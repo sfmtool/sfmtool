@@ -1,0 +1,20 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sfmtool"
+version = "0.1"
+requires-python = ">=3.13"
+license = "Apache-2.0"
+description = "Structure from Motion for fun and learning"
+
+[dependency-groups]
+test = ["pytest", "ruff"]
+dev = ["ipython", {include-group = "test"}]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
