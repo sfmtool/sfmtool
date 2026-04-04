@@ -8,7 +8,7 @@ members = [
     "crates/matches-format",
     "crates/sfmr-colmap",
     "crates/sfmtool-core",
-    "crates/sfmtool-gui",
+    "crates/sfm-explorer",
     "crates/sfmtool-py",
 ]
 resolver = "2"

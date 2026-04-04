@@ -48,7 +48,7 @@ pixi run docs-serve
 ```
 crates/
   sfmtool-core/     Core project functionality
-  sfmtool-gui/      SfM Explorer GUI
+  sfm-explorer/     SfM Explorer GUI
   sfmtool-py/       Python bindings
   sfmr-format/      .sfmr reconstruction file I/O
   sfmr-colmap/      COLMAP integration

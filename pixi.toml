@@ -16,7 +16,7 @@ rust = ">=1.85"
 sfmtool = { path = ".", editable = true }
 
 [tasks]
-gui = "cargo run --release --bin sfmtool-gui"
+gui = "cargo run --release --bin sfm-explorer"
 
 [feature.test.tasks]
 test = "pytest"
