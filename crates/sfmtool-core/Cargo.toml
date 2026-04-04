@@ -6,3 +6,32 @@ name = "sfmtool-core"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
+description = "Core data structures and algorithms for sfmtool"
+
+[features]
+default = ["gpu"]
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
+[dependencies]
+nalgebra = "0.33"
+ndarray = "0.16"
+kiddo = "4"
+rayon = "1.10"
+rand = "0.8"
+serde_json = "1"
+sfmr-format = { path = "../sfmr-format" }
+sift-format = { path = "../sift-format" }
+
+# GPU compute (optional)
+wgpu = { version = "27", features = ["dx12", "vulkan"], optional = true }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1.14", features = ["derive"], optional = true }
+
+[dev-dependencies]
+approx = "0.5"
+criterion = { version = "0.5", features = ["html_reports"] }
+image = "0.25"
+
+[[bench]]
+name = "optical_flow"
+harness = false
