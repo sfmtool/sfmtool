@@ -31,7 +31,7 @@ repeat options redundantly while using it.
 Here's the simplest way to create a workspace and perform an SfM reconstruction with
 a small image dataset.
 
-```bash
+```
 # Create the workspace and an images directory inside of it
 $ mkdir -p workspace/images
 
@@ -54,7 +54,7 @@ Configuration file: .../workspace/.sfm-workspace.json
 $ sfm solve -g images/
 Running global SfM with GLOMAP...
 Image files:
-  C:\Dev\sfmtool\workspace\images\seoul_bull_sculpture_%02d.jpg (17 files, sequence 1-17)
+  .../workspace/images/seoul_bull_sculpture_%02d.jpg (17 files, sequence 1-17)
 ...
 Saved reconstruction to: .../workspace/sfmr/20260404-00-solve-seoul_bull_sculpture_1-17.sfmr
 ```
