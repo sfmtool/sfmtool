@@ -1,0 +1,24 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+
+[project]
+site_name = "SfM Tool"
+site_description = "Fun with Structure from Motion"
+repo_url = "https://github.com/sfmtool/sfmtool"
+repo_name = "sfmtool/sfmtool"
+
+nav = [
+  { "Home" = "index.md" },
+]
+
+[project.theme]
+
+[[project.theme.palette]]
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"

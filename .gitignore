@@ -40,3 +40,6 @@ dist/
 
 # MkDocs build output
 site/
+
+# User-specific Claude settings
+.claude/settings.local.json
