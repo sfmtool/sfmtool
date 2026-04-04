@@ -36,3 +36,6 @@ __pycache__/
 # Build artifacts
 dist/
 *.egg-info/
+
+# MkDocs build output
+site/

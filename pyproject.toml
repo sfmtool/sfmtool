@@ -10,7 +10,7 @@ name = "sfmtool"
 version = "0.1"
 requires-python = ">=3.13"
 license = "Apache-2.0"
-description = "Structure from Motion for fun and learning"
+description = "Fun with Structure from Motion"
 
 [dependency-groups]
 test = ["pytest", "ruff"]

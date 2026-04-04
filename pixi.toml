@@ -24,7 +24,15 @@ check = "ruff check src tests"
 [feature.dev.tasks]
 ipython = "ipython"
 
+[feature.docs.pypi-dependencies]
+zensical = "*"
+
+[feature.docs.tasks]
+docs-serve = "zensical serve"
+docs-build = "zensical build"
+
 [environments]
 default = {solve-group = "default"}
 test = {features = ["test"], solve-group = "default"}
 dev = {features = ["dev"], solve-group = "default"}
+docs = {features = ["docs"], solve-group = "default"}
