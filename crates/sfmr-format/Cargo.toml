@@ -2,14 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "sfmtool-gui"
+name = "sfmr-format"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-
-[[bin]]
-name = "sfmtool-gui"
-path = "src/main.rs"
-
-[dependencies]
-sfmtool-core = { path = "../sfmtool-core" }
+description = "Read/write .sfmr file format for SfM reconstructions"

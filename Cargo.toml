@@ -3,6 +3,10 @@
 
 [workspace]
 members = [
+    "crates/sift-format",
+    "crates/sfmr-format",
+    "crates/matches-format",
+    "crates/sfmr-colmap",
     "crates/sfmtool-core",
     "crates/sfmtool-gui",
     "crates/sfmtool-py",

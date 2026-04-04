@@ -15,6 +15,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48f5d2a454e16a5ea0f4ced81bd44e4cfc7bd3a507b61887c99fd3538b28e4af"
 
 [[package]]
+name = "matches-format"
+version = "0.1.0"
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -103,6 +107,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sfmr-colmap"
+version = "0.1.0"
+
+[[package]]
+name = "sfmr-format"
+version = "0.1.0"
+
+[[package]]
 name = "sfmtool-core"
 version = "0.1.0"
 
@@ -120,6 +132,10 @@ dependencies = [
  "pyo3",
  "sfmtool-core",
 ]
+
+[[package]]
+name = "sift-format"
+version = "0.1.0"
 
 [[package]]
 name = "syn"
