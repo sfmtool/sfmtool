@@ -3,8 +3,8 @@
 
 site_name: SfM Tool
 site_description: Fun with Structure from Motion
-repo_url: https://github.com/mwiebe/sfmtool
-repo_name: mwiebe/sfmtool
+repo_url: https://github.com/sfmtool/sfmtool
+repo_name: sfmtool/sfmtool
 
 theme:
   palette:

@@ -12,6 +12,15 @@ SfM Tool builds heavily on the work of others, especially [COLMAP](https://colma
 and [OpenCV](https://opencv.org/). Most of what's different is around the workflow you use
 to create SfM reconstructions.
 
+### The SfM Explorer GUI
+
+Once you have an .sfmr file, you can load it into the SfM Explorer GUI to view it in 3D.
+In this screenshot, we've loaded the solution created by the below `sfm solve` command.
+By selecting a 3D point, we can view the track it comes from and visualize all the projected
+rays from the cameras.
+
+![SfM Explorer with Seoul Bull sample](./images/sfm-explorer-with-seoul-bull-tiny-images.jpg)
+
 ### The `sfm` CLI command
 
 The CLI command `sfm` is the interface for creating and evaluating reconstructions.
@@ -62,10 +71,6 @@ $ sfm inspect --metrics sfmr/20260404-00-solve-seoul_bull_sculpture_1-17.sfmr
 ...
 ```
 
-### The SfM Explorer GUI
-
-Once you have an .sfmr file, you can load it into the SfM Explorer GUi to view it in 3D.
-
 ## What is Structure from Motion?
 
 In SfM, you start with a scene that is static and take photographs
@@ -78,8 +83,21 @@ camera extrinsics like the image's position and orientation.
 
 Recent research is focused on ideas like using feedforward networks to go straight from images
 into 3D representations. This project is not about VGGT or similar techniques, but visualizing their
-output in SfMm tool or using them as part of SfM would be interesting to explore.
+output in SfM tool or using them as part of SfM would be interesting to explore.
 
 ## Installation
 
 Coming soon...
+
+## About Me
+
+I'm Mark Wiebe, and I've long had a soft spot for everything to do with capturing, reconstructing,
+and rendering 3D. This is a personal project, all views are my own and do not reflect Amazon's
+views or positions. I work as a Principal Engineer at AWS on the [Deadline Cloud](https://aws.amazon.com/deadline-cloud/)
+web service that provides render farm/batch computing focused on rendering and related workloads.
+Other projects I've helped create include the [conda package management system](https://conda.org/)
+while building the [Anaconda Distribution](https://www.anaconda.com/download), introducing the
+[EinSum](https://numpy.org/doc/2.2/reference/generated/numpy.einsum.html) function to NumPy, and
+I played a major role creating tools at [Frantic Films](https://en.wikipedia.org/wiki/Frantic_Films)
+and at [Thinkbox Software](https://aws.amazon.com/media-services/thinkbox/) (later acquired by AWS) such as
+Deadline, Flood, Krakatoa, XMesh, Frost, Sequoia and more.
