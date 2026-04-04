@@ -6,10 +6,72 @@ name = "sfm-explorer"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
+description = "GUI application for viewing SfM reconstructions"
+default-run = "sfm-explorer"
 
 [[bin]]
 name = "sfm-explorer"
 path = "src/main.rs"
 
+[[bin]]
+name = "win32_directmanipulation"
+path = "src/bin/win32_directmanipulation.rs"
+required-features = ["directmanipulation"]
+
+[[bin]]
+name = "winit_directmanipulation"
+path = "src/bin/winit_directmanipulation.rs"
+required-features = ["directmanipulation"]
+
+[[bin]]
+name = "winit_wgpu_directmanipulation"
+path = "src/bin/winit_wgpu_directmanipulation.rs"
+required-features = ["directmanipulation"]
+
+[features]
+default = []
+directmanipulation = []
+
 [dependencies]
 sfmtool-core = { path = "../sfmtool-core" }
+sift-format = { path = "../sift-format" }
+egui = "0.33"
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+egui_dock = "0.18"
+wgpu = { version = "27", features = ["dx12", "vulkan"] }
+nalgebra = "0.33"
+bytemuck = { version = "1.14", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
+egui-winit = "0.33"
+raw-window-handle = "0.6"
+winit = "0.30.12"
+pollster = "0.4"
+rfd = "0.15"
+kiddo = "4"
+rand = "0.8"
+image = "0.25"
+ndarray = "0.16"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_Graphics_DirectManipulation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_UI_Controls",
+    "Win32_UI_Input_Ime",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_Pointer",
+    "Win32_UI_Input_Touch",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = "0.58"
+
+[build-dependencies]
+winres = "0.1"
