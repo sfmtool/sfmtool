@@ -1,0 +1,10 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+
+[workspace]
+members = [
+    "crates/sfmtool-core",
+    "crates/sfmtool-gui",
+    "crates/sfmtool-py",
+]
+resolver = "2"

@@ -1,0 +1,8 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "sfmtool-core"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"

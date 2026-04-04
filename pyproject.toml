@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.8,<2"]
+build-backend = "maturin"
 
 [project]
 name = "sfmtool"
@@ -11,10 +11,21 @@ version = "0.1"
 requires-python = ">=3.13"
 license = "Apache-2.0"
 description = "Fun with Structure from Motion"
+dependencies = [
+    "click",
+]
+
+[project.scripts]
+sfm = "sfmtool.cli:main"
 
 [dependency-groups]
 test = ["pytest", "ruff"]
 dev = ["ipython", {include-group = "test"}]
+
+[tool.maturin]
+manifest-path = "crates/sfmtool-py/Cargo.toml"
+python-source = "src"
+module-name = "sfmtool._sfmtool"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
