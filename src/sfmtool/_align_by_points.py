@@ -109,3 +109,93 @@ def estimate_alignment_from_points(
     result.distances_for_stats = distances_for_stats
 
     return result
+
+
+def estimate_alignment_from_points_with_logging(
+    source_recon: SfmrReconstruction,
+    target_recon: SfmrReconstruction,
+    shared_images: list[tuple[int, int]],
+    min_points: int = 10,
+    use_ransac: bool = True,
+    ransac_iterations: int = 1000,
+    ransac_percentile: float = 95.0,
+    verbose: bool = True,
+) -> AlignmentResult:
+    """Estimate alignment with progress logging.
+
+    Wrapper around estimate_alignment_from_points that provides
+    detailed logging for CLI usage.
+    """
+    import click
+
+    if verbose:
+        click.echo("  Finding 3D point correspondences...")
+
+    result = estimate_alignment_from_points(
+        source_recon=source_recon,
+        target_recon=target_recon,
+        shared_images=shared_images,
+        min_points=min_points,
+        use_ransac=use_ransac,
+        ransac_iterations=ransac_iterations,
+        ransac_percentile=ransac_percentile,
+    )
+
+    if verbose:
+        click.echo(f"    Found {result.n_point_correspondences} point correspondences")
+
+        if use_ransac and result.distances_for_stats is not None:
+            from ._histogram_utils import print_histogram
+
+            distances = result.distances_for_stats
+            click.echo("\n    Correspondence distance statistics:")
+            click.echo(f"      Min:    {np.min(distances):.6f}")
+            click.echo(f"      Max:    {np.max(distances):.6f}")
+            click.echo(f"      Mean:   {np.mean(distances):.6f}")
+            click.echo(f"      Median: {np.median(distances):.6f}")
+
+            percentiles = [50, 75, 90, 95, 99]
+            click.echo("\n    Percentiles:")
+            for p in percentiles:
+                val = np.percentile(distances, p)
+                marker = (
+                    " <-- threshold" if abs(p - result.ransac_percentile) < 0.1 else ""
+                )
+                click.echo(f"      {p:3d}th: {val:.6f}{marker}")
+
+            click.echo()
+            print_histogram(
+                distances,
+                title="Distance distribution",
+                num_buckets=60,
+                show_stats=False,
+            )
+
+            if result.computed_threshold is not None:
+                click.echo(
+                    f"\n    Using {result.ransac_percentile:.1f}th percentile as threshold: {result.computed_threshold:.6f}"
+                )
+            click.echo()
+
+        if use_ransac:
+            n_outliers = result.n_point_correspondences - result.n_inliers
+            inlier_ratio = (
+                result.n_inliers / result.n_point_correspondences
+                if result.n_point_correspondences > 0
+                else 0
+            )
+            click.echo(f"    RANSAC: {result.n_inliers} inliers, {n_outliers} outliers")
+            click.echo(f"    Inlier ratio: {inlier_ratio * 100:.1f}%")
+
+            if inlier_ratio < 0.5:
+                click.echo(
+                    click.style(
+                        f"    WARNING: Low inlier ratio ({inlier_ratio * 100:.1f}%)! "
+                        "Alignment quality may be poor.",
+                        fg="yellow",
+                        bold=True,
+                    )
+                )
+        click.echo(f"    Point RMS error: {result.point_rms_error:.4f}")
+
+    return result
