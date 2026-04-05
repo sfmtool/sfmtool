@@ -1,0 +1,164 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+from pathlib import Path
+
+from click.testing import CliRunner
+
+from sfmtool.cli import main
+
+
+def test_match_no_method(isolated_seoul_bull_image: Path):
+    """Test that match without a method flag raises an error."""
+    result = CliRunner().invoke(main, ["match", str(isolated_seoul_bull_image)])
+    assert result.exit_code != 0
+    assert "Must specify a matching method" in result.output
+
+
+def test_match_multiple_methods(isolated_seoul_bull_image: Path):
+    """Test that specifying multiple methods raises an error."""
+    result = CliRunner().invoke(
+        main,
+        ["match", "--exhaustive", "--sequential", str(isolated_seoul_bull_image)],
+    )
+    assert result.exit_code != 0
+    assert "Cannot specify more than one matching method" in result.output
+
+
+def test_match_no_paths():
+    """Test that match without paths raises an error."""
+    result = CliRunner().invoke(main, ["match", "--exhaustive"])
+    assert result.exit_code != 0
+    assert "Must provide image paths" in result.output
+
+
+def test_match_exhaustive(isolated_seoul_bull_17_images: list[Path]):
+    """Test exhaustive matching on a small set of images."""
+    workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+    # Initialize workspace
+    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+
+    # Extract SIFT features first
+    result = CliRunner().invoke(
+        main, ["sift", "--extract", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+
+    # Run exhaustive matching
+    result = CliRunner().invoke(
+        main, ["match", "--exhaustive", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Running exhaustive matching" in result.output
+    assert "Done:" in result.output
+    assert "pairs" in result.output
+    assert "matches" in result.output
+
+    # Check that a .matches file was created
+    tvg_dir = workspace_dir / "tvg-matches"
+    matches_dir = workspace_dir / "matches"
+    matches_files = []
+    if tvg_dir.exists():
+        matches_files.extend(tvg_dir.glob("*.matches"))
+    if matches_dir.exists():
+        matches_files.extend(matches_dir.glob("*.matches"))
+    assert len(matches_files) == 1
+
+    # Verify the .matches file can be read back
+    from sfmtool._sfmtool import read_matches
+
+    matches_data = read_matches(str(matches_files[0]))
+    assert matches_data["metadata"]["matching_method"] == "exhaustive"
+    assert matches_data["metadata"]["matching_tool"] == "colmap"
+    assert matches_data["metadata"]["image_count"] == 17
+    assert matches_data["metadata"]["match_count"] > 0
+
+
+def test_match_sequential(isolated_seoul_bull_17_images: list[Path]):
+    """Test sequential matching on a small set of images."""
+    workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+    # Initialize workspace
+    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+
+    # Extract SIFT features
+    result = CliRunner().invoke(
+        main, ["sift", "--extract", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+
+    # Run sequential matching with small overlap
+    result = CliRunner().invoke(
+        main,
+        ["match", "--sequential", "--sequential-overlap", "3", str(workspace_dir)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Running sequential matching" in result.output
+    assert "Done:" in result.output
+
+
+def test_match_with_output_path(isolated_seoul_bull_17_images: list[Path]):
+    """Test matching with a custom output path."""
+    workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+
+    result = CliRunner().invoke(
+        main, ["sift", "--extract", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+
+    output_path = workspace_dir / "custom_output.matches"
+    result = CliRunner().invoke(
+        main,
+        [
+            "match",
+            "--exhaustive",
+            "--output",
+            str(output_path),
+            str(workspace_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert output_path.exists()
+
+
+def test_match_with_range(isolated_seoul_bull_17_images: list[Path]):
+    """Test matching with a range expression."""
+    workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+
+    # Extract features for the subset first
+    result = CliRunner().invoke(
+        main,
+        ["sift", "--extract", "--range", "1-5", str(workspace_dir)],
+    )
+    assert result.exit_code == 0, result.output
+
+    # Match the subset
+    output_path = workspace_dir / "range_test.matches"
+    result = CliRunner().invoke(
+        main,
+        [
+            "match",
+            "--exhaustive",
+            "--range",
+            "1-5",
+            "--output",
+            str(output_path),
+            str(workspace_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    from sfmtool._sfmtool import read_matches
+
+    matches_data = read_matches(str(output_path))
+    assert matches_data["metadata"]["image_count"] == 5

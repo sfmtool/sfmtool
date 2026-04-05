@@ -1,0 +1,461 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Feature matching command — produces .matches files."""
+
+import os
+import re
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+import click
+import numpy as np
+
+from .._cli_utils import timed_command
+from .._filenames import expand_paths
+
+
+@click.command("match")
+@timed_command
+@click.help_option("--help", "-h")
+@click.argument("paths", nargs=-1, type=click.Path(exists=True))
+@click.option(
+    "--exhaustive",
+    "-e",
+    "exhaustive",
+    is_flag=True,
+    help="Run exhaustive pairwise matching.",
+)
+@click.option(
+    "--max-features",
+    "max_feature_count",
+    type=click.IntRange(min=1),
+    help="Maximum number of features to use from each image.",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(),
+    help="Output .matches file path. If not specified, generates a timestamped filename.",
+)
+@click.option(
+    "--range",
+    "-r",
+    "range_expr",
+    help="A range expression of file numbers to use from the input directories.",
+)
+@click.option(
+    "--sequential",
+    "-s",
+    "sequential",
+    is_flag=True,
+    help="Run sequential matching (pairs nearby images in sequence order). "
+    "Best for ordered image collections with known capture order.",
+)
+@click.option(
+    "--sequential-overlap",
+    "sequential_overlap",
+    type=click.IntRange(min=1),
+    default=10,
+    help="Number of overlapping image pairs for --sequential. Default: 10.",
+)
+@click.option(
+    "--camera-model",
+    "camera_model",
+    type=click.Choice(
+        [
+            "SIMPLE_PINHOLE",
+            "PINHOLE",
+            "SIMPLE_RADIAL",
+            "RADIAL",
+            "OPENCV",
+            "OPENCV_FISHEYE",
+            "SIMPLE_RADIAL_FISHEYE",
+            "RADIAL_FISHEYE",
+            "THIN_PRISM_FISHEYE",
+            "RAD_TAN_THIN_PRISM_FISHEYE",
+        ],
+        case_sensitive=False,
+    ),
+    default=None,
+    help="Camera model to use (overrides auto-detection).",
+)
+def match(
+    paths,
+    exhaustive,
+    sequential,
+    sequential_overlap,
+    max_feature_count,
+    output_path,
+    range_expr,
+    camera_model,
+):
+    """Match features between image pairs and write a .matches file.
+
+    Requires a workspace initialized with 'sfm init' and SIFT features
+    extracted with 'sfm sift --extract'.
+
+    Examples:
+        # Exhaustive matching
+        sfm match --exhaustive images/
+
+        # Sequential matching for ordered collections
+        sfm match --sequential images/
+
+        # With feature count limit
+        sfm match --exhaustive --max-features 4096 images/
+    """
+    from ..cli import deduce_workspace
+
+    if not paths:
+        raise click.UsageError("Must provide image paths.")
+
+    method_count = sum([exhaustive, sequential])
+    if method_count > 1:
+        raise click.UsageError(
+            "Cannot specify more than one matching method. "
+            "Choose one of: --exhaustive (-e) or --sequential (-s)"
+        )
+    if method_count == 0:
+        raise click.UsageError(
+            "Must specify a matching method: --exhaustive (-e) or --sequential (-s)"
+        )
+
+    numbers = None
+    if range_expr:
+        from openjd.model import IntRangeExpr
+
+        numbers = IntRangeExpr.from_str(range_expr)
+
+    paths = [Path(p) for p in paths]
+    filenames = expand_paths(
+        paths, extensions=(".png", ".jpg", ".jpeg"), numbers=numbers
+    )
+    if not filenames:
+        raise click.UsageError("No image files found in the provided paths.")
+
+    absolute_paths = [Path(os.path.normpath(os.path.abspath(p))) for p in filenames]
+    workspace_dir = deduce_workspace({p.parent for p in absolute_paths})
+
+    try:
+        matching_method = "sequential" if sequential else "exhaustive"
+        _run_matching(
+            absolute_paths,
+            workspace_dir,
+            matching_method=matching_method,
+            max_feature_count=max_feature_count,
+            output_path=output_path,
+            camera_model=camera_model,
+            sequential_overlap=sequential_overlap,
+        )
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+
+def _run_matching(
+    image_paths: list[Path],
+    workspace_dir: Path,
+    matching_method: str,
+    max_feature_count: int | None,
+    output_path: str | None,
+    camera_model: str | None,
+    sequential_overlap: int = 10,
+):
+    """Run matching and produce a .matches file."""
+    import pycolmap
+
+    from .._workspace import load_workspace_config
+    from .._sift_file import image_files_to_sift_files
+
+    ws_config = load_workspace_config(workspace_dir)
+    feature_tool = ws_config.get("feature_tool", "colmap")
+    feature_options = ws_config.get("feature_options")
+    feature_prefix_dir = ws_config.get("feature_prefix_dir")
+
+    # Ensure SIFT features exist
+    click.echo("Checking SIFT features...")
+    sift_paths = image_files_to_sift_files(
+        image_paths,
+        feature_tool=feature_tool,
+        feature_options=feature_options,
+        feature_prefix_dir=feature_prefix_dir,
+    )
+
+    image_count = len(image_paths)
+    click.echo(f"Found {image_count} images with SIFT features")
+
+    # Build workspace-relative image names
+    image_names = []
+    for p in image_paths:
+        rel = os.path.relpath(p, workspace_dir).replace("\\", "/")
+        image_names.append(rel)
+
+    # Create a temporary COLMAP database, populate features, run matching
+    with tempfile.TemporaryDirectory(prefix="sfm_match_") as tmpdir:
+        db_path = Path(tmpdir) / "database.db"
+
+        click.echo("Populating COLMAP database with features...")
+        _populate_db_features(
+            db_path,
+            image_paths,
+            sift_paths,
+            image_names,
+            workspace_dir,
+            max_feature_count,
+            camera_model,
+        )
+
+        # Run matching
+        click.echo(f"Running {matching_method} matching...")
+        if matching_method == "exhaustive":
+            pycolmap.match_exhaustive(db_path)
+        elif matching_method == "sequential":
+            pairing_options = pycolmap.SequentialPairingOptions(
+                overlap=sequential_overlap,
+                quadratic_overlap=True,
+            )
+            pycolmap.match_sequential(db_path, pairing_options=pairing_options)
+        else:
+            raise ValueError(f"Unsupported matching method: {matching_method}")
+
+        # Read matches + TVGs back from the DB
+        click.echo("Reading matches from database...")
+        from .._sfmtool import read_colmap_db_matches
+
+        matches_data = read_colmap_db_matches(str(db_path), include_tvg=True)
+
+    # The Rust reader sorts images lexicographically from the DB.
+    # Re-derive image_names, sift_paths, and image_paths in that order.
+    rust_image_names = matches_data["image_names"]
+    name_to_sift = {name: sp for name, sp in zip(image_names, sift_paths)}
+    name_to_path = {name: ip for name, ip in zip(image_names, image_paths)}
+    image_names = list(rust_image_names)
+    sift_paths = [name_to_sift[n] for n in image_names]
+    image_paths = [name_to_path[n] for n in image_names]
+
+    # Compute descriptor distances from .sift files
+    click.echo("Computing descriptor distances...")
+    _compute_descriptor_distances(matches_data, sift_paths, max_feature_count)
+
+    # Fill in metadata
+    matches_data["metadata"]["matching_method"] = matching_method
+    matches_data["metadata"]["matching_tool"] = "colmap"
+    matches_data["metadata"]["matching_tool_version"] = pycolmap.__version__
+    matches_data["metadata"]["matching_options"] = {}
+    if max_feature_count:
+        matches_data["metadata"]["matching_options"]["max_feature_count"] = (
+            max_feature_count
+        )
+    if matching_method == "sequential":
+        matches_data["metadata"]["matching_options"]["sequential_overlap"] = (
+            sequential_overlap
+        )
+    matches_data["metadata"]["version"] = 1
+    matches_data["metadata"]["workspace"] = {
+        "absolute_path": str(workspace_dir),
+        "relative_path": "",
+        "contents": {
+            "feature_tool": feature_tool,
+            "feature_type": ws_config.get("feature_type", "sift"),
+            "feature_options": feature_options or {},
+            "feature_prefix_dir": feature_prefix_dir or "",
+        },
+    }
+    matches_data["metadata"]["timestamp"] = datetime.now().astimezone().isoformat()
+
+    # Fill in feature tool hashes and sift content hashes
+    _fill_sift_hashes(matches_data, sift_paths, image_names, image_paths)
+
+    # Determine output path
+    if output_path:
+        out = Path(output_path)
+    else:
+        has_tvg = matches_data["has_two_view_geometries"]
+        if has_tvg:
+            out_dir = workspace_dir / "tvg-matches"
+        else:
+            out_dir = workspace_dir / "matches"
+        out = _generate_output_path(out_dir, image_paths, matching_method)
+
+    # Set relative_path from output location to workspace
+    out_abs = Path(os.path.abspath(out))
+    matches_data["metadata"]["workspace"]["relative_path"] = os.path.relpath(
+        workspace_dir, out_abs.parent
+    ).replace("\\", "/")
+
+    # Write the .matches file
+    from .._sfmtool import write_matches
+
+    click.echo(f"Writing {out}...")
+    write_matches(str(out), matches_data)
+
+    pair_count = matches_data["metadata"]["image_pair_count"]
+    match_count = matches_data["metadata"]["match_count"]
+    click.echo(f"Done: {pair_count} pairs, {match_count} matches")
+    if matches_data["has_two_view_geometries"]:
+        inlier_count = matches_data["tvg_metadata"]["inlier_count"]
+        click.echo(f"  Two-view geometries: {inlier_count} total inliers")
+
+
+def _populate_db_features(
+    db_path: Path,
+    image_paths: list[Path],
+    sift_paths: list[Path],
+    image_names: list[str],
+    workspace_dir: Path,
+    max_feature_count: int | None,
+    camera_model: str | None,
+):
+    """Create a COLMAP DB and populate it with cameras, images, keypoints, descriptors."""
+    import pycolmap
+
+    from .._camera_setup import _infer_camera, _wrap_descriptors
+    from .._sift_file import SiftReader
+
+    with pycolmap.Database.open(db_path) as db:
+        cam = _infer_camera(image_paths[0], camera_model)
+        camera_id = db.write_camera(cam)
+
+        # Create a trivial rig (required by COLMAP/GLOMAP)
+        rig = pycolmap.Rig()
+        rig.add_ref_sensor(
+            pycolmap.sensor_t(type=pycolmap.SensorType.CAMERA, id=camera_id)
+        )
+        rig_id = db.write_rig(rig)
+
+        for i, (img_path, sift_path) in enumerate(zip(image_paths, sift_paths)):
+            image = pycolmap.Image(
+                name=image_names[i],
+                camera_id=camera_id,
+            )
+            image_id = db.write_image(image)
+
+            frame = pycolmap.Frame()
+            frame.rig_id = rig_id
+            frame.add_data_id(
+                pycolmap.data_t(
+                    sensor_id=pycolmap.sensor_t(
+                        type=pycolmap.SensorType.CAMERA, id=camera_id
+                    ),
+                    id=image_id,
+                )
+            )
+            frame_id = db.write_frame(frame)
+            image.frame_id = frame_id
+            image.image_id = image_id
+            db.update_image(image)
+
+            with SiftReader(sift_path) as reader:
+                keypoints = reader.read_positions(count=max_feature_count)
+                descriptors = reader.read_descriptors(count=max_feature_count)
+                db.write_keypoints(image_id, keypoints)
+                db.write_descriptors(image_id, _wrap_descriptors(descriptors))
+
+            if (i + 1) % 100 == 0 or i == len(image_paths) - 1:
+                click.echo(f"  Loaded {i + 1}/{len(image_paths)} images")
+
+
+def _compute_descriptor_distances(matches_data, sift_paths, max_feature_count):
+    """Compute L2 descriptor distances for all matches from .sift files."""
+    from .._sift_file import SiftReader
+
+    pair_count = matches_data["metadata"]["image_pair_count"]
+    if pair_count == 0:
+        return
+
+    desc_cache = {}
+
+    def get_descriptors(img_idx):
+        if img_idx not in desc_cache:
+            with SiftReader(sift_paths[img_idx]) as reader:
+                desc = reader.read_descriptors(count=max_feature_count)
+            desc_cache[img_idx] = desc.astype(np.float32)
+        return desc_cache[img_idx]
+
+    image_index_pairs = matches_data["image_index_pairs"]
+    match_counts = matches_data["match_counts"]
+    match_feature_indexes = matches_data["match_feature_indexes"]
+    distances = matches_data["match_descriptor_distances"]
+
+    offset = 0
+    for k in range(pair_count):
+        idx_i = int(image_index_pairs[k, 0])
+        idx_j = int(image_index_pairs[k, 1])
+        count = int(match_counts[k])
+
+        desc_i = get_descriptors(idx_i)
+        desc_j = get_descriptors(idx_j)
+
+        for m in range(offset, offset + count):
+            fi = int(match_feature_indexes[m, 0])
+            fj = int(match_feature_indexes[m, 1])
+            diff = desc_i[fi].astype(np.float32) - desc_j[fj].astype(np.float32)
+            distances[m] = float(np.sqrt(np.dot(diff, diff)))
+
+        offset += count
+
+
+def _fill_sift_hashes(matches_data, sift_paths, image_names, image_paths):
+    """Fill feature_tool_hashes and sift_content_hashes from .sift files."""
+    from .._sfmtool import read_sift_metadata
+
+    image_count = len(image_names)
+    feature_tool_hashes = np.zeros((image_count, 16), dtype=np.uint8)
+    sift_content_hashes = np.zeros((image_count, 16), dtype=np.uint8)
+
+    for i, sift_path in enumerate(sift_paths):
+        result = read_sift_metadata(str(sift_path))
+        content_hash = result["content_hash"]
+        ft_hash = bytes.fromhex(content_hash["feature_tool_xxh128"])
+        ct_hash = bytes.fromhex(content_hash["content_xxh128"])
+        feature_tool_hashes[i] = np.frombuffer(ft_hash, dtype=np.uint8)
+        sift_content_hashes[i] = np.frombuffer(ct_hash, dtype=np.uint8)
+
+    matches_data["feature_tool_hashes"] = feature_tool_hashes
+    matches_data["sift_content_hashes"] = sift_content_hashes
+
+
+def _generate_output_path(
+    base_dir: Path, image_paths: list[Path], matching_method: str
+) -> Path:
+    """Generate a timestamped output path for a .matches file."""
+    from deadline.job_attachments.api import summarize_paths_by_sequence
+    from openjd.model import IntRangeExpr
+
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now().astimezone()
+    date_prefix = now.strftime("%Y%m%d")
+
+    # Generate image descriptor
+    filenames = [p.name for p in image_paths]
+    summaries = summarize_paths_by_sequence(filenames)
+    descriptor = ""
+    if len(summaries) == 1 and summaries[0].index_set:
+        summary = summaries[0]
+        prefix = summary.path.split("%")[0].rstrip("_-")
+        range_str = str(IntRangeExpr.from_list(sorted(summary.index_set)))
+        range_str = range_str.replace(":", "x")
+        descriptor = f"{prefix}_{range_str}"
+
+    # Find max counter for this date
+    pattern = re.compile(rf"^{re.escape(date_prefix)}-(\d{{2,}})(?:-.*)?\.matches$")
+    max_counter = -1
+    if base_dir.exists():
+        for f in base_dir.iterdir():
+            if f.is_file():
+                m = pattern.match(f.name)
+                if m:
+                    max_counter = max(max_counter, int(m.group(1)))
+
+    next_counter = max_counter + 1
+    counter_str = f"{next_counter:02d}" if next_counter < 100 else str(next_counter)
+
+    parts = [date_prefix, counter_str, matching_method]
+    if descriptor:
+        parts.append(descriptor)
+    filename = "-".join(parts) + ".matches"
+
+    return base_dir / filename

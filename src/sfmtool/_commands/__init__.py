@@ -4,9 +4,11 @@
 """CLI command implementations organized by functionality."""
 
 from .init import init
+from .match import match
 from .sift import sift
 
 __all__ = [
     "init",
+    "match",
     "sift",
 ]
