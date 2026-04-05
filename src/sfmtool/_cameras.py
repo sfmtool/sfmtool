@@ -3,6 +3,8 @@
 
 """Camera conversion utilities for pycolmap interop."""
 
+import numpy as np
+
 _CAMERA_PARAM_NAMES = {
     "PINHOLE": [
         "focal_length_x",
@@ -108,6 +110,50 @@ _CAMERA_PARAM_NAMES = {
         "thin_prism_s3",
     ],
 }
+
+
+def get_intrinsic_matrix(camera) -> np.ndarray:
+    """Extract intrinsic matrix K from a camera object.
+
+    Accepts either a pycolmap.Camera or a CameraIntrinsics object.
+
+    Args:
+        camera: pycolmap.Camera or CameraIntrinsics object
+
+    Returns:
+        3x3 intrinsic matrix K
+    """
+    from ._sfmtool import CameraIntrinsics
+
+    if isinstance(camera, CameraIntrinsics):
+        return np.asarray(camera.intrinsic_matrix())
+
+    model_name = camera.model.name
+    params = camera.params
+
+    if model_name in (
+        "PINHOLE",
+        "OPENCV",
+        "OPENCV_FISHEYE",
+        "FULL_OPENCV",
+        "THIN_PRISM_FISHEYE",
+        "RAD_TAN_THIN_PRISM_FISHEYE",
+    ):
+        fx, fy = params[0], params[1]
+        cx, cy = params[2], params[3]
+    elif model_name in ("SIMPLE_PINHOLE", "SIMPLE_RADIAL", "SIMPLE_RADIAL_FISHEYE"):
+        fx = fy = params[0]
+        cx, cy = params[1], params[2]
+    elif model_name == "RADIAL":
+        fx = fy = params[0]
+        cx, cy = params[1], params[2]
+    elif model_name == "RADIAL_FISHEYE":
+        fx = fy = params[0]
+        cx, cy = params[1], params[2]
+    else:
+        raise ValueError(f"Unsupported camera model: {model_name}")
+
+    return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
 
 
 def colmap_camera_from_intrinsics(camera_meta, *, width=None, height=None):

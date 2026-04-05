@@ -9,7 +9,18 @@ from pathlib import Path
 import click
 
 from ._cli_group import CategoryGroup
-from ._commands import align, compare, init, inspect, match, merge, sift, solve, xform
+from ._commands import (
+    align,
+    compare,
+    densify,
+    init,
+    inspect,
+    match,
+    merge,
+    sift,
+    solve,
+    xform,
+)
 from ._workspace import find_workspace_for_path
 
 
@@ -36,6 +47,7 @@ main.add_command_with_category(inspect, category="Reconstruction")
 main.add_command_with_category(compare, category="Reconstruction")
 main.add_command_with_category(align, category="Reconstruction")
 main.add_command_with_category(merge, category="Reconstruction")
+main.add_command_with_category(densify, category="Reconstruction")
 
 
 @main.command()

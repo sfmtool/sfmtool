@@ -475,6 +475,56 @@ impl PySfmrReconstruction {
 
         use crate::helpers::{extract_cameras_as_sfmr, extract_rig_frame_data, py_to_u128_bytes};
 
+        /// Helper to extract a typed numpy array with a clear error message.
+        macro_rules! extract_array1 {
+            ($value:expr, $param:expr, $ty:ty) => {
+                $value.extract::<PyReadonlyArray1<$ty>>().map_err(|_| {
+                    let actual_type = $value
+                        .get_type()
+                        .qualname()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|_| "unknown".to_string());
+                    let actual_dtype = $value
+                        .getattr("dtype")
+                        .ok()
+                        .and_then(|d| d.str().ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    pyo3::exceptions::PyTypeError::new_err(format!(
+                        "clone_with_changes(): '{}' must be a contiguous ndarray with dtype {}, \
+                         got {} with dtype {}",
+                        $param,
+                        stringify!($ty),
+                        actual_type,
+                        actual_dtype
+                    ))
+                })
+            };
+        }
+        macro_rules! extract_array2 {
+            ($value:expr, $param:expr, $ty:ty) => {
+                $value.extract::<PyReadonlyArray2<$ty>>().map_err(|_| {
+                    let actual_type = $value.get_type().qualname()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|_| "unknown".to_string());
+                    let actual_dtype = $value
+                        .getattr("dtype")
+                        .ok()
+                        .and_then(|d| d.str().ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    pyo3::exceptions::PyTypeError::new_err(format!(
+                        "clone_with_changes(): '{}' must be a 2D contiguous ndarray with dtype {}, \
+                         got {} with dtype {}",
+                        $param,
+                        stringify!($ty),
+                        actual_type,
+                        actual_dtype
+                    ))
+                })
+            };
+        }
+
         let mut recon = self.inner.clone();
 
         let Some(kw) = kwargs else {
@@ -491,14 +541,19 @@ impl PySfmrReconstruction {
             let key_str: String = key.extract()?;
             match key_str.as_str() {
                 "positions" => {
-                    let arr: PyReadonlyArray2<f64> = value.extract()?;
+                    let arr = extract_array2!(value, "positions", f64)?;
                     let s = arr.as_slice().map_err(|e| {
-                        pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'positions' must be C-contiguous: {e}"
+                        ))
                     })?;
                     if arr.shape()[1] != 3 {
-                        return Err(pyo3::exceptions::PyValueError::new_err(
-                            "positions must have shape (N, 3)",
-                        ));
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'positions' must have shape (N, 3), \
+                             got shape ({}, {})",
+                            arr.shape()[0],
+                            arr.shape()[1]
+                        )));
                     }
                     // Allow changing number of points
                     let n = arr.shape()[0];
@@ -517,39 +572,94 @@ impl PySfmrReconstruction {
                     }
                 }
                 "colors" => {
-                    let arr: PyReadonlyArray2<u8> = value.extract()?;
+                    let arr = extract_array2!(value, "colors", u8)?;
                     let s = arr.as_slice().map_err(|e| {
-                        pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'colors' must be C-contiguous: {e}"
+                        ))
                     })?;
+                    if arr.shape()[1] != 3 {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'colors' must have shape (N, 3), \
+                             got shape ({}, {})",
+                            arr.shape()[0],
+                            arr.shape()[1]
+                        )));
+                    }
+                    if arr.shape()[0] != recon.points.len() {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'colors' length ({}) must match point count ({}). \
+                             Hint: pass 'positions' first if changing point count.",
+                            arr.shape()[0],
+                            recon.points.len()
+                        )));
+                    }
                     for (i, pt) in recon.points.iter_mut().enumerate() {
                         let off = i * 3;
                         pt.color = [s[off], s[off + 1], s[off + 2]];
                     }
                 }
                 "errors" => {
-                    let arr: PyReadonlyArray1<f32> = value.extract()?;
+                    let arr = extract_array1!(value, "errors", f32)?;
                     let s = arr.as_slice().map_err(|e| {
-                        pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'errors' must be C-contiguous: {e}"
+                        ))
                     })?;
+                    if s.len() != recon.points.len() {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'errors' length ({}) must match point count ({}). \
+                             Hint: pass 'positions' first if changing point count.",
+                            s.len(),
+                            recon.points.len()
+                        )));
+                    }
                     for (i, pt) in recon.points.iter_mut().enumerate() {
                         pt.error = s[i];
                     }
                 }
                 "estimated_normals" => {
-                    let arr: PyReadonlyArray2<f32> = value.extract()?;
+                    let arr = extract_array2!(value, "estimated_normals", f32)?;
                     let s = arr.as_slice().map_err(|e| {
-                        pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'estimated_normals' must be C-contiguous: {e}"
+                        ))
                     })?;
+                    if arr.shape()[1] != 3 {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'estimated_normals' must have shape (N, 3), \
+                             got shape ({}, {})",
+                            arr.shape()[0],
+                            arr.shape()[1]
+                        )));
+                    }
+                    if arr.shape()[0] != recon.points.len() {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'estimated_normals' length ({}) must match point count ({})",
+                            arr.shape()[0],
+                            recon.points.len()
+                        )));
+                    }
                     for (i, pt) in recon.points.iter_mut().enumerate() {
                         let off = i * 3;
                         pt.estimated_normal = Vector3::new(s[off], s[off + 1], s[off + 2]);
                     }
                 }
                 "quaternions_wxyz" => {
-                    let arr: PyReadonlyArray2<f64> = value.extract()?;
+                    let arr = extract_array2!(value, "quaternions_wxyz", f64)?;
                     let s = arr.as_slice().map_err(|e| {
-                        pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'quaternions_wxyz' must be C-contiguous: {e}"
+                        ))
                     })?;
+                    if arr.shape()[1] != 4 {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'quaternions_wxyz' must have shape (N, 4), \
+                             got shape ({}, {})",
+                            arr.shape()[0],
+                            arr.shape()[1]
+                        )));
+                    }
                     let n = arr.shape()[0];
                     // Resize images if needed (when combined with image_names)
                     while recon.images.len() < n {
@@ -571,10 +681,28 @@ impl PySfmrReconstruction {
                     }
                 }
                 "translations" => {
-                    let arr: PyReadonlyArray2<f64> = value.extract()?;
+                    let arr = extract_array2!(value, "translations", f64)?;
                     let s = arr.as_slice().map_err(|e| {
-                        pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'translations' must be C-contiguous: {e}"
+                        ))
                     })?;
+                    if arr.shape()[1] != 3 {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'translations' must have shape (N, 3), \
+                             got shape ({}, {})",
+                            arr.shape()[0],
+                            arr.shape()[1]
+                        )));
+                    }
+                    if arr.shape()[0] != recon.images.len() {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'translations' length ({}) must match image count ({}). \
+                             Hint: pass 'quaternions_wxyz' or 'image_names' first to resize.",
+                            arr.shape()[0],
+                            recon.images.len()
+                        )));
+                    }
                     for (i, im) in recon.images.iter_mut().enumerate() {
                         let off = i * 3;
                         im.translation_xyz = Vector3::new(s[off], s[off + 1], s[off + 2]);
@@ -585,11 +713,13 @@ impl PySfmrReconstruction {
                     // Defer to after the loop
                 }
                 "observation_counts" => {
-                    let arr: PyReadonlyArray1<u32> = value.extract()?;
+                    let arr = extract_array1!(value, "observation_counts", u32)?;
                     recon.observation_counts = arr
                         .as_slice()
                         .map_err(|e| {
-                            pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                            pyo3::exceptions::PyValueError::new_err(format!(
+                                "clone_with_changes(): 'observation_counts' must be C-contiguous: {e}"
+                            ))
                         })?
                         .to_vec();
                 }
@@ -597,12 +727,12 @@ impl PySfmrReconstruction {
                     new_image_names = Some(value.extract()?);
                 }
                 "camera_indexes" => {
-                    let arr: PyReadonlyArray1<u32> = value.extract()?;
+                    let arr = extract_array1!(value, "camera_indexes", u32)?;
                     new_camera_indexes = Some(
                         arr.as_slice()
                             .map_err(|e| {
                                 pyo3::exceptions::PyValueError::new_err(format!(
-                                    "not contiguous: {e}"
+                                    "clone_with_changes(): 'camera_indexes' must be C-contiguous: {e}"
                                 ))
                             })?
                             .to_vec(),
@@ -616,7 +746,7 @@ impl PySfmrReconstruction {
                         .map(|sc| {
                             CameraIntrinsics::try_from(sc).map_err(|e| {
                                 pyo3::exceptions::PyValueError::new_err(format!(
-                                    "Failed to convert camera: {e}"
+                                    "clone_with_changes(): failed to convert camera: {e}"
                                 ))
                             })
                         })
@@ -629,7 +759,25 @@ impl PySfmrReconstruction {
                     new_sift_content_hashes = Some(py_to_u128_bytes(&value)?);
                 }
                 "thumbnails_y_x_rgb" => {
-                    let arr: numpy::PyReadonlyArray4<u8> = value.extract()?;
+                    let arr: numpy::PyReadonlyArray4<u8> = value.extract().map_err(|_| {
+                        let actual_type = value
+                            .get_type()
+                            .qualname()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|_| "unknown".to_string());
+                        let actual_dtype = value
+                            .getattr("dtype")
+                            .ok()
+                            .and_then(|d| d.str().ok())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        pyo3::exceptions::PyTypeError::new_err(format!(
+                            "clone_with_changes(): 'thumbnails_y_x_rgb' must be a 4D contiguous \
+                             ndarray with dtype uint8 and shape (N, 128, 128, 3), \
+                             got {} with dtype {}",
+                            actual_type, actual_dtype
+                        ))
+                    })?;
                     recon.thumbnails_y_x_rgb = arr.as_array().to_owned();
                 }
                 "rig_frame_data" => {
@@ -677,20 +825,41 @@ impl PySfmrReconstruction {
             }
             recon.images.truncate(n);
             for (i, im) in recon.images.iter_mut().enumerate() {
-                im.name = names[i].clone();
+                im.name.clone_from(&names[i]);
             }
         }
-        if let Some(indexes) = new_camera_indexes {
+        if let Some(ref indexes) = new_camera_indexes {
+            if indexes.len() != recon.images.len() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'camera_indexes' length ({}) must match image count ({})",
+                    indexes.len(),
+                    recon.images.len()
+                )));
+            }
             for (i, im) in recon.images.iter_mut().enumerate() {
                 im.camera_index = indexes[i];
             }
         }
-        if let Some(hashes) = new_feature_tool_hashes {
+        if let Some(ref hashes) = new_feature_tool_hashes {
+            if hashes.len() != recon.images.len() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'feature_tool_hashes' length ({}) must match image count ({})",
+                    hashes.len(),
+                    recon.images.len()
+                )));
+            }
             for (i, im) in recon.images.iter_mut().enumerate() {
                 im.feature_tool_hash = hashes[i];
             }
         }
-        if let Some(hashes) = new_sift_content_hashes {
+        if let Some(ref hashes) = new_sift_content_hashes {
+            if hashes.len() != recon.images.len() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'sift_content_hashes' length ({}) must match image count ({})",
+                    hashes.len(),
+                    recon.images.len()
+                )));
+            }
             for (i, im) in recon.images.iter_mut().enumerate() {
                 im.sift_content_hash = hashes[i];
             }
@@ -709,34 +878,57 @@ impl PySfmrReconstruction {
             || kw.contains("track_point_ids")?;
 
         if has_tracks {
-            let img_idx: PyReadonlyArray1<u32> = kw
-                .get_item("track_image_indexes")?
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(
-                    "track_image_indexes, track_feature_indexes, and track_point_ids must all be provided together",
-                ))?
-                .extract()?;
-            let feat_idx: PyReadonlyArray1<u32> = kw
-                .get_item("track_feature_indexes")?
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(
-                    "track_image_indexes, track_feature_indexes, and track_point_ids must all be provided together",
-                ))?
-                .extract()?;
-            let pt_idx: PyReadonlyArray1<u32> = kw
-                .get_item("track_point_ids")?
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(
-                    "track_image_indexes, track_feature_indexes, and track_point_ids must all be provided together",
-                ))?
-                .extract()?;
+            let img_idx = kw.get_item("track_image_indexes")?.ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "clone_with_changes(): track_image_indexes, track_feature_indexes, and \
+                     track_point_ids must all be provided together",
+                )
+            })?;
+            let img_idx: PyReadonlyArray1<u32> =
+                extract_array1!(img_idx, "track_image_indexes", u32)?;
+
+            let feat_idx = kw.get_item("track_feature_indexes")?.ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "clone_with_changes(): track_image_indexes, track_feature_indexes, and \
+                     track_point_ids must all be provided together",
+                )
+            })?;
+            let feat_idx: PyReadonlyArray1<u32> =
+                extract_array1!(feat_idx, "track_feature_indexes", u32)?;
+
+            let pt_idx = kw.get_item("track_point_ids")?.ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "clone_with_changes(): track_image_indexes, track_feature_indexes, and \
+                     track_point_ids must all be provided together",
+                )
+            })?;
+            let pt_idx: PyReadonlyArray1<u32> = extract_array1!(pt_idx, "track_point_ids", u32)?;
 
             let img_s = img_idx.as_slice().map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'track_image_indexes' must be C-contiguous: {e}"
+                ))
             })?;
             let feat_s = feat_idx.as_slice().map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'track_feature_indexes' must be C-contiguous: {e}"
+                ))
             })?;
             let pt_s = pt_idx.as_slice().map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'track_point_ids' must be C-contiguous: {e}"
+                ))
             })?;
+
+            if img_s.len() != feat_s.len() || img_s.len() != pt_s.len() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): track arrays must all have the same length, \
+                     got track_image_indexes={}, track_feature_indexes={}, track_point_ids={}",
+                    img_s.len(),
+                    feat_s.len(),
+                    pt_s.len()
+                )));
+            }
 
             recon.tracks = (0..img_s.len())
                 .map(|i| sfmtool_core::TrackObservation {

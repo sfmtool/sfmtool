@@ -5,6 +5,7 @@
 
 from .align import align
 from .compare import compare
+from .densify import densify
 from .init import init
 from .inspect import inspect
 from .match import match
@@ -16,6 +17,7 @@ from .xform import xform
 __all__ = [
     "align",
     "compare",
+    "densify",
     "init",
     "inspect",
     "match",
