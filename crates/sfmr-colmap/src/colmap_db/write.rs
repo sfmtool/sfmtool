@@ -311,9 +311,8 @@ fn write_pose_priors(
 fn write_rigs(conn: &Connection, rigs: &[DbRig]) -> Result<Vec<i64>, ColmapDbError> {
     let mut rig_ids = Vec::with_capacity(rigs.len());
 
-    let mut rig_stmt = conn.prepare(
-        "INSERT INTO rigs (ref_sensor_id, ref_sensor_type) VALUES (?1, ?2)",
-    )?;
+    let mut rig_stmt =
+        conn.prepare("INSERT INTO rigs (ref_sensor_id, ref_sensor_type) VALUES (?1, ?2)")?;
     let mut sensor_stmt = conn.prepare(
         "INSERT INTO rig_sensors (rig_id, sensor_id, sensor_type, sensor_from_rig)
          VALUES (?1, ?2, ?3, ?4)",

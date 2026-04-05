@@ -110,6 +110,42 @@ _CAMERA_PARAM_NAMES = {
 }
 
 
+def colmap_camera_from_intrinsics(camera_meta, *, width=None, height=None):
+    """Convert CameraIntrinsics to pycolmap.Camera object.
+
+    Args:
+        camera_meta: CameraIntrinsics object
+        width: Image width in pixels. If None, uses width from camera_meta.
+        height: Image height in pixels. If None, uses height from camera_meta.
+
+    Returns:
+        pycolmap.Camera object
+    """
+    import pycolmap
+
+    d = camera_meta.to_dict()
+    model = d["model"]
+    params = d["parameters"]
+
+    if width is None:
+        width = camera_meta.width
+    if height is None:
+        height = camera_meta.height
+
+    param_names = _CAMERA_PARAM_NAMES.get(model)
+    if param_names is None:
+        raise ValueError(f"Unsupported camera model: {model}")
+
+    param_list = [params[name] for name in param_names]
+
+    return pycolmap.Camera(
+        model=model,
+        width=width,
+        height=height,
+        params=param_list,
+    )
+
+
 def pycolmap_camera_to_intrinsics(camera):
     """Convert a pycolmap.Camera to a CameraIntrinsics object."""
     from ._sfmtool import CameraIntrinsics

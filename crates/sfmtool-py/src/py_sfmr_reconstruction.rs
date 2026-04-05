@@ -92,16 +92,14 @@ impl PySfmrReconstruction {
             meta.timestamp = chrono::Local::now().to_rfc3339();
 
             // Update workspace paths relative to output file
-            let output_path = std::path::absolute(Path::new(path))
-                .unwrap_or_else(|_| PathBuf::from(path));
+            let output_path =
+                std::path::absolute(Path::new(path)).unwrap_or_else(|_| PathBuf::from(path));
             if let Some(parent) = output_path.parent() {
                 if let Some(rel) = pathdiff::diff_paths(&self.inner.workspace_dir, parent) {
-                    meta.workspace.relative_path =
-                        rel.to_string_lossy().replace('\\', "/");
+                    meta.workspace.relative_path = rel.to_string_lossy().replace('\\', "/");
                 }
             }
-            meta.workspace.absolute_path =
-                self.inner.workspace_dir.to_string_lossy().to_string();
+            meta.workspace.absolute_path = self.inner.workspace_dir.to_string_lossy().to_string();
         }
 
         // Merge tool_options if provided
@@ -467,13 +465,15 @@ impl PySfmrReconstruction {
     /// ``feature_tool_hashes``, ``sift_content_hashes``, ``thumbnails_y_x_rgb``,
     /// ``rig_frame_data``, ``world_space_unit``.
     #[pyo3(signature = (**kwargs))]
-    fn clone_with_changes(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+    fn clone_with_changes(
+        &self,
+        py: Python<'_>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Self> {
         use nalgebra::{UnitQuaternion, Vector3};
         use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 
-        use crate::helpers::{
-            extract_cameras_as_sfmr, extract_rig_frame_data, py_to_u128_bytes,
-        };
+        use crate::helpers::{extract_cameras_as_sfmr, extract_rig_frame_data, py_to_u128_bytes};
 
         let mut recon = self.inner.clone();
 
@@ -502,16 +502,18 @@ impl PySfmrReconstruction {
                     }
                     // Allow changing number of points
                     let n = arr.shape()[0];
-                    recon.points.resize(n, sfmtool_core::Point3D {
-                        position: nalgebra::Point3::origin(),
-                        color: [0, 0, 0],
-                        error: 0.0,
-                        estimated_normal: Vector3::zeros(),
-                    });
+                    recon.points.resize(
+                        n,
+                        sfmtool_core::Point3D {
+                            position: nalgebra::Point3::origin(),
+                            color: [0, 0, 0],
+                            error: 0.0,
+                            estimated_normal: Vector3::zeros(),
+                        },
+                    );
                     for (i, pt) in recon.points.iter_mut().enumerate() {
                         let off = i * 3;
-                        pt.position =
-                            nalgebra::Point3::new(s[off], s[off + 1], s[off + 2]);
+                        pt.position = nalgebra::Point3::new(s[off], s[off + 1], s[off + 2]);
                     }
                 }
                 "colors" => {
@@ -540,8 +542,7 @@ impl PySfmrReconstruction {
                     })?;
                     for (i, pt) in recon.points.iter_mut().enumerate() {
                         let off = i * 3;
-                        pt.estimated_normal =
-                            Vector3::new(s[off], s[off + 1], s[off + 2]);
+                        pt.estimated_normal = Vector3::new(s[off], s[off + 1], s[off + 2]);
                     }
                 }
                 "quaternions_wxyz" => {
@@ -585,8 +586,11 @@ impl PySfmrReconstruction {
                 }
                 "observation_counts" => {
                     let arr: PyReadonlyArray1<u32> = value.extract()?;
-                    recon.observation_counts = arr.as_slice()
-                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}")))?
+                    recon.observation_counts = arr
+                        .as_slice()
+                        .map_err(|e| {
+                            pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                        })?
                         .to_vec();
                 }
                 "image_names" => {
@@ -594,20 +598,28 @@ impl PySfmrReconstruction {
                 }
                 "camera_indexes" => {
                     let arr: PyReadonlyArray1<u32> = value.extract()?;
-                    new_camera_indexes = Some(arr.as_slice()
-                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}")))?
-                        .to_vec());
+                    new_camera_indexes = Some(
+                        arr.as_slice()
+                            .map_err(|e| {
+                                pyo3::exceptions::PyValueError::new_err(format!(
+                                    "not contiguous: {e}"
+                                ))
+                            })?
+                            .to_vec(),
+                    );
                 }
                 "cameras" => {
                     use sfmtool_core::CameraIntrinsics;
                     let sfmr_cameras = extract_cameras_as_sfmr(&value)?;
                     recon.cameras = sfmr_cameras
                         .iter()
-                        .map(|sc| CameraIntrinsics::try_from(sc).map_err(|e| {
-                            pyo3::exceptions::PyValueError::new_err(format!(
-                                "Failed to convert camera: {e}"
-                            ))
-                        }))
+                        .map(|sc| {
+                            CameraIntrinsics::try_from(sc).map_err(|e| {
+                                pyo3::exceptions::PyValueError::new_err(format!(
+                                    "Failed to convert camera: {e}"
+                                ))
+                            })
+                        })
                         .collect::<PyResult<Vec<_>>>()?;
                 }
                 "feature_tool_hashes" => {

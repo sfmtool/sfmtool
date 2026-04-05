@@ -1165,11 +1165,9 @@ fn test_write_multi_sensor_rig() {
 
     // Check sensor_from_rig blob
     let pose_blob: Vec<u8> = conn
-        .query_row(
-            "SELECT sensor_from_rig FROM rig_sensors",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT sensor_from_rig FROM rig_sensors", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(pose_blob.len(), 7 * 8); // qw,qx,qy,qz,tx,ty,tz as f64
     let values: Vec<f64> = pose_blob

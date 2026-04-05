@@ -564,8 +564,7 @@ impl SfmrReconstruction {
         use crate::rot_quaternion::RotQuaternion;
 
         // Transform 3D points
-        let point_positions: Vec<Point3<f64>> =
-            self.points.iter().map(|pt| pt.position).collect();
+        let point_positions: Vec<Point3<f64>> = self.points.iter().map(|pt| pt.position).collect();
         let new_positions = transform.apply_to_points(&point_positions);
 
         let new_points: Vec<Point3D> = self
