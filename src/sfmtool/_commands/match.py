@@ -62,6 +62,27 @@ from .._filenames import expand_paths
     help="Number of overlapping image pairs for --sequential. Default: 10.",
 )
 @click.option(
+    "--flow",
+    "flow_match",
+    is_flag=True,
+    help="Use optical flow-based matching instead of exhaustive descriptor matching. "
+    "Best for sequential video frames with small inter-frame motion.",
+)
+@click.option(
+    "--flow-preset",
+    "flow_preset",
+    type=click.Choice(["fast", "default", "high_quality"]),
+    default="default",
+    help="Optical flow quality preset for --flow. Default: default.",
+)
+@click.option(
+    "--flow-skip",
+    "flow_wide_baseline_skip",
+    type=click.IntRange(min=1),
+    default=5,
+    help="Sliding window size for --flow. 1 = adjacent pairs only. Default: 5.",
+)
+@click.option(
     "--camera-model",
     "camera_model",
     type=click.Choice(
@@ -90,6 +111,9 @@ def match(
     max_feature_count,
     output_path,
     range_expr,
+    flow_match,
+    flow_preset,
+    flow_wide_baseline_skip,
     camera_model,
 ):
     """Match features between image pairs and write a .matches file.
@@ -104,6 +128,9 @@ def match(
         # Sequential matching for ordered collections
         sfm match --sequential images/
 
+        # Flow-based matching for sequential video
+        sfm match --flow images/
+
         # With feature count limit
         sfm match --exhaustive --max-features 4096 images/
     """
@@ -112,15 +139,16 @@ def match(
     if not paths:
         raise click.UsageError("Must provide image paths.")
 
-    method_count = sum([exhaustive, sequential])
+    method_count = sum([exhaustive, sequential, flow_match])
     if method_count > 1:
         raise click.UsageError(
             "Cannot specify more than one matching method. "
-            "Choose one of: --exhaustive (-e) or --sequential (-s)"
+            "Choose one of: --exhaustive (-e), --sequential (-s), or --flow"
         )
     if method_count == 0:
         raise click.UsageError(
-            "Must specify a matching method: --exhaustive (-e) or --sequential (-s)"
+            "Must specify a matching method: "
+            "--exhaustive (-e), --sequential (-s), or --flow"
         )
 
     numbers = None
@@ -140,7 +168,12 @@ def match(
     workspace_dir = deduce_workspace({p.parent for p in absolute_paths})
 
     try:
-        matching_method = "sequential" if sequential else "exhaustive"
+        if flow_match:
+            matching_method = "flow"
+        elif sequential:
+            matching_method = "sequential"
+        else:
+            matching_method = "exhaustive"
         _run_matching(
             absolute_paths,
             workspace_dir,
@@ -148,6 +181,8 @@ def match(
             max_feature_count=max_feature_count,
             output_path=output_path,
             camera_model=camera_model,
+            flow_preset=flow_preset,
+            flow_wide_baseline_skip=flow_wide_baseline_skip,
             sequential_overlap=sequential_overlap,
         )
     except Exception as e:
@@ -161,6 +196,8 @@ def _run_matching(
     max_feature_count: int | None,
     output_path: str | None,
     camera_model: str | None,
+    flow_preset: str = "default",
+    flow_wide_baseline_skip: int = 5,
     sequential_overlap: int = 10,
 ):
     """Run matching and produce a .matches file."""
@@ -217,6 +254,17 @@ def _run_matching(
                 quadratic_overlap=True,
             )
             pycolmap.match_sequential(db_path, pairing_options=pairing_options)
+        elif matching_method == "flow":
+            _run_flow_matching(
+                image_paths,
+                sift_paths,
+                workspace_dir,
+                db_path,
+                Path(tmpdir),
+                max_feature_count=max_feature_count,
+                flow_preset=flow_preset,
+                flow_wide_baseline_skip=flow_wide_baseline_skip,
+            )
         else:
             raise ValueError(f"Unsupported matching method: {matching_method}")
 
@@ -241,12 +289,21 @@ def _run_matching(
 
     # Fill in metadata
     matches_data["metadata"]["matching_method"] = matching_method
-    matches_data["metadata"]["matching_tool"] = "colmap"
-    matches_data["metadata"]["matching_tool_version"] = pycolmap.__version__
+    if matching_method == "flow":
+        matches_data["metadata"]["matching_tool"] = "sfmtool-flow"
+        matches_data["metadata"]["matching_tool_version"] = ""
+    else:
+        matches_data["metadata"]["matching_tool"] = "colmap"
+        matches_data["metadata"]["matching_tool_version"] = pycolmap.__version__
     matches_data["metadata"]["matching_options"] = {}
     if max_feature_count:
         matches_data["metadata"]["matching_options"]["max_feature_count"] = (
             max_feature_count
+        )
+    if matching_method == "flow":
+        matches_data["metadata"]["matching_options"]["flow_preset"] = flow_preset
+        matches_data["metadata"]["matching_options"]["flow_skip"] = (
+            flow_wide_baseline_skip
         )
     if matching_method == "sequential":
         matches_data["metadata"]["matching_options"]["sequential_overlap"] = (
@@ -459,3 +516,78 @@ def _generate_output_path(
     filename = "-".join(parts) + ".matches"
 
     return base_dir / filename
+
+
+def _run_flow_matching(
+    image_paths: list[Path],
+    sift_paths: list[Path],
+    workspace_dir: Path,
+    db_path: Path,
+    colmap_dir: Path,
+    max_feature_count: int | None = None,
+    flow_preset: str = "default",
+    flow_wide_baseline_skip: int = 5,
+) -> None:
+    """Run flow-based matching and write results to COLMAP database.
+
+    Computes optical flow between sequential image pairs, finds feature
+    correspondences via advection + descriptor filtering, writes matches
+    to the database, and runs geometric verification via pycolmap.
+    """
+    import pycolmap
+
+    from ..feature_match._flow_matching import flow_match_sequential
+
+    # Build image_id mapping from the database
+    image_id_map = {}  # image index -> database image_id
+    with pycolmap.Database.open(db_path) as db:
+        images = db.read_all_images()
+        rel_to_id = {}
+        for img in images:
+            rel_to_id[img.name] = img.image_id
+
+        for idx, image_path in enumerate(image_paths):
+            rel_path = os.path.relpath(image_path, workspace_dir).replace("\\", "/")
+            if rel_path in rel_to_id:
+                image_id_map[idx] = rel_to_id[rel_path]
+
+    # Run the flow matching pipeline
+    all_matches = flow_match_sequential(
+        image_paths=[Path(p) for p in image_paths],
+        sift_paths=sift_paths,
+        preset=flow_preset,
+        window_size=flow_wide_baseline_skip,
+        max_feature_count=max_feature_count,
+    )
+
+    if not all_matches:
+        click.echo("Warning: Flow matching produced no matches")
+        return
+
+    # Write matches to database and build pairs file for geometric verification
+    pairs_path = colmap_dir / "flow_pairs.txt"
+    with (
+        pycolmap.Database.open(db_path) as db,
+        open(pairs_path, "w") as pairs_file,
+    ):
+        for (idx_i, idx_j), matches in all_matches.items():
+            if idx_i not in image_id_map or idx_j not in image_id_map:
+                continue
+            img_id_i = image_id_map[idx_i]
+            img_id_j = image_id_map[idx_j]
+
+            db.write_matches(img_id_i, img_id_j, matches)
+
+            rel_i = os.path.relpath(image_paths[idx_i], workspace_dir).replace(
+                "\\", "/"
+            )
+            rel_j = os.path.relpath(image_paths[idx_j], workspace_dir).replace(
+                "\\", "/"
+            )
+            pairs_file.write(f"{rel_i} {rel_j}\n")
+
+    tvg_options = pycolmap.TwoViewGeometryOptions()
+
+    # Run geometric verification on matched pairs
+    click.echo("Running geometric verification...")
+    pycolmap.verify_matches(str(db_path), str(pairs_path), options=tvg_options)

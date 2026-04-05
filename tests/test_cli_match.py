@@ -1,7 +1,6 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -21,6 +20,13 @@ def test_match_multiple_methods(isolated_seoul_bull_image: Path):
     result = CliRunner().invoke(
         main,
         ["match", "--exhaustive", "--sequential", str(isolated_seoul_bull_image)],
+    )
+    assert result.exit_code != 0
+    assert "Cannot specify more than one matching method" in result.output
+
+    result = CliRunner().invoke(
+        main,
+        ["match", "--exhaustive", "--flow", str(isolated_seoul_bull_image)],
     )
     assert result.exit_code != 0
     assert "Cannot specify more than one matching method" in result.output
@@ -126,6 +132,49 @@ def test_match_with_output_path(isolated_seoul_bull_17_images: list[Path]):
     )
     assert result.exit_code == 0, result.output
     assert output_path.exists()
+
+
+def test_match_flow(isolated_seoul_bull_17_images: list[Path]):
+    """Test flow-based matching on a small set of images."""
+    workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+    # Initialize workspace
+    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+
+    # Extract SIFT features
+    result = CliRunner().invoke(
+        main, ["sift", "--extract", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+
+    # Run flow matching with small window
+    output_path = workspace_dir / "flow_test.matches"
+    result = CliRunner().invoke(
+        main,
+        [
+            "match",
+            "--flow",
+            "--flow-skip",
+            "3",
+            "--output",
+            str(output_path),
+            str(workspace_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Running flow matching" in result.output
+    assert "Done:" in result.output
+
+    # Verify the .matches file
+    from sfmtool._sfmtool import read_matches
+
+    matches_data = read_matches(str(output_path))
+    assert matches_data["metadata"]["matching_method"] == "flow"
+    assert matches_data["metadata"]["matching_tool"] == "sfmtool-flow"
+    assert matches_data["metadata"]["matching_options"]["flow_preset"] == "default"
+    assert matches_data["metadata"]["matching_options"]["flow_skip"] == 3
+    assert matches_data["metadata"]["match_count"] > 0
 
 
 def test_match_with_range(isolated_seoul_bull_17_images: list[Path]):

@@ -3,7 +3,7 @@
 
 //! Python wrapper for the sfmtool-core SfmrReconstruction type.
 
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::path::{Path, PathBuf};
@@ -454,7 +454,7 @@ impl PySfmrReconstruction {
     /// ``track_feature_indexes``, ``track_point_ids``, ``observation_counts``,
     /// ``estimated_normals``.
     #[pyo3(signature = (**kwargs))]
-    fn replace(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+    fn replace(&self, _py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         use nalgebra::{UnitQuaternion, Vector3};
         use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 

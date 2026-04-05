@@ -9,7 +9,7 @@ from pathlib import Path
 import click
 
 from ._cli_group import CategoryGroup
-from ._commands import init, match, sift
+from ._commands import init, match, sift, solve
 from ._workspace import find_workspace_for_path
 
 
@@ -30,6 +30,7 @@ def main():
 main.add_command_with_category(init, category="Workspace")
 main.add_command_with_category(sift, category="Image Feature")
 main.add_command_with_category(match, category="Image Feature")
+main.add_command_with_category(solve, category="Reconstruction")
 
 
 @main.command()
