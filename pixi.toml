@@ -18,8 +18,19 @@ sfmtool = { path = ".", editable = true }
 [tasks]
 gui = "cargo run --release --bin sfm-explorer"
 
+[feature.test.dependencies]
+cargo-llvm-cov = "*"
+
+[feature.test.pypi-dependencies]
+maturin = ">=1.8,<2"
+pip = "*"
+
 [feature.test.tasks]
 test = "pytest"
+test-rust = "cargo llvm-cov --workspace"
+coverage = "cargo llvm-cov --workspace --lcov --output-path lcov.info"
+coverage-all = "bash scripts/coverage.sh"
+coverage-html = "cargo llvm-cov --workspace --html --open"
 fmt = "ruff format src tests"
 check = "ruff check src tests"
 

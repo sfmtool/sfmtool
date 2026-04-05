@@ -1,5 +1,8 @@
 # SfM Tool
 
+[![CI](https://github.com/sfmtool/sfmtool/actions/workflows/ci.yml/badge.svg)](https://github.com/sfmtool/sfmtool/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/sfmtool/sfmtool/graph/badge.svg)](https://codecov.io/gh/sfmtool/sfmtool)
+
 A tool for creating and exploring Structure from Motion (SfM) reconstructions,
 built on [COLMAP](https://colmap.github.io/) and [OpenCV](https://opencv.org/).
 

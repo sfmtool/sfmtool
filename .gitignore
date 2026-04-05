@@ -33,12 +33,13 @@ __pycache__/
 # Coverage
 /htmlcov/
 .coverage
+lcov.info
 
 # Build artifacts
 dist/
 *.egg-info/
 
-# MkDocs build output
+# Docs build output
 site/
 
 # User-specific Claude settings
