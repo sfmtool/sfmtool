@@ -201,6 +201,7 @@ pub struct FramesMetadata {
 ///
 /// When `None`, the reconstruction has no multi-camera rigs and every
 /// camera is implicitly a single-sensor rig with identity `sensor_from_rig`.
+#[derive(Debug, Clone)]
 pub struct RigFrameData {
     // Rigs
     pub rigs_metadata: RigsMetadata,

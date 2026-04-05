@@ -15,7 +15,7 @@ use ndarray::Array4;
 
 use sfmr_format::{
     resolve_workspace_dir, ContentHash, DepthStatistics, ImageDepthStats, ObservedDepthStats,
-    SfmrCamera, SfmrData, SfmrError, SfmrMetadata,
+    RigFrameData, SfmrCamera, SfmrData, SfmrError, SfmrMetadata,
 };
 
 use crate::camera_intrinsics::CameraIntrinsics;
@@ -143,6 +143,8 @@ pub struct SfmrReconstruction {
     pub depth_statistics: DepthStatistics,
     /// Depth histogram counts: `depth_histogram_counts[i]` has `num_histogram_buckets` entries.
     pub depth_histogram_counts: Vec<Vec<u32>>,
+    /// Rig definitions and frame groupings. `None` when no multi-camera rigs.
+    pub rig_frame_data: Option<RigFrameData>,
 
     // --- Derived data (computed from the fields above, not stored in .sfmr) ---
     /// Prefix sum of `observation_counts`: `observation_offsets[i]` is the
@@ -530,6 +532,7 @@ impl SfmrReconstruction {
             thumbnails_y_x_rgb: data.thumbnails_y_x_rgb,
             depth_statistics: data.depth_statistics,
             depth_histogram_counts,
+            rig_frame_data: data.rig_frame_data,
             image_feature_to_point,
             max_track_feature_index,
         })
@@ -591,9 +594,24 @@ impl SfmrReconstruction {
             })
             .collect();
 
+        // Scale rig sensor translations if needed
+        let new_rig_frame_data = if let Some(ref rf) = self.rig_frame_data {
+            let scale = transform.scale;
+            if (scale - 1.0).abs() > f64::EPSILON {
+                let mut rf = rf.clone();
+                rf.sensor_translations_xyz.mapv_inplace(|v| v * scale);
+                Some(rf)
+            } else {
+                Some(rf.clone())
+            }
+        } else {
+            None
+        };
+
         SfmrReconstruction {
             images: new_images,
             points: new_points,
+            rig_frame_data: new_rig_frame_data,
             // All other fields are unchanged
             workspace_dir: self.workspace_dir.clone(),
             metadata: self.metadata.clone(),
@@ -690,6 +708,7 @@ impl SfmrReconstruction {
             thumbnails_y_x_rgb: self.thumbnails_y_x_rgb.clone(),
             depth_statistics: self.depth_statistics.clone(),
             depth_histogram_counts: self.depth_histogram_counts.clone(),
+            rig_frame_data: self.rig_frame_data.clone(),
             image_feature_to_point: new_image_feature_to_point,
             max_track_feature_index: new_max_track_feature_index,
         }
@@ -774,7 +793,7 @@ impl SfmrReconstruction {
             metadata: self.metadata.clone(),
             content_hash: self.content_hash.clone(),
             cameras,
-            rig_frame_data: None,
+            rig_frame_data: self.rig_frame_data.clone(),
             image_names,
             camera_indexes,
             quaternions_wxyz,
@@ -953,6 +972,7 @@ impl SfmrReconstruction {
         SfmrReconstruction {
             workspace_dir: PathBuf::new(),
             metadata,
+            rig_frame_data: None,
             content_hash: ContentHash {
                 metadata_xxh128: String::new(),
                 cameras_xxh128: String::new(),

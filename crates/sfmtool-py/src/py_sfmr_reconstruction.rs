@@ -60,7 +60,59 @@ impl PySfmrReconstruction {
     }
 
     /// Save this reconstruction to a `.sfmr` file path.
-    fn save(&self, path: &str) -> PyResult<()> {
+    ///
+    /// Optionally updates the metadata with operation details before writing.
+    /// If ``operation`` is provided, the metadata fields ``operation``, ``tool``,
+    /// ``tool_version``, ``timestamp``, and counts are updated automatically.
+    ///
+    /// Args:
+    ///     path: Output file path.
+    ///     operation: Name of the operation (e.g. ``"xform"``, ``"sfm_solve"``).
+    ///     tool_name: Tool that performed the operation (default ``"sfmtool"``).
+    ///     tool_options: Optional dict of operation-specific metadata to merge
+    ///         into ``metadata.tool_options``.
+    #[pyo3(signature = (path, operation=None, tool_name=None, tool_options=None))]
+    fn save(
+        &mut self,
+        py: Python<'_>,
+        path: &str,
+        operation: Option<&str>,
+        tool_name: Option<&str>,
+        tool_options: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<()> {
+        // Update metadata if operation is provided
+        if let Some(op) = operation {
+            let meta = &mut self.inner.metadata;
+            meta.operation = op.to_string();
+            meta.tool = tool_name.unwrap_or("sfmtool").to_string();
+            meta.image_count = self.inner.images.len() as u32;
+            meta.points3d_count = self.inner.points.len() as u32;
+            meta.observation_count = self.inner.tracks.len() as u32;
+            meta.camera_count = self.inner.cameras.len() as u32;
+            meta.timestamp = chrono::Local::now().to_rfc3339();
+
+            // Update workspace paths relative to output file
+            let output_path = std::path::absolute(Path::new(path))
+                .unwrap_or_else(|_| PathBuf::from(path));
+            if let Some(parent) = output_path.parent() {
+                if let Some(rel) = pathdiff::diff_paths(&self.inner.workspace_dir, parent) {
+                    meta.workspace.relative_path =
+                        rel.to_string_lossy().replace('\\', "/");
+                }
+            }
+            meta.workspace.absolute_path =
+                self.inner.workspace_dir.to_string_lossy().to_string();
+        }
+
+        // Merge tool_options if provided
+        if let Some(opts) = tool_options {
+            for (key, value) in opts.iter() {
+                let k: String = key.extract()?;
+                let v: serde_json::Value = crate::helpers::py_to_serde(py, &value)?;
+                self.inner.metadata.tool_options.insert(k, v);
+            }
+        }
+
         self.inner
             .save(Path::new(path))
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
