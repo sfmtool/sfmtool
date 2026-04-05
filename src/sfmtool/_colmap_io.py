@@ -570,7 +570,7 @@ def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None)
             track_point3d_indexes = old_to_new[track_point3d_indexes].astype(np.uint32)
 
     data = {
-        "cameras": recon.cameras(),
+        "cameras": recon.cameras,
         "image_names": recon.image_names,
         "camera_indexes": recon.camera_indexes,
         "quaternions_wxyz": recon.quaternions_wxyz,
@@ -587,7 +587,7 @@ def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None)
     if recon.rig_frame_data is not None:
         data["rig_frame_data"] = recon.rig_frame_data
 
-    num_cameras = len(recon.cameras())
+    num_cameras = len(recon.cameras)
     num_images = len(recon.image_names)
     num_points = len(positions_xyz)
 

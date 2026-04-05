@@ -161,6 +161,7 @@ impl PySfmrReconstruction {
     }
 
     /// Camera intrinsic parameters as a Python list of CameraIntrinsics objects.
+    #[getter]
     fn cameras(&self) -> Vec<PyCameraIntrinsics> {
         self.inner
             .cameras

@@ -4,6 +4,7 @@
 """CLI command implementations organized by functionality."""
 
 from .init import init
+from .inspect import inspect
 from .match import match
 from .sift import sift
 from .solve import solve
@@ -11,6 +12,7 @@ from .xform import xform
 
 __all__ = [
     "init",
+    "inspect",
     "match",
     "sift",
     "solve",
