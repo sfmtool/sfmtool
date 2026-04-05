@@ -47,8 +47,15 @@ zensical = "*"
 docs-serve = "zensical serve"
 docs-build = "zensical build"
 
+[feature.cuda.dependencies]
+pycolmap = { version = ">=4.0", build = "cuda*" }
+
+[feature.cuda.system-requirements]
+cuda = "12.9"
+
 [environments]
 default = {solve-group = "default"}
+cuda = {features = ["cuda"], solve-group = "cuda"}
 test = {features = ["test"], solve-group = "default"}
 dev = {features = ["dev"], solve-group = "default"}
 docs = {features = ["docs"], solve-group = "default"}
