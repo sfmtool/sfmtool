@@ -9,6 +9,7 @@ from sfmtool._filenames import (  # noqa: F401
 )
 from sfmtool._workspace import (  # noqa: F401
     find_workspace_for_path,
+    init_workspace,
     load_workspace_config,
 )
 from sfmtool._sift_file import (  # noqa: F401

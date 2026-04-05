@@ -13,8 +13,10 @@ license = "Apache-2.0"
 description = "Fun with Structure from Motion"
 dependencies = [
     "click",
+    "deadline",
     "numpy",
     "opencv-python-headless",
+    "openjd-model",
     "pycolmap",
     "xxhash",
 ]

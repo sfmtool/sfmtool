@@ -9,7 +9,7 @@ platforms = ["win-64", "linux-64"]
 version = "0.1"
 
 [dependencies]
-python = ">=3.13,<3.15"
+python = ">=3.13,<3.14"
 rust = ">=1.93"
 pycolmap = ">=4.0"
 
@@ -25,6 +25,8 @@ cargo-llvm-cov = "*"
 [feature.test.pypi-dependencies]
 maturin = ">=1.8,<2"
 pip = "*"
+pytest = "*"
+ruff = "*"
 
 [feature.test.tasks]
 test = "pytest"

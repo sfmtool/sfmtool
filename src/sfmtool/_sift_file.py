@@ -8,11 +8,13 @@ and helper functions for path resolution and feature analysis.
 """
 
 import json
+import textwrap
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import xxhash
+from deadline.job_attachments.api import summarize_path_list
 
 from sfmtool._sfmtool import (
     read_sift as _core_read_sift,
@@ -560,24 +562,6 @@ def print_sift_summary(sift_filename: str | Path, verbose: bool = False):
 # ---------------------------------------------------------------------------
 
 
-def _summarize_paths(paths: list[Path]) -> str:
-    """Summarize a list of paths for display."""
-    if not paths:
-        return "(none)"
-    parents = {p.parent for p in paths}
-    lines = []
-    for parent in sorted(parents):
-        children = sorted(p.name for p in paths if p.parent == parent)
-        if len(children) <= 3:
-            lines.append(f"{parent}/  ({', '.join(children)})")
-        else:
-            lines.append(
-                f"{parent}/  ({children[0]}, ..., {children[-1]}) "
-                f"[{len(children)} files]"
-            )
-    return "\n".join(lines)
-
-
 def image_files_to_sift_files(
     image_filename_list: list[str | Path],
     feature_path: str | Path | None = None,
@@ -717,9 +701,9 @@ def image_files_to_sift_files(
     )
     print()
     print("Image files:")
-    print("  " + _summarize_paths(image_filename_list).replace("\n", "\n  "))
+    print(textwrap.indent(summarize_path_list(image_filename_list), "  "))
     print("SIFT features files:")
-    print("  " + _summarize_paths(sift_filename_list).replace("\n", "\n  "))
+    print(textwrap.indent(summarize_path_list(sift_filename_list), "  "))
     return sift_filename_list
 
 
