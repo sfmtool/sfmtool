@@ -20,7 +20,8 @@ mod write;
 
 pub use read::read_colmap_db_matches;
 pub use types::{
-    ColmapDbError, ColmapDbFeatureData, ColmapDbWriteData, ImageIdMap, PosePrior, TwoViewGeometry,
+    ColmapDbError, ColmapDbFeatureData, ColmapDbWriteData, DbFrame, DbFrameDataId, DbRig,
+    DbRigSensor, DbSensor, DbSensorType, ImageIdMap, PosePrior, TwoViewGeometry,
     TwoViewGeometryConfig,
 };
 pub use write::{write_colmap_db, write_colmap_db_features, write_colmap_db_matches};

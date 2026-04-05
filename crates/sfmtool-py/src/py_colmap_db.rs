@@ -237,6 +237,8 @@ pub fn write_colmap_db(
         descriptor_dim,
         pose_priors: pose_priors.as_deref(),
         two_view_geometries: two_view_geometries.as_deref(),
+        rigs: None,
+        frames: None,
     };
 
     let image_ids = colmap_db::write_colmap_db(Path::new(db_path), &write_data)

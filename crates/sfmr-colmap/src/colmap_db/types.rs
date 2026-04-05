@@ -44,6 +44,10 @@ pub struct ColmapDbWriteData<'a> {
     pub pose_priors: Option<&'a [PosePrior]>,
     /// Optional two-view geometries to write.
     pub two_view_geometries: Option<&'a [TwoViewGeometry]>,
+    /// Optional rig definitions. When provided, frames must also be provided.
+    pub rigs: Option<&'a [DbRig]>,
+    /// Optional frame definitions. Each frame references a rig by index into `rigs`.
+    pub frames: Option<&'a [DbFrame]>,
 }
 
 /// A pose prior for an image in the COLMAP database.
@@ -97,6 +101,58 @@ pub struct TwoViewGeometry {
     pub tvec: Option<[f64; 3]>,
 }
 
+// ── Rig and frame types ─────────────────────────────────────────────────
+
+/// Sensor type enum matching COLMAP's `SensorType`.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbSensorType {
+    Camera = 0,
+    Imu = 1,
+}
+
+/// A sensor identifier (type + id).
+#[derive(Debug, Clone)]
+pub struct DbSensor {
+    pub sensor_type: DbSensorType,
+    pub id: u32,
+}
+
+/// A non-reference sensor in a rig, with optional `sensor_from_rig` transform.
+#[derive(Debug, Clone)]
+pub struct DbRigSensor {
+    pub sensor: DbSensor,
+    /// Optional `sensor_from_rig` pose: WXYZ quaternion + XYZ translation.
+    pub sensor_from_rig: Option<([f64; 4], [f64; 3])>,
+}
+
+/// A rig definition for the COLMAP database.
+#[derive(Debug, Clone)]
+pub struct DbRig {
+    /// Reference sensor (defines the rig origin).
+    pub ref_sensor: DbSensor,
+    /// Non-reference sensors with optional extrinsic poses.
+    pub sensors: Vec<DbRigSensor>,
+}
+
+/// A data_id entry in a frame (maps a sensor to an image).
+#[derive(Debug, Clone)]
+pub struct DbFrameDataId {
+    pub sensor_type: DbSensorType,
+    pub sensor_id: u32,
+    /// The image_id (0-based index into image_names) this sensor maps to.
+    pub data_id: u32,
+}
+
+/// A frame (temporal instant linking a rig to its images).
+#[derive(Debug, Clone)]
+pub struct DbFrame {
+    /// Index of the rig in the rigs slice (0-based).
+    pub rig_index: u32,
+    /// Data IDs mapping sensors to images for this frame.
+    pub data_ids: Vec<DbFrameDataId>,
+}
+
 // ── Matches-format interop types ────────────────────────────────────────
 
 /// Mapping between 0-based image indexes and 1-based COLMAP database image IDs.
@@ -138,6 +194,10 @@ pub struct ColmapDbFeatureData<'a> {
     pub descriptor_dim: u32,
     /// Optional pose priors for each image.
     pub pose_priors: Option<&'a [PosePrior]>,
+    /// Optional rig definitions.
+    pub rigs: Option<&'a [DbRig]>,
+    /// Optional frame definitions.
+    pub frames: Option<&'a [DbFrame]>,
 }
 
 // ── TwoViewGeometryConfig conversions ───────────────────────────────────

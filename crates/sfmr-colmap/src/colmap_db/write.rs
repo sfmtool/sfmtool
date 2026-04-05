@@ -11,8 +11,8 @@ use rusqlite::Connection;
 use crate::colmap_io::{camera_params_to_array, colmap_model_id};
 
 use super::types::{
-    ColmapDbError, ColmapDbFeatureData, ColmapDbWriteData, ImageIdMap, PosePrior, TwoViewGeometry,
-    TwoViewGeometryConfig,
+    ColmapDbError, ColmapDbFeatureData, ColmapDbWriteData, DbFrame, DbRig, ImageIdMap, PosePrior,
+    TwoViewGeometry, TwoViewGeometryConfig,
 };
 
 /// COLMAP's maximum number of images for pair ID encoding.
@@ -23,6 +23,24 @@ const K_MAX_NUM_IMAGES: i64 = 2_147_483_647;
 fn create_schema(conn: &Connection) -> Result<(), ColmapDbError> {
     conn.execute_batch(
         "
+        CREATE TABLE IF NOT EXISTS rigs (
+            rig_id          INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            ref_sensor_id   INTEGER NOT NULL,
+            ref_sensor_type INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS rig_ref_sensor_assignment ON
+            rigs(ref_sensor_id, ref_sensor_type);
+
+        CREATE TABLE IF NOT EXISTS rig_sensors (
+            rig_id          INTEGER NOT NULL,
+            sensor_id       INTEGER NOT NULL,
+            sensor_type     INTEGER NOT NULL,
+            sensor_from_rig BLOB,
+            FOREIGN KEY(rig_id) REFERENCES rigs(rig_id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS rig_sensor_assignment ON
+            rig_sensors(sensor_id, sensor_type);
+
         CREATE TABLE IF NOT EXISTS cameras (
             camera_id   INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
             model       INTEGER NOT NULL,
@@ -32,18 +50,29 @@ fn create_schema(conn: &Connection) -> Result<(), ColmapDbError> {
             prior_focal_length  INTEGER DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS frames (
+            frame_id    INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            rig_id      INTEGER NOT NULL,
+            FOREIGN KEY(rig_id) REFERENCES rigs(rig_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS frame_data (
+            frame_id    INTEGER NOT NULL,
+            data_id     INTEGER NOT NULL,
+            sensor_id   INTEGER NOT NULL,
+            sensor_type INTEGER NOT NULL,
+            FOREIGN KEY(frame_id) REFERENCES frames(frame_id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS frame_sensor_assignment ON
+            frame_data(data_id, sensor_type);
+
         CREATE TABLE IF NOT EXISTS images (
             image_id    INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-            name        TEXT NOT NULL DEFAULT '',
+            name        TEXT NOT NULL UNIQUE,
             camera_id   INTEGER NOT NULL,
-            prior_qw    REAL,
-            prior_qx    REAL,
-            prior_qy    REAL,
-            prior_qz    REAL,
-            prior_tx    REAL,
-            prior_ty    REAL,
-            prior_tz    REAL
+            FOREIGN KEY(camera_id) REFERENCES cameras(camera_id)
         );
+        CREATE UNIQUE INDEX IF NOT EXISTS index_name ON images(name);
 
         CREATE TABLE IF NOT EXISTS keypoints (
             image_id    INTEGER PRIMARY KEY NOT NULL,
@@ -278,6 +307,88 @@ fn write_pose_priors(
     Ok(())
 }
 
+/// Write rigs to the database, returning a vec of database rig_ids.
+fn write_rigs(conn: &Connection, rigs: &[DbRig]) -> Result<Vec<i64>, ColmapDbError> {
+    let mut rig_ids = Vec::with_capacity(rigs.len());
+
+    let mut rig_stmt = conn.prepare(
+        "INSERT INTO rigs (ref_sensor_id, ref_sensor_type) VALUES (?1, ?2)",
+    )?;
+    let mut sensor_stmt = conn.prepare(
+        "INSERT INTO rig_sensors (rig_id, sensor_id, sensor_type, sensor_from_rig)
+         VALUES (?1, ?2, ?3, ?4)",
+    )?;
+
+    for rig in rigs {
+        rig_stmt.execute(rusqlite::params![
+            rig.ref_sensor.id as i64,
+            rig.ref_sensor.sensor_type as i32,
+        ])?;
+        let rig_id = conn.last_insert_rowid();
+
+        // Write non-reference sensors
+        for rs in &rig.sensors {
+            let pose_blob: Option<Vec<u8>> = rs.sensor_from_rig.map(|(q, t)| {
+                // COLMAP stores Rigid3d as: qw, qx, qy, qz, tx, ty, tz (f64 LE)
+                let mut blob = Vec::with_capacity(7 * 8);
+                for &v in &q {
+                    blob.extend_from_slice(&v.to_le_bytes());
+                }
+                for &v in &t {
+                    blob.extend_from_slice(&v.to_le_bytes());
+                }
+                blob
+            });
+            sensor_stmt.execute(rusqlite::params![
+                rig_id,
+                rs.sensor.id as i64,
+                rs.sensor.sensor_type as i32,
+                pose_blob,
+            ])?;
+        }
+
+        rig_ids.push(rig_id);
+    }
+
+    Ok(rig_ids)
+}
+
+/// Write frames to the database, creating frame_data entries that link sensors to images.
+fn write_frames(
+    conn: &Connection,
+    frames: &[DbFrame],
+    rig_ids: &[i64],
+    image_ids: &[i64],
+) -> Result<Vec<i64>, ColmapDbError> {
+    let mut frame_ids = Vec::with_capacity(frames.len());
+
+    let mut frame_stmt = conn.prepare("INSERT INTO frames (rig_id) VALUES (?1)")?;
+    let mut data_stmt = conn.prepare(
+        "INSERT INTO frame_data (frame_id, data_id, sensor_id, sensor_type)
+         VALUES (?1, ?2, ?3, ?4)",
+    )?;
+
+    for frame in frames {
+        let rig_id = rig_ids[frame.rig_index as usize];
+        frame_stmt.execute(rusqlite::params![rig_id])?;
+        let frame_id = conn.last_insert_rowid();
+
+        for did in &frame.data_ids {
+            let db_image_id = image_ids[did.data_id as usize];
+            data_stmt.execute(rusqlite::params![
+                frame_id,
+                db_image_id,
+                did.sensor_id as i64,
+                did.sensor_type as i32,
+            ])?;
+        }
+
+        frame_ids.push(frame_id);
+    }
+
+    Ok(frame_ids)
+}
+
 /// Convert an f64 array to a little-endian byte blob.
 fn f64_array_to_blob(values: &[f64]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
@@ -405,6 +516,13 @@ pub fn write_colmap_db(
         write_two_view_geometries(&tx, tvgs, &image_ids)?;
     }
 
+    if let Some(rigs) = data.rigs {
+        let rig_ids = write_rigs(&tx, rigs)?;
+        if let Some(frames) = data.frames {
+            write_frames(&tx, frames, &rig_ids, &image_ids)?;
+        }
+    }
+
     tx.commit()?;
     Ok(image_ids)
 }
@@ -445,6 +563,13 @@ pub fn write_colmap_db_features(
 
     if let Some(priors) = data.pose_priors {
         write_pose_priors(&tx, priors, &image_ids)?;
+    }
+
+    if let Some(rigs) = data.rigs {
+        let rig_ids = write_rigs(&tx, rigs)?;
+        if let Some(frames) = data.frames {
+            write_frames(&tx, frames, &rig_ids, &image_ids)?;
+        }
     }
 
     tx.commit()?;

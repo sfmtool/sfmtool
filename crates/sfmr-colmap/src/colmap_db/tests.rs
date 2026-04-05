@@ -54,6 +54,8 @@ fn test_write_and_read_back_cameras() {
         descriptor_dim: 128,
         pose_priors: None,
         two_view_geometries: None,
+        rigs: None,
+        frames: None,
     };
 
     let image_ids = write_colmap_db(&db_path, &data).unwrap();
@@ -168,6 +170,8 @@ fn test_write_pose_priors() {
         descriptor_dim: 128,
         pose_priors: Some(&pose_priors),
         two_view_geometries: None,
+        rigs: None,
+        frames: None,
     };
 
     write_colmap_db(&db_path, &data).unwrap();
@@ -270,6 +274,8 @@ fn test_write_two_view_geometries() {
         descriptor_dim: 128,
         pose_priors: None,
         two_view_geometries: Some(&tvgs),
+        rigs: None,
+        frames: None,
     };
 
     write_colmap_db(&db_path, &data).unwrap();
@@ -370,6 +376,8 @@ fn test_pair_id_encoding() {
         descriptor_dim: 128,
         pose_priors: None,
         two_view_geometries: Some(&tvgs),
+        rigs: None,
+        frames: None,
     };
 
     let image_ids = write_colmap_db(&db_path, &data).unwrap();
@@ -435,6 +443,8 @@ fn test_multiple_cameras() {
         descriptor_dim: 128,
         pose_priors: None,
         two_view_geometries: None,
+        rigs: None,
+        frames: None,
     };
 
     write_colmap_db(&db_path, &data).unwrap();
@@ -507,6 +517,8 @@ fn test_overwrite_existing_db() {
         descriptor_dim: 128,
         pose_priors: None,
         two_view_geometries: None,
+        rigs: None,
+        frames: None,
     };
 
     // Write twice — second should overwrite cleanly
@@ -681,6 +693,8 @@ fn test_feature_then_matches_round_trip() {
         descriptors_per_image: &descriptors,
         descriptor_dim: 128,
         pose_priors: None,
+        rigs: None,
+        frames: None,
     };
 
     let id_map = write_colmap_db_features(&db_path, &feature_data).unwrap();
@@ -722,6 +736,8 @@ fn test_feature_then_matches_with_tvg_round_trip() {
         descriptors_per_image: &descriptors,
         descriptor_dim: 128,
         pose_priors: None,
+        rigs: None,
+        frames: None,
     };
 
     let id_map = write_colmap_db_features(&db_path, &feature_data).unwrap();
@@ -783,6 +799,8 @@ fn test_read_with_include_tvg_false() {
         descriptors_per_image: &descriptors,
         descriptor_dim: 128,
         pose_priors: None,
+        rigs: None,
+        frames: None,
     };
 
     let id_map = write_colmap_db_features(&db_path, &feature_data).unwrap();
@@ -812,6 +830,8 @@ fn test_empty_matches_from_db() {
         descriptors_per_image: &descriptors,
         descriptor_dim: 128,
         pose_priors: None,
+        rigs: None,
+        frames: None,
     };
 
     write_colmap_db_features(&db_path, &feature_data).unwrap();
@@ -840,6 +860,8 @@ fn test_db_contents_verification() {
         descriptors_per_image: &descriptors,
         descriptor_dim: 128,
         pose_priors: None,
+        rigs: None,
+        frames: None,
     };
 
     let id_map = write_colmap_db_features(&db_path, &feature_data).unwrap();
@@ -911,6 +933,8 @@ fn test_image_id_map_consistency() {
         descriptors_per_image: &descriptors,
         descriptor_dim: 128,
         pose_priors: None,
+        rigs: None,
+        frames: None,
     };
 
     let id_map = write_colmap_db_features(&db_path, &feature_data).unwrap();
@@ -930,6 +954,254 @@ fn test_image_id_map_consistency() {
             .unwrap();
         assert_eq!(db_id, id_map.index_to_db_id[idx]);
     }
+
+    drop(conn);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// ── Rig and frame tests ─────────────────────────────────────────────────
+
+use super::types::{DbFrame, DbFrameDataId, DbRig, DbRigSensor, DbSensor, DbSensorType};
+
+#[test]
+fn test_write_single_camera_rig_with_frame() {
+    let dir = std::env::temp_dir().join("colmap_db_rig_single");
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = dir.join("test.db");
+
+    let cameras = vec![make_pinhole_camera(640, 480, 500.0, 500.0, 320.0, 240.0)];
+    let image_names = vec!["frame_001.jpg".to_string()];
+    let camera_indexes = vec![0u32];
+    let quaternions_wxyz = vec![[1.0, 0.0, 0.0, 0.0]];
+    let translations_xyz = vec![[0.0, 0.0, 0.0]];
+    let keypoints_per_image = vec![vec![[100.0, 200.0]]];
+    let descriptors_per_image = vec![vec![0u8; 128]];
+
+    // Single-camera trivial rig
+    let rigs = vec![DbRig {
+        ref_sensor: DbSensor {
+            sensor_type: DbSensorType::Camera,
+            id: 1, // camera_id in DB (1-based)
+        },
+        sensors: vec![],
+    }];
+
+    let frames = vec![DbFrame {
+        rig_index: 0,
+        data_ids: vec![DbFrameDataId {
+            sensor_type: DbSensorType::Camera,
+            sensor_id: 1,
+            data_id: 0, // 0-based image index
+        }],
+    }];
+
+    let data = ColmapDbWriteData {
+        cameras: &cameras,
+        image_names: &image_names,
+        camera_indexes: &camera_indexes,
+        quaternions_wxyz: &quaternions_wxyz,
+        translations_xyz: &translations_xyz,
+        keypoints_per_image: &keypoints_per_image,
+        descriptors_per_image: &descriptors_per_image,
+        descriptor_dim: 128,
+        pose_priors: None,
+        two_view_geometries: None,
+        rigs: Some(&rigs),
+        frames: Some(&frames),
+    };
+
+    let image_ids = write_colmap_db(&db_path, &data).unwrap();
+    assert_eq!(image_ids.len(), 1);
+
+    let conn = Connection::open(&db_path).unwrap();
+
+    // Check rigs table
+    let (rig_id, ref_sensor_id, ref_sensor_type): (i64, i64, i32) = conn
+        .query_row(
+            "SELECT rig_id, ref_sensor_id, ref_sensor_type FROM rigs",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(rig_id, 1);
+    assert_eq!(ref_sensor_id, 1);
+    assert_eq!(ref_sensor_type, 0); // Camera
+
+    // Check no rig_sensors (single-camera rig has no non-ref sensors)
+    let sensor_count: i32 = conn
+        .query_row("SELECT COUNT(*) FROM rig_sensors", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(sensor_count, 0);
+
+    // Check frames table
+    let (frame_id, frame_rig_id): (i64, i64) = conn
+        .query_row("SELECT frame_id, rig_id FROM frames", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(frame_id, 1);
+    assert_eq!(frame_rig_id, 1);
+
+    // Check frame_data
+    let (fd_frame_id, fd_data_id, fd_sensor_id, fd_sensor_type): (i64, i64, i64, i32) = conn
+        .query_row(
+            "SELECT frame_id, data_id, sensor_id, sensor_type FROM frame_data",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(fd_frame_id, 1);
+    assert_eq!(fd_data_id, image_ids[0]); // DB image_id
+    assert_eq!(fd_sensor_id, 1);
+    assert_eq!(fd_sensor_type, 0);
+
+    drop(conn);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_write_multi_sensor_rig() {
+    let dir = std::env::temp_dir().join("colmap_db_rig_multi");
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = dir.join("test.db");
+
+    // Two cameras: left (ref) and right (non-ref)
+    let cameras = vec![
+        make_pinhole_camera(640, 480, 500.0, 500.0, 320.0, 240.0),
+        make_pinhole_camera(640, 480, 500.0, 500.0, 320.0, 240.0),
+    ];
+    let image_names = vec![
+        "left_001.jpg".to_string(),
+        "right_001.jpg".to_string(),
+        "left_002.jpg".to_string(),
+        "right_002.jpg".to_string(),
+    ];
+    let camera_indexes = vec![0, 1, 0, 1];
+    let quaternions_wxyz = vec![[1.0, 0.0, 0.0, 0.0]; 4];
+    let translations_xyz = vec![[0.0, 0.0, 0.0]; 4];
+    let keypoints_per_image = vec![vec![]; 4];
+    let descriptors_per_image = vec![vec![]; 4];
+
+    // Stereo rig: camera 1 is ref, camera 2 is offset by 10cm in x
+    let rigs = vec![DbRig {
+        ref_sensor: DbSensor {
+            sensor_type: DbSensorType::Camera,
+            id: 1,
+        },
+        sensors: vec![DbRigSensor {
+            sensor: DbSensor {
+                sensor_type: DbSensorType::Camera,
+                id: 2,
+            },
+            sensor_from_rig: Some(([1.0, 0.0, 0.0, 0.0], [0.1, 0.0, 0.0])),
+        }],
+    }];
+
+    // Two frames, each with both sensors
+    let frames = vec![
+        DbFrame {
+            rig_index: 0,
+            data_ids: vec![
+                DbFrameDataId {
+                    sensor_type: DbSensorType::Camera,
+                    sensor_id: 1,
+                    data_id: 0,
+                },
+                DbFrameDataId {
+                    sensor_type: DbSensorType::Camera,
+                    sensor_id: 2,
+                    data_id: 1,
+                },
+            ],
+        },
+        DbFrame {
+            rig_index: 0,
+            data_ids: vec![
+                DbFrameDataId {
+                    sensor_type: DbSensorType::Camera,
+                    sensor_id: 1,
+                    data_id: 2,
+                },
+                DbFrameDataId {
+                    sensor_type: DbSensorType::Camera,
+                    sensor_id: 2,
+                    data_id: 3,
+                },
+            ],
+        },
+    ];
+
+    let data = ColmapDbWriteData {
+        cameras: &cameras,
+        image_names: &image_names,
+        camera_indexes: &camera_indexes,
+        quaternions_wxyz: &quaternions_wxyz,
+        translations_xyz: &translations_xyz,
+        keypoints_per_image: &keypoints_per_image,
+        descriptors_per_image: &descriptors_per_image,
+        descriptor_dim: 128,
+        pose_priors: None,
+        two_view_geometries: None,
+        rigs: Some(&rigs),
+        frames: Some(&frames),
+    };
+
+    let image_ids = write_colmap_db(&db_path, &data).unwrap();
+    assert_eq!(image_ids.len(), 4);
+
+    let conn = Connection::open(&db_path).unwrap();
+
+    // Check rigs
+    let rig_count: i32 = conn
+        .query_row("SELECT COUNT(*) FROM rigs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(rig_count, 1);
+
+    // Check rig_sensors (1 non-ref sensor)
+    let sensor_count: i32 = conn
+        .query_row("SELECT COUNT(*) FROM rig_sensors", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(sensor_count, 1);
+
+    // Check sensor_from_rig blob
+    let pose_blob: Vec<u8> = conn
+        .query_row(
+            "SELECT sensor_from_rig FROM rig_sensors",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(pose_blob.len(), 7 * 8); // qw,qx,qy,qz,tx,ty,tz as f64
+    let values: Vec<f64> = pose_blob
+        .chunks_exact(8)
+        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .collect();
+    assert!((values[0] - 1.0).abs() < 1e-10); // qw
+    assert!((values[4] - 0.1).abs() < 1e-10); // tx
+
+    // Check frames
+    let frame_count: i32 = conn
+        .query_row("SELECT COUNT(*) FROM frames", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(frame_count, 2);
+
+    // Check frame_data
+    let fd_count: i32 = conn
+        .query_row("SELECT COUNT(*) FROM frame_data", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(fd_count, 4); // 2 frames x 2 sensors
+
+    // Verify frame 1 has the correct image IDs
+    let frame1_data_ids: Vec<i64> = {
+        let mut stmt = conn
+            .prepare("SELECT data_id FROM frame_data WHERE frame_id = 1 ORDER BY sensor_id")
+            .unwrap();
+        stmt.query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+    assert_eq!(frame1_data_ids, vec![image_ids[0], image_ids[1]]);
 
     drop(conn);
     std::fs::remove_dir_all(&dir).unwrap();
