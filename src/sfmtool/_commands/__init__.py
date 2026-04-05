@@ -3,6 +3,7 @@
 
 """CLI command implementations organized by functionality."""
 
+from .compare import compare
 from .init import init
 from .inspect import inspect
 from .match import match
@@ -11,6 +12,7 @@ from .solve import solve
 from .xform import xform
 
 __all__ = [
+    "compare",
     "init",
     "inspect",
     "match",

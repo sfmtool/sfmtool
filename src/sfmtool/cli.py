@@ -9,7 +9,7 @@ from pathlib import Path
 import click
 
 from ._cli_group import CategoryGroup
-from ._commands import init, inspect, match, sift, solve, xform
+from ._commands import compare, init, inspect, match, sift, solve, xform
 from ._workspace import find_workspace_for_path
 
 
@@ -33,6 +33,7 @@ main.add_command_with_category(match, category="Image Feature")
 main.add_command_with_category(solve, category="Reconstruction")
 main.add_command_with_category(xform, category="Reconstruction")
 main.add_command_with_category(inspect, category="Reconstruction")
+main.add_command_with_category(compare, category="Reconstruction")
 
 
 @main.command()

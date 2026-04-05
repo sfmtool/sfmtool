@@ -81,9 +81,7 @@ def test_inspect_non_sfmr_file(tmp_path: Path):
 def test_inspect_mutually_exclusive_flags(sfmrfile_reconstruction_with_17_images):
     """Multiple mode flags at once are rejected."""
     sfmr_path = str(sfmrfile_reconstruction_with_17_images)
-    result = CliRunner().invoke(
-        main, ["inspect", "--coviz", "--metrics", sfmr_path]
-    )
+    result = CliRunner().invoke(main, ["inspect", "--coviz", "--metrics", sfmr_path])
     assert result.exit_code != 0
     assert "mutually exclusive" in result.output
 
@@ -91,8 +89,6 @@ def test_inspect_mutually_exclusive_flags(sfmrfile_reconstruction_with_17_images
 def test_inspect_range_without_metrics(sfmrfile_reconstruction_with_17_images):
     """--range without --metrics is rejected."""
     sfmr_path = str(sfmrfile_reconstruction_with_17_images)
-    result = CliRunner().invoke(
-        main, ["inspect", "--range", "1-5", sfmr_path]
-    )
+    result = CliRunner().invoke(main, ["inspect", "--range", "1-5", sfmr_path])
     assert result.exit_code != 0
     assert "--range" in result.output
