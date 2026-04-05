@@ -7,10 +7,12 @@ from .init import init
 from .match import match
 from .sift import sift
 from .solve import solve
+from .xform import xform
 
 __all__ = [
     "init",
     "match",
     "sift",
     "solve",
+    "xform",
 ]

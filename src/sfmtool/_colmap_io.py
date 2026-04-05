@@ -1,14 +1,14 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""COLMAP binary format import and conversion to SfmrReconstruction."""
+"""COLMAP binary format import/export and conversion to SfmrReconstruction."""
 
 from pathlib import Path
 
 import numpy as np
 
 from ._cameras import pycolmap_camera_to_intrinsics
-from ._sift_file import SiftReader
+from ._sift_file import SiftReader, get_sift_path_for_image
 from ._workspace import find_workspace_for_path, load_workspace_config
 
 
@@ -508,3 +508,101 @@ def _extract_rig_frame_data(
         "image_sensor_indexes": image_sensor_indexes,
         "image_frame_indexes": image_frame_indexes,
     }
+
+
+def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None):
+    """Export a SfmrReconstruction to COLMAP binary format.
+
+    Creates cameras.bin, images.bin, points3D.bin (and optionally rigs.bin,
+    frames.bin) in the output directory.
+
+    Args:
+        recon: SfmrReconstruction object to export
+        output_dir: Directory to write COLMAP binary files
+        max_features: Maximum features to export per image (None = all features)
+    """
+    from ._sfmtool import write_colmap_binary
+
+    output_dir = Path(output_dir)
+    workspace_dir = recon.workspace_dir
+
+    # Read keypoints from .sift files for each image
+    keypoints_per_image = []
+    for img_name in recon.image_names:
+        image_path = Path(workspace_dir) / img_name
+        sift_path = get_sift_path_for_image(image_path)
+        with SiftReader(sift_path) as reader:
+            positions = reader.read_positions(count=max_features)
+        keypoints_per_image.append(np.asarray(positions, dtype=np.float64))
+
+    # Get track arrays
+    track_image_indexes = recon.track_image_indexes
+    track_feature_indexes = recon.track_feature_indexes
+    track_point3d_indexes = recon.track_point_ids
+    positions_xyz = recon.positions
+    colors_rgb = recon.colors
+    reprojection_errors = recon.errors
+
+    if max_features is not None:
+        keypoint_counts = np.array(
+            [len(kps) for kps in keypoints_per_image], dtype=np.uint32
+        )
+        per_obs_limit = keypoint_counts[track_image_indexes]
+        obs_mask = track_feature_indexes < per_obs_limit
+        track_image_indexes = track_image_indexes[obs_mask]
+        track_feature_indexes = track_feature_indexes[obs_mask]
+        track_point3d_indexes = track_point3d_indexes[obs_mask]
+
+        point_obs_counts = np.bincount(
+            track_point3d_indexes, minlength=len(positions_xyz)
+        )
+        surviving_point_ids = np.where(point_obs_counts >= 2)[0]
+        obs_point_mask = point_obs_counts[track_point3d_indexes] >= 2
+        track_image_indexes = track_image_indexes[obs_point_mask]
+        track_feature_indexes = track_feature_indexes[obs_point_mask]
+        track_point3d_indexes = track_point3d_indexes[obs_point_mask]
+        if len(surviving_point_ids) < len(positions_xyz):
+            old_to_new = np.full(len(positions_xyz), -1, dtype=np.int64)
+            old_to_new[surviving_point_ids] = np.arange(len(surviving_point_ids))
+            positions_xyz = positions_xyz[surviving_point_ids]
+            colors_rgb = colors_rgb[surviving_point_ids]
+            reprojection_errors = reprojection_errors[surviving_point_ids]
+            track_point3d_indexes = old_to_new[track_point3d_indexes].astype(np.uint32)
+
+    data = {
+        "cameras": recon.cameras(),
+        "image_names": recon.image_names,
+        "camera_indexes": recon.camera_indexes,
+        "quaternions_wxyz": recon.quaternions_wxyz,
+        "translations_xyz": recon.translations,
+        "positions_xyz": positions_xyz,
+        "colors_rgb": colors_rgb,
+        "reprojection_errors": reprojection_errors,
+        "track_image_indexes": track_image_indexes,
+        "track_feature_indexes": track_feature_indexes,
+        "track_point3d_indexes": track_point3d_indexes,
+        "keypoints_per_image": keypoints_per_image,
+    }
+
+    if recon.rig_frame_data is not None:
+        data["rig_frame_data"] = recon.rig_frame_data
+
+    num_cameras = len(recon.cameras())
+    num_images = len(recon.image_names)
+    num_points = len(positions_xyz)
+
+    print(
+        f"Writing {num_cameras} cameras, {num_images} images, {num_points} 3D points..."
+    )
+    write_colmap_binary(str(output_dir), data)
+
+    print("\nExport complete!")
+    print(f"Output directory: {output_dir}")
+    print(f"  - cameras.bin: {num_cameras} cameras")
+    print(f"  - images.bin: {num_images} images")
+    print(f"  - points3D.bin: {num_points} points")
+    if recon.rig_frame_data is not None:
+        num_rigs = recon.rig_frame_data["rigs_metadata"]["rig_count"]
+        num_frames = recon.rig_frame_data["frames_metadata"]["frame_count"]
+        print(f"  - rigs.bin: {num_rigs} rigs")
+        print(f"  - frames.bin: {num_frames} frames")

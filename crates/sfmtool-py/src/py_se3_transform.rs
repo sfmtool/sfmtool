@@ -13,7 +13,7 @@ use crate::py_rot_quaternion::{extract_f64_vec, PyRotQuaternion};
 /// SE(3) similarity transform: rotation, translation, and uniform scale.
 ///
 /// Applies as: ``p' = scale * (R * p) + t``
-#[pyclass(name = "SE3Transform")]
+#[pyclass(name = "Se3Transform")]
 #[derive(Clone)]
 pub struct PySe3Transform {
     pub(crate) inner: sfmtool_core::Se3Transform,
@@ -342,9 +342,9 @@ impl PySe3Transform {
         Ok(dict)
     }
 
-    /// Compose (SE3Transform) or apply to points (numpy array) via @.
+    /// Compose (Se3Transform) or apply to points (numpy array) via @.
     fn __matmul__<'py>(&self, py: Python<'py>, other: &Bound<'py, PyAny>) -> PyResult<Py<PyAny>> {
-        // Try SE3Transform first
+        // Try Se3Transform first
         if let Ok(other_t) = other.extract::<PySe3Transform>() {
             let composed = self.inner.compose(&other_t.inner);
             return Ok(PySe3Transform { inner: composed }
@@ -413,14 +413,14 @@ impl PySe3Transform {
         }
 
         Err(pyo3::exceptions::PyTypeError::new_err(
-            "unsupported operand type for @: expected SE3Transform, numpy array, or SfmrReconstruction",
+            "unsupported operand type for @: expected Se3Transform, numpy array, or SfmrReconstruction",
         ))
     }
 
     fn __repr__(&self) -> String {
         let t = &self.inner.translation;
         format!(
-            "SE3Transform(rotation={}, translation=[{:.6}, {:.6}, {:.6}], scale={:.6})",
+            "Se3Transform(rotation={}, translation=[{:.6}, {:.6}, {:.6}], scale={:.6})",
             {
                 let q = &self.inner.rotation;
                 format!(

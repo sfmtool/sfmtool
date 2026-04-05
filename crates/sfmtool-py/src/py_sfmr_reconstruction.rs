@@ -433,6 +433,16 @@ impl PySfmrReconstruction {
         serde_to_py(py, &self.inner.metadata)
     }
 
+    /// Rig/frame data as a Python dict, or None if no rig data.
+    #[getter]
+    fn rig_frame_data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        use crate::helpers::rig_frame_data_to_py;
+        match &self.inner.rig_frame_data {
+            Some(rf) => rig_frame_data_to_py(py, rf),
+            None => Ok(py.None()),
+        }
+    }
+
     /// World space unit string, or None.
     #[getter]
     fn world_space_unit(&self) -> Option<String> {
@@ -452,17 +462,29 @@ impl PySfmrReconstruction {
     /// Supported fields: ``positions``, ``colors``, ``errors``,
     /// ``quaternions_wxyz``, ``translations``, ``track_image_indexes``,
     /// ``track_feature_indexes``, ``track_point_ids``, ``observation_counts``,
-    /// ``estimated_normals``.
+    /// ``estimated_normals``, ``image_names``, ``camera_indexes``, ``cameras``,
+    /// ``feature_tool_hashes``, ``sift_content_hashes``, ``thumbnails_y_x_rgb``,
+    /// ``rig_frame_data``, ``world_space_unit``.
     #[pyo3(signature = (**kwargs))]
-    fn replace(&self, _py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+    fn replace(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         use nalgebra::{UnitQuaternion, Vector3};
         use numpy::{PyReadonlyArray1, PyReadonlyArray2};
+
+        use crate::helpers::{
+            extract_cameras_as_sfmr, extract_rig_frame_data, py_to_u128_bytes,
+        };
 
         let mut recon = self.inner.clone();
 
         let Some(kw) = kwargs else {
             return Ok(Self { inner: recon });
         };
+
+        // Track whether we need to rebuild images from scratch
+        let mut new_image_names: Option<Vec<String>> = None;
+        let mut new_camera_indexes: Option<Vec<u32>> = None;
+        let mut new_feature_tool_hashes: Option<Vec<[u8; 16]>> = None;
+        let mut new_sift_content_hashes: Option<Vec<[u8; 16]>> = None;
 
         for (key, value) in kw.iter() {
             let key_str: String = key.extract()?;
@@ -477,6 +499,14 @@ impl PySfmrReconstruction {
                             "positions must have shape (N, 3)",
                         ));
                     }
+                    // Allow changing number of points
+                    let n = arr.shape()[0];
+                    recon.points.resize(n, sfmtool_core::Point3D {
+                        position: nalgebra::Point3::origin(),
+                        color: [0, 0, 0],
+                        error: 0.0,
+                        estimated_normal: Vector3::zeros(),
+                    });
                     for (i, pt) in recon.points.iter_mut().enumerate() {
                         let off = i * 3;
                         pt.position =
@@ -518,6 +548,19 @@ impl PySfmrReconstruction {
                     let s = arr.as_slice().map_err(|e| {
                         pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
                     })?;
+                    let n = arr.shape()[0];
+                    // Resize images if needed (when combined with image_names)
+                    while recon.images.len() < n {
+                        recon.images.push(sfmtool_core::SfmrImage {
+                            name: String::new(),
+                            camera_index: 0,
+                            quaternion_wxyz: UnitQuaternion::identity(),
+                            translation_xyz: Vector3::zeros(),
+                            feature_tool_hash: [0u8; 16],
+                            sift_content_hash: [0u8; 16],
+                        });
+                    }
+                    recon.images.truncate(n);
                     for (i, im) in recon.images.iter_mut().enumerate() {
                         let off = i * 4;
                         im.quaternion_wxyz = UnitQuaternion::new_normalize(
@@ -545,12 +588,106 @@ impl PySfmrReconstruction {
                         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}")))?
                         .to_vec();
                 }
+                "image_names" => {
+                    new_image_names = Some(value.extract()?);
+                }
+                "camera_indexes" => {
+                    let arr: PyReadonlyArray1<u32> = value.extract()?;
+                    new_camera_indexes = Some(arr.as_slice()
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}")))?
+                        .to_vec());
+                }
+                "cameras" => {
+                    use sfmtool_core::CameraIntrinsics;
+                    let sfmr_cameras = extract_cameras_as_sfmr(&value)?;
+                    recon.cameras = sfmr_cameras
+                        .iter()
+                        .map(|sc| CameraIntrinsics::try_from(sc).map_err(|e| {
+                            pyo3::exceptions::PyValueError::new_err(format!(
+                                "Failed to convert camera: {e}"
+                            ))
+                        }))
+                        .collect::<PyResult<Vec<_>>>()?;
+                }
+                "feature_tool_hashes" => {
+                    new_feature_tool_hashes = Some(py_to_u128_bytes(&value)?);
+                }
+                "sift_content_hashes" => {
+                    new_sift_content_hashes = Some(py_to_u128_bytes(&value)?);
+                }
+                "thumbnails_y_x_rgb" => {
+                    let arr: numpy::PyReadonlyArray4<u8> = value.extract()?;
+                    recon.thumbnails_y_x_rgb = arr.as_array().to_owned();
+                }
+                "rig_frame_data" => {
+                    if value.is_none() {
+                        recon.rig_frame_data = None;
+                    } else {
+                        // Wrap in a temporary dict for extract_rig_frame_data
+                        let tmp = PyDict::new(py);
+                        tmp.set_item("rig_frame_data", &value)?;
+                        recon.rig_frame_data = extract_rig_frame_data(py, &tmp)?;
+                    }
+                }
+                "world_space_unit" => {
+                    if value.is_none() {
+                        recon.metadata.tool_options.remove("world_space_unit");
+                    } else {
+                        let unit: String = value.extract()?;
+                        recon.metadata.tool_options.insert(
+                            "world_space_unit".to_string(),
+                            serde_json::Value::String(unit),
+                        );
+                    }
+                }
                 other => {
                     return Err(pyo3::exceptions::PyTypeError::new_err(format!(
                         "replace() got unexpected keyword argument: '{other}'"
                     )));
                 }
             }
+        }
+
+        // Apply image-level field updates that may change the image count
+        if let Some(names) = new_image_names {
+            let n = names.len();
+            // Resize images vec to match
+            while recon.images.len() < n {
+                recon.images.push(sfmtool_core::SfmrImage {
+                    name: String::new(),
+                    camera_index: 0,
+                    quaternion_wxyz: UnitQuaternion::identity(),
+                    translation_xyz: Vector3::zeros(),
+                    feature_tool_hash: [0u8; 16],
+                    sift_content_hash: [0u8; 16],
+                });
+            }
+            recon.images.truncate(n);
+            for (i, im) in recon.images.iter_mut().enumerate() {
+                im.name = names[i].clone();
+            }
+        }
+        if let Some(indexes) = new_camera_indexes {
+            for (i, im) in recon.images.iter_mut().enumerate() {
+                im.camera_index = indexes[i];
+            }
+        }
+        if let Some(hashes) = new_feature_tool_hashes {
+            for (i, im) in recon.images.iter_mut().enumerate() {
+                im.feature_tool_hash = hashes[i];
+            }
+        }
+        if let Some(hashes) = new_sift_content_hashes {
+            for (i, im) in recon.images.iter_mut().enumerate() {
+                im.sift_content_hash = hashes[i];
+            }
+        }
+
+        // Resize depth_histogram_counts to match the (possibly new) image count.
+        // When the image count changes, histogram data becomes stale so we reset it.
+        if recon.depth_histogram_counts.len() != recon.images.len() {
+            let num_buckets = recon.depth_statistics.num_histogram_buckets as usize;
+            recon.depth_histogram_counts = vec![vec![0u32; num_buckets]; recon.images.len()];
         }
 
         // Rebuild tracks if any track arrays were provided

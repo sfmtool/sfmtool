@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from sfmtool._workspace import init_workspace
+
 TEST_DATA_DIR = Path(__file__).parent.parent / "test-data"
 
 
@@ -73,3 +75,40 @@ def isolated_seoul_bull_17_images(tmp_path_factory) -> list[Path]:
         img_paths.append(dest_path)
 
     return img_paths
+
+
+@pytest.fixture(scope="session")
+def sfmrfile_reconstruction_with_17_images_once(tmp_path_factory) -> Path:
+    """Session-scoped fixture: build a .sfmr reconstruction from 17 images."""
+    from sfmtool._isfm import run_incremental_sfm
+
+    data_dir = TEST_DATA_DIR / "images" / "seoul_bull_sculpture"
+    image_files = sorted(data_dir.glob("seoul_bull_sculpture_*.jpg"))
+    workspace_dir = tmp_path_factory.mktemp("workspace_17_images")
+    init_workspace(workspace_dir, domain_size_pooling=True)
+    (workspace_dir / "test_17_image").mkdir(exist_ok=True)
+
+    img_paths = []
+    for img_file in image_files:
+        dest_path = workspace_dir / "test_17_image" / img_file.name
+        shutil.copy(img_file, dest_path)
+        img_paths.append(dest_path)
+
+    return run_incremental_sfm(
+        img_paths,
+        workspace_dir,
+        workspace_dir / "colmap",
+        random_seed=42,
+        output_sfm_file=workspace_dir / "seoul_bull.sfmr",
+    )
+
+
+@pytest.fixture
+def sfmrfile_reconstruction_with_17_images(
+    sfmrfile_reconstruction_with_17_images_once: Path, tmp_path_factory
+) -> Path:
+    """Per-test isolation of the 17-image .sfmr reconstruction."""
+    source_workspace_dir = sfmrfile_reconstruction_with_17_images_once.parent
+    workspace_dir = tmp_path_factory.mktemp("workspace_17_images")
+    shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
+    return workspace_dir / sfmrfile_reconstruction_with_17_images_once.name
