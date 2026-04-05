@@ -198,13 +198,9 @@ def solve(
 
     if matches_file is not None:
         if seq_overlap:
-            raise click.UsageError(
-                "--seq-overlap cannot be used with a .matches file."
-            )
+            raise click.UsageError("--seq-overlap cannot be used with a .matches file.")
         if flow_match:
-            raise click.UsageError(
-                "--flow-match cannot be used with a .matches file."
-            )
+            raise click.UsageError("--flow-match cannot be used with a .matches file.")
 
         try:
             if colmap_dir:

@@ -466,7 +466,7 @@ impl PySfmrReconstruction {
     /// ``feature_tool_hashes``, ``sift_content_hashes``, ``thumbnails_y_x_rgb``,
     /// ``rig_frame_data``, ``world_space_unit``.
     #[pyo3(signature = (**kwargs))]
-    fn replace(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+    fn clone_with_changes(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         use nalgebra::{UnitQuaternion, Vector3};
         use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 
@@ -642,7 +642,7 @@ impl PySfmrReconstruction {
                 }
                 other => {
                     return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                        "replace() got unexpected keyword argument: '{other}'"
+                        "clone_with_changes() got unexpected keyword argument: '{other}'"
                     )));
                 }
             }

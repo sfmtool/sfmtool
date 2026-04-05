@@ -40,9 +40,7 @@ def test_solve_incremental(isolated_seoul_bull_17_images: list[Path]):
     assert result.exit_code == 0, result.output
 
     # Extract SIFT features
-    result = CliRunner().invoke(
-        main, ["sift", "--extract", str(workspace_dir)]
-    )
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     # Run incremental SfM
@@ -80,9 +78,7 @@ def test_solve_global(isolated_seoul_bull_17_images: list[Path]):
     assert result.exit_code == 0, result.output
 
     # Extract SIFT features
-    result = CliRunner().invoke(
-        main, ["sift", "--extract", str(workspace_dir)]
-    )
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     # Run global SfM
@@ -111,9 +107,7 @@ def test_solve_from_matches(isolated_seoul_bull_17_images: list[Path]):
     result = CliRunner().invoke(main, ["init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
-    result = CliRunner().invoke(
-        main, ["sift", "--extract", str(workspace_dir)]
-    )
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     # Run exhaustive matching first

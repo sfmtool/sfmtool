@@ -17,7 +17,7 @@ class AlignToInputTransform:
 
     @classmethod
     def set_original_input(cls, recon: SfmrReconstruction):
-        cls._original_input = recon.replace()
+        cls._original_input = recon.clone_with_changes()
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         if self._original_input is None:

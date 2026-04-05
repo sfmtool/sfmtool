@@ -118,7 +118,7 @@ class BundleAdjustTransform:
         track_feature_indexes = np.array(track_feature_indexes_list, dtype=np.uint32)
         track_point_ids = np.array(track_point_ids_list, dtype=np.uint32)
 
-        return original_recon.replace(
+        return original_recon.clone_with_changes(
             cameras=cameras,
             camera_indexes=camera_indexes,
             quaternions_wxyz=quaternions_wxyz,

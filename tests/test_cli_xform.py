@@ -54,9 +54,7 @@ def test_xform_on_reconstruction(isolated_seoul_bull_17_images: list[Path]):
     result = CliRunner().invoke(main, ["init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
-    result = CliRunner().invoke(
-        main, ["sift", "--extract", str(workspace_dir)]
-    )
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     output_sfmr = workspace_dir / "test_solve.sfmr"
@@ -93,9 +91,7 @@ def test_xform_remove_short_tracks(isolated_seoul_bull_17_images: list[Path]):
     result = CliRunner().invoke(main, ["init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
-    result = CliRunner().invoke(
-        main, ["sift", "--extract", str(workspace_dir)]
-    )
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     output_sfmr = workspace_dir / "test_solve.sfmr"
@@ -129,9 +125,7 @@ def test_xform_chained_transforms(isolated_seoul_bull_17_images: list[Path]):
     result = CliRunner().invoke(main, ["init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
-    result = CliRunner().invoke(
-        main, ["sift", "--extract", str(workspace_dir)]
-    )
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     output_sfmr = workspace_dir / "test_solve.sfmr"

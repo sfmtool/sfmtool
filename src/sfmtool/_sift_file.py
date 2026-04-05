@@ -554,7 +554,9 @@ def print_sift_summary(sift_filename: str | Path, verbose: bool = False):
         sizes_x = feature_size_x(affine_shapes)
         sizes_y = feature_size_y(affine_shapes)
         for i, (pos, sx, sy) in enumerate(zip(positions, sizes_x, sizes_y), 1):
-            print(f"    {i}. pos=({pos[0]:.2f}, {pos[1]:.2f}), size=({sx:.2f}, {sy:.2f})")
+            print(
+                f"    {i}. pos=({pos[0]:.2f}, {pos[1]:.2f}), size=({sx:.2f}, {sy:.2f})"
+            )
 
 
 # ---------------------------------------------------------------------------

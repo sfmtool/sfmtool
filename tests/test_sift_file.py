@@ -275,7 +275,9 @@ def test_get_sift_path_for_image_with_tool(tmp_path):
 
     # With explicit tool and options
     opts = {"domain_size_pooling": True}
-    path = get_sift_path_for_image(image_path, feature_tool="colmap", feature_options=opts)
+    path = get_sift_path_for_image(
+        image_path, feature_tool="colmap", feature_options=opts
+    )
     expected_hash = get_feature_tool_xxh128("colmap", "sift-colmap-dsp", opts)
     assert f"sift-colmap-dsp-{expected_hash}" in str(path)
     assert path.name == "image.jpg.sift"
@@ -532,9 +534,14 @@ def test_opencv_sift_extraction(tmp_path):
     results = extract_sift_with_opencv([image_path], feature_options, num_threads=1)
 
     assert len(results) == 1
-    feature_tool_metadata, metadata, positions, affine_shapes, descriptors, thumbnail = (
-        results[0]
-    )
+    (
+        feature_tool_metadata,
+        metadata,
+        positions,
+        affine_shapes,
+        descriptors,
+        thumbnail,
+    ) = results[0]
 
     assert feature_tool_metadata["feature_tool"] == "opencv"
     assert metadata["feature_count"] == len(positions)
@@ -576,9 +583,14 @@ def test_opencv_extraction_roundtrip(tmp_path):
 
     feature_options = get_default_opencv_feature_options()
     results = extract_sift_with_opencv([image_path], feature_options, num_threads=1)
-    feature_tool_metadata, metadata, positions, affine_shapes, descriptors, thumbnail = (
-        results[0]
-    )
+    (
+        feature_tool_metadata,
+        metadata,
+        positions,
+        affine_shapes,
+        descriptors,
+        thumbnail,
+    ) = results[0]
 
     sift_filename = tmp_path / "opencv_test.sift"
     write_sift(
@@ -676,8 +688,10 @@ def test_draw_sift_features_with_filter(tmp_path):
     output_path = tmp_path / "viz_filtered.png"
     indices = np.arange(5, dtype=np.uint32)
     draw_sift_features(
-        str(image_path), str(output_path),
-        feature_indices=indices, feature_tool="opencv",
+        str(image_path),
+        str(output_path),
+        feature_indices=indices,
+        feature_tool="opencv",
     )
     assert output_path.exists()
 

@@ -10,7 +10,11 @@ import pycolmap
 from deadline.job_attachments.api import summarize_path_list
 
 from ._colmap_db import _setup_for_sfm, _setup_for_sfm_from_matches
-from ._colmap_io import build_metadata, colmap_binary_to_rust_sfmr, pycolmap_to_rust_sfmr
+from ._colmap_io import (
+    build_metadata,
+    colmap_binary_to_rust_sfmr,
+    pycolmap_to_rust_sfmr,
+)
 from ._rig_config import _load_rig_config
 from ._sfm_reconstruction import get_next_sfm_filename as _get_next_sfm_filename
 from ._workspace import load_workspace_config

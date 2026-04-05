@@ -137,7 +137,10 @@ def test_sift_workspace_detection_from_subdirectory(tmp_path):
     images_dir.mkdir(parents=True)
 
     test_image_src = (
-        TEST_DATA_DIR / "images" / "seoul_bull_sculpture" / "seoul_bull_sculpture_01.jpg"
+        TEST_DATA_DIR
+        / "images"
+        / "seoul_bull_sculpture"
+        / "seoul_bull_sculpture_01.jpg"
     )
     test_image = images_dir / "test.jpg"
     shutil.copy(test_image_src, test_image)

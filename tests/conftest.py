@@ -52,7 +52,10 @@ def sample_sift_data():
 def isolated_seoul_bull_image(tmp_path_factory) -> Path:
     """Fixture that provides a .jpg file isolated in a directory for testing."""
     input_img_path = (
-        TEST_DATA_DIR / "images" / "seoul_bull_sculpture" / "seoul_bull_sculpture_01.jpg"
+        TEST_DATA_DIR
+        / "images"
+        / "seoul_bull_sculpture"
+        / "seoul_bull_sculpture_01.jpg"
     )
     tmp_path = tmp_path_factory.mktemp("test_image")
     img_path = tmp_path / "test_image.jpg"

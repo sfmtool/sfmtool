@@ -7,7 +7,11 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool.cli import main
-from sfmtool._sift_file import SiftReader, get_feature_tool_xxh128, get_feature_type_for_tool
+from sfmtool._sift_file import (
+    SiftReader,
+    get_feature_tool_xxh128,
+    get_feature_type_for_tool,
+)
 from sfmtool._extract_sift_colmap import get_colmap_feature_options
 
 # Compute the hash of the default feature tool metadata (COLMAP without DSP)

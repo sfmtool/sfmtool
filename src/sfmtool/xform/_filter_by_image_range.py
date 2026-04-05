@@ -237,7 +237,7 @@ def _filter_images(
 
     new_rig_frame_data = _filter_rig_frame_data(recon.rig_frame_data, images_to_keep)
 
-    return recon.replace(
+    return recon.clone_with_changes(
         image_names=new_image_names,
         camera_indexes=new_camera_indexes,
         quaternions_wxyz=new_quaternions_wxyz,

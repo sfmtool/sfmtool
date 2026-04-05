@@ -315,7 +315,7 @@ class ScaleByMeasurementsTransform:
 
         transform = Se3Transform(scale=median_scale)
         recon = transform @ recon
-        recon = recon.replace(world_space_unit=target_unit)
+        recon = recon.clone_with_changes(world_space_unit=target_unit)
         return recon
 
     def _load_and_validate(self) -> dict:

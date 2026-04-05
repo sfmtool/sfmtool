@@ -45,6 +45,4 @@ class RemoveNarrowTracksFilter:
         return recon.filter_points_by_mask(points_to_keep_mask)
 
     def description(self) -> str:
-        return (
-            f"Remove tracks with viewing angle < {np.degrees(self.min_angle_rad):.2f}\u00b0"
-        )
+        return f"Remove tracks with viewing angle < {np.degrees(self.min_angle_rad):.2f}\u00b0"

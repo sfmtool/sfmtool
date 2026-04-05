@@ -48,15 +48,11 @@ def test_match_exhaustive(isolated_seoul_bull_17_images: list[Path]):
     assert result.exit_code == 0, result.output
 
     # Extract SIFT features first
-    result = CliRunner().invoke(
-        main, ["sift", "--extract", str(workspace_dir)]
-    )
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     # Run exhaustive matching
-    result = CliRunner().invoke(
-        main, ["match", "--exhaustive", str(workspace_dir)]
-    )
+    result = CliRunner().invoke(main, ["match", "--exhaustive", str(workspace_dir)])
     assert result.exit_code == 0, result.output
     assert "Running exhaustive matching" in result.output
     assert "Done:" in result.output
@@ -92,9 +88,7 @@ def test_match_sequential(isolated_seoul_bull_17_images: list[Path]):
     assert result.exit_code == 0, result.output
 
     # Extract SIFT features
-    result = CliRunner().invoke(
-        main, ["sift", "--extract", str(workspace_dir)]
-    )
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     # Run sequential matching with small overlap
@@ -114,9 +108,7 @@ def test_match_with_output_path(isolated_seoul_bull_17_images: list[Path]):
     result = CliRunner().invoke(main, ["init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
-    result = CliRunner().invoke(
-        main, ["sift", "--extract", str(workspace_dir)]
-    )
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     output_path = workspace_dir / "custom_output.matches"
@@ -143,9 +135,7 @@ def test_match_flow(isolated_seoul_bull_17_images: list[Path]):
     assert result.exit_code == 0, result.output
 
     # Extract SIFT features
-    result = CliRunner().invoke(
-        main, ["sift", "--extract", str(workspace_dir)]
-    )
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     # Run flow matching with small window
