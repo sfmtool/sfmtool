@@ -3,7 +3,7 @@
 
 //! Python wrapper for the sfmtool-core SfmrReconstruction type.
 
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::path::{Path, PathBuf};
@@ -363,6 +363,192 @@ impl PySfmrReconstruction {
         self.inner
             .recompute_point_errors()
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    }
+
+    /// Apply an SE(3) similarity transform to this reconstruction.
+    ///
+    /// Transforms all 3D point positions and camera poses. Returns a new
+    /// reconstruction; the original is unchanged.
+    fn apply_transform(&self, transform: &crate::PySe3Transform) -> Self {
+        Self {
+            inner: self.inner.apply_se3_transform(&transform.inner),
+        }
+    }
+
+    /// Source metadata as a Python dict.
+    #[getter]
+    fn source_metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        serde_to_py(py, &self.inner.metadata)
+    }
+
+    /// World space unit string, or None.
+    #[getter]
+    fn world_space_unit(&self) -> Option<String> {
+        self.inner
+            .metadata
+            .tool_options
+            .get("world_space_unit")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    /// Create a copy of this reconstruction with some fields replaced.
+    ///
+    /// Accepts optional keyword arguments for the fields to replace.
+    /// Unspecified fields are copied from the original.
+    ///
+    /// Supported fields: ``positions``, ``colors``, ``errors``,
+    /// ``quaternions_wxyz``, ``translations``, ``track_image_indexes``,
+    /// ``track_feature_indexes``, ``track_point_ids``, ``observation_counts``,
+    /// ``estimated_normals``.
+    #[pyo3(signature = (**kwargs))]
+    fn replace(&self, py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+        use nalgebra::{UnitQuaternion, Vector3};
+        use numpy::{PyReadonlyArray1, PyReadonlyArray2};
+
+        let mut recon = self.inner.clone();
+
+        let Some(kw) = kwargs else {
+            return Ok(Self { inner: recon });
+        };
+
+        for (key, value) in kw.iter() {
+            let key_str: String = key.extract()?;
+            match key_str.as_str() {
+                "positions" => {
+                    let arr: PyReadonlyArray2<f64> = value.extract()?;
+                    let s = arr.as_slice().map_err(|e| {
+                        pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                    })?;
+                    if arr.shape()[1] != 3 {
+                        return Err(pyo3::exceptions::PyValueError::new_err(
+                            "positions must have shape (N, 3)",
+                        ));
+                    }
+                    for (i, pt) in recon.points.iter_mut().enumerate() {
+                        let off = i * 3;
+                        pt.position =
+                            nalgebra::Point3::new(s[off], s[off + 1], s[off + 2]);
+                    }
+                }
+                "colors" => {
+                    let arr: PyReadonlyArray2<u8> = value.extract()?;
+                    let s = arr.as_slice().map_err(|e| {
+                        pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                    })?;
+                    for (i, pt) in recon.points.iter_mut().enumerate() {
+                        let off = i * 3;
+                        pt.color = [s[off], s[off + 1], s[off + 2]];
+                    }
+                }
+                "errors" => {
+                    let arr: PyReadonlyArray1<f32> = value.extract()?;
+                    let s = arr.as_slice().map_err(|e| {
+                        pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                    })?;
+                    for (i, pt) in recon.points.iter_mut().enumerate() {
+                        pt.error = s[i];
+                    }
+                }
+                "estimated_normals" => {
+                    let arr: PyReadonlyArray2<f32> = value.extract()?;
+                    let s = arr.as_slice().map_err(|e| {
+                        pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                    })?;
+                    for (i, pt) in recon.points.iter_mut().enumerate() {
+                        let off = i * 3;
+                        pt.estimated_normal =
+                            Vector3::new(s[off], s[off + 1], s[off + 2]);
+                    }
+                }
+                "quaternions_wxyz" => {
+                    let arr: PyReadonlyArray2<f64> = value.extract()?;
+                    let s = arr.as_slice().map_err(|e| {
+                        pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                    })?;
+                    for (i, im) in recon.images.iter_mut().enumerate() {
+                        let off = i * 4;
+                        im.quaternion_wxyz = UnitQuaternion::new_normalize(
+                            nalgebra::Quaternion::new(s[off], s[off + 1], s[off + 2], s[off + 3]),
+                        );
+                    }
+                }
+                "translations" => {
+                    let arr: PyReadonlyArray2<f64> = value.extract()?;
+                    let s = arr.as_slice().map_err(|e| {
+                        pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+                    })?;
+                    for (i, im) in recon.images.iter_mut().enumerate() {
+                        let off = i * 3;
+                        im.translation_xyz = Vector3::new(s[off], s[off + 1], s[off + 2]);
+                    }
+                }
+                "track_image_indexes" | "track_feature_indexes" | "track_point_ids" => {
+                    // These must all be set together to rebuild tracks
+                    // Defer to after the loop
+                }
+                "observation_counts" => {
+                    let arr: PyReadonlyArray1<u32> = value.extract()?;
+                    recon.observation_counts = arr.as_slice()
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}")))?
+                        .to_vec();
+                }
+                other => {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "replace() got unexpected keyword argument: '{other}'"
+                    )));
+                }
+            }
+        }
+
+        // Rebuild tracks if any track arrays were provided
+        let has_tracks = kw.contains("track_image_indexes")?
+            || kw.contains("track_feature_indexes")?
+            || kw.contains("track_point_ids")?;
+
+        if has_tracks {
+            let img_idx: PyReadonlyArray1<u32> = kw
+                .get_item("track_image_indexes")?
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(
+                    "track_image_indexes, track_feature_indexes, and track_point_ids must all be provided together",
+                ))?
+                .extract()?;
+            let feat_idx: PyReadonlyArray1<u32> = kw
+                .get_item("track_feature_indexes")?
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(
+                    "track_image_indexes, track_feature_indexes, and track_point_ids must all be provided together",
+                ))?
+                .extract()?;
+            let pt_idx: PyReadonlyArray1<u32> = kw
+                .get_item("track_point_ids")?
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(
+                    "track_image_indexes, track_feature_indexes, and track_point_ids must all be provided together",
+                ))?
+                .extract()?;
+
+            let img_s = img_idx.as_slice().map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+            })?;
+            let feat_s = feat_idx.as_slice().map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+            })?;
+            let pt_s = pt_idx.as_slice().map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("not contiguous: {e}"))
+            })?;
+
+            recon.tracks = (0..img_s.len())
+                .map(|i| sfmtool_core::TrackObservation {
+                    image_index: img_s[i],
+                    feature_index: feat_s[i],
+                    point_index: pt_s[i],
+                })
+                .collect();
+        }
+
+        // Recompute derived fields
+        recon.rebuild_derived_indexes();
+
+        Ok(Self { inner: recon })
     }
 
     fn __repr__(&self) -> String {

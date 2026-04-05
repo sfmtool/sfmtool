@@ -119,6 +119,7 @@ pub struct TrackObservation {
 ///
 /// This is the Rust equivalent of Python's `SfmrReconstruction` class.
 /// All fields from the `.sfmr` format are represented.
+#[derive(Clone)]
 pub struct SfmrReconstruction {
     /// Resolved workspace directory path.
     pub workspace_dir: PathBuf,
@@ -532,6 +533,81 @@ impl SfmrReconstruction {
             image_feature_to_point,
             max_track_feature_index,
         })
+    }
+
+    /// Rebuild derived indexes (observation offsets, feature→point maps)
+    /// from the current `tracks`, `observation_counts`, and `images`.
+    ///
+    /// Call this after mutating tracks or observation counts externally.
+    pub fn rebuild_derived_indexes(&mut self) {
+        self.observation_offsets = compute_observation_offsets(&self.observation_counts);
+
+        let image_count = self.images.len();
+        self.image_feature_to_point = vec![HashMap::new(); image_count];
+        self.max_track_feature_index = vec![0u32; image_count];
+        for obs in &self.tracks {
+            let img = obs.image_index as usize;
+            self.image_feature_to_point[img].insert(obs.feature_index, obs.point_index);
+            self.max_track_feature_index[img] =
+                self.max_track_feature_index[img].max(obs.feature_index);
+        }
+    }
+
+    /// Apply an SE(3) similarity transform to this reconstruction.
+    ///
+    /// Transforms all 3D point positions and camera poses. Returns a new
+    /// reconstruction with the transformed data; `self` is not modified.
+    pub fn apply_se3_transform(&self, transform: &crate::Se3Transform) -> Self {
+        use crate::rot_quaternion::RotQuaternion;
+
+        // Transform 3D points
+        let point_positions: Vec<Point3<f64>> =
+            self.points.iter().map(|pt| pt.position).collect();
+        let new_positions = transform.apply_to_points(&point_positions);
+
+        let new_points: Vec<Point3D> = self
+            .points
+            .iter()
+            .zip(new_positions.iter())
+            .map(|(pt, &new_pos)| Point3D {
+                position: new_pos,
+                ..pt.clone()
+            })
+            .collect();
+
+        // Transform camera poses
+        let new_images: Vec<SfmrImage> = self
+            .images
+            .iter()
+            .map(|im| {
+                let cam_rot = RotQuaternion::from_nalgebra(im.quaternion_wxyz);
+                let (new_rot, new_t) =
+                    transform.apply_to_camera_pose(&cam_rot, &im.translation_xyz);
+                SfmrImage {
+                    quaternion_wxyz: *new_rot.as_nalgebra(),
+                    translation_xyz: new_t,
+                    ..im.clone()
+                }
+            })
+            .collect();
+
+        SfmrReconstruction {
+            images: new_images,
+            points: new_points,
+            // All other fields are unchanged
+            workspace_dir: self.workspace_dir.clone(),
+            metadata: self.metadata.clone(),
+            content_hash: self.content_hash.clone(),
+            cameras: self.cameras.clone(),
+            tracks: self.tracks.clone(),
+            observation_counts: self.observation_counts.clone(),
+            observation_offsets: self.observation_offsets.clone(),
+            thumbnails_y_x_rgb: self.thumbnails_y_x_rgb.clone(),
+            depth_statistics: self.depth_statistics.clone(),
+            depth_histogram_counts: self.depth_histogram_counts.clone(),
+            image_feature_to_point: self.image_feature_to_point.clone(),
+            max_track_feature_index: self.max_track_feature_index.clone(),
+        }
     }
 
     /// Filter 3D points by a boolean mask, returning a new reconstruction.

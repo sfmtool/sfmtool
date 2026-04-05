@@ -402,8 +402,18 @@ impl PySe3Transform {
             return Ok(out.into_any().unbind());
         }
 
+        // Try SfmrReconstruction
+        if let Ok(recon) = other.downcast::<crate::py_sfmr_reconstruction::PySfmrReconstruction>() {
+            let recon_ref = recon.borrow();
+            let transformed = recon_ref.inner.apply_se3_transform(&self.inner);
+            return Ok(crate::py_sfmr_reconstruction::PySfmrReconstruction { inner: transformed }
+                .into_pyobject(py)?
+                .into_any()
+                .unbind());
+        }
+
         Err(pyo3::exceptions::PyTypeError::new_err(
-            "unsupported operand type for @: expected SE3Transform or numpy array",
+            "unsupported operand type for @: expected SE3Transform, numpy array, or SfmrReconstruction",
         ))
     }
 
