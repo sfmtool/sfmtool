@@ -18,8 +18,10 @@ from ._commands import (
     heatmap,
     init,
     inspect,
+    insv2rig,
     match,
     merge,
+    pano2rig,
     sift,
     solve,
     undistort,
@@ -56,6 +58,8 @@ main.add_command_with_category(epipolar, category="Visualization")
 main.add_command_with_category(flow, category="Image Processing")
 main.add_command_with_category(heatmap, category="Visualization")
 main.add_command_with_category(undistort, category="Image Processing")
+main.add_command_with_category(pano2rig, category="Workspace")
+main.add_command_with_category(insv2rig, category="Workspace")
 
 
 @main.command()
