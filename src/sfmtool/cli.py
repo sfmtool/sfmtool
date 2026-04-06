@@ -15,6 +15,7 @@ from ._commands import (
     densify,
     epipolar,
     flow,
+    from_colmap_bin,
     heatmap,
     init,
     inspect,
@@ -24,6 +25,8 @@ from ._commands import (
     pano2rig,
     sift,
     solve,
+    to_colmap_bin,
+    to_colmap_db,
     undistort,
     xform,
 )
@@ -60,6 +63,9 @@ main.add_command_with_category(heatmap, category="Visualization")
 main.add_command_with_category(undistort, category="Image Processing")
 main.add_command_with_category(pano2rig, category="Workspace")
 main.add_command_with_category(insv2rig, category="Workspace")
+main.add_command_with_category(to_colmap_bin, category="COLMAP Interop")
+main.add_command_with_category(to_colmap_db, category="COLMAP Interop")
+main.add_command_with_category(from_colmap_bin, category="COLMAP Interop")
 
 
 @main.command()

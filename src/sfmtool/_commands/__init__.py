@@ -8,6 +8,7 @@ from .compare import compare
 from .densify import densify
 from .epipolar import epipolar
 from .flow import flow
+from .from_colmap_bin import from_colmap_bin
 from .heatmap import heatmap
 from .init import init
 from .inspect import inspect
@@ -17,6 +18,8 @@ from .merge import merge
 from .pano2rig import pano2rig
 from .sift import sift
 from .solve import solve
+from .to_colmap_bin import to_colmap_bin
+from .to_colmap_db import to_colmap_db
 from .undistort import undistort
 from .xform import xform
 
@@ -26,6 +29,7 @@ __all__ = [
     "densify",
     "epipolar",
     "flow",
+    "from_colmap_bin",
     "heatmap",
     "init",
     "inspect",
@@ -35,6 +39,8 @@ __all__ = [
     "pano2rig",
     "sift",
     "solve",
+    "to_colmap_bin",
+    "to_colmap_db",
     "undistort",
     "xform",
 ]
