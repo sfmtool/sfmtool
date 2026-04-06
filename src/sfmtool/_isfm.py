@@ -133,7 +133,7 @@ def run_incremental_sfm(
             from ._sfmtool import read_colmap_binary
 
             recon_dir = Path(reconstruction_path) / str(idx)
-            colmap_data = read_colmap_binary(str(recon_dir))
+            colmap_data = read_colmap_binary(recon_dir)
             image_count = len(colmap_data["image_names"])
             points3d_count = len(colmap_data["positions_xyz"])
             obs_count = len(colmap_data["track_image_indexes"])
@@ -171,6 +171,6 @@ def run_incremental_sfm(
             f", Points: {recon.point_count}"
         )
 
-        recon.save(str(output_path))
+        recon.save(output_path)
         print(f"Saved reconstruction to: {output_sfm_file}")
         return Path(output_sfm_file)

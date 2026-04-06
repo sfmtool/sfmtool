@@ -346,7 +346,7 @@ def _run_matching(
     from .._sfmtool import write_matches
 
     click.echo(f"Writing {out}...")
-    write_matches(str(out), matches_data)
+    write_matches(out, matches_data)
 
     pair_count = matches_data["metadata"]["image_pair_count"]
     match_count = matches_data["metadata"]["match_count"]

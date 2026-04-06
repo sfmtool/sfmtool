@@ -6,7 +6,7 @@
 use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use std::path::Path;
+use std::path::PathBuf;
 
 use sfmr_colmap::colmap_io;
 use sfmr_format::SfmrCamera;
@@ -33,8 +33,8 @@ use crate::PyCameraIntrinsics;
 ///   track_point3d_indexes (M,) uint32,
 ///   observation_counts (P,) uint32.
 #[pyfunction]
-pub fn read_colmap_binary(py: Python<'_>, dir: &str) -> PyResult<Py<PyAny>> {
-    let recon = colmap_io::read_colmap_binary(Path::new(dir))
+pub fn read_colmap_binary(py: Python<'_>, dir: PathBuf) -> PyResult<Py<PyAny>> {
+    let recon = colmap_io::read_colmap_binary(&dir)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
     let dict = PyDict::new(py);
@@ -361,7 +361,7 @@ fn colmap_rigs_frames_to_py<'py>(
 ///   data: Dict with keys matching the output of `read_colmap_binary`, plus
 ///     `keypoints_per_image` as list of (K,2) float64 arrays (x, y positions).
 #[pyfunction]
-pub fn write_colmap_binary(dir: &str, data: &Bound<'_, PyDict>) -> PyResult<()> {
+pub fn write_colmap_binary(dir: PathBuf, data: &Bound<'_, PyDict>) -> PyResult<()> {
     let cameras: Vec<SfmrCamera> = extract_cameras_as_sfmr(&get_item(data, "cameras")?)?;
     let image_names: Vec<String> = get_item(data, "image_names")?.extract()?;
 
@@ -454,7 +454,7 @@ pub fn write_colmap_binary(dir: &str, data: &Bound<'_, PyDict>) -> PyResult<()> 
         frames: colmap_frames.as_deref(),
     };
 
-    colmap_io::write_colmap_binary(Path::new(dir), &write_data)
+    colmap_io::write_colmap_binary(&dir, &write_data)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 

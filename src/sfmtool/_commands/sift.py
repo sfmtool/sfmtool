@@ -235,7 +235,7 @@ def sift(
         if filter_sfm_path:
             from sfmtool._sfmtool import SfmrReconstruction
 
-            filter_recon = SfmrReconstruction.load(str(filter_sfm_path))
+            filter_recon = SfmrReconstruction.load(filter_sfm_path)
 
         for image_path in filenames:
             image_basename = image_path.name

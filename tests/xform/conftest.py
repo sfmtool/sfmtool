@@ -17,16 +17,16 @@ def apply_transforms_to_file(
     transforms: list,
 ) -> Path:
     """Helper that wraps apply_transforms with file I/O for tests."""
-    recon = SfmrReconstruction.load(str(input_path))
+    recon = SfmrReconstruction.load(input_path)
     recon = _apply_transforms(recon, transforms)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    recon.save(str(output_path), operation="xform_test")
+    recon.save(output_path, operation="xform_test")
     return output_path
 
 
 def load_reconstruction_data(reconstruction_path: Path) -> dict:
     """Load all data from a reconstruction for comparison."""
-    recon = SfmrReconstruction.load(str(reconstruction_path))
+    recon = SfmrReconstruction.load(reconstruction_path)
     return {
         "image_names": recon.image_names,
         "positions": recon.positions,

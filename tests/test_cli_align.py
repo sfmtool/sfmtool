@@ -20,10 +20,10 @@ from sfmtool.xform import IncludeRangeFilter, SimilarityTransform, apply_transfo
 
 def _apply_transforms_to_file(input_path, output_path, transforms):
     """Helper that wraps apply_transforms with file I/O."""
-    recon = SfmrReconstruction.load(str(input_path))
+    recon = SfmrReconstruction.load(input_path)
     recon = apply_transforms(recon, transforms)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    recon.save(str(output_path), operation="xform_test")
+    recon.save(output_path, operation="xform_test")
     return output_path
 
 
@@ -34,7 +34,7 @@ def _apply_transforms_to_file(input_path, output_path, transforms):
 
 class TestHelperFunctions:
     def test_get_reconstruction_images(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         images = _get_reconstruction_images(recon)
         assert len(images) == 17
         assert all(isinstance(v, str) for v in images.values())
@@ -52,7 +52,7 @@ class TestHelperFunctions:
         assert shared == set()
 
     def test_build_connectivity_graph(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         graph = _build_connectivity_graph([recon, recon])
         assert 1 in graph[0]
         assert 0 in graph[1]
@@ -69,7 +69,7 @@ class TestAlignReconstructionsPoints:
 
     def test_align_transformed_recovery(self, sfmrfile_reconstruction_with_17_images):
         """Alignment should recover the inverse of an applied transform."""
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         transform = Se3Transform(translation=[5, 0, 0], scale=2.0)
         transformed = apply_transforms(recon, [SimilarityTransform(transform)])
 
@@ -84,7 +84,7 @@ class TestAlignReconstructionsPoints:
 
     def test_align_identical(self, sfmrfile_reconstruction_with_17_images):
         """Aligning identical reconstructions should succeed with near-zero error."""
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         result = align_reconstructions(
             reference=recon,
             to_align=[recon],
@@ -94,7 +94,7 @@ class TestAlignReconstructionsPoints:
 
     def test_align_no_shared_images(self, sfmrfile_reconstruction_with_17_images):
         """Aligning reconstructions with no shared images should fail gracefully."""
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         # Filter to disjoint image sets
         subset1 = apply_transforms(
             recon, [IncludeRangeFilter(IntRangeExpr.from_str("1-5"))]
@@ -115,7 +115,7 @@ class TestAlignReconstructionsCameras:
     """Test align_reconstructions with camera-based method."""
 
     def test_align_transformed_recovery(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         transform = Se3Transform(translation=[5, 0, 0], scale=2.0)
         transformed = apply_transforms(recon, [SimilarityTransform(transform)])
 
@@ -260,8 +260,8 @@ class TestAlignCLI:
         assert result.exit_code == 0, result.output
 
         # Load reference and aligned, compare positions
-        ref_recon = SfmrReconstruction.load(str(output_dir / ref.name))
-        aligned_recon = SfmrReconstruction.load(str(output_dir / target_path.name))
+        ref_recon = SfmrReconstruction.load(output_dir / ref.name)
+        aligned_recon = SfmrReconstruction.load(output_dir / target_path.name)
 
         # Positions should be very close after alignment
         ref_positions = ref_recon.positions

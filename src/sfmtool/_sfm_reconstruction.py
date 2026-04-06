@@ -4,11 +4,15 @@
 """SfM reconstruction filename generation utilities."""
 
 import re
+import textwrap
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from deadline.job_attachments.api import summarize_paths_by_sequence
+from deadline.job_attachments.api import (
+    summarize_path_list,
+    summarize_paths_by_sequence,
+)
 from openjd.model import IntRangeExpr
 
 
@@ -69,3 +73,43 @@ def _generate_image_descriptor(image_paths: list[str | Path]) -> str:
     first_name = first_image.stem
     total_count = len(image_paths)
     return f"{first_name}-total-{total_count}-images"
+
+
+def get_image_hint_message(
+    recon,
+    missing_image: str | None = None,
+) -> str:
+    """Create a helpful error message with available images in a reconstruction.
+
+    Args:
+        recon: SfmrReconstruction object
+        missing_image: Optional image name that was not found
+
+    Returns:
+        A multiline string containing the error message and hints
+    """
+    from difflib import get_close_matches
+
+    image_names = recon.image_names
+
+    error_msg = ""
+    if missing_image:
+        error_msg = f"Image '{missing_image}' not found in reconstruction.\n"
+
+        basenames = [Path(name).name for name in image_names]
+        similar_names = get_close_matches(
+            Path(missing_image).name, basenames, n=3, cutoff=0.6
+        )
+
+        if similar_names:
+            error_msg += "\nDid you mean one of these?\n"
+            for name in similar_names:
+                full_name = next(n for n in image_names if Path(n).name == name)
+                error_msg += f"  - {full_name}\n"
+
+    if error_msg:
+        error_msg += "\n"
+    error_msg += "Image in reconstruction:\n"
+    error_msg += textwrap.indent(summarize_path_list(image_names), "  ")
+
+    return error_msg

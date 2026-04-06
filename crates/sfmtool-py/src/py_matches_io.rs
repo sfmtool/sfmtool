@@ -6,7 +6,7 @@
 use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use std::path::Path;
+use std::path::PathBuf;
 
 use matches_format::{
     MatchesContentHash, MatchesData, MatchesMetadata, TvgMetadata, TwoViewGeometryConfig,
@@ -67,16 +67,16 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
 
 /// Read a complete .matches file, returning a dict with numpy arrays and metadata.
 #[pyfunction]
-pub fn read_matches(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
-    let data = matches_format::read_matches(Path::new(path))
+pub fn read_matches(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
+    let data = matches_format::read_matches(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     matches_data_to_py(py, data)
 }
 
 /// Read only metadata from a .matches file (fast, no binary data).
 #[pyfunction]
-pub fn read_matches_metadata(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
-    let metadata = matches_format::read_matches_metadata(Path::new(path))
+pub fn read_matches_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
+    let metadata = matches_format::read_matches_metadata(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     serde_to_py(py, &metadata)
 }
@@ -89,7 +89,7 @@ pub fn read_matches_metadata(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> 
 #[pyo3(signature = (path, data, zstd_level=3))]
 pub fn write_matches(
     py: Python<'_>,
-    path: &str,
+    path: PathBuf,
     data: &Bound<'_, PyDict>,
     zstd_level: i32,
 ) -> PyResult<()> {
@@ -168,7 +168,7 @@ pub fn write_matches(
         two_view_geometries,
     };
 
-    matches_format::write_matches(Path::new(path), &matches_data, zstd_level)
+    matches_format::write_matches(&path, &matches_data, zstd_level)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 
@@ -176,7 +176,7 @@ pub fn write_matches(
 ///
 /// Returns a tuple (is_valid, error_messages).
 #[pyfunction]
-pub fn verify_matches(path: &str) -> PyResult<(bool, Vec<String>)> {
-    matches_format::verify_matches(Path::new(path))
+pub fn verify_matches(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
+    matches_format::verify_matches(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }

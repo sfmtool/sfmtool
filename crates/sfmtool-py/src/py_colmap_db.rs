@@ -6,7 +6,7 @@
 use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use std::path::Path;
+use std::path::PathBuf;
 
 use sfmr_colmap::colmap_db;
 
@@ -40,7 +40,7 @@ use crate::py_matches_io::matches_data_to_py;
 #[pyfunction]
 pub fn write_colmap_db(
     py: Python<'_>,
-    db_path: &str,
+    db_path: PathBuf,
     data: &Bound<'_, PyDict>,
 ) -> PyResult<Py<PyAny>> {
     let cameras = extract_cameras_as_sfmr(&get_item(data, "cameras")?)?;
@@ -241,7 +241,7 @@ pub fn write_colmap_db(
         frames: None,
     };
 
-    let image_ids = colmap_db::write_colmap_db(Path::new(db_path), &write_data)
+    let image_ids = colmap_db::write_colmap_db(&db_path, &write_data)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
     Ok(PyList::new(py, &image_ids)?.into())
@@ -262,10 +262,10 @@ pub fn write_colmap_db(
 #[pyo3(signature = (db_path, include_tvg=true))]
 pub fn read_colmap_db_matches(
     py: Python<'_>,
-    db_path: &str,
+    db_path: PathBuf,
     include_tvg: bool,
 ) -> PyResult<Py<PyAny>> {
-    let data = colmap_db::read_colmap_db_matches(Path::new(db_path), include_tvg)
+    let data = colmap_db::read_colmap_db_matches(&db_path, include_tvg)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     matches_data_to_py(py, data)
 }

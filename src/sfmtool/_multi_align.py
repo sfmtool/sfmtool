@@ -342,12 +342,12 @@ def align_command(
 
     click.echo("\nLoading reconstructions...")
     click.echo(f"  Loading {reference_path.name}...")
-    reference = SfmrReconstruction.load(str(reference_path))
+    reference = SfmrReconstruction.load(reference_path)
 
     to_align = []
     for path in align_paths:
         click.echo(f"  Loading {path.name}...")
-        to_align.append(SfmrReconstruction.load(str(path)))
+        to_align.append(SfmrReconstruction.load(path))
 
     click.echo("\nAnalyzing connectivity...")
     graph = _build_connectivity_graph([reference] + to_align)
@@ -397,7 +397,7 @@ def align_command(
         path = align_paths[i]
         if aligned is not None:
             output_path = output_dir / path.name
-            aligned.save(str(output_path), operation="align")
+            aligned.save(output_path, operation="align")
             click.echo(f"  Saved {output_path}")
             success_count += 1
 

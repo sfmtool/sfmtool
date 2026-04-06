@@ -20,7 +20,7 @@ class AlignToTransform:
             raise ValueError(
                 f"Reference must be a .sfmr file, got: {self.reference_path}"
             )
-        self._reference_recon = SfmrReconstruction.load(str(self.reference_path))
+        self._reference_recon = SfmrReconstruction.load(self.reference_path)
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         print(f"  Aligning to {self.reference_path.name} using 3D points...")

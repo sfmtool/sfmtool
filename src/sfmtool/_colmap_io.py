@@ -229,7 +229,7 @@ def colmap_binary_to_rust_sfmr(
     colmap_dir = Path(colmap_dir)
     image_dir = Path(image_dir).absolute()
 
-    data = read_colmap_binary(str(colmap_dir))
+    data = read_colmap_binary(colmap_dir)
     if len(data["positions_xyz"]) == 0:
         raise RuntimeError("No 3D points found in reconstruction.")
 
@@ -264,7 +264,7 @@ def colmap_binary_to_rust_sfmr(
         rig_frame_data=rig_frame_data,
     )
 
-    return SfmrReconstruction.from_data(str(workspace_dir), sfmr_dict)
+    return SfmrReconstruction.from_data(workspace_dir, sfmr_dict)
 
 
 def pycolmap_to_rust_sfmr(
@@ -379,7 +379,7 @@ def pycolmap_to_rust_sfmr(
         rig_frame_data=rig_frame_data,
     )
 
-    return SfmrReconstruction.from_data(str(workspace_dir), sfmr_dict)
+    return SfmrReconstruction.from_data(workspace_dir, sfmr_dict)
 
 
 def _extract_rig_frame_data(
@@ -594,7 +594,7 @@ def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None)
     print(
         f"Writing {num_cameras} cameras, {num_images} images, {num_points} 3D points..."
     )
-    write_colmap_binary(str(output_dir), data)
+    write_colmap_binary(output_dir, data)
 
     print("\nExport complete!")
     print(f"Output directory: {output_dir}")

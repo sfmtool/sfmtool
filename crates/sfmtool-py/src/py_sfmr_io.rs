@@ -6,7 +6,7 @@
 use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray4};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use std::path::Path;
+use std::path::PathBuf;
 
 use sfmr_format::{self, ContentHash, DepthStatistics, SfmrData, SfmrMetadata, WriteOptions};
 
@@ -27,8 +27,8 @@ use crate::PyCameraIntrinsics;
 ///   image_indexes, feature_indexes, points3d_indexes, observation_counts,
 ///   observed_depth_histogram_counts (numpy arrays).
 #[pyfunction]
-pub fn read_sfmr(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
-    let data = sfmr_format::read_sfmr(Path::new(path))
+pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
+    let data = sfmr_format::read_sfmr(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
     let dict = PyDict::new(py);
@@ -115,8 +115,8 @@ pub fn read_sfmr(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
 
 /// Read only the top-level metadata from a .sfmr file (fast, no binary data).
 #[pyfunction]
-pub fn read_sfmr_metadata(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
-    let metadata = sfmr_format::read_sfmr_metadata(Path::new(path))
+pub fn read_sfmr_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
+    let metadata = sfmr_format::read_sfmr_metadata(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     serde_to_py(py, &metadata)
 }
@@ -219,7 +219,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
 #[pyo3(signature = (path, data, zstd_level=3, skip_recompute_depth_stats=false))]
 pub fn write_sfmr(
     py: Python<'_>,
-    path: &str,
+    path: PathBuf,
     data: &Bound<'_, PyDict>,
     zstd_level: i32,
     skip_recompute_depth_stats: bool,
@@ -230,7 +230,7 @@ pub fn write_sfmr(
         zstd_level,
         skip_recompute_depth_stats,
     };
-    sfmr_format::write_sfmr_with_options(Path::new(path), &mut sfmr_data, &options)
+    sfmr_format::write_sfmr_with_options(&path, &mut sfmr_data, &options)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 
@@ -238,7 +238,6 @@ pub fn write_sfmr(
 ///
 /// Returns a tuple (is_valid, error_messages).
 #[pyfunction]
-pub fn verify_sfmr(path: &str) -> PyResult<(bool, Vec<String>)> {
-    sfmr_format::verify_sfmr(Path::new(path))
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+pub fn verify_sfmr(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
+    sfmr_format::verify_sfmr(&path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }

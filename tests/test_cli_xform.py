@@ -78,8 +78,8 @@ def test_xform_on_reconstruction(isolated_seoul_bull_17_images: list[Path]):
     # Verify the scaled reconstruction
     from sfmtool._sfmtool import SfmrReconstruction
 
-    original = SfmrReconstruction.load(str(output_sfmr))
-    scaled = SfmrReconstruction.load(str(scaled_sfmr))
+    original = SfmrReconstruction.load(output_sfmr)
+    scaled = SfmrReconstruction.load(scaled_sfmr)
     assert scaled.image_count == original.image_count
     assert scaled.point_count == original.point_count
 
@@ -112,8 +112,8 @@ def test_xform_remove_short_tracks(isolated_seoul_bull_17_images: list[Path]):
 
     from sfmtool._sfmtool import SfmrReconstruction
 
-    original = SfmrReconstruction.load(str(output_sfmr))
-    filtered = SfmrReconstruction.load(str(filtered_sfmr))
+    original = SfmrReconstruction.load(output_sfmr)
+    filtered = SfmrReconstruction.load(filtered_sfmr)
     assert filtered.point_count <= original.point_count
     assert filtered.image_count == original.image_count
 

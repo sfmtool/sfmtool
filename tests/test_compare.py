@@ -27,10 +27,10 @@ def _rot_quat_from_euler_angles(angles_rad):
 
 def _apply_transforms_to_file(input_path, output_path, transforms):
     """Helper that wraps apply_transforms with file I/O for tests."""
-    recon = SfmrReconstruction.load(str(input_path))
+    recon = SfmrReconstruction.load(input_path)
     recon = apply_transforms(recon, transforms)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    recon.save(str(output_path), operation="xform_test")
+    recon.save(output_path, operation="xform_test")
     return output_path
 
 
@@ -49,24 +49,24 @@ class TestCompareIdentical:
     """Test comparing a reconstruction with itself."""
 
     def test_all_images_match(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         output = _capture_compare(recon, recon)
         assert "Matching images: 17" in output
         assert "Only in reference: 0" in output
         assert "Only in target: 0" in output
 
     def test_camera_parameters_match(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         output = _capture_compare(recon, recon)
         assert "Camera parameters match" in output
 
     def test_same_sift_files(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         output = _capture_compare(recon, recon)
         assert "Same SIFT file: 17" in output
 
     def test_identity_alignment(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         output = _capture_compare(recon, recon)
         assert "RMS error:" in output
         for line in output.split("\n"):
@@ -75,14 +75,14 @@ class TestCompareIdentical:
                 assert rms < 0.2
 
     def test_all_points_correspond(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         n_points = recon.point_count
         output = _capture_compare(recon, recon)
         assert f"Corresponding point pairs: {n_points}" in output
         assert f"< 0.01: {n_points} (100.0%)" in output
 
     def test_conclusion_identical(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         output = _capture_compare(recon, recon)
         assert "IDENTICAL" in output
 
@@ -102,8 +102,8 @@ class TestCompareTransformed:
             [SimilarityTransform(transform)],
         )
 
-        original = SfmrReconstruction.load(str(original_path))
-        transformed = SfmrReconstruction.load(str(transformed_path))
+        original = SfmrReconstruction.load(original_path)
+        transformed = SfmrReconstruction.load(transformed_path)
         output = _capture_compare(original, transformed)
 
         assert "Camera parameters match" in output
@@ -127,8 +127,8 @@ class TestCompareTransformed:
             [SimilarityTransform(transform)],
         )
 
-        original = SfmrReconstruction.load(str(original_path))
-        transformed = SfmrReconstruction.load(str(transformed_path))
+        original = SfmrReconstruction.load(original_path)
+        transformed = SfmrReconstruction.load(transformed_path)
         output = _capture_compare(original, transformed)
 
         for line in output.split("\n"):
@@ -150,8 +150,8 @@ class TestCompareTransformed:
             [SimilarityTransform(transform)],
         )
 
-        original = SfmrReconstruction.load(str(original_path))
-        transformed = SfmrReconstruction.load(str(transformed_path))
+        original = SfmrReconstruction.load(original_path)
+        transformed = SfmrReconstruction.load(transformed_path)
         output = _capture_compare(original, transformed)
 
         assert "Only in reference (mean): 0.0" in output
@@ -171,8 +171,8 @@ class TestCompareFiltered:
             [IncludeRangeFilter(IntRangeExpr.from_str("5-12"))],
         )
 
-        original = SfmrReconstruction.load(str(original_path))
-        filtered = SfmrReconstruction.load(str(filtered_path))
+        original = SfmrReconstruction.load(original_path)
+        filtered = SfmrReconstruction.load(filtered_path)
         output = _capture_compare(original, filtered)
 
         assert "Camera parameters match" in output
@@ -197,8 +197,8 @@ class TestCompareFiltered:
             [IncludeRangeFilter(IntRangeExpr.from_str("5-12"))],
         )
 
-        original = SfmrReconstruction.load(str(original_path))
-        filtered = SfmrReconstruction.load(str(filtered_path))
+        original = SfmrReconstruction.load(original_path)
+        filtered = SfmrReconstruction.load(filtered_path)
         output = _capture_compare(original, filtered)
 
         for line in output.split("\n"):
@@ -225,8 +225,8 @@ class TestCompareTransformAndFilter:
             ],
         )
 
-        original = SfmrReconstruction.load(str(original_path))
-        modified = SfmrReconstruction.load(str(modified_path))
+        original = SfmrReconstruction.load(original_path)
+        modified = SfmrReconstruction.load(modified_path)
         output = _capture_compare(original, modified)
 
         assert "Camera parameters match" in output

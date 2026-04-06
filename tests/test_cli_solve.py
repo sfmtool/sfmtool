@@ -63,7 +63,7 @@ def test_solve_incremental(isolated_seoul_bull_17_images: list[Path]):
     # Verify the .sfmr file can be loaded
     from sfmtool._sfmtool import SfmrReconstruction
 
-    recon = SfmrReconstruction.load(str(output_path))
+    recon = SfmrReconstruction.load(output_path)
     assert recon.image_count > 0
     assert recon.point_count > 0
     assert recon.camera_count > 0

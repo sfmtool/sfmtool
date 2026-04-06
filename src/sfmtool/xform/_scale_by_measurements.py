@@ -358,7 +358,7 @@ class ScaleByMeasurementsTransform:
         if sfmr_path is not None:
             if not sfmr_path.exists():
                 raise FileNotFoundError(f"Source .sfmr file not found: {sfmr_path}")
-            source = SfmrReconstruction.load(str(sfmr_path))
+            source = SfmrReconstruction.load(sfmr_path)
             source_prefix = (source.content_xxh128 or "")[:8]
             if source_prefix != hash_prefix:
                 raise ValueError(

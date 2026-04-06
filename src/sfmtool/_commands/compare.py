@@ -46,8 +46,8 @@ def compare(reconstruction1, reconstruction2):
         )
 
     try:
-        recon1 = SfmrReconstruction.load(str(recon1_path))
-        recon2 = SfmrReconstruction.load(str(recon2_path))
+        recon1 = SfmrReconstruction.load(recon1_path)
+        recon2 = SfmrReconstruction.load(recon2_path)
 
         compare_reconstructions(
             recon1, recon2, recon1_name=recon1_path.name, recon2_name=recon2_path.name

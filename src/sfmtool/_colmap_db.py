@@ -127,7 +127,7 @@ def _setup_for_sfm_from_matches(
     colmap_dir = Path(colmap_dir)
 
     print(f"Loading matches from: {matches_file}")
-    matches_data = read_matches(str(matches_file))
+    matches_data = read_matches(matches_file)
 
     metadata = matches_data["metadata"]
     ws_meta = metadata["workspace"]

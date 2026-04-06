@@ -6,7 +6,7 @@
 use numpy::{IntoPyArray, PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use std::path::Path;
+use std::path::PathBuf;
 
 use sift_format::{self, FeatureToolMetadata, SiftContentHash, SiftData, SiftMetadata};
 
@@ -37,8 +37,8 @@ fn sift_data_to_py(py: Python<'_>, data: SiftData) -> PyResult<Py<PyAny>> {
 ///   positions_xy (N,2 float32), affine_shapes (N,2,2 float32),
 ///   descriptors (N,128 uint8), thumbnail_y_x_rgb (128,128,3 uint8).
 #[pyfunction]
-pub fn read_sift(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
-    let data = sift_format::read_sift(Path::new(path))
+pub fn read_sift(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
+    let data = sift_format::read_sift(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     sift_data_to_py(py, data)
 }
@@ -47,8 +47,8 @@ pub fn read_sift(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
 ///
 /// Returns a dict with keys: feature_tool_metadata, metadata, content_hash.
 #[pyfunction]
-pub fn read_sift_metadata(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
-    let (tool_meta, meta, hash) = sift_format::read_sift_metadata(Path::new(path))
+pub fn read_sift_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
+    let (tool_meta, meta, hash) = sift_format::read_sift_metadata(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
     let dict = PyDict::new(py);
@@ -62,8 +62,8 @@ pub fn read_sift_metadata(py: Python<'_>, path: &str) -> PyResult<Py<PyAny>> {
 ///
 /// If `count` exceeds the feature count, returns all features.
 #[pyfunction]
-pub fn read_sift_partial(py: Python<'_>, path: &str, count: usize) -> PyResult<Py<PyAny>> {
-    let data = sift_format::read_sift_partial(Path::new(path), count)
+pub fn read_sift_partial(py: Python<'_>, path: PathBuf, count: usize) -> PyResult<Py<PyAny>> {
+    let data = sift_format::read_sift_partial(&path, count)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     sift_data_to_py(py, data)
 }
@@ -76,7 +76,7 @@ pub fn read_sift_partial(py: Python<'_>, path: &str, count: usize) -> PyResult<P
 #[pyo3(signature = (path, data, zstd_level=3))]
 pub fn write_sift(
     py: Python<'_>,
-    path: &str,
+    path: PathBuf,
     data: &Bound<'_, PyDict>,
     zstd_level: i32,
 ) -> PyResult<()> {
@@ -99,7 +99,7 @@ pub fn write_sift(
         thumbnail_y_x_rgb: thumbnail_y_x_rgb.as_array().to_owned(),
     };
 
-    sift_format::write_sift(Path::new(path), &sift_data, zstd_level)
+    sift_format::write_sift(&path, &sift_data, zstd_level)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 
@@ -107,7 +107,6 @@ pub fn write_sift(
 ///
 /// Returns a tuple (is_valid, error_messages).
 #[pyfunction]
-pub fn verify_sift(path: &str) -> PyResult<(bool, Vec<String>)> {
-    sift_format::verify_sift(Path::new(path))
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+pub fn verify_sift(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
+    sift_format::verify_sift(&path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }

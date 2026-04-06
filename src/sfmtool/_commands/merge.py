@@ -72,7 +72,7 @@ def merge(reconstruction_paths, output_path, merge_percentile):
         reconstructions = []
         for path in input_paths:
             click.echo(f"  Loading {path.name}...")
-            recon = SfmrReconstruction.load(str(path))
+            recon = SfmrReconstruction.load(path)
             reconstructions.append(recon)
             click.echo(f"    Images: {recon.image_count}, Points: {recon.point_count}")
 

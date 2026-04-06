@@ -645,7 +645,7 @@ class TestDensifyE2E:
         from sfmtool._sfmtool import SfmrReconstruction
 
         sfmr_path = sfmrfile_reconstruction_with_17_images
-        recon = SfmrReconstruction.load(str(sfmr_path))
+        recon = SfmrReconstruction.load(sfmr_path)
         original_point_count = recon.point_count
 
         result = densify_reconstruction(
@@ -682,6 +682,6 @@ class TestDensifyE2E:
 
         from sfmtool._sfmtool import SfmrReconstruction
 
-        densified = SfmrReconstruction.load(str(output_path))
+        densified = SfmrReconstruction.load(output_path)
         assert densified.image_count > 0
         assert densified.point_count > 0

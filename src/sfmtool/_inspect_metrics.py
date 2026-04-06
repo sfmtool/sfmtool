@@ -101,7 +101,7 @@ def print_metrics_analysis(
     if range_expr is not None:
         range_numbers = set(IntRangeExpr.from_str(range_expr))
 
-    rust_recon = SfmrReconstruction.load(str(sfmr_path))
+    rust_recon = SfmrReconstruction.load(sfmr_path)
 
     if rust_recon.point_count == 0:
         click.echo(f"\nPer-image metrics analysis for: {recon_name}")

@@ -6,7 +6,7 @@
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use sfmtool_core::SfmrReconstruction;
 
@@ -27,8 +27,8 @@ pub struct PySfmrReconstruction {
 impl PySfmrReconstruction {
     /// Load a reconstruction from a `.sfmr` file path.
     #[staticmethod]
-    fn load(path: &str) -> PyResult<Self> {
-        let inner = SfmrReconstruction::load(Path::new(path))
+    fn load(path: PathBuf) -> PyResult<Self> {
+        let inner = SfmrReconstruction::load(&path)
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -44,12 +44,16 @@ impl PySfmrReconstruction {
     ///     workspace_dir: Resolved workspace directory path.
     ///     data: Dict with the same keys as `write_sfmr` expects.
     #[staticmethod]
-    fn from_data(py: Python<'_>, workspace_dir: &str, data: &Bound<'_, PyDict>) -> PyResult<Self> {
+    fn from_data(
+        py: Python<'_>,
+        workspace_dir: PathBuf,
+        data: &Bound<'_, PyDict>,
+    ) -> PyResult<Self> {
         let mut sfmr_data = parse_sfmr_data_from_dict(py, data, false)?;
-        sfmr_data.workspace_dir = Some(PathBuf::from(workspace_dir));
+        sfmr_data.workspace_dir = Some(workspace_dir.clone());
         let mut inner = SfmrReconstruction::from_sfmr_data(sfmr_data)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        inner.workspace_dir = PathBuf::from(workspace_dir);
+        inner.workspace_dir = workspace_dir;
         inner
             .recompute_depth_statistics()
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -75,7 +79,7 @@ impl PySfmrReconstruction {
     fn save(
         &mut self,
         py: Python<'_>,
-        path: &str,
+        path: PathBuf,
         operation: Option<&str>,
         tool_name: Option<&str>,
         tool_options: Option<&Bound<'_, PyDict>>,
@@ -92,8 +96,7 @@ impl PySfmrReconstruction {
             meta.timestamp = chrono::Local::now().to_rfc3339();
 
             // Update workspace paths relative to output file
-            let output_path =
-                std::path::absolute(Path::new(path)).unwrap_or_else(|_| PathBuf::from(path));
+            let output_path = std::path::absolute(&path).unwrap_or_else(|_| path.clone());
             if let Some(parent) = output_path.parent() {
                 if let Some(rel) = pathdiff::diff_paths(&self.inner.workspace_dir, parent) {
                     meta.workspace.relative_path = rel.to_string_lossy().replace('\\', "/");
@@ -112,7 +115,7 @@ impl PySfmrReconstruction {
         }
 
         self.inner
-            .save(Path::new(path))
+            .save(&path)
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         Ok(())
     }

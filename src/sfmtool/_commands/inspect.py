@@ -172,7 +172,7 @@ def inspect(
                 reconstruction_path, recon_name=recon_name, range_expr=range_expr
             )
         else:
-            recon = SfmrReconstruction.load(str(reconstruction_path))
+            recon = SfmrReconstruction.load(reconstruction_path)
 
             if coviz_flag:
                 print_covisibility_graph(recon, recon_name=recon_name)

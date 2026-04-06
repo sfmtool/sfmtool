@@ -11,7 +11,7 @@ from sfmtool._inspect_metrics import _compute_per_image_metrics, print_metrics_a
 
 @pytest.fixture
 def rust_recon(sfmrfile_reconstruction_with_17_images):
-    return SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+    return SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
 
 
 @pytest.fixture

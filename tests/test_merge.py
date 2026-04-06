@@ -18,19 +18,19 @@ from sfmtool.xform import IncludeRangeFilter, apply_transforms
 
 def _apply_transforms_to_file(input_path, output_path, transforms):
     """Helper that wraps apply_transforms with file I/O."""
-    recon = SfmrReconstruction.load(str(input_path))
+    recon = SfmrReconstruction.load(input_path)
     recon = apply_transforms(recon, transforms)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    recon.save(str(output_path), operation="xform_test")
+    recon.save(output_path, operation="xform_test")
     return output_path
 
 
 def _merge_reconstructions_to_file(input_paths, output_path, **kwargs):
     """Helper that wraps merge_reconstructions with file I/O."""
-    reconstructions = [SfmrReconstruction.load(str(p)) for p in input_paths]
+    reconstructions = [SfmrReconstruction.load(p) for p in input_paths]
     merged = merge_reconstructions(reconstructions=reconstructions, **kwargs)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    merged.save(str(output_path), operation="merge_test")
+    merged.save(output_path, operation="merge_test")
     return output_path
 
 
@@ -47,7 +47,7 @@ class TestMergeValidation:
     def test_merge_requires_at_least_two_reconstructions_single(
         self, sfmrfile_reconstruction_with_17_images
     ):
-        recon = SfmrReconstruction.load(str(sfmrfile_reconstruction_with_17_images))
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         with pytest.raises(ValueError, match="Need at least 2 reconstructions"):
             merge_reconstructions(reconstructions=[recon])
 
@@ -63,7 +63,7 @@ class TestMergeSubsets:
     ):
         """Split into 1-10 and 6-17, merge, verify image count and names match."""
         original_path = sfmrfile_reconstruction_with_17_images
-        original = SfmrReconstruction.load(str(original_path))
+        original = SfmrReconstruction.load(original_path)
 
         subset_a_path = tmp_path / "subset_a.sfmr"
         subset_b_path = tmp_path / "subset_b.sfmr"
@@ -79,8 +79,8 @@ class TestMergeSubsets:
             [IncludeRangeFilter(IntRangeExpr.from_str("6-17"))],
         )
 
-        subset_a = SfmrReconstruction.load(str(subset_a_path))
-        subset_b = SfmrReconstruction.load(str(subset_b_path))
+        subset_a = SfmrReconstruction.load(subset_a_path)
+        subset_b = SfmrReconstruction.load(subset_b_path)
         assert subset_a.image_count == 10
         assert subset_b.image_count == 12
 
@@ -90,7 +90,7 @@ class TestMergeSubsets:
             output_path=merged_path,
         )
 
-        merged = SfmrReconstruction.load(str(merged_path))
+        merged = SfmrReconstruction.load(merged_path)
 
         assert merged.image_count == original.image_count
         original_names = {Path(n).name for n in original.image_names}
@@ -102,7 +102,7 @@ class TestMergeSubsets:
     ):
         """Merge three overlapping subsets (1-7, 5-12, 10-17)."""
         original_path = sfmrfile_reconstruction_with_17_images
-        original = SfmrReconstruction.load(str(original_path))
+        original = SfmrReconstruction.load(original_path)
 
         subset_paths = []
         ranges = ["1-7", "5-12", "10-17"]
@@ -121,7 +121,7 @@ class TestMergeSubsets:
             output_path=merged_path,
         )
 
-        merged = SfmrReconstruction.load(str(merged_path))
+        merged = SfmrReconstruction.load(merged_path)
 
         assert merged.image_count == original.image_count
         original_names = {Path(n).name for n in original.image_names}
@@ -135,7 +135,7 @@ class TestMergeQuality:
     ):
         """Camera parameters should be preserved through merge."""
         original_path = sfmrfile_reconstruction_with_17_images
-        original = SfmrReconstruction.load(str(original_path))
+        original = SfmrReconstruction.load(original_path)
 
         subset_a_path = tmp_path / "subset_a.sfmr"
         subset_b_path = tmp_path / "subset_b.sfmr"
@@ -157,7 +157,7 @@ class TestMergeQuality:
             output_path=merged_path,
         )
 
-        merged = SfmrReconstruction.load(str(merged_path))
+        merged = SfmrReconstruction.load(merged_path)
 
         assert len(merged.cameras) == len(original.cameras)
         for orig_cam, merged_cam in zip(original.cameras, merged.cameras):
@@ -174,7 +174,7 @@ class TestMergeQuality:
     ):
         """Merged point count should match original when subsets cover all images."""
         original_path = sfmrfile_reconstruction_with_17_images
-        original = SfmrReconstruction.load(str(original_path))
+        original = SfmrReconstruction.load(original_path)
 
         subset_a_path = tmp_path / "subset_a.sfmr"
         subset_b_path = tmp_path / "subset_b.sfmr"
@@ -196,7 +196,7 @@ class TestMergeQuality:
             output_path=merged_path,
         )
 
-        merged = SfmrReconstruction.load(str(merged_path))
+        merged = SfmrReconstruction.load(merged_path)
         assert merged.point_count == original.point_count
 
     def test_merge_preserves_point_positions(
@@ -204,7 +204,7 @@ class TestMergeQuality:
     ):
         """After merge, point positions should match original via feature mapping."""
         original_path = sfmrfile_reconstruction_with_17_images
-        original = SfmrReconstruction.load(str(original_path))
+        original = SfmrReconstruction.load(original_path)
 
         subset_a_path = tmp_path / "subset_a.sfmr"
         subset_b_path = tmp_path / "subset_b.sfmr"
@@ -226,7 +226,7 @@ class TestMergeQuality:
             output_path=merged_path,
         )
 
-        merged = SfmrReconstruction.load(str(merged_path))
+        merged = SfmrReconstruction.load(merged_path)
 
         def build_feature_point_map(recon):
             result = {}
@@ -261,7 +261,7 @@ class TestMergeQuality:
     ):
         """After merge, at least 85% of camera poses should be close to original."""
         original_path = sfmrfile_reconstruction_with_17_images
-        original = SfmrReconstruction.load(str(original_path))
+        original = SfmrReconstruction.load(original_path)
 
         subset_a_path = tmp_path / "subset_a.sfmr"
         subset_b_path = tmp_path / "subset_b.sfmr"
@@ -283,7 +283,7 @@ class TestMergeQuality:
             output_path=merged_path,
         )
 
-        merged = SfmrReconstruction.load(str(merged_path))
+        merged = SfmrReconstruction.load(merged_path)
 
         original_name_to_idx = {
             Path(n).name: i for i, n in enumerate(original.image_names)
@@ -320,7 +320,7 @@ class TestMergeQuality:
     ):
         """Each (image, feature) pair should map to exactly one point."""
         original_path = sfmrfile_reconstruction_with_17_images
-        original = SfmrReconstruction.load(str(original_path))
+        original = SfmrReconstruction.load(original_path)
 
         subset_a_path = tmp_path / "subset_a.sfmr"
         subset_b_path = tmp_path / "subset_b.sfmr"
@@ -343,7 +343,7 @@ class TestMergeQuality:
             output_path=merged_path,
         )
 
-        merged = SfmrReconstruction.load(str(merged_path))
+        merged = SfmrReconstruction.load(merged_path)
 
         seen_observations = set()
         for img_idx, feat_idx in zip(

@@ -454,7 +454,7 @@ def xform(ctx, input_path, output_path, **kwargs):
 
     try:
         click.echo(f"Loading reconstruction from: {input_path}")
-        recon = SfmrReconstruction.load(str(input_path))
+        recon = SfmrReconstruction.load(input_path)
         click.echo(f"  Images: {recon.image_count}")
         click.echo(f"  Points: {recon.point_count}")
         click.echo(f"  Cameras: {recon.camera_count}")

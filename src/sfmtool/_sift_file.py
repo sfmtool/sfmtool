@@ -280,7 +280,7 @@ class SiftReader:
         if count is not None:
             return read_sift_partial(str(self.filename), count)
         if self._data is None:
-            self._data = _core_read_sift(str(self.filename))
+            self._data = _core_read_sift(self.filename)
         return self._data
 
     def read_positions(self, count=None):
@@ -394,7 +394,7 @@ def write_sift(
         "descriptors": descriptor,
         "thumbnail_y_x_rgb": thumbnail,
     }
-    _core_write_sift(str(filename), data, zstd_level)
+    _core_write_sift(filename, data, zstd_level)
 
 
 # ---------------------------------------------------------------------------

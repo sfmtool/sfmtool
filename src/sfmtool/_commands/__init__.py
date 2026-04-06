@@ -6,6 +6,7 @@
 from .align import align
 from .compare import compare
 from .densify import densify
+from .epipolar import epipolar
 from .init import init
 from .inspect import inspect
 from .match import match
@@ -18,6 +19,7 @@ __all__ = [
     "align",
     "compare",
     "densify",
+    "epipolar",
     "init",
     "inspect",
     "match",
