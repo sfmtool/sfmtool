@@ -8,6 +8,7 @@ from .compare import compare
 from .densify import densify
 from .epipolar import epipolar
 from .flow import flow
+from .heatmap import heatmap
 from .init import init
 from .inspect import inspect
 from .match import match
@@ -22,6 +23,7 @@ __all__ = [
     "densify",
     "epipolar",
     "flow",
+    "heatmap",
     "init",
     "inspect",
     "match",

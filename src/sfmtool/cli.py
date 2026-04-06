@@ -15,6 +15,7 @@ from ._commands import (
     densify,
     epipolar,
     flow,
+    heatmap,
     init,
     inspect,
     match,
@@ -52,6 +53,7 @@ main.add_command_with_category(merge, category="Reconstruction")
 main.add_command_with_category(densify, category="Reconstruction")
 main.add_command_with_category(epipolar, category="Visualization")
 main.add_command_with_category(flow, category="Image Processing")
+main.add_command_with_category(heatmap, category="Visualization")
 
 
 @main.command()
