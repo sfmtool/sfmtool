@@ -15,6 +15,7 @@ from .match import match
 from .merge import merge
 from .sift import sift
 from .solve import solve
+from .undistort import undistort
 from .xform import xform
 
 __all__ = [
@@ -30,5 +31,6 @@ __all__ = [
     "merge",
     "sift",
     "solve",
+    "undistort",
     "xform",
 ]

@@ -22,6 +22,7 @@ from ._commands import (
     merge,
     sift,
     solve,
+    undistort,
     xform,
 )
 from ._workspace import find_workspace_for_path
@@ -54,6 +55,7 @@ main.add_command_with_category(densify, category="Reconstruction")
 main.add_command_with_category(epipolar, category="Visualization")
 main.add_command_with_category(flow, category="Image Processing")
 main.add_command_with_category(heatmap, category="Visualization")
+main.add_command_with_category(undistort, category="Image Processing")
 
 
 @main.command()
