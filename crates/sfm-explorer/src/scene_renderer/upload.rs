@@ -343,11 +343,6 @@ impl SceneRenderer {
         let color_hidden: u32 = 0; // alpha=0 → shader discards
 
         let mut colors: Vec<u32> = vec![color_default; image_count];
-        if let Some(idx) = hidden_image {
-            if idx < image_count {
-                colors[idx] = color_hidden;
-            }
-        }
         if let Some(idx) = selected_image {
             if idx < image_count {
                 colors[idx] = color_selected;
@@ -358,17 +353,30 @@ impl SceneRenderer {
                 colors[idx] = color_track;
             }
         }
+        // Hidden must be applied last so it wins over selected/track
+        if let Some(idx) = hidden_image {
+            if idx < image_count {
+                colors[idx] = color_hidden;
+            }
+        }
         queue.write_buffer(color_buffer, 0, bytemuck::cast_slice(&colors));
     }
 
-    /// Rebuild the frustum bind group after the color buffer is created or replaced.
+    /// Rebuild bind groups that depend on the frustum color buffer.
+    ///
+    /// Called after the color buffer is created or replaced. Rebuilds:
+    /// - Frustum wireframe bind group (uniform + color storage)
+    /// - Image quad bind group (uniform + thumbnail texture + sampler + color storage)
     fn rebuild_frustum_bind_group(&mut self, device: &wgpu::Device) {
-        if let (Some(layout), Some(uniform_buf), Some(color_buf)) = (
-            &self.frustum_bind_group_layout,
-            &self.frustum_uniform_buffer,
-            &self.frustum_color_buffer,
-        ) {
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let Some(color_buf) = &self.frustum_color_buffer else {
+            return;
+        };
+
+        // Frustum wireframe bind group
+        if let (Some(layout), Some(uniform_buf)) =
+            (&self.frustum_bind_group_layout, &self.frustum_uniform_buffer)
+        {
+            self.frustum_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("frustum bind group"),
                 layout,
                 entries: &[
@@ -381,8 +389,38 @@ impl SceneRenderer {
                         resource: color_buf.as_entire_binding(),
                     },
                 ],
-            });
-            self.frustum_bind_group = Some(bind_group);
+            }));
+        }
+
+        // Image quad bind group (shared by pinhole + distorted quad pipelines)
+        if let (Some(layout), Some(uniform_buf), Some(tex_view), Some(sampler)) = (
+            &self.image_quad_bind_group_layout,
+            &self.image_quad_uniform_buffer,
+            &self.image_quad_thumbnail_view,
+            &self.image_quad_sampler,
+        ) {
+            self.image_quad_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("image quad bind group"),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(tex_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: color_buf.as_entire_binding(),
+                    },
+                ],
+            }));
         }
     }
 
@@ -511,28 +549,10 @@ impl SceneRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Create bind group
-        if let Some(layout) = &self.image_quad_bind_group_layout {
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("image quad bind group"),
-                layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniform_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&texture_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-            });
-            self.image_quad_bind_group = Some(bind_group);
-        }
+        // Store texture and sampler; bind group is created by
+        // rebuild_frustum_bind_group after the color buffer exists.
+        self.image_quad_thumbnail_view = Some(texture_view);
+        self.image_quad_sampler = Some(sampler);
 
         self.image_quad_uniform_buffer = Some(uniform_buf);
         self.thumbnail_texture = Some(texture);

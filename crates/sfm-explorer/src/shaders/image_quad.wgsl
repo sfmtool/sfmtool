@@ -15,6 +15,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var thumbnail_texture: texture_2d_array<f32>;
 @group(0) @binding(2) var thumbnail_sampler: sampler;
+@group(0) @binding(3) var<storage, read> frustum_colors: array<u32>;
 
 // Pick ID tag for frustum entities (bits 31..24).
 const PICK_TAG_FRUSTUM: u32 = 0x01000000u;
@@ -60,6 +61,11 @@ struct FragOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> FragOutput {
+    // Discard hidden frustums (alpha == 0 in color buffer)
+    let color_packed = frustum_colors[in.frustum_index];
+    if (color_packed >> 24u) == 0u {
+        discard;
+    }
     // Compute atlas UV and layer from grid position
     let page = in.frustum_index / uniforms.images_per_page;
     let idx_in_page = in.frustum_index % uniforms.images_per_page;
