@@ -55,7 +55,7 @@ pub(super) struct CompassEdgeInstance {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct FrustumEdge {
     pub endpoint_a: [f32; 3],
-    pub color_packed: u32, // R8G8B8A8
+    pub _pad0: u32,
     pub endpoint_b: [f32; 3],
     pub frustum_index: u32, // image index for pick buffer
 }

@@ -17,6 +17,7 @@ struct FrustumUniforms {
 }
 
 @group(0) @binding(0) var<uniform> uniforms: FrustumUniforms;
+@group(0) @binding(1) var<storage, read> frustum_colors: array<u32>;
 
 // Pick ID tag for frustum entities (bits 31..24).
 const PICK_TAG_FRUSTUM: u32 = 0x01000000u;
@@ -27,8 +28,7 @@ struct VertexInput {
     // Per-instance edge data
     @location(1) endpoint_a: vec3<f32>,
     @location(2) endpoint_b: vec3<f32>,
-    @location(3) color_packed: u32,
-    @location(4) frustum_index: u32,
+    @location(3) frustum_index: u32,
 }
 
 struct VertexOutput {
@@ -68,11 +68,12 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let pixel_to_ndc = vec2<f32>(2.0 / uniforms.screen_size.x, 2.0 / uniforms.screen_size.y);
     let offset_ndc = perp * in.corner.y * uniforms.line_half_width * pixel_to_ndc;
 
-    // Unpack color
-    let r = f32(in.color_packed & 0xFFu) / 255.0;
-    let g = f32((in.color_packed >> 8u) & 0xFFu) / 255.0;
-    let b = f32((in.color_packed >> 16u) & 0xFFu) / 255.0;
-    let a = f32((in.color_packed >> 24u) & 0xFFu) / 255.0;
+    // Look up color from per-frustum storage buffer
+    let color_packed = frustum_colors[in.frustum_index];
+    let r = f32(color_packed & 0xFFu) / 255.0;
+    let g = f32((color_packed >> 8u) & 0xFFu) / 255.0;
+    let b = f32((color_packed >> 16u) & 0xFFu) / 255.0;
+    let a = f32((color_packed >> 24u) & 0xFFu) / 255.0;
 
     var out: VertexOutput;
     out.clip_pos = vec4<f32>(clip_pos.xy + offset_ndc * clip_pos.w, clip_pos.zw);

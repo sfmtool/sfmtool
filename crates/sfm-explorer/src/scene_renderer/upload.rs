@@ -66,22 +66,18 @@ impl SceneRenderer {
     /// Builds 8 edges per camera (4 side edges from apex to far corners + 4
     /// base edges around the far face). The stub depth is `length_scale *
     /// frustum_size_multiplier`.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// Colors are stored in a separate per-image storage buffer that can be
+    /// updated cheaply via [`update_frustum_colors`] without recomputing geometry.
     pub fn upload_frustums(
         &mut self,
         device: &wgpu::Device,
         recon: &SfmrReconstruction,
         length_scale: f32,
         frustum_size_multiplier: f32,
-        selected_image: Option<usize>,
         hidden_image: Option<usize>,
-        track_images: &[usize],
     ) {
         let far_z = (length_scale * frustum_size_multiplier) as f64;
-        // White with alpha 0.7 for default, cyan for selected, orange for track
-        let color_default: u32 = 255 | (255 << 8) | (255 << 16) | (180 << 24);
-        let color_selected: u32 = (255 << 8) | (255 << 16) | (255 << 24);
-        let color_track: u32 = 255 | (165 << 8) | (255 << 24); // orange (R=255, G=165, B=0)
 
         let mut edges: Vec<FrustumEdge> = Vec::with_capacity(recon.images.len() * 8);
 
@@ -98,13 +94,6 @@ impl SceneRenderer {
             if hidden_image == Some(image_idx) {
                 continue;
             }
-            let color = if selected_image == Some(image_idx) {
-                color_selected
-            } else if track_images.contains(&image_idx) {
-                color_track
-            } else {
-                color_default
-            };
             let camera = &recon.cameras[image.camera_index as usize];
             let center = image.camera_center();
             let r = image.camera_to_world_rotation_flat();
@@ -139,7 +128,7 @@ impl SceneRenderer {
                 for fc in &far_corners {
                     edges.push(FrustumEdge {
                         endpoint_a: apex,
-                        color_packed: color,
+                        _pad0: 0,
                         endpoint_b: *fc,
                         frustum_index: image_idx as u32,
                     });
@@ -150,7 +139,7 @@ impl SceneRenderer {
                 for i in 0..n - 1 {
                     edges.push(FrustumEdge {
                         endpoint_a: pos(i, 0),
-                        color_packed: color,
+                        _pad0: 0,
                         endpoint_b: pos(i + 1, 0),
                         frustum_index: image_idx as u32,
                     });
@@ -159,7 +148,7 @@ impl SceneRenderer {
                 for j in 0..n - 1 {
                     edges.push(FrustumEdge {
                         endpoint_a: pos(n - 1, j),
-                        color_packed: color,
+                        _pad0: 0,
                         endpoint_b: pos(n - 1, j + 1),
                         frustum_index: image_idx as u32,
                     });
@@ -168,7 +157,7 @@ impl SceneRenderer {
                 for i in (0..n - 1).rev() {
                     edges.push(FrustumEdge {
                         endpoint_a: pos(i + 1, n - 1),
-                        color_packed: color,
+                        _pad0: 0,
                         endpoint_b: pos(i, n - 1),
                         frustum_index: image_idx as u32,
                     });
@@ -177,7 +166,7 @@ impl SceneRenderer {
                 for j in (0..n - 1).rev() {
                     edges.push(FrustumEdge {
                         endpoint_a: pos(0, j + 1),
-                        color_packed: color,
+                        _pad0: 0,
                         endpoint_b: pos(0, j),
                         frustum_index: image_idx as u32,
                     });
@@ -240,7 +229,7 @@ impl SceneRenderer {
                 for fc in &far {
                     edges.push(FrustumEdge {
                         endpoint_a: apex,
-                        color_packed: color,
+                        _pad0: 0,
                         endpoint_b: *fc,
                         frustum_index: image_idx as u32,
                     });
@@ -251,7 +240,7 @@ impl SceneRenderer {
                     let j = (i + 1) % 4;
                     edges.push(FrustumEdge {
                         endpoint_a: far[i],
-                        color_packed: color,
+                        _pad0: 0,
                         endpoint_b: far[j],
                         frustum_index: image_idx as u32,
                     });
@@ -281,6 +270,20 @@ impl SceneRenderer {
         });
         self.frustum_edge_buffer = Some(buffer);
         self.frustum_edge_count = edges.len() as u32;
+        self.frustum_image_count = recon.images.len() as u32;
+
+        // Create per-image color storage buffer (initialized to default white/alpha)
+        let color_default: u32 = 255 | (255 << 8) | (255 << 16) | (180 << 24);
+        let colors: Vec<u32> = vec![color_default; recon.images.len()];
+        let color_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("frustum colors"),
+            contents: bytemuck::cast_slice(&colors),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        self.frustum_color_buffer = Some(color_buffer);
+
+        // Rebuild bind group with uniform + color storage buffer
+        self.rebuild_frustum_bind_group(device);
 
         // Upload pinhole image quads (instanced)
         if !pinhole_quads.is_empty() {
@@ -315,6 +318,64 @@ impl SceneRenderer {
             self.distorted_quad_vertex_buffer = None;
             self.distorted_quad_index_buffer = None;
             self.distorted_quad_index_count = 0;
+        }
+    }
+
+    /// Update per-image frustum colors without recomputing geometry.
+    ///
+    /// Writes a new color array to the existing storage buffer via `queue.write_buffer`.
+    /// This is much cheaper than `upload_frustums` — just 4 bytes × image_count.
+    pub fn update_frustum_colors(
+        &self,
+        queue: &wgpu::Queue,
+        image_count: usize,
+        selected_image: Option<usize>,
+        track_images: &[usize],
+    ) {
+        let Some(ref color_buffer) = self.frustum_color_buffer else {
+            return;
+        };
+
+        let color_default: u32 = 255 | (255 << 8) | (255 << 16) | (180 << 24);
+        let color_selected: u32 = (255 << 8) | (255 << 16) | (255 << 24);
+        let color_track: u32 = 255 | (165 << 8) | (255 << 24); // orange
+
+        let mut colors: Vec<u32> = vec![color_default; image_count];
+        if let Some(idx) = selected_image {
+            if idx < image_count {
+                colors[idx] = color_selected;
+            }
+        }
+        for &idx in track_images {
+            if idx < image_count && selected_image != Some(idx) {
+                colors[idx] = color_track;
+            }
+        }
+        queue.write_buffer(color_buffer, 0, bytemuck::cast_slice(&colors));
+    }
+
+    /// Rebuild the frustum bind group after the color buffer is created or replaced.
+    fn rebuild_frustum_bind_group(&mut self, device: &wgpu::Device) {
+        if let (Some(layout), Some(uniform_buf), Some(color_buf)) = (
+            &self.frustum_bind_group_layout,
+            &self.frustum_uniform_buffer,
+            &self.frustum_color_buffer,
+        ) {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("frustum bind group"),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: color_buf.as_entire_binding(),
+                    },
+                ],
+            });
+            self.frustum_bind_group = Some(bind_group);
         }
     }
 

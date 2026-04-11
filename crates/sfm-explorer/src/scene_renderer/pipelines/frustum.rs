@@ -9,7 +9,7 @@ const SHADER: &str = include_str!("../../shaders/frustum.wgsl");
 pub(in crate::scene_renderer) struct FrustumPipelineResources {
     pub pipeline: wgpu::RenderPipeline,
     pub uniform_buffer: wgpu::Buffer,
-    pub bind_group: wgpu::BindGroup,
+    pub bind_group_layout: wgpu::BindGroupLayout,
 }
 
 pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> FrustumPipelineResources {
@@ -20,16 +20,28 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> FrustumPipelin
 
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("frustum bind group layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
             },
-            count: None,
-        }],
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -66,11 +78,6 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> FrustumPipelin
                             shader_location: 1, // endpoint_a
                         },
                         wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Uint32,
-                            offset: 12,
-                            shader_location: 3, // color_packed
-                        },
-                        wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Float32x3,
                             offset: 16,
                             shader_location: 2, // endpoint_b
@@ -78,7 +85,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> FrustumPipelin
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Uint32,
                             offset: 28,
-                            shader_location: 4, // frustum_index
+                            shader_location: 3, // frustum_index
                         },
                     ],
                 },
@@ -138,19 +145,9 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> FrustumPipelin
         mapped_at_creation: false,
     });
 
-    // Frustum bind group
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("frustum bind group"),
-        layout: &bind_group_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: uniform_buffer.as_entire_binding(),
-        }],
-    });
-
     FrustumPipelineResources {
         pipeline,
         uniform_buffer,
-        bind_group,
+        bind_group_layout,
     }
 }

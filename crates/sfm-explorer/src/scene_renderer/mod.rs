@@ -85,8 +85,11 @@ pub struct SceneRenderer {
     frustum_pipeline: Option<wgpu::RenderPipeline>,
     frustum_edge_buffer: Option<wgpu::Buffer>,
     frustum_uniform_buffer: Option<wgpu::Buffer>,
+    frustum_bind_group_layout: Option<wgpu::BindGroupLayout>,
     frustum_bind_group: Option<wgpu::BindGroup>,
+    frustum_color_buffer: Option<wgpu::Buffer>,
     frustum_edge_count: u32,
+    frustum_image_count: u32,
 
     // ── Image quad rendering (pinhole: instanced, distorted: indexed) ──
     image_quad_pipeline: Option<wgpu::RenderPipeline>,
@@ -190,8 +193,11 @@ impl SceneRenderer {
             frustum_pipeline: None,
             frustum_edge_buffer: None,
             frustum_uniform_buffer: None,
+            frustum_bind_group_layout: None,
             frustum_bind_group: None,
+            frustum_color_buffer: None,
             frustum_edge_count: 0,
+            frustum_image_count: 0,
             image_quad_pipeline: None,
             image_quad_bind_group_layout: None,
             image_quad_instance_buffer: None,
@@ -298,7 +304,7 @@ impl SceneRenderer {
         let fr = pipelines::frustum::create(device);
         self.frustum_pipeline = Some(fr.pipeline);
         self.frustum_uniform_buffer = Some(fr.uniform_buffer);
-        self.frustum_bind_group = Some(fr.bind_group);
+        self.frustum_bind_group_layout = Some(fr.bind_group_layout);
 
         // ── Image quad pipeline ──
         let iq = pipelines::image_quad::create(device);
