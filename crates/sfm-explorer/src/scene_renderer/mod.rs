@@ -141,6 +141,10 @@ pub struct SceneRenderer {
     /// Auto-computed point size (median NN distance * 0.5). Updated on upload.
     auto_point_size: f32,
 
+    /// Characteristic inter-camera distance (p90 of camera-center NN distances).
+    /// `None` when fewer than 2 cameras or not yet computed.
+    camera_nn_scale: Option<f32>,
+
     // ── Scene bounds ──
     /// Bounding sphere center of the reconstruction's 3D points.
     scene_center: nalgebra::Point3<f64>,
@@ -221,6 +225,7 @@ impl SceneRenderer {
             hover_depth: None,
             hover_pick_id: PICK_TAG_NONE,
             auto_point_size: FALLBACK_POINT_SIZE,
+            camera_nn_scale: None,
             scene_center: nalgebra::Point3::origin(),
             scene_radius: 1.0,
         }
@@ -234,6 +239,12 @@ impl SceneRenderer {
     /// Returns the auto-computed point size (world space, before user scaling).
     pub fn auto_point_size(&self) -> f32 {
         self.auto_point_size
+    }
+
+    /// Returns the characteristic inter-camera distance (p90 of camera NN distances),
+    /// or `None` if fewer than 2 cameras.
+    pub fn camera_nn_scale(&self) -> Option<f32> {
+        self.camera_nn_scale
     }
 
     /// Returns the bounding sphere center of the scene.

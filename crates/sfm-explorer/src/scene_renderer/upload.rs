@@ -4,7 +4,7 @@
 //! Data upload logic — transfers point cloud, frustum, thumbnail, and background
 //! image data to the GPU.
 
-use super::auto_point_size::{compute_auto_point_size, compute_scene_bounds};
+use super::auto_point_size::{compute_auto_point_size, compute_camera_nn_scale, compute_scene_bounds};
 use super::distorted_mesh::generate_bg_distorted_mesh;
 use super::gpu_types::*;
 use super::SceneRenderer;
@@ -36,6 +36,9 @@ impl SceneRenderer {
 
         // Compute auto point size from nearest-neighbor distances
         self.auto_point_size = compute_auto_point_size(&recon.points);
+
+        // Compute characteristic inter-camera distance
+        self.camera_nn_scale = compute_camera_nn_scale(&recon.images);
 
         // Compute scene bounding sphere for adaptive clip planes
         let (center, radius) = compute_scene_bounds(&recon.points);

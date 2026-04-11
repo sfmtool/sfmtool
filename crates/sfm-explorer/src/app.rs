@@ -112,8 +112,12 @@ impl App {
         if self.state.points_need_upload {
             if let Some(ref recon) = self.state.reconstruction {
                 self.scene_renderer.upload_points(device, recon);
-                self.state.length_scale = scene_renderer::DEFAULT_LENGTH_SCALE_MULTIPLIER
+                let point_scale = scene_renderer::DEFAULT_LENGTH_SCALE_MULTIPLIER
                     * self.scene_renderer.auto_point_size();
+                self.state.length_scale = match self.scene_renderer.camera_nn_scale() {
+                    Some(cam_scale) => point_scale.min(cam_scale),
+                    None => point_scale,
+                };
                 self.scene_renderer.upload_thumbnails(device, queue, recon);
                 let track_images = dock::compute_track_images(&self.state, recon);
                 self.scene_renderer.upload_frustums(

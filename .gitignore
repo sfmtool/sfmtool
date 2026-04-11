@@ -45,3 +45,6 @@ site/
 
 # User-specific Claude settings
 .claude/settings.local.json
+
+# Workspaces
+/*_ws/

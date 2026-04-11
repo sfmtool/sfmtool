@@ -76,6 +76,55 @@ pub(super) fn compute_auto_point_size(points: &[sfmtool_core::Point3D]) -> f32 {
     auto_size
 }
 
+/// Compute a characteristic inter-camera distance from nearest-neighbor distances.
+///
+/// Builds a KD-tree of all camera centers, queries the NN distance for each
+/// camera, and returns the 90th percentile. The high percentile makes the
+/// result robust to a few cameras that happen to sit on top of each other
+/// (e.g. colocated rig cameras), which would otherwise pull the value to zero.
+///
+/// Returns `None` if there are fewer than 2 images.
+pub(super) fn compute_camera_nn_scale(images: &[sfmtool_core::SfmrImage]) -> Option<f32> {
+    if images.len() < 2 {
+        return None;
+    }
+
+    let mut tree: KdTree<f32, 3> = KdTree::with_capacity(images.len());
+    for (i, img) in images.iter().enumerate() {
+        let c = img.camera_center();
+        tree.add(&[c.x as f32, c.y as f32, c.z as f32], i as u64);
+    }
+
+    let mut nn_distances: Vec<f32> = Vec::with_capacity(images.len());
+    for img in images {
+        let c = img.camera_center();
+        let query = [c.x as f32, c.y as f32, c.z as f32];
+        let neighbors = tree.nearest_n::<SquaredEuclidean>(&query, 2);
+        if neighbors.len() >= 2 {
+            let dist = neighbors[1].distance.sqrt();
+            if dist > 0.0 {
+                nn_distances.push(dist);
+            }
+        }
+    }
+
+    if nn_distances.is_empty() {
+        return None;
+    }
+
+    nn_distances.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+    let p90 = nn_distances[nn_distances.len() * 9 / 10];
+
+    log::info!(
+        "Camera NN scale: {:.4} (p90 of {} NN distances from {} cameras)",
+        p90,
+        nn_distances.len(),
+        images.len()
+    );
+
+    Some(p90)
+}
+
 /// Compute the bounding sphere (center, radius) for a set of 3D points.
 ///
 /// Uses component-wise median for a robust center, then 80th percentile
@@ -124,8 +173,8 @@ pub(super) fn compute_scene_bounds(points: &[sfmtool_core::Point3D]) -> (Point3<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nalgebra::Point3 as NPoint3;
-    use sfmtool_core::Point3D;
+    use nalgebra::{Point3 as NPoint3, UnitQuaternion, Vector3};
+    use sfmtool_core::{Point3D, SfmrImage};
 
     fn make_point(x: f64, y: f64, z: f64) -> Point3D {
         Point3D {
@@ -194,6 +243,53 @@ mod tests {
         assert!(center.x.abs() < 1.0, "center.x={}", center.x);
         // Radius at 80th percentile should be small-ish (not 1000)
         assert!(radius < 10.0, "radius={}", radius);
+    }
+
+    /// Create a camera at the given world-space position (identity rotation, looking along +Z).
+    fn make_image_at(x: f64, y: f64, z: f64) -> SfmrImage {
+        let q = UnitQuaternion::identity();
+        // For identity rotation, t = -R * C = -C
+        let t = Vector3::new(-x, -y, -z);
+        SfmrImage {
+            name: String::new(),
+            camera_index: 0,
+            quaternion_wxyz: q,
+            translation_xyz: t,
+            feature_tool_hash: [0; 16],
+            sift_content_hash: [0; 16],
+        }
+    }
+
+    #[test]
+    fn test_camera_nn_scale_too_few() {
+        assert_eq!(compute_camera_nn_scale(&[]), None);
+        assert_eq!(compute_camera_nn_scale(&[make_image_at(0.0, 0.0, 0.0)]), None);
+    }
+
+    #[test]
+    fn test_camera_nn_scale_uniform_line() {
+        // 10 cameras spaced 2.0 apart along X
+        let images: Vec<SfmrImage> = (0..10)
+            .map(|i| make_image_at(i as f64 * 2.0, 0.0, 0.0))
+            .collect();
+        let scale = compute_camera_nn_scale(&images).unwrap();
+        // All NN distances are 2.0, so p90 should be 2.0
+        assert!((scale - 2.0).abs() < 0.01, "scale={}", scale);
+    }
+
+    #[test]
+    fn test_camera_nn_scale_with_colocated() {
+        // 10 cameras spaced 1.0 apart, plus 2 colocated at origin
+        let mut images: Vec<SfmrImage> = (0..10)
+            .map(|i| make_image_at(i as f64, 0.0, 0.0))
+            .collect();
+        // Add 2 cameras sitting right on camera 0
+        images.push(make_image_at(0.0, 0.0, 0.0));
+        images.push(make_image_at(0.0, 0.0, 0.0));
+        let scale = compute_camera_nn_scale(&images).unwrap();
+        // The colocated cameras have NN distance ~0 but p90 should still be ~1.0
+        assert!(scale > 0.5, "scale={}", scale);
+        assert!(scale < 1.5, "scale={}", scale);
     }
 
     #[test]
