@@ -31,5 +31,5 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
+          files: lcov.info,python-lcov.info
           flags: ${{ matrix.os }}

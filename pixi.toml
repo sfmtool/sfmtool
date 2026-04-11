@@ -26,6 +26,7 @@ cargo-llvm-cov = "*"
 maturin = ">=1.8,<2"
 pip = "*"
 pytest = "*"
+pytest-cov = "*"
 ruff = "*"
 
 [feature.test.tasks]

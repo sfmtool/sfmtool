@@ -19,11 +19,11 @@ maturin develop
 # Run Rust tests (generates Rust-side coverage)
 cargo test --workspace
 
-# Run Python tests (generates Rust coverage from Python calls)
-pytest
+# Run Python tests (generates Rust coverage from Python calls + Python coverage)
+pytest --cov=sfmtool --cov-report=lcov:python-lcov.info
 
-# Generate the combined report
+# Generate the Rust coverage report
 cargo llvm-cov report --lcov --output-path lcov.info
 
 echo ""
-echo "Coverage report written to lcov.info"
+echo "Coverage reports written to lcov.info (Rust) and python-lcov.info (Python)"
