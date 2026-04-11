@@ -124,6 +124,21 @@ impl RotQuaternion {
         -self.inverse().rotate_vector(translation)
     }
 
+    /// The rotation angle in radians (always non-negative, in [0, π]).
+    pub fn angle(&self) -> f64 {
+        self.inner.angle()
+    }
+
+    /// Spherical linear interpolation between `self` and `other` at parameter `t`.
+    ///
+    /// `t=0` returns `self`, `t=1` returns `other`. Values outside [0, 1]
+    /// extrapolate beyond the two rotations.
+    pub fn slerp(&self, other: &Self, t: f64) -> Self {
+        Self {
+            inner: self.inner.slerp(&other.inner, t),
+        }
+    }
+
     /// Access the inner nalgebra `UnitQuaternion` for interop with other Rust code.
     pub fn as_nalgebra(&self) -> &UnitQuaternion<f64> {
         &self.inner

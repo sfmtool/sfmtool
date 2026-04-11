@@ -28,52 +28,12 @@ def _compute_camera_centers(quaternions, translations):
 
 def _compute_rotation_angle(quat_a, quat_b):
     """Compute rotation angle in degrees between two RotQuaternion objects."""
-    q_rel = quat_b * quat_a.conjugate()
-    w = q_rel.w
-    w = np.clip(w, -1.0, 1.0)
-    angle_rad = 2.0 * np.arccos(abs(w))
-    return np.degrees(angle_rad)
+    return np.degrees((quat_b * quat_a.conjugate()).angle())
 
 
 def _slerp_halfway(quat_prev, quat_next):
     """Compute SLERP interpolation at t=0.5 between two RotQuaternion objects."""
-    dot_product = (
-        quat_prev.w * quat_next.w
-        + quat_prev.x * quat_next.x
-        + quat_prev.y * quat_next.y
-        + quat_prev.z * quat_next.z
-    )
-    if dot_product < 0:
-        quat_next = RotQuaternion(
-            -quat_next.w, -quat_next.x, -quat_next.y, -quat_next.z
-        )
-
-    q_rel = quat_next * quat_prev.conjugate()
-
-    w = np.clip(q_rel.w, -1.0, 1.0)
-    half_angle = np.arccos(w)
-    angle = 2.0 * half_angle
-
-    if abs(angle) < 1e-8:
-        return quat_prev
-
-    sin_half_angle = np.sin(half_angle)
-    if abs(sin_half_angle) < 1e-8:
-        return quat_prev
-
-    axis = np.array([q_rel.x, q_rel.y, q_rel.z]) / sin_half_angle
-
-    new_half_angle = 0.5 * angle / 2.0
-    new_w = np.cos(new_half_angle)
-    new_sin = np.sin(new_half_angle)
-    q_half = RotQuaternion(
-        new_w,
-        new_sin * axis[0],
-        new_sin * axis[1],
-        new_sin * axis[2],
-    )
-
-    return q_half * quat_prev
+    return quat_prev.slerp(quat_next, 0.5)
 
 
 def _analyze_motion_path(recon, camera_centers, quaternions):

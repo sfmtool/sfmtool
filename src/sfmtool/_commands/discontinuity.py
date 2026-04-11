@@ -94,10 +94,20 @@ def discontinuity(
 
     # Check if input is a .sfmr file
     if len(paths) == 1 and paths[0].endswith(".sfmr"):
-        raise click.UsageError(
-            "Reconstruction analysis mode is not yet implemented. "
-            "Provide image paths or directories for image sequence analysis."
-        )
+        from .._discontinuity import analyze_reconstruction
+        from .._sfmtool import SfmrReconstruction
+
+        sfmr_path = Path(paths[0])
+        recon = SfmrReconstruction.load(sfmr_path)
+
+        numbers = None
+        if range_expr:
+            from openjd.model import IntRangeExpr
+
+            numbers = set(IntRangeExpr.from_str(range_expr))
+
+        analyze_reconstruction(recon, range_numbers=numbers)
+        return
 
     # Image sequence mode
     numbers = None

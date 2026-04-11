@@ -263,7 +263,10 @@ mod tests {
     #[test]
     fn test_camera_nn_scale_too_few() {
         assert_eq!(compute_camera_nn_scale(&[]), None);
-        assert_eq!(compute_camera_nn_scale(&[make_image_at(0.0, 0.0, 0.0)]), None);
+        assert_eq!(
+            compute_camera_nn_scale(&[make_image_at(0.0, 0.0, 0.0)]),
+            None
+        );
     }
 
     #[test]
@@ -280,9 +283,8 @@ mod tests {
     #[test]
     fn test_camera_nn_scale_with_colocated() {
         // 10 cameras spaced 1.0 apart, plus 2 colocated at origin
-        let mut images: Vec<SfmrImage> = (0..10)
-            .map(|i| make_image_at(i as f64, 0.0, 0.0))
-            .collect();
+        let mut images: Vec<SfmrImage> =
+            (0..10).map(|i| make_image_at(i as f64, 0.0, 0.0)).collect();
         // Add 2 cameras sitting right on camera 0
         images.push(make_image_at(0.0, 0.0, 0.0));
         images.push(make_image_at(0.0, 0.0, 0.0));

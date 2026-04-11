@@ -159,6 +159,21 @@ impl PyRotQuaternion {
         self.inner.to_euler_angles()
     }
 
+    /// The rotation angle in radians (always non-negative, in [0, π]).
+    fn angle(&self) -> f64 {
+        self.inner.angle()
+    }
+
+    /// Spherical linear interpolation between self and other at parameter t.
+    ///
+    /// t=0 returns self, t=1 returns other. Values outside [0, 1]
+    /// extrapolate beyond the two rotations.
+    fn slerp(&self, other: &PyRotQuaternion, t: f64) -> Self {
+        Self {
+            inner: self.inner.slerp(&other.inner, t),
+        }
+    }
+
     /// Compute the camera center in world coordinates from a world-to-camera pose.
     ///
     /// Given a world-to-camera transform where ``p_camera = R * p_world + t``,
@@ -201,6 +216,13 @@ impl PyRotQuaternion {
 
     /// Quaternion multiplication (composition of rotations).
     fn __mul__(&self, other: &PyRotQuaternion) -> Self {
+        Self {
+            inner: self.inner.clone() * other.inner.clone(),
+        }
+    }
+
+    /// Quaternion multiplication via @ operator (composition of rotations).
+    fn __matmul__(&self, other: &PyRotQuaternion) -> Self {
         Self {
             inner: self.inner.clone() * other.inner.clone(),
         }

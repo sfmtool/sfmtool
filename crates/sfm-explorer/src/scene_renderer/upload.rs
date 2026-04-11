@@ -4,7 +4,9 @@
 //! Data upload logic — transfers point cloud, frustum, thumbnail, and background
 //! image data to the GPU.
 
-use super::auto_point_size::{compute_auto_point_size, compute_camera_nn_scale, compute_scene_bounds};
+use super::auto_point_size::{
+    compute_auto_point_size, compute_camera_nn_scale, compute_scene_bounds,
+};
 use super::distorted_mesh::generate_bg_distorted_mesh;
 use super::gpu_types::*;
 use super::SceneRenderer;
@@ -373,9 +375,10 @@ impl SceneRenderer {
         };
 
         // Frustum wireframe bind group
-        if let (Some(layout), Some(uniform_buf)) =
-            (&self.frustum_bind_group_layout, &self.frustum_uniform_buffer)
-        {
+        if let (Some(layout), Some(uniform_buf)) = (
+            &self.frustum_bind_group_layout,
+            &self.frustum_uniform_buffer,
+        ) {
             self.frustum_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("frustum bind group"),
                 layout,
@@ -399,28 +402,29 @@ impl SceneRenderer {
             &self.image_quad_thumbnail_view,
             &self.image_quad_sampler,
         ) {
-            self.image_quad_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("image quad bind group"),
-                layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniform_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(tex_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: color_buf.as_entire_binding(),
-                    },
-                ],
-            }));
+            self.image_quad_bind_group =
+                Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("image quad bind group"),
+                    layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: uniform_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(tex_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: color_buf.as_entire_binding(),
+                        },
+                    ],
+                }));
         }
     }
 

@@ -5,6 +5,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 from click.testing import CliRunner
 
@@ -31,13 +32,12 @@ def test_no_paths(runner):
     assert "Must provide" in result.output
 
 
-def test_sfmr_not_implemented(runner, tmp_path):
-    """Passing a .sfmr file gives a not-implemented error."""
+def test_sfmr_invalid_file(runner, tmp_path):
+    """Passing an invalid .sfmr file gives an error."""
     fake_sfmr = tmp_path / "test.sfmr"
     fake_sfmr.touch()
     result = runner.invoke(main, ["discontinuity", str(fake_sfmr)])
     assert result.exit_code != 0
-    assert "not yet implemented" in result.output
 
 
 def test_no_images_found(runner, tmp_path):
@@ -193,3 +193,155 @@ def test_save_flow_dir(runner, tmp_path):
     # Files are valid JPEGs with nonzero content
     for jpg in saved_files:
         assert jpg.stat().st_size > 1000, f"{jpg.name} is suspiciously small"
+
+
+# --- Reconstruction analysis ---
+
+
+def _make_discontinuous_recon(sfmr_path, *, translate=None, rotate_deg=None):
+    """Load a reconstruction and introduce a pose discontinuity at image 10->11.
+
+    Shifts or rotates the poses of images 11-17 to create an artificial break.
+    Returns the modified reconstruction (not saved to disk).
+    """
+    from sfmtool._sfmtool import RotQuaternion, Se3Transform, SfmrReconstruction
+
+    recon = SfmrReconstruction.load(sfmr_path)
+    image_names = recon.image_names
+    quats = recon.quaternions_wxyz.copy()
+    trans = recon.translations.copy()
+
+    # Build Se3Transform for the perturbation
+    if translate is not None:
+        xform = Se3Transform(translation=np.array(translate, dtype=np.float64))
+    elif rotate_deg is not None:
+        xform = Se3Transform.from_axis_angle(
+            np.array([0.0, 0.0, 1.0]), np.radians(rotate_deg)
+        )
+    else:
+        raise ValueError("must specify translate or rotate_deg")
+
+    # Apply to images whose number is >= 11
+    from sfmtool._filenames import number_from_filename
+
+    for i in range(recon.image_count):
+        num = number_from_filename(image_names[i])
+        if num is not None and num >= 11:
+            # Transform the world-to-camera pose: new_pose = pose @ xform_inv
+            # Equivalently, transform camera center in world space.
+            q = RotQuaternion.from_wxyz_array(quats[i])
+            center = q.camera_center(trans[i])
+
+            # Apply world-space transform to center and rotation
+            new_center = xform.apply_to_point(center)
+            new_q = xform.rotation @ q
+
+            # Convert back to world-to-camera (t = -R @ C)
+            R = np.array(new_q.to_rotation_matrix())
+            new_t = -R @ new_center
+            quats[i] = new_q.to_wxyz_array()
+            trans[i] = new_t
+
+    return recon.clone_with_changes(quaternions_wxyz=quats, translations=trans)
+
+
+def test_recon_no_discontinuity(sfmrfile_reconstruction_with_17_images):
+    """Unmodified reconstruction has no discontinuities."""
+    from sfmtool._discontinuity import analyze_reconstruction
+    from sfmtool._sfmtool import SfmrReconstruction
+
+    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    results = analyze_reconstruction(recon)
+    assert len(results) == 1
+    assert len(results[0]["core_edges"]) == 0
+
+
+def test_recon_translation_discontinuity(sfmrfile_reconstruction_with_17_images):
+    """A large translation applied to images 11-17 creates a discontinuity
+    at the 10->11 edge."""
+    from sfmtool._discontinuity import analyze_reconstruction
+
+    recon = _make_discontinuous_recon(
+        sfmrfile_reconstruction_with_17_images,
+        translate=[50.0, 0.0, 0.0],
+    )
+    results = analyze_reconstruction(recon)
+    assert len(results) == 1
+
+    core_edges = results[0]["core_edges"]
+    assert len(core_edges) > 0
+
+    # The core edge should be at seq frame 10->11
+    core_frame_pairs = set()
+    seq_frm = results[0]["seq_frame_numbers"]
+    for a, b in core_edges:
+        core_frame_pairs.add((seq_frm[a], seq_frm[b]))
+    assert (10, 11) in core_frame_pairs
+
+    # Should have translation evidence
+    edge_10_11 = None
+    for (a, b), evidence in core_edges.items():
+        if seq_frm[a] == 10 and seq_frm[b] == 11:
+            edge_10_11 = evidence
+    assert edge_10_11 is not None
+    assert any(".t" in e for e in edge_10_11)
+
+
+def test_recon_rotation_discontinuity(sfmrfile_reconstruction_with_17_images):
+    """A large rotation applied to images 11-17 creates a discontinuity
+    at the 10->11 edge."""
+    from sfmtool._discontinuity import analyze_reconstruction
+
+    recon = _make_discontinuous_recon(
+        sfmrfile_reconstruction_with_17_images,
+        rotate_deg=90.0,
+    )
+    results = analyze_reconstruction(recon)
+    assert len(results) == 1
+
+    core_edges = results[0]["core_edges"]
+    assert len(core_edges) > 0
+
+    seq_frm = results[0]["seq_frame_numbers"]
+    core_frame_pairs = set()
+    for a, b in core_edges:
+        core_frame_pairs.add((seq_frm[a], seq_frm[b]))
+    assert (10, 11) in core_frame_pairs
+
+    # Should have rotation evidence
+    edge_10_11 = None
+    for (a, b), evidence in core_edges.items():
+        if seq_frm[a] == 10 and seq_frm[b] == 11:
+            edge_10_11 = evidence
+    assert edge_10_11 is not None
+    assert any(".r" in e for e in edge_10_11)
+
+
+def test_recon_cli_with_sfmr(runner, sfmrfile_reconstruction_with_17_images):
+    """The CLI accepts a .sfmr file and produces reconstruction analysis output."""
+    result = runner.invoke(
+        main,
+        ["discontinuity", str(sfmrfile_reconstruction_with_17_images)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Reconstruction:" in result.output
+    assert "Summary" in result.output
+    assert "seoul_bull_sculpture" in result.output
+
+
+def test_recon_cli_with_range(runner, sfmrfile_reconstruction_with_17_images):
+    """The CLI --range flag filters images in reconstruction mode."""
+    result = runner.invoke(
+        main,
+        [
+            "discontinuity",
+            str(sfmrfile_reconstruction_with_17_images),
+            "-r",
+            "1-10",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    # Should only process frames 1-10, not enough for both L and R
+    # (need 4+ frames, which we have), but should not mention frame 17
+    assert "Reconstruction:" in result.output
+    assert "seoul_bull_sculpture_17" not in result.output
