@@ -13,6 +13,7 @@ from ._commands import (
     align,
     compare,
     densify,
+    discontinuity,
     epipolar,
     flow,
     from_colmap_bin,
@@ -57,6 +58,7 @@ main.add_command_with_category(compare, category="Reconstruction")
 main.add_command_with_category(align, category="Reconstruction")
 main.add_command_with_category(merge, category="Reconstruction")
 main.add_command_with_category(densify, category="Reconstruction")
+main.add_command_with_category(discontinuity, category="Reconstruction")
 main.add_command_with_category(epipolar, category="Visualization")
 main.add_command_with_category(flow, category="Image Processing")
 main.add_command_with_category(heatmap, category="Visualization")

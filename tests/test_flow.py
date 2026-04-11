@@ -3,7 +3,6 @@
 
 """Tests for the flow command and flow visualization utilities."""
 
-
 import cv2
 import numpy as np
 from click.testing import CliRunner

@@ -6,6 +6,7 @@
 from .align import align
 from .compare import compare
 from .densify import densify
+from .discontinuity import discontinuity
 from .epipolar import epipolar
 from .flow import flow
 from .from_colmap_bin import from_colmap_bin
@@ -27,6 +28,7 @@ __all__ = [
     "align",
     "compare",
     "densify",
+    "discontinuity",
     "epipolar",
     "flow",
     "from_colmap_bin",

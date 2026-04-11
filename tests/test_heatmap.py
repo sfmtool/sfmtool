@@ -3,7 +3,6 @@
 
 """Tests for the heatmap command and visualization utilities."""
 
-
 import cv2
 import numpy as np
 import pytest
