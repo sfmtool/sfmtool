@@ -3,12 +3,9 @@
 
 """Tests for the flow command and flow visualization utilities."""
 
-from pathlib import Path
-from unittest.mock import patch
 
 import cv2
 import numpy as np
-import pytest
 from click.testing import CliRunner
 
 from sfmtool._sfmtool import compute_optical_flow as _rust_compute_optical_flow
@@ -17,9 +14,7 @@ from sfmtool._flow_viz import (
     _find_nearest_within_tolerance,
     _flow_to_color,
     _get_color_palette,
-    _get_shared_feature_pairs,
     _save_output,
-    draw_flow_visualization,
 )
 from sfmtool.cli import main
 

@@ -3,9 +3,7 @@
 
 """Tests for COLMAP interop CLI commands."""
 
-import json
 
-import pytest
 from click.testing import CliRunner
 
 from sfmtool.cli import main

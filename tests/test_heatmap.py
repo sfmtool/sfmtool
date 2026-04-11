@@ -3,7 +3,6 @@
 
 """Tests for the heatmap command and visualization utilities."""
 
-from pathlib import Path
 
 import cv2
 import numpy as np

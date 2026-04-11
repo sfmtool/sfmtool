@@ -130,7 +130,7 @@ def from_colmap_bin(
 
         recon.save(output_sfmr_file)
 
-        click.echo(f"\nSuccessfully converted reconstruction")
+        click.echo("\nSuccessfully converted reconstruction")
         click.echo(f"Saved to: {output_sfmr_file}")
 
     except Exception as e:

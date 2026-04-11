@@ -646,7 +646,6 @@ class TestDensifyE2E:
 
         sfmr_path = sfmrfile_reconstruction_with_17_images
         recon = SfmrReconstruction.load(sfmr_path)
-        original_point_count = recon.point_count
 
         result = densify_reconstruction(
             recon=recon,

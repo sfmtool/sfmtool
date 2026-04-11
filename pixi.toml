@@ -30,10 +30,11 @@ ruff = "*"
 
 [feature.test.tasks]
 test = "pytest"
-test-rust = "cargo llvm-cov --workspace"
+test-rust = "cargo llvm-cov --workspace --exclude sfmtool-py --exclude sfm-explorer"
 coverage = "cargo llvm-cov --workspace --lcov --output-path lcov.info"
 coverage-all = "bash scripts/coverage.sh"
 coverage-html = "cargo llvm-cov --workspace --html --open"
+maturin = "maturin"
 fmt = "ruff format src tests"
 check = "ruff check src tests"
 

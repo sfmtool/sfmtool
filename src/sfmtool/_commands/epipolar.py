@@ -12,7 +12,7 @@ from .._epipolar_viz import draw_epipolar_visualization
 from .._filenames import number_from_filename
 from .._sfm_reconstruction import get_image_hint_message
 from .._sfmtool import SfmrReconstruction
-from .._workspace import find_workspace_for_path, load_workspace_config
+from .._workspace import load_workspace_config
 
 
 def resolve_image_name(image_input: str, recon) -> str:
