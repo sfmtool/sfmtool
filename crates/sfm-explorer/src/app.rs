@@ -124,13 +124,13 @@ impl App {
                     recon,
                     self.state.length_scale,
                     self.state.frustum_size_multiplier,
-                    hidden_image,
                 );
                 let track_images = dock::compute_track_images(&self.state, recon);
                 self.scene_renderer.update_frustum_colors(
                     queue,
                     recon.images.len(),
                     self.state.selected_image,
+                    hidden_image,
                     &track_images,
                 );
                 self.prev_frustum_length_scale = self.state.length_scale;
@@ -142,14 +142,13 @@ impl App {
             self.state.points_need_upload = false;
         }
 
-        // Re-upload frustum geometry if length_scale, frustum_size_multiplier,
-        // or hidden camera changed (these affect frustum shape/visibility)
+        // Re-upload frustum geometry only if length_scale or frustum_size_multiplier changed
         let geometry_changed = self.state.length_scale != self.prev_frustum_length_scale
-            || self.state.frustum_size_multiplier != self.prev_frustum_size_multiplier
-            || hidden_image != self.prev_hidden_image;
+            || self.state.frustum_size_multiplier != self.prev_frustum_size_multiplier;
         let point_selection_changed = self.state.selected_point != self.prev_selected_point;
         let colors_changed = self.state.selected_image != self.prev_selected_image
-            || point_selection_changed;
+            || point_selection_changed
+            || hidden_image != self.prev_hidden_image;
         if geometry_changed {
             if let Some(ref recon) = self.state.reconstruction {
                 self.scene_renderer.upload_frustums(
@@ -157,13 +156,13 @@ impl App {
                     recon,
                     self.state.length_scale,
                     self.state.frustum_size_multiplier,
-                    hidden_image,
                 );
                 let track_images = dock::compute_track_images(&self.state, recon);
                 self.scene_renderer.update_frustum_colors(
                     queue,
                     recon.images.len(),
                     self.state.selected_image,
+                    hidden_image,
                     &track_images,
                 );
                 self.prev_frustum_length_scale = self.state.length_scale;
@@ -180,10 +179,12 @@ impl App {
                     queue,
                     recon.images.len(),
                     self.state.selected_image,
+                    hidden_image,
                     &track_images,
                 );
                 self.prev_selected_image = self.state.selected_image;
                 self.prev_selected_point = self.state.selected_point;
+                self.prev_hidden_image = hidden_image;
             }
         }
 

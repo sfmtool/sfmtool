@@ -94,6 +94,11 @@ struct FragmentOutput {
 fn fs_main(in: VertexOutput) -> FragmentOutput {
     var color = in.color;
     var alpha = in.alpha;
+    // Alpha == 0 means this frustum is hidden (e.g. the camera we're viewing
+    // through). Discard so it doesn't write to color, depth, or pick buffers.
+    if alpha == 0.0 {
+        discard;
+    }
     // Highlight hovered frustum (cross-panel hover feedback):
     // override to full-opacity white so it stands out against the
     // default semi-transparent white frustums.

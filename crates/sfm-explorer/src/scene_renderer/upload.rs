@@ -69,13 +69,14 @@ impl SceneRenderer {
     ///
     /// Colors are stored in a separate per-image storage buffer that can be
     /// updated cheaply via [`update_frustum_colors`] without recomputing geometry.
+    /// Hidden cameras are handled by setting alpha=0 in the color buffer (the
+    /// shader discards those fragments), so geometry includes all cameras.
     pub fn upload_frustums(
         &mut self,
         device: &wgpu::Device,
         recon: &SfmrReconstruction,
         length_scale: f32,
         frustum_size_multiplier: f32,
-        hidden_image: Option<usize>,
     ) {
         let far_z = (length_scale * frustum_size_multiplier) as f64;
 
@@ -90,10 +91,6 @@ impl SceneRenderer {
         let has_thumbnails = self.thumbnail_texture.is_some();
 
         for (image_idx, image) in recon.images.iter().enumerate() {
-            // Skip the camera we're viewing through
-            if hidden_image == Some(image_idx) {
-                continue;
-            }
             let camera = &recon.cameras[image.camera_index as usize];
             let center = image.camera_center();
             let r = image.camera_to_world_rotation_flat();
@@ -325,11 +322,15 @@ impl SceneRenderer {
     ///
     /// Writes a new color array to the existing storage buffer via `queue.write_buffer`.
     /// This is much cheaper than `upload_frustums` — just 4 bytes × image_count.
+    ///
+    /// Hidden images (e.g. the camera being viewed through) get alpha=0, which
+    /// the shader discards so they don't render or participate in picking.
     pub fn update_frustum_colors(
         &self,
         queue: &wgpu::Queue,
         image_count: usize,
         selected_image: Option<usize>,
+        hidden_image: Option<usize>,
         track_images: &[usize],
     ) {
         let Some(ref color_buffer) = self.frustum_color_buffer else {
@@ -339,8 +340,14 @@ impl SceneRenderer {
         let color_default: u32 = 255 | (255 << 8) | (255 << 16) | (180 << 24);
         let color_selected: u32 = (255 << 8) | (255 << 16) | (255 << 24);
         let color_track: u32 = 255 | (165 << 8) | (255 << 24); // orange
+        let color_hidden: u32 = 0; // alpha=0 → shader discards
 
         let mut colors: Vec<u32> = vec![color_default; image_count];
+        if let Some(idx) = hidden_image {
+            if idx < image_count {
+                colors[idx] = color_hidden;
+            }
+        }
         if let Some(idx) = selected_image {
             if idx < image_count {
                 colors[idx] = color_selected;
