@@ -67,17 +67,28 @@ def print_reconstruction_summary(
         click.echo(f"  Avg observations per point: {avg_obs:.2f}")
 
     # Camera information
+    from ._cameras import _CAMERA_PARAM_NAMES
+
     click.echo("\nCameras:")
     for idx, cam in enumerate(recon.cameras):
-        click.echo(f"  Camera {idx}:")
-        click.echo(f"    Model: {cam.model}")
-        click.echo(f"    Resolution: {cam.width}x{cam.height}")
+        click.echo(f"  Camera {idx}: {cam.model} {cam.width}x{cam.height}")
         params = cam.parameters
         if params:
-            param_str = ", ".join(f"{k}={v:.2f}" for k, v in list(params.items())[:4])
-            if len(params) > 4:
-                param_str += ", ..."
-            click.echo(f"    Parameters: {param_str}")
+            canonical_order = _CAMERA_PARAM_NAMES.get(cam.model)
+            if canonical_order is not None:
+                keys = list(canonical_order)
+                extra = sorted(set(params.keys()) - set(keys))
+                keys.extend(extra)
+            else:
+                keys = list(params.keys())
+
+            name_width = max(len(k) for k in keys)
+            click.echo(f"    {'Parameter':<{name_width}}  {'Value':>14}")
+            click.echo(f"    {'-' * name_width}  {'-' * 14}")
+            for key in keys:
+                val = params.get(key)
+                if val is not None:
+                    click.echo(f"    {key:<{name_width}}  {val:>14.6f}")
 
     # 3D point statistics
     if recon.point_count > 0:
