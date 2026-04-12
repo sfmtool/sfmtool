@@ -82,7 +82,7 @@ def insv2rig(input_file, output_dir):
             sensor_names,
             rotations=rotations,
             translations=translations,
-            camera_intrinsics={"model": "RAD_TAN_THIN_PRISM_FISHEYE"},
+            camera_intrinsics={"model": "SIMPLE_RADIAL_FISHEYE"},
         )
 
         click.echo(f"Output: {output_dir}")
