@@ -297,15 +297,16 @@ def _compare_cameras(recon1: SfmrReconstruction, recon2: SfmrReconstruction) -> 
 def _find_matching_images(
     recon1: SfmrReconstruction, recon2: SfmrReconstruction
 ) -> list[tuple[int, int]]:
-    """Find matching images between two reconstructions."""
-    name_to_idx1 = {Path(name).name: idx for idx, name in enumerate(recon1.image_names)}
-    name_to_idx2 = {Path(name).name: idx for idx, name in enumerate(recon2.image_names)}
+    """Find matching images between two reconstructions by workspace-relative path."""
+    name_to_idx2 = {
+        name.replace("\\", "/"): idx for idx, name in enumerate(recon2.image_names)
+    }
 
     matches = []
-    for name, idx1 in name_to_idx1.items():
-        if name in name_to_idx2:
-            idx2 = name_to_idx2[name]
-            matches.append((idx1, idx2))
+    for idx1, name in enumerate(recon1.image_names):
+        norm = name.replace("\\", "/")
+        if norm in name_to_idx2:
+            matches.append((idx1, name_to_idx2[norm]))
 
     return matches
 
