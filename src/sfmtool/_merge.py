@@ -225,7 +225,15 @@ def _merge_images(
 
     for recon_idx, recon in enumerate(reconstructions):
         rfd = recon.rig_frame_data if has_rig_data else None
-        for old_idx, img_name in enumerate(recon.image_names):
+        # Cache array properties to avoid repeated Rust->numpy allocations
+        r_names = recon.image_names
+        r_cam_idxs = recon.camera_indexes
+        r_quats = recon.quaternions_wxyz
+        r_trans = recon.translations
+        r_ft_hashes = recon.feature_tool_hashes
+        r_sift_hashes = recon.sift_content_hashes
+        r_thumbs = recon.thumbnails_y_x_rgb
+        for old_idx, img_name in enumerate(r_names):
             img_key = Path(img_name).as_posix()
 
             if img_key in name_to_merged_idx:
@@ -235,16 +243,16 @@ def _merge_images(
                 name_to_merged_idx[img_key] = merged_idx
                 image_mapping[img_key] = [(recon_idx, old_idx)]
 
-                old_cam_idx = recon.camera_indexes[old_idx]
+                old_cam_idx = r_cam_idxs[old_idx]
                 new_cam_idx = camera_mapping[recon_idx][old_cam_idx]
 
                 merged_names.append(img_name)
                 merged_camera_indexes.append(new_cam_idx)
-                merged_quaternions.append(recon.quaternions_wxyz[old_idx])
-                merged_translations.append(recon.translations[old_idx])
-                merged_feature_tool_hashes.append(recon.feature_tool_hashes[old_idx])
-                merged_sift_hashes.append(recon.sift_content_hashes[old_idx])
-                merged_thumbnails.append(recon.thumbnails_y_x_rgb[old_idx])
+                merged_quaternions.append(r_quats[old_idx])
+                merged_translations.append(r_trans[old_idx])
+                merged_feature_tool_hashes.append(r_ft_hashes[old_idx])
+                merged_sift_hashes.append(r_sift_hashes[old_idx])
+                merged_thumbnails.append(r_thumbs[old_idx])
 
                 if rfd is not None:
                     merged_image_sensor_indexes.append(

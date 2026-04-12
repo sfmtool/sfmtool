@@ -3,7 +3,7 @@
 
 //! Python wrapper for the sfmtool-core SfmrReconstruction type.
 
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyUntypedArrayMethods};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray4, PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::path::PathBuf;
@@ -324,14 +324,19 @@ impl PySfmrReconstruction {
     }
 
     /// RGB thumbnails for each image, shape `(N, 128, 128, 3)`.
+    ///
+    /// Returns a read-only numpy view into the Rust-owned data (zero-copy).
     #[getter]
-    fn thumbnails_y_x_rgb<'py>(&self, py: Python<'py>) -> Py<PyAny> {
-        self.inner
-            .thumbnails_y_x_rgb
-            .clone()
-            .into_pyarray(py)
-            .into_any()
-            .unbind()
+    fn thumbnails_y_x_rgb<'py>(self_: &Bound<'py, Self>) -> Bound<'py, PyArray4<u8>> {
+        // Get a raw pointer to the thumbnail array. This is safe because:
+        // 1. #[pyclass] objects are heap-allocated and pinned — the data won't move.
+        // 2. The returned numpy array holds a reference to `self_` (via the base/container
+        //    object), preventing garbage collection while the view is alive.
+        let ptr = {
+            let borrow = self_.borrow();
+            &borrow.inner.thumbnails_y_x_rgb as *const ndarray::Array4<u8>
+        };
+        unsafe { PyArray4::borrow_from_array(&*ptr, self_.clone().into_any()) }
     }
 
     // ── Depth data getters ───────────────────────────────────────────
