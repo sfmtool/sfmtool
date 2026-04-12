@@ -11,9 +11,31 @@ import json
 import subprocess
 from pathlib import Path
 
+import click
 import cv2
 
 _FISHEYE_SENSOR_NAMES = ["fisheye_left", "fisheye_right"]
+
+
+def _format_file_size(size_bytes: int) -> str:
+    """Format a file size in human-readable form."""
+    if size_bytes >= 1_000_000_000:
+        return f"{size_bytes / 1_000_000_000:.1f} GB"
+    if size_bytes >= 1_000_000:
+        return f"{size_bytes / 1_000_000:.1f} MB"
+    if size_bytes >= 1_000:
+        return f"{size_bytes / 1_000:.1f} KB"
+    return f"{size_bytes} bytes"
+
+
+def _format_duration(seconds: float) -> str:
+    """Format seconds as mm:ss or hh:mm:ss."""
+    total = int(seconds)
+    h, remainder = divmod(total, 3600)
+    m, s = divmod(remainder, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
 
 
 def _probe_video_streams(insv_path: Path) -> list[dict]:
@@ -40,13 +62,66 @@ def _probe_video_streams(insv_path: Path) -> list[dict]:
     return json.loads(result.stdout)["streams"]
 
 
+def _print_video_info(insv_path: Path, streams: list[dict]) -> None:
+    """Print video metadata summary."""
+    file_size = insv_path.stat().st_size
+    click.echo(f"File size: {_format_file_size(file_size)}")
+    click.echo(f"Video streams: {len(streams)}")
+    for i, s in enumerate(streams):
+        w = s.get("width", "?")
+        h = s.get("height", "?")
+        parts = [f"  Stream {i}: {w}x{h}"]
+        r_frame_rate = s.get("r_frame_rate", "")
+        if r_frame_rate and "/" in r_frame_rate:
+            num, den = r_frame_rate.split("/")
+            try:
+                fps = int(num) / int(den)
+                parts.append(f"{fps:.1f} fps")
+            except (ValueError, ZeroDivisionError):
+                pass
+        duration = s.get("duration")
+        nb_frames = s.get("nb_frames")
+        if duration:
+            try:
+                parts.append(_format_duration(float(duration)))
+            except ValueError:
+                pass
+        if nb_frames:
+            parts.append(f"{nb_frames} frames")
+        click.echo(", ".join(parts))
+
+
+def _run_ffmpeg(args: list[str], label: str) -> None:
+    """Run ffmpeg, streaming stderr for progress. Raises on failure."""
+    click.echo(f"  {label}...")
+    process = subprocess.Popen(
+        args,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    last_line = ""
+    for line in process.stderr:
+        last_line = line
+        # ffmpeg writes progress as carriage-return lines starting with "frame="
+        stripped = line.strip()
+        if stripped.startswith("frame="):
+            click.echo(f"\r  {stripped}", nl=False)
+    # Clear the progress line
+    if last_line.strip().startswith("frame="):
+        click.echo()
+    returncode = process.wait()
+    if returncode != 0:
+        raise RuntimeError(f"ffmpeg failed ({label}, exit code {returncode})")
+
+
 def _extract_dual_stream(
     insv_path: Path,
     sensor_dirs: list[Path],
 ) -> int:
     """Extract frames from a dual-stream .insv file (two separate video streams)."""
     for stream_idx, sensor_dir in enumerate(sensor_dirs):
-        result = subprocess.run(
+        _run_ffmpeg(
             [
                 "ffmpeg",
                 "-i",
@@ -57,14 +132,8 @@ def _extract_dual_stream(
                 "2",
                 str(sensor_dir / "frame_%06d.jpg"),
             ],
-            capture_output=True,
-            text=True,
+            label=f"Extracting stream {stream_idx} ({sensor_dir.name})",
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"ffmpeg failed extracting stream {stream_idx} "
-                f"(exit code {result.returncode}):\n{result.stderr}"
-            )
 
     left_frames = sorted(sensor_dirs[0].glob("frame_*.jpg"))
     right_frames = sorted(sensor_dirs[1].glob("frame_*.jpg"))
@@ -86,7 +155,7 @@ def _extract_side_by_side(
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        result = subprocess.run(
+        _run_ffmpeg(
             [
                 "ffmpeg",
                 "-i",
@@ -95,13 +164,8 @@ def _extract_side_by_side(
                 "2",
                 str(temp_dir / "frame_%06d.jpg"),
             ],
-            capture_output=True,
-            text=True,
+            label="Extracting frames",
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"ffmpeg failed (exit code {result.returncode}):\n{result.stderr}"
-            )
 
         frame_files = sorted(temp_dir.glob("frame_*.jpg"))
         if not frame_files:
@@ -119,7 +183,12 @@ def _extract_side_by_side(
                 f"(e.g., Insta360 5.7K mode) which is not supported."
             )
 
-        for frame_file in frame_files:
+        total = len(frame_files)
+        click.echo(f"  Splitting {total} frames into left/right...")
+        for i, frame_file in enumerate(frame_files):
+            if (i + 1) % 100 == 0 or (i + 1) == total:
+                click.echo(f"\r  Splitting frames: {i + 1}/{total}", nl=False)
+
             frame = cv2.imread(str(frame_file))
             if frame is None:
                 raise ValueError(f"Failed to read extracted frame: {frame_file}")
@@ -132,6 +201,7 @@ def _extract_side_by_side(
             frame_name = frame_file.name
             cv2.imwrite(str(sensor_dirs[0] / frame_name), left)
             cv2.imwrite(str(sensor_dirs[1] / frame_name), right)
+        click.echo()
 
     finally:
         import shutil
@@ -173,6 +243,7 @@ def extract_insv_frames(
         sensor_dirs.append(d)
 
     video_streams = _probe_video_streams(insv_path)
+    _print_video_info(insv_path, video_streams)
 
     if len(video_streams) >= 2:
         num_frames = _extract_dual_stream(insv_path, sensor_dirs)
