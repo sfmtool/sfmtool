@@ -201,3 +201,95 @@ def test_match_with_range(isolated_seoul_bull_17_images: list[Path]):
 
     matches_data = read_matches(str(output_path))
     assert matches_data["metadata"]["image_count"] == 5
+
+
+def test_match_merge(isolated_seoul_bull_17_images: list[Path]):
+    """Test merging two .matches files."""
+    workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+    # Initialize workspace and extract features
+    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+
+    # Create two matches files with different methods
+    seq_path = workspace_dir / "seq.matches"
+    result = CliRunner().invoke(
+        main,
+        [
+            "match",
+            "--sequential",
+            "--sequential-overlap",
+            "3",
+            "--output",
+            str(seq_path),
+            str(workspace_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    exh_path = workspace_dir / "exh.matches"
+    result = CliRunner().invoke(
+        main,
+        ["match", "--exhaustive", "--output", str(exh_path), str(workspace_dir)],
+    )
+    assert result.exit_code == 0, result.output
+
+    # Merge them
+    merged_path = workspace_dir / "merged.matches"
+    result = CliRunner().invoke(
+        main,
+        [
+            "match",
+            "--merge",
+            str(seq_path),
+            str(exh_path),
+            "--output",
+            str(merged_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Merging 2 .matches files" in result.output
+    assert "Merged:" in result.output
+
+    # Verify the merged file
+    from sfmtool._sfmtool import read_matches
+
+    merged = read_matches(str(merged_path))
+    seq = read_matches(str(seq_path))
+    exh = read_matches(str(exh_path))
+
+    assert merged["metadata"]["matching_method"] == "merged"
+    assert merged["metadata"]["image_count"] == 17
+    # Merged should have at least as many pairs as either input
+    assert merged["metadata"]["image_pair_count"] >= seq["metadata"]["image_pair_count"]
+    assert merged["metadata"]["image_pair_count"] >= exh["metadata"]["image_pair_count"]
+    # Merged should have at least as many matches as the larger input
+    assert merged["metadata"]["match_count"] >= max(
+        seq["metadata"]["match_count"], exh["metadata"]["match_count"]
+    )
+    # Both inputs have TVGs (from COLMAP), so merged should preserve them
+    assert merged["has_two_view_geometries"] is True
+    assert merged["tvg_metadata"]["inlier_count"] > 0
+
+
+def test_match_merge_errors(tmp_path: Path):
+    """Test merge validation errors."""
+    result = CliRunner().invoke(main, ["match", "--merge"])
+    assert result.exit_code != 0
+    assert "Must provide .matches file paths" in result.output
+
+    # Single file (need at least 2)
+    dummy = tmp_path / "a.matches"
+    dummy.write_bytes(b"")
+    result = CliRunner().invoke(main, ["match", "--merge", str(dummy)])
+    assert result.exit_code != 0
+    assert "at least 2" in result.output
+
+    # Missing --output
+    dummy2 = tmp_path / "b.matches"
+    dummy2.write_bytes(b"")
+    result = CliRunner().invoke(main, ["match", "--merge", str(dummy), str(dummy2)])
+    assert result.exit_code != 0
+    assert "--output" in result.output or "-o" in result.output

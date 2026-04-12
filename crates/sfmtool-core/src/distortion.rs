@@ -504,7 +504,14 @@ fn distort_fisheye(x: f64, y: f64, k1: f64, k2: f64, k3: f64, k4: f64) -> (f64, 
 ///
 /// Solves `r_d = theta * (1 + k1·θ² + k2·θ⁴ + k3·θ⁶ + k4·θ⁸)` for theta
 /// using Newton's method.
-fn recover_theta_equidistant(r_d: f64, k1: f64, k2: f64, k3: f64, k4: f64) -> f64 {
+///
+/// Returns `(theta, converged)`. When `converged` is false, `r_d` exceeds
+/// the maximum value of the distortion function (its peak), and `theta` is
+/// clamped to the peak angle — the largest angle the model can represent.
+/// Callers that need smooth extrapolation beyond the model's valid range
+/// (e.g. [`equidistant_fisheye_to_ray`]) can use this flag to fall back to
+/// the identity equidistant model.
+fn recover_theta_equidistant(r_d: f64, k1: f64, k2: f64, k3: f64, k4: f64) -> (f64, bool) {
     /// Evaluate f'(θ) = d/dθ [θ·(1 + k1·θ² + k2·θ⁴ + k3·θ⁶ + k4·θ⁸)].
     #[inline]
     fn f_prime(theta: f64, k1: f64, k2: f64, k3: f64, k4: f64) -> f64 {
@@ -513,6 +520,22 @@ fn recover_theta_equidistant(r_d: f64, k1: f64, k2: f64, k3: f64, k4: f64) -> f6
         let t6 = t4 * t2;
         let t8 = t4 * t4;
         1.0 + 3.0 * k1 * t2 + 5.0 * k2 * t4 + 7.0 * k3 * t6 + 9.0 * k4 * t8
+    }
+
+    /// Bisect to find theta where f'(theta) = 0 (the peak of f).
+    #[inline]
+    fn find_peak(hi_start: f64, k1: f64, k2: f64, k3: f64, k4: f64) -> f64 {
+        let mut lo = 0.0_f64;
+        let mut hi = hi_start;
+        for _ in 0..64 {
+            let mid = 0.5 * (lo + hi);
+            if f_prime(mid, k1, k2, k3, k4) > 0.0 {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
     }
 
     // Clamp the initial guess to π.
@@ -525,19 +548,11 @@ fn recover_theta_equidistant(r_d: f64, k1: f64, k2: f64, k3: f64, k4: f64) -> f6
     // out-of-range r_d (above the peak f-value), Newton converges to the
     // peak — the maximum angle the model can represent.
     let mut theta_max = std::f64::consts::PI;
+    let mut hit_peak = false;
     if f_prime(theta, k1, k2, k3, k4) <= 0.0 {
-        let mut lo = 0.0_f64;
-        let mut hi = theta;
-        for _ in 0..64 {
-            let mid = 0.5 * (lo + hi);
-            if f_prime(mid, k1, k2, k3, k4) > 0.0 {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-        theta_max = lo;
-        theta = lo;
+        theta_max = find_peak(theta, k1, k2, k3, k4);
+        theta = theta_max;
+        hit_peak = true;
     }
 
     for _ in 0..UNDISTORT_MAX_ITER {
@@ -549,7 +564,9 @@ fn recover_theta_equidistant(r_d: f64, k1: f64, k2: f64, k3: f64, k4: f64) -> f6
         let fp =
             1.0 + 3.0 * k1 * theta2 + 5.0 * k2 * theta4 + 7.0 * k3 * theta6 + 9.0 * k4 * theta8;
         if fp <= 0.0 {
-            // Reached the peak — can't go further.
+            // Newton overshot past the peak. Bisect to find the true peak.
+            theta = find_peak(theta, k1, k2, k3, k4);
+            hit_peak = true;
             break;
         }
         let delta = f / fp;
@@ -559,7 +576,22 @@ fn recover_theta_equidistant(r_d: f64, k1: f64, k2: f64, k3: f64, k4: f64) -> f6
             break;
         }
     }
-    theta
+
+    // If we ended up at the peak, check whether r_d is actually reachable.
+    // If the peak f-value is less than r_d, the model can't represent this
+    // r_d, so report non-convergence.
+    if hit_peak {
+        let t2 = theta * theta;
+        let t4 = t2 * t2;
+        let t6 = t4 * t2;
+        let t8 = t4 * t4;
+        let f_at_peak = theta * (1.0 + k1 * t2 + k2 * t4 + k3 * t6 + k4 * t8);
+        if f_at_peak < r_d - UNDISTORT_EPS {
+            return (theta, false);
+        }
+    }
+
+    (theta, true)
 }
 
 /// Inverse of OpenCV fisheye distortion.
@@ -572,7 +604,7 @@ fn undistort_fisheye(x_d: f64, y_d: f64, k1: f64, k2: f64, k3: f64, k4: f64) -> 
     if r_d < 1e-15 {
         return (x_d, y_d);
     }
-    let theta = recover_theta_equidistant(r_d, k1, k2, k3, k4);
+    let (theta, _) = recover_theta_equidistant(r_d, k1, k2, k3, k4);
     let r = theta.tan();
     let scale = r / r_d;
     (x_d * scale, y_d * scale)
@@ -599,7 +631,7 @@ fn undistort_simple_radial_fisheye(x_d: f64, y_d: f64, k: f64) -> (f64, f64) {
     if r_d < 1e-15 {
         return (x_d, y_d);
     }
-    let theta = recover_theta_equidistant(r_d, k, 0.0, 0.0, 0.0);
+    let (theta, _) = recover_theta_equidistant(r_d, k, 0.0, 0.0, 0.0);
     let r = theta.tan();
     let scale = r / r_d;
     (x_d * scale, y_d * scale)
@@ -627,7 +659,7 @@ fn undistort_radial_fisheye(x_d: f64, y_d: f64, k1: f64, k2: f64) -> (f64, f64) 
     if r_d < 1e-15 {
         return (x_d, y_d);
     }
-    let theta = recover_theta_equidistant(r_d, k1, k2, 0.0, 0.0);
+    let (theta, _) = recover_theta_equidistant(r_d, k1, k2, 0.0, 0.0);
     let r = theta.tan();
     let scale = r / r_d;
     (x_d * scale, y_d * scale)
@@ -1080,14 +1112,21 @@ fn equidistant_fisheye_to_ray(x_d: f64, y_d: f64, k1: f64, k2: f64, k3: f64, k4:
     if r_d < 1e-15 {
         return [0.0, 0.0, 1.0];
     }
-    let theta = recover_theta_equidistant(r_d, k1, k2, k3, k4);
+    let (theta, converged) = recover_theta_equidistant(r_d, k1, k2, k3, k4);
+    if !converged {
+        // r_d exceeds the valid range of the distortion model (past the
+        // peak of the distortion polynomial). Fall back to the identity
+        // equidistant model which treats r_d directly as the incidence
+        // angle. This avoids the broken peak-clamped theta and produces
+        // a smooth extrapolation beyond the model's valid domain.
+        return equidistant_to_ray(x_d, y_d);
+    }
     let sin_theta = theta.sin();
     let cos_theta = theta.cos();
     let s = sin_theta / r_d;
     let recovered = [x_d * s, y_d * s, cos_theta];
-    // For the simple equidistant model the XY direction is the same for
-    // recovered and undistorted, so we can pass the recovered ray as both.
-    blend_fisheye_ray(r_d, recovered, recovered)
+    let undistorted = equidistant_to_ray(x_d, y_d);
+    blend_fisheye_ray(r_d, recovered, undistorted)
 }
 
 /// Convert undistorted equidistant coordinates `(uu, vv)` to a unit ray direction.
@@ -1866,11 +1905,13 @@ mod tests {
         let k4 = -0.0026965936602161068;
 
         // In-range: should converge to a valid theta
-        let theta = recover_theta_equidistant(1.5, k1, k2, k3, k4);
+        let (theta, converged) = recover_theta_equidistant(1.5, k1, k2, k3, k4);
+        assert!(converged, "should converge for in-range r_d");
         assert!(theta > 0.0 && theta < std::f64::consts::PI, "theta={theta}");
 
         // Out-of-range (corner pixel): should NOT produce garbage
-        let theta = recover_theta_equidistant(2.636, k1, k2, k3, k4);
+        let (theta, converged) = recover_theta_equidistant(2.636, k1, k2, k3, k4);
+        assert!(!converged, "should not converge for out-of-range r_d");
         assert!(
             theta > 0.0 && theta <= std::f64::consts::PI,
             "Out-of-range r_d should produce bounded theta, got {theta} ({} degrees)",
@@ -1944,6 +1985,187 @@ mod tests {
                 assert_relative_eq!(batch[i][1], ray[1], epsilon = 1e-15);
                 assert_relative_eq!(batch[i][2], ray[2], epsilon = 1e-15);
             }
+        }
+    }
+
+    /// Round-trip: project a 3D direction to pixels, then pixel_to_ray should
+    /// recover the same direction. Tests all fisheye camera models.
+    #[test]
+    fn pixel_to_ray_round_trip_fisheye() {
+        let cameras = vec![simple_radial_fisheye(), radial_fisheye(), opencv_fisheye()];
+        // Undistorted normalized coords → 3D directions
+        let test_dirs: Vec<[f64; 3]> = [
+            [0.1, 0.0],
+            [0.0, 0.1],
+            [0.2, 0.15],
+            [-0.1, 0.3],
+            [0.4, -0.2],
+            [0.05, 0.05],
+        ]
+        .iter()
+        .map(|&[x, y]: &[f64; 2]| {
+            let len = (x * x + y * y + 1.0).sqrt();
+            [x / len, y / len, 1.0 / len]
+        })
+        .collect();
+
+        for cam in &cameras {
+            for &dir in &test_dirs {
+                // Normalized coords from direction
+                let x: f64 = dir[0] / dir[2];
+                let y: f64 = dir[1] / dir[2];
+                // Project to pixel
+                let (u, v) = cam.project(x, y);
+                // Recover ray
+                let ray = cam.pixel_to_ray(u, v);
+                let len = (ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]).sqrt();
+                assert_relative_eq!(len, 1.0, epsilon = 1e-10);
+                assert_relative_eq!(ray[0], dir[0], epsilon = 1e-8);
+                assert_relative_eq!(ray[1], dir[1], epsilon = 1e-8);
+                assert_relative_eq!(ray[2], dir[2], epsilon = 1e-8);
+            }
+        }
+    }
+
+    /// Test pixel_to_ray at image corners for SimpleRadialFisheye.
+    /// Verifies no NaN/Inf and that rays are sane at extreme pixels.
+    #[test]
+    fn pixel_to_ray_simple_radial_fisheye_corners() {
+        // Camera with various k values (positive, zero, negative)
+        for k in [-0.2, -0.1, 0.0, 0.05, 0.1] {
+            let cam = CameraIntrinsics {
+                model: CameraModel::SimpleRadialFisheye {
+                    focal_length: 300.0,
+                    principal_point_x: 320.0,
+                    principal_point_y: 240.0,
+                    radial_distortion_k1: k,
+                },
+                width: 640,
+                height: 480,
+            };
+            let corners = [
+                [0.0, 0.0],
+                [640.0, 0.0],
+                [0.0, 480.0],
+                [640.0, 480.0],
+                [320.0, 240.0],
+            ];
+            for &[u, v] in &corners {
+                let ray = cam.pixel_to_ray(u, v);
+                let len = (ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]).sqrt();
+                assert!(
+                    len.is_finite(),
+                    "k={k}, pixel=({u},{v}): ray is not finite: {ray:?}"
+                );
+                assert_relative_eq!(len, 1.0, epsilon = 1e-10,);
+                // z should be positive for this camera (half-diagonal FoV ~53°)
+                assert!(
+                    ray[2] > 0.0,
+                    "k={k}, pixel=({u},{v}): ray z should be positive, got {}",
+                    ray[2]
+                );
+            }
+        }
+    }
+
+    /// Wide-angle SimpleRadialFisheye: pixels beyond 90° from the optical
+    /// axis should produce backward-facing rays (z < 0), matching the
+    /// equidistant projection model.
+    #[test]
+    fn pixel_to_ray_simple_radial_fisheye_wide_angle() {
+        // Pure equidistant (k=0) with focal length chosen so corners
+        // exceed 90°: half-diagonal r_d = sqrt(500²+500²)/300 ≈ 2.36 rad ≈ 135°.
+        let cam = CameraIntrinsics {
+            model: CameraModel::SimpleRadialFisheye {
+                focal_length: 300.0,
+                principal_point_x: 500.0,
+                principal_point_y: 500.0,
+                radial_distortion_k1: 0.0,
+            },
+            width: 1000,
+            height: 1000,
+        };
+
+        // Principal point → straight ahead
+        let ray = cam.pixel_to_ray(500.0, 500.0);
+        assert_relative_eq!(ray[2], 1.0, epsilon = 1e-10);
+
+        // Edge midpoint: r_d = 500/300 ≈ 1.667 rad ≈ 95° → just past 90°
+        let ray = cam.pixel_to_ray(1000.0, 500.0);
+        let len = (ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]).sqrt();
+        assert_relative_eq!(len, 1.0, epsilon = 1e-10);
+        assert!(ray[0] > 0.0, "should point rightward");
+        assert!(
+            ray[2] < 0.0,
+            "edge at ~95° should have z < 0, got {}",
+            ray[2]
+        );
+
+        // Corner: r_d ≈ 2.36 rad ≈ 135° → well past 90°
+        let ray = cam.pixel_to_ray(1000.0, 1000.0);
+        let len = (ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]).sqrt();
+        assert_relative_eq!(len, 1.0, epsilon = 1e-10);
+        assert!(ray[0] > 0.0, "corner should point right");
+        assert!(ray[1] > 0.0, "corner should point down");
+        assert!(
+            ray[2] < 0.0,
+            "corner at ~135° should have z < 0, got {}",
+            ray[2]
+        );
+
+        // Verify the angle is approximately correct: theta ≈ r_d for k=0
+        let theta = ray[2].acos();
+        let expected_theta = (500.0_f64 * 2.0_f64.sqrt()) / 300.0;
+        assert_relative_eq!(theta, expected_theta, epsilon = 1e-6);
+    }
+
+    /// SimpleRadialFisheye with small positive k: the distortion function
+    /// is monotonic, so recovery should converge even at wide angles.
+    /// Verifies round-trip at 100° and 110°.
+    #[test]
+    fn pixel_to_ray_simple_radial_fisheye_wide_angle_with_distortion() {
+        let cam = CameraIntrinsics {
+            model: CameraModel::SimpleRadialFisheye {
+                focal_length: 300.0,
+                principal_point_x: 500.0,
+                principal_point_y: 500.0,
+                radial_distortion_k1: 0.02,
+            },
+            width: 1000,
+            height: 1000,
+        };
+
+        // Test round-trip at various angles including beyond 90°
+        for theta_deg in [30.0, 60.0, 80.0, 100.0, 110.0] {
+            let theta = theta_deg * std::f64::consts::PI / 180.0;
+            // Undistorted normalized coords for this angle along x-axis
+            let r = theta.tan();
+            let x = r;
+            let y = 0.0;
+
+            // Skip angles where tan() is very large (near 90°)
+            if r.abs() > 100.0 {
+                continue;
+            }
+
+            let (u, v) = cam.project(x, y);
+
+            // Only test if the projected pixel is within a reasonable range
+            if u < -1000.0 || u > 2000.0 {
+                continue;
+            }
+
+            let ray = cam.pixel_to_ray(u, v);
+            let len = (ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]).sqrt();
+            assert_relative_eq!(len, 1.0, epsilon = 1e-10);
+
+            // Expected ray direction: normalize(x, 0, 1)
+            let expected_len = (x * x + 1.0).sqrt();
+            let expected = [x / expected_len, 0.0, 1.0 / expected_len];
+
+            assert_relative_eq!(ray[0], expected[0], epsilon = 1e-6,);
+            assert_relative_eq!(ray[1], expected[1], epsilon = 1e-6,);
+            assert_relative_eq!(ray[2], expected[2], epsilon = 1e-6,);
         }
     }
 }
