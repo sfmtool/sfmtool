@@ -9,7 +9,7 @@ from pathlib import Path
 import click
 import numpy as np
 
-from ._merge_correspondences import find_point_correspondences, merge_points_and_tracks
+from ._merge_correspondences import find_point_correspondences
 from ._merge_pose_refinement import refine_camera_poses
 from ._sfmtool import SfmrReconstruction
 
@@ -74,9 +74,21 @@ def merge_reconstructions(
     # [5/7] Merge 3D points and tracks
     click.echo("\n[5/7] Merging 3D points and tracks...")
     step_start = time.perf_counter()
-    merged_points, merged_tracks = merge_points_and_tracks(
+    from ._sfmtool import merge_points_and_tracks_py
+
+    merge_result = merge_points_and_tracks_py(
         reconstructions, point_correspondences, image_mapping
     )
+    merged_points = {
+        "positions": merge_result["positions"],
+        "colors": merge_result["colors"],
+        "errors": merge_result["errors"],
+    }
+    merged_tracks = {
+        "image_indexes": merge_result["image_indexes"],
+        "feature_indexes": merge_result["feature_indexes"],
+        "point_ids": merge_result["point_ids"],
+    }
     click.echo(f"  Merged 3D points: {len(merged_points['positions'])}")
     click.echo(f"  Total observations: {len(merged_tracks['image_indexes'])}")
     click.echo(f"  Completed in {time.perf_counter() - step_start:.2f}s")

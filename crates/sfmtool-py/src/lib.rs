@@ -164,6 +164,10 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
         py_analysis::find_point_correspondences_py,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(
+        py_analysis::merge_points_and_tracks_py,
+        m
+    )?)?;
 
     // Track filtering
     m.add_function(wrap_pyfunction!(

@@ -4,11 +4,15 @@
 //! Python bindings for spatial analysis, SE3 transforms, viewing angles,
 //! alignment, point correspondence, and track filtering.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
+
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
-use std::borrow::Cow;
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use crate::py_se3_transform::PySe3Transform;
+use crate::PySfmrReconstruction;
 
 // ── SE3 transform acceleration ────────────────────────────────────────────
 
@@ -242,4 +246,115 @@ pub fn filter_tracks_by_point_mask_py(
             .into_any()
             .unbind(),
     ))
+}
+
+// ── Point and track merging ─────────────────────────────────────────────
+
+/// Merge 3D points and tracks from multiple aligned reconstructions.
+///
+/// Args:
+///     reconstructions: List of SfmrReconstruction objects.
+///     correspondence_groups: List of groups, each group a list of (recon_idx, point_id).
+///     image_mapping: Dict mapping image name -> list of (recon_idx, old_img_idx).
+///
+/// Returns:
+///     Dict with keys: positions, colors, errors, track_image_indexes,
+///     track_feature_indexes, track_point_ids.
+#[pyfunction]
+pub fn merge_points_and_tracks_py(
+    py: Python<'_>,
+    reconstructions: &Bound<'_, PyList>,
+    correspondence_groups: &Bound<'_, PyList>,
+    image_mapping: &Bound<'_, PyDict>,
+) -> PyResult<Py<PyDict>> {
+    // Borrow all reconstructions.
+    let recon_refs: Vec<PyRef<PySfmrReconstruction>> = reconstructions
+        .iter()
+        .map(|item| item.extract::<PyRef<PySfmrReconstruction>>())
+        .collect::<PyResult<Vec<_>>>()?;
+    let inner_refs: Vec<&sfmtool_core::SfmrReconstruction> =
+        recon_refs.iter().map(|r| &r.inner).collect();
+
+    // Parse correspondence groups: list[list[tuple[int, int]]].
+    let groups: Vec<Vec<(usize, u32)>> = correspondence_groups
+        .iter()
+        .map(|group| {
+            let group_list = group.downcast::<PyList>()?;
+            group_list
+                .iter()
+                .map(|item| {
+                    let tuple = item.downcast::<PyTuple>()?;
+                    let recon_idx: usize = tuple.get_item(0)?.extract()?;
+                    let point_id: u32 = tuple.get_item(1)?.extract()?;
+                    Ok((recon_idx, point_id))
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+
+    // Build reverse image mapping: per-recon HashMap<old_img_idx, merged_img_idx>.
+    let num_recons = inner_refs.len();
+    let mut reverse_mapping: Vec<HashMap<u32, u32>> = vec![HashMap::new(); num_recons];
+
+    for (merged_idx, item) in image_mapping.iter().enumerate() {
+        let (_name, occurrences) = item;
+        let occ_list = occurrences.downcast::<PyList>()?;
+        for occ in occ_list.iter() {
+            let tuple = occ.downcast::<PyTuple>()?;
+            let recon_idx: usize = tuple.get_item(0)?.extract()?;
+            let old_img_idx: u32 = tuple.get_item(1)?.extract()?;
+            reverse_mapping[recon_idx]
+                .entry(old_img_idx)
+                .or_insert(merged_idx as u32);
+        }
+    }
+
+    // Call the Rust core function.
+    let result = sfmtool_core::point_correspondence::merge_points_and_tracks(
+        &inner_refs,
+        &groups,
+        &reverse_mapping,
+    );
+
+    // Build output dict with numpy arrays.
+    let dict = PyDict::new(py);
+    let positions = numpy::PyArray2::from_vec2(
+        py,
+        &result
+            .positions
+            .iter()
+            .map(|p| p.to_vec())
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let colors = numpy::PyArray2::from_vec2(
+        py,
+        &result
+            .colors
+            .iter()
+            .map(|c| c.to_vec())
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+    dict.set_item("positions", positions)?;
+    dict.set_item("colors", colors)?;
+    dict.set_item(
+        "errors",
+        numpy::PyArray1::from_vec(py, result.errors),
+    )?;
+    dict.set_item(
+        "image_indexes",
+        numpy::PyArray1::from_vec(py, result.track_image_indexes),
+    )?;
+    dict.set_item(
+        "feature_indexes",
+        numpy::PyArray1::from_vec(py, result.track_feature_indexes),
+    )?;
+    dict.set_item(
+        "point_ids",
+        numpy::PyArray1::from_vec(py, result.track_point_ids),
+    )?;
+
+    Ok(dict.unbind())
 }
