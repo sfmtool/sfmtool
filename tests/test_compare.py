@@ -58,7 +58,7 @@ class TestCompareIdentical:
     def test_camera_parameters_match(self, sfmrfile_reconstruction_with_17_images):
         recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         output = _capture_compare(recon, recon)
-        assert "Camera parameters match" in output
+        assert "All parameters match" in output
 
     def test_same_sift_files(self, sfmrfile_reconstruction_with_17_images):
         recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
@@ -106,7 +106,7 @@ class TestCompareTransformed:
         transformed = SfmrReconstruction.load(transformed_path)
         output = _capture_compare(original, transformed)
 
-        assert "Camera parameters match" in output
+        assert "All parameters match" in output
         assert "Matching images: 17" in output
         assert "Same SIFT file: 17" in output
 
@@ -175,7 +175,7 @@ class TestCompareFiltered:
         filtered = SfmrReconstruction.load(filtered_path)
         output = _capture_compare(original, filtered)
 
-        assert "Camera parameters match" in output
+        assert "All parameters match" in output
 
         for line in output.split("\n"):
             if "Matching images:" in line:
@@ -229,7 +229,7 @@ class TestCompareTransformAndFilter:
         modified = SfmrReconstruction.load(modified_path)
         output = _capture_compare(original, modified)
 
-        assert "Camera parameters match" in output
+        assert "All parameters match" in output
         assert "Matching images: 10" in output
 
         for line in output.split("\n"):
@@ -252,7 +252,7 @@ class TestCompareCLI:
         assert result.exit_code == 0, result.output
         assert "Comparing reconstructions:" in result.output
         assert "Matching images: 17" in result.output
-        assert "Camera parameters match" in result.output
+        assert "All parameters match" in result.output
         assert "Alignment succeeded!" in result.output
         assert "Comparing feature usage" in result.output
         assert "Comparing 3D points" in result.output

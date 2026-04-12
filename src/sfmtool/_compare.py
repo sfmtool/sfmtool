@@ -215,44 +215,83 @@ def _print_reconstruction_summary(recon: SfmrReconstruction, label: str) -> None
 
 def _compare_cameras(recon1: SfmrReconstruction, recon2: SfmrReconstruction) -> None:
     """Compare camera intrinsics between two reconstructions."""
+    from ._cameras import _CAMERA_PARAM_NAMES
+
     cameras1 = recon1.cameras
     cameras2 = recon2.cameras
 
     print(f"  Reference has {len(cameras1)} camera(s)")
     print(f"  Target has {len(cameras2)} camera(s)")
 
-    for i, cam1 in enumerate(cameras1):
-        print(f"\n  Camera {i}:")
-        print(f"    Reference model: {cam1.model}")
-        print(f"    Reference resolution: {cam1.width}x{cam1.height}")
-        print(f"    Reference params: {dict(cam1.parameters)}")
+    n_cameras = max(len(cameras1), len(cameras2))
+    for i in range(n_cameras):
+        cam1 = cameras1[i] if i < len(cameras1) else None
+        cam2 = cameras2[i] if i < len(cameras2) else None
 
-        if i < len(cameras2):
-            cam2 = cameras2[i]
-            print(f"    Target model: {cam2.model}")
-            print(f"    Target resolution: {cam2.width}x{cam2.height}")
-            print(f"    Target params: {dict(cam2.parameters)}")
+        if cam1 is not None and cam2 is None:
+            print(f"\n  Camera {i}: {cam1.model} {cam1.width}x{cam1.height}")
+            print("    Not found in target")
+            continue
+        if cam1 is None and cam2 is not None:
+            print(f"\n  Camera {i}: {cam2.model} {cam2.width}x{cam2.height}")
+            print("    Not found in reference")
+            continue
 
-            if cam1.model != cam2.model:
-                print("    Different camera models!")
-            elif cam1.width != cam2.width or cam1.height != cam2.height:
-                print("    Different resolutions!")
-            else:
-                params1 = cam1.parameters
-                params2 = cam2.parameters
-                all_match = True
-                for key in params1.keys():
-                    if key not in params2:
-                        print(f"    Parameter {key} not in target")
-                        all_match = False
-                    elif not np.isclose(params1[key], params2[key], rtol=1e-3):
-                        diff = params2[key] - params1[key]
-                        print(f"    Parameter {key} differs by {diff:.6f}")
-                        all_match = False
-                if all_match:
-                    print("    Camera parameters match")
+        print(f"\n  Camera {i}: {cam1.model} {cam1.width}x{cam1.height}")
+
+        if cam1.model != cam2.model:
+            print(
+                f"    Different camera models! Reference: {cam1.model}, Target: {cam2.model}"
+            )
+            continue
+        if cam1.width != cam2.width or cam1.height != cam2.height:
+            print(
+                f"    Different resolutions! Reference: {cam1.width}x{cam1.height}, "
+                f"Target: {cam2.width}x{cam2.height}"
+            )
+            continue
+
+        params1 = cam1.parameters
+        params2 = cam2.parameters
+
+        # Use the canonical parameter order for this camera model
+        canonical_order = _CAMERA_PARAM_NAMES.get(cam1.model)
+        if canonical_order is not None:
+            all_keys = list(canonical_order)
+            # Append any unexpected keys not in the canonical list
+            extra = sorted((set(params1.keys()) | set(params2.keys())) - set(all_keys))
+            all_keys.extend(extra)
         else:
-            print(f"    Camera {i} not found in target")
+            all_keys = sorted(set(params1.keys()) | set(params2.keys()))
+
+        name_width = max(len(k) for k in all_keys)
+        header = f"    {'Parameter':<{name_width}}  {'Reference':>14}  {'Target':>14}  {'Diff':>14}"
+        separator = "    " + "-" * (len(header) - 4)
+        print(header)
+        print(separator)
+
+        all_match = True
+        for key in all_keys:
+            val1 = params1.get(key)
+            val2 = params2.get(key)
+            if val1 is None:
+                print(f"    {key:<{name_width}}  {'(missing)':>14}  {val2:>14.6f}")
+                all_match = False
+            elif val2 is None:
+                print(f"    {key:<{name_width}}  {val1:>14.6f}  {'(missing)':>14}")
+                all_match = False
+            else:
+                diff = val2 - val1
+                match = np.isclose(val1, val2, rtol=1e-3)
+                marker = "" if match else " *"
+                if not match:
+                    all_match = False
+                print(
+                    f"    {key:<{name_width}}  {val1:>14.6f}  {val2:>14.6f}  {diff:>+14.6f}{marker}"
+                )
+
+        if all_match:
+            print("    All parameters match")
 
 
 def _find_matching_images(
