@@ -384,52 +384,30 @@ def _populate_db_features(
     camera_model: str | None,
 ):
     """Create a COLMAP DB and populate it with cameras, images, keypoints, descriptors."""
-    import pycolmap
+    from .._colmap_db import _setup_db_single_camera, _setup_db_with_rigs
+    from .._rig_config import _load_rig_config
 
-    from .._camera_setup import _infer_camera, _wrap_descriptors
-    from .._sift_file import SiftReader
+    rig_config = _load_rig_config(workspace_dir)
 
-    with pycolmap.Database.open(db_path) as db:
-        cam = _infer_camera(image_paths[0], camera_model)
-        camera_id = db.write_camera(cam)
-
-        # Create a trivial rig (required by COLMAP/GLOMAP)
-        rig = pycolmap.Rig()
-        rig.add_ref_sensor(
-            pycolmap.sensor_t(type=pycolmap.SensorType.CAMERA, id=camera_id)
+    if rig_config is not None:
+        _setup_db_with_rigs(
+            image_paths,
+            sift_paths,
+            workspace_dir,
+            db_path,
+            max_feature_count,
+            rig_configs=rig_config,
+            camera_model=camera_model,
         )
-        rig_id = db.write_rig(rig)
-
-        for i, (img_path, sift_path) in enumerate(zip(image_paths, sift_paths)):
-            image = pycolmap.Image(
-                name=image_names[i],
-                camera_id=camera_id,
-            )
-            image_id = db.write_image(image)
-
-            frame = pycolmap.Frame()
-            frame.rig_id = rig_id
-            frame.add_data_id(
-                pycolmap.data_t(
-                    sensor_id=pycolmap.sensor_t(
-                        type=pycolmap.SensorType.CAMERA, id=camera_id
-                    ),
-                    id=image_id,
-                )
-            )
-            frame_id = db.write_frame(frame)
-            image.frame_id = frame_id
-            image.image_id = image_id
-            db.update_image(image)
-
-            with SiftReader(sift_path) as reader:
-                keypoints = reader.read_positions(count=max_feature_count)
-                descriptors = reader.read_descriptors(count=max_feature_count)
-                db.write_keypoints(image_id, keypoints)
-                db.write_descriptors(image_id, _wrap_descriptors(descriptors))
-
-            if (i + 1) % 100 == 0 or i == len(image_paths) - 1:
-                click.echo(f"  Loaded {i + 1}/{len(image_paths)} images")
+    else:
+        _setup_db_single_camera(
+            image_paths,
+            sift_paths,
+            workspace_dir,
+            db_path,
+            max_feature_count,
+            camera_model=camera_model,
+        )
 
 
 def _compute_descriptor_distances(matches_data, sift_paths, max_feature_count):

@@ -29,6 +29,25 @@ _X5_RIGHT_ROTATION = RotQuaternion.from_axis_angle([0.0, 1.0, 0.0], math.radians
 # t = -R * [0,0,-0.0307] = -[0, 0, 0.0307] = [0, 0, -0.0307]
 _X5_RIGHT_TRANSLATION = [0.0, 0.0, -_X5_BASELINE_M]
 
+# Calibrated OPENCV_FISHEYE intrinsics for the Insta360 X5 at 3840x3840.
+# These were refined via SfM bundle adjustment on a single X5 unit and need
+# further validation across different units to confirm consistency.
+_X5_CAMERA_INTRINSICS = {
+    "model": "OPENCV_FISHEYE",
+    "width": 3840,
+    "height": 3840,
+    "parameters": {
+        "focal_length_x": 1031.741638,
+        "focal_length_y": 1029.728817,
+        "principal_point_x": 1920.0,
+        "principal_point_y": 1920.0,
+        "radial_distortion_k1": 0.042219,
+        "radial_distortion_k2": -0.011493,
+        "radial_distortion_k3": 0.010094,
+        "radial_distortion_k4": -0.003034,
+    },
+}
+
 
 @click.command("insv2rig")
 @timed_command
@@ -82,7 +101,7 @@ def insv2rig(input_file, output_dir):
             sensor_names,
             rotations=rotations,
             translations=translations,
-            camera_intrinsics={"model": "SIMPLE_RADIAL_FISHEYE"},
+            camera_intrinsics=_X5_CAMERA_INTRINSICS,
         )
 
         click.echo(f"Output: {output_dir}")

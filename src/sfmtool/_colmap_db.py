@@ -192,15 +192,31 @@ def _setup_for_sfm_from_matches(
 
     image_dir = workspace_dir
 
+    # Check for rig config in the workspace
+    from ._rig_config import _load_rig_config
+
+    rig_config = _load_rig_config(workspace_dir)
+
     # Populate DB with features
-    _setup_db_single_camera(
-        image_paths,
-        sift_paths,
-        image_dir,
-        db_path,
-        max_feature_count=None,
-        camera_model=camera_model,
-    )
+    if rig_config is not None:
+        _setup_db_with_rigs(
+            image_paths,
+            sift_paths,
+            image_dir,
+            db_path,
+            max_feature_count=None,
+            rig_configs=rig_config,
+            camera_model=camera_model,
+        )
+    else:
+        _setup_db_single_camera(
+            image_paths,
+            sift_paths,
+            image_dir,
+            db_path,
+            max_feature_count=None,
+            camera_model=camera_model,
+        )
 
     # Write matches and TVGs to the database
     _write_matches_to_db(db_path, matches_data, image_names, image_dir)
@@ -369,6 +385,49 @@ def _setup_db_single_camera(
                 db.write_descriptors(image_id, _wrap_descriptors(descriptors))
 
 
+def _camera_from_rig_intrinsics(
+    rig_config: dict,
+    image_path: str | Path,
+    camera_model_override: str | None,
+) -> pycolmap.Camera:
+    """Create a pycolmap.Camera from rig intrinsics or by inference.
+
+    If the rig config contains full camera_intrinsics (model, width, height,
+    and parameters), those are used directly.  Otherwise falls back to
+    _infer_camera with the model name hint.
+    """
+    from ._cameras import _CAMERA_PARAM_NAMES
+
+    intrinsics = rig_config.get("camera_intrinsics")
+
+    # If rig config has full parameters, use them directly
+    if (
+        camera_model_override is None
+        and intrinsics is not None
+        and "parameters" in intrinsics
+        and "width" in intrinsics
+        and "height" in intrinsics
+    ):
+        model_name = intrinsics["model"]
+        param_names = _CAMERA_PARAM_NAMES.get(model_name)
+        if param_names is not None:
+            params = intrinsics["parameters"]
+            if all(name in params for name in param_names):
+                cam = pycolmap.Camera()
+                cam.model = getattr(pycolmap.CameraModelId, model_name.upper())
+                cam.width = intrinsics["width"]
+                cam.height = intrinsics["height"]
+                cam.params = [params[name] for name in param_names]
+                cam.has_prior_focal_length = True
+                return cam
+
+    # Fall back to inference with optional model hint
+    effective_model = camera_model_override
+    if effective_model is None and intrinsics is not None:
+        effective_model = intrinsics.get("model")
+    return _infer_camera(str(image_path), effective_model)
+
+
 def _setup_db_with_rigs(
     image_paths: list[str | Path],
     sift_paths: list[Path],
@@ -393,12 +452,9 @@ def _setup_db_with_rigs(
             key = (rig_idx, sensor_idx)
             if key not in sensor_first_image_found:
                 sensor_first_image_found[key] = True
-                effective_model = camera_model
-                if effective_model is None:
-                    intrinsics = rig_configs[rig_idx].get("camera_intrinsics")
-                    if intrinsics is not None:
-                        effective_model = intrinsics.get("model")
-                cam = _infer_camera(str(image_path), effective_model)
+                cam = _camera_from_rig_intrinsics(
+                    rig_configs[rig_idx], image_path, camera_model
+                )
                 camera_id = db.write_camera(cam)
                 sensor_camera_ids[key] = camera_id
 

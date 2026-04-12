@@ -49,7 +49,7 @@ def run_incremental_sfm(
             camera_model=camera_model,
         )
         workspace_dir = Path(image_dir).absolute()
-        has_rig = False
+        has_rig = _load_rig_config(workspace_dir) is not None
     else:
         print("Image files:")
         print(textwrap.indent(summarize_path_list(image_paths), "  "))
