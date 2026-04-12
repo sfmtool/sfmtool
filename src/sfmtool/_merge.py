@@ -211,10 +211,20 @@ def _merge_images(
     merged_sift_hashes = []
     merged_thumbnails = []
 
+    # Rig frame data per-image arrays
+    merged_image_sensor_indexes = []
+    merged_image_frame_indexes = []
+    # Frame deduplication: (recon_idx, old_frame_idx) -> merged_frame_idx
+    frame_key_to_merged_idx = {}
+    merged_rig_indexes = []
+
+    has_rig_data = any(r.rig_frame_data is not None for r in reconstructions)
+
     image_mapping = {}
     name_to_merged_idx = {}
 
     for recon_idx, recon in enumerate(reconstructions):
+        rfd = recon.rig_frame_data if has_rig_data else None
         for old_idx, img_name in enumerate(recon.image_names):
             img_key = Path(img_name).as_posix()
 
@@ -236,6 +246,20 @@ def _merge_images(
                 merged_sift_hashes.append(recon.sift_content_hashes[old_idx])
                 merged_thumbnails.append(recon.thumbnails_y_x_rgb[old_idx])
 
+                if rfd is not None:
+                    merged_image_sensor_indexes.append(
+                        rfd["image_sensor_indexes"][old_idx]
+                    )
+                    old_frame_idx = int(rfd["image_frame_indexes"][old_idx])
+                    frame_key = (recon_idx, old_frame_idx)
+                    if frame_key not in frame_key_to_merged_idx:
+                        new_frame_idx = len(merged_rig_indexes)
+                        frame_key_to_merged_idx[frame_key] = new_frame_idx
+                        merged_rig_indexes.append(rfd["rig_indexes"][old_frame_idx])
+                    merged_image_frame_indexes.append(
+                        frame_key_to_merged_idx[frame_key]
+                    )
+
     merged_images = {
         "names": merged_names,
         "camera_indexes": np.array(merged_camera_indexes, dtype=np.int32),
@@ -245,6 +269,15 @@ def _merge_images(
         "sift_hashes": merged_sift_hashes,
         "thumbnails_y_x_rgb": np.array(merged_thumbnails, dtype=np.uint8),
     }
+
+    if has_rig_data:
+        merged_images["image_sensor_indexes"] = np.array(
+            merged_image_sensor_indexes, dtype=np.uint32
+        )
+        merged_images["image_frame_indexes"] = np.array(
+            merged_image_frame_indexes, dtype=np.uint32
+        )
+        merged_images["rig_indexes"] = np.array(merged_rig_indexes, dtype=np.uint32)
 
     return merged_images, image_mapping
 
@@ -262,6 +295,9 @@ def _create_merged_reconstruction(
     observation_counts = np.bincount(
         tracks["point_ids"], minlength=len(points["positions"])
     ).astype(np.uint32)
+
+    # Build merged rig_frame_data if source reconstructions have it
+    rig_frame_data = _merge_rig_frame_data(images, source_reconstructions)
 
     return first_recon.clone_with_changes(
         cameras=cameras,
@@ -287,4 +323,31 @@ def _create_merged_reconstruction(
         ),
         track_point_ids=np.ascontiguousarray(tracks["point_ids"], dtype=np.uint32),
         observation_counts=observation_counts,
+        rig_frame_data=rig_frame_data,
     )
+
+
+def _merge_rig_frame_data(images, source_reconstructions):
+    """Build merged rig_frame_data from merged image arrays, or None."""
+    if "image_sensor_indexes" not in images:
+        return None
+
+    # Use rig/sensor definitions from the first reconstruction that has them
+    ref_rfd = None
+    for recon in source_reconstructions:
+        if recon.rig_frame_data is not None:
+            ref_rfd = recon.rig_frame_data
+            break
+    if ref_rfd is None:
+        return None
+
+    return {
+        "rigs_metadata": ref_rfd["rigs_metadata"],
+        "sensor_camera_indexes": ref_rfd["sensor_camera_indexes"],
+        "sensor_quaternions_wxyz": ref_rfd["sensor_quaternions_wxyz"],
+        "sensor_translations_xyz": ref_rfd["sensor_translations_xyz"],
+        "frames_metadata": {"frame_count": len(images["rig_indexes"])},
+        "rig_indexes": images["rig_indexes"],
+        "image_sensor_indexes": images["image_sensor_indexes"],
+        "image_frame_indexes": images["image_frame_indexes"],
+    }

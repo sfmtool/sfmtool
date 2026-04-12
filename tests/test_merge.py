@@ -434,6 +434,82 @@ class TestMergeCLI:
         assert result.exit_code != 0
         assert "2 reconstructions" in result.output
 
+    def test_merge_cli_with_rig_frame_data(
+        self, sfmrfile_reconstruction_with_17_images, tmp_path
+    ):
+        """Merge should succeed when reconstructions have rig_frame_data."""
+        original_path = sfmrfile_reconstruction_with_17_images
+        recon = SfmrReconstruction.load(original_path)
+
+        # Add synthetic rig_frame_data to the reconstruction
+        n_images = recon.image_count
+        n_frames = (n_images + 1) // 2
+        rig_frame_data = {
+            "rigs_metadata": {
+                "rig_count": 1,
+                "sensor_count": 2,
+                "rigs": [
+                    {
+                        "name": "rig0",
+                        "sensor_count": 2,
+                        "sensor_offset": 0,
+                        "ref_sensor_name": "sensor0",
+                        "sensor_names": ["sensor0", "sensor1"],
+                    }
+                ],
+            },
+            "sensor_camera_indexes": np.array([0, 0], dtype=np.uint32),
+            "sensor_quaternions_wxyz": np.array(
+                [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
+            ),
+            "sensor_translations_xyz": np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]]),
+            "frames_metadata": {"frame_count": n_frames},
+            "rig_indexes": np.zeros(n_frames, dtype=np.uint32),
+            "image_sensor_indexes": np.array(
+                [i % 2 for i in range(n_images)], dtype=np.uint32
+            ),
+            "image_frame_indexes": np.array(
+                [i // 2 for i in range(n_images)], dtype=np.uint32
+            ),
+        }
+        recon_with_rig = recon.clone_with_changes(rig_frame_data=rig_frame_data)
+        rig_path = original_path.parent / "with_rig.sfmr"
+        recon_with_rig.save(rig_path, operation="add_rig")
+
+        # Create two overlapping subsets
+        workspace = original_path.parent
+        subset_a_path = workspace / "rig_subset_a.sfmr"
+        subset_b_path = workspace / "rig_subset_b.sfmr"
+
+        _apply_transforms_to_file(
+            rig_path,
+            subset_a_path,
+            [IncludeRangeFilter(IntRangeExpr.from_str("1-10"))],
+        )
+        _apply_transforms_to_file(
+            rig_path,
+            subset_b_path,
+            [IncludeRangeFilter(IntRangeExpr.from_str("6-17"))],
+        )
+
+        # Merge should succeed (save without shape mismatch error)
+        output_path = tmp_path / "merged_rig.sfmr"
+        result = CliRunner().invoke(
+            main,
+            [
+                "merge",
+                str(subset_a_path),
+                str(subset_b_path),
+                "-o",
+                str(output_path),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert output_path.exists()
+
+        merged = SfmrReconstruction.load(output_path)
+        assert merged.image_count == recon.image_count
+
     def test_merge_cli_with_percentile(
         self, sfmrfile_reconstruction_with_17_images, tmp_path
     ):
