@@ -186,14 +186,12 @@ def heatmap(
             image_path = Path(recon.workspace_dir) / image_name
 
             if not image_path.exists():
-                click.echo(f"  Warning: Image not found: {image_path}")
-                continue
+                raise FileNotFoundError(f"Image not found: {image_path}")
 
             # Get feature positions from SIFT file
             sift_path = get_sift_path_for_image(image_path)
             if not sift_path.exists():
-                click.echo(f"  Warning: SIFT file not found: {sift_path}")
-                continue
+                raise FileNotFoundError(f"SIFT file not found: {sift_path}")
 
             with SiftReader(sift_path) as reader:
                 all_positions = reader.read_positions()

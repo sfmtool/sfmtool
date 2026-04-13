@@ -22,6 +22,7 @@ from ..xform import (
     IncludeGlobFilter,
     IncludeRangeFilter,
     RemoveIsolatedPointsFilter,
+    RemoveLargeFeaturesFilter,
     RemoveNarrowTracksFilter,
     RemoveShortTracksFilter,
     RotateTransform,
@@ -192,6 +193,21 @@ def parse_transform_args(args: list[str]) -> list:
         elif arg == "--align-to-input":
             transforms.append(AlignToInputTransform())
 
+        elif arg == "--remove-large-features":
+            if i + 1 >= len(args):
+                raise click.UsageError("--remove-large-features requires an argument")
+            i += 1
+            param = args[i]
+
+            try:
+                max_size = float(param)
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --remove-large-features parameter '{param}': {e}"
+                )
+
+            transforms.append(RemoveLargeFeaturesFilter(max_size))
+
         elif arg == "--filter-by-reprojection-error":
             if i + 1 >= len(args):
                 raise click.UsageError(
@@ -307,6 +323,11 @@ def parse_transform_args(args: list[str]) -> list:
     help="Remove points with viewing angle < threshold (e.g., '5deg')",
 )
 @click.option(
+    "--remove-large-features",
+    multiple=True,
+    help="Remove points where max SIFT feature size > threshold in pixels (e.g., '50')",
+)
+@click.option(
     "--remove-isolated",
     multiple=True,
     help="Remove isolated points (factor,value_spec) (e.g., '3.0,median')",
@@ -380,6 +401,7 @@ def xform(ctx, input_path, output_path, **kwargs):
       --exclude-glob PATTERN              Exclude images matching glob pattern
       --remove-short-tracks size          Remove points with track length <= size
       --remove-narrow-tracks angle        Remove points with viewing angle < threshold
+      --remove-large-features size        Remove points with max feature size > threshold
       --remove-isolated factor,spec       Remove isolated points (NN distance filter)
       --filter-by-reprojection-error val  Remove points with reprojection error > threshold
 
@@ -448,8 +470,8 @@ def xform(ctx, input_path, output_path, **kwargs):
             "Options: --rotate, --translate, --scale, --scale-by-measurements, "
             "--include-range, --exclude-range, "
             "--include-glob, --exclude-glob, --remove-short-tracks, --remove-narrow-tracks, "
-            "--remove-isolated, --filter-by-reprojection-error, --bundle-adjust, "
-            "--align-to, --align-to-input"
+            "--remove-large-features, --remove-isolated, --filter-by-reprojection-error, "
+            "--bundle-adjust, --align-to, --align-to-input"
         )
 
     try:

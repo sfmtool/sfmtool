@@ -28,6 +28,8 @@ struct TrackObservationData {
     reproj_error: f32,
     /// Angular discrepancy between observation ray and point direction, in degrees.
     ray_angle_deg: f32,
+    /// SIFT feature size (average radius in pixels from affine shape).
+    feature_size: f32,
     /// Truncated display name (e.g. "…/fisheye_left/image_0345.jpg").
     image_name: String,
     /// Full image path from the reconstruction.
@@ -268,7 +270,8 @@ impl PointTrackDetail {
         let col_image = THUMB_SIZE + 8.0;
         let col_name = col_image + 50.0;
         let col_feat = col_name + 170.0;
-        let col_error = col_feat + 55.0;
+        let col_size = col_feat + 55.0;
+        let col_error = col_size + 50.0;
         let col_angle = col_error + 60.0;
         let col_xy = col_angle + 55.0;
 
@@ -284,6 +287,7 @@ impl PointTrackDetail {
                 (col_image, "Image"),
                 (col_name, "Name"),
                 (col_feat, "Feat #"),
+                (col_size, "Size"),
                 (col_error, "Error"),
                 (col_angle, "Angle"),
                 (col_xy, "Feature (x, y)"),
@@ -307,6 +311,7 @@ impl PointTrackDetail {
                 let obs_feature_xy = obs.feature_xy;
                 let obs_reproj_error = obs.reproj_error;
                 let obs_ray_angle_deg = obs.ray_angle_deg;
+                let obs_feature_size = obs.feature_size;
                 let obs_image_name = obs.image_name.clone();
                 let obs_image_full_name = obs.image_full_name.clone();
                 let is_hovered_image = hovered_image == Some(obs_image_index);
@@ -405,6 +410,20 @@ impl PointTrackDetail {
                     egui::pos2(x0 + col_feat, cy),
                     egui::Align2::LEFT_CENTER,
                     format!("{}", obs_feature_index),
+                    font.clone(),
+                    text_color,
+                );
+
+                // Feature size
+                let size_text = if obs_feature_size > 0.0 {
+                    format!("{:.1}", obs_feature_size)
+                } else {
+                    "N/A".to_string()
+                };
+                painter.text(
+                    egui::pos2(x0 + col_size, cy),
+                    egui::Align2::LEFT_CENTER,
+                    size_text,
                     font.clone(),
                     text_color,
                 );
@@ -547,12 +566,20 @@ impl PointTrackDetail {
             let image = &recon.images[img_idx];
             let camera = &recon.cameras[image.camera_index as usize];
 
-            // Get feature position from SIFT cache
-            let feature_xy = sift_cache
-                .get(&img_idx)
+            // Get feature position and size from SIFT cache
+            let cached_sift = sift_cache.get(&img_idx);
+            let feature_xy = cached_sift
                 .and_then(|sift| sift.positions_xy.get(feat_idx))
                 .copied()
                 .unwrap_or([0.0, 0.0]);
+            let feature_size = cached_sift
+                .and_then(|sift| sift.affine_shapes.get(feat_idx))
+                .map(|a| {
+                    let col0 = (a[0][0] * a[0][0] + a[1][0] * a[1][0]).sqrt();
+                    let col1 = (a[0][1] * a[0][1] + a[1][1] * a[1][1]).sqrt();
+                    0.5 * (col0 + col1)
+                })
+                .unwrap_or(0.0);
 
             // --- Compute per-observation reprojection error and ray angle ---
             let (reproj_error, ray_angle_deg) =
@@ -575,6 +602,7 @@ impl PointTrackDetail {
                 feature_xy,
                 reproj_error,
                 ray_angle_deg,
+                feature_size,
                 image_name,
                 image_full_name,
             });

@@ -60,8 +60,7 @@ def undistort_reconstruction_images(
         image_path = workspace_dir / image_name
 
         if not os.path.exists(image_path):
-            print(f"Warning: Image not found: {image_path}")
-            continue
+            raise FileNotFoundError(f"Image not found: {image_path}")
 
         # Get camera for this image
         cam_idx = camera_indexes[i]
