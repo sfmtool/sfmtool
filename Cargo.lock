@@ -2340,7 +2340,7 @@ dependencies = [
 
 [[package]]
 name = "matches-format"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "ndarray",
@@ -3777,7 +3777,7 @@ dependencies = [
 
 [[package]]
 name = "sfm-explorer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "eframe",
@@ -3805,7 +3805,7 @@ dependencies = [
 
 [[package]]
 name = "sfmr-colmap"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "approx",
  "matches-format",
@@ -3818,7 +3818,7 @@ dependencies = [
 
 [[package]]
 name = "sfmr-format"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "approx",
  "bytemuck",
@@ -3835,7 +3835,7 @@ dependencies = [
 
 [[package]]
 name = "sfmtool-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "approx",
  "bytemuck",
@@ -3855,7 +3855,7 @@ dependencies = [
 
 [[package]]
 name = "sfmtool-py"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "matches-format",
@@ -3889,7 +3889,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "sift-format"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "approx",
  "bytemuck",
