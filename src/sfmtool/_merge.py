@@ -124,6 +124,7 @@ def merge_reconstructions(
         points=merged_points,
         tracks=merged_tracks,
         source_reconstructions=reconstructions,
+        camera_mapping=camera_mapping,
     )
     click.echo(f"  Completed in {time.perf_counter() - step_start:.2f}s")
 
@@ -308,6 +309,7 @@ def _create_merged_reconstruction(
     points,
     tracks,
     source_reconstructions,
+    camera_mapping,
 ) -> SfmrReconstruction:
     """Create a SfmrReconstruction from merged data."""
     first_recon = source_reconstructions[0]
@@ -317,7 +319,9 @@ def _create_merged_reconstruction(
     ).astype(np.uint32)
 
     # Build merged rig_frame_data if source reconstructions have it
-    rig_frame_data = _merge_rig_frame_data(images, source_reconstructions)
+    rig_frame_data = _merge_rig_frame_data(
+        images, source_reconstructions, camera_mapping
+    )
 
     return first_recon.clone_with_changes(
         cameras=cameras,
@@ -347,23 +351,33 @@ def _create_merged_reconstruction(
     )
 
 
-def _merge_rig_frame_data(images, source_reconstructions):
+def _merge_rig_frame_data(images, source_reconstructions, camera_mapping):
     """Build merged rig_frame_data from merged image arrays, or None."""
     if "image_sensor_indexes" not in images:
         return None
 
-    # Use rig/sensor definitions from the first reconstruction that has them
+    # Use rig/sensor definitions from the first reconstruction that has them,
+    # remapping sensor_camera_indexes through the camera mapping.
     ref_rfd = None
-    for recon in source_reconstructions:
+    ref_cam_mapping = None
+    for recon_idx, recon in enumerate(source_reconstructions):
         if recon.rig_frame_data is not None:
             ref_rfd = recon.rig_frame_data
+            ref_cam_mapping = camera_mapping[recon_idx]
             break
     if ref_rfd is None:
         return None
 
+    # Remap sensor_camera_indexes from the reference reconstruction's
+    # camera numbering to the merged camera numbering.
+    old_sensor_cam_idxs = ref_rfd["sensor_camera_indexes"]
+    remapped_sensor_cam_idxs = np.array(
+        [ref_cam_mapping[int(idx)] for idx in old_sensor_cam_idxs], dtype=np.uint32
+    )
+
     return {
         "rigs_metadata": ref_rfd["rigs_metadata"],
-        "sensor_camera_indexes": ref_rfd["sensor_camera_indexes"],
+        "sensor_camera_indexes": remapped_sensor_cam_idxs,
         "sensor_quaternions_wxyz": ref_rfd["sensor_quaternions_wxyz"],
         "sensor_translations_xyz": ref_rfd["sensor_translations_xyz"],
         "frames_metadata": {"frame_count": len(images["rig_indexes"])},

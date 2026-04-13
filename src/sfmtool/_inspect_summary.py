@@ -90,6 +90,35 @@ def print_reconstruction_summary(
                 if val is not None:
                     click.echo(f"    {key:<{name_width}}  {val:>14.6f}")
 
+    # Rig information
+    rfd = recon.rig_frame_data
+    if rfd is not None:
+        rigs_meta = rfd["rigs_metadata"]
+        click.echo("\nRig configuration:")
+        click.echo(f"  Rigs: {rigs_meta['rig_count']}")
+        click.echo(f"  Total sensors: {rigs_meta['sensor_count']}")
+        click.echo(f"  Frames: {rfd['frames_metadata']['frame_count']}")
+        for rig_def in rigs_meta.get("rigs", []):
+            click.echo(f"  Rig '{rig_def['name']}':")
+            click.echo(f"    Sensors: {rig_def['sensor_count']}")
+            click.echo(f"    Reference sensor: {rig_def['ref_sensor_name']}")
+            sensor_names = rig_def.get("sensor_names", [])
+            offset = rig_def.get("sensor_offset", 0)
+            for i, sensor_name in enumerate(sensor_names):
+                cam_idx = int(rfd["sensor_camera_indexes"][offset + i])
+                is_ref = sensor_name == rig_def["ref_sensor_name"]
+                ref_marker = " (ref)" if is_ref else ""
+                if not is_ref:
+                    t = rfd["sensor_translations_xyz"][offset + i]
+                    click.echo(
+                        f"    {sensor_name}{ref_marker}: camera {cam_idx}, "
+                        f"translation=({t[0]:.4f}, {t[1]:.4f}, {t[2]:.4f})"
+                    )
+                else:
+                    click.echo(f"    {sensor_name}{ref_marker}: camera {cam_idx}")
+    else:
+        click.echo("\nRig configuration: none")
+
     # 3D point statistics
     if recon.point_count > 0:
         positions = recon.positions

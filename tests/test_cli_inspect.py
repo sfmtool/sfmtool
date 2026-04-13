@@ -23,9 +23,9 @@ def test_inspect_default_summary(sfmrfile_reconstruction_with_17_images):
     assert "Images: 17" in out
     assert "Cameras:" in out
     assert "Camera 0:" in out
-    assert "Model:" in out
-    assert "Resolution:" in out
-    assert "Parameters:" in out
+    assert "Parameter" in out
+    assert "Value" in out
+    assert "Rig configuration:" in out
     assert "3D Point statistics:" in out
     assert "Position range:" in out
     assert "Reprojection error:" in out

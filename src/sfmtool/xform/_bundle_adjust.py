@@ -55,6 +55,7 @@ class BundleAdjustTransform:
         original_recon: SfmrReconstruction,
     ) -> SfmrReconstruction:
         from .._cameras import pycolmap_camera_to_intrinsics
+        from .._colmap_io import _extract_rig_frame_data
 
         sorted_camera_ids = sorted(reconstruction.cameras.keys())
         cameras = [
@@ -72,9 +73,11 @@ class BundleAdjustTransform:
         quaternions_wxyz = np.zeros((len(image_names), 4), dtype=np.float64)
         translations = np.zeros((len(image_names), 3), dtype=np.float64)
 
-        for _image_id, image in reconstruction.images.items():
+        image_id_to_index = {}
+        for image_id, image in reconstruction.images.items():
             idx = name_to_idx.get(image.name)
             if idx is not None:
+                image_id_to_index[image_id] = idx
                 camera_indexes[idx] = camera_id_to_index[image.camera_id]
                 cam_from_world = image.cam_from_world()
                 quat_xyzw = cam_from_world.rotation.quat
@@ -118,7 +121,11 @@ class BundleAdjustTransform:
         track_feature_indexes = np.array(track_feature_indexes_list, dtype=np.uint32)
         track_point_ids = np.array(track_point_ids_list, dtype=np.uint32)
 
-        return original_recon.clone_with_changes(
+        rig_frame_data = _extract_rig_frame_data(
+            reconstruction, camera_id_to_index, image_id_to_index
+        )
+
+        kwargs = dict(
             cameras=cameras,
             camera_indexes=camera_indexes,
             quaternions_wxyz=quaternions_wxyz,
@@ -131,6 +138,10 @@ class BundleAdjustTransform:
             track_point_ids=track_point_ids,
             observation_counts=observation_counts,
         )
+        if rig_frame_data is not None:
+            kwargs["rig_frame_data"] = rig_frame_data
+
+        return original_recon.clone_with_changes(**kwargs)
 
     def description(self) -> str:
         opts = []

@@ -275,7 +275,7 @@ def refine_camera_poses(
     click.echo(f"      I/O (reading SIFT files): {total_io_time:.2f}s")
     click.echo(f"      Compute (pose estimation): {total_compute_time:.2f}s")
 
-    return {
+    result = {
         "names": merged_images["names"],
         "camera_indexes": merged_images["camera_indexes"],
         "quaternions_wxyz": np.array(refined_quaternions),
@@ -284,3 +284,10 @@ def refine_camera_poses(
         "sift_hashes": merged_images["sift_hashes"],
         "thumbnails_y_x_rgb": merged_images["thumbnails_y_x_rgb"],
     }
+
+    # Preserve rig frame data keys if present
+    for key in ("image_sensor_indexes", "image_frame_indexes", "rig_indexes"):
+        if key in merged_images:
+            result[key] = merged_images[key]
+
+    return result

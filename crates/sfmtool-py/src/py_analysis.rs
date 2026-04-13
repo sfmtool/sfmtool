@@ -329,20 +329,13 @@ pub fn merge_points_and_tracks_py(
     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let colors = numpy::PyArray2::from_vec2(
         py,
-        &result
-            .colors
-            .iter()
-            .map(|c| c.to_vec())
-            .collect::<Vec<_>>(),
+        &result.colors.iter().map(|c| c.to_vec()).collect::<Vec<_>>(),
     )
     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     dict.set_item("positions", positions)?;
     dict.set_item("colors", colors)?;
-    dict.set_item(
-        "errors",
-        numpy::PyArray1::from_vec(py, result.errors),
-    )?;
+    dict.set_item("errors", numpy::PyArray1::from_vec(py, result.errors))?;
     dict.set_item(
         "image_indexes",
         numpy::PyArray1::from_vec(py, result.track_image_indexes),

@@ -287,11 +287,9 @@ pub fn merge_points_and_tracks(
             all_observations.extend(&tp.observations);
         }
 
-        result.positions.push([
-            avg_pos[0] / gc,
-            avg_pos[1] / gc,
-            avg_pos[2] / gc,
-        ]);
+        result
+            .positions
+            .push([avg_pos[0] / gc, avg_pos[1] / gc, avg_pos[2] / gc]);
         result.colors.push([
             (avg_color[0] / gc).round() as u8,
             (avg_color[1] / gc).round() as u8,
