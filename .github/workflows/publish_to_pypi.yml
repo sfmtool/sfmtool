@@ -14,7 +14,7 @@ jobs:
       - uses: PyO3/maturin-action@v1
         with:
           manylinux: auto
-          args: --release --out dist
+          args: --release --out dist --interpreter python3.13 python3.14
 
       - uses: actions/upload-artifact@v4
         with:
@@ -23,16 +23,23 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
       - uses: PyO3/maturin-action@v1
         with:
-          args: --release --out dist
+          args: --release --out dist --interpreter python${{ matrix.python-version }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-windows
+          name: wheels-windows-py${{ matrix.python-version }}
           path: dist/*.whl
 
   build-sdist:

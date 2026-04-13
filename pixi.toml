@@ -6,10 +6,10 @@ authors = ["Mark <399551+mwiebe@users.noreply.github.com>"]
 channels = ["conda-forge"]
 name = "sfmtool"
 platforms = ["win-64", "linux-64"]
-version = "0.1"
+version = "0.2"
 
 [dependencies]
-python = ">=3.13,<3.14"
+python = ">=3.13"
 rust = ">=1.93"
 pycolmap = ">=4.0"
 
