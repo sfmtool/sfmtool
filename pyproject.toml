@@ -7,7 +7,7 @@ build-backend = "maturin"
 
 [project]
 name = "sfmtool"
-version = "0.1"
+version = "0.2"
 requires-python = ">=3.13"
 license = "Apache-2.0"
 description = "Fun with Structure from Motion"
