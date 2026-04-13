@@ -3866,6 +3866,7 @@ dependencies = [
  "pyo3",
  "serde",
  "serde_json",
+ "sfm-explorer",
  "sfmr-colmap",
  "sfmr-format",
  "sfmtool-core",

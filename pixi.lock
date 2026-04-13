@@ -8378,7 +8378,7 @@ packages:
 - pypi: ./
   name: sfmtool
   version: '0.2'
-  sha256: 81a01daadb158da8e896b5ded70f7998919d17bc8042c0016de9a4bb2581005e
+  sha256: 2cb9a6301847d1928b5af434a775d8f9279f88b221a58a1bd1cc1581c94d3fb4
   requires_dist:
   - click
   - deadline

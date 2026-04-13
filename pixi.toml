@@ -17,7 +17,7 @@ pycolmap = ">=4.0"
 sfmtool = { path = ".", editable = true }
 
 [tasks]
-gui = "cargo run --release --bin sfm-explorer"
+gui = "cargo run --release -p sfm-explorer --bin sfm-explorer"
 
 [feature.test.dependencies]
 cargo-llvm-cov = "*"

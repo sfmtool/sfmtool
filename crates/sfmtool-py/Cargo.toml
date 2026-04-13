@@ -26,3 +26,7 @@ serde_json = "1"
 nalgebra = "0.33"
 chrono = "0.4"
 pathdiff = "0.2"
+sfm-explorer = { path = "../sfm-explorer" }
+
+[[bin]]
+name = "sfm-explorer"

@@ -9,6 +9,10 @@ license = "Apache-2.0"
 description = "GUI application for viewing SfM reconstructions"
 default-run = "sfm-explorer"
 
+[lib]
+name = "sfm_explorer"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sfm-explorer"
 path = "src/main.rs"
