@@ -237,32 +237,34 @@ def _compare_cameras(recon1: SfmrReconstruction, recon2: SfmrReconstruction) -> 
             print("    Not found in reference")
             continue
 
-        print(f"\n  Camera {i}: {cam1.model} {cam1.width}x{cam1.height}")
-
-        if cam1.model != cam2.model:
+        if cam1.model == cam2.model:
+            print(f"\n  Camera {i}: {cam1.model} {cam1.width}x{cam1.height}")
+        else:
             print(
-                f"    Different camera models! Reference: {cam1.model}, Target: {cam2.model}"
+                f"\n  Camera {i}: {cam1.model} {cam1.width}x{cam1.height}"
+                f" vs {cam2.model} {cam2.width}x{cam2.height}"
             )
-            continue
+
         if cam1.width != cam2.width or cam1.height != cam2.height:
             print(
                 f"    Different resolutions! Reference: {cam1.width}x{cam1.height}, "
                 f"Target: {cam2.width}x{cam2.height}"
             )
-            continue
 
         params1 = cam1.parameters
         params2 = cam2.parameters
 
-        # Use the canonical parameter order for this camera model
-        canonical_order = _CAMERA_PARAM_NAMES.get(cam1.model)
-        if canonical_order is not None:
-            all_keys = list(canonical_order)
-            # Append any unexpected keys not in the canonical list
-            extra = sorted((set(params1.keys()) | set(params2.keys())) - set(all_keys))
-            all_keys.extend(extra)
-        else:
-            all_keys = sorted(set(params1.keys()) | set(params2.keys()))
+        # Build ordered key list from canonical orders of both models
+        canonical1 = _CAMERA_PARAM_NAMES.get(cam1.model, [])
+        canonical2 = _CAMERA_PARAM_NAMES.get(cam2.model, [])
+        # Start with canonical order of reference, then add target-only params in order
+        all_keys = list(canonical1)
+        for k in canonical2:
+            if k not in all_keys:
+                all_keys.append(k)
+        # Append any unexpected keys not in either canonical list
+        extra = sorted((set(params1.keys()) | set(params2.keys())) - set(all_keys))
+        all_keys.extend(extra)
 
         name_width = max(len(k) for k in all_keys)
         header = f"    {'Parameter':<{name_width}}  {'Reference':>14}  {'Target':>14}  {'Diff':>14}"
@@ -275,10 +277,10 @@ def _compare_cameras(recon1: SfmrReconstruction, recon2: SfmrReconstruction) -> 
             val1 = params1.get(key)
             val2 = params2.get(key)
             if val1 is None:
-                print(f"    {key:<{name_width}}  {'(missing)':>14}  {val2:>14.6f}")
+                print(f"    {key:<{name_width}}  {'N/A':>14}  {val2:>14.6f}")
                 all_match = False
             elif val2 is None:
-                print(f"    {key:<{name_width}}  {val1:>14.6f}  {'(missing)':>14}")
+                print(f"    {key:<{name_width}}  {val1:>14.6f}  {'N/A':>14}")
                 all_match = False
             else:
                 diff = val2 - val1
