@@ -57,10 +57,6 @@ mod py_matches_io;
 mod py_sfmr_io;
 mod py_sift_io;
 
-// ── GUI ───────────────────────────────────────────────────────────────────
-
-mod py_gui;
-
 // ── Feature matching ──────────────────────────────────────────────────────
 
 mod py_descriptor_match;
@@ -141,10 +137,6 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
         py_image_match::match_image_pairs_batch_py,
         m
     )?)?;
-
-    // GUI
-    m.add_function(wrap_pyfunction!(py_gui::view3d, m)?)?;
-    m.add_function(wrap_pyfunction!(py_gui::view3d_with_cameras, m)?)?;
 
     // SE3 transform acceleration
     m.add_function(wrap_pyfunction!(

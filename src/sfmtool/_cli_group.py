@@ -34,10 +34,9 @@ class CategoryGroup(click.Group):
             "Workspace",
             "Image Feature",
             "Reconstruction",
-            "Reconstruction Refinement",
-            "Reconstruction Analysis",
-            "COLMAP Interoperability",
+            "Visualization",
             "Image Processing",
+            "COLMAP Interop",
             "Other",
         ]
 

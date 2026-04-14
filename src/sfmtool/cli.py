@@ -15,6 +15,7 @@ from ._commands import (
     densify,
     discontinuity,
     epipolar,
+    explorer,
     flow,
     from_colmap_bin,
     heatmap,
@@ -59,6 +60,7 @@ main.add_command_with_category(align, category="Reconstruction")
 main.add_command_with_category(merge, category="Reconstruction")
 main.add_command_with_category(densify, category="Reconstruction")
 main.add_command_with_category(discontinuity, category="Reconstruction")
+main.add_command_with_category(explorer, category="Visualization")
 main.add_command_with_category(epipolar, category="Visualization")
 main.add_command_with_category(flow, category="Image Processing")
 main.add_command_with_category(heatmap, category="Visualization")

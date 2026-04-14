@@ -294,10 +294,10 @@ pixi run cargo-check
 
 ### Python Integration
 
-The GUI currently runs as a standalone binary (`sfm-explorer`) via
-`pixi run gui`. The PyO3 bindings provide `.sfmr` and `.sift` file I/O with
-zero-copy numpy arrays. The `view3d` and `view3d_with_cameras` Python entry
-points exist as stubs — wiring them to launch the viewer window is planned.
+The GUI runs as a standalone binary (`sfm-explorer`). It can be launched via
+`pixi run gui` or `sfm explorer` from the CLI. The `sfmtool-py` crate includes
+a `launch-sfm-explorer` binary that the Python wheel ships, and the
+`sfm explorer` CLI command runs it as a subprocess.
 
 ---
 

@@ -8,6 +8,7 @@ from .compare import compare
 from .densify import densify
 from .discontinuity import discontinuity
 from .epipolar import epipolar
+from .explorer import explorer
 from .flow import flow
 from .from_colmap_bin import from_colmap_bin
 from .heatmap import heatmap
@@ -30,6 +31,7 @@ __all__ = [
     "densify",
     "discontinuity",
     "epipolar",
+    "explorer",
     "flow",
     "from_colmap_bin",
     "heatmap",

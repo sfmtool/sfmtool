@@ -29,4 +29,4 @@ pathdiff = "0.2"
 sfm-explorer = { path = "../sfm-explorer" }
 
 [[bin]]
-name = "sfm-explorer"
+name = "launch-sfm-explorer"
