@@ -9,9 +9,13 @@ repo_name = "sfmtool/sfmtool"
 
 nav = [
   { "Home" = "index.md" },
+  { "Tutorials" = [
+    { "Getting Started" = "tutorials/getting-started.md" },
+  ]},
 ]
 
 [project.theme]
+features = ["navigation.expand"]
 
 [[project.theme.palette]]
 scheme = "default"
