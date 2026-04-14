@@ -231,7 +231,7 @@ def read_colmap_db_sift(
     }
 
     # Generate 128x128 RGB thumbnail
-    img = cv2.imread(str(image_file))
+    img = cv2.imread(str(image_file), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
     thumbnail = cv2.resize(img, (128, 128), interpolation=cv2.INTER_AREA)
     thumbnail = cv2.cvtColor(thumbnail, cv2.COLOR_BGR2RGB)
 

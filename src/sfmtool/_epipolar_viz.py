@@ -394,8 +394,12 @@ def draw_epipolar_visualization(
 
     if not rectify or (sweep_max_features is not None and rectification is None):
         if sweep_max_features is None:
-            test_img1 = cv2.imread(str(image1_path))
-            test_img2 = cv2.imread(str(image2_path))
+            test_img1 = cv2.imread(
+                str(image1_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+            )
+            test_img2 = cv2.imread(
+                str(image2_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+            )
             if test_img1 is not None and test_img2 is not None:
                 h1, w1 = test_img1.shape[:2]
                 h2, w2 = test_img2.shape[:2]
@@ -551,8 +555,12 @@ def draw_epipolar_visualization(
 
     else:
         # Standard epipolar visualization (original distorted images)
-        img1 = cv2.imread(str(image1_path))
-        img2 = cv2.imread(str(image2_path))
+        img1 = cv2.imread(
+            str(image1_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+        )
+        img2 = cv2.imread(
+            str(image2_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+        )
 
         if img1 is None or img2 is None:
             raise ValueError("Failed to load image files.")

@@ -43,7 +43,9 @@ class RemoveLargeFeaturesFilter:
             image_rel = Path(image_name)
             image_parent = image_rel.parent
             sift_filename = f"{image_rel.name}.sift"
-            sift_path = workspace_dir / image_parent / feature_prefix_dir / sift_filename
+            sift_path = (
+                workspace_dir / image_parent / feature_prefix_dir / sift_filename
+            )
 
             if not sift_path.exists():
                 raise FileNotFoundError(

@@ -285,7 +285,9 @@ def convert_panoramas(
     rotations = _cubemap_rotations()
 
     # Read first panorama to determine face size
-    first_pano = cv2.imread(str(pano_paths[0]))
+    first_pano = cv2.imread(
+        str(pano_paths[0]), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+    )
     if first_pano is None:
         raise ValueError(f"Failed to read panorama image: {pano_paths[0]}")
 
@@ -302,7 +304,9 @@ def convert_panoramas(
 
     # Process each panorama
     for pano_path in pano_paths:
-        pano = cv2.imread(str(pano_path))
+        pano = cv2.imread(
+            str(pano_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+        )
         if pano is None:
             raise ValueError(f"Failed to read panorama image: {pano_path}")
 

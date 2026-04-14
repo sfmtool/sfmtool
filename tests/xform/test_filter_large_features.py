@@ -58,9 +58,7 @@ def _compute_max_feature_sizes(sfmr_path):
     return max_sizes
 
 
-def test_remove_large_features_basic(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_remove_large_features_basic(sfmrfile_reconstruction_with_17_images, tmp_path):
     """Test that large features filter removes some points."""
     # Use a threshold that should remove some but not all points
     max_sizes = _compute_max_feature_sizes(sfmrfile_reconstruction_with_17_images)

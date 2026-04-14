@@ -171,7 +171,9 @@ def _extract_side_by_side(
         if not frame_files:
             raise ValueError(f"No frames extracted from {insv_path}")
 
-        first_frame = cv2.imread(str(frame_files[0]))
+        first_frame = cv2.imread(
+            str(frame_files[0]), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+        )
         if first_frame is None:
             raise ValueError(f"Failed to read extracted frame: {frame_files[0]}")
 
@@ -189,7 +191,9 @@ def _extract_side_by_side(
             if (i + 1) % 100 == 0 or (i + 1) == total:
                 click.echo(f"\r  Splitting frames: {i + 1}/{total}", nl=False)
 
-            frame = cv2.imread(str(frame_file))
+            frame = cv2.imread(
+                str(frame_file), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+            )
             if frame is None:
                 raise ValueError(f"Failed to read extracted frame: {frame_file}")
 

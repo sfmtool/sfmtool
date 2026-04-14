@@ -768,7 +768,9 @@ def draw_sift_features(
     if not image_path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
 
-    image = cv2.imread(str(image_path))
+    image = cv2.imread(
+        str(image_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+    )
     if image is None:
         raise ValueError(f"Failed to load image: {image_path}")
 

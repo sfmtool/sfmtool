@@ -175,8 +175,12 @@ def draw_flow_visualization(
         output_path = Path(output_path)
 
     # Load images
-    img1_bgr = cv2.imread(str(image1_path))
-    img2_bgr = cv2.imread(str(image2_path))
+    img1_bgr = cv2.imread(
+        str(image1_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+    )
+    img2_bgr = cv2.imread(
+        str(image2_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+    )
     if img1_bgr is None:
         raise FileNotFoundError(f"Failed to read image: {image1_path}")
     if img2_bgr is None:

@@ -127,7 +127,9 @@ def render_heatmap_overlay(
         show_colorbar: Whether to add a colorbar legend
     """
     # Load image
-    image = cv2.imread(str(image_path))
+    image = cv2.imread(
+        str(image_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+    )
     if image is None:
         raise FileNotFoundError(f"Could not load image: {image_path}")
 

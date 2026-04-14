@@ -155,7 +155,7 @@ def _flow_match_from_advected(
 
 def _load_gray(path: Path) -> np.ndarray:
     """Load an image as grayscale."""
-    img = cv2.imread(str(path))
+    img = cv2.imread(str(path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
     if img is None:
         raise FileNotFoundError(f"Failed to read image: {path}")
     return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
