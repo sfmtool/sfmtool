@@ -246,6 +246,54 @@ impl PyCameraIntrinsics {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
+    /// Project a unit ray direction in camera space to pixel coordinates.
+    ///
+    /// For perspective models, equivalent to project(rx/rz, ry/rz).
+    /// For fisheye models, computes directly from the incidence angle,
+    /// avoiding the tan(theta) singularity. For equirectangular, maps
+    /// via longitude/latitude.
+    ///
+    /// Args:
+    ///     ray: List or array [rx, ry, rz] unit ray direction.
+    ///
+    /// Returns:
+    ///     Tuple (u, v) in pixel coordinates, or None if the ray is
+    ///     outside the model's valid domain.
+    fn ray_to_pixel(&self, ray: [f64; 3]) -> Option<(f64, f64)> {
+        self.inner.ray_to_pixel(ray)
+    }
+
+    /// Batch version of ray_to_pixel.
+    ///
+    /// Args:
+    ///     rays: Nx3 numpy array of unit ray directions.
+    ///
+    /// Returns:
+    ///     Nx2 numpy array of pixel coordinates (NaN for invalid rays).
+    fn ray_to_pixel_batch<'py>(
+        &self,
+        py: Python<'py>,
+        rays: numpy::PyReadonlyArray2<'py, f64>,
+    ) -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
+        let arr = rays.as_array();
+        if arr.ncols() != 3 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "rays must have shape (N, 3)",
+            ));
+        }
+        let input: Vec<[f64; 3]> = arr.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect();
+        let output = self.inner.ray_to_pixel_batch(&input);
+        let rows: Vec<Vec<f64>> = output
+            .iter()
+            .map(|opt| match opt {
+                Some([u, v]) => vec![*u, *v],
+                None => vec![f64::NAN, f64::NAN],
+            })
+            .collect();
+        numpy::PyArray2::from_vec2(py, &rows)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
     /// Convert pixel coordinates to a unit ray direction in camera space.
     ///
     /// For perspective models, equivalent to normalizing (unproject(u, v), 1).

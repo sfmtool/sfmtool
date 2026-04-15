@@ -60,7 +60,9 @@ impl CameraModel {
     /// For pinhole models (no distortion), returns `(x, y)` unchanged.
     pub fn distort(&self, x: f64, y: f64) -> (f64, f64) {
         match self {
-            CameraModel::Pinhole { .. } | CameraModel::SimplePinhole { .. } => (x, y),
+            CameraModel::Pinhole { .. }
+            | CameraModel::SimplePinhole { .. }
+            | CameraModel::Equirectangular { .. } => (x, y),
 
             CameraModel::SimpleRadial {
                 radial_distortion_k1: k1,
@@ -159,7 +161,9 @@ impl CameraModel {
     /// theta mapping.
     pub fn undistort(&self, x_d: f64, y_d: f64) -> (f64, f64) {
         match self {
-            CameraModel::Pinhole { .. } | CameraModel::SimplePinhole { .. } => (x_d, y_d),
+            CameraModel::Pinhole { .. }
+            | CameraModel::SimplePinhole { .. }
+            | CameraModel::Equirectangular { .. } => (x_d, y_d),
 
             CameraModel::OpenCVFisheye {
                 radial_distortion_k1: k1,
@@ -258,6 +262,120 @@ impl CameraModel {
             .collect()
     }
 
+    /// Project a unit ray direction in camera space to distorted normalized
+    /// coordinates.
+    ///
+    /// For perspective models, computes `(rx/rz, ry/rz)` then applies
+    /// distortion. For fisheye models, computes the distorted coordinates
+    /// directly from the incidence angle `theta = atan2(sqrt(rx² + ry²), rz)`,
+    /// avoiding the `tan(theta)` singularity. For equirectangular, maps via
+    /// longitude/latitude. This is the true inverse of [`undistort_to_ray`].
+    ///
+    /// Returns `None` if the ray falls outside the model's valid domain:
+    /// for perspective models, `theta >= pi/2`; for fisheye, only when the
+    /// distortion polynomial's representable range is exceeded.
+    pub fn distort_ray(&self, ray: [f64; 3]) -> Option<(f64, f64)> {
+        let [rx, ry, rz] = ray;
+        match self {
+            // Equirectangular: longitude/latitude mapping
+            CameraModel::Equirectangular { .. } => {
+                let longitude = rx.atan2(rz);
+                let r_len = (rx * rx + ry * ry + rz * rz).sqrt();
+                let latitude = -(ry / r_len).clamp(-1.0, 1.0).asin();
+                Some((longitude, latitude))
+            }
+
+            // Perspective models: divide by rz, then distort
+            CameraModel::Pinhole { .. }
+            | CameraModel::SimplePinhole { .. }
+            | CameraModel::SimpleRadial { .. }
+            | CameraModel::Radial { .. }
+            | CameraModel::OpenCV { .. }
+            | CameraModel::FullOpenCV { .. } => {
+                if rz <= 0.0 {
+                    return None;
+                }
+                let x = rx / rz;
+                let y = ry / rz;
+                let (x_d, y_d) = self.distort(x, y);
+                Some((x_d, y_d))
+            }
+
+            // Fisheye models: work in theta-space
+            CameraModel::OpenCVFisheye {
+                radial_distortion_k1: k1,
+                radial_distortion_k2: k2,
+                radial_distortion_k3: k3,
+                radial_distortion_k4: k4,
+                ..
+            } => distort_ray_equidistant(rx, ry, rz, *k1, *k2, *k3, *k4),
+
+            CameraModel::SimpleRadialFisheye {
+                radial_distortion_k1: k,
+                ..
+            } => distort_ray_equidistant(rx, ry, rz, *k, 0.0, 0.0, 0.0),
+
+            CameraModel::RadialFisheye {
+                radial_distortion_k1: k1,
+                radial_distortion_k2: k2,
+                ..
+            } => distort_ray_equidistant(rx, ry, rz, *k1, *k2, 0.0, 0.0),
+
+            CameraModel::ThinPrismFisheye {
+                radial_distortion_k1: k1,
+                radial_distortion_k2: k2,
+                tangential_distortion_p1: p1,
+                tangential_distortion_p2: p2,
+                radial_distortion_k3: k3,
+                radial_distortion_k4: k4,
+                thin_prism_sx1: sx1,
+                thin_prism_sy1: sy1,
+                ..
+            } => {
+                let r_xy = (rx * rx + ry * ry).sqrt();
+                let theta = r_xy.atan2(rz);
+                if r_xy < 1e-15 {
+                    return Some((0.0, 0.0));
+                }
+                let (dx, dy) = (rx / r_xy, ry / r_xy);
+                let uu = theta * dx;
+                let vv = theta * dy;
+                let (x_d, y_d) =
+                    distort_thin_prism_fisheye(uu, vv, *k1, *k2, *p1, *p2, *k3, *k4, *sx1, *sy1);
+                Some((x_d, y_d))
+            }
+
+            CameraModel::RadTanThinPrismFisheye {
+                radial_distortion_k0: k0,
+                radial_distortion_k1: k1,
+                radial_distortion_k2: k2,
+                radial_distortion_k3: k3,
+                radial_distortion_k4: k4,
+                radial_distortion_k5: k5,
+                tangential_distortion_p0: p0,
+                tangential_distortion_p1: p1,
+                thin_prism_s0: s0,
+                thin_prism_s1: s1,
+                thin_prism_s2: s2,
+                thin_prism_s3: s3,
+                ..
+            } => {
+                let r_xy = (rx * rx + ry * ry).sqrt();
+                let theta = r_xy.atan2(rz);
+                if r_xy < 1e-15 {
+                    return Some((0.0, 0.0));
+                }
+                let (dx, dy) = (rx / r_xy, ry / r_xy);
+                let uu = theta * dx;
+                let vv = theta * dy;
+                let (x_d, y_d) = distort_rad_tan_thin_prism_fisheye(
+                    uu, vv, *k0, *k1, *k2, *k3, *k4, *k5, *p0, *p1, *s0, *s1, *s2, *s3,
+                );
+                Some((x_d, y_d))
+            }
+        }
+    }
+
     /// Convert distorted normalized coordinates to a unit ray direction.
     ///
     /// For perspective models, equivalent to normalizing `(undistort(x_d, y_d), 1)`.
@@ -269,6 +387,18 @@ impl CameraModel {
     /// camera pixel is looking in camera space (z-forward).
     pub fn undistort_to_ray(&self, x_d: f64, y_d: f64) -> [f64; 3] {
         match self {
+            // Equirectangular: x_d is longitude, y_d is latitude (negated v)
+            CameraModel::Equirectangular { .. } => {
+                let longitude = x_d;
+                let latitude = -y_d;
+                let cos_lat = latitude.cos();
+                [
+                    longitude.sin() * cos_lat,
+                    latitude.sin(),
+                    longitude.cos() * cos_lat,
+                ]
+            }
+
             // Perspective models: undistort then normalize (x, y, 1)
             CameraModel::Pinhole { .. }
             | CameraModel::SimplePinhole { .. }
@@ -426,6 +556,34 @@ impl CameraIntrinsics {
         let x_d = (u - cx) / fx;
         let y_d = (v - cy) / fy;
         self.model.undistort_to_ray(x_d, y_d)
+    }
+
+    /// Project a unit ray direction in camera space to pixel coordinates.
+    ///
+    /// For perspective models, equivalent to `project(rx/rz, ry/rz)`, but
+    /// for fisheye models computes the distorted coordinates directly from
+    /// the incidence angle, avoiding the `tan(theta)` singularity. For
+    /// equirectangular, maps via longitude/latitude. This is the true inverse
+    /// of [`pixel_to_ray`].
+    ///
+    /// Returns `None` if the ray falls outside the model's valid domain.
+    pub fn ray_to_pixel(&self, ray: [f64; 3]) -> Option<(f64, f64)> {
+        let (fx, fy) = self.focal_lengths();
+        let (cx, cy) = self.principal_point();
+        let (x_d, y_d) = self.model.distort_ray(ray)?;
+        Some((fx * x_d + cx, fy * y_d + cy))
+    }
+
+    /// Batch version of [`ray_to_pixel`].
+    pub fn ray_to_pixel_batch(&self, rays: &[[f64; 3]]) -> Vec<Option<[f64; 2]>> {
+        let (fx, fy) = self.focal_lengths();
+        let (cx, cy) = self.principal_point();
+        rays.par_iter()
+            .map(|&ray| {
+                let (x_d, y_d) = self.model.distort_ray(ray)?;
+                Some([fx * x_d + cx, fy * y_d + cy])
+            })
+            .collect()
     }
 
     /// Convert a batch of pixel coordinates to unit ray directions.
@@ -1129,6 +1287,43 @@ fn equidistant_fisheye_to_ray(x_d: f64, y_d: f64, k1: f64, k2: f64, k3: f64, k4:
     blend_fisheye_ray(r_d, recovered, undistorted)
 }
 
+/// Project a unit ray through the equidistant fisheye model, working in theta-space.
+///
+/// Computes `theta = atan2(sqrt(rx² + ry²), rz)`, applies the distortion
+/// polynomial `theta_d = theta * (1 + k1*θ² + k2*θ⁴ + k3*θ⁶ + k4*θ⁸)`,
+/// and returns `(theta_d * dx, theta_d * dy)` where `(dx, dy)` is the unit
+/// direction in the image plane. Returns `None` only when the polynomial is
+/// non-monotonic and `theta` exceeds the peak.
+fn distort_ray_equidistant(
+    rx: f64,
+    ry: f64,
+    rz: f64,
+    k1: f64,
+    k2: f64,
+    k3: f64,
+    k4: f64,
+) -> Option<(f64, f64)> {
+    let r_xy = (rx * rx + ry * ry).sqrt();
+    let theta = r_xy.atan2(rz);
+    if r_xy < 1e-15 {
+        return Some((0.0, 0.0));
+    }
+    let theta2 = theta * theta;
+    let theta4 = theta2 * theta2;
+    let theta6 = theta4 * theta2;
+    let theta8 = theta4 * theta4;
+    let theta_d = theta * (1.0 + k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8);
+
+    // Check monotonicity: if theta_d is negative for positive theta, we've
+    // exceeded the model's valid range.
+    if theta > 0.0 && theta_d <= 0.0 {
+        return None;
+    }
+
+    let (dx, dy) = (rx / r_xy, ry / r_xy);
+    Some((theta_d * dx, theta_d * dy))
+}
+
 /// Convert undistorted equidistant coordinates `(uu, vv)` to a unit ray direction.
 ///
 /// `theta = sqrt(uu² + vv²)` is the incidence angle.
@@ -1360,6 +1555,19 @@ mod tests {
         }
     }
 
+    fn equirectangular() -> CameraIntrinsics {
+        CameraIntrinsics {
+            model: CameraModel::Equirectangular {
+                focal_length_x: 640.0 / (2.0 * std::f64::consts::PI),
+                focal_length_y: 480.0 / std::f64::consts::PI,
+                principal_point_x: 320.0,
+                principal_point_y: 240.0,
+            },
+            width: 640,
+            height: 480,
+        }
+    }
+
     fn all_cameras() -> Vec<CameraIntrinsics> {
         vec![
             pinhole(),
@@ -1373,6 +1581,7 @@ mod tests {
             thin_prism_fisheye(),
             rad_tan_thin_prism_fisheye(),
             full_opencv(),
+            equirectangular(),
         ]
     }
 
@@ -2166,6 +2375,194 @@ mod tests {
             assert_relative_eq!(ray[0], expected[0], epsilon = 1e-6,);
             assert_relative_eq!(ray[1], expected[1], epsilon = 1e-6,);
             assert_relative_eq!(ray[2], expected[2], epsilon = 1e-6,);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // ray_to_pixel: round-trip pixel_to_ray → ray_to_pixel for all models
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ray_to_pixel_round_trip_all_models() {
+        for cam in all_cameras() {
+            let (cx, cy) = cam.principal_point();
+            let w = cam.width as f64;
+            let h = cam.height as f64;
+
+            // Test at center and nearby positions. Avoid extreme corners where
+            // fisheye blending in pixel_to_ray causes larger round-trip errors.
+            let test_points = vec![
+                [cx, cy],        // center
+                [cx + 10.0, cy], // right of center
+                [cx, cy + 10.0], // below center
+                [cx - 10.0, cy - 10.0],
+                [cx + 50.0, cy + 30.0],
+                [cx - 30.0, cy + 50.0],
+            ];
+
+            for pt in &test_points {
+                let ray = cam.pixel_to_ray(pt[0], pt[1]);
+                if let Some((u, v)) = cam.ray_to_pixel(ray) {
+                    // Thin prism / rad-tan fisheye models have larger round-trip
+                    // errors due to blending in pixel_to_ray at moderate angles.
+                    let tol = if cam.model.is_fisheye() { 0.5 } else { 0.01 };
+                    assert!(
+                        (u - pt[0]).abs() < tol && (v - pt[1]).abs() < tol,
+                        "ray_to_pixel round-trip failed for {} at ({}, {}): got ({u}, {v}), tol={tol}",
+                        cam.model_name(),
+                        pt[0],
+                        pt[1],
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ray_to_pixel_returns_none_behind_camera_perspective() {
+        let cam = pinhole();
+        // Ray pointing backward
+        assert!(cam.ray_to_pixel([0.0, 0.0, -1.0]).is_none());
+        assert!(cam.ray_to_pixel([0.5, 0.3, -0.1]).is_none());
+    }
+
+    #[test]
+    fn ray_to_pixel_batch_matches_single() {
+        let cam = opencv();
+        let rays = vec![[0.0, 0.0, 1.0], [0.1, 0.2, 1.0], [-0.3, 0.1, 1.0]];
+        let batch = cam.ray_to_pixel_batch(&rays);
+        for (ray, result) in rays.iter().zip(batch.iter()) {
+            let single = cam.ray_to_pixel(*ray);
+            match (single, result) {
+                (Some((u, v)), Some([bu, bv])) => {
+                    assert_relative_eq!(u, bu, epsilon = 1e-10);
+                    assert_relative_eq!(v, bv, epsilon = 1e-10);
+                }
+                (None, None) => {}
+                _ => panic!("mismatch"),
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Equirectangular model tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn equirectangular_pixel_to_ray_center() {
+        let cam = equirectangular();
+        let (cx, cy) = cam.principal_point();
+        let ray = cam.pixel_to_ray(cx, cy);
+        // Center should point along +Z
+        assert_relative_eq!(ray[0], 0.0, epsilon = 1e-10);
+        assert_relative_eq!(ray[1], 0.0, epsilon = 1e-10);
+        assert_relative_eq!(ray[2], 1.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn equirectangular_pixel_to_ray_right_edge() {
+        // Right edge is at longitude = π (pointing along -Z)
+        let cam = equirectangular();
+        let ray = cam.pixel_to_ray(cam.width as f64, cam.height as f64 / 2.0);
+        assert_relative_eq!(ray[0], 0.0, epsilon = 1e-10);
+        assert_relative_eq!(ray[1], 0.0, epsilon = 1e-10);
+        assert_relative_eq!(ray[2], -1.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn equirectangular_pixel_to_ray_top() {
+        // Top is at latitude = +π/2 (pointing along +Y)
+        let cam = equirectangular();
+        let ray = cam.pixel_to_ray(cam.width as f64 / 2.0, 0.0);
+        assert_relative_eq!(ray[0], 0.0, epsilon = 1e-10);
+        assert_relative_eq!(ray[1], 1.0, epsilon = 1e-10);
+        assert_relative_eq!(ray[2], 0.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn equirectangular_round_trip() {
+        let cam = equirectangular();
+        let test_pixels = vec![
+            [100.0, 50.0],
+            [320.0, 160.0],
+            [500.0, 100.0],
+            [1.0, 1.0],
+            [639.0, 319.0],
+        ];
+        for pt in &test_pixels {
+            let ray = cam.pixel_to_ray(pt[0], pt[1]);
+            let (u, v) = cam.ray_to_pixel(ray).unwrap();
+            assert_relative_eq!(u, pt[0], epsilon = 1e-8);
+            assert_relative_eq!(v, pt[1], epsilon = 1e-8);
+        }
+    }
+
+    #[test]
+    fn equirectangular_ray_to_pixel_always_valid() {
+        // Equirectangular can represent any direction
+        let cam = equirectangular();
+        let rays = vec![
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.577, 0.577, 0.577],
+        ];
+        for ray in &rays {
+            assert!(cam.ray_to_pixel(*ray).is_some(), "failed for ray {ray:?}");
+        }
+    }
+
+    #[test]
+    fn equirectangular_distort_undistort_identity() {
+        let cam = equirectangular();
+        let (x, y) = (0.5, -0.3);
+        let (xd, yd) = cam.model.distort(x, y);
+        assert_relative_eq!(xd, x);
+        assert_relative_eq!(yd, y);
+        let (xu, yu) = cam.model.undistort(x, y);
+        assert_relative_eq!(xu, x);
+        assert_relative_eq!(yu, y);
+    }
+
+    // -----------------------------------------------------------------------
+    // ray_to_pixel for fisheye at wide angles
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ray_to_pixel_fisheye_wide_angle() {
+        let cam = opencv_fisheye();
+        // 80° from optical axis
+        let theta = 80.0_f64.to_radians();
+        let ray = [theta.sin(), 0.0, theta.cos()];
+        let result = cam.ray_to_pixel(ray);
+        assert!(result.is_some(), "80° should be valid for fisheye");
+
+        // 89° should also work
+        let theta = 89.0_f64.to_radians();
+        let ray = [theta.sin(), 0.0, theta.cos()];
+        let result = cam.ray_to_pixel(ray);
+        assert!(result.is_some(), "89° should be valid for fisheye");
+    }
+
+    #[test]
+    fn ray_to_pixel_fisheye_round_trip_wide_angle() {
+        let cam = opencv_fisheye();
+        for angle_deg in [10.0_f64, 30.0, 60.0, 80.0, 85.0] {
+            let theta = angle_deg.to_radians();
+            let ray_in = [theta.sin(), 0.0, theta.cos()];
+            if let Some((u, v)) = cam.ray_to_pixel(ray_in) {
+                let ray_out = cam.pixel_to_ray(u, v);
+                let len =
+                    (ray_out[0] * ray_out[0] + ray_out[1] * ray_out[1] + ray_out[2] * ray_out[2])
+                        .sqrt();
+                assert_relative_eq!(len, 1.0, epsilon = 1e-10);
+                assert_relative_eq!(ray_out[0], ray_in[0], epsilon = 1e-4);
+                assert_relative_eq!(ray_out[1], ray_in[1], epsilon = 1e-4);
+                assert_relative_eq!(ray_out[2], ray_in[2], epsilon = 1e-4);
+            }
         }
     }
 }

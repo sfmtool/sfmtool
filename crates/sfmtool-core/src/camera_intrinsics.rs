@@ -124,6 +124,20 @@ pub enum CameraModel {
         radial_distortion_k5: f64,
         radial_distortion_k6: f64,
     },
+    /// Equirectangular projection for panoramic imagery.
+    ///
+    /// Maps longitude and latitude linearly to pixel coordinates. No distortion
+    /// parameters — `distort`/`undistort` are identity operations.
+    ///
+    /// Focal lengths are in pixels per radian. For a standard full-sphere
+    /// panorama (360° × 180°): `focal_length_x = width / (2π)`,
+    /// `focal_length_y = height / π`, with principal point at `(width/2, height/2)`.
+    Equirectangular {
+        focal_length_x: f64,
+        focal_length_y: f64,
+        principal_point_x: f64,
+        principal_point_y: f64,
+    },
 }
 
 /// Threshold below which a distortion coefficient is considered zero.
@@ -144,6 +158,7 @@ impl CameraModel {
             CameraModel::ThinPrismFisheye { .. } => "THIN_PRISM_FISHEYE",
             CameraModel::RadTanThinPrismFisheye { .. } => "RAD_TAN_THIN_PRISM_FISHEYE",
             CameraModel::FullOpenCV { .. } => "FULL_OPENCV",
+            CameraModel::Equirectangular { .. } => "EQUIRECTANGULAR",
         }
     }
 
@@ -154,7 +169,9 @@ impl CameraModel {
     /// coefficients are zero (below [`DISTORTION_EPS`]).
     pub fn has_distortion(&self) -> bool {
         match self {
-            CameraModel::Pinhole { .. } | CameraModel::SimplePinhole { .. } => false,
+            CameraModel::Pinhole { .. }
+            | CameraModel::SimplePinhole { .. }
+            | CameraModel::Equirectangular { .. } => false,
             CameraModel::SimpleRadial {
                 radial_distortion_k1: k1,
                 ..
@@ -279,6 +296,18 @@ impl CameraModel {
                 | CameraModel::RadTanThinPrismFisheye { .. }
         )
     }
+
+    /// Returns true for the equirectangular projection model.
+    pub fn is_equirectangular(&self) -> bool {
+        matches!(self, CameraModel::Equirectangular { .. })
+    }
+
+    /// Returns true if this model requires the ray-based warp path
+    /// (fisheye or equirectangular), as opposed to the perspective
+    /// image-plane path.
+    pub fn needs_ray_path(&self) -> bool {
+        self.is_fisheye() || self.is_equirectangular()
+    }
 }
 
 /// Camera intrinsic parameters with image dimensions.
@@ -381,6 +410,11 @@ impl CameraIntrinsics {
                 focal_length_x,
                 focal_length_y,
                 ..
+            }
+            | CameraModel::Equirectangular {
+                focal_length_x,
+                focal_length_y,
+                ..
             } => (*focal_length_x, *focal_length_y),
         }
     }
@@ -439,6 +473,11 @@ impl CameraIntrinsics {
                 ..
             }
             | CameraModel::FullOpenCV {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::Equirectangular {
                 principal_point_x,
                 principal_point_y,
                 ..
@@ -585,6 +624,12 @@ impl TryFrom<&SfmrCamera> for CameraIntrinsics {
                 radial_distortion_k4: get_param(p, m, "radial_distortion_k4")?,
                 radial_distortion_k5: get_param(p, m, "radial_distortion_k5")?,
                 radial_distortion_k6: get_param(p, m, "radial_distortion_k6")?,
+            },
+            "EQUIRECTANGULAR" => CameraModel::Equirectangular {
+                focal_length_x: get_param(p, m, "focal_length_x")?,
+                focal_length_y: get_param(p, m, "focal_length_y")?,
+                principal_point_x: get_param(p, m, "principal_point_x")?,
+                principal_point_y: get_param(p, m, "principal_point_y")?,
             },
             other => return Err(CameraIntrinsicsError::UnknownModel(other.to_string())),
         };
@@ -825,6 +870,17 @@ impl From<&CameraIntrinsics> for SfmrCamera {
                 parameters.insert("radial_distortion_k5".to_string(), *radial_distortion_k5);
                 parameters.insert("radial_distortion_k6".to_string(), *radial_distortion_k6);
             }
+            CameraModel::Equirectangular {
+                focal_length_x,
+                focal_length_y,
+                principal_point_x,
+                principal_point_y,
+            } => {
+                parameters.insert("focal_length_x".to_string(), *focal_length_x);
+                parameters.insert("focal_length_y".to_string(), *focal_length_y);
+                parameters.insert("principal_point_x".to_string(), *principal_point_x);
+                parameters.insert("principal_point_y".to_string(), *principal_point_y);
+            }
         }
 
         SfmrCamera {
@@ -1025,6 +1081,20 @@ mod tests {
         }
     }
 
+    fn equirectangular() -> CameraIntrinsics {
+        // Equirectangular with same principal point (320, 240) as other test cameras
+        CameraIntrinsics {
+            model: CameraModel::Equirectangular {
+                focal_length_x: 640.0 / (2.0 * std::f64::consts::PI),
+                focal_length_y: 480.0 / std::f64::consts::PI,
+                principal_point_x: 320.0,
+                principal_point_y: 240.0,
+            },
+            width: 640,
+            height: 480,
+        }
+    }
+
     fn all_cameras() -> Vec<CameraIntrinsics> {
         vec![
             pinhole(),
@@ -1038,6 +1108,7 @@ mod tests {
             thin_prism_fisheye(),
             rad_tan_thin_prism_fisheye(),
             full_opencv(),
+            equirectangular(),
         ]
     }
 
@@ -1126,6 +1197,7 @@ mod tests {
             "THIN_PRISM_FISHEYE",
             "RAD_TAN_THIN_PRISM_FISHEYE",
             "FULL_OPENCV",
+            "EQUIRECTANGULAR",
         ];
         for (cam, name) in all_cameras().iter().zip(expected.iter()) {
             assert_eq!(cam.model_name(), *name);
@@ -1466,6 +1538,19 @@ mod tests {
         assert!(!radial().model.is_fisheye());
         assert!(!opencv().model.is_fisheye());
         assert!(!full_opencv().model.is_fisheye());
+        assert!(!equirectangular().model.is_fisheye());
+    }
+
+    #[test]
+    fn is_equirectangular() {
+        assert!(equirectangular().model.is_equirectangular());
+        assert!(!pinhole().model.is_equirectangular());
+        assert!(!opencv_fisheye().model.is_equirectangular());
+    }
+
+    #[test]
+    fn equirectangular_has_no_distortion() {
+        assert!(!equirectangular().has_distortion());
     }
 
     // -----------------------------------------------------------------------

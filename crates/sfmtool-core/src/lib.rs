@@ -23,6 +23,7 @@ pub mod optical_flow;
 pub mod point_correspondence;
 pub mod reconstruction;
 pub mod rectification;
+pub mod remap;
 pub mod rigid_transform;
 pub mod rot_quaternion;
 pub mod rotation;
@@ -30,6 +31,7 @@ pub mod se3_transform;
 pub mod spatial;
 pub mod transform;
 pub mod viewing_angle;
+pub mod warp_map;
 
 pub use camera::Camera;
 pub use camera_intrinsics::{CameraIntrinsics, CameraModel};

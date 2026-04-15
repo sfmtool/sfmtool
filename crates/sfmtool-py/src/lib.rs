@@ -63,6 +63,11 @@ mod py_descriptor_match;
 mod py_image_match;
 mod py_sweep_match;
 
+// ── Image warping ────────────────────────────────────────────────────────
+
+mod py_warp_map;
+pub use py_warp_map::PyWarpMap;
+
 // ── Analysis & algorithms ─────────────────────────────────────────────────
 
 mod py_analysis;
@@ -203,6 +208,7 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySfmrReconstruction>()?;
     m.add_class::<py_kdtree::PyKdTree2d>()?;
     m.add_class::<py_kdtree::PyKdTree3d>()?;
+    m.add_class::<PyWarpMap>()?;
 
     Ok(())
 }
