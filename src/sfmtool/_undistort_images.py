@@ -12,15 +12,16 @@ import json
 import os
 from pathlib import Path
 
-import pycolmap
+import cv2
 
-from ._cameras import colmap_camera_from_intrinsics, pycolmap_camera_to_intrinsics
-from ._sfmtool import SfmrReconstruction
+from ._sfmtool import SfmrReconstruction, WarpMap
 
 
 def undistort_reconstruction_images(
     recon: SfmrReconstruction,
     output_dir: Path,
+    fit: str = "inside",
+    resampling_filter: str = "aniso",
     progress_callback=None,
 ) -> tuple[int, str]:
     """
@@ -32,6 +33,8 @@ def undistort_reconstruction_images(
     Args:
         recon: The SfmrReconstruction containing camera parameters and image metadata
         output_dir: Directory where undistorted images will be saved
+        fit: "inside" (no black borders) or "outside" (no cropping)
+        resampling_filter: "aniso" (anisotropic, higher quality) or "bilinear"
         progress_callback: Optional callback(current, total, image_name) for progress
 
     Returns:
@@ -43,13 +46,18 @@ def undistort_reconstruction_images(
     camera_indexes = recon.camera_indexes
 
     image_count = len(image_names)
-    print(f"Undistorting {image_count} images...")
+    print(
+        f"Undistorting {image_count} images (fit={fit}, filter={resampling_filter})..."
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Track undistorted cameras (may differ from original if dimensions change)
-    undistorted_cameras = []
-    undistorted_image_sizes = []
+    # Build pinhole cameras and warp maps per unique camera (not per image).
+    pinhole_cameras = {}
+    warp_maps = {}
+
+    # Track per-image metadata
+    image_entries = []
 
     # Process each image
     for i, image_name in enumerate(image_names):
@@ -67,68 +75,61 @@ def undistort_reconstruction_images(
         cam_meta = cameras_meta[cam_idx]
 
         # Load image
-        bitmap = pycolmap.Bitmap.read(str(image_path), as_rgb=True)
-        if bitmap is None:
+        image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+        if image is None:
             print(f"Warning: Failed to load image: {image_path}")
             continue
 
-        # Get image dimensions
-        array = bitmap.to_array()
-        height, width = array.shape[:2]
+        height, width = image.shape[:2]
 
-        # Create pycolmap Camera (use actual image dimensions, not metadata dimensions)
-        camera = colmap_camera_from_intrinsics(cam_meta, width=width, height=height)
+        # Build (or reuse) the pinhole camera and warp map for this camera index.
+        if cam_idx not in pinhole_cameras:
+            if fit == "outside":
+                pinhole = cam_meta.best_fit_outside_pinhole(width, height)
+            else:
+                pinhole = cam_meta.best_fit_inside_pinhole(width, height)
+            pinhole_cameras[cam_idx] = pinhole
+            warp_maps[cam_idx] = WarpMap.from_cameras(src=cam_meta, dst=pinhole)
 
-        # Configure undistortion options - force output size to match input
-        options = pycolmap.UndistortCameraOptions()
-        options.min_scale = 1.0
-        options.max_scale = 1.0
+        warp = warp_maps[cam_idx]
 
-        # Undistort
-        try:
-            undistorted_bitmap, undistorted_camera = pycolmap.undistort_image(
-                options, bitmap, camera
-            )
-        except Exception as e:
-            print(f"Error undistorting {image_name}: {e}")
-            continue
+        # Warp the image
+        if resampling_filter == "aniso":
+            undistorted = warp.remap_aniso(image)
+        else:
+            undistorted = warp.remap_bilinear(image)
 
         # Save undistorted image using canonical POSIX path (preserves directory structure)
         output_path = output_dir / image_name
-
-        # Create parent directories if needed
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        success = undistorted_bitmap.write(str(output_path))
+        success = cv2.imwrite(str(output_path), undistorted)
         if not success:
             print(f"Warning: Failed to save undistorted image: {output_path}")
             continue
 
-        # Store undistorted camera info
-        undistorted_cameras.append(pycolmap_camera_to_intrinsics(undistorted_camera))
-        undistorted_image_sizes.append(
-            {
-                "original_path": image_name,
-                "undistorted_path": image_name,
-                "width": undistorted_camera.width,
-                "height": undistorted_camera.height,
-            }
-        )
+        image_entries.append({"name": image_name, "camera_index": cam_idx})
 
         if i < 3 or (i + 1) % 10 == 0:
+            pinhole = pinhole_cameras[cam_idx]
             print(
                 f"  [{i + 1}/{image_count}] {image_name}: "
-                f"{width}x{height} -> {undistorted_camera.width}x{undistorted_camera.height}"
+                f"{width}x{height} -> {pinhole.width}x{pinhole.height}"
             )
 
     if progress_callback:
         progress_callback(image_count, image_count, "")
 
-    # Save undistorted camera metadata
+    # Build deduplicated camera list keyed by original camera index.
+    # Remap to contiguous indices for the JSON output.
+    sorted_cam_idxs = sorted(pinhole_cameras)
+    cam_idx_to_json_idx = {idx: j for j, idx in enumerate(sorted_cam_idxs)}
     camera_metadata = {
-        "cameras": [cam.to_dict() for cam in undistorted_cameras],
-        "image_sizes": undistorted_image_sizes,
-        "note": "Cameras for undistorted images. All distortion parameters removed (PINHOLE model).",
+        "cameras": [pinhole_cameras[idx].to_dict() for idx in sorted_cam_idxs],
+        "images": [
+            {"name": e["name"], "camera_index": cam_idx_to_json_idx[e["camera_index"]]}
+            for e in image_entries
+        ],
     }
 
     camera_json_path = output_dir / "undistorted_cameras.json"

@@ -6,8 +6,8 @@
 import json
 from pathlib import Path
 
+import cv2
 import numpy as np
-import pycolmap
 import pytest
 from click.testing import CliRunner
 
@@ -27,6 +27,7 @@ class TestUndistortCLI:
         result = runner.invoke(main, ["undistort", "--help"])
         assert result.exit_code == 0
         assert "Undistort all images" in result.output
+        assert "--fit" in result.output
 
     def test_non_sfmr_rejected(self, tmp_path):
         recon = tmp_path / "recon.txt"
@@ -70,9 +71,9 @@ class TestUndistortReconstructionImages:
             metadata = json.load(f)
 
         assert "cameras" in metadata
-        assert "image_sizes" in metadata
+        assert "images" in metadata
         assert len(metadata["cameras"]) > 0
-        assert len(metadata["image_sizes"]) == image_count
+        assert len(metadata["images"]) == image_count
 
         # Verify all cameras are PINHOLE (distortion removed)
         for cam in metadata["cameras"]:
@@ -83,16 +84,41 @@ class TestUndistortReconstructionImages:
             assert "height" in cam
             assert len(cam["parameters"]) == 4  # fx, fy, cx, cy only
 
+        # Verify image entries reference valid camera indices
+        num_cameras = len(metadata["cameras"])
+        for img in metadata["images"]:
+            assert "name" in img
+            assert "camera_index" in img
+            assert 0 <= img["camera_index"] < num_cameras
+
         # Verify image files were created and are valid
         for image_name in recon.image_names:
             undistorted_path = output_dir_path / image_name
             assert undistorted_path.exists(), f"Missing undistorted image: {image_name}"
 
-            bitmap = pycolmap.Bitmap.read(str(undistorted_path), as_rgb=True)
-            assert bitmap is not None, f"Failed to load undistorted image: {image_name}"
+            img = cv2.imread(str(undistorted_path))
+            assert img is not None, f"Failed to load undistorted image: {image_name}"
+            assert img.shape[0] > 0 and img.shape[1] > 0
 
-            array = bitmap.to_array()
-            assert array.shape[0] > 0 and array.shape[1] > 0
+    def test_fit_outside(self, sfmrfile_reconstruction_with_17_images, tmp_path):
+        """Test undistortion with fit=outside produces valid output."""
+        sfmr_path = sfmrfile_reconstruction_with_17_images
+        recon = SfmrReconstruction.load(sfmr_path)
+        output_dir = tmp_path / "undistorted_outside"
+
+        image_count, output_dir_str = undistort_reconstruction_images(
+            recon=recon, output_dir=output_dir, fit="outside"
+        )
+
+        output_dir_path = Path(output_dir_str)
+        assert image_count > 0
+
+        json_path = output_dir_path / "undistorted_cameras.json"
+        with open(json_path) as f:
+            metadata = json.load(f)
+
+        for cam in metadata["cameras"]:
+            assert cam["model"] == "PINHOLE"
 
     def test_progress_callback(self, sfmrfile_reconstruction_with_17_images, tmp_path):
         """Test that progress callback is called correctly."""
@@ -137,21 +163,17 @@ class TestUndistortReconstructionImages:
             metadata = json.load(f)
 
         workspace_dir = Path(recon.workspace_dir)
-        image_names = recon.image_names
 
-        for i, size_info in enumerate(metadata["image_sizes"]):
-            original_image = workspace_dir / image_names[i]
+        for img_entry in metadata["images"]:
+            cam = metadata["cameras"][img_entry["camera_index"]]
+            original_image = workspace_dir / img_entry["name"]
             if original_image.exists():
-                orig_bitmap = pycolmap.Bitmap.read(str(original_image), as_rgb=True)
-                orig_array = orig_bitmap.to_array()
-                orig_height, orig_width = orig_array.shape[:2]
+                orig = cv2.imread(str(original_image))
+                orig_height, orig_width = orig.shape[:2]
 
-                undist_width = size_info["width"]
-                undist_height = size_info["height"]
-
-                # With min_scale=1.0 and max_scale=1.0, dimensions should be very close
-                assert abs(undist_width - orig_width) <= orig_width * 0.2
-                assert abs(undist_height - orig_height) <= orig_height * 0.2
+                # Dimensions should match since we pass the source dimensions
+                assert cam["width"] == orig_width
+                assert cam["height"] == orig_height
 
     def test_actually_modifies_images(
         self, sfmrfile_reconstruction_with_17_images, tmp_path
@@ -163,9 +185,7 @@ class TestUndistortReconstructionImages:
 
         # Check if any camera has distortion parameters
         cameras = recon.cameras
-        has_distortion = any(
-            cam.model not in ["PINHOLE", "SIMPLE_PINHOLE"] for cam in cameras
-        )
+        has_distortion = any(cam.has_distortion for cam in cameras)
 
         if not has_distortion:
             pytest.skip("Test reconstruction has no lens distortion")
@@ -178,13 +198,8 @@ class TestUndistortReconstructionImages:
         workspace_dir = Path(recon.workspace_dir)
         image_name = recon.image_names[0]
 
-        orig_bitmap = pycolmap.Bitmap.read(str(workspace_dir / image_name), as_rgb=True)
-        undist_bitmap = pycolmap.Bitmap.read(
-            str(output_dir_path / image_name), as_rgb=True
-        )
-
-        orig_array = orig_bitmap.to_array()
-        undist_array = undist_bitmap.to_array()
+        orig_array = cv2.imread(str(workspace_dir / image_name))
+        undist_array = cv2.imread(str(output_dir_path / image_name))
 
         assert orig_array.shape == undist_array.shape
 
@@ -192,6 +207,39 @@ class TestUndistortReconstructionImages:
             np.abs(orig_array.astype(float) - undist_array.astype(float))
         )
         assert pixel_diff > 0.1, "Expected pixel differences after undistortion"
+
+    def test_inside_and_outside_produce_different_focals(
+        self, sfmrfile_reconstruction_with_17_images, tmp_path
+    ):
+        """Test that inside and outside fit modes produce different focal lengths."""
+        sfmr_path = sfmrfile_reconstruction_with_17_images
+        recon = SfmrReconstruction.load(sfmr_path)
+
+        cameras = recon.cameras
+        has_distortion = any(cam.has_distortion for cam in cameras)
+        if not has_distortion:
+            pytest.skip("Test reconstruction has no lens distortion")
+
+        inside_dir = tmp_path / "inside"
+        outside_dir = tmp_path / "outside"
+
+        undistort_reconstruction_images(
+            recon=recon, output_dir=inside_dir, fit="inside"
+        )
+        undistort_reconstruction_images(
+            recon=recon, output_dir=outside_dir, fit="outside"
+        )
+
+        with open(inside_dir / "undistorted_cameras.json") as f:
+            inside_meta = json.load(f)
+        with open(outside_dir / "undistorted_cameras.json") as f:
+            outside_meta = json.load(f)
+
+        inside_fx = inside_meta["cameras"][0]["parameters"]["focal_length_x"]
+        outside_fx = outside_meta["cameras"][0]["parameters"]["focal_length_x"]
+
+        # They should differ for distorted cameras
+        assert inside_fx != outside_fx
 
 
 # =============================================================================
@@ -204,21 +252,6 @@ class TestUndistortE2E:
         """Run the undistort command on a real reconstruction."""
         sfmr_path = sfmrfile_reconstruction_with_17_images
 
-        # Copy sfmr to tmp_path so output goes there
-        import shutil
-
-        local_sfmr = tmp_path / "test.sfmr"
-        shutil.copy(sfmr_path, local_sfmr)
-
-        # We also need the workspace to be accessible — the sfmr contains
-        # workspace_dir pointing to the fixture's workspace. Copy that too.
-        recon = SfmrReconstruction.load(sfmr_path)
-        workspace_dir = Path(recon.workspace_dir)
-        local_workspace = tmp_path / "workspace"
-        shutil.copytree(workspace_dir, local_workspace)
-
-        # Re-save the sfmr with updated workspace_dir
-        # Actually, let's just run against the fixture's sfmr directly
         runner = CliRunner()
         result = runner.invoke(main, ["undistort", str(sfmr_path)])
 
@@ -226,6 +259,27 @@ class TestUndistortE2E:
         assert "Successfully undistorted" in result.output
 
         # Clean up the output directory created next to the fixture sfmr
+        import shutil
+
+        output_dir = sfmr_path.parent / f"{sfmr_path.stem}_undistorted"
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+
+    def test_undistort_command_fit_outside(
+        self, sfmrfile_reconstruction_with_17_images, tmp_path
+    ):
+        """Run the undistort command with --fit outside."""
+        sfmr_path = sfmrfile_reconstruction_with_17_images
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["undistort", str(sfmr_path), "--fit", "outside"])
+
+        assert result.exit_code == 0, f"Failed: {result.output}"
+        assert "Successfully undistorted" in result.output
+
+        # Clean up
+        import shutil
+
         output_dir = sfmr_path.parent / f"{sfmr_path.stem}_undistorted"
         if output_dir.exists():
             shutil.rmtree(output_dir)

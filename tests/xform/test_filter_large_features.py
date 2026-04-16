@@ -122,7 +122,7 @@ def test_remove_large_features_tiny_threshold(
         apply_transforms_to_file(
             sfmrfile_reconstruction_with_17_images, output_path, transforms
         )
-        filtered = load_reconstruction_data(output_path)
+        load_reconstruction_data(output_path)
         max_sizes = _compute_max_feature_sizes(output_path)
         assert np.all(max_sizes <= 0.1)
     except ValueError as e:
