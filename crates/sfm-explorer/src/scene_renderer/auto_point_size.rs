@@ -31,7 +31,7 @@ pub(super) fn compute_auto_point_size(points: &[sfmtool_core::Point3D]) -> f32 {
     }
 
     // Subsample indices for NN queries
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let query_indices: Vec<usize> = if points.len() <= NN_SUBSAMPLE_COUNT {
         (0..points.len()).collect()
     } else {

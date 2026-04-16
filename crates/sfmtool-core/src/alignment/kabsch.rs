@@ -280,28 +280,28 @@ mod tests {
         for _ in 0..10 {
             // Random rotation via Rodrigues formula on a random axis/angle
             let axis = Vector3::new(
-                rng.gen_range(-1.0..1.0),
-                rng.gen_range(-1.0..1.0),
-                rng.gen_range(-1.0..1.0),
+                rng.random_range(-1.0..1.0),
+                rng.random_range(-1.0..1.0),
+                rng.random_range(-1.0..1.0),
             )
             .normalize();
-            let angle: f64 = rng.gen_range(-std::f64::consts::PI..std::f64::consts::PI);
+            let angle: f64 = rng.random_range(-std::f64::consts::PI..std::f64::consts::PI);
             let k = Matrix3::new(
                 0.0, -axis[2], axis[1], axis[2], 0.0, -axis[0], -axis[1], axis[0], 0.0,
             );
             let expected_rot = Matrix3::identity() + angle.sin() * k + (1.0 - angle.cos()) * k * k;
 
-            let expected_scale: f64 = rng.gen_range(0.1..10.0);
+            let expected_scale: f64 = rng.random_range(0.1..10.0);
             let expected_trans = Vector3::new(
-                rng.gen_range(-10.0..10.0),
-                rng.gen_range(-10.0..10.0),
-                rng.gen_range(-10.0..10.0),
+                rng.random_range(-10.0..10.0),
+                rng.random_range(-10.0..10.0),
+                rng.random_range(-10.0..10.0),
             );
 
             // Generate random 3D source points
             let mut source = vec![0.0f64; n_points * 3];
             for v in source.iter_mut() {
-                *v = rng.gen_range(-5.0..5.0);
+                *v = rng.random_range(-5.0..5.0);
             }
 
             // Apply similarity transform: target = scale * R * source + translation

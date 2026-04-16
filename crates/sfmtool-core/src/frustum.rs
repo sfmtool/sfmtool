@@ -299,7 +299,7 @@ pub fn sample_points_in_frustum(
     let mut candidates = Vec::with_capacity(candidate_count * 3);
     for _ in 0..candidate_count {
         for d in 0..3 {
-            candidates.push(rng.gen_range(min_coords[d]..=max_coords[d]));
+            candidates.push(rng.random_range(min_coords[d]..=max_coords[d]));
         }
     }
 
