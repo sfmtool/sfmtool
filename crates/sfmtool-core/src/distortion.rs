@@ -36,7 +36,7 @@
 
 use rayon::prelude::*;
 
-use crate::camera_intrinsics::{CameraIntrinsics, CameraModel};
+use crate::camera_intrinsics::{CameraIntrinsics, CameraIntrinsicsError, CameraModel};
 
 /// Maximum iterations for iterative undistortion.
 const UNDISTORT_MAX_ITER: usize = 100;
@@ -598,6 +598,182 @@ impl CameraIntrinsics {
                 self.model.undistort_to_ray(x_d, y_d)
             })
             .collect()
+    }
+
+    // -----------------------------------------------------------------------
+    // Best-fit pinhole estimation
+    // -----------------------------------------------------------------------
+
+    /// Build a pinhole camera at the given resolution whose field of view is
+    /// the largest that still maps every destination pixel to a valid location
+    /// in this (source) camera.
+    ///
+    /// The resulting undistorted image will have no black borders — every pixel
+    /// is backed by source data — but some peripheral source pixels may be
+    /// cropped.
+    ///
+    /// The pinhole is centred at `(width/2, height/2)` with equal focal lengths
+    /// `fx = fy`. The focal length is found via binary search.
+    ///
+    /// Returns [`CameraIntrinsicsError::UnsupportedModel`] if `self` is a
+    /// fisheye or equirectangular model.
+    pub fn best_fit_inside_pinhole(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<CameraIntrinsics, CameraIntrinsicsError> {
+        if self.model.needs_ray_path() {
+            return Err(CameraIntrinsicsError::UnsupportedModel(
+                self.model.model_name().to_string(),
+            ));
+        }
+
+        let cx = width as f64 / 2.0;
+        let cy = height as f64 / 2.0;
+        let src_w = self.width as f64;
+        let src_h = self.height as f64;
+
+        let boundary = Self::boundary_samples(width, height);
+
+        // Predicate: at this focal length, do ALL boundary points in the
+        // pinhole frame map to valid source pixels?
+        let all_inside = |focal: f64| -> bool {
+            for &(u, v) in &boundary {
+                let x = (u - cx) / focal;
+                let y = (v - cy) / focal;
+                let (sx, sy) = self.project(x, y);
+                if sx < 0.0 || sy < 0.0 || sx >= src_w || sy >= src_h {
+                    return false;
+                }
+            }
+            true
+        };
+
+        // Search range: a very small focal length sees a wide FoV (likely
+        // out of bounds), a very large focal length sees a narrow FoV
+        // (likely all in bounds). We want the smallest focal length where
+        // all_inside is true.
+        let (fx, fy) = self.focal_lengths();
+        let mut lo = 1.0_f64;
+        let mut hi = fx.max(fy) * 4.0;
+
+        // Ensure hi is actually valid (it should be for any reasonable camera).
+        if !all_inside(hi) {
+            hi *= 4.0;
+        }
+
+        for _ in 0..64 {
+            let mid = (lo + hi) / 2.0;
+            if all_inside(mid) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+
+        Ok(CameraIntrinsics {
+            model: CameraModel::Pinhole {
+                focal_length_x: hi,
+                focal_length_y: hi,
+                principal_point_x: cx,
+                principal_point_y: cy,
+            },
+            width,
+            height,
+        })
+    }
+
+    /// Build a pinhole camera at the given resolution whose field of view is
+    /// the smallest that still covers every pixel in this (source) camera.
+    ///
+    /// The resulting undistorted image will contain all source content — nothing
+    /// is cropped — but may have black borders where no source data exists.
+    ///
+    /// The pinhole is centred at `(width/2, height/2)` with equal focal lengths
+    /// `fx = fy`. The focal length is found via binary search.
+    ///
+    /// Returns [`CameraIntrinsicsError::UnsupportedModel`] if `self` is a
+    /// fisheye or equirectangular model.
+    pub fn best_fit_outside_pinhole(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Result<CameraIntrinsics, CameraIntrinsicsError> {
+        if self.model.needs_ray_path() {
+            return Err(CameraIntrinsicsError::UnsupportedModel(
+                self.model.model_name().to_string(),
+            ));
+        }
+
+        let cx = width as f64 / 2.0;
+        let cy = height as f64 / 2.0;
+        let dst_w = width as f64;
+        let dst_h = height as f64;
+
+        let boundary = Self::boundary_samples(self.width, self.height);
+
+        // Predicate: at this focal length, do ALL source boundary points
+        // map to valid locations in the destination pinhole frame?
+        let all_covered = |focal: f64| -> bool {
+            for &(u, v) in &boundary {
+                let (x, y) = self.unproject(u, v);
+                let px = focal * x + cx;
+                let py = focal * y + cy;
+                if px < 0.0 || py < 0.0 || px >= dst_w || py >= dst_h {
+                    return false;
+                }
+            }
+            true
+        };
+
+        // Search range: a very large focal length maps source boundary
+        // points outside the dst frame; a very small focal length pulls
+        // them all in. We want the largest focal length where all_covered
+        // is true.
+        let (fx, fy) = self.focal_lengths();
+        let mut lo = 1.0_f64;
+        let mut hi = fx.max(fy) * 4.0;
+
+        // Ensure lo is actually valid.
+        if !all_covered(lo) {
+            lo = 0.1;
+        }
+
+        for _ in 0..64 {
+            let mid = (lo + hi) / 2.0;
+            if all_covered(mid) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+
+        Ok(CameraIntrinsics {
+            model: CameraModel::Pinhole {
+                focal_length_x: lo,
+                focal_length_y: lo,
+                principal_point_x: cx,
+                principal_point_y: cy,
+            },
+            width,
+            height,
+        })
+    }
+
+    /// Sample 8 boundary points of an image: 4 corners + 4 edge midpoints.
+    fn boundary_samples(width: u32, height: u32) -> Vec<(f64, f64)> {
+        let w = width as f64;
+        let h = height as f64;
+        vec![
+            (0.5, 0.5),         // top-left
+            (w - 0.5, 0.5),     // top-right
+            (0.5, h - 0.5),     // bottom-left
+            (w - 0.5, h - 0.5), // bottom-right
+            (w / 2.0, 0.5),     // top-center
+            (w / 2.0, h - 0.5), // bottom-center
+            (0.5, h / 2.0),     // left-center
+            (w - 0.5, h / 2.0), // right-center
+        ]
     }
 }
 
@@ -2564,5 +2740,141 @@ mod tests {
                 assert_relative_eq!(ray_out[2], ray_in[2], epsilon = 1e-4);
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // best_fit_inside_pinhole / best_fit_outside_pinhole
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn best_fit_inside_pinhole_simple_radial() {
+        let cam = simple_radial();
+        let result = cam.best_fit_inside_pinhole(640, 480).unwrap();
+        assert_eq!(result.width, 640);
+        assert_eq!(result.height, 480);
+
+        // The inside pinhole must map every boundary pixel to a valid
+        // source location.
+        let boundary = CameraIntrinsics::boundary_samples(640, 480);
+        let (cx, cy) = result.principal_point();
+        let (fx, _fy) = result.focal_lengths();
+        for &(u, v) in &boundary {
+            let x = (u - cx) / fx;
+            let y = (v - cy) / fx;
+            let (sx, sy) = cam.project(x, y);
+            assert!(
+                sx >= 0.0 && sy >= 0.0 && sx < 640.0 && sy < 480.0,
+                "boundary point ({u}, {v}) maps outside source at ({sx}, {sy})"
+            );
+        }
+
+        // The focal length should be larger than the source (narrower FoV
+        // to avoid black borders with positive barrel distortion k1=0.1).
+        assert!(
+            fx > 500.0,
+            "expected focal > 500 for barrel distortion, got {fx}"
+        );
+    }
+
+    #[test]
+    fn best_fit_outside_pinhole_simple_radial() {
+        let cam = simple_radial();
+        let result = cam.best_fit_outside_pinhole(640, 480).unwrap();
+        assert_eq!(result.width, 640);
+        assert_eq!(result.height, 480);
+
+        // The outside pinhole must cover every source boundary pixel.
+        let src_boundary = CameraIntrinsics::boundary_samples(640, 480);
+        let (cx, cy) = result.principal_point();
+        let (fx, _fy) = result.focal_lengths();
+        for &(u, v) in &src_boundary {
+            let (x, y) = cam.unproject(u, v);
+            let px = fx * x + cx;
+            let py = fx * y + cy;
+            assert!(
+                px >= 0.0 && py >= 0.0 && px < 640.0 && py < 480.0,
+                "source boundary ({u}, {v}) maps outside dst at ({px}, {py})"
+            );
+        }
+    }
+
+    #[test]
+    fn best_fit_inside_larger_than_outside() {
+        // For barrel distortion, inside focal > outside focal
+        // (inside is narrower FoV, outside is wider).
+        let cam = simple_radial();
+        let inside = cam.best_fit_inside_pinhole(640, 480).unwrap();
+        let outside = cam.best_fit_outside_pinhole(640, 480).unwrap();
+        let (fi, _) = inside.focal_lengths();
+        let (fo, _) = outside.focal_lengths();
+        assert!(
+            fi > fo,
+            "inside focal ({fi}) should be > outside focal ({fo})"
+        );
+    }
+
+    #[test]
+    fn best_fit_pinhole_different_resolution() {
+        let cam = simple_radial();
+        let result = cam.best_fit_inside_pinhole(1280, 960).unwrap();
+        assert_eq!(result.width, 1280);
+        assert_eq!(result.height, 960);
+
+        let (cx, cy) = result.principal_point();
+        assert_relative_eq!(cx, 640.0, epsilon = 1e-10);
+        assert_relative_eq!(cy, 480.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn best_fit_pinhole_rejects_fisheye() {
+        let cam = simple_radial_fisheye();
+        assert!(cam.best_fit_inside_pinhole(640, 480).is_err());
+        assert!(cam.best_fit_outside_pinhole(640, 480).is_err());
+    }
+
+    #[test]
+    fn best_fit_pinhole_rejects_equirectangular() {
+        let cam = equirectangular();
+        assert!(cam.best_fit_inside_pinhole(640, 480).is_err());
+        assert!(cam.best_fit_outside_pinhole(640, 480).is_err());
+    }
+
+    #[test]
+    fn best_fit_pinhole_no_distortion_returns_square_pixels() {
+        // Source pinhole has non-square pixels (fx=500, fy=502).
+        let cam = pinhole();
+        let result = cam.best_fit_inside_pinhole(640, 480).unwrap();
+        let (fx, fy) = result.focal_lengths();
+        // Output must have square pixels.
+        assert_relative_eq!(fx, fy, epsilon = 1e-6);
+        // The focal length should be close to the source focal lengths.
+        assert!((fx - 500.0).abs() < 5.0, "expected focal ~500, got {fx}");
+
+        // Inside and outside should agree for a no-distortion camera
+        // (both converge on the same focal length to map identical FoV).
+        let outside = cam.best_fit_outside_pinhole(640, 480).unwrap();
+        let (fox, foy) = outside.focal_lengths();
+        assert_relative_eq!(fox, foy, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn best_fit_pinhole_opencv_model() {
+        let cam = opencv();
+        let inside = cam.best_fit_inside_pinhole(640, 480).unwrap();
+        let outside = cam.best_fit_outside_pinhole(640, 480).unwrap();
+        let (fi, _) = inside.focal_lengths();
+        let (fo, _) = outside.focal_lengths();
+        // Both should succeed and the inside focal should be larger.
+        assert!(fi > fo);
+    }
+
+    #[test]
+    fn best_fit_pinhole_radial_model() {
+        let cam = radial();
+        let inside = cam.best_fit_inside_pinhole(640, 480).unwrap();
+        let outside = cam.best_fit_outside_pinhole(640, 480).unwrap();
+        let (fi, _) = inside.focal_lengths();
+        let (fo, _) = outside.focal_lengths();
+        assert!(fi > fo);
     }
 }

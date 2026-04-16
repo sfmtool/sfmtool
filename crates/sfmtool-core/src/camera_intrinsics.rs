@@ -328,6 +328,9 @@ pub enum CameraIntrinsicsError {
     UnknownModel(String),
     /// A required parameter is missing from the parameter map.
     MissingParameter { model: String, parameter: String },
+    /// The camera model is not a perspective projection (fisheye or
+    /// equirectangular) and cannot be converted to a pinhole.
+    UnsupportedModel(String),
 }
 
 impl fmt::Display for CameraIntrinsicsError {
@@ -340,6 +343,12 @@ impl fmt::Display for CameraIntrinsicsError {
                 write!(
                     f,
                     "missing parameter '{parameter}' for camera model '{model}'"
+                )
+            }
+            CameraIntrinsicsError::UnsupportedModel(name) => {
+                write!(
+                    f,
+                    "camera model '{name}' is not a perspective projection and cannot be converted to a pinhole"
                 )
             }
         }

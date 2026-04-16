@@ -335,6 +335,48 @@ impl PyCameraIntrinsics {
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
+    /// Build a pinhole camera whose FoV is the largest that maps every
+    /// destination pixel to a valid location in this camera (no black borders).
+    ///
+    /// Args:
+    ///     width: Output image width.
+    ///     height: Output image height.
+    ///
+    /// Returns:
+    ///     A PINHOLE CameraIntrinsics with the best-fit focal length.
+    ///
+    /// Raises:
+    ///     ValueError: If this camera is fisheye or equirectangular.
+    #[pyo3(signature = (width, height))]
+    fn best_fit_inside_pinhole(&self, width: u32, height: u32) -> PyResult<PyCameraIntrinsics> {
+        let inner = self
+            .inner
+            .best_fit_inside_pinhole(width, height)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(PyCameraIntrinsics { inner })
+    }
+
+    /// Build a pinhole camera whose FoV is the smallest that covers every
+    /// pixel in this camera (no cropping, may have black borders).
+    ///
+    /// Args:
+    ///     width: Output image width.
+    ///     height: Output image height.
+    ///
+    /// Returns:
+    ///     A PINHOLE CameraIntrinsics with the best-fit focal length.
+    ///
+    /// Raises:
+    ///     ValueError: If this camera is fisheye or equirectangular.
+    #[pyo3(signature = (width, height))]
+    fn best_fit_outside_pinhole(&self, width: u32, height: u32) -> PyResult<PyCameraIntrinsics> {
+        let inner = self
+            .inner
+            .best_fit_outside_pinhole(width, height)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(PyCameraIntrinsics { inner })
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "CameraIntrinsics(model={}, width={}, height={})",
