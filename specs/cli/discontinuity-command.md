@@ -20,12 +20,12 @@ camera.
 This spec describes two analysis modes, for looking at a sequence of images without and
 with a corresponding SfM solution:
 
-1. **Image sequence analysis** (implemented) — Uses optical flow between adjacent frames
-   to find discontinuities in the raw data before any SfM processing.
+1. **Image sequence analysis** — Uses optical flow between adjacent frames to find
+   discontinuities in the raw data before any SfM processing.
 
-2. **Reconstruction analysis** (not yet implemented) — Starts from camera motion in a
-   `.sfmr` file to find pose discontinuities, then cross-checks each one against optical
-   flow to classify it as either a real data discontinuity or a likely SfM error.
+2. **Reconstruction analysis** — Starts from camera motion in a `.sfmr` file to find
+   pose discontinuities, with reprojection error and covisibility context. Optical flow
+   cross-check (Step 2) is designed but not yet wired into the output.
 
 ## Definitions
 
@@ -234,7 +234,7 @@ the analysis advances — images more than one position behind the current sampl
 removed to limit memory usage for long sequences.
 
 
-## Reconstruction Analysis (Not Yet Implemented)
+## Reconstruction Analysis
 
 ### Input
 
@@ -266,7 +266,7 @@ Flag frames where either extrapolation error exceeds a threshold. Frames near th
 or end of a sequence that don't have three neighbors on one side use a shorter
 extrapolation window or are skipped.
 
-### Step 2: Optical Flow Cross-Check
+### Step 2: Optical Flow Cross-Check (Not Yet Implemented)
 
 For each pose discontinuity found in Step 1, use the same adaptive stride flow analysis
 as image sequence mode: compute local and stride flow pairs around the flagged frame,
@@ -278,6 +278,10 @@ histograms and tile means match the stride representations), the images are visu
 continuous and the pose discontinuity is suspect — it may be an SfM error. If the flow
 representations also show a discontinuity, it corroborates the pose analysis and suggests
 a real break in the data.
+
+> **Status:** The infrastructure for this step exists (the adaptive stride flow code is
+> reusable from image sequence mode), but detailed per-edge flow histogram output is not
+> yet wired into the reconstruction analysis output.
 
 ### Step 3: Reprojection Error Context
 
