@@ -54,14 +54,14 @@ def undistort(
 
     For each image in the reconstruction, this command loads the corresponding
     camera model and undistorts the image to a best-fit pinhole camera with
-    square pixels.
+    square pixels. Produces a full workspace with undistorted images,
+    transformed .sift files, and a new .sfmr reconstruction.
 
-    By default, undistorted images are saved next to the .sfmr file:
+    By default, the output workspace is created next to the .sfmr file:
         reconstruction.sfmr -> reconstruction_undistorted/
 
-    Camera parameters are saved to: <output_dir>/undistorted_cameras.json
-
-    The undistorted cameras will be PINHOLE models with all distortion removed.
+    The output workspace contains:
+        .sfm-workspace.json, undistorted images, .sift files, sfmr/undistorted.sfmr
 
     RECONSTRUCTION_PATH must be a .sfmr file.
 
@@ -80,6 +80,7 @@ def undistort(
 
     try:
         from .._sfmtool import SfmrReconstruction
+        from .._workspace import find_workspace_for_path, load_workspace_config
 
         # Load reconstruction
         recon = SfmrReconstruction.load(reconstruction_path)
@@ -92,16 +93,35 @@ def undistort(
         else:
             output_dir = Path(output_dir)
 
+        # Load source workspace config
+        source_workspace_dir = find_workspace_for_path(reconstruction_path)
+        source_workspace_config = None
+        source_sfmr_path = None
+        if source_workspace_dir is not None:
+            source_workspace_config = load_workspace_config(source_workspace_dir)
+            try:
+                source_sfmr_path = (
+                    reconstruction_path.resolve()
+                    .relative_to(source_workspace_dir.resolve())
+                    .as_posix()
+                )
+            except ValueError:
+                source_sfmr_path = reconstruction_path.name
+
         # Undistort all images
-        image_count, output_dir_str = undistort_reconstruction_images(
+        image_count, output_dir_str, sfmr_path = undistort_reconstruction_images(
             recon=recon,
             output_dir=output_dir,
             fit=fit,
             resampling_filter=resampling_filter,
+            source_workspace_config=source_workspace_config,
+            source_sfmr_path=source_sfmr_path,
         )
 
         click.echo(f"\nSuccessfully undistorted {image_count} images")
         click.echo(f"Output directory: {output_dir_str}")
+        if sfmr_path:
+            click.echo(f"Reconstruction: {sfmr_path}")
 
     except Exception as e:
         raise click.ClickException(str(e))
