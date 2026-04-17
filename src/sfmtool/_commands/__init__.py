@@ -22,6 +22,7 @@ from .sift import sift
 from .solve import solve
 from .to_colmap_bin import to_colmap_bin
 from .to_colmap_db import to_colmap_db
+from .to_nerfstudio import to_nerfstudio
 from .undistort import undistort
 from .xform import xform
 
@@ -45,6 +46,7 @@ __all__ = [
     "solve",
     "to_colmap_bin",
     "to_colmap_db",
+    "to_nerfstudio",
     "undistort",
     "xform",
 ]

@@ -29,6 +29,7 @@ from ._commands import (
     solve,
     to_colmap_bin,
     to_colmap_db,
+    to_nerfstudio,
     undistort,
     xform,
 )
@@ -70,6 +71,7 @@ main.add_command_with_category(insv2rig, category="Workspace")
 main.add_command_with_category(to_colmap_bin, category="COLMAP Interop")
 main.add_command_with_category(to_colmap_db, category="COLMAP Interop")
 main.add_command_with_category(from_colmap_bin, category="COLMAP Interop")
+main.add_command_with_category(to_nerfstudio, category="COLMAP Interop")
 
 
 @main.command()
