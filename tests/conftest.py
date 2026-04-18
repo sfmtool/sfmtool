@@ -82,8 +82,14 @@ def isolated_seoul_bull_17_images(tmp_path_factory) -> list[Path]:
 
 @pytest.fixture(scope="session")
 def sfmrfile_reconstruction_with_17_images_once(tmp_path_factory) -> Path:
-    """Session-scoped fixture: build a .sfmr reconstruction from 17 images."""
+    """Session-scoped fixture: build a .sfmr reconstruction from 17 images.
+
+    The incremental SfM solver sometimes converges with only a couple of
+    images registered. Run without a fixed random seed and retry until all
+    17 images are registered.
+    """
     from sfmtool._isfm import run_incremental_sfm
+    from sfmtool._sfmtool import SfmrReconstruction
 
     data_dir = TEST_DATA_DIR / "images" / "seoul_bull_sculpture"
     image_files = sorted(data_dir.glob("seoul_bull_sculpture_*.jpg"))
@@ -97,12 +103,31 @@ def sfmrfile_reconstruction_with_17_images_once(tmp_path_factory) -> Path:
         shutil.copy(img_file, dest_path)
         img_paths.append(dest_path)
 
-    return run_incremental_sfm(
-        img_paths,
-        workspace_dir,
-        workspace_dir / "colmap",
-        random_seed=42,
-        output_sfm_file=workspace_dir / "seoul_bull.sfmr",
+    output_sfm_file = workspace_dir / "seoul_bull.sfmr"
+    colmap_dir = workspace_dir / "colmap"
+    expected_image_count = len(image_files)
+    max_attempts = 10
+    for attempt in range(1, max_attempts + 1):
+        if colmap_dir.exists():
+            shutil.rmtree(colmap_dir)
+        if output_sfm_file.exists():
+            output_sfm_file.unlink()
+        sfmr_path = run_incremental_sfm(
+            img_paths,
+            workspace_dir,
+            colmap_dir,
+            output_sfm_file=output_sfm_file,
+        )
+        recon = SfmrReconstruction.load(sfmr_path)
+        if recon.image_count == expected_image_count:
+            return sfmr_path
+        print(
+            f"SfM solve attempt {attempt}/{max_attempts} registered "
+            f"{recon.image_count}/{expected_image_count} images, retrying."
+        )
+    raise RuntimeError(
+        f"Failed to register all {expected_image_count} images after "
+        f"{max_attempts} attempts."
     )
 
 

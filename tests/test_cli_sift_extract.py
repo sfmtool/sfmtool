@@ -1,6 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 from pathlib import Path
 
 import pytest
@@ -78,7 +79,10 @@ def test_sift_cli_with_file(isolated_seoul_bull_image: Path, provide_dir: bool):
     assert "test_image.jpg (1 file)" in result.output
     assert "test_image.jpg.sift (1 file)" in result.output
 
-    # Touch the last-modified time the image, and it should re-compute the .sift file
+    # Touch the last-modified time the image, and it should re-compute the .sift file.
+    # Sleep first to clear filesystem mtime resolution (a few ms on WSL2 ext4),
+    # otherwise touch() can land on the same mtime as the just-written .sift.
+    time.sleep(0.005)
     isolated_seoul_bull_image.touch()
     result = CliRunner().invoke(
         main, ["sift", "--extract", "--tool", "colmap", extract_path]

@@ -29,6 +29,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.so
 
 # Coverage
 /htmlcov/
