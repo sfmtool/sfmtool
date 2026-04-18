@@ -14,8 +14,8 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use ndarray::Array4;
 
 use sfmr_format::{
-    resolve_workspace_dir, ContentHash, DepthStatistics, ImageDepthStats, ObservedDepthStats,
-    RigFrameData, SfmrCamera, SfmrData, SfmrError, SfmrMetadata,
+    resolve_workspace_dir, ContentHash, DepthStatistics, FramesMetadata, ImageDepthStats,
+    ObservedDepthStats, RigFrameData, SfmrCamera, SfmrData, SfmrError, SfmrMetadata,
 };
 
 use crate::camera_intrinsics::CameraIntrinsics;
@@ -627,6 +627,177 @@ impl SfmrReconstruction {
         }
     }
 
+    /// Return a new reconstruction that retains only the images at
+    /// `image_indices` (0-based, in the order given). Observations whose
+    /// image is not kept are dropped. Frames with no kept image are dropped;
+    /// rig and sensor definitions are preserved.
+    ///
+    /// If `drop_orphaned_points` is true, 3D points with zero remaining
+    /// observations are removed and point IDs are remapped to be contiguous.
+    /// Otherwise, all 3D points are kept with their original IDs (some may
+    /// have `observation_count == 0`).
+    ///
+    /// # Errors
+    /// Returns an error if any index is out of bounds or if `image_indices`
+    /// contains duplicates.
+    pub fn subset_by_image_indices(
+        &self,
+        image_indices: &[u32],
+        drop_orphaned_points: bool,
+    ) -> Result<Self, String> {
+        let old_image_count = self.images.len();
+        let new_image_count = image_indices.len();
+
+        // Validate: in bounds, no duplicates. old_to_new is None for removed
+        // images, Some(new_idx) for kept images (new_idx matches the position
+        // in `image_indices`).
+        let mut old_to_new: Vec<Option<u32>> = vec![None; old_image_count];
+        for (new_idx, &old_idx) in image_indices.iter().enumerate() {
+            let old_idx_usize = old_idx as usize;
+            if old_idx_usize >= old_image_count {
+                return Err(format!(
+                    "image index {} out of bounds (image_count={})",
+                    old_idx, old_image_count
+                ));
+            }
+            if old_to_new[old_idx_usize].is_some() {
+                return Err(format!("duplicate image index {} in selection", old_idx));
+            }
+            old_to_new[old_idx_usize] = Some(new_idx as u32);
+        }
+
+        // Build new image-indexed data in the order given.
+        let new_images: Vec<SfmrImage> = image_indices
+            .iter()
+            .map(|&i| self.images[i as usize].clone())
+            .collect();
+
+        let new_thumbnails = {
+            let mut out = Array4::<u8>::zeros((new_image_count, 128, 128, 3));
+            for (new_idx, &old_idx) in image_indices.iter().enumerate() {
+                let src = self
+                    .thumbnails_y_x_rgb
+                    .slice(ndarray::s![old_idx as usize, .., .., ..]);
+                out.slice_mut(ndarray::s![new_idx, .., .., ..]).assign(&src);
+            }
+            out
+        };
+
+        let new_depth_stats_images: Vec<ImageDepthStats> = image_indices
+            .iter()
+            .map(|&i| self.depth_statistics.images[i as usize].clone())
+            .collect();
+        let new_depth_statistics = DepthStatistics {
+            num_histogram_buckets: self.depth_statistics.num_histogram_buckets,
+            images: new_depth_stats_images,
+        };
+
+        let new_depth_histogram_counts: Vec<Vec<u32>> = image_indices
+            .iter()
+            .map(|&i| self.depth_histogram_counts[i as usize].clone())
+            .collect();
+
+        // Filter and remap tracks. Input tracks are grouped by point_index, so
+        // a simple single-pass filter preserves that grouping.
+        let mut new_tracks: Vec<TrackObservation> = Vec::with_capacity(self.tracks.len());
+        for obs in &self.tracks {
+            if let Some(new_img_idx) = old_to_new[obs.image_index as usize] {
+                new_tracks.push(TrackObservation {
+                    image_index: new_img_idx,
+                    feature_index: obs.feature_index,
+                    point_index: obs.point_index,
+                });
+            }
+        }
+
+        // Points + observation counts.
+        let (new_points, new_observation_counts, new_tracks) = if drop_orphaned_points {
+            // Count surviving observations per point and build a keep mask.
+            let mut per_point_count = vec![0u32; self.points.len()];
+            for obs in &new_tracks {
+                per_point_count[obs.point_index as usize] += 1;
+            }
+            let keep_mask: Vec<bool> = per_point_count.iter().map(|&c| c > 0).collect();
+
+            // Remap point ids to be contiguous over kept points.
+            let mut point_remap = vec![u32::MAX; self.points.len()];
+            let mut next_id = 0u32;
+            for (old_id, &keep) in keep_mask.iter().enumerate() {
+                if keep {
+                    point_remap[old_id] = next_id;
+                    next_id += 1;
+                }
+            }
+            let remapped_tracks: Vec<TrackObservation> = new_tracks
+                .into_iter()
+                .map(|obs| TrackObservation {
+                    image_index: obs.image_index,
+                    feature_index: obs.feature_index,
+                    point_index: point_remap[obs.point_index as usize],
+                })
+                .collect();
+
+            let kept_points: Vec<Point3D> = self
+                .points
+                .iter()
+                .zip(keep_mask.iter())
+                .filter(|(_, &k)| k)
+                .map(|(p, _)| p.clone())
+                .collect();
+            let kept_counts: Vec<u32> = per_point_count
+                .iter()
+                .zip(keep_mask.iter())
+                .filter(|(_, &k)| k)
+                .map(|(&c, _)| c)
+                .collect();
+
+            (kept_points, kept_counts, remapped_tracks)
+        } else {
+            // Keep all points; recompute per-point counts from the filtered tracks.
+            let mut per_point_count = vec![0u32; self.points.len()];
+            for obs in &new_tracks {
+                per_point_count[obs.point_index as usize] += 1;
+            }
+            (self.points.clone(), per_point_count, new_tracks)
+        };
+
+        let new_observation_offsets = compute_observation_offsets(&new_observation_counts);
+
+        // Rebuild per-image feature→point mapping and max feature indexes.
+        let mut new_image_feature_to_point = vec![HashMap::new(); new_image_count];
+        let mut new_max_track_feature_index = vec![0u32; new_image_count];
+        for obs in &new_tracks {
+            let img = obs.image_index as usize;
+            new_image_feature_to_point[img].insert(obs.feature_index, obs.point_index);
+            new_max_track_feature_index[img] =
+                new_max_track_feature_index[img].max(obs.feature_index);
+        }
+
+        // Filter rig/frame data.
+        let new_rig_frame_data = self
+            .rig_frame_data
+            .as_ref()
+            .map(|rf| subset_rig_frame_data(rf, image_indices));
+
+        Ok(SfmrReconstruction {
+            workspace_dir: self.workspace_dir.clone(),
+            metadata: self.metadata.clone(),
+            content_hash: self.content_hash.clone(),
+            cameras: self.cameras.clone(),
+            images: new_images,
+            points: new_points,
+            tracks: new_tracks,
+            observation_counts: new_observation_counts,
+            observation_offsets: new_observation_offsets,
+            thumbnails_y_x_rgb: new_thumbnails,
+            depth_statistics: new_depth_statistics,
+            depth_histogram_counts: new_depth_histogram_counts,
+            rig_frame_data: new_rig_frame_data,
+            image_feature_to_point: new_image_feature_to_point,
+            max_track_feature_index: new_max_track_feature_index,
+        })
+    }
+
     /// Filter 3D points by a boolean mask, returning a new reconstruction.
     ///
     /// Points where `mask[i]` is `true` are kept; others are removed.
@@ -997,6 +1168,83 @@ impl SfmrReconstruction {
     }
 }
 
+/// Build a new `RigFrameData` restricted to the given image subset.
+///
+/// `image_indices` gives the old image indices in their new order.
+/// `old_to_new` maps old image index → new image index (None if removed).
+///
+/// Frames with no remaining images are dropped; surviving frame indices are
+/// remapped to be contiguous. Rig and sensor definitions are preserved
+/// unchanged.
+fn subset_rig_frame_data(rf: &RigFrameData, image_indices: &[u32]) -> RigFrameData {
+    use ndarray::Array1;
+
+    let new_image_count = image_indices.len();
+
+    // Per-image arrays: reindex using image_indices order.
+    let mut new_image_sensor_indexes = Array1::<u32>::zeros(new_image_count);
+    let mut new_image_frame_indexes = Array1::<u32>::zeros(new_image_count);
+    for (new_idx, &old_idx) in image_indices.iter().enumerate() {
+        new_image_sensor_indexes[new_idx] = rf.image_sensor_indexes[old_idx as usize];
+        new_image_frame_indexes[new_idx] = rf.image_frame_indexes[old_idx as usize];
+    }
+
+    // Which frames still have an image? Keep their original order.
+    let old_frame_count = rf.frames_metadata.frame_count as usize;
+    let mut frame_kept = vec![false; old_frame_count];
+    for &f in new_image_frame_indexes.iter() {
+        frame_kept[f as usize] = true;
+    }
+
+    let new_frame_count = frame_kept.iter().filter(|&&k| k).count();
+
+    if new_frame_count == old_frame_count {
+        // All frames kept; leave rig_indexes and frame indexes alone.
+        return RigFrameData {
+            rigs_metadata: rf.rigs_metadata.clone(),
+            sensor_camera_indexes: rf.sensor_camera_indexes.clone(),
+            sensor_quaternions_wxyz: rf.sensor_quaternions_wxyz.clone(),
+            sensor_translations_xyz: rf.sensor_translations_xyz.clone(),
+            frames_metadata: FramesMetadata {
+                frame_count: new_frame_count as u32,
+            },
+            rig_indexes: rf.rig_indexes.clone(),
+            image_sensor_indexes: new_image_sensor_indexes,
+            image_frame_indexes: new_image_frame_indexes,
+        };
+    }
+
+    // Build old_frame → new_frame mapping and filter rig_indexes.
+    let mut frame_remap = vec![u32::MAX; old_frame_count];
+    let mut new_rig_indexes_vec = Vec::with_capacity(new_frame_count);
+    let mut next_frame_idx = 0u32;
+    for (old_frame_idx, &keep) in frame_kept.iter().enumerate() {
+        if keep {
+            frame_remap[old_frame_idx] = next_frame_idx;
+            new_rig_indexes_vec.push(rf.rig_indexes[old_frame_idx]);
+            next_frame_idx += 1;
+        }
+    }
+
+    // Remap image_frame_indexes to the new contiguous frame space.
+    for v in new_image_frame_indexes.iter_mut() {
+        *v = frame_remap[*v as usize];
+    }
+
+    RigFrameData {
+        rigs_metadata: rf.rigs_metadata.clone(),
+        sensor_camera_indexes: rf.sensor_camera_indexes.clone(),
+        sensor_quaternions_wxyz: rf.sensor_quaternions_wxyz.clone(),
+        sensor_translations_xyz: rf.sensor_translations_xyz.clone(),
+        frames_metadata: FramesMetadata {
+            frame_count: new_frame_count as u32,
+        },
+        rig_indexes: Array1::from_vec(new_rig_indexes_vec),
+        image_sensor_indexes: new_image_sensor_indexes,
+        image_frame_indexes: new_image_frame_indexes,
+    }
+}
+
 /// Compute prefix sum offsets from observation counts.
 ///
 /// Returns a vector of length `counts.len() + 1` where `offsets[i]` is the
@@ -1039,5 +1287,124 @@ mod tests {
         // Point 0 is observed by cameras 0 and 1 in the demo
         let images = recon.track_image_indices(0);
         assert_eq!(images.len(), 2);
+    }
+
+    #[test]
+    fn test_subset_keep_all_images_is_identity() {
+        let recon = SfmrReconstruction::demo();
+        let indices: Vec<u32> = (0..recon.images.len() as u32).collect();
+        let subset = recon.subset_by_image_indices(&indices, false).unwrap();
+        assert_eq!(subset.images.len(), recon.images.len());
+        assert_eq!(subset.points.len(), recon.points.len());
+        assert_eq!(subset.tracks.len(), recon.tracks.len());
+        assert_eq!(subset.observation_counts, recon.observation_counts);
+    }
+
+    #[test]
+    fn test_subset_keeps_all_points_by_default() {
+        let recon = SfmrReconstruction::demo();
+        // Keep only image 0. In the demo, point i is observed by images
+        // (i % 8) and ((i + 1) % 8), so ~2 points out of every 8 touch image 0.
+        let subset = recon.subset_by_image_indices(&[0], false).unwrap();
+
+        assert_eq!(subset.images.len(), 1);
+        // Default: all points kept even if their track dropped to zero.
+        assert_eq!(subset.points.len(), recon.points.len());
+        assert_eq!(subset.observation_counts.len(), recon.points.len());
+
+        // Observations that survived are the ones referencing image 0.
+        let expected_surviving: usize = recon.tracks.iter().filter(|t| t.image_index == 0).count();
+        assert_eq!(subset.tracks.len(), expected_surviving);
+        // Every surviving track now references the new image index 0.
+        for obs in &subset.tracks {
+            assert_eq!(obs.image_index, 0);
+        }
+        // Per-point observation_counts sum to the surviving track count.
+        assert_eq!(
+            subset.observation_counts.iter().sum::<u32>() as usize,
+            expected_surviving
+        );
+        // And some points have zero observations.
+        assert!(subset.observation_counts.contains(&0));
+    }
+
+    #[test]
+    fn test_subset_drops_orphaned_points_when_requested() {
+        let recon = SfmrReconstruction::demo();
+        let subset = recon.subset_by_image_indices(&[0], true).unwrap();
+
+        assert_eq!(subset.images.len(), 1);
+        // All surviving points have at least one observation.
+        assert!(subset.observation_counts.iter().all(|&c| c > 0));
+        assert_eq!(
+            subset.points.len(),
+            subset.observation_counts.iter().filter(|&&c| c > 0).count()
+        );
+        // Point IDs in tracks are contiguous.
+        let max_pt = subset
+            .tracks
+            .iter()
+            .map(|t| t.point_index)
+            .max()
+            .unwrap_or(0);
+        assert!((max_pt as usize) < subset.points.len());
+        // Observation offsets round-trip.
+        assert_eq!(
+            *subset.observation_offsets.last().unwrap(),
+            subset.tracks.len()
+        );
+    }
+
+    #[test]
+    fn test_subset_rejects_out_of_bounds_and_duplicates() {
+        let recon = SfmrReconstruction::demo();
+        let n = recon.images.len() as u32;
+        assert!(recon.subset_by_image_indices(&[n], false).is_err());
+        assert!(recon.subset_by_image_indices(&[0, 0], false).is_err());
+    }
+
+    #[test]
+    fn test_subset_filters_rig_frame_data() {
+        use ndarray::{Array1, Array2};
+        use sfmr_format::{FramesMetadata, RigDefinition, RigsMetadata};
+
+        // Start from the demo (8 images) and attach a trivial rig/frame
+        // structure: one single-sensor rig, one frame per image.
+        let mut recon = SfmrReconstruction::demo();
+        let n_images = recon.images.len();
+        let rig_def = RigDefinition {
+            name: "rig0".to_string(),
+            sensor_count: 1,
+            sensor_offset: 0,
+            ref_sensor_name: "sensor0".to_string(),
+            sensor_names: vec!["sensor0".to_string()],
+        };
+        recon.rig_frame_data = Some(RigFrameData {
+            rigs_metadata: RigsMetadata {
+                rig_count: 1,
+                sensor_count: 1,
+                rigs: vec![rig_def],
+            },
+            sensor_camera_indexes: Array1::from_vec(vec![0u32]),
+            sensor_quaternions_wxyz: Array2::from_shape_vec((1, 4), vec![1.0, 0.0, 0.0, 0.0])
+                .unwrap(),
+            sensor_translations_xyz: Array2::from_shape_vec((1, 3), vec![0.0, 0.0, 0.0]).unwrap(),
+            frames_metadata: FramesMetadata {
+                frame_count: n_images as u32,
+            },
+            rig_indexes: Array1::from_vec(vec![0u32; n_images]),
+            image_sensor_indexes: Array1::from_vec(vec![0u32; n_images]),
+            image_frame_indexes: Array1::from_vec((0..n_images as u32).collect()),
+        });
+
+        // Keep images 0, 3, 5 — three frames survive and must be remapped to 0,1,2.
+        let subset = recon.subset_by_image_indices(&[0, 3, 5], false).unwrap();
+        let rf = subset.rig_frame_data.as_ref().unwrap();
+        assert_eq!(rf.frames_metadata.frame_count, 3);
+        assert_eq!(rf.rig_indexes.len(), 3);
+        assert_eq!(rf.image_frame_indexes.to_vec(), vec![0, 1, 2]);
+        // Sensor definitions are unchanged.
+        assert_eq!(rf.rigs_metadata.rig_count, 1);
+        assert_eq!(rf.sensor_camera_indexes.to_vec(), vec![0]);
     }
 }

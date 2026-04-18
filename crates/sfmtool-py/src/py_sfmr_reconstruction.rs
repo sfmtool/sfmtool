@@ -353,6 +353,33 @@ impl PySfmrReconstruction {
         PyArray2::from_vec2(py, &self.inner.depth_histogram_counts).unwrap()
     }
 
+    /// Return a new reconstruction containing only the images at
+    /// `image_indices` (0-based, in the given order).
+    ///
+    /// Observations referencing removed images are dropped. Frames with no
+    /// kept image are dropped; rig and sensor definitions are preserved.
+    ///
+    /// If ``drop_orphaned_points`` is true, 3D points with zero remaining
+    /// observations are removed and point IDs are remapped. Otherwise, all
+    /// 3D points are kept (some may have zero observations).
+    #[pyo3(signature = (image_indices, drop_orphaned_points=false))]
+    fn subset_by_image_indices(
+        &self,
+        image_indices: PyReadonlyArray1<u32>,
+        drop_orphaned_points: bool,
+    ) -> PyResult<Self> {
+        let slice = image_indices.as_slice().map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "image_indices must be a contiguous array: {e}"
+            ))
+        })?;
+        let filtered = self
+            .inner
+            .subset_by_image_indices(slice, drop_orphaned_points)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        Ok(Self { inner: filtered })
+    }
+
     /// Filter 3D points by a boolean mask, returning a new reconstruction.
     ///
     /// Points where `mask[i]` is `true` are kept. Tracks are filtered and

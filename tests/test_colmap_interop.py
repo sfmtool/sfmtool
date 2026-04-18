@@ -154,3 +154,90 @@ class TestToColmapBinE2E:
         assert (output_dir / "cameras.bin").exists()
         assert (output_dir / "images.bin").exists()
         assert (output_dir / "points3D.bin").exists()
+
+    def test_range_subsets_images_and_keeps_all_points(
+        self, tmp_path, sfmrfile_reconstruction_with_17_images
+    ):
+        """--range keeps only the requested images but retains every 3D point."""
+        from sfmtool._sfmtool import SfmrReconstruction, read_colmap_binary
+
+        sfmr_path = sfmrfile_reconstruction_with_17_images
+        original = SfmrReconstruction.load(sfmr_path)
+        original_point_count = len(original.positions)
+
+        output_dir = tmp_path / "colmap_output"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["to-colmap-bin", str(sfmr_path), str(output_dir), "-r", "1-5"],
+        )
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+
+        data = read_colmap_binary(output_dir)
+        # Five image file numbers (1..5) were requested and all exist.
+        assert len(data["image_names"]) == 5
+        # All 3D points are kept even though most observations were dropped.
+        assert len(data["positions_xyz"]) == original_point_count
+        # At least some points have zero surviving observations.
+        assert any(c == 0 for c in data["observation_counts"])
+
+    def test_range_with_filter_points_drops_orphans(
+        self, tmp_path, sfmrfile_reconstruction_with_17_images
+    ):
+        """--filter-points removes 3D points left with no observations."""
+        from sfmtool._sfmtool import SfmrReconstruction, read_colmap_binary
+
+        sfmr_path = sfmrfile_reconstruction_with_17_images
+        original = SfmrReconstruction.load(sfmr_path)
+        original_point_count = len(original.positions)
+
+        output_dir = tmp_path / "colmap_output"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "to-colmap-bin",
+                str(sfmr_path),
+                str(output_dir),
+                "-r",
+                "1-5",
+                "--filter-points",
+            ],
+        )
+        assert result.exit_code == 0, f"CLI failed: {result.output}"
+
+        data = read_colmap_binary(output_dir)
+        assert len(data["image_names"]) == 5
+        # Point cloud shrunk and every surviving point has at least one obs.
+        assert len(data["positions_xyz"]) < original_point_count
+        assert all(c >= 1 for c in data["observation_counts"])
+
+    def test_filter_points_without_range_errors(
+        self, tmp_path, sfmrfile_reconstruction_with_17_images
+    ):
+        """--filter-points without --range is a usage error."""
+        sfmr_path = sfmrfile_reconstruction_with_17_images
+        output_dir = tmp_path / "colmap_output"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["to-colmap-bin", str(sfmr_path), str(output_dir), "--filter-points"],
+        )
+        assert result.exit_code != 0
+        assert "--filter-points" in result.output
+        assert "--range" in result.output
+
+    def test_range_with_no_matches_errors(
+        self, tmp_path, sfmrfile_reconstruction_with_17_images
+    ):
+        """A range that matches no image lists the available file numbers."""
+        sfmr_path = sfmrfile_reconstruction_with_17_images
+        output_dir = tmp_path / "colmap_output"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["to-colmap-bin", str(sfmr_path), str(output_dir), "-r", "100-200"],
+        )
+        assert result.exit_code != 0
+        assert "100-200" in result.output
+        assert "Available file numbers" in result.output
