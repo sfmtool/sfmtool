@@ -2562,8 +2562,6 @@ mod tests {
     fn ray_to_pixel_round_trip_all_models() {
         for cam in all_cameras() {
             let (cx, cy) = cam.principal_point();
-            let w = cam.width as f64;
-            let h = cam.height as f64;
 
             // Test at center and nearby positions. Avoid extreme corners where
             // fisheye blending in pixel_to_ray causes larger round-trip errors.

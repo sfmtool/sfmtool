@@ -9,27 +9,80 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use super::types::{
-    camera_params_to_array, colmap_model_id, ColmapFrame, ColmapIoError, ColmapRig, ColmapWriteData,
+    camera_params_to_array, colmap_model_id, ColmapDataId, ColmapFrame, ColmapIoError, ColmapRig,
+    ColmapSensor, ColmapSensorType, ColmapWriteData,
 };
 
 /// Sentinel value for unobserved 3D point references in COLMAP binary format.
 const INVALID_POINT3D_ID: u64 = u64::MAX;
 
 /// Write a complete COLMAP binary reconstruction to a directory, creating
-/// `cameras.bin`, `images.bin`, and `points3D.bin`.
+/// `cameras.bin`, `images.bin`, `points3D.bin`, `rigs.bin`, and `frames.bin`.
+///
+/// When `data.rigs` and `data.frames` are both `None`, the implicit rig and
+/// frame values defined by the .sfmr spec (one trivial single-sensor rig per
+/// camera, one frame per image) are synthesized so COLMAP consumers always
+/// see a complete set of files. See `specs/formats/sfmr-file-format.md`,
+/// "Implicit Rig and Frame Values".
 pub fn write_colmap_binary(dir: &Path, data: &ColmapWriteData) -> Result<(), ColmapIoError> {
     validate_write_data(data)?;
     std::fs::create_dir_all(dir)?;
     write_cameras_bin(&dir.join("cameras.bin"), data)?;
     write_images_bin(&dir.join("images.bin"), data)?;
     write_points3d_bin(&dir.join("points3D.bin"), data)?;
-    if let Some(rigs) = data.rigs {
-        write_rigs_bin(&dir.join("rigs.bin"), rigs)?;
-    }
-    if let Some(frames) = data.frames {
-        write_frames_bin(&dir.join("frames.bin"), frames)?;
-    }
+
+    let synthesized: Option<(Vec<ColmapRig>, Vec<ColmapFrame>)> =
+        if data.rigs.is_none() && data.frames.is_none() {
+            Some(implicit_rigs_frames(data))
+        } else {
+            None
+        };
+    let (rigs, frames): (&[ColmapRig], &[ColmapFrame]) =
+        match (&synthesized, data.rigs, data.frames) {
+            (Some((r, f)), _, _) => (r.as_slice(), f.as_slice()),
+            (None, Some(r), Some(f)) => (r, f),
+            (None, Some(r), None) => (r, &[]),
+            (None, None, Some(f)) => (&[], f),
+            (None, None, None) => unreachable!(),
+        };
+    write_rigs_bin(&dir.join("rigs.bin"), rigs)?;
+    write_frames_bin(&dir.join("frames.bin"), frames)?;
     Ok(())
+}
+
+/// Synthesize the implicit rigs and frames defined by the .sfmr spec: one
+/// trivial single-sensor rig per camera (no `sensor_from_rig` pose) and one
+/// frame per image, with each frame inheriting its image's pose.
+fn implicit_rigs_frames(data: &ColmapWriteData) -> (Vec<ColmapRig>, Vec<ColmapFrame>) {
+    let rigs: Vec<ColmapRig> = (0..data.cameras.len())
+        .map(|i| ColmapRig {
+            rig_id: i as u32,
+            ref_sensor: Some(ColmapSensor {
+                sensor_type: ColmapSensorType::Camera,
+                id: (i as u32) + 1, // 1-based camera_id
+            }),
+            non_ref_sensors: Vec::new(),
+        })
+        .collect();
+
+    let frames: Vec<ColmapFrame> = (0..data.image_names.len())
+        .map(|j| {
+            let cam_idx = data.camera_indexes[j];
+            ColmapFrame {
+                frame_id: j as u32,
+                rig_id: cam_idx,
+                quaternion_wxyz: data.quaternions_wxyz[j],
+                translation_xyz: data.translations_xyz[j],
+                data_ids: vec![ColmapDataId {
+                    sensor_type: ColmapSensorType::Camera,
+                    sensor_id: cam_idx + 1,  // 1-based camera_id
+                    data_id: (j as u64) + 1, // 1-based image_id
+                }],
+            }
+        })
+        .collect();
+
+    (rigs, frames)
 }
 
 /// Validate that all arrays in `ColmapWriteData` have consistent lengths.

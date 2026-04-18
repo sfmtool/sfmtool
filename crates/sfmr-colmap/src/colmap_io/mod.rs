@@ -458,7 +458,6 @@ mod tests {
         use types::{
             ColmapDataId, ColmapFrame, ColmapRig, ColmapRigSensor, ColmapSensor, ColmapSensorType,
         };
-        use write::{write_frames_bin, write_rigs_bin};
 
         let dir = std::env::temp_dir().join("colmap_io_rigs_frames");
         std::fs::create_dir_all(&dir).unwrap();
@@ -522,9 +521,6 @@ mod tests {
             },
         ];
 
-        write_rigs_bin(&dir.join("rigs.bin"), &rigs).unwrap();
-        write_frames_bin(&dir.join("frames.bin"), &frames).unwrap();
-
         // Also write minimal cameras/images/points3D for read_colmap_binary
         let cameras = vec![
             make_pinhole_camera(640, 480, 320.0, 320.0, 320.0, 240.0),
@@ -557,8 +553,8 @@ mod tests {
             track_feature_indexes: &[],
             track_point3d_indexes: &[],
             keypoints_per_image: &keypoints_per_image,
-            rigs: None,
-            frames: None,
+            rigs: Some(&rigs),
+            frames: Some(&frames),
         };
         write_colmap_binary(&dir, &write_data).unwrap();
 
@@ -603,18 +599,37 @@ mod tests {
     }
 
     #[test]
-    fn test_no_rigs_files() {
-        // When rigs.bin/frames.bin don't exist, rigs and frames should be None
-        let cameras = vec![make_pinhole_camera(640, 480, 320.0, 320.0, 320.0, 240.0)];
-        let image_names = vec!["img.jpg".to_string()];
-        let keypoints_per_image = vec![vec![]];
+    fn test_implicit_rigs_frames_round_trip() {
+        // When ColmapWriteData has no explicit rigs/frames, write_colmap_binary
+        // materializes the implicit values from the .sfmr spec: one trivial
+        // single-sensor rig per camera, one frame per image. After a
+        // write/read round-trip the reader's 0-based remap should yield those
+        // exact values.
+        let cameras = vec![
+            make_pinhole_camera(640, 480, 320.0, 320.0, 320.0, 240.0),
+            make_pinhole_camera(800, 600, 400.0, 400.0, 400.0, 300.0),
+        ];
+        // Names in sorted order so write order == reader's sorted order.
+        let image_names = vec![
+            "a.jpg".to_string(),
+            "b.jpg".to_string(),
+            "c.jpg".to_string(),
+        ];
+        let camera_indexes = vec![0u32, 1, 0];
+        let quaternions_wxyz = vec![
+            [1.0, 0.0, 0.0, 0.0],
+            [0.9239, 0.0, 0.3827, 0.0],
+            [0.7071, 0.7071, 0.0, 0.0],
+        ];
+        let translations_xyz = vec![[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [-1.0, 0.5, 0.25]];
+        let keypoints_per_image = vec![vec![], vec![], vec![]];
 
         let write_data = ColmapWriteData {
             cameras: &cameras,
             image_names: &image_names,
-            camera_indexes: &[0],
-            quaternions_wxyz: &[[1.0, 0.0, 0.0, 0.0]],
-            translations_xyz: &[[0.0, 0.0, 0.0]],
+            camera_indexes: &camera_indexes,
+            quaternions_wxyz: &quaternions_wxyz,
+            translations_xyz: &translations_xyz,
             positions_xyz: &[],
             colors_rgb: &[],
             reprojection_errors: &[],
@@ -626,13 +641,46 @@ mod tests {
             frames: None,
         };
 
-        let dir = std::env::temp_dir().join("colmap_io_no_rigs");
+        let dir = std::env::temp_dir().join("colmap_io_implicit_rigs");
         std::fs::create_dir_all(&dir).unwrap();
         write_colmap_binary(&dir, &write_data).unwrap();
 
+        assert!(dir.join("rigs.bin").exists());
+        assert!(dir.join("frames.bin").exists());
+
         let recon = read_colmap_binary(&dir).unwrap();
-        assert!(recon.rigs.is_none());
-        assert!(recon.frames.is_none());
+        let rigs = recon.rigs.as_ref().expect("rigs.bin should be written");
+        let frames = recon.frames.as_ref().expect("frames.bin should be written");
+
+        // One rig per camera, each a trivial single-sensor rig.
+        assert_eq!(rigs.len(), cameras.len());
+        for (i, rig) in rigs.iter().enumerate() {
+            assert_eq!(rig.rig_id, i as u32);
+            let ref_sensor = rig
+                .ref_sensor
+                .as_ref()
+                .expect("implicit rig must have a ref sensor");
+            // Reader remaps 1-based camera_id back to 0-based index.
+            assert_eq!(ref_sensor.id, i as u32);
+            assert!(rig.non_ref_sensors.is_empty());
+        }
+
+        // One frame per image, inheriting the image's pose and pointing at
+        // the image through its camera's trivial rig.
+        assert_eq!(frames.len(), image_names.len());
+        for (j, frame) in frames.iter().enumerate() {
+            assert_eq!(frame.frame_id, j as u32);
+            assert_eq!(frame.rig_id, camera_indexes[j]);
+            assert_eq!(frame.quaternion_wxyz, quaternions_wxyz[j]);
+            assert_eq!(frame.translation_xyz, translations_xyz[j]);
+            assert_eq!(frame.data_ids.len(), 1);
+            let d = &frame.data_ids[0];
+            assert_eq!(d.sensor_type, ColmapSensorType::Camera);
+            // Reader remaps sensor_id to 0-based camera index, data_id to
+            // 0-based sorted image index.
+            assert_eq!(d.sensor_id, camera_indexes[j]);
+            assert_eq!(d.data_id, j as u64);
+        }
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

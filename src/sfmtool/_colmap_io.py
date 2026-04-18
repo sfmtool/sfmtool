@@ -513,8 +513,11 @@ def _extract_rig_frame_data(
 def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None):
     """Export a SfmrReconstruction to COLMAP binary format.
 
-    Creates cameras.bin, images.bin, points3D.bin (and optionally rigs.bin,
-    frames.bin) in the output directory.
+    Creates cameras.bin, images.bin, points3D.bin, rigs.bin, and frames.bin
+    in the output directory. When the reconstruction has no explicit rig/
+    frame data, the Rust writer synthesizes the implicit values from the
+    .sfmr spec (one trivial single-sensor rig per camera, one frame per
+    image) so rigs.bin and frames.bin are always present.
 
     Args:
         recon: SfmrReconstruction object to export
@@ -601,8 +604,5 @@ def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None)
     print(f"  - cameras.bin: {num_cameras} cameras")
     print(f"  - images.bin: {num_images} images")
     print(f"  - points3D.bin: {num_points} points")
-    if recon.rig_frame_data is not None:
-        num_rigs = recon.rig_frame_data["rigs_metadata"]["rig_count"]
-        num_frames = recon.rig_frame_data["frames_metadata"]["frame_count"]
-        print(f"  - rigs.bin: {num_rigs} rigs")
-        print(f"  - frames.bin: {num_frames} frames")
+    print("  - rigs.bin")
+    print("  - frames.bin")

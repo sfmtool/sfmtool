@@ -236,4 +236,3 @@ class TestToNerfstudioE2E:
         assert (sparse / "cameras.bin").exists()
         assert (sparse / "images.bin").exists()
         assert (sparse / "points3D.bin").exists()
-
