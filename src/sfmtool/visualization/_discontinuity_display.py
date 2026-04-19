@@ -9,7 +9,7 @@ import click
 import cv2
 import numpy as np
 
-from .._flow_viz import _draw_flow_legend, _flow_to_color
+from ._flow_display import _draw_flow_legend, _flow_to_color
 
 
 _DIRECTION_ARROWS = ["→", "↗", "↑", "↖", "←", "↙", "↓", "↘"]

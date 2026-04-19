@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
-from .._flow_viz import draw_flow_visualization
+from ..visualization._flow_display import draw_flow_visualization
 
 
 @click.command("flow")

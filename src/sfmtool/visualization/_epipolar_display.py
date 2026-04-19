@@ -12,10 +12,10 @@ import cv2
 import numpy as np
 import pycolmap
 
-from ._cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
-from ._rectification import compute_stereo_rectification
-from ._sift_file import SiftReader, get_sift_path_for_image
-from ._sfmtool import RotQuaternion
+from .._cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
+from .._rectification import compute_stereo_rectification
+from .._sift_file import SiftReader, get_sift_path_for_image
+from .._sfmtool import RotQuaternion
 
 
 def _get_color_palette(n_colors: int) -> list:
@@ -204,7 +204,7 @@ def draw_epipolar_visualization(
         if Path(name).name == Path(image2_name).name or name == image2_name:
             image2_idx = idx
 
-    from ._sfm_reconstruction import get_image_hint_message
+    from .._sfm_reconstruction import get_image_hint_message
 
     if image1_idx is None:
         raise ValueError(get_image_hint_message(recon, image1_name))
@@ -276,7 +276,7 @@ def draw_epipolar_visualization(
             cameras[camera_indexes[image2_idx]], width=w2, height=h2
         )
 
-        from .feature_match._geometry import check_rectification_safe
+        from ..feature_match._geometry import check_rectification_safe
 
         K1_check = get_intrinsic_matrix(cam1)
         K2_check = get_intrinsic_matrix(cam2)
@@ -293,7 +293,7 @@ def draw_epipolar_visualization(
         quat2_xyzw = np.roll(quat2_wxyz, -1)
         pose2 = pycolmap.Rigid3d(pycolmap.Rotation3d(quat2_xyzw), t2)
 
-        from .feature_match import match_image_pair
+        from ..feature_match import match_image_pair
 
         mutual_matches = match_image_pair(
             pose1,
@@ -388,7 +388,7 @@ def draw_epipolar_visualization(
     colors = _get_color_palette(len(feature_pairs))
 
     # Check if epipoles are inside the image for visualization
-    from .feature_match._polar_sweep import _compute_epipole_pair_from_F
+    from ..feature_match._polar_sweep import _compute_epipole_pair_from_F
 
     e1, e2, e1_inf, e2_inf = _compute_epipole_pair_from_F(F)
 

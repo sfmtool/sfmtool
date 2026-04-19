@@ -9,7 +9,7 @@ from click.testing import CliRunner
 
 from sfmtool._sfmtool import compute_optical_flow as _rust_compute_optical_flow
 from sfmtool.feature_match._flow_matching import _flow_match_pair, flow_match_sequential
-from sfmtool._flow_viz import (
+from sfmtool.visualization._flow_display import (
     _find_nearest_within_tolerance,
     _flow_to_color,
     _get_color_palette,

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._epipolar_viz import (
+from sfmtool.visualization._epipolar_display import (
     _compute_fundamental_matrix,
     _draw_epipolar_line,
     _draw_polar_epipolar_line,
@@ -389,7 +389,7 @@ class TestEpipolarE2E:
         """Test drawing epipolar visualization with a real reconstruction."""
         import cv2
 
-        from sfmtool._epipolar_viz import draw_epipolar_visualization
+        from sfmtool.visualization._epipolar_display import draw_epipolar_visualization
         from sfmtool._sfmtool import SfmrReconstruction
         from sfmtool._workspace import load_workspace_config
 
@@ -422,7 +422,7 @@ class TestEpipolarE2E:
         """Test side-by-side epipolar visualization."""
         import cv2
 
-        from sfmtool._epipolar_viz import draw_epipolar_visualization
+        from sfmtool.visualization._epipolar_display import draw_epipolar_visualization
         from sfmtool._sfmtool import SfmrReconstruction
         from sfmtool._workspace import load_workspace_config
 

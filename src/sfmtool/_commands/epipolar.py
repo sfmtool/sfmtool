@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
-from .._epipolar_viz import draw_epipolar_visualization
+from ..visualization._epipolar_display import draw_epipolar_visualization
 from .._filenames import number_from_filename
 from .._sfm_reconstruction import get_image_hint_message
 from .._sfmtool import SfmrReconstruction
