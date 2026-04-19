@@ -16,10 +16,12 @@ from ._filter_by_image_range import (
 )
 from ._filter_by_reprojection_error import FilterByReprojectionErrorTransform
 from ._interface import Transform
-from ._remove_isolated import RemoveIsolatedPointsFilter
-from ._remove_large_features import RemoveLargeFeaturesFilter
-from ._remove_narrow_tracks import RemoveNarrowTracksFilter
-from ._remove_short_tracks import RemoveShortTracksFilter
+from ._point_filters import (
+    RemoveIsolatedPointsFilter,
+    RemoveLargeFeaturesFilter,
+    RemoveNarrowTracksFilter,
+    RemoveShortTracksFilter,
+)
 from ._rotate import RotateTransform
 from ._scale import ScaleTransform
 from ._scale_by_measurements import ScaleByMeasurementsTransform
