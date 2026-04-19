@@ -56,8 +56,8 @@ All three panels share `AppState::selected_image` as the central image selection
   browser highlights the corresponding thumbnail and scrolls it into view. The detail pane
   loads the full-resolution image.
 - **Image Detail → others**: The detail pane is display-only (no selection input — it
-  shows whatever is selected). Future: `,`/`.` keys could navigate to prev/next image from
-  any focused panel.
+  shows whatever is selected). `,`/`.` keys on the 3D viewport step the selection
+  back/forward (wrapping at the ends) even when not in camera view mode.
 - **Deselect**: Clicking background in 3D viewer or clicking the selected thumbnail again
   clears `selected_image`. The detail pane shows "No image selected."
 
@@ -338,7 +338,7 @@ rendered interactively via egui rather than baked into an output image.
 | **Features** | SIFT keypoint ellipses + center dots | `sfm sift --draw` |
 | **Reproj Error** | Colored circles by reprojection error | `sfm heatmap --metric reproj` |
 | **Track Length** | Colored circles by observation count | `sfm heatmap --metric tracks` |
-| **Tri Angle** | Colored circles by triangulation angle | `sfm heatmap --metric angle` |
+| **Max Track Angle** | Colored circles by max pairwise ray angle (triangulation angle) | `sfm heatmap --metric angle` |
 
 #### Feature Filtering
 
@@ -428,8 +428,10 @@ When an overlay mode is active and `selected_image` changes, load:
 3. **Per-point metrics** looked up by `point_idx`:
    - Reprojection error: `SfmrReconstruction::points[point_idx].error`
    - Track length: `SfmrReconstruction::observation_counts[point_idx]`
-   - Triangulation angle: precomputed per-point (same as `compute_triangulation_angles`
-     in the Python heatmap command)
+   - Max track angle (triangulation angle): max pairwise angle (degrees) between
+     world-space rays from observing cameras to the 3D point. Computed on
+     demand when the Max Track Angle overlay is active, cached per-feature in
+     the overlay state for the duration of the current mode.
 
 **Drawing (egui painter)**:
 
@@ -445,10 +447,12 @@ image-to-panel transform (accounting for the fitted image size and offset within
   - Only draw features within the visible panel region for performance.
   - The "Tracked only" checkbox controls whether untracked features are shown.
 
-- **Heatmap modes** (Reproj Error / Track Length / Tri Angle): For each tracked feature:
+- **Heatmap modes** (Reproj Error / Track Length / Max Track Angle): For each tracked feature:
   - Draw a filled circle at the feature position.
   - Color is mapped from the metric value using the same colormap definitions as
-    `visualization/_colormap.py` (error, tracks, viridis respectively).
+    `visualization/_colormap.py` for error and tracks. Max Track Angle uses a
+    red→yellow→green gradient (low angle = weak triangulation = red,
+    high = well-triangulated = green).
   - Circle radius is a fixed size in image pixels (default ~5px, configurable via the
     overlay toolbar).
   - Show a small colorbar legend in the corner of the panel with min/max range labels.
@@ -942,7 +946,7 @@ open-ended.
   for Phase B.
 
 - **Feature overlay modes**: The full overlay system (Features / Reproj
-  Error / Track Length / Tri Angle) from the original Step 8 spec. Only
+  Error / Track Length / Max Track Angle) from the original Step 8 spec. Only
   add this if evaluation shows the single-feature marker is insufficient.
 
 - **Image detail pan/zoom**: Implemented (see "Image Detail — 2D pan and

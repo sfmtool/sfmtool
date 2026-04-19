@@ -418,19 +418,37 @@ impl Viewer3D {
                     }
                 }
             }
-            // ,/. navigate to previous/next camera while in camera view
-            if self.camera_view.is_some() && !reconstruction.images.is_empty() {
+            // ,/. navigate to previous/next image. In camera view mode this
+            // also switches which camera we're viewing through; otherwise the
+            // viewport stays put and only the selection changes.
+            if !reconstruction.images.is_empty() {
                 let n = reconstruction.images.len();
+                let in_camera_view = self.camera_view.is_some();
+                let cur = self
+                    .camera_view
+                    .as_ref()
+                    .map(|cv| cv.image_index)
+                    .or(*selected_image);
                 if i.key_pressed(egui::Key::Comma) {
-                    let cur = self.camera_view.as_ref().unwrap().image_index;
-                    let prev = if cur == 0 { n - 1 } else { cur - 1 };
-                    self.switch_camera_view(prev, reconstruction);
+                    let prev = match cur {
+                        None => 0,
+                        Some(0) => n - 1,
+                        Some(c) => c - 1,
+                    };
+                    if in_camera_view {
+                        self.switch_camera_view(prev, reconstruction);
+                    }
                     *selected_image = Some(prev);
                 }
                 if i.key_pressed(egui::Key::Period) {
-                    let cur = self.camera_view.as_ref().unwrap().image_index;
-                    let next = if cur + 1 >= n { 0 } else { cur + 1 };
-                    self.switch_camera_view(next, reconstruction);
+                    let next = match cur {
+                        None => 0,
+                        Some(c) if c + 1 >= n => 0,
+                        Some(c) => c + 1,
+                    };
+                    if in_camera_view {
+                        self.switch_camera_view(next, reconstruction);
+                    }
                     *selected_image = Some(next);
                 }
             }

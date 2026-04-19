@@ -688,6 +688,11 @@ without Shift) commonly used for previous/next in video editors and image
 viewers. They are also the Vim keys for paragraph navigation, reinforcing
 the "step through a sequence" mental model.
 
+Outside camera view mode, `,`/`.` still step through images — they move
+`selected_image` back/forward with the same wrap-around — but the 3D
+viewport is left alone. This lets you scrub through the image browser /
+image detail panel without the viewport jumping around.
+
 ### Exiting camera view
 
 Camera view exits when navigation moves the camera center — orbiting, panning,

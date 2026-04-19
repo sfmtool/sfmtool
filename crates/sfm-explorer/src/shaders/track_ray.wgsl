@@ -11,6 +11,10 @@ struct Uniforms {
     screen_size: vec2<f32>,
     line_half_width: f32,
     hovered_image_index: u32, // unused by track rays, matches FrustumUniforms layout
+    near: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -35,11 +39,35 @@ struct VertexOutput {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     let is_b = in.corner.x > 0.0;
-    let world_pos = select(in.endpoint_a, in.endpoint_b, is_b);
 
-    // Project both endpoints to clip space
-    let clip_a = uniforms.view_proj * vec4<f32>(in.endpoint_a, 1.0);
-    let clip_b = uniforms.view_proj * vec4<f32>(in.endpoint_b, 1.0);
+    // Clip the edge against the near plane in view space before the manual
+    // perspective divide. See frustum.wgsl for a full explanation.
+    let near_z = -uniforms.near;
+    let view_a_z = (uniforms.view * vec4<f32>(in.endpoint_a, 1.0)).z;
+    let view_b_z = (uniforms.view * vec4<f32>(in.endpoint_b, 1.0)).z;
+    let a_in_front = view_a_z < near_z;
+    let b_in_front = view_b_z < near_z;
+
+    if !a_in_front && !b_in_front {
+        var out: VertexOutput;
+        out.clip_pos = vec4<f32>(0.0, 0.0, 0.0, -1.0);
+        out.perp_coord = 0.0;
+        return out;
+    }
+
+    var world_a = in.endpoint_a;
+    var world_b = in.endpoint_b;
+    if !a_in_front {
+        let t = (near_z - view_a_z) / (view_b_z - view_a_z);
+        world_a = mix(world_a, world_b, t);
+    } else if !b_in_front {
+        let t = (near_z - view_a_z) / (view_b_z - view_a_z);
+        world_b = mix(world_a, world_b, t);
+    }
+
+    // Project both endpoints to clip space (both now have clip.w > 0)
+    let clip_a = uniforms.view_proj * vec4<f32>(world_a, 1.0);
+    let clip_b = uniforms.view_proj * vec4<f32>(world_b, 1.0);
     let clip_pos = select(clip_a, clip_b, is_b);
 
     // Compute edge direction in NDC for perpendicular expansion

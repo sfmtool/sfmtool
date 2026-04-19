@@ -695,7 +695,7 @@ fn compute_observation_metrics(
 }
 
 /// Compute the maximum angle (in degrees) between any pair of world-space rays.
-fn compute_max_pairwise_angle(rays: &[[f64; 3]]) -> f32 {
+pub(crate) fn compute_max_pairwise_angle(rays: &[[f64; 3]]) -> f32 {
     let mut min_dot = 1.0f64;
     for i in 0..rays.len() {
         for j in (i + 1)..rays.len() {

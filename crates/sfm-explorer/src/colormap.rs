@@ -3,8 +3,10 @@
 
 //! Colormap utilities for heatmap visualization.
 //!
-//! Maps scalar values to RGB colors using piecewise-linear colormaps,
-//! matching the Python `visualization/_colormap.py` definitions.
+//! Maps scalar values to RGB colors using piecewise-linear colormaps.
+//! The `error` colormap matches Python's `visualization/_colormap.py`;
+//! the `quality` colormap is a GUI-only variant so track length and
+//! max track angle share the same red→yellow→green encoding.
 
 /// A colormap defined by control points (position, r, g, b).
 /// Positions are in [0, 1], colors are in [0, 255].
@@ -45,14 +47,12 @@ const ERROR_COLORMAP: Colormap = Colormap {
     stops: &[(0.0, 0, 200, 0), (0.5, 255, 255, 0), (1.0, 255, 0, 0)],
 };
 
-/// Track length colormap: blue (few observations) -> cyan -> yellow -> red (many).
-const TRACKS_COLORMAP: Colormap = Colormap {
-    stops: &[
-        (0.0, 0, 0, 255),
-        (0.33, 0, 200, 200),
-        (0.66, 200, 200, 0),
-        (1.0, 255, 50, 50),
-    ],
+/// Quality colormap: red (low/bad) -> yellow -> green (high/good).
+/// Inverse of ERROR_COLORMAP — used for metrics where higher is better
+/// (track length, max track angle). Shared so visually comparable metrics
+/// use the same encoding.
+const QUALITY_COLORMAP: Colormap = Colormap {
+    stops: &[(0.0, 255, 0, 0), (0.5, 255, 255, 0), (1.0, 0, 200, 0)],
 };
 
 /// Map a reprojection error value to a color.
@@ -74,7 +74,18 @@ pub fn track_length_color(value: f32, vmin: f32, vmax: f32) -> egui::Color32 {
     } else {
         (value - vmin) / (vmax - vmin)
     };
-    TRACKS_COLORMAP.sample(t)
+    QUALITY_COLORMAP.sample(t)
+}
+
+/// Map a max track angle (degrees) to a color.
+/// `vmin` and `vmax` define the range (values outside are clamped).
+pub fn max_track_angle_color(value: f32, vmin: f32, vmax: f32) -> egui::Color32 {
+    let t = if (vmax - vmin).abs() < 1e-9 {
+        0.5
+    } else {
+        (value - vmin) / (vmax - vmin)
+    };
+    QUALITY_COLORMAP.sample(t)
 }
 
 /// Draw a vertical colorbar legend on the painter.

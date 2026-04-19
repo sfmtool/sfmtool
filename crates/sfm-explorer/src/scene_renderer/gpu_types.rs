@@ -106,6 +106,11 @@ pub(super) struct FrustumUniforms {
     pub line_half_width: f32,
     /// Index of the hovered image (0xFFFFFFFF = no hover).
     pub hovered_image_index: u32,
+    /// Near clip plane distance. Used by the shader to clip line segments
+    /// in view space before the manual perspective divide, so endpoints
+    /// behind the camera don't flip sign and launch ribbons across the screen.
+    pub near: f32,
+    pub _pad: [f32; 3],
 }
 
 #[repr(C)]

@@ -24,14 +24,20 @@ pub enum OverlayMode {
     ReprojError,
     /// Colored circles by track length (observation count).
     TrackLength,
+    /// Colored circles by the max pairwise angle (degrees) between
+    /// world-space rays from observing cameras to the 3D point, i.e. the
+    /// track's widest triangulation baseline. High = well-triangulated,
+    /// low = unreliable.
+    MaxTrackAngle,
 }
 
 impl OverlayMode {
-    pub const ALL: [OverlayMode; 4] = [
+    pub const ALL: [OverlayMode; 5] = [
         OverlayMode::None,
         OverlayMode::Features,
         OverlayMode::ReprojError,
         OverlayMode::TrackLength,
+        OverlayMode::MaxTrackAngle,
     ];
 
     pub fn label(self) -> &'static str {
@@ -40,6 +46,7 @@ impl OverlayMode {
             OverlayMode::Features => "Features",
             OverlayMode::ReprojError => "Reproj Error",
             OverlayMode::TrackLength => "Track Length",
+            OverlayMode::MaxTrackAngle => "Max Track Angle",
         }
     }
 }

@@ -62,6 +62,8 @@ impl SceneRenderer {
                 screen_size: [w as f32, h as f32],
                 line_half_width: FRUSTUM_LINE_HALF_WIDTH,
                 hovered_image_index: hovered_image.map(|i| i as u32).unwrap_or(0xFFFFFFFF),
+                near: camera.near as f32,
+                _pad: [0.0; 3],
             };
 
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
@@ -130,6 +132,8 @@ impl SceneRenderer {
             screen_size: [w as f32, h as f32],
             line_half_width: 1.5,
             hovered_image_index: 0xFFFFFFFF, // no hover for track rays
+            near: camera.near as f32,
+            _pad: [0.0; 3],
         };
         queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
     }

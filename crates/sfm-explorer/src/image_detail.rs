@@ -55,6 +55,10 @@ struct DisplayFeature {
     affine_shape: [[f32; 2]; 2],
     /// The 3D point index this feature maps to, or `u32::MAX` if untracked.
     point_index: u32,
+    /// Max pairwise angle (degrees) between observing rays for this feature's
+    /// 3D point — the track's widest triangulation baseline. NaN for untracked
+    /// features or when not populated.
+    max_track_angle_deg: f32,
 }
 
 impl DisplayFeature {
@@ -530,6 +534,41 @@ impl ImageDetail {
                         colormap::track_length_color,
                     );
                 }
+                OverlayMode::MaxTrackAngle => {
+                    let (vmin, vmax) = compute_max_track_angle_range(features);
+                    for feature in features {
+                        if !feature.is_tracked() || !feature.max_track_angle_deg.is_finite() {
+                            continue;
+                        }
+                        let center = image_to_panel(feature.position[0], feature.position[1]);
+                        if !panel_rect.expand(10.0).contains(center) {
+                            continue;
+                        }
+                        let is_selected = selected_point == Some(feature.point_index as usize);
+                        let color = colormap::max_track_angle_color(
+                            feature.max_track_angle_deg,
+                            vmin,
+                            vmax,
+                        );
+                        let radius = 5.0;
+                        painter.circle_filled(center, radius, color);
+                        if is_selected {
+                            painter.circle_stroke(
+                                center,
+                                radius + 2.0,
+                                egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                            );
+                        }
+                    }
+                    colormap::draw_colorbar(
+                        &painter,
+                        panel_rect,
+                        "Max Track Angle (°)",
+                        vmin,
+                        vmax,
+                        colormap::max_track_angle_color,
+                    );
+                }
             }
 
             // Hit testing for feature clicks (only tracked features)
@@ -587,10 +626,19 @@ impl ImageDetail {
                                 .get(point_idx)
                                 .copied()
                                 .unwrap_or(0);
-                            format!(
+                            let max_track_angle = features
+                                .iter()
+                                .find(|f| f.point_index as usize == point_idx)
+                                .map(|f| f.max_track_angle_deg)
+                                .unwrap_or(f32::NAN);
+                            let mut text = format!(
                                 "Point3D #{point_idx} | err: {:.3}px | tracklen: {obs_count}",
                                 pt.error
-                            )
+                            );
+                            if max_track_angle.is_finite() {
+                                text.push_str(&format!(" | max angle: {max_track_angle:.2}°"));
+                            }
+                            text
                         } else {
                             format!("Point3D #{point_idx}")
                         };
@@ -677,6 +725,7 @@ impl ImageDetail {
                     position: cached.positions_xy[fi],
                     affine_shape: cached.affine_shapes[fi],
                     point_index: point_idx,
+                    max_track_angle_deg: f32::NAN,
                 });
             }
         }
@@ -772,7 +821,20 @@ impl ImageDetail {
                 position: cached.positions_xy[i],
                 affine_shape: cached.affine_shapes[i],
                 point_index,
+                max_track_angle_deg: f32::NAN,
             });
+        }
+
+        // Populate max track angles only when needed. Computing for every
+        // tracked feature iterates that point's observations, so we pay the
+        // cost only when the overlay will consume it.
+        if settings.overlay_mode == OverlayMode::MaxTrackAngle {
+            for feature in features.iter_mut() {
+                if feature.is_tracked() {
+                    feature.max_track_angle_deg =
+                        compute_max_track_angle_deg(recon, feature.point_index as usize);
+                }
+            }
         }
 
         let mut tree = kiddo::KdTree::<f32, 2>::new();
@@ -930,6 +992,56 @@ fn compute_error_range(features: &[DisplayFeature], recon: &SfmrReconstruction) 
     } else {
         (vmin, vmax)
     }
+}
+
+/// Compute the max-track-angle range (degrees) across tracked features.
+fn compute_max_track_angle_range(features: &[DisplayFeature]) -> (f32, f32) {
+    let mut vmin = f32::MAX;
+    let mut vmax = f32::MIN;
+    for feature in features {
+        if !feature.is_tracked() {
+            continue;
+        }
+        let v = feature.max_track_angle_deg;
+        if v.is_finite() {
+            vmin = vmin.min(v);
+            vmax = vmax.max(v);
+        }
+    }
+    if vmin > vmax {
+        (0.0, 1.0)
+    } else if (vmax - vmin).abs() < 1e-6 {
+        (vmin - 0.5, vmax + 0.5)
+    } else {
+        (vmin, vmax)
+    }
+}
+
+/// Compute the max pairwise angle (degrees) between world-space rays from
+/// observing cameras to a 3D point. Single-observation points return 0.0.
+fn compute_max_track_angle_deg(recon: &SfmrReconstruction, point_idx: usize) -> f32 {
+    let Some(pt) = recon.points.get(point_idx) else {
+        return f32::NAN;
+    };
+    let point_pos = pt.position;
+    let observations = recon.observations_for_point(point_idx);
+    let mut world_rays: Vec<[f64; 3]> = Vec::with_capacity(observations.len());
+    for obs in observations {
+        let img_idx = obs.image_index as usize;
+        let Some(image) = recon.images.get(img_idx) else {
+            continue;
+        };
+        let cam_center = image.camera_center();
+        let dir = point_pos - cam_center;
+        let len = (dir.x * dir.x + dir.y * dir.y + dir.z * dir.z).sqrt();
+        if len > 1e-12 {
+            world_rays.push([dir.x / len, dir.y / len, dir.z / len]);
+        }
+    }
+    if world_rays.len() < 2 {
+        return 0.0;
+    }
+    crate::point_track_detail::compute_max_pairwise_angle(&world_rays)
 }
 
 /// Compute the track length (observation count) range for tracked features.

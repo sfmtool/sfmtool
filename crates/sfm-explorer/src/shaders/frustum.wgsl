@@ -14,6 +14,10 @@ struct FrustumUniforms {
     screen_size: vec2<f32>,
     line_half_width: f32,
     hovered_image_index: u32,
+    near: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: FrustumUniforms;
@@ -42,11 +46,45 @@ struct VertexOutput {
 fn vs_main(in: VertexInput) -> VertexOutput {
     // Select which endpoint this vertex belongs to
     let is_b = in.corner.x > 0.0;
-    let world_pos = select(in.endpoint_a, in.endpoint_b, is_b);
 
-    // Project both endpoints to clip space
-    let clip_a = uniforms.view_proj * vec4<f32>(in.endpoint_a, 1.0);
-    let clip_b = uniforms.view_proj * vec4<f32>(in.endpoint_b, 1.0);
+    // Clip the edge against the near plane in view space before the manual
+    // perspective divide below. Without this, an endpoint behind the view
+    // camera has clip.w < 0; dividing by that flips the NDC sign and the
+    // ribbon expansion goes off in a random direction, producing long lines
+    // that appear to shoot across the screen.
+    let near_z = -uniforms.near;
+    let view_a_z = (uniforms.view * vec4<f32>(in.endpoint_a, 1.0)).z;
+    let view_b_z = (uniforms.view * vec4<f32>(in.endpoint_b, 1.0)).z;
+    let a_in_front = view_a_z < near_z;
+    let b_in_front = view_b_z < near_z;
+
+    // Both endpoints behind the near plane: emit a vertex with w < 0 so the
+    // hardware clipper discards the whole ribbon.
+    if !a_in_front && !b_in_front {
+        var out: VertexOutput;
+        out.clip_pos = vec4<f32>(0.0, 0.0, 0.0, -1.0);
+        out.color = vec3<f32>(0.0);
+        out.alpha = 0.0;
+        out.frustum_index = in.frustum_index;
+        return out;
+    }
+
+    // Replace the behind-camera endpoint with the segment's intersection
+    // with the near plane. The view transform is rigid, so view-space z is
+    // linear along the segment and the same t applies in world space.
+    var world_a = in.endpoint_a;
+    var world_b = in.endpoint_b;
+    if !a_in_front {
+        let t = (near_z - view_a_z) / (view_b_z - view_a_z);
+        world_a = mix(world_a, world_b, t);
+    } else if !b_in_front {
+        let t = (near_z - view_a_z) / (view_b_z - view_a_z);
+        world_b = mix(world_a, world_b, t);
+    }
+
+    // Project both endpoints to clip space (both now have clip.w > 0)
+    let clip_a = uniforms.view_proj * vec4<f32>(world_a, 1.0);
+    let clip_b = uniforms.view_proj * vec4<f32>(world_b, 1.0);
     let clip_pos = select(clip_a, clip_b, is_b);
 
     // Compute edge direction in NDC for perpendicular expansion

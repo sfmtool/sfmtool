@@ -318,6 +318,10 @@ See [gui-camera-views.md](gui-camera-views.md#viewing-through-a-camera)
 for the full camera view specification including FOV best-fit, background
 image rendering, and `,`/`.` navigation between cameras.
 
+Outside camera view, `,`/`.` still step through images by moving the
+selected image back/forward (wrapping at the ends); the 3D viewport stays
+put and only the selection changes.
+
 ## Rendering Details
 
 ### Near-Plane Line Clipping
@@ -636,7 +640,7 @@ in Houdini (Space+Z), CloudCompare (Pick Rotation Center), and Potree/RealityCap
 - [x] Tilt / roll (`world_up` modification via Q/E)
 - [x] FOV based on shorter viewport dimension (see [FOV and aspect ratio](#fov-and-aspect-ratio))
 - [x] View through selected camera (Z with frustum selected)
-- [x] Camera image navigation (`,`/`.` to step through cameras in camera view mode)
+- [x] Image navigation (`,`/`.` to step through images: switches viewed camera in camera view mode, otherwise just moves the selection)
 - [ ] Mouse-drag binding for tilt/roll (open question — Ctrl+drag? See [Tilt / Roll](#tilt--roll))
 - [x] Animated target transitions (slerp + ease-in/ease-out over ~200ms on Alt+click)
 - [x] Target indicator redesign: 3D compass shape with filled star rose showing `world_up` (see [Activation and Visual Feedback](#activation-and-visual-feedback))

@@ -52,9 +52,11 @@ The core 3D viewer is working with these features implemented:
 - FOV menu slider (10°–120°) with min-dimension FOV convention
 - View through selected camera (Z key: pose + best-fit FOV from intrinsics)
 - Full-resolution background image in camera view mode (pinhole + distorted)
-- `,`/`.` keys to navigate between cameras in camera view mode
+- `,`/`.` keys to step through images: in camera view mode they switch the
+  viewed camera; otherwise they move the selected image without moving the
+  3D viewport
 - Single 3D point selection with track visualization (Phase A complete)
-- Image detail feature overlay modes (None, Features, Reproj Error, Track Length)
+- Image detail feature overlay modes (None, Features, Reproj Error, Track Length, Max Track Angle)
 - Feature filtering controls (max features, min/max size, tracked only)
 - Colorbar legend for heatmap overlay modes
 
