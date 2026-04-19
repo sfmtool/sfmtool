@@ -612,4 +612,33 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    // Every entry in a .sfmr archive MUST use ZIP's STORE method. Entries are already
+    // zstandard-compressed; applying ZIP-level DEFLATE would double-compress and break
+    // the spec guarantee of random access via simple seek.
+    #[test]
+    fn test_archive_uses_stored_compression() {
+        let mut data = make_test_data();
+        let dir = std::env::temp_dir().join("sfmr_test_stored_compression");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sfmr");
+
+        write_sfmr(&path, &mut data).unwrap();
+
+        let file = std::fs::File::open(&path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        assert!(archive.len() > 10, "expected a populated archive");
+        for i in 0..archive.len() {
+            let entry = archive.by_index(i).unwrap();
+            assert_eq!(
+                entry.compression(),
+                zip::CompressionMethod::Stored,
+                "entry '{}' uses {:?}, expected Stored",
+                entry.name(),
+                entry.compression(),
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
