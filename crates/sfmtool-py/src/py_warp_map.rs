@@ -9,6 +9,8 @@ use pyo3::prelude::*;
 use sfmtool_core::remap::{remap_aniso, remap_bilinear, ImageU8};
 use sfmtool_core::warp_map::WarpMap;
 
+use crate::py_rigid_transform::PyRigidTransform;
+use crate::py_rot_quaternion::PyRotQuaternion;
 use crate::PyCameraIntrinsics;
 
 /// A dense pixel coordinate map for image warping.
@@ -50,6 +52,71 @@ impl PyWarpMap {
     #[pyo3(signature = (src, dst))]
     fn from_cameras(src: &PyCameraIntrinsics, dst: &PyCameraIntrinsics) -> Self {
         let inner = WarpMap::from_cameras(&src.inner, &dst.inner);
+        Self { inner }
+    }
+
+    /// Build a warp map that assumes the scene is infinitely far away.
+    ///
+    /// For each dst pixel center, rotates the corresponding dst ray into
+    /// src-camera coordinates (via ``rot_src_from_dst``) and projects. Only
+    /// the relative rotation between the two cameras affects the result;
+    /// any translation between them is ignored.
+    ///
+    /// Passing an identity quaternion is equivalent to ``from_cameras``.
+    ///
+    /// Args:
+    ///     src: Source (input) camera intrinsics.
+    ///     dst: Destination (output) camera intrinsics.
+    ///     rot_src_from_dst: Rotation that takes a ray from the dst-camera
+    ///         frame into the src-camera frame.
+    #[staticmethod]
+    #[pyo3(signature = (src, dst, rot_src_from_dst))]
+    fn from_cameras_with_rotation(
+        src: &PyCameraIntrinsics,
+        dst: &PyCameraIntrinsics,
+        rot_src_from_dst: &PyRotQuaternion,
+    ) -> Self {
+        let inner =
+            WarpMap::from_cameras_with_rotation(&src.inner, &dst.inner, &rot_src_from_dst.inner);
+        Self { inner }
+    }
+
+    /// Build a warp map under the assumption that every dst ray hits a
+    /// scene point at radial distance ``depth`` from the dst camera centre.
+    ///
+    /// ``src_from_world`` and ``dst_from_world`` are world-to-camera
+    /// extrinsics, matching ``SfmrReconstruction.quaternions_wxyz`` and
+    /// ``SfmrReconstruction.translations`` conventions (i.e. they can be
+    /// constructed via ``RigidTransform.from_wxyz_translation(q, t)``).
+    ///
+    /// ``depth`` is radial distance (sphere radius), not z-depth, so the
+    /// method also works with equirectangular or fisheye destination
+    /// cameras. Passing ``float('inf')`` short-circuits to the
+    /// rotation-only path (the only pose component that still matters is
+    /// the relative rotation ``R_src * R_dst^T``).
+    ///
+    /// Args:
+    ///     src: Source (input) camera intrinsics.
+    ///     dst: Destination (output) camera intrinsics.
+    ///     src_from_world: World-to-src-camera pose.
+    ///     dst_from_world: World-to-dst-camera pose.
+    ///     depth: Scene radius in world units (may be ``float('inf')``).
+    #[staticmethod]
+    #[pyo3(signature = (src, dst, src_from_world, dst_from_world, depth))]
+    fn from_cameras_with_pose(
+        src: &PyCameraIntrinsics,
+        dst: &PyCameraIntrinsics,
+        src_from_world: &PyRigidTransform,
+        dst_from_world: &PyRigidTransform,
+        depth: f64,
+    ) -> Self {
+        let inner = WarpMap::from_cameras_with_pose(
+            &src.inner,
+            &dst.inner,
+            &src_from_world.inner,
+            &dst_from_world.inner,
+            depth,
+        );
         Self { inner }
     }
 

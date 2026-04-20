@@ -10,9 +10,12 @@
 //! [`WarpMapSvd`] stores the singular value decomposition of the local Jacobian
 //! at each pixel, useful for adaptive filtering during resampling.
 
+use nalgebra::{Matrix3, Vector3};
 use rayon::prelude::*;
 
 use crate::camera_intrinsics::CameraIntrinsics;
+use crate::rigid_transform::RigidTransform;
+use crate::rot_quaternion::RotQuaternion;
 
 /// A dense pixel-to-pixel warp map from a destination image to a source image.
 ///
@@ -105,6 +108,132 @@ impl WarpMap {
                     };
 
                     // Bounds check against source image.
+                    let (sx, sy) = if sx >= 0.0 && sy >= 0.0 && sx < src_w && sy < src_h {
+                        (sx, sy)
+                    } else {
+                        (f64::NAN, f64::NAN)
+                    };
+
+                    let idx = 2 * col as usize;
+                    row_data[idx] = sx as f32;
+                    row_data[idx + 1] = sy as f32;
+                }
+                row_data
+            })
+            .collect();
+
+        WarpMap {
+            width: dst_w,
+            height: dst_h,
+            data,
+            svd: None,
+        }
+    }
+
+    /// Build a warp map that assumes the scene is infinitely far away — only
+    /// the relative rotation between the two cameras affects the projection.
+    ///
+    /// For each destination pixel center `(col + 0.5, row + 0.5)`:
+    /// - `d_dst = dst_camera.pixel_to_ray(u, v)` (unit ray in dst-camera frame)
+    /// - `d_src = rot_src_from_dst * d_dst` (rotate into src-camera frame)
+    /// - `(sx, sy) = src_camera.ray_to_pixel(d_src)`
+    /// - Source coordinates outside `[0, src_w) x [0, src_h)` are stored as `(NaN, NaN)`.
+    ///
+    /// Passing the identity rotation recovers [`from_cameras`] (both code
+    /// paths project the same ray through the src camera).
+    ///
+    /// Rows are computed in parallel via rayon.
+    pub fn from_cameras_with_rotation(
+        src_camera: &CameraIntrinsics,
+        dst_camera: &CameraIntrinsics,
+        rot_src_from_dst: &RotQuaternion,
+    ) -> Self {
+        let r = rot_src_from_dst.to_rotation_matrix();
+        Self::build_with_pose_impl(src_camera, dst_camera, &r, None, f64::INFINITY)
+    }
+
+    /// Build a warp map under the assumption that every dst ray hits a point
+    /// at radial distance `depth` from the dst camera center.
+    ///
+    /// For each destination pixel center `(col + 0.5, row + 0.5)`:
+    /// - `d_dst = dst_camera.pixel_to_ray(u, v)` (unit ray in dst-camera frame)
+    /// - `p_dst = depth * d_dst` (point in dst-camera frame)
+    /// - `p_world = dst_from_world.inverse().transform(p_dst)`
+    /// - `p_src = src_from_world.transform(p_world)`
+    /// - `(sx, sy) = src_camera.ray_to_pixel(p_src)`
+    /// - Source coordinates outside `[0, src_w) x [0, src_h)`, or behind a
+    ///   perspective src camera, are stored as `(NaN, NaN)`.
+    ///
+    /// Passing `depth = f64::INFINITY` short-circuits to the
+    /// [`from_cameras_with_rotation`] path using only the relative rotation
+    /// `R_src * R_dst^T`.
+    ///
+    /// The formulation is collapsed to
+    /// `p_src = R_sd * p_dst + T_sd` where
+    /// `R_sd = R_sw * R_dw^T` and `T_sd = t_sw - R_sd * t_dw`,
+    /// so the math involves exactly one 3x3 matrix multiply and one vector
+    /// add per dst pixel — no inverse, no small-angle approximation.
+    ///
+    /// Rows are computed in parallel via rayon.
+    pub fn from_cameras_with_pose(
+        src_camera: &CameraIntrinsics,
+        dst_camera: &CameraIntrinsics,
+        src_from_world: &RigidTransform,
+        dst_from_world: &RigidTransform,
+        depth: f64,
+    ) -> Self {
+        let r_sw = src_from_world.to_rotation_matrix();
+        let r_dw = dst_from_world.to_rotation_matrix();
+        let r_sd = r_sw * r_dw.transpose();
+
+        if !depth.is_finite() {
+            return Self::build_with_pose_impl(src_camera, dst_camera, &r_sd, None, depth);
+        }
+
+        let t_sd = src_from_world.translation - r_sd * dst_from_world.translation;
+        Self::build_with_pose_impl(src_camera, dst_camera, &r_sd, Some(t_sd), depth)
+    }
+
+    /// Shared implementation for the pose-aware constructors.
+    ///
+    /// When `t_sd` is `None` the map is built from rays only (the depth is
+    /// either infinite or irrelevant). When `t_sd` is `Some`, each dst ray is
+    /// traced to `depth * d_dst` in dst-camera frame, then transformed to
+    /// src-camera frame as `R_sd * p_dst + t_sd`.
+    fn build_with_pose_impl(
+        src_camera: &CameraIntrinsics,
+        dst_camera: &CameraIntrinsics,
+        r_sd: &Matrix3<f64>,
+        t_sd: Option<Vector3<f64>>,
+        depth: f64,
+    ) -> Self {
+        let dst_w = dst_camera.width;
+        let dst_h = dst_camera.height;
+        let src_w = src_camera.width as f64;
+        let src_h = src_camera.height as f64;
+        let row_len = 2 * dst_w as usize;
+
+        let data: Vec<f32> = (0..dst_h)
+            .into_par_iter()
+            .flat_map(|row| {
+                let mut row_data = vec![0.0f32; row_len];
+                let v = row as f64 + 0.5;
+                for col in 0..dst_w {
+                    let u = col as f64 + 0.5;
+                    let d_dst = dst_camera.pixel_to_ray(u, v);
+                    let d_dst_vec = Vector3::new(d_dst[0], d_dst[1], d_dst[2]);
+
+                    let p_src_vec = match t_sd {
+                        Some(t) => r_sd * (depth * d_dst_vec) + t,
+                        None => r_sd * d_dst_vec,
+                    };
+                    let ray_src = [p_src_vec.x, p_src_vec.y, p_src_vec.z];
+
+                    let (sx, sy) = match src_camera.ray_to_pixel(ray_src) {
+                        Some((px, py)) => (px, py),
+                        None => (f64::NAN, f64::NAN),
+                    };
+
                     let (sx, sy) = if sx >= 0.0 && sy >= 0.0 && sx < src_w && sy < src_h {
                         (sx, sy)
                     } else {
@@ -676,5 +805,288 @@ mod tests {
         let (s1, s2, _, _) = svd_2x2(angle.cos(), -angle.sin(), angle.sin(), angle.cos());
         assert!((s1 - 1.0).abs() < 1e-5, "s1 = {s1}");
         assert!((s2 - 1.0).abs() < 1e-5, "s2 = {s2}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Pose-aware constructors
+    // -----------------------------------------------------------------------
+
+    /// Compare two warp maps pixel-by-pixel with a per-pixel tolerance.
+    ///
+    /// Both maps are required to agree on which pixels are valid (NaN vs not).
+    fn assert_maps_equal(a: &WarpMap, b: &WarpMap, tol: f32) {
+        assert_eq!(a.width(), b.width());
+        assert_eq!(a.height(), b.height());
+        for row in 0..a.height() {
+            for col in 0..a.width() {
+                let va = a.is_valid(col, row);
+                let vb = b.is_valid(col, row);
+                assert_eq!(va, vb, "validity mismatch at ({col}, {row})");
+                if !va {
+                    continue;
+                }
+                let (ax, ay) = a.get(col, row);
+                let (bx, by) = b.get(col, row);
+                let err = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+                assert!(
+                    err < tol,
+                    "mismatch at ({col},{row}): ({ax},{ay}) vs ({bx},{by}), err={err}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn from_cameras_with_rotation_identity_matches_from_cameras() {
+        // rotation-aware with identity rotation must equal the baseline.
+        let src = pinhole(64, 48, 100.0);
+        let dst = pinhole(64, 48, 100.0);
+
+        let baseline = WarpMap::from_cameras(&src, &dst);
+        let rotated = WarpMap::from_cameras_with_rotation(&src, &dst, &RotQuaternion::identity());
+
+        assert_maps_equal(&baseline, &rotated, 1e-4);
+    }
+
+    #[test]
+    fn from_cameras_with_rotation_identity_matches_from_cameras_equirect() {
+        // Same invariance must hold for equirectangular / fisheye, which go
+        // through the ray-based path.
+        let src = simple_radial_fisheye(200, 200, 100.0, 0.0);
+        let dst = equirectangular(400, 200);
+
+        let baseline = WarpMap::from_cameras(&src, &dst);
+        let rotated = WarpMap::from_cameras_with_rotation(&src, &dst, &RotQuaternion::identity());
+
+        assert_maps_equal(&baseline, &rotated, 1e-3);
+    }
+
+    #[test]
+    fn from_cameras_with_pose_infinity_matches_rotation_only() {
+        // With depth = +INF the translation drops out of the formulation.
+        let src = pinhole(64, 48, 100.0);
+        let dst = pinhole(64, 48, 100.0);
+
+        let rot = RotQuaternion::from_axis_angle(Vector3::new(0.0, 1.0, 0.0), 0.2).unwrap();
+        let src_from_world = RigidTransform::new(rot.clone(), Vector3::new(0.5, -0.2, 3.0));
+        let dst_from_world =
+            RigidTransform::new(RotQuaternion::identity(), Vector3::new(-0.1, 0.3, 2.5));
+        // Relative rotation from dst-frame to src-frame: R_sw * R_dw^T.
+        let r_sd_mat =
+            src_from_world.to_rotation_matrix() * dst_from_world.to_rotation_matrix().transpose();
+        let r_sd = RotQuaternion::from_rotation_matrix(r_sd_mat);
+
+        let pose_inf = WarpMap::from_cameras_with_pose(
+            &src,
+            &dst,
+            &src_from_world,
+            &dst_from_world,
+            f64::INFINITY,
+        );
+        let rot_only = WarpMap::from_cameras_with_rotation(&src, &dst, &r_sd);
+        assert_maps_equal(&pose_inf, &rot_only, 1e-3);
+    }
+
+    #[test]
+    fn from_cameras_with_pose_coincident_pose_matches_from_cameras() {
+        // If src and dst cameras sit at the same world pose, the pose
+        // construction must agree with from_cameras (scene points on the
+        // radius-r sphere around dst land in the same place in src).
+        let src = pinhole(64, 48, 100.0);
+        let dst = pinhole(64, 48, 100.0);
+
+        let pose = RigidTransform::new(
+            RotQuaternion::from_axis_angle(Vector3::new(1.0, 0.5, 0.2), 0.4).unwrap(),
+            Vector3::new(2.0, -1.0, 0.5),
+        );
+
+        let baseline = WarpMap::from_cameras(&src, &dst);
+        let posed = WarpMap::from_cameras_with_pose(&src, &dst, &pose, &pose, 5.0);
+        assert_maps_equal(&baseline, &posed, 1e-2);
+    }
+
+    #[test]
+    fn from_cameras_with_pose_known_depth_synthetic_sphere() {
+        // Synthetic "scene" = a sphere of radius R centered at dst camera.
+        // Every dst pixel center traces a ray hitting a point on that sphere.
+        // When we transform that point into src coordinates and project, we
+        // should get a pixel which is in-bounds and matches the warp exactly.
+        let src = pinhole(160, 120, 200.0);
+        let dst = pinhole(160, 120, 200.0);
+
+        let src_from_world = RigidTransform::new(
+            RotQuaternion::from_axis_angle(Vector3::new(0.1, 1.0, 0.05), 0.15).unwrap(),
+            Vector3::new(0.5, 0.0, 0.0),
+        );
+        let dst_from_world = RigidTransform::new(
+            RotQuaternion::from_axis_angle(Vector3::new(0.0, 1.0, 0.1), -0.05).unwrap(),
+            Vector3::new(0.0, 0.0, 0.0),
+        );
+        let radius = 10.0_f64;
+
+        let warp =
+            WarpMap::from_cameras_with_pose(&src, &dst, &src_from_world, &dst_from_world, radius);
+
+        // Precompute R_sd and T_sd just like the implementation does.
+        let r_sw = src_from_world.to_rotation_matrix();
+        let r_dw = dst_from_world.to_rotation_matrix();
+        let r_sd = r_sw * r_dw.transpose();
+        let t_sd = src_from_world.translation - r_sd * dst_from_world.translation;
+
+        // Spot-check the middle 80% of pixels — edges may miss src bounds.
+        let w = warp.width();
+        let h = warp.height();
+        let mut checked = 0usize;
+        for row in (h / 10)..(9 * h / 10) {
+            for col in (w / 10)..(9 * w / 10) {
+                if !warp.is_valid(col, row) {
+                    continue;
+                }
+                let u = col as f64 + 0.5;
+                let v = row as f64 + 0.5;
+                let d_dst = dst.pixel_to_ray(u, v);
+                let d_dst_vec = Vector3::new(d_dst[0], d_dst[1], d_dst[2]);
+                let p_dst = radius * d_dst_vec;
+                let p_src = r_sd * p_dst + t_sd;
+                let (exp_x, exp_y) = src.ray_to_pixel([p_src.x, p_src.y, p_src.z]).unwrap();
+
+                let (gx, gy) = warp.get(col, row);
+                assert!(
+                    (gx as f64 - exp_x).abs() < 1e-3,
+                    "x mismatch at ({col},{row}): got {gx}, expected {exp_x}"
+                );
+                assert!(
+                    (gy as f64 - exp_y).abs() < 1e-3,
+                    "y mismatch at ({col},{row}): got {gy}, expected {exp_y}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 100, "too few pixels in-bounds: {checked}");
+    }
+
+    #[test]
+    fn from_cameras_with_pose_baseline_comparable_to_depth() {
+        // Spec: at r ≈ B_max, a small-angle approximation (rotation-only,
+        // ignoring translation) errs by noticeable amounts. The exact ray
+        // formula must still be pixel-accurate. We construct a synthetic
+        // scene on a sphere and verify the two formulations disagree.
+
+        let cam = pinhole(320, 240, 300.0);
+        // Baseline = 0.3, depth = 1.0: comparable scale, but mild enough that
+        // most pixels still project inside the image. The small-angle approx
+        // (rotation-only) disagrees with the exact formulation by many
+        // pixels under these conditions.
+        let src_from_world =
+            RigidTransform::new(RotQuaternion::identity(), Vector3::new(0.3, 0.0, 0.0));
+        let dst_from_world =
+            RigidTransform::new(RotQuaternion::identity(), Vector3::new(0.0, 0.0, 0.0));
+        let radius = 1.0_f64;
+
+        let exact =
+            WarpMap::from_cameras_with_pose(&cam, &cam, &src_from_world, &dst_from_world, radius);
+        // The rotation-only (infinite-depth) approximation ignores the
+        // translation entirely — it should be obviously wrong here.
+        let approx = WarpMap::from_cameras_with_rotation(&cam, &cam, &RotQuaternion::identity());
+
+        // Find the maximum error between the two maps across valid pixels.
+        let mut max_err_sq = 0.0_f32;
+        let mut counted = 0usize;
+        for row in (cam.height / 4)..(3 * cam.height / 4) {
+            for col in (cam.width / 4)..(3 * cam.width / 4) {
+                if !exact.is_valid(col, row) || !approx.is_valid(col, row) {
+                    continue;
+                }
+                let (ax, ay) = exact.get(col, row);
+                let (bx, by) = approx.get(col, row);
+                let err_sq = (ax - bx).powi(2) + (ay - by).powi(2);
+                if err_sq > max_err_sq {
+                    max_err_sq = err_sq;
+                }
+                counted += 1;
+            }
+        }
+        assert!(counted > 100);
+        let max_err = max_err_sq.sqrt();
+        // Sanity: the approximation should be off by many pixels. If the two
+        // agreed to <0.1 px we'd know one of the two was silently ignoring
+        // its inputs.
+        assert!(
+            max_err > 5.0,
+            "rotation-only approximation should disagree with exact; got max_err={max_err} px",
+        );
+
+        // Cross-check the exact map against a hand-computed reprojection at
+        // the centre pixel. src_from_world.translation = (0.3, 0, 0) means
+        // src camera sits at world (-0.3, 0, 0). Ray from dst centre is
+        // (0, 0, 1); at depth 1 it lands at world point (0, 0, 1). In src
+        // frame: p_src = R_sw * p_w + t_sw = (0, 0, 1) + (0.3, 0, 0)
+        // = (0.3, 0, 1), which projects to pixel (cx + 0.3*f, cy) =
+        // (160 + 90, 120) = (250, 120).
+        let cx = cam.width / 2;
+        let cy = cam.height / 2;
+        assert!(exact.is_valid(cx, cy));
+        let (gx, gy) = exact.get(cx, cy);
+        // Allow ±1 px since (cx, cy) is the integer pixel index and the
+        // ray traces from the pixel centre at (cx + 0.5, cy + 0.5).
+        assert!(
+            (gx - 250.5).abs() < 1.0,
+            "centre sx = {gx}, expected ~250.5"
+        );
+        assert!(
+            (gy - 120.5).abs() < 1.0,
+            "centre sy = {gy}, expected ~120.5"
+        );
+
+        // The rotation-only approximation at the same pixel is the identity
+        // map: pixel centre (160.5, 120.5).
+        let (ax, ay) = approx.get(cx, cy);
+        assert!((ax - 160.5).abs() < 0.5);
+        assert!((ay - 120.5).abs() < 0.5);
+        let center_err = ((gx - ax).powi(2) + (gy - ay).powi(2)).sqrt();
+        assert!(
+            center_err > 50.0,
+            "rotation-only vs exact must disagree by many pixels; got {center_err}"
+        );
+    }
+
+    #[test]
+    fn from_cameras_with_pose_svd_still_works() {
+        // compute_svd must work identically on a pose-built map.
+        let src = pinhole(64, 48, 100.0);
+        let dst = pinhole(64, 48, 100.0);
+        let src_from_world = RigidTransform::new(
+            RotQuaternion::from_axis_angle(Vector3::new(0.0, 1.0, 0.0), 0.05).unwrap(),
+            Vector3::new(0.02, 0.0, 0.0),
+        );
+        let dst_from_world = RigidTransform::identity();
+        let mut warp =
+            WarpMap::from_cameras_with_pose(&src, &dst, &src_from_world, &dst_from_world, 100.0);
+        assert!(!warp.has_svd());
+        warp.compute_svd();
+        assert!(warp.has_svd());
+
+        // Singular values must be finite and positive somewhere away from
+        // the boundary.
+        let svd = warp.svd().unwrap();
+        let idx = (24 * 64 + 32) as usize;
+        assert!(svd.sigma_major[idx].is_finite() && svd.sigma_major[idx] > 0.0);
+        assert!(svd.sigma_minor[idx].is_finite() && svd.sigma_minor[idx] > 0.0);
+    }
+
+    #[test]
+    fn from_cameras_with_pose_equirect_dst() {
+        // Equirectangular dst: every ray is valid and all pixels with a
+        // proper src projection should be in-bounds.
+        let src = pinhole(200, 200, 100.0);
+        let dst = equirectangular(400, 200);
+        let pose = RigidTransform::identity();
+
+        let warp = WarpMap::from_cameras_with_pose(&src, &dst, &pose, &pose, 1e6);
+
+        // Centre of equirect (forward) must be valid in src.
+        let cx = warp.width() / 2;
+        let cy = warp.height() / 2;
+        assert!(warp.is_valid(cx, cy));
     }
 }
