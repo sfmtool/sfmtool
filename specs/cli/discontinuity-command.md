@@ -23,9 +23,10 @@ with a corresponding SfM solution:
 1. **Image sequence analysis** — Uses optical flow between adjacent frames to find
    discontinuities in the raw data before any SfM processing.
 
-2. **Reconstruction analysis** — Starts from camera motion in a `.sfmr` file to find
-   pose discontinuities, with reprojection error and covisibility context. Optical flow
-   cross-check (Step 2) is designed but not yet wired into the output.
+2. **Reconstruction analysis** — Starts from a `.sfmr` file and combines four signals
+   to catch discontinuities: pose extrapolation errors, local step-size ratio,
+   covisibility drop across the edge, and per-image observation-count outliers.
+   Reprojection error and shared 3D point context are reported for each flagged edge.
 
 ## Definitions
 
@@ -266,22 +267,56 @@ Flag frames where either extrapolation error exceeds a threshold. Frames near th
 or end of a sequence that don't have three neighbors on one side use a shorter
 extrapolation window or are skipped.
 
-### Step 2: Optical Flow Cross-Check (Not Yet Implemented)
+### Step 2: Secondary Signals
 
-For each pose discontinuity found in Step 1, use the same adaptive stride flow analysis
-as image sequence mode: compute local and stride flow pairs around the flagged frame,
-build the global (u, v) histogram and spatial tile mean representations, and compare
-scaled local flow against stride flow.
+Pose extrapolation on its own misses subtle discontinuities because polynomial
+extrapolators silently absorb smooth scale or slope changes — a sequence that goes from
+"walking" to "slow pan" across one edge stays smooth at the pose level but has nothing
+covisible across the break. Three complementary signals catch these cases without
+depending on pose smoothness:
 
-If the flow representations are consistent across the flagged region (the scaled local
-histograms and tile means match the stride representations), the images are visually
-continuous and the pose discontinuity is suspect — it may be an SfM error. If the flow
-representations also show a discontinuity, it corroborates the pose analysis and suggests
-a real break in the data.
+**Step-size ratio (per edge).** For edge i → (i+1), take a window of `STEP_RATIO_WINDOW`
+edges on each side (default 8, excluding the edge itself). Let `m_pre` and `m_post` be
+the median step length `‖C_{k+1} − C_k‖` in the two windows. Flag the edge when
+`max(m_pre / m_post, m_post / m_pre) > STEP_RATIO_THRESHOLD` (default 1.5). Catches
+scale shifts where the camera's translational velocity changes abruptly. The test is
+two-tailed — it fires whether motion speeds up or slows down — unlike the pose-residual
+test which fires mostly on spikes.
 
-> **Status:** The infrastructure for this step exists (the adaptive stride flow code is
-> reusable from image sequence mode), but detailed per-edge flow histogram output is not
-> yet wired into the reconstruction analysis output.
+**Covisibility drop (per edge).** For edge i → (i+1), collect `P_pre` = union of 3D
+points observed across images [i − w + 1, i] and `P_post` = union across [i + 1, i + w],
+with `w = OVERLAP_WINDOW` (default 16). Compute the per-edge overlap ratio
+`cross = |P_pre ∩ P_post| / min(|P_pre|, |P_post|)`, then define the drop factor as
+`median(neighbor cross values) / cross`. Flag when the drop factor exceeds
+`OVERLAP_DROP_THRESHOLD` (default 1.8). Baseline neighbors are collected from a
+`OVERLAP_BASELINE_WINDOW` of ±24 edges around the candidate. A `cross` of 0 (no tracks
+survive the edge) yields an infinite drop factor and always flags. Robust to loop
+closure — revisits that inflate cross only suppress detection, never cause false
+positives.
+
+**Observation-count outlier (per frame).** Image i may be a "bridge frame" — motion
+blur, occlusion, brief tracking slip — if its track count drops well below the local
+norm. Using a symmetric rolling window of `OBS_WINDOW` frames (default 24) centered on
+i (excluding i itself), compute the MAD-based z-score
+`z = (nobs[i] − median) / (1.4826 · MAD)`. Flag frame i when `z < −OBS_Z_THRESHOLD`
+(default 2.5). Unlike the edge signals above, a frame-level obs outlier does **not**
+flag an edge on its own — a single dim image is often benign. Instead, obs flags attach
+to adjacent edges as endpoint context when those edges are already flagged by one of
+the other signals.
+
+**Combined rule.** An edge is reported as a discontinuity when any of the following
+fires: pose extrapolation (`L.t`, `L.r`, `R.t`, `R.r`), step-size ratio (`Step`), or
+covisibility drop (`Cov`). Clustering deduplicates adjacent edges in the same break.
+The output partitions discontinuities into:
+
+- **Single-signal (low confidence):** only one of {P, S, C} fired. Usually pose-only
+  hits on edges where a polynomial extrapolator mildly overshot.
+- **Multi-signal (high confidence):** two or more of {P, S, C} fired, or at least one
+  plus Obs context at an endpoint.
+
+Scale-shift discontinuities that the pose test misses (as in the KerryPark 831→832
+case) reliably trigger both Step and Cov simultaneously and show up as high-confidence
+hits.
 
 ### Step 3: Reprojection Error Context
 
@@ -297,11 +332,21 @@ discontinuity is an SfM error.
 
 ### Output
 
-- Per-sequence summary: sequence pattern, frame count.
-- Per-frame extrapolation errors (left and right).
-- Per-pair flow analysis: global histogram and tile mean comparisons.
-- Flagged discontinuities with pose and flow agreement/disagreement.
-- Reprojection error and covisibility context for flagged frames.
+- Header: threshold values for all four signals.
+- Per-sequence line: sequence pattern, frame count.
+- Per-frame table with columns: frame number, image name, left/right pose
+  extrapolation residuals (`L.trans`, `L.rot`, `R.trans`, `R.rot`), step-size ratio
+  (`StepR`) and coviz drop (`CovR`) for the landing edge, obs-count z-score (`ObsZ`),
+  and a `Flag` column listing fired codes (`L.t`, `L.r`, `R.t`, `R.r`, `Step`, `Cov`,
+  `Obs`). StepR and CovR attach to the landing frame of each edge so row i shows the
+  metrics for edge (i−1, i).
+- Summary table (one row per detected discontinuity): edge, raw edge translation and
+  rotation, StepR, CovR, endpoint obs z-scores, shared 3D point count, per-endpoint
+  mean reprojection errors, and a `Signals` column listing fired codes
+  (e.g. `P S C O`). Values that exceeded their signal's threshold are wrapped in
+  `< >` brackets.
+- Footer: total count, plus a partition into single-signal (low-confidence) vs
+  multi-signal (high-confidence) hits, and a legend for the signal codes.
 
 
 ## Existing Infrastructure

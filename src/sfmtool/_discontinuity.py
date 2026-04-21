@@ -503,6 +503,178 @@ def _compute_per_image_mean_errors(
     return errors
 
 
+# ---------------------------------------------------------------------------
+# Secondary discontinuity signals (complement pose extrapolation)
+#
+# These three signals catch discontinuities the pose-extrapolation test misses
+# because polynomial extrapolators can absorb smooth scale/slope changes:
+#
+#   Step-size ratio : median step changes sharply pre-vs-post an edge
+#                     (catches zoom/scale shifts)
+#   Overlap drop    : track covisibility across the edge drops far below the
+#                     local baseline (catches scene/segment breaks)
+#   Obs outlier     : per-image observation count is abnormally low
+#                     (catches "bridge frames" at breaks)
+#
+# Each returns per-edge or per-frame values plus fixed thresholds.
+# ---------------------------------------------------------------------------
+
+STEP_RATIO_THRESHOLD = 1.5
+OVERLAP_DROP_THRESHOLD = 1.8
+OBS_Z_THRESHOLD = 2.5
+
+STEP_RATIO_WINDOW = 8
+OVERLAP_WINDOW = 16
+OVERLAP_BASELINE_WINDOW = 24
+OBS_WINDOW = 24
+
+
+def _build_per_image_point_sets(recon) -> list[set[int]]:
+    """Return per-image sets of 3D point ids observed in that image."""
+    obs_counts = np.asarray(recon.observation_counts, dtype=np.int64)
+    tii = np.asarray(recon.track_image_indexes, dtype=np.int64)
+    offsets = np.concatenate([[np.int64(0)], np.cumsum(obs_counts)])
+    n_images = recon.image_count
+    per_image: list[set[int]] = [set() for _ in range(n_images)]
+    for p in range(len(obs_counts)):
+        for img_idx in tii[offsets[p] : offsets[p + 1]]:
+            per_image[int(img_idx)].add(p)
+    return per_image
+
+
+def _compute_step_ratios(
+    seq_centers: list[np.ndarray],
+    window: int = STEP_RATIO_WINDOW,
+) -> list[float | None]:
+    """Per-edge ratio of local median step size before vs. after.
+
+    For each edge i→(i+1), compute the ratio max(m_pre/m_post, m_post/m_pre)
+    where m_pre is the median step length in the `window-1` edges immediately
+    before i and m_post is the median in the `window-1` edges after.  The
+    edge itself is excluded — we are testing whether the surrounding motion
+    magnitude changes across it, not whether this one step is an outlier.
+
+    Returns None for edges without at least 2 edges of context on each side.
+    """
+    n = len(seq_centers)
+    if n < 2:
+        return []
+    step_sizes = [
+        float(np.linalg.norm(seq_centers[i + 1] - seq_centers[i])) for i in range(n - 1)
+    ]
+    n_edges = len(step_sizes)
+    ratios: list[float | None] = [None] * n_edges
+    for i in range(n_edges):
+        pre = step_sizes[max(0, i - window + 1) : i]
+        post = step_sizes[i + 1 : min(n_edges, i + window)]
+        if len(pre) < 2 or len(post) < 2:
+            continue
+        m_pre = float(np.median(pre))
+        m_post = float(np.median(post))
+        if m_pre <= 0 or m_post <= 0:
+            continue
+        ratios[i] = max(m_pre / m_post, m_post / m_pre)
+    return ratios
+
+
+def _compute_overlap_drops(
+    per_image_points: list[set[int]],
+    seq_image_indexes: list[int],
+    window: int = OVERLAP_WINDOW,
+    baseline_window: int = OVERLAP_BASELINE_WINDOW,
+) -> list[float | None]:
+    """Per-edge covisibility drop relative to a local baseline of edges.
+
+    For each edge i→(i+1):
+      cross = |P_pre ∩ P_post| / min(|P_pre|, |P_post|)
+        where P_pre  = union of tracks observed in images [i-w+1 .. i]
+              P_post = union of tracks observed in images [i+1 .. i+w]
+      baseline = median of the surrounding edges' `cross` values
+      drop = baseline / cross      (larger = stronger break)
+
+    Returns all None when the sequence has fewer than 3*window frames — on
+    short sequences typical track lifetimes exceed the window and the test
+    cannot distinguish a real break from natural track aging.  Returns +inf
+    for a per-edge cross of 0 (no tracks survive the edge).
+    """
+    n = len(seq_image_indexes)
+    n_edges = max(0, n - 1)
+    if n < 3 * window:
+        return [None] * n_edges
+    overlaps: list[float | None] = [None] * n_edges
+
+    for i in range(n_edges):
+        lo_l = max(0, i - window + 1)
+        hi_l = i + 1
+        lo_r = i + 1
+        hi_r = min(n, i + 1 + window)
+        pre: set[int] = set()
+        for k in range(lo_l, hi_l):
+            pre |= per_image_points[seq_image_indexes[k]]
+        post: set[int] = set()
+        for k in range(lo_r, hi_r):
+            post |= per_image_points[seq_image_indexes[k]]
+        if not pre or not post:
+            continue
+        denom = min(len(pre), len(post))
+        overlaps[i] = len(pre & post) / denom if denom > 0 else None
+
+    drops: list[float | None] = [None] * n_edges
+    for i in range(n_edges):
+        own = overlaps[i]
+        if own is None:
+            continue
+        lo = max(0, i - baseline_window)
+        hi = min(n_edges, i + baseline_window + 1)
+        nearby = [
+            overlaps[j] for j in range(lo, hi) if j != i and overlaps[j] is not None
+        ]
+        if len(nearby) < 3:
+            continue
+        baseline = float(np.median(nearby))
+        if own == 0:
+            drops[i] = float("inf")
+        elif baseline <= 0:
+            continue
+        else:
+            drops[i] = baseline / own
+    return drops
+
+
+def _compute_obs_z_scores(
+    per_image_points: list[set[int]],
+    seq_image_indexes: list[int],
+    window: int = OBS_WINDOW,
+) -> list[float | None]:
+    """Per-frame robust z-score of observation count.
+
+    Uses a symmetric rolling window of `window` frames centered on i
+    (excluding i itself) and MAD-based scale (σ ≈ 1.4826·MAD).  Returns
+    None for frames without enough neighbors or with zero MAD.
+    """
+    n = len(seq_image_indexes)
+    if n < 5:
+        return [None] * n
+    nobs = np.array(
+        [len(per_image_points[seq_image_indexes[i]]) for i in range(n)],
+        dtype=np.float64,
+    )
+    half = window // 2
+    z_scores: list[float | None] = [None] * n
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        window_vals = np.concatenate([nobs[lo:i], nobs[i + 1 : hi]])
+        if len(window_vals) < 5:
+            continue
+        med = float(np.median(window_vals))
+        mad = float(np.median(np.abs(window_vals - med)))
+        if mad <= 0:
+            continue
+        z_scores[i] = (nobs[i] - med) / (1.4826 * mad)
+    return z_scores
+
+
 def analyze_reconstruction(
     recon,
     *,
@@ -554,6 +726,10 @@ def analyze_reconstruction(
         f"{recon.observation_count:,} observations"
     )
     click.echo(f"Found {len(numbered_sequences)} sequence(s)")
+
+    # Per-image point sets drive the overlap-drop and obs-outlier signals.
+    # Built once up front; reused across sequences.
+    per_image_points = _build_per_image_point_sets(recon)
 
     all_sequence_results = []
 
@@ -611,6 +787,17 @@ def analyze_reconstruction(
         median_trans = float(np.median(successive_trans))
         median_rot = float(np.median(successive_rots))
 
+        # Step 2: Secondary signals.  These are complementary to pose
+        # extrapolation — polynomial fits can absorb smooth scale/slope
+        # changes that these three catch directly.
+        step_ratios = _compute_step_ratios(seq_centers)  # per-edge, len n-1
+        overlap_drops = _compute_overlap_drops(
+            per_image_points, seq_image_indexes
+        )  # per-edge, len n-1
+        obs_z_scores = _compute_obs_z_scores(
+            per_image_points, seq_image_indexes
+        )  # per-frame, len n
+
         # Print per-frame extrapolation errors
         click.echo(
             f"\n  Successive motion --"
@@ -631,20 +818,37 @@ def analyze_reconstruction(
         # of how fast the camera is rotating.
         rot_threshold = 15.0
 
+        click.echo("  Signal thresholds:")
         click.echo(
-            f"  Extrapolation thresholds:"
-            f"  trans>{trans_threshold:.4f} (3x median step)"
-            f"  rot>{rot_threshold:.1f}° (fixed)"
+            f"    Pose extrapolation:  trans>{trans_threshold:.4f} (3x median step)"
+            f"  rot>{rot_threshold:.1f}°"
+        )
+        click.echo(
+            f"    Step-size ratio  (w={STEP_RATIO_WINDOW}):  "
+            f"max(pre/post, post/pre) > {STEP_RATIO_THRESHOLD}"
+        )
+        click.echo(
+            f"    Coviz drop       (w={OVERLAP_WINDOW}):  "
+            f"baseline/cross-overlap > {OVERLAP_DROP_THRESHOLD}"
+        )
+        click.echo(
+            f"    Obs-count outlier (w={OBS_WINDOW}):  "
+            f"|z-score| > {OBS_Z_THRESHOLD} (low tail)"
         )
         click.echo("")
         click.echo(
             f"  {'Frame':>7}  {'Image':<40}  "
             f"{'L.trans':>7}  {'L.rot':>6}  "
-            f"{'R.trans':>7}  {'R.rot':>6}  {'Flag'}"
+            f"{'R.trans':>7}  {'R.rot':>6}  "
+            f"{'StepR':>6}  {'CovR':>6}  {'ObsZ':>6}  {'Flag'}"
         )
-        click.echo("  " + "-" * 95)
+        click.echo("  " + "-" * 120)
 
         flagged_frames = []
+        # Per-edge flags accumulated outside the per-frame loop
+        step_edge_flags: dict[int, str] = {}  # edge_idx i -> "Step"
+        cov_edge_flags: dict[int, str] = {}
+        obs_frame_flags: dict[int, str] = {}
 
         for er in extrap_results:
             i = er["seq_idx"]
@@ -663,6 +867,22 @@ def analyze_reconstruction(
             rt_s = f"{rt:.4f}" if rt is not None else "-"
             rr_s = f"{rr:.2f}°" if rr is not None else "-"
 
+            # New per-row values: StepR and CovR come from the landing edge
+            # (i-1, i) so they annotate the frame that the edge lands on.
+            # ObsZ is the per-frame outlier z-score.
+            landing_edge = i - 1  # edge index for edge (i-1, i)
+            step_r = step_ratios[landing_edge] if landing_edge >= 0 else None
+            cov_r = overlap_drops[landing_edge] if landing_edge >= 0 else None
+            obs_z = obs_z_scores[i] if i < len(obs_z_scores) else None
+
+            step_r_s = f"{step_r:.2f}" if step_r is not None else "-"
+            cov_r_s = (
+                f"{cov_r:.2f}"
+                if cov_r is not None and cov_r != float("inf")
+                else ("inf" if cov_r == float("inf") else "-")
+            )
+            obs_z_s = f"{obs_z:+.1f}" if obs_z is not None else "-"
+
             # Determine flags
             flags = []
             if lt is not None and lt > trans_threshold:
@@ -673,13 +893,34 @@ def analyze_reconstruction(
                 flags.append("R.t")
             if rr is not None and rr > rot_threshold:
                 flags.append("R.r")
+            # Step and Cov flags annotate the landing frame for the edge
+            # (i-1, i) — so the flag sits on frame i, matching where the
+            # value is displayed.
+            if (
+                step_r is not None
+                and step_r > STEP_RATIO_THRESHOLD
+                and landing_edge >= 0
+            ):
+                flags.append("Step")
+                step_edge_flags[landing_edge] = f"frame {frame_num} Step"
+            if (
+                cov_r is not None
+                and cov_r > OVERLAP_DROP_THRESHOLD
+                and landing_edge >= 0
+            ):
+                flags.append("Cov")
+                cov_edge_flags[landing_edge] = f"frame {frame_num} Cov"
+            if obs_z is not None and obs_z < -OBS_Z_THRESHOLD:
+                flags.append("Obs")
+                obs_frame_flags[i] = f"frame {frame_num} Obs"
 
             flag_str = ",".join(flags) if flags else ""
 
             click.echo(
                 f"  {frame_num:>7}  {name:<40}  "
                 f"{lt_s:>7}  {lr_s:>6}  "
-                f"{rt_s:>7}  {rr_s:>6}  {flag_str}"
+                f"{rt_s:>7}  {rr_s:>6}  "
+                f"{step_r_s:>6}  {cov_r_s:>6}  {obs_z_s:>6}  {flag_str}"
             )
 
             if flags:
@@ -693,28 +934,49 @@ def analyze_reconstruction(
                         "left_rot_err": lr,
                         "right_trans_err": rt,
                         "right_rot_err": rr,
+                        "step_ratio": step_r,
+                        "overlap_drop": cov_r,
+                        "obs_z": obs_z,
                         "flags": flags,
                     }
                 )
 
-        # Step 2: Aggregate per-frame flags into per-edge discontinuities.
+        # Step 3: Aggregate per-frame flags into per-edge discontinuities.
         # L flags on frame i implicate edge (i-1) → (i).
         # R flags on frame i implicate edge (i) → (i+1).
+        # Step and Cov flags are edge-level — they sit on the landing frame i
+        # and implicate edge (i-1, i).
+        # Obs flags are per-frame context only; attached below to any edge
+        # already flagged by another signal, but never flag an edge alone
+        # (a single dim frame is not a discontinuity).
         flagged_edges: dict[tuple[int, int], list[str]] = {}
         for f in flagged_frames:
             idx = f["seq_idx"]
             for flag in f["flags"]:
+                if flag == "Obs":
+                    continue  # attached below as endpoint context
                 if flag.startswith("L") and idx > 0:
                     edge = (idx - 1, idx)
                 elif flag.startswith("R") and idx < n - 1:
                     edge = (idx, idx + 1)
+                elif flag in ("Step", "Cov") and idx > 0:
+                    edge = (idx - 1, idx)  # landing edge
                 else:
                     continue
                 flagged_edges.setdefault(edge, []).append(
                     f"frame {f['frame_number']} {flag}"
                 )
 
-        # Step 3: Cluster adjacent edges and keep only the core edge per
+        # Attach Obs context to adjacent edges that are already flagged.
+        for f in flagged_frames:
+            if "Obs" not in f["flags"]:
+                continue
+            idx = f["seq_idx"]
+            for edge in ((idx - 1, idx), (idx, idx + 1)):
+                if edge in flagged_edges:
+                    flagged_edges[edge].append(f"frame {f['frame_number']} Obs")
+
+        # Step 4: Cluster adjacent edges and keep only the core edge per
         # cluster.  A single discontinuity at edge (A, A+1) causes the
         # neighboring edges to also get flagged because even the nearest 2
         # extrapolation points straddle the break.  We cluster consecutive
@@ -774,6 +1036,9 @@ def analyze_reconstruction(
                 "seq_quats": seq_quats,
                 "median_trans": median_trans,
                 "median_rot": median_rot,
+                "step_ratios": step_ratios,
+                "overlap_drops": overlap_drops,
+                "obs_z_scores": obs_z_scores,
             }
         )
 
@@ -803,19 +1068,21 @@ def analyze_reconstruction(
         seq_centers = s["seq_centers"]
         seq_quats = s["seq_quats"]
         pair_counts = s["pair_counts"]
+        step_ratios = s["step_ratios"]
+        overlap_drops = s["overlap_drops"]
+        obs_z_scores = s["obs_z_scores"]
         core_img_indexes = set()
         for a, b in core_edges:
             core_img_indexes.add(seq_img_indexes[a])
             core_img_indexes.add(seq_img_indexes[b])
         reproj_errors = _compute_per_image_mean_errors(recon, list(core_img_indexes))
 
-        n_seq = len(seq_centers)
         click.echo(
-            f"    {'Edge':>14}  {'Dist(prev)':>10}  {'Dist':>8}  "
-            f"{'Dist(next)':>10}  {'Rot':>7}  "
-            f"{'SharedPts':>10}  {'Err(A)':>8}  {'Err(B)':>8}"
+            f"    {'Edge':>14}  {'Dist':>8}  {'Rot':>7}  "
+            f"{'StepR':>6}  {'CovR':>6}  {'ObsZ(A/B)':>11}  "
+            f"{'SharedPts':>9}  {'Err(A)':>8}  {'Err(B)':>8}  {'Signals'}"
         )
-        click.echo("    " + "-" * 97)
+        click.echo("    " + "-" * 105)
 
         for (a, b), evidence in sorted(core_edges.items()):
             img_a = seq_img_indexes[a]
@@ -823,17 +1090,7 @@ def analyze_reconstruction(
             frame_a = seq_frm_numbers[a]
             frame_b = seq_frm_numbers[b]
 
-            dist_prev = (
-                float(np.linalg.norm(seq_centers[a] - seq_centers[a - 1]))
-                if a > 0
-                else None
-            )
             dist = float(np.linalg.norm(seq_centers[b] - seq_centers[a]))
-            dist_next = (
-                float(np.linalg.norm(seq_centers[b + 1] - seq_centers[b]))
-                if b + 1 < n_seq
-                else None
-            )
             rot = _rotation_angle_deg(seq_quats[a], seq_quats[b])
 
             shared = pair_counts.get((img_a, img_b), 0)
@@ -842,39 +1099,108 @@ def analyze_reconstruction(
             err_a_s = f"{err_a:.3f}px" if not np.isnan(err_a) else "N/A"
             err_b_s = f"{err_b:.3f}px" if not np.isnan(err_b) else "N/A"
 
-            # Determine if translation and/or rotation triggered this edge
-            has_t = any(" L.t" in e or " R.t" in e for e in evidence)
-            has_r = any(" L.r" in e or " R.r" in e for e in evidence)
+            # Look up the edge-level signal values.  Edge (a, b) corresponds
+            # to edge index a in the step/overlap arrays.
+            step_r = step_ratios[a] if a < len(step_ratios) else None
+            cov_r = overlap_drops[a] if a < len(overlap_drops) else None
+            obs_a = obs_z_scores[a] if a < len(obs_z_scores) else None
+            obs_b = obs_z_scores[b] if b < len(obs_z_scores) else None
 
-            # Highlight flagged values with < >
-            if has_t:
-                dp_s = f"{dist_prev:.4f}" if dist_prev is not None else "-"
-                dist_s = f"<{dist:.4f}>"
-                dn_s = f"{dist_next:.4f}" if dist_next is not None else "-"
-            else:
-                dp_s = f"{dist_prev:.4f}" if dist_prev is not None else "-"
-                dist_s = f" {dist:.4f} "
-                dn_s = f"{dist_next:.4f}" if dist_next is not None else "-"
+            # Determine which signals contributed to this edge.
+            has_p = any(
+                " L.t" in e or " L.r" in e or " R.t" in e or " R.r" in e
+                for e in evidence
+            )
+            has_s = any(" Step" in e for e in evidence)
+            has_c = any(" Cov" in e for e in evidence)
+            has_o = any(" Obs" in e for e in evidence)
+            has_pose_t = any(" L.t" in e or " R.t" in e for e in evidence)
+            has_pose_r = any(" L.r" in e or " R.r" in e for e in evidence)
 
-            if has_r:
-                rot_s = f"<{rot:.2f}°>"
+            dist_s = f"<{dist:.4f}>" if has_pose_t else f" {dist:.4f} "
+            rot_s = f"<{rot:.2f}°>" if has_pose_r else f" {rot:.2f}° "
+
+            if step_r is None:
+                step_r_s = "-"
+            elif has_s:
+                step_r_s = f"<{step_r:.2f}>"
             else:
-                rot_s = f" {rot:.2f}° "
+                step_r_s = f" {step_r:.2f} "
+
+            if cov_r is None:
+                cov_r_s = "-"
+            elif cov_r == float("inf"):
+                cov_r_s = "<inf>" if has_c else " inf "
+            elif has_c:
+                cov_r_s = f"<{cov_r:.2f}>"
+            else:
+                cov_r_s = f" {cov_r:.2f} "
+
+            def _fmt_z(z, highlight):
+                if z is None:
+                    return "-"
+                s = f"{z:+.1f}"
+                return f"<{s}>" if highlight and z < -OBS_Z_THRESHOLD else s
+
+            obs_a_s = _fmt_z(obs_a, has_o)
+            obs_b_s = _fmt_z(obs_b, has_o)
+            obs_pair = f"{obs_a_s}/{obs_b_s}"
+
+            signals_parts = []
+            if has_p:
+                signals_parts.append("P")
+            if has_s:
+                signals_parts.append("S")
+            if has_c:
+                signals_parts.append("C")
+            if has_o:
+                signals_parts.append("O")
+            signals_str = " ".join(signals_parts)
 
             edge_str = f"{frame_a}->{frame_b}"
             click.echo(
-                f"    {edge_str:>14}  {dp_s:>10}  {dist_s:>10}  "
-                f"{dn_s:>10}  {rot_s:>9}  "
-                f"{shared:>10}  {err_a_s:>8}  {err_b_s:>8}"
+                f"    {edge_str:>14}  {dist_s:>10}  {rot_s:>9}  "
+                f"{step_r_s:>8}  {cov_r_s:>8}  {obs_pair:>11}  "
+                f"{shared:>9}  {err_a_s:>8}  {err_b_s:>8}  {signals_str}"
             )
 
     click.echo("")
+
+    # Footer: partition detections by signal-agreement level.
+    # An edge counts as "high confidence" when at least two distinct signals
+    # fire — whether that's two of the primary signals (P/S/C) or one primary
+    # plus an Obs outlier on an endpoint.  A single fire is "low confidence".
+    single_signal = 0
+    multi_signal = 0
+    for s in all_sequence_results:
+        for evidence in s["core_edges"].values():
+            codes = set()
+            for e in evidence:
+                if any(t in e for t in (" L.t", " L.r", " R.t", " R.r")):
+                    codes.add("P")
+                if " Step" in e:
+                    codes.add("S")
+                if " Cov" in e:
+                    codes.add("C")
+                if " Obs" in e:
+                    codes.add("O")
+            if len(codes) >= 2:
+                multi_signal += 1
+            else:
+                single_signal += 1
+
     if total_discontinuities == 0:
         click.echo("No pose discontinuities detected in any sequence.")
     else:
         click.echo(
             f"Total: {total_discontinuities} discontinuity(s) "
             f"across {len(all_sequence_results)} sequence(s)."
+        )
+        click.echo(f"  Single-signal (low confidence):  {single_signal}")
+        click.echo(f"  Multi-signal  (high confidence): {multi_signal}")
+        click.echo(
+            "  Legend: P=pose residual, S=step-size ratio, "
+            "C=coviz drop, O=obs-count outlier."
         )
 
     return all_sequence_results
