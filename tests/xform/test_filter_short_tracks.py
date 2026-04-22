@@ -33,10 +33,28 @@ def test_remove_short_tracks_filter(sfmrfile_reconstruction_with_17_images, tmp_
 
 def test_invalid_track_size_raises_error():
     """Test that invalid track size raises error."""
-    with pytest.raises(ValueError, match="Track size must be >= 2"):
-        RemoveShortTracksFilter(1)
-    with pytest.raises(ValueError, match="Track size must be >= 2"):
+    with pytest.raises(ValueError, match="Track size must be >= 1"):
         RemoveShortTracksFilter(0)
+    with pytest.raises(ValueError, match="Track size must be >= 1"):
+        RemoveShortTracksFilter(-1)
+
+
+def test_remove_short_tracks_length_one(
+    sfmrfile_reconstruction_with_17_images, tmp_path
+):
+    """`--remove-short-tracks 1` removes length-1 tracks. Valid
+    reconstructions don't normally contain any, but the call must not
+    reject the parameter — filters like --include-range can leave tracks
+    stranded with a single surviving observation."""
+    output_path = tmp_path / "filtered_one.sfmr"
+    transforms = [RemoveShortTracksFilter(1)]
+
+    apply_transforms_to_file(
+        sfmrfile_reconstruction_with_17_images, output_path, transforms
+    )
+
+    filtered = load_reconstruction_data(output_path)
+    assert np.all(filtered["observation_counts"] > 1)
 
 
 def test_remove_short_tracks_min_threshold(

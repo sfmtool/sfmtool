@@ -11,11 +11,18 @@ from .._sfmtool import SfmrReconstruction, read_sift_partial
 
 
 class RemoveShortTracksFilter:
-    """Remove 3D points with track length <= size."""
+    """Remove 3D points with track length <= size.
+
+    `max_size=1` is the natural minimum — it keeps only points triangulated
+    from at least two views, which is what's required for a valid 3D point.
+    Operations like `--include-range` or other image filters commonly strand
+    a point with a single surviving observation, so removing length-1
+    tracks is a routine clean-up step.
+    """
 
     def __init__(self, max_size: int):
-        if max_size < 2:
-            raise ValueError(f"Track size must be >= 2, got {max_size}")
+        if max_size < 1:
+            raise ValueError(f"Track size must be >= 1, got {max_size}")
         self.max_size = max_size
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
