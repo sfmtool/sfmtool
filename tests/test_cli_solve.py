@@ -141,6 +141,75 @@ def test_solve_from_matches(isolated_seoul_bull_17_images: list[Path]):
     assert output_path.exists()
 
 
+def test_resolve_output_path_explicit(tmp_path: Path):
+    """Explicit --output: recon 0 gets the exact path, subsequent recons
+    get `-N` before the suffix."""
+    from sfmtool._isfm import _resolve_output_path
+
+    explicit = tmp_path / "mine.sfmr"
+    images = [Path("img_1.jpg"), Path("img_2.jpg")]
+
+    p0 = _resolve_output_path(
+        order=0,
+        explicit_output=explicit,
+        recon_image_paths=images,
+        sfmr_dir=None,
+        workspace_dir=tmp_path,
+    )
+    p1 = _resolve_output_path(
+        order=1,
+        explicit_output=explicit,
+        recon_image_paths=images,
+        sfmr_dir=None,
+        workspace_dir=tmp_path,
+    )
+    p2 = _resolve_output_path(
+        order=2,
+        explicit_output=explicit,
+        recon_image_paths=images,
+        sfmr_dir=None,
+        workspace_dir=tmp_path,
+    )
+    assert p0 == explicit
+    assert p1 == tmp_path / "mine-1.sfmr"
+    assert p2 == tmp_path / "mine-2.sfmr"
+
+
+def test_resolve_output_path_auto_per_recon(tmp_path: Path):
+    """Auto-name: each reconstruction gets its own descriptor reflecting the
+    images actually present in that reconstruction."""
+    from sfmtool._isfm import _resolve_output_path
+
+    sfmr_dir = tmp_path / "sfmr"
+
+    # Recon 0: three frames that form a small sub-range (1-3).
+    recon0_images = [Path(f"KerryPark_{n}.jpg") for n in (1, 2, 3)]
+    p0 = _resolve_output_path(
+        order=0,
+        explicit_output=None,
+        recon_image_paths=recon0_images,
+        sfmr_dir=sfmr_dir,
+        workspace_dir=tmp_path,
+    )
+    assert "KerryPark_1-3" in p0.name
+    # Touch the file so the counter advances for the next call.
+    p0.parent.mkdir(parents=True, exist_ok=True)
+    p0.touch()
+
+    # Recon 1: the other 98 frames. Descriptor reflects 4..101, not the
+    # full input range.
+    recon1_images = [Path(f"KerryPark_{n}.jpg") for n in range(4, 102)]
+    p1 = _resolve_output_path(
+        order=1,
+        explicit_output=None,
+        recon_image_paths=recon1_images,
+        sfmr_dir=sfmr_dir,
+        workspace_dir=tmp_path,
+    )
+    assert "KerryPark_4-101" in p1.name
+    assert p1 != p0
+
+
 def test_solve_from_matches_with_range(isolated_seoul_bull_17_images: list[Path]):
     """`--range` on the .matches solve path restricts which images/pairs are
     written to the COLMAP DB."""

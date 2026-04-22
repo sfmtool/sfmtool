@@ -15,8 +15,8 @@ from ._colmap_io import (
     colmap_binary_to_rust_sfmr,
     pycolmap_to_rust_sfmr,
 )
+from ._isfm import _resolve_output_path
 from ._rig_config import _load_rig_config
-from ._sfm_reconstruction import get_next_sfm_filename as _get_next_sfm_filename
 from ._workspace import load_workspace_config
 
 
@@ -101,29 +101,27 @@ def run_global_sfm(
     if not reconstructions:
         raise RuntimeError("Global mapping failed or produced no reconstructions.")
 
-    for idx in reconstructions:
-        tool_options = {"algorithm": "global"}
-        if max_feature_count is not None:
-            tool_options["max_features"] = max_feature_count
-        if random_seed is not None:
-            tool_options["random_seed"] = random_seed
-        if has_rig:
-            tool_options["rig_aware"] = True
-            tool_options["refine_rig"] = refine_rig
+    tool_options: dict = {"algorithm": "global"}
+    if max_feature_count is not None:
+        tool_options["max_features"] = max_feature_count
+    if random_seed is not None:
+        tool_options["random_seed"] = random_seed
+    if has_rig:
+        tool_options["rig_aware"] = True
+        tool_options["refine_rig"] = refine_rig
 
-        if output_sfm_file is None:
-            if sfmr_dir is None:
-                results_base = workspace_dir / "sfmr"
-            else:
-                results_base = Path(sfmr_dir).absolute()
-            output_sfm_file = _get_next_sfm_filename(
-                results_base, image_paths, operation="solve"
-            )
+    workspace_config = load_workspace_config(workspace_dir)
+    image_dir_rel = str(image_dir.relative_to(workspace_dir))
+    explicit_output = Path(output_sfm_file).absolute() if output_sfm_file else None
 
-        output_path = Path(output_sfm_file).absolute()
-
+    saved_paths: list[Path] = []
+    for order, idx in enumerate(sorted(reconstructions)):
+        recon_image_paths: list[Path]
         if has_rig:
             pycolmap_recon = reconstructions[idx]
+            recon_image_paths = [
+                Path(image_dir) / img.name for img in pycolmap_recon.images.values()
+            ]
             image_count = len(pycolmap_recon.images)
             points3d_count = len(pycolmap_recon.points3D)
             obs_count = sum(
@@ -136,21 +134,32 @@ def run_global_sfm(
 
             recon_dir = Path(reconstruction_path) / str(idx)
             colmap_data = read_colmap_binary(recon_dir)
+            recon_image_paths = [
+                Path(image_dir) / name for name in colmap_data["image_names"]
+            ]
             image_count = len(colmap_data["image_names"])
             points3d_count = len(colmap_data["positions_xyz"])
             obs_count = len(colmap_data["track_image_indexes"])
             camera_count = len(colmap_data["cameras"])
 
+        output_path = _resolve_output_path(
+            order=order,
+            explicit_output=explicit_output,
+            recon_image_paths=recon_image_paths,
+            sfmr_dir=sfmr_dir,
+            workspace_dir=workspace_dir,
+        )
+
         metadata = build_metadata(
             workspace_dir=workspace_dir,
             output_path=output_path,
-            workspace_config=load_workspace_config(workspace_dir),
+            workspace_config=workspace_config,
             operation="sfm_solve",
             tool_name="glomap",
             tool_options=tool_options,
             inputs={
                 "images": {
-                    "image_dir": str(image_dir.relative_to(workspace_dir)),
+                    "image_dir": image_dir_rel,
                     "image_count": len(image_paths),
                 }
             },
@@ -174,5 +183,7 @@ def run_global_sfm(
         )
 
         recon.save(output_path)
-        print(f"Saved reconstruction to: {output_sfm_file}")
-        return Path(output_sfm_file)
+        print(f"Saved reconstruction to: {output_path}")
+        saved_paths.append(output_path)
+
+    return saved_paths[0]
