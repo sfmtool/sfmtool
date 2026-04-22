@@ -114,12 +114,21 @@ def _setup_for_sfm_from_matches(
     matches_file: str | Path,
     colmap_dir: str | Path,
     camera_model: str | None = None,
+    range_expr: str | None = None,
 ) -> tuple[Path, Path, list[Path]]:
     """Prepare a COLMAP database from a .matches file for running the mapper.
+
+    If `range_expr` is provided, restrict the solve to images whose filename
+    number falls within the range; dropped images are excluded from the DB
+    and any pairs that reference them are skipped.
 
     Returns:
         tuple: (db_path, image_dir, image_paths)
     """
+    import numpy as np
+    from openjd.model import IntRangeExpr
+
+    from ._filenames import number_from_filename
     from ._sfmtool import read_matches
     from ._workspace import find_workspace_for_path
 
@@ -131,8 +140,30 @@ def _setup_for_sfm_from_matches(
 
     metadata = matches_data["metadata"]
     ws_meta = metadata["workspace"]
-    image_names = matches_data["image_names"]
-    image_count = metadata["image_count"]
+    all_image_names = matches_data["image_names"]
+    full_image_count = metadata["image_count"]
+
+    if range_expr:
+        numbers = IntRangeExpr.from_str(range_expr)
+        kept_old_indices = [
+            i
+            for i, name in enumerate(all_image_names)
+            if (n := number_from_filename(Path(name).name)) is not None and n in numbers
+        ]
+        if not kept_old_indices:
+            raise RuntimeError(
+                f"Range '{range_expr}' excludes all {full_image_count} images "
+                f"in {matches_file}"
+            )
+        image_names = [all_image_names[i] for i in kept_old_indices]
+        old_to_new: dict[int, int] | None = {
+            old: new for new, old in enumerate(kept_old_indices)
+        }
+    else:
+        image_names = list(all_image_names)
+        old_to_new = None
+
+    image_count = len(image_names)
 
     # Resolve workspace directory
     workspace_dir = None
@@ -161,10 +192,26 @@ def _setup_for_sfm_from_matches(
         )
 
     print(f"Workspace: {workspace_dir}")
-    print(
-        f"Images: {image_count}, Pairs: {metadata['image_pair_count']}, "
-        f"Matches: {metadata['match_count']}"
-    )
+    if old_to_new is None:
+        print(
+            f"Images: {image_count}, Pairs: {metadata['image_pair_count']}, "
+            f"Matches: {metadata['match_count']}"
+        )
+    else:
+        pairs_arr = matches_data["image_index_pairs"]
+        counts_arr = matches_data["match_counts"]
+        kept_arr = np.fromiter(old_to_new.keys(), dtype=pairs_arr.dtype)
+        pair_mask = np.isin(pairs_arr[:, 0], kept_arr) & np.isin(
+            pairs_arr[:, 1], kept_arr
+        )
+        kept_pairs = int(pair_mask.sum())
+        kept_matches = int(counts_arr[pair_mask].sum())
+        print(
+            f"Images: {image_count} (filtered from {full_image_count} "
+            f"via --range {range_expr}), "
+            f"Pairs: {kept_pairs} (filtered from {metadata['image_pair_count']}), "
+            f"Matches: {kept_matches} (filtered from {metadata['match_count']})"
+        )
 
     # Resolve image paths and .sift paths
     feature_prefix_dir = ws_meta.get("contents", {}).get("feature_prefix_dir", "")
@@ -219,7 +266,9 @@ def _setup_for_sfm_from_matches(
         )
 
     # Write matches and TVGs to the database
-    _write_matches_to_db(db_path, matches_data, image_names, image_dir)
+    _write_matches_to_db(
+        db_path, matches_data, image_names, image_dir, old_to_new=old_to_new
+    )
 
     return db_path, image_dir, image_paths
 
@@ -229,8 +278,15 @@ def _write_matches_to_db(
     matches_data: dict,
     image_names: list[str],
     image_dir: Path,
+    old_to_new: dict[int, int] | None = None,
 ) -> None:
-    """Write matches and TVGs from a read_matches dict into a COLMAP database."""
+    """Write matches and TVGs from a read_matches dict into a COLMAP database.
+
+    If `old_to_new` is given, it maps original indices in `matches_data` to
+    positions in `image_names`; pairs that reference an original index not
+    present in the mapping are skipped (their slices of
+    `match_feature_indexes` / `inlier_feature_indexes` are stepped over).
+    """
     import numpy as np
 
     with pycolmap.Database.open(db_path) as db:
@@ -243,10 +299,17 @@ def _write_matches_to_db(
             raise RuntimeError(f"Image '{name}' not found in COLMAP database")
         db_ids.append(name_to_db_id[name])
 
+    def _resolve(idx: int) -> int | None:
+        if old_to_new is None:
+            return db_ids[idx]
+        new_idx = old_to_new.get(idx)
+        return None if new_idx is None else db_ids[new_idx]
+
     image_index_pairs = matches_data["image_index_pairs"]
     match_counts = matches_data["match_counts"]
     match_feature_indexes = matches_data["match_feature_indexes"]
     pair_count = len(image_index_pairs)
+    pairs_written = 0
 
     with pycolmap.Database.open(db_path) as db:
         match_offset = 0
@@ -255,13 +318,19 @@ def _write_matches_to_db(
             idx_j = int(image_index_pairs[k, 1])
             count = int(match_counts[k])
 
-            db_id_i = db_ids[idx_i]
-            db_id_j = db_ids[idx_j]
+            db_id_i = _resolve(idx_i)
+            db_id_j = _resolve(idx_j)
 
-            matches_slice = match_feature_indexes[match_offset : match_offset + count]
-            db.write_matches(db_id_i, db_id_j, matches_slice)
+            if db_id_i is not None and db_id_j is not None:
+                matches_slice = match_feature_indexes[
+                    match_offset : match_offset + count
+                ]
+                db.write_matches(db_id_i, db_id_j, matches_slice)
+                pairs_written += 1
             match_offset += count
 
+        tvgs_written = 0
+        total_inliers_written = 0
         if matches_data.get("has_two_view_geometries", False):
             config_types = matches_data["config_types"]
             config_indexes = matches_data["config_indexes"]
@@ -285,10 +354,15 @@ def _write_matches_to_db(
             for k in range(pair_count):
                 idx_i = int(image_index_pairs[k, 0])
                 idx_j = int(image_index_pairs[k, 1])
-                db_id_i = db_ids[idx_i]
-                db_id_j = db_ids[idx_j]
-
                 ic = int(inlier_counts[k])
+
+                db_id_i = _resolve(idx_i)
+                db_id_j = _resolve(idx_j)
+
+                if db_id_i is None or db_id_j is None:
+                    inlier_offset += ic
+                    continue
+
                 config_str = config_types[int(config_indexes[k])]
                 config_int = CONFIG_STR_TO_INT.get(config_str, 0)
 
@@ -329,11 +403,15 @@ def _write_matches_to_db(
 
                 db.write_two_view_geometry(db_id_i, db_id_j, tvg)
                 inlier_offset += ic
+                tvgs_written += 1
+                total_inliers_written += ic
 
-    print(f"Wrote {pair_count} match pairs to database")
+    print(f"Wrote {pairs_written} match pairs to database")
     if matches_data.get("has_two_view_geometries", False):
-        total_inliers = int(matches_data["tvg_metadata"]["inlier_count"])
-        print(f"Wrote {pair_count} two-view geometries ({total_inliers} total inliers)")
+        print(
+            f"Wrote {tvgs_written} two-view geometries "
+            f"({total_inliers_written} total inliers)"
+        )
 
 
 def _setup_db_single_camera(

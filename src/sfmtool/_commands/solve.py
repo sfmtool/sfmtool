@@ -216,6 +216,7 @@ def solve(
                     refine_rig=refine_rig,
                     camera_model=camera_model,
                     matches_file=matches_file,
+                    range_expr=range_expr,
                 )
             else:
                 with tempfile.TemporaryDirectory(prefix="colmap_") as temp_colmap_dir:
@@ -231,6 +232,7 @@ def solve(
                         refine_rig=refine_rig,
                         camera_model=camera_model,
                         matches_file=matches_file,
+                        range_expr=range_expr,
                     )
         except Exception as e:
             raise click.ClickException(str(e))
@@ -444,6 +446,7 @@ def _run_sfm(
     flow_preset: str = "default",
     flow_wide_baseline_skip: int = 5,
     matches_file: str | Path | None = None,
+    range_expr: str | None = None,
 ):
     """Run SfM with the given colmap_dir."""
     if incremental:
@@ -463,6 +466,7 @@ def _run_sfm(
             flow_preset=flow_preset,
             flow_wide_baseline_skip=flow_wide_baseline_skip,
             matches_file=matches_file,
+            range_expr=range_expr,
         )
     else:
         from .._gsfm import run_global_sfm
@@ -481,4 +485,5 @@ def _run_sfm(
             flow_preset=flow_preset,
             flow_wide_baseline_skip=flow_wide_baseline_skip,
             matches_file=matches_file,
+            range_expr=range_expr,
         )

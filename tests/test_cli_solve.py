@@ -139,3 +139,54 @@ def test_solve_from_matches(isolated_seoul_bull_17_images: list[Path]):
     )
     assert result.exit_code == 0, result.output
     assert output_path.exists()
+
+
+def test_solve_from_matches_with_range(isolated_seoul_bull_17_images: list[Path]):
+    """`--range` on the .matches solve path restricts which images/pairs are
+    written to the COLMAP DB."""
+    workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+
+    matches_path = workspace_dir / "test.matches"
+    result = CliRunner().invoke(
+        main,
+        [
+            "match",
+            "--exhaustive",
+            "--output",
+            str(matches_path),
+            str(workspace_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    output_path = workspace_dir / "from_matches_range.sfmr"
+    # The 17-image fixture is numbered 1..17; keep 5..12 (8 images).
+    result = CliRunner().invoke(
+        main,
+        [
+            "solve",
+            "-i",
+            "--range",
+            "5-12",
+            "--output",
+            str(output_path),
+            str(matches_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    # Summary line reflects the filtered counts, not the full .matches payload.
+    assert "filtered from 17" in result.output
+    # 8 images → C(8, 2) = 28 possible pairs (upper bound).
+    import re
+
+    m = re.search(r"Pairs: (\d+) \(filtered from (\d+)\)", result.output)
+    assert m is not None, result.output
+    kept_pairs, full_pairs = int(m.group(1)), int(m.group(2))
+    assert 0 < kept_pairs <= 28
+    assert kept_pairs < full_pairs

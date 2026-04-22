@@ -34,6 +34,7 @@ def run_global_sfm(
     flow_preset: str = "default",
     flow_wide_baseline_skip: int = 5,
     matches_file: str | Path | None = None,
+    range_expr: str | None = None,
 ):
     """Run global Structure from Motion on a list of images using GLOMAP."""
     print("Running global SfM with GLOMAP...")
@@ -47,6 +48,7 @@ def run_global_sfm(
             matches_file,
             colmap_dir,
             camera_model=camera_model,
+            range_expr=range_expr,
         )
         workspace_dir = Path(image_dir).absolute()
         has_rig = _load_rig_config(workspace_dir) is not None
