@@ -118,6 +118,77 @@ def test_xform_remove_short_tracks(isolated_seoul_bull_17_images: list[Path]):
     assert filtered.image_count == original.image_count
 
 
+def test_xform_camera_model_with_bundle_adjust(
+    isolated_seoul_bull_17_images: list[Path],
+):
+    """`--camera-model RADIAL --bundle-adjust` upgrades SIMPLE_RADIAL → RADIAL,
+    then bundle adjustment refines the k2 term that was zero-initialized."""
+    workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+
+    output_sfmr = workspace_dir / "solve.sfmr"
+    result = CliRunner().invoke(
+        main,
+        ["solve", "-i", "--output", str(output_sfmr), str(workspace_dir)],
+    )
+    assert result.exit_code == 0, result.output
+
+    switched_sfmr = workspace_dir / "radial_ba.sfmr"
+    args = [
+        "xform",
+        str(output_sfmr),
+        str(switched_sfmr),
+        "--camera-model",
+        "RADIAL",
+        "--bundle-adjust",
+    ]
+    with patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert switched_sfmr.exists()
+    assert "Switch camera model to RADIAL" in result.output
+
+    from sfmtool._sfmtool import SfmrReconstruction
+
+    switched = SfmrReconstruction.load(switched_sfmr)
+    for camera in switched.cameras:
+        assert camera.model == "RADIAL"
+
+
+def test_xform_camera_model_unknown(isolated_seoul_bull_17_images: list[Path]):
+    """An unknown camera model is rejected at the CLI."""
+    workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+
+    output_sfmr = workspace_dir / "solve.sfmr"
+    result = CliRunner().invoke(
+        main,
+        ["solve", "-i", "--output", str(output_sfmr), str(workspace_dir)],
+    )
+    assert result.exit_code == 0, result.output
+
+    bad_sfmr = workspace_dir / "bad.sfmr"
+    args = [
+        "xform",
+        str(output_sfmr),
+        str(bad_sfmr),
+        "--camera-model",
+        "NOT_A_MODEL",
+    ]
+    with patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code != 0
+    assert "Unknown camera model" in result.output
+
+
 def test_xform_chained_transforms(isolated_seoul_bull_17_images: list[Path]):
     """Test xform with multiple chained transforms."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent

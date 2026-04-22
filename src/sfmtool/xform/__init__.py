@@ -26,6 +26,7 @@ from ._rotate import RotateTransform
 from ._scale import ScaleTransform
 from ._scale_by_measurements import ScaleByMeasurementsTransform
 from ._similarity import SimilarityTransform
+from ._switch_camera_model import SwitchCameraModelTransform
 from ._translate import TranslateTransform
 
 __all__ = [
@@ -48,5 +49,6 @@ __all__ = [
     "AlignToTransform",
     "AlignToInputTransform",
     "SimilarityTransform",
+    "SwitchCameraModelTransform",
     "apply_transforms",
 ]

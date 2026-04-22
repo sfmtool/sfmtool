@@ -28,6 +28,7 @@ from ..xform import (
     RotateTransform,
     ScaleByMeasurementsTransform,
     ScaleTransform,
+    SwitchCameraModelTransform,
     TranslateTransform,
     apply_transforms,
 )
@@ -281,6 +282,19 @@ def parse_transform_args(args: list[str]) -> list:
             i += 1
             transforms.append(ExcludeGlobFilter(args[i]))
 
+        elif arg == "--camera-model":
+            if i + 1 >= len(args):
+                raise click.UsageError("--camera-model requires an argument")
+            i += 1
+            param = args[i]
+
+            try:
+                transforms.append(SwitchCameraModelTransform(param))
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --camera-model parameter '{param}': {e}"
+                )
+
         i += 1
 
     return transforms
@@ -373,6 +387,15 @@ def parse_transform_args(args: list[str]) -> list:
     multiple=True,
     help="Exclude images whose name matches a glob pattern (e.g., '*fisheye_right*')",
 )
+@click.option(
+    "--camera-model",
+    multiple=True,
+    help=(
+        "Switch every camera to a different COLMAP model "
+        "(e.g., 'RADIAL' to add a k2 term for bundle adjustment to refine). "
+        "Shared parameters carry over; new ones initialize to zero."
+    ),
+)
 @click.pass_context
 def xform(ctx, input_path, output_path, **kwargs):
     """Apply transformations to a .sfmr file.
@@ -404,6 +427,10 @@ def xform(ctx, input_path, output_path, **kwargs):
       --remove-large-features size        Remove points with max feature size > threshold
       --remove-isolated factor,spec       Remove isolated points (NN distance filter)
       --filter-by-reprojection-error val  Remove points with reprojection error > threshold
+
+    \b
+    Camera model:
+      --camera-model NAME                 Switch every camera's model (e.g. RADIAL)
 
     \b
     Optimization:
@@ -439,6 +466,10 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
         # Filter and optimize with bundle adjustment
         sfm xform in.sfmr out.sfmr --remove-short-tracks 2 --bundle-adjust
+
+    \b
+        # Upgrade SIMPLE_RADIAL → RADIAL to refine k2 during bundle adjustment
+        sfm xform in.sfmr out.sfmr --camera-model RADIAL --bundle-adjust
     """
     from .._sfmtool import SfmrReconstruction
 
@@ -471,7 +502,7 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--include-range, --exclude-range, "
             "--include-glob, --exclude-glob, --remove-short-tracks, --remove-narrow-tracks, "
             "--remove-large-features, --remove-isolated, --filter-by-reprojection-error, "
-            "--bundle-adjust, --align-to, --align-to-input"
+            "--camera-model, --bundle-adjust, --align-to, --align-to-input"
         )
 
     try:
