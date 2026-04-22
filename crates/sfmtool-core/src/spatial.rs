@@ -15,6 +15,7 @@
 //! ```
 
 use kiddo::float::kdtree::Axis;
+use kiddo::float_leaf_slice::leaf_slice::{LeafSliceFloat, LeafSliceFloatChunk};
 use kiddo::SquaredEuclidean;
 
 /// A point cloud with a KD-tree for spatial queries.
@@ -24,13 +25,24 @@ use kiddo::SquaredEuclidean;
 ///
 /// `A` is the scalar type (`f32` or `f64`), and `DIM` is the spatial
 /// dimensionality (e.g. 2 or 3).
-pub struct PointCloud<A: Axis, const DIM: usize> {
+///
+/// Uses `ImmutableKdTree` because the mutable `KdTree` panics at
+/// construction when more than `BUCKET_SIZE - 1` items share the same
+/// value on one axis (which happens routinely with SIFT features along a
+/// strong image edge). The immutable tree uses median-based splits that
+/// handle duplicate axis values correctly.
+pub struct PointCloud<
+    A: Axis + LeafSliceFloat<u64> + LeafSliceFloatChunk<u64, DIM>,
+    const DIM: usize,
+> {
     positions: Vec<A>,
-    tree: kiddo::KdTree<A, DIM>,
+    tree: kiddo::ImmutableKdTree<A, DIM>,
     n_points: usize,
 }
 
-impl<A: Axis, const DIM: usize> PointCloud<A, DIM> {
+impl<A: Axis + LeafSliceFloat<u64> + LeafSliceFloatChunk<u64, DIM>, const DIM: usize>
+    PointCloud<A, DIM>
+{
     /// Build from a flat slice of coordinates with `n_points` entries.
     ///
     /// For 2D: `[x, y, x, y, ...]`, for 3D: `[x, y, z, x, y, z, ...]`.
@@ -41,13 +53,14 @@ impl<A: Axis, const DIM: usize> PointCloud<A, DIM> {
             "positions length must be {DIM} * n_points",
         );
 
-        let mut tree = kiddo::KdTree::<A, DIM>::new();
+        let mut points: Vec<[A; DIM]> = Vec::with_capacity(n_points);
         for i in 0..n_points {
             let base = i * DIM;
             let mut point = [A::default(); DIM];
             point.copy_from_slice(&positions[base..base + DIM]);
-            tree.add(&point, i as u64);
+            points.push(point);
         }
+        let tree = kiddo::ImmutableKdTree::<A, DIM>::new_from_slice(&points);
 
         Self {
             positions: positions.to_vec(),
@@ -98,12 +111,15 @@ impl<A: Axis, const DIM: usize> PointCloud<A, DIM> {
     /// If fewer than `k` neighbors exist, remaining slots are filled with `u32::MAX`.
     pub fn nearest_k(&self, query: &[A], n_queries: usize, k: usize) -> Vec<u32> {
         assert_eq!(query.len(), n_queries * DIM);
+        let Some(k_nz) = std::num::NonZero::<usize>::new(k) else {
+            return Vec::new();
+        };
         let mut result = Vec::with_capacity(n_queries * k);
         for i in 0..n_queries {
             let base = i * DIM;
             let mut q = [A::default(); DIM];
             q.copy_from_slice(&query[base..base + DIM]);
-            let neighbors = self.tree.nearest_n::<SquaredEuclidean>(&q, k);
+            let neighbors = self.tree.nearest_n::<SquaredEuclidean>(&q, k_nz);
             for nb in &neighbors {
                 result.push(nb.item as u32);
             }
@@ -160,6 +176,9 @@ impl<A: Axis, const DIM: usize> PointCloud<A, DIM> {
         use rayon::prelude::*;
 
         assert_eq!(query.len(), n_queries * DIM);
+        let Some(k_nz) = std::num::NonZero::<usize>::new(k) else {
+            return Vec::new();
+        };
         let radius_sq = radius * radius;
         let mut result = vec![u32::MAX; n_queries * k];
         result.par_chunks_mut(k).enumerate().for_each(|(i, row)| {
@@ -168,7 +187,7 @@ impl<A: Axis, const DIM: usize> PointCloud<A, DIM> {
             q.copy_from_slice(&query[base..base + DIM]);
             let neighbors = self
                 .tree
-                .nearest_n_within::<SquaredEuclidean>(&q, radius_sq, k, true);
+                .nearest_n_within::<SquaredEuclidean>(&q, radius_sq, k_nz, true);
             for (slot, nb) in row.iter_mut().zip(neighbors.iter()) {
                 *slot = nb.item as u32;
             }
@@ -181,10 +200,11 @@ impl<A: Axis, const DIM: usize> PointCloud<A, DIM> {
     /// Returns a flat `Vec<u32>` of length `n_points * k`, row-major.
     /// If fewer than `k` other points exist, remaining slots are `u32::MAX`.
     pub fn self_nearest_k(&self, k: usize) -> Vec<u32> {
+        let k_plus_1 = std::num::NonZero::<usize>::new(k + 1).expect("k + 1 is non-zero");
         let mut result = Vec::with_capacity(self.n_points * k);
         for i in 0..self.n_points {
             let q = self.position(i);
-            let neighbors = self.tree.nearest_n::<SquaredEuclidean>(&q, k + 1);
+            let neighbors = self.tree.nearest_n::<SquaredEuclidean>(&q, k_plus_1);
             let mut count = 0;
             for nb in &neighbors {
                 if nb.item != i as u64 {
@@ -211,10 +231,11 @@ impl<A: Axis, const DIM: usize> PointCloud<A, DIM> {
             return vec![A::infinity(); self.n_points];
         }
 
+        let two = std::num::NonZero::<usize>::new(2).expect("2 is non-zero");
         let mut distances = Vec::with_capacity(self.n_points);
         for i in 0..self.n_points {
             let query = self.position(i);
-            let neighbors = self.tree.nearest_n::<SquaredEuclidean>(&query, 2);
+            let neighbors = self.tree.nearest_n::<SquaredEuclidean>(&query, two);
 
             let mut min_dist = A::infinity();
             for nb in &neighbors {

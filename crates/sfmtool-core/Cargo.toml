@@ -15,7 +15,7 @@ gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 [dependencies]
 nalgebra = "0.33"
 ndarray = "0.16"
-kiddo = "4"
+kiddo = "5"
 rayon = "1.10"
 rand = "0.9"
 serde_json = "1"

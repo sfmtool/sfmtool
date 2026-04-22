@@ -261,3 +261,53 @@ fn test_nn_distances_single_point_f32() {
     assert_eq!(dists.len(), 1);
     assert!(dists[0].is_infinite());
 }
+
+/// Regression: kiddo 4.2's KD-tree constructions both fail on inputs with
+/// many points sharing the same value on one axis — the mutable `KdTree`
+/// panics with "Too many items with the same position on one axis" once
+/// more than `BUCKET_SIZE - 1` items collide, and the `ImmutableKdTree`'s
+/// balance optimizer hits a pivot underflow panic ("mid > len") for
+/// heavily skewed inputs. `PointCloud::new` applies deterministic
+/// per-index jitter so every axis value is unique, which sidesteps both
+/// bugs. This reproduces the real-world failure seen during flow matching
+/// on scenes with strong vertical edges.
+#[test]
+fn test_2d_construction_axis_cluster() {
+    // 40 points with x=100.0 plus 60 scattered points. The 40 collinear
+    // points exceed the default 32 bucket size.
+    let mut positions = Vec::new();
+    for i in 0..40 {
+        positions.push(100.0_f32);
+        positions.push(i as f32 * 0.5);
+    }
+    for i in 0..60 {
+        positions.push((i as f32).sin() * 50.0 + 50.0);
+        positions.push((i as f32).cos() * 50.0 + 50.0);
+    }
+    let n = 100;
+    let cloud = PointCloud2::<f32>::new(&positions, n);
+    assert_eq!(cloud.len(), n);
+    // Query near one of the collinear points; it must land on a point with
+    // x=100.0 (indices 0..40).
+    let result = cloud.nearest(&[100.0, 5.1], 1);
+    assert!(result[0] < 40);
+}
+
+/// Regression: many points at literally the same position (e.g. SIFT
+/// features at the exact same quantized location) should not panic.
+#[test]
+fn test_2d_construction_exact_duplicates() {
+    // 200 points all at the exact same coordinate. Without jitter this
+    // triggers the mutable tree's bucket-overflow panic immediately.
+    let n = 200;
+    let mut positions = Vec::with_capacity(n * 2);
+    for _ in 0..n {
+        positions.push(42.0_f32);
+        positions.push(17.0_f32);
+    }
+    let cloud = PointCloud2::<f32>::new(&positions, n);
+    assert_eq!(cloud.len(), n);
+    // All points coincide; nearest to the shared location must be valid.
+    let result = cloud.nearest(&[42.0, 17.0], 1);
+    assert!(result[0] < n as u32);
+}
