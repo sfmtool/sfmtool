@@ -185,6 +185,12 @@ def match(
     absolute_paths = [Path(os.path.normpath(os.path.abspath(p))) for p in filenames]
     workspace_dir = deduce_workspace({p.parent for p in absolute_paths})
 
+    from .._camera_config import CameraConfigResolver
+    from .._camera_setup import _check_camera_model_conflict
+
+    camera_config_resolver = CameraConfigResolver(workspace_dir)
+    _check_camera_model_conflict(absolute_paths, camera_config_resolver, camera_model)
+
     try:
         if flow_match:
             matching_method = "flow"
@@ -382,10 +388,15 @@ def _populate_db_features(
     workspace_dir: Path,
     max_feature_count: int | None,
     camera_model: str | None,
+    camera_config_resolver=None,
 ):
     """Create a COLMAP DB and populate it with cameras, images, keypoints, descriptors."""
+    from .._camera_config import CameraConfigResolver
     from .._colmap_db import _setup_db_single_camera, _setup_db_with_rigs
     from .._rig_config import _load_rig_config
+
+    if camera_config_resolver is None:
+        camera_config_resolver = CameraConfigResolver(workspace_dir)
 
     rig_config = _load_rig_config(workspace_dir)
 
@@ -398,6 +409,7 @@ def _populate_db_features(
             max_feature_count,
             rig_configs=rig_config,
             camera_model=camera_model,
+            camera_config_resolver=camera_config_resolver,
         )
     else:
         _setup_db_single_camera(
@@ -407,6 +419,7 @@ def _populate_db_features(
             db_path,
             max_feature_count,
             camera_model=camera_model,
+            camera_config_resolver=camera_config_resolver,
         )
 
 

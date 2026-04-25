@@ -37,6 +37,13 @@ Populates the database with camera intrinsics, pose priors, keypoints, descripto
 Populates the database with cameras, keypoints, descriptors, and pre-computed matches and
 two-view geometries (if included) from the matches file.
 
+## Camera Intrinsics (`.matches` mode only)
+
+If any image referenced by the `.matches` file resolves a `camera_config.json` (closest-ancestor
+walk from its parent directory up to the workspace root), the file's intrinsics are used and
+`--camera-model` is rejected with an error before any database work begins. See
+[`../workspace/camera-config.md`](../workspace/camera-config.md).
+
 ## Usage Examples
 
 ```bash

@@ -45,6 +45,13 @@ or `--merge` to combine existing `.matches` files.
 4. Computes descriptor distances for matched pairs
 5. Writes a timestamped `.matches` file
 
+## Camera Intrinsics
+
+If any image being processed resolves a `camera_config.json` (closest-ancestor walk from
+its parent directory up to the workspace root), the file's intrinsics are used and
+`--camera-model` is rejected with an error. See
+[`../workspace/camera-config.md`](../workspace/camera-config.md).
+
 ## Merge
 
 `--merge` combines multiple `.matches` files into a single file. This is useful

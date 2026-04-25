@@ -154,7 +154,7 @@ shared calibration.
 A `camera_config.json` file applies to all images in the directory that contains
 it, and recursively to all subdirectories — unless a deeper subdirectory contains
 its own `camera_config.json`, which takes precedence for images under that
-subdirectory. Resolution is closest-ancestor-wins, similar to `.gitignore`.
+subdirectory. Resolution is closest-ancestor-wins.
 
 Workspace root is the upper bound: the search never crosses out of the
 workspace. If no `camera_config.json` is found between the image's parent

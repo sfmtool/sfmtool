@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pycolmap
 
-from ._camera_setup import _infer_camera, _wrap_descriptors
+from ._camera_config import CameraConfigResolver
+from ._camera_setup import _infer_camera, _wrap_descriptors, intrinsics_for_image
+from ._cameras import colmap_camera_from_intrinsics
 from ._rig_config import (
     _infer_frame_key,
     _match_image_to_sensor,
@@ -31,6 +33,7 @@ def _setup_for_sfm(
     matching_mode: str = "exhaustive",
     flow_preset: str = "default",
     flow_wide_baseline_skip: int = 5,
+    camera_config_resolver: CameraConfigResolver | None = None,
 ) -> tuple[Path, Path]:
     """Prepare a COLMAP database for running the mapper.
 
@@ -61,6 +64,7 @@ def _setup_for_sfm(
             max_feature_count,
             rig_config,
             camera_model=camera_model,
+            camera_config_resolver=camera_config_resolver,
         )
     else:
         _setup_db_single_camera(
@@ -70,6 +74,7 @@ def _setup_for_sfm(
             db_path,
             max_feature_count,
             camera_model=camera_model,
+            camera_config_resolver=camera_config_resolver,
         )
 
     # Build same-frame exclusion data for multi-sensor rigs
@@ -115,6 +120,7 @@ def _setup_for_sfm_from_matches(
     colmap_dir: str | Path,
     camera_model: str | None = None,
     range_expr: str | None = None,
+    camera_config_resolver: CameraConfigResolver | None = None,
 ) -> tuple[Path, Path, list[Path]]:
     """Prepare a COLMAP database from a .matches file for running the mapper.
 
@@ -244,6 +250,15 @@ def _setup_for_sfm_from_matches(
 
     rig_config = _load_rig_config(workspace_dir)
 
+    # Build a camera_config_resolver if the caller didn't already supply one. Without a
+    # camera_config_resolver, intrinsics fall back to EXIF-only behavior.
+    if camera_config_resolver is None:
+        camera_config_resolver = CameraConfigResolver(workspace_dir)
+
+    from ._camera_setup import _check_camera_model_conflict
+
+    _check_camera_model_conflict(image_paths, camera_config_resolver, camera_model)
+
     # Populate DB with features
     if rig_config is not None:
         _setup_db_with_rigs(
@@ -254,6 +269,7 @@ def _setup_for_sfm_from_matches(
             max_feature_count=None,
             rig_configs=rig_config,
             camera_model=camera_model,
+            camera_config_resolver=camera_config_resolver,
         )
     else:
         _setup_db_single_camera(
@@ -263,6 +279,7 @@ def _setup_for_sfm_from_matches(
             db_path,
             max_feature_count=None,
             camera_model=camera_model,
+            camera_config_resolver=camera_config_resolver,
         )
 
     # Write matches and TVGs to the database
@@ -421,10 +438,16 @@ def _setup_db_single_camera(
     db_path: Path,
     max_feature_count: int | None,
     camera_model: str | None = None,
+    camera_config_resolver: CameraConfigResolver | None = None,
 ) -> None:
     """Set up COLMAP database with a single-camera trivial rig."""
     with pycolmap.Database.open(db_path) as db:
-        cam = _infer_camera(image_paths[0], camera_model)
+        intrinsics, prior = intrinsics_for_image(
+            Path(image_paths[0]), camera_config_resolver, camera_model
+        )
+        cam = colmap_camera_from_intrinsics(intrinsics)
+        if prior:
+            cam.has_prior_focal_length = True
         camera_id = db.write_camera(cam)
 
         rig = pycolmap.Rig()
@@ -514,6 +537,7 @@ def _setup_db_with_rigs(
     max_feature_count: int | None,
     rig_configs: list[dict],
     camera_model: str | None = None,
+    camera_config_resolver: CameraConfigResolver | None = None,
 ) -> None:
     """Set up COLMAP database with multi-sensor rigs from rig_config.json."""
     with pycolmap.Database.open(db_path) as db:
@@ -616,9 +640,13 @@ def _setup_db_with_rigs(
 
         # Handle unmatched images with trivial single-camera rigs
         if unmatched_images:
-            cam = pycolmap.infer_camera_from_image(
-                str(image_dir / unmatched_images[0][0])
+            first_unmatched = image_dir / unmatched_images[0][0]
+            intrinsics, prior = intrinsics_for_image(
+                first_unmatched, camera_config_resolver, camera_model
             )
+            cam = colmap_camera_from_intrinsics(intrinsics)
+            if prior:
+                cam.has_prior_focal_length = True
             camera_id = db.write_camera(cam)
             fallback_rig = pycolmap.Rig()
             fallback_rig.add_ref_sensor(

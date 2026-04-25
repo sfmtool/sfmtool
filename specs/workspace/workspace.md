@@ -373,6 +373,15 @@ Old feature directories are never deleted automatically. This is by design — t
 referenced by existing `.sfmr` files, or you may want to switch back to that configuration
 later. If you're sure a feature directory is no longer needed, delete it manually.
 
+## Camera Intrinsics
+
+A workspace can commit known-good camera intrinsics through optional
+`camera_config.json` files. Resolution is closest-ancestor-wins from the image's
+parent directory up to the workspace root. When present, the file is the sole
+source of camera setup for those images, and `--camera-model` on the command
+line is rejected for the invocation. See
+[`camera-config.md`](camera-config.md) for the file format and semantics.
+
 ## Design Principles
 
 1. **Convention over configuration**: Sensible defaults mean most projects need only `sfm init`

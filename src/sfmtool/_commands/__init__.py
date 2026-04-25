@@ -4,6 +4,7 @@
 """CLI command implementations organized by functionality."""
 
 from .align import align
+from .cam import cam
 from .compare import compare
 from .densify import densify
 from .discontinuity import discontinuity
@@ -28,6 +29,7 @@ from .xform import xform
 
 __all__ = [
     "align",
+    "cam",
     "compare",
     "densify",
     "discontinuity",

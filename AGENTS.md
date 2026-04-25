@@ -68,7 +68,9 @@ When finishing a task, run the checks for what you changed:
 Run `pixi run sfm --help` to list all subcommands grouped by category
 (Workspace / Image Feature / Reconstruction / Visualization / Image Processing
 / COLMAP Interop). Source in `src/sfmtool/_commands/<name>.py`; specs in
-`specs/cli/<name>-command.md`. Typical reconstruction flow:
+`specs/cli/<name>-command.md`. `sfm cam` is a command **group** (with one
+subcommand `cp` today); every other top-level command is flat. Typical
+reconstruction flow:
 
 ```bash
 cd workspace-dir
@@ -91,3 +93,9 @@ pixi run sfm solve -g images     # global SfM
   (e.g. `scale-by-measurements-command.md` documents an `xform` sub-command);
   likewise not every CLI command has a spec yet.
 - Python 3.14 and Rust 1.94 are pinned in `pixi.toml`.
+- A workspace can supply per-directory camera intrinsics via
+  `camera_config.json` files; resolution is closest-ancestor-wins, capped at
+  the workspace root. See `src/sfmtool/_camera_config.py` and
+  `specs/workspace/camera-config.md`. When such a file resolves for any image
+  in a `solve` / `match` / `to-colmap-db` invocation, `--camera-model` is
+  rejected up front.

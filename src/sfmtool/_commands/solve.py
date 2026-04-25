@@ -234,6 +234,8 @@ def solve(
                         matches_file=matches_file,
                         range_expr=range_expr,
                     )
+        except click.UsageError:
+            raise
         except Exception as e:
             raise click.ClickException(str(e))
         return
@@ -255,6 +257,12 @@ def solve(
     absolute_paths = [Path(os.path.normpath(os.path.abspath(p))) for p in filenames]
 
     workspace_dir = deduce_workspace({p.parent for p in absolute_paths})
+
+    from .._camera_config import CameraConfigResolver
+    from .._camera_setup import _check_camera_model_conflict
+
+    camera_config_resolver = CameraConfigResolver(workspace_dir)
+    _check_camera_model_conflict(absolute_paths, camera_config_resolver, camera_model)
 
     if seq_overlap:
         _run_sequential_overlap_sfm(

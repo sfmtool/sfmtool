@@ -10,6 +10,7 @@ from pathlib import Path
 import pycolmap
 from deadline.job_attachments.api import summarize_path_list
 
+from ._camera_config import CameraConfigResolver
 from ._colmap_db import _setup_for_sfm, _setup_for_sfm_from_matches
 from ._colmap_io import (
     build_metadata,
@@ -69,6 +70,8 @@ def run_incremental_sfm(
         if has_rig:
             print(f"Rig config: {len(rig_config)} rig(s) detected")
 
+        camera_config_resolver = CameraConfigResolver(workspace_dir)
+
         db_path, image_dir = _setup_for_sfm(
             image_paths,
             colmap_dir,
@@ -82,6 +85,7 @@ def run_incremental_sfm(
             matching_mode=matching_mode,
             flow_preset=flow_preset,
             flow_wide_baseline_skip=flow_wide_baseline_skip,
+            camera_config_resolver=camera_config_resolver,
         )
 
     reconstruction_path = os.path.join(colmap_dir, "reconstruction")

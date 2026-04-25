@@ -66,6 +66,13 @@ If the workspace contains a rig configuration, the command automatically sets up
 constraints. Use `--refine-rig / --no-refine-rig` to control whether sensor-from-rig poses
 are refined during bundle adjustment.
 
+## Camera Intrinsics
+
+If any image being processed resolves a `camera_config.json` (closest-ancestor walk from
+its parent directory up to the workspace root), the file's intrinsics are used and
+`--camera-model` is rejected with an error before any solve work begins. See
+[`../workspace/camera-config.md`](../workspace/camera-config.md).
+
 ## Usage Examples
 
 ```bash

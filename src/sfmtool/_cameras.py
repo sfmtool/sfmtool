@@ -5,6 +5,19 @@
 
 import numpy as np
 
+# Parameter names that represent focal length or principal point (as opposed
+# to distortion coefficients). Used by callers that need to treat the two
+# groups differently — e.g. resolution scaling, schema validation.
+FOCAL_PRINCIPAL_PARAM_NAMES = frozenset(
+    {
+        "focal_length",
+        "focal_length_x",
+        "focal_length_y",
+        "principal_point_x",
+        "principal_point_y",
+    }
+)
+
 _CAMERA_PARAM_NAMES = {
     "PINHOLE": [
         "focal_length_x",

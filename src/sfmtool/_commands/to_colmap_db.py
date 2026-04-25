@@ -126,5 +126,7 @@ def _from_matches(input_path, output_db_path, camera_model):
 
             shutil.move(str(db_path), str(output_db_path))
             click.echo(f"Database: {output_db_path}")
+    except click.UsageError:
+        raise
     except Exception as e:
         raise click.ClickException(str(e))
