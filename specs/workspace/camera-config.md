@@ -275,8 +275,8 @@ sfm xform my_project/sfmr/calibration_subset.sfmr \
     --output my_project/sfmr/calibration_subset_cleaned.sfmr
 
 # 4. Save the cleaned reconstruction's intrinsics into the workspace
-sfm save-camera-config my_project/sfmr/calibration_subset_cleaned.sfmr \
-    --output my_project/camera_config.json
+sfm cam cp my_project/sfmr/calibration_subset_cleaned.sfmr \
+    my_project/camera_config.json
 
 # 5. Re-solve from scratch — now with priors
 sfm solve -i my_project/photos
@@ -291,7 +291,7 @@ high-quality observations, which is what we want to harvest.
 `--align-to-input` keeps the cleaned reconstruction in the same coordinate
 frame as the original so it remains comparable.
 
-The intent of step 4 is captured by a future `sfm save-camera-config` command;
+The intent of step 4 is captured by a future `sfm cam cp` command;
 until that lands, the file can be written by hand from the values in
 `sfm inspect --metrics` output, or from a small script using
 `pycolmap_camera_to_intrinsics`.
