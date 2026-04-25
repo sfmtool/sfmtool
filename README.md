@@ -24,7 +24,7 @@ cp /path/to/images/*.jpg workspace/images/
 cd workspace
 
 # Initialize and solve
-sfm init .
+sfm ws init .
 sfm solve -g images/
 
 # Inspect the result

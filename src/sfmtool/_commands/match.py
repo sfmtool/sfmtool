@@ -126,7 +126,7 @@ def match(
 ):
     """Match features between image pairs and write a .matches file.
 
-    Requires a workspace initialized with 'sfm init' and SIFT features
+    Requires a workspace initialized with 'sfm ws init' and SIFT features
     extracted with 'sfm sift --extract'.
 
     Examples:

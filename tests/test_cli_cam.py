@@ -140,7 +140,7 @@ def test_cam_cp_roundtrip_into_solve(
     shutil.copytree(images_src, images_dst)
 
     runner = CliRunner()
-    result = runner.invoke(main, ["init", str(new_ws)])
+    result = runner.invoke(main, ["ws", "init", str(new_ws)])
     assert result.exit_code == 0, result.output
 
     # Harvest intrinsics from the existing reconstruction into the new workspace

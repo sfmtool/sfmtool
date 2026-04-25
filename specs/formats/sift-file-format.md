@@ -155,7 +155,7 @@ The `feature_tool_xxh128` identifies a specific feature extraction configuration
 derived from `feature_tool`, `feature_type`, and `feature_options`.
 
 The spec does not prescribe a specific serialization or hashing algorithm. The implementation
-computes the hash during workspace initialization (`sfm init`) and stores the result in
+computes the hash during workspace initialization (`sfm ws init`) and stores the result in
 `.sfm-workspace.json` as part of `feature_prefix_dir`. From that point on, the hash is never
 recomputed — it is read from the workspace config and propagated into `.sift`, `.sfmr`, and
 `.matches` files as-is.

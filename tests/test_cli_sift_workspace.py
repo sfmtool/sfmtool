@@ -16,7 +16,7 @@ def test_sift_workspace_mode(isolated_seoul_bull_image: Path):
     workspace_dir = isolated_seoul_bull_image.parent
     workspace_config_file = workspace_dir / ".sfm-workspace.json"
 
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0
     assert workspace_config_file.exists()
 
@@ -37,7 +37,7 @@ def test_sift_workspace_with_dsp(isolated_seoul_bull_image: Path):
     workspace_dir = isolated_seoul_bull_image.parent
     workspace_config_file = workspace_dir / ".sfm-workspace.json"
 
-    result = CliRunner().invoke(main, ["init", "--dsp", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", "--dsp", str(workspace_dir)])
     assert result.exit_code == 0
 
     with open(workspace_config_file) as f:
@@ -56,7 +56,7 @@ def test_sift_cli_override_workspace(isolated_seoul_bull_image: Path):
     """Test that --tool overrides workspace configuration."""
     workspace_dir = isolated_seoul_bull_image.parent
 
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0
 
     result = CliRunner().invoke(
@@ -78,21 +78,21 @@ def test_sift_no_workspace_error(isolated_seoul_bull_image: Path):
     )
     assert result.exit_code != 0
     assert "No workspace found" in result.output
-    assert "Initialize a workspace with 'sfm init'" in result.output
+    assert "Initialize a workspace with 'sfm ws init'" in result.output
     assert "Specify --tool explicitly" in result.output
 
 
 def test_sift_dsp_without_tool_error(isolated_seoul_bull_image: Path):
     """Test that --dsp without --tool raises an error."""
     workspace_dir = isolated_seoul_bull_image.parent
-    CliRunner().invoke(main, ["init", str(workspace_dir)])
+    CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
 
     result = CliRunner().invoke(
         main, ["sift", "--extract", "--dsp", str(isolated_seoul_bull_image)]
     )
     assert result.exit_code != 0
     assert "--dsp/--no-dsp can only be used with --tool" in result.output
-    assert "reinitialize the workspace with 'sfm init --dsp'" in result.output
+    assert "reinitialize the workspace with 'sfm ws init --dsp'" in result.output
 
 
 def test_sift_dsp_with_opencv_error(isolated_seoul_bull_image: Path):
@@ -117,7 +117,7 @@ def test_sift_workspace_opencv(isolated_seoul_bull_image: Path):
     workspace_dir = isolated_seoul_bull_image.parent
 
     result = CliRunner().invoke(
-        main, ["init", "--feature-tool", "opencv", str(workspace_dir)]
+        main, ["ws", "init", "--feature-tool", "opencv", str(workspace_dir)]
     )
     assert result.exit_code == 0
 
@@ -145,7 +145,7 @@ def test_sift_workspace_detection_from_subdirectory(tmp_path):
     test_image = images_dir / "test.jpg"
     shutil.copy(test_image_src, test_image)
 
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0
 
     result = CliRunner().invoke(main, ["sift", "--extract", str(test_image)])

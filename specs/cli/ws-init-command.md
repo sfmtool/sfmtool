@@ -1,4 +1,4 @@
-# `sfm init` Command
+# `sfm ws init` Command
 
 ## Overview
 
@@ -9,7 +9,7 @@ commands.
 ## Command Syntax
 
 ```bash
-sfm init [WORKSPACE_DIR] [OPTIONS...]
+sfm ws init [WORKSPACE_DIR] [OPTIONS...]
 ```
 
 If `WORKSPACE_DIR` is omitted, the current directory is used.
@@ -37,14 +37,14 @@ If `WORKSPACE_DIR` is omitted, the current directory is used.
 
 ```bash
 # Initialize with defaults (COLMAP, GPU, 8192 features)
-sfm init
+sfm ws init
 
 # Initialize a specific directory with OpenCV
-sfm init ./my_project --feature-tool opencv
+sfm ws init ./my_project --feature-tool opencv
 
 # COLMAP with domain size pooling, more features
-sfm init --feature-tool colmap --dsp --max-features 16384
+sfm ws init --feature-tool colmap --dsp --max-features 16384
 
 # Re-initialize an existing workspace
-sfm init --force
+sfm ws init --force
 ```

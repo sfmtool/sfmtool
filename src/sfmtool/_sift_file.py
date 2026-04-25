@@ -433,7 +433,7 @@ def get_sift_path_for_image(
                     raise RuntimeError(
                         f"SfM workspace {workspace_dir} is missing required "
                         f"field feature_prefix_dir. Re-initialize the workspace "
-                        f"with 'sfm init'."
+                        f"with 'sfm ws init'."
                     )
                 return (
                     image_filename.parent

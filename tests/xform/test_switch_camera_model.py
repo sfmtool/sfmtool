@@ -94,6 +94,8 @@ def test_switch_preserves_points_and_poses(
     sfmrfile_reconstruction_with_17_images, tmp_path
 ):
     """Only cameras change; points, poses, and observations are untouched."""
+    import numpy as np
+
     from .conftest import load_reconstruction_data
 
     output_path = tmp_path / "switched.sfmr"
@@ -111,4 +113,9 @@ def test_switch_preserves_points_and_poses(
     assert switched["observation_count"] == original["observation_count"]
     assert (switched["positions"] == original["positions"]).all()
     assert (switched["translations"] == original["translations"]).all()
-    assert (switched["quaternions_wxyz"] == original["quaternions_wxyz"]).all()
+    # Loading a .sfmr re-normalizes quaternions (reconstruction.rs:440), so the
+    # extra save→load cycle that `switched` goes through can perturb the bytes
+    # by a few ULPs even though the transform itself never touches poses.
+    assert np.allclose(
+        switched["quaternions_wxyz"], original["quaternions_wxyz"], rtol=0, atol=1e-12
+    )

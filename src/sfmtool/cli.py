@@ -20,7 +20,6 @@ from ._commands import (
     flow,
     from_colmap_bin,
     heatmap,
-    init,
     inspect,
     insv2rig,
     match,
@@ -32,6 +31,7 @@ from ._commands import (
     to_colmap_db,
     to_nerfstudio,
     undistort,
+    ws,
     xform,
 )
 from ._workspace import find_workspace_for_path
@@ -51,7 +51,7 @@ def main():
         pass
 
 
-main.add_command_with_category(init, category="Workspace")
+main.add_command_with_category(ws, category="Workspace")
 main.add_command_with_category(cam, category="Workspace")
 main.add_command_with_category(sift, category="Image Feature")
 main.add_command_with_category(match, category="Image Feature")
@@ -103,7 +103,7 @@ def deduce_workspace(paths: set[Path]) -> Path:
     if workspace_dir is None:
         raise click.ClickException(
             "No workspace found for paths. "
-            "Please initialize a workspace using 'sfm init' in a parent directory."
+            "Please initialize a workspace using 'sfm ws init' in a parent directory."
         )
 
     return workspace_dir

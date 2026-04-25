@@ -15,7 +15,7 @@ def test_init_basic(tmp_path: Path):
     workspace_dir = tmp_path / "workspace"
     workspace_dir.mkdir()
 
-    result = runner.invoke(main, ["init", str(workspace_dir)])
+    result = runner.invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0
 
     config_file = workspace_dir / ".sfm-workspace.json"
@@ -33,16 +33,16 @@ def test_init_existing_workspace_protection(tmp_path: Path):
     workspace_dir = tmp_path / "workspace"
     workspace_dir.mkdir()
 
-    runner.invoke(main, ["init", str(workspace_dir)])
+    runner.invoke(main, ["ws", "init", str(workspace_dir)])
 
     # Without --force should fail
-    result = runner.invoke(main, ["init", str(workspace_dir)])
+    result = runner.invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code != 0
     assert "A workspace already exists" in result.output
     assert "Use --force to overwrite" in result.output
 
     # With --force should succeed
-    result = runner.invoke(main, ["init", "--force", str(workspace_dir)])
+    result = runner.invoke(main, ["ws", "init", "--force", str(workspace_dir)])
     assert result.exit_code == 0
     assert "Initialized workspace" in result.output
 
@@ -54,17 +54,17 @@ def test_init_nested_workspace_protection(tmp_path: Path):
     child_dir = parent_dir / "child"
     child_dir.mkdir(parents=True)
 
-    runner.invoke(main, ["init", str(parent_dir)])
+    runner.invoke(main, ["ws", "init", str(parent_dir)])
 
     # Without --force
-    result = runner.invoke(main, ["init", str(child_dir)])
+    result = runner.invoke(main, ["ws", "init", str(child_dir)])
     assert result.exit_code != 0
     assert "Cannot create nested workspace" in result.output
     assert str(parent_dir.resolve()) in result.output
     assert "Use --force to create" in result.output
 
     # With --force
-    result = runner.invoke(main, ["init", "--force", str(child_dir)])
+    result = runner.invoke(main, ["ws", "init", "--force", str(child_dir)])
     assert result.exit_code == 0
     assert "Initialized workspace" in result.output
 
@@ -76,7 +76,7 @@ def test_init_opencv(tmp_path: Path):
     workspace_dir.mkdir()
 
     result = runner.invoke(
-        main, ["init", "--feature-tool", "opencv", str(workspace_dir)]
+        main, ["ws", "init", "--feature-tool", "opencv", str(workspace_dir)]
     )
     assert result.exit_code == 0
 
@@ -89,6 +89,6 @@ def test_init_opencv(tmp_path: Path):
 def test_init_dsp_validation():
     """Test that --dsp requires colmap."""
     runner = CliRunner()
-    result = runner.invoke(main, ["init", "--feature-tool", "opencv", "--dsp"])
+    result = runner.invoke(main, ["ws", "init", "--feature-tool", "opencv", "--dsp"])
     assert result.exit_code != 0
     assert "The --dsp/--no-dsp option is only supported for COLMAP" in result.output

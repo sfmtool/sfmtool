@@ -254,7 +254,7 @@ intrinsics, then solve the full set with the harvested values as priors.
 
 ```bash
 # 1. Initialize the workspace and extract features
-sfm init my_project
+sfm ws init my_project
 sfm sift --extract my_project/photos
 
 # 2. Solve a small, well-conditioned subset (good baseline, lots of overlap)
@@ -301,7 +301,7 @@ until that lands, the file can be written by hand from the values in
 You've previously calibrated a camera and want to skip the bootstrap step.
 
 ```bash
-sfm init new_project
+sfm ws init new_project
 cp ~/calibrations/nikon_z6_24mm/camera_config.json new_project/
 
 sfm sift --extract new_project/photos

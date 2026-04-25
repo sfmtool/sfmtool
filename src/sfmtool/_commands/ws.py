@@ -1,7 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Workspace initialization command."""
+"""Workspace-related commands (`sfm ws ...`)."""
 
 from pathlib import Path
 
@@ -10,7 +10,13 @@ import click
 from .._workspace import find_workspace_for_path, init_workspace
 
 
-@click.command("init")
+@click.group("ws")
+@click.help_option("--help", "-h")
+def ws():
+    """Workspace-related operations."""
+
+
+@ws.command("init")
 @click.help_option("--help", "-h")
 @click.argument("workspace_dir", required=False, type=click.Path())
 @click.option(
@@ -67,13 +73,13 @@ def init(
 
     Example usage:
 
-        sfm init
+        sfm ws init
 
-        sfm init my_workspace
+        sfm ws init my_workspace
 
-        sfm init --feature-tool opencv opencv_workspace
+        sfm ws init --feature-tool opencv opencv_workspace
 
-        sfm init --dsp dsp_workspace
+        sfm ws init --dsp dsp_workspace
     """
     # Validate tool-specific options
     if domain_size_pooling and feature_tool.lower() == "opencv":

@@ -86,7 +86,7 @@ def from_colmap_bin(
         if workspace_dir is None:
             raise RuntimeError(
                 f"No workspace found at or above {image_dir}. "
-                "Initialize one with 'sfm init'."
+                "Initialize one with 'sfm ws init'."
             )
         workspace_config = load_workspace_config(workspace_dir)
 

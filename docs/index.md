@@ -42,7 +42,7 @@ $ cp /path/to/images/*.jpg workspace/images/
 $ cd workspace
 
 # Initialize the workspace
-$ sfm init .
+$ sfm ws init .
 Initialized workspace: .../workspace
 Configuration file: .../workspace/.sfm-workspace.json
   feature_tool: colmap

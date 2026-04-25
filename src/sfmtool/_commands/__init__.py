@@ -13,7 +13,6 @@ from .explorer import explorer
 from .flow import flow
 from .from_colmap_bin import from_colmap_bin
 from .heatmap import heatmap
-from .init import init
 from .inspect import inspect
 from .insv2rig import insv2rig
 from .match import match
@@ -25,6 +24,7 @@ from .to_colmap_bin import to_colmap_bin
 from .to_colmap_db import to_colmap_db
 from .to_nerfstudio import to_nerfstudio
 from .undistort import undistort
+from .ws import ws
 from .xform import xform
 
 __all__ = [
@@ -38,7 +38,6 @@ __all__ = [
     "flow",
     "from_colmap_bin",
     "heatmap",
-    "init",
     "inspect",
     "insv2rig",
     "match",
@@ -50,5 +49,6 @@ __all__ = [
     "to_colmap_db",
     "to_nerfstudio",
     "undistort",
+    "ws",
     "xform",
 ]

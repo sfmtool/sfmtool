@@ -19,7 +19,7 @@ def _get_feature_prefix_dir(workspace_config: dict) -> str:
         return prefix
     raise RuntimeError(
         "Workspace config missing 'feature_prefix_dir'. "
-        "Re-initialize the workspace with 'sfm init'."
+        "Re-initialize the workspace with 'sfm ws init'."
     )
 
 
@@ -37,7 +37,7 @@ def _resolve_workspace_and_sift(
     if workspace_dir is None:
         raise RuntimeError(
             f"Could not find workspace for image directory: {image_dir}\n"
-            "Initialize a workspace with 'sfm init <workspace_dir>'"
+            "Initialize a workspace with 'sfm ws init <workspace_dir>'"
         )
 
     workspace_config = load_workspace_config(workspace_dir)

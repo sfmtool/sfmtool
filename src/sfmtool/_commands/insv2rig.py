@@ -67,11 +67,11 @@ def insv2rig(input_file, output_dir):
     Reads an Insta360 .insv video file and extracts every frame as a pair
     of fisheye images (left and right), suitable for rig-aware SfM.
 
-    The output directory must be inside an initialized workspace (via 'sfm init').
+    The output directory must be inside an initialized workspace (via 'sfm ws init').
 
     Example usage:
 
-        sfm init my_workspace/
+        sfm ws init my_workspace/
         sfm insv2rig video.insv -o my_workspace/images/seq1
 
     """
@@ -82,7 +82,7 @@ def insv2rig(input_file, output_dir):
         if find_workspace_for_path(output_dir) is None:
             raise RuntimeError(
                 f"No workspace found at or above {output_dir}. "
-                f"Initialize one with 'sfm init'."
+                f"Initialize one with 'sfm ws init'."
             )
 
         click.echo(f"Input: {input_file}")

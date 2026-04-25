@@ -51,7 +51,7 @@ def test_xform_on_reconstruction(isolated_seoul_bull_17_images: list[Path]):
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     # Build a reconstruction
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
@@ -88,7 +88,7 @@ def test_xform_remove_short_tracks(isolated_seoul_bull_17_images: list[Path]):
     """Test xform with short track removal."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
@@ -125,7 +125,7 @@ def test_xform_camera_model_with_bundle_adjust(
     then bundle adjustment refines the k2 term that was zero-initialized."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
     result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
@@ -163,7 +163,7 @@ def test_xform_camera_model_unknown(isolated_seoul_bull_17_images: list[Path]):
     """An unknown camera model is rejected at the CLI."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
     result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
@@ -193,7 +193,7 @@ def test_xform_chained_transforms(isolated_seoul_bull_17_images: list[Path]):
     """Test xform with multiple chained transforms."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])

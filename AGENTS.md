@@ -68,13 +68,13 @@ When finishing a task, run the checks for what you changed:
 Run `pixi run sfm --help` to list all subcommands grouped by category
 (Workspace / Image Feature / Reconstruction / Visualization / Image Processing
 / COLMAP Interop). Source in `src/sfmtool/_commands/<name>.py`; specs in
-`specs/cli/<name>-command.md`. `sfm cam` is a command **group** (with one
-subcommand `cp` today); every other top-level command is flat. Typical
-reconstruction flow:
+`specs/cli/<name>-command.md`. `sfm ws` and `sfm cam` are command **groups**
+(each with one subcommand today: `ws init` and `cam cp`); every other
+top-level command is flat. Typical reconstruction flow:
 
 ```bash
 cd workspace-dir
-pixi run sfm init .
+pixi run sfm ws init .
 pixi run sfm sift --extract images
 pixi run sfm solve -i images     # incremental SfM
 pixi run sfm solve -g images     # global SfM

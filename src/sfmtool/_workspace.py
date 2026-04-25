@@ -116,7 +116,7 @@ def load_workspace_config(workspace_dir: Path) -> dict:
     if not config_file.exists():
         raise RuntimeError(
             f"The SfM workspace {workspace_dir} is not initialized. "
-            f"Initialize it with 'sfm init {workspace_dir}'."
+            f"Initialize it with 'sfm ws init {workspace_dir}'."
         )
 
     try:

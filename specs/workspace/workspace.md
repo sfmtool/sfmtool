@@ -52,17 +52,17 @@ data. Some examples of this include:
 
 ```bash
 # Initialize the current directory as a workspace
-sfm init
+sfm ws init
 
 # Initialize a new directory as a workspace
-sfm init my_project
+sfm ws init my_project
 
 # Initialize with specific feature extraction settings
-sfm init --feature-tool colmap --dsp my_project
-sfm init --feature-tool opencv my_project
+sfm ws init --feature-tool colmap --dsp my_project
+sfm ws init --feature-tool opencv my_project
 ```
 
-The `sfm init` command creates the directory (if needed) and writes `.sfm-workspace.json`.
+The `sfm ws init` command creates the directory (if needed) and writes `.sfm-workspace.json`.
 
 ### File Format
 
@@ -108,7 +108,7 @@ This is structured as `features/{feature_type}-{feature_tool_xxh128}`, where:
 
 - `feature_type` identifies the descriptor format (e.g., `sift-colmap`, `sift-opencv`)
 - `feature_tool_xxh128` is a hash derived from `feature_tool`, `feature_type`, and
-  `feature_options`, computed once during `sfm init`. The spec does not prescribe a specific
+  `feature_options`, computed once during `sfm ws init`. The spec does not prescribe a specific
   serialization algorithm — the implementation decides how to hash these values.
   Implementations should be deterministic so that reinitializing a workspace with the same
   settings produces the same hash and reuses cached features
@@ -120,7 +120,7 @@ switch back.
 
 ### Protection Against Nesting
 
-`sfm init` prevents creating a workspace inside an existing workspace, since nested workspaces
+`sfm ws init` prevents creating a workspace inside an existing workspace, since nested workspaces
 create ambiguity about which workspace a file belongs to. Use `--force` to override this check
 if you have a specific reason to nest.
 
@@ -203,7 +203,7 @@ Different commands discover the workspace in different ways depending on their i
 
 - **`sfm sift --extract`**: Finds the workspace from the common parent of the provided image
   paths. If no workspace is found and `--tool` is not specified, the command fails with a
-  helpful message suggesting `sfm init`.
+  helpful message suggesting `sfm ws init`.
 
 - **`sfm solve`**: Finds the workspace from the common parent of the image directories being
   solved. The workspace provides feature tool settings needed to locate `.sift` files.
@@ -295,7 +295,7 @@ The workspace eliminates repetition across commands. Here's what a session looks
 
 ```bash
 # One-time setup
-sfm init --dsp my_project
+sfm ws init --dsp my_project
 
 # Extract features — workspace provides the tool and options
 sfm sift --extract my_project/frames/
@@ -329,19 +329,19 @@ directories mean you can freely switch between configurations without losing pre
 
 ```bash
 # Start with default COLMAP settings
-sfm init my_project
+sfm ws init my_project
 sfm sift --extract my_project/frames/
 sfm solve -i my_project/frames/
 # Features are in frames/features/sift-colmap-a1b2c3d4...
 
 # Try domain size pooling — reinitialize the workspace
-sfm init --dsp --force my_project
+sfm ws init --dsp --force my_project
 sfm sift --extract my_project/frames/
 sfm solve -i my_project/frames/
 # Features are in frames/features/sift-colmap-e5f6a7b8... (different hash)
 
 # Switch back to the original settings
-sfm init --force my_project
+sfm ws init --force my_project
 # The original features in frames/features/sift-colmap-a1b2c3d4... are still there
 # No need to re-extract — sfm sift will find them cached
 sfm sift --extract my_project/frames/
@@ -384,7 +384,7 @@ line is rejected for the invocation. See
 
 ## Design Principles
 
-1. **Convention over configuration**: Sensible defaults mean most projects need only `sfm init`
+1. **Convention over configuration**: Sensible defaults mean most projects need only `sfm ws init`
    with no options.
 
 2. **Don't repeat yourself**: Settings that apply to the whole project are stored once in the

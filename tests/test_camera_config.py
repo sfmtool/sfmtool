@@ -597,7 +597,7 @@ def test_solve_uses_camera_config(isolated_seoul_bull_17_images):
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     runner = CliRunner()
-    result = runner.invoke(main, ["init", str(workspace_dir)])
+    result = runner.invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     block = _seoul_bull_native_intrinsics()
@@ -636,7 +636,7 @@ def test_solve_rejects_camera_model_with_camera_config(isolated_seoul_bull_17_im
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     runner = CliRunner()
-    result = runner.invoke(main, ["init", str(workspace_dir)])
+    result = runner.invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     _write_config(
@@ -670,7 +670,7 @@ def test_match_rejects_camera_model_with_camera_config(isolated_seoul_bull_17_im
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     runner = CliRunner()
-    result = runner.invoke(main, ["init", str(workspace_dir)])
+    result = runner.invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     _write_config(
@@ -704,7 +704,7 @@ def test_to_colmap_db_rejects_camera_model_with_camera_config(
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     runner = CliRunner()
-    result = runner.invoke(main, ["init", str(workspace_dir)])
+    result = runner.invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     result = runner.invoke(main, ["sift", "--extract", str(workspace_dir)])

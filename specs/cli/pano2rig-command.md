@@ -45,7 +45,7 @@ rotations) for use by `sfm solve`.
 
 ## Constraints
 
-The output directory must be inside an initialized workspace (`sfm init`).
+The output directory must be inside an initialized workspace (`sfm ws init`).
 
 ## Usage Examples
 

@@ -31,7 +31,7 @@ cd "$(dirname "$0")"
 
 # Initialize workspace
 if [ ! -f .sfm-workspace.json ]; then
-  sfm init .
+  sfm ws init .
 fi
 
 # Extract features with 3 threads

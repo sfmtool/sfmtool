@@ -49,14 +49,14 @@ def pano2rig(input_dir, output_dir, face_size, jpeg_quality):
     top, bottom) with 90-degree FOV. Face images are written to
     <output>/front/, <output>/right/, etc.
 
-    The output directory must be inside an initialized workspace (via 'sfm init').
+    The output directory must be inside an initialized workspace (via 'sfm ws init').
 
     Example usage:
 
-        sfm init my_workspace/
+        sfm ws init my_workspace/
         sfm pano2rig panoramas/ -o my_workspace/images
 
-        sfm init my_workspace/
+        sfm ws init my_workspace/
         sfm pano2rig panoramas/ -o my_workspace/images --face-size 1024
 
     """

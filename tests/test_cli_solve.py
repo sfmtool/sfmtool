@@ -36,7 +36,7 @@ def test_solve_incremental(isolated_seoul_bull_17_images: list[Path]):
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     # Initialize workspace
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     # Extract SIFT features
@@ -74,7 +74,7 @@ def test_solve_global(isolated_seoul_bull_17_images: list[Path]):
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     # Initialize workspace
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     # Extract SIFT features
@@ -104,7 +104,7 @@ def test_solve_from_matches(isolated_seoul_bull_17_images: list[Path]):
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     # Initialize workspace and extract SIFT
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
@@ -215,7 +215,7 @@ def test_solve_from_matches_with_range(isolated_seoul_bull_17_images: list[Path]
     written to the COLMAP DB."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])

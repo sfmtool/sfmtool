@@ -9,7 +9,7 @@ including optical flow computation, flow composition, and feature matching.
 
 Requires a workspace with extracted SIFT features. Set one up with:
     bash scripts/init_dataset_dino_dog_toy.sh
-    pixi run sfm init --dsp dino_dog_toy_ws
+    pixi run sfm ws init --dsp dino_dog_toy_ws
     pixi run sfm sift --extract dino_dog_toy_ws/images/*.jpg
 
 Usage:

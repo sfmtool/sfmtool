@@ -26,7 +26,7 @@ $ cd dino
 ### 2. Initialize the workspace
 
 ```
-$ sfm init --max-features 4000
+$ sfm ws init --max-features 4000
 Initialized workspace: .../dino
 Configuration file: .../dino/.sfm-workspace.json
   feature_tool: colmap

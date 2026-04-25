@@ -44,7 +44,7 @@ def test_match_exhaustive(isolated_seoul_bull_17_images: list[Path]):
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     # Initialize workspace
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     # Extract SIFT features first
@@ -84,7 +84,7 @@ def test_match_sequential(isolated_seoul_bull_17_images: list[Path]):
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     # Initialize workspace
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     # Extract SIFT features
@@ -105,7 +105,7 @@ def test_match_with_output_path(isolated_seoul_bull_17_images: list[Path]):
     """Test matching with a custom output path."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
@@ -131,7 +131,7 @@ def test_match_flow(isolated_seoul_bull_17_images: list[Path]):
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     # Initialize workspace
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     # Extract SIFT features
@@ -171,7 +171,7 @@ def test_match_with_range(isolated_seoul_bull_17_images: list[Path]):
     """Test matching with a range expression."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
     # Extract features for the subset first
@@ -208,7 +208,7 @@ def test_match_merge(isolated_seoul_bull_17_images: list[Path]):
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     # Initialize workspace and extract features
-    result = CliRunner().invoke(main, ["init", str(workspace_dir)])
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
     assert result.exit_code == 0, result.output
     result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output

@@ -351,7 +351,7 @@ def write_rig_config(
     if workspace_dir is None:
         raise RuntimeError(
             f"No workspace found at or above {output_dir}. "
-            f"Initialize one with 'sfm init'."
+            f"Initialize one with 'sfm ws init'."
         )
 
     # Compute workspace-relative prefix for the output directory

@@ -31,7 +31,7 @@ cd "$(dirname "$0")"
 
 # Initialize workspace with DSP
 if [ ! -f .sfm-workspace.json ]; then
-  sfm init --max-features 3000 --dsp .
+  sfm ws init --max-features 3000 --dsp .
 fi
 
 # Extract features with 3 threads

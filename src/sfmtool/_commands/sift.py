@@ -134,7 +134,7 @@ def sift(
     if domain_size_pooling is not None and tool is None:
         raise click.UsageError(
             "--dsp/--no-dsp can only be used with --tool. "
-            "To change DSP settings, reinitialize the workspace with 'sfm init --dsp'."
+            "To change DSP settings, reinitialize the workspace with 'sfm ws init --dsp'."
         )
 
     # Determine feature tool and options based on CLI vs workspace
@@ -168,7 +168,7 @@ def sift(
             raise click.ClickException(
                 f"No workspace found for images at {common_parent}. "
                 "Either:\n"
-                "  1. Initialize a workspace with 'sfm init', or\n"
+                "  1. Initialize a workspace with 'sfm ws init', or\n"
                 "  2. Specify --tool explicitly"
             )
 
