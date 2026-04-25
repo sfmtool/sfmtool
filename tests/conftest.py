@@ -65,7 +65,11 @@ def isolated_seoul_bull_image(tmp_path_factory) -> Path:
 
 @pytest.fixture
 def isolated_seoul_bull_17_images(tmp_path_factory) -> list[Path]:
-    """Fixture that provides 17 .jpg files isolated in a directory for testing."""
+    """Fixture that provides 17 .jpg files isolated in a directory for testing.
+
+    Also copies the dataset's `camera_config.json` so any solve/match commands
+    pick up the calibrated intrinsics committed alongside the images.
+    """
     data_dir = TEST_DATA_DIR / "images" / "seoul_bull_sculpture"
     image_files = sorted(data_dir.glob("seoul_bull_sculpture_*.jpg"))
     assert len(image_files) == 17
@@ -76,6 +80,8 @@ def isolated_seoul_bull_17_images(tmp_path_factory) -> list[Path]:
         dest_path = tmp_path / img_file.name
         shutil.copy(img_file, dest_path)
         img_paths.append(dest_path)
+
+    shutil.copy(data_dir / "camera_config.json", tmp_path / "camera_config.json")
 
     return img_paths
 
@@ -95,13 +101,20 @@ def sfmrfile_reconstruction_with_17_images_once(tmp_path_factory) -> Path:
     image_files = sorted(data_dir.glob("seoul_bull_sculpture_*.jpg"))
     workspace_dir = tmp_path_factory.mktemp("workspace_17_images")
     init_workspace(workspace_dir, domain_size_pooling=True)
-    (workspace_dir / "test_17_image").mkdir(exist_ok=True)
+    image_dir = workspace_dir / "test_17_image"
+    image_dir.mkdir(exist_ok=True)
 
     img_paths = []
     for img_file in image_files:
-        dest_path = workspace_dir / "test_17_image" / img_file.name
+        dest_path = image_dir / img_file.name
         shutil.copy(img_file, dest_path)
         img_paths.append(dest_path)
+
+    # Place camera_config.json at the workspace root so tests that copy just
+    # the image directory (e.g. test_cam_cp_roundtrip_into_solve) start with
+    # an unconfigured workspace; the closest-ancestor resolver still finds it
+    # for solves that run on the original workspace.
+    shutil.copy(data_dir / "camera_config.json", workspace_dir / "camera_config.json")
 
     output_sfm_file = workspace_dir / "seoul_bull.sfmr"
     colmap_dir = workspace_dir / "colmap"

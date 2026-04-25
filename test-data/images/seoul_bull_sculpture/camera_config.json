@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "camera_intrinsics": {
+    "model": "SIMPLE_RADIAL",
+    "width": 270,
+    "height": 480,
+    "parameters": {
+      "focal_length": 344,
+      "principal_point_x": 135.0,
+      "principal_point_y": 240.0,
+      "radial_distortion_k1": 0.035
+    }
+  }
+}
