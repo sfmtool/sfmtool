@@ -985,12 +985,16 @@ impl SfmrReconstruction {
     }
 
     /// Creates a demo reconstruction with synthetic data for testing.
-    pub fn demo() -> Self {
+    ///
+    /// Generates `num_points` 3D points evenly distributed on a unit sphere
+    /// (offset to sit in front of the camera arc), observed by 8 cameras
+    /// arranged in a circle around the origin.
+    pub fn demo(num_points: usize) -> Self {
         use crate::camera_intrinsics::CameraModel;
+        use crate::sphere_points::{evenly_distributed_sphere_points, RelaxConfig};
         use std::collections::HashMap;
 
         let num_images = 8;
-        let num_points = 1000;
         let num_buckets: u32 = 128;
 
         // Camera
@@ -1038,14 +1042,14 @@ impl SfmrReconstruction {
             });
         }
 
-        // Points: Fibonacci sphere
+        // Points: evenly distributed on the unit sphere via Thomson relaxation,
+        // then offset by +1 in z so they sit in front of the camera arc.
+        let sphere = evenly_distributed_sphere_points(num_points, &RelaxConfig::default());
         let mut points = Vec::with_capacity(num_points);
         for i in 0..num_points {
-            let phi = std::f64::consts::PI * (3.0 - (5.0_f64).sqrt()) * (i as f64);
-            let y = 1.0 - (i as f64 / (num_points - 1) as f64) * 2.0;
-            let radius_at_y = (1.0 - y * y).sqrt();
-            let x = phi.cos() * radius_at_y;
-            let z = phi.sin() * radius_at_y;
+            let x = sphere[3 * i] as f64;
+            let y = sphere[3 * i + 1] as f64;
+            let z = sphere[3 * i + 2] as f64;
 
             let r = ((x + 1.0) * 127.5) as u8;
             let g = ((y + 1.0) * 127.5) as u8;
@@ -1054,7 +1058,7 @@ impl SfmrReconstruction {
             points.push(Point3D {
                 position: Point3::new(x, y, z + 1.0),
                 color: [r, g, b],
-                error: 0.5 + (i as f64 / num_points as f64) as f32 * 0.5,
+                error: 0.5 + (i as f64 / num_points.max(1) as f64) as f32 * 0.5,
                 estimated_normal: Vector3::new(x as f32, y as f32, z as f32).normalize(),
             });
         }
@@ -1264,7 +1268,7 @@ mod tests {
 
     #[test]
     fn test_observations_for_point() {
-        let recon = SfmrReconstruction::demo();
+        let recon = SfmrReconstruction::demo(1000);
         // Demo creates 1000 points, each observed by 2 cameras
         assert_eq!(recon.observation_offsets.len(), recon.points.len() + 1);
         assert_eq!(
@@ -1283,7 +1287,7 @@ mod tests {
 
     #[test]
     fn test_track_image_indices() {
-        let recon = SfmrReconstruction::demo();
+        let recon = SfmrReconstruction::demo(1000);
         // Point 0 is observed by cameras 0 and 1 in the demo
         let images = recon.track_image_indices(0);
         assert_eq!(images.len(), 2);
@@ -1291,7 +1295,7 @@ mod tests {
 
     #[test]
     fn test_subset_keep_all_images_is_identity() {
-        let recon = SfmrReconstruction::demo();
+        let recon = SfmrReconstruction::demo(1000);
         let indices: Vec<u32> = (0..recon.images.len() as u32).collect();
         let subset = recon.subset_by_image_indices(&indices, false).unwrap();
         assert_eq!(subset.images.len(), recon.images.len());
@@ -1302,7 +1306,7 @@ mod tests {
 
     #[test]
     fn test_subset_keeps_all_points_by_default() {
-        let recon = SfmrReconstruction::demo();
+        let recon = SfmrReconstruction::demo(1000);
         // Keep only image 0. In the demo, point i is observed by images
         // (i % 8) and ((i + 1) % 8), so ~2 points out of every 8 touch image 0.
         let subset = recon.subset_by_image_indices(&[0], false).unwrap();
@@ -1330,7 +1334,7 @@ mod tests {
 
     #[test]
     fn test_subset_drops_orphaned_points_when_requested() {
-        let recon = SfmrReconstruction::demo();
+        let recon = SfmrReconstruction::demo(1000);
         let subset = recon.subset_by_image_indices(&[0], true).unwrap();
 
         assert_eq!(subset.images.len(), 1);
@@ -1357,7 +1361,7 @@ mod tests {
 
     #[test]
     fn test_subset_rejects_out_of_bounds_and_duplicates() {
-        let recon = SfmrReconstruction::demo();
+        let recon = SfmrReconstruction::demo(1000);
         let n = recon.images.len() as u32;
         assert!(recon.subset_by_image_indices(&[n], false).is_err());
         assert!(recon.subset_by_image_indices(&[0, 0], false).is_err());
@@ -1370,7 +1374,7 @@ mod tests {
 
         // Start from the demo (8 images) and attach a trivial rig/frame
         // structure: one single-sensor rig, one frame per image.
-        let mut recon = SfmrReconstruction::demo();
+        let mut recon = SfmrReconstruction::demo(1000);
         let n_images = recon.images.len();
         let rig_def = RigDefinition {
             name: "rig0".to_string(),

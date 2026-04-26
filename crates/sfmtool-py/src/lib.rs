@@ -74,6 +74,7 @@ mod py_analysis;
 mod py_image_pair_graph;
 mod py_kdtree;
 mod py_optical_flow;
+mod py_sphere_points;
 
 // ── Module registration ───────────────────────────────────────────────────
 
@@ -197,6 +198,12 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_optical_flow::advect_points, m)?)?;
     m.add_function(wrap_pyfunction!(
         py_optical_flow::match_candidates_by_descriptor,
+        m
+    )?)?;
+
+    // Sphere point generation
+    m.add_function(wrap_pyfunction!(
+        py_sphere_points::evenly_distributed_sphere_points,
         m
     )?)?;
 

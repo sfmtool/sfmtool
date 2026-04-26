@@ -150,6 +150,12 @@ pub struct AppState {
     /// (for computing true observation ray directions).
     /// Cleared when the reconstruction changes.
     pub sift_cache: HashMap<usize, CachedSiftFeatures>,
+
+    /// Whether the "Load Demo Data" dialog is currently open.
+    pub show_demo_dialog: bool,
+
+    /// Number of points configured in the demo-data dialog (preserved across opens).
+    pub demo_num_points: usize,
 }
 
 /// Cached SIFT positions and affine shapes for one image (no descriptors).
@@ -183,6 +189,8 @@ impl AppState {
             length_scale: DEFAULT_LENGTH_SCALE_MULTIPLIER * 0.03, // fallback until points loaded
             frustum_size_multiplier: DEFAULT_FRUSTUM_SIZE_MULTIPLIER,
             sift_cache: HashMap::new(),
+            show_demo_dialog: false,
+            demo_num_points: 1000,
         }
     }
 

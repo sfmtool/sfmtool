@@ -368,10 +368,8 @@ impl App {
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("Load Demo Data").clicked() {
-                            app_state.reconstruction = Some(SfmrReconstruction::demo());
-                            app_state.status_message = None;
-                            app_state.points_need_upload = true;
+                        if ui.button("Load Demo Data...").clicked() {
+                            app_state.show_demo_dialog = true;
                             ui.close();
                         }
                         ui.separator();
@@ -417,6 +415,45 @@ impl App {
                     });
                 });
             });
+
+            if app_state.show_demo_dialog {
+                let mut open = true;
+                let mut load_clicked = false;
+                egui::Window::new("Load Demo Data")
+                    .open(&mut open)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Number of points:");
+                            ui.add(
+                                egui::DragValue::new(&mut app_state.demo_num_points)
+                                    .range(1..=100_000)
+                                    .speed(10.0),
+                            );
+                        });
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Load").clicked() {
+                                load_clicked = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                app_state.show_demo_dialog = false;
+                            }
+                        });
+                    });
+                if !open {
+                    app_state.show_demo_dialog = false;
+                }
+                if load_clicked {
+                    app_state.reconstruction =
+                        Some(SfmrReconstruction::demo(app_state.demo_num_points));
+                    app_state.status_message = None;
+                    app_state.points_need_upload = true;
+                    app_state.show_demo_dialog = false;
+                }
+            }
 
             egui::CentralPanel::default().show(ctx, |ui| {
                 let mut tab_context = TabContext {
