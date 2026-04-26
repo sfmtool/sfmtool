@@ -40,3 +40,6 @@ from sfmtool._extract_sift_opencv import (  # noqa: F401
     get_default_opencv_feature_options,
     opencv_keypoint_to_affine_shape,
 )
+from sfmtool._spherical_tile_rig import (  # noqa: F401
+    resample_atlas_to_equirect,
+)

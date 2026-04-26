@@ -1,6 +1,12 @@
 # Spherical tile rig: discretizing the sphere as a rig of pinhole tiles
 
-**Status:** Draft proposal.
+**Status:** Implemented in
+`crates/sfmtool-core/src/spherical_tile_rig.rs` and exposed to Python as
+`sfmtool._sfmtool.SphericalTileRig`. The atlas → destination resampler is
+the Rust method `SphericalTileRig::resample_atlas` (also exposed as
+`SphericalTileRig.resample_atlas` in Python). A thin Python convenience
+wrapper at `src/sfmtool/_spherical_tile_rig.py::resample_atlas_to_equirect`
+builds the equirectangular destination camera and forwards to it.
 
 ## Motivation
 
@@ -78,33 +84,38 @@ A `SphericalTileRig` is fully described by three knobs:
 | `arc_per_pixel` | Angular size of one tile pixel, in radians. Chosen to match the target projected resolution: e.g. for an equirectangular width `W`, `arc_per_pixel = 2π/W`. | `2π/256` … `2π/4096` |
 | `overlap_factor` | How much each tile's FOV exceeds the worst-case nearest-neighbour angular gap between tile directions on the sphere. | `1.15` (default; ~15% safety margin) |
 
-From these, the half-FOV and patch grid size are derived directly from
-the relaxer output, not from a closed-form approximation. The constructor:
+From these, the half-FOV and patch grid size are derived from the
+**measured** worst-case Voronoi-cell radius across the sphere, not from a
+closed-form approximation. The constructor:
 
 1. Generates the `n` tile directions via
-   `evenly_distributed_sphere_points`.
-2. Measures the actual worst-case nearest-neighbour gap from those
-   directions: chord distances come from
-   `PointCloud3::nearest_neighbor_distances`, converted to angles via
-   `angle = 2 · asin(chord / 2)`.
-3. Sets `half_fov_rad = 0.5 · measured_max_nn_angle · overlap_factor`.
-4. Sets `patch_size = ceil(2 · half_fov_rad / arc_per_pixel)`, clamped to
-   a minimum (e.g. 5) so NCC / gradient kernels still have neighbourhood
-   support at the smallest configurations.
+   `evenly_distributed_sphere_points` (seeded if
+   `params.relax.seed.is_some()`).
+2. Builds a KD-tree over the directions.
+3. Measures the actual worst-case Voronoi-cell radius
+   `measured_max_coverage_angle` by sampling the sphere with a fixed
+   probe of `COVERAGE_PROBE_N = 50_000` points (deterministic when
+   `relax.seed` is set) and taking the maximum angular distance from any
+   probe point to its nearest tile direction. This makes coverage hold by
+   construction at all `n`, including under-relaxed cases where the
+   Voronoi-cell radius can exceed half the worst-case nearest-neighbour
+   gap.
+4. Sets `half_fov_rad = measured_max_coverage_angle · overlap_factor`.
+5. Sets `patch_size = ceil(2 · half_fov_rad / arc_per_pixel)`, clamped to
+   a minimum (`MIN_PATCH_SIZE = 5`) so NCC / gradient kernels still have
+   neighbourhood support at the smallest configurations.
 
-The measured max NN angle is also stashed on the rig so callers can
-inspect it. As a sanity check, on the current relaxer config it tracks
-`≈ 1.05–1.15 · √(4π/n)` for `n ∈ [50, 10 000]`, with mean ≈ `0.95 ·
-√(4π/n)` and `std/mean ≈ 0.045`. None of those numbers are baked into
-the constructor — if relaxer quality changes, or `n` is small enough that
-the empirical relation breaks, the FOV adapts automatically and the
-coverage invariant ("every direction's nearest tile contains it") still
-holds by construction.
+The constructor also stashes `measured_max_nn_angle` (worst-case nearest
+neighbour gap among tile directions, from
+`PointCloud3::nearest_neighbor_distances`) for diagnostics. For
+well-relaxed point sets it tracks `≈ 1.05–1.15 · √(4π/n)` for
+`n ∈ [50, 10 000]` and `0.5 · measured_max_nn_angle ≈
+measured_max_coverage_angle` to within probe noise.
 
 For very small `n` (≲ 50), random init plus 50 iterations may not have
-fully relaxed; the measured max NN angle will simply be larger and the
-FOV correspondingly wider. If that's undesirable, raise `relax.iterations`
-in `RelaxConfig` rather than tweaking a fudge factor.
+fully relaxed; `measured_max_coverage_angle` simply grows and the FOV
+widens to compensate. If that's undesirable, raise `relax.iterations`
+in `RelaxConfig`.
 
 ### Sizing compared to equirectangular images
 
@@ -137,7 +148,9 @@ about a 10% overdraw, which is the price of overlap.
 pub struct SphericalTileRig {
     /// World-space optical centre shared by every tile in the rig.
     centre: [f64; 3],
-    /// Unit look direction per tile in world frame. (3·n f64)
+    /// Unit look direction per tile in world frame. (3·n f64,
+    /// re-normalised to f64 precision so the bases below are
+    /// orthonormal to f64 precision.)
     directions: Vec<[f64; 3]>,
     /// World-frame tangent-plane basis per tile: (e_right, e_up).
     /// e_right, e_up are unit, orthogonal to the tile's direction, and
@@ -148,13 +161,15 @@ pub struct SphericalTileRig {
     /// axis (the optical axis) maps to direction.
     bases: Vec<[f64; 6]>,
     /// Half-FOV of each tile in radians. Uniform across tiles.
-    /// Set at construction to
-    /// `0.5 · measured_max_nn_angle · overlap_factor`.
+    /// `half_fov_rad = measured_max_coverage_angle · overlap_factor`.
     half_fov_rad: f64,
-    /// Measured worst-case nearest-neighbour angular gap across
-    /// `directions`, in radians. Stored for diagnostics; `half_fov_rad`
-    /// is derived from this.
+    /// Diagnostic: worst-case nearest-neighbour angular gap among tile
+    /// directions, in radians. Not used to size the FOV.
     measured_max_nn_angle: f64,
+    /// Worst-case Voronoi-cell radius across the sphere (probed at
+    /// construction with `COVERAGE_PROBE_N = 50_000` points). Used to
+    /// derive `half_fov_rad` and to make coverage hold by construction.
+    measured_max_coverage_angle: f64,
     /// Per-tile patch grid size (pixels per side). Uniform across tiles.
     patch_size: u32,
     /// Number of tile columns in the packed atlas. The atlas height is
@@ -224,10 +239,13 @@ impl SphericalTileRig {
     /// Half-FOV of each tile, in radians.
     pub fn half_fov_rad(&self) -> f64;
 
-    /// The measured worst-case nearest-neighbour angular gap across all
-    /// tile directions. Diagnostic only; the constructor already used
-    /// this to pick `half_fov_rad`.
+    /// Diagnostic: worst-case nearest-neighbour angular gap across all
+    /// tile directions.
     pub fn measured_max_nn_angle(&self) -> f64;
+
+    /// The probed worst-case Voronoi-cell radius across the sphere.
+    /// `half_fov_rad` is `measured_max_coverage_angle · overlap_factor`.
+    pub fn measured_max_coverage_angle(&self) -> f64;
 
     /// Pinhole `CameraIntrinsics` shared by every tile. Concretely:
     /// - model: `Pinhole`
@@ -334,12 +352,28 @@ impl SphericalTileRig {
         dst: &CameraIntrinsics,
         rot_world_from_dst: &RotQuaternion,
     ) -> WarpMap;
+
+    /// Resample an atlas image into the destination camera, blending the
+    /// `k` angularly-nearest tiles per dst pixel by inverse-angular-distance
+    /// weights. `k = 1` is closest-tile sampling (Voronoi seams visible);
+    /// `k > 1` blends across seams. Atlas layout is row-major,
+    /// channels-interleaved: `atlas.len() == atlas_size().0 *
+    /// atlas_size().1 * channels`. The result has length
+    /// `dst.width * dst.height * channels` in the same layout.
+    pub fn resample_atlas(
+        &self,
+        atlas: &[f32],
+        channels: usize,
+        dst: &CameraIntrinsics,
+        rot_world_from_dst: &RotQuaternion,
+        k: usize,
+    ) -> Vec<f32>;
 }
 ```
 
-The Python wrapper exposes `SphericalTileRig` along with a helper to resample
-an assembled tile grid into an equirectangular image (bilinear trilateration
-over the nearest overlapping tiles).
+The Python wrapper exposes `SphericalTileRig` along with a helper
+(`resample_atlas_to_equirect`) that builds a full-sphere equirectangular
+destination camera and forwards to `SphericalTileRig.resample_atlas`.
 
 ### Tile-to-image mapping
 
@@ -434,9 +468,11 @@ The assembly kernel is analogous to `WarpMap::remap_aniso` but sourcing from
   in regions the relaxer happened to leave sparse.
 - **Half-FOV tracks measurement.** For a constructed rig with known `n`
   and `overlap_factor`, assert
-  `|half_fov_rad - 0.5 · measured_max_nn_angle · overlap_factor| < eps`
-  and `measured_max_nn_angle` matches `nn_angles.max()` recomputed from
-  `directions`.
+  `|half_fov_rad - measured_max_coverage_angle · overlap_factor| < eps`
+  and that `measured_max_nn_angle` matches `nn_angles.max()` recomputed
+  from `directions`. As a sanity check on relaxer quality, assert
+  `measured_max_coverage_angle / (0.5 · measured_max_nn_angle) ∈ [0.7, 1.5]`
+  for well-relaxed rigs.
 - **Direction uniformity.** Std/mean of NN angular distances over the
   generated tile directions is < 0.06 — guards against accidentally
   regressing the relaxer's `iterations` or `step_size` defaults.
@@ -483,11 +519,12 @@ The assembly kernel is analogous to `WarpMap::remap_aniso` but sourcing from
 
 ## Open questions
 
-- **Reproducibility of tile placement.** `random_sphere_points` currently
-  uses `rand::rng()` (thread-local, unseeded). For deterministic
-  reconstructions across runs the relaxer needs a seed. Plumb a
-  `seed: Option<u64>` through `RelaxConfig` → `SphericalTileRigParams` before
-  this lands as a public CLI surface.
+- **Reproducibility of tile placement.** Resolved.
+  `RelaxConfig { seed: Option<u64>, .. }` is plumbed through
+  `random_sphere_points` and `evenly_distributed_sphere_points`; setting
+  the seed makes both the tile placement and the construction-time
+  coverage probe bit-for-bit reproducible across runs on the same
+  platform.
 - **Persistence.** The rig is described here as an in-memory compute
   structure; nothing in this spec serialises it. If a downstream `solve`
   / `densify` stage emits per-tile depth and we want resumable runs,

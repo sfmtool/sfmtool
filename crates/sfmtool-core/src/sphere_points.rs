@@ -13,7 +13,8 @@
 //! All functions return points as a flat `Vec<f32>` of length `3 * n` in
 //! row-major order: `[x0, y0, z0, x1, y1, z1, ...]`.
 
-use rand::Rng;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 use rayon::prelude::*;
 use std::f32::consts::PI;
@@ -25,6 +26,7 @@ use crate::spatial::PointCloud3;
 /// `step_size` and `cutoff_multiplier` are both expressed in units of the
 /// characteristic nearest-neighbor spacing `√(4π/n)`, so good defaults are
 /// stable across `n`.
+#[derive(Debug, Clone)]
 pub struct RelaxConfig {
     /// Number of relaxation iterations.
     pub iterations: usize,
@@ -34,6 +36,12 @@ pub struct RelaxConfig {
     /// Per-point neighbor cutoff radius, as a multiple of the characteristic
     /// nearest-neighbor spacing.
     pub cutoff_multiplier: f32,
+    /// Optional seed for the initial uniform random sampling. `None` uses the
+    /// thread-local RNG (non-reproducible). `Some(s)` makes both
+    /// [`random_sphere_points`] and [`evenly_distributed_sphere_points`]
+    /// deterministic — bit-for-bit identical results across runs on the same
+    /// platform.
+    pub seed: Option<u64>,
 }
 
 impl Default for RelaxConfig {
@@ -42,6 +50,7 @@ impl Default for RelaxConfig {
             iterations: 50,
             step_size: 0.05,
             cutoff_multiplier: 5.0,
+            seed: None,
         }
     }
 }
@@ -53,10 +62,26 @@ impl Default for RelaxConfig {
 /// is uniform on the sphere. Resamples in the (vanishingly unlikely) case of
 /// a near-zero magnitude vector.
 ///
+/// `seed = Some(s)` makes the result deterministic; `seed = None` uses the
+/// thread-local RNG.
+///
 /// Returns a flat `Vec<f32>` of length `3 * n`.
-pub fn random_sphere_points(n: usize) -> Vec<f32> {
-    let mut rng = rand::rng();
+pub fn random_sphere_points(n: usize, seed: Option<u64>) -> Vec<f32> {
     let mut points = Vec::with_capacity(3 * n);
+    match seed {
+        Some(s) => {
+            let mut rng = StdRng::seed_from_u64(s);
+            fill_random_sphere_points(&mut rng, n, &mut points);
+        }
+        None => {
+            let mut rng = rand::rng();
+            fill_random_sphere_points(&mut rng, n, &mut points);
+        }
+    }
+    points
+}
+
+fn fill_random_sphere_points<R: Rng + ?Sized>(rng: &mut R, n: usize, points: &mut Vec<f32>) {
     for _ in 0..n {
         loop {
             let x: f32 = rng.sample(StandardNormal);
@@ -72,7 +97,6 @@ pub fn random_sphere_points(n: usize) -> Vec<f32> {
             }
         }
     }
-    points
 }
 
 /// Relax points in-place towards an even distribution on the unit sphere.
@@ -161,10 +185,12 @@ pub fn relax_sphere_points(points: &mut [f32], config: &RelaxConfig) {
 
 /// Generate `n` points evenly distributed on the unit sphere.
 ///
-/// Combines [`random_sphere_points`] (uniform random initialization) with
-/// [`relax_sphere_points`] (Thomson-style repulsion relaxation).
+/// Combines [`random_sphere_points`] (uniform random initialization, seeded
+/// by `config.seed`) with [`relax_sphere_points`] (Thomson-style repulsion
+/// relaxation). The relaxation step itself is deterministic; setting
+/// `config.seed` therefore makes the entire pipeline reproducible.
 pub fn evenly_distributed_sphere_points(n: usize, config: &RelaxConfig) -> Vec<f32> {
-    let mut points = random_sphere_points(n);
+    let mut points = random_sphere_points(n, config.seed);
     relax_sphere_points(&mut points, config);
     points
 }
@@ -193,7 +219,7 @@ mod tests {
 
     #[test]
     fn random_points_have_unit_norm() {
-        let points = random_sphere_points(200);
+        let points = random_sphere_points(200, None);
         assert_eq!(points.len(), 600);
         assert_unit_norm(&points, 1e-5);
     }
@@ -201,7 +227,7 @@ mod tests {
     #[test]
     fn random_points_cover_sphere() {
         // A simple smoke check: octant occupancy should be roughly balanced.
-        let points = random_sphere_points(8000);
+        let points = random_sphere_points(8000, None);
         let mut counts = [0usize; 8];
         for chunk in points.chunks_exact(3) {
             let i = (chunk[0] >= 0.0) as usize
@@ -218,7 +244,7 @@ mod tests {
     #[test]
     fn relaxation_improves_uniformity() {
         let n = 500;
-        let initial = random_sphere_points(n);
+        let initial = random_sphere_points(n, None);
         let rough_std = std_dev(&nn_distances(&initial));
 
         let mut relaxed = initial.clone();
@@ -235,7 +261,7 @@ mod tests {
 
     #[test]
     fn relaxed_points_remain_on_unit_sphere() {
-        let mut points = random_sphere_points(300);
+        let mut points = random_sphere_points(300, None);
         relax_sphere_points(&mut points, &RelaxConfig::default());
         assert_unit_norm(&points, 1e-4);
     }
@@ -267,11 +293,10 @@ mod tests {
         // antipodal (≈ one step of angular travel), so the threshold here
         // is loose. The point is just to confirm the repulsion drives them
         // into opposite hemispheres from a random start.
-        let mut points = random_sphere_points(2);
+        let mut points = random_sphere_points(2, None);
         let config = RelaxConfig {
             iterations: 500,
-            step_size: 0.05,
-            cutoff_multiplier: 5.0,
+            ..Default::default()
         };
         relax_sphere_points(&mut points, &config);
         let dot = points[0] * points[3] + points[1] * points[4] + points[2] * points[5];
@@ -283,7 +308,7 @@ mod tests {
 
     #[test]
     fn zero_iterations_leaves_points_unchanged() {
-        let mut points = random_sphere_points(10);
+        let mut points = random_sphere_points(10, None);
         let snapshot = points.clone();
         let config = RelaxConfig {
             iterations: 0,
@@ -291,5 +316,30 @@ mod tests {
         };
         relax_sphere_points(&mut points, &config);
         assert_eq!(points, snapshot);
+    }
+
+    #[test]
+    fn same_seed_produces_identical_random_points() {
+        let a = random_sphere_points(50, Some(42));
+        let b = random_sphere_points(50, Some(42));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn different_seeds_produce_different_random_points() {
+        let a = random_sphere_points(50, Some(1));
+        let b = random_sphere_points(50, Some(2));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn seed_makes_evenly_distributed_deterministic() {
+        let cfg = RelaxConfig {
+            seed: Some(7),
+            ..Default::default()
+        };
+        let a = evenly_distributed_sphere_points(80, &cfg);
+        let b = evenly_distributed_sphere_points(80, &cfg);
+        assert_eq!(a, b);
     }
 }

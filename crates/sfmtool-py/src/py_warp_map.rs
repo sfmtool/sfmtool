@@ -31,7 +31,15 @@ use crate::PyCameraIntrinsics;
 ///     undistorted = warp.remap_bilinear(image)
 #[pyclass(name = "WarpMap", module = "sfmtool._core")]
 pub struct PyWarpMap {
-    inner: WarpMap,
+    pub(crate) inner: WarpMap,
+}
+
+impl PyWarpMap {
+    /// Wrap a `WarpMap` into the Python type. For use by other PyO3 modules
+    /// in this crate that build a `WarpMap` and need to expose it.
+    pub(crate) fn from_inner(inner: WarpMap) -> Self {
+        Self { inner }
+    }
 }
 
 #[pymethods]

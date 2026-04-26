@@ -30,6 +30,7 @@ pub mod rotation;
 pub mod se3_transform;
 pub mod spatial;
 pub mod sphere_points;
+pub mod spherical_tile_rig;
 pub mod transform;
 pub mod viewing_angle;
 pub mod warp_map;

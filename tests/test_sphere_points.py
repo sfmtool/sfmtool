@@ -81,3 +81,13 @@ class TestEvenlyDistributedSpherePoints:
         assert points.shape == (n, 3)
         norms = np.linalg.norm(points, axis=1)
         assert np.allclose(norms, 1.0, atol=1e-4)
+
+    def test_seed_makes_result_deterministic(self):
+        a = evenly_distributed_sphere_points(80, seed=42)
+        b = evenly_distributed_sphere_points(80, seed=42)
+        np.testing.assert_array_equal(a, b)
+
+    def test_different_seeds_produce_different_points(self):
+        a = evenly_distributed_sphere_points(80, seed=1)
+        b = evenly_distributed_sphere_points(80, seed=2)
+        assert not np.array_equal(a, b)
