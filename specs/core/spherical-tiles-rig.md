@@ -105,6 +105,13 @@ closed-form approximation. The constructor:
    a minimum (`MIN_PATCH_SIZE = 5`) so NCC / gradient kernels still have
    neighbourhood support at the smallest configurations.
 
+Consumers that need a different `patch_size` (e.g. one rounded up to
+the next power of two for clean image-pyramid sizing) can override it
+after construction via [`set_patch_size`](#set_patch_size); the rig
+keeps its other state (directions, bases, half-FOV, KD-tree) and just
+re-derives the per-tile camera and atlas dimensions from the new
+value.
+
 The constructor also stashes `measured_max_nn_angle` (worst-case nearest
 neighbour gap among tile directions, from
 `PointCloud3::nearest_neighbor_distances`) for diagnostics. For
@@ -257,6 +264,26 @@ impl SphericalTileRig {
     /// Composed with `WarpMap::from_cameras_with_pose` this is the
     /// per-tile workhorse of the algorithm.
     pub fn tile_camera(&self) -> CameraIntrinsics;
+
+    /// Override the per-tile patch size after construction.
+    ///
+    /// Use this when a downstream consumer needs a specific patch size
+    /// the constructor's `arc_per_pixel`-driven formula doesn't
+    /// produce — for example, rounding up to the next power of two so
+    /// the per-tile patch can serve as an image-pyramid base
+    /// (`patch_size`, `patch_size / 2`, … , `1`).
+    ///
+    /// The angular FOV per tile (`half_fov_rad`) stays the same; only
+    /// the per-pixel angular resolution changes. Specifically the new
+    /// `tile_camera()` will have `width = height = patch_size` and
+    /// `fx = fy = (patch_size as f64 / 2.0) / tan(half_fov_rad)`, and
+    /// `atlas_size()` becomes
+    /// `(atlas_cols * patch_size, atlas_rows * patch_size)`.
+    /// Tile directions, bases, half-FOV, and the KD-tree are
+    /// unaffected.
+    ///
+    /// Panics if `patch_size == 0`.
+    pub fn set_patch_size(&mut self, patch_size: u32);
 
     /// Build `R_world_from_tile` for tile `idx`. Columns are
     /// `[e_right | e_up | direction]`, so for a tile-frame ray
@@ -486,6 +513,16 @@ The assembly kernel is analogous to `WarpMap::remap_aniso` but sourcing from
   into its atlas sub-image and reading back via `tile_atlas_origin(idx)` +
   `patch_size` recovers the same constant — guards against off-by-one
   errors in the row/col packing.
+- **`set_patch_size` round-trip.** Build a rig at the constructor's
+  default `patch_size`, snapshot `tile_camera()` and `atlas_size()`,
+  then call `set_patch_size(new_size)` for several `new_size` values
+  (e.g. `next_power_of_two(default)`, half the default, twice the
+  default). Assert: `tile_camera()` reflects the new `patch_size`
+  (`width`, `height`, `cx`, `cy`, `fx`, `fy` all update per the
+  documented formula); `atlas_size() == (atlas_cols * new_size,
+  atlas_rows * new_size)`; tile directions, bases, half-FOV, and the
+  KD-tree are unchanged; rebuilding the equirectangular ↔ atlas
+  round-trip at the new size still passes the seam tolerance.
 - **Equirectangular ↔ atlas round-trip.** Build a smooth synthetic
   equirectangular image — a band-limited pattern such as
   `f(lon, lat) = 0.5 + 0.25·sin(3·lon)·cos(2·lat)`, sampled at a
