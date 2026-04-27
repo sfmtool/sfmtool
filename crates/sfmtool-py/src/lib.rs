@@ -74,8 +74,10 @@ mod py_analysis;
 mod py_image_pair_graph;
 mod py_kdtree;
 mod py_optical_flow;
+mod py_per_spherical_tile_source_stack;
 mod py_sphere_points;
 mod py_spherical_tile_rig;
+pub use py_per_spherical_tile_source_stack::PyPerSphericalTileSourceStack;
 pub use py_spherical_tile_rig::PySphericalTileRig;
 
 // ── Module registration ───────────────────────────────────────────────────
@@ -217,6 +219,7 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySfmrReconstruction>()?;
     m.add_class::<py_kdtree::PyKdTree2d>()?;
     m.add_class::<py_kdtree::PyKdTree3d>()?;
+    m.add_class::<PyPerSphericalTileSourceStack>()?;
     m.add_class::<PySphericalTileRig>()?;
     m.add_class::<PyWarpMap>()?;
 

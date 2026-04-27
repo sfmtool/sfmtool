@@ -134,6 +134,26 @@ impl PySphericalTileRig {
         self.inner.patch_size()
     }
 
+    /// Override the per-tile patch size after construction.
+    ///
+    /// Tile directions, bases, half-FOV, and the KD-tree are unaffected;
+    /// ``tile_camera`` and ``atlas_size`` shift to reflect the new
+    /// resolution. Useful for rounding the constructor's
+    /// ``arc_per_pixel``-driven ``patch_size`` up to a power of two so the
+    /// per-tile patch can serve as an image-pyramid base.
+    ///
+    /// Args:
+    ///     patch_size: New per-tile patch grid size in pixels (must be > 0).
+    fn set_patch_size(&mut self, patch_size: u32) -> PyResult<()> {
+        if patch_size == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "patch_size must be > 0",
+            ));
+        }
+        self.inner.set_patch_size(patch_size);
+        Ok(())
+    }
+
     /// Number of tile columns in the packed atlas.
     #[getter]
     fn atlas_cols(&self) -> u32 {

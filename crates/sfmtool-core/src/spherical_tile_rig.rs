@@ -289,6 +289,24 @@ impl SphericalTileRig {
         self.patch_size
     }
 
+    /// Override the per-tile patch size after construction.
+    ///
+    /// Use this when a downstream consumer needs a specific patch size the
+    /// constructor's `arc_per_pixel`-driven formula doesn't produce — for
+    /// example, rounding up to the next power of two so the per-tile patch
+    /// can serve as an image-pyramid base.
+    ///
+    /// Tile directions, bases, half-FOV, and the KD-tree are unaffected; only
+    /// [`tile_camera`](Self::tile_camera) and [`atlas_size`](Self::atlas_size)
+    /// (and their derivatives) shift to the new resolution.
+    ///
+    /// # Panics
+    /// Panics if `patch_size == 0`.
+    pub fn set_patch_size(&mut self, patch_size: u32) {
+        assert!(patch_size > 0, "patch_size must be > 0");
+        self.patch_size = patch_size;
+    }
+
     /// Pinhole `CameraIntrinsics` shared by every tile.
     pub fn tile_camera(&self) -> CameraIntrinsics {
         let half = self.patch_size as f64 / 2.0;

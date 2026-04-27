@@ -1,7 +1,17 @@
 # Per-spherical-tile source patch stack
 
-**Status:** Draft proposal. General direction-space primitive on top of
-`spherical-tiles-rig.md`.
+**Status:** Implemented in
+`crates/sfmtool-core/src/per_spherical_tile_source_stack.rs` (the
+rotation-only build) and exposed to Python as
+`sfmtool._sfmtool.PerSphericalTileSourceStack`. The pose-aware variant
+described under "Pose-aware variant" is still future work.
+
+The implemented build runs the outer source loop sequentially and
+parallelises across the source's kept tiles via rayon — each tile-task
+writes to its own SoA buffer at a unique `pos` slot, so the writes are
+race-free without atomics or locks. The
+`BuildParams::max_in_flight_sources` knob is reserved for future
+parallel-source chunking; setting it has no effect today.
 
 ## Motivation
 
@@ -224,11 +234,16 @@ pub struct BuildParams {
     pub max_in_flight_sources: Option<usize>,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum BuildError {
-    #[error("rig.patch_size = {0} is not a power of two; call set_patch_size on the rig first")]
+    /// `rig.patch_size()` is not a power of two.
     PatchSizeNotPowerOfTwo(u32),
-    // (Other validation failures land here as the API grows.)
+    /// Sources disagree on channel count. The whole slice must use the
+    /// same value.
+    MixedSourceChannels { first: u32, offending: u32 },
+    /// A source has an unsupported channel count (only 1, 3, 4 are
+    /// accepted by the remap kernels).
+    UnsupportedChannelCount(u32),
 }
 ```
 
@@ -311,8 +326,10 @@ applied). For each source `i` and every tile `t` with
 2. Build `WarpMap::from_cameras_with_rotation(src=src_intrinsics_i,
    dst=rig.tile_camera(), rot_src_from_dst=R_src_from_tile)`.
 3. Apply `WarpMap::remap_bilinear` to `image_i` → a `B × B × C` patch
-   in a per-task scratch buffer; compute the level-0 valid mask from
-   `map_x`, `map_y` (`finite & in_bounds`).
+   in a per-task scratch buffer; the level-0 valid mask is the warp
+   map's own `is_valid` bit per pixel (`WarpMap` already encodes
+   "finite & in source bounds" by writing `(NaN, NaN)` into out-of-
+   range pixels, so a single `!is_nan(map_x)` check is sufficient).
 4. **Direct write to the SoA slot.** Let `pos = position[t][i]` and
    `s_0 = B`. Copy the patch into
    `tiles[t].levels[0].patches[pos · s_0² · C .. (pos + 1) · s_0² · C]`
@@ -371,63 +388,45 @@ every dataset we've measured so far.
 
 ## Loop order and parallelism
 
-The outer loop is **over sources, not tiles**. Either order produces
-the same result, but image-major has decisive practical advantages:
+Pass 1 (visibility) runs sequentially in source-index order so
+`src_indices[t]` lands ascending without a merge step. Pass 3 (warp +
+pyramid write) is what carries the bulk of the per-source work.
 
-- **One source image in memory at a time** (per parallel slot).
-  Tile-major would require either holding all `N` source images
-  simultaneously (~3 GB for a 124-image full-resolution capture set)
-  or re-decoding each source per tile (death by I/O).
-- **One source-image bind for all its tile warps.** Steps 2–3 reuse
-  the loaded source image for every kept tile of source `i`,
-  amortising decode + memory transfer across `n_kept` warp+remap
-  passes.
-- **Sequential image I/O.** When the caller streams JPGs from disk,
-  image-major matches the sequential-read pattern.
+The implemented v1 inverts the spec's original source-major plan and
+runs Pass 3 as **sequential outer over sources, parallel inner over
+that source's kept tiles** (rayon `par_iter_mut` on `tiles`). Each
+inner tile-task only writes to its own tile's SoA buffer at the unique
+`pos` slot for the current source, so the writes are race-free without
+atomics, locks, or `unsafe` slice splitting. With all `N` source
+images already in memory (the build's input), there is nothing to
+amortise across kept tiles of a single source — the loaded image is
+already resident and the outer-loop choice is free.
 
-### Parallelism within image-major
+A future memory-bounded variant could go source-major (parallel outer
+over chunks of sources, each writing into per-tile SoA slots) when
+sources are streamed in rather than handed in pre-loaded. That path
+needs lock-free routing of per-`(tile, source)` slot references; the
+`BuildParams::max_in_flight_sources` knob is reserved for that
+extension and is a no-op in v1.
 
-The two-pass build (Pass 1 visibility matrix → Pass 2 SoA allocation
-→ Pass 3 parallel writes) makes the parallel phase **lock-free
-without atomics**. Each `(source, tile)` task writes to a unique
-`pos = position[t][i]`, so two tasks updating the same tile's level
-buffers touch disjoint slices. No per-tile mutex, no thread-local
-buffers, no merge phase.
-
-Concretely the parallel phase is rayon `par_iter` over sources (with
-the `max_in_flight_sources` chunking applied for memory bounding),
-and within each source-task an inner `par_iter` over the source's
-kept-tile list. Each inner task does the warp + remap + per-level
-downsample + direct write described in algorithm Pass 3. There is no
-output-contention concern, so no deferred merge.
-
-The visibility-cull pass (Pass 1) is `O(n · N)` of cheap projection
-math and runs sequentially in source-index order; this gives
-`src_indices[t]` ascending sort and `position[t][i]` deterministic
-without coordination. It is the only pass that imposes ordering on
-sources.
-
-### Memory ceiling: `max_in_flight_sources`
+### Memory ceiling: `max_in_flight_sources` (reserved)
 
 Rayon's default work-stealing puts roughly `num_threads` source-tasks
 in flight, each holding an `ImageU8` (the full source image, e.g.
 ~25 MB for a 2160 × 3840 RGB capture) plus its per-tile working set
 (`n_kept · B² · (3 + 8)` bytes for patch + map data, well under
-1 MB at typical configurations). The dominant cost is the source
-images themselves: `num_threads × source_image_bytes`.
+1 MB at typical configurations). With v1's tile-major Pass 3 only
+*one* source is "active" at a time, so the resident source-image
+working set is just one `ImageU8` regardless of `num_threads`.
 
-`BuildParams::max_in_flight_sources` gives a hard ceiling for
-environments where this matters: the source list is processed in
-chunks of that size, with each chunk's sources rayon-parallel
-internally, source-image memory released between chunks. Set to
-`None` (default) to let rayon decide; set to a small integer (2–8)
-to bound peak memory when running on many-core boxes against
+`BuildParams::max_in_flight_sources` is reserved for the future
+source-major parallel variant. When that lands the knob will cap
+how many source-images are simultaneously held by parallel
+source-tasks: `None` (default) lets rayon decide; small integers
+(2–8) bound peak memory when running on many-core boxes against
 high-resolution captures, or when running multiple builds
-concurrently.
-
-This knob trades throughput for memory in a predictable way: at
-`max_in_flight_sources = 1` the build is fully serial; at
-`max_in_flight_sources = num_threads` it matches rayon's default.
+concurrently. Setting the knob today has no effect — the build
+is sequential over sources by construction.
 
 ## Memory
 

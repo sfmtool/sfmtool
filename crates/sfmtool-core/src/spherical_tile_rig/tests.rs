@@ -314,6 +314,88 @@ fn atlas_packing_round_trip() {
     }
 }
 
+#[test]
+fn set_patch_size_round_trip() {
+    let mut rig = make_rig(320, 512);
+    let original_patch = rig.patch_size();
+    let original_half_fov = rig.half_fov_rad();
+    let original_max_nn = rig.measured_max_nn_angle();
+    let original_max_cov = rig.measured_max_coverage_angle();
+    let original_dirs: Vec<[f64; 3]> = (0..rig.len()).map(|i| rig.direction(i)).collect();
+    let original_bases: Vec<([f64; 3], [f64; 3])> = (0..rig.len()).map(|i| rig.basis(i)).collect();
+    let atlas_cols = rig.atlas_cols();
+    let atlas_rows = rig.atlas_rows();
+
+    let candidates = [
+        original_patch.next_power_of_two(),
+        (original_patch / 2).max(1),
+        original_patch * 2,
+        1u32,
+    ];
+    for &new_size in &candidates {
+        rig.set_patch_size(new_size);
+        assert_eq!(rig.patch_size(), new_size);
+
+        // Tile camera reflects the new patch_size.
+        let cam = rig.tile_camera();
+        assert_eq!(cam.width, new_size);
+        assert_eq!(cam.height, new_size);
+        let half = new_size as f64 / 2.0;
+        let expected_f = half / rig.half_fov_rad().tan();
+        let (fx, fy) = cam.focal_lengths();
+        let (cx, cy) = cam.principal_point();
+        assert!((fx - expected_f).abs() < 1e-9);
+        assert!((fy - expected_f).abs() < 1e-9);
+        assert!((cx - half).abs() < 1e-9);
+        assert!((cy - half).abs() < 1e-9);
+
+        // Atlas size scales with the new patch size.
+        let (aw, ah) = rig.atlas_size();
+        assert_eq!(aw, atlas_cols * new_size);
+        assert_eq!(ah, atlas_rows * new_size);
+
+        // Tile directions, bases, half-FOV, and the diagnostic measurements
+        // are unaffected.
+        assert_eq!(rig.half_fov_rad(), original_half_fov);
+        assert_eq!(rig.measured_max_nn_angle(), original_max_nn);
+        assert_eq!(rig.measured_max_coverage_angle(), original_max_cov);
+        assert_eq!(rig.atlas_cols(), atlas_cols);
+        for i in 0..rig.len() {
+            assert_eq!(rig.direction(i), original_dirs[i]);
+            let (er, eu) = rig.basis(i);
+            assert_eq!(er, original_bases[i].0);
+            assert_eq!(eu, original_bases[i].1);
+        }
+    }
+
+    // Round-trip: rebuilding the equirect ↔ atlas warp at the new size still
+    // recovers a smooth pattern within tolerance.
+    rig.set_patch_size(original_patch.next_power_of_two());
+    let w = 512u32;
+    let h = w / 2;
+    let equirect = equirect_camera(w, h);
+    let img = equirect_pattern(w, h);
+    let to_atlas = rig.warp_to_atlas_with_rotation(&equirect, &RotQuaternion::identity());
+    let atlas_img = remap_bilinear(w, h, &img, &to_atlas, true);
+    let from_atlas = rig.warp_from_atlas_with_rotation(&equirect, &RotQuaternion::identity());
+    let (aw, ah) = rig.atlas_size();
+    let recovered = remap_bilinear(aw, ah, &atlas_img, &from_atlas, false);
+    let mae: f64 = img
+        .iter()
+        .zip(recovered.iter())
+        .map(|(&a, &b)| (a - b).abs() as f64)
+        .sum::<f64>()
+        / img.len() as f64;
+    assert!(mae < 6e-3, "post-resize round-trip mae {mae} too high");
+}
+
+#[test]
+#[should_panic(expected = "patch_size must be > 0")]
+fn set_patch_size_zero_panics() {
+    let mut rig = make_rig(80, 256);
+    rig.set_patch_size(0);
+}
+
 // ── Geometric correctness of the basis ──────────────────────────────────
 
 #[test]
