@@ -124,12 +124,13 @@ class TestPerSphericalTileSourceStackSynthetic:
             img = _render_synthetic(cam, q)
             sources.append((cam, q, img))
         stack = PerSphericalTileSourceStack.build_rotation_only(rig, sources)
+        assert stack.dtype == "uint8"
         for t in range(stack.n_tiles):
             k = stack.n_contributors(t)
             for li in range(stack.pyramid_levels):
                 s = stack.level_size(li)
-                patches = stack.level_patches(t, li)
-                valid = stack.level_valid(t, li)
+                patches = stack.patches_for_tile(t, li)
+                valid = stack.valid_for_tile(t, li)
                 assert valid.dtype == np.bool_
                 if k == 0:
                     # Empty tiles: shape (0, s, s, 3) and (0, s, s).
@@ -150,7 +151,7 @@ class TestPerSphericalTileSourceStackSynthetic:
             sources.append((cam, q, _render_synthetic(cam, q)))
         stack = PerSphericalTileSourceStack.build_rotation_only(rig, sources)
         for t in range(stack.n_tiles):
-            indices = stack.src_indices(t)
+            indices = stack.src_indices_for_tile(t)
             assert indices.dtype == np.uint32
             if len(indices) > 1:
                 assert np.all(np.diff(indices) > 0)
@@ -176,8 +177,8 @@ class TestPerSphericalTileSourceStackSynthetic:
         assert chosen is not None, "expected at least one kept tile"
 
         # Pull level-0 patch + valid for the only contributor (pos=0).
-        l0_patches = stack.level_patches(chosen, 0)
-        l0_valid = stack.level_valid(chosen, 0)
+        l0_patches = stack.patches_for_tile(chosen, 0)
+        l0_valid = stack.valid_for_tile(chosen, 0)
         assert l0_patches.shape[0] == 1
         cur_p = l0_patches[0].copy()
         cur_v = l0_valid[0].copy()
@@ -189,8 +190,8 @@ class TestPerSphericalTileSourceStackSynthetic:
             blocks_v = cur_v.reshape(new_size, 2, new_size, 2)
             new_v = blocks_v.all(axis=(1, 3))
 
-            stored_p = stack.level_patches(chosen, li)[0]
-            stored_v = stack.level_valid(chosen, li)[0]
+            stored_p = stack.patches_for_tile(chosen, li)[0]
+            stored_v = stack.valid_for_tile(chosen, li)[0]
             np.testing.assert_array_equal(stored_p, new_p)
             np.testing.assert_array_equal(stored_v, new_v)
 
@@ -198,7 +199,7 @@ class TestPerSphericalTileSourceStackSynthetic:
             cur_v = new_v
 
         # Final 1×1 level.
-        assert stack.level_patches(chosen, stack.pyramid_levels - 1).shape[1:] == (
+        assert stack.patches_for_tile(chosen, stack.pyramid_levels - 1).shape[1:] == (
             1,
             1,
             3,
@@ -210,9 +211,106 @@ class TestPerSphericalTileSourceStackSynthetic:
         with pytest.raises(IndexError):
             stack.n_contributors(rig.n)
         with pytest.raises(IndexError):
-            stack.level_patches(0, stack.pyramid_levels)
+            stack.patches_for_tile(0, stack.pyramid_levels)
         with pytest.raises(IndexError):
-            stack.level_valid(rig.n, 0)
+            stack.valid_for_tile(rig.n, 0)
+
+
+class TestPerSphericalTileSourceStackCsr:
+    """CSR-flat layout invariants exposed at the Python level."""
+
+    def test_tile_offsets_and_ids_consistent(self):
+        rig = _make_pow2_rig(40, 256, 16)
+        cam = _pinhole(128, 128, 60.0)
+        sources = []
+        for i in range(4):
+            q = RotQuaternion.from_axis_angle([0.0, 1.0, 0.0], i * (np.pi / 4))
+            sources.append((cam, q, _render_synthetic(cam, q)))
+        stack = PerSphericalTileSourceStack.build_rotation_only(rig, sources)
+
+        offsets = stack.tile_offsets()
+        tile_id = stack.tile_id()
+        src_id = stack.src_id()
+        assert offsets.dtype == np.uint32
+        assert tile_id.dtype == np.uint32
+        assert src_id.dtype == np.uint32
+        assert offsets.shape == (stack.n_tiles + 1,)
+        assert tile_id.shape == (stack.total_contrib_rows,)
+        assert src_id.shape == (stack.total_contrib_rows,)
+        assert offsets[0] == 0
+        assert offsets[-1] == stack.total_contrib_rows
+        assert np.all(np.diff(offsets) >= 0)
+
+        # tile_id[r] == t for every r in tile t's range.
+        for t in range(stack.n_tiles):
+            start, end = int(offsets[t]), int(offsets[t + 1])
+            assert np.all(tile_id[start:end] == t)
+            # src_id slice equals src_indices_for_tile.
+            np.testing.assert_array_equal(
+                src_id[start:end], stack.src_indices_for_tile(t)
+            )
+
+    def test_whole_level_buffers_match_per_tile_concatenation(self):
+        rig = _make_pow2_rig(40, 256, 16)
+        cam = _pinhole(128, 128, 60.0)
+        sources = []
+        for i in range(3):
+            q = RotQuaternion.from_axis_angle([0.0, 1.0, 0.0], i * (np.pi / 5))
+            sources.append((cam, q, _render_synthetic(cam, q)))
+        stack = PerSphericalTileSourceStack.build_rotation_only(rig, sources)
+
+        for li in range(stack.pyramid_levels):
+            whole_p = stack.level_patches(li)
+            whole_v = stack.level_valid(li)
+            assert whole_p.shape[0] == stack.total_contrib_rows
+            assert whole_v.shape[0] == stack.total_contrib_rows
+
+            # Concatenate per-tile slices and compare.
+            tile_ps = []
+            tile_vs = []
+            for t in range(stack.n_tiles):
+                if stack.n_contributors(t) > 0:
+                    tile_ps.append(stack.patches_for_tile(t, li))
+                    tile_vs.append(stack.valid_for_tile(t, li))
+            if tile_ps:
+                np.testing.assert_array_equal(np.concatenate(tile_ps, axis=0), whole_p)
+                np.testing.assert_array_equal(np.concatenate(tile_vs, axis=0), whole_v)
+
+
+class TestPerSphericalTileSourceStackFloat32:
+    """The dtype='float32' build path."""
+
+    def test_dtype_float32_level_zero_byte_equivalent_to_uint8(self):
+        rig = _make_pow2_rig(40, 256, 16)
+        cam = _pinhole(128, 128, 60.0)
+        sources = []
+        for i in range(3):
+            q = RotQuaternion.from_axis_angle([0.0, 1.0, 0.0], i * (np.pi / 6))
+            sources.append((cam, q, _render_synthetic(cam, q)))
+
+        stack_u8 = PerSphericalTileSourceStack.build_rotation_only(rig, sources)
+        stack_f32 = PerSphericalTileSourceStack.build_rotation_only(
+            rig, sources, dtype="float32"
+        )
+
+        assert stack_u8.dtype == "uint8"
+        assert stack_f32.dtype == "float32"
+        assert stack_u8.total_contrib_rows == stack_f32.total_contrib_rows
+
+        l0_u8 = stack_u8.level_patches(0)
+        l0_f32 = stack_f32.level_patches(0)
+        assert l0_u8.dtype == np.uint8
+        assert l0_f32.dtype == np.float32
+        # Range-preserving conversion: f32[i] == u8[i] as f32.
+        np.testing.assert_array_equal(l0_f32, l0_u8.astype(np.float32))
+
+        # Valid masks must be identical.
+        np.testing.assert_array_equal(stack_f32.level_valid(0), stack_u8.level_valid(0))
+
+    def test_invalid_dtype_rejected(self):
+        rig = _make_pow2_rig(20, 256, 8)
+        with pytest.raises(ValueError, match="dtype"):
+            PerSphericalTileSourceStack.build_rotation_only(rig, [], dtype="float64")
 
 
 class TestPerSphericalTileSourceStackOnReconstruction:
@@ -265,13 +363,13 @@ class TestPerSphericalTileSourceStackOnReconstruction:
             k = stack.n_contributors(t)
             if k == 0:
                 continue
-            indices = stack.src_indices(t)
+            indices = stack.src_indices_for_tile(t)
             assert len(indices) == k
             assert np.all((indices >= 0) & (indices < len(image_names)))
             for li in range(stack.pyramid_levels):
                 s = stack.level_size(li)
-                patches = stack.level_patches(t, li)
-                valid = stack.level_valid(t, li)
+                patches = stack.patches_for_tile(t, li)
+                valid = stack.valid_for_tile(t, li)
                 assert patches.shape == (k, s, s, 3)
                 assert valid.shape == (k, s, s)
             checked += 1

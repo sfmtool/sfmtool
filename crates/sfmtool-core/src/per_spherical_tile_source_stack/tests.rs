@@ -89,8 +89,9 @@ fn build_fails_on_non_power_of_two_patch_size() {
     // Constructor's natural patch_size is ~21 (not a power of two).
     assert!(!rig.patch_size().is_power_of_two());
     let raw = rig.patch_size();
-    let err = PerSphericalTileSourceStack::build_rotation_only(&rig, &[], &BuildParams::default())
-        .unwrap_err();
+    let err =
+        PerSphericalTileSourceStack::<u8>::build_rotation_only(&rig, &[], &BuildParams::default())
+            .unwrap_err();
     assert_eq!(err, BuildError::PatchSizeNotPowerOfTwo(raw));
 }
 
@@ -108,7 +109,7 @@ fn build_succeeds_after_set_patch_size() {
     .unwrap();
     rig.set_patch_size(rig.patch_size().next_power_of_two());
     let stack =
-        PerSphericalTileSourceStack::build_rotation_only(&rig, &[], &BuildParams::default())
+        PerSphericalTileSourceStack::<u8>::build_rotation_only(&rig, &[], &BuildParams::default())
             .unwrap();
     assert_eq!(stack.n_tiles(), 80);
     assert_eq!(stack.base_patch_size(), rig.patch_size());
@@ -116,15 +117,20 @@ fn build_succeeds_after_set_patch_size() {
         stack.pyramid_levels(),
         rig.patch_size().trailing_zeros() + 1
     );
+    assert_eq!(stack.total_contrib_rows(), 0);
     for t in 0..stack.n_tiles() {
         assert_eq!(stack.n_contributors(t), 0);
-        let tile = stack.tile(t);
-        assert!(tile.src_indices.is_empty());
-        for level in &tile.levels {
-            assert_eq!(level.n_contributors, 0);
-            assert!(level.patches.is_empty());
-            assert!(level.valid.is_empty());
+        assert!(stack.src_indices_for_tile(t).is_empty());
+        for li in 0..stack.pyramid_levels() as usize {
+            assert!(stack.patches_for_tile(t, li).is_empty());
+            assert!(stack.valid_for_tile(t, li).is_empty());
         }
+    }
+    // Whole-level buffers are sized to total_contrib_rows = 0, so they
+    // are empty too.
+    for li in 0..stack.pyramid_levels() as usize {
+        assert!(stack.level_patches(li).is_empty());
+        assert!(stack.level_valid(li).is_empty());
     }
 }
 
@@ -138,9 +144,12 @@ fn build_rejects_mixed_channels() {
         (cam.clone(), RotQuaternion::identity(), img_rgb),
         (cam.clone(), RotQuaternion::identity(), img_gray),
     ];
-    let err =
-        PerSphericalTileSourceStack::build_rotation_only(&rig, &sources, &BuildParams::default())
-            .unwrap_err();
+    let err = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap_err();
     assert_eq!(
         err,
         BuildError::MixedSourceChannels {
@@ -156,24 +165,23 @@ fn build_rejects_mixed_channels() {
 fn pyramid_level_count_and_sizes() {
     for &b in &[8u32, 16, 32, 64, 128] {
         let rig = make_pow2_rig(20, 256, b);
-        let stack =
-            PerSphericalTileSourceStack::build_rotation_only(&rig, &[], &BuildParams::default())
-                .unwrap();
+        let stack = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+            &rig,
+            &[],
+            &BuildParams::default(),
+        )
+        .unwrap();
         assert_eq!(stack.base_patch_size(), b);
         assert_eq!(stack.pyramid_levels(), b.trailing_zeros() + 1);
-        for t in 0..stack.n_tiles() {
-            let tile = stack.tile(t);
-            assert_eq!(tile.levels.len() as u32, stack.pyramid_levels());
-            for (li, level) in tile.levels.iter().enumerate() {
-                assert_eq!(level.size, b >> li as u32);
-            }
-            assert_eq!(tile.levels.last().unwrap().size, 1);
+        for li in 0..stack.pyramid_levels() as usize {
+            assert_eq!(stack.level(li).size, b >> li as u32);
         }
+        assert_eq!(stack.level(stack.pyramid_levels() as usize - 1).size, 1);
     }
 }
 
 #[test]
-fn soa_buffer_sizing() {
+fn level_buffer_sizing_matches_csr_layout() {
     let rig = make_pow2_rig(40, 256, 16);
     let cam = pinhole_camera(128, 128, 60.0);
     let r1 = RotQuaternion::identity();
@@ -185,24 +193,77 @@ fn soa_buffer_sizing() {
         (cam.clone(), r2.clone(), img2),
     ];
 
-    let stack =
-        PerSphericalTileSourceStack::build_rotation_only(&rig, &sources, &BuildParams::default())
-            .unwrap();
-    for t in 0..stack.n_tiles() {
-        let tile = stack.tile(t);
-        let k = tile.src_indices.len();
-        for level in &tile.levels {
-            let s = level.size as usize;
-            let c = level.channels as usize;
-            assert_eq!(level.n_contributors as usize, k);
-            assert_eq!(level.patches.len(), k * s * s * c);
-            assert_eq!(level.valid.len(), k * s * s);
+    let stack = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    let total_rows = stack.total_contrib_rows();
+    let c = stack.channels() as usize;
+    for li in 0..stack.pyramid_levels() as usize {
+        let level = stack.level(li);
+        let s = level.size as usize;
+        assert_eq!(level.patches.len(), total_rows * s * s * c);
+        assert_eq!(level.valid.len(), total_rows * s * s);
+    }
+    // Per-tile slices add up to the whole level.
+    for li in 0..stack.pyramid_levels() as usize {
+        let s = stack.level(li).size as usize;
+        let mut sum_patches = 0usize;
+        let mut sum_valid = 0usize;
+        for t in 0..stack.n_tiles() {
+            let k = stack.n_contributors(t);
+            assert_eq!(stack.patches_for_tile(t, li).len(), k * s * s * c);
+            assert_eq!(stack.valid_for_tile(t, li).len(), k * s * s);
+            sum_patches += stack.patches_for_tile(t, li).len();
+            sum_valid += stack.valid_for_tile(t, li).len();
         }
+        assert_eq!(sum_patches, stack.level_patches(li).len());
+        assert_eq!(sum_valid, stack.level_valid(li).len());
+    }
+}
+
+// ── CSR invariants ──────────────────────────────────────────────────────
+
+#[test]
+fn tile_offsets_are_well_formed() {
+    let rig = make_pow2_rig(40, 256, 16);
+    let cam = pinhole_camera(128, 128, 60.0);
+    let n_sources = 4usize;
+    let sources: Vec<_> = (0..n_sources)
+        .map(|i| {
+            let q = RotQuaternion::from_axis_angle(
+                Vector3::new(0.0, 1.0, 0.0),
+                (i as f64) * (PI / n_sources as f64),
+            )
+            .unwrap();
+            let img = render_synthetic(&cam, &q);
+            (cam.clone(), q, img)
+        })
+        .collect();
+    let stack = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    let offsets = stack.tile_offsets();
+    assert_eq!(offsets.len(), stack.n_tiles() + 1);
+    assert_eq!(offsets[0], 0);
+    assert_eq!(
+        offsets[stack.n_tiles()] as usize,
+        stack.total_contrib_rows()
+    );
+    for t in 0..stack.n_tiles() {
+        assert!(offsets[t] <= offsets[t + 1], "offsets not monotone at {t}");
+        let span = (offsets[t + 1] - offsets[t]) as usize;
+        assert_eq!(span, stack.n_contributors(t));
     }
 }
 
 #[test]
-fn src_indices_are_strictly_ascending_and_in_range() {
+fn tile_id_and_src_id_consistent_with_offsets() {
     let rig = make_pow2_rig(40, 256, 16);
     let cam = pinhole_camera(128, 128, 60.0);
     let n_sources = 5usize;
@@ -217,16 +278,61 @@ fn src_indices_are_strictly_ascending_and_in_range() {
             (cam.clone(), q, img)
         })
         .collect();
-    let stack =
-        PerSphericalTileSourceStack::build_rotation_only(&rig, &sources, &BuildParams::default())
-            .unwrap();
+    let stack = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    let total = stack.total_contrib_rows();
+    assert_eq!(stack.tile_id().len(), total);
+    assert_eq!(stack.src_id().len(), total);
+    let offsets = stack.tile_offsets();
     for t in 0..stack.n_tiles() {
-        let tile = stack.tile(t);
-        for window in tile.src_indices.windows(2) {
-            assert!(window[0] < window[1], "src_indices not strictly ascending");
+        let start = offsets[t] as usize;
+        let end = offsets[t + 1] as usize;
+        // tile_id[r] == t for every r in this tile's range.
+        for r in start..end {
+            assert_eq!(stack.tile_id()[r], t as u32);
         }
-        for &i in &tile.src_indices {
+        // src_id slice for tile t is strictly ascending and equals
+        // src_indices_for_tile(t).
+        let slice = &stack.src_id()[start..end];
+        assert_eq!(slice, stack.src_indices_for_tile(t));
+        for window in slice.windows(2) {
+            assert!(window[0] < window[1]);
+        }
+        // Every src_id in this tile is a valid source index.
+        for &i in slice {
             assert!((i as usize) < n_sources);
+        }
+    }
+}
+
+#[test]
+fn valid_mask_is_strictly_zero_or_one() {
+    let rig = make_pow2_rig(40, 256, 16);
+    let cam = pinhole_camera(128, 128, 60.0);
+    let sources: Vec<_> = (0..3)
+        .map(|i| {
+            let q = RotQuaternion::from_axis_angle(
+                Vector3::new(0.0, 1.0, 0.0),
+                (i as f64) * (PI / 6.0),
+            )
+            .unwrap();
+            let img = render_synthetic(&cam, &q);
+            (cam.clone(), q, img)
+        })
+        .collect();
+    let stack = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    for li in 0..stack.pyramid_levels() as usize {
+        for &b in stack.level_valid(li) {
+            assert!(b == 0 || b == 1, "valid byte must be 0 or 1, got {b}");
         }
     }
 }
@@ -244,9 +350,12 @@ fn empty_cull_for_distant_source() {
     let img = render_synthetic(&cam, &r_src_from_world);
     let sources = vec![(cam, r_src_from_world, img)];
 
-    let stack =
-        PerSphericalTileSourceStack::build_rotation_only(&rig, &sources, &BuildParams::default())
-            .unwrap();
+    let stack = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
 
     // For each tile, recompute centre-direction projection by hand to verify
     // the cull matches the spec's definition exactly.
@@ -262,7 +371,7 @@ fn empty_cull_for_distant_source() {
             Some((sx, sy)) => sx >= 0.0 && sy >= 0.0 && sx < sw && sy < sh,
             None => false,
         };
-        let listed = stack.tile(t).src_indices.contains(&0);
+        let listed = stack.src_indices_for_tile(t).contains(&0);
         assert_eq!(listed, in_view, "tile {t}: cull disagrees with spec rule");
         if listed {
             total_kept += 1;
@@ -288,13 +397,16 @@ fn opposite_sources_have_disjoint_tiles() {
     let img_a = render_synthetic(&cam, &r_a);
     let img_b = render_synthetic(&cam, &r_b);
     let sources = vec![(cam.clone(), r_a, img_a), (cam.clone(), r_b, img_b)];
-    let stack =
-        PerSphericalTileSourceStack::build_rotation_only(&rig, &sources, &BuildParams::default())
-            .unwrap();
+    let stack = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
     for t in 0..stack.n_tiles() {
-        let tile = stack.tile(t);
-        let has_a = tile.src_indices.contains(&0);
-        let has_b = tile.src_indices.contains(&1);
+        let indices = stack.src_indices_for_tile(t);
+        let has_a = indices.contains(&0);
+        let has_b = indices.contains(&1);
         assert!(
             !(has_a && has_b),
             "tile {t} has both opposite sources in src_indices"
@@ -305,8 +417,7 @@ fn opposite_sources_have_disjoint_tiles() {
 // ── Synthetic correctness ───────────────────────────────────────────────
 
 /// For each kept (source, tile), recompute the warp + remap by hand and
-/// assert byte equality with the corresponding `pos · B² · C` slice of
-/// `tile(t).levels[0].patches`. Load-bearing correctness check.
+/// assert byte equality with the corresponding row of `level 0`'s patches.
 #[test]
 fn level_zero_byte_equal_to_hand_warp() {
     let rig = make_pow2_rig(40, 256, 16);
@@ -323,9 +434,12 @@ fn level_zero_byte_equal_to_hand_warp() {
             (cam.clone(), q, img)
         })
         .collect();
-    let stack =
-        PerSphericalTileSourceStack::build_rotation_only(&rig, &sources, &BuildParams::default())
-            .unwrap();
+    let stack = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
 
     let tile_camera = rig.tile_camera();
     let b = stack.base_patch_size();
@@ -335,7 +449,6 @@ fn level_zero_byte_equal_to_hand_warp() {
 
     let mut checked = 0usize;
     for t in 0..stack.n_tiles() {
-        let tile = stack.tile(t);
         // Build R_world_from_tile.
         let cols = rig.tile_rotation(t);
         let r_wt = nalgebra::Matrix3::from_columns(&[
@@ -343,17 +456,18 @@ fn level_zero_byte_equal_to_hand_warp() {
             Vector3::new(cols[3], cols[4], cols[5]),
             Vector3::new(cols[6], cols[7], cols[8]),
         ]);
-        for (pos, &i) in tile.src_indices.iter().enumerate() {
+        let level0_patches = stack.patches_for_tile(t, 0);
+        let level0_valid = stack.valid_for_tile(t, 0);
+        for (pos, &i) in stack.src_indices_for_tile(t).iter().enumerate() {
             let (src_intrinsics, r_sw_q, image) = &sources[i as usize];
             let r_sw = r_sw_q.to_rotation_matrix();
             let r_st = r_sw * r_wt;
             let r_st_q = RotQuaternion::from_rotation_matrix(r_st);
             let warp = WarpMap::from_cameras_with_rotation(src_intrinsics, &tile_camera, &r_st_q);
             let patch = remap_bilinear(image, &warp);
-            let level0 = &tile.levels[0];
             let p_off = pos * pixel_count * c_us;
             assert_eq!(
-                &level0.patches[p_off..p_off + pixel_count * c_us],
+                &level0_patches[p_off..p_off + pixel_count * c_us],
                 patch.data(),
                 "tile {t} src {i}: level-0 patch differs from hand warp"
             );
@@ -361,8 +475,8 @@ fn level_zero_byte_equal_to_hand_warp() {
             let v_off = pos * pixel_count;
             for v in 0..b {
                 for u in 0..b {
-                    let expected = warp.is_valid(u, v);
-                    let stored = level0.valid[v_off + (v as usize) * b_us + u as usize];
+                    let expected = if warp.is_valid(u, v) { 1u8 } else { 0u8 };
+                    let stored = level0_valid[v_off + (v as usize) * b_us + u as usize];
                     assert_eq!(
                         stored, expected,
                         "tile {t} src {i}: level-0 valid disagrees at ({u}, {v})"
@@ -379,40 +493,38 @@ fn level_zero_byte_equal_to_hand_warp() {
 
 #[test]
 fn pyramid_constant_color_propagates() {
-    // Mock up a tile-stack manually: write a known constant level-0 patch
-    // and walk the downsample logic by reusing `warp_and_downsample_into`.
-    // We do this by going through the public path with a constant-coloured
-    // synthetic source to check end-to-end consistency.
     let rig = make_pow2_rig(20, 256, 8);
     let w = 64u32;
     let cam = pinhole_camera(w, w, 90.0);
     // Constant-grey image.
     let img = ImageU8::new(w, w, 3, vec![137u8; (w * w * 3) as usize]);
     let sources = vec![(cam, RotQuaternion::identity(), img)];
-    let stack =
-        PerSphericalTileSourceStack::build_rotation_only(&rig, &sources, &BuildParams::default())
-            .unwrap();
+    let stack = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
 
     let mut checked = 0usize;
     for t in 0..stack.n_tiles() {
-        let tile = stack.tile(t);
-        if tile.src_indices.is_empty() {
+        let k = stack.n_contributors(t);
+        if k == 0 {
             continue;
         }
-        for level in &tile.levels {
-            // For a constant input, every level should also be constant. The
-            // valid bits are governed by warp validity, not the colour, so
-            // some pixels may be invalid; check colours only at valid pixels.
-            let s = level.size as usize;
+        for li in 0..stack.pyramid_levels() as usize {
+            let s = stack.level(li).size as usize;
             let pixel_count = s * s;
-            for pos in 0..tile.src_indices.len() {
+            let patches = stack.patches_for_tile(t, li);
+            let valid = stack.valid_for_tile(t, li);
+            for pos in 0..k {
                 let p_off = pos * pixel_count * 3;
                 let v_off = pos * pixel_count;
                 for px in 0..pixel_count {
-                    if level.valid[v_off + px] {
-                        let r = level.patches[p_off + px * 3];
-                        let g = level.patches[p_off + px * 3 + 1];
-                        let bl = level.patches[p_off + px * 3 + 2];
+                    if valid[v_off + px] == 1 {
+                        let r = patches[p_off + px * 3];
+                        let g = patches[p_off + px * 3 + 1];
+                        let bl = patches[p_off + px * 3 + 2];
                         // u8 round-trip of mean(137, 137, 137, 137) = 137.
                         assert_eq!(r, 137);
                         assert_eq!(g, 137);
@@ -430,28 +542,21 @@ fn pyramid_constant_color_propagates() {
 
 #[test]
 fn all_four_valid_propagates_through_pyramid() {
-    // Build a tiny stack with one source feeding one kept tile, then poke a
-    // single invalid pixel into the level-0 valid mask via a custom rig
-    // built inline. We re-implement the all-four AND rule and compare.
-    //
-    // Rather than mocking a stack, the cleanest reproduction is to call the
-    // module-private downsample helper directly. We expose the kernel by
-    // doing a hand-rolled mirror here and asserting the spec's documented
-    // propagation: an invalid pixel at `(x, y)` in level L−1 makes the
-    // level-L pixel at `(x/2, y/2)` invalid; level L+1 at `(x/4, y/4)`; …
-    // the final 1×1 entry is always invalid.
+    // Standalone reference implementation of the all-four AND rule, asserts
+    // the documented per-level shrink behaviour: an invalid pixel at
+    // `(x, y)` in level L−1 → invalid at `(x/2, y/2)` in level L; the final
+    // 1×1 entry is invalid.
     let b: usize = 16;
-    let mut prev_valid = vec![true; b * b];
-    // Seed: invalidate one specific pixel.
+    let mut prev_valid = vec![1u8; b * b];
     let (x0, y0) = (5usize, 11usize);
-    prev_valid[y0 * b + x0] = false;
+    prev_valid[y0 * b + x0] = 0;
 
     let mut x = x0;
     let mut y = y0;
     let mut s = b;
     while s > 1 {
         let new_s = s / 2;
-        let mut new_valid = vec![false; new_s * new_s];
+        let mut new_valid = vec![0u8; new_s * new_s];
         for v in 0..new_s {
             for u in 0..new_s {
                 let i00 = (2 * v) * s + (2 * u);
@@ -459,16 +564,16 @@ fn all_four_valid_propagates_through_pyramid() {
                 let i01 = (2 * v + 1) * s + (2 * u);
                 let i11 = (2 * v + 1) * s + (2 * u + 1);
                 new_valid[v * new_s + u] =
-                    prev_valid[i00] && prev_valid[i10] && prev_valid[i01] && prev_valid[i11];
+                    prev_valid[i00] & prev_valid[i10] & prev_valid[i01] & prev_valid[i11];
             }
         }
-        // Exactly one invalid pixel in the new level: at (x/2, y/2).
-        let invalid_count = new_valid.iter().filter(|&&v| !v).count();
+        let invalid_count = new_valid.iter().filter(|&&v| v == 0).count();
         assert_eq!(invalid_count, 1, "expected exactly one invalid pixel");
         x /= 2;
         y /= 2;
-        assert!(
-            !new_valid[y * new_s + x],
+        assert_eq!(
+            new_valid[y * new_s + x],
+            0,
             "level with size {new_s} should mark ({x}, {y}) invalid"
         );
         prev_valid = new_valid;
@@ -476,19 +581,13 @@ fn all_four_valid_propagates_through_pyramid() {
     }
     // Final 1x1 level must be invalid.
     assert_eq!(prev_valid.len(), 1);
-    assert!(!prev_valid[0]);
+    assert_eq!(prev_valid[0], 0);
 }
 
 // ── Visibility = base-warp centre-pixel validity ────────────────────────
 
 #[test]
 fn visibility_matches_base_warp_centre_pixel() {
-    // Spec: a tile has source `i` in `tile(t).src_indices` iff the level-0
-    // warp's `map_x`, `map_y` at the patch centre is in-bounds for that
-    // source. Cross-checks the cull's centre-direction projection against
-    // the warp's per-pixel in-bounds bit at the patch centre — agreement
-    // confirms the rig's `tile_camera()` and warp construction are
-    // consistent with the cull rule.
     let rig = make_pow2_rig(40, 256, 16);
     let cam = pinhole_camera(128, 128, 60.0);
     let n_sources = 4usize;
@@ -503,16 +602,15 @@ fn visibility_matches_base_warp_centre_pixel() {
             (cam.clone(), q, img)
         })
         .collect();
-    let stack =
-        PerSphericalTileSourceStack::build_rotation_only(&rig, &sources, &BuildParams::default())
-            .unwrap();
+    let stack = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
 
     let tile_camera = rig.tile_camera();
     let b = stack.base_patch_size();
-    // patch centre = (B/2, B/2) — in pixel-centre-at-0.5 convention this is
-    // the boundary between the two centre rows/cols, which still has a
-    // well-defined in-bounds bit on either side. Use the upper-left of the
-    // 2x2 centre block so we evaluate exactly one warp pixel.
     let centre_u = b / 2;
     let centre_v = b / 2;
 
@@ -529,7 +627,7 @@ fn visibility_matches_base_warp_centre_pixel() {
             let r_st_q = RotQuaternion::from_rotation_matrix(r_st);
             let warp = WarpMap::from_cameras_with_rotation(src_intrinsics, &tile_camera, &r_st_q);
             let in_view = warp.is_valid(centre_u, centre_v);
-            let listed = stack.tile(t).src_indices.contains(&(i as u32));
+            let listed = stack.src_indices_for_tile(t).contains(&(i as u32));
             assert_eq!(
                 listed, in_view,
                 "tile {t} src {i}: cull ({listed}) disagrees with warp centre validity ({in_view})"
@@ -538,7 +636,7 @@ fn visibility_matches_base_warp_centre_pixel() {
     }
 }
 
-// ── max_in_flight_sources / determinism ─────────────────────────────────
+// ── Determinism ─────────────────────────────────────────────────────────
 
 #[test]
 fn determinism_param_does_not_change_output() {
@@ -555,7 +653,7 @@ fn determinism_param_does_not_change_output() {
             (cam.clone(), q, img)
         })
         .collect();
-    let stack_a = PerSphericalTileSourceStack::build_rotation_only(
+    let stack_a = PerSphericalTileSourceStack::<u8>::build_rotation_only(
         &rig,
         &sources,
         &BuildParams {
@@ -563,7 +661,7 @@ fn determinism_param_does_not_change_output() {
         },
     )
     .unwrap();
-    let stack_b = PerSphericalTileSourceStack::build_rotation_only(
+    let stack_b = PerSphericalTileSourceStack::<u8>::build_rotation_only(
         &rig,
         &sources,
         &BuildParams {
@@ -571,7 +669,148 @@ fn determinism_param_does_not_change_output() {
         },
     )
     .unwrap();
-    for t in 0..stack_a.n_tiles() {
-        assert_eq!(stack_a.tile(t), stack_b.tile(t));
+    assert_eq!(stack_a.tile_offsets(), stack_b.tile_offsets());
+    assert_eq!(stack_a.src_id(), stack_b.src_id());
+    assert_eq!(stack_a.tile_id(), stack_b.tile_id());
+    for li in 0..stack_a.pyramid_levels() as usize {
+        assert_eq!(stack_a.level_patches(li), stack_b.level_patches(li));
+        assert_eq!(stack_a.level_valid(li), stack_b.level_valid(li));
     }
+}
+
+// ── f32 storage ─────────────────────────────────────────────────────────
+
+#[test]
+fn f32_level_zero_byte_equivalent_to_u8() {
+    // Range-preserving u8 → f32: at level 0, every f32 value should equal
+    // the corresponding u8 value cast to f32. (Levels > 0 diverge because
+    // u8 uses rounded means and f32 uses exact arithmetic.)
+    let rig = make_pow2_rig(40, 256, 16);
+    let cam = pinhole_camera(128, 128, 60.0);
+    let sources: Vec<_> = (0..3)
+        .map(|i| {
+            let q = RotQuaternion::from_axis_angle(
+                Vector3::new(0.0, 1.0, 0.0),
+                (i as f64) * (PI / 6.0),
+            )
+            .unwrap();
+            let img = render_synthetic(&cam, &q);
+            (cam.clone(), q, img)
+        })
+        .collect();
+    let stack_u8 = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    let stack_f32 = PerSphericalTileSourceStack::<f32>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+
+    assert_eq!(stack_u8.tile_offsets(), stack_f32.tile_offsets());
+    assert_eq!(stack_u8.src_id(), stack_f32.src_id());
+    assert_eq!(stack_u8.tile_id(), stack_f32.tile_id());
+    assert_eq!(stack_u8.level_valid(0), stack_f32.level_valid(0));
+
+    let level0_u8 = stack_u8.level_patches(0);
+    let level0_f32 = stack_f32.level_patches(0);
+    assert_eq!(level0_u8.len(), level0_f32.len());
+    for i in 0..level0_u8.len() {
+        assert_eq!(level0_f32[i], level0_u8[i] as f32);
+    }
+}
+
+#[test]
+fn f32_pyramid_within_quarter_per_level_of_u8() {
+    // u8 round-to-nearest box-filter accumulates at most 0.5 of error per
+    // level relative to the exact f32 mean (the rounding adds [-0.5, 0.5)
+    // at each level; the upstream rounded value is the only input). Bound
+    // the absolute deviation by 0.5 · level to give some headroom.
+    let rig = make_pow2_rig(40, 256, 16);
+    let cam = pinhole_camera(128, 128, 60.0);
+    let sources: Vec<_> = (0..3)
+        .map(|i| {
+            let q = RotQuaternion::from_axis_angle(
+                Vector3::new(0.0, 1.0, 0.0),
+                (i as f64) * (PI / 6.0),
+            )
+            .unwrap();
+            let img = render_synthetic(&cam, &q);
+            (cam.clone(), q, img)
+        })
+        .collect();
+    let stack_u8 = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    let stack_f32 = PerSphericalTileSourceStack::<f32>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+
+    for li in 0..stack_u8.pyramid_levels() as usize {
+        let bound = 0.5 * (li as f32);
+        let a = stack_u8.level_patches(li);
+        let b = stack_f32.level_patches(li);
+        assert_eq!(a.len(), b.len());
+        for i in 0..a.len() {
+            let diff = (b[i] - (a[i] as f32)).abs();
+            assert!(
+                diff <= bound + 1e-4,
+                "level {li}: deviation {diff} exceeds bound {bound}"
+            );
+        }
+    }
+}
+
+#[test]
+fn f32_constant_color_means_are_exact() {
+    // f32 box_avg_4 is exact arithmetic, so a constant input pyramid
+    // remains exactly constant at every level — no rounding drift.
+    let rig = make_pow2_rig(20, 256, 8);
+    let w = 64u32;
+    let cam = pinhole_camera(w, w, 90.0);
+    let img = ImageU8::new(w, w, 3, vec![137u8; (w * w * 3) as usize]);
+    let sources = vec![(cam, RotQuaternion::identity(), img)];
+    let stack = PerSphericalTileSourceStack::<f32>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+
+    let mut checked = 0usize;
+    for t in 0..stack.n_tiles() {
+        let k = stack.n_contributors(t);
+        if k == 0 {
+            continue;
+        }
+        for li in 0..stack.pyramid_levels() as usize {
+            let s = stack.level(li).size as usize;
+            let pixel_count = s * s;
+            let patches = stack.patches_for_tile(t, li);
+            let valid = stack.valid_for_tile(t, li);
+            for pos in 0..k {
+                let p_off = pos * pixel_count * 3;
+                let v_off = pos * pixel_count;
+                for px in 0..pixel_count {
+                    if valid[v_off + px] == 1 {
+                        assert_eq!(patches[p_off + px * 3], 137.0);
+                        assert_eq!(patches[p_off + px * 3 + 1], 137.0);
+                        assert_eq!(patches[p_off + px * 3 + 2], 137.0);
+                    }
+                }
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no levels checked");
 }
