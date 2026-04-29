@@ -61,6 +61,25 @@ def parse_angle(angle_str: str) -> float:
         raise ValueError(f"Unrecognized angle unit: {unit}")
 
 
+def _auto_output_path(input_path: Path) -> Path:
+    """Generate an output path of the form {stem}-transformed[-N].sfmr next to the input.
+
+    Picks ``{stem}-transformed.sfmr`` if available, otherwise the smallest
+    counter starting at 2: ``{stem}-transformed-2.sfmr``, ``-3.sfmr``, ...
+    """
+    base = input_path.with_name(f"{input_path.stem}-transformed.sfmr")
+    if not base.exists():
+        return base
+    counter = 2
+    while True:
+        candidate = input_path.with_name(
+            f"{input_path.stem}-transformed-{counter}.sfmr"
+        )
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
 def parse_transform_args(args: list[str]) -> list:
     """Parse command-line arguments to extract transforms in order."""
     transforms = []
@@ -304,7 +323,7 @@ def parse_transform_args(args: list[str]) -> list:
 @timed_command
 @click.help_option("--help", "-h")
 @click.argument("input_path", type=click.Path(exists=True))
-@click.argument("output_path", type=click.Path())
+@click.argument("output_path", type=click.Path(), required=False)
 @click.option(
     "--rotate",
     multiple=True,
@@ -405,7 +424,10 @@ def xform(ctx, input_path, output_path, **kwargs):
     order they appear on the command line.
 
     INPUT_PATH must be a .sfmr file.
-    OUTPUT_PATH is the path for the output .sfmr file.
+    OUTPUT_PATH is the path for the output .sfmr file. If omitted, the
+    output is written next to the input as ``{stem}-transformed.sfmr``,
+    falling back to ``{stem}-transformed-2.sfmr`` (then ``-3``, ...) when
+    that name is taken.
 
     Available transformations:
 
@@ -474,18 +496,25 @@ def xform(ctx, input_path, output_path, **kwargs):
     from .._sfmtool import SfmrReconstruction
 
     input_path = Path(input_path)
-    output_path = Path(output_path)
+    output_path_provided = output_path is not None
 
     if input_path.suffix.lower() != ".sfmr":
         raise click.UsageError(f"Input path must be a .sfmr file, got: {input_path}")
 
-    if output_path.suffix.lower() != ".sfmr":
-        raise click.UsageError(f"Output path must be a .sfmr file, got: {output_path}")
+    if output_path_provided:
+        output_path = Path(output_path)
+        if output_path.suffix.lower() != ".sfmr":
+            raise click.UsageError(
+                f"Output path must be a .sfmr file, got: {output_path}"
+            )
+    else:
+        output_path = _auto_output_path(input_path)
 
     # Parse transforms from sys.argv to preserve order
     try:
         xform_idx = sys.argv.index("xform")
-        transform_args_start = xform_idx + 3  # Skip 'xform', input_path, output_path
+        # Skip 'xform', input_path, and output_path (if it was supplied).
+        transform_args_start = xform_idx + (3 if output_path_provided else 2)
         transform_args = sys.argv[transform_args_start:]
     except (ValueError, IndexError):
         transform_args = []

@@ -189,6 +189,45 @@ def test_xform_camera_model_unknown(isolated_seoul_bull_17_images: list[Path]):
     assert "Unknown camera model" in result.output
 
 
+def test_xform_default_output_path(isolated_seoul_bull_17_images: list[Path]):
+    """When OUTPUT_PATH is omitted, xform writes {stem}-transformed.sfmr next
+    to the input, then -2, -3, ... for subsequent runs."""
+    workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+
+    input_sfmr = workspace_dir / "solve.sfmr"
+    result = CliRunner().invoke(
+        main,
+        ["solve", "-i", "--output", str(input_sfmr), str(workspace_dir)],
+    )
+    assert result.exit_code == 0, result.output
+
+    expected_first = workspace_dir / "solve-transformed.sfmr"
+    expected_second = workspace_dir / "solve-transformed-2.sfmr"
+    expected_third = workspace_dir / "solve-transformed-3.sfmr"
+
+    args = ["xform", str(input_sfmr), "--scale", "2.0"]
+    with patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert expected_first.exists()
+    assert str(expected_first) in result.output
+
+    with patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert expected_second.exists()
+
+    with patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert expected_third.exists()
+
+
 def test_xform_chained_transforms(isolated_seoul_bull_17_images: list[Path]):
     """Test xform with multiple chained transforms."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent

@@ -9,8 +9,12 @@ applied sequentially in the order specified on the command line.
 ## Command Syntax
 
 ```bash
-sfm xform <input.sfmr> <output.sfmr> [OPTIONS...]
+sfm xform <input.sfmr> [<output.sfmr>] [OPTIONS...]
 ```
+
+If `<output.sfmr>` is omitted, the result is written next to the input as
+`<stem>-transformed.sfmr`. If that name is already taken, a numeric suffix is
+appended starting at 2 (`<stem>-transformed-2.sfmr`, `-3`, ...).
 
 ### Order Matters
 
