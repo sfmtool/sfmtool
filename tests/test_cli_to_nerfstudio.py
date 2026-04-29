@@ -214,6 +214,71 @@ class TestToNerfstudioE2E:
         # header is 10 lines; total = 10 + n
         assert len(lines) == 10 + n
 
+    def test_range_filters_frames(self, pinhole_sfmr_17_images, tmp_path):
+        out = tmp_path / "ns_dataset"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "to-nerfstudio",
+                str(pinhole_sfmr_17_images),
+                "-o",
+                str(out),
+                "--num-downscales",
+                "0",
+                "-r",
+                "1-5",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        with open(out / "transforms.json") as f:
+            data = json.load(f)
+
+        # Only the five matching images should be exported.
+        frames = data["frames"]
+        assert len(frames) == 5
+
+        images_dir = out / "images"
+        assert sum(1 for _ in images_dir.iterdir()) == 5
+        for frame in frames:
+            assert (out / frame["file_path"]).exists()
+
+    def test_range_with_no_matches_errors(self, pinhole_sfmr_17_images, tmp_path):
+        out = tmp_path / "ns_dataset"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "to-nerfstudio",
+                str(pinhole_sfmr_17_images),
+                "-o",
+                str(out),
+                "-r",
+                "100-200",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "100-200" in result.output
+        assert "Available file numbers" in result.output
+
+    def test_filter_points_without_range_errors(self, pinhole_sfmr_17_images, tmp_path):
+        out = tmp_path / "ns_dataset"
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "to-nerfstudio",
+                str(pinhole_sfmr_17_images),
+                "-o",
+                str(out),
+                "--filter-points",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "--filter-points" in result.output
+        assert "--range" in result.output
+
     def test_include_colmap_writes_sparse(self, pinhole_sfmr_17_images, tmp_path):
         out = tmp_path / "ns_dataset"
         runner = CliRunner()

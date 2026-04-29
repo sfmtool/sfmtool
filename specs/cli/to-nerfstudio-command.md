@@ -35,6 +35,8 @@ sfm to-nerfstudio <INPUT.sfmr> [--output <OUTPUT_DIR>] [OPTIONS...]
 | `--num-downscales` | int ≥ 0 | 3 | Number of downsampled image pyramid levels (0 disables the pyramid) |
 | `--jpeg-quality` | int 1–100 | 95 | JPEG quality for downsampled pyramid images |
 | `--include-colmap` | flag | off | Also emit a `sparse/` directory with COLMAP `.bin` files |
+| `--range / -r` | range expr | none | Export only images whose file number matches the range (e.g. `10-50` or `0-9,20-29`). Observations on excluded images are dropped. |
+| `--filter-points` | flag | off | With `--range`, also drop 3D points that have no remaining observations. Requires `--range`. |
 
 Input cameras must all be pinhole (zero distortion). The command rejects any
 reconstruction with a distorted camera and tells the user to run

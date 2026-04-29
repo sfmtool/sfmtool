@@ -6,8 +6,11 @@
 from pathlib import Path
 
 import click
+import numpy as np
+from openjd.model import IntRangeExpr
 
 from .._cli_utils import timed_command
+from .._filenames import number_from_filename
 
 
 @click.command("to-nerfstudio")
@@ -42,12 +45,30 @@ from .._cli_utils import timed_command
     default=False,
     help="Also write a sparse/ directory with COLMAP .bin files.",
 )
+@click.option(
+    "--range",
+    "-r",
+    "range_expr",
+    default=None,
+    help="Export only images whose file number matches this range expression "
+    "(e.g. '10-50' or '0-9,20-29'). Observations on excluded images are dropped.",
+)
+@click.option(
+    "--filter-points",
+    "filter_points",
+    is_flag=True,
+    default=False,
+    help="With --range, also drop 3D points that have no remaining observations. "
+    "Default is to keep all 3D points.",
+)
 def to_nerfstudio(
     input_sfmr: str,
     output_dir: str | None,
     num_downscales: int,
     jpeg_quality: int,
     include_colmap: bool,
+    range_expr: str | None,
+    filter_points: bool,
 ):
     """Convert a pinhole .sfmr reconstruction to a Nerfstudio dataset.
 
@@ -62,6 +83,7 @@ def to_nerfstudio(
 
     \b
         sfm to-nerfstudio undistorted.sfmr -o my_dataset/
+        sfm to-nerfstudio undistorted.sfmr -o my_dataset/ -r 10-50
         ns-train nerfacto --data my_dataset/
     """
     from .._sfmtool import SfmrReconstruction
@@ -71,6 +93,9 @@ def to_nerfstudio(
     if input_path.suffix.lower() != ".sfmr":
         raise click.UsageError(f"Input must be a .sfmr file: {input_path}")
 
+    if filter_points and range_expr is None:
+        raise click.UsageError("--filter-points requires --range")
+
     if output_dir is None:
         out_path = input_path.parent / f"{input_path.stem}_nerfstudio"
     else:
@@ -78,6 +103,8 @@ def to_nerfstudio(
 
     try:
         recon = SfmrReconstruction.load(input_path)
+        if range_expr is not None:
+            recon = _apply_range_filter(recon, range_expr, filter_points)
     except Exception as e:
         raise click.ClickException(str(e))
 
@@ -103,4 +130,37 @@ def to_nerfstudio(
         f"{'single' if summary['single_camera'] else 'multi'}-camera, "
         f"{summary['num_downscales']} pyramid levels"
         + (", + sparse/" if summary["include_colmap"] else "")
+    )
+
+
+def _apply_range_filter(recon, range_expr_str: str, filter_points: bool):
+    """Subset the reconstruction by image file number range."""
+    range_numbers = set(IntRangeExpr.from_str(range_expr_str))
+
+    image_names = recon.image_names
+    keep_indices: list[int] = []
+    for i, name in enumerate(image_names):
+        file_number = number_from_filename(name)
+        if file_number is not None and file_number in range_numbers:
+            keep_indices.append(i)
+
+    if not keep_indices:
+        available_numbers = sorted(
+            n
+            for n in (number_from_filename(name) for name in image_names)
+            if n is not None
+        )
+        raise ValueError(
+            f"No images remain after applying range filter '{range_expr_str}'. "
+            f"Available file numbers: {available_numbers}"
+        )
+
+    click.echo(
+        f"  Applied range filter '{range_expr_str}': "
+        f"keeping {len(keep_indices)} of {len(image_names)} images"
+    )
+
+    indices_arr = np.array(keep_indices, dtype=np.uint32)
+    return recon.subset_by_image_indices(
+        indices_arr, drop_orphaned_points=filter_points
     )
