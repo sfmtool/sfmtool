@@ -7,7 +7,7 @@ use nalgebra::Vector3;
 
 use super::*;
 use crate::camera_intrinsics::{CameraIntrinsics, CameraModel};
-use crate::sphere_points::{evenly_distributed_sphere_points, RelaxConfig};
+use crate::sphere_points::{random_sphere_points, RelaxConfig};
 use crate::warp_map::WarpMap;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -245,19 +245,16 @@ fn direction_uniformity_within_relaxer_quality() {
 fn coverage_every_direction_within_half_fov() {
     // For each of n ∈ {20, 80, 320, 5000}: every unit vector's angular
     // distance to its nearest tile direction must be ≤ half_fov_rad.
-    // Probe with a different sphere stratification (different seed).
+    //
+    // Probe is uniform-random (no Thomson relaxation) and hoisted outside
+    // the loop. At 50_000 samples the typical inter-probe gap is ≪ the
+    // rig's tile spacing even at n=5000, so Poisson clumpiness still
+    // resolves any rig gap the relaxer leaves.
+    let probe_flat = random_sphere_points(50_000, Some(987));
+    let probe_n = probe_flat.len() / 3;
+
     for &n in &[20usize, 80, 320, 5000] {
         let rig = make_rig(n, 512);
-
-        let probe_flat = evenly_distributed_sphere_points(
-            50_000,
-            &RelaxConfig {
-                seed: Some(987),
-                ..Default::default()
-            },
-        );
-
-        let probe_n = probe_flat.len() / 3;
         let nn = rig.direction_tree.nearest(&probe_flat, probe_n);
 
         let half_fov = rig.half_fov_rad();

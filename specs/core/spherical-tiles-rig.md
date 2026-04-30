@@ -486,13 +486,16 @@ The assembly kernel is analogous to `WarpMap::remap_aniso` but sourcing from
 - **Coverage (parameterised over `n`).** For each of `n ∈ {20, 80, 320,
   5_000}`, every unit vector's angular distance to its nearest tile
   direction is ≤ `half_fov_rad`. The "every unit vector" sample is a
-  separate `evenly_distributed_sphere_points(50_000)` call (different
-  RNG state from the rig under test) — that's the simplest sphere
-  stratification we already have. Because `half_fov_rad` is derived from
-  the rig's own measured max NN gap, this is mostly a check that
-  `overlap_factor ≥ 1` and the asin/chord conversion is correct, but it
-  also guards against the 50 000-sample probe being denser than the rig
-  in regions the relaxer happened to leave sparse.
+  fixed-seed `random_sphere_points(50_000, Some(987))`, built once
+  outside the `n` loop. Uniform random rather than Thomson-relaxed: at
+  50 000 samples the typical inter-probe gap (≈ `√(4π/50000) ≈ 0.016`
+  rad) is well below the rig's tile spacing even at `n=5000`
+  (`≈ 0.050` rad), so Poisson clumpiness still resolves any region the
+  relaxer happened to leave sparse — and a 50-iteration relaxation of
+  50 000 points runs to multi-second cost for no detectable change in
+  the test's verdict. Because `half_fov_rad` is derived from the rig's
+  own measured max NN gap, this is mostly a check that
+  `overlap_factor ≥ 1` and the asin/chord conversion is correct.
 - **Half-FOV tracks measurement.** For a constructed rig with known `n`
   and `overlap_factor`, assert
   `|half_fov_rad - measured_max_coverage_angle · overlap_factor| < eps`
