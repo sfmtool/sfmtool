@@ -1981,8 +1981,8 @@ mod tests {
 
             let mut max_diff = 0.0f32;
             let mut sum_diff_sq = 0.0f64;
-            for i in 0..n {
-                let d = (cpu_level.data()[i] - gpu_data[i]).abs();
+            for (cpu, gpu) in cpu_level.data().iter().zip(gpu_data.iter()) {
+                let d = (cpu - gpu).abs();
                 max_diff = max_diff.max(d);
                 sum_diff_sq += (d as f64).powi(2);
             }

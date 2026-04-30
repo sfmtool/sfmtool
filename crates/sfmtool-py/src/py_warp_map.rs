@@ -147,6 +147,7 @@ impl PyWarpMap {
     ///
     /// Returns:
     ///     Tuple of (map_x, map_y) numpy arrays.
+    #[allow(clippy::type_complexity)]
     fn to_numpy<'py>(
         &self,
         py: Python<'py>,

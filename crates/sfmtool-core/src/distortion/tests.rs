@@ -990,7 +990,7 @@ fn pixel_to_ray_simple_radial_fisheye_wide_angle_with_distortion() {
         let (u, v) = cam.project(x, y);
 
         // Only test if the projected pixel is within a reasonable range
-        if u < -1000.0 || u > 2000.0 {
+        if !(-1000.0..=2000.0).contains(&u) {
             continue;
         }
 

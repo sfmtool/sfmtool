@@ -603,6 +603,7 @@ mod tests {
 
     /// Helper: call both scalar and SSE2 paths and assert they match.
     #[cfg(target_arch = "x86_64")]
+    #[allow(clippy::too_many_arguments)]
     fn assert_scalar_simd_equivalent(
         tgt_image: &GrayImage,
         template: &[f32],

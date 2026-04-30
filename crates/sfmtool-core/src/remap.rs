@@ -634,15 +634,8 @@ mod tests {
 
         assert_eq!(result.width(), 4);
         assert_eq!(result.height(), 4);
-        for i in 0..16 {
-            assert_eq!(
-                result.data()[i],
-                data[i],
-                "pixel {} differs: {} vs {}",
-                i,
-                result.data()[i],
-                data[i]
-            );
+        for (i, (got, want)) in result.data().iter().zip(data.iter()).enumerate() {
+            assert_eq!(got, want, "pixel {i} differs: {got} vs {want}");
         }
     }
 
@@ -663,15 +656,8 @@ mod tests {
         assert_eq!(result.width(), 3);
         assert_eq!(result.height(), 3);
         assert_eq!(result.channels(), 3);
-        for i in 0..data.len() {
-            assert_eq!(
-                result.data()[i],
-                data[i],
-                "byte {} differs: {} vs {}",
-                i,
-                result.data()[i],
-                data[i]
-            );
+        for (i, (got, want)) in result.data().iter().zip(data.iter()).enumerate() {
+            assert_eq!(got, want, "byte {i} differs: {got} vs {want}");
         }
     }
 
@@ -733,8 +719,8 @@ mod tests {
 
         let result = remap_bilinear(&src, &map);
 
-        for i in 0..data.len() {
-            assert_eq!(result.data()[i], data[i], "byte {} differs", i);
+        for (i, (got, want)) in result.data().iter().zip(data.iter()).enumerate() {
+            assert_eq!(got, want, "byte {i} differs");
         }
     }
 

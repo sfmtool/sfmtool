@@ -549,6 +549,7 @@ use super::write::{write_colmap_db_features, write_colmap_db_matches};
 use super::ColmapDbFeatureData;
 
 /// Create feature data for 3 images with some keypoints.
+#[allow(clippy::type_complexity)]
 fn make_feature_data() -> (
     Vec<SfmrCamera>,
     Vec<String>,

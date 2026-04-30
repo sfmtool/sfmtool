@@ -108,13 +108,27 @@ mod tests {
                 "frame_003.jpg".into(),
             ],
             camera_indexes: Array1::from_vec(vec![0, 0, 0]),
-            quaternions_wxyz: Array2::from_shape_vec(
-                (image_count, 4),
-                vec![
-                    1.0, 0.0, 0.0, 0.0, 0.9239, 0.0, 0.3827, 0.0, 0.7071, 0.0, 0.7071, 0.0,
-                ],
-            )
-            .unwrap(),
+            quaternions_wxyz: {
+                const FRAC_1_SQRT_2: f64 = std::f64::consts::FRAC_1_SQRT_2;
+                Array2::from_shape_vec(
+                    (image_count, 4),
+                    vec![
+                        1.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.9239,
+                        0.0,
+                        0.3827,
+                        0.0,
+                        FRAC_1_SQRT_2,
+                        0.0,
+                        FRAC_1_SQRT_2,
+                        0.0,
+                    ],
+                )
+                .unwrap()
+            },
             translations_xyz: Array2::zeros((image_count, 3)),
             feature_tool_hashes: vec![[0u8; 16]; image_count],
             sift_content_hashes: vec![[1u8; 16]; image_count],

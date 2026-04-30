@@ -77,22 +77,20 @@ impl PyRotQuaternion {
                 "expected 3x3 matrix",
             ));
         }
-        let mat = if let Ok(slice) = r.as_slice() {
-            Matrix3::from_row_slice(slice)
-        } else {
-            // Non-contiguous array: copy element-wise (row-major)
-            let mut data = [0.0f64; 9];
-            for row in 0..3 {
-                for col in 0..3 {
-                    data[row * 3 + col] = *r.get([row, col]).ok_or_else(|| {
-                        pyo3::exceptions::PyValueError::new_err("index out of bounds")
-                    })?;
-                }
+        // Index by (row, col) — `as_slice()` returns Ok for any contiguous
+        // layout including Fortran order, which would silently transpose.
+        let mut data = [0.0f64; 9];
+        for row in 0..3 {
+            for col in 0..3 {
+                data[row * 3 + col] = *r.get([row, col]).ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err("index out of bounds")
+                })?;
             }
-            Matrix3::from_row_slice(&data)
-        };
+        }
         Ok(Self {
-            inner: sfmtool_core::RotQuaternion::from_rotation_matrix(mat),
+            inner: sfmtool_core::RotQuaternion::from_rotation_matrix(Matrix3::from_row_slice(
+                &data,
+            )),
         })
     }
 

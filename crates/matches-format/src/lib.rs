@@ -526,7 +526,7 @@ mod tests {
 
         let file = std::fs::File::open(&path).unwrap();
         let mut archive = zip::ZipArchive::new(file).unwrap();
-        assert!(archive.len() > 0, "expected a populated archive");
+        assert!(!archive.is_empty(), "expected a populated archive");
         for i in 0..archive.len() {
             let entry = archive.by_index(i).unwrap();
             assert_eq!(

@@ -616,10 +616,11 @@ mod tests {
             "c.jpg".to_string(),
         ];
         let camera_indexes = vec![0u32, 1, 0];
+        const FRAC_1_SQRT_2: f64 = std::f64::consts::FRAC_1_SQRT_2;
         let quaternions_wxyz = vec![
             [1.0, 0.0, 0.0, 0.0],
             [0.9239, 0.0, 0.3827, 0.0],
-            [0.7071, 0.7071, 0.0, 0.0],
+            [FRAC_1_SQRT_2, FRAC_1_SQRT_2, 0.0, 0.0],
         ];
         let translations_xyz = vec![[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [-1.0, 0.5, 0.25]];
         let keypoints_per_image = vec![vec![], vec![], vec![]];
