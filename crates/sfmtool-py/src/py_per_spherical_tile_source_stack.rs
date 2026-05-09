@@ -21,7 +21,7 @@ fn err_to_py(e: BuildError) -> PyErr {
 }
 
 /// Internal storage: dispatches between u8 and f32 underlying stacks.
-enum Inner {
+pub(crate) enum Inner {
     U8(PerSphericalTileSourceStack<u8>),
     F32(PerSphericalTileSourceStack<f32>),
 }
@@ -36,7 +36,7 @@ enum Inner {
 /// ``float32`` conversion preserves 0-255 range, not [0, 1] scale.
 #[pyclass(name = "PerSphericalTileSourceStack", module = "sfmtool._sfmtool")]
 pub struct PyPerSphericalTileSourceStack {
-    inner: Inner,
+    pub(crate) inner: Inner,
 }
 
 #[pymethods]

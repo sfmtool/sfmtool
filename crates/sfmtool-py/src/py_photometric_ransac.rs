@@ -1,0 +1,201 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! Python binding for the photometric RANSAC refinement.
+//!
+//! See ``specs/drafts/photometric-subsets-ransac.md`` for the algorithm.
+//! This binding accepts a float32-backed
+//! [`crate::PyPerSphericalTileSourceStack`] and returns a
+//! :class:`RansacPhotometricOutput` whose fields are owned NumPy arrays.
+
+use numpy::{IntoPyArray, PyArray1};
+use pyo3::prelude::*;
+
+use sfmtool_core::photometric_ransac::{
+    refine_photometric_ransac, RansacPhotometricError, RansacPhotometricOutput,
+    RansacPhotometricParams,
+};
+
+use crate::py_per_spherical_tile_source_stack::Inner;
+use crate::PyPerSphericalTileSourceStack;
+
+fn err_to_py(e: RansacPhotometricError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(format!("{e}"))
+}
+
+/// Result of :func:`refine_photometric_ransac`. Fields are NumPy arrays
+/// (or scalars where noted) and match the spec's
+/// ``RansacPhotometricOutput`` shape:
+///
+/// - ``log_gain`` : float32 ``[n_sources]``
+/// - ``primary_mask`` : bool ``[R]``
+/// - ``secondary_mask`` : bool ``[R]``
+/// - ``tile_primary_count`` : int32 ``[n_tiles]``
+/// - ``tile_secondary_count`` : int32 ``[n_tiles]``
+/// - ``tile_primary_lum_mad`` : float32 ``[n_tiles]`` (NaN where skipped)
+/// - ``tile_secondary_lum_mad`` : float32 ``[n_tiles]`` (NaN where skipped)
+/// - ``outer_iters`` : int (number of outer iterations executed)
+/// - ``mask_change_history`` : uint32 ``[outer_iters]``
+#[pyclass(name = "RansacPhotometricOutput", module = "sfmtool._sfmtool")]
+pub struct PyRansacPhotometricOutput {
+    inner: RansacPhotometricOutput,
+}
+
+#[pymethods]
+impl PyRansacPhotometricOutput {
+    #[getter]
+    fn log_gain<'py>(&self, py: Python<'py>) -> Py<PyAny> {
+        PyArray1::from_slice(py, &self.inner.log_gain)
+            .into_any()
+            .unbind()
+    }
+
+    #[getter]
+    fn primary_mask<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
+        bool_array(py, &self.inner.primary_mask)
+    }
+
+    #[getter]
+    fn secondary_mask<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
+        bool_array(py, &self.inner.secondary_mask)
+    }
+
+    #[getter]
+    fn tile_primary_count<'py>(&self, py: Python<'py>) -> Py<PyAny> {
+        PyArray1::from_slice(py, &self.inner.tile_primary_count)
+            .into_any()
+            .unbind()
+    }
+
+    #[getter]
+    fn tile_secondary_count<'py>(&self, py: Python<'py>) -> Py<PyAny> {
+        PyArray1::from_slice(py, &self.inner.tile_secondary_count)
+            .into_any()
+            .unbind()
+    }
+
+    #[getter]
+    fn tile_primary_lum_mad<'py>(&self, py: Python<'py>) -> Py<PyAny> {
+        PyArray1::from_slice(py, &self.inner.tile_primary_lum_mad)
+            .into_any()
+            .unbind()
+    }
+
+    #[getter]
+    fn tile_secondary_lum_mad<'py>(&self, py: Python<'py>) -> Py<PyAny> {
+        PyArray1::from_slice(py, &self.inner.tile_secondary_lum_mad)
+            .into_any()
+            .unbind()
+    }
+
+    #[getter]
+    fn outer_iters(&self) -> u32 {
+        self.inner.outer_iters
+    }
+
+    #[getter]
+    fn mask_change_history<'py>(&self, py: Python<'py>) -> Py<PyAny> {
+        self.inner
+            .mask_change_history
+            .clone()
+            .into_pyarray(py)
+            .into_any()
+            .unbind()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "RansacPhotometricOutput(log_gain[{}], primary_mask[{}], \
+             secondary_mask[{}], tile_primary_count[{}], outer_iters={})",
+            self.inner.log_gain.len(),
+            self.inner.primary_mask.len(),
+            self.inner.secondary_mask.len(),
+            self.inner.tile_primary_count.len(),
+            self.inner.outer_iters,
+        )
+    }
+}
+
+fn bool_array<'py>(py: Python<'py>, data: &[bool]) -> PyResult<Py<PyAny>> {
+    // numpy doesn't have a direct bool ndarray ctor in this binding; route
+    // through u8 + .view(bool_).
+    let bytes: Vec<u8> = data.iter().map(|&b| if b { 1 } else { 0 }).collect();
+    let arr_u8 = PyArray1::from_vec(py, bytes);
+    let np = py.import("numpy")?;
+    let bool_dtype = np.getattr("bool_")?;
+    let arr_bool = arr_u8.into_any().call_method1("view", (bool_dtype,))?;
+    Ok(arr_bool.unbind())
+}
+
+/// Refine photometric agreement on ``stack`` per the spec.
+///
+/// The stack must be float32-backed (``stack.dtype == "float32"``);
+/// uint8 stacks are rejected because the gamma exponentiation in Step 1
+/// requires a floating-point representation. Convert at construction by
+/// passing ``dtype="float32"`` to
+/// :meth:`PerSphericalTileSourceStack.build_rotation_only`.
+///
+/// All keyword arguments mirror the spec's ``RansacPhotometricParams``;
+/// defaults match the spec's recommendations.
+///
+/// Returns:
+///     :class:`RansacPhotometricOutput`.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(name = "refine_photometric_ransac", signature = (
+    stack,
+    inlier_threshold = 8.0,
+    gamma = 1.0,
+    target_patch_size = 4,
+    scoring_patch_size = 2,
+    subset_size = 2,
+    max_subsets_per_tile = 64,
+    min_inliers = 2,
+    max_outer_iters = 8,
+    mask_change_tolerance = 0.05,
+    saturation_threshold = 254,
+    seed = 0,
+))]
+pub fn refine_photometric_ransac_py(
+    py: Python<'_>,
+    stack: &PyPerSphericalTileSourceStack,
+    inlier_threshold: f32,
+    gamma: f32,
+    target_patch_size: u32,
+    scoring_patch_size: u32,
+    subset_size: u32,
+    max_subsets_per_tile: u32,
+    min_inliers: u32,
+    max_outer_iters: u32,
+    mask_change_tolerance: f32,
+    saturation_threshold: u8,
+    seed: u64,
+) -> PyResult<PyRansacPhotometricOutput> {
+    let params = RansacPhotometricParams {
+        inlier_threshold,
+        gamma,
+        target_patch_size,
+        scoring_patch_size,
+        subset_size,
+        max_subsets_per_tile,
+        min_inliers,
+        max_outer_iters,
+        mask_change_tolerance,
+        saturation_threshold,
+        seed,
+    };
+    let inner_stack = match &stack.inner {
+        Inner::F32(s) => s,
+        Inner::U8(_) => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "refine_photometric_ransac requires a float32-backed stack; \
+                 rebuild via PerSphericalTileSourceStack.build_rotation_only(\
+                 ..., dtype=\"float32\")",
+            ));
+        }
+    };
+    let inner = py
+        .detach(|| refine_photometric_ransac(inner_stack, &params))
+        .map_err(err_to_py)?;
+    Ok(PyRansacPhotometricOutput { inner })
+}
