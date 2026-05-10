@@ -11,6 +11,13 @@ Under the hood, sfmtool is a multi-language toolkit: a Python CLI and
 pipeline (`src/sfmtool/`) on top of a Rust Cargo workspace (`crates/`).
 The two are wired together by PyO3 bindings in `crates/sfmtool-py`.
 
+sfmtool has been developed primarily with AI-assisted coding tools such
+as [Claude Code](https://www.anthropic.com/claude-code). The `specs/`
+directory is central to that workflow: features are designed in a spec
+first, then implemented against it, and the specs are kept in sync as
+behavior evolves. Before contributing, please get familiar with what's
+there — see the [Specs](#specs) section below for the layout.
+
 ## Development environment
 
 The project uses [Pixi](https://pixi.sh) for all environments and tasks.
