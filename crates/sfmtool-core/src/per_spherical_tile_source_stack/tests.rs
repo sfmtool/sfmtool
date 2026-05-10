@@ -924,9 +924,7 @@ fn primary_consensus_atlas_empty_primary_yields_nan() {
     let mut primary_mask = vec![true; stack.total_contrib_rows()];
     let row_start = stack.tile_offsets()[t] as usize;
     let row_end = stack.tile_offsets()[t + 1] as usize;
-    for r in row_start..row_end {
-        primary_mask[r] = false;
-    }
+    primary_mask[row_start..row_end].fill(false);
     let log_gain = vec![0.0_f32; 3];
     let atlas = stack
         .primary_consensus_atlas(&rig, &primary_mask, &log_gain)

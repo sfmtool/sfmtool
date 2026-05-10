@@ -8,6 +8,11 @@
 //! `PerSphericalTileSourceStack`. Tests track the validation plan in
 //! `specs/drafts/photometric-subsets-ransac.md` (items 1–9 and 14–18).
 
+// Indexed loops mirror the indexed math in the synthetic fixtures
+// (`target_l[t]`, `truth[i]`, …); converting them to iterator form would
+// obscure the structure of the tests.
+#![allow(clippy::needless_range_loop)]
+
 use super::*;
 
 // ── Synthesis helpers ────────────────────────────────────────────────────
@@ -203,7 +208,7 @@ fn two_cluster_partition_recovers_both_groups() {
     let out = stack.run(&params);
 
     for t in 0..n_tiles {
-        let a = (t * n_sources) as usize;
+        let a = t * n_sources;
         for i in 0..4 {
             assert!(out.primary_mask[a + i], "tile {t}, src {i}: primary");
             assert!(
