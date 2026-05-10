@@ -814,3 +814,246 @@ fn f32_constant_color_means_are_exact() {
     }
     assert!(checked > 0, "no levels checked");
 }
+
+// ── primary_consensus_atlas ─────────────────────────────────────────────
+
+/// Build a 3-source stack of constant-color RGB images so every valid
+/// patch pixel equals its source's constant. Returns `(rig, stack,
+/// constants)` with `constants[i]` being the `[R, G, B]` triple sampled
+/// from source `i`.
+fn build_constant_color_stack() -> (
+    SphericalTileRig,
+    PerSphericalTileSourceStack<f32>,
+    [[f32; 3]; 3],
+) {
+    let rig = make_pow2_rig(20, 256, 4);
+    let w = 64u32;
+    let cam = pinhole_camera(w, w, 90.0);
+    let constants: [[u8; 3]; 3] = [[100, 50, 200], [150, 75, 100], [50, 200, 150]];
+    let mut img_buffers: Vec<Vec<u8>> = constants
+        .iter()
+        .map(|c| {
+            let mut buf = Vec::with_capacity((w * w * 3) as usize);
+            for _ in 0..(w * w) {
+                buf.extend_from_slice(c);
+            }
+            buf
+        })
+        .collect();
+    let sources: Vec<_> = constants
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let img = ImageU8::new(w, w, 3, std::mem::take(&mut img_buffers[i]));
+            // Three slightly-different rotations so all three see the same
+            // central tile area but lay out distinctly.
+            let q = RotQuaternion::from_axis_angle(Vector3::new(0.0, 1.0, 0.0), (i as f64) * 0.05)
+                .unwrap();
+            (cam.clone(), q, img)
+        })
+        .collect();
+    let stack = PerSphericalTileSourceStack::<f32>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    let constants_f32: [[f32; 3]; 3] =
+        std::array::from_fn(|i| std::array::from_fn(|c| constants[i][c] as f32));
+    (rig, stack, constants_f32)
+}
+
+/// Find a tile with all 3 sources contributing.
+fn find_full_tile(stack: &PerSphericalTileSourceStack<f32>) -> Option<usize> {
+    (0..stack.n_tiles()).find(|&t| stack.n_contributors(t) == 3)
+}
+
+#[test]
+fn primary_consensus_atlas_median_with_gains() {
+    let (rig, stack, constants) = build_constant_color_stack();
+    let t = find_full_tile(&stack).expect("expected at least one tile with 3 contributors");
+    let row_start = stack.tile_offsets()[t] as usize;
+    let row_end = stack.tile_offsets()[t + 1] as usize;
+    let primary_mask = vec![true; stack.total_contrib_rows()];
+    // Distinct, non-trivial gains so the median is sensitive to them.
+    let gains = [1.0_f32, 0.5, 0.25];
+    let log_gain: Vec<f32> = gains.iter().map(|g| g.ln()).collect();
+
+    let atlas = stack
+        .primary_consensus_atlas(&rig, &primary_mask, &log_gain)
+        .unwrap();
+
+    // Build the expected median per channel from the three (constant ·
+    // gain) sources contributing to tile `t`.
+    let src_indices: Vec<usize> = (row_start..row_end)
+        .map(|r| stack.src_id()[r] as usize)
+        .collect();
+    let expected_median: [f32; 3] = std::array::from_fn(|ch| {
+        let mut vals: Vec<f32> = src_indices
+            .iter()
+            .map(|&i| constants[i][ch] * gains[i])
+            .collect();
+        vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        vals[1] // median of 3
+    });
+
+    // Inspect the centre pixel of tile `t`'s atlas slot.
+    let (atlas_w, _atlas_h) = rig.atlas_size();
+    let (ox, oy) = rig.tile_atlas_origin(t);
+    let ps = stack.base_patch_size();
+    let cx = ox as usize + ps as usize / 2;
+    let cy = oy as usize + ps as usize / 2;
+    let off = (cy * atlas_w as usize + cx) * 3;
+    for ch in 0..3 {
+        let actual = atlas[off + ch];
+        // Allow a tiny tolerance for sub-pixel warp interpolation drift; the
+        // synthetic image is uniform so the median should be exact.
+        assert!(
+            (actual - expected_median[ch]).abs() < 1e-3,
+            "ch {ch}: median {actual} != expected {} at tile {t}",
+            expected_median[ch]
+        );
+    }
+}
+
+#[test]
+fn primary_consensus_atlas_empty_primary_yields_nan() {
+    let (rig, stack, _) = build_constant_color_stack();
+    let t = find_full_tile(&stack).expect("expected a full tile");
+    // Build a primary mask that's true everywhere EXCEPT for tile `t`.
+    let mut primary_mask = vec![true; stack.total_contrib_rows()];
+    let row_start = stack.tile_offsets()[t] as usize;
+    let row_end = stack.tile_offsets()[t + 1] as usize;
+    for r in row_start..row_end {
+        primary_mask[r] = false;
+    }
+    let log_gain = vec![0.0_f32; 3];
+    let atlas = stack
+        .primary_consensus_atlas(&rig, &primary_mask, &log_gain)
+        .unwrap();
+
+    // Tile `t`'s entire atlas slot is NaN; another full-cluster tile is
+    // populated.
+    let (atlas_w, _atlas_h) = rig.atlas_size();
+    let ps = stack.base_patch_size() as usize;
+    let (ox, oy) = rig.tile_atlas_origin(t);
+    for dy in 0..ps {
+        for dx in 0..ps {
+            let off = ((oy as usize + dy) * atlas_w as usize + (ox as usize + dx)) * 3;
+            for ch in 0..3 {
+                assert!(
+                    atlas[off + ch].is_nan(),
+                    "tile {t} slot pixel ({dx},{dy}) ch {ch} expected NaN"
+                );
+            }
+        }
+    }
+    let other = (0..stack.n_tiles())
+        .find(|&u| u != t && stack.n_contributors(u) > 0)
+        .expect("expected another contributing tile");
+    let (ox2, oy2) = rig.tile_atlas_origin(other);
+    let centre_off = (((oy2 as usize) + ps / 2) * atlas_w as usize + (ox2 as usize) + ps / 2) * 3;
+    for ch in 0..3 {
+        assert!(atlas[centre_off + ch].is_finite());
+    }
+}
+
+#[test]
+fn primary_consensus_atlas_trailing_slots_are_nan() {
+    // Atlas is laid out as a grid of `atlas_cols × atlas_rows` slots; when
+    // `n_tiles` doesn't fill the grid, the trailing slots must remain NaN.
+    // n=18 → atlas_cols=5, atlas_rows=4 → 2 trailing slots.
+    let rig = make_pow2_rig(18, 256, 4);
+    let w = 64u32;
+    let cam = pinhole_camera(w, w, 90.0);
+    let img = ImageU8::new(w, w, 3, vec![137u8; (w * w * 3) as usize]);
+    let sources = vec![(cam, RotQuaternion::identity(), img)];
+    let stack = PerSphericalTileSourceStack::<f32>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    let n = stack.n_tiles();
+    let atlas_cells = (rig.atlas_cols() as usize) * (rig.atlas_rows() as usize);
+    assert!(
+        atlas_cells > n,
+        "trailing-slot configuration broken (atlas_cells={atlas_cells}, n_tiles={n})"
+    );
+    let primary_mask = vec![true; stack.total_contrib_rows()];
+    let log_gain = vec![0.0_f32; 1];
+    let atlas = stack
+        .primary_consensus_atlas(&rig, &primary_mask, &log_gain)
+        .unwrap();
+
+    let (atlas_w, _atlas_h) = rig.atlas_size();
+    let ps = stack.base_patch_size() as usize;
+    let cols = rig.atlas_cols() as usize;
+    for cell in n..atlas_cells {
+        let row = cell / cols;
+        let col = cell % cols;
+        let ox = col * ps;
+        let oy = row * ps;
+        // Sample the slot's centre — if any cell is non-NaN, the sweep
+        // missed a trailing slot.
+        let off = ((oy + ps / 2) * atlas_w as usize + ox + ps / 2) * 3;
+        for ch in 0..3 {
+            assert!(
+                atlas[off + ch].is_nan(),
+                "trailing slot {cell} centre ch {ch} unexpectedly populated"
+            );
+        }
+    }
+}
+
+#[test]
+fn primary_consensus_atlas_rejects_mismatched_lengths() {
+    let (rig, stack, _) = build_constant_color_stack();
+    let r = stack.total_contrib_rows();
+
+    // primary_mask wrong length
+    let bad_mask = vec![true; r + 1];
+    let log_gain = vec![0.0_f32; 3];
+    let err = stack
+        .primary_consensus_atlas(&rig, &bad_mask, &log_gain)
+        .unwrap_err();
+    assert_eq!(
+        err,
+        ConsensusAtlasError::PrimaryMaskLength {
+            expected: r,
+            got: r + 1,
+        }
+    );
+
+    // log_gain too short
+    let mask = vec![true; r];
+    let short_gain = vec![0.0_f32; 1];
+    let err = stack
+        .primary_consensus_atlas(&rig, &mask, &short_gain)
+        .unwrap_err();
+    assert!(
+        matches!(err, ConsensusAtlasError::LogGainTooShort { .. }),
+        "expected LogGainTooShort, got {err:?}"
+    );
+
+    // Tile-count mismatch via a different rig
+    let other_rig = make_pow2_rig(7, 256, 4);
+    let err = stack
+        .primary_consensus_atlas(&other_rig, &mask, &log_gain)
+        .unwrap_err();
+    assert!(
+        matches!(err, ConsensusAtlasError::TileCountMismatch { .. }),
+        "expected TileCountMismatch, got {err:?}"
+    );
+
+    // Patch-size mismatch via a same-tile-count rig with a different patch size
+    let mut bumped = make_pow2_rig(stack.n_tiles(), 256, 8);
+    bumped.set_patch_size(8);
+    let err = stack
+        .primary_consensus_atlas(&bumped, &mask, &log_gain)
+        .unwrap_err();
+    assert!(
+        matches!(err, ConsensusAtlasError::PatchSizeMismatch { .. }),
+        "expected PatchSizeMismatch, got {err:?}"
+    );
+}

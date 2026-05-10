@@ -187,6 +187,48 @@ impl std::fmt::Display for BuildError {
 
 impl std::error::Error for BuildError {}
 
+/// Validation errors for
+/// [`PerSphericalTileSourceStack::primary_consensus_atlas`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConsensusAtlasError {
+    /// Stack and rig disagree on tile count.
+    TileCountMismatch { stack: usize, rig: usize },
+    /// Stack base patch size and rig patch size don't agree, so writing
+    /// per-tile patches into rig atlas slots would mis-align.
+    PatchSizeMismatch { stack: u32, rig: u32 },
+    /// `primary_mask.len()` is not exactly `total_contrib_rows`.
+    PrimaryMaskLength { expected: usize, got: usize },
+    /// Some row's `src_id` is `>= log_gain.len()`, leaving its source
+    /// without a gain to apply.
+    LogGainTooShort { needed: usize, got: usize },
+}
+
+impl std::fmt::Display for ConsensusAtlasError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TileCountMismatch { stack, rig } => write!(
+                f,
+                "stack n_tiles ({stack}) does not match rig.len() ({rig})"
+            ),
+            Self::PatchSizeMismatch { stack, rig } => write!(
+                f,
+                "stack base_patch_size ({stack}) does not match rig.patch_size ({rig})"
+            ),
+            Self::PrimaryMaskLength { expected, got } => write!(
+                f,
+                "primary_mask length {got} does not match total_contrib_rows {expected}"
+            ),
+            Self::LogGainTooShort { needed, got } => write!(
+                f,
+                "log_gain length {got} too short; max source index in stack \
+                 needs at least length {needed}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConsensusAtlasError {}
+
 impl<T: PatchPixel> PerSphericalTileSourceStack<T> {
     /// Build a rotation-only stack: every patch is the source's view of the
     /// tile assuming the scene is at infinite radial distance from the rig
@@ -478,6 +520,178 @@ impl<T: PatchPixel> PerSphericalTileSourceStack<T> {
     pub fn level_valid(&self, l: usize) -> &[u8] {
         &self.levels[l].valid
     }
+}
+
+impl PerSphericalTileSourceStack<f32> {
+    /// Build a per-tile consensus atlas from the photometric-RANSAC primary
+    /// cluster.
+    ///
+    /// For each tile `t`, the rows in `tile_offsets[t]..tile_offsets[t + 1]`
+    /// whose `primary_mask` entry is `true` are gain-corrected by
+    /// `exp(log_gain[src_id[r]])`, then reduced to a single patch by taking
+    /// the per-pixel, per-channel median. Pixels whose `valid` flag is `0`
+    /// are excluded from the median; pixels where every primary contributor
+    /// is invalid become `NaN`. Tiles with an empty primary cluster fill
+    /// their entire atlas slot with `NaN`. Trailing atlas slots beyond
+    /// `rig.len()` are also `NaN`.
+    ///
+    /// Operates on level 0 (full base patch resolution); other levels make
+    /// no sense for a panorama and would mismatch the rig's atlas slot size.
+    ///
+    /// Output layout matches the rig's atlas: row-major
+    /// `atlas_h × atlas_w × channels` `f32`, with each tile's `patch_size ×
+    /// patch_size × channels` block written at `rig.tile_atlas_origin(t)`.
+    /// Tiles are processed in parallel via rayon.
+    ///
+    /// # Errors
+    /// See [`ConsensusAtlasError`].
+    pub fn primary_consensus_atlas(
+        &self,
+        rig: &SphericalTileRig,
+        primary_mask: &[bool],
+        log_gain: &[f32],
+    ) -> Result<Vec<f32>, ConsensusAtlasError> {
+        // ── Validate ──────────────────────────────────────────────────────
+        if rig.len() != self.n_tiles {
+            return Err(ConsensusAtlasError::TileCountMismatch {
+                stack: self.n_tiles,
+                rig: rig.len(),
+            });
+        }
+        if rig.patch_size() != self.base_patch_size {
+            return Err(ConsensusAtlasError::PatchSizeMismatch {
+                stack: self.base_patch_size,
+                rig: rig.patch_size(),
+            });
+        }
+        if primary_mask.len() != self.total_contrib_rows() {
+            return Err(ConsensusAtlasError::PrimaryMaskLength {
+                expected: self.total_contrib_rows(),
+                got: primary_mask.len(),
+            });
+        }
+        let max_src = self.src_id.iter().copied().max().unwrap_or(0) as usize;
+        let needed = if self.src_id.is_empty() {
+            0
+        } else {
+            max_src + 1
+        };
+        if log_gain.len() < needed {
+            return Err(ConsensusAtlasError::LogGainTooShort {
+                needed,
+                got: log_gain.len(),
+            });
+        }
+
+        // ── Per-tile consensus patches ────────────────────────────────────
+        let level0 = &self.levels[0];
+        let ps = level0.size as usize;
+        let pixel_count = ps * ps;
+        let c_us = self.channels as usize;
+        let patch_floats = pixel_count * c_us;
+
+        let tile_patches: Vec<Vec<f32>> = (0..self.n_tiles)
+            .into_par_iter()
+            .map(|t| {
+                consensus_patch_for_tile(
+                    t,
+                    ps,
+                    c_us,
+                    &self.tile_offsets,
+                    &self.src_id,
+                    &level0.patches,
+                    &level0.valid,
+                    primary_mask,
+                    log_gain,
+                )
+            })
+            .collect();
+
+        // ── Lay out into atlas (NaN-filled) ───────────────────────────────
+        let (atlas_w, atlas_h) = rig.atlas_size();
+        let atlas_w_us = atlas_w as usize;
+        let atlas_h_us = atlas_h as usize;
+        let mut atlas = vec![f32::NAN; atlas_w_us * atlas_h_us * c_us];
+        let row_stride = atlas_w_us * c_us;
+        for (t, src) in tile_patches.iter().enumerate() {
+            let (ox, oy) = rig.tile_atlas_origin(t);
+            let ox_us = ox as usize;
+            let oy_us = oy as usize;
+            debug_assert_eq!(src.len(), patch_floats);
+            for dy in 0..ps {
+                let src_off = dy * ps * c_us;
+                let dst_off = (oy_us + dy) * row_stride + ox_us * c_us;
+                atlas[dst_off..dst_off + ps * c_us]
+                    .copy_from_slice(&src[src_off..src_off + ps * c_us]);
+            }
+        }
+        Ok(atlas)
+    }
+}
+
+/// Compute one tile's consensus patch from its primary-cluster rows. Returns
+/// a row-major `pixel_count × channels` buffer, `NaN`-filled where the
+/// primary cluster is empty for the whole tile or empty after the per-pixel
+/// `valid` filter.
+#[allow(clippy::too_many_arguments)]
+fn consensus_patch_for_tile(
+    t: usize,
+    ps: usize,
+    channels: usize,
+    tile_offsets: &[u32],
+    src_id: &[u32],
+    patches: &[f32],
+    valid: &[u8],
+    primary_mask: &[bool],
+    log_gain: &[f32],
+) -> Vec<f32> {
+    let pixel_count = ps * ps;
+    let mut out = vec![f32::NAN; pixel_count * channels];
+
+    let row_start = tile_offsets[t] as usize;
+    let row_end = tile_offsets[t + 1] as usize;
+    if row_start == row_end {
+        return out;
+    }
+
+    // Collect primary-cluster rows + their gains.
+    let mut primary_rows: Vec<usize> = Vec::with_capacity(row_end - row_start);
+    let mut gains: Vec<f32> = Vec::with_capacity(row_end - row_start);
+    for r in row_start..row_end {
+        if primary_mask[r] {
+            primary_rows.push(r);
+            gains.push(log_gain[src_id[r] as usize].exp());
+        }
+    }
+    if primary_rows.is_empty() {
+        return out;
+    }
+
+    // Per-pixel per-channel median of gain-corrected, valid samples.
+    let mut buf: Vec<f32> = Vec::with_capacity(primary_rows.len());
+    for px in 0..pixel_count {
+        for ch in 0..channels {
+            buf.clear();
+            for (i, &r) in primary_rows.iter().enumerate() {
+                if valid[r * pixel_count + px] != 0 {
+                    let v = patches[(r * pixel_count + px) * channels + ch];
+                    buf.push(v * gains[i]);
+                }
+            }
+            if buf.is_empty() {
+                continue; // out[..] stays NaN
+            }
+            buf.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let n = buf.len();
+            let m = if n % 2 == 1 {
+                buf[n / 2]
+            } else {
+                0.5 * (buf[n / 2 - 1] + buf[n / 2])
+            };
+            out[px * channels + ch] = m;
+        }
+    }
+    out
 }
 
 // ── Unsafe SoA writer for parallel disjoint-row writes ──────────────────

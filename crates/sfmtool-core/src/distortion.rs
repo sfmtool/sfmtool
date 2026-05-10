@@ -154,6 +154,86 @@ impl CameraModel {
         }
     }
 
+    /// Whether the normalized image-plane point `(x, y)` lies in the
+    /// distortion polynomial's principal monotonic branch — the branch
+    /// connected to the origin via positive radial growth.
+    ///
+    /// Beyond the first inflection of the polynomial, the forward map
+    /// stops being injective: the same distorted pixel can be reached from
+    /// multiple ray directions, producing ghost / mirror projections
+    /// outside the camera's true FOV. [`distort_ray`] uses this to gate
+    /// rays before calling [`distort`].
+    ///
+    /// For radially-symmetric distortion (`xd = x · g(r²)`,
+    /// `yd = y · g(r²)`) the principal branch is the region where the
+    /// radial scalar `g > 0` and the radial Jacobian factor
+    /// `g + 2r² g' > 0` are both positive. Either crossing zero means we
+    /// have either folded sign or passed an inflection.
+    ///
+    /// For models with tangential terms (OpenCV / FullOpenCV) we apply
+    /// the radial branch test to the radial part and additionally require
+    /// the full Jacobian (computed via central differences) to be positive
+    /// at `(x, y)`.
+    ///
+    /// Only meaningful for the perspective-model family that goes through
+    /// [`distort`]; for fisheye and equirectangular models — which take
+    /// different code paths in [`distort_ray`] — this returns `true`.
+    fn forward_projection_invertible(&self, x: f64, y: f64) -> bool {
+        match self {
+            CameraModel::Pinhole { .. } | CameraModel::SimplePinhole { .. } => true,
+            CameraModel::SimpleRadial {
+                radial_distortion_k1: k1,
+                ..
+            } => {
+                // Principal branch: 1 + k1 r² > 0 and 1 + 3 k1 r² > 0.
+                let r2 = x * x + y * y;
+                (1.0 + k1 * r2) > 0.0 && (1.0 + 3.0 * k1 * r2) > 0.0
+            }
+            CameraModel::Radial {
+                radial_distortion_k1: k1,
+                radial_distortion_k2: k2,
+                ..
+            } => {
+                // Principal branch: g and (g + 2r² g') both positive.
+                let r2 = x * x + y * y;
+                let g = 1.0 + k1 * r2 + k2 * r2 * r2;
+                let g_jac = 1.0 + 3.0 * k1 * r2 + 5.0 * k2 * r2 * r2;
+                g > 0.0 && g_jac > 0.0
+            }
+            CameraModel::OpenCV {
+                radial_distortion_k1: k1,
+                radial_distortion_k2: k2,
+                ..
+            }
+            | CameraModel::FullOpenCV {
+                radial_distortion_k1: k1,
+                radial_distortion_k2: k2,
+                ..
+            } => {
+                // Radial sign check (rough proxy — picks up the dominant
+                // fold even with k3..k6 / rational denominator at higher
+                // orders) plus a numerical det(J) > 0 at (x, y) to catch
+                // local non-invertibility from the tangential terms.
+                let r2 = x * x + y * y;
+                if (1.0 + k1 * r2 + k2 * r2 * r2) <= 0.0 {
+                    return false;
+                }
+                let h = 1e-5;
+                let (xpx, ypx) = self.distort(x + h, y);
+                let (xmx, ymx) = self.distort(x - h, y);
+                let (xpy, ypy) = self.distort(x, y + h);
+                let (xmy, ymy) = self.distort(x, y - h);
+                let dxd_dx = (xpx - xmx) / (2.0 * h);
+                let dyd_dx = (ypx - ymx) / (2.0 * h);
+                let dxd_dy = (xpy - xmy) / (2.0 * h);
+                let dyd_dy = (ypy - ymy) / (2.0 * h);
+                (dxd_dx * dyd_dy - dxd_dy * dyd_dx) > 0.0
+            }
+            // Non-perspective models reach this only via accidental call.
+            _ => true,
+        }
+    }
+
     /// Remove distortion: distorted image-plane → undistorted image-plane.
     ///
     /// Uses iterative fixed-point solving. For pinhole models, returns the
@@ -297,6 +377,13 @@ impl CameraModel {
                 }
                 let x = rx / rz;
                 let y = ry / rz;
+                // Reject rays that fall outside the distortion polynomial's
+                // principal monotonic branch. Beyond the first inflection
+                // the forward map stops being injective and produces ghost
+                // projections at spurious pixels inside the image rectangle.
+                if !self.forward_projection_invertible(x, y) {
+                    return None;
+                }
                 let (x_d, y_d) = self.distort(x, y);
                 Some((x_d, y_d))
             }

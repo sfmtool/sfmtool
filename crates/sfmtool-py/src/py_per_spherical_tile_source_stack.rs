@@ -3,12 +3,12 @@
 
 //! Python wrapper for [`sfmtool_core::per_spherical_tile_source_stack::PerSphericalTileSourceStack`].
 
-use numpy::{PyArray1, PyArrayMethods, PyUntypedArrayMethods};
+use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
 use sfmtool_core::per_spherical_tile_source_stack::{
-    BuildError, BuildParams, PerSphericalTileSourceStack,
+    BuildError, BuildParams, ConsensusAtlasError, PerSphericalTileSourceStack,
 };
 use sfmtool_core::remap::ImageU8;
 
@@ -301,6 +301,84 @@ impl PyPerSphericalTileSourceStack {
         };
         PyArray1::from_vec(py, data).into_any().unbind()
     }
+
+    /// Build a per-tile consensus atlas from a photometric-RANSAC primary
+    /// mask and per-source log-gain.
+    ///
+    /// For each tile, the rows whose ``primary_mask`` entry is ``True`` are
+    /// gain-corrected by ``exp(log_gain[src])`` and reduced to a single
+    /// patch by per-pixel, per-channel median; pixels whose ``valid`` flag
+    /// is zero are excluded. Tiles with empty primary clusters and pixels
+    /// whose contributors are all invalid are filled with ``NaN``. Trailing
+    /// atlas slots (where ``n_tiles`` doesn't fill the
+    /// ``atlas_cols × atlas_rows`` grid) are also ``NaN``.
+    ///
+    /// Operates on level 0 (full base patch resolution).
+    ///
+    /// Args:
+    ///     rig: The :class:`SphericalTileRig` the stack was built from.
+    ///         Tile count and patch size must match the stack.
+    ///     primary_mask: 1-D ``bool`` array of length
+    ///         ``total_contrib_rows`` (e.g. from
+    ///         :class:`RansacPhotometricOutput.primary_mask`).
+    ///     log_gain: 1-D ``float32`` array, length at least
+    ///         ``max(src_id) + 1``.
+    ///
+    /// Returns:
+    ///     ``(atlas_h, atlas_w, channels)`` ``float32`` array (or
+    ///     ``(atlas_h, atlas_w)`` when ``channels == 1``) suitable for
+    ///     passing to :meth:`SphericalTileRig.resample_atlas`.
+    ///
+    /// Raises:
+    ///     ValueError: If the stack is uint8-backed, or any input length
+    ///         doesn't match the stack/rig.
+    fn primary_consensus_atlas<'py>(
+        &self,
+        py: Python<'py>,
+        rig: &PySphericalTileRig,
+        primary_mask: PyReadonlyArray1<'_, bool>,
+        log_gain: PyReadonlyArray1<'_, f32>,
+    ) -> PyResult<Py<PyAny>> {
+        let stack = match &self.inner {
+            Inner::F32(s) => s,
+            Inner::U8(_) => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "primary_consensus_atlas requires a float32-backed stack; \
+                     rebuild via PerSphericalTileSourceStack.build_rotation_only(\
+                     ..., dtype=\"float32\")",
+                ));
+            }
+        };
+        let mask_vec: Vec<bool> = match primary_mask.as_slice() {
+            Ok(s) => s.to_vec(),
+            Err(_) => primary_mask.as_array().iter().copied().collect(),
+        };
+        let gain_vec: Vec<f32> = match log_gain.as_slice() {
+            Ok(s) => s.to_vec(),
+            Err(_) => log_gain.as_array().iter().copied().collect(),
+        };
+        let atlas = py
+            .detach(|| stack.primary_consensus_atlas(&rig.inner, &mask_vec, &gain_vec))
+            .map_err(consensus_err_to_py)?;
+        let (atlas_w, atlas_h) = rig.inner.atlas_size();
+        let channels = stack.channels() as usize;
+        let arr = if channels == 1 {
+            PyArray1::from_vec(py, atlas)
+                .reshape([atlas_h as usize, atlas_w as usize])?
+                .into_any()
+                .unbind()
+        } else {
+            PyArray1::from_vec(py, atlas)
+                .reshape([atlas_h as usize, atlas_w as usize, channels])?
+                .into_any()
+                .unbind()
+        };
+        Ok(arr)
+    }
+}
+
+fn consensus_err_to_py(e: ConsensusAtlasError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(format!("{e}"))
 }
 
 impl PyPerSphericalTileSourceStack {

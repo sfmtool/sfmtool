@@ -1054,6 +1054,88 @@ fn ray_to_pixel_returns_none_behind_camera_perspective() {
     assert!(cam.ray_to_pixel([0.5, 0.3, -0.1]).is_none());
 }
 
+/// SimpleRadial with strongly-negative k1 has a non-monotonic forward
+/// distortion polynomial — past the inflection radius the polynomial
+/// folds and produces ghost projections at the opposite side of the
+/// image. `ray_to_pixel` must reject rays in that regime.
+///
+/// k1 = -0.6563 reproduces the seoul_bull-style refined-intrinsics bug
+/// where wide-angle equirect rays were mapping to mirror copies inside
+/// the source image.
+#[test]
+fn ray_to_pixel_rejects_folded_simple_radial() {
+    let cam = CameraIntrinsics {
+        model: CameraModel::SimpleRadial {
+            focal_length: 497.08,
+            principal_point_x: 135.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: -0.6563,
+        },
+        width: 270,
+        height: 480,
+    };
+
+    // A ray at lon ≈ 53° (rx/rz ≈ 1.35) is well outside the camera's
+    // physical FOV but, with the folded polynomial, would project to a
+    // pixel near x = 7 — visibly inside the source rectangle. This is
+    // the spurious mirror; the gate must reject it.
+    let folded_ray = [0.803_f64, 0.0, 0.596];
+    assert!(
+        cam.ray_to_pixel(folded_ray).is_none(),
+        "expected None for ray in distortion fold-over region"
+    );
+
+    // A ray well inside the monotonic regime (small angle) must still
+    // project successfully — the gate isn't allowed to over-reject.
+    let on_axis = [0.0_f64, 0.0, 1.0];
+    let pix = cam.ray_to_pixel(on_axis).expect("on-axis ray must project");
+    assert_relative_eq!(pix.0, 135.0, epsilon = 1e-6);
+    assert_relative_eq!(pix.1, 240.0, epsilon = 1e-6);
+}
+
+/// Pinhole / SimplePinhole have no distortion; the new gate must be a
+/// no-op for them, accepting any ray with rz > 0.
+#[test]
+fn ray_to_pixel_pinhole_accepts_wide_rays() {
+    let cam = pinhole();
+    // Ray well off-axis but still rz > 0; pinhole has no distortion to
+    // fold, so projection lands far outside the image rectangle but the
+    // function must still return Some(_) — it is then up to the caller
+    // to do bounds checking.
+    let result = cam.ray_to_pixel([0.9_f64, 0.0, 0.4]);
+    assert!(
+        result.is_some(),
+        "pinhole ray_to_pixel must not reject wide-angle rays (no distortion)"
+    );
+}
+
+/// Radial (k1, k2) with negative coefficients can also fold; the gate
+/// catches it via the same closed-form det(J) test as SimpleRadial.
+#[test]
+fn ray_to_pixel_rejects_folded_radial() {
+    let cam = CameraIntrinsics {
+        model: CameraModel::Radial {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: -0.7,
+            radial_distortion_k2: 0.0,
+        },
+        width: 640,
+        height: 480,
+    };
+    // For k1 = -0.7, det(J) = (1 - 0.7 r²)(1 - 2.1 r²) goes negative
+    // for r² in (1/2.1, 1/0.7) ≈ (0.476, 1.429). A ray at (1.0, 0, 0.7)
+    // gives x=y=1.428, r²=2.04 — past the second root, det(J) > 0 again
+    // but g flipped, so the projection is a fold. Pick a ray squarely
+    // in the fold-zone (r² between the roots).
+    let folded = [0.5_f64, 0.5, 0.6]; // x=y=0.833, r²=1.39 in fold zone
+    assert!(
+        cam.ray_to_pixel(folded).is_none(),
+        "expected None for radial fold-over"
+    );
+}
+
 #[test]
 fn ray_to_pixel_batch_matches_single() {
     let cam = opencv();
