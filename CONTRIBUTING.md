@@ -3,9 +3,9 @@
 Thanks for your interest in contributing! sfmtool is a personal project
 aimed at making Structure from Motion (SfM) reconstruction fun to play
 with. It is not a stable, supported tool — APIs, file formats, and CLI
-shapes can all shift between commits — but if you have vacation
-datasets sitting around, or you just want to poke at SfM, we hope it's
-fun and interesting to try out.
+shapes can all shift between commits — but if you have interesting
+datasets sitting around, or you just want to poke at SfM, we hope you
+enjoy trying it out.
 
 Under the hood, sfmtool is a multi-language toolkit: a Python CLI and
 pipeline (`src/sfmtool/`) on top of a Rust Cargo workspace (`crates/`).
