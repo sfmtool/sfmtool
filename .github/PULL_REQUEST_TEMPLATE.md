@@ -25,4 +25,4 @@ Thanks for contributing to sfmtool! A few notes before you fill this out:
 - [ ] Rust changes: `pixi run cargo fmt && pixi run cargo clippy --workspace`
 - [ ] Rust changes touching `sfmtool-py` re-exports: ran `pixi run maturin develop --release`
 - [ ] Tests pass locally (`pixi run test`, `pixi run cargo test --workspace` as applicable)
-- [ ] Updated the relevant spec under `specs/` if behavior changed
+- [ ] Updated the relevant spec under `specs/` if behavior changed, or added a new spec if this introduces new behavior
