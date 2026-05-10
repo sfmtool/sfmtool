@@ -838,6 +838,52 @@ fn resample_atlas_partial_nan_renormalises_within_voronoi_cells() {
 }
 
 #[test]
+fn resample_atlas_blend_only_near_cell_boundaries() {
+    // Adjacent tiles store distinct constants 0.2 and 0.8. Two
+    // properties must hold of the output:
+    //
+    // 1. Some output pixels must land exactly on one of the constants
+    //    (deep inside a Voronoi cell, only one tile contributes with
+    //    full weight). Under the old wide-angle 1/r weighting, every
+    //    pixel was a contaminated mix of all k nearest tiles' colours,
+    //    so this property used to fail outright.
+    // 2. Every blended pixel must be within `[0.2, 0.8]` (the new ramp
+    //    only blends two adjacent contributors, never crosses bounds).
+    let rig = make_rig(1000, 1024);
+    let (aw, ah) = rig.atlas_size();
+    let ps = rig.patch_size() as usize;
+    let aw_us = aw as usize;
+    let mut atlas = vec![0.0_f32; (aw * ah) as usize];
+    for t in 0..rig.len() {
+        let v = if t % 2 == 0 { 0.2 } else { 0.8 };
+        let (ox, oy) = rig.tile_atlas_origin(t);
+        for dy in 0..ps {
+            for dx in 0..ps {
+                atlas[(oy as usize + dy) * aw_us + (ox as usize + dx)] = v;
+            }
+        }
+    }
+    let dst = equirect_camera(512, 256);
+    let out = rig.resample_atlas(&atlas, 1, &dst, &RotQuaternion::identity(), 4);
+    let mut exact = 0usize;
+    for &v in &out {
+        assert!(
+            (0.2 - 1e-4..=0.8 + 1e-4).contains(&v),
+            "output {v} outside blended bounds [0.2, 0.8]; \
+             ramp is leaking content from non-adjacent tiles"
+        );
+        if (v - 0.2).abs() < 1e-4 || (v - 0.8).abs() < 1e-4 {
+            exact += 1;
+        }
+    }
+    assert!(
+        exact > 0,
+        "no output pixel reached either constant exactly — the ramp \
+         is contaminating cell interiors"
+    );
+}
+
+#[test]
 fn resample_atlas_closest_tile_gate_prevents_bleed() {
     // Only ONE tile (tile 0) is valid; every other tile slot is NaN.
     // With k = 4, the new gate should restrict the valid output to dst

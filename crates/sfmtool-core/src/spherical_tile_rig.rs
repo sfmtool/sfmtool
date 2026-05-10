@@ -479,13 +479,17 @@ impl SphericalTileRig {
     /// The result has length `dst.width * dst.height * channels`, same layout.
     /// `channels` may be any positive value (1 = grayscale, 3 = RGB, …).
     ///
-    /// `k = 1` reduces to closest-tile sampling — a single bilinear sample
-    /// from each dst pixel's owning tile (visible Voronoi seams). `k > 1`
-    /// blends adjacent tiles, smoothing across seams at the cost of blurring
-    /// direction-only patterns slightly.
+    /// Each contributor's weight is a soft cell-membership ramp on the
+    /// projected radius: inside the tile's Voronoi cell the weight is `1`;
+    /// across a 2-pixel-wide ramp centred on the cell boundary the weight
+    /// falls linearly to `0`; tiles whose projection escapes their own
+    /// patch contribute nothing. This means `k = 1` already produces seam-
+    /// smoothing inside the overlap rings between tiles, and `k > 1` only
+    /// changes which farther neighbours are eligible to participate
+    /// (typically a no-op away from cell boundaries). Setting `k > 1`
+    /// guarantees both sides of every cell boundary are reachable.
     ///
-    /// Out-of-bounds atlas taps replicate the edge. `k` is clamped to the
-    /// number of tiles in the rig.
+    /// `k` is clamped to the number of tiles in the rig.
     ///
     /// **NaN handling:** atlas pixels carrying `NaN` are interpreted as
     /// "no data here". The bilinear sampler skips NaN corners and
@@ -538,6 +542,19 @@ impl SphericalTileRig {
         let half = self.patch_size as f64 / 2.0;
         let f = half / self.half_fov_rad.tan();
         let (fx_t, fy_t, cx_t, cy_t) = (f, f, half, half);
+        let patch_size_f = self.patch_size as f64;
+        // Voronoi-cell radius in tile-pixel units. Tiles tile the sphere
+        // with `half_fov_rad`, but Voronoi cells span only the
+        // `measured_max_coverage_angle` core of each FOV (the ratio is
+        // `1 / overlap_factor`). Inside this radius a dst direction
+        // belongs unambiguously to one tile; outside it (still inside
+        // the patch) we are in the overlap zone where adjacent tiles
+        // share coverage.
+        let cell_radius_px = half * (self.measured_max_coverage_angle / self.half_fov_rad);
+        // Half-width of the cross-cell blend, in tile pixels. A 2-pixel
+        // total blend zone (`-1..+1` of signed cell-boundary distance)
+        // gives a tight, geometrically meaningful seam smoothing.
+        let blend_half_px = 1.0_f64;
         let n_tiles = self.len();
         let k_eff = k.min(n_tiles);
 
@@ -546,7 +563,6 @@ impl SphericalTileRig {
             .into_par_iter()
             .flat_map(|row| {
                 let mut row_data = vec![0.0_f32; row_len];
-                let mut weights = vec![0.0_f64; k_eff];
                 let mut sample = vec![0.0_f32; channels];
                 let mut accum = vec![0.0_f32; channels];
                 let v_pix = row as f64 + 0.5;
@@ -559,25 +575,17 @@ impl SphericalTileRig {
                     let q = [world.x as f32, world.y as f32, world.z as f32];
                     let nn = self.direction_tree.nearest_k(&q, 1, k_eff);
 
-                    // Inverse-angular-distance weights (a single tile gets
-                    // weight 1; tiny offset avoids div-by-zero when world
-                    // coincides with a tile direction). Renormalisation
-                    // happens after the NaN-aware sampling pass below, so
-                    // the weight sum here is unused.
-                    for (i, &idx_u32) in nn.iter().enumerate() {
-                        let d = self.directions[idx_u32 as usize];
-                        let dot =
-                            (world.x * d[0] + world.y * d[1] + world.z * d[2]).clamp(-1.0, 1.0);
-                        let angle = dot.acos();
-                        weights[i] = 1.0 / (angle + 1e-9);
-                    }
-
                     // The closest tile (nn[0]) gates the pixel: if its
                     // sample is NaN this direction is genuinely
                     // unobserved (no Voronoi-cell owner has data) and we
                     // emit NaN regardless of what farther tiles hold.
-                    // Otherwise blend the k-nearest tiles, skipping any
-                    // NaN samples and renormalising over the contributors.
+                    // Each contributor's weight is a soft cell-membership
+                    // ramp on the projection radius — full inside the
+                    // tile's Voronoi cell, falling linearly to zero
+                    // across `2 * blend_half_px` centred on the cell
+                    // boundary, and reject if the projection escapes
+                    // the tile's own patch (so we can never bilinear-
+                    // sample into a neighbour's atlas slot).
                     accum.iter_mut().for_each(|v| *v = 0.0);
                     let base = col as usize * channels;
                     let mut closest_valid = false;
@@ -590,12 +598,40 @@ impl SphericalTileRig {
                         let tx = basis[0] * world.x + basis[1] * world.y + basis[2] * world.z;
                         let ty = basis[3] * world.x + basis[4] * world.y + basis[5] * world.z;
                         let tz = dir[0] * world.x + dir[1] * world.y + dir[2] * world.z;
-                        // Forward-clamp z so back-facing tiles project to
-                        // saturated pixel coords; the bilinear sampler then
-                        // clamps to the patch edge. Their weight is small.
-                        let tz_safe = if tz > 1e-9 { tz } else { 1e-9 };
-                        let in_x = fx_t * (tx / tz_safe) + cx_t;
-                        let in_y = fy_t * (ty / tz_safe) + cy_t;
+                        // Reject tiles where the dst direction is behind
+                        // (tz <= 0) or projects outside their patch — by
+                        // rig construction the closest tile never falls
+                        // here, but farther neighbours often do.
+                        if tz <= 1e-9 {
+                            if i == 0 {
+                                break;
+                            }
+                            continue;
+                        }
+                        let in_x = fx_t * (tx / tz) + cx_t;
+                        let in_y = fy_t * (ty / tz) + cy_t;
+                        if in_x < 0.0 || in_x >= patch_size_f || in_y < 0.0 || in_y >= patch_size_f
+                        {
+                            if i == 0 {
+                                break;
+                            }
+                            continue;
+                        }
+                        // Soft cell-membership weight from the projection's
+                        // signed distance to the cell boundary (positive
+                        // inside the cell, negative in the overlap ring).
+                        let dx = in_x - cx_t;
+                        let dy = in_y - cy_t;
+                        let r_proj = (dx * dx + dy * dy).sqrt();
+                        let signed_dist = cell_radius_px - r_proj;
+                        let cell_w = ((signed_dist / blend_half_px) * 0.5 + 0.5).clamp(0.0, 1.0);
+                        if cell_w <= 0.0 {
+                            // Beyond the blend ramp on the outside — not
+                            // worth sampling. Closest tile by definition
+                            // has cell_w near 1, so this branch is only
+                            // hit by farther neighbours.
+                            continue;
+                        }
                         let (ox, oy) = self.tile_atlas_origin(tile_idx);
                         let ax = (ox as f64 + in_x) as f32;
                         let ay = (oy as f64 + in_y) as f32;
@@ -617,8 +653,8 @@ impl SphericalTileRig {
                         if !valid {
                             continue;
                         }
-                        valid_weight_sum += weights[i];
-                        let w_i = weights[i] as f32;
+                        valid_weight_sum += cell_w;
+                        let w_i = cell_w as f32;
                         for ch in 0..channels {
                             accum[ch] += w_i * sample[ch];
                         }
