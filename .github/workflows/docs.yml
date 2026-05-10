@@ -6,8 +6,16 @@ name: Docs
 on:
   push:
     branches: [main]
+    paths:
+      - 'docs/**'
+      - 'pixi.toml'
+      - '.github/workflows/docs.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'docs/**'
+      - 'pixi.toml'
+      - '.github/workflows/docs.yml'
 
 permissions:
   contents: read

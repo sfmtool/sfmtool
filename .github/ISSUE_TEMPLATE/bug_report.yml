@@ -1,0 +1,90 @@
+name: Bug report
+description: Report a defect in sfmtool (CLI, Python pipeline, Rust crates, or GUI).
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please include enough detail that someone else
+        can reproduce the problem on a fresh clone.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing what is broken.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        Exact commands, ideally using one of the bundled test datasets
+        (`seoul_bull_sculpture`, `dino_dog_toy`, `seattle_backyard`) or a
+        minimal external dataset. Include the workspace layout if relevant.
+      placeholder: |
+        pixi run sfm ws init .
+        pixi run sfm sift --extract images
+        pixi run sfm solve -i images
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error messages, stack traces, or relevant log output.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      multiple: true
+      options:
+        - "CLI (sfm ...)"
+        - "Python pipeline (src/sfmtool/)"
+        - "Rust crates (crates/sfmtool-core, formats, etc.)"
+        - "PyO3 bindings (sfmtool-py)"
+        - "GUI viewer (sfm-explorer)"
+        - "Build / packaging / pixi"
+        - "Docs"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: sfmtool version / commit
+      description: Output of `pixi run sfm --version` or the commit SHA you tested.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - Windows
+        - macOS (unsupported, best-effort)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Workspace `camera_config.json`, GPU/CUDA details, dataset characteristics, etc.
