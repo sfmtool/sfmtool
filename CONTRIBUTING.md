@@ -21,7 +21,10 @@ there — see the [Specs](#specs) section below for the layout.
 ## Development environment
 
 The project uses [Pixi](https://pixi.sh) for all environments and tasks.
-Once Pixi is installed, run everything via `pixi run …`.
+Once Pixi is installed, run everything via `pixi run …`. If you'd rather
+not prefix every command, `pixi shell -e test` (or another environment)
+drops you into a subshell with that environment already activated, so
+plain `pytest`, `cargo`, and `ruff` work directly.
 
 ```bash
 pixi run sfm --help                 # Run the CLI
