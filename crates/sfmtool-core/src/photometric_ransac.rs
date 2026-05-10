@@ -5,9 +5,8 @@
 //!
 //! See `specs/drafts/photometric-subsets-ransac.md` for the spec.
 //!
-//! Operates on a [`PerSphericalTileSourceStack<f32>`]. Recovers per-source
-//! log-gain (mean-zero by construction) plus a primary / secondary cluster
-//! partition over the per-`(tile, source)` rows. Inputs:
+//! Operates on a [`PerSphericalTileSourceStack<f32>`]. Returns a primary /
+//! secondary cluster partition over the per-`(tile, source)` rows. Inputs:
 //!
 //! - The pyramid level matching `params.target_patch_size` is read from the
 //!   stack (the algorithm errors if no level matches exactly).
@@ -15,14 +14,12 @@
 //!   sub-patch is linearised by `gamma`, has saturated pixels masked out, and
 //!   is the unit the RANSAC kernel scores.
 //!
-//! The algorithm alternates per-tile RANSAC (primary cluster) with a
-//! per-image least-squares log-gain solve, until either the primary mask
-//! stops changing or `max_outer_iters` is hit. After convergence one extra
-//! RANSAC pass over the primary-rejected rows yields the secondary cluster.
+//! For each tile, one RANSAC pass picks the primary cluster (largest
+//! agreeing subset). A second RANSAC pass over each tile's primary-rejected
+//! rows yields the secondary cluster.
 
 use std::collections::HashSet;
 
-use nalgebra::{DMatrix, DVector};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rayon::prelude::*;
@@ -49,11 +46,6 @@ pub struct RansacPhotometricParams {
     pub max_subsets_per_tile: u32,
     /// Tiles with fewer contributors than this are skipped.
     pub min_inliers: u32,
-    /// Cap on outer alternation iterations.
-    pub max_outer_iters: u32,
-    /// Convergence tolerance: stop when fewer than
-    /// `mask_change_tolerance * R` rows in the primary mask flip.
-    pub mask_change_tolerance: f32,
     /// Per-channel u8 cutoff above which a pixel is treated as saturated;
     /// pixels at or above this value have their working validity zeroed.
     pub saturation_threshold: u8,
@@ -71,8 +63,6 @@ impl Default for RansacPhotometricParams {
             subset_size: 2,
             max_subsets_per_tile: 64,
             min_inliers: 2,
-            max_outer_iters: 8,
-            mask_change_tolerance: 0.05,
             saturation_threshold: 254,
             seed: 0,
         }
@@ -82,8 +72,6 @@ impl Default for RansacPhotometricParams {
 /// Output of [`refine_photometric_ransac`]; arrays match spec shapes.
 #[derive(Debug, Clone)]
 pub struct RansacPhotometricOutput {
-    /// Per-source log-gain, mean-zero by construction. Length `n_sources`.
-    pub log_gain: Vec<f32>,
     /// Per-row primary-cluster flag. Length `total_contrib_rows`.
     pub primary_mask: Vec<bool>,
     /// Per-row secondary-cluster flag (largest agreeing subset within the
@@ -93,17 +81,12 @@ pub struct RansacPhotometricOutput {
     pub tile_primary_count: Vec<i32>,
     /// Per-tile secondary cluster size (0 where there's no runner-up).
     pub tile_secondary_count: Vec<i32>,
-    /// Median Absolute Deviation of `row_lum_corrected` over each tile's
-    /// primary cluster, NaN where `tile_primary_count < min_inliers`.
+    /// Median Absolute Deviation of `row_lum` over each tile's primary
+    /// cluster, NaN where `tile_primary_count < min_inliers`.
     pub tile_primary_lum_mad: Vec<f32>,
     /// Same MAD over each tile's secondary cluster; NaN where
     /// `tile_secondary_count < min_inliers`.
     pub tile_secondary_lum_mad: Vec<f32>,
-    /// Number of outer iterations executed.
-    pub outer_iters: u32,
-    /// Per-iteration `primary_mask` Hamming distance from the previous
-    /// iteration. Length `outer_iters`.
-    pub mask_change_history: Vec<u32>,
 }
 
 /// Errors from [`refine_photometric_ransac`].
@@ -154,13 +137,8 @@ impl std::error::Error for RansacPhotometricError {}
 ///
 /// Picks the pyramid level whose patch side equals
 /// `params.target_patch_size` exactly; reads patches and valid masks from
-/// that level; runs the alternation; returns per-source log-gain plus the
-/// primary / secondary cluster partition.
-///
-/// `n_sources` is taken to be `max(stack.src_id()) + 1` (or 0 for an empty
-/// stack). Sources that contribute no rows correspond to all-zero columns of
-/// the LSQ matrix and end up with `log_gain[i] = 0` — the minimum-norm
-/// answer.
+/// that level; runs one per-tile primary RANSAC pass and one secondary
+/// RANSAC pass over the primary-rejected rows.
 pub fn refine_photometric_ransac(
     stack: &PerSphericalTileSourceStack<f32>,
     params: &RansacPhotometricParams,
@@ -190,23 +168,14 @@ pub fn refine_photometric_ransac(
     let n_tiles = stack.n_tiles();
     let patches = stack.level_patches(level); // [R * s * s * C]
     let valid = stack.level_valid(level); // [R * s * s], strictly {0, 1}
-    let src_index = stack.src_id();
     let tile_offsets = stack.tile_offsets();
-    let n_sources = src_index
-        .iter()
-        .copied()
-        .max()
-        .map(|m| m as usize + 1)
-        .unwrap_or(0);
 
     refine_flat(
         patches,
         valid,
-        src_index,
         tile_offsets,
         s as u32,
         c as u32,
-        n_sources,
         n_tiles,
         r_total,
         params,
@@ -222,11 +191,9 @@ pub fn refine_photometric_ransac(
 pub fn refine_photometric_ransac_flat(
     patches: &[f32],
     valid: &[u8],
-    src_index: &[u32],
     tile_offsets: &[u32],
     target_patch_size: u32,
     channels: u32,
-    n_sources: usize,
     n_tiles: usize,
     params: &RansacPhotometricParams,
 ) -> Result<RansacPhotometricOutput, RansacPhotometricError> {
@@ -245,11 +212,9 @@ pub fn refine_photometric_ransac_flat(
     refine_flat(
         patches,
         valid,
-        src_index,
         tile_offsets,
         target_patch_size,
         channels,
-        n_sources,
         n_tiles,
         r_total,
         params,
@@ -293,12 +258,6 @@ fn validate_params(params: &RansacPhotometricParams) -> Result<(), RansacPhotome
             params.inlier_threshold
         )));
     }
-    if !params.mask_change_tolerance.is_finite() {
-        return Err(RansacPhotometricError::InvalidParam(format!(
-            "mask_change_tolerance must be finite; got {}",
-            params.mask_change_tolerance
-        )));
-    }
     Ok(())
 }
 
@@ -306,11 +265,9 @@ fn validate_params(params: &RansacPhotometricParams) -> Result<(), RansacPhotome
 fn refine_flat(
     patches: &[f32],
     valid: &[u8],
-    src_index: &[u32],
     tile_offsets: &[u32],
     target_patch_size: u32,
     channels: u32,
-    n_sources: usize,
     n_tiles: usize,
     r_total: usize,
     params: &RansacPhotometricParams,
@@ -340,13 +297,6 @@ fn refine_flat(
             expected_valid_len
         )));
     }
-    if src_index.len() != r_total {
-        return Err(RansacPhotometricError::InvalidParam(format!(
-            "src_index length {} != R = {}",
-            src_index.len(),
-            r_total
-        )));
-    }
     if tile_offsets.len() != n_tiles + 1 {
         return Err(RansacPhotometricError::InvalidParam(format!(
             "tile_offsets length {} != n_tiles + 1 = {}",
@@ -355,10 +305,10 @@ fn refine_flat(
         )));
     }
 
-    // ── Step 1: Per-row scoring patch + mean luminance (once) ────────────
-    let mut row_patch_uncorrected = vec![0.0f32; r_total * row_patch_stride];
+    // ── Per-row scoring patch + mean luminance (once) ────────────────────
+    let mut row_patch = vec![0.0f32; r_total * row_patch_stride];
     let mut centre_v = vec![0.0f32; r_total * row_valid_stride];
-    let mut row_lum_uncorrected = vec![0.0f32; r_total];
+    let mut row_lum = vec![0.0f32; r_total];
     let sat_thresh = params.saturation_threshold as f32;
     let gamma = params.gamma;
     let gamma_is_one = (gamma - 1.0).abs() < 1e-6;
@@ -396,101 +346,36 @@ fn refine_flat(
                     } else {
                         255.0 * (raw / 255.0).powf(gamma)
                     };
-                    row_patch_uncorrected[p_out_base + (vi * ss + ui) * c + ch] = linearised;
+                    row_patch[p_out_base + (vi * ss + ui) * c + ch] = linearised;
                     sum += linearised as f64 * v_after_f64;
                 }
                 denom += v_after_f64 * c as f64;
             }
         }
-        row_lum_uncorrected[r] = (sum / denom.max(1.0)) as f32;
+        row_lum[r] = (sum / denom.max(1.0)) as f32;
     }
 
-    // Precompute row → tile lookup (avoids a binary search inside the LSQ
-    // build).
-    let mut row_to_tile = vec![0u32; r_total];
-    for t in 0..n_tiles {
-        let a = tile_offsets[t] as usize;
-        let b = tile_offsets[t + 1] as usize;
-        row_to_tile[a..b].fill(t as u32);
-    }
-
-    // ── Outer loop ───────────────────────────────────────────────────────
-    let mut log_gain = vec![0.0f32; n_sources];
-    let mut primary_mask = vec![false; r_total];
-    let mut mask_change_history: Vec<u32> = Vec::with_capacity(params.max_outer_iters as usize);
-
-    let max_outer = params.max_outer_iters.max(1) as usize;
-    let mask_change_cap = (params.mask_change_tolerance * r_total as f32).round() as i64;
     let min_inliers = params.min_inliers as usize;
 
-    let mut row_patch_corrected = vec![0.0f32; r_total * row_patch_stride];
-    let mut row_lum_corrected = vec![0.0f32; r_total];
-
-    let mut outer_iters: u32 = 0;
-    for _iter_idx in 0..max_outer {
-        // Step 2: apply current gains to row patches and luminances.
-        apply_gains(
-            &row_patch_uncorrected,
-            &row_lum_uncorrected,
-            src_index,
-            &log_gain,
-            &mut row_patch_corrected,
-            &mut row_lum_corrected,
-            row_patch_stride,
-        );
-
-        // Step 3: per-tile RANSAC → new primary mask.
-        let new_primary_mask = run_per_tile_ransac(
-            &row_patch_corrected,
-            &centre_v,
-            tile_offsets,
-            n_tiles,
-            ss,
-            c,
-            params.inlier_threshold,
-            params.subset_size as usize,
-            params.max_subsets_per_tile as usize,
-            min_inliers,
-            params.seed,
-            r_total,
-        );
-
-        // Step 4: LSQ for log-gain.
-        log_gain = solve_log_gain_lsq(
-            &row_lum_uncorrected,
-            src_index,
-            &row_to_tile,
-            &new_primary_mask,
-            n_sources,
-            &log_gain,
-        );
-
-        // Step 5: convergence.
-        let mask_change = hamming(&new_primary_mask, &primary_mask) as i64;
-        mask_change_history.push(mask_change as u32);
-        outer_iters += 1;
-        primary_mask = new_primary_mask;
-        if mask_change == 0 {
-            break;
-        }
-        if mask_change < mask_change_cap {
-            break;
-        }
-    }
-
-    // Step 6: secondary cluster — re-apply final gains, then RANSAC over
-    // each tile's primary-rejected rows.
-    apply_gains(
-        &row_patch_uncorrected,
-        &row_lum_uncorrected,
-        src_index,
-        &log_gain,
-        &mut row_patch_corrected,
-        &mut row_lum_corrected,
-        row_patch_stride,
+    // Primary cluster: one per-tile RANSAC pass.
+    let primary_mask = run_per_tile_ransac(
+        &row_patch,
+        &centre_v,
+        tile_offsets,
+        n_tiles,
+        ss,
+        c,
+        params.inlier_threshold,
+        params.subset_size as usize,
+        params.max_subsets_per_tile as usize,
+        min_inliers,
+        params.seed,
+        r_total,
     );
+
+    // Secondary cluster: RANSAC over each tile's primary-rejected rows.
     let secondary_mask = run_secondary_ransac(
-        &row_patch_corrected,
+        &row_patch,
         &centre_v,
         tile_offsets,
         &primary_mask,
@@ -520,15 +405,10 @@ fn refine_flat(
             }
         }
     }
-    let tile_primary_lum_mad = compute_tile_lum_mad(
-        &row_lum_corrected,
-        tile_offsets,
-        &primary_mask,
-        n_tiles,
-        min_inliers,
-    );
+    let tile_primary_lum_mad =
+        compute_tile_lum_mad(&row_lum, tile_offsets, &primary_mask, n_tiles, min_inliers);
     let tile_secondary_lum_mad = compute_tile_lum_mad(
-        &row_lum_corrected,
+        &row_lum,
         tile_offsets,
         &secondary_mask,
         n_tiles,
@@ -536,36 +416,13 @@ fn refine_flat(
     );
 
     Ok(RansacPhotometricOutput {
-        log_gain,
         primary_mask,
         secondary_mask,
         tile_primary_count,
         tile_secondary_count,
         tile_primary_lum_mad,
         tile_secondary_lum_mad,
-        outer_iters,
-        mask_change_history,
     })
-}
-
-fn apply_gains(
-    row_patch_uncorrected: &[f32],
-    row_lum_uncorrected: &[f32],
-    src_index: &[u32],
-    log_gain: &[f32],
-    row_patch_corrected: &mut [f32],
-    row_lum_corrected: &mut [f32],
-    row_patch_stride: usize,
-) {
-    let r_total = row_lum_uncorrected.len();
-    for r in 0..r_total {
-        let g = (log_gain[src_index[r] as usize] as f64).exp() as f32;
-        row_lum_corrected[r] = row_lum_uncorrected[r] * g;
-        let base = r * row_patch_stride;
-        for k in 0..row_patch_stride {
-            row_patch_corrected[base + k] = row_patch_uncorrected[base + k] * g;
-        }
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -908,86 +765,6 @@ fn comb(n: usize, k: usize) -> usize {
     } else {
         result as usize
     }
-}
-
-fn solve_log_gain_lsq(
-    row_lum_uncorrected: &[f32],
-    src_index: &[u32],
-    row_to_tile: &[u32],
-    primary_mask: &[bool],
-    n_sources: usize,
-    current_log_gain: &[f32],
-) -> Vec<f32> {
-    let r_total = row_lum_uncorrected.len();
-    if n_sources == 0 {
-        return Vec::new();
-    }
-    let log_lum: Vec<f64> = row_lum_uncorrected
-        .iter()
-        .map(|&v| (v as f64).max(1e-3).ln())
-        .collect();
-
-    let primary_rows: Vec<usize> = (0..r_total).filter(|&r| primary_mask[r]).collect();
-    if primary_rows.is_empty() {
-        return current_log_gain.to_vec();
-    }
-
-    // Per-tile primary aggregates.
-    let n_tiles = row_to_tile
-        .iter()
-        .copied()
-        .max()
-        .map(|m| m as usize + 1)
-        .unwrap_or(0);
-    let mut tile_primary_srcs: Vec<Vec<u32>> = vec![Vec::new(); n_tiles];
-    let mut tile_primary_log_lum_sum: Vec<f64> = vec![0.0; n_tiles];
-    let mut tile_primary_count: Vec<usize> = vec![0; n_tiles];
-    for &r in &primary_rows {
-        let t = row_to_tile[r] as usize;
-        tile_primary_srcs[t].push(src_index[r]);
-        tile_primary_log_lum_sum[t] += log_lum[r];
-        tile_primary_count[t] += 1;
-    }
-    let tile_primary_log_lum_mean: Vec<f64> = (0..n_tiles)
-        .map(|t| {
-            if tile_primary_count[t] > 0 {
-                tile_primary_log_lum_sum[t] / tile_primary_count[t] as f64
-            } else {
-                0.0
-            }
-        })
-        .collect();
-
-    let k_rows = primary_rows.len();
-    let mut a = DMatrix::<f64>::zeros(k_rows, n_sources);
-    let mut b = DVector::<f64>::zeros(k_rows);
-    for (k, &r) in primary_rows.iter().enumerate() {
-        let t = row_to_tile[r] as usize;
-        let n_in_t = tile_primary_count[t];
-        if n_in_t < 2 {
-            continue;
-        }
-        let s = src_index[r] as usize;
-        a[(k, s)] += 1.0;
-        let inv_n = 1.0 / n_in_t as f64;
-        for &s2 in &tile_primary_srcs[t] {
-            a[(k, s2 as usize)] -= inv_n;
-        }
-        b[k] = tile_primary_log_lum_mean[t] - log_lum[r];
-    }
-
-    let svd = nalgebra::SVD::new(a, true, true);
-    let x: DVector<f64> = match svd.solve(&b, 1e-9) {
-        Ok(v) => v,
-        Err(_) => DVector::zeros(n_sources),
-    };
-    let mean = x.iter().sum::<f64>() / n_sources as f64;
-    let centred: Vec<f32> = x.iter().map(|&v| (v - mean) as f32).collect();
-    centred
-}
-
-fn hamming(a: &[bool], b: &[bool]) -> u32 {
-    a.iter().zip(b).filter(|(x, y)| x != y).count() as u32
 }
 
 fn compute_tile_lum_mad(

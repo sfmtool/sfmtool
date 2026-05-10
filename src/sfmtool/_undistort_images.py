@@ -219,6 +219,7 @@ def undistort_reconstruction_images(
     from ._sift_file import (
         SiftReader,
         get_feature_tool_xxh128,
+        get_sift_path_for_image,
         write_sift,
         xxh128_of_file,
     )
@@ -344,12 +345,12 @@ def undistort_reconstruction_images(
         thumbnails.append(thumbnail_rgb)
 
         # Step 4: Read source .sift file and transform features
-        source_sift_reader = SiftReader.for_image(
+        source_sift_path = get_sift_path_for_image(
             image_path,
             feature_tool=source_feature_tool,
             feature_options=source_feature_options if source_feature_options else None,
         )
-        with source_sift_reader as reader:
+        with SiftReader(source_sift_path) as reader:
             src_positions = reader.read_positions()  # Nx2 float32
             src_affine_shapes = reader.read_affine_shapes()  # Nx2x2 float32
             src_descriptors = reader.read_descriptors()  # Nx128 uint8

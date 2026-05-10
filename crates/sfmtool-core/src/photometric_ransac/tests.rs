@@ -5,8 +5,7 @@
 //!
 //! The flat-array entry point lets these tests construct exact patch
 //! tensors and tile/source assignments without going through a
-//! `PerSphericalTileSourceStack`. Tests track the validation plan in
-//! `specs/drafts/photometric-subsets-ransac.md` (items 1–9 and 14–18).
+//! `PerSphericalTileSourceStack`.
 
 // Indexed loops mirror the indexed math in the synthetic fixtures
 // (`target_l[t]`, `truth[i]`, …); converting them to iterator form would
@@ -26,7 +25,6 @@ struct SyntheticStack {
     src_index: Vec<u32>,
     tile_offsets: Vec<u32>,
     n_tiles: usize,
-    n_sources: usize,
     target_size: u32,
     channels: u32,
 }
@@ -44,7 +42,6 @@ impl SyntheticStack {
             src_index,
             tile_offsets,
             n_tiles,
-            n_sources,
             target_size,
             channels,
         }
@@ -102,11 +99,9 @@ impl SyntheticStack {
         super::refine_photometric_ransac_flat(
             &self.patches,
             &self.valid,
-            &self.src_index,
             &self.tile_offsets,
             self.target_size,
             self.channels,
-            self.n_sources,
             self.n_tiles,
             params,
         )
@@ -114,76 +109,7 @@ impl SyntheticStack {
     }
 }
 
-fn loose_threshold_params() -> RansacPhotometricParams {
-    RansacPhotometricParams {
-        // Loose enough to admit gain-only disagreements among synthetic
-        // sources differing by ~10 % luminance on the first iteration.
-        inlier_threshold: 16.0,
-        ..Default::default()
-    }
-}
-
-// ── 1. Single-cluster recovery ───────────────────────────────────────────
-
-#[test]
-fn single_cluster_recovery_with_known_gains() {
-    let truth = [0.0_f32, 0.1, -0.05, 0.02];
-    // After mean-zero recentering, what the algorithm should recover:
-    let mean = truth.iter().sum::<f32>() / truth.len() as f32;
-    let recovered_truth: [f32; 4] = std::array::from_fn(|i| truth[i] - mean);
-
-    let n_tiles = 5;
-    let n_sources = 4;
-    let mut stack = SyntheticStack::full(n_tiles, n_sources, 4, 3);
-    let target_l = [50.0_f32, 80.0, 120.0, 150.0, 180.0];
-    for t in 0..n_tiles {
-        for i in 0..n_sources {
-            // Source i observed L_target * exp(-truth[i]); the algorithm's
-            // gain * uncorrected reproduces L_target.
-            let l_obs = target_l[t] * (-truth[i]).exp();
-            stack.set_uniform(t, i, l_obs);
-        }
-    }
-
-    let out = stack.run(&loose_threshold_params());
-
-    // Mean-zero check: |mean(log_gain)| < 1e-6 (also test 5 below).
-    let mean_lg = out.log_gain.iter().sum::<f32>() / out.log_gain.len() as f32;
-    assert!(mean_lg.abs() < 1e-6, "mean log_gain = {mean_lg}");
-
-    // Per-source within 0.01.
-    for i in 0..n_sources {
-        let err = (out.log_gain[i] - recovered_truth[i]).abs();
-        assert!(
-            err < 0.01,
-            "source {i}: recovered {} vs truth {} (err {err})",
-            out.log_gain[i],
-            recovered_truth[i]
-        );
-    }
-
-    // All rows in primary cluster, none in secondary.
-    assert!(
-        out.primary_mask.iter().all(|&b| b),
-        "primary cluster should contain every row"
-    );
-    assert!(
-        out.secondary_mask.iter().all(|&b| !b),
-        "secondary cluster should be empty"
-    );
-
-    // Spec: "one outer iteration suffices" — but note that the strict
-    // mask-stable convergence is checked between consecutive iterations,
-    // so even if iteration 1 produces the perfect mask, iteration 2 sees
-    // mask_change == 0 and breaks. Allow up to 2.
-    assert!(
-        out.outer_iters <= 2,
-        "should converge in <=2 iterations, got {}",
-        out.outer_iters
-    );
-}
-
-// ── 2. Two-cluster partition ─────────────────────────────────────────────
+// ── Two-cluster partition ────────────────────────────────────────────────
 
 #[test]
 fn two_cluster_partition_recovers_both_groups() {
@@ -221,21 +147,9 @@ fn two_cluster_partition_recovers_both_groups() {
             assert!(out.secondary_mask[a + i], "tile {t}, src {i}: secondary");
         }
     }
-
-    // Recovered gains should be ~zero on the primary subset (sources 0..4
-    // all see the same L_t, so no per-source gain to fit). Sources 4..5,
-    // which never enter the primary, are unidentifiable — pinned to the
-    // mean by the SVD min-norm + recentering, which leaves them at 0.
-    for i in 0..n_sources {
-        assert!(
-            out.log_gain[i].abs() < 0.05,
-            "log_gain[{i}] = {} unexpectedly large",
-            out.log_gain[i]
-        );
-    }
 }
 
-// ── 3. Below-threshold tile (K ≤ m) — symmetric rejection ───────────────
+// ── Below-threshold tile (K ≤ m) — symmetric rejection ──────────────────
 
 #[test]
 fn k_le_m_uses_median_fallback_with_symmetric_rejection() {
@@ -280,19 +194,17 @@ fn k_le_m_keeps_close_pair() {
     assert_eq!(out.tile_primary_count[0], 2);
 }
 
-// ── 4. Empty / single-contributor tiles ─────────────────────────────────
+// ── Empty / single-contributor tiles ────────────────────────────────────
 
 #[test]
 fn empty_and_single_contributor_tiles_are_skipped() {
     // Two tiles: tile 0 has 0 contributors; tile 1 has 1 contributor;
-    // tile 2 has 3 contributors so the LSQ has at least one row to act on.
-    let n_sources = 3;
+    // tile 2 has 3 contributors so the RANSAC has at least one row to act on.
     let n_tiles = 3;
     let s = 4_u32;
     let c = 1_u32;
     let s_us = s as usize;
     let tile_offsets = vec![0u32, 0, 1, 4];
-    let src_index = vec![0u32, 0, 1, 2];
     let r_total = 4;
     let mut patches = vec![0.0_f32; r_total * s_us * s_us * c as usize];
     let valid = vec![1u8; r_total * s_us * s_us];
@@ -311,11 +223,9 @@ fn empty_and_single_contributor_tiles_are_skipped() {
     let out = super::refine_photometric_ransac_flat(
         &patches,
         &valid,
-        &src_index,
         &tile_offsets,
         s,
         c,
-        n_sources,
         n_tiles,
         &params,
     )
@@ -334,60 +244,7 @@ fn empty_and_single_contributor_tiles_are_skipped() {
     assert_eq!(out.tile_primary_count[2], 3);
 }
 
-// ── 5. Mean-zero output ─────────────────────────────────────────────────
-
-#[test]
-fn log_gain_is_mean_zero() {
-    // Re-uses the test 1 setup; assert via the explicit invariant.
-    let truth = [0.0_f32, 0.1, -0.05, 0.02];
-    let n_tiles = 5;
-    let n_sources = 4;
-    let mut stack = SyntheticStack::full(n_tiles, n_sources, 4, 3);
-    let target_l = [50.0_f32, 80.0, 120.0, 150.0, 180.0];
-    for t in 0..n_tiles {
-        for i in 0..n_sources {
-            let l_obs = target_l[t] * (-truth[i]).exp();
-            stack.set_uniform(t, i, l_obs);
-        }
-    }
-    let out = stack.run(&loose_threshold_params());
-    let m = out.log_gain.iter().sum::<f32>() / out.log_gain.len() as f32;
-    assert!(m.abs() < 1e-6, "mean = {m}");
-}
-
-// ── 6. Shift invariance ─────────────────────────────────────────────────
-
-#[test]
-fn constant_shift_in_truth_gains_yields_identical_recovery() {
-    let truth = [0.0_f32, 0.1, -0.05, 0.02];
-    let n_tiles = 4;
-    let n_sources = 4;
-    let target_l = [60.0_f32, 90.0, 120.0, 150.0];
-    let build = |shift: f32| {
-        let mut stack = SyntheticStack::full(n_tiles, n_sources, 4, 3);
-        for t in 0..n_tiles {
-            for i in 0..n_sources {
-                let g_i = truth[i] + shift;
-                let l_obs = target_l[t] * (-g_i).exp();
-                stack.set_uniform(t, i, l_obs);
-            }
-        }
-        stack.run(&loose_threshold_params())
-    };
-    let a = build(0.0);
-    let b = build(0.5);
-    for i in 0..n_sources {
-        let err = (a.log_gain[i] - b.log_gain[i]).abs();
-        assert!(
-            err < 1e-5,
-            "shift-invariance violated at source {i}: {} vs {} (err {err})",
-            a.log_gain[i],
-            b.log_gain[i]
-        );
-    }
-}
-
-// ── 7. Subset-enumeration boundary ──────────────────────────────────────
+// ── Subset-enumeration boundary ─────────────────────────────────────────
 
 #[test]
 fn subset_enumeration_boundary_seed_independence() {
@@ -441,7 +298,7 @@ fn subset_enumeration_boundary_seed_independence() {
     }
 }
 
-// ── 8. Secondary cluster recovery ───────────────────────────────────────
+// ── Secondary cluster recovery ──────────────────────────────────────────
 
 #[test]
 fn secondary_cluster_recovers_runner_up_group() {
@@ -493,7 +350,7 @@ fn secondary_skipped_when_runner_up_too_small() {
     assert!(out.secondary_mask.iter().all(|&b| !b));
 }
 
-// ── 9. Patch-aware scoring distinguishes spatial pattern ────────────────
+// ── Patch-aware scoring distinguishes spatial pattern ───────────────────
 
 #[test]
 fn patch_aware_scoring_separates_checker_from_constant() {
@@ -523,42 +380,7 @@ fn patch_aware_scoring_separates_checker_from_constant() {
     assert!(out.secondary_mask[2] && out.secondary_mask[3]);
 }
 
-// ── 14. Permutation invariance of source order ──────────────────────────
-
-#[test]
-fn permuting_source_order_permutes_log_gain() {
-    // Build two stacks: identical except sources 0 and 2 are swapped.
-    let truth = [0.0_f32, 0.1, -0.05, 0.02];
-    let n_tiles = 4;
-    let n_sources = 4;
-    let target_l = [60.0_f32, 100.0, 130.0, 150.0];
-    let build = |perm: &[usize; 4]| {
-        let mut stack = SyntheticStack::full(n_tiles, n_sources, 4, 3);
-        for t in 0..n_tiles {
-            for slot in 0..n_sources {
-                // After perm, slot `slot` corresponds to original source perm[slot].
-                let orig = perm[slot];
-                let l_obs = target_l[t] * (-truth[orig]).exp();
-                stack.set_uniform(t, slot, l_obs);
-            }
-        }
-        stack.run(&loose_threshold_params())
-    };
-    let identity: [usize; 4] = [0, 1, 2, 3];
-    let permuted: [usize; 4] = [2, 1, 0, 3];
-    let a = build(&identity);
-    let b = build(&permuted);
-    for slot in 0..n_sources {
-        let orig = permuted[slot];
-        let err = (b.log_gain[slot] - a.log_gain[orig]).abs();
-        assert!(
-            err < 1e-4,
-            "permutation invariance: slot {slot} (orig {orig}) {err}",
-        );
-    }
-}
-
-// ── 15. Permutation invariance of row order within a tile ───────────────
+// ── Permutation invariance of row order within a tile ───────────────────
 
 #[test]
 fn permuting_rows_within_tile_permutes_masks() {
@@ -591,94 +413,16 @@ fn permuting_rows_within_tile_permutes_masks() {
     }
 }
 
-// ── 16. Idempotence at the fixed point ──────────────────────────────────
+// ── Fully-masked input ──────────────────────────────────────────────────
 
 #[test]
-fn one_more_iter_at_fixed_point_does_not_change_outputs() {
-    let truth = [0.0_f32, 0.05, -0.02, 0.03];
-    let n_tiles = 4;
-    let n_sources = 4;
-    let target_l = [80.0_f32, 100.0, 120.0, 150.0];
-    let mut stack = SyntheticStack::full(n_tiles, n_sources, 4, 3);
-    for t in 0..n_tiles {
-        for i in 0..n_sources {
-            let l_obs = target_l[t] * (-truth[i]).exp();
-            stack.set_uniform(t, i, l_obs);
-        }
-    }
-    // Run with cap = 8.
-    let out_8 = stack.run(&loose_threshold_params());
-    // Run with cap = out_8.outer_iters + 1.
-    let extended_params = RansacPhotometricParams {
-        max_outer_iters: out_8.outer_iters + 1,
-        ..loose_threshold_params()
-    };
-    let out_n1 = super::refine_photometric_ransac_flat(
-        &stack.patches,
-        &stack.valid,
-        &stack.src_index,
-        &stack.tile_offsets,
-        stack.target_size,
-        stack.channels,
-        stack.n_sources,
-        stack.n_tiles,
-        &extended_params,
-    )
-    .expect("ok");
-
-    assert_eq!(out_n1.primary_mask, out_8.primary_mask);
-    for i in 0..n_sources {
-        let err = (out_n1.log_gain[i] - out_8.log_gain[i]).abs();
-        assert!(err < 1e-6, "log_gain[{i}] drifted by {err}");
-    }
-}
-
-// ── 17. All rows fully masked ───────────────────────────────────────────
-
-#[test]
-fn fully_masked_input_returns_zero_gain_and_no_crash() {
+fn fully_masked_input_does_not_crash() {
     let n_tiles = 3;
     let n_sources = 4;
     let mut stack = SyntheticStack::full(n_tiles, n_sources, 4, 3);
-    // Set every validity entry to 0.
     for v in stack.valid.iter_mut() {
         *v = 0;
     }
     let out = stack.run(&RansacPhotometricParams::default());
-    // Every row's mean luminance is the floor (sum=0 / max(denom,1) = 0),
-    // and all-zero gains is the defensible fallback. The algorithm must
-    // not crash and must produce mean-zero log_gain.
-    assert!(out.log_gain.iter().all(|&g| g.is_finite()));
-    let mean = out.log_gain.iter().sum::<f32>() / out.log_gain.len() as f32;
-    assert!(mean.abs() < 1e-5);
-    // Per-tile MAD on fully-zeroed rows is 0 (when classified) or NaN
-    // (when below min_inliers). Either is acceptable here; just ensure
-    // we don't panic.
     let _ = (out.tile_primary_lum_mad, out.tile_secondary_lum_mad);
-}
-
-// ── 18. Single-tile underdetermined ────────────────────────────────────
-
-#[test]
-fn single_tile_underdetermined_returns_sensible_gains() {
-    let n_sources = 10;
-    let n_tiles = 1;
-    let mut stack = SyntheticStack::full(n_tiles, n_sources, 4, 1);
-    // Truth gains for all 10 sources.
-    let truth: Vec<f32> = (0..n_sources)
-        .map(|i| 0.05 * (i as f32 - (n_sources as f32 - 1.0) / 2.0))
-        .collect();
-    let target_l = 100.0_f32;
-    for i in 0..n_sources {
-        let l_obs = target_l * (-truth[i]).exp();
-        stack.set_uniform(0, i, l_obs);
-    }
-    let out = stack.run(&loose_threshold_params());
-    // Mean-zero.
-    let m = out.log_gain.iter().sum::<f32>() / out.log_gain.len() as f32;
-    assert!(m.abs() < 1e-5, "mean = {m}");
-    // No source's gain is wildly out of plausible range.
-    for &g in &out.log_gain {
-        assert!(g.abs() < 1.0);
-    }
 }

@@ -36,3 +36,16 @@ module-name = "sfmtool._sfmtool"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tee-sys avoids fd-level dup that breaks Click CliRunner on Windows + Python 3.14
+# (pytest's default FDCapture corrupts Click's preserved fileno; see pytest #2465 / #13720).
+addopts = "--capture=tee-sys"
+
+[tool.coverage.run]
+# parallel + multiprocessing tracks code that runs inside ProcessPoolExecutor
+# workers (e.g. _merge_pose_refinement._refine_single_camera_pose). pytest-cov
+# auto-instruments the spawned interpreters from this config alone — no
+# COVERAGE_PROCESS_START env var needed (and setting it triggers a numpy
+# multi-init crash on Python 3.14).
+parallel = true
+concurrency = ["multiprocessing"]
+source = ["sfmtool"]

@@ -82,11 +82,8 @@ def _resolve_workspace_and_sift(
 
         resolved_names.append(posix_path)
 
-        with SiftReader.for_image(
-            img_abs_path,
-            feature_tool=feature_tool,
-            feature_options=feature_options,
-        ) as reader:
+        sift_path = get_sift_path_for_image(img_abs_path)
+        with SiftReader(sift_path) as reader:
             ft_hash = reader.content_hash["feature_tool_xxh128"]
             sc_hash = reader.content_hash["content_xxh128"]
             feature_tool_hashes.append(bytes.fromhex(ft_hash))

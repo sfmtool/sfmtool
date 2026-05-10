@@ -29,6 +29,14 @@ pytest = ">=9.0.3, <10"
 pytest-cov = ">=7.1.0, <8"
 ruff = ">=0.15.10, <0.16"
 
+[feature.test.activation.env]
+# Force UTF-8 stdio on Windows so histogram block characters (▁..█) and other
+# non-ASCII output survive cp1252. Matters under pytest's tee-sys capture
+# (which routes prints through Python's text streams) and applies to any
+# test-env command — `pixi run test`, `pixi run coverage-all`, the coverage
+# shell script, etc.
+PYTHONIOENCODING = "utf-8"
+
 [feature.test.tasks]
 test = "pytest"
 test-rust = "cargo llvm-cov --workspace --exclude sfmtool-py --exclude sfm-explorer"

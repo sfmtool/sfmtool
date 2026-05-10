@@ -12,7 +12,7 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool._sfmtool import SfmrReconstruction
-from sfmtool._sift_file import SiftReader
+from sfmtool._sift_file import SiftReader, get_sift_path_for_image
 from sfmtool._undistort_images import undistort_reconstruction_images
 from sfmtool.cli import main
 
@@ -391,11 +391,12 @@ class TestUndistortWorkspace:
         image_name = recon.image_names[0]
         image_path = Path(recon.workspace_dir) / image_name
 
-        with SiftReader.for_image(
+        sift_path = get_sift_path_for_image(
             image_path,
             feature_tool=source_config["feature_tool"],
             feature_options=source_config["feature_options"],
-        ) as reader:
+        )
+        with SiftReader(sift_path) as reader:
             src_shapes = reader.read_affine_shapes()
 
         image_basename = Path(image_name).name
@@ -438,11 +439,12 @@ class TestUndistortWorkspace:
         for image_name in recon.image_names:
             image_path = Path(recon.workspace_dir) / image_name
 
-            with SiftReader.for_image(
+            sift_path = get_sift_path_for_image(
                 image_path,
                 feature_tool=source_config["feature_tool"],
                 feature_options=source_config["feature_options"],
-            ) as reader:
+            )
+            with SiftReader(sift_path) as reader:
                 src_count = reader.metadata["feature_count"]
 
             image_basename = Path(image_name).name
@@ -476,11 +478,12 @@ class TestUndistortWorkspace:
         image_name = recon.image_names[0]
         image_path = Path(recon.workspace_dir) / image_name
 
-        with SiftReader.for_image(
+        sift_path = get_sift_path_for_image(
             image_path,
             feature_tool=source_config["feature_tool"],
             feature_options=source_config["feature_options"],
-        ) as reader:
+        )
+        with SiftReader(sift_path) as reader:
             src_descriptors = reader.read_descriptors()
 
         image_basename = Path(image_name).name

@@ -250,23 +250,6 @@ class SiftReader:
         self.content_hash = meta["content_hash"]
         self._data = None
 
-    @classmethod
-    def for_image(
-        cls,
-        image_path: str | Path,
-        feature_tool: str | None = None,
-        feature_options: dict | None = None,
-    ):
-        """Open a SiftReader for the .sift file corresponding to an image."""
-        if feature_tool is None:
-            feature_tool = "colmap"
-        sift_path = get_sift_path_for_image(
-            image_path,
-            feature_tool=feature_tool,
-            feature_options=feature_options,
-        )
-        return cls(sift_path)
-
     def __enter__(self):
         return self
 
@@ -409,41 +392,27 @@ def get_sift_path_for_image(
 ) -> Path:
     """Determine the .sift file path for a given image filename.
 
-    If feature_tool and feature_options are not provided, attempts to find
-    the workspace configuration and use its ``feature_prefix_dir``.
+    When ``image_filename`` lies inside an SfM workspace whose config has
+    ``feature_prefix_dir``, that prefix is used directly — explicit
+    ``feature_tool`` / ``feature_options`` arguments are ignored. The
+    workspace's stored prefix is the source of truth and avoids re-hashing
+    options that may have drifted from what was used at extraction time.
 
-    Args:
-        image_filename: Absolute path to an image file
-        feature_tool: Feature extraction tool name. If None, tries workspace config.
-        feature_options: Dict with feature extraction options. If None, uses defaults.
-
-    Returns:
-        Path where the corresponding .sift file should be located
+    For images outside a workspace (or in a workspace missing
+    ``feature_prefix_dir``), the path is recomputed from the supplied
+    ``feature_tool`` / ``feature_options``, defaulting to colmap with
+    default options.
     """
     image_filename = Path(image_filename).resolve()
 
-    if feature_tool is None or feature_options is None:
-        from sfmtool._workspace import find_workspace_for_path, load_workspace_config
+    from sfmtool._workspace import find_workspace_for_path, load_workspace_config
 
-        workspace_dir = find_workspace_for_path(image_filename)
-        if workspace_dir is not None:
-            workspace_config = load_workspace_config(workspace_dir)
-            if feature_tool is None and feature_options is None:
-                if "feature_prefix_dir" not in workspace_config:
-                    raise RuntimeError(
-                        f"SfM workspace {workspace_dir} is missing required "
-                        f"field feature_prefix_dir. Re-initialize the workspace "
-                        f"with 'sfm ws init'."
-                    )
-                return (
-                    image_filename.parent
-                    / workspace_config["feature_prefix_dir"]
-                    / (image_filename.name + ".sift")
-                )
-            if feature_tool is None:
-                feature_tool = workspace_config["feature_tool"]
-            if feature_options is None:
-                feature_options = workspace_config["feature_options"]
+    workspace_dir = find_workspace_for_path(image_filename)
+    if workspace_dir is not None:
+        workspace_config = load_workspace_config(workspace_dir)
+        prefix = workspace_config.get("feature_prefix_dir")
+        if prefix:
+            return image_filename.parent / prefix / (image_filename.name + ".sift")
 
     if feature_tool is None:
         feature_tool = "colmap"
@@ -774,21 +743,17 @@ def draw_sift_features(
     if image is None:
         raise ValueError(f"Failed to load image: {image_path}")
 
+    sift_path = get_sift_path_for_image(
+        image_path,
+        feature_tool=feature_tool,
+        feature_options=feature_options,
+    )
     try:
-        with SiftReader.for_image(
-            image_path,
-            feature_tool=feature_tool,
-            feature_options=feature_options,
-        ) as reader:
+        with SiftReader(sift_path) as reader:
             positions, affine_shapes = reader.read_positions_and_shapes(
                 count=max_features
             )
     except FileNotFoundError:
-        sift_path = get_sift_path_for_image(
-            image_path,
-            feature_tool=feature_tool,
-            feature_options=feature_options,
-        )
         raise FileNotFoundError(
             f"SIFT file not found for image {image_path}. "
             f"Expected at: {sift_path}. "
