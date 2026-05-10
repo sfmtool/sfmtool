@@ -487,11 +487,30 @@ impl SphericalTileRig {
     /// Out-of-bounds atlas taps replicate the edge. `k` is clamped to the
     /// number of tiles in the rig.
     ///
+    /// **NaN handling:** atlas pixels carrying `NaN` are interpreted as
+    /// "no data here". The bilinear sampler skips NaN corners and
+    /// renormalises over the remaining ones (so a tile only goes NaN when
+    /// every corner of its bilinear footprint is). Output is gated on the
+    /// *closest* tile: if the nearest neighbour to the dst direction has
+    /// no data, the direction is treated as unobserved and the output is
+    /// `NaN`, regardless of what farther tiles hold — this keeps each
+    /// tile's data within its Voronoi cell instead of letting the few
+    /// valid tiles bleed into the empty hemisphere. When the closest tile
+    /// is valid, farther neighbours still participate in the k-nearest
+    /// blend, with weights renormalised over the non-NaN contributors.
+    /// Callers can therefore pass an atlas with `NaN` holes (e.g. from
+    /// [`PerSphericalTileSourceStack::primary_consensus_atlas`])
+    /// and trust that valid neighbours dominate the blend without
+    /// contaminating uncovered regions.
+    ///
     /// Rows are computed in parallel via rayon.
     ///
     /// # Panics
     /// Panics if `k == 0`, `channels == 0`, or `atlas.len()` does not match
     /// `atlas_size().0 * atlas_size().1 * channels`.
+    ///
+    /// [`PerSphericalTileSourceStack::primary_consensus_atlas`]:
+    ///     crate::per_spherical_tile_source_stack::PerSphericalTileSourceStack::primary_consensus_atlas
     pub fn resample_atlas(
         &self,
         atlas: &[f32],
@@ -542,20 +561,27 @@ impl SphericalTileRig {
 
                     // Inverse-angular-distance weights (a single tile gets
                     // weight 1; tiny offset avoids div-by-zero when world
-                    // coincides with a tile direction).
-                    let mut weight_sum = 0.0_f64;
+                    // coincides with a tile direction). Renormalisation
+                    // happens after the NaN-aware sampling pass below, so
+                    // the weight sum here is unused.
                     for (i, &idx_u32) in nn.iter().enumerate() {
                         let d = self.directions[idx_u32 as usize];
                         let dot =
                             (world.x * d[0] + world.y * d[1] + world.z * d[2]).clamp(-1.0, 1.0);
                         let angle = dot.acos();
-                        let w = 1.0 / (angle + 1e-9);
-                        weights[i] = w;
-                        weight_sum += w;
+                        weights[i] = 1.0 / (angle + 1e-9);
                     }
-                    let inv_sum = 1.0 / weight_sum;
 
+                    // The closest tile (nn[0]) gates the pixel: if its
+                    // sample is NaN this direction is genuinely
+                    // unobserved (no Voronoi-cell owner has data) and we
+                    // emit NaN regardless of what farther tiles hold.
+                    // Otherwise blend the k-nearest tiles, skipping any
+                    // NaN samples and renormalising over the contributors.
                     accum.iter_mut().for_each(|v| *v = 0.0);
+                    let base = col as usize * channels;
+                    let mut closest_valid = false;
+                    let mut valid_weight_sum = 0.0_f64;
                     for (i, &idx_u32) in nn.iter().enumerate() {
                         let tile_idx = idx_u32 as usize;
                         let basis = self.bases[tile_idx];
@@ -573,15 +599,43 @@ impl SphericalTileRig {
                         let (ox, oy) = self.tile_atlas_origin(tile_idx);
                         let ax = (ox as f64 + in_x) as f32;
                         let ay = (oy as f64 + in_y) as f32;
-                        sample_bilinear_f32(atlas, atlas_w, atlas_h, channels, ax, ay, &mut sample);
-                        let w_i = (weights[i] * inv_sum) as f32;
+                        let valid = sample_bilinear_f32_nan_aware(
+                            atlas,
+                            atlas_w,
+                            atlas_h,
+                            channels,
+                            ax,
+                            ay,
+                            &mut sample,
+                        );
+                        if i == 0 {
+                            if !valid {
+                                break;
+                            }
+                            closest_valid = true;
+                        }
+                        if !valid {
+                            continue;
+                        }
+                        valid_weight_sum += weights[i];
+                        let w_i = weights[i] as f32;
                         for ch in 0..channels {
                             accum[ch] += w_i * sample[ch];
                         }
                     }
 
-                    let base = col as usize * channels;
-                    row_data[base..base + channels].copy_from_slice(&accum);
+                    if closest_valid && valid_weight_sum > 0.0 {
+                        let inv_w = (1.0 / valid_weight_sum) as f32;
+                        for ch in 0..channels {
+                            row_data[base + ch] = accum[ch] * inv_w;
+                        }
+                    } else {
+                        // Closest tile had no data → direction is in an
+                        // unobserved region of the rig; propagate NaN.
+                        for ch in 0..channels {
+                            row_data[base + ch] = f32::NAN;
+                        }
+                    }
                 }
                 row_data
             })
@@ -659,8 +713,17 @@ impl SphericalTileRig {
 
 /// Bilinear sample from a packed row-major f32 atlas at fractional pixel
 /// coordinates (pixel-center-at-0.5 convention). Out-of-bounds taps replicate
-/// the edge pixel. Writes one value per channel into `out`.
-fn sample_bilinear_f32(
+/// the edge pixel.
+///
+/// `NaN` corners are treated as "missing data": the bilinear weights of
+/// non-NaN corners are renormalised over only the contributing corners.
+/// All channels share the corner-validity decision (we test NaN on channel
+/// 0; producers of multi-channel atlases store NaN per-pixel across all
+/// channels together).
+///
+/// Returns `true` and fills `out` when at least one corner is valid.
+/// Returns `false` and leaves `out` unspecified when every corner is NaN.
+fn sample_bilinear_f32_nan_aware(
     img: &[f32],
     width: u32,
     height: u32,
@@ -668,7 +731,7 @@ fn sample_bilinear_f32(
     x: f32,
     y: f32,
     out: &mut [f32],
-) {
+) -> bool {
     let gx = x - 0.5;
     let gy = y - 0.5;
     let w = width as i32;
@@ -684,16 +747,56 @@ fn sample_bilinear_f32(
     let cy0 = y0.clamp(0, h - 1) as usize;
     let cy1 = y1.clamp(0, h - 1) as usize;
     let stride = width as usize * channels;
-    for ch in 0..channels {
-        let v00 = img[cy0 * stride + cx0 * channels + ch];
-        let v10 = img[cy0 * stride + cx1 * channels + ch];
-        let v01 = img[cy1 * stride + cx0 * channels + ch];
-        let v11 = img[cy1 * stride + cx1 * channels + ch];
-        out[ch] = (1.0 - fx) * (1.0 - fy) * v00
-            + fx * (1.0 - fy) * v10
-            + (1.0 - fx) * fy * v01
-            + fx * fy * v11;
+
+    let i00 = cy0 * stride + cx0 * channels;
+    let i10 = cy0 * stride + cx1 * channels;
+    let i01 = cy1 * stride + cx0 * channels;
+    let i11 = cy1 * stride + cx1 * channels;
+    let valid00 = !img[i00].is_nan();
+    let valid10 = !img[i10].is_nan();
+    let valid01 = !img[i01].is_nan();
+    let valid11 = !img[i11].is_nan();
+
+    let w00 = (1.0 - fx) * (1.0 - fy);
+    let w10 = fx * (1.0 - fy);
+    let w01 = (1.0 - fx) * fy;
+    let w11 = fx * fy;
+
+    let mut wsum = 0.0_f32;
+    if valid00 {
+        wsum += w00;
     }
+    if valid10 {
+        wsum += w10;
+    }
+    if valid01 {
+        wsum += w01;
+    }
+    if valid11 {
+        wsum += w11;
+    }
+    if wsum == 0.0 {
+        return false;
+    }
+    let inv_w = 1.0 / wsum;
+
+    for ch in 0..channels {
+        let mut s = 0.0_f32;
+        if valid00 {
+            s += w00 * img[i00 + ch];
+        }
+        if valid10 {
+            s += w10 * img[i10 + ch];
+        }
+        if valid01 {
+            s += w01 * img[i01 + ch];
+        }
+        if valid11 {
+            s += w11 * img[i11 + ch];
+        }
+        out[ch] = s * inv_w;
+    }
+    true
 }
 
 /// Compute `(e_right, e_up)` for a unit world direction.

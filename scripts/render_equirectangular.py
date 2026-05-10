@@ -134,9 +134,11 @@ def render(args: argparse.Namespace) -> int:
         f"({time.perf_counter() - t0:.2f}s)"
     )
 
-    # Replace NaN with 0 so the bilinear sampler in resample_atlas doesn't
-    # propagate NaN. Empty / all-invalid regions render as black.
-    atlas = np.where(np.isnan(atlas), 0.0, atlas).astype(np.float32)
+    # resample_atlas is NaN-aware: it skips NaN samples in the k-NN blend
+    # and renormalises remaining weights, so we keep the consensus's NaN
+    # holes intact through the resampling step. NaN flips to black only at
+    # the final u8 cast for PNG output.
+    atlas = atlas.astype(np.float32)
 
     eq_cam = CameraIntrinsics(
         model="EQUIRECTANGULAR",
@@ -155,6 +157,7 @@ def render(args: argparse.Namespace) -> int:
     pano = rig.resample_atlas(atlas, eq_cam, identity, k=args.k)
     print(f"Resampled to equirectangular {pano.shape} ({time.perf_counter() - t0:.2f}s)")
 
+    pano = np.where(np.isnan(pano), 0.0, pano)
     pano_u8 = np.clip(pano, 0, 255).astype(np.uint8)
     bgr_out = cv2.cvtColor(pano_u8, cv2.COLOR_RGB2BGR)
     args.output.parent.mkdir(parents=True, exist_ok=True)

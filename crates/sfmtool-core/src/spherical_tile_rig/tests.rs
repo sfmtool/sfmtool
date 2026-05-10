@@ -781,6 +781,97 @@ fn resample_atlas_constant_atlas_yields_constant_output() {
 }
 
 #[test]
+fn resample_atlas_nan_atlas_yields_nan_output() {
+    // Whole atlas is NaN → every output pixel should be NaN.
+    let rig = make_rig(80, 256);
+    let (aw, ah) = rig.atlas_size();
+    let atlas = vec![f32::NAN; (aw * ah) as usize];
+    let dst = equirect_camera(32, 16);
+    let out = rig.resample_atlas(&atlas, 1, &dst, &RotQuaternion::identity(), 4);
+    assert!(
+        out.iter().all(|v| v.is_nan()),
+        "every output pixel must be NaN when the atlas is fully NaN"
+    );
+}
+
+#[test]
+fn resample_atlas_partial_nan_renormalises_within_voronoi_cells() {
+    // Mark every tile slot for tiles 0..n/2 with a constant; tiles
+    // n/2..n are entirely NaN. Then for any dst direction whose closest
+    // tile is in the valid half, the output should be the constant
+    // (renormalised over the valid contributors among the k nearest).
+    // For dst directions whose closest tile is in the NaN half, output
+    // must be NaN — even at k > 1 — to keep tile data inside its
+    // Voronoi cell.
+    let rig = make_rig(80, 256);
+    let (aw, ah) = rig.atlas_size();
+    let ps = rig.patch_size() as usize;
+    let aw_us = aw as usize;
+    let mut atlas = vec![f32::NAN; (aw * ah) as usize];
+    let n = rig.len();
+    for t in 0..n / 2 {
+        let (ox, oy) = rig.tile_atlas_origin(t);
+        for dy in 0..ps {
+            for dx in 0..ps {
+                atlas[(oy as usize + dy) * aw_us + (ox as usize + dx)] = 0.42;
+            }
+        }
+    }
+    let dst = equirect_camera(64, 32);
+    let out = rig.resample_atlas(&atlas, 1, &dst, &RotQuaternion::identity(), 4);
+    let mut valid = 0;
+    for &v in &out {
+        if !v.is_nan() {
+            valid += 1;
+            assert!(
+                (v - 0.42).abs() < 1e-5,
+                "renormalised blend should equal the constant, got {v}"
+            );
+        }
+    }
+    assert!(valid > 0, "expected at least some valid output pixels");
+    let nan_count = out.iter().filter(|v| v.is_nan()).count();
+    assert!(
+        nan_count > 0,
+        "expected output pixels whose closest tile is NaN to remain NaN"
+    );
+}
+
+#[test]
+fn resample_atlas_closest_tile_gate_prevents_bleed() {
+    // Only ONE tile (tile 0) is valid; every other tile slot is NaN.
+    // With k = 4, the new gate should restrict the valid output to dst
+    // directions whose closest neighbour is tile 0 — its Voronoi cell.
+    // Without the gate, tile 0's content would bleed into every direction
+    // where it appears among the k nearest (a large fraction of the
+    // sphere).
+    let rig = make_rig(80, 256);
+    let (aw, ah) = rig.atlas_size();
+    let ps = rig.patch_size() as usize;
+    let aw_us = aw as usize;
+    let mut atlas = vec![f32::NAN; (aw * ah) as usize];
+    let (ox, oy) = rig.tile_atlas_origin(0);
+    for dy in 0..ps {
+        for dx in 0..ps {
+            atlas[(oy as usize + dy) * aw_us + (ox as usize + dx)] = 0.42;
+        }
+    }
+    let dst = equirect_camera(64, 32);
+    let out = rig.resample_atlas(&atlas, 1, &dst, &RotQuaternion::identity(), 4);
+    let valid_count = out.iter().filter(|v| !v.is_nan()).count();
+    // tile 0's Voronoi cell is roughly 1/n of the sphere; for n = 80 a
+    // single tile cell should cover well under 5% of the dst pixels.
+    let frac = valid_count as f64 / out.len() as f64;
+    assert!(
+        frac < 0.05,
+        "single-valid-tile output covered {:.2}% of dst (expected < 5%); \
+         the closest-tile gate is leaking",
+        100.0 * frac
+    );
+    assert!(valid_count > 0, "expected tile 0's Voronoi cell to render");
+}
+
+#[test]
 fn resample_atlas_multi_channel_rgb() {
     let rig = make_rig(80, 256);
     let (aw, ah) = rig.atlas_size();
