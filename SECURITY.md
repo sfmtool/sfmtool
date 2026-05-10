@@ -21,4 +21,4 @@ to send a report directly to the maintainers. Include:
 We will acknowledge the report and work with you on a fix and a coordinated
 disclosure timeline.
 
-[gh-pvr]: https://github.com/mwiebe/sfmtool/security/advisories/new
+[gh-pvr]: https://github.com/sfmtool/sfmtool/security/advisories/new
