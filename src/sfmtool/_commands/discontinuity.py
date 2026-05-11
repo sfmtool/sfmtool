@@ -57,6 +57,13 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp")
     default=None,
     help="Directory to save optical flow color images.",
 )
+@click.option(
+    "--json",
+    "json_path",
+    type=click.Path(),
+    default=None,
+    help="Write a machine-readable JSON report of the analysis to this path.",
+)
 def discontinuity(
     paths,
     range_expr,
@@ -65,6 +72,7 @@ def discontinuity(
     max_stride,
     no_adaptive,
     save_flow_dir,
+    json_path,
 ):
     """Analyze image sequences or reconstructions for discontinuities.
 
@@ -95,6 +103,10 @@ def discontinuity(
     # Check if input is a .sfmr file
     if len(paths) == 1 and paths[0].endswith(".sfmr"):
         from .._discontinuity import analyze_reconstruction
+        from .._discontinuity_json import (
+            reconstruction_results_to_json,
+            write_report,
+        )
         from .._sfmtool import SfmrReconstruction
 
         sfmr_path = Path(paths[0])
@@ -106,7 +118,10 @@ def discontinuity(
 
             numbers = set(IntRangeExpr.from_str(range_expr))
 
-        analyze_reconstruction(recon, range_numbers=numbers)
+        results = analyze_reconstruction(recon, range_numbers=numbers)
+        if json_path and results:
+            report = reconstruction_results_to_json(results)
+            write_report(Path(json_path), report)
         return
 
     # Image sequence mode
@@ -140,6 +155,8 @@ def discontinuity(
     # Build a filename-to-path lookup
     name_to_path = {p.name: p for p in image_paths}
 
+    image_sequence_results: list[dict] = []
+
     for seq in numbered_sequences:
         # Get the ordered image paths for this sequence
         sorted_indexes = sorted(seq.index_set)
@@ -164,7 +181,7 @@ def discontinuity(
         # Derive a base name from the sequence pattern (e.g. "seoul_bull_sculpture")
         seq_base = seq.path.rsplit(".", 1)[0].split("%")[0].rstrip("_")
 
-        analyze_image_sequence(
+        seq_results = analyze_image_sequence(
             seq_paths,
             frame_numbers=seq_frame_numbers,
             initial_stride=initial_stride,
@@ -174,3 +191,15 @@ def discontinuity(
             save_flow_dir=Path(save_flow_dir) if save_flow_dir else None,
             sequence_name=seq_base,
         )
+        image_sequence_results.append(
+            {"pattern": seq.path, "name": seq_base, "results": seq_results}
+        )
+
+    if json_path and image_sequence_results:
+        from .._discontinuity_json import (
+            image_sequence_results_to_json,
+            write_report,
+        )
+
+        report = image_sequence_results_to_json(image_sequence_results)
+        write_report(Path(json_path), report)

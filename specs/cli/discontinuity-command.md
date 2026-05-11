@@ -62,6 +62,7 @@ sfm discontinuity [OPTIONS] PATHS...
 | `--max-stride N` | 32 | Maximum stride (ceiling for adaptive growing). |
 | `--no-adaptive` | false | Disable adaptive stride adjustment; keep stride fixed. |
 | `--save-flow-dir PATH` | | Directory to save optical flow color images (Middlebury convention). |
+| `--json PATH` | | Write a machine-readable JSON report of the analysis to this path. Human-readable output is unchanged. |
 
 ### Examples
 
@@ -80,6 +81,9 @@ sfm discontinuity images/ --initial-stride 4 --no-adaptive
 
 # Save flow visualizations
 sfm discontinuity images/ --save-flow-dir /tmp/flow_output
+
+# Emit a machine-readable report alongside the printed output
+sfm discontinuity reconstruction.sfmr --json discontinuity.json
 ```
 
 
@@ -349,7 +353,263 @@ discontinuity is an SfM error.
   multi-signal (high-confidence) hits, and a legend for the signal codes.
 
 
-## Existing Infrastructure
+## JSON Output
+
+When `--json PATH` is provided, the tool writes a JSON file in addition to its
+normal printed output. The file captures the per-frame metrics, the detected
+discontinuities, and (for reconstruction mode) the segment partition implied
+by those discontinuities, so downstream tools can act on the results without
+parsing the human-readable tables.
+
+### Schema (version 1)
+
+Top-level object:
+
+```jsonc
+{
+  "schema_version": 1,
+  "mode": "reconstruction" | "image_sequence",
+  "thresholds": { ... },           // global, mode-specific (see below)
+  "sequences": [ { ... }, ... ]    // one per detected numbered sequence
+}
+```
+
+`schema_version` increments on backwards-incompatible changes — renames,
+type changes, removals, or semantic changes to existing fields. Adding a new
+optional field, a new enum value, or widening a value's range is additive and
+does not bump the version.
+
+All numbers are JSON numbers. `NaN`, `+inf`, and `-inf` are emitted as `null`
+to keep the output strictly RFC-8259 compliant. Tuple-keyed dicts (edges,
+image-pair counts) are emitted as objects with `[a, b]` array fields rather
+than encoded keys. Per-frame numpy arrays used for human display (flow
+histograms, tile grids) are **not** emitted.
+
+### Reconstruction mode
+
+`thresholds`:
+
+| Field | Description |
+|-------|-------------|
+| `pose_trans_factor` | Multiplier applied to each sequence's median step length. Fixed at `3.0` in v1 — not a CLI flag. The resolved per-sequence threshold is in `sequences[].pose_trans_threshold`. |
+| `pose_rot_deg` | Fixed rotation residual threshold (`15.0`). Echoed per sequence as `pose_rot_threshold` for symmetry with the translation threshold. |
+| `step_ratio` | `STEP_RATIO_THRESHOLD` (default `1.5`). |
+| `overlap_drop` | `OVERLAP_DROP_THRESHOLD` (default `1.8`). |
+| `obs_z` | `OBS_Z_THRESHOLD` (default `2.5`). |
+
+Each entry in `sequences`:
+
+| Field | Description |
+|-------|-------------|
+| `pattern` | Sequence pattern from `summarize_paths_by_sequence` (e.g. `frame_%04d.jpg`). |
+| `name` | Base name derived from the pattern (e.g. `frame`). |
+| `frame_count` | Number of frames analyzed for this sequence. |
+| `median_trans` | Median translation between successive frames in this sequence. |
+| `median_rot_deg` | Median rotation (degrees) between successive frames. |
+| `pose_trans_threshold` | Resolved translation threshold = `pose_trans_factor × median_trans`. |
+| `pose_rot_threshold` | Resolved rotation threshold (degrees) — currently equal to `thresholds.pose_rot_deg`. |
+| `frames` | Per-frame array (length = `frame_count`). |
+| `discontinuities` | Per-clustered-edge array (one entry per `core_edge`). |
+| `segments` | Segment partition derived from `discontinuities`. |
+
+Each entry in `frames` (corresponds to one row of the per-frame table):
+
+| Field | Description |
+|-------|-------------|
+| `seq_index` | 0-based index into this sequence's frame list. |
+| `frame_number` | File number from the sequence pattern (e.g. `123` for `frame_0123.jpg`). |
+| `image_name` | Image filename as stored in the reconstruction. |
+| `left_trans_err` | Translation residual from the left-side extrapolation, or `null` near the start of the sequence. |
+| `left_rot_err` | Rotation residual (degrees) from the left-side extrapolation, or `null`. |
+| `right_trans_err` | Translation residual from the right-side extrapolation, or `null`. |
+| `right_rot_err` | Rotation residual (degrees) from the right-side extrapolation, or `null`. |
+| `edge_translation` | Euclidean distance between camera centers at `(i-1, i)` — the landing edge. `null` at `seq_index == 0`. |
+| `edge_rotation_deg` | Rotation angle (degrees) at the landing edge `(i-1, i)`. `null` at `seq_index == 0`. |
+| `step_ratio` | Step-size ratio for the landing edge `(i-1, i)`, or `null` at `seq_index == 0`. |
+| `overlap_drop` | Covisibility drop factor for the landing edge, or `null` at `seq_index == 0`. |
+| `obs_z` | Per-frame observation-count z-score, or `null` when the window is too short. |
+| `flags` | Array of fired codes (subset of `["L.t", "L.r", "R.t", "R.r", "Step", "Cov", "Obs"]`). |
+
+Each entry in `discontinuities` (one per `core_edge` after clustering):
+
+| Field | Description |
+|-------|-------------|
+| `edge` | `[a, b]` — 0-based sequence indexes of the two endpoints. |
+| `frame_a`, `frame_b` | File numbers of the endpoint images. |
+| `image_a`, `image_b` | Filenames of the endpoint images. |
+| `translation` | Euclidean distance between the two camera centers. |
+| `rotation_deg` | Rotation angle (degrees) between the two camera orientations. |
+| `step_ratio` | Step-size ratio at this edge, or `null` near sequence ends. |
+| `overlap_drop` | Covisibility drop factor at this edge, or `null` near ends. |
+| `obs_z_a`, `obs_z_b` | Per-frame obs z-scores for the two endpoints, or `null`. |
+| `shared_points` | Number of shared 3D points between the two endpoints. |
+| `reproj_error_a`, `reproj_error_b` | Mean reprojection error (pixels) for each endpoint image, or `null` if not available. |
+| `signals` | Array of fired primary codes (subset of `["P", "S", "C", "O"]`, sorted). `P` aggregates the four pose-residual flags. |
+| `confidence` | `"high"` if `len(signals) >= 2`, else `"low"`. Matches the footer partition rule. |
+
+`segments` — partition of `[0..frame_count-1]` at each discontinuity edge.
+Frame `a` of edge `(a, b)` ends the preceding segment; frame `b` starts the
+next. If `discontinuities` is empty, `segments` contains a single full-length
+entry. Single-frame segments are emitted as-is — a discontinuity on the
+first edge `(0, 1)` produces a singleton first segment `[0, 0]`, two
+adjacent discontinuities at `(3, 4)` and `(4, 5)` produce a singleton middle
+segment `[4, 4]`. Consumers that require a minimum segment length should
+filter.
+
+| Field | Description |
+|-------|-------------|
+| `start_index`, `end_index` | Inclusive 0-based sequence indexes. |
+| `start_frame`, `end_frame` | Inclusive file numbers of the endpoint frames. |
+| `frame_count` | Number of frames in the segment. |
+
+### Image-sequence mode
+
+`thresholds`:
+
+| Field | Description |
+|-------|-------------|
+| `ratio_lower` | Lower edge of the in-band ratio interval (`0.75`). |
+| `ratio_upper` | Upper edge of the in-band ratio interval (`1 / ratio_lower`). |
+
+Each entry in `sequences`:
+
+| Field | Description |
+|-------|-------------|
+| `pattern` | Sequence pattern. |
+| `name` | Base name. |
+| `sample_count` | Number of non-superseded sample points emitted. |
+| `samples` | Per-sample-point array. |
+
+Each entry in `samples` (superseded points are dropped):
+
+| Field | Description |
+|-------|-------------|
+| `frame_number` | File number of the local-flow source frame. |
+| `frame_name` | Filename of the local-flow source. |
+| `next_frame_name` | Filename of `i + 1`. |
+| `stride_frame_name` | Filename of `i + N`, or `null` if no stride flow was computed. |
+| `stride` | Effective stride used at this sample point. |
+| `local_median_magnitude` | Median in-bounds magnitude of the local flow. |
+| `stride_median_magnitude` | Median in-bounds magnitude of the stride flow, or `null`. |
+| `expected_magnitude_ratio` | The stride used as the expected ratio (= `stride` when `stride >= 2`), or `null`. |
+| `actual_magnitude_ratio` | Observed ratio `stride_median / local_median`, or `null`. |
+| `in_bounds_pct` | Percentage of pixels whose scaled local flow stays in-bounds, or `null`. |
+| `classification` | `null` (in-band) or one of `"strong deceleration"`, `"deceleration"`, `"acceleration"`, `"strong acceleration"` — same band table as the human-readable summary. |
+
+Image-sequence mode emits per-sample metrics but no `segments` array. The
+adaptive-stride shrink threshold drives the band classification, but it is
+deliberately permissive (it must trigger on benign motion changes to keep the
+stride small) and is not a reliable segment boundary. Choosing a robust
+segmentation rule for raw image sequences is left as future work — see
+specs/core/ for the discontinuity-detection design notes.
+
+### Examples
+
+Reconstruction mode, two discontinuities clustered to single edges:
+
+```jsonc
+{
+  "schema_version": 1,
+  "mode": "reconstruction",
+  "thresholds": {
+    "pose_trans_factor": 3.0,
+    "pose_rot_deg": 15.0,
+    "step_ratio": 1.5,
+    "overlap_drop": 1.8,
+    "obs_z": 2.5
+  },
+  "sequences": [
+    {
+      "pattern": "frame_%04d.jpg",
+      "name": "frame",
+      "frame_count": 5,
+      "median_trans": 0.052,
+      "median_rot_deg": 0.31,
+      "pose_trans_threshold": 0.156,
+      "pose_rot_threshold": 15.0,
+      "frames": [
+        {"seq_index": 0, "frame_number": 100, "image_name": "frame_0100.jpg",
+         "left_trans_err": null, "left_rot_err": null,
+         "right_trans_err": 0.013, "right_rot_err": 0.4,
+         "edge_translation": null, "edge_rotation_deg": null,
+         "step_ratio": null, "overlap_drop": null, "obs_z": null,
+         "flags": []},
+        // ... three more frames ...
+        {"seq_index": 4, "frame_number": 104, "image_name": "frame_0104.jpg",
+         "left_trans_err": 0.011, "left_rot_err": 0.3,
+         "right_trans_err": null, "right_rot_err": null,
+         "edge_translation": 0.054, "edge_rotation_deg": 0.29,
+         "step_ratio": 1.1, "overlap_drop": 1.0, "obs_z": -0.4,
+         "flags": []}
+      ],
+      "discontinuities": [
+        {"edge": [1, 2], "frame_a": 101, "frame_b": 102,
+         "image_a": "frame_0101.jpg", "image_b": "frame_0102.jpg",
+         "translation": 0.45, "rotation_deg": 0.5,
+         "step_ratio": 3.2, "overlap_drop": 8.1,
+         "obs_z_a": -0.2, "obs_z_b": -3.1,
+         "shared_points": 12,
+         "reproj_error_a": 0.78, "reproj_error_b": 0.93,
+         "signals": ["C", "O", "S"], "confidence": "high"}
+      ],
+      "segments": [
+        {"start_index": 0, "end_index": 1, "start_frame": 100, "end_frame": 101, "frame_count": 2},
+        {"start_index": 2, "end_index": 4, "start_frame": 102, "end_frame": 104, "frame_count": 3}
+      ]
+    }
+  ]
+}
+```
+
+### Error behavior
+
+- `--json` writes the file after analysis completes. If the file cannot be
+  created (permission denied, parent does not exist), `click.ClickException`
+  is raised. The printed analysis is not suppressed.
+- When no numbered sequences are detected, no JSON file is written
+  (image-sequence mode raises `ClickException` before reaching the writer;
+  reconstruction mode echoes the no-sequences message and returns).
+- When a sequence is skipped (e.g. fewer than four frames in reconstruction
+  mode), it is omitted from `sequences`. The remaining sequences are still
+  emitted.
+
+### Tests
+
+`tests/test_discontinuity_json.py`:
+
+- **Reconstruction with planted discontinuity.** Build a small in-memory
+  `SfmrReconstruction` (10 frames, image names `frame_0000.jpg`…
+  `frame_0009.jpg`, pose jump between frame 4 and 5). Run
+  `analyze_reconstruction` and serialize. Assert:
+  - `schema_version == 1`, `mode == "reconstruction"`.
+  - One sequence with `frame_count == 10`.
+  - `len(discontinuities) == 1` and `edge == [4, 5]`.
+  - `len(segments) == 2`; segment 0 = `[0, 4]`, segment 1 = `[5, 9]`.
+  - `json.dumps(report, allow_nan=False)` does not raise (no `NaN`/`Infinity`
+    leaks).
+  - `thresholds.step_ratio == 1.5`, `thresholds.overlap_drop == 1.8`,
+    `thresholds.obs_z == 2.5`, `thresholds.pose_trans_factor == 3.0`,
+    `thresholds.pose_rot_deg == 15.0`.
+  - `sequences[0].pose_trans_threshold == 3.0 * sequences[0].median_trans`.
+- **Reconstruction with no discontinuity.** Same fixture but a smooth pose
+  sequence. Assert `discontinuities == []` and `segments` has exactly one
+  full-length entry covering `[0, n-1]`.
+- **Singleton-segment edge case.** Construct a fixture where the only
+  discontinuity is on edge `(0, 1)`. Assert segment 0 = `[0, 0]`
+  (`frame_count == 1`).
+- **NaN reprojection error round-trips as `null`.** Construct a fixture
+  where one endpoint image has no valid observations so
+  `_compute_per_image_mean_errors` returns `nan` for it. Assert the
+  serialized `reproj_error_a` (or `_b`) is `null`, not `NaN`.
+- **Image-sequence mode.** Run `analyze_image_sequence` on the
+  `seoul_bull_17_images` fixture or equivalent and serialize. Assert
+  `mode == "image_sequence"`, `samples` length matches non-superseded
+  sample points, no `segments` field at sequence level, no numpy arrays
+  remain (verify by `json.dumps(allow_nan=False)`).
+- **Write-failure.** `--json /nonexistent/dir/out.json` raises
+  `ClickException`. Analysis printed before the failure is acceptable.
+
+
 
 Code and patterns to build on:
 
@@ -378,6 +638,10 @@ Code and patterns to build on:
   unordered image sets, the "adjacent" concept doesn't apply. Should there be a mode that
   analyzes all covisibility-connected pairs instead?
 
-- **Segmentation output**: When discontinuities split a sequence into segments, should
-  the tool output segment boundaries in a machine-readable format (e.g., JSON) for
-  downstream use (e.g., solving each segment separately)?
+- **Segmentation output (image-sequence mode)**: Reconstruction mode emits
+  segment boundaries in the `--json` report (see the JSON Output section).
+  Image-sequence mode does not — the adaptive-stride shrink threshold is
+  permissive enough that using it as a segment classifier would yield many
+  false positives. A dedicated image-sequence segmentation rule (e.g. a
+  tighter ratio band, requiring `min_stride` saturation, or a covisibility
+  proxy that doesn't need an SfM solution) is still open.
