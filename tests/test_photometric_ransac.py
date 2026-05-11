@@ -67,11 +67,8 @@ def _build_seoul_bull_stack(
     n_tiles: int = 160,
     arc_pixels: int = 384,
     seed: int = 1234,
-) -> tuple[PerSphericalTileSourceStack, np.ndarray]:
-    """Build an f32 stack from the seoul_bull reconstruction.
-
-    Returns `(stack, src_index_array)` for downstream metric computations.
-    """
+) -> PerSphericalTileSourceStack:
+    """Build an f32 stack from the seoul_bull reconstruction."""
     import cv2  # local import — heavy module, only needed by integration
 
     recon = SfmrReconstruction.load(sfmr_path)
@@ -95,10 +92,9 @@ def _build_seoul_bull_stack(
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         sources.append((cam, q, rgb))
 
-    stack = PerSphericalTileSourceStack.build_rotation_only(
+    return PerSphericalTileSourceStack.build_rotation_only(
         rig, sources, dtype="float32"
     )
-    return stack, np.asarray(stack.src_id())
 
 
 def _row_mean_lum_at_level(
@@ -107,8 +103,7 @@ def _row_mean_lum_at_level(
     """Recompute the per-row mean luminance over the central
     `scoring_size × scoring_size` sub-patch at the pyramid level whose patch
     side equals `target_size`. Mirrors the reduction the algorithm performs
-    internally so the test can compute its own pre-correction baseline to
-    compare against the post-correction result."""
+    internally."""
     levels = stack.pyramid_levels
     chosen = None
     for li in range(levels):
@@ -140,8 +135,7 @@ def seoul_bull_stack(sfmrfile_reconstruction_with_17_images: Path):
 
 
 class TestRefinePhotometricRansacSeoulBull:
-    """Integration tests on `seoul_bull_sculpture` (17 images) — covers
-    validation-plan items 10, 11, 12, 13."""
+    """Integration tests on `seoul_bull_sculpture` (17 images)."""
 
     def test_rejects_uint8_stack(self):
         # The documented "must be float32" gate. A trivial empty stack
@@ -154,15 +148,13 @@ class TestRefinePhotometricRansacSeoulBull:
 
     def test_primary_more_compact_than_all_rows(self, seoul_bull_stack):
         """The primary cluster is, by construction, the subset of rows the
-        algorithm decided agree photometrically; outliers go to the
-        secondary / rejected groups. So the primary-cluster median MAD must
-        be strictly lower than the post-correction all-rows median MAD —
-        any reconstruction where that fails means the cluster split isn't
-        actually separating agreeing from disagreeing rows."""
-        stack, src_index = seoul_bull_stack
+        algorithm decided agree photometrically. Its per-tile MAD must be
+        strictly lower than the all-rows per-tile MAD — otherwise the
+        cluster split isn't separating agreeing from disagreeing rows."""
+        stack = seoul_bull_stack
         target_size = 4
         scoring_size = 2
-        row_lum_pre = _row_mean_lum_at_level(stack, target_size, scoring_size)
+        row_lum = _row_mean_lum_at_level(stack, target_size, scoring_size)
         tile_offsets = np.asarray(stack.tile_offsets())
         active = np.diff(tile_offsets) >= 2
 
@@ -172,10 +164,7 @@ class TestRefinePhotometricRansacSeoulBull:
             scoring_patch_size=scoring_size,
         )
 
-        # All-rows post-correction MAD (apply gains then recompute).
-        gain_per_row = np.exp(out.log_gain[src_index]).astype(np.float32)
-        row_lum_post = row_lum_pre * gain_per_row
-        all_rows_mad = _per_tile_lum_mad(row_lum_post, tile_offsets)[active]
+        all_rows_mad = _per_tile_lum_mad(row_lum, tile_offsets)[active]
         all_rows_mad = all_rows_mad[~np.isnan(all_rows_mad)]
 
         primary_mad = np.asarray(out.tile_primary_lum_mad)[active]
@@ -188,51 +177,17 @@ class TestRefinePhotometricRansacSeoulBull:
             f"lower than all-rows MAD {median_all:.3f}"
         )
 
-    def test_algorithm_recovers_nontrivial_gains(self, seoul_bull_stack):
-        """Sanity check: the algorithm should produce non-zero per-source
-        gains on a real dataset. Pre-correction `log_gain` is all zeros;
-        if the algorithm leaves it that way, something is broken upstream
-        (e.g., LSQ never fired, or every primary cluster was empty)."""
-        stack, _ = seoul_bull_stack
-        out = refine_photometric_ransac(stack)
-        # Pre-correction `log_gain` is all zeros, so any real recovery
-        # produces non-zero per-source spread. 0.005 is small enough to
-        # absorb reconstruction-quality variance while still rejecting
-        # the degenerate all-zeros case (LSQ never fired, every primary
-        # cluster empty, etc.).
-        assert out.log_gain.std() > 0.005, (
-            f"log_gain std {out.log_gain.std():.4f} suggests no recovery"
-        )
-
-    def test_inter_seed_gain_stability(self, seoul_bull_stack):
-        """RANSAC determinism: re-running on the same stack with different
-        seeds should land on essentially the same gains. The bound is set
-        well below the magnitude of the gains the algorithm typically
-        recovers (per-source `log_gain` runs in the 0.05-0.15 range), so a
-        mean inter-seed std under 0.02 means seed choice never flips the
-        consensus enough to matter for downstream luminance correction."""
-        stack, _ = seoul_bull_stack
-        gains = []
-        for seed in range(8):
-            out = refine_photometric_ransac(stack, seed=seed)
-            gains.append(np.asarray(out.log_gain, dtype=np.float64))
-        gains = np.stack(gains, axis=0)  # (8, n_sources)
-        per_source_std = gains.std(axis=0, ddof=0)
-        mean_std = float(per_source_std.mean())
-        assert mean_std < 0.02, f"mean inter-seed log_gain std {mean_std:.4f} >= 0.02"
-
     def test_wallclock_under_one_second(self, seoul_bull_stack):
         """End-to-end algorithm time on a 17-image stack should stay well
         under 1 s so the refinement is cheap enough to run interactively
         and inside iterative pipelines. The bound is wall-clock on the
         binding alone; stack construction is not included."""
-        stack, _ = seoul_bull_stack
+        stack = seoul_bull_stack
         # Warm-up call to amortise any first-call init cost.
         refine_photometric_ransac(stack)
         t0 = time.perf_counter()
-        out = refine_photometric_ransac(stack)
+        refine_photometric_ransac(stack)
         elapsed = time.perf_counter() - t0
-        assert out.outer_iters >= 1
         assert elapsed < 1.0, f"refine_photometric_ransac took {elapsed:.3f} s >= 1.0"
 
 
@@ -241,14 +196,10 @@ class TestRefinePhotometricRansacAPISmoke:
     error paths."""
 
     def test_returns_expected_shapes_and_dtypes(self, seoul_bull_stack):
-        stack, _ = seoul_bull_stack
+        stack = seoul_bull_stack
         out = refine_photometric_ransac(stack)
         n_tiles = stack.n_tiles
         r = stack.total_contrib_rows
-        # log_gain length matches max(src_id) + 1.
-        n_sources = int(np.asarray(stack.src_id()).max()) + 1
-        assert out.log_gain.shape == (n_sources,)
-        assert out.log_gain.dtype == np.float32
         assert out.primary_mask.shape == (r,)
         assert out.primary_mask.dtype == np.bool_
         assert out.secondary_mask.shape == (r,)
@@ -261,10 +212,5 @@ class TestRefinePhotometricRansacAPISmoke:
         assert out.tile_primary_lum_mad.dtype == np.float32
         assert out.tile_secondary_lum_mad.shape == (n_tiles,)
         assert out.tile_secondary_lum_mad.dtype == np.float32
-        assert isinstance(out.outer_iters, int)
-        assert out.mask_change_history.shape == (out.outer_iters,)
-        assert out.mask_change_history.dtype == np.uint32
-        # Mean-zero log_gain check.
-        assert abs(float(out.log_gain.mean())) < 1e-5
         # Cluster invariants: primary and secondary disjoint.
         assert not np.any(out.primary_mask & out.secondary_mask)

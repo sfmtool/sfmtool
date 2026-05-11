@@ -8,7 +8,7 @@
 //! [`crate::PyPerSphericalTileSourceStack`] and returns a
 //! :class:`RansacPhotometricOutput` whose fields are owned NumPy arrays.
 
-use numpy::{IntoPyArray, PyArray1};
+use numpy::PyArray1;
 use pyo3::prelude::*;
 
 use sfmtool_core::photometric_ransac::{
@@ -23,19 +23,15 @@ fn err_to_py(e: RansacPhotometricError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("{e}"))
 }
 
-/// Result of :func:`refine_photometric_ransac`. Fields are NumPy arrays
-/// (or scalars where noted) and match the spec's
-/// ``RansacPhotometricOutput`` shape:
+/// Result of :func:`refine_photometric_ransac`. Fields are NumPy arrays and
+/// match the spec's ``RansacPhotometricOutput`` shape:
 ///
-/// - ``log_gain`` : float32 ``[n_sources]``
 /// - ``primary_mask`` : bool ``[R]``
 /// - ``secondary_mask`` : bool ``[R]``
 /// - ``tile_primary_count`` : int32 ``[n_tiles]``
 /// - ``tile_secondary_count`` : int32 ``[n_tiles]``
 /// - ``tile_primary_lum_mad`` : float32 ``[n_tiles]`` (NaN where skipped)
 /// - ``tile_secondary_lum_mad`` : float32 ``[n_tiles]`` (NaN where skipped)
-/// - ``outer_iters`` : int (number of outer iterations executed)
-/// - ``mask_change_history`` : uint32 ``[outer_iters]``
 #[pyclass(name = "RansacPhotometricOutput", module = "sfmtool._sfmtool")]
 pub struct PyRansacPhotometricOutput {
     inner: RansacPhotometricOutput,
@@ -43,13 +39,6 @@ pub struct PyRansacPhotometricOutput {
 
 #[pymethods]
 impl PyRansacPhotometricOutput {
-    #[getter]
-    fn log_gain<'py>(&self, py: Python<'py>) -> Py<PyAny> {
-        PyArray1::from_slice(py, &self.inner.log_gain)
-            .into_any()
-            .unbind()
-    }
-
     #[getter]
     fn primary_mask<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
         bool_array(py, &self.inner.primary_mask)
@@ -88,30 +77,13 @@ impl PyRansacPhotometricOutput {
             .unbind()
     }
 
-    #[getter]
-    fn outer_iters(&self) -> u32 {
-        self.inner.outer_iters
-    }
-
-    #[getter]
-    fn mask_change_history<'py>(&self, py: Python<'py>) -> Py<PyAny> {
-        self.inner
-            .mask_change_history
-            .clone()
-            .into_pyarray(py)
-            .into_any()
-            .unbind()
-    }
-
     fn __repr__(&self) -> String {
         format!(
-            "RansacPhotometricOutput(log_gain[{}], primary_mask[{}], \
-             secondary_mask[{}], tile_primary_count[{}], outer_iters={})",
-            self.inner.log_gain.len(),
+            "RansacPhotometricOutput(primary_mask[{}], secondary_mask[{}], \
+             tile_primary_count[{}])",
             self.inner.primary_mask.len(),
             self.inner.secondary_mask.len(),
             self.inner.tile_primary_count.len(),
-            self.inner.outer_iters,
         )
     }
 }
@@ -151,8 +123,6 @@ fn bool_array<'py>(py: Python<'py>, data: &[bool]) -> PyResult<Py<PyAny>> {
     subset_size = 2,
     max_subsets_per_tile = 64,
     min_inliers = 2,
-    max_outer_iters = 8,
-    mask_change_tolerance = 0.05,
     saturation_threshold = 254,
     seed = 0,
 ))]
@@ -166,8 +136,6 @@ pub fn refine_photometric_ransac_py(
     subset_size: u32,
     max_subsets_per_tile: u32,
     min_inliers: u32,
-    max_outer_iters: u32,
-    mask_change_tolerance: f32,
     saturation_threshold: u8,
     seed: u64,
 ) -> PyResult<PyRansacPhotometricOutput> {
@@ -179,8 +147,6 @@ pub fn refine_photometric_ransac_py(
         subset_size,
         max_subsets_per_tile,
         min_inliers,
-        max_outer_iters,
-        mask_change_tolerance,
         saturation_threshold,
         seed,
     };

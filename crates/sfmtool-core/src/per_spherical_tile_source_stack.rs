@@ -198,9 +198,6 @@ pub enum ConsensusAtlasError {
     PatchSizeMismatch { stack: u32, rig: u32 },
     /// `primary_mask.len()` is not exactly `total_contrib_rows`.
     PrimaryMaskLength { expected: usize, got: usize },
-    /// Some row's `src_id` is `>= log_gain.len()`, leaving its source
-    /// without a gain to apply.
-    LogGainTooShort { needed: usize, got: usize },
 }
 
 impl std::fmt::Display for ConsensusAtlasError {
@@ -217,11 +214,6 @@ impl std::fmt::Display for ConsensusAtlasError {
             Self::PrimaryMaskLength { expected, got } => write!(
                 f,
                 "primary_mask length {got} does not match total_contrib_rows {expected}"
-            ),
-            Self::LogGainTooShort { needed, got } => write!(
-                f,
-                "log_gain length {got} too short; max source index in stack \
-                 needs at least length {needed}"
             ),
         }
     }
@@ -527,13 +519,12 @@ impl PerSphericalTileSourceStack<f32> {
     /// cluster.
     ///
     /// For each tile `t`, the rows in `tile_offsets[t]..tile_offsets[t + 1]`
-    /// whose `primary_mask` entry is `true` are gain-corrected by
-    /// `exp(log_gain[src_id[r]])`, then reduced to a single patch by taking
-    /// the per-pixel, per-channel median. Pixels whose `valid` flag is `0`
-    /// are excluded from the median; pixels where every primary contributor
-    /// is invalid become `NaN`. Tiles with an empty primary cluster fill
-    /// their entire atlas slot with `NaN`. Trailing atlas slots beyond
-    /// `rig.len()` are also `NaN`.
+    /// whose `primary_mask` entry is `true` are reduced to a single patch by
+    /// taking the per-pixel, per-channel median. Pixels whose `valid` flag
+    /// is `0` are excluded from the median; pixels where every primary
+    /// contributor is invalid become `NaN`. Tiles with an empty primary
+    /// cluster fill their entire atlas slot with `NaN`. Trailing atlas slots
+    /// beyond `rig.len()` are also `NaN`.
     ///
     /// Operates on level 0 (full base patch resolution); other levels make
     /// no sense for a panorama and would mismatch the rig's atlas slot size.
@@ -549,7 +540,6 @@ impl PerSphericalTileSourceStack<f32> {
         &self,
         rig: &SphericalTileRig,
         primary_mask: &[bool],
-        log_gain: &[f32],
     ) -> Result<Vec<f32>, ConsensusAtlasError> {
         // ── Validate ──────────────────────────────────────────────────────
         if rig.len() != self.n_tiles {
@@ -570,18 +560,6 @@ impl PerSphericalTileSourceStack<f32> {
                 got: primary_mask.len(),
             });
         }
-        let max_src = self.src_id.iter().copied().max().unwrap_or(0) as usize;
-        let needed = if self.src_id.is_empty() {
-            0
-        } else {
-            max_src + 1
-        };
-        if log_gain.len() < needed {
-            return Err(ConsensusAtlasError::LogGainTooShort {
-                needed,
-                got: log_gain.len(),
-            });
-        }
 
         // ── Per-tile consensus patches ────────────────────────────────────
         let level0 = &self.levels[0];
@@ -598,11 +576,9 @@ impl PerSphericalTileSourceStack<f32> {
                     ps,
                     c_us,
                     &self.tile_offsets,
-                    &self.src_id,
                     &level0.patches,
                     &level0.valid,
                     primary_mask,
-                    log_gain,
                 )
             })
             .collect();
@@ -633,17 +609,14 @@ impl PerSphericalTileSourceStack<f32> {
 /// a row-major `pixel_count × channels` buffer, `NaN`-filled where the
 /// primary cluster is empty for the whole tile or empty after the per-pixel
 /// `valid` filter.
-#[allow(clippy::too_many_arguments)]
 fn consensus_patch_for_tile(
     t: usize,
     ps: usize,
     channels: usize,
     tile_offsets: &[u32],
-    src_id: &[u32],
     patches: &[f32],
     valid: &[u8],
     primary_mask: &[bool],
-    log_gain: &[f32],
 ) -> Vec<f32> {
     let pixel_count = ps * ps;
     let mut out = vec![f32::NAN; pixel_count * channels];
@@ -654,28 +627,19 @@ fn consensus_patch_for_tile(
         return out;
     }
 
-    // Collect primary-cluster rows + their gains.
-    let mut primary_rows: Vec<usize> = Vec::with_capacity(row_end - row_start);
-    let mut gains: Vec<f32> = Vec::with_capacity(row_end - row_start);
-    for r in row_start..row_end {
-        if primary_mask[r] {
-            primary_rows.push(r);
-            gains.push(log_gain[src_id[r] as usize].exp());
-        }
-    }
+    let primary_rows: Vec<usize> = (row_start..row_end).filter(|&r| primary_mask[r]).collect();
     if primary_rows.is_empty() {
         return out;
     }
 
-    // Per-pixel per-channel median of gain-corrected, valid samples.
+    // Per-pixel per-channel median of valid samples.
     let mut buf: Vec<f32> = Vec::with_capacity(primary_rows.len());
     for px in 0..pixel_count {
         for ch in 0..channels {
             buf.clear();
-            for (i, &r) in primary_rows.iter().enumerate() {
+            for &r in &primary_rows {
                 if valid[r * pixel_count + px] != 0 {
-                    let v = patches[(r * pixel_count + px) * channels + ch];
-                    buf.push(v * gains[i]);
+                    buf.push(patches[(r * pixel_count + px) * channels + ch]);
                 }
             }
             if buf.is_empty() {

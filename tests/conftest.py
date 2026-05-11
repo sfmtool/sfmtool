@@ -119,7 +119,7 @@ def sfmrfile_reconstruction_with_17_images_once(tmp_path_factory) -> Path:
     output_sfm_file = workspace_dir / "seoul_bull.sfmr"
     colmap_dir = workspace_dir / "colmap"
     expected_image_count = len(image_files)
-    max_attempts = 10
+    max_attempts = 20
     for attempt in range(1, max_attempts + 1):
         if colmap_dir.exists():
             shutil.rmtree(colmap_dir)

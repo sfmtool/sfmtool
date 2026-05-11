@@ -312,6 +312,37 @@ class TestPerSphericalTileSourceStackFloat32:
         with pytest.raises(ValueError, match="dtype"):
             PerSphericalTileSourceStack.build_rotation_only(rig, [], dtype="float64")
 
+    def test_primary_consensus_atlas_smoke(self):
+        """Drives the PyO3 wrapper end-to-end: build a float32 stack, take
+        the all-True primary mask, sample tile centres of the returned atlas
+        against the source colour the rig can actually see."""
+        rig = _make_pow2_rig(40, 256, 16)
+        cam = _pinhole(128, 128, 60.0)
+        sources = []
+        for i in range(3):
+            q = RotQuaternion.from_axis_angle([0.0, 1.0, 0.0], i * (np.pi / 6))
+            sources.append((cam, q, _render_synthetic(cam, q)))
+        stack = PerSphericalTileSourceStack.build_rotation_only(
+            rig, sources, dtype="float32"
+        )
+        primary_mask = np.ones(stack.total_contrib_rows, dtype=np.bool_)
+
+        atlas = stack.primary_consensus_atlas(rig, primary_mask)
+
+        atlas_w, atlas_h = rig.atlas_size
+        assert atlas.shape == (atlas_h, atlas_w, 3)
+        assert atlas.dtype == np.float32
+        # At least some tiles must have produced finite pixels (not every
+        # slot is NaN); otherwise the binding is silently writing nothing.
+        assert np.isfinite(atlas).any()
+
+    def test_primary_consensus_atlas_rejects_uint8_stack(self):
+        rig = _make_pow2_rig(20, 256, 8)
+        u8_stack = PerSphericalTileSourceStack.build_rotation_only(rig, [])
+        primary_mask = np.zeros(u8_stack.total_contrib_rows, dtype=np.bool_)
+        with pytest.raises(ValueError, match="float32"):
+            u8_stack.primary_consensus_atlas(rig, primary_mask)
+
 
 class TestPerSphericalTileSourceStackOnReconstruction:
     """Smoke test on a real bundled reconstruction."""

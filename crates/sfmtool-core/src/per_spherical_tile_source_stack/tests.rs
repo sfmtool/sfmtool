@@ -869,30 +869,22 @@ fn find_full_tile(stack: &PerSphericalTileSourceStack<f32>) -> Option<usize> {
 }
 
 #[test]
-fn primary_consensus_atlas_median_with_gains() {
+fn primary_consensus_atlas_median_of_constants() {
     let (rig, stack, constants) = build_constant_color_stack();
     let t = find_full_tile(&stack).expect("expected at least one tile with 3 contributors");
     let row_start = stack.tile_offsets()[t] as usize;
     let row_end = stack.tile_offsets()[t + 1] as usize;
     let primary_mask = vec![true; stack.total_contrib_rows()];
-    // Distinct, non-trivial gains so the median is sensitive to them.
-    let gains = [1.0_f32, 0.5, 0.25];
-    let log_gain: Vec<f32> = gains.iter().map(|g| g.ln()).collect();
 
-    let atlas = stack
-        .primary_consensus_atlas(&rig, &primary_mask, &log_gain)
-        .unwrap();
+    let atlas = stack.primary_consensus_atlas(&rig, &primary_mask).unwrap();
 
-    // Build the expected median per channel from the three (constant ·
-    // gain) sources contributing to tile `t`.
+    // Build the expected median per channel from the three constants
+    // contributing to tile `t`.
     let src_indices: Vec<usize> = (row_start..row_end)
         .map(|r| stack.src_id()[r] as usize)
         .collect();
     let expected_median: [f32; 3] = std::array::from_fn(|ch| {
-        let mut vals: Vec<f32> = src_indices
-            .iter()
-            .map(|&i| constants[i][ch] * gains[i])
-            .collect();
+        let mut vals: Vec<f32> = src_indices.iter().map(|&i| constants[i][ch]).collect();
         vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
         vals[1] // median of 3
     });
@@ -925,10 +917,7 @@ fn primary_consensus_atlas_empty_primary_yields_nan() {
     let row_start = stack.tile_offsets()[t] as usize;
     let row_end = stack.tile_offsets()[t + 1] as usize;
     primary_mask[row_start..row_end].fill(false);
-    let log_gain = vec![0.0_f32; 3];
-    let atlas = stack
-        .primary_consensus_atlas(&rig, &primary_mask, &log_gain)
-        .unwrap();
+    let atlas = stack.primary_consensus_atlas(&rig, &primary_mask).unwrap();
 
     // Tile `t`'s entire atlas slot is NaN; another full-cluster tile is
     // populated.
@@ -979,10 +968,7 @@ fn primary_consensus_atlas_trailing_slots_are_nan() {
         "trailing-slot configuration broken (atlas_cells={atlas_cells}, n_tiles={n})"
     );
     let primary_mask = vec![true; stack.total_contrib_rows()];
-    let log_gain = vec![0.0_f32; 1];
-    let atlas = stack
-        .primary_consensus_atlas(&rig, &primary_mask, &log_gain)
-        .unwrap();
+    let atlas = stack.primary_consensus_atlas(&rig, &primary_mask).unwrap();
 
     let (atlas_w, _atlas_h) = rig.atlas_size();
     let ps = stack.base_patch_size() as usize;
@@ -1011,10 +997,7 @@ fn primary_consensus_atlas_rejects_mismatched_lengths() {
 
     // primary_mask wrong length
     let bad_mask = vec![true; r + 1];
-    let log_gain = vec![0.0_f32; 3];
-    let err = stack
-        .primary_consensus_atlas(&rig, &bad_mask, &log_gain)
-        .unwrap_err();
+    let err = stack.primary_consensus_atlas(&rig, &bad_mask).unwrap_err();
     assert_eq!(
         err,
         ConsensusAtlasError::PrimaryMaskLength {
@@ -1023,21 +1006,12 @@ fn primary_consensus_atlas_rejects_mismatched_lengths() {
         }
     );
 
-    // log_gain too short
     let mask = vec![true; r];
-    let short_gain = vec![0.0_f32; 1];
-    let err = stack
-        .primary_consensus_atlas(&rig, &mask, &short_gain)
-        .unwrap_err();
-    assert!(
-        matches!(err, ConsensusAtlasError::LogGainTooShort { .. }),
-        "expected LogGainTooShort, got {err:?}"
-    );
 
     // Tile-count mismatch via a different rig
     let other_rig = make_pow2_rig(7, 256, 4);
     let err = stack
-        .primary_consensus_atlas(&other_rig, &mask, &log_gain)
+        .primary_consensus_atlas(&other_rig, &mask)
         .unwrap_err();
     assert!(
         matches!(err, ConsensusAtlasError::TileCountMismatch { .. }),
@@ -1047,9 +1021,7 @@ fn primary_consensus_atlas_rejects_mismatched_lengths() {
     // Patch-size mismatch via a same-tile-count rig with a different patch size
     let mut bumped = make_pow2_rig(stack.n_tiles(), 256, 8);
     bumped.set_patch_size(8);
-    let err = stack
-        .primary_consensus_atlas(&bumped, &mask, &log_gain)
-        .unwrap_err();
+    let err = stack.primary_consensus_atlas(&bumped, &mask).unwrap_err();
     assert!(
         matches!(err, ConsensusAtlasError::PatchSizeMismatch { .. }),
         "expected PatchSizeMismatch, got {err:?}"

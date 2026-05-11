@@ -22,13 +22,15 @@ permissions:
   pages: write
   id-token: write
 
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
-
 jobs:
-  build:
+  docs-build:
     runs-on: ubuntu-latest
+    # Per-ref group so PR pushes supersede their own previous runs and main
+    # never gets cancelled. The global "pages" group lives on docs-deploy
+    # only, where GitHub Pages actually requires it.
+    concurrency:
+      group: docs-build-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@v4
       - uses: prefix-dev/setup-pixi@v0.8.1
@@ -40,10 +42,15 @@ jobs:
         with:
           path: site
 
-  deploy:
+  docs-deploy:
     if: github.ref == 'refs/heads/main'
-    needs: build
+    needs: docs-build
     runs-on: ubuntu-latest
+    # GitHub Pages serialises deploys through a single global group; required
+    # by actions/deploy-pages.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
