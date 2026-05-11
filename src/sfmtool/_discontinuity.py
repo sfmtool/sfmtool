@@ -528,6 +528,11 @@ OVERLAP_WINDOW = 16
 OVERLAP_BASELINE_WINDOW = 24
 OBS_WINDOW = 24
 
+# Pose-extrapolation thresholds.  Translation is sequence-dependent
+# (POSE_TRANS_FACTOR × median step length); rotation is fixed.
+POSE_TRANS_FACTOR = 3.0
+POSE_ROT_DEG = 15.0
+
 
 def _build_per_image_point_sets(recon) -> list[set[int]]:
     """Return per-image sets of 3D point ids observed in that image."""
@@ -804,19 +809,20 @@ def analyze_reconstruction(
             f" median translation: {median_trans:.4f},"
             f" median rotation: {median_rot:.2f}°"
         )
-        # Translation threshold: 3x median successive motion.  Using 1x
-        # is too tight — normal trajectory curvature produces extrapolation
-        # errors on the order of the step size.  3x leaves room for that
-        # while still catching real jumps.  Invariant to pruning since it's
-        # based on trajectory properties, not error statistics.
-        trans_threshold = 3.0 * median_trans
+        # Translation threshold: POSE_TRANS_FACTOR × median successive
+        # motion.  Using 1× is too tight — normal trajectory curvature
+        # produces extrapolation errors on the order of the step size.
+        # The factor leaves room for that while still catching real jumps.
+        # Invariant to pruning since it's based on trajectory properties,
+        # not error statistics.
+        trans_threshold = POSE_TRANS_FACTOR * median_trans
 
-        # Rotation threshold: fixed at 15°.  Unlike translation, rotation
+        # Rotation threshold: fixed.  Unlike translation, rotation
         # extrapolation quality depends on the smoothness of the trajectory,
         # not on the rotation rate.  A quadratic extrapolation from 3
         # smooth neighbors should predict within a few degrees regardless
         # of how fast the camera is rotating.
-        rot_threshold = 15.0
+        rot_threshold = POSE_ROT_DEG
 
         click.echo("  Signal thresholds:")
         click.echo(
@@ -1030,6 +1036,7 @@ def analyze_reconstruction(
                 "flagged_edges": flagged_edges,
                 "core_edges": core_edges,
                 "pair_counts": pair_counts,
+                "seq_image_names": seq_image_names,
                 "seq_image_indexes": seq_image_indexes,
                 "seq_frame_numbers": seq_frame_numbers,
                 "seq_centers": seq_centers,
@@ -1039,6 +1046,9 @@ def analyze_reconstruction(
                 "step_ratios": step_ratios,
                 "overlap_drops": overlap_drops,
                 "obs_z_scores": obs_z_scores,
+                "trans_threshold": trans_threshold,
+                "rot_threshold": rot_threshold,
+                "core_edge_reproj_errors": {},
             }
         )
 
@@ -1076,6 +1086,7 @@ def analyze_reconstruction(
             core_img_indexes.add(seq_img_indexes[a])
             core_img_indexes.add(seq_img_indexes[b])
         reproj_errors = _compute_per_image_mean_errors(recon, list(core_img_indexes))
+        s["core_edge_reproj_errors"] = reproj_errors
 
         click.echo(
             f"    {'Edge':>14}  {'Dist':>8}  {'Rot':>7}  "
