@@ -1,0 +1,23 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Python dependencies are managed by Pixi (`pixi.toml`), which Dependabot
+# does not support natively, so they are intentionally not listed here.
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      cargo-minor-and-patch:
+        update-types: ["minor", "patch"]

@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose a new capability or enhancement.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that sfmtool does not currently support well?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        What would the user-facing behavior look like? If this is a new CLI
+        command or option, sketch the invocation. If it touches a format or
+        an algorithm, mention any spec under `specs/` that would need to
+        change.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you ruled out, or workarounds you have used.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context

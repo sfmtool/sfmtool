@@ -9,8 +9,36 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          environments: test
+
+      - name: Ruff format
+        run: pixi run -e test ruff format --check src tests
+
+      - name: Ruff lint
+        run: pixi run -e test check
+
+      - name: Cargo fmt
+        run: pixi run -e test cargo fmt --all -- --check
+
+      - name: Cargo clippy
+        run: pixi run -e test cargo clippy --workspace --all-targets -- -D warnings
+
   test:
+    needs: lint
     strategy:
       fail-fast: false
       matrix:
