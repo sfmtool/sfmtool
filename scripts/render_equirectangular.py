@@ -159,11 +159,11 @@ def render(args: argparse.Namespace) -> int:
 
     t0 = time.perf_counter()
     stack = PerSphericalTileSourceStack.build_rotation_only(
-        rig, sources, dtype="float32"
+        rig, sources, dtype=args.dtype
     )
     print(
-        f"Stack: {stack.total_contrib_rows} rows across {stack.n_tiles} tiles "
-        f"({time.perf_counter() - t0:.2f}s)"
+        f"Stack: {stack.total_contrib_rows} rows across {stack.n_tiles} tiles, "
+        f"dtype={stack.dtype} ({time.perf_counter() - t0:.2f}s)"
     )
 
     t0 = time.perf_counter()
@@ -326,6 +326,16 @@ def main() -> int:
         help=(
             "Write per-cluster (primary/secondary/outliers) and per-source "
             "panoramas to {output_stem}_debug/ next to the main output."
+        ),
+    )
+    parser.add_argument(
+        "--dtype",
+        choices=["float16", "float32"],
+        default="float32",
+        help=(
+            "Stack storage dtype. 'float16' halves stack memory (level 0 is "
+            "the bulk) at the cost of ~3 decimal digits of precision. "
+            "Default: 'float32'."
         ),
     )
     return render(parser.parse_args())

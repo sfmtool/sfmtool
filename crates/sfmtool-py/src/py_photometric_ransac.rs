@@ -101,11 +101,11 @@ fn bool_array<'py>(py: Python<'py>, data: &[bool]) -> PyResult<Py<PyAny>> {
 
 /// Refine photometric agreement on ``stack`` per the spec.
 ///
-/// The stack must be float32-backed (``stack.dtype == "float32"``);
-/// uint8 stacks are rejected because the gamma exponentiation in Step 1
-/// requires a floating-point representation. Convert at construction by
-/// passing ``dtype="float32"`` to
-/// :meth:`PerSphericalTileSourceStack.build_rotation_only`.
+/// The stack must be float-backed — either ``"float16"`` or ``"float32"``.
+/// ``uint8`` stacks are rejected because the gamma exponentiation in Step 1
+/// requires a floating-point representation. For ``"float16"`` storage the
+/// chosen pyramid level is cast to f32 once internally (cheap: that level is
+/// `target_patch_size = 4` by default, regardless of base patch size).
 ///
 /// All keyword arguments mirror the spec's ``RansacPhotometricParams``;
 /// defaults match the spec's recommendations.
@@ -150,18 +150,20 @@ pub fn refine_photometric_ransac_py(
         saturation_threshold,
         seed,
     };
-    let inner_stack = match &stack.inner {
-        Inner::F32(s) => s,
+    let inner = match &stack.inner {
+        Inner::F16(s) => py
+            .detach(|| refine_photometric_ransac(s, &params))
+            .map_err(err_to_py)?,
+        Inner::F32(s) => py
+            .detach(|| refine_photometric_ransac(s, &params))
+            .map_err(err_to_py)?,
         Inner::U8(_) => {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "refine_photometric_ransac requires a float32-backed stack; \
+                "refine_photometric_ransac requires a float16- or float32-backed stack; \
                  rebuild via PerSphericalTileSourceStack.build_rotation_only(\
-                 ..., dtype=\"float32\")",
+                 ..., dtype=\"float16\" | \"float32\")",
             ));
         }
     };
-    let inner = py
-        .detach(|| refine_photometric_ransac(inner_stack, &params))
-        .map_err(err_to_py)?;
     Ok(PyRansacPhotometricOutput { inner })
 }

@@ -7,6 +7,7 @@ use nalgebra::Vector3;
 
 use super::*;
 use crate::camera_intrinsics::{CameraIntrinsics, CameraModel};
+use crate::photometric_ransac::{refine_photometric_ransac, RansacPhotometricParams};
 use crate::remap::{remap_bilinear, ImageU8};
 use crate::rot_quaternion::RotQuaternion;
 use crate::sphere_points::RelaxConfig;
@@ -14,6 +15,9 @@ use crate::spherical_tile_rig::{SphericalTileRig, SphericalTileRigParams};
 use crate::warp_map::WarpMap;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
+
+/// A list of `(camera, source-from-world rotation, image)` build inputs.
+type SourceList = Vec<(CameraIntrinsics, RotQuaternion, ImageU8)>;
 
 fn make_pow2_rig(n: usize, w_equiv: u32, target_patch: u32) -> SphericalTileRig {
     let mut rig = SphericalTileRig::new(&SphericalTileRigParams {
@@ -815,36 +819,121 @@ fn f32_constant_color_means_are_exact() {
     assert!(checked > 0, "no levels checked");
 }
 
+// ── f16 storage ─────────────────────────────────────────────────────────
+
+#[test]
+fn f16_level_zero_within_one_quantum_of_u8() {
+    // f16 can exactly represent every integer in [0, 2048], so storing u8
+    // pixel values (0–255) at level 0 should be a lossless round-trip
+    // through `f16::from_f32(v as f32).to_f32() == v as f32`.
+    let rig = make_pow2_rig(40, 256, 16);
+    let cam = pinhole_camera(128, 128, 60.0);
+    let sources: Vec<_> = (0..3)
+        .map(|i| {
+            let q = RotQuaternion::from_axis_angle(
+                Vector3::new(0.0, 1.0, 0.0),
+                (i as f64) * (PI / 6.0),
+            )
+            .unwrap();
+            let img = render_synthetic(&cam, &q);
+            (cam.clone(), q, img)
+        })
+        .collect();
+    let stack_u8 = PerSphericalTileSourceStack::<u8>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    let stack_f16 = PerSphericalTileSourceStack::<half::f16>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+
+    assert_eq!(stack_u8.tile_offsets(), stack_f16.tile_offsets());
+    assert_eq!(stack_u8.level_valid(0), stack_f16.level_valid(0));
+
+    let level0_u8 = stack_u8.level_patches(0);
+    let level0_f16 = stack_f16.level_patches(0);
+    assert_eq!(level0_u8.len(), level0_f16.len());
+    for i in 0..level0_u8.len() {
+        assert_eq!(level0_f16[i].to_f32(), level0_u8[i] as f32);
+    }
+}
+
+#[test]
+fn f16_pyramid_close_to_f32() {
+    // Below 2048 f16 has integer precision, but accumulated box-filter
+    // averages drift due to a final cast per level. Bound the absolute
+    // deviation per level loosely; on u8-range inputs (≤ 255) f16's
+    // representational quantum is 0.5, so accumulated drift after a
+    // power-of-two box average is bounded by ~0.25 per level.
+    let rig = make_pow2_rig(40, 256, 16);
+    let cam = pinhole_camera(128, 128, 60.0);
+    let sources: Vec<_> = (0..3)
+        .map(|i| {
+            let q = RotQuaternion::from_axis_angle(
+                Vector3::new(0.0, 1.0, 0.0),
+                (i as f64) * (PI / 6.0),
+            )
+            .unwrap();
+            let img = render_synthetic(&cam, &q);
+            (cam.clone(), q, img)
+        })
+        .collect();
+    let stack_f32 = PerSphericalTileSourceStack::<f32>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    let stack_f16 = PerSphericalTileSourceStack::<half::f16>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+
+    for li in 0..stack_f32.pyramid_levels() as usize {
+        let bound = 0.25 * (li as f32 + 1.0);
+        let a = stack_f32.level_patches(li);
+        let b = stack_f16.level_patches(li);
+        assert_eq!(a.len(), b.len());
+        for i in 0..a.len() {
+            let diff = (b[i].to_f32() - a[i]).abs();
+            assert!(
+                diff <= bound + 1e-3,
+                "level {li}: deviation {diff} exceeds bound {bound}"
+            );
+        }
+    }
+}
+
 // ── primary_consensus_atlas ─────────────────────────────────────────────
 
-/// Build a 3-source stack of constant-color RGB images so every valid
-/// patch pixel equals its source's constant. Returns `(rig, stack,
-/// constants)` with `constants[i]` being the `[R, G, B]` triple sampled
-/// from source `i`.
-fn build_constant_color_stack() -> (
-    SphericalTileRig,
-    PerSphericalTileSourceStack<f32>,
-    [[f32; 3]; 3],
-) {
+/// Synthetic 3-source set of constant-color RGB images plus a rig sized so
+/// the central tile is seen by all three contributors. Returns
+/// `(rig, sources, constants)` with `constants[i]` the `[R, G, B]` triple
+/// of source `i`. Because every source image is uniform, the value stored
+/// at every valid patch pixel — at every pyramid level — equals that
+/// source's constant exactly, in *any* storage type (the box filter of a
+/// constant is the same constant, with no rounding drift).
+fn constant_color_sources() -> (SphericalTileRig, SourceList, [[f32; 3]; 3]) {
     let rig = make_pow2_rig(20, 256, 4);
     let w = 64u32;
     let cam = pinhole_camera(w, w, 90.0);
     let constants: [[u8; 3]; 3] = [[100, 50, 200], [150, 75, 100], [50, 200, 150]];
-    let mut img_buffers: Vec<Vec<u8>> = constants
+    let sources: Vec<_> = constants
         .iter()
-        .map(|c| {
+        .enumerate()
+        .map(|(i, c)| {
             let mut buf = Vec::with_capacity((w * w * 3) as usize);
             for _ in 0..(w * w) {
                 buf.extend_from_slice(c);
             }
-            buf
-        })
-        .collect();
-    let sources: Vec<_> = constants
-        .iter()
-        .enumerate()
-        .map(|(i, _)| {
-            let img = ImageU8::new(w, w, 3, std::mem::take(&mut img_buffers[i]));
+            let img = ImageU8::new(w, w, 3, buf);
             // Three slightly-different rotations so all three see the same
             // central tile area but lay out distinctly.
             let q = RotQuaternion::from_axis_angle(Vector3::new(0.0, 1.0, 0.0), (i as f64) * 0.05)
@@ -852,15 +941,27 @@ fn build_constant_color_stack() -> (
             (cam.clone(), q, img)
         })
         .collect();
+    let constants_f32: [[f32; 3]; 3] =
+        std::array::from_fn(|i| std::array::from_fn(|c| constants[i][c] as f32));
+    (rig, sources, constants_f32)
+}
+
+/// Build a 3-source `f32` stack of constant-color RGB images so every valid
+/// patch pixel equals its source's constant. Returns `(rig, stack,
+/// constants)`.
+fn build_constant_color_stack() -> (
+    SphericalTileRig,
+    PerSphericalTileSourceStack<f32>,
+    [[f32; 3]; 3],
+) {
+    let (rig, sources, constants) = constant_color_sources();
     let stack = PerSphericalTileSourceStack::<f32>::build_rotation_only(
         &rig,
         &sources,
         &BuildParams::default(),
     )
     .unwrap();
-    let constants_f32: [[f32; 3]; 3] =
-        std::array::from_fn(|i| std::array::from_fn(|c| constants[i][c] as f32));
-    (rig, stack, constants_f32)
+    (rig, stack, constants)
 }
 
 /// Find a tile with all 3 sources contributing.
@@ -1025,5 +1126,134 @@ fn primary_consensus_atlas_rejects_mismatched_lengths() {
     assert!(
         matches!(err, ConsensusAtlasError::PatchSizeMismatch { .. }),
         "expected PatchSizeMismatch, got {err:?}"
+    );
+}
+
+// ── f16-backed downstream consumers ─────────────────────────────────────
+//
+// `primary_consensus_atlas` and `refine_photometric_ransac` were made
+// generic over the `PatchPixel` storage type, reading values back through
+// `PatchPixel::as_f32`. The key behavioural claim is that an f16-backed
+// stack is accepted *and treated identically* wherever an f32-backed one
+// is — switching storage width must not change results.
+//
+// For `primary_consensus_atlas` we use constant-color sources: a box
+// average of a constant is that constant with no drift, and integers ≤ 255
+// are exact in f16, so every pyramid value matches f32 bit-for-bit and the
+// two atlases must be identical.
+//
+// For `refine_photometric_ransac` the equality is even more robust: the
+// default `target_patch_size` (4) equals the rigs' base patch size, so the
+// RANSAC level is level 0, whose values come straight from the u8 warp and
+// are therefore exact integers in *both* storages. We can thus feed it the
+// general smooth-pattern sources (which produce real, non-degenerate
+// clustering) and still demand bit-identical output.
+
+#[test]
+fn primary_consensus_atlas_f16_matches_f32() {
+    let (rig, sources, _) = constant_color_sources();
+    let stack_f32 = PerSphericalTileSourceStack::<f32>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    let stack_f16 = PerSphericalTileSourceStack::<half::f16>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    assert_eq!(stack_f32.tile_offsets(), stack_f16.tile_offsets());
+    let mask = vec![true; stack_f32.total_contrib_rows()];
+
+    let atlas_f32 = stack_f32.primary_consensus_atlas(&rig, &mask).unwrap();
+    let atlas_f16 = stack_f16.primary_consensus_atlas(&rig, &mask).unwrap();
+    assert_eq!(atlas_f32.len(), atlas_f16.len());
+    // The two atlases must agree bit-for-bit, NaN == NaN (empty-cluster /
+    // trailing-slot pixels).
+    let mut populated = 0usize;
+    for (a, b) in atlas_f32.iter().zip(&atlas_f16) {
+        if a.is_nan() {
+            assert!(b.is_nan(), "f32 NaN but f16 finite ({b})");
+        } else {
+            assert_eq!(*a, *b, "atlas value diverged: f32 {a} vs f16 {b}");
+            populated += 1;
+        }
+    }
+    assert!(populated > 0, "atlas was entirely NaN — test is vacuous");
+}
+
+#[test]
+fn refine_photometric_ransac_f16_matches_f32() {
+    let rig = make_pow2_rig(40, 256, 4);
+    let cam = pinhole_camera(128, 128, 60.0);
+    let sources: Vec<_> = (0..4)
+        .map(|i| {
+            let q = RotQuaternion::from_axis_angle(
+                Vector3::new(0.0, 1.0, 0.0),
+                (i as f64) * (PI / 8.0),
+            )
+            .unwrap();
+            let img = render_synthetic(&cam, &q);
+            (cam.clone(), q, img)
+        })
+        .collect();
+    let stack_f32 = PerSphericalTileSourceStack::<f32>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+    let stack_f16 = PerSphericalTileSourceStack::<half::f16>::build_rotation_only(
+        &rig,
+        &sources,
+        &BuildParams::default(),
+    )
+    .unwrap();
+
+    let params = RansacPhotometricParams::default();
+    let out_f32 = refine_photometric_ransac(&stack_f32, &params).unwrap();
+    let out_f16 = refine_photometric_ransac(&stack_f16, &params).unwrap();
+
+    // Shape sanity (the stack→flat glue path is otherwise untested at this
+    // level — `photometric_ransac/tests.rs` exercises `_flat` directly).
+    let r = stack_f32.total_contrib_rows();
+    let n = stack_f32.n_tiles();
+    assert_eq!(out_f32.primary_mask.len(), r);
+    assert_eq!(out_f32.tile_primary_count.len(), n);
+    assert_eq!(out_f32.tile_primary_lum_mad.len(), n);
+    for i in 0..r {
+        assert!(!(out_f32.primary_mask[i] && out_f32.secondary_mask[i]));
+    }
+
+    assert_eq!(out_f32.primary_mask, out_f16.primary_mask);
+    assert_eq!(out_f32.secondary_mask, out_f16.secondary_mask);
+    assert_eq!(out_f32.tile_primary_count, out_f16.tile_primary_count);
+    assert_eq!(out_f32.tile_secondary_count, out_f16.tile_secondary_count);
+    for (a, b) in out_f32
+        .tile_primary_lum_mad
+        .iter()
+        .zip(&out_f16.tile_primary_lum_mad)
+    {
+        assert!(
+            (a.is_nan() && b.is_nan()) || a == b,
+            "primary MAD: {a} vs {b}"
+        );
+    }
+    for (a, b) in out_f32
+        .tile_secondary_lum_mad
+        .iter()
+        .zip(&out_f16.tile_secondary_lum_mad)
+    {
+        assert!(
+            (a.is_nan() && b.is_nan()) || a == b,
+            "secondary MAD: {a} vs {b}"
+        );
+    }
+    // Guard against a vacuous comparison: clustering actually happened.
+    assert!(
+        out_f32.primary_mask.iter().any(|&b| b),
+        "no row landed in any primary cluster — test is vacuous"
     );
 }

@@ -20,9 +20,10 @@ fn err_to_py(e: BuildError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("{e}"))
 }
 
-/// Internal storage: dispatches between u8 and f32 underlying stacks.
+/// Internal storage: dispatches between u8, f16, and f32 underlying stacks.
 pub(crate) enum Inner {
     U8(PerSphericalTileSourceStack<u8>),
+    F16(PerSphericalTileSourceStack<half::f16>),
     F32(PerSphericalTileSourceStack<f32>),
 }
 
@@ -31,9 +32,19 @@ pub(crate) enum Inner {
 /// and their per-source pyramids of warped patches in the tile's local
 /// pinhole frame. See ``specs/core/per-spherical-tile-source-stack.md``.
 ///
-/// Pixel storage is selected at build time via ``dtype="uint8"`` (default,
-/// compact) or ``dtype="float32"`` (autodiff-ready). The ``uint8`` ->
-/// ``float32`` conversion preserves 0-255 range, not [0, 1] scale.
+/// Pixel storage is selected at build time via ``dtype``:
+///
+/// - ``"uint8"`` (default) — compact, what NCC / GPU-byte-texture consumers
+///   want. Rejected by :meth:`primary_consensus_atlas` and
+///   :func:`refine_photometric_ransac` because Step 1's gamma exponentiation
+///   needs a floating-point representation.
+/// - ``"float16"`` — half-precision; 2× memory cut over ``"float32"`` with
+///   ~3 decimal digits of precision (plenty for u8-range source values).
+///   Accepted everywhere ``"float32"`` is.
+/// - ``"float32"`` — autodiff-ready, exact box-filter arithmetic.
+///
+/// All three preserve the source's 0-255 range (so a u8 value `v` reads back
+/// as the storage type's representation of `v`, not `v / 255.0`).
 #[pyclass(name = "PerSphericalTileSourceStack", module = "sfmtool._sfmtool")]
 pub struct PyPerSphericalTileSourceStack {
     pub(crate) inner: Inner,
@@ -56,10 +67,10 @@ impl PyPerSphericalTileSourceStack {
     ///         channel count.
     ///     max_in_flight_sources: Reserved for future parallel-source
     ///         chunking. Currently a no-op.
-    ///     dtype: Pixel storage type — ``"uint8"`` (default) or
-    ///         ``"float32"``. Float32 storage preserves 0–255 range (so
-    ///         level-0 values are byte-equivalent to uint8) and uses exact
-    ///         arithmetic for box-filter downsampling.
+    ///     dtype: Pixel storage type — ``"uint8"`` (default), ``"float16"``,
+    ///         or ``"float32"``. All three preserve 0–255 range. ``"float16"``
+    ///         halves memory vs ``"float32"`` while still being accepted by
+    ///         :meth:`primary_consensus_atlas` and the photometric RANSAC.
     ///
     /// Returns:
     ///     A populated :class:`PerSphericalTileSourceStack`.
@@ -87,6 +98,16 @@ impl PyPerSphericalTileSourceStack {
                     .map_err(err_to_py)?;
                 Inner::U8(stack)
             }
+            "float16" | "f16" | "half" => {
+                let stack = py
+                    .detach(|| {
+                        PerSphericalTileSourceStack::<half::f16>::build_rotation_only(
+                            &rig.inner, &parsed, &params,
+                        )
+                    })
+                    .map_err(err_to_py)?;
+                Inner::F16(stack)
+            }
             "float32" | "f32" => {
                 let stack = py
                     .detach(|| {
@@ -99,18 +120,19 @@ impl PyPerSphericalTileSourceStack {
             }
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "dtype must be 'uint8' or 'float32', got {other:?}"
+                    "dtype must be 'uint8', 'float16', or 'float32', got {other:?}"
                 )));
             }
         };
         Ok(Self { inner })
     }
 
-    /// Pixel storage dtype — ``"uint8"`` or ``"float32"``.
+    /// Pixel storage dtype — ``"uint8"``, ``"float16"``, or ``"float32"``.
     #[getter]
     fn dtype(&self) -> &'static str {
         match &self.inner {
             Inner::U8(_) => "uint8",
+            Inner::F16(_) => "float16",
             Inner::F32(_) => "float32",
         }
     }
@@ -120,6 +142,7 @@ impl PyPerSphericalTileSourceStack {
     fn n_tiles(&self) -> usize {
         match &self.inner {
             Inner::U8(s) => s.n_tiles(),
+            Inner::F16(s) => s.n_tiles(),
             Inner::F32(s) => s.n_tiles(),
         }
     }
@@ -134,6 +157,7 @@ impl PyPerSphericalTileSourceStack {
     fn base_patch_size(&self) -> u32 {
         match &self.inner {
             Inner::U8(s) => s.base_patch_size(),
+            Inner::F16(s) => s.base_patch_size(),
             Inner::F32(s) => s.base_patch_size(),
         }
     }
@@ -143,6 +167,7 @@ impl PyPerSphericalTileSourceStack {
     fn pyramid_levels(&self) -> u32 {
         match &self.inner {
             Inner::U8(s) => s.pyramid_levels(),
+            Inner::F16(s) => s.pyramid_levels(),
             Inner::F32(s) => s.pyramid_levels(),
         }
     }
@@ -152,6 +177,7 @@ impl PyPerSphericalTileSourceStack {
     fn channels(&self) -> u32 {
         match &self.inner {
             Inner::U8(s) => s.channels(),
+            Inner::F16(s) => s.channels(),
             Inner::F32(s) => s.channels(),
         }
     }
@@ -161,6 +187,7 @@ impl PyPerSphericalTileSourceStack {
     fn total_contrib_rows(&self) -> usize {
         match &self.inner {
             Inner::U8(s) => s.total_contrib_rows(),
+            Inner::F16(s) => s.total_contrib_rows(),
             Inner::F32(s) => s.total_contrib_rows(),
         }
     }
@@ -170,6 +197,7 @@ impl PyPerSphericalTileSourceStack {
         self.check_tile_idx(tile_idx)?;
         Ok(match &self.inner {
             Inner::U8(s) => s.n_contributors(tile_idx),
+            Inner::F16(s) => s.n_contributors(tile_idx),
             Inner::F32(s) => s.n_contributors(tile_idx),
         })
     }
@@ -180,6 +208,7 @@ impl PyPerSphericalTileSourceStack {
         self.check_tile_idx(tile_idx)?;
         let data: Vec<u32> = match &self.inner {
             Inner::U8(s) => s.src_indices_for_tile(tile_idx).to_vec(),
+            Inner::F16(s) => s.src_indices_for_tile(tile_idx).to_vec(),
             Inner::F32(s) => s.src_indices_for_tile(tile_idx).to_vec(),
         };
         Ok(PyArray1::from_vec(py, data).into_any().unbind())
@@ -191,14 +220,14 @@ impl PyPerSphericalTileSourceStack {
         self.check_level_idx(level)?;
         Ok(match &self.inner {
             Inner::U8(s) => s.level(level).size,
+            Inner::F16(s) => s.level(level).size,
             Inner::F32(s) => s.level(level).size,
         })
     }
 
     /// Tile ``tile_idx``'s patches at pyramid ``level``, as a
     /// ``(n_contributors, size, size, channels)`` numpy array (rank 3 if
-    /// ``channels == 1``). Dtype is ``uint8`` or ``float32`` depending on
-    /// the stack's :attr:`dtype`.
+    /// ``channels == 1``). Dtype matches the stack's :attr:`dtype`.
     fn patches_for_tile<'py>(
         &self,
         py: Python<'py>,
@@ -210,6 +239,11 @@ impl PyPerSphericalTileSourceStack {
         let (s, c) = self.size_and_channels(level);
         match &self.inner {
             Inner::U8(stack) => {
+                let n = stack.n_contributors(tile_idx);
+                let data = stack.patches_for_tile(tile_idx, level).to_vec();
+                reshape_patch_array(py, data, n, s, c)
+            }
+            Inner::F16(stack) => {
                 let n = stack.n_contributors(tile_idx);
                 let data = stack.patches_for_tile(tile_idx, level).to_vec();
                 reshape_patch_array(py, data, n, s, c)
@@ -235,6 +269,7 @@ impl PyPerSphericalTileSourceStack {
         let (s, _c) = self.size_and_channels(level);
         let data: Vec<u8> = match &self.inner {
             Inner::U8(stack) => stack.valid_for_tile(tile_idx, level).to_vec(),
+            Inner::F16(stack) => stack.valid_for_tile(tile_idx, level).to_vec(),
             Inner::F32(stack) => stack.valid_for_tile(tile_idx, level).to_vec(),
         };
         let n = data.len() / (s * s).max(1);
@@ -243,12 +278,17 @@ impl PyPerSphericalTileSourceStack {
 
     /// Whole-level patches buffer at ``level``, as a
     /// ``(total_contrib_rows, size, size, channels)`` numpy array. Dtype
-    /// is ``uint8`` or ``float32`` depending on the stack's :attr:`dtype`.
+    /// matches the stack's :attr:`dtype`.
     fn level_patches<'py>(&self, py: Python<'py>, level: usize) -> PyResult<Py<PyAny>> {
         self.check_level_idx(level)?;
         let (s, c) = self.size_and_channels(level);
         match &self.inner {
             Inner::U8(stack) => {
+                let n = stack.total_contrib_rows();
+                let data = stack.level_patches(level).to_vec();
+                reshape_patch_array(py, data, n, s, c)
+            }
+            Inner::F16(stack) => {
                 let n = stack.total_contrib_rows();
                 let data = stack.level_patches(level).to_vec();
                 reshape_patch_array(py, data, n, s, c)
@@ -268,6 +308,7 @@ impl PyPerSphericalTileSourceStack {
         let (s, _c) = self.size_and_channels(level);
         let data: Vec<u8> = match &self.inner {
             Inner::U8(stack) => stack.level_valid(level).to_vec(),
+            Inner::F16(stack) => stack.level_valid(level).to_vec(),
             Inner::F32(stack) => stack.level_valid(level).to_vec(),
         };
         let n = data.len() / (s * s).max(1);
@@ -279,6 +320,7 @@ impl PyPerSphericalTileSourceStack {
     fn tile_offsets<'py>(&self, py: Python<'py>) -> Py<PyAny> {
         let data: Vec<u32> = match &self.inner {
             Inner::U8(s) => s.tile_offsets().to_vec(),
+            Inner::F16(s) => s.tile_offsets().to_vec(),
             Inner::F32(s) => s.tile_offsets().to_vec(),
         };
         PyArray1::from_vec(py, data).into_any().unbind()
@@ -288,6 +330,7 @@ impl PyPerSphericalTileSourceStack {
     fn tile_id<'py>(&self, py: Python<'py>) -> Py<PyAny> {
         let data: Vec<u32> = match &self.inner {
             Inner::U8(s) => s.tile_id().to_vec(),
+            Inner::F16(s) => s.tile_id().to_vec(),
             Inner::F32(s) => s.tile_id().to_vec(),
         };
         PyArray1::from_vec(py, data).into_any().unbind()
@@ -297,6 +340,7 @@ impl PyPerSphericalTileSourceStack {
     fn src_id<'py>(&self, py: Python<'py>) -> Py<PyAny> {
         let data: Vec<u32> = match &self.inner {
             Inner::U8(s) => s.src_id().to_vec(),
+            Inner::F16(s) => s.src_id().to_vec(),
             Inner::F32(s) => s.src_id().to_vec(),
         };
         PyArray1::from_vec(py, data).into_any().unbind()
@@ -335,25 +379,32 @@ impl PyPerSphericalTileSourceStack {
         rig: &PySphericalTileRig,
         primary_mask: PyReadonlyArray1<'_, bool>,
     ) -> PyResult<Py<PyAny>> {
-        let stack = match &self.inner {
-            Inner::F32(s) => s,
-            Inner::U8(_) => {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "primary_consensus_atlas requires a float32-backed stack; \
-                     rebuild via PerSphericalTileSourceStack.build_rotation_only(\
-                     ..., dtype=\"float32\")",
-                ));
-            }
-        };
         let mask_vec: Vec<bool> = match primary_mask.as_slice() {
             Ok(s) => s.to_vec(),
             Err(_) => primary_mask.as_array().iter().copied().collect(),
         };
-        let atlas = py
-            .detach(|| stack.primary_consensus_atlas(&rig.inner, &mask_vec))
-            .map_err(consensus_err_to_py)?;
+        let (atlas, channels) = match &self.inner {
+            Inner::F16(stack) => {
+                let atlas = py
+                    .detach(|| stack.primary_consensus_atlas(&rig.inner, &mask_vec))
+                    .map_err(consensus_err_to_py)?;
+                (atlas, stack.channels() as usize)
+            }
+            Inner::F32(stack) => {
+                let atlas = py
+                    .detach(|| stack.primary_consensus_atlas(&rig.inner, &mask_vec))
+                    .map_err(consensus_err_to_py)?;
+                (atlas, stack.channels() as usize)
+            }
+            Inner::U8(_) => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "primary_consensus_atlas requires a float16- or float32-backed stack; \
+                     rebuild via PerSphericalTileSourceStack.build_rotation_only(\
+                     ..., dtype=\"float16\" | \"float32\")",
+                ));
+            }
+        };
         let (atlas_w, atlas_h) = rig.inner.atlas_size();
-        let channels = stack.channels() as usize;
         let arr = if channels == 1 {
             PyArray1::from_vec(py, atlas)
                 .reshape([atlas_h as usize, atlas_w as usize])?
@@ -397,6 +448,7 @@ impl PyPerSphericalTileSourceStack {
     fn size_and_channels(&self, level: usize) -> (usize, usize) {
         match &self.inner {
             Inner::U8(s) => (s.level(level).size as usize, s.channels() as usize),
+            Inner::F16(s) => (s.level(level).size as usize, s.channels() as usize),
             Inner::F32(s) => (s.level(level).size as usize, s.channels() as usize),
         }
     }

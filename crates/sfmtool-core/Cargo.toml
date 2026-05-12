@@ -13,6 +13,7 @@ default = ["gpu"]
 gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 
 [dependencies]
+half = "2"
 nalgebra = "0.33"
 ndarray = "0.16"
 kiddo = "5"
