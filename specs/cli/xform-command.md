@@ -71,6 +71,25 @@ combinations. Also removes 3D points with no remaining observations and remaps i
 --exclude-range "23-25,47"
 ```
 
+#### `--include-by-distribution <COUNT>`
+
+Keeps a small, strategically-chosen subset of `COUNT` views instead of decimating blindly. A first
+phase scatters seed views across the distinct parts of the capture (using shared observations, not
+spatial distance, as the notion of "distinct"); a second phase spends the rest of the budget
+densifying around those seeds so covered points end up seen from genuinely different directions and
+the subset solves cleanly on its own. The unit of selection is the rig frame when rig data is
+present (both fisheyes of a 360° pair kept together), otherwise the individual image. Typically
+followed by `--remove-short-tracks 1` to drop stranded single-observation points.
+
+```bash
+--include-by-distribution 16
+--include-by-distribution 16 --remove-short-tracks 1
+```
+
+See [xform-select-by-distribution-command.md](xform-select-by-distribution-command.md) for the full
+specification — the two phases, the parallax-based coverage objective, the incremental algorithm,
+and parameters.
+
 #### `--remove-isolated <factor>,<value_spec>`
 
 Removes 3D points whose nearest neighbor distance exceeds `factor * reference_value`.
