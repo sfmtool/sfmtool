@@ -70,10 +70,14 @@ list of contributing source images. Each contribution is a per-source
 image pyramid of warped patches.
 
 Storage is generic over a [`PatchPixel`] type — `u8` (compact, what
-NCC / GPU-byte-texture consumers want) and `f32` (autodiff-ready) are
-provided. The `u8` → `f32` conversion preserves **range**
-(0–255 maps to `0.0–255.0`), not scale, so an `f32` stack is
-byte-equivalent to a `u8` stack at level 0 modulo type cost.
+NCC / GPU-byte-texture consumers want), `half::f16` (2× memory cut over
+`f32` with ~3-decimal-digit precision, which suffices for u8-range source
+values), and `f32` (autodiff-ready) are provided. All three conversions
+preserve **range** (0–255 maps to `0.0–255.0`), not scale, so an `f32`
+or `f16` stack is byte-equivalent to a `u8` stack at level 0 modulo type
+cost. Downstream consumers that work in f32 regardless of storage
+(`primary_consensus_atlas`, `refine_photometric_ransac`) read pixel
+values through `PatchPixel::as_f32`.
 
 **Pyramid sizing.** Let `B = rig.patch_size` (the *base patch size*)
 and `L = log2(B) + 1` (the *level count*). For `B = 32`, `L = 6`,
@@ -171,16 +175,25 @@ The CSR layout supports three access patterns naturally:
 /// Pixel-element storage trait.
 pub trait PatchPixel: Copy + Default + Send + Sync + 'static {
     /// Convert a u8 source-image sample into storage type. Preserves
-    /// **range** (0–255 maps to `0.0–255.0` for f32), not scale.
+    /// **range** (0–255 maps to `0.0–255.0` for f32/f16), not scale.
     fn from_u8(v: u8) -> Self;
 
     /// Mean of four storage-typed neighbours. For u8 this is the
     /// round-to-nearest u16 mean `(a + b + c + d + 2) / 4`; for f32
-    /// it is exact arithmetic `0.25 · (a + b + c + d)`.
+    /// it is exact arithmetic `0.25 · (a + b + c + d)`; for f16 the
+    /// sum and divide are done in f32 and the result is cast back
+    /// (single rounding step at the end).
     fn box_avg_4(a: Self, b: Self, c: Self, d: Self) -> Self;
+
+    /// Range-preserving cast to f32 (so a u8 value `v` maps to
+    /// `v as f32`, not `v / 255.0`). Lets downstream consumers
+    /// (`primary_consensus_atlas`, `refine_photometric_ransac`) read
+    /// pixel values uniformly in f32 regardless of storage type.
+    fn as_f32(self) -> f32;
 }
 
 impl PatchPixel for u8 { /* … */ }
+impl PatchPixel for half::f16 { /* … */ }
 impl PatchPixel for f32 { /* … */ }
 
 /// Per-pyramid-level CSR-packed storage.

@@ -2657,6 +2657,7 @@ version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b2dba356160b54f5371b550575b78130a54718b4c6e46b3f33a6da74a27e78b"
 dependencies = [
+ "half",
  "libc",
  "ndarray",
  "num-complex",
@@ -3831,6 +3832,7 @@ dependencies = [
  "approx",
  "bytemuck",
  "criterion",
+ "half",
  "image",
  "kiddo",
  "nalgebra",
@@ -3850,6 +3852,7 @@ name = "sfmtool-py"
 version = "0.2.0"
 dependencies = [
  "chrono",
+ "half",
  "matches-format",
  "nalgebra",
  "ndarray",

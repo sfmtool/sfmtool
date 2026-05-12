@@ -24,7 +24,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
-use crate::per_spherical_tile_source_stack::PerSphericalTileSourceStack;
+use crate::per_spherical_tile_source_stack::{PatchPixel, PerSphericalTileSourceStack};
 
 /// Tuning knobs; defaults match the spec's recommendations.
 #[derive(Debug, Clone)]
@@ -139,8 +139,14 @@ impl std::error::Error for RansacPhotometricError {}
 /// `params.target_patch_size` exactly; reads patches and valid masks from
 /// that level; runs one per-tile primary RANSAC pass and one secondary
 /// RANSAC pass over the primary-rejected rows.
-pub fn refine_photometric_ransac(
-    stack: &PerSphericalTileSourceStack<f32>,
+///
+/// Generic over the stack's storage type. For non-f32 storage (u8, f16) the
+/// chosen pyramid level is converted to f32 once via [`PatchPixel::as_f32`]
+/// before the prep loop. That intermediate buffer is sized only to the
+/// chosen level (typically `target_patch_size = 4`), so it is small even at
+/// large `total_contrib_rows`.
+pub fn refine_photometric_ransac<T: PatchPixel>(
+    stack: &PerSphericalTileSourceStack<T>,
     params: &RansacPhotometricParams,
 ) -> Result<RansacPhotometricOutput, RansacPhotometricError> {
     validate_params(params)?;
@@ -166,12 +172,17 @@ pub fn refine_photometric_ransac(
     let c = stack.channels() as usize;
     let r_total = stack.total_contrib_rows();
     let n_tiles = stack.n_tiles();
-    let patches = stack.level_patches(level); // [R * s * s * C]
+    let patches_raw = stack.level_patches(level); // [R * s * s * C], T
     let valid = stack.level_valid(level); // [R * s * s], strictly {0, 1}
     let tile_offsets = stack.tile_offsets();
 
+    // Convert the chosen level's patches to f32 once. The buffer is sized to
+    // the RANSAC target level (`target_patch_size = 4` by default), so it is
+    // small even when level 0 would be huge.
+    let patches_f32: Vec<f32> = patches_raw.iter().map(|p| p.as_f32()).collect();
+
     refine_flat(
-        patches,
+        &patches_f32,
         valid,
         tile_offsets,
         s as u32,

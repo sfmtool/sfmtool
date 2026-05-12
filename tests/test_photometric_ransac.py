@@ -67,8 +67,9 @@ def _build_seoul_bull_stack(
     n_tiles: int = 160,
     arc_pixels: int = 384,
     seed: int = 1234,
+    dtype: str = "float32",
 ) -> PerSphericalTileSourceStack:
-    """Build an f32 stack from the seoul_bull reconstruction."""
+    """Build a stack from the seoul_bull reconstruction (default f32)."""
     import cv2  # local import — heavy module, only needed by integration
 
     recon = SfmrReconstruction.load(sfmr_path)
@@ -92,9 +93,7 @@ def _build_seoul_bull_stack(
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         sources.append((cam, q, rgb))
 
-    return PerSphericalTileSourceStack.build_rotation_only(
-        rig, sources, dtype="float32"
-    )
+    return PerSphericalTileSourceStack.build_rotation_only(rig, sources, dtype=dtype)
 
 
 def _row_mean_lum_at_level(
@@ -132,6 +131,14 @@ def _row_mean_lum_at_level(
 def seoul_bull_stack(sfmrfile_reconstruction_with_17_images: Path):
     """Build the seoul_bull stack from the shared 17-image reconstruction."""
     return _build_seoul_bull_stack(sfmrfile_reconstruction_with_17_images)
+
+
+@pytest.fixture
+def seoul_bull_stack_f16(sfmrfile_reconstruction_with_17_images: Path):
+    """The seoul_bull stack with half-precision pixel storage."""
+    return _build_seoul_bull_stack(
+        sfmrfile_reconstruction_with_17_images, dtype="float16"
+    )
 
 
 class TestRefinePhotometricRansacSeoulBull:
@@ -214,3 +221,27 @@ class TestRefinePhotometricRansacAPISmoke:
         assert out.tile_secondary_lum_mad.dtype == np.float32
         # Cluster invariants: primary and secondary disjoint.
         assert not np.any(out.primary_mask & out.secondary_mask)
+
+    def test_accepts_float16_stack(self, seoul_bull_stack_f16):
+        """A float16-backed stack must be accepted (not rejected like uint8)
+        and produce the same-shaped, same-typed output as a float32 one."""
+        stack = seoul_bull_stack_f16
+        assert stack.dtype == "float16"
+        out = refine_photometric_ransac(stack)
+        n_tiles = stack.n_tiles
+        r = stack.total_contrib_rows
+        assert out.primary_mask.shape == (r,)
+        assert out.primary_mask.dtype == np.bool_
+        assert out.tile_primary_count.shape == (n_tiles,)
+        assert out.tile_primary_lum_mad.dtype == np.float32
+        assert not np.any(out.primary_mask & out.secondary_mask)
+        # Non-degenerate: the algorithm placed at least one row in a primary
+        # cluster, so the f16 → f32 level conversion fed it usable values.
+        assert out.primary_mask.any()
+
+    def test_rejects_uint8_stack_f16_message_mentions_float16(self):
+        rig = SphericalTileRig(n=10, arc_per_pixel=2 * np.pi / 256, seed=1)
+        rig.set_patch_size(_next_pow2(rig.patch_size))
+        u8_stack = PerSphericalTileSourceStack.build_rotation_only(rig, [])
+        with pytest.raises(ValueError, match="float16"):
+            refine_photometric_ransac(u8_stack)

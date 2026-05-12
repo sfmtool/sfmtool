@@ -344,6 +344,68 @@ class TestPerSphericalTileSourceStackFloat32:
             u8_stack.primary_consensus_atlas(rig, primary_mask)
 
 
+class TestPerSphericalTileSourceStackFloat16:
+    """The dtype='float16' build path. Equality of f16-backed and
+    f32-backed *results* is pinned by Rust unit tests; here we verify the
+    PyO3 F16 enum arm is wired through every accessor and that the f32-only
+    consumers now accept it."""
+
+    def _synthetic_sources(self):
+        cam = _pinhole(128, 128, 60.0)
+        sources = []
+        for i in range(3):
+            q = RotQuaternion.from_axis_angle([0.0, 1.0, 0.0], i * (np.pi / 6))
+            sources.append((cam, q, _render_synthetic(cam, q)))
+        return sources
+
+    def test_dtype_float16_level_zero_matches_uint8(self):
+        rig = _make_pow2_rig(40, 256, 16)
+        sources = self._synthetic_sources()
+        stack_u8 = PerSphericalTileSourceStack.build_rotation_only(rig, sources)
+        stack_f16 = PerSphericalTileSourceStack.build_rotation_only(
+            rig, sources, dtype="float16"
+        )
+        assert stack_f16.dtype == "float16"
+        assert stack_u8.total_contrib_rows == stack_f16.total_contrib_rows
+
+        l0_u8 = stack_u8.level_patches(0)
+        l0_f16 = stack_f16.level_patches(0)
+        assert l0_f16.dtype == np.float16
+        # f16 represents every integer in [0, 255] exactly: lossless at L0.
+        np.testing.assert_array_equal(
+            l0_f16.astype(np.float32), l0_u8.astype(np.float32)
+        )
+        np.testing.assert_array_equal(stack_f16.level_valid(0), stack_u8.level_valid(0))
+
+        # Per-tile accessor agrees with the whole-level buffer and carries
+        # the f16 dtype too (exercises the F16 arm of patches_for_tile).
+        for t in range(stack_f16.n_tiles):
+            if stack_f16.n_contributors(t) == 0:
+                continue
+            pt = stack_f16.patches_for_tile(t, 0)
+            assert pt.dtype == np.float16
+            break
+
+    def test_dtype_alias_f16_accepted(self):
+        rig = _make_pow2_rig(20, 256, 8)
+        stack = PerSphericalTileSourceStack.build_rotation_only(rig, [], dtype="f16")
+        assert stack.dtype == "float16"
+
+    def test_primary_consensus_atlas_accepts_float16_stack(self):
+        rig = _make_pow2_rig(40, 256, 16)
+        sources = self._synthetic_sources()
+        stack = PerSphericalTileSourceStack.build_rotation_only(
+            rig, sources, dtype="float16"
+        )
+        primary_mask = np.ones(stack.total_contrib_rows, dtype=np.bool_)
+        atlas = stack.primary_consensus_atlas(rig, primary_mask)
+        atlas_w, atlas_h = rig.atlas_size
+        assert atlas.shape == (atlas_h, atlas_w, 3)
+        # Atlas is always f32 regardless of stack storage (Step 1 works in f32).
+        assert atlas.dtype == np.float32
+        assert np.isfinite(atlas).any()
+
+
 class TestPerSphericalTileSourceStackOnReconstruction:
     """Smoke test on a real bundled reconstruction."""
 

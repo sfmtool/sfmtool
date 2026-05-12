@@ -64,8 +64,15 @@ pub trait PatchPixel: Copy + Default + Send + Sync + 'static {
 
     /// Mean of four storage-typed neighbours. For `u8` this is the
     /// round-to-nearest u16 mean `(a + b + c + d + 2) / 4`; for `f32` it
-    /// is exact arithmetic `0.25 · (a + b + c + d)`.
+    /// is exact arithmetic `0.25 · (a + b + c + d)`; for `f16` the average
+    /// is computed in `f32` and cast back at the end (one rounding step).
     fn box_avg_4(a: Self, b: Self, c: Self, d: Self) -> Self;
+
+    /// Range-preserving cast to `f32` (so a u8 value `v` maps to `v as f32`,
+    /// not `v as f32 / 255.0`). Used by downstream consumers
+    /// (`primary_consensus_atlas`, `refine_photometric_ransac`) that work in
+    /// f32 regardless of the stack's storage type.
+    fn as_f32(self) -> f32;
 }
 
 impl PatchPixel for u8 {
@@ -78,6 +85,11 @@ impl PatchPixel for u8 {
     fn box_avg_4(a: u8, b: u8, c: u8, d: u8) -> Self {
         ((a as u16 + b as u16 + c as u16 + d as u16 + 2) / 4) as u8
     }
+
+    #[inline]
+    fn as_f32(self) -> f32 {
+        self as f32
+    }
 }
 
 impl PatchPixel for f32 {
@@ -89,6 +101,29 @@ impl PatchPixel for f32 {
     #[inline]
     fn box_avg_4(a: f32, b: f32, c: f32, d: f32) -> Self {
         0.25 * (a + b + c + d)
+    }
+
+    #[inline]
+    fn as_f32(self) -> f32 {
+        self
+    }
+}
+
+impl PatchPixel for half::f16 {
+    #[inline]
+    fn from_u8(v: u8) -> Self {
+        half::f16::from_f32(v as f32)
+    }
+
+    #[inline]
+    fn box_avg_4(a: Self, b: Self, c: Self, d: Self) -> Self {
+        // Average in f32 to avoid losing precision on the sum, then cast back.
+        half::f16::from_f32(0.25 * (a.to_f32() + b.to_f32() + c.to_f32() + d.to_f32()))
+    }
+
+    #[inline]
+    fn as_f32(self) -> f32 {
+        half::f16::to_f32(self)
     }
 }
 
@@ -514,7 +549,7 @@ impl<T: PatchPixel> PerSphericalTileSourceStack<T> {
     }
 }
 
-impl PerSphericalTileSourceStack<f32> {
+impl<T: PatchPixel> PerSphericalTileSourceStack<T> {
     /// Build a per-tile consensus atlas from the photometric-RANSAC primary
     /// cluster.
     ///
@@ -532,7 +567,9 @@ impl PerSphericalTileSourceStack<f32> {
     /// Output layout matches the rig's atlas: row-major
     /// `atlas_h × atlas_w × channels` `f32`, with each tile's `patch_size ×
     /// patch_size × channels` block written at `rig.tile_atlas_origin(t)`.
-    /// Tiles are processed in parallel via rayon.
+    /// Stored pixel values are read through [`PatchPixel::as_f32`], so a
+    /// `u8`-backed stack range-promotes to `0.0–255.0` f32 just like an
+    /// `f32`-backed stack. Tiles are processed in parallel via rayon.
     ///
     /// # Errors
     /// See [`ConsensusAtlasError`].
@@ -608,13 +645,13 @@ impl PerSphericalTileSourceStack<f32> {
 /// Compute one tile's consensus patch from its primary-cluster rows. Returns
 /// a row-major `pixel_count × channels` buffer, `NaN`-filled where the
 /// primary cluster is empty for the whole tile or empty after the per-pixel
-/// `valid` filter.
-fn consensus_patch_for_tile(
+/// `valid` filter. Pixel values are read through [`PatchPixel::as_f32`].
+fn consensus_patch_for_tile<T: PatchPixel>(
     t: usize,
     ps: usize,
     channels: usize,
     tile_offsets: &[u32],
-    patches: &[f32],
+    patches: &[T],
     valid: &[u8],
     primary_mask: &[bool],
 ) -> Vec<f32> {
@@ -639,7 +676,7 @@ fn consensus_patch_for_tile(
             buf.clear();
             for &r in &primary_rows {
                 if valid[r * pixel_count + px] != 0 {
-                    buf.push(patches[(r * pixel_count + px) * channels + ch]);
+                    buf.push(patches[(r * pixel_count + px) * channels + ch].as_f32());
                 }
             }
             if buf.is_empty() {
