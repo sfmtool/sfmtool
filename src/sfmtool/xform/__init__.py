@@ -25,6 +25,7 @@ from ._point_filters import (
 from ._rotate import RotateTransform
 from ._scale import ScaleTransform
 from ._scale_by_measurements import ScaleByMeasurementsTransform
+from ._select_by_distribution import SelectByDistributionFilter
 from ._similarity import SimilarityTransform
 from ._switch_camera_model import SwitchCameraModelTransform
 from ._translate import TranslateTransform
@@ -45,6 +46,7 @@ __all__ = [
     "ExcludeRangeFilter",
     "IncludeGlobFilter",
     "ExcludeGlobFilter",
+    "SelectByDistributionFilter",
     "BundleAdjustTransform",
     "AlignToTransform",
     "AlignToInputTransform",
