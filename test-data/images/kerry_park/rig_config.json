@@ -1,0 +1,40 @@
+[
+  {
+    "camera_intrinsics": {
+      "model": "OPENCV_FISHEYE",
+      "width": 480,
+      "height": 480,
+      "parameters": {
+        "focal_length_x": 129.1499937015594,
+        "focal_length_y": 129.2573627423474,
+        "principal_point_x": 240.0,
+        "principal_point_y": 240.0,
+        "radial_distortion_k1": 0.038113353966529886,
+        "radial_distortion_k2": -0.00800851799065643,
+        "radial_distortion_k3": 0.008329720504707577,
+        "radial_distortion_k4": -0.0026901578801066814
+      }
+    },
+    "cameras": [
+      {
+        "image_prefix": "fisheye_left/",
+        "ref_sensor": true
+      },
+      {
+        "image_prefix": "fisheye_right/",
+        "ref_sensor": false,
+        "cam_from_rig_rotation": [
+          0,
+          0,
+          1,
+          0
+        ],
+        "cam_from_rig_translation": [
+          0,
+          0,
+          -0.0307
+        ]
+      }
+    ]
+  }
+]

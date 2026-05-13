@@ -56,9 +56,10 @@ When finishing a task, run the checks for what you changed:
 - `specs/` — design specs. Read the relevant file before making non-trivial
   changes and update it when behavior diverges. Subdirs: `cli/` (per-command),
   `core/` (algorithm design), `formats/`, `gui/`, `workspace/`.
-- `test-data/images/` — three checked-in datasets:
+- `test-data/images/` — four checked-in datasets:
   `seoul_bull_sculpture` (17 @ 270×480), `dino_dog_toy` (85 @ 2040×1536),
-  `seattle_backyard` (26 @ 360×640). Bootstrap with `scripts/init_dataset_*.sh`.
+  `seattle_backyard` (26 @ 360×640), `kerry_park` (24 rig frames × 2 fisheyes
+  @ 480×480, with `rig_config.json`). Bootstrap with `scripts/init_dataset_*.sh`.
 - `docs/` — Zensical site, deployed to GitHub Pages.
 - `.github/workflows/` — `ci.yml` (Linux + Windows, runs `coverage-all`, uploads
   to codecov), `docs.yml`, `publish_to_pypi.yml`.
