@@ -73,22 +73,24 @@ combinations. Also removes 3D points with no remaining observations and remaps i
 
 #### `--include-by-distribution <COUNT>`
 
-Keeps a small, strategically-chosen subset of `COUNT` views instead of decimating blindly. A first
-phase scatters seed views across the distinct parts of the capture (using shared observations, not
-spatial distance, as the notion of "distinct"); a second phase spends the rest of the budget
-densifying around those seeds so covered points end up seen from genuinely different directions and
-the subset solves cleanly on its own. The unit of selection is the rig frame when rig data is
-present (both fisheyes of a 360° pair kept together), otherwise the individual image. Typically
-followed by `--remove-short-tracks 1` to drop stranded single-observation points.
+Keeps a small, strategically-chosen subset of `COUNT` views instead of decimating blindly. A single
+greedy loop drives the choice off the reconstructed point cloud: a farthest-point step always heads
+to the part of the cloud that is currently worst-covered, and at each such target it adds only the
+observers that open up genuinely new viewing angles on it (so covered points end up well
+triangulated and the subset solves cleanly on its own). The unit of selection is the rig frame when
+rig data is present (both fisheyes of a 360° pair kept together), otherwise the individual image.
+Operates on the cloud as given — clean it first if needed (e.g. `--filter-by-reprojection-error`,
+`--remove-isolated`) — and typically follow with `--remove-short-tracks 1` to drop stranded
+single-observation points.
 
 ```bash
 --include-by-distribution 16
---include-by-distribution 16 --remove-short-tracks 1
+--filter-by-reprojection-error 2.0 --include-by-distribution 16 --remove-short-tracks 1
 ```
 
 See [xform-select-by-distribution-command.md](xform-select-by-distribution-command.md) for the full
-specification — the two phases, the parallax-based coverage objective, the incremental algorithm,
-and parameters.
+specification — the farthest-point coverage loop, angular thinning of observers, the incremental
+algorithm, and parameters.
 
 #### `--remove-isolated <factor>,<value_spec>`
 

@@ -28,6 +28,7 @@ from ..xform import (
     RotateTransform,
     ScaleByMeasurementsTransform,
     ScaleTransform,
+    SelectByDistributionFilter,
     SwitchCameraModelTransform,
     TranslateTransform,
     apply_transforms,
@@ -301,6 +302,35 @@ def parse_transform_args(args: list[str]) -> list:
             i += 1
             transforms.append(ExcludeGlobFilter(args[i]))
 
+        elif arg == "--include-by-distribution":
+            if i + 1 >= len(args):
+                raise click.UsageError("--include-by-distribution requires an argument")
+            i += 1
+            param = args[i]
+
+            parts = param.split(",")
+            try:
+                count = int(parts[0])
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --include-by-distribution parameter '{param}': {e}"
+                )
+            if count < 2:
+                raise click.UsageError(
+                    f"--include-by-distribution COUNT must be >= 2, got {count}"
+                )
+            verbose = False
+            for modifier in parts[1:]:
+                if modifier.strip() == "verbose":
+                    verbose = True
+                else:
+                    raise click.UsageError(
+                        f"Unknown --include-by-distribution modifier '{modifier}' "
+                        "(expected 'verbose')"
+                    )
+
+            transforms.append(SelectByDistributionFilter(count, verbose=verbose))
+
         elif arg == "--camera-model":
             if i + 1 >= len(args):
                 raise click.UsageError("--camera-model requires an argument")
@@ -407,6 +437,11 @@ def parse_transform_args(args: list[str]) -> list:
     help="Exclude images whose name matches a glob pattern (e.g., '*fisheye_right*')",
 )
 @click.option(
+    "--include-by-distribution",
+    multiple=True,
+    help="Keep COUNT strategically distributed cameras/rig frames; append ',verbose' for a per-step trace (e.g., '16' or '16,verbose')",
+)
+@click.option(
     "--camera-model",
     multiple=True,
     help=(
@@ -449,6 +484,7 @@ def xform(ctx, input_path, output_path, **kwargs):
       --remove-large-features size        Remove points with max feature size > threshold
       --remove-isolated factor,spec       Remove isolated points (NN distance filter)
       --filter-by-reprojection-error val  Remove points with reprojection error > threshold
+      --include-by-distribution COUNT[,verbose]  Keep COUNT well-distributed cameras/rig frames
 
     \b
     Camera model:
@@ -531,6 +567,7 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--include-range, --exclude-range, "
             "--include-glob, --exclude-glob, --remove-short-tracks, --remove-narrow-tracks, "
             "--remove-large-features, --remove-isolated, --filter-by-reprojection-error, "
+            "--include-by-distribution, "
             "--camera-model, --bundle-adjust, --align-to, --align-to-input"
         )
 
