@@ -65,10 +65,25 @@ Scales all 3D points and camera positions relative to the origin. Must be positi
 
 Filters images by file number. Supports single numbers, ranges, and comma-separated
 combinations. Also removes 3D points with no remaining observations and remaps indices.
+Rig metadata is pruned alongside the images: any rig frame whose images are all removed
+is dropped, and partially-kept frames are retained with the surviving sensors.
 
 ```bash
 --include-range 10-50
 --exclude-range "23-25,47"
+```
+
+#### `--include-glob <PATTERN>` / `--exclude-glob <PATTERN>`
+
+Filters images by filename pattern, matched against the workspace-relative image name
+(e.g. `subdir/fisheye_left/0001.jpg`) using Python's `fnmatch.fnmatch`. Note that
+`fnmatch` is *not* shell globbing: `*` matches across `/` boundaries. As with range
+filters, points with no remaining observations are removed and rig metadata is pruned;
+an error is raised if the filter would keep zero images.
+
+```bash
+--include-glob "*fisheye_left*"
+--exclude-glob "*/fisheye_right/*"
 ```
 
 #### `--include-by-distribution <COUNT>`
@@ -118,12 +133,56 @@ Removes 3D points whose maximum viewing angle span is less than the threshold.
 --remove-narrow-tracks 5deg
 ```
 
+#### `--remove-large-features <size>`
+
+Removes 3D points whose largest SIFT feature in the track exceeds `size` pixels.
+"Feature size" is the average of the two column norms of the SIFT affine-shape matrix
+(an approximate per-feature radius in source-image pixels, with no rescale to the
+reconstructed-image resolution), and the per-track value is the maximum across its
+observations.
+
+This filter reads the original `.sift` files associated with the reconstruction's
+workspace (resolved as `<workspace_dir>/<image_parent>/<feature_prefix_dir>/<name>.sift`),
+so the SIFT artifacts must still be present where the reconstruction was created.
+A missing file raises `FileNotFoundError`.
+
+```bash
+--remove-large-features 50
+```
+
 #### `--filter-by-reprojection-error <threshold>`
 
 Removes 3D points with reprojection error exceeding the threshold (in pixels).
 
 ```bash
 --filter-by-reprojection-error 2.0
+```
+
+### Camera Model
+
+#### `--camera-model <NAME>`
+
+Converts every camera in the reconstruction to a different COLMAP camera model. The
+target name is case-insensitive and must be one of the models registered in
+`_CAMERA_PARAM_NAMES` (e.g. `SIMPLE_PINHOLE`, `PINHOLE`, `SIMPLE_RADIAL`, `RADIAL`,
+`OPENCV`, `OPENCV_FISHEYE`, ...). Each camera is converted independently, so a
+reconstruction with mixed source models is fine; image width and height are preserved.
+Parameter handling:
+
+- Parameters whose names are identical in source and target are carried over as-is.
+- Parameters that exist only in the target model are initialized to zero.
+- Parameters that exist only in the source model are dropped.
+- When the focal-length representation differs: a single `focal_length` becomes split
+  `focal_length_x = focal_length_y` and vice versa; collapsing split → single averages
+  `fx` and `fy` and prints a warning if they differ by more than a small relative tolerance.
+- If every camera already uses the target model, all parameter names match and values
+  are carried over unchanged (the operation is effectively a no-op, but is still logged).
+
+The typical use is to widen the parameter set right before bundle adjustment — e.g.
+upgrading `SIMPLE_RADIAL` to `RADIAL` so bundle adjustment has a `k2` term to refine.
+
+```bash
+--camera-model RADIAL
 ```
 
 ### Optimization
@@ -218,4 +277,14 @@ sfm xform input.sfmr output.sfmr \
   --remove-short-tracks 2 \
   --bundle-adjust \
   --scale-by-measurements measurements.yaml
+
+# Keep only the left fisheye of a 360° rig and clean up
+sfm xform rig.sfmr left_only.sfmr \
+  --include-glob "*fisheye_left*" \
+  --remove-short-tracks 1
+
+# Upgrade SIMPLE_RADIAL → RADIAL so bundle adjustment can refine k2
+sfm xform input.sfmr refined.sfmr \
+  --camera-model RADIAL \
+  --bundle-adjust
 ```
