@@ -10,10 +10,10 @@ from click.testing import CliRunner
 from sfmtool.visualization._epipolar_display import (
     _compute_fundamental_matrix,
     _draw_epipolar_line,
-    _draw_polar_epipolar_line,
+    _draw_polyline,
     _get_color_palette,
 )
-from sfmtool._sfmtool import CameraIntrinsics
+from sfmtool._sfmtool import CameraIntrinsics, RotQuaternion, epipolar_curves
 
 
 # ===== Color Palette Tests =====
@@ -118,14 +118,158 @@ class TestDrawEpipolarLine:
         assert img.sum() == 0  # No pixels drawn
 
 
-class TestDrawPolarEpipolarLine:
-    def test_draws_line(self):
+class TestDrawPolyline:
+    def test_draws_polyline(self):
         img = np.zeros((200, 200, 3), dtype=np.uint8)
-        line = np.array([0, 1, -100])  # y = 100
-        epipole = np.array([100, 100])
-        feature_point = np.array([150, 100])
-        _draw_polar_epipolar_line(img, line, epipole, feature_point, (255, 255, 255), 1)
-        assert img.sum() > 0
+        polyline = np.array([[10.0, 100.0], [100.0, 100.0], [190.0, 100.0]])
+        _draw_polyline(img, polyline, (255, 255, 255), 1)
+        assert img[100, 100, 0] > 0
+
+    def test_too_short_polyline_noop(self):
+        img = np.zeros((200, 200, 3), dtype=np.uint8)
+        _draw_polyline(img, np.array([[10.0, 10.0]]), (255, 255, 255), 1)
+        assert img.sum() == 0
+
+
+class TestEpipolarCurves:
+    @staticmethod
+    def _pinhole(width=640, height=480, f=500.0):
+        return CameraIntrinsics(
+            "PINHOLE",
+            width,
+            height,
+            {
+                "focal_length_x": f,
+                "focal_length_y": f,
+                "principal_point_x": width / 2,
+                "principal_point_y": height / 2,
+            },
+        )
+
+    def test_curve_satisfies_fundamental_constraint_pinhole(self):
+        cam = self._pinhole()
+        q_identity = np.array([1.0, 0.0, 0.0, 0.0])
+        t1 = np.zeros(3)
+        t2 = np.array([1.0, 0.0, 0.0])
+        pts1 = np.array([[400.0, 305.0], [250.0, 180.0]])
+        anchors = np.array([5.0, 5.0])
+        curves = epipolar_curves(
+            pts1,
+            anchors,
+            cam,
+            q_identity,
+            t1,
+            cam,
+            q_identity,
+            t2,
+        )
+        assert len(curves) == 2
+
+        K = cam.intrinsic_matrix()
+        R = RotQuaternion.from_wxyz_array(q_identity).to_rotation_matrix()
+        F = _compute_fundamental_matrix(K, R, t1, K, R, t2)
+        for p1, curve in zip(pts1, curves):
+            assert len(curve) >= 2
+            p1h = np.array([p1[0], p1[1], 1.0])
+            for q in curve:
+                residual = np.array([q[0], q[1], 1.0]) @ F @ p1h
+                assert abs(residual) < 1e-6
+
+    def test_curve_passes_through_true_correspondence(self):
+        cam = self._pinhole()
+        q_identity = np.array([1.0, 0.0, 0.0, 0.0])
+        R = np.eye(3)
+        t1 = np.zeros(3)
+        t2 = np.array([0.4, 0.1, 0.0])
+        P = np.array([0.3, -0.2, 5.0])
+        K = cam.intrinsic_matrix()
+        p1 = K @ (R @ P + t1)
+        p1 = p1[:2] / p1[2]
+        p2 = K @ (R @ P + t2)
+        p2 = p2[:2] / p2[2]
+        curves = epipolar_curves(
+            np.array([p1]),
+            np.array([5.0]),
+            cam,
+            q_identity,
+            t1,
+            cam,
+            q_identity,
+            t2,
+        )
+        curve = curves[0]
+        assert len(curve) > 0
+        # Adaptive sampling emits sparse vertices on near-straight regions, so
+        # check distance to polyline segments (not just vertices).
+        dists = []
+        for i in range(len(curve) - 1):
+            a, b = curve[i], curve[i + 1]
+            d = b - a
+            len2 = d @ d
+            if len2 < 1e-12:
+                dists.append(np.linalg.norm(p2 - a))
+                continue
+            tparam = np.clip(((p2 - a) @ d) / len2, 0.0, 1.0)
+            proj = a + tparam * d
+            dists.append(np.linalg.norm(p2 - proj))
+        assert min(dists) < 1.0
+
+    def test_zero_baseline_returns_empty(self):
+        cam = self._pinhole()
+        q_identity = np.array([1.0, 0.0, 0.0, 0.0])
+        t = np.zeros(3)
+        curves = epipolar_curves(
+            np.array([[400.0, 300.0]]),
+            np.array([5.0]),
+            cam,
+            q_identity,
+            t,
+            cam,
+            q_identity,
+            t,
+        )
+        assert len(curves) == 1
+        assert len(curves[0]) == 0
+
+    def test_anchor_length_mismatch_raises(self):
+        cam = self._pinhole()
+        q_identity = np.array([1.0, 0.0, 0.0, 0.0])
+        t1 = np.zeros(3)
+        t2 = np.array([1.0, 0.0, 0.0])
+        with pytest.raises(ValueError, match="anchor_depths length"):
+            epipolar_curves(
+                np.array([[400.0, 300.0], [200.0, 100.0]]),
+                np.array([5.0]),  # wrong length
+                cam,
+                q_identity,
+                t1,
+                cam,
+                q_identity,
+                t2,
+            )
+
+    def test_vertices_inside_image_rectangle(self):
+        cam = self._pinhole()
+        q_identity = np.array([1.0, 0.0, 0.0, 0.0])
+        t1 = np.zeros(3)
+        t2 = np.array([0.4, 0.2, 0.0])
+        pts1 = np.array([[400.0, 305.0], [120.0, 360.0]])
+        anchors = np.array([5.0, 5.0])
+        curves = epipolar_curves(
+            pts1,
+            anchors,
+            cam,
+            q_identity,
+            t1,
+            cam,
+            q_identity,
+            t2,
+        )
+        for curve in curves:
+            if len(curve) == 0:
+                continue
+            assert (curve[:, 0] >= 0).all() and (curve[:, 0] < cam.width).all()
+            assert (curve[:, 1] >= 0).all() and (curve[:, 1] < cam.height).all()
 
 
 # ===== Intrinsic Matrix Tests =====
