@@ -71,6 +71,7 @@ pub use py_warp_map::PyWarpMap;
 // ── Analysis & algorithms ─────────────────────────────────────────────────
 
 mod py_analysis;
+mod py_epipolar;
 mod py_image_pair_graph;
 mod py_kdtree;
 mod py_optical_flow;
@@ -212,6 +213,9 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
         py_sphere_points::evenly_distributed_sphere_points,
         m
     )?)?;
+
+    // Epipolar curves (distortion-aware epipolar lines)
+    m.add_function(wrap_pyfunction!(py_epipolar::epipolar_curves_py, m)?)?;
 
     // Types
     m.add_class::<PyCameraIntrinsics>()?;

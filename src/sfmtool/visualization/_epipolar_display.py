@@ -15,7 +15,7 @@ import pycolmap
 from .._cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
 from .._rectification import compute_stereo_rectification
 from .._sift_file import SiftReader, get_sift_path_for_image
-from .._sfmtool import RotQuaternion
+from .._sfmtool import RotQuaternion, epipolar_curves
 
 
 def _get_color_palette(n_colors: int) -> list:
@@ -89,58 +89,58 @@ def _draw_epipolar_line(
         cv2.line(image, points[0], points[1], color, thickness)
 
 
-def _draw_polar_epipolar_line(
+def _curve_anchor_depths(
+    recon,
+    track_point_ids: np.ndarray,
+    R_from: np.ndarray,
+    t_from: np.ndarray,
+    R_other: np.ndarray,
+    t_other: np.ndarray,
+) -> np.ndarray:
+    """Per-feature seed depth for epipolar-curve sampling, in `R_from` coords.
+
+    Uses the reconstructed track depth when a triangulated 3D point is
+    available (and is in front of the camera); otherwise the baseline length
+    `‖C_other − C_from‖`. `track_point_ids` is one entry per feature pair with
+    `-1` marking unmatched features. See specs/core/epipolar-curves.md
+    ("Caller-side seeding strategy") for the rationale.
+    """
+    c_from = -R_from.T @ t_from
+    c_other = -R_other.T @ t_other
+    baseline = float(np.linalg.norm(c_other - c_from))
+    if baseline < 1e-9:
+        baseline = 1.0  # degenerate; Rust returns empty anyway.
+
+    depths = np.full(len(track_point_ids), baseline, dtype=np.float64)
+    valid = track_point_ids >= 0
+    if not valid.any():
+        return depths
+    pids = track_point_ids[valid]
+    points = np.asarray(recon.positions)[pids]
+    track_depths = points @ R_from[2, :] + t_from[2]
+    in_front = track_depths > 0
+    if in_front.any():
+        valid_idx = np.where(valid)[0]
+        depths[valid_idx[in_front]] = track_depths[in_front]
+    return depths
+
+
+def _draw_polyline(
     image: np.ndarray,
-    line: np.ndarray,
-    epipole: np.ndarray,
-    feature_point: np.ndarray,
+    polyline: np.ndarray,
     color: tuple[int, int, int],
     thickness: int = 1,
 ) -> None:
-    """Draw a polar epipolar line from the epipole in one direction."""
-    h, w = image.shape[:2]
-    a, b, c = line
+    """Draw an epipolar curve on an image.
 
-    boundary_points = []
-
-    if abs(b) > 1e-10:
-        y = -c / b
-        if 0 <= y < h:
-            boundary_points.append((0, int(round(y))))
-    if abs(b) > 1e-10:
-        y = -(a * (w - 1) + c) / b
-        if 0 <= y < h:
-            boundary_points.append((w - 1, int(round(y))))
-    if abs(a) > 1e-10:
-        x = -c / a
-        if 0 <= x < w:
-            boundary_points.append((int(round(x)), 0))
-    if abs(a) > 1e-10:
-        x = -(b * (h - 1) + c) / a
-        if 0 <= x < w:
-            boundary_points.append((int(round(x)), h - 1))
-
-    boundary_points = list(dict.fromkeys(boundary_points))
-
-    if len(boundary_points) == 0:
+    The Rust sampler returns vertices that are already inside the image
+    rectangle, so no clipping is needed here — just round and call polylines.
+    """
+    if polyline is None or len(polyline) < 2:
         return
-
-    epipole_pt = np.array([epipole[0], epipole[1]])
-    feature_vec = np.array([feature_point[0], feature_point[1]]) - epipole_pt
-
-    best_boundary = None
-    max_dot = -float("inf")
-
-    for boundary_pt in boundary_points:
-        boundary_vec = np.array([boundary_pt[0], boundary_pt[1]]) - epipole_pt
-        dot = np.dot(feature_vec, boundary_vec)
-        if dot > max_dot:
-            max_dot = dot
-            best_boundary = boundary_pt
-
-    if best_boundary is not None:
-        epipole_int = (int(round(epipole[0])), int(round(epipole[1])))
-        cv2.line(image, epipole_int, best_boundary, color, thickness)
+    pts = np.round(np.asarray(polyline, dtype=np.float64)).astype(np.int32)
+    pts = pts.reshape(-1, 1, 2)
+    cv2.polylines(image, [pts], False, color, thickness)
 
 
 def draw_epipolar_visualization(
@@ -194,15 +194,24 @@ def draw_epipolar_visualization(
 
     observations = np.column_stack([image_indexes, feature_indexes])
 
-    # Find image indices in reconstruction
-    image1_idx = None
-    image2_idx = None
+    # Find image indices in reconstruction. Prefer exact full-path matches so
+    # that datasets with the same basename under multiple subdirectories (e.g.
+    # rig sensors with `fisheye_left/frame_01.jpg` and
+    # `fisheye_right/frame_01.jpg`) resolve unambiguously.
+    def _find_index(query: str) -> int | None:
+        exact = None
+        basename_match = None
+        query_basename = Path(query).name
+        for idx, name in enumerate(image_names):
+            if name == query:
+                exact = idx
+                break
+            if Path(name).name == query_basename and basename_match is None:
+                basename_match = idx
+        return exact if exact is not None else basename_match
 
-    for idx, name in enumerate(image_names):
-        if Path(name).name == Path(image1_name).name or name == image1_name:
-            image1_idx = idx
-        if Path(name).name == Path(image2_name).name or name == image2_name:
-            image2_idx = idx
+    image1_idx = _find_index(image1_name)
+    image2_idx = _find_index(image2_name)
 
     from .._sfm_reconstruction import get_image_hint_message
 
@@ -213,19 +222,25 @@ def draw_epipolar_visualization(
     if image1_idx == image2_idx:
         raise ValueError("Cannot visualize epipolar geometry with the same image")
 
-    # Get camera poses
-    R1 = RotQuaternion.from_wxyz_array(quaternions[image1_idx]).to_rotation_matrix()
+    cam1_intrinsics = cameras[camera_indexes[image1_idx]]
+    cam2_intrinsics = cameras[camera_indexes[image2_idx]]
+
+    if rectify and (
+        "FISHEYE" in cam1_intrinsics.model or "FISHEYE" in cam2_intrinsics.model
+    ):
+        raise ValueError(
+            "--rectify is not supported for fisheye cameras (no global rectifying "
+            "homography exists). Use the default visualization (epipolar curves on "
+            "the original images) or --undistort."
+        )
+
+    # Get camera poses (cam_from_world)
+    quat1 = quaternions[image1_idx]
+    quat2 = quaternions[image2_idx]
+    R1 = RotQuaternion.from_wxyz_array(quat1).to_rotation_matrix()
     t1 = translations[image1_idx]
-
-    R2 = RotQuaternion.from_wxyz_array(quaternions[image2_idx]).to_rotation_matrix()
+    R2 = RotQuaternion.from_wxyz_array(quat2).to_rotation_matrix()
     t2 = translations[image2_idx]
-
-    # Get intrinsic matrices
-    K1 = cameras[camera_indexes[image1_idx]].intrinsic_matrix()
-    K2 = cameras[camera_indexes[image2_idx]].intrinsic_matrix()
-
-    # Compute fundamental matrix
-    F = _compute_fundamental_matrix(K1, R1, t1, K2, R2, t2)
 
     # Load SIFT features
     image1_path = workspace_dir / image_names[image1_idx]
@@ -348,6 +363,10 @@ def draw_epipolar_visualization(
             mutual_matches = [mutual_matches[i] for i in indices]
 
         feature_pairs = [(m[0], m[1]) for m in mutual_matches]
+        # Sweep matches aren't tied to triangulated 3D points, so per-feature
+        # track depth is unavailable; -1 sentinel routes the caller to the
+        # baseline-length fallback.
+        feature_track_point_ids = np.full(len(feature_pairs), -1, dtype=np.int64)
         print(f"Found {len(mutual_matches)} matches using {match_method}")
 
     else:
@@ -369,14 +388,18 @@ def draw_epipolar_visualization(
             )
 
         feature_pairs = []
+        feature_track_point_ids = []
         for point_id in shared_point_ids:
             feat1_idx = obs1[point_ids1 == point_id, 1][0]
             feat2_idx = obs2[point_ids2 == point_id, 1][0]
             feature_pairs.append((feat1_idx, feat2_idx))
+            feature_track_point_ids.append(point_id)
 
         if max_features is not None and len(feature_pairs) > max_features:
             indices = np.linspace(0, len(feature_pairs) - 1, max_features, dtype=int)
             feature_pairs = [feature_pairs[i] for i in indices]
+            feature_track_point_ids = [feature_track_point_ids[i] for i in indices]
+        feature_track_point_ids = np.asarray(feature_track_point_ids, dtype=np.int64)
 
         with SiftReader(sift1_path) as reader:
             positions1 = reader.read_positions()
@@ -386,45 +409,6 @@ def draw_epipolar_visualization(
 
     # Generate color palette
     colors = _get_color_palette(len(feature_pairs))
-
-    # Check if epipoles are inside the image for visualization
-    from ..feature_match._polar_sweep import _compute_epipole_pair_from_F
-
-    e1, e2, e1_inf, e2_inf = _compute_epipole_pair_from_F(F)
-
-    if not rectify or (sweep_max_features is not None and rectification is None):
-        if sweep_max_features is None:
-            test_img1 = cv2.imread(
-                str(image1_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-            )
-            test_img2 = cv2.imread(
-                str(image2_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-            )
-            if test_img1 is not None and test_img2 is not None:
-                h1, w1 = test_img1.shape[:2]
-                h2, w2 = test_img2.shape[:2]
-            else:
-                h1 = w1 = h2 = w2 = 1000
-        else:
-            h1, w1 = bitmap1.to_array().shape[:2]
-            h2, w2 = bitmap2.to_array().shape[:2]
-
-        margin = 0
-        epipole1 = None
-        epipole2 = None
-
-        if not e1_inf:
-            x1, y1 = e1[0], e1[1]
-            if -margin <= x1 <= w1 + margin and -margin <= y1 <= h1 + margin:
-                epipole1 = e1
-
-        if not e2_inf:
-            x2, y2 = e2[0], e2[1]
-            if -margin <= x2 <= w2 + margin and -margin <= y2 <= h2 + margin:
-                epipole2 = e2
-    else:
-        epipole1 = None
-        epipole2 = None
 
     # Handle rectification fallback for in-frame epipole
     if rectify and sweep_max_features is not None and rectification is None:
@@ -554,7 +538,10 @@ def draw_epipolar_visualization(
                 _draw_epipolar_line(img1, epipolar_line1, color, line_thickness)
 
     else:
-        # Standard epipolar visualization (original distorted images)
+        # Standard visualization on the original (distorted) images. The
+        # epipolar geometry is drawn directly through the full camera model, so
+        # the "lines" are curves for fisheye / wide-FOV cameras. See
+        # specs/core/epipolar-curves.md.
         img1 = cv2.imread(
             str(image1_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
         )
@@ -565,37 +552,52 @@ def draw_epipolar_visualization(
         if img1 is None or img2 is None:
             raise ValueError("Failed to load image files.")
 
-        for i, ((feat1_idx, feat2_idx), color) in enumerate(zip(feature_pairs, colors)):
-            pos1 = positions1[feat1_idx]
-            pos2 = positions2[feat2_idx]
+        feat1_indices = [f[0] for f in feature_pairs]
+        feat2_indices = [f[1] for f in feature_pairs]
+        pts1 = np.ascontiguousarray(positions1[feat1_indices, :2], dtype=np.float64)
+        pts2 = np.ascontiguousarray(positions2[feat2_indices, :2], dtype=np.float64)
 
-            pt1 = (int(round(pos1[0])), int(round(pos1[1])))
-            cv2.circle(img1, pt1, feature_size, color, -1)
+        if draw_lines:
+            anchors_from_cam1 = _curve_anchor_depths(
+                recon, feature_track_point_ids, R1, t1, R2, t2
+            )
+            anchors_from_cam2 = _curve_anchor_depths(
+                recon, feature_track_point_ids, R2, t2, R1, t1
+            )
+            curves_in_2 = epipolar_curves(
+                pts1,
+                anchors_from_cam1,
+                cam1_intrinsics,
+                quat1,
+                t1,
+                cam2_intrinsics,
+                quat2,
+                t2,
+            )
+            curves_in_1 = epipolar_curves(
+                pts2,
+                anchors_from_cam2,
+                cam2_intrinsics,
+                quat2,
+                t2,
+                cam1_intrinsics,
+                quat1,
+                t1,
+            )
+
+        for i, color in enumerate(colors):
+            p1 = pts1[i]
+            p2 = pts2[i]
+            cv2.circle(
+                img1, (int(round(p1[0])), int(round(p1[1]))), feature_size, color, -1
+            )
+            cv2.circle(
+                img2, (int(round(p2[0])), int(round(p2[1]))), feature_size, color, -1
+            )
 
             if draw_lines:
-                p1_homog = np.array([pos1[0], pos1[1], 1.0])
-                epipolar_line2 = F @ p1_homog
-
-                if epipole2 is not None:
-                    _draw_polar_epipolar_line(
-                        img2, epipolar_line2, epipole2, pos2, color, line_thickness
-                    )
-                else:
-                    _draw_epipolar_line(img2, epipolar_line2, color, line_thickness)
-
-            pt2 = (int(round(pos2[0])), int(round(pos2[1])))
-            cv2.circle(img2, pt2, feature_size, color, -1)
-
-            if draw_lines:
-                p2_homog = np.array([pos2[0], pos2[1], 1.0])
-                epipolar_line1 = F.T @ p2_homog
-
-                if epipole1 is not None:
-                    _draw_polar_epipolar_line(
-                        img1, epipolar_line1, epipole1, pos1, color, line_thickness
-                    )
-                else:
-                    _draw_epipolar_line(img1, epipolar_line1, color, line_thickness)
+                _draw_polyline(img2, curves_in_2[i], color, line_thickness)
+                _draw_polyline(img1, curves_in_1[i], color, line_thickness)
 
     # Output
     output_path.parent.mkdir(exist_ok=True, parents=True)
