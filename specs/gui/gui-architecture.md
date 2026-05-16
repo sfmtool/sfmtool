@@ -93,6 +93,7 @@ sfmtool/
 │   │       └── ...               # Feature matching, alignment, spatial indexing
 │   │
 │   ├── sfm-explorer/              # GUI application
+│   │   ├── examples/             # DirectManipulation reference examples (feature-gated)
 │   │   └── src/
 │   │       ├── main.rs           # Entry point, winit event loop, wgpu setup, egui_dock layout
 │   │       ├── viewer_3d.rs      # ViewportCamera, interaction, fly navigation
@@ -120,7 +121,6 @@ sfmtool/
 │   │       ├── state.rs          # Shared application state (AppState)
 │   │       ├── image_browser.rs  # Thumbnail strip with horizontal scrolling
 │   │       ├── image_detail.rs   # Full-resolution image display panel
-│   │       ├── bin/              # DirectManipulation test binaries
 │   │       ├── platform/
 │   │       │   ├── mod.rs
 │   │       │   └── windows.rs    # DirectManipulation touchpad integration
