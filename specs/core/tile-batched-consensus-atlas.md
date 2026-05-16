@@ -1,14 +1,17 @@
 # Tile-batched consensus atlas: bounded-memory panorama compositing
 
-**Status:** Draft. Implementable on top of the existing
+**Status:** Implemented. Built on top of the existing
 [`PerSphericalTileSourceStack`], [`SphericalTileRig`], and the
 photometric RANSAC ([`refine_photometric_ransac`]) without changing any
-of their algorithms. Folds into `specs/core/` once the production
-panorama path consumes it.
+of their algorithms. The orchestrator lives in
+`crates/sfmtool-core/src/consensus_atlas.rs` (`render_consensus_atlas`),
+the PyO3 binding in `crates/sfmtool-py/src/py_consensus_atlas.rs`, and
+`scripts/render_equirectangular.py` consumes it for the production
+panorama render.
 
-[`PerSphericalTileSourceStack`]: ../core/per-spherical-tile-source-stack.md
-[`SphericalTileRig`]: ../core/spherical-tiles-rig.md
-[`refine_photometric_ransac`]: photometric-subsets-ransac.md
+[`PerSphericalTileSourceStack`]: per-spherical-tile-source-stack.md
+[`SphericalTileRig`]: spherical-tiles-rig.md
+[`refine_photometric_ransac`]: ../drafts/photometric-subsets-ransac.md
 
 ## Problem statement
 

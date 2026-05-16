@@ -591,34 +591,12 @@ impl<T: PatchPixel> PerSphericalTileSourceStack<T> {
                 rig: rig.patch_size(),
             });
         }
-        if primary_mask.len() != self.total_contrib_rows() {
-            return Err(ConsensusAtlasError::PrimaryMaskLength {
-                expected: self.total_contrib_rows(),
-                got: primary_mask.len(),
-            });
-        }
 
         // ── Per-tile consensus patches ────────────────────────────────────
-        let level0 = &self.levels[0];
-        let ps = level0.size as usize;
-        let pixel_count = ps * ps;
+        let tile_patches = self.consensus_patches_per_tile(primary_mask)?;
+        let ps = self.levels[0].size as usize;
         let c_us = self.channels as usize;
-        let patch_floats = pixel_count * c_us;
-
-        let tile_patches: Vec<Vec<f32>> = (0..self.n_tiles)
-            .into_par_iter()
-            .map(|t| {
-                consensus_patch_for_tile(
-                    t,
-                    ps,
-                    c_us,
-                    &self.tile_offsets,
-                    &level0.patches,
-                    &level0.valid,
-                    primary_mask,
-                )
-            })
-            .collect();
+        let patch_floats = ps * ps * c_us;
 
         // ── Lay out into atlas (NaN-filled) ───────────────────────────────
         let (atlas_w, atlas_h) = rig.atlas_size();
@@ -639,6 +617,49 @@ impl<T: PatchPixel> PerSphericalTileSourceStack<T> {
             }
         }
         Ok(atlas)
+    }
+
+    /// One consensus patch per tile — the per-tile pieces that
+    /// [`primary_consensus_atlas`](Self::primary_consensus_atlas) lays into an
+    /// atlas, returned directly so a caller can place them into an atlas it
+    /// owns (e.g. the tile-batched compositing path).
+    ///
+    /// Entry `t` is a row-major `patch_size² × channels` `f32` buffer, `NaN`
+    /// where tile `t`'s primary cluster is empty or every primary contributor
+    /// is invalid for a pixel — identical reduction to
+    /// `primary_consensus_atlas` (which is a thin wrapper over this). Operates
+    /// on level 0; tiles are processed in parallel via rayon.
+    ///
+    /// # Errors
+    /// [`ConsensusAtlasError::PrimaryMaskLength`] if `primary_mask.len()`
+    /// differs from [`total_contrib_rows`](Self::total_contrib_rows).
+    pub fn consensus_patches_per_tile(
+        &self,
+        primary_mask: &[bool],
+    ) -> Result<Vec<Vec<f32>>, ConsensusAtlasError> {
+        if primary_mask.len() != self.total_contrib_rows() {
+            return Err(ConsensusAtlasError::PrimaryMaskLength {
+                expected: self.total_contrib_rows(),
+                got: primary_mask.len(),
+            });
+        }
+        let level0 = &self.levels[0];
+        let ps = level0.size as usize;
+        let c_us = self.channels as usize;
+        Ok((0..self.n_tiles)
+            .into_par_iter()
+            .map(|t| {
+                consensus_patch_for_tile(
+                    t,
+                    ps,
+                    c_us,
+                    &self.tile_offsets,
+                    &level0.patches,
+                    &level0.valid,
+                    primary_mask,
+                )
+            })
+            .collect())
     }
 }
 

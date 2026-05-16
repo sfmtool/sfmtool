@@ -426,3 +426,71 @@ fn fully_masked_input_does_not_crash() {
     let out = stack.run(&RansacPhotometricParams::default());
     let _ = (out.tile_primary_lum_mad, out.tile_secondary_lum_mad);
 }
+
+// ── tile_index_base plumbing ────────────────────────────────────────────
+
+/// Per-tile rows `[t * n_sources, (t + 1) * n_sources)`.
+fn tile_rows(out: &[bool], t: usize, n_sources: usize) -> &[bool] {
+    &out[t * n_sources..(t + 1) * n_sources]
+}
+
+/// `tile_index_base` shifts every tile's RNG stream by a constant offset.
+///
+/// On an over-cap stack (`C(16, 2) = 120 > max_subsets_per_tile = 64`, so each
+/// tile uses sampled — RNG-seeded — candidate subsets) where every tile holds
+/// *identical* data, the only thing that can vary tile-to-tile is the seed.
+/// Two equal-size, well-separated clusters make the surviving cluster a
+/// function purely of which candidate pairs the RNG samples first, so the
+/// per-tile partition genuinely depends on the seed.
+///
+/// Running with `tile_index_base = k` must therefore reproduce, for tile `t`,
+/// exactly what `tile_index_base = 0` produces for global tile `t + k`.
+#[test]
+fn tile_index_base_shifts_per_tile_rng_streams() {
+    let n_tiles = 24;
+    let n_sources = 16; // C(16, 2) = 120 > 64 ⇒ sampled candidates, RNG in play.
+    let k = 7;
+
+    // Every tile identical: 8 sources at luminance 100, 8 at 200. The two
+    // clusters are equal-size and well-separated (gap 100 ≫ inlier_threshold).
+    let mut stack = SyntheticStack::full(n_tiles, n_sources, 4, 3);
+    for t in 0..n_tiles {
+        for i in 0..8 {
+            stack.set_uniform(t, i, 100.0);
+        }
+        for i in 8..16 {
+            stack.set_uniform(t, i, 200.0);
+        }
+    }
+
+    let base = RansacPhotometricParams::default();
+    let out_0 = stack.run(&base);
+    let out_k = stack.run(&RansacPhotometricParams {
+        tile_index_base: k,
+        ..base.clone()
+    });
+
+    // Non-vacuity: the partition really is seed-dependent — not every tile
+    // resolves to the same cluster.
+    let first = tile_rows(&out_0.primary_mask, 0, n_sources).to_vec();
+    assert!(
+        (0..n_tiles).any(|t| tile_rows(&out_0.primary_mask, t, n_sources) != first.as_slice()),
+        "fixture is seed-insensitive — the test would pass vacuously"
+    );
+
+    // The shift property: tile `t` at base `k` == tile `t + k` at base 0.
+    for t in 0..(n_tiles - k) {
+        assert_eq!(
+            tile_rows(&out_k.primary_mask, t, n_sources),
+            tile_rows(&out_0.primary_mask, t + k, n_sources),
+            "primary_mask: tile {t} (base {k}) != tile {} (base 0)",
+            t + k
+        );
+        assert_eq!(
+            tile_rows(&out_k.secondary_mask, t, n_sources),
+            tile_rows(&out_0.secondary_mask, t + k, n_sources),
+            "secondary_mask: tile {t} (base {k}) != tile {} (base 0)",
+            t + k
+        );
+    }
+}

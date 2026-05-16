@@ -71,6 +71,7 @@ pub use py_warp_map::PyWarpMap;
 // ── Analysis & algorithms ─────────────────────────────────────────────────
 
 mod py_analysis;
+mod py_consensus_atlas;
 mod py_epipolar;
 mod py_image_pair_graph;
 mod py_kdtree;
@@ -233,6 +234,12 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Photometric refinement.
     m.add_function(wrap_pyfunction!(
         py_photometric_ransac::refine_photometric_ransac_py,
+        m
+    )?)?;
+
+    // Tile-batched consensus atlas compositing.
+    m.add_function(wrap_pyfunction!(
+        py_consensus_atlas::render_consensus_atlas_py,
         m
     )?)?;
 

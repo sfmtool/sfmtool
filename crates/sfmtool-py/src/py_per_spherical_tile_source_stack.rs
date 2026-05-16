@@ -495,7 +495,7 @@ fn valid_array_to_bool<'py>(
 
 /// Parse a Python iterable of ``(CameraIntrinsics, RotQuaternion,
 /// numpy.ndarray)`` tuples into the Rust slice the builder expects.
-fn parse_sources(
+pub(crate) fn parse_sources(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<
     Vec<(
