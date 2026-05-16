@@ -45,8 +45,11 @@ subsequent solves start from the right answer instead of re-discovering it.
 
 ### The `camera_intrinsics` Block
 
-This is the same shape used by the optional `camera_intrinsics` block in
-`rig_config.json`, so a single Python helper handles both.
+This block is specific to `camera_config.json`. It uses a named-parameter
+shape (a `model` string plus a `parameters` object). `rig_config.json` is a
+separate, COLMAP-native format that instead carries per-sensor
+`camera_model_name` + positional `camera_params`; see
+[rig-config.md](rig-config.md).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -377,8 +380,10 @@ organization that matches how A/B testing actually shows up.
 ## Future Unification
 
 `rig_config.json` and `camera_config.json` overlap in their treatment of
-intrinsics: the `camera_intrinsics` block defined here has the same shape as
-the optional block on each rig entry. A future revision may unify them by:
+intrinsics, but express them differently: `camera_config.json` uses the
+named-parameter `camera_intrinsics` block defined here, while
+`rig_config.json` uses COLMAP-native per-sensor `camera_model_name` +
+positional `camera_params`. A future revision may unify them by:
 
 1. Allowing `camera_config.json` entries to also describe rig topology
    (sensors, sensor-from-rig poses), or
