@@ -362,6 +362,44 @@ impl SphericalTileRig {
         self.direction_tree = PointCloud3::<f32>::new(&flat, self.directions.len());
     }
 
+    /// A rig containing only tiles `[range.start, range.end)` of `self`,
+    /// re-indexed `0 .. range.len()`. Inherits `centre`, `half_fov_rad`,
+    /// `patch_size`, and the diagnostic `measured_max_*` angles (hence
+    /// [`tile_camera`](Self::tile_camera)).
+    ///
+    /// The sub-rig's atlas is sized for `range.len()` tiles, so its
+    /// [`tile_atlas_origin`](Self::tile_atlas_origin) is **not** the parent's
+    /// — callers that compose sub-rig consensus patches into a parent atlas
+    /// must use the parent's `tile_atlas_origin(global_index)`.
+    ///
+    /// The direction KD-tree is rebuilt over the subset so nearest-tile
+    /// queries (`resample_atlas` / `warp_*`) on the sub-rig stay correct.
+    ///
+    /// # Panics
+    /// Panics if `range` is out of bounds for `self.len()`.
+    pub fn tiles_subset(&self, range: std::ops::Range<usize>) -> SphericalTileRig {
+        let directions: Vec<[f64; 3]> = self.directions[range.clone()].to_vec();
+        let bases: Vec<[f64; 6]> = self.bases[range].to_vec();
+        let len = directions.len();
+        let atlas_cols = ((len as f64).sqrt().ceil() as u32).max(1);
+        let flat: Vec<f32> = directions
+            .iter()
+            .flat_map(|d| [d[0] as f32, d[1] as f32, d[2] as f32])
+            .collect();
+        let direction_tree = PointCloud3::<f32>::new(&flat, len);
+        SphericalTileRig {
+            centre: self.centre,
+            directions,
+            bases,
+            half_fov_rad: self.half_fov_rad,
+            measured_max_nn_angle: self.measured_max_nn_angle,
+            measured_max_coverage_angle: self.measured_max_coverage_angle,
+            patch_size: self.patch_size,
+            atlas_cols,
+            direction_tree,
+        }
+    }
+
     // ── Tile-to-image (atlas) mapping ─────────────────────────────────────
 
     /// Number of tile columns in the packed atlas.

@@ -149,6 +149,7 @@ pub fn refine_photometric_ransac_py(
         min_inliers,
         saturation_threshold,
         seed,
+        tile_index_base: 0,
     };
     let inner = match &stack.inner {
         Inner::F16(s) => py

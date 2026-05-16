@@ -1257,3 +1257,68 @@ fn refine_photometric_ransac_f16_matches_f32() {
         "no row landed in any primary cluster — test is vacuous"
     );
 }
+
+// ── consensus_patches_per_tile ──────────────────────────────────────────
+
+/// Laying the `consensus_patches_per_tile` outputs into a NaN-filled atlas at
+/// the rig's `tile_atlas_origin`s must reproduce `primary_consensus_atlas`'s
+/// buffer bit-for-bit — the latter is meant to be a thin wrapper over the
+/// former.
+#[test]
+fn consensus_patches_per_tile_reassemble_to_primary_consensus_atlas() {
+    let (rig, stack, _) = build_constant_color_stack();
+    let r = stack.total_contrib_rows();
+    assert!(r > 0, "fixture must have contributor rows");
+
+    // A non-trivial deterministic primary mask (roughly two-thirds true).
+    let primary_mask: Vec<bool> = (0..r).map(|i| i % 3 != 0).collect();
+
+    let patches = stack.consensus_patches_per_tile(&primary_mask).unwrap();
+    assert_eq!(patches.len(), stack.n_tiles());
+
+    let reference = stack.primary_consensus_atlas(&rig, &primary_mask).unwrap();
+
+    let (atlas_w, atlas_h) = rig.atlas_size();
+    let atlas_w = atlas_w as usize;
+    let channels = stack.channels() as usize;
+    let ps = stack.base_patch_size() as usize;
+    let mut atlas = vec![f32::NAN; atlas_w * atlas_h as usize * channels];
+    let row_stride = atlas_w * channels;
+    for (t, patch) in patches.iter().enumerate() {
+        assert_eq!(patch.len(), ps * ps * channels);
+        let (ox, oy) = rig.tile_atlas_origin(t);
+        for dy in 0..ps {
+            let src_off = dy * ps * channels;
+            let dst_off = (oy as usize + dy) * row_stride + ox as usize * channels;
+            atlas[dst_off..dst_off + ps * channels]
+                .copy_from_slice(&patch[src_off..src_off + ps * channels]);
+        }
+    }
+
+    assert_eq!(atlas.len(), reference.len());
+    for (i, (a, b)) in atlas.iter().zip(&reference).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "atlas element {i} differs ({a} vs {b})"
+        );
+    }
+}
+
+/// `consensus_patches_per_tile` rejects a `primary_mask` whose length does not
+/// match `total_contrib_rows`.
+#[test]
+fn consensus_patches_per_tile_rejects_mismatched_mask() {
+    let (_rig, stack, _) = build_constant_color_stack();
+    let r = stack.total_contrib_rows();
+    let err = stack
+        .consensus_patches_per_tile(&vec![true; r + 1])
+        .unwrap_err();
+    assert_eq!(
+        err,
+        ConsensusAtlasError::PrimaryMaskLength {
+            expected: r,
+            got: r + 1,
+        }
+    );
+}

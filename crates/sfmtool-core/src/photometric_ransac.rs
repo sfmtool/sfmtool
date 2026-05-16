@@ -51,6 +51,12 @@ pub struct RansacPhotometricParams {
     pub saturation_threshold: u8,
     /// RNG seed for reproducible subset sampling.
     pub seed: u64,
+    /// Added to the local tile index before deriving per-tile RNG state, in
+    /// both the primary and secondary RANSAC passes. The monolithic path
+    /// leaves this 0; the tile-batched path sets it to the batch's starting
+    /// global tile index so the per-tile RNG streams match the monolithic
+    /// run regardless of batch size.
+    pub tile_index_base: usize,
 }
 
 impl Default for RansacPhotometricParams {
@@ -65,6 +71,7 @@ impl Default for RansacPhotometricParams {
             min_inliers: 2,
             saturation_threshold: 254,
             seed: 0,
+            tile_index_base: 0,
         }
     }
 }
@@ -381,6 +388,7 @@ fn refine_flat(
         params.max_subsets_per_tile as usize,
         min_inliers,
         params.seed,
+        params.tile_index_base,
         r_total,
     );
 
@@ -398,6 +406,7 @@ fn refine_flat(
         params.max_subsets_per_tile as usize,
         min_inliers,
         params.seed,
+        params.tile_index_base,
         r_total,
     );
 
@@ -449,6 +458,7 @@ fn run_per_tile_ransac(
     max_subsets: usize,
     min_inliers: usize,
     seed: u64,
+    tile_index_base: usize,
     r_total: usize,
 ) -> Vec<bool> {
     let row_patch_stride = ss * ss * c;
@@ -464,7 +474,8 @@ fn run_per_tile_ransac(
             }
             let row_patch = &row_patch_corrected[a * row_patch_stride..b * row_patch_stride];
             let valid_pp = &centre_v[a * row_valid_stride..b * row_valid_stride];
-            let mut rng = StdRng::seed_from_u64(seed.rotate_left(32) ^ (t as u64));
+            let g = (tile_index_base + t) as u64;
+            let mut rng = StdRng::seed_from_u64(seed.rotate_left(32) ^ g);
             ransac_cluster_for_tile(
                 row_patch,
                 valid_pp,
@@ -499,6 +510,7 @@ fn run_secondary_ransac(
     max_subsets: usize,
     min_inliers: usize,
     seed: u64,
+    tile_index_base: usize,
     r_total: usize,
 ) -> Vec<bool> {
     let row_patch_stride = ss * ss * c;
@@ -529,8 +541,9 @@ fn run_secondary_ransac(
                     .extend_from_slice(&row_patch_corrected[p_base..p_base + row_patch_stride]);
                 sub_valid.extend_from_slice(&centre_v[v_base..v_base + row_valid_stride]);
             }
+            let g = (tile_index_base + t) as u64;
             let mut rng = StdRng::seed_from_u64(
-                seed.rotate_left(32) ^ ((t as u64).wrapping_add(0xA5A5_A5A5_A5A5_A5A5)),
+                seed.rotate_left(32) ^ (g.wrapping_add(0xA5A5_A5A5_A5A5_A5A5)),
             );
             let sub_mask = ransac_cluster_for_tile(
                 &sub_patches,

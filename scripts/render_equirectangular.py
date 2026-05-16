@@ -35,6 +35,7 @@ from sfmtool._sfmtool import (
     SfmrReconstruction,
     SphericalTileRig,
     refine_photometric_ransac,
+    render_consensus_atlas,
 )
 
 
@@ -157,31 +158,54 @@ def render(args: argparse.Namespace) -> int:
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         sources.append((cam, q, rgb))
 
-    t0 = time.perf_counter()
-    stack = PerSphericalTileSourceStack.build_rotation_only(
-        rig, sources, dtype=args.dtype
-    )
-    print(
-        f"Stack: {stack.total_contrib_rows} rows across {stack.n_tiles} tiles, "
-        f"dtype={stack.dtype} ({time.perf_counter() - t0:.2f}s)"
-    )
+    if args.debug:
+        # --debug needs the full materialised stack for its per-cluster and
+        # per-source passes, so it stays on the monolithic path.
+        t0 = time.perf_counter()
+        stack = PerSphericalTileSourceStack.build_rotation_only(
+            rig, sources, dtype=args.dtype
+        )
+        print(
+            f"Stack: {stack.total_contrib_rows} rows across {stack.n_tiles} tiles, "
+            f"dtype={stack.dtype} ({time.perf_counter() - t0:.2f}s)"
+        )
 
-    t0 = time.perf_counter()
-    out = refine_photometric_ransac(stack)
-    primary_count = int(out.primary_mask.sum())
-    print(
-        f"Photometric RANSAC: {primary_count}/{stack.total_contrib_rows} primary rows "
-        f"({time.perf_counter() - t0:.2f}s)"
-    )
+        t0 = time.perf_counter()
+        out = refine_photometric_ransac(stack)
+        primary_count = int(out.primary_mask.sum())
+        print(
+            f"Photometric RANSAC: {primary_count}/{stack.total_contrib_rows} primary rows "
+            f"({time.perf_counter() - t0:.2f}s)"
+        )
 
-    t0 = time.perf_counter()
-    atlas = stack.primary_consensus_atlas(rig, out.primary_mask)
-    nan_pixels = np.isnan(atlas).any(axis=-1) if atlas.ndim == 3 else np.isnan(atlas)
-    print(
-        f"Consensus atlas: {atlas.shape}, "
-        f"{float(nan_pixels.mean()) * 100:.1f}% NaN pixels "
-        f"({time.perf_counter() - t0:.2f}s)"
-    )
+        t0 = time.perf_counter()
+        atlas = stack.primary_consensus_atlas(rig, out.primary_mask)
+        nan_pixels = (
+            np.isnan(atlas).any(axis=-1) if atlas.ndim == 3 else np.isnan(atlas)
+        )
+        print(
+            f"Consensus atlas: {atlas.shape}, "
+            f"{float(nan_pixels.mean()) * 100:.1f}% NaN pixels "
+            f"({time.perf_counter() - t0:.2f}s)"
+        )
+    else:
+        # Production path: tile-batched compositing. Peak memory is bounded by
+        # the heaviest single batch's stack, not the whole source set, so this
+        # scales to thousands of sources.
+        t0 = time.perf_counter()
+        atlas, *_ = render_consensus_atlas(
+            rig, sources, batch_size=args.batch_size, dtype=args.dtype
+        )
+        nan_pixels = (
+            np.isnan(atlas).any(axis=-1) if atlas.ndim == 3 else np.isnan(atlas)
+        )
+        n_batches = -(-rig.n // args.batch_size)
+        print(
+            f"Batched consensus atlas: {atlas.shape}, "
+            f"{float(nan_pixels.mean()) * 100:.1f}% NaN pixels, "
+            f"batch_size={args.batch_size} ({n_batches} batches) "
+            f"({time.perf_counter() - t0:.2f}s)"
+        )
 
     # resample_atlas is NaN-aware: it skips NaN samples in the k-NN blend
     # and renormalises remaining weights, so we keep the consensus's NaN
@@ -312,13 +336,27 @@ def main() -> int:
         help="Number of spherical tiles in the rig (default: 320)",
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=32,
+        help=(
+            "Tiles per batch for the tile-batched consensus atlas. Smaller "
+            "values lower peak memory at the cost of more per-batch overhead. "
+            "Ignored in --debug mode (which uses the monolithic path). "
+            "Default: 32"
+        ),
+    )
+    parser.add_argument(
         "--seed", type=int, default=1234, help="Rig relaxer seed (default: 1234)"
     )
     parser.add_argument(
         "-k",
         type=int,
-        default=4,
-        help="k-NN tile blending in resample_atlas (default: 4)",
+        default=1,
+        help=(
+            "k-NN tile blending in resample_atlas (default: 1). k > 1 blends "
+            "neighbouring tiles and consistently degrades the result visually."
+        ),
     )
     parser.add_argument(
         "--debug",

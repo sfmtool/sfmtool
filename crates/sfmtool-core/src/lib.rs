@@ -13,6 +13,7 @@
 pub mod alignment;
 pub mod camera;
 pub mod camera_intrinsics;
+pub mod consensus_atlas;
 pub mod distortion;
 pub mod epipolar;
 pub mod feature_match;
@@ -39,6 +40,10 @@ pub mod warp_map;
 
 pub use camera::Camera;
 pub use camera_intrinsics::{CameraIntrinsics, CameraModel};
+pub use consensus_atlas::{
+    render_consensus_atlas, ConsensusAtlasBatchError, ConsensusAtlasBatchParams,
+    ConsensusAtlasReport,
+};
 pub use reconstruction::{
     Point3D, ReconstructionError, SfmrImage, SfmrReconstruction, TrackObservation,
 };

@@ -954,3 +954,58 @@ fn resample_atlas_panics_on_size_mismatch() {
     let dst = equirect_camera(32, 16);
     let _ = rig.resample_atlas(&bogus, 1, &dst, &RotQuaternion::identity(), 1);
 }
+
+// ── tiles_subset ────────────────────────────────────────────────────────
+
+/// A sub-rig over a contiguous tile range re-indexes the subset `0..len` and
+/// inherits the parent's per-tile geometry verbatim.
+#[test]
+fn tiles_subset_inherits_parent_geometry() {
+    let rig = make_rig(40, 256);
+    let range = 12..25;
+    let sub = rig.tiles_subset(range.clone());
+
+    assert_eq!(sub.len(), range.len());
+    assert_eq!(sub.half_fov_rad(), rig.half_fov_rad());
+    assert_eq!(sub.patch_size(), rig.patch_size());
+    assert_eq!(sub.tile_camera(), rig.tile_camera());
+    assert_eq!(sub.centre(), rig.centre());
+
+    for i in 0..sub.len() {
+        let parent = range.start + i;
+        assert_eq!(sub.direction(i), rig.direction(parent), "direction {i}");
+        assert_eq!(sub.basis(i), rig.basis(parent), "basis {i}");
+        assert_eq!(
+            sub.tile_rotation(i),
+            rig.tile_rotation(parent),
+            "tile_rotation {i}"
+        );
+    }
+}
+
+/// The sub-rig's atlas is sized for `range.len()` tiles — its own atlas
+/// geometry, not the parent's.
+#[test]
+fn tiles_subset_atlas_sized_for_subset() {
+    let rig = make_rig(40, 256);
+    // 13 tiles ⇒ atlas_cols = ceil(sqrt(13)) = 4, atlas_rows = ceil(13/4) = 4.
+    let sub = rig.tiles_subset(12..25);
+    let ps = sub.patch_size();
+    assert_eq!(sub.atlas_cols(), 4);
+    assert_eq!(sub.atlas_rows(), 4);
+    assert_eq!(sub.atlas_size(), (4 * ps, 4 * ps));
+    // The parent (40 tiles) has a wider atlas, so the two differ.
+    assert_ne!(sub.atlas_size(), rig.atlas_size());
+}
+
+/// A full-range subset reproduces the parent rig tile-for-tile.
+#[test]
+fn tiles_subset_full_range_matches_parent() {
+    let rig = make_rig(24, 256);
+    let sub = rig.tiles_subset(0..rig.len());
+    assert_eq!(sub.len(), rig.len());
+    for i in 0..rig.len() {
+        assert_eq!(sub.direction(i), rig.direction(i));
+        assert_eq!(sub.basis(i), rig.basis(i));
+    }
+}
