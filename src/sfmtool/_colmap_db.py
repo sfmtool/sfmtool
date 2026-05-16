@@ -486,47 +486,40 @@ def _setup_db_single_camera(
                 db.write_descriptors(image_id, _wrap_descriptors(descriptors))
 
 
-def _camera_from_rig_intrinsics(
-    rig_config: dict,
+def _camera_from_sensor_entry(
+    cam_config: dict,
     image_path: str | Path,
     camera_model_override: str | None,
 ) -> pycolmap.Camera:
-    """Create a pycolmap.Camera from rig intrinsics or by inference.
+    """Create a pycolmap.Camera for one rig sensor.
 
-    If the rig config contains full camera_intrinsics (model, width, height,
-    and parameters), those are used directly.  Otherwise falls back to
-    _infer_camera with the model name hint.
+    Uses the sensor entry's COLMAP-style ``camera_model_name`` /
+    ``camera_params`` when present; otherwise falls back to ``_infer_camera``
+    with the model name as a hint. Image dimensions always come from the
+    image itself (the COLMAP rig config carries no width/height).
     """
-    from ._cameras import _CAMERA_PARAM_NAMES
+    model_name = cam_config.get("camera_model_name")
+    camera_params = cam_config.get("camera_params")
 
-    intrinsics = rig_config.get("camera_intrinsics")
+    if camera_params is not None and not model_name:
+        raise ValueError("rig_config.json: camera_params requires camera_model_name")
 
-    # If rig config has full parameters, use them directly
-    if (
-        camera_model_override is None
-        and intrinsics is not None
-        and "parameters" in intrinsics
-        and "width" in intrinsics
-        and "height" in intrinsics
-    ):
-        model_name = intrinsics["model"]
-        param_names = _CAMERA_PARAM_NAMES.get(model_name)
-        if param_names is not None:
-            params = intrinsics["parameters"]
-            if all(name in params for name in param_names):
-                cam = pycolmap.Camera()
-                cam.model = getattr(pycolmap.CameraModelId, model_name.upper())
-                cam.width = intrinsics["width"]
-                cam.height = intrinsics["height"]
-                cam.params = [params[name] for name in param_names]
-                cam.has_prior_focal_length = True
-                return cam
+    effective_model = camera_model_override or model_name
+    cam = _infer_camera(str(image_path), effective_model)
 
-    # Fall back to inference with optional model hint
-    effective_model = camera_model_override
-    if effective_model is None and intrinsics is not None:
-        effective_model = intrinsics.get("model")
-    return _infer_camera(str(image_path), effective_model)
+    # An explicit --camera-model override takes precedence over the config's
+    # calibrated parameters.
+    if camera_model_override is None and camera_params is not None:
+        # The inferred camera already carries the correct parameter count for
+        # this model; use it to validate the config's positional array.
+        if len(camera_params) != len(cam.params):
+            raise ValueError(
+                f"rig_config.json: camera_params for {model_name} expects "
+                f"{len(cam.params)} values, got {len(camera_params)}"
+            )
+        cam.params = [float(p) for p in camera_params]
+        cam.has_prior_focal_length = True
+    return cam
 
 
 def _setup_db_with_rigs(
@@ -554,9 +547,8 @@ def _setup_db_with_rigs(
             key = (rig_idx, sensor_idx)
             if key not in sensor_first_image_found:
                 sensor_first_image_found[key] = True
-                cam = _camera_from_rig_intrinsics(
-                    rig_configs[rig_idx], image_path, camera_model
-                )
+                cam_config = rig_configs[rig_idx]["cameras"][sensor_idx]
+                cam = _camera_from_sensor_entry(cam_config, image_path, camera_model)
                 camera_id = db.write_camera(cam)
                 sensor_camera_ids[key] = camera_id
 

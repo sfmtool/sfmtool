@@ -786,6 +786,87 @@ fn recover_theta_equidistant_out_of_range() {
     );
 }
 
+/// kerry_park is a real ~180° FOV OPENCV_FISHEYE rig (test-data/images/kerry_park).
+/// Sweep a radial line of pixels from the principal point out to the corner and
+/// assert that the recovered ray varies continuously: no kink where the
+/// undistortion solver hands off to the small-angle blend at 90°–100°.
+#[test]
+fn kerry_park_pixel_to_ray_smooth_across_blend_region() {
+    let cam = CameraIntrinsics {
+        model: CameraModel::OpenCVFisheye {
+            focal_length_x: 129.1499937015594,
+            focal_length_y: 129.2573627423474,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: 0.038113353966529886,
+            radial_distortion_k2: -0.00800851799065643,
+            radial_distortion_k3: 0.008329720504707577,
+            radial_distortion_k4: -0.0026901578801066814,
+        },
+        width: 480,
+        height: 480,
+    };
+
+    // Walk in 1-pixel steps along +x from the principal point to the image
+    // corner. r_d (= radial pixel distance / f, capped at π in the
+    // unprojection path) crosses both the 90° (≈ f·π/2 = 203 px) and 100°
+    // (≈ f·100°/57.3 = 225 px) boundaries within the 240 px half-width.
+    let (cx, cy) = (240.0, 240.0);
+    let mut rays = Vec::with_capacity(240);
+    for du in 0..240 {
+        rays.push(cam.pixel_to_ray(cx + du as f64, cy));
+    }
+
+    // 1. Every ray must be a finite unit vector. The blend exists precisely
+    //    so that out-of-range pixels don't produce NaN/inf or garbage.
+    for (i, r) in rays.iter().enumerate() {
+        assert!(
+            r[0].is_finite() && r[1].is_finite() && r[2].is_finite(),
+            "non-finite ray at offset {i}: {r:?}",
+        );
+        let len = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
+        assert_relative_eq!(len, 1.0, epsilon = 1e-10);
+    }
+
+    // 2. The ray sequence must be continuous. A discontinuity at the blend
+    //    boundary would show up as a single large step between adjacent
+    //    1-pixel samples. Each step is small in well-behaved regions
+    //    (~0.005 rad/px) and must not spike past a generous threshold.
+    for i in 1..rays.len() {
+        let dx = rays[i][0] - rays[i - 1][0];
+        let dy = rays[i][1] - rays[i - 1][1];
+        let dz = rays[i][2] - rays[i - 1][2];
+        let step = (dx * dx + dy * dy + dz * dz).sqrt();
+        assert!(
+            step < 0.05,
+            "ray discontinuity at pixel offset {i}: step={step}, \
+             rays[{}]={:?}, rays[{i}]={:?}",
+            i - 1,
+            rays[i - 1],
+            rays[i],
+        );
+    }
+
+    // 3. The ray at the principal point must be (0, 0, 1) exactly.
+    assert_relative_eq!(rays[0][0], 0.0, epsilon = 1e-15);
+    assert_relative_eq!(rays[0][1], 0.0, epsilon = 1e-15);
+    assert_relative_eq!(rays[0][2], 1.0, epsilon = 1e-15);
+
+    // 4. By the image edge (240 px out, well past the 100° blend end) the
+    //    ray must be pointing strongly sideways: z component small, x large.
+    let edge = rays.last().unwrap();
+    assert!(
+        edge[0] > 0.7,
+        "edge ray should swing nearly perpendicular, got x={}",
+        edge[0],
+    );
+    assert!(
+        edge[2].abs() < 0.7,
+        "edge ray z should be small (near 90° off-axis), got z={}",
+        edge[2],
+    );
+}
+
 // -----------------------------------------------------------------------
 // pixel_to_ray tests
 // -----------------------------------------------------------------------

@@ -82,7 +82,7 @@ def pano2rig(input_dir, output_dir, face_size, jpeg_quality):
             output_dir,
             face_names,
             _cubemap_rotations(),
-            camera_intrinsics={"model": "PINHOLE"},
+            camera_model_name="PINHOLE",
         )
 
         click.echo(f"Output: {output_dir}")

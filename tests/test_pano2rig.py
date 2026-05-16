@@ -152,17 +152,36 @@ class TestRigConfigJson:
         assert config["cameras"][0]["image_prefix"] == "images/seq1/front/"
         assert config["cameras"][1]["image_prefix"] == "images/seq1/right/"
 
-    def test_camera_intrinsics(self):
+    def test_camera_model_name(self):
         names = ["front", "right"]
-        intrinsics = {"model": "PINHOLE"}
-        config = generate_rig_config_json(names, camera_intrinsics=intrinsics)
-        assert config["camera_intrinsics"] == {"model": "PINHOLE"}
+        config = generate_rig_config_json(names, camera_model_name="PINHOLE")
         assert len(config["cameras"]) == 2
+        for cam in config["cameras"]:
+            assert cam["camera_model_name"] == "PINHOLE"
+            assert "camera_params" not in cam
 
-    def test_no_camera_intrinsics_by_default(self):
+    def test_camera_params(self):
+        names = ["front", "right"]
+        params = [600.0, 600.0, 512.0, 512.0]
+        config = generate_rig_config_json(
+            names, camera_model_name="PINHOLE", camera_params=params
+        )
+        for cam in config["cameras"]:
+            assert cam["camera_model_name"] == "PINHOLE"
+            assert cam["camera_params"] == params
+
+    def test_no_camera_model_by_default(self):
         names = ["front", "right"]
         config = generate_rig_config_json(names)
         assert "camera_intrinsics" not in config
+        for cam in config["cameras"]:
+            assert "camera_model_name" not in cam
+            assert "camera_params" not in cam
+
+    def test_camera_params_without_model_rejected(self):
+        names = ["front", "right"]
+        with pytest.raises(ValueError, match="requires camera_model_name"):
+            generate_rig_config_json(names, camera_params=[600.0, 600.0, 512.0, 512.0])
 
 
 # =============================================================================

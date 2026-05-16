@@ -126,9 +126,13 @@ def generate_rig_config_json(
     prefix_base: str = "",
     rotations: list[RotQuaternion] | None = None,
     translations: list[list[float]] | None = None,
-    camera_intrinsics: dict | None = None,
+    camera_model_name: str | None = None,
+    camera_params: list[float] | None = None,
 ) -> dict:
-    """Generate a COLMAP-compatible rig config entry.
+    """Generate a COLMAP rig config entry.
+
+    The output matches COLMAP's ``rig_configurator`` file format: intrinsics
+    are attached per sensor via ``camera_model_name`` and ``camera_params``.
 
     Args:
         face_names: List of face/sensor names.
@@ -143,17 +147,17 @@ def generate_rig_config_json(
         translations: Optional list of sensor_from_rig translations [x, y, z]
             (one per face). The ref sensor (index 0) translation is ignored.
             Non-ref sensors get cam_from_rig_translation written as [X, Y, Z].
-        camera_intrinsics: Optional dict with camera intrinsics info shared by
-            all sensors in this rig. Must contain "model" (e.g. "PINHOLE",
-            "OPENCV_FISHEYE"). May also contain model-specific parameters.
+        camera_model_name: Optional COLMAP camera model name (e.g. "PINHOLE",
+            "OPENCV_FISHEYE") written on every sensor entry.
+        camera_params: Optional positional camera parameter array written on
+            every sensor entry. Requires camera_model_name.
 
     Returns:
-        Dict with "cameras" list and optional "camera_intrinsics",
-        suitable as one entry in rig_config.json.
+        Dict with a "cameras" list, suitable as one entry in rig_config.json.
     """
-    result = {}
-    if camera_intrinsics is not None:
-        result["camera_intrinsics"] = camera_intrinsics
+    if camera_params is not None and camera_model_name is None:
+        raise ValueError("camera_params requires camera_model_name")
+
     cameras = []
     for i, name in enumerate(face_names):
         cam = {"image_prefix": f"{prefix_base}{name}/"}
@@ -168,9 +172,12 @@ def generate_rig_config_json(
                 cam["cam_from_rig_rotation"] = [q.w, -q.x, q.y, -q.z]
             if translations is not None:
                 cam["cam_from_rig_translation"] = translations[i]
+        if camera_model_name is not None:
+            cam["camera_model_name"] = camera_model_name
+        if camera_params is not None:
+            cam["camera_params"] = list(camera_params)
         cameras.append(cam)
-    result["cameras"] = cameras
-    return result
+    return {"cameras": cameras}
 
 
 def build_rig_frame_data(
@@ -330,11 +337,13 @@ def write_rig_config(
     face_names: list[str],
     rotations: list[RotQuaternion] | None = None,
     translations: list[list[float]] | None = None,
-    camera_intrinsics: dict | None = None,
+    camera_model_name: str | None = None,
+    camera_params: list[float] | None = None,
 ) -> None:
     """Write rig configuration into an existing workspace.
 
-    Appends a new rig entry to rig_config.json (COLMAP-compatible).
+    Appends a new rig entry to rig_config.json (COLMAP rig_configurator
+    format).
 
     Args:
         output_dir: Workspace directory.
@@ -342,8 +351,10 @@ def write_rig_config(
         rotations: Optional list of sensor_from_rig rotations (one per face).
         translations: Optional list of sensor_from_rig translations [x, y, z]
             (one per face).
-        camera_intrinsics: Optional dict with camera intrinsics info shared by
-            all sensors (e.g. {"model": "PINHOLE"}).
+        camera_model_name: Optional COLMAP camera model name written on every
+            sensor entry (e.g. "PINHOLE").
+        camera_params: Optional positional camera parameter array written on
+            every sensor entry.
     """
     from ._workspace import find_workspace_for_path
 
@@ -362,11 +373,16 @@ def write_rig_config(
     else:
         prefix_base = prefix_base + "/"
 
-    # Write COLMAP-compatible rig_config.json
+    # Write COLMAP-format rig_config.json
     # If an existing rig entry has overlapping image prefixes, replace it;
     # otherwise append as a new rig entry.
     new_rig = generate_rig_config_json(
-        face_names, prefix_base, rotations, translations, camera_intrinsics
+        face_names,
+        prefix_base,
+        rotations,
+        translations,
+        camera_model_name,
+        camera_params,
     )
     new_prefixes = {c["image_prefix"] for c in new_rig["cameras"]}
     rig_config_path = workspace_dir / "rig_config.json"

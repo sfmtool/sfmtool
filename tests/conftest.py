@@ -153,3 +153,89 @@ def sfmrfile_reconstruction_with_17_images(
     workspace_dir = tmp_path_factory.mktemp("workspace_17_images")
     shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
     return workspace_dir / sfmrfile_reconstruction_with_17_images_once.name
+
+
+KERRY_PARK_DIR = TEST_DATA_DIR / "images" / "kerry_park"
+KERRY_PARK_FRAME_COUNT = 24
+KERRY_PARK_SENSORS = ("fisheye_left", "fisheye_right")
+
+
+def _copy_kerry_park_into(workspace_dir: Path) -> None:
+    """Copy the kerry_park rig images + rig_config.json into ``workspace_dir``.
+
+    Preserves the ``fisheye_left/`` / ``fisheye_right/`` subdirectory layout
+    so the rig_config.json ``image_prefix`` entries resolve correctly.
+    """
+    for sensor in KERRY_PARK_SENSORS:
+        src_dir = KERRY_PARK_DIR / sensor
+        dst_dir = workspace_dir / sensor
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        for img in sorted(src_dir.glob("frame_*.jpg")):
+            shutil.copy(img, dst_dir / img.name)
+    shutil.copy(KERRY_PARK_DIR / "rig_config.json", workspace_dir / "rig_config.json")
+
+
+@pytest.fixture
+def isolated_kerry_park_rig(tmp_path_factory) -> Path:
+    """Function-scoped: all 48 kerry_park rig images + rig_config.json in a tmp dir.
+
+    Yields the workspace directory. Layout under it::
+
+        <workspace>/
+          rig_config.json
+          fisheye_left/frame_01.jpg ... frame_24.jpg
+          fisheye_right/frame_01.jpg ... frame_24.jpg
+    """
+    workspace_dir = tmp_path_factory.mktemp("kerry_park_rig")
+    _copy_kerry_park_into(workspace_dir)
+    return workspace_dir
+
+
+@pytest.fixture(scope="session")
+def sfmrfile_reconstruction_kerry_park_once(tmp_path_factory) -> Path:
+    """Session-scoped: build a .sfmr reconstruction from the kerry_park rig.
+
+    Uses global SfM (GLOMAP) with a fixed random seed. The global solver
+    reliably registers all 48 rig images; the fixture fails fast if it
+    doesn't, rather than handing a partial reconstruction to the tests.
+    """
+    from sfmtool._gsfm import run_global_sfm
+    from sfmtool._sfmtool import SfmrReconstruction
+
+    workspace_dir = tmp_path_factory.mktemp("kerry_park_sfmr")
+    _copy_kerry_park_into(workspace_dir)
+    init_workspace(workspace_dir, max_num_features=2000, domain_size_pooling=True)
+
+    image_paths: list[Path] = []
+    for sensor in KERRY_PARK_SENSORS:
+        image_paths.extend(sorted((workspace_dir / sensor).glob("frame_*.jpg")))
+
+    output_sfm_file = workspace_dir / "kerry_park.sfmr"
+    colmap_dir = workspace_dir / "colmap"
+    sfmr_path = run_global_sfm(
+        image_paths,
+        workspace_dir,
+        colmap_dir,
+        output_sfm_file=str(output_sfm_file),
+        random_seed=42,
+    )
+
+    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_FRAME_COUNT
+    recon = SfmrReconstruction.load(sfmr_path)
+    if recon.image_count != expected_count:
+        raise RuntimeError(
+            f"kerry_park global solve registered {recon.image_count}/"
+            f"{expected_count} images (all {expected_count} required)."
+        )
+    return sfmr_path
+
+
+@pytest.fixture
+def sfmrfile_reconstruction_kerry_park(
+    sfmrfile_reconstruction_kerry_park_once: Path, tmp_path_factory
+) -> Path:
+    """Per-test isolation of the kerry_park .sfmr reconstruction."""
+    source_workspace_dir = sfmrfile_reconstruction_kerry_park_once.parent
+    workspace_dir = tmp_path_factory.mktemp("kerry_park_sfmr")
+    shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
+    return workspace_dir / sfmrfile_reconstruction_kerry_park_once.name
