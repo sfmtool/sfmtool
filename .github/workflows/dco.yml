@@ -1,0 +1,55 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+
+name: DCO
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dco-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Check Developer Certificate of Origin
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          status=0
+          commits=$(git rev-list "$BASE_SHA".."$HEAD_SHA")
+          for sha in $commits; do
+            subject=$(git show -s --format=%s "$sha")
+            author="$(git show -s --format='%an <%ae>' "$sha")"
+            if git show -s --format=%B "$sha" \
+                | grep -qiE "^Signed-off-by: .+ <.+@.+>$"; then
+              signoff=$(git show -s --format=%B "$sha" \
+                | grep -iE "^Signed-off-by: " | tail -n1 \
+                | sed -E 's/^[Ss]igned-off-by: //')
+              if [ "$signoff" != "$author" ]; then
+                echo "::error::Commit $sha sign-off ($signoff) does not match author ($author)"
+                status=1
+              fi
+            else
+              echo "::error::Commit $sha ($subject) is missing a Signed-off-by line"
+              status=1
+            fi
+          done
+          if [ "$status" -ne 0 ]; then
+            echo ""
+            echo "All commits must be signed off. Amend with: git commit --amend -s"
+            echo "Or sign off a range with: git rebase --signoff $BASE_SHA"
+          fi
+          exit $status

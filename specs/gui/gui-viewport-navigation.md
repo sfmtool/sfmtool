@@ -777,22 +777,22 @@ with a ~16ms interval, triggered from `new_events` when `StartCause::ResumeTimeR
 
 #### Reference Implementation
 
-See `crates/sfm-explorer/src/bin/winit_directmanipulation.rs` for a minimal working
+See `crates/sfm-explorer/examples/winit_directmanipulation.rs` for a minimal working
 example of all three workarounds combined. Compare with
-`crates/sfm-explorer/src/bin/win32_directmanipulation.rs` for a minimal working
+`crates/sfm-explorer/examples/win32_directmanipulation.rs` for a minimal working
 example directly using Win32.
 
-Additional test binary:
+Additional test example:
 
 - `winit_wgpu_directmanipulation.rs` — winit + wgpu + DM (working). Tests that wgpu/DXGI
   surface creation does not interfere with DirectManipulation.
 
-All test binaries require the `directmanipulation` Cargo feature:
+All examples require the `directmanipulation` Cargo feature:
 
 ```
-cargo run --bin win32_directmanipulation --features directmanipulation
-cargo run --bin winit_directmanipulation --features directmanipulation
-cargo run --bin winit_wgpu_directmanipulation --features directmanipulation
+cargo run --example win32_directmanipulation --features directmanipulation
+cargo run --example winit_directmanipulation --features directmanipulation
+cargo run --example winit_wgpu_directmanipulation --features directmanipulation
 ```
 
 ### Known Limitation: Eframe Window Creation

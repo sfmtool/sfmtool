@@ -26,3 +26,10 @@ Thanks for contributing to sfmtool! A few notes before you fill this out:
 - [ ] Rust changes touching `sfmtool-py` re-exports: ran `pixi run maturin develop --release`
 - [ ] Tests pass locally (`pixi run test`, `pixi run cargo test --workspace` as applicable)
 - [ ] Updated the relevant spec under `specs/` if behavior changed, or added a new spec if this introduces new behavior
+
+## License
+
+By submitting this pull request, I confirm that my contribution is made
+under the terms of the project's [Apache License 2.0](/LICENSE), and I
+certify the [Developer Certificate of Origin](/CONTRIBUTING.md#sign-off-your-commits-dco)
+by signing off on all of my commits.

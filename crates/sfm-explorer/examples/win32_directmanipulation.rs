@@ -7,9 +7,9 @@
 //! windowing library. The window procedure intercepts DM_POINTERHITTEST
 //! and calls SetContact() to begin gesture tracking.
 //!
-//! Run with: cargo run --bin win32_directmanipulation --features directmanipulation
+//! Run with: cargo run --example win32_directmanipulation --features directmanipulation
 //!
-//! This binary only builds on Windows.
+//! This example only builds on Windows.
 
 #[cfg(not(windows))]
 fn main() {

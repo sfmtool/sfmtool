@@ -7,7 +7,6 @@ version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "GUI application for viewing SfM reconstructions"
-default-run = "sfm-explorer"
 
 [lib]
 name = "sfm_explorer"
@@ -17,19 +16,19 @@ path = "src/lib.rs"
 name = "sfm-explorer"
 path = "src/main.rs"
 
-[[bin]]
+[[example]]
 name = "win32_directmanipulation"
-path = "src/bin/win32_directmanipulation.rs"
+path = "examples/win32_directmanipulation.rs"
 required-features = ["directmanipulation"]
 
-[[bin]]
+[[example]]
 name = "winit_directmanipulation"
-path = "src/bin/winit_directmanipulation.rs"
+path = "examples/winit_directmanipulation.rs"
 required-features = ["directmanipulation"]
 
-[[bin]]
+[[example]]
 name = "winit_wgpu_directmanipulation"
-path = "src/bin/winit_wgpu_directmanipulation.rs"
+path = "examples/winit_wgpu_directmanipulation.rs"
 required-features = ["directmanipulation"]
 
 [features]

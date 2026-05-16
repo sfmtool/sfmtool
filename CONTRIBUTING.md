@@ -57,8 +57,9 @@ crosses the PyO3 boundary, otherwise Python tests run against a stale `.so`.
 
 CI runs `pixi run -e test coverage-all` on Linux and Windows, plus a fast
 lint job (`ruff format --check`, `ruff check`, `cargo fmt --check`,
-`cargo clippy -- -D warnings`). The lint job gates the test matrix, so a
-formatting slip won't burn the full test budget.
+`cargo clippy -- -D warnings`) and a DCO check (see [Sign off your commits](#sign-off-your-commits-dco)).
+The lint job gates the test matrix, so a formatting slip won't burn the
+full test budget.
 
 ## Specs
 
@@ -84,6 +85,25 @@ reports and reproductions where possible.
 Short, imperative subject lines (e.g. "Add a spec for the spherical tile
 rig", "Fix NumPy to quaternion transpose bug"). Group related changes into
 one commit; avoid noisy fixup commits in the final history.
+
+## Sign off your commits (DCO)
+
+This project uses the [Developer Certificate of Origin](https://developercertificate.org/).
+Every commit must carry a `Signed-off-by` line certifying that you wrote
+the change or otherwise have the right to submit it under the project's
+license. Add it by committing with `-s`:
+
+```bash
+git commit -s -m "Your message"
+```
+
+This appends `Signed-off-by: Your Name <you@example.com>`, which must match
+the commit author. CI enforces this on every PR; to fix existing commits:
+
+```bash
+git commit --amend -s            # the most recent commit
+git rebase --signoff origin/main # every commit on the branch
+```
 
 ## Reporting issues
 

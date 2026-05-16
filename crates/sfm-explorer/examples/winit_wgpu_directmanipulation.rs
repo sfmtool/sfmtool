@@ -6,9 +6,9 @@
 //! Same as `winit_directmanipulation` but adds wgpu surface creation to the
 //! window, to test whether wgpu/DXGI initialization breaks DM_POINTERHITTEST.
 //!
-//! Run with: cargo run --bin winit_wgpu_directmanipulation --features directmanipulation
+//! Run with: cargo run --example winit_wgpu_directmanipulation --features directmanipulation
 //!
-//! This binary only builds on Windows.
+//! This example only builds on Windows.
 
 #[cfg(not(windows))]
 fn main() {

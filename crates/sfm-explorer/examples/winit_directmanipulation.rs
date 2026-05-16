@@ -13,9 +13,9 @@
 //! 3. Drive update_manager.Update() manually from winit's event loop
 //!    (WM_TIMER is not delivered when a winit window exists).
 //!
-//! Run with: cargo run --bin winit_directmanipulation --features directmanipulation
+//! Run with: cargo run --example winit_directmanipulation --features directmanipulation
 //!
-//! This binary only builds on Windows.
+//! This example only builds on Windows.
 
 #[cfg(not(windows))]
 fn main() {
