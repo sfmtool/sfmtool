@@ -22,10 +22,12 @@ use crate::PyCameraIntrinsics;
 ///   metadata, content_hash, cameras, depth_statistics (dicts/lists),
 ///   image_names (list[str]),
 ///   feature_tool_hashes, sift_content_hashes (list[bytes], 16 bytes each),
-///   camera_indexes, quaternions_wxyz, translations_xyz, positions_xyz,
+///   camera_indexes, quaternions_wxyz, translations_xyz, positions_xyzw,
 ///   colors_rgb, reprojection_errors, estimated_normals_xyz,
-///   image_indexes, feature_indexes, points3d_indexes, observation_counts,
+///   image_indexes, feature_indexes, point_indexes, observation_counts,
 ///   observed_depth_histogram_counts (numpy arrays).
+///
+/// `positions_xyzw` is the homogeneous `(P, 4)` point array.
 #[pyfunction]
 pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     let data = sfmr_format::read_sfmr(&path)
@@ -78,7 +80,7 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     dict.set_item("camera_indexes", data.camera_indexes.into_pyarray(py))?;
     dict.set_item("quaternions_wxyz", data.quaternions_wxyz.into_pyarray(py))?;
     dict.set_item("translations_xyz", data.translations_xyz.into_pyarray(py))?;
-    dict.set_item("positions_xyz", data.positions_xyz.into_pyarray(py))?;
+    dict.set_item("positions_xyzw", data.positions_xyzw.into_pyarray(py))?;
     dict.set_item("colors_rgb", data.colors_rgb.into_pyarray(py))?;
     dict.set_item(
         "reprojection_errors",
@@ -90,7 +92,7 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     )?;
     dict.set_item("image_indexes", data.image_indexes.into_pyarray(py))?;
     dict.set_item("feature_indexes", data.feature_indexes.into_pyarray(py))?;
-    dict.set_item("points3d_indexes", data.points3d_indexes.into_pyarray(py))?;
+    dict.set_item("point_indexes", data.point_indexes.into_pyarray(py))?;
     dict.set_item(
         "observation_counts",
         data.observation_counts.into_pyarray(py),
@@ -137,13 +139,13 @@ pub(crate) fn parse_sfmr_data_from_dict(
     let camera_indexes: PyReadonlyArray1<u32> = get_item(data, "camera_indexes")?.extract()?;
     let quaternions_wxyz: PyReadonlyArray2<f64> = get_item(data, "quaternions_wxyz")?.extract()?;
     let translations_xyz: PyReadonlyArray2<f64> = get_item(data, "translations_xyz")?.extract()?;
-    let positions_xyz: PyReadonlyArray2<f64> = get_item(data, "positions_xyz")?.extract()?;
+    let positions_xyzw: PyReadonlyArray2<f64> = get_item(data, "positions_xyzw")?.extract()?;
     let colors_rgb: PyReadonlyArray2<u8> = get_item(data, "colors_rgb")?.extract()?;
     let reprojection_errors: PyReadonlyArray1<f32> =
         get_item(data, "reprojection_errors")?.extract()?;
     let image_indexes: PyReadonlyArray1<u32> = get_item(data, "image_indexes")?.extract()?;
     let feature_indexes: PyReadonlyArray1<u32> = get_item(data, "feature_indexes")?.extract()?;
-    let points3d_indexes: PyReadonlyArray1<u32> = get_item(data, "points3d_indexes")?.extract()?;
+    let point_indexes: PyReadonlyArray1<u32> = get_item(data, "point_indexes")?.extract()?;
     let observation_counts: PyReadonlyArray1<u32> =
         get_item(data, "observation_counts")?.extract()?;
 
@@ -162,13 +164,13 @@ pub(crate) fn parse_sfmr_data_from_dict(
             (ds, en.as_array().to_owned(), ohc.as_array().to_owned())
         } else {
             let image_count = metadata.image_count as usize;
-            let points3d_count = metadata.points3d_count as usize;
+            let point_count = metadata.point_count as usize;
             (
                 DepthStatistics {
                     num_histogram_buckets: 128,
                     images: Vec::new(),
                 },
-                ndarray::Array2::<f32>::zeros((points3d_count, 3)),
+                ndarray::Array2::<f32>::zeros((point_count, 3)),
                 ndarray::Array2::<u32>::zeros((image_count, 128)),
             )
         };
@@ -198,13 +200,13 @@ pub(crate) fn parse_sfmr_data_from_dict(
         feature_tool_hashes,
         sift_content_hashes,
         thumbnails_y_x_rgb: thumbnails_y_x_rgb.as_array().to_owned(),
-        positions_xyz: positions_xyz.as_array().to_owned(),
+        positions_xyzw: positions_xyzw.as_array().to_owned(),
         colors_rgb: colors_rgb.as_array().to_owned(),
         reprojection_errors: reprojection_errors.as_array().to_owned(),
         estimated_normals_xyz,
         image_indexes: image_indexes.as_array().to_owned(),
         feature_indexes: feature_indexes.as_array().to_owned(),
-        points3d_indexes: points3d_indexes.as_array().to_owned(),
+        point_indexes: point_indexes.as_array().to_owned(),
         observation_counts: observation_counts.as_array().to_owned(),
         depth_statistics,
         observed_depth_histogram_counts,

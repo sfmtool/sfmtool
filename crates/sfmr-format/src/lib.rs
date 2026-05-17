@@ -36,17 +36,17 @@ mod tests {
     /// Create minimal valid SfmrData for testing.
     fn make_test_data() -> SfmrData {
         let image_count = 3;
-        let points3d_count = 5;
+        let point_count = 5;
         let observation_count = 8;
         let num_buckets = 128;
 
-        // Build track arrays sorted by (points3d_indexes, image_indexes)
+        // Build track arrays sorted by (point_indexes, image_indexes)
         // Point 0: observed by images 0, 1 (2 obs)
         // Point 1: observed by images 0, 1, 2 (3 obs)
         // Point 2: observed by image 2 (1 obs)
         // Point 3: observed by image 1 (1 obs)
         // Point 4: observed by image 0 (1 obs)
-        let points3d_indexes = Array1::from_vec(vec![0, 0, 1, 1, 1, 2, 3, 4]);
+        let point_indexes = Array1::from_vec(vec![0, 0, 1, 1, 1, 2, 3, 4]);
         let image_indexes = Array1::from_vec(vec![0, 1, 0, 1, 2, 2, 1, 0]);
         let feature_indexes = Array1::from_vec(vec![0, 0, 1, 1, 0, 1, 2, 2]);
         let observation_counts = Array1::from_vec(vec![2, 3, 1, 1, 1]);
@@ -54,7 +54,7 @@ mod tests {
         SfmrData {
             workspace_dir: None,
             metadata: SfmrMetadata {
-                version: 1,
+                version: 2,
                 operation: "sfm_solve".into(),
                 tool: "colmap".into(),
                 tool_version: "3.10".into(),
@@ -71,7 +71,8 @@ mod tests {
                 },
                 timestamp: "2025-12-21T14:32:15.123456Z".into(),
                 image_count: image_count as u32,
-                points3d_count: points3d_count as u32,
+                point_count: point_count as u32,
+                infinity_point_count: 0,
                 observation_count: observation_count as u32,
                 camera_count: 1,
                 rig_count: None,
@@ -133,21 +134,25 @@ mod tests {
             feature_tool_hashes: vec![[0u8; 16]; image_count],
             sift_content_hashes: vec![[1u8; 16]; image_count],
             thumbnails_y_x_rgb: Array4::zeros((image_count, 128, 128, 3)),
-            positions_xyz: Array2::from_shape_vec(
-                (points3d_count, 3),
+            positions_xyzw: Array2::from_shape_vec(
+                (point_count, 4),
                 vec![
-                    0.0, 0.0, 5.0, 1.0, 0.0, 6.0, -1.0, 1.0, 4.0, 0.5, -0.5, 7.0, -0.5, 0.5, 3.0,
+                    0.0, 0.0, 5.0, 1.0, // finite point, w=1
+                    1.0, 0.0, 6.0, 1.0, //
+                    -1.0, 1.0, 4.0, 1.0, //
+                    0.5, -0.5, 7.0, 1.0, //
+                    -0.5, 0.5, 3.0, 1.0, //
                 ],
             )
             .unwrap(),
             colors_rgb: Array2::from_shape_vec(
-                (points3d_count, 3),
+                (point_count, 3),
                 vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 128, 128, 0, 0, 128, 128],
             )
             .unwrap(),
             reprojection_errors: Array1::from_vec(vec![0.5, 0.6, 0.7, 0.8, 0.4]),
             estimated_normals_xyz: Array2::from_shape_vec(
-                (points3d_count, 3),
+                (point_count, 3),
                 vec![
                     0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
                 ],
@@ -155,7 +160,7 @@ mod tests {
             .unwrap(),
             image_indexes,
             feature_indexes,
-            points3d_indexes,
+            point_indexes,
             observation_counts,
             depth_statistics: DepthStatistics {
                 num_histogram_buckets: num_buckets as u32,
@@ -165,6 +170,7 @@ mod tests {
                         histogram_max_z: Some(7.0),
                         observed: ObservedDepthStats {
                             count: 3,
+                            infinity_count: 0,
                             min_z: Some(3.0),
                             max_z: Some(7.0),
                             median_z: Some(5.0),
@@ -176,6 +182,7 @@ mod tests {
                         histogram_max_z: Some(7.0),
                         observed: ObservedDepthStats {
                             count: 3,
+                            infinity_count: 0,
                             min_z: Some(4.0),
                             max_z: Some(7.0),
                             median_z: Some(5.5),
@@ -187,6 +194,7 @@ mod tests {
                         histogram_max_z: Some(6.0),
                         observed: ObservedDepthStats {
                             count: 2,
+                            infinity_count: 0,
                             min_z: Some(4.0),
                             max_z: Some(6.0),
                             median_z: Some(5.0),
@@ -220,7 +228,7 @@ mod tests {
         assert_eq!(loaded.metadata.operation, "sfm_solve");
         assert_eq!(loaded.metadata.tool, "colmap");
         assert_eq!(loaded.metadata.image_count, 3);
-        assert_eq!(loaded.metadata.points3d_count, 5);
+        assert_eq!(loaded.metadata.point_count, 5);
         assert_eq!(loaded.metadata.observation_count, 8);
         assert_eq!(loaded.metadata.camera_count, 1);
 
@@ -239,7 +247,7 @@ mod tests {
         assert_eq!(loaded.thumbnails_y_x_rgb, data.thumbnails_y_x_rgb);
 
         // Verify points3d
-        assert_eq!(loaded.positions_xyz, data.positions_xyz);
+        assert_eq!(loaded.positions_xyzw, data.positions_xyzw);
         assert_eq!(loaded.colors_rgb, data.colors_rgb);
         assert_eq!(loaded.reprojection_errors, data.reprojection_errors);
         assert_eq!(loaded.estimated_normals_xyz, data.estimated_normals_xyz);
@@ -247,7 +255,7 @@ mod tests {
         // Verify tracks
         assert_eq!(loaded.image_indexes, data.image_indexes);
         assert_eq!(loaded.feature_indexes, data.feature_indexes);
-        assert_eq!(loaded.points3d_indexes, data.points3d_indexes);
+        assert_eq!(loaded.point_indexes, data.point_indexes);
         assert_eq!(loaded.observation_counts, data.observation_counts);
 
         // Verify depth statistics
@@ -317,6 +325,145 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// Rewrite a version-2 `.sfmr` file into the version-1 on-disk layout, so
+    /// the version-1 compatibility path in `read_sfmr` can be exercised.
+    /// Version 1 stored Euclidean `positions_xyz` `(P, 3)`, named the track
+    /// point-index array `points3d_indexes`, and used the `points3d_count`
+    /// metadata key.
+    fn rewrite_v2_as_v1(v2_path: &std::path::Path, v1_path: &std::path::Path) {
+        use std::io::{Read, Write};
+
+        let v2 = std::fs::File::open(v2_path).unwrap();
+        let mut archive = zip::ZipArchive::new(v2).unwrap();
+        let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+
+        let out = std::fs::File::create(v1_path).unwrap();
+        let mut zip = zip::ZipWriter::new(out);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        let rename_json_key = |compressed: &[u8], set_version: bool| -> Vec<u8> {
+            let mut json: serde_json::Value =
+                serde_json::from_slice(&zstd::stream::decode_all(compressed).unwrap()).unwrap();
+            let obj = json.as_object_mut().unwrap();
+            if let Some(pc) = obj.remove("point_count") {
+                obj.insert("points3d_count".into(), pc);
+            }
+            obj.remove("infinity_point_count");
+            if set_version {
+                obj.insert("version".into(), serde_json::json!(1));
+            }
+            zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap()
+        };
+
+        for name in &names {
+            let mut compressed = Vec::new();
+            archive
+                .by_name(name)
+                .unwrap()
+                .read_to_end(&mut compressed)
+                .unwrap();
+
+            if name == "metadata.json.zst" {
+                zip.start_file(name, stored).unwrap();
+                zip.write_all(&rename_json_key(&compressed, true)).unwrap();
+            } else if name == "points3d/metadata.json.zst" {
+                zip.start_file(name, stored).unwrap();
+                zip.write_all(&rename_json_key(&compressed, false)).unwrap();
+            } else if name.starts_with("points3d/positions_xyzw.") {
+                // Drop the homogeneous `w` column: keep the first 3 of every
+                // 4 little-endian f64 values (24 of every 32 bytes).
+                let xyzw = zstd::stream::decode_all(&compressed[..]).unwrap();
+                let mut xyz = Vec::with_capacity(xyzw.len() / 4 * 3);
+                for row in xyzw.chunks_exact(32) {
+                    xyz.extend_from_slice(&row[..24]);
+                }
+                let v1_name = name
+                    .replace("positions_xyzw", "positions_xyz")
+                    .replace(".4.float64", ".3.float64");
+                zip.start_file(&v1_name, stored).unwrap();
+                zip.write_all(&zstd::bulk::compress(&xyz, 3).unwrap())
+                    .unwrap();
+            } else if name.starts_with("tracks/point_indexes.") {
+                // Identical bytes under the version-1 name.
+                let v1_name = name.replace("point_indexes", "points3d_indexes");
+                zip.start_file(&v1_name, stored).unwrap();
+                zip.write_all(&compressed).unwrap();
+            } else {
+                zip.start_file(name, stored).unwrap();
+                zip.write_all(&compressed).unwrap();
+            }
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn test_read_version_1_layout() {
+        let mut data = make_test_data();
+        let dir = std::env::temp_dir().join("sfmr_test_v1_compat");
+        std::fs::create_dir_all(&dir).unwrap();
+        let v2_path = dir.join("v2.sfmr");
+        let v1_path = dir.join("v1.sfmr");
+
+        write_sfmr(&v2_path, &mut data).unwrap();
+        rewrite_v2_as_v1(&v2_path, &v1_path);
+
+        // Metadata-only read must accept the version-1 `points3d_count` key.
+        let meta = read_sfmr_metadata(&v1_path).unwrap();
+        assert_eq!(meta.version, 1);
+        assert_eq!(meta.point_count, 5);
+
+        // Full read upgrades version 1 to the version-2 in-memory model.
+        let loaded = read_sfmr(&v1_path).unwrap();
+        assert_eq!(loaded.metadata.version, 2);
+        assert_eq!(loaded.metadata.point_count, 5);
+        assert_eq!(loaded.metadata.infinity_point_count, 0);
+        assert_eq!(loaded.positions_xyzw.shape(), &[5, 4]);
+        // Every version-1 point is finite: the appended `w` column is 1.
+        for i in 0..5 {
+            assert_eq!(loaded.positions_xyzw[[i, 3]], 1.0);
+        }
+        // Euclidean coordinates survive the round trip.
+        assert_eq!(loaded.positions_xyzw[[0, 0]], 0.0);
+        assert_eq!(loaded.positions_xyzw[[0, 2]], 5.0);
+        // The renamed track point-index array is read correctly.
+        assert_eq!(loaded.point_indexes, data.point_indexes);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_point_at_infinity_round_trip() {
+        let mut data = make_test_data();
+        // Turn point 4 (observed only by image 0) into a point at infinity:
+        // a unit direction with `w == 0`.
+        data.positions_xyzw[[4, 0]] = 0.0;
+        data.positions_xyzw[[4, 1]] = 0.0;
+        data.positions_xyzw[[4, 2]] = 1.0;
+        data.positions_xyzw[[4, 3]] = 0.0;
+
+        let dir = std::env::temp_dir().join("sfmr_test_infinity_round_trip");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sfmr");
+
+        write_sfmr(&path, &mut data).unwrap();
+
+        let (valid, errors) = verify_sfmr(&path).unwrap();
+        assert!(valid, "Verification failed: {:?}", errors);
+
+        let loaded = read_sfmr(&path).unwrap();
+        assert_eq!(loaded.metadata.infinity_point_count, 1);
+        assert_eq!(loaded.positions_xyzw[[4, 3]], 0.0);
+
+        // Depth statistics count the infinity point separately. Image 0 also
+        // observes finite points 0 and 1, so its finite `count` stays 2.
+        let img0 = &loaded.depth_statistics.images[0];
+        assert_eq!(img0.observed.infinity_count, 1);
+        assert_eq!(img0.observed.count, 2);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     // NOTE: test_reconstruction_round_trip is intentionally omitted here.
     // It tests SfmrReconstruction which lives in sfmtool-core, not sfmr-format.
     // That test remains in sfmtool-core.
@@ -327,7 +474,7 @@ mod tests {
         let mut data = SfmrData {
             workspace_dir: None,
             metadata: SfmrMetadata {
-                version: 1,
+                version: 2,
                 operation: "sfm_solve".into(),
                 tool: "colmap".into(),
                 tool_version: "3.10".into(),
@@ -344,7 +491,8 @@ mod tests {
                 },
                 timestamp: "2025-12-21T14:32:15.123456Z".into(),
                 image_count: 0,
-                points3d_count: 0,
+                point_count: 0,
+                infinity_point_count: 0,
                 observation_count: 0,
                 camera_count: 0,
                 rig_count: None,
@@ -370,13 +518,13 @@ mod tests {
             feature_tool_hashes: vec![],
             sift_content_hashes: vec![],
             thumbnails_y_x_rgb: Array4::zeros((0, 128, 128, 3)),
-            positions_xyz: Array2::zeros((0, 3)),
+            positions_xyzw: Array2::zeros((0, 4)),
             colors_rgb: Array2::zeros((0, 3)),
             reprojection_errors: Array1::from_vec(vec![]),
             estimated_normals_xyz: Array2::zeros((0, 3)),
             image_indexes: Array1::from_vec(vec![]),
             feature_indexes: Array1::from_vec(vec![]),
-            points3d_indexes: Array1::from_vec(vec![]),
+            point_indexes: Array1::from_vec(vec![]),
             observation_counts: Array1::from_vec(vec![]),
             depth_statistics: DepthStatistics {
                 num_histogram_buckets: num_buckets as u32,
@@ -398,11 +546,11 @@ mod tests {
         // Read back
         let loaded = read_sfmr(&path).unwrap();
         assert_eq!(loaded.metadata.image_count, 0);
-        assert_eq!(loaded.metadata.points3d_count, 0);
+        assert_eq!(loaded.metadata.point_count, 0);
         assert_eq!(loaded.metadata.observation_count, 0);
         assert_eq!(loaded.cameras.len(), 0);
         assert_eq!(loaded.image_names.len(), 0);
-        assert_eq!(loaded.positions_xyz.shape(), &[0, 3]);
+        assert_eq!(loaded.positions_xyzw.shape(), &[0, 4]);
 
         // Verify
         let (valid, errors) = verify_sfmr(&path).unwrap();

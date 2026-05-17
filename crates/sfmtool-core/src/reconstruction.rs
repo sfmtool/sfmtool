@@ -45,16 +45,33 @@ impl std::fmt::Display for ReconstructionError {
 impl std::error::Error for ReconstructionError {}
 
 /// A 3D point in the reconstruction.
+///
+/// Points are homogeneous: the on-disk `.sfmr` v2 format stores `(x, y, z, w)`.
+/// Here the representation is normalised — a finite point (`w != 0`) stores its
+/// Euclidean position in `position` with `w == 1.0`; a point at infinity
+/// (`w == 0`) stores a unit-length direction in `position` with `w == 0.0`.
 #[derive(Debug, Clone)]
 pub struct Point3D {
-    /// Position in world coordinates.
+    /// Euclidean position (finite point) or unit direction (point at infinity),
+    /// in world coordinates. Disambiguated by `w`.
     pub position: Point3<f64>,
+    /// Homogeneous coordinate kind: `1.0` for a finite point, `0.0` for a point
+    /// at infinity.
+    pub w: f64,
     /// RGB color (0-255 each).
     pub color: [u8; 3],
     /// RMS reprojection error in pixels.
     pub error: f32,
     /// Estimated surface normal (unit vector in world coordinates).
+    /// `(0, 0, 0)` for a point at infinity, which has no surface normal.
     pub estimated_normal: Vector3<f32>,
+}
+
+impl Point3D {
+    /// Whether this point is at infinity (`w == 0`).
+    pub fn is_at_infinity(&self) -> bool {
+        self.w == 0.0
+    }
 }
 
 /// An image in the reconstruction with its pose.
@@ -379,26 +396,27 @@ impl SfmrReconstruction {
             translations_xyz[[i, 2]] = im.translation_xyz.z;
         }
 
-        let mut positions_xyz = Array2::<f64>::zeros((points3d_count, 3));
+        let mut positions_xyzw = Array2::<f64>::zeros((points3d_count, 4));
         for (i, pt) in self.points.iter().enumerate() {
-            positions_xyz[[i, 0]] = pt.position.x;
-            positions_xyz[[i, 1]] = pt.position.y;
-            positions_xyz[[i, 2]] = pt.position.z;
+            positions_xyzw[[i, 0]] = pt.position.x;
+            positions_xyzw[[i, 1]] = pt.position.y;
+            positions_xyzw[[i, 2]] = pt.position.z;
+            positions_xyzw[[i, 3]] = pt.w;
         }
 
         let mut image_indexes = Array1::<u32>::zeros(observation_count);
-        let mut points3d_indexes = Array1::<u32>::zeros(observation_count);
+        let mut point_indexes = Array1::<u32>::zeros(observation_count);
         for (i, obs) in self.tracks.iter().enumerate() {
             image_indexes[i] = obs.image_index;
-            points3d_indexes[i] = obs.point_index;
+            point_indexes[i] = obs.point_index;
         }
 
         let result = sfmr_format::compute_depth_statistics(
             &quaternions_wxyz,
             &translations_xyz,
-            &positions_xyz,
+            &positions_xyzw,
             &image_indexes,
-            &points3d_indexes,
+            &point_indexes,
         )?;
 
         // Store results back
@@ -425,7 +443,7 @@ impl SfmrReconstruction {
     /// Convert from the raw columnar I/O representation.
     pub fn from_sfmr_data(data: SfmrData) -> Result<Self, SfmrError> {
         let image_count = data.metadata.image_count as usize;
-        let points3d_count = data.metadata.points3d_count as usize;
+        let point_count = data.metadata.point_count as usize;
         let observation_count = data.metadata.observation_count as usize;
         let num_buckets = data.depth_statistics.num_histogram_buckets as usize;
 
@@ -453,15 +471,27 @@ impl SfmrReconstruction {
             });
         }
 
-        // Convert points
-        let mut points = Vec::with_capacity(points3d_count);
-        for i in 0..points3d_count {
+        // Convert points. On-disk positions are homogeneous (x, y, z, w);
+        // normalise into the ergonomic form — a finite point stores its
+        // Euclidean position with w = 1, a point at infinity stores a
+        // unit-length direction with w = 0.
+        let mut points = Vec::with_capacity(point_count);
+        for i in 0..point_count {
+            let x = data.positions_xyzw[[i, 0]];
+            let y = data.positions_xyzw[[i, 1]];
+            let z = data.positions_xyzw[[i, 2]];
+            let w = data.positions_xyzw[[i, 3]];
+            let (position, w) = if w != 0.0 {
+                (Point3::new(x / w, y / w, z / w), 1.0)
+            } else {
+                let dir = Vector3::new(x, y, z);
+                let norm = dir.norm();
+                let unit = if norm > 0.0 { dir / norm } else { dir };
+                (Point3::from(unit), 0.0)
+            };
             points.push(Point3D {
-                position: Point3::new(
-                    data.positions_xyz[[i, 0]],
-                    data.positions_xyz[[i, 1]],
-                    data.positions_xyz[[i, 2]],
-                ),
+                position,
+                w,
                 color: [
                     data.colors_rgb[[i, 0]],
                     data.colors_rgb[[i, 1]],
@@ -482,7 +512,7 @@ impl SfmrReconstruction {
             tracks.push(TrackObservation {
                 image_index: data.image_indexes[i],
                 feature_index: data.feature_indexes[i],
-                point_index: data.points3d_indexes[i],
+                point_index: data.point_indexes[i],
             });
         }
 
@@ -889,7 +919,7 @@ impl SfmrReconstruction {
         use ndarray::{Array1, Array2};
 
         let image_count = self.images.len();
-        let points3d_count = self.points.len();
+        let point_count = self.points.len();
         let observation_count = self.tracks.len();
         let num_buckets = self.depth_statistics.num_histogram_buckets as usize;
 
@@ -915,16 +945,19 @@ impl SfmrReconstruction {
             sift_content_hashes.push(im.sift_content_hash);
         }
 
-        // Points
-        let mut positions_xyz = Array2::<f64>::zeros((points3d_count, 3));
-        let mut colors_rgb = Array2::<u8>::zeros((points3d_count, 3));
-        let mut reprojection_errors = Array1::<f32>::zeros(points3d_count);
-        let mut estimated_normals_xyz = Array2::<f32>::zeros((points3d_count, 3));
+        // Points. The ergonomic form is normalised — finite points have w = 1
+        // and an Euclidean position, infinity points have w = 0 and a unit
+        // direction — so the homogeneous row is just `(x, y, z, w)`.
+        let mut positions_xyzw = Array2::<f64>::zeros((point_count, 4));
+        let mut colors_rgb = Array2::<u8>::zeros((point_count, 3));
+        let mut reprojection_errors = Array1::<f32>::zeros(point_count);
+        let mut estimated_normals_xyz = Array2::<f32>::zeros((point_count, 3));
 
         for (i, pt) in self.points.iter().enumerate() {
-            positions_xyz[[i, 0]] = pt.position.x;
-            positions_xyz[[i, 1]] = pt.position.y;
-            positions_xyz[[i, 2]] = pt.position.z;
+            positions_xyzw[[i, 0]] = pt.position.x;
+            positions_xyzw[[i, 1]] = pt.position.y;
+            positions_xyzw[[i, 2]] = pt.position.z;
+            positions_xyzw[[i, 3]] = pt.w;
             colors_rgb[[i, 0]] = pt.color[0];
             colors_rgb[[i, 1]] = pt.color[1];
             colors_rgb[[i, 2]] = pt.color[2];
@@ -937,12 +970,12 @@ impl SfmrReconstruction {
         // Tracks
         let mut image_indexes = Array1::<u32>::zeros(observation_count);
         let mut feature_indexes = Array1::<u32>::zeros(observation_count);
-        let mut points3d_indexes = Array1::<u32>::zeros(observation_count);
+        let mut point_indexes = Array1::<u32>::zeros(observation_count);
 
         for (i, obs) in self.tracks.iter().enumerate() {
             image_indexes[i] = obs.image_index;
             feature_indexes[i] = obs.feature_index;
-            points3d_indexes[i] = obs.point_index;
+            point_indexes[i] = obs.point_index;
         }
 
         let observation_counts = Array1::from_vec(self.observation_counts.clone());
@@ -971,13 +1004,13 @@ impl SfmrReconstruction {
             feature_tool_hashes,
             sift_content_hashes,
             thumbnails_y_x_rgb: self.thumbnails_y_x_rgb.clone(),
-            positions_xyz,
+            positions_xyzw,
             colors_rgb,
             reprojection_errors,
             estimated_normals_xyz,
             image_indexes,
             feature_indexes,
-            points3d_indexes,
+            point_indexes,
             observation_counts,
             depth_statistics: self.depth_statistics.clone(),
             observed_depth_histogram_counts,
@@ -1057,6 +1090,7 @@ impl SfmrReconstruction {
 
             points.push(Point3D {
                 position: Point3::new(x, y, z + 1.0),
+                w: 1.0,
                 color: [r, g, b],
                 error: 0.5 + (i as f64 / num_points.max(1) as f64) as f32 * 0.5,
                 estimated_normal: Vector3::new(x as f32, y as f32, z as f32).normalize(),
@@ -1096,6 +1130,7 @@ impl SfmrReconstruction {
                     histogram_max_z: None,
                     observed: ObservedDepthStats {
                         count: 0,
+                        infinity_count: 0,
                         min_z: None,
                         max_z: None,
                         median_z: None,
@@ -1107,7 +1142,7 @@ impl SfmrReconstruction {
         let depth_histogram_counts = vec![vec![0u32; num_buckets as usize]; num_images];
 
         let metadata = SfmrMetadata {
-            version: 1,
+            version: 2,
             operation: "demo".into(),
             tool: "sfmtool".into(),
             tool_version: "0.1.0".into(),
@@ -1124,7 +1159,8 @@ impl SfmrReconstruction {
             },
             timestamp: String::new(),
             image_count: num_images as u32,
-            points3d_count: num_points as u32,
+            point_count: num_points as u32,
+            infinity_point_count: 0,
             observation_count: (num_points * 2) as u32,
             camera_count: 1,
             rig_count: None,

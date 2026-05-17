@@ -731,7 +731,7 @@ def densify_reconstruction(
         len(pt.track.elements) for pt in densified_reconstruction.points3D.values()
     )
     metadata["image_count"] = num_images
-    metadata["points3d_count"] = num_points
+    metadata["point_count"] = num_points
     metadata["observation_count"] = num_observations
     metadata["camera_count"] = num_cameras
 

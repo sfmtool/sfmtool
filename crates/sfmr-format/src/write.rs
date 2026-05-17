@@ -39,16 +39,17 @@ impl Default for WriteOptions {
 /// to ensure they are consistent with the current poses, points, and tracks.
 /// Use [`write_sfmr_with_options`] to skip recomputation if needed.
 ///
-/// Sorts tracks by `(points3d_indexes, image_indexes)` if not already sorted.
+/// Sorts tracks by `(point_indexes, image_indexes)` if not already sorted.
 /// Computes content hashes and writes all section metadata files.
-/// The `content_hash` field in `data` is ignored on write (recomputed).
+/// Always writes format version 2; the `content_hash` field in `data` is
+/// ignored on write (recomputed).
 pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
     write_sfmr_with_options(path, data, &WriteOptions::default())
 }
 
 /// Write columnar data to a `.sfmr` file with explicit options.
 ///
-/// Sorts tracks by `(points3d_indexes, image_indexes)` if not already sorted.
+/// Sorts tracks by `(point_indexes, image_indexes)` if not already sorted.
 /// See [`WriteOptions`] for available options. By default, depth statistics
 /// are recomputed from the reconstruction data to ensure trustworthiness.
 pub fn write_sfmr_with_options(
@@ -56,8 +57,15 @@ pub fn write_sfmr_with_options(
     data: &mut SfmrData,
     options: &WriteOptions,
 ) -> Result<(), SfmrError> {
-    // Ensure tracks are sorted by (points3d_indexes, image_indexes)
+    // Ensure tracks are sorted by (point_indexes, image_indexes)
     ensure_tracks_sorted(data);
+
+    // Always emit format version 2, and keep `infinity_point_count` consistent
+    // with the actual `w` column.
+    data.metadata.version = 2;
+    data.metadata.infinity_point_count = (0..data.positions_xyzw.shape()[0])
+        .filter(|&i| data.positions_xyzw[[i, 3]] == 0.0)
+        .count() as u32;
 
     // Recompute depth statistics unless explicitly skipped
     let recomputed: Option<DepthStatsResult>;
@@ -72,9 +80,9 @@ pub fn write_sfmr_with_options(
             recomputed = Some(compute_depth_statistics(
                 &data.quaternions_wxyz,
                 &data.translations_xyz,
-                &data.positions_xyz,
+                &data.positions_xyzw,
                 &data.image_indexes,
-                &data.points3d_indexes,
+                &data.point_indexes,
             )?);
             let r = recomputed.as_ref().unwrap();
             (
@@ -85,7 +93,7 @@ pub fn write_sfmr_with_options(
         };
 
     let image_count = data.metadata.image_count as usize;
-    let points3d_count = data.metadata.points3d_count as usize;
+    let point_count = data.metadata.point_count as usize;
     let observation_count = data.metadata.observation_count as usize;
     let num_buckets = depth_statistics.num_histogram_buckets as usize;
 
@@ -96,7 +104,7 @@ pub fn write_sfmr_with_options(
         &observed_depth_histogram_counts,
         depth_statistics,
         image_count,
-        points3d_count,
+        point_count,
         observation_count,
         num_buckets,
     )?;
@@ -346,7 +354,7 @@ pub fn write_sfmr_with_options(
     // points3d/colors_rgb
     let bytes = write_binary_entry(
         &mut zip,
-        &format!("points3d/colors_rgb.{points3d_count}.3.uint8.zst"),
+        &format!("points3d/colors_rgb.{point_count}.3.uint8.zst"),
         data.colors_rgb.as_slice().unwrap(),
         options.zstd_level,
     )?;
@@ -355,14 +363,14 @@ pub fn write_sfmr_with_options(
     // points3d/estimated_normals_xyz
     let bytes = write_binary_entry(
         &mut zip,
-        &format!("points3d/estimated_normals_xyz.{points3d_count}.3.float32.zst"),
+        &format!("points3d/estimated_normals_xyz.{point_count}.3.float32.zst"),
         bytemuck::cast_slice(estimated_normals_xyz.as_slice().unwrap()),
         options.zstd_level,
     )?;
     points3d_hasher.update(&bytes);
 
     // points3d/metadata.json
-    let points3d_meta = serde_json::json!({"points3d_count": points3d_count});
+    let points3d_meta = serde_json::json!({"point_count": point_count});
     let bytes = write_json_entry(
         &mut zip,
         "points3d/metadata.json.zst",
@@ -371,11 +379,11 @@ pub fn write_sfmr_with_options(
     )?;
     points3d_hasher.update(&bytes);
 
-    // points3d/positions_xyz
+    // points3d/positions_xyzw
     let bytes = write_binary_entry(
         &mut zip,
-        &format!("points3d/positions_xyz.{points3d_count}.3.float64.zst"),
-        bytemuck::cast_slice(data.positions_xyz.as_slice().unwrap()),
+        &format!("points3d/positions_xyzw.{point_count}.4.float64.zst"),
+        bytemuck::cast_slice(data.positions_xyzw.as_slice().unwrap()),
         options.zstd_level,
     )?;
     points3d_hasher.update(&bytes);
@@ -383,7 +391,7 @@ pub fn write_sfmr_with_options(
     // points3d/reprojection_errors
     let bytes = write_binary_entry(
         &mut zip,
-        &format!("points3d/reprojection_errors.{points3d_count}.float32.zst"),
+        &format!("points3d/reprojection_errors.{point_count}.float32.zst"),
         bytemuck::cast_slice(data.reprojection_errors.as_slice().unwrap()),
         options.zstd_level,
     )?;
@@ -426,17 +434,17 @@ pub fn write_sfmr_with_options(
     // tracks/observation_counts
     let bytes = write_binary_entry(
         &mut zip,
-        &format!("tracks/observation_counts.{points3d_count}.uint32.zst"),
+        &format!("tracks/observation_counts.{point_count}.uint32.zst"),
         bytemuck::cast_slice(data.observation_counts.as_slice().unwrap()),
         options.zstd_level,
     )?;
     tracks_hasher.update(&bytes);
 
-    // tracks/points3d_indexes
+    // tracks/point_indexes
     let bytes = write_binary_entry(
         &mut zip,
-        &format!("tracks/points3d_indexes.{observation_count}.uint32.zst"),
-        bytemuck::cast_slice(data.points3d_indexes.as_slice().unwrap()),
+        &format!("tracks/point_indexes.{observation_count}.uint32.zst"),
+        bytemuck::cast_slice(data.point_indexes.as_slice().unwrap()),
         options.zstd_level,
     )?;
     tracks_hasher.update(&bytes);
@@ -472,15 +480,15 @@ pub fn write_sfmr_with_options(
     Ok(())
 }
 
-/// Check if tracks are sorted by `(points3d_indexes, image_indexes)` and sort
+/// Check if tracks are sorted by `(point_indexes, image_indexes)` and sort
 /// them in-place if not. This is a no-op when tracks are already sorted.
 fn ensure_tracks_sorted(data: &mut SfmrData) {
-    let n = data.points3d_indexes.len();
+    let n = data.point_indexes.len();
     if n <= 1 {
         return;
     }
 
-    let p3d = data.points3d_indexes.as_slice().unwrap();
+    let p3d = data.point_indexes.as_slice().unwrap();
     let img = data.image_indexes.as_slice().unwrap();
 
     // Check if already sorted
@@ -503,7 +511,7 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
             arr[i] = old[pi];
         }
     };
-    reorder(&mut data.points3d_indexes, &perm);
+    reorder(&mut data.point_indexes, &perm);
     reorder(&mut data.image_indexes, &perm);
     reorder(&mut data.feature_indexes, &perm);
 }
@@ -515,7 +523,7 @@ fn validate_dimensions_with(
     observed_depth_histogram_counts: &ndarray::Array2<u32>,
     depth_statistics: &DepthStatistics,
     image_count: usize,
-    points3d_count: usize,
+    point_count: usize,
     observation_count: usize,
     num_buckets: usize,
 ) -> Result<(), SfmrError> {
@@ -585,30 +593,30 @@ fn validate_dimensions_with(
         )
     );
     check!(
-        data.positions_xyz.shape() == [points3d_count, 3],
+        data.positions_xyzw.shape() == [point_count, 4],
         format!(
-            "positions_xyz shape {:?} != [{points3d_count}, 3]",
-            data.positions_xyz.shape()
+            "positions_xyzw shape {:?} != [{point_count}, 4]",
+            data.positions_xyzw.shape()
         )
     );
     check!(
-        data.colors_rgb.shape() == [points3d_count, 3],
+        data.colors_rgb.shape() == [point_count, 3],
         format!(
-            "colors_rgb shape {:?} != [{points3d_count}, 3]",
+            "colors_rgb shape {:?} != [{point_count}, 3]",
             data.colors_rgb.shape()
         )
     );
     check!(
-        data.reprojection_errors.len() == points3d_count,
+        data.reprojection_errors.len() == point_count,
         format!(
-            "reprojection_errors len {} != points3d_count {points3d_count}",
+            "reprojection_errors len {} != point_count {point_count}",
             data.reprojection_errors.len()
         )
     );
     check!(
-        estimated_normals_xyz.shape() == [points3d_count, 3],
+        estimated_normals_xyz.shape() == [point_count, 3],
         format!(
-            "estimated_normals_xyz shape {:?} != [{points3d_count}, 3]",
+            "estimated_normals_xyz shape {:?} != [{point_count}, 3]",
             estimated_normals_xyz.shape()
         )
     );
@@ -627,16 +635,16 @@ fn validate_dimensions_with(
         )
     );
     check!(
-        data.points3d_indexes.len() == observation_count,
+        data.point_indexes.len() == observation_count,
         format!(
-            "points3d_indexes len {} != observation_count {observation_count}",
-            data.points3d_indexes.len()
+            "point_indexes len {} != observation_count {observation_count}",
+            data.point_indexes.len()
         )
     );
     check!(
-        data.observation_counts.len() == points3d_count,
+        data.observation_counts.len() == point_count,
         format!(
-            "observation_counts len {} != points3d_count {points3d_count}",
+            "observation_counts len {} != point_count {point_count}",
             data.observation_counts.len()
         )
     );
@@ -656,7 +664,7 @@ fn validate_dimensions_with(
     );
 
     // Validate observation_counts sum
-    if points3d_count > 0 {
+    if point_count > 0 {
         let obs_sum: u64 = data.observation_counts.iter().map(|&c| c as u64).sum();
         if obs_sum != observation_count as u64 {
             return Err(SfmrError::ShapeMismatch(format!(

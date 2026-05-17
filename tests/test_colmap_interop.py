@@ -3,6 +3,7 @@
 
 """Tests for COLMAP interop CLI commands."""
 
+import pytest
 from click.testing import CliRunner
 
 from sfmtool.cli import main
@@ -154,6 +155,23 @@ class TestToColmapBinE2E:
         assert (output_dir / "cameras.bin").exists()
         assert (output_dir / "images.bin").exists()
         assert (output_dir / "points3D.bin").exists()
+
+    def test_points_at_infinity_rejected(
+        self, tmp_path, sfmrfile_reconstruction_with_17_images
+    ):
+        """COLMAP binary export must fail loudly on a w=0 point."""
+        from sfmtool._colmap_io import save_colmap_binary
+        from sfmtool._sfmtool import SfmrReconstruction
+
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        positions_xyzw = recon.positions_xyzw.copy()
+        assert len(positions_xyzw) > 0
+        # Turn the first point into a point at infinity (w = 0).
+        positions_xyzw[0] = [0.0, 0.0, 1.0, 0.0]
+        recon = recon.clone_with_changes(positions=positions_xyzw)
+
+        with pytest.raises(NotImplementedError, match="point.* at infinity"):
+            save_colmap_binary(recon, tmp_path / "colmap_output")
 
     def test_range_subsets_images_and_keeps_all_points(
         self, tmp_path, sfmrfile_reconstruction_with_17_images

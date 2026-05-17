@@ -100,6 +100,42 @@ def _resolve_workspace_and_sift(
     )
 
 
+def finite_positions_xyzw(positions_xyz: np.ndarray) -> np.ndarray:
+    """Homogeneous ``(P, 4)`` positions for finite points.
+
+    The ``.sfmr`` v2 format stores point positions homogeneously as
+    ``(x, y, z, w)``. COLMAP and pycolmap reconstructions contain only finite
+    points, so this appends a ``w = 1`` column to Euclidean ``(P, 3)``
+    coordinates.
+    """
+    positions_xyz = np.asarray(positions_xyz, dtype=np.float64).reshape(-1, 3)
+    w = np.ones((len(positions_xyz), 1), dtype=np.float64)
+    return np.hstack([positions_xyz, w])
+
+
+def reject_points_at_infinity(recon, operation: str) -> None:
+    """Raise if the reconstruction contains points at infinity.
+
+    A finite-only operation (COLMAP export, undistortion) reads
+    ``recon.positions``, which for a ``w = 0`` point is a unit-length
+    *direction*, not a coordinate. Treating that direction as a finite
+    position would silently produce wrong data, so this fails loudly instead.
+
+    Handling ``w = 0`` points here requires the infinity->finite
+    materialisation pass described in
+    ``specs/drafts/sfmr-v2-points-at-infinity.md``, which is not yet
+    implemented.
+    """
+    at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
+    count = int(at_infinity.sum())
+    if count:
+        raise NotImplementedError(
+            f"{operation} cannot handle the {count} point(s) at infinity in "
+            "this reconstruction: the infinity->finite conversion (see "
+            "specs/drafts/sfmr-v2-points-at-infinity.md) is not yet implemented."
+        )
+
+
 def _build_sfmr_data_dict(
     *,
     cameras: list,
@@ -107,12 +143,12 @@ def _build_sfmr_data_dict(
     camera_indexes: np.ndarray,
     quaternions_wxyz: np.ndarray,
     translations_xyz: np.ndarray,
-    positions_xyz: np.ndarray,
+    positions_xyzw: np.ndarray,
     colors_rgb: np.ndarray,
     reprojection_errors: np.ndarray,
     track_image_indexes: np.ndarray,
     track_feature_indexes: np.ndarray,
-    track_point3d_indexes: np.ndarray,
+    point_indexes: np.ndarray,
     observation_counts: np.ndarray,
     feature_tool_hashes: list[bytes],
     sift_content_hashes: list[bytes],
@@ -120,7 +156,11 @@ def _build_sfmr_data_dict(
     metadata: dict,
     rig_frame_data: dict | None = None,
 ) -> dict:
-    """Assemble a data dict for SfmrReconstruction.from_data."""
+    """Assemble a v2 data dict for SfmrReconstruction.from_data.
+
+    ``positions_xyzw`` is the homogeneous ``(P, 4)`` point array; use
+    :func:`finite_positions_xyzw` to build it from Euclidean coordinates.
+    """
     data = {
         "metadata": metadata,
         "cameras": cameras,
@@ -128,12 +168,12 @@ def _build_sfmr_data_dict(
         "camera_indexes": np.asarray(camera_indexes, dtype=np.uint32),
         "quaternions_wxyz": np.asarray(quaternions_wxyz, dtype=np.float64),
         "translations_xyz": np.asarray(translations_xyz, dtype=np.float64),
-        "positions_xyz": np.asarray(positions_xyz, dtype=np.float64),
+        "positions_xyzw": np.asarray(positions_xyzw, dtype=np.float64),
         "colors_rgb": np.asarray(colors_rgb, dtype=np.uint8),
         "reprojection_errors": np.asarray(reprojection_errors, dtype=np.float32),
         "image_indexes": np.asarray(track_image_indexes, dtype=np.uint32),
         "feature_indexes": np.asarray(track_feature_indexes, dtype=np.uint32),
-        "points3d_indexes": np.asarray(track_point3d_indexes, dtype=np.uint32),
+        "point_indexes": np.asarray(point_indexes, dtype=np.uint32),
         "observation_counts": np.asarray(observation_counts, dtype=np.uint32),
         "feature_tool_hashes": feature_tool_hashes,
         "sift_content_hashes": sift_content_hashes,
@@ -154,7 +194,7 @@ def build_metadata(
     tool_options: dict | None = None,
     inputs: dict | None = None,
     image_count: int,
-    points3d_count: int,
+    point_count: int,
     observation_count: int,
     camera_count: int,
     world_space_unit: str | None = None,
@@ -190,7 +230,7 @@ def build_metadata(
     }
 
     metadata = {
-        "version": 1,
+        "version": 2,
         "operation": operation,
         "tool": tool_name,
         "tool_version": tool_version,
@@ -201,7 +241,7 @@ def build_metadata(
         },
         "timestamp": datetime.now().astimezone().isoformat(),
         "image_count": image_count,
-        "points3d_count": points3d_count,
+        "point_count": point_count,
         "observation_count": observation_count,
         "camera_count": camera_count,
         "tool_options": tool_options if tool_options is not None else {},
@@ -247,12 +287,12 @@ def colmap_binary_to_rust_sfmr(
         camera_indexes=data["camera_indexes"],
         quaternions_wxyz=data["quaternions_wxyz"],
         translations_xyz=data["translations_xyz"],
-        positions_xyz=data["positions_xyz"],
+        positions_xyzw=finite_positions_xyzw(data["positions_xyz"]),
         colors_rgb=data["colors_rgb"],
         reprojection_errors=data["reprojection_errors"],
         track_image_indexes=data["track_image_indexes"],
         track_feature_indexes=data["track_feature_indexes"],
-        track_point3d_indexes=data["track_point3d_indexes"],
+        point_indexes=data["track_point3d_indexes"],
         observation_counts=data["observation_counts"],
         feature_tool_hashes=feature_tool_hashes,
         sift_content_hashes=sift_content_hashes,
@@ -362,12 +402,12 @@ def pycolmap_to_rust_sfmr(
         camera_indexes=np.array(camera_indexes, dtype=np.uint32),
         quaternions_wxyz=np.array(quaternions_wxyz, dtype=np.float64),
         translations_xyz=np.array(translations_xyz, dtype=np.float64),
-        positions_xyz=np.array(point_positions, dtype=np.float64),
+        positions_xyzw=finite_positions_xyzw(point_positions),
         colors_rgb=np.array(point_colors, dtype=np.uint8),
         reprojection_errors=np.array(point_errors, dtype=np.float32),
         track_image_indexes=np.array(image_indexes_list, dtype=np.uint32),
         track_feature_indexes=np.array(feature_indexes_list, dtype=np.uint32),
-        track_point3d_indexes=np.array(points3d_indexes_list, dtype=np.uint32),
+        point_indexes=np.array(points3d_indexes_list, dtype=np.uint32),
         observation_counts=np.array(observation_counts, dtype=np.uint32),
         feature_tool_hashes=feature_tool_hashes,
         sift_content_hashes=sift_content_hashes,
@@ -522,6 +562,8 @@ def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None)
         max_features: Maximum features to export per image (None = all features)
     """
     from ._sfmtool import write_colmap_binary
+
+    reject_points_at_infinity(recon, "COLMAP binary export")
 
     output_dir = Path(output_dir)
     workspace_dir = recon.workspace_dir
