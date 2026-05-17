@@ -662,6 +662,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "camrig-format"
+version = "0.2.0"
+dependencies = [
+ "bytemuck",
+ "ndarray",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "xxhash-rust",
+ "zip",
+ "zstd",
+]
+
+[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,23 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "camrig-format"
+version = "0.2.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Read/write .camrig file format for camera rigs"
+
+[dependencies]
+ndarray = "0.16"
+bytemuck = "1.14"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+zstd = "0.13"
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: parse JSON floats with full precision so camera intrinsics
+# and rig_attributes round-trip bit-exact. Cargo feature unification applies
+# this to serde_json across the workspace; that is harmless, as the feature
+# is purely additive.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+thiserror = "2"
