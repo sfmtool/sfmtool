@@ -12,6 +12,7 @@ from ._cli_group import CategoryGroup
 from ._commands import (
     align,
     cam,
+    camrig,
     compare,
     densify,
     discontinuity,
@@ -70,6 +71,7 @@ main.add_command_with_category(heatmap, category="Visualization")
 main.add_command_with_category(undistort, category="Image Processing")
 main.add_command_with_category(pano2rig, category="Workspace")
 main.add_command_with_category(insv2rig, category="Workspace")
+main.add_command_with_category(camrig, category="Workspace")
 main.add_command_with_category(to_colmap_bin, category="COLMAP Interop")
 main.add_command_with_category(to_colmap_db, category="COLMAP Interop")
 main.add_command_with_category(from_colmap_bin, category="COLMAP Interop")

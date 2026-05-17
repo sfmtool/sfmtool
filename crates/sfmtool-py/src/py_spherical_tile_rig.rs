@@ -3,12 +3,14 @@
 
 //! Python wrapper for [`sfmtool_core::spherical_tile_rig::SphericalTileRig`].
 
+use std::path::PathBuf;
+
 use numpy::{PyArray1, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
 use sfmtool_core::sphere_points::RelaxConfig;
 use sfmtool_core::spherical_tile_rig::{
-    SphericalTileRig, SphericalTileRigError, SphericalTileRigParams,
+    CamRigConversionError, SphericalTileRig, SphericalTileRigError, SphericalTileRigParams,
 };
 
 use crate::py_camera_intrinsics::PyCameraIntrinsics;
@@ -18,6 +20,13 @@ use crate::py_warp_map::PyWarpMap;
 
 fn err_to_py(e: SphericalTileRigError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("{e}"))
+}
+
+fn camrig_err_to_py(e: CamRigConversionError) -> PyErr {
+    match e {
+        CamRigConversionError::File(_) => pyo3::exceptions::PyIOError::new_err(format!("{e}")),
+        _ => pyo3::exceptions::PyValueError::new_err(format!("{e}")),
+    }
 }
 
 /// A rig of `n` shared-centre pinhole tile cameras tiling the unit sphere.
@@ -341,6 +350,39 @@ impl PySphericalTileRig {
                 .unbind()
         };
         Ok(arr)
+    }
+
+    /// Write this rig to a ``.camrig`` file.
+    ///
+    /// Args:
+    ///     path: Output ``.camrig`` file path.
+    ///     name: Human-readable rig name stored in the file (default: the
+    ///         file stem of ``path``).
+    #[pyo3(signature = (path, name=None))]
+    fn write_camrig(&self, py: Python<'_>, path: PathBuf, name: Option<String>) -> PyResult<()> {
+        let name = name.unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("rig")
+                .to_string()
+        });
+        py.detach(|| self.inner.write_camrig(&path, &name))
+            .map_err(camrig_err_to_py)
+    }
+
+    /// Read a ``spherical_tiles`` rig from a ``.camrig`` file.
+    ///
+    /// Args:
+    ///     path: Input ``.camrig`` file path.
+    ///
+    /// Raises:
+    ///     ValueError: If the file is not a ``spherical_tiles`` rig.
+    #[staticmethod]
+    fn read_camrig(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
+        let inner = py
+            .detach(|| SphericalTileRig::read_camrig(&path))
+            .map_err(camrig_err_to_py)?;
+        Ok(Self { inner })
     }
 }
 

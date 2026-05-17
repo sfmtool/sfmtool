@@ -234,13 +234,21 @@ camera tables. Defined values so far:
 | `stereo_pair` | Two side-by-side sensors with near-parallel optical axes, in a stereo-vision configuration. | `{ "baseline_m": <float> }` |
 | `fisheye_360` | Two fisheye sensors facing opposite directions for full 360° coverage (e.g. `sfm insv2rig`). | `{ "baseline_m": <float> }` |
 | `cubemap` | Six co-centric pinhole faces (e.g. `sfm pano2rig`). | `{}` |
-| `spherical_tiles` | Co-centric pinhole tiles discretising the sphere (see `specs/core/spherical-tiles-rig.md`). | `n`, `arc_per_pixel`, `overlap_factor`, `half_fov_rad`, `patch_size`, `atlas_cols`, `centre` (`[x,y,z]` world placement), `relax_seed` |
+| `spherical_tiles` | Co-centric pinhole tiles discretising the sphere (see `specs/core/spherical-tiles-rig.md`). | `centre` (`[x,y,z]` world placement), `measured_max_nn_angle`, `measured_max_coverage_angle`, `atlas_cols`, plus informational `half_fov_rad` and `patch_size` |
 
 For a `spherical_tiles` rig, the generic tables already capture every tile's
 intrinsics (one shared pinhole camera) and rotation (per-tile quaternion,
-zero translation). `rig_attributes` additionally records the generator
-parameters so the exact rig — including its atlas packing and world placement
-— can be reconstructed without re-running the sphere-point relaxer.
+zero translation) — the per-tile rotations *are* the tile look directions and
+tangent bases, and the shared pinhole camera *is* the authoritative tile
+intrinsics, from which `patch_size` and `half_fov_rad` are recovered on read.
+`rig_attributes` records the remaining derived scalars (world placement, the
+measured coverage angles, and atlas packing) so the exact rig can be
+reconstructed without re-running the sphere-point relaxer. It also stores
+`half_fov_rad` and `patch_size`, but those are informational copies of values
+already implied by the shared camera and are not consumed when the rig is
+reloaded. The construction inputs (`n`, `arc_per_pixel`, `overlap_factor`,
+relaxer seed) are not stored: `n` is `sensor_count`, and the rest only feed
+the relaxer, which the reconstruction bypasses.
 
 ## How `.camrig` files fit into workspaces
 
@@ -342,14 +350,12 @@ $ jq . metadata.json
   "camera_count": 1,
   "rig_type": "spherical_tiles",
   "rig_attributes": {
-    "n": 1280,
-    "arc_per_pixel": 0.006135923151542565,
-    "overlap_factor": 1.15,
-    "half_fov_rad": 0.0654,
-    "patch_size": 21,
-    "atlas_cols": 36,
     "centre": [0.0, 0.0, 0.0],
-    "relax_seed": 42
+    "half_fov_rad": 0.0654,
+    "measured_max_nn_angle": 0.1138,
+    "measured_max_coverage_angle": 0.0569,
+    "patch_size": 21,
+    "atlas_cols": 36
   }
 }
 

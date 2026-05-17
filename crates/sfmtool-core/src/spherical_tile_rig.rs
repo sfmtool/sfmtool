@@ -30,6 +30,9 @@ use crate::spatial::PointCloud3;
 use crate::sphere_points::{evenly_distributed_sphere_points, random_sphere_points, RelaxConfig};
 use crate::warp_map::WarpMap;
 
+mod camrig;
+pub use camrig::CamRigConversionError;
+
 /// Lower bound on `patch_size`. Keeps NCC / gradient kernels meaningful at
 /// small `n`.
 const MIN_PATCH_SIZE: u32 = 5;
@@ -79,7 +82,31 @@ impl Default for SphericalTileRigParams {
     }
 }
 
-/// Construction-time validation errors for [`SphericalTileRig::new`].
+/// Already-computed parts of a [`SphericalTileRig`], handed to
+/// [`SphericalTileRig::from_parts`] to rebuild a rig without re-running the
+/// sphere-point relaxer. See `from_parts` for the validity constraints.
+#[derive(Debug, Clone)]
+pub struct SphericalTileRigParts {
+    /// Rig optical centre in world space.
+    pub centre: [f64; 3],
+    /// Per-tile unit look directions in world frame. Length `n >= 2`.
+    pub directions: Vec<[f64; 3]>,
+    /// Per-tile `(e_right, e_up)` tangent bases, flattened. Length `n`.
+    pub bases: Vec<[f64; 6]>,
+    /// Per-tile half-FOV in radians. Finite and `> 0`.
+    pub half_fov_rad: f64,
+    /// Measured worst-case nearest-neighbour angular gap. Diagnostic.
+    pub measured_max_nn_angle: f64,
+    /// Measured worst-case Voronoi-cell radius. Diagnostic.
+    pub measured_max_coverage_angle: f64,
+    /// Tile patch resolution in pixels. `> 0`.
+    pub patch_size: u32,
+    /// Atlas column count. `> 0`.
+    pub atlas_cols: u32,
+}
+
+/// Construction-time validation errors for [`SphericalTileRig::new`] and
+/// [`SphericalTileRig::from_parts`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum SphericalTileRigError {
     /// `n < 2`.
@@ -90,6 +117,9 @@ pub enum SphericalTileRigError {
     InvalidOverlapFactor,
     /// `centre` contains a non-finite component.
     InvalidCentre,
+    /// A part handed to [`SphericalTileRig::from_parts`] is inconsistent
+    /// (mismatched lengths, a non-unit direction, a non-positive dimension).
+    InvalidParts(String),
 }
 
 impl std::fmt::Display for SphericalTileRigError {
@@ -99,6 +129,7 @@ impl std::fmt::Display for SphericalTileRigError {
             Self::InvalidArcPerPixel => write!(f, "arc_per_pixel must be finite and > 0"),
             Self::InvalidOverlapFactor => write!(f, "overlap_factor must be finite and >= 1.0"),
             Self::InvalidCentre => write!(f, "centre must contain only finite components"),
+            Self::InvalidParts(msg) => write!(f, "invalid rig parts: {msg}"),
         }
     }
 }
@@ -229,6 +260,136 @@ impl SphericalTileRig {
 
         Ok(Self {
             centre: params.centre,
+            directions,
+            bases,
+            half_fov_rad,
+            measured_max_nn_angle,
+            measured_max_coverage_angle,
+            patch_size,
+            atlas_cols,
+            direction_tree,
+        })
+    }
+
+    /// Reconstruct a rig directly from its parts, bypassing the sphere-point
+    /// relaxer.
+    ///
+    /// [`new`](Self::new) derives `directions`, `bases`, and the `measured_*`
+    /// angles by running the relaxer and probing the sphere — a process that
+    /// is only bit-for-bit reproducible on the same platform. `from_parts`
+    /// instead takes those already-computed values verbatim, so a rig
+    /// serialised to a `.camrig` file (see [`from_camrig`](Self::from_camrig))
+    /// reloads identically on any platform. The direction KD-tree, which is
+    /// pure derived state, is the only thing rebuilt here.
+    ///
+    /// `parts.directions` and `parts.bases` must have equal length `n >= 2`;
+    /// each direction must be unit length; each basis `(e_right, e_up)` must
+    /// form a right-handed orthonormal frame with its direction (i.e.
+    /// `[e_right | e_up | direction]` is a rotation matrix); `half_fov_rad`
+    /// must be finite and positive; the `measured_*` angles must be finite;
+    /// `patch_size` and `atlas_cols` must be `> 0`.
+    pub fn from_parts(parts: SphericalTileRigParts) -> Result<Self, SphericalTileRigError> {
+        let SphericalTileRigParts {
+            centre,
+            directions,
+            bases,
+            half_fov_rad,
+            measured_max_nn_angle,
+            measured_max_coverage_angle,
+            patch_size,
+            atlas_cols,
+        } = parts;
+        let n = directions.len();
+        if n < 2 {
+            return Err(SphericalTileRigError::TooFewTiles);
+        }
+        if bases.len() != n {
+            return Err(SphericalTileRigError::InvalidParts(format!(
+                "directions length {n} != bases length {}",
+                bases.len()
+            )));
+        }
+        if !centre.iter().all(|c| c.is_finite()) {
+            return Err(SphericalTileRigError::InvalidCentre);
+        }
+        for (i, d) in directions.iter().enumerate() {
+            if !d.iter().all(|c| c.is_finite()) {
+                return Err(SphericalTileRigError::InvalidParts(format!(
+                    "direction {i} has a non-finite component"
+                )));
+            }
+            let norm = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if (norm - 1.0).abs() > 1e-6 {
+                return Err(SphericalTileRigError::InvalidParts(format!(
+                    "direction {i} is not unit length (norm {norm})"
+                )));
+            }
+        }
+        let dot = |u: &[f64; 3], v: &[f64; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+        for (i, b) in bases.iter().enumerate() {
+            if !b.iter().all(|c| c.is_finite()) {
+                return Err(SphericalTileRigError::InvalidParts(format!(
+                    "basis {i} has a non-finite component"
+                )));
+            }
+            let e_right = [b[0], b[1], b[2]];
+            let e_up = [b[3], b[4], b[5]];
+            let r_norm = dot(&e_right, &e_right).sqrt();
+            let u_norm = dot(&e_up, &e_up).sqrt();
+            if (r_norm - 1.0).abs() > 1e-6 || (u_norm - 1.0).abs() > 1e-6 {
+                return Err(SphericalTileRigError::InvalidParts(format!(
+                    "basis {i} axes are not unit length (e_right {r_norm}, e_up {u_norm})"
+                )));
+            }
+            if dot(&e_right, &e_up).abs() > 1e-6 {
+                return Err(SphericalTileRigError::InvalidParts(format!(
+                    "basis {i} axes e_right and e_up are not orthogonal"
+                )));
+            }
+            // [e_right | e_up | direction] must be a right-handed rotation:
+            // e_right x e_up == direction. This also forces direction to be
+            // orthogonal to both axes.
+            let d = directions[i];
+            let cross = [
+                e_right[1] * e_up[2] - e_right[2] * e_up[1],
+                e_right[2] * e_up[0] - e_right[0] * e_up[2],
+                e_right[0] * e_up[1] - e_right[1] * e_up[0],
+            ];
+            if (0..3).any(|k| (cross[k] - d[k]).abs() > 1e-6) {
+                return Err(SphericalTileRigError::InvalidParts(format!(
+                    "basis {i} is not a right-handed orthonormal frame with direction {i}"
+                )));
+            }
+        }
+        if !half_fov_rad.is_finite() || half_fov_rad <= 0.0 {
+            return Err(SphericalTileRigError::InvalidParts(
+                "half_fov_rad must be finite and > 0".into(),
+            ));
+        }
+        if !measured_max_nn_angle.is_finite() || !measured_max_coverage_angle.is_finite() {
+            return Err(SphericalTileRigError::InvalidParts(
+                "measured_* angles must be finite".into(),
+            ));
+        }
+        if patch_size == 0 {
+            return Err(SphericalTileRigError::InvalidParts(
+                "patch_size must be > 0".into(),
+            ));
+        }
+        if atlas_cols == 0 {
+            return Err(SphericalTileRigError::InvalidParts(
+                "atlas_cols must be > 0".into(),
+            ));
+        }
+
+        let flat: Vec<f32> = directions
+            .iter()
+            .flat_map(|d| [d[0] as f32, d[1] as f32, d[2] as f32])
+            .collect();
+        let direction_tree = PointCloud3::<f32>::new(&flat, n);
+
+        Ok(Self {
+            centre,
             directions,
             bases,
             half_fov_rad,

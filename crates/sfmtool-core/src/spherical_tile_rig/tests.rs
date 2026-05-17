@@ -421,6 +421,73 @@ fn basis_is_orthonormal_and_right_handed() {
     }
 }
 
+/// Extract a rig's `(centre, directions, bases, ...)` parts in the order
+/// `from_parts` expects.
+fn rig_parts(rig: &SphericalTileRig) -> ([f64; 3], Vec<[f64; 3]>, Vec<[f64; 6]>) {
+    let directions = (0..rig.len()).map(|i| rig.direction(i)).collect();
+    let bases = (0..rig.len())
+        .map(|i| {
+            let (r, u) = rig.basis(i);
+            [r[0], r[1], r[2], u[0], u[1], u[2]]
+        })
+        .collect();
+    (rig.centre(), directions, bases)
+}
+
+#[test]
+fn from_parts_round_trips_a_relaxed_rig() {
+    let rig = make_rig(256, 512);
+    let (centre, directions, bases) = rig_parts(&rig);
+    let rebuilt = SphericalTileRig::from_parts(SphericalTileRigParts {
+        centre,
+        directions,
+        bases,
+        half_fov_rad: rig.half_fov_rad(),
+        measured_max_nn_angle: rig.measured_max_nn_angle(),
+        measured_max_coverage_angle: rig.measured_max_coverage_angle(),
+        patch_size: rig.patch_size(),
+        atlas_cols: rig.atlas_cols(),
+    })
+    .unwrap();
+    assert_eq!(rebuilt.len(), rig.len());
+    for i in 0..rig.len() {
+        assert_eq!(rebuilt.direction(i), rig.direction(i));
+    }
+}
+
+#[test]
+fn from_parts_rejects_non_orthonormal_basis() {
+    let rig = make_rig(64, 512);
+    let build = |directions, bases| {
+        SphericalTileRig::from_parts(SphericalTileRigParts {
+            centre: rig.centre(),
+            directions,
+            bases,
+            half_fov_rad: rig.half_fov_rad(),
+            measured_max_nn_angle: rig.measured_max_nn_angle(),
+            measured_max_coverage_angle: rig.measured_max_coverage_angle(),
+            patch_size: rig.patch_size(),
+            atlas_cols: rig.atlas_cols(),
+        })
+    };
+    let expect_invalid = |result| match result {
+        Ok(_) => panic!("expected from_parts to reject the basis"),
+        Err(e) => assert!(matches!(e, SphericalTileRigError::InvalidParts(_)), "{e}"),
+    };
+
+    // e_right of tile 0 scaled off the unit sphere.
+    let (_, directions, mut bases) = rig_parts(&rig);
+    bases[0][0] *= 2.0;
+    expect_invalid(build(directions, bases));
+
+    // e_right and e_up of tile 0 swapped: orthonormal but left-handed.
+    let (_, directions, mut bases) = rig_parts(&rig);
+    bases[0].swap(0, 3);
+    bases[0].swap(1, 4);
+    bases[0].swap(2, 5);
+    expect_invalid(build(directions, bases));
+}
+
 #[test]
 fn tile_camera_intrinsics_match_spec() {
     let rig = make_rig(320, 512);
