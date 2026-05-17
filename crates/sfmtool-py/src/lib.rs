@@ -51,6 +51,7 @@ pub use py_sfmr_reconstruction::PySfmrReconstruction;
 
 // ── File I/O ──────────────────────────────────────────────────────────────
 
+mod py_camrig_io;
 mod py_colmap_binary;
 mod py_colmap_db;
 mod py_matches_io;
@@ -108,6 +109,10 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_matches_io::read_matches_metadata, m)?)?;
     m.add_function(wrap_pyfunction!(py_matches_io::write_matches, m)?)?;
     m.add_function(wrap_pyfunction!(py_matches_io::verify_matches, m)?)?;
+
+    // .camrig file inspection
+    m.add_function(wrap_pyfunction!(py_camrig_io::read_camrig_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(py_camrig_io::verify_camrig, m)?)?;
 
     // .sift file I/O
     m.add_function(wrap_pyfunction!(py_sift_io::read_sift, m)?)?;

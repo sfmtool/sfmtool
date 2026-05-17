@@ -565,12 +565,24 @@ The assembly kernel is analogous to `WarpMap::remap_aniso` but sourcing from
   the seed makes both the tile placement and the construction-time
   coverage probe bit-for-bit reproducible across runs on the same
   platform.
-- **Persistence.** The rig is described here as an in-memory compute
-  structure; nothing in this spec serialises it. If a downstream `solve`
-  / `densify` stage emits per-tile depth and we want resumable runs,
-  decide whether to (a) re-generate the rig from `(centre, n, seed,
-  arc_per_pixel, overlap_factor)` and trust determinism, or (b) write
-  `directions` / `bases` to disk alongside the atlas.
+- **Persistence.** Resolved. A `SphericalTileRig` serialises to the
+  `.camrig` camera-rig format (`specs/formats/camrig-file-format.md`)
+  via `SphericalTileRig::to_camrig` / `from_camrig` in Rust,
+  `SphericalTileRig.write_camrig` / `read_camrig` in Python, or
+  `sfm camrig spherical-tiles` from the command line. This takes
+  option (b): the per-tile `sensor_from_rig` quaternions store
+  `directions` and `bases` directly, the shared pool camera carries the
+  tile intrinsics (from which `patch_size` and `half_fov_rad` are
+  recovered), and `rig_attributes` carries the remaining derived scalars
+  (`centre`, the `measured_*` angles, `atlas_cols`), so `from_camrig`
+  rebuilds the rig via `SphericalTileRig::from_parts` — bypassing the
+  relaxer — and reloads identically on any platform. `rig_attributes`
+  also stores informational copies of `patch_size` and `half_fov_rad`,
+  but `from_camrig` does not consume them — the shared camera is
+  authoritative. Option (a) (re-generating from
+  `(centre, n, seed, arc_per_pixel, overlap_factor)`) was rejected
+  because relaxer output is only bit-for-bit reproducible on the same
+  platform.
 - **Texture-size limits for very large `n`.** Default
   `atlas_cols = ceil(sqrt(n))` gives a near-square atlas; at
   `n = 20_000`, `patch_size ≈ 21` ⇒ atlas ≈ 2982 × 2961, well within

@@ -18,6 +18,7 @@ sift-format = { path = "../sift-format" }
 sfmr-format = { path = "../sfmr-format" }
 sfmr-colmap = { path = "../sfmr-colmap" }
 matches-format = { path = "../matches-format" }
+camrig-format = { path = "../camrig-format" }
 pyo3 = { version = "0.26", features = ["extension-module"] }
 numpy = { version = "0.26", features = ["half"] }
 half = "2"

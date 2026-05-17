@@ -3845,6 +3845,7 @@ version = "0.2.0"
 dependencies = [
  "approx",
  "bytemuck",
+ "camrig-format",
  "criterion",
  "half",
  "image",
@@ -3865,6 +3866,7 @@ dependencies = [
 name = "sfmtool-py"
 version = "0.2.0"
 dependencies = [
+ "camrig-format",
  "chrono",
  "half",
  "matches-format",

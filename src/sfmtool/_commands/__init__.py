@@ -5,6 +5,7 @@
 
 from .align import align
 from .cam import cam
+from .camrig import camrig
 from .compare import compare
 from .densify import densify
 from .discontinuity import discontinuity
@@ -30,6 +31,7 @@ from .xform import xform
 __all__ = [
     "align",
     "cam",
+    "camrig",
     "compare",
     "densify",
     "discontinuity",
