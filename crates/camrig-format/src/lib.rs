@@ -20,11 +20,13 @@ compile_error!(
 );
 
 pub(crate) mod archive_io;
+mod pattern;
 mod read;
 mod types;
 mod verify;
 mod write;
 
+pub use pattern::*;
 pub use read::{read_camrig, read_camrig_metadata};
 pub use types::*;
 pub use verify::verify_camrig;
@@ -501,6 +503,52 @@ mod tests {
         let path = std::env::temp_dir().join("camrig_bad_names.camrig");
         let err = write_camrig(&path, &data, 3).unwrap_err();
         assert!(format!("{err}").contains("sensor_image_patterns"));
+    }
+
+    #[test]
+    fn write_rejects_multi_sensor_pattern_without_frame_field() {
+        // A glob-only pattern groups frames positionally, which a multi-sensor
+        // rig cannot use — every pattern must carry a `%d` / `%0Nd` field.
+        let mut data = cubemap_rig(256);
+        data.sensor_image_patterns[2] = "back/*.jpg".into();
+        let path = std::env::temp_dir().join("camrig_no_frame_field.camrig");
+        let err = write_camrig(&path, &data, 3).unwrap_err();
+        assert!(format!("{err}").contains("frame field"));
+    }
+
+    #[test]
+    fn single_sensor_glob_pattern_without_frame_field_round_trips() {
+        // The motivating case: a one-camera rig dropped beside a directory of
+        // images, its sole pattern a bare glob. Positional frame grouping is
+        // well-defined for a single sensor, so this is valid.
+        let mut data = single_camera_rig();
+        data.sensor_image_patterns = vec!["*.jpg".into()];
+        let loaded = assert_round_trip(&data, "single_glob");
+        assert_eq!(loaded.sensor_image_patterns, vec!["*.jpg".to_string()]);
+    }
+
+    #[test]
+    fn write_rejects_pattern_with_two_frame_fields() {
+        // A pattern carries at most one frame field; a second `%d` makes the
+        // captured frame index ambiguous, so validate() rejects it — even for
+        // a single-sensor rig.
+        let mut data = single_camera_rig();
+        data.sensor_image_patterns = vec!["cam_%d_%04d.jpg".into()];
+        let path = std::env::temp_dir().join("camrig_two_frame_fields.camrig");
+        let err = write_camrig(&path, &data, 3).unwrap_err();
+        assert!(format!("{err}").contains("at most one"));
+    }
+
+    #[test]
+    fn write_rejects_camera_with_zero_dimension() {
+        // A zero width or height is a degenerate camera; consumers that scale
+        // intrinsics by aspect ratio would divide by zero, so validate()
+        // rejects it.
+        let mut data = single_camera_rig();
+        data.cameras[0].height = 0;
+        let path = std::env::temp_dir().join("camrig_zero_dimension.camrig");
+        let err = write_camrig(&path, &data, 3).unwrap_err();
+        assert!(format!("{err}").contains("non-positive dimension"));
     }
 
     #[test]

@@ -265,18 +265,23 @@ def solve(
     _check_camera_model_conflict(absolute_paths, camera_config_resolver, camera_model)
 
     if seq_overlap:
-        _run_sequential_overlap_sfm(
-            absolute_paths,
-            workspace_dir,
-            colmap_dir,
-            max_feature_count,
-            incremental,
-            sfmr_dir,
-            random_seed,
-            seq_overlap,
-            refine_rig,
-            camera_model=camera_model,
-        )
+        try:
+            _run_sequential_overlap_sfm(
+                absolute_paths,
+                workspace_dir,
+                colmap_dir,
+                max_feature_count,
+                incremental,
+                sfmr_dir,
+                random_seed,
+                seq_overlap,
+                refine_rig,
+                camera_model=camera_model,
+            )
+        except click.ClickException:
+            raise
+        except Exception as e:
+            raise click.ClickException(str(e))
         return
 
     matching_mode = "flow" if flow_match else "exhaustive"

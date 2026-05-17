@@ -343,6 +343,24 @@ def _intrinsics_to_dict(intrinsics) -> dict:
     return intrinsics.to_dict()
 
 
+def test_read_image_size_is_header_only(isolated_test_image: Path):
+    # `_read_image_size` reads dimensions from the header alone (via the Rust
+    # `image_dimensions` binding) — the seoul_bull_sculpture images are
+    # 270x480.
+    from sfmtool._camera_setup import _read_image_size
+
+    assert _read_image_size(isolated_test_image) == (270, 480)
+
+
+def test_image_dimensions_binding_rejects_non_image(tmp_path: Path):
+    from sfmtool._sfmtool import image_dimensions
+
+    bogus = tmp_path / "notes.txt"
+    bogus.write_text("not an image")
+    with pytest.raises(Exception):
+        image_dimensions(str(bogus))
+
+
 class TestBuildIntrinsicsFromCameraConfig:
     def test_none_config_calls_infer(self, isolated_test_image: Path):
         from sfmtool._camera_setup import build_intrinsics_from_camera_config
