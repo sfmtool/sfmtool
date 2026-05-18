@@ -1,7 +1,39 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use nalgebra::{Quaternion, UnitQuaternion, Vector3};
+use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
+
+/// Normalized world-frame rays from each observing camera toward `point`, each
+/// paired with the image index it came from.
+///
+/// A camera coincident with `point` yields a zero-length ray and is dropped, so
+/// the result may be shorter than `observing_images`.
+pub fn viewing_rays(
+    point: Point3<f64>,
+    camera_centers: &[Point3<f64>],
+    observing_images: impl IntoIterator<Item = usize>,
+) -> Vec<(usize, Vector3<f64>)> {
+    observing_images
+        .into_iter()
+        .filter_map(|img| {
+            let ray = point.coords - camera_centers[img].coords;
+            let norm = ray.norm();
+            (norm > 0.0).then_some((img, ray / norm))
+        })
+        .collect()
+}
+
+/// Maximum angle (radians) between any pair of viewing rays produced by
+/// [`viewing_rays`]; `0.0` when fewer than two rays are supplied.
+pub fn max_viewing_angle(rays: &[(usize, Vector3<f64>)]) -> f64 {
+    let mut min_dot = 1.0_f64;
+    for i in 0..rays.len() {
+        for j in (i + 1)..rays.len() {
+            min_dot = min_dot.min(rays[i].1.dot(&rays[j].1));
+        }
+    }
+    min_dot.clamp(-1.0, 1.0).acos()
+}
 
 /// Compute which 3D points to keep based on minimum viewing angle threshold.
 ///
@@ -32,7 +64,7 @@ pub fn compute_narrow_track_mask(
     min_angle_rad: f64,
 ) -> Vec<bool> {
     // Step 1: Compute camera centers for all images
-    let camera_centers: Vec<Vector3<f64>> = (0..num_images)
+    let camera_centers: Vec<Point3<f64>> = (0..num_images)
         .map(|i| {
             let qo = i * 4;
             let to = i * 3;
@@ -45,7 +77,7 @@ pub fn compute_narrow_track_mask(
             let t = Vector3::new(translations[to], translations[to + 1], translations[to + 2]);
             let rot = quat.to_rotation_matrix();
             // Camera center: C = -R^T @ t
-            -(rot.transpose() * t)
+            Point3::from(-(rot.transpose() * t))
         })
         .collect();
 
@@ -58,10 +90,8 @@ pub fn compute_narrow_track_mask(
         }
     }
 
-    // Step 3: For each point, compute max viewing angle and decide keep/remove
-    // Use cos_threshold optimization: comparing dot products avoids acos
-    let cos_threshold = min_angle_rad.cos();
-
+    // Step 3: For each point, keep it when its maximum viewing angle (the
+    // largest angle between any pair of observation rays) meets the threshold.
     let mut keep = vec![false; num_points];
     for point_id in 0..num_points {
         let obs = &point_observations[point_id];
@@ -69,43 +99,21 @@ pub fn compute_narrow_track_mask(
             continue;
         }
 
-        let px = positions[point_id * 3];
-        let py = positions[point_id * 3 + 1];
-        let pz = positions[point_id * 3 + 2];
-        let point_pos = Vector3::new(px, py, pz);
-
-        // Compute normalized viewing rays
-        let mut rays: Vec<Vector3<f64>> = Vec::with_capacity(obs.len());
-        for &img_idx in obs {
-            let center = &camera_centers[img_idx as usize];
-            let ray = point_pos - center;
-            let norm = ray.norm();
-            if norm > 0.0 {
-                rays.push(ray / norm);
-            }
-        }
-
+        let point_pos = Point3::new(
+            positions[point_id * 3],
+            positions[point_id * 3 + 1],
+            positions[point_id * 3 + 2],
+        );
+        let rays = viewing_rays(
+            point_pos,
+            &camera_centers,
+            obs.iter().map(|&img_idx| img_idx as usize),
+        );
         if rays.len() < 2 {
             continue;
         }
 
-        // Find minimum dot product (= maximum angle) among all ray pairs
-        // If min_dot <= cos_threshold, the max angle >= min_angle_rad
-        let mut min_dot = 1.0_f64;
-        'outer: for i in 0..rays.len() {
-            for j in (i + 1)..rays.len() {
-                let dot = rays[i].dot(&rays[j]);
-                if dot < min_dot {
-                    min_dot = dot;
-                    // Early exit: if we already found a pair exceeding the threshold
-                    if min_dot <= cos_threshold {
-                        break 'outer;
-                    }
-                }
-            }
-        }
-
-        if min_dot <= cos_threshold {
+        if max_viewing_angle(&rays) >= min_angle_rad {
             keep[point_id] = true;
         }
     }
@@ -232,8 +240,9 @@ mod tests {
     }
 
     #[test]
-    fn test_cos_threshold_matches_acos() {
-        // Verify that the cos-threshold optimization gives the same result as computing acos
+    fn test_angle_threshold_boundary() {
+        // Verify keep/remove decisions are correct just below and above the
+        // actual viewing angle.
         // Set up cameras with known geometry
         let quaternions = [identity_quat(), identity_quat()].concat();
         let translations = [0.0, 0.0, 0.0, -10.0, 0.0, 0.0];

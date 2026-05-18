@@ -35,11 +35,19 @@ from .._cli_utils import timed_command
     default="unknown",
     help="Name of the tool that created the reconstruction (e.g., 'colmap', 'glomap'). Default: 'unknown'.",
 )
+@click.option(
+    "--detect-infinity/--no-detect-infinity",
+    "detect_infinity",
+    default=True,
+    help="Reclassify points whose depth the solve could not pin down as "
+    "points at infinity. Enabled by default.",
+)
 def from_colmap_bin(
     colmap_reconstruction_path,
     image_dir,
     output_sfmr_file,
     tool_name,
+    detect_infinity,
 ):
     """Convert COLMAP .bin files to a .sfmr file.
 
@@ -121,7 +129,10 @@ def from_colmap_bin(
         )
 
         recon = colmap_binary_to_rust_sfmr(
-            colmap_reconstruction_path, image_dir, metadata
+            colmap_reconstruction_path,
+            image_dir,
+            metadata,
+            classify_infinity=detect_infinity,
         )
 
         click.echo(

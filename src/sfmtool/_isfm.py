@@ -37,6 +37,7 @@ def run_incremental_sfm(
     flow_wide_baseline_skip: int = 5,
     matches_file: str | Path | None = None,
     range_expr: str | None = None,
+    detect_infinity: bool = True,
 ) -> Path:
     """Run incremental Structure from Motion on a list of images."""
     print("Running incremental SfM with COLMAP...")
@@ -174,10 +175,17 @@ def run_incremental_sfm(
         )
 
         if has_rig:
-            recon = pycolmap_to_rust_sfmr(reconstructions[idx], image_dir, metadata)
+            recon = pycolmap_to_rust_sfmr(
+                reconstructions[idx],
+                image_dir,
+                metadata,
+                classify_infinity=detect_infinity,
+            )
         else:
             recon_dir = Path(reconstruction_path) / str(idx)
-            recon = colmap_binary_to_rust_sfmr(recon_dir, image_dir, metadata)
+            recon = colmap_binary_to_rust_sfmr(
+                recon_dir, image_dir, metadata, classify_infinity=detect_infinity
+            )
 
         print(f"Found reconstruction {idx}:")
         print(

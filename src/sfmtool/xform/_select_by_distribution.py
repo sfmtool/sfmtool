@@ -121,6 +121,19 @@ def _select_images(
     track_img = np.asarray(recon.track_image_indexes).astype(np.int64)
     track_pt = np.asarray(recon.track_point_ids).astype(np.int64)
 
+    # Distribution is reasoned about from the finite point cloud: a point at
+    # infinity is a direction, not a location, so it carries no triangulation
+    # angle or position the loop can use. Drop its observations up front.
+    at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
+    finite_obs = ~at_infinity[track_pt]
+    track_img = track_img[finite_obs]
+    track_pt = track_pt[finite_obs]
+    if len(track_pt) == 0:
+        raise ValueError(
+            "--include-by-distribution needs finite 3D points; this "
+            "reconstruction has only points at infinity"
+        )
+
     unit_images, n_units, image_sensor, unit_label = _build_units(recon)
 
     if count >= n_units:
@@ -172,7 +185,11 @@ def _select_images(
     point_ids = sorted(units_of_pt)
     tri_angle = _triangulation_angles(point_ids, units_of_pt, ray_of)
     n_pts_geh = sum(1 for p in point_ids if tri_angle[p] >= _H_RAD)
-    bbox = positions.max(axis=0) - positions.min(axis=0)
+    # The bbox describes the finite point cloud; an infinity point's stored
+    # position is a unit-length direction near the origin, not a location, so
+    # it would skew the diagonal. Measure over finite points only.
+    finite_positions = positions[~at_infinity]
+    bbox = finite_positions.max(axis=0) - finite_positions.min(axis=0)
     diag = float(np.linalg.norm(bbox)) or 1.0
 
     _fmt = "  {:>5} | {:>4} | {:>8} | {:>9} | {:>10} | {:>9} | {:>9} | {:>7} | {:>6}"

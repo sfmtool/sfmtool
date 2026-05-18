@@ -70,3 +70,63 @@ class TestHomogeneousPointAccessors:
         clone = recon.clone_with_changes(positions=recon.positions)
         assert not clone.point_is_at_infinity.any()
         assert np.array_equal(clone.positions_xyzw[:, 3], np.ones(len(clone.positions)))
+
+
+class TestInfinityConversions:
+    def test_classify_preserves_point_count(
+        self, sfmrfile_reconstruction_with_17_images
+    ):
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        classified = recon.classify_points_at_infinity()
+        # Reclassification never adds or drops points or observations.
+        assert classified.point_count == recon.point_count
+        assert classified.observation_count == recon.observation_count
+
+    def test_classify_detects_a_far_point(self, sfmrfile_reconstruction_with_17_images):
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        # Pick a well-observed point and push it far away so its observation
+        # rays become parallel — its parallax collapses below the noise floor.
+        idx = int(np.argmax(recon.observation_counts))
+        positions = recon.positions_xyzw.copy()
+        positions[idx] = [0.0, 0.0, 1.0e7, 1.0]
+        recon = recon.clone_with_changes(positions=positions)
+
+        classified = recon.classify_points_at_infinity()
+        assert classified.point_is_at_infinity[idx]
+        # A point at infinity stores a unit-length direction.
+        np.testing.assert_allclose(
+            np.linalg.norm(classified.positions[idx]), 1.0, atol=1e-9
+        )
+
+    def test_classify_noise_floor_is_monotone(
+        self, sfmrfile_reconstruction_with_17_images
+    ):
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        # A larger noise floor can only classify a superset of points.
+        strict = recon.classify_points_at_infinity(noise_floor_px=0.01)
+        loose = recon.classify_points_at_infinity(noise_floor_px=1.0e4)
+        assert loose.point_is_at_infinity.sum() >= strict.point_is_at_infinity.sum()
+
+    def test_materialize_makes_every_point_finite(
+        self, sfmrfile_reconstruction_with_17_images
+    ):
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        positions = recon.positions_xyzw.copy()
+        n_infinity = min(5, len(positions))
+        for i in range(n_infinity):
+            positions[i] = [0.0, 0.0, 1.0, 0.0]
+        recon = recon.clone_with_changes(positions=positions)
+        assert recon.point_is_at_infinity[:n_infinity].all()
+
+        materialized = recon.materialize_points_at_infinity()
+        assert not materialized.point_is_at_infinity.any()
+        assert materialized.point_count == recon.point_count
+        assert np.all(np.isfinite(materialized.positions))
+
+    def test_materialize_leaves_finite_points_unchanged(
+        self, sfmrfile_reconstruction_with_17_images
+    ):
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        # No points at infinity — materialise is a no-op on the positions.
+        materialized = recon.materialize_points_at_infinity()
+        np.testing.assert_array_equal(materialized.positions, recon.positions)

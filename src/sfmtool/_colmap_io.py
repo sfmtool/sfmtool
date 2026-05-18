@@ -113,27 +113,22 @@ def finite_positions_xyzw(positions_xyz: np.ndarray) -> np.ndarray:
     return np.hstack([positions_xyz, w])
 
 
-def reject_points_at_infinity(recon, operation: str) -> None:
-    """Raise if the reconstruction contains points at infinity.
+def materialize_infinity_for_export(recon, operation: str):
+    """Materialise points at infinity for a finite-only operation.
 
     A finite-only operation (COLMAP export, undistortion) reads
     ``recon.positions``, which for a ``w = 0`` point is a unit-length
-    *direction*, not a coordinate. Treating that direction as a finite
-    position would silently produce wrong data, so this fails loudly instead.
-
-    Handling ``w = 0`` points here requires the infinity->finite
-    materialisation pass described in
-    ``specs/drafts/sfmr-v2-points-at-infinity.md``, which is not yet
-    implemented.
+    *direction*, not a coordinate. ``SfmrReconstruction.materialize_points_at_infinity``
+    places each such point at a finite depth far enough that its parallax
+    falls below one pixel in every observing camera, so the export stays
+    faithful. Returns ``recon`` unchanged when it has no points at infinity.
     """
     at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
     count = int(at_infinity.sum())
-    if count:
-        raise NotImplementedError(
-            f"{operation} cannot handle the {count} point(s) at infinity in "
-            "this reconstruction: the infinity->finite conversion (see "
-            "specs/drafts/sfmr-v2-points-at-infinity.md) is not yet implemented."
-        )
+    if not count:
+        return recon
+    print(f"  {operation}: materializing {count} point(s) at infinity")
+    return recon.materialize_points_at_infinity()
 
 
 def _build_sfmr_data_dict(
@@ -255,12 +250,33 @@ def build_metadata(
     return metadata
 
 
+def _detect_infinity_points(recon):
+    """Classify points at infinity on a freshly imported reconstruction.
+
+    COLMAP stores every point as a finite ``(x, y, z)``, but a track whose
+    observation rays are parallel to within measurement noise has no real
+    depth — it is a point at infinity. This reclassifies such points so
+    downstream consumers see the homogeneous model. See
+    ``specs/drafts/sfmr-v2-points-at-infinity.md``.
+    """
+    classified = recon.classify_points_at_infinity()
+    count = int(np.count_nonzero(classified.point_is_at_infinity))
+    if count:
+        print(f"  Detected {count} point(s) at infinity")
+    return classified
+
+
 def colmap_binary_to_rust_sfmr(
     colmap_dir: str | Path,
     image_dir: str | Path,
     metadata: dict,
+    classify_infinity: bool = True,
 ):
-    """Load a COLMAP binary reconstruction as a Rust SfmrReconstruction."""
+    """Load a COLMAP binary reconstruction as a Rust SfmrReconstruction.
+
+    When ``classify_infinity`` is true (the default), points whose depth the
+    solve could not pin down are reclassified as points at infinity.
+    """
     from ._sfmtool import SfmrReconstruction, read_colmap_binary
 
     colmap_dir = Path(colmap_dir)
@@ -301,15 +317,23 @@ def colmap_binary_to_rust_sfmr(
         rig_frame_data=rig_frame_data,
     )
 
-    return SfmrReconstruction.from_data(workspace_dir, sfmr_dict)
+    recon = SfmrReconstruction.from_data(workspace_dir, sfmr_dict)
+    if classify_infinity:
+        recon = _detect_infinity_points(recon)
+    return recon
 
 
 def pycolmap_to_rust_sfmr(
     reconstruction,
     image_dir: str | Path,
     metadata: dict,
+    classify_infinity: bool = True,
 ):
-    """Convert a pycolmap.Reconstruction to a Rust SfmrReconstruction."""
+    """Convert a pycolmap.Reconstruction to a Rust SfmrReconstruction.
+
+    When ``classify_infinity`` is true (the default), points whose depth the
+    solve could not pin down are reclassified as points at infinity.
+    """
     from ._sfmtool import SfmrReconstruction
 
     image_dir = Path(image_dir).absolute()
@@ -416,7 +440,10 @@ def pycolmap_to_rust_sfmr(
         rig_frame_data=rig_frame_data,
     )
 
-    return SfmrReconstruction.from_data(workspace_dir, sfmr_dict)
+    recon = SfmrReconstruction.from_data(workspace_dir, sfmr_dict)
+    if classify_infinity:
+        recon = _detect_infinity_points(recon)
+    return recon
 
 
 def _extract_rig_frame_data(
@@ -563,7 +590,7 @@ def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None)
     """
     from ._sfmtool import write_colmap_binary
 
-    reject_points_at_infinity(recon, "COLMAP binary export")
+    recon = materialize_infinity_for_export(recon, "COLMAP binary export")
 
     output_dir = Path(output_dir)
     workspace_dir = recon.workspace_dir

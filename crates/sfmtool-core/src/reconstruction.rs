@@ -593,7 +593,10 @@ impl SfmrReconstruction {
     pub fn apply_se3_transform(&self, transform: &crate::Se3Transform) -> Self {
         use crate::rot_quaternion::RotQuaternion;
 
-        // Transform 3D points
+        // Transform 3D points. A finite point gets the full similarity; a
+        // point at infinity is a direction, so only the rotation acts on it
+        // (translation and scale do not move a point at infinity) and the
+        // result is renormalised to keep the stored direction unit-length.
         let point_positions: Vec<Point3<f64>> = self.points.iter().map(|pt| pt.position).collect();
         let new_positions = transform.apply_to_points(&point_positions);
 
@@ -601,9 +604,18 @@ impl SfmrReconstruction {
             .points
             .iter()
             .zip(new_positions.iter())
-            .map(|(pt, &new_pos)| Point3D {
-                position: new_pos,
-                ..pt.clone()
+            .map(|(pt, &new_pos)| {
+                let position = if pt.is_at_infinity() {
+                    let rotated = transform.rotation.rotate_vector(&pt.position.coords);
+                    let norm = rotated.norm();
+                    Point3::from(if norm > 0.0 { rotated / norm } else { rotated })
+                } else {
+                    new_pos
+                };
+                Point3D {
+                    position,
+                    ..pt.clone()
+                }
             })
             .collect();
 

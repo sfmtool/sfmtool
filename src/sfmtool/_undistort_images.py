@@ -218,7 +218,7 @@ def undistort_reconstruction_images(
     from ._colmap_io import (
         _build_sfmr_data_dict,
         finite_positions_xyzw,
-        reject_points_at_infinity,
+        materialize_infinity_for_export,
     )
     from ._sift_file import (
         SiftReader,
@@ -229,7 +229,7 @@ def undistort_reconstruction_images(
     )
     from ._workspace import find_workspace_for_path, load_workspace_config
 
-    reject_points_at_infinity(recon, "Undistortion")
+    recon = materialize_infinity_for_export(recon, "Undistortion")
 
     workspace_dir = Path(recon.workspace_dir)
     image_names = recon.image_names

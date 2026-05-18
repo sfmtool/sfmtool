@@ -30,10 +30,18 @@ class BundleAdjustTransform:
 
         print("  Running bundle adjustment...")
 
+        # Bundle adjustment is finite-only. Materialise any points at infinity
+        # to finite landmarks for the solve, then reclassify afterwards so
+        # points whose depth is still unconstrained return to w = 0.
+        n_infinity = int(np.count_nonzero(recon.point_is_at_infinity))
+        if n_infinity:
+            print(f"    Materializing {n_infinity} point(s) at infinity")
+        ba_input = recon.materialize_points_at_infinity()
+
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             colmap_dir = temp_path / "colmap"
-            save_colmap_binary(recon, colmap_dir)
+            save_colmap_binary(ba_input, colmap_dir)
 
             reconstruction = pycolmap.Reconstruction()
             reconstruction.read_binary(str(colmap_dir))
@@ -47,7 +55,13 @@ class BundleAdjustTransform:
             pycolmap.bundle_adjustment(reconstruction, ba_config)
             reconstruction.update_point_3d_errors()
 
-            return self._reconstruction_to_data(reconstruction, recon)
+            refined = self._reconstruction_to_data(reconstruction, ba_input)
+
+        result = refined.classify_points_at_infinity()
+        n_after = int(np.count_nonzero(result.point_is_at_infinity))
+        if n_after:
+            print(f"    Reclassified {n_after} point(s) as at infinity")
+        return result
 
     def _reconstruction_to_data(
         self,

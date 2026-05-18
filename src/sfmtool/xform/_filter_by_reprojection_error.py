@@ -6,6 +6,7 @@
 import numpy as np
 
 from .._sfmtool import SfmrReconstruction
+from ._point_filters import keep_infinity_points
 
 
 class FilterByReprojectionErrorTransform:
@@ -17,7 +18,9 @@ class FilterByReprojectionErrorTransform:
         self.threshold = threshold
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
-        points_to_keep_mask = recon.errors <= self.threshold
+        points_to_keep_mask = keep_infinity_points(
+            recon, recon.errors <= self.threshold
+        )
 
         if not np.any(points_to_keep_mask):
             raise ValueError(

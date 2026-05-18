@@ -735,8 +735,10 @@ def densify_reconstruction(
     metadata["observation_count"] = num_observations
     metadata["camera_count"] = num_cameras
 
+    # Densify produces a dense finite point cloud; leave infinity
+    # classification to a later solve/import step.
     result = pycolmap_to_rust_sfmr(
-        densified_reconstruction, workspace_dir_abs, metadata
+        densified_reconstruction, workspace_dir_abs, metadata, classify_infinity=False
     )
 
     click.echo("Densification complete!")
