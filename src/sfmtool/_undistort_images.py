@@ -215,7 +215,11 @@ def undistort_reconstruction_images(
     Returns:
         Tuple of (number_of_images_processed, output_directory_path, sfmr_path_or_None)
     """
-    from ._colmap_io import _build_sfmr_data_dict
+    from ._colmap_io import (
+        _build_sfmr_data_dict,
+        finite_positions_xyzw,
+        reject_points_at_infinity,
+    )
     from ._sift_file import (
         SiftReader,
         get_feature_tool_xxh128,
@@ -224,6 +228,8 @@ def undistort_reconstruction_images(
         xxh128_of_file,
     )
     from ._workspace import find_workspace_for_path, load_workspace_config
+
+    reject_points_at_infinity(recon, "Undistortion")
 
     workspace_dir = Path(recon.workspace_dir)
     image_names = recon.image_names
@@ -516,7 +522,7 @@ def undistort_reconstruction_images(
     }
 
     metadata = {
-        "version": 1,
+        "version": 2,
         "operation": "undistort",
         "tool": "sfmtool",
         "tool_version": tool_version,
@@ -527,7 +533,7 @@ def undistort_reconstruction_images(
         },
         "timestamp": datetime.now().astimezone().isoformat(),
         "image_count": image_count,
-        "points3d_count": len(positions_xyz),
+        "point_count": len(positions_xyz),
         "observation_count": len(track_image_indexes),
         "camera_count": len(cameras_list),
         "tool_options": {
@@ -544,12 +550,12 @@ def undistort_reconstruction_images(
         camera_indexes=new_camera_indexes,
         quaternions_wxyz=np.asarray(recon.quaternions_wxyz),
         translations_xyz=np.asarray(recon.translations),
-        positions_xyz=positions_xyz,
+        positions_xyzw=finite_positions_xyzw(positions_xyz),
         colors_rgb=colors_rgb,
         reprojection_errors=reprojection_errors,
         track_image_indexes=track_image_indexes,
         track_feature_indexes=track_feature_indexes,
-        track_point3d_indexes=track_point3d_indexes,
+        point_indexes=track_point3d_indexes,
         observation_counts=observation_counts,
         feature_tool_hashes=feature_tool_hashes,
         sift_content_hashes=sift_content_hashes,

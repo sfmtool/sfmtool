@@ -90,7 +90,7 @@ impl PySfmrReconstruction {
             meta.operation = op.to_string();
             meta.tool = tool_name.unwrap_or("sfmtool").to_string();
             meta.image_count = self.inner.images.len() as u32;
-            meta.points3d_count = self.inner.points.len() as u32;
+            meta.point_count = self.inner.points.len() as u32;
             meta.observation_count = self.inner.tracks.len() as u32;
             meta.camera_count = self.inner.cameras.len() as u32;
             meta.timestamp = chrono::Local::now().to_rfc3339();
@@ -246,6 +246,11 @@ impl PySfmrReconstruction {
     // ── Point data array getters ─────────────────────────────────────
 
     /// 3D point positions, shape `(M, 3)`.
+    ///
+    /// For a finite point this is its Euclidean position; for a point at
+    /// infinity (`w == 0`) it is a unit-length direction. Use
+    /// `point_is_at_infinity` to disambiguate the two, or `positions_xyzw` for
+    /// the unambiguous homogeneous form.
     #[getter]
     fn positions<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
         let vec2: Vec<Vec<f64>> = self
@@ -255,6 +260,40 @@ impl PySfmrReconstruction {
             .map(|pt| vec![pt.position.x, pt.position.y, pt.position.z])
             .collect();
         PyArray2::from_vec2(py, &vec2).unwrap()
+    }
+
+    /// Homogeneous 3D point positions, shape `(M, 4)`.
+    ///
+    /// Each row is `(x, y, z, w)`: a finite point has `w == 1` with Euclidean
+    /// coordinates `(x, y, z)`; a point at infinity has `w == 0` with a
+    /// unit-length direction `(x, y, z)`. This is the canonical form: it is
+    /// what `clone_with_changes(positions=...)` accepts and what `.sfmr`
+    /// version 2 files store.
+    #[getter]
+    fn positions_xyzw<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
+        let vec2: Vec<Vec<f64>> = self
+            .inner
+            .points
+            .iter()
+            .map(|pt| vec![pt.position.x, pt.position.y, pt.position.z, pt.w])
+            .collect();
+        PyArray2::from_vec2(py, &vec2).unwrap()
+    }
+
+    /// Boolean mask of points at infinity (`w == 0`), shape `(M,)`.
+    ///
+    /// Pairs with `positions` for finite-only handling, e.g.
+    /// ``recon.positions[~recon.point_is_at_infinity]`` selects the Euclidean
+    /// positions of just the finite points.
+    #[getter]
+    fn point_is_at_infinity<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<bool>> {
+        let vec: Vec<bool> = self
+            .inner
+            .points
+            .iter()
+            .map(|pt| pt.is_at_infinity())
+            .collect();
+        PyArray1::from_vec(py, vec)
     }
 
     /// RGB colors for 3D points, shape `(M, 3)`.
@@ -493,6 +532,10 @@ impl PySfmrReconstruction {
     /// Accepts optional keyword arguments for the fields to replace.
     /// Unspecified fields are copied from the original.
     ///
+    /// ``positions`` accepts either ``(N, 3)`` Euclidean coordinates (``w = 1``)
+    /// or ``(N, 4)`` homogeneous coordinates (``w = 0`` marks a point at
+    /// infinity).
+    ///
     /// Supported fields: ``positions``, ``colors``, ``errors``,
     /// ``quaternions_wxyz``, ``translations``, ``track_image_indexes``,
     /// ``track_feature_indexes``, ``track_point_ids``, ``observation_counts``,
@@ -582,12 +625,13 @@ impl PySfmrReconstruction {
                             "clone_with_changes(): 'positions' must be C-contiguous: {e}"
                         ))
                     })?;
-                    if arr.shape()[1] != 3 {
+                    let cols = arr.shape()[1];
+                    if cols != 3 && cols != 4 {
                         return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                            "clone_with_changes(): 'positions' must have shape (N, 3), \
-                             got shape ({}, {})",
+                            "clone_with_changes(): 'positions' must have shape (N, 3) \
+                             [Euclidean] or (N, 4) [homogeneous], got shape ({}, {})",
                             arr.shape()[0],
-                            arr.shape()[1]
+                            cols
                         )));
                     }
                     // Allow changing number of points
@@ -596,14 +640,37 @@ impl PySfmrReconstruction {
                         n,
                         sfmtool_core::Point3D {
                             position: nalgebra::Point3::origin(),
+                            w: 1.0,
                             color: [0, 0, 0],
                             error: 0.0,
                             estimated_normal: Vector3::zeros(),
                         },
                     );
+                    // (N, 3) input is Euclidean (w = 1). (N, 4) input is
+                    // homogeneous; normalise into the ergonomic form — a finite
+                    // point stores its Euclidean position with w = 1, a point
+                    // at infinity stores a unit-length direction with w = 0.
                     for (i, pt) in recon.points.iter_mut().enumerate() {
-                        let off = i * 3;
-                        pt.position = nalgebra::Point3::new(s[off], s[off + 1], s[off + 2]);
+                        let off = i * cols;
+                        let (x, y, z) = (s[off], s[off + 1], s[off + 2]);
+                        let w = if cols == 4 { s[off + 3] } else { 1.0 };
+                        if w != 0.0 {
+                            pt.position = nalgebra::Point3::new(x / w, y / w, z / w);
+                            pt.w = 1.0;
+                        } else {
+                            let dir = Vector3::new(x, y, z);
+                            let norm = dir.norm();
+                            if norm == 0.0 {
+                                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                                    "clone_with_changes(): 'positions' row {i} is the \
+                                     all-zero homogeneous coordinate (0, 0, 0, 0), which \
+                                     denotes no point; a point at infinity (w = 0) needs \
+                                     a non-zero direction"
+                                )));
+                            }
+                            pt.position = nalgebra::Point3::from(dir / norm);
+                            pt.w = 0.0;
+                        }
                     }
                 }
                 "colors" => {

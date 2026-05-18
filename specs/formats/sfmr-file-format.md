@@ -11,7 +11,7 @@ The `.sfmr` file format provides a portable, self-contained format for storing S
 3. **JSON metadata** - Human-readable metadata in JSON format
 4. **Content hash verification** - XXH128 hashes for integrity checking
 5. **Columnar storage** - One file per field, enabling selective loading
-6. **Self-documenting filenames** - Include tensor shapes and data types (e.g., `positions_xyz.2107.3.float64.zst`)
+6. **Self-documenting filenames** - Include tensor shapes and data types (e.g., `positions_xyzw.2107.4.float64.zst`)
 7. **Little-endian binary** - All numeric data in C/row-major order
 8. **Tool agnostic** - Works with any SfM solver (COLMAP, GLOMAP, OpenMVG, etc.)
 
@@ -52,7 +52,7 @@ reconstruction.sfmr (ZIP archive)
 │   ├── depth_statistics.json.zst                       # Per-image depth stats
 │   └── observed_depth_histogram_counts.{N}.128.uint32.zst  # Observed depth histograms
 ├── points3d/
-│   ├── positions_xyz.{N}.3.float64.zst        # 3D point coordinates (XYZ format)
+│   ├── positions_xyzw.{N}.4.float64.zst       # Homogeneous 3D point coordinates (w=0 = point at infinity)
 │   ├── colors_rgb.{N}.3.uint8.zst             # RGB colors (0-255)
 │   ├── reprojection_errors.{N}.float32.zst    # Reprojection errors
 │   ├── metadata.json.zst                      # Points metadata
@@ -60,7 +60,7 @@ reconstruction.sfmr (ZIP archive)
 └── tracks/
     ├── image_indexes.{M}.uint32.zst           # Image index per observation
     ├── feature_indexes.{M}.uint32.zst         # Feature index per observation
-    ├── points3d_indexes.{M}.uint32.zst        # 3D point index per observation
+    ├── point_indexes.{M}.uint32.zst           # Point index per observation
     ├── observation_counts.{N}.uint32.zst      # Observations per point
     └── metadata.json.zst                      # Tracks metadata
 ```
@@ -79,7 +79,7 @@ JSON structure describing the reconstruction:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "operation": "sfm_solve",
   "tool": "colmap",
   "tool_version": "3.10",
@@ -104,7 +104,8 @@ JSON structure describing the reconstruction:
   },
   "timestamp": "2025-12-21T14:32:15.123456Z",
   "image_count": 18,
-  "points3d_count": 2107,
+  "point_count": 2107,
+  "infinity_point_count": 12,
   "observation_count": 9427,
   "camera_count": 1,
   "rig_count": 1,
@@ -114,7 +115,9 @@ JSON structure describing the reconstruction:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. Must be `1` for this specification
+- `version`: Format version number. Must be `2` for this specification. See
+  [Versioning and Migration](#versioning-and-migration) for the relationship
+  to version `1`.
 - `operation`: Type of operation that created this reconstruction
   - `"sfm_solve"`: Structure-from-Motion reconstruction
   - `"transform"`: Geometric transformation of an existing reconstruction
@@ -137,7 +140,11 @@ JSON structure describing the reconstruction:
     - `feature_prefix_dir`: Relative path from each image's parent directory to the features subdirectory (e.g., `"features/sift-colmap-d1245b460906df27ee4730273e0aba41"`). Used to locate `.sift` files.
 - `timestamp`: ISO 8601 format with timezone
 - `image_count`: Number of registered images in reconstruction
-- `points3d_count`: Number of 3D points
+- `point_count`: Number of points (finite points and points at infinity combined)
+- `infinity_point_count`: Number of points at infinity (rows of `positions_xyzw`
+  with `w = 0`). Derivable from the points array, but stored here so a consumer
+  can read the finite/infinity split without decompressing that array. Must be
+  `0` when no points are at infinity.
 - `observation_count`: Total number of 2D-3D correspondences
 - `camera_count`: Number of unique camera intrinsics
 - `rig_count`: (Optional) Number of rig definitions. Present only when rig data exists.
@@ -520,6 +527,7 @@ Per-image depth statistics and histogram parameters for observed points only:
       "histogram_max_z": 38.148,
       "observed": {
         "count": 239,
+        "infinity_count": 4,
         "min_z": 2.939,
         "max_z": 38.148,
         "median_z": 5.606,
@@ -536,11 +544,12 @@ Per-image depth statistics and histogram parameters for observed points only:
   - `histogram_min_z`: Minimum Z depth for histogram bucket edges (`null` if no observed points)
   - `histogram_max_z`: Maximum Z depth for histogram bucket edges (`null` if no observed points)
   - `observed`: Statistics for points with actual track observations in this image
-    - `count`: Number of observed points (0 if none)
-    - `min_z`, `max_z`: Depth range of observed points (`null` if count is 0)
+    - `count`: Number of observed finite points with positive depth (0 if none)
+    - `infinity_count`: Number of observed points at infinity (`w == 0`). Omitted in version 1 files; treat a missing value as 0. Points at infinity have no finite depth, so they are excluded from `count`, the depth range, and the histogram.
+    - `min_z`, `max_z`: Depth range of observed finite points (`null` if count is 0)
     - `median_z`, `mean_z`: Central tendency statistics (`null` if count is 0)
 
-**Null handling**: When an image has no observed points with positive depth, all depth values are `null` and `count` is 0. The corresponding row in the histogram counts array is all zeros.
+**Null handling**: When an image has no observed finite points with positive depth, all depth values are `null` and `count` is 0 (`infinity_count` may still be nonzero). The corresponding row in the histogram counts array is all zeros.
 
 **Histogram bucket edges** can be reconstructed as:
 ```python
@@ -558,27 +567,65 @@ Histogram counts for observed points (points with track observations):
 
 ### 7. Points3D
 
+Every point — finite or at infinity — is one homogeneous coordinate
+`(x, y, z, w)`:
+
+- `w ≠ 0` — a finite point at Euclidean position `(x/w, y/w, z/w)`.
+- `w = 0` — a point at infinity; `(x, y, z)` is a direction in the world frame.
+
+`w` is the kind: the representation is self-describing, with no separate flag.
+A point at infinity is the `w → 0` limit, not a special case bolted on.
+A point at infinity is a feature track whose observation rays are parallel to
+within feature-localisation noise — distant content (a skyline, a far building)
+whose depth the SfM solve cannot pin down. Storing it as a finite `(x, y, z)`
+would be lossy and misleading; the homogeneous model represents it faithfully.
+
+#### `w` normalisation
+
+`w` is a homogeneous coordinate, so `(x, y, z, w)` and `(λx, λy, λz, λw)` denote
+the same point for any `λ ≠ 0`. The format permits any such scale; it does
+**not** mandate a canonical one.
+
+The **recommended normalised form** sets two conventions:
+
+- finite points (`w ≠ 0`) are divided through by their own `w`, so `w = 1`;
+- infinity points (`w = 0`) store a unit-length direction in `(x, y, z)`.
+
+The first compresses well: a `w` column that is all `1`s and `0`s is a
+near-constant run that zstd collapses to almost nothing. The second is the
+natural canonical form for a direction. The writer in this codebase emits this
+form.
+
+Because the format does not *require* the normalised form, a consumer that
+relies on `w ∈ {0, 1}` (or on unit-length directions) must normalise on read.
+It cannot assume an arbitrary v2 file, possibly produced by other tooling, is
+already normalised.
+
 #### `points3d/metadata.json.zst`
 
 ```json
 {
-  "points3d_count": 2107
+  "point_count": 2107
 }
 ```
 
-#### `points3d/positions_xyz.{N}.3.float64.zst`
+#### `points3d/positions_xyzw.{N}.4.float64.zst`
 
-3D point coordinates:
+Homogeneous 3D point coordinates:
 
-- **Shape**: `(N, 3)` where N = points3d_count
+- **Shape**: `(N, 4)` where N = point_count
 - **Data type**: `float64` (little-endian)
-- **Format**: [x, y, z] in world coordinate system
+- **Format**: `[x, y, z, w]` in the world coordinate system. `w ≠ 0` is a finite
+  point at `(x/w, y/w, z/w)`; `w = 0` is a point at infinity whose direction is
+  `(x, y, z)`.
+- **Constraint**: No coordinate may be `NaN` or infinite. A `w = 0` row must
+  have a non-zero `(x, y, z)` direction.
 
 #### `points3d/colors_rgb.{N}.3.uint8.zst`
 
 RGB colors:
 
-- **Shape**: `(N, 3)` where N = points3d_count
+- **Shape**: `(N, 3)` where N = point_count
 - **Data type**: `uint8` (little-endian)
 - **Format**: [R, G, B] values in range [0, 255]
 
@@ -586,19 +633,21 @@ RGB colors:
 
 Reprojection errors:
 
-- **Shape**: `(N,)` where N = points3d_count
+- **Shape**: `(N,)` where N = point_count
 - **Data type**: `float32` (little-endian)
-- **Format**: RMS reprojection error in pixels
+- **Format**: RMS reprojection error in pixels. A `w = 0` point still projects
+  (rotation + intrinsics only), so its reprojection error stays well-defined.
 
 #### `points3d/estimated_normals_xyz.{N}.3.float32.zst`
 
 Estimated surface normals for 3D points.
 
-- **Shape**: `(N, 3)` where N = points3d_count
+- **Shape**: `(N, 3)` where N = point_count
 - **Data type**: `float32` (little-endian)
-- **Format**: [x, y, z] unit normal vectors in world coordinate system
+- **Format**: [x, y, z] unit normal vectors in world coordinate system. Rows for
+  `w = 0` points are `(0, 0, 0)` — a direction has no surface normal.
 
-**Computation method**: For each 3D point, the estimated normal is computed as the average direction from the point toward all cameras that observe it (from track data). This approximates the surface normal for points on convex surfaces.
+**Computation method**: For each finite 3D point, the estimated normal is computed as the average direction from the point toward all cameras that observe it (from track data). This approximates the surface normal for points on convex surfaces.
 
 ```python
 # For point P observed by cameras C1, C2, ..., Ck:
@@ -629,7 +678,7 @@ Image index for each observation:
 - **Shape**: `(M,)` where M = observation_count
 - **Data type**: `uint32` (little-endian)
 - **Format**: Index into images arrays for each observation
-- **Constraint**: MUST be sorted lexicographically by `(points3d_indexes[i], image_indexes[i])`
+- **Constraint**: MUST be sorted lexicographically by `(point_indexes[i], image_indexes[i])`
 
 #### `tracks/feature_indexes.{M}.uint32.zst`
 
@@ -638,22 +687,24 @@ Feature index for each observation:
 - **Shape**: `(M,)` where M = observation_count
 - **Data type**: `uint32` (little-endian)
 - **Format**: Index into feature file for each observation
-- **Constraint**: MUST be sorted lexicographically by `(points3d_indexes[i], image_indexes[i])`
+- **Constraint**: MUST be sorted lexicographically by `(point_indexes[i], image_indexes[i])`
 
-#### `tracks/points3d_indexes.{M}.uint32.zst`
+#### `tracks/point_indexes.{M}.uint32.zst`
 
-3D point index for each observation:
+Point index for each observation:
 
 - **Shape**: `(M,)` where M = observation_count
 - **Data type**: `uint32` (little-endian)
-- **Format**: Index into points3d arrays for each observation
-- **Constraint**: MUST be sorted lexicographically by `(points3d_indexes[i], image_indexes[i])`
+- **Format**: Index into the points3d arrays for each observation. A track is a
+  track regardless of the referenced point's `w`; the finite/infinity
+  distinction is a property of the point, never of the observation.
+- **Constraint**: MUST be sorted lexicographically by `(point_indexes[i], image_indexes[i])`
 
 #### `tracks/observation_counts.{N}.uint32.zst`
 
 Observations per point:
 
-- **Shape**: `(N,)` where N = points3d_count
+- **Shape**: `(N,)` where N = point_count
 - **Data type**: `uint32` (little-endian)
 - **Format**: Number of observations for each 3D point
 - **Constraints**:
@@ -665,14 +716,14 @@ Observations per point:
 ### Critical Ordering Requirements
 
 1. **Tracks must be sorted lexicographically**:
-   - All three track arrays (`image_indexes`, `feature_indexes`, `points3d_indexes`) MUST be sorted lexicographically by `(points3d_indexes[i], image_indexes[i])`
-   - Primary sort: by 3D point index (all observations of point 0, then point 1, etc.)
+   - All three track arrays (`image_indexes`, `feature_indexes`, `point_indexes`) MUST be sorted lexicographically by `(point_indexes[i], image_indexes[i])`
+   - Primary sort: by point index (all observations of point 0, then point 1, etc.)
    - Secondary sort: by image index within each point's observations
    - This provides deterministic ordering and enables efficient extraction of observations per point
    - Example: `[(0,5), (0,12), (0,15), (1,3), (1,8), (2,1), ...]` where tuples are `(point_index, image_index)`
 
 2. **Observation counts must align**:
-   - `observation_counts[i]` = number of entries in track arrays where `points3d_indexes == i`
+   - `observation_counts[i]` = number of entries in track arrays where `point_indexes == i`
    - `sum(observation_counts)` must equal `observation_count`
 
 ### Index Relationships
@@ -680,7 +731,7 @@ Observations per point:
 - `camera_indexes[i]` → index into `cameras` array
 - `image_indexes[j]` → index into `images` arrays
 - `feature_indexes[j]` → index into feature file for `images[image_indexes[j]]`
-- `points3d_indexes[j]` → index into `points3d` arrays
+- `point_indexes[j]` → index into `points3d` arrays
 
 ## Compression Details
 
@@ -698,7 +749,7 @@ Binary files use self-documenting names:
 **Format**: `{field_name}.{dim1}.{dim2}...{dtype}.zst`
 
 **Examples**:
-- `positions_xyz.2107.3.float64.zst` → 2107 points, 3 coordinates, float64
+- `positions_xyzw.2107.4.float64.zst` → 2107 points, 4 homogeneous coordinates, float64
 - `camera_indexes.18.uint32.zst` → 18 images, uint32 indices
 - `quaternions_wxyz.18.4.float64.zst` → 18 images, 4 components, float64
 
@@ -743,11 +794,11 @@ with SfmrFileReader("reconstruction.sfmr") as sfm:
     image_names = sfm.read_image_names()
     camera_indexes, quaternions, translations = sfm.read_image_data()
 
-    # Load 3D points
-    positions, colors_rgb, reprojection_errors = sfm.read_points3d()
+    # Load 3D points (positions are homogeneous: (N, 4) [x, y, z, w])
+    positions_xyzw, colors_rgb, reprojection_errors = sfm.read_points3d()
 
     # Load tracks
-    image_indexes, feature_indexes, points3d_indexes, obs_counts = sfm.read_tracks()
+    image_indexes, feature_indexes, point_indexes, obs_counts = sfm.read_tracks()
 ```
 
 ### Writing a .sfmr file
@@ -767,14 +818,14 @@ write_sfm(
         "sift_content_hashes": content_hashes,
     },
     points3d={
-        "positions_xyz": positions,
+        "positions_xyzw": positions_xyzw,
         "colors_rgb": colors_rgb,
         "reprojection_errors": reprojection_errors,
     },
     tracks={
         "image_indexes": image_indexes,
         "feature_indexes": feature_indexes,
-        "points3d_indexes": points3d_indexes,
+        "point_indexes": point_indexes,
         "observation_counts": observation_counts,
     },
     metadata={
@@ -1002,7 +1053,9 @@ solve.
 
 **Semantics:**
 
-- All 3D point positions (`points3d/positions_xyz`) are in this unit.
+- All 3D point positions (`points3d/positions_xyzw`) are in this unit. The unit
+  applies to a finite point's Euclidean position `(x/w, y/w, z/w)`; a `w = 0`
+  point is a direction and is unitless.
 - All camera translations (`images/translations_xyz`) are in this unit.
 - Camera intrinsics (focal length, principal point) remain in pixel units and are unaffected.
 - Rotations (quaternions) are dimensionless and are unaffected.
@@ -1038,6 +1091,40 @@ All extensions should:
 - Include metadata describing new fields
 - Update content hashes appropriately
 
+## Versioning and Migration
+
+The `version` field in `metadata.json.zst` is `2` for this specification.
+
+Version 2 replaces the version 1 point representation with the unified
+homogeneous model described in [Points3D](#7-points3d). The differences:
+
+| Version 1 | Version 2 |
+|-----------|-----------|
+| `points3d/positions_xyz.{N}.3.float64.zst` — Euclidean `(x, y, z)` | `points3d/positions_xyzw.{N}.4.float64.zst` — homogeneous `(x, y, z, w)` |
+| `tracks/points3d_indexes.{M}.uint32.zst` | `tracks/point_indexes.{M}.uint32.zst` |
+| metadata `points3d_count` | metadata `point_count` |
+| (no infinity points) | metadata `infinity_point_count` |
+| `points3d/metadata.json.zst` key `points3d_count` | `points3d/metadata.json.zst` key `point_count` |
+
+The `points3d/` archive directory and the `points3d_xxh128` content-hash field
+keep their version 1 names in version 2.
+
+Version 2 changes the meaning of the positions array and renames the track
+index array, so it is **not** backward compatible — hence the version bump.
+A version 1 file is **not** readable by version-2-only tooling, and a version 2
+file is **not** readable by pre-version-2 tooling.
+
+**Migration is mechanical and lossless.** A version 1 file upgrades to the
+version 2 model by appending a `w = 1` column to every point position (every
+version 1 point is finite) and renaming `points3d_indexes` to `point_indexes`;
+it carries no points at infinity, so `infinity_point_count` is `0`.
+
+The reader in this codebase accepts **both version 1 and version 2**, upgrading
+version 1 on read so the rest of the codebase only ever sees the unified model.
+The writer emits **version 2 only**.
+
 ## Version History
 
+- **Version 2**: Unified homogeneous point model — points at infinity
+  (`w = 0`) are first-class. Reader accepts version 1 and version 2.
 - **Version 1.0rc1**: Release candidate

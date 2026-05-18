@@ -115,7 +115,7 @@ def from_colmap_bin(
                 }
             },
             image_count=num_images,
-            points3d_count=num_points,
+            point_count=num_points,
             observation_count=num_observations,
             camera_count=num_cameras,
         )

@@ -115,7 +115,17 @@ pub struct SfmrMetadata {
     pub workspace: WorkspaceMetadata,
     pub timestamp: String,
     pub image_count: u32,
-    pub points3d_count: u32,
+    /// Number of points (finite and at infinity combined).
+    ///
+    /// The `points3d_count` alias accepts the version 1 field name on read.
+    #[serde(alias = "points3d_count")]
+    pub point_count: u32,
+    /// Number of points at infinity (rows of `positions_xyzw` with `w = 0`).
+    ///
+    /// Absent in version 1 files (which have no infinity points); `serde(default)`
+    /// supplies `0` in that case.
+    #[serde(default)]
+    pub infinity_point_count: u32,
     pub observation_count: u32,
     pub camera_count: u32,
     /// Number of rig definitions. Present only when rig data exists.
@@ -151,7 +161,11 @@ pub struct ContentHash {
 /// Statistics for observed points in a single image.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObservedDepthStats {
+    /// Number of observed finite points with positive depth.
     pub count: u32,
+    /// Number of observed points at infinity (`w == 0`). Absent in v1 files.
+    #[serde(default)]
+    pub infinity_count: u32,
     pub min_z: Option<f64>,
     pub max_z: Option<f64>,
     pub median_z: Option<f64>,
@@ -258,13 +272,18 @@ pub struct SfmrData {
     pub thumbnails_y_x_rgb: Array4<u8>,
 
     // Points3D
-    /// `(P, 3)` 3D point positions in world coordinates.
-    pub positions_xyz: Array2<f64>,
+    /// `(P, 4)` homogeneous 3D point positions in world coordinates.
+    ///
+    /// Each row is `[x, y, z, w]`: `w != 0` is a finite point at
+    /// `(x/w, y/w, z/w)`; `w == 0` is a point at infinity whose direction is
+    /// `(x, y, z)`.
+    pub positions_xyzw: Array2<f64>,
     /// `(P, 3)` RGB colors (0-255).
     pub colors_rgb: Array2<u8>,
     /// `(P,)` RMS reprojection errors in pixels.
     pub reprojection_errors: Array1<f32>,
-    /// `(P, 3)` estimated surface normals (unit vectors).
+    /// `(P, 3)` estimated surface normals (unit vectors; `(0, 0, 0)` rows for
+    /// `w == 0`, which have no surface normal).
     pub estimated_normals_xyz: Array2<f32>,
 
     // Tracks
@@ -272,8 +291,8 @@ pub struct SfmrData {
     pub image_indexes: Array1<u32>,
     /// `(M,)` feature index per observation.
     pub feature_indexes: Array1<u32>,
-    /// `(M,)` 3D point index per observation.
-    pub points3d_indexes: Array1<u32>,
+    /// `(M,)` point index per observation.
+    pub point_indexes: Array1<u32>,
     /// `(P,)` number of observations per 3D point.
     pub observation_counts: Array1<u32>,
 

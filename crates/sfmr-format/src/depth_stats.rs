@@ -59,15 +59,15 @@ fn compute_camera_centers(
 /// - `positions_xyz`: `(P, 3)` 3D point positions in world coordinates.
 /// - `camera_centers`: `(N, 3)` per-image camera center in world coordinates,
 ///   derived from the per-image camera extrinsics (`C = -R^T * t`).
-/// - `image_indexes`, `points3d_indexes`: parallel `(M,)` arrays representing
+/// - `image_indexes`, `point_indexes`: parallel `(M,)` arrays representing
 ///   track observations. Each observation `i` means "image `image_indexes[i]`
-///   sees point `points3d_indexes[i]`", where image indices index into
+///   sees point `point_indexes[i]`", where image indices index into
 ///   `camera_centers` and point indices index into `positions_xyz`.
 fn compute_estimated_normals(
     positions_xyz: &Array2<f64>,
     camera_centers: &Array2<f64>,
     image_indexes: &Array1<u32>,
-    points3d_indexes: &Array1<u32>,
+    point_indexes: &Array1<u32>,
 ) -> Array2<f32> {
     let num_points = positions_xyz.shape()[0];
     let num_obs = image_indexes.len();
@@ -75,7 +75,7 @@ fn compute_estimated_normals(
 
     // Accumulate directions from each point toward its observing cameras
     for obs in 0..num_obs {
-        let point_idx = points3d_indexes[obs] as usize;
+        let point_idx = point_indexes[obs] as usize;
         let image_idx = image_indexes[obs] as usize;
 
         // Direction from point toward camera
@@ -91,10 +91,14 @@ fn compute_estimated_normals(
         let nx = normals[[i, 0]];
         let ny = normals[[i, 1]];
         let nz = normals[[i, 2]];
-        let norm = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-10);
-        result[[i, 0]] = (nx / norm) as f32;
-        result[[i, 1]] = (ny / norm) as f32;
-        result[[i, 2]] = (nz / norm) as f32;
+        let norm = (nx * nx + ny * ny + nz * nz).sqrt();
+        // Points at infinity have NaN positions, hence a NaN accumulated
+        // direction; leave their normal as the (0, 0, 0) initializer.
+        if norm.is_finite() && norm > 1e-10 {
+            result[[i, 0]] = (nx / norm) as f32;
+            result[[i, 1]] = (ny / norm) as f32;
+            result[[i, 2]] = (nz / norm) as f32;
+        }
     }
 
     result
@@ -188,20 +192,23 @@ pub struct DepthStatsResult {
 ///
 /// - `quaternions_wxyz`: `(N, 4)` world-to-camera rotation quaternions (WXYZ order).
 /// - `translations_xyz`: `(N, 3)` world-to-camera translation vectors.
-/// - `positions_xyz`: `(P, 3)` 3D point positions in world coordinates.
-/// - `image_indexes`, `points3d_indexes`: parallel `(M,)` arrays representing
+/// - `positions_xyzw`: `(P, 4)` homogeneous 3D point positions in world
+///   coordinates. A `w != 0` point is finite at `(x/w, y/w, z/w)`; a `w == 0`
+///   point is at infinity and is excluded from finite depth stats but counted
+///   per image via [`ObservedDepthStats::infinity_count`].
+/// - `image_indexes`, `point_indexes`: parallel `(M,)` arrays representing
 ///   track observations. Each observation `i` means "image `image_indexes[i]`
-///   sees point `points3d_indexes[i]`", where image indices index into the
-///   camera pose arrays and point indices index into `positions_xyz`.
+///   sees point `point_indexes[i]`", where image indices index into the
+///   camera pose arrays and point indices index into `positions_xyzw`.
 pub fn compute_depth_statistics(
     quaternions_wxyz: &Array2<f64>,
     translations_xyz: &Array2<f64>,
-    positions_xyz: &Array2<f64>,
+    positions_xyzw: &Array2<f64>,
     image_indexes: &Array1<u32>,
-    points3d_indexes: &Array1<u32>,
+    point_indexes: &Array1<u32>,
 ) -> Result<DepthStatsResult, SfmrError> {
     let num_images = quaternions_wxyz.shape()[0];
-    let num_points = positions_xyz.shape()[0];
+    let num_points = positions_xyzw.shape()[0];
     let num_buckets = NUM_HISTOGRAM_BUCKETS as usize;
 
     // Validate array shapes
@@ -219,10 +226,10 @@ pub fn compute_depth_statistics(
             num_images
         )));
     }
-    if positions_xyz.shape()[1] != 3 {
+    if positions_xyzw.shape()[1] != 4 {
         return Err(SfmrError::InvalidFormat(format!(
-            "positions_xyz shape {:?} doesn't match expected ({}, 3)",
-            positions_xyz.shape(),
+            "positions_xyzw shape {:?} doesn't match expected ({}, 4)",
+            positions_xyzw.shape(),
             num_points
         )));
     }
@@ -239,22 +246,38 @@ pub fn compute_depth_statistics(
         });
     }
 
+    // Homogeneous -> Euclidean. A `w == 0` point is at infinity: it has no
+    // finite position, so its row is NaN (finite depth stats skip non-finite
+    // depths) and it is tracked separately via `is_infinity`.
+    let mut positions_xyz = Array2::<f64>::zeros((num_points, 3));
+    let mut is_infinity = vec![false; num_points];
+    for i in 0..num_points {
+        let w = positions_xyzw[[i, 3]];
+        if w != 0.0 {
+            positions_xyz[[i, 0]] = positions_xyzw[[i, 0]] / w;
+            positions_xyz[[i, 1]] = positions_xyzw[[i, 1]] / w;
+            positions_xyz[[i, 2]] = positions_xyzw[[i, 2]] / w;
+        } else {
+            is_infinity[i] = true;
+            positions_xyz[[i, 0]] = f64::NAN;
+            positions_xyz[[i, 1]] = f64::NAN;
+            positions_xyz[[i, 2]] = f64::NAN;
+        }
+    }
+    let positions_xyz = &positions_xyz;
+
     // Compute camera centers
     let camera_centers = compute_camera_centers(quaternions_wxyz, translations_xyz);
 
     // Compute estimated normals
-    let estimated_normals_xyz = compute_estimated_normals(
-        positions_xyz,
-        &camera_centers,
-        image_indexes,
-        points3d_indexes,
-    );
+    let estimated_normals_xyz =
+        compute_estimated_normals(positions_xyz, &camera_centers, image_indexes, point_indexes);
 
     // Build mapping: image_index -> set of observed point indices
     let mut image_to_points: Vec<Vec<u32>> = vec![Vec::new(); num_images];
     for obs in 0..image_indexes.len() {
         let img_idx = image_indexes[obs] as usize;
-        let pt_idx = points3d_indexes[obs];
+        let pt_idx = point_indexes[obs];
         // Use sorted insert to deduplicate (like Python's set)
         let points = &mut image_to_points[img_idx];
         if !points.contains(&pt_idx) {
@@ -281,6 +304,10 @@ pub fn compute_depth_statistics(
         );
 
         let observed_points = &image_to_points[img_idx];
+        let infinity_count = observed_points
+            .iter()
+            .filter(|&&pt_idx| is_infinity[pt_idx as usize])
+            .count() as u32;
         let mut depths = compute_observed_depths(&r, &center, positions_xyz, observed_points);
 
         if depths.is_empty() {
@@ -289,6 +316,7 @@ pub fn compute_depth_statistics(
                 histogram_max_z: None,
                 observed: ObservedDepthStats {
                     count: 0,
+                    infinity_count,
                     min_z: None,
                     max_z: None,
                     median_z: None,
@@ -318,6 +346,7 @@ pub fn compute_depth_statistics(
             histogram_max_z: Some(max_z),
             observed: ObservedDepthStats {
                 count,
+                infinity_count,
                 min_z: Some(min_z),
                 max_z: Some(max_z),
                 median_z: Some(median_z),
@@ -345,7 +374,7 @@ mod tests {
     fn test_empty_reconstruction() {
         let q = Array2::<f64>::zeros((0, 4));
         let t = Array2::<f64>::zeros((0, 3));
-        let p = Array2::<f64>::zeros((0, 3));
+        let p = Array2::<f64>::zeros((0, 4));
         let ii = Array1::<u32>::zeros(0);
         let pi = Array1::<u32>::zeros(0);
 
@@ -363,8 +392,9 @@ mod tests {
         let t = Array2::<f64>::zeros((1, 3));
 
         // Point at (0, 0, 5) - should be at depth 5
-        let mut p = Array2::<f64>::zeros((1, 3));
+        let mut p = Array2::<f64>::zeros((1, 4));
         p[[0, 2]] = 5.0;
+        p[[0, 3]] = 1.0;
 
         let ii = Array1::from_vec(vec![0u32]);
         let pi = Array1::from_vec(vec![0u32]);
@@ -376,8 +406,37 @@ mod tests {
 
         let stats = &result.depth_statistics.images[0];
         assert_eq!(stats.observed.count, 1);
+        assert_eq!(stats.observed.infinity_count, 0);
         assert!((stats.observed.min_z.unwrap() - 5.0).abs() < 1e-10);
         assert!((stats.observed.max_z.unwrap() - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_point_at_infinity_counted_separately() {
+        // Camera at origin looking along +Z.
+        let mut q = Array2::<f64>::zeros((1, 4));
+        q[[0, 0]] = 1.0;
+        let t = Array2::<f64>::zeros((1, 3));
+
+        // Point 0: finite at (0, 0, 5). Point 1: at infinity (w = 0).
+        let mut p = Array2::<f64>::zeros((2, 4));
+        p[[0, 2]] = 5.0;
+        p[[0, 3]] = 1.0;
+        p[[1, 2]] = 1.0; // direction (0, 0, 1), w = 0
+
+        let ii = Array1::from_vec(vec![0u32, 0]);
+        let pi = Array1::from_vec(vec![0u32, 1]);
+
+        let result = compute_depth_statistics(&q, &t, &p, &ii, &pi).unwrap();
+        let stats = &result.depth_statistics.images[0];
+        assert_eq!(stats.observed.count, 1);
+        assert_eq!(stats.observed.infinity_count, 1);
+        // The infinity point must not pollute the finite depth range.
+        assert!((stats.observed.max_z.unwrap() - 5.0).abs() < 1e-10);
+        // Its estimated normal stays at the (0, 0, 0) initializer.
+        assert_eq!(result.estimated_normals_xyz[[1, 0]], 0.0);
+        assert_eq!(result.estimated_normals_xyz[[1, 1]], 0.0);
+        assert_eq!(result.estimated_normals_xyz[[1, 2]], 0.0);
     }
 
     #[test]

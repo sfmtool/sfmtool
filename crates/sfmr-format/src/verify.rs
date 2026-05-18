@@ -31,8 +31,11 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     let metadata_raw = read_zst_entry(&mut archive, "metadata.json.zst")?;
     let metadata: SfmrMetadata = serde_json::from_slice(&metadata_raw)?;
     let image_count = metadata.image_count as usize;
-    let points3d_count = metadata.points3d_count as usize;
+    let point_count = metadata.point_count as usize;
     let observation_count = metadata.observation_count as usize;
+    // Version 1 stored Euclidean `positions_xyz` and `points3d_indexes`;
+    // version 2 stores homogeneous `positions_xyzw` and `point_indexes`.
+    let is_v1 = metadata.version < 2;
 
     let mut section_digests: Vec<u128> = Vec::with_capacity(5);
 
@@ -203,24 +206,27 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     // points3d/colors_rgb
     points3d_hasher.update(&read_zst_entry(
         &mut archive,
-        &format!("points3d/colors_rgb.{points3d_count}.3.uint8.zst"),
+        &format!("points3d/colors_rgb.{point_count}.3.uint8.zst"),
     )?);
     // points3d/estimated_normals_xyz
     points3d_hasher.update(&read_zst_entry(
         &mut archive,
-        &format!("points3d/estimated_normals_xyz.{points3d_count}.3.float32.zst"),
+        &format!("points3d/estimated_normals_xyz.{point_count}.3.float32.zst"),
     )?);
     // points3d/metadata.json
     points3d_hasher.update(&read_zst_entry(&mut archive, "points3d/metadata.json.zst")?);
-    // points3d/positions_xyz
-    points3d_hasher.update(&read_zst_entry(
-        &mut archive,
-        &format!("points3d/positions_xyz.{points3d_count}.3.float64.zst"),
-    )?);
+    // points3d/positions_xyz (version 1) or positions_xyzw (version 2)
+    let positions_name = if is_v1 {
+        format!("points3d/positions_xyz.{point_count}.3.float64.zst")
+    } else {
+        format!("points3d/positions_xyzw.{point_count}.4.float64.zst")
+    };
+    let positions_raw = read_zst_entry(&mut archive, &positions_name)?;
+    points3d_hasher.update(&positions_raw);
     // points3d/reprojection_errors
     points3d_hasher.update(&read_zst_entry(
         &mut archive,
-        &format!("points3d/reprojection_errors.{points3d_count}.float32.zst"),
+        &format!("points3d/reprojection_errors.{point_count}.float32.zst"),
     )?);
 
     let points3d_hash = points3d_hasher.digest128();
@@ -232,6 +238,48 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         ));
     }
     section_digests.push(points3d_hash);
+
+    // === Validate homogeneous positions (version 2 only) ===
+    // No coordinate may be NaN/infinite; a w=0 row must be a non-zero
+    // direction; and the count of w=0 rows must match infinity_point_count.
+    if !is_v1 && point_count > 0 {
+        if positions_raw.len() == point_count * 32 {
+            let read_f64 = |off: usize| -> f64 {
+                f64::from_le_bytes(positions_raw[off..off + 8].try_into().unwrap())
+            };
+            let mut infinity_count = 0u32;
+            for i in 0..point_count {
+                let base = i * 32;
+                let x = read_f64(base);
+                let y = read_f64(base + 8);
+                let z = read_f64(base + 16);
+                let w = read_f64(base + 24);
+                if !x.is_finite() || !y.is_finite() || !z.is_finite() || !w.is_finite() {
+                    errors.push(format!(
+                        "positions_xyzw row {i} contains a NaN or infinite value"
+                    ));
+                } else if w == 0.0 {
+                    infinity_count += 1;
+                    if x == 0.0 && y == 0.0 && z == 0.0 {
+                        errors.push(format!(
+                            "positions_xyzw row {i} has w=0 but a zero direction"
+                        ));
+                    }
+                }
+            }
+            if infinity_count != metadata.infinity_point_count {
+                errors.push(format!(
+                    "infinity_point_count ({}) != number of w=0 points ({infinity_count})",
+                    metadata.infinity_point_count
+                ));
+            }
+        } else {
+            errors.push(format!(
+                "positions_xyzw byte length {} != point_count {point_count} * 32",
+                positions_raw.len()
+            ));
+        }
+    }
 
     // === Tracks hash (lexicographic path order) ===
     let mut tracks_hasher = Xxh3::new();
@@ -252,15 +300,17 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     // tracks/observation_counts
     let track_obs_counts_raw = read_zst_entry(
         &mut archive,
-        &format!("tracks/observation_counts.{points3d_count}.uint32.zst"),
+        &format!("tracks/observation_counts.{point_count}.uint32.zst"),
     )?;
     tracks_hasher.update(&track_obs_counts_raw);
-    // tracks/points3d_indexes
-    let track_points3d_indexes_raw = read_zst_entry(
-        &mut archive,
-        &format!("tracks/points3d_indexes.{observation_count}.uint32.zst"),
-    )?;
-    tracks_hasher.update(&track_points3d_indexes_raw);
+    // tracks/points3d_indexes (version 1) or point_indexes (version 2)
+    let point_indexes_name = if is_v1 {
+        format!("tracks/points3d_indexes.{observation_count}.uint32.zst")
+    } else {
+        format!("tracks/point_indexes.{observation_count}.uint32.zst")
+    };
+    let track_point_indexes_raw = read_zst_entry(&mut archive, &point_indexes_name)?;
+    tracks_hasher.update(&track_point_indexes_raw);
 
     let tracks_hash = tracks_hasher.digest128();
     if format_hash(tracks_hash) != stored.tracks_xxh128 {
@@ -274,14 +324,14 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
 
     // === Validate track sorting ===
     if observation_count > 1 {
-        let p3d_idxs: &[u32] = bytemuck::cast_slice(&track_points3d_indexes_raw);
+        let p3d_idxs: &[u32] = bytemuck::cast_slice(&track_point_indexes_raw);
         let img_idxs: &[u32] = bytemuck::cast_slice(&track_image_indexes_raw);
         for i in 0..observation_count - 1 {
             if p3d_idxs[i] > p3d_idxs[i + 1]
                 || (p3d_idxs[i] == p3d_idxs[i + 1] && img_idxs[i] > img_idxs[i + 1])
             {
                 errors.push(format!(
-                    "Tracks not sorted lexicographically by (points3d_indexes, image_indexes) at index {i}"
+                    "Tracks not sorted lexicographically by (point_indexes, image_indexes) at index {i}"
                 ));
                 break;
             }
@@ -289,7 +339,7 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     }
 
     // === Validate observation_counts ===
-    if points3d_count > 0 {
+    if point_count > 0 {
         let obs_counts: &[u32] = bytemuck::cast_slice(&track_obs_counts_raw);
         let obs_sum: u64 = obs_counts.iter().map(|&c| c as u64).sum();
         if obs_sum != observation_count as u64 {

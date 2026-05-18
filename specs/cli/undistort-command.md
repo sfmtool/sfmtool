@@ -199,14 +199,14 @@ The output `.sfmr`'s metadata block records:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "operation": "undistort",
   "tool": "sfmtool",
   "tool_version": "<sfmtool version>",
   "workspace": { ... },
   "timestamp": "<ISO 8601>",
   "image_count": ...,
-  "points3d_count": ...,
+  "point_count": ...,
   "observation_count": ...,
   "camera_count": ...,
   "tool_options": {

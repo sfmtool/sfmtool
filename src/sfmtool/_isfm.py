@@ -168,7 +168,7 @@ def run_incremental_sfm(
                 }
             },
             image_count=image_count,
-            points3d_count=points3d_count,
+            point_count=points3d_count,
             observation_count=obs_count,
             camera_count=camera_count,
         )

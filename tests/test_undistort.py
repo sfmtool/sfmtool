@@ -150,6 +150,22 @@ class TestUndistortReconstructionImages:
         for cam in undist_recon.cameras:
             assert cam.model == "PINHOLE"
 
+    def test_points_at_infinity_rejected(
+        self, sfmrfile_reconstruction_with_17_images, tmp_path
+    ):
+        """Undistortion must fail loudly on a w=0 point, not re-finitize it."""
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        positions_xyzw = recon.positions_xyzw.copy()
+        assert len(positions_xyzw) > 0
+        # Turn the first point into a point at infinity (w = 0).
+        positions_xyzw[0] = [0.0, 0.0, 1.0, 0.0]
+        recon = recon.clone_with_changes(positions=positions_xyzw)
+
+        with pytest.raises(NotImplementedError, match="point.* at infinity"):
+            undistort_reconstruction_images(
+                recon=recon, output_dir=tmp_path / "undistorted"
+            )
+
     def test_progress_callback(self, sfmrfile_reconstruction_with_17_images, tmp_path):
         """Test that progress callback is called correctly."""
         sfmr_path = sfmrfile_reconstruction_with_17_images
