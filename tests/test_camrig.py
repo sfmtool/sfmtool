@@ -152,42 +152,11 @@ def test_camrig_spherical_tiles_requires_one_resolution_option(tmp_path: Path):
     assert "exactly one" in result.output.lower()
 
 
-def test_camrig_inspect_cli(tmp_path: Path):
-    out = tmp_path / "inspect.camrig"
-    build = CliRunner().invoke(
-        main,
-        [
-            "camrig",
-            "spherical-tiles",
-            str(out),
-            "--n",
-            "150",
-            "--equirect-width",
-            "256",
-        ],
-    )
-    assert build.exit_code == 0, build.output
-
-    result = CliRunner().invoke(main, ["camrig", "inspect", str(out)])
-    assert result.exit_code == 0, result.output
-    assert "Rig type:     spherical_tiles" in result.output
-    assert "Sensors:      150" in result.output
-    assert "Integrity:    OK" in result.output
-
-
-def test_camrig_inspect_rejects_non_camrig(tmp_path: Path):
-    fake = tmp_path / "junk.camrig"
-    fake.write_bytes(b"not a zip archive")
-    result = CliRunner().invoke(main, ["camrig", "inspect", str(fake)])
-    assert result.exit_code != 0
-
-
 def test_camrig_help_lists_subcommands():
     result = CliRunner().invoke(main, ["camrig", "--help"])
     assert result.exit_code == 0
     assert "create" in result.output
     assert "spherical-tiles" in result.output
-    assert "inspect" in result.output
 
 
 # ── write_camrig binding ────────────────────────────────────────────────────

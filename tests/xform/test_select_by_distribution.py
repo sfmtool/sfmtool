@@ -8,7 +8,7 @@ import math
 import numpy as np
 import pytest
 
-from sfmtool._inspect_images import _compute_camera_centers
+from sfmtool._analyze_images import _compute_camera_centers
 from sfmtool._sfmtool import SfmrReconstruction
 from sfmtool.xform import (
     BundleAdjustTransform,

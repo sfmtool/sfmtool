@@ -26,7 +26,6 @@ from sfmtool._sift_file import (  # noqa: F401
     get_used_features_from_reconstruction,
     image_files_to_sift_files,
     image_files_to_sift_files_opencv,
-    print_sift_summary,
     write_sift,
     xxh128_of_file,
 )

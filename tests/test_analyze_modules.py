@@ -1,13 +1,13 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the inspect command modules."""
+"""Tests for the analyze command modules."""
 
 import numpy as np
 import pytest
 
 from sfmtool._histogram_utils import estimate_z_from_histogram
-from sfmtool._inspect_images import (
+from sfmtool._analyze_images import (
     _compute_camera_centers,
     _compute_rotation_angle,
     _slerp_halfway,

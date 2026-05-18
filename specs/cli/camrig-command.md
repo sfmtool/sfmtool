@@ -2,14 +2,16 @@
 
 ## Overview
 
-Builds and inspects `.camrig` camera rig files. `camrig` is a command group
-with three subcommands:
+Builds `.camrig` camera rig files. `camrig` is a command group with two
+subcommands:
 
 - `create` — build a one-camera rig for a directory of images and write it
   to a `.camrig` file.
 - `spherical-tiles` — build a spherical tile rig (a sphere discretised into
   co-centric pinhole tiles) and write it to a `.camrig` file.
-- `inspect` — verify a `.camrig` file's integrity and print its metadata.
+
+To inspect a `.camrig` file, use `sfm inspect <FILE.camrig>` (see
+`specs/cli/inspect-command.md`).
 
 See `specs/formats/camrig-file-format.md` for the file format and
 `specs/core/spherical-tiles-rig.md` for the spherical tile rig.
@@ -127,20 +129,6 @@ bit-for-bit reproducible layout. The written `.camrig` file is a
 `sensor_from_rig` quaternion per tile, and the derived scalars in
 `rig_attributes`.
 
-## `sfm camrig inspect`
-
-### Syntax
-
-```bash
-sfm camrig inspect <CAMRIG_FILE>
-```
-
-Recomputes the file's content hashes, checks its structural constraints, and
-prints the rig metadata: format version, name, rig type, sensor and camera
-counts, `rig_attributes`, and the content hash. Exits with an error if
-verification fails. Works for any `.camrig` file, not only spherical tile
-rigs.
-
 ## Usage Examples
 
 ```bash
@@ -152,5 +140,5 @@ sfm camrig spherical-tiles tiles.camrig --n 320 --arc-per-pixel 0.012 \
     --overlap-factor 1.2 --centre 0 1.5 0 --seed 42
 
 # Verify and inspect a .camrig file
-sfm camrig inspect tiles.camrig
+sfm inspect tiles.camrig
 ```

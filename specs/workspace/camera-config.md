@@ -296,7 +296,7 @@ frame as the original so it remains comparable.
 
 The intent of step 4 is captured by a future `sfm cam cp` command;
 until that lands, the file can be written by hand from the values in
-`sfm inspect --metrics` output, or from a small script using
+`sfm analyze --metrics` output, or from a small script using
 `pycolmap_camera_to_intrinsics`.
 
 ### Workflow 2: Reuse Intrinsics from a Previous Project

@@ -17,10 +17,8 @@ from .._workspace import find_workspace_for_path, load_workspace_config
 from .._sift_file import (
     SiftExtractionError,
     draw_sift_features,
-    get_sift_path_for_image,
     get_used_features_from_reconstruction,
     image_files_to_sift_files,
-    print_sift_summary,
 )
 
 
@@ -36,9 +34,6 @@ from .._sift_file import (
     help="Extract features from the specified image files.",
 )
 @click.option(
-    "--print", "-p", "print_flag", is_flag=True, help="Print summary of .sift files."
-)
-@click.option(
     "--draw",
     "-d",
     "draw_output_dir",
@@ -50,9 +45,6 @@ from .._sift_file import (
     "filter_sfm_path",
     type=click.Path(exists=True),
     help="Only draw features used in this .sfm reconstruction file (only with --draw).",
-)
-@click.option(
-    "--verbose", "-v", "verbose_flag", is_flag=True, help="Print verbose output."
 )
 @click.option(
     "--range",
@@ -82,22 +74,21 @@ from .._sift_file import (
 def sift(
     paths,
     extract_flag,
-    print_flag,
     draw_output_dir,
     filter_sfm_path,
-    verbose_flag,
     range_expr,
     num_threads,
     tool,
     domain_size_pooling,
 ):
-    """Extract and inspect .sift feature files."""
+    """Extract SIFT features and visualize .sift feature files.
+
+    Use `sfm inspect <FILE.sift>` to inspect a feature file.
+    """
     # Count how many modes are active
-    active_modes = sum([extract_flag, print_flag, draw_output_dir is not None])
+    active_modes = sum([extract_flag, draw_output_dir is not None])
     if active_modes != 1:
-        raise click.UsageError(
-            "Exactly one of --extract, --print, or --draw must be specified."
-        )
+        raise click.UsageError("Exactly one of --extract or --draw must be specified.")
 
     # Validate --filter-sfm is only used with --draw
     if filter_sfm_path and not draw_output_dir:
@@ -116,13 +107,10 @@ def sift(
     if range_expr:
         numbers = IntRangeExpr.from_str(range_expr)
 
-    if extract_flag or draw_output_dir:
-        extensions = (".png", ".jpg", ".jpeg")
-    else:  # print_flag
-        extensions = (".png", ".jpg", ".jpeg", ".sift")
-
     # Convert any directories into lists of image paths for processing
-    filenames = expand_paths(paths, extensions=extensions, numbers=numbers)
+    filenames = expand_paths(
+        paths, extensions=(".png", ".jpg", ".jpeg"), numbers=numbers
+    )
 
     # Validate we have files to process
     if not filenames:
@@ -199,24 +187,6 @@ def sift(
             )
         except SiftExtractionError as e:
             raise click.ClickException(str(e))
-
-    elif print_flag:
-        for filename in filenames:
-            if filename.suffix.lower() == ".sift":
-                sift_path = filename
-            else:
-                sift_path = get_sift_path_for_image(
-                    filename,
-                    feature_tool=tool,
-                    feature_options=feature_options,
-                )
-
-            if sift_path.exists():
-                print_sift_summary(sift_path, verbose=verbose_flag)
-            else:
-                click.echo(
-                    f"Could not find SIFT file for '{filename}' at '{sift_path}'"
-                )
 
     elif draw_output_dir:
         draw_output_dir.mkdir(parents=True, exist_ok=True)

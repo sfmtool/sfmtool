@@ -135,15 +135,15 @@ orbiting around it more comfortable.
 
 ### 1. Reconstruction summary
 
-Use `sfm inspect` to get a detailed summary of a reconstruction from the
+Use `sfm inspect -v` to get a detailed summary of a reconstruction from the
 command line. Even from the command line, you can get an idea about the 3D
 points from this output. The bounding box extents are accompanied by histograms
 that show the point density projected to each axis. Similarly, you can see a
 histogram of the reprojection error, track lengths, and 3D distance to the
-nearest other point.
+nearest other point. (Without `-v`, `sfm inspect` prints a one-screen summary.)
 
 ```
-$ sfm inspect sfmr/20260413-00-solve-dino_dog_toy_1-85.sfmr
+$ sfm inspect -v sfmr/20260413-00-solve-dino_dog_toy_1-85.sfmr
 
 Reconstruction file: 20260413-00-solve-dino_dog_toy_1-85.sfmr
 ======================================================================
@@ -225,13 +225,13 @@ Completed in 0.04s
 
 ### 2. Image reprojection statistics
 
-The `--metrics` flag shows per-image reprojection error statistics, sorted by
-mean error descending. Each row includes a histogram of that image's error
-distribution, plus the observation count, mean track length, and a flag for
-images with elevated error.
+The `sfm analyze --metrics` report shows per-image reprojection error
+statistics, sorted by mean error descending. Each row includes a histogram of
+that image's error distribution, plus the observation count, mean track length,
+and a flag for images with elevated error.
 
 ```
-$ sfm inspect --metrics sfmr/20260413-00-solve-dino_dog_toy_1-85.sfmr
+$ sfm analyze --metrics sfmr/20260413-00-solve-dino_dog_toy_1-85.sfmr
 
 Per-image metrics analysis for: 20260413-00-solve-dino_dog_toy_1-85.sfmr
 ====================================================================================================
@@ -268,11 +268,11 @@ Completed in 0.10s
 
 ### 3. Depth range per image
 
-The `--z-range` flag shows the range of 3D point depths as seen from each
-camera, with a histogram of the depth distribution.
+The `sfm analyze --z-range` report shows the range of 3D point depths as seen
+from each camera, with a histogram of the depth distribution.
 
 ```
-$ sfm inspect --z-range sfmr/20260413-00-solve-dino_dog_toy_1-85.sfmr
+$ sfm analyze --z-range sfmr/20260413-00-solve-dino_dog_toy_1-85.sfmr
 
 Z range statistics for: 20260413-00-solve-dino_dog_toy_1-85.sfmr
 ======================================================================
