@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::archive_io::ArchiveIoError;
+use crate::pattern::{count_frame_fields, validate_pattern};
 
 /// Errors that can occur when reading or writing `.camrig` files.
 #[derive(Error, Debug)]
@@ -195,11 +196,41 @@ impl CamRigData {
                 self.sensor_image_patterns.len()
             )));
         }
+        // Each image pattern must be a structurally valid pattern (see
+        // `validate_pattern`), and a multi-sensor rig additionally requires a
+        // frame field in every pattern. A frame-field-less pattern groups
+        // frames positionally, which is well-defined only for a single-sensor
+        // rig: with more sensors, frames are paired across sensors by frame
+        // index. See the format spec, *How `.camrig` files fit into
+        // workspaces*. Geometry-only rigs (empty patterns) are exempt.
+        for (i, pattern) in self.sensor_image_patterns.iter().enumerate() {
+            validate_pattern(pattern)
+                .map_err(|msg| CamRigError::InvalidFormat(format!("sensor {i} {msg}")))?;
+            if s > 1 && count_frame_fields(pattern) == 0 {
+                return Err(CamRigError::InvalidFormat(format!(
+                    "sensor {i} image pattern '{pattern}' has no frame field \
+                     (%d / %0Nd); a rig with more than one sensor requires a \
+                     frame field in every image pattern"
+                )));
+            }
+        }
         for (i, &ci) in self.camera_indexes.iter().enumerate() {
             if ci as usize >= self.cameras.len() {
                 return Err(CamRigError::InvalidFormat(format!(
                     "sensor {i} references camera {ci}, out of range [0, {})",
                     self.cameras.len()
+                )));
+            }
+        }
+        // Camera dimensions must be positive: a zero width or height is a
+        // degenerate camera that yields a zero-aspect-ratio division in
+        // consumers that scale intrinsics to an actual image size.
+        for (i, camera) in self.cameras.iter().enumerate() {
+            if camera.width == 0 || camera.height == 0 {
+                return Err(CamRigError::InvalidFormat(format!(
+                    "camera {i} has a non-positive dimension {}x{}; width and \
+                     height must both be greater than zero",
+                    camera.width, camera.height
                 )));
             }
         }

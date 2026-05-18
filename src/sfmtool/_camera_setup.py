@@ -201,14 +201,20 @@ def build_intrinsics_from_camera_config(
 
 
 def _read_image_size(image_path: Path) -> tuple[int, int]:
-    """Return `(width, height)` of an image file in pixels."""
-    import cv2
+    """Return `(width, height)` of an image file in pixels.
 
-    img = cv2.imread(str(image_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
-    if img is None:
-        raise CameraConfigError(f"Failed to read image: {image_path}")
-    h, w = img.shape[:2]
-    return int(w), int(h)
+    Reads only the image header — no pixel decode — via the Rust
+    `image_dimensions` binding. The dimensions are the ones stored in the
+    file; EXIF orientation is not applied, matching the rest of the
+    intrinsics pipeline.
+    """
+    from ._sfmtool import image_dimensions
+
+    try:
+        width, height = image_dimensions(str(image_path))
+    except Exception as e:
+        raise CameraConfigError(f"Failed to read image: {image_path}: {e}") from None
+    return int(width), int(height)
 
 
 def intrinsics_for_image(

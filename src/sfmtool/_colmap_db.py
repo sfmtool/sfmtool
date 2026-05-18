@@ -9,8 +9,14 @@ from pathlib import Path
 import pycolmap
 
 from ._camera_config import CameraConfigResolver
-from ._camera_setup import _infer_camera, _wrap_descriptors, intrinsics_for_image
+from ._camera_setup import (
+    _infer_camera,
+    _wrap_descriptors,
+    build_intrinsics_from_camera_config,
+    intrinsics_for_image,
+)
 from ._cameras import colmap_camera_from_intrinsics
+from ._camrig_resolver import resolve_camrig_for_solve
 from ._rig_config import (
     _infer_frame_key,
     _match_image_to_sensor,
@@ -40,6 +46,16 @@ def _setup_for_sfm(
     Returns:
         tuple: (db_path, image_dir)
     """
+    camrig_camera = resolve_camrig_for_solve(
+        image_paths, workspace_dir, camera_model, camera_config_resolver
+    )
+    use_rigs = rig_config is not None and camrig_camera is None
+    if rig_config is not None and camrig_camera is not None:
+        print(
+            "Note: a .camrig covers these images; rig_config.json is ignored "
+            "(the .camrig takes precedence)."
+        )
+
     sift_paths = image_files_to_sift_files(
         image_paths,
         feature_tool=feature_tool,
@@ -55,7 +71,7 @@ def _setup_for_sfm(
 
     image_dir = Path(workspace_dir)
 
-    if rig_config is not None:
+    if use_rigs:
         _setup_db_with_rigs(
             image_paths,
             sift_paths,
@@ -75,11 +91,12 @@ def _setup_for_sfm(
             max_feature_count,
             camera_model=camera_model,
             camera_config_resolver=camera_config_resolver,
+            camrig_camera=camrig_camera,
         )
 
     # Build same-frame exclusion data for multi-sensor rigs
     same_frame_index_pairs: set[tuple[int, int]] | None = None
-    if rig_config is not None:
+    if use_rigs:
         same_frame_index_pairs = _build_same_frame_index_pairs(
             db_path, image_paths, image_dir
         )
@@ -100,7 +117,7 @@ def _setup_for_sfm(
             flow_preset=flow_preset,
             flow_wide_baseline_skip=flow_wide_baseline_skip,
         )
-    elif rig_config is not None and same_frame_index_pairs:
+    elif use_rigs and same_frame_index_pairs:
         cross_frame_pairs = _build_cross_frame_pairs(db_path)
         pairs_path = colmap_dir / "match_pairs.txt"
         with open(pairs_path, "w") as f:
@@ -259,8 +276,17 @@ def _setup_for_sfm_from_matches(
 
     _check_camera_model_conflict(image_paths, camera_config_resolver, camera_model)
 
+    camrig_camera = resolve_camrig_for_solve(
+        image_paths, workspace_dir, camera_model, camera_config_resolver
+    )
+    if rig_config is not None and camrig_camera is not None:
+        print(
+            "Note: a .camrig covers these images; rig_config.json is ignored "
+            "(the .camrig takes precedence)."
+        )
+
     # Populate DB with features
-    if rig_config is not None:
+    if rig_config is not None and camrig_camera is None:
         _setup_db_with_rigs(
             image_paths,
             sift_paths,
@@ -280,6 +306,7 @@ def _setup_for_sfm_from_matches(
             max_feature_count=None,
             camera_model=camera_model,
             camera_config_resolver=camera_config_resolver,
+            camrig_camera=camrig_camera,
         )
 
     # Write matches and TVGs to the database
@@ -439,12 +466,23 @@ def _setup_db_single_camera(
     max_feature_count: int | None,
     camera_model: str | None = None,
     camera_config_resolver: CameraConfigResolver | None = None,
+    camrig_camera: dict | None = None,
 ) -> None:
-    """Set up COLMAP database with a single-camera trivial rig."""
+    """Set up COLMAP database with a single-camera trivial rig.
+
+    When `camrig_camera` (a `{model, width, height, parameters}` dict from a
+    discovered `.camrig`) is given, it supplies the camera; otherwise the
+    intrinsics come from `camera_config.json` / EXIF inference.
+    """
     with pycolmap.Database.open(db_path) as db:
-        intrinsics, prior = intrinsics_for_image(
-            Path(image_paths[0]), camera_config_resolver, camera_model
-        )
+        if camrig_camera is not None:
+            intrinsics, prior = build_intrinsics_from_camera_config(
+                camrig_camera, Path(image_paths[0]), None
+            )
+        else:
+            intrinsics, prior = intrinsics_for_image(
+                Path(image_paths[0]), camera_config_resolver, camera_model
+            )
         cam = colmap_camera_from_intrinsics(intrinsics)
         if prior:
             cam.has_prior_focal_length = True

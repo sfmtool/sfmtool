@@ -58,6 +58,10 @@ mod py_matches_io;
 mod py_sfmr_io;
 mod py_sift_io;
 
+// ── Image inspection ──────────────────────────────────────────────────────
+
+mod py_image;
+
 // ── Feature matching ──────────────────────────────────────────────────────
 
 mod py_descriptor_match;
@@ -110,9 +114,16 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_matches_io::write_matches, m)?)?;
     m.add_function(wrap_pyfunction!(py_matches_io::verify_matches, m)?)?;
 
-    // .camrig file inspection
+    // .camrig file I/O
     m.add_function(wrap_pyfunction!(py_camrig_io::read_camrig_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(py_camrig_io::read_camrig, m)?)?;
     m.add_function(wrap_pyfunction!(py_camrig_io::verify_camrig, m)?)?;
+    m.add_function(wrap_pyfunction!(py_camrig_io::write_camrig, m)?)?;
+
+    // .camrig image patterns
+    m.add_function(wrap_pyfunction!(py_camrig_io::validate_camrig_pattern, m)?)?;
+    m.add_function(wrap_pyfunction!(py_camrig_io::camrig_pattern_to_glob, m)?)?;
+    m.add_function(wrap_pyfunction!(py_camrig_io::camrig_pattern_matches, m)?)?;
 
     // .sift file I/O
     m.add_function(wrap_pyfunction!(py_sift_io::read_sift, m)?)?;
@@ -120,6 +131,9 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_sift_io::read_sift_partial, m)?)?;
     m.add_function(wrap_pyfunction!(py_sift_io::write_sift, m)?)?;
     m.add_function(wrap_pyfunction!(py_sift_io::verify_sift, m)?)?;
+
+    // Image inspection
+    m.add_function(wrap_pyfunction!(py_image::image_dimensions, m)?)?;
 
     // Feature matching
     m.add_function(wrap_pyfunction!(

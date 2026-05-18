@@ -8,6 +8,7 @@ from pathlib import Path
 
 import click
 
+from .._cameras import _CAMERA_PARAM_NAMES
 from .._cli_utils import timed_command
 
 
@@ -15,6 +16,131 @@ from .._cli_utils import timed_command
 @click.help_option("--help", "-h")
 def camrig():
     """Build and inspect .camrig camera rig files."""
+
+
+# COLMAP camera-model names accepted by `--camera-model`, taken from the
+# canonical parameter-name table so the two cannot drift apart.
+_CAMERA_MODELS = tuple(_CAMERA_PARAM_NAMES)
+
+
+@camrig.command("create")
+@timed_command
+@click.help_option("--help", "-h")
+@click.argument("output_file", type=click.Path(dir_okay=False))
+@click.argument("image_pattern")
+@click.option(
+    "--camera-model",
+    type=click.Choice(_CAMERA_MODELS, case_sensitive=False),
+    default=None,
+    help="COLMAP camera model. Overrides the EXIF-inferred model; "
+    "required when --params is used.",
+)
+@click.option(
+    "--resolution",
+    default=None,
+    help="Image resolution as WIDTHxHEIGHT (e.g. 4000x3000). Every matched "
+    "image must have this resolution.",
+)
+@click.option(
+    "--focal-length",
+    type=float,
+    default=None,
+    help="Focal length in pixels; sets both fx and fy.",
+)
+@click.option(
+    "--focal-length-x",
+    type=float,
+    default=None,
+    help="Focal length fx in pixels.",
+)
+@click.option(
+    "--focal-length-y",
+    type=float,
+    default=None,
+    help="Focal length fy in pixels.",
+)
+@click.option(
+    "--principal-point-x",
+    type=float,
+    default=None,
+    help="Principal point cx in pixels.",
+)
+@click.option(
+    "--principal-point-y",
+    type=float,
+    default=None,
+    help="Principal point cy in pixels.",
+)
+@click.option(
+    "--params",
+    default=None,
+    help="Full camera parameter list in COLMAP order, comma-separated "
+    "(e.g. 1400,1400,960,540). Requires --camera-model.",
+)
+@click.option(
+    "--name",
+    default=None,
+    help="Rig name stored in the file (default: the output file stem).",
+)
+def create(
+    output_file,
+    image_pattern,
+    camera_model,
+    resolution,
+    focal_length,
+    focal_length_x,
+    focal_length_y,
+    principal_point_x,
+    principal_point_y,
+    params,
+    name,
+):
+    """Create a .camrig file for a directory of images.
+
+    Scans the images matched by IMAGE_PATTERN — a .camrig image pattern
+    (globs and/or %d-style frame fields) resolved relative to the OUTPUT_FILE
+    directory and stored verbatim in the rig — and writes a one-camera
+    .camrig. Intrinsics come from pycolmap EXIF inference unless overridden.
+    The command fails if the matched images are inconsistent (mixed
+    resolutions, mixed inferred models, varying focal lengths) so the caller
+    can narrow the pattern and build separate rigs.
+
+    Example usage:
+
+        sfm camrig create my_images.camrig 'images/*'
+
+        sfm camrig create rig.camrig '*.jpg' --camera-model OPENCV \\
+            --resolution 4000x3000 \\
+            --params 2800,2800,2000,1500,-0.08,0.01,0,0
+
+    """
+    from .._camrig_create import build_camrig_from_images
+
+    try:
+        summary = build_camrig_from_images(
+            Path(output_file),
+            image_pattern,
+            camera_model=camera_model,
+            resolution=resolution,
+            focal_length=focal_length,
+            focal_length_x=focal_length_x,
+            focal_length_y=focal_length_y,
+            principal_point_x=principal_point_x,
+            principal_point_y=principal_point_y,
+            params=params,
+            name=name,
+        )
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+    cam = summary["camera"]
+    cam_params = cam["parameters"]
+    focal = cam_params.get("focal_length_x", cam_params.get("focal_length"))
+    click.echo(f"Wrote {summary['output_file']}")
+    click.echo(f"  images:   {summary['image_count']}")
+    click.echo(f"  pattern:  {summary['pattern']}")
+    click.echo(f"  camera:   {cam['model']} {cam['width']}x{cam['height']}")
+    click.echo(f"  focal:    {focal:.1f} px")
 
 
 @camrig.command("spherical-tiles")

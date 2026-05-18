@@ -73,6 +73,26 @@ its parent directory up to the workspace root), the file's intrinsics are used a
 `--camera-model` is rejected with an error before any solve work begins. See
 [`../workspace/camera-config.md`](../workspace/camera-config.md).
 
+## Camera Rig Files (`.camrig`)
+
+`sfm solve` auto-discovers `.camrig` files in the workspace. A single-sensor `.camrig`
+(such as one written by `sfm camrig create`) supplies the camera intrinsics for the
+images its stored image pattern matches.
+
+When every image being solved is covered by one single-sensor `.camrig`, that camera is
+used as the prior. A `.camrig` takes precedence over `camera_config.json` and
+`rig_config.json` for the images it covers — a note is printed when it overrides one.
+
+The command fails up front, with a message naming the offending files, when the
+discovered `.camrig` files cannot be used:
+
+- the images being solved span more than one `.camrig`;
+- a `.camrig` covers only some of the images being solved;
+- a matching `.camrig` is a multi-sensor rig (not yet supported by `solve`);
+- `--camera-model` is given alongside a matching `.camrig`.
+
+See [`../formats/camrig-file-format.md`](../formats/camrig-file-format.md).
+
 ## Usage Examples
 
 ```bash

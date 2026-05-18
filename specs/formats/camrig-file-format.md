@@ -152,8 +152,10 @@ Compact JSON, zstd-compressed: a JSON **array** of strings.
 * If the array has `sensor_count` entries, entry `i` is sensor `i`'s image
   file pattern — the path pattern identifying that sensor's images in a
   workspace (see *How `.camrig` files fit into workspaces*). The format
-  treats each entry as an opaque string; pattern syntax is interpreted by
-  workspace tooling, not the format layer.
+  treats each entry as an opaque string and leaves pattern syntax to
+  workspace tooling, with one exception: it checks each pattern's frame-field
+  count — at most one in any pattern, and exactly one per pattern in a
+  multi-sensor rig (see *Data ordering and constraints*).
 * If the array is **empty** (`[]`), the rig is not backed by workspace
   images — it describes pure geometry, and sensors are referred to by index.
   This is the expected case for large generated rigs (a 100 000-tile
@@ -206,6 +208,13 @@ sfmtool formats.
   `cameras` array length.
 - Every entry of `camera_indexes` is in `[0, camera_count)`.
 - Quaternions are unit length (within tolerance).
+- Every image pattern is a relative forward-slash path: no leading `/`, no
+  `..` component, and every `**` stands alone as a whole path segment.
+- Every image pattern contains at most one frame field (`%d` or `%0Nd`) —
+  see *How `.camrig` files fit into workspaces*.
+- If `sensor_count > 1` and the rig is image-backed (non-empty
+  `image_file_patterns`), every pattern contains exactly one frame field. A
+  frame-field-less pattern is permitted only in a single-sensor rig.
 
 A reader must reject a file that violates any of these constraints, rather
 than passing it through to a consumer — a file can be byte-intact (its
@@ -267,10 +276,29 @@ left/image_%04d.jpg
 right/image_%04d.jpg
 ```
 
+or, for a single-camera rig dropped alongside a directory of images:
+
+```
+*.jpg
+```
+
 The pattern is the sensor's entry in `sensors/image_file_patterns.json.zst`.
-It is a
-forward-slash relative path (no leading `/`, no `..`) that may descend into
-subdirectories and contains at most one **frame field**:
+It is a forward-slash relative path (no leading `/`, no `..`) that may
+descend into subdirectories. A pattern is built from literal text plus two
+kinds of special token: **glob wildcards**, which broaden which files match,
+and an optional **frame field**, which assigns frame indices.
+
+**Glob wildcards** match path text but capture nothing. A pattern may
+contain any number of them:
+
+- `*` — matches zero or more characters within a single path segment; it
+  does **not** match `/`.
+- `**` — matches zero or more whole path segments, separators included
+  (`a/**/b.jpg`, `**/img.png`). It must occupy a full path segment.
+
+`*` and `**` are always wildcards — there is no escape for a literal `*`.
+
+The **frame field** is optional and may appear **at most once**:
 
 - `%0Nd` — a zero-padded integer `N` digits wide (`%04d` matches `0007`).
 - `%d` — an unpadded integer.
@@ -278,14 +306,24 @@ subdirectories and contains at most one **frame field**:
 
 The pattern does two things:
 
-1. **Membership.** The files whose paths match the pattern are exactly that
-   sensor's images. Patterns for different sensors must not match the same
-   file.
-2. **Frame grouping.** The integer captured by the frame field is the
-   image's **frame index**. Images from different sensors that share a frame
-   index were captured at the same instant and make up one rig **frame** —
-   their relative pose is fixed by the rig. A pattern with no frame field
-   matches a single image: a single-frame sensor.
+1. **Membership.** The files whose paths match the pattern — glob wildcards
+   and frame field included — are exactly that sensor's images. Patterns for
+   different sensors must not match the same file.
+2. **Frame grouping.** Images from different sensors captured at the same
+   instant make up one rig **frame**; their relative pose is fixed by the
+   rig. Each image's **frame index** is what assigns it to a frame:
+   - If the pattern has a frame field, the integer it captures is the frame
+     index. Glob wildcards capture nothing and never contribute to it.
+   - If the pattern has no frame field, the sensor's matched files are
+     sorted by relative path and assigned frame indices `0, 1, 2, …` by
+     position. A pattern with neither a frame field nor a wildcard matches a
+     single file — a single-frame sensor — as the degenerate case of this
+     rule.
+
+A frame-field-less pattern is only valid in a **single-sensor** rig. With
+more than one sensor, frames are paired across sensors by frame index, so
+every pattern must carry a frame field; a rig with `sensor_count > 1` whose
+patterns omit the frame field is invalid.
 
 This is the `.camrig` equivalent of COLMAP's frame grouping by stripped
 `image_prefix` (see *Relationship to the COLMAP rig format*), stated as an

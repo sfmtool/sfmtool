@@ -20,6 +20,7 @@ sfmr-colmap = { path = "../sfmr-colmap" }
 matches-format = { path = "../matches-format" }
 camrig-format = { path = "../camrig-format" }
 pyo3 = { version = "0.26", features = ["extension-module"] }
+image = "0.25"
 numpy = { version = "0.26", features = ["half"] }
 half = "2"
 ndarray = "0.16"
