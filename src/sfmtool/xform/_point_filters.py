@@ -10,6 +10,22 @@ import numpy as np
 from .._sfmtool import SfmrReconstruction, read_sift_partial
 
 
+def keep_infinity_points(
+    recon: SfmrReconstruction, finite_keep_mask: np.ndarray
+) -> np.ndarray:
+    """Combine a finite-point keep mask with a pass-through for infinity points.
+
+    Some xform point filters score a quantity that is undefined for a point at
+    infinity — a triangulation angle, neighbour distance, or reprojection error
+    computed from a direction rather than a location. Those filters keep such
+    points unconditionally via this helper. Filters scoring track length or
+    feature size, which are well-defined regardless of ``w``, score points at
+    infinity normally instead. See specs/drafts/sfmr-v2-points-at-infinity.md.
+    """
+    at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
+    return np.asarray(finite_keep_mask, dtype=bool) | at_infinity
+
+
 class RemoveShortTracksFilter:
     """Remove 3D points with track length <= size.
 
@@ -26,6 +42,8 @@ class RemoveShortTracksFilter:
         self.max_size = max_size
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
+        # Track length is well-defined regardless of w, so score points at
+        # infinity normally rather than passing them through.
         points_to_keep_mask = recon.observation_counts > self.max_size
 
         if not np.any(points_to_keep_mask):
@@ -59,13 +77,19 @@ class RemoveNarrowTracksFilter:
 
         from .._sfmtool import compute_narrow_track_mask
 
-        points_to_keep_mask = compute_narrow_track_mask(
-            recon.quaternions_wxyz,
-            recon.translations,
-            recon.positions,
-            recon.track_point_ids,
-            recon.track_image_indexes,
-            self.min_angle_rad,
+        # The narrow-track mask scores each point from its own observation
+        # rays; for a point at infinity the stored position is a direction, so
+        # its score is meaningless — pass it through untouched.
+        points_to_keep_mask = keep_infinity_points(
+            recon,
+            compute_narrow_track_mask(
+                recon.quaternions_wxyz,
+                recon.translations,
+                recon.positions,
+                recon.track_point_ids,
+                recon.track_image_indexes,
+                self.min_angle_rad,
+            ),
         )
 
         if not np.any(points_to_keep_mask):
@@ -94,16 +118,26 @@ class RemoveIsolatedPointsFilter:
         self.value_spec = value_spec
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
-        if recon.point_count < 2:
-            raise ValueError("Need at least 2 points to compute nearest neighbors")
+        # Score finite points only: a point at infinity has a direction, not a
+        # location, so its distance to neighbours is meaningless. Building the
+        # k-d tree from finite points alone also keeps the unit-length
+        # direction vectors from skewing finite points' neighbour distances.
+        at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
+        finite_idx = np.flatnonzero(~at_infinity)
+        if len(finite_idx) < 2:
+            raise ValueError(
+                "Need at least 2 finite points to compute nearest neighbors"
+            )
 
         print(
-            f"  Computing nearest neighbor distances for {recon.point_count} points..."
+            f"  Computing nearest neighbor distances for {len(finite_idx)} finite points..."
         )
 
         from .._sfmtool import KdTree3d
 
-        nn_distances = KdTree3d(recon.positions).nearest_neighbor_distances()
+        nn_distances = KdTree3d(
+            recon.positions[finite_idx]
+        ).nearest_neighbor_distances()
 
         if self.value_spec == "median":
             reference_value = np.median(nn_distances)
@@ -139,7 +173,8 @@ class RemoveIsolatedPointsFilter:
         print(f"    Reference value ({ref_desc}): {reference_value:.6f}")
         print(f"    Threshold ({self.factor}\u00d7 reference): {threshold:.6f}")
 
-        points_to_keep_mask = nn_distances <= threshold
+        points_to_keep_mask = np.ones(recon.point_count, dtype=bool)
+        points_to_keep_mask[finite_idx] = nn_distances <= threshold
 
         if not np.any(points_to_keep_mask):
             raise ValueError(
@@ -222,6 +257,8 @@ class RemoveLargeFeaturesFilter:
         max_feature_size_per_point = np.zeros(point_count, dtype=np.float32)
         np.maximum.at(max_feature_size_per_point, track_point_ids, obs_sizes)
 
+        # Feature size is well-defined regardless of w, so score points at
+        # infinity normally rather than passing them through.
         points_to_keep_mask = max_feature_size_per_point <= self.max_size
 
         if not np.any(points_to_keep_mask):

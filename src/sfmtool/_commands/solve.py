@@ -125,6 +125,13 @@ from .._filenames import expand_paths, number_from_filename
     default=None,
     help="Camera model to use (overrides auto-detection).",
 )
+@click.option(
+    "--detect-infinity/--no-detect-infinity",
+    "detect_infinity",
+    default=True,
+    help="Reclassify points whose depth the solve could not pin down as "
+    "points at infinity. Enabled by default.",
+)
 def solve(
     paths,
     colmap_dir,
@@ -141,6 +148,7 @@ def solve(
     flow_preset,
     flow_wide_baseline_skip,
     camera_model,
+    detect_infinity,
 ):
     """Run structure from motion on images or a .matches file.
 
@@ -217,6 +225,7 @@ def solve(
                     camera_model=camera_model,
                     matches_file=matches_file,
                     range_expr=range_expr,
+                    detect_infinity=detect_infinity,
                 )
             else:
                 with tempfile.TemporaryDirectory(prefix="colmap_") as temp_colmap_dir:
@@ -233,6 +242,7 @@ def solve(
                         camera_model=camera_model,
                         matches_file=matches_file,
                         range_expr=range_expr,
+                        detect_infinity=detect_infinity,
                     )
         except click.UsageError:
             raise
@@ -277,6 +287,7 @@ def solve(
                 seq_overlap,
                 refine_rig,
                 camera_model=camera_model,
+                detect_infinity=detect_infinity,
             )
         except click.ClickException:
             raise
@@ -302,6 +313,7 @@ def solve(
                 matching_mode=matching_mode,
                 flow_preset=flow_preset,
                 flow_wide_baseline_skip=flow_wide_baseline_skip,
+                detect_infinity=detect_infinity,
             )
         else:
             with tempfile.TemporaryDirectory(prefix="colmap_") as temp_colmap_dir:
@@ -319,6 +331,7 @@ def solve(
                     matching_mode=matching_mode,
                     flow_preset=flow_preset,
                     flow_wide_baseline_skip=flow_wide_baseline_skip,
+                    detect_infinity=detect_infinity,
                 )
     except Exception as e:
         raise click.ClickException(str(e))
@@ -335,6 +348,7 @@ def _run_sequential_overlap_sfm(
     seq_overlap: str,
     refine_rig: bool = True,
     camera_model: str | None = None,
+    detect_infinity: bool = True,
 ):
     """Run sequential overlapping SfM solves."""
     try:
@@ -421,6 +435,7 @@ def _run_sequential_overlap_sfm(
                 output_sfm_file=None,
                 refine_rig=refine_rig,
                 camera_model=camera_model,
+                detect_infinity=detect_infinity,
             )
         else:
             with tempfile.TemporaryDirectory(
@@ -437,6 +452,7 @@ def _run_sequential_overlap_sfm(
                     output_sfm_file=None,
                     refine_rig=refine_rig,
                     camera_model=camera_model,
+                    detect_infinity=detect_infinity,
                 )
 
         click.echo()
@@ -460,6 +476,7 @@ def _run_sfm(
     flow_wide_baseline_skip: int = 5,
     matches_file: str | Path | None = None,
     range_expr: str | None = None,
+    detect_infinity: bool = True,
 ):
     """Run SfM with the given colmap_dir."""
     if incremental:
@@ -480,6 +497,7 @@ def _run_sfm(
             flow_wide_baseline_skip=flow_wide_baseline_skip,
             matches_file=matches_file,
             range_expr=range_expr,
+            detect_infinity=detect_infinity,
         )
     else:
         from .._gsfm import run_global_sfm
@@ -499,4 +517,5 @@ def _run_sfm(
             flow_wide_baseline_skip=flow_wide_baseline_skip,
             matches_file=matches_file,
             range_expr=range_expr,
+            detect_infinity=detect_infinity,
         )

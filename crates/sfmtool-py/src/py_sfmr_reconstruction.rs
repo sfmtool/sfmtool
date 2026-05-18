@@ -500,6 +500,42 @@ impl PySfmrReconstruction {
         }
     }
 
+    /// Reclassify finite points whose depth is unconstrained as points at
+    /// infinity, returning a new reconstruction.
+    ///
+    /// A finite point becomes a point at infinity (``w = 0``) when its parallax
+    /// signal in pixels (``alpha_max * f_max``, the largest viewing angle times
+    /// the largest observing focal length) falls below the track's measurement
+    /// noise, ``max(reprojection_error, noise_floor_px)``. Its coordinate is
+    /// replaced with the bearing-mean direction of its observation rays. Points
+    /// already at infinity, and points with fewer than two observations, are
+    /// left unchanged.
+    ///
+    /// Args:
+    ///     noise_floor_px: SIFT keypoint localisation noise floor in pixels;
+    ///         the per-point noise estimate is never taken below this. Defaults
+    ///         to 1.0.
+    #[pyo3(signature = (noise_floor_px=None))]
+    fn classify_points_at_infinity(&self, noise_floor_px: Option<f64>) -> Self {
+        let floor = noise_floor_px.unwrap_or(sfmtool_core::infinity::DEFAULT_NOISE_FLOOR_PX);
+        Self {
+            inner: self.inner.classify_points_at_infinity(floor),
+        }
+    }
+
+    /// Materialise every point at infinity as a finite point, returning a new
+    /// reconstruction.
+    ///
+    /// A ``w = 0`` point is placed along its stored direction, at the
+    /// camera-cloud centroid plus the largest per-camera distance beyond which
+    /// its parallax falls below one pixel. This does not triangulate — a point
+    /// at infinity has no depth to recover. Finite points are unchanged.
+    fn materialize_points_at_infinity(&self) -> Self {
+        Self {
+            inner: self.inner.materialize_points_at_infinity(),
+        }
+    }
+
     /// Source metadata as a Python dict.
     #[getter]
     fn source_metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {

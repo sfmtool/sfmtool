@@ -114,20 +114,53 @@ run, so there are no checked-in v1 fixtures that need migrating.
 ## Classification — which tracks are at infinity
 
 A point at infinity has a maximum viewing angle of zero: its
-observation rays are exactly parallel. A point is classified `w = 0`
-when its maximum viewing angle `α_max` (the largest angle between any
-pair of observation rays, from `viewing_angle.rs`) is small enough that
-its parallax is lost in feature-localisation noise:
+observation rays are exactly parallel. More usefully, a point's depth
+is at infinity whenever the depth its rays *do* imply is buried in
+measurement noise.
+
+Two cameras observing a point at triangulation angle `α` resolve its
+depth to a *relative* precision
 
 ```
-α_max · f_max  <  ε_noise        ⇒  w = 0   (else w = 1)
+Δz / z  ≈  noise / (α_max · f_max)
 ```
 
-`f_max` is the largest focal length (pixels) among the observing
-cameras and `ε_noise` is the SIFT keypoint localisation noise, ≈ 0.5–1
-px. Below that bound the triangulated depth is indistinguishable from
-infinity; above it there is depth signal and the point stays finite.
-Equivalently the cut is an angle `α_∞ = ε_noise / f_max`.
+where `α_max` is the maximum viewing angle (the largest angle between
+any pair of observation rays, from `viewing_angle.rs`) and `f_max` is
+the largest focal length (pixels) among the observing cameras. The
+product `α_max · f_max` is the **parallax signal in pixels**: how far
+the point's projection shifts across the widest-baseline camera pair as
+its depth ranges from the triangulated estimate out to infinity. When
+that signal drops to the level of the measurement `noise`, the depth is
+uncertain by 100% or more — the data cannot tell the finite estimate
+from infinity. So the cut is:
+
+```
+α_max · f_max  <  noise        ⇒  w = 0   (else w = 1)
+```
+
+`noise` is **per point**, not a universal constant. The measurement
+noise of a track is best estimated by the track's own RMS reprojection
+error `e_reproj` — it captures every residual source for that track
+(keypoint localisation, faint mismatches, camera-model error), not just
+an idealised SIFT-localisation floor. A track with `e_reproj = 3 px`
+genuinely has its depth lost below a 3 px parallax signal, even though a
+fixed 1 px cut would wrongly keep it finite.
+
+```
+noise  =  max(e_reproj, ε_floor)
+```
+
+The floor `ε_floor` (≈ 1 px, the SIFT keypoint localisation noise)
+guards the short-track case. A 2- or 3-view track is triangulated to
+fit its handful of observations almost exactly *regardless of depth
+conditioning*, so its `e_reproj` is spuriously small and under-states
+the true measurement noise. Flooring `noise` at `ε_floor` keeps a
+poorly-conditioned short track from masquerading as well-determined.
+`ε_floor` is the one tunable parameter of the classifier; `e_reproj` is
+read from the reconstruction.
+
+Equivalently the per-point cut is an angle `α_∞ = noise / f_max`.
 
 The two conversions are not inverses, and round-tripping is not
 lossless: finite → infinity drops a depth the data never pinned down,
@@ -179,9 +212,19 @@ coordinate is replaced with its bearing-mean direction.
 - PyO3 bindings + `SfmrReconstruction`: accessors expose `w` (or a
   derived `is_at_infinity` mask) alongside the existing point/track
   accessors; one tracks view spans all points.
+- `SfmrReconstruction` (Rust core) owns the two conversions as methods:
+  `classify_points_at_infinity` (finite → infinity, per the cut above)
+  and `materialize_points_at_infinity` (infinity → finite). Both return
+  a new reconstruction and are exposed through the PyO3 bindings.
 - Rotation-only refinement reads the `w = 0` points directly.
-- `xform`: a reclassification step (finite ↔ infinity); the transforms
-  that consume points handle finite and infinity points together.
+- `xform`: an SE(3) similarity transform rotates a `w = 0` direction and
+  renormalises it, leaving translation and scale to act on finite points
+  only; point filters whose score is undefined for a direction
+  (reprojection error, triangulation angle, neighbour distance) pass
+  infinity points through untouched, while filters scoring track length or
+  feature size — well defined regardless of `w` — score them normally;
+  bundle adjustment materialises infinity points, refines, then
+  reclassifies.
 - `sfm-explorer`: reads `positions_xyzw`; renders a `w = 0` point as a
   direction on the far view sphere rather than at a finite coordinate.
 - `sfmr-colmap`: on import, classify per
@@ -195,7 +238,7 @@ coordinate is replaced with its bearing-mean direction.
 | Format types | `crates/sfmr-format/src/types.rs` | `positions_xyzw`, unified track arrays on `SfmrData` |
 | Read / write / verify | `crates/sfmr-format/src/{read,write,verify}.rs` | v1 upgrade-on-read; v2-only write; `w` validation |
 | Format spec | [`sfmr-file-format.md`] | Document v2 |
-| Bindings | `crates/sfmtool-py/src/py_sfmr_reconstruction.rs` | `w` / `is_at_infinity` + unified track accessors |
-| Classification | `src/sfmtool/xform/` | Reclassify step (finite ↔ infinity) |
-| COLMAP interop | `crates/sfmr-colmap` | Drop or materialise `w = 0` on export; classify on import |
+| Bindings | `crates/sfmtool-py/src/py_sfmr_reconstruction.rs` | `w` / `is_at_infinity` + unified track accessors; the two conversion methods |
+| Conversions | `crates/sfmtool-core/src/infinity.rs` | `classify_points_at_infinity` / `materialize_points_at_infinity` on `SfmrReconstruction` |
+| COLMAP interop | `src/sfmtool/_colmap_io.py` | Classify on import by default (`--no-detect-infinity` to skip) |
 | GUI viewer | `crates/sfm-explorer` | Render `w = 0` points as directions on the view sphere |

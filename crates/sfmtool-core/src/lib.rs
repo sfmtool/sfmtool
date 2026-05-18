@@ -20,6 +20,7 @@ pub mod feature_match;
 pub mod filter;
 pub mod frustum;
 pub mod image_pair_graph;
+pub mod infinity;
 pub mod optical_flow;
 pub mod per_spherical_tile_source_stack;
 pub mod photometric_ransac;

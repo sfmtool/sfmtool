@@ -3,7 +3,7 @@
 
 """Tests for COLMAP interop CLI commands."""
 
-import pytest
+import numpy as np
 from click.testing import CliRunner
 
 from sfmtool.cli import main
@@ -156,12 +156,12 @@ class TestToColmapBinE2E:
         assert (output_dir / "images.bin").exists()
         assert (output_dir / "points3D.bin").exists()
 
-    def test_points_at_infinity_rejected(
+    def test_points_at_infinity_materialized(
         self, tmp_path, sfmrfile_reconstruction_with_17_images
     ):
-        """COLMAP binary export must fail loudly on a w=0 point."""
+        """COLMAP binary export materialises w=0 points to finite landmarks."""
         from sfmtool._colmap_io import save_colmap_binary
-        from sfmtool._sfmtool import SfmrReconstruction
+        from sfmtool._sfmtool import SfmrReconstruction, read_colmap_binary
 
         recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         positions_xyzw = recon.positions_xyzw.copy()
@@ -170,8 +170,14 @@ class TestToColmapBinE2E:
         positions_xyzw[0] = [0.0, 0.0, 1.0, 0.0]
         recon = recon.clone_with_changes(positions=positions_xyzw)
 
-        with pytest.raises(NotImplementedError, match="point.* at infinity"):
-            save_colmap_binary(recon, tmp_path / "colmap_output")
+        output_dir = tmp_path / "colmap_output"
+        save_colmap_binary(recon, output_dir)
+
+        # The exported reconstruction holds only finite COLMAP points.
+        data = read_colmap_binary(output_dir)
+        positions = np.asarray(data["positions_xyz"])
+        assert len(positions) == len(positions_xyzw)
+        assert np.all(np.isfinite(positions))
 
     def test_range_subsets_images_and_keeps_all_points(
         self, tmp_path, sfmrfile_reconstruction_with_17_images
