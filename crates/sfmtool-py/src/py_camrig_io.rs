@@ -175,3 +175,18 @@ pub fn camrig_pattern_to_glob(pattern: &str) -> String {
 pub fn camrig_pattern_matches(pattern: &str, relative_path: &str, case_insensitive: bool) -> bool {
     camrig_format::pattern_matches(pattern, relative_path, case_insensitive)
 }
+
+/// The frame index a `.camrig` image `pattern`'s frame field captures from
+/// `relative_path`.
+///
+/// Returns `None` when the pattern has no frame field, when `relative_path`
+/// does not match the pattern, or when the captured digits overflow a 64-bit
+/// integer. `case_insensitive` mirrors `camrig_pattern_matches`.
+#[pyfunction]
+pub fn camrig_pattern_frame_index(
+    pattern: &str,
+    relative_path: &str,
+    case_insensitive: bool,
+) -> Option<u64> {
+    camrig_format::pattern_frame_index(pattern, relative_path, case_insensitive)
+}

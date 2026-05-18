@@ -16,7 +16,7 @@ from ._camera_setup import (
     intrinsics_for_image,
 )
 from ._cameras import colmap_camera_from_intrinsics
-from ._camrig_resolver import resolve_camrig_for_solve
+from ._camrig_resolver import CamrigRig, resolve_camrig_for_solve
 from ._rig_config import (
     _infer_frame_key,
     _match_image_to_sensor,
@@ -40,17 +40,21 @@ def _setup_for_sfm(
     flow_preset: str = "default",
     flow_wide_baseline_skip: int = 5,
     camera_config_resolver: CameraConfigResolver | None = None,
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, bool]:
     """Prepare a COLMAP database for running the mapper.
 
     Returns:
-        tuple: (db_path, image_dir)
+        tuple: (db_path, image_dir, rig_used) — `rig_used` is True when a
+        multi-sensor rig (a multi-sensor `.camrig` or `rig_config.json`) was
+        set up, so the caller runs the rig-aware mapper path.
     """
-    camrig_camera = resolve_camrig_for_solve(
+    camrig = resolve_camrig_for_solve(
         image_paths, workspace_dir, camera_model, camera_config_resolver
     )
-    use_rigs = rig_config is not None and camrig_camera is None
-    if rig_config is not None and camrig_camera is not None:
+    camrig_multi = camrig is not None and camrig.is_multi_sensor
+    use_rigs = rig_config is not None and camrig is None
+    rig_used = use_rigs or camrig_multi
+    if rig_config is not None and camrig is not None:
         print(
             "Note: a .camrig covers these images; rig_config.json is ignored "
             "(the .camrig takes precedence)."
@@ -71,7 +75,16 @@ def _setup_for_sfm(
 
     image_dir = Path(workspace_dir)
 
-    if use_rigs:
+    if camrig_multi:
+        _setup_db_with_camrig(
+            image_paths,
+            sift_paths,
+            image_dir,
+            db_path,
+            max_feature_count,
+            camrig.rig,
+        )
+    elif use_rigs:
         _setup_db_with_rigs(
             image_paths,
             sift_paths,
@@ -91,12 +104,12 @@ def _setup_for_sfm(
             max_feature_count,
             camera_model=camera_model,
             camera_config_resolver=camera_config_resolver,
-            camrig_camera=camrig_camera,
+            camrig_camera=camrig.camera if camrig is not None else None,
         )
 
     # Build same-frame exclusion data for multi-sensor rigs
     same_frame_index_pairs: set[tuple[int, int]] | None = None
-    if use_rigs:
+    if rig_used:
         same_frame_index_pairs = _build_same_frame_index_pairs(
             db_path, image_paths, image_dir
         )
@@ -117,7 +130,7 @@ def _setup_for_sfm(
             flow_preset=flow_preset,
             flow_wide_baseline_skip=flow_wide_baseline_skip,
         )
-    elif use_rigs and same_frame_index_pairs:
+    elif rig_used and same_frame_index_pairs:
         cross_frame_pairs = _build_cross_frame_pairs(db_path)
         pairs_path = colmap_dir / "match_pairs.txt"
         with open(pairs_path, "w") as f:
@@ -129,7 +142,7 @@ def _setup_for_sfm(
     else:
         pycolmap.match_exhaustive(db_path)
 
-    return db_path, image_dir
+    return db_path, image_dir, rig_used
 
 
 def _setup_for_sfm_from_matches(
@@ -138,7 +151,7 @@ def _setup_for_sfm_from_matches(
     camera_model: str | None = None,
     range_expr: str | None = None,
     camera_config_resolver: CameraConfigResolver | None = None,
-) -> tuple[Path, Path, list[Path]]:
+) -> tuple[Path, Path, list[Path], bool]:
     """Prepare a COLMAP database from a .matches file for running the mapper.
 
     If `range_expr` is provided, restrict the solve to images whose filename
@@ -146,7 +159,9 @@ def _setup_for_sfm_from_matches(
     and any pairs that reference them are skipped.
 
     Returns:
-        tuple: (db_path, image_dir, image_paths)
+        tuple: (db_path, image_dir, image_paths, rig_used) — `rig_used` is True
+        when a multi-sensor rig (a multi-sensor `.camrig` or `rig_config.json`)
+        was set up.
     """
     import numpy as np
     from openjd.model import IntRangeExpr
@@ -276,17 +291,29 @@ def _setup_for_sfm_from_matches(
 
     _check_camera_model_conflict(image_paths, camera_config_resolver, camera_model)
 
-    camrig_camera = resolve_camrig_for_solve(
+    camrig = resolve_camrig_for_solve(
         image_paths, workspace_dir, camera_model, camera_config_resolver
     )
-    if rig_config is not None and camrig_camera is not None:
+    camrig_multi = camrig is not None and camrig.is_multi_sensor
+    use_rigs = rig_config is not None and camrig is None
+    rig_used = use_rigs or camrig_multi
+    if rig_config is not None and camrig is not None:
         print(
             "Note: a .camrig covers these images; rig_config.json is ignored "
             "(the .camrig takes precedence)."
         )
 
     # Populate DB with features
-    if rig_config is not None and camrig_camera is None:
+    if camrig_multi:
+        _setup_db_with_camrig(
+            image_paths,
+            sift_paths,
+            image_dir,
+            db_path,
+            None,
+            camrig.rig,
+        )
+    elif use_rigs:
         _setup_db_with_rigs(
             image_paths,
             sift_paths,
@@ -306,7 +333,7 @@ def _setup_for_sfm_from_matches(
             max_feature_count=None,
             camera_model=camera_model,
             camera_config_resolver=camera_config_resolver,
-            camrig_camera=camrig_camera,
+            camrig_camera=camrig.camera if camrig is not None else None,
         )
 
     # Write matches and TVGs to the database
@@ -314,7 +341,7 @@ def _setup_for_sfm_from_matches(
         db_path, matches_data, image_names, image_dir, old_to_new=old_to_new
     )
 
-    return db_path, image_dir, image_paths
+    return db_path, image_dir, image_paths, rig_used
 
 
 def _write_matches_to_db(
@@ -709,3 +736,126 @@ def _setup_db_with_rigs(
                     descriptors = reader.read_descriptors(count=max_feature_count)
                     db.write_keypoints(image_id, keypoints)
                     db.write_descriptors(image_id, _wrap_descriptors(descriptors))
+
+
+def _rigid3d_sensor_from_rig(rig_data: dict, sensor_idx: int) -> pycolmap.Rigid3d:
+    """Build the `sensor_from_rig` pose of a `.camrig` sensor as a Rigid3d.
+
+    The `.camrig` format stores quaternions WXYZ; pycolmap's `Rotation3d`
+    takes XYZW.
+    """
+    import numpy as np
+
+    q = rig_data["quaternions_wxyz"][sensor_idx]
+    t = rig_data["translations_xyz"][sensor_idx]
+    xyzw = np.array([q[1], q[2], q[3], q[0]], dtype=np.float64)
+    return pycolmap.Rigid3d(pycolmap.Rotation3d(xyzw), np.asarray(t, dtype=np.float64))
+
+
+def _setup_db_with_camrig(
+    image_paths: list[str | Path],
+    sift_paths: list[Path],
+    image_dir: Path,
+    db_path: Path,
+    max_feature_count: int | None,
+    rig: CamrigRig,
+) -> None:
+    """Set up a COLMAP database from a multi-sensor `.camrig`.
+
+    Builds one COLMAP camera per used sensor (intrinsics from the rig's camera
+    pool, scaled to the actual image resolution), a single rig whose reference
+    sensor is the lowest-indexed sensor present — its `cam_from_rig` is the
+    identity and the others are rebased relative to it — and one frame per
+    captured frame index, so images sharing a frame index form one rig frame.
+    """
+    rig_data = rig.data
+    assignments = rig.assignments
+
+    # Resolve each solve image to (rel_path, sift_path, sensor, frame).
+    resolved: list[tuple[str, Path, int, int]] = []
+    for image_path, sift_path in zip(image_paths, sift_paths):
+        sensor_idx, frame_idx = assignments[Path(image_path).resolve()]
+        rel_path = os.path.relpath(image_path, image_dir).replace("\\", "/")
+        resolved.append((rel_path, sift_path, sensor_idx, frame_idx))
+
+    used_sensors = sorted({sensor_idx for _r, _s, sensor_idx, _f in resolved})
+    ref_sensor = used_sensors[0]
+
+    # A representative image per sensor, for resolution-aware intrinsics scaling.
+    rep_image: dict[int, str] = {}
+    for rel_path, _sift, sensor_idx, _frame in resolved:
+        rep_image.setdefault(sensor_idx, rel_path)
+
+    with pycolmap.Database.open(db_path) as db:
+        # One COLMAP camera per used sensor. The `.camrig` camera pool may
+        # share intrinsics between sensors, but COLMAP identifies a rig sensor
+        # by its camera id, so each sensor needs a distinct camera.
+        sensor_camera_ids: dict[int, int] = {}
+        for sensor_idx in used_sensors:
+            cam_dict = rig_data["cameras"][rig_data["camera_indexes"][sensor_idx]]
+            intrinsics, prior = build_intrinsics_from_camera_config(
+                cam_dict, image_dir / rep_image[sensor_idx], None
+            )
+            cam = colmap_camera_from_intrinsics(intrinsics)
+            if prior:
+                cam.has_prior_focal_length = True
+            sensor_camera_ids[sensor_idx] = db.write_camera(cam)
+
+        # One rig: the reference sensor sits at the identity `cam_from_rig`;
+        # every other sensor is rebased relative to it,
+        # cam_from_rig[i] = sensor_from_rig[i] @ sensor_from_rig[ref]^-1.
+        rig_obj = pycolmap.Rig()
+        rig_from_ref = _rigid3d_sensor_from_rig(rig_data, ref_sensor).inverse()
+        for sensor_idx in used_sensors:
+            sensor_t = pycolmap.sensor_t(
+                type=pycolmap.SensorType.CAMERA, id=sensor_camera_ids[sensor_idx]
+            )
+            if sensor_idx == ref_sensor:
+                rig_obj.add_ref_sensor(sensor_t)
+            else:
+                cam_from_rig = (
+                    _rigid3d_sensor_from_rig(rig_data, sensor_idx) * rig_from_ref
+                )
+                rig_obj.add_sensor(sensor_t, cam_from_rig)
+        rig_id = db.write_rig(rig_obj)
+
+        # Group images into frames by captured frame index: images from
+        # different sensors that share a frame index form one rig frame.
+        frame_groups: dict[int, list[tuple[str, Path, int]]] = {}
+        for rel_path, sift_path, sensor_idx, frame_idx in resolved:
+            frame_groups.setdefault(frame_idx, []).append(
+                (rel_path, sift_path, sensor_idx)
+            )
+
+        for _frame_idx, group in sorted(frame_groups.items()):
+            frame = pycolmap.Frame()
+            frame.rig_id = rig_id
+
+            image_entries = []
+            for rel_path, sift_path, sensor_idx in group:
+                camera_id = sensor_camera_ids[sensor_idx]
+                with SiftReader(sift_path) as reader:
+                    image = pycolmap.Image(name=rel_path, camera_id=camera_id)
+                    image_id = db.write_image(image)
+                    image_entries.append((image_id, image))
+
+                    keypoints = reader.read_positions(count=max_feature_count)
+                    descriptors = reader.read_descriptors(count=max_feature_count)
+                    db.write_keypoints(image_id, keypoints)
+                    db.write_descriptors(image_id, _wrap_descriptors(descriptors))
+
+                frame.add_data_id(
+                    pycolmap.data_t(
+                        sensor_id=pycolmap.sensor_t(
+                            type=pycolmap.SensorType.CAMERA, id=camera_id
+                        ),
+                        id=image_id,
+                    )
+                )
+
+            frame_id = db.write_frame(frame)
+
+            for image_id, image in image_entries:
+                image.frame_id = frame_id
+                image.image_id = image_id
+                db.update_image(image)

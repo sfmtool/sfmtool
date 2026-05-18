@@ -257,3 +257,73 @@ def test_kerry_park_rig_rotation_recovered(
         f"be close to R_y(180°)."
     )
     assert float(np.median(angles_from_180)) < 5.0
+
+
+# --------------------------------------------------------------------------- #
+# Multi-sensor .camrig: the same rig described by a kerry_park.camrig file.
+# --------------------------------------------------------------------------- #
+
+
+def test_kerry_park_camrig_parses_as_fisheye_360(
+    isolated_kerry_park_camrig: Path,
+) -> None:
+    """The kerry_park.camrig should be a 2-sensor ``fisheye_360`` rig sharing
+    one OPENCV_FISHEYE camera, with the right sensor flipped 180° about Y.
+    """
+    from sfmtool._sfmtool import read_camrig
+
+    data = read_camrig(str(isolated_kerry_park_camrig / "kerry_park.camrig"))
+    meta = data["metadata"]
+    assert meta["sensor_count"] == 2
+    assert meta["camera_count"] == 1
+    assert meta["rig_type"] == "fisheye_360"
+    assert data["cameras"][0]["model"] == "OPENCV_FISHEYE"
+    assert data["sensor_image_patterns"] == [
+        "fisheye_left/frame_%02d.jpg",
+        "fisheye_right/frame_%02d.jpg",
+    ]
+    # Sensor 0 identity, sensor 1 = 180° about Y (WXYZ [0, 0, 1, 0]).
+    np.testing.assert_allclose(data["quaternions_wxyz"][0], [1, 0, 0, 0])
+    np.testing.assert_allclose(data["quaternions_wxyz"][1], [0, 0, 1, 0])
+
+
+def test_kerry_park_camrig_resolves_to_rig(
+    isolated_kerry_park_camrig: Path,
+) -> None:
+    """``resolve_camrig_for_solve`` should pair the 48 images into 24 frames,
+    each frame carrying both sensors.
+    """
+    from collections import Counter
+
+    from sfmtool._camrig_resolver import resolve_camrig_for_solve
+
+    image_paths = []
+    for sensor in ("fisheye_left", "fisheye_right"):
+        image_paths.extend(sorted((isolated_kerry_park_camrig / sensor).glob("*.jpg")))
+
+    result = resolve_camrig_for_solve(image_paths, isolated_kerry_park_camrig, None)
+    assert result is not None and result.is_multi_sensor
+    assignments = result.rig.assignments
+    assert len(assignments) == 48
+
+    sensors = Counter(s for s, _f in assignments.values())
+    frames = Counter(f for _s, f in assignments.values())
+    assert dict(sensors) == {0: 24, 1: 24}
+    assert set(frames) == set(range(1, 25))
+    assert all(count == 2 for count in frames.values())
+
+
+def test_kerry_park_camrig_solve_registers_all_frames(
+    sfmrfile_reconstruction_kerry_park_camrig: Path,
+) -> None:
+    """A global solve driven by the multi-sensor ``.camrig`` should register
+    all 48 rig images with one camera per sensor — the same outcome as the
+    ``rig_config.json`` path.
+    """
+    recon = SfmrReconstruction.load(sfmrfile_reconstruction_kerry_park_camrig)
+    assert recon.image_count == 48
+    assert recon.camera_count == 2  # one camera per sensor
+    assert recon.point_count >= 500
+    errors = recon.errors
+    assert errors.size > 0
+    assert float(np.median(errors)) < 1.5

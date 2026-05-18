@@ -16,6 +16,11 @@ import cv2
 
 _FISHEYE_SENSOR_NAMES = ["fisheye_left", "fisheye_right"]
 
+# Per-sensor frame filename template. The `%06d` field is both ffmpeg's
+# output-template syntax and a `.camrig` frame field, so the same string
+# names the extracted files and the rig's image pattern.
+_INSV_FRAME_PATTERN = "frame_%06d.jpg"
+
 
 def _format_file_size(size_bytes: int) -> str:
     """Format a file size in human-readable form."""
@@ -130,7 +135,7 @@ def _extract_dual_stream(
                 f"0:v:{stream_idx}",
                 "-qscale:v",
                 "2",
-                str(sensor_dir / "frame_%06d.jpg"),
+                str(sensor_dir / _INSV_FRAME_PATTERN),
             ],
             label=f"Extracting stream {stream_idx} ({sensor_dir.name})",
         )
@@ -162,7 +167,7 @@ def _extract_side_by_side(
                 str(insv_path),
                 "-qscale:v",
                 "2",
-                str(temp_dir / "frame_%06d.jpg"),
+                str(temp_dir / _INSV_FRAME_PATTERN),
             ],
             label="Extracting frames",
         )
@@ -213,6 +218,62 @@ def _extract_side_by_side(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     return len(frame_files)
+
+
+def write_insv_camrig(
+    camrig_path: Path,
+    *,
+    rig_name: str,
+    sensor_names: list[str],
+    frame_pattern: str,
+    camera_model: str,
+    camera_params: list[float],
+    width: int,
+    height: int,
+    quaternions_wxyz,
+    translations_xyz,
+    baseline_m: float,
+) -> None:
+    """Write a back-to-back fisheye rig to a ``.camrig`` file.
+
+    The two fisheye sensors share one calibrated camera, so the camera pool
+    holds a single entry. ``quaternions_wxyz`` / ``translations_xyz`` are the
+    ``sensor_from_rig`` poses in COLMAP's WXYZ convention and are stored
+    verbatim. Each sensor's image pattern is ``<sensor>/<frame_pattern>``,
+    relative to the directory holding the ``.camrig`` file (the rig root).
+    """
+    import numpy as np
+
+    from ._cameras import _CAMERA_PARAM_NAMES
+    from ._sfmtool import CameraIntrinsics, write_camrig
+
+    param_names = _CAMERA_PARAM_NAMES[camera_model]
+    if len(camera_params) != len(param_names):
+        raise ValueError(
+            f"camera_params for {camera_model} expects {len(param_names)} "
+            f"values, got {len(camera_params)}"
+        )
+    camera = CameraIntrinsics.from_dict(
+        {
+            "model": camera_model,
+            "width": width,
+            "height": height,
+            "parameters": dict(zip(param_names, camera_params)),
+        }
+    ).to_dict()
+
+    patterns = [f"{name}/{frame_pattern}" for name in sensor_names]
+    write_camrig(
+        path=str(camrig_path),
+        name=rig_name,
+        rig_type="fisheye_360",
+        cameras=[camera],
+        sensor_image_patterns=patterns,
+        camera_indexes=[0] * len(sensor_names),
+        quaternions_wxyz=np.asarray(quaternions_wxyz, dtype=np.float64),
+        translations_xyz=np.asarray(translations_xyz, dtype=np.float64),
+        rig_attributes={"baseline_m": baseline_m},
+    )
 
 
 def extract_insv_frames(

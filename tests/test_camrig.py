@@ -476,9 +476,10 @@ def test_resolve_camrig_returns_camera(tmp_path: Path):
     _copy_images(tmp_path / "imgs", "seoul_bull_sculpture", 3)
     imgs = sorted((tmp_path / "imgs").glob("*.jpg"))
     _make_camrig(tmp_path / "rig.camrig", ["imgs/*.jpg"], camera=_camera(270, 480))
-    camera = resolve_camrig_for_solve(imgs, tmp_path, None)
-    assert camera is not None
-    assert camera["model"] == "PINHOLE"
+    result = resolve_camrig_for_solve(imgs, tmp_path, None)
+    assert result is not None
+    assert not result.is_multi_sensor
+    assert result.camera["model"] == "PINHOLE"
 
 
 def test_resolve_camrig_none_when_absent(tmp_path: Path):
@@ -522,14 +523,69 @@ def test_resolve_camrig_rejects_camera_model(tmp_path: Path):
         resolve_camrig_for_solve(imgs, tmp_path, "PINHOLE")
 
 
-def test_resolve_camrig_rejects_multi_sensor(tmp_path: Path):
-    imgs = _touch_images(tmp_path / "imgs", ["a_1.jpg", "b_1.jpg"])
+def test_resolve_camrig_resolves_multi_sensor(tmp_path: Path):
+    # A multi-sensor .camrig resolves to a rig with a per-image sensor/frame
+    # assignment; the two sensors are paired by the captured frame index.
+    _copy_images(tmp_path / "left", "seoul_bull_sculpture", 2)
+    _copy_images(tmp_path / "right", "seoul_bull_sculpture", 2)
+    imgs = sorted((tmp_path / "left").glob("*.jpg")) + sorted(
+        (tmp_path / "right").glob("*.jpg")
+    )
     _make_camrig(
         tmp_path / "rig.camrig",
-        ["imgs/a_%d.jpg", "imgs/b_%d.jpg"],
+        [
+            "left/seoul_bull_sculpture_%d.jpg",
+            "right/seoul_bull_sculpture_%d.jpg",
+        ],
         sensor_count=2,
+        camera=_camera(270, 480),
     )
-    with pytest.raises(CamrigSolveError, match="multi-sensor"):
+    result = resolve_camrig_for_solve(imgs, tmp_path, None)
+    assert result is not None
+    assert result.is_multi_sensor
+    rig = result.rig
+    assert {a[0] for a in rig.assignments.values()} == {0, 1}
+    assert {a[1] for a in rig.assignments.values()} == {1, 2}
+
+
+def test_resolve_camrig_multi_sensor_rejects_camera_model(tmp_path: Path):
+    _copy_images(tmp_path / "left", "seoul_bull_sculpture", 2)
+    _copy_images(tmp_path / "right", "seoul_bull_sculpture", 2)
+    imgs = sorted((tmp_path / "left").glob("*.jpg")) + sorted(
+        (tmp_path / "right").glob("*.jpg")
+    )
+    _make_camrig(
+        tmp_path / "rig.camrig",
+        [
+            "left/seoul_bull_sculpture_%d.jpg",
+            "right/seoul_bull_sculpture_%d.jpg",
+        ],
+        sensor_count=2,
+        camera=_camera(270, 480),
+    )
+    with pytest.raises(CamrigSolveError, match="camera-model"):
+        resolve_camrig_for_solve(imgs, tmp_path, "PINHOLE")
+
+
+def test_resolve_camrig_rejects_same_sensor_frame_collision(tmp_path: Path):
+    # A variable-width `%d` field can capture the same frame index from two
+    # files of one sensor (`frame_1.jpg` and `frame_001.jpg` both -> 1); the
+    # resolver must reject this rather than build a rig frame carrying two
+    # images for one sensor.
+    src = sorted((_IMAGE_DATA / "seoul_bull_sculpture").glob("*.jpg"))[0]
+    left = tmp_path / "left"
+    left.mkdir()
+    shutil.copy(src, left / "frame_1.jpg")
+    shutil.copy(src, left / "frame_001.jpg")
+    _copy_images(tmp_path / "right", "seoul_bull_sculpture", 1)
+    imgs = sorted(left.glob("*.jpg")) + sorted((tmp_path / "right").glob("*.jpg"))
+    _make_camrig(
+        tmp_path / "rig.camrig",
+        ["left/frame_%d.jpg", "right/seoul_bull_sculpture_%d.jpg"],
+        sensor_count=2,
+        camera=_camera(270, 480),
+    )
+    with pytest.raises(CamrigSolveError, match="same frame index"):
         resolve_camrig_for_solve(imgs, tmp_path, None)
 
 
@@ -570,9 +626,10 @@ def test_resolve_camrig_globstar_pattern(tmp_path: Path):
     _copy_images(tmp_path / "a" / "b", "seoul_bull_sculpture", 2)
     imgs = sorted((tmp_path / "a" / "b").glob("*.jpg"))
     _make_camrig(tmp_path / "rig.camrig", ["**/*.jpg"], camera=_camera(270, 480))
-    camera = resolve_camrig_for_solve(imgs, tmp_path, None)
-    assert camera is not None
-    assert camera["model"] == "PINHOLE"
+    result = resolve_camrig_for_solve(imgs, tmp_path, None)
+    assert result is not None
+    assert result.camera is not None
+    assert result.camera["model"] == "PINHOLE"
 
 
 # ── pattern matching (camrig-format grammar via the PyO3 binding) ───────────

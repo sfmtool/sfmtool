@@ -242,6 +242,64 @@ pub fn pattern_matches(pattern: &str, relative_path: &str, case_insensitive: boo
     )
 }
 
+/// Match `toks` against `path`; on success return the digit slice consumed by
+/// the (at most one) frame field — `None` when the pattern has no frame field.
+/// A mismatch returns the outer `None`.
+///
+/// The frame field is greedy: it consumes the longest digit run for which the
+/// remainder of the pattern still matches, the printf `%d` convention. A
+/// well-formed pattern has at most one frame field, so once a `Frame` token is
+/// consumed the remaining tokens carry no further capture.
+fn capture_tokens<'p>(toks: &[Tok], path: &'p [u8], ci: bool) -> Option<Option<&'p [u8]>> {
+    let Some((tok, rest)) = toks.split_first() else {
+        return path.is_empty().then_some(None);
+    };
+    match tok {
+        Tok::Lit(c) => (!path.is_empty() && byte_eq(path[0], *c, ci))
+            .then(|| capture_tokens(rest, &path[1..], ci))
+            .flatten(),
+        Tok::Frame => {
+            let digits = path.iter().take_while(|b| b.is_ascii_digit()).count();
+            (1..=digits)
+                .rev()
+                .find(|&n| capture_tokens(rest, &path[n..], ci).is_some())
+                .map(|n| Some(&path[..n]))
+        }
+        Tok::Star => {
+            let seg = path.iter().take_while(|&&b| b != b'/').count();
+            (0..=seg).find_map(|n| capture_tokens(rest, &path[n..], ci))
+        }
+        Tok::SegStar => {
+            if let Some(cap) = capture_tokens(rest, path, ci) {
+                return Some(cap);
+            }
+            match path.iter().position(|&b| b == b'/') {
+                Some(slash) if slash > 0 => capture_tokens(toks, &path[slash + 1..], ci),
+                _ => None,
+            }
+        }
+        Tok::TrailStar => (!path.is_empty()).then_some(None),
+    }
+}
+
+/// The frame index `pattern`'s frame field captures from `relative_path`.
+///
+/// Returns `None` when the pattern has no frame field, when `relative_path`
+/// does not match `pattern`, or when the captured digit run does not fit a
+/// `u64`. `case_insensitive` mirrors [`pattern_matches`]. The grammar — what
+/// counts as a frame field — is the one this module owns, so frame-index
+/// extraction stays consistent with pattern matching and validation.
+pub fn pattern_frame_index(
+    pattern: &str,
+    relative_path: &str,
+    case_insensitive: bool,
+) -> Option<u64> {
+    let toks = tokenize(pattern);
+    let digits = capture_tokens(&toks, relative_path.as_bytes(), case_insensitive)??;
+    // `digits` is an all-ASCII-digit slice produced by the `Frame` token.
+    std::str::from_utf8(digits).ok()?.parse::<u64>().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +363,32 @@ mod tests {
     fn case_insensitive_matching_is_opt_in() {
         assert!(!pattern_matches("cam_%d.JPG", "cam_7.jpg", false));
         assert!(pattern_matches("cam_%d.JPG", "cam_7.jpg", true));
+    }
+
+    #[test]
+    fn pattern_frame_index_captures_the_frame_field_integer() {
+        let idx = |p: &str, path: &str| pattern_frame_index(p, path, false);
+        assert_eq!(idx("cam_%04d.jpg", "cam_0007.jpg"), Some(7));
+        assert_eq!(idx("cam_%d.jpg", "cam_42.jpg"), Some(42));
+        assert_eq!(idx("cam_%04d.jpg", "cam_10000.jpg"), Some(10000));
+        // Frame field behind glob wildcards.
+        assert_eq!(
+            idx("left/**/frame_%06d.jpg", "left/a/b/frame_000123.jpg"),
+            Some(123)
+        );
+        assert_eq!(idx("*/frame_%d.png", "sensor/frame_9.png"), Some(9));
+    }
+
+    #[test]
+    fn pattern_frame_index_is_none_without_a_field_or_a_match() {
+        // No frame field at all.
+        assert_eq!(pattern_frame_index("*.jpg", "a.jpg", false), None);
+        // Frame field present, but the path does not match the pattern.
+        assert_eq!(pattern_frame_index("cam_%d.jpg", "cam_x.jpg", false), None);
+        assert_eq!(
+            pattern_frame_index("cam_%d.jpg", "other_7.jpg", false),
+            None
+        );
     }
 
     #[test]
