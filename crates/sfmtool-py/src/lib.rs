@@ -124,6 +124,10 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_camrig_io::validate_camrig_pattern, m)?)?;
     m.add_function(wrap_pyfunction!(py_camrig_io::camrig_pattern_to_glob, m)?)?;
     m.add_function(wrap_pyfunction!(py_camrig_io::camrig_pattern_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        py_camrig_io::camrig_pattern_frame_index,
+        m
+    )?)?;
 
     // .sift file I/O
     m.add_function(wrap_pyfunction!(py_sift_io::read_sift, m)?)?;

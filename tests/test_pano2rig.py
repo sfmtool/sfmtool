@@ -412,3 +412,63 @@ class TestInsv2rigCLI:
         runner = CliRunner()
         result = runner.invoke(main, ["insv2rig", str(fake_insv)])
         assert result.exit_code != 0
+
+
+class TestInsv2rigCamrig:
+    """`write_insv_camrig` builds the back-to-back fisheye `.camrig`."""
+
+    def test_writes_a_valid_fisheye_360_rig(self, tmp_path):
+        from sfmtool._insv2rig import write_insv_camrig
+        from sfmtool._sfmtool import read_camrig, verify_camrig
+
+        camrig_path = tmp_path / "recording.camrig"
+        write_insv_camrig(
+            camrig_path,
+            rig_name="insv2_x5",
+            sensor_names=["fisheye_left", "fisheye_right"],
+            frame_pattern="frame_%06d.jpg",
+            camera_model="OPENCV_FISHEYE",
+            camera_params=[1031.7, 1029.7, 1920.0, 1920.0, 0.042, -0.011, 0.01, -0.003],
+            width=3840,
+            height=3840,
+            quaternions_wxyz=[[1, 0, 0, 0], [0, 0, 1, 0]],
+            translations_xyz=[[0, 0, 0], [0, 0, -0.0307]],
+            baseline_m=0.0307,
+        )
+        assert camrig_path.exists()
+        valid, errors = verify_camrig(str(camrig_path))
+        assert valid, errors
+
+        data = read_camrig(str(camrig_path))
+        meta = data["metadata"]
+        assert meta["rig_type"] == "fisheye_360"
+        assert meta["sensor_count"] == 2
+        assert meta["camera_count"] == 1
+        assert meta["rig_attributes"] == {"baseline_m": 0.0307}
+        assert data["sensor_image_patterns"] == [
+            "fisheye_left/frame_%06d.jpg",
+            "fisheye_right/frame_%06d.jpg",
+        ]
+        cam = data["cameras"][0]
+        assert cam["model"] == "OPENCV_FISHEYE"
+        assert cam["width"] == 3840 and cam["height"] == 3840
+        np.testing.assert_allclose(data["quaternions_wxyz"][1], [0, 0, 1, 0])
+        np.testing.assert_allclose(data["translations_xyz"][1], [0, 0, -0.0307])
+
+    def test_rejects_wrong_param_count(self, tmp_path):
+        from sfmtool._insv2rig import write_insv_camrig
+
+        with pytest.raises(ValueError, match="expects 8 values"):
+            write_insv_camrig(
+                tmp_path / "bad.camrig",
+                rig_name="insv2_x5",
+                sensor_names=["fisheye_left", "fisheye_right"],
+                frame_pattern="frame_%06d.jpg",
+                camera_model="OPENCV_FISHEYE",
+                camera_params=[1.0, 2.0, 3.0],
+                width=3840,
+                height=3840,
+                quaternions_wxyz=[[1, 0, 0, 0], [0, 0, 1, 0]],
+                translations_xyz=[[0, 0, 0], [0, 0, -0.0307]],
+                baseline_m=0.0307,
+            )

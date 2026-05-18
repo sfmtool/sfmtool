@@ -24,7 +24,11 @@ matches digits only and `*` / `**` respect path-segment boundaries.
 import sys
 from pathlib import Path
 
-from ._sfmtool import camrig_pattern_matches, camrig_pattern_to_glob
+from ._sfmtool import (
+    camrig_pattern_frame_index,
+    camrig_pattern_matches,
+    camrig_pattern_to_glob,
+)
 
 # `pathlib.glob` uses the OS-default case sensitivity, which is
 # case-insensitive on Windows and macOS. The strict confirm must match, or it
@@ -49,3 +53,26 @@ def match_pattern(root: Path, pattern: str) -> list[Path]:
         if camrig_pattern_matches(pattern, rel, _CASE_INSENSITIVE):
             matches.append(hit.resolve())
     return sorted(matches)
+
+
+def match_pattern_with_frames(root: Path, pattern: str) -> list[tuple[Path, int]]:
+    """`(path, frame_index)` pairs for files under `root` matching `pattern`.
+
+    `pattern` is expected to carry a frame field (`%d` / `%0Nd`); the frame
+    index is the integer that field captures. Multi-sensor rigs pair frames
+    across sensors by this index, so every sensor pattern must yield one. A
+    matched file from which no frame index can be captured raises `ValueError`
+    rather than being silently dropped.
+    """
+    root = Path(root)
+    result: list[tuple[Path, int]] = []
+    for path in match_pattern(root, pattern):
+        rel = path.relative_to(root).as_posix()
+        frame = camrig_pattern_frame_index(pattern, rel, _CASE_INSENSITIVE)
+        if frame is None:
+            raise ValueError(
+                f"pattern {pattern!r} matched {rel} but captured no frame "
+                "index; a multi-sensor rig pattern must carry a frame field"
+            )
+        result.append((path, frame))
+    return result

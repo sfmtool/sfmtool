@@ -75,20 +75,29 @@ its parent directory up to the workspace root), the file's intrinsics are used a
 
 ## Camera Rig Files (`.camrig`)
 
-`sfm solve` auto-discovers `.camrig` files in the workspace. A single-sensor `.camrig`
-(such as one written by `sfm camrig create`) supplies the camera intrinsics for the
-images its stored image pattern matches.
+`sfm solve` auto-discovers `.camrig` files in the workspace and uses the one
+covering every image being solved. A `.camrig` takes precedence over
+`camera_config.json` and `rig_config.json` for the images it covers — a note is
+printed when it overrides one.
 
-When every image being solved is covered by one single-sensor `.camrig`, that camera is
-used as the prior. A `.camrig` takes precedence over `camera_config.json` and
-`rig_config.json` for the images it covers — a note is printed when it overrides one.
+- A **single-sensor** `.camrig` (such as one written by `sfm camrig create`)
+  supplies the camera intrinsics prior for the images its stored image pattern
+  matches.
+- A **multi-sensor** `.camrig` (such as one written by `sfm insv2rig`) drives
+  rig-aware SfM. Each sensor's image pattern carries a frame field, and images
+  from different sensors that share a frame index form one rig frame. The
+  command builds one COLMAP camera per sensor (intrinsics from the rig's camera
+  pool, scaled to the actual image resolution) and one rig whose reference is
+  the lowest-indexed sensor present — its `cam_from_rig` is the identity and
+  the others are rebased relative to it. Same-frame image pairs are excluded
+  from matching, and `--refine-rig / --no-refine-rig` controls whether the
+  `sensor_from_rig` poses are refined during bundle adjustment.
 
 The command fails up front, with a message naming the offending files, when the
 discovered `.camrig` files cannot be used:
 
 - the images being solved span more than one `.camrig`;
 - a `.camrig` covers only some of the images being solved;
-- a matching `.camrig` is a multi-sensor rig (not yet supported by `solve`);
 - `--camera-model` is given alongside a matching `.camrig`.
 
 See [`../formats/camrig-file-format.md`](../formats/camrig-file-format.md).

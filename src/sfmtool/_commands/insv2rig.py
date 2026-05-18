@@ -9,8 +9,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
-from .._insv2rig import extract_insv_frames
-from .._pano2rig import write_rig_config
+from .._insv2rig import _INSV_FRAME_PATTERN, extract_insv_frames, write_insv_camrig
 from .._sfmtool import RotQuaternion
 from .._workspace import find_workspace_for_path
 
@@ -19,8 +18,9 @@ from .._workspace import find_workspace_for_path
 # around Y relative to the left eye. The optical center baseline is ~29mm along
 # the optical axis (-Z in the left/rig camera frame).
 #
-# These are sensor_from_rig transforms in COLMAP's Y-down convention.
-# Left eye (ref sensor): identity rotation, zero translation.
+# These are sensor_from_rig transforms in COLMAP's Y-down convention, stored
+# verbatim in the .camrig file.
+# Left eye (sensor 0): identity rotation, zero translation.
 # Right eye: 180 deg around Y, translated [0, 0, -0.0307] m in rig frame.
 _X5_BASELINE_M = 0.0307
 _X5_RIGHT_ROTATION = RotQuaternion.from_axis_angle([0.0, 1.0, 0.0], math.radians(180))
@@ -34,6 +34,7 @@ _X5_RIGHT_TRANSLATION = [0.0, 0.0, -_X5_BASELINE_M]
 # further validation across different units to confirm consistency.
 # Positional camera_params order: fx, fy, cx, cy, k1, k2, k3, k4.
 _X5_CAMERA_MODEL = "OPENCV_FISHEYE"
+_X5_RESOLUTION = (3840, 3840)
 _X5_CAMERA_PARAMS = [
     1031.741638,
     1029.728817,
@@ -62,7 +63,8 @@ def insv2rig(input_file, output_dir):
     """Extract dual-fisheye frames from an Insta360 .insv video file.
 
     Reads an Insta360 .insv video file and extracts every frame as a pair
-    of fisheye images (left and right), suitable for rig-aware SfM.
+    of fisheye images (left and right), then writes a .camrig file
+    describing the back-to-back fisheye rig.
 
     The output directory must be inside an initialized workspace (via 'sfm ws init').
 
@@ -88,22 +90,33 @@ def insv2rig(input_file, output_dir):
 
         click.echo(f"Extracted {num_frames} frames into {len(sensor_names)} sensors")
 
-        # Build rig geometry: left eye is ref sensor (identity), right eye
-        # is rotated 180 deg with calibrated baseline.
-        rotations = [RotQuaternion.identity(), _X5_RIGHT_ROTATION]
-        translations = [[0.0, 0.0, 0.0], _X5_RIGHT_TRANSLATION]
+        # Build rig geometry: left eye is sensor 0 (identity), right eye is
+        # rotated 180 deg with the calibrated baseline. Poses are stored
+        # verbatim as the .camrig sensor_from_rig transforms.
+        quaternions_wxyz = [
+            RotQuaternion.identity().to_wxyz_array(),
+            _X5_RIGHT_ROTATION.to_wxyz_array(),
+        ]
+        translations_xyz = [[0.0, 0.0, 0.0], _X5_RIGHT_TRANSLATION]
 
-        write_rig_config(
-            output_dir,
-            sensor_names,
-            rotations=rotations,
-            translations=translations,
-            camera_model_name=_X5_CAMERA_MODEL,
+        camrig_path = output_dir / f"{input_file.stem}.camrig"
+        write_insv_camrig(
+            camrig_path,
+            rig_name="insv2_x5",
+            sensor_names=sensor_names,
+            frame_pattern=_INSV_FRAME_PATTERN,
+            camera_model=_X5_CAMERA_MODEL,
             camera_params=_X5_CAMERA_PARAMS,
+            width=_X5_RESOLUTION[0],
+            height=_X5_RESOLUTION[1],
+            quaternions_wxyz=quaternions_wxyz,
+            translations_xyz=translations_xyz,
+            baseline_m=_X5_BASELINE_M,
         )
 
         click.echo(f"Output: {output_dir}")
         click.echo(f"  Sensor directories: {output_dir}/<name>/")
+        click.echo(f"  Camera rig: {camrig_path}")
         click.echo()
         click.echo("Next steps:")
         click.echo(f"  sfm sift --extract {output_dir}")

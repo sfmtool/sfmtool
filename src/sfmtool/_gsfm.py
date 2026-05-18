@@ -46,14 +46,13 @@ def run_global_sfm(
     colmap_dir = Path(colmap_dir)
 
     if matches_file is not None:
-        db_path, image_dir, image_paths = _setup_for_sfm_from_matches(
+        db_path, image_dir, image_paths, has_rig = _setup_for_sfm_from_matches(
             matches_file,
             colmap_dir,
             camera_model=camera_model,
             range_expr=range_expr,
         )
         workspace_dir = Path(image_dir).absolute()
-        has_rig = _load_rig_config(workspace_dir) is not None
     else:
         print("Image files:")
         print(textwrap.indent(summarize_path_list(image_paths), "  "))
@@ -67,13 +66,12 @@ def run_global_sfm(
         feature_prefix_dir = config["feature_prefix_dir"]
 
         rig_config = _load_rig_config(workspace_dir)
-        has_rig = rig_config is not None
-        if has_rig:
+        if rig_config is not None:
             print(f"Rig config: {len(rig_config)} rig(s) detected")
 
         camera_config_resolver = CameraConfigResolver(workspace_dir)
 
-        db_path, image_dir = _setup_for_sfm(
+        db_path, image_dir, has_rig = _setup_for_sfm(
             image_paths,
             colmap_dir,
             workspace_dir,

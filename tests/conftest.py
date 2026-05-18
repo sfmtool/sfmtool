@@ -175,6 +175,24 @@ def _copy_kerry_park_into(workspace_dir: Path) -> None:
     shutil.copy(KERRY_PARK_DIR / "rig_config.json", workspace_dir / "rig_config.json")
 
 
+def _copy_kerry_park_camrig_into(workspace_dir: Path) -> None:
+    """Copy the kerry_park rig images + ``kerry_park.camrig`` into ``workspace_dir``.
+
+    The same back-to-back fisheye rig as :func:`_copy_kerry_park_into`, but
+    described by a multi-sensor ``.camrig`` file rather than ``rig_config.json``
+    — the layout `sfm insv2rig` now produces.
+    """
+    for sensor in KERRY_PARK_SENSORS:
+        src_dir = KERRY_PARK_DIR / sensor
+        dst_dir = workspace_dir / sensor
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        for img in sorted(src_dir.glob("frame_*.jpg")):
+            shutil.copy(img, dst_dir / img.name)
+    shutil.copy(
+        KERRY_PARK_DIR / "kerry_park.camrig", workspace_dir / "kerry_park.camrig"
+    )
+
+
 @pytest.fixture
 def isolated_kerry_park_rig(tmp_path_factory) -> Path:
     """Function-scoped: all 48 kerry_park rig images + rig_config.json in a tmp dir.
@@ -188,6 +206,22 @@ def isolated_kerry_park_rig(tmp_path_factory) -> Path:
     """
     workspace_dir = tmp_path_factory.mktemp("kerry_park_rig")
     _copy_kerry_park_into(workspace_dir)
+    return workspace_dir
+
+
+@pytest.fixture
+def isolated_kerry_park_camrig(tmp_path_factory) -> Path:
+    """Function-scoped: all 48 kerry_park rig images + ``kerry_park.camrig``.
+
+    Yields the workspace directory. Layout under it::
+
+        <workspace>/
+          kerry_park.camrig
+          fisheye_left/frame_01.jpg ... frame_24.jpg
+          fisheye_right/frame_01.jpg ... frame_24.jpg
+    """
+    workspace_dir = tmp_path_factory.mktemp("kerry_park_camrig")
+    _copy_kerry_park_camrig_into(workspace_dir)
     return workspace_dir
 
 
@@ -239,3 +273,54 @@ def sfmrfile_reconstruction_kerry_park(
     workspace_dir = tmp_path_factory.mktemp("kerry_park_sfmr")
     shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
     return workspace_dir / sfmrfile_reconstruction_kerry_park_once.name
+
+
+@pytest.fixture(scope="session")
+def sfmrfile_reconstruction_kerry_park_camrig_once(tmp_path_factory) -> Path:
+    """Session-scoped: build a .sfmr reconstruction from the kerry_park rig,
+    with the rig described by a multi-sensor ``kerry_park.camrig``.
+
+    The same global SfM solve as :func:`sfmrfile_reconstruction_kerry_park_once`
+    but driven by the ``.camrig`` rig-discovery path rather than
+    ``rig_config.json``.
+    """
+    from sfmtool._gsfm import run_global_sfm
+    from sfmtool._sfmtool import SfmrReconstruction
+
+    workspace_dir = tmp_path_factory.mktemp("kerry_park_camrig_sfmr")
+    _copy_kerry_park_camrig_into(workspace_dir)
+    init_workspace(workspace_dir, max_num_features=2000, domain_size_pooling=True)
+
+    image_paths: list[Path] = []
+    for sensor in KERRY_PARK_SENSORS:
+        image_paths.extend(sorted((workspace_dir / sensor).glob("frame_*.jpg")))
+
+    output_sfm_file = workspace_dir / "kerry_park.sfmr"
+    colmap_dir = workspace_dir / "colmap"
+    sfmr_path = run_global_sfm(
+        image_paths,
+        workspace_dir,
+        colmap_dir,
+        output_sfm_file=str(output_sfm_file),
+        random_seed=42,
+    )
+
+    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_FRAME_COUNT
+    recon = SfmrReconstruction.load(sfmr_path)
+    if recon.image_count != expected_count:
+        raise RuntimeError(
+            f"kerry_park .camrig global solve registered {recon.image_count}/"
+            f"{expected_count} images (all {expected_count} required)."
+        )
+    return sfmr_path
+
+
+@pytest.fixture
+def sfmrfile_reconstruction_kerry_park_camrig(
+    sfmrfile_reconstruction_kerry_park_camrig_once: Path, tmp_path_factory
+) -> Path:
+    """Per-test isolation of the kerry_park ``.camrig`` .sfmr reconstruction."""
+    source_workspace_dir = sfmrfile_reconstruction_kerry_park_camrig_once.parent
+    workspace_dir = tmp_path_factory.mktemp("kerry_park_camrig_sfmr")
+    shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
+    return workspace_dir / sfmrfile_reconstruction_kerry_park_camrig_once.name

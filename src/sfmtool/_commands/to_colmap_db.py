@@ -115,7 +115,7 @@ def _from_matches(input_path, output_db_path, camera_model):
 
     try:
         colmap_dir = output_db_path.parent
-        db_path, _image_dir, _image_paths = _setup_for_sfm_from_matches(
+        db_path, _image_dir, _image_paths, _has_rig = _setup_for_sfm_from_matches(
             input_path,
             colmap_dir,
             camera_model=camera_model,
