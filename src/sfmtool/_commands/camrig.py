@@ -15,7 +15,10 @@ from .._cli_utils import timed_command
 @click.group("camrig")
 @click.help_option("--help", "-h")
 def camrig():
-    """Build and inspect .camrig camera rig files."""
+    """Build .camrig camera rig files.
+
+    Use `sfm inspect <FILE.camrig>` to inspect a rig file.
+    """
 
 
 # COLMAP camera-model names accepted by `--camera-model`, taken from the
@@ -256,51 +259,3 @@ def spherical_tiles(
     click.echo(f"  patch size: {rig.patch_size} px")
     click.echo(f"  atlas:      {atlas_w}x{atlas_h} px ({rig.atlas_cols} cols)")
     click.echo(f"  tile FOV:   {math.degrees(2.0 * rig.half_fov_rad):.2f} deg")
-
-
-@camrig.command("inspect")
-@click.help_option("--help", "-h")
-@click.argument("camrig_file", type=click.Path(exists=True, dir_okay=False))
-def inspect(camrig_file):
-    """Verify a .camrig file and print its metadata.
-
-    Recomputes the file's content hashes, checks its structural
-    constraints, and prints the rig metadata.
-
-    Example usage:
-
-        sfm camrig inspect tiles.camrig
-
-    """
-    from .._sfmtool import read_camrig_metadata, verify_camrig
-
-    camrig_file = Path(camrig_file)
-    try:
-        info = read_camrig_metadata(str(camrig_file))
-        valid, errors = verify_camrig(str(camrig_file))
-    except Exception as e:
-        raise click.ClickException(str(e))
-
-    meta = info["metadata"]
-    content_hash = info["content_hash"]
-    click.echo(f"File:         {camrig_file}")
-    click.echo(f"Format ver:   {meta['version']}")
-    click.echo(f"Name:         {meta['name']}")
-    click.echo(f"Rig type:     {meta['rig_type']}")
-    click.echo(f"Sensors:      {meta['sensor_count']}")
-    click.echo(f"Cameras:      {meta['camera_count']}")
-
-    attrs = meta.get("rig_attributes")
-    if isinstance(attrs, dict) and attrs:
-        click.echo("Attributes:")
-        for key, value in attrs.items():
-            click.echo(f"  {key}: {value}")
-
-    click.echo(f"Content hash: {content_hash['content_xxh128']}")
-    if valid:
-        click.echo("Integrity:    OK")
-    else:
-        click.echo("Integrity:    FAILED")
-        for err in errors:
-            click.echo(f"  {err}")
-        raise click.ClickException("camrig verification failed")

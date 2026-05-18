@@ -41,7 +41,7 @@ data. Some examples of this include:
    are always individually referenceable as file paths relative in the workspace.
 2. Every data format is intended to be written once and then left untouched. There are
    no mutable database files to incrementally update.
-3. Every data format is inspectable by CLI commands (e.g. `sfm sift --print` or `sfm inspect`)
+3. Every data format is inspectable by CLI commands (e.g. `sfm inspect`)
    and by the SfM Tool GUI.
 4. We've defined file formats for SIFT features (`.sift`), feature matches (`.matches`),
    and SfM reconstructions (`.sfmr`).
@@ -310,7 +310,7 @@ sfm solve -i --max-features 500 my_project/frames/
 sfm solve -g my_project/frames/
 
 # Inspect a result — workspace resolved from the .sfmr file
-sfm inspect my_project/sfmr/*.sfmr
+sfm inspect my_project/sfmr/20260101-00-solve.sfmr
 
 # View in the GUI — workspace resolved from the .sfmr file
 pixi run gui -- my_project/sfmr/*.sfmr

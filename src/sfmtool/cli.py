@@ -11,6 +11,7 @@ import click
 from ._cli_group import CategoryGroup
 from ._commands import (
     align,
+    analyze,
     cam,
     camrig,
     compare,
@@ -59,6 +60,7 @@ main.add_command_with_category(match, category="Image Feature")
 main.add_command_with_category(solve, category="Reconstruction")
 main.add_command_with_category(xform, category="Reconstruction")
 main.add_command_with_category(inspect, category="Reconstruction")
+main.add_command_with_category(analyze, category="Reconstruction")
 main.add_command_with_category(compare, category="Reconstruction")
 main.add_command_with_category(align, category="Reconstruction")
 main.add_command_with_category(merge, category="Reconstruction")

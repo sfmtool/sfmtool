@@ -4,6 +4,7 @@
 """CLI command implementations organized by functionality."""
 
 from .align import align
+from .analyze import analyze
 from .cam import cam
 from .camrig import camrig
 from .compare import compare
@@ -30,6 +31,7 @@ from .xform import xform
 
 __all__ = [
     "align",
+    "analyze",
     "cam",
     "camrig",
     "compare",

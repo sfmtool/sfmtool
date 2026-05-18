@@ -33,7 +33,6 @@ __all__ = [
     "get_feature_type_for_tool",
     "get_sift_path_for_image",
     "get_used_features_from_reconstruction",
-    "print_sift_summary",
     "image_files_to_sift_files",
     "image_files_to_sift_files_opencv",
     "draw_sift_features",
@@ -486,46 +485,6 @@ def get_used_features_from_reconstruction(
 
     mask = image_indexes == image_index
     return feature_indexes[mask]
-
-
-# ---------------------------------------------------------------------------
-# Summary printing
-# ---------------------------------------------------------------------------
-
-
-def print_sift_summary(sift_filename: str | Path, verbose: bool = False):
-    """Read a .sift file and print a human-readable summary.
-
-    Args:
-        sift_filename: Path to the .sift file
-        verbose: If True, also print file hashes and tool options
-    """
-    print(f"--- Summary for {sift_filename} ---")
-    with SiftReader(sift_filename) as reader:
-        meta = reader.metadata
-        tool_meta = reader.feature_tool_metadata
-        print(f"  Image Name:         {meta['image_name']}")
-        print(f"  Image Dimensions:   {meta['image_width']}x{meta['image_height']}")
-        print(f"  Feature Count:      {meta['feature_count']}")
-        print(f"  Feature Tool:       {tool_meta['feature_tool']}")
-
-        if verbose:
-            hashes = reader.content_hash
-            print(f"  Image File Size:    {meta['image_file_size']} bytes")
-            print(f"  Image File Hash:    {meta['image_file_xxh128']}")
-            print(f"  Feature Tool Hash:  {hashes['feature_tool_xxh128']}")
-            print(f"  Content Hash:       {hashes['content_xxh128']}")
-            print(f"  Feature Tool Options: {tool_meta['feature_options']}")
-
-        print("  Top 5 Features (by size):")
-        positions = reader.read_positions(count=5)
-        affine_shapes = reader.read_affine_shapes(count=5)
-        sizes_x = feature_size_x(affine_shapes)
-        sizes_y = feature_size_y(affine_shapes)
-        for i, (pos, sx, sy) in enumerate(zip(positions, sizes_x, sizes_y), 1):
-            print(
-                f"    {i}. pos=({pos[0]:.2f}, {pos[1]:.2f}), size=({sx:.2f}, {sy:.2f})"
-            )
 
 
 # ---------------------------------------------------------------------------

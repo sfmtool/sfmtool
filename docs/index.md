@@ -67,7 +67,7 @@ $ sfm inspect sfmr/20260404-00-solve-seoul_bull_sculpture_1-17.sfmr
 ...
 
 # Per-image reprojection error metrics
-$ sfm inspect --metrics sfmr/20260404-00-solve-seoul_bull_sculpture_1-17.sfmr
+$ sfm analyze --metrics sfmr/20260404-00-solve-seoul_bull_sculpture_1-17.sfmr
 ...
 ```
 
