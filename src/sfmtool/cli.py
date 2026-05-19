@@ -12,7 +12,6 @@ from ._cli_group import CategoryGroup
 from ._commands import (
     align,
     analyze,
-    cam,
     camrig,
     compare,
     densify,
@@ -54,7 +53,6 @@ def main():
 
 
 main.add_command_with_category(ws, category="Workspace")
-main.add_command_with_category(cam, category="Workspace")
 main.add_command_with_category(sift, category="Image Feature")
 main.add_command_with_category(match, category="Image Feature")
 main.add_command_with_category(solve, category="Reconstruction")
