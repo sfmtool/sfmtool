@@ -2,13 +2,18 @@
 
 ## Overview
 
-Builds `.camrig` camera rig files. `camrig` is a command group with two
+Builds `.camrig` camera rig files. `camrig` is a command group with three
 subcommands:
 
 - `create` — build a one-camera rig for a directory of images and write it
   to a `.camrig` file.
+- `cp` — build a `.camrig` by copying a rig, a single camera, or a subset of
+  sensors out of an existing `.sfmr` reconstruction or `.camrig` file.
 - `spherical-tiles` — build a spherical tile rig (a sphere discretised into
   co-centric pinhole tiles) and write it to a `.camrig` file.
+
+`create` builds a rig from a directory of images on disk; `cp` builds one
+from an existing file. Both write a `.camrig`.
 
 To inspect a `.camrig` file, use `sfm inspect <FILE.camrig>` (see
 `specs/cli/inspect-command.md`).
@@ -92,6 +97,98 @@ sfm camrig create rig.camrig '*.jpg' --camera-model OPENCV_FISHEYE
 sfm camrig create rig.camrig '*.jpg' --camera-model OPENCV \
     --resolution 4000x3000 \
     --params 2800,2800,2000,1500,-0.08,0.01,0,0
+```
+
+## `sfm camrig cp`
+
+### Syntax
+
+```bash
+sfm camrig cp <SOURCE> <OUTPUT_FILE> [SELECTOR] [OPTIONS...]
+```
+
+Builds a `.camrig` by copying from an existing file. `SOURCE` is either a
+`.sfmr` reconstruction or another `.camrig` file; the output is always a
+`.camrig`. Where `create` reads a directory of images, `cp` reads a file that
+already carries cameras (and, for a rig, sensor poses) — a solved
+reconstruction or a previously built rig.
+
+### Selectors
+
+A *selector* says which slice of the source becomes the output rig. The
+selectors available depend on the source type, and at most one may be given.
+
+| Selector | Source | Result |
+|----------|--------|--------|
+| `--rig N` | `.sfmr` | The whole of rig `N` — a multi-sensor `.camrig` preserving the rig's sensors, cameras, and `sensor_from_rig` poses. |
+| `--camera N` | `.sfmr` or `.camrig` | Camera `N` from the source's camera pool, on its own — a single-sensor `generic` rig at the identity pose. |
+| `--sensors RANGE` | `.camrig` | The selected subset of the source's sensors — itself a `.camrig`, with the camera pool reduced to the cameras those sensors use. |
+| *(none)* | `.sfmr` | Defaults to `--rig 0` when the reconstruction has exactly one rig, or `--camera 0` when it has no rig data and exactly one camera; otherwise the command asks for a selector. |
+| *(none)* | `.camrig` | Copies the whole rig unchanged. |
+
+`--rig` is rejected for a `.camrig` source (a `.camrig` holds exactly one
+rig — use `--sensors`); `--sensors` is rejected for a `.sfmr` source (use
+`--rig`).
+
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `SOURCE` | path | required | The `.sfmr` or `.camrig` file to copy from. |
+| `OUTPUT_FILE` | path | required | Path of the `.camrig` file to write. Its directory is the rig root. |
+| `--rig` | int | — | `.sfmr` only. Index of the rig to copy. |
+| `--camera` | int | — | Index into the source's camera pool. Copies that one camera as a single-sensor rig. |
+| `--sensors` | range | — | `.camrig` only. Sensor indices to keep, as an integer range expression (e.g. `0-2`, `0,2,4`). |
+| `--pattern` | pattern | — | Image pattern for the output sensor. Only valid with `--camera` (single-sensor output); for multi-sensor results the per-sensor patterns are inferred (see below). |
+| `--name` | str | (see below) | Rig name stored in the file. Defaults to the source rig's name, then to the output file stem. |
+
+### Image patterns
+
+A `.camrig` is located in a workspace by each sensor's image pattern, so `cp`
+fills patterns in by default:
+
+- **`.camrig` source** — the source already stores per-sensor patterns; the
+  kept sensors keep theirs verbatim.
+- **`.sfmr` source** — a reconstruction has no patterns. For each output
+  sensor, `cp` collects the file names of that sensor's images and infers a
+  pattern from them with the same path-sequence summariser the rest of the
+  CLI uses (`summarize_paths_by_sequence`). A multi-sensor `.camrig` requires
+  every pattern to carry a frame field; if inference cannot produce one for
+  every sensor, the whole rig is written **geometry-only** (empty patterns,
+  describing pure geometry) and a note is printed. A single-sensor result
+  (`--camera`) may instead be given an explicit `--pattern`; without it the
+  pattern is inferred, and `cp` fails if it cannot.
+
+Inferred patterns are relative to whatever the source's image names are
+relative to. They are only correct if the `.camrig` is placed at that same
+root — normally the workspace root.
+
+### Behaviour
+
+The output is written with `rig_type` `generic`, except when the whole of a
+`.camrig` is copied (no selector, or `--sensors` selecting every sensor), in
+which case the source's `rig_type` and `rig_attributes` are preserved. A
+subset of a typed rig (e.g. three faces of a `cubemap`) is no longer that
+type, so it becomes `generic` with empty attributes.
+
+`sensor_from_rig` poses are copied verbatim — the rig frame is arbitrary, so
+a sensor subset needs no rebasing. `--camera` produces a lone sensor at the
+identity pose.
+
+### Usage Examples
+
+```bash
+# Harvest refined intrinsics from a solved reconstruction, pattern inferred
+sfm camrig cp sfmr/solve_001.sfmr photos.camrig --camera 0
+
+# Same, but state the pattern explicitly so the rig can be dropped elsewhere
+sfm camrig cp sfmr/solve_001.sfmr rig.camrig --camera 0 --pattern '*.jpg'
+
+# Copy a solved rig (its sensors, cameras, and poses) into a reusable .camrig
+sfm camrig cp sfmr/rig_solve.sfmr studio_rig.camrig --rig 0
+
+# Take three faces out of a six-face cubemap rig
+sfm camrig cp cubemap.camrig front_faces.camrig --sensors 0-2
 ```
 
 ## `sfm camrig spherical-tiles`

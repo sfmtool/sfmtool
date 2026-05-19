@@ -277,9 +277,9 @@ sfm xform my_project/sfmr/calibration_subset.sfmr \
     --align-to-input \
     --output my_project/sfmr/calibration_subset_cleaned.sfmr
 
-# 4. Save the cleaned reconstruction's intrinsics into the workspace
-sfm cam cp my_project/sfmr/calibration_subset_cleaned.sfmr \
-    my_project/camera_config.json
+# 4. Harvest the cleaned reconstruction's intrinsics as a .camrig file
+sfm camrig cp my_project/sfmr/calibration_subset_cleaned.sfmr \
+    my_project/photos.camrig --camera 0
 
 # 5. Re-solve from scratch — now with priors
 sfm solve -i my_project/photos
@@ -294,10 +294,12 @@ high-quality observations, which is what we want to harvest.
 `--align-to-input` keeps the cleaned reconstruction in the same coordinate
 frame as the original so it remains comparable.
 
-The intent of step 4 is captured by a future `sfm cam cp` command;
-until that lands, the file can be written by hand from the values in
-`sfm analyze --metrics` output, or from a small script using
-`pycolmap_camera_to_intrinsics`.
+Step 4 uses `sfm camrig cp` to copy the cleaned reconstruction's camera into
+a single-sensor `.camrig` (see `specs/cli/camrig-command.md`). A `.camrig`
+takes precedence over `camera_config.json` when `sfm solve` discovers both,
+and `camrig cp` infers the sensor's image pattern from the reconstruction, so
+it is the recommended way to harvest solved intrinsics. `camera_config.json`
+remains the mechanism for hand-authored, per-directory intrinsics.
 
 ### Workflow 2: Reuse Intrinsics from a Previous Project
 

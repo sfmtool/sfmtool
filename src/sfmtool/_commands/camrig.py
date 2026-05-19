@@ -146,6 +146,128 @@ def create(
     click.echo(f"  focal:    {focal:.1f} px")
 
 
+@camrig.command("cp")
+@timed_command
+@click.help_option("--help", "-h")
+@click.argument("source", type=click.Path(exists=True, dir_okay=False))
+@click.argument("output_file", type=click.Path(dir_okay=False))
+@click.option(
+    "--rig",
+    "rig_index",
+    type=click.IntRange(min=0),
+    default=None,
+    help="`.sfmr` source only: index of the rig to copy.",
+)
+@click.option(
+    "--camera",
+    "camera_index",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Index into the source's camera pool; copies that one camera as a "
+    "single-sensor rig.",
+)
+@click.option(
+    "--sensors",
+    "sensors_expr",
+    default=None,
+    help="`.camrig` source only: sensor indices to keep, as an integer range "
+    "expression (e.g. 0-2, 0,2,4).",
+)
+@click.option(
+    "--pattern",
+    default=None,
+    help="Image pattern for the output sensor. Only valid with --camera.",
+)
+@click.option(
+    "--name",
+    default=None,
+    help="Rig name stored in the file (default: the source rig name, then the "
+    "output file stem).",
+)
+def cp(source, output_file, rig_index, camera_index, sensors_expr, pattern, name):
+    """Build a .camrig by copying from a .sfmr or .camrig file.
+
+    SOURCE is a `.sfmr` reconstruction or a `.camrig` file; OUTPUT_FILE is the
+    `.camrig` to write. A selector chooses what to copy: `--rig` (a whole rig,
+    `.sfmr` only), `--camera` (one camera as a single-sensor rig), or
+    `--sensors` (a subset of sensors, `.camrig` only). With no selector, a
+    `.sfmr` falls back to its lone rig or lone camera and a `.camrig` is copied
+    whole.
+
+    Example usage:
+
+    \b
+        # Harvest refined intrinsics from a solved reconstruction
+        sfm camrig cp sfmr/solve_001.sfmr photos.camrig --camera 0
+        # Copy a solved rig into a reusable .camrig
+        sfm camrig cp sfmr/rig_solve.sfmr studio.camrig --rig 0
+        # Take three faces out of a six-face cubemap rig
+        sfm camrig cp cubemap.camrig front.camrig --sensors 0-2
+    """
+    from .._camrig_cp import CamrigCpError, copy_from_camrig, copy_from_sfmr
+
+    src = Path(source)
+    out = Path(output_file)
+
+    if camera_index is not None and rig_index is not None:
+        raise click.UsageError("--rig and --camera are mutually exclusive.")
+    if camera_index is not None and sensors_expr is not None:
+        raise click.UsageError("--sensors and --camera are mutually exclusive.")
+    if rig_index is not None and sensors_expr is not None:
+        raise click.UsageError("--rig and --sensors are mutually exclusive.")
+    if pattern is not None and camera_index is None:
+        raise click.UsageError(
+            "--pattern applies only with --camera (single-sensor output)."
+        )
+
+    suffix = src.suffix.lower()
+    try:
+        if suffix == ".sfmr":
+            if sensors_expr is not None:
+                raise click.UsageError(
+                    "--sensors applies to a .camrig source; use --rig for a "
+                    ".sfmr reconstruction."
+                )
+            summary = copy_from_sfmr(
+                src,
+                out,
+                rig_index=rig_index,
+                camera_index=camera_index,
+                pattern=pattern,
+                name=name,
+            )
+        elif suffix == ".camrig":
+            if rig_index is not None:
+                raise click.UsageError(
+                    "--rig applies to a .sfmr source; a .camrig holds exactly "
+                    "one rig — use --sensors to pick a subset of its sensors."
+                )
+            summary = copy_from_camrig(
+                src,
+                out,
+                sensors_expr=sensors_expr,
+                camera_index=camera_index,
+                pattern=pattern,
+                name=name,
+            )
+        else:
+            raise click.UsageError(f"SOURCE must be a .sfmr or .camrig file: {src}")
+    except CamrigCpError as e:
+        raise click.ClickException(str(e))
+
+    click.echo(f"Wrote {summary['output_file']}")
+    click.echo(
+        f"  sensors:  {summary['sensor_count']}  "
+        f"cameras: {summary['camera_count']}  "
+        f"rig type: {summary['rig_type']}"
+    )
+    if not summary["image_backed"]:
+        click.echo(
+            "  note:     written geometry-only (no image patterns could be "
+            "inferred for every sensor)"
+        )
+
+
 @camrig.command("spherical-tiles")
 @timed_command
 @click.help_option("--help", "-h")
