@@ -3,8 +3,6 @@
 
 """Tests for pano2rig and insv2rig modules."""
 
-import json
-
 import cv2
 import numpy as np
 import pytest
@@ -12,13 +10,11 @@ from click.testing import CliRunner
 
 from sfmtool._pano2rig import (
     _cubemap_rotations,
-    build_rig_frame_data,
     convert_panoramas,
     default_face_size,
     extract_perspective_face,
     find_panorama_images,
-    generate_rig_config_json,
-    write_rig_config,
+    write_pano_camrig,
 )
 from sfmtool.cli import main
 
@@ -133,109 +129,6 @@ class TestDefaultFaceSize:
 
 
 # =============================================================================
-# Rig config JSON tests
-# =============================================================================
-
-
-class TestRigConfigJson:
-    def test_cubemap_config(self):
-        names = ["front", "right", "back", "left", "top", "bottom"]
-        config = generate_rig_config_json(names)
-        assert len(config["cameras"]) == 6
-        assert config["cameras"][0]["ref_sensor"] is True
-        assert config["cameras"][0]["image_prefix"] == "front/"
-        assert config["cameras"][1]["ref_sensor"] is False
-
-    def test_prefix_base(self):
-        names = ["front", "right"]
-        config = generate_rig_config_json(names, prefix_base="images/seq1/")
-        assert config["cameras"][0]["image_prefix"] == "images/seq1/front/"
-        assert config["cameras"][1]["image_prefix"] == "images/seq1/right/"
-
-    def test_camera_model_name(self):
-        names = ["front", "right"]
-        config = generate_rig_config_json(names, camera_model_name="PINHOLE")
-        assert len(config["cameras"]) == 2
-        for cam in config["cameras"]:
-            assert cam["camera_model_name"] == "PINHOLE"
-            assert "camera_params" not in cam
-
-    def test_camera_params(self):
-        names = ["front", "right"]
-        params = [600.0, 600.0, 512.0, 512.0]
-        config = generate_rig_config_json(
-            names, camera_model_name="PINHOLE", camera_params=params
-        )
-        for cam in config["cameras"]:
-            assert cam["camera_model_name"] == "PINHOLE"
-            assert cam["camera_params"] == params
-
-    def test_no_camera_model_by_default(self):
-        names = ["front", "right"]
-        config = generate_rig_config_json(names)
-        assert "camera_intrinsics" not in config
-        for cam in config["cameras"]:
-            assert "camera_model_name" not in cam
-            assert "camera_params" not in cam
-
-    def test_camera_params_without_model_rejected(self):
-        names = ["front", "right"]
-        with pytest.raises(ValueError, match="requires camera_model_name"):
-            generate_rig_config_json(names, camera_params=[600.0, 600.0, 512.0, 512.0])
-
-
-# =============================================================================
-# Rig frame data tests
-# =============================================================================
-
-
-class TestBuildRigFrameData:
-    def test_basic_structure(self):
-        names = ["front", "right", "back", "left", "top", "bottom"]
-        rotations = _cubemap_rotations()
-        data = build_rig_frame_data(names, rotations, num_panoramas=5)
-
-        assert data["rigs_metadata"]["rig_count"] == 1
-        assert data["rigs_metadata"]["sensor_count"] == 6
-        assert data["rigs_metadata"]["rigs"][0]["name"] == "pano2rig"
-        assert data["rigs_metadata"]["rigs"][0]["ref_sensor_name"] == "front"
-
-        assert data["sensor_camera_indexes"].shape == (6,)
-        assert data["sensor_quaternions_wxyz"].shape == (6, 4)
-        assert data["sensor_translations_xyz"].shape == (6, 3)
-
-        assert data["frames_metadata"]["frame_count"] == 5
-        assert data["rig_indexes"].shape == (5,)
-        assert data["image_sensor_indexes"].shape == (30,)
-        assert data["image_frame_indexes"].shape == (30,)
-
-    def test_front_sensor_is_identity(self):
-        names = ["front", "right"]
-        rotations = _cubemap_rotations()[:2]
-        data = build_rig_frame_data(names, rotations, num_panoramas=1)
-
-        np.testing.assert_allclose(
-            data["sensor_quaternions_wxyz"][0], [1, 0, 0, 0], atol=1e-14
-        )
-
-    def test_translations_are_zero(self):
-        names = ["front", "right"]
-        rotations = _cubemap_rotations()[:2]
-        data = build_rig_frame_data(names, rotations, num_panoramas=3)
-
-        np.testing.assert_allclose(data["sensor_translations_xyz"], 0)
-
-    def test_image_mapping(self):
-        names = ["a", "b", "c"]
-        rotations = _cubemap_rotations()[:3]
-        data = build_rig_frame_data(names, rotations, num_panoramas=2)
-
-        # 3 sensors * 2 panos = 6 images
-        np.testing.assert_array_equal(data["image_sensor_indexes"], [0, 0, 1, 1, 2, 2])
-        np.testing.assert_array_equal(data["image_frame_indexes"], [0, 1, 0, 1, 0, 1])
-
-
-# =============================================================================
 # Find panorama images tests
 # =============================================================================
 
@@ -292,7 +185,7 @@ class TestConvertPanoramas:
         _, face_size, _ = convert_panoramas(input_dir, output_dir, face_size=64)
         assert face_size == 64
 
-        face_img = cv2.imread(str(output_dir / "front" / "pano_000.jpg"))
+        face_img = cv2.imread(str(output_dir / "front" / "frame_000000.jpg"))
         assert face_img.shape[:2] == (64, 64)
 
     def test_empty_input_raises(self, tmp_path):
@@ -305,61 +198,77 @@ class TestConvertPanoramas:
 
 
 # =============================================================================
-# Write rig config tests
+# Write cubemap .camrig tests
 # =============================================================================
 
 
-class TestWriteRigConfig:
-    def test_creates_rig_config(self, tmp_path):
-        from sfmtool._workspace import init_workspace
+class TestPano2rigCamrig:
+    """`write_pano_camrig` builds the six-face cubemap `.camrig`."""
 
-        init_workspace(tmp_path)
+    _FACE_NAMES = ["front", "right", "back", "left", "top", "bottom"]
 
-        face_names = ["front", "right", "back", "left", "top", "bottom"]
-        write_rig_config(tmp_path, face_names)
+    def test_writes_a_valid_cubemap_rig(self, tmp_path):
+        from sfmtool._sfmtool import read_camrig, verify_camrig
 
-        rig_config_path = tmp_path / "rig_config.json"
-        assert rig_config_path.exists()
-        rig_config = json.loads(rig_config_path.read_text())
-        assert len(rig_config) == 1
-        assert len(rig_config[0]["cameras"]) == 6
+        camrig_path = tmp_path / "cubemap.camrig"
+        write_pano_camrig(
+            camrig_path,
+            rig_name="cubemap",
+            face_names=self._FACE_NAMES,
+            rotations=_cubemap_rotations(),
+            face_size=512,
+        )
+        assert camrig_path.exists()
+        valid, errors = verify_camrig(str(camrig_path))
+        assert valid, errors
 
-    def test_workspace_relative_prefixes(self, tmp_path):
-        from sfmtool._workspace import init_workspace
+        data = read_camrig(str(camrig_path))
+        meta = data["metadata"]
+        assert meta["rig_type"] == "cubemap"
+        assert meta["sensor_count"] == 6
+        assert meta["camera_count"] == 1
+        assert meta["rig_attributes"] == {}
+        assert data["sensor_image_patterns"] == [
+            f"{name}/frame_%06d.jpg" for name in self._FACE_NAMES
+        ]
 
-        init_workspace(tmp_path)
+    def test_camera_is_a_square_90deg_pinhole(self, tmp_path):
+        from sfmtool._sfmtool import read_camrig
 
-        output_dir = tmp_path / "images"
-        output_dir.mkdir()
-        face_names = ["front", "right", "back", "left", "top", "bottom"]
-        write_rig_config(output_dir, face_names)
+        camrig_path = tmp_path / "cubemap.camrig"
+        write_pano_camrig(
+            camrig_path,
+            rig_name="cubemap",
+            face_names=self._FACE_NAMES,
+            rotations=_cubemap_rotations(),
+            face_size=512,
+        )
+        cam = read_camrig(str(camrig_path))["cameras"][0]
+        assert cam["model"] == "PINHOLE"
+        assert cam["width"] == 512 and cam["height"] == 512
+        # 90° FOV over a 512-px square: fx = fy = 256, principal point at centre.
+        assert cam["parameters"]["focal_length_x"] == 256.0
+        assert cam["parameters"]["focal_length_y"] == 256.0
+        assert cam["parameters"]["principal_point_x"] == 256.0
+        assert cam["parameters"]["principal_point_y"] == 256.0
 
-        rig_config = json.loads((tmp_path / "rig_config.json").read_text())
-        assert rig_config[0]["cameras"][0]["image_prefix"] == "images/front/"
+    def test_cocentric_zero_translations(self, tmp_path):
+        from sfmtool._sfmtool import read_camrig
 
-    def test_appends_to_existing_rig_config(self, tmp_path):
-        from sfmtool._workspace import init_workspace
-
-        init_workspace(tmp_path)
-
-        face_names_1 = ["front", "right", "back", "left", "top", "bottom"]
-        output_dir_1 = tmp_path / "images" / "pano1"
-        output_dir_1.mkdir(parents=True)
-        write_rig_config(output_dir_1, face_names_1)
-
-        rig_config = json.loads((tmp_path / "rig_config.json").read_text())
-        assert len(rig_config) == 1
-
-        face_names_2 = ["a", "b", "c"]
-        output_dir_2 = tmp_path / "images" / "pano2"
-        output_dir_2.mkdir(parents=True)
-        write_rig_config(output_dir_2, face_names_2)
-
-        rig_config = json.loads((tmp_path / "rig_config.json").read_text())
-        assert len(rig_config) == 2
-        assert len(rig_config[0]["cameras"]) == 6
-        assert len(rig_config[1]["cameras"]) == 3
-        assert rig_config[1]["cameras"][0]["image_prefix"] == "images/pano2/a/"
+        camrig_path = tmp_path / "cubemap.camrig"
+        write_pano_camrig(
+            camrig_path,
+            rig_name="cubemap",
+            face_names=self._FACE_NAMES,
+            rotations=_cubemap_rotations(),
+            face_size=256,
+        )
+        data = read_camrig(str(camrig_path))
+        np.testing.assert_array_equal(data["translations_xyz"], 0)
+        # Front (sensor 0) sits at the identity sensor_from_rig pose.
+        np.testing.assert_allclose(
+            data["quaternions_wxyz"][0], [1, 0, 0, 0], atol=1e-14
+        )
 
 
 # =============================================================================
@@ -395,8 +304,9 @@ class TestPano2rigCLI:
 
         assert result.exit_code == 0, f"CLI failed: {result.output}"
         assert (workspace_dir / ".sfm-workspace.json").exists()
-        assert (workspace_dir / "rig_config.json").exists()
+        assert (output_dir / "cubemap.camrig").exists()
         assert (output_dir / "front").is_dir()
+        assert (output_dir / "front" / "frame_000000.jpg").exists()
 
 
 class TestInsv2rigCLI:
