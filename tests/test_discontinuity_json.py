@@ -64,7 +64,7 @@ def _make_translation_discontinuity(sfmr_path: Path, *, offset_m: float = 50.0):
 
 def _run_recon_to_json(recon) -> dict:
     """Run `analyze_reconstruction` and convert the result to a JSON dict."""
-    from sfmtool._discontinuity import analyze_reconstruction
+    from sfmtool._discontinuity_reconstruction import analyze_reconstruction
     from sfmtool._discontinuity_json import reconstruction_results_to_json
 
     results = analyze_reconstruction(recon)
