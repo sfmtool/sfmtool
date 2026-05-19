@@ -49,6 +49,9 @@ pub use py_se3_transform::PySe3Transform;
 mod py_sfmr_reconstruction;
 pub use py_sfmr_reconstruction::PySfmrReconstruction;
 
+mod py_range_expr;
+pub use py_range_expr::PyRangeExpr;
+
 // ── File I/O ──────────────────────────────────────────────────────────────
 
 mod py_camrig_io;
@@ -247,6 +250,7 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRotQuaternion>()?;
     m.add_class::<PySe3Transform>()?;
     m.add_class::<PySfmrReconstruction>()?;
+    m.add_class::<PyRangeExpr>()?;
     m.add_class::<py_kdtree::PyKdTree2d>()?;
     m.add_class::<py_kdtree::PyKdTree3d>()?;
     m.add_class::<PyPerSphericalTileSourceStack>()?;

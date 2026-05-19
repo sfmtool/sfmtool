@@ -17,7 +17,6 @@ dependencies = [
     "deadline",
     "numpy",
     "opencv-python-headless",
-    "openjd-model",
     "pycolmap",
     "xxhash",
 ]

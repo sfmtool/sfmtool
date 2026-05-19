@@ -13,7 +13,7 @@ use crate::py_rot_quaternion::{extract_f64_vec, PyRotQuaternion};
 /// SE(3) similarity transform: rotation, translation, and uniform scale.
 ///
 /// Applies as: ``p' = scale * (R * p) + t``
-#[pyclass(name = "Se3Transform")]
+#[pyclass(name = "Se3Transform", module = "sfmtool")]
 #[derive(Clone)]
 pub struct PySe3Transform {
     pub(crate) inner: sfmtool_core::Se3Transform,

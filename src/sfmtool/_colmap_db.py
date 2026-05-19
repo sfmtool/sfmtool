@@ -164,10 +164,9 @@ def _setup_for_sfm_from_matches(
         was set up.
     """
     import numpy as np
-    from openjd.model import IntRangeExpr
 
     from ._filenames import number_from_filename
-    from ._sfmtool import read_matches
+    from ._sfmtool import RangeExpr, read_matches
     from ._workspace import find_workspace_for_path
 
     matches_file = Path(matches_file)
@@ -182,7 +181,7 @@ def _setup_for_sfm_from_matches(
     full_image_count = metadata["image_count"]
 
     if range_expr:
-        numbers = IntRangeExpr.from_str(range_expr)
+        numbers = RangeExpr(range_expr)
         kept_old_indices = [
             i
             for i, name in enumerate(all_image_names)

@@ -34,7 +34,7 @@ enum Inner2d {
 /// Build once from an (N, 2) float32 or float64 array, then issue batch queries.
 /// The dtype of the positions array determines the internal precision; query
 /// arrays must use the same dtype.
-#[pyclass(name = "KdTree2d")]
+#[pyclass(name = "KdTree2d", module = "sfmtool")]
 pub struct PyKdTree2d {
     inner: Inner2d,
 }
@@ -321,7 +321,7 @@ enum Inner3d {
 /// Build once from an (N, 3) float32 or float64 array, then issue batch queries.
 /// The dtype of the positions array determines the internal precision; query
 /// arrays must use the same dtype.
-#[pyclass(name = "KdTree3d")]
+#[pyclass(name = "KdTree3d", module = "sfmtool")]
 pub struct PyKdTree3d {
     inner: Inner3d,
 }

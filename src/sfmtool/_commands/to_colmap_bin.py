@@ -7,10 +7,10 @@ from pathlib import Path
 
 import click
 import numpy as np
-from openjd.model import IntRangeExpr
 
 from .._cli_utils import timed_command
 from .._filenames import number_from_filename
+from .._sfmtool import RangeExpr
 
 
 @click.command("to-colmap-bin")
@@ -88,7 +88,7 @@ def to_colmap_bin(
 
 def _apply_range_filter(recon, range_expr_str: str, filter_points: bool):
     """Subset the reconstruction by image file number range."""
-    range_numbers = set(IntRangeExpr.from_str(range_expr_str))
+    range_numbers = set(RangeExpr(range_expr_str))
 
     image_names = recon.image_names
     keep_indices: list[int] = []

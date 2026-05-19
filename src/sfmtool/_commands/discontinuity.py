@@ -114,9 +114,9 @@ def discontinuity(
 
         numbers = None
         if range_expr:
-            from openjd.model import IntRangeExpr
+            from .._sfmtool import RangeExpr
 
-            numbers = set(IntRangeExpr.from_str(range_expr))
+            numbers = set(RangeExpr(range_expr))
 
         results = analyze_reconstruction(recon, range_numbers=numbers)
         if json_path and results:
@@ -127,9 +127,9 @@ def discontinuity(
     # Image sequence mode
     numbers = None
     if range_expr:
-        from openjd.model import IntRangeExpr
+        from .._sfmtool import RangeExpr
 
-        numbers = IntRangeExpr.from_str(range_expr)
+        numbers = RangeExpr(range_expr)
 
     image_paths = expand_paths(paths, extensions=IMAGE_EXTENSIONS, numbers=numbers)
     if not image_paths:

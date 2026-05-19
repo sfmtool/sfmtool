@@ -7,8 +7,8 @@ import io
 import sys
 import numpy as np
 from click.testing import CliRunner
-from openjd.model import IntRangeExpr
 
+from sfmtool import RangeExpr
 from sfmtool._compare import compare_reconstructions
 from sfmtool._sfmtool import Se3Transform, SfmrReconstruction
 from sfmtool.cli import main
@@ -168,7 +168,7 @@ class TestCompareFiltered:
         filtered_path = _apply_transforms_to_file(
             original_path,
             workspace / "filtered.sfmr",
-            [IncludeRangeFilter(IntRangeExpr.from_str("5-12"))],
+            [IncludeRangeFilter(RangeExpr("5-12"))],
         )
 
         original = SfmrReconstruction.load(original_path)
@@ -194,7 +194,7 @@ class TestCompareFiltered:
         filtered_path = _apply_transforms_to_file(
             original_path,
             workspace / "filtered_sift.sfmr",
-            [IncludeRangeFilter(IntRangeExpr.from_str("5-12"))],
+            [IncludeRangeFilter(RangeExpr("5-12"))],
         )
 
         original = SfmrReconstruction.load(original_path)
@@ -221,7 +221,7 @@ class TestCompareTransformAndFilter:
             workspace / "xform_and_filter.sfmr",
             [
                 SimilarityTransform(transform),
-                IncludeRangeFilter(IntRangeExpr.from_str("1-10")),
+                IncludeRangeFilter(RangeExpr("1-10")),
             ],
         )
 
