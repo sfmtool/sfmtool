@@ -16,7 +16,7 @@ use crate::py_rot_quaternion::{extract_f64_vec, PyRotQuaternion};
 /// The rotation is a unit quaternion (det(R) = +1, no reflections).
 /// Distances are preserved. For transforms with uniform scaling,
 /// use :class:`Se3Transform`.
-#[pyclass(name = "RigidTransform")]
+#[pyclass(name = "RigidTransform", module = "sfmtool")]
 #[derive(Clone)]
 pub struct PyRigidTransform {
     pub(crate) inner: sfmtool_core::RigidTransform,

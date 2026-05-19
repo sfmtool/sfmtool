@@ -15,7 +15,7 @@ use sfmtool_core::CameraIntrinsics;
 ///
 /// Wraps a camera model (e.g. PINHOLE, OPENCV) with width/height and provides
 /// access to focal lengths, principal point, intrinsic matrix, and distortion info.
-#[pyclass(name = "CameraIntrinsics", module = "sfmtool._core")]
+#[pyclass(name = "CameraIntrinsics", module = "sfmtool")]
 #[derive(Clone)]
 pub struct PyCameraIntrinsics {
     pub(crate) inner: CameraIntrinsics,

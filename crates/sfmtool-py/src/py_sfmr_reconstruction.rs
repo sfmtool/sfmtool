@@ -18,7 +18,7 @@ use crate::PyCameraIntrinsics;
 ///
 /// Wraps the Rust `SfmrReconstruction` and exposes scalar properties,
 /// metadata, cameras, and image names to Python.
-#[pyclass(name = "SfmrReconstruction")]
+#[pyclass(name = "SfmrReconstruction", module = "sfmtool")]
 pub struct PySfmrReconstruction {
     pub(crate) inner: SfmrReconstruction,
 }

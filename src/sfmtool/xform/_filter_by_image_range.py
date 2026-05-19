@@ -6,16 +6,15 @@
 import fnmatch
 
 import numpy as np
-from openjd.model import IntRangeExpr
 
 from .._filenames import number_from_filename
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool import RangeExpr, SfmrReconstruction
 
 
 class IncludeRangeFilter:
     """Filter to keep only images whose file number is in the specified range."""
 
-    def __init__(self, range_expr: IntRangeExpr):
+    def __init__(self, range_expr: RangeExpr):
         self.range_expr = range_expr
         self.range_numbers = set(range_expr)
 
@@ -31,7 +30,7 @@ class IncludeRangeFilter:
 class ExcludeRangeFilter:
     """Filter to exclude images whose file number is in the specified range."""
 
-    def __init__(self, range_expr: IntRangeExpr):
+    def __init__(self, range_expr: RangeExpr):
         self.range_expr = range_expr
         self.range_numbers = set(range_expr)
 

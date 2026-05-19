@@ -21,7 +21,7 @@ sfm to-colmap-bin <INPUT.sfmr> <OUTPUT_DIR> [OPTIONS]
 `--filter-points` is only meaningful together with `--range`; supplying it without
 `--range` is an error. The range grammar matches `sfm sift -r`, `sfm match -r`,
 `sfm solve -r`, and `sfm xform --include-range` (parsed with
-`openjd.model.IntRangeExpr`, matched against file numbers recovered by
+`sfmtool.RangeExpr`, matched against file numbers recovered by
 `number_from_filename`).
 
 ## Output Files
@@ -91,7 +91,7 @@ remapping, and rig/frame filtering (dropping frames with no remaining
 images and remapping frame indices).
 
 The CLI shim (`src/sfmtool/_commands/to_colmap_bin.py`) parses `--range`
-with `IntRangeExpr`, resolves file numbers to image indices via
+with `RangeExpr`, resolves file numbers to image indices via
 `number_from_filename`, calls `subset_by_image_indices`, and hands the
 result to `save_colmap_binary`. No changes to `_colmap_io.save_colmap_binary`
 are required — it operates on whatever reconstruction it is handed.

@@ -5,8 +5,8 @@
 
 import numpy as np
 import pytest
-from openjd.model import IntRangeExpr
 
+from sfmtool import RangeExpr
 from sfmtool._filenames import number_from_filename
 from sfmtool.xform import ExcludeRangeFilter, IncludeRangeFilter
 from sfmtool.xform._filter_by_image_range import _filter_rig_frame_data
@@ -24,7 +24,7 @@ def test_include_range_filter(sfmrfile_reconstruction_with_17_images, tmp_path):
     output_path = tmp_path / "include_range.sfmr"
 
     # Keep only images 1-5 (out of 1-17)
-    range_expr = IntRangeExpr.from_str("1-5")
+    range_expr = RangeExpr("1-5")
     transforms = [IncludeRangeFilter(range_expr)]
 
     result = apply_transforms_to_file(
@@ -53,7 +53,7 @@ def test_include_range_filter_with_comma_separated(
     """Test include range filter with comma-separated values."""
     output_path = tmp_path / "include_range_comma.sfmr"
 
-    range_expr = IntRangeExpr.from_str("1,3,5,7")
+    range_expr = RangeExpr("1,3,5,7")
     transforms = [IncludeRangeFilter(range_expr)]
 
     result = apply_transforms_to_file(
@@ -77,7 +77,7 @@ def test_include_range_filter_mixed_format(
     """Test include range filter with mixed ranges and individual values."""
     output_path = tmp_path / "include_range_mixed.sfmr"
 
-    range_expr = IntRangeExpr.from_str("1-3,10,15-17")
+    range_expr = RangeExpr("1-3,10,15-17")
     transforms = [IncludeRangeFilter(range_expr)]
 
     result = apply_transforms_to_file(
@@ -101,7 +101,7 @@ def test_include_range_removes_orphaned_points(
     """Test that filtering images also removes 3D points with no remaining observations."""
     output_path = tmp_path / "include_range_orphaned.sfmr"
 
-    range_expr = IntRangeExpr.from_str("1-3")
+    range_expr = RangeExpr("1-3")
     transforms = [IncludeRangeFilter(range_expr)]
 
     result = apply_transforms_to_file(
@@ -124,7 +124,7 @@ def test_include_range_no_matching_images_raises_error(
     """Test that include range filter raises error when no images match."""
     output_path = tmp_path / "no_match.sfmr"
 
-    range_expr = IntRangeExpr.from_str("100-200")
+    range_expr = RangeExpr("100-200")
     transforms = [IncludeRangeFilter(range_expr)]
 
     with pytest.raises(ValueError, match="No images remain"):
@@ -142,7 +142,7 @@ def test_exclude_range_filter(sfmrfile_reconstruction_with_17_images, tmp_path):
     """Test that exclude range filter removes images in the specified range."""
     output_path = tmp_path / "exclude_range.sfmr"
 
-    range_expr = IntRangeExpr.from_str("1-5")
+    range_expr = RangeExpr("1-5")
     transforms = [ExcludeRangeFilter(range_expr)]
 
     result = apply_transforms_to_file(
@@ -171,7 +171,7 @@ def test_exclude_range_filter_single_image(
     """Test exclude range filter with a single image."""
     output_path = tmp_path / "exclude_single.sfmr"
 
-    range_expr = IntRangeExpr.from_str("10")
+    range_expr = RangeExpr("10")
     transforms = [ExcludeRangeFilter(range_expr)]
 
     result = apply_transforms_to_file(
@@ -196,7 +196,7 @@ def test_exclude_range_all_images_raises_error(
     """Test that exclude range filter raises error when all images are excluded."""
     output_path = tmp_path / "exclude_all.sfmr"
 
-    range_expr = IntRangeExpr.from_str("1-17")
+    range_expr = RangeExpr("1-17")
     transforms = [ExcludeRangeFilter(range_expr)]
 
     with pytest.raises(ValueError, match="No images remain"):
@@ -216,8 +216,8 @@ def test_include_and_exclude_range_combined(
     """Test using both include and exclude range in sequence."""
     output_path = tmp_path / "include_exclude.sfmr"
 
-    include_expr = IntRangeExpr.from_str("1-10")
-    exclude_expr = IntRangeExpr.from_str("5")
+    include_expr = RangeExpr("1-10")
+    exclude_expr = RangeExpr("5")
     transforms = [
         IncludeRangeFilter(include_expr),
         ExcludeRangeFilter(exclude_expr),
@@ -244,7 +244,7 @@ def test_range_filter_preserves_observation_counts(
     """Test that observation counts are correctly updated after filtering."""
     output_path = tmp_path / "range_obs_counts.sfmr"
 
-    range_expr = IntRangeExpr.from_str("5-15")
+    range_expr = RangeExpr("5-15")
     transforms = [IncludeRangeFilter(range_expr)]
 
     apply_transforms_to_file(

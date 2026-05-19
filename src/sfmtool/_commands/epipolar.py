@@ -52,7 +52,7 @@ def resolve_image_name(image_input: str, recon) -> str:
         error_msg += "\nPlease specify the full filename instead of the file number."
         raise click.ClickException(error_msg)
     else:
-        from openjd.model import IntRangeExpr
+        from .._sfmtool import RangeExpr
 
         available_numbers = []
         for image_name in image_names:
@@ -63,7 +63,7 @@ def resolve_image_name(image_input: str, recon) -> str:
         available_numbers.sort()
 
         if available_numbers:
-            range_expr = IntRangeExpr.from_list(available_numbers)
+            range_expr = RangeExpr.from_list(available_numbers)
             error_msg = (
                 f"File number {file_number} not found in reconstruction.\n"
                 f"Available file numbers: {range_expr}"

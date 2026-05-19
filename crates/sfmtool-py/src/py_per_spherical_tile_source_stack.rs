@@ -45,7 +45,7 @@ pub(crate) enum Inner {
 ///
 /// All three preserve the source's 0-255 range (so a u8 value `v` reads back
 /// as the storage type's representation of `v`, not `v / 255.0`).
-#[pyclass(name = "PerSphericalTileSourceStack", module = "sfmtool._sfmtool")]
+#[pyclass(name = "PerSphericalTileSourceStack", module = "sfmtool")]
 pub struct PyPerSphericalTileSourceStack {
     pub(crate) inner: Inner,
 }

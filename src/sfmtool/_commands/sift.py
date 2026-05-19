@@ -9,10 +9,10 @@ from pathlib import Path
 
 import click
 from deadline.job_attachments.api import summarize_path_list
-from openjd.model import IntRangeExpr
 
 from .._cli_utils import timed_command
 from .._filenames import expand_paths
+from .._sfmtool import RangeExpr
 from .._workspace import find_workspace_for_path, load_workspace_config
 from .._sift_file import (
     SiftExtractionError,
@@ -105,7 +105,7 @@ def sift(
 
     numbers = None
     if range_expr:
-        numbers = IntRangeExpr.from_str(range_expr)
+        numbers = RangeExpr(range_expr)
 
     # Convert any directories into lists of image paths for processing
     filenames = expand_paths(

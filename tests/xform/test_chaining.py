@@ -4,8 +4,8 @@
 """Tests for chaining multiple transforms together."""
 
 import numpy as np
-from openjd.model import IntRangeExpr
 
+from sfmtool import RangeExpr
 from sfmtool.xform import (
     BundleAdjustTransform,
     FilterByReprojectionErrorTransform,
@@ -72,7 +72,7 @@ def test_range_filter_chain_with_other_transforms(
     """Test that range filter can be chained with other transforms."""
     output_path = tmp_path / "range_chain.sfmr"
 
-    range_expr = IntRangeExpr.from_str("1-10")
+    range_expr = RangeExpr("1-10")
     transforms = [
         IncludeRangeFilter(range_expr),
         RemoveShortTracksFilter(2),
@@ -99,7 +99,7 @@ def test_complex_pipeline(sfmrfile_reconstruction_with_17_images, tmp_path):
     output_path = tmp_path / "complex_pipeline.sfmr"
 
     transforms = [
-        IncludeRangeFilter(IntRangeExpr.from_str("3-15")),
+        IncludeRangeFilter(RangeExpr("3-15")),
         RemoveShortTracksFilter(2),
         RotateTransform(np.array([1, 0, 0]), np.radians(30)),
         TranslateTransform(np.array([5, 0, 0])),
@@ -204,7 +204,7 @@ def test_all_filters_combined(sfmrfile_reconstruction_with_17_images, tmp_path):
     output_path = tmp_path / "all_filters.sfmr"
 
     transforms = [
-        IncludeRangeFilter(IntRangeExpr.from_str("2-16")),
+        IncludeRangeFilter(RangeExpr("2-16")),
         RemoveShortTracksFilter(2),
         FilterByReprojectionErrorTransform(threshold=5.0),
         RemoveNarrowTracksFilter(np.radians(2.0)),

@@ -29,7 +29,7 @@ use crate::PyCameraIntrinsics;
 ///     })
 ///     warp = WarpMap.from_cameras(src=camera, dst=pinhole)
 ///     undistorted = warp.remap_bilinear(image)
-#[pyclass(name = "WarpMap", module = "sfmtool._core")]
+#[pyclass(name = "WarpMap", module = "sfmtool")]
 pub struct PyWarpMap {
     pub(crate) inner: WarpMap,
 }

@@ -171,9 +171,9 @@ def match(
 
     numbers = None
     if range_expr:
-        from openjd.model import IntRangeExpr
+        from .._sfmtool import RangeExpr
 
-        numbers = IntRangeExpr.from_str(range_expr)
+        numbers = RangeExpr(range_expr)
 
     paths = [Path(p) for p in paths]
     filenames = expand_paths(
@@ -488,7 +488,8 @@ def _generate_output_path(
 ) -> Path:
     """Generate a timestamped output path for a .matches file."""
     from deadline.job_attachments.api import summarize_paths_by_sequence
-    from openjd.model import IntRangeExpr
+
+    from .._sfmtool import RangeExpr
 
     base_dir.mkdir(parents=True, exist_ok=True)
 
@@ -502,7 +503,7 @@ def _generate_output_path(
     if len(summaries) == 1 and summaries[0].index_set:
         summary = summaries[0]
         prefix = summary.path.split("%")[0].rstrip("_-")
-        range_str = str(IntRangeExpr.from_list(sorted(summary.index_set)))
+        range_str = str(RangeExpr.from_list(sorted(summary.index_set)))
         range_str = range_str.replace(":", "x")
         descriptor = f"{prefix}_{range_str}"
 

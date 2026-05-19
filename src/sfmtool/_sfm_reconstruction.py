@@ -13,7 +13,8 @@ from deadline.job_attachments.api import (
     summarize_path_list,
     summarize_paths_by_sequence,
 )
-from openjd.model import IntRangeExpr
+
+from ._sfmtool import RangeExpr
 
 
 def get_next_sfm_filename(
@@ -65,7 +66,7 @@ def _generate_image_descriptor(image_paths: list[str | Path]) -> str:
     if len(summaries) == 1 and summaries[0].index_set:
         summary = summaries[0]
         prefix = summary.path.split("%")[0].rstrip("_-")
-        range_str = str(IntRangeExpr.from_list(sorted(summary.index_set)))
+        range_str = str(RangeExpr.from_list(sorted(summary.index_set)))
         range_str = range_str.replace(":", "x")
         return f"{prefix}_{range_str}"
 

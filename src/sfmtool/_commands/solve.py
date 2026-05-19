@@ -9,10 +9,10 @@ from pathlib import Path
 
 import click
 from deadline.job_attachments.api import summarize_paths_by_sequence
-from openjd.model import IntRangeExpr
 
 from .._cli_utils import timed_command
 from .._filenames import expand_paths, number_from_filename
+from .._sfmtool import RangeExpr
 
 
 @click.command("solve")
@@ -255,7 +255,7 @@ def solve(
 
     numbers = None
     if range_expr:
-        numbers = IntRangeExpr.from_str(range_expr)
+        numbers = RangeExpr(range_expr)
 
     filenames = expand_paths(
         paths, extensions=(".png", ".jpg", ".jpeg"), numbers=numbers
@@ -407,14 +407,14 @@ def _run_sequential_overlap_sfm(
     )
     click.echo(
         f"Detected sequence with {len(sorted_numbers)} images: "
-        f"{IntRangeExpr.from_list(sorted_numbers)}"
+        f"{RangeExpr.from_list(sorted_numbers)}"
     )
     click.echo(f"Will perform {len(windows)} solves")
     click.echo()
 
     for i, window_numbers in enumerate(windows, 1):
         window_paths = [number_to_path[num] for num in window_numbers]
-        window_range = IntRangeExpr.from_list(window_numbers)
+        window_range = RangeExpr.from_list(window_numbers)
 
         click.echo(
             f"=== Solve {i}/{len(windows)}: "

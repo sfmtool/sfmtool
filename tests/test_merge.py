@@ -8,8 +8,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 from click.testing import CliRunner
-from openjd.model import IntRangeExpr
 
+from sfmtool import RangeExpr
 from sfmtool._merge import merge_reconstructions
 from sfmtool._sfmtool import SfmrReconstruction
 from sfmtool.cli import main
@@ -71,12 +71,12 @@ class TestMergeSubsets:
         _apply_transforms_to_file(
             original_path,
             subset_a_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("1-10"))],
+            [IncludeRangeFilter(RangeExpr("1-10"))],
         )
         _apply_transforms_to_file(
             original_path,
             subset_b_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("6-17"))],
+            [IncludeRangeFilter(RangeExpr("6-17"))],
         )
 
         subset_a = SfmrReconstruction.load(subset_a_path)
@@ -109,7 +109,7 @@ class TestMergeSubsets:
 
         for i, range_str in enumerate(ranges):
             subset_path = tmp_path / f"subset_{i}.sfmr"
-            range_expr = IntRangeExpr.from_str(range_str)
+            range_expr = RangeExpr(range_str)
             _apply_transforms_to_file(
                 original_path, subset_path, [IncludeRangeFilter(range_expr)]
             )
@@ -143,12 +143,12 @@ class TestMergeQuality:
         _apply_transforms_to_file(
             original_path,
             subset_a_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("1-10"))],
+            [IncludeRangeFilter(RangeExpr("1-10"))],
         )
         _apply_transforms_to_file(
             original_path,
             subset_b_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("6-17"))],
+            [IncludeRangeFilter(RangeExpr("6-17"))],
         )
 
         merged_path = tmp_path / "merged.sfmr"
@@ -182,12 +182,12 @@ class TestMergeQuality:
         _apply_transforms_to_file(
             original_path,
             subset_a_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("1-10"))],
+            [IncludeRangeFilter(RangeExpr("1-10"))],
         )
         _apply_transforms_to_file(
             original_path,
             subset_b_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("6-17"))],
+            [IncludeRangeFilter(RangeExpr("6-17"))],
         )
 
         merged_path = tmp_path / "merged.sfmr"
@@ -212,12 +212,12 @@ class TestMergeQuality:
         _apply_transforms_to_file(
             original_path,
             subset_a_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("1-10"))],
+            [IncludeRangeFilter(RangeExpr("1-10"))],
         )
         _apply_transforms_to_file(
             original_path,
             subset_b_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("6-17"))],
+            [IncludeRangeFilter(RangeExpr("6-17"))],
         )
 
         merged_path = tmp_path / "merged.sfmr"
@@ -269,12 +269,12 @@ class TestMergeQuality:
         _apply_transforms_to_file(
             original_path,
             subset_a_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("1-10"))],
+            [IncludeRangeFilter(RangeExpr("1-10"))],
         )
         _apply_transforms_to_file(
             original_path,
             subset_b_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("6-17"))],
+            [IncludeRangeFilter(RangeExpr("6-17"))],
         )
 
         merged_path = tmp_path / "merged.sfmr"
@@ -329,12 +329,12 @@ class TestMergeQuality:
         _apply_transforms_to_file(
             original_path,
             subset_a_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("1-12"))],
+            [IncludeRangeFilter(RangeExpr("1-12"))],
         )
         _apply_transforms_to_file(
             original_path,
             subset_b_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("6-17"))],
+            [IncludeRangeFilter(RangeExpr("6-17"))],
         )
 
         merged_path = tmp_path / "merged.sfmr"
@@ -375,12 +375,12 @@ class TestMergeCLI:
         _apply_transforms_to_file(
             original_path,
             subset_a_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("1-10"))],
+            [IncludeRangeFilter(RangeExpr("1-10"))],
         )
         _apply_transforms_to_file(
             original_path,
             subset_b_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("6-17"))],
+            [IncludeRangeFilter(RangeExpr("6-17"))],
         )
 
         output_path = tmp_path / "merged.sfmr"
@@ -484,12 +484,12 @@ class TestMergeCLI:
         _apply_transforms_to_file(
             rig_path,
             subset_a_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("1-10"))],
+            [IncludeRangeFilter(RangeExpr("1-10"))],
         )
         _apply_transforms_to_file(
             rig_path,
             subset_b_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("6-17"))],
+            [IncludeRangeFilter(RangeExpr("6-17"))],
         )
 
         # Merge should succeed (save without shape mismatch error)
@@ -523,12 +523,12 @@ class TestMergeCLI:
         _apply_transforms_to_file(
             original_path,
             subset_a_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("1-10"))],
+            [IncludeRangeFilter(RangeExpr("1-10"))],
         )
         _apply_transforms_to_file(
             original_path,
             subset_b_path,
-            [IncludeRangeFilter(IntRangeExpr.from_str("6-17"))],
+            [IncludeRangeFilter(RangeExpr("6-17"))],
         )
 
         output_path = tmp_path / "merged.sfmr"

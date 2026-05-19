@@ -5,8 +5,8 @@
 
 import numpy as np
 from click.testing import CliRunner
-from openjd.model import IntRangeExpr
 
+from sfmtool import RangeExpr
 from sfmtool._multi_align import (
     _build_connectivity_graph,
     _find_shared_images,
@@ -96,12 +96,8 @@ class TestAlignReconstructionsPoints:
         """Aligning reconstructions with no shared images should fail gracefully."""
         recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
         # Filter to disjoint image sets
-        subset1 = apply_transforms(
-            recon, [IncludeRangeFilter(IntRangeExpr.from_str("1-5"))]
-        )
-        subset2 = apply_transforms(
-            recon, [IncludeRangeFilter(IntRangeExpr.from_str("10-17"))]
-        )
+        subset1 = apply_transforms(recon, [IncludeRangeFilter(RangeExpr("1-5"))])
+        subset2 = apply_transforms(recon, [IncludeRangeFilter(RangeExpr("10-17"))])
 
         result = align_reconstructions(
             reference=subset1,

@@ -34,7 +34,7 @@ fn camrig_err_to_py(e: CamRigConversionError) -> PyErr {
 /// Every tile has identical intrinsics (focal length, half-FOV, patch
 /// resolution); only the rotation differs per tile so the tiles look in
 /// different directions on the unit sphere around the rig centre.
-#[pyclass(name = "SphericalTileRig", module = "sfmtool._sfmtool")]
+#[pyclass(name = "SphericalTileRig", module = "sfmtool")]
 pub struct PySphericalTileRig {
     pub(crate) inner: SphericalTileRig,
 }

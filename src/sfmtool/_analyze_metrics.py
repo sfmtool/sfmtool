@@ -92,14 +92,14 @@ def print_metrics_analysis(
     range_expr: str | None = None,
 ) -> None:
     """Print per-image metrics analysis sorted by mean reprojection error."""
-    from openjd.model import IntRangeExpr
+    from ._sfmtool import RangeExpr
 
     if recon_name is None:
         recon_name = sfmr_path.name
 
     range_numbers = None
     if range_expr is not None:
-        range_numbers = set(IntRangeExpr.from_str(range_expr))
+        range_numbers = set(RangeExpr(range_expr))
 
     rust_recon = SfmrReconstruction.load(sfmr_path)
 

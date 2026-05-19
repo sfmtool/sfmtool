@@ -9,9 +9,9 @@ from pathlib import Path
 
 import click
 import numpy as np
-from openjd.model import IntRangeExpr
 
 from .._cli_utils import timed_command
+from .._sfmtool import RangeExpr
 from ..xform import (
     AlignToInputTransform,
     AlignToTransform,
@@ -253,7 +253,7 @@ def parse_transform_args(args: list[str]) -> list:
             param = args[i]
 
             try:
-                range_expr = IntRangeExpr.from_str(param)
+                range_expr = RangeExpr(param)
             except ValueError as e:
                 raise click.UsageError(
                     f"Invalid --include-range parameter '{param}': {e}"
@@ -268,7 +268,7 @@ def parse_transform_args(args: list[str]) -> list:
             param = args[i]
 
             try:
-                range_expr = IntRangeExpr.from_str(param)
+                range_expr = RangeExpr(param)
             except ValueError as e:
                 raise click.UsageError(
                     f"Invalid --exclude-range parameter '{param}': {e}"
