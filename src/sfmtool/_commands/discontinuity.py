@@ -92,7 +92,7 @@ def discontinuity(
     """
     from deadline.job_attachments.api import summarize_paths_by_sequence
 
-    from .._discontinuity import analyze_image_sequence
+    from .._discontinuity_image_sequence import analyze_image_sequence
     from .._filenames import number_from_filename
 
     if not paths:
@@ -102,7 +102,7 @@ def discontinuity(
 
     # Check if input is a .sfmr file
     if len(paths) == 1 and paths[0].endswith(".sfmr"):
-        from .._discontinuity import analyze_reconstruction
+        from .._discontinuity_reconstruction import analyze_reconstruction
         from .._discontinuity_json import (
             reconstruction_results_to_json,
             write_report,

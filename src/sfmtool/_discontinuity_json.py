@@ -16,14 +16,14 @@ from typing import Any
 import click
 import numpy as np
 
-from ._discontinuity import (
+from ._discontinuity_constants import (
     OBS_Z_THRESHOLD,
     OVERLAP_DROP_THRESHOLD,
     POSE_ROT_DEG,
     POSE_TRANS_FACTOR,
     STEP_RATIO_THRESHOLD,
-    _rotation_angle_deg,
 )
+from ._discontinuity_reconstruction import _rotation_angle_deg
 
 
 SCHEMA_VERSION = 1
