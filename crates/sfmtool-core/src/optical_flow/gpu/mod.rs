@@ -98,9 +98,9 @@ impl GpuContext {
     }
 
     async fn new_async() -> Option<Self> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
         let adapter = instance
@@ -658,10 +658,12 @@ fn create_compute_pipeline(
         label: None,
         source: wgpu::ShaderSource::Wgsl(shader_source.into()),
     });
+    let layout_opts: Vec<Option<&wgpu::BindGroupLayout>> =
+        layouts.iter().map(|l| Some(*l)).collect();
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
-        bind_group_layouts: layouts,
-        push_constant_ranges: &[],
+        bind_group_layouts: &layout_opts,
+        ..Default::default()
     });
     device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: None,

@@ -68,7 +68,7 @@ pub(crate) fn py_to_u128_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<[u8; 16]>
 /// Accepts `list[CameraIntrinsics]` (typed Rust objects).
 pub(crate) fn extract_cameras_as_sfmr(obj: &Bound<'_, PyAny>) -> PyResult<Vec<SfmrCamera>> {
     let list = obj
-        .downcast::<PyList>()
+        .cast::<PyList>()
         .map_err(|_| pyo3::exceptions::PyTypeError::new_err("cameras must be a list"))?;
 
     let mut cameras = Vec::with_capacity(list.len());
@@ -126,7 +126,7 @@ pub(crate) fn extract_rig_frame_data(
         _ => return Ok(None),
     };
     let rf_dict = rf_obj
-        .downcast::<PyDict>()
+        .cast::<PyDict>()
         .map_err(|_| pyo3::exceptions::PyTypeError::new_err("rig_frame_data must be a dict"))?;
 
     let rigs_metadata: RigsMetadata = py_to_serde(py, &get_item(rf_dict, "rigs_metadata")?)?;

@@ -48,8 +48,8 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> TrackRayPipeli
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("track ray pipeline layout"),
-        bind_group_layouts: &[&bind_group_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&bind_group_layout)],
+        ..Default::default()
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -108,7 +108,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> TrackRayPipeli
             })],
             compilation_options: Default::default(),
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     });
 

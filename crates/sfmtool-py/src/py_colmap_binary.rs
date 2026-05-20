@@ -381,7 +381,7 @@ pub fn write_colmap_binary(dir: PathBuf, data: &Bound<'_, PyDict>) -> PyResult<(
 
     // Extract per-image keypoint arrays: list of (K,2) float64
     let kp_list_obj = get_item(data, "keypoints_per_image")?;
-    let kp_py_list = kp_list_obj.downcast::<PyList>().map_err(|_| {
+    let kp_py_list = kp_list_obj.cast::<PyList>().map_err(|_| {
         pyo3::exceptions::PyTypeError::new_err("keypoints_per_image must be a list")
     })?;
 
@@ -479,7 +479,7 @@ fn extract_colmap_rigs_frames(
         None => return Ok((None, None)),
     };
     let rfd = rfd
-        .downcast::<PyDict>()
+        .cast::<PyDict>()
         .map_err(|_| pyo3::exceptions::PyTypeError::new_err("rig_frame_data must be a dict"))?;
 
     // Extract arrays
@@ -505,18 +505,18 @@ fn extract_colmap_rigs_frames(
     // Extract rigs_metadata
     let rigs_metadata = get_item(rfd, "rigs_metadata")?;
     let rigs_metadata = rigs_metadata
-        .downcast::<PyDict>()
+        .cast::<PyDict>()
         .map_err(|_| pyo3::exceptions::PyTypeError::new_err("rigs_metadata must be a dict"))?;
     let rig_defs_list = get_item(rigs_metadata, "rigs")?;
     let rig_defs_list = rig_defs_list
-        .downcast::<PyList>()
+        .cast::<PyList>()
         .map_err(|_| pyo3::exceptions::PyTypeError::new_err("rigs must be a list"))?;
 
     // Build ColmapRig for each rig definition
     let mut colmap_rigs = Vec::with_capacity(rig_defs_list.len());
     for (rig_idx, rig_def_obj) in rig_defs_list.iter().enumerate() {
         let rig_def = rig_def_obj
-            .downcast::<PyDict>()
+            .cast::<PyDict>()
             .map_err(|_| pyo3::exceptions::PyTypeError::new_err("rig def must be a dict"))?;
         let sensor_count: usize = get_item(rig_def, "sensor_count")?.extract()?;
         let sensor_offset: usize = get_item(rig_def, "sensor_offset")?.extract()?;
@@ -612,7 +612,7 @@ fn extract_colmap_rigs_frames(
     let mut rig_ref_offsets: Vec<usize> = Vec::with_capacity(rig_defs_list.len());
     for rig_def_obj in rig_defs_list.iter() {
         let rig_def = rig_def_obj
-            .downcast::<PyDict>()
+            .cast::<PyDict>()
             .map_err(|_| pyo3::exceptions::PyTypeError::new_err("rig def must be a dict"))?;
         let offset: usize = get_item(rig_def, "sensor_offset")?.extract()?;
         rig_ref_offsets.push(offset);

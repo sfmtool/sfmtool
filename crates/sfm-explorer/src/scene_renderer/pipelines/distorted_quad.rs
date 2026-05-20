@@ -17,8 +17,8 @@ pub(in crate::scene_renderer) fn create(
     // Reuses the same bind group layout as image_quad (uniforms + texture array + sampler)
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("distorted quad pipeline layout"),
-        bind_group_layouts: &[image_quad_bind_group_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(image_quad_bind_group_layout)],
+        ..Default::default()
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -59,8 +59,8 @@ pub(in crate::scene_renderer) fn create(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Greater,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Greater),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -87,7 +87,7 @@ pub(in crate::scene_renderer) fn create(
             ],
             compilation_options: Default::default(),
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }
