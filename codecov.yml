@@ -1,0 +1,5 @@
+# The sfm-explorer crate is the native GUI viewer (winit + wgpu + egui).
+# Its rendering pipelines and UI callbacks can't be exercised without a GPU
+# and a window, so they have no tests and shouldn't count toward coverage.
+ignore:
+  - "crates/sfm-explorer"

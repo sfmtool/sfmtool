@@ -38,27 +38,26 @@ directmanipulation = []
 [dependencies]
 sfmtool-core = { path = "../sfmtool-core" }
 sift-format = { path = "../sift-format" }
-egui = "0.33"
-eframe = { version = "0.33", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
-egui_dock = "0.18"
-wgpu = { version = "27", features = ["dx12", "vulkan"] }
-nalgebra = "0.33"
+egui = "0.34"
+eframe = { version = "0.34", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+egui_dock = "0.19"
+wgpu = { version = "29", features = ["dx12", "vulkan"] }
+nalgebra = "0.34"
 bytemuck = { version = "1.14", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
-egui-winit = "0.33"
+egui-winit = "0.34"
 raw-window-handle = "0.6"
 winit = "0.30.12"
 pollster = "0.4"
-rfd = "0.15"
+rfd = "0.17"
 kiddo = "5"
-rand = "0.9"
+rand = "0.10"
 image = "0.25"
-ndarray = "0.16"
+ndarray = "0.17"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = [
-    "implement",
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_DirectManipulation",
     "Win32_Graphics_Gdi",
@@ -74,7 +73,7 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
-windows-core = "0.58"
+windows-core = "0.62"
 
 [build-dependencies]
 winres = "0.1"

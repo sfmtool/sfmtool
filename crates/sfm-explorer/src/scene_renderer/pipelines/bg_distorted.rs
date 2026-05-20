@@ -16,8 +16,8 @@ pub(in crate::scene_renderer) fn create(
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("bg image distorted pipeline layout"),
-        bind_group_layouts: &[bg_image_bind_group_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(bg_image_bind_group_layout)],
+        ..Default::default()
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -63,7 +63,7 @@ pub(in crate::scene_renderer) fn create(
             })],
             compilation_options: Default::default(),
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }

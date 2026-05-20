@@ -9,7 +9,7 @@ license = "Apache-2.0"
 description = "Read/write .sift file format for SIFT feature descriptors"
 
 [dependencies]
-ndarray = "0.16"
+ndarray = "0.17"
 bytemuck = { version = "1.14", features = ["derive"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 zstd = "0.13"

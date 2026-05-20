@@ -51,7 +51,7 @@ pub fn write_colmap_db(
 
     // Extract per-image keypoint arrays: list of (K,2) float64
     let kp_list_obj = get_item(data, "keypoints_per_image")?;
-    let kp_py_list = kp_list_obj.downcast::<PyList>().map_err(|_| {
+    let kp_py_list = kp_list_obj.cast::<PyList>().map_err(|_| {
         pyo3::exceptions::PyTypeError::new_err("keypoints_per_image must be a list")
     })?;
     let mut keypoints_per_image: Vec<Vec<[f64; 2]>> = Vec::with_capacity(kp_py_list.len());
@@ -68,7 +68,7 @@ pub fn write_colmap_db(
 
     // Extract per-image descriptor arrays: list of (K,D) uint8
     let desc_list_obj = get_item(data, "descriptors_per_image")?;
-    let desc_py_list = desc_list_obj.downcast::<PyList>().map_err(|_| {
+    let desc_py_list = desc_list_obj.cast::<PyList>().map_err(|_| {
         pyo3::exceptions::PyTypeError::new_err("descriptors_per_image must be a list")
     })?;
     let mut descriptors_per_image: Vec<Vec<u8>> = Vec::with_capacity(desc_py_list.len());
@@ -110,11 +110,11 @@ pub fn write_colmap_db(
         data.get_item("pose_priors")?
     {
         let priors_list = priors_obj
-            .downcast::<PyList>()
+            .cast::<PyList>()
             .map_err(|_| pyo3::exceptions::PyTypeError::new_err("pose_priors must be a list"))?;
         let mut priors = Vec::with_capacity(priors_list.len());
         for item in priors_list.iter() {
-            let dict = item.downcast::<PyDict>().map_err(|_| {
+            let dict = item.cast::<PyDict>().map_err(|_| {
                 pyo3::exceptions::PyTypeError::new_err("pose_prior entries must be dicts")
             })?;
             let pos: PyReadonlyArray1<f64> = get_item(dict, "position")?.extract()?;
@@ -145,12 +145,12 @@ pub fn write_colmap_db(
     let two_view_geometries: Option<Vec<colmap_db::TwoViewGeometry>> = if let Some(tvg_obj) =
         data.get_item("two_view_geometries")?
     {
-        let tvg_list = tvg_obj.downcast::<PyList>().map_err(|_| {
+        let tvg_list = tvg_obj.cast::<PyList>().map_err(|_| {
             pyo3::exceptions::PyTypeError::new_err("two_view_geometries must be a list")
         })?;
         let mut tvgs = Vec::with_capacity(tvg_list.len());
         for item in tvg_list.iter() {
-            let dict = item.downcast::<PyDict>().map_err(|_| {
+            let dict = item.cast::<PyDict>().map_err(|_| {
                 pyo3::exceptions::PyTypeError::new_err("two_view_geometry entries must be dicts")
             })?;
 

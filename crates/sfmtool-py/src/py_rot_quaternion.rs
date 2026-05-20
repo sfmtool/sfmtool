@@ -28,7 +28,7 @@ pub(crate) fn extract_f64_vec(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
 }
 
 /// Rotation quaternion for 3D rotations (WXYZ order).
-#[pyclass(name = "RotQuaternion", module = "sfmtool")]
+#[pyclass(name = "RotQuaternion", module = "sfmtool", from_py_object)]
 #[derive(Clone)]
 pub struct PyRotQuaternion {
     pub(crate) inner: sfmtool_core::RotQuaternion,

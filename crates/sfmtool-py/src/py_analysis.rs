@@ -270,7 +270,10 @@ pub fn merge_points_and_tracks_py(
     // Borrow all reconstructions.
     let recon_refs: Vec<PyRef<PySfmrReconstruction>> = reconstructions
         .iter()
-        .map(|item| item.extract::<PyRef<PySfmrReconstruction>>())
+        .map(|item| {
+            item.extract::<PyRef<PySfmrReconstruction>>()
+                .map_err(PyErr::from)
+        })
         .collect::<PyResult<Vec<_>>>()?;
     let inner_refs: Vec<&sfmtool_core::SfmrReconstruction> =
         recon_refs.iter().map(|r| &r.inner).collect();
@@ -279,11 +282,11 @@ pub fn merge_points_and_tracks_py(
     let groups: Vec<Vec<(usize, u32)>> = correspondence_groups
         .iter()
         .map(|group| {
-            let group_list = group.downcast::<PyList>()?;
+            let group_list = group.cast::<PyList>()?;
             group_list
                 .iter()
                 .map(|item| {
-                    let tuple = item.downcast::<PyTuple>()?;
+                    let tuple = item.cast::<PyTuple>()?;
                     let recon_idx: usize = tuple.get_item(0)?.extract()?;
                     let point_id: u32 = tuple.get_item(1)?.extract()?;
                     Ok((recon_idx, point_id))
@@ -298,9 +301,9 @@ pub fn merge_points_and_tracks_py(
 
     for (merged_idx, item) in image_mapping.iter().enumerate() {
         let (_name, occurrences) = item;
-        let occ_list = occurrences.downcast::<PyList>()?;
+        let occ_list = occurrences.cast::<PyList>()?;
         for occ in occ_list.iter() {
-            let tuple = occ.downcast::<PyTuple>()?;
+            let tuple = occ.cast::<PyTuple>()?;
             let recon_idx: usize = tuple.get_item(0)?.extract()?;
             let old_img_idx: u32 = tuple.get_item(1)?.extract()?;
             reverse_mapping[recon_idx]
