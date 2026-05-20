@@ -36,8 +36,8 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("point pipeline layout"),
-        bind_group_layouts: &[&bind_group_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&bind_group_layout)],
+        ..Default::default()
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -86,8 +86,8 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Greater,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Greater),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -117,7 +117,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
             ],
             compilation_options: Default::default(),
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     });
 

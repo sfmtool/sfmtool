@@ -14,7 +14,7 @@
 //! row-major order: `[x0, y0, z0, x1, y1, z1, ...]`.
 
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng};
 use rand_distr::StandardNormal;
 use rayon::prelude::*;
 use std::f32::consts::PI;

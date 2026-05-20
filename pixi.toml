@@ -51,7 +51,7 @@ check = "ruff check src tests"
 ipython = "ipython"
 
 [feature.docs.pypi-dependencies]
-zensical = ">=0.0.33, <0.0.34"
+zensical = ">=0.0.43, <0.0.44"
 
 [feature.docs.tasks]
 docs-serve = "zensical serve"

@@ -89,13 +89,14 @@ impl App {
 
         // Get the surface texture to render to
         let output = match surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+            wgpu::CurrentSurfaceTexture::Success(output)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 surface.configure(device, surface_config);
                 return;
             }
-            Err(e) => {
-                log::error!("wgpu surface error: {:?}", e);
+            other => {
+                log::error!("wgpu surface error: {:?}", other);
                 return;
             }
         };
@@ -350,12 +351,14 @@ impl App {
         let point_track_detail = &mut self.point_track_detail;
         let dock_state = &mut self.dock_state;
 
-        let full_output = self.egui_ctx.run(raw_input, |ctx| {
+        let full_output = self.egui_ctx.run_ui(raw_input, |root_ui| {
             // Accumulate scroll events once per frame, with DM-aware suppression.
-            let scroll_input =
-                platform::ScrollInput::from_ctx(ctx, handler_ok && !gesture_events.is_empty());
+            let scroll_input = platform::ScrollInput::from_ctx(
+                root_ui.ctx(),
+                handler_ok && !gesture_events.is_empty(),
+            );
 
-            egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+            egui::Panel::top("menu_bar").show_inside(root_ui, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button("File", |ui| {
                         if ui.button("Open...").clicked() {
@@ -424,7 +427,7 @@ impl App {
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                    .show(ctx, |ui| {
+                    .show(root_ui.ctx(), |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Number of points:");
                             ui.add(
@@ -455,7 +458,7 @@ impl App {
                 }
             }
 
-            egui::CentralPanel::default().show(ctx, |ui| {
+            egui::CentralPanel::default().show_inside(root_ui, |ui| {
                 let mut tab_context = TabContext {
                     state: app_state,
                     viewer_3d,

@@ -3,6 +3,7 @@
 
 use crate::camera_intrinsics::CameraIntrinsics;
 use nalgebra::{Matrix3, Vector3};
+use rand::RngExt;
 
 /// Compute 8 corners of a camera frustum in world coordinates.
 ///

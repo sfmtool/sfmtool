@@ -180,9 +180,9 @@ impl ApplicationHandler for App {
         self.window = Some(window.clone());
 
         // Step 2: Raw wgpu setup
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::DX12,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
         let surface = instance

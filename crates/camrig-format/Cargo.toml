@@ -9,7 +9,7 @@ license = "Apache-2.0"
 description = "Read/write .camrig file format for camera rigs"
 
 [dependencies]
-ndarray = "0.16"
+ndarray = "0.17"
 bytemuck = "1.14"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 zstd = "0.13"
