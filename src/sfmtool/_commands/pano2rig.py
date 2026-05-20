@@ -11,8 +11,9 @@ from .._cli_utils import timed_command
 from .._pano2rig import (
     _cubemap_rotations,
     convert_panoramas,
-    write_rig_config,
+    write_pano_camrig,
 )
+from .._workspace import find_workspace_for_path
 
 
 @click.command("pano2rig")
@@ -43,7 +44,8 @@ def pano2rig(input_dir, output_dir, face_size, jpeg_quality):
     """Convert equirectangular panoramas to perspective face images for rig-aware SfM.
 
     Reads equirectangular (360) panorama images from INPUT_DIR and generates
-    perspective face images under the OUTPUT directory.
+    perspective face images under the OUTPUT directory, then writes a .camrig
+    file describing the six-face cubemap rig.
 
     Generates a standard 6-face cubemap (front, right, back, left,
     top, bottom) with 90-degree FOV. Face images are written to
@@ -64,6 +66,12 @@ def pano2rig(input_dir, output_dir, face_size, jpeg_quality):
     output_dir = Path(output_dir).resolve()
 
     try:
+        if find_workspace_for_path(output_dir) is None:
+            raise RuntimeError(
+                f"No workspace found at or above {output_dir}. "
+                f"Initialize one with 'sfm ws init'."
+            )
+
         click.echo(f"Input: {input_dir}")
         click.echo(f"Output: {output_dir}")
         num_panos, actual_face_size, face_names = convert_panoramas(
@@ -78,15 +86,18 @@ def pano2rig(input_dir, output_dir, face_size, jpeg_quality):
             f"(face size: {actual_face_size}x{actual_face_size})"
         )
 
-        write_rig_config(
-            output_dir,
-            face_names,
-            _cubemap_rotations(),
-            camera_model_name="PINHOLE",
+        camrig_path = output_dir / "cubemap.camrig"
+        write_pano_camrig(
+            camrig_path,
+            rig_name="cubemap",
+            face_names=face_names,
+            rotations=_cubemap_rotations(),
+            face_size=actual_face_size,
         )
 
         click.echo(f"Output: {output_dir}")
         click.echo(f"  Face directories: {output_dir}/<name>/")
+        click.echo(f"  Camera rig: {camrig_path}")
         click.echo()
         click.echo("Next steps:")
         click.echo(f"  sfm sift --extract {output_dir}")

@@ -7,15 +7,18 @@ Converts equirectangular (360) panoramas into perspective face images
 suitable for rig-aware SfM using a standard 6-face cubemap layout.
 """
 
-import json
 import math
-import os
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 from ._sfmtool import RotQuaternion
+
+# Per-sensor frame filename template. The `%06d` field is both the output
+# filename and a `.camrig` frame field, so the same string names the extracted
+# face images and the rig's image pattern.
+_PANO_FRAME_PATTERN = "frame_%06d.jpg"
 
 # Standard cubemap: 6 faces looking along +Z, +X, -Z, -X, +Y, -Y
 #
@@ -121,138 +124,6 @@ def default_face_size(pano_width: int) -> int:
     return pano_width // 4
 
 
-def generate_rig_config_json(
-    face_names: list[str],
-    prefix_base: str = "",
-    rotations: list[RotQuaternion] | None = None,
-    translations: list[list[float]] | None = None,
-    camera_model_name: str | None = None,
-    camera_params: list[float] | None = None,
-) -> dict:
-    """Generate a COLMAP rig config entry.
-
-    The output matches COLMAP's ``rig_configurator`` file format: intrinsics
-    are attached per sensor via ``camera_model_name`` and ``camera_params``.
-
-    Args:
-        face_names: List of face/sensor names.
-        prefix_base: Workspace-relative path prefix for image directories.
-            If non-empty, should end with '/'.
-        rotations: Optional list of sensor_from_rig rotations (one per face).
-            The ref sensor (index 0) rotation is ignored. Non-ref sensors get
-            cam_from_rig_rotation written as WXYZ quaternion. These rotations
-            use the Y-up ray convention (as used in extract_perspective_face);
-            they are converted to COLMAP's Y-down convention via [w, -x, y, -z]
-            when written.
-        translations: Optional list of sensor_from_rig translations [x, y, z]
-            (one per face). The ref sensor (index 0) translation is ignored.
-            Non-ref sensors get cam_from_rig_translation written as [X, Y, Z].
-        camera_model_name: Optional COLMAP camera model name (e.g. "PINHOLE",
-            "OPENCV_FISHEYE") written on every sensor entry.
-        camera_params: Optional positional camera parameter array written on
-            every sensor entry. Requires camera_model_name.
-
-    Returns:
-        Dict with a "cameras" list, suitable as one entry in rig_config.json.
-    """
-    if camera_params is not None and camera_model_name is None:
-        raise ValueError("camera_params requires camera_model_name")
-
-    cameras = []
-    for i, name in enumerate(face_names):
-        cam = {"image_prefix": f"{prefix_base}{name}/"}
-        if i == 0:
-            cam["ref_sensor"] = True
-        else:
-            cam["ref_sensor"] = False
-            if rotations is not None:
-                q = rotations[i]
-                # Convert from Y-up extraction convention to COLMAP's Y-down
-                # convention: negate x and z quaternion components.
-                cam["cam_from_rig_rotation"] = [q.w, -q.x, q.y, -q.z]
-            if translations is not None:
-                cam["cam_from_rig_translation"] = translations[i]
-        if camera_model_name is not None:
-            cam["camera_model_name"] = camera_model_name
-        if camera_params is not None:
-            cam["camera_params"] = list(camera_params)
-        cameras.append(cam)
-    return {"cameras": cameras}
-
-
-def build_rig_frame_data(
-    face_names: list[str],
-    rotations: list[RotQuaternion],
-    num_panoramas: int,
-    camera_index: int = 0,
-) -> dict:
-    """Build rig_frame_data dict for writing into .sfmr files.
-
-    Args:
-        face_names: List of sensor names.
-        rotations: List of sensor_from_rig RotQuaternion rotations.
-        num_panoramas: Number of panoramas (= number of frames).
-        camera_index: Camera intrinsics index for all sensors (same PINHOLE model).
-
-    Returns:
-        Dictionary matching the rig_frame_data format expected by sfmr_file.write_sfm().
-    """
-    num_sensors = len(face_names)
-    num_images = num_panoramas * num_sensors
-
-    # Rig metadata
-    rigs_metadata = {
-        "rig_count": 1,
-        "sensor_count": num_sensors,
-        "rigs": [
-            {
-                "name": "pano2rig",
-                "sensor_count": num_sensors,
-                "sensor_offset": 0,
-                "ref_sensor_name": face_names[0],
-                "sensor_names": face_names,
-            }
-        ],
-    }
-
-    # Sensor arrays
-    sensor_camera_indexes = np.full(num_sensors, camera_index, dtype=np.uint32)
-    sensor_quaternions_wxyz = np.zeros((num_sensors, 4), dtype=np.float64)
-    sensor_translations_xyz = np.zeros((num_sensors, 3), dtype=np.float64)
-
-    for i, q in enumerate(rotations):
-        sensor_quaternions_wxyz[i] = q.to_wxyz_array()
-
-    # Frames metadata
-    frames_metadata = {"frame_count": num_panoramas}
-
-    # Frame arrays
-    rig_indexes = np.zeros(num_panoramas, dtype=np.uint32)  # all frames use rig 0
-
-    # Image->sensor and image->frame mappings
-    # Images are ordered: face0_pano0, face0_pano1, ..., face1_pano0, face1_pano1, ...
-    # i.e., grouped by face subdirectory
-    image_sensor_indexes = np.zeros(num_images, dtype=np.uint32)
-    image_frame_indexes = np.zeros(num_images, dtype=np.uint32)
-
-    for sensor_idx in range(num_sensors):
-        for frame_idx in range(num_panoramas):
-            img_idx = sensor_idx * num_panoramas + frame_idx
-            image_sensor_indexes[img_idx] = sensor_idx
-            image_frame_indexes[img_idx] = frame_idx
-
-    return {
-        "rigs_metadata": rigs_metadata,
-        "sensor_camera_indexes": sensor_camera_indexes,
-        "sensor_quaternions_wxyz": sensor_quaternions_wxyz,
-        "sensor_translations_xyz": sensor_translations_xyz,
-        "frames_metadata": frames_metadata,
-        "rig_indexes": rig_indexes,
-        "image_sensor_indexes": image_sensor_indexes,
-        "image_frame_indexes": image_frame_indexes,
-    }
-
-
 def find_panorama_images(input_dir: Path) -> list[Path]:
     """Find panorama images in a directory.
 
@@ -309,20 +180,21 @@ def convert_panoramas(
         d.mkdir(parents=True, exist_ok=True)
         face_dirs.append(d)
 
-    # Process each panorama
-    for pano_path in pano_paths:
+    # Process each panorama. Faces are named by frame index — the panorama's
+    # position in sorted order — so each sensor's images carry a `.camrig`
+    # frame field and frames pair up across faces.
+    for frame_idx, pano_path in enumerate(pano_paths):
         pano = cv2.imread(
             str(pano_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
         )
         if pano is None:
             raise ValueError(f"Failed to read panorama image: {pano_path}")
 
-        stem = pano_path.stem
-
+        frame_name = _PANO_FRAME_PATTERN % frame_idx
         for i, (name, rotation) in enumerate(zip(face_names, rotations)):
             face = extract_perspective_face(pano, rotation, face_size)
 
-            out_path = face_dirs[i] / f"{stem}.jpg"
+            out_path = face_dirs[i] / frame_name
             cv2.imwrite(
                 str(out_path),
                 face,
@@ -332,73 +204,58 @@ def convert_panoramas(
     return len(pano_paths), face_size, face_names
 
 
-def write_rig_config(
-    output_dir: Path,
+def write_pano_camrig(
+    camrig_path: Path,
+    *,
+    rig_name: str,
     face_names: list[str],
-    rotations: list[RotQuaternion] | None = None,
-    translations: list[list[float]] | None = None,
-    camera_model_name: str | None = None,
-    camera_params: list[float] | None = None,
+    rotations: list[RotQuaternion],
+    face_size: int,
 ) -> None:
-    """Write rig configuration into an existing workspace.
+    """Write a six-face cubemap rig to a ``.camrig`` file.
 
-    Appends a new rig entry to rig_config.json (COLMAP rig_configurator
-    format).
-
-    Args:
-        output_dir: Workspace directory.
-        face_names: List of face/sensor names.
-        rotations: Optional list of sensor_from_rig rotations (one per face).
-        translations: Optional list of sensor_from_rig translations [x, y, z]
-            (one per face).
-        camera_model_name: Optional COLMAP camera model name written on every
-            sensor entry (e.g. "PINHOLE").
-        camera_params: Optional positional camera parameter array written on
-            every sensor entry.
+    All six faces share one square 90°-FOV ``PINHOLE`` camera and one optical
+    centre, so the camera pool holds a single entry and every translation is
+    zero. ``rotations`` are the ``sensor_from_rig`` rotations in the Y-up ray
+    convention ``extract_perspective_face`` uses; conjugating by the Y-flip
+    (negating the x and z quaternion components) converts each to COLMAP's
+    Y-down camera convention, which the ``.camrig`` format stores. Each
+    sensor's image pattern is ``<face>/frame_%06d.jpg``, relative to the
+    directory holding the ``.camrig`` file (the rig root).
     """
-    from ._workspace import find_workspace_for_path
+    from ._sfmtool import CameraIntrinsics, write_camrig
 
-    workspace_dir = find_workspace_for_path(output_dir)
-    if workspace_dir is None:
-        raise RuntimeError(
-            f"No workspace found at or above {output_dir}. "
-            f"Initialize one with 'sfm ws init'."
-        )
+    # 90° FOV over a square face: half-FOV is 45°, so fx = fy = face_size / 2.
+    # The principal point sits at the image centre, face_size / 2 in COLMAP's
+    # pixel-coordinate convention.
+    half = face_size / 2.0
+    camera = CameraIntrinsics.from_dict(
+        {
+            "model": "PINHOLE",
+            "width": face_size,
+            "height": face_size,
+            "parameters": {
+                "focal_length_x": half,
+                "focal_length_y": half,
+                "principal_point_x": half,
+                "principal_point_y": half,
+            },
+        }
+    ).to_dict()
 
-    # Compute workspace-relative prefix for the output directory
-    output_rel = Path(os.path.relpath(output_dir, workspace_dir))
-    prefix_base = output_rel.as_posix()
-    if prefix_base == ".":
-        prefix_base = ""
-    else:
-        prefix_base = prefix_base + "/"
-
-    # Write COLMAP-format rig_config.json
-    # If an existing rig entry has overlapping image prefixes, replace it;
-    # otherwise append as a new rig entry.
-    new_rig = generate_rig_config_json(
-        face_names,
-        prefix_base,
-        rotations,
-        translations,
-        camera_model_name,
-        camera_params,
+    quaternions_wxyz = np.array(
+        [[q.w, -q.x, q.y, -q.z] for q in rotations], dtype=np.float64
     )
-    new_prefixes = {c["image_prefix"] for c in new_rig["cameras"]}
-    rig_config_path = workspace_dir / "rig_config.json"
-    if rig_config_path.exists():
-        with open(rig_config_path) as f:
-            rig_config = json.load(f)
-        replaced = False
-        for i, existing_rig in enumerate(rig_config):
-            existing_prefixes = {c["image_prefix"] for c in existing_rig["cameras"]}
-            if existing_prefixes & new_prefixes:
-                rig_config[i] = new_rig
-                replaced = True
-                break
-        if not replaced:
-            rig_config.append(new_rig)
-    else:
-        rig_config = [new_rig]
-    with open(rig_config_path, "w") as f:
-        json.dump(rig_config, f, indent=2)
+    translations_xyz = np.zeros((len(face_names), 3), dtype=np.float64)
+
+    patterns = [f"{name}/{_PANO_FRAME_PATTERN}" for name in face_names]
+    write_camrig(
+        path=str(camrig_path),
+        name=rig_name,
+        rig_type="cubemap",
+        cameras=[camera],
+        sensor_image_patterns=patterns,
+        camera_indexes=[0] * len(face_names),
+        quaternions_wxyz=quaternions_wxyz,
+        translations_xyz=translations_xyz,
+    )

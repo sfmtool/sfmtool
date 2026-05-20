@@ -1,8 +1,5 @@
 # The camera rig file format
 
-**Status:** Draft. The format is implemented in `crates/camrig-format/`.
-This spec and the implementation are expected to iterate together.
-
 A `.camrig` file stores a **camera rig**: a set of cameras (called *sensors*)
 held in fixed relative poses. It is deliberately one format for the whole
 range of rigs sfmtool produces:
@@ -415,4 +412,4 @@ $ jq . cameras/metadata.json
 
 ## Version history
 
-- **Version 1 (draft)**: Initial draft.
+- **Version 1**: Initial release.
