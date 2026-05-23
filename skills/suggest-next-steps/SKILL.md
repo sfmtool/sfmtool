@@ -44,6 +44,15 @@ Each item:
 - Open questions: <the hard parts the discussion would need to resolve>
 ```
 
+## Saving the report
+
+Write both lists to `reports/<date>-next-steps.md`, where `<date>` is today's
+date in `YYYY-MM-DD` form (get it with `date +%F`). Create the `reports/`
+directory if it doesn't exist. Each run is a dated snapshot — do not overwrite a
+prior day's report. After saving, tell the user the path and give a short
+summary of the top implementation tasks in the conversation; don't paste the
+whole report back.
+
 ## Guidelines
 
 - Be concrete: "implement `sfm xform crop`" is useful; "improve transforms" is not.

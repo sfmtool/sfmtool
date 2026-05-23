@@ -9,9 +9,13 @@ Take a set of candidate tasks (typically the output of `audit-specs`, `suggest-n
 
 ## Inputs
 
-If the current conversation already contains a set of candidate tasks (e.g., the user listed them, or a prior skill run produced them), use those.
+Draw candidate tasks from the first available source:
 
-Otherwise, run all three of `audit-specs`, `audit-hygiene`, and `suggest-next-steps` first — in parallel, via `Agent` subagents — and pool their outputs into a single candidate list covering spec/code inconsistencies, hygiene problems, and new-feature ideas. The random pick then draws from across all three sources, so any of them can be the starting point for the end-to-end implementation.
+1. **This conversation** — if the user listed candidates or a prior skill run already produced them, use those.
+2. **Saved reports** — otherwise check `reports/` for the most recent `*-hygiene-audit.md`, `*-spec-audit.md`, and `*-next-steps.md` files (the three audit skills save dated snapshots there). If present and still current, pool their findings into the candidate list.
+3. **Fresh audits** — otherwise run all three of `audit-specs`, `audit-hygiene`, and `suggest-next-steps` first — in parallel, via `Agent` subagents. Each saves a dated report under `reports/`; pool their outputs.
+
+Pool across sources into a single candidate list covering spec/code inconsistencies, hygiene problems, and new-feature ideas. The random pick then draws from across all sources, so any of them can be the starting point for the end-to-end implementation.
 
 ## Stage 0 — Random selection
 
@@ -33,6 +37,8 @@ Write a proposal covering:
 - Open questions
 
 Then dispatch an `Agent` subagent to cross-validate: hand it the proposal and ask for (a) gaps or risks, (b) anything that's hand-wavy, (c) whether the approach seems right. Incorporate feedback. Loop if needed — proposal quality is cheap to improve at this stage.
+
+The proposal is a working artifact — keep it in the conversation, not under `reports/` (that directory is only for the audit/eval skill snapshots). The spec it becomes lands under `specs/` (Stage 2).
 
 ## Stage 2 — Spec
 

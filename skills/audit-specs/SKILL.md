@@ -46,6 +46,15 @@ Then a **Code without specs** section — each entry:
 
 End the report with a **Top priorities** section listing the 3–5 most important fixes across both divergences and missing specs.
 
+## Saving the report
+
+Write the full report to `reports/<date>-spec-audit.md`, where `<date>` is
+today's date in `YYYY-MM-DD` form (get it with `date +%F`). Create the
+`reports/` directory if it doesn't exist. Each run is a dated snapshot — do not
+overwrite a prior day's report. After saving, tell the user the path and give a
+short summary of the Top priorities in the conversation; don't paste the whole
+report back.
+
 ## Guidelines
 
 - Inconsistencies must be concrete — cite line numbers or symbol names, not vague "the spec is out of date."
