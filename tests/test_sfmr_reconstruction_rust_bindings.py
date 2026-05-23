@@ -130,3 +130,33 @@ class TestInfinityConversions:
         # No points at infinity — materialise is a no-op on the positions.
         materialized = recon.materialize_points_at_infinity()
         np.testing.assert_array_equal(materialized.positions, recon.positions)
+
+
+class TestWorldSpaceUnit:
+    def test_default_is_none(self, sfmrfile_reconstruction_with_17_images):
+        # A freshly solved reconstruction is in arbitrary units.
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        assert recon.world_space_unit is None
+
+    def test_clone_sets_and_clears_unit(self, sfmrfile_reconstruction_with_17_images):
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+
+        scaled = recon.clone_with_changes(world_space_unit="m")
+        assert scaled.world_space_unit == "m"
+        # The original is untouched.
+        assert recon.world_space_unit is None
+
+        cleared = scaled.clone_with_changes(world_space_unit=None)
+        assert cleared.world_space_unit is None
+
+    def test_unit_survives_save_load_roundtrip(
+        self, sfmrfile_reconstruction_with_17_images, tmp_path
+    ):
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        scaled = recon.clone_with_changes(world_space_unit="mm")
+
+        out_path = tmp_path / "scaled.sfmr"
+        scaled.save(out_path)
+
+        reloaded = SfmrReconstruction.load(out_path)
+        assert reloaded.world_space_unit == "mm"

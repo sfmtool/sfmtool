@@ -137,6 +137,12 @@ pub struct SfmrMetadata {
     /// Number of frames (temporal instants). Present only when rig data exists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame_count: Option<u32>,
+    /// Physical unit of 3D world-space coordinates (point positions and camera
+    /// translations). One of `"mm"`, `"cm"`, `"m"`, `"in"`, `"ft"`. Absent when
+    /// the reconstruction is in arbitrary (unscaled) units — the default after
+    /// an SfM solve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub world_space_unit: Option<String>,
 }
 
 /// Content integrity hashes from `content_hash.json.zst`.

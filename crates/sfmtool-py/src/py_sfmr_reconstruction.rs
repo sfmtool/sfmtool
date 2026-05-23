@@ -555,12 +555,7 @@ impl PySfmrReconstruction {
     /// World space unit string, or None.
     #[getter]
     fn world_space_unit(&self) -> Option<String> {
-        self.inner
-            .metadata
-            .tool_options
-            .get("world_space_unit")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+        self.inner.metadata.world_space_unit.clone()
     }
 
     /// Create a copy of this reconstruction with some fields replaced.
@@ -930,13 +925,9 @@ impl PySfmrReconstruction {
                 }
                 "world_space_unit" => {
                     if value.is_none() {
-                        recon.metadata.tool_options.remove("world_space_unit");
+                        recon.metadata.world_space_unit = None;
                     } else {
-                        let unit: String = value.extract()?;
-                        recon.metadata.tool_options.insert(
-                            "world_space_unit".to_string(),
-                            serde_json::Value::String(unit),
-                        );
+                        recon.metadata.world_space_unit = Some(value.extract()?);
                     }
                 }
                 other => {
