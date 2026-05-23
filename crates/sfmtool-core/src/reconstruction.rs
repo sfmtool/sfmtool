@@ -1178,6 +1178,7 @@ impl SfmrReconstruction {
             rig_count: None,
             sensor_count: None,
             frame_count: None,
+            world_space_unit: None,
         };
 
         let observation_offsets = compute_observation_offsets(&observation_counts);

@@ -78,6 +78,7 @@ mod tests {
                 rig_count: None,
                 sensor_count: None,
                 frame_count: None,
+                world_space_unit: None,
             },
             content_hash: ContentHash {
                 metadata_xxh128: String::new(),
@@ -498,6 +499,7 @@ mod tests {
                 rig_count: None,
                 sensor_count: None,
                 frame_count: None,
+                world_space_unit: None,
             },
             content_hash: ContentHash {
                 metadata_xxh128: String::new(),
