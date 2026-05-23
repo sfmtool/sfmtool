@@ -84,7 +84,7 @@ fn get_inverted_scroll() -> bool {
     let subkey =
         windows::core::w!("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\PrecisionTouchPad");
     unsafe {
-        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey, 0, KEY_READ, &mut hkey).is_ok() {
+        if RegOpenKeyExW(HKEY_CURRENT_USER, subkey, Some(0), KEY_READ, &mut hkey).is_ok() {
             let mut value = 0u32;
             let mut size = std::mem::size_of::<u32>() as u32;
             let mut type_ = REG_DWORD;
@@ -225,7 +225,7 @@ struct ViewportEventHandler {
 impl IDirectManipulationViewportEventHandler_Impl for ViewportEventHandler_Impl {
     fn OnViewportStatusChanged(
         &self,
-        _viewport: Option<&IDirectManipulationViewport>,
+        _viewport: windows_core::Ref<'_, IDirectManipulationViewport>,
         current: DIRECTMANIPULATION_STATUS,
         previous: DIRECTMANIPULATION_STATUS,
     ) -> windows::core::Result<()> {
@@ -245,21 +245,21 @@ impl IDirectManipulationViewportEventHandler_Impl for ViewportEventHandler_Impl 
 
     fn OnViewportUpdated(
         &self,
-        _viewport: Option<&IDirectManipulationViewport>,
+        _viewport: windows_core::Ref<'_, IDirectManipulationViewport>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
 
     fn OnContentUpdated(
         &self,
-        _viewport: Option<&IDirectManipulationViewport>,
-        content: Option<&IDirectManipulationContent>,
+        _viewport: windows_core::Ref<'_, IDirectManipulationViewport>,
+        content: windows_core::Ref<'_, IDirectManipulationContent>,
     ) -> windows::core::Result<()> {
         if let Ok(mut state) = self.state.lock() {
             state.update_count += 1;
         }
 
-        let Some(content) = content else {
+        let Some(content) = content.as_ref() else {
             log::warn!("OnContentUpdated called with no content");
             return Ok(());
         };
@@ -472,7 +472,7 @@ impl WinGestureHandler {
             state: Arc::clone(&state),
         };
         let handler_interface: IDirectManipulationViewportEventHandler = event_handler.into();
-        let _cookie = unsafe { viewport.AddEventHandler(hwnd, &handler_interface) }?;
+        let _cookie = unsafe { viewport.AddEventHandler(Some(hwnd), &handler_interface) }?;
 
         // Set viewport rect AFTER AddEventHandler
         let viewport_rect = RECT {

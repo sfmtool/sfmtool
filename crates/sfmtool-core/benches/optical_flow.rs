@@ -11,8 +11,9 @@
 //!
 //! The test images used (dino_dog_toy at 2040x1536) are checked into the repo.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use sfmtool_core::optical_flow::{self, bench, compute_optical_flow, DisFlowParams, GrayImage};
+use std::hint::black_box;
 use std::time::Duration;
 
 fn test_data_dir() -> std::path::PathBuf {

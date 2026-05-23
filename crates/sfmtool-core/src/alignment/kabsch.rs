@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn test_random_similarity_round_trip() {
         use rand::rngs::StdRng;
-        use rand::Rng;
+        use rand::RngExt;
         use rand::SeedableRng;
 
         let mut rng = StdRng::seed_from_u64(12345);

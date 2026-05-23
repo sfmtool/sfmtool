@@ -507,7 +507,7 @@ pub(crate) fn parse_sources(
     let mut out = Vec::new();
     for item in obj.try_iter()? {
         let item = item?;
-        let tup: Bound<'_, PyTuple> = item.downcast_into::<PyTuple>().map_err(|_| {
+        let tup: Bound<'_, PyTuple> = item.cast_into::<PyTuple>().map_err(|_| {
             pyo3::exceptions::PyTypeError::new_err(
                 "each source must be a (CameraIntrinsics, RotQuaternion, ndarray) tuple",
             )

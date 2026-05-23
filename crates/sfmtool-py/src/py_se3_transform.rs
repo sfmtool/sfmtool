@@ -13,7 +13,7 @@ use crate::py_rot_quaternion::{extract_f64_vec, PyRotQuaternion};
 /// SE(3) similarity transform: rotation, translation, and uniform scale.
 ///
 /// Applies as: ``p' = scale * (R * p) + t``
-#[pyclass(name = "Se3Transform", module = "sfmtool")]
+#[pyclass(name = "Se3Transform", module = "sfmtool", from_py_object)]
 #[derive(Clone)]
 pub struct PySe3Transform {
     pub(crate) inner: sfmtool_core::Se3Transform,
@@ -94,7 +94,7 @@ impl PySe3Transform {
             .get_item("rotation")?
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("missing 'rotation' key"))?;
         let rot_dict: &Bound<'_, PyDict> = rot_obj
-            .downcast()
+            .cast()
             .map_err(|_| pyo3::exceptions::PyTypeError::new_err("'rotation' must be a dict"))?;
 
         let w: f64 = rot_dict
@@ -403,7 +403,7 @@ impl PySe3Transform {
         }
 
         // Try SfmrReconstruction
-        if let Ok(recon) = other.downcast::<crate::py_sfmr_reconstruction::PySfmrReconstruction>() {
+        if let Ok(recon) = other.cast::<crate::py_sfmr_reconstruction::PySfmrReconstruction>() {
             let recon_ref = recon.borrow();
             let transformed = recon_ref.inner.apply_se3_transform(&self.inner);
             return Ok(
