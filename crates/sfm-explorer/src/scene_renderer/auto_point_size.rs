@@ -13,29 +13,35 @@ use super::gpu_types::{FALLBACK_POINT_SIZE, NN_SUBSAMPLE_COUNT};
 /// subsample of up to `NN_SUBSAMPLE_COUNT` points. Returns
 /// `median_nn_distance * 0.5` as the splat radius.
 pub(super) fn compute_auto_point_size(points: &[sfmtool_core::Point3D]) -> f32 {
-    if points.len() < 2 {
-        return FALLBACK_POINT_SIZE;
-    }
-
-    // Build KD-tree from all points (f32 for speed)
-    let mut tree: KdTree<f32, 3> = KdTree::with_capacity(points.len());
-    for (i, p) in points.iter().enumerate() {
-        tree.add(
-            &[
+    // Points at infinity store a unit direction, not a location, so they would
+    // cluster on the unit sphere and skew NN distances — exclude them.
+    let positions: Vec<[f32; 3]> = points
+        .iter()
+        .filter(|p| !p.is_at_infinity())
+        .map(|p| {
+            [
                 p.position.x as f32,
                 p.position.y as f32,
                 p.position.z as f32,
-            ],
-            i as u64,
-        );
+            ]
+        })
+        .collect();
+    if positions.len() < 2 {
+        return FALLBACK_POINT_SIZE;
+    }
+
+    // Build KD-tree from finite points (f32 for speed)
+    let mut tree: KdTree<f32, 3> = KdTree::with_capacity(positions.len());
+    for (i, p) in positions.iter().enumerate() {
+        tree.add(p, i as u64);
     }
 
     // Subsample indices for NN queries
     let mut rng = rand::rng();
-    let query_indices: Vec<usize> = if points.len() <= NN_SUBSAMPLE_COUNT {
-        (0..points.len()).collect()
+    let query_indices: Vec<usize> = if positions.len() <= NN_SUBSAMPLE_COUNT {
+        (0..positions.len()).collect()
     } else {
-        let mut indices: Vec<usize> = (0..points.len()).collect();
+        let mut indices: Vec<usize> = (0..positions.len()).collect();
         indices.shuffle(&mut rng);
         indices.truncate(NN_SUBSAMPLE_COUNT);
         indices
@@ -44,9 +50,7 @@ pub(super) fn compute_auto_point_size(points: &[sfmtool_core::Point3D]) -> f32 {
     // Query nearest neighbor for each subsampled point (k=2: self + nearest)
     let mut nn_distances: Vec<f32> = Vec::with_capacity(query_indices.len());
     for &idx in &query_indices {
-        let p = &points[idx].position;
-        let query = [p.x as f32, p.y as f32, p.z as f32];
-        let neighbors = tree.nearest_n::<SquaredEuclidean>(&query, 2);
+        let neighbors = tree.nearest_n::<SquaredEuclidean>(&positions[idx], 2);
         // The first result is the point itself (distance 0); take the second
         if neighbors.len() >= 2 {
             let dist = neighbors[1].distance.sqrt();
@@ -66,11 +70,11 @@ pub(super) fn compute_auto_point_size(points: &[sfmtool_core::Point3D]) -> f32 {
 
     let auto_size = p40 * 1.2;
     log::info!(
-        "Auto point size: {:.4} (p40 NN dist: {:.4}, from {} queries over {} points)",
+        "Auto point size: {:.4} (p40 NN dist: {:.4}, from {} queries over {} finite points)",
         auto_size,
         p40,
         nn_distances.len(),
-        points.len()
+        positions.len()
     );
 
     auto_size
@@ -133,14 +137,19 @@ pub(super) fn compute_camera_nn_scale(images: &[sfmtool_core::SfmrImage]) -> Opt
 ///
 /// Returns `(origin, 1.0)` if fewer than 2 points.
 pub(super) fn compute_scene_bounds(points: &[sfmtool_core::Point3D]) -> (Point3<f64>, f64) {
-    if points.len() < 2 {
+    // Exclude points at infinity: their `position` is a unit direction, not a
+    // location, and would pull the center toward the origin and distort the
+    // radius (and hence the adaptive clip planes that depend on these bounds).
+    let finite: Vec<&sfmtool_core::Point3D> =
+        points.iter().filter(|p| !p.is_at_infinity()).collect();
+    if finite.len() < 2 {
         return (Point3::origin(), 1.0);
     }
 
     // Collect coordinates
-    let mut xs: Vec<f64> = points.iter().map(|p| p.position.x).collect();
-    let mut ys: Vec<f64> = points.iter().map(|p| p.position.y).collect();
-    let mut zs: Vec<f64> = points.iter().map(|p| p.position.z).collect();
+    let mut xs: Vec<f64> = finite.iter().map(|p| p.position.x).collect();
+    let mut ys: Vec<f64> = finite.iter().map(|p| p.position.y).collect();
+    let mut zs: Vec<f64> = finite.iter().map(|p| p.position.z).collect();
 
     xs.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
     ys.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
@@ -150,7 +159,7 @@ pub(super) fn compute_scene_bounds(points: &[sfmtool_core::Point3D]) -> (Point3<
     let center = Point3::new(xs[n / 2], ys[n / 2], zs[n / 2]);
 
     // Compute distances from center and take 80th percentile
-    let mut dists: Vec<f64> = points
+    let mut dists: Vec<f64> = finite
         .iter()
         .map(|p| (p.position - center).norm())
         .collect();
@@ -184,6 +193,71 @@ mod tests {
             error: 0.0,
             estimated_normal: nalgebra::Vector3::new(0.0, 0.0, 1.0),
         }
+    }
+
+    /// A point at infinity: `w = 0` with a unit-length direction in `position`.
+    fn make_infinity_point(dx: f64, dy: f64, dz: f64) -> Point3D {
+        let dir = nalgebra::Vector3::new(dx, dy, dz).normalize();
+        Point3D {
+            position: NPoint3::from(dir),
+            w: 0.0,
+            color: [255, 255, 255],
+            error: 0.0,
+            estimated_normal: nalgebra::Vector3::zeros(),
+        }
+    }
+
+    #[test]
+    fn test_scene_bounds_ignores_infinity_points() {
+        // A finite cluster far from the origin.
+        let mut points: Vec<Point3D> = (0..20)
+            .map(|i| make_point(100.0 + i as f64 * 0.1, 100.0, 100.0))
+            .collect();
+        let (center_finite, radius_finite) = compute_scene_bounds(&points);
+
+        // Infinity points are unit directions near the origin; including them
+        // would drag the median center toward 0 and change the radius.
+        for k in 0..50 {
+            let a = k as f64;
+            points.push(make_infinity_point(a.cos(), a.sin(), 0.3));
+        }
+        let (center, radius) = compute_scene_bounds(&points);
+
+        assert!(
+            (center - center_finite).norm() < 1e-9,
+            "infinity points moved the center: {center:?} vs {center_finite:?}"
+        );
+        assert!(
+            (radius - radius_finite).abs() < 1e-9,
+            "infinity points changed the radius: {radius} vs {radius_finite}"
+        );
+        // Sanity: the center stayed at the finite cluster, not the origin.
+        assert!(center.x > 50.0, "center.x={}", center.x);
+    }
+
+    #[test]
+    fn test_auto_point_size_ignores_infinity_points() {
+        // Regular grid of finite points (deterministic: count < subsample cap).
+        // A unique z per point keeps the KD-tree from seeing too many items
+        // sharing one axis value.
+        let mut points: Vec<Point3D> = Vec::new();
+        for i in 0..10 {
+            for j in 0..10 {
+                points.push(make_point(i as f64, j as f64, (i * 10 + j) as f64 * 0.01));
+            }
+        }
+        let size_finite = compute_auto_point_size(&points);
+
+        for k in 0..40 {
+            let a = k as f64 * 0.3;
+            points.push(make_infinity_point(a.cos(), a.sin(), 1.0));
+        }
+        let size = compute_auto_point_size(&points);
+
+        assert!(
+            (size - size_finite).abs() < 1e-6,
+            "infinity points changed the auto size: {size} vs {size_finite}"
+        );
     }
 
     #[test]

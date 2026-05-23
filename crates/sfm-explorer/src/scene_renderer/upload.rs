@@ -23,16 +23,21 @@ impl SceneRenderer {
         let instances: Vec<PointInstance> = recon
             .points
             .iter()
-            .map(|p| PointInstance {
-                position: [
-                    p.position.x as f32,
-                    p.position.y as f32,
-                    p.position.z as f32,
-                ],
-                color: (p.color[0] as u32)
-                    | ((p.color[1] as u32) << 8)
-                    | ((p.color[2] as u32) << 16)
-                    | (255u32 << 24),
+            .map(|p| {
+                // For an infinity point `position` holds a unit direction; the
+                // shader detects it via alpha = 0 and transforms it with w = 0.
+                let alpha: u32 = if p.is_at_infinity() { 0 } else { 255 };
+                PointInstance {
+                    position: [
+                        p.position.x as f32,
+                        p.position.y as f32,
+                        p.position.z as f32,
+                    ],
+                    color: (p.color[0] as u32)
+                        | ((p.color[1] as u32) << 8)
+                        | ((p.color[2] as u32) << 16)
+                        | (alpha << 24),
+                }
             })
             .collect();
 

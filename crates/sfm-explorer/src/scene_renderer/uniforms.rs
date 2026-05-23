@@ -14,6 +14,7 @@ impl SceneRenderer {
         queue: &wgpu::Queue,
         camera: &ViewportCamera,
         size_log2: f32,
+        infinity_point_px: f32,
         edl_line_thickness: f32,
         target_view_pos: [f32; 3],
         target_active: f32,
@@ -45,7 +46,9 @@ impl SceneRenderer {
                 camera_up: vec3_to_f32(&camera.camera.up()),
                 selected_point_index: selected_point.map(|i| i as u32).unwrap_or(0xFFFFFFFF),
                 hovered_point_index: hovered_point.map(|i| i as u32).unwrap_or(0xFFFFFFFF),
-                _pad: [0; 3],
+                screen_width: w as f32,
+                screen_height: h as f32,
+                infinity_point_px,
             };
 
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));

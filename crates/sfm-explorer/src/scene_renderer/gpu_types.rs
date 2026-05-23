@@ -32,7 +32,11 @@ pub(super) struct PointUniforms {
     pub selected_point_index: u32,
     /// Index of the hovered point (0xFFFFFFFF = no hover).
     pub hovered_point_index: u32,
-    pub _pad: [u32; 3], // Pad to 16-byte alignment
+    /// Viewport size in pixels — converts the infinity splat pixel radius to NDC.
+    pub screen_width: f32,
+    pub screen_height: f32,
+    /// On-screen splat radius (pixels) for points at infinity.
+    pub infinity_point_px: f32,
 }
 
 #[repr(C)]
