@@ -43,6 +43,15 @@ One section per recommendation:
 
 End with a **Top 3** section: the fixes with the best effort-to-value ratio.
 
+## Saving the report
+
+Write the full report to `reports/<date>-hygiene-audit.md`, where `<date>` is
+today's date in `YYYY-MM-DD` form (get it with `date +%F`). Create the
+`reports/` directory if it doesn't exist. Each run is a dated snapshot — do not
+overwrite a prior day's report. After saving, tell the user the path and give a
+short summary of the Top 3 in the conversation; don't paste the whole report
+back.
+
 ## Guidelines
 
 - Be specific. "X is too big" is useless; "X is 900 lines covering matching AND geometric filtering AND serialization — split serialization into a sibling file" is useful.
