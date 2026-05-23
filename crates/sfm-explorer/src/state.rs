@@ -127,6 +127,11 @@ pub struct AppState {
     /// Actual multiplier = 2^point_size_log2.
     pub point_size_log2: f32,
 
+    /// On-screen splat radius (pixels) for points at infinity. A direction has
+    /// no distance, so infinity points are sized in pixels rather than world
+    /// units like finite points.
+    pub infinity_point_px: f32,
+
     /// EDL line thickness in pixels. Controls how far the neighbor samples
     /// reach, which determines the width of depth-discontinuity edges.
     pub edl_line_thickness: f32,
@@ -183,6 +188,7 @@ impl AppState {
             status_message: None,
             points_need_upload: false,
             point_size_log2: 0.0,
+            infinity_point_px: 3.0,
             edl_line_thickness: 2.4,
             target_size_multiplier: DEFAULT_TARGET_SIZE_MULTIPLIER,
             target_fog_multiplier: DEFAULT_TARGET_FOG_MULTIPLIER,

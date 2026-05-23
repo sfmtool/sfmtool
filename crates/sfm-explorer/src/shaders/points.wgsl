@@ -13,9 +13,9 @@ struct Uniforms {
     camera_up: vec3<f32>,
     selected_point_index: u32,
     hovered_point_index: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    screen_width: f32,
+    screen_height: f32,
+    infinity_point_px: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -38,15 +38,14 @@ struct VertexOutput {
     @location(3) @interpolate(flat) point3d_index: u32,
 }
 
+// Tiny positive NDC depth so an infinity splat sits just in front of the
+// reversed-Z far plane (cleared to 0.0, compared with Greater): it passes the
+// depth test against the cleared background but loses to all finite geometry.
+const INF_DEPTH: f32 = 1e-6;
+
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
-    // Billboard: expand quad corners in the camera-aligned plane
-    let offset = uniforms.camera_right * in.quad_pos.x * uniforms.point_size
-               + uniforms.camera_up    * in.quad_pos.y * uniforms.point_size;
-    let world = vec4<f32>(in.world_pos + offset, 1.0);
-
     var out: VertexOutput;
-    out.clip_pos = uniforms.view_proj * world;
     out.uv = in.quad_pos;
 
     // Unpack color from u32 (R in low byte, then G, B)
@@ -55,12 +54,43 @@ fn vs_main(in: VertexInput) -> VertexOutput {
         f32((in.color_packed >>  8u) & 0xFFu) / 255.0,
         f32((in.color_packed >> 16u) & 0xFFu) / 255.0,
     );
+    out.point3d_index = in.instance_index;
+
+    // The alpha byte is the finite/infinity flag: 0 = point at infinity.
+    let is_infinity = ((in.color_packed >> 24u) & 0xFFu) == 0u;
+
+    if is_infinity {
+        // `world_pos` is a unit direction. Transform with w = 0 so the camera
+        // translation drops out — a point at infinity has no parallax.
+        let clip_c = uniforms.view_proj * vec4<f32>(in.world_pos, 0.0);
+        if clip_c.w <= 0.0 {
+            // Direction points behind the camera: emit a clipped vertex.
+            out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
+            out.view_depth = 0.0;
+            return out;
+        }
+        // Screen-space billboard: offset the projected point by a fixed pixel
+        // radius (2 NDC units span the full screen in each axis).
+        let ndc = clip_c.xyz / clip_c.w;
+        let offset_ndc = in.quad_pos * 2.0 * uniforms.infinity_point_px
+            / vec2<f32>(uniforms.screen_width, uniforms.screen_height);
+        let ndc_xy = ndc.xy + offset_ndc;
+        // Pin depth to just in front of the far plane and undo the divide.
+        out.clip_pos = vec4<f32>(ndc_xy * clip_c.w, INF_DEPTH * clip_c.w, clip_c.w);
+        // 0.0 view depth = EDL passthrough (a direction has no finite depth).
+        out.view_depth = 0.0;
+        return out;
+    }
+
+    // Finite point: billboard expanded in the camera-aligned plane in world space.
+    let offset = uniforms.camera_right * in.quad_pos.x * uniforms.point_size
+               + uniforms.camera_up    * in.quad_pos.y * uniforms.point_size;
+    let world = vec4<f32>(in.world_pos + offset, 1.0);
+    out.clip_pos = uniforms.view_proj * world;
 
     // Linear view-space depth for EDL (positive = in front of camera)
     let view_pos = uniforms.view * vec4<f32>(in.world_pos, 1.0);
     out.view_depth = -view_pos.z;
-
-    out.point3d_index = in.instance_index;
 
     return out;
 }

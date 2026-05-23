@@ -250,6 +250,7 @@ impl App {
             queue,
             &self.viewer_3d.camera,
             self.state.point_size_log2,
+            self.state.infinity_point_px,
             self.state.edl_line_thickness,
             self.viewer_3d.supernova_view_pos,
             self.viewer_3d.supernova_active,
@@ -394,6 +395,13 @@ impl App {
                         if ui.button("Reset Size").clicked() {
                             app_state.point_size_log2 = 0.0;
                         }
+                        ui.separator();
+                        ui.label("Infinity Point Size");
+                        ui.add(
+                            egui::Slider::new(&mut app_state.infinity_point_px, 1.0..=16.0)
+                                .text("px")
+                                .fixed_decimals(1),
+                        );
                         ui.separator();
                         ui.label("Length Scale");
                         ui.add(
