@@ -536,6 +536,51 @@ impl PySfmrReconstruction {
         }
     }
 
+    /// Discover points at infinity (and near-infinite distant points) and
+    /// append them as new points/tracks, returning a new reconstruction.
+    ///
+    /// Un-projects every keypoint in every image to a world-space direction,
+    /// clusters co-directional keypoints within ``eps_deg`` on the unit sphere,
+    /// confirms each cluster with mutual SIFT descriptor matching (Lowe ratio +
+    /// one feature per image), and emits each surviving track that spans at
+    /// least ``min_views`` images. A track whose parallax signal falls below
+    /// ``noise_floor_px`` becomes a ``w = 0`` point at infinity; otherwise it is
+    /// triangulated to a finite distant point. Candidate tracks that duplicate
+    /// an existing point are skipped.
+    ///
+    /// Args:
+    ///     eps_deg: Angular clustering radius in degrees. Tighter values demand
+    ///         more nearly parallel rays (more "infinite").
+    ///     desc_thresh: Maximum L2 SIFT descriptor distance for a match.
+    ///     ratio: Lowe ratio test against the second-best in-image match.
+    ///     min_views: Minimum distinct images a track must span.
+    ///     max_features: Per-image cap on the largest keypoints to read; reads
+    ///         all when None.
+    ///     noise_floor_px: SIFT keypoint localisation noise floor in pixels.
+    #[pyo3(signature = (eps_deg, desc_thresh=200.0, ratio=0.8, min_views=2, max_features=None, noise_floor_px=1.0))]
+    fn find_points_at_infinity(
+        &self,
+        eps_deg: f64,
+        desc_thresh: f64,
+        ratio: f64,
+        min_views: usize,
+        max_features: Option<usize>,
+        noise_floor_px: f64,
+    ) -> PyResult<Self> {
+        let inner = self
+            .inner
+            .find_points_at_infinity(
+                eps_deg,
+                desc_thresh,
+                ratio,
+                min_views,
+                max_features,
+                noise_floor_px,
+            )
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
     /// Source metadata as a Python dict.
     #[getter]
     fn source_metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {

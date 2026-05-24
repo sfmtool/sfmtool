@@ -16,9 +16,11 @@ from ..xform import (
     AlignToInputTransform,
     AlignToTransform,
     BundleAdjustTransform,
+    ClassifyPointsAtInfinityTransform,
     ExcludeGlobFilter,
     ExcludeRangeFilter,
     FilterByReprojectionErrorTransform,
+    FindPointsAtInfinityTransform,
     IncludeGlobFilter,
     IncludeRangeFilter,
     RemoveIsolatedPointsFilter,
@@ -81,8 +83,13 @@ def _auto_output_path(input_path: Path) -> Path:
         counter += 1
 
 
-def parse_transform_args(args: list[str]) -> list:
-    """Parse command-line arguments to extract transforms in order."""
+def parse_transform_args(args: list[str], max_features: int | None = None) -> list:
+    """Parse command-line arguments to extract transforms in order.
+
+    ``max_features`` is a global value option (not an ordered transform); it is
+    obtained reliably from the Click ``kwargs`` and shared by every
+    ``--find-points-at-infinity`` operation in the chain.
+    """
     transforms = []
     i = 0
 
@@ -344,6 +351,67 @@ def parse_transform_args(args: list[str]) -> list:
                     f"Invalid --camera-model parameter '{param}': {e}"
                 )
 
+        elif arg == "--find-points-at-infinity":
+            if i + 1 >= len(args):
+                raise click.UsageError("--find-points-at-infinity requires an argument")
+            i += 1
+            param = args[i]
+
+            parts = param.split(",")
+            if not 1 <= len(parts) <= 3:
+                raise click.UsageError(
+                    "--find-points-at-infinity expects "
+                    "eps_deg[,desc_thresh[,min_views]], "
+                    f"got: {param}"
+                )
+
+            try:
+                eps_deg = float(parts[0])
+                desc_thresh = float(parts[1]) if len(parts) > 1 else 200.0
+                min_views = int(parts[2]) if len(parts) > 2 else 2
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --find-points-at-infinity parameter '{param}': {e}"
+                )
+
+            try:
+                transforms.append(
+                    FindPointsAtInfinityTransform(
+                        eps_deg,
+                        desc_thresh,
+                        min_views,
+                        max_features=max_features,
+                    )
+                )
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --find-points-at-infinity parameter '{param}': {e}"
+                )
+
+        elif arg == "--classify-points-at-infinity":
+            if i + 1 >= len(args):
+                raise click.UsageError(
+                    "--classify-points-at-infinity requires an argument"
+                )
+            i += 1
+            param = args[i]
+
+            try:
+                noise_floor_px = float(param)
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --classify-points-at-infinity parameter '{param}': {e}"
+                )
+
+            transforms.append(ClassifyPointsAtInfinityTransform(noise_floor_px))
+
+        elif arg == "--max-features":
+            # A global value option, not an ordered transform: its value is
+            # obtained reliably via Click kwargs, so just step over its token
+            # here to keep it out of the ordered transform list.
+            if i + 1 < len(args):
+                i += 1
+
         i += 1
 
     return transforms
@@ -450,6 +518,22 @@ def parse_transform_args(args: list[str]) -> list:
         "Shared parameters carry over; new ones initialize to zero."
     ),
 )
+@click.option(
+    "--find-points-at-infinity",
+    multiple=True,
+    help="Discover points at infinity: eps_deg[,desc_thresh[,min_views]] (e.g. '0.1,200,2')",
+)
+@click.option(
+    "--classify-points-at-infinity",
+    multiple=True,
+    help="Reclassify finite points whose depth is unconstrained as points at infinity: noise_floor_px (e.g. '1.0')",
+)
+@click.option(
+    "--max-features",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Cap features per image for --find-points-at-infinity (largest first)",
+)
 @click.pass_context
 def xform(ctx, input_path, output_path, **kwargs):
     """Apply transformations to a .sfmr file.
@@ -485,6 +569,12 @@ def xform(ctx, input_path, output_path, **kwargs):
       --remove-isolated factor,spec       Remove isolated points (NN distance filter)
       --filter-by-reprojection-error val  Remove points with reprojection error > threshold
       --include-by-distribution COUNT[,verbose]  Keep COUNT well-distributed cameras/rig frames
+
+    \b
+    Points at infinity:
+      --find-points-at-infinity SPEC      Discover points at infinity: eps_deg[,desc_thresh[,min_views]]
+      --classify-points-at-infinity NOISE Reclassify unconstrained finite points as points at infinity
+      --max-features N                    Cap features per image for --find-points-at-infinity (largest first)
 
     \b
     Camera model:
@@ -528,6 +618,10 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
         # Upgrade SIMPLE_RADIAL → RADIAL to refine k2 during bundle adjustment
         sfm xform in.sfmr out.sfmr --camera-model RADIAL --bundle-adjust
+
+    \b
+        # Discover points at infinity, capping features per image
+        sfm xform in.sfmr out.sfmr --find-points-at-infinity 0.1,200,2 --max-features 2000
     """
     from .._sfmtool import SfmrReconstruction
 
@@ -556,7 +650,9 @@ def xform(ctx, input_path, output_path, **kwargs):
         transform_args = []
 
     try:
-        transforms = parse_transform_args(transform_args)
+        transforms = parse_transform_args(
+            transform_args, max_features=kwargs.get("max_features")
+        )
     except ValueError as e:
         raise click.UsageError(str(e))
 
@@ -568,6 +664,7 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--include-glob, --exclude-glob, --remove-short-tracks, --remove-narrow-tracks, "
             "--remove-large-features, --remove-isolated, --filter-by-reprojection-error, "
             "--include-by-distribution, "
+            "--find-points-at-infinity, --classify-points-at-infinity, "
             "--camera-model, --bundle-adjust, --align-to, --align-to-input"
         )
 
