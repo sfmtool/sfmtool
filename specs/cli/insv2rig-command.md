@@ -30,7 +30,7 @@ The Insta360 X5 rig is modeled as dual back-to-back fisheye cameras:
 
 - **Left lens**: Forward-facing (identity rotation)
 - **Right lens**: Rotated 180° around Y axis
-- **Baseline**: 29 mm between optical centers
+- **Baseline**: 30.7 mm between optical centers
 
 ## Process
 

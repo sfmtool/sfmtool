@@ -133,6 +133,7 @@ def init(
         domain_size_pooling=domain_size_pooling,
         max_num_features=max_num_features,
         estimate_affine_shape=estimate_affine_shape,
+        use_gpu=use_gpu,
     )
 
     click.echo(f"Initialized workspace: {workspace_dir.resolve()}")
@@ -144,8 +145,10 @@ def init(
         dsp_value = options_dict.get("domain_size_pooling", False)
         max_features_value = options_dict.get("max_num_features")
         affine_value = options_dict.get("estimate_affine_shape", False)
+        gpu_value = options_dict.get("use_gpu", True)
         click.echo(f"  estimate_affine_shape: {affine_value}")
         click.echo(f"  domain_size_pooling: {dsp_value}")
         click.echo(f"  max_num_features: {max_features_value}")
+        click.echo(f"  use_gpu: {gpu_value}")
     else:
         click.echo(f"  nfeatures: {options_dict.get('nfeatures', 0)}")

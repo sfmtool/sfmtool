@@ -13,6 +13,7 @@ def init_workspace(
     domain_size_pooling: bool = False,
     max_num_features: int | None = None,
     estimate_affine_shape: bool = False,
+    use_gpu: bool = True,
 ) -> dict:
     """Initialize an SfM workspace.
 
@@ -25,6 +26,9 @@ def init_workspace(
         max_num_features: Maximum number of features per image (COLMAP only).
                          If None, uses COLMAP default (8192).
         estimate_affine_shape: Enable affine shape estimation (COLMAP only, default: False).
+        use_gpu: Use GPU SIFT extraction (COLMAP only, default: True). Persisted
+                 into the config and honored at extraction time, but excluded
+                 from the feature-cache hash.
 
     Returns:
         The workspace configuration dict that was written.
@@ -41,6 +45,7 @@ def init_workspace(
             domain_size_pooling=domain_size_pooling,
             max_num_features=max_num_features,
             estimate_affine_shape=estimate_affine_shape,
+            use_gpu=use_gpu,
         )
     elif feature_tool.lower() == "opencv":
         feature_options = get_default_opencv_feature_options()

@@ -4,6 +4,11 @@ A dated snapshot of recommended next work, drawn from existing specs/code and
 verified against the actual implementation. Two lists: concrete implementation
 tasks pulled from already-written specs, then speculative design topics.
 
+> **Update 2026-05-23:** Item #4 (render points-at-infinity in SfM Explorer)
+> has since shipped — commit c3c2805, with `positions_xyzw` now consumed in
+> `crates/sfm-explorer/src/scene_renderer/{upload,auto_point_size}.rs`. It is
+> struck through below. Remaining items are unchanged.
+
 ---
 
 ## ~5 implementation tasks (from existing specs)
@@ -71,25 +76,15 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
   feature composable with the existing pipeline, and is the maintainer's own
   stated intent. Medium effort; mostly re-plumbing existing pieces.
 
-### 4. Render points-at-infinity (`w = 0`) in SfM Explorer
+### 4. ~~Render points-at-infinity (`w = 0`) in SfM Explorer~~ — DONE (2026-05-23, commit c3c2805)
 
 - **Spec reference:** `specs/drafts/sfmr-v2-points-at-infinity.md` §"API and
   consumers": "`sfm-explorer`: reads `positions_xyzw`; renders a `w = 0` point as
   a direction on the far view sphere rather than at a finite coordinate."
-- **Current state:** The v2 homogeneous point model is fully implemented in the
-  Rust core/format/bindings (`infinity.rs`, `positions_xyzw`,
-  `classify_points_at_infinity`, etc.), and `xform`/COLMAP/`inspect` already
-  consume it. But the GUI does not: grep across `crates/sfm-explorer/` finds no
-  `positions_xyzw` / `is_at_infinity` handling — `scene_renderer/upload.rs` packs
-  finite XYZ point instances only (the `infinity` hits elsewhere are clip-plane
-  "far", not `w = 0` points).
-- **Scope:** Plumb `is_at_infinity` / `positions_xyzw` from the loaded
-  reconstruction into the renderer; project `w = 0` points onto the adaptive far
-  sphere along their stored direction, with a distinct visual treatment. Touches
-  `scene_renderer/upload.rs`, the point pipeline, and the loader.
-- **Why now:** Completes the one remaining unchecked consumer of an otherwise
-  shipped format feature; without it, distant content silently vanishes from the
-  viewer. Moderate effort (GPU upload + shader).
+- **Status:** Shipped. The GUI now consumes `positions_xyzw` in
+  `crates/sfm-explorer/src/scene_renderer/upload.rs` and
+  `scene_renderer/auto_point_size.rs`, projecting `w = 0` points onto the
+  adaptive far sphere. No longer an open task.
 
 ### 5. Add an `--camera-config PATH` flag for explicit calibration selection
 

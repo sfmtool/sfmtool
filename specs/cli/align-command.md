@@ -28,7 +28,7 @@ are transformed to align with it.
 |--------|------|---------|-------------|
 | `--output-dir / -o` | path | required | Output directory for aligned reconstructions |
 | `--method` | `cameras` \| `points` | `points` | Alignment method |
-| `--confidence` | float (0–1) | 0.7 | Confidence threshold for image matches (cameras only) |
+| `--confidence` | float (0–1) | 0.7 | Confidence threshold for image matches. Used only by `--method cameras`; accepted but ignored for `--method points` (not rejected). |
 | `--max-error` | float | 0.1 | Maximum acceptable alignment error |
 | `--iterative` | flag | | Enable iterative refinement |
 | `--visualize` | flag | | Generate visualization data |

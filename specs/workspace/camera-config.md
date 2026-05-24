@@ -199,7 +199,7 @@ Commands that operate on existing `.sfmr` files (`sfm xform`, `sfm inspect`,
 `sfm align`, `sfm merge`, the GUI viewer) do **not** consult
 `camera_config.json` — once a `.sfmr` exists, its embedded camera intrinsics are
 authoritative. To apply updated intrinsics to an existing reconstruction, use
-`sfm xform --switch-camera-model` or re-solve.
+`sfm xform --camera-model` or re-solve.
 
 ### One Camera per Source Directory
 

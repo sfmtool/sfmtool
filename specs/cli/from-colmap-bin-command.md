@@ -18,6 +18,7 @@ sfm from-colmap-bin <COLMAP_DIR> --image-dir <DIR> --output <OUTPUT.sfmr> [OPTIO
 | `--image-dir` | path | required | Directory containing images (for workspace and `.sift` resolution) |
 | `--output / -o` | path | required | Output `.sfmr` file path |
 | `--tool-name` | string | `unknown` | Tool provenance tag (e.g., `colmap`, `glomap`) |
+| `--detect-infinity / --no-detect-infinity` | bool | `true` | Reclassify ill-conditioned points (depth the solve could not pin down) as points at infinity (`w = 0`). See [sfmr file format §7](../formats/sfmr-file-format.md) and [points-at-infinity draft](../drafts/sfmr-v2-points-at-infinity.md). |
 
 ## Input Directory
 

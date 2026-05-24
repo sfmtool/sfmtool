@@ -608,8 +608,9 @@ def _run_merge(paths, output_path):
 
     Builds a unified image list, remaps pair indexes, concatenates matches
     for each pair, and deduplicates by feature index pair (keeping the match
-    with the lowest descriptor distance). Two-view geometry data is dropped
-    since it is invalidated by the merge.
+    with the lowest descriptor distance). Two-view geometry is preserved: for
+    each pair the best available TVG is carried into the output, and the
+    output's has_two_view_geometries reflects whether any survived.
     """
     from datetime import datetime
 
