@@ -24,6 +24,7 @@ def get_colmap_feature_options(
     max_image_size=4096,
     max_num_features=None,
     estimate_affine_shape=False,
+    use_gpu=True,
 ):
     """Get COLMAP feature extraction options as a flat dict.
 
@@ -34,6 +35,9 @@ def get_colmap_feature_options(
                          If None, uses COLMAP default (8192).
         estimate_affine_shape: Enable affine shape estimation (default: False).
                               Incompatible with GPU SIFT.
+        use_gpu: Use GPU SIFT extraction (default: True). A hardware/performance
+                 choice, not a feature-defining option, so it is excluded from
+                 the feature-cache hash (see get_feature_tool_xxh128).
 
     Returns:
         Dict of feature options that affect feature output
@@ -65,6 +69,7 @@ def get_colmap_feature_options(
 
     result = {k: v for k, v in sift_dict.items() if k in _sift_keys}
     result["max_image_size"] = max_image_size
+    result["use_gpu"] = use_gpu
 
     # Use None for max_num_features when it's the COLMAP default
     if max_num_features is None:
@@ -133,6 +138,8 @@ def extract_sift_with_colmap(
         extraction_kwargs = {}
         if "max_image_size" in feature_options:
             extraction_kwargs["max_image_size"] = feature_options["max_image_size"]
+        if "use_gpu" in feature_options:
+            extraction_kwargs["use_gpu"] = feature_options["use_gpu"]
 
         if num_threads != -1:
             extraction_kwargs["num_threads"] = num_threads

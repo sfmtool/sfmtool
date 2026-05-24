@@ -34,8 +34,11 @@ Each output image includes a colorbar legend showing the value range.
 
 ## Output
 
-Images are saved as `{image_stem}_{metric}.png` (e.g., `image_001_reproj.png`). When
-`--metric all` is used, three images are generated per input image.
+Images are saved with the metric inserted *before* any trailing number in the
+image stem — `{prefix}_{metric}{trailing_number}.png` (e.g., `image_001` with
+metric `reproj` becomes `image_reproj_001.png`; a stem with no trailing number
+just gets `_{metric}` appended). When `--metric all` is used, three images are
+generated per input image.
 
 ## Usage Examples
 

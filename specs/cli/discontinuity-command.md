@@ -615,13 +615,13 @@ Code and patterns to build on:
 
 | Component | Location | Relevance |
 |---|---|---|
-| Camera center computation | `_inspect_images.py:_compute_camera_centers()` | World-space positions |
-| Rotation angle computation | `_inspect_images.py:_compute_rotation_angle()` | Rotation between poses |
+| Camera center computation | `_analyze_images.py:_compute_camera_centers()` | World-space positions |
+| Rotation angle computation | `_analyze_images.py:_compute_rotation_angle()` | Rotation between poses |
 | DIS optical flow | `_sfmtool.compute_optical_flow()` | Flow computation |
 | DIS with initial flow | `_sfmtool.compute_optical_flow_with_init()` | Stride flow from scaled local |
 | Sequence detection | `deadline.job_attachments.api.summarize_paths_by_sequence` | Input grouping |
 | Flow visualization | `visualization/_flow_display.py:_flow_to_color()`, `_draw_flow_legend()` | Middlebury color images |
-| Reprojection errors | `_inspect_metrics.py` | Error context for flagged frames |
+| Reprojection errors | `_analyze_metrics.py` | Error context for flagged frames |
 | Covisibility graph | `_image_pair_graph.py` | Shared point counts |
 
 ## Open Questions

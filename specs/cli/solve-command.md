@@ -40,6 +40,7 @@ Exactly one is required:
 | `--max-features` | int | | Maximum features per image |
 | `--camera-model` | string | auto | Camera model override |
 | `--range / -r` | string | | Range expression for file numbers |
+| `--detect-infinity / --no-detect-infinity` | bool | `true` | Reclassify points whose depth the solve could not pin down as points at infinity (`w = 0`). See [sfmr file format §7](../formats/sfmr-file-format.md) and [points-at-infinity draft](../drafts/sfmr-v2-points-at-infinity.md). |
 
 ## Input Modes
 

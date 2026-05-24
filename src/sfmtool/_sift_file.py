@@ -72,6 +72,11 @@ def xxh128_of_file(filename: str | Path) -> str:
     return xxh128.hexdigest()
 
 
+# Feature options that describe hardware/performance choices rather than the
+# feature output, and so are excluded from the feature-cache hash.
+_NON_DEFINING_OPTION_KEYS = frozenset({"use_gpu"})
+
+
 def get_feature_tool_xxh128(
     feature_tool: str, feature_type: str, feature_options: dict
 ) -> str:
@@ -85,11 +90,17 @@ def get_feature_tool_xxh128(
     Returns:
         Hexadecimal string representation of the XXH128 hash
     """
+    # Drop non-defining keys (e.g. use_gpu) so the cache directory is stable
+    # across GPU/CPU extraction and identical to configs written before the
+    # key existed (where stripping is a no-op).
+    hashed_options = {
+        k: v for k, v in feature_options.items() if k not in _NON_DEFINING_OPTION_KEYS
+    }
     canonical = json.dumps(
         {
             "feature_tool": feature_tool,
             "feature_type": feature_type,
-            "feature_options": feature_options,
+            "feature_options": hashed_options,
         },
         sort_keys=True,
         separators=(",", ":"),

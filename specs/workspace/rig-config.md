@@ -207,5 +207,8 @@ For ~180° FOV fisheye rigs (e.g. OPENCV_FISHEYE with k1–k4):
 
 - `test-data/images/kerry_park/rig_config.json` — back-to-back 180° FOV
   fisheye stereo pair (`OPENCV_FISHEYE`, 480×480, 30.7 mm baseline).
-- `sfm pano2rig` — generates a rig_config.json for the six rectilinear
-  faces of a panoramic cubemap. See `specs/cli/pano2rig-command.md`.
+
+`rig_config.json` is consumed as an *input* by the solving commands, but
+sfmtool no longer *produces* it. The rig builders (`sfm pano2rig`,
+`sfm insv2rig`, `sfm camrig …`) all emit a `.camrig` file instead — see
+`specs/formats/camrig-file-format.md` and `specs/cli/pano2rig-command.md`.
