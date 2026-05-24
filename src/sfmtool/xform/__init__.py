@@ -15,6 +15,10 @@ from ._filter_by_image_range import (
     IncludeRangeFilter,
 )
 from ._filter_by_reprojection_error import FilterByReprojectionErrorTransform
+from ._find_points_at_infinity import (
+    ClassifyPointsAtInfinityTransform,
+    FindPointsAtInfinityTransform,
+)
 from ._interface import Transform
 from ._point_filters import (
     RemoveIsolatedPointsFilter,
@@ -42,6 +46,8 @@ __all__ = [
     "RemoveIsolatedPointsFilter",
     "RemoveLargeFeaturesFilter",
     "FilterByReprojectionErrorTransform",
+    "FindPointsAtInfinityTransform",
+    "ClassifyPointsAtInfinityTransform",
     "IncludeRangeFilter",
     "ExcludeRangeFilter",
     "IncludeGlobFilter",

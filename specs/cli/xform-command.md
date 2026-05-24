@@ -158,6 +158,56 @@ Removes 3D points with reprojection error exceeding the threshold (in pixels).
 --filter-by-reprojection-error 2.0
 ```
 
+### Points at Infinity
+
+`--find-points-at-infinity` is *additive*: it appends new points and tracks, so
+the point count grows. See
+[xform-find-points-at-infinity.md](../drafts/xform-find-points-at-infinity.md)
+for the design.
+
+#### `--find-points-at-infinity <eps_deg>[,<desc_thresh>[,<min_views>]]`
+
+Discovers points at infinity (and near-infinite distant points) by clustering
+keypoint world-space directions across all images within `eps_deg` on the unit
+sphere, confirming each cluster with mutual SIFT descriptor matching, and
+emitting each surviving track as a `w = 0` point or a finite distant point.
+`desc_thresh` is the maximum L2 SIFT descriptor distance (default `200`) and
+`min_views` is the minimum number of distinct images a track must span
+(default `2`, must be `>= 2`); a tighter `eps_deg` demands more nearly parallel
+rays (more "infinite"), and a tighter `desc_thresh` rejects weak matches (raise
+it to recover more, lower it to suppress coincidental matches on feature-dense
+or self-similar scenes). This reads the original `.sift` files from the
+reconstruction's workspace, so the SIFT artifacts must still be present.
+
+```bash
+--find-points-at-infinity 0.1
+--find-points-at-infinity 0.1,200,2
+```
+
+#### `--classify-points-at-infinity <noise_floor_px>`
+
+Reclassifies *existing* finite points whose depth is unconstrained as points at
+infinity (`w = 0`). A finite point is reclassified when its parallax signal
+falls below the track's measurement noise (never taken below `noise_floor_px`).
+It finds no new points and leaves the point count unchanged.
+
+```bash
+--classify-points-at-infinity 1.0
+```
+
+#### `--max-features <N>`
+
+Caps the per-image keypoint set used by `--find-points-at-infinity` to the `N`
+largest features (by scale). Bounds memory and runtime on dense or many-image
+solves; the largest-scale features tend to be the most repeatable across the
+wide viewpoint changes a distant point is seen under. This is a single global
+value (not an ordered transform), shared by every `--find-points-at-infinity`
+in the chain.
+
+```bash
+sfm xform in.sfmr out.sfmr --find-points-at-infinity 0.1,200,2 --max-features 2000
+```
+
 ### Camera Model
 
 #### `--camera-model <NAME>`

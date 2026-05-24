@@ -1,11 +1,16 @@
 # Finding points at infinity in an existing solve
 
-**Status:** Draft proposal. Adds a new `sfm xform` operation that *discovers*
+**Status:** Implemented. Adds a new `sfm xform` operation that *discovers*
 points at infinity (and near-infinite distant points) in an already-solved
 `.sfmr` by clustering the world-space directions of keypoints across all
 images and confirming clusters with SIFT descriptors. Complements the existing
 [`classify_points_at_infinity`](sfmr-v2-points-at-infinity.md), which only
-*reclassifies* points that the solve already triangulated.
+*reclassifies* points that the solve already triangulated. The clustering /
+matching / classification core lives in `crates/sfmtool-core/src/find_infinity.rs`,
+exposed via the PyO3 method `SfmrReconstruction.find_points_at_infinity`; the
+CLI surface is `sfm xform --find-points-at-infinity` (plus
+`--classify-points-at-infinity` and `--max-features`), wired through the thin
+Python transforms in `src/sfmtool/xform/_find_points_at_infinity.py`.
 
 [v2 model]: sfmr-v2-points-at-infinity.md
 
@@ -125,9 +130,11 @@ nothing new.
 
 1. **Un-project.** For every image, load its keypoints from the `.sift` file
    (`get_sift_path_for_image` + `SiftReader`), optionally capped to the largest
-   `--max-features` per image, batch-un-project with `pixel_to_ray_batch`, and
-   rotate to world with `R_iᵀ`. Accumulate `dirs (T,3)`, `descriptors (T,128)`,
-   and the back-index `(image_index, feature_index)`.
+   `--max-features` per image, **skipping any keypoint already assigned to an
+   existing 3D point** — discovery operates only on the features the solve left
+   untracked. Batch-un-project the rest with `pixel_to_ray_batch` and rotate to
+   world with `R_iᵀ`. Accumulate `dirs (T,3)`, `descriptors (T,128)`, and the
+   back-index `(image_index, feature_index)`.
 2. **Build** one `KdTree3d` over `dirs`.
 3. **Neighbour query** within chord radius `r = √(2(1−cos ε))` (this is the
    Euclidean distance on the unit sphere that corresponds to angular distance
@@ -147,9 +154,9 @@ nothing new.
 7. **Emit.** Each surviving track becomes a new point (direction
    `normalise(Σ rᵢ)` for `w = 0`, the triangulated position for finite), plus
    its observations, appended to the reconstruction via `clone_with_changes`.
-   Deduplicate against existing tracks: if a candidate's observations already
-   belong to one existing point, skip it (or reclassify that existing point in
-   place instead of adding a duplicate).
+   Because step 1 excluded already-tracked keypoints, no appended observation
+   reuses a feature an existing point already owns — a 2D feature still observes
+   exactly one 3D point, which COLMAP export and bundle adjustment require.
 
 Heavy lifting (steps 3–6) belongs in `sfmtool-core` behind a PyO3 entry point.
 The prototype implements this policy in vectorised NumPy and it works, but the
@@ -166,18 +173,18 @@ filtering/optimisation ops:
 sfm xform in.sfmr out.sfmr --find-points-at-infinity <eps_deg>[,<desc_thresh>[,<min_views>]]
 ```
 
-e.g. `--find-points-at-infinity 0.1,300,2`. A `--max-features <N>` flag (the
+e.g. `--find-points-at-infinity 0.1,200,2` (the `desc_thresh` default is 200).
+A `--max-features <N>` flag (the
 standard cap many commands carry, taking each image's largest features) bounds
 the per-image keypoint set: it caps memory and runtime on dense or many-image
 solves, and the largest-scale features tend to be the most repeatable across the
 wide viewpoint changes a distant point is seen under. The prototype caps at
 2000/image. Optionally a companion `--classify-points-at-infinity
 <noise_floor_px>` flag (reclassify existing points), which composes naturally
-before or after. Because the operation *adds* points and tracks rather than
-transforming existing geometry, note it as the first additive `xform`; the
-`Transform.apply(recon) -> recon` protocol still holds. The op emits both kinds
-of point on its own (per the classify step): a tight `ε` yields all `w = 0`, a
-looser `ε` lets some tracks triangulate into finite distant points.
+before or after. The operation is *additive*: it appends new points and tracks
+via the `Transform.apply(recon) -> recon` protocol. It emits both kinds of point
+on its own (per the classify step): a tight `ε` yields all `w = 0`, a looser `ε`
+lets some tracks triangulate into finite distant points.
 
 ## Prototype findings
 
