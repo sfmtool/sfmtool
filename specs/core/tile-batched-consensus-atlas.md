@@ -6,7 +6,7 @@ photometric RANSAC ([`refine_photometric_ransac`]) without changing any
 of their algorithms. The orchestrator lives in
 `crates/sfmtool-core/src/consensus_atlas.rs` (`render_consensus_atlas`),
 the PyO3 binding in `crates/sfmtool-py/src/py_consensus_atlas.rs`, and
-`scripts/render_equirectangular.py` consumes it for the production
+`sfm panorama` (`src/sfmtool/_panorama.py`) consumes it for the production
 panorama render.
 
 [`PerSphericalTileSourceStack`]: per-spherical-tile-source-stack.md
@@ -171,10 +171,12 @@ out of scope here.
 
 - **The equirect resample** stays as-is, on the full rig + assembled
   atlas. Not memory-bound, not touched.
-- **`render_equirectangular.py --debug`** (per-cluster and per-source
-  panoramas) re-runs the consensus against the *full* stack with
-  alternative masks; the batched path never materialises the full stack,
-  so `--debug` stays on the existing monolithic path — a dev aid on
+- **Per-cluster / per-source debug panoramas** (rendering secondary,
+  outlier, or single-source masks) re-run the consensus against the
+  *full* stack with alternative masks; the batched path never
+  materialises the full stack, so that kind of exploration stays on the
+  monolithic path (`PerSphericalTileSourceStack` +
+  `refine_photometric_ransac` + `primary_consensus_atlas`) — a dev aid on
   small data, where memory is not the constraint. Generalising the
   orchestrator to emit per-(tile, arbitrary-mask) patches is a possible
   later extension, not v1.
@@ -531,15 +533,14 @@ dtype="float16", **ransac_kwargs)` free function. The binding does the
 => render_consensus_atlas::<f32>, "uint8" => Err(...) }` dispatch — the
 same pattern as `build_rotation_only`'s binding — and returns
 `(atlas, tile_primary_count, tile_secondary_count, tile_primary_lum_mad,
-tile_secondary_lum_mad)`. `scripts/render_equirectangular.py` switches
-its build→ransac→consensus trio to this single call, with a new
-`--batch-size` flag (default chosen so the per-batch f16 stack is a few
-GB at the script's default resolution). The script now **always** takes
-the batched path for the production render; the only exception is
-`--debug`, which still needs the full materialised stack for its
-per-cluster / per-source passes and so falls back to the existing
-monolithic `build_rotation_only` → `refine_photometric_ransac` →
-`primary_consensus_atlas` trio (see [Non-goals](#non-goals)).
+tile_secondary_lum_mad)`. `sfm panorama` (`src/sfmtool/_panorama.py`)
+drives its build→ransac→consensus trio through this single call, exposing
+`--batch-size` (default chosen so the per-batch f16 stack is a few GB at
+the command's default resolution). The command always takes the batched
+path for the production render; per-cluster / per-source debug passes,
+which need the full materialised stack, use the monolithic
+`build_rotation_only` → `refine_photometric_ransac` →
+`primary_consensus_atlas` trio directly (see [Non-goals](#non-goals)).
 
 ## Edge cases
 
