@@ -365,7 +365,10 @@ def print_reconstruction_summary(
         pass
 
     click.echo(f"  Cameras: {recon.camera_count}")
-    click.echo(f"  3D points: {recon.point_count}")
+    points_line = f"  3D points: {recon.point_count}"
+    if recon.infinity_point_count:
+        points_line += f"  ({recon.infinity_point_count} at infinity)"
+    click.echo(points_line)
     click.echo(f"  Observations: {recon.observation_count}")
 
     if recon.point_count > 0:

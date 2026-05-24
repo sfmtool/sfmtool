@@ -44,7 +44,10 @@ files have no integrity check.
 The default output is a compact label/value block. The fields per type:
 
 - **`.sfmr`** — format version, operation (tool + version), image / camera /
-  3D point / observation counts, rig counts (if present), integrity.
+  3D point / observation counts, rig counts (if present), integrity. When the
+  reconstruction holds any points at infinity (`w == 0`), the 3D point count is
+  annotated with how many are at infinity (e.g. `206,413  (105,773 at
+  infinity)`), read from the format's stored `infinity_point_count`.
 - **`.sift`** — image name and dimensions, feature count, feature tool,
   integrity.
 - **`.matches`** — format version, matching method (tool + version), image /
@@ -58,7 +61,9 @@ The default output is a compact label/value block. The fields per type:
 
 - **`.sfmr`** — the full reconstruction report: metadata, workspace, per-camera
   parameter tables, rig configuration, 3D point statistics with histograms,
-  reprojection error, observation statistics, nearest-neighbor distances.
+  reprojection error, observation statistics, nearest-neighbor distances. The
+  3D point count carries the same `(N at infinity)` annotation as the default
+  summary when any points at infinity are present.
 - **`.sift`** — adds image file size and hashes, feature tool and content
   hashes, feature tool options, and the top 5 features by size.
 - **`.matches`** — adds timestamp, workspace, matching options, matches-per-pair

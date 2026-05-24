@@ -28,6 +28,7 @@ class TestHomogeneousPointAccessors:
 
         # A normally solved reconstruction contains only finite points.
         assert not at_infinity.any()
+        assert recon.infinity_point_count == 0
         assert np.array_equal(positions_xyzw[:, 3], np.ones(m))
         assert np.array_equal(positions_xyzw[:, :3], positions)
 
@@ -46,6 +47,8 @@ class TestHomogeneousPointAccessors:
         at_infinity = clone.point_is_at_infinity
         assert at_infinity[0]
         assert not at_infinity[1:].any()
+        assert clone.infinity_point_count == 1
+        assert clone.infinity_point_count == int(at_infinity.sum())
 
         assert clone.positions_xyzw[0, 3] == 0.0
         np.testing.assert_allclose(clone.positions[0], [0.0, 0.0, 1.0])
@@ -81,6 +84,9 @@ class TestInfinityConversions:
         # Reclassification never adds or drops points or observations.
         assert classified.point_count == recon.point_count
         assert classified.observation_count == recon.observation_count
+        assert classified.infinity_point_count == int(
+            classified.point_is_at_infinity.sum()
+        )
 
     def test_classify_detects_a_far_point(self, sfmrfile_reconstruction_with_17_images):
         recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
@@ -93,6 +99,11 @@ class TestInfinityConversions:
 
         classified = recon.classify_points_at_infinity()
         assert classified.point_is_at_infinity[idx]
+        # The cached count reflects the newly-classified far point.
+        assert classified.infinity_point_count >= 1
+        assert classified.infinity_point_count == int(
+            classified.point_is_at_infinity.sum()
+        )
         # A point at infinity stores a unit-length direction.
         np.testing.assert_allclose(
             np.linalg.norm(classified.positions[idx]), 1.0, atol=1e-9
@@ -106,6 +117,8 @@ class TestInfinityConversions:
         strict = recon.classify_points_at_infinity(noise_floor_px=0.01)
         loose = recon.classify_points_at_infinity(noise_floor_px=1.0e4)
         assert loose.point_is_at_infinity.sum() >= strict.point_is_at_infinity.sum()
+        assert strict.infinity_point_count == int(strict.point_is_at_infinity.sum())
+        assert loose.infinity_point_count == int(loose.point_is_at_infinity.sum())
 
     def test_materialize_makes_every_point_finite(
         self, sfmrfile_reconstruction_with_17_images
@@ -117,11 +130,14 @@ class TestInfinityConversions:
             positions[i] = [0.0, 0.0, 1.0, 0.0]
         recon = recon.clone_with_changes(positions=positions)
         assert recon.point_is_at_infinity[:n_infinity].all()
+        # clone_with_changes rebuilds the cache: it counts the new w=0 points.
+        assert recon.infinity_point_count == n_infinity
 
         materialized = recon.materialize_points_at_infinity()
         assert not materialized.point_is_at_infinity.any()
         assert materialized.point_count == recon.point_count
         assert np.all(np.isfinite(materialized.positions))
+        assert materialized.infinity_point_count == 0
 
     def test_materialize_leaves_finite_points_unchanged(
         self, sfmrfile_reconstruction_with_17_images
@@ -130,6 +146,7 @@ class TestInfinityConversions:
         # No points at infinity — materialise is a no-op on the positions.
         materialized = recon.materialize_points_at_infinity()
         np.testing.assert_array_equal(materialized.positions, recon.positions)
+        assert materialized.infinity_point_count == 0
 
 
 class TestWorldSpaceUnit:
