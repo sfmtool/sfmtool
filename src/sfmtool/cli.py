@@ -26,6 +26,7 @@ from ._commands import (
     match,
     merge,
     pano2rig,
+    panorama,
     sift,
     solve,
     to_colmap_bin,
@@ -68,6 +69,7 @@ main.add_command_with_category(explorer, category="Visualization")
 main.add_command_with_category(epipolar, category="Visualization")
 main.add_command_with_category(flow, category="Image Processing")
 main.add_command_with_category(heatmap, category="Visualization")
+main.add_command_with_category(panorama, category="Visualization")
 main.add_command_with_category(undistort, category="Image Processing")
 main.add_command_with_category(pano2rig, category="Workspace")
 main.add_command_with_category(insv2rig, category="Workspace")

@@ -19,6 +19,7 @@ from .insv2rig import insv2rig
 from .match import match
 from .merge import merge
 from .pano2rig import pano2rig
+from .panorama import panorama
 from .sift import sift
 from .solve import solve
 from .to_colmap_bin import to_colmap_bin
@@ -45,6 +46,7 @@ __all__ = [
     "match",
     "merge",
     "pano2rig",
+    "panorama",
     "sift",
     "solve",
     "to_colmap_bin",
