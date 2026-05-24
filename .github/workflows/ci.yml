@@ -17,7 +17,33 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'crates/**'
+              - 'tests/**'
+              - 'test-data/**'
+              - 'scripts/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'pyproject.toml'
+              - 'pixi.toml'
+              - 'pixi.lock'
+              - 'codecov.yml'
+              - '.github/workflows/ci.yml'
+
   lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +64,8 @@ jobs:
         run: pixi run -e test cargo clippy --workspace --all-targets -- -D warnings
 
   test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -60,3 +88,15 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info,python-lcov.info
           flags: ${{ matrix.os }}
+
+  # Single stable check to mark as required in branch protection. Always runs
+  # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.
+  ci-ok:
+    needs: [changes, lint, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any required job failed or was cancelled
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - run: echo "CI passed"
