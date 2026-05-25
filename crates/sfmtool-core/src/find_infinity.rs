@@ -510,7 +510,7 @@ impl SfmrReconstruction {
         }
 
         debug_assert!(recon.points.len() >= old_point_count);
-        recon.rebuild_derived_indexes();
+        recon.rebuild_derived_fields();
         Ok(recon)
     }
 }

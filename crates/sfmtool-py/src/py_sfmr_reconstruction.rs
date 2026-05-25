@@ -132,6 +132,12 @@ impl PySfmrReconstruction {
         self.inner.point_count()
     }
 
+    /// Number of 3D points at infinity (`w == 0`).
+    #[getter]
+    fn infinity_point_count(&self) -> usize {
+        self.inner.infinity_point_count
+    }
+
     /// Number of track observations.
     #[getter]
     fn observation_count(&self) -> usize {
@@ -1114,7 +1120,7 @@ impl PySfmrReconstruction {
         }
 
         // Recompute derived fields
-        recon.rebuild_derived_indexes();
+        recon.rebuild_derived_fields();
 
         Ok(Self { inner: recon })
     }

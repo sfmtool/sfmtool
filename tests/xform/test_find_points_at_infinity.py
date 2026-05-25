@@ -55,6 +55,11 @@ def test_find_is_additive_and_consistent(sfmrfile_reconstruction_with_17_images)
     # A tight eps yields some genuine w=0 points at infinity.
     assert int(np.asarray(result.point_is_at_infinity).sum()) > 0
 
+    # The cached infinity_point_count matches the actual w=0 count after find.
+    assert result.infinity_point_count == int(
+        np.asarray(result.point_is_at_infinity).sum()
+    )
+
 
 def test_min_views_three_yields_fewer(sfmrfile_reconstruction_with_17_images):
     """Requiring 3 views finds no more new points than requiring 2."""
@@ -79,6 +84,9 @@ def test_classify_preserves_point_count(sfmrfile_reconstruction_with_17_images):
     result = ClassifyPointsAtInfinityTransform(1.0).apply(original)
 
     assert result.point_count == original.point_count
+    assert result.infinity_point_count == int(
+        np.asarray(result.point_is_at_infinity).sum()
+    )
 
 
 def test_find_no_duplicate_observations(sfmrfile_reconstruction_with_17_images):
@@ -123,6 +131,9 @@ def test_found_reconstruction_survives_bundle_adjust(
     # The round trip keeps the bulk of the discovered points and stays finite.
     assert adjusted.point_count > original.point_count
     assert np.isfinite(np.asarray(adjusted.positions)).all()
+    assert adjusted.infinity_point_count == int(
+        np.asarray(adjusted.point_is_at_infinity).sum()
+    )
 
 
 def test_cli_find_points_at_infinity(sfmrfile_reconstruction_with_17_images):
@@ -152,3 +163,7 @@ def test_cli_find_points_at_infinity(sfmrfile_reconstruction_with_17_images):
     original = SfmrReconstruction.load(input_sfmr)
     transformed = SfmrReconstruction.load(output_sfmr)
     assert transformed.point_count > original.point_count
+    # Saved then reloaded: the cached count survives the write/read round trip.
+    assert transformed.infinity_point_count == int(
+        np.asarray(transformed.point_is_at_infinity).sum()
+    )

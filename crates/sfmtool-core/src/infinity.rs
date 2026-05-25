@@ -14,7 +14,7 @@
 
 use nalgebra::{Point3, Vector3};
 
-use crate::reconstruction::SfmrReconstruction;
+use crate::reconstruction::{count_points_at_infinity, SfmrReconstruction};
 use crate::viewing_angle::{max_viewing_angle, viewing_rays};
 
 /// SIFT keypoint localisation noise floor (pixels).
@@ -101,6 +101,7 @@ impl SfmrReconstruction {
             // norm == 0 (rays exactly cancel) is degenerate — leave finite.
         }
 
+        recon.infinity_point_count = count_points_at_infinity(&recon.points);
         recon
     }
 
@@ -172,6 +173,7 @@ impl SfmrReconstruction {
             pt.w = 1.0;
         }
 
+        recon.infinity_point_count = count_points_at_infinity(&recon.points);
         recon
     }
 }
@@ -187,6 +189,8 @@ mod tests {
         let classified = recon.classify_points_at_infinity(DEFAULT_NOISE_FLOOR_PX);
         let n_inf = classified.points.iter().filter(|p| p.w == 0.0).count();
         assert_eq!(n_inf, 0, "well-conditioned demo points must stay finite");
+        // The cached count tracks the actual w=0 count after classify.
+        assert_eq!(classified.infinity_point_count, n_inf);
     }
 
     #[test]
@@ -199,6 +203,8 @@ mod tests {
 
         let classified = recon.classify_points_at_infinity(DEFAULT_NOISE_FLOOR_PX);
         assert!(classified.points[0].is_at_infinity());
+        // The cached count reflects the freshly-classified point.
+        assert_eq!(classified.infinity_point_count, 1);
         // The stored direction is a unit vector.
         assert!((classified.points[0].position.coords.norm() - 1.0).abs() < 1e-9);
         // estimated_normal is zeroed for a point at infinity.
@@ -220,6 +226,7 @@ mod tests {
             !with_floor.points[0].is_at_infinity(),
             "parallax exceeds the 1 px floor — point stays finite"
         );
+        assert_eq!(with_floor.infinity_point_count, 0);
 
         recon.points[0].error = 5.0;
         let with_error = recon.classify_points_at_infinity(DEFAULT_NOISE_FLOOR_PX);
@@ -227,6 +234,7 @@ mod tests {
             with_error.points[0].is_at_infinity(),
             "parallax is below the point's own 5 px reprojection error"
         );
+        assert_eq!(with_error.infinity_point_count, 1);
     }
 
     #[test]
@@ -238,6 +246,7 @@ mod tests {
         }
         let classified = recon.classify_points_at_infinity(DEFAULT_NOISE_FLOOR_PX);
         assert!(classified.points.iter().all(|p| p.is_at_infinity()));
+        assert_eq!(classified.infinity_point_count, classified.points.len());
         for pt in &classified.points {
             assert!((pt.position.coords.norm() - 1.0).abs() < 1e-9);
         }
@@ -253,6 +262,7 @@ mod tests {
         }
         let materialised = recon.materialize_points_at_infinity();
         assert!(materialised.points.iter().all(|p| p.w == 1.0));
+        assert_eq!(materialised.infinity_point_count, 0);
     }
 
     #[test]
@@ -325,8 +335,10 @@ mod tests {
 
         let materialised = recon.materialize_points_at_infinity();
         assert!(!materialised.points[0].is_at_infinity());
+        assert_eq!(materialised.infinity_point_count, 0);
 
         let reclassified = materialised.classify_points_at_infinity(DEFAULT_NOISE_FLOOR_PX);
         assert!(reclassified.points[0].is_at_infinity());
+        assert_eq!(reclassified.infinity_point_count, 1);
     }
 }

@@ -174,6 +174,12 @@ pub struct SfmrReconstruction {
     /// Max feature_index referenced by any track observation for each image.
     /// Used to determine how many features to read from the .sift file.
     pub max_track_feature_index: Vec<u32>,
+    /// Cached count of 3D points at infinity (`w == 0`). Refreshed by
+    /// `rebuild_derived_fields` and by the in-place `w`-mutators
+    /// (`classify_points_at_infinity` / `materialize_points_at_infinity`), since
+    /// the count depends on point `w`-values rather than the track structure the
+    /// other derived fields track.
+    pub infinity_point_count: usize,
 }
 
 impl SfmrReconstruction {
@@ -549,6 +555,8 @@ impl SfmrReconstruction {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        let infinity_point_count = count_points_at_infinity(&points);
+
         Ok(SfmrReconstruction {
             workspace_dir: data.workspace_dir.unwrap_or_default(),
             metadata: data.metadata,
@@ -565,14 +573,17 @@ impl SfmrReconstruction {
             rig_frame_data: data.rig_frame_data,
             image_feature_to_point,
             max_track_feature_index,
+            infinity_point_count,
         })
     }
 
-    /// Rebuild derived indexes (observation offsets, feature→point maps)
-    /// from the current `tracks`, `observation_counts`, and `images`.
+    /// Rebuild derived fields (observation offsets, feature→point maps, and the
+    /// `infinity_point_count` cache) from the current `tracks`,
+    /// `observation_counts`, `images`, and `points`.
     ///
-    /// Call this after mutating tracks or observation counts externally.
-    pub fn rebuild_derived_indexes(&mut self) {
+    /// Call this after mutating tracks, observation counts, or point
+    /// `w`-values externally.
+    pub fn rebuild_derived_fields(&mut self) {
         self.observation_offsets = compute_observation_offsets(&self.observation_counts);
 
         let image_count = self.images.len();
@@ -584,6 +595,8 @@ impl SfmrReconstruction {
             self.max_track_feature_index[img] =
                 self.max_track_feature_index[img].max(obs.feature_index);
         }
+
+        self.infinity_point_count = count_points_at_infinity(&self.points);
     }
 
     /// Apply an SE(3) similarity transform to this reconstruction.
@@ -649,7 +662,9 @@ impl SfmrReconstruction {
             None
         };
 
+        let infinity_point_count = count_points_at_infinity(&new_points);
         SfmrReconstruction {
+            infinity_point_count,
             images: new_images,
             points: new_points,
             rig_frame_data: new_rig_frame_data,
@@ -821,7 +836,9 @@ impl SfmrReconstruction {
             .as_ref()
             .map(|rf| subset_rig_frame_data(rf, image_indices));
 
+        let infinity_point_count = count_points_at_infinity(&new_points);
         Ok(SfmrReconstruction {
+            infinity_point_count,
             workspace_dir: self.workspace_dir.clone(),
             metadata: self.metadata.clone(),
             content_hash: self.content_hash.clone(),
@@ -907,7 +924,9 @@ impl SfmrReconstruction {
                 new_max_track_feature_index[img].max(obs.feature_index);
         }
 
+        let infinity_point_count = count_points_at_infinity(&new_points);
         SfmrReconstruction {
+            infinity_point_count,
             workspace_dir: self.workspace_dir.clone(),
             metadata: self.metadata.clone(),
             content_hash: self.content_hash.clone(),
@@ -1192,7 +1211,9 @@ impl SfmrReconstruction {
             max_track_feature_index[img] = max_track_feature_index[img].max(obs.feature_index);
         }
 
+        let infinity_point_count = count_points_at_infinity(&points);
         SfmrReconstruction {
+            infinity_point_count,
             workspace_dir: PathBuf::new(),
             metadata,
             rig_frame_data: None,
@@ -1302,6 +1323,13 @@ fn subset_rig_frame_data(rf: &RigFrameData, image_indices: &[u32]) -> RigFrameDa
 ///
 /// Returns a vector of length `counts.len() + 1` where `offsets[i]` is the
 /// index into the tracks array where point `i`'s observations begin.
+/// Count 3D points at infinity (`w == 0`) in a slice. Shared by every
+/// constructor and refresh site so the cached `infinity_point_count` stays
+/// consistent.
+pub(crate) fn count_points_at_infinity(points: &[Point3D]) -> usize {
+    points.iter().filter(|p| p.is_at_infinity()).count()
+}
+
 fn compute_observation_offsets(counts: &[u32]) -> Vec<usize> {
     let mut offsets = Vec::with_capacity(counts.len() + 1);
     offsets.push(0);
