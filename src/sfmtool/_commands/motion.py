@@ -1,7 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Discontinuity analysis command."""
+"""Camera-motion analysis command."""
 
 from pathlib import Path
 
@@ -14,7 +14,7 @@ from .._filenames import expand_paths
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp")
 
 
-@click.command("discontinuity")
+@click.command("motion")
 @timed_command
 @click.help_option("--help", "-h")
 @click.argument("paths", nargs=-1, type=click.Path(exists=True))
@@ -64,7 +64,7 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp")
     default=None,
     help="Write a machine-readable JSON report of the analysis to this path.",
 )
-def discontinuity(
+def motion(
     paths,
     range_expr,
     initial_stride,
@@ -74,7 +74,7 @@ def discontinuity(
     save_flow_dir,
     json_path,
 ):
-    """Analyze image sequences or reconstructions for discontinuities.
+    """Analyze camera motion in image sequences or reconstructions for discontinuities.
 
     Input can be image paths/directories (analyzes frame-to-frame optical flow)
     or a single .sfmr file (analyzes camera motion with flow cross-check).
@@ -86,13 +86,13 @@ def discontinuity(
 
     \b
     Examples:
-        sfm discontinuity images/
-        sfm discontinuity images/ --initial-stride 16
-        sfm discontinuity images/ -r 1-100
+        sfm motion images/
+        sfm motion images/ --initial-stride 16
+        sfm motion images/ -r 1-100
     """
     from deadline.job_attachments.api import summarize_paths_by_sequence
 
-    from .._discontinuity_image_sequence import analyze_image_sequence
+    from ..motion.image_sequence import analyze_image_sequence
     from .._filenames import number_from_filename
 
     if not paths:
@@ -102,8 +102,8 @@ def discontinuity(
 
     # Check if input is a .sfmr file
     if len(paths) == 1 and paths[0].endswith(".sfmr"):
-        from .._discontinuity_reconstruction import analyze_reconstruction
-        from .._discontinuity_json import (
+        from ..motion.reconstruction import analyze_reconstruction
+        from ..motion.report import (
             reconstruction_results_to_json,
             write_report,
         )
@@ -196,7 +196,7 @@ def discontinuity(
         )
 
     if json_path and image_sequence_results:
-        from .._discontinuity_json import (
+        from ..motion.report import (
             image_sequence_results_to_json,
             write_report,
         )

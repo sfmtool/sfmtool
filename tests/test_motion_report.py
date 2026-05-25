@@ -1,10 +1,10 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the `sfm discontinuity --json` machine-readable output.
+"""Tests for the `sfm motion --json` machine-readable output.
 
 The schema is documented under "JSON Output" in
-specs/cli/discontinuity-command.md.
+specs/cli/motion-command.md.
 """
 
 import json
@@ -30,7 +30,7 @@ def runner():
 def _make_translation_discontinuity(sfmr_path: Path, *, offset_m: float = 50.0):
     """Apply a large translation to all images with file number >= 11.
 
-    Mirrors `_make_discontinuous_recon` in test_cli_discontinuity.py — the
+    Mirrors `_make_discontinuous_recon` in test_cli_motion.py — the
     seoul_bull dataset has 17 sequentially-named images, so this plants a
     pose break between frame 10 and frame 11.
     """
@@ -64,8 +64,8 @@ def _make_translation_discontinuity(sfmr_path: Path, *, offset_m: float = 50.0):
 
 def _run_recon_to_json(recon) -> dict:
     """Run `analyze_reconstruction` and convert the result to a JSON dict."""
-    from sfmtool._discontinuity_reconstruction import analyze_reconstruction
-    from sfmtool._discontinuity_json import reconstruction_results_to_json
+    from sfmtool.motion.reconstruction import analyze_reconstruction
+    from sfmtool.motion.report import reconstruction_results_to_json
 
     results = analyze_reconstruction(recon)
     return reconstruction_results_to_json(results)
@@ -174,7 +174,7 @@ def test_segments_helper_handles_edge_cases():
     """Unit test for `_segments_from_core_edges`: covers the no-edge case,
     edges at the boundaries (yielding singleton segments), and adjacent
     edges (yielding a singleton middle segment)."""
-    from sfmtool._discontinuity_json import _segments_from_core_edges
+    from sfmtool.motion.report import _segments_from_core_edges
 
     frame_numbers = list(range(100, 110))  # seq index i -> file number 100+i
 
@@ -234,7 +234,7 @@ def test_image_sequence_json_has_samples_and_no_segments(runner, tmp_path):
     result = runner.invoke(
         main,
         [
-            "discontinuity",
+            "motion",
             str(SEOUL_BULL_DIR),
             "-r",
             "1-4",
@@ -294,7 +294,7 @@ def test_cli_recon_writes_json(
     result = runner.invoke(
         main,
         [
-            "discontinuity",
+            "motion",
             str(sfmrfile_reconstruction_with_17_images),
             "--json",
             str(json_out),
@@ -315,7 +315,7 @@ def test_cli_recon_json_to_nonexistent_dir_raises(
     result = runner.invoke(
         main,
         [
-            "discontinuity",
+            "motion",
             str(sfmrfile_reconstruction_with_17_images),
             "--json",
             str(bad),

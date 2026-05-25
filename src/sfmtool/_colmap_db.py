@@ -16,7 +16,7 @@ from ._camera_setup import (
     intrinsics_for_image,
 )
 from ._cameras import colmap_camera_from_intrinsics
-from ._camrig_resolver import CamrigRig, resolve_camrig_for_solve
+from .camrig.resolver import CamrigRig, resolve_camrig_for_solve
 from ._rig_config import (
     _infer_frame_key,
     _match_image_to_sensor,

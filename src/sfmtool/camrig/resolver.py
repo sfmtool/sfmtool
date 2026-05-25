@@ -19,7 +19,7 @@ taking precedence over `camera_config.json` and `rig_config.json`.
 from dataclasses import dataclass
 from pathlib import Path
 
-from ._camrig_pattern import match_pattern, match_pattern_with_frames
+from .pattern import match_pattern, match_pattern_with_frames
 
 # Allowed relative difference between an image's aspect ratio and the
 # `.camrig` camera's aspect ratio before the rig is rejected.
@@ -82,7 +82,7 @@ def _check_image_resolution(
     image size). A mixed-resolution set would otherwise be silently mis-scaled
     off the first image alone.
     """
-    from ._camera_setup import _read_image_size
+    from .._camera_setup import _read_image_size
 
     where = f"{camrig_file}{label}"
     by_size: dict[tuple[int, int], list] = {}
@@ -270,7 +270,7 @@ def resolve_camrig_for_solve(
     if not camrig_files:
         return None
 
-    from ._sfmtool import read_camrig
+    from .._sfmtool import read_camrig
 
     solve_set = {Path(p).resolve() for p in image_paths}
 

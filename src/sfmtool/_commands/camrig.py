@@ -117,7 +117,7 @@ def create(
             --params 2800,2800,2000,1500,-0.08,0.01,0,0
 
     """
-    from .._camrig_create import build_camrig_from_images
+    from ..camrig.create import build_camrig_from_images
 
     try:
         summary = build_camrig_from_images(
@@ -204,7 +204,7 @@ def cp(source, output_file, rig_index, camera_index, sensors_expr, pattern, name
         # Take three faces out of a six-face cubemap rig
         sfm camrig cp cubemap.camrig front.camrig --sensors 0-2
     """
-    from .._camrig_cp import CamrigCpError, copy_from_camrig, copy_from_sfmr
+    from ..camrig.cp import CamrigCpError, copy_from_camrig, copy_from_sfmr
 
     src = Path(source)
     out = Path(output_file)

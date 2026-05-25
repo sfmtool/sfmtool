@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._camrig_resolver import (
+from sfmtool.camrig.resolver import (
     CamrigSolveError,
     resolve_camrig_for_solve,
 )

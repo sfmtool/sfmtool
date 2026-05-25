@@ -6,7 +6,7 @@
 import click
 import numpy as np
 
-from ._discontinuity_constants import (
+from .constants import (
     OBS_WINDOW,
     OBS_Z_THRESHOLD,
     OVERLAP_BASELINE_WINDOW,
@@ -17,7 +17,7 @@ from ._discontinuity_constants import (
     STEP_RATIO_THRESHOLD,
     STEP_RATIO_WINDOW,
 )
-from ._sfmtool import RotQuaternion
+from .._sfmtool import RotQuaternion
 
 
 def _rotation_angle_deg(qa: RotQuaternion, qb: RotQuaternion) -> float:
@@ -238,7 +238,7 @@ def _compute_shared_point_counts(
 
     Returns a dict mapping (img_idx_a, img_idx_b) → shared_count.
     """
-    from ._image_pair_graph import build_covisibility_pairs
+    from .._image_pair_graph import build_covisibility_pairs
 
     all_pairs = build_covisibility_pairs(recon)
     pair_counts = {}
@@ -266,7 +266,7 @@ def _compute_per_image_mean_errors(
 
 # ---------------------------------------------------------------------------
 # Secondary discontinuity signals (complement pose extrapolation).
-# See `_discontinuity_constants.py` for the rationale behind each signal and
+# See `constants.py` for the rationale behind each signal and
 # its threshold/window constants.
 # ---------------------------------------------------------------------------
 
@@ -438,7 +438,7 @@ def analyze_reconstruction(
     """
     from deadline.job_attachments.api import summarize_paths_by_sequence
 
-    from ._filenames import number_from_filename
+    from .._filenames import number_from_filename
 
     image_names = recon.image_names
     num_images = recon.image_count

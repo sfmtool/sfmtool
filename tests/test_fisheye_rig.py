@@ -295,7 +295,7 @@ def test_kerry_park_camrig_resolves_to_rig(
     """
     from collections import Counter
 
-    from sfmtool._camrig_resolver import resolve_camrig_for_solve
+    from sfmtool.camrig.resolver import resolve_camrig_for_solve
 
     image_paths = []
     for sensor in ("fisheye_left", "fisheye_right"):

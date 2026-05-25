@@ -17,8 +17,8 @@ then narrow the pattern and build separate `.camrig` files per subset.
 from collections import Counter
 from pathlib import Path
 
-from ._cameras import _CAMERA_PARAM_NAMES
-from ._camrig_pattern import match_pattern
+from .._cameras import _CAMERA_PARAM_NAMES
+from .pattern import match_pattern
 
 # Image file extensions a pattern is allowed to match.
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp")
@@ -63,7 +63,7 @@ def normalize_pattern(pattern: str) -> str:
     same rule the format's `validate()` enforces (see
     `specs/formats/camrig-file-format.md`).
     """
-    from ._sfmtool import validate_camrig_pattern
+    from .._sfmtool import validate_camrig_pattern
 
     normalized = pattern.replace("\\", "/").strip()
     try:
@@ -147,7 +147,7 @@ def _check_resolution_consistency(
 
 def _read_image_sizes(abs_paths: list[Path]) -> list[tuple[int, int]]:
     """Return `(width, height)` for each image file."""
-    from ._camera_setup import _read_image_size
+    from .._camera_setup import _read_image_size
 
     return [_read_image_size(p) for p in abs_paths]
 
@@ -192,8 +192,8 @@ def _camera_from_inference(
     principal_point_y: float | None,
 ) -> dict:
     """Build a camera dict from pycolmap EXIF inference, applying overrides."""
-    from ._camera_setup import _infer_camera
-    from ._cameras import pycolmap_camera_to_intrinsics
+    from .._camera_setup import _infer_camera
+    from .._cameras import pycolmap_camera_to_intrinsics
 
     inferred = [
         pycolmap_camera_to_intrinsics(_infer_camera(p, camera_model)) for p in abs_paths
@@ -260,7 +260,7 @@ def _camera_from_inference(
 
 def _validated_camera(model: str, width: int, height: int, parameters: dict) -> dict:
     """Build a `{model, width, height, parameters}` dict, validating it."""
-    from ._sfmtool import CameraIntrinsics
+    from .._sfmtool import CameraIntrinsics
 
     try:
         intrinsics = CameraIntrinsics.from_dict(
@@ -301,7 +301,7 @@ def build_camrig_from_images(
     """
     import numpy as np
 
-    from ._sfmtool import write_camrig
+    from .._sfmtool import write_camrig
 
     output_file = Path(output_file)
     rig_root = output_file.parent

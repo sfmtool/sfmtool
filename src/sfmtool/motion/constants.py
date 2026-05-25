@@ -3,8 +3,8 @@
 
 """Threshold and window constants for reconstruction discontinuity analysis.
 
-Shared by `_discontinuity_reconstruction.py` (which computes the signals) and
-`_discontinuity_json.py` (which serializes the results).
+Shared by `reconstruction.py` (which computes the signals) and `report.py`
+(which serializes the results).
 
 Secondary discontinuity signals complement pose extrapolation — they catch
 discontinuities the pose-extrapolation test misses because polynomial

@@ -15,7 +15,6 @@ from ._commands import (
     camrig,
     compare,
     densify,
-    discontinuity,
     epipolar,
     explorer,
     flow,
@@ -25,6 +24,7 @@ from ._commands import (
     insv2rig,
     match,
     merge,
+    motion,
     pano2rig,
     panorama,
     sift,
@@ -64,7 +64,7 @@ main.add_command_with_category(compare, category="Reconstruction")
 main.add_command_with_category(align, category="Reconstruction")
 main.add_command_with_category(merge, category="Reconstruction")
 main.add_command_with_category(densify, category="Reconstruction")
-main.add_command_with_category(discontinuity, category="Reconstruction")
+main.add_command_with_category(motion, category="Reconstruction")
 main.add_command_with_category(explorer, category="Visualization")
 main.add_command_with_category(epipolar, category="Visualization")
 main.add_command_with_category(flow, category="Image Processing")
