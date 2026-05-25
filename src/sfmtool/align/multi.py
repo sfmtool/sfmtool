@@ -8,8 +8,8 @@ from pathlib import Path
 
 import click
 
-from ._align import estimate_pairwise_alignment
-from ._sfmtool import SfmrReconstruction
+from .core import estimate_pairwise_alignment
+from .._sfmtool import SfmrReconstruction
 
 
 def _get_reconstruction_images(recon: SfmrReconstruction) -> dict[int, str]:
@@ -93,8 +93,8 @@ def _align_with_cameras(
     verbose: bool = False,
 ) -> AlignmentResult:
     """Align reconstructions using camera poses."""
-    from ._align_by_cameras import build_image_matches, get_reconstruction_poses
-    from .xform import SimilarityTransform, apply_transforms
+    from .by_cameras import build_image_matches, get_reconstruction_poses
+    from ..xform import SimilarityTransform, apply_transforms
 
     all_recons = [reference] + list(to_align)
     n = len(all_recons)
@@ -209,8 +209,8 @@ def _align_with_points(
     verbose: bool = False,
 ) -> AlignmentResult:
     """Align reconstructions using 3D point correspondences."""
-    from ._align_by_points import estimate_alignment_from_points_with_logging
-    from .xform import SimilarityTransform, apply_transforms
+    from .by_points import estimate_alignment_from_points_with_logging
+    from ..xform import SimilarityTransform, apply_transforms
 
     all_recons = [reference] + list(to_align)
     n = len(all_recons)

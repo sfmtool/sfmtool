@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from sfmtool._sfmtool import SfmrReconstruction, read_sift_partial
-from sfmtool._sift_file import feature_size
+from sfmtool.sift.file import feature_size
 from sfmtool.xform import RemoveLargeFeaturesFilter
 
 from .conftest import apply_transforms_to_file, load_reconstruction_data

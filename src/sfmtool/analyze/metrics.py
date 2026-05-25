@@ -8,9 +8,9 @@ from pathlib import Path
 import click
 import numpy as np
 
-from ._sfmtool import SfmrReconstruction
-from ._filenames import number_from_filename
-from ._histogram_utils import create_histogram_string
+from .._sfmtool import SfmrReconstruction
+from .._filenames import number_from_filename
+from .._histogram_utils import create_histogram_string
 
 
 def _compute_per_image_metrics(
@@ -92,7 +92,7 @@ def print_metrics_analysis(
     range_expr: str | None = None,
 ) -> None:
     """Print per-image metrics analysis sorted by mean reprojection error."""
-    from ._sfmtool import RangeExpr
+    from .._sfmtool import RangeExpr
 
     if recon_name is None:
         recon_name = sfmr_path.name

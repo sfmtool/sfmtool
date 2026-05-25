@@ -23,7 +23,7 @@ from ._rig_config import (
     _sensor_from_rig_pose,
 )
 from ._rig_frames import _build_cross_frame_pairs, _build_same_frame_index_pairs
-from ._sift_file import SiftReader, image_files_to_sift_files
+from .sift.file import SiftReader, image_files_to_sift_files
 
 
 def _setup_for_sfm(

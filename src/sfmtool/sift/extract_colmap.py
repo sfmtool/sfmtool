@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import pycolmap
 
-from sfmtool._sift_file import SiftExtractionError, feature_size, xxh128_of_file
+from sfmtool.sift.file import SiftExtractionError, feature_size, xxh128_of_file
 
 __all__ = [
     "get_colmap_feature_options",

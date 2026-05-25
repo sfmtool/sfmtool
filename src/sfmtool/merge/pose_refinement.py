@@ -15,7 +15,7 @@ from pathlib import Path
 import click
 import numpy as np
 
-from ._cameras import _CAMERA_PARAM_NAMES
+from .._cameras import _CAMERA_PARAM_NAMES
 
 
 def _camera_dict_to_pycolmap(cam_dict):
@@ -62,7 +62,7 @@ def _refine_single_camera_pose(
     """
     import pycolmap
 
-    from ._sift_file import SiftReader, get_sift_path_for_image
+    from ..sift.file import SiftReader, get_sift_path_for_image
 
     if len(observations) < 4:
         return img_idx, original_quat, original_trans, "no_observations", 0.0, 0.0, 0, 0

@@ -429,8 +429,8 @@ def get_sift_path_for_image(
     feature_tool = feature_tool.lower()
 
     if feature_options is None:
-        from sfmtool._extract_sift_colmap import get_colmap_feature_options
-        from sfmtool._extract_sift_opencv import get_default_opencv_feature_options
+        from sfmtool.sift.extract_colmap import get_colmap_feature_options
+        from sfmtool.sift.extract_opencv import get_default_opencv_feature_options
 
         if feature_tool == "opencv":
             feature_options = get_default_opencv_feature_options()
@@ -534,11 +534,11 @@ def image_files_to_sift_files(
     Raises:
         SiftExtractionError: If feature extraction fails for any image
     """
-    from sfmtool._extract_sift_colmap import (
+    from sfmtool.sift.extract_colmap import (
         extract_sift_with_colmap,
         get_colmap_feature_options,
     )
-    from sfmtool._extract_sift_opencv import (
+    from sfmtool.sift.extract_opencv import (
         extract_sift_with_opencv,
         get_default_opencv_feature_options,
     )

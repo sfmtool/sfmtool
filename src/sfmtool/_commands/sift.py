@@ -14,7 +14,7 @@ from .._cli_utils import timed_command
 from .._filenames import expand_paths
 from .._sfmtool import RangeExpr
 from .._workspace import find_workspace_for_path, load_workspace_config
-from .._sift_file import (
+from ..sift.file import (
     SiftExtractionError,
     draw_sift_features,
     get_used_features_from_reconstruction,
@@ -136,12 +136,12 @@ def sift(
             )
 
         if tool.lower() == "colmap":
-            from .._extract_sift_colmap import get_colmap_feature_options
+            from ..sift.extract_colmap import get_colmap_feature_options
 
             dsp = domain_size_pooling if domain_size_pooling is not None else False
             feature_options = get_colmap_feature_options(domain_size_pooling=dsp)
         else:  # opencv
-            from .._extract_sift_opencv import get_default_opencv_feature_options
+            from ..sift.extract_opencv import get_default_opencv_feature_options
 
             feature_options = get_default_opencv_feature_options()
     else:

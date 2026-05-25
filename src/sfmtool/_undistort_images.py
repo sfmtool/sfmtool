@@ -220,7 +220,7 @@ def undistort_reconstruction_images(
         finite_positions_xyzw,
         materialize_infinity_for_export,
     )
-    from ._sift_file import (
+    from .sift.file import (
         SiftReader,
         get_feature_tool_xxh128,
         get_sift_path_for_image,

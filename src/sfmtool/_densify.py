@@ -24,7 +24,7 @@ from ._image_pair_graph import (
     build_covisibility_pairs,
     build_frustum_intersection_pairs,
 )
-from ._sift_file import SiftReader, get_sift_path_for_image
+from .sift.file import SiftReader, get_sift_path_for_image
 from ._sfmtool import KdTree3d, RotQuaternion, SfmrReconstruction
 from .feature_match import GeometricFilterConfig, match_image_pair
 
@@ -467,7 +467,7 @@ def _align_to_original(
     original_recon: SfmrReconstruction,
 ) -> pycolmap.Reconstruction:
     """Align densified reconstruction back to original coordinate space."""
-    from ._align import ImageMatch, estimate_pairwise_alignment
+    from .align.core import ImageMatch, estimate_pairwise_alignment
 
     orig_quaternions_wxyz = original_recon.quaternions_wxyz
     orig_translations = original_recon.translations

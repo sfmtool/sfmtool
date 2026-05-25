@@ -6,7 +6,7 @@
 import pytest
 
 from sfmtool._sfmtool import SfmrReconstruction
-from sfmtool._analyze_metrics import _compute_per_image_metrics, print_metrics_analysis
+from sfmtool.analyze.metrics import _compute_per_image_metrics, print_metrics_analysis
 
 
 @pytest.fixture

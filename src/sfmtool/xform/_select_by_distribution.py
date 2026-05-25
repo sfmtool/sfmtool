@@ -27,7 +27,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from .._analyze_images import _compute_camera_centers
+from ..analyze.images import _compute_camera_centers
 from .._sfmtool import KdTree3d, SfmrReconstruction
 from ._filter_by_image_range import _filter_images
 

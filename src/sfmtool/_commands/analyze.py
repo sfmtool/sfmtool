@@ -8,10 +8,10 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
-from .._analyze_graphs import print_covisibility_graph, print_frustum_intersection_graph
-from .._analyze_depth import print_z_range
-from .._analyze_images import print_images_table
-from .._analyze_metrics import print_metrics_analysis
+from ..analyze.graphs import print_covisibility_graph, print_frustum_intersection_graph
+from ..analyze.depth import print_z_range
+from ..analyze.images import print_images_table
+from ..analyze.metrics import print_metrics_analysis
 from .._sfmtool import SfmrReconstruction
 
 

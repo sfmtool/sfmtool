@@ -10,7 +10,7 @@ import click
 import numpy as np
 
 from .._cli_utils import timed_command
-from .._sift_file import SiftReader, get_sift_path_for_image
+from ..sift.file import SiftReader, get_sift_path_for_image
 from ..visualization._heatmap_renderer import (
     compute_triangulation_angles,
     render_heatmap_overlay,

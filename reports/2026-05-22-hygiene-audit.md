@@ -1,5 +1,7 @@
 # Codebase Hygiene Audit — 2026-05-22
 
+> _Status annotations added 2026-05-24 (after commits cb3f185 and 52518a2) appear inline per recommendation. The body below is the original 2026-05-22 snapshot and is unchanged._
+
 Read-only structural survey of the sfmtool repository: Python (`src/sfmtool/`,
 `tests/`), Rust crates (`crates/`), and top-level layout (`scripts/`, `specs/`,
 `docs/`). Totals: ~25.5k lines Python in `src/`, ~16.6k lines Python tests,
@@ -15,6 +17,8 @@ the Top 3 are called out at the end.
 ## Recommendations
 
 ### 1. Inconsistent Rust unit-test placement across `sfmtool-core`
+
+> _Status (2026-05-24): Not done — still 7 sibling `tests.rs` files alongside inline-test files (camera_intrinsics.rs 1596, warp_map.rs 1092, gpu/mod.rs 2071); mixed convention persists._
 
 - Location: `crates/sfmtool-core/src/` (multiple files)
 - Problem: The crate uses **two** conventions for unit tests with no clear rule.
@@ -47,6 +51,8 @@ the Top 3 are called out at the end.
 
 ### 2. `_commands/match.py` mixes CLI wiring with matching orchestration
 
+> _Status (2026-05-24): Not done — `match.py` is still 941 lines; no `feature_match/_run.py` or `_db_populate.py`._
+
 - Location: `src/sfmtool/_commands/match.py` (940 lines)
 - Problem: This is by far the heaviest command module (next is `xform.py` at
   600; most commands are 90–250 lines and delegate to a sibling implementation
@@ -70,6 +76,8 @@ the Top 3 are called out at the end.
 
 ### 3. `analyze_reconstruction` is one 534-line function mixing signal computation and report rendering
 
+> _Status (2026-05-24): Not done — the module moved to `motion/reconstruction.py` (cb3f185), but `analyze_reconstruction` is still one ~534-line function (lines 420–954) with inline rendering._
+
 - Location: `src/sfmtool/_discontinuity_reconstruction.py` (954 lines), function
   `analyze_reconstruction` (lines 420–954)
 - Problem: The module's top-level helpers (`_compute_extrapolation_errors`,
@@ -90,6 +98,8 @@ the Top 3 are called out at the end.
   keep the rendered string byte-identical or update the test.
 
 ### 4. Flat `src/sfmtool/` root: 52 modules with obvious unused subpackage clusters
+
+> _Status (2026-05-24): Partially done — align/, analyze/, camrig/, merge/, and discontinuity→motion/ packaged (commits cb3f185, 52518a2); colmap/ not done. (sift/ tracked separately as #12.)_
 
 - Location: `src/sfmtool/` (52 top-level `*.py` modules)
 - Problem: The package already demonstrates the subpackage pattern
@@ -117,6 +127,8 @@ the Top 3 are called out at the end.
 
 ### 5. Misleading name: `_sfm_reconstruction.py` is filename-generation utilities
 
+> _Status (2026-05-24): Not done — `_sfm_reconstruction.py` still present (116 lines)._
+
 - Location: `src/sfmtool/_sfm_reconstruction.py` (about 90 lines)
 - Problem: The name reads as "the SfM reconstruction model/type" (and there *is*
   an `SfmrReconstruction` type in Rust/bindings), but the file only contains
@@ -129,6 +141,8 @@ the Top 3 are called out at the end.
 - Risk: low — rename plus import updates; private module.
 
 ### 6. Cryptic abbreviated module names `_isfm.py` / `_gsfm.py`
+
+> _Status (2026-05-24): Not done — `_isfm.py` and `_gsfm.py` both still present._
 
 - Location: `src/sfmtool/_isfm.py`, `src/sfmtool/_gsfm.py`
 - Problem: The names are non-obvious abbreviations (incremental SfM via COLMAP /
@@ -143,6 +157,8 @@ the Top 3 are called out at the end.
   `_isfm.py`).
 
 ### 7. `visualization/_flow_display.py` bundles flow rendering, two display modes, legend, and I/O
+
+> _Status (2026-05-24): Not done — `_flow_display.py` still 722 lines; no `_flow_color.py`._
 
 - Location: `src/sfmtool/visualization/_flow_display.py` (722 lines)
 - Problem: Largest visualization module. `draw_flow_visualization` (lines
@@ -162,6 +178,8 @@ the Top 3 are called out at the end.
 
 ### 8. `_colmap_db.py` setup-path proliferation
 
+> _Status (2026-05-24): Not done — `_colmap_db.py` still flat; no `colmap/` subpackage._
+
 - Location: `src/sfmtool/_colmap_db.py` (860 lines)
 - Problem: Holds five parallel DB-setup entry points that branch by camera
   configuration — `_setup_for_sfm` (29), `_setup_for_sfm_from_matches` (148),
@@ -178,6 +196,8 @@ the Top 3 are called out at the end.
   `tests/test_colmap_interop.py` and CLI tests.
 
 ### 9. `optical_flow/gpu/mod.rs` is a 2071-line module gateway
+
+> _Status (2026-05-24): Not done — `optical_flow/gpu/mod.rs` still 2071 lines._
 
 - Location: `crates/sfmtool-core/src/optical_flow/gpu/mod.rs`
 - Problem: Even discounting the ~634 inline test lines (see #1), the module is
@@ -199,6 +219,8 @@ the Top 3 are called out at the end.
 
 ### 10. `_camera_setup.py` vs `_cameras.py` vs `_camera_config.py` — overlapping camera-utility names
 
+> _Status (2026-05-24): Not done — `_cameras.py`, `_camera_setup.py`, `_camera_config.py` all still flat._
+
 - Location: `src/sfmtool/_camera_setup.py` (261), `src/sfmtool/_cameras.py`
   (226), `src/sfmtool/_camera_config.py` (169)
 - Problem: Three similarly-named root modules cover adjacent concerns —
@@ -216,6 +238,8 @@ the Top 3 are called out at the end.
 
 ### 11. CLI-test file naming is inconsistent (`test_cli_*` vs flat)
 
+> _Status (2026-05-24): Not done — tests still mix `test_cli_*` with flat `test_merge.py` / `test_compare.py`._
+
 - Location: `tests/` (top level)
 - Problem: Some command tests use the `test_cli_<cmd>.py` prefix (11 files:
   `test_cli_align`, `test_cli_match`, `test_cli_solve`, `test_cli_xform`, …)
@@ -231,6 +255,8 @@ the Top 3 are called out at the end.
 - Risk: low — test-only; pytest discovers by pattern regardless.
 
 ### 12. `_extract_sift_colmap.py` / `_extract_sift_opencv.py` split vs `_sift_file.py`
+
+> _Status (2026-05-24): Done — `sift/` package created in commit 52518a2 (landed as `sift/file.py`, not `format.py`; `image_files_to_sift_files` still lives there, so the extraction entry points were not pulled out)._
 
 - Location: `src/sfmtool/_extract_sift_colmap.py` (245),
   `src/sfmtool/_extract_sift_opencv.py`, `src/sfmtool/_sift_file.py` (753)
@@ -251,6 +277,8 @@ the Top 3 are called out at the end.
 ---
 
 ## Top 3 (best effort-to-value)
+
+> _Status (2026-05-24): None of these three (Rust test placement, match.py, the renames) completed yet._
 
 1. **Standardize Rust unit-test placement (#1).** A mostly-mechanical
    cut/paste, validated instantly by `cargo test`, that immediately makes the

@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
-from .._multi_align import align_command
+from ..align.multi import align_command
 
 
 @click.command("align")

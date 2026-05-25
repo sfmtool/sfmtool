@@ -12,7 +12,7 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool._sfmtool import SfmrReconstruction
-from sfmtool._sift_file import SiftReader, get_sift_path_for_image
+from sfmtool.sift.file import SiftReader, get_sift_path_for_image
 from sfmtool._undistort_images import undistort_reconstruction_images
 from sfmtool.cli import main
 

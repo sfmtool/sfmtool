@@ -20,7 +20,7 @@ import numpy as np
 from .._sfmtool import KdTree2d, advect_points as _rust_advect_points
 from .._sfmtool import compute_optical_flow as _rust_compute_optical_flow
 from .._histogram_utils import print_histogram
-from .._sift_file import SiftReader, get_sift_path_for_image
+from ..sift.file import SiftReader, get_sift_path_for_image
 
 if TYPE_CHECKING:
     from .._sfmtool import SfmrReconstruction

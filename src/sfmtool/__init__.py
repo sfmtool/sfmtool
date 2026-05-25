@@ -12,7 +12,7 @@ from sfmtool._workspace import (  # noqa: F401
     init_workspace,
     load_workspace_config,
 )
-from sfmtool._sift_file import (  # noqa: F401
+from sfmtool.sift.file import (  # noqa: F401
     SiftExtractionError,
     SiftReader,
     compute_orientation,
@@ -29,12 +29,12 @@ from sfmtool._sift_file import (  # noqa: F401
     write_sift,
     xxh128_of_file,
 )
-from sfmtool._extract_sift_colmap import (  # noqa: F401
+from sfmtool.sift.extract_colmap import (  # noqa: F401
     extract_sift_with_colmap,
     get_colmap_feature_options,
     read_colmap_db_sift,
 )
-from sfmtool._extract_sift_opencv import (  # noqa: F401
+from sfmtool.sift.extract_opencv import (  # noqa: F401
     extract_sift_with_opencv,
     get_default_opencv_feature_options,
     opencv_keypoint_to_affine_shape,
