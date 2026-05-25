@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from sfmtool._histogram_utils import estimate_z_from_histogram
-from sfmtool._analyze_images import (
+from sfmtool.analyze.images import (
     _compute_camera_centers,
     _compute_rotation_angle,
     _slerp_halfway,

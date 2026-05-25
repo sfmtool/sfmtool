@@ -33,9 +33,9 @@ def init_workspace(
     Returns:
         The workspace configuration dict that was written.
     """
-    from sfmtool._extract_sift_colmap import get_colmap_feature_options
-    from sfmtool._extract_sift_opencv import get_default_opencv_feature_options
-    from sfmtool._sift_file import get_feature_tool_xxh128, get_feature_type_for_tool
+    from sfmtool.sift.extract_colmap import get_colmap_feature_options
+    from sfmtool.sift.extract_opencv import get_default_opencv_feature_options
+    from sfmtool.sift.file import get_feature_tool_xxh128, get_feature_type_for_tool
 
     workspace_dir = Path(workspace_dir)
     workspace_dir.mkdir(parents=True, exist_ok=True)

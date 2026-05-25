@@ -5,7 +5,7 @@
 
 from pathlib import Path
 
-from .._align_by_points import estimate_alignment_from_points
+from ..align.by_points import estimate_alignment_from_points
 from .._sfmtool import SfmrReconstruction
 
 

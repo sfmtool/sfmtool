@@ -8,8 +8,8 @@ from collections import defaultdict
 import click
 import numpy as np
 
-from ._histogram_utils import print_histogram
-from ._sfmtool import SfmrReconstruction, find_point_correspondences_py
+from .._histogram_utils import print_histogram
+from .._sfmtool import SfmrReconstruction, find_point_correspondences_py
 
 
 def _find_pairwise_correspondences(

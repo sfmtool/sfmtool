@@ -7,7 +7,7 @@ import numpy as np
 from click.testing import CliRunner
 
 from sfmtool import RangeExpr
-from sfmtool._multi_align import (
+from sfmtool.align.multi import (
     _build_connectivity_graph,
     _find_shared_images,
     _get_reconstruction_images,

@@ -41,6 +41,7 @@ config modules, and the four on-disk formats.
 **Inconsistencies:**
   - The "Code and patterns to build on" table (spec lines 614-625) cites `_inspect_images.py:_compute_camera_centers()`, `_inspect_images.py:_compute_rotation_angle()`, and `_inspect_metrics.py` for reprojection errors. Those module names no longer exist — they are now `_analyze_images.py` / `_analyze_metrics.py` (confirmed: only `_analyze_*` and `_discontinuity_reconstruction.py` reference these symbols). Stale path references.
 **Recommendation:** update spec — rename `_inspect_images.py`→`_analyze_images.py` and `_inspect_metrics.py`→`_analyze_metrics.py` in the references table.
+**Status (2026-05-24):** Resolved — the spec is now `specs/cli/motion-command.md` (discontinuity→motion, cb3f185), and its build-on table was updated to `analyze/images.py` / `analyze/metrics.py` (52518a2 + follow-up).
 **Unclear / incorrect / suspicious:** The detailed JSON schema (v1) and CLI options match the implementation precisely; only the build-on table is stale.
 
 ### specs/cli/epipolar-command.md
@@ -329,6 +330,6 @@ All core specs carry explicit Status markers and matched code where checked.
 
 3. **Stale `rig-config.md` pano2rig example.** Lines 210-211 claim `pano2rig` generates `rig_config.json`; it now writes `.camrig` (commit 8a3957b; confirmed no `rig_config.json` writer in code). Update the example. (specs/workspace/rig-config.md)
 
-4. **Discontinuity spec references dead module names.** The "build on" table cites `_inspect_images.py` / `_inspect_metrics.py`, renamed to `_analyze_images.py` / `_analyze_metrics.py` (commit 1a8b76a era). Update the references table. (specs/cli/discontinuity-command.md, lines 614-625)
+4. **Discontinuity spec references dead module names.** The "build on" table cites `_inspect_images.py` / `_inspect_metrics.py`, renamed to `_analyze_images.py` / `_analyze_metrics.py` (commit 1a8b76a era). Update the references table. (specs/cli/discontinuity-command.md, lines 614-625) — **Resolved (2026-05-24):** spec is now `motion-command.md`; build-on table updated to `analyze/images.py` / `analyze/metrics.py`.
 
 5. **Two smaller doc/code fixes:** (a) `heatmap` filename order — spec says `image_001_reproj.png` but code emits `image_reproj_001.png` (`heatmap.py:_insert_metric_before_number`); (b) the `_run_merge` docstring in `match.py:606-613` says TVG is dropped while the code preserves it (and the spec correctly says preserved) — fix the misleading docstring. Also: `insv2rig.md` says "29 mm" baseline vs code's 30.7 mm.

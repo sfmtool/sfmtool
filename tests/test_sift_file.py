@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import pytest
 
-from sfmtool._sift_file import (
+from sfmtool.sift.file import (
     SiftExtractionError,
     SiftReader,
     compute_orientation,
@@ -23,8 +23,8 @@ from sfmtool._sift_file import (
     write_sift,
     xxh128_of_file,
 )
-from sfmtool._extract_sift_colmap import get_colmap_feature_options
-from sfmtool._extract_sift_opencv import (
+from sfmtool.sift.extract_colmap import get_colmap_feature_options
+from sfmtool.sift.extract_opencv import (
     get_default_opencv_feature_options,
     opencv_keypoint_to_affine_shape,
 )
@@ -525,7 +525,7 @@ def _create_test_image(path, size=512):
 
 def test_opencv_sift_extraction(tmp_path):
     """OpenCV SIFT extraction produces valid feature data."""
-    from sfmtool._extract_sift_opencv import extract_sift_with_opencv
+    from sfmtool.sift.extract_opencv import extract_sift_with_opencv
 
     image_path = tmp_path / "test_image.jpg"
     _create_test_image(image_path)
@@ -559,7 +559,7 @@ def test_opencv_sift_extraction(tmp_path):
 
 def test_opencv_features_sorted_by_size(tmp_path):
     """OpenCV features are sorted by size (largest first)."""
-    from sfmtool._extract_sift_opencv import extract_sift_with_opencv
+    from sfmtool.sift.extract_opencv import extract_sift_with_opencv
 
     image_path = tmp_path / "test_image.jpg"
     _create_test_image(image_path)
@@ -576,7 +576,7 @@ def test_opencv_features_sorted_by_size(tmp_path):
 
 def test_opencv_extraction_roundtrip(tmp_path):
     """OpenCV extraction → write_sift → SiftReader roundtrip."""
-    from sfmtool._extract_sift_opencv import extract_sift_with_opencv
+    from sfmtool.sift.extract_opencv import extract_sift_with_opencv
 
     image_path = tmp_path / "test_image.jpg"
     _create_test_image(image_path)

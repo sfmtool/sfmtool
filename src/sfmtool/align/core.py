@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ._sfmtool import RotQuaternion, Se3Transform
+from .._sfmtool import RotQuaternion, Se3Transform
 
 
 @dataclass
@@ -221,6 +221,6 @@ def kabsch_algorithm(
     if source_points.shape != target_points.shape or source_points.shape[0] < 2:
         raise ValueError("Need at least 2 matching points with same shape")
 
-    from ._sfmtool import kabsch_algorithm_rs
+    from .._sfmtool import kabsch_algorithm_rs
 
     return kabsch_algorithm_rs(source_points, target_points)

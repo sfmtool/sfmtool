@@ -10,7 +10,7 @@ from sfmtool._sfmtool import (
     descriptor_distance as rust_descriptor_distance,
     find_best_descriptor_match as rust_find_best_match,
 )
-from sfmtool._sift_file import SiftReader
+from sfmtool.sift.file import SiftReader
 
 
 class TestDescriptorDistance:

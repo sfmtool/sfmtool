@@ -5,9 +5,9 @@
 
 import numpy as np
 
-from ._align import AlignmentResult, kabsch_algorithm
-from ._point_correspondence import find_point_correspondences
-from ._sfmtool import SfmrReconstruction
+from .core import AlignmentResult, kabsch_algorithm
+from .._point_correspondence import find_point_correspondences
+from .._sfmtool import SfmrReconstruction
 
 
 def estimate_alignment_from_points(
@@ -63,7 +63,7 @@ def estimate_alignment_from_points(
             np.percentile(distances_for_stats, ransac_percentile)
         )
 
-        from ._sfmtool import ransac_alignment_rs
+        from .._sfmtool import ransac_alignment_rs
 
         inlier_mask = ransac_alignment_rs(
             source_positions,
@@ -145,7 +145,7 @@ def estimate_alignment_from_points_with_logging(
         click.echo(f"    Found {result.n_point_correspondences} point correspondences")
 
         if use_ransac and result.distances_for_stats is not None:
-            from ._histogram_utils import print_histogram
+            from .._histogram_utils import print_histogram
 
             distances = result.distances_for_stats
             click.echo("\n    Correspondence distance statistics:")

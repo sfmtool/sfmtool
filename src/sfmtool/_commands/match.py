@@ -228,7 +228,7 @@ def _run_matching(
     import pycolmap
 
     from .._workspace import load_workspace_config
-    from .._sift_file import image_files_to_sift_files
+    from ..sift.file import image_files_to_sift_files
 
     ws_config = load_workspace_config(workspace_dir)
     feature_tool = ws_config.get("feature_tool", "colmap")
@@ -425,7 +425,7 @@ def _populate_db_features(
 
 def _compute_descriptor_distances(matches_data, sift_paths, max_feature_count):
     """Compute L2 descriptor distances for all matches from .sift files."""
-    from .._sift_file import SiftReader
+    from ..sift.file import SiftReader
 
     pair_count = matches_data["metadata"]["image_pair_count"]
     if pair_count == 0:

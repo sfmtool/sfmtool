@@ -14,7 +14,7 @@ import pycolmap
 
 from .._cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
 from .._rectification import compute_stereo_rectification
-from .._sift_file import SiftReader, get_sift_path_for_image
+from ..sift.file import SiftReader, get_sift_path_for_image
 from .._sfmtool import RotQuaternion, epipolar_curves
 
 

@@ -32,7 +32,7 @@ from .._sfmtool import (
     compute_optical_flow as _rust_compute_optical_flow,
     match_candidates_by_descriptor as _rust_match_candidates,
 )
-from .._sift_file import SiftReader
+from ..sift.file import SiftReader
 
 
 _SPATIAL_CANDIDATES_K = 5

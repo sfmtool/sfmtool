@@ -7,9 +7,9 @@ from pathlib import Path
 
 import click
 
-from ._sfmtool import SfmrReconstruction
-from ._histogram_utils import render_histogram_string
-from ._image_pair_graph import _has_valid_depth_statistics
+from .._sfmtool import SfmrReconstruction
+from .._histogram_utils import render_histogram_string
+from .._image_pair_graph import _has_valid_depth_statistics
 
 
 def print_z_range(recon: SfmrReconstruction, recon_name: str | None = None):

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ._align import ImageMatch, estimate_pairwise_alignment
+from .align.core import ImageMatch, estimate_pairwise_alignment
 from ._histogram_utils import print_histogram
 from ._point_correspondence import find_point_correspondences
 from ._sfmtool import RotQuaternion, SfmrReconstruction

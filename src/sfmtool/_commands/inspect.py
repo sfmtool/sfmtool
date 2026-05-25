@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
-from .._inspect_summary import (
+from ..analyze.summary import (
     print_camrig_summary,
     print_image_summary,
     print_matches_summary,
