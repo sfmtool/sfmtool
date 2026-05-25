@@ -47,7 +47,7 @@ def _infer_pattern(image_names: list[str], *, require_frame_field: bool) -> str 
     """
     from deadline.job_attachments.api import summarize_paths_by_sequence
 
-    from ._sfmtool import validate_camrig_pattern
+    from .._sfmtool import validate_camrig_pattern
 
     if not image_names:
         return None
@@ -69,7 +69,7 @@ def _infer_pattern(image_names: list[str], *, require_frame_field: bool) -> str 
 
 def _normalize_pattern(pattern: str) -> str:
     """Validate an explicit `--pattern` and return it in forward-slash form."""
-    from ._sfmtool import validate_camrig_pattern
+    from .._sfmtool import validate_camrig_pattern
 
     normalized = pattern.replace("\\", "/").strip()
     try:
@@ -113,7 +113,7 @@ def _write(
     zstd_level: int = 3,
 ) -> None:
     """Write a `.camrig` file from prepared columnar rig data."""
-    from ._sfmtool import write_camrig
+    from .._sfmtool import write_camrig
 
     write_camrig(
         path=str(output),
@@ -131,7 +131,7 @@ def _write(
 
 def _parse_sensor_range(expr: str, sensor_count: int, source: Path) -> list[int]:
     """Parse a `--sensors` range expression into sorted, validated indices."""
-    from ._sfmtool import RangeExpr
+    from .._sfmtool import RangeExpr
 
     try:
         selected = sorted(set(RangeExpr(expr)))
@@ -290,7 +290,7 @@ def copy_from_sfmr(
     copies a whole rig. With neither set the selector defaults to the lone rig,
     or the lone camera of a rig-less reconstruction. Returns a summary dict.
     """
-    from ._sfmtool import SfmrReconstruction
+    from .._sfmtool import SfmrReconstruction
 
     source = Path(source)
     output = Path(output)
@@ -379,7 +379,7 @@ def copy_from_camrig(
     copies a subset of sensors. With neither set the whole rig is copied,
     preserving its `rig_type` and `rig_attributes`. Returns a summary dict.
     """
-    from ._sfmtool import read_camrig
+    from .._sfmtool import read_camrig
 
     source = Path(source)
     output = Path(output)

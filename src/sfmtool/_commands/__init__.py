@@ -8,7 +8,6 @@ from .analyze import analyze
 from .camrig import camrig
 from .compare import compare
 from .densify import densify
-from .discontinuity import discontinuity
 from .epipolar import epipolar
 from .explorer import explorer
 from .flow import flow
@@ -18,6 +17,7 @@ from .inspect import inspect
 from .insv2rig import insv2rig
 from .match import match
 from .merge import merge
+from .motion import motion
 from .pano2rig import pano2rig
 from .panorama import panorama
 from .sift import sift
@@ -35,7 +35,6 @@ __all__ = [
     "camrig",
     "compare",
     "densify",
-    "discontinuity",
     "epipolar",
     "explorer",
     "flow",
@@ -45,6 +44,7 @@ __all__ = [
     "insv2rig",
     "match",
     "merge",
+    "motion",
     "pano2rig",
     "panorama",
     "sift",

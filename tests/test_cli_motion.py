@@ -1,7 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the `sfm discontinuity` CLI command."""
+"""Tests for the `sfm motion` CLI command."""
 
 from pathlib import Path
 
@@ -27,7 +27,7 @@ def runner():
 
 def test_no_paths(runner):
     """No arguments produces a usage error."""
-    result = runner.invoke(main, ["discontinuity"])
+    result = runner.invoke(main, ["motion"])
     assert result.exit_code != 0
     assert "Must provide" in result.output
 
@@ -36,13 +36,13 @@ def test_sfmr_invalid_file(runner, tmp_path):
     """Passing an invalid .sfmr file gives an error."""
     fake_sfmr = tmp_path / "test.sfmr"
     fake_sfmr.touch()
-    result = runner.invoke(main, ["discontinuity", str(fake_sfmr)])
+    result = runner.invoke(main, ["motion", str(fake_sfmr)])
     assert result.exit_code != 0
 
 
 def test_no_images_found(runner, tmp_path):
     """Empty directory produces an error."""
-    result = runner.invoke(main, ["discontinuity", str(tmp_path)])
+    result = runner.invoke(main, ["motion", str(tmp_path)])
     assert result.exit_code != 0
     assert "No image files found" in result.output
 
@@ -53,7 +53,7 @@ def test_single_image_no_sequence(runner, tmp_path):
 
     src = SEOUL_BULL_DIR / "seoul_bull_sculpture_01.jpg"
     shutil.copy(src, tmp_path / "img_01.jpg")
-    result = runner.invoke(main, ["discontinuity", str(tmp_path)])
+    result = runner.invoke(main, ["motion", str(tmp_path)])
     assert result.exit_code != 0
     assert "No numbered sequences" in result.output
 
@@ -64,7 +64,7 @@ def test_non_sequential_images(runner, tmp_path):
 
     for name in ("alpha.jpg", "beta.jpg", "gamma.jpg"):
         shutil.copy(SEOUL_BULL_DIR / "seoul_bull_sculpture_01.jpg", tmp_path / name)
-    result = runner.invoke(main, ["discontinuity", str(tmp_path)])
+    result = runner.invoke(main, ["motion", str(tmp_path)])
     assert result.exit_code != 0
     assert "No numbered sequences" in result.output
 
@@ -78,7 +78,7 @@ def test_stride_1_analysis(runner):
     result = runner.invoke(
         main,
         [
-            "discontinuity",
+            "motion",
             str(SEOUL_BULL_DIR),
             "-r",
             "1-3",
@@ -127,7 +127,7 @@ def test_fixed_stride(runner):
     result = runner.invoke(
         main,
         [
-            "discontinuity",
+            "motion",
             str(SEOUL_BULL_DIR),
             "-r",
             "1-4",
@@ -151,7 +151,7 @@ def test_adaptive_stride(runner):
     """Adaptive stride on 8 frames runs to completion with summary."""
     result = runner.invoke(
         main,
-        ["discontinuity", str(SEOUL_BULL_DIR), "-r", "1-8"],
+        ["motion", str(SEOUL_BULL_DIR), "-r", "1-8"],
     )
     assert result.exit_code == 0, result.output
     assert "Found 8 images in 1 sequence" in result.output
@@ -168,7 +168,7 @@ def test_save_flow_dir(runner, tmp_path):
     result = runner.invoke(
         main,
         [
-            "discontinuity",
+            "motion",
             str(SEOUL_BULL_DIR),
             "-r",
             "1-3",
@@ -247,7 +247,7 @@ def _make_discontinuous_recon(sfmr_path, *, translate=None, rotate_deg=None):
 
 def test_recon_no_discontinuity(sfmrfile_reconstruction_with_17_images):
     """Unmodified reconstruction has no discontinuities."""
-    from sfmtool._discontinuity_reconstruction import analyze_reconstruction
+    from sfmtool.motion.reconstruction import analyze_reconstruction
     from sfmtool._sfmtool import SfmrReconstruction
 
     recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
@@ -259,7 +259,7 @@ def test_recon_no_discontinuity(sfmrfile_reconstruction_with_17_images):
 def test_recon_translation_discontinuity(sfmrfile_reconstruction_with_17_images):
     """A large translation applied to images 11-17 creates a discontinuity
     at the 10->11 edge."""
-    from sfmtool._discontinuity_reconstruction import analyze_reconstruction
+    from sfmtool.motion.reconstruction import analyze_reconstruction
 
     recon = _make_discontinuous_recon(
         sfmrfile_reconstruction_with_17_images,
@@ -290,7 +290,7 @@ def test_recon_translation_discontinuity(sfmrfile_reconstruction_with_17_images)
 def test_recon_rotation_discontinuity(sfmrfile_reconstruction_with_17_images):
     """A large rotation applied to images 11-17 creates a discontinuity
     at the 10->11 edge."""
-    from sfmtool._discontinuity_reconstruction import analyze_reconstruction
+    from sfmtool.motion.reconstruction import analyze_reconstruction
 
     recon = _make_discontinuous_recon(
         sfmrfile_reconstruction_with_17_images,
@@ -321,7 +321,7 @@ def test_recon_cli_with_sfmr(runner, sfmrfile_reconstruction_with_17_images):
     """The CLI accepts a .sfmr file and produces reconstruction analysis output."""
     result = runner.invoke(
         main,
-        ["discontinuity", str(sfmrfile_reconstruction_with_17_images)],
+        ["motion", str(sfmrfile_reconstruction_with_17_images)],
     )
     assert result.exit_code == 0, result.output
     assert "Reconstruction:" in result.output
@@ -334,7 +334,7 @@ def test_recon_cli_with_range(runner, sfmrfile_reconstruction_with_17_images):
     result = runner.invoke(
         main,
         [
-            "discontinuity",
+            "motion",
             str(sfmrfile_reconstruction_with_17_images),
             "-r",
             "1-10",

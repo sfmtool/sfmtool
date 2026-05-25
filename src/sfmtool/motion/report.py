@@ -1,9 +1,9 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""JSON serialization for `sfm discontinuity` analysis results.
+"""JSON serialization for `sfm motion` analysis results.
 
-See `specs/cli/discontinuity-command.md` section "JSON Output" for the schema.
+See `specs/cli/motion-command.md` section "JSON Output" for the schema.
 """
 
 from __future__ import annotations
@@ -16,14 +16,14 @@ from typing import Any
 import click
 import numpy as np
 
-from ._discontinuity_constants import (
+from .constants import (
     OBS_Z_THRESHOLD,
     OVERLAP_DROP_THRESHOLD,
     POSE_ROT_DEG,
     POSE_TRANS_FACTOR,
     STEP_RATIO_THRESHOLD,
 )
-from ._discontinuity_reconstruction import _rotation_angle_deg
+from .reconstruction import _rotation_angle_deg
 
 
 SCHEMA_VERSION = 1

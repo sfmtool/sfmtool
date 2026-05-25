@@ -1,4 +1,4 @@
-# Discontinuity Analysis
+# Camera Motion Analysis
 
 ## Motivation
 
@@ -43,7 +43,7 @@ frames in a reconstruction significantly exceeds the local trend.
 ## CLI
 
 ```
-sfm discontinuity [OPTIONS] PATHS...
+sfm motion [OPTIONS] PATHS...
 ```
 
 ### Arguments
@@ -68,22 +68,22 @@ sfm discontinuity [OPTIONS] PATHS...
 
 ```bash
 # Analyze all images in a directory (adaptive stride starting at 1)
-sfm discontinuity images/
+sfm motion images/
 
 # Start with a larger stride to skip smooth regions faster
-sfm discontinuity images/ --initial-stride 16
+sfm motion images/ --initial-stride 16
 
 # Analyze a subset of frames
-sfm discontinuity images/ -r 1-100
+sfm motion images/ -r 1-100
 
 # Fixed stride, no adaptation
-sfm discontinuity images/ --initial-stride 4 --no-adaptive
+sfm motion images/ --initial-stride 4 --no-adaptive
 
 # Save flow visualizations
-sfm discontinuity images/ --save-flow-dir /tmp/flow_output
+sfm motion images/ --save-flow-dir /tmp/flow_output
 
 # Emit a machine-readable report alongside the printed output
-sfm discontinuity reconstruction.sfmr --json discontinuity.json
+sfm motion reconstruction.sfmr --json discontinuity.json
 ```
 
 
@@ -575,7 +575,7 @@ Reconstruction mode, two discontinuities clustered to single edges:
 
 ### Tests
 
-`tests/test_discontinuity_json.py`:
+`tests/test_motion_report.py`:
 
 - **Reconstruction with planted discontinuity.** Build a small in-memory
   `SfmrReconstruction` (10 frames, image names `frame_0000.jpg`…

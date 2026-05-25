@@ -345,13 +345,13 @@ Completed in 0.04s
 
 ### 4. Detect sequence discontinuities
 
-The `sfm discontinuity` command analyzes successive camera motions in image
+The `sfm motion` command analyzes successive camera motions in image
 sequences and flags jumps in translation or rotation. This is especially useful
 for reconstructions made from video footage, where a discontinuity can indicate
 a problem with the solve.
 
 ```
-$ sfm discontinuity sfmr/20260413-00-solve-dino_dog_toy_1-85.sfmr
+$ sfm motion sfmr/20260413-00-solve-dino_dog_toy_1-85.sfmr
 Reconstruction: 85 images, 10,580 points, 80,387 observations
 Found 1 sequence(s)
 

@@ -8,17 +8,17 @@ from pathlib import Path
 import click
 import numpy as np
 
-from ._flow_analysis import (
+from .._flow_analysis import (
     _compare_flow_representations,
     _compute_in_bounds_mask,
     _flow_magnitude,
     _load_gray,
 )
-from ._sfmtool import (
+from .._sfmtool import (
     compute_optical_flow,
     compute_optical_flow_with_init,
 )
-from .visualization._discontinuity_display import (
+from ..visualization._discontinuity_display import (
     _print_sample_point,
     _print_summary,
     _save_flow_images,

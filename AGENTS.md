@@ -40,7 +40,9 @@ When finishing a task, run the checks for what you changed:
 - `src/sfmtool/` — Python package (~93 modules). Entry point is `cli.py`
   (Click + `_cli_group.CategoryGroup` for categorized `--help`). Subpackages:
   - `_commands/` — one module per top-level CLI subcommand
+  - `camrig/` — `.camrig` rig construction, copy, pattern matching, solve resolution
   - `feature_match/` — descriptor matching, polar/rectified sweep, flow matching, geometric filtering
+  - `motion/` — camera-motion discontinuity analysis (image sequences + reconstructions)
   - `xform/` — reconstruction transforms (align, filter, rotate, scale, translate, bundle-adjust, …)
   - `visualization/` — colormap, heatmap, discontinuity display
 - `crates/` — Cargo workspace, 7 crates:
