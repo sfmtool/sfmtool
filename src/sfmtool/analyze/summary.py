@@ -16,6 +16,10 @@ import numpy as np
 from .._sfmtool import KdTree3d, SfmrReconstruction
 from .._histogram_utils import print_histogram
 
+# Matches sfmtool_core::infinity::DEFAULT_INVERSE_DEPTH_Z_CUTOFF: below this a
+# point's depth is statistically indistinguishable from infinity.
+DEPTH_RELIABILITY_Z_CUTOFF = 4.0
+
 
 class InspectError(Exception):
     """Raised when a file fails its integrity check during inspection."""
@@ -319,6 +323,27 @@ def print_image_summary(path: Path, verbose: bool = False) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _print_tool_options(tool_options) -> None:
+    """Print the operation's recorded tool parameters under the Metadata block.
+
+    ``tool_options`` is the free-form dict the producing command stored — the
+    ordered ``transforms`` list for ``xform``, solver flags for ``solve``, and
+    so on. The ``transforms`` list is printed first (one entry per line);
+    remaining keys follow in sorted order. Nothing is printed when it is absent
+    or empty.
+    """
+    if not tool_options:
+        return
+    click.echo("  Tool options:")
+    transforms = tool_options.get("transforms")
+    if isinstance(transforms, list):
+        click.echo("    transforms:")
+        for transform in transforms:
+            click.echo(f"      - {transform}")
+    for key in sorted(k for k in tool_options if k != "transforms"):
+        click.echo(f"    {key}: {tool_options[key]}")
+
+
 def print_reconstruction_summary(
     recon: SfmrReconstruction, recon_name: str | None = None
 ):
@@ -339,6 +364,7 @@ def print_reconstruction_summary(
     click.echo(f"  Tool: {metadata.get('tool', 'unknown')}")
     click.echo(f"  Tool version: {metadata.get('tool_version', 'unknown')}")
     click.echo(f"  Timestamp: {metadata.get('timestamp', 'unknown')}")
+    _print_tool_options(metadata.get("tool_options"))
 
     # Workspace
     workspace_info = metadata.get("workspace", {})
@@ -449,6 +475,8 @@ def print_reconstruction_summary(
         click.echo(f"    Max: {errors.max():.3f} pixels")
         print_histogram(errors, "Error distribution", show_stats=False)
 
+        _print_depth_reliability(recon)
+
     # Observation statistics
     if recon.point_count > 0:
         observation_counts = recon.observation_counts
@@ -476,3 +504,120 @@ def print_reconstruction_summary(
         print_histogram(nn_distances, "NN distance distribution", show_stats=False)
 
     click.echo("")
+
+
+def _print_depth_reliability(recon: SfmrReconstruction) -> None:
+    """Print per-point triangulation conditioning.
+
+    The inverse-depth z-score (depth / σ_depth) is the scale-free reliability
+    signal: low values mean the depth is statistically indistinguishable from
+    infinity. The normal-matrix condition number is the cheap geometric proxy.
+    Points at infinity and sub-2-view points have no finite depth and are
+    excluded.
+    """
+    diag = recon.triangulation_diagnostics(noise_px=1.0)
+    z = np.asarray(diag["inverse_depth_z"])
+    cond = np.asarray(diag["condition_number"])
+
+    finite = np.isfinite(z)
+    n = int(finite.sum())
+    if n == 0:
+        return
+    zf = z[finite]
+
+    click.echo("  Depth reliability (finite, >=2-view points):")
+    click.echo(f"    Diagnosed points: {n:,}")
+    click.echo("    Inverse-depth z (depth/sigma; low => near-infinity):")
+    click.echo(f"      Median: {np.median(zf):.2f}")
+    click.echo(f"      Min: {zf.min():.2f}   Max: {zf.max():.2f}")
+    below = int((zf < DEPTH_RELIABILITY_Z_CUTOFF).sum())
+    click.echo(
+        f"      Below z={DEPTH_RELIABILITY_Z_CUTOFF:g} (near-infinity): "
+        f"{below:,} ({100.0 * below / n:.1f}%)"
+    )
+    # Clip the long tail so the histogram bins the bulk of the points usefully.
+    hi = max(float(np.percentile(zf, 99)), DEPTH_RELIABILITY_Z_CUTOFF)
+    print_histogram(zf, "Inverse-depth z", min_val=0.0, max_val=hi, show_stats=False)
+
+    cond_f = cond[np.isfinite(cond)]
+    if cond_f.size:
+        click.echo(f"    Condition number (median): {np.median(cond_f):.1f}")
+
+
+# ---------------------------------------------------------------------------
+# 3D point IDs (pt3d_<hash>_<index>)
+# ---------------------------------------------------------------------------
+
+
+def print_point_summary(
+    recon: SfmrReconstruction,
+    point_index: int,
+    point_id: str,
+    sfmr_path: Path,
+    verbose: bool = False,
+) -> None:
+    """Inspect a single 3D point referenced by its ``pt3d_<hash>_<index>`` ID.
+
+    The compact summary uses only the stored reconstruction. ``--verbose`` adds
+    the full triangulation analysis, which re-derives the point's observation
+    rays from the workspace ``.sift`` files (they must be present).
+    """
+    xyzw = np.asarray(recon.positions_xyzw)[point_index]
+    color = np.asarray(recon.colors)[point_index]
+    error = float(np.asarray(recon.errors)[point_index])
+    at_infinity = xyzw[3] == 0.0
+
+    point_ids = np.asarray(recon.track_point_ids)
+    obs_images = np.asarray(recon.track_image_indexes)[point_ids == point_index]
+
+    coord_label = "Direction" if at_infinity else "Position"
+    rows = [
+        ("Point", point_id),
+        ("File", sfmr_path.name),
+        ("Type", "at infinity (w=0)" if at_infinity else "finite (w=1)"),
+        (coord_label, f"({xyzw[0]:.3f}, {xyzw[1]:.3f}, {xyzw[2]:.3f})"),
+        ("Color", f"rgb({int(color[0])}, {int(color[1])}, {int(color[2])})"),
+        ("Reprojection error", f"{error:.3f} px"),
+        ("Observations", f"{len(obs_images)} images"),
+    ]
+    _print_block(rows)
+
+    if not verbose:
+        return
+
+    diag = recon.inspect_point(point_index)
+    tp = diag["triangulated_point"]
+    ev = diag["eigenvalues"]
+    resolvable = diag["resolvable_distance"]
+    fh = diag["finite_horizon"]
+    sufficient = "sufficient" if resolvable >= fh else "insufficient"
+
+    click.echo("\nTriangulation analysis:")
+    click.echo(f"  Classification (re-derived): {diag['classification']}")
+    click.echo(f"  Triangulated point: ({tp[0]:.3f}, {tp[1]:.3f}, {tp[2]:.3f})")
+    click.echo(f"  Depth along mean view direction: {diag['depth']:.2f}")
+    click.echo(f"  In front of all cameras: {'yes' if diag['in_front'] else 'no'}")
+    click.echo(
+        f"  Condition number: {diag['condition_number']:.1f}   "
+        f"eigenvalues: [{ev[0]:.3g}, {ev[1]:.3g}, {ev[2]:.3g}]"
+    )
+    click.echo(
+        f"  Inverse-depth z: {diag['inverse_depth_z']:.2f} "
+        f"(sigma {diag['sigma']:.3g}; cutoff {DEPTH_RELIABILITY_Z_CUTOFF:g})"
+    )
+    click.echo(
+        f"  Resolvable distance: {resolvable:.1f}  vs finite_horizon "
+        f"(camera extents) {fh:.1f}  -> {sufficient} baseline"
+    )
+    click.echo(f"  Observing-camera baseline span: {diag['baseline_span']:.2f}")
+    click.echo(f"  Ray spread (max angle to mean): {diag['max_ray_angle_deg']:.3f} deg")
+
+    click.echo("\n  Observations (incidence = ray angle off optical axis):")
+    for o in sorted(
+        diag["observations"], key=lambda d: d["incidence_deg"], reverse=True
+    ):
+        edge = "  <- near fisheye edge" if o["incidence_deg"] >= 80.0 else ""
+        click.echo(
+            f"    {o['image_name']}  feat {o['feature_index']}  "
+            f"incidence {o['incidence_deg']:.1f} deg{edge}"
+        )

@@ -9,7 +9,7 @@ import click
 
 from .._cli_utils import timed_command
 from ..analyze.graphs import print_covisibility_graph, print_frustum_intersection_graph
-from ..analyze.depth import print_z_range
+from ..analyze.depth import print_depth_reliability, print_z_range
 from ..analyze.images import print_images_table
 from ..analyze.metrics import print_metrics_analysis
 from .._sfmtool import SfmrReconstruction
@@ -50,6 +50,12 @@ from .._sfmtool import SfmrReconstruction
     help="Print per-image metrics analysis (reprojection error breakdown).",
 )
 @click.option(
+    "--depth-reliability",
+    "depth_reliability_flag",
+    is_flag=True,
+    help="Print per-point triangulation conditioning (inverse-depth z-score, condition number).",
+)
+@click.option(
     "--range",
     "-r",
     "range_expr",
@@ -83,6 +89,7 @@ def analyze(
     frustum_flag,
     images_flag,
     metrics_flag,
+    depth_reliability_flag,
     range_expr,
     near_percentile,
     far_percentile,
@@ -111,6 +118,10 @@ def analyze(
     error breakdown (mean, median, max), observation count, and mean track
     length for each image.
 
+    With --depth-reliability, prints per-point triangulation conditioning: the
+    inverse-depth z-score (depth / sigma, low => near-infinity) and the
+    normal-matrix condition number, summarised across the finite points.
+
     RECONSTRUCTION_PATH must be a .sfmr file.
 
     Examples:
@@ -128,20 +139,31 @@ def analyze(
         sfm analyze reconstruction.sfmr --metrics
 
         sfm analyze reconstruction.sfmr --metrics --range 1-10
+
+        sfm analyze reconstruction.sfmr --depth-reliability
     """
     reconstruction_path = Path(reconstruction_path)
 
     active_modes = sum(
-        [coviz_flag, z_range_flag, frustum_flag, images_flag, metrics_flag]
+        [
+            coviz_flag,
+            z_range_flag,
+            frustum_flag,
+            images_flag,
+            metrics_flag,
+            depth_reliability_flag,
+        ]
     )
     if active_modes == 0:
         raise click.UsageError(
             "Select an analysis mode: "
-            "--coviz, --z-range, --frustum, --images, or --metrics."
+            "--coviz, --z-range, --frustum, --images, --metrics, or "
+            "--depth-reliability."
         )
     if active_modes > 1:
         raise click.UsageError(
-            "--coviz, --z-range, --frustum, --images, and --metrics are mutually exclusive."
+            "--coviz, --z-range, --frustum, --images, --metrics, and "
+            "--depth-reliability are mutually exclusive."
         )
 
     if range_expr is not None and not metrics_flag:
@@ -190,5 +212,7 @@ def analyze(
                 )
             elif images_flag:
                 print_images_table(recon, recon_name=recon_name)
+            elif depth_reliability_flag:
+                print_depth_reliability(recon, recon_name=recon_name)
     except Exception as e:
         raise click.ClickException(str(e))

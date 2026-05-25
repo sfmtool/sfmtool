@@ -24,6 +24,21 @@ pub fn read_sfmr_metadata(path: &Path) -> Result<SfmrMetadata, SfmrError> {
     Ok(read_json_entry(&mut archive, "metadata.json.zst")?)
 }
 
+/// Read only the content-integrity hashes from a `.sfmr` file.
+///
+/// Decompresses just `content_hash.json.zst`, so it is cheap enough to scan a
+/// directory of `.sfmr` files (e.g. to resolve a `pt3d_<hash>_<index>` Point ID
+/// by its `content_xxh128` prefix) without loading any reconstruction data.
+pub fn read_sfmr_content_hash(path: &Path) -> Result<ContentHash, SfmrError> {
+    let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
+        operation: "Failed to open file",
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    Ok(read_json_entry(&mut archive, "content_hash.json.zst")?)
+}
+
 /// Read a complete `.sfmr` file into columnar data.
 pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {

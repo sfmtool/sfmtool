@@ -3,11 +3,15 @@
 
 //! Python wrapper for the sfmtool-core SfmrReconstruction type.
 
+use nalgebra::Point3;
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray4, PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::path::PathBuf;
 
+use sfmtool_core::infinity::Classification;
+use sfmtool_core::triangulation::{depth_uncertainty_batch, triangulate_batch};
+use sfmtool_core::viewing_angle::viewing_rays;
 use sfmtool_core::SfmrReconstruction;
 
 use crate::helpers::{serde_to_py, u128_bytes_to_py};
@@ -509,13 +513,14 @@ impl PySfmrReconstruction {
     /// Reclassify finite points whose depth is unconstrained as points at
     /// infinity, returning a new reconstruction.
     ///
-    /// A finite point becomes a point at infinity (``w = 0``) when its parallax
-    /// signal in pixels (``alpha_max * f_max``, the largest viewing angle times
-    /// the largest observing focal length) falls below the track's measurement
-    /// noise, ``max(reprojection_error, noise_floor_px)``. Its coordinate is
-    /// replaced with the bearing-mean direction of its observation rays. Points
-    /// already at infinity, and points with fewer than two observations, are
-    /// left unchanged.
+    /// A finite point becomes a point at infinity (``w = 0``) when the
+    /// triangulation of its observation rays is statistically indistinguishable
+    /// from infinity: a degenerate or behind-camera solve, or — in the
+    /// ill-conditioned regime — an inverse-depth z-score below the cutoff. The
+    /// per-ray angular noise is ``max(reprojection_error, noise_floor_px) / fᵢ``.
+    /// Its coordinate is replaced with the bearing-mean direction of its
+    /// observation rays. Points already at infinity, and points with fewer than
+    /// two observations, are left unchanged.
     ///
     /// Args:
     ///     noise_floor_px: SIFT keypoint localisation noise floor in pixels;
@@ -527,6 +532,169 @@ impl PySfmrReconstruction {
         Self {
             inner: self.inner.classify_points_at_infinity(floor),
         }
+    }
+
+    /// Triangulation observability diagnostics for the stored finite points.
+    ///
+    /// Re-triangulates each finite point from its observing cameras' rays toward
+    /// the *stored* point (no ``.sift`` reads) and returns the per-point
+    /// conditioning and the noise-calibrated depth uncertainty. Points at
+    /// infinity and points with fewer than two observations get ``NaN`` (their
+    /// depth is undefined). Arrays are length ``M = point_count`` and align with
+    /// ``positions`` / ``errors`` for masking.
+    ///
+    /// Args:
+    ///     noise_px: Per-ray pixel localisation noise; the per-point noise is
+    ///         ``max(reprojection_error, noise_px)``. Defaults to 1.0.
+    ///
+    /// Returns:
+    ///     A dict of arrays, each shape ``(M,)`` float64: ``condition_number``
+    ///     (of the normal matrix ``A``, scales with track length),
+    ///     ``depth_sigma`` (1σ depth uncertainty along the mean viewing
+    ///     direction), and ``inverse_depth_z`` (scale-free ``depth / sigma``;
+    ///     small ⇒ near-infinity).
+    #[pyo3(signature = (noise_px=1.0))]
+    fn triangulation_diagnostics(&self, py: Python<'_>, noise_px: f64) -> PyResult<Py<PyAny>> {
+        let recon = &self.inner;
+        let centers: Vec<Point3<f64>> = recon.images.iter().map(|im| im.camera_center()).collect();
+        let focal_max: Vec<f64> = recon
+            .images
+            .iter()
+            .map(|im| {
+                let (fx, fy) = recon.cameras[im.camera_index as usize].focal_lengths();
+                fx.max(fy)
+            })
+            .collect();
+
+        let m = recon.points.len();
+        let mut condition_number = vec![f64::NAN; m];
+        let mut depth_sigma = vec![f64::NAN; m];
+        let mut inverse_depth_z = vec![f64::NAN; m];
+
+        // Build one CSR batch over every diagnosable finite point.
+        let mut dirs = Vec::new();
+        let mut ray_centers = Vec::new();
+        let mut sigma_rad = Vec::new();
+        let mut offsets = vec![0usize];
+        let mut point_of_track = Vec::new();
+        for (pidx, pt) in recon.points.iter().enumerate() {
+            if pt.is_at_infinity() {
+                continue;
+            }
+            let obs = recon.observations_for_point(pidx);
+            if obs.len() < 2 {
+                continue;
+            }
+            let rays = viewing_rays(
+                pt.position,
+                &centers,
+                obs.iter().map(|o| o.image_index as usize),
+            );
+            if rays.len() < 2 {
+                continue;
+            }
+            let noise = (pt.error as f64).max(noise_px);
+            for (img, r) in &rays {
+                dirs.push(*r);
+                ray_centers.push(centers[*img]);
+                sigma_rad.push(noise / focal_max[*img]);
+            }
+            offsets.push(dirs.len());
+            point_of_track.push(pidx);
+        }
+
+        let tris = triangulate_batch(&dirs, &ray_centers, &offsets);
+        let dus = depth_uncertainty_batch(&tris, &dirs, &ray_centers, &offsets, &sigma_rad);
+        for (track, &pidx) in point_of_track.iter().enumerate() {
+            condition_number[pidx] = tris[track].condition_number;
+            depth_sigma[pidx] = dus[track].sigma;
+            inverse_depth_z[pidx] = dus[track].inverse_depth_z;
+        }
+
+        let dict = PyDict::new(py);
+        dict.set_item("condition_number", PyArray1::from_vec(py, condition_number))?;
+        dict.set_item("depth_sigma", PyArray1::from_vec(py, depth_sigma))?;
+        dict.set_item("inverse_depth_z", PyArray1::from_vec(py, inverse_depth_z))?;
+        Ok(dict.into_any().unbind())
+    }
+
+    /// Full triangulation analysis of a single 3D point, re-deriving its rays
+    /// from the workspace ``.sift`` files.
+    ///
+    /// Reads the observing images' ``.sift`` files, so they must be present.
+    /// Returns a dict: ``w``, ``position`` (3,), ``error``, ``color`` (3,),
+    /// ``classification`` ("finite"/"at_infinity"/"indeterminate"),
+    /// ``triangulated_point`` (3,), ``eigenvalues`` (3,), ``condition_number``,
+    /// ``in_front``, ``depth``, ``sigma``, ``inverse_depth_z``,
+    /// ``resolvable_distance``, ``finite_horizon``, ``baseline_span``,
+    /// ``max_ray_angle_deg``, and ``observations`` (list of dicts with
+    /// ``image_index``, ``image_name``, ``feature_index``, ``incidence_deg``).
+    ///
+    /// Args:
+    ///     point_index: Index into the points array.
+    ///     noise_px: Per-ray pixel noise; per-point noise is
+    ///         ``max(reprojection_error, noise_px)``. Defaults to 1.0.
+    #[pyo3(signature = (point_index, noise_px=1.0))]
+    fn inspect_point(
+        &self,
+        py: Python<'_>,
+        point_index: usize,
+        noise_px: f64,
+    ) -> PyResult<Py<PyAny>> {
+        if point_index >= self.inner.points.len() {
+            return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+                "point index {point_index} out of range (0..{})",
+                self.inner.points.len()
+            )));
+        }
+        let rep = self
+            .inner
+            .inspect_point(point_index, noise_px)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+        let dict = PyDict::new(py);
+        dict.set_item("w", rep.w)?;
+        dict.set_item("position", [rep.position.x, rep.position.y, rep.position.z])?;
+        dict.set_item("error", rep.error)?;
+        dict.set_item("color", [rep.color[0], rep.color[1], rep.color[2]])?;
+        dict.set_item(
+            "classification",
+            match rep.classification {
+                Classification::Finite(_) => "finite",
+                Classification::Infinity(_) => "at_infinity",
+                Classification::Indeterminate => "indeterminate",
+            },
+        )?;
+        dict.set_item(
+            "triangulated_point",
+            [
+                rep.triangulated_point.x,
+                rep.triangulated_point.y,
+                rep.triangulated_point.z,
+            ],
+        )?;
+        dict.set_item("eigenvalues", rep.eigenvalues.to_vec())?;
+        dict.set_item("condition_number", rep.condition_number)?;
+        dict.set_item("in_front", rep.in_front)?;
+        dict.set_item("depth", rep.depth)?;
+        dict.set_item("sigma", rep.sigma)?;
+        dict.set_item("inverse_depth_z", rep.inverse_depth_z)?;
+        dict.set_item("resolvable_distance", rep.resolvable_distance)?;
+        dict.set_item("finite_horizon", rep.finite_horizon)?;
+        dict.set_item("baseline_span", rep.baseline_span)?;
+        dict.set_item("max_ray_angle_deg", rep.max_ray_angle_deg)?;
+
+        let obs_list = PyList::empty(py);
+        for o in &rep.observations {
+            let od = PyDict::new(py);
+            od.set_item("image_index", o.image_index)?;
+            od.set_item("image_name", &o.image_name)?;
+            od.set_item("feature_index", o.feature_index)?;
+            od.set_item("incidence_deg", o.incidence_deg)?;
+            obs_list.append(od)?;
+        }
+        dict.set_item("observations", obs_list)?;
+        Ok(dict.into_any().unbind())
     }
 
     /// Materialise every point at infinity as a finite point, returning a new

@@ -6,10 +6,19 @@
 from pathlib import Path
 
 import click
+import numpy as np
 
 from .._sfmtool import SfmrReconstruction
-from .._histogram_utils import render_histogram_string
+from .._histogram_utils import (
+    create_histogram,
+    print_histogram,
+    render_histogram_string,
+)
 from .._image_pair_graph import _has_valid_depth_statistics
+
+# Matches sfmtool_core::infinity::DEFAULT_INVERSE_DEPTH_Z_CUTOFF: below this a
+# point's depth is statistically indistinguishable from infinity.
+DEPTH_RELIABILITY_Z_CUTOFF = 4.0
 
 
 def print_z_range(recon: SfmrReconstruction, recon_name: str | None = None):
@@ -83,5 +92,75 @@ def print_z_range(recon: SfmrReconstruction, recon_name: str | None = None):
                 click.echo("    Observed:  (none)")
         else:
             click.echo(f"  {name}: no data")
+
+    click.echo("")
+
+
+def print_depth_reliability(
+    recon: SfmrReconstruction,
+    recon_name: str | None = None,
+    noise_px: float = 1.0,
+):
+    """Print per-point triangulation observability diagnostics.
+
+    For each finite, >=2-view point this reports the inverse-depth z-score
+    (depth / sigma_depth) — the scale-free reliability signal, where low values
+    mean the depth is statistically indistinguishable from infinity — and the
+    normal-matrix condition number, the cheap geometric proxy that scales with
+    track length. Points at infinity and sub-2-view points have no finite depth
+    and are excluded.
+    """
+    if recon_name is None:
+        recon_name = recon.source_metadata.get("source_path", "reconstruction")
+        if "/" in recon_name or "\\" in recon_name:
+            recon_name = Path(recon_name).name
+
+    diag = recon.triangulation_diagnostics(noise_px=noise_px)
+    z = np.asarray(diag["inverse_depth_z"])
+    cond = np.asarray(diag["condition_number"])
+
+    click.echo(f"\nDepth reliability for: {recon_name}")
+    click.echo("=" * 70)
+    click.echo(
+        f"3D points: {recon.point_count}  ({recon.infinity_point_count} at infinity)"
+    )
+    click.echo(f"Noise floor: {noise_px:g} px")
+
+    finite = np.isfinite(z)
+    n = int(finite.sum())
+    if n == 0:
+        click.echo("\nNo finite, >=2-view points to diagnose.")
+        return
+    zf = z[finite]
+
+    below = int((zf < DEPTH_RELIABILITY_Z_CUTOFF).sum())
+    click.echo(f"\nDiagnosed points: {n:,}")
+    click.echo("\nInverse-depth z (depth/sigma; low => near-infinity):")
+    click.echo(f"  Median: {np.median(zf):.2f}")
+    click.echo(f"  Mean:   {zf.mean():.2f}")
+    click.echo(f"  Min:    {zf.min():.2f}    Max: {zf.max():.2f}")
+    click.echo(
+        f"  Below z={DEPTH_RELIABILITY_Z_CUTOFF:g} (near-infinity): "
+        f"{below:,} ({100.0 * below / n:.1f}%)"
+    )
+    hi = max(float(np.percentile(zf, 99)), DEPTH_RELIABILITY_Z_CUTOFF)
+    print_histogram(zf, "Inverse-depth z", min_val=0.0, max_val=hi, show_stats=False)
+
+    cond_f = cond[np.isfinite(cond)]
+    if cond_f.size:
+        click.echo("\nCondition number of the normal matrix:")
+        click.echo(f"  Median: {np.median(cond_f):.1f}")
+        click.echo(f"  Max:    {cond_f.max():.1f}")
+        # Log-scale histogram: the condition number spans orders of magnitude.
+        log_cond = np.log10(np.clip(cond_f, 1.0, None))
+        counts, edges = create_histogram(log_cond, num_buckets=64)
+        if counts.size:
+            print_histogram(
+                log_cond,
+                "log10(condition number)",
+                min_val=float(edges[0]),
+                max_val=float(edges[-1]),
+                show_stats=False,
+            )
 
     click.echo("")

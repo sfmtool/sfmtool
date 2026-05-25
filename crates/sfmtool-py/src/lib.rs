@@ -88,6 +88,7 @@ mod py_per_spherical_tile_source_stack;
 mod py_photometric_ransac;
 mod py_sphere_points;
 mod py_spherical_tile_rig;
+mod py_triangulation;
 pub use py_per_spherical_tile_source_stack::PyPerSphericalTileSourceStack;
 pub use py_photometric_ransac::PyRansacPhotometricOutput;
 pub use py_spherical_tile_rig::PySphericalTileRig;
@@ -100,6 +101,7 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // .sfmr file I/O
     m.add_function(wrap_pyfunction!(py_sfmr_io::read_sfmr, m)?)?;
     m.add_function(wrap_pyfunction!(py_sfmr_io::read_sfmr_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(py_sfmr_io::read_sfmr_content_hash, m)?)?;
     m.add_function(wrap_pyfunction!(py_sfmr_io::write_sfmr, m)?)?;
     m.add_function(wrap_pyfunction!(py_sfmr_io::verify_sfmr, m)?)?;
 
@@ -186,6 +188,9 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Viewing angle analysis
     m.add_function(wrap_pyfunction!(py_analysis::compute_narrow_track_mask, m)?)?;
+
+    // Batch triangulation
+    m.add_function(wrap_pyfunction!(py_triangulation::triangulate_batch, m)?)?;
 
     // Alignment (Kabsch + RANSAC)
     m.add_function(wrap_pyfunction!(py_analysis::kabsch_algorithm_rs, m)?)?;

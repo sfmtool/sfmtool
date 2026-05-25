@@ -29,15 +29,27 @@ pub enum OverlayMode {
     /// track's widest triangulation baseline. High = well-triangulated,
     /// low = unreliable.
     MaxTrackAngle,
+    /// Colored circles by the inverse-depth z-score (`depth / σ_depth`) of the
+    /// 3D point's triangulation. High = depth well-resolved, low = depth
+    /// statistically indistinguishable from infinity. Unlike the max angle this
+    /// is scale-free and does not inflate with view count, so it stays right in
+    /// the distant / near-infinity regime.
+    DepthReliability,
+    /// Colored circles by the condition number of the triangulation's normal
+    /// matrix (log scale). Low = well-conditioned depth, high = ill-conditioned
+    /// / near-degenerate. A cheap geometric proxy that scales with track length.
+    ConditionNumber,
 }
 
 impl OverlayMode {
-    pub const ALL: [OverlayMode; 5] = [
+    pub const ALL: [OverlayMode; 7] = [
         OverlayMode::None,
         OverlayMode::Features,
         OverlayMode::ReprojError,
         OverlayMode::TrackLength,
         OverlayMode::MaxTrackAngle,
+        OverlayMode::DepthReliability,
+        OverlayMode::ConditionNumber,
     ];
 
     pub fn label(self) -> &'static str {
@@ -47,6 +59,8 @@ impl OverlayMode {
             OverlayMode::ReprojError => "Reproj Error",
             OverlayMode::TrackLength => "Track Length",
             OverlayMode::MaxTrackAngle => "Max Track Angle",
+            OverlayMode::DepthReliability => "Depth Reliability",
+            OverlayMode::ConditionNumber => "Condition Number",
         }
     }
 }

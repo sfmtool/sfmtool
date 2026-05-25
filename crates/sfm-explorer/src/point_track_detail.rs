@@ -44,6 +44,11 @@ pub struct PointTrackDetail {
     observations: Vec<TrackObservationData>,
     /// Maximum angle (degrees) between any pair of observation rays in the track.
     max_angle_deg: f32,
+    /// Inverse-depth z-score (`depth / σ_depth`) of the triangulation; NaN when
+    /// undefined (point at infinity or fewer than two usable rays).
+    inverse_depth_z: f32,
+    /// Condition number of the triangulation's normal matrix; NaN when undefined.
+    condition_number: f32,
     /// Cached thumbnail textures keyed by image index.
     thumbnail_textures: HashMap<usize, egui::TextureHandle>,
     /// The content_xxh128 hash prefix (first 8 hex chars) for Point IDs.
@@ -75,6 +80,8 @@ impl PointTrackDetail {
             prepared_point: None,
             observations: Vec::new(),
             max_angle_deg: 0.0,
+            inverse_depth_z: f32::NAN,
+            condition_number: f32::NAN,
             thumbnail_textures: HashMap::new(),
             hash_prefix: String::new(),
             scroll_offset_y: None,
@@ -219,6 +226,17 @@ impl PointTrackDetail {
             if self.max_angle_deg > 0.0 {
                 ui.label("|");
                 ui.label(format!("max pair angle: {:.1}°", self.max_angle_deg));
+            }
+
+            // Triangulation observability diagnostics (complementary to the
+            // max angle — scale-free and correct in the near-infinity regime).
+            if self.inverse_depth_z.is_finite() {
+                ui.label("|");
+                ui.label(format!("depth z: {:.1}", self.inverse_depth_z));
+            }
+            if self.condition_number.is_finite() {
+                ui.label("|");
+                ui.label(format!("cond: {:.0}", self.condition_number));
             }
         });
     }
@@ -613,6 +631,11 @@ impl PointTrackDetail {
 
         // Compute max angle between any pair of observation rays.
         self.max_angle_deg = compute_max_pairwise_angle(&world_rays);
+
+        // Triangulation observability diagnostics for this point.
+        let (condition_number, inverse_depth_z) = compute_point_diagnostics(recon, point_idx);
+        self.condition_number = condition_number;
+        self.inverse_depth_z = inverse_depth_z;
     }
 
     /// Clear all cached state (e.g. when reconstruction changes).
@@ -621,6 +644,8 @@ impl PointTrackDetail {
         self.prepared_point = None;
         self.observations.clear();
         self.max_angle_deg = 0.0;
+        self.inverse_depth_z = f32::NAN;
+        self.condition_number = f32::NAN;
         self.thumbnail_textures.clear();
         self.hash_prefix.clear();
         self.scroll_offset_y = None;
@@ -692,6 +717,55 @@ fn compute_observation_metrics(
     let ray_angle_deg = dot.acos().to_degrees() as f32;
 
     (reproj_error, ray_angle_deg)
+}
+
+/// Triangulation observability diagnostics for a 3D point, computed from the
+/// rays from each observing camera to the *stored* point (no `.sift` reads):
+/// `(condition_number, inverse_depth_z)`. Returns `(NaN, NaN)` for points at
+/// infinity, missing points, or fewer than two usable rays. The per-ray angular
+/// noise is `max(reproj_error, 1px) / f`, matching the classifier's policy.
+pub(crate) fn compute_point_diagnostics(
+    recon: &SfmrReconstruction,
+    point_idx: usize,
+) -> (f32, f32) {
+    use sfmtool_core::triangulation::{depth_uncertainty_batch, triangulate_batch};
+
+    let Some(pt) = recon.points.get(point_idx) else {
+        return (f32::NAN, f32::NAN);
+    };
+    if pt.is_at_infinity() {
+        return (f32::NAN, f32::NAN);
+    }
+    let observations = recon.observations_for_point(point_idx);
+    let noise = (pt.error as f64).max(1.0);
+    let mut dirs = Vec::with_capacity(observations.len());
+    let mut centers = Vec::with_capacity(observations.len());
+    let mut sigma = Vec::with_capacity(observations.len());
+    for obs in observations {
+        let img_idx = obs.image_index as usize;
+        let Some(image) = recon.images.get(img_idx) else {
+            continue;
+        };
+        let center = image.camera_center();
+        let dir = pt.position - center;
+        let len = dir.norm();
+        if len > 1e-12 {
+            dirs.push(dir / len);
+            centers.push(center);
+            let (fx, fy) = recon.cameras[image.camera_index as usize].focal_lengths();
+            sigma.push(noise / fx.max(fy));
+        }
+    }
+    if dirs.len() < 2 {
+        return (f32::NAN, f32::NAN);
+    }
+    let offsets = [0usize, dirs.len()];
+    let tris = triangulate_batch(&dirs, &centers, &offsets);
+    let dus = depth_uncertainty_batch(&tris, &dirs, &centers, &offsets, &sigma);
+    (
+        tris[0].condition_number as f32,
+        dus[0].inverse_depth_z as f32,
+    )
 }
 
 /// Compute the maximum angle (in degrees) between any pair of world-space rays.

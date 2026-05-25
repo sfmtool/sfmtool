@@ -3,6 +3,7 @@
 
 """Unified file inspection command."""
 
+import re
 from pathlib import Path
 
 import click
@@ -12,6 +13,7 @@ from ..analyze.summary import (
     print_camrig_summary,
     print_image_summary,
     print_matches_summary,
+    print_point_summary,
     print_sfmr_summary,
     print_sift_summary,
 )
@@ -25,11 +27,15 @@ _SUMMARY_DISPATCH = {
     ".camrig": print_camrig_summary,
 }
 
+# A 3D point ID: pt3d_<8 hex chars of the .sfmr content hash>_<point index>.
+_POINT_ID_RE = re.compile(r"^pt3d_([0-9a-fA-F]{8})_(\d+)$")
+
 
 @click.command("inspect")
 @timed_command
 @click.help_option("--help", "-h")
-@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@click.argument("target")
+@click.argument("location", required=False, default=None)
 @click.option(
     "--verbose",
     "-v",
@@ -37,10 +43,11 @@ _SUMMARY_DISPATCH = {
     is_flag=True,
     help="Print detailed information instead of a short summary.",
 )
-def inspect(path, verbose):
-    """Inspect an sfmtool file or image and print a summary.
+def inspect(target, location, verbose):
+    """Inspect an sfmtool file, image, or 3D point and print a summary.
 
-    The file type is determined by extension:
+    TARGET is a file path or a 3D point ID. A file's type is determined by
+    extension:
 
     \b
       .sfmr     reconstruction
@@ -49,8 +56,16 @@ def inspect(path, verbose):
       .camrig   camera rig
       image     .png / .jpg / .jpeg
 
-    Without --verbose, prints a short summary. With --verbose, prints the
-    full detail available for that file type.
+    A 3D point ID has the form ``pt3d_<hash>_<index>`` (as shown by the GUI and
+    verbose reconstruction reports). It is resolved by finding the .sfmr whose
+    content hash matches ``<hash>`` within the workspace: pass the workspace
+    directory (or any path inside it) as the optional second argument LOCATION;
+    the workspace is found by searching that directory and its parents. LOCATION
+    defaults to the current directory.
+
+    Without --verbose, prints a short summary. With --verbose, prints the full
+    detail — for a point ID, the complete triangulation analysis, which reads
+    the workspace ``.sift`` files.
 
     For deep-analysis reports on a reconstruction (covisibility, frustum,
     depth, per-image metrics), use `sfm analyze`.
@@ -61,26 +76,107 @@ def inspect(path, verbose):
 
         sfm inspect image_001.sift --verbose
 
-        sfm inspect matches.matches
+        sfm inspect pt3d_220747a8_96414
 
-        sfm inspect rig.camrig
-
-        sfm inspect photo.jpg -v
+        sfm inspect pt3d_220747a8_96414 /data/KerryPark360 --verbose
     """
-    path = Path(path)
-    suffix = path.suffix.lower()
+    match = _POINT_ID_RE.match(target)
+    if match is not None:
+        _inspect_point(
+            target, match.group(1).lower(), int(match.group(2)), location, verbose
+        )
+        return
 
+    # Otherwise TARGET is a file path.
+    if location is not None:
+        raise click.UsageError(
+            "the second argument is the workspace and is only valid with a "
+            "pt3d_<hash>_<index> point ID"
+        )
+    path = Path(target)
+    if not path.exists() or path.is_dir():
+        raise click.UsageError(f"file not found: {target}")
+
+    suffix = path.suffix.lower()
     summary_fn = _SUMMARY_DISPATCH.get(suffix)
     if summary_fn is None and suffix in _IMAGE_SUFFIXES:
         summary_fn = print_image_summary
     if summary_fn is None:
         raise click.UsageError(
             f"Cannot inspect '{path.name}': unsupported file type '{suffix}'. "
-            "Supported types: .sfmr, .sift, .matches, .camrig, and image "
-            "files (.png, .jpg, .jpeg)."
+            "Supported types: .sfmr, .sift, .matches, .camrig, image files "
+            "(.png, .jpg, .jpeg), and pt3d_<hash>_<index> point IDs."
         )
 
     try:
         summary_fn(path, verbose=verbose)
     except Exception as e:
         raise click.ClickException(str(e))
+
+
+def _inspect_point(point_id, hash_prefix, point_index, location, verbose):
+    """Resolve a pt3d_ point ID to its .sfmr and print the point summary."""
+    from .._sfmtool import SfmrReconstruction
+    from .._workspace import find_workspace_for_path
+
+    base = Path(location) if location else Path.cwd()
+    if not base.exists():
+        raise click.UsageError(f"location does not exist: {base}")
+
+    workspace = find_workspace_for_path(base) or base
+    sfmr_path = _find_sfmr_by_content_hash(workspace, hash_prefix)
+    if sfmr_path is None:
+        raise click.ClickException(
+            f"no .sfmr under '{workspace}' has content hash '{hash_prefix}' "
+            f"(from {point_id}). Pass the workspace directory as the second argument."
+        )
+
+    try:
+        recon = SfmrReconstruction.load(sfmr_path)
+        if point_index >= recon.point_count:
+            raise click.ClickException(
+                f"{point_id}: point index {point_index} is out of range — "
+                f"{sfmr_path.name} has {recon.point_count} points."
+            )
+        print_point_summary(recon, point_index, point_id, sfmr_path, verbose=verbose)
+    except click.ClickException:
+        raise
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+
+def _find_sfmr_by_content_hash(workspace, hash_prefix):
+    """First .sfmr under `workspace` whose content hash starts with `hash_prefix`.
+
+    Search order follows the sfmr-format spec: the conventional ``sfmr/``
+    subdirectory first, then the workspace root, then the rest of the tree
+    (skipping hidden directories). Reading each candidate's hash decompresses
+    only ``content_hash.json.zst``, not the reconstruction data.
+    """
+    from .._sfmtool import read_sfmr_content_hash
+
+    def matches(path: Path) -> bool:
+        try:
+            return read_sfmr_content_hash(str(path))[:8].lower() == hash_prefix
+        except Exception:
+            return False
+
+    # 1. The conventional sfmr/ subdirectory.
+    sfmr_dir = workspace / "sfmr"
+    if sfmr_dir.is_dir():
+        for path in sorted(sfmr_dir.glob("*.sfmr")):
+            if matches(path):
+                return path
+    # 2. The workspace root.
+    for path in sorted(workspace.glob("*.sfmr")):
+        if matches(path):
+            return path
+    # 3. The rest of the tree, skipping hidden / already-searched directories.
+    for path in sorted(workspace.rglob("*.sfmr")):
+        if path.parent == workspace or path.parent == sfmr_dir:
+            continue
+        if any(part.startswith(".") for part in path.relative_to(workspace).parts):
+            continue
+        if matches(path):
+            return path
+    return None

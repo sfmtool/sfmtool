@@ -59,6 +59,12 @@ struct DisplayFeature {
     /// 3D point — the track's widest triangulation baseline. NaN for untracked
     /// features or when not populated.
     max_track_angle_deg: f32,
+    /// Inverse-depth z-score (`depth / σ_depth`) of this feature's 3D point.
+    /// NaN for untracked / infinity points or when not populated.
+    inverse_depth_z: f32,
+    /// Condition number of this feature's 3D point's triangulation normal
+    /// matrix. NaN for untracked / infinity points or when not populated.
+    condition_number: f32,
 }
 
 impl DisplayFeature {
@@ -535,7 +541,8 @@ impl ImageDetail {
                     );
                 }
                 OverlayMode::MaxTrackAngle => {
-                    let (vmin, vmax) = compute_max_track_angle_range(features);
+                    let (vmin, vmax) =
+                        compute_finite_value_range(features, |f| f.max_track_angle_deg);
                     for feature in features {
                         if !feature.is_tracked() || !feature.max_track_angle_deg.is_finite() {
                             continue;
@@ -567,6 +574,73 @@ impl ImageDetail {
                         vmin,
                         vmax,
                         colormap::max_track_angle_color,
+                    );
+                }
+                OverlayMode::DepthReliability => {
+                    let (vmin, vmax) = compute_finite_value_range(features, |f| f.inverse_depth_z);
+                    for feature in features {
+                        if !feature.is_tracked() || !feature.inverse_depth_z.is_finite() {
+                            continue;
+                        }
+                        let center = image_to_panel(feature.position[0], feature.position[1]);
+                        if !panel_rect.expand(10.0).contains(center) {
+                            continue;
+                        }
+                        let is_selected = selected_point == Some(feature.point_index as usize);
+                        let color =
+                            colormap::depth_reliability_color(feature.inverse_depth_z, vmin, vmax);
+                        let radius = 5.0;
+                        painter.circle_filled(center, radius, color);
+                        if is_selected {
+                            painter.circle_stroke(
+                                center,
+                                radius + 2.0,
+                                egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                            );
+                        }
+                    }
+                    colormap::draw_colorbar(
+                        &painter,
+                        panel_rect,
+                        "Inverse-depth z",
+                        vmin,
+                        vmax,
+                        colormap::depth_reliability_color,
+                    );
+                }
+                OverlayMode::ConditionNumber => {
+                    // Condition numbers span orders of magnitude — color in log10.
+                    let (vmin, vmax) = compute_finite_value_range(features, |f| {
+                        log10_condition(f.condition_number)
+                    });
+                    for feature in features {
+                        let log_cond = log10_condition(feature.condition_number);
+                        if !feature.is_tracked() || !log_cond.is_finite() {
+                            continue;
+                        }
+                        let center = image_to_panel(feature.position[0], feature.position[1]);
+                        if !panel_rect.expand(10.0).contains(center) {
+                            continue;
+                        }
+                        let is_selected = selected_point == Some(feature.point_index as usize);
+                        let color = colormap::condition_number_color(log_cond, vmin, vmax);
+                        let radius = 5.0;
+                        painter.circle_filled(center, radius, color);
+                        if is_selected {
+                            painter.circle_stroke(
+                                center,
+                                radius + 2.0,
+                                egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                            );
+                        }
+                    }
+                    colormap::draw_colorbar(
+                        &painter,
+                        panel_rect,
+                        "log10(Condition #)",
+                        vmin,
+                        vmax,
+                        colormap::condition_number_color,
                     );
                 }
             }
@@ -626,17 +700,27 @@ impl ImageDetail {
                                 .get(point_idx)
                                 .copied()
                                 .unwrap_or(0);
-                            let max_track_angle = features
+                            let feat = features
                                 .iter()
-                                .find(|f| f.point_index as usize == point_idx)
-                                .map(|f| f.max_track_angle_deg)
-                                .unwrap_or(f32::NAN);
+                                .find(|f| f.point_index as usize == point_idx);
+                            let max_track_angle =
+                                feat.map(|f| f.max_track_angle_deg).unwrap_or(f32::NAN);
+                            let inverse_depth_z =
+                                feat.map(|f| f.inverse_depth_z).unwrap_or(f32::NAN);
+                            let condition_number =
+                                feat.map(|f| f.condition_number).unwrap_or(f32::NAN);
                             let mut text = format!(
                                 "Point3D #{point_idx} | err: {:.3}px | tracklen: {obs_count}",
                                 pt.error
                             );
                             if max_track_angle.is_finite() {
                                 text.push_str(&format!(" | max angle: {max_track_angle:.2}°"));
+                            }
+                            if inverse_depth_z.is_finite() {
+                                text.push_str(&format!(" | depth z: {inverse_depth_z:.1}"));
+                            }
+                            if condition_number.is_finite() {
+                                text.push_str(&format!(" | cond: {condition_number:.0}"));
                             }
                             text
                         } else {
@@ -726,6 +810,8 @@ impl ImageDetail {
                     affine_shape: cached.affine_shapes[fi],
                     point_index: point_idx,
                     max_track_angle_deg: f32::NAN,
+                    inverse_depth_z: f32::NAN,
+                    condition_number: f32::NAN,
                 });
             }
         }
@@ -822,19 +908,35 @@ impl ImageDetail {
                 affine_shape: cached.affine_shapes[i],
                 point_index,
                 max_track_angle_deg: f32::NAN,
+                inverse_depth_z: f32::NAN,
+                condition_number: f32::NAN,
             });
         }
 
-        // Populate max track angles only when needed. Computing for every
-        // tracked feature iterates that point's observations, so we pay the
-        // cost only when the overlay will consume it.
-        if settings.overlay_mode == OverlayMode::MaxTrackAngle {
-            for feature in features.iter_mut() {
-                if feature.is_tracked() {
-                    feature.max_track_angle_deg =
-                        compute_max_track_angle_deg(recon, feature.point_index as usize);
+        // Populate per-point diagnostics only when the active overlay consumes
+        // them. Each iterates a point's observations, so we pay only on demand.
+        match settings.overlay_mode {
+            OverlayMode::MaxTrackAngle => {
+                for feature in features.iter_mut() {
+                    if feature.is_tracked() {
+                        feature.max_track_angle_deg =
+                            compute_max_track_angle_deg(recon, feature.point_index as usize);
+                    }
                 }
             }
+            OverlayMode::DepthReliability | OverlayMode::ConditionNumber => {
+                for feature in features.iter_mut() {
+                    if feature.is_tracked() {
+                        let (cond, z) = crate::point_track_detail::compute_point_diagnostics(
+                            recon,
+                            feature.point_index as usize,
+                        );
+                        feature.condition_number = cond;
+                        feature.inverse_depth_z = z;
+                    }
+                }
+            }
+            _ => {}
         }
 
         let mut tree = kiddo::KdTree::<f32, 2>::new();
@@ -994,15 +1096,30 @@ fn compute_error_range(features: &[DisplayFeature], recon: &SfmrReconstruction) 
     }
 }
 
-/// Compute the max-track-angle range (degrees) across tracked features.
-fn compute_max_track_angle_range(features: &[DisplayFeature]) -> (f32, f32) {
+/// `log10` of a condition number, guarding the degenerate `∞` (and clamping at
+/// 1 so the result is non-negative). Non-finite input maps to NaN (skipped).
+fn log10_condition(condition_number: f32) -> f32 {
+    if condition_number.is_finite() {
+        condition_number.max(1.0).log10()
+    } else {
+        f32::NAN
+    }
+}
+
+/// Compute the value range across tracked features for an arbitrary per-feature
+/// accessor, ignoring non-finite values. Falls back to a unit range when there
+/// is no finite data, and pads a degenerate (zero-width) range.
+fn compute_finite_value_range(
+    features: &[DisplayFeature],
+    value: impl Fn(&DisplayFeature) -> f32,
+) -> (f32, f32) {
     let mut vmin = f32::MAX;
     let mut vmax = f32::MIN;
     for feature in features {
         if !feature.is_tracked() {
             continue;
         }
-        let v = feature.max_track_angle_deg;
+        let v = value(feature);
         if v.is_finite() {
             vmin = vmin.min(v);
             vmax = vmax.max(v);
