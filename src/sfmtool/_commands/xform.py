@@ -358,10 +358,10 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             param = args[i]
 
             parts = param.split(",")
-            if not 1 <= len(parts) <= 3:
+            if not 1 <= len(parts) <= 4:
                 raise click.UsageError(
                     "--find-points-at-infinity expects "
-                    "eps_deg[,desc_thresh[,min_views]], "
+                    "eps_deg[,desc_thresh[,min_views[,noise_floor_px]]], "
                     f"got: {param}"
                 )
 
@@ -369,6 +369,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
                 eps_deg = float(parts[0])
                 desc_thresh = float(parts[1]) if len(parts) > 1 else 200.0
                 min_views = int(parts[2]) if len(parts) > 2 else 2
+                noise_floor_px = float(parts[3]) if len(parts) > 3 else 1.0
             except ValueError as e:
                 raise click.UsageError(
                     f"Invalid --find-points-at-infinity parameter '{param}': {e}"
@@ -381,6 +382,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
                         desc_thresh,
                         min_views,
                         max_features=max_features,
+                        noise_floor_px=noise_floor_px,
                     )
                 )
             except ValueError as e:
@@ -521,7 +523,7 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
 @click.option(
     "--find-points-at-infinity",
     multiple=True,
-    help="Discover points at infinity: eps_deg[,desc_thresh[,min_views]] (e.g. '0.1,200,2')",
+    help="Discover points at infinity: eps_deg[,desc_thresh[,min_views[,noise_floor_px]]] (e.g. '0.1,200,2,1.0')",
 )
 @click.option(
     "--classify-points-at-infinity",
@@ -572,7 +574,7 @@ def xform(ctx, input_path, output_path, **kwargs):
 
     \b
     Points at infinity:
-      --find-points-at-infinity SPEC      Discover points at infinity: eps_deg[,desc_thresh[,min_views]]
+      --find-points-at-infinity SPEC      Discover points at infinity: eps_deg[,desc_thresh[,min_views[,noise_floor_px]]]
       --classify-points-at-infinity NOISE Reclassify unconstrained finite points as points at infinity
       --max-features N                    Cap features per image for --find-points-at-infinity (largest first)
 

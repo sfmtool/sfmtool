@@ -15,9 +15,18 @@ frustum intersection, depth ranges, per-image metrics), use `sfm analyze`
 
 ```bash
 sfm inspect <PATH> [--verbose / -v]
+sfm inspect <POINT_ID> [WORKSPACE] [--verbose / -v]
 ```
 
 `PATH` is a single file. Directories and multiple paths are not accepted.
+
+`POINT_ID` is a 3D point reference of the form `pt3d_<hash>_<index>` (as shown
+by the GUI and by verbose reconstruction reports — see the [Point ID section in
+the sfmr format spec](../formats/sfmr-file-format.md#point-id-portable-3d-point-references)).
+The optional second argument `WORKSPACE` is a directory used to locate the
+source `.sfmr`; it (or its nearest ancestor containing `.sfm-workspace.json`) is
+the workspace searched. `WORKSPACE` defaults to the current directory, and is
+only valid with a point ID (an error with a file `PATH`).
 
 ## Supported File Types
 
@@ -28,9 +37,33 @@ sfm inspect <PATH> [--verbose / -v]
 | `.matches` | Feature matches | `read_matches_metadata` / `verify_matches` (default), `read_matches` (verbose) |
 | `.camrig` | Camera rig | `read_camrig_metadata` / `verify_camrig` (default), `read_camrig` (verbose) |
 | `.png` `.jpg` `.jpeg` | Image | Image dimensions; pycolmap EXIF inference (verbose) |
+| `pt3d_<hash>_<index>` | 3D point | `read_sfmr_content_hash` to resolve the `.sfmr`, then `SfmrReconstruction.load` / `inspect_point` (verbose) |
 
 An unsupported extension is rejected with a message listing the supported
 types.
+
+## 3D Point IDs
+
+`sfm inspect pt3d_<hash>_<index>` resolves a point reference to its 3D point.
+The `.sfmr` file is located by matching `<hash>` (the first 8 hex chars of the
+file's `content_xxh128`) against the content hashes of the `.sfmr` files in the
+workspace — searched in the order the format spec prescribes: the `sfmr/`
+subdirectory first, then the workspace root, then the rest of the tree (hidden
+directories skipped). Each candidate's hash is read by decompressing only
+`content_hash.json.zst` (`read_sfmr_content_hash`), not the full reconstruction.
+A missing match, or an index beyond the file's point count, is a clear error.
+
+- **Default summary** — point ID, source file, finite (`w = 1`) vs at-infinity
+  (`w = 0`), position/direction, color, reprojection error, observation count.
+  Uses only the loaded reconstruction (no `.sift` needed).
+- **Verbose** — the full triangulation analysis from `inspect_point`, which
+  re-derives the point's observation rays from the workspace `.sift` files (so
+  they must be present): the re-derived classification, triangulated point and
+  depth, condition number and eigenvalues, in-front flag, inverse-depth z-score
+  (and σ), `resolvable_distance` vs `finite_horizon` (the camera extents) with a
+  sufficient/insufficient verdict, observing-camera baseline span, ray spread,
+  and a per-observation list with each ray's incidence angle off the optical
+  axis (flagging the near-fisheye-edge observations).
 
 ## Integrity
 
@@ -59,9 +92,12 @@ The default output is a compact label/value block. The fields per type:
 
 ## Verbose Output (`--verbose` / `-v`)
 
-- **`.sfmr`** — the full reconstruction report: metadata, workspace, per-camera
-  parameter tables, rig configuration, 3D point statistics with histograms,
-  reprojection error, observation statistics, nearest-neighbor distances. The
+- **`.sfmr`** — the full reconstruction report: metadata (including the
+  operation's recorded **tool options** — the ordered `transforms` list for
+  `xform`, solver flags for `solve`, etc.), workspace, per-camera parameter
+  tables, rig configuration, 3D point statistics with histograms, reprojection
+  error, per-point depth-reliability diagnostics (inverse-depth z-score and
+  condition number), observation statistics, nearest-neighbor distances. The
   3D point count carries the same `(N at infinity)` annotation as the default
   summary when any points at infinity are present.
 - **`.sift`** — adds image file size and hashes, feature tool and content

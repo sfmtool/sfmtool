@@ -88,6 +88,31 @@ pub fn max_track_angle_color(value: f32, vmin: f32, vmax: f32) -> egui::Color32 
     QUALITY_COLORMAP.sample(t)
 }
 
+/// Map an inverse-depth z-score to a color: high (depth well-resolved) → green,
+/// low (near-infinity / unconstrained depth) → red. `vmin`/`vmax` define the
+/// range (values outside are clamped).
+pub fn depth_reliability_color(value: f32, vmin: f32, vmax: f32) -> egui::Color32 {
+    let t = if (vmax - vmin).abs() < 1e-9 {
+        0.5
+    } else {
+        (value - vmin) / (vmax - vmin)
+    };
+    QUALITY_COLORMAP.sample(t)
+}
+
+/// Map a (log10) condition number to a color: low (well-conditioned) → green,
+/// high (ill-conditioned / near-degenerate) → red. Higher is worse, so this
+/// uses the error encoding. `vmin`/`vmax` define the range (values outside are
+/// clamped).
+pub fn condition_number_color(value: f32, vmin: f32, vmax: f32) -> egui::Color32 {
+    let t = if (vmax - vmin).abs() < 1e-9 {
+        0.5
+    } else {
+        (value - vmin) / (vmax - vmin)
+    };
+    ERROR_COLORMAP.sample(t)
+}
+
 /// Draw a vertical colorbar legend on the painter.
 ///
 /// Renders a gradient bar with min/max labels in the bottom-right corner

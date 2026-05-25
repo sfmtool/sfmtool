@@ -26,6 +26,7 @@ pub mod optical_flow;
 pub mod per_spherical_tile_source_stack;
 pub mod photometric_ransac;
 pub mod point_correspondence;
+pub mod point_inspect;
 pub mod reconstruction;
 pub mod rectification;
 pub mod remap;
@@ -37,6 +38,7 @@ pub mod spatial;
 pub mod sphere_points;
 pub mod spherical_tile_rig;
 pub mod transform;
+pub mod triangulation;
 pub mod viewing_angle;
 pub mod warp_map;
 

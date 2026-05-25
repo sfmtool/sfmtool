@@ -14,6 +14,25 @@ use sfmtool_core::frustum::{compute_distorted_frustum_grid, compute_frustum_corn
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
 
+/// Length of a point-at-infinity track ray, as a multiple of the camera-cloud
+/// extent — long enough to clearly head out past the scene toward infinity.
+const INFINITY_RAY_SCENE_MULTIPLE: f64 = 2.0;
+
+/// Bounding-box diagonal of the reconstruction's camera centers — a
+/// characteristic scene scale, used to size rays toward points at infinity.
+fn camera_cloud_extent(recon: &SfmrReconstruction) -> f64 {
+    let mut iter = recon.images.iter().map(|im| im.camera_center().coords);
+    let Some(first) = iter.next() else {
+        return 0.0;
+    };
+    let (mut lo, mut hi) = (first, first);
+    for c in iter {
+        lo = lo.inf(&c);
+        hi = hi.sup(&c);
+    }
+    (hi - lo).norm()
+}
+
 impl SceneRenderer {
     /// Upload point cloud data to the GPU.
     ///
@@ -720,7 +739,21 @@ impl SceneRenderer {
         point_idx: usize,
         sift_cache: &std::collections::HashMap<usize, crate::state::CachedSiftFeatures>,
     ) {
-        let point_pos = &recon.points[point_idx].position;
+        let point = &recon.points[point_idx];
+        let point_pos = point.position;
+        let at_infinity = point.is_at_infinity();
+
+        // A point at infinity has no finite location — its stored position is a
+        // unit direction at the origin, which would project onto every forward
+        // ray at t < 0 and collapse to a zero-length (invisible) ray. Instead,
+        // shoot each ray outward along its own bearing to a fixed, scene-scaled
+        // length (a multiple of the camera-cloud extent) so the bundle is
+        // visible heading off toward infinity.
+        let infinity_ray_length = if at_infinity {
+            INFINITY_RAY_SCENE_MULTIPLE * camera_cloud_extent(recon)
+        } else {
+            0.0
+        };
 
         let observations = recon.observations_for_point(point_idx);
         let edges: Vec<EdgeInstance> = observations
@@ -751,24 +784,32 @@ impl SceneRenderer {
                     r_flat[6] * d_cam[0] + r_flat[7] * d_cam[1] + r_flat[8] * d_cam[2],
                 ];
 
-                // Project the 3D point onto the ray to find the nearest point:
-                // t = dot(P - C, d_world), nearest = C + t * d_world
-                let cp = [
-                    point_pos.x - center.x,
-                    point_pos.y - center.y,
-                    point_pos.z - center.z,
-                ];
-                let t = cp[0] * d_world[0] + cp[1] * d_world[1] + cp[2] * d_world[2];
-                let t = t.max(0.0); // clamp to forward direction
-                let nearest = [
-                    (center.x + t * d_world[0]) as f32,
-                    (center.y + t * d_world[1]) as f32,
-                    (center.z + t * d_world[2]) as f32,
-                ];
+                let endpoint_b = if at_infinity {
+                    // Feature is at infinity along d_world — shoot the ray outward.
+                    [
+                        (center.x + infinity_ray_length * d_world[0]) as f32,
+                        (center.y + infinity_ray_length * d_world[1]) as f32,
+                        (center.z + infinity_ray_length * d_world[2]) as f32,
+                    ]
+                } else {
+                    // Finite point: terminate at the nearest point on the ray,
+                    // t = dot(P - C, d_world) clamped to the forward direction.
+                    let cp = [
+                        point_pos.x - center.x,
+                        point_pos.y - center.y,
+                        point_pos.z - center.z,
+                    ];
+                    let t = (cp[0] * d_world[0] + cp[1] * d_world[1] + cp[2] * d_world[2]).max(0.0);
+                    [
+                        (center.x + t * d_world[0]) as f32,
+                        (center.y + t * d_world[1]) as f32,
+                        (center.z + t * d_world[2]) as f32,
+                    ]
+                };
 
                 Some(EdgeInstance {
                     endpoint_a,
-                    endpoint_b: nearest,
+                    endpoint_b,
                 })
             })
             .collect();

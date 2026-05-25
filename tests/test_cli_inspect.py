@@ -7,7 +7,41 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool.analyze.summary import _print_tool_options
 from sfmtool.cli import main
+
+
+# ── tool options rendering ───────────────────────────────────────────────────
+
+
+def test_print_tool_options_renders_transforms_and_keys(capsys):
+    """An operation's recorded parameters are surfaced: transforms first, then
+    the remaining keys in sorted order."""
+    _print_tool_options(
+        {
+            "transforms": [
+                "Find points at infinity (eps=0.1, min_views=2)",
+                "Bundle adjustment (refine: focal)",
+            ],
+            "algorithm": "global",
+            "rig_aware": True,
+        }
+    )
+    out = capsys.readouterr().out
+    assert "Tool options:" in out
+    assert "transforms:" in out
+    assert "Find points at infinity (eps=0.1, min_views=2)" in out
+    assert "Bundle adjustment (refine: focal)" in out
+    assert "algorithm: global" in out
+    assert "rig_aware: True" in out
+
+
+def test_print_tool_options_empty_prints_nothing(capsys):
+    """A reconstruction with no recorded parameters prints no block."""
+    _print_tool_options({})
+    _print_tool_options(None)
+    assert capsys.readouterr().out == ""
 
 
 # ── .sfmr reconstructions ────────────────────────────────────────────────────
@@ -180,3 +214,61 @@ def test_inspect_unsupported_type(tmp_path: Path):
     result = CliRunner().invoke(main, ["inspect", str(p)])
     assert result.exit_code != 0
     assert "unsupported file type" in result.output
+
+
+# ── pt3d_ point IDs ──────────────────────────────────────────────────────────
+
+
+def _point_id(sfmr_path, index):
+    """Build a pt3d_ ID for the given .sfmr and point index."""
+    recon = SfmrReconstruction.load(str(sfmr_path))
+    return f"pt3d_{recon.content_xxh128[:8]}_{index}"
+
+
+def test_inspect_point_summary(sfmrfile_reconstruction_with_17_images):
+    """A pt3d_ ID resolves to its .sfmr and prints the point summary."""
+    sfmr = sfmrfile_reconstruction_with_17_images
+    point_id = _point_id(sfmr, 0)
+    result = CliRunner().invoke(main, ["inspect", point_id, str(sfmr.parent)])
+    assert result.exit_code == 0, result.output
+    assert point_id in result.output
+    assert "Observations" in result.output
+    assert sfmr.name in result.output
+
+
+def test_inspect_point_verbose(sfmrfile_reconstruction_with_17_images):
+    """--verbose adds the full triangulation analysis."""
+    sfmr = sfmrfile_reconstruction_with_17_images
+    point_id = _point_id(sfmr, 0)
+    result = CliRunner().invoke(main, ["inspect", point_id, str(sfmr.parent), "-v"])
+    assert result.exit_code == 0, result.output
+    assert "Triangulation analysis:" in result.output
+    assert "Inverse-depth z" in result.output
+    assert "incidence" in result.output
+
+
+def test_inspect_point_unknown_hash(sfmrfile_reconstruction_with_17_images):
+    """A hash matching no .sfmr is a clear error."""
+    sfmr = sfmrfile_reconstruction_with_17_images
+    result = CliRunner().invoke(main, ["inspect", "pt3d_deadbeef_0", str(sfmr.parent)])
+    assert result.exit_code != 0
+    assert "no .sfmr" in result.output
+
+
+def test_inspect_point_index_out_of_range(sfmrfile_reconstruction_with_17_images):
+    """An index beyond the point count is rejected."""
+    sfmr = sfmrfile_reconstruction_with_17_images
+    point_id = _point_id(sfmr, 10_000_000)
+    result = CliRunner().invoke(main, ["inspect", point_id, str(sfmr.parent)])
+    assert result.exit_code != 0
+    assert "out of range" in result.output
+
+
+def test_inspect_workspace_arg_rejected_for_file(
+    sfmrfile_reconstruction_with_17_images,
+):
+    """The second (workspace) argument is only valid with a point ID."""
+    sfmr = sfmrfile_reconstruction_with_17_images
+    result = CliRunner().invoke(main, ["inspect", str(sfmr), str(sfmr.parent)])
+    assert result.exit_code != 0
+    assert "point ID" in result.output

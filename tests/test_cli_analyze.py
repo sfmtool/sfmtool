@@ -53,6 +53,15 @@ def test_analyze_metrics_with_range(sfmrfile_reconstruction_with_17_images):
     assert "5 of 17 images" in result.output
 
 
+def test_analyze_depth_reliability(sfmrfile_reconstruction_with_17_images):
+    """--depth-reliability prints the inverse-depth z-score report."""
+    sfmr_path = str(sfmrfile_reconstruction_with_17_images)
+    result = CliRunner().invoke(main, ["analyze", "--depth-reliability", sfmr_path])
+    assert result.exit_code == 0, result.output
+    assert "Depth reliability" in result.output
+    assert "Inverse-depth z" in result.output
+
+
 def test_analyze_non_sfmr_file(tmp_path: Path):
     """Passing a non-.sfmr file raises an error."""
     p = tmp_path / "input.txt"

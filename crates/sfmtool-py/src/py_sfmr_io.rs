@@ -123,6 +123,17 @@ pub fn read_sfmr_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> 
     serde_to_py(py, &metadata)
 }
 
+/// Read the overall content hash (`content_xxh128`) of a .sfmr file.
+///
+/// Decompresses only `content_hash.json.zst`, so it is cheap enough to scan a
+/// directory of `.sfmr` files to resolve a `pt3d_<hash>_<index>` Point ID.
+#[pyfunction]
+pub fn read_sfmr_content_hash(path: PathBuf) -> PyResult<String> {
+    let content_hash = sfmr_format::read_sfmr_content_hash(&path)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    Ok(content_hash.content_xxh128)
+}
+
 /// Parse a Python dict into an `SfmrData` struct.
 ///
 /// This is the shared parsing logic used by both `write_sfmr` and

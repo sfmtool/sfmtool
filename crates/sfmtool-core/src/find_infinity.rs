@@ -20,11 +20,14 @@
 
 use std::collections::HashMap;
 
-use nalgebra::{Matrix3, Point3, Vector3};
+use nalgebra::{Point3, Vector3};
 
 use crate::feature_match::descriptor::descriptor_distance_l2_squared;
+use crate::infinity::{
+    camera_extents, classify_rays_at_infinity, Classification, RayClassification,
+    DEFAULT_INVERSE_DEPTH_Z_CUTOFF,
+};
 use crate::reconstruction::{Point3D, ReconstructionError, SfmrReconstruction, TrackObservation};
-use crate::viewing_angle::max_viewing_angle;
 
 /// Parameters governing the points-at-infinity search.
 #[derive(Debug, Clone, Copy)]
@@ -45,16 +48,16 @@ pub struct InfinityParams {
     pub noise_floor_px: f64,
 }
 
-/// A discovered track: its member observations and resulting 3D point.
+/// A discovered track: its member observations and the classification of its
+/// rays (finite / at infinity / indeterminate), with the diagnostics behind
+/// the call for debug review of dropped tracks.
 #[derive(Debug, Clone)]
 pub struct InfinityTrack {
     /// Member observations as `(image_index, feature_index)` pairs, one per
     /// distinct image.
     pub members: Vec<(u32, u32)>,
-    /// Euclidean position (`w = 1`) or unit direction (`w = 0`).
-    pub position: Point3<f64>,
-    /// Homogeneous coordinate kind: `1.0` finite, `0.0` at infinity.
-    pub w: f64,
+    /// Classification plus observability diagnostics.
+    pub classification: RayClassification,
 }
 
 /// Discover infinite/distant-point tracks from un-projected keypoint
@@ -64,6 +67,7 @@ pub struct InfinityTrack {
 /// All keypoint-indexed slices (`dirs`, `descriptors`, `image_index`,
 /// `feature_index`) have the same length `T`. `camera_centers` and `focal_max`
 /// are indexed by image (length `N`).
+#[allow(clippy::too_many_arguments)]
 pub fn find_infinity_tracks(
     dirs: &[Vector3<f64>],
     descriptors: &[[u8; 128]],
@@ -72,6 +76,7 @@ pub fn find_infinity_tracks(
     camera_centers: &[Point3<f64>],
     focal_max: &[f64],
     params: &InfinityParams,
+    finite_horizon: f64,
 ) -> Vec<InfinityTrack> {
     let t = dirs.len();
     assert_eq!(descriptors.len(), t, "descriptors length must equal dirs");
@@ -238,9 +243,10 @@ pub fn find_infinity_tracks(
             continue;
         }
 
-        // 8. Classify: parallax_px = alpha_max * f_max. Below the floor → w = 0
-        //    bearing mean; above → triangulate, fall back to bearing mean when
-        //    the solve is ill-conditioned or the point is behind the cameras.
+        // 8. Classify on the triangulation's observability diagnostics into
+        //    finite / at-infinity / indeterminate. See `classify_track`. The
+        //    caller drops indeterminate tracks; the diagnostics ride along for
+        //    debug review.
         let member_dirs: Vec<Vector3<f64>> = best_for_image
             .values()
             .map(|&(_, m_u)| dirs[m_u as usize])
@@ -250,106 +256,52 @@ pub fn find_infinity_tracks(
             .map(|&(_, m_u)| image_index[m_u as usize] as usize)
             .collect();
 
-        let (position, w) = classify_track(
+        let classification = classify_track(
             &member_dirs,
             &member_images,
             camera_centers,
             focal_max,
             params.noise_floor_px,
+            finite_horizon,
         );
 
         tracks.push(InfinityTrack {
             members: chosen,
-            position,
-            w,
+            classification,
         });
     }
 
     tracks
 }
 
-/// Classify a track from its member directions: a `w = 0` bearing-mean point at
-/// infinity, or a triangulated finite point when the parallax clears the noise
-/// floor and the midpoint solve is well-conditioned and in front of the
-/// cameras.
+/// Classify a track from its member directions into finite / at-infinity /
+/// indeterminate, decided on the triangulation's observability diagnostics —
+/// see [`classify_rays_at_infinity`]. Discovered tracks carry no reprojection
+/// error, so the per-ray angular noise is `noise_floor_px` divided by each
+/// observing camera's focal length.
 fn classify_track(
     member_dirs: &[Vector3<f64>],
     member_images: &[usize],
     camera_centers: &[Point3<f64>],
     focal_max: &[f64],
     noise_floor_px: f64,
-) -> (Point3<f64>, f64) {
-    let bearing_mean = || -> Point3<f64> {
-        let mut sum = Vector3::zeros();
-        for d in member_dirs {
-            sum += d;
-        }
-        let norm = sum.norm();
-        if norm > 0.0 {
-            Point3::from(sum / norm)
-        } else {
-            // Rays cancel exactly — degenerate; fall back to the first member.
-            Point3::from(member_dirs[0])
-        }
-    };
-
-    // alpha_max over the member directions: the largest pairwise angle.
-    let rays: Vec<(usize, Vector3<f64>)> = member_images
+    finite_horizon: f64,
+) -> RayClassification {
+    let member_centers: Vec<Point3<f64>> = member_images
         .iter()
-        .zip(member_dirs.iter())
-        .map(|(&img, &d)| (img, d))
+        .map(|&img| camera_centers[img])
         .collect();
-    let alpha_max = max_viewing_angle(&rays);
-    let f_max = member_images
+    let sigma_rad: Vec<f64> = member_images
         .iter()
-        .map(|&img| focal_max[img])
-        .fold(0.0_f64, f64::max);
-    let parallax_px = alpha_max * f_max;
-
-    if parallax_px < noise_floor_px {
-        return (bearing_mean(), 0.0);
-    }
-
-    // Triangulate by the midpoint / least-squares closest point to N lines
-    // `cᵢ + t·dᵢ`: solve `A p = b` with `A = Σ(I - dᵢdᵢᵀ)`,
-    // `b = Σ(I - dᵢdᵢᵀ)cᵢ`.
-    let mut a_mat = Matrix3::<f64>::zeros();
-    let mut b_vec = Vector3::<f64>::zeros();
-    let identity = Matrix3::<f64>::identity();
-    for (&img, &d) in member_images.iter().zip(member_dirs.iter()) {
-        let proj = identity - d * d.transpose();
-        a_mat += proj;
-        b_vec += proj * camera_centers[img].coords;
-    }
-
-    // Well-conditioned check: the projection sum is rank-deficient when all
-    // directions are parallel (the infinite-point case). Guard with the
-    // determinant relative to the trace scale.
-    let det = a_mat.determinant();
-    let scale = a_mat.norm();
-    if scale <= 0.0 || det.abs() < 1e-9 * scale.powi(3) {
-        return (bearing_mean(), 0.0);
-    }
-    let Some(inv) = a_mat.try_inverse() else {
-        return (bearing_mean(), 0.0);
-    };
-    let p = inv * b_vec;
-    let point = Point3::from(p);
-
-    // The triangulated point must lie in front of every observing camera (the
-    // ray from camera to point agrees with the un-projected direction).
-    let in_front = member_images
-        .iter()
-        .zip(member_dirs.iter())
-        .all(|(&img, &d)| {
-            let to_point = point.coords - camera_centers[img].coords;
-            to_point.dot(&d) > 0.0
-        });
-    if !in_front || !p.iter().all(|c| c.is_finite()) {
-        return (bearing_mean(), 0.0);
-    }
-
-    (point, 1.0)
+        .map(|&img| noise_floor_px / focal_max[img])
+        .collect();
+    classify_rays_at_infinity(
+        member_dirs,
+        &member_centers,
+        &sigma_rad,
+        DEFAULT_INVERSE_DEPTH_Z_CUTOFF,
+        finite_horizon,
+    )
 }
 
 /// Minimal union-find over `0..n` for connected-component assembly.
@@ -468,6 +420,12 @@ impl SfmrReconstruction {
             self.images.iter().map(|im| im.camera_center()).collect();
         let focal_max = per_image_focal_max(self);
 
+        // `finite_horizon` defaults to the camera extents — the scale of the
+        // region the capture explored. A track whose observing baseline can't
+        // resolve a point even at this distance is indeterminate and dropped.
+        // (Initial value; worth sweeping other multiples of the extents later.)
+        let finite_horizon = camera_extents(&camera_centers);
+
         let params = InfinityParams {
             eps_deg,
             desc_thresh,
@@ -483,18 +441,51 @@ impl SfmrReconstruction {
             &camera_centers,
             &focal_max,
             &params,
+            finite_horizon,
         );
 
-        // Append surviving tracks. Every member is a previously untracked
-        // feature (already-tracked keypoints were excluded above), so no
-        // appended observation collides with an existing point's observation.
+        // Append finite and at-infinity tracks; drop indeterminate ones (the
+        // baseline couldn't adjudicate them) with a debug line for review. Every
+        // member is a previously untracked feature, so no appended observation
+        // collides with an existing point's observation.
         let mut recon = self.clone();
         let old_point_count = recon.points.len();
+        let (mut n_finite, mut n_infinity, mut n_dropped) = (0usize, 0usize, 0usize);
         for track in found {
+            let rc = &track.classification;
+            let (position, w) = match rc.class {
+                Classification::Finite(p) => {
+                    n_finite += 1;
+                    (p, 1.0)
+                }
+                Classification::Infinity(dir) => {
+                    n_infinity += 1;
+                    (dir, 0.0)
+                }
+                Classification::Indeterminate => {
+                    n_dropped += 1;
+                    let images: Vec<u32> = track.members.iter().map(|(i, _)| *i).collect();
+                    eprintln!(
+                        "[find-infinity] DROP indeterminate: views={} cond={:.1} \
+                         resolvable={:.2} < finite_horizon={:.2} z={:.2} \
+                         bearing=[{:.3}, {:.3}, {:.3}] images={:?}",
+                        rc.num_views,
+                        rc.condition_number,
+                        rc.resolvable_distance,
+                        finite_horizon,
+                        rc.inverse_depth_z,
+                        rc.bearing.x,
+                        rc.bearing.y,
+                        rc.bearing.z,
+                        images,
+                    );
+                    continue;
+                }
+            };
             let new_point_id = recon.points.len() as u32;
             recon.points.push(Point3D {
-                position: track.position,
-                w: track.w,
+                position,
+                w,
                 color: [200, 200, 200],
                 error: 0.0,
                 estimated_normal: Vector3::zeros(),
@@ -508,6 +499,10 @@ impl SfmrReconstruction {
             }
             recon.observation_counts.push(track.members.len() as u32);
         }
+        eprintln!(
+            "[find-infinity] kept {n_finite} finite + {n_infinity} at-infinity, \
+             dropped {n_dropped} indeterminate (finite_horizon={finite_horizon:.2})"
+        );
 
         debug_assert!(recon.points.len() >= old_point_count);
         recon.rebuild_derived_fields();
@@ -534,6 +529,31 @@ mod tests {
         [value; 128]
     }
 
+    /// `find_infinity_tracks` with `finite_horizon` defaulted to the camera
+    /// extents, as the production path does.
+    #[allow(clippy::too_many_arguments)]
+    fn find(
+        dirs: &[Vector3<f64>],
+        descriptors: &[[u8; 128]],
+        image_index: &[u32],
+        feature_index: &[u32],
+        camera_centers: &[Point3<f64>],
+        focal_max: &[f64],
+        params: &InfinityParams,
+    ) -> Vec<InfinityTrack> {
+        let finite_horizon = camera_extents(camera_centers);
+        find_infinity_tracks(
+            dirs,
+            descriptors,
+            image_index,
+            feature_index,
+            camera_centers,
+            focal_max,
+            params,
+            finite_horizon,
+        )
+    }
+
     #[test]
     fn finds_single_infinite_point() {
         // 3 keypoints in 3 distinct images, near-identical world directions and
@@ -551,7 +571,7 @@ mod tests {
         ];
         let focal_max = vec![1000.0, 1000.0, 1000.0];
 
-        let tracks = find_infinity_tracks(
+        let tracks = find(
             &dirs,
             &descriptors,
             &image_index,
@@ -564,11 +584,13 @@ mod tests {
         assert_eq!(tracks.len(), 1, "exactly one track");
         let track = &tracks[0];
         assert_eq!(track.members.len(), 3, "three members, one per image");
-        assert_eq!(track.w, 0.0, "parallel rays → point at infinity");
-        assert!(
-            (track.position.coords.norm() - 1.0).abs() < 1e-9,
-            "position is a unit direction"
-        );
+        match track.classification.class {
+            Classification::Infinity(dir) => assert!(
+                (dir.coords.norm() - 1.0).abs() < 1e-9,
+                "position is a unit direction"
+            ),
+            other => panic!("parallel rays → point at infinity, got {other:?}"),
+        }
     }
 
     #[test]
@@ -582,7 +604,7 @@ mod tests {
         let camera_centers = vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)];
         let focal_max = vec![1000.0, 1000.0];
 
-        let tracks = find_infinity_tracks(
+        let tracks = find(
             &dirs,
             &descriptors,
             &image_index,
@@ -604,7 +626,7 @@ mod tests {
         let camera_centers = vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)];
         let focal_max = vec![1000.0, 1000.0];
 
-        let tracks = find_infinity_tracks(
+        let tracks = find(
             &dirs,
             &descriptors,
             &image_index,
@@ -638,7 +660,7 @@ mod tests {
         ];
         let focal_max = vec![1000.0, 1000.0, 1000.0];
 
-        let tracks = find_infinity_tracks(
+        let tracks = find(
             &dirs,
             &descriptors,
             &image_index,
@@ -673,7 +695,7 @@ mod tests {
 
         let mut params = default_params();
         params.min_views = 3;
-        let tracks = find_infinity_tracks(
+        let tracks = find(
             &dirs,
             &descriptors,
             &image_index,
@@ -685,7 +707,7 @@ mod tests {
         assert!(tracks.is_empty(), "2-image track dropped at min_views=3");
 
         params.min_views = 2;
-        let tracks = find_infinity_tracks(
+        let tracks = find(
             &dirs,
             &descriptors,
             &image_index,
@@ -717,7 +739,7 @@ mod tests {
         let feature_index = vec![0, 0, 0];
         let focal_max = vec![1000.0, 1000.0, 1000.0];
 
-        let tracks = find_infinity_tracks(
+        let tracks = find(
             &dirs,
             &descriptors,
             &image_index,
@@ -732,13 +754,14 @@ mod tests {
         );
 
         assert_eq!(tracks.len(), 1, "one track");
-        assert_eq!(tracks[0].w, 1.0, "wide parallax → finite point");
-        let recovered = tracks[0].position;
-        assert!(
-            (recovered.coords - point.coords).norm() < 1e-6,
-            "triangulated position {:?} near true point {:?}",
-            recovered,
-            point
-        );
+        match tracks[0].classification.class {
+            Classification::Finite(recovered) => assert!(
+                (recovered.coords - point.coords).norm() < 1e-6,
+                "triangulated position {:?} near true point {:?}",
+                recovered,
+                point
+            ),
+            other => panic!("wide parallax → finite point, got {other:?}"),
+        }
     }
 }

@@ -15,7 +15,8 @@
 use nalgebra::{Point3, Vector3};
 
 use crate::reconstruction::{count_points_at_infinity, SfmrReconstruction};
-use crate::viewing_angle::{max_viewing_angle, viewing_rays};
+use crate::triangulation::{depth_uncertainty_batch, triangulate_batch};
+use crate::viewing_angle::viewing_rays;
 
 /// SIFT keypoint localisation noise floor (pixels).
 ///
@@ -24,6 +25,149 @@ use crate::viewing_angle::{max_viewing_angle, viewing_rays};
 /// triangulated to fit its few observations almost exactly regardless of depth
 /// conditioning, so its reprojection error under-states the true noise.
 pub const DEFAULT_NOISE_FLOOR_PX: f64 = 1.0;
+
+/// Provisional inverse-depth z-score cutoff: a track whose `depth / σ_depth`
+/// falls below this is statistically indistinguishable from infinity and is
+/// classified as a `w = 0` point. (KerryPark360 populations: genuine z ≈ 62 vs
+/// discovered z ≈ 3.) The scale-free z-score is the decision variable; final
+/// calibration on larger captures is deferred — see the spec's open questions.
+pub const DEFAULT_INVERSE_DEPTH_Z_CUTOFF: f64 = 4.0;
+
+/// Cheap geometric pre-filter on the condition number of the normal matrix `A`.
+/// A track this well-conditioned has an observable depth and is finite without
+/// computing the noise-calibrated z-score; the z-score is only consulted in the
+/// ill-conditioned regime above this. (KerryPark360 medians: genuine 82 vs
+/// degenerate 89,599.) Note the condition number scales with track length, so
+/// it is a pre-filter, not the decision variable.
+pub const CONDITION_NUMBER_PREFILTER: f64 = 1e4;
+
+/// What a track's rays resolve to.
+#[derive(Debug, Clone, Copy)]
+pub enum Classification {
+    /// Triangulated finite point.
+    Finite(Point3<f64>),
+    /// Point at infinity — a unit bearing direction.
+    Infinity(Point3<f64>),
+    /// The baseline could not place a point even at `finite_horizon`, so neither
+    /// finite nor infinity is earned (see [`classify_rays_at_infinity`]).
+    Indeterminate,
+}
+
+/// A track's classification plus the diagnostics behind it, kept for debug
+/// review of the points that get dropped.
+#[derive(Debug, Clone, Copy)]
+pub struct RayClassification {
+    pub class: Classification,
+    pub condition_number: f64,
+    pub resolvable_distance: f64,
+    pub inverse_depth_z: f64,
+    pub bearing: Point3<f64>,
+    pub num_views: usize,
+}
+
+/// Spatial extent (bounding-box diagonal) of a set of camera centers — the
+/// scale of the region a capture explored, and the default `finite_horizon`.
+pub(crate) fn camera_extents(centers: &[Point3<f64>]) -> f64 {
+    let Some(first) = centers.first() else {
+        return 0.0;
+    };
+    let mut lo = first.coords;
+    let mut hi = first.coords;
+    for c in centers {
+        lo = lo.inf(&c.coords);
+        hi = hi.sup(&c.coords);
+    }
+    (hi - lo).norm()
+}
+
+/// Classify one track from its observation rays into finite / at-infinity /
+/// indeterminate.
+///
+/// `dirs` are the unit world-space rays (at least one), `centers` the matching
+/// camera centers, and `sigma_rad` the per-ray angular noise (`noise_px / fᵢ`).
+/// The decision:
+///
+/// - A clearly well-conditioned, in-front solve (condition number below
+///   [`CONDITION_NUMBER_PREFILTER`]) is **finite** — no noise model needed.
+/// - Otherwise, if the geometry cannot resolve a point even at `finite_horizon`
+///   (`resolvable_distance < finite_horizon`), the call is **indeterminate**:
+///   the baseline is too small to tell a scene-scale finite point from infinity.
+/// - With adequate baseline, a degenerate/behind solve or an inverse-depth
+///   z-score below `z_cutoff` is **at infinity** (a `w = 0` bearing direction —
+///   the mean of the rays, or the first ray if they cancel exactly); else
+///   **finite**.
+pub(crate) fn classify_rays_at_infinity(
+    dirs: &[Vector3<f64>],
+    centers: &[Point3<f64>],
+    sigma_rad: &[f64],
+    z_cutoff: f64,
+    finite_horizon: f64,
+) -> RayClassification {
+    let offsets = [0usize, dirs.len()];
+    let tri = triangulate_batch(dirs, centers, &offsets)
+        .pop()
+        .expect("one track");
+
+    // The direction to store for a w = 0 point: the bearing mean of the rays,
+    // or the first ray if they cancel exactly (degenerate; unreachable for
+    // genuine near-parallel infinity tracks, whose rays sum to ≈ K·d ≠ 0).
+    let bearing = {
+        let mut sum = Vector3::zeros();
+        for d in dirs {
+            sum += d;
+        }
+        let norm = sum.norm();
+        if norm > 0.0 {
+            Point3::from(sum / norm)
+        } else {
+            Point3::from(dirs[0])
+        }
+    };
+    let num_views = dirs.len();
+
+    // A rank-deficient solve (parallel rays → infinite condition number), a
+    // point behind a camera, or a non-finite point cannot be a physical finite
+    // point.
+    let geometrically_finite = tri.in_front_of_all_cameras
+        && tri.condition_number.is_finite()
+        && tri.point.coords.iter().all(|c| c.is_finite());
+
+    // Cheap pre-filter: a well-conditioned, in-front depth is finite without the
+    // noise-calibrated test (and has ample baseline, so never indeterminate).
+    if geometrically_finite && tri.condition_number < CONDITION_NUMBER_PREFILTER {
+        return RayClassification {
+            class: Classification::Finite(tri.point),
+            condition_number: tri.condition_number,
+            resolvable_distance: f64::NAN,
+            inverse_depth_z: f64::NAN,
+            bearing,
+            num_views,
+        };
+    }
+
+    // Degenerate / near-parallel / behind regime: needs the noise-calibrated
+    // diagnostics. `resolvable_distance` is depth-independent, so it stays valid
+    // even when the solved point (and hence `inverse_depth_z`) is noise.
+    let du = depth_uncertainty_batch(&[tri], dirs, centers, &offsets, sigma_rad)
+        .pop()
+        .expect("one track");
+    let class = if du.resolvable_distance < finite_horizon {
+        // Baseline can't reach the required distance — can't adjudicate.
+        Classification::Indeterminate
+    } else if !geometrically_finite || du.inverse_depth_z < z_cutoff {
+        Classification::Infinity(bearing)
+    } else {
+        Classification::Finite(tri.point)
+    };
+    RayClassification {
+        class,
+        condition_number: tri.condition_number,
+        resolvable_distance: du.resolvable_distance,
+        inverse_depth_z: du.inverse_depth_z,
+        bearing,
+        num_views,
+    }
+}
 
 impl SfmrReconstruction {
     /// Largest focal length (pixels) for each image's camera.
@@ -40,16 +184,21 @@ impl SfmrReconstruction {
     /// Reclassify finite points whose depth is unconstrained as points at
     /// infinity, returning a new reconstruction.
     ///
-    /// A finite point becomes `w = 0` when its parallax signal in pixels
-    /// (`α_max · f_max`, the largest viewing angle times the largest observing
-    /// focal length) falls below the track's measurement noise,
-    /// `max(reprojection_error, noise_floor_px)`. Its coordinate is replaced
-    /// with the bearing-mean direction `normalise(Σ rᵢ)` of its observation
-    /// rays. Points already at infinity, and points with fewer than two
-    /// observations, are left unchanged.
+    /// A finite point becomes `w = 0` only on a **confident** infinity call from
+    /// the triangulation of its observation rays — adequate baseline (resolvable
+    /// distance ≥ the camera extents) and a degenerate/behind solve or an
+    /// inverse-depth z-score below [`DEFAULT_INVERSE_DEPTH_Z_CUTOFF`]. Its
+    /// coordinate is replaced with the bearing-mean direction of its rays. The
+    /// per-ray angular noise is `max(reprojection_error, noise_floor_px) / fᵢ`.
+    ///
+    /// This is non-destructive and relabel-only: a point we lack the baseline to
+    /// adjudicate (indeterminate) is left as the finite point the solve
+    /// produced, never removed. Points already at infinity, and points with
+    /// fewer than two observations, are left unchanged.
     pub fn classify_points_at_infinity(&self, noise_floor_px: f64) -> Self {
         let centers: Vec<Point3<f64>> = self.images.iter().map(|im| im.camera_center()).collect();
         let focal_max = self.per_image_focal_max();
+        let finite_horizon = camera_extents(&centers);
 
         let mut recon = self.clone();
         for (pidx, pt) in recon.points.iter_mut().enumerate() {
@@ -62,7 +211,8 @@ impl SfmrReconstruction {
             }
 
             // World-frame rays from each observing camera toward the point,
-            // paired with their image index.
+            // paired with their image index. A camera coincident with the point
+            // contributes no ray.
             let rays = viewing_rays(
                 pt.position,
                 &centers,
@@ -72,33 +222,31 @@ impl SfmrReconstruction {
                 continue;
             }
 
-            // Parallax signal = max viewing angle x largest focal length, both
-            // taken over the cameras whose rays survived: a camera coincident
-            // with the point contributes neither a ray nor a focal length.
-            let alpha_max = max_viewing_angle(&rays);
-            let f_max = rays
-                .iter()
-                .map(|(img, _)| focal_max[*img])
-                .fold(0.0_f64, f64::max);
-
-            let parallax_px = alpha_max * f_max;
+            // Per-ray angular noise from the track's measurement noise (its
+            // reprojection error, floored) and each observing camera's focal
+            // length.
             let noise = (pt.error as f64).max(noise_floor_px);
-            if parallax_px >= noise {
-                continue;
-            }
+            let dirs: Vec<Vector3<f64>> = rays.iter().map(|(_, r)| *r).collect();
+            let ray_centers: Vec<Point3<f64>> = rays.iter().map(|(img, _)| centers[*img]).collect();
+            let sigma_rad: Vec<f64> = rays
+                .iter()
+                .map(|(img, _)| noise / focal_max[*img])
+                .collect();
 
-            // Depth is lost in noise: store the bearing-mean direction.
-            let mut sum = Vector3::zeros();
-            for (_, r) in &rays {
-                sum += r;
-            }
-            let norm = sum.norm();
-            if norm > 0.0 {
-                pt.position = Point3::from(sum / norm);
+            let rc = classify_rays_at_infinity(
+                &dirs,
+                &ray_centers,
+                &sigma_rad,
+                DEFAULT_INVERSE_DEPTH_Z_CUTOFF,
+                finite_horizon,
+            );
+            // Relabel-only: demote on a confident infinity call; leave finite and
+            // indeterminate points exactly as the solve produced them.
+            if let Classification::Infinity(direction) = rc.class {
+                pt.position = direction;
                 pt.w = 0.0;
                 pt.estimated_normal = Vector3::zeros();
             }
-            // norm == 0 (rays exactly cancel) is degenerate — leave finite.
         }
 
         recon.infinity_point_count = count_points_at_infinity(&recon.points);
@@ -182,6 +330,88 @@ impl SfmrReconstruction {
 mod tests {
     use super::*;
 
+    fn classify(
+        dirs: &[Vector3<f64>],
+        centers: &[Point3<f64>],
+        finite_horizon: f64,
+    ) -> Classification {
+        let sigma = vec![1.0e-3; dirs.len()];
+        classify_rays_at_infinity(
+            dirs,
+            centers,
+            &sigma,
+            DEFAULT_INVERSE_DEPTH_Z_CUTOFF,
+            finite_horizon,
+        )
+        .class
+    }
+
+    #[test]
+    fn classify_rays_finite_when_well_conditioned() {
+        // Rays converging on a near point with wide parallax → finite via the
+        // condition pre-filter, regardless of finite_horizon.
+        let target = Point3::new(0.0, 0.0, 3.0);
+        let centers = vec![
+            Point3::new(-2.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+        ];
+        let dirs: Vec<Vector3<f64>> = centers
+            .iter()
+            .map(|c| (target.coords - c.coords).normalize())
+            .collect();
+        assert!(matches!(
+            classify(&dirs, &centers, 1e6),
+            Classification::Finite(_)
+        ));
+    }
+
+    #[test]
+    fn classify_rays_confident_infinity_with_wide_baseline() {
+        // Parallel rays seen across a wide perpendicular baseline: resolvable far
+        // past finite_horizon, so the parallel solve is a *confident* infinity.
+        let dirs = vec![Vector3::z(), Vector3::z(), Vector3::z()];
+        let centers = vec![
+            Point3::new(-50.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(50.0, 0.0, 0.0),
+        ];
+        match classify(&dirs, &centers, 100.0) {
+            Classification::Infinity(dir) => {
+                assert!((dir.coords - Vector3::z()).norm() < 1e-9)
+            }
+            other => panic!("expected Infinity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_rays_indeterminate_without_baseline() {
+        // Near-parallel rays from nearly-coincident cameras: the perpendicular
+        // baseline can't reach finite_horizon, so neither finite nor infinity is
+        // earned — indeterminate. (This is the 97221 / 102031 single-stop case.)
+        let target = Point3::new(0.0, 0.0, 1000.0);
+        let centers = vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.01, 0.0, 0.0)];
+        let dirs: Vec<Vector3<f64>> = centers
+            .iter()
+            .map(|c| (target.coords - c.coords).normalize())
+            .collect();
+        assert!(matches!(
+            classify(&dirs, &centers, 100.0),
+            Classification::Indeterminate
+        ));
+    }
+
+    #[test]
+    fn camera_extents_is_bbox_diagonal() {
+        let centers = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(3.0, 4.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+        ];
+        assert!((camera_extents(&centers) - 5.0).abs() < 1e-9);
+        assert_eq!(camera_extents(&[]), 0.0);
+    }
+
     #[test]
     fn classify_leaves_well_conditioned_points_finite() {
         // demo() points sit ~1 unit from cameras ~5 units away: wide parallax.
@@ -213,26 +443,26 @@ mod tests {
 
     #[test]
     fn classify_uses_per_point_reprojection_error() {
-        // A point whose parallax signal sits between the noise floor and its
-        // own reprojection error: the fixed floor would keep it finite, the
-        // per-point error reclassifies it.
+        // A distant, ill-conditioned point: its inverse-depth z-score sits
+        // above the cutoff at the 1 px noise floor (depth still resolvable), but
+        // a large per-point reprojection error inflates the angular noise enough
+        // to push it below the cutoff. The per-point error folds into σ.
         let mut recon = SfmrReconstruction::demo(1);
-        // Distance tuned so parallax (α_max · f_max) lands near ~2 px.
-        recon.points[0].position = Point3::new(0.0, 0.0, 1_900.0);
+        recon.points[0].position = Point3::new(0.0, 0.0, 300.0);
 
         recon.points[0].error = 0.5;
         let with_floor = recon.classify_points_at_infinity(DEFAULT_NOISE_FLOOR_PX);
         assert!(
             !with_floor.points[0].is_at_infinity(),
-            "parallax exceeds the 1 px floor — point stays finite"
+            "z-score above the cutoff at the 1 px floor — point stays finite"
         );
         assert_eq!(with_floor.infinity_point_count, 0);
 
-        recon.points[0].error = 5.0;
+        recon.points[0].error = 20.0;
         let with_error = recon.classify_points_at_infinity(DEFAULT_NOISE_FLOOR_PX);
         assert!(
             with_error.points[0].is_at_infinity(),
-            "parallax is below the point's own 5 px reprojection error"
+            "the point's own 20 px error inflates σ, dropping the z-score below the cutoff"
         );
         assert_eq!(with_error.infinity_point_count, 1);
     }
