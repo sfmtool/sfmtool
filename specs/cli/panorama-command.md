@@ -32,7 +32,8 @@ sfm panorama <RECONSTRUCTION.sfmr> --output <PANO.png> [OPTIONS...]
 | `--near-count` | int | none | With `--near-image`, keep the N images whose cameras are closest to the reference (reference always included) |
 | `--near-radius` | float | none | With `--near-image`, keep images whose cameras are within this world-space distance of the reference |
 | `--equirect-width` | int | 2160 | Output width in pixels; height is `width / 2`. Must be a positive even integer |
-| `--n-tiles` | int | 320 | Number of spherical tiles in the rig |
+| `--n-tiles` | int | 320 | Number of spherical tiles in the synthesized rig (ignored when `--camrig` is given) |
+| `--camrig` | path | none | Load the spherical-tile rig from this `.camrig` file instead of synthesizing one. Takes precedence over `--n-tiles`; see [Rig source](#rig-source) |
 | `--batch-size` | int | 32 | Tiles composited per batch; smaller bounds peak memory |
 | `--dtype` | `float32` \| `float16` | `float32` | Per-batch stack storage; `float16` halves memory at some precision cost |
 | `-k` | int | 1 | Nearest tiles blended when resampling; `k = 1` is closest-tile |
@@ -43,9 +44,11 @@ sfm panorama <RECONSTRUCTION.sfmr> --output <PANO.png> [OPTIONS...]
 
 ## Pipeline
 
-1. Build a `SphericalTileRig` whose angular resolution (`2π / equirect-width`)
-   maps roughly one atlas sample per output pixel along the equator. The rig's
-   patch size is rounded up to the next power of two.
+1. Resolve a `SphericalTileRig` (see [Rig source](#rig-source)). Its per-tile
+   patch resolution is sized to `equirect-width` (`2π / equirect-width` maps
+   roughly one atlas sample per output pixel along the equator) and rounded up
+   to the next power of two — whether the rig is synthesized or loaded from a
+   `.camrig`.
 2. Load each image as RGB from `image-dir / <image_name>`, paired with the
    reconstruction's per-image camera intrinsics and rotation.
 3. Composite a per-tile consensus atlas in tile batches
@@ -58,6 +61,30 @@ sfm panorama <RECONSTRUCTION.sfmr> --output <PANO.png> [OPTIONS...]
 
 Only the per-image rotation is used (rotation-only sources), so the result is a
 view-direction panorama centered on the reconstruction's world frame.
+
+## Rig source
+
+By default the rig is synthesized to match the output width: its angular
+resolution is `2π / equirect-width`, so the tile sampling density is tied to the
+output size and `--n-tiles` sets how many tiles cover the sphere.
+
+`--camrig PATH` instead loads a pre-built `spherical_tiles` rig (via
+`SphericalTileRig.read_camrig`). This **decouples tile density from output
+size**: the tile *layout* — count, look directions, and half-FOV — comes from
+the saved rig, while `--equirect-width` controls the output equirect resolution.
+A provided `.camrig` takes precedence over `--n-tiles`, which is ignored (a note
+is printed if it was passed explicitly).
+
+The per-tile `patch_size` is **not** inherited from the file. It is re-derived
+from `--equirect-width` using the same `arc_per_pixel = 2π / width` formula as a
+synthesized rig (`max(MIN_PATCH_SIZE, ceil(2·half_fov / arc_per_pixel))`,
+rounded up to the next power of two). So a rig saved at high resolution renders
+a small panorama with a correspondingly small patch — it does not wastefully
+over-sample, and the patch can be much smaller than the rig's stored
+`patch_size`. The tile half-FOV is preserved, so coverage is unchanged. The
+build log prints the loaded tile count and the resulting tile focal length in
+pixels. The file must be a `spherical_tiles` rig (build one with `sfm camrig
+spherical-tiles`); any other rig type is rejected.
 
 ## Source subsetting
 
@@ -90,6 +117,10 @@ sfm panorama result.sfmr -o pano.png
 # Higher resolution with an explicit image directory
 sfm panorama result.sfmr -o pano.png --equirect-width 4096 --image-dir images/
 
+# Render with a pre-built rig; --equirect-width is output resolution only
+sfm camrig spherical-tiles tiles.camrig --n 1280 --equirect-width 2048
+sfm panorama result.sfmr -o pano.png --camrig tiles.camrig --equirect-width 4096
+
 # Lower memory: smaller batches and half-precision stack storage
 sfm panorama result.sfmr -o pano.png --batch-size 16 --dtype float16
 
@@ -104,9 +135,12 @@ sfm panorama result.sfmr -o slice.png --range 400-600
 ## Implementation
 
 The CLI shim is `src/sfmtool/_commands/panorama.py`; the reusable pipeline is
-`render_equirect_panorama` in `src/sfmtool/_panorama.py`, which builds the rig
-(`build_panorama_rig`), loads the sources (`load_sources`), runs
-`render_consensus_atlas`, and resamples via `resample_atlas_to_equirect`
-(`src/sfmtool/_spherical_tile_rig.py`). Source subsetting is computed by
-`select_source_indices` (also in `_panorama.py`) and applied with
+`render_equirect_panorama` in `src/sfmtool/_panorama.py`, which loads the
+sources (`load_sources`), runs `render_consensus_atlas`, and resamples via
+`resample_atlas_to_equirect` (`src/sfmtool/_spherical_tile_rig.py`). The rig is
+resolved by `resolve_panorama_rig`, which either synthesizes one
+(`build_panorama_rig`) or loads it from a `.camrig` (`load_panorama_rig`); the
+CLI resolves it up front so it can log the tile count and tile focal length, and
+passes the result to `render_equirect_panorama`. Source subsetting is computed
+by `select_source_indices` (also in `_panorama.py`) and applied with
 `SfmrReconstruction.subset_by_image_indices` before rendering.

@@ -6,6 +6,7 @@
 from pathlib import Path
 
 import click
+from click.core import ParameterSource
 
 from .._cli_utils import timed_command
 
@@ -73,7 +74,17 @@ from .._cli_utils import timed_command
     "n_tiles",
     type=int,
     default=320,
-    help="Number of spherical tiles in the rig (default: 320).",
+    help="Number of spherical tiles in the synthesized rig (default: 320; "
+    "ignored when --camrig is given).",
+)
+@click.option(
+    "--camrig",
+    "camrig_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Load the spherical-tile rig from this .camrig file instead of "
+    "synthesizing one. Takes precedence over --n-tiles (which is then "
+    "ignored); --equirect-width controls only the output resolution.",
 )
 @click.option(
     "--batch-size",
@@ -135,6 +146,7 @@ def panorama(
     near_radius,
     equirect_width,
     n_tiles,
+    camrig_path,
     batch_size,
     dtype,
     k,
@@ -158,20 +170,38 @@ def panorama(
         # Higher resolution with images in an explicit directory
         sfm panorama result.sfmr -o pano.png --equirect-width 4096 \\
             --image-dir images/
+
+        # Render with a pre-built rig (tile density decoupled from output size)
+        sfm panorama result.sfmr -o pano.png --camrig tiles.camrig \\
+            --equirect-width 4096
     """
     import cv2
     import numpy as np
 
-    from .._panorama import render_equirect_panorama, select_source_indices
+    from .._panorama import (
+        render_equirect_panorama,
+        resolve_panorama_rig,
+        select_source_indices,
+    )
     from .._sfmtool import SfmrReconstruction
 
     reconstruction_path = Path(reconstruction_path)
     output_path = Path(output_path)
+    if camrig_path is not None:
+        camrig_path = Path(camrig_path)
 
     if reconstruction_path.suffix.lower() != ".sfmr":
         raise click.UsageError(
             f"Reconstruction path must be a .sfmr file, got: {reconstruction_path}"
         )
+    if camrig_path is not None:
+        if camrig_path.suffix.lower() != ".camrig":
+            raise click.UsageError(
+                f"--camrig must be a .camrig file, got: {camrig_path}"
+            )
+        ctx = click.get_current_context()
+        if ctx.get_parameter_source("n_tiles") == ParameterSource.COMMANDLINE:
+            click.echo("Note: --n-tiles is ignored because --camrig was supplied.")
     if equirect_width < 2 or equirect_width % 2 != 0:
         raise click.UsageError("--equirect-width must be a positive even integer.")
     if (near_count is not None or near_radius is not None) and near_image is None:
@@ -207,20 +237,29 @@ def panorama(
         base_dir = (
             Path(image_dir) if image_dir is not None else Path(recon.workspace_dir)
         )
+
+        rig = resolve_panorama_rig(
+            equirect_width=equirect_width,
+            n_tiles=n_tiles,
+            camrig_path=camrig_path,
+            seed=seed,
+        )
+        tile_fx = rig.tile_camera().focal_lengths[0]
+        if camrig_path is not None:
+            click.echo(f"Loaded rig from {camrig_path}")
         click.echo(
             f"Rendering {equirect_width}x{equirect_width // 2} panorama "
-            f"(n_tiles={n_tiles}, k={k}) from images in {base_dir}"
+            f"(tiles={rig.n}, tile_fx={tile_fx:.1f}px, k={k}) from images in {base_dir}"
         )
 
         pano = render_equirect_panorama(
             recon,
             base_dir,
+            rig=rig,
             equirect_width=equirect_width,
-            n_tiles=n_tiles,
             batch_size=batch_size,
             dtype=dtype,
             k=k,
-            seed=seed,
             inlier_threshold=inlier_threshold,
             gamma=gamma,
             ransac_seed=ransac_seed,

@@ -38,6 +38,23 @@ def _next_pow2(x: int) -> int:
     return 1 << (x - 1).bit_length()
 
 
+# Mirrors `sfmtool_core::spherical_tile_rig::MIN_PATCH_SIZE`.
+_MIN_PATCH_SIZE = 5
+
+
+def _patch_size_for_width(half_fov_rad: float, equirect_width: int) -> int:
+    """Power-of-two patch size that samples a tile at the equirect pixel rate.
+
+    Replicates the ``SphericalTileRig`` constructor's ``arc_per_pixel``-driven
+    formula — ``max(MIN_PATCH_SIZE, ceil(2·half_fov_rad / arc_per_pixel))`` with
+    ``arc_per_pixel = 2π / equirect_width`` — then rounds up to the next power
+    of two, which the atlas packer requires.
+    """
+    arc_per_pixel = 2.0 * np.pi / equirect_width
+    raw = int(np.ceil(2.0 * half_fov_rad / arc_per_pixel))
+    return _next_pow2(max(_MIN_PATCH_SIZE, raw))
+
+
 def _camera_centers(quaternions, translations) -> NDArray[np.float64]:
     """World-space camera centers ``C = -R(q)^T t`` for each image."""
     n = len(quaternions)
@@ -150,8 +167,48 @@ def build_panorama_rig(
     """
     arc_per_pixel = 2.0 * np.pi / equirect_width
     rig = SphericalTileRig(n=n_tiles, arc_per_pixel=arc_per_pixel, seed=seed)
-    rig.set_patch_size(_next_pow2(rig.patch_size))
+    rig.set_patch_size(_patch_size_for_width(rig.half_fov_rad, equirect_width))
     return rig
+
+
+def load_panorama_rig(camrig_path: str | Path, equirect_width: int) -> SphericalTileRig:
+    """Load a pre-built spherical-tile rig from a ``.camrig`` file.
+
+    The tile *layout* — count, look directions, and half-FOV — comes from the
+    saved rig, decoupling tile density from output size. The per-tile
+    ``patch_size`` is **not** inherited from the file; it is re-derived from the
+    target ``equirect_width`` (sampling one tile pixel per output pixel at the
+    equator, then rounded up to the next power of two) exactly as
+    :func:`build_panorama_rig` does for a synthesized rig. So a rig saved at a
+    high resolution renders a small panorama with a correspondingly small patch
+    size rather than wastefully over-sampling. The tile half-FOV is preserved,
+    so coverage is unchanged.
+
+    Raises:
+        ValueError: If the file is not a ``spherical_tiles`` rig.
+    """
+    rig = SphericalTileRig.read_camrig(str(camrig_path))
+    rig.set_patch_size(_patch_size_for_width(rig.half_fov_rad, equirect_width))
+    return rig
+
+
+def resolve_panorama_rig(
+    *,
+    equirect_width: int,
+    n_tiles: int,
+    camrig_path: str | Path | None = None,
+    seed: int = 1234,
+) -> SphericalTileRig:
+    """Load or synthesize the rig used to render the panorama.
+
+    When ``camrig_path`` is given the rig is loaded from disk
+    (:func:`load_panorama_rig`) and ``n_tiles`` is ignored; otherwise a fresh
+    rig is synthesized (:func:`build_panorama_rig`). Either way the per-tile
+    patch resolution is sized to ``equirect_width``.
+    """
+    if camrig_path is not None:
+        return load_panorama_rig(camrig_path, equirect_width)
+    return build_panorama_rig(equirect_width, n_tiles, seed=seed)
 
 
 def load_sources(
@@ -184,8 +241,10 @@ def render_equirect_panorama(
     recon: SfmrReconstruction,
     image_dir: str | Path,
     *,
+    rig: SphericalTileRig | None = None,
     equirect_width: int = 2160,
     n_tiles: int = 320,
+    camrig_path: str | Path | None = None,
     batch_size: int = 32,
     dtype: str = "float32",
     k: int = 1,
@@ -204,12 +263,17 @@ def render_equirect_panorama(
     Args:
         recon: A loaded reconstruction with per-image poses and intrinsics.
         image_dir: Directory the reconstruction's image names are relative to.
+        rig: A pre-built rig to render with. When ``None`` one is resolved from
+            ``camrig_path`` / ``equirect_width`` / ``n_tiles``.
         equirect_width: Output width in pixels; height is ``width // 2``.
-        n_tiles: Number of spherical tiles in the rig.
+        n_tiles: Number of spherical tiles in a synthesized rig (ignored when
+            ``rig`` or ``camrig_path`` is given).
+        camrig_path: Load the rig from this ``.camrig`` file instead of
+            synthesizing one (ignored when ``rig`` is given).
         batch_size: Tiles composited per batch (bounds peak memory).
         dtype: Per-batch stack storage, ``"float32"`` or ``"float16"``.
         k: Nearest tiles blended during resampling (``k = 1`` is closest-tile).
-        seed: Rig relaxer seed.
+        seed: Rig relaxer seed (synthesized rig only).
         inlier_threshold: Photometric RANSAC inlier threshold (luma units).
         gamma: Photometric RANSAC tone exponent.
         ransac_seed: Photometric RANSAC seed.
@@ -218,7 +282,13 @@ def render_equirect_panorama(
         ``(height, width, channels)`` float32 RGB panorama. Uncovered regions
         are left as ``NaN`` so callers can choose how to fill them.
     """
-    rig = build_panorama_rig(equirect_width, n_tiles, seed=seed)
+    if rig is None:
+        rig = resolve_panorama_rig(
+            equirect_width=equirect_width,
+            n_tiles=n_tiles,
+            camrig_path=camrig_path,
+            seed=seed,
+        )
     sources = load_sources(recon, image_dir)
     atlas, *_ = render_consensus_atlas(
         rig,
