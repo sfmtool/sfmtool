@@ -46,7 +46,7 @@ nalgebra = "0.34"
 bytemuck = { version = "1.14", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
-egui-winit = "0.34"
+egui-winit = { version = "0.34", features = ["accesskit"] }
 raw-window-handle = "0.6"
 winit = "0.30.12"
 pollster = "0.4"
