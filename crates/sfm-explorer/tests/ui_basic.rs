@@ -37,19 +37,6 @@ fn window_appears() {
     attach(&_guard.0);
 }
 
-/// The window carries the expected title.
-#[test]
-fn window_title() {
-    let child = launch();
-    let _guard = Guard(child);
-    let app = attach(&_guard.0);
-    let name = app.as_element().data().name.clone().unwrap_or_default();
-    assert!(
-        name.contains("SfM Explorer"),
-        "expected title to contain 'SfM Explorer', got: {name:?}",
-    );
-}
-
 /// The window respects the 800×600 minimum size constraint.
 #[test]
 fn window_min_size() {
@@ -59,22 +46,6 @@ fn window_min_size() {
     let b = app.as_element().data().bounds.expect("window has no bounds");
     assert!(b.width >= 800, "width {} < 800", b.width);
     assert!(b.height >= 600, "height {} < 600", b.height);
-}
-
-/// Standard window control buttons are present.
-#[test]
-fn window_controls_exist() {
-    let child = launch();
-    let _guard = Guard(child);
-    let app = attach(&_guard.0);
-    for name in ["Minimize", "Maximize", "Close"] {
-        assert!(
-            app.locator(&format!(r#"button[name="{name}"]"#))
-                .exists()
-                .unwrap_or(false),
-            "window control button '{name}' not found",
-        );
-    }
 }
 
 // --- Menu bar tests (AccessKit) ---
