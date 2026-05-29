@@ -77,3 +77,6 @@ windows-core = "0.62"
 
 [build-dependencies]
 winres = "0.1"
+
+[target.'cfg(windows)'.dev-dependencies]
+xa11y = "0.8"

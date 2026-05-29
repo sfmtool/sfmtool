@@ -18,6 +18,7 @@ sfmtool = { path = ".", editable = true }
 
 [tasks]
 gui = "cargo run --release -p sfm-explorer --bin sfm-explorer"
+ui-test = "cargo test -p sfm-explorer --test ui_basic -- --test-threads=1"
 
 [feature.test.dependencies]
 cargo-llvm-cov = ">=0.8.5,<0.9"
