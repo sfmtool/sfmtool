@@ -43,7 +43,11 @@ fn window_min_size() {
     let child = launch();
     let _guard = Guard(child);
     let app = attach(&_guard.0);
-    let b = app.as_element().data().bounds.expect("window has no bounds");
+    let b = app
+        .as_element()
+        .data()
+        .bounds
+        .expect("window has no bounds");
     assert!(b.width >= 800, "width {} < 800", b.width);
     assert!(b.height >= 600, "height {} < 600", b.height);
 }
@@ -166,9 +170,15 @@ fn dump_tree_after_view() {
     let pid = child.id();
     let _guard = Guard(child);
     let app = App::by_pid(pid, Duration::from_secs(15)).expect("app not found");
-    app.locator(r#"button[name="View"]"#).press().expect("press View");
+    app.locator(r#"button[name="View"]"#)
+        .press()
+        .expect("press View");
     std::thread::sleep(Duration::from_secs(1));
-    println!("{}", app.dump(Some(6)).unwrap_or_else(|e| format!("dump error: {e}")));
+    println!(
+        "{}",
+        app.dump(Some(6))
+            .unwrap_or_else(|e| format!("dump error: {e}"))
+    );
 }
 
 /// Diagnostic: dump the accessibility tree (run with -- --ignored --nocapture).
@@ -179,5 +189,9 @@ fn dump_tree() {
     let pid = child.id();
     let _guard = Guard(child);
     let app = App::by_pid(pid, Duration::from_secs(15)).expect("app not found");
-    println!("{}", app.dump(Some(5)).unwrap_or_else(|e| format!("dump error: {e}")));
+    println!(
+        "{}",
+        app.dump(Some(5))
+            .unwrap_or_else(|e| format!("dump error: {e}"))
+    );
 }
