@@ -188,7 +188,7 @@ impl ApplicationHandler<UserEvent> for App {
                         .with_title("SfM Explorer")
                         .with_inner_size(winit::dpi::LogicalSize::new(1280, 720))
                         .with_min_inner_size(winit::dpi::LogicalSize::new(800, 600))
-                        .with_visible(false),
+                        .with_visible(false), // shown after AccessKit registers its UIAutomation provider
                 )
                 .expect("Failed to create window"),
         );
