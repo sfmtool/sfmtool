@@ -124,8 +124,7 @@ fn view_checkboxes_checked_by_default() {
 /// Toggling the Show Points checkbox via accessibility updates its checked state.
 #[test]
 fn toggle_show_points() {
-    let child = launch();
-    let _guard = Guard(child);
+    let _guard = Guard(launch());
     let app = attach(&_guard.0);
 
     app.locator(r#"button[name="View"]"#)
