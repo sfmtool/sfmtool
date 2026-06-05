@@ -55,8 +55,7 @@ fn window_min_size() {
 /// Both top-level menu buttons are exposed in the accessibility tree.
 #[test]
 fn menu_bar_buttons_present() {
-    let child = launch();
-    let _guard = Guard(child);
+    let _guard = Guard(launch());
     let app = attach(&_guard.0);
     for name in ["File", "View"] {
         assert!(
