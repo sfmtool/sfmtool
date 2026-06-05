@@ -39,8 +39,7 @@ fn window_appears() {
 /// The window respects the 800×600 minimum size constraint.
 #[test]
 fn window_min_size() {
-    let child = launch();
-    let _guard = Guard(child);
+    let _guard = Guard(launch());
     let app = attach(&_guard.0);
     let b = app
         .as_element()
