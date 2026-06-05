@@ -161,7 +161,6 @@ fn toggle_show_points() {
 fn dump_tree_after_view() {
     let _guard = Guard(launch());
     let pid = _guard.0.id();
-    let _guard = Guard(child);
     let app = App::by_pid(pid, Duration::from_secs(15)).expect("app not found");
     app.locator(r#"button[name="View"]"#)
         .press()
