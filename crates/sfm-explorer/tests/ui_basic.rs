@@ -70,8 +70,7 @@ fn menu_bar_buttons_present() {
 /// The empty-state placeholder text is shown before any file is loaded.
 #[test]
 fn empty_state_placeholder_text() {
-    let child = launch();
-    let _guard = Guard(child);
+    let _guard = Guard(launch());
     let app = attach(&_guard.0);
     assert!(
         app.locator(r#"static_text[name="No reconstruction loaded."]"#)
