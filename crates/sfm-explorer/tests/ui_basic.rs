@@ -32,8 +32,7 @@ fn attach(child: &Child) -> App {
 /// App process appears in the accessibility tree.
 #[test]
 fn window_appears() {
-    let child = launch();
-    let _guard = Guard(child);
+    let _guard = Guard(launch());
     attach(&_guard.0);
 }
 
