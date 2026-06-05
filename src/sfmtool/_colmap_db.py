@@ -118,7 +118,7 @@ def _setup_for_sfm(
 
     # Run feature matching
     if matching_mode == "flow":
-        from ._commands.match import _run_flow_matching
+        from .feature_match._run import _run_flow_matching
 
         _run_flow_matching(
             image_paths,

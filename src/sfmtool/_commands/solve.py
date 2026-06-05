@@ -480,7 +480,7 @@ def _run_sfm(
 ):
     """Run SfM with the given colmap_dir."""
     if incremental:
-        from .._isfm import run_incremental_sfm
+        from .._incremental_sfm import run_incremental_sfm
 
         run_incremental_sfm(
             image_paths,
@@ -500,7 +500,7 @@ def _run_sfm(
             detect_infinity=detect_infinity,
         )
     else:
-        from .._gsfm import run_global_sfm
+        from .._global_sfm import run_global_sfm
 
         run_global_sfm(
             image_paths,

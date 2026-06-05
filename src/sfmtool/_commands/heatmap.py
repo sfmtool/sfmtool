@@ -103,7 +103,8 @@ def heatmap(
     - tracks: tracks (blue=few, red=many)
     - angle: viridis (purple=small, yellow=large)
 
-    Output images are saved with metric suffix (e.g., image_001_reproj.png).
+    Output images are saved with the metric inserted before any trailing number
+    (e.g., image_001 with metric reproj -> image_reproj_001.png).
 
     Examples:
 
