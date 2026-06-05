@@ -83,8 +83,7 @@ fn empty_state_placeholder_text() {
 /// Opening the File menu exposes all three items in the accessibility tree.
 #[test]
 fn file_menu_items() {
-    let child = launch();
-    let _guard = Guard(child);
+    let _guard = Guard(launch());
     let app = attach(&_guard.0);
 
     app.locator(r#"button[name="File"]"#)
