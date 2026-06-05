@@ -89,10 +89,23 @@ jobs:
           files: lcov.info,python-lcov.info
           flags: ${{ matrix.os }}
 
+  ui-test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          environments: default
+
+      - name: UI tests
+        run: pixi run ui-test
+
   # Single stable check to mark as required in branch protection. Always runs
   # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.
   ci-ok:
-    needs: [changes, lint, test]
+    needs: [changes, lint, test, ui-test]
     if: always()
     runs-on: ubuntu-latest
     steps:

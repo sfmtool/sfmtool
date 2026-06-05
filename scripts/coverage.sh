@@ -16,8 +16,10 @@ cargo llvm-cov clean --workspace
 # Build the Python extension with coverage instrumentation
 maturin develop
 
-# Run Rust tests (generates Rust-side coverage)
-cargo test --workspace
+# Run Rust tests (generates Rust-side coverage).
+# sfm-explorer is excluded because its ui_basic integration tests require
+# --test-threads=1 and are run separately in the ui-test CI job.
+cargo test --workspace --exclude sfm-explorer
 
 # Run Python tests (generates Rust coverage from Python calls + Python coverage)
 pytest --cov=sfmtool --cov-report=lcov:python-lcov.info

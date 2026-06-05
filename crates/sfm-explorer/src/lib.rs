@@ -39,7 +39,7 @@ use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 #[cfg(target_os = "windows")]
 use winit::event_loop::ControlFlow;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowAttributes};
 
 use dock::Tab;
@@ -50,6 +50,18 @@ use platform::windows::{EarlyDmState, WinGestureHandler};
 /// Interval for DirectManipulation update polling.
 #[cfg(target_os = "windows")]
 const DM_UPDATE_INTERVAL: Duration = Duration::from_millis(16);
+
+/// User event type that carries AccessKit events through the winit event loop.
+#[derive(Debug)]
+pub(crate) enum UserEvent {
+    AccessKit(egui_winit::accesskit_winit::Event),
+}
+
+impl From<egui_winit::accesskit_winit::Event> for UserEvent {
+    fn from(event: egui_winit::accesskit_winit::Event) -> Self {
+        Self::AccessKit(event)
+    }
+}
 
 /// Entry point for the SfM Explorer GUI application.
 pub fn run() {
@@ -82,9 +94,10 @@ pub fn run() {
         }
     };
 
-    let event_loop = EventLoop::builder()
+    let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
         .expect("Failed to create event loop");
+    let proxy = event_loop.create_proxy();
 
     // Set up the default dock layout:
     //   top-left: Viewer3D, top-right: ImageDetail, bottom: ImageBrowser
@@ -95,6 +108,7 @@ pub fn run() {
         surface.split_right(top, 0.67, vec![Tab::ImageDetail, Tab::PointTrackDetail]);
 
     let mut app = App {
+        proxy,
         egui_ctx: egui::Context::default(),
         egui_winit_state: None,
         window: None,
@@ -129,6 +143,7 @@ pub fn run() {
 }
 
 pub(crate) struct App {
+    pub(crate) proxy: EventLoopProxy<UserEvent>,
     pub(crate) egui_ctx: egui::Context,
     pub(crate) egui_winit_state: Option<egui_winit::State>,
     pub(crate) window: Option<Arc<Window>>,
@@ -159,7 +174,7 @@ pub(crate) struct App {
     pub(crate) next_dm_update: Option<Instant>,
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -172,7 +187,8 @@ impl ApplicationHandler for App {
                     WindowAttributes::default()
                         .with_title("SfM Explorer")
                         .with_inner_size(winit::dpi::LogicalSize::new(1280, 720))
-                        .with_min_inner_size(winit::dpi::LogicalSize::new(800, 600)),
+                        .with_min_inner_size(winit::dpi::LogicalSize::new(800, 600))
+                        .with_visible(false), // shown after AccessKit registers its UIAutomation provider
                 )
                 .expect("Failed to create window"),
         );
@@ -218,7 +234,7 @@ impl ApplicationHandler for App {
 
         // Step 5: Set up egui-winit integration
         let max_texture_side = device.limits().max_texture_dimension_2d as usize;
-        let egui_winit_state = egui_winit::State::new(
+        let mut egui_winit_state = egui_winit::State::new(
             self.egui_ctx.clone(),
             ViewportId::ROOT,
             event_loop,
@@ -233,12 +249,20 @@ impl ApplicationHandler for App {
             repaint_window.request_redraw();
         });
 
+        // Initialize AccessKit so egui's widget tree is visible to UIAutomation
+        // (and screen readers). Must happen after egui_winit_state is created
+        // but while the window is still hidden.
+        egui_winit_state.init_accesskit::<UserEvent>(event_loop, &window, self.proxy.clone());
+        self.egui_ctx.enable_accesskit();
+
         self.wgpu_device = Some(device);
         self.wgpu_queue = Some(queue);
         self.wgpu_surface = Some(surface);
         self.wgpu_surface_config = Some(surface_config);
         self.egui_renderer = Some(egui_renderer);
         self.egui_winit_state = Some(egui_winit_state);
+
+        window.set_visible(true);
 
         // Schedule initial DM update and repaint
         #[cfg(target_os = "windows")]
@@ -324,6 +348,22 @@ impl ApplicationHandler for App {
         #[cfg(target_os = "windows")]
         if let Some(next) = self.next_dm_update {
             event_loop.set_control_flow(ControlFlow::WaitUntil(next));
+        }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+        let UserEvent::AccessKit(ak_event) = event;
+        match ak_event.window_event {
+            egui_winit::accesskit_winit::WindowEvent::ActionRequested(request) => {
+                if let Some(state) = self.egui_winit_state.as_mut() {
+                    state.on_accesskit_action_request(request);
+                }
+            }
+            egui_winit::accesskit_winit::WindowEvent::InitialTreeRequested => {}
+            egui_winit::accesskit_winit::WindowEvent::AccessibilityDeactivated => {}
+        }
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
         }
     }
 }
