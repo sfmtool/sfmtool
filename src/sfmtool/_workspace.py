@@ -35,6 +35,7 @@ def init_workspace(
     """
     from sfmtool.sift.extract_colmap import get_colmap_feature_options
     from sfmtool.sift.extract_opencv import get_default_opencv_feature_options
+    from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
     from sfmtool.sift.file import get_feature_tool_xxh128, get_feature_type_for_tool
 
     workspace_dir = Path(workspace_dir)
@@ -49,6 +50,8 @@ def init_workspace(
         )
     elif feature_tool.lower() == "opencv":
         feature_options = get_default_opencv_feature_options()
+    elif feature_tool.lower() == "sfmtool":
+        feature_options = get_default_sfmtool_feature_options()
     else:
         raise ValueError(f"Unsupported feature tool: {feature_tool}")
 

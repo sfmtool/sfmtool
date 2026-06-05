@@ -31,8 +31,12 @@ Exactly one of these is required:
 | `--filter-sfm` | path | | Only draw features used in a `.sfmr` reconstruction (with `--draw`) |
 | `--range / -r` | string | | Range expression for file numbers (e.g., `1:100`, `5,10,15`) |
 | `--num-threads / -t` | int | -1 (all) | Thread count for extraction |
-| `--tool` | `colmap` \| `opencv` | workspace | Override workspace feature tool |
-| `--dsp / --no-dsp` | bool | workspace | Override domain size pooling (requires `--tool`) |
+| `--tool` | `colmap` \| `opencv` \| `sfmtool` | workspace | Override workspace feature tool |
+| `--dsp / --no-dsp` | bool | workspace | Override domain size pooling (COLMAP only; requires `--tool`) |
+
+The `sfmtool` tool is the toolkit's own SIFT (the Rust `sfmtool-core`
+implementation), calibrated to match COLMAP's keypoint density and descriptor
+convention. It needs no external library and parallelizes internally.
 
 ## Workspace Integration
 
@@ -47,6 +51,9 @@ sfm sift --extract
 
 # Extract with specific tool override
 sfm sift --extract --tool opencv
+
+# Extract with the sfmtool (Rust) backend
+sfm sift --extract --tool sfmtool
 
 # Visualize features on images
 sfm sift --draw ./sift_viz

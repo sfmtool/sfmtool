@@ -60,6 +60,7 @@ sfm ws init my_project
 # Initialize with specific feature extraction settings
 sfm ws init --feature-tool colmap --dsp my_project
 sfm ws init --feature-tool opencv my_project
+sfm ws init --feature-tool sfmtool my_project   # sfmtool's own Rust SIFT
 ```
 
 The `sfm ws init` command creates the directory (if needed) and writes `.sfm-workspace.json`.
@@ -90,7 +91,7 @@ The `sfm ws init` command creates the directory (if needed) and writes `.sfm-wor
 | Field | Type | Description |
 |-------|------|-------------|
 | `version` | integer | Format version of the workspace config file. Must be `1` |
-| `feature_tool` | string | Feature extraction tool: `"colmap"` or `"opencv"` |
+| `feature_tool` | string | Feature extraction tool: `"colmap"`, `"opencv"`, or `"sfmtool"` (the Rust SIFT in `sfmtool-core`) |
 | `feature_type` | string | Feature type: `"sift"` (future: `"surf"`, `"superpoint"`, etc.) |
 | `feature_options` | object | All parameters that affect feature output. Keys are tool-defined. See the `.sift` format spec for details |
 | `feature_prefix_dir` | string | Relative path to the features subdirectory, including a content hash of the tool configuration |
@@ -106,7 +107,7 @@ features/sift-colmap-d1245b460906df27ee4730273e0aba41
 
 This is structured as `features/{feature_type}-{feature_tool_xxh128}`, where:
 
-- `feature_type` identifies the descriptor format (e.g., `sift-colmap`, `sift-opencv`)
+- `feature_type` identifies the descriptor format (e.g., `sift-colmap`, `sift-opencv`, `sift-sfmtool`)
 - `feature_tool_xxh128` is a hash derived from `feature_tool`, `feature_type`, and
   `feature_options`, computed once during `sfm ws init`. The spec does not prescribe a specific
   serialization algorithm — the implementation decides how to hash these values.

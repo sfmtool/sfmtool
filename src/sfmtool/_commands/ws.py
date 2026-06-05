@@ -21,9 +21,9 @@ def ws():
 @click.argument("workspace_dir", required=False, type=click.Path())
 @click.option(
     "--feature-tool",
-    type=click.Choice(["colmap", "opencv"], case_sensitive=False),
+    type=click.Choice(["colmap", "opencv", "sfmtool"], case_sensitive=False),
     default="colmap",
-    help="Feature extraction tool: colmap (default) or opencv",
+    help="Feature extraction tool: colmap (default), opencv, or sfmtool",
 )
 @click.option(
     "--dsp/--no-dsp",
@@ -81,22 +81,23 @@ def init(
 
         sfm ws init --dsp dsp_workspace
     """
-    # Validate tool-specific options
-    if domain_size_pooling and feature_tool.lower() == "opencv":
+    # Validate tool-specific options (these are all COLMAP-only knobs)
+    tool_lower = feature_tool.lower()
+    if domain_size_pooling and tool_lower != "colmap":
         raise click.UsageError(
-            "The --dsp/--no-dsp option is only supported for COLMAP, not OpenCV"
+            f"The --dsp/--no-dsp option is only supported for COLMAP, not {feature_tool}"
         )
-    if max_num_features is not None and feature_tool.lower() == "opencv":
+    if max_num_features is not None and tool_lower != "colmap":
         raise click.UsageError(
-            "The --max-features option is only supported for COLMAP, not OpenCV"
+            f"The --max-features option is only supported for COLMAP, not {feature_tool}"
         )
-    if not use_gpu and feature_tool.lower() == "opencv":
+    if not use_gpu and tool_lower != "colmap":
         raise click.UsageError(
-            "The --gpu/--no-gpu option is only supported for COLMAP, not OpenCV"
+            f"The --gpu/--no-gpu option is only supported for COLMAP, not {feature_tool}"
         )
-    if estimate_affine_shape and feature_tool.lower() == "opencv":
+    if estimate_affine_shape and tool_lower != "colmap":
         raise click.UsageError(
-            "The --affine-shape option is only supported for COLMAP, not OpenCV"
+            f"The --affine-shape option is only supported for COLMAP, not {feature_tool}"
         )
     if use_gpu and estimate_affine_shape and feature_tool.lower() == "colmap":
         raise click.UsageError(
@@ -141,7 +142,7 @@ def init(
     click.echo(f"  feature_tool: {feature_tool.lower()}")
 
     options_dict = workspace["feature_options"]
-    if feature_tool.lower() == "colmap":
+    if tool_lower == "colmap":
         dsp_value = options_dict.get("domain_size_pooling", False)
         max_features_value = options_dict.get("max_num_features")
         affine_value = options_dict.get("estimate_affine_shape", False)
@@ -150,5 +151,8 @@ def init(
         click.echo(f"  domain_size_pooling: {dsp_value}")
         click.echo(f"  max_num_features: {max_features_value}")
         click.echo(f"  use_gpu: {gpu_value}")
+    elif tool_lower == "sfmtool":
+        click.echo(f"  contrast_threshold: {options_dict.get('contrast_threshold')}")
+        click.echo(f"  octave_layers: {options_dict.get('octave_layers')}")
     else:
         click.echo(f"  nfeatures: {options_dict.get('nfeatures', 0)}")

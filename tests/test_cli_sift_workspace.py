@@ -129,6 +129,61 @@ def test_sift_workspace_opencv(isolated_seoul_bull_image: Path):
     assert "Feature tool: opencv" in result.output
 
 
+def test_sift_workspace_sfmtool(isolated_seoul_bull_image: Path):
+    """Test workspace mode with the sfmtool tool."""
+    workspace_dir = isolated_seoul_bull_image.parent
+    workspace_config_file = workspace_dir / ".sfm-workspace.json"
+
+    result = CliRunner().invoke(
+        main, ["ws", "init", "--feature-tool", "sfmtool", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+
+    with open(workspace_config_file) as f:
+        config = json.load(f)
+    assert config["feature_tool"] == "sfmtool"
+    assert config["feature_type"] == "sift-sfmtool"
+
+    result = CliRunner().invoke(
+        main, ["sift", "--extract", str(isolated_seoul_bull_image)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Using workspace:" in result.output
+    assert "Feature tool: sfmtool" in result.output
+
+    sift_dir = workspace_dir / config["feature_prefix_dir"]
+    assert sift_dir.exists()
+    assert (sift_dir / (isolated_seoul_bull_image.name + ".sift")).is_file()
+
+
+def test_sift_cli_override_workspace_sfmtool(isolated_seoul_bull_image: Path):
+    """Test that --tool sfmtool overrides workspace configuration."""
+    workspace_dir = isolated_seoul_bull_image.parent
+
+    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
+    assert result.exit_code == 0
+
+    result = CliRunner().invoke(
+        main,
+        ["sift", "--extract", "--tool", "sfmtool", str(isolated_seoul_bull_image)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Using workspace:" not in result.output
+
+    features_dir = workspace_dir / "features"
+    sfmtool_dirs = list(features_dir.glob("sift-sfmtool-*"))
+    assert len(sfmtool_dirs) == 1
+
+
+def test_ws_init_sfmtool_rejects_colmap_only_options(tmp_path):
+    """COLMAP-only knobs are rejected for the sfmtool tool."""
+    result = CliRunner().invoke(
+        main, ["ws", "init", "--feature-tool", "sfmtool", "--dsp", str(tmp_path)]
+    )
+    assert result.exit_code != 0
+    assert "--dsp/--no-dsp option is only supported for COLMAP" in result.output
+
+
 def test_sift_workspace_detection_from_subdirectory(tmp_path):
     """Test that workspace is detected from parent directories."""
     workspace_dir = tmp_path / "workspace"
