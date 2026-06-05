@@ -61,7 +61,7 @@ from ..sift.file import (
 )
 @click.option(
     "--tool",
-    type=click.Choice(["colmap", "opencv"], case_sensitive=False),
+    type=click.Choice(["colmap", "opencv", "sfmtool"], case_sensitive=False),
     default=None,
     help="Feature extraction tool. If not specified, uses workspace configuration.",
 )
@@ -130,9 +130,9 @@ def sift(
     feature_prefix_dir = None
 
     if tool_from_cli:
-        if domain_size_pooling is not None and tool.lower() == "opencv":
+        if domain_size_pooling is not None and tool.lower() != "colmap":
             raise click.UsageError(
-                "The --dsp/--no-dsp option is only supported for COLMAP, not OpenCV"
+                f"The --dsp/--no-dsp option is only supported for COLMAP, not {tool}"
             )
 
         if tool.lower() == "colmap":
@@ -140,6 +140,10 @@ def sift(
 
             dsp = domain_size_pooling if domain_size_pooling is not None else False
             feature_options = get_colmap_feature_options(domain_size_pooling=dsp)
+        elif tool.lower() == "sfmtool":
+            from ..sift.extract_sfmtool import get_default_sfmtool_feature_options
+
+            feature_options = get_default_sfmtool_feature_options()
         else:  # opencv
             from ..sift.extract_opencv import get_default_opencv_feature_options
 

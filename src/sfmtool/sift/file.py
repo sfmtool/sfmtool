@@ -184,6 +184,8 @@ def get_feature_type_for_tool(feature_tool: str, feature_options: dict) -> str:
 
     if feature_tool == "opencv":
         return "sift-opencv"
+    elif feature_tool == "sfmtool":
+        return "sift-sfmtool"
     elif feature_tool == "colmap":
         parts = ["sift-colmap"]
 
@@ -431,9 +433,12 @@ def get_sift_path_for_image(
     if feature_options is None:
         from sfmtool.sift.extract_colmap import get_colmap_feature_options
         from sfmtool.sift.extract_opencv import get_default_opencv_feature_options
+        from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
 
         if feature_tool == "opencv":
             feature_options = get_default_opencv_feature_options()
+        elif feature_tool == "sfmtool":
+            feature_options = get_default_sfmtool_feature_options()
         else:
             feature_options = get_colmap_feature_options()
 
@@ -542,6 +547,10 @@ def image_files_to_sift_files(
         extract_sift_with_opencv,
         get_default_opencv_feature_options,
     )
+    from sfmtool.sift.extract_sfmtool import (
+        extract_sift_with_sfmtool,
+        get_default_sfmtool_feature_options,
+    )
 
     image_filename_list = [Path(p) for p in image_filename_list]
     if feature_path:
@@ -554,6 +563,10 @@ def image_files_to_sift_files(
         if feature_options is None:
             feature_options = get_default_opencv_feature_options()
         extraction_fn = extract_sift_with_opencv
+    elif feature_tool == "sfmtool":
+        if feature_options is None:
+            feature_options = get_default_sfmtool_feature_options()
+        extraction_fn = extract_sift_with_sfmtool
     else:  # colmap
         if feature_options is None:
             feature_options = get_colmap_feature_options()

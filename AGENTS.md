@@ -46,7 +46,8 @@ When finishing a task, run the checks for what you changed:
   - `feature_match/` — descriptor matching, polar/rectified sweep, flow matching, geometric filtering
   - `merge/` — merge aligned reconstructions (point correspondences + pose refinement)
   - `motion/` — camera-motion discontinuity analysis (image sequences + reconstructions)
-  - `sift/` — SIFT feature file I/O and extraction (OpenCV and COLMAP backends)
+  - `sift/` — SIFT feature file I/O and extraction (COLMAP, OpenCV, and
+    `sfmtool` Rust backends)
   - `xform/` — reconstruction transforms (align, filter, rotate, scale, translate, bundle-adjust, …)
   - `visualization/` — colormap, heatmap, discontinuity display
 - `crates/` — Cargo workspace, 7 crates:

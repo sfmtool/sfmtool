@@ -94,6 +94,41 @@ def test_sift_cli_with_file(isolated_seoul_bull_image: Path, provide_dir: bool):
     assert "test_image.jpg.sift (1 file)" in result.output
 
 
+def test_sift_cli_sfmtool_backend(isolated_seoul_bull_image: Path):
+    """Tests 'sift --extract --tool sfmtool' uses the sfmtool Rust backend."""
+    from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
+
+    options = get_default_sfmtool_feature_options()
+    feature_type = get_feature_type_for_tool("sfmtool", options)
+    assert feature_type == "sift-sfmtool"
+    tool_hash = get_feature_tool_xxh128("sfmtool", feature_type, options)
+
+    expected_sift_path = (
+        isolated_seoul_bull_image.parent
+        / "features"
+        / f"{feature_type}-{tool_hash}"
+        / (isolated_seoul_bull_image.name + ".sift")
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["sift", "--extract", "--tool", "sfmtool", str(isolated_seoul_bull_image)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "using the sfmtool backend" in result.output
+    assert "New SIFT feature extraction (SFMTOOL): 1 / 1 image(s)" in result.output
+
+    assert expected_sift_path.is_file()
+    with SiftReader(expected_sift_path) as reader:
+        assert reader.metadata["image_name"] == isolated_seoul_bull_image.name
+        assert reader.metadata["feature_count"] > 0
+        assert reader.feature_tool_metadata["feature_tool"] == "sfmtool"
+        positions = reader.read_positions()
+        descriptors = reader.read_descriptors()
+    assert positions.shape == (reader.metadata["feature_count"], 2)
+    assert descriptors.shape == (reader.metadata["feature_count"], 128)
+
+
 def test_sift_cli_with_empty_directory(tmp_path):
     """Tests the sift command with an empty directory."""
     empty_dir = tmp_path / "empty"

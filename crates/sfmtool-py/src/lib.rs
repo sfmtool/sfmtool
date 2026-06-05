@@ -69,6 +69,7 @@ mod py_image;
 
 mod py_descriptor_match;
 mod py_image_match;
+mod py_sift;
 mod py_sweep_match;
 
 // ── Image warping ────────────────────────────────────────────────────────
@@ -140,6 +141,10 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_sift_io::read_sift_partial, m)?)?;
     m.add_function(wrap_pyfunction!(py_sift_io::write_sift, m)?)?;
     m.add_function(wrap_pyfunction!(py_sift_io::verify_sift, m)?)?;
+
+    // sfmtool SIFT detection / extraction
+    m.add_function(wrap_pyfunction!(py_sift::detect_sift_keypoints, m)?)?;
+    m.add_function(wrap_pyfunction!(py_sift::extract_sift, m)?)?;
 
     // Image inspection
     m.add_function(wrap_pyfunction!(py_image::image_dimensions, m)?)?;
