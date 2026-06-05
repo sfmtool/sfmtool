@@ -101,8 +101,7 @@ fn file_menu_items() {
 /// checkboxes all checked by default.
 #[test]
 fn view_checkboxes_checked_by_default() {
-    let child = launch();
-    let _guard = Guard(child);
+    let _guard = Guard(launch());
     let app = attach(&_guard.0);
 
     app.locator(r#"button[name="View"]"#)
