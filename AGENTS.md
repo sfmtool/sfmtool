@@ -68,6 +68,8 @@ When finishing a task, run the checks for what you changed:
   `seattle_backyard` (26 @ 360×640), `kerry_park` (24 rig frames × 2 fisheyes
   @ 480×480, with `rig_config.json`). Bootstrap with `scripts/init_dataset_*.sh`.
 - `docs/` — Zensical site, deployed to GitHub Pages.
+- `reports/` — dated snapshots from the audit skills (`audit-hygiene`,
+  `audit-specs`, `suggest-next-steps`). See "Quality reports" below.
 - `.github/workflows/` — `ci.yml` (Linux + Windows, runs `coverage-all`, uploads
   to codecov), `docs.yml`, `publish_to_pypi.yml`.
 
@@ -87,6 +89,24 @@ pixi run sfm sift --extract images
 pixi run sfm solve -i images     # incremental SfM
 pixi run sfm solve -g images     # global SfM
 ```
+
+## Quality reports
+
+`reports/` holds dated read-only snapshots produced by the audit skills
+(`audit-hygiene`, `audit-specs`, `suggest-next-steps`). Treat them as a living
+backlog and keep them honest as findings get addressed:
+
+- **Mark off findings in place.** Whenever you act on a recommendation from a
+  report, annotate that finding inline rather than deleting it — add a dated
+  status line in the established style, e.g.
+  `> _Status (YYYY-MM-DD): Done — <what changed>, commit <sha>._` (use
+  `Partially done` / `Not done` as appropriate). The body of a finding stays as
+  the original snapshot; status accretes above or below it. This is how the
+  existing reports already track progress.
+- **Remove a report once it's generally done.** When every finding in a report
+  has been resolved or superseded, delete the whole file in the same commit that
+  closes out the last item — git history preserves it. Don't leave fully-actioned
+  reports lying around.
 
 ## Things that can surprise you
 

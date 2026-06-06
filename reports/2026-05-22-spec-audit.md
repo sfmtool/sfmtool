@@ -72,6 +72,7 @@ config modules, and the four on-disk formats.
 **Inconsistencies:** Options and colormap choices match. Output naming (`{stem}_{metric}`) is implemented via `_insert_metric_before_number` which inserts the metric *before* a trailing number (e.g. `image_reproj_001.png`); the spec example says `image_001_reproj.png`. The spec's stated naming order is the reverse of the code.
 **Recommendation:** update spec — the implemented filename inserts the metric before the trailing number (`image_001` + `reproj` → `image_reproj_001`), not after.
 **Unclear / incorrect / suspicious:** Spec output example `image_001_reproj.png` contradicts `_insert_metric_before_number` docstring examples in `heatmap.py:20-40`.
+**Status (2026-06-05):** Resolved — the spec example now reads `image_reproj_001.png` (heatmap-command.md lines 38-39), and the stale `heatmap.py` command docstring example was corrected to match `_insert_metric_before_number`.
 
 ### specs/cli/match-command.md
 **Summary:** Feature matching (exhaustive/sequential/flow) producing `.matches`, plus `--merge`. Documents camera_config interaction and detailed TVG-preserving merge semantics.
@@ -81,6 +82,7 @@ config modules, and the four on-disk formats.
   - `--camera-model` Choice list (`match.py:88-105`) omits `FULL_OPENCV`, which is a registered model (`_cameras.py:_CAMERA_PARAM_NAMES`). `sfm xform --camera-model` accepts the full registry; `match`/`solve` accept a fixed 10-model subset. Cross-command inconsistency, not flagged by the spec.
 **Recommendation:** update code — fix the `_run_merge` docstring; discuss whether `FULL_OPENCV` should be in the `match`/`solve` choice lists.
 **Unclear / incorrect / suspicious:** The stale docstring is a real trap for a reader skimming `_run_merge`.
+**Status (2026-06-05):** Partially resolved — the `_run_merge` docstring now correctly states TVG is preserved. The `FULL_OPENCV` omission from the `match`/`solve` `--camera-model` choice lists is still open (needs a decision).
 
 ### specs/cli/merge-command.md
 **Summary:** Merges pre-aligned reconstructions: dedup cameras, merge images, union-find correspondences, percentile filter, average points, PnP+RANSAC pose refine.
@@ -160,6 +162,7 @@ config modules, and the four on-disk formats.
 **Inconsistencies:** Output (`<stem>.camrig`, `fisheye_left/`, `fisheye_right/`), the 180°-about-Y right sensor, and the OPENCV_FISHEYE camera all match. Spec says baseline "29 mm" (line 33) while code uses `_X5_BASELINE_M = 0.0307` (= 30.7 mm; `insv2rig.py:25`). Numeric mismatch.
 **Recommendation:** update spec — change "29 mm" to "30.7 mm" (matches `rig-config.md`, which already says 30.7 mm).
 **Unclear / incorrect / suspicious:** The "29 mm" figure in the prose conflicts with both the code constant and the rig-config spec.
+**Status (2026-06-05):** Resolved — insv2rig-command.md line 33 now reads "30.7 mm".
 
 ### specs/cli/inspect-command.md
 **Summary:** Unified per-file inspection for `.sfmr`/`.sift`/`.matches`/`.camrig`/images, default vs `--verbose`, integrity line.
@@ -333,3 +336,5 @@ All core specs carry explicit Status markers and matched code where checked.
 4. **Discontinuity spec references dead module names.** The "build on" table cites `_inspect_images.py` / `_inspect_metrics.py`, renamed to `_analyze_images.py` / `_analyze_metrics.py` (commit 1a8b76a era). Update the references table. (specs/cli/discontinuity-command.md, lines 614-625) — **Resolved (2026-05-24):** spec is now `motion-command.md`; build-on table updated to `analyze/images.py` / `analyze/metrics.py`.
 
 5. **Two smaller doc/code fixes:** (a) `heatmap` filename order — spec says `image_001_reproj.png` but code emits `image_reproj_001.png` (`heatmap.py:_insert_metric_before_number`); (b) the `_run_merge` docstring in `match.py:606-613` says TVG is dropped while the code preserves it (and the spec correctly says preserved) — fix the misleading docstring. Also: `insv2rig.md` says "29 mm" baseline vs code's 30.7 mm.
+
+> _Status (2026-06-05): Done — heatmap spec + docstring corrected, `_run_merge` docstring corrected, insv2rig baseline corrected to 30.7 mm. The only residual from these items is the `FULL_OPENCV` choice-list question noted under match-command.md above._

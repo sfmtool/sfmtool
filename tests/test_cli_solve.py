@@ -144,7 +144,7 @@ def test_solve_from_matches(isolated_seoul_bull_17_images: list[Path]):
 def test_resolve_output_path_explicit(tmp_path: Path):
     """Explicit --output: recon 0 gets the exact path, subsequent recons
     get `-N` before the suffix."""
-    from sfmtool._isfm import _resolve_output_path
+    from sfmtool._incremental_sfm import _resolve_output_path
 
     explicit = tmp_path / "mine.sfmr"
     images = [Path("img_1.jpg"), Path("img_2.jpg")]
@@ -178,7 +178,7 @@ def test_resolve_output_path_explicit(tmp_path: Path):
 def test_resolve_output_path_auto_per_recon(tmp_path: Path):
     """Auto-name: each reconstruction gets its own descriptor reflecting the
     images actually present in that reconstruction."""
-    from sfmtool._isfm import _resolve_output_path
+    from sfmtool._incremental_sfm import _resolve_output_path
 
     sfmr_dir = tmp_path / "sfmr"
 

@@ -1,8 +1,9 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Global Structure from Motion using GLOMAP."""
+"""Incremental Structure from Motion using COLMAP."""
 
+import os
 import textwrap
 from pathlib import Path
 
@@ -16,12 +17,12 @@ from ._colmap_io import (
     colmap_binary_to_rust_sfmr,
     pycolmap_to_rust_sfmr,
 )
-from ._isfm import _resolve_output_path
 from ._rig_config import _load_rig_config
+from ._sfm_filenames import get_next_sfm_filename as _get_next_sfm_filename
 from ._workspace import load_workspace_config
 
 
-def run_global_sfm(
+def run_incremental_sfm(
     image_paths: list[str | Path],
     workspace_dir: str | Path,
     colmap_dir: str | Path,
@@ -37,13 +38,12 @@ def run_global_sfm(
     matches_file: str | Path | None = None,
     range_expr: str | None = None,
     detect_infinity: bool = True,
-):
-    """Run global Structure from Motion on a list of images using GLOMAP."""
-    print("Running global SfM with GLOMAP...")
+) -> Path:
+    """Run incremental Structure from Motion on a list of images."""
+    print("Running incremental SfM with COLMAP...")
     if random_seed is not None:
         print(f"Random seed: {random_seed}")
-
-    colmap_dir = Path(colmap_dir)
+        pycolmap.set_random_seed(random_seed)
 
     if matches_file is not None:
         db_path, image_dir, image_paths, has_rig = _setup_for_sfm_from_matches(
@@ -87,24 +87,24 @@ def run_global_sfm(
             camera_config_resolver=camera_config_resolver,
         )
 
-    reconstruction_path = colmap_dir / "reconstruction"
-    reconstruction_path.mkdir(exist_ok=True)
+    reconstruction_path = os.path.join(colmap_dir, "reconstruction")
+    os.makedirs(reconstruction_path, exist_ok=True)
 
-    mapper_options = pycolmap.GlobalPipelineOptions()
+    mapper_options = pycolmap.IncrementalPipelineOptions()
     if random_seed is not None:
         mapper_options.random_seed = random_seed
         pycolmap.set_random_seed(random_seed)
     if has_rig:
-        mapper_options.mapper.bundle_adjustment.refine_sensor_from_rig = refine_rig
+        mapper_options.ba_refine_sensor_from_rig = refine_rig
 
-    reconstructions = pycolmap.global_mapping(
+    reconstructions = pycolmap.incremental_mapping(
         db_path, image_dir, reconstruction_path, mapper_options
     )
 
     if not reconstructions:
-        raise RuntimeError("Global mapping failed or produced no reconstructions.")
+        raise RuntimeError("Incremental mapping failed.")
 
-    tool_options: dict = {"algorithm": "global"}
+    tool_options: dict = {}
     if max_feature_count is not None:
         tool_options["max_features"] = max_feature_count
     if random_seed is not None:
@@ -114,7 +114,7 @@ def run_global_sfm(
         tool_options["refine_rig"] = refine_rig
 
     workspace_config = load_workspace_config(workspace_dir)
-    image_dir_rel = str(image_dir.relative_to(workspace_dir))
+    image_dir_rel = str(Path(image_dir).relative_to(workspace_dir))
     explicit_output = Path(output_sfm_file).absolute() if output_sfm_file else None
 
     saved_paths: list[Path] = []
@@ -158,7 +158,7 @@ def run_global_sfm(
             output_path=output_path,
             workspace_config=workspace_config,
             operation="sfm_solve",
-            tool_name="glomap",
+            tool_name="colmap",
             tool_options=tool_options,
             inputs={
                 "images": {
@@ -197,3 +197,27 @@ def run_global_sfm(
         saved_paths.append(output_path)
 
     return saved_paths[0]
+
+
+def _resolve_output_path(
+    order: int,
+    explicit_output: Path | None,
+    recon_image_paths: list[Path],
+    sfmr_dir: str | Path | None,
+    workspace_dir: Path,
+) -> Path:
+    """Pick the `.sfmr` output path for the `order`th reconstruction in a solve.
+
+    With an explicit `--output`: the first reconstruction gets that exact
+    path; the rest get `{stem}-{order}{suffix}` in the same directory.
+
+    Without: each reconstruction gets a fresh auto-generated name whose
+    descriptor reflects the images actually in *that* reconstruction.
+    """
+    if explicit_output is not None:
+        if order == 0:
+            return explicit_output
+        suffix = explicit_output.suffix or ".sfmr"
+        return explicit_output.parent / f"{explicit_output.stem}-{order}{suffix}"
+    results_base = Path(sfmr_dir).absolute() if sfmr_dir else workspace_dir / "sfmr"
+    return _get_next_sfm_filename(results_base, recon_image_paths, operation="solve")

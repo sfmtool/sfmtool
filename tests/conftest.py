@@ -94,7 +94,7 @@ def sfmrfile_reconstruction_with_17_images_once(tmp_path_factory) -> Path:
     images registered. Run without a fixed random seed and retry until all
     17 images are registered.
     """
-    from sfmtool._isfm import run_incremental_sfm
+    from sfmtool._incremental_sfm import run_incremental_sfm
     from sfmtool._sfmtool import SfmrReconstruction
 
     data_dir = TEST_DATA_DIR / "images" / "seoul_bull_sculpture"
@@ -233,7 +233,7 @@ def sfmrfile_reconstruction_kerry_park_once(tmp_path_factory) -> Path:
     reliably registers all 48 rig images; the fixture fails fast if it
     doesn't, rather than handing a partial reconstruction to the tests.
     """
-    from sfmtool._gsfm import run_global_sfm
+    from sfmtool._global_sfm import run_global_sfm
     from sfmtool._sfmtool import SfmrReconstruction
 
     workspace_dir = tmp_path_factory.mktemp("kerry_park_sfmr")
@@ -284,7 +284,7 @@ def sfmrfile_reconstruction_kerry_park_camrig_once(tmp_path_factory) -> Path:
     but driven by the ``.camrig`` rig-discovery path rather than
     ``rig_config.json``.
     """
-    from sfmtool._gsfm import run_global_sfm
+    from sfmtool._global_sfm import run_global_sfm
     from sfmtool._sfmtool import SfmrReconstruction
 
     workspace_dir = tmp_path_factory.mktemp("kerry_park_camrig_sfmr")

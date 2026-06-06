@@ -19,6 +19,7 @@ the Top 3 are called out at the end.
 ### 1. Inconsistent Rust unit-test placement across `sfmtool-core`
 
 > _Status (2026-05-24): Not done — still 7 sibling `tests.rs` files alongside inline-test files (camera_intrinsics.rs 1596, warp_map.rs 1092, gpu/mod.rs 2071); mixed convention persists._
+> _Status (2026-06-05): Done (size-threshold) — extracted the inline test modules from the seven largest files (camera_intrinsics, warp_map, epipolar, frustum, reconstruction, feature_match/polar, optical_flow/gpu) into sibling `tests.rs` files, matching the existing convention. Production sizes are now honest (camera_intrinsics 1596→905, gpu/mod 2071→1438, warp_map 1092→486). Small inline test blocks in the remaining modules were left inline by design._
 
 - Location: `crates/sfmtool-core/src/` (multiple files)
 - Problem: The crate uses **two** conventions for unit tests with no clear rule.
@@ -52,6 +53,7 @@ the Top 3 are called out at the end.
 ### 2. `_commands/match.py` mixes CLI wiring with matching orchestration
 
 > _Status (2026-05-24): Not done — `match.py` is still 941 lines; no `feature_match/_run.py` or `_db_populate.py`._
+> _Status (2026-06-05): Done — moved the matching/DB/flow/merge orchestration into `feature_match/_run.py` (`_run_matching`, `_run_flow_matching`, `_run_merge`, `_generate_output_path`) and `feature_match/_db_populate.py` (`_populate_db_features`, `_compute_descriptor_distances`, `_fill_sift_hashes`). `match.py` is now a 212-line thin Click wrapper; `_colmap_db.py`'s `_run_flow_matching` import was repointed. test_cli_match + test_colmap_interop pass (27)._
 
 - Location: `src/sfmtool/_commands/match.py` (940 lines)
 - Problem: This is by far the heaviest command module (next is `xform.py` at
@@ -128,6 +130,7 @@ the Top 3 are called out at the end.
 ### 5. Misleading name: `_sfm_reconstruction.py` is filename-generation utilities
 
 > _Status (2026-05-24): Not done — `_sfm_reconstruction.py` still present (116 lines)._
+> _Status (2026-06-05): Done — renamed to `_sfm_filenames.py`; all import sites updated._
 
 - Location: `src/sfmtool/_sfm_reconstruction.py` (about 90 lines)
 - Problem: The name reads as "the SfM reconstruction model/type" (and there *is*
@@ -143,6 +146,7 @@ the Top 3 are called out at the end.
 ### 6. Cryptic abbreviated module names `_isfm.py` / `_gsfm.py`
 
 > _Status (2026-05-24): Not done — `_isfm.py` and `_gsfm.py` both still present._
+> _Status (2026-06-05): Done — renamed to `_incremental_sfm.py` and `_global_sfm.py`; all import sites updated._
 
 - Location: `src/sfmtool/_isfm.py`, `src/sfmtool/_gsfm.py`
 - Problem: The names are non-obvious abbreviations (incremental SfM via COLMAP /
@@ -279,6 +283,7 @@ the Top 3 are called out at the end.
 ## Top 3 (best effort-to-value)
 
 > _Status (2026-05-24): None of these three (Rust test placement, match.py, the renames) completed yet._
+> _Status (2026-06-05): All three done — #1 (Rust test placement, size-threshold), #2 (thin out match.py), and #3 (the renames, #5 + #6). Lower-ranked findings (#4 colmap/, #7–#12) remain open, so the report stays._
 
 1. **Standardize Rust unit-test placement (#1).** A mostly-mechanical
    cut/paste, validated instantly by `cargo test`, that immediately makes the
