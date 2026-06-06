@@ -4674,6 +4674,7 @@ dependencies = [
  "openjd-expr",
  "pathdiff",
  "pyo3",
+ "rayon",
  "serde",
  "serde_json",
  "sfm-explorer",

@@ -140,6 +140,7 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_sift_io::read_sift_metadata, m)?)?;
     m.add_function(wrap_pyfunction!(py_sift_io::read_sift_partial, m)?)?;
     m.add_function(wrap_pyfunction!(py_sift_io::write_sift, m)?)?;
+    m.add_class::<py_sift_io::SiftWriteQueue>()?;
     m.add_function(wrap_pyfunction!(py_sift_io::verify_sift, m)?)?;
 
     // sfmtool SIFT detection / extraction

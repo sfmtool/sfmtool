@@ -241,8 +241,8 @@ fallback (for A-B timing and reproducibility). Per step:
 | Step | Multithreading (rayon) | SIMD |
 |------|------------------------|------|
 | **Gaussian pyramid** | Octaves are sequential (each seeds the next), but within an octave the separable blur parallelizes by row (horizontal pass) / column-block (vertical pass) via `par_chunks_mut`. Multiple images (image-A/image-B, or a batch of input images) build in parallel with `par_iter`. | Separable convolution is the classic SIMD kernel: the interior loops run 8-wide AVX2+FMA (load contiguous pixels, FMA against each tap) with a 4-wide SSE2 fallback, reusing the optical-flow pyramid's vectorized blur. |
-| **DoG** | `par_chunks_mut` over output rows; embarrassingly parallel. | Pure 4-wide subtraction `_mm_sub_ps`. |
-| **Extrema detection** | `par_iter` over DoG levels, or tile the image into row-bands per thread; each writes its own candidate list (`flat_map`/`collect`). | The 26-neighbor test is branchy and scalar-friendly, but the *pre-threshold* flat-rejection (`|D| > frac·C`) vectorizes 4 pixels at a time to skip dead regions cheaply. |
+| **DoG** | Not a standalone stage: fused into detection (see *tiled DoG/detect fusion* below). DoG values are computed per row-stripe in cache and never materialized to RAM. | Pure 4-wide subtraction `_mm_sub_ps`. |
+| **Extrema detection** | `par_iter` over `(octave, row-stripe)`; each stripe computes its DoG band in a cache-resident scratch buffer and writes its own candidate list (`flat_map`/`collect`). Replaces the coarser per-`(octave, level)` jobs. | The 26-neighbor test is branchy and scalar-friendly, but the *pre-threshold* flat-rejection (`|D| > frac·C`) vectorizes 4 pixels at a time to skip dead regions cheaply. |
 | **Localization** | `par_iter` over the candidate list — each candidate is independent; output filtered keypoints via `filter_map().collect()`. | Low arithmetic per candidate (3×3 solve); leave scalar. The win is thread-parallelism over many candidates. |
 | **Orientation** | `par_iter` over localized keypoints (each may emit 1–N oriented keypoints → `flat_map`). | Implemented (`sift::simd`): the per-pixel window math runs **8-wide AVX2+FMA** — gradient diff, `sqrt`, a polynomial `atan2_approx` (≈1.3e-3 rad) and the `exp_approx` Gaussian weight — with only the `hist[bin] += …` scatter left scalar. ~2.1× over the scalar fill on dino (46→22 ms/img); SSE2/non-x86 fall back to scalar. |
 | **Descriptor** | `par_iter` over oriented keypoints; each fills its own 128-D vector independently. | Implemented (`sift::simd`): each window row runs **8-wide AVX2+FMA** — the rotation into the descriptor frame, gradient diff, `sqrt`, `atan2_approx`, the `exp_approx` Gaussian weight and the orientation-bin reduction — with only the per-sample trilinear scatter left scalar. ~6.5× over the scalar fill on dino (211→33 ms/img). Final L2 norm / clamp / renorm is 4-wide SSE2 (`l2_norm_sse2`/`scale_sse2`); SSE2/non-x86 fall back to scalar. |
@@ -254,9 +254,92 @@ The dominant cost is the pyramid (memory-bound, SIMD-bound) and the descriptor
 (many independent keypoints, thread-bound) — both map cleanly onto the existing
 patterns.
 
+### Scale-space memory traffic: tiled DoG/detect fusion
+
+**Motivation (measured).** Profiling `extract_sift` on dino (2040×1536, so a
+4080×3072 octave-0 after image doubling) with `SFM_SIFT_TIMING` at 1/2/4 threads
+shows two stages that *do not* scale — they cap at ~2.6× on 4 cores while blur,
+base and orientation reach 3.2–3.5×:
+
+| stage | 1T | 4T | speedup | limiter |
+|------|----|----|---------|---------|
+| DoG `difference` | 172 ms | 67 ms | 2.6× | memory bandwidth |
+| extrema `detect` | 177 ms | 69 ms | 2.6× | memory bandwidth + coarse jobs |
+
+The cause is data movement, not arithmetic. An octave-0 level is 4080×3072×f32 =
+**50 MB**. The current pipeline (a) **materializes the whole DoG pyramid** to RAM
+(`s+2` levels ≈ 250 MB written for octave 0), then (b) `detect` **reads it back**
+(each level serves as `below`/`cur`/`above` for adjacent levels, so ~3 reads), all
+streamed from main memory. On a bandwidth-limited host that round-trip — not the
+subtraction or the 26-neighbour test — is the wall. A secondary issue: detection
+parallelizes over `(octave, level)`, so octave 0 has only `s = 3` jobs — too coarse
+to balance 4+ cores.
+
+The fix is to stop touching RAM for the DoG and to expose finer parallelism, in
+two tiers. Both rest on one identity: **DoG is pointwise** — `dog(o,l) = g(o,l+1)
+− g(o,l)` — and the Gaussian pyramid is *already* resident (orientation and
+description sample it after detection). So any DoG value can be recomputed from
+two gaussians with **bit-identical** f32 arithmetic (`a − b` is one IEEE
+subtraction whether done by `subps`, `subss`, or scalar `-`), and the DoG pyramid
+need never exist as a stored array.
+
+#### Tier 1 — fuse DoG into detection, tiled in row stripes (implemented)
+
+Stop materializing `Octave::dogs` entirely. `detect_and_localize` parallelizes
+over **`(octave, row-stripe)`** instead of `(octave, level)`. Each stripe task,
+for its band of `STRIPE_ROWS` owned interior rows (plus a **1-row halo** for the
+3×3×3 test):
+
+1. computes the `s+2` DoG levels **for that stripe only** into a small per-task
+   scratch buffer (`(s+2) × (STRIPE_ROWS+2) × W × f32`, a few MB — fits L2/L3),
+   from the resident gaussian stripes;
+2. runs the existing pre-threshold (`candidate_cols`) + 26-neighbour
+   `is_extremum` scan over the owned rows of each interior level `l = 1..=s`,
+   reusing the stripe's DoG scratch;
+3. for each surviving candidate, runs `localize` — which reads DoG **on the fly**
+   from the resident gaussians (`g(o,l+1)[i] − g(o,l)[i]`), giving it the full
+   random, multi-level, iterative-recenter access it needs with no halo limit
+   (localization is sparse, so this costs nothing in bandwidth).
+
+The DoG of octave 0 thus lives only in cache: the 250 MB write and the read-back
+disappear, leaving the gaussians (streamed once per stripe, reused across levels
+in-cache) as the only octave-0 detect traffic. Tiling is **safe by construction**:
+the DoG scan has a 1-row halo (pointwise DoG, 3×3×3 detect), each stripe *owns* a
+disjoint row band and only *reads* the halo, so the keypoint **set** is identical;
+the existing total-order sort in `detect_keypoints` then yields **byte-identical
+`.sift`** regardless of stripe boundaries or thread count. Bonus wins: peak RSS
+drops by the DoG pyramid (~250 MB octave-0, more across octaves), and octave 0
+goes from 3 detect jobs to dozens (`rows / STRIPE_ROWS`), fixing the imbalance.
+`STRIPE_ROWS` is the one tuning knob (cache-fit vs. negligible halo overhead),
+overridable via `SFM_SIFT_STRIPE_ROWS` and clamped to `[1, 2^16]` so a stray
+value can't overflow the stripe loop or collapse an octave into one stripe.
+
+What Tier 1 does **not** touch: the blur chain still materializes the gaussians to
+RAM (they must persist for orientation/description), so `base`/`blur`/`decimate`
+are unchanged.
+
+#### Tier 2 — fuse the blur chain into the stripe (future)
+
+Keep the gaussians cache-resident too, fusing blur → DoG → detect per stripe so a
+stripe is read from RAM once (octave base) and only keypoints come out. Two
+obstacles make this a separate, larger effort with a narrower margin:
+
+- **The gaussian pyramid must persist.** Orientation/description sample scattered
+  gaussian patches at keypoint locations *after* detect, so either the gaussians
+  are still written to RAM (no blur-bandwidth saved) or those stages are *also*
+  folded into the tiled pass (data-dependent, much larger rework).
+- **The blur halo is large.** The incremental blur is a 5-deep chain, so a valid
+  output stripe needs a cumulative ~25-row halo (Σ of per-level radii 3+4+5+6+7);
+  at full octave-0 width the cache-fitting stripe is short, pushing halo recompute
+  to 20–40%. The trade (redundant blur compute for saved bandwidth) is far less
+  clearly positive than Tier 1's ~1-row halo.
+
+So Tier 2 is deferred until Tier 1 is measured and (if pursued) tackled together
+with folding orientation/description into the tiled pass.
+
 ### Diagnostics (environment variables)
 
-Three environment variables gate optional diagnostics (zero-cost when unset; all
+These environment variables gate optional diagnostics (zero-cost when unset; all
 output goes to stderr):
 
 - `SFM_SIFT_NO_AVX2` — force the SSE2/scalar fallbacks everywhere (skip the AVX2+FMA
@@ -264,44 +347,101 @@ output goes to stderr):
 - `SFM_SIFT_TIMING` — emit per-stage wall-clock timing (`SIFT_TIMING build …` and
   `SIFT_TIMING detect …` lines).
 - `SFM_SIFT_OPS` — emit one `SIFT_OP …` line per scale-space operator (`upsample`,
-  `blur`, `dog`, `decimate`) for offline aggregation. Independent of `SFM_SIFT_TIMING`.
+  `blur`, `decimate`) for offline aggregation. Independent of `SFM_SIFT_TIMING`.
+  (No `dog` op: detection fuses the DoG per stripe, so it is never a standalone
+  whole-image operator — see *tiled DoG/detect fusion*.)
 
-### Future: extraction-orchestration pipelining
+One env var is a tuning knob rather than a diagnostic (it changes work
+partitioning, not just logging), cross-listed here for discoverability:
 
-The Python extraction backend (`extract_sift_with_sfmtool`) currently processes
-images **strictly sequentially** — for each image: load+decode (`cv2.imread`),
-extract (the Rust core, GIL released, internally rayon-parallel), then save
-(`write_sift`, zstd+ZIP). Measured per-image stage split (ms): extract dominates
-at **85–91%** of the work; load+thumbnail+save together are only **~7% on large
-images (2040×1536), ~15% on small (270×480)**, and the source-file re-read used
-for content hashing is effectively free (OS page cache serves it after the
-decode).
+- `SFM_SIFT_STRIPE_ROWS` — override the detect stripe height (default 32, clamped
+  to `[1, 2^16]`); see *tiled DoG/detect fusion*. Output is unaffected.
+
+### Extraction-orchestration pipelining
+
+The Python extraction backend (`extract_sift_with_sfmtool`) processes images in
+three stages: load+decode (`cv2.imread`), extract (the Rust core, GIL released,
+internally rayon-parallel), then save (`write_sift`, zstd+ZIP). Measured
+per-image stage split (ms): extract dominates at **85–91%** of the work;
+load+thumbnail+save together are only **~7% on large images (2040×1536), ~15% on
+small (270×480)**, and the source-file re-read used for content hashing is
+effectively free (OS page cache serves it after the decode).
 
 A load ∥ extract ∥ save pipeline is therefore a **single-digit-percent** win on
-local/SSD storage, and is limited less by the GIL than by **CPU saturation**.
-`write_sift` should release the GIL around its zstd/ZIP work (a cheap change,
-and part of this effort), but that compression is itself **CPU-bound**: on a box
-where the rayon extract already uses every core, overlapping the save — or
-decoding the next image — *contends* for cores rather than hiding idle time. The
-one stage with genuine idle time to hide is the **disk read** (`cv2.imread`
-already releases the GIL); the remaining overlap only pays off when cores are
-*spare* (small images, or a thread-limited extract). So the worthwhile,
-low-risk follow-up is not a full three-stage pipeline but:
+local/SSD storage, and is limited less by the GIL than by **CPU saturation**:
+the rayon extract already uses every core, so overlapping the save — or decoding
+the next image — *contends* for cores rather than hiding idle time. The one
+stage with genuine idle time to hide is the **disk read** (`cv2.imread` already
+releases the GIL); the remaining overlap only pays off when cores are *spare*
+(small images, or a thread-limited extract). So rather than a full three-stage
+pipeline, the backend implements three targeted, low-risk overlaps:
 
-- **Prefetch the next image's read+decode** on a single bounded-queue worker
-  thread while the current image extracts — hides disk-read latency, most
-  valuable for **many small/medium images on slow or remote storage** (NFS,
-  cloud block store, cold cache).
-- **Stream `.sift` writes per image** instead of buffering a whole chunk (up to
-  ~500 images) in memory — a peak-memory win (hundreds of MB for dense,
-  high-resolution inputs) that also enables the interleaving above.
-- **Release the GIL around the `write_sift` zstd/ZIP compression** so a save can
-  overlap orchestration / a prefetch decode when cores are spare.
+- **Prefetch the next image's read+decode** on a single worker thread (a
+  `ThreadPoolExecutor(max_workers=1)` with a one-image look-ahead) while the
+  current image extracts — hides disk-read latency, most valuable for **many
+  small/medium images on slow or remote storage** (NFS, cloud block store, cold
+  cache). See `_stream_sift_with_sfmtool` in `sift/extract_sfmtool.py`.
+- **Stream `.sift` writes per image** instead of buffering a whole chunk
+  (`chunk_size = 500` images) in memory — `extract_sift_with_sfmtool` is a
+  generator that yields one result at a time, and `image_files_to_sift_files`
+  writes each as it arrives. A peak-memory win (hundreds of MB for dense,
+  high-resolution inputs). (Up front, before any extraction, images whose `.sift`
+  is already newer than the source are skipped via an mtime check, so the
+  pipeline only runs on stale/missing outputs.)
+- **The `write_sift` binding releases the GIL** (`py.detach`) around its
+  zstd/ZIP compression and file write, so a save can run concurrently with other
+  Rust work.
+- **Overlap the save with the next extract — on the rayon pool, not a thread.**
+  `image_files_to_sift_files` drains results into a `SiftWriteQueue` (the
+  `_sfmtool` PyO3 class): `submit` copies the data (GIL held) and `rayon::spawn`s
+  the compression+write onto the **same global pool the extract uses**, then
+  returns; `join_oldest` (bounded look-ahead for backpressure) and `join` await
+  saves and surface their errors in order. The save of image *i* thus overlaps
+  the extract of image *i+1*. This is **unconditional** — no spare-core gate.
+  Backpressure bounds the queue at a **two-save look-ahead** (`write_lookahead`):
+  before each `submit`, if two saves are already in flight the oldest is joined
+  first, so at most ~2 compressed images are buffered. (Distinct from the *decode*
+  prefetch's one-image look-ahead above.)
+  The drain is guaranteed on every exit: the write loop's `finally` calls
+  `drain` (a non-raising await of in-flight saves, so it can't mask an
+  exception already unwinding), and `SiftWriteQueue::Drop` awaits any stragglers
+  as a structural backstop — a spawned save never outlives the queue, so an
+  error mid-stream can't leave a half-written `.sift` racing the next step.
 
-Ordering (results must stay in input order for the parallel `.sift` filename
-list) and deterministic error propagation across threads must be preserved, and
-the shared `image_files_to_sift_files` / `write_sift` path must not regress the
-COLMAP and OpenCV backends.
+Why both the decode and the save are worth hiding: they are **fixed per-image
+costs that do not shrink with core count**, while the rayon extract does.
+Measured on dino (2040×1536): decode ≈ 13 ms, save (zstd/ZIP) ≈ 26 ms — both
+constant — versus extract ≈ 1244 / 730 / 546 / 407 ms at 1 / 2 / 3 / 4 threads
+(Amdahl fit `≈ 165 + 1088/p` ms). So the decode+save "gap between images" is a
+small slice when extract dominates (few cores, large images) but a growing
+fraction as cores scale and extract collapses toward its ~165 ms serial floor.
+
+**Why the save goes on the rayon pool, not a worker thread (the contention
+trap).** Decode is I/O-bound (`cv2.imread` waits on disk and releases the GIL),
+so prefetching it on a Python thread is free — it never burns a core. The save is
+*CPU-bound* (single-stream zstd). An earlier attempt offloaded it to a dedicated
+`ThreadPoolExecutor` writer thread; that **regressed ~25–30%** (wall *and*
+CPU-seconds) on a fully-subscribed box. Root cause: a separate OS thread pushes
+the runnable-thread count to *N+1* on *N* cores, so the kernel deschedules a
+rayon worker mid-chunk; the descheduled worker stalls at one of the extract's
+many sync barriers (sequential octaves, separable-blur passes) and the others
+**busy-spin**, burning CPU for no work (hence the CPU-seconds inflation ≫ the
+~2 s of actual save work). Verified: the same concurrent save caused **0%
+slowdown with spare cores**, and external tenant load reproduced the identical
+inflation — i.e. the cause is core oversubscription, not the write path.
+
+Submitting the save as a **rayon task** instead avoids this: the pool stays at
+*N* threads, one worker runs the ~26 ms save while the extract's `par_iter`
+proceeds on the other *N−1* (rayon routes chunks only to available workers, so no
+barrier waits on the saving worker → no spin). The cost is only the genuine
+`save/N` of lost worker-time. Measured back-to-back on a 4-core box, the in-pool
+overlap is **CPU-neutral vs inline** (the +25 % inflation of the thread approach
+is gone), so it is safe to enable unconditionally; the wall-time win itself
+materialises on many-core boxes, where the extract's serial floor leaves workers
+genuinely idle for the save to fill. Ordering is preserved (the generator yields
+in input order; `join`/`join_oldest` re-raise decode/write errors), and writes
+target distinct files so a single in-flight save keeps up (save ≪ extract). The
+COLMAP/OpenCV backends share the same queue unchanged (they return eager lists).
 
 ## Interface: split detection from description
 

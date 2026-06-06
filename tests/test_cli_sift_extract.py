@@ -129,6 +129,99 @@ def test_sift_cli_sfmtool_backend(isolated_seoul_bull_image: Path):
     assert descriptors.shape == (reader.metadata["feature_count"], 128)
 
 
+def test_sfmtool_backend_streams_in_order(isolated_seoul_bull_17_images: list[Path]):
+    """The sfmtool backend yields one result per image, in input order.
+
+    Exercises the prefetch/look-ahead generator in extract_sfmtool.py across
+    multiple images: it must be lazy (a generator, not a list) and preserve the
+    input ordering its callers rely on for the parallel .sift filename list.
+    """
+    import types
+
+    from sfmtool.sift.extract_sfmtool import (
+        extract_sift_with_sfmtool,
+        get_default_sfmtool_feature_options,
+    )
+
+    images = isolated_seoul_bull_17_images
+    options = get_default_sfmtool_feature_options()
+
+    results = extract_sift_with_sfmtool(images, options)
+    assert isinstance(results, types.GeneratorType)
+
+    results = list(results)
+    assert len(results) == len(images)
+    for image_path, result in zip(images, results):
+        _, metadata, positions, _, descriptors, thumbnail = result
+        assert metadata["image_name"] == image_path.name
+        assert metadata["feature_count"] == len(positions) == len(descriptors)
+        assert thumbnail.shape == (128, 128, 3)
+
+
+def test_sfmtool_backend_propagates_decode_error(isolated_seoul_bull_image: Path):
+    """A failed read+decode on the prefetch worker surfaces in input order."""
+    from sfmtool.sift.extract_sfmtool import (
+        extract_sift_with_sfmtool,
+        get_default_sfmtool_feature_options,
+    )
+    from sfmtool.sift.file import SiftExtractionError
+
+    bad_path = isolated_seoul_bull_image.parent / "not_an_image.jpg"
+    bad_path.write_bytes(b"this is not a valid image")
+
+    images = [isolated_seoul_bull_image, bad_path]
+    results = extract_sift_with_sfmtool(images, get_default_sfmtool_feature_options())
+
+    # The first (valid) image yields fine; the second raises when reached.
+    first = next(results)
+    assert first[1]["image_name"] == isolated_seoul_bull_image.name
+    with pytest.raises(SiftExtractionError, match="Failed to load image"):
+        next(results)
+
+
+def test_sift_write_queue_writes_and_propagates_errors(
+    isolated_seoul_bull_image: Path, tmp_path
+):
+    """SiftWriteQueue (rayon-pool saves) writes correctly and surfaces errors.
+
+    This is the mechanism that overlaps a save with the next image's extract:
+    submit() spawns the compression onto the shared rayon pool, join() awaits
+    it. A good path produces a readable .sift; a save into a missing directory
+    surfaces as an IOError from join().
+    """
+    from sfmtool._sfmtool import SiftWriteQueue
+    from sfmtool.sift.extract_sfmtool import (
+        extract_sift_with_sfmtool,
+        get_default_sfmtool_feature_options,
+    )
+    from sfmtool.sift.file import _validate_sift_write
+
+    result = next(
+        iter(
+            extract_sift_with_sfmtool(
+                [isolated_seoul_bull_image], get_default_sfmtool_feature_options()
+            )
+        )
+    )
+    data = _validate_sift_write(*result)
+
+    # Good path: the save lands on the pool, join() waits, file is readable.
+    queue = SiftWriteQueue()
+    good = tmp_path / "ok.sift"
+    queue.submit(str(good), data, 5)
+    assert queue.pending_count == 1
+    queue.join()
+    assert queue.pending_count == 0
+    with SiftReader(good) as reader:
+        assert reader.metadata["image_name"] == isolated_seoul_bull_image.name
+
+    # A save into a nonexistent directory fails; join() reports it in order.
+    bad_queue = SiftWriteQueue()
+    bad_queue.submit(str(tmp_path / "missing_dir" / "bad.sift"), data, 5)
+    with pytest.raises(OSError):
+        bad_queue.join()
+
+
 def test_sift_cli_with_empty_directory(tmp_path):
     """Tests the sift command with an empty directory."""
     empty_dir = tmp_path / "empty"
