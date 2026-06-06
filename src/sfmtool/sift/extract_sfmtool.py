@@ -5,10 +5,17 @@
 
 Wraps the ``sfmtool._sfmtool.extract_sift`` PyO3 binding so it plugs into the
 same extraction pipeline as the COLMAP and OpenCV backends. The Rust core
-parallelizes internally (rayon), so images are processed sequentially here.
+parallelizes internally (rayon), so the per-image extract already saturates the
+machine; what it cannot hide is the disk read for the *next* image. The backend
+therefore prefetches the next image's read+decode on a single bounded worker
+thread (``cv2.imread`` releases the GIL) while the current image extracts, and
+yields results one image at a time so the caller can stream ``.sift`` writes
+instead of buffering a whole chunk in memory.
 """
 
+import collections
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -58,12 +65,78 @@ def get_default_sfmtool_feature_options() -> dict:
     }
 
 
+def _decode_image(image_path: Path):
+    """Read, decode, and thumbnail one image (the prefetch task).
+
+    Runs on the decode worker thread; ``cv2.imread``/``cv2.cvtColor``/
+    ``cv2.resize`` release the GIL, so this overlaps the GIL-free Rust extract of
+    the previous image. Returns ``(image_path, rgb, thumbnail)``; the BGR image
+    is dropped here once the RGB and thumbnail are derived, so it never enters
+    the look-ahead window. Raises in input order via the future's ``.result()``.
+    """
+    image = cv2.imread(
+        str(image_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+    )
+    if image is None:
+        raise SiftExtractionError(f"Failed to load image: {image_path}")
+    rgb = np.ascontiguousarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    thumbnail = cv2.resize(image, (128, 128), interpolation=cv2.INTER_AREA)
+    thumbnail = cv2.cvtColor(thumbnail, cv2.COLOR_BGR2RGB)
+    return image_path, rgb, thumbnail
+
+
+def _extract_one(
+    image_path, rgb, thumbnail, params, feature_options, rust_extract_sift
+):
+    """Run the Rust extract on a decoded image and assemble its result tuple."""
+    height, width = rgb.shape[:2]
+
+    # The binding already returns C-contiguous float32/float32/uint8 arrays,
+    # and keypoints already sorted by descending feature size (the .sift
+    # ordering every consumer expects) — so no re-contiguize and no re-sort
+    # here (matching the COLMAP/OpenCV backends).
+    positions, affine_shapes, descriptors = rust_extract_sift(rgb, params)
+
+    file_size = image_path.stat().st_size
+    file_xxh128 = xxh128_of_file(image_path)
+
+    feature_tool_metadata = {
+        "feature_tool": "sfmtool",
+        "feature_type": "sift",
+        "feature_options": feature_options,
+    }
+
+    metadata = {
+        "version": 1,
+        "image_name": image_path.name,
+        "image_file_xxh128": file_xxh128,
+        "image_file_size": file_size,
+        "image_width": width,
+        "image_height": height,
+        "feature_count": len(positions),
+    }
+
+    return (
+        feature_tool_metadata,
+        metadata,
+        positions,
+        affine_shapes,
+        descriptors,
+        thumbnail,
+    )
+
+
 def extract_sift_with_sfmtool(
     image_filename_list: list[str | Path],
     feature_options: dict,
     num_threads: int = -1,
 ):
     """Extract SIFT features from image files using the sfmtool Rust backend.
+
+    Yields one result per image, in input order, with the next image's
+    read+decode prefetched on a single worker thread while the current image
+    extracts (see the module docstring). Yielding incrementally lets the caller
+    stream ``.sift`` writes rather than buffering a whole chunk in memory.
 
     Args:
         image_filename_list: List of absolute paths to image files
@@ -72,10 +145,10 @@ def extract_sift_with_sfmtool(
             Rust defaults.
         num_threads: Accepted for interface compatibility. The Rust core
             parallelizes within each image via rayon (using all cores for
-            ``-1``); images are processed sequentially here.
+            ``-1``); the only extra thread here prefetches the next decode.
 
     Returns:
-        List of tuples with (feature_tool_metadata, metadata, positions,
+        Iterator of tuples (feature_tool_metadata, metadata, positions,
         affine_shapes, descriptors, thumbnail) for each image in order
 
     Raises:
@@ -96,51 +169,44 @@ def extract_sift_with_sfmtool(
         f"using the sfmtool backend"
     )
 
-    def process_single_image(image_path):
-        image = cv2.imread(
-            str(image_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-        )
-        if image is None:
-            raise SiftExtractionError(f"Failed to load image: {image_path}")
+    return _stream_sift_with_sfmtool(
+        image_filename_list, params, feature_options, _rust_extract_sift
+    )
 
-        height, width = image.shape[:2]
-        rgb = np.ascontiguousarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
 
-        # The binding already returns C-contiguous float32/float32/uint8 arrays,
-        # and keypoints already sorted by descending feature size (the .sift
-        # ordering every consumer expects) — so no re-contiguize and no re-sort
-        # here (matching the COLMAP/OpenCV backends).
-        positions, affine_shapes, descriptors = _rust_extract_sift(rgb, params)
+def _stream_sift_with_sfmtool(
+    image_filename_list, params, feature_options, rust_extract_sift
+):
+    """Generator backing ``extract_sift_with_sfmtool``.
 
-        file_size = image_path.stat().st_size
-        file_xxh128 = xxh128_of_file(image_path)
+    A single-worker pool keeps the next image decoded and ready (a bounded
+    one-image look-ahead) while the current image is being extracted. The
+    ``ThreadPoolExecutor`` context manager joins the worker on exit, including
+    when the consumer stops early or an extract raises.
+    """
+    with ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="sift-decode"
+    ) as executor:
+        pending = collections.deque()
+        paths = iter(image_filename_list)
 
-        feature_tool_metadata = {
-            "feature_tool": "sfmtool",
-            "feature_type": "sift",
-            "feature_options": feature_options,
-        }
+        first = next(paths, None)
+        if first is None:
+            return
+        pending.append(executor.submit(_decode_image, first))
 
-        metadata = {
-            "version": 1,
-            "image_name": image_path.name,
-            "image_file_xxh128": file_xxh128,
-            "image_file_size": file_size,
-            "image_width": width,
-            "image_height": height,
-            "feature_count": len(positions),
-        }
+        def extract_oldest():
+            # popleft().result() takes the oldest prefetched decode, re-raising
+            # any decode error in input order.
+            image_path, rgb, thumbnail = pending.popleft().result()
+            return _extract_one(
+                image_path, rgb, thumbnail, params, feature_options, rust_extract_sift
+            )
 
-        thumbnail = cv2.resize(image, (128, 128), interpolation=cv2.INTER_AREA)
-        thumbnail = cv2.cvtColor(thumbnail, cv2.COLOR_BGR2RGB)
+        for next_path in paths:
+            # Prefetch the next decode before consuming the current one, so the
+            # worker reads ahead while we extract (one decode stays in flight).
+            pending.append(executor.submit(_decode_image, next_path))
+            yield extract_oldest()
 
-        return (
-            feature_tool_metadata,
-            metadata,
-            positions,
-            affine_shapes,
-            descriptors,
-            thumbnail,
-        )
-
-    return [process_single_image(img_path) for img_path in image_filename_list]
+        yield extract_oldest()  # drain the last prefetched decode

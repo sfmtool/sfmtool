@@ -17,6 +17,7 @@ import xxhash
 from deadline.job_attachments.api import summarize_path_list
 
 from sfmtool._sfmtool import (
+    SiftWriteQueue as _SiftWriteQueue,
     read_sift as _core_read_sift,
     read_sift_metadata,
     read_sift_partial,
@@ -301,24 +302,19 @@ class SiftReader:
 # ---------------------------------------------------------------------------
 
 
-def write_sift(
-    filename: str | Path,
+def _validate_sift_write(
     feature_tool_metadata,
     metadata,
     position,
     affine_shape,
     descriptor,
     thumbnail,
-    *,
-    zstd_level=5,
-):
-    """Write a .sift file with SIFT feature data.
+) -> dict:
+    """Validate fields/shapes and assemble the dict the Rust writer expects.
 
-    Validates metadata and array shapes/dtypes in Python, then delegates
-    ZIP/zstd I/O to the Rust backend.
+    Returns the ``data`` dict (numpy arrays + metadata) ready for either the
+    synchronous ``_core_write_sift`` or the rayon-pool ``SiftWriteQueue``.
     """
-    filename = Path(filename)
-
     _validate_input(
         feature_tool_metadata,
         _FEATURE_TOOL_METADATA_KEYS,
@@ -381,7 +377,7 @@ def write_sift(
             f"Thumbnail dtype {thumbnail.dtype} does not match required dtype uint8"
         )
 
-    data = {
+    return {
         "feature_tool_metadata": feature_tool_metadata,
         "metadata": metadata,
         "positions_xy": position,
@@ -389,6 +385,70 @@ def write_sift(
         "descriptors": descriptor,
         "thumbnail_y_x_rgb": thumbnail,
     }
+
+
+# Default zstd level for .sift writes. Chosen as a size/speed balance; shared by
+# the synchronous `write_sift` and the pipelined `SiftWriteQueue` path so they
+# stay in sync.
+_SIFT_ZSTD_LEVEL = 5
+
+# How many compressed saves may be in flight at once. 2 lets the save of image i
+# overlap the extract of image i+1 (one ahead) while still bounding buffered
+# memory; a deeper queue buys no more overlap. See specs/core/sift.md.
+_SIFT_WRITE_LOOKAHEAD = 2
+
+
+class _SiftWriteStream:
+    """Context manager over the rayon-pool ``SiftWriteQueue``.
+
+    ``submit`` applies backpressure at the look-ahead bound; the ``with`` block
+    makes the cleanup guarantee structural: a clean exit ``join``s (surfacing
+    write errors in order), while an exception ``drain``s instead (best effort,
+    never raises, so it can't mask the in-flight exception). Either way no
+    spawned save outlives the block.
+    """
+
+    def __init__(self, lookahead: int = _SIFT_WRITE_LOOKAHEAD):
+        self._queue = _SiftWriteQueue()
+        self._lookahead = lookahead
+
+    def submit(self, path: str, data, zstd_level: int) -> None:
+        if self._queue.pending_count >= self._lookahead:
+            self._queue.join_oldest()
+        self._queue.submit(path, data, zstd_level)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        # join() already empties the queue, so drain() on a clean exit is a
+        # no-op; the split only matters so an exception path never raises.
+        if exc_type is None:
+            self._queue.join()
+        else:
+            self._queue.drain()
+
+
+def write_sift(
+    filename: str | Path,
+    feature_tool_metadata,
+    metadata,
+    position,
+    affine_shape,
+    descriptor,
+    thumbnail,
+    *,
+    zstd_level=_SIFT_ZSTD_LEVEL,
+):
+    """Write a .sift file with SIFT feature data.
+
+    Validates metadata and array shapes/dtypes in Python, then delegates
+    ZIP/zstd I/O to the Rust backend.
+    """
+    filename = Path(filename)
+    data = _validate_sift_write(
+        feature_tool_metadata, metadata, position, affine_shape, descriptor, thumbnail
+    )
     _core_write_sift(filename, data, zstd_level)
 
 
@@ -629,17 +689,35 @@ def image_files_to_sift_files(
 
     if image_filename_filtered_list:
         chunk_size = 500
-        for index_start in range(0, len(image_filename_filtered_list), chunk_size):
-            sift_list = extraction_fn(
-                image_filename_filtered_list[index_start : index_start + chunk_size],
-                feature_options,
-                num_threads=num_threads,
-            )
-            for sift, sift_filename in zip(
-                sift_list,
-                sift_filename_filtered_list[index_start : index_start + chunk_size],
-            ):
-                write_sift(sift_filename, *sift)
+        # Compress + write each .sift on the shared rayon pool via SiftWriteQueue
+        # (write_sift releases the GIL for the zstd/ZIP work). Because the save
+        # is a pool *task* rather than a separate OS thread, it never
+        # oversubscribes the cores: one worker runs the save while the extract's
+        # par_iter proceeds on the rest, so the save of image i overlaps the
+        # extract of image i+1 without the barrier busy-spin a contending
+        # external thread would cause. See specs/core/sift.md.
+        with _SiftWriteStream() as writer:
+            for index_start in range(0, len(image_filename_filtered_list), chunk_size):
+                # extraction_fn may return a list (COLMAP/OpenCV, which shell out
+                # to batch binaries) or an in-order generator (the sfmtool
+                # backend). In the generator case the zip pulls one result at a
+                # time, so extraction and writing stream per image.
+                sift_list = extraction_fn(
+                    image_filename_filtered_list[
+                        index_start : index_start + chunk_size
+                    ],
+                    feature_options,
+                    num_threads=num_threads,
+                )
+                for sift, sift_filename in zip(
+                    sift_list,
+                    sift_filename_filtered_list[index_start : index_start + chunk_size],
+                ):
+                    writer.submit(
+                        str(sift_filename),
+                        _validate_sift_write(*sift),
+                        _SIFT_ZSTD_LEVEL,
+                    )
 
     print()
     if len(sift_filename_filtered_list) != len(sift_filename_list):

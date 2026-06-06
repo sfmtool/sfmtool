@@ -3,23 +3,25 @@
 
 //! Gaussian scale-space and Difference-of-Gaussians (DoG) pyramids.
 //!
-//! Stages 1 and 2 of SIFT (`specs/core/sift.md`). This is the shared, expensive
-//! artifact both detection and description read. It owns:
+//! Stages 1 and 2 of SIFT (`specs/core/sift.md`). The Gaussian pyramid is the
+//! shared, expensive artifact that detection, orientation, and description all
+//! read:
 //!
 //! - The **Gaussian pyramid**: `octave_layers + 3` Gaussian-blurred images per
 //!   octave, with absolute blur `σ · k^i` at level `i` (`k = 2^(1/s)`). The input
 //!   is optionally doubled (bilinear) before octave 0; the next octave is seeded
 //!   by decimating the Gaussian image `octave_layers` levels up.
-//! - The **DoG pyramid**: `octave_layers + 2` adjacent-Gaussian differences per
-//!   octave. It is only needed for detection and can be freed with
-//!   [`ScaleSpace::drop_dog`] while the Gaussian pyramid is kept for orientation
-//!   and description.
+//! - The **DoG** (`octave_layers + 2` adjacent-Gaussian differences per octave)
+//!   is **not stored**. It is needed only for detection, which fuses it per row
+//!   stripe in cache (`dog(l) = gaussian(l+1) − gaussian(l)`, computed on the
+//!   fly; see `detect.rs` and `specs/core/sift.md`). Only the Gaussian pyramid
+//!   is retained.
 //!
-//! Gradient **magnitude** and **orientation** are *not* stored. Detection works
-//! off the DoG alone; the orientation and descriptor stages sample gradients on
-//! the fly from the Gaussian pyramid via [`pixel_gradient`], which avoids
-//! computing (and holding) a full magnitude/orientation map for every level when
-//! only small per-keypoint windows are ever read.
+//! Gradient **magnitude** and **orientation** are likewise *not* stored; the
+//! orientation and descriptor stages sample gradients on the fly from the
+//! Gaussian pyramid via [`pixel_gradient`], which avoids computing (and holding)
+//! a full magnitude/orientation map for every level when only small per-keypoint
+//! windows are ever read.
 //!
 //! Conventions follow the optical-flow module: [`GrayImage`], separable Gaussian
 //! blur with an SSE2 inner pass plus scalar fallback, and rayon row parallelism.
@@ -64,12 +66,10 @@ struct Octave {
     height: u32,
     /// `octave_layers + 3` Gaussian-blurred images, level 0 first.
     gaussians: Vec<GrayImage>,
-    /// `octave_layers + 2` DoG images (adjacent Gaussian differences). Emptied
-    /// by [`ScaleSpace::drop_dog`].
-    dogs: Vec<GrayImage>,
 }
 
-/// The Gaussian + DoG scale-space pyramids for an image.
+/// The Gaussian scale-space pyramid for an image (the DoG is computed on the
+/// fly during detection, not stored — see the module docs).
 ///
 /// Built by [`ScaleSpace::build`]. See the module docs for the coordinate and
 /// sigma conventions.
@@ -84,7 +84,8 @@ pub struct ScaleSpace {
 }
 
 impl ScaleSpace {
-    /// Build the Gaussian and DoG pyramids for `image`.
+    /// Build the Gaussian pyramid for `image` (the DoG is fused into detection,
+    /// not materialized here — see the module docs).
     pub fn build(image: &GrayImage, params: &SiftParams) -> Self {
         let s = params.octave_layers;
         let sigma = params.sigma;
@@ -97,7 +98,6 @@ impl ScaleSpace {
         let timing = *crate::sift::SIFT_TIMING;
         let mut t_base = std::time::Duration::ZERO;
         let mut t_blur = std::time::Duration::ZERO;
-        let mut t_dog = std::time::Duration::ZERO;
         let mut t_decimate = std::time::Duration::ZERO;
         let t_base_start = std::time::Instant::now();
 
@@ -173,13 +173,11 @@ impl ScaleSpace {
             let width = gaussians[0].width();
             let height = gaussians[0].height();
 
-            // DoG = adjacent Gaussian differences (s + 2 of them).
-            let tm = std::time::Instant::now();
-            let mut dogs: Vec<GrayImage> = Vec::with_capacity(gaussians_per_octave - 1);
-            for i in 1..gaussians.len() {
-                dogs.push(difference(&gaussians[i], &gaussians[i - 1]));
-            }
-            t_dog += tm.elapsed();
+            // The DoG pyramid is no longer materialized: detection fuses it per
+            // row-stripe in cache, computing `dog(l) = gaussian(l+1) − gaussian(l)`
+            // on the fly (see `detect.rs` and `specs/core/sift.md`). Only the
+            // Gaussian stack is retained — it is also what orientation and
+            // description sample.
 
             // Seed the next octave by decimating the Gaussian image `s` levels up
             // (absolute blur 2σ), taking every second pixel.
@@ -195,7 +193,6 @@ impl ScaleSpace {
                 width,
                 height,
                 gaussians,
-                dogs,
             });
 
             if let Some(nb) = next_base {
@@ -207,10 +204,9 @@ impl ScaleSpace {
 
         if timing {
             eprintln!(
-                "SIFT_TIMING build base_ms={:.3} blur_ms={:.3} dog_ms={:.3} decimate_ms={:.3}",
+                "SIFT_TIMING build base_ms={:.3} blur_ms={:.3} decimate_ms={:.3}",
                 t_base.as_secs_f64() * 1e3,
                 t_blur.as_secs_f64() * 1e3,
-                t_dog.as_secs_f64() * 1e3,
                 t_decimate.as_secs_f64() * 1e3,
             );
         }
@@ -238,9 +234,14 @@ impl ScaleSpace {
         (self.s + 3) as usize
     }
 
-    /// Number of DoG levels per octave (`s + 2`) — `0` once the DoG is dropped.
+    /// Number of DoG levels per octave (`s + 2`). The DoG is not stored
+    /// (detection fuses it per stripe); this is the count it *would* have.
     pub fn dogs_per_octave(&self) -> usize {
-        self.octaves.first().map(|o| o.dogs.len()).unwrap_or(0)
+        if self.octaves.is_empty() {
+            0
+        } else {
+            (self.s + 2) as usize
+        }
     }
 
     /// The `(width, height)` of every image in `octave`.
@@ -254,17 +255,17 @@ impl ScaleSpace {
         &self.octaves[octave].gaussians[level]
     }
 
-    /// The DoG image at `(octave, level)`. Panics if the DoG pyramid was dropped.
-    pub fn dog(&self, octave: usize, level: usize) -> &GrayImage {
-        &self.octaves[octave].dogs[level]
-    }
-
-    /// Free the DoG pyramid (only needed for detection), keeping the Gaussian
-    /// pyramid for orientation and description (gradients are sampled on the fly).
-    pub fn drop_dog(&mut self) {
-        for o in &mut self.octaves {
-            o.dogs = Vec::new();
-        }
+    /// The DoG image at `(octave, level)`, computed on demand as
+    /// `gaussian(level+1) − gaussian(level)`.
+    ///
+    /// The DoG pyramid is not stored — detection fuses it per row-stripe in
+    /// cache (see `detect.rs`). This convenience materializes one level (an
+    /// allocation) and is intended for tests/diagnostics, not the hot path.
+    pub fn dog(&self, octave: usize, level: usize) -> GrayImage {
+        difference(
+            self.gaussian(octave, level + 1),
+            self.gaussian(octave, level),
+        )
     }
 
     /// The full-resolution pixel step of one octave-`octave` pixel.
@@ -381,7 +382,6 @@ fn decimate_2x(img: &GrayImage) -> GrayImage {
 fn difference(a: &GrayImage, b: &GrayImage) -> GrayImage {
     debug_assert_eq!(a.width(), b.width());
     debug_assert_eq!(a.height(), b.height());
-    let t0 = std::time::Instant::now();
     let n = a.data().len();
     let mut out = vec![0.0f32; n];
     let ad = a.data();
@@ -410,14 +410,13 @@ fn difference(a: &GrayImage, b: &GrayImage) -> GrayImage {
             }
         });
 
-    log_op("dog", a.width(), a.height(), 0, t0);
     GrayImage::new(a.width(), a.height(), out)
 }
 
 /// SSE2 elementwise subtraction `dst = a − b` for equal-length slices.
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
-unsafe fn sub_slice_sse2(a: &[f32], b: &[f32], dst: &mut [f32]) {
+pub(crate) unsafe fn sub_slice_sse2(a: &[f32], b: &[f32], dst: &mut [f32]) {
     let n = dst.len();
     let mut i = 0;
     while i + 4 <= n {
@@ -480,7 +479,7 @@ fn log_op(op: &str, w: u32, h: u32, taps: u32, t0: std::time::Instant) {
 /// before any read, so no `undef` is ever observed.
 #[inline]
 #[allow(clippy::uninit_vec)] // write-before-read is guaranteed by the callers
-fn uninit_vec_f32(n: usize) -> Vec<f32> {
+pub(crate) fn uninit_vec_f32(n: usize) -> Vec<f32> {
     let mut v = Vec::<f32>::with_capacity(n);
     // SAFETY: capacity >= n; see the function doc for the write-before-read and
     // valid-bit-pattern argument that makes the uninitialized contents sound.
@@ -945,14 +944,13 @@ mod tests {
     }
 
     #[test]
-    fn test_drop_dog() {
+    fn test_gaussian_pyramid_retained() {
         let img = GrayImage::new_constant(64, 64, 0.5);
-        let mut ss = ScaleSpace::build(&img, &params());
-        assert!(ss.dogs_per_octave() > 0);
-        ss.drop_dog();
-        assert_eq!(ss.dogs_per_octave(), 0);
-        // The Gaussian pyramid survives (gradients are sampled from it on the fly).
-        assert_eq!(ss.gaussians_per_octave(), 6);
+        let ss = ScaleSpace::build(&img, &params());
+        // DoG is virtual (computed on the fly); the Gaussian pyramid is retained
+        // for detection, orientation, and description.
+        assert_eq!(ss.dogs_per_octave(), 5); // s + 2
+        assert_eq!(ss.gaussians_per_octave(), 6); // s + 3
         let (gw, _) = ss.octave_dims(0);
         assert_eq!(gw, 64 * 2); // doubled octave 0
         assert_eq!(ss.gaussian(0, 0).data().len(), 64 * 64 * 4);

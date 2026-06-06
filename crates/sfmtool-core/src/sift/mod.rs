@@ -51,7 +51,7 @@ pub(crate) static SIFT_TIMING: std::sync::LazyLock<bool> =
 
 /// Env-gated per-operator detail logging for scale-space build. Enabled by
 /// setting the `SFM_SIFT_OPS` environment variable. When on, each scale-space
-/// operator (`upsample`, `blur`, `dog`, `decimate`) prints one `SIFT_OP ...`
+/// operator (`upsample`, `blur`, `decimate`) prints one `SIFT_OP ...`
 /// line to stderr with its image dimensions, pixel count, and wall-clock time,
 /// for offline aggregation. Independent of `SFM_SIFT_TIMING`.
 pub(crate) static SIFT_OPS: std::sync::LazyLock<bool> =
@@ -251,7 +251,7 @@ pub struct Detection {
     /// it has multiple dominant orientations).
     pub keypoints: Vec<SiftKeypoint>,
     /// The Gaussian scale space (with gradients) retained for lazy description.
-    /// The DoG pyramid may already have been freed (see [`ScaleSpace::drop_dog`]).
+    /// (The DoG is never stored — detection fuses it per stripe in cache.)
     pub scale_space: ScaleSpace,
 }
 
@@ -265,16 +265,16 @@ pub struct SiftFeatures {
 
 /// Detect, localize, and orient SIFT keypoints in `image`.
 ///
-/// Builds the [`ScaleSpace`] (Gaussian + DoG pyramids and per-level gradients),
-/// runs extrema detection + subpixel localization (`detect`), then assigns
-/// orientation(s) (`orientation`). The DoG pyramid is freed after detection; the
-/// returned [`Detection`] retains the Gaussian pyramid (with gradients) so the
-/// caller can describe any subset of keypoints later.
+/// Builds the [`ScaleSpace`] (the Gaussian pyramid; gradients are sampled on the
+/// fly), runs extrema detection + subpixel localization (`detect`, which fuses
+/// the DoG per stripe in cache), then assigns orientation(s) (`orientation`). The
+/// returned [`Detection`] retains the Gaussian pyramid so the caller can describe
+/// any subset of keypoints later.
 pub fn detect_keypoints(image: &GrayImage, params: &SiftParams) -> Detection {
     let timing = *SIFT_TIMING;
 
     let t = std::time::Instant::now();
-    let mut scale_space = ScaleSpace::build(image, params);
+    let scale_space = ScaleSpace::build(image, params);
     let t_build = t.elapsed();
 
     // Stage 3+4: scale-space extrema + subpixel localization (un-oriented).
@@ -306,9 +306,8 @@ pub fn detect_keypoints(image: &GrayImage, params: &SiftParams) -> Detection {
     }
     let t_detect = t.elapsed();
 
-    // The DoG pyramid is only needed for detection; free it now and keep the
-    // Gaussian pyramid (and its gradients) for orientation and description.
-    scale_space.drop_dog();
+    // No DoG pyramid to free — detection computed it per stripe in cache. The
+    // Gaussian pyramid is retained for orientation and description.
 
     // Stage 5: orientation assignment (may emit multiple keypoints per candidate).
     let t = std::time::Instant::now();
