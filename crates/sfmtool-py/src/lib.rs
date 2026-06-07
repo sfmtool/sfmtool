@@ -83,6 +83,7 @@ mod py_analysis;
 mod py_consensus_atlas;
 mod py_epipolar;
 mod py_image_pair_graph;
+mod py_kdforest;
 mod py_kdtree;
 mod py_optical_flow;
 mod py_per_spherical_tile_source_stack;
@@ -264,6 +265,7 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRangeExpr>()?;
     m.add_class::<py_kdtree::PyKdTree2d>()?;
     m.add_class::<py_kdtree::PyKdTree3d>()?;
+    m.add_class::<py_kdforest::PyKdForest>()?;
     m.add_class::<PyPerSphericalTileSourceStack>()?;
     m.add_class::<PyRansacPhotometricOutput>()?;
     m.add_class::<PySphericalTileRig>()?;

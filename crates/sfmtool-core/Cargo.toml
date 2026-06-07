@@ -38,3 +38,7 @@ image = "0.25"
 [[bench]]
 name = "optical_flow"
 harness = false
+
+[[bench]]
+name = "kdtree_forest"
+harness = false

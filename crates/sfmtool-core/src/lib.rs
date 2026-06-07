@@ -22,6 +22,7 @@ pub mod find_infinity;
 pub mod frustum;
 pub mod image_pair_graph;
 pub mod infinity;
+pub mod kdforest;
 pub mod optical_flow;
 pub mod per_spherical_tile_source_stack;
 pub mod photometric_ransac;
