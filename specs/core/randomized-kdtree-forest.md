@@ -1,13 +1,33 @@
-# Randomized KD-Tree Forest (DRAFT)
+# Randomized KD-Tree Forest
 
-> Status: draft. This documents a planned pure-Rust approximate
-> nearest-neighbor (ANN) index in sfmtool-core, structured to mirror the existing
-> optical-flow (`specs/core/optical-flow.md`) and SIFT (`specs/core/sift.md`)
-> implementations: pure Rust, no external ANN library, SSE2 SIMD inner loops, and
-> rayon for both build and batched query. This spec covers the multiple
-> randomized kd-tree forest from Muja & Lowe (2009). Numeric defaults below follow
-> the paper and are subject to revision once we cross-validate against exact
-> (brute-force) nearest neighbors.
+> Status (2026-06-06): Implemented (Phase 1). Pure-Rust ANN index landed in
+> `crates/sfmtool-core/src/kdforest/` (`distance.rs`, `build.rs`, `search.rs`,
+> `calibrate.rs`, `mod.rs`) with PyO3 bindings in
+> `crates/sfmtool-py/src/py_kdforest.rs` (`KdForest` class), Rust unit tests
+> (`kdforest/tests.rs`), a Python binding test
+> (`tests/test_kdtree_forest_rust_bindings.py`), and Criterion benchmarks
+> (`crates/sfmtool-core/benches/kdtree_forest.rs`). It mirrors the optical-flow
+> (`specs/core/optical-flow.md`) and SIFT (`specs/core/sift.md`)
+> implementations: pure Rust, no external ANN library, AVX2/SSE2 SIMD inner
+> loop, and
+> rayon for both build and batched query, covering the multiple randomized
+> kd-tree forest from Muja & Lowe (2009).
+>
+> **Refinements from the original draft (as built):**
+> - **Runtime dimensionality.** The index is `KdForest<S: ForestScalar>` with a
+>   runtime `dim` field rather than `KdForest<S, const DIM>`. Descriptors are
+>   "arbitrary-length `u8` vectors" and the Python binding infers `D` from the
+>   array width at runtime — a const generic could not satisfy that without a
+>   per-width dispatch table. Type aliases `KdForestU8` / `KdForestF32`.
+> - **Presets** are `fast` / `balanced` (default) / `accurate`, differing in
+>   `max_leaf_checks` (32 / 128 / 512) and `num_trees` (4 / 4 / 8). These are
+>   starting points pending broader cross-validation.
+> - **Python `query` returns Euclidean distances** (sqrt of the internal squared
+>   value), matching the existing `descriptor_distance` binding; the Rust
+>   `search_batch_with_distances` returns squared distances.
+> - **Matcher CLI integration** (an approximate backend wired into
+>   `src/sfmtool/feature_match/`) is left as a follow-up; the `KdForest` Python
+>   class already emits the `(indices, distances)` layout that pipeline consumes.
 
 ## Motivation
 
@@ -29,14 +49,15 @@ FLANN/nanoflann) gives us a shared, reusable ANN index that any matcher
 This spec defines library types in sfmtool-core, independent of any on-disk
 layout. It follows the codebase's existing descriptor conventions: descriptors
 are arbitrary-length `u8` vectors and distances are squared L2 computed in integer space
-(`descriptor_distance_l2_squared`), with `sqrt` taken only for reported winners.
+(`descriptor_distance_l2_squared`), with `sqrt` taken only for the neighbors
+actually returned.
 
 ## Algorithm: Multiple Randomized KD-Trees
 
 Reference: Marius Muja and David G. Lowe, "Fast Approximate Nearest Neighbors
 with Automatic Algorithm Configuration," VISAPP 2009.
 [09muja](https://www.cs.ubc.ca/~lowe/papers/09muja.pdf) (§3.1). Builds on the
-randomized trees of [Silpa-Anan & Hartley (2004, 2008)](https://users.cecs.anu.edu.au/~hartley/Papers/PDF/SilpaAnan:CVPR08.pdf),
+randomized trees of [Silpa-Anan & Hartley (2008)](https://users.cecs.anu.edu.au/~hartley/Papers/PDF/SilpaAnan:CVPR08.pdf),
 the priority queue search of
 [Arya et al. (1998)](https://www.cse.ust.hk/faculty/arya/pub/JACM.pdf), and
 the best-bin-first fixed-budget stopping criterion of
@@ -145,12 +166,23 @@ descend(node, q, lb, result, queue, checked, n_checks):
 
 - **Single shared queue across all trees**, ordered by `lb` (squared distance from
   `q` to the branch boundary). Popping the smallest first is best-bin-first.
-- **Boundary lower bound.** We enqueue the far child with `lb + diff²`. This
-  additive accumulation is a valid lower bound (it may under-estimate when an axis
-  is re-split deeper in the tree, but never over-estimates), so the early-exit
-  `lb > result.worst_dist_sq()` is safe.
-- **Stopping criterion = `L_max` distance computations.** `L_max` is the single
-  precision knob (Beis & Lowe's `E_max`): larger ⇒ more accurate and slower.
+- **Boundary lower bound (approximate).** We enqueue the far child with
+  `lb + diff²` — the additive priority bound of FLANN's randomized kd-tree
+  forest. This bound is **not admissible**: when the same axis is re-split deeper
+  along a far path it double-counts that axis and can *over-estimate* the true
+  query-to-cell distance. Consequently the `lb > result.worst_dist_sq()`
+  early-exit (and the enqueue prune) can skip a branch that holds a true
+  neighbor, so the forest is **approximate even at an unlimited budget** — the
+  same speed/accuracy trade FLANN's `FLANN_INDEX_KDTREE` makes. (An exact bound
+  would replace, not add, the per-axis component, which needs per-axis state on
+  every queue entry; FLANN's *exact* index is the separate single-tree DFS,
+  out of scope here.) The only configuration that is exact by construction is a
+  single leaf (`leaf_size ≥ N`), where no pruning occurs.
+- **Stopping criterion = `L_max` distance computations (soft).** `L_max` is the
+  single precision knob (Beis & Lowe's `E_max`): larger ⇒ more accurate and
+  slower. It is a *soft* budget — checked at leaf granularity and only after each
+  tree has been descended once to seed the queue — so the actual count can exceed
+  `L_max` by up to one leaf per seeded tree. This matches FLANN's `checks`.
 - **Cross-tree dedup.** A `checked` bitset ensures each point's distance is
   computed at most once, so `L_max` measures unique work.
 - **Distance cutoff.** Seeding `result.worst_dist_sq()` with `max_dist²` makes the
@@ -197,44 +229,49 @@ and parameter selection are out of scope.
 
 Following the optical-flow and SIFT implementations:
 
-- **Build.** The `T` trees are independent → build them with rayon
-  (`into_par_iter` over tree index), each with its own seeded RNG. Within a tree,
-  recursion is sequential (cheap relative to the leaf-distance work at query time).
+- **Build.** The `T` trees are independent → built with rayon (`into_par_iter`
+  over tree index), each with its own seeded RNG. Recursion within a tree is
+  sequential, so build parallelism is capped at `T`.
 - **Batched query.** `par_chunks_mut(k)` over the output rows (as in
-  `spatial.rs::nearest_k_within_radius`). Each query owns its result set, priority
-  queue, and `checked` bitset; the forest is shared `&`.
-- **SIMD leaf scan.** The per-point squared-L2 distance over 128 `u8` lanes is the
-  hot loop. Reuse the existing integer SSE2 kernels behind
-  `descriptor_distance_l2_squared` / `sift/simd.rs` (SAD/SSD of `u8` via
-  `_mm_sad_epu8`-style reductions), with a scalar fallback. The generic float
-  index uses an `f32` SSE2 path with a scalar fallback for non-x86.
+  `spatial.rs::nearest_k_within_radius`); the forest is shared `&`. Each rayon
+  worker keeps one reusable scratch (priority queue, `checked` bitset, result
+  set) that is reset, not reallocated, between queries, so the query inner loop
+  does no per-query heap allocation.
+- **SIMD leaf scan.** The per-point squared-L2 distance over the 128 `u8` lanes
+  is the hot loop. `distance.rs` provides hand-written AVX2 and SSE2 sum-of-
+  squared-differences kernels (`|a−b|` via `max−min`, widened and squared with
+  `madd_epi16`), runtime-dispatched, with the scalar fallback delegating to
+  `descriptor_distance_l2_squared`. The generic `f32` index uses a scalar
+  squared-L2 loop (no hand-written SIMD).
 - **Integer distance domain.** Keep SIFT distances in `i64`/`u32` squared-L2 and
   take `sqrt` only when a reported distance is needed, matching
   `feature_match/descriptor.rs`.
 
 ### Diagnostics (environment variables)
 
-Following the SIFT/optical-flow precedent, gate optional instrumentation behind an
-env var (e.g. `SFMTOOL_KDFOREST_STATS=1`) to print per-query average checks,
-queue pushes/pops, and measured precision against brute force on a sample — useful
-when calibrating `L_max`.
+Following the SIFT/optical-flow precedent, `SFMTOOL_KDFOREST_STATS=1` prints the
+per-query average checks and queue pushes/pops for a batch — useful when
+calibrating `L_max`. (Measured precision is reported separately by the tests and
+`scripts/kdforest_vs_flann.py`, not by this env var.)
 
 ## Architecture
 
-### Module structure (planned)
+### Module structure (as built)
 
 ```
 sfmtool-core/src/kdforest/
 ├── mod.rs        # Public API: KdForestParams, KdForest, build, search, search_batch
 ├── build.rs      # Randomized tree construction (variance sample, top-D pick, median split)
 ├── search.rs     # Shared-queue BBF search, bounded result set, checked-set dedup
-├── distance.rs   # SquaredL2 over u8 (SIMD) and f32; trait so the index is metric-generic
-└── calibrate.rs  # Optional L_max precision calibration against brute-force sample
+├── distance.rs   # SquaredL2 over u8 (SIMD) and f32; ForestScalar trait, metric-generic
+├── calibrate.rs  # Optional L_max precision calibration against brute-force sample
+└── tests.rs      # Exactness ceiling, determinism, monotonicity, dedup, cutoff, calibration
 ```
 
-A small `KdForest<S, const DIM: usize>` generic over the scalar `S` (`u8` for
-descriptors, `f32` for general vectors) and dimensionality keeps it reusable,
-paralleling `spatial.rs`'s `PointCloud<A, DIM>`.
+`KdForest<S: ForestScalar>` is generic over the scalar `S` (`u8` for
+descriptors, `f32` for general vectors), with `dim` stored at runtime (see the
+status note above). Type aliases `KdForestU8` / `KdForestF32` parallel
+`spatial.rs`'s `PointCloud2` / `PointCloud3`.
 
 ### Key types
 
@@ -267,15 +304,19 @@ Flat row-major arrays at the boundary, mirroring `spatial.rs`:
 - `calibrate_max_leaf_checks(forest, sample_queries, exact_nn, target_precision)
   -> usize`.
 
-### Python bindings (planned)
+### Python bindings (as built)
 
 `crates/sfmtool-py/src/py_kdforest.rs`, registered in `sfmtool-py/src/lib.rs`,
 following `py_optical_flow.rs` conventions (`PyReadonlyArray2` in, `IntoPyArray`
 out, `py.detach(...)` around build and query):
 
-- `KdForest(descriptors (N,D) u8, params=None)` — `#[pyclass]` constructor;
-  `D` is inferred from the array width
-- `forest.query(descriptors (M,D) u8, k=2, max_leaf_checks=..., max_dist=None) -> (indices (M,k) u32, distances (M,k) f32)`
+- `KdForest(descriptors (N,D) u8, preset=None, num_trees=None, leaf_size=None, max_leaf_checks=None, seed=None)`
+  — `#[pyclass]` constructor; `D` is inferred from the array width. `preset` is
+  one of `balanced` (default) / `fast` / `accurate`, with the other kwargs as
+  optional overrides.
+- `forest.query(descriptors (M,D) u8, k=2, max_leaf_checks=None, max_dist=None) -> (indices (M,k) u32, distances (M,k) f32)`
+  — `max_leaf_checks=None` uses the build-time default; reported distances are
+  Euclidean.
 
 This output is exactly what `src/sfmtool/feature_match/` already consumes for the
 ratio test, so an approximate matcher backend slots in alongside the exact one.
@@ -283,32 +324,55 @@ ratio test, so an approximate matcher backend slots in alongside the exact one.
 ## Phasing
 
 1. **Phase 1 (this spec): CPU + SIMD + multithread.** Randomized build,
-   shared-queue BBF search, SIFT-`u8` specialization, `L_max` calibration helper,
-   matcher integration. Cross-validate against brute-force exact NN.
+   shared-queue BBF search, SIFT-`u8` specialization, and `L_max` calibration
+   helper, cross-validated against brute-force exact NN. **Done**, except the
+   matcher CLI integration (the `KdForest` building block exists; wiring an
+   approximate backend into `src/sfmtool/feature_match/` is a follow-up).
 2. **Phase 2 (future):** generic `f32` index hardening and benchmarks on
    higher-dimensional / less-correlated data; consider the k-means tree and full
    auto-selection as separate specs if a dataset wants them.
 
-## Testing & validation (planned)
+## Testing & validation
 
-- **Exactness ceiling.** With `T = 1`, `leaf_size = 1`, and `L_max = N` (unbounded),
-  the search must return the *true* nearest neighbor for every query — a forest
-  search with an unlimited budget is exact. Unit-test this against
-  `descriptor_distance_l2_squared` brute force on a small random set.
-- **Precision vs budget curve.** On the checked-in datasets
-  (`seoul_bull_sculpture`, `seattle_backyard`, `dino_dog_toy`), measure precision
-  (fraction of queries whose exact NN is returned) as a function of `L_max` and
-  `T`, and assert it is monotone non-decreasing and crosses sane thresholds
-  (e.g. ≥0.95 precision at a budget far below linear), with a speedup table
-  calibrated like the optical-flow cross-validation table.
-- **Determinism.** Same `seed` ⇒ byte-identical tree structure and identical query
-  results across runs and across thread counts.
-- **Matcher parity.** The approximate matcher's accepted matches are a high-overlap
-  superset-bounded approximation of the exact matcher's on the test pairs (e.g.
-  ≥0.95 of exact mutual-best matches recovered at the accurate preset).
-- **Rust unit tests:** top-`D` variance selection on a synthetic axis-aligned
-  cloud, median split balance, BBF lower-bound monotonicity, `checked`-set dedup
-  (a point scored once across trees), early-exit correctness.
+> _Status (2026-06-06): Implemented in `kdforest/tests.rs` and
+> `tests/test_kdtree_forest_rust_bindings.py`, plus
+> `benches/kdtree_forest.rs`. The two dataset-driven items below remain as
+> future work; the listed unit tests are covered._
+
+- **Exactness ceiling.** The bound is approximate (see "Boundary lower bound"),
+  so the genuine exact configuration is a *single leaf* (`T = 1`,
+  `leaf_size ≥ N`): the root scans every point with no pruning, so the result is
+  exact by construction. Unit-tested against `descriptor_distance_l2_squared`
+  brute force (`single_leaf_search_is_exact`) and via the Python binding
+  (`test_exhaustive_budget_matches_brute_force`, which uses `num_trees=1,
+  leaf_size=1` and asserts exact recovery on a fixed random set — empirically
+  exact there, though not guaranteed for a deep tree in general). A deep tree at
+  full budget is asserted to reach **high recall**, not exactness
+  (`deep_tree_full_budget_high_recall`, ≥0.95).
+- **Precision vs budget curve.** A synthetic-data version is covered
+  (`precision_monotone_in_budget`: precision is asserted monotone
+  non-decreasing in `L_max` — valid because a larger budget checks a superset of
+  points in the same heap order — and ≥0.98 at an exhaustive budget). _Future:_
+  the same measurement on the checked-in datasets
+  (`seoul_bull_sculpture`, `seattle_backyard`, `dino_dog_toy`) with a speedup
+  table calibrated like the optical-flow cross-validation table. A standalone
+  comparison against OpenCV's FLANN forest on real SIFT already exists in
+  `scripts/kdforest_vs_flann.py`.
+- **Determinism.** Same `seed` ⇒ identical query results across runs and thread
+  counts (each tree is seeded independently as `seed + tree_index` and built by
+  an order-preserving parallel map). Covered by `determinism_same_seed` and the
+  Python `test_determinism`.
+- **Matcher parity.** _Future, with the matcher CLI integration:_ the
+  approximate matcher's accepted matches should recover ≥0.95 of the exact
+  mutual-best matches at the accurate preset. The exactness/precision tests
+  above bound the index's accuracy in the meantime.
+- **Rust unit tests:** high recall across many trees exercising cross-tree
+  `checked`-set dedup (`many_trees_full_budget_high_recall`), median split
+  balance under heavy duplicates (`duplicate_coordinates_build_and_query`),
+  `max_dist` cutoff
+  (`max_dist_cutoff_respected`), reported-distance correctness, `< k` padding,
+  empty/`k = 0` edge cases, SSE2-vs-scalar kernel parity (`u8_kernel_matches_scalar`),
+  and calibration (`calibration_finds_a_budget`).
 - **PyO3 surface test** (`tests/test_kdtree_forest_rust_bindings.py`) exercising
   build/query and comparing against a NumPy brute-force reference.
 - **Criterion benchmarks** (`crates/sfmtool-core/benches/kdtree_forest.rs`): build
@@ -317,7 +381,8 @@ ratio test, so an approximate matcher backend slots in alongside the exact one.
 
 ## Dependencies
 
-No new crate dependencies anticipated: `rayon` for parallel build and batched
-query, a small seeded RNG (the workspace's existing PRNG, or a tiny SplitMix64 /
-xorshift kept inline for determinism), and `criterion` (dev) for benchmarks. SIMD
-via `std::arch`, reusing the SIFT/descriptor `u8` distance kernels.
+No new crate dependencies: `rayon` for parallel build and batched query, the
+workspace's existing `rand` crate (`StdRng::seed_from_u64` per tree, as used
+elsewhere in `sfmtool-core`) for deterministic seeded construction, and
+`criterion` (dev) for benchmarks. SIMD via `std::arch` (hand-written AVX2/SSE2
+`u8` kernels).
