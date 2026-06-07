@@ -103,10 +103,25 @@ backlog and keep them honest as findings get addressed:
   `Partially done` / `Not done` as appropriate). The body of a finding stays as
   the original snapshot; status accretes above or below it. This is how the
   existing reports already track progress.
-- **Remove a report once it's generally done.** When every finding in a report
-  has been resolved or superseded, delete the whole file in the same commit that
-  closes out the last item — git history preserves it. Don't leave fully-actioned
-  reports lying around.
+- **Retire a report once it has outlived its usefulness — use judgement.** The
+  bar is "is this still earning its place as a live backlog?", not "is every last
+  box ticked". Retire (delete the whole file, git preserves history) when any of
+  these holds:
+  - Every finding is resolved or superseded.
+  - The substantive findings are resolved and only minor or discussion-grade
+    items remain (carry those forward — fold them into a related report, the
+    next regenerated snapshot, or an issue — rather than keeping a near-empty
+    report alive for them).
+  - The report has gone stale against significant code movement, such that
+    re-running the audit skill would supersede it more cleanly than annotating it
+    item by item. In that case regenerate a fresh dated snapshot and delete the
+    old one in the same commit, carrying any still-open findings into the new
+    report.
+
+  When you retire a report, say briefly in the commit message why (resolved /
+  superseded / stale-and-regenerated) and where any unfinished items went. Don't
+  leave fully-actioned or clearly-stale reports lying around, but don't force a
+  retirement while a report is still doing useful work tracking real open items.
 
 ## Things that can surprise you
 
