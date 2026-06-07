@@ -65,6 +65,7 @@ the Top 3 by effort-to-value are called out at the end.
 - Proposed fix: rename → `recon_discontinuity.py` (or `reconstruction_analysis.py`), best done with finding #5. Importers: `motion.py` plus `report.py`'s `from .reconstruction import _rotation_angle_deg`.
 - Effort: low
 - Risk: low — two internal import sites.
+> _Status (2026-06-07): Done — renamed to `motion/recon_discontinuity.py`; updated the four import sites. The finding #5 split (console/JSON flag dedup) is still open (this commit)._
 
 ### 7. `_flow_analysis.py` — misleading name, orphaned from its only consumer
 - Location: `src/sfmtool/_flow_analysis.py` (194)
@@ -72,6 +73,7 @@ the Top 3 by effort-to-value are called out at the end.
 - Proposed fix: move into `motion/` as `motion/flow_stats.py` — disambiguates the name and co-locates with its caller.
 - Effort: low
 - Risk: low — one import site.
+> _Status (2026-06-07): Done — moved to `motion/flow_stats.py`; updated the single import in `motion/image_sequence.py` (this commit)._
 
 ### 8. `_sfm_filenames.py` vs `_filenames.py` — confusable names (low priority)
 - Location: `_sfm_filenames.py` (116), `_filenames.py` (208)
@@ -97,6 +99,7 @@ the Top 3 by effort-to-value are called out at the end.
 - Problem: Both named for "infinity", easy to confuse, living side by side: `infinity.rs` *converts* finite↔infinity tracks; `find_infinity.rs` *discovers* new infinite tracks via sphere clustering (prior rec #7's pairing note).
 - Proposed fix: merge into an `infinity/` directory module with `convert` (current `infinity.rs`) and `discover` (current `find_infinity.rs`).
 - Effort: low · Risk: low — `find_infinity` is consumed by xform/point-inspect paths only.
+> _Status (2026-06-07): Done — merged into `infinity/` (`convert.rs` + `discover.rs` + `mod.rs` re-export shims keep `infinity::*` paths stable; inherent methods unaffected). Inline tests extracted to `infinity/{convert,discover}/tests.rs` (this commit)._
 
 ### 11. `distortion.rs` mixes the public projection API with 17 private per-model kernels
 - Location: `crates/sfmtool-core/src/distortion.rs` (1633 prod lines)
@@ -123,6 +126,7 @@ the Top 3 by effort-to-value are called out at the end.
 - Proposed fix: extract the inline `mod tests` from the 7 files into sibling `tests.rs`, matching the established convention.
 - Effort: low — mechanical per file.
 - Risk: low — test-only; `use super::*` access preserved by the sibling convention already in use.
+> _Status (2026-06-07): Done — all 7 extracted to sibling `tests.rs` (`find_infinity` handled as part of #10's merge). Two-convention inconsistency within `feature_match/` resolved. `cargo test -p sfmtool-core` 614 passed (this commit)._
 
 ---
 
@@ -169,12 +173,14 @@ the Top 3 by effort-to-value are called out at the end.
 - Proposed fix: drop the `test_cli_` prefix on the 11 modules (matching the flat majority) and merge the two `to_nerfstudio` files.
 - Effort: low (renames + one merge)
 - Risk: low — glob-based discovery; only explicit `pixi run test -- tests/test_cli_x.py` invocations in docs/scripts would need updating.
+> _Status (2026-06-07): Done — dropped the `test_cli_` prefix on all 10 remaining modules and merged the `to_nerfstudio` pair into `test_to_nerfstudio.py` (this commit)._
 
 ### 20. `*_rust_bindings.py` — coherent cluster suitable for `tests/rust_bindings/`
 - Location: 9 modules (`test_descriptor_`, `test_distortion_`, `test_kdtree_forest_`, `test_kdtree_`, `test_range_expr_`, `test_rot_quaternion_`, `test_sfmr_reconstruction_`, `test_sift_extract_`, `test_triangulation_rust_bindings.py`) — ~1,573 lines
 - Problem: All exercise the `sfmtool._sfmtool` PyO3 surface, share a uniform suffix, and are the tests most sensitive to a stale `.so` (the `maturin develop` gotcha). `tests/xform/` already sets the grouping precedent.
 - Proposed fix: regroup into `tests/rust_bindings/` (with `__init__.py`); enables a targeted `pixi run test -- tests/rust_bindings` after `maturin develop`.
 - Effort: low · Risk: low — `conftest.py` still applies via upward discovery.
+> _Status (2026-06-07): Done — all 9 moved into `tests/rust_bindings/` with `__init__.py` (this commit)._
 
 ### 21. `test_camrig.py` (1015) and `test_camera_config.py` (766) mix several concerns
 - Location: `tests/test_camrig.py`, `tests/test_camera_config.py`
@@ -194,6 +200,7 @@ the Top 3 by effort-to-value are called out at the end.
    half-done prior effort, removes a two-convention inconsistency *within the same
    directory* (`feature_match/`), and makes the largest "files" honest about
    production size (`geometric_filter.rs` 944→~489, `remap.rs` 766→~383).
+   > _Status (2026-06-07): Done — see #14 (this commit)._
 
 2. **Build the `colmap/` package (#1, with the #2 split).** The last unbuilt
    package-grouping from the prior audits — medium effort, low risk, all-internal
@@ -206,6 +213,7 @@ the Top 3 by effort-to-value are called out at the end.
    collision), and move the 9 `*_rust_bindings.py` into `tests/rust_bindings/`.
    Pure low-risk navigability win that also gives a clean target for the
    post-`maturin-develop` binding tests.
+   > _Status (2026-06-07): Done — see #19 and #20 (this commit)._
 
 > Carried-forward larger items still open and worth scheduling beyond the Top 3:
 > the `sfmtool-core` `geometry/`/`camera/`/`spherical/` regroup (#9) and the

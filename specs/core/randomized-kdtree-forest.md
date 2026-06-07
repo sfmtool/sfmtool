@@ -5,7 +5,7 @@
 > `calibrate.rs`, `mod.rs`) with PyO3 bindings in
 > `crates/sfmtool-py/src/py_kdforest.rs` (`KdForest` class), Rust unit tests
 > (`kdforest/tests.rs`), a Python binding test
-> (`tests/test_kdtree_forest_rust_bindings.py`), and Criterion benchmarks
+> (`tests/rust_bindings/test_kdtree_forest_rust_bindings.py`), and Criterion benchmarks
 > (`crates/sfmtool-core/benches/kdtree_forest.rs`). It mirrors the optical-flow
 > (`specs/core/optical-flow.md`) and SIFT (`specs/core/sift.md`)
 > implementations: pure Rust, no external ANN library, AVX2/SSE2 SIMD inner
@@ -335,7 +335,7 @@ ratio test, so an approximate matcher backend slots in alongside the exact one.
 ## Testing & validation
 
 > _Status (2026-06-06): Implemented in `kdforest/tests.rs` and
-> `tests/test_kdtree_forest_rust_bindings.py`, plus
+> `tests/rust_bindings/test_kdtree_forest_rust_bindings.py`, plus
 > `benches/kdtree_forest.rs`. The two dataset-driven items below remain as
 > future work; the listed unit tests are covered._
 
@@ -373,7 +373,7 @@ ratio test, so an approximate matcher backend slots in alongside the exact one.
   (`max_dist_cutoff_respected`), reported-distance correctness, `< k` padding,
   empty/`k = 0` edge cases, SSE2-vs-scalar kernel parity (`u8_kernel_matches_scalar`),
   and calibration (`calibration_finds_a_budget`).
-- **PyO3 surface test** (`tests/test_kdtree_forest_rust_bindings.py`) exercising
+- **PyO3 surface test** (`tests/rust_bindings/test_kdtree_forest_rust_bindings.py`) exercising
   build/query and comparing against a NumPy brute-force reference.
 - **Criterion benchmarks** (`crates/sfmtool-core/benches/kdtree_forest.rs`): build
   time vs `T`, query throughput vs `L_max`, and end-to-end image-pair matching

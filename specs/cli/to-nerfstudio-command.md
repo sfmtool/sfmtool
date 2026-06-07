@@ -211,8 +211,7 @@ the output smaller.
 | `src/sfmtool/_commands/to_nerfstudio.py` | Click CLI shim (option parsing, .sfmr load, error wrapping) |
 | `src/sfmtool/_to_nerfstudio.py` | Coordinate conversion, `transforms.json` builder, PLY writer, image placement, pyramid generation, top-level `export_to_nerfstudio` orchestrator |
 | `src/sfmtool/_colmap_io.py` (existing) | `save_colmap_binary` is reused for `--include-colmap` |
-| `tests/test_to_nerfstudio.py` | Unit tests for coordinate conversion, PLY writer, filename strategy |
-| `tests/test_cli_to_nerfstudio.py` | End-to-end CLI tests (uses `pinhole_sfmr_17_images` fixture: undistort + to-nerfstudio over the seoul_bull dataset) |
+| `tests/test_to_nerfstudio.py` | Unit tests for coordinate conversion, PLY writer, filename strategy, plus end-to-end CLI tests (uses `pinhole_sfmr_17_images` fixture: undistort + to-nerfstudio over the seoul_bull dataset) |
 
 ## Out of Scope
 

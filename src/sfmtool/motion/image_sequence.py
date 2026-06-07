@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 import numpy as np
 
-from .._flow_analysis import (
+from .flow_stats import (
     _compare_flow_representations,
     _compute_in_bounds_mask,
     _flow_magnitude,

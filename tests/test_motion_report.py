@@ -30,7 +30,7 @@ def runner():
 def _make_translation_discontinuity(sfmr_path: Path, *, offset_m: float = 50.0):
     """Apply a large translation to all images with file number >= 11.
 
-    Mirrors `_make_discontinuous_recon` in test_cli_motion.py — the
+    Mirrors `_make_discontinuous_recon` in test_motion.py — the
     seoul_bull dataset has 17 sequentially-named images, so this plants a
     pose break between frame 10 and frame 11.
     """
@@ -64,7 +64,7 @@ def _make_translation_discontinuity(sfmr_path: Path, *, offset_m: float = 50.0):
 
 def _run_recon_to_json(recon) -> dict:
     """Run `analyze_reconstruction` and convert the result to a JSON dict."""
-    from sfmtool.motion.reconstruction import analyze_reconstruction
+    from sfmtool.motion.recon_discontinuity import analyze_reconstruction
     from sfmtool.motion.report import reconstruction_results_to_json
 
     results = analyze_reconstruction(recon)

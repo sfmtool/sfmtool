@@ -247,7 +247,7 @@ def _make_discontinuous_recon(sfmr_path, *, translate=None, rotate_deg=None):
 
 def test_recon_no_discontinuity(sfmrfile_reconstruction_with_17_images):
     """Unmodified reconstruction has no discontinuities."""
-    from sfmtool.motion.reconstruction import analyze_reconstruction
+    from sfmtool.motion.recon_discontinuity import analyze_reconstruction
     from sfmtool._sfmtool import SfmrReconstruction
 
     recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
@@ -259,7 +259,7 @@ def test_recon_no_discontinuity(sfmrfile_reconstruction_with_17_images):
 def test_recon_translation_discontinuity(sfmrfile_reconstruction_with_17_images):
     """A large translation applied to images 11-17 creates a discontinuity
     at the 10->11 edge."""
-    from sfmtool.motion.reconstruction import analyze_reconstruction
+    from sfmtool.motion.recon_discontinuity import analyze_reconstruction
 
     recon = _make_discontinuous_recon(
         sfmrfile_reconstruction_with_17_images,
@@ -290,7 +290,7 @@ def test_recon_translation_discontinuity(sfmrfile_reconstruction_with_17_images)
 def test_recon_rotation_discontinuity(sfmrfile_reconstruction_with_17_images):
     """A large rotation applied to images 11-17 creates a discontinuity
     at the 10->11 edge."""
-    from sfmtool.motion.reconstruction import analyze_reconstruction
+    from sfmtool.motion.recon_discontinuity import analyze_reconstruction
 
     recon = _make_discontinuous_recon(
         sfmrfile_reconstruction_with_17_images,
