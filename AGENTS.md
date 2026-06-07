@@ -56,7 +56,7 @@ When finishing a task, run the checks for what you changed:
   - `sfmtool-core` — algorithms: camera, alignment, distortion, epipolar, matching, frustum, optical flow, transforms, spatial indexing
   - `sfm-explorer` — native GUI viewer (winit + wgpu + egui); window title "SfM Explorer"
   - `sfmtool-py` — PyO3 bindings, compiled as `sfmtool._sfmtool`
-- `tests/` — pytest, ~43 modules (top-level + `tests/xform/`). Fixtures in
+- `tests/` — pytest, ~43 modules (top-level + `tests/xform/` and `tests/rust_bindings/`). Fixtures in
   `conftest.py` — notably `isolated_seoul_bull_image` and
   `isolated_seoul_bull_17_images`. Look for `test_*_rust_bindings.py` modules
   that exercise the PyO3 surface.

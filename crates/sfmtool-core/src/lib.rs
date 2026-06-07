@@ -18,7 +18,6 @@ pub mod distortion;
 pub mod epipolar;
 pub mod feature_match;
 pub mod filter;
-pub mod find_infinity;
 pub mod frustum;
 pub mod image_pair_graph;
 pub mod infinity;

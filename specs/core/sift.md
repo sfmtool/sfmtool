@@ -712,7 +712,7 @@ unlike the OpenCV backend, which derives them from its `KeyPoint`s via
 - **Rust unit tests:** known-extremum toy DoG, edge-response rejection on a synthetic
   ridge, descriptor unit-norm + 0.2-clamp invariants, orientation on a synthetic
   gradient.
-- **PyO3 surface test** (`tests/test_sift_rust_bindings.py`) exercising the bindings and
+- **PyO3 surface test** (`tests/rust_bindings/test_sift_extract_rust_bindings.py`) exercising the bindings and
   round-tripping through `sift-format`.
 - **Criterion benchmarks** (`crates/sfmtool-core/benches/sift.rs`): pyramid build,
   detection, descriptor, end-to-end — same structure as `benches/optical_flow.rs`.

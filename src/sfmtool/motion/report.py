@@ -23,7 +23,7 @@ from .constants import (
     POSE_TRANS_FACTOR,
     STEP_RATIO_THRESHOLD,
 )
-from .reconstruction import _rotation_angle_deg
+from .recon_discontinuity import _rotation_angle_deg
 
 
 SCHEMA_VERSION = 1

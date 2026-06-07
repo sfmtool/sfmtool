@@ -102,7 +102,7 @@ def motion(
 
     # Check if input is a .sfmr file
     if len(paths) == 1 and paths[0].endswith(".sfmr"):
-        from ..motion.reconstruction import analyze_reconstruction
+        from ..motion.recon_discontinuity import analyze_reconstruction
         from ..motion.report import (
             reconstruction_results_to_json,
             write_report,
