@@ -109,12 +109,14 @@ the Top 3 by effort-to-value are called out at the end.
 - Problem: Public coordinate-conversion API (`impl CameraModel` 57-578, `impl CameraIntrinsics` 579-871: `distort`/`undistort`/`project`/`unproject`/`pixel_to_ray`/`best_fit_inside_pinhole`) sits above 17 private model-specific math kernels (872-1632): `distort_opencv`, `distort_fisheye`, `distort_thin_prism_fisheye`, `newton_thin_prism`, `newton_rad_tan_thin_prism`, `blend_fisheye_ray`, etc. The fisheye/thin-prism Newton-solver kernels (1102-1632, ~530 lines) are a self-contained sub-concern.
 - Proposed fix: move the private kernels into `distortion/kernels.rs` (or `thin_prism.rs` + `fisheye.rs`), keeping the two public `impl` blocks in `distortion.rs`. (`distortion/tests.rs` already exists.)
 - Effort: medium · Risk: low — private, single-crate, compiler-caught.
+> _Status (2026-06-08): Done — moved the 21 per-model kernel functions into `distortion/kernels.rs` (as `pub(super)`); `distortion.rs` now holds only the two public `impl` blocks + dispatch and `use kernels::*;` (1634→871 lines, kernels 793). `distortion/tests.rs` unchanged (still reaches the kernels via `super::*`). 67 distortion tests pass (this commit)._
 
 ### 12. `reconstruction.rs` bundles data types, file I/O, and edit/subset operations
 - Location: `crates/sfmtool-core/src/reconstruction.rs` (1343 prod lines)
 - Problem: One `impl SfmrReconstruction` (185-1251) carries three concerns: (a) types + accessors (`Point3D`, `SfmrImage`, `TrackObservation`, `observations_for_point`); (b) file I/O + columnar conversion (`load`, `save`, `from_sfmr_data`, `to_sfmr_data`, `rebuild_derived_fields`); (c) mutating ops (`apply_se3_transform`, `subset_by_image_indices` ~168 lines, `filter_points_by_mask`, `recompute_*`) + `demo` (~180 lines). The subset/filter/transform group (~340 lines) is the cleanest extraction.
 - Proposed fix: keep types + accessors + I/O in `reconstruction.rs`; move `subset_by_image_indices`/`filter_points_by_mask`/`apply_se3_transform` (+ helpers) into `reconstruction/edit.rs` as a separate `impl` block. (`reconstruction/tests.rs` already exists.)
 - Effort: medium · Risk: low — same-crate impl split; re-exported types stay put.
+> _Status (2026-06-08): Done — the three editing methods (+ the `subset_rig_frame_data` helper) now live in a separate `impl SfmrReconstruction` block in `reconstruction/edit.rs` (`use super::*;`); types, accessors, I/O, and the shared `count_points_at_infinity`/`compute_observation_offsets` helpers stay in `reconstruction.rs` (1343→922 lines, edit 436). Methods are inherent so call sites are unchanged; 614 sfmtool-core tests pass (this commit)._
 
 ### 13. `optical_flow/gpu/mod.rs` mixes wgpu plumbing, the variational refiner, and DIS orchestration
 - Location: `crates/sfmtool-core/src/optical_flow/gpu/mod.rs` (1438 prod lines)
