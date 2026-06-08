@@ -118,7 +118,7 @@ def test_rig_intrinsics_used_directly_when_fully_specified(
     ``_camera_from_sensor_entry`` should use those parameters directly rather
     than falling back to pycolmap inference.
     """
-    from sfmtool._colmap_db import _camera_from_sensor_entry
+    from sfmtool.colmap.db_builders import _camera_from_sensor_entry
 
     rig_config = json.loads((isolated_kerry_park_rig / "rig_config.json").read_text())[
         0
@@ -142,7 +142,7 @@ def test_rig_intrinsics_wrong_length_rejected(
     """``camera_params`` with the wrong length for its model must be rejected,
     not silently fed to pycolmap.
     """
-    from sfmtool._colmap_db import _camera_from_sensor_entry
+    from sfmtool.colmap.db_builders import _camera_from_sensor_entry
 
     image = isolated_kerry_park_rig / "fisheye_left" / "frame_01.jpg"
     sensor = {"camera_model_name": "OPENCV_FISHEYE", "camera_params": [1.0, 2.0, 3.0]}
@@ -155,7 +155,7 @@ def test_rig_params_without_model_rejected(isolated_kerry_park_rig: Path) -> Non
     """``camera_params`` is positional and meaningless without a model name;
     a sensor entry carrying params but no ``camera_model_name`` is malformed.
     """
-    from sfmtool._colmap_db import _camera_from_sensor_entry
+    from sfmtool.colmap.db_builders import _camera_from_sensor_entry
 
     image = isolated_kerry_park_rig / "fisheye_left" / "frame_01.jpg"
     sensor = {"camera_params": [1.0, 2.0, 3.0, 4.0]}

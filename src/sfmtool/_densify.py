@@ -207,7 +207,7 @@ def triangulate_new_tracks(
     filter_isolated_median_ratio: float = 2.0,
 ) -> pycolmap.Reconstruction:
     """Build tracks from new matches and triangulate using known camera poses."""
-    from ._colmap_io import save_colmap_binary
+    from .colmap.io import save_colmap_binary
 
     # Step 1: Export reconstruction to COLMAP binary format
     colmap_input_dir = temp_dir / "colmap_input"
@@ -717,7 +717,7 @@ def densify_reconstruction(
     )
 
     # Convert to SfmrReconstruction
-    from ._colmap_io import pycolmap_to_rust_sfmr
+    from .colmap.io import pycolmap_to_rust_sfmr
 
     workspace_dir_abs = workspace_dir.absolute()
     metadata = recon.source_metadata.copy()

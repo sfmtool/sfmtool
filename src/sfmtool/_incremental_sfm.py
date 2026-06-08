@@ -11,8 +11,8 @@ import pycolmap
 from deadline.job_attachments.api import summarize_path_list
 
 from ._camera_config import CameraConfigResolver
-from ._colmap_db import _setup_for_sfm, _setup_for_sfm_from_matches
-from ._colmap_io import (
+from .colmap.db_setup import _setup_for_sfm, _setup_for_sfm_from_matches
+from .colmap.io import (
     build_metadata,
     colmap_binary_to_rust_sfmr,
     pycolmap_to_rust_sfmr,

@@ -240,5 +240,5 @@ coordinate is replaced with its bearing-mean direction.
 | Format spec | [`sfmr-file-format.md`] | Document v2 |
 | Bindings | `crates/sfmtool-py/src/py_sfmr_reconstruction.rs` | `w` / `is_at_infinity` + unified track accessors; the two conversion methods |
 | Conversions | `crates/sfmtool-core/src/infinity/convert.rs` | `classify_points_at_infinity` / `materialize_points_at_infinity` on `SfmrReconstruction` |
-| COLMAP interop | `src/sfmtool/_colmap_io.py` | Classify on import by default (`--no-detect-infinity` to skip) |
+| COLMAP interop | `src/sfmtool/colmap/io.py` | Classify on import by default (`--no-detect-infinity` to skip) |
 | GUI viewer | `crates/sfm-explorer` | Render `w = 0` points as directions on the view sphere |

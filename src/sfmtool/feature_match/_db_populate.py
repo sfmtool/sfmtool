@@ -26,7 +26,7 @@ def _populate_db_features(
 ):
     """Create a COLMAP DB and populate it with cameras, images, keypoints, descriptors."""
     from .._camera_config import CameraConfigResolver
-    from .._colmap_db import _setup_db_single_camera, _setup_db_with_rigs
+    from ..colmap.db_builders import _setup_db_single_camera, _setup_db_with_rigs
     from .._rig_config import _load_rig_config
 
     if camera_config_resolver is None:

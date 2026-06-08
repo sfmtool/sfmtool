@@ -25,6 +25,7 @@ the Top 3 by effort-to-value are called out at the end.
 - Proposed fix: regroup under `colmap/` → `colmap/db_setup.py`, `colmap/io.py`, `colmap/db_export.py`.
 - Effort: medium
 - Risk: low — purely internal imports; symbols are `_`-prefixed/internal-only, mechanical call-site updates.
+> _Status (2026-06-08): Done — built the `colmap/` package: `_colmap_io.py`→`colmap/io.py`, `_to_colmap_db.py`→`colmap/db_export.py` (both via `git mv`), and `_colmap_db.py` split into `colmap/db_setup.py` + `colmap/db_builders.py` (see #2). Updated all 13 internal call sites + 2 test modules; spec references refreshed (this commit)._
 
 ### 2. `_colmap_db.py` mixes orchestration with the three DB builders
 - Location: `src/sfmtool/_colmap_db.py` (860)
@@ -32,6 +33,7 @@ the Top 3 by effort-to-value are called out at the end.
 - Proposed fix: when moving into `colmap/`, split along the existing dispatch boundary — `colmap/db_setup.py` (orchestrators + match writing) and `colmap/db_builders.py` (the three `_setup_db_*` + sensor helpers).
 - Effort: medium
 - Risk: low — dispatch call sites are all within `_setup_for_sfm`.
+> _Status (2026-06-08): Done — `colmap/db_setup.py` (481) holds `_setup_for_sfm`, `_setup_for_sfm_from_matches`, `_write_matches_to_db`; `colmap/db_builders.py` (403) holds the three `_setup_db_*` builders + `_camera_from_sensor_entry` / `_rigid3d_sensor_from_rig`. `db_setup` imports the builders from `db_builders` (this commit)._
 
 ### 3. Camera/rig/panorama cluster still flat — regroup under `camera/` + `rig/`
 - Location: `_cameras.py` (226), `_camera_setup.py` (261), `_camera_config.py` (169), `_rig_config.py`, `_rig_frames.py` (100), `_insv2rig.py` (320), `_pano2rig.py` (261), `_panorama.py` (304), `_spherical_tile_rig.py` (86) — 9 modules
@@ -207,6 +209,8 @@ the Top 3 by effort-to-value are called out at the end.
    callers — that retires ~1,780 flat lines into a coherent subpackage and splits
    the 860-line `_colmap_db.py` along its existing orchestrator/builder seam. The
    `camera/`+`rig/` regroup (#3) is the natural, slightly higher-risk follow-on.
+   > _Status (2026-06-08): Done — see #1 and #2 (this commit). The `camera/`+`rig/`
+   > regroup (#3) remains the natural follow-on._
 
 3. **Tidy `tests/` naming and grouping (#19 + #20).** Drop the inconsistent
    `test_cli_` prefix, merge the duplicate `to_nerfstudio` pair (a real

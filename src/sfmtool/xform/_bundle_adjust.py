@@ -26,7 +26,7 @@ class BundleAdjustTransform:
         self.refine_extra_params = refine_extra_params
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
-        from .._colmap_io import save_colmap_binary
+        from ..colmap.io import save_colmap_binary
 
         print("  Running bundle adjustment...")
 
@@ -69,7 +69,7 @@ class BundleAdjustTransform:
         original_recon: SfmrReconstruction,
     ) -> SfmrReconstruction:
         from .._cameras import pycolmap_camera_to_intrinsics
-        from .._colmap_io import _extract_rig_frame_data
+        from ..colmap.io import _extract_rig_frame_data
 
         sorted_camera_ids = sorted(reconstruction.cameras.keys())
         cameras = [

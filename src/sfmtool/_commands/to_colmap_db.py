@@ -90,7 +90,7 @@ def to_colmap_db(
 def _from_sfmr(input_path, output_db_path, max_features, no_guided_matching):
     """Create COLMAP DB from a .sfmr reconstruction."""
     from .._sfmtool import SfmrReconstruction
-    from .._to_colmap_db import create_colmap_db_from_reconstruction
+    from ..colmap.db_export import create_colmap_db_from_reconstruction
     from .._workspace import find_workspace_for_path, load_workspace_config
 
     workspace_dir = find_workspace_for_path(input_path.parent)
@@ -111,7 +111,7 @@ def _from_sfmr(input_path, output_db_path, max_features, no_guided_matching):
 
 def _from_matches(input_path, output_db_path, camera_model):
     """Create COLMAP DB from a .matches file."""
-    from .._colmap_db import _setup_for_sfm_from_matches
+    from ..colmap.db_setup import _setup_for_sfm_from_matches
 
     try:
         colmap_dir = output_db_path.parent

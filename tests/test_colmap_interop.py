@@ -160,7 +160,7 @@ class TestToColmapBinE2E:
         self, tmp_path, sfmrfile_reconstruction_with_17_images
     ):
         """COLMAP binary export materialises w=0 points to finite landmarks."""
-        from sfmtool._colmap_io import save_colmap_binary
+        from sfmtool.colmap.io import save_colmap_binary
         from sfmtool._sfmtool import SfmrReconstruction, read_colmap_binary
 
         recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
