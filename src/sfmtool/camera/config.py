@@ -13,7 +13,7 @@ See `specs/workspace/camera-config.md` for the file format and semantics.
 import json
 from pathlib import Path
 
-from ._cameras import _CAMERA_PARAM_NAMES, FOCAL_PRINCIPAL_PARAM_NAMES
+from .cameras import _CAMERA_PARAM_NAMES, FOCAL_PRINCIPAL_PARAM_NAMES
 
 
 class CameraConfigError(Exception):

@@ -8,8 +8,8 @@ from pathlib import Path
 import numpy as np
 import pycolmap
 
-from ._camera_config import CameraConfigError, CameraConfigResolver
-from ._cameras import (
+from .config import CameraConfigError, CameraConfigResolver
+from .cameras import (
     _CAMERA_PARAM_NAMES,
     FOCAL_PRINCIPAL_PARAM_NAMES,
     pycolmap_camera_to_intrinsics,
@@ -151,7 +151,7 @@ def build_intrinsics_from_camera_config(
         intrinsics_dict = intrinsics.to_dict()
         for name in _distortion_param_names(model):
             intrinsics_dict["parameters"][name] = float(parameters.get(name, 0.0))
-        from ._sfmtool import CameraIntrinsics
+        from .._sfmtool import CameraIntrinsics
 
         return CameraIntrinsics.from_dict(intrinsics_dict), False
 
@@ -187,7 +187,7 @@ def build_intrinsics_from_camera_config(
         else:
             scaled_params[name] = value
 
-    from ._sfmtool import CameraIntrinsics
+    from .._sfmtool import CameraIntrinsics
 
     intrinsics = CameraIntrinsics.from_dict(
         {
@@ -208,7 +208,7 @@ def _read_image_size(image_path: Path) -> tuple[int, int]:
     file; EXIF orientation is not applied, matching the rest of the
     intrinsics pipeline.
     """
-    from ._sfmtool import image_dimensions
+    from .._sfmtool import image_dimensions
 
     try:
         width, height = image_dimensions(str(image_path))

@@ -41,6 +41,7 @@ the Top 3 by effort-to-value are called out at the end.
 - Proposed fix: `camera/` (`cameras.py`, `setup.py`, `config.py`) and `rig/` (`config.py`, `frames.py`, `insv2rig.py`, `pano2rig.py`, `panorama.py`, `spherical_tile.py`). Keep the `_panorama`/`_spherical_tile_rig` render pair together.
 - Effort: medium
 - Risk: medium — `CameraConfigResolver` and `_camera_setup` symbols are imported widely (`_colmap_db`, `_incremental_sfm`, `_global_sfm`, `feature_match/`); more call sites than the COLMAP cluster. (`camera/` coexists with Rust `sfmtool_core::camera` — naming only, no conflict.)
+> _Status (2026-06-08): Done — built `camera/` (`cameras.py`, `setup.py`, `config.py`) and `rig/` (`config.py`, `frames.py`, `insv2rig.py`, `pano2rig.py`, `panorama.py`, `spherical_tile.py`) via `git mv`; the `panorama`/`spherical_tile` render pair stayed together. Adjusted intra-package imports and ~45 external call sites across src + tests; refreshed spec/AGENTS references. All 122 modules import clean; ruff clean; 259 tests pass across the affected areas (this commit)._
 
 ---
 

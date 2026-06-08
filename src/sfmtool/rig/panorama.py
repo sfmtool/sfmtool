@@ -24,7 +24,7 @@ from sfmtool._sfmtool import (
     SphericalTileRig,
     render_consensus_atlas,
 )
-from sfmtool._spherical_tile_rig import resample_atlas_to_equirect
+from sfmtool.rig.spherical_tile import resample_atlas_to_equirect
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray

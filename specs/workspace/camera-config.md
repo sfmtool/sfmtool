@@ -59,7 +59,7 @@ separate, COLMAP-native format that instead carries per-sensor
 | `parameters` | object | Model-specific named parameters |
 
 The parameter names per model are defined in `_CAMERA_PARAM_NAMES` in
-`src/sfmtool/_cameras.py`. For example, `PINHOLE` takes `focal_length_x`,
+`src/sfmtool/camera/cameras.py`. For example, `PINHOLE` takes `focal_length_x`,
 `focal_length_y`, `principal_point_x`, `principal_point_y`, while `OPENCV` adds
 `radial_distortion_k1`, `radial_distortion_k2`, `tangential_distortion_p1`, and
 `tangential_distortion_p2`.

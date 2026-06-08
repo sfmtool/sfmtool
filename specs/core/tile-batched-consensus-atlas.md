@@ -6,7 +6,7 @@ photometric RANSAC ([`refine_photometric_ransac`]) without changing any
 of their algorithms. The orchestrator lives in
 `crates/sfmtool-core/src/consensus_atlas.rs` (`render_consensus_atlas`),
 the PyO3 binding in `crates/sfmtool-py/src/py_consensus_atlas.rs`, and
-`sfm panorama` (`src/sfmtool/_panorama.py`) consumes it for the production
+`sfm panorama` (`src/sfmtool/rig/panorama.py`) consumes it for the production
 panorama render.
 
 [`PerSphericalTileSourceStack`]: per-spherical-tile-source-stack.md
@@ -533,7 +533,7 @@ dtype="float16", **ransac_kwargs)` free function. The binding does the
 => render_consensus_atlas::<f32>, "uint8" => Err(...) }` dispatch — the
 same pattern as `build_rotation_only`'s binding — and returns
 `(atlas, tile_primary_count, tile_secondary_count, tile_primary_lum_mad,
-tile_secondary_lum_mad)`. `sfm panorama` (`src/sfmtool/_panorama.py`)
+tile_secondary_lum_mad)`. `sfm panorama` (`src/sfmtool/rig/panorama.py`)
 drives its build→ransac→consensus trio through this single call, exposing
 `--batch-size` (default chosen so the per-batch f16 stack is a few GB at
 the command's default resolution). The command always takes the batched

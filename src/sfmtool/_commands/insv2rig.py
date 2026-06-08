@@ -9,7 +9,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
-from .._insv2rig import _INSV_FRAME_PATTERN, extract_insv_frames, write_insv_camrig
+from ..rig.insv2rig import _INSV_FRAME_PATTERN, extract_insv_frames, write_insv_camrig
 from .._sfmtool import RotQuaternion
 from .._workspace import find_workspace_for_path
 

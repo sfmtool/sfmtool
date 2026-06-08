@@ -67,7 +67,7 @@ def test_sensor_from_rig_pose_wxyz_to_xyzw() -> None:
     ``specs/workspace/rig-config.md``.
     """
     pycolmap = pytest.importorskip("pycolmap")
-    from sfmtool._rig_config import _sensor_from_rig_pose
+    from sfmtool.rig.config import _sensor_from_rig_pose
 
     # WXYZ = [0, 0, 1, 0] is a 180° rotation about Y.
     cam_cfg = {
@@ -87,7 +87,7 @@ def test_sensor_from_rig_pose_wxyz_to_xyzw() -> None:
 
 def test_sensor_from_rig_pose_missing_rotation_returns_none() -> None:
     """Reference sensors (no rotation field) should yield ``None``."""
-    from sfmtool._rig_config import _sensor_from_rig_pose
+    from sfmtool.rig.config import _sensor_from_rig_pose
 
     assert _sensor_from_rig_pose({"ref_sensor": True}) is None
 
@@ -96,7 +96,7 @@ def test_fisheye_focal_length_inference(isolated_kerry_park_rig: Path) -> None:
     """``_infer_camera`` should seed OPENCV_FISHEYE focal length to ~size/π,
     not the EXIF-derived 1.2× image-size guess used for rectilinear lenses.
     """
-    from sfmtool._camera_setup import _infer_camera
+    from sfmtool.camera.setup import _infer_camera
 
     image = isolated_kerry_park_rig / "fisheye_left" / "frame_01.jpg"
     cam = _infer_camera(str(image), "OPENCV_FISHEYE")

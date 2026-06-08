@@ -289,7 +289,7 @@ _IMAGE_FORMAT_NAMES = {
 
 def print_image_summary(path: Path, verbose: bool = False) -> None:
     """Inspect an image file."""
-    from .._camera_setup import _read_image_size
+    from ..camera.setup import _read_image_size
 
     width, height = _read_image_size(path)
     rows = [
@@ -301,7 +301,7 @@ def print_image_summary(path: Path, verbose: bool = False) -> None:
     _print_block(rows)
 
     if verbose:
-        from .._camera_setup import _infer_camera
+        from ..camera.setup import _infer_camera
 
         click.echo("")
         try:
@@ -402,7 +402,7 @@ def print_reconstruction_summary(
         click.echo(f"  Avg observations per point: {avg_obs:.2f}")
 
     # Camera information
-    from .._cameras import _CAMERA_PARAM_NAMES
+    from ..camera.cameras import _CAMERA_PARAM_NAMES
 
     click.echo("\nCameras:")
     for idx, cam in enumerate(recon.cameras):

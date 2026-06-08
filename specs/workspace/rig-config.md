@@ -116,7 +116,7 @@ through pycolmap. Matching the format exactly means the same
 `cam_from_rig_rotation` is stored as **WXYZ** to match the COLMAP rig file
 format. sfmtool converts to **XYZW** internally when handing the value to
 pycolmap. The conversion lives in `_sensor_from_rig_pose` in
-`src/sfmtool/_rig_config.py`.
+`src/sfmtool/rig/config.py`.
 
 Examples:
 
@@ -195,13 +195,13 @@ For ~180° FOV fisheye rigs (e.g. OPENCV_FISHEYE with k1–k4):
   pycolmap; this is benign cull-back, not a numerical error.
 - **Focal-length inference is fisheye-aware.** When inferring intrinsics
   for an OPENCV_FISHEYE camera without an explicit focal length,
-  `_camera_setup._infer_camera` seeds the focal length to roughly
+  `camera.setup._infer_camera` seeds the focal length to roughly
   `min(width, height) / π` instead of the EXIF-derived 1.2× image-size
   guess, which is far too long for a ~180° projection.
 - **Same-frame matching is skipped.** For back-to-back fisheye rigs the
   two sensors share no field of view; matching them would be wasteful
   even without the rig pose constraint. The cross-frame pair builder in
-  `_rig_frames._build_cross_frame_pairs` handles this naturally.
+  `rig.frames._build_cross_frame_pairs` handles this naturally.
 
 ## Examples in the Repository
 

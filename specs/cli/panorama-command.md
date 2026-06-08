@@ -135,12 +135,12 @@ sfm panorama result.sfmr -o slice.png --range 400-600
 ## Implementation
 
 The CLI shim is `src/sfmtool/_commands/panorama.py`; the reusable pipeline is
-`render_equirect_panorama` in `src/sfmtool/_panorama.py`, which loads the
+`render_equirect_panorama` in `src/sfmtool/rig/panorama.py`, which loads the
 sources (`load_sources`), runs `render_consensus_atlas`, and resamples via
-`resample_atlas_to_equirect` (`src/sfmtool/_spherical_tile_rig.py`). The rig is
+`resample_atlas_to_equirect` (`src/sfmtool/rig/spherical_tile.py`). The rig is
 resolved by `resolve_panorama_rig`, which either synthesizes one
 (`build_panorama_rig`) or loads it from a `.camrig` (`load_panorama_rig`); the
 CLI resolves it up front so it can log the tile count and tile focal length, and
 passes the result to `render_equirect_panorama`. Source subsetting is computed
-by `select_source_indices` (also in `_panorama.py`) and applied with
+by `select_source_indices` (also in `rig/panorama.py`) and applied with
 `SfmrReconstruction.subset_by_image_indices` before rendering.

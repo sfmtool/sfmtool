@@ -13,7 +13,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ._sfmtool import RotQuaternion
+from .._sfmtool import RotQuaternion
 
 # Per-sensor frame filename template. The `%06d` field is both the output
 # filename and a `.camrig` frame field, so the same string names the extracted
@@ -223,7 +223,7 @@ def write_pano_camrig(
     sensor's image pattern is ``<face>/frame_%06d.jpg``, relative to the
     directory holding the ``.camrig`` file (the rig root).
     """
-    from ._sfmtool import CameraIntrinsics, write_camrig
+    from .._sfmtool import CameraIntrinsics, write_camrig
 
     # 90° FOV over a square face: half-FOV is 45°, so fx = fy = face_size / 2.
     # The principal point sits at the image centre, face_size / 2 in COLMAP's

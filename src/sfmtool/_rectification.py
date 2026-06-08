@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import pycolmap
 
-from ._cameras import get_intrinsic_matrix
+from .camera.cameras import get_intrinsic_matrix
 
 
 @dataclass

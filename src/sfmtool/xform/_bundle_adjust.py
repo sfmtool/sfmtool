@@ -68,7 +68,7 @@ class BundleAdjustTransform:
         reconstruction: pycolmap.Reconstruction,
         original_recon: SfmrReconstruction,
     ) -> SfmrReconstruction:
-        from .._cameras import pycolmap_camera_to_intrinsics
+        from ..camera.cameras import pycolmap_camera_to_intrinsics
         from ..colmap.io import _extract_rig_frame_data
 
         sorted_camera_ids = sorted(reconstruction.cameras.keys())

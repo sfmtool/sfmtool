@@ -8,7 +8,7 @@ higher-order distortion model — e.g. upgrading `SIMPLE_RADIAL` to `RADIAL`
 so bundle adjustment has a `k2` parameter to refine.
 """
 
-from .._cameras import _CAMERA_PARAM_NAMES
+from ..camera.cameras import _CAMERA_PARAM_NAMES
 from .._sfmtool import CameraIntrinsics, SfmrReconstruction
 
 

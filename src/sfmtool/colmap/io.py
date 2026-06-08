@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .._cameras import pycolmap_camera_to_intrinsics
+from ..camera.cameras import pycolmap_camera_to_intrinsics
 from ..sift.file import SiftReader, get_sift_path_for_image
 from .._workspace import find_workspace_for_path, load_workspace_config
 

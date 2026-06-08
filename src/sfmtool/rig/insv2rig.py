@@ -244,8 +244,8 @@ def write_insv_camrig(
     """
     import numpy as np
 
-    from ._cameras import _CAMERA_PARAM_NAMES
-    from ._sfmtool import CameraIntrinsics, write_camrig
+    from ..camera.cameras import _CAMERA_PARAM_NAMES
+    from .._sfmtool import CameraIntrinsics, write_camrig
 
     param_names = _CAMERA_PARAM_NAMES[camera_model]
     if len(camera_params) != len(param_names):

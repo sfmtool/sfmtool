@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._pano2rig import (
+from sfmtool.rig.pano2rig import (
     _cubemap_rotations,
     convert_panoramas,
     default_face_size,
@@ -328,7 +328,7 @@ class TestInsv2rigCamrig:
     """`write_insv_camrig` builds the back-to-back fisheye `.camrig`."""
 
     def test_writes_a_valid_fisheye_360_rig(self, tmp_path):
-        from sfmtool._insv2rig import write_insv_camrig
+        from sfmtool.rig.insv2rig import write_insv_camrig
         from sfmtool._sfmtool import read_camrig, verify_camrig
 
         camrig_path = tmp_path / "recording.camrig"
@@ -366,7 +366,7 @@ class TestInsv2rigCamrig:
         np.testing.assert_allclose(data["translations_xyz"][1], [0, 0, -0.0307])
 
     def test_rejects_wrong_param_count(self, tmp_path):
-        from sfmtool._insv2rig import write_insv_camrig
+        from sfmtool.rig.insv2rig import write_insv_camrig
 
         with pytest.raises(ValueError, match="expects 8 values"):
             write_insv_camrig(

@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pycolmap
 
-from .._camera_config import CameraConfigResolver
+from ..camera.config import CameraConfigResolver
 from ..camrig.resolver import resolve_camrig_for_solve
-from .._rig_frames import _build_cross_frame_pairs, _build_same_frame_index_pairs
+from ..rig.frames import _build_cross_frame_pairs, _build_same_frame_index_pairs
 from ..sift.file import image_files_to_sift_files
 from .db_builders import (
     _setup_db_single_camera,
@@ -274,7 +274,7 @@ def _setup_for_sfm_from_matches(
     image_dir = workspace_dir
 
     # Check for rig config in the workspace
-    from .._rig_config import _load_rig_config
+    from ..rig.config import _load_rig_config
 
     rig_config = _load_rig_config(workspace_dir)
 
@@ -283,7 +283,7 @@ def _setup_for_sfm_from_matches(
     if camera_config_resolver is None:
         camera_config_resolver = CameraConfigResolver(workspace_dir)
 
-    from .._camera_setup import _check_camera_model_conflict
+    from ..camera.setup import _check_camera_model_conflict
 
     _check_camera_model_conflict(image_paths, camera_config_resolver, camera_model)
 

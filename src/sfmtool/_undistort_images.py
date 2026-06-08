@@ -25,7 +25,7 @@ from ._sfmtool import SfmrReconstruction, WarpMap
 
 def _print_camera_params(label: str, cam) -> None:
     """Print camera model and parameters in a compact table."""
-    from ._cameras import _CAMERA_PARAM_NAMES
+    from .camera.cameras import _CAMERA_PARAM_NAMES
 
     params = cam.parameters
     canonical_order = _CAMERA_PARAM_NAMES.get(cam.model)
