@@ -178,7 +178,7 @@ def panorama(
     import cv2
     import numpy as np
 
-    from .._panorama import (
+    from ..rig.panorama import (
         render_equirect_panorama,
         resolve_panorama_rig,
         select_source_indices,

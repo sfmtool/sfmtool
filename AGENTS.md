@@ -42,10 +42,13 @@ When finishing a task, run the checks for what you changed:
   - `_commands/` — one module per top-level CLI subcommand
   - `align/` — alignment of multiple reconstructions (pairwise, by-cameras, by-points, multi-way)
   - `analyze/` — reconstruction analysis: summary, per-image metrics, depth, covisibility/frustum graphs
+  - `camera/` — camera intrinsics, EXIF/config-based inference, `camera_config.json` resolution
   - `camrig/` — `.camrig` rig construction, copy, pattern matching, solve resolution
+  - `colmap/` — COLMAP interop: DB setup for the solvers, binary/pycolmap ↔ `.sfmr` conversion, DB export
   - `feature_match/` — descriptor matching, polar/rectified sweep, flow matching, geometric filtering
   - `merge/` — merge aligned reconstructions (point correspondences + pose refinement)
   - `motion/` — camera-motion discontinuity analysis (image sequences + reconstructions)
+  - `rig/` — multi-sensor rig ingestion/rendering: `rig_config.json`, frame grouping, insv2rig/pano2rig, equirect render
   - `sift/` — SIFT feature file I/O and extraction (COLMAP, OpenCV, and
     `sfmtool` Rust backends)
   - `xform/` — reconstruction transforms (align, filter, rotate, scale, translate, bundle-adjust, …)
@@ -138,7 +141,7 @@ backlog and keep them honest as findings get addressed:
 - Python 3.14 and Rust 1.94 are pinned in `pixi.toml`.
 - A workspace can supply per-directory camera intrinsics via
   `camera_config.json` files; resolution is closest-ancestor-wins, capped at
-  the workspace root. See `src/sfmtool/_camera_config.py` and
+  the workspace root. See `src/sfmtool/camera/config.py` and
   `specs/workspace/camera-config.md`. When such a file resolves for any image
   in a `solve` / `match` / `to-colmap-db` invocation, `--camera-model` is
   rejected up front.

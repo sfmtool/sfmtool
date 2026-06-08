@@ -183,8 +183,8 @@ def match(
     absolute_paths = [Path(os.path.normpath(os.path.abspath(p))) for p in filenames]
     workspace_dir = deduce_workspace({p.parent for p in absolute_paths})
 
-    from .._camera_config import CameraConfigResolver
-    from .._camera_setup import _check_camera_model_conflict
+    from ..camera.config import CameraConfigResolver
+    from ..camera.setup import _check_camera_model_conflict
     from ..feature_match._run import _run_matching
 
     camera_config_resolver = CameraConfigResolver(workspace_dir)

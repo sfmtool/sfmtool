@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from sfmtool._camera_config import (
+from sfmtool.camera.config import (
     CameraConfigError,
     CameraConfigResolver,
     find_camera_config_for_directory,
@@ -347,7 +347,7 @@ def test_read_image_size_is_header_only(isolated_test_image: Path):
     # `_read_image_size` reads dimensions from the header alone (via the Rust
     # `image_dimensions` binding) — the seoul_bull_sculpture images are
     # 270x480.
-    from sfmtool._camera_setup import _read_image_size
+    from sfmtool.camera.setup import _read_image_size
 
     assert _read_image_size(isolated_test_image) == (270, 480)
 
@@ -363,7 +363,7 @@ def test_image_dimensions_binding_rejects_non_image(tmp_path: Path):
 
 class TestBuildIntrinsicsFromCameraConfig:
     def test_none_config_calls_infer(self, isolated_test_image: Path):
-        from sfmtool._camera_setup import build_intrinsics_from_camera_config
+        from sfmtool.camera.setup import build_intrinsics_from_camera_config
 
         intrinsics, prior = build_intrinsics_from_camera_config(
             None, isolated_test_image, camera_model_override=None
@@ -380,7 +380,7 @@ class TestBuildIntrinsicsFromCameraConfig:
         }
 
     def test_model_only_overrides_model(self, isolated_test_image: Path):
-        from sfmtool._camera_setup import build_intrinsics_from_camera_config
+        from sfmtool.camera.setup import build_intrinsics_from_camera_config
 
         intrinsics, prior = build_intrinsics_from_camera_config(
             {"model": "OPENCV"}, isolated_test_image, camera_model_override=None
@@ -390,7 +390,7 @@ class TestBuildIntrinsicsFromCameraConfig:
         assert d["model"] == "OPENCV"
 
     def test_distortion_only_overlays(self, isolated_test_image: Path):
-        from sfmtool._camera_setup import build_intrinsics_from_camera_config
+        from sfmtool.camera.setup import build_intrinsics_from_camera_config
 
         block = {
             "model": "OPENCV",
@@ -414,7 +414,7 @@ class TestBuildIntrinsicsFromCameraConfig:
     def test_full_block_at_native_resolution(self, isolated_test_image: Path):
         import cv2
 
-        from sfmtool._camera_setup import build_intrinsics_from_camera_config
+        from sfmtool.camera.setup import build_intrinsics_from_camera_config
 
         img = cv2.imread(
             str(isolated_test_image),
@@ -451,7 +451,7 @@ class TestBuildIntrinsicsFromCameraConfig:
     def test_full_block_uniform_downscale(self, isolated_test_image: Path):
         import cv2
 
-        from sfmtool._camera_setup import build_intrinsics_from_camera_config
+        from sfmtool.camera.setup import build_intrinsics_from_camera_config
 
         img = cv2.imread(
             str(isolated_test_image),
@@ -494,7 +494,7 @@ class TestBuildIntrinsicsFromCameraConfig:
     def test_aspect_mismatch_raises(self, isolated_test_image: Path):
         import cv2
 
-        from sfmtool._camera_setup import build_intrinsics_from_camera_config
+        from sfmtool.camera.setup import build_intrinsics_from_camera_config
 
         img = cv2.imread(
             str(isolated_test_image),
@@ -533,7 +533,7 @@ class TestBuildIntrinsicsFromCameraConfig:
 
 class TestCheckCameraModelConflict:
     def test_no_camera_model_no_conflict(self, tmp_path: Path):
-        from sfmtool._camera_setup import _check_camera_model_conflict
+        from sfmtool.camera.setup import _check_camera_model_conflict
 
         block = _full_opencv_block(100, 80)
         _write_config(
@@ -547,7 +547,7 @@ class TestCheckCameraModelConflict:
         _check_camera_model_conflict([img], resolver, None)
 
     def test_no_camera_config_no_conflict(self, tmp_path: Path):
-        from sfmtool._camera_setup import _check_camera_model_conflict
+        from sfmtool.camera.setup import _check_camera_model_conflict
 
         img = tmp_path / "img.jpg"
         img.touch()
@@ -558,7 +558,7 @@ class TestCheckCameraModelConflict:
     def test_conflict_raises(self, tmp_path: Path):
         import click
 
-        from sfmtool._camera_setup import _check_camera_model_conflict
+        from sfmtool.camera.setup import _check_camera_model_conflict
 
         block = _full_opencv_block(100, 80)
         _write_config(
@@ -572,7 +572,7 @@ class TestCheckCameraModelConflict:
             _check_camera_model_conflict([img], resolver, "OPENCV")
 
     def test_no_resolver_no_conflict(self, tmp_path: Path):
-        from sfmtool._camera_setup import _check_camera_model_conflict
+        from sfmtool.camera.setup import _check_camera_model_conflict
 
         img = tmp_path / "img.jpg"
         img.touch()

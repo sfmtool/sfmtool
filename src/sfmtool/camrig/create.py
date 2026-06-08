@@ -17,7 +17,7 @@ then narrow the pattern and build separate `.camrig` files per subset.
 from collections import Counter
 from pathlib import Path
 
-from .._cameras import _CAMERA_PARAM_NAMES
+from ..camera.cameras import _CAMERA_PARAM_NAMES
 from .pattern import match_pattern
 
 # Image file extensions a pattern is allowed to match.
@@ -147,7 +147,7 @@ def _check_resolution_consistency(
 
 def _read_image_sizes(abs_paths: list[Path]) -> list[tuple[int, int]]:
     """Return `(width, height)` for each image file."""
-    from .._camera_setup import _read_image_size
+    from ..camera.setup import _read_image_size
 
     return [_read_image_size(p) for p in abs_paths]
 
@@ -192,8 +192,8 @@ def _camera_from_inference(
     principal_point_y: float | None,
 ) -> dict:
     """Build a camera dict from pycolmap EXIF inference, applying overrides."""
-    from .._camera_setup import _infer_camera
-    from .._cameras import pycolmap_camera_to_intrinsics
+    from ..camera.setup import _infer_camera
+    from ..camera.cameras import pycolmap_camera_to_intrinsics
 
     inferred = [
         pycolmap_camera_to_intrinsics(_infer_camera(p, camera_model)) for p in abs_paths

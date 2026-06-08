@@ -12,7 +12,7 @@ import numpy as np
 import pycolmap
 
 from ._geometric_filter import GeometricFilterConfig
-from .._cameras import get_intrinsic_matrix
+from ..camera.cameras import get_intrinsic_matrix
 from .._sfmtool import (
     match_image_pair_py as _rust_match_image_pair,
     match_image_pairs_batch_py as _rust_match_image_pairs_batch,

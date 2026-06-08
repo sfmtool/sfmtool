@@ -15,7 +15,7 @@ from pathlib import Path
 import click
 import numpy as np
 
-from .._cameras import _CAMERA_PARAM_NAMES
+from ..camera.cameras import _CAMERA_PARAM_NAMES
 
 
 def _camera_dict_to_pycolmap(cam_dict):

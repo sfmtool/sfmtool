@@ -10,16 +10,16 @@ from pathlib import Path
 
 import pycolmap
 
-from .._camera_config import CameraConfigResolver
-from .._camera_setup import (
+from ..camera.config import CameraConfigResolver
+from ..camera.setup import (
     _infer_camera,
     _wrap_descriptors,
     build_intrinsics_from_camera_config,
     intrinsics_for_image,
 )
-from .._cameras import colmap_camera_from_intrinsics
+from ..camera.cameras import colmap_camera_from_intrinsics
 from ..camrig.resolver import CamrigRig
-from .._rig_config import (
+from ..rig.config import (
     _infer_frame_key,
     _match_image_to_sensor,
     _sensor_from_rig_pose,

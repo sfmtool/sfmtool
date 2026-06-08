@@ -9,7 +9,7 @@ from pathlib import Path
 import pycolmap
 from deadline.job_attachments.api import summarize_path_list
 
-from ._camera_config import CameraConfigResolver
+from .camera.config import CameraConfigResolver
 from .colmap.db_setup import _setup_for_sfm, _setup_for_sfm_from_matches
 from .colmap.io import (
     build_metadata,
@@ -17,7 +17,7 @@ from .colmap.io import (
     pycolmap_to_rust_sfmr,
 )
 from ._incremental_sfm import _resolve_output_path
-from ._rig_config import _load_rig_config
+from .rig.config import _load_rig_config
 from ._workspace import load_workspace_config
 
 

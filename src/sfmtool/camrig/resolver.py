@@ -82,7 +82,7 @@ def _check_image_resolution(
     image size). A mixed-resolution set would otherwise be silently mis-scaled
     off the first image alone.
     """
-    from .._camera_setup import _read_image_size
+    from ..camera.setup import _read_image_size
 
     where = f"{camrig_file}{label}"
     by_size: dict[tuple[int, int], list] = {}

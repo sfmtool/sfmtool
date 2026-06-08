@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import pycolmap
 
-from .._cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
+from ..camera.cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
 from .._rectification import compute_stereo_rectification
 from ..sift.file import SiftReader, get_sift_path_for_image
 from .._sfmtool import RotQuaternion, epipolar_curves

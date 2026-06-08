@@ -19,7 +19,7 @@ import click
 import numpy as np
 import pycolmap
 
-from ._cameras import colmap_camera_from_intrinsics
+from .camera.cameras import colmap_camera_from_intrinsics
 from ._image_pair_graph import (
     build_covisibility_pairs,
     build_frustum_intersection_pairs,

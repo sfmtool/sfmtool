@@ -215,7 +215,7 @@ def _print_reconstruction_summary(recon: SfmrReconstruction, label: str) -> None
 
 def _compare_cameras(recon1: SfmrReconstruction, recon2: SfmrReconstruction) -> None:
     """Compare camera intrinsics between two reconstructions."""
-    from ._cameras import _CAMERA_PARAM_NAMES
+    from .camera.cameras import _CAMERA_PARAM_NAMES
 
     cameras1 = recon1.cameras
     cameras2 = recon2.cameras

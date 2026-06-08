@@ -10,14 +10,14 @@ from pathlib import Path
 import pycolmap
 from deadline.job_attachments.api import summarize_path_list
 
-from ._camera_config import CameraConfigResolver
+from .camera.config import CameraConfigResolver
 from .colmap.db_setup import _setup_for_sfm, _setup_for_sfm_from_matches
 from .colmap.io import (
     build_metadata,
     colmap_binary_to_rust_sfmr,
     pycolmap_to_rust_sfmr,
 )
-from ._rig_config import _load_rig_config
+from .rig.config import _load_rig_config
 from ._sfm_filenames import get_next_sfm_filename as _get_next_sfm_filename
 from ._workspace import load_workspace_config
 

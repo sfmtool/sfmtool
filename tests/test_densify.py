@@ -8,7 +8,7 @@ import pytest
 import pycolmap
 from click.testing import CliRunner
 
-from sfmtool._cameras import get_intrinsic_matrix
+from sfmtool.camera.cameras import get_intrinsic_matrix
 from sfmtool._densify import prune_image_pairs
 from sfmtool.cli import main
 from sfmtool.feature_match import GeometricFilterConfig, match_image_pair

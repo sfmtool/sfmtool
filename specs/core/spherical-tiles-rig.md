@@ -5,7 +5,7 @@
 `sfmtool._sfmtool.SphericalTileRig`. The atlas → destination resampler is
 the Rust method `SphericalTileRig::resample_atlas` (also exposed as
 `SphericalTileRig.resample_atlas` in Python). A thin Python convenience
-wrapper at `src/sfmtool/_spherical_tile_rig.py::resample_atlas_to_equirect`
+wrapper at `src/sfmtool/rig/spherical_tile.py::resample_atlas_to_equirect`
 builds the equirectangular destination camera and forwards to it.
 
 ## Motivation
