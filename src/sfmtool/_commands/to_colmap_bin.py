@@ -63,7 +63,7 @@ def to_colmap_bin(
         sfm to-colmap-bin reconstruction.sfmr colmap_output/ -r 10-50 --filter-points
         colmap gui --import_path colmap_output/
     """
-    from .._colmap_io import save_colmap_binary
+    from ..colmap.io import save_colmap_binary
     from .._sfmtool import SfmrReconstruction
 
     input_path = Path(input_sfmr)

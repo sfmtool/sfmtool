@@ -7,9 +7,9 @@ from pathlib import Path
 
 import numpy as np
 
-from ._cameras import pycolmap_camera_to_intrinsics
-from .sift.file import SiftReader, get_sift_path_for_image
-from ._workspace import find_workspace_for_path, load_workspace_config
+from .._cameras import pycolmap_camera_to_intrinsics
+from ..sift.file import SiftReader, get_sift_path_for_image
+from .._workspace import find_workspace_for_path, load_workspace_config
 
 
 def _get_feature_prefix_dir(workspace_config: dict) -> str:
@@ -277,7 +277,7 @@ def colmap_binary_to_rust_sfmr(
     When ``classify_infinity`` is true (the default), points whose depth the
     solve could not pin down are reclassified as points at infinity.
     """
-    from ._sfmtool import SfmrReconstruction, read_colmap_binary
+    from .._sfmtool import SfmrReconstruction, read_colmap_binary
 
     colmap_dir = Path(colmap_dir)
     image_dir = Path(image_dir).absolute()
@@ -334,7 +334,7 @@ def pycolmap_to_rust_sfmr(
     When ``classify_infinity`` is true (the default), points whose depth the
     solve could not pin down are reclassified as points at infinity.
     """
-    from ._sfmtool import SfmrReconstruction
+    from .._sfmtool import SfmrReconstruction
 
     image_dir = Path(image_dir).absolute()
 
@@ -588,7 +588,7 @@ def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None)
         output_dir: Directory to write COLMAP binary files
         max_features: Maximum features to export per image (None = all features)
     """
-    from ._sfmtool import write_colmap_binary
+    from .._sfmtool import write_colmap_binary
 
     recon = materialize_infinity_for_export(recon, "COLMAP binary export")
 

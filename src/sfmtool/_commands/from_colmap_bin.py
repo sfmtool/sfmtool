@@ -74,7 +74,7 @@ def from_colmap_bin(
             -o reconstruction.sfmr \\
             --tool-name glomap
     """
-    from .._colmap_io import build_metadata, colmap_binary_to_rust_sfmr
+    from ..colmap.io import build_metadata, colmap_binary_to_rust_sfmr
     from .._workspace import find_workspace_for_path, load_workspace_config
 
     colmap_reconstruction_path = Path(colmap_reconstruction_path)

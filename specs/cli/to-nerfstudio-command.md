@@ -199,7 +199,7 @@ output is not replicated.
 ### 6. COLMAP Export (`--include-colmap`)
 
 When set, the command writes `sparse/{cameras,images,points3D,rigs,frames}.bin`
-into the output directory using the existing `_colmap_io.save_colmap_binary`
+into the output directory using the existing `colmap.io.save_colmap_binary`
 function (the same code path as `sfm to-colmap-bin`). Off by default —
 nerfstudio doesn't read these files for training, and skipping them keeps
 the output smaller.
@@ -210,7 +210,7 @@ the output smaller.
 |------|----------------|
 | `src/sfmtool/_commands/to_nerfstudio.py` | Click CLI shim (option parsing, .sfmr load, error wrapping) |
 | `src/sfmtool/_to_nerfstudio.py` | Coordinate conversion, `transforms.json` builder, PLY writer, image placement, pyramid generation, top-level `export_to_nerfstudio` orchestrator |
-| `src/sfmtool/_colmap_io.py` (existing) | `save_colmap_binary` is reused for `--include-colmap` |
+| `src/sfmtool/colmap/io.py` (existing) | `save_colmap_binary` is reused for `--include-colmap` |
 | `tests/test_to_nerfstudio.py` | Unit tests for coordinate conversion, PLY writer, filename strategy, plus end-to-end CLI tests (uses `pinhole_sfmr_17_images` fixture: undistort + to-nerfstudio over the seoul_bull dataset) |
 
 ## Out of Scope

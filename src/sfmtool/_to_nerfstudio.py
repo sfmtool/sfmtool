@@ -259,7 +259,7 @@ def export_to_nerfstudio(
     )
 
     if include_colmap:
-        from ._colmap_io import save_colmap_binary
+        from .colmap.io import save_colmap_binary
 
         sparse_dir = output_dir / "sparse"
         sparse_dir.mkdir(parents=True, exist_ok=True)

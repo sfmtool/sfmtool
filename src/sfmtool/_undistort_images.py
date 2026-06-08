@@ -215,7 +215,7 @@ def undistort_reconstruction_images(
     Returns:
         Tuple of (number_of_images_processed, output_directory_path, sfmr_path_or_None)
     """
-    from ._colmap_io import (
+    from .colmap.io import (
         _build_sfmr_data_dict,
         finite_positions_xyzw,
         materialize_infinity_for_export,

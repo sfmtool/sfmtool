@@ -93,5 +93,5 @@ images and remapping frame indices).
 The CLI shim (`src/sfmtool/_commands/to_colmap_bin.py`) parses `--range`
 with `RangeExpr`, resolves file numbers to image indices via
 `number_from_filename`, calls `subset_by_image_indices`, and hands the
-result to `save_colmap_binary`. No changes to `_colmap_io.save_colmap_binary`
+result to `save_colmap_binary`. No changes to `colmap.io.save_colmap_binary`
 are required — it operates on whatever reconstruction it is handed.
