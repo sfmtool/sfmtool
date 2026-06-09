@@ -1,0 +1,425 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Order-preserving argument parsing for the ``sfm xform`` pipeline.
+
+``xform`` is an ordered pipeline of repeatable, interleaved heterogeneous
+options (``--rotate … --scale … --rotate …``). Click's ``kwargs`` collapses
+each option into a per-option tuple that loses the cross-option ordering the
+pipeline depends on, so the command walks ``sys.argv`` by hand here to build
+the ordered list of transforms. The Click ``@option`` decorators on the
+command itself still provide ``--help``, completion, and unknown-option
+rejection; this module is the complementary ordered parser.
+"""
+
+import re
+from pathlib import Path
+
+import click
+import numpy as np
+
+from .._sfmtool import RangeExpr
+from . import (
+    AlignToInputTransform,
+    AlignToTransform,
+    BundleAdjustTransform,
+    ClassifyPointsAtInfinityTransform,
+    ExcludeGlobFilter,
+    ExcludeRangeFilter,
+    FilterByReprojectionErrorTransform,
+    FindPointsAtInfinityTransform,
+    IncludeGlobFilter,
+    IncludeRangeFilter,
+    RemoveIsolatedPointsFilter,
+    RemoveLargeFeaturesFilter,
+    RemoveNarrowTracksFilter,
+    RemoveShortTracksFilter,
+    RotateTransform,
+    ScaleByMeasurementsTransform,
+    ScaleTransform,
+    SelectByDistributionFilter,
+    SwitchCameraModelTransform,
+    TranslateTransform,
+)
+
+
+def parse_angle(angle_str: str) -> float:
+    """Parse angle string with unit suffix.
+
+    Args:
+        angle_str: Angle string like "90deg" or "1.57rad"
+
+    Returns:
+        Angle in radians
+    """
+    match = re.match(r"^([+-]?[\d.]+)(deg|degrees|rad|radians)$", angle_str.strip())
+    if not match:
+        raise ValueError(
+            f"Invalid angle format: '{angle_str}'. Expected format: <number><unit> "
+            f"where unit is 'deg', 'degrees', 'rad', or 'radians'"
+        )
+
+    value_str, unit = match.groups()
+    value = float(value_str)
+
+    if unit in ("deg", "degrees"):
+        return np.radians(value)
+    elif unit in ("rad", "radians"):
+        return value
+    else:
+        raise ValueError(f"Unrecognized angle unit: {unit}")
+
+
+def auto_output_path(input_path: Path) -> Path:
+    """Generate an output path of the form {stem}-transformed[-N].sfmr next to the input.
+
+    Picks ``{stem}-transformed.sfmr`` if available, otherwise the smallest
+    counter starting at 2: ``{stem}-transformed-2.sfmr``, ``-3.sfmr``, ...
+    """
+    base = input_path.with_name(f"{input_path.stem}-transformed.sfmr")
+    if not base.exists():
+        return base
+    counter = 2
+    while True:
+        candidate = input_path.with_name(
+            f"{input_path.stem}-transformed-{counter}.sfmr"
+        )
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def parse_transform_args(args: list[str], max_features: int | None = None) -> list:
+    """Parse command-line arguments to extract transforms in order.
+
+    ``max_features`` is a global value option (not an ordered transform); it is
+    obtained reliably from the Click ``kwargs`` and shared by every
+    ``--find-points-at-infinity`` operation in the chain.
+    """
+    transforms = []
+    i = 0
+
+    while i < len(args):
+        arg = args[i]
+
+        if arg == "--rotate":
+            if i + 1 >= len(args):
+                raise click.UsageError("--rotate requires an argument")
+            i += 1
+            param = args[i]
+
+            parts = param.split(",")
+            if len(parts) != 4:
+                raise click.UsageError(
+                    f"--rotate expects 4 comma-separated values (axisX,axisY,axisZ,angle), got: {param}"
+                )
+
+            try:
+                axis_x = float(parts[0])
+                axis_y = float(parts[1])
+                axis_z = float(parts[2])
+                angle_rad = parse_angle(parts[3])
+            except ValueError as e:
+                raise click.UsageError(f"Invalid --rotate parameter '{param}': {e}")
+
+            axis = np.array([axis_x, axis_y, axis_z])
+            transforms.append(RotateTransform(axis, angle_rad))
+
+        elif arg == "--translate":
+            if i + 1 >= len(args):
+                raise click.UsageError("--translate requires an argument")
+            i += 1
+            param = args[i]
+
+            parts = param.split(",")
+            if len(parts) != 3:
+                raise click.UsageError(
+                    f"--translate expects 3 comma-separated values (X,Y,Z), got: {param}"
+                )
+
+            try:
+                x = float(parts[0])
+                y = float(parts[1])
+                z = float(parts[2])
+            except ValueError as e:
+                raise click.UsageError(f"Invalid --translate parameter '{param}': {e}")
+
+            translation = np.array([x, y, z])
+            transforms.append(TranslateTransform(translation))
+
+        elif arg == "--scale":
+            if i + 1 >= len(args):
+                raise click.UsageError("--scale requires an argument")
+            i += 1
+            param = args[i]
+
+            try:
+                scale_factor = float(param)
+            except ValueError as e:
+                raise click.UsageError(f"Invalid --scale parameter '{param}': {e}")
+
+            transforms.append(ScaleTransform(scale_factor))
+
+        elif arg == "--remove-short-tracks":
+            if i + 1 >= len(args):
+                raise click.UsageError("--remove-short-tracks requires an argument")
+            i += 1
+            param = args[i]
+
+            try:
+                max_size = int(param)
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --remove-short-tracks parameter '{param}': {e}"
+                )
+
+            transforms.append(RemoveShortTracksFilter(max_size))
+
+        elif arg == "--bundle-adjust":
+            transforms.append(BundleAdjustTransform())
+
+        elif arg == "--remove-narrow-tracks":
+            if i + 1 >= len(args):
+                raise click.UsageError("--remove-narrow-tracks requires an argument")
+            i += 1
+            param = args[i]
+
+            try:
+                min_angle_rad = parse_angle(param)
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --remove-narrow-tracks parameter '{param}': {e}"
+                )
+
+            transforms.append(RemoveNarrowTracksFilter(min_angle_rad))
+
+        elif arg == "--remove-isolated":
+            if i + 1 >= len(args):
+                raise click.UsageError("--remove-isolated requires an argument")
+            i += 1
+            param = args[i]
+
+            parts = param.split(",")
+            if len(parts) != 2:
+                raise click.UsageError(
+                    f"--remove-isolated expects 2 comma-separated values (factor,value_spec), got: {param}"
+                )
+
+            try:
+                factor = float(parts[0])
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid factor in --remove-isolated '{param}': {e}"
+                )
+
+            value_spec = parts[1]
+            transforms.append(RemoveIsolatedPointsFilter(factor, value_spec))
+
+        elif arg == "--align-to":
+            if i + 1 >= len(args):
+                raise click.UsageError("--align-to requires an argument")
+            i += 1
+            param = args[i]
+
+            reference_path = Path(param)
+            transforms.append(AlignToTransform(reference_path))
+
+        elif arg == "--align-to-input":
+            transforms.append(AlignToInputTransform())
+
+        elif arg == "--remove-large-features":
+            if i + 1 >= len(args):
+                raise click.UsageError("--remove-large-features requires an argument")
+            i += 1
+            param = args[i]
+
+            try:
+                max_size = float(param)
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --remove-large-features parameter '{param}': {e}"
+                )
+
+            transforms.append(RemoveLargeFeaturesFilter(max_size))
+
+        elif arg == "--filter-by-reprojection-error":
+            if i + 1 >= len(args):
+                raise click.UsageError(
+                    "--filter-by-reprojection-error requires an argument"
+                )
+            i += 1
+            param = args[i]
+
+            try:
+                threshold = float(param)
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --filter-by-reprojection-error parameter '{param}': {e}"
+                )
+
+            transforms.append(FilterByReprojectionErrorTransform(threshold))
+
+        elif arg == "--include-range":
+            if i + 1 >= len(args):
+                raise click.UsageError("--include-range requires an argument")
+            i += 1
+            param = args[i]
+
+            try:
+                range_expr = RangeExpr(param)
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --include-range parameter '{param}': {e}"
+                )
+
+            transforms.append(IncludeRangeFilter(range_expr))
+
+        elif arg == "--exclude-range":
+            if i + 1 >= len(args):
+                raise click.UsageError("--exclude-range requires an argument")
+            i += 1
+            param = args[i]
+
+            try:
+                range_expr = RangeExpr(param)
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --exclude-range parameter '{param}': {e}"
+                )
+
+            transforms.append(ExcludeRangeFilter(range_expr))
+
+        elif arg == "--scale-by-measurements":
+            if i + 1 >= len(args):
+                raise click.UsageError("--scale-by-measurements requires an argument")
+            i += 1
+            param = args[i]
+
+            measurements_path = Path(param)
+            if not measurements_path.exists():
+                raise click.UsageError(
+                    f"Measurements file not found: {measurements_path}"
+                )
+
+            transforms.append(ScaleByMeasurementsTransform(measurements_path))
+
+        elif arg == "--include-glob":
+            if i + 1 >= len(args):
+                raise click.UsageError("--include-glob requires an argument")
+            i += 1
+            transforms.append(IncludeGlobFilter(args[i]))
+
+        elif arg == "--exclude-glob":
+            if i + 1 >= len(args):
+                raise click.UsageError("--exclude-glob requires an argument")
+            i += 1
+            transforms.append(ExcludeGlobFilter(args[i]))
+
+        elif arg == "--include-by-distribution":
+            if i + 1 >= len(args):
+                raise click.UsageError("--include-by-distribution requires an argument")
+            i += 1
+            param = args[i]
+
+            parts = param.split(",")
+            try:
+                count = int(parts[0])
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --include-by-distribution parameter '{param}': {e}"
+                )
+            if count < 2:
+                raise click.UsageError(
+                    f"--include-by-distribution COUNT must be >= 2, got {count}"
+                )
+            verbose = False
+            for modifier in parts[1:]:
+                if modifier.strip() == "verbose":
+                    verbose = True
+                else:
+                    raise click.UsageError(
+                        f"Unknown --include-by-distribution modifier '{modifier}' "
+                        "(expected 'verbose')"
+                    )
+
+            transforms.append(SelectByDistributionFilter(count, verbose=verbose))
+
+        elif arg == "--camera-model":
+            if i + 1 >= len(args):
+                raise click.UsageError("--camera-model requires an argument")
+            i += 1
+            param = args[i]
+
+            try:
+                transforms.append(SwitchCameraModelTransform(param))
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --camera-model parameter '{param}': {e}"
+                )
+
+        elif arg == "--find-points-at-infinity":
+            if i + 1 >= len(args):
+                raise click.UsageError("--find-points-at-infinity requires an argument")
+            i += 1
+            param = args[i]
+
+            parts = param.split(",")
+            if not 1 <= len(parts) <= 4:
+                raise click.UsageError(
+                    "--find-points-at-infinity expects "
+                    "eps_deg[,desc_thresh[,min_views[,noise_floor_px]]], "
+                    f"got: {param}"
+                )
+
+            try:
+                eps_deg = float(parts[0])
+                desc_thresh = float(parts[1]) if len(parts) > 1 else 200.0
+                min_views = int(parts[2]) if len(parts) > 2 else 2
+                noise_floor_px = float(parts[3]) if len(parts) > 3 else 1.0
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --find-points-at-infinity parameter '{param}': {e}"
+                )
+
+            try:
+                transforms.append(
+                    FindPointsAtInfinityTransform(
+                        eps_deg,
+                        desc_thresh,
+                        min_views,
+                        max_features=max_features,
+                        noise_floor_px=noise_floor_px,
+                    )
+                )
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --find-points-at-infinity parameter '{param}': {e}"
+                )
+
+        elif arg == "--classify-points-at-infinity":
+            if i + 1 >= len(args):
+                raise click.UsageError(
+                    "--classify-points-at-infinity requires an argument"
+                )
+            i += 1
+            param = args[i]
+
+            try:
+                noise_floor_px = float(param)
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --classify-points-at-infinity parameter '{param}': {e}"
+                )
+
+            transforms.append(ClassifyPointsAtInfinityTransform(noise_floor_px))
+
+        elif arg == "--max-features":
+            # A global value option, not an ordered transform: its value is
+            # obtained reliably via Click kwargs, so just step over its token
+            # here to keep it out of the ordered transform list.
+            if i + 1 < len(args):
+                i += 1
+
+        i += 1
+
+    return transforms

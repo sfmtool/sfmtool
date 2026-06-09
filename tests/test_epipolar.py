@@ -405,7 +405,7 @@ class TestResolveImageName:
 
 class TestGetImageHintMessage:
     def test_basic_message(self):
-        from sfmtool._sfm_filenames import get_image_hint_message
+        from sfmtool._sfmr_naming import get_image_hint_message
 
         class FakeRecon:
             image_names = ["test/img_001.jpg", "test/img_002.jpg"]
@@ -414,7 +414,7 @@ class TestGetImageHintMessage:
         assert "Image in reconstruction" in msg
 
     def test_missing_image_message(self):
-        from sfmtool._sfm_filenames import get_image_hint_message
+        from sfmtool._sfmr_naming import get_image_hint_message
 
         class FakeRecon:
             image_names = ["test/img_001.jpg", "test/img_002.jpg"]
@@ -423,7 +423,7 @@ class TestGetImageHintMessage:
         assert "not found" in msg
 
     def test_similar_names_suggestion(self):
-        from sfmtool._sfm_filenames import get_image_hint_message
+        from sfmtool._sfmr_naming import get_image_hint_message
 
         class FakeRecon:
             image_names = ["test/img_001.jpg", "test/img_002.jpg"]
