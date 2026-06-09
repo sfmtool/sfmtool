@@ -23,7 +23,7 @@ from .constants import (
     POSE_TRANS_FACTOR,
     STEP_RATIO_THRESHOLD,
 )
-from .recon_discontinuity import _rotation_angle_deg
+from .recon_discontinuity import _flag_frame, _rotation_angle_deg
 
 
 SCHEMA_VERSION = 1
@@ -126,64 +126,58 @@ def reconstruction_results_to_json(all_sequence_results: list[dict]) -> dict:
 
         extrap_by_idx = {er["seq_idx"]: er for er in extrap_results}
 
+        # `extrap_results` does not carry per-frame flags — they are derived
+        # from the thresholds.  Recompute here via the shared `_flag_frame`
+        # (the same helper the console table uses) so the JSON faithfully
+        # mirrors what `analyze_reconstruction` printed.  Flags are computed
+        # from the *raw* signal values — `_f()` is only applied to the
+        # serialized fields, since it maps +inf (a total covisibility break,
+        # which must still fire "Cov") to None.
+        trans_threshold = s["trans_threshold"]
+        rot_threshold = s["rot_threshold"]
+
         frames = []
         for i in range(frame_count):
             er = extrap_by_idx.get(i, {})
             landing = i - 1  # edge (i-1, i)
+            lt = er.get("left_trans_err")
+            lr = er.get("left_rot_err")
+            rt = er.get("right_trans_err")
+            rr = er.get("right_rot_err")
+            sr = step_ratios[landing] if landing >= 0 else None
+            cv = overlap_drops[landing] if landing >= 0 else None
+            oz = obs_z_scores[i] if i < len(obs_z_scores) else None
             frames.append(
                 {
                     "seq_index": i,
                     "frame_number": seq_frame_numbers[i],
                     "image_name": seq_image_names[i],
-                    "left_trans_err": _f(er.get("left_trans_err")),
-                    "left_rot_err": _f(er.get("left_rot_err")),
-                    "right_trans_err": _f(er.get("right_trans_err")),
-                    "right_rot_err": _f(er.get("right_rot_err")),
+                    "left_trans_err": _f(lt),
+                    "left_rot_err": _f(lr),
+                    "right_trans_err": _f(rt),
+                    "right_rot_err": _f(rr),
                     "edge_translation": (
                         _f(successive_trans[landing]) if landing >= 0 else None
                     ),
                     "edge_rotation_deg": (
                         _f(successive_rots[landing]) if landing >= 0 else None
                     ),
-                    "step_ratio": (_f(step_ratios[landing]) if landing >= 0 else None),
-                    "overlap_drop": (
-                        _f(overlap_drops[landing]) if landing >= 0 else None
+                    "step_ratio": _f(sr),
+                    "overlap_drop": _f(cv),
+                    "obs_z": _f(oz),
+                    "flags": _flag_frame(
+                        left_trans_err=lt,
+                        left_rot_err=lr,
+                        right_trans_err=rt,
+                        right_rot_err=rr,
+                        step_ratio=sr,
+                        overlap_drop=cv,
+                        obs_z=oz,
+                        trans_threshold=trans_threshold,
+                        rot_threshold=rot_threshold,
                     ),
-                    "obs_z": _f(obs_z_scores[i]) if i < len(obs_z_scores) else None,
-                    "flags": list(er.get("flags", [])) if er else [],
                 }
             )
-
-        # The per-frame `flags` list above is not populated by extrap_results
-        # itself — flags are computed inline in `analyze_reconstruction`'s
-        # print loop. Recompute here so the JSON faithfully mirrors what was
-        # printed.
-        trans_threshold = s["trans_threshold"]
-        rot_threshold = s["rot_threshold"]
-        for i, frame in enumerate(frames):
-            flags: list[str] = []
-            lt = frame["left_trans_err"]
-            lr = frame["left_rot_err"]
-            rt = frame["right_trans_err"]
-            rr = frame["right_rot_err"]
-            sr = frame["step_ratio"]
-            cv = frame["overlap_drop"]
-            oz = frame["obs_z"]
-            if lt is not None and lt > trans_threshold:
-                flags.append("L.t")
-            if lr is not None and lr > rot_threshold:
-                flags.append("L.r")
-            if rt is not None and rt > trans_threshold:
-                flags.append("R.t")
-            if rr is not None and rr > rot_threshold:
-                flags.append("R.r")
-            if sr is not None and sr > STEP_RATIO_THRESHOLD and i > 0:
-                flags.append("Step")
-            if cv is not None and cv > OVERLAP_DROP_THRESHOLD and i > 0:
-                flags.append("Cov")
-            if oz is not None and oz < -OBS_Z_THRESHOLD:
-                flags.append("Obs")
-            frame["flags"] = flags
 
         discontinuities: list[dict] = []
         for (a, b), evidence in sorted(core_edges.items()):
