@@ -48,6 +48,7 @@ pub use py_se3_transform::PySe3Transform;
 
 mod py_sfmr_reconstruction;
 pub use py_sfmr_reconstruction::PySfmrReconstruction;
+mod recon_clone;
 
 mod py_range_expr;
 pub use py_range_expr::PyRangeExpr;
