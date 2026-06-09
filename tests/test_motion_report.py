@@ -170,6 +170,81 @@ def test_recon_json_has_no_nan_or_infinity(
     assert "Infinity" not in text
 
 
+def test_recon_json_flags_cov_on_infinite_overlap_drop():
+    """An infinite overlap_drop (total covisibility break: no tracks survive
+    the edge) must fire the "Cov" flag in the JSON `flags` array, even though
+    the serialized `overlap_drop` field is null (inf is not JSON-representable).
+
+    Regression test: the serializer previously recomputed per-frame flags from
+    the inf/NaN-sanitized fields, where +inf maps to None, so it silently
+    dropped "Cov" while the console table (raw values) flagged it. Both paths
+    now share `_flag_frame` on raw values, and the spec requires an infinite
+    drop to always flag (specs/cli/motion-command.md, "Covisibility drop").
+
+    Built from a synthetic sequence-result dict because a real reconstruction
+    needs 3*OVERLAP_WINDOW (48) frames before overlap-drop is computed at all,
+    which the checked-in datasets don't reach.
+    """
+    from sfmtool._sfmtool import RotQuaternion
+    from sfmtool.motion.report import reconstruction_results_to_json
+
+    identity = RotQuaternion(1.0, 0.0, 0.0, 0.0)
+    seq = {
+        "sequence": "seq_%03d.jpg",
+        "sequence_name": "seq",
+        "frame_count": 3,
+        "extrap_results": [
+            {
+                "seq_idx": i,
+                "frame_number": i + 1,
+                "left_trans_err": None,
+                "left_rot_err": None,
+                "right_trans_err": None,
+                "right_rot_err": None,
+            }
+            for i in range(3)
+        ],
+        "flagged_frames": [],
+        "flagged_edges": {},
+        "core_edges": {},
+        "pair_counts": {},
+        "seq_image_names": ["seq_001.jpg", "seq_002.jpg", "seq_003.jpg"],
+        "seq_image_indexes": [0, 1, 2],
+        "seq_frame_numbers": [1, 2, 3],
+        "seq_centers": [
+            np.array([0.0, 0.0, 0.0]),
+            np.array([1.0, 0.0, 0.0]),
+            np.array([2.0, 0.0, 0.0]),
+        ],
+        "seq_quats": [identity, identity, identity],
+        "median_trans": 1.0,
+        "median_rot": 0.0,
+        # Per-edge arrays (len frame_count - 1). The second edge — the landing
+        # edge for frame index 2 — is a total covisibility break (+inf).
+        "step_ratios": [None, None],
+        "overlap_drops": [None, float("inf")],
+        # Per-frame array (len frame_count).
+        "obs_z_scores": [None, None, None],
+        "trans_threshold": 3.0,
+        "rot_threshold": 15.0,
+        "core_edge_reproj_errors": {},
+    }
+
+    report = reconstruction_results_to_json([seq])
+    frames = report["sequences"][0]["frames"]
+
+    # Frame index 2's landing edge (1, 2) carries the infinite drop: the
+    # serialized field is null, but the flag must still fire.
+    assert frames[2]["overlap_drop"] is None
+    assert frames[2]["flags"] == ["Cov"]
+    # Frame 0 has no landing edge; frame 1's landing-edge drop is None.
+    assert frames[0]["flags"] == []
+    assert frames[1]["flags"] == []
+
+    # No inf must leak into the serialized report.
+    json.dumps(report, allow_nan=False)
+
+
 def test_segments_helper_handles_edge_cases():
     """Unit test for `_segments_from_core_edges`: covers the no-edge case,
     edges at the boundaries (yielding singleton segments), and adjacent

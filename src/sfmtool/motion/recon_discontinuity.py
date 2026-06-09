@@ -417,6 +417,151 @@ def _compute_obs_z_scores(
     return z_scores
 
 
+def _flag_frame(
+    *,
+    left_trans_err: float | None,
+    left_rot_err: float | None,
+    right_trans_err: float | None,
+    right_rot_err: float | None,
+    step_ratio: float | None,
+    overlap_drop: float | None,
+    obs_z: float | None,
+    trans_threshold: float,
+    rot_threshold: float,
+) -> list[str]:
+    """Determine discontinuity flags for a single frame.
+
+    The single source of truth for per-frame thresholding, shared by the
+    console table in `analyze_reconstruction` and the JSON serializer in
+    `report.py` so the two cannot silently diverge.
+
+    `step_ratio` and `overlap_drop` are the values of the *landing* edge
+    `(i-1, i)`; both callers pass `None` for the first frame (no landing
+    edge), so the "Step"/"Cov" flags never fire on frame 0.
+    """
+    flags: list[str] = []
+    if left_trans_err is not None and left_trans_err > trans_threshold:
+        flags.append("L.t")
+    if left_rot_err is not None and left_rot_err > rot_threshold:
+        flags.append("L.r")
+    if right_trans_err is not None and right_trans_err > trans_threshold:
+        flags.append("R.t")
+    if right_rot_err is not None and right_rot_err > rot_threshold:
+        flags.append("R.r")
+    if step_ratio is not None and step_ratio > STEP_RATIO_THRESHOLD:
+        flags.append("Step")
+    if overlap_drop is not None and overlap_drop > OVERLAP_DROP_THRESHOLD:
+        flags.append("Cov")
+    if obs_z is not None and obs_z < -OBS_Z_THRESHOLD:
+        flags.append("Obs")
+    return flags
+
+
+def _aggregate_flagged_edges(
+    flagged_frames: list[dict], n: int
+) -> dict[tuple[int, int], list[str]]:
+    """Aggregate per-frame flags into per-edge discontinuity evidence.
+
+    - L flags on frame i implicate edge (i-1, i).
+    - R flags on frame i implicate edge (i, i+1).
+    - Step and Cov flags are edge-level — they sit on the landing frame i and
+      implicate edge (i-1, i).
+    - Obs flags are per-frame context only: attached to any adjacent edge that
+      is already flagged by another signal, but they never flag an edge alone
+      (a single dim frame is not a discontinuity).
+
+    Returns a dict mapping edge `(a, b)` → list of evidence strings.
+    """
+    flagged_edges: dict[tuple[int, int], list[str]] = {}
+    for f in flagged_frames:
+        idx = f["seq_idx"]
+        for flag in f["flags"]:
+            if flag == "Obs":
+                continue  # attached below as endpoint context
+            if flag.startswith("L") and idx > 0:
+                edge = (idx - 1, idx)
+            elif flag.startswith("R") and idx < n - 1:
+                edge = (idx, idx + 1)
+            elif flag in ("Step", "Cov") and idx > 0:
+                edge = (idx - 1, idx)  # landing edge
+            else:
+                continue
+            flagged_edges.setdefault(edge, []).append(
+                f"frame {f['frame_number']} {flag}"
+            )
+
+    # Attach Obs context to adjacent edges that are already flagged.
+    for f in flagged_frames:
+        if "Obs" not in f["flags"]:
+            continue
+        idx = f["seq_idx"]
+        for edge in ((idx - 1, idx), (idx, idx + 1)):
+            if edge in flagged_edges:
+                flagged_edges[edge].append(f"frame {f['frame_number']} Obs")
+
+    return flagged_edges
+
+
+def _select_core_edges(
+    flagged_edges: dict[tuple[int, int], list[str]],
+    seq_image_indexes: list[int],
+    recon,
+) -> tuple[dict[tuple[int, int], list[str]], dict[tuple[int, int], int]]:
+    """Cluster adjacent flagged edges and keep only the core edge per cluster.
+
+    A single discontinuity at edge (A, A+1) causes the neighboring edges to
+    also get flagged because even the nearest 2 extrapolation points straddle
+    the break.  Consecutive flagged edges are clustered and the one with the
+    most evidence (flag count) is kept, breaking ties by lowest shared 3D
+    point count.
+
+    Returns `(core_edges, pair_counts)` where `core_edges` maps the kept edge
+    → its evidence, and `pair_counts` maps `(img_a, img_b)` → shared 3D point
+    count for every flagged edge (used both here for tie-breaking and by the
+    summary report).
+    """
+    core_edges: dict[tuple[int, int], list[str]] = {}
+    pair_counts: dict[tuple[int, int], int] = {}
+    if not flagged_edges:
+        return core_edges, pair_counts
+
+    # Compute shared point counts for all flagged edges up front.
+    context_indexes = set()
+    for a, b in flagged_edges:
+        context_indexes.add(seq_image_indexes[a])
+        context_indexes.add(seq_image_indexes[b])
+    pair_counts = _compute_shared_point_counts(recon, list(context_indexes))
+
+    # Build clusters of adjacent edges.
+    sorted_edges = sorted(flagged_edges.keys())
+    clusters: list[list[tuple[int, int]]] = []
+    current_cluster: list[tuple[int, int]] = [sorted_edges[0]]
+    for edge in sorted_edges[1:]:
+        prev = current_cluster[-1]
+        if edge[0] <= prev[1]:  # adjacent or overlapping
+            current_cluster.append(edge)
+        else:
+            clusters.append(current_cluster)
+            current_cluster = [edge]
+    clusters.append(current_cluster)
+
+    # Pick the core edge per cluster: most evidence, then fewest shared points.
+    for cluster in clusters:
+        best_edge = max(
+            cluster,
+            key=lambda e: (
+                len(flagged_edges[e]),
+                -pair_counts.get(
+                    (seq_image_indexes[e[0]], seq_image_indexes[e[1]]),
+                    0,
+                ),
+            ),
+        )
+        core_edges[best_edge] = flagged_edges[best_edge]
+
+    return core_edges, pair_counts
+
+
 def analyze_reconstruction(
     recon,
     *,
@@ -439,6 +584,10 @@ def analyze_reconstruction(
     from deadline.job_attachments.api import summarize_paths_by_sequence
 
     from .._filenames import number_from_filename
+
+    # Imported lazily to avoid a module-level import cycle: _recon_console
+    # imports the pure helpers (`_flag_frame`, `_rotation_angle_deg`) from here.
+    from ._recon_console import print_frame_table, print_summary
 
     image_names = recon.image_names
     num_images = recon.image_count
@@ -540,12 +689,8 @@ def analyze_reconstruction(
             per_image_points, seq_image_indexes
         )  # per-frame, len n
 
-        # Print per-frame extrapolation errors
-        click.echo(
-            f"\n  Successive motion --"
-            f" median translation: {median_trans:.4f},"
-            f" median rotation: {median_rot:.2f}°"
-        )
+        # Thresholds for this sequence (consumed by both the console table and
+        # the JSON report).
         # Translation threshold: POSE_TRANS_FACTOR × median successive
         # motion.  Using 1× is too tight — normal trajectory curvature
         # produces extrapolation errors on the order of the step size.
@@ -553,7 +698,6 @@ def analyze_reconstruction(
         # Invariant to pruning since it's based on trajectory properties,
         # not error statistics.
         trans_threshold = POSE_TRANS_FACTOR * median_trans
-
         # Rotation threshold: fixed.  Unlike translation, rotation
         # extrapolation quality depends on the smoothness of the trajectory,
         # not on the rotation rate.  A quadratic extrapolation from 3
@@ -561,122 +705,40 @@ def analyze_reconstruction(
         # of how fast the camera is rotating.
         rot_threshold = POSE_ROT_DEG
 
-        click.echo("  Signal thresholds:")
-        click.echo(
-            f"    Pose extrapolation:  trans>{trans_threshold:.4f} (3x median step)"
-            f"  rot>{rot_threshold:.1f}°"
-        )
-        click.echo(
-            f"    Step-size ratio  (w={STEP_RATIO_WINDOW}):  "
-            f"max(pre/post, post/pre) > {STEP_RATIO_THRESHOLD}"
-        )
-        click.echo(
-            f"    Coviz drop       (w={OVERLAP_WINDOW}):  "
-            f"baseline/cross-overlap > {OVERLAP_DROP_THRESHOLD}"
-        )
-        click.echo(
-            f"    Obs-count outlier (w={OBS_WINDOW}):  "
-            f"|z-score| > {OBS_Z_THRESHOLD} (low tail)"
-        )
-        click.echo("")
-        click.echo(
-            f"  {'Frame':>7}  {'Image':<40}  "
-            f"{'L.trans':>7}  {'L.rot':>6}  "
-            f"{'R.trans':>7}  {'R.rot':>6}  "
-            f"{'StepR':>6}  {'CovR':>6}  {'ObsZ':>6}  {'Flag'}"
-        )
-        click.echo("  " + "-" * 120)
-
+        # Per-frame flags.  StepR/CovR come from the landing edge (i-1, i), so
+        # they annotate the frame the edge lands on; both are None when
+        # landing_edge < 0 and thus never fire those flags on frame 0.
         flagged_frames = []
-        # Per-edge flags accumulated outside the per-frame loop
-        step_edge_flags: dict[int, str] = {}  # edge_idx i -> "Step"
-        cov_edge_flags: dict[int, str] = {}
-        obs_frame_flags: dict[int, str] = {}
-
         for er in extrap_results:
             i = er["seq_idx"]
-            frame_num = er["frame_number"]
-            name = seq_image_names[i]
-            if len(name) > 40:
-                name = "..." + name[-37:]
-
-            lt = er["left_trans_err"]
-            lr = er["left_rot_err"]
-            rt = er["right_trans_err"]
-            rr = er["right_rot_err"]
-
-            lt_s = f"{lt:.4f}" if lt is not None else "-"
-            lr_s = f"{lr:.2f}°" if lr is not None else "-"
-            rt_s = f"{rt:.4f}" if rt is not None else "-"
-            rr_s = f"{rr:.2f}°" if rr is not None else "-"
-
-            # New per-row values: StepR and CovR come from the landing edge
-            # (i-1, i) so they annotate the frame that the edge lands on.
-            # ObsZ is the per-frame outlier z-score.
             landing_edge = i - 1  # edge index for edge (i-1, i)
             step_r = step_ratios[landing_edge] if landing_edge >= 0 else None
             cov_r = overlap_drops[landing_edge] if landing_edge >= 0 else None
             obs_z = obs_z_scores[i] if i < len(obs_z_scores) else None
 
-            step_r_s = f"{step_r:.2f}" if step_r is not None else "-"
-            cov_r_s = (
-                f"{cov_r:.2f}"
-                if cov_r is not None and cov_r != float("inf")
-                else ("inf" if cov_r == float("inf") else "-")
-            )
-            obs_z_s = f"{obs_z:+.1f}" if obs_z is not None else "-"
-
-            # Determine flags
-            flags = []
-            if lt is not None and lt > trans_threshold:
-                flags.append("L.t")
-            if lr is not None and lr > rot_threshold:
-                flags.append("L.r")
-            if rt is not None and rt > trans_threshold:
-                flags.append("R.t")
-            if rr is not None and rr > rot_threshold:
-                flags.append("R.r")
-            # Step and Cov flags annotate the landing frame for the edge
-            # (i-1, i) — so the flag sits on frame i, matching where the
-            # value is displayed.
-            if (
-                step_r is not None
-                and step_r > STEP_RATIO_THRESHOLD
-                and landing_edge >= 0
-            ):
-                flags.append("Step")
-                step_edge_flags[landing_edge] = f"frame {frame_num} Step"
-            if (
-                cov_r is not None
-                and cov_r > OVERLAP_DROP_THRESHOLD
-                and landing_edge >= 0
-            ):
-                flags.append("Cov")
-                cov_edge_flags[landing_edge] = f"frame {frame_num} Cov"
-            if obs_z is not None and obs_z < -OBS_Z_THRESHOLD:
-                flags.append("Obs")
-                obs_frame_flags[i] = f"frame {frame_num} Obs"
-
-            flag_str = ",".join(flags) if flags else ""
-
-            click.echo(
-                f"  {frame_num:>7}  {name:<40}  "
-                f"{lt_s:>7}  {lr_s:>6}  "
-                f"{rt_s:>7}  {rr_s:>6}  "
-                f"{step_r_s:>6}  {cov_r_s:>6}  {obs_z_s:>6}  {flag_str}"
+            flags = _flag_frame(
+                left_trans_err=er["left_trans_err"],
+                left_rot_err=er["left_rot_err"],
+                right_trans_err=er["right_trans_err"],
+                right_rot_err=er["right_rot_err"],
+                step_ratio=step_r,
+                overlap_drop=cov_r,
+                obs_z=obs_z,
+                trans_threshold=trans_threshold,
+                rot_threshold=rot_threshold,
             )
 
             if flags:
                 flagged_frames.append(
                     {
                         "seq_idx": i,
-                        "frame_number": frame_num,
+                        "frame_number": er["frame_number"],
                         "image_name": seq_image_names[i],
                         "image_index": seq_image_indexes[i],
-                        "left_trans_err": lt,
-                        "left_rot_err": lr,
-                        "right_trans_err": rt,
-                        "right_rot_err": rr,
+                        "left_trans_err": er["left_trans_err"],
+                        "left_rot_err": er["left_rot_err"],
+                        "right_trans_err": er["right_trans_err"],
+                        "right_rot_err": er["right_rot_err"],
                         "step_ratio": step_r,
                         "overlap_drop": cov_r,
                         "obs_z": obs_z,
@@ -684,271 +746,54 @@ def analyze_reconstruction(
                     }
                 )
 
-        # Step 3: Aggregate per-frame flags into per-edge discontinuities.
-        # L flags on frame i implicate edge (i-1) → (i).
-        # R flags on frame i implicate edge (i) → (i+1).
-        # Step and Cov flags are edge-level — they sit on the landing frame i
-        # and implicate edge (i-1, i).
-        # Obs flags are per-frame context only; attached below to any edge
-        # already flagged by another signal, but never flag an edge alone
-        # (a single dim frame is not a discontinuity).
-        flagged_edges: dict[tuple[int, int], list[str]] = {}
-        for f in flagged_frames:
-            idx = f["seq_idx"]
-            for flag in f["flags"]:
-                if flag == "Obs":
-                    continue  # attached below as endpoint context
-                if flag.startswith("L") and idx > 0:
-                    edge = (idx - 1, idx)
-                elif flag.startswith("R") and idx < n - 1:
-                    edge = (idx, idx + 1)
-                elif flag in ("Step", "Cov") and idx > 0:
-                    edge = (idx - 1, idx)  # landing edge
-                else:
-                    continue
-                flagged_edges.setdefault(edge, []).append(
-                    f"frame {f['frame_number']} {flag}"
-                )
-
-        # Attach Obs context to adjacent edges that are already flagged.
-        for f in flagged_frames:
-            if "Obs" not in f["flags"]:
-                continue
-            idx = f["seq_idx"]
-            for edge in ((idx - 1, idx), (idx, idx + 1)):
-                if edge in flagged_edges:
-                    flagged_edges[edge].append(f"frame {f['frame_number']} Obs")
-
-        # Step 4: Cluster adjacent edges and keep only the core edge per
-        # cluster.  A single discontinuity at edge (A, A+1) causes the
-        # neighboring edges to also get flagged because even the nearest 2
-        # extrapolation points straddle the break.  We cluster consecutive
-        # flagged edges and pick the one with the most evidence (flag count),
-        # breaking ties by lowest shared 3D point count.
-        core_edges: dict[tuple[int, int], list[str]] = {}
-        pair_counts: dict[tuple[int, int], int] = {}
-        if flagged_edges:
-            # Compute shared point counts for all flagged edges up front
-            context_indexes = set()
-            for a, b in flagged_edges:
-                context_indexes.add(seq_image_indexes[a])
-                context_indexes.add(seq_image_indexes[b])
-            pair_counts = _compute_shared_point_counts(recon, list(context_indexes))
-
-            # Build clusters of adjacent edges
-            sorted_edges = sorted(flagged_edges.keys())
-            clusters: list[list[tuple[int, int]]] = []
-            current_cluster: list[tuple[int, int]] = [sorted_edges[0]]
-            for edge in sorted_edges[1:]:
-                prev = current_cluster[-1]
-                if edge[0] <= prev[1]:  # adjacent or overlapping
-                    current_cluster.append(edge)
-                else:
-                    clusters.append(current_cluster)
-                    current_cluster = [edge]
-            clusters.append(current_cluster)
-
-            # Pick the core edge per cluster: most evidence, then fewest
-            # shared points
-            for cluster in clusters:
-                best_edge = max(
-                    cluster,
-                    key=lambda e: (
-                        len(flagged_edges[e]),
-                        -pair_counts.get(
-                            (seq_image_indexes[e[0]], seq_image_indexes[e[1]]),
-                            0,
-                        ),
-                    ),
-                )
-                core_edges[best_edge] = flagged_edges[best_edge]
-
-        all_sequence_results.append(
-            {
-                "sequence": seq.path,
-                "sequence_name": seq_base,
-                "frame_count": len(seq_image_names),
-                "extrap_results": extrap_results,
-                "flagged_frames": flagged_frames,
-                "flagged_edges": flagged_edges,
-                "core_edges": core_edges,
-                "pair_counts": pair_counts,
-                "seq_image_names": seq_image_names,
-                "seq_image_indexes": seq_image_indexes,
-                "seq_frame_numbers": seq_frame_numbers,
-                "seq_centers": seq_centers,
-                "seq_quats": seq_quats,
-                "median_trans": median_trans,
-                "median_rot": median_rot,
-                "step_ratios": step_ratios,
-                "overlap_drops": overlap_drops,
-                "obs_z_scores": obs_z_scores,
-                "trans_threshold": trans_threshold,
-                "rot_threshold": rot_threshold,
-                "core_edge_reproj_errors": {},
-            }
+        # Aggregate per-frame flags into per-edge discontinuities, then
+        # cluster adjacent edges down to one core edge per break.
+        flagged_edges = _aggregate_flagged_edges(flagged_frames, n)
+        core_edges, pair_counts = _select_core_edges(
+            flagged_edges, seq_image_indexes, recon
         )
 
-    # --- Summary section: all sequences grouped at the end ---
-    click.echo("")
-    click.echo("=" * 80)
-    click.echo("Summary")
-    click.echo("=" * 80)
-
-    total_discontinuities = sum(len(s["core_edges"]) for s in all_sequence_results)
-
-    for s in all_sequence_results:
-        core_edges = s["core_edges"]
-        seq_name = s["sequence_name"]
-        click.echo(
-            f"\n  {seq_name}: {s['frame_count']} frames, "
-            f"{len(core_edges)} discontinuity(s)"
-        )
-
-        if not core_edges:
-            click.echo("    No pose discontinuities detected.")
-            continue
-
-        # Compute reprojection errors for core edges
-        seq_img_indexes = s["seq_image_indexes"]
-        seq_frm_numbers = s["seq_frame_numbers"]
-        seq_centers = s["seq_centers"]
-        seq_quats = s["seq_quats"]
-        pair_counts = s["pair_counts"]
-        step_ratios = s["step_ratios"]
-        overlap_drops = s["overlap_drops"]
-        obs_z_scores = s["obs_z_scores"]
-        core_img_indexes = set()
+        # Mean reprojection error per endpoint of each core edge (context for
+        # the summary report).
+        core_img_indexes: set[int] = set()
         for a, b in core_edges:
-            core_img_indexes.add(seq_img_indexes[a])
-            core_img_indexes.add(seq_img_indexes[b])
-        reproj_errors = _compute_per_image_mean_errors(recon, list(core_img_indexes))
-        s["core_edge_reproj_errors"] = reproj_errors
-
-        click.echo(
-            f"    {'Edge':>14}  {'Dist':>8}  {'Rot':>7}  "
-            f"{'StepR':>6}  {'CovR':>6}  {'ObsZ(A/B)':>11}  "
-            f"{'SharedPts':>9}  {'Err(A)':>8}  {'Err(B)':>8}  {'Signals'}"
+            core_img_indexes.add(seq_image_indexes[a])
+            core_img_indexes.add(seq_image_indexes[b])
+        reproj_errors = (
+            _compute_per_image_mean_errors(recon, list(core_img_indexes))
+            if core_edges
+            else {}
         )
-        click.echo("    " + "-" * 105)
 
-        for (a, b), evidence in sorted(core_edges.items()):
-            img_a = seq_img_indexes[a]
-            img_b = seq_img_indexes[b]
-            frame_a = seq_frm_numbers[a]
-            frame_b = seq_frm_numbers[b]
+        seq_result = {
+            "sequence": seq.path,
+            "sequence_name": seq_base,
+            "frame_count": len(seq_image_names),
+            "extrap_results": extrap_results,
+            "flagged_frames": flagged_frames,
+            "flagged_edges": flagged_edges,
+            "core_edges": core_edges,
+            "pair_counts": pair_counts,
+            "seq_image_names": seq_image_names,
+            "seq_image_indexes": seq_image_indexes,
+            "seq_frame_numbers": seq_frame_numbers,
+            "seq_centers": seq_centers,
+            "seq_quats": seq_quats,
+            "median_trans": median_trans,
+            "median_rot": median_rot,
+            "step_ratios": step_ratios,
+            "overlap_drops": overlap_drops,
+            "obs_z_scores": obs_z_scores,
+            "trans_threshold": trans_threshold,
+            "rot_threshold": rot_threshold,
+            "core_edge_reproj_errors": reproj_errors,
+        }
+        all_sequence_results.append(seq_result)
 
-            dist = float(np.linalg.norm(seq_centers[b] - seq_centers[a]))
-            rot = _rotation_angle_deg(seq_quats[a], seq_quats[b])
+        # Render this sequence's per-frame table.
+        print_frame_table(seq_result)
 
-            shared = pair_counts.get((img_a, img_b), 0)
-            err_a = reproj_errors.get(img_a, float("nan"))
-            err_b = reproj_errors.get(img_b, float("nan"))
-            err_a_s = f"{err_a:.3f}px" if not np.isnan(err_a) else "N/A"
-            err_b_s = f"{err_b:.3f}px" if not np.isnan(err_b) else "N/A"
-
-            # Look up the edge-level signal values.  Edge (a, b) corresponds
-            # to edge index a in the step/overlap arrays.
-            step_r = step_ratios[a] if a < len(step_ratios) else None
-            cov_r = overlap_drops[a] if a < len(overlap_drops) else None
-            obs_a = obs_z_scores[a] if a < len(obs_z_scores) else None
-            obs_b = obs_z_scores[b] if b < len(obs_z_scores) else None
-
-            # Determine which signals contributed to this edge.
-            has_p = any(
-                " L.t" in e or " L.r" in e or " R.t" in e or " R.r" in e
-                for e in evidence
-            )
-            has_s = any(" Step" in e for e in evidence)
-            has_c = any(" Cov" in e for e in evidence)
-            has_o = any(" Obs" in e for e in evidence)
-            has_pose_t = any(" L.t" in e or " R.t" in e for e in evidence)
-            has_pose_r = any(" L.r" in e or " R.r" in e for e in evidence)
-
-            dist_s = f"<{dist:.4f}>" if has_pose_t else f" {dist:.4f} "
-            rot_s = f"<{rot:.2f}°>" if has_pose_r else f" {rot:.2f}° "
-
-            if step_r is None:
-                step_r_s = "-"
-            elif has_s:
-                step_r_s = f"<{step_r:.2f}>"
-            else:
-                step_r_s = f" {step_r:.2f} "
-
-            if cov_r is None:
-                cov_r_s = "-"
-            elif cov_r == float("inf"):
-                cov_r_s = "<inf>" if has_c else " inf "
-            elif has_c:
-                cov_r_s = f"<{cov_r:.2f}>"
-            else:
-                cov_r_s = f" {cov_r:.2f} "
-
-            def _fmt_z(z, highlight):
-                if z is None:
-                    return "-"
-                s = f"{z:+.1f}"
-                return f"<{s}>" if highlight and z < -OBS_Z_THRESHOLD else s
-
-            obs_a_s = _fmt_z(obs_a, has_o)
-            obs_b_s = _fmt_z(obs_b, has_o)
-            obs_pair = f"{obs_a_s}/{obs_b_s}"
-
-            signals_parts = []
-            if has_p:
-                signals_parts.append("P")
-            if has_s:
-                signals_parts.append("S")
-            if has_c:
-                signals_parts.append("C")
-            if has_o:
-                signals_parts.append("O")
-            signals_str = " ".join(signals_parts)
-
-            edge_str = f"{frame_a}->{frame_b}"
-            click.echo(
-                f"    {edge_str:>14}  {dist_s:>10}  {rot_s:>9}  "
-                f"{step_r_s:>8}  {cov_r_s:>8}  {obs_pair:>11}  "
-                f"{shared:>9}  {err_a_s:>8}  {err_b_s:>8}  {signals_str}"
-            )
-
-    click.echo("")
-
-    # Footer: partition detections by signal-agreement level.
-    # An edge counts as "high confidence" when at least two distinct signals
-    # fire — whether that's two of the primary signals (P/S/C) or one primary
-    # plus an Obs outlier on an endpoint.  A single fire is "low confidence".
-    single_signal = 0
-    multi_signal = 0
-    for s in all_sequence_results:
-        for evidence in s["core_edges"].values():
-            codes = set()
-            for e in evidence:
-                if any(t in e for t in (" L.t", " L.r", " R.t", " R.r")):
-                    codes.add("P")
-                if " Step" in e:
-                    codes.add("S")
-                if " Cov" in e:
-                    codes.add("C")
-                if " Obs" in e:
-                    codes.add("O")
-            if len(codes) >= 2:
-                multi_signal += 1
-            else:
-                single_signal += 1
-
-    if total_discontinuities == 0:
-        click.echo("No pose discontinuities detected in any sequence.")
-    else:
-        click.echo(
-            f"Total: {total_discontinuities} discontinuity(s) "
-            f"across {len(all_sequence_results)} sequence(s)."
-        )
-        click.echo(f"  Single-signal (low confidence):  {single_signal}")
-        click.echo(f"  Multi-signal  (high confidence): {multi_signal}")
-        click.echo(
-            "  Legend: P=pose residual, S=step-size ratio, "
-            "C=coviz drop, O=obs-count outlier."
-        )
+    # Summary section: all sequences grouped at the end.
+    print_summary(all_sequence_results)
 
     return all_sequence_results
