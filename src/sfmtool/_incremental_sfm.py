@@ -18,7 +18,7 @@ from .colmap.io import (
     pycolmap_to_rust_sfmr,
 )
 from .rig.config import _load_rig_config
-from ._sfm_filenames import get_next_sfm_filename as _get_next_sfm_filename
+from ._sfmr_naming import get_next_sfm_filename as _get_next_sfm_filename
 from ._workspace import load_workspace_config
 
 

@@ -10,7 +10,7 @@ import click
 from .._cli_utils import timed_command
 from ..visualization._epipolar_display import draw_epipolar_visualization
 from .._filenames import number_from_filename
-from .._sfm_filenames import get_image_hint_message
+from .._sfmr_naming import get_image_hint_message
 from .._sfmtool import SfmrReconstruction
 from .._workspace import load_workspace_config
 

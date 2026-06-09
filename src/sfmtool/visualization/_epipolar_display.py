@@ -213,7 +213,7 @@ def draw_epipolar_visualization(
     image1_idx = _find_index(image1_name)
     image2_idx = _find_index(image2_name)
 
-    from .._sfm_filenames import get_image_hint_message
+    from .._sfmr_naming import get_image_hint_message
 
     if image1_idx is None:
         raise ValueError(get_image_hint_message(recon, image1_name))

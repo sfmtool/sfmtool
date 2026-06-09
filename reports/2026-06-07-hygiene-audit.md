@@ -54,6 +54,7 @@ the Top 3 by effort-to-value are called out at the end.
 - Effort: low
 - Risk: low — pure relocation, covered by xform tests.
 - Note: the `sys.argv.index("xform")` slice (646-650) assumes the subcommand token isn't also an option value — a minor robustness nit, not a structural smell.
+> _Status (2026-06-09): Done — moved `parse_transform_args`, `parse_angle`, and `_auto_output_path` (now public `auto_output_path`) into `xform/_arg_parser.py`, leaving `xform.py` as the Click shell (700→~290 lines). No deduplication against Click was attempted, per the finding. The `sys.argv` slice robustness nit is left as-is. Spec note in `xform-select-by-distribution-command.md` refreshed to point at the new location (this commit)._
 
 ### 5. `motion/reconstruction.py` — 534-line function with flag logic duplicated in `report.py`
 - Location: `src/sfmtool/motion/reconstruction.py` (`analyze_reconstruction`, 420-954) and `motion/report.py` (163-186)
@@ -83,6 +84,7 @@ the Top 3 by effort-to-value are called out at the end.
 - Problem: Genuinely distinct (`_filenames` = generic path utils; `_sfm_filenames` = `.sfmr` output naming), correctly separated, but the near-identical names invite confusion — `_incremental_sfm.py` even aliases on import.
 - Proposed fix: optional rename `_sfm_filenames.py` → `_sfmr_naming.py`.
 - Effort: low · Risk: low
+> _Status (2026-06-09): Done — `git mv`'d to `_sfmr_naming.py`; updated the four import sites (`_incremental_sfm.py`, `_commands/epipolar.py`, `visualization/_epipolar_display.py`, `tests/test_epipolar.py`). The `_incremental_sfm.py` import alias is retained but is no longer load-bearing for disambiguation (this commit)._
 
 > Assessed and cleared (no action): `_densify.py` (745), `_undistort_images.py` (595), `_compare.py` (576) are each large but single-purpose pipelines, not mixed concerns. The `_incremental_sfm`/`_global_sfm` pair (~420 lines combined) could form a `solve/` package but the value is marginal today.
 

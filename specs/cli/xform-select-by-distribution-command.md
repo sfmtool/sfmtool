@@ -236,9 +236,10 @@ the observer-thinning gate should be one knob or two.
 
 - `SelectByDistributionFilter(count, verbose=False)` in
   `src/sfmtool/xform/_select_by_distribution.py`, exported from `src/sfmtool/xform/__init__.py`, and
-  wired into `src/sfmtool/_commands/xform.py` (a `@click.option`, a branch in `parse_transform_args`
-  that splits the arg on `,` — `COUNT` then optional `verbose` — the help text, and the "at least
-  one transform" error list). `COUNT < 2` must surface as a `click.UsageError`. Its `description()`
+  wired into `src/sfmtool/_commands/xform.py` (a `@click.option`, the help text, and the "at least
+  one transform" error list) plus a branch in `parse_transform_args`
+  (`src/sfmtool/xform/_arg_parser.py`) that splits the arg on `,` — `COUNT` then optional `verbose`.
+  `COUNT < 2` must surface as a `click.UsageError`. Its `description()`
   should follow precedent, e.g. `"Select N cameras by distribution"`.
 - The module only computes *which images to keep*; it then delegates to `_filter_images()` from
   `_filter_by_image_range.py` for the track/point/rig-frame bookkeeping and index remapping.
