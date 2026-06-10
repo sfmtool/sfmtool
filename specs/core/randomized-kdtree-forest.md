@@ -246,6 +246,16 @@ Following the optical-flow and SIFT implementations:
 - **Integer distance domain.** Keep SIFT distances in `i64`/`u32` squared-L2 and
   take `sqrt` only when a reported distance is needed, matching
   `feature_match/descriptor.rs`.
+- **Software prefetch in the leaf scan.** The leaf scan is memory-bound, not
+  compute-bound: each point row is a random ~128-byte gather from the shared
+  corpus, and the gather latency dwarfs the SIMD kernel's ~25 cycles. Because a
+  leaf's point ids are known before its rows are needed, the scan issues
+  `_mm_prefetch` hints two rows ahead, overlapping the fetches with the distance
+  computation. Measured on a 255k-descriptor corpus (32 MB, `accurate` preset):
+  ~1.2× on the batched query, recovering most of what a per-tree leaf-contiguous
+  coordinate copy would buy without the `T`× memory cost. Prefetch is a hint
+  with no architectural effect, so results and determinism are unchanged; the
+  helper is a no-op off x86_64.
 
 ### Diagnostics (environment variables)
 

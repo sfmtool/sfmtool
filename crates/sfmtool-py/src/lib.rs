@@ -68,6 +68,7 @@ mod py_image;
 
 // ── Feature matching ──────────────────────────────────────────────────────
 
+mod py_cluster_match;
 mod py_descriptor_match;
 mod py_image_match;
 mod py_sift;
@@ -185,6 +186,16 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_image_match::match_image_pair_py, m)?)?;
     m.add_function(wrap_pyfunction!(
         py_image_match::match_image_pairs_batch_py,
+        m
+    )?)?;
+
+    // Background-floor track-cluster matching
+    m.add_function(wrap_pyfunction!(
+        py_cluster_match::background_floor_clusters,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        py_cluster_match::clusters_to_pair_matches,
         m
     )?)?;
 
