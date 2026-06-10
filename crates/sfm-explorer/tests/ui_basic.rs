@@ -24,7 +24,11 @@ impl Drop for Guard {
 }
 
 fn attach(child: &Child) -> App {
-    App::by_pid(child.id(), Duration::from_secs(15)).expect("sfm-explorer did not appear")
+    // Generous timeout: the first launch on a cold CI runner pays wgpu
+    // adapter/shader init and AV scanning of the fresh binary, which has
+    // been observed to exceed 15s. Healthy launches attach in ~1s; this
+    // only delays failure reporting.
+    App::by_pid(child.id(), Duration::from_secs(60)).expect("sfm-explorer did not appear")
 }
 
 // --- Window-level tests ---
