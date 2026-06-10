@@ -9,7 +9,7 @@ experimental "flow" mode, which has some promise for videos.
 ## Command Syntax
 
 ```bash
-sfm match [PATHS...] --exhaustive | --sequential | --flow [OPTIONS...]
+sfm match [PATHS...] --exhaustive | --sequential | --flow | --cluster [OPTIONS...]
 sfm match --merge FILE1.matches FILE2.matches ... -o OUTPUT.matches
 ```
 
@@ -23,6 +23,7 @@ or `--merge` to combine existing `.matches` files.
 | `--exhaustive / -e` | Match every pair of images against every other |
 | `--sequential / -s` | Match each image against its nearby neighbors in sequence order |
 | `--flow` | Use dense optical flow to guide feature matching |
+| `--cluster` | Cluster all images' descriptors at once (background-floor track-cluster matching) |
 | `--merge` | Merge multiple `.matches` files into one |
 
 ## Options
@@ -32,6 +33,9 @@ or `--merge` to combine existing `.matches` files.
 | `--sequential-overlap` | int | 10 | Number of overlapping neighbors for sequential matching |
 | `--flow-preset` | `fast` \| `default` \| `high_quality` | `default` | Optical flow quality preset |
 | `--flow-skip` | int | 5 | Sliding window size for flow matching |
+| `--cluster-alpha` | float | 0.8 | Background-floor radius multiplier for cluster matching |
+| `--cluster-d` | int | 10 | Background rank: the d-th-nearest distance sets the floor for cluster matching |
+| `--cluster-preset` | `accurate` \| `balanced` \| `fast` | `accurate` | Kd-tree forest preset for cluster matching |
 | `--max-features` | int | | Maximum features per image |
 | `--output / -o` | path | auto | Output `.matches` file path (default: timestamped, required for `--merge`) |
 | `--range / -r` | string | | Range expression for file numbers |
@@ -51,6 +55,28 @@ If any image being processed resolves a `camera_config.json` (closest-ancestor w
 its parent directory up to the workspace root), the file's intrinsics are used and
 `--camera-model` is rejected with an error. See
 [`../workspace/camera-config.md`](../workspace/camera-config.md).
+
+## Cluster Matching
+
+`--cluster` uses the background-floor track-cluster matcher: instead of
+enumerating image pairs, it concatenates every image's descriptors into one
+corpus, queries each descriptor's nearest neighbours over a randomized kd-tree
+forest, and keeps the cross-image neighbours within `--cluster-alpha` × its
+`--cluster-d`-th-nearest distance (its *background floor*). Those candidates
+are materialized into track clusters and then expanded into per-image-pair
+matches, which are geometrically verified — so the output `.matches` carries
+two-view geometry and is written under `tvg-matches/`. Image pair selection
+falls out of the clustering: only pairs that share a cluster are verified.
+
+The clustering itself uses no intrinsics or poses. `--camera-model` is still
+accepted with `--cluster` because it feeds the geometric verification step
+(as it does for the other matchers): the chosen model is written into the
+COLMAP database and used to estimate each clustered pair's two-view geometry.
+As elsewhere, `--camera-model` is rejected only when a `camera_config.json`
+resolves for one of the images (see [Camera Intrinsics](#camera-intrinsics)).
+
+See [`../core/track-cluster-matching.md`](../core/track-cluster-matching.md)
+for the algorithm design, empirical justification, and the production API.
 
 ## Merge
 
@@ -79,6 +105,9 @@ sfm match --sequential --sequential-overlap 20
 
 # Flow-based matching for video frames
 sfm match --flow --flow-preset high_quality --flow-skip 10
+
+# Background-floor track-cluster matching
+sfm match --cluster images/
 
 # Match a subset of images
 sfm match --exhaustive --range 1:100 --max-features 4096

@@ -20,7 +20,10 @@ use sfmtool_core::kdforest::{KdForestParams, KdForestU8};
 ///
 /// PyO3's own extraction failure for a mismatched dtype is opaque; this mirrors
 /// the explicit dtype errors the sibling `py_kdtree` bindings give.
-fn extract_u8_2d<'py>(arr: &Bound<'py, PyAny>, what: &str) -> PyResult<PyReadonlyArray2<'py, u8>> {
+pub(crate) fn extract_u8_2d<'py>(
+    arr: &Bound<'py, PyAny>,
+    what: &str,
+) -> PyResult<PyReadonlyArray2<'py, u8>> {
     arr.extract::<PyReadonlyArray2<u8>>().map_err(|_| {
         let dtype = arr
             .getattr("dtype")
@@ -32,8 +35,8 @@ fn extract_u8_2d<'py>(arr: &Bound<'py, PyAny>, what: &str) -> PyResult<PyReadonl
 }
 
 /// Resolve a preset name to base parameters.
-fn parse_preset(preset: Option<&str>) -> PyResult<KdForestParams> {
-    match preset.unwrap_or("balanced") {
+fn parse_preset(preset: Option<&str>, default_preset: &str) -> PyResult<KdForestParams> {
+    match preset.unwrap_or(default_preset) {
         "balanced" => Ok(KdForestParams::balanced()),
         "fast" => Ok(KdForestParams::fast()),
         "accurate" => Ok(KdForestParams::accurate()),
@@ -41,6 +44,39 @@ fn parse_preset(preset: Option<&str>) -> PyResult<KdForestParams> {
             "unknown preset {other:?}; expected 'balanced', 'fast', or 'accurate'"
         ))),
     }
+}
+
+/// Resolve a preset name plus per-field overrides into [`KdForestParams`],
+/// validating the overridden values. Shared by [`PyKdForest::new`] and the
+/// cluster-match bindings so forest configuration means the same thing
+/// everywhere.
+pub(crate) fn resolve_forest_params(
+    preset: Option<&str>,
+    default_preset: &str,
+    num_trees: Option<usize>,
+    leaf_size: Option<usize>,
+    max_leaf_checks: Option<usize>,
+    seed: Option<u64>,
+) -> PyResult<KdForestParams> {
+    let mut params = parse_preset(preset, default_preset)?;
+    if let Some(t) = num_trees {
+        params.num_trees = t;
+    }
+    if let Some(l) = leaf_size {
+        params.leaf_size = l;
+    }
+    if let Some(m) = max_leaf_checks {
+        params.max_leaf_checks = m;
+    }
+    if let Some(s) = seed {
+        params.seed = s;
+    }
+    if params.num_trees == 0 || params.leaf_size == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "num_trees and leaf_size must be positive",
+        ));
+    }
+    Ok(params)
 }
 
 /// A randomized kd-tree forest over `uint8` descriptors (e.g. SIFT).
@@ -85,24 +121,14 @@ impl PyKdForest {
             ));
         }
 
-        let mut params = parse_preset(preset)?;
-        if let Some(t) = num_trees {
-            params.num_trees = t;
-        }
-        if let Some(l) = leaf_size {
-            params.leaf_size = l;
-        }
-        if let Some(m) = max_leaf_checks {
-            params.max_leaf_checks = m;
-        }
-        if let Some(s) = seed {
-            params.seed = s;
-        }
-        if params.num_trees == 0 || params.leaf_size == 0 {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "num_trees and leaf_size must be positive",
-            ));
-        }
+        let params = resolve_forest_params(
+            preset,
+            "balanced",
+            num_trees,
+            leaf_size,
+            max_leaf_checks,
+            seed,
+        )?;
 
         let data: Cow<[u8]> = match descriptors.as_slice() {
             Ok(s) => Cow::Borrowed(s),

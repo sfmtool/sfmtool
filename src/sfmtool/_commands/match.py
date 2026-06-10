@@ -79,6 +79,35 @@ from .._filenames import expand_paths
     help="Sliding window size for --flow. 1 = adjacent pairs only. Default: 5.",
 )
 @click.option(
+    "--cluster",
+    "cluster_match",
+    is_flag=True,
+    help="Use the background-floor track-cluster matcher: cluster all images' "
+    "descriptors at once instead of matching image pairs.",
+)
+@click.option(
+    "--cluster-alpha",
+    "cluster_alpha",
+    type=click.FloatRange(min=0.0, min_open=True),
+    default=0.8,
+    help="Background-floor radius multiplier for --cluster. Default: 0.8.",
+)
+@click.option(
+    "--cluster-d",
+    "cluster_d",
+    type=click.IntRange(min=1),
+    default=10,
+    help="Background rank for --cluster: the d-th-nearest distance sets the "
+    "floor. Default: 10.",
+)
+@click.option(
+    "--cluster-preset",
+    "cluster_preset",
+    type=click.Choice(["accurate", "balanced", "fast"]),
+    default="accurate",
+    help="Kd-tree forest preset for --cluster. Default: accurate.",
+)
+@click.option(
     "--camera-model",
     "camera_model",
     type=click.Choice(
@@ -117,6 +146,10 @@ def match(
     flow_match,
     flow_preset,
     flow_wide_baseline_skip,
+    cluster_match,
+    cluster_alpha,
+    cluster_d,
+    cluster_preset,
     camera_model,
     merge,
 ):
@@ -134,6 +167,9 @@ def match(
 
         # Flow-based matching for sequential video
         sfm match --flow images/
+
+        # Background-floor track-cluster matching
+        sfm match --cluster images/
 
         # With feature count limit
         sfm match --exhaustive --max-features 4096 images/
@@ -155,16 +191,17 @@ def match(
     if not paths:
         raise click.UsageError("Must provide image paths.")
 
-    method_count = sum([exhaustive, sequential, flow_match])
+    method_count = sum([exhaustive, sequential, flow_match, cluster_match])
     if method_count > 1:
         raise click.UsageError(
             "Cannot specify more than one matching method. "
-            "Choose one of: --exhaustive (-e), --sequential (-s), or --flow"
+            "Choose one of: --exhaustive (-e), --sequential (-s), --flow, "
+            "or --cluster"
         )
     if method_count == 0:
         raise click.UsageError(
             "Must specify a matching method: "
-            "--exhaustive (-e), --sequential (-s), or --flow"
+            "--exhaustive (-e), --sequential (-s), --flow, or --cluster"
         )
 
     numbers = None
@@ -193,6 +230,8 @@ def match(
     try:
         if flow_match:
             matching_method = "flow"
+        elif cluster_match:
+            matching_method = "cluster"
         elif sequential:
             matching_method = "sequential"
         else:
@@ -207,6 +246,9 @@ def match(
             flow_preset=flow_preset,
             flow_wide_baseline_skip=flow_wide_baseline_skip,
             sequential_overlap=sequential_overlap,
+            cluster_d=cluster_d,
+            cluster_alpha=cluster_alpha,
+            cluster_preset=cluster_preset,
         )
     except Exception as e:
         raise click.ClickException(str(e))

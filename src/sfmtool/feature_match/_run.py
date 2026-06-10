@@ -35,6 +35,10 @@ def _run_matching(
     flow_preset: str = "default",
     flow_wide_baseline_skip: int = 5,
     sequential_overlap: int = 10,
+    cluster_d: int = 10,
+    cluster_alpha: float = 0.8,
+    cluster_min_size: int = 2,
+    cluster_preset: str = "accurate",
 ):
     """Run matching and produce a .matches file."""
     import pycolmap
@@ -101,6 +105,19 @@ def _run_matching(
                 flow_preset=flow_preset,
                 flow_wide_baseline_skip=flow_wide_baseline_skip,
             )
+        elif matching_method == "cluster":
+            _run_cluster_matching(
+                image_paths,
+                sift_paths,
+                workspace_dir,
+                db_path,
+                Path(tmpdir),
+                max_feature_count=max_feature_count,
+                d=cluster_d,
+                alpha=cluster_alpha,
+                min_size=cluster_min_size,
+                preset=cluster_preset,
+            )
         else:
             raise ValueError(f"Unsupported matching method: {matching_method}")
 
@@ -128,6 +145,11 @@ def _run_matching(
     if matching_method == "flow":
         matches_data["metadata"]["matching_tool"] = "sfmtool-flow"
         matches_data["metadata"]["matching_tool_version"] = ""
+    elif matching_method == "cluster":
+        from importlib.metadata import version as get_version
+
+        matches_data["metadata"]["matching_tool"] = "sfmtool"
+        matches_data["metadata"]["matching_tool_version"] = get_version("sfmtool")
     else:
         matches_data["metadata"]["matching_tool"] = "colmap"
         matches_data["metadata"]["matching_tool_version"] = pycolmap.__version__
@@ -140,6 +162,16 @@ def _run_matching(
         matches_data["metadata"]["matching_options"]["flow_preset"] = flow_preset
         matches_data["metadata"]["matching_options"]["flow_skip"] = (
             flow_wide_baseline_skip
+        )
+    if matching_method == "cluster":
+        matches_data["metadata"]["matching_options"].update(
+            {
+                "mode": "background-floor",
+                "d": cluster_d,
+                "alpha": cluster_alpha,
+                "min_size": cluster_min_size,
+                "preset": cluster_preset,
+            }
         )
     if matching_method == "sequential":
         matches_data["metadata"]["matching_options"]["sequential_overlap"] = (
@@ -309,6 +341,85 @@ def _run_flow_matching(
 
     # Run geometric verification on matched pairs
     click.echo("Running geometric verification...")
+    pycolmap.verify_matches(str(db_path), str(pairs_path), options=tvg_options)
+
+
+def _run_cluster_matching(
+    image_paths: list[Path],
+    sift_paths: list[Path],
+    workspace_dir: Path,
+    db_path: Path,
+    colmap_dir: Path,
+    max_feature_count: int | None = None,
+    d: int = 10,
+    alpha: float = 0.8,
+    min_size: int = 2,
+    preset: str = "accurate",
+) -> None:
+    """Run background-floor track-cluster matching and write results to the DB.
+
+    Builds one descriptor corpus from every image's SIFT features, materializes
+    track clusters with the per-point background floor, expands them into
+    per-image-pair matches, writes those to the database, and runs geometric
+    verification via pycolmap. The clusters themselves are the matcher's
+    primary artefact; persisting them to disk is a future consumer's job.
+    """
+    import pycolmap
+
+    from ._cluster_matching import cluster_match
+
+    clusters, pairs = cluster_match(
+        image_paths,
+        sift_paths,
+        d=d,
+        alpha=alpha,
+        min_size=min_size,
+        preset=preset,
+        max_feature_count=max_feature_count,
+    )
+    cluster_count = len(clusters.cluster_starts) - 1
+    pair_count = len(pairs.image_index_pairs)
+    click.echo(
+        f"Materialized {cluster_count} track clusters: "
+        f"{len(pairs.match_feature_indexes)} candidate matches "
+        f"across {pair_count} image pairs"
+    )
+    if pair_count == 0:
+        click.echo("Warning: Cluster matching produced no matches")
+        return
+
+    # Map image index (corpus order) -> database image_id
+    with pycolmap.Database.open(db_path) as db:
+        rel_to_id = {img.name: img.image_id for img in db.read_all_images()}
+    rel_names = [
+        os.path.relpath(p, workspace_dir).replace("\\", "/") for p in image_paths
+    ]
+
+    # Write matches to database and build pairs file for geometric verification
+    pairs_path = colmap_dir / "cluster_pairs.txt"
+    match_offset = 0
+    with (
+        pycolmap.Database.open(db_path) as db,
+        open(pairs_path, "w") as pairs_file,
+    ):
+        for k in range(pair_count):
+            idx_i = int(pairs.image_index_pairs[k, 0])
+            idx_j = int(pairs.image_index_pairs[k, 1])
+            count = int(pairs.match_counts[k])
+            matches_slice = pairs.match_feature_indexes[
+                match_offset : match_offset + count
+            ]
+            match_offset += count
+
+            rel_i, rel_j = rel_names[idx_i], rel_names[idx_j]
+            if rel_i not in rel_to_id or rel_j not in rel_to_id:
+                continue
+            db.write_matches(rel_to_id[rel_i], rel_to_id[rel_j], matches_slice)
+            pairs_file.write(f"{rel_i} {rel_j}\n")
+
+    # Run geometric verification on matched pairs
+    click.echo("Running geometric verification...")
+    tvg_options = pycolmap.TwoViewGeometryOptions()
     pycolmap.verify_matches(str(db_path), str(pairs_path), options=tvg_options)
 
 

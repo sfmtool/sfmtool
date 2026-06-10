@@ -310,7 +310,7 @@ Primary path (the per-point background floor, §2):
 
 | Parameter     | Default   | Effect                                                 |
 | ------------- | --------- | ------------------------------------------------------ |
-| `d`           | 28        | background rank: the `d`-th-nearest distance is the background floor `B_i = dist[i, d]`; the query width is `d + 1` |
+| `d`           | 10        | background rank: the `d`-th-nearest distance is the background floor `B_i = dist[i, d]`; the query width is `d + 1` |
 | `bg_alpha` (α) | 0.8      | keep cross-image neighbours within `α · B_i`; `<1` = generous cut inside the floor |
 | `min_size`    | 2         | record a cluster only if it spans at least this many images |
 
@@ -391,6 +391,49 @@ method in `feature_match/` and selectable from `sfm match` / `sfm solve`; the
 per-point background floor is the recommended membership rule, and its production
 API is specified in [Production Implementation](#production-implementation) below.
 
+The production implementation is **done** as specified: the Rust matcher lives in
+`crates/sfmtool-core/src/cluster_match/`, the PyO3 bindings in
+`crates/sfmtool-py/src/py_cluster_match.rs` (exposed as
+`sfmtool.background_floor_clusters` / `sfmtool.clusters_to_pair_matches`), the
+Python matcher layer in `src/sfmtool/feature_match/_cluster_matching.py` with the
+`_run_cluster_matching` orchestration in `feature_match/_run.py`, and the CLI as
+`sfm match --cluster` (see `specs/cli/match-command.md`). A `sfm solve --cluster`
+shortcut remains future work.
+
+The production matcher reproduces the prototype's end-to-end results: run
+through `sfm match --cluster` + seeded incremental `sfm solve -i` on all four
+datasets (cluster corpus at each dataset's full extraction budget), every image
+registers, `sfm compare` against the baseline rates all four VERY SIMILAR, and
+the point clouds land where the table above predicts — seoul_bull 17/17 at
+1,550 points, seattle_backyard 26/26 at 4,980, kerry_park 48/48 at 3,153,
+dino_dog_toy 85/85 at 29,644.
+
+**Default `d` lowered 28 → 10 after a production sweep (2026-06-10).** The
+prototype tuned `d = 28`; sweeping the production matcher at
+`d ∈ {6, 7, 8, 9, 10, 14, 20, 28}` across all four datasets (match + seeded
+incremental solve per point) showed the wide floor was paying for itself in
+solve time, not quality. Findings:
+
+- Registration is full (17/17, 26/26, 48/48, 85/85) at every `d ≥ 8`;
+  kerry_park drops to 46/48 at `d ∈ {6, 7}`, locating the cliff just below 8.
+- Smaller `d` is faster end to end — mostly in the *solve*, which scales with
+  the candidate matches a wider floor admits (kerry 55 s at `d = 8` vs 108 s at
+  28; dino 99 s vs 147 s total).
+- Mean reprojection error *improves* monotonically as `d` shrinks on every
+  dataset (e.g. seoul 0.47 px at 8 vs 0.58 px at 28): the extra matches a wide
+  floor admits are disproportionately the weak ones.
+- Total points dip on the small scenes (seoul −20%, kerry −15% at `d = 10` vs
+  28) but the lost points are mostly 2-view: the fraction of points with ≥ 3
+  observations is far higher at small `d` (92–97% vs 77–84%), and dino's point
+  count actually rises (32,181 vs 29,657).
+
+`d = 10` was chosen as the default: measured directly on all four datasets,
+two ranks of margin above the kerry_park registration cliff, ~1.5–2.4×
+end-to-end speedup vs 28, better reprojection everywhere. The original `d = 28`
+remains a reasonable choice for unusually high-covisibility collections
+(features co-observed in tens of images), where a small rank could read the
+floor inside the track itself; pass `--cluster-d` to raise it.
+
 ## Production Implementation
 
 This section specifies the production form of the **background-floor** matcher
@@ -416,7 +459,7 @@ two-view geometry, for the existing `sfm solve` / `sfm to-colmap-db` consumers.
 ### Distance space (read this first)
 
 All distances in this matcher are **Euclidean L2** (square-rooted), not squared.
-This matters because the tuned defaults `alpha = 0.8`, `d = 28` were fit in L2
+This matters because the tuned defaults `alpha = 0.8`, `d = 10` were fit in L2
 space (via Python `KdForest.query`, which returns L2).
 
 The core `KdForest::search_batch_with_distances` returns **squared** L2
@@ -445,7 +488,7 @@ use crate::kdforest::KdForestParams;
 #[derive(Clone, Debug)]
 pub struct BackgroundFloorParams {
     /// Background rank: the `d`-th-nearest distance is the background floor
-    /// `B_i = dist[i, d]`. Default 28.
+    /// `B_i = dist[i, d]`. Default 10.
     pub d: usize,
     /// Radius multiplier: keep neighbours within `alpha * B_i`. Default 0.8.
     pub alpha: f32,
@@ -458,7 +501,7 @@ pub struct BackgroundFloorParams {
 impl Default for BackgroundFloorParams {
     fn default() -> Self {
         Self {
-            d: 28,
+            d: 10,
             alpha: 0.8,
             min_size: 2,
             forest: KdForestParams::accurate(),
@@ -665,7 +708,7 @@ return numpy arrays via `PyArray1::from_vec(...).reshape(...).into_any().unbind(
 ///         concatenated image by image.
 ///     image_starts: (n_images + 1,) uint32 CSR offsets; image i owns rows
 ///         image_starts[i]:image_starts[i+1].
-///     d, alpha, min_size: background-floor parameters (defaults 28, 0.8, 2);
+///     d, alpha, min_size: background-floor parameters (defaults 10, 0.8, 2);
 ///         the query width is derived as d + 1.
 ///     preset / num_trees / leaf_size / max_leaf_checks / seed: forest config,
 ///         same meaning as KdForest.
@@ -674,7 +717,7 @@ return numpy arrays via `PyArray1::from_vec(...).reshape(...).into_any().unbind(
 ///     (cluster_starts (C+1,) uint32, member_images (M,) uint32,
 ///      member_features (M,) uint32)
 #[pyfunction]
-#[pyo3(signature = (descriptors, image_starts, d=28, alpha=0.8, min_size=2,
+#[pyo3(signature = (descriptors, image_starts, d=10, alpha=0.8, min_size=2,
                     preset=None, num_trees=None, leaf_size=None,
                     max_leaf_checks=None, seed=None))]
 pub fn background_floor_clusters<'py>(...) -> PyResult<(Py<PyAny>, Py<PyAny>, Py<PyAny>)>;
@@ -732,7 +775,7 @@ def cluster_match(
     image_paths: list[Path],
     sift_paths: list[Path],
     *,
-    d: int = 28,
+    d: int = 10,
     alpha: float = 0.8,
     min_size: int = 2,
     preset: str = "accurate",
@@ -809,7 +852,7 @@ exclusive with `--exhaustive` / `--sequential` / `--flow`:
 ```
 --cluster                 use the background-floor track-cluster matcher
 --cluster-alpha FLOAT     background-floor radius multiplier (default 0.8)
---cluster-d INT           background rank: d-th-nearest distance sets the floor (default 28)
+--cluster-d INT           background rank: d-th-nearest distance sets the floor (default 10)
 --cluster-preset CHOICE   forest preset: accurate|balanced|fast (default accurate)
 ```
 
@@ -819,12 +862,14 @@ set the corpus is built from). Update the method-selection / mutual-exclusion
 validation and the help text. Keep it in the **Image Feature** category (already
 where `match` is registered in `cli.py`).
 
-**Camera model / camera_config.** The cluster matcher uses no intrinsics or
-poses, so `--camera-model` is not applicable to `--cluster`; reject the
-combination with a `click.UsageError` (it only means something for the
-registered-image descriptor matcher). The existing
-`_check_camera_model_conflict` (`src/sfmtool/_camera_setup.py`) still applies to
-the other methods unchanged.
+**Camera model / camera_config.** The clustering itself uses no intrinsics or
+poses, but the geometric-verification step that turns clustered pairs into
+two-view geometries does. `--camera-model` therefore stays available with
+`--cluster`: it is written into the COLMAP database (exactly as for the other
+matchers) and used to estimate each pair's two-view geometry. The existing
+`_check_camera_model_conflict` (`src/sfmtool/camera/setup.py`) still applies
+across all methods, so `--camera-model` is rejected when a `camera_config.json`
+resolves for an image.
 
 #### CLI spec
 
@@ -866,14 +911,15 @@ the deliverable.
 
 | Parameter | Default      | Layer(s)            | Meaning                                            |
 | --------- | ------------ | ------------------- | -------------------------------------------------- |
-| `d`       | 28           | core/py/cli         | background rank: `B_i = dist[i, d]`; query width is `d + 1` (derived) |
+| `d`       | 10           | core/py/cli         | background rank: `B_i = dist[i, d]`; query width is `d + 1` (derived) |
 | `alpha`   | 0.8          | core/py/cli         | keep neighbours within `alpha · B_i`               |
 | `min_size`| 2            | core/py/cli         | record a cluster only if it spans ≥ this many images |
 | `preset`  | `accurate`   | core/py/cli         | forest build + search budget                       |
 | distance  | Euclidean L2 | all                 | sqrt of the forest's squared distances             |
 | TVG       | embedded     | py/cli              | matcher runs geometric verification; `.matches` carries two-view geometry |
 
-These are the tuned values from the empirical sections above; do not change them
+These are the tuned values from the empirical sections above (`d` re-tuned by
+the 2026-06-10 production sweep — see Implementation Status); do not change them
 without re-running the membership-rule bench and the end-to-end reconstructions.
 
 ### Implementation order (suggested)

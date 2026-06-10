@@ -13,6 +13,7 @@
 pub mod alignment;
 pub mod camera;
 pub mod camera_intrinsics;
+pub mod cluster_match;
 pub mod consensus_atlas;
 pub mod distortion;
 pub mod epipolar;

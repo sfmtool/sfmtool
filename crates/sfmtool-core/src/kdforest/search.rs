@@ -29,6 +29,41 @@ use std::collections::BinaryHeap;
 use super::build::Node;
 use super::distance::ForestScalar;
 
+/// How many rows ahead the leaf scan prefetches (see [`prefetch_row`]).
+///
+/// The leaf's point ids are known up front, so while the SIMD distance kernel
+/// works on row `i` the memory system can already be pulling row
+/// `i + PREFETCH_AHEAD` out of DRAM — overlapping the gather latency with
+/// compute instead of paying it serially. Two rows ahead is enough to cover
+/// one row's compute (~25 cycles) against DRAM latency (~hundreds of cycles)
+/// without evicting useful lines.
+const PREFETCH_AHEAD: usize = 2;
+
+/// Hint the CPU to start fetching the `dim`-byte point row at `base` into
+/// cache. A no-op on non-x86_64 targets; correctness never depends on it.
+#[inline(always)]
+fn prefetch_row<S>(points: &[S], base: usize, dim: usize) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: prefetch has no architectural effect on memory or registers;
+        // any address is safe. `base` is a valid row start, so the pointer is
+        // in bounds; one hint per 64-byte cache line spans the row.
+        unsafe {
+            let p = points.as_ptr().add(base) as *const i8;
+            let bytes = dim * std::mem::size_of::<S>();
+            let mut off = 0;
+            while off < bytes {
+                std::arch::x86_64::_mm_prefetch(p.add(off), std::arch::x86_64::_MM_HINT_T0);
+                off += 64;
+            }
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = (points, base, dim);
+    }
+}
+
 /// A nearest-neighbor result: a point index and its squared distance (as `f32`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Neighbor {
@@ -331,11 +366,23 @@ impl<S: ForestScalar> Search<'_, S> {
                 }
                 Node::Leaf { start, len } => {
                     let dim = self.forest.dim;
-                    for &p in &tree.point_ids[start as usize..(start + len) as usize] {
+                    let points = &self.forest.points;
+                    let ids = &tree.point_ids[start as usize..(start + len) as usize];
+                    // The leaf scan is memory-bound: each row is a random
+                    // ~`dim`-byte gather from the corpus. The ids are known up
+                    // front, so prefetch a couple of rows ahead to overlap the
+                    // fetches with the distance kernel.
+                    for &p in ids.iter().take(PREFETCH_AHEAD) {
+                        prefetch_row(points, p as usize * dim, dim);
+                    }
+                    for (i, &p) in ids.iter().enumerate() {
+                        if let Some(&ahead) = ids.get(i + PREFETCH_AHEAD) {
+                            prefetch_row(points, ahead as usize * dim, dim);
+                        }
                         if self.scratch.checked.insert(p) {
                             self.stats.checks += 1;
                             let base = p as usize * dim;
-                            let d = S::dist_sq(self.query, &self.forest.points[base..base + dim]);
+                            let d = S::dist_sq(self.query, &points[base..base + dim]);
                             self.scratch.result.consider(p, d);
                         }
                     }
