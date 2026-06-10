@@ -11,7 +11,7 @@ panorama render.
 
 [`PerSphericalTileSourceStack`]: per-spherical-tile-source-stack.md
 [`SphericalTileRig`]: spherical-tiles-rig.md
-[`refine_photometric_ransac`]: ../drafts/photometric-subsets-ransac.md
+[`refine_photometric_ransac`]: photometric-subsets-ransac.md
 
 ## Problem statement
 

@@ -1,9 +1,14 @@
-# Plan: Multi-Panel GUI with Image Browser and Detail Pane
+# Multi-Panel GUI with Image Browser and Detail Pane
+
+**Status:** Implemented — the `egui_dock` layout (`dock.rs`), `ImageBrowser`
+(`image_browser.rs`), `ImageDetail` (`image_detail.rs`), and
+`PointTrackDetail` (`point_track_detail.rs`) panels all shipped; cross-panel
+selection state lives in `AppState` (`state.rs`).
 
 ## Overview
 
-Introduce `egui_dock`-based multi-panel layout to the GUI, replacing the current single
-`CentralPanel` with a dockable tab system. Add three panel types:
+An `egui_dock`-based multi-panel layout, replacing the original single
+`CentralPanel` with a dockable tab system. Three panel types:
 
 1. **3D Viewer** — the existing viewport (point cloud, frustums, navigation)
 2. **Image Browser** — bottom strip of 128×128 thumbnails for browsing the image sequence
@@ -131,7 +136,7 @@ This complements the persistent `selected_point` with a transient, softer highli
 **State**: `AppState::hovered_point_index: Option<usize>`. Updated every frame from the 3D
 viewer's existing GPU pick buffer (`SceneRenderer::hover_pick_id`). Currently
 `hover_pick_id` lives only in `SceneRenderer` and is passed as a parameter to the
-status text overlay in `viewer_3d.rs` (line ~1280). To enable cross-panel hover, the
+status text overlay in `viewer_3d/overlay.rs`. To enable cross-panel hover, the
 resolved point index is promoted to `AppState`:
 
 ```rust

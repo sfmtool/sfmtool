@@ -7,7 +7,7 @@ These exercise the additive ``--find-points-at-infinity`` transform, which
 appends new points and tracks, and the ``--classify-points-at-infinity``
 reclassifier. Both read the workspace ``.sift`` files, so they use the
 ``sfmrfile_reconstruction_with_17_images`` fixture (a real solve with sift
-artifacts on disk). See specs/drafts/xform-find-points-at-infinity.md.
+artifacts on disk). See specs/cli/xform-find-points-at-infinity.md.
 """
 
 from unittest.mock import patch

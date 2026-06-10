@@ -3,7 +3,7 @@
 
 //! Photometric refinement via per-tile RANSAC subset partition.
 //!
-//! See `specs/drafts/photometric-subsets-ransac.md` for the spec.
+//! See `specs/core/photometric-subsets-ransac.md` for the spec.
 //!
 //! Operates on a [`PerSphericalTileSourceStack<f32>`]. Returns a primary /
 //! secondary cluster partition over the per-`(tile, source)` rows. Inputs:

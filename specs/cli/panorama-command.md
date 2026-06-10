@@ -13,7 +13,7 @@ pipeline. The heavy lifting lives in the Rust core — see
 [`specs/core/spherical-tiles-rig.md`](../core/spherical-tiles-rig.md),
 [`specs/core/per-spherical-tile-source-stack.md`](../core/per-spherical-tile-source-stack.md),
 [`specs/core/tile-batched-consensus-atlas.md`](../core/tile-batched-consensus-atlas.md),
-and [`specs/drafts/photometric-subsets-ransac.md`](../drafts/photometric-subsets-ransac.md).
+and [`specs/core/photometric-subsets-ransac.md`](../core/photometric-subsets-ransac.md).
 
 ## Command Syntax
 

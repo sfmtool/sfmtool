@@ -64,7 +64,8 @@ full test budget.
 ## Specs
 
 Design lives under `specs/` (subdirs: `cli/`, `core/`, `formats/`, `gui/`,
-`workspace/`, `drafts/`). For non-trivial behavior changes, read the
+`workspace/`, `drafts/` for in-progress design drafts). For non-trivial
+behavior changes, read the
 relevant spec first and update it in the same PR. Not every CLI command
 has a spec yet, and not every spec maps 1:1 to a top-level CLI command;
 when in doubt, mention the gap in the PR description.

@@ -4,7 +4,7 @@
 points at infinity (and near-infinite distant points) in an already-solved
 `.sfmr` by clustering the world-space directions of keypoints across all
 images and confirming clusters with SIFT descriptors. Complements the existing
-[`classify_points_at_infinity`](sfmr-v2-points-at-infinity.md), which only
+[`classify_points_at_infinity`](../formats/sfmr-file-format.md), which only
 *reclassifies* points that the solve already triangulated. The clustering /
 matching / classification core lives in `crates/sfmtool-core/src/infinity/discover.rs`,
 exposed via the PyO3 method `SfmrReconstruction.find_points_at_infinity`; the
@@ -12,7 +12,7 @@ CLI surface is `sfm xform --find-points-at-infinity` (plus
 `--classify-points-at-infinity` and `--max-features`), wired through the thin
 Python transforms in `src/sfmtool/xform/_find_points_at_infinity.py`.
 
-[v2 model]: sfmr-v2-points-at-infinity.md
+[v2 model]: ../formats/sfmr-file-format.md
 
 ## Motivation
 
@@ -95,9 +95,9 @@ This also tells us what to *do* with a cluster once found. By construction its
 members agree in direction to within `ε`. If their parallax is below the
 keypoint-localisation noise floor, the depth is unrecoverable and the point is
 genuinely `w = 0`. If `ε` is loose enough that a track's parallax clears the
-floor, we triangulate it and decide per cluster: emit `w = 0` when the
-triangulated result still fails the existing `α_max · f_max < noise` criterion,
-otherwise emit a finite distant point (see Decisions).
+floor, we triangulate it and decide per cluster from the triangulation's
+observability diagnostics: emit `w = 0` when the depth is still unresolvable,
+otherwise a finite distant point (see Decisions).
 
 ## Approach
 
@@ -146,11 +146,14 @@ nothing new.
 5. **Assemble tracks** from confirmed pairs with the **one-feature-per-image**
    constraint; drop tracks seen in fewer than `min_views` images (default 2,
    raise to 3 to suppress false positives).
-6. **Classify.** Compute each track's parallax signal `α_max · f_max` in pixels.
-   If it is below the noise floor the depth is unrecoverable, so the track stays
-   `w = 0`. Otherwise triangulate it and apply the same `α_max · f_max < noise`
-   criterion to the triangulated result: `w = 0` if it still fails, a finite
-   distant point if it passes.
+6. **Classify.** Triangulate each track and classify it with the shared
+   observability diagnostics (`classify_rays_at_infinity`, see
+   [batch-triangulation-api.md](../core/batch-triangulation-api.md)): the
+   inverse-depth z-score — computed against a per-ray angular noise of
+   `noise_floor_px / f_max`, since discovered tracks carry no reprojection
+   error — decides finite vs at infinity, and tracks whose depth the
+   diagnostics cannot pin down either way come back *indeterminate* and are
+   dropped.
 7. **Emit.** Each surviving track becomes a new point (direction
    `normalise(Σ rᵢ)` for `w = 0`, the triangulated position for finite), plus
    its observations, appended to the reconstruction via `clone_with_changes`.
@@ -170,10 +173,12 @@ Fits `sfm xform` as an ordered operation, consistent with the existing
 filtering/optimisation ops:
 
 ```
-sfm xform in.sfmr out.sfmr --find-points-at-infinity <eps_deg>[,<desc_thresh>[,<min_views>]]
+sfm xform in.sfmr out.sfmr --find-points-at-infinity <eps_deg>[,<desc_thresh>[,<min_views>[,<noise_floor_px>]]]
 ```
 
-e.g. `--find-points-at-infinity 0.1,200,2` (the `desc_thresh` default is 200).
+e.g. `--find-points-at-infinity 0.1,200,2` (defaults: `desc_thresh` 200,
+`min_views` 2, `noise_floor_px` 1.0 — the keypoint-localisation noise the
+classifier converts to per-ray angular noise).
 A `--max-features <N>` flag (the
 standard cap many commands carry, taking each image's largest features) bounds
 the per-image keypoint set: it caps memory and runtime on dense or many-image
@@ -265,12 +270,14 @@ What the numbers say:
 
 ## Decisions
 
-- **`w = 0` vs distant-finite.** Decide per track from its parallax signal
-  `α_max · f_max`. Below the noise floor the depth is unrecoverable, so emit
-  `w = 0`. Above the floor, triangulate the track and judge the triangulated
-  result against the same finite-vs-infinite criterion: keep `w = 0` if its noise
-  still fails, otherwise emit a finite distant point. No separate flag; ε governs
-  how many tracks reach the triangulation branch.
+- **`w = 0` vs distant-finite.** Decide per track from the triangulation's
+  observability diagnostics (the inverse-depth z-score of
+  [batch-triangulation-api.md](../core/batch-triangulation-api.md), with
+  `noise_floor_px / f_max` as the per-ray angular noise): emit `w = 0` when the
+  depth is unresolvable, a finite distant point when it resolves, and drop the
+  *indeterminate* middle. No separate flag; ε governs how many tracks reach the
+  triangulation branch. (The original `α_max · f_max < noise` cut was replaced
+  by this classifier when the batch triangulation API landed.)
 - **Mutual-match scope.** Per-image descriptor-best + ratio test + mutual edge,
   then transitive closure through mutual edges with a one-per-image constraint
   (validated by the prototype: 0 dirty tracks, higher consistency). When closure

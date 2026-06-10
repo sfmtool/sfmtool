@@ -156,7 +156,7 @@ distorted.
 ## Point ID Resolution
 
 Point IDs are resolved following the
-[Point ID specification](sfmr-file-format.md#point-id-portable-3d-point-references). The goal is
+[Point ID specification](../formats/sfmr-file-format.md#point-id-portable-3d-point-references). The goal is
 to find the 3D point position corresponding to each Point ID in the **input reconstruction** (the
 one being transformed), even when the Point IDs were copied from a different reconstruction.
 
@@ -178,7 +178,7 @@ The resolution process:
 1. **Load the source reconstruction** — the `.sfmr` file referenced by `sfmr` (resolved relative
    to the YAML file's directory), or found by searching for a file whose `content_xxh128` matches
    the Point ID hash prefix (using the
-   [workspace search strategy](sfmr-file-format.md#resolving-a-point-id-to-a-sfmr-file)).
+   [workspace search strategy](../formats/sfmr-file-format.md#resolving-a-point-id-to-a-sfmr-file)).
 2. **Map point to (image, feature) observations** — look up the point index in the source
    reconstruction's track data to get the list of `(image_name, feature_index)` pairs that
    observe this point.
@@ -209,11 +209,11 @@ warn and use the most common point index.
 When cross-reconstruction resolution is used, print a summary:
 
 ```
-Resolving Point IDs from sfmr/calib_x04.sfmr -> input.sfmr
-  pt3d_a1b2c3d4_12345 -> pt3d_e5f6g7h8_8901 (via image_003.jpg feat #847)
-  pt3d_a1b2c3d4_67890 -> pt3d_e5f6g7h8_3456 (via image_012.jpg feat #1247)
-  pt3d_a1b2c3d4_11111 -> pt3d_e5f6g7h8_7722 (via image_015.jpg feat #602)
-  pt3d_a1b2c3d4_22222 -> pt3d_e5f6g7h8_9103 (via image_023.jpg feat #2031)
+Resolving Point IDs from source (a1b2c3d4...) -> input (e5f6a7b8...):
+  pt3d_a1b2c3d4_12345 -> point 8901 (via image_003.jpg feat #847)
+  pt3d_a1b2c3d4_67890 -> point 3456 (via image_012.jpg feat #1247)
+  pt3d_a1b2c3d4_11111 -> point 7722 (via image_015.jpg feat #602)
+  pt3d_a1b2c3d4_22222 -> point 9103 (via image_023.jpg feat #2031)
 ```
 
 This lets the user verify that the right points were found and through which image the match
@@ -268,6 +268,6 @@ that appear after it (e.g., `--align-to-input`) operate on the already-scaled re
 
 When `--scale-by-measurements` is applied, the target unit is recorded in the output `.sfmr`
 file's top-level metadata as `world_space_unit`. See the
-[sfmr file format spec](sfmr-file-format.md#world-space-unit) for the field definition.
+[sfmr file format spec](../formats/sfmr-file-format.md#world-space-unit) for the field definition.
 
 This allows downstream tools and the GUI to display coordinates with appropriate units.

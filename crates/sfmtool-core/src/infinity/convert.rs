@@ -6,7 +6,7 @@
 //! A point at infinity (`w = 0`) is a feature track whose observation rays are
 //! parallel to within measurement noise — distant content whose depth the SfM
 //! solve cannot pin down. The two conversions here move points across that
-//! boundary; see `specs/drafts/sfmr-v2-points-at-infinity.md` for the theory.
+//! boundary; see `specs/formats/sfmr-file-format.md` for the theory.
 //!
 //! The conversions are not inverses: finite → infinity drops a depth the data
 //! never determined, while infinity → finite must *supply* a depth the data

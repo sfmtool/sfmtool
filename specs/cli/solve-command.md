@@ -38,9 +38,9 @@ Exactly one is required:
 | `--flow-preset` | `fast` \| `default` \| `high_quality` | `default` | Flow quality preset |
 | `--flow-skip` | int | 5 | Sliding window size for flow matching |
 | `--max-features` | int | | Maximum features per image |
-| `--camera-model` | string | auto | Camera model override |
+| `--camera-model` | choice | auto | Camera model override; one of the 10 supported COLMAP model names (`SIMPLE_PINHOLE`, `PINHOLE`, `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `OPENCV_FISHEYE`, `SIMPLE_RADIAL_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`, `RAD_TAN_THIN_PRISM_FISHEYE`) |
 | `--range / -r` | string | | Range expression for file numbers |
-| `--detect-infinity / --no-detect-infinity` | bool | `true` | Reclassify points whose depth the solve could not pin down as points at infinity (`w = 0`). See [sfmr file format §7](../formats/sfmr-file-format.md) and [points-at-infinity draft](../drafts/sfmr-v2-points-at-infinity.md). |
+| `--detect-infinity / --no-detect-infinity` | bool | `true` | Reclassify points whose depth the solve could not pin down as points at infinity (`w = 0`). See [sfmr file format §7](../formats/sfmr-file-format.md). |
 
 ## Input Modes
 
@@ -60,6 +60,10 @@ COLMAP database, skipping feature extraction and matching.
 `--seq-overlap WINDOW,OVERLAP` reconstructs the sequence in overlapping windows of size
 `WINDOW` with `OVERLAP` shared images, then aligns and merges the sub-reconstructions. Useful
 for long sequences that fail with a single solve.
+
+`--seq-overlap` cannot be combined with `--output` (each window writes its own
+automatically-named output) or with a `.matches` input file (the windows drive
+their own feature matching).
 
 ## Rig Support
 

@@ -69,6 +69,7 @@ duplicated helper. The remaining work is concentrated in the Rust crates.
 - Proposed fix: extract the inline `mod tests` into sibling `tests.rs` for the 8 files, matching the established convention. (Genuinely small files — `camera.rs` 248, `rotation.rs` 204, etc. — are fine inline; no need to chase those.)
 - Effort: low — mechanical per file.
 - Risk: low — test-only.
+> _Status (2026-06-10): Done — all 8 extracted to sibling `tests.rs` following the `distortion.rs` convention (net −1545 inline lines). Test counts identical before/after (614 passed, 2 ignored); `cargo fmt` and `clippy --workspace` clean (this commit)._
 
 > **Surveyed and cleared:** `spherical_tile_rig.rs` (1060 — coherent tile-rig
 > primitive; its `camrig.rs` helper is properly private), `camera_intrinsics.rs`
@@ -147,6 +148,7 @@ duplicated helper. The remaining work is concentrated in the Rust crates.
    tests, `triangulation.rs` 46%, `image_pair_graph.rs` 40%) — and one
    (`optical_flow/variational.rs`) was simply missed by the prior pass. Low/low,
    mechanical, and it removes the residual two-convention split inside `sift/`.
+   > _Status (2026-06-10): Done — see #4 (this commit)._
 
 2. **Extract the `cam cp` block from `test_camrig.py` (#9) and consolidate the
    PyO3 array-extraction helpers (#6, helper half).** Two independent low/low

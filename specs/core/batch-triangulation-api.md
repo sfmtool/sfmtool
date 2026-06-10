@@ -16,9 +16,9 @@ with many observations were misclassified as finite. The conditioning of the
 triangulation answers the finite-vs-infinity question directly; previously it
 was computed and thrown away.
 
-Related: [finding points at infinity in an existing solve](xform-find-points-at-infinity.md),
-[the v2 points-at-infinity format model](sfmr-v2-points-at-infinity.md), and
-[rendering points at infinity in the GUI](gui-points-at-infinity.md).
+Related: [finding points at infinity in an existing solve](../cli/xform-find-points-at-infinity.md),
+[the v2 points-at-infinity format model](../formats/sfmr-file-format.md) (§7), and
+[rendering points at infinity in the GUI](../gui/gui-point-cloud-rendering.md).
 
 ## The Problem
 

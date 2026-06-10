@@ -1,5 +1,12 @@
 # Epipolar Curves for Non-Perspective Cameras
 
+**Status:** Implemented — `crates/sfmtool-core/src/epipolar.rs`
+(`plot_epipolar_curve`, `plot_epipolar_curves_batch`, `EpipolarCurveOptions`),
+exposed as `sfmtool._sfmtool.epipolar_curves` (`py_epipolar.rs`) and consumed
+by `sfm epipolar` via `visualization/_epipolar_display.py`. As shipped, the
+anchor depth is a **per-feature argument** (scalar / array), not an options
+field — the API blocks below reflect that.
+
 ## The Problem
 
 The epipolar constraint `p2ᵀ F p1 = 0` only holds when `p1`, `p2` are pixel
@@ -52,13 +59,6 @@ handling).
 
 /// Controls how an epipolar curve is sampled into a polyline.
 pub struct EpipolarCurveOptions {
-    /// Seed depth in camera 1 used to bracket the in-image interval. Typical:
-    /// reconstructed depth of the observed track when triangulated, otherwise
-    /// the baseline length `‖C2 − C1‖`. The algorithm walks outward in
-    /// log-depth from this seed to find where the curve enters and exits the
-    /// image, so the seed only needs to be within ~10 octaves of the truth.
-    /// Default: 1.0.
-    pub anchor_depth: f64,
     /// Maximum allowed perpendicular distance (pixels) from a segment's
     /// midpoint to its chord before the segment is further subdivided.
     /// Default: 0.5.
@@ -70,7 +70,7 @@ pub struct EpipolarCurveOptions {
 
 impl Default for EpipolarCurveOptions {
     fn default() -> Self {
-        Self { anchor_depth: 1.0, curvature_tolerance: 0.5, max_vertices: 256 }
+        Self { curvature_tolerance: 0.5, max_vertices: 256 }
     }
 }
 
@@ -84,18 +84,28 @@ impl Default for EpipolarCurveOptions {
 ///
 /// The returned polyline is fully inside `[0, cam2.width) × [0, cam2.height)`;
 /// the caller can draw it directly with `cv2.polylines` (no further clipping).
+///
+/// `anchor_depth` is the seed depth in camera 1 used to bracket the in-image
+/// interval — typically the reconstructed depth of the observed track when
+/// triangulated, otherwise the baseline length `‖C2 − C1‖`. The algorithm
+/// walks outward in log-depth from this seed, so an order-of-magnitude
+/// estimate is fine.
 pub fn plot_epipolar_curve(
     p1: [f64; 2],
     cam1: &CameraIntrinsics,
     pose1: &RigidTransform,          // cam1_from_world
     cam2: &CameraIntrinsics,
     pose2: &RigidTransform,          // cam2_from_world
+    anchor_depth: f64,
     opts: &EpipolarCurveOptions,
 ) -> Vec<[f64; 2]>;
 
-/// Batch form: one polyline per input pixel, parallelized over points.
+/// Batch form: one polyline per input pixel (with a per-feature anchor
+/// depth), parallelized over points. `anchor_depths.len()` must equal
+/// `points1.len()`.
 pub fn plot_epipolar_curves_batch(
     points1: &[[f64; 2]],
+    anchor_depths: &[f64],
     cam1: &CameraIntrinsics,
     pose1: &RigidTransform,
     cam2: &CameraIntrinsics,
@@ -249,10 +259,10 @@ Exposed as `sfmtool._sfmtool.epipolar_curves`
 ```python
 epipolar_curves(
     points1: NDArray[N, 2],
+    anchor_depths: NDArray[N],   # per-feature seed depths (required, positional)
     cam1: CameraIntrinsics, q1_wxyz: NDArray[4], t1: NDArray[3],
     cam2: CameraIntrinsics, q2_wxyz: NDArray[4], t2: NDArray[3],
-    *, anchor_depth: float = 1.0,
-    curvature_tolerance: float = 0.5,
+    *, curvature_tolerance: float = 0.5,
     max_vertices: int = 256,
 ) -> list[NDArray[M, 2]]   # one polyline per input point; lengths vary
 ```
@@ -284,7 +294,7 @@ O(1) lookups against the track-index.
 ## Out of Scope
 
 Visualization only (`sfm epipolar`). The polar-sweep and rectified-sweep
-matchers (`feature_match/_polar_sweep.py`, `_rectification.py`,
+matchers (`feature_match/_polar_sweep.py`, `feature_match/_rectified_sweep.py`,
 `sfmtool-core/src/rectification.rs`) carry the same pinhole assumption; making
 *matching* fisheye-aware (sweeping along the bearing-space epipolar line) is
 separate, larger work.

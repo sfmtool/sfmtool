@@ -257,7 +257,7 @@ def _detect_infinity_points(recon):
     observation rays are parallel to within measurement noise has no real
     depth — it is a point at infinity. This reclassifies such points so
     downstream consumers see the homogeneous model. See
-    ``specs/drafts/sfmr-v2-points-at-infinity.md``.
+    ``specs/formats/sfmr-file-format.md``.
     """
     classified = recon.classify_points_at_infinity()
     count = int(np.count_nonzero(classified.point_is_at_infinity))
