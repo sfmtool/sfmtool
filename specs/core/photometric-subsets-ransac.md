@@ -1,14 +1,15 @@
 # Photometric refinement via per-tile RANSAC subset partition
 
-**Status:** Draft. Standalone specification — implementable from
-scratch without reference to any other photometric refinement
-approach. The production target is Rust on the existing
-`PerSphericalTileSourceStack` data structures, with PyO3 bindings.
-Folds into `specs/core/` once the production pipeline consumes its
-outputs.
+**Status:** Implemented — `crates/sfmtool-core/src/photometric_ransac.rs`
+(`refine_photometric_ransac`, `RansacPhotometricParams`), with PyO3 bindings
+(`py_photometric_ransac.rs`). Consumed in production by the tile-batched
+consensus-atlas pipeline ([tile-batched-consensus-atlas.md](tile-batched-consensus-atlas.md)
+→ `consensus_atlas.rs`), which `sfm panorama` drives via `rig/panorama.py`.
+Originally a standalone draft; promoted to `specs/core/` once the production
+pipeline consumed its outputs, per its own graduation trigger.
 
-[`PerSphericalTileSourceStack`]: ../core/per-spherical-tile-source-stack.md
-[`SphericalTileRig`]: ../core/spherical-tiles-rig.md
+[`PerSphericalTileSourceStack`]: per-spherical-tile-source-stack.md
+[`SphericalTileRig`]: spherical-tiles-rig.md
 
 ## Problem statement
 

@@ -18,7 +18,7 @@ If `WORKSPACE_DIR` is omitted, the current directory is used.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--feature-tool` | `colmap` \| `opencv` | `colmap` | Feature extraction backend |
+| `--feature-tool` | `colmap` \| `opencv` \| `sfmtool` | `colmap` | Feature extraction backend |
 | `--dsp / --no-dsp` | bool | `false` | Enable domain size pooling (COLMAP only) |
 | `--max-features` | int | 8192 | Maximum features per image (COLMAP only) |
 | `--gpu / --no-gpu` | bool | `true` | GPU acceleration for SIFT (COLMAP only) |
@@ -28,7 +28,7 @@ If `WORKSPACE_DIR` is omitted, the current directory is used.
 ## Validation Rules
 
 - COLMAP-specific options (`--dsp`, `--max-features`, `--gpu`, `--affine-shape`) cannot be
-  used with `--feature-tool opencv`.
+  used with any non-`colmap` feature tool (`opencv` or `sfmtool`).
 - `--gpu` and `--affine-shape` cannot both be enabled simultaneously.
 - Without `--force`, the command errors if the directory is already a workspace or is nested
   inside an existing workspace.

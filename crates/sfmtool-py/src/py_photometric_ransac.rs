@@ -3,7 +3,7 @@
 
 //! Python binding for the photometric RANSAC refinement.
 //!
-//! See ``specs/drafts/photometric-subsets-ransac.md`` for the algorithm.
+//! See ``specs/core/photometric-subsets-ransac.md`` for the algorithm.
 //! This binding accepts a float32-backed
 //! [`crate::PyPerSphericalTileSourceStack`] and returns a
 //! :class:`RansacPhotometricOutput` whose fields are owned NumPy arrays.

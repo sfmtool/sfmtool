@@ -20,7 +20,7 @@ def keep_infinity_points(
     computed from a direction rather than a location. Those filters keep such
     points unconditionally via this helper. Filters scoring track length or
     feature size, which are well-defined regardless of ``w``, score points at
-    infinity normally instead. See specs/drafts/sfmr-v2-points-at-infinity.md.
+    infinity normally instead. See specs/formats/sfmr-file-format.md.
     """
     at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
     return np.asarray(finite_keep_mask, dtype=bool) | at_infinity

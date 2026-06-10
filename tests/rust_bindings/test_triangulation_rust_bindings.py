@@ -5,7 +5,7 @@
 
 Covers the free ``triangulate_batch`` (rays in, point + diagnostics out) and the
 ``SfmrReconstruction.triangulation_diagnostics`` convenience over a loaded
-reconstruction's stored points. See specs/drafts/batch-triangulation-api.md.
+reconstruction's stored points. See specs/core/batch-triangulation-api.md.
 """
 
 import numpy as np

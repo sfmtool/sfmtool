@@ -361,7 +361,7 @@ impl SphericalTileRig {
     /// The returned map has dimensions `dst.size()`.
     ///
     /// **Why closest-tile is sufficient.** With
-    /// `half_fov_rad = 0.5 · measured_max_nn_angle · overlap_factor`,
+    /// `half_fov_rad = measured_max_coverage_angle · overlap_factor`,
     /// every world direction's angularly-closest tile contains that
     /// direction inside its patch (validated by the coverage test below),
     /// so the projected pixel always lands inside the tile's

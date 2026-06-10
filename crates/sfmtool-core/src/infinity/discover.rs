@@ -5,7 +5,7 @@
 //! existing reconstruction by clustering the world-space directions of
 //! keypoints across all images and confirming clusters with SIFT descriptors.
 //!
-//! See `specs/drafts/xform-find-points-at-infinity.md` for the design. This
+//! See `specs/cli/xform-find-points-at-infinity.md` for the design. This
 //! complements [`SfmrReconstruction::classify_points_at_infinity`], which only
 //! *reclassifies* points the solve already triangulated; here we *discover* new
 //! tracks the solve's parallax filters threw away.

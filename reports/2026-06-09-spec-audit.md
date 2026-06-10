@@ -46,6 +46,7 @@ re-verified against the current tree with fresh line numbers. What did change:
   - `--depth-reliability` is fully implemented (`analyze.py:52-57,216`, in the mutual-exclusion set) and even appears in the command docstring (`analyze.py:120-122`), but remains absent from the spec's Analysis Modes table and syntax line — the spec lists 5 modes, the code has 6.
   - `--samples` is `click.IntRange(min=100)` (`analyze.py:81-84`); the spec's option table documents a plain `int` default 100 with no minimum.
 **Recommendation:** update spec — add the `--depth-reliability` row and the `--samples` minimum.
+> _Status (2026-06-10): Done — added the `--depth-reliability` mode to the syntax line and Modes table, and noted the `--samples` min of 100 (this commit)._
 **Unclear / incorrect / suspicious:** None.
 
 ### specs/cli/camrig-command.md
@@ -72,6 +73,7 @@ re-verified against the current tree with fresh line numbers. What did change:
 **Inconsistencies:** (carried forward; sharpened this run)
   - Spec line 32 says `--separate` produces two files suffixed `_A`/`_B`; the code writes `{stem}.png` + `{stem}_other.png` (`_epipolar_display.py:617-625`), and in `--pairs-dir` batch mode saves only the first image when not side-by-side (`save_which="first"`).
 **Recommendation:** update spec — document the actual `_other` suffix and batch-mode single-side behavior.
+> _Status (2026-06-10): Done — option table now says `_other` suffix; the Adjacent-pairs section documents `<stem>.png` naming and first-image-only saving (this commit)._
 **Unclear / incorrect / suspicious:** None.
 
 ### specs/cli/flow-command.md
@@ -105,6 +107,7 @@ re-verified against the current tree with fresh line numbers. What did change:
 **Implementing code:** `src/sfmtool/_commands/insv2rig.py`; `rig/insv2rig.py`.
 **Inconsistencies:** None in the spec itself.
 **Recommendation:** update code (trivial, carried forward) — the comment `rig/insv2rig.py:18` still says "~29mm" while `_X5_BASELINE_M = 0.0307` (30.7 mm). Internal comment typo, not spec divergence.
+> _Status (2026-06-10): Done — comment fixed to "~30.7mm" (it lives at `_commands/insv2rig.py:18`, not `rig/insv2rig.py`) (this commit)._
 
 ### specs/cli/match-command.md
 **Summary:** Feature matching (exhaustive/sequential/flow) producing `.matches`, plus `--merge`, with the camera_config/`--camera-model` conflict rule.
@@ -144,6 +147,7 @@ re-verified against the current tree with fresh line numbers. What did change:
   - The cross-reconstruction diagnostics example (spec lines 212-216) differs from the printed format: spec shows `Resolving Point IDs from sfmr/calib_x04.sfmr -> input.sfmr`; code prints `Resolving Point IDs from source ({prefix}...) -> input ({hash}...):` (`_scale_by_measurements.py:255`).
   - Example Point IDs in that block use non-hex characters (`pt3d_e5f6g7h8_…`, lines 213-216) while the parser requires `[0-9a-f]{8}` (`:30`) — the examples could not parse. (The *primary* diagnostics example earlier in the spec matches the code; only this block is wrong.)
 **Recommendation:** update spec — refresh the cross-reconstruction diagnostics block and use valid hex IDs.
+> _Status (2026-06-10): Done — the diagnostics example now shows the real `Resolving Point IDs from source (…) -> input (…):` / `pt3d_… -> point N (via …)` format with valid hex prefixes; also fixed three pre-existing broken `sfmr-file-format.md` relative links in the same file (this commit)._
 
 ### specs/cli/sift-command.md
 **Summary:** SIFT extract/draw with workspace integration, `--filter-sfm`, `--tool`/`--dsp` overrides.
@@ -151,6 +155,7 @@ re-verified against the current tree with fresh line numbers. What did change:
 **Inconsistencies:** (carried forward, still present)
   - Spec line 16 says PATHS "If omitted, the workspace root is used", but the code requires it (`sift.py:98` raises `UsageError`).
 **Recommendation:** discuss — drop the workspace-root-default claim, or implement it.
+> _Status (2026-06-10): Done (spec side) — the spec now marks PATHS as required, matching the code; implementing a workspace-root default remains available as a future enhancement if wanted (this commit)._
 
 ### specs/cli/solve-command.md
 **Summary:** Incremental/global SfM from images or `.matches`, with rig support, flow matching, seq-overlap, camera_config/`.camrig` precedence, `--detect-infinity`.
@@ -159,6 +164,7 @@ re-verified against the current tree with fresh line numbers. What did change:
   - `--camera-model` documented as free-form "string … auto" but is a 10-value `click.Choice` (`solve.py:110-122`), omitting `FULL_OPENCV` (same question as `match`).
   - `--seq-overlap` mutual exclusions — cannot combine with `--output` (`solve.py:186-189`) or `.matches` input (`:208-209`) — remain undocumented.
 **Recommendation:** update spec — note the enumerated Choice and the `--seq-overlap` exclusions; fold the `FULL_OPENCV` question in with `match`.
+> _Status (2026-06-10): Done — `--camera-model` documented as the 10-value choice list and the `--seq-overlap` exclusions added. The `FULL_OPENCV` decision itself remains open (see match) (this commit)._
 
 ### specs/cli/to-colmap-bin-command.md
 **Summary:** Exports `.sfmr` to COLMAP binary with `--range`/`--filter-points`.
@@ -190,6 +196,7 @@ re-verified against the current tree with fresh line numbers. What did change:
 **Inconsistencies:** (carried forward, still present)
   - The `--feature-tool` Choice in the spec lists `colmap | opencv`; the code accepts `colmap | opencv | sfmtool` (`ws.py:24`). The COLMAP-only-option validation also errors for any non-`colmap` tool, not just `opencv`.
 **Recommendation:** update spec — add `sfmtool` and generalize the validation wording.
+> _Status (2026-06-10): Done — `sfmtool` added to the Choice and the COLMAP-only rule reworded to any non-`colmap` tool (this commit)._
 
 ### specs/cli/xform-command.md
 **Summary:** Ordered transform/filter pipeline including points-at-infinity ops and `--include-by-distribution`.
@@ -197,6 +204,7 @@ re-verified against the current tree with fresh line numbers. What did change:
 **Inconsistencies:** (carried forward, still present)
   - `--find-points-at-infinity` accepts an optional 4th comma part `noise_floor_px` (`xform/_arg_parser.py:367-378`), but the spec's signature (line 168) documents only 3 parts.
 **Recommendation:** update spec (minor) — document the 4th parameter (default 1.0).
+> _Status (2026-06-10): Done — signature, parameter prose, and an example updated in `xform-command.md`; the promoted `xform-find-points-at-infinity.md` CLI section matches (this commit)._
 
 ### specs/cli/xform-select-by-distribution-command.md
 **Summary:** `--include-by-distribution COUNT[,verbose]` — farthest-point + angular-thinning subset selection.
@@ -216,12 +224,14 @@ re-verified against the current tree with fresh line numbers. What did change:
   - "Out of Scope" (line 287) lists `_rectification.py` among the `feature_match/` matchers; the matcher there is `_rectified_sweep.py` (`_rectification.py` lives at the package root).
   - No Status marker despite being fully implemented.
 **Recommendation:** update spec — align the options struct, signatures, and PyO3 block with the per-feature-anchor implementation; fix the file path; add a Status marker.
+> _Status (2026-06-10): Done — Status marker added; `EpipolarCurveOptions` block, both Rust signatures (`anchor_depth` param / `anchor_depths` slice), and the PyO3 block now match the shipped per-feature-anchor API; Out-of-Scope path corrected to `feature_match/_rectified_sweep.py` (this commit)._
 
 ### specs/core/flow-based-matching.md
 **Summary:** Design/empirical rationale for flow-based feature matching (sliding-window advection + descriptor filtering).
 **Implementing code:** `src/sfmtool/feature_match/_flow_matching.py`; `crates/sfmtool-core/src/optical_flow/`.
 **Inconsistencies:** (carried forward) Internal narrative inconsistency — descriptor threshold `L2 <= 100` in the table header (line 39) vs `L2 <= 250` chosen elsewhere (lines 50/98/112).
 **Recommendation:** update spec — reconcile the table header with the chosen threshold (confirm the code default in `_flow_matching.py` while doing so); optionally add a Status marker.
+> _Status (2026-06-10): Done — verified the production default is 250 (`_flow_matching.py:179`) while the table's ≤100 column was measured with the `sfm flow` diagnostic default (100.0, `flow.py`); the caption now says so explicitly rather than changing the data. Status marker added (this commit)._
 
 ### specs/core/gpu-optical-flow.md
 **Summary:** wgpu compute-shader DIS pipeline (5 stages, hybrid CPU/GPU routing, persistent buffer pools).
@@ -234,6 +244,7 @@ re-verified against the current tree with fresh line numbers. What did change:
 **Implementing code:** `warp_map.rs`, `remap.rs`, `camera_intrinsics.rs`/`distortion.rs` (`ray_to_pixel`), `py_warp_map.rs`.
 **Inconsistencies:** (carried forward) No divergence of substance; the framing ("proposes", "New method needed") is stale and there is no Status marker.
 **Recommendation:** update spec — flip to present tense + Status: Implemented; fold in the implemented `warpmap-pose-extension.md` draft (see Drafts).
+> _Status (2026-06-10): Done — Status marker added, "proposes"/"New method needed" framing flipped to present tense, and the pose extension folded in as a `## Pose-Aware Construction` section (this commit)._
 
 ### specs/core/optical-flow.md
 **Summary:** Core DIS optical-flow spec (algorithm, parameters, presets, module structure, bindings).
@@ -258,6 +269,7 @@ re-verified against the current tree with fresh line numbers. What did change:
 **Implementing code:** `crates/sfmtool-core/src/sift/`; `py_sift.rs`, `py_sift_io.rs`.
 **Inconsistencies:** (carried forward, still present) Header still declares "Status: draft … *planned*"; module-structure and bindings sections still labeled "(planned)" though they exist.
 **Recommendation:** update spec — flip Status to Implemented (Phase 1), keeping the on-disk incremental extraction genuinely-future sections marked as such.
+> _Status (2026-06-10): Done — header now reads Implemented (Phase 1 — CPU + SIMD + multithread) with the GPU phase and on-disk incremental extraction still marked future; the three "(planned)" section labels dropped (this commit)._
 
 ### specs/core/spherical-tiles-rig.md — Status: Implemented
 **Summary:** Sphere-as-pinhole-tile-rig with atlas packing and resampling.
@@ -265,6 +277,7 @@ re-verified against the current tree with fresh line numbers. What did change:
 **Inconsistencies:** (carried forward, still present; code-side confirmed this run)
   - Line 364's "Why closest-tile" note states `half_fov_rad = 0.5 · measured_max_nn_angle · overlap_factor`, contradicting the authoritative definition (lines 103-104, 174) and the code (`spherical_tile_rig.rs:248`: `measured_max_coverage_angle * params.overlap_factor` — no 0.5, coverage-angle).
 **Recommendation:** update spec — correct line 364 to the coverage-angle form. Code is right; this is an isolated doc bug.
+> _Status (2026-06-10): Done — the doc-comment formula now reads `half_fov_rad = measured_max_coverage_angle · overlap_factor` (this commit)._
 
 ### specs/core/tile-batched-consensus-atlas.md — Status: Implemented
 **Summary:** Bounded-memory batched panorama compositing orchestrator.
@@ -345,10 +358,12 @@ since shipped, with `gui-plan.md` still carrying the oldest snapshot.
 ### specs/gui/gui-image-animation.md
 **Inconsistencies:** (carried forward, still present) Proposal framing with an "Implementation Plan" and no Status marker, but `AnimationState` (`image_browser.rs:41-69`), `PlayDirection` (:32-38), keyboard controls, minibar transport, and camera-switch sync all exist.
 **Recommendation:** update spec — add `Status: Implemented (date)`, convert plan framing to present tense.
+> _Status (2026-06-10): Done — Status marker added pointing at the implementing symbols; the Implementation Plan section is kept, labelled as the as-built breakdown (this commit)._
 
 ### specs/gui/gui-multi-panel-image-browser.md
 **Inconsistencies:** (carried forward; refined) "Plan:" framing though implemented; the stale reference at line 134 — "`viewer_3d.rs` (line ~1280)" — now resolves to `viewer_3d/overlay.rs` (the status-text overlay).
 **Recommendation:** update spec — add Status: Implemented, fix the reference to `viewer_3d/overlay.rs`.
+> _Status (2026-06-10): Done — title de-"Plan:"-ed, Status marker added, overview reworded to present tense, stale reference now points at `viewer_3d/overlay.rs` (this commit)._
 
 ### specs/gui/gui-plan.md — "Current Implementation Status" *Updated: 2026-03-27* (oldest GUI snapshot)
 **Inconsistencies:** (carried forward, still present, plus one addition)
@@ -356,10 +371,12 @@ since shipped, with `gui-plan.md` still carrying the oldest snapshot.
   - "Image Browser → Planned enhancements: Animation mode" still listed as planned but implemented ("Grid mode" remains genuinely unimplemented).
   - "Next Steps" items overlapping `gui-adaptive-clip-and-grid.md` (Implemented 2026-04-05) still unreconciled.
 **Recommendation:** update spec — refresh the snapshot date and reconcile the lists.
+> _Status (2026-06-10): Done — snapshot stamped 2026-06-10; animation, cross-panel hover, full Point Track Detail, and camera-view FOV zoom added to the implemented list; the Image Browser "Animation mode" enhancement struck through. One correction to this audit: Next-Steps item 1 (grid depth occlusion) is NOT delivered — `gui-adaptive-clip-and-grid.md:124` explicitly defers it — so it stays listed (this commit)._
 
 ### specs/gui/gui-viewport-navigation.md
 **Inconsistencies:** (carried forward, still present) Self-contradiction: the Camera View Mode Override subsection (lines 70-77) documents that all zoom controls adjust FOV in camera view — matching `viewer_3d/input.rs:105-106` and the user docs — while "Future Enhancements" line 647 keeps "FOV zoom" as a single unchecked `[ ] (Planned)` item. Only the *free-navigation* FOV-zoom binding is missing. Other unchecked items verified genuinely pending.
 **Recommendation:** update spec — split the item: camera-view Ctrl+drag (done) vs free-navigation gesture (planned).
+> _Status (2026-06-10): Done — checklist split into `[x]` camera-view FOV zoom and `[ ]` free-navigation binding; the "(Planned)" section renamed to "FOV Zoom" with implemented/planned halves and the contradictory "not needed in camera view" sentence corrected; anchors updated in both this file and `gui-plan.md` (this commit)._
 
 ### docs/index.md
 **Inconsistencies:** None found.
@@ -381,26 +398,32 @@ marker is now itself stale.
 ### specs/drafts/sfmr-v2-points-at-infinity.md — RETIRE (carried forward)
 Fully implemented and canonicalized as v2 in `specs/formats/sfmr-file-format.md` §7. The draft is a redundant duplicate whose classification math (`α_max·f_max`) is the *old* approach superseded by `batch-triangulation-api.md`'s `inverse_depth_z`.
 **Recommendation:** retire — the format spec is the source of truth.
+> _Status (2026-06-10): Done — retired; the two CLI specs and three code comments that linked to it now point at `specs/formats/sfmr-file-format.md` (this commit)._
 
 ### specs/drafts/batch-triangulation-api.md — PROMOTE to specs/core (carried forward)
 Status marker reads "Implemented (all four migration phases landed)" and verification confirms it (`triangulation.rs`, `infinity/convert.rs::classify_rays_at_infinity`, bindings, GUI overlays, `analyze --depth-reliability`). Threshold calibration sub-questions remain appropriately flagged as deferred tuning.
 **Recommendation:** promote to `specs/core/` as the triangulation/observability design of record.
+> _Status (2026-06-10): Done — moved to `specs/core/batch-triangulation-api.md`; its Related links retargeted to the promoted/folded locations (this commit)._
 
 ### specs/drafts/photometric-subsets-ransac.md — PROMOTE to specs/core (carried forward; its own Status marker is now the drift)
 The header still reads "**Status:** Draft … implementable from scratch", but the algorithm shipped: `photometric_ransac.rs` (839 lines) exists with PyO3 bindings and is consumed in production by `consensus_atlas.rs` and `rig/panorama.py` — the spec's own promotion trigger ("folds into specs/core once the production pipeline consumes its outputs") fired some time ago. This stale marker misled even this audit's first-pass review.
 **Recommendation:** promote to specs/core and flip the Status marker; cross-link `consensus_atlas` as the production consumer.
+> _Status (2026-06-10): Done — moved to `specs/core/photometric-subsets-ransac.md` with the Status flipped to Implemented, naming `photometric_ransac.rs`, the bindings, and the consensus-atlas/panorama consumers; referrers updated (this commit)._
 
 ### specs/drafts/warpmap-pose-extension.md — FOLD into image-warping (carried forward)
 Status "Implemented" is accurate (`from_cameras_with_rotation`/`with_pose` at `warp_map.rs:40-78`, bindings, `tests/test_warp_map_pose.py`).
 **Recommendation:** fold into `specs/core/image-warping.md` (which it explicitly extends) and remove from drafts/.
+> _Status (2026-06-10): Done — folded as `image-warping.md` § Pose-Aware Construction (API, radial-depth rationale, bindings, implementation notes, non-goals); draft deleted; `per-spherical-tile-source-stack.md` reference retargeted (this commit)._
 
 ### specs/drafts/xform-find-points-at-infinity.md — PROMOTE to specs/cli (carried forward)
 Status "Implemented" is accurate (`infinity/discover.rs`, `xform/_find_points_at_infinity.py`, CLI surface). Step 6 still describes the legacy `α_max·f_max` cut rather than the `inverse_depth_z`/`indeterminate` classifier that `batch-triangulation-api.md` installed — update on promotion so the two specs don't contradict.
 **Recommendation:** promote into `specs/cli/`; update step 6's classifier description.
+> _Status (2026-06-10): Done — moved to `specs/cli/xform-find-points-at-infinity.md`; step 6, the geometric-insight paragraph, and the Decisions bullet now describe the `classify_rays_at_infinity` inverse-depth z-score classifier (with the legacy cut noted as replaced); the CLI signature gained the 4th `noise_floor_px` part; links retargeted (this commit)._
 
 ### specs/drafts/gui-points-at-infinity.md — UPDATE then fold into gui-point-cloud-rendering (carried forward)
 Header still "Draft proposal" though rendering landed (commit c3c2805; `points.wgsl`, `scene_renderer/{gpu_types,uniforms,upload,auto_point_size}.rs`, `point_track_detail.rs`). The §5 UI controls ("Show points at infinity" toggle + `N points (M at infinity)` count) remain the only unbuilt piece — no such strings exist in `state.rs`/dock.
 **Recommendation:** update status to "Implemented (minus §5 toggle/count)", fold into `specs/gui/gui-point-cloud-rendering.md`, and either implement or explicitly defer the toggle/count.
+> _Status (2026-06-10): Done — folded into `gui-point-cloud-rendering.md` as a `## Points at Infinity` section with the status split (rendering + pipeline fixes implemented; toggle/slider/count readout listed under "Remaining UI work" and as an unchecked Future Enhancement); the stale `PointInstance` "alpha unused" comment in that spec fixed; draft deleted (this commit)._
 
 ---
 
@@ -434,6 +457,9 @@ confirmed all of them. In unchanged priority order:
    `xform-find-points-at-infinity.md` to `specs/cli/` (updating its step-6
    classifier); fold `warpmap-pose-extension.md` into `image-warping.md` and
    `gui-points-at-infinity.md` into `gui-point-cloud-rendering.md`.
+   > _Status (2026-06-10): Done — all six graduated as recommended; `specs/drafts/`
+   > is now empty (kept with a `.keep` for future drafts). See the per-draft
+   > status lines above (this commit)._
 
 2. **`sfm flow --pairs-dir` is a documented dead option.** Declared
    (`flow.py:80-84,97`) but never consumed; the spec's batch mode does nothing.
@@ -451,6 +477,7 @@ confirmed all of them. In unchanged priority order:
    --feature-tool` accepts `sfmtool` but the spec lists `colmap|opencv`;
    (c) `sift` PATHS required in code vs optional in spec; (d) `solve`
    `--seq-overlap` exclusions and enumerated `--camera-model` undocumented.
+   > _Status (2026-06-10): Done — all four fixed spec-side (this commit)._
 
 5. **Stale/missing status markers.** `specs/core/sift.md` still "draft/planned"
    though shipped; `image-warping.md` and `epipolar-curves.md` (which also needs
@@ -459,6 +486,10 @@ confirmed all of them. In unchanged priority order:
    `gui-image-animation.md` / `gui-multi-panel-image-browser.md` need refreshing;
    `gui-viewport-navigation.md`'s FOV-zoom checkbox contradicts its own §
    "Camera View Mode Override" and the shipped code.
+   > _Status (2026-06-10): Done — all listed markers/framings fixed, plus
+   > `flow-based-matching.md` (Status + threshold caption) and
+   > `spherical-tiles-rig.md` (line-364 formula). See per-spec status lines
+   > above (this commit)._
 
 Lower-priority carry-forwards: `FULL_OPENCV` omitted from the `match`/`solve`
 Choice lists (needs a decision), the `xform --find-points-at-infinity` 4th

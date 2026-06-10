@@ -46,12 +46,13 @@ via GPU instancing.
 ```rust
 #[repr(C)]
 struct PointInstance {
-    position: [f32; 3],     // world-space XYZ
-    color_packed: u32,      // R8G8B8A8 (alpha unused, set to 255)
+    position: [f32; 3],     // world-space XYZ (unit direction when at infinity)
+    color_packed: u32,      // R8G8B8A8 (alpha: 255 = finite, 0 = at infinity)
 }
 ```
 
-16 bytes per point. 10M points = 160 MB of GPU buffer.
+16 bytes per point. 10M points = 160 MB of GPU buffer. The alpha byte carries
+the points-at-infinity flag (see [Points at Infinity](#points-at-infinity)).
 
 ### Point Sizing
 
@@ -349,6 +350,84 @@ does not write to it, allowing it to render with depth-aware transparency.
 
 ---
 
+## Points at Infinity
+
+*(Folded in from the `gui-points-at-infinity.md` draft. **Status:** rendering
+and the data-pipeline fixes below are implemented (commit c3c2805); the UI
+controls — "Show points at infinity" toggle, `infinity_point_px` slider, and
+the `N points (M at infinity)` count readout — are not yet built.)*
+
+Render `w = 0` points — directions, not locations — so a distant
+skyline/ridge/cloud track contributes to the visual reconstruction instead of
+being dropped or scattered to arbitrary far coordinates. The defining
+property: **a point at infinity has no parallax.** As the camera translates, a
+`w = 0` point holds its angular position; only camera *rotation* moves it —
+exactly the `w = 0` homogeneous transform the background-image mesh already
+relies on (see [gui-camera-views.md](gui-camera-views.md)). Materialising
+infinity points at a finite far distance is explicitly rejected: it
+reintroduces parallax and is wrong. The format model and classifier live in
+the [sfmr file format](../formats/sfmr-file-format.md) (§7) and
+[batch-triangulation-api.md](../core/batch-triangulation-api.md); points are
+normalised on read so the renderer can rely on `w ∈ {0, 1}`, with `position`
+holding a unit direction when `w = 0`.
+
+### Design
+
+1. **One instance buffer for all points.** `instance_index` stays equal to the
+   global `recon.points` index, so picking, hover, and selection work
+   unchanged for infinity points. The kind flag is packed into the otherwise
+   unused alpha byte of `color` (finite → `255`, infinity → `0`), keeping
+   `PointInstance` at 16 B; the shader tests
+   `is_inf = ((color >> 24) & 0xFFu) == 0u`.
+
+2. **Shader branch on kind** (`points.wgsl` `vs_main`). Finite points keep
+   today's world-space billboard path. For a direction `d`:
+   project with `clip_c = view_proj * vec4(d, 0.0)` (translation drops out —
+   no parallax); cull when `clip_c.w <= 0` (behind camera); expand the quad in
+   **screen space** at a fixed pixel radius (world-space size is meaningless
+   for a direction); bias depth to `ndc_z = INF_EPSILON` — a raw `w = 0`
+   transform yields `ndc_z = 0`, which fails `Greater` against the reversed-Z
+   `0.0` clear, so the tiny positive bias keeps infinity splats visible while
+   losing to all finite geometry; and write `view_depth = 0.0`, the existing
+   "skip EDL" sentinel, so infinity points composite unshaded like
+   frustums/quads instead of generating EDL halos. The fragment shader is
+   unchanged (circle clip, selection/hover override, pick id).
+
+3. **Uniforms.** `PointUniforms` gains `screen_size` (pixel-radius → NDC
+   conversion) and `infinity_point_px` (on-screen splat radius for infinity
+   points, default 3 px; a direction has no distance, so a fixed pixel size is
+   the only meaningful sizing).
+
+4. **Data-pipeline exclusions** — sites that iterate `p.position` as a 3-D
+   location must skip or branch on `w = 0` points, or they silently corrupt
+   (unit directions cluster at the origin):
+   `auto_point_size.rs::compute_scene_bounds` and `compute_auto_point_size`
+   skip them (protecting scene center/radius, clip planes, and auto splat
+   size); `upload.rs::upload_track_rays` draws infinity observations as
+   fixed-length bearing rays from each camera center (no finite endpoint to
+   converge on); `point_track_detail.rs` shows the **direction** plus an "∞ /
+   at infinity" badge instead of bogus xyz and projects rotation-only (`R·d`,
+   no depth divide); `app.rs` Alt+click does not move the orbit target from an
+   infinity-point pick (a point with no location has no pivot — selection and
+   hover still work via the pick id).
+
+There is **no visual distinction** between finite and infinity splats beyond
+the (free) absence of EDL shading. In camera-view mode an infinity point's
+splat lands on the same pixel as its observed feature regardless of the viewed
+camera's translation, since the background image mesh uses the same `w = 0`
+transform.
+
+### Remaining UI work
+
+- **Visibility toggle** "Show points at infinity" (default on) and the
+  **count readout** `N points (M at infinity)` (`infinity_point_count` is
+  already in the metadata) — in `state.rs` + dock/overlay.
+- **Infinity point size slider** — `infinity_point_px`, pixel radius, range
+  1–16 px, default 3 (separate from the world-unit `point_size_log2` slider).
+  Whether 1–16 px is the right range is the carried-over open question.
+
+---
+
 ## Implementation Status
 
 ### Implemented
@@ -364,9 +443,15 @@ does not write to it, allowing it to render with depth-aware transparency.
 - [x] Depth-aware transparency with color shift
 - [x] Supernova lighting effect with inverse-square falloff and radiating waves
 - [x] Smooth activation/deactivation fade
+- [x] Points-at-infinity rendering (`w = 0` direction transform, screen-space
+      splats, depth bias, EDL passthrough, data-pipeline exclusions — see
+      [Points at Infinity](#points-at-infinity))
 
 ### Future Enhancements
 
+- [ ] "Show points at infinity" toggle, `N points (M at infinity)` count
+      readout, and infinity point-size slider (see
+      [Remaining UI work](#remaining-ui-work))
 - [ ] Adaptive `length_scale` that updates as you navigate to different parts of the scene
 - [x] Target indicator redesign: 3D compass shape with filled star rose showing `world_up` (see [3D Shape](#3d-shape-rotating-compass))
 - [ ] Target indicator visibility over bright backgrounds (see [open question](#glow-effect))

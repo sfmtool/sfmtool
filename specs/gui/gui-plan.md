@@ -29,7 +29,7 @@ design:
 
 ## Current Implementation Status
 
-*Updated: 2026-03-27*
+*Updated: 2026-06-10*
 
 ### 3D Viewer — Functional
 
@@ -55,10 +55,16 @@ The core 3D viewer is working with these features implemented:
 - `,`/`.` keys to step through images: in camera view mode they switch the
   viewed camera; otherwise they move the selected image without moving the
   3D viewport
-- Single 3D point selection with track visualization (Phase A complete)
+- Single 3D point selection with track visualization, including the Point
+  Track Detail panel (see [gui-point-track-detail.md](gui-point-track-detail.md))
 - Image detail feature overlay modes (None, Features, Reproj Error, Track Length, Max Track Angle)
 - Feature filtering controls (max features, min/max size, tracked only)
 - Colorbar legend for heatmap overlay modes
+- Image animation & playback (Space/arrows/brackets, minibar transport,
+  camera-view fly-through; see [gui-image-animation.md](gui-image-animation.md))
+- Cross-panel hover highlighting (see [gui-cross-panel-hover.md](gui-cross-panel-hover.md))
+- FOV zoom in camera view mode (scroll / Ctrl+drag / pinch adjust FOV instead
+  of dollying; see [gui-viewport-navigation.md](gui-viewport-navigation.md))
 
 ### Core Data — Complete
 
@@ -84,7 +90,7 @@ In rough priority order:
    depth occlusion.
 2. **FOV zoom gesture** — Dedicated input binding for FOV adjustment during
    navigation (lower priority now that the menu slider exists; see
-   [gui-viewport-navigation.md](gui-viewport-navigation.md#fov-zoom-planned))
+   [gui-viewport-navigation.md](gui-viewport-navigation.md#fov-zoom))
 3. ~~**Adaptive grid** — Update grid to work at any scale.~~ Done.
 4. ~~**Adaptive clip planes** — Reversed-Z infinite far projection with adaptive near plane.~~ Done. See [gui-adaptive-clip-and-grid.md](gui-adaptive-clip-and-grid.md).
 
@@ -116,7 +122,8 @@ The image browser is a horizontal thumbnail strip with:
 
 **Planned enhancements**:
 - Grid mode (multi-row thumbnail layout)
-- Animation mode (play through images as sequence)
+- ~~Animation mode (play through images as sequence)~~ Done — see
+  [gui-image-animation.md](gui-image-animation.md).
 - Overlay modes: features, tracks, reprojection error, triangulation angle,
   epipolar lines to selected image
 

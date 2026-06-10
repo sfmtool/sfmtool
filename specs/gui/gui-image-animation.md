@@ -1,5 +1,11 @@
 # Image Animation & Playback
 
+**Status:** Implemented — `AnimationState` / `PlayDirection` and the keyboard
+controls live in `image_browser.rs`, the minibar transport (play/pause button
++ FPS label) in `dock.rs`, with camera-view fly-through via
+`request_camera_switch`. The "Implementation Plan" section below is retained
+as the as-built step breakdown.
+
 ## Problem
 
 The GUI image browser shows a static strip of thumbnails. For video-sequence SfM reconstructions

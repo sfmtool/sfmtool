@@ -661,7 +661,7 @@ Depends on:
   - `direction(t)`, `tile_rotation(t)`, `tile_camera()`,
     `patch_size`. All shipped.
 - `WarpMap::from_cameras_with_rotation` and `WarpMap::remap_bilinear`
-  (`specs/drafts/warpmap-pose-extension.md`) — DONE.
+  (`specs/core/image-warping.md`, Pose-Aware Construction) — DONE.
 
 Independently testable; no external state beyond the rig + sources.
 

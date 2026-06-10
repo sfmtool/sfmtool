@@ -12,7 +12,7 @@ For a quick summary of any sfmtool file, use `sfm inspect`
 ## Command Syntax
 
 ```bash
-sfm analyze <RECONSTRUCTION.sfmr> (--coviz | --z-range | --frustum | --images | --metrics) [OPTIONS...]
+sfm analyze <RECONSTRUCTION.sfmr> (--coviz | --z-range | --frustum | --images | --metrics | --depth-reliability) [OPTIONS...]
 ```
 
 `RECONSTRUCTION` must be a `.sfmr` file.
@@ -28,6 +28,7 @@ Exactly one is required:
 | `--frustum` | Frustum intersection graph: images whose viewing volumes overlap |
 | `--images` | Per-image connectivity table: observations, distances, closest images, graph metrics |
 | `--metrics` | Per-image quality metrics: reprojection error, track length (see below) |
+| `--depth-reliability` | Per-point triangulation conditioning: inverse-depth z-score, condition number |
 
 ## Options
 
@@ -36,7 +37,7 @@ Exactly one is required:
 | `--range / -r` | string | | Range expression for file numbers (only with `--metrics`) |
 | `--near-percentile` | float | 5.0 | Near depth percentile (only with `--frustum`) |
 | `--far-percentile` | float | 95.0 | Far depth percentile (only with `--frustum`) |
-| `--samples` | int | 100 | Monte Carlo samples per frustum pair (only with `--frustum`) |
+| `--samples` | int (min 100) | 100 | Monte Carlo samples per frustum pair (only with `--frustum`) |
 
 ## Per-Image Quality Metrics (`--metrics`)
 

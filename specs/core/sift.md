@@ -1,11 +1,12 @@
-# SIFT (DRAFT)
+# SIFT
 
-> **Status: draft.** This documents a *planned* pure-Rust SIFT detector and
-> descriptor in sfmtool-core, structured to mirror the existing optical-flow
-> implementation (`specs/core/optical-flow.md`). Phase 1 covers CPU + SIMD +
-> multithread only; GPU is deferred to a later phase (a future
-> `specs/core/gpu-sift.md`). Numeric defaults below follow Lowe (2004) and are
-> subject to revision once we cross-validate against OpenCV/COLMAP.
+> **Status: Implemented (Phase 1 — CPU + SIMD + multithread).** The pure-Rust
+> SIFT detector and descriptor ship in `crates/sfmtool-core/src/sift/`, with
+> PyO3 bindings (`py_sift.rs`, `py_sift_io.rs`) and the `sfmtool` backend of
+> `sfm sift` / `ws init --feature-tool sfmtool`. Structured to mirror the
+> optical-flow implementation (`specs/core/optical-flow.md`). GPU remains
+> deferred to a later phase (a future `specs/core/gpu-sift.md`); the on-disk
+> incremental-extraction extensions below are likewise still future work.
 
 ## Motivation
 
@@ -665,7 +666,7 @@ critical section. Wrap describe-and-append in an advisory file lock on the `.sif
   [`../formats/sift-file-format.md`](../formats/sift-file-format.md) under "Incremental
   descriptor extraction (version 2)"; this section is the design rationale.
 
-### Module structure (planned)
+### Module structure
 
 ```
 sfmtool-core/src/sift/
@@ -676,7 +677,7 @@ sfmtool-core/src/sift/
 └── descriptor.rs   # 4x4x8 trilinear-interpolated descriptor + normalize/clamp/quantize
 ```
 
-### Python bindings (planned)
+### Python bindings
 
 `crates/sfmtool-py/src/py_sift.rs`, registered in `sfmtool-py/src/lib.rs`, following
 `py_optical_flow.rs` conventions (`PyReadonlyArray2` in, `IntoPyArray` out,
@@ -699,7 +700,7 @@ unlike the OpenCV backend, which derives them from its `KeyPoint`s via
 2. **Phase 2 (future):** GPU compute shaders (separable blur, DoG, extrema, descriptor),
    reusing the wgpu infrastructure — documented in a future `specs/core/gpu-sift.md`.
 
-## Testing & validation (planned)
+## Testing & validation
 
 - **Cross-validation against OpenCV** (`cv2.SIFT_create`) on the checked-in datasets
   (`seoul_bull_sculpture`, `seattle_backyard`, `dino_dog_toy`): keypoint count in a

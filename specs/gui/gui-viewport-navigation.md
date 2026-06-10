@@ -187,22 +187,28 @@ Zoom toward the point under the cursor rather than toward the target:
 - Uses the existing GPU depth readback (same as Alt+click target picking)
 - Useful for focusing on specific areas without explicitly setting the target
 
-### FOV Zoom (Planned)
+### FOV Zoom
 
 A separate zoom operation that adjusts the camera's field of view instead of
 moving the camera. This is distinct from the standard dolly zoom (which
 changes `target_distance`) — FOV zoom changes `fov` while the camera stays
 in place.
 
-FOV is already adjustable via the View menu slider (10°–120°). A dedicated
-gesture binding would make it faster to adjust during navigation. When
-viewing through a camera (see
-[gui-camera-views.md](gui-camera-views.md#viewing-through-a-camera)),
-the FOV is set automatically from camera intrinsics — FOV zoom is not needed
-for that use case.
+**Implemented in camera view mode:** when viewing through a camera (see
+[gui-camera-views.md](gui-camera-views.md#viewing-through-a-camera)), the
+camera position is locked, so all zoom controls (scroll wheel, Ctrl+drag,
+right-drag, pinch) adjust the FOV instead of dollying (see
+[Camera View Mode Override](#camera-view-mode-override);
+`viewer_3d/input.rs`). The FOV starts from the best fit to the camera's
+intrinsics and the gesture adjusts it from there.
 
-**Open question**: What input binding should FOV zoom use? It needs to be
-distinct from the existing dolly zoom (scroll wheel / Ctrl+two-finger drag).
+**Planned for free navigation:** FOV is already adjustable via the View menu
+slider (10°–120°); a dedicated gesture binding would make it faster to adjust
+during normal (non-camera-view) navigation.
+
+**Open question**: What input binding should free-navigation FOV zoom use? It
+needs to be distinct from the existing dolly zoom (scroll wheel /
+Ctrl+two-finger drag), which is exactly what camera view mode repurposes.
 Most 3D applications treat FOV as a camera property rather than a viewport
 gesture (see survey below), so this is lower priority now that the menu slider
 exists.
@@ -347,7 +353,7 @@ consistent sense of "how much you can see" regardless of window shape.
 
 The FOV is adjustable at runtime via the View menu slider (10°–120°, default
 45°). It can also be adjusted via FOV zoom (see
-[FOV Zoom](#fov-zoom-planned)) — this is needed both for viewing through a
+[FOV Zoom](#fov-zoom)) — this is needed both for viewing through a
 camera at its native FOV and for general-purpose field of view adjustment.
 
 ## Target Control (Alt Mode)
@@ -644,7 +650,8 @@ in Houdini (Space+Z), CloudCompare (Pick Rotation Center), and Potree/RealityCap
 - [ ] Mouse-drag binding for tilt/roll (open question — Ctrl+drag? See [Tilt / Roll](#tilt--roll))
 - [x] Animated target transitions (slerp + ease-in/ease-out over ~200ms on Alt+click)
 - [x] Target indicator redesign: 3D compass shape with filled star rose showing `world_up` (see [Activation and Visual Feedback](#activation-and-visual-feedback))
-- [ ] FOV zoom (adjust field of view without moving camera; see [FOV Zoom](#fov-zoom-planned))
+- [x] FOV zoom in camera view mode (all zoom controls adjust FOV; see [FOV Zoom](#fov-zoom))
+- [ ] FOV zoom gesture binding for free navigation (see [FOV Zoom](#fov-zoom))
 - [ ] Configurable sensitivity settings
 - [ ] Zoom-to-cursor (depth readback to zoom toward point under cursor)
 - [ ] Inertial scrolling / smooth animation

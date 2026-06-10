@@ -6,7 +6,7 @@
 Unlike the other xform operations, ``FindPointsAtInfinityTransform`` is
 *additive*: it appends new points and tracks rather than transforming or
 removing existing geometry, so the point count grows. See
-specs/drafts/xform-find-points-at-infinity.md.
+specs/cli/xform-find-points-at-infinity.md.
 """
 
 from .._sfmtool import SfmrReconstruction

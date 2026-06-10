@@ -29,7 +29,7 @@ Image arguments accept filenames (e.g., `image_003.jpg`) or file numbers (e.g., 
 | `--rectify / --no-rectify` | bool | `false` | Apply stereo rectification (pinhole/radial models only) |
 | `--undistort` | flag | | Remove lens distortion (mutually exclusive with `--rectify`) |
 | `--draw-lines / --no-lines` | bool | `true` | Draw epipolar lines/curves vs. horizontal scanlines |
-| `--side-by-side / --separate` | bool | `false` | Single combined image or two separate files (`_A`, `_B`) |
+| `--side-by-side / --separate` | bool | `false` | Single combined image, or two separate files (the second suffixed `_other`) |
 | `--sweep-with-max-features` | int | | Run sort-and-sweep matching with this many features |
 | `--sweep-window-size` | int | 30 | Window size for sweep matching |
 | `--pairs-dir` | path | | Process all adjacent pairs, saving to directory |
@@ -44,7 +44,9 @@ geometry between the two images.
 ### Adjacent pairs
 
 Uses `--pairs-dir` to batch-process all adjacent image pairs in the reconstruction. Saves
-one visualization per pair to the output directory.
+one visualization per pair to the output directory, named by the first image's
+stem (`<stem>.png`); when not `--side-by-side`, only the first image's
+visualization is saved.
 
 ## Camera models and epipolar curves
 

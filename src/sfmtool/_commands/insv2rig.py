@@ -15,7 +15,7 @@ from .._workspace import find_workspace_for_path
 
 # Insta360 X5 rig geometry (calibrated from SfM, validated against physical measurement).
 # The two fisheye lenses are back-to-back, with the right eye rotated 180 degrees
-# around Y relative to the left eye. The optical center baseline is ~29mm along
+# around Y relative to the left eye. The optical center baseline is ~30.7mm along
 # the optical axis (-Z in the left/rig camera frame).
 #
 # These are sensor_from_rig transforms in COLMAP's Y-down convention, stored

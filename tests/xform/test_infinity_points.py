@@ -7,7 +7,7 @@ Filters whose score is undefined for a direction (reprojection error,
 triangulation angle, neighbour distance) pass points at infinity through
 untouched; filters scoring track length or feature size score them normally.
 Bundle adjustment materialises them, refines, then reclassifies. See
-specs/drafts/sfmr-v2-points-at-infinity.md.
+specs/formats/sfmr-file-format.md.
 """
 
 import numpy as np

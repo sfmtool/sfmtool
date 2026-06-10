@@ -162,10 +162,10 @@ Removes 3D points with reprojection error exceeding the threshold (in pixels).
 
 `--find-points-at-infinity` is *additive*: it appends new points and tracks, so
 the point count grows. See
-[xform-find-points-at-infinity.md](../drafts/xform-find-points-at-infinity.md)
+[xform-find-points-at-infinity.md](xform-find-points-at-infinity.md)
 for the design.
 
-#### `--find-points-at-infinity <eps_deg>[,<desc_thresh>[,<min_views>]]`
+#### `--find-points-at-infinity <eps_deg>[,<desc_thresh>[,<min_views>[,<noise_floor_px>]]]`
 
 Discovers points at infinity (and near-infinite distant points) by clustering
 keypoint world-space directions across all images within `eps_deg` on the unit
@@ -176,12 +176,15 @@ emitting each surviving track as a `w = 0` point or a finite distant point.
 (default `2`, must be `>= 2`); a tighter `eps_deg` demands more nearly parallel
 rays (more "infinite"), and a tighter `desc_thresh` rejects weak matches (raise
 it to recover more, lower it to suppress coincidental matches on feature-dense
-or self-similar scenes). This reads the original `.sift` files from the
+or self-similar scenes). `noise_floor_px` (default `1.0`) is the assumed
+keypoint-localisation noise the finite-vs-infinity classifier converts to
+per-ray angular noise. This reads the original `.sift` files from the
 reconstruction's workspace, so the SIFT artifacts must still be present.
 
 ```bash
 --find-points-at-infinity 0.1
 --find-points-at-infinity 0.1,200,2
+--find-points-at-infinity 0.1,200,2,1.5
 ```
 
 #### `--classify-points-at-infinity <noise_floor_px>`

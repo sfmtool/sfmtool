@@ -1,5 +1,10 @@
 # Flow-Based Feature Matching
 
+**Status:** Implemented — `feature_match/_flow_matching.py`
+(`flow_match_sequential`, production descriptor threshold L2 ≤ 250) on top of
+the Rust optical-flow module, driven by `sfm match --flow` / `sfm solve
+--flow-match`; the `sfm flow` command provides the diagnostics described here.
+
 ## The Idea
 
 Traditional SfM feature matching compares SIFT descriptors between image pairs to find
@@ -36,7 +41,9 @@ full-resolution images) established the following baseline behavior:
 | 40 frames | 57.0 px | 21% | 1% pass | 1.48 px median |
 
 "Hit rate" = fraction of image1 keypoints whose advected position lands within 3px of
-an image2 keypoint. "Desc filter" = fraction of hits with L2 descriptor distance <= 100.
+an image2 keypoint. "Desc filter" = fraction of hits with L2 descriptor distance <= 100
+(this column was measured with the `sfm flow` diagnostic default of 100; the production
+matcher threshold chosen below is 250 — see Observations).
 "Filtered spatial" = median hit distance for descriptor-filtered matches.
 
 ### Observations
