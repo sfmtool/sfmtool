@@ -14,6 +14,7 @@ use nalgebra::{Matrix3, Vector3};
 use rayon::prelude::*;
 
 use crate::camera_intrinsics::CameraIntrinsics;
+use crate::patch_cloud::OrientedPatch;
 use crate::rigid_transform::RigidTransform;
 use crate::rot_quaternion::RotQuaternion;
 
@@ -251,6 +252,62 @@ impl WarpMap {
         WarpMap {
             width: dst_w,
             height: dst_h,
+            data,
+            svd: None,
+        }
+    }
+
+    /// Build a `resolution × resolution` warp map sampling `camera`'s image over
+    /// an oriented 3D `patch`.
+    ///
+    /// The destination is the patch's canonical `(s, t) ∈ [-1, 1]²` grid (pixel
+    /// centers at `(col + 0.5, row + 0.5)`). Each entry is the source-image
+    /// `(x, y)` where that patch pixel projects: the patch point is mapped to the
+    /// camera frame via `cam_from_world` and projected with `ray_to_pixel`, so
+    /// all camera models (including distortion / fisheye) are handled. Pixels are
+    /// `(NaN, NaN)` when behind the camera, outside the model domain, or outside
+    /// the image bounds — matching the other constructors.
+    ///
+    /// Generalizes [`Self::from_cameras_with_pose`] from a fronto-parallel depth
+    /// plane to an arbitrary oriented plane. See `specs/core/patch-cloud.md`.
+    pub fn from_patch(
+        patch: &OrientedPatch,
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        resolution: u32,
+    ) -> Self {
+        let r = resolution.max(1);
+        let src_w = camera.width as f64;
+        let src_h = camera.height as f64;
+        let row_len = 2 * r as usize;
+        let step = 2.0 / r as f64;
+
+        let data: Vec<f32> = (0..r)
+            .into_par_iter()
+            .flat_map(|row| {
+                let mut row_data = vec![0.0f32; row_len];
+                let t = (row as f64 + 0.5) * step - 1.0;
+                for col in 0..r {
+                    let s = (col as f64 + 0.5) * step - 1.0;
+                    let world = patch.to_world(s, t);
+                    let p_cam = cam_from_world.transform_point(&world);
+                    let (sx, sy) = match camera.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z]) {
+                        Some((px, py)) if px >= 0.0 && py >= 0.0 && px < src_w && py < src_h => {
+                            (px, py)
+                        }
+                        _ => (f64::NAN, f64::NAN),
+                    };
+                    let idx = 2 * col as usize;
+                    row_data[idx] = sx as f32;
+                    row_data[idx + 1] = sy as f32;
+                }
+                row_data
+            })
+            .collect();
+
+        WarpMap {
+            width: r,
+            height: r,
             data,
             svd: None,
         }
