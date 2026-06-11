@@ -76,8 +76,10 @@ mod py_sweep_match;
 
 // ── Image warping ────────────────────────────────────────────────────────
 
+mod py_patch_cloud;
+pub use py_patch_cloud::{PyOrientedPatch, PyPatchCloud};
 mod py_warp_map;
-pub use py_warp_map::PyWarpMap;
+pub use py_warp_map::{PyImagePyramid, PyWarpMap};
 
 // ── Analysis & algorithms ─────────────────────────────────────────────────
 
@@ -282,6 +284,9 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRansacPhotometricOutput>()?;
     m.add_class::<PySphericalTileRig>()?;
     m.add_class::<PyWarpMap>()?;
+    m.add_class::<PyImagePyramid>()?;
+    m.add_class::<PyOrientedPatch>()?;
+    m.add_class::<PyPatchCloud>()?;
 
     // Photometric refinement.
     m.add_function(wrap_pyfunction!(

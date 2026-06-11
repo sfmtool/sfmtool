@@ -277,6 +277,23 @@ pub fn remap_bilinear(src: &ImageU8, map: &WarpMap) -> ImageU8 {
 ///
 /// `max_anisotropy` caps the number of samples along the major axis.
 pub fn remap_aniso(src: &ImageU8, map: &WarpMap, max_anisotropy: u32) -> ImageU8 {
+    // Number of levels = floor(log2(min(w, h))) + 1, but at least 1.
+    let min_dim = src.width.min(src.height).max(1);
+    let max_levels = ((min_dim as f32).log2().floor() as usize).max(1) + 1;
+    let pyramid = ImageU8Pyramid::build(src, max_levels);
+    remap_aniso_with_pyramid(&pyramid, map, max_anisotropy)
+}
+
+/// Like [`remap_aniso`], but resamples from a prebuilt [`ImageU8Pyramid`].
+///
+/// Use this to warp a single source image through many different maps (e.g.
+/// many small per-keypoint patches) without rebuilding the Gaussian pyramid on
+/// every call. Requires [`WarpMap::compute_svd`] to have been called first.
+pub fn remap_aniso_with_pyramid(
+    pyramid: &ImageU8Pyramid,
+    map: &WarpMap,
+    max_anisotropy: u32,
+) -> ImageU8 {
     assert!(
         map.has_svd(),
         "remap_aniso requires WarpMap SVD data; call compute_svd() first"
@@ -284,14 +301,9 @@ pub fn remap_aniso(src: &ImageU8, map: &WarpMap, max_anisotropy: u32) -> ImageU8
 
     let out_w = map.width();
     let out_h = map.height();
-    let c = src.channels;
+    let c = pyramid.level(0).channels();
     let out_stride = out_w as usize * c as usize;
 
-    // Build the Gaussian pyramid. Number of levels = floor(log2(min(w, h))) + 1,
-    // but at least 1.
-    let min_dim = src.width.min(src.height).max(1);
-    let max_levels = ((min_dim as f32).log2().floor() as usize).max(1) + 1;
-    let pyramid = ImageU8Pyramid::build(src, max_levels);
     let num_levels = pyramid.num_levels();
 
     let rows: Vec<Vec<u8>> = (0..out_h)
