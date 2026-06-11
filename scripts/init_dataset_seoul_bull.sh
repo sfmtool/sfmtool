@@ -1,6 +1,9 @@
 #!/bin/bash
 # Initialize Seoul Bull dataset workspace
 # This script creates a workspace, copies test images, and sets up an sfm_solve.sh script
+#
+# Pipeline: sfmtool SIFT -> track-cluster matching (d=28) -> incremental SfM.
+# The small 270x480 images use a wider cluster floor (d=28) so all 17 register.
 
 set -e
 
@@ -24,21 +27,25 @@ echo "Copied ${NUM_IMAGES} images to ${WORKSPACE_DIR}/images/"
 cat > "${WORKSPACE_DIR}/sfm_solve.sh" << 'EOF'
 #!/bin/bash
 # SfM solve script for Seoul Bull dataset
-# Uses incremental SfM with domain size pooling (DSP)
+# sfmtool SIFT -> track-cluster matching (d=28) -> incremental SfM
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Initialize workspace with DSP
+# Initialize workspace with the sfmtool SIFT backend
 if [ ! -f .sfm-workspace.json ]; then
-  sfm ws init --dsp .
+  sfm ws init --feature-tool sfmtool .
 fi
 
 # Extract features with 3 threads
 sfm sift --extract -t 3 images/*.jpg
 
+# Track-cluster matching with a wider background floor (d=28)
+mkdir -p tvg-matches
+sfm match --cluster --cluster-d 28 images/ -o tvg-matches/seoul_bull.matches
+
 echo "Running incremental SfM on Seoul Bull dataset..."
-sfm solve --incremental --seed 42 images/
+sfm solve --incremental --seed 42 tvg-matches/seoul_bull.matches
 
 echo "Reconstruction complete! Check sfmr/ for results."
 EOF

@@ -29,7 +29,7 @@ __all__ = [
 ]
 
 
-def get_default_sfmtool_feature_options() -> dict:
+def get_default_sfmtool_feature_options(max_num_features: int | None = None) -> dict:
     """Get default options for the sfmtool SIFT backend.
 
     The keys mirror the output-defining fields of ``SiftParams::default()`` in
@@ -39,6 +39,10 @@ def get_default_sfmtool_feature_options() -> dict:
 
     Hardware/performance-only knobs (e.g. thread count) are intentionally
     excluded — they do not change the feature output.
+
+    Args:
+        max_num_features: Cap on the number of features kept per image (the
+            strongest are retained). ``None`` uses the sfmtool default of 8192.
 
     Returns:
         Dict of sfmtool SIFT options.
@@ -51,7 +55,7 @@ def get_default_sfmtool_feature_options() -> dict:
         "double_image": True,
         "contrast_threshold": 0.0067,
         "edge_threshold": 10.0,
-        "max_num_features": 8192,
+        "max_num_features": 8192 if max_num_features is None else max_num_features,
         "orientation_bins": 36,
         "peak_ratio": 0.8,
         "descriptor_width": 4,

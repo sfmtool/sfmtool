@@ -1,6 +1,10 @@
 #!/bin/bash
 # Initialize Dino Dog Toy dataset workspace
 # This script creates a workspace, copies test images, and sets up an sfm_solve.sh script
+#
+# Pipeline: sfmtool SIFT (capped at 2500 features) -> track-cluster matching ->
+# incremental SfM. The feature cap bounds match and solve cost on these
+# high-resolution images.
 
 set -e
 
@@ -24,21 +28,25 @@ echo "Copied ${NUM_IMAGES} images to ${WORKSPACE_DIR}/images/"
 cat > "${WORKSPACE_DIR}/sfm_solve.sh" << 'EOF'
 #!/bin/bash
 # SfM solve script for Dino Dog Toy dataset
-# Uses global SfM with GLOMAP, max 500 features with DSP
+# sfmtool SIFT -> track-cluster matching -> incremental SfM
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Initialize workspace with DSP
+# Initialize workspace with the sfmtool SIFT backend, capped at 2500 features
 if [ ! -f .sfm-workspace.json ]; then
-  sfm ws init --max-features 3000 --dsp .
+  sfm ws init --feature-tool sfmtool --max-features 2500 .
 fi
 
 # Extract features with 3 threads
 sfm sift --extract -t 3 images/*.jpg
 
-echo "Running global SfM (GLOMAP) on Dino Dog Toy dataset..."
-sfm solve --global --max-features 1000 --seed 42 images/
+# Track-cluster matching
+mkdir -p tvg-matches
+sfm match --cluster images/ -o tvg-matches/dino_dog_toy.matches
+
+echo "Running incremental SfM on Dino Dog Toy dataset..."
+sfm solve --incremental --seed 42 tvg-matches/dino_dog_toy.matches
 
 echo "Reconstruction complete! Check sfmr/ for results."
 EOF

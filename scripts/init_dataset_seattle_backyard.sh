@@ -1,6 +1,9 @@
 #!/bin/bash
 # Initialize Seattle Backyard dataset workspace
 # This script creates a workspace, copies test images, and sets up an sfm_solve.sh script
+#
+# Pipeline: sfmtool SIFT (capped at 2000 features) -> track-cluster matching ->
+# global SfM (GLOMAP).
 
 set -e
 
@@ -24,21 +27,25 @@ echo "Copied ${NUM_IMAGES} images to ${WORKSPACE_DIR}/images/"
 cat > "${WORKSPACE_DIR}/sfm_solve.sh" << 'EOF'
 #!/bin/bash
 # SfM solve script for Seattle Backyard dataset
-# Uses global SfM with GLOMAP, 250 max features
+# sfmtool SIFT -> track-cluster matching -> global SfM (GLOMAP)
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Initialize workspace
+# Initialize workspace with the sfmtool SIFT backend, capped at 2000 features
 if [ ! -f .sfm-workspace.json ]; then
-  sfm ws init .
+  sfm ws init --feature-tool sfmtool --max-features 2000 .
 fi
 
 # Extract features with 3 threads
 sfm sift --extract -t 3 images/*.jpg
 
+# Track-cluster matching
+mkdir -p tvg-matches
+sfm match --cluster images/ -o tvg-matches/seattle_backyard.matches
+
 echo "Running global SfM (GLOMAP) on Seattle Backyard dataset..."
-sfm solve --global --max-features 250 --seed 42 images/
+sfm solve --global --seed 42 tvg-matches/seattle_backyard.matches
 
 echo "Reconstruction complete! Check sfmr/ for results."
 EOF
