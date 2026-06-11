@@ -23,8 +23,9 @@ def init_workspace(
         workspace_dir: The SfM workspace directory.
         feature_tool: Name of the feature tool (default: "colmap")
         domain_size_pooling: Enable domain size pooling for SIFT (default: False)
-        max_num_features: Maximum number of features per image (COLMAP only).
-                         If None, uses COLMAP default (8192).
+        max_num_features: Maximum number of features per image (COLMAP and
+                         sfmtool backends). If None, uses the backend default
+                         (8192).
         estimate_affine_shape: Enable affine shape estimation (COLMAP only, default: False).
         use_gpu: Use GPU SIFT extraction (COLMAP only, default: True). Persisted
                  into the config and honored at extraction time, but excluded
@@ -51,7 +52,9 @@ def init_workspace(
     elif feature_tool.lower() == "opencv":
         feature_options = get_default_opencv_feature_options()
     elif feature_tool.lower() == "sfmtool":
-        feature_options = get_default_sfmtool_feature_options()
+        feature_options = get_default_sfmtool_feature_options(
+            max_num_features=max_num_features,
+        )
     else:
         raise ValueError(f"Unsupported feature tool: {feature_tool}")
 

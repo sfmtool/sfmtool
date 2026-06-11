@@ -92,3 +92,40 @@ def test_init_dsp_validation():
     result = runner.invoke(main, ["ws", "init", "--feature-tool", "opencv", "--dsp"])
     assert result.exit_code != 0
     assert "The --dsp/--no-dsp option is only supported for COLMAP" in result.output
+
+
+def test_init_sfmtool_max_features(tmp_path: Path):
+    """--max-features is honored by the sfmtool backend and written to the config."""
+    runner = CliRunner()
+    workspace_dir = tmp_path / "workspace"
+    workspace_dir.mkdir()
+
+    result = runner.invoke(
+        main,
+        [
+            "ws",
+            "init",
+            "--feature-tool",
+            "sfmtool",
+            "--max-features",
+            "2500",
+            str(workspace_dir),
+        ],
+    )
+    assert result.exit_code == 0
+
+    with open(workspace_dir / ".sfm-workspace.json") as f:
+        config = json.load(f)
+    assert config["feature_tool"] == "sfmtool"
+    assert config["feature_options"]["max_num_features"] == 2500
+
+
+def test_init_max_features_opencv_rejected():
+    """--max-features is only supported for COLMAP and sfmtool, not opencv."""
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["ws", "init", "--feature-tool", "opencv", "--max-features", "500"],
+    )
+    assert result.exit_code != 0
+    assert "only supported for COLMAP and sfmtool" in result.output

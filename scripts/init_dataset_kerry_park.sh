@@ -2,6 +2,9 @@
 # Initialize Kerry Park dataset workspace
 # This script creates a workspace, copies the rig images and rig_config.json,
 # and sets up an sfm_solve.sh script
+#
+# Pipeline: sfmtool SIFT -> track-cluster matching -> global SfM (GLOMAP) on a
+# 360-degree fisheye rig.
 
 set -e
 
@@ -28,21 +31,26 @@ echo "Copied ${NUM_FRAMES} rig frames to ${WORKSPACE_DIR}/"
 cat > "${WORKSPACE_DIR}/sfm_solve.sh" << 'EOF'
 #!/bin/bash
 # SfM solve script for Kerry Park dataset
-# Uses global SfM (GLOMAP) on a 360-degree fisheye rig, with DSP features
+# sfmtool SIFT -> track-cluster matching -> global SfM (GLOMAP) on a 360-degree
+# fisheye rig
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Initialize workspace with DSP and 2000 max features
+# Initialize workspace with the sfmtool SIFT backend
 if [ ! -f .sfm-workspace.json ]; then
-  sfm ws init --max-features 2000 --dsp .
+  sfm ws init --feature-tool sfmtool .
 fi
 
 # Extract features for both fisheye sensors
 sfm sift --extract -t 3 fisheye_left/*.jpg fisheye_right/*.jpg
 
+# Track-cluster matching
+mkdir -p tvg-matches
+sfm match --cluster fisheye_left fisheye_right -o tvg-matches/kerry_park.matches
+
 echo "Running global SfM (GLOMAP) on Kerry Park dataset..."
-sfm solve --global --seed 42 fisheye_left fisheye_right
+sfm solve --global --seed 42 tvg-matches/kerry_park.matches
 
 echo "Reconstruction complete! Check sfmr/ for results."
 EOF

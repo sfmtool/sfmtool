@@ -36,7 +36,7 @@ def ws():
     "max_num_features",
     type=int,
     default=None,
-    help="Maximum features per image (COLMAP only, default: 8192)",
+    help="Maximum features per image (COLMAP and sfmtool, default: 8192)",
 )
 @click.option(
     "--gpu/--no-gpu",
@@ -87,9 +87,10 @@ def init(
         raise click.UsageError(
             f"The --dsp/--no-dsp option is only supported for COLMAP, not {feature_tool}"
         )
-    if max_num_features is not None and tool_lower != "colmap":
+    if max_num_features is not None and tool_lower not in ("colmap", "sfmtool"):
         raise click.UsageError(
-            f"The --max-features option is only supported for COLMAP, not {feature_tool}"
+            f"The --max-features option is only supported for COLMAP and sfmtool, "
+            f"not {feature_tool}"
         )
     if not use_gpu and tool_lower != "colmap":
         raise click.UsageError(
@@ -154,5 +155,6 @@ def init(
     elif tool_lower == "sfmtool":
         click.echo(f"  contrast_threshold: {options_dict.get('contrast_threshold')}")
         click.echo(f"  octave_layers: {options_dict.get('octave_layers')}")
+        click.echo(f"  max_num_features: {options_dict.get('max_num_features')}")
     else:
         click.echo(f"  nfeatures: {options_dict.get('nfeatures', 0)}")
