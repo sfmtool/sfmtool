@@ -13,6 +13,30 @@ use crate::reconstruction::SfmrReconstruction;
 use crate::rigid_transform::RigidTransform;
 use crate::spatial::PointCloud;
 
+/// Errors from [`PatchCloud::from_reconstruction`].
+#[derive(Debug)]
+pub enum PatchCloudError {
+    /// [`PatchExtent::FeatureSize`] could not read a keypoint scale for any
+    /// observation of point `point_id` (its `.sift` files were unreadable, the
+    /// feature index was out of range, or every observation projected behind the
+    /// camera), so the patch has no defined world size.
+    MissingFeatureScale { point_id: u32 },
+}
+
+impl std::fmt::Display for PatchCloudError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PatchCloudError::MissingFeatureScale { point_id } => write!(
+                f,
+                "no readable keypoint scale for any observation of point {point_id}; \
+                 cannot size its patch from FeatureSize"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PatchCloudError {}
+
 /// An oriented planar patch (surfel) in world space.
 ///
 /// The plane is spanned by orthonormal in-plane axes `u_axis` and `v_axis`; the
@@ -140,11 +164,15 @@ impl PatchCloud {
     /// One patch per finite point: center = position, in-plane up from the
     /// first observing camera, normal and half-size per the given policies.
     /// `point_ids` records the source point index for each patch.
+    ///
+    /// Errors with [`PatchCloudError::MissingFeatureScale`] under
+    /// [`PatchExtent::FeatureSize`] if a point has no readable keypoint scale in
+    /// any view.
     pub fn from_reconstruction(
         recon: &SfmrReconstruction,
         normal: PatchNormal,
         extent: PatchExtent,
-    ) -> Self {
+    ) -> Result<Self, PatchCloudError> {
         let finite: Vec<usize> = (0..recon.points.len())
             .filter(|&i| !recon.points[i].is_at_infinity())
             .collect();
@@ -189,6 +217,42 @@ impl PatchCloud {
             cloud.as_ref().map(|c| c.self_nearest_k(geo_k))
         } else {
             None
+        };
+
+        // FeatureSize: per-finite-point world half-size from the observing
+        // keypoints' scales, read from the workspace `.sift` files. A point with
+        // no readable scale in any view is an error.
+        let feature_half: Vec<f64> = if let PatchExtent::FeatureSize { factor, across } = extent {
+            let img_scales: Vec<Option<Vec<f64>>> = (0..recon.images.len())
+                .map(|i| read_image_scales(recon, i))
+                .collect();
+            let mut halves = vec![f64::NAN; finite.len()];
+            for (fi, &p) in finite.iter().enumerate() {
+                let center = recon.points[p].position;
+                let obs =
+                    &recon.tracks[recon.observation_offsets[p]..recon.observation_offsets[p + 1]];
+                let mut sizes: Vec<f64> = Vec::new();
+                for o in obs {
+                    let im = &recon.images[o.image_index as usize];
+                    if let Some(Some(scales)) = img_scales.get(o.image_index as usize) {
+                        if let Some(&sigma) = scales.get(o.feature_index as usize) {
+                            let z = (im.quaternion_wxyz * center.coords + im.translation_xyz).z;
+                            if z > 1e-6 {
+                                let (fx, _) =
+                                    recon.cameras[im.camera_index as usize].focal_lengths();
+                                sizes.push(sigma * z / fx);
+                            }
+                        }
+                    }
+                }
+                if sizes.is_empty() {
+                    return Err(PatchCloudError::MissingFeatureScale { point_id: p as u32 });
+                }
+                halves[fi] = factor * reduce(&mut sizes, across);
+            }
+            halves
+        } else {
+            Vec::new()
         };
 
         let mut patches = Vec::with_capacity(finite.len());
@@ -247,6 +311,7 @@ impl PatchCloud {
             let half = match extent {
                 PatchExtent::Fixed(w) => w,
                 PatchExtent::RelativeToSpacing(_) => spacing_half,
+                PatchExtent::FeatureSize { .. } => feature_half[fi],
                 PatchExtent::PixelRadius { radius_px, across } => {
                     // World half-size that projects to `radius_px` px in each
                     // observing view, reduced across views.
@@ -278,15 +343,16 @@ impl PatchCloud {
             point_ids.push(p as u32);
         }
 
-        PatchCloud { patches, point_ids }
+        Ok(PatchCloud { patches, point_ids })
     }
 }
 
 /// How to choose each patch's surface normal in [`PatchCloud::from_reconstruction`].
 #[derive(Debug, Clone, Copy)]
 pub enum PatchNormal {
-    /// Use the reconstruction's stored normal (the mean viewing direction).
-    /// Falls back to recomputing it if the stored value is zero/degenerate.
+    /// Use the reconstruction's stored estimated normal (whatever is in the
+    /// `.sfmr`, not necessarily the mean viewing direction). Falls back to the
+    /// mean viewing direction if the stored value is zero/degenerate.
     Stored,
     /// Normalized mean of the unit directions from the point to each observing
     /// camera centre.
@@ -311,6 +377,42 @@ pub enum PatchExtent {
     /// rest; `Max` is sized to the smallest-appearing view, so the patch can be
     /// much larger in close views.
     PixelRadius { radius_px: f64, across: ViewReduce },
+    /// `factor` × the projected world feature size: each observation's keypoint
+    /// scale `sigma_i` back-projected to world (`sigma_i · z_i / f_i`), reduced
+    /// across views by `across` (`Median` recommended — the scales are
+    /// consistent across views). Reads the workspace `.sift` files; a point whose
+    /// scale can't be read in any view yields a
+    /// [`PatchCloudError::MissingFeatureScale`].
+    FeatureSize { factor: f64, across: ViewReduce },
+}
+
+impl Default for PatchExtent {
+    /// `FeatureSize { factor: 5.0, across: Median }` — size each patch from the
+    /// observing keypoints' scales (the default sizing policy).
+    fn default() -> Self {
+        PatchExtent::FeatureSize {
+            factor: 5.0,
+            across: ViewReduce::Median,
+        }
+    }
+}
+
+/// Per-feature keypoint scales (column-0 norm of the affine shape) read from an
+/// image's `.sift` file, or `None` if it cannot be read.
+fn read_image_scales(recon: &SfmrReconstruction, image_index: usize) -> Option<Vec<f64>> {
+    let read_count = *recon.max_track_feature_index.get(image_index)? as usize + 1;
+    let path = recon.sift_path_for_image(image_index);
+    let data = sift_format::read_sift_partial(&path, read_count).ok()?;
+    let aff = &data.affine_shapes;
+    Some(
+        (0..aff.shape()[0])
+            .map(|i| {
+                let a00 = aff[[i, 0, 0]] as f64;
+                let a10 = aff[[i, 1, 0]] as f64;
+                (a00 * a00 + a10 * a10).sqrt()
+            })
+            .collect(),
+    )
 }
 
 /// How to reduce a per-view quantity to one value across a point's observing
@@ -330,7 +432,14 @@ fn reduce(values: &mut [f64], how: ViewReduce) -> f64 {
         ViewReduce::Mean => values.iter().sum::<f64>() / values.len().max(1) as f64,
         ViewReduce::Median => {
             values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            values[values.len() / 2]
+            let n = values.len();
+            if n == 0 {
+                f64::NAN
+            } else if n % 2 == 1 {
+                values[n / 2]
+            } else {
+                0.5 * (values[n / 2 - 1] + values[n / 2])
+            }
         }
     }
 }

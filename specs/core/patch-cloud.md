@@ -107,17 +107,21 @@ impl PatchCloud {
 
     /// One patch per finite 3D point: center = position, in-plane up from the
     /// first observing camera, normal and half-size per the given policies.
+    /// Errors with `PatchCloudError::MissingFeatureScale` under
+    /// `PatchExtent::FeatureSize` when a point has no readable keypoint scale in
+    /// any view (no silent size fallback).
     pub fn from_reconstruction(
         recon: &SfmrReconstruction,
         normal: PatchNormal,
         extent: PatchExtent,
-    ) -> Self;
+    ) -> Result<Self, PatchCloudError>;
 }
 
 /// How to choose each patch's surface normal.
 pub enum PatchNormal {
-    /// Use the reconstruction's stored normal (which is the mean viewing
-    /// direction); falls back to recomputing it if zero/degenerate.
+    /// Use the reconstruction's stored estimated normal (whatever is in the
+    /// `.sfmr`, not necessarily the mean viewing direction); falls back to the
+    /// mean viewing direction if zero/degenerate.
     Stored,
     /// Normalized mean of the unit directions from the point to each observing
     /// camera centre.
@@ -139,7 +143,17 @@ pub enum PatchExtent {
     /// pixel budget in every view (sized to it in the view where the point
     /// appears largest); `Max`/`Median`/`Mean` trade that off.
     PixelRadius { radius_px: f64, across: ViewReduce },
+    /// `factor` × the projected world feature size — each observation's keypoint
+    /// scale back-projected to world (`sigma_i · z_i / f_i`), reduced across views
+    /// by `across` (`Median` recommended; the scales are consistent across a
+    /// track's views). Reads the workspace `.sift` files. A point with no
+    /// readable scale in any view is an error (`PatchCloudError::MissingFeatureScale`)
+    /// — there is no silent size fallback.
+    FeatureSize { factor: f64, across: ViewReduce },
 }
+
+// PatchExtent::default() == FeatureSize { factor: 5.0, across: Median }, and the
+// Python binding's `extent` defaults to "feature_size" / `extent_value` to 5.0.
 
 /// How to reduce a per-view quantity across a point's observing views.
 pub enum ViewReduce { Min, Max, Median, Mean }
@@ -152,7 +166,9 @@ so `from_reconstruction` is the bridge from a solved model to a patch cloud.
 > (`OrientedPatch`, `PatchCloud::from_reconstruction`, `PatchNormal`,
 > `PatchExtent`, `mean_viewing_normal`, `pca_plane_normal`), `WarpMap::from_patch`,
 > PyO3 bindings (`OrientedPatch`, `PatchCloud`, `WarpMap.from_patch`). The
-> reconstruction's stored normals are exactly the mean viewing direction; a
+> For the COLMAP-solved reconstructions tested here the stored normals happened
+> to match the mean viewing direction (`|cos| = 1.0` for all points), but that is
+> an empirical observation about the solver, not a property of `Stored`. A
 > photometric normal-refinement prototype lives in `scripts/patch_crossval.py`
 > (`--refine-normal`)._
 
@@ -240,10 +256,12 @@ patch in a strip the same world surfel.
   some points. Fallbacks: orient the patch fronto-parallel to a reference view,
   or to the mean viewing direction of the observing cameras. Worth a quality flag
   per patch.
-- **Extent selection.** `PatchExtent` lists three policies; which is the right
-  default for visualization vs. matching is unresolved. `PixelRadiusInView`
-  reproduces today's "constant pixels" behavior; `RelativeToSpacing` is more
-  scene-adaptive.
+- **Extent selection.** `PatchExtent` lists four policies. `FeatureSize` is the
+  default — it sizes each patch from the observing keypoints' scales, which keeps
+  the patch tied to the real feature support. `PixelRadius` reproduces a
+  "constant pixels" behavior; `RelativeToSpacing` is scene-adaptive; `Fixed` is a
+  uniform world size. Whether `FeatureSize` is also the right default for
+  matching (vs. visualization) is still open.
 - **In-plane rotation default.** `up_hint` = world up is simple but degenerate for
   near-horizontal patches; per-track consistency may prefer the reference
   camera's up. Pick one default, allow override.
