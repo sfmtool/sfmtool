@@ -103,6 +103,18 @@ impl PyOrientedPatch {
     }
 }
 
+fn parse_reduce(s: &str) -> PyResult<ViewReduce> {
+    match s {
+        "min" => Ok(ViewReduce::Min),
+        "max" => Ok(ViewReduce::Max),
+        "median" => Ok(ViewReduce::Median),
+        "mean" => Ok(ViewReduce::Mean),
+        other => Err(PyValueError::new_err(format!(
+            "unknown reduce: {other:?} (expected min|max|median|mean)"
+        ))),
+    }
+}
+
 /// A collection of oriented patches built from a reconstruction's 3D points.
 ///
 /// See :meth:`from_reconstruction` and ``specs/core/patch-cloud.md``.
@@ -118,22 +130,29 @@ impl PyPatchCloud {
     /// Args:
     ///     recon: The reconstruction.
     ///     normal: Normal policy — ``"stored"`` (the reconstruction's stored
-    ///         normal, i.e. the mean viewing direction), ``"mean_viewing"``, or
-    ///         ``"geometric"`` (local PCA plane fit over ``k_neighbors`` points).
+    ///         estimated normal, whatever is in the ``.sfmr``), ``"mean_viewing"``
+    ///         (mean direction to the observing cameras), or ``"geometric"``
+    ///         (local PCA plane fit over ``k_neighbors`` points).
     ///     k_neighbors: Neighbor count for the ``"geometric"`` policy.
-    ///     extent: Half-size policy — ``"fixed"`` (world units = ``extent_value``),
-    ///         ``"relative_spacing"`` (``extent_value`` × median point spacing),
-    ///         or ``"pixel_radius"`` (back-project ``extent_value`` px in each
-    ///         observing view, reduced across views by ``pixel_reduce``).
-    ///     extent_value: The scalar for the chosen extent policy.
-    ///     pixel_reduce: For ``"pixel_radius"``, how to reduce the per-view
-    ///         world sizes across a point's views: ``"min"`` (default; keeps the
-    ///         patch within the pixel budget in every view), ``"max"``,
-    ///         ``"median"``, or ``"mean"``.
+    ///     extent: Half-size policy — ``"feature_size"`` (default; ``extent_value``
+    ///         × each observation's keypoint scale back-projected to world, reduced
+    ///         by ``feature_reduce``; reads the ``.sift`` files and raises
+    ///         ``ValueError`` if a point has no readable scale in any view),
+    ///         ``"fixed"`` (world
+    ///         units = ``extent_value``), ``"relative_spacing"`` (``extent_value`` ×
+    ///         median point spacing), or ``"pixel_radius"`` (back-project
+    ///         ``extent_value`` px in each observing view, reduced by ``pixel_reduce``).
+    ///     extent_value: The scalar for the chosen extent policy (default 5.0; for
+    ///         ``"feature_size"`` the keypoint-scale multiplier).
+    ///     pixel_reduce: For ``"pixel_radius"``, the view reduce — ``"min"``
+    ///         (default), ``"max"``, ``"median"``, or ``"mean"``.
+    ///     feature_reduce: For ``"feature_size"``, the view reduce (default
+    ///         ``"median"``).
     #[staticmethod]
     #[pyo3(signature = (
         recon, normal="mean_viewing", k_neighbors=12,
-        extent="relative_spacing", extent_value=2.0, pixel_reduce="min"
+        extent="feature_size", extent_value=5.0,
+        pixel_reduce="min", feature_reduce="median"
     ))]
     fn from_reconstruction(
         recon: &PySfmrReconstruction,
@@ -142,6 +161,7 @@ impl PyPatchCloud {
         extent: &str,
         extent_value: f64,
         pixel_reduce: &str,
+        feature_reduce: &str,
     ) -> PyResult<Self> {
         let normal = match normal {
             "stored" => PatchNormal::Stored,
@@ -156,32 +176,24 @@ impl PyPatchCloud {
         let extent = match extent {
             "fixed" => PatchExtent::Fixed(extent_value),
             "relative_spacing" => PatchExtent::RelativeToSpacing(extent_value),
-            "pixel_radius" => {
-                let across = match pixel_reduce {
-                    "min" => ViewReduce::Min,
-                    "max" => ViewReduce::Max,
-                    "median" => ViewReduce::Median,
-                    "mean" => ViewReduce::Mean,
-                    other => {
-                        return Err(PyValueError::new_err(format!(
-                            "unknown pixel_reduce: {other:?} (expected min|max|median|mean)"
-                        )))
-                    }
-                };
-                PatchExtent::PixelRadius {
-                    radius_px: extent_value,
-                    across,
-                }
-            }
+            "pixel_radius" => PatchExtent::PixelRadius {
+                radius_px: extent_value,
+                across: parse_reduce(pixel_reduce)?,
+            },
+            "feature_size" => PatchExtent::FeatureSize {
+                factor: extent_value,
+                across: parse_reduce(feature_reduce)?,
+            },
             other => {
                 return Err(PyValueError::new_err(format!(
-                "unknown extent policy: {other:?} (expected fixed|relative_spacing|pixel_radius)"
-            )))
+                    "unknown extent policy: {other:?} \
+                     (expected fixed|relative_spacing|pixel_radius|feature_size)"
+                )))
             }
         };
-        Ok(Self {
-            inner: PatchCloud::from_reconstruction(&recon.inner, normal, extent),
-        })
+        let inner = PatchCloud::from_reconstruction(&recon.inner, normal, extent)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
     }
 
     fn __len__(&self) -> usize {

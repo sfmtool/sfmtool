@@ -318,9 +318,9 @@ def strips_mode_3d(
     patch per track into each observing camera (`WarpMap.from_patch`).
 
     Each track is a triangulated 3D point; its surfel (center = position, normal
-    per the chosen policy, world half-size back-projected from the reference
-    keypoint's scale) is rendered into every observing view, so the strip tiles
-    are the same world patch seen from each camera.
+    per the chosen policy, world half-size = the median over views of each
+    keypoint's scale back-projected to world) is rendered into every observing
+    view, so the strip tiles are the same world patch seen from each camera.
     """
     recon = s.SfmrReconstruction.load(sfmr_path)
     names = list(recon.image_names)
@@ -329,21 +329,27 @@ def strips_mode_3d(
     cameras = list(recon.cameras)
     quats = np.asarray(recon.quaternions_wxyz, np.float64)
     trans = np.asarray(recon.translations, np.float64)
-    sift_paths = find_sift_paths(workspace, names)
-
-    # Per-point normal from the chosen policy (library). "geometric" is a local
-    # PCA plane fit; "mean"/"stored" are the mean viewing direction.
+    # Per-point normal (chosen policy) and world half-size (feature_size = each
+    # observing keypoint's scale back-projected to world, median over views) from
+    # the library. "geometric" is a local PCA plane fit; "mean" is the mean
+    # viewing direction; "stored" is whatever estimated normal is in the .sfmr
+    # (not necessarily the mean viewing direction).
     policy = {
         "mean": "mean_viewing",
         "stored": "stored",
         "geometric": "geometric",
     }[normal]
+    # extent defaults to "feature_size" (factor = extent_value, default 5,
+    # median over views).
     cloud = PatchCloud.from_reconstruction(
-        recon, normal=policy, k_neighbors=k_neighbors, extent="fixed", extent_value=1.0
+        recon, normal=policy, k_neighbors=k_neighbors, extent_value=radius
     )
     pid_normal = {
-        int(pid): np.asarray(cloud[i].normal, np.float64)
-        for i, pid in enumerate(cloud.point_ids)
+        int(p): np.asarray(cloud[i].normal, np.float64)
+        for i, p in enumerate(cloud.point_ids)
+    }
+    pid_half = {
+        int(p): float(cloud[i].half_extent[0]) for i, p in enumerate(cloud.point_ids)
     }
 
     cam_of = [cameras[int(cam_idx[i])] for i in range(len(names))]
@@ -352,7 +358,7 @@ def strips_mode_3d(
         for i in range(len(names))
     ]
     rot_of = [_quat_to_rotation(quats[i]) for i in range(len(names))]
-    images, scales = {}, {}
+    images = {}
 
     def image(i):
         if i not in images:
@@ -361,14 +367,6 @@ def strips_mode_3d(
                 raise FileNotFoundError(names[i])
             images[i] = np.ascontiguousarray(img)
         return images[i]
-
-    def kp_scale(i, f):
-        if i not in scales:
-            aff = np.asarray(
-                s.read_sift(sift_paths[names[i]])["affine_shapes"], np.float64
-            )
-            scales[i] = np.linalg.norm(aff[:, :, 0], axis=1)  # column-0 norm = sigma
-        return float(scales[i][f])
 
     # Group observations by 3D point id.
     pids = np.asarray(recon.track_point_ids).tolist()
@@ -399,14 +397,13 @@ def strips_mode_3d(
     w = np.ones(patch * patch) if window == "uniform" else gauss_window(patch)
 
     def patch_frame(pid, obs):
-        """(center, up, validated_half) world-space frame for a track."""
+        """(center, up, validated_half) world-space frame for a track. The
+        half-size is the library's FeatureSize (radius x median feature size)."""
         center = positions[pid]
-        i0, f0 = obs[0]  # reference view sets the world scale and in-plane up
-        p_cam = rot_of[i0] @ center + trans[i0]
-        depth = max(abs(float(p_cam[2])), 1e-6)
-        focal = float(cam_of[i0].focal_lengths[0])
-        half = radius * kp_scale(i0, f0) * depth / focal
-        up = rot_of[i0].T @ np.array([0.0, -1.0, 0.0])  # reference camera's up
+        # Every cloud point has a half-size; the default only guards a pid that
+        # isn't in the cloud (e.g. a point at infinity), which shouldn't reach here.
+        half = pid_half.get(int(pid), 1e-2)
+        up = rot_of[obs[0][0]].T @ np.array([0.0, -1.0, 0.0])  # first camera's up
         return center, up, half
 
     def make_patch(center, up, ext, n):
@@ -448,10 +445,10 @@ def strips_mode_3d(
     deltas = []
     print(f"{len(tracks)} tracks (>= {min_track} images), labeled by image index:")
     for ti, (pid, obs) in enumerate(tracks):
-        center, up, half = patch_frame(pid, obs)
         base_n = pid_normal.get(int(pid))
         if base_n is None or np.linalg.norm(base_n) < 0.5:
             base_n = np.array([0.0, 0.0, 1.0])
+        center, up, half = patch_frame(pid, obs)
 
         if refine:
             best_n, base_ncc, ref_ncc = refine_normal(center, up, half, base_n, obs)
@@ -639,7 +636,11 @@ def main(argv=None):
     ap.add_argument("matches", nargs="?", help="a .matches file (default: first found)")
     ap.add_argument("--patch", type=int, default=32, help="patch side in pixels")
     ap.add_argument(
-        "--radius", type=float, default=5.0, help="half-extent in keypoint units"
+        "--radius",
+        type=float,
+        default=5.0,
+        help="half-extent in keypoint units for 2D warps; the feature-size "
+        "multiplier for 3D --sfmr patches (default 5)",
     )
     ap.add_argument("--sampler", choices=["bilinear", "aniso"], default="bilinear")
     ap.add_argument("--window", choices=["uniform", "gauss"], default="gauss")

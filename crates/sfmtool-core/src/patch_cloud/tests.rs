@@ -128,7 +128,33 @@ fn reduce_across_views() {
     assert_eq!(reduce(&mut base.to_vec(), ViewReduce::Min), 2.0);
     assert_eq!(reduce(&mut base.to_vec(), ViewReduce::Max), 9.0);
     assert!((reduce(&mut base.to_vec(), ViewReduce::Mean) - 4.75).abs() < 1e-12);
-    assert_eq!(reduce(&mut base.to_vec(), ViewReduce::Median), 5.0);
+    // even count -> average of the two middle values ([2,3,5,9] -> (3+5)/2)
+    assert_eq!(reduce(&mut base.to_vec(), ViewReduce::Median), 4.0);
+    assert_eq!(reduce(&mut [3.0, 1.0, 2.0], ViewReduce::Median), 2.0);
+}
+
+#[test]
+fn feature_size_without_sift_is_an_error() {
+    // The demo reconstruction has no workspace `.sift` files, so no keypoint
+    // scale is readable for any point. FeatureSize must error rather than fall
+    // back to a substitute size; the other extent policies still succeed.
+    let recon = SfmrReconstruction::demo(12);
+
+    let err = PatchCloud::from_reconstruction(
+        &recon,
+        PatchNormal::MeanViewing,
+        PatchExtent::FeatureSize {
+            factor: 5.0,
+            across: ViewReduce::Median,
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, PatchCloudError::MissingFeatureScale { .. }));
+
+    let cloud =
+        PatchCloud::from_reconstruction(&recon, PatchNormal::MeanViewing, PatchExtent::Fixed(0.1))
+            .expect("Fixed extent needs no sift files");
+    assert_eq!(cloud.len(), 12);
 }
 
 #[test]
