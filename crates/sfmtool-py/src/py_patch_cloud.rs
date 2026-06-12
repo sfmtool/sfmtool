@@ -4,13 +4,22 @@
 //! Python wrapper for sfmtool-core oriented patches.
 
 use nalgebra::{Point3, Vector3};
+use numpy::{IntoPyArray, PyArray2};
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use sfmtool_core::patch_cloud::{OrientedPatch, PatchCloud, PatchExtent, PatchNormal, ViewReduce};
+use sfmtool_core::patch_normal_refine::{
+    patch_view_indices_from_reconstruction, refine_patch_cloud, NormalRefineParams, Objective,
+    PatchWindow, ProjectedImage, Sampler,
+};
+use sfmtool_core::remap::ImageU8Pyramid;
+use sfmtool_core::rigid_transform::RigidTransform;
 
 use crate::py_rigid_transform::PyRigidTransform;
 use crate::py_sfmr_reconstruction::PySfmrReconstruction;
+use crate::py_warp_map::extract_image_u8;
 
 /// An oriented planar patch (surfel) in world space.
 ///
@@ -214,5 +223,219 @@ impl PyPatchCloud {
     #[getter]
     fn point_ids(&self) -> Vec<u32> {
         self.inner.point_ids.clone()
+    }
+
+    /// Refine every patch's normal in place by photometric consistency across
+    /// the reconstruction's observing views (see
+    /// ``specs/core/patch-normal-refinement.md``).
+    ///
+    /// Args:
+    ///     recon: The reconstruction the cloud was built from (provides cameras,
+    ///         poses, and the per-point observing-image lists via ``point_ids``).
+    ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
+    ///         image, parallel to ``recon`` (index = image index).
+    ///     resolution: The R×R patch grid the consensus is scored on.
+    ///     objective: ``"robust"`` (IRLS-weighted consensus, default) or
+    ///         ``"mean"`` (unweighted all-pairs consensus).
+    ///     window: Per-pixel scoring weight — ``"gaussian_disk"`` (default),
+    ///         ``"gaussian"``, or ``"uniform"``.
+    ///     sampler: How to sample the source pyramids — ``"anisotropic"`` (default;
+    ///         anti-aliased oblique views) or ``"bilinear"``.
+    ///     point_ids: If given, refine only the patches with these source point
+    ///         ids (the rest keep their input normal) — cheap when refining a few
+    ///         patches out of a large cloud. ``None`` refines every patch.
+    ///
+    /// Returns a dict of per-patch results (numpy arrays parallel to the cloud):
+    /// ``normal`` (Nx3), ``photoconsistency`` (N), ``init_photoconsistency`` (N),
+    /// ``confidence`` (N), ``valid_view_count`` (N). The cloud's patches are
+    /// updated to the refined normals in place.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        recon, images, *, resolution=24, angular_range_deg=25.0, init_steps=7,
+        refine_levels=3, objective="robust", robust_iters=3, window="gaussian_disk",
+        window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="anisotropic",
+        point_ids=None
+    ))]
+    fn refine_normals<'py>(
+        &mut self,
+        py: Python<'py>,
+        recon: &PySfmrReconstruction,
+        images: Vec<Bound<'py, PyAny>>,
+        resolution: u32,
+        angular_range_deg: f64,
+        init_steps: u32,
+        refine_levels: u32,
+        objective: &str,
+        robust_iters: u32,
+        window: &str,
+        window_sigma: f64,
+        min_valid_fraction: f64,
+        min_views: u32,
+        sampler: &str,
+        point_ids: Option<Vec<u32>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let recon = &recon.inner;
+        if images.len() != recon.images.len() {
+            return Err(PyValueError::new_err(format!(
+                "images must be parallel to the reconstruction's {} images, got {}",
+                recon.images.len(),
+                images.len()
+            )));
+        }
+        // The cloud must have been built from this reconstruction: its per-patch
+        // point_ids index `recon`'s points. This is a range check only — it
+        // catches a too-small recon (and would-be panics in the core), but cannot
+        // detect a *different* recon with at least as many points; the caller is
+        // responsible for passing the recon the cloud was built from.
+        if self.inner.point_ids.len() != self.inner.len() {
+            return Err(PyValueError::new_err(
+                "patch cloud has no per-patch point_ids; rebuild it with from_reconstruction",
+            ));
+        }
+        if self
+            .inner
+            .point_ids
+            .iter()
+            .any(|&p| p as usize >= recon.points.len())
+        {
+            return Err(PyValueError::new_err(
+                "patch cloud point_ids are out of range for this reconstruction \
+                 (was the cloud built from a different recon?)",
+            ));
+        }
+
+        let objective = match objective {
+            "mean" | "mean_pairwise" => Objective::MeanPairwise,
+            "robust" | "robust_weighted" => Objective::RobustWeighted {
+                iters: robust_iters,
+            },
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown objective: {other:?} (expected mean|robust)"
+                )))
+            }
+        };
+        let window = match window {
+            "uniform" => PatchWindow::Uniform,
+            "gaussian" => PatchWindow::Gaussian {
+                sigma: window_sigma,
+            },
+            "gaussian_disk" => PatchWindow::GaussianDisk {
+                sigma: window_sigma,
+            },
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown window: {other:?} (expected uniform|gaussian|gaussian_disk)"
+                )))
+            }
+        };
+        let sampler = match sampler {
+            "bilinear" => Sampler::Bilinear,
+            "anisotropic" => Sampler::Anisotropic,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown sampler: {other:?} (expected bilinear|anisotropic)"
+                )))
+            }
+        };
+        let params = NormalRefineParams {
+            angular_range_deg,
+            init_steps,
+            refine_levels,
+            objective,
+            window,
+            min_valid_fraction,
+            min_views,
+            sampler,
+        };
+
+        // Build one pyramid + pose per reconstruction image; the ProjectedImages
+        // borrow these for the duration of the refinement.
+        let pyramids: Vec<ImageU8Pyramid> = images
+            .iter()
+            .enumerate()
+            .map(|(i, im)| {
+                let src = extract_image_u8(im)?;
+                // The warp validity / sampling assume the image matches its
+                // camera's resolution; a downscaled image would sample silently
+                // wrong and mis-gate validity.
+                let cam = &recon.cameras[recon.images[i].camera_index as usize];
+                if src.width() != cam.width || src.height() != cam.height {
+                    return Err(PyValueError::new_err(format!(
+                        "image {i} is {}x{} but its camera is {}x{}; \
+                         pass full-resolution images",
+                        src.width(),
+                        src.height(),
+                        cam.width,
+                        cam.height
+                    )));
+                }
+                let min_dim = src.width().min(src.height()).max(1);
+                let max_levels = ((min_dim as f32).log2().floor() as usize).max(1) + 1;
+                Ok(ImageU8Pyramid::build(&src, max_levels))
+            })
+            .collect::<PyResult<_>>()?;
+        let poses: Vec<RigidTransform> = recon
+            .images
+            .iter()
+            .map(|im| {
+                let q = im.quaternion_wxyz;
+                RigidTransform::from_wxyz_translation(
+                    [q.w, q.i, q.j, q.k],
+                    [
+                        im.translation_xyz.x,
+                        im.translation_xyz.y,
+                        im.translation_xyz.z,
+                    ],
+                )
+            })
+            .collect();
+        let views: Vec<ProjectedImage<'_>> = (0..recon.images.len())
+            .map(|i| ProjectedImage {
+                camera: &recon.cameras[recon.images[i].camera_index as usize],
+                cam_from_world: &poses[i],
+                pyramid: &pyramids[i],
+            })
+            .collect();
+        let mut patch_views = patch_view_indices_from_reconstruction(recon, &self.inner);
+        // Optional subset: refine only patches whose point id is listed. Cleared
+        // view-lists make `refine_patch_normal` skip a patch immediately (it sees
+        // too few views), so a handful of patches can be refined out of a large
+        // cloud cheaply — the rest keep their input normal.
+        if let Some(ids) = point_ids {
+            let keep: std::collections::HashSet<u32> = ids.into_iter().collect();
+            for (pv, &pid) in patch_views.iter_mut().zip(&self.inner.point_ids) {
+                if !keep.contains(&pid) {
+                    pv.clear();
+                }
+            }
+        }
+
+        let results = py.detach(|| {
+            refine_patch_cloud(&mut self.inner, &views, &patch_views, resolution, &params)
+        });
+
+        let n = results.len();
+        let mut normals = Vec::with_capacity(n);
+        let mut photo = Vec::with_capacity(n);
+        let mut init_photo = Vec::with_capacity(n);
+        let mut conf = Vec::with_capacity(n);
+        let mut vvc = Vec::with_capacity(n);
+        for r in &results {
+            let nrm = r.patch.normal();
+            normals.push(vec![nrm.x, nrm.y, nrm.z]);
+            photo.push(r.photoconsistency);
+            init_photo.push(r.init_photoconsistency);
+            conf.push(r.confidence);
+            vvc.push(r.valid_view_count);
+        }
+
+        let out = PyDict::new(py);
+        out.set_item("normal", PyArray2::from_vec2(py, &normals).unwrap())?;
+        out.set_item("photoconsistency", photo.into_pyarray(py))?;
+        out.set_item("init_photoconsistency", init_photo.into_pyarray(py))?;
+        out.set_item("confidence", conf.into_pyarray(py))?;
+        out.set_item("valid_view_count", vvc.into_pyarray(py))?;
+        Ok(out)
     }
 }

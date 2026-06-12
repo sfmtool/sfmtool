@@ -287,15 +287,6 @@ def _quat_to_rotation(wxyz):
     )
 
 
-def _tangent_basis(n):
-    """Two orthonormal vectors spanning the plane perpendicular to unit `n`."""
-    n = n / np.linalg.norm(n)
-    a = np.array([1.0, 0.0, 0.0]) if abs(n[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-    u = a - n * (a @ n)
-    u /= np.linalg.norm(u)
-    return u, np.cross(n, u)
-
-
 def strips_mode_3d(
     workspace,
     out,
@@ -321,6 +312,11 @@ def strips_mode_3d(
     per the chosen policy, world half-size = the median over views of each
     keypoint's scale back-projected to world) is rendered into every observing
     view, so the strip tiles are the same world patch seen from each camera.
+
+    With ``refine`` the per-patch normals are optimized for cross-view
+    photoconsistency by the Rust ``PatchCloud.refine_normals`` routine
+    (``refine_range`` / ``refine_steps`` set its search cone and grid resolution),
+    and each track is shown as a before/after pair.
     """
     recon = s.SfmrReconstruction.load(sfmr_path)
     names = list(recon.image_names)
@@ -415,31 +411,37 @@ def strips_mode_3d(
         wm = WarpMap.from_patch(p, cam_of[i], pose_of[i], res)
         return np.asarray(wm.remap_bilinear(image(i)), np.float32)
 
-    def track_ncc(center, up, half, n, obs):
-        """Mean pairwise (per-channel color) NCC of the validated patch under `n`."""
-        pats = [render_into(make_patch(center, up, half, n), i, patch) for i, _ in obs]
-        sims = [
-            wncc_color(pats[a], pats[b], w)
-            for a in range(len(pats))
-            for b in range(a + 1, len(pats))
-        ]
-        return float(np.mean(sims)) if sims else -1.0
-
-    def refine_normal(center, up, half, base_n, obs):
-        """Local search over normal tilt to maximize cross-view NCC."""
-        u, v = _tangent_basis(base_n)
-        span = np.tan(np.radians(refine_range))
-        grid = np.linspace(-span, span, refine_steps)
-        base = track_ncc(center, up, half, base_n, obs)
-        best_n, best = base_n, base
-        for a in grid:
-            for b in grid:
-                n = base_n + a * u + b * v
-                n /= np.linalg.norm(n)
-                sc = track_ncc(center, up, half, n, obs)
-                if sc > best:
-                    best, best_n = sc, n
-        return best_n, base, best
+    # Optionally refine the rendered tracks' patch normals with the Rust routine
+    # (PatchCloud.refine_normals): photometric consensus over all observing views,
+    # in place and in parallel. Restricting to the displayed tracks' point ids
+    # keeps it cheap on large clouds. Base normals are already in `pid_normal`;
+    # read the refined normals and the Rust consensus Φ (init / refined, scored on
+    # the same frozen support, so Δ >= 0) back per point id.
+    pid_refined = pid_normal
+    pid_phi: dict = {}
+    pid_init_phi: dict = {}
+    if refine:
+        all_images = [image(i) for i in range(len(names))]
+        res = cloud.refine_normals(
+            recon,
+            all_images,
+            resolution=patch,
+            angular_range_deg=refine_range,
+            init_steps=refine_steps,
+            point_ids=[int(pid) for pid, _ in tracks],
+        )
+        pid_refined = {
+            int(p): np.asarray(cloud[i].normal, np.float64)
+            for i, p in enumerate(cloud.point_ids)
+        }
+        pid_phi = {
+            int(p): float(res["photoconsistency"][i])
+            for i, p in enumerate(cloud.point_ids)
+        }
+        pid_init_phi = {
+            int(p): float(res["init_photoconsistency"][i])
+            for i, p in enumerate(cloud.point_ids)
+        }
 
     rows = []
     deltas = []
@@ -451,10 +453,13 @@ def strips_mode_3d(
         center, up, half = patch_frame(pid, obs)
 
         if refine:
-            best_n, base_ncc, ref_ncc = refine_normal(center, up, half, base_n, obs)
-            deltas.append(ref_ncc - base_ncc)
+            best_n = pid_refined.get(int(pid), base_n)
+            base_phi = pid_init_phi.get(int(pid), float("nan"))
+            ref_phi = pid_phi.get(int(pid), float("nan"))
+            if np.isfinite(base_phi) and np.isfinite(ref_phi):
+                deltas.append(ref_phi - base_phi)
         else:
-            best_n, base_ncc, ref_ncc = base_n, None, None
+            best_n, base_phi, ref_phi = base_n, None, None
 
         ext = half * extent_scale
 
@@ -474,8 +479,8 @@ def strips_mode_3d(
             )
             rows.extend((b_strip, r_strip))
             print(
-                f"  track {ti:3d}: {nobs:2d} obs  NCC base={base_ncc:+.3f} "
-                f"refined={ref_ncc:+.3f}  Δ={ref_ncc - base_ncc:+.3f}"
+                f"  track {ti:3d}: {nobs:2d} obs  consensus Φ base={base_phi:+.3f} "
+                f"refined={ref_phi:+.3f}  Δ={ref_phi - base_phi:+.3f}"
             )
         else:
             strip, mean_ncc, nobs = render_track_strip(
@@ -486,7 +491,7 @@ def strips_mode_3d(
 
     if refine and deltas:
         print(
-            f"normal refinement: mean ΔNCC = {np.mean(deltas):+.3f} over {len(deltas)} tracks"
+            f"normal refinement: mean ΔΦ = {np.mean(deltas):+.3f} over {len(deltas)} tracks"
         )
 
     width = max(r.shape[1] for r in rows)
@@ -690,6 +695,13 @@ def main(argv=None):
         "(--strips); scored on the inner --patch region",
     )
     args = ap.parse_args(argv)
+
+    if args.context is not None and args.context < args.patch:
+        print(
+            f"error: --context ({args.context}) must be >= --patch ({args.patch})",
+            file=sys.stderr,
+        )
+        return 1
 
     matches = args.matches
     if matches is None and not (args.strips and args.sfmr):

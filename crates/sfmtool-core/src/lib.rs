@@ -25,6 +25,7 @@ pub mod infinity;
 pub mod kdforest;
 pub mod optical_flow;
 pub mod patch_cloud;
+pub mod patch_normal_refine;
 pub mod per_spherical_tile_source_stack;
 pub mod photometric_ransac;
 pub mod point_correspondence;
