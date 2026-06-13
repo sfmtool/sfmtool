@@ -5,7 +5,41 @@
 
 use rayon::prelude::*;
 
-use crate::warp_map::WarpMap;
+use crate::warp_map::{WarpMap, PAR_MIN_PIXELS};
+
+/// Run `fill_row` over every destination row, sequentially for small outputs
+/// (where rayon scaffolding dwarfs the row work — e.g. patch-sized remaps
+/// nested inside an already-parallel caller) and via rayon otherwise.
+/// Returns the concatenated row data.
+fn remap_rows(
+    out_w: u32,
+    out_h: u32,
+    channels: u32,
+    fill_row: impl Fn(u32, &mut [u8]) + Sync,
+) -> Vec<u8> {
+    let out_stride = out_w as usize * channels as usize;
+    if (out_w as usize) * (out_h as usize) <= PAR_MIN_PIXELS {
+        let mut data = vec![0u8; out_stride * out_h as usize];
+        for (row, row_data) in data.chunks_exact_mut(out_stride).enumerate() {
+            fill_row(row as u32, row_data);
+        }
+        data
+    } else {
+        let rows: Vec<Vec<u8>> = (0..out_h)
+            .into_par_iter()
+            .map(|row| {
+                let mut row_data = vec![0u8; out_stride];
+                fill_row(row, &mut row_data);
+                row_data
+            })
+            .collect();
+        let mut data = Vec::with_capacity(out_stride * out_h as usize);
+        for row in rows {
+            data.extend_from_slice(&row);
+        }
+        data
+    }
+}
 
 /// A multi-channel image stored as packed u8 values.
 ///
@@ -183,7 +217,7 @@ impl ImageU8Pyramid {
 /// Coordinates use the pixel-center-at-0.5 convention: sampling at (0.5, 0.5)
 /// returns the exact value of the top-left pixel. Out-of-bounds coordinates
 /// are clamped to the nearest edge pixel.
-fn sample_bilinear_u8(img: &ImageU8, x: f32, y: f32, channel: u32) -> f32 {
+pub fn sample_bilinear_u8(img: &ImageU8, x: f32, y: f32, channel: u32) -> f32 {
     let gx = x - 0.5;
     let gy = y - 0.5;
 
@@ -230,32 +264,21 @@ pub fn remap_bilinear(src: &ImageU8, map: &WarpMap) -> ImageU8 {
     let out_w = map.width();
     let out_h = map.height();
     let c = src.channels;
-    let out_stride = out_w as usize * c as usize;
 
-    let rows: Vec<Vec<u8>> = (0..out_h)
-        .into_par_iter()
-        .map(|row| {
-            let mut row_data = vec![0u8; out_stride];
-            for col in 0..out_w {
-                let (sx, sy) = map.get(col, row);
-                if sx.is_nan() || sy.is_nan() {
-                    // Leave as zero (black).
-                    continue;
-                }
-                let base = col as usize * c as usize;
-                for ch in 0..c {
-                    let val = sample_bilinear_u8(src, sx, sy, ch);
-                    row_data[base + ch as usize] = (val + 0.5).clamp(0.0, 255.0) as u8;
-                }
+    let data = remap_rows(out_w, out_h, c, |row, row_data| {
+        for col in 0..out_w {
+            let (sx, sy) = map.get(col, row);
+            if sx.is_nan() || sy.is_nan() {
+                // Leave as zero (black).
+                continue;
             }
-            row_data
-        })
-        .collect();
-
-    let mut data = Vec::with_capacity((out_w as usize) * (out_h as usize) * c as usize);
-    for row in rows {
-        data.extend_from_slice(&row);
-    }
+            let base = col as usize * c as usize;
+            for ch in 0..c {
+                let val = sample_bilinear_u8(src, sx, sy, ch);
+                row_data[base + ch as usize] = (val + 0.5).clamp(0.0, 255.0) as u8;
+            }
+        }
+    });
 
     ImageU8 {
         width: out_w,
@@ -302,65 +325,66 @@ pub fn remap_aniso_with_pyramid(
     let out_w = map.width();
     let out_h = map.height();
     let c = pyramid.level(0).channels();
-    let out_stride = out_w as usize * c as usize;
 
     let num_levels = pyramid.num_levels();
 
-    let rows: Vec<Vec<u8>> = (0..out_h)
-        .into_par_iter()
-        .map(|row| {
-            let mut row_data = vec![0u8; out_stride];
-            for col in 0..out_w {
-                let (sx, sy) = map.get(col, row);
-                if sx.is_nan() || sy.is_nan() {
-                    continue;
-                }
+    let data = remap_rows(out_w, out_h, c, |row, row_data| {
+        for col in 0..out_w {
+            let (sx, sy) = map.get(col, row);
+            if sx.is_nan() || sy.is_nan() {
+                continue;
+            }
 
-                let (sigma_major, sigma_minor, major_dx, major_dy) = map.get_svd(col, row);
+            let (sigma_major, sigma_minor, major_dx, major_dy) = map.get_svd(col, row);
 
-                let base = col as usize * c as usize;
+            let base = col as usize * c as usize;
 
-                // Non-compressive case: single bilinear sample from level 0.
-                if sigma_major <= 1.0 {
-                    for ch in 0..c {
-                        let val = sample_bilinear_u8(pyramid.level(0), sx, sy, ch);
-                        row_data[base + ch as usize] = (val + 0.5).clamp(0.0, 255.0) as u8;
-                    }
-                    continue;
-                }
-
-                // Select pyramid level from sigma_minor.
-                let level_f = sigma_minor.max(1.0_f32).log2();
-                let level_lo = (level_f.floor() as usize).min(num_levels - 1);
-                let level_hi = (level_lo + 1).min(num_levels - 1);
-                let frac = if level_lo == level_hi {
-                    0.0
-                } else {
-                    level_f - level_lo as f32
-                };
-
-                // Number of samples along the major axis.
-                let ratio = sigma_major / sigma_minor.max(1.0);
-                let n = (ratio.ceil() as u32).clamp(1, max_anisotropy);
-
-                let scale_lo = (1u32 << level_lo) as f32;
-                let scale_hi = (1u32 << level_hi) as f32;
-
+            // Non-compressive case: single bilinear sample from level 0.
+            if sigma_major <= 1.0 {
                 for ch in 0..c {
-                    let mut sum_lo = 0.0f32;
-                    let mut sum_hi = 0.0f32;
+                    let val = sample_bilinear_u8(pyramid.level(0), sx, sy, ch);
+                    row_data[base + ch as usize] = (val + 0.5).clamp(0.0, 255.0) as u8;
+                }
+                continue;
+            }
 
-                    for i in 0..n {
-                        let t = (i as f32 + 0.5) / n as f32 - 0.5;
-                        let sample_x = sx + t * sigma_major * major_dx;
-                        let sample_y = sy + t * sigma_major * major_dy;
+            // Select pyramid level from sigma_minor.
+            let level_f = sigma_minor.max(1.0_f32).log2();
+            let level_lo = (level_f.floor() as usize).min(num_levels - 1);
+            let level_hi = (level_lo + 1).min(num_levels - 1);
+            let frac = if level_lo == level_hi {
+                0.0
+            } else {
+                level_f - level_lo as f32
+            };
 
-                        sum_lo += sample_bilinear_u8(
-                            pyramid.level(level_lo),
-                            sample_x / scale_lo,
-                            sample_y / scale_lo,
-                            ch,
-                        );
+            // Number of samples along the major axis.
+            let ratio = sigma_major / sigma_minor.max(1.0);
+            let n = (ratio.ceil() as u32).clamp(1, max_anisotropy);
+
+            let scale_lo = (1u32 << level_lo) as f32;
+            let scale_hi = (1u32 << level_hi) as f32;
+            // `frac == 0` exactly whenever `sigma_minor <= 1` (the common
+            // stretched-but-not-minified case): the hi-level taps would be
+            // multiplied by zero, so skip computing them entirely.
+            let need_hi = frac > 0.0;
+
+            for ch in 0..c {
+                let mut sum_lo = 0.0f32;
+                let mut sum_hi = 0.0f32;
+
+                for i in 0..n {
+                    let t = (i as f32 + 0.5) / n as f32 - 0.5;
+                    let sample_x = sx + t * sigma_major * major_dx;
+                    let sample_y = sy + t * sigma_major * major_dy;
+
+                    sum_lo += sample_bilinear_u8(
+                        pyramid.level(level_lo),
+                        sample_x / scale_lo,
+                        sample_y / scale_lo,
+                        ch,
+                    );
+                    if need_hi {
                         sum_hi += sample_bilinear_u8(
                             pyramid.level(level_hi),
                             sample_x / scale_hi,
@@ -368,21 +392,15 @@ pub fn remap_aniso_with_pyramid(
                             ch,
                         );
                     }
-
-                    let avg_lo = sum_lo / n as f32;
-                    let avg_hi = sum_hi / n as f32;
-                    let val = avg_lo * (1.0 - frac) + avg_hi * frac;
-                    row_data[base + ch as usize] = (val + 0.5).clamp(0.0, 255.0) as u8;
                 }
-            }
-            row_data
-        })
-        .collect();
 
-    let mut data = Vec::with_capacity((out_w as usize) * (out_h as usize) * c as usize);
-    for row in rows {
-        data.extend_from_slice(&row);
-    }
+                let avg_lo = sum_lo / n as f32;
+                let avg_hi = sum_hi / n as f32;
+                let val = avg_lo * (1.0 - frac) + avg_hi * frac;
+                row_data[base + ch as usize] = (val + 0.5).clamp(0.0, 255.0) as u8;
+            }
+        }
+    });
 
     ImageU8 {
         width: out_w,

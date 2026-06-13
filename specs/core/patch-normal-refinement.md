@@ -15,6 +15,17 @@
 > representative patch and the `representative` texture output; and the
 > atlas-backed textured patch cloud. The `scripts/patch_crossval.py` strip
 > renderer drives this routine via `--refine-normal`._
+>
+> _Status (2026-06-13): performance characterized — see
+> `reports/2026-06-13-perf-patch-normal-refinement.md` (phase breakdown,
+> per-knob perf-vs-benefit, prioritized optimization list). The search defaults
+> hold up; the **sampler default is now `Bilinear`** (the analysis found
+> anisotropic barely changes the found normal at 1.6–3× the cost — it stays an
+> opt-in for unbiased `Φ`/confidence). Landed behavior-preserving fixes: small
+> warp/remap grids run sequentially instead of nested-rayon, and `remap_aniso`
+> skips zero-weight hi-level taps. `SFMTOOL_PROFILE=1` enables hot-path phase
+> timers; `scripts/bench_normal_refine.py` and the `patch_render` criterion bench
+> reproduce the measurements._
 
 ## Problem
 
@@ -254,10 +265,13 @@ pub struct NormalRefineParams {
 
 /// How to sample a `ProjectedImage`'s pyramid when rendering a patch.
 pub enum Sampler {
-    /// Plain bilinear from the full-resolution level.
+    /// Plain bilinear from the full-resolution level. The default — the perf
+    /// analysis found the found normal barely differs from anisotropic (≤ ~1° on
+    /// pinhole cameras) at a fraction of the cost.
     Bilinear,
     /// Anisotropic over the pyramid (the warp's Jacobian SVD picks the level),
-    /// de-aliasing oblique / grazing views. Recommended default.
+    /// de-aliasing oblique / grazing views. Costs ~1.6–3× more; keeps the reported
+    /// `Φ`/confidence unbiased and helps slightly on distorted/fisheye rigs.
     Anisotropic,
 }
 
@@ -428,9 +442,11 @@ reference-view objective unnecessary. What remains open:
 ## Recommended v1
 
 Exp-map coarse-to-fine grid (3 levels) seeded from mean-viewing + geometric inits,
-`remap_aniso`, a `GaussianDisk` window, back-face/grazing culling, the `RobustWeighted`
-consensus objective, and a Hessian-based confidence. Gauss-Newton polish and the
-iterative good-view set are fast-follows.
+**bilinear sampling** (the perf analysis found anisotropic barely changes the
+found normal at 1.6–3× the cost — keep it as an opt-in for unbiased `Φ`), a
+`GaussianDisk` window, back-face/grazing culling, the `RobustWeighted` consensus
+objective, and a Hessian-based confidence. Gauss-Newton polish and the iterative
+good-view set are fast-follows.
 
 ## Open questions
 

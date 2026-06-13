@@ -20,6 +20,8 @@ use crate::remap::{remap_aniso_with_pyramid, remap_bilinear, ImageU8Pyramid};
 use crate::rigid_transform::RigidTransform;
 use crate::warp_map::WarpMap;
 
+pub mod prof;
+
 /// A source image together with the projection that maps world points into it:
 /// the camera intrinsics, its world-to-camera pose, and a prebuilt pyramid for
 /// sampling colour. Everything a patch needs to be rendered from one view. The
@@ -67,10 +69,14 @@ pub enum PatchWindow {
 /// How to sample a [`ProjectedImage`]'s pyramid when rendering a patch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sampler {
-    /// Plain bilinear from the full-resolution level.
+    /// Plain bilinear from the full-resolution level. The **default**: it barely
+    /// moves the found normal (within ~1° of anisotropic on pinhole cameras) at a
+    /// fraction of the cost.
     Bilinear,
     /// Anisotropic sampling over the pyramid — the patch warp's Jacobian SVD picks
-    /// the level, de-aliasing oblique / grazing views. Recommended default.
+    /// the level, de-aliasing oblique / grazing views. Costs ~1.6–3× more but keeps
+    /// the reported `Φ`/confidence unbiased (bilinear depresses `Φ` on oblique
+    /// views) and helps slightly on distorted/fisheye rigs.
     Anisotropic,
 }
 
@@ -108,7 +114,7 @@ impl Default for NormalRefineParams {
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
             min_valid_fraction: 0.6,
             min_views: 3,
-            sampler: Sampler::Anisotropic,
+            sampler: Sampler::Bilinear,
         }
     }
 }
@@ -266,7 +272,8 @@ fn view_valid_mask(
     resolution: u32,
     w_full: &[f64],
 ) -> Vec<bool> {
-    let map = WarpMap::from_patch(patch, view.camera, view.cam_from_world, resolution);
+    let map = prof::MASK
+        .time(|| WarpMap::from_patch(patch, view.camera, view.cam_from_world, resolution));
     let r = resolution;
     let mut mask = vec![false; (r as usize) * (r as usize)];
     for row in 0..r {
@@ -372,11 +379,14 @@ fn normalized_stack(
     let sqrt_w: Vec<f64> = ctx.weights.iter().map(|&w| w.sqrt()).collect();
     let r = resolution as usize;
 
+    prof::count(&prof::N_RENDER, n_views as u64);
+
     // Raw per-view, per-channel masked pixel values.
     let mut raw: Vec<Vec<Vec<f64>>> = Vec::with_capacity(n_views);
     for &vi in &ctx.kept {
         let view = &views[vi];
-        let mut map = WarpMap::from_patch(patch, view.camera, view.cam_from_world, resolution);
+        let mut map = prof::WARP
+            .time(|| WarpMap::from_patch(patch, view.camera, view.cam_from_world, resolution));
         // Reject a candidate that pushes any frozen-support pixel out of frame in
         // any kept view: such a pixel renders as 0 (zero-fill on a NaN warp), and
         // several views going black at the same pixels fake cross-view agreement,
@@ -388,74 +398,78 @@ fn normalized_stack(
             .iter()
             .any(|&p| !map.is_valid((p % r) as u32, (p / r) as u32))
         {
+            prof::count(&prof::N_REJECT, 1);
             return None;
         }
         let img = match sampler {
             Sampler::Anisotropic => {
-                map.compute_svd();
-                remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY)
+                prof::SVD.time(|| map.compute_svd());
+                prof::REMAP.time(|| remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY))
             }
-            Sampler::Bilinear => remap_bilinear(view.pyramid.level(0), &map),
+            Sampler::Bilinear => prof::REMAP.time(|| remap_bilinear(view.pyramid.level(0), &map)),
         };
-        let mut per_channel = Vec::with_capacity(channels);
-        for ch in 0..channels {
-            let vals: Vec<f64> = ctx
-                .pixels
-                .iter()
-                .map(|&p| img.get_pixel((p % r) as u32, (p / r) as u32, ch as u32) as f64)
-                .collect();
-            per_channel.push(vals);
-        }
+        let per_channel = prof::ZNORM.time(|| {
+            (0..channels)
+                .map(|ch| {
+                    ctx.pixels
+                        .iter()
+                        .map(|&p| img.get_pixel((p % r) as u32, (p / r) as u32, ch as u32) as f64)
+                        .collect::<Vec<f64>>()
+                })
+                .collect::<Vec<_>>()
+        });
         raw.push(per_channel);
     }
 
     // Per-(view, channel) windowed mean / norm; a channel is kept only when no
     // view is flat in it.
-    let mut keep_channel = vec![true; channels];
-    let mut stats = vec![vec![(0.0f64, 0.0f64); channels]; n_views];
-    for (i, per_channel) in raw.iter().enumerate() {
-        for (c, vals) in per_channel.iter().enumerate() {
-            let mean: f64 = vals
-                .iter()
-                .zip(&ctx.weights)
-                .map(|(&f, &w)| w * f)
-                .sum::<f64>()
-                / total_w;
-            let norm_sq: f64 = vals
-                .iter()
-                .zip(&ctx.weights)
-                .map(|(&f, &w)| w * (f - mean) * (f - mean))
-                .sum();
-            if norm_sq < FLAT_NORM_SQ_EPS {
-                keep_channel[c] = false;
+    prof::ZNORM.time(|| {
+        let mut keep_channel = vec![true; channels];
+        let mut stats = vec![vec![(0.0f64, 0.0f64); channels]; n_views];
+        for (i, per_channel) in raw.iter().enumerate() {
+            for (c, vals) in per_channel.iter().enumerate() {
+                let mean: f64 = vals
+                    .iter()
+                    .zip(&ctx.weights)
+                    .map(|(&f, &w)| w * f)
+                    .sum::<f64>()
+                    / total_w;
+                let norm_sq: f64 = vals
+                    .iter()
+                    .zip(&ctx.weights)
+                    .map(|(&f, &w)| w * (f - mean) * (f - mean))
+                    .sum();
+                if norm_sq < FLAT_NORM_SQ_EPS {
+                    keep_channel[c] = false;
+                }
+                stats[i][c] = (mean, norm_sq);
             }
-            stats[i][c] = (mean, norm_sq);
         }
-    }
-    if !keep_channel.iter().any(|&k| k) {
-        return None;
-    }
+        if !keep_channel.iter().any(|&k| k) {
+            return None;
+        }
 
-    let xs: Vec<Vec<Vec<f64>>> = raw
-        .iter()
-        .enumerate()
-        .map(|(i, per_channel)| {
-            per_channel
-                .iter()
-                .enumerate()
-                .filter(|(c, _)| keep_channel[*c])
-                .map(|(c, vals)| {
-                    let (mean, norm_sq) = stats[i][c];
-                    let inv_norm = 1.0 / norm_sq.sqrt();
-                    vals.iter()
-                        .zip(&sqrt_w)
-                        .map(|(&f, &sw)| sw * (f - mean) * inv_norm)
-                        .collect()
-                })
-                .collect()
-        })
-        .collect();
-    Some(xs)
+        let xs: Vec<Vec<Vec<f64>>> = raw
+            .iter()
+            .enumerate()
+            .map(|(i, per_channel)| {
+                per_channel
+                    .iter()
+                    .enumerate()
+                    .filter(|(c, _)| keep_channel[*c])
+                    .map(|(c, vals)| {
+                        let (mean, norm_sq) = stats[i][c];
+                        let inv_norm = 1.0 / norm_sq.sqrt();
+                        vals.iter()
+                            .zip(&sqrt_w)
+                            .map(|(&f, &sw)| sw * (f - mean) * inv_norm)
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
+        Some(xs)
+    })
 }
 
 /// Unweighted consensus over one channel: `ρ̄ = (V‖x̄‖² − 1)/(V − 1)` with
@@ -588,9 +602,10 @@ fn eval_phi(
     resolution: u32,
     params: &NormalRefineParams,
 ) -> Option<f64> {
+    prof::count(&prof::N_EVAL, 1);
     let patch = repose_patch(base, n);
     let xs = normalized_stack(&patch, ctx, views, resolution, params.sampler)?;
-    consensus_phi(&xs, params.objective)
+    prof::CONSENSUS.time(|| consensus_phi(&xs, params.objective))
 }
 
 // ---------------------------------------------------------------------------
@@ -799,6 +814,15 @@ pub fn refine_patch_normal(
     resolution: u32,
     params: &NormalRefineParams,
 ) -> NormalRefineResult {
+    prof::TOTAL.time(|| refine_patch_normal_impl(patch, views, resolution, params))
+}
+
+fn refine_patch_normal_impl(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    resolution: u32,
+    params: &NormalRefineParams,
+) -> NormalRefineResult {
     let resolution = resolution.max(2);
     let init_n = patch.normal();
     let w_full = window_weights(params.window, resolution);
@@ -868,7 +892,8 @@ pub fn refine_patch_normal(
     let h = (params.angular_range_deg.to_radians()
         * shrink.powi(params.refine_levels.max(1) as i32))
     .clamp(0.2f64.to_radians(), 5.0f64.to_radians());
-    let confidence = grid_confidence(patch, &best_n, &ctx, views, resolution, params, h);
+    let confidence = prof::CONFIDENCE
+        .time(|| grid_confidence(patch, &best_n, &ctx, views, resolution, params, h));
 
     NormalRefineResult {
         patch: if improved {
@@ -904,6 +929,10 @@ pub fn refine_patch_cloud(
         cloud.len(),
         "patch_views must be parallel to the cloud"
     );
+    if prof::enabled() {
+        prof::reset();
+    }
+    let wall_start = std::time::Instant::now();
     let results: Vec<NormalRefineResult> = cloud
         .patches
         .par_iter()
@@ -913,6 +942,9 @@ pub fn refine_patch_cloud(
             refine_patch_normal(patch, &pv, resolution, params)
         })
         .collect();
+    if prof::enabled() {
+        prof::report(cloud.len(), wall_start.elapsed().as_secs_f64());
+    }
     for (p, r) in cloud.patches.iter_mut().zip(&results) {
         *p = r.patch.clone();
     }
