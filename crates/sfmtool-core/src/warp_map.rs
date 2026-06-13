@@ -32,6 +32,13 @@ pub struct WarpMap {
     svd: Option<WarpMapSvd>,
 }
 
+/// Destination-pixel count at or below which the warp / remap row loops run
+/// sequentially. For small destinations (e.g. the `R×R` patch grids of
+/// patch-normal refinement, typically nested inside an already-parallel
+/// per-patch loop) the rayon scaffolding costs an order of magnitude more
+/// than the row work itself; full-image warps stay parallel.
+pub(crate) const PAR_MIN_PIXELS: usize = 2048;
+
 /// Singular value decomposition of the 2x2 Jacobian at each warp map pixel.
 ///
 /// For each pixel the Jacobian of the warp is decomposed as `J = U * S * V^T`
@@ -282,28 +289,40 @@ impl WarpMap {
         let row_len = 2 * r as usize;
         let step = 2.0 / r as f64;
 
-        let data: Vec<f32> = (0..r)
-            .into_par_iter()
-            .flat_map(|row| {
-                let mut row_data = vec![0.0f32; row_len];
-                let t = (row as f64 + 0.5) * step - 1.0;
-                for col in 0..r {
-                    let s = (col as f64 + 0.5) * step - 1.0;
-                    let world = patch.to_world(s, t);
-                    let p_cam = cam_from_world.transform_point(&world);
-                    let (sx, sy) = match camera.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z]) {
-                        Some((px, py)) if px >= 0.0 && py >= 0.0 && px < src_w && py < src_h => {
-                            (px, py)
-                        }
-                        _ => (f64::NAN, f64::NAN),
-                    };
-                    let idx = 2 * col as usize;
-                    row_data[idx] = sx as f32;
-                    row_data[idx + 1] = sy as f32;
-                }
-                row_data
-            })
-            .collect();
+        let fill_row = |row: u32, row_data: &mut [f32]| {
+            let t = (row as f64 + 0.5) * step - 1.0;
+            for col in 0..r {
+                let s = (col as f64 + 0.5) * step - 1.0;
+                let world = patch.to_world(s, t);
+                let p_cam = cam_from_world.transform_point(&world);
+                let (sx, sy) = match camera.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z]) {
+                    Some((px, py)) if px >= 0.0 && py >= 0.0 && px < src_w && py < src_h => {
+                        (px, py)
+                    }
+                    _ => (f64::NAN, f64::NAN),
+                };
+                let idx = 2 * col as usize;
+                row_data[idx] = sx as f32;
+                row_data[idx + 1] = sy as f32;
+            }
+        };
+
+        let data: Vec<f32> = if (r as usize) * (r as usize) <= PAR_MIN_PIXELS {
+            let mut data = vec![0.0f32; row_len * r as usize];
+            for (row, row_data) in data.chunks_exact_mut(row_len).enumerate() {
+                fill_row(row as u32, row_data);
+            }
+            data
+        } else {
+            (0..r)
+                .into_par_iter()
+                .flat_map(|row| {
+                    let mut row_data = vec![0.0f32; row_len];
+                    fill_row(row, &mut row_data);
+                    row_data
+                })
+                .collect()
+        };
 
         WarpMap {
             width: r,
@@ -391,37 +410,53 @@ impl WarpMap {
         let h = self.height as usize;
         let n = w * h;
 
-        let (sigma_major, sigma_minor, major_dir) = (0..h)
-            .into_par_iter()
-            .map(|row| {
-                let mut row_major = Vec::with_capacity(w);
-                let mut row_minor = Vec::with_capacity(w);
-                let mut row_dir = Vec::with_capacity(2 * w);
-
+        let (sigma_major, sigma_minor, major_dir) = if n <= PAR_MIN_PIXELS {
+            let mut sigma_major = Vec::with_capacity(n);
+            let mut sigma_minor = Vec::with_capacity(n);
+            let mut major_dir = Vec::with_capacity(2 * n);
+            for row in 0..h {
                 for col in 0..w {
                     let (s_maj, s_min, dx, dy) = self.jacobian_svd_at(col, row, w, h);
-                    row_major.push(s_maj);
-                    row_minor.push(s_min);
-                    row_dir.push(dx);
-                    row_dir.push(dy);
+                    sigma_major.push(s_maj);
+                    sigma_minor.push(s_min);
+                    major_dir.push(dx);
+                    major_dir.push(dy);
                 }
-                (row_major, row_minor, row_dir)
-            })
-            .reduce(
-                || {
-                    (
-                        Vec::with_capacity(n),
-                        Vec::with_capacity(n),
-                        Vec::with_capacity(2 * n),
-                    )
-                },
-                |mut acc, row| {
-                    acc.0.extend(row.0);
-                    acc.1.extend(row.1);
-                    acc.2.extend(row.2);
-                    acc
-                },
-            );
+            }
+            (sigma_major, sigma_minor, major_dir)
+        } else {
+            (0..h)
+                .into_par_iter()
+                .map(|row| {
+                    let mut row_major = Vec::with_capacity(w);
+                    let mut row_minor = Vec::with_capacity(w);
+                    let mut row_dir = Vec::with_capacity(2 * w);
+
+                    for col in 0..w {
+                        let (s_maj, s_min, dx, dy) = self.jacobian_svd_at(col, row, w, h);
+                        row_major.push(s_maj);
+                        row_minor.push(s_min);
+                        row_dir.push(dx);
+                        row_dir.push(dy);
+                    }
+                    (row_major, row_minor, row_dir)
+                })
+                .reduce(
+                    || {
+                        (
+                            Vec::with_capacity(n),
+                            Vec::with_capacity(n),
+                            Vec::with_capacity(2 * n),
+                        )
+                    },
+                    |mut acc, row| {
+                        acc.0.extend(row.0);
+                        acc.1.extend(row.1);
+                        acc.2.extend(row.2);
+                        acc
+                    },
+                )
+        };
 
         self.svd = Some(WarpMapSvd {
             sigma_major,

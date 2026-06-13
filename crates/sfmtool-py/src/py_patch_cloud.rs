@@ -239,8 +239,10 @@ impl PyPatchCloud {
     ///         ``"mean"`` (unweighted all-pairs consensus).
     ///     window: Per-pixel scoring weight — ``"gaussian_disk"`` (default),
     ///         ``"gaussian"``, or ``"uniform"``.
-    ///     sampler: How to sample the source pyramids — ``"anisotropic"`` (default;
-    ///         anti-aliased oblique views) or ``"bilinear"``.
+    ///     sampler: How to sample the source pyramids — ``"bilinear"`` (default;
+    ///         fastest, and the found normal barely differs) or ``"anisotropic"``
+    ///         (anti-aliased oblique views; keeps the reported Φ/confidence
+    ///         unbiased, ~1.6-3x slower).
     ///     point_ids: If given, refine only the patches with these source point
     ///         ids (the rest keep their input normal) — cheap when refining a few
     ///         patches out of a large cloud. ``None`` refines every patch.
@@ -253,7 +255,7 @@ impl PyPatchCloud {
     #[pyo3(signature = (
         recon, images, *, resolution=24, angular_range_deg=25.0, init_steps=7,
         refine_levels=3, objective="robust", robust_iters=3, window="gaussian_disk",
-        window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="anisotropic",
+        window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="bilinear",
         point_ids=None
     ))]
     fn refine_normals<'py>(
