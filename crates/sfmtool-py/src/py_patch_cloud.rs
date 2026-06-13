@@ -138,10 +138,11 @@ impl PyPatchCloud {
     ///
     /// Args:
     ///     recon: The reconstruction.
-    ///     normal: Normal policy — ``"stored"`` (the reconstruction's stored
-    ///         estimated normal, whatever is in the ``.sfmr``), ``"mean_viewing"``
-    ///         (mean direction to the observing cameras), or ``"geometric"``
-    ///         (local PCA plane fit over ``k_neighbors`` points).
+    ///     normal: Normal policy — ``"stored"`` (default; the reconstruction's
+    ///         stored estimated normal, whatever is in the ``.sfmr``, falling back
+    ///         to the mean viewing direction where that is zero/degenerate),
+    ///         ``"mean_viewing"`` (mean direction to the observing cameras), or
+    ///         ``"geometric"`` (local PCA plane fit over ``k_neighbors`` points).
     ///     k_neighbors: Neighbor count for the ``"geometric"`` policy.
     ///     extent: Half-size policy — ``"feature_size"`` (default; ``extent_value``
     ///         × each observation's keypoint scale back-projected to world, reduced
@@ -159,7 +160,7 @@ impl PyPatchCloud {
     ///         ``"median"``).
     #[staticmethod]
     #[pyo3(signature = (
-        recon, normal="mean_viewing", k_neighbors=12,
+        recon, normal="stored", k_neighbors=12,
         extent="feature_size", extent_value=5.0,
         pixel_reduce="min", feature_reduce="median"
     ))]
