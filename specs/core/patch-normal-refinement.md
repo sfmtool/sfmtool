@@ -1,8 +1,20 @@
 # Photometric Patch-Normal Refinement
 
-**Status:** Proposed (core); a prototype lives in `scripts/patch_crossval.py`
-(`--refine-normal`). Builds on `specs/core/patch-cloud.md`
+**Status:** Builds on `specs/core/patch-cloud.md`
 (`OrientedPatch`, `WarpMap::from_patch`, `remap_*`).
+
+> _Status (2026-06-12): v1 implemented — `sfmtool-core/src/patch_normal_refine.rs`
+> (`ProjectedImage`, `Objective`, `PatchWindow`, `NormalRefineParams`,
+> `NormalRefineResult`, `refine_patch_normal`, `refine_patch_cloud`,
+> `patch_view_indices_from_reconstruction`) and the PyO3 binding
+> `PatchCloud.refine_normals`. Deferred from v1: the analytic Gauss-Newton polish
+> and its centered-Hessian confidence (v1 uses a finite-difference grid-curvature
+> confidence and does not yet gate on a confidence threshold to keep the init
+> normal); the geometric/PCA seed (v1 seeds from the patch's current normal and
+> the mean-viewing direction); stochastic view subsets; the joint normal + robust
+> representative patch and the `representative` texture output; and the
+> atlas-backed textured patch cloud. The `scripts/patch_crossval.py` strip
+> renderer drives this routine via `--refine-normal`._
 
 ## Problem
 
@@ -79,9 +91,12 @@ correlation keeps the same single-sweep form:
 Set `wᵢ` by IRLS from each view's residual `‖xᵢ − x̄_w‖` (a robust M-estimator —
 e.g. Tukey, with a scale from the residual MAD), re-forming `x̄_w` and
 re-weighting a few times. This stays a smooth consensus while down-weighting
-outliers, instead of a non-smooth median over pairs. Gate on the *effective* view
-count `1/Σwᵢ² ≥ min_views` (as weight concentrates on one view, `Σwᵢ² → 1` and
-`ρ̄_w → 0/0`); `min_valid_fraction` still applies.
+outliers, instead of a non-smooth median over pairs. The view *count* is gated by
+`min_views` (and `min_valid_fraction`) when forming the support; separately, gate
+the robust *effective* view count `1/Σwᵢ² ≥ 2` — a pure degeneracy floor, since
+as weight concentrates on one view `Σwᵢ² → 1` and `ρ̄_w → 0/0`. (Don't reuse
+`min_views` for this: `1/Σwᵢ² ≤ V` with equality only for exactly uniform weights,
+so a clean `V == min_views` track would be falsely rejected.)
 
 **Validity.** A candidate normal can project the patch partly out of frame (NaN)
 or behind a camera in some views. Score only over commonly-valid pixels; require a
@@ -130,7 +145,7 @@ Two requirements on the search basis:
   `[-tan r, tan r]²` reaches `atan(√2·tan r) ≈ √2·r` into the corners. Fine for a
   modest cone; for
   wide cones prefer clamping to the disk `‖(a, b)‖ ≤ tan r` (it also matches the
-  radial `Disk` support and keeps the per-level cone circular).
+  radial `GaussianDisk` support and keeps the per-level cone circular).
 
 Single-level dense grid; `steps²·V` renders per point. On seoul it lifts mean
 pairwise NCC by ~0.03 on average and up to +0.17 on the least-consistent tracks.
@@ -189,14 +204,27 @@ contrast, `R`, and window mass — relative to the trace or an image-noise estim
 and, below a threshold, keep the init normal and flag it. Degenerate (≤ 2 valid,
 single-sided) points skip the search outright.
 
+**Not idempotent — by design.** `refine_patch_normal` is *not* a fixed-point
+operation: feeding a refined normal back in can improve it further, and that is
+desirable, not a bug. Each pass re-seeds (including the mean-viewing seed), reopens
+the cone, and re-freezes the support around the new normal, so a second pass can
+reach a sub-grid-better point or a better basin the first grid missed (the
+observed drift is small on converged points, larger where a new basin is found).
+Each pass still honors never-worse-than-its-own-init, so repeated refinement
+drives `Φ` toward the continuous optimum — running to convergence is the
+*thorough* setting. Forcing idempotence (e.g. an acceptance threshold or no cone
+reopening) would only cap the achievable accuracy; the Gauss-Newton polish above
+is the right way to converge in one pass instead.
+
 ## Proposed core API
 
 ```rust
-/// One observing view: the camera, its world-to-camera pose, and a prebuilt
-/// source-image pyramid. The pyramid is built once per view and borrowed for
-/// every candidate render (the `'_` lifetime), so a refinement allocates no
-/// per-candidate image data.
-pub struct PatchView<'a> {
+/// A fully-calibrated source camera: its intrinsics, its world-to-camera pose,
+/// and a prebuilt source-image pyramid — projects world points to pixels and
+/// samples colour there, everything a patch needs to be rendered from one view.
+/// The pyramid is built once and borrowed for every candidate render (the `'_`
+/// lifetime), so a refinement allocates no per-candidate image data.
+pub struct ProjectedImage<'a> {
     pub camera: &'a CameraIntrinsics,
     pub cam_from_world: &'a RigidTransform,
     pub pyramid: &'a ImageU8Pyramid,
@@ -221,12 +249,21 @@ pub struct NormalRefineParams {
     pub window: PatchWindow,      // per-pixel scoring weight / support (below)
     pub min_valid_fraction: f64,  // per-view valid-pixel floor
     pub min_views: u32,
-    pub anisotropic: bool,        // remap_aniso vs remap_bilinear
+    pub sampler: Sampler,         // how to sample the source pyramids
+}
+
+/// How to sample a `ProjectedImage`'s pyramid when rendering a patch.
+pub enum Sampler {
+    /// Plain bilinear from the full-resolution level.
+    Bilinear,
+    /// Anisotropic over the pyramid (the warp's Jacobian SVD picks the level),
+    /// de-aliasing oblique / grazing views. Recommended default.
+    Anisotropic,
 }
 
 /// Per-pixel weight applied to the `R×R` patch when scoring (the NCC window).
 /// Also sets whether in-plane rotation is *exactly* free of the score: a radial
-/// weight (`Disk`) is rotation-invariant; a square-grid weight only up to corner
+/// weight (`GaussianDisk`) is rotation-invariant; a square-grid weight only up to corner
 /// effects.
 pub enum PatchWindow {
     /// Uniform weight over the whole square grid (rotation-leaky; mainly a
@@ -237,7 +274,7 @@ pub enum PatchWindow {
     /// Gaussian weight confined to the inscribed disk — radial, so in-plane
     /// rotation is exactly free and grazing corners don't leak in. Recommended
     /// default.
-    Disk { sigma: f64 },
+    GaussianDisk { sigma: f64 },
     // Future: `Alpha` — an explicit per-(s, t) mask carried by the patch (e.g. to
     // exclude occluders or non-planar pixels). See "Improvements".
 }
@@ -266,7 +303,7 @@ pub struct NormalRefineResult {
 /// the new plane forces and no `up` hint is needed.
 pub fn refine_patch_normal(
     patch: &OrientedPatch,
-    views: &[PatchView<'_>],
+    views: &[ProjectedImage<'_>],
     resolution: u32,
     params: &NormalRefineParams,
 ) -> NormalRefineResult;
@@ -277,7 +314,7 @@ pub fn refine_patch_cloud(cloud: &mut PatchCloud, views: ..., params: ...) -> Ve
 ```
 
 `refine_patch_normal` composes `WarpMap::from_patch` + `remap` over the
-`PatchView` pyramids.
+`ProjectedImage` pyramids.
 
 ## Improvements to discuss
 
@@ -289,9 +326,9 @@ reference-view objective unnecessary. What remains open:
 1. **Anti-aliased sampling (`remap_aniso`).** Oblique views foreshorten the patch;
    bilinear sampling then aliases and *biases `Φ` downward*, pulling the optimum
    off the true normal. `remap_aniso` (the patch warp's Jacobian SVD picks the
-   pyramid level) de-aliases grazing views — this is the `anisotropic` param, and
+   pyramid level) de-aliases grazing views — this is `Sampler::Anisotropic`, and
    the same Jacobian feeds the GN step. Cost: one pyramid per source image
-   (already in `PatchView`).
+   (already in `ProjectedImage`).
 
 2. **Back-face / grazing culling + good-view iteration.** Cull **back-facing**
    views (`is_front_facing`), past-grazing views, and views where the patch
@@ -348,7 +385,7 @@ reference-view objective unnecessary. What remains open:
    an analytic shape to an explicit per-`(s, t)` weight attached to the patch — a
    non-rectangular footprint or a downweight of off-surface pixels (occluders,
    depth discontinuities, a foreground matte) so the score sees only the planar
-   region. Subsumes `Disk`/`Gaussian` (those are fixed masks) and pairs with the
+   region. Subsumes `GaussianDisk`/`Gaussian` (those are fixed masks) and pairs with the
    good-view iteration in (2); per-view alpha could even carry per-view occlusion.
    Needs the mask to ride on `OrientedPatch` (or a thin `MaskedPatch` wrapper);
    deferred until a producer exists. Out of scope for v1.
@@ -391,7 +428,7 @@ reference-view objective unnecessary. What remains open:
 ## Recommended v1
 
 Exp-map coarse-to-fine grid (3 levels) seeded from mean-viewing + geometric inits,
-`remap_aniso`, a `Disk` window, back-face/grazing culling, the `RobustWeighted`
+`remap_aniso`, a `GaussianDisk` window, back-face/grazing culling, the `RobustWeighted`
 consensus objective, and a Hessian-based confidence. Gauss-Newton polish and the
 iterative good-view set are fast-follows.
 

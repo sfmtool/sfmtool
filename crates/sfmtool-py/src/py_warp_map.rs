@@ -361,7 +361,7 @@ impl PyImagePyramid {
 }
 
 /// Extract a numpy uint8 array (HxW or HxWxC) into an ImageU8.
-fn extract_image_u8(obj: &Bound<'_, pyo3::types::PyAny>) -> PyResult<ImageU8> {
+pub(crate) fn extract_image_u8(obj: &Bound<'_, pyo3::types::PyAny>) -> PyResult<ImageU8> {
     // Try 3D first (HxWxC), then 2D (HxW)
     if let Ok(arr) = obj.extract::<numpy::PyReadonlyArray3<'_, u8>>() {
         let shape = arr.shape();
