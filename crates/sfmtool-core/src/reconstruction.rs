@@ -204,6 +204,11 @@ impl SfmrReconstruction {
     }
 
     /// Save this reconstruction to a `.sfmr` file.
+    ///
+    /// The write preserves the in-memory `estimated_normal` of every point that
+    /// has one, recomputing only the missing (zero) normals from geometry — so
+    /// normals a consumer has set (e.g. `sfm xform --refine-normals`) survive the
+    /// round trip. Depth statistics and histograms are still recomputed.
     pub fn save(&self, path: &Path) -> Result<(), SfmrError> {
         let mut data = self.to_sfmr_data();
         sfmr_format::write_sfmr(path, &mut data)

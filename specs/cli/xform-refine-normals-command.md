@@ -1,10 +1,22 @@
 # `sfm xform --refine-normals` Design
 
-**Status:** Proposed. Surfaces the photometric patch-normal refinement
+**Status:** Implemented (2026-06-13) in `src/sfmtool/xform/_refine_normals.py`
+(`RefineNormalsTransform`), wired through `xform/_arg_parser.py`
+(`parse_refine_normals_params`) and the `--refine-normals` Click option in
+`_commands/xform.py`. Surfaces the photometric patch-normal refinement
 (`specs/core/patch-normal-refinement.md`, v1 implemented in
 `sfmtool-core/src/patch_normal_refine.rs` + the `PatchCloud.refine_normals`
 PyO3 binding) as an `sfm xform` operation that rewrites a reconstruction's
 per-point `estimated_normals` in place.
+
+> _Note (2026-06-13): the Click option is declared `is_flag=False,
+> flag_value=""` so the optional value accepts all three forms — bare
+> `--refine-normals`, space-separated `--refine-normals init_steps=7`, and
+> joined `--refine-normals=init_steps=7` — while still leaving a following
+> option (e.g. `--refine-normals --bundle-adjust`) untouched. The ordered
+> `_arg_parser` walk mirrors that tokenization. The reported low-confidence
+> count uses a fixed reporting threshold (0.1) on the normalized confidence; it
+> is diagnostic only (no per-point gating), as specified below._
 
 ## Why this fits `xform` (and how)
 
@@ -41,7 +53,7 @@ normals back onto the points.
 ## Command syntax
 
 ```
-sfm xform <input.sfmr> [<output.sfmr>] --refine-normals[=<params>] [...]
+sfm xform <input.sfmr> [<output.sfmr>] --refine-normals [<params>] [...]
 ```
 
 `--refine-normals` takes an **optional** comma-separated parameter string of
@@ -181,6 +193,22 @@ class RefineNormalsTransform:
 on `cloud.point_ids` being **point-array indices** (the 3D-point index, not a
 track id) — which is what `from_reconstruction` emits and what the binding
 range-checks — so `normals[pid] = …` indexes the right row directly.
+
+**Persisting the refined normals (decided).** `.sfmr` *write* used to recompute
+`estimated_normals_xyz` from geometry (the mean-viewing normals; see
+`sfmr-format/src/depth_stats.rs`) on every save, which would silently discard the
+refinement. The write path now **preserves** every stored normal and recomputes
+only the *missing* ones — the zero vector left for points whose normal was never
+set and for degenerate / infinity points (`merge_preserving_estimated_normals` in
+`sfmr-format/src/write.rs`, gated on `MISSING_NORMAL_NORM_SQ`). Depth statistics
+and histograms are still recomputed so they track the current geometry (e.g.
+after a prior `--bundle-adjust`). This is a global save-pipeline change, not
+special-cased to this command: a freshly imported reconstruction (normals start
+all-zero) still gets a full set computed on its first write, while any normals a
+consumer set — refined here, or otherwise — survive subsequent saves. So
+`RefineNormalsTransform.apply` just writes the normals back via
+`clone_with_changes` and the ordinary `recon.save` keeps them; no save flag is
+needed.
 
 Image loading resolves `workspace_dir / image_name` exactly as
 `RemoveLargeFeaturesFilter` resolves its `.sift` paths (via `recon.workspace_dir`

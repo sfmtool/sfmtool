@@ -248,6 +248,26 @@ Applies bundle adjustment via pycolmap to refine camera poses and 3D point posit
 --remove-short-tracks 2 --bundle-adjust
 ```
 
+#### `--refine-normals [<params>]`
+
+Refines each finite point's `estimated_normal` to the normal that maximizes
+photometric cross-view consensus, leaving the point count, positions, poses, and
+cameras unchanged. Because it is photometric it reads the workspace source
+images (and, under the default `extent=feature_size`, the `.sift` files), so
+those artifacts must still be present where the reconstruction was created. The
+optional value is a comma-separated `key=value` string; with no value it runs the
+v1 defaults. Recommended after `--bundle-adjust` (refine against the final
+geometry).
+
+See [xform-refine-normals-command.md](xform-refine-normals-command.md) for the
+full parameter list and semantics.
+
+```bash
+--refine-normals
+--refine-normals angular_range_deg=25,init_steps=7
+--bundle-adjust --refine-normals
+```
+
 ### Scaling to Physical Units
 
 #### `--scale-by-measurements <measurements.yaml>`

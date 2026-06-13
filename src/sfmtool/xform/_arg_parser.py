@@ -30,6 +30,7 @@ from . import (
     FindPointsAtInfinityTransform,
     IncludeGlobFilter,
     IncludeRangeFilter,
+    RefineNormalsTransform,
     RemoveIsolatedPointsFilter,
     RemoveLargeFeaturesFilter,
     RemoveNarrowTracksFilter,
@@ -68,6 +69,75 @@ def parse_angle(angle_str: str) -> float:
         return value
     else:
         raise ValueError(f"Unrecognized angle unit: {unit}")
+
+
+# Each --refine-normals key maps to the Python type its value parses as; the
+# RefineNormalsTransform constructor owns range/enum validation. Keys mirror the
+# PatchCloud.refine_normals / from_reconstruction binding parameters one-to-one.
+_REFINE_NORMALS_KEYS: dict[str, type] = {
+    "angular_range_deg": float,
+    "init_steps": int,
+    "refine_levels": int,
+    "resolution": int,
+    "objective": str,
+    "robust_iters": int,
+    "window": str,
+    "window_sigma": float,
+    "sampler": str,
+    "min_valid_fraction": float,
+    "min_views": int,
+    "initial_normals": str,
+    "extent": str,
+    "extent_value": float,
+}
+
+
+def parse_refine_normals_params(param: str) -> RefineNormalsTransform:
+    """Parse a ``--refine-normals`` comma-separated ``key=value`` string.
+
+    An empty string runs the v1 defaults. Unknown keys, malformed tokens (no
+    ``=`` or an empty key), and unparseable values raise ``click.UsageError``;
+    range/enum validation is the transform constructor's job (its ``ValueError``
+    is re-raised as ``UsageError`` by the caller).
+    """
+    kwargs: dict = {}
+    for token in param.split(","):
+        token = token.strip()
+        if not token:
+            # Tolerate empty segments (e.g. a trailing comma); a bare
+            # ``--refine-normals=`` likewise yields no overrides.
+            continue
+        if "=" not in token:
+            raise click.UsageError(
+                f"Invalid --refine-normals token '{token}': expected key=value"
+            )
+        key, value = token.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            raise click.UsageError(
+                f"Invalid --refine-normals token '{token}': empty key"
+            )
+        if key not in _REFINE_NORMALS_KEYS:
+            raise click.UsageError(
+                f"Unknown --refine-normals key '{key}' "
+                f"(expected one of: {', '.join(sorted(_REFINE_NORMALS_KEYS))})"
+            )
+        if key in kwargs:
+            raise click.UsageError(f"Duplicate --refine-normals key '{key}'")
+        caster = _REFINE_NORMALS_KEYS[key]
+        if caster is str:
+            kwargs[key] = value
+        else:
+            try:
+                kwargs[key] = caster(value)
+            except ValueError:
+                raise click.UsageError(
+                    f"Invalid value for --refine-normals key '{key}': "
+                    f"'{value}' is not a valid {caster.__name__}"
+                )
+
+    return RefineNormalsTransform(**kwargs)
 
 
 def auto_output_path(input_path: Path) -> Path:
@@ -177,6 +247,25 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
 
         elif arg == "--bundle-adjust":
             transforms.append(BundleAdjustTransform())
+
+        elif arg == "--refine-normals" or arg.startswith("--refine-normals="):
+            # Optional value. Mirror Click's optional-value tokenization (the
+            # command declares it is_flag=False, flag_value=""): a value joined
+            # with ``=`` is taken verbatim; otherwise the next token is the value
+            # iff it isn't another option (so ``--refine-normals --bundle-adjust``
+            # and a trailing ``--refine-normals`` both run the defaults).
+            if arg.startswith("--refine-normals="):
+                param = arg[len("--refine-normals=") :]
+            elif i + 1 < len(args) and not args[i + 1].startswith("-"):
+                i += 1
+                param = args[i]
+            else:
+                param = ""
+
+            try:
+                transforms.append(parse_refine_normals_params(param))
+            except ValueError as e:
+                raise click.UsageError(f"Invalid --refine-normals parameter: {e}")
 
         elif arg == "--remove-narrow-tracks":
             if i + 1 >= len(args):

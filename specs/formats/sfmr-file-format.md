@@ -647,12 +647,25 @@ Estimated surface normals for 3D points.
 - **Format**: [x, y, z] unit normal vectors in world coordinate system. Rows for
   `w = 0` points are `(0, 0, 0)` — a direction has no surface normal.
 
-**Computation method**: For each finite 3D point, the estimated normal is computed as the average direction from the point toward all cameras that observe it (from track data). This approximates the surface normal for points on convex surfaces.
+**Computation method**: By default each finite 3D point's normal is the average
+direction from the point toward all cameras that observe it (from track data),
+which approximates the surface normal for points on convex surfaces.
 
 ```python
 # For point P observed by cameras C1, C2, ..., Ck:
 normal = normalize(sum(camera_center[i] - P for i in observers))
 ```
+
+**Write-time preservation**: The writer does *not* unconditionally overwrite this
+field. It **preserves** any normal already set on a point and recomputes only the
+*missing* ones — the `(0, 0, 0)` rows left for points whose normal was never
+estimated (and for `w = 0` points, which stay `(0, 0, 0)`). So a freshly built
+reconstruction (normals start all-zero) gets a full mean-viewing set on its first
+write, while a better normal a consumer has computed — e.g. the photometric
+`sfm xform --refine-normals` (`specs/cli/xform-refine-normals-command.md`) —
+survives subsequent saves instead of being clobbered. Depth statistics and
+histograms are always recomputed regardless. (Set `skip_recompute_depth_stats` to
+write every depth-derived field, normals included, exactly as supplied.)
 
 **Use cases**:
 - Visibility testing (front-facing check)
