@@ -69,7 +69,11 @@ pub fn match_image_pair(
 ) -> Vec<(usize, usize, f64)> {
     use crate::{epipolar, rectification};
 
-    let f = epipolar::compute_fundamental_matrix(k1, r1, t1, k2, r2, t2);
+    // A singular intrinsic matrix (e.g. a degenerate camera with zero focal
+    // length) has no fundamental matrix; such a pair cannot be matched.
+    let Some(f) = epipolar::compute_fundamental_matrix(k1, r1, t1, k2, r2, t2) else {
+        return Vec::new();
+    };
     // Check both epipoles: right epipole (in image 2) and left epipole (in image 1)
     let is_safe =
         rectification::check_rectification_safe_from_f(&f, width2, height2, rectification_margin)

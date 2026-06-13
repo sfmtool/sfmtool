@@ -3,12 +3,36 @@
 
 //! `.sfmr` file integrity verification.
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::archive_io::{format_hash, read_zst_entry};
 use crate::types::*;
+
+/// Reinterpret a freshly decompressed byte buffer as `u32` values.
+///
+/// `read_zst_entry` returns a `Vec<u8>` whose start address is only guaranteed
+/// to be 1-aligned, so `bytemuck::cast_slice::<u8, u32>` panics when the buffer
+/// is not 4-aligned. Borrow the buffer directly when it is already aligned (the
+/// common case, no copy), and fall back to copying through a freshly aligned
+/// `Vec<u32>` only when it is not. Any trailing bytes that do not form a whole
+/// `u32` (truncated/corrupt entry) are dropped; structural checks downstream
+/// then catch the mismatch.
+fn raw_to_u32(raw: &[u8]) -> Cow<'_, [u32]> {
+    let size = std::mem::size_of::<u32>();
+    let n = raw.len() / size;
+    let trimmed = &raw[..n * size];
+    match bytemuck::try_cast_slice::<u8, u32>(trimmed) {
+        Ok(slice) => Cow::Borrowed(slice),
+        Err(_) => {
+            let mut out = vec![0u32; n];
+            bytemuck::cast_slice_mut::<u32, u8>(&mut out).copy_from_slice(trimmed);
+            Cow::Owned(out)
+        }
+    }
+}
 
 /// Verify integrity of a `.sfmr` file using content hashes.
 ///
@@ -324,8 +348,8 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
 
     // === Validate track sorting ===
     if observation_count > 1 {
-        let p3d_idxs: &[u32] = bytemuck::cast_slice(&track_point_indexes_raw);
-        let img_idxs: &[u32] = bytemuck::cast_slice(&track_image_indexes_raw);
+        let p3d_idxs = raw_to_u32(&track_point_indexes_raw);
+        let img_idxs = raw_to_u32(&track_image_indexes_raw);
         for i in 0..observation_count - 1 {
             if p3d_idxs[i] > p3d_idxs[i + 1]
                 || (p3d_idxs[i] == p3d_idxs[i + 1] && img_idxs[i] > img_idxs[i + 1])
@@ -340,7 +364,7 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
 
     // === Validate observation_counts ===
     if point_count > 0 {
-        let obs_counts: &[u32] = bytemuck::cast_slice(&track_obs_counts_raw);
+        let obs_counts = raw_to_u32(&track_obs_counts_raw);
         let obs_sum: u64 = obs_counts.iter().map(|&c| c as u64).sum();
         if obs_sum != observation_count as u64 {
             errors.push(format!(
@@ -367,4 +391,32 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     }
 
     Ok((errors.is_empty(), errors))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::raw_to_u32;
+
+    #[test]
+    fn raw_to_u32_handles_unaligned_buffer() {
+        // Build a u32 byte payload starting at an odd offset so the slice is
+        // not 4-aligned — exactly the layout a freshly decompressed buffer can
+        // land on, and the case where `bytemuck::cast_slice::<u8, u32>` panics.
+        // The aligned-copy path must read it correctly instead.
+        let mut backing = vec![0u8; 1];
+        backing.extend_from_slice(&7u32.to_ne_bytes());
+        backing.extend_from_slice(&4_000_000_000u32.to_ne_bytes());
+        let unaligned = &backing[1..];
+        assert_eq!(unaligned.as_ptr() as usize % 4, 1);
+        // Unaligned input must fall back to the owned (copied) path, not panic.
+        let got = raw_to_u32(unaligned);
+        assert!(matches!(got, std::borrow::Cow::Owned(_)));
+        assert_eq!(got.as_ref(), &[7u32, 4_000_000_000][..]);
+
+        // A trailing partial u32 (truncated entry) is dropped, not panicked on.
+        assert_eq!(
+            raw_to_u32(&backing[1..backing.len() - 1]).as_ref(),
+            &[7u32][..]
+        );
+    }
 }

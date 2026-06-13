@@ -220,7 +220,8 @@ fn test_rectification_safe_requires_both_epipoles_outside() {
     let t1 = Vector3::zeros();
     let t2 = Vector3::new(0.0, 0.0, 1.0);
 
-    let f = compute_fundamental_matrix(&k, &r, &t1, &k, &r, &t2);
+    let f =
+        compute_fundamental_matrix(&k, &r, &t1, &k, &r, &t2).expect("intrinsics are invertible");
 
     // Epipole in image 2 is outside the tiny image
     assert!(check_rectification_safe_from_f(&f, 10, 10, 50));

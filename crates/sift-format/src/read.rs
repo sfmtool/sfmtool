@@ -181,11 +181,27 @@ fn read_partial_f32_array<R: Read + Seek>(
     cols: usize,
 ) -> Result<Array2<f32>, SiftError> {
     let bytes = crate::archive_io::read_zst_entry(archive, name)?;
-    let item_bytes = count * cols * std::mem::size_of::<f32>();
+    let f32_size = std::mem::size_of::<f32>();
+    let item_bytes = count * cols * f32_size;
+    // Clamp to the available bytes and round down to a whole number of items
+    // (a truncated/corrupt entry may not end on an item boundary).
     let read_bytes = item_bytes.min(bytes.len());
-    let slice: &[f32] = bytemuck::cast_slice(&bytes[..read_bytes]);
-    let actual_count = slice.len() / cols;
-    Array2::from_shape_vec((actual_count, cols), slice.to_vec())
+    let read_bytes = read_bytes - (read_bytes % (cols * f32_size));
+    let actual_count = read_bytes / (cols * f32_size);
+    let src = &bytes[..read_bytes];
+    // Fast path: borrow the buffer when it is already 4-aligned (the common
+    // case) and copy once via `to_vec`, exactly as the original code did. Only
+    // an unaligned buffer (which used to panic in `cast_slice`) is routed
+    // through a freshly aligned `Vec<f32>`.
+    let values: Vec<f32> = match bytemuck::try_cast_slice::<u8, f32>(src) {
+        Ok(slice) => slice.to_vec(),
+        Err(_) => {
+            let mut v = vec![0.0f32; actual_count * cols];
+            bytemuck::cast_slice_mut::<f32, u8>(&mut v).copy_from_slice(src);
+            v
+        }
+    };
+    Array2::from_shape_vec((actual_count, cols), values)
         .map_err(|e| SiftError::ShapeMismatch(format!("partial f32 reshape: {e}")))
 }
 

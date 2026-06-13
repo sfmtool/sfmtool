@@ -58,6 +58,11 @@ a panic; each should be a typed Python error or an up-front validation failure.
 
 ### A1. `from-colmap-bin`: unvalidated element counts → `capacity overflow`
 
+> _Status (2026-06-13): Done — `read_colmap_binary` now clamps every
+> count-driven `Vec::with_capacity` to `file_len / min_record_bytes` via a new
+> `capped_capacity` helper, so a corrupt count fails cleanly with an I/O error
+> instead of panicking. Regression test `capped_capacity_clamps_to_available_bytes`._
+
 **Severity: medium (robustness / DoS on untrusted COLMAP models).**
 
 The COLMAP binary reader trusts the `u64` element counts embedded in the file
@@ -93,6 +98,14 @@ the unbounded `with_capacity`. Fix: sanity-cap counts against remaining bytes
 (each record has a known minimum size) or use fallible/lazy allocation.
 
 ### A2. `undistort` on a camera with `focal_length == 0` → `cast_slice` alignment panic
+
+> _Status (2026-06-13): Done — root cause was `sift-format` reading a freshly
+> decompressed (1-aligned) `Vec<u8>` and reinterpreting it as `&[f32]`/`&[T]`
+> via `bytemuck::cast_slice`, which panics on an unaligned buffer (a latent,
+> address-dependent bug that focal=0 happened to trigger reliably).
+> `read_binary_array` and `read_partial_f32_array` now copy into a properly
+> aligned `Vec<T>` via `cast_slice_mut`. `undistort` of a focal=0 model now
+> fails cleanly on the resulting empty data instead of crashing._
 
 **Severity: medium.**
 
@@ -135,6 +148,12 @@ the unchecked cast can't handle. Two independent hardening points: (a)
 not a panic.
 
 ### A3. `densify` / feature matching with `focal_length == 0` → `Intrinsic matrix K2 must be invertible`
+
+> _Status (2026-06-13): Done — `compute_fundamental_matrix` now returns
+> `Option<Matrix3<f64>>` (`None` when an intrinsic matrix is singular) instead
+> of `.expect()`-ing the inverse. `match_image_pair` returns no matches and
+> `check_rectification_safe` returns `false` for such degenerate pairs.
+> Regression test `fundamental_matrix_none_for_singular_intrinsics`._
 
 **Severity: medium.**
 
@@ -272,6 +291,21 @@ makes the extra siblings a surprise; worth a one-line note in `--help`.
   reconstruction (median 41.1, max 4778.9). Not a crash, but the
   condition-number path appears not to reflect the degenerate camera, which
   could mask a real problem.
+- **Same latent `cast_slice` pattern lived across the other format crates.**
+  > _Status (2026-06-13): Done — the A2 alignment fix was generalized. Every
+  > read path that reinterpreted a freshly decompressed `Vec<u8>` as a wider
+  > type now copies into a properly aligned `Vec<T>`: `read_binary_array` in
+  > `sfmr-format`, `matches-format`, and `camrig-format`, plus the structural
+  > `&[u32]` casts in `sfmr-format/src/verify.rs` and
+  > `matches-format/src/verify.rs`. Write-side casts (aligned ndarray → `&[u8]`)
+  > are unaffected. Regression test `raw_to_u32_handles_unaligned_buffer`._
+
+  `crates/matches-format/src/verify.rs` (≈lines 139, 170, 184–187, 314) and the
+  `read_binary_array` helpers reinterpreted freshly decompressed `Vec<u8>`
+  buffers as `&[u32]`/`&[T]` via `bytemuck::cast_slice`, the identical
+  unaligned-buffer panic risk as A2, reachable through `sfm inspect`/verify on a
+  `.matches`/`.sfmr`/`.camrig`. Not reproduced as a crash here (alignment is
+  address-dependent), but given the same treatment.
 
 ---
 

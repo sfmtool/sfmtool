@@ -57,7 +57,8 @@ fn epipolar_curve_pinhole_satisfies_fundamental_constraint() {
         &k,
         &pose2.to_rotation_matrix(),
         &pose2.translation,
-    );
+    )
+    .expect("intrinsics are invertible");
     let p1h = Vector3::new(p1[0], p1[1], 1.0);
     for q in &curve {
         let p2h = Vector3::new(q[0], q[1], 1.0);
@@ -285,7 +286,7 @@ fn test_fundamental_matrix_identity_cameras() {
     let r = Matrix3::identity();
     let t = Vector3::zeros();
 
-    let f = compute_fundamental_matrix(&k, &r, &t, &k, &r, &t);
+    let f = compute_fundamental_matrix(&k, &r, &t, &k, &r, &t).expect("intrinsics are invertible");
     assert_relative_eq!(f, Matrix3::zeros(), epsilon = 1e-10);
 }
 
@@ -297,7 +298,8 @@ fn test_fundamental_matrix_lateral_baseline() {
     let t1 = Vector3::zeros();
     let t2 = Vector3::new(1.0, 0.0, 0.0);
 
-    let f = compute_fundamental_matrix(&k, &r, &t1, &k, &r, &t2);
+    let f =
+        compute_fundamental_matrix(&k, &r, &t1, &k, &r, &t2).expect("intrinsics are invertible");
 
     // F should not be zero
     assert!(f.norm() > 1e-10);
@@ -320,7 +322,8 @@ fn test_fundamental_matrix_vertical_baseline() {
     let t1 = Vector3::zeros();
     let t2 = Vector3::new(0.0, 1.0, 0.0);
 
-    let f = compute_fundamental_matrix(&k, &r, &t1, &k, &r, &t2);
+    let f =
+        compute_fundamental_matrix(&k, &r, &t1, &k, &r, &t2).expect("intrinsics are invertible");
 
     assert!(f.norm() > 1e-10);
     assert_relative_eq!(f.determinant(), 0.0, epsilon = 1e-10);
@@ -368,7 +371,8 @@ fn test_single_epipole_lateral_motion() {
     let r = Matrix3::identity();
     let t1 = Vector3::zeros();
     let t2 = Vector3::new(1.0, 0.0, 0.0);
-    let f = compute_fundamental_matrix(&k, &r, &t1, &k, &r, &t2);
+    let f =
+        compute_fundamental_matrix(&k, &r, &t1, &k, &r, &t2).expect("intrinsics are invertible");
 
     let (_epipole, is_at_infinity) = compute_epipole(&f);
     assert!(is_at_infinity);
@@ -382,7 +386,8 @@ fn test_fundamental_equals_essential_when_k_identity() {
     let t1 = Vector3::zeros();
     let t2 = Vector3::new(1.0, 0.0, 0.0);
 
-    let f = compute_fundamental_matrix(&k, &r, &t1, &k, &r, &t2);
+    let f =
+        compute_fundamental_matrix(&k, &r, &t1, &k, &r, &t2).expect("intrinsics are invertible");
 
     // E = [t_rel]_x * R_rel
     //   = [t2]_x * I
@@ -411,7 +416,8 @@ fn test_essential_matrix_epipolar_constraint() {
     let r2 = Matrix3::identity();
     let t2 = Vector3::new(1.0, 0.0, 0.0);
 
-    let f = compute_fundamental_matrix(&k, &r1, &t1, &k, &r2, &t2);
+    let f =
+        compute_fundamental_matrix(&k, &r1, &t1, &k, &r2, &t2).expect("intrinsics are invertible");
 
     // 3D point at (2, 3, 10):
     // cam1: K * (2, 3, 10) / 10 = K * (0.2, 0.3, 1) = (420, 390, 1) (homogeneous)
@@ -448,7 +454,8 @@ fn test_epipole_from_90_degree_rotation() {
     );
     let t2 = Vector3::new(1.0, 0.0, 0.0);
 
-    let f = compute_fundamental_matrix(&k, &r1, &t1, &k, &r2, &t2);
+    let f =
+        compute_fundamental_matrix(&k, &r1, &t1, &k, &r2, &t2).expect("intrinsics are invertible");
 
     // F should be rank 2
     assert!(f.norm() > 1e-10);
@@ -462,10 +469,28 @@ fn test_single_epipole_forward_motion() {
     let r = Matrix3::identity();
     let t1 = Vector3::zeros();
     let t2 = Vector3::new(0.0, 0.0, 1.0);
-    let f = compute_fundamental_matrix(&k, &r, &t1, &k, &r, &t2);
+    let f =
+        compute_fundamental_matrix(&k, &r, &t1, &k, &r, &t2).expect("intrinsics are invertible");
 
     let (epipole, is_at_infinity) = compute_epipole(&f);
     assert!(!is_at_infinity);
     assert!((epipole[0] - 320.0).abs() < 1.0);
     assert!((epipole[1] - 240.0).abs() < 1.0);
+}
+
+#[test]
+fn fundamental_matrix_none_for_singular_intrinsics() {
+    // A camera with zero focal length has a singular intrinsic matrix, so no
+    // fundamental matrix is defined. The function must return `None` rather
+    // than panicking on the failed inverse (regression: it used to `.expect`).
+    let k_ok = Matrix3::new(500.0, 0.0, 320.0, 0.0, 500.0, 240.0, 0.0, 0.0, 1.0);
+    let k_singular = Matrix3::new(0.0, 0.0, 320.0, 0.0, 0.0, 240.0, 0.0, 0.0, 1.0);
+    let r = Matrix3::identity();
+    let t1 = Vector3::zeros();
+    let t2 = Vector3::new(1.0, 0.0, 0.0);
+
+    assert!(compute_fundamental_matrix(&k_singular, &r, &t1, &k_ok, &r, &t2).is_none());
+    assert!(compute_fundamental_matrix(&k_ok, &r, &t1, &k_singular, &r, &t2).is_none());
+    // Two valid intrinsics still yield a matrix.
+    assert!(compute_fundamental_matrix(&k_ok, &r, &t1, &k_ok, &r, &t2).is_some());
 }
