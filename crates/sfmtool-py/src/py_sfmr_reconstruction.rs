@@ -79,6 +79,11 @@ impl PySfmrReconstruction {
     ///     tool_name: Tool that performed the operation (default ``"sfmtool"``).
     ///     tool_options: Optional dict of operation-specific metadata to merge
     ///         into ``metadata.tool_options``.
+    ///
+    /// The write preserves the in-memory ``estimated_normals`` of every point
+    /// that has one (recomputing only the missing/zero rows from geometry), so
+    /// normals set via ``clone_with_changes(estimated_normals=...)`` — e.g. by
+    /// ``sfm xform --refine-normals`` — survive the round trip.
     #[pyo3(signature = (path, operation=None, tool_name=None, tool_options=None))]
     fn save(
         &mut self,

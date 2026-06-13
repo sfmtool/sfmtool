@@ -45,6 +45,19 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
     help="Apply bundle adjustment to refine camera poses and 3D points",
 )
 @click.option(
+    "--refine-normals",
+    is_flag=False,
+    flag_value="",
+    multiple=True,
+    help=(
+        "Refine per-point surface normals by photometric cross-view consensus. "
+        "Optional comma-separated key=value params (e.g. "
+        "'angular_range_deg=25,init_steps=7'). Reads the workspace source images; "
+        "the default extent=feature_size also reads the .sift files, which must "
+        "still be present where the reconstruction was created."
+    ),
+)
+@click.option(
     "--remove-narrow-tracks",
     multiple=True,
     help="Remove points with viewing angle < threshold (e.g., '5deg')",
@@ -179,6 +192,7 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
     Optimization:
       --bundle-adjust                     Apply bundle adjustment
+      --refine-normals [PARAMS]           Refine per-point normals by photometric consensus (reads source images)
 
     \b
     Alignment:
@@ -218,6 +232,10 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
         # Discover points at infinity, capping features per image
         sfm xform in.sfmr out.sfmr --find-points-at-infinity 0.1,200,2 --max-features 2000
+
+    \b
+        # Bundle-adjust, then refine surface normals against the final geometry
+        sfm xform in.sfmr out.sfmr --bundle-adjust --refine-normals angular_range_deg=25,init_steps=7
     """
     from .._sfmtool import SfmrReconstruction
 
@@ -261,7 +279,7 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--remove-large-features, --remove-isolated, --filter-by-reprojection-error, "
             "--include-by-distribution, "
             "--find-points-at-infinity, --classify-points-at-infinity, "
-            "--camera-model, --bundle-adjust, --align-to, --align-to-input"
+            "--camera-model, --bundle-adjust, --refine-normals, --align-to, --align-to-input"
         )
 
     try:

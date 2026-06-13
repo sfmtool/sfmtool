@@ -635,6 +635,55 @@ mod tests {
     }
 
     #[test]
+    fn test_write_preserves_set_normals_and_fills_missing() {
+        // The default write preserves any normal already set and recomputes only
+        // the missing (zero) rows from geometry. In make_test_data all cameras
+        // sit at the origin (zero translations), so the mean-viewing recompute
+        // for a point P points roughly toward -P — distinguishable from a set
+        // normal that disagrees with it.
+        let mut data = make_test_data();
+
+        // Point 0 is at +z (0, 0, 5); its mean-viewing normal would be (0, 0, -1).
+        // Store the opposite, (0, 0, 1): a *set* normal that recompute would flip.
+        data.estimated_normals_xyz[[0, 0]] = 0.0;
+        data.estimated_normals_xyz[[0, 1]] = 0.0;
+        data.estimated_normals_xyz[[0, 2]] = 1.0;
+        // Point 1 has no normal yet — the zero vector. It must be filled.
+        data.estimated_normals_xyz[[1, 0]] = 0.0;
+        data.estimated_normals_xyz[[1, 1]] = 0.0;
+        data.estimated_normals_xyz[[1, 2]] = 0.0;
+
+        let dir = std::env::temp_dir().join("sfmr_test_preserve_normals");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sfmr");
+        write_sfmr(&path, &mut data).unwrap();
+        let loaded = read_sfmr(&path).unwrap();
+
+        // Point 0's set normal is preserved (z = +1), not overwritten with the
+        // recomputed mean-viewing normal (which would have z = -1).
+        assert!(
+            loaded.estimated_normals_xyz[[0, 2]] > 0.5,
+            "set normal should be preserved, got {:?}",
+            loaded.estimated_normals_xyz.row(0)
+        );
+
+        // Point 1's missing normal is filled from the recompute: a non-zero unit
+        // vector pointing roughly toward -P = -(1, 0, 6).
+        let n1 = loaded.estimated_normals_xyz.row(1);
+        let norm1 = (n1[0] * n1[0] + n1[1] * n1[1] + n1[2] * n1[2]).sqrt();
+        assert!(
+            (norm1 - 1.0).abs() < 0.01,
+            "missing normal should be filled"
+        );
+        assert!(
+            n1[0] < 0.0 && n1[2] < 0.0,
+            "filled normal should point toward -P"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn test_depth_statistics_structure() {
         let mut data = make_test_data();
         let dir = std::env::temp_dir().join("sfmr_test_depth_stats");

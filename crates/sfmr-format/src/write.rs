@@ -33,6 +33,44 @@ impl Default for WriteOptions {
     }
 }
 
+/// Squared-norm below which a stored estimated normal counts as "missing".
+///
+/// A set normal is a unit vector (norm² ≈ 1); the zero vector is the
+/// initializer kept for points whose normal was never estimated and for
+/// degenerate / infinity points, so anything this close to zero is treated as
+/// absent and filled from the recomputed mean-viewing normals.
+const MISSING_NORMAL_NORM_SQ: f32 = 1e-6;
+
+/// Merge stored estimated normals with the geometry-recomputed ones, *keeping*
+/// every stored normal that is present and filling only the missing (zero)
+/// rows from the recompute. Falls back to the recomputed set wholesale if the
+/// stored array's shape doesn't match (e.g. a dict-built `SfmrData` that never
+/// carried normals). Returns a borrow when no copy is needed.
+fn merge_preserving_estimated_normals<'a>(
+    stored: &'a ndarray::Array2<f32>,
+    recomputed: &'a ndarray::Array2<f32>,
+) -> Cow<'a, ndarray::Array2<f32>> {
+    if stored.dim() != recomputed.dim() {
+        return Cow::Borrowed(recomputed);
+    }
+    let mut merged: Option<ndarray::Array2<f32>> = None;
+    for i in 0..stored.nrows() {
+        let x = stored[[i, 0]];
+        let y = stored[[i, 1]];
+        let z = stored[[i, 2]];
+        if x * x + y * y + z * z <= MISSING_NORMAL_NORM_SQ {
+            let out = merged.get_or_insert_with(|| stored.clone());
+            out[[i, 0]] = recomputed[[i, 0]];
+            out[[i, 1]] = recomputed[[i, 1]];
+            out[[i, 2]] = recomputed[[i, 2]];
+        }
+    }
+    match merged {
+        Some(out) => Cow::Owned(out),
+        None => Cow::Borrowed(stored),
+    }
+}
+
 /// Write columnar data to a `.sfmr` file.
 ///
 /// Recomputes depth statistics (normals, histograms, per-image stats) by default
@@ -85,9 +123,23 @@ pub fn write_sfmr_with_options(
                 &data.point_indexes,
             )?);
             let r = recomputed.as_ref().unwrap();
+            // Depth statistics and histograms always come from the recompute so
+            // they track the current geometry (e.g. after a bundle adjust). The
+            // estimated normals, however, are *preserved* from the input — only
+            // the missing ones (the zero vector, the initializer used before any
+            // normal is set and the value left for degenerate/infinity points)
+            // are filled in from the recomputed mean-viewing normals. This keeps
+            // normals a consumer has set (e.g. `sfm xform --refine-normals`)
+            // instead of silently overwriting them, while a freshly imported
+            // reconstruction — whose normals start all-zero — still gets a full
+            // set computed on its first write.
+            let normals = merge_preserving_estimated_normals(
+                &data.estimated_normals_xyz,
+                &r.estimated_normals_xyz,
+            );
             (
                 &r.depth_statistics,
-                Cow::Borrowed(&r.estimated_normals_xyz),
+                normals,
                 Cow::Borrowed(&r.observed_depth_histogram_counts),
             )
         };
