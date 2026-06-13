@@ -77,7 +77,19 @@ pub fn read_binary_array<R: Read + Seek, T: bytemuck::Pod>(
     if bytes.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(bytemuck::cast_slice::<u8, T>(&bytes).to_vec())
+    // Fast path: when the decompressed buffer is already aligned for `T` (the
+    // common case, since the allocator over-aligns sizeable allocations), borrow
+    // it and copy once via `to_vec` — exactly what the original code did. Only
+    // when the buffer happens to land on an address `cast_slice` would reject
+    // (which used to panic) do we route through a freshly aligned `Vec<T>`.
+    match bytemuck::try_cast_slice::<u8, T>(&bytes) {
+        Ok(slice) => Ok(slice.to_vec()),
+        Err(_) => {
+            let mut out: Vec<T> = vec![T::zeroed(); expected_len];
+            bytemuck::cast_slice_mut::<T, u8>(&mut out).copy_from_slice(&bytes);
+            Ok(out)
+        }
+    }
 }
 
 /// Read uint128 hashes (16 bytes each) from a zstandard-compressed entry.

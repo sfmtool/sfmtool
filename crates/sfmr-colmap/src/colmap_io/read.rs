@@ -26,6 +26,19 @@ fn open_file(path: &Path) -> Result<std::fs::File, ColmapIoError> {
     })
 }
 
+/// Cap a count read from the file before using it as a `with_capacity` hint.
+///
+/// COLMAP binary files store element counts as `u64` immediately before the
+/// elements themselves. A corrupt or hostile count (e.g. `u64::MAX`) passed
+/// straight to `Vec::with_capacity` overflows the allocator and panics. Since
+/// at most `file_len / min_record_bytes` elements can actually be present, we
+/// clamp the preallocation to that bound. The subsequent read loop still fails
+/// cleanly with an I/O error if the declared count exceeds the available data.
+fn capped_capacity(count: u64, file_len: u64, min_record_bytes: u64) -> usize {
+    let max_possible = file_len / min_record_bytes.max(1);
+    count.min(max_possible) as usize
+}
+
 /// Read a complete COLMAP binary reconstruction from a directory containing
 /// `cameras.bin`, `images.bin`, and `points3D.bin`. Optionally reads `rigs.bin`
 /// and `frames.bin` if present.
@@ -248,11 +261,14 @@ struct RawKeypoint {
 /// Read `cameras.bin`, returning cameras and a camera_id -> 0-based index map.
 fn read_cameras_bin(path: &Path) -> Result<(Vec<SfmrCamera>, HashMap<u32, u32>), ColmapIoError> {
     let file = open_file(path)?;
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
     let mut r = BufReader::new(file);
 
     let num_cameras = read_u64(&mut r)?;
-    let mut cameras = Vec::with_capacity(num_cameras as usize);
-    let mut id_map = HashMap::with_capacity(num_cameras as usize);
+    // Smallest camera record: camera_id(4) + model_id(4) + width(8) + height(8).
+    let cap = capped_capacity(num_cameras, file_len, 24);
+    let mut cameras = Vec::with_capacity(cap);
+    let mut id_map = HashMap::with_capacity(cap);
 
     for idx in 0..num_cameras {
         let camera_id = read_u32(&mut r)?;
@@ -284,10 +300,13 @@ fn read_cameras_bin(path: &Path) -> Result<(Vec<SfmrCamera>, HashMap<u32, u32>),
 /// Read `images.bin`, returning raw images (unsorted).
 fn read_images_bin(path: &Path) -> Result<Vec<RawImage>, ColmapIoError> {
     let file = open_file(path)?;
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
     let mut r = BufReader::new(file);
 
     let num_images = read_u64(&mut r)?;
-    let mut images = Vec::with_capacity(num_images as usize);
+    // Smallest image record: image_id(4) + quat(32) + trans(24) + camera_id(4)
+    // + name(>=1 incl. NUL) + num_points2d(8) = 73 bytes.
+    let mut images = Vec::with_capacity(capped_capacity(num_images, file_len, 73));
 
     for _ in 0..num_images {
         let image_id = read_u32(&mut r)?;
@@ -302,7 +321,8 @@ fn read_images_bin(path: &Path) -> Result<Vec<RawImage>, ColmapIoError> {
         let name = read_null_terminated_string(&mut r)?;
         let num_points2d = read_u64(&mut r)?;
 
-        let mut keypoints = Vec::with_capacity(num_points2d as usize);
+        // Each 2D point is x(8) + y(8) + point3d_id(8) = 24 bytes.
+        let mut keypoints = Vec::with_capacity(capped_capacity(num_points2d, file_len, 24));
         for _ in 0..num_points2d {
             let x = read_f64(&mut r)?;
             let y = read_f64(&mut r)?;
@@ -336,14 +356,18 @@ type Points3dResult = (
 /// point3D_id -> 0-based index map.
 fn read_points3d_bin(path: &Path) -> Result<Points3dResult, ColmapIoError> {
     let file = open_file(path)?;
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
     let mut r = BufReader::new(file);
 
     let num_points = read_u64(&mut r)?;
-    let mut positions = Vec::with_capacity(num_points as usize);
-    let mut colors = Vec::with_capacity(num_points as usize);
-    let mut errors = Vec::with_capacity(num_points as usize);
-    let mut tracks = Vec::with_capacity(num_points as usize);
-    let mut id_map = HashMap::with_capacity(num_points as usize);
+    // Smallest point record: id(8) + xyz(24) + rgb(3) + error(8) + track_len(8)
+    // = 51 bytes.
+    let cap = capped_capacity(num_points, file_len, 51);
+    let mut positions = Vec::with_capacity(cap);
+    let mut colors = Vec::with_capacity(cap);
+    let mut errors = Vec::with_capacity(cap);
+    let mut tracks = Vec::with_capacity(cap);
+    let mut id_map = HashMap::with_capacity(cap);
 
     for idx in 0..num_points {
         let point3d_id = read_u64(&mut r)?;
@@ -356,7 +380,8 @@ fn read_points3d_bin(path: &Path) -> Result<Points3dResult, ColmapIoError> {
         let error = read_f64(&mut r)?;
         let track_length = read_u64(&mut r)?;
 
-        let mut track = Vec::with_capacity(track_length as usize);
+        // Each track element is image_id(4) + point2d_idx(4) = 8 bytes.
+        let mut track = Vec::with_capacity(capped_capacity(track_length, file_len, 8));
         for _ in 0..track_length {
             let image_id = read_u32(&mut r)?;
             let point2d_idx = read_u32(&mut r)?;
@@ -481,4 +506,23 @@ fn read_frames_bin(path: &Path) -> Result<Vec<ColmapFrame>, ColmapIoError> {
     }
 
     Ok(frames)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::capped_capacity;
+
+    #[test]
+    fn capped_capacity_clamps_to_available_bytes() {
+        // A hostile/corrupt count must be clamped to what the file could
+        // actually hold, so it never reaches `Vec::with_capacity` as a value
+        // that overflows the allocator (regression: an unclamped `u64::MAX`
+        // count panicked with "capacity overflow").
+        assert_eq!(capped_capacity(u64::MAX, 1000, 24), 1000 / 24);
+        assert_eq!(capped_capacity(u64::MAX, 0, 24), 0);
+        // A plausible count below the file-size bound is preserved exactly.
+        assert_eq!(capped_capacity(5, 1000, 24), 5);
+        // A zero minimum record size must not divide by zero.
+        assert_eq!(capped_capacity(7, 1000, 0), 7);
+    }
 }

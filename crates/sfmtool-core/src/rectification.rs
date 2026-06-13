@@ -37,8 +37,12 @@ pub fn check_rectification_safe(
     height: u32,
     margin: u32,
 ) -> bool {
-    let f = compute_fundamental_matrix(k1, r1, t1, k2, r2, t2);
-    check_rectification_safe_from_f(&f, width, height, margin)
+    // A singular intrinsic matrix yields no fundamental matrix; treat such a
+    // degenerate pair as unsafe to rectify rather than panicking.
+    match compute_fundamental_matrix(k1, r1, t1, k2, r2, t2) {
+        Some(f) => check_rectification_safe_from_f(&f, width, height, margin),
+        None => false,
+    }
 }
 
 /// Check if rectification is safe given a pre-computed fundamental matrix.

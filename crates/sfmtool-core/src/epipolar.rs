@@ -21,6 +21,11 @@ use crate::{CameraIntrinsics, RigidTransform};
 /// The fundamental matrix relates corresponding points in pixel coordinates:
 /// `p2^T F p1 = 0`.
 ///
+/// Returns `None` when either intrinsic matrix is singular (e.g. a degenerate
+/// camera with a zero focal length), in which case no fundamental matrix is
+/// defined. Callers should treat this as "these two views cannot be related"
+/// rather than crashing.
+///
 /// # Parameters
 ///
 /// * `k1`, `k2` - 3x3 intrinsic matrices.
@@ -34,20 +39,16 @@ pub fn compute_fundamental_matrix(
     k2: &Matrix3<f64>,
     r2: &Matrix3<f64>,
     t2: &Vector3<f64>,
-) -> Matrix3<f64> {
+) -> Option<Matrix3<f64>> {
     let r_rel = r2 * r1.transpose();
     let t_rel = t2 - r_rel * t1;
     let t_skew = skew_symmetric(&t_rel);
     let e = t_skew * r_rel;
 
-    let k2_inv = k2
-        .try_inverse()
-        .expect("Intrinsic matrix K2 must be invertible");
-    let k1_inv = k1
-        .try_inverse()
-        .expect("Intrinsic matrix K1 must be invertible");
+    let k2_inv = k2.try_inverse()?;
+    let k1_inv = k1.try_inverse()?;
 
-    k2_inv.transpose() * e * k1_inv
+    Some(k2_inv.transpose() * e * k1_inv)
 }
 
 /// Compute a single epipole from a fundamental matrix via SVD null space.

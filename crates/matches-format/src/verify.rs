@@ -3,12 +3,36 @@
 
 //! `.matches` file integrity verification.
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::archive_io::{format_hash, read_zst_entry};
 use crate::types::*;
+
+/// Reinterpret a freshly decompressed byte buffer as `u32` values.
+///
+/// `read_zst_entry` returns a `Vec<u8>` whose start address is only guaranteed
+/// to be 1-aligned, so `bytemuck::cast_slice::<u8, u32>` panics when the buffer
+/// is not 4-aligned. Borrow the buffer directly when it is already aligned (the
+/// common case, no copy), and fall back to copying through a freshly aligned
+/// `Vec<u32>` only when it is not. Any trailing bytes that do not form a whole
+/// `u32` (truncated/corrupt entry) are dropped; structural checks downstream
+/// then catch the mismatch.
+fn raw_to_u32(raw: &[u8]) -> Cow<'_, [u32]> {
+    let size = std::mem::size_of::<u32>();
+    let n = raw.len() / size;
+    let trimmed = &raw[..n * size];
+    match bytemuck::try_cast_slice::<u8, u32>(trimmed) {
+        Ok(slice) => Cow::Borrowed(slice),
+        Err(_) => {
+            let mut out = vec![0u32; n];
+            bytemuck::cast_slice_mut::<u32, u8>(&mut out).copy_from_slice(trimmed);
+            Cow::Owned(out)
+        }
+    }
+}
 
 /// Verify integrity of a `.matches` file using content hashes and
 /// structural constraints.
@@ -136,7 +160,7 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
 
     // Validate pair sorting (idx_i < idx_j, lexicographic order)
     if pair_count > 0 {
-        let pair_idxs: &[u32] = bytemuck::cast_slice(&pairs_raw);
+        let pair_idxs = raw_to_u32(&pairs_raw);
         for k in 0..pair_count {
             let idx_i = pair_idxs[k * 2];
             let idx_j = pair_idxs[k * 2 + 1];
@@ -167,7 +191,7 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
 
     // Validate match_counts sum
     if !match_counts_raw.is_empty() {
-        let counts: &[u32] = bytemuck::cast_slice(&match_counts_raw);
+        let counts = raw_to_u32(&match_counts_raw);
         let sum: u64 = counts.iter().map(|&c| c as u64).sum();
         if sum != match_count as u64 {
             errors.push(format!(
@@ -181,10 +205,10 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
 
     // Validate feature index bounds
     if pair_count > 0 && match_count > 0 {
-        let pair_idxs: &[u32] = bytemuck::cast_slice(&pairs_raw);
-        let counts: &[u32] = bytemuck::cast_slice(&match_counts_raw);
-        let match_fi: &[u32] = bytemuck::cast_slice(&match_fi_raw);
-        let feature_counts: &[u32] = bytemuck::cast_slice(&feature_counts_raw);
+        let pair_idxs = raw_to_u32(&pairs_raw);
+        let counts = raw_to_u32(&match_counts_raw);
+        let match_fi = raw_to_u32(&match_fi_raw);
+        let feature_counts = raw_to_u32(&feature_counts_raw);
 
         let mut offset: usize = 0;
         'outer: for k in 0..pair_count {
@@ -311,7 +335,7 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
 
         // Validate inlier_counts sum
         if !inlier_counts_raw.is_empty() {
-            let inlier_counts: &[u32] = bytemuck::cast_slice(&inlier_counts_raw);
+            let inlier_counts = raw_to_u32(&inlier_counts_raw);
             let inlier_sum: u64 = inlier_counts.iter().map(|&c| c as u64).sum();
             if inlier_sum != inlier_count as u64 {
                 errors.push(format!(
