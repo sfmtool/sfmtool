@@ -141,6 +141,60 @@ def test_solve_from_matches(isolated_seoul_bull_17_images: list[Path]):
     assert output_path.exists()
 
 
+def test_solve_from_cluster_matches(isolated_seoul_bull_17_images: list[Path]):
+    """The dataset-script recipe: sfmtool SIFT + track-cluster matching, then
+    solve from the resulting .matches file."""
+    workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+    # The committed camera_config.json would reject --camera-model, but the
+    # cluster recipe uses auto-detected intrinsics — leave it in place.
+    result = CliRunner().invoke(
+        main, ["ws", "init", "--feature-tool", "sfmtool", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+
+    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+
+    matches_path = workspace_dir / "cluster.matches"
+    result = CliRunner().invoke(
+        main,
+        [
+            "match",
+            "--cluster",
+            "--cluster-d",
+            "28",
+            "--output",
+            str(matches_path),
+            str(workspace_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert matches_path.exists()
+
+    output_path = workspace_dir / "from_cluster.sfmr"
+    result = CliRunner().invoke(
+        main,
+        [
+            "solve",
+            "-i",
+            "--seed",
+            "42",
+            "--output",
+            str(output_path),
+            str(matches_path),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert output_path.exists()
+
+    from sfmtool._sfmtool import SfmrReconstruction
+
+    recon = SfmrReconstruction.load(output_path)
+    assert recon.image_count > 0
+    assert recon.point_count > 0
+
+
 def test_resolve_output_path_explicit(tmp_path: Path):
     """Explicit --output: recon 0 gets the exact path, subsequent recons
     get `-N` before the suffix."""
