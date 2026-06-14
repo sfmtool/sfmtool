@@ -10,8 +10,9 @@ set -euo pipefail
 # Set up LLVM coverage environment
 eval "$(cargo llvm-cov show-env --sh)"
 
-# Clean previous coverage data
-cargo llvm-cov clean --workspace
+# Clear stale coverage counters from prior runs, but keep compiled artifacts
+# so a restored build cache (CI) or an incremental local build stays warm.
+cargo llvm-cov clean --workspace --profraw-only
 
 # Build the Python extension with coverage instrumentation
 maturin develop

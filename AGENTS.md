@@ -73,8 +73,9 @@ When finishing a task, run the checks for what you changed:
 - `docs/` — Zensical site, deployed to GitHub Pages.
 - `reports/` — dated snapshots from the audit skills (`audit-hygiene`,
   `audit-specs`, `suggest-next-steps`). See "Quality reports" below.
-- `.github/workflows/` — `ci.yml` (Linux + Windows, runs `coverage-all`, uploads
-  to codecov), `docs.yml`, `publish_to_pypi.yml`.
+- `.github/workflows/` — `ci.yml` (Linux runs `coverage-all` + codecov upload;
+  Windows runs the same suites without instrumentation; pixi env and Rust build
+  are cached), `docs.yml`, `publish_to_pypi.yml`.
 
 ## CLI
 

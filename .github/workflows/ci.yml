@@ -50,6 +50,18 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.8.1
         with:
           environments: test
+          cache: true
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-
 
       - name: Ruff format
         run: pixi run -e test ruff format --check src tests
@@ -63,19 +75,31 @@ jobs:
       - name: Cargo clippy
         run: pixi run -e test cargo clippy --workspace --all-targets -- -D warnings
 
+  # Full instrumented build + combined Rust/Python coverage, uploaded to
+  # codecov. Coverage line numbers are platform-independent, so we only pay
+  # the slower instrumented build once, on Linux. Windows still runs the same
+  # tests (see test-windows) without instrumentation.
   test:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: prefix-dev/setup-pixi@v0.8.1
         with:
           environments: test
+          cache: true
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-coverage-
 
       - name: Run tests with combined coverage
         run: pixi run -e test coverage-all
@@ -87,7 +111,41 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info,python-lcov.info
-          flags: ${{ matrix.os }}
+          flags: ubuntu-latest
+
+  # Windows correctness check: runs the same Rust + Python suites as the
+  # coverage job, but without LLVM coverage instrumentation (much faster to
+  # build) since we don't need a second set of coverage numbers.
+  test-windows:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          environments: test
+          cache: true
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      - name: Build Python extension
+        run: pixi run -e test maturin develop
+
+      - name: Rust tests
+        run: pixi run -e test cargo test --workspace --exclude sfm-explorer
+
+      - name: Python tests
+        run: pixi run -e test pytest
 
   ui-test:
     needs: changes
@@ -98,6 +156,18 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.8.1
         with:
           environments: default
+          cache: true
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-ui-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-ui-
 
       - name: UI tests
         run: pixi run ui-test
@@ -105,7 +175,7 @@ jobs:
   # Single stable check to mark as required in branch protection. Always runs
   # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.
   ci-ok:
-    needs: [changes, lint, test, ui-test]
+    needs: [changes, lint, test, test-windows, ui-test]
     if: always()
     runs-on: ubuntu-latest
     steps:
