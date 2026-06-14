@@ -515,6 +515,28 @@ def get_sift_path_for_image(
     )
 
 
+def get_sift_path_from_recon(
+    recon: "SfmrReconstruction", image_name: str | Path
+) -> Path:
+    """Resolve an image's ``.sift`` path from the reconstruction's own metadata.
+
+    The feature directory is taken from the ``feature_prefix_dir`` recorded in
+    the reconstruction (the features actually used to build it), joined under the
+    recon's workspace directory. Use this — rather than
+    :func:`get_sift_path_for_image` — whenever the path must reflect the features
+    a given reconstruction was built from, since the image's *current* on-disk
+    workspace config may have drifted to a different feature set.
+
+    ``image_name`` is the workspace-relative path as stored in
+    ``recon.image_names`` (e.g. ``images/foo.jpg``).
+    """
+    prefix = recon.metadata()["workspace"]["contents"]["feature_prefix_dir"]
+    image_rel = Path(image_name)
+    return (
+        Path(recon.workspace_dir) / image_rel.parent / prefix / f"{image_rel.name}.sift"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Reconstruction helpers
 # ---------------------------------------------------------------------------

@@ -10,8 +10,46 @@ import numpy as np
 
 from .align.core import ImageMatch, estimate_pairwise_alignment
 from ._histogram_utils import print_histogram
-from ._point_correspondence import find_point_correspondences
+from ._point_correspondence import (
+    find_point_correspondences,
+    find_point_correspondences_by_coordinate,
+)
 from ._sfmtool import RotQuaternion, SfmrReconstruction
+
+
+def _characteristic_scene_scale(recon: SfmrReconstruction) -> float:
+    """Characteristic linear scale of a reconstruction.
+
+    SfM is gauge-free, so a scene reconstructed 100x larger would otherwise
+    report 100x the alignment residuals. Reporting residuals relative to this
+    scale makes the comparison scale-independent. Defined as the RMS distance of
+    the reconstruction's finite 3D points (the triangulated structure) from their
+    centroid, falling back to the camera-center spread (e.g. a panoramic rig whose
+    points are all at infinity).
+    """
+
+    def _rms_radius(points: np.ndarray) -> float:
+        if len(points) < 2:
+            return 0.0
+        centroid = points.mean(axis=0)
+        return float(np.sqrt(np.mean(np.sum((points - centroid) ** 2, axis=1))))
+
+    xyzw = np.asarray(recon.positions_xyzw)
+    finite = np.abs(xyzw[:, 3]) > 1e-9
+    scale = _rms_radius(np.asarray(recon.positions)[finite])
+    if scale > 1e-12:
+        return scale
+
+    centers = np.array(
+        [
+            RotQuaternion.from_wxyz_array(recon.quaternions_wxyz[i]).camera_center(
+                recon.translations[i]
+            )
+            for i in range(recon.image_count)
+        ]
+    )
+    scale = _rms_radius(centers)
+    return scale if scale > 1e-12 else 1.0
 
 
 def compare_reconstructions(
@@ -19,8 +57,26 @@ def compare_reconstructions(
     recon2: SfmrReconstruction,
     recon1_name: str | None = None,
     recon2_name: str | None = None,
+    by_coordinate: bool | None = None,
+    pixel_threshold: float = 2.0,
+    strips_out: str | None = None,
+    strips_num: int = 16,
+    strips_views: int = 8,
+    strips_context: int = 0,
+    strips_rank: str = "overview",
+    strips_end: str | None = None,
+    strips_refine: bool = True,
+    strips_labels: tuple[str, str] = ("reference", "target"),
 ) -> None:
-    """Compare two reconstructions and print detailed analysis."""
+    """Compare two reconstructions and print detailed analysis.
+
+    ``by_coordinate`` selects how 3D points are put in correspondence:
+    ``False`` keys on identical feature index (requires the same ``.sift``
+    files), ``True`` matches observations by 2D keypoint coordinate (works
+    across feature backends), and ``None`` (the default) auto-selects coordinate
+    matching when the two reconstructions use different SIFT files for every
+    shared image.
+    """
     if recon1_name is None:
         recon1_name = recon1.source_metadata.get("source_path", "recon1")
         if "/" in recon1_name or "\\" in recon1_name:
@@ -96,17 +152,70 @@ def compare_reconstructions(
         print(f"\nAlignment failed: {e}")
         alignment_result = None
 
-    # Compare image extrinsics
+    # Compare image extrinsics. Residuals are reported relative to the reference
+    # reconstruction's scale so the comparison is gauge/scale-independent.
+    scene_scale = _characteristic_scene_scale(recon1)
     print("\n[5/6] Comparing image extrinsics...")
-    _compare_image_extrinsics(recon1, recon2, matches, alignment_result)
+    print(f"  Reference scene scale: {scene_scale:.4g} (RMS point radius)")
+    _compare_image_extrinsics(
+        recon1, recon2, matches, alignment_result, scene_scale=scene_scale
+    )
 
     # Compare feature usage
     print("\n[6/7] Comparing feature usage...")
     _compare_feature_usage(recon1, recon2, matches)
 
-    # Compare 3D points
+    # Compare 3D points. Resolve the correspondence method: when every shared
+    # image uses a different SIFT file, feature-index correspondence is
+    # meaningless, so default to matching by 2D keypoint coordinate.
+    if by_coordinate is None:
+        resolved_by_coordinate = bool(matches) and all(
+            recon1.sift_content_hashes[i1] != recon2.sift_content_hashes[i2]
+            for i1, i2 in matches
+        )
+    else:
+        resolved_by_coordinate = by_coordinate
+
     print("\n[7/7] Comparing 3D points...")
-    _compare_3d_points(recon1, recon2, matches, alignment_result)
+    _compare_3d_points(
+        recon1,
+        recon2,
+        matches,
+        alignment_result,
+        by_coordinate=resolved_by_coordinate,
+        pixel_threshold=pixel_threshold,
+        scene_scale=scene_scale,
+    )
+
+    # Optionally render the most-different corresponding points as side-by-side
+    # patch strips. Needs the alignment transform and matched images computed
+    # above; reuses coordinate matching (the robust choice across backends).
+    if strips_out is not None:
+        print(f"\nRendering side-by-side patch strips to {strips_out}...")
+        if alignment_result is None:
+            print("  --strips: skipped (alignment unavailable)")
+        else:
+            from ._compare_strips import render_comparison_strips
+
+            render_comparison_strips(
+                recon1,
+                recon2,
+                matches,
+                alignment_result.transform,
+                strips_out,
+                recon1_name=recon1_name,
+                recon2_name=recon2_name,
+                left_label=strips_labels[0],
+                right_label=strips_labels[1],
+                num=strips_num,
+                max_views=strips_views,
+                context=strips_context,
+                rank=strips_rank,
+                end=strips_end,
+                pixel_threshold=pixel_threshold,
+                refine=strips_refine,
+                scene_scale=scene_scale,
+            )
 
     print("\n" + "=" * 70)
     print("Comparison complete!")
@@ -134,6 +243,8 @@ def compare_reconstructions(
             if matches
             else 0.0
         )
+        # Scale-independent: mean camera-center error as a fraction of scene scale.
+        rel_pos_error = mean_pos_error / scene_scale if scene_scale else mean_pos_error
 
         transform = alignment_result.transform
         is_near_identity = (
@@ -146,7 +257,7 @@ def compare_reconstructions(
         num_ref_total = recon1.image_count
         num_target_total = recon2.image_count
 
-        if mean_pos_error < 0.01:
+        if rel_pos_error < 0.001:
             if is_near_identity:
                 print(
                     f"\nCONCLUSION: The {num_matching} overlapping images are IDENTICAL"
@@ -171,7 +282,7 @@ def compare_reconstructions(
                     f"      Target has {num_target_total - num_matching} additional image(s) not in reference."
                 )
                 print("      This comparison only covers the overlapping portion.")
-        elif mean_pos_error < 0.1:
+        elif rel_pos_error < 0.01:
             print(
                 f"\nCONCLUSION: The {num_matching} overlapping images are VERY SIMILAR,"
             )
@@ -185,7 +296,8 @@ def compare_reconstructions(
                 f"\nCONCLUSION: The {num_matching} overlapping images have SIGNIFICANT DIFFERENCES"
             )
             print(
-                f"            even after alignment (mean error: {mean_pos_error:.3f})."
+                f"            even after alignment (mean error: {rel_pos_error * 100:.1f}% "
+                f"of scene scale, {mean_pos_error:.3f} absolute)."
             )
             if num_ref_total > num_matching or num_target_total > num_matching:
                 print(
@@ -350,8 +462,14 @@ def _compare_image_extrinsics(
     recon2: SfmrReconstruction,
     matches: list[tuple[int, int]],
     alignment_result,
+    scene_scale: float = 1.0,
 ) -> None:
-    """Compare camera extrinsics for matching images."""
+    """Compare camera extrinsics for matching images.
+
+    Position errors are reported relative to ``scene_scale`` (as a percentage)
+    so they are independent of the reconstruction's arbitrary gauge; rotation
+    errors are already in degrees and scale-free.
+    """
     if alignment_result is None:
         print("  Skipping (no alignment available)")
         return
@@ -395,8 +513,10 @@ def _compare_image_extrinsics(
     position_errors = np.array(position_errors)
     rotation_errors = np.array(rotation_errors)
 
-    print("\n  Position errors (after alignment):")
-    print_histogram(position_errors, "Distribution", num_buckets=60, min_val=0)
+    position_errors_pct = position_errors / scene_scale * 100.0
+
+    print("\n  Position errors (after alignment, % of scene scale):")
+    print_histogram(position_errors_pct, "Distribution (%)", num_buckets=60, min_val=0)
 
     print("\n  Rotation errors (after alignment):")
     print_histogram(
@@ -412,7 +532,10 @@ def _compare_image_extrinsics(
 
         print("\n  Worst position error:")
         print(f"    Image: {Path(recon1.image_names[idx1_pos]).name}")
-        print(f"    Error: {position_errors[worst_pos_idx]:.4f}")
+        print(
+            f"    Error: {position_errors_pct[worst_pos_idx]:.2f}% of scene scale "
+            f"({position_errors[worst_pos_idx]:.4f} absolute)"
+        )
 
         print("\n  Worst rotation error:")
         print(f"    Image: {Path(recon1.image_names[idx1_rot]).name}")
@@ -506,16 +629,40 @@ def _compare_3d_points(
     recon2: SfmrReconstruction,
     matches: list[tuple[int, int]],
     alignment_result,
+    by_coordinate: bool = False,
+    pixel_threshold: float = 2.0,
+    scene_scale: float = 1.0,
 ) -> None:
-    """Compare 3D points between reconstructions."""
-    print("\n  Finding corresponding 3D points...")
+    """Compare 3D points between reconstructions.
+
+    Post-alignment distances are reported relative to ``scene_scale`` (as a
+    percentage) so the comparison is independent of the reconstruction's
+    arbitrary gauge.
+    """
+    if by_coordinate:
+        print(
+            "\n  Finding corresponding 3D points (by keypoint coordinate, "
+            f"threshold {pixel_threshold:g}px)..."
+        )
+    else:
+        print("\n  Finding corresponding 3D points (by feature index)...")
 
     try:
-        point_correspondences, positions1, positions2 = find_point_correspondences(
-            source_recon=recon1,
-            target_recon=recon2,
-            shared_images=matches,
-        )
+        if by_coordinate:
+            point_correspondences, positions1, positions2 = (
+                find_point_correspondences_by_coordinate(
+                    source_recon=recon1,
+                    target_recon=recon2,
+                    shared_images=matches,
+                    pixel_threshold=pixel_threshold,
+                )
+            )
+        else:
+            point_correspondences, positions1, positions2 = find_point_correspondences(
+                source_recon=recon1,
+                target_recon=recon2,
+                shared_images=matches,
+            )
     except ValueError:
         n_points1 = recon1.point_count
         n_points2 = recon2.point_count
@@ -545,32 +692,54 @@ def _compare_3d_points(
 
     print("\n  Comparing 3D positions of corresponding points...")
 
-    positions2_transformed = alignment_result.transform @ positions2
+    # Points at infinity (homogeneous w == 0) have no finite position, so their
+    # post-alignment "distance" is meaningless (a finite-vs-infinity difference
+    # blows up). Exclude them from the position stats and report the count.
+    ref_ids = np.fromiter(point_correspondences.keys(), dtype=np.int64)
+    tgt_ids = np.fromiter(point_correspondences.values(), dtype=np.int64)
+    w1 = np.abs(np.asarray(recon1.positions_xyzw)[:, 3])
+    w2 = np.abs(np.asarray(recon2.positions_xyzw)[:, 3])
+    finite = (w1[ref_ids] > 1e-9) & (w2[tgt_ids] > 1e-9)
+    n_inf = int((~finite).sum())
+    if n_inf:
+        print(
+            f"    Excluding {n_inf} correspondence(s) at infinity (w=0); "
+            f"comparing {int(finite.sum())} finite pair(s)."
+        )
 
-    distances = np.linalg.norm(positions2_transformed - positions1, axis=1)
+    ref_ids = ref_ids[finite]
+    tgt_ids = tgt_ids[finite]
+    positions2_transformed = alignment_result.transform @ positions2[finite]
+    distances = np.linalg.norm(positions2_transformed - positions1[finite], axis=1)
+    if len(distances) == 0:
+        print("    (No finite corresponding points to compare)")
+        return
+
+    n_finite = len(distances)
+    # Report relative to scene scale so the metric is gauge/scale-independent.
+    distances_pct = distances / scene_scale * 100.0
 
     print_histogram(
-        distances,
-        "Distance distribution (after alignment)",
+        distances_pct,
+        "Distance distribution (after alignment, % of scene scale)",
         num_buckets=60,
         min_val=0,
         show_stats=True,
     )
 
-    within_001 = np.sum(distances < 0.01)
-    within_01 = np.sum(distances < 0.1)
-    within_1 = np.sum(distances < 1.0)
+    within_01 = np.sum(distances_pct < 0.1)
+    within_1 = np.sum(distances_pct < 1.0)
+    within_10 = np.sum(distances_pct < 10.0)
 
-    print("\n    Points within distance thresholds:")
-    print(f"      < 0.01: {within_001} ({within_001 / n_ref_matched * 100:.1f}%)")
-    print(f"      < 0.1:  {within_01} ({within_01 / n_ref_matched * 100:.1f}%)")
-    print(f"      < 1.0:  {within_1} ({within_1 / n_ref_matched * 100:.1f}%)")
+    print("\n    Points within distance thresholds (% of scene scale):")
+    print(f"      < 0.1%: {within_01} ({within_01 / n_finite * 100:.1f}%)")
+    print(f"      < 1%:   {within_1} ({within_1 / n_finite * 100:.1f}%)")
+    print(f"      < 10%:  {within_10} ({within_10 / n_finite * 100:.1f}%)")
 
-    if len(distances) > 0:
-        worst_idx = np.argmax(distances)
-        worst_point_id1 = list(point_correspondences.keys())[worst_idx]
-        worst_point_id2 = point_correspondences[worst_point_id1]
-
-        print("\n    Worst correspondence:")
-        print(f"      Point IDs: {worst_point_id1} <-> {worst_point_id2}")
-        print(f"      Distance: {distances[worst_idx]:.4f}")
+    worst_idx = int(np.argmax(distances))
+    print("\n    Worst correspondence:")
+    print(f"      Point IDs: {int(ref_ids[worst_idx])} <-> {int(tgt_ids[worst_idx])}")
+    print(
+        f"      Distance: {distances_pct[worst_idx]:.2f}% of scene scale "
+        f"({distances[worst_idx]:.4f} absolute)"
+    )

@@ -5,13 +5,19 @@
 
 import io
 import sys
+from pathlib import Path
+
+import click
 import numpy as np
+import pytest
 from click.testing import CliRunner
 
 from sfmtool import RangeExpr
+from sfmtool._commands.compare import _parse_labels
 from sfmtool._compare import compare_reconstructions
 from sfmtool._sfmtool import Se3Transform, SfmrReconstruction
 from sfmtool.cli import main
+from sfmtool.sift.file import get_sift_path_from_recon
 from sfmtool.xform import IncludeRangeFilter, SimilarityTransform, apply_transforms
 
 
@@ -79,7 +85,9 @@ class TestCompareIdentical:
         n_points = recon.point_count
         output = _capture_compare(recon, recon)
         assert f"Corresponding point pairs: {n_points}" in output
-        assert f"< 0.01: {n_points} (100.0%)" in output
+        # Identical recon: every pair is at zero distance, so all fall within the
+        # tightest relative threshold (distances are reported as % of scene scale).
+        assert f"< 0.1%: {n_points} (100.0%)" in output
 
     def test_conclusion_identical(self, sfmrfile_reconstruction_with_17_images):
         recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
@@ -136,6 +144,54 @@ class TestCompareTransformed:
                 recovered_scale = float(line.split(":")[-1].strip())
                 expected_scale = 1.0 / scale
                 assert abs(recovered_scale - expected_scale) < 0.01
+
+    def test_distance_metric_is_scale_independent(
+        self, sfmrfile_reconstruction_with_17_images
+    ):
+        # A reconstruction compared against a 100x-scaled copy of itself must
+        # report the same scale-independent stats as comparing it to a 1x copy:
+        # the similarity alignment removes the gauge, and residuals are reported
+        # as a percentage of scene scale. Only the absolute "scene scale" line
+        # should differ (by 100x).
+        original_path = sfmrfile_reconstruction_with_17_images
+        workspace = original_path.parent
+        original = SfmrReconstruction.load(original_path)
+        n_points = original.point_count
+
+        identity_rot = _rot_quat_from_euler_angles(np.radians([0, 0, 0]))
+
+        def _compare_to_scaled(scale):
+            transform = Se3Transform(
+                rotation=identity_rot, translation=[0, 0, 0], scale=scale
+            )
+            scaled_path = _apply_transforms_to_file(
+                original_path,
+                workspace / f"scaled_{scale}.sfmr",
+                [SimilarityTransform(transform)],
+            )
+            scaled = SfmrReconstruction.load(scaled_path)
+            return _capture_compare(original, scaled)
+
+        out_1x = _compare_to_scaled(1.0)
+        out_100x = _compare_to_scaled(100.0)
+
+        # Identical-up-to-scale => every pair within the tightest relative bucket,
+        # regardless of the 100x gauge change.
+        assert f"< 0.1%: {n_points} (100.0%)" in out_1x
+        assert f"< 0.1%: {n_points} (100.0%)" in out_100x
+        assert "IDENTICAL" in out_1x
+        assert "IDENTICAL" in out_100x
+
+        # The reported absolute scene scale tracks the gauge (~100x apart).
+        def _scene_scale(output):
+            for line in output.split("\n"):
+                if "Reference scene scale:" in line:
+                    return float(line.split(":")[1].split("(")[0].strip())
+            raise AssertionError("scene scale not reported")
+
+        # Reference is the unscaled recon in both runs, so the scale line is the
+        # same — the point is that the *percentage* stats above are identical.
+        assert _scene_scale(out_1x) == _scene_scale(out_100x)
 
     def test_features_identical_after_transform(
         self, sfmrfile_reconstruction_with_17_images
@@ -294,3 +350,100 @@ class TestCompareCLI:
         assert result.exit_code == 0, result.output
         assert "Matching images: 17" in result.output
         assert "Scale:" in result.output
+
+
+class TestCompareCoordinateAndStrips:
+    """Cross-backend coordinate matching, the --strips montage, and helpers."""
+
+    def test_get_sift_path_from_recon(self, sfmrfile_reconstruction_with_17_images):
+        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        name = recon.image_names[0]
+        path = get_sift_path_from_recon(recon, name)
+        assert path.name == Path(name).name + ".sift"
+        assert path.exists()
+
+    def test_parse_labels(self):
+        assert _parse_labels("ref,tgt") == ("ref", "tgt")
+        assert _parse_labels(" OLD , NEW ") == ("OLD", "NEW")
+        for bad in ("only", "a,b,c", "a,", ",b"):
+            with pytest.raises(click.UsageError):
+                _parse_labels(bad)
+
+    def test_cli_compare_auto_uses_feature_index(
+        self, sfmrfile_reconstruction_with_17_images
+    ):
+        # Identical inputs share .sift hashes, so auto-resolution keys on
+        # feature index rather than 2D keypoint coordinate.
+        p = str(sfmrfile_reconstruction_with_17_images)
+        result = CliRunner().invoke(main, ["compare", p, p])
+        assert result.exit_code == 0, result.output
+        assert "by feature index" in result.output
+
+    def test_cli_compare_by_coordinate(self, sfmrfile_reconstruction_with_17_images):
+        p = str(sfmrfile_reconstruction_with_17_images)
+        result = CliRunner().invoke(main, ["compare", p, p, "--by-coordinate"])
+        assert result.exit_code == 0, result.output
+        assert "by keypoint coordinate" in result.output
+
+    def test_cli_strips_writes_montage(
+        self, sfmrfile_reconstruction_with_17_images, tmp_path
+    ):
+        # Full vs a filtered subset: the full solve keeps points unique to it,
+        # exercising the overview "unique to <label>" rows under custom labels.
+        original_path = sfmrfile_reconstruction_with_17_images
+        workspace = original_path.parent
+        filtered_path = _apply_transforms_to_file(
+            original_path,
+            workspace / "strips_filtered.sfmr",
+            [IncludeRangeFilter(RangeExpr("5-12"))],
+        )
+        out = tmp_path / "strips.png"
+        result = CliRunner().invoke(
+            main,
+            [
+                "compare",
+                str(original_path),
+                str(filtered_path),
+                "--strips",
+                str(out),
+                "--strips-num",
+                "8",
+                "--strips-labels",
+                "OLD,NEW",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "--strips: wrote" in result.output
+        assert out.exists() and out.stat().st_size > 0
+
+    def test_cli_strips_single_axis(
+        self, sfmrfile_reconstruction_with_17_images, tmp_path
+    ):
+        # A geometry-only single axis with an explicit end (no normal refine).
+        original_path = sfmrfile_reconstruction_with_17_images
+        workspace = original_path.parent
+        transformed_path = _apply_transforms_to_file(
+            original_path,
+            workspace / "strips_axis.sfmr",
+            [SimilarityTransform(Se3Transform(translation=[1, 0, 0], scale=1.0))],
+        )
+        out = tmp_path / "axis.png"
+        result = CliRunner().invoke(
+            main,
+            [
+                "compare",
+                str(original_path),
+                str(transformed_path),
+                "--strips",
+                str(out),
+                "--strips-num",
+                "6",
+                "--strips-rank",
+                "view-angle",
+                "--strips-end",
+                "high",
+                "--strips-no-refine",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert out.exists() and out.stat().st_size > 0
