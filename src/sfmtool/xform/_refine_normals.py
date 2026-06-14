@@ -15,8 +15,6 @@ See ``specs/cli/xform-refine-normals-command.md`` and
 ``specs/core/patch-normal-refinement.md``.
 """
 
-from pathlib import Path
-
 import numpy as np
 
 from .._sfmtool import PatchCloud, SfmrReconstruction
@@ -124,17 +122,12 @@ class RefineNormalsTransform:
         ``refine_normals`` requires one full-resolution image per reconstruction
         image (matching its camera resolution), so all are loaded up front.
         """
-        import cv2  # heavy module, only needed here
+        from sfmtool._workspace_image import read_workspace_image
 
-        workspace_dir = Path(recon.workspace_dir)
-        images = []
-        for name in recon.image_names:
-            path = workspace_dir / name
-            bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
-            if bgr is None:
-                raise FileNotFoundError(f"Source image not found or unreadable: {path}")
-            images.append(np.ascontiguousarray(bgr))
-        return images
+        return [
+            read_workspace_image(recon.workspace_dir, name)
+            for name in recon.image_names
+        ]
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         images = self._load_images(recon)
