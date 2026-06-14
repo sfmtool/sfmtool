@@ -65,6 +65,26 @@ for long sequences that fail with a single solve.
 automatically-named output) or with a `.matches` input file (the windows drive
 their own feature matching).
 
+## Outputs and Multiple Models
+
+The mapper can return more than one reconstruction (it splits a model whenever
+it cannot register every image into a single one). `sfm solve` writes one
+`.sfmr` per surviving model:
+
+- **Degenerate models are skipped.** A model the mapper abandoned with zero
+  3-D points is dropped with a warning rather than aborting the run — a single
+  junk fragment must never discard the good models that share the output loop.
+  Only when *no* model survives does the command raise
+  `No 3D points found in reconstruction.`. A split is also a hint the run may be
+  worth re-seeding, so it is surfaced loudly rather than swallowed silently.
+- **The largest surviving model is primary.** Surviving models are ordered by
+  registered image count (ties broken by observation count), and that ordering
+  — not the mapper's internal model index — decides output naming: with an
+  explicit `--output`, the largest model takes that exact path and the rest get
+  `{stem}-{N}{suffix}` siblings; without it, each model is auto-named from the
+  images it actually contains. This keeps a small fragment that happened to land
+  at a lower model index from claiming the requested output name.
+
 ## Rig Support
 
 If the workspace contains a rig configuration, the command automatically sets up rig
