@@ -86,21 +86,126 @@ def isolated_seoul_bull_17_images(tmp_path_factory) -> list[Path]:
     return img_paths
 
 
+def _largest_recon(output_sfm_file: Path):
+    """Return ``(path, image_count)`` for the biggest recon a solve wrote.
+
+    A solve can split into several sub-reconstructions; ``run_*_sfm`` writes the
+    first to ``output_sfm_file`` and the rest to ``{stem}-N.sfmr`` siblings, and
+    returns only the first — which is not always the most complete one. Pick the
+    one that registered the most images.
+    """
+    from sfmtool._sfmtool import SfmrReconstruction
+
+    candidates = sorted(output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"))
+    best_path, best_count = None, -1
+    for path in candidates:
+        count = SfmrReconstruction.load(path).image_count
+        if count > best_count:
+            best_path, best_count = path, count
+    return best_path, best_count
+
+
+def build_cluster_reconstruction(
+    workspace_dir: Path,
+    image_paths: list[Path],
+    output_sfm_file: Path,
+    *,
+    max_num_features: int | None = None,
+    cluster_d: int = 10,
+    incremental: bool = True,
+    random_seed: int = 42,
+    expected_image_count: int | None = None,
+    max_attempts: int = 6,
+) -> Path:
+    """Solve a ``.sfmr`` the way the dataset scripts now do.
+
+    Mirrors ``scripts/init_dataset_*.sh``: initialize the workspace with the
+    sfmtool SIFT backend, run background-floor track-cluster matching
+    (``sfm match --cluster``) to a ``.matches`` file, then solve from that file.
+    Matching runs once; only the (cheap) solve is retried. Each solve can split
+    into several sub-reconstructions, so the most complete one is selected and
+    canonicalized to ``output_sfm_file``. When ``expected_image_count`` is set
+    the solve is re-run (with fresh randomization) until that many images
+    register, which is far faster and more reliable than the old
+    extract-then-exhaustive matching it replaces.
+    """
+    from sfmtool.feature_match._run import _run_matching
+
+    init_workspace(
+        workspace_dir, feature_tool="sfmtool", max_num_features=max_num_features
+    )
+
+    matches_dir = workspace_dir / "tvg-matches"
+    matches_dir.mkdir(parents=True, exist_ok=True)
+    matches_file = matches_dir / "recon.matches"
+    # _run_matching extracts any missing .sift files before matching.
+    _run_matching(
+        [Path(p) for p in image_paths],
+        workspace_dir,
+        matching_method="cluster",
+        max_feature_count=None,
+        output_path=str(matches_file),
+        camera_model=None,
+        cluster_d=cluster_d,
+    )
+
+    colmap_dir = workspace_dir / "colmap"
+    if incremental:
+        from sfmtool._incremental_sfm import run_incremental_sfm as _solve
+    else:
+        from sfmtool._global_sfm import run_global_sfm as _solve
+
+    output_sfm_file = Path(output_sfm_file)
+    best_path, best_count = None, -1
+    for attempt in range(1, max_attempts + 1):
+        if colmap_dir.exists():
+            shutil.rmtree(colmap_dir)
+        for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
+            stale.unlink()
+        # First attempt uses the fixed seed for a reproducible result; retries
+        # let the solver randomize so a fresh split can register all images.
+        seed = random_seed if attempt == 1 else None
+        _solve(
+            [],
+            workspace_dir,
+            colmap_dir,
+            matches_file=matches_file,
+            random_seed=seed,
+            output_sfm_file=str(output_sfm_file),
+        )
+        path, count = _largest_recon(output_sfm_file)
+        if count > best_count:
+            best_path, best_count = path, count
+            # Stash the best so far; the next attempt clears the output dir.
+            stash = output_sfm_file.parent / f"_best{output_sfm_file.suffix}"
+            shutil.copy(path, stash)
+            best_path = stash
+        if expected_image_count is None or best_count >= expected_image_count:
+            break
+
+    # Canonicalize: the chosen reconstruction lives at output_sfm_file alone.
+    for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
+        stale.unlink()
+    shutil.copy(best_path, output_sfm_file)
+    best_path.unlink()
+    return output_sfm_file
+
+
 @pytest.fixture(scope="session")
 def sfmrfile_reconstruction_with_17_images_once(tmp_path_factory) -> Path:
     """Session-scoped fixture: build a .sfmr reconstruction from 17 images.
 
-    The incremental SfM solver sometimes converges with only a couple of
-    images registered. Run without a fixed random seed and retry until all
-    17 images are registered.
+    Mirrors ``scripts/init_dataset_seoul_bull.sh``: sfmtool SIFT + track-cluster
+    matching + incremental SfM. The fixture carries calibrated intrinsics and
+    keeps the most complete sub-reconstruction, so the cluster matcher's default
+    floor registers all 17 of these small 270x480 images without the wide
+    ``d=28`` (and the resulting tracks stay longer).
     """
-    from sfmtool._incremental_sfm import run_incremental_sfm
     from sfmtool._sfmtool import SfmrReconstruction
 
     data_dir = TEST_DATA_DIR / "images" / "seoul_bull_sculpture"
     image_files = sorted(data_dir.glob("seoul_bull_sculpture_*.jpg"))
     workspace_dir = tmp_path_factory.mktemp("workspace_17_images")
-    init_workspace(workspace_dir, domain_size_pooling=True)
     image_dir = workspace_dir / "test_17_image"
     image_dir.mkdir(exist_ok=True)
 
@@ -116,32 +221,24 @@ def sfmrfile_reconstruction_with_17_images_once(tmp_path_factory) -> Path:
     # for solves that run on the original workspace.
     shutil.copy(data_dir / "camera_config.json", workspace_dir / "camera_config.json")
 
-    output_sfm_file = workspace_dir / "seoul_bull.sfmr"
-    colmap_dir = workspace_dir / "colmap"
     expected_image_count = len(image_files)
-    max_attempts = 20
-    for attempt in range(1, max_attempts + 1):
-        if colmap_dir.exists():
-            shutil.rmtree(colmap_dir)
-        if output_sfm_file.exists():
-            output_sfm_file.unlink()
-        sfmr_path = run_incremental_sfm(
-            img_paths,
-            workspace_dir,
-            colmap_dir,
-            output_sfm_file=output_sfm_file,
-        )
-        recon = SfmrReconstruction.load(sfmr_path)
-        if recon.image_count == expected_image_count:
-            return sfmr_path
-        print(
-            f"SfM solve attempt {attempt}/{max_attempts} registered "
-            f"{recon.image_count}/{expected_image_count} images, retrying."
-        )
-    raise RuntimeError(
-        f"Failed to register all {expected_image_count} images after "
-        f"{max_attempts} attempts."
+    output_sfm_file = workspace_dir / "seoul_bull.sfmr"
+    sfmr_path = build_cluster_reconstruction(
+        workspace_dir,
+        img_paths,
+        output_sfm_file,
+        incremental=True,
+        random_seed=42,
+        expected_image_count=expected_image_count,
     )
+
+    recon = SfmrReconstruction.load(sfmr_path)
+    if recon.image_count != expected_image_count:
+        raise RuntimeError(
+            f"seoul_bull cluster solve registered {recon.image_count}/"
+            f"{expected_image_count} images (all {expected_image_count} required)."
+        )
+    return sfmr_path
 
 
 @pytest.fixture
@@ -229,32 +326,31 @@ def isolated_kerry_park_camrig(tmp_path_factory) -> Path:
 def sfmrfile_reconstruction_kerry_park_once(tmp_path_factory) -> Path:
     """Session-scoped: build a .sfmr reconstruction from the kerry_park rig.
 
-    Uses global SfM (GLOMAP) with a fixed random seed. The global solver
-    reliably registers all 48 rig images; the fixture fails fast if it
-    doesn't, rather than handing a partial reconstruction to the tests.
+    Mirrors ``scripts/init_dataset_kerry_park.sh``: sfmtool SIFT + track-cluster
+    matching + global SfM (GLOMAP) with a fixed seed. The global solver reliably
+    registers all 48 rig images; the fixture fails fast if it doesn't, rather
+    than handing a partial reconstruction to the tests.
     """
-    from sfmtool._global_sfm import run_global_sfm
     from sfmtool._sfmtool import SfmrReconstruction
 
     workspace_dir = tmp_path_factory.mktemp("kerry_park_sfmr")
     _copy_kerry_park_into(workspace_dir)
-    init_workspace(workspace_dir, max_num_features=2000, domain_size_pooling=True)
 
     image_paths: list[Path] = []
     for sensor in KERRY_PARK_SENSORS:
         image_paths.extend(sorted((workspace_dir / sensor).glob("frame_*.jpg")))
 
+    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_FRAME_COUNT
     output_sfm_file = workspace_dir / "kerry_park.sfmr"
-    colmap_dir = workspace_dir / "colmap"
-    sfmr_path = run_global_sfm(
-        image_paths,
+    sfmr_path = build_cluster_reconstruction(
         workspace_dir,
-        colmap_dir,
-        output_sfm_file=str(output_sfm_file),
+        image_paths,
+        output_sfm_file,
+        incremental=False,
         random_seed=42,
+        expected_image_count=expected_count,
     )
 
-    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_FRAME_COUNT
     recon = SfmrReconstruction.load(sfmr_path)
     if recon.image_count != expected_count:
         raise RuntimeError(
@@ -280,16 +376,20 @@ def sfmrfile_reconstruction_kerry_park_camrig_once(tmp_path_factory) -> Path:
     """Session-scoped: build a .sfmr reconstruction from the kerry_park rig,
     with the rig described by a multi-sensor ``kerry_park.camrig``.
 
-    The same global SfM solve as :func:`sfmrfile_reconstruction_kerry_park_once`
-    but driven by the ``.camrig`` rig-discovery path rather than
-    ``rig_config.json``.
+    Unlike :func:`sfmrfile_reconstruction_kerry_park_once`, this fixture solves
+    straight from the images with exhaustive, rig-aware matching (the
+    ``_setup_for_sfm`` path that excludes same-frame fisheye pairs). The
+    back-to-back fisheye geometry makes same-frame matches spurious, and the
+    multi-sensor ``.camrig`` fixes the per-sensor intrinsics, so the unfiltered
+    cluster matches degenerate the solve — exhaustive matching keeps it robust
+    and, as a bonus, retains coverage of the from-images rig-aware solve path.
     """
     from sfmtool._global_sfm import run_global_sfm
     from sfmtool._sfmtool import SfmrReconstruction
 
     workspace_dir = tmp_path_factory.mktemp("kerry_park_camrig_sfmr")
     _copy_kerry_park_camrig_into(workspace_dir)
-    init_workspace(workspace_dir, max_num_features=2000, domain_size_pooling=True)
+    init_workspace(workspace_dir, feature_tool="sfmtool", max_num_features=2000)
 
     image_paths: list[Path] = []
     for sensor in KERRY_PARK_SENSORS:

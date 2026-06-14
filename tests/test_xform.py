@@ -46,24 +46,10 @@ def test_xform_non_sfmr_output(tmp_path: Path):
     assert "Output path must be a .sfmr file" in result.output
 
 
-def test_xform_on_reconstruction(isolated_seoul_bull_17_images: list[Path]):
+def test_xform_on_reconstruction(sfmrfile_reconstruction_with_17_images: Path):
     """Test xform scale on a real reconstruction."""
-    workspace_dir = isolated_seoul_bull_17_images[0].parent
-
-    # Build a reconstruction
-    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
-    assert result.exit_code == 0, result.output
-
-    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
-    assert result.exit_code == 0, result.output
-
-    output_sfmr = workspace_dir / "test_solve.sfmr"
-    result = CliRunner().invoke(
-        main,
-        ["solve", "-i", "--output", str(output_sfmr), str(workspace_dir)],
-    )
-    assert result.exit_code == 0, result.output
-    assert output_sfmr.exists()
+    output_sfmr = sfmrfile_reconstruction_with_17_images
+    workspace_dir = output_sfmr.parent
 
     # Now test xform with scale
     scaled_sfmr = workspace_dir / "scaled.sfmr"
@@ -84,22 +70,10 @@ def test_xform_on_reconstruction(isolated_seoul_bull_17_images: list[Path]):
     assert scaled.point_count == original.point_count
 
 
-def test_xform_remove_short_tracks(isolated_seoul_bull_17_images: list[Path]):
+def test_xform_remove_short_tracks(sfmrfile_reconstruction_with_17_images: Path):
     """Test xform with short track removal."""
-    workspace_dir = isolated_seoul_bull_17_images[0].parent
-
-    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
-    assert result.exit_code == 0, result.output
-
-    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
-    assert result.exit_code == 0, result.output
-
-    output_sfmr = workspace_dir / "test_solve.sfmr"
-    result = CliRunner().invoke(
-        main,
-        ["solve", "-i", "--output", str(output_sfmr), str(workspace_dir)],
-    )
-    assert result.exit_code == 0, result.output
+    output_sfmr = sfmrfile_reconstruction_with_17_images
+    workspace_dir = output_sfmr.parent
 
     # Remove short tracks
     filtered_sfmr = workspace_dir / "filtered.sfmr"
@@ -119,23 +93,12 @@ def test_xform_remove_short_tracks(isolated_seoul_bull_17_images: list[Path]):
 
 
 def test_xform_camera_model_with_bundle_adjust(
-    isolated_seoul_bull_17_images: list[Path],
+    sfmrfile_reconstruction_with_17_images: Path,
 ):
     """`--camera-model RADIAL --bundle-adjust` upgrades SIMPLE_RADIAL → RADIAL,
     then bundle adjustment refines the k2 term that was zero-initialized."""
-    workspace_dir = isolated_seoul_bull_17_images[0].parent
-
-    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
-    assert result.exit_code == 0, result.output
-    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
-    assert result.exit_code == 0, result.output
-
-    output_sfmr = workspace_dir / "solve.sfmr"
-    result = CliRunner().invoke(
-        main,
-        ["solve", "-i", "--output", str(output_sfmr), str(workspace_dir)],
-    )
-    assert result.exit_code == 0, result.output
+    output_sfmr = sfmrfile_reconstruction_with_17_images
+    workspace_dir = output_sfmr.parent
 
     switched_sfmr = workspace_dir / "radial_ba.sfmr"
     args = [
@@ -159,21 +122,10 @@ def test_xform_camera_model_with_bundle_adjust(
         assert camera.model == "RADIAL"
 
 
-def test_xform_camera_model_unknown(isolated_seoul_bull_17_images: list[Path]):
+def test_xform_camera_model_unknown(sfmrfile_reconstruction_with_17_images: Path):
     """An unknown camera model is rejected at the CLI."""
-    workspace_dir = isolated_seoul_bull_17_images[0].parent
-
-    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
-    assert result.exit_code == 0, result.output
-    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
-    assert result.exit_code == 0, result.output
-
-    output_sfmr = workspace_dir / "solve.sfmr"
-    result = CliRunner().invoke(
-        main,
-        ["solve", "-i", "--output", str(output_sfmr), str(workspace_dir)],
-    )
-    assert result.exit_code == 0, result.output
+    output_sfmr = sfmrfile_reconstruction_with_17_images
+    workspace_dir = output_sfmr.parent
 
     bad_sfmr = workspace_dir / "bad.sfmr"
     args = [
@@ -189,26 +141,16 @@ def test_xform_camera_model_unknown(isolated_seoul_bull_17_images: list[Path]):
     assert "Unknown camera model" in result.output
 
 
-def test_xform_default_output_path(isolated_seoul_bull_17_images: list[Path]):
+def test_xform_default_output_path(sfmrfile_reconstruction_with_17_images: Path):
     """When OUTPUT_PATH is omitted, xform writes {stem}-transformed.sfmr next
     to the input, then -2, -3, ... for subsequent runs."""
-    workspace_dir = isolated_seoul_bull_17_images[0].parent
+    input_sfmr = sfmrfile_reconstruction_with_17_images
+    workspace_dir = input_sfmr.parent
+    stem = input_sfmr.stem
 
-    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
-    assert result.exit_code == 0, result.output
-    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
-    assert result.exit_code == 0, result.output
-
-    input_sfmr = workspace_dir / "solve.sfmr"
-    result = CliRunner().invoke(
-        main,
-        ["solve", "-i", "--output", str(input_sfmr), str(workspace_dir)],
-    )
-    assert result.exit_code == 0, result.output
-
-    expected_first = workspace_dir / "solve-transformed.sfmr"
-    expected_second = workspace_dir / "solve-transformed-2.sfmr"
-    expected_third = workspace_dir / "solve-transformed-3.sfmr"
+    expected_first = workspace_dir / f"{stem}-transformed.sfmr"
+    expected_second = workspace_dir / f"{stem}-transformed-2.sfmr"
+    expected_third = workspace_dir / f"{stem}-transformed-3.sfmr"
 
     args = ["xform", str(input_sfmr), "--scale", "2.0"]
     with patch("sys.argv", ["sfm"] + args):
@@ -228,22 +170,10 @@ def test_xform_default_output_path(isolated_seoul_bull_17_images: list[Path]):
     assert expected_third.exists()
 
 
-def test_xform_chained_transforms(isolated_seoul_bull_17_images: list[Path]):
+def test_xform_chained_transforms(sfmrfile_reconstruction_with_17_images: Path):
     """Test xform with multiple chained transforms."""
-    workspace_dir = isolated_seoul_bull_17_images[0].parent
-
-    result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
-    assert result.exit_code == 0, result.output
-
-    result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
-    assert result.exit_code == 0, result.output
-
-    output_sfmr = workspace_dir / "test_solve.sfmr"
-    result = CliRunner().invoke(
-        main,
-        ["solve", "-i", "--output", str(output_sfmr), str(workspace_dir)],
-    )
-    assert result.exit_code == 0, result.output
+    output_sfmr = sfmrfile_reconstruction_with_17_images
+    workspace_dir = output_sfmr.parent
 
     # Chain: remove short tracks -> scale -> translate
     chained_sfmr = workspace_dir / "chained.sfmr"

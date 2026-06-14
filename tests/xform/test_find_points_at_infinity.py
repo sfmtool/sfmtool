@@ -148,9 +148,9 @@ def test_cli_find_points_at_infinity(sfmrfile_reconstruction_with_17_images):
         str(input_sfmr),
         str(output_sfmr),
         "--find-points-at-infinity",
-        "0.1,300,3",
+        "0.1,300,2",
         "--max-features",
-        "800",
+        "1500",
     ]
     # The xform command re-parses sys.argv to preserve transform order, so the
     # CliRunner invocation must have argv contain "xform" + the same args.
