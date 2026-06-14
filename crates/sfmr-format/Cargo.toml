@@ -10,14 +10,14 @@ description = "Read/write .sfmr file format for SfM reconstructions"
 
 [dependencies]
 ndarray = "0.17"
-bytemuck = { version = "1.14", features = ["derive"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+bytemuck = { version = "1.25", features = ["derive"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 zstd = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 thiserror = "2"
-nalgebra = "0.34"
+nalgebra = "0.35"
 dunce = "1"
 
 [dev-dependencies]

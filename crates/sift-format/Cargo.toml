@@ -10,8 +10,8 @@ description = "Read/write .sift file format for SIFT feature descriptors"
 
 [dependencies]
 ndarray = "0.17"
-bytemuck = { version = "1.14", features = ["derive"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+bytemuck = { version = "1.25", features = ["derive"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 zstd = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
