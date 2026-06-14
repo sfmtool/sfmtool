@@ -10,8 +10,8 @@ description = "Read/write .camrig file format for camera rigs"
 
 [dependencies]
 ndarray = "0.17"
-bytemuck = "1.14"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+bytemuck = "1.25"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 zstd = "0.13"
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: parse JSON floats with full precision so camera intrinsics

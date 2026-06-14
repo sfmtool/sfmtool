@@ -42,13 +42,13 @@ egui = "0.34"
 eframe = { version = "0.34", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 egui_dock = "0.19"
 wgpu = { version = "29", features = ["dx12", "vulkan"] }
-nalgebra = "0.34"
-bytemuck = { version = "1.14", features = ["derive"] }
+nalgebra = "0.35"
+bytemuck = { version = "1.25", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
 egui-winit = { version = "0.34", features = ["accesskit"] }
 raw-window-handle = "0.6"
-winit = "0.30.12"
+winit = "0.30.13"
 pollster = "0.4"
 rfd = "0.17"
 kiddo = "5"

@@ -14,10 +14,10 @@ gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 
 [dependencies]
 half = "2"
-nalgebra = "0.34"
+nalgebra = "0.35"
 ndarray = "0.17"
 kiddo = "5"
-rayon = "1.10"
+rayon = "1.12"
 rand = "0.10"
 rand_distr = "0.6"
 serde_json = "1"
@@ -28,7 +28,7 @@ camrig-format = { path = "../camrig-format" }
 # GPU compute (optional)
 wgpu = { version = "29", features = ["dx12", "vulkan"], optional = true }
 pollster = { version = "0.4", optional = true }
-bytemuck = { version = "1.14", features = ["derive"], optional = true }
+bytemuck = { version = "1.25", features = ["derive"], optional = true }
 
 [dev-dependencies]
 approx = "0.5"
