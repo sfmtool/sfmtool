@@ -114,12 +114,53 @@ def run_incremental_sfm(
         tool_options["refine_rig"] = refine_rig
 
     workspace_config = load_workspace_config(workspace_dir)
-    image_dir_rel = str(Path(image_dir).relative_to(workspace_dir))
     explicit_output = Path(output_sfm_file).absolute() if output_sfm_file else None
 
-    saved_paths: list[Path] = []
-    for order, idx in enumerate(sorted(reconstructions)):
-        recon_image_paths: list[Path]
+    return _save_reconstructions(
+        reconstructions,
+        has_rig=has_rig,
+        reconstruction_path=Path(reconstruction_path),
+        image_dir=image_dir,
+        workspace_dir=workspace_dir,
+        workspace_config=workspace_config,
+        tool_name="colmap",
+        tool_options=tool_options,
+        input_image_count=len(image_paths),
+        explicit_output=explicit_output,
+        sfmr_dir=sfmr_dir,
+        detect_infinity=detect_infinity,
+    )
+
+
+def _save_reconstructions(
+    reconstructions,
+    *,
+    has_rig: bool,
+    reconstruction_path: Path,
+    image_dir: str | Path,
+    workspace_dir: Path,
+    workspace_config: dict,
+    tool_name: str,
+    tool_options: dict,
+    input_image_count: int,
+    explicit_output: Path | None,
+    sfmr_dir: str | Path | None,
+    detect_infinity: bool,
+) -> Path:
+    """Convert and save the mapper's reconstructions, returning the primary one.
+
+    Degenerate models the mapper abandons (0 three-D points) are skipped with a
+    warning rather than aborting the whole solve; only if *no* model survives is
+    a `RuntimeError` raised. Surviving models are saved largest-first (by
+    registered image count, then observations), so the real reconstruction —
+    not a junk 2-image fragment that happened to land at a lower model index —
+    claims the explicit `--output` slot and is returned as the primary.
+    """
+    image_dir_rel = str(Path(image_dir).relative_to(workspace_dir))
+
+    # Gather per-model stats first, dropping degenerate (0-point) fragments.
+    models: list[dict] = []
+    for idx in sorted(reconstructions):
         if has_rig:
             pycolmap_recon = reconstructions[idx]
             recon_image_paths = [
@@ -135,7 +176,7 @@ def run_incremental_sfm(
         else:
             from ._sfmtool import read_colmap_binary
 
-            recon_dir = Path(reconstruction_path) / str(idx)
+            recon_dir = reconstruction_path / str(idx)
             colmap_data = read_colmap_binary(recon_dir)
             recon_image_paths = [
                 Path(image_dir) / name for name in colmap_data["image_names"]
@@ -145,10 +186,38 @@ def run_incremental_sfm(
             obs_count = len(colmap_data["track_image_indexes"])
             camera_count = len(colmap_data["cameras"])
 
+        if points3d_count == 0:
+            print(
+                f"Warning: skipping degenerate model {idx} "
+                f"({image_count} image(s), 0 points) — the mapper split off a "
+                "junk fragment. A split can mean the run is worth re-seeding."
+            )
+            continue
+
+        models.append(
+            {
+                "idx": idx,
+                "recon_image_paths": recon_image_paths,
+                "image_count": image_count,
+                "points3d_count": points3d_count,
+                "obs_count": obs_count,
+                "camera_count": camera_count,
+            }
+        )
+
+    if not models:
+        raise RuntimeError("No 3D points found in reconstruction.")
+
+    # Largest model first, so it claims the primary / --output slot.
+    models.sort(key=lambda m: (m["image_count"], m["obs_count"]), reverse=True)
+
+    saved_paths: list[Path] = []
+    for order, model in enumerate(models):
+        idx = model["idx"]
         output_path = _resolve_output_path(
             order=order,
             explicit_output=explicit_output,
-            recon_image_paths=recon_image_paths,
+            recon_image_paths=model["recon_image_paths"],
             sfmr_dir=sfmr_dir,
             workspace_dir=workspace_dir,
         )
@@ -158,18 +227,18 @@ def run_incremental_sfm(
             output_path=output_path,
             workspace_config=workspace_config,
             operation="sfm_solve",
-            tool_name="colmap",
+            tool_name=tool_name,
             tool_options=tool_options,
             inputs={
                 "images": {
                     "image_dir": image_dir_rel,
-                    "image_count": len(image_paths),
+                    "image_count": input_image_count,
                 }
             },
-            image_count=image_count,
-            point_count=points3d_count,
-            observation_count=obs_count,
-            camera_count=camera_count,
+            image_count=model["image_count"],
+            point_count=model["points3d_count"],
+            observation_count=model["obs_count"],
+            camera_count=model["camera_count"],
         )
 
         if has_rig:
@@ -180,7 +249,7 @@ def run_incremental_sfm(
                 classify_infinity=detect_infinity,
             )
         else:
-            recon_dir = Path(reconstruction_path) / str(idx)
+            recon_dir = reconstruction_path / str(idx)
             recon = colmap_binary_to_rust_sfmr(
                 recon_dir, image_dir, metadata, classify_infinity=detect_infinity
             )

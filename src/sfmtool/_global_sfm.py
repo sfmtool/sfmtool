@@ -11,12 +11,7 @@ from deadline.job_attachments.api import summarize_path_list
 
 from .camera.config import CameraConfigResolver
 from .colmap.db_setup import _setup_for_sfm, _setup_for_sfm_from_matches
-from .colmap.io import (
-    build_metadata,
-    colmap_binary_to_rust_sfmr,
-    pycolmap_to_rust_sfmr,
-)
-from ._incremental_sfm import _resolve_output_path
+from ._incremental_sfm import _save_reconstructions
 from .rig.config import _load_rig_config
 from ._workspace import load_workspace_config
 
@@ -114,86 +109,19 @@ def run_global_sfm(
         tool_options["refine_rig"] = refine_rig
 
     workspace_config = load_workspace_config(workspace_dir)
-    image_dir_rel = str(image_dir.relative_to(workspace_dir))
     explicit_output = Path(output_sfm_file).absolute() if output_sfm_file else None
 
-    saved_paths: list[Path] = []
-    for order, idx in enumerate(sorted(reconstructions)):
-        recon_image_paths: list[Path]
-        if has_rig:
-            pycolmap_recon = reconstructions[idx]
-            recon_image_paths = [
-                Path(image_dir) / img.name for img in pycolmap_recon.images.values()
-            ]
-            image_count = len(pycolmap_recon.images)
-            points3d_count = len(pycolmap_recon.points3D)
-            obs_count = sum(
-                len(pycolmap_recon.points3D[pid].track.elements)
-                for pid in pycolmap_recon.points3D
-            )
-            camera_count = len(pycolmap_recon.cameras)
-        else:
-            from ._sfmtool import read_colmap_binary
-
-            recon_dir = Path(reconstruction_path) / str(idx)
-            colmap_data = read_colmap_binary(recon_dir)
-            recon_image_paths = [
-                Path(image_dir) / name for name in colmap_data["image_names"]
-            ]
-            image_count = len(colmap_data["image_names"])
-            points3d_count = len(colmap_data["positions_xyz"])
-            obs_count = len(colmap_data["track_image_indexes"])
-            camera_count = len(colmap_data["cameras"])
-
-        output_path = _resolve_output_path(
-            order=order,
-            explicit_output=explicit_output,
-            recon_image_paths=recon_image_paths,
-            sfmr_dir=sfmr_dir,
-            workspace_dir=workspace_dir,
-        )
-
-        metadata = build_metadata(
-            workspace_dir=workspace_dir,
-            output_path=output_path,
-            workspace_config=workspace_config,
-            operation="sfm_solve",
-            tool_name="glomap",
-            tool_options=tool_options,
-            inputs={
-                "images": {
-                    "image_dir": image_dir_rel,
-                    "image_count": len(image_paths),
-                }
-            },
-            image_count=image_count,
-            point_count=points3d_count,
-            observation_count=obs_count,
-            camera_count=camera_count,
-        )
-
-        if has_rig:
-            recon = pycolmap_to_rust_sfmr(
-                reconstructions[idx],
-                image_dir,
-                metadata,
-                classify_infinity=detect_infinity,
-            )
-        else:
-            recon_dir = Path(reconstruction_path) / str(idx)
-            recon = colmap_binary_to_rust_sfmr(
-                recon_dir, image_dir, metadata, classify_infinity=detect_infinity
-            )
-
-        print(f"Found reconstruction {idx}:")
-        print(
-            f"  Cameras: {recon.camera_count}"
-            f", Images: {recon.image_count}"
-            f", Points: {recon.point_count}"
-        )
-
-        recon.save(output_path)
-        print(f"Saved reconstruction to: {output_path}")
-        saved_paths.append(output_path)
-
-    return saved_paths[0]
+    return _save_reconstructions(
+        reconstructions,
+        has_rig=has_rig,
+        reconstruction_path=Path(reconstruction_path),
+        image_dir=image_dir,
+        workspace_dir=workspace_dir,
+        workspace_config=workspace_config,
+        tool_name="glomap",
+        tool_options=tool_options,
+        input_image_count=len(image_paths),
+        explicit_output=explicit_output,
+        sfmr_dir=sfmr_dir,
+        detect_infinity=detect_infinity,
+    )
