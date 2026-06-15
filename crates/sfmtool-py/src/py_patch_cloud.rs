@@ -257,7 +257,7 @@ impl PyPatchCloud {
         recon, images, *, resolution=24, angular_range_deg=25.0, init_steps=7,
         refine_levels=3, objective="robust", robust_iters=3, window="gaussian_disk",
         window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="bilinear",
-        cache="off", cache_supersample=1.0, point_ids=None
+        cache="fronto", cache_supersample=2.0, point_ids=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn refine_normals<'py>(

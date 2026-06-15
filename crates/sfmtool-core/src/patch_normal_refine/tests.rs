@@ -155,6 +155,23 @@ fn synthetic_normalized(seed: u64, len: usize) -> Vec<f64> {
     v
 }
 
+/// Flatten a nested `[view][channel][pixel]` test stack into the production
+/// layout `data[(v*channels + c)*n + k]` as f32, returning the dims.
+fn flatten_stack(xs: &[Vec<Vec<f64>>]) -> (Vec<f32>, usize, usize, usize) {
+    let views = xs.len();
+    let channels = xs[0].len();
+    let n = xs[0][0].len();
+    let mut data = vec![0f32; views * channels * n];
+    for (v, per_channel) in xs.iter().enumerate() {
+        for (c, col) in per_channel.iter().enumerate() {
+            for (k, &x) in col.iter().enumerate() {
+                data[(v * channels + c) * n + k] = x as f32;
+            }
+        }
+    }
+    (data, views, channels, n)
+}
+
 #[test]
 fn consensus_identity_matches_brute_force_pairwise_mean() {
     for v_count in [2usize, 3, 5, 8] {
@@ -177,12 +194,15 @@ fn consensus_identity_matches_brute_force_pairwise_mean() {
         }
         let brute = sum / pairs;
 
-        let closed = mean_pairwise_channel(&xs, 0);
-        assert_relative_eq!(closed, brute, epsilon = 1e-12);
+        // The consensus reads an f32 stack, so the closed form matches the f64
+        // brute force only to f32 precision.
+        let (d, vw, ch, nn) = flatten_stack(&xs);
+        let closed = mean_pairwise_channel(&d, vw, ch, nn, 0);
+        assert_relative_eq!(closed, brute, epsilon = 1e-5);
 
         // The full objective averages channels; with one channel it matches.
-        let phi = consensus_phi(&xs, Objective::MeanPairwise).unwrap();
-        assert_relative_eq!(phi, brute, epsilon = 1e-12);
+        let phi = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise).unwrap();
+        assert_relative_eq!(phi, brute, epsilon = 1e-5);
     }
 }
 
@@ -215,8 +235,9 @@ fn robust_consensus_with_uniform_weights_matches_unweighted() {
     let xs: Vec<Vec<Vec<f64>>> = (0..4)
         .map(|i| vec![consistent_view(&base, 100 + i as u64, 0.12)])
         .collect();
-    let unweighted = consensus_phi(&xs, Objective::MeanPairwise).unwrap();
-    let robust = consensus_phi(&xs, Objective::RobustWeighted { iters: 3 }).unwrap();
+    let (d, vw, ch, nn) = flatten_stack(&xs);
+    let unweighted = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise).unwrap();
+    let robust = consensus_phi(&d, vw, ch, nn, Objective::RobustWeighted { iters: 3 }).unwrap();
     // High (not perfect) agreement, and robust tracks unweighted with no outlier.
     assert!(unweighted > 0.8 && unweighted < 1.0, "phi = {unweighted}");
     assert_relative_eq!(robust, unweighted, epsilon = 1e-2);
@@ -235,10 +256,11 @@ fn robust_consensus_beats_unweighted_with_an_outlier() {
         vec![good.clone()],
         vec![bad],
     ];
-    let unweighted = consensus_phi(&xs, Objective::MeanPairwise).unwrap();
-    let robust = consensus_phi(&xs, Objective::RobustWeighted { iters: 5 }).unwrap();
+    let (d, vw, ch, nn) = flatten_stack(&xs);
+    let unweighted = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise).unwrap();
+    let robust = consensus_phi(&d, vw, ch, nn, Objective::RobustWeighted { iters: 5 }).unwrap();
     assert!(
-        unweighted.abs() < 1e-9,
+        unweighted.abs() < 1e-6,
         "unweighted should be ~0, got {unweighted}"
     );
     assert!(
