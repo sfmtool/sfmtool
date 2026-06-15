@@ -144,11 +144,15 @@ pub enum PatchExtent {
     /// appears largest); `Max`/`Median`/`Mean` trade that off.
     PixelRadius { radius_px: f64, across: ViewReduce },
     /// `factor` × the projected world feature size — each observation's keypoint
-    /// scale back-projected to world (`sigma_i · z_i / f_i`), reduced across views
-    /// by `across` (`Median` recommended; the scales are consistent across a
-    /// track's views). Reads the workspace `.sift` files. A point with no
-    /// readable scale in any view is an error (`PatchCloudError::MissingFeatureScale`)
-    /// — there is no silent size fallback.
+    /// scale back-projected to world (`sigma_i · d_i / f_i`, where `d_i` is the
+    /// ray distance `‖X − C_i‖`), reduced across views by `across` (`Median`
+    /// recommended; the scales are consistent across a track's views). Using the
+    /// ray distance rather than the optical-axis depth `z_i` makes this
+    /// camera-agnostic: a fisheye (FoV > 180°) sees points past 90° off axis at
+    /// `z_i ≤ 0`, which a pinhole `σ·z/f` could not size. On-axis `d = z`, so it
+    /// reduces to the pinhole form. Reads the workspace `.sift` files. A point
+    /// with no readable scale in any view is an error
+    /// (`PatchCloudError::MissingFeatureScale`) — there is no silent size fallback.
     FeatureSize { factor: f64, across: ViewReduce },
 }
 

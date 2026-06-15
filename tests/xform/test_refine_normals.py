@@ -112,12 +112,39 @@ def test_parse_duplicate_key_rejected():
         "initial_normals=bogus",
         "extent=bogus",
         "extent_value=0",
+        "cache=bogus",
+        "cache_supersample=0.5",
+        "quality=bogus",
     ],
 )
 def test_parse_out_of_range_or_bad_enum_rejected(param):
     """Constructor range/enum validation surfaces as ValueError."""
     with pytest.raises(ValueError):
         parse_refine_normals_params(param)
+
+
+def test_parse_cache_knobs():
+    """The cache knobs parse with the right types and pass through."""
+    t = parse_refine_normals_params("cache=fronto,cache_supersample=2")
+    assert t.cache == "fronto"
+    assert t.cache_supersample == 2.0
+
+
+def test_quality_preset_overrides_cache_knobs():
+    """A quality preset sets (cache, cache_supersample) and wins over them."""
+    coarse = RefineNormalsTransform(quality="coarse")
+    assert coarse.cache == "fronto"
+    assert coarse.cache_supersample == 2.0
+
+    fine = RefineNormalsTransform(quality="fine", cache="fronto", cache_supersample=3.0)
+    assert fine.cache == "off"
+
+    # quality=none defers to the explicit knobs.
+    explicit = RefineNormalsTransform(
+        quality="none", cache="fronto", cache_supersample=2.0
+    )
+    assert explicit.cache == "fronto"
+    assert explicit.cache_supersample == 2.0
 
 
 def test_constructor_description_mentions_key_settings():

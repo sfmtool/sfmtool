@@ -30,6 +30,18 @@ _WINDOWS = ("gaussian_disk", "gaussian", "uniform")
 _SAMPLERS = ("bilinear", "anisotropic")
 _INITIAL_NORMALS = ("stored", "mean_viewing", "geometric")
 _EXTENTS = ("feature_size", "fixed", "relative_spacing", "pixel_radius")
+_CACHES = ("off", "fronto")
+_QUALITIES = ("none", "coarse", "fine")
+
+# Quality presets: convenience that sets (cache, cache_supersample) together.
+# ``coarse`` trades a little tail accuracy for ~2× speed via the fronto-parallel
+# cache; ``fine`` is the exact source-rendering path. ``none`` defers to the
+# explicit ``cache`` / ``cache_supersample`` knobs. See
+# ``specs/core/fronto-parallel-patch-cache.md``.
+_QUALITY_PRESETS = {
+    "coarse": ("fronto", 2.0),
+    "fine": ("off", 1.0),
+}
 
 
 class RefineNormalsTransform:
@@ -57,6 +69,9 @@ class RefineNormalsTransform:
         sampler: str = "bilinear",
         min_valid_fraction: float = 0.6,
         min_views: int = 3,
+        cache: str = "off",
+        cache_supersample: float = 1.0,
+        quality: str = "none",
         # forwarded to PatchCloud.from_reconstruction
         initial_normals: str = "stored",
         extent: str = "feature_size",
@@ -90,6 +105,14 @@ class RefineNormalsTransform:
             )
         if min_views < 2:
             raise ValueError(f"min_views must be >= 2, got {min_views}")
+        if cache not in _CACHES:
+            raise ValueError(f"cache must be one of {_CACHES}, got {cache!r}")
+        if cache_supersample < 1.0:
+            raise ValueError(
+                f"cache_supersample must be >= 1.0, got {cache_supersample}"
+            )
+        if quality not in _QUALITIES:
+            raise ValueError(f"quality must be one of {_QUALITIES}, got {quality!r}")
         if initial_normals not in _INITIAL_NORMALS:
             raise ValueError(
                 f"initial_normals must be one of {_INITIAL_NORMALS}, got {initial_normals!r}"
@@ -110,6 +133,14 @@ class RefineNormalsTransform:
         self.sampler = sampler
         self.min_valid_fraction = min_valid_fraction
         self.min_views = min_views
+        # A quality preset (other than ``none``) wins over the explicit cache
+        # knobs, so the two never disagree.
+        if quality != "none":
+            self.cache, self.cache_supersample = _QUALITY_PRESETS[quality]
+        else:
+            self.cache = cache
+            self.cache_supersample = cache_supersample
+        self.quality = quality
         self.initial_normals = initial_normals
         self.extent = extent
         self.extent_value = extent_value
@@ -158,6 +189,8 @@ class RefineNormalsTransform:
             min_valid_fraction=self.min_valid_fraction,
             min_views=self.min_views,
             sampler=self.sampler,
+            cache=self.cache,
+            cache_supersample=self.cache_supersample,
         )
 
         refined = np.asarray(result["normal"], dtype=np.float32)

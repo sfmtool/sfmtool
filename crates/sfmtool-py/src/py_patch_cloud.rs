@@ -11,8 +11,8 @@ use pyo3::types::PyDict;
 
 use sfmtool_core::patch_cloud::{OrientedPatch, PatchCloud, PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch_normal_refine::{
-    patch_view_indices_from_reconstruction, refine_patch_cloud, NormalRefineParams, Objective,
-    PatchWindow, ProjectedImage, Sampler,
+    patch_view_indices_from_reconstruction, refine_patch_cloud, CacheMode, NormalRefineParams,
+    Objective, PatchWindow, ProjectedImage, Sampler,
 };
 use sfmtool_core::remap::ImageU8Pyramid;
 use sfmtool_core::rigid_transform::RigidTransform;
@@ -257,8 +257,9 @@ impl PyPatchCloud {
         recon, images, *, resolution=24, angular_range_deg=25.0, init_steps=7,
         refine_levels=3, objective="robust", robust_iters=3, window="gaussian_disk",
         window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="bilinear",
-        point_ids=None
+        cache="off", cache_supersample=1.0, point_ids=None
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn refine_normals<'py>(
         &mut self,
         py: Python<'py>,
@@ -275,6 +276,8 @@ impl PyPatchCloud {
         min_valid_fraction: f64,
         min_views: u32,
         sampler: &str,
+        cache: &str,
+        cache_supersample: f64,
         point_ids: Option<Vec<u32>>,
     ) -> PyResult<Bound<'py, PyDict>> {
         let recon = &recon.inner;
@@ -341,6 +344,20 @@ impl PyPatchCloud {
                 )))
             }
         };
+        let cache = match cache {
+            "off" => CacheMode::Off,
+            "fronto" => CacheMode::FrontoParallel,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown cache: {other:?} (expected off|fronto)"
+                )))
+            }
+        };
+        if cache_supersample < 1.0 {
+            return Err(PyValueError::new_err(format!(
+                "cache_supersample must be >= 1.0, got {cache_supersample}"
+            )));
+        }
         let params = NormalRefineParams {
             angular_range_deg,
             init_steps,
@@ -350,6 +367,8 @@ impl PyPatchCloud {
             min_valid_fraction,
             min_views,
             sampler,
+            cache,
+            cache_supersample,
         };
 
         // Build one pyramid + pose per reconstruction image; the ProjectedImages
