@@ -1,14 +1,15 @@
 # Fronto-Parallel Patch Cache for Normal Refinement
 
-**Status:** Design spec for a **prototype**, not yet in production. The working
-implementation lives on branch `claude/proto-patch-cache` in
-`sfmtool-core/src/patch_normal_refine/proto_cache.rs` behind runtime flags
-(`set_patch_cache_fronto`, `set_patch_cache_supersample`, …) and the
-`PatchCloud.proto_patch_cache_eval` A/B harness. Builds on
-`specs/core/patch-normal-refinement.md` (the search this accelerates) and
-`specs/core/patch-cloud.md` (`OrientedPatch`, `WarpMap::from_patch`, `remap_*`).
-Measurements: `reports/2026-06-15-patch-cache-status.md`. This spec documents the
-fronto-parallel variant specifically and the plan to land it in production.
+**Status:** Phase 1 implemented (scalar kernel, parameterized). The cache lives
+in `sfmtool-core/src/patch_normal_refine/fronto_cache.rs`, selected by
+`NormalRefineParams { cache: CacheMode, cache_supersample }`, exposed through
+`PatchCloud.refine_normals(cache=…, cache_supersample=…)` and
+`sfm xform --refine-normals cache=…/quality=…`. The Phase 2 AVX2 kernel is not
+yet landed (the production resample is the scalar packed/planar/masked kernel).
+Builds on `specs/core/patch-normal-refinement.md` (the search this accelerates)
+and `specs/core/patch-cloud.md` (`OrientedPatch`, `WarpMap::from_patch`,
+`remap_*`). Prototype exploration and measurements:
+`reports/2026-06-15-patch-cache-status.md`.
 
 ## Problem
 
@@ -135,12 +136,22 @@ runtime-R kernel.
 ## Limitations / when it does not apply
 
 - **Flat-Φ data** (weak parallax / low texture): the affine softening costs a few
-  degrees in the tail. Prefer the homography cache or no cache when the tail
-  matters more than wall time.
+  degrees in the tail. Prefer no cache when the tail matters more than wall time.
 - **Extreme tilt**: the differential/affine approximation degrades; the guard +
   int clamp keep it safe but the resample is approximate there.
 - **Non-3-channel images**: the packed kernel assumes RGB; the base render bails
   (falls back to source rendering) otherwise.
+- **Out-of-frame candidates are not rejected.** The source path drops a candidate
+  whose frozen-support pixels leave any view's frame (so zero-fill can't fake
+  cross-view agreement); the cache instead resamples the replicate-padded base
+  *edge*. This is an argmax-affecting divergence, but measured Φ-equivalent in
+  practice — the fronto base is the least-foreshortened render, so its support
+  covers the candidate's footprint.
+- **Per-patch view coverage is fixed at the seed.** Bases are rendered for the
+  views front-facing at the search seed; a view that only becomes front-facing
+  (and valid) at a *drifted* later-level centre has no base, which ends that
+  patch's search one level early rather than dropping the point (level 0 — seeded
+  at the search centre — is always covered).
 
 ## Implementation plan (production)
 
@@ -150,10 +161,22 @@ deterministic-first, tested, and exposed. Land it as two reviewable changes —
 
 ### Phase 1 — algorithm, scalar kernel, parameterized (the merge that matters)
 
-1. **Lift the cache out of `proto_cache`** into the refine module: the
-   fronto base render (`prerender_fronto_bases`), the affine fit and composition,
-   and `eval_phi_fronto`. Drop the A/B harness (`proto_patch_cache_eval`), the
-   homography per-level variant, and the global `set_patch_cache_*` atomics.
+> _Status (2026-06-15): done. `patch_normal_refine/fronto_cache.rs`
+> (`FrontoCache`, `prerender`, `eval_phi`, scalar packed/planar/masked-support
+> resample with the guarded base + single int clamp); `CacheMode` +
+> `cache_supersample` on `NormalRefineParams` (default `Off`); the
+> `PatchCloud.refine_normals(cache=, cache_supersample=)` binding; the
+> `--refine-normals cache=/cache_supersample=/quality=` CLI keys and the
+> coarse/fine preset; unit tests for the affine fit and padding plus
+> `tests/test_patch_normal_refine.py` (Φ-equivalence + population on seoul_bull,
+> distortion-independence on the kerry_park fisheye rig) and
+> `tests/xform/test_refine_normals.py` (preset + validation). Measured ~2.3× at
+> Φ-equivalent median on dino R=32. Phase 2 (AVX2) pending._
+
+1. **Lift the cache into the refine module**: the fronto base render
+   (`prerender`), the affine fit and composition, and `eval_phi`. (Written fresh
+   as production code rather than lifted from the prototype branch, which never
+   reached `main`.)
 2. **Parameterize via `NormalRefineParams`**, not globals: add
    `cache: CacheMode { Off, FrontoParallel }` (room to grow) and
    `cache_supersample: f64`. Default `Off` so existing behavior is unchanged

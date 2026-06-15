@@ -17,9 +17,9 @@ use crate::spatial::PointCloud;
 #[derive(Debug)]
 pub enum PatchCloudError {
     /// [`PatchExtent::FeatureSize`] could not read a keypoint scale for any
-    /// observation of point `point_id` (its `.sift` files were unreadable, the
-    /// feature index was out of range, or every observation projected behind the
-    /// camera), so the patch has no defined world size.
+    /// observation of point `point_id` — its `.sift` files were unreadable (or,
+    /// degenerately, every observation coincides with a camera centre) — so the
+    /// patch has no defined world size.
     MissingFeatureScale { point_id: u32 },
 }
 
@@ -222,6 +222,13 @@ impl PatchCloud {
         // FeatureSize: per-finite-point world half-size from the observing
         // keypoints' scales, read from the workspace `.sift` files. A point with
         // no readable scale in any view is an error.
+        //
+        // A σ-pixel keypoint subtends an angle ≈ σ/f, which at ray-distance
+        // d = ‖X − C‖ from the camera spans ≈ σ·d/f world units. Using the ray
+        // distance d (always positive) rather than the optical-axis depth z makes
+        // this camera-agnostic: a fisheye (FoV > 180°) sees points past 90° off
+        // axis at z ≤ 0, where the old pinhole `σ·z/f` (gated on z > 0) could not
+        // size them. On-axis d = z, so this reduces to the pinhole formula.
         let feature_half: Vec<f64> = if let PatchExtent::FeatureSize { factor, across } = extent {
             let img_scales: Vec<Option<Vec<f64>>> = (0..recon.images.len())
                 .map(|i| read_image_scales(recon, i))
@@ -236,11 +243,12 @@ impl PatchCloud {
                     let im = &recon.images[o.image_index as usize];
                     if let Some(Some(scales)) = img_scales.get(o.image_index as usize) {
                         if let Some(&sigma) = scales.get(o.feature_index as usize) {
-                            let z = (im.quaternion_wxyz * center.coords + im.translation_xyz).z;
-                            if z > 1e-6 {
+                            let d =
+                                (im.quaternion_wxyz * center.coords + im.translation_xyz).norm();
+                            if d > 1e-6 {
                                 let (fx, _) =
                                     recon.cameras[im.camera_index as usize].focal_lengths();
-                                sizes.push(sigma * z / fx);
+                                sizes.push(sigma * d / fx);
                             }
                         }
                     }

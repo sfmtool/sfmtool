@@ -52,3 +52,23 @@ def test_feature_size_scales_linearly_with_factor(
     # half = factor * reduce(per-view feature size): doubling the factor doubles
     # every patch's half-size (pins the `factor *` and a deterministic reduce).
     np.testing.assert_allclose(h10, 2.0 * h5, rtol=1e-12)
+
+
+def test_feature_size_handles_fisheye(sfmrfile_reconstruction_kerry_park: Path):
+    """FeatureSize sizes every point of a fisheye (FoV > 180°) rig.
+
+    A fisheye sees points past 90° off axis at camera-frame z <= 0; the world
+    size is back-projected from the ray distance d = ‖X − C‖ (always positive),
+    not the optical-axis depth z, so such peripheral points size fine. The old
+    pinhole `σ·z/f` (gated on z > 0) raised ``MissingFeatureScale`` for a point
+    whose every observation was peripheral. See ``specs/core/patch-cloud.md``.
+    """
+    recon = SfmrReconstruction.load(sfmrfile_reconstruction_kerry_park)
+    cloud = PatchCloud.from_reconstruction(
+        recon, extent="feature_size", extent_value=5.0
+    )
+
+    assert len(cloud) > 0
+    halves = np.array([cloud[i].half_extent for i in range(len(cloud))])
+    assert np.all(np.isfinite(halves))
+    assert np.all(halves > 0.0)

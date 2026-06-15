@@ -20,6 +20,7 @@ use crate::remap::{remap_aniso_with_pyramid, remap_bilinear, ImageU8Pyramid};
 use crate::rigid_transform::RigidTransform;
 use crate::warp_map::WarpMap;
 
+mod fronto_cache;
 pub mod prof;
 
 /// A source image together with the projection that maps world points into it:
@@ -80,6 +81,21 @@ pub enum Sampler {
     Anisotropic,
 }
 
+/// How candidate normals are scored: re-rendered from the source images, or
+/// resampled from a cached base patch (see
+/// `specs/core/fronto-parallel-patch-cache.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheMode {
+    /// Re-render every candidate from the source pyramid (the exact baseline).
+    Off,
+    /// Render one supersampled fronto-parallel base per view up front and
+    /// affine-resample each candidate from it. ~2× faster at Φ-equivalent
+    /// median accuracy; the affine approximation costs a little in the tail on
+    /// flat-`Φ` data. Falls back to `Off` per-patch when the base can't be built
+    /// (e.g. non-RGB imagery).
+    FrontoParallel,
+}
+
 /// Tunables for [`refine_patch_normal`].
 #[derive(Debug, Clone)]
 pub struct NormalRefineParams {
@@ -102,6 +118,12 @@ pub struct NormalRefineParams {
     pub min_views: u32,
     /// How to sample the source pyramids when rendering candidates.
     pub sampler: Sampler,
+    /// Candidate-scoring strategy (source re-render vs. fronto-parallel cache).
+    pub cache: CacheMode,
+    /// Base-patch supersample factor for the cache (≥ 1; `1.0` = candidate
+    /// density). Denser bases sharpen the resample and tighten accuracy at the
+    /// cost of a bigger up-front render. Ignored when `cache == Off`.
+    pub cache_supersample: f64,
 }
 
 impl Default for NormalRefineParams {
@@ -115,6 +137,8 @@ impl Default for NormalRefineParams {
             min_valid_fraction: 0.6,
             min_views: 3,
             sampler: Sampler::Bilinear,
+            cache: CacheMode::Off,
+            cache_supersample: 1.0,
         }
     }
 }
@@ -421,36 +445,44 @@ fn normalized_stack(
         raw.push(per_channel);
     }
 
-    // Per-(view, channel) windowed mean / norm; a channel is kept only when no
-    // view is flat in it.
-    prof::ZNORM.time(|| {
-        let mut keep_channel = vec![true; channels];
-        let mut stats = vec![vec![(0.0f64, 0.0f64); channels]; n_views];
-        for (i, per_channel) in raw.iter().enumerate() {
-            for (c, vals) in per_channel.iter().enumerate() {
-                let mean: f64 = vals
-                    .iter()
-                    .zip(&ctx.weights)
-                    .map(|(&f, &w)| w * f)
-                    .sum::<f64>()
-                    / total_w;
-                let norm_sq: f64 = vals
-                    .iter()
-                    .zip(&ctx.weights)
-                    .map(|(&f, &w)| w * (f - mean) * (f - mean))
-                    .sum();
-                if norm_sq < FLAT_NORM_SQ_EPS {
-                    keep_channel[c] = false;
-                }
-                stats[i][c] = (mean, norm_sq);
-            }
-        }
-        if !keep_channel.iter().any(|&k| k) {
-            return None;
-        }
+    prof::ZNORM.time(|| znormalize_stack(&raw, &ctx.weights, total_w, &sqrt_w))
+}
 
-        let xs: Vec<Vec<Vec<f64>>> = raw
-            .iter()
+/// z-normalize `raw[view][channel][pixel]` over the windowed support: subtract
+/// the weighted mean, scale to unit windowed-norm, and fold `√w` in (so plain
+/// dot products realize the windowed inner product). A channel that is flat
+/// (windowed norm² < [`FLAT_NORM_SQ_EPS`]) in *any* view is dropped for *every*
+/// view, keeping all inner products in one space; `None` when no channel
+/// survives. Shared by the source-render path ([`normalized_stack`]) and the
+/// fronto cache ([`fronto_cache::eval_phi`]) so the two cannot drift.
+fn znormalize_stack(
+    raw: &[Vec<Vec<f64>>],
+    weights: &[f64],
+    total_w: f64,
+    sqrt_w: &[f64],
+) -> Option<Vec<Vec<Vec<f64>>>> {
+    let channels = raw.first().map_or(0, Vec::len);
+    let mut keep_channel = vec![true; channels];
+    let mut stats = vec![vec![(0.0f64, 0.0f64); channels]; raw.len()];
+    for (i, per_channel) in raw.iter().enumerate() {
+        for (c, vals) in per_channel.iter().enumerate() {
+            let mean: f64 = vals.iter().zip(weights).map(|(&f, &w)| w * f).sum::<f64>() / total_w;
+            let norm_sq: f64 = vals
+                .iter()
+                .zip(weights)
+                .map(|(&f, &w)| w * (f - mean) * (f - mean))
+                .sum();
+            if norm_sq < FLAT_NORM_SQ_EPS {
+                keep_channel[c] = false;
+            }
+            stats[i][c] = (mean, norm_sq);
+        }
+    }
+    if !keep_channel.iter().any(|&k| k) {
+        return None;
+    }
+    Some(
+        raw.iter()
             .enumerate()
             .map(|(i, per_channel)| {
                 per_channel
@@ -461,15 +493,14 @@ fn normalized_stack(
                         let (mean, norm_sq) = stats[i][c];
                         let inv_norm = 1.0 / norm_sq.sqrt();
                         vals.iter()
-                            .zip(&sqrt_w)
+                            .zip(sqrt_w)
                             .map(|(&f, &sw)| sw * (f - mean) * inv_norm)
                             .collect()
                     })
                     .collect()
             })
-            .collect();
-        Some(xs)
-    })
+            .collect(),
+    )
 }
 
 /// Unweighted consensus over one channel: `ρ̄ = (V‖x̄‖² − 1)/(V − 1)` with
@@ -633,15 +664,53 @@ fn coarse_to_fine(
     let mut range = params.angular_range_deg.to_radians().max(1e-4);
     let mut any_eval = false;
 
+    // Fronto-parallel cache: render one supersampled base per view here, reused
+    // across all levels. `None` (cache off, or the base could not be built for
+    // this patch) means score every candidate from the source images instead.
+    let cache = match params.cache {
+        CacheMode::FrontoParallel => fronto_cache::prerender(
+            base,
+            &center,
+            views,
+            resolution,
+            params.cache_supersample,
+            params,
+        ),
+        CacheMode::Off => None,
+    };
+
     for _ in 0..params.refine_levels.max(1) {
         let Some(ctx) = build_level_context(base, &center, views, resolution, w_full, params)
         else {
             break;
         };
         let (u, v) = tangent_basis(&center);
+        // The cache resamples the level's frozen support; its grid coords are
+        // level-dependent, so compute them once per level.
+        let (cols, rows): (Vec<i32>, Vec<i32>) = if cache.is_some() {
+            ctx.pixels
+                .iter()
+                .map(|&p| {
+                    (
+                        (p % resolution as usize) as i32,
+                        (p / resolution as usize) as i32,
+                    )
+                })
+                .unzip()
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let eval = |n: &Vector3<f64>| -> Option<f64> {
+            match &cache {
+                Some(c) => fronto_cache::eval_phi(
+                    base, n, c, &ctx, views, resolution, &cols, &rows, params,
+                ),
+                None => eval_phi(base, n, &ctx, views, resolution, params),
+            }
+        };
         let mut best_n = center;
         let mut best_phi = f64::NEG_INFINITY;
-        if let Some(phi) = eval_phi(base, &center, &ctx, views, resolution, params) {
+        if let Some(phi) = eval(&center) {
             best_phi = phi;
         }
         for i in 0..steps {
@@ -656,7 +725,7 @@ fn coarse_to_fine(
                     continue;
                 }
                 let n = exp_map_in_basis(&center, &u, &v, [a, b]);
-                if let Some(phi) = eval_phi(base, &n, &ctx, views, resolution, params) {
+                if let Some(phi) = eval(&n) {
                     if phi > best_phi {
                         best_phi = phi;
                         best_n = n;

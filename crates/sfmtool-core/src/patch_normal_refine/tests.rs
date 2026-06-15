@@ -131,6 +131,7 @@ fn test_params(objective: Objective) -> NormalRefineParams {
         min_valid_fraction: 0.5,
         min_views: 2,
         sampler: Sampler::Bilinear,
+        ..NormalRefineParams::default()
     }
 }
 
