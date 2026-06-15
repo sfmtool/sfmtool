@@ -94,8 +94,8 @@ so the CLI re-specifies nothing and the two layers cannot drift.
 | `sampler`           | `bilinear`      | `refine_normals` (`bilinear`/`anisotropic`) |
 | `min_valid_fraction`| `0.6`           | `refine_normals`                  |
 | `min_views`         | `3`             | `refine_normals`                  |
-| `cache`             | `off`           | `refine_normals` candidate scoring (`off`/`fronto`; see below) |
-| `cache_supersample` | `1.0`           | `refine_normals` (fronto base density, ≥ 1) |
+| `cache`             | `fronto`        | `refine_normals` candidate scoring (`off`/`fronto`; see below) |
+| `cache_supersample` | `2.0`           | `refine_normals` (fronto base density, ≥ 1) |
 | `quality`           | `none`          | preset for `cache`/`cache_supersample` (`none`/`coarse`/`fine`) |
 | `initial_normals`   | `stored`        | `from_reconstruction` normal policy (below) |
 | `extent`            | `feature_size`  | `from_reconstruction` extent policy |
@@ -107,19 +107,20 @@ values raise `click.UsageError`, consistent with the other parsers in
 
 ### Candidate-scoring cache (`cache` / `cache_supersample` / `quality`)
 
-`cache=fronto` selects the fronto-parallel patch cache
-(`specs/core/fronto-parallel-patch-cache.md`): instead of re-rendering every
-candidate normal from the source images, it renders one supersampled
-fronto-parallel base per view up front and affine-resamples each candidate from
-it — ~2× faster at Φ-equivalent median accuracy, trading a little tail accuracy
-on flat-`Φ` data. `cache_supersample` (≥ 1) renders the base denser than the
-candidate grid to sharpen the resample. `cache=off` (default) is the exact
-source-rendering path.
+`cache=fronto` (**the default**, with `cache_supersample=2`) selects the
+fronto-parallel patch cache (`specs/core/fronto-parallel-patch-cache.md`):
+instead of re-rendering every candidate normal from the source images, it renders
+one supersampled fronto-parallel base per view up front and affine-resamples each
+candidate from it — ~2× faster at Φ-equivalent median accuracy, trading a little
+tail accuracy on flat-`Φ` data. The reported photoconsistency is always
+source-scored in the final pass regardless of the cache. `cache_supersample`
+(≥ 1) renders the base denser than the candidate grid to sharpen the resample.
+`cache=off` is the exact source-rendering path (opt in for the tightest tail).
 
 `quality` is a convenience preset: `coarse` → `cache=fronto,
-cache_supersample=2`; `fine` → `cache=off`. A non-`none` preset **overrides** any
-explicit `cache`/`cache_supersample` so the two never disagree; `quality=none`
-(default) defers to the explicit knobs.
+cache_supersample=2` (the default operating point); `fine` → `cache=off` (exact).
+A non-`none` preset **overrides** any explicit `cache`/`cache_supersample` so the
+two never disagree; `quality=none` (default) defers to the explicit knobs.
 
 **Not surfaced in v1.** The bindings also accept `k_neighbors` (for
 `initial_normals=geometric`), `pixel_reduce` (for `extent=pixel_radius`), and

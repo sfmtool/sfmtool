@@ -1,15 +1,17 @@
 # Fronto-Parallel Patch Cache for Normal Refinement
 
-**Status:** Phase 1 implemented (scalar kernel, parameterized). The cache lives
-in `sfmtool-core/src/patch_normal_refine/fronto_cache.rs`, selected by
+**Status:** Phases 1 and 2 implemented, and **the cache is the default**
+(`CacheMode::FrontoParallel`, `cache_supersample = 2` — the quality-preserving
+operating point; `cache=off` / `quality=fine` opts back into the exact
+source-rendering path). The cache lives in
+`sfmtool-core/src/patch_normal_refine/fronto_cache.rs`, selected by
 `NormalRefineParams { cache: CacheMode, cache_supersample }`, exposed through
 `PatchCloud.refine_normals(cache=…, cache_supersample=…)` and
-`sfm xform --refine-normals cache=…/quality=…`. The Phase 2 AVX2 kernel is not
-yet landed (the production resample is the scalar packed/planar/masked kernel).
-Builds on `specs/core/patch-normal-refinement.md` (the search this accelerates)
-and `specs/core/patch-cloud.md` (`OrientedPatch`, `WarpMap::from_patch`,
-`remap_*`). Prototype exploration and measurements:
-`reports/2026-06-15-patch-cache-status.md`.
+`sfm xform --refine-normals cache=…/quality=…`. The resample is runtime-dispatched
+to an AVX2 kernel (Phase 2) with the scalar path as reference/fallback. Builds on
+`specs/core/patch-normal-refinement.md` (the search this accelerates) and
+`specs/core/patch-cloud.md` (`OrientedPatch`, `WarpMap::from_patch`, `remap_*`).
+Prototype exploration and measurements: `reports/2026-06-15-patch-cache-status.md`.
 
 ## Problem
 
@@ -202,11 +204,22 @@ deterministic-first, tested, and exposed. Land it as two reviewable changes —
 
 ### Phase 2 — AVX2 kernel (pure speed, no behavior change)
 
+> _Status (2026-06-15): done. `resample_support` runtime-dispatches (the
+> `kdforest` `is_x86_feature_detected!` pattern) to `resample_support_avx2`
+> (packed `vpgatherdd` — 4 gathers/tap not 12 — branch-free guarded base, planar
+> stores), with `resample_support_scalar` the reference and the `n % 8` tail.
+> Correctness test `resample_avx2_matches_scalar` (incl. an off-base-edge map);
+> the kernel is **3.5×** the scalar reference at the microbench
+> (`resample_bench`, `--ignored`). End-to-end the cache is ~2.3–2.5× off vs on at
+> unchanged accuracy (Φ and normals identical to Phase 1 within rounding); the
+> kernel win is gather/Amdahl-capped by the un-cacheable work and the
+> per-candidate affine inverse, as the report predicted._
+
 1. Add the runtime-dispatched AVX2 masked affine kernel (packed/planar,
    branch-free with the guarded base) behind the same path, with the **scalar
    kernel as the reference**.
 2. Correctness test: `avx2 ≈ scalar` within an eps over a fixture's candidates;
-   keep the `bench_resample` example as the microbenchmark.
+   an on-demand `resample_bench` (`#[ignore]`) is the microbenchmark.
 3. Because the scalar path already fixed the numbers, this merge cannot regress
    quality — it only needs to prove "same output, faster."
 

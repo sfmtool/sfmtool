@@ -38,22 +38,38 @@ const FRONTO_GUARD: u32 = 2;
 const CHANNELS: usize = 3;
 
 /// One fronto-parallel base patch for a view: the supersampled RGB patch packed
-/// as `u32`/pixel and replicate-padded by [`FRONTO_GUARD`], plus the **affine**
-/// grid→undistorted-normalized map that produced it (fit on the *unpadded*
-/// `bw`×`bw` grid).
+/// as `u32`/pixel and replicate-padded by [`FRONTO_GUARD`], plus the **inverse**
+/// of the affine grid→undistorted-normalized map that produced it (fit on the
+/// *unpadded* `bw`×`bw` grid).
 struct FrontoBase {
     /// Padded buffer, `bw_pad × bw_pad`.
     patch: Vec<u32>,
     /// Padded width `bw + 2·FRONTO_GUARD` (the buffer's row stride).
     bw_pad: u32,
-    /// Affine grid→undistorted-normalized map (homogeneous 3×3, last row 0 0 1).
-    a0: SMatrix<f64, 3, 3>,
+    /// Inverse of the base's affine grid→undistorted-normalized map (homogeneous
+    /// 3×3). Precomputed once per view: it is candidate-independent, so the
+    /// per-candidate composition `a0⁻¹·ap` is a matmul, not an inverse.
+    a0_inv: SMatrix<f64, 3, 3>,
 }
 
 /// Per-view fronto bases, parallel to the caller's `views` slice (`None` where
 /// the patch is back-facing in that view or the base could not be built).
 pub(super) struct FrontoCache {
     bases: Vec<Option<FrontoBase>>,
+}
+
+/// Reusable per-candidate scratch buffers, owned by the caller for the whole
+/// `coarse_to_fine` and threaded through [`eval_phi`]. The flat buffers keep
+/// their capacity across the ~hundreds of candidate evaluations per patch, so
+/// scoring a candidate allocates nothing after warm-up.
+#[derive(Default)]
+pub(super) struct Scratch {
+    /// Flat raw support `[(view*CHANNELS + channel)*n + pixel]`, f32. Each view's
+    /// resample writes straight into its slice — no separate planar buffer and no
+    /// f32→f64 widening.
+    raw: Vec<f32>,
+    /// Flat z-normalized stack handed to `consensus_phi`.
+    xs: Vec<f32>,
 }
 
 /// Undistorted-normalized projection `(x/z, y/z)` of the four patch grid corners
@@ -166,13 +182,19 @@ pub(super) fn prerender(
             let b = img.get_pixel(c, rw, 2) as u32;
             *slot = r | (g << 8) | (b << 16);
         }
-        let fb = corner_norm_pts(&fp, view, rb).map(|pts| FrontoBase {
-            patch: pad_replicate(&packed, rb as usize, FRONTO_GUARD as usize),
-            bw_pad: rb + 2 * FRONTO_GUARD,
-            a0: affine_grid_to_img(&pts, rb),
-        });
+        // Invert the base affine once per view (None → skip this base, as a
+        // degenerate map could not be used per-candidate anyway).
+        let fb = corner_norm_pts(&fp, view, rb)
+            .and_then(|pts| affine_grid_to_img(&pts, rb).try_inverse())
+            .map(|a0_inv| FrontoBase {
+                patch: pad_replicate(&packed, rb as usize, FRONTO_GUARD as usize),
+                bw_pad: rb + 2 * FRONTO_GUARD,
+                a0_inv,
+            });
         bases.push(fb);
     }
+    // A non-invertible base (a degenerate, collinear fronto projection) is `None`
+    // and so does not count here — it could not be resampled from anyway.
     if bases.iter().filter(|b| b.is_some()).count() < params.min_views.max(2) as usize {
         return None;
     }
@@ -185,6 +207,9 @@ pub(super) fn prerender(
 /// each `n = cols.len()`). Bilinear, packed `u32` source; a single branch-free
 /// integer clamp on the pixel coordinate keeps escaped/degenerate candidates
 /// in-bounds (the guard absorbs the sub-pixel overshoot of covered ones).
+///
+/// Runtime-dispatched to an AVX2 kernel (the `kdforest` pattern); the scalar
+/// path is the reference and the `n % 8` AVX2 tail.
 fn resample_support(
     base: &FrontoBase,
     phi: &[f64; 6],
@@ -193,14 +218,45 @@ fn resample_support(
     out: &mut [f32],
 ) {
     let n = cols.len();
+    let p = [
+        phi[0] as f32,
+        phi[1] as f32,
+        phi[2] as f32,
+        phi[3] as f32,
+        phi[4] as f32,
+        phi[5] as f32,
+    ];
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: guarded by the runtime feature check above.
+            unsafe {
+                return resample_support_avx2(base, &p, cols, rows, out);
+            }
+        }
+    }
+    resample_support_scalar(base, &p, cols, rows, 0, n, out);
+}
+
+/// Scalar reference resample of support pixels `[i0, i1)` (also the AVX2 tail).
+fn resample_support_scalar(
+    base: &FrontoBase,
+    phi: &[f32; 6],
+    cols: &[i32],
+    rows: &[i32],
+    i0: usize,
+    i1: usize,
+    out: &mut [f32],
+) {
+    let n = cols.len();
     let bw = base.bw_pad as usize;
     let g = FRONTO_GUARD as f32;
     let hi = (bw - 2) as i32; // x0/y0 ceiling so the +1 neighbour stays in-bounds
-    for i in 0..n {
+    for i in i0..i1 {
         let cf = cols[i] as f32;
         let rf = rows[i] as f32;
-        let bx = (phi[0] as f32) * cf + (phi[1] as f32) * rf + phi[2] as f32 + g;
-        let by = (phi[3] as f32) * cf + (phi[4] as f32) * rf + phi[5] as f32 + g;
+        let bx = phi[0] * cf + phi[1] * rf + phi[2] + g;
+        let by = phi[3] * cf + phi[4] * rf + phi[5] + g;
         let x0 = (bx as i32).clamp(0, hi) as usize;
         let y0 = (by as i32).clamp(0, hi) as usize;
         let fx = bx - x0 as f32;
@@ -215,9 +271,88 @@ fn resample_support(
     }
 }
 
+/// AVX2 resample (8 support pixels per iteration). One packed `vpgatherdd` per
+/// bilinear tap fetches all three channels of 8 pixels (4 gathers, not 12);
+/// channels are unpacked in-register and written planar. The `n % 8` tail falls
+/// back to the scalar reference. Produces the same result as
+/// [`resample_support_scalar`] up to f32 rounding.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn resample_support_avx2(
+    base: &FrontoBase,
+    phi: &[f32; 6],
+    cols: &[i32],
+    rows: &[i32],
+    out: &mut [f32],
+) {
+    use std::arch::x86_64::*;
+    let n = cols.len();
+    let bw = base.bw_pad as usize;
+    let bptr = base.patch.as_ptr() as *const i32;
+    let optr = out.as_mut_ptr();
+    let one = _mm256_set1_ps(1.0);
+    let gv = _mm256_set1_ps(FRONTO_GUARD as f32);
+    let bw_i = _mm256_set1_epi32(bw as i32);
+    let one_i = _mm256_set1_epi32(1);
+    let zero_i = _mm256_setzero_si256();
+    let hi_i = _mm256_set1_epi32((bw - 2) as i32);
+    let mask = _mm256_set1_epi32(0xFF);
+    let h: [__m256; 6] = std::array::from_fn(|i| _mm256_set1_ps(phi[i]));
+    let mut i = 0usize;
+    while i + 8 <= n {
+        let colf = _mm256_cvtepi32_ps(_mm256_loadu_si256(cols.as_ptr().add(i) as *const __m256i));
+        let rowf = _mm256_cvtepi32_ps(_mm256_loadu_si256(rows.as_ptr().add(i) as *const __m256i));
+        // Affine + guard offset; no divide, no per-pixel float clamp.
+        let bx = _mm256_add_ps(
+            _mm256_fmadd_ps(h[0], colf, _mm256_fmadd_ps(h[1], rowf, h[2])),
+            gv,
+        );
+        let by = _mm256_add_ps(
+            _mm256_fmadd_ps(h[3], colf, _mm256_fmadd_ps(h[4], rowf, h[5])),
+            gv,
+        );
+        // One branch-free integer clamp keeps the +1 neighbour in-bounds (and
+        // makes any escaped/degenerate candidate memory-safe: cvtt maps
+        // NaN/overflow to i32::MIN → clamps to 0).
+        let x0i = _mm256_min_epi32(_mm256_max_epi32(_mm256_cvttps_epi32(bx), zero_i), hi_i);
+        let y0i = _mm256_min_epi32(_mm256_max_epi32(_mm256_cvttps_epi32(by), zero_i), hi_i);
+        let fx = _mm256_sub_ps(bx, _mm256_cvtepi32_ps(x0i));
+        let fy = _mm256_sub_ps(by, _mm256_cvtepi32_ps(y0i));
+        let row0 = _mm256_mullo_epi32(y0i, bw_i);
+        let row1 = _mm256_mullo_epi32(_mm256_add_epi32(y0i, one_i), bw_i);
+        let x1i = _mm256_add_epi32(x0i, one_i);
+        let i00 = _mm256_add_epi32(row0, x0i);
+        let i10 = _mm256_add_epi32(row0, x1i);
+        let i01 = _mm256_add_epi32(row1, x0i);
+        let i11 = _mm256_add_epi32(row1, x1i);
+        let g00 = _mm256_i32gather_epi32::<4>(bptr, i00);
+        let g10 = _mm256_i32gather_epi32::<4>(bptr, i10);
+        let g01 = _mm256_i32gather_epi32::<4>(bptr, i01);
+        let g11 = _mm256_i32gather_epi32::<4>(bptr, i11);
+        let omfx = _mm256_sub_ps(one, fx);
+        let omfy = _mm256_sub_ps(one, fy);
+        let ch = |sh: i32| -> __m256 {
+            let unpack = |g: __m256i| {
+                let s = _mm256_srlv_epi32(g, _mm256_set1_epi32(sh));
+                _mm256_cvtepi32_ps(_mm256_and_si256(s, mask))
+            };
+            let top = _mm256_fmadd_ps(unpack(g10), fx, _mm256_mul_ps(unpack(g00), omfx));
+            let bot = _mm256_fmadd_ps(unpack(g11), fx, _mm256_mul_ps(unpack(g01), omfx));
+            _mm256_fmadd_ps(bot, fy, _mm256_mul_ps(top, omfy))
+        };
+        _mm256_storeu_ps(optr.add(i), ch(0));
+        _mm256_storeu_ps(optr.add(n + i), ch(8));
+        _mm256_storeu_ps(optr.add(2 * n + i), ch(16));
+        i += 8;
+    }
+    resample_support_scalar(base, phi, cols, rows, i, n, out);
+}
+
 /// `Φ` for `candidate_n` evaluated by affine-resampling the cached fronto bases
 /// instead of re-rendering from the source images. `cols`/`rows` are the level's
-/// frozen support grid coords (computed once per level by the caller). Mirrors
+/// frozen support grid coords and `sqrt_w`/`total_w` its window weights —
+/// candidate-independent, so the caller computes them once per level. `scratch`
+/// holds reused buffers so a candidate allocates nothing after warm-up. Mirrors
 /// [`super::normalized_stack`] + [`consensus_phi`]; `None` if a candidate map
 /// fails or no channel survives.
 #[allow(clippy::too_many_arguments)]
@@ -230,28 +365,33 @@ pub(super) fn eval_phi(
     resolution: u32,
     cols: &[i32],
     rows: &[i32],
+    sqrt_w: &[f64],
+    total_w: f64,
+    scratch: &mut Scratch,
     params: &NormalRefineParams,
 ) -> Option<f64> {
     super::prof::count(&super::prof::N_EVAL, 1);
-    let cp = repose_patch(base, candidate_n);
-    let n = cols.len();
-    let total_w: f64 = ctx.weights.iter().sum();
     if total_w <= 0.0 {
         return None;
     }
-    let sqrt_w: Vec<f64> = ctx.weights.iter().map(|&w| w.sqrt()).collect();
-    let mut masked = vec![0f32; n * CHANNELS];
+    let cp = repose_patch(base, candidate_n);
+    let n = cols.len();
+    let vn = ctx.kept.len();
+    let stride = CHANNELS * n;
+    scratch.raw.resize(vn * stride, 0.0);
 
-    // raw[view][channel][support-pixel], in cols/rows (= ctx.weights) order.
-    let mut raw: Vec<Vec<Vec<f64>>> = Vec::with_capacity(ctx.kept.len());
-    for &vi in &ctx.kept {
+    // Flat raw `[(view*CHANNELS + channel)*n + pixel]`: each view's resample
+    // writes its `CHANNELS*n` slice in the planar `[R|G|B]` layout directly.
+    for (k, &vi) in ctx.kept.iter().enumerate() {
         let fb = cache.bases[vi].as_ref()?;
         let view = &views[vi];
         let ap =
             corner_norm_pts(&cp, view, resolution).map(|p| affine_grid_to_img(&p, resolution))?;
         // Both operands are affine (last row [0,0,1]), so the composition is too;
-        // the resampler only needs the 2×3 part (candidate-grid → base-grid).
-        let m = fb.a0.try_inverse()? * ap;
+        // the resampler only needs the 2×3 part (candidate-grid → base-grid). The
+        // base inverse is precomputed, so this is a matmul, not a per-candidate
+        // inverse.
+        let m = fb.a0_inv * ap;
         let phi = [
             m[(0, 0)],
             m[(0, 1)],
@@ -260,16 +400,28 @@ pub(super) fn eval_phi(
             m[(1, 1)],
             m[(1, 2)],
         ];
-        resample_support(fb, &phi, cols, rows, &mut masked);
-        let per_channel: Vec<Vec<f64>> = (0..CHANNELS)
-            .map(|c| (0..n).map(|i| masked[c * n + i] as f64).collect())
-            .collect();
-        raw.push(per_channel);
+        resample_support(
+            fb,
+            &phi,
+            cols,
+            rows,
+            &mut scratch.raw[k * stride..(k + 1) * stride],
+        );
     }
 
-    // Same z-normalization as the source-render path, then the shared consensus.
-    let xs = super::znormalize_stack(&raw, &ctx.weights, total_w, &sqrt_w)?;
-    consensus_phi(&xs, params.objective)
+    // Same z-normalization + consensus as the source-render path, on the shared
+    // flat f32 buffers.
+    let kept = super::znormalize_into(
+        &scratch.raw[..vn * stride],
+        vn,
+        CHANNELS,
+        n,
+        &ctx.weights,
+        total_w,
+        sqrt_w,
+        &mut scratch.xs,
+    )?;
+    consensus_phi(&scratch.xs, vn, kept, n, params.objective)
 }
 
 #[cfg(test)]
@@ -322,5 +474,111 @@ mod tests {
         assert_eq!(p[(guard + 1) * w + (guard + 1)], src[rb + 1]); // -> src(1,1)
         assert_eq!(p[0], src[0]); // top-left corner replicates src(0,0)
         assert_eq!(p[w * w - 1], src[rb * rb - 1]); // bottom-right replicates src(2,2)
+    }
+
+    /// A synthetic padded base + scattered support, for the kernel tests/bench.
+    fn synthetic_base(rb: usize) -> FrontoBase {
+        let guard = FRONTO_GUARD as usize;
+        let bw = rb + 2 * guard;
+        let patch: Vec<u32> = (0..bw * bw)
+            .map(|k| {
+                let r = (k * 7) % 256;
+                let g = (k * 13 + 5) % 256;
+                let b = (k * 29 + 11) % 256;
+                (r | (g << 8) | (b << 16)) as u32
+            })
+            .collect();
+        FrontoBase {
+            patch,
+            bw_pad: bw as u32,
+            a0_inv: SMatrix::identity(),
+        }
+    }
+
+    fn synthetic_support(rb: usize) -> (Vec<i32>, Vec<i32>) {
+        // 173 support pixels (not a multiple of 8, so the AVX2 tail is exercised).
+        let mut cols = Vec::new();
+        let mut rows = Vec::new();
+        for k in 0..173 {
+            cols.push((k % rb) as i32);
+            rows.push((k * 3 % rb) as i32);
+        }
+        (cols, rows)
+    }
+
+    #[test]
+    fn resample_avx2_matches_scalar() {
+        let rb = 24usize;
+        let base = synthetic_base(rb);
+        let (cols, rows) = synthetic_support(rb);
+        let n = cols.len();
+        // A few affine maps incl. one that pushes some pixels off the base edge
+        // (exercises the clamp); the dispatcher picks AVX2 where available.
+        for phi in [
+            [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            [1.07, 0.04, 1.5, -0.03, 0.96, -0.8],
+            [1.6, 0.2, 6.0, -0.25, 1.55, -5.0],
+        ] {
+            let p32 = [
+                phi[0] as f32,
+                phi[1] as f32,
+                phi[2] as f32,
+                phi[3] as f32,
+                phi[4] as f32,
+                phi[5] as f32,
+            ];
+            let mut want = vec![0f32; n * 3];
+            resample_support_scalar(&base, &p32, &cols, &rows, 0, n, &mut want);
+            let mut got = vec![0f32; n * 3];
+            resample_support(&base, &phi, &cols, &rows, &mut got);
+            for (a, b) in want.iter().zip(&got) {
+                assert!((a - b).abs() < 5e-3, "{a} vs {b}");
+            }
+        }
+    }
+
+    /// On-demand micro-benchmark: `cargo test -p sfmtool-core resample_bench
+    /// -- --ignored --nocapture`. Times the dispatched (AVX2) kernel vs the
+    /// scalar reference on a 32×32-ish support.
+    #[test]
+    #[ignore]
+    fn resample_bench() {
+        use std::time::Instant;
+        let rb = 64usize;
+        let base = synthetic_base(rb);
+        let mut cols: Vec<i32> = Vec::new();
+        let mut rows: Vec<i32> = Vec::new();
+        for k in 0..812 {
+            cols.push(k % 32);
+            rows.push(k / 32 % 32);
+        }
+        let n = cols.len();
+        let phi = [1.05, 0.03, 2.0, -0.02, 0.98, 1.5];
+        let p32 = [
+            phi[0] as f32,
+            phi[1] as f32,
+            phi[2] as f32,
+            phi[3] as f32,
+            phi[4] as f32,
+            phi[5] as f32,
+        ];
+        let iters = 200_000;
+        let mut out = vec![0f32; n * 3];
+        let t = Instant::now();
+        for _ in 0..iters {
+            resample_support_scalar(&base, &p32, &cols, &rows, 0, n, &mut out);
+            std::hint::black_box(&out);
+        }
+        let scalar = t.elapsed().as_nanos() as f64 / iters as f64;
+        let t = Instant::now();
+        for _ in 0..iters {
+            resample_support(&base, &phi, &cols, &rows, &mut out);
+            std::hint::black_box(&out);
+        }
+        let dispatch = t.elapsed().as_nanos() as f64 / iters as f64;
+        println!(
+            "resample {n} support px: scalar {scalar:.0} ns, dispatch {dispatch:.0} ns ({:.2}x)",
+            scalar / dispatch
+        );
     }
 }

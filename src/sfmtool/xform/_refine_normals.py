@@ -69,8 +69,8 @@ class RefineNormalsTransform:
         sampler: str = "bilinear",
         min_valid_fraction: float = 0.6,
         min_views: int = 3,
-        cache: str = "off",
-        cache_supersample: float = 1.0,
+        cache: str = "fronto",
+        cache_supersample: float = 2.0,
         quality: str = "none",
         # forwarded to PatchCloud.from_reconstruction
         initial_normals: str = "stored",

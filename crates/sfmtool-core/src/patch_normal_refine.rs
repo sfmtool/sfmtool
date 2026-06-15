@@ -86,13 +86,17 @@ pub enum Sampler {
 /// `specs/core/fronto-parallel-patch-cache.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheMode {
-    /// Re-render every candidate from the source pyramid (the exact baseline).
+    /// Re-render every candidate from the source pyramid — the exact path; opt
+    /// in for the tightest tail when wall time doesn't matter.
     Off,
     /// Render one supersampled fronto-parallel base per view up front and
-    /// affine-resample each candidate from it. ~2× faster at Φ-equivalent
-    /// median accuracy; the affine approximation costs a little in the tail on
-    /// flat-`Φ` data. Falls back to `Off` per-patch when the base can't be built
-    /// (e.g. non-RGB imagery).
+    /// affine-resample each candidate from it. **The default** (with
+    /// `cache_supersample = 2`): ~2× faster at Φ-equivalent *median* accuracy;
+    /// the affine approximation costs a little in the tail on flat-`Φ` data. Note
+    /// the returned `photoconsistency` is always source-scored in the final pass,
+    /// and `≥ init_photoconsistency` by construction, regardless of the cache.
+    /// Falls back to `Off` per-patch when the base can't be built (e.g. non-RGB
+    /// imagery).
     FrontoParallel,
 }
 
@@ -137,8 +141,8 @@ impl Default for NormalRefineParams {
             min_valid_fraction: 0.6,
             min_views: 3,
             sampler: Sampler::Bilinear,
-            cache: CacheMode::Off,
-            cache_supersample: 1.0,
+            cache: CacheMode::FrontoParallel,
+            cache_supersample: 2.0,
         }
     }
 }
@@ -388,7 +392,7 @@ fn normalized_stack(
     views: &[ProjectedImage<'_>],
     resolution: u32,
     sampler: Sampler,
-) -> Option<Vec<Vec<Vec<f64>>>> {
+) -> Option<(Vec<f32>, usize)> {
     let n_views = ctx.kept.len();
     let channels = ctx
         .kept
@@ -398,16 +402,15 @@ fn normalized_stack(
     if channels == 0 {
         return None;
     }
-
-    let total_w: f64 = ctx.weights.iter().sum();
-    let sqrt_w: Vec<f64> = ctx.weights.iter().map(|&w| w.sqrt()).collect();
+    let n = ctx.pixels.len();
     let r = resolution as usize;
 
     prof::count(&prof::N_RENDER, n_views as u64);
 
-    // Raw per-view, per-channel masked pixel values.
-    let mut raw: Vec<Vec<Vec<f64>>> = Vec::with_capacity(n_views);
-    for &vi in &ctx.kept {
+    // Raw masked pixel values, flat `[(view*channels + channel)*n + pixel]` in
+    // `ctx.pixels` order — the same layout the cache fills and the consensus reads.
+    let mut raw = vec![0f32; n_views * channels * n];
+    for (vk, &vi) in ctx.kept.iter().enumerate() {
         let view = &views[vi];
         let mut map = prof::WARP
             .time(|| WarpMap::from_patch(patch, view.camera, view.cam_from_world, resolution));
@@ -432,88 +435,101 @@ fn normalized_stack(
             }
             Sampler::Bilinear => prof::REMAP.time(|| remap_bilinear(view.pyramid.level(0), &map)),
         };
-        let per_channel = prof::ZNORM.time(|| {
-            (0..channels)
-                .map(|ch| {
-                    ctx.pixels
-                        .iter()
-                        .map(|&p| img.get_pixel((p % r) as u32, (p / r) as u32, ch as u32) as f64)
-                        .collect::<Vec<f64>>()
-                })
-                .collect::<Vec<_>>()
+        prof::ZNORM.time(|| {
+            for c in 0..channels {
+                let base = (vk * channels + c) * n;
+                for (ki, &p) in ctx.pixels.iter().enumerate() {
+                    raw[base + ki] = img.get_pixel((p % r) as u32, (p / r) as u32, c as u32) as f32;
+                }
+            }
         });
-        raw.push(per_channel);
     }
 
-    prof::ZNORM.time(|| znormalize_stack(&raw, &ctx.weights, total_w, &sqrt_w))
+    Some((raw, channels))
 }
 
-/// z-normalize `raw[view][channel][pixel]` over the windowed support: subtract
-/// the weighted mean, scale to unit windowed-norm, and fold `√w` in (so plain
-/// dot products realize the windowed inner product). A channel that is flat
-/// (windowed norm² < [`FLAT_NORM_SQ_EPS`]) in *any* view is dropped for *every*
-/// view, keeping all inner products in one space; `None` when no channel
-/// survives. Shared by the source-render path ([`normalized_stack`]) and the
-/// fronto cache ([`fronto_cache::eval_phi`]) so the two cannot drift.
-fn znormalize_stack(
-    raw: &[Vec<Vec<f64>>],
+/// z-normalize the flat raw stack `raw[(view*channels + channel)*n + pixel]`
+/// (f32) over the windowed support into `out` (flat, channels compacted to the
+/// kept ones), reusing `out`'s capacity. Subtract the weighted mean, scale to
+/// unit windowed-norm, and fold `√w` in (so plain dot products realize the
+/// windowed inner product). A channel flat (windowed norm² < [`FLAT_NORM_SQ_EPS`])
+/// in *any* view is dropped for *every* view. Reductions accumulate in f64; the
+/// stack is stored f32 to halve the memory traffic the consensus re-reads.
+/// Returns the kept-channel count, or `None` when none survive. Shared by the
+/// source-render path ([`normalized_stack`]) and the fronto cache
+/// ([`fronto_cache::eval_phi`]) so the two cannot drift.
+#[allow(clippy::too_many_arguments)]
+fn znormalize_into(
+    raw: &[f32],
+    views: usize,
+    channels: usize,
+    n: usize,
     weights: &[f64],
     total_w: f64,
     sqrt_w: &[f64],
-) -> Option<Vec<Vec<Vec<f64>>>> {
-    let channels = raw.first().map_or(0, Vec::len);
-    let mut keep_channel = vec![true; channels];
-    let mut stats = vec![vec![(0.0f64, 0.0f64); channels]; raw.len()];
-    for (i, per_channel) in raw.iter().enumerate() {
-        for (c, vals) in per_channel.iter().enumerate() {
-            let mean: f64 = vals.iter().zip(weights).map(|(&f, &w)| w * f).sum::<f64>() / total_w;
-            let norm_sq: f64 = vals
+    out: &mut Vec<f32>,
+) -> Option<usize> {
+    let mut keep = vec![true; channels];
+    let mut stats = vec![(0.0f64, 0.0f64); views * channels];
+    for v in 0..views {
+        for c in 0..channels {
+            let col = &raw[(v * channels + c) * n..][..n];
+            let mean = col
                 .iter()
                 .zip(weights)
-                .map(|(&f, &w)| w * (f - mean) * (f - mean))
-                .sum();
+                .map(|(&f, &w)| w * f as f64)
+                .sum::<f64>()
+                / total_w;
+            let norm_sq = col
+                .iter()
+                .zip(weights)
+                .map(|(&f, &w)| {
+                    let d = f as f64 - mean;
+                    w * d * d
+                })
+                .sum::<f64>();
             if norm_sq < FLAT_NORM_SQ_EPS {
-                keep_channel[c] = false;
+                keep[c] = false;
             }
-            stats[i][c] = (mean, norm_sq);
+            stats[v * channels + c] = (mean, norm_sq);
         }
     }
-    if !keep_channel.iter().any(|&k| k) {
+    let kept = keep.iter().filter(|&&k| k).count();
+    if kept == 0 {
+        out.clear();
         return None;
     }
-    Some(
-        raw.iter()
-            .enumerate()
-            .map(|(i, per_channel)| {
-                per_channel
-                    .iter()
-                    .enumerate()
-                    .filter(|(c, _)| keep_channel[*c])
-                    .map(|(c, vals)| {
-                        let (mean, norm_sq) = stats[i][c];
-                        let inv_norm = 1.0 / norm_sq.sqrt();
-                        vals.iter()
-                            .zip(sqrt_w)
-                            .map(|(&f, &sw)| sw * (f - mean) * inv_norm)
-                            .collect()
-                    })
-                    .collect()
-            })
-            .collect(),
-    )
+    out.resize(views * kept * n, 0.0);
+    for v in 0..views {
+        let mut kc = 0;
+        for c in 0..channels {
+            if !keep[c] {
+                continue;
+            }
+            let (mean, norm_sq) = stats[v * channels + c];
+            let inv_norm = 1.0 / norm_sq.sqrt();
+            let src = &raw[(v * channels + c) * n..][..n];
+            let base = (v * kept + kc) * n;
+            for k in 0..n {
+                out[base + k] = (sqrt_w[k] * (src[k] as f64 - mean) * inv_norm) as f32;
+            }
+            kc += 1;
+        }
+    }
+    Some(kept)
 }
 
 /// Unweighted consensus over one channel: `ρ̄ = (V‖x̄‖² − 1)/(V − 1)` with
 /// `x̄ = (1/V) Σ xᵢ` — the closed form of the all-pairs mean ZNCC.
-fn mean_pairwise_channel(xs: &[Vec<Vec<f64>>], c: usize) -> f64 {
-    let v = xs.len();
-    let p = xs[0][c].len();
+fn mean_pairwise_channel(xs: &[f32], views: usize, channels: usize, n: usize, c: usize) -> f64 {
     let mut norm_sq = 0.0;
-    for k in 0..p {
-        let s: f64 = xs.iter().map(|x| x[c][k]).sum();
-        norm_sq += (s / v as f64) * (s / v as f64);
+    for k in 0..n {
+        let s: f64 = (0..views)
+            .map(|v| xs[(v * channels + c) * n + k] as f64)
+            .sum();
+        norm_sq += (s / views as f64) * (s / views as f64);
     }
-    (v as f64 * norm_sq - 1.0) / (v as f64 - 1.0)
+    (views as f64 * norm_sq - 1.0) / (views as f64 - 1.0)
 }
 
 fn median(values: &mut [f64]) -> f64 {
@@ -532,34 +548,31 @@ fn median(values: &mut [f64]) -> f64 {
 /// `‖xᵢ − x̄_w‖` (stacked over channels), with a scale from the residual MAD
 /// (floored against the median so a clean, outlier-free stack keeps
 /// near-uniform weights), re-formed `iters` times.
-fn irls_view_weights(xs: &[Vec<Vec<f64>>], iters: u32) -> Vec<f64> {
-    let v = xs.len();
-    let channels = xs[0].len();
-    let mut w = vec![1.0 / v as f64; v];
+fn irls_view_weights(xs: &[f32], views: usize, channels: usize, n: usize, iters: u32) -> Vec<f64> {
+    let mut w = vec![1.0 / views as f64; views];
+    let mut xbar = vec![0.0f64; channels * n];
+    let mut resid = vec![0.0f64; views];
 
     for _ in 0..iters {
         // Weighted consensus per channel.
-        let xbar: Vec<Vec<f64>> = (0..channels)
-            .map(|c| {
-                let p = xs[0][c].len();
-                (0..p)
-                    .map(|k| xs.iter().zip(&w).map(|(x, &wi)| wi * x[c][k]).sum())
-                    .collect()
-            })
-            .collect();
+        for c in 0..channels {
+            for k in 0..n {
+                xbar[c * n + k] = (0..views)
+                    .map(|v| w[v] * xs[(v * channels + c) * n + k] as f64)
+                    .sum();
+            }
+        }
         // Per-view residual to the consensus.
-        let resid: Vec<f64> = xs
-            .iter()
-            .map(|x| {
-                let mut r2 = 0.0;
-                for c in 0..channels {
-                    for (a, b) in x[c].iter().zip(&xbar[c]) {
-                        r2 += (a - b) * (a - b);
-                    }
+        for v in 0..views {
+            let mut r2 = 0.0;
+            for c in 0..channels {
+                for k in 0..n {
+                    let d = xs[(v * channels + c) * n + k] as f64 - xbar[c * n + k];
+                    r2 += d * d;
                 }
-                r2.sqrt()
-            })
-            .collect();
+            }
+            resid[v] = r2.sqrt();
+        }
 
         let med = median(&mut resid.clone());
         let mad = median(&mut resid.iter().map(|r| (r - med).abs()).collect::<Vec<_>>());
@@ -590,19 +603,25 @@ fn irls_view_weights(xs: &[Vec<Vec<f64>>], iters: u32) -> Vec<f64> {
 /// objective. `None` when fewer than 2 views, or when the robust effective
 /// view count `1/Σwᵢ²` drops below [`MIN_EFFECTIVE_VIEWS`] (weights collapsed
 /// onto essentially one view).
-fn consensus_phi(xs: &[Vec<Vec<f64>>], objective: Objective) -> Option<f64> {
-    let v = xs.len();
-    if v < 2 {
+fn consensus_phi(
+    xs: &[f32],
+    views: usize,
+    channels: usize,
+    n: usize,
+    objective: Objective,
+) -> Option<f64> {
+    if views < 2 {
         return None;
     }
-    let channels = xs[0].len();
     match objective {
         Objective::MeanPairwise => {
-            let sum: f64 = (0..channels).map(|c| mean_pairwise_channel(xs, c)).sum();
+            let sum: f64 = (0..channels)
+                .map(|c| mean_pairwise_channel(xs, views, channels, n, c))
+                .sum();
             Some(sum / channels as f64)
         }
         Objective::RobustWeighted { iters } => {
-            let w = irls_view_weights(xs, iters);
+            let w = irls_view_weights(xs, views, channels, n, iters);
             let sum_w2: f64 = w.iter().map(|&x| x * x).sum();
             // Degeneracy gate only (the view *count* is gated by `min_views` per
             // level): as weight concentrates on one view, Σwᵢ² → 1 and ρ̄_w → 0/0.
@@ -611,10 +630,11 @@ fn consensus_phi(xs: &[Vec<Vec<f64>>], objective: Objective) -> Option<f64> {
             }
             let mut sum = 0.0;
             for c in 0..channels {
-                let p = xs[0][c].len();
                 let mut norm_sq = 0.0;
-                for k in 0..p {
-                    let s: f64 = xs.iter().zip(&w).map(|(x, &wi)| wi * x[c][k]).sum();
+                for k in 0..n {
+                    let s: f64 = (0..views)
+                        .map(|v| w[v] * xs[(v * channels + c) * n + k] as f64)
+                        .sum();
                     norm_sq += s * s;
                 }
                 sum += (norm_sq - sum_w2) / (1.0 - sum_w2);
@@ -635,8 +655,27 @@ fn eval_phi(
 ) -> Option<f64> {
     prof::count(&prof::N_EVAL, 1);
     let patch = repose_patch(base, n);
-    let xs = normalized_stack(&patch, ctx, views, resolution, params.sampler)?;
-    prof::CONSENSUS.time(|| consensus_phi(&xs, params.objective))
+    let (raw, channels) = normalized_stack(&patch, ctx, views, resolution, params.sampler)?;
+    let n = ctx.pixels.len();
+    let total_w: f64 = ctx.weights.iter().sum();
+    if total_w <= 0.0 {
+        return None;
+    }
+    let sqrt_w: Vec<f64> = ctx.weights.iter().map(|&w| w.sqrt()).collect();
+    let mut xs = Vec::new();
+    let kept = prof::ZNORM.time(|| {
+        znormalize_into(
+            &raw,
+            ctx.kept.len(),
+            channels,
+            n,
+            &ctx.weights,
+            total_w,
+            &sqrt_w,
+            &mut xs,
+        )
+    })?;
+    prof::CONSENSUS.time(|| consensus_phi(&xs, ctx.kept.len(), kept, n, params.objective))
 }
 
 // ---------------------------------------------------------------------------
@@ -678,6 +717,8 @@ fn coarse_to_fine(
         ),
         CacheMode::Off => None,
     };
+    // Reused across every candidate of every level (cache path only).
+    let mut scratch = fronto_cache::Scratch::default();
 
     for _ in 0..params.refine_levels.max(1) {
         let Some(ctx) = build_level_context(base, &center, views, resolution, w_full, params)
@@ -685,8 +726,8 @@ fn coarse_to_fine(
             break;
         };
         let (u, v) = tangent_basis(&center);
-        // The cache resamples the level's frozen support; its grid coords are
-        // level-dependent, so compute them once per level.
+        // The cache resamples the level's frozen support; its grid coords and
+        // window weights are candidate-independent, so compute them once per level.
         let (cols, rows): (Vec<i32>, Vec<i32>) = if cache.is_some() {
             ctx.pixels
                 .iter()
@@ -700,10 +741,29 @@ fn coarse_to_fine(
         } else {
             (Vec::new(), Vec::new())
         };
-        let eval = |n: &Vector3<f64>| -> Option<f64> {
+        let (sqrt_w, total_w): (Vec<f64>, f64) = if cache.is_some() {
+            (
+                ctx.weights.iter().map(|&w| w.sqrt()).collect(),
+                ctx.weights.iter().sum(),
+            )
+        } else {
+            (Vec::new(), 0.0)
+        };
+        let mut eval = |n: &Vector3<f64>| -> Option<f64> {
             match &cache {
                 Some(c) => fronto_cache::eval_phi(
-                    base, n, c, &ctx, views, resolution, &cols, &rows, params,
+                    base,
+                    n,
+                    c,
+                    &ctx,
+                    views,
+                    resolution,
+                    &cols,
+                    &rows,
+                    &sqrt_w,
+                    total_w,
+                    &mut scratch,
+                    params,
                 ),
                 None => eval_phi(base, n, &ctx, views, resolution, params),
             }
