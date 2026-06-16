@@ -131,6 +131,8 @@ fn test_params(objective: Objective) -> NormalRefineParams {
         min_valid_fraction: 0.5,
         min_views: 2,
         sampler: Sampler::Bilinear,
+        // The refine tests exercise the confidence stencil (off in production).
+        compute_confidence: true,
         ..NormalRefineParams::default()
     }
 }
@@ -337,6 +339,25 @@ fn tangent_basis_is_deterministic_and_orthonormal() {
 // ---------------------------------------------------------------------------
 // Synthetic refinement
 // ---------------------------------------------------------------------------
+
+#[test]
+fn confidence_is_nan_when_not_requested() {
+    // A patch that refines fine still reports NaN confidence when the stencil is
+    // not requested (off by default in production); the score is unaffected.
+    let scene = Scene::new(&[[0.8, 0.0, 0.0], [-0.8, 0.0, 0.0], [0.0, 0.7, 0.0]]);
+    let views = scene.views();
+    let init_n = exp_map_normal(&true_normal(), [10.0f64.to_radians(), 0.0]);
+    let patch = plane_patch(init_n);
+    let params = NormalRefineParams {
+        compute_confidence: false,
+        ..test_params(Objective::MeanPairwise)
+    };
+
+    let result = refine_patch_normal(&patch, &views, 15, &params);
+
+    assert!(result.photoconsistency.is_finite());
+    assert!(result.confidence.is_nan());
+}
 
 #[test]
 fn recovers_fronto_parallel_normal_from_tilted_init() {

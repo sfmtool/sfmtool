@@ -97,6 +97,7 @@ so the CLI re-specifies nothing and the two layers cannot drift.
 | `cache`             | `fronto`        | `refine_normals` candidate scoring (`off`/`fronto`; see below) |
 | `cache_supersample` | `2.0`           | `refine_normals` (fronto base density, ≥ 1) |
 | `quality`           | `none`          | preset for `cache`/`cache_supersample` (`none`/`coarse`/`fine`) |
+| `confidence`        | `false`         | `refine_normals` (compute + report the Φ-peakedness; see below) |
 | `initial_normals`   | `stored`        | `from_reconstruction` normal policy (below) |
 | `extent`            | `feature_size`  | `from_reconstruction` extent policy |
 | `extent_value`      | `5.0`           | `from_reconstruction`             |
@@ -121,6 +122,15 @@ source-scored in the final pass regardless of the cache. `cache_supersample`
 cache_supersample=2` (the default operating point); `fine` → `cache=off` (exact).
 A non-`none` preset **overrides** any explicit `cache`/`cache_supersample` so the
 two never disagree; `quality=none` (default) defers to the explicit knobs.
+
+### Confidence (`confidence`)
+
+`confidence=true` computes the per-patch Φ-peakedness (a curvature stencil around
+the optimum) and includes a `… N low-confidence` count in the summary. It is
+**off by default**: the stencil is an extra un-cached source-render pass per patch
+(~1/6 of the cached runtime) and is purely informational — refinement does not
+persist it. When off, the summary omits the low-confidence count and the
+`refine_normals` `confidence` array is `NaN`.
 
 **Not surfaced in v1.** The bindings also accept `k_neighbors` (for
 `initial_normals=geometric`), `pixel_reduce` (for `extent=pixel_radius`), and

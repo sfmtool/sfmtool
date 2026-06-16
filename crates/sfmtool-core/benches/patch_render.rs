@@ -302,6 +302,8 @@ fn bench_refine(crit: &mut Criterion) {
     ] {
         let params = NormalRefineParams {
             sampler,
+            // Benchmark the full per-patch cost (confidence is off by default).
+            compute_confidence: true,
             ..NormalRefineParams::default()
         };
         group.bench_function(BenchmarkId::new(name, 16), |b| {
