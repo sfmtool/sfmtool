@@ -385,43 +385,49 @@ pub(super) fn eval_phi(
     for (k, &vi) in ctx.kept.iter().enumerate() {
         let fb = cache.bases[vi].as_ref()?;
         let view = &views[vi];
-        let ap =
-            corner_norm_pts(&cp, view, resolution).map(|p| affine_grid_to_img(&p, resolution))?;
         // Both operands are affine (last row [0,0,1]), so the composition is too;
         // the resampler only needs the 2×3 part (candidate-grid → base-grid). The
         // base inverse is precomputed, so this is a matmul, not a per-candidate
         // inverse.
-        let m = fb.a0_inv * ap;
-        let phi = [
-            m[(0, 0)],
-            m[(0, 1)],
-            m[(0, 2)],
-            m[(1, 0)],
-            m[(1, 1)],
-            m[(1, 2)],
-        ];
-        resample_support(
-            fb,
-            &phi,
-            cols,
-            rows,
-            &mut scratch.raw[k * stride..(k + 1) * stride],
-        );
+        let phi = super::prof::CACHE_MAP.time(|| {
+            let ap = corner_norm_pts(&cp, view, resolution)
+                .map(|p| affine_grid_to_img(&p, resolution))?;
+            let m = fb.a0_inv * ap;
+            Some([
+                m[(0, 0)],
+                m[(0, 1)],
+                m[(0, 2)],
+                m[(1, 0)],
+                m[(1, 1)],
+                m[(1, 2)],
+            ])
+        })?;
+        super::prof::CACHE_RESAMPLE.time(|| {
+            resample_support(
+                fb,
+                &phi,
+                cols,
+                rows,
+                &mut scratch.raw[k * stride..(k + 1) * stride],
+            )
+        });
     }
 
     // Same z-normalization + consensus as the source-render path, on the shared
     // flat f32 buffers.
-    let kept = super::znormalize_into(
-        &scratch.raw[..vn * stride],
-        vn,
-        CHANNELS,
-        n,
-        &ctx.weights,
-        total_w,
-        sqrt_w,
-        &mut scratch.xs,
-    )?;
-    consensus_phi(&scratch.xs, vn, kept, n, params.objective)
+    let kept = super::prof::CACHE_ZNORM.time(|| {
+        super::znormalize_into(
+            &scratch.raw[..vn * stride],
+            vn,
+            CHANNELS,
+            n,
+            &ctx.weights,
+            total_w,
+            sqrt_w,
+            &mut scratch.xs,
+        )
+    })?;
+    super::prof::CACHE_CONSENSUS.time(|| consensus_phi(&scratch.xs, vn, kept, n, params.objective))
 }
 
 #[cfg(test)]

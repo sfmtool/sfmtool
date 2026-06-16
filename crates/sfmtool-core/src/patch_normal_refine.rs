@@ -714,14 +714,16 @@ fn coarse_to_fine(
     // across all levels. `None` (cache off, or the base could not be built for
     // this patch) means score every candidate from the source images instead.
     let cache = match params.cache {
-        CacheMode::FrontoParallel => fronto_cache::prerender(
-            base,
-            &center,
-            views,
-            resolution,
-            params.cache_supersample,
-            params,
-        ),
+        CacheMode::FrontoParallel => prof::PRERENDER.time(|| {
+            fronto_cache::prerender(
+                base,
+                &center,
+                views,
+                resolution,
+                params.cache_supersample,
+                params,
+            )
+        }),
         CacheMode::Off => None,
     };
     // Reused across every candidate of every level (cache path only).

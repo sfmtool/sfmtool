@@ -73,12 +73,23 @@ pub static ZNORM: Phase = Phase::new("gather_znorm");
 pub static CONSENSUS: Phase = Phase::new("consensus_phi");
 /// `view_valid_mask` (support warps + masks; level/final context builds).
 pub static MASK: Phase = Phase::new("valid_mask");
+// Fronto-cache leaf phases (the per-candidate cached scoring path).
+/// Candidate→base affine map: corner projection + 3-corner fit + compose.
+pub static CACHE_MAP: Phase = Phase::new("cache_map");
+/// `resample_support` (the AVX2 gather kernel).
+pub static CACHE_RESAMPLE: Phase = Phase::new("cache_resample");
+/// `znormalize_into` on the cached stack.
+pub static CACHE_ZNORM: Phase = Phase::new("cache_znorm");
+/// `consensus_phi` on the cached stack.
+pub static CACHE_CONSENSUS: Phase = Phase::new("cache_consensus");
 
 // Enclosing phases (overlap the leaves; reported as shares of TOTAL).
 /// Whole `refine_patch_normal` calls.
 pub static TOTAL: Phase = Phase::new("refine_total");
 /// Whole `grid_confidence` calls (9-point stencil; nests the leaves).
 pub static CONFIDENCE: Phase = Phase::new("confidence");
+/// Whole `fronto_cache::prerender` calls (per patch; nests WARP/REMAP).
+pub static PRERENDER: Phase = Phase::new("cache_prerender");
 
 // Event counters (no time attached).
 /// `Φ` evaluations (each renders every kept view).
@@ -96,7 +107,7 @@ pub fn count(c: &AtomicU64, n: u64) {
     }
 }
 
-const PHASES: [&Phase; 8] = [
+const PHASES: [&Phase; 13] = [
     &TOTAL,
     &WARP,
     &SVD,
@@ -104,7 +115,12 @@ const PHASES: [&Phase; 8] = [
     &ZNORM,
     &CONSENSUS,
     &MASK,
+    &CACHE_MAP,
+    &CACHE_RESAMPLE,
+    &CACHE_ZNORM,
+    &CACHE_CONSENSUS,
     &CONFIDENCE,
+    &PRERENDER,
 ];
 
 /// Zero all counters (start of a profiled batch).
@@ -140,10 +156,21 @@ pub fn report(patches: usize, wall_secs: f64) {
             },
         );
     }
-    let leaves: u64 = [&WARP, &SVD, &REMAP, &ZNORM, &CONSENSUS, &MASK]
-        .iter()
-        .map(|p| p.ns.load(Ordering::Relaxed))
-        .sum();
+    let leaves: u64 = [
+        &WARP,
+        &SVD,
+        &REMAP,
+        &ZNORM,
+        &CONSENSUS,
+        &MASK,
+        &CACHE_MAP,
+        &CACHE_RESAMPLE,
+        &CACHE_ZNORM,
+        &CACHE_CONSENSUS,
+    ]
+    .iter()
+    .map(|p| p.ns.load(Ordering::Relaxed))
+    .sum();
     eprintln!(
         "[sfmtool-profile]   {:<16} {:>9.3}s  {:>5.1}%  (refine_total minus leaf phases)",
         "other/overhead",
