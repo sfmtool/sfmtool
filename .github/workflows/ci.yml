@@ -79,7 +79,7 @@ jobs:
   # codecov. Coverage line numbers are platform-independent, so we only pay
   # the slower instrumented build once, on Linux. Windows still runs the same
   # tests (see test-windows) without instrumentation.
-  test:
+  test-linux:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -175,7 +175,7 @@ jobs:
   # Single stable check to mark as required in branch protection. Always runs
   # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.
   ci-ok:
-    needs: [changes, lint, test, test-windows, ui-test]
+    needs: [changes, lint, test-linux, test-windows, ui-test]
     if: always()
     runs-on: ubuntu-latest
     steps:
