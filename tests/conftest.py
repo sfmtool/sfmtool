@@ -105,6 +105,52 @@ def _largest_recon(output_sfm_file: Path):
     return best_path, best_count
 
 
+def _drop_camera_coincident_points(sfmr_path: Path) -> None:
+    """Drop finite points that triangulated onto their observing camera centres.
+
+    A near-zero-baseline two-view track can collapse onto the cameras, leaving a
+    point whose ray distance ``d = ‖X − C‖`` is ~0 in *every* view. Such a point
+    is a triangulation artifact with no surface element:
+    ``PatchExtent::FeatureSize`` sizes a patch as ``σ·d/f`` and skips
+    observations with ``d ≤ 1e-6``, so a point degenerate in all views cannot be
+    sized and ``PatchCloud.from_reconstruction`` errors. GLOMAP emits such a
+    point only occasionally, which flakes the fisheye patch-cloud tests; dropping
+    it here keeps every fixture reconstruction clean. A no-op (no resave) for the
+    usual case where no point is camera-coincident.
+    """
+    from sfmtool._sfmtool import SfmrReconstruction
+
+    recon = SfmrReconstruction.load(sfmr_path)
+    pos = np.asarray(recon.positions)
+    if len(pos) == 0:
+        return
+    quat = np.asarray(recon.quaternions_wxyz)
+    trans = np.asarray(recon.translations)
+    tii = np.asarray(recon.track_image_indexes)
+    tpid = np.asarray(recon.track_point_ids)
+    at_inf = np.asarray(recon.point_is_at_infinity)
+
+    # Per-observation ray distance d = ‖R(q)·X + t‖ in the camera frame, using
+    # the optimized unit-quaternion rotation v' = v + 2w(u×v) + 2u×(u×v).
+    x = pos[tpid]
+    q = quat[tii]
+    w = q[:, :1]
+    u = q[:, 1:]
+    t = 2.0 * np.cross(u, x)
+    cam_pt = x + w * t + np.cross(u, t) + trans[tii]
+    d = np.linalg.norm(cam_pt, axis=1)
+
+    # Keep a point if any observation is non-degenerate (matches the FeatureSize
+    # d > 1e-6 gate). Points at infinity have no ray distance and are always kept.
+    max_d = np.full(len(pos), -np.inf)
+    np.maximum.at(max_d, tpid, d)
+    keep = at_inf | (max_d > 1e-6)
+    if keep.all():
+        return
+    filtered = recon.filter_points_by_mask(keep)
+    filtered.save(sfmr_path, "drop-camera-coincident-points")
+
+
 def build_cluster_reconstruction(
     workspace_dir: Path,
     image_paths: list[Path],
@@ -188,6 +234,9 @@ def build_cluster_reconstruction(
         stale.unlink()
     shutil.copy(best_path, output_sfm_file)
     best_path.unlink()
+    # Strip the occasional degenerate point that collapsed onto its cameras, so
+    # FeatureSize patch sizing (and any other ray-distance consumer) is robust.
+    _drop_camera_coincident_points(output_sfm_file)
     return output_sfm_file
 
 
