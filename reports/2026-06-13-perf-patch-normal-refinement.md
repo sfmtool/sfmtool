@@ -255,6 +255,37 @@ datasets (4 cores), multiplicative where independent.
    ranking alone is not trustworthy for the *final* answer, which is exactly
    why only the basin choice may be delegated to it). Medium change; verify
    with the agreement metric (target: within scatter of the unscheduled run).
+
+   > _Status (2026-06-16): Partially explored — `search_robust_iters`
+   > (`NormalRefineParams`, default `None`) lets the coarse-to-fine **search**
+   > rank candidates with a cheaper consensus objective than the final pass,
+   > which always re-scores survivors at `objective` (so the reported `Φ` stays
+   > honest). This is the *objective* axis of a fidelity schedule (robust→mean),
+   > orthogonal to the proposed *resolution/sampler* axis. Swept on the 56k-point
+   > dino (8000-pt sample, default fronto cache R=24, robust-3 final pass, min of
+   > 3); "dist-to-exact" = median angle to the exact `cache=off`, robust-3 search
+   > reference, segmented by the `compute_confidence` peakedness:_
+   >
+   > | search obj | wall | speedup | meanΦ | well≥0.3 | mid .1–.3 | amb<0.1 | all |
+   > |---|--:|--:|--:|--:|--:|--:|--:|
+   > | none (=robust 3) | 13.83s | 1.00× | 0.7502 | 1.36° | 2.07° | 2.87° | 2.08° |
+   > | robust 2 | 12.04s | 1.15× | 0.7433 | 1.85° | 2.17° | 3.34° | 2.62° |
+   > | robust 1 | 11.07s | 1.25× | 0.7449 | 2.07° | 3.29° | 4.30° | 3.65° |
+   > | 0 (mean-pairwise) | 10.05s | 1.38× | 0.7416 | 3.76° | 5.38° | 6.59° | 5.83° |
+   >
+   > _`SFMTOOL_PROFILE` confirms the mechanism: the `cache_consensus` phase
+   > collapses 19.56 µs/call (36.8% of `refine_total`) → 2.26 µs/call (6.4%) at
+   > `search=0` — mean-pairwise is ~8.6× cheaper than 3-iteration IRLS. But
+   > prerender (24%), znorm (14%), and per-call overhead don't shrink, so Amdahl
+   > caps the wall at 1.38×. **It is not a free lunch:** because the final pass
+   > picks among the seed-winners but does not re-search around them, a cheaper
+   > search lands a less-accurate normal that the honest final pass merely scores
+   > — and the drift hits **well-constrained** points too (`search=0`: +2.4°
+   > median on the well-constrained segment), the same non-benign signature as
+   > lowering the full `robust_iters` (§3). Kept as an opt-in lever (`search=2`
+   > is the gentle setting, 1.15× for ~+0.5° well-constrained); default stays
+   > `None`. The accuracy-preserving version of #3 still needs the proposed
+   > final-pass re-search / top-k carry-over to relocate the winner._
 4. **Cheap anti-aliasing: single-level pyramid sampling** — answer to "what's
    the cheapest way to keep aniso's benefit": since the *normals* are already
    sampler-insensitive, the residual value of `remap_aniso` is unbiased Φ /
