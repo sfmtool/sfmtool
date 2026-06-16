@@ -89,6 +89,7 @@ so the CLI re-specifies nothing and the two layers cannot drift.
 | `resolution`        | `24`            | `refine_normals` (R×R patch grid) |
 | `objective`         | `robust`        | `refine_normals` (`robust`/`mean`)|
 | `robust_iters`      | `3`             | `refine_normals`                  |
+| `search_robust_iters`| `none`         | `refine_normals` (cheaper search-only objective; see below) |
 | `window`            | `gaussian_disk` | `refine_normals`                  |
 | `window_sigma`      | `0.6`           | `refine_normals`                  |
 | `sampler`           | `bilinear`      | `refine_normals` (`bilinear`/`anisotropic`) |
@@ -122,6 +123,21 @@ source-scored in the final pass regardless of the cache. `cache_supersample`
 cache_supersample=2` (the default operating point); `fine` → `cache=off` (exact).
 A non-`none` preset **overrides** any explicit `cache`/`cache_supersample` so the
 two never disagree; `quality=none` (default) defers to the explicit knobs.
+
+### Search-only objective (`search_robust_iters`)
+
+The coarse-to-fine search evaluates the consensus `Φ` for every candidate normal
+(the bulk of the work), but only *ranks* candidates with it — the final pass
+re-scores the surviving winners with the full `objective` and is what the
+reported `photoconsistency` reflects. `search_robust_iters` lets the search use a
+cheaper objective than that final pass: `none` (the default) searches with the
+same `objective`; `0` searches with the unweighted mean-pairwise consensus
+(`objective=mean`, the cheapest); `k ≥ 1` searches with `robust` IRLS at `k`
+iterations. Because the final pass is unchanged, the reported `Φ` stays honest —
+this only trades a little tail accuracy in the *found normal* for a faster search.
+It only helps when `objective=robust`: under `objective=mean` the final pass is
+already the cheapest objective, so the knob has no benefit (and `k ≥ 1` would make
+the search *dearer* than the final pass).
 
 ### Confidence (`confidence`)
 

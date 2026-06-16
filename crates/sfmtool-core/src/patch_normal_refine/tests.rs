@@ -199,11 +199,12 @@ fn consensus_identity_matches_brute_force_pairwise_mean() {
         // The consensus reads an f32 stack, so the closed form matches the f64
         // brute force only to f32 precision.
         let (d, vw, ch, nn) = flatten_stack(&xs);
-        let closed = mean_pairwise_channel(&d, vw, ch, nn, 0);
+        let mut sc = ConsensusScratch::default();
+        let closed = mean_pairwise_channel(&d, vw, ch, nn, 0, &mut sc);
         assert_relative_eq!(closed, brute, epsilon = 1e-5);
 
         // The full objective averages channels; with one channel it matches.
-        let phi = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise).unwrap();
+        let phi = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise, &mut sc).unwrap();
         assert_relative_eq!(phi, brute, epsilon = 1e-5);
     }
 }
@@ -238,8 +239,17 @@ fn robust_consensus_with_uniform_weights_matches_unweighted() {
         .map(|i| vec![consistent_view(&base, 100 + i as u64, 0.12)])
         .collect();
     let (d, vw, ch, nn) = flatten_stack(&xs);
-    let unweighted = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise).unwrap();
-    let robust = consensus_phi(&d, vw, ch, nn, Objective::RobustWeighted { iters: 3 }).unwrap();
+    let mut sc = ConsensusScratch::default();
+    let unweighted = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise, &mut sc).unwrap();
+    let robust = consensus_phi(
+        &d,
+        vw,
+        ch,
+        nn,
+        Objective::RobustWeighted { iters: 3 },
+        &mut sc,
+    )
+    .unwrap();
     // High (not perfect) agreement, and robust tracks unweighted with no outlier.
     assert!(unweighted > 0.8 && unweighted < 1.0, "phi = {unweighted}");
     assert_relative_eq!(robust, unweighted, epsilon = 1e-2);
@@ -259,8 +269,17 @@ fn robust_consensus_beats_unweighted_with_an_outlier() {
         vec![bad],
     ];
     let (d, vw, ch, nn) = flatten_stack(&xs);
-    let unweighted = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise).unwrap();
-    let robust = consensus_phi(&d, vw, ch, nn, Objective::RobustWeighted { iters: 5 }).unwrap();
+    let mut sc = ConsensusScratch::default();
+    let unweighted = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise, &mut sc).unwrap();
+    let robust = consensus_phi(
+        &d,
+        vw,
+        ch,
+        nn,
+        Objective::RobustWeighted { iters: 5 },
+        &mut sc,
+    )
+    .unwrap();
     assert!(
         unweighted.abs() < 1e-6,
         "unweighted should be ~0, got {unweighted}"
@@ -481,6 +500,51 @@ fn robust_objective_downweights_occluded_view() {
     assert!(
         refined_err < angle_between(&init_n, &truth) && refined_err < 5.0f64.to_radians(),
         "robust refinement should still recover the normal: {:.2}°",
+        refined_err.to_degrees()
+    );
+    assert!(result.photoconsistency >= result.init_photoconsistency);
+}
+
+#[test]
+fn search_objective_maps_robust_iters() {
+    // None defers to `objective`; Some(0) is the cheap mean-pairwise; Some(k) is
+    // robust at k iterations. The final / confidence passes always use `objective`.
+    let mut p = NormalRefineParams {
+        objective: Objective::RobustWeighted { iters: 3 },
+        search_robust_iters: None,
+        ..NormalRefineParams::default()
+    };
+    assert_eq!(p.search_objective(), Objective::RobustWeighted { iters: 3 });
+    p.search_robust_iters = Some(0);
+    assert_eq!(p.search_objective(), Objective::MeanPairwise);
+    p.search_robust_iters = Some(2);
+    assert_eq!(p.search_objective(), Objective::RobustWeighted { iters: 2 });
+}
+
+#[test]
+fn cheap_search_objective_still_recovers_normal_with_honest_phi() {
+    // A cheaper search objective (mean-pairwise) than the robust final pass still
+    // finds the normal, and the reported Φ is the robust final-pass score — never
+    // below init — so the search-only knob can't inflate the reported quality.
+    let scene = Scene::new(&[
+        [0.8, 0.0, 0.0],
+        [-0.8, 0.0, 0.0],
+        [0.0, 0.7, 0.0],
+        [0.0, -0.7, 0.0],
+    ]);
+    let views = scene.views();
+    let truth = true_normal();
+    let init_n = exp_map_normal(&truth, [14.0f64.to_radians(), 0.0]);
+    let patch = plane_patch(init_n);
+    let mut params = test_params(Objective::RobustWeighted { iters: 3 });
+    params.search_robust_iters = Some(0);
+
+    let result = refine_patch_normal(&patch, &views, 15, &params);
+
+    let refined_err = angle_between(&result.patch.normal(), &truth);
+    assert!(
+        refined_err < angle_between(&init_n, &truth) && refined_err < 5.0f64.to_radians(),
+        "cheap-search refinement should still recover the normal: {:.2}°",
         refined_err.to_degrees()
     );
     assert!(result.photoconsistency >= result.init_photoconsistency);

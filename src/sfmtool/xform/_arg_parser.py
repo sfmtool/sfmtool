@@ -82,6 +82,14 @@ def _parse_bool(value: str) -> bool:
     raise ValueError(value)
 
 
+def _parse_opt_int(value: str) -> int | None:
+    """Parse an optional integer (``none``/``off`` → ``None``, else ``int``)."""
+    v = value.strip().lower()
+    if v in ("none", "off"):
+        return None
+    return int(value)
+
+
 # Each --refine-normals key maps to a caster for its value; the
 # RefineNormalsTransform constructor owns range/enum validation. Keys mirror the
 # PatchCloud.refine_normals / from_reconstruction binding parameters one-to-one.
@@ -92,6 +100,7 @@ _REFINE_NORMALS_KEYS: dict[str, Callable[[str], object]] = {
     "resolution": int,
     "objective": str,
     "robust_iters": int,
+    "search_robust_iters": _parse_opt_int,
     "window": str,
     "window_sigma": float,
     "sampler": str,

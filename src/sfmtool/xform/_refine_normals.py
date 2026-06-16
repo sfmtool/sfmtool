@@ -64,6 +64,7 @@ class RefineNormalsTransform:
         resolution: int = 24,
         objective: str = "robust",
         robust_iters: int = 3,
+        search_robust_iters: int | None = None,
         window: str = "gaussian_disk",
         window_sigma: float = 0.6,
         sampler: str = "bilinear",
@@ -94,6 +95,10 @@ class RefineNormalsTransform:
             )
         if robust_iters < 1:
             raise ValueError(f"robust_iters must be >= 1, got {robust_iters}")
+        if search_robust_iters is not None and search_robust_iters < 0:
+            raise ValueError(
+                f"search_robust_iters must be >= 0 or None, got {search_robust_iters}"
+            )
         if window not in _WINDOWS:
             raise ValueError(f"window must be one of {_WINDOWS}, got {window!r}")
         if window_sigma <= 0:
@@ -131,6 +136,7 @@ class RefineNormalsTransform:
         self.resolution = resolution
         self.objective = objective
         self.robust_iters = robust_iters
+        self.search_robust_iters = search_robust_iters
         self.window = window
         self.window_sigma = window_sigma
         self.sampler = sampler
@@ -188,6 +194,7 @@ class RefineNormalsTransform:
             refine_levels=self.refine_levels,
             objective=self.objective,
             robust_iters=self.robust_iters,
+            search_robust_iters=self.search_robust_iters,
             window=self.window,
             window_sigma=self.window_sigma,
             min_valid_fraction=self.min_valid_fraction,
