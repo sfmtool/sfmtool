@@ -83,6 +83,17 @@ pub static CACHE_ZNORM: Phase = Phase::new("cache_znorm");
 /// `consensus_phi` on the cached stack.
 pub static CACHE_CONSENSUS: Phase = Phase::new("cache_consensus");
 
+// Consensus sub-phases (nest inside CONSENSUS / CACHE_CONSENSUS for the
+// consensus deep-dive; not partitioned into the leaf total).
+/// IRLS weighted-consensus (xbar) SAXPY accumulation.
+pub static IRLS_XBAR: Phase = Phase::new("irls_xbar");
+/// IRLS per-view residual `‖xᵢ − x̄_w‖` computation.
+pub static IRLS_RESID: Phase = Phase::new("irls_resid");
+/// IRLS median/MAD/Tukey reweight (O(views)).
+pub static IRLS_REWEIGHT: Phase = Phase::new("irls_reweight");
+/// Final closed-form weighted consensus (post-IRLS).
+pub static CONS_FINAL: Phase = Phase::new("cons_final");
+
 // Enclosing phases (overlap the leaves; reported as shares of TOTAL).
 /// Whole `refine_patch_normal` calls.
 pub static TOTAL: Phase = Phase::new("refine_total");
@@ -107,7 +118,7 @@ pub fn count(c: &AtomicU64, n: u64) {
     }
 }
 
-const PHASES: [&Phase; 13] = [
+const PHASES: [&Phase; 17] = [
     &TOTAL,
     &WARP,
     &SVD,
@@ -119,6 +130,10 @@ const PHASES: [&Phase; 13] = [
     &CACHE_RESAMPLE,
     &CACHE_ZNORM,
     &CACHE_CONSENSUS,
+    &IRLS_XBAR,
+    &IRLS_RESID,
+    &IRLS_REWEIGHT,
+    &CONS_FINAL,
     &CONFIDENCE,
     &PRERENDER,
 ];

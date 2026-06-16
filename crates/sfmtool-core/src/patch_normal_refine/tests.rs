@@ -175,6 +175,47 @@ fn flatten_stack(xs: &[Vec<Vec<f64>>]) -> (Vec<f32>, usize, usize, usize) {
 }
 
 #[test]
+fn sum_sq_diff_avx2_matches_scalar() {
+    // The dispatched AVX2 residual reduction agrees with the scalar reference
+    // (up to f32 summation order), including a length that exercises the n % 8
+    // tail. Mirrors fronto_cache::resample_avx2_matches_scalar.
+    for len in [0usize, 1, 7, 8, 31, 173, 512] {
+        let row: Vec<f32> = (0..len)
+            .map(|i| ((i * 7 % 53) as f32 - 26.0) * 0.13)
+            .collect();
+        let xbar: Vec<f64> = (0..len)
+            .map(|i| ((i * 11 % 47) as f64 - 23.0) * 0.07)
+            .collect();
+        let want = sum_sq_diff_scalar(&row, &xbar, 0, len);
+        let got = sum_sq_diff(&row, &xbar);
+        assert!(
+            (want - got).abs() <= 1e-3 * (1.0 + want.abs()),
+            "len {len}: scalar {want} vs dispatched {got}"
+        );
+    }
+}
+
+#[test]
+fn axpy_f32_f64_avx2_matches_scalar() {
+    // The dispatched AVX2 weighted-consensus SAXPY agrees with the scalar
+    // reference, including a length that exercises the n % 4 tail.
+    for len in [0usize, 1, 3, 4, 31, 173, 512] {
+        let row: Vec<f32> = (0..len)
+            .map(|i| ((i * 5 % 37) as f32 - 18.0) * 0.11)
+            .collect();
+        let w = 0.137;
+        let init: Vec<f64> = (0..len).map(|i| (i as f64).sin()).collect();
+        let mut want = init.clone();
+        axpy_f32_f64_scalar(&mut want, &row, w, 0, len);
+        let mut got = init.clone();
+        axpy_f32_f64(&mut got, &row, w);
+        for (a, b) in want.iter().zip(&got) {
+            assert!((a - b).abs() <= 1e-12 * (1.0 + a.abs()), "{a} vs {b}");
+        }
+    }
+}
+
+#[test]
 fn consensus_identity_matches_brute_force_pairwise_mean() {
     for v_count in [2usize, 3, 5, 8] {
         let xs: Vec<Vec<Vec<f64>>> = (0..v_count)
