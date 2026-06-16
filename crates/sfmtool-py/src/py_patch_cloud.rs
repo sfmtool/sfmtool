@@ -257,7 +257,7 @@ impl PyPatchCloud {
         recon, images, *, resolution=24, angular_range_deg=25.0, init_steps=7,
         refine_levels=3, objective="robust", robust_iters=3, window="gaussian_disk",
         window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="bilinear",
-        cache="fronto", cache_supersample=2.0, point_ids=None
+        cache="fronto", cache_supersample=2.0, compute_confidence=false, point_ids=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn refine_normals<'py>(
@@ -278,6 +278,7 @@ impl PyPatchCloud {
         sampler: &str,
         cache: &str,
         cache_supersample: f64,
+        compute_confidence: bool,
         point_ids: Option<Vec<u32>>,
     ) -> PyResult<Bound<'py, PyDict>> {
         let recon = &recon.inner;
@@ -369,6 +370,7 @@ impl PyPatchCloud {
             sampler,
             cache,
             cache_supersample,
+            compute_confidence,
         };
 
         // Build one pyramid + pose per reconstruction image; the ProjectedImages

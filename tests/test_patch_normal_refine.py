@@ -44,6 +44,7 @@ def test_refine_normals_improves_consensus(
     n0 = np.array([cloud[i].normal for i in range(len(cloud))])
 
     # Modest search params keep the test quick; correctness, not quality.
+    # Confidence is opt-in (off by default), and this test checks it.
     res = cloud.refine_normals(
         recon,
         images,
@@ -51,6 +52,7 @@ def test_refine_normals_improves_consensus(
         init_steps=5,
         refine_levels=2,
         sampler="bilinear",
+        compute_confidence=True,
     )
 
     normals = res["normal"]
@@ -87,6 +89,38 @@ def test_refine_normals_improves_consensus(
     # At least one normal moved away from its mean-viewing init.
     moved = 1.0 - np.abs(np.sum(n0 * n1, axis=1))
     assert np.nanmax(moved) > 1e-4
+
+
+def test_confidence_is_opt_in(sfmrfile_reconstruction_with_17_images: Path):
+    """Confidence is NaN unless ``compute_confidence=True`` (off by default)."""
+    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    images = _load_images(recon)
+
+    def conf(compute):
+        cloud = PatchCloud.from_reconstruction(
+            recon, normal="mean_viewing", extent_value=5.0
+        )
+        res = cloud.refine_normals(
+            recon,
+            images,
+            resolution=12,
+            init_steps=5,
+            refine_levels=2,
+            sampler="bilinear",
+            compute_confidence=compute,
+        )
+        return np.asarray(res["confidence"]), np.asarray(res["photoconsistency"])
+
+    # Refined (scored) patches report NaN confidence when not requested;
+    # unrefined patches keep the 0.0 not-refined sentinel either way.
+    off, photo_off = conf(False)
+    scored = np.isfinite(photo_off)
+    assert scored.sum() > 0
+    assert np.all(np.isnan(off[scored]))
+
+    on, photo_on = conf(True)
+    scored = np.isfinite(photo_on)
+    assert np.all(np.isfinite(on[scored])) and np.all(on[scored] >= 0.0)
 
 
 def _refine(recon, images, cache, cache_supersample):

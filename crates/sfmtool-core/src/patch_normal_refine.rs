@@ -128,6 +128,11 @@ pub struct NormalRefineParams {
     /// density). Denser bases sharpen the resample and tighten accuracy at the
     /// cost of a bigger up-front render. Ignored when `cache == Off`.
     pub cache_supersample: f64,
+    /// Whether to compute the per-patch confidence (the `Φ`-peakedness stencil).
+    /// Off by default: it is an un-cached extra source-render pass per patch
+    /// (~⅙ of the cached runtime) and is purely informational — when `false`,
+    /// [`NormalRefineResult::confidence`] is `NaN`.
+    pub compute_confidence: bool,
 }
 
 impl Default for NormalRefineParams {
@@ -143,6 +148,7 @@ impl Default for NormalRefineParams {
             sampler: Sampler::Bilinear,
             cache: CacheMode::FrontoParallel,
             cache_supersample: 2.0,
+            compute_confidence: false,
         }
     }
 }
@@ -171,7 +177,8 @@ pub struct NormalRefineResult {
     /// Peakedness of `Φ` at the optimum: the smaller eigenvalue of the
     /// finite-difference curvature of `Φ(δ)`, normalized against the larger
     /// one (see [`grid_confidence`] internals). `0` when the patch was not
-    /// refined or `Φ` is flat (e.g. the narrow-baseline degeneracy).
+    /// refined or `Φ` is flat (e.g. the narrow-baseline degeneracy). `NaN` when
+    /// not requested ([`NormalRefineParams::compute_confidence`] is `false`).
     pub confidence: f64,
 }
 
@@ -1014,15 +1021,21 @@ fn refine_patch_normal_impl(
         return unrefined(valid_view_count);
     }
 
-    // Confidence stencil spacing: the final grid spacing of the coarse-to-fine
-    // schedule, clamped to a sane angular band.
-    let steps = params.init_steps.max(3) as f64;
-    let shrink = 2.0 / (steps - 1.0);
-    let h = (params.angular_range_deg.to_radians()
-        * shrink.powi(params.refine_levels.max(1) as i32))
-    .clamp(0.2f64.to_radians(), 5.0f64.to_radians());
-    let confidence = prof::CONFIDENCE
-        .time(|| grid_confidence(patch, &best_n, &ctx, views, resolution, params, h));
+    // Confidence (optional): an extra source-render stencil around the optimum,
+    // un-cached and purely informational, so it is computed only on request.
+    let confidence = if params.compute_confidence {
+        // Stencil spacing: the final grid spacing of the coarse-to-fine schedule,
+        // clamped to a sane angular band.
+        let steps = params.init_steps.max(3) as f64;
+        let shrink = 2.0 / (steps - 1.0);
+        let h = (params.angular_range_deg.to_radians()
+            * shrink.powi(params.refine_levels.max(1) as i32))
+        .clamp(0.2f64.to_radians(), 5.0f64.to_radians());
+        prof::CONFIDENCE
+            .time(|| grid_confidence(patch, &best_n, &ctx, views, resolution, params, h))
+    } else {
+        f64::NAN
+    };
 
     NormalRefineResult {
         patch: if improved {

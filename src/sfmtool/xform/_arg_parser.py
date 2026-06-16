@@ -13,6 +13,7 @@ rejection; this module is the complementary ordered parser.
 """
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import click
@@ -71,10 +72,20 @@ def parse_angle(angle_str: str) -> float:
         raise ValueError(f"Unrecognized angle unit: {unit}")
 
 
-# Each --refine-normals key maps to the Python type its value parses as; the
+def _parse_bool(value: str) -> bool:
+    """Parse a ``key=value`` boolean flag (``true``/``false``/``1``/``0``/…)."""
+    v = value.strip().lower()
+    if v in ("true", "1", "yes", "on"):
+        return True
+    if v in ("false", "0", "no", "off"):
+        return False
+    raise ValueError(value)
+
+
+# Each --refine-normals key maps to a caster for its value; the
 # RefineNormalsTransform constructor owns range/enum validation. Keys mirror the
 # PatchCloud.refine_normals / from_reconstruction binding parameters one-to-one.
-_REFINE_NORMALS_KEYS: dict[str, type] = {
+_REFINE_NORMALS_KEYS: dict[str, Callable[[str], object]] = {
     "angular_range_deg": float,
     "init_steps": int,
     "refine_levels": int,
@@ -89,6 +100,7 @@ _REFINE_NORMALS_KEYS: dict[str, type] = {
     "cache": str,
     "cache_supersample": float,
     "quality": str,
+    "confidence": _parse_bool,
     "initial_normals": str,
     "extent": str,
     "extent_value": float,

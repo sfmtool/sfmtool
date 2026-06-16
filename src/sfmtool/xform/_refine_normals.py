@@ -72,6 +72,7 @@ class RefineNormalsTransform:
         cache: str = "fronto",
         cache_supersample: float = 2.0,
         quality: str = "none",
+        confidence: bool = False,
         # forwarded to PatchCloud.from_reconstruction
         initial_normals: str = "stored",
         extent: str = "feature_size",
@@ -113,6 +114,8 @@ class RefineNormalsTransform:
             )
         if quality not in _QUALITIES:
             raise ValueError(f"quality must be one of {_QUALITIES}, got {quality!r}")
+        if not isinstance(confidence, bool):
+            raise ValueError(f"confidence must be a bool, got {confidence!r}")
         if initial_normals not in _INITIAL_NORMALS:
             raise ValueError(
                 f"initial_normals must be one of {_INITIAL_NORMALS}, got {initial_normals!r}"
@@ -141,6 +144,7 @@ class RefineNormalsTransform:
             self.cache = cache
             self.cache_supersample = cache_supersample
         self.quality = quality
+        self.confidence = confidence
         self.initial_normals = initial_normals
         self.extent = extent
         self.extent_value = extent_value
@@ -191,6 +195,7 @@ class RefineNormalsTransform:
             sampler=self.sampler,
             cache=self.cache,
             cache_supersample=self.cache_supersample,
+            compute_confidence=self.confidence,
         )
 
         refined = np.asarray(result["normal"], dtype=np.float32)
@@ -225,10 +230,14 @@ class RefineNormalsTransform:
         mean_init = float(init[scored].mean())
         mean_photo = float(photo[scored].mean())
         improved = int(np.count_nonzero(photo[scored] > init[scored] + 1e-6))
-        low_conf = int(np.count_nonzero(conf[scored] < _LOW_CONFIDENCE_THRESHOLD))
+        # Confidence is computed (and reported) only when explicitly requested.
+        conf_note = ""
+        if self.confidence:
+            low_conf = int(np.count_nonzero(conf[scored] < _LOW_CONFIDENCE_THRESHOLD))
+            conf_note = f", {low_conf} low-confidence"
         print(
             f"  Refined {n} normals (mean Φ {mean_init:.2f} → {mean_photo:.2f}, "
-            f"{mean_photo - mean_init:+.2f}; {improved} improved, {low_conf} low-confidence)"
+            f"{mean_photo - mean_init:+.2f}; {improved} improved{conf_note})"
         )
 
     def description(self) -> str:

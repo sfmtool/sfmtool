@@ -51,6 +51,9 @@ DEFAULT_BASE = {
     "robust_iters": 3,
     "sampler": "anisotropic",
     "window": "gaussian_disk",
+    # The bench reports per-patch confidence metrics, so request them (confidence
+    # is off by default in production for the extra runtime it costs).
+    "compute_confidence": True,
 }
 
 DEFAULT_REFERENCE = {

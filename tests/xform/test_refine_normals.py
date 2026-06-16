@@ -130,6 +130,31 @@ def test_parse_cache_knobs():
     assert t.cache_supersample == 2.0
 
 
+def test_parse_confidence_flag():
+    """``confidence`` parses to a bool and is off by default."""
+    assert parse_refine_normals_params("").confidence is False
+    assert parse_refine_normals_params("confidence=true").confidence is True
+    assert parse_refine_normals_params("confidence=off").confidence is False
+    import click
+    import pytest
+
+    with pytest.raises(click.UsageError):
+        parse_refine_normals_params("confidence=maybe")
+
+
+def test_summary_reports_confidence_only_when_requested(capsys):
+    """The xform summary mentions low-confidence only when confidence is on."""
+    photo = np.array([0.8, 0.9])
+    init = np.array([0.7, 0.8])
+    conf = np.array([0.05, np.nan])
+
+    RefineNormalsTransform(confidence=False)._print_summary(photo, init, conf)
+    assert "low-confidence" not in capsys.readouterr().out
+
+    RefineNormalsTransform(confidence=True)._print_summary(photo, init, conf)
+    assert "low-confidence" in capsys.readouterr().out
+
+
 def test_quality_preset_overrides_cache_knobs():
     """A quality preset sets (cache, cache_supersample) and wins over them."""
     coarse = RefineNormalsTransform(quality="coarse")
