@@ -446,22 +446,51 @@ def sfmrfile_reconstruction_kerry_park_camrig_once(tmp_path_factory) -> Path:
 
     output_sfm_file = workspace_dir / "kerry_park.sfmr"
     colmap_dir = workspace_dir / "colmap"
-    sfmr_path = run_global_sfm(
-        image_paths,
-        workspace_dir,
-        colmap_dir,
-        output_sfm_file=str(output_sfm_file),
-        random_seed=42,
-    )
-
     expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_FRAME_COUNT
-    recon = SfmrReconstruction.load(sfmr_path)
-    if recon.image_count != expected_count:
+
+    # GLOMAP is non-deterministic, and the back-to-back fisheye geometry
+    # occasionally yields a degenerate solve — all frames register but no points
+    # triangulate, so ``run_global_sfm`` raises "No 3D points found". Retry with a
+    # fresh randomization (mirroring ``build_cluster_reconstruction``), keeping the
+    # most-complete result, rather than flaking the suite. The first attempt stays
+    # reproducible (seed 42); retries randomize so a different split can register.
+    max_attempts = 6
+    best_stash = output_sfm_file.with_name("_best_camrig.sfmr")
+    best_points = -1
+    for attempt in range(1, max_attempts + 1):
+        if colmap_dir.exists():
+            shutil.rmtree(colmap_dir)
+        for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
+            stale.unlink()
+        seed = 42 if attempt == 1 else None
+        try:
+            sfmr_path = run_global_sfm(
+                image_paths,
+                workspace_dir,
+                colmap_dir,
+                output_sfm_file=str(output_sfm_file),
+                random_seed=seed,
+            )
+        except RuntimeError:
+            # Degenerate solve (e.g. "No 3D points found"); re-randomize.
+            continue
+        recon = SfmrReconstruction.load(sfmr_path)
+        if recon.image_count == expected_count and recon.point_count > best_points:
+            best_points = recon.point_count
+            shutil.copy(sfmr_path, best_stash)
+        if recon.image_count == expected_count and recon.point_count >= 500:
+            break
+
+    if best_points < 0:
         raise RuntimeError(
-            f"kerry_park .camrig global solve registered {recon.image_count}/"
-            f"{expected_count} images (all {expected_count} required)."
+            f"kerry_park .camrig global solve produced no complete reconstruction "
+            f"in {max_attempts} attempts (all {expected_count} images required)."
         )
-    return sfmr_path
+    for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
+        stale.unlink()
+    shutil.copy(best_stash, output_sfm_file)
+    best_stash.unlink()
+    return output_sfm_file
 
 
 @pytest.fixture
