@@ -369,7 +369,7 @@ pub(super) fn eval_phi(
     resolution: u32,
     cols: &[i32],
     rows: &[i32],
-    sqrt_w: &[f64],
+    sqrt_w: &[f32],
     total_w: f64,
     scratch: &mut Scratch,
     objective: Objective,

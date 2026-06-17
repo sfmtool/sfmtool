@@ -216,6 +216,48 @@ fn axpy_f32_avx2_matches_scalar() {
 }
 
 #[test]
+fn weighted_moments_avx2_matches_scalar() {
+    // The dispatched AVX2 (f64-accumulate) moments agree with the scalar
+    // reference, including a length that exercises the n % 4 tail.
+    for len in [0usize, 1, 3, 4, 31, 173, 512] {
+        let col: Vec<f32> = (0..len)
+            .map(|i| ((i * 7 % 53) as f32) * 1.7 + 3.0)
+            .collect();
+        let w: Vec<f64> = (0..len).map(|i| 0.3 + (i % 5) as f64 * 0.13).collect();
+        let (s1s, s2s) = weighted_moments_scalar(&col, &w, 0, len);
+        let (s1, s2) = weighted_moments(&col, &w);
+        assert!(
+            (s1 - s1s).abs() <= 1e-9 * (1.0 + s1s.abs()),
+            "s1 {s1s} vs {s1}"
+        );
+        assert!(
+            (s2 - s2s).abs() <= 1e-9 * (1.0 + s2s.abs()),
+            "s2 {s2s} vs {s2}"
+        );
+    }
+}
+
+#[test]
+fn znorm_write_avx2_matches_scalar() {
+    // The dispatched AVX2 normalize write agrees with the scalar reference,
+    // including a length that exercises the n % 8 tail.
+    for len in [0usize, 1, 7, 8, 31, 173, 512] {
+        let src: Vec<f32> = (0..len)
+            .map(|i| ((i * 11 % 41) as f32) * 0.9 - 7.0)
+            .collect();
+        let sqrt_w: Vec<f32> = (0..len).map(|i| 0.5 + (i % 7) as f32 * 0.05).collect();
+        let (mean, inv_norm) = (12.5f32, 0.031f32);
+        let mut want = vec![0f32; len];
+        znorm_write_scalar(&src, &sqrt_w, mean, inv_norm, &mut want, 0, len);
+        let mut got = vec![0f32; len];
+        znorm_write(&src, &sqrt_w, mean, inv_norm, &mut got);
+        for (a, b) in want.iter().zip(&got) {
+            assert!((a - b).abs() <= 1e-6 * (1.0 + a.abs()), "{a} vs {b}");
+        }
+    }
+}
+
+#[test]
 fn consensus_identity_matches_brute_force_pairwise_mean() {
     for v_count in [2usize, 3, 5, 8] {
         let xs: Vec<Vec<Vec<f64>>> = (0..v_count)

@@ -488,10 +488,13 @@ fn normalized_stack(
 /// kept ones), reusing `out`'s capacity. Subtract the weighted mean, scale to
 /// unit windowed-norm, and fold `√w` in (so plain dot products realize the
 /// windowed inner product). A channel flat (windowed norm² < [`FLAT_NORM_SQ_EPS`])
-/// in *any* view is dropped for *every* view. Reductions accumulate in f64; the
-/// stack is stored f32 to halve the memory traffic the consensus re-reads.
-/// Returns the kept-channel count, or `None` when none survive. Shared by the
-/// source-render path ([`normalized_stack`]) and the fronto cache
+/// in *any* view is dropped for *every* view. The per-(view, channel) moments
+/// are reduced in **f64** SIMD: the variance `norm_sq = s2 − s1·mean` is
+/// cancellation-sensitive and feeds Φ directly (the stack is the consensus
+/// input), so f32 accumulation there moves normals. The element-wise normalize
+/// is f32 and the stack is stored f32 to halve the memory traffic the consensus
+/// re-reads. Returns the kept-channel count, or `None` when none survive. Shared
+/// by the source-render path ([`normalized_stack`]) and the fronto cache
 /// ([`fronto_cache::eval_phi`]) so the two cannot drift.
 #[allow(clippy::too_many_arguments)]
 fn znormalize_into(
@@ -501,34 +504,33 @@ fn znormalize_into(
     n: usize,
     weights: &[f64],
     total_w: f64,
-    sqrt_w: &[f64],
+    sqrt_w: &[f32],
     out: &mut Vec<f32>,
 ) -> Option<usize> {
     let mut keep = vec![true; channels];
-    let mut stats = vec![(0.0f64, 0.0f64); views * channels];
+    // (mean, inv_norm) per (view, channel), as f32 for the normalize kernel.
+    let mut stats = vec![(0.0f32, 0.0f32); views * channels];
     for v in 0..views {
         for c in 0..channels {
             let col = &raw[(v * channels + c) * n..][..n];
-            // One pass for the weighted mean and norm²: with s1 = Σ w·x and
-            // s2 = Σ w·x², the windowed variance is s2 − s1²/total_w (= s2 −
-            // s1·mean), so the (x − mean)² pass is avoided. This difference form
-            // can cancel slightly negative for a (near-)constant channel, but such
-            // a channel is `< FLAT_NORM_SQ_EPS` and so dropped by the flat gate
-            // below (shared across views) before `1/√norm_sq` is ever taken — so
-            // the cancellation never reaches a NaN. (f64 has ample headroom at
-            // 8-bit pixel magnitudes for any channel with real texture.)
-            let (mut s1, mut s2) = (0.0f64, 0.0f64);
-            for (&f, &w) in col.iter().zip(weights) {
-                let wx = w * f as f64;
-                s1 += wx;
-                s2 += wx * f as f64;
-            }
+            // Moments reduced in f64 (vectorized): the variance difference
+            // `s2 − s1·mean` is cancellation-sensitive and feeds Φ directly (it is
+            // the consensus input, unlike the IRLS residual), so f32 accumulation
+            // here moves normals. A (near-)constant channel cancels below
+            // `FLAT_NORM_SQ_EPS` and is dropped by the flat gate (shared across
+            // views) before `1/√norm_sq` is taken, so it never reaches a NaN.
+            let (s1, s2) = weighted_moments(col, weights);
             let mean = s1 / total_w;
             let norm_sq = s2 - s1 * mean;
             if norm_sq < FLAT_NORM_SQ_EPS {
                 keep[c] = false;
             }
-            stats[v * channels + c] = (mean, norm_sq);
+            let inv_norm = if norm_sq > 0.0 {
+                1.0 / norm_sq.sqrt()
+            } else {
+                0.0
+            };
+            stats[v * channels + c] = (mean as f32, inv_norm as f32);
         }
     }
     let kept = keep.iter().filter(|&&k| k).count();
@@ -543,17 +545,169 @@ fn znormalize_into(
             if !keep[c] {
                 continue;
             }
-            let (mean, norm_sq) = stats[v * channels + c];
-            let inv_norm = 1.0 / norm_sq.sqrt();
+            let (mean, inv_norm) = stats[v * channels + c];
             let src = &raw[(v * channels + c) * n..][..n];
             let base = (v * kept + kc) * n;
-            for k in 0..n {
-                out[base + k] = (sqrt_w[k] * (src[k] as f64 - mean) * inv_norm) as f32;
-            }
+            znorm_write(src, sqrt_w, mean, inv_norm, &mut out[base..base + n]);
             kc += 1;
         }
     }
     Some(kept)
+}
+
+/// Horizontal sum of a 4-lane f64 vector.
+///
+/// # Safety
+/// Requires `avx` (guarded by the caller).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx")]
+unsafe fn hsum256_pd(v: std::arch::x86_64::__m256d) -> f64 {
+    use std::arch::x86_64::*;
+    let lo = _mm256_castpd256_pd128(v);
+    let hi = _mm256_extractf128_pd(v, 1);
+    let s2 = _mm_add_pd(lo, hi);
+    let s1 = _mm_add_sd(s2, _mm_unpackhi_pd(s2, s2));
+    _mm_cvtsd_f64(s1)
+}
+
+/// Weighted moments `(Σ w·x, Σ w·x²)` of `col` over the windowed support,
+/// accumulated in **f64**: the caller forms the cancellation-sensitive variance
+/// `s2 − s1·mean` from these and feeds it (via `1/√norm_sq`) straight into Φ, so
+/// f32 accumulation here moves normals (measured). The baseline target limits the
+/// autovectorized fallback to SSE, so an AVX2+FMA kernel (4-wide f64, widening the
+/// f32 `col`) is dispatched at runtime; same pattern as [`sum_sq_diff`].
+#[inline]
+fn weighted_moments(col: &[f32], w: &[f64]) -> (f64, f64) {
+    debug_assert_eq!(col.len(), w.len());
+    let n = col.len().min(w.len());
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: guarded by the runtime feature check above.
+            return unsafe { weighted_moments_avx2(col, w, n) };
+        }
+    }
+    weighted_moments_scalar(col, w, 0, n)
+}
+
+/// Scalar reference for [`weighted_moments`] over `[i0, i1)` (also the AVX2 tail).
+/// Four independent f64 lane sums keep the fallback SSE-vectorizable.
+fn weighted_moments_scalar(col: &[f32], w: &[f64], i0: usize, i1: usize) -> (f64, f64) {
+    const LANES: usize = 4;
+    let mut s1 = [0f64; LANES];
+    let mut s2 = [0f64; LANES];
+    let body = i0 + (i1 - i0) / LANES * LANES;
+    let mut i = i0;
+    while i < body {
+        for l in 0..LANES {
+            let f = col[i + l] as f64;
+            let wx = w[i + l] * f;
+            s1[l] += wx;
+            s2[l] += wx * f;
+        }
+        i += LANES;
+    }
+    let mut a1: f64 = s1.iter().sum();
+    let mut a2: f64 = s2.iter().sum();
+    for k in i..i1 {
+        let f = col[k] as f64;
+        let wx = w[k] * f;
+        a1 += wx;
+        a2 += wx * f;
+    }
+    (a1, a2)
+}
+
+/// AVX2+FMA reduction of the weighted moments over the first `n` elements (4
+/// f64/iteration; the 4 f32 `col` lanes are widened with one `vcvtps2pd`). The
+/// `n % 4` tail falls back to [`weighted_moments_scalar`].
+///
+/// # Safety
+/// Requires the `avx2` + `fma` target features (guarded by the dispatcher).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn weighted_moments_avx2(col: &[f32], w: &[f64], n: usize) -> (f64, f64) {
+    use std::arch::x86_64::*;
+    let mut a1 = _mm256_setzero_pd();
+    let mut a2 = _mm256_setzero_pd();
+    let mut i = 0usize;
+    while i + 4 <= n {
+        let f = _mm256_cvtps_pd(_mm_loadu_ps(col.as_ptr().add(i)));
+        let wv = _mm256_loadu_pd(w.as_ptr().add(i));
+        let wx = _mm256_mul_pd(wv, f);
+        a1 = _mm256_add_pd(a1, wx);
+        a2 = _mm256_fmadd_pd(wx, f, a2);
+        i += 4;
+    }
+    let s1 = hsum256_pd(a1);
+    let s2 = hsum256_pd(a2);
+    let (t1, t2) = weighted_moments_scalar(col, w, i, n);
+    (s1 + t1, s2 + t2)
+}
+
+/// `out[k] = sqrt_w[k] · (src[k] − mean) · inv_norm`, all f32 — the per-pixel
+/// z-normalize write. AVX2+FMA (8-wide) dispatched at runtime; same pattern as
+/// [`sum_sq_diff`].
+#[inline]
+fn znorm_write(src: &[f32], sqrt_w: &[f32], mean: f32, inv_norm: f32, out: &mut [f32]) {
+    let n = src.len().min(sqrt_w.len()).min(out.len());
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: guarded by the runtime feature check above.
+            unsafe {
+                znorm_write_avx2(src, sqrt_w, mean, inv_norm, out, n);
+            }
+            return;
+        }
+    }
+    znorm_write_scalar(src, sqrt_w, mean, inv_norm, out, 0, n);
+}
+
+/// Scalar reference for [`znorm_write`] over `[i0, i1)` (also the AVX2 tail).
+fn znorm_write_scalar(
+    src: &[f32],
+    sqrt_w: &[f32],
+    mean: f32,
+    inv_norm: f32,
+    out: &mut [f32],
+    i0: usize,
+    i1: usize,
+) {
+    for k in i0..i1 {
+        out[k] = sqrt_w[k] * (src[k] - mean) * inv_norm;
+    }
+}
+
+/// AVX2+FMA `out[k] = sqrt_w[k]·(src[k] − mean)·inv_norm` over the first `n`
+/// elements (8 f32/iteration). The `n % 8` tail falls back to
+/// [`znorm_write_scalar`].
+///
+/// # Safety
+/// Requires the `avx2` + `fma` target features (guarded by the dispatcher).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn znorm_write_avx2(
+    src: &[f32],
+    sqrt_w: &[f32],
+    mean: f32,
+    inv_norm: f32,
+    out: &mut [f32],
+    n: usize,
+) {
+    use std::arch::x86_64::*;
+    let m = _mm256_set1_ps(mean);
+    let s = _mm256_set1_ps(inv_norm);
+    let mut i = 0usize;
+    while i + 8 <= n {
+        let x = _mm256_loadu_ps(src.as_ptr().add(i));
+        let sw = _mm256_loadu_ps(sqrt_w.as_ptr().add(i));
+        let d = _mm256_sub_ps(x, m);
+        let scale = _mm256_mul_ps(sw, s);
+        _mm256_storeu_ps(out.as_mut_ptr().add(i), _mm256_mul_ps(scale, d));
+        i += 8;
+    }
+    znorm_write_scalar(src, sqrt_w, mean, inv_norm, out, i, n);
 }
 
 /// Reused buffers for the consensus / IRLS reductions, so scoring a candidate
@@ -897,7 +1051,7 @@ fn eval_phi(
     if total_w <= 0.0 {
         return None;
     }
-    let sqrt_w: Vec<f64> = ctx.weights.iter().map(|&w| w.sqrt()).collect();
+    let sqrt_w: Vec<f32> = ctx.weights.iter().map(|&w| w.sqrt() as f32).collect();
     let mut xs = Vec::new();
     let kept = prof::ZNORM.time(|| {
         znormalize_into(
@@ -983,9 +1137,9 @@ fn coarse_to_fine(
         } else {
             (Vec::new(), Vec::new())
         };
-        let (sqrt_w, total_w): (Vec<f64>, f64) = if cache.is_some() {
+        let (sqrt_w, total_w): (Vec<f32>, f64) = if cache.is_some() {
             (
-                ctx.weights.iter().map(|&w| w.sqrt()).collect(),
+                ctx.weights.iter().map(|&w| w.sqrt() as f32).collect(),
                 ctx.weights.iter().sum(),
             )
         } else {
