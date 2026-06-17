@@ -8,17 +8,38 @@ name = "sfmtool"
 platforms = ["win-64", "linux-64"]
 version = "0.2"
 
+# Universal build dependency: the Rust toolchain is needed to build any crate in
+# the workspace (clippy, the sfm-explorer GUI tests, the PyO3 extension).
 [dependencies]
-python = ">=3.14.4,<3.15"
 rust = ">=1.94.0,<1.95"
+
+# The SfM runtime: the Python interpreter, the pycolmap solver, and the editable
+# sfmtool package (which compiles the PyO3 extension via maturin). Only
+# environments that actually run the Python tool pull this in — keeping it out
+# of the base deps lets the `lint` and `ui` environments skip the ~6 min
+# extension build and the heavy pycolmap/Qt/CUDA/opencv closure.
+[feature.runtime.dependencies]
+python = ">=3.14.4,<3.15"
 pycolmap = ">=4.0.3,<5"
 
-[pypi-dependencies]
+[feature.runtime.pypi-dependencies]
 sfmtool = { path = ".", editable = true }
 
 [tasks]
 gui = "cargo run --release -p sfm-explorer --bin sfm-explorer"
 ui-test = "cargo test -p sfm-explorer --test ui_basic -- --test-threads=1"
+
+# Linting: ruff plus a Python interpreter. clippy doesn't link libpython, but the
+# PyO3 build script for sfmtool-py needs an interpreter at compile time.
+[feature.lint.dependencies]
+python = ">=3.14.4,<3.15"
+
+[feature.lint.pypi-dependencies]
+ruff = ">=0.15.10, <0.16"
+
+[feature.lint.tasks]
+fmt = "ruff format src tests"
+check = "ruff check src tests"
 
 [feature.test.dependencies]
 cargo-llvm-cov = ">=0.8.5,<0.9"
@@ -28,7 +49,6 @@ maturin = ">=1.13.1, <2"
 pip = ">=26.0.1, <27"
 pytest = ">=9.0.3, <10"
 pytest-cov = ">=7.1.0, <8"
-ruff = ">=0.15.10, <0.16"
 
 [feature.test.activation.env]
 # Force UTF-8 stdio on Windows so histogram block characters (▁..█) and other
@@ -45,8 +65,6 @@ coverage = "cargo llvm-cov --workspace --lcov --output-path lcov.info"
 coverage-all = "bash scripts/coverage.sh"
 coverage-html = "cargo llvm-cov --workspace --html --open"
 maturin = "maturin"
-fmt = "ruff format src tests"
-check = "ruff check src tests"
 
 [feature.dev.tasks]
 ipython = "ipython"
@@ -65,8 +83,10 @@ pycolmap = { version = ">=4.0.3,<5", build = "cuda*" }
 cuda = "12.9"
 
 [environments]
-default = {solve-group = "default"}
-cuda = {features = ["cuda"], solve-group = "cuda"}
-test = {features = ["test"], solve-group = "default"}
-dev = {features = ["dev"], solve-group = "default"}
-docs = {features = ["docs"], solve-group = "default"}
+default = { features = ["runtime"], solve-group = "default" }
+lint = { features = ["lint"], solve-group = "default" }
+ui = { solve-group = "default" }
+test = { features = ["runtime", "lint", "test"], solve-group = "default" }
+dev = { features = ["runtime", "dev"], solve-group = "default" }
+docs = { features = ["runtime", "docs"], solve-group = "default" }
+cuda = { features = ["runtime", "cuda"], solve-group = "cuda" }

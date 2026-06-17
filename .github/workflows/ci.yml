@@ -49,7 +49,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
-          environments: test
+          environments: lint
           cache: true
       - name: Cache Rust build
         uses: actions/cache@v5
@@ -64,16 +64,16 @@ jobs:
             ${{ runner.os }}-cargo-lint-
 
       - name: Ruff format
-        run: pixi run -e test ruff format --check src tests
+        run: pixi run -e lint ruff format --check src tests
 
       - name: Ruff lint
-        run: pixi run -e test check
+        run: pixi run -e lint check
 
       - name: Cargo fmt
-        run: pixi run -e test cargo fmt --all -- --check
+        run: pixi run -e lint cargo fmt --all -- --check
 
       - name: Cargo clippy
-        run: pixi run -e test cargo clippy --workspace --all-targets -- -D warnings
+        run: pixi run -e lint cargo clippy --workspace --all-targets -- -D warnings
 
   # Full instrumented build + combined Rust/Python coverage, uploaded to
   # codecov. Coverage line numbers are platform-independent, so we only pay
@@ -85,10 +85,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.9.6
-        with:
-          environments: test
-          cache: true
+      # Restore the Rust cache before setup-pixi: installing the `test` env
+      # compiles the editable sfmtool PyO3 extension via maturin, so a warm
+      # target makes that build incremental instead of a cold ~6 min compile.
       - name: Cache Rust build
         uses: actions/cache@v5
         with:
@@ -100,6 +99,10 @@ jobs:
           key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-coverage-
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          environments: test
+          cache: true
 
       - name: Run tests with combined coverage
         run: pixi run -e test coverage-all
@@ -122,10 +125,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.9.6
-        with:
-          environments: test
-          cache: true
+      # Restore the Rust cache before setup-pixi: installing the `test` env
+      # compiles the editable sfmtool PyO3 extension via maturin, so a warm
+      # target makes that build incremental instead of a cold compile.
       - name: Cache Rust build
         uses: actions/cache@v5
         with:
@@ -137,6 +139,10 @@ jobs:
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-test-
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          environments: test
+          cache: true
 
       - name: Build Python extension
         run: pixi run -e test maturin develop
@@ -155,7 +161,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
-          environments: default
+          environments: ui
           cache: true
       - name: Cache Rust build
         uses: actions/cache@v5
@@ -170,7 +176,7 @@ jobs:
             ${{ runner.os }}-cargo-ui-
 
       - name: UI tests
-        run: pixi run ui-test
+        run: pixi run -e ui ui-test
 
   # Single stable check to mark as required in branch protection. Always runs
   # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.
