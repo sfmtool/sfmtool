@@ -5,7 +5,7 @@
 authors = ["Mark <399551+mwiebe@users.noreply.github.com>"]
 channels = ["conda-forge"]
 name = "sfmtool"
-platforms = ["win-64", "linux-64"]
+platforms = ["win-64", "linux-64", "osx-arm64"]
 version = "0.2"
 
 # Universal build dependency: the Rust toolchain is needed to build any crate in
@@ -75,6 +75,12 @@ zensical = ">=0.0.43, <0.0.44"
 [feature.docs.tasks]
 docs-serve = "zensical serve"
 docs-build = "zensical build"
+
+# CUDA-enabled pycolmap is only published for Linux and Windows, so restrict the
+# cuda feature (and any environment that uses it) to those platforms — otherwise
+# the lock solve fails for osx-arm64, which has no CUDA builds.
+[feature.cuda]
+platforms = ["win-64", "linux-64"]
 
 [feature.cuda.dependencies]
 pycolmap = { version = ">=4.0.3,<5", build = "cuda*" }
