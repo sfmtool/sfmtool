@@ -77,8 +77,8 @@ jobs:
 
   # Full instrumented build + combined Rust/Python coverage, uploaded to
   # codecov. Coverage line numbers are platform-independent, so we only pay
-  # the slower instrumented build once, on Linux. Windows still runs the same
-  # tests (see test-windows) without instrumentation.
+  # the slower instrumented build once, on Linux. Windows and macOS still run
+  # the same tests (see test-os) without instrumentation.
   test-linux:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -116,18 +116,25 @@ jobs:
           files: lcov.info,python-lcov.info
           flags: ubuntu-latest
 
-  # Windows correctness check: runs the same Rust + Python suites as the
+  # Non-Linux correctness check: runs the same Rust + Python suites as the
   # coverage job, but without LLVM coverage instrumentation (much faster to
-  # build) since we don't need a second set of coverage numbers.
-  test-windows:
+  # build) since coverage line numbers are platform-independent and Linux
+  # already produces them. macos-latest runners are Apple Silicon (arm64),
+  # matching the osx-arm64 pixi platform.
+  test-os:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       # Restore the Rust cache before setup-pixi: installing the `test` env
       # compiles the editable sfmtool PyO3 extension via maturin, so a warm
-      # target makes that build incremental instead of a cold compile.
+      # target makes that build incremental instead of a cold compile. The key
+      # is namespaced by runner.os, so each matrix OS keeps its own cache.
       - name: Cache Rust build
         uses: actions/cache@v5
         with:
@@ -181,7 +188,7 @@ jobs:
   # Single stable check to mark as required in branch protection. Always runs
   # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.
   ci-ok:
-    needs: [changes, lint, test-linux, test-windows, ui-test]
+    needs: [changes, lint, test-linux, test-os, ui-test]
     if: always()
     runs-on: ubuntu-latest
     steps:
