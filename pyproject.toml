@@ -37,7 +37,9 @@ module-name = "sfmtool._sfmtool"
 testpaths = ["tests"]
 # tee-sys avoids fd-level dup that breaks Click CliRunner on Windows + Python 3.14
 # (pytest's default FDCapture corrupts Click's preserved fileno; see pytest #2465 / #13720).
-addopts = "--capture=tee-sys"
+# --durations surfaces the slowest tests/fixtures (setup/call/teardown) at the
+# end of every run, including in CI, to keep an eye on suite hot spots.
+addopts = "--capture=tee-sys --durations=15"
 
 [tool.coverage.run]
 # parallel + multiprocessing tracks code that runs inside ProcessPoolExecutor
