@@ -563,8 +563,11 @@ fn znormalize_into(
 pub(super) struct ConsensusScratch {
     /// View weights (`views`).
     w: Vec<f64>,
-    /// Weighted per-(channel, pixel) consensus (`channels·n`).
-    xbar: Vec<f64>,
+    /// Weighted per-(channel, pixel) consensus (`channels·n`). f32: it is only
+    /// consumed by the IRLS residual that feeds the robust reweight, so the
+    /// accumulation precision is immaterial, and f32 keeps both the SAXPY and the
+    /// residual a single 8-wide AVX2 path with no f64↔f32 narrowing.
+    xbar: Vec<f32>,
     /// Per-pixel accumulator for a channel's weighted sum (`n`).
     s: Vec<f64>,
     /// Per-view residual to the consensus (`views`).
@@ -613,16 +616,16 @@ fn median(values: &mut [f64]) -> f64 {
     }
 }
 
-/// `Σ_k (row[k] − xbar[k])²` in f32 — the IRLS per-view residual sum. An f64
+/// `Σ_k (row[k] − xbar[k])²`, all f32 — the IRLS per-view residual sum. An f64
 /// `.sum()` cannot vectorize (non-associative → a serial dependency chain), and
 /// the crate builds for a baseline target (no `-C target-feature=+avx2`), so the
 /// scalar fallback only reaches SSE; the dispatched AVX2+FMA kernel below is
-/// 8-wide. The residual only feeds the Tukey reweight (median/MAD/cutoff), so f32
-/// precision is ample and the found weights — hence normals — are unaffected in
-/// practice. Mirrors the runtime-dispatch pattern of [`fronto_cache`] and
-/// [`crate::sift::simd`].
+/// 8-wide. With `xbar` also f32 there is no per-element narrowing. The residual
+/// only feeds the Tukey reweight (median/MAD/cutoff), so f32 precision is ample
+/// and the found weights — hence normals — are unaffected in practice. Mirrors
+/// the runtime-dispatch pattern of [`fronto_cache`] and [`crate::sift::simd`].
 #[inline]
-fn sum_sq_diff(row: &[f32], xbar: &[f64]) -> f32 {
+fn sum_sq_diff(row: &[f32], xbar: &[f32]) -> f32 {
     debug_assert_eq!(row.len(), xbar.len());
     let n = row.len().min(xbar.len());
     #[cfg(target_arch = "x86_64")]
@@ -637,45 +640,42 @@ fn sum_sq_diff(row: &[f32], xbar: &[f64]) -> f32 {
 
 /// Scalar reference for [`sum_sq_diff`] over `[i0, i1)` (also the AVX2 tail). Eight
 /// independent accumulators keep the fallback SSE-vectorizable on a baseline build.
-fn sum_sq_diff_scalar(row: &[f32], xbar: &[f64], i0: usize, i1: usize) -> f32 {
+fn sum_sq_diff_scalar(row: &[f32], xbar: &[f32], i0: usize, i1: usize) -> f32 {
     const LANES: usize = 8;
     let mut acc = [0f32; LANES];
     let body = i0 + (i1 - i0) / LANES * LANES;
     let mut i = i0;
     while i < body {
         for (l, a) in acc.iter_mut().enumerate() {
-            let d = row[i + l] - xbar[i + l] as f32;
+            let d = row[i + l] - xbar[i + l];
             *a += d * d;
         }
         i += LANES;
     }
     let mut s: f32 = acc.iter().sum();
     for k in i..i1 {
-        let d = row[k] - xbar[k] as f32;
+        let d = row[k] - xbar[k];
         s += d * d;
     }
     s
 }
 
 /// AVX2+FMA reduction of `Σ_k (row[k] − xbar[k])²` over the first `n` elements
-/// (8 lanes/iteration; `xbar` is f64 so each 8-block is two `vcvtpd2ps`). The
-/// `n % 8` tail falls back to [`sum_sq_diff_scalar`]. Result matches the scalar
-/// path up to f32 summation order.
+/// (8 lanes/iteration; both operands f32, so one `vmovups` each — no narrowing).
+/// The `n % 8` tail falls back to [`sum_sq_diff_scalar`]. Result matches the
+/// scalar path up to f32 summation order.
 ///
 /// # Safety
 /// Requires the `avx2` + `fma` target features (guarded by the dispatcher).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-unsafe fn sum_sq_diff_avx2(row: &[f32], xbar: &[f64], n: usize) -> f32 {
+unsafe fn sum_sq_diff_avx2(row: &[f32], xbar: &[f32], n: usize) -> f32 {
     use std::arch::x86_64::*;
     let mut acc = _mm256_setzero_ps();
     let mut i = 0usize;
     while i + 8 <= n {
         let r = _mm256_loadu_ps(row.as_ptr().add(i));
-        // xbar is f64: load 4+4 and narrow each half to f32, then pack to one __m256.
-        let lo = _mm256_cvtpd_ps(_mm256_loadu_pd(xbar.as_ptr().add(i)));
-        let hi = _mm256_cvtpd_ps(_mm256_loadu_pd(xbar.as_ptr().add(i + 4)));
-        let xb = _mm256_set_m128(hi, lo);
+        let xb = _mm256_loadu_ps(xbar.as_ptr().add(i));
         let d = _mm256_sub_ps(r, xb);
         acc = _mm256_fmadd_ps(d, d, acc);
         i += 8;
@@ -689,12 +689,12 @@ unsafe fn sum_sq_diff_avx2(row: &[f32], xbar: &[f64], n: usize) -> f32 {
     _mm_cvtss_f32(s1) + sum_sq_diff_scalar(row, xbar, i, n)
 }
 
-/// `xb[k] += w · row[k]` — the IRLS weighted-consensus SAXPY (f64 accumulator,
-/// f32 source). Like the residual reduction, the baseline target limits the
-/// autovectorized fallback to SSE, so an AVX2+FMA kernel (4-wide f64) is
-/// dispatched at runtime. Same runtime-dispatch pattern as [`sum_sq_diff`].
+/// `xb[k] += w · row[k]` — the IRLS weighted-consensus SAXPY, all f32. The
+/// baseline target limits the autovectorized fallback to SSE, so an AVX2+FMA
+/// kernel (8-wide f32) is dispatched at runtime. Same runtime-dispatch pattern as
+/// [`sum_sq_diff`].
 #[inline]
-fn axpy_f32_f64(xb: &mut [f64], row: &[f32], w: f64) {
+fn axpy_f32(xb: &mut [f32], row: &[f32], w: f32) {
     debug_assert_eq!(xb.len(), row.len());
     let n = xb.len().min(row.len());
     #[cfg(target_arch = "x86_64")]
@@ -702,40 +702,40 @@ fn axpy_f32_f64(xb: &mut [f64], row: &[f32], w: f64) {
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: guarded by the runtime feature check above.
             unsafe {
-                axpy_f32_f64_avx2(xb, row, w, n);
+                axpy_f32_avx2(xb, row, w, n);
             }
             return;
         }
     }
-    axpy_f32_f64_scalar(xb, row, w, 0, n);
+    axpy_f32_scalar(xb, row, w, 0, n);
 }
 
-/// Scalar reference for [`axpy_f32_f64`] over `[i0, i1)` (also the AVX2 tail).
-fn axpy_f32_f64_scalar(xb: &mut [f64], row: &[f32], w: f64, i0: usize, i1: usize) {
+/// Scalar reference for [`axpy_f32`] over `[i0, i1)` (also the AVX2 tail).
+fn axpy_f32_scalar(xb: &mut [f32], row: &[f32], w: f32, i0: usize, i1: usize) {
     for k in i0..i1 {
-        xb[k] += w * row[k] as f64;
+        xb[k] += w * row[k];
     }
 }
 
-/// AVX2+FMA `xb[k] += w · row[k]` over the first `n` elements (4 f64/iteration;
-/// each 4-block widens 4 f32 with one `vcvtps2pd`). The `n % 4` tail falls back
-/// to [`axpy_f32_f64_scalar`].
+/// AVX2+FMA `xb[k] += w · row[k]` over the first `n` elements (8 f32/iteration;
+/// both operands f32, no narrowing). The `n % 8` tail falls back to
+/// [`axpy_f32_scalar`].
 ///
 /// # Safety
 /// Requires the `avx2` + `fma` target features (guarded by the dispatcher).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
-unsafe fn axpy_f32_f64_avx2(xb: &mut [f64], row: &[f32], w: f64, n: usize) {
+unsafe fn axpy_f32_avx2(xb: &mut [f32], row: &[f32], w: f32, n: usize) {
     use std::arch::x86_64::*;
-    let wv = _mm256_set1_pd(w);
+    let wv = _mm256_set1_ps(w);
     let mut i = 0usize;
-    while i + 4 <= n {
-        let r = _mm256_cvtps_pd(_mm_loadu_ps(row.as_ptr().add(i)));
-        let acc = _mm256_loadu_pd(xb.as_ptr().add(i));
-        _mm256_storeu_pd(xb.as_mut_ptr().add(i), _mm256_fmadd_pd(wv, r, acc));
-        i += 4;
+    while i + 8 <= n {
+        let r = _mm256_loadu_ps(row.as_ptr().add(i));
+        let acc = _mm256_loadu_ps(xb.as_ptr().add(i));
+        _mm256_storeu_ps(xb.as_mut_ptr().add(i), _mm256_fmadd_ps(wv, r, acc));
+        i += 8;
     }
-    axpy_f32_f64_scalar(xb, row, w, i, n);
+    axpy_f32_scalar(xb, row, w, i, n);
 }
 
 /// IRLS view weights into `sc.w` (`Σwᵢ = 1`): a Tukey weight on each view's
@@ -764,17 +764,17 @@ fn irls_view_weights(
         prof::IRLS_XBAR.time(|| {
             sc.xbar.iter_mut().for_each(|x| *x = 0.0);
             for v in 0..views {
-                let wv = sc.w[v];
+                let wv = sc.w[v] as f32;
                 for c in 0..channels {
                     let row = &xs[(v * channels + c) * n..][..n];
                     let xb = &mut sc.xbar[c * n..][..n];
-                    axpy_f32_f64(xb, row, wv);
+                    axpy_f32(xb, row, wv);
                 }
             }
         });
-        // Per-view residual to the consensus (contiguous per row), f32: only the
-        // Tukey reweight consumes it, so the precision is immaterial and the
-        // dispatched AVX2 reduction is several times the original f64 `.sum()`.
+        // Per-view residual to the consensus (contiguous per row), all f32: only
+        // the Tukey reweight consumes it, so the precision is immaterial, and the
+        // dispatched AVX2 reduction needs no narrowing now that xbar is f32 too.
         prof::IRLS_RESID.time(|| {
             for v in 0..views {
                 let mut r2 = 0f32;
