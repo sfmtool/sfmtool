@@ -304,6 +304,15 @@ def sfmrfile_reconstruction_with_17_images(
 KERRY_PARK_DIR = TEST_DATA_DIR / "images" / "kerry_park"
 KERRY_PARK_FRAME_COUNT = 24
 KERRY_PARK_SENSORS = ("fisheye_left", "fisheye_right")
+# The solve fixtures don't need all 24 frames. The kerry_park capture is from a
+# video, so a contiguous prefix preserves the frame-to-frame
+# covisibility chain (adjacent same-sensor frames share ~28 points on average,
+# decaying past a gap of ~3) while the two back-to-back fisheyes stay tied
+# together by their cross-sensor-at-different-frames overlap. An 8-frame prefix
+# (16 images) still solves complete and well-conditioned (all images
+# registered, both cameras, ~300 points, sub-pixel error) at a fraction of the
+# matching/solve cost. Disk-parsing/resolution fixtures still see all 24 frames.
+KERRY_PARK_SOLVE_FRAME_COUNT = 8
 
 
 def _copy_kerry_park_into(workspace_dir: Path) -> None:
@@ -376,9 +385,10 @@ def sfmrfile_reconstruction_kerry_park_once(tmp_path_factory) -> Path:
     """Session-scoped: build a .sfmr reconstruction from the kerry_park rig.
 
     Mirrors ``scripts/init_dataset_kerry_park.sh``: sfmtool SIFT + track-cluster
-    matching + global SfM (GLOMAP) with a fixed seed. The global solver reliably
-    registers all 48 rig images; the fixture fails fast if it doesn't, rather
-    than handing a partial reconstruction to the tests.
+    matching + global SfM (GLOMAP) with a fixed seed. Solves an 8-frame prefix
+    of the dataset (``KERRY_PARK_SOLVE_FRAME_COUNT`` × 2 sensors = 16 images); the
+    solver reliably registers all of them. The fixture fails fast if it doesn't,
+    rather than handing a partial reconstruction to the tests.
     """
     from sfmtool._sfmtool import SfmrReconstruction
 
@@ -387,9 +397,10 @@ def sfmrfile_reconstruction_kerry_park_once(tmp_path_factory) -> Path:
 
     image_paths: list[Path] = []
     for sensor in KERRY_PARK_SENSORS:
-        image_paths.extend(sorted((workspace_dir / sensor).glob("frame_*.jpg")))
+        frames = sorted((workspace_dir / sensor).glob("frame_*.jpg"))
+        image_paths.extend(frames[:KERRY_PARK_SOLVE_FRAME_COUNT])
 
-    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_FRAME_COUNT
+    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_SOLVE_FRAME_COUNT
     output_sfm_file = workspace_dir / "kerry_park.sfmr"
     sfmr_path = build_cluster_reconstruction(
         workspace_dir,
@@ -444,11 +455,12 @@ def sfmrfile_reconstruction_kerry_park_camrig_once(tmp_path_factory) -> Path:
 
     image_paths: list[Path] = []
     for sensor in KERRY_PARK_SENSORS:
-        image_paths.extend(sorted((workspace_dir / sensor).glob("frame_*.jpg")))
+        frames = sorted((workspace_dir / sensor).glob("frame_*.jpg"))
+        image_paths.extend(frames[:KERRY_PARK_SOLVE_FRAME_COUNT])
 
     output_sfm_file = workspace_dir / "kerry_park.sfmr"
     colmap_dir = workspace_dir / "colmap"
-    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_FRAME_COUNT
+    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_SOLVE_FRAME_COUNT
 
     # GLOMAP is non-deterministic, and the back-to-back fisheye geometry
     # occasionally yields a degenerate solve — all frames register but no points
@@ -481,7 +493,7 @@ def sfmrfile_reconstruction_kerry_park_camrig_once(tmp_path_factory) -> Path:
         if recon.image_count == expected_count and recon.point_count > best_points:
             best_points = recon.point_count
             shutil.copy(sfmr_path, best_stash)
-        if recon.image_count == expected_count and recon.point_count >= 500:
+        if recon.image_count == expected_count and recon.point_count >= 150:
             break
 
     if best_points < 0:
