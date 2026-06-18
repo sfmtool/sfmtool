@@ -355,6 +355,7 @@ def _run_cluster_matching(
     alpha: float = 0.8,
     min_size: int = 2,
     preset: str = "accurate",
+    exclude_index_pairs: set[tuple[int, int]] | None = None,
 ) -> None:
     """Run background-floor track-cluster matching and write results to the DB.
 
@@ -363,6 +364,12 @@ def _run_cluster_matching(
     per-image-pair matches, writes those to the database, and runs geometric
     verification via pycolmap. The clusters themselves are the matcher's
     primary artefact; persisting them to disk is a future consumer's job.
+
+    ``exclude_index_pairs`` is a set of normalized ``(i, j)`` image-index pairs
+    (indices into ``image_paths``) to drop from the output — used for
+    multi-sensor rigs to suppress the spurious same-frame matches that
+    back-to-back sensors with no shared view produce, which the clustering
+    cannot know to avoid on descriptors alone.
     """
     import pycolmap
 
@@ -398,6 +405,7 @@ def _run_cluster_matching(
     # Write matches to database and build pairs file for geometric verification
     pairs_path = colmap_dir / "cluster_pairs.txt"
     match_offset = 0
+    excluded = 0
     with (
         pycolmap.Database.open(db_path) as db,
         open(pairs_path, "w") as pairs_file,
@@ -411,11 +419,18 @@ def _run_cluster_matching(
             ]
             match_offset += count
 
+            if exclude_index_pairs and (idx_i, idx_j) in exclude_index_pairs:
+                excluded += 1
+                continue
+
             rel_i, rel_j = rel_names[idx_i], rel_names[idx_j]
             if rel_i not in rel_to_id or rel_j not in rel_to_id:
                 continue
             db.write_matches(rel_to_id[rel_i], rel_to_id[rel_j], matches_slice)
             pairs_file.write(f"{rel_i} {rel_j}\n")
+
+    if excluded:
+        click.echo(f"Excluded {excluded} same-frame rig image pairs from matching")
 
     # Run geometric verification on matched pairs
     click.echo("Running geometric verification...")
