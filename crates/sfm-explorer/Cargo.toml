@@ -41,7 +41,7 @@ sift-format = { path = "../sift-format" }
 egui = "0.34"
 eframe = { version = "0.34", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 egui_dock = "0.19"
-wgpu = { version = "29", features = ["dx12", "vulkan"] }
+wgpu = { version = "29", features = ["dx12", "vulkan", "metal"] }
 nalgebra = "0.35"
 bytemuck = { version = "1.25", features = ["derive"] }
 log = "0.4"
@@ -78,5 +78,8 @@ windows-core = "0.62"
 [build-dependencies]
 winres = "0.1"
 
-[target.'cfg(windows)'.dev-dependencies]
-xa11y = "0.8"
+# UI tests drive the accessibility tree, which xa11y exposes on Windows (UI
+# Automation) and macOS (AXUIElement). Linux (AT-SPI) is intentionally left out:
+# the headless CI display lacks the AT-SPI bridge the tree needs.
+[target.'cfg(any(windows, target_os = "macos"))'.dev-dependencies]
+xa11y = "0.9"

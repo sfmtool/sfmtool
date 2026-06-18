@@ -87,21 +87,6 @@ impl App {
             return;
         };
 
-        // Get the surface texture to render to
-        let output = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(output)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                surface.configure(device, surface_config);
-                return;
-            }
-            other => {
-                log::error!("wgpu surface error: {:?}", other);
-                return;
-            }
-        };
-        let view = output.texture.create_view(&Default::default());
-
         // Ensure scene texture and pipeline match the 3D panel size
         let [pw, ph] = self.viewer_3d.panel_size;
         if pw > 0 && ph > 0 {
@@ -487,21 +472,49 @@ impl App {
 
         egui_winit_state.handle_platform_output(window, full_output.platform_output);
 
-        // Tessellate
+        // Tessellate and apply egui's texture set-deltas now, before acquiring
+        // the surface. Doing this unconditionally keeps the renderer's texture
+        // set in sync with the egui context even on frames we cannot present
+        // (see below); otherwise a skipped `set` makes a later partial update
+        // panic with "texture has not been allocated yet".
         let pixels_per_point = full_output.pixels_per_point;
         let clipped_primitives = self
             .egui_ctx
             .tessellate(full_output.shapes, pixels_per_point);
+        for (id, image_delta) in &full_output.textures_delta.set {
+            renderer.update_texture(device, queue, *id, image_delta);
+        }
+
+        // Acquire the surface texture only now, after the egui pass above has
+        // already published the AccessKit tree via handle_platform_output. A
+        // window that can't present its surface — e.g. occluded / off-screen on
+        // a headless CI runner — still updates its accessibility tree each
+        // frame; we just skip the GPU submit and present. Free released egui
+        // textures before returning so the renderer stays in sync.
+        let output = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(output)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                surface.configure(device, surface_config);
+                for id in &full_output.textures_delta.free {
+                    renderer.free_texture(id);
+                }
+                return;
+            }
+            other => {
+                log::error!("wgpu surface error: {:?}", other);
+                for id in &full_output.textures_delta.free {
+                    renderer.free_texture(id);
+                }
+                return;
+            }
+        };
+        let view = output.texture.create_view(&Default::default());
 
         let screen_descriptor = eframe::egui_wgpu::ScreenDescriptor {
             size_in_pixels: [surface_config.width, surface_config.height],
             pixels_per_point,
         };
-
-        // Update textures
-        for (id, image_delta) in &full_output.textures_delta.set {
-            renderer.update_texture(device, queue, *id, image_delta);
-        }
 
         // Update buffers and render (encoder was created earlier for the scene pass)
         let user_cmd_bufs = renderer.update_buffers(
