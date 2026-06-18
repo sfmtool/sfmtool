@@ -160,7 +160,7 @@ jobs:
       - name: Python tests
         run: pixi run -e test pytest
 
-  ui-test:
+  ui-test-windows:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
@@ -185,10 +185,63 @@ jobs:
       - name: UI tests
         run: pixi run -e ui ui-test
 
+  # macOS accessibility UI tests. Same xa11y-driven suite as the
+  # ui-test-windows job, but macOS gates the AX API behind a TCC grant
+  # (kTCCServiceAccessibility) that must target the *exact* on-disk binary.
+  # The cargo test binary's path is content-hashed, so we build it first,
+  # resolve that path, grant TCC to it, then execute it directly — running it
+  # back through `cargo test` could rebuild and move the hash out from under
+  # the grant.
+  ui-test-macos:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          environments: ui
+          cache: true
+      - name: Cache Rust build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-ui-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-ui-
+
+      # Compile the test binary (and the sfm-explorer bin it launches) without
+      # running, then resolve the test binary's hashed path from cargo's JSON
+      # stream. `fromjson?` skips any non-JSON lines pixi may interleave.
+      - name: Build UI test binary
+        id: build
+        run: |
+          set -euo pipefail
+          bin=$(pixi run -e ui cargo test -p sfm-explorer --test ui_basic --no-run --message-format=json \
+            | jq -rR 'fromjson? | select(.reason == "compiler-artifact" and .target.name == "ui_basic") | .executable // empty' \
+            | tail -n1)
+          test -x "$bin"
+          echo "Resolved UI test binary: $bin"
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
+      # Grant the Accessibility (TCC) permission to that exact binary so it can
+      # read sfm-explorer's accessibility tree via AXUIElement.
+      - name: Grant accessibility permission
+        uses: xa11y/setup-a11y@v1
+        with:
+          macos-tcc-client: ${{ steps.build.outputs.bin }}
+
+      - name: UI tests
+        run: "${{ steps.build.outputs.bin }} --test-threads=1"
+
   # Single stable check to mark as required in branch protection. Always runs
   # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.
   ci-ok:
-    needs: [changes, lint, test-linux, test-os, ui-test]
+    needs: [changes, lint, test-linux, test-os, ui-test-windows, ui-test-macos]
     if: always()
     runs-on: ubuntu-latest
     steps:
