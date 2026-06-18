@@ -426,12 +426,14 @@ def sfmrfile_reconstruction_kerry_park_camrig_once(tmp_path_factory) -> Path:
     with the rig described by a multi-sensor ``kerry_park.camrig``.
 
     Unlike :func:`sfmrfile_reconstruction_kerry_park_once`, this fixture solves
-    straight from the images with exhaustive, rig-aware matching (the
-    ``_setup_for_sfm`` path that excludes same-frame fisheye pairs). The
-    back-to-back fisheye geometry makes same-frame matches spurious, and the
-    multi-sensor ``.camrig`` fixes the per-sensor intrinsics, so the unfiltered
-    cluster matches degenerate the solve — exhaustive matching keeps it robust
-    and, as a bonus, retains coverage of the from-images rig-aware solve path.
+    straight from the images through the ``_setup_for_sfm`` rig-aware path
+    (``run_global_sfm(matching_mode="cluster")``), which sets up the multi-sensor
+    ``.camrig`` and then runs the background-floor cluster matcher with the same
+    same-frame exclusion the exhaustive path uses. The back-to-back fisheye
+    geometry makes same-frame matches spurious; dropping those same-frame pairs is
+    what lets the faster cluster matcher replace exhaustive here without
+    degenerating the solve, while retaining coverage of the from-images rig-aware
+    solve path.
     """
     from sfmtool._global_sfm import run_global_sfm
     from sfmtool._sfmtool import SfmrReconstruction
@@ -470,6 +472,7 @@ def sfmrfile_reconstruction_kerry_park_camrig_once(tmp_path_factory) -> Path:
                 colmap_dir,
                 output_sfm_file=str(output_sfm_file),
                 random_seed=seed,
+                matching_mode="cluster",
             )
         except RuntimeError:
             # Degenerate solve (e.g. "No 3D points found"); re-randomize.

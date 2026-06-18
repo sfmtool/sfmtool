@@ -127,6 +127,25 @@ def _setup_for_sfm(
             flow_preset=flow_preset,
             flow_wide_baseline_skip=flow_wide_baseline_skip,
         )
+    elif matching_mode == "cluster":
+        from ..feature_match._run import _run_cluster_matching
+
+        # The background-floor matcher does its own implicit pair selection
+        # (only image pairs that share a cluster are verified) and writes the
+        # surviving matches + two-view geometry straight into the DB, so it
+        # slots in where match_exhaustive would, with the rig already set up.
+        # For a multi-sensor rig, exclude same-frame pairs (back-to-back sensors
+        # with no shared view) so their spurious cluster matches don't degenerate
+        # the solve — the same exclusion the rig-aware exhaustive path applies.
+        _run_cluster_matching(
+            image_paths,
+            sift_paths,
+            image_dir,
+            db_path,
+            colmap_dir,
+            max_feature_count=max_feature_count,
+            exclude_index_pairs=same_frame_index_pairs,
+        )
     elif rig_used and same_frame_index_pairs:
         cross_frame_pairs = _build_cross_frame_pairs(db_path)
         pairs_path = colmap_dir / "match_pairs.txt"
