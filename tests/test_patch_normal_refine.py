@@ -31,6 +31,19 @@ def _load_images(recon) -> list[np.ndarray]:
     return images
 
 
+def _sample_point_ids(cloud, n: int = 500, seed: int = 0) -> list[int]:
+    """A deterministic point-id subset to refine instead of the whole cloud.
+
+    The per-point photometric search dominates ``refine_normals`` runtime, so
+    refining a representative sample keeps these integration tests fast while
+    leaving the statistical assertions (consensus improves, cache equivalence)
+    well-populated. ``min(n, …)`` keeps it robust to small clouds.
+    """
+    ids = np.asarray(cloud.point_ids)
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.choice(ids, size=min(n, len(ids)), replace=False)).tolist()
+
+
 def test_refine_normals_improves_consensus(
     sfmrfile_reconstruction_with_17_images: Path,
 ):
@@ -43,11 +56,12 @@ def test_refine_normals_improves_consensus(
     assert len(cloud) > 0
     n0 = np.array([cloud[i].normal for i in range(len(cloud))])
 
-    # Modest search params keep the test quick; correctness, not quality.
-    # Confidence is opt-in (off by default), and this test checks it.
+    # Modest search params + a point subset keep the test quick; correctness,
+    # not quality. Confidence is opt-in (off by default), and this test checks it.
     res = cloud.refine_normals(
         recon,
         images,
+        point_ids=_sample_point_ids(cloud),
         resolution=12,
         init_steps=5,
         refine_levels=2,
@@ -95,6 +109,9 @@ def test_confidence_is_opt_in(sfmrfile_reconstruction_with_17_images: Path):
     """Confidence is NaN unless ``compute_confidence=True`` (off by default)."""
     recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
     images = _load_images(recon)
+    sample = _sample_point_ids(
+        PatchCloud.from_reconstruction(recon, normal="mean_viewing", extent_value=5.0)
+    )
 
     def conf(compute):
         cloud = PatchCloud.from_reconstruction(
@@ -103,6 +120,7 @@ def test_confidence_is_opt_in(sfmrfile_reconstruction_with_17_images: Path):
         res = cloud.refine_normals(
             recon,
             images,
+            point_ids=sample,
             resolution=12,
             init_steps=5,
             refine_levels=2,
@@ -123,13 +141,14 @@ def test_confidence_is_opt_in(sfmrfile_reconstruction_with_17_images: Path):
     assert np.all(np.isfinite(on[scored])) and np.all(on[scored] >= 0.0)
 
 
-def _refine(recon, images, cache, cache_supersample):
+def _refine(recon, images, cache, cache_supersample, point_ids):
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
     return cloud.refine_normals(
         recon,
         images,
+        point_ids=point_ids,
         resolution=16,
         init_steps=5,
         refine_levels=2,
@@ -150,9 +169,12 @@ def test_fronto_cache_matches_source_rendering(
     """
     recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
     images = _load_images(recon)
+    sample = _sample_point_ids(
+        PatchCloud.from_reconstruction(recon, normal="mean_viewing", extent_value=5.0)
+    )
 
-    off = _refine(recon, images, cache="off", cache_supersample=1.0)
-    on = _refine(recon, images, cache="fronto", cache_supersample=2.0)
+    off = _refine(recon, images, cache="off", cache_supersample=1.0, point_ids=sample)
+    on = _refine(recon, images, cache="fronto", cache_supersample=2.0, point_ids=sample)
 
     # Cached normals are unit length and finite.
     norms = np.linalg.norm(on["normal"], axis=1)

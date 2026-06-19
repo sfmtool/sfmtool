@@ -272,7 +272,14 @@ def test_cli_refine_normals_bare_before_other_option(
     sfmrfile_reconstruction_with_17_images,
 ):
     """A bare --refine-normals followed by another option runs the defaults
-    and leaves the following option intact (optional-value tokenization)."""
+    and leaves the following option intact (optional-value tokenization).
+
+    This is a CLI *tokenization* test, not a refinement-quality one, so the
+    expensive default-resolution refinement is stubbed out: what matters is that
+    the bare option parsed to the documented defaults and did not swallow the
+    trailing ``--scale 2.0`` as its value. Real refinement execution is covered
+    by ``test_cli_refine_normals`` and the library integration tests.
+    """
     input_sfmr = sfmrfile_reconstruction_with_17_images
     output_sfmr = input_sfmr.with_name("refined_bare.sfmr")
 
@@ -286,11 +293,29 @@ def test_cli_refine_normals_bare_before_other_option(
         "--scale",
         "2.0",
     ]
-    with patch("sys.argv", ["sfm"] + args):
+
+    captured: list[RefineNormalsTransform] = []
+
+    def _stub_apply(self, recon):
+        # Record the parsed transform, then skip the heavy refinement and pass
+        # the reconstruction through unchanged.
+        captured.append(self)
+        return recon
+
+    with (
+        patch("sys.argv", ["sfm"] + args),
+        patch.object(RefineNormalsTransform, "apply", _stub_apply),
+    ):
         result = CliRunner().invoke(main, args)
 
     assert result.exit_code == 0, result.output
     assert output_sfmr.exists()
+
+    # The bare --refine-normals parsed to the documented defaults.
+    assert len(captured) == 1
+    t = captured[0]
+    assert (t.init_steps, t.refine_levels, t.resolution) == (7, 3, 24)
+
     original = SfmrReconstruction.load(input_sfmr)
     refined = SfmrReconstruction.load(output_sfmr)
     # The trailing --scale 2.0 still applied (proves it wasn't consumed as the
