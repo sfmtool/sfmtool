@@ -10,10 +10,8 @@ from sfmtool._sfmtool import SfmrReconstruction
 
 
 class TestHomogeneousPointAccessors:
-    def test_finite_reconstruction_accessors(
-        self, sfmrfile_reconstruction_with_17_images
-    ):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_finite_reconstruction_accessors(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         m = len(recon.positions)
         assert m > 0
 
@@ -32,10 +30,8 @@ class TestHomogeneousPointAccessors:
         assert np.array_equal(positions_xyzw[:, 3], np.ones(m))
         assert np.array_equal(positions_xyzw[:, :3], positions)
 
-    def test_clone_with_changes_homogeneous_positions(
-        self, sfmrfile_reconstruction_with_17_images
-    ):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_clone_with_changes_homogeneous_positions(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         positions_xyzw = recon.positions_xyzw.copy()
         assert len(positions_xyzw) >= 2
 
@@ -54,9 +50,9 @@ class TestHomogeneousPointAccessors:
         np.testing.assert_allclose(clone.positions[0], [0.0, 0.0, 1.0])
 
     def test_clone_with_changes_rejects_all_zero_homogeneous_coordinate(
-        self, sfmrfile_reconstruction_with_17_images
+        self, seoul_bull_sfmr_only
     ):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         positions_xyzw = recon.positions_xyzw.copy()
         assert len(positions_xyzw) > 0
         # (0, 0, 0, 0) is no point at all: w = 0 with a zero direction.
@@ -66,9 +62,9 @@ class TestHomogeneousPointAccessors:
             recon.clone_with_changes(positions=positions_xyzw)
 
     def test_clone_with_changes_euclidean_positions_stay_finite(
-        self, sfmrfile_reconstruction_with_17_images
+        self, seoul_bull_sfmr_only
     ):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         # An (N, 3) Euclidean array keeps every point finite (w = 1).
         clone = recon.clone_with_changes(positions=recon.positions)
         assert not clone.point_is_at_infinity.any()
@@ -76,10 +72,8 @@ class TestHomogeneousPointAccessors:
 
 
 class TestInfinityConversions:
-    def test_classify_preserves_point_count(
-        self, sfmrfile_reconstruction_with_17_images
-    ):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_classify_preserves_point_count(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         classified = recon.classify_points_at_infinity()
         # Reclassification never adds or drops points or observations.
         assert classified.point_count == recon.point_count
@@ -88,8 +82,8 @@ class TestInfinityConversions:
             classified.point_is_at_infinity.sum()
         )
 
-    def test_classify_detects_a_far_point(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_classify_detects_a_far_point(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         # Pick a well-observed point and push it far away so its observation
         # rays become parallel — its parallax collapses below the noise floor.
         idx = int(np.argmax(recon.observation_counts))
@@ -109,10 +103,8 @@ class TestInfinityConversions:
             np.linalg.norm(classified.positions[idx]), 1.0, atol=1e-9
         )
 
-    def test_classify_noise_floor_is_monotone(
-        self, sfmrfile_reconstruction_with_17_images
-    ):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_classify_noise_floor_is_monotone(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         # A larger noise floor can only classify a superset of points.
         strict = recon.classify_points_at_infinity(noise_floor_px=0.01)
         loose = recon.classify_points_at_infinity(noise_floor_px=1.0e4)
@@ -120,10 +112,8 @@ class TestInfinityConversions:
         assert strict.infinity_point_count == int(strict.point_is_at_infinity.sum())
         assert loose.infinity_point_count == int(loose.point_is_at_infinity.sum())
 
-    def test_materialize_makes_every_point_finite(
-        self, sfmrfile_reconstruction_with_17_images
-    ):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_materialize_makes_every_point_finite(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         positions = recon.positions_xyzw.copy()
         n_infinity = min(5, len(positions))
         for i in range(n_infinity):
@@ -139,10 +129,8 @@ class TestInfinityConversions:
         assert np.all(np.isfinite(materialized.positions))
         assert materialized.infinity_point_count == 0
 
-    def test_materialize_leaves_finite_points_unchanged(
-        self, sfmrfile_reconstruction_with_17_images
-    ):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_materialize_leaves_finite_points_unchanged(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         # No points at infinity — materialise is a no-op on the positions.
         materialized = recon.materialize_points_at_infinity()
         np.testing.assert_array_equal(materialized.positions, recon.positions)
@@ -150,13 +138,13 @@ class TestInfinityConversions:
 
 
 class TestWorldSpaceUnit:
-    def test_default_is_none(self, sfmrfile_reconstruction_with_17_images):
+    def test_default_is_none(self, seoul_bull_sfmr_only):
         # A freshly solved reconstruction is in arbitrary units.
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         assert recon.world_space_unit is None
 
-    def test_clone_sets_and_clears_unit(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_clone_sets_and_clears_unit(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
 
         scaled = recon.clone_with_changes(world_space_unit="m")
         assert scaled.world_space_unit == "m"
@@ -166,10 +154,8 @@ class TestWorldSpaceUnit:
         cleared = scaled.clone_with_changes(world_space_unit=None)
         assert cleared.world_space_unit is None
 
-    def test_unit_survives_save_load_roundtrip(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_unit_survives_save_load_roundtrip(self, seoul_bull_sfmr_only, tmp_path):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
         scaled = recon.clone_with_changes(world_space_unit="mm")
 
         out_path = tmp_path / "scaled.sfmr"

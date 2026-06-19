@@ -58,70 +58,56 @@ def _compute_max_feature_sizes(sfmr_path):
     return max_sizes
 
 
-def test_remove_large_features_basic(sfmrfile_reconstruction_with_17_images, tmp_path):
+def test_remove_large_features_basic(seoul_bull_workspace, tmp_path):
     """Test that large features filter removes some points."""
     # Use a threshold that should remove some but not all points
-    max_sizes = _compute_max_feature_sizes(sfmrfile_reconstruction_with_17_images)
+    max_sizes = _compute_max_feature_sizes(seoul_bull_workspace)
     median_size = float(np.median(max_sizes[max_sizes > 0]))
 
     output_path = tmp_path / "filtered.sfmr"
     transforms = [RemoveLargeFeaturesFilter(median_size)]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_workspace)
     filtered = load_reconstruction_data(output_path)
 
     assert filtered["point_count"] < original["point_count"]
     assert filtered["observation_count"] < original["observation_count"]
 
 
-def test_remove_large_features_verifies_sizes(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_remove_large_features_verifies_sizes(seoul_bull_workspace, tmp_path):
     """Test that all remaining points have max feature size <= threshold."""
     threshold = 10.0
     output_path = tmp_path / "filtered_verify.sfmr"
     transforms = [RemoveLargeFeaturesFilter(threshold)]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
 
     max_sizes = _compute_max_feature_sizes(output_path)
     assert np.all(max_sizes <= threshold)
 
 
-def test_remove_large_features_lenient(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_remove_large_features_lenient(seoul_bull_workspace, tmp_path):
     """Test that a very large threshold keeps all points."""
     output_path = tmp_path / "filtered_lenient.sfmr"
     transforms = [RemoveLargeFeaturesFilter(1e6)]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_workspace)
     filtered = load_reconstruction_data(output_path)
 
     assert filtered["point_count"] == original["point_count"]
 
 
-def test_remove_large_features_tiny_threshold(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_remove_large_features_tiny_threshold(seoul_bull_workspace, tmp_path):
     """Test that a tiny threshold either removes all points or leaves valid ones."""
     output_path = tmp_path / "filtered_tiny.sfmr"
     transforms = [RemoveLargeFeaturesFilter(0.1)]
 
     try:
-        apply_transforms_to_file(
-            sfmrfile_reconstruction_with_17_images, output_path, transforms
-        )
+        apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
         load_reconstruction_data(output_path)
         max_sizes = _compute_max_feature_sizes(output_path)
         assert np.all(max_sizes <= 0.1)
@@ -129,36 +115,28 @@ def test_remove_large_features_tiny_threshold(
         assert "No points remain" in str(e)
 
 
-def test_remove_large_features_preserves_images(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_remove_large_features_preserves_images(seoul_bull_workspace, tmp_path):
     """Test that filtering by feature size doesn't remove images."""
-    max_sizes = _compute_max_feature_sizes(sfmrfile_reconstruction_with_17_images)
+    max_sizes = _compute_max_feature_sizes(seoul_bull_workspace)
     median_size = float(np.median(max_sizes[max_sizes > 0]))
 
     output_path = tmp_path / "filtered_images.sfmr"
     transforms = [RemoveLargeFeaturesFilter(median_size)]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_workspace)
     filtered = load_reconstruction_data(output_path)
 
     assert filtered["image_count"] == original["image_count"]
 
 
-def test_remove_large_features_preserves_tracks(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_remove_large_features_preserves_tracks(seoul_bull_workspace, tmp_path):
     """Test that remaining points have valid observation counts."""
     output_path = tmp_path / "filtered_tracks.sfmr"
     transforms = [RemoveLargeFeaturesFilter(20.0)]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
 
     filtered = load_reconstruction_data(output_path)
     assert np.all(filtered["observation_counts"] > 0)
@@ -182,7 +160,7 @@ def test_remove_large_features_description():
 
 
 def test_remove_large_features_combined_with_short_tracks(
-    sfmrfile_reconstruction_with_17_images, tmp_path
+    seoul_bull_workspace, tmp_path
 ):
     """Test chaining with RemoveShortTracksFilter."""
     from sfmtool.xform import RemoveShortTracksFilter
@@ -193,11 +171,9 @@ def test_remove_large_features_combined_with_short_tracks(
         RemoveLargeFeaturesFilter(20.0),
     ]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_workspace)
     filtered = load_reconstruction_data(output_path)
 
     assert filtered["point_count"] < original["point_count"]

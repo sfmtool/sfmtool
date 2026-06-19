@@ -360,9 +360,9 @@ class TestHeatmapCLI:
 class TestHeatmapE2E:
     """End-to-end test using the Seoul Bull dataset."""
 
-    def test_heatmap_reproj(self, sfmrfile_reconstruction_with_17_images, tmp_path):
+    def test_heatmap_reproj(self, seoul_bull_workspace, tmp_path):
         """Generate reprojection error heatmaps for a real reconstruction."""
-        sfmr_path = sfmrfile_reconstruction_with_17_images
+        sfmr_path = seoul_bull_workspace
         output_dir = tmp_path / "heatmaps"
 
         runner = CliRunner()
@@ -384,11 +384,9 @@ class TestHeatmapE2E:
         pngs = list(output_dir.glob("*.png"))
         assert len(pngs) > 0, f"No PNGs generated. Output: {result.output}"
 
-    def test_heatmap_all_metrics(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
+    def test_heatmap_all_metrics(self, seoul_bull_workspace, tmp_path):
         """Generate all metric heatmaps."""
-        sfmr_path = sfmrfile_reconstruction_with_17_images
+        sfmr_path = seoul_bull_workspace
         output_dir = tmp_path / "heatmaps_all"
 
         runner = CliRunner()

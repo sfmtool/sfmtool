@@ -46,9 +46,9 @@ def test_xform_non_sfmr_output(tmp_path: Path):
     assert "Output path must be a .sfmr file" in result.output
 
 
-def test_xform_on_reconstruction(sfmrfile_reconstruction_with_17_images: Path):
+def test_xform_on_reconstruction(seoul_bull_workspace: Path):
     """Test xform scale on a real reconstruction."""
-    output_sfmr = sfmrfile_reconstruction_with_17_images
+    output_sfmr = seoul_bull_workspace
     workspace_dir = output_sfmr.parent
 
     # Now test xform with scale
@@ -70,9 +70,9 @@ def test_xform_on_reconstruction(sfmrfile_reconstruction_with_17_images: Path):
     assert scaled.point_count == original.point_count
 
 
-def test_xform_remove_short_tracks(sfmrfile_reconstruction_with_17_images: Path):
+def test_xform_remove_short_tracks(seoul_bull_workspace: Path):
     """Test xform with short track removal."""
-    output_sfmr = sfmrfile_reconstruction_with_17_images
+    output_sfmr = seoul_bull_workspace
     workspace_dir = output_sfmr.parent
 
     # Remove short tracks
@@ -93,11 +93,11 @@ def test_xform_remove_short_tracks(sfmrfile_reconstruction_with_17_images: Path)
 
 
 def test_xform_camera_model_with_bundle_adjust(
-    sfmrfile_reconstruction_with_17_images: Path,
+    seoul_bull_workspace: Path,
 ):
     """`--camera-model RADIAL --bundle-adjust` upgrades SIMPLE_RADIAL → RADIAL,
     then bundle adjustment refines the k2 term that was zero-initialized."""
-    output_sfmr = sfmrfile_reconstruction_with_17_images
+    output_sfmr = seoul_bull_workspace
     workspace_dir = output_sfmr.parent
 
     switched_sfmr = workspace_dir / "radial_ba.sfmr"
@@ -122,9 +122,9 @@ def test_xform_camera_model_with_bundle_adjust(
         assert camera.model == "RADIAL"
 
 
-def test_xform_camera_model_unknown(sfmrfile_reconstruction_with_17_images: Path):
+def test_xform_camera_model_unknown(seoul_bull_workspace: Path):
     """An unknown camera model is rejected at the CLI."""
-    output_sfmr = sfmrfile_reconstruction_with_17_images
+    output_sfmr = seoul_bull_workspace
     workspace_dir = output_sfmr.parent
 
     bad_sfmr = workspace_dir / "bad.sfmr"
@@ -141,10 +141,10 @@ def test_xform_camera_model_unknown(sfmrfile_reconstruction_with_17_images: Path
     assert "Unknown camera model" in result.output
 
 
-def test_xform_default_output_path(sfmrfile_reconstruction_with_17_images: Path):
+def test_xform_default_output_path(seoul_bull_workspace: Path):
     """When OUTPUT_PATH is omitted, xform writes {stem}-transformed.sfmr next
     to the input, then -2, -3, ... for subsequent runs."""
-    input_sfmr = sfmrfile_reconstruction_with_17_images
+    input_sfmr = seoul_bull_workspace
     workspace_dir = input_sfmr.parent
     stem = input_sfmr.stem
 
@@ -170,9 +170,9 @@ def test_xform_default_output_path(sfmrfile_reconstruction_with_17_images: Path)
     assert expected_third.exists()
 
 
-def test_xform_chained_transforms(sfmrfile_reconstruction_with_17_images: Path):
+def test_xform_chained_transforms(seoul_bull_workspace: Path):
     """Test xform with multiple chained transforms."""
-    output_sfmr = sfmrfile_reconstruction_with_17_images
+    output_sfmr = seoul_bull_workspace
     workspace_dir = output_sfmr.parent
 
     # Chain: remove short tracks -> scale -> translate

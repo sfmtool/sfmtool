@@ -14,20 +14,18 @@ from sfmtool.xform import (
 from .conftest import apply_transforms_to_file, load_reconstruction_data
 
 
-def test_bundle_adjust_transform(sfmrfile_reconstruction_with_17_images, tmp_path):
+def test_bundle_adjust_transform(seoul_bull_workspace, tmp_path):
     """Test that bundle adjustment works."""
     output_path = tmp_path / "bundle_adjusted.sfmr"
 
     transforms = [BundleAdjustTransform()]
 
-    result = apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    result = apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
 
     assert result == output_path
     assert output_path.exists()
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_workspace)
     adjusted = load_reconstruction_data(output_path)
 
     assert adjusted["point_count"] == original["point_count"]
@@ -35,7 +33,7 @@ def test_bundle_adjust_transform(sfmrfile_reconstruction_with_17_images, tmp_pat
     assert len(adjusted["quaternions_wxyz"]) > 0
 
 
-def test_bundle_adjust_with_filter(sfmrfile_reconstruction_with_17_images, tmp_path):
+def test_bundle_adjust_with_filter(seoul_bull_workspace, tmp_path):
     """Test bundle adjustment combined with filtering."""
     output_path = tmp_path / "filtered_and_adjusted.sfmr"
 
@@ -44,59 +42,47 @@ def test_bundle_adjust_with_filter(sfmrfile_reconstruction_with_17_images, tmp_p
         BundleAdjustTransform(),
     ]
 
-    result = apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    result = apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
 
     assert result == output_path
     assert output_path.exists()
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_workspace)
     result_data = load_reconstruction_data(output_path)
 
     assert result_data["point_count"] < original["point_count"]
     assert np.all(result_data["observation_counts"] > 2)
 
 
-def test_bundle_adjust_preserves_image_count(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_bundle_adjust_preserves_image_count(seoul_bull_workspace, tmp_path):
     """Test that BA preserves the number of images."""
     output_path = tmp_path / "ba_images.sfmr"
 
     transforms = [BundleAdjustTransform()]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_workspace)
     adjusted = load_reconstruction_data(output_path)
 
     assert adjusted["image_count"] == original["image_count"]
 
 
-def test_bundle_adjust_preserves_observation_count(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_bundle_adjust_preserves_observation_count(seoul_bull_workspace, tmp_path):
     """Test that BA preserves the observation count."""
     output_path = tmp_path / "ba_observations.sfmr"
 
     transforms = [BundleAdjustTransform()]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_workspace)
     adjusted = load_reconstruction_data(output_path)
 
     assert adjusted["observation_count"] == original["observation_count"]
 
 
-def test_bundle_adjust_quaternion_consistency(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_bundle_adjust_quaternion_consistency(seoul_bull_workspace, tmp_path):
     """Test that BA preserves quaternion ordering (xyzw->wxyz conversion).
 
     Regression test: pycolmap returns quaternions in xyzw order, but our
@@ -106,11 +92,9 @@ def test_bundle_adjust_quaternion_consistency(
     output_path = tmp_path / "ba_quat_check.sfmr"
     transforms = [BundleAdjustTransform()]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_workspace)
     adjusted = load_reconstruction_data(output_path)
 
     # Compute camera centers from quaternions and translations
@@ -142,24 +126,20 @@ def test_bundle_adjust_quaternion_consistency(
     )
 
 
-def test_bundle_adjust_no_rig_data(sfmrfile_reconstruction_with_17_images, tmp_path):
+def test_bundle_adjust_no_rig_data(seoul_bull_workspace, tmp_path):
     """Test that BA on a non-rig reconstruction doesn't add spurious rig data."""
     from sfmtool._sfmtool import SfmrReconstruction
 
     output_path = tmp_path / "ba_no_rig.sfmr"
     transforms = [BundleAdjustTransform()]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
 
     adjusted = SfmrReconstruction.load(output_path)
     assert adjusted.rig_frame_data is None
 
 
-def test_bundle_adjust_preserves_rig_data(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_bundle_adjust_preserves_rig_data(seoul_bull_workspace, tmp_path):
     """Test that BA preserves rig_frame_data through the round-trip.
 
     Regression test: before the fix, _reconstruction_to_data did not call
@@ -167,7 +147,7 @@ def test_bundle_adjust_preserves_rig_data(
     """
     from sfmtool._sfmtool import SfmrReconstruction
 
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     image_count = recon.image_count
 
     # Create a 2-sensor rig by duplicating the camera (each sensor needs a

@@ -74,8 +74,8 @@ def _seoul_bull_rig_and_sources(
 
 
 @pytest.fixture
-def seoul_bull_rig_and_sources(sfmrfile_reconstruction_with_17_images: Path):
-    return _seoul_bull_rig_and_sources(sfmrfile_reconstruction_with_17_images)
+def seoul_bull_rig_and_sources(seoul_bull_workspace: Path):
+    return _seoul_bull_rig_and_sources(seoul_bull_workspace)
 
 
 def _monolithic_atlas(rig, sources, dtype: str) -> np.ndarray:

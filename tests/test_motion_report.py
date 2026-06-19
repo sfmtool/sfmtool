@@ -75,11 +75,11 @@ def _run_recon_to_json(recon) -> dict:
 
 
 def test_recon_with_planted_discontinuity_emits_one_edge_and_two_segments(
-    sfmrfile_reconstruction_with_17_images,
+    seoul_bull_workspace,
 ):
     """A large translation between frame 10 and 11 should yield one
     discontinuity edge and two segments covering [0..10] and [11..16]."""
-    recon = _make_translation_discontinuity(sfmrfile_reconstruction_with_17_images)
+    recon = _make_translation_discontinuity(seoul_bull_workspace)
     report = _run_recon_to_json(recon)
 
     assert report["schema_version"] == 1
@@ -115,13 +115,13 @@ def test_recon_with_planted_discontinuity_emits_one_edge_and_two_segments(
 
 
 def test_recon_with_no_discontinuity_emits_single_full_length_segment(
-    sfmrfile_reconstruction_with_17_images,
+    seoul_bull_workspace,
 ):
     """An unmodified, smooth reconstruction has no discontinuities and one
     segment covering the whole sequence."""
     from sfmtool._sfmtool import SfmrReconstruction
 
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     report = _run_recon_to_json(recon)
 
     seq = report["sequences"][0]
@@ -134,14 +134,14 @@ def test_recon_with_no_discontinuity_emits_single_full_length_segment(
 
 
 def test_recon_thresholds_block_matches_module_constants(
-    sfmrfile_reconstruction_with_17_images,
+    seoul_bull_workspace,
 ):
     """The top-level thresholds block echoes the analyzer's module-level
     constants and the resolved per-sequence threshold is derived from
     median_trans."""
     from sfmtool._sfmtool import SfmrReconstruction
 
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     report = _run_recon_to_json(recon)
 
     th = report["thresholds"]
@@ -158,11 +158,11 @@ def test_recon_thresholds_block_matches_module_constants(
 
 
 def test_recon_json_has_no_nan_or_infinity(
-    sfmrfile_reconstruction_with_17_images,
+    seoul_bull_workspace,
 ):
     """The serialized report must be strictly RFC-8259 compliant: no NaN,
     +inf, or -inf leaks. We verify via `allow_nan=False`."""
-    recon = _make_translation_discontinuity(sfmrfile_reconstruction_with_17_images)
+    recon = _make_translation_discontinuity(seoul_bull_workspace)
     report = _run_recon_to_json(recon)
     # Round-trip via strict JSON.
     text = json.dumps(report, allow_nan=False)
@@ -361,16 +361,14 @@ def test_image_sequence_json_has_samples_and_no_segments(runner, tmp_path):
 # --- CLI integration & error handling ---
 
 
-def test_cli_recon_writes_json(
-    runner, sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_cli_recon_writes_json(runner, seoul_bull_workspace, tmp_path):
     """The CLI `--json PATH` flag writes a JSON file for reconstruction mode."""
     json_out = tmp_path / "report.json"
     result = runner.invoke(
         main,
         [
             "motion",
-            str(sfmrfile_reconstruction_with_17_images),
+            str(seoul_bull_workspace),
             "--json",
             str(json_out),
         ],
@@ -383,7 +381,7 @@ def test_cli_recon_writes_json(
 
 
 def test_cli_recon_json_to_nonexistent_dir_raises(
-    runner, sfmrfile_reconstruction_with_17_images, tmp_path
+    runner, seoul_bull_workspace, tmp_path
 ):
     """A `--json` path whose parent directory does not exist fails cleanly."""
     bad = tmp_path / "does_not_exist" / "report.json"
@@ -391,7 +389,7 @@ def test_cli_recon_json_to_nonexistent_dir_raises(
         main,
         [
             "motion",
-            str(sfmrfile_reconstruction_with_17_images),
+            str(seoul_bull_workspace),
             "--json",
             str(bad),
         ],

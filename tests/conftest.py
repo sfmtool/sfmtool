@@ -241,7 +241,7 @@ def build_cluster_reconstruction(
 
 
 @pytest.fixture(scope="session")
-def sfmrfile_reconstruction_with_17_images_once(tmp_path_factory) -> Path:
+def seoul_bull_workspace_once(tmp_path_factory) -> Path:
     """Session-scoped fixture: build a .sfmr reconstruction from 17 images.
 
     Mirrors ``scripts/init_dataset_seoul_bull.sh``: sfmtool SIFT + track-cluster
@@ -291,14 +291,35 @@ def sfmrfile_reconstruction_with_17_images_once(tmp_path_factory) -> Path:
 
 
 @pytest.fixture
-def sfmrfile_reconstruction_with_17_images(
-    sfmrfile_reconstruction_with_17_images_once: Path, tmp_path_factory
-) -> Path:
+def seoul_bull_workspace(seoul_bull_workspace_once: Path, tmp_path_factory) -> Path:
     """Per-test isolation of the 17-image .sfmr reconstruction."""
-    source_workspace_dir = sfmrfile_reconstruction_with_17_images_once.parent
+    source_workspace_dir = seoul_bull_workspace_once.parent
     workspace_dir = tmp_path_factory.mktemp("workspace_17_images")
     shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
-    return workspace_dir / sfmrfile_reconstruction_with_17_images_once.name
+    return workspace_dir / seoul_bull_workspace_once.name
+
+
+@pytest.fixture
+def seoul_bull_sfmr_only(seoul_bull_workspace_once: Path, tmp_path_factory) -> Path:
+    """Per-test copy of *only* the 17-image ``.sfmr`` (plus the workspace marker).
+
+    For tests that just ``SfmrReconstruction.load`` the reconstruction and read
+    its geometry (or apply geometry-only transforms / alignment), copying the
+    whole solved workspace — 17 images, every ``.sift`` file, the COLMAP db and
+    the match cache — is wasted I/O that dominates the suite's file-copy time.
+    This copies the single ``.sfmr`` plus the ``.sfm-workspace.json`` marker into
+    an isolated tmp dir, so the reconstruction resolves its workspace to *that*
+    dir (not the shared session workspace) and any source-image / ``.sift``
+    access fails loudly. Tests that need the source images or ``.sift`` files must
+    use the full :func:`seoul_bull_workspace` instead.
+    """
+    src = seoul_bull_workspace_once
+    workspace_dir = tmp_path_factory.mktemp("sfmr_only_17_images")
+    shutil.copy(src, workspace_dir / src.name)
+    marker = src.parent / ".sfm-workspace.json"
+    if marker.exists():
+        shutil.copy(marker, workspace_dir / marker.name)
+    return workspace_dir / src.name
 
 
 KERRY_PARK_DIR = TEST_DATA_DIR / "images" / "kerry_park"
@@ -381,7 +402,7 @@ def isolated_kerry_park_camrig(tmp_path_factory) -> Path:
 
 
 @pytest.fixture(scope="session")
-def sfmrfile_reconstruction_kerry_park_once(tmp_path_factory) -> Path:
+def kerry_park_workspace_once(tmp_path_factory) -> Path:
     """Session-scoped: build a .sfmr reconstruction from the kerry_park rig.
 
     Mirrors ``scripts/init_dataset_kerry_park.sh``: sfmtool SIFT + track-cluster
@@ -421,22 +442,20 @@ def sfmrfile_reconstruction_kerry_park_once(tmp_path_factory) -> Path:
 
 
 @pytest.fixture
-def sfmrfile_reconstruction_kerry_park(
-    sfmrfile_reconstruction_kerry_park_once: Path, tmp_path_factory
-) -> Path:
+def kerry_park_workspace(kerry_park_workspace_once: Path, tmp_path_factory) -> Path:
     """Per-test isolation of the kerry_park .sfmr reconstruction."""
-    source_workspace_dir = sfmrfile_reconstruction_kerry_park_once.parent
+    source_workspace_dir = kerry_park_workspace_once.parent
     workspace_dir = tmp_path_factory.mktemp("kerry_park_sfmr")
     shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
-    return workspace_dir / sfmrfile_reconstruction_kerry_park_once.name
+    return workspace_dir / kerry_park_workspace_once.name
 
 
 @pytest.fixture(scope="session")
-def sfmrfile_reconstruction_kerry_park_camrig_once(tmp_path_factory) -> Path:
+def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
     """Session-scoped: build a .sfmr reconstruction from the kerry_park rig,
     with the rig described by a multi-sensor ``kerry_park.camrig``.
 
-    Unlike :func:`sfmrfile_reconstruction_kerry_park_once`, this fixture solves
+    Unlike :func:`kerry_park_workspace_once`, this fixture solves
     straight from the images through the ``_setup_for_sfm`` rig-aware path
     (``run_global_sfm(matching_mode="cluster")``), which sets up the multi-sensor
     ``.camrig`` and then runs the background-floor cluster matcher with the same
@@ -509,11 +528,11 @@ def sfmrfile_reconstruction_kerry_park_camrig_once(tmp_path_factory) -> Path:
 
 
 @pytest.fixture
-def sfmrfile_reconstruction_kerry_park_camrig(
-    sfmrfile_reconstruction_kerry_park_camrig_once: Path, tmp_path_factory
+def kerry_park_camrig_workspace(
+    kerry_park_camrig_workspace_once: Path, tmp_path_factory
 ) -> Path:
     """Per-test isolation of the kerry_park ``.camrig`` .sfmr reconstruction."""
-    source_workspace_dir = sfmrfile_reconstruction_kerry_park_camrig_once.parent
+    source_workspace_dir = kerry_park_camrig_workspace_once.parent
     workspace_dir = tmp_path_factory.mktemp("kerry_park_camrig_sfmr")
     shutil.copytree(source_workspace_dir, workspace_dir, dirs_exist_ok=True)
-    return workspace_dir / sfmrfile_reconstruction_kerry_park_camrig_once.name
+    return workspace_dir / kerry_park_camrig_workspace_once.name

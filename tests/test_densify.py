@@ -639,12 +639,12 @@ class TestDensifyCLI:
 
 
 class TestDensifyE2E:
-    def test_densify_reconstruction(self, sfmrfile_reconstruction_with_17_images):
+    def test_densify_reconstruction(self, seoul_bull_workspace):
         """Test that densify produces a valid reconstruction with more points."""
         from sfmtool._densify import densify_reconstruction
         from sfmtool._sfmtool import SfmrReconstruction
 
-        sfmr_path = sfmrfile_reconstruction_with_17_images
+        sfmr_path = seoul_bull_workspace
         recon = SfmrReconstruction.load(sfmr_path)
 
         result = densify_reconstruction(
@@ -659,10 +659,10 @@ class TestDensifyE2E:
         # Densified should generally have more points
         # (but don't strictly require it since filtering can reduce count)
 
-    def test_densify_cli_e2e(self, sfmrfile_reconstruction_with_17_images, tmp_path):
+    def test_densify_cli_e2e(self, seoul_bull_workspace, tmp_path):
         """Test densify CLI end-to-end."""
         runner = CliRunner()
-        input_path = sfmrfile_reconstruction_with_17_images
+        input_path = seoul_bull_workspace
         output_path = tmp_path / "densified.sfmr"
 
         result = runner.invoke(
