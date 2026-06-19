@@ -45,9 +45,9 @@ class TestMergeValidation:
             merge_reconstructions(reconstructions=[])
 
     def test_merge_requires_at_least_two_reconstructions_single(
-        self, sfmrfile_reconstruction_with_17_images
+        self, seoul_bull_workspace
     ):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         with pytest.raises(ValueError, match="Need at least 2 reconstructions"):
             merge_reconstructions(reconstructions=[recon])
 
@@ -58,11 +58,9 @@ class TestMergeValidation:
 
 
 class TestMergeSubsets:
-    def test_merge_two_overlapping_subsets(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
+    def test_merge_two_overlapping_subsets(self, seoul_bull_workspace, tmp_path):
         """Split into 1-10 and 6-17, merge, verify image count and names match."""
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         original = SfmrReconstruction.load(original_path)
 
         subset_a_path = tmp_path / "subset_a.sfmr"
@@ -97,11 +95,9 @@ class TestMergeSubsets:
         merged_names = {Path(n).name for n in merged.image_names}
         assert original_names == merged_names
 
-    def test_merge_three_overlapping_subsets(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
+    def test_merge_three_overlapping_subsets(self, seoul_bull_workspace, tmp_path):
         """Merge three overlapping subsets (1-7, 5-12, 10-17)."""
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         original = SfmrReconstruction.load(original_path)
 
         subset_paths = []
@@ -130,11 +126,9 @@ class TestMergeSubsets:
 
 
 class TestMergeQuality:
-    def test_merge_preserves_camera_intrinsics(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
+    def test_merge_preserves_camera_intrinsics(self, seoul_bull_workspace, tmp_path):
         """Camera parameters should be preserved through merge."""
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         original = SfmrReconstruction.load(original_path)
 
         subset_a_path = tmp_path / "subset_a.sfmr"
@@ -169,14 +163,12 @@ class TestMergeQuality:
                     orig_cam.parameters[key], merged_cam.parameters[key], rtol=1e-5
                 )
 
-    def test_merge_preserves_point_count(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
+    def test_merge_preserves_point_count(self, seoul_bull_workspace, tmp_path):
         """Merging subsets that together cover all images recovers the original
         points: none are lost, and only a handful of boundary tracks (whose
         observations straddle the subset gap without sharing an image) split,
         so the merged count is the original plus a small surplus."""
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         original = SfmrReconstruction.load(original_path)
 
         subset_a_path = tmp_path / "subset_a.sfmr"
@@ -203,11 +195,9 @@ class TestMergeQuality:
         assert merged.point_count >= original.point_count
         assert merged.point_count <= int(original.point_count * 1.05)
 
-    def test_merge_preserves_point_positions(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
+    def test_merge_preserves_point_positions(self, seoul_bull_workspace, tmp_path):
         """After merge, point positions should match original via feature mapping."""
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         original = SfmrReconstruction.load(original_path)
 
         subset_a_path = tmp_path / "subset_a.sfmr"
@@ -260,11 +250,9 @@ class TestMergeQuality:
             merged_pos = merged.positions[merged_pt_id]
             assert np.allclose(orig_pos, merged_pos, atol=1e-5)
 
-    def test_merge_camera_poses_close(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
+    def test_merge_camera_poses_close(self, seoul_bull_workspace, tmp_path):
         """After merge, at least 85% of camera poses should be close to original."""
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         original = SfmrReconstruction.load(original_path)
 
         subset_a_path = tmp_path / "subset_a.sfmr"
@@ -319,11 +307,9 @@ class TestMergeQuality:
             f"close poses after merge (expected >= 85%)"
         )
 
-    def test_merge_no_duplicate_points(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
+    def test_merge_no_duplicate_points(self, seoul_bull_workspace, tmp_path):
         """Each (image, feature) pair should map to exactly one point."""
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         original = SfmrReconstruction.load(original_path)
 
         subset_a_path = tmp_path / "subset_a.sfmr"
@@ -370,9 +356,9 @@ class TestMergeQuality:
 
 
 class TestMergeCLI:
-    def test_merge_cli_basic(self, sfmrfile_reconstruction_with_17_images, tmp_path):
+    def test_merge_cli_basic(self, seoul_bull_workspace, tmp_path):
         """Basic CLI merge succeeds and produces output."""
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         workspace = original_path.parent
 
         subset_a_path = workspace / "subset_a.sfmr"
@@ -440,11 +426,9 @@ class TestMergeCLI:
         assert result.exit_code != 0
         assert "2 reconstructions" in result.output
 
-    def test_merge_cli_with_rig_frame_data(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
+    def test_merge_cli_with_rig_frame_data(self, seoul_bull_workspace, tmp_path):
         """Merge should succeed when reconstructions have rig_frame_data."""
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         recon = SfmrReconstruction.load(original_path)
 
         # Add synthetic rig_frame_data to the reconstruction
@@ -516,11 +500,9 @@ class TestMergeCLI:
         merged = SfmrReconstruction.load(output_path)
         assert merged.image_count == recon.image_count
 
-    def test_merge_cli_with_percentile(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
+    def test_merge_cli_with_percentile(self, seoul_bull_workspace, tmp_path):
         """Merge with custom percentile option."""
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         workspace = original_path.parent
 
         subset_a_path = workspace / "subset_a.sfmr"

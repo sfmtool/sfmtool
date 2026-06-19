@@ -17,8 +17,8 @@ import numpy as np
 from sfmtool._sfmtool import PatchCloud, SfmrReconstruction
 
 
-def test_feature_size_success_path(sfmrfile_reconstruction_with_17_images: Path):
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+def test_feature_size_success_path(seoul_bull_workspace: Path):
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     cloud = PatchCloud.from_reconstruction(
         recon, extent="feature_size", extent_value=5.0
     )
@@ -36,9 +36,9 @@ def test_feature_size_success_path(sfmrfile_reconstruction_with_17_images: Path)
 
 
 def test_feature_size_scales_linearly_with_factor(
-    sfmrfile_reconstruction_with_17_images: Path,
+    seoul_bull_workspace: Path,
 ):
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     cloud5 = PatchCloud.from_reconstruction(
         recon, extent="feature_size", extent_value=5.0
     )
@@ -54,7 +54,7 @@ def test_feature_size_scales_linearly_with_factor(
     np.testing.assert_allclose(h10, 2.0 * h5, rtol=1e-12)
 
 
-def test_feature_size_handles_fisheye(sfmrfile_reconstruction_kerry_park: Path):
+def test_feature_size_handles_fisheye(kerry_park_workspace: Path):
     """FeatureSize sizes every point of a fisheye (FoV > 180°) rig.
 
     A fisheye sees points past 90° off axis at camera-frame z <= 0; the world
@@ -63,7 +63,7 @@ def test_feature_size_handles_fisheye(sfmrfile_reconstruction_kerry_park: Path):
     pinhole `σ·z/f` (gated on z > 0) raised ``MissingFeatureScale`` for a point
     whose every observation was peripheral. See ``specs/core/patch-cloud.md``.
     """
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_kerry_park)
+    recon = SfmrReconstruction.load(kerry_park_workspace)
     cloud = PatchCloud.from_reconstruction(
         recon, extent="feature_size", extent_value=5.0
     )

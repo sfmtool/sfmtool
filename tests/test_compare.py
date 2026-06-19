@@ -54,25 +54,25 @@ def _capture_compare(recon1, recon2, name1="recon1", name2="recon2"):
 class TestCompareIdentical:
     """Test comparing a reconstruction with itself."""
 
-    def test_all_images_match(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_all_images_match(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         output = _capture_compare(recon, recon)
         assert "Matching images: 17" in output
         assert "Only in reference: 0" in output
         assert "Only in target: 0" in output
 
-    def test_camera_parameters_match(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_camera_parameters_match(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         output = _capture_compare(recon, recon)
         assert "All parameters match" in output
 
-    def test_same_sift_files(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_same_sift_files(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         output = _capture_compare(recon, recon)
         assert "Same SIFT file: 17" in output
 
-    def test_identity_alignment(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_identity_alignment(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         output = _capture_compare(recon, recon)
         assert "RMS error:" in output
         for line in output.split("\n"):
@@ -80,8 +80,8 @@ class TestCompareIdentical:
                 rms = float(line.split(":")[-1].strip())
                 assert rms < 0.2
 
-    def test_all_points_correspond(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_all_points_correspond(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         n_points = recon.point_count
         output = _capture_compare(recon, recon)
         assert f"Corresponding point pairs: {n_points}" in output
@@ -89,8 +89,8 @@ class TestCompareIdentical:
         # tightest relative threshold (distances are reported as % of scene scale).
         assert f"< 0.1%: {n_points} (100.0%)" in output
 
-    def test_conclusion_identical(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_conclusion_identical(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         output = _capture_compare(recon, recon)
         assert "IDENTICAL" in output
 
@@ -98,8 +98,8 @@ class TestCompareIdentical:
 class TestCompareTransformed:
     """Test comparing original with a similarity-transformed version."""
 
-    def test_cameras_still_match(self, sfmrfile_reconstruction_with_17_images):
-        original_path = sfmrfile_reconstruction_with_17_images
+    def test_cameras_still_match(self, seoul_bull_workspace):
+        original_path = seoul_bull_workspace
         workspace = original_path.parent
 
         rotation = _rot_quat_from_euler_angles(np.radians([45, 30, 15]))
@@ -118,10 +118,8 @@ class TestCompareTransformed:
         assert "Matching images: 17" in output
         assert "Same SIFT file: 17" in output
 
-    def test_alignment_recovers_inverse_scale(
-        self, sfmrfile_reconstruction_with_17_images
-    ):
-        original_path = sfmrfile_reconstruction_with_17_images
+    def test_alignment_recovers_inverse_scale(self, seoul_bull_workspace):
+        original_path = seoul_bull_workspace
         workspace = original_path.parent
         scale = 2.5
 
@@ -145,15 +143,13 @@ class TestCompareTransformed:
                 expected_scale = 1.0 / scale
                 assert abs(recovered_scale - expected_scale) < 0.01
 
-    def test_distance_metric_is_scale_independent(
-        self, sfmrfile_reconstruction_with_17_images
-    ):
+    def test_distance_metric_is_scale_independent(self, seoul_bull_workspace):
         # A reconstruction compared against a 100x-scaled copy of itself must
         # report the same scale-independent stats as comparing it to a 1x copy:
         # the similarity alignment removes the gauge, and residuals are reported
         # as a percentage of scene scale. Only the absolute "scene scale" line
         # should differ (by 100x).
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         workspace = original_path.parent
         original = SfmrReconstruction.load(original_path)
         n_points = original.point_count
@@ -193,10 +189,8 @@ class TestCompareTransformed:
         # same — the point is that the *percentage* stats above are identical.
         assert _scene_scale(out_1x) == _scene_scale(out_100x)
 
-    def test_features_identical_after_transform(
-        self, sfmrfile_reconstruction_with_17_images
-    ):
-        original_path = sfmrfile_reconstruction_with_17_images
+    def test_features_identical_after_transform(self, seoul_bull_workspace):
+        original_path = seoul_bull_workspace
         workspace = original_path.parent
 
         transform = Se3Transform(translation=[1, 2, 3], scale=1.5)
@@ -217,8 +211,8 @@ class TestCompareTransformed:
 class TestCompareFiltered:
     """Test comparing original with a filtered (subset) version."""
 
-    def test_subset_matching(self, sfmrfile_reconstruction_with_17_images):
-        original_path = sfmrfile_reconstruction_with_17_images
+    def test_subset_matching(self, seoul_bull_workspace):
+        original_path = seoul_bull_workspace
         workspace = original_path.parent
 
         filtered_path = _apply_transforms_to_file(
@@ -243,8 +237,8 @@ class TestCompareFiltered:
 
         assert "Only in target: 0" in output
 
-    def test_same_sift_for_matching(self, sfmrfile_reconstruction_with_17_images):
-        original_path = sfmrfile_reconstruction_with_17_images
+    def test_same_sift_for_matching(self, seoul_bull_workspace):
+        original_path = seoul_bull_workspace
         workspace = original_path.parent
 
         filtered_path = _apply_transforms_to_file(
@@ -266,8 +260,8 @@ class TestCompareFiltered:
 class TestCompareTransformAndFilter:
     """Test combining transform and filter."""
 
-    def test_transform_then_filter(self, sfmrfile_reconstruction_with_17_images):
-        original_path = sfmrfile_reconstruction_with_17_images
+    def test_transform_then_filter(self, seoul_bull_workspace):
+        original_path = seoul_bull_workspace
         workspace = original_path.parent
 
         rotation = _rot_quat_from_euler_angles(np.radians([20, 0, 0]))
@@ -302,8 +296,8 @@ class TestCompareTransformAndFilter:
 class TestCompareCLI:
     """Test the CLI command."""
 
-    def test_compare_same_file(self, sfmrfile_reconstruction_with_17_images):
-        sfmr = str(sfmrfile_reconstruction_with_17_images)
+    def test_compare_same_file(self, seoul_bull_workspace):
+        sfmr = str(seoul_bull_workspace)
         result = CliRunner().invoke(main, ["compare", sfmr, sfmr])
         assert result.exit_code == 0, result.output
         assert "Comparing reconstructions:" in result.output
@@ -333,8 +327,8 @@ class TestCompareCLI:
         assert result.exit_code != 0
         assert ".sfmr" in result.output
 
-    def test_compare_with_transformed(self, sfmrfile_reconstruction_with_17_images):
-        original_path = sfmrfile_reconstruction_with_17_images
+    def test_compare_with_transformed(self, seoul_bull_workspace):
+        original_path = seoul_bull_workspace
         workspace = original_path.parent
 
         transform = Se3Transform(translation=[5, 0, 0], scale=2.0)
@@ -355,8 +349,8 @@ class TestCompareCLI:
 class TestCompareCoordinateAndStrips:
     """Cross-backend coordinate matching, the --strips montage, and helpers."""
 
-    def test_get_sift_path_from_recon(self, sfmrfile_reconstruction_with_17_images):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_get_sift_path_from_recon(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         name = recon.image_names[0]
         path = get_sift_path_from_recon(recon, name)
         assert path.name == Path(name).name + ".sift"
@@ -369,28 +363,24 @@ class TestCompareCoordinateAndStrips:
             with pytest.raises(click.UsageError):
                 _parse_labels(bad)
 
-    def test_cli_compare_auto_uses_feature_index(
-        self, sfmrfile_reconstruction_with_17_images
-    ):
+    def test_cli_compare_auto_uses_feature_index(self, seoul_bull_workspace):
         # Identical inputs share .sift hashes, so auto-resolution keys on
         # feature index rather than 2D keypoint coordinate.
-        p = str(sfmrfile_reconstruction_with_17_images)
+        p = str(seoul_bull_workspace)
         result = CliRunner().invoke(main, ["compare", p, p])
         assert result.exit_code == 0, result.output
         assert "by feature index" in result.output
 
-    def test_cli_compare_by_coordinate(self, sfmrfile_reconstruction_with_17_images):
-        p = str(sfmrfile_reconstruction_with_17_images)
+    def test_cli_compare_by_coordinate(self, seoul_bull_workspace):
+        p = str(seoul_bull_workspace)
         result = CliRunner().invoke(main, ["compare", p, p, "--by-coordinate"])
         assert result.exit_code == 0, result.output
         assert "by keypoint coordinate" in result.output
 
-    def test_cli_strips_writes_montage(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
+    def test_cli_strips_writes_montage(self, seoul_bull_workspace, tmp_path):
         # Full vs a filtered subset: the full solve keeps points unique to it,
         # exercising the overview "unique to <label>" rows under custom labels.
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         workspace = original_path.parent
         filtered_path = _apply_transforms_to_file(
             original_path,
@@ -416,11 +406,9 @@ class TestCompareCoordinateAndStrips:
         assert "--strips: wrote" in result.output
         assert out.exists() and out.stat().st_size > 0
 
-    def test_cli_strips_single_axis(
-        self, sfmrfile_reconstruction_with_17_images, tmp_path
-    ):
+    def test_cli_strips_single_axis(self, seoul_bull_workspace, tmp_path):
         # A geometry-only single axis with an explicit end (no normal refine).
-        original_path = sfmrfile_reconstruction_with_17_images
+        original_path = seoul_bull_workspace
         workspace = original_path.parent
         transformed_path = _apply_transforms_to_file(
             original_path,

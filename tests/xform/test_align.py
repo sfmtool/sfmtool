@@ -22,17 +22,15 @@ from .conftest import apply_transforms_to_file, load_reconstruction_data
 # =============================================================================
 
 
-def test_align_to_transform_basic(sfmrfile_reconstruction_with_17_images, tmp_path):
+def test_align_to_transform_basic(seoul_bull_sfmr_only, tmp_path):
     """Test aligning a reconstruction to itself (should be identity)."""
     output_path = tmp_path / "aligned.sfmr"
 
-    transforms = [AlignToTransform(sfmrfile_reconstruction_with_17_images)]
+    transforms = [AlignToTransform(seoul_bull_sfmr_only)]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_sfmr_only)
     aligned = load_reconstruction_data(output_path)
 
     assert aligned["point_count"] == original["point_count"]
@@ -45,21 +43,17 @@ def test_align_to_transform_basic(sfmrfile_reconstruction_with_17_images, tmp_pa
     assert relative_error < 0.1
 
 
-def test_align_to_transform_after_scale(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_align_to_transform_after_scale(seoul_bull_sfmr_only, tmp_path):
     """Test that align recovers original scale after scaling."""
     scaled_path = tmp_path / "scaled.sfmr"
     transforms = [ScaleTransform(2.0)]
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, scaled_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_sfmr_only, scaled_path, transforms)
 
     aligned_path = tmp_path / "realigned.sfmr"
-    transforms = [AlignToTransform(sfmrfile_reconstruction_with_17_images)]
+    transforms = [AlignToTransform(seoul_bull_sfmr_only)]
     apply_transforms_to_file(scaled_path, aligned_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_sfmr_only)
     aligned = load_reconstruction_data(aligned_path)
 
     assert aligned["point_count"] == original["point_count"]
@@ -80,9 +74,9 @@ def test_align_to_transform_invalid_extension(tmp_path):
         AlignToTransform(wrong_file)
 
 
-def test_align_to_transform_description(sfmrfile_reconstruction_with_17_images):
+def test_align_to_transform_description(seoul_bull_sfmr_only):
     """Test the description method."""
-    transform = AlignToTransform(sfmrfile_reconstruction_with_17_images)
+    transform = AlignToTransform(seoul_bull_sfmr_only)
     desc = transform.description()
 
     assert "Align to" in desc
@@ -93,9 +87,7 @@ def test_align_to_transform_description(sfmrfile_reconstruction_with_17_images):
 # =============================================================================
 
 
-def test_align_to_input_after_transform(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_align_to_input_after_transform(seoul_bull_sfmr_only, tmp_path):
     """Test that AlignToInput recovers original after transformations."""
     output_path = tmp_path / "realigned.sfmr"
 
@@ -105,11 +97,9 @@ def test_align_to_input_after_transform(
         AlignToInputTransform(),
     ]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_sfmr_only)
     realigned = load_reconstruction_data(output_path)
 
     assert realigned["point_count"] == original["point_count"]
@@ -120,9 +110,7 @@ def test_align_to_input_after_transform(
     assert relative_error < 0.2
 
 
-def test_align_to_input_after_rotation(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_align_to_input_after_rotation(seoul_bull_sfmr_only, tmp_path):
     """Test that AlignToInput works after rotation."""
     output_path = tmp_path / "rotated_realigned.sfmr"
 
@@ -131,11 +119,9 @@ def test_align_to_input_after_rotation(
         AlignToInputTransform(),
     ]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_sfmr_only)
     realigned = load_reconstruction_data(output_path)
 
     assert realigned["point_count"] == original["point_count"]
@@ -163,26 +149,24 @@ def test_align_to_input_without_apply_context():
 # =============================================================================
 
 
-def test_align_to_and_transform(sfmrfile_reconstruction_with_17_images, tmp_path):
+def test_align_to_and_transform(seoul_bull_sfmr_only, tmp_path):
     """Test combining AlignToTransform with other transforms."""
     output_path = tmp_path / "aligned_scaled.sfmr"
 
     transforms = [
-        AlignToTransform(sfmrfile_reconstruction_with_17_images),
+        AlignToTransform(seoul_bull_sfmr_only),
         ScaleTransform(0.5),
     ]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_sfmr_only)
     result = load_reconstruction_data(output_path)
 
     assert result["point_count"] == original["point_count"]
 
 
-def test_align_preserves_image_count(sfmrfile_reconstruction_with_17_images, tmp_path):
+def test_align_preserves_image_count(seoul_bull_sfmr_only, tmp_path):
     """Test that alignment preserves image count."""
     output_path = tmp_path / "aligned_images.sfmr"
 
@@ -191,11 +175,9 @@ def test_align_preserves_image_count(sfmrfile_reconstruction_with_17_images, tmp
         AlignToInputTransform(),
     ]
 
-    apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images, output_path, transforms
-    )
+    apply_transforms_to_file(seoul_bull_sfmr_only, output_path, transforms)
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_sfmr_only)
     result = load_reconstruction_data(output_path)
 
     assert result["image_count"] == original["image_count"]

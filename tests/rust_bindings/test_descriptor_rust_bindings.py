@@ -127,8 +127,8 @@ class TestDescriptorMatchingOnRealData:
     """Test Rust matching on real SIFT features from Seoul Bull dataset."""
 
     @pytest.fixture(scope="class")
-    def seoul_bull_features(self, sfmrfile_reconstruction_with_17_images_once):
-        workspace = sfmrfile_reconstruction_with_17_images_once.parent
+    def seoul_bull_features(self, seoul_bull_workspace_once):
+        workspace = seoul_bull_workspace_once.parent
         img_dir = workspace / "test_17_image"
         features_base = img_dir / "features"
         sift_dirs = list(features_base.glob("sift-*"))

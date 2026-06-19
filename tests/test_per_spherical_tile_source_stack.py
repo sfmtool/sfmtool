@@ -409,15 +409,13 @@ class TestPerSphericalTileSourceStackFloat16:
 class TestPerSphericalTileSourceStackOnReconstruction:
     """Smoke test on a real bundled reconstruction."""
 
-    def test_smoke_on_seoul_bull_reconstruction(
-        self, sfmrfile_reconstruction_with_17_images: Path
-    ):
-        recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    def test_smoke_on_seoul_bull_reconstruction(self, seoul_bull_workspace: Path):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
         cameras = recon.cameras
         camera_indexes = recon.camera_indexes
         quats = recon.quaternions_wxyz
         image_names = recon.image_names
-        workspace_dir = sfmrfile_reconstruction_with_17_images.parent
+        workspace_dir = seoul_bull_workspace.parent
         # The fixture stores images under either workspace_dir/test_17_image
         # (the session fixture) or workspace_dir/<name> directly.
         candidates = [workspace_dir / "test_17_image", workspace_dir]

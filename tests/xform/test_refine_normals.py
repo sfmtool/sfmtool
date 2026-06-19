@@ -189,9 +189,9 @@ def _modest_params() -> RefineNormalsTransform:
 
 
 def test_refine_normals_preserves_points_and_improves(
-    sfmrfile_reconstruction_with_17_images,
+    seoul_bull_workspace,
 ):
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     original_normals = np.asarray(recon.estimated_normals).copy()
     original_positions = np.asarray(recon.positions).copy()
     at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
@@ -220,18 +220,16 @@ def test_refine_normals_preserves_points_and_improves(
         )
 
 
-def test_refine_normals_does_not_lower_consensus(
-    sfmrfile_reconstruction_with_17_images, capsys
-):
+def test_refine_normals_does_not_lower_consensus(seoul_bull_workspace, capsys):
     """The summary reports a non-negative mean Φ delta."""
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     _modest_params().apply(recon)
     summary = capsys.readouterr().out
     assert "Refined" in summary
 
 
-def test_missing_image_is_hard_error(sfmrfile_reconstruction_with_17_images):
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+def test_missing_image_is_hard_error(seoul_bull_workspace):
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     # Remove a source image so loading fails.
     from pathlib import Path
 
@@ -241,9 +239,9 @@ def test_missing_image_is_hard_error(sfmrfile_reconstruction_with_17_images):
         _modest_params().apply(recon)
 
 
-def test_cli_refine_normals(sfmrfile_reconstruction_with_17_images):
+def test_cli_refine_normals(seoul_bull_workspace):
     """End-to-end CLI run rewrites normals; the sys.argv reparse needs patching."""
-    input_sfmr = sfmrfile_reconstruction_with_17_images
+    input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("refined.sfmr")
 
     args = [
@@ -269,7 +267,7 @@ def test_cli_refine_normals(sfmrfile_reconstruction_with_17_images):
 
 
 def test_cli_refine_normals_bare_before_other_option(
-    sfmrfile_reconstruction_with_17_images,
+    seoul_bull_workspace,
 ):
     """A bare --refine-normals followed by another option runs the defaults
     and leaves the following option intact (optional-value tokenization).
@@ -280,7 +278,7 @@ def test_cli_refine_normals_bare_before_other_option(
     trailing ``--scale 2.0`` as its value. Real refinement execution is covered
     by ``test_cli_refine_normals`` and the library integration tests.
     """
-    input_sfmr = sfmrfile_reconstruction_with_17_images
+    input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("refined_bare.sfmr")
 
     # --refine-normals (bare) then --scale: the scale must still be parsed as

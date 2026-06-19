@@ -10,8 +10,8 @@ from sfmtool.analyze.metrics import _compute_per_image_metrics, print_metrics_an
 
 
 @pytest.fixture
-def rust_recon(sfmrfile_reconstruction_with_17_images):
-    return SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+def rust_recon(seoul_bull_workspace):
+    return SfmrReconstruction.load(seoul_bull_workspace)
 
 
 @pytest.fixture
@@ -49,10 +49,8 @@ class TestComputePerImageMetrics:
 
 
 class TestPrintMetricsAnalysis:
-    def test_header_and_table(self, sfmrfile_reconstruction_with_17_images, capsys):
-        print_metrics_analysis(
-            sfmrfile_reconstruction_with_17_images, recon_name="test.sfmr"
-        )
+    def test_header_and_table(self, seoul_bull_workspace, capsys):
+        print_metrics_analysis(seoul_bull_workspace, recon_name="test.sfmr")
         captured = capsys.readouterr()
 
         assert "Per-image metrics analysis for: test.sfmr" in captured.out
@@ -71,10 +69,8 @@ class TestPrintMetricsAnalysis:
         assert "1.5x reconstruction median" in captured.out
         assert "no observations" in captured.out
 
-    def test_sorted_descending_by_mean_error(
-        self, sfmrfile_reconstruction_with_17_images, capsys
-    ):
-        print_metrics_analysis(sfmrfile_reconstruction_with_17_images)
+    def test_sorted_descending_by_mean_error(self, seoul_bull_workspace, capsys):
+        print_metrics_analysis(seoul_bull_workspace)
         captured = capsys.readouterr()
 
         lines = [
@@ -94,17 +90,15 @@ class TestPrintMetricsAnalysis:
 
         assert errors == sorted(errors, reverse=True)
 
-    def test_recon_name(self, sfmrfile_reconstruction_with_17_images, capsys):
-        print_metrics_analysis(
-            sfmrfile_reconstruction_with_17_images, recon_name="custom.sfmr"
-        )
+    def test_recon_name(self, seoul_bull_workspace, capsys):
+        print_metrics_analysis(seoul_bull_workspace, recon_name="custom.sfmr")
         assert "custom.sfmr" in capsys.readouterr().out
 
-        print_metrics_analysis(sfmrfile_reconstruction_with_17_images)
-        assert sfmrfile_reconstruction_with_17_images.name in capsys.readouterr().out
+        print_metrics_analysis(seoul_bull_workspace)
+        assert seoul_bull_workspace.name in capsys.readouterr().out
 
-    def test_range_filter(self, sfmrfile_reconstruction_with_17_images, capsys):
-        print_metrics_analysis(sfmrfile_reconstruction_with_17_images, range_expr="1-5")
+    def test_range_filter(self, seoul_bull_workspace, capsys):
+        print_metrics_analysis(seoul_bull_workspace, range_expr="1-5")
         captured = capsys.readouterr()
 
         lines = [

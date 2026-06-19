@@ -83,9 +83,9 @@ def test_triangulate_batch_rejects_bad_offsets():
 
 
 def test_triangulation_diagnostics_shapes_and_nan(
-    sfmrfile_reconstruction_with_17_images,
+    seoul_bull_sfmr_only,
 ):
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
     diag = recon.triangulation_diagnostics(noise_px=1.0)
 
     assert set(diag) == {"condition_number", "depth_sigma", "inverse_depth_z"}
@@ -136,10 +136,10 @@ def test_triangulation_diagnostics_shapes_and_nan(
 
 
 def test_triangulation_diagnostics_flags_distant_as_low_z(
-    sfmrfile_reconstruction_with_17_images,
+    seoul_bull_sfmr_only,
 ):
     """Points the classifier moves to infinity carry the lowest z-scores."""
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
     diag = recon.triangulation_diagnostics(noise_px=1.0)
     z = diag["inverse_depth_z"]
 

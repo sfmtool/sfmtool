@@ -45,9 +45,9 @@ def _sample_point_ids(cloud, n: int = 500, seed: int = 0) -> list[int]:
 
 
 def test_refine_normals_improves_consensus(
-    sfmrfile_reconstruction_with_17_images: Path,
+    seoul_bull_workspace: Path,
 ):
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = _load_images(recon)
 
     cloud = PatchCloud.from_reconstruction(
@@ -105,9 +105,9 @@ def test_refine_normals_improves_consensus(
     assert np.nanmax(moved) > 1e-4
 
 
-def test_confidence_is_opt_in(sfmrfile_reconstruction_with_17_images: Path):
+def test_confidence_is_opt_in(seoul_bull_workspace: Path):
     """Confidence is NaN unless ``compute_confidence=True`` (off by default)."""
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = _load_images(recon)
     sample = _sample_point_ids(
         PatchCloud.from_reconstruction(recon, normal="mean_viewing", extent_value=5.0)
@@ -159,7 +159,7 @@ def _refine(recon, images, cache, cache_supersample, point_ids):
 
 
 def test_fronto_cache_matches_source_rendering(
-    sfmrfile_reconstruction_with_17_images: Path,
+    seoul_bull_workspace: Path,
 ):
     """The fronto-parallel cache reproduces the source-render refinement.
 
@@ -167,7 +167,7 @@ def test_fronto_cache_matches_source_rendering(
     Φ-equivalent (the angular tail is ambiguity, not error) and must not drop a
     meaningful fraction of the scored points.
     """
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = _load_images(recon)
     sample = _sample_point_ids(
         PatchCloud.from_reconstruction(recon, normal="mean_viewing", extent_value=5.0)
@@ -207,7 +207,7 @@ def test_fronto_cache_matches_source_rendering(
 
 
 def test_fronto_cache_handles_fisheye_distortion(
-    sfmrfile_reconstruction_kerry_park: Path,
+    kerry_park_workspace: Path,
 ):
     """The cache stays Φ-equivalent on a genuine back-to-back fisheye rig.
 
@@ -217,7 +217,7 @@ def test_fronto_cache_handles_fisheye_distortion(
     corners instead, the cache would mis-resample the strongly-distorted fisheye
     views and Φ would collapse — this test guards that cancellation.
     """
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_kerry_park)
+    recon = SfmrReconstruction.load(kerry_park_workspace)
     images = _load_images(recon)
 
     def build():
@@ -258,11 +258,11 @@ def test_fronto_cache_handles_fisheye_distortion(
 
 
 def test_refine_normals_cache_validation(
-    sfmrfile_reconstruction_with_17_images: Path,
+    seoul_bull_workspace: Path,
 ):
     import pytest
 
-    recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = _load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0

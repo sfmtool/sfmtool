@@ -11,18 +11,16 @@ from sfmtool.xform import SwitchCameraModelTransform
 from .conftest import apply_transforms_to_file
 
 
-def test_switch_simple_radial_to_radial(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_switch_simple_radial_to_radial(seoul_bull_sfmr_only, tmp_path):
     """The motivating case: upgrade SIMPLE_RADIAL → RADIAL to expose a k2
     term for bundle adjustment to refine."""
-    source_recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    source_recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
     # The 17-image solve uses SIMPLE_RADIAL by default.
     assert all(c.model == "SIMPLE_RADIAL" for c in source_recon.cameras)
 
     output_path = tmp_path / "radial.sfmr"
     apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images,
+        seoul_bull_sfmr_only,
         output_path,
         [SwitchCameraModelTransform("RADIAL")],
     )
@@ -49,18 +47,18 @@ def test_switch_simple_radial_to_radial(
 
 
 def test_switch_simple_radial_to_opencv_pads_new_params_with_zero(
-    sfmrfile_reconstruction_with_17_images, tmp_path
+    seoul_bull_sfmr_only, tmp_path
 ):
     """Converting to a split-focal model duplicates focal_length into fx/fy
     and zeros out k2/p1/p2."""
     output_path = tmp_path / "opencv.sfmr"
     apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images,
+        seoul_bull_sfmr_only,
         output_path,
         [SwitchCameraModelTransform("OPENCV")],
     )
 
-    source_recon = SfmrReconstruction.load(sfmrfile_reconstruction_with_17_images)
+    source_recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
     result = SfmrReconstruction.load(output_path)
 
     for src, dst in zip(source_recon.cameras, result.cameras):
@@ -90,9 +88,7 @@ def test_switch_is_case_insensitive():
     SwitchCameraModelTransform("RADIAL")
 
 
-def test_switch_preserves_points_and_poses(
-    sfmrfile_reconstruction_with_17_images, tmp_path
-):
+def test_switch_preserves_points_and_poses(seoul_bull_sfmr_only, tmp_path):
     """Only cameras change; points, poses, and observations are untouched."""
     import numpy as np
 
@@ -100,12 +96,12 @@ def test_switch_preserves_points_and_poses(
 
     output_path = tmp_path / "switched.sfmr"
     apply_transforms_to_file(
-        sfmrfile_reconstruction_with_17_images,
+        seoul_bull_sfmr_only,
         output_path,
         [SwitchCameraModelTransform("RADIAL")],
     )
 
-    original = load_reconstruction_data(sfmrfile_reconstruction_with_17_images)
+    original = load_reconstruction_data(seoul_bull_sfmr_only)
     switched = load_reconstruction_data(output_path)
 
     assert switched["image_count"] == original["image_count"]

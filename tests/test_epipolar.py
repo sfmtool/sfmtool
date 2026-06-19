@@ -529,7 +529,7 @@ class TestEpipolarCLI:
 
 
 class TestEpipolarE2E:
-    def test_draw_epipolar_visualization(self, sfmrfile_reconstruction_with_17_images):
+    def test_draw_epipolar_visualization(self, seoul_bull_workspace):
         """Test drawing epipolar visualization with a real reconstruction."""
         import cv2
 
@@ -537,7 +537,7 @@ class TestEpipolarE2E:
         from sfmtool._sfmtool import SfmrReconstruction
         from sfmtool._workspace import load_workspace_config
 
-        sfmr_path = sfmrfile_reconstruction_with_17_images
+        sfmr_path = seoul_bull_workspace
         workspace_dir = sfmr_path.parent
         recon = SfmrReconstruction.load(sfmr_path)
         workspace_config = load_workspace_config(workspace_dir)
@@ -562,7 +562,7 @@ class TestEpipolarE2E:
         assert img is not None
         assert img.shape[0] > 0 and img.shape[1] > 0
 
-    def test_draw_side_by_side(self, sfmrfile_reconstruction_with_17_images):
+    def test_draw_side_by_side(self, seoul_bull_workspace):
         """Test side-by-side epipolar visualization."""
         import cv2
 
@@ -570,7 +570,7 @@ class TestEpipolarE2E:
         from sfmtool._sfmtool import SfmrReconstruction
         from sfmtool._workspace import load_workspace_config
 
-        sfmr_path = sfmrfile_reconstruction_with_17_images
+        sfmr_path = seoul_bull_workspace
         workspace_dir = sfmr_path.parent
         recon = SfmrReconstruction.load(sfmr_path)
         workspace_config = load_workspace_config(workspace_dir)
