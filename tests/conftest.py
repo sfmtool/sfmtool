@@ -161,6 +161,7 @@ def build_cluster_reconstruction(
     incremental: bool = True,
     random_seed: int = 42,
     expected_image_count: int | None = None,
+    min_point_count: int = 0,
     max_attempts: int = 6,
 ) -> Path:
     """Solve a ``.sfmr`` the way the dataset scripts now do.
@@ -170,10 +171,13 @@ def build_cluster_reconstruction(
     (``sfm match --cluster``) to a ``.matches`` file, then solve from that file.
     Matching runs once; only the (cheap) solve is retried. Each solve can split
     into several sub-reconstructions, so the most complete one is selected and
-    canonicalized to ``output_sfm_file``. When ``expected_image_count`` is set
-    the solve is re-run (with fresh randomization) until that many images
-    register, which is far faster and more reliable than the old
-    extract-then-exhaustive matching it replaces.
+    canonicalized to ``output_sfm_file``. When ``expected_image_count`` and/or
+    ``min_point_count`` are set the solve is re-run (with fresh randomization)
+    until that many images register *and* that many points triangulate, keeping
+    the best (most images, then most points) attempt seen. A complete-but-sparse
+    solve — all images registered but few points — is a degenerate result, so
+    ``min_point_count`` lets a caller insist on a substantive point cloud rather
+    than accepting the first attempt that merely registers every image.
     """
     from sfmtool.feature_match._run import _run_matching
 
@@ -201,8 +205,13 @@ def build_cluster_reconstruction(
     else:
         from sfmtool._global_sfm import run_global_sfm as _solve
 
+    from sfmtool._sfmtool import SfmrReconstruction
+
     output_sfm_file = Path(output_sfm_file)
-    best_path, best_count = None, -1
+    # Rank attempts by (image_count, point_count): prefer a fully registered
+    # reconstruction, and among those the densest. This keeps retrying past a
+    # complete-but-sparse solve until a substantive one shows up.
+    best_path, best_key = None, (-1, -1)
     for attempt in range(1, max_attempts + 1):
         if colmap_dir.exists():
             shutil.rmtree(colmap_dir)
@@ -220,13 +229,17 @@ def build_cluster_reconstruction(
             output_sfm_file=str(output_sfm_file),
         )
         path, count = _largest_recon(output_sfm_file)
-        if count > best_count:
-            best_path, best_count = path, count
+        points = SfmrReconstruction.load(path).point_count
+        key = (count, points)
+        if key > best_key:
+            best_key = key
             # Stash the best so far; the next attempt clears the output dir.
             stash = output_sfm_file.parent / f"_best{output_sfm_file.suffix}"
             shutil.copy(path, stash)
             best_path = stash
-        if expected_image_count is None or best_count >= expected_image_count:
+        images_ok = expected_image_count is None or count >= expected_image_count
+        points_ok = points >= min_point_count
+        if images_ok and points_ok:
             break
 
     # Canonicalize: the chosen reconstruction lives at output_sfm_file alone.
@@ -423,6 +436,11 @@ def kerry_park_workspace_once(tmp_path_factory) -> Path:
 
     expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_SOLVE_FRAME_COUNT
     output_sfm_file = workspace_dir / "kerry_park.sfmr"
+    # The 8-frame back-to-back fisheye solve is sparse and non-deterministic: a
+    # single attempt can register all 16 images yet triangulate very few points
+    # (CI has seen ~80). Insist on a substantive point cloud (well above the
+    # test's >= 150 floor, leaving margin for the trailing camera-coincident
+    # point drop) and retry hard for it, keeping the densest complete attempt.
     sfmr_path = build_cluster_reconstruction(
         workspace_dir,
         image_paths,
@@ -430,6 +448,8 @@ def kerry_park_workspace_once(tmp_path_factory) -> Path:
         incremental=False,
         random_seed=42,
         expected_image_count=expected_count,
+        min_point_count=200,
+        max_attempts=10,
     )
 
     recon = SfmrReconstruction.load(sfmr_path)
@@ -437,6 +457,12 @@ def kerry_park_workspace_once(tmp_path_factory) -> Path:
         raise RuntimeError(
             f"kerry_park global solve registered {recon.image_count}/"
             f"{expected_count} images (all {expected_count} required)."
+        )
+    if recon.point_count < 150:
+        raise RuntimeError(
+            f"kerry_park global solve triangulated only {recon.point_count} "
+            f"points after {10} attempts (>= 150 required); the back-to-back "
+            f"fisheye geometry produced a degenerate, near-empty reconstruction."
         )
     return sfmr_path
 
@@ -482,12 +508,13 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
     expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_SOLVE_FRAME_COUNT
 
     # GLOMAP is non-deterministic, and the back-to-back fisheye geometry
-    # occasionally yields a degenerate solve — all frames register but no points
-    # triangulate, so ``run_global_sfm`` raises "No 3D points found". Retry with a
-    # fresh randomization (mirroring ``build_cluster_reconstruction``), keeping the
-    # most-complete result, rather than flaking the suite. The first attempt stays
-    # reproducible (seed 42); retries randomize so a different split can register.
-    max_attempts = 6
+    # occasionally yields a degenerate solve — all frames register but few/no
+    # points triangulate (``run_global_sfm`` raises "No 3D points found" in the
+    # extreme). Retry with a fresh randomization (mirroring
+    # ``build_cluster_reconstruction``), keeping the densest complete result and
+    # holding out for a substantive point cloud, rather than flaking the suite.
+    # The first attempt stays reproducible (seed 42); retries randomize.
+    max_attempts = 10
     best_stash = output_sfm_file.with_name("_best_camrig.sfmr")
     best_points = -1
     for attempt in range(1, max_attempts + 1):
@@ -512,13 +539,19 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
         if recon.image_count == expected_count and recon.point_count > best_points:
             best_points = recon.point_count
             shutil.copy(sfmr_path, best_stash)
-        if recon.image_count == expected_count and recon.point_count >= 150:
+        if recon.image_count == expected_count and recon.point_count >= 200:
             break
 
     if best_points < 0:
         raise RuntimeError(
             f"kerry_park .camrig global solve produced no complete reconstruction "
             f"in {max_attempts} attempts (all {expected_count} images required)."
+        )
+    if best_points < 150:
+        raise RuntimeError(
+            f"kerry_park .camrig global solve triangulated only {best_points} "
+            f"points in {max_attempts} attempts (>= 150 required); the back-to-back "
+            f"fisheye geometry produced a degenerate, near-empty reconstruction."
         )
     for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
         stale.unlink()
