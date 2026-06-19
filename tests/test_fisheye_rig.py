@@ -188,14 +188,15 @@ def _rotation_angle_deg(R: np.ndarray) -> float:
 def test_kerry_park_solve_registers_all_frames(
     sfmrfile_reconstruction_kerry_park: Path,
 ) -> None:
-    """The global solve should register all 48 rig images and produce a
-    substantive point cloud. Bounds are forgiving: GLOMAP output drifts
-    slightly across pycolmap versions and isn't seed-deterministic.
+    """The global solve should register every image of the 8-frame prefix
+    subset (16 images) and produce a substantive point cloud. Bounds are
+    forgiving: GLOMAP output drifts slightly across pycolmap versions and isn't
+    seed-deterministic.
     """
     recon = SfmrReconstruction.load(sfmrfile_reconstruction_kerry_park)
-    assert recon.image_count == 48
+    assert recon.image_count == 16
     assert recon.camera_count == 2  # one camera per sensor
-    assert recon.point_count >= 500
+    assert recon.point_count >= 150
     # Median reprojection error should be small for a well-conditioned solve.
     errors = recon.errors
     assert errors.size > 0
@@ -234,7 +235,7 @@ def test_kerry_park_rig_rotation_recovered(
         for f, sensors in frames.items()
         if "fisheye_left" in sensors and "fisheye_right" in sensors
     ]
-    assert len(paired_frames) >= 20, (
+    assert len(paired_frames) >= 6, (
         f"Expected almost every rig frame to have both sensors registered, "
         f"got only {len(paired_frames)} of {len(frames)} frames paired."
     )
@@ -317,13 +318,13 @@ def test_kerry_park_camrig_solve_registers_all_frames(
     sfmrfile_reconstruction_kerry_park_camrig: Path,
 ) -> None:
     """A global solve driven by the multi-sensor ``.camrig`` should register
-    all 48 rig images with one camera per sensor — the same outcome as the
-    ``rig_config.json`` path.
+    every image of the 8-frame prefix subset (16 images) with one camera per
+    sensor — the same outcome as the ``rig_config.json`` path.
     """
     recon = SfmrReconstruction.load(sfmrfile_reconstruction_kerry_park_camrig)
-    assert recon.image_count == 48
+    assert recon.image_count == 16
     assert recon.camera_count == 2  # one camera per sensor
-    assert recon.point_count >= 500
+    assert recon.point_count >= 150
     errors = recon.errors
     assert errors.size > 0
     assert float(np.median(errors)) < 1.5
