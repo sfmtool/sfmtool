@@ -216,6 +216,14 @@ Easy to invoke backwards.
 
 ### B3. `align` flattens inputs to basenames in the output dir — silent overwrite / data loss
 
+> _Status (2026-06-20): Done — `align_command` now rejects any input set in which
+> two paths share a basename (different directories, or the same file passed
+> twice) up front with a clear `ClickException`, alongside the existing
+> "input inside output directory" guard, before anything is written
+> (`src/sfmtool/align/multi.py`). Regression tests
+> `test_align_basename_collision_rejected` / `test_align_same_file_twice_rejected`;
+> documented under a new "Output" section in `specs/cli/align-command.md`._
+
 **Severity: medium (correctness, not just UX).**
 
 `align` writes each input into `--output-dir` under its **basename only**, with

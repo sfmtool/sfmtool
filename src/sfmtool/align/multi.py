@@ -335,6 +335,21 @@ def align_command(
         except ValueError:
             pass
 
+    # Every input is written into output_dir under its basename, so two inputs
+    # that share a basename (e.g. same-named files from different directories, or
+    # the same file passed twice) would silently overwrite each other and the
+    # user would get fewer outputs than inputs. Reject the collision up front.
+    seen_names: dict[str, Path] = {}
+    for input_path in all_input_paths:
+        existing = seen_names.get(input_path.name)
+        if existing is not None:
+            raise click.ClickException(
+                f"Inputs '{existing}' and '{input_path}' share the basename "
+                f"'{input_path.name}' and would overwrite each other in the "
+                "output directory. Give the inputs distinct file names."
+            )
+        seen_names[input_path.name] = input_path
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     click.echo(f"Reference reconstruction: {reference_path.name}")
