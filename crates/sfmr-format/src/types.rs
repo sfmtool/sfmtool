@@ -148,8 +148,8 @@ pub struct SfmrMetadata {
 /// Content integrity hashes from `content_hash.json.zst`.
 ///
 /// All hash values are plain 32-character lowercase hex strings.
-/// The `rigs_xxh128` and `frames_xxh128` fields are only present when
-/// the `.sfmr` file contains rig/frame data.
+/// The `rigs_xxh128` and `frames_xxh128` fields are only present when the
+/// `.sfmr` file contains the corresponding optional section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContentHash {
     pub metadata_xxh128: String,
@@ -159,6 +159,9 @@ pub struct ContentHash {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frames_xxh128: Option<String>,
     pub images_xxh128: String,
+    /// Hash of the `points3d/` section. Covers the optional per-point patch
+    /// frame arrays (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) when
+    /// present.
     pub points3d_xxh128: String,
     pub tracks_xxh128: String,
     pub content_xxh128: String,
@@ -288,9 +291,36 @@ pub struct SfmrData {
     pub colors_rgb: Array2<u8>,
     /// `(P,)` RMS reprojection errors in pixels.
     pub reprojection_errors: Array1<f32>,
-    /// `(P, 3)` estimated surface normals (unit vectors; `(0, 0, 0)` rows for
-    /// `w == 0`, which have no surface normal).
-    pub estimated_normals_xyz: Array2<f32>,
+    /// Optional `(P, 3)` surface normals (unit vectors; the default mean-viewing
+    /// estimate leaves `(0, 0, 0)` rows for `w == 0` points). `None` when the
+    /// reconstruction carries no normals at all.
+    ///
+    /// On disk this is `points3d/normals_xyz` in format version 3+ (present only
+    /// when `points3d/metadata.json`'s `has_normals` is `true`); version 1 and 2
+    /// files always store it under the legacy name `estimated_normals_xyz`,
+    /// which the reader accepts and maps onto this field.
+    pub normals_xyz: Option<Array2<f32>>,
+
+    // Per-point oriented-patch ("surfel") frame (optional, version 3+), stored
+    // alongside the other `points3d/` arrays. A patch is centred on its 3D point
+    // with outward normal `u × v`, so only the in-plane frame is stored: two
+    // half-extent vectors `u` and `v` that span the patch corner
+    // `(center + s·u + t·v, w)` for `(s, t) ∈ [-1, 1]²`, each carrying the
+    // in-plane orientation and half-size. The offset is homogeneous, so this is
+    // defined for finite points (planar surfels) and points at infinity alike
+    // (a patch of directions tangent to the sphere, whose outward normal is fixed
+    // at `normalize(-d)` for direction `d`, so `u × v` points along `-d`). A
+    // point with no patch stores all-zero rows (a row is "present" iff its `u` is
+    // non-zero), independent of finiteness. `patch_u_halfvec_xyz` and
+    // `patch_v_halfvec_xyz` are both present or both `None`; bitmaps require them.
+    /// `(P, 3)` in-plane half-extent vector `u`. `None` when no patch frame.
+    pub patch_u_halfvec_xyz: Option<Array2<f32>>,
+    /// `(P, 3)` in-plane half-extent vector `v`. `None` when no patch frame.
+    pub patch_v_halfvec_xyz: Option<Array2<f32>>,
+    /// `(P, R, R, 4)` RGBA patch textures, one `R×R` bitmap per point, stored
+    /// like image thumbnails. The alpha channel holds a per-pixel confidence.
+    /// `None` when no patch bitmaps.
+    pub patch_bitmaps_y_x_rgba: Option<Array4<u8>>,
 
     // Tracks
     /// `(M,)` image index per observation.

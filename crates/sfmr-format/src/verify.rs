@@ -60,6 +60,10 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     // Version 1 stored Euclidean `positions_xyz` and `points3d_indexes`;
     // version 2 stores homogeneous `positions_xyzw` and `point_indexes`.
     let is_v1 = metadata.version < 2;
+    // Version 3 renamed `points3d/estimated_normals_xyz` to
+    // `points3d/normals_xyz` and added the optional per-point patch frame in the
+    // points3d section.
+    let is_pre_v3 = metadata.version < 3;
 
     let mut section_digests: Vec<u128> = Vec::with_capacity(5);
 
@@ -225,6 +229,29 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     section_digests.push(images_hash);
 
     // === Points3D hash (lexicographic path order) ===
+    // The optional per-point patch frame (`patch_*`) lives in this section.
+    let points3d_meta_raw = read_zst_entry(&mut archive, "points3d/metadata.json.zst")?;
+    let points3d_meta: serde_json::Value = serde_json::from_slice(&points3d_meta_raw)?;
+    // Normals are optional in version 3 (default `false`); versions 1 and 2
+    // always carry them.
+    let has_normals = is_pre_v3
+        || points3d_meta
+            .get("has_normals")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    let has_uv_frames = points3d_meta
+        .get("has_uv_frames")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let has_patch_bitmaps = points3d_meta
+        .get("has_patch_bitmaps")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let patch_bitmap_r = points3d_meta
+        .get("patch_bitmap_resolution")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
     let mut points3d_hasher = Xxh3::new();
 
     // points3d/colors_rgb
@@ -232,13 +259,36 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         &mut archive,
         &format!("points3d/colors_rgb.{point_count}.3.uint8.zst"),
     )?);
-    // points3d/estimated_normals_xyz
-    points3d_hasher.update(&read_zst_entry(
-        &mut archive,
-        &format!("points3d/estimated_normals_xyz.{point_count}.3.float32.zst"),
-    )?);
     // points3d/metadata.json
-    points3d_hasher.update(&read_zst_entry(&mut archive, "points3d/metadata.json.zst")?);
+    points3d_hasher.update(&points3d_meta_raw);
+    // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
+    if has_normals {
+        let normals_name = if is_pre_v3 {
+            format!("points3d/estimated_normals_xyz.{point_count}.3.float32.zst")
+        } else {
+            format!("points3d/normals_xyz.{point_count}.3.float32.zst")
+        };
+        points3d_hasher.update(&read_zst_entry(&mut archive, &normals_name)?);
+    }
+    // Optional patch frame, in lexicographic order: bitmaps, u, v.
+    if has_uv_frames {
+        if has_patch_bitmaps {
+            points3d_hasher.update(&read_zst_entry(
+                &mut archive,
+                &format!(
+                    "points3d/patch_bitmaps_y_x_rgba.{point_count}.{patch_bitmap_r}.{patch_bitmap_r}.4.uint8.zst"
+                ),
+            )?);
+        }
+        points3d_hasher.update(&read_zst_entry(
+            &mut archive,
+            &format!("points3d/patch_u_halfvec_xyz.{point_count}.3.float32.zst"),
+        )?);
+        points3d_hasher.update(&read_zst_entry(
+            &mut archive,
+            &format!("points3d/patch_v_halfvec_xyz.{point_count}.3.float32.zst"),
+        )?);
+    }
     // points3d/positions_xyz (version 1) or positions_xyzw (version 2)
     let positions_name = if is_v1 {
         format!("points3d/positions_xyz.{point_count}.3.float64.zst")

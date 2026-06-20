@@ -5,11 +5,16 @@
 
 Unlike the geometric transforms, ``RefineNormalsTransform`` is a *modifier*: it
 removes no points and moves nothing — it only rewrites each finite point's
-``estimated_normal`` to the normal that maximizes cross-view photometric
-consensus. Because the refinement is photometric it reads the workspace's source
-images (``workspace_dir / image_name``), the same way the SIFT-reading filters
-reach back for the ``.sift`` files; a missing image is a hard error. The default
+``normal`` to the one that maximizes cross-view photometric consensus. Because
+the refinement is photometric it reads the workspace's source images
+(``workspace_dir / image_name``), the same way the SIFT-reading filters reach
+back for the ``.sift`` files; a missing image is a hard error. The default
 ``extent=feature_size`` patch sizing additionally reads the ``.sift`` files.
+
+When ``save_patches`` is set, the full refined patch cloud (each point's
+``u``/``v`` in-plane half-extent vectors, alongside the normal) is attached to
+the reconstruction and written as the per-point patch frame in the ``.sfmr``
+``points3d/`` section (format version 3+), not just the per-point normal.
 
 See ``specs/cli/xform-refine-normals-command.md`` and
 ``specs/core/patch-normal-refinement.md``.
@@ -50,13 +55,16 @@ class RefineNormalsTransform:
     All knobs default to the ``PatchCloud.refine_normals`` /
     ``PatchCloud.from_reconstruction`` binding defaults, so the two layers
     cannot drift. The point count, positions, poses, and cameras are unchanged;
-    only ``estimated_normals`` is rewritten (finite points only — points at
-    infinity have no surface element and pass through).
+    only ``normals`` is rewritten (finite points only — points at infinity have
+    no surface element and pass through). With ``save_patches``, the refined
+    patch geometry is additionally attached to the reconstruction.
     """
 
     def __init__(
         self,
         *,
+        # whether to persist the full patch cloud, not just per-point normals
+        save_patches: bool = False,
         # forwarded to PatchCloud.refine_normals
         angular_range_deg: float = 25.0,
         init_steps: int = 7,
@@ -129,7 +137,10 @@ class RefineNormalsTransform:
             raise ValueError(f"extent must be one of {_EXTENTS}, got {extent!r}")
         if extent_value <= 0:
             raise ValueError(f"extent_value must be positive, got {extent_value}")
+        if not isinstance(save_patches, bool):
+            raise ValueError(f"save_patches must be a bool, got {save_patches!r}")
 
+        self.save_patches = save_patches
         self.angular_range_deg = angular_range_deg
         self.init_steps = init_steps
         self.refine_levels = refine_levels
@@ -213,12 +224,18 @@ class RefineNormalsTransform:
         # Copy-and-scatter keeps the normals of excluded (infinity) points
         # intact while overwriting every finite point. point_ids are 3D-point
         # indices, so normals[pid] indexes the right row directly.
-        normals = np.asarray(recon.estimated_normals, dtype=np.float32).copy()
+        normals = np.asarray(recon.normals, dtype=np.float32).copy()
         normals[point_ids] = refined
 
         self._print_summary(photo, init, conf)
 
-        return recon.clone_with_changes(estimated_normals=normals)
+        # With save_patches, persist the full refined patch cloud (the per-point
+        # u/v half-extent vectors) in the .sfmr points3d/ section, in addition to
+        # scattering the per-point normals.
+        if self.save_patches:
+            print(f"  Saving {len(point_ids)} patches to the reconstruction")
+            return recon.clone_with_changes(normals=normals, patches=cloud)
+        return recon.clone_with_changes(normals=normals)
 
     def _print_summary(
         self, photo: np.ndarray, init: np.ndarray, conf: np.ndarray
@@ -248,8 +265,9 @@ class RefineNormalsTransform:
         )
 
     def description(self) -> str:
+        patches = ", save_patches" if self.save_patches else ""
         return (
             f"Refine normals (initial={self.initial_normals}, extent={self.extent}, "
             f"range={self.angular_range_deg}°, objective={self.objective}, "
-            f"sampler={self.sampler})"
+            f"sampler={self.sampler}{patches})"
         )

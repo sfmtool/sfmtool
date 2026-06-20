@@ -245,7 +245,7 @@ impl SfmrReconstruction {
             if let Classification::Infinity(direction) = rc.class {
                 pt.position = direction;
                 pt.w = 0.0;
-                pt.estimated_normal = Vector3::zeros();
+                pt.normal = Vector3::zeros();
             }
         }
 

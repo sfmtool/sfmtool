@@ -51,7 +51,8 @@ fn compute_camera_centers(
     centers
 }
 
-/// Compute estimated surface normals for 3D points from track observations.
+/// Compute mean-viewing-direction surface normals for 3D points from track
+/// observations.
 ///
 /// For each 3D point, the normal is the average direction from the point
 /// toward all cameras that observe it, normalized to a unit vector.
@@ -63,7 +64,7 @@ fn compute_camera_centers(
 ///   track observations. Each observation `i` means "image `image_indexes[i]`
 ///   sees point `point_indexes[i]`", where image indices index into
 ///   `camera_centers` and point indices index into `positions_xyz`.
-fn compute_estimated_normals(
+fn compute_mean_viewing_normals(
     positions_xyz: &Array2<f64>,
     camera_centers: &Array2<f64>,
     image_indexes: &Array1<u32>,
@@ -175,8 +176,8 @@ fn median_sorted(sorted: &[f64]) -> f64 {
 
 /// Result of depth statistics computation.
 pub struct DepthStatsResult {
-    /// Estimated surface normals `(P, 3)` float32.
-    pub estimated_normals_xyz: Array2<f32>,
+    /// Mean-viewing-direction surface normals `(P, 3)` float32.
+    pub mean_viewing_normals_xyz: Array2<f32>,
     /// Per-image depth statistics JSON structure.
     pub depth_statistics: DepthStatistics,
     /// Depth histogram counts `(N, num_buckets)` uint32.
@@ -237,7 +238,7 @@ pub fn compute_depth_statistics(
     // Handle empty reconstructions
     if num_images == 0 || num_points == 0 {
         return Ok(DepthStatsResult {
-            estimated_normals_xyz: Array2::zeros((num_points, 3)),
+            mean_viewing_normals_xyz: Array2::zeros((num_points, 3)),
             depth_statistics: DepthStatistics {
                 num_histogram_buckets: NUM_HISTOGRAM_BUCKETS,
                 images: Vec::new(),
@@ -270,8 +271,8 @@ pub fn compute_depth_statistics(
     let camera_centers = compute_camera_centers(quaternions_wxyz, translations_xyz);
 
     // Compute estimated normals
-    let estimated_normals_xyz =
-        compute_estimated_normals(positions_xyz, &camera_centers, image_indexes, point_indexes);
+    let mean_viewing_normals_xyz =
+        compute_mean_viewing_normals(positions_xyz, &camera_centers, image_indexes, point_indexes);
 
     // Build mapping: image_index -> set of observed point indices
     let mut image_to_points: Vec<Vec<u32>> = vec![Vec::new(); num_images];
@@ -356,7 +357,7 @@ pub fn compute_depth_statistics(
     }
 
     Ok(DepthStatsResult {
-        estimated_normals_xyz,
+        mean_viewing_normals_xyz,
         depth_statistics: DepthStatistics {
             num_histogram_buckets: NUM_HISTOGRAM_BUCKETS,
             images: depth_stats_images,
@@ -379,7 +380,7 @@ mod tests {
         let pi = Array1::<u32>::zeros(0);
 
         let result = compute_depth_statistics(&q, &t, &p, &ii, &pi).unwrap();
-        assert_eq!(result.estimated_normals_xyz.shape(), &[0, 3]);
+        assert_eq!(result.mean_viewing_normals_xyz.shape(), &[0, 3]);
         assert_eq!(result.depth_statistics.images.len(), 0);
         assert_eq!(result.observed_depth_histogram_counts.shape(), &[0, 128]);
     }
@@ -401,7 +402,7 @@ mod tests {
 
         let result = compute_depth_statistics(&q, &t, &p, &ii, &pi).unwrap();
 
-        assert_eq!(result.estimated_normals_xyz.shape(), &[1, 3]);
+        assert_eq!(result.mean_viewing_normals_xyz.shape(), &[1, 3]);
         assert_eq!(result.depth_statistics.images.len(), 1);
 
         let stats = &result.depth_statistics.images[0];
@@ -434,9 +435,9 @@ mod tests {
         // The infinity point must not pollute the finite depth range.
         assert!((stats.observed.max_z.unwrap() - 5.0).abs() < 1e-10);
         // Its estimated normal stays at the (0, 0, 0) initializer.
-        assert_eq!(result.estimated_normals_xyz[[1, 0]], 0.0);
-        assert_eq!(result.estimated_normals_xyz[[1, 1]], 0.0);
-        assert_eq!(result.estimated_normals_xyz[[1, 2]], 0.0);
+        assert_eq!(result.mean_viewing_normals_xyz[[1, 0]], 0.0);
+        assert_eq!(result.mean_viewing_normals_xyz[[1, 1]], 0.0);
+        assert_eq!(result.mean_viewing_normals_xyz[[1, 2]], 0.0);
     }
 
     #[test]
@@ -482,7 +483,7 @@ mod tests {
         let ii = Array1::from_vec(vec![0u32, 1]);
         let pi = Array1::from_vec(vec![0u32, 0]);
 
-        let normals = compute_estimated_normals(&p, &compute_camera_centers(&q, &t), &ii, &pi);
+        let normals = compute_mean_viewing_normals(&p, &compute_camera_centers(&q, &t), &ii, &pi);
 
         // Directions (-5,0,0)->(0,0,0) and (5,0,0)->(0,0,0) cancel out on x,
         // but the directions are from point TO camera, so (-5,0,0) and (5,0,0)

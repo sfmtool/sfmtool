@@ -80,10 +80,13 @@ impl PySfmrReconstruction {
     ///     tool_options: Optional dict of operation-specific metadata to merge
     ///         into ``metadata.tool_options``.
     ///
-    /// The write preserves the in-memory ``estimated_normals`` of every point
-    /// that has one (recomputing only the missing/zero rows from geometry), so
-    /// normals set via ``clone_with_changes(estimated_normals=...)`` — e.g. by
-    /// ``sfm xform --refine-normals`` — survive the round trip.
+    /// The write preserves the in-memory ``normals`` of every point that has one
+    /// (recomputing only the missing/zero rows from geometry), so normals set via
+    /// ``clone_with_changes(normals=...)`` — e.g. by ``sfm xform
+    /// --refine-normals`` — survive the round trip. A reconstruction with
+    /// ``has_normals`` ``False`` writes no normals at all. Any attached patch
+    /// cloud is written as the per-point patch frame in ``points3d/`` (format
+    /// version 3+).
     #[pyo3(signature = (path, operation=None, tool_name=None, tool_options=None))]
     fn save(
         &mut self,
@@ -330,22 +333,40 @@ impl PySfmrReconstruction {
         PyArray1::from_vec(py, vec)
     }
 
-    /// Estimated surface normals for 3D points, shape `(M, 3)`.
+    /// Surface normals for 3D points, shape `(M, 3)`.
+    ///
+    /// Always returns an array; when :attr:`has_normals` is ``False`` every row
+    /// is ``(0, 0, 0)`` (the reconstruction carries no normals).
     #[getter]
-    fn estimated_normals<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
+    fn normals<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
         let vec2: Vec<Vec<f32>> = self
             .inner
             .points
             .iter()
-            .map(|pt| {
-                vec![
-                    pt.estimated_normal.x,
-                    pt.estimated_normal.y,
-                    pt.estimated_normal.z,
-                ]
-            })
+            .map(|pt| vec![pt.normal.x, pt.normal.y, pt.normal.z])
             .collect();
         PyArray2::from_vec2(py, &vec2).unwrap()
+    }
+
+    /// Whether this reconstruction carries per-point normals. When ``False``,
+    /// :attr:`normals` is all-zero and no `normals_xyz` array is written.
+    #[getter]
+    fn has_normals(&self) -> bool {
+        self.inner.has_normals
+    }
+
+    /// The attached oriented-patch cloud, or ``None`` when this reconstruction
+    /// carries no patch data. The returned cloud is a copy (geometry only;
+    /// bitmaps, if stored, are not loaded into the cloud).
+    #[getter]
+    fn patches(&self) -> Option<crate::py_patch_cloud::PyPatchCloud> {
+        let u = self.inner.patch_u_halfvec_xyz.as_ref()?;
+        let v = self.inner.patch_v_halfvec_xyz.as_ref()?;
+        // The patch center for each point is the point's own position.
+        let centers: Vec<Point3<f64>> = self.inner.points.iter().map(|p| p.position).collect();
+        Some(crate::py_patch_cloud::PyPatchCloud {
+            inner: sfmtool_core::patch_cloud::PatchCloud::from_halfvec_arrays(u, v, &centers),
+        })
     }
 
     // ── Track data array getters ─────────────────────────────────────
@@ -794,7 +815,8 @@ impl PySfmrReconstruction {
     /// Supported fields: ``positions``, ``colors``, ``errors``,
     /// ``quaternions_wxyz``, ``translations``, ``track_image_indexes``,
     /// ``track_feature_indexes``, ``track_point_ids``, ``observation_counts``,
-    /// ``estimated_normals``, ``image_names``, ``camera_indexes``, ``cameras``,
+    /// ``normals``, ``patches`` (a ``PatchCloud`` or ``None``),
+    /// ``image_names``, ``camera_indexes``, ``cameras``,
     /// ``feature_tool_hashes``, ``sift_content_hashes``, ``thumbnails_y_x_rgb``,
     /// ``rig_frame_data``, ``world_space_unit``.
     #[pyo3(signature = (**kwargs))]

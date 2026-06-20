@@ -103,8 +103,8 @@ fn classify_detects_far_point_as_infinity() {
     assert_eq!(classified.infinity_point_count, 1);
     // The stored direction is a unit vector.
     assert!((classified.points[0].position.coords.norm() - 1.0).abs() < 1e-9);
-    // estimated_normal is zeroed for a point at infinity.
-    assert_eq!(classified.points[0].estimated_normal, Vector3::zeros());
+    // normal is zeroed for a point at infinity.
+    assert_eq!(classified.points[0].normal, Vector3::zeros());
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn materialize_makes_every_point_finite() {
     for pt in &mut recon.points {
         pt.position = Point3::from(pt.position.coords.normalize());
         pt.w = 0.0;
-        pt.estimated_normal = Vector3::zeros();
+        pt.normal = Vector3::zeros();
     }
     let materialised = recon.materialize_points_at_infinity();
     assert!(materialised.points.iter().all(|p| p.w == 1.0));

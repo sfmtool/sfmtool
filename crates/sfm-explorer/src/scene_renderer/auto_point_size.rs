@@ -191,7 +191,7 @@ mod tests {
             w: 1.0,
             color: [255, 255, 255],
             error: 0.0,
-            estimated_normal: nalgebra::Vector3::new(0.0, 0.0, 1.0),
+            normal: nalgebra::Vector3::new(0.0, 0.0, 1.0),
         }
     }
 
@@ -203,7 +203,7 @@ mod tests {
             w: 0.0,
             color: [255, 255, 255],
             error: 0.0,
-            estimated_normal: nalgebra::Vector3::zeros(),
+            normal: nalgebra::Vector3::zeros(),
         }
     }
 

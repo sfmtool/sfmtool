@@ -59,6 +59,11 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     // stores homogeneous positions and `point_indexes`. The reader accepts both
     // and upgrades version 1 to the version 2 in-memory model.
     let is_v1 = metadata.version < 2;
+    // Version 3 renamed `points3d/estimated_normals_xyz` to
+    // `points3d/normals_xyz` and added the optional per-point patch frame in the
+    // points3d section. Versions 1 and 2 carry the legacy normals name and no
+    // patch frame.
+    let is_pre_v3 = metadata.version < 3;
 
     // Cameras
     let cameras: Vec<SfmrCamera> = read_json_entry(&mut archive, "cameras/metadata.json.zst")?;
@@ -212,13 +217,81 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     )?;
     let reprojection_errors = Array1::from_vec(reprojection_vec);
 
-    let normals_vec: Vec<f32> = read_binary_array(
-        &mut archive,
-        &format!("points3d/estimated_normals_xyz.{point_count}.3.float32.zst"),
-        point_count * 3,
-    )?;
-    let estimated_normals_xyz = Array2::from_shape_vec((point_count, 3), normals_vec)
-        .map_err(|e| SfmrError::ShapeMismatch(format!("normals reshape: {e}")))?;
+    // Normals are optional in version 3 (flagged by `has_normals`, which
+    // defaults to `false` when absent — like the patch flags). Versions 1 and 2
+    // always carry them and have no flag.
+    let has_normals = is_pre_v3
+        || points3d_meta
+            .get("has_normals")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    let normals_xyz = if has_normals {
+        let normals_name = if is_pre_v3 {
+            format!("points3d/estimated_normals_xyz.{point_count}.3.float32.zst")
+        } else {
+            format!("points3d/normals_xyz.{point_count}.3.float32.zst")
+        };
+        let normals_vec: Vec<f32> =
+            read_binary_array(&mut archive, &normals_name, point_count * 3)?;
+        Some(
+            Array2::from_shape_vec((point_count, 3), normals_vec)
+                .map_err(|e| SfmrError::ShapeMismatch(format!("normals reshape: {e}")))?,
+        )
+    } else {
+        None
+    };
+
+    // Optional per-point patch frame (version 3+), stored beside the normals.
+    let read_vec3 = |archive: &mut zip::ZipArchive<std::fs::File>,
+                     field: &str|
+     -> Result<Array2<f32>, SfmrError> {
+        let v: Vec<f32> = read_binary_array(
+            archive,
+            &format!("points3d/{field}.{point_count}.3.float32.zst"),
+            point_count * 3,
+        )?;
+        Array2::from_shape_vec((point_count, 3), v)
+            .map_err(|e| SfmrError::ShapeMismatch(format!("{field} reshape: {e}")))
+    };
+    let has_uv_frames = points3d_meta
+        .get("has_uv_frames")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let (patch_u_halfvec_xyz, patch_v_halfvec_xyz) = if has_uv_frames {
+        (
+            Some(read_vec3(&mut archive, "patch_u_halfvec_xyz")?),
+            Some(read_vec3(&mut archive, "patch_v_halfvec_xyz")?),
+        )
+    } else {
+        (None, None)
+    };
+    let patch_bitmaps_y_x_rgba = if has_uv_frames
+        && points3d_meta
+            .get("has_patch_bitmaps")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    {
+        let r = points3d_meta
+            .get("patch_bitmap_resolution")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| {
+                SfmrError::InvalidFormat(
+                    "points3d/metadata.json.zst has_patch_bitmaps but no patch_bitmap_resolution"
+                        .into(),
+                )
+            })? as usize;
+        let bitmaps_vec: Vec<u8> = read_binary_array(
+            &mut archive,
+            &format!("points3d/patch_bitmaps_y_x_rgba.{point_count}.{r}.{r}.4.uint8.zst"),
+            point_count * r * r * 4,
+        )?;
+        Some(
+            Array4::from_shape_vec((point_count, r, r, 4), bitmaps_vec)
+                .map_err(|e| SfmrError::ShapeMismatch(format!("patch bitmaps reshape: {e}")))?,
+        )
+    } else {
+        None
+    };
 
     // Tracks
     let image_indexes_vec: Vec<u32> = read_binary_array(
@@ -334,10 +407,11 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         None
     };
 
-    // Upgrade version-1 metadata to the version-2 model: the in-memory data is
-    // always version 2. Recompute `infinity_point_count` from the `w` column so
-    // it is correct regardless of the source version (version 1 has none).
-    metadata.version = 2;
+    // Upgrade older metadata to the current (version 3) in-memory model: the
+    // in-memory data is always the latest version. Recompute
+    // `infinity_point_count` from the `w` column so it is correct regardless of
+    // the source version (version 1 has none).
+    metadata.version = 3;
     metadata.infinity_point_count = (0..point_count)
         .filter(|&i| positions_xyzw[[i, 3]] == 0.0)
         .count() as u32;
@@ -361,7 +435,10 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         positions_xyzw,
         colors_rgb,
         reprojection_errors,
-        estimated_normals_xyz,
+        normals_xyz,
+        patch_u_halfvec_xyz,
+        patch_v_halfvec_xyz,
+        patch_bitmaps_y_x_rgba,
         image_indexes,
         feature_indexes,
         point_indexes,

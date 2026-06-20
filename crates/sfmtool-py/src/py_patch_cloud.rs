@@ -129,7 +129,7 @@ fn parse_reduce(s: &str) -> PyResult<ViewReduce> {
 /// See :meth:`from_reconstruction` and ``specs/core/patch-cloud.md``.
 #[pyclass(name = "PatchCloud", module = "sfmtool")]
 pub struct PyPatchCloud {
-    inner: PatchCloud,
+    pub(crate) inner: PatchCloud,
 }
 
 #[pymethods]

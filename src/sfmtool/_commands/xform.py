@@ -52,9 +52,10 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
     help=(
         "Refine per-point surface normals by photometric cross-view consensus. "
         "Optional comma-separated key=value params (e.g. "
-        "'angular_range_deg=25,init_steps=7'). Reads the workspace source images; "
-        "the default extent=feature_size also reads the .sift files, which must "
-        "still be present where the reconstruction was created."
+        "'angular_range_deg=25,init_steps=7'; 'save_patches=true' also writes the "
+        "full refined patch cloud). Reads the workspace source images; the default "
+        "extent=feature_size also reads the .sift files, which must still be "
+        "present where the reconstruction was created."
     ),
 )
 @click.option(

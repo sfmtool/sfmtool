@@ -7,7 +7,8 @@
 (`specs/core/patch-normal-refinement.md`, v1 implemented in
 `sfmtool-core/src/patch_normal_refine.rs` + the `PatchCloud.refine_normals`
 PyO3 binding) as an `sfm xform` operation that rewrites a reconstruction's
-per-point `estimated_normals` in place.
+per-point `normals` in place, and can optionally persist the full refined patch
+cloud (`save_patches`).
 
 > _Note (2026-06-13): the Click option is declared `is_flag=False,
 > flag_value=""` so the optional value accepts all three forms — bare
@@ -27,9 +28,10 @@ naturally — with two characteristics that shape the design:
 
 1. **It is a modifier, not a point filter.** Unlike `--remove-short-tracks`
    et al. it removes no points and changes no positions; it only rewrites the
-   per-point `estimated_normal` field (stored in the `.sfmr` as
-   `estimated_normals_xyz`, surfaced as `recon.estimated_normals` and writable
-   via `recon.clone_with_changes(estimated_normals=...)`). It therefore belongs
+   per-point `normal` field (stored in the `.sfmr` version 3+ as `normals_xyz`,
+   surfaced as `recon.normals` and writable via
+   `recon.clone_with_changes(normals=...)`). With `save_patches` it additionally
+   attaches the refined patch geometry to the reconstruction. It therefore belongs
    in the **Optimization** group of `xform-command.md` next to `--bundle-adjust`,
    not under "Filtering Operations." (The user's "filter" is loose usage; the
    operation is a refinement transform.) The point count is unchanged.
@@ -102,6 +104,7 @@ so the CLI re-specifies nothing and the two layers cannot drift.
 | `initial_normals`   | `stored`        | `from_reconstruction` normal policy (below) |
 | `extent`            | `feature_size`  | `from_reconstruction` extent policy |
 | `extent_value`      | `5.0`           | `from_reconstruction`             |
+| `save_patches`      | `false`         | persist the full refined patch cloud, not just per-point normals (below) |
 
 Unknown keys, malformed `key=value` tokens (no `=`, empty key), or out-of-range
 values raise `click.UsageError`, consistent with the other parsers in
@@ -164,7 +167,7 @@ also one of the search seeds. (The parameter is named `initial_normals`, not
 the search.) Choices map to `PatchNormal`:
 
 - `stored` *(default, decided)* — refine the reconstruction's existing
-  `estimated_normals` (falls back to mean-viewing where a stored normal is
+  `normals` (falls back to mean-viewing where a stored normal is
   zero/degenerate). This makes `--refine-normals` read as "improve the normals
   already in this model," and lets a second `--refine-normals` in the chain
   continue from the first (refinement is intentionally **not idempotent** — each
@@ -226,26 +229,38 @@ class RefineNormalsTransform:
         images = [load_full_res(workspace_dir / name) for name in recon.image_names]
         cloud = PatchCloud.from_reconstruction(recon, normal=initial_normals, extent=extent, ...)
         result = cloud.refine_normals(recon, images, angular_range_deg=..., ...)
-        normals = np.asarray(recon.estimated_normals, np.float32).copy()  # (P, 3)
+        normals = np.asarray(recon.normals, np.float32).copy()  # (P, 3)
         for i, pid in enumerate(cloud.point_ids):
             normals[pid] = result["normal"][i]
-        return recon.clone_with_changes(estimated_normals=normals)
+        if save_patches:
+            return recon.clone_with_changes(normals=normals, patches=cloud)
+        return recon.clone_with_changes(normals=normals)
 ```
 
-`recon.estimated_normals` is always point-count-sized (each point carries an
-`estimated_normal`), so the copy-and-scatter keeps the normals of excluded
-(infinity) points intact while overwriting every refined finite point.
-`clone_with_changes` validates the `(point_count, 3)` shape. The scatter relies
-on `cloud.point_ids` being **point-array indices** (the 3D-point index, not a
-track id) — which is what `from_reconstruction` emits and what the binding
-range-checks — so `normals[pid] = …` indexes the right row directly.
+`recon.normals` is always point-count-sized (each point carries a `normal`), so
+the copy-and-scatter keeps the normals of excluded (infinity) points intact while
+overwriting every refined finite point. `clone_with_changes` validates the
+`(point_count, 3)` shape. The scatter relies on `cloud.point_ids` being
+**point-array indices** (the 3D-point index, not a track id) — which is what
+`from_reconstruction` emits and what the binding range-checks — so
+`normals[pid] = …` indexes the right row directly.
+
+**Persisting the full patch cloud (`save_patches`).** By default only the
+per-point normal is written. With `save_patches=true`, the refined `PatchCloud`
+is attached to the reconstruction via `clone_with_changes(patches=cloud)` and
+written as a per-point patch frame beside the normals in the `.sfmr` `points3d/`
+section (format version 3+; see `specs/formats/sfmr-file-format.md`): two
+in-plane half-extent vectors `u` and `v` per point (the patch centre is the
+point's position, and `normalize(u × v)` is the per-point normal scattered
+above). The optional patch *bitmaps* are not yet emitted by this command; the
+format supports them, so they can be added later without a version bump.
 
 **Persisting the refined normals (decided).** `.sfmr` *write* used to recompute
-`estimated_normals_xyz` from geometry (the mean-viewing normals; see
+the per-point normals from geometry (the mean-viewing normals; see
 `sfmr-format/src/depth_stats.rs`) on every save, which would silently discard the
 refinement. The write path now **preserves** every stored normal and recomputes
 only the *missing* ones — the zero vector left for points whose normal was never
-set and for degenerate / infinity points (`merge_preserving_estimated_normals` in
+set and for degenerate / infinity points (`merge_preserving_normals` in
 `sfmr-format/src/write.rs`, gated on `MISSING_NORMAL_NORM_SQ`). Depth statistics
 and histograms are still recomputed so they track the current geometry (e.g.
 after a prior `--bundle-adjust`). This is a global save-pipeline change, not

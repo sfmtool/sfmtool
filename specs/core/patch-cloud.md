@@ -163,8 +163,39 @@ pub enum PatchExtent {
 pub enum ViewReduce { Min, Max, Median, Mean }
 ```
 
-`SfmrReconstruction` exposes `positions`, `estimated_normals`, cameras and poses,
-so `from_reconstruction` is the bridge from a solved model to a patch cloud.
+`SfmrReconstruction` exposes `positions`, `normals`, cameras and poses, so
+`from_reconstruction` is the bridge from a solved model to a patch cloud.
+
+### Serialization
+
+A `PatchCloud` round-trips to the per-point patch frame in the `.sfmr`
+`points3d/` section (format version 3+) via
+`PatchCloud::to_halfvec_arrays(point_count)` /
+`PatchCloud::from_halfvec_arrays(half_u_xyz, half_v_xyz, centers)`.
+`to_halfvec_arrays` scatters the cloud's patches into per-point rows by
+`point_ids`, folding each unit axis and half-extent into one vector and leaving
+zero rows elsewhere; `from_halfvec_arrays` takes the points' positions as
+`centers`, keeps the present rows (non-zero `u`), and recovers their point
+indices.
+
+The two arrays (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) and the optional
+`patch_bitmaps_y_x_rgba` are stored on `SfmrData`/`SfmrReconstruction` as plain
+`Option` fields beside `normals_xyz` — there is no separate patch struct, and the
+centre is not stored (it is the point's position). See
+`specs/formats/sfmr-file-format.md` for the on-disk layout. On the Python side,
+`recon.clone_with_changes(patches=cloud)` attaches a cloud and `recon.patches`
+reads it back; `recon.save` writes the `patch_*` arrays beside the normals. Patch
+bitmaps are supported by the format but not yet emitted by the refinement
+pipeline.
+
+The per-point patch frame rides along with the reconstruction's editing
+operations rather than being discarded: image subsetting and point-mask filtering
+keep the rows of the surviving points, and an SE(3) similarity (`--rotate` /
+`--translate` / `--scale`) reorients and rescales the half-vectors with the
+geometry (rotation only for a point at infinity, whose patch is angular) while the
+bitmaps — parameterised in the patch's own `(s, t)` frame — are carried unchanged.
+The per-point `normal` rotates in step, so `normalize(u × v)` stays consistent
+with it.
 
 > _Status (2026-06-11): Implemented — `patch_cloud.rs`
 > (`OrientedPatch`, `PatchCloud::from_reconstruction`, `PatchNormal`,
@@ -256,7 +287,7 @@ patch in a strip the same world surfel.
 
 ## Open questions
 
-- **Normal source and quality.** `estimated_normals` may be noisy or absent for
+- **Normal source and quality.** `normals` may be noisy or absent for
   some points. Fallbacks: orient the patch fronto-parallel to a reference view,
   or to the mean viewing direction of the observing cameras. Worth a quality flag
   per patch.

@@ -8,6 +8,7 @@
 //! projects a camera's image onto one to render its canonical appearance.
 
 use nalgebra::{Matrix3, Point3, Vector3};
+use ndarray::Array2;
 
 use crate::reconstruction::SfmrReconstruction;
 use crate::rigid_transform::RigidTransform;
@@ -278,7 +279,7 @@ impl PatchCloud {
 
             let n = match normal {
                 PatchNormal::Stored => {
-                    let en = pt.estimated_normal;
+                    let en = pt.normal;
                     let v = Vector3::new(en.x as f64, en.y as f64, en.z as f64);
                     if v.norm() > 1e-6 {
                         v.normalize()
@@ -352,6 +353,76 @@ impl PatchCloud {
         }
 
         Ok(PatchCloud { patches, point_ids })
+    }
+
+    /// Serialize to the per-point in-plane half-extent vector arrays
+    /// (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) stored beside the other
+    /// `points3d/` arrays.
+    ///
+    /// The arrays are **per 3D point** (parallel to the points arrays), so the
+    /// patches are scattered into `point_count` rows by their `point_ids`; every
+    /// row this cloud has no patch for is left as a zero row (a row is "present"
+    /// iff its `u` is non-zero). The center is not stored (it is the point's own
+    /// position — a Euclidean point for a finite point, a direction for a point
+    /// at infinity); each unit axis and its half-extent are folded into one
+    /// half-extent vector (`u = u_axis · half_extent[0]`). Bitmaps are not
+    /// produced here.
+    pub fn to_halfvec_arrays(&self, point_count: usize) -> (Array2<f32>, Array2<f32>) {
+        let mut u_xyz = Array2::<f32>::zeros((point_count, 3));
+        let mut v_xyz = Array2::<f32>::zeros((point_count, 3));
+        for (k, patch) in self.patches.iter().enumerate() {
+            let i = self.point_ids.get(k).copied().unwrap_or(k as u32) as usize;
+            if i >= point_count {
+                continue;
+            }
+            let u = patch.u_axis * patch.half_extent[0];
+            let v = patch.v_axis * patch.half_extent[1];
+            u_xyz[[i, 0]] = u.x as f32;
+            u_xyz[[i, 1]] = u.y as f32;
+            u_xyz[[i, 2]] = u.z as f32;
+            v_xyz[[i, 0]] = v.x as f32;
+            v_xyz[[i, 1]] = v.y as f32;
+            v_xyz[[i, 2]] = v.z as f32;
+        }
+        (u_xyz, v_xyz)
+    }
+
+    /// Reconstruct a patch cloud from the per-point half-extent vector arrays,
+    /// keeping only the present rows (non-zero `u`) and recording each one's
+    /// point index in `point_ids`. `centers[i]` supplies the patch center for
+    /// point `i` (its position). The half-extent vectors are split back into a
+    /// unit axis and a half-size.
+    pub fn from_halfvec_arrays(
+        half_u_xyz: &Array2<f32>,
+        half_v_xyz: &Array2<f32>,
+        centers: &[Point3<f64>],
+    ) -> Self {
+        let mut patches = Vec::new();
+        let mut point_ids = Vec::new();
+        for i in 0..half_u_xyz.shape()[0] {
+            let u = Vector3::new(
+                half_u_xyz[[i, 0]] as f64,
+                half_u_xyz[[i, 1]] as f64,
+                half_u_xyz[[i, 2]] as f64,
+            );
+            // A zero `u` marks a point with no patch (e.g. a point at infinity).
+            let hu = u.norm();
+            if hu <= 1e-12 {
+                continue;
+            }
+            let v = Vector3::new(
+                half_v_xyz[[i, 0]] as f64,
+                half_v_xyz[[i, 1]] as f64,
+                half_v_xyz[[i, 2]] as f64,
+            );
+            let hv = v.norm();
+            let u_axis = u / hu;
+            let v_axis = if hv > 1e-12 { v / hv } else { v };
+            let center = centers.get(i).copied().unwrap_or_else(Point3::origin);
+            patches.push(OrientedPatch::new(center, u_axis, v_axis, [hu, hv]));
+            point_ids.push(i as u32);
+        }
+        PatchCloud { patches, point_ids }
     }
 }
 
