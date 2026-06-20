@@ -510,6 +510,81 @@ fn recovers_fronto_parallel_normal_from_tilted_init() {
 }
 
 #[test]
+fn representative_is_none_unless_requested() {
+    let scene = Scene::new(&[[0.8, 0.0, 0.0], [-0.8, 0.0, 0.0], [0.0, 0.7, 0.0]]);
+    let views = scene.views();
+    let patch = plane_patch(true_normal());
+    // test_params leaves render_bitmap at its default (false).
+    let params = test_params(Objective::MeanPairwise);
+    let result = refine_patch_normal(&patch, &views, 16, &params);
+    assert!(result.representative.is_none());
+}
+
+#[test]
+fn representative_fuses_consistent_views_with_high_agreement() {
+    let scene = Scene::new(&[
+        [0.8, 0.0, 0.0],
+        [-0.8, 0.0, 0.0],
+        [0.0, 0.7, 0.0],
+        [0.0, -0.7, 0.0],
+    ]);
+    let views = scene.views();
+    let patch = plane_patch(true_normal());
+    let mut params = test_params(Objective::RobustWeighted { iters: 3 });
+    params.render_bitmap = true;
+    let resolution = 16u32;
+    let r = resolution as usize;
+
+    let result = refine_patch_normal(&patch, &views, resolution, &params);
+    let rep = result.representative.expect("bitmap should be rendered");
+    assert_eq!(rep.len(), r * r * 4);
+
+    // Center pixel: well inside the gaussian-disk support and covered by every
+    // view. Source is single-channel, so the fused RGB is grey.
+    let center = (r / 2 * r + r / 2) * 4;
+    let (cr, cg, cb, ca) = (
+        rep[center],
+        rep[center + 1],
+        rep[center + 2],
+        rep[center + 3],
+    );
+    assert_eq!(cr, cg);
+    assert_eq!(cg, cb);
+    // All four views observe the same texture, so cross-view agreement is high
+    // (alpha approaches the coverage ceiling of 255·(1 − 1/4) ≈ 191 for 4 views).
+    assert!(
+        ca > 180,
+        "agreement alpha should be high for identical views, got {ca}"
+    );
+
+    // Fusion is a (weighted) mean of identical renders, so it matches a single
+    // view's render of the same patch at the same pixel.
+    let map = WarpMap::from_patch(
+        &result.patch,
+        views[0].camera,
+        views[0].cam_from_world,
+        resolution,
+    );
+    let img0 = remap_bilinear(views[0].pyramid.level(0), &map);
+    let v0 = img0.get_pixel((r / 2) as u32, (r / 2) as u32, 0) as i32;
+    assert!(
+        (cr as i32 - v0).abs() <= 4,
+        "fused grey {cr} should match the single-view render {v0}"
+    );
+}
+
+#[test]
+fn representative_is_none_when_too_few_views() {
+    let scene = Scene::new(&[[0.0, 0.0, 0.0]]);
+    let views = scene.views();
+    let patch = plane_patch(true_normal());
+    let mut params = test_params(Objective::MeanPairwise);
+    params.render_bitmap = true; // min_views is 2, so a single view skips the search
+    let result = refine_patch_normal(&patch, &views, 16, &params);
+    assert!(result.representative.is_none());
+}
+
+#[test]
 fn recovers_normal_when_no_seed_is_at_the_optimum() {
     // Asymmetric cameras (all offset toward +x) so the mean-viewing seed is tilted
     // off the true fronto-parallel normal; combined with a tilted init, *neither*

@@ -187,6 +187,18 @@ def test_parse_save_patches():
     assert "save_patches" in desc
 
 
+def test_parse_bitmaps():
+    """``bitmaps`` is a recognized boolean key (default False) and implies
+    ``save_patches`` (the bitmaps need the patch frame)."""
+    assert parse_refine_normals_params("").bitmaps is False
+    t = parse_refine_normals_params("bitmaps=true")
+    assert t.bitmaps is True
+    assert t.save_patches is True  # forced on
+    assert parse_refine_normals_params("bitmaps=false").bitmaps is False
+    desc = RefineNormalsTransform(bitmaps=True).description()
+    assert "bitmaps" in desc
+
+
 # ── Integration over a real reconstruction ──────────────────────────────────
 
 
@@ -282,6 +294,47 @@ def test_refine_normals_save_patches_round_trips(seoul_bull_workspace, tmp_path)
     normals = np.asarray(reloaded.normals)
     pid = int(np.asarray(rcloud.point_ids)[0])
     np.testing.assert_allclose(after.normal, normals[pid], atol=1e-5)
+
+
+def test_refine_normals_bitmaps_round_trips(seoul_bull_workspace, tmp_path):
+    """``bitmaps`` attaches per-point RGBA patch textures that survive a
+    save/load round trip and pass ``verify_sfmr``."""
+    from sfmtool._sfmtool import verify_sfmr
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+
+    # Without bitmaps, no bitmap array is attached.
+    plain = _modest_params().apply(recon)
+    assert plain.patch_bitmaps is None
+
+    params = RefineNormalsTransform(
+        resolution=12,
+        init_steps=5,
+        refine_levels=2,
+        sampler="bilinear",
+        bitmaps=True,
+    )
+    out = params.apply(recon)
+
+    # bitmaps imply save_patches, so the frame is attached too.
+    assert out.patches is not None
+    bitmaps = out.patch_bitmaps
+    assert bitmaps is not None
+    npoints = len(np.asarray(recon.positions))
+    assert bitmaps.shape == (npoints, 12, 12, 4)
+    assert bitmaps.dtype == np.uint8
+    # At least one patch was rendered (non-zero RGBA somewhere).
+    assert bitmaps.any()
+
+    path = tmp_path / "with_bitmaps.sfmr"
+    out.save(path)
+
+    is_valid, errors = verify_sfmr(str(path))
+    assert is_valid, errors
+
+    reloaded = SfmrReconstruction.load(path)
+    assert reloaded.patch_bitmaps is not None
+    np.testing.assert_array_equal(reloaded.patch_bitmaps, bitmaps)
 
 
 def test_refine_normals_does_not_lower_consensus(seoul_bull_workspace, capsys):

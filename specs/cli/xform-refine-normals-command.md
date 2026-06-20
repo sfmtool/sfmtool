@@ -105,6 +105,7 @@ so the CLI re-specifies nothing and the two layers cannot drift.
 | `extent`            | `feature_size`  | `from_reconstruction` extent policy |
 | `extent_value`      | `5.0`           | `from_reconstruction`             |
 | `save_patches`      | `false`         | persist the full refined patch cloud, not just per-point normals (below) |
+| `bitmaps`           | `false`         | also render + persist the per-point RGBA patch bitmaps (implies `save_patches`; below) |
 
 Unknown keys, malformed `key=value` tokens (no `=`, empty key), or out-of-range
 values raise `click.UsageError`, consistent with the other parsers in
@@ -252,8 +253,23 @@ written as a per-point patch frame beside the normals in the `.sfmr` `points3d/`
 section (format version 3+; see `specs/formats/sfmr-file-format.md`): two
 in-plane half-extent vectors `u` and `v` per point (the patch centre is the
 point's position, and `normalize(u × v)` is the per-point normal scattered
-above). The optional patch *bitmaps* are not yet emitted by this command; the
-format supports them, so they can be added later without a version bump.
+above).
+
+**Persisting the patch bitmaps (`bitmaps`).** With `bitmaps=true` the command
+additionally renders each refined patch's canonical RGBA texture at the found
+normal and writes the per-point `patch_bitmaps_y_x_rgba` array
+(`(point_count, R, R, 4)` uint8, `R = resolution`) beside the frame. The binding
+(`PatchCloud.refine_normals(render_bitmaps=True)`) returns the textures already
+scattered to per-3D-point rows (zero rows for points with no refined patch), and
+the command attaches them via `clone_with_changes(patch_bitmaps=…)`. Because the
+bitmaps require the frame, `bitmaps=true` forces `save_patches` on. Each patch
+texture is the cross-view **fusion** of the kept views at the optimum: RGB is the
+robust IRLS-weighted mean (the same per-view weights the consensus uses; an
+unweighted mean under `objective=mean`), and the **alpha channel is a per-pixel
+cross-view agreement confidence** — high where the views agree, `0` where no kept
+view covers the pixel (and `0` for a pixel seen by a single view, which carries no
+cross-view evidence). Rendering costs one extra full-grid source render per kept
+view per patch, so it is off by default.
 
 **Persisting the refined normals (decided).** `.sfmr` *write* used to recompute
 the per-point normals from geometry (the mean-viewing normals; see

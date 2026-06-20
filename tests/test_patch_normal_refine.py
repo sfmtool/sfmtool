@@ -141,6 +141,83 @@ def test_confidence_is_opt_in(seoul_bull_workspace: Path):
     assert np.all(np.isfinite(on[scored])) and np.all(on[scored] >= 0.0)
 
 
+def test_render_bitmaps_scatters_to_points(seoul_bull_workspace: Path):
+    """``render_bitmaps`` returns a per-3D-point RGBA bitmap array."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    sample = _sample_point_ids(cloud)
+    resolution = 12
+    res = cloud.refine_normals(
+        recon,
+        images,
+        point_ids=sample,
+        resolution=resolution,
+        init_steps=5,
+        refine_levels=2,
+        sampler="bilinear",
+        render_bitmaps=True,
+    )
+
+    # Off by default: omitting render_bitmaps yields no bitmaps key.
+    assert "bitmaps" in res
+    bitmaps = res["bitmaps"]
+    npoints = len(recon.positions)
+    assert bitmaps.shape == (npoints, resolution, resolution, 4)
+    assert bitmaps.dtype == np.uint8
+
+    # Only refined (scored) patches get a filled row; everything else is zero.
+    photo = np.asarray(res["photoconsistency"])
+    point_ids = np.asarray(cloud.point_ids)
+    filled = bitmaps.any(axis=(1, 2, 3))
+    assert filled.sum() > 0
+    # Every filled row belongs to a scored patch's point id.
+    scored_pids = set(point_ids[np.isfinite(photo)].tolist())
+    assert set(np.nonzero(filled)[0].tolist()).issubset(scored_pids)
+
+    # A filled patch has some non-zero alpha (cross-view agreement) where covered.
+    alpha = bitmaps[..., 3]
+    assert alpha[filled].max() > 0
+
+
+def test_render_bitmaps_round_trips_through_sfmr(seoul_bull_workspace: Path, tmp_path):
+    """Attached bitmaps survive a save / load of the .sfmr."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    res = cloud.refine_normals(
+        recon,
+        images,
+        point_ids=_sample_point_ids(cloud, n=200),
+        resolution=10,
+        init_steps=5,
+        refine_levels=2,
+        sampler="bilinear",
+        render_bitmaps=True,
+    )
+
+    # Bitmaps require the frame, so attach the cloud too.
+    edited = recon.clone_with_changes(patches=cloud, patch_bitmaps=res["bitmaps"])
+    assert edited.patch_bitmaps is not None
+    np.testing.assert_array_equal(edited.patch_bitmaps, res["bitmaps"])
+
+    out = tmp_path / "with-bitmaps.sfmr"
+    edited.save(str(out))
+
+    reloaded = SfmrReconstruction.load(str(out))
+    assert reloaded.patch_bitmaps is not None
+    np.testing.assert_array_equal(reloaded.patch_bitmaps, res["bitmaps"])
+
+    # A reconstruction with no patch data reports None.
+    assert recon.patch_bitmaps is None
+
+
 def _refine(recon, images, cache, cache_supersample, point_ids):
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0

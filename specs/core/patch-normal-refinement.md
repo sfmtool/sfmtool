@@ -11,10 +11,21 @@
 > and its centered-Hessian confidence (v1 uses a finite-difference grid-curvature
 > confidence and does not yet gate on a confidence threshold to keep the init
 > normal); the geometric/PCA seed (v1 seeds from the patch's current normal and
-> the mean-viewing direction); stochastic view subsets; the joint normal + robust
-> representative patch and the `representative` texture output; and the
+> the mean-viewing direction); stochastic view subsets; and the
 > atlas-backed textured patch cloud. The `scripts/patch_crossval.py` strip
 > renderer drives this routine via `--refine-normal`._
+>
+> _Status (2026-06-20): the `representative` texture output is now produced — a
+> per-patch fused RGBA bitmap rendered at the found normal, gated on the new
+> `NormalRefineParams::render_bitmap` (Python `refine_normals(render_bitmaps=…)`),
+> scattered to per-3D-point rows and persisted as `patch_bitmaps_y_x_rgba` by
+> `sfm xform --refine-normals bitmaps=true`. RGB is the cross-view (robust)
+> fusion; alpha is per-pixel cross-view agreement. The final scoring pass renders
+> each candidate's per-view stack (`PatchViewStack`) and keeps the winner's, so
+> the bitmap and the consensus view-weights it fuses with come from that one
+> render — no extra render or IRLS pass. This is the simple fused-render form; the
+> **joint normal + per-pixel robust template** of item 7 (a free latent `m`,
+> super-resolvable, atlas-backed) remains beyond v1._
 >
 > _Status (2026-06-13): performance characterized — see
 > `reports/2026-06-13-perf-patch-normal-refinement.md` (phase breakdown,
@@ -261,6 +272,9 @@ pub struct NormalRefineParams {
     pub min_valid_fraction: f64,  // per-view valid-pixel floor
     pub min_views: u32,
     pub sampler: Sampler,         // how to sample the source pyramids
+    pub render_bitmap: bool,      // also render the `representative` RGBA texture
+                                  // at the found normal (off by default; one extra
+                                  // full-grid source render per kept view per patch)
 }
 
 /// How to sample a `ProjectedImage`'s pyramid when rendering a patch.
@@ -302,11 +316,16 @@ pub struct NormalRefineResult {
     pub init_photoconsistency: f64,
     pub valid_view_count: u32,
     pub confidence: f64,          // peakedness of Φ at the optimum (see below)
-    /// The canonical appearance in the patch `(s, t)` frame, RGBA with `A` the
-    /// per-pixel coverage/confidence. `None` for the plain consensus (where it
-    /// would just be the mean `x̄`); populated by the robust-template variant
-    /// (item 7). May be higher resolution than the scoring grid.
-    pub representative: Option<PatchTexture>,
+    /// The canonical appearance in the patch `(s, t)` frame at the found normal:
+    /// a fused `R×R` RGBA texture, flat row-major `(row, col, channel)`. RGB is
+    /// the cross-view fused colour (the robust IRLS view weights under
+    /// `RobustWeighted`, an unweighted mean under `MeanPairwise`); `A` is a
+    /// per-pixel cross-view *agreement* confidence (0 where no kept view covers
+    /// the pixel). Populated when `NormalRefineParams::render_bitmap` is set;
+    /// `None` otherwise. This is the simple fused-render form — the per-pixel
+    /// robust *template* `m` of item 7 (a free latent, super-resolvable) is still
+    /// beyond v1.
+    pub representative: Option<Vec<u8>>,
 }
 
 /// Refine one patch's normal. Takes the patch and returns an updated copy.
