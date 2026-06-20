@@ -230,6 +230,33 @@ class TestAlignCLI:
         assert result.exit_code != 0
         assert "RANSAC" in result.output
 
+    def test_align_basename_collision_rejected(self, tmp_path):
+        """Inputs sharing a basename are rejected rather than silently overwritten."""
+        ref = tmp_path / "a" / "recon.sfmr"
+        other = tmp_path / "b" / "recon.sfmr"
+        ref.parent.mkdir()
+        other.parent.mkdir()
+        ref.touch()
+        other.touch()
+        result = CliRunner().invoke(
+            main, ["align", str(ref), str(other), "-o", str(tmp_path / "out")]
+        )
+        assert result.exit_code != 0
+        assert "recon.sfmr" in result.output
+        assert "overwrite each other" in result.output
+        # Nothing should have been written to the output directory.
+        assert not (tmp_path / "out").exists()
+
+    def test_align_same_file_twice_rejected(self, tmp_path):
+        """Passing the same file as reference and target is rejected as a collision."""
+        ref = tmp_path / "recon.sfmr"
+        ref.touch()
+        result = CliRunner().invoke(
+            main, ["align", str(ref), str(ref), "-o", str(tmp_path / "out")]
+        )
+        assert result.exit_code != 0
+        assert "overwrite each other" in result.output
+
     def test_aligned_positions_close_to_reference(self, seoul_bull_sfmr_only, tmp_path):
         """After alignment, camera positions should be close to the reference."""
         ref = seoul_bull_sfmr_only

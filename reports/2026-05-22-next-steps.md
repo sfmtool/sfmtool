@@ -15,7 +15,12 @@ tasks pulled from already-written specs, then speculative design topics.
 
 Ranked roughly by value × readiness — cheap, high-leverage wins first.
 
-### 1. Expose the equirectangular-panorama pipeline as a `sfm` CLI command
+### 1. Expose the equirectangular-panorama pipeline as a `sfm` CLI command — DONE
+
+> _Status (2026-06-20): Done (verified) — shipped as `sfm panorama`
+> (`src/sfmtool/_commands/panorama.py`, registered under Visualization in
+> `cli.py`, spec `specs/cli/panorama-command.md`). No longer an open task._
+
 
 - **Spec reference:** `specs/core/spherical-tiles-rig.md`,
   `specs/core/per-spherical-tile-source-stack.md`,

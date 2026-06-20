@@ -42,6 +42,16 @@ When aligning more than one reconstruction, the command builds a connectivity gr
 images to determine alignment order, ensuring each reconstruction is aligned through the
 shortest path to the reference.
 
+## Output
+
+The reference and every aligned reconstruction are written into `--output-dir` under their
+**input basename** (the reference is copied verbatim; each aligned result is saved alongside it).
+Because the output name is just the basename, the command rejects up front any set of inputs in
+which two paths share a basename — same-named files from different directories, or the same file
+passed twice — since they would otherwise silently overwrite each other and yield fewer outputs
+than inputs. Give such inputs distinct file names. Inputs located inside the output directory are
+likewise rejected.
+
 ## Usage Examples
 
 ```bash
