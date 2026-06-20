@@ -59,8 +59,12 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('Cargo.lock') }}
+          # run_id rotates the key so the cache refreshes each run (actions/cache
+          # skips saving on an existing key, which otherwise freezes a stale
+          # cache); restore-keys falls back to the latest prior cache.
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-cargo-lint-${{ hashFiles('Cargo.lock') }}-
             ${{ runner.os }}-cargo-lint-
 
       - name: Ruff format
@@ -96,8 +100,12 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('Cargo.lock') }}
+          # run_id rotates the key so the cache refreshes each run (actions/cache
+          # skips saving on an existing key, which otherwise freezes a stale
+          # cache); restore-keys falls back to the latest prior cache.
+          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-cargo-coverage-${{ hashFiles('Cargo.lock') }}-
             ${{ runner.os }}-cargo-coverage-
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
@@ -143,8 +151,13 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
+          # run_id rotates the key so the cache refreshes each run (actions/cache
+          # skips saving on an existing key, which otherwise freezes a stale
+          # cache — this is why the Windows release build was cold every run);
+          # restore-keys falls back to the latest prior cache for incrementality.
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}-
             ${{ runner.os }}-cargo-test-
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
@@ -182,8 +195,12 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-ui-${{ hashFiles('Cargo.lock') }}
+          # run_id rotates the key so the cache refreshes each run (actions/cache
+          # skips saving on an existing key, which otherwise freezes a stale
+          # cache); restore-keys falls back to the latest prior cache.
+          key: ${{ runner.os }}-cargo-ui-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-cargo-ui-${{ hashFiles('Cargo.lock') }}-
             ${{ runner.os }}-cargo-ui-
 
       - name: UI tests
@@ -214,8 +231,12 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-ui-${{ hashFiles('Cargo.lock') }}
+          # run_id rotates the key so the cache refreshes each run (actions/cache
+          # skips saving on an existing key, which otherwise freezes a stale
+          # cache); restore-keys falls back to the latest prior cache.
+          key: ${{ runner.os }}-cargo-ui-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
+            ${{ runner.os }}-cargo-ui-${{ hashFiles('Cargo.lock') }}-
             ${{ runner.os }}-cargo-ui-
 
       # Compile the test binary (and the sfm-explorer bin it launches) without
