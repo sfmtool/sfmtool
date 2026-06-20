@@ -1,0 +1,6 @@
+# Keep Cargo.lock byte-identical across platforms. Windows runners default to
+# core.autocrlf=true and would rewrite it to CRLF, which changes
+# hashFiles('Cargo.lock') (diverging the Windows Rust cache key) and perturbs
+# cargo's build fingerprints. Scoped to this one file on purpose — we do not
+# want to force eol on Windows-native files.
+Cargo.lock text eol=lf
