@@ -152,13 +152,18 @@ mod tests {
             )
             .unwrap(),
             reprojection_errors: Array1::from_vec(vec![0.5, 0.6, 0.7, 0.8, 0.4]),
-            estimated_normals_xyz: Array2::from_shape_vec(
-                (point_count, 3),
-                vec![
-                    0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-                ],
-            )
-            .unwrap(),
+            normals_xyz: Some(
+                Array2::from_shape_vec(
+                    (point_count, 3),
+                    vec![
+                        0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+                    ],
+                )
+                .unwrap(),
+            ),
+            patch_u_halfvec_xyz: None,
+            patch_v_halfvec_xyz: None,
+            patch_bitmaps_y_x_rgba: None,
             image_indexes,
             feature_indexes,
             point_indexes,
@@ -251,7 +256,7 @@ mod tests {
         assert_eq!(loaded.positions_xyzw, data.positions_xyzw);
         assert_eq!(loaded.colors_rgb, data.colors_rgb);
         assert_eq!(loaded.reprojection_errors, data.reprojection_errors);
-        assert_eq!(loaded.estimated_normals_xyz, data.estimated_normals_xyz);
+        assert_eq!(loaded.normals_xyz, data.normals_xyz);
 
         // Verify tracks
         assert_eq!(loaded.image_indexes, data.image_indexes);
@@ -390,6 +395,11 @@ mod tests {
                 let v1_name = name.replace("point_indexes", "points3d_indexes");
                 zip.start_file(&v1_name, stored).unwrap();
                 zip.write_all(&compressed).unwrap();
+            } else if name.starts_with("points3d/normals_xyz.") {
+                // Identical bytes under the version-1/2 normals name.
+                let v1_name = name.replace("normals_xyz", "estimated_normals_xyz");
+                zip.start_file(&v1_name, stored).unwrap();
+                zip.write_all(&compressed).unwrap();
             } else {
                 zip.start_file(name, stored).unwrap();
                 zip.write_all(&compressed).unwrap();
@@ -414,9 +424,9 @@ mod tests {
         assert_eq!(meta.version, 1);
         assert_eq!(meta.point_count, 5);
 
-        // Full read upgrades version 1 to the version-2 in-memory model.
+        // Full read upgrades version 1 to the current in-memory model.
         let loaded = read_sfmr(&v1_path).unwrap();
-        assert_eq!(loaded.metadata.version, 2);
+        assert_eq!(loaded.metadata.version, 3);
         assert_eq!(loaded.metadata.point_count, 5);
         assert_eq!(loaded.metadata.infinity_point_count, 0);
         assert_eq!(loaded.positions_xyzw.shape(), &[5, 4]);
@@ -523,7 +533,10 @@ mod tests {
             positions_xyzw: Array2::zeros((0, 4)),
             colors_rgb: Array2::zeros((0, 3)),
             reprojection_errors: Array1::from_vec(vec![]),
-            estimated_normals_xyz: Array2::zeros((0, 3)),
+            normals_xyz: Some(Array2::zeros((0, 3))),
+            patch_u_halfvec_xyz: None,
+            patch_v_halfvec_xyz: None,
+            patch_bitmaps_y_x_rgba: None,
             image_indexes: Array1::from_vec(vec![]),
             feature_indexes: Array1::from_vec(vec![]),
             point_indexes: Array1::from_vec(vec![]),
@@ -620,10 +633,11 @@ mod tests {
         let loaded = read_sfmr(&path).unwrap();
 
         // Verify all normals are unit vectors
-        for i in 0..loaded.estimated_normals_xyz.shape()[0] {
-            let nx = loaded.estimated_normals_xyz[[i, 0]] as f64;
-            let ny = loaded.estimated_normals_xyz[[i, 1]] as f64;
-            let nz = loaded.estimated_normals_xyz[[i, 2]] as f64;
+        let normals = loaded.normals_xyz.expect("normals present");
+        for i in 0..normals.shape()[0] {
+            let nx = normals[[i, 0]] as f64;
+            let ny = normals[[i, 1]] as f64;
+            let nz = normals[[i, 2]] as f64;
             let norm = (nx * nx + ny * ny + nz * nz).sqrt();
             assert!(
                 (norm - 1.0).abs() < 0.01,
@@ -645,31 +659,33 @@ mod tests {
 
         // Point 0 is at +z (0, 0, 5); its mean-viewing normal would be (0, 0, -1).
         // Store the opposite, (0, 0, 1): a *set* normal that recompute would flip.
-        data.estimated_normals_xyz[[0, 0]] = 0.0;
-        data.estimated_normals_xyz[[0, 1]] = 0.0;
-        data.estimated_normals_xyz[[0, 2]] = 1.0;
+        let set = data.normals_xyz.as_mut().unwrap();
+        set[[0, 0]] = 0.0;
+        set[[0, 1]] = 0.0;
+        set[[0, 2]] = 1.0;
         // Point 1 has no normal yet — the zero vector. It must be filled.
-        data.estimated_normals_xyz[[1, 0]] = 0.0;
-        data.estimated_normals_xyz[[1, 1]] = 0.0;
-        data.estimated_normals_xyz[[1, 2]] = 0.0;
+        set[[1, 0]] = 0.0;
+        set[[1, 1]] = 0.0;
+        set[[1, 2]] = 0.0;
 
         let dir = std::env::temp_dir().join("sfmr_test_preserve_normals");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.sfmr");
         write_sfmr(&path, &mut data).unwrap();
         let loaded = read_sfmr(&path).unwrap();
+        let normals = loaded.normals_xyz.expect("normals present");
 
         // Point 0's set normal is preserved (z = +1), not overwritten with the
         // recomputed mean-viewing normal (which would have z = -1).
         assert!(
-            loaded.estimated_normals_xyz[[0, 2]] > 0.5,
+            normals[[0, 2]] > 0.5,
             "set normal should be preserved, got {:?}",
-            loaded.estimated_normals_xyz.row(0)
+            normals.row(0)
         );
 
         // Point 1's missing normal is filled from the recompute: a non-zero unit
         // vector pointing roughly toward -P = -(1, 0, 6).
-        let n1 = loaded.estimated_normals_xyz.row(1);
+        let n1 = normals.row(1);
         let norm1 = (n1[0] * n1[0] + n1[1] * n1[1] + n1[2] * n1[2]).sqrt();
         assert!(
             (norm1 - 1.0).abs() < 0.01,
@@ -679,6 +695,34 @@ mod tests {
             n1[0] < 0.0 && n1[2] < 0.0,
             "filled normal should point toward -P"
         );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_round_trip_without_normals() {
+        // Normals are optional: `None` opts out entirely, so no normals are
+        // written and the reloaded data carries `None`.
+        let mut data = make_test_data();
+        data.normals_xyz = None;
+
+        let dir = std::env::temp_dir().join("sfmr_test_no_normals");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sfmr");
+        write_sfmr(&path, &mut data).unwrap();
+
+        let loaded = read_sfmr(&path).unwrap();
+        assert!(loaded.normals_xyz.is_none());
+
+        // The normals entry is absent from the archive.
+        let file = std::fs::File::open(&path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        assert!(archive
+            .by_name("points3d/normals_xyz.5.3.float32.zst")
+            .is_err());
+
+        let (valid, errors) = verify_sfmr(&path).unwrap();
+        assert!(valid, "no-normals verification failed: {errors:?}");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -851,6 +895,153 @@ mod tests {
                 entry.compression(),
             );
         }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_round_trip_with_patches_and_bitmaps() {
+        let mut data = make_test_data();
+        // Per-point patch frame over all 5 points, with R=4 bitmaps. Distinct
+        // per-cell values catch any reshape/transposition bug on round trip.
+        let point_count = 5;
+        let r = 4;
+        let u_halfvec_xyz =
+            Array2::from_shape_fn((point_count, 3), |(i, j)| (i * 3 + j) as f32 * 0.1);
+        let v_halfvec_xyz =
+            Array2::from_shape_fn((point_count, 3), |(i, j)| (i * 3 + j) as f32 * 0.01 + 1.0);
+        // 4 channels: RGB + an alpha confidence plane.
+        let bitmaps = Array4::<u8>::from_shape_fn((point_count, r, r, 4), |(i, y, x, c)| {
+            ((i * 37 + y * 11 + x * 5 + c) % 256) as u8
+        });
+        data.patch_u_halfvec_xyz = Some(u_halfvec_xyz.clone());
+        data.patch_v_halfvec_xyz = Some(v_halfvec_xyz.clone());
+        data.patch_bitmaps_y_x_rgba = Some(bitmaps.clone());
+
+        // Snapshot every points3d array the writer may touch so we can assert
+        // the patch frame round-trips without disturbing its neighbours.
+        let positions_xyzw = data.positions_xyzw.clone();
+        let colors_rgb = data.colors_rgb.clone();
+        let reprojection_errors = data.reprojection_errors.clone();
+        let normals_xyz = data.normals_xyz.clone().unwrap();
+
+        let dir = std::env::temp_dir().join("sfmr_test_patches_round_trip");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sfmr");
+        write_sfmr(&path, &mut data).unwrap();
+
+        let meta = read_sfmr_metadata(&path).unwrap();
+        assert_eq!(meta.version, 3);
+
+        let loaded = read_sfmr(&path).unwrap();
+        // Patch arrays are parallel to the points and round-trip exactly.
+        assert_eq!(loaded.patch_u_halfvec_xyz.unwrap(), u_halfvec_xyz);
+        assert_eq!(loaded.patch_v_halfvec_xyz.unwrap(), v_halfvec_xyz);
+        assert_eq!(loaded.patch_bitmaps_y_x_rgba.unwrap(), bitmaps);
+        // The rest of the points3d section round-trips unchanged alongside it.
+        assert_eq!(loaded.positions_xyzw, positions_xyzw);
+        assert_eq!(loaded.colors_rgb, colors_rgb);
+        assert_eq!(loaded.reprojection_errors, reprojection_errors);
+        assert_eq!(loaded.normals_xyz.unwrap(), normals_xyz);
+        // The patch frame is hashed inside the points3d section.
+        assert_eq!(loaded.content_hash.points3d_xxh128.len(), 32);
+
+        let (valid, errors) = verify_sfmr(&path).unwrap();
+        assert!(valid, "patch round-trip verification failed: {errors:?}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_round_trip_with_patches_no_bitmaps() {
+        let mut data = make_test_data();
+        // A patch frame without bitmaps exercises the has_patch_bitmaps=false path.
+        let u_halfvec_xyz = Array2::from_shape_fn((5, 3), |(i, j)| (i * 3 + j) as f32 * 0.1);
+        let v_halfvec_xyz = Array2::from_shape_fn((5, 3), |(i, j)| (i * 3 + j) as f32 * 0.05 - 0.5);
+        data.patch_u_halfvec_xyz = Some(u_halfvec_xyz.clone());
+        data.patch_v_halfvec_xyz = Some(v_halfvec_xyz.clone());
+
+        let dir = std::env::temp_dir().join("sfmr_test_patches_no_bitmaps");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sfmr");
+        write_sfmr(&path, &mut data).unwrap();
+
+        let loaded = read_sfmr(&path).unwrap();
+        // The frame round-trips by value; bitmaps stay absent.
+        assert_eq!(loaded.patch_u_halfvec_xyz.unwrap(), u_halfvec_xyz);
+        assert_eq!(loaded.patch_v_halfvec_xyz.unwrap(), v_halfvec_xyz);
+        assert!(loaded.patch_bitmaps_y_x_rgba.is_none());
+
+        let (valid, errors) = verify_sfmr(&path).unwrap();
+        assert!(valid, "{errors:?}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_patch_frame_without_normals_round_trips() {
+        // A patch frame is independent of normals: storing the frame with
+        // `normals_xyz = None` is well-formed (the normal is implied by the
+        // frame), so it must round-trip.
+        let mut data = make_test_data();
+        data.normals_xyz = None;
+        let u_halfvec_xyz = Array2::from_shape_fn((5, 3), |(i, j)| (i * 3 + j) as f32 * 0.1);
+        let v_halfvec_xyz = Array2::from_shape_fn((5, 3), |(i, j)| (i * 3 + j) as f32 * 0.05 - 0.5);
+        data.patch_u_halfvec_xyz = Some(u_halfvec_xyz.clone());
+        data.patch_v_halfvec_xyz = Some(v_halfvec_xyz.clone());
+
+        let dir = std::env::temp_dir().join("sfmr_test_patch_frame_no_normals");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sfmr");
+        write_sfmr(&path, &mut data).unwrap();
+
+        let loaded = read_sfmr(&path).unwrap();
+        assert!(loaded.normals_xyz.is_none());
+        assert_eq!(loaded.patch_u_halfvec_xyz.unwrap(), u_halfvec_xyz);
+        assert_eq!(loaded.patch_v_halfvec_xyz.unwrap(), v_halfvec_xyz);
+
+        let (valid, errors) = verify_sfmr(&path).unwrap();
+        assert!(valid, "{errors:?}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_patch_bitmaps_without_frame_rejected() {
+        // The one cross-restriction: bitmaps require the patch frame. Bitmaps
+        // with no `u`/`v` must be rejected at write time.
+        let mut data = make_test_data();
+        data.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::zeros((5, 4, 4, 4)));
+
+        let dir = std::env::temp_dir().join("sfmr_test_bitmaps_no_frame");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sfmr");
+        let result = write_sfmr(&path, &mut data);
+        assert!(
+            matches!(result, Err(SfmrError::ShapeMismatch(_))),
+            "bitmaps without a frame should be rejected, got {result:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_patch_frame_half_present_rejected() {
+        // `u` and `v` form the frame as a pair: one without the other is not a
+        // frame and must be rejected.
+        let mut data = make_test_data();
+        data.patch_u_halfvec_xyz = Some(Array2::from_shape_fn((5, 3), |(i, j)| {
+            (i * 3 + j) as f32 * 0.1
+        }));
+
+        let dir = std::env::temp_dir().join("sfmr_test_frame_half");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sfmr");
+        let result = write_sfmr(&path, &mut data);
+        assert!(
+            matches!(result, Err(SfmrError::ShapeMismatch(_))),
+            "a half-present frame should be rejected, got {result:?}"
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

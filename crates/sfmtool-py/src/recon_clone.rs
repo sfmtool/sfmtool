@@ -120,7 +120,7 @@ pub(crate) fn clone_with_changes(
                         w: 1.0,
                         color: [0, 0, 0],
                         error: 0.0,
-                        estimated_normal: Vector3::zeros(),
+                        normal: Vector3::zeros(),
                     },
                 );
                 // (N, 3) input is Euclidean (w = 1). (N, 4) input is
@@ -197,31 +197,59 @@ pub(crate) fn clone_with_changes(
                     pt.error = s[i];
                 }
             }
-            "estimated_normals" => {
-                let arr = extract_array2!(value, "estimated_normals", f32)?;
-                let s = arr.as_slice().map_err(|e| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'estimated_normals' must be C-contiguous: {e}"
-                    ))
-                })?;
-                if arr.shape()[1] != 3 {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'estimated_normals' must have shape (N, 3), \
-                         got shape ({}, {})",
-                        arr.shape()[0],
-                        arr.shape()[1]
-                    )));
+            "normals" => {
+                if value.is_none() {
+                    // Opt out of normals entirely (no normals_xyz written).
+                    recon.has_normals = false;
+                    for pt in recon.points.iter_mut() {
+                        pt.normal = Vector3::zeros();
+                    }
+                } else {
+                    let arr = extract_array2!(value, "normals", f32)?;
+                    let s = arr.as_slice().map_err(|e| {
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'normals' must be C-contiguous: {e}"
+                        ))
+                    })?;
+                    if arr.shape()[1] != 3 {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'normals' must have shape (N, 3), \
+                             got shape ({}, {})",
+                            arr.shape()[0],
+                            arr.shape()[1]
+                        )));
+                    }
+                    if arr.shape()[0] != recon.points.len() {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'normals' length ({}) must match point count ({})",
+                            arr.shape()[0],
+                            recon.points.len()
+                        )));
+                    }
+                    recon.has_normals = true;
+                    for (i, pt) in recon.points.iter_mut().enumerate() {
+                        let off = i * 3;
+                        pt.normal = Vector3::new(s[off], s[off + 1], s[off + 2]);
+                    }
                 }
-                if arr.shape()[0] != recon.points.len() {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'estimated_normals' length ({}) must match point count ({})",
-                        arr.shape()[0],
-                        recon.points.len()
-                    )));
-                }
-                for (i, pt) in recon.points.iter_mut().enumerate() {
-                    let off = i * 3;
-                    pt.estimated_normal = Vector3::new(s[off], s[off + 1], s[off + 2]);
+            }
+            "patches" => {
+                if value.is_none() {
+                    recon.patch_u_halfvec_xyz = None;
+                    recon.patch_v_halfvec_xyz = None;
+                    recon.patch_bitmaps_y_x_rgba = None;
+                } else {
+                    let cloud: PyRef<crate::py_patch_cloud::PyPatchCloud> =
+                        value.extract().map_err(|_| {
+                            pyo3::exceptions::PyTypeError::new_err(
+                                "clone_with_changes(): 'patches' must be a PatchCloud or None",
+                            )
+                        })?;
+                    let (u, v) = cloud.inner.to_halfvec_arrays(recon.points.len());
+                    recon.patch_u_halfvec_xyz = Some(u);
+                    recon.patch_v_halfvec_xyz = Some(v);
+                    // The cloud carries geometry only; clear any stale bitmaps.
+                    recon.patch_bitmaps_y_x_rgba = None;
                 }
             }
             "quaternions_wxyz" => {

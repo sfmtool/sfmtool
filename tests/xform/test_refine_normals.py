@@ -178,6 +178,15 @@ def test_constructor_description_mentions_key_settings():
     assert "mean_viewing" in desc
 
 
+def test_parse_save_patches():
+    """``save_patches`` is a recognized boolean key (default False)."""
+    assert parse_refine_normals_params("").save_patches is False
+    assert parse_refine_normals_params("save_patches=true").save_patches is True
+    assert parse_refine_normals_params("save_patches=false").save_patches is False
+    desc = RefineNormalsTransform(save_patches=True).description()
+    assert "save_patches" in desc
+
+
 # ── Integration over a real reconstruction ──────────────────────────────────
 
 
@@ -192,7 +201,7 @@ def test_refine_normals_preserves_points_and_improves(
     seoul_bull_workspace,
 ):
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    original_normals = np.asarray(recon.estimated_normals).copy()
+    original_normals = np.asarray(recon.normals).copy()
     original_positions = np.asarray(recon.positions).copy()
     at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
 
@@ -203,7 +212,7 @@ def test_refine_normals_preserves_points_and_improves(
     assert out.image_count == recon.image_count
     np.testing.assert_array_equal(np.asarray(out.positions), original_positions)
 
-    new_normals = np.asarray(out.estimated_normals)
+    new_normals = np.asarray(out.normals)
     assert new_normals.shape == original_normals.shape
 
     # Some finite-point normal actually moved.
@@ -218,6 +227,61 @@ def test_refine_normals_preserves_points_and_improves(
         np.testing.assert_array_equal(
             new_normals[at_infinity], original_normals[at_infinity]
         )
+
+
+def test_refine_normals_save_patches_round_trips(seoul_bull_workspace, tmp_path):
+    """``save_patches`` attaches the refined patch cloud, which survives a
+    save/load round trip through the version-3 ``.sfmr`` points3d patch frame."""
+    from sfmtool._sfmtool import verify_sfmr
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+
+    # Without save_patches, no patch data is attached.
+    plain = _modest_params().apply(recon)
+    assert plain.patches is None
+
+    # With save_patches, the refined patch cloud is attached.
+    params = RefineNormalsTransform(
+        resolution=12,
+        init_steps=5,
+        refine_levels=2,
+        sampler="bilinear",
+        save_patches=True,
+    )
+    out = params.apply(recon)
+    cloud = out.patches
+    assert cloud is not None
+    n = len(cloud)
+    assert n > 0
+
+    # Round trip through a .sfmr file.
+    path = tmp_path / "with_patches.sfmr"
+    out.save(path)
+
+    is_valid, errors = verify_sfmr(str(path))
+    assert is_valid, errors
+
+    reloaded = SfmrReconstruction.load(path)
+    rcloud = reloaded.patches
+    assert rcloud is not None
+    assert len(rcloud) == n
+
+    np.testing.assert_array_equal(
+        np.asarray(rcloud.point_ids), np.asarray(cloud.point_ids)
+    )
+
+    # Per-patch geometry round-trips (half-vectors are float32 on disk).
+    before, after = cloud[0], rcloud[0]
+    np.testing.assert_allclose(after.center, before.center)
+    np.testing.assert_allclose(after.u_axis, before.u_axis, atol=1e-5)
+    np.testing.assert_allclose(after.v_axis, before.v_axis, atol=1e-5)
+    np.testing.assert_allclose(after.half_extent, before.half_extent, rtol=1e-5)
+
+    # The patch outward normal agrees with the per-point normal it was scattered
+    # into, for the linked point.
+    normals = np.asarray(reloaded.normals)
+    pid = int(np.asarray(rcloud.point_ids)[0])
+    np.testing.assert_allclose(after.normal, normals[pid], atol=1e-5)
 
 
 def test_refine_normals_does_not_lower_consensus(seoul_bull_workspace, capsys):
@@ -261,9 +325,7 @@ def test_cli_refine_normals(seoul_bull_workspace):
     refined = SfmrReconstruction.load(output_sfmr)
     assert refined.point_count == original.point_count
     # At least one normal changed.
-    assert not np.array_equal(
-        np.asarray(original.estimated_normals), np.asarray(refined.estimated_normals)
-    )
+    assert not np.array_equal(np.asarray(original.normals), np.asarray(refined.normals))
 
 
 def test_cli_refine_normals_bare_before_other_option(

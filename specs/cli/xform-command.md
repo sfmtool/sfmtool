@@ -250,13 +250,16 @@ Applies bundle adjustment via pycolmap to refine camera poses and 3D point posit
 
 #### `--refine-normals [<params>]`
 
-Refines each finite point's `estimated_normal` to the normal that maximizes
-photometric cross-view consensus, leaving the point count, positions, poses, and
-cameras unchanged. Because it is photometric it reads the workspace source
-images (and, under the default `extent=feature_size`, the `.sift` files), so
-those artifacts must still be present where the reconstruction was created. The
-optional value is a comma-separated `key=value` string; with no value it runs the
-v1 defaults. Recommended after `--bundle-adjust` (refine against the final
+Refines each finite point's `normal` to the one that maximizes photometric
+cross-view consensus, leaving the point count, positions, poses, and cameras
+unchanged. Because it is photometric it reads the workspace source images (and,
+under the default `extent=feature_size`, the `.sift` files), so those artifacts
+must still be present where the reconstruction was created. With
+`save_patches=true` the full refined patch cloud (per-point in-plane `u`/`v`
+half-extent vectors) is also written beside the normals in the `.sfmr`
+`points3d/` section. The optional
+value is a comma-separated `key=value` string; with no value it runs the v1
+defaults. Recommended after `--bundle-adjust` (refine against the final
 geometry).
 
 See [xform-refine-normals-command.md](xform-refine-normals-command.md) for the
@@ -265,6 +268,7 @@ full parameter list and semantics.
 ```bash
 --refine-normals
 --refine-normals angular_range_deg=25,init_steps=7
+--refine-normals save_patches=true
 --bundle-adjust --refine-normals
 ```
 

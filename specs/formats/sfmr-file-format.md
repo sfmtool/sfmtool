@@ -56,7 +56,10 @@ reconstruction.sfmr (ZIP archive)
 │   ├── colors_rgb.{N}.3.uint8.zst             # RGB colors (0-255)
 │   ├── reprojection_errors.{N}.float32.zst    # Reprojection errors
 │   ├── metadata.json.zst                      # Points metadata
-│   └── estimated_normals_xyz.{N}.3.float32.zst # Estimated point normals
+│   ├── normals_xyz.{N}.3.float32.zst          # (Optional) per-point surface normals
+│   ├── patch_u_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector u (version 3+)
+│   ├── patch_v_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector v (version 3+)
+│   └── patch_bitmaps_y_x_rgba.{N}.{R}.{R}.4.uint8.zst # (Optional) R×R RGBA patch textures, alpha = confidence (version 3+)
 └── tracks/
     ├── image_indexes.{M}.uint32.zst           # Image index per observation
     ├── feature_indexes.{M}.uint32.zst         # Feature index per observation
@@ -70,6 +73,7 @@ Where:
 - `{S}` = total number of sensors across all rigs
 - `{F}` = number of frames (temporal instants)
 - `{M}` = number of observations (track elements)
+- `{R}` = patch bitmap resolution (square)
 
 ## File Format Details
 
@@ -79,7 +83,7 @@ JSON structure describing the reconstruction:
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "operation": "sfm_solve",
   "tool": "colmap",
   "tool_version": "3.10",
@@ -115,9 +119,9 @@ JSON structure describing the reconstruction:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. Must be `2` for this specification. See
+- `version`: Format version number. Must be `3` for this specification. See
   [Versioning and Migration](#versioning-and-migration) for the relationship
-  to version `1`.
+  to versions `1` and `2`.
 - `operation`: Type of operation that created this reconstruction
   - `"sfm_solve"`: Structure-from-Motion reconstruction
   - `"transform"`: Geometric transformation of an existing reconstruction
@@ -219,7 +223,7 @@ XXH128 hashes for integrity verification:
 - `rigs_xxh128`: (Optional) Hash of all rigs data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Present only when `rigs/` section exists.
 - `frames_xxh128`: (Optional) Hash of all frames data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Present only when `frames/` section exists.
 - `images_xxh128`: Hash of all image data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order (includes depth statistics and histogram files)
-- `points3d_xxh128`: Hash of all points3d data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order (includes estimated normals)
+- `points3d_xxh128`: Hash of all points3d data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Includes the optional per-point arrays — `normals_xyz`, and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
 - `tracks_xxh128`: Hash of all tracks data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order
 - `content_xxh128`: Hash of all present section hashes concatenated as raw 16-byte big-endian digests in order: metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks.
 
@@ -593,8 +597,7 @@ The **recommended normalised form** sets two conventions:
 
 The first compresses well: a `w` column that is all `1`s and `0`s is a
 near-constant run that zstd collapses to almost nothing. The second is the
-natural canonical form for a direction. The writer in this codebase emits this
-form.
+natural canonical form for a direction. Writers should emit this canonical form.
 
 Because the format does not *require* the normalised form, a consumer that
 relies on `w ∈ {0, 1}` (or on unit-length directions) must normalise on read.
@@ -605,9 +608,30 @@ already normalised.
 
 ```json
 {
-  "point_count": 2107
+  "point_count": 2107,
+  "has_normals": true,
+  "has_uv_frames": true,
+  "has_patch_bitmaps": true,
+  "patch_bitmap_resolution": 24
 }
 ```
+
+**Field descriptions:**
+- `point_count`: Number of 3D points.
+- `has_normals`: (version 3+) Whether the optional `normals_xyz` array is
+  present. See [Normals](#points3dnormals_xyzn3float32zst-optional).
+- `has_uv_frames`: (version 3+) Whether the optional per-point patch
+  frame (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) is present. See
+  [Per-point patch frame](#per-point-patch-frame-optional-version-3).
+- `has_patch_bitmaps`: (version 3+) Whether `patch_bitmaps_y_x_rgba` is present.
+- `patch_bitmap_resolution`: (version 3+) The `R` dimension of the square patch
+  bitmaps, or `null` when `has_patch_bitmaps` is `false`.
+
+A version-3 file includes all four flags (`false` / `null` when the data is
+absent). A missing flag defaults to `false` (a missing `has_normals` means no
+normals) — but since versions 1 and 2 carry none of these keys yet always
+include normals, an upgraded version 1 or 2 file is read with `has_normals` as
+`true`.
 
 #### `points3d/positions_xyzw.{N}.4.float64.zst`
 
@@ -638,39 +662,100 @@ Reprojection errors:
 - **Format**: RMS reprojection error in pixels. A `w = 0` point still projects
   (rotation + intrinsics only), so its reprojection error stays well-defined.
 
-#### `points3d/estimated_normals_xyz.{N}.3.float32.zst`
+#### `points3d/normals_xyz.{N}.3.float32.zst` (Optional)
 
-Estimated surface normals for 3D points.
+Per-point surface normals.
 
 - **Shape**: `(N, 3)` where N = point_count
 - **Data type**: `float32` (little-endian)
 - **Format**: [x, y, z] unit normal vectors in world coordinate system. Rows for
-  `w = 0` points are `(0, 0, 0)` — a direction has no surface normal.
-
-**Computation method**: By default each finite 3D point's normal is the average
-direction from the point toward all cameras that observe it (from track data),
-which approximates the surface normal for points on convex surfaces.
-
-```python
-# For point P observed by cameras C1, C2, ..., Ck:
-normal = normalize(sum(camera_center[i] - P for i in observers))
-```
-
-**Write-time preservation**: The writer does *not* unconditionally overwrite this
-field. It **preserves** any normal already set on a point and recomputes only the
-*missing* ones — the `(0, 0, 0)` rows left for points whose normal was never
-estimated (and for `w = 0` points, which stay `(0, 0, 0)`). So a freshly built
-reconstruction (normals start all-zero) gets a full mean-viewing set on its first
-write, while a better normal a consumer has computed — e.g. the photometric
-`sfm xform --refine-normals` (`specs/cli/xform-refine-normals-command.md`) —
-survives subsequent saves instead of being clobbered. Depth statistics and
-histograms are always recomputed regardless. (Set `skip_recompute_depth_stats` to
-write every depth-derived field, normals included, exactly as supplied.)
+  `w = 0` points are `(0, 0, 0)`.
+- **Optional** (version 3+): present only when `points3d/metadata.json`'s
+  `has_normals` is `true`. A reconstruction may carry no normals, in which case
+  this array is absent. Versions 1 and 2 always include it.
+- **Naming**: Versions 1 and 2 stored this array under the name
+  `points3d/estimated_normals_xyz.{N}.3.float32.zst`; version 3 renamed it to
+  `points3d/normals_xyz`. Readers accept the legacy name in version 1 and 2 files.
 
 **Use cases**:
 - Visibility testing (front-facing check)
 - Frustum-based covisibility estimation
 - Surface orientation analysis
+
+#### Per-point patch frame (Optional, version 3+)
+
+A **patch** is an oriented surface element (surfel) centred on a 3D point. Only
+its in-plane frame is stored here — two **half-extent vectors** `u` and `v` —
+because the centre is the point's own position and the outward normal is
+`normalize(u × v)`. The patch spans `center + s·u + t·v` for `(s, t) ∈ [-1, 1]²`,
+each vector carrying both its in-plane orientation and half-size (no separate unit
+axes or extents).
+
+The corner offset is **homogeneous**: with the point's coordinate `(center, w)`,
+a patch corner is `(center + s·u + t·v, w)`, so a patch is well-defined for finite
+and infinity points alike:
+
+- **Finite point** (`w = 1`): a planar surfel at the Euclidean position
+  `center`. Its outward normal `normalize(u × v)` agrees with the point's
+  `normals_xyz` (a unit vector; `u × v` itself is only parallel to it, scaled by
+  the half-extents).
+- **Point at infinity** (`w = 0`, direction `d`): the corner `d + s·u + t·v` is
+  again a direction, so the patch is a small oriented region of the sphere of
+  directions around `d`. Its outward normal is **not** free: every viewing ray to
+  a point at infinity is parallel to `d`, so the visible side faces back toward
+  the observers and the normal is fixed at `normalize(-d)`. Accordingly `u` and
+  `v` are tangent to the unit sphere (`⊥ d`) — carrying only the in-plane rotation
+  and the angular half-sizes — and `u × v` points along `-d`. The per-point
+  `normals_xyz` entry is `(0, 0, 0)` here, so unlike a finite point the patch's
+  `normalize(u × v)` is implied by the direction rather than read from
+  `normals_xyz`.
+
+These arrays are **optional** (present only in format version 3+, when
+`points3d/metadata.json`'s `has_uv_frames` is `true`) and **per 3D point**,
+parallel to the other `points3d/` arrays. A point with **no patch** stores
+**all-zero rows** (a row is present iff its `u` is non-zero). Presence is
+independent of finiteness: a finite point may lack a patch, and a point at
+infinity may carry one.
+
+These are **producer conventions, not format-enforced invariants**: the format
+constrains only array shapes — not handedness, that `normalize(u × v)` matches
+`normals_xyz`, or that unpatched rows are exactly zero. A consumer relying on these
+must not assume an arbitrary v3 file honours them.
+
+Per-point surface data has three independently optional pieces, each flagged in
+`points3d/metadata.json` (version 3+):
+
+- **Normals** (`has_normals`) — the `normals_xyz` array.
+- **Patch frame** (`has_uv_frames`) — `patch_u_halfvec_xyz` and
+  `patch_v_halfvec_xyz` (the two always appear together; one without the other
+  is not a frame).
+- **Patch bitmaps** (`has_patch_bitmaps`) — `patch_bitmaps_y_x_rgba`.
+
+The **only** presence rule between them is: **patch bitmaps require the patch
+frame** (a texture is meaningless without the `u`/`v` it is parameterised over).
+Every other combination is valid — normals without a frame, a frame without
+normals, both, or neither.
+
+##### `points3d/patch_u_halfvec_xyz.{N}.3.float32.zst` and `points3d/patch_v_halfvec_xyz.{N}.3.float32.zst`
+
+- **Shape**: `(N, 3)` each, where N = point_count
+- **Data type**: `float32` (little-endian)
+- **Format**: The in-plane half-extent vectors `u` and `v`. The patch covers
+  world points `center + s·u + t·v` for `(s, t) ∈ [-1, 1]²`, where `center` is
+  the point's position. Rows for points with no patch are `(0, 0, 0)`; a
+  non-zero `u` is what marks a row as present.
+
+##### `points3d/patch_bitmaps_y_x_rgba.{N}.{R}.{R}.4.uint8.zst` (Optional)
+
+- **Shape**: `(N, R, R, 4)` where N = point_count and `R` =
+  `patch_bitmap_resolution` (both spatial dimensions are the same `R` — bitmaps
+  are square)
+- **Data type**: `uint8` (little-endian)
+- **Format**: Row-major RGBA data, one `R×R` texture per point. Dimension order
+  `(point_index, y, x, channel)` — the RGB layout used for image thumbnails plus
+  a fourth **alpha** channel carrying a per-pixel confidence (`0`–`255`). Rows
+  for points with no patch are zero. Present only when `has_patch_bitmaps` is
+  `true`.
 
 ### 8. Tracks
 
@@ -778,7 +863,7 @@ Binary files use self-documenting names:
 
 1. **Metadata hash**: XXH128 of the uncompressed `metadata.json.zst` content bytes
 2. **Cameras hash**: XXH128 of the uncompressed `cameras/metadata.json.zst` content bytes
-3. **Section hashes** (images, points3d, tracks): For each section, feed all files' uncompressed content bytes into a streaming XXH128 hasher in lexicographic path order. The final digest is the section hash.
+3. **Section hashes** (images, points3d, tracks): For each section, feed all files' uncompressed content bytes into a streaming XXH128 hasher in lexicographic path order. The final digest is the section hash. The points3d section includes the optional per-point patch-frame files (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) when present.
 4. **Overall hash**: Concatenate all present section hashes as raw 16-byte big-endian digests (metadata, cameras, rigs if present, frames if present, images, points3d, tracks), then compute XXH128 of the concatenation. Each 128-bit hash digest is serialized as 16 bytes in big-endian (most significant byte first) order before concatenation.
 
 ### Verification Process
@@ -1106,9 +1191,11 @@ All extensions should:
 
 ## Versioning and Migration
 
-The `version` field in `metadata.json.zst` is `2` for this specification.
+The `version` field in `metadata.json.zst` is `3` for this specification.
 
-Version 2 replaces the version 1 point representation with the unified
+### Version 1 → Version 2 (history)
+
+Version 2 replaced the version 1 point representation with the unified
 homogeneous model described in [Points3D](#7-points3d). The differences:
 
 | Version 1 | Version 2 |
@@ -1119,25 +1206,37 @@ homogeneous model described in [Points3D](#7-points3d). The differences:
 | (no infinity points) | metadata `infinity_point_count` |
 | `points3d/metadata.json.zst` key `points3d_count` | `points3d/metadata.json.zst` key `point_count` |
 
+### Version 2 → Version 3
+
+Version 3 renames the per-point normals array, makes it optional, and adds the
+optional per-point patch frame (all stored in `points3d/`). The differences:
+
+| Version 2 | Version 3 |
+|-----------|-----------|
+| `points3d/estimated_normals_xyz.{N}.3.float32.zst` (always present) | `points3d/normals_xyz.{N}.3.float32.zst` (optional, flagged by `has_normals`) |
+| (no patch data) | optional [per-point patch frame](#per-point-patch-frame-optional-version-3) (`points3d/patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) |
+
 The `points3d/` archive directory and the `points3d_xxh128` content-hash field
-keep their version 1 names in version 2.
+keep their original names across all versions; the patch-frame files, when
+present, are part of the points3d section and its hash.
 
-Version 2 changes the meaning of the positions array and renames the track
-index array, so it is **not** backward compatible — hence the version bump.
-A version 1 file is **not** readable by version-2-only tooling, and a version 2
-file is **not** readable by pre-version-2 tooling.
+**Migration is mechanical and lossless.** A version 2 file upgrades to the
+version 3 model by reading `estimated_normals_xyz` as `normals_xyz` (the bytes
+are identical; versions 1 and 2 always carry normals, so `has_normals` is
+effectively `true`); it carries no patch data, so the patch-frame files are
+absent.
 
-**Migration is mechanical and lossless.** A version 1 file upgrades to the
-version 2 model by appending a `w = 1` column to every point position (every
-version 1 point is finite) and renaming `points3d_indexes` to `point_indexes`;
-it carries no points at infinity, so `infinity_point_count` is `0`.
-
-The reader in this codebase accepts **both version 1 and version 2**, upgrading
-version 1 on read so the rest of the codebase only ever sees the unified model.
-The writer emits **version 2 only**.
+**Versions 1, 2, and 3 are all valid**; a reader is expected to accept all three,
+upgrading older files to the version-3 model on read. Writers emit **version 3**.
+As with version 2, a version 3 file is not readable by pre-version-3 tooling
+because of the normals rename, hence the version bump.
 
 ## Version History
 
+- **Version 3**: Per-point normals array renamed `estimated_normals_xyz` →
+  `normals_xyz` and made optional (flagged by `has_normals`); optional per-point
+  patch frame stored in `points3d/` (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, and optional
+  `patch_bitmaps_y_x_rgba`). Reader accepts versions 1, 2, and 3.
 - **Version 2**: Unified homogeneous point model — points at infinity
   (`w = 0`) are first-class. Reader accepts version 1 and version 2.
 - **Version 1.0rc1**: Release candidate

@@ -163,3 +163,53 @@ class TestWorldSpaceUnit:
 
         reloaded = SfmrReconstruction.load(out_path)
         assert reloaded.world_space_unit == "mm"
+
+
+class TestOptionalNormals:
+    def test_default_has_normals(self, seoul_bull_sfmr_only):
+        # A solved reconstruction carries (auto-computed) normals.
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        assert recon.has_normals is True
+
+    def test_clear_normals_round_trips(self, seoul_bull_sfmr_only, tmp_path):
+        import numpy as np
+
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+
+        # Opt out of normals entirely.
+        no_normals = recon.clone_with_changes(normals=None)
+        assert no_normals.has_normals is False
+        # The original is untouched.
+        assert recon.has_normals is True
+        # `normals` is still a valid (all-zero) array.
+        n = np.asarray(no_normals.normals)
+        assert n.shape == (no_normals.point_count, 3)
+        assert not n.any()
+
+        # Absence survives a save/load round trip.
+        out_path = tmp_path / "no_normals.sfmr"
+        no_normals.save(out_path)
+        reloaded = SfmrReconstruction.load(out_path)
+        assert reloaded.has_normals is False
+        assert not np.asarray(reloaded.normals).any()
+
+        # The normals_xyz entry is absent from the archive.
+        import zipfile
+
+        with zipfile.ZipFile(out_path) as zf:
+            names = zf.namelist()
+        assert not any("normals_xyz" in n for n in names)
+
+    def test_set_normals_marks_present(self, seoul_bull_sfmr_only):
+        import numpy as np
+
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        cleared = recon.clone_with_changes(normals=None)
+        assert cleared.has_normals is False
+
+        # Re-supplying normals marks them present again.
+        normals = np.zeros((cleared.point_count, 3), dtype=np.float32)
+        normals[:, 2] = 1.0
+        restored = cleared.clone_with_changes(normals=normals)
+        assert restored.has_normals is True
+        np.testing.assert_allclose(np.asarray(restored.normals), normals)

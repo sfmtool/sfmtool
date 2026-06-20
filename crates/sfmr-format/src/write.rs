@@ -41,12 +41,12 @@ impl Default for WriteOptions {
 /// absent and filled from the recomputed mean-viewing normals.
 const MISSING_NORMAL_NORM_SQ: f32 = 1e-6;
 
-/// Merge stored estimated normals with the geometry-recomputed ones, *keeping*
-/// every stored normal that is present and filling only the missing (zero)
-/// rows from the recompute. Falls back to the recomputed set wholesale if the
-/// stored array's shape doesn't match (e.g. a dict-built `SfmrData` that never
-/// carried normals). Returns a borrow when no copy is needed.
-fn merge_preserving_estimated_normals<'a>(
+/// Merge the stored normals with the geometry-recomputed mean-viewing ones,
+/// *keeping* every stored normal that is present and filling only the missing
+/// (zero) rows from the recompute. Falls back to the recomputed set wholesale if
+/// the stored array's shape doesn't match (e.g. a dict-built `SfmrData` that
+/// never carried normals). Returns a borrow when no copy is needed.
+fn merge_preserving_normals<'a>(
     stored: &'a ndarray::Array2<f32>,
     recomputed: &'a ndarray::Array2<f32>,
 ) -> Cow<'a, ndarray::Array2<f32>> {
@@ -79,7 +79,7 @@ fn merge_preserving_estimated_normals<'a>(
 ///
 /// Sorts tracks by `(point_indexes, image_indexes)` if not already sorted.
 /// Computes content hashes and writes all section metadata files.
-/// Always writes format version 2; the `content_hash` field in `data` is
+/// Always writes format version 3; the `content_hash` field in `data` is
 /// ignored on write (recomputed).
 pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
     write_sfmr_with_options(path, data, &WriteOptions::default())
@@ -98,20 +98,20 @@ pub fn write_sfmr_with_options(
     // Ensure tracks are sorted by (point_indexes, image_indexes)
     ensure_tracks_sorted(data);
 
-    // Always emit format version 2, and keep `infinity_point_count` consistent
+    // Always emit format version 3, and keep `infinity_point_count` consistent
     // with the actual `w` column.
-    data.metadata.version = 2;
+    data.metadata.version = 3;
     data.metadata.infinity_point_count = (0..data.positions_xyzw.shape()[0])
         .filter(|&i| data.positions_xyzw[[i, 3]] == 0.0)
         .count() as u32;
 
     // Recompute depth statistics unless explicitly skipped
     let recomputed: Option<DepthStatsResult>;
-    let (depth_statistics, estimated_normals_xyz, observed_depth_histogram_counts) =
+    let (depth_statistics, normals_xyz, observed_depth_histogram_counts) =
         if options.skip_recompute_depth_stats {
             (
                 &data.depth_statistics,
-                Cow::Borrowed(&data.estimated_normals_xyz),
+                data.normals_xyz.as_ref().map(Cow::Borrowed),
                 Cow::Borrowed(&data.observed_depth_histogram_counts),
             )
         } else {
@@ -132,11 +132,12 @@ pub fn write_sfmr_with_options(
             // normals a consumer has set (e.g. `sfm xform --refine-normals`)
             // instead of silently overwriting them, while a freshly imported
             // reconstruction — whose normals start all-zero — still gets a full
-            // set computed on its first write.
-            let normals = merge_preserving_estimated_normals(
-                &data.estimated_normals_xyz,
-                &r.estimated_normals_xyz,
-            );
+            // set computed on its first write. A reconstruction that carries no
+            // normals at all (`None`) opts out entirely: none are written.
+            let normals = data
+                .normals_xyz
+                .as_ref()
+                .map(|n| merge_preserving_normals(n, &r.mean_viewing_normals_xyz));
             (
                 &r.depth_statistics,
                 normals,
@@ -152,7 +153,7 @@ pub fn write_sfmr_with_options(
     // Validate dimensions (use possibly-recomputed depth stats)
     validate_dimensions_with(
         data,
-        &estimated_normals_xyz,
+        normals_xyz.as_deref(),
         &observed_depth_histogram_counts,
         depth_statistics,
         image_count,
@@ -401,6 +402,10 @@ pub fn write_sfmr_with_options(
     section_digests.push(images_hash);
 
     // === Points3D (hashed in lexicographic path order) ===
+    // The optional per-point patch frame (`patch_u_halfvec_xyz`,
+    // `patch_v_halfvec_xyz`, and an optional `patch_bitmaps_y_x_rgba`) lives in
+    // this section, beside the normal.
+    validate_patch_dimensions(data, point_count)?;
     let mut points3d_hasher = Xxh3::new();
 
     // points3d/colors_rgb
@@ -412,17 +417,15 @@ pub fn write_sfmr_with_options(
     )?;
     points3d_hasher.update(&bytes);
 
-    // points3d/estimated_normals_xyz
-    let bytes = write_binary_entry(
-        &mut zip,
-        &format!("points3d/estimated_normals_xyz.{point_count}.3.float32.zst"),
-        bytemuck::cast_slice(estimated_normals_xyz.as_slice().unwrap()),
-        options.zstd_level,
-    )?;
-    points3d_hasher.update(&bytes);
-
-    // points3d/metadata.json
-    let points3d_meta = serde_json::json!({"point_count": point_count});
+    // points3d/metadata.json (records which optional per-point arrays are present)
+    let patch_bitmap_resolution = data.patch_bitmaps_y_x_rgba.as_ref().map(|b| b.shape()[1]);
+    let points3d_meta = serde_json::json!({
+        "point_count": point_count,
+        "has_normals": normals_xyz.is_some(),
+        "has_uv_frames": data.patch_u_halfvec_xyz.is_some(),
+        "has_patch_bitmaps": data.patch_bitmaps_y_x_rgba.is_some(),
+        "patch_bitmap_resolution": patch_bitmap_resolution,
+    });
     let bytes = write_json_entry(
         &mut zip,
         "points3d/metadata.json.zst",
@@ -430,6 +433,47 @@ pub fn write_sfmr_with_options(
         options.zstd_level,
     )?;
     points3d_hasher.update(&bytes);
+
+    // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
+    if let Some(normals_xyz) = &normals_xyz {
+        let bytes = write_binary_entry(
+            &mut zip,
+            &format!("points3d/normals_xyz.{point_count}.3.float32.zst"),
+            bytemuck::cast_slice(normals_xyz.as_slice().unwrap()),
+            options.zstd_level,
+        )?;
+        points3d_hasher.update(&bytes);
+    }
+
+    // Optional patch frame, in lexicographic order: bitmaps, u, v.
+    if let Some(bitmaps) = &data.patch_bitmaps_y_x_rgba {
+        let r = bitmaps.shape()[1];
+        let bytes = write_binary_entry(
+            &mut zip,
+            &format!("points3d/patch_bitmaps_y_x_rgba.{point_count}.{r}.{r}.4.uint8.zst"),
+            bitmaps.as_slice().unwrap(),
+            options.zstd_level,
+        )?;
+        points3d_hasher.update(&bytes);
+    }
+    if let Some(u) = &data.patch_u_halfvec_xyz {
+        let bytes = write_binary_entry(
+            &mut zip,
+            &format!("points3d/patch_u_halfvec_xyz.{point_count}.3.float32.zst"),
+            bytemuck::cast_slice(u.as_slice().unwrap()),
+            options.zstd_level,
+        )?;
+        points3d_hasher.update(&bytes);
+    }
+    if let Some(v) = &data.patch_v_halfvec_xyz {
+        let bytes = write_binary_entry(
+            &mut zip,
+            &format!("points3d/patch_v_halfvec_xyz.{point_count}.3.float32.zst"),
+            bytemuck::cast_slice(v.as_slice().unwrap()),
+            options.zstd_level,
+        )?;
+        points3d_hasher.update(&bytes);
+    }
 
     // points3d/positions_xyzw
     let bytes = write_binary_entry(
@@ -532,6 +576,45 @@ pub fn write_sfmr_with_options(
     Ok(())
 }
 
+/// Validate the optional per-point patch frame arrays: `patch_u_halfvec_xyz`
+/// and `patch_v_halfvec_xyz` must be present together and shaped `(P, 3)`;
+/// bitmaps require the frame and must be shaped `(P, R, R, 3)`.
+fn validate_patch_dimensions(data: &SfmrData, point_count: usize) -> Result<(), SfmrError> {
+    let check = |name: &str, got: &[usize]| -> Result<(), SfmrError> {
+        if got != [point_count, 3] {
+            return Err(SfmrError::ShapeMismatch(format!(
+                "points3d/{name} shape {got:?} != [{point_count}, 3]"
+            )));
+        }
+        Ok(())
+    };
+    if data.patch_u_halfvec_xyz.is_some() != data.patch_v_halfvec_xyz.is_some() {
+        return Err(SfmrError::ShapeMismatch(
+            "patch_u_halfvec_xyz and patch_v_halfvec_xyz must be present together".into(),
+        ));
+    }
+    if let Some(u) = &data.patch_u_halfvec_xyz {
+        check("patch_u_halfvec_xyz", u.shape())?;
+    }
+    if let Some(v) = &data.patch_v_halfvec_xyz {
+        check("patch_v_halfvec_xyz", v.shape())?;
+    }
+    if let Some(b) = &data.patch_bitmaps_y_x_rgba {
+        if data.patch_u_halfvec_xyz.is_none() {
+            return Err(SfmrError::ShapeMismatch(
+                "patch_bitmaps_y_x_rgba requires the patch frame (patch_u/v_halfvec_xyz)".into(),
+            ));
+        }
+        let s = b.shape();
+        if s.len() != 4 || s[0] != point_count || s[1] != s[2] || s[3] != 4 {
+            return Err(SfmrError::ShapeMismatch(format!(
+                "points3d/patch_bitmaps_y_x_rgba shape {s:?} != [{point_count}, R, R, 4]"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Check if tracks are sorted by `(point_indexes, image_indexes)` and sort
 /// them in-place if not. This is a no-op when tracks are already sorted.
 fn ensure_tracks_sorted(data: &mut SfmrData) {
@@ -571,7 +654,7 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
 #[allow(clippy::too_many_arguments)]
 fn validate_dimensions_with(
     data: &SfmrData,
-    estimated_normals_xyz: &ndarray::Array2<f32>,
+    normals_xyz: Option<&ndarray::Array2<f32>>,
     observed_depth_histogram_counts: &ndarray::Array2<u32>,
     depth_statistics: &DepthStatistics,
     image_count: usize,
@@ -665,13 +748,15 @@ fn validate_dimensions_with(
             data.reprojection_errors.len()
         )
     );
-    check!(
-        estimated_normals_xyz.shape() == [point_count, 3],
-        format!(
-            "estimated_normals_xyz shape {:?} != [{point_count}, 3]",
-            estimated_normals_xyz.shape()
-        )
-    );
+    if let Some(normals_xyz) = normals_xyz {
+        check!(
+            normals_xyz.shape() == [point_count, 3],
+            format!(
+                "normals_xyz shape {:?} != [{point_count}, 3]",
+                normals_xyz.shape()
+            )
+        );
+    }
     check!(
         data.image_indexes.len() == observation_count,
         format!(

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
-use ndarray::Array4;
+use ndarray::{Array2, Array4};
 
 use sfmr_format::{
     resolve_workspace_dir, ContentHash, DepthStatistics, FramesMetadata, ImageDepthStats,
@@ -64,9 +64,9 @@ pub struct Point3D {
     pub color: [u8; 3],
     /// RMS reprojection error in pixels.
     pub error: f32,
-    /// Estimated surface normal (unit vector in world coordinates).
-    /// `(0, 0, 0)` for a point at infinity, which has no surface normal.
-    pub estimated_normal: Vector3<f32>,
+    /// Surface normal (unit vector in world coordinates). The default
+    /// mean-viewing estimate leaves this `(0, 0, 0)` for a point at infinity.
+    pub normal: Vector3<f32>,
 }
 
 impl Point3D {
@@ -164,6 +164,21 @@ pub struct SfmrReconstruction {
     pub depth_histogram_counts: Vec<Vec<u32>>,
     /// Rig definitions and frame groupings. `None` when no multi-camera rigs.
     pub rig_frame_data: Option<RigFrameData>,
+    /// Optional per-point oriented-patch frame (parallel to `points`), persisted
+    /// in `points3d/` (version 3+). `patch_u_halfvec_xyz` and
+    /// `patch_v_halfvec_xyz` are the in-plane half-extent vectors (both present
+    /// or both `None`); a patch's center is its point's position and its normal
+    /// is the point's `normal`. See [`crate::patch_cloud::PatchCloud`].
+    pub patch_u_halfvec_xyz: Option<Array2<f32>>,
+    pub patch_v_halfvec_xyz: Option<Array2<f32>>,
+    /// Optional `(P, R, R, 4)` per-point RGBA patch bitmaps; the alpha channel
+    /// holds a per-pixel confidence.
+    pub patch_bitmaps_y_x_rgba: Option<Array4<u8>>,
+    /// Whether this reconstruction carries per-point normals. When `false`, each
+    /// point's inline `normal` is left zero and the columnar `normals_xyz` array
+    /// is neither built nor written. `true` for everything loaded from versions 1
+    /// and 2.
+    pub has_normals: bool,
 
     // --- Derived data (computed from the fields above, not stored in .sfmr) ---
     /// Prefix sum of `observation_counts`: `observation_offsets[i]` is the
@@ -205,7 +220,7 @@ impl SfmrReconstruction {
 
     /// Save this reconstruction to a `.sfmr` file.
     ///
-    /// The write preserves the in-memory `estimated_normal` of every point that
+    /// The write preserves the in-memory `normal` of every point that
     /// has one, recomputing only the missing (zero) normals from geometry — so
     /// normals a consumer has set (e.g. `sfm xform --refine-normals`) survive the
     /// round trip. Depth statistics and histograms are still recomputed.
@@ -442,12 +457,15 @@ impl SfmrReconstruction {
                     .collect()
             })
             .collect();
-        for (i, pt) in self.points.iter_mut().enumerate() {
-            pt.estimated_normal = Vector3::new(
-                result.estimated_normals_xyz[[i, 0]],
-                result.estimated_normals_xyz[[i, 1]],
-                result.estimated_normals_xyz[[i, 2]],
-            );
+        // Only materialize normals when this reconstruction carries them.
+        if self.has_normals {
+            for (i, pt) in self.points.iter_mut().enumerate() {
+                pt.normal = Vector3::new(
+                    result.mean_viewing_normals_xyz[[i, 0]],
+                    result.mean_viewing_normals_xyz[[i, 1]],
+                    result.mean_viewing_normals_xyz[[i, 2]],
+                );
+            }
         }
 
         Ok(())
@@ -488,6 +506,7 @@ impl SfmrReconstruction {
         // normalise into the ergonomic form — a finite point stores its
         // Euclidean position with w = 1, a point at infinity stores a
         // unit-length direction with w = 0.
+        let has_normals = data.normals_xyz.is_some();
         let mut points = Vec::with_capacity(point_count);
         for i in 0..point_count {
             let x = data.positions_xyzw[[i, 0]];
@@ -502,6 +521,11 @@ impl SfmrReconstruction {
                 let unit = if norm > 0.0 { dir / norm } else { dir };
                 (Point3::from(unit), 0.0)
             };
+            // No normals array → leave each point's normal zero.
+            let normal = match &data.normals_xyz {
+                Some(n) => Vector3::new(n[[i, 0]], n[[i, 1]], n[[i, 2]]),
+                None => Vector3::zeros(),
+            };
             points.push(Point3D {
                 position,
                 w,
@@ -511,11 +535,7 @@ impl SfmrReconstruction {
                     data.colors_rgb[[i, 2]],
                 ],
                 error: data.reprojection_errors[i],
-                estimated_normal: Vector3::new(
-                    data.estimated_normals_xyz[[i, 0]],
-                    data.estimated_normals_xyz[[i, 1]],
-                    data.estimated_normals_xyz[[i, 2]],
-                ),
+                normal,
             });
         }
 
@@ -578,6 +598,10 @@ impl SfmrReconstruction {
             depth_statistics: data.depth_statistics,
             depth_histogram_counts,
             rig_frame_data: data.rig_frame_data,
+            patch_u_halfvec_xyz: data.patch_u_halfvec_xyz,
+            patch_v_halfvec_xyz: data.patch_v_halfvec_xyz,
+            patch_bitmaps_y_x_rgba: data.patch_bitmaps_y_x_rgba,
+            has_normals,
             image_feature_to_point,
             max_track_feature_index,
             infinity_point_count,
@@ -643,7 +667,10 @@ impl SfmrReconstruction {
         let mut positions_xyzw = Array2::<f64>::zeros((point_count, 4));
         let mut colors_rgb = Array2::<u8>::zeros((point_count, 3));
         let mut reprojection_errors = Array1::<f32>::zeros(point_count);
-        let mut estimated_normals_xyz = Array2::<f32>::zeros((point_count, 3));
+        // Normals are optional: `None` when this reconstruction carries none.
+        let mut normals_xyz = self
+            .has_normals
+            .then(|| Array2::<f32>::zeros((point_count, 3)));
 
         for (i, pt) in self.points.iter().enumerate() {
             positions_xyzw[[i, 0]] = pt.position.x;
@@ -654,9 +681,11 @@ impl SfmrReconstruction {
             colors_rgb[[i, 1]] = pt.color[1];
             colors_rgb[[i, 2]] = pt.color[2];
             reprojection_errors[i] = pt.error;
-            estimated_normals_xyz[[i, 0]] = pt.estimated_normal.x;
-            estimated_normals_xyz[[i, 1]] = pt.estimated_normal.y;
-            estimated_normals_xyz[[i, 2]] = pt.estimated_normal.z;
+            if let Some(normals) = &mut normals_xyz {
+                normals[[i, 0]] = pt.normal.x;
+                normals[[i, 1]] = pt.normal.y;
+                normals[[i, 2]] = pt.normal.z;
+            }
         }
 
         // Tracks
@@ -689,6 +718,9 @@ impl SfmrReconstruction {
             content_hash: self.content_hash.clone(),
             cameras,
             rig_frame_data: self.rig_frame_data.clone(),
+            patch_u_halfvec_xyz: self.patch_u_halfvec_xyz.clone(),
+            patch_v_halfvec_xyz: self.patch_v_halfvec_xyz.clone(),
+            patch_bitmaps_y_x_rgba: self.patch_bitmaps_y_x_rgba.clone(),
             image_names,
             camera_indexes,
             quaternions_wxyz,
@@ -699,7 +731,7 @@ impl SfmrReconstruction {
             positions_xyzw,
             colors_rgb,
             reprojection_errors,
-            estimated_normals_xyz,
+            normals_xyz,
             image_indexes,
             feature_indexes,
             point_indexes,
@@ -785,7 +817,7 @@ impl SfmrReconstruction {
                 w: 1.0,
                 color: [r, g, b],
                 error: 0.5 + (i as f64 / num_points.max(1) as f64) as f32 * 0.5,
-                estimated_normal: Vector3::new(x as f32, y as f32, z as f32).normalize(),
+                normal: Vector3::new(x as f32, y as f32, z as f32).normalize(),
             });
         }
 
@@ -878,6 +910,10 @@ impl SfmrReconstruction {
             workspace_dir: PathBuf::new(),
             metadata,
             rig_frame_data: None,
+            patch_u_halfvec_xyz: None,
+            patch_v_halfvec_xyz: None,
+            patch_bitmaps_y_x_rgba: None,
+            has_normals: true,
             content_hash: ContentHash {
                 metadata_xxh128: String::new(),
                 cameras_xxh128: String::new(),

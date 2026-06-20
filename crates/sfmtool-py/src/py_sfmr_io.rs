@@ -23,7 +23,7 @@ use crate::PyCameraIntrinsics;
 ///   image_names (list[str]),
 ///   feature_tool_hashes, sift_content_hashes (list[bytes], 16 bytes each),
 ///   camera_indexes, quaternions_wxyz, translations_xyz, positions_xyzw,
-///   colors_rgb, reprojection_errors, estimated_normals_xyz,
+///   colors_rgb, reprojection_errors, normals_xyz,
 ///   image_indexes, feature_indexes, point_indexes, observation_counts,
 ///   observed_depth_histogram_counts (numpy arrays).
 ///
@@ -86,10 +86,11 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         "reprojection_errors",
         data.reprojection_errors.into_pyarray(py),
     )?;
-    dict.set_item(
-        "estimated_normals_xyz",
-        data.estimated_normals_xyz.into_pyarray(py),
-    )?;
+    // Normals are optional: emit the array when present, else `None`.
+    match data.normals_xyz {
+        Some(n) => dict.set_item("normals_xyz", n.into_pyarray(py))?,
+        None => dict.set_item("normals_xyz", py.None())?,
+    }
     dict.set_item("image_indexes", data.image_indexes.into_pyarray(py))?;
     dict.set_item("feature_indexes", data.feature_indexes.into_pyarray(py))?;
     dict.set_item("point_indexes", data.point_indexes.into_pyarray(py))?;
@@ -165,23 +166,36 @@ pub(crate) fn parse_sfmr_data_from_dict(
     let thumbnails_y_x_rgb: PyReadonlyArray4<u8> =
         get_item(data, "thumbnails_y_x_rgb")?.extract()?;
 
-    // Depth-related fields are only required when skipping recomputation
-    let (depth_statistics, estimated_normals_xyz, observed_depth_histogram_counts) =
+    // Depth-related fields are only required when skipping recomputation.
+    // Normals are optional: a missing or `None` `normals_xyz` means no normals.
+    let (depth_statistics, normals_xyz, observed_depth_histogram_counts) =
         if skip_recompute_depth_stats {
             let ds: DepthStatistics = py_to_serde(py, &get_item(data, "depth_statistics")?)?;
-            let en: PyReadonlyArray2<f32> = get_item(data, "estimated_normals_xyz")?.extract()?;
+            let normals: Option<ndarray::Array2<f32>> = match data.get_item("normals_xyz")? {
+                Some(v) if !v.is_none() => {
+                    let en: PyReadonlyArray2<f32> = v.extract()?;
+                    Some(en.as_array().to_owned())
+                }
+                _ => None,
+            };
             let ohc: PyReadonlyArray2<u32> =
                 get_item(data, "observed_depth_histogram_counts")?.extract()?;
-            (ds, en.as_array().to_owned(), ohc.as_array().to_owned())
+            (ds, normals, ohc.as_array().to_owned())
         } else {
             let image_count = metadata.image_count as usize;
             let point_count = metadata.point_count as usize;
+            // Default to an all-zero set so the write-time mean-viewing recompute
+            // fills them; pass `normals_xyz=None` explicitly to opt out.
+            let normals = match data.get_item("normals_xyz")? {
+                Some(v) if v.is_none() => None,
+                _ => Some(ndarray::Array2::<f32>::zeros((point_count, 3))),
+            };
             (
                 DepthStatistics {
                     num_histogram_buckets: 128,
                     images: Vec::new(),
                 },
-                ndarray::Array2::<f32>::zeros((point_count, 3)),
+                normals,
                 ndarray::Array2::<u32>::zeros((image_count, 128)),
             )
         };
@@ -214,7 +228,12 @@ pub(crate) fn parse_sfmr_data_from_dict(
         positions_xyzw: positions_xyzw.as_array().to_owned(),
         colors_rgb: colors_rgb.as_array().to_owned(),
         reprojection_errors: reprojection_errors.as_array().to_owned(),
-        estimated_normals_xyz,
+        normals_xyz,
+        // The dict-based columnar API does not carry patch data; the
+        // patch-aware path is `SfmrReconstruction`.
+        patch_u_halfvec_xyz: None,
+        patch_v_halfvec_xyz: None,
+        patch_bitmaps_y_x_rgba: None,
         image_indexes: image_indexes.as_array().to_owned(),
         feature_indexes: feature_indexes.as_array().to_owned(),
         point_indexes: point_indexes.as_array().to_owned(),

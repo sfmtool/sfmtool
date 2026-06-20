@@ -488,7 +488,7 @@ impl SfmrReconstruction {
                 w,
                 color: [200, 200, 200],
                 error: 0.0,
-                estimated_normal: Vector3::zeros(),
+                normal: Vector3::zeros(),
             });
             for (img, feat) in &track.members {
                 recon.tracks.push(TrackObservation {
