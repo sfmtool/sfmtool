@@ -101,9 +101,27 @@ pub use py_spherical_tile_rig::PySphericalTileRig;
 
 // ── Module registration ───────────────────────────────────────────────────
 
+/// Cargo build profile this extension was compiled with: `"debug"` or `"release"`.
+///
+/// The Rust numeric kernels (SIFT, optical flow, matching) run roughly an order
+/// of magnitude slower without optimizations, so performance-sensitive callers
+/// (benchmarks) check this to refuse accidental debug builds, whose timings are
+/// meaningless. `cfg!(debug_assertions)` is the standard release/debug split.
+#[pyfunction]
+fn build_profile() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    }
+}
+
 /// Python module for sfmtool core functionality.
 #[pymodule]
 fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Build introspection
+    m.add_function(wrap_pyfunction!(build_profile, m)?)?;
+
     // .sfmr file I/O
     m.add_function(wrap_pyfunction!(py_sfmr_io::read_sfmr, m)?)?;
     m.add_function(wrap_pyfunction!(py_sfmr_io::read_sfmr_metadata, m)?)?;

@@ -106,7 +106,7 @@ intact while cutting taps on the widest (high-σ) blurs, which dominate scale-sp
 Lowe's wider 3·σ (~99.7% mass) is available via the parameter.
 
 The interior of both passes is vectorized (AVX2+FMA where available, SSE2 otherwise);
-`SFM_SIFT_NO_AVX2` forces the SSE2 path for A-B timing. The horizontal pass is
+`SFMTOOL_SIFT_NO_AVX2` forces the SSE2 path for A-B timing. The horizontal pass is
 contiguous read/write; the vertical pass reads a strided column neighborhood but writes
 contiguous output rows, and rayon's per-row split gives each thread a sliding band of
 `2·radius + 1` source rows that stays resident in L2 (each source row is read from DRAM
@@ -236,7 +236,7 @@ than `max_num_features` candidates the cap is a no-op.
 A two-tier SIMD strategy plus **rayon** data parallelism. Hot loops have an
 explicit **AVX2 + FMA** path (8-wide f32, selected at runtime via
 `sift::simd::HAS_AVX2_FMA`) with an **SSE2** (4-wide) or scalar fallback for
-borders, non-x86, and CPUs lacking AVX2/FMA; `SFM_SIFT_NO_AVX2` forces the
+borders, non-x86, and CPUs lacking AVX2/FMA; `SFMTOOL_SIFT_NO_AVX2` forces the
 fallback (for A-B timing and reproducibility). Per step:
 
 | Step | Multithreading (rayon) | SIMD |
@@ -258,7 +258,7 @@ patterns.
 ### Scale-space memory traffic: tiled DoG/detect fusion
 
 **Motivation (measured).** Profiling `extract_sift` on dino (2040×1536, so a
-4080×3072 octave-0 after image doubling) with `SFM_SIFT_TIMING` at 1/2/4 threads
+4080×3072 octave-0 after image doubling) with `SFMTOOL_SIFT_TIMING` at 1/2/4 threads
 shows two stages that *do not* scale — they cap at ~2.6× on 4 cores while blur,
 base and orientation reach 3.2–3.5×:
 
@@ -312,7 +312,7 @@ the existing total-order sort in `detect_keypoints` then yields **byte-identical
 drops by the DoG pyramid (~250 MB octave-0, more across octaves), and octave 0
 goes from 3 detect jobs to dozens (`rows / STRIPE_ROWS`), fixing the imbalance.
 `STRIPE_ROWS` is the one tuning knob (cache-fit vs. negligible halo overhead),
-overridable via `SFM_SIFT_STRIPE_ROWS` and clamped to `[1, 2^16]` so a stray
+overridable via `SFMTOOL_SIFT_STRIPE_ROWS` and clamped to `[1, 2^16]` so a stray
 value can't overflow the stripe loop or collapse an octave into one stripe.
 
 What Tier 1 does **not** touch: the blur chain still materializes the gaussians to
@@ -343,19 +343,19 @@ with folding orientation/description into the tiled pass.
 These environment variables gate optional diagnostics (zero-cost when unset; all
 output goes to stderr):
 
-- `SFM_SIFT_NO_AVX2` — force the SSE2/scalar fallbacks everywhere (skip the AVX2+FMA
+- `SFMTOOL_SIFT_NO_AVX2` — force the SSE2/scalar fallbacks everywhere (skip the AVX2+FMA
   paths), for A-B timing and reproducibility.
-- `SFM_SIFT_TIMING` — emit per-stage wall-clock timing (`SIFT_TIMING build …` and
+- `SFMTOOL_SIFT_TIMING` — emit per-stage wall-clock timing (`SIFT_TIMING build …` and
   `SIFT_TIMING detect …` lines).
-- `SFM_SIFT_OPS` — emit one `SIFT_OP …` line per scale-space operator (`upsample`,
-  `blur`, `decimate`) for offline aggregation. Independent of `SFM_SIFT_TIMING`.
+- `SFMTOOL_SIFT_OPS` — emit one `SIFT_OP …` line per scale-space operator (`upsample`,
+  `blur`, `decimate`) for offline aggregation. Independent of `SFMTOOL_SIFT_TIMING`.
   (No `dog` op: detection fuses the DoG per stripe, so it is never a standalone
   whole-image operator — see *tiled DoG/detect fusion*.)
 
 One env var is a tuning knob rather than a diagnostic (it changes work
 partitioning, not just logging), cross-listed here for discoverability:
 
-- `SFM_SIFT_STRIPE_ROWS` — override the detect stripe height (default 32, clamped
+- `SFMTOOL_SIFT_STRIPE_ROWS` — override the detect stripe height (default 32, clamped
   to `[1, 2^16]`); see *tiled DoG/detect fusion*. Output is unaffected.
 
 ### Extraction-orchestration pipelining
@@ -373,15 +373,30 @@ local/SSD storage, and is limited less by the GIL than by **CPU saturation**:
 the rayon extract already uses every core, so overlapping the save — or decoding
 the next image — *contends* for cores rather than hiding idle time. The one
 stage with genuine idle time to hide is the **disk read** (`cv2.imread` already
-releases the GIL); the remaining overlap only pays off when cores are *spare*
-(small images, or a thread-limited extract). So rather than a full three-stage
-pipeline, the backend implements three targeted, low-risk overlaps:
+releases the GIL) — *and*, on small images, the cores the per-image rayon extract
+cannot itself saturate (measured: 1→4 threads scales only **3.1×** on a 270×480
+image, ~23% idle), plus each image's serial floor (octave-0 build, setup). So
+rather than a full three-stage pipeline, the backend implements several targeted,
+low-risk overlaps:
 
-- **Prefetch the next image's read+decode** on a single worker thread (a
-  `ThreadPoolExecutor(max_workers=1)` with a one-image look-ahead) while the
-  current image extracts — hides disk-read latency, most valuable for **many
-  small/medium images on slow or remote storage** (NFS, cloud block store, cold
-  cache). See `_stream_sift_with_sfmtool` in `sift/extract_sfmtool.py`.
+- **Decode and extract several images concurrently**, yielding results in input
+  order. A `ThreadPoolExecutor(max_workers=_extract_workers())` runs up to *K*
+  decode+extract pipelines at once (FIFO over the in-flight futures preserves
+  order and re-raises decode/extract errors in order); the bounded look-ahead
+  caps memory to ~*K* decoded frames + pyramids. This hides disk-read latency
+  **and** overlaps one image's serial floor with another's parallel work, so the
+  cores the per-image rayon leaves idle on small images get filled. Because both
+  `cv2.imread` and the Rust extract release the GIL and rayon's *single global
+  pool* caps total CPU threads at the core count, more in-flight images never
+  oversubscribe — they just keep that pool fed. *K* defaults to
+  `min(os.cpu_count(), 4)` (override with `SFMTOOL_SIFT_EXTRACT_WORKERS`; `1`
+  restores one-at-a-time). Measured win (point-in-time, 4-core box, release
+  build, seoul_bull 270×480): **~20–25% batch throughput** (17 imgs 38→30 ms/img,
+  100 imgs 35→29 ms/img), no single-image regression; the win grows on
+  higher-core hosts where small-image per-image rayon is least efficient. (These
+  are illustrative snapshots, not invariants — rerun `bench-sift` to refresh.)
+  See `_stream_sift_with_sfmtool` and `_extract_workers` in
+  `sift/extract_sfmtool.py`.
 - **Stream `.sift` writes per image** instead of buffering a whole chunk
   (`chunk_size = 500` images) in memory — `extract_sift_with_sfmtool` is a
   generator that yields one result at a time, and `image_files_to_sift_files`
@@ -401,8 +416,8 @@ pipeline, the backend implements three targeted, low-risk overlaps:
   the extract of image *i+1*. This is **unconditional** — no spare-core gate.
   Backpressure bounds the queue at a **two-save look-ahead** (`write_lookahead`):
   before each `submit`, if two saves are already in flight the oldest is joined
-  first, so at most ~2 compressed images are buffered. (Distinct from the *decode*
-  prefetch's one-image look-ahead above.)
+  first, so at most ~2 compressed images are buffered. (Distinct from the
+  *extract* concurrency's *K*-image look-ahead above.)
   The drain is guaranteed on every exit: the write loop's `finally` calls
   `drain` (a non-raising await of in-flight saves, so it can't mask an
   exception already unwinding), and `SiftWriteQueue::Drop` awaits any stragglers

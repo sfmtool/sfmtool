@@ -152,7 +152,11 @@ jobs:
           cache: true
 
       - name: Build Python extension
-        run: pixi run -e test maturin develop
+        # --release: the debug-built PyO3 extension runs the Rust SIFT/flow
+        # kernels ~10-15x slower, which both inflates test time and makes any
+        # timing comparison (e.g. sfmtool vs COLMAP) meaningless. Tests exercise
+        # the same optimized build that ships.
+        run: pixi run -e test maturin develop --release
 
       - name: Rust tests
         run: pixi run -e test cargo test --workspace --exclude sfm-explorer

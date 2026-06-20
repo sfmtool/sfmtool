@@ -41,21 +41,21 @@ pub use scale_space::ScaleSpace;
 pub use crate::optical_flow::GrayImage;
 
 /// Env-gated stage timing for the keypoint-finding pipeline. Enabled by setting
-/// the `SFM_SIFT_TIMING` environment variable; effectively zero-cost otherwise
+/// the `SFMTOOL_SIFT_TIMING` environment variable; effectively zero-cost otherwise
 /// (one cached bool check plus a few `Instant::now()` per image). When on, each
 /// `detect_keypoints` call and each `ScaleSpace::build` prints one
 /// `SIFT_TIMING ...` line to stderr with per-stage wall-clock milliseconds, for
 /// offline aggregation.
 pub(crate) static SIFT_TIMING: std::sync::LazyLock<bool> =
-    std::sync::LazyLock::new(|| std::env::var_os("SFM_SIFT_TIMING").is_some());
+    std::sync::LazyLock::new(|| std::env::var_os("SFMTOOL_SIFT_TIMING").is_some());
 
 /// Env-gated per-operator detail logging for scale-space build. Enabled by
-/// setting the `SFM_SIFT_OPS` environment variable. When on, each scale-space
+/// setting the `SFMTOOL_SIFT_OPS` environment variable. When on, each scale-space
 /// operator (`upsample`, `blur`, `decimate`) prints one `SIFT_OP ...`
 /// line to stderr with its image dimensions, pixel count, and wall-clock time,
-/// for offline aggregation. Independent of `SFM_SIFT_TIMING`.
+/// for offline aggregation. Independent of `SFMTOOL_SIFT_TIMING`.
 pub(crate) static SIFT_OPS: std::sync::LazyLock<bool> =
-    std::sync::LazyLock::new(|| std::env::var_os("SFM_SIFT_OPS").is_some());
+    std::sync::LazyLock::new(|| std::env::var_os("SFMTOOL_SIFT_OPS").is_some());
 
 /// SIFT algorithm parameters. [`SiftParams::default`] returns Lowe (2004) values.
 ///

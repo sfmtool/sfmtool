@@ -64,14 +64,14 @@ impl From<egui_winit::accesskit_winit::Event> for UserEvent {
 }
 
 /// Whether the UI tests asked us to render continuously. The harness sets
-/// `SFM_EXPLORER_FORCE_REPAINT` on the spawned process: without it the app
+/// `SFMTOOL_EXPLORER_FORCE_REPAINT` on the spawned process: without it the app
 /// renders a couple of frames and goes idle, and the accessibility tree can be
 /// queried before egui has fully published it. Kept out of normal runs so the
 /// idle viewer doesn't spin the CPU.
 fn force_repaint_for_tests() -> bool {
     use std::sync::OnceLock;
     static FORCE: OnceLock<bool> = OnceLock::new();
-    *FORCE.get_or_init(|| std::env::var_os("SFM_EXPLORER_FORCE_REPAINT").is_some())
+    *FORCE.get_or_init(|| std::env::var_os("SFMTOOL_EXPLORER_FORCE_REPAINT").is_some())
 }
 
 /// Entry point for the SfM Explorer GUI application.

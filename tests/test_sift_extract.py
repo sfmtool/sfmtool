@@ -1,6 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import time
 from pathlib import Path
 
@@ -132,9 +133,10 @@ def test_sift_cli_sfmtool_backend(isolated_seoul_bull_image: Path):
 def test_sfmtool_backend_streams_in_order(isolated_seoul_bull_17_images: list[Path]):
     """The sfmtool backend yields one result per image, in input order.
 
-    Exercises the prefetch/look-ahead generator in extract_sfmtool.py across
-    multiple images: it must be lazy (a generator, not a list) and preserve the
-    input ordering its callers rely on for the parallel .sift filename list.
+    Exercises the concurrent decode+extract generator in extract_sfmtool.py
+    across multiple images (real extract, default concurrency): it must be lazy
+    (a generator, not a list) and preserve the input ordering its callers rely on
+    for the parallel .sift filename list.
     """
     import types
 
@@ -159,7 +161,7 @@ def test_sfmtool_backend_streams_in_order(isolated_seoul_bull_17_images: list[Pa
 
 
 def test_sfmtool_backend_propagates_decode_error(isolated_seoul_bull_image: Path):
-    """A failed read+decode on the prefetch worker surfaces in input order."""
+    """A failed read+decode on an extract worker surfaces in input order."""
     from sfmtool.sift.extract_sfmtool import (
         extract_sift_with_sfmtool,
         get_default_sfmtool_feature_options,
@@ -177,6 +179,94 @@ def test_sfmtool_backend_propagates_decode_error(isolated_seoul_bull_image: Path
     assert first[1]["image_name"] == isolated_seoul_bull_image.name
     with pytest.raises(SiftExtractionError, match="Failed to load image"):
         next(results)
+
+
+def test_extract_workers_env_override(monkeypatch):
+    """SFMTOOL_SIFT_EXTRACT_WORKERS controls concurrency, clamped to >= 1."""
+    from sfmtool.sift.extract_sfmtool import _extract_workers
+
+    default = max(1, min(os.cpu_count() or 1, 4))
+
+    monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", "1")
+    assert _extract_workers() == 1  # restores one-at-a-time
+    monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", "7")
+    assert _extract_workers() == 7
+    monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", "0")
+    assert _extract_workers() == 1  # clamped up, never zero workers
+    monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", "-3")
+    assert _extract_workers() == 1  # clamped up
+    monkeypatch.delenv("SFMTOOL_SIFT_EXTRACT_WORKERS", raising=False)
+    assert _extract_workers() == default
+
+    monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", "notanint")
+    with pytest.warns(UserWarning, match="non-integer"):
+        assert _extract_workers() == default  # falls back, doesn't crash
+
+
+def test_stream_preserves_input_order_under_out_of_order_completion(monkeypatch):
+    """The FIFO yields in input order even when later images finish first.
+
+    Drives ``_stream_sift_with_sfmtool`` directly with lightweight fakes so the
+    timing is controlled: every image runs concurrently (workers == count) and
+    earlier indices sleep *longer*, so completion order is the reverse of input
+    order. A correct FIFO-over-futures must still yield 0, 1, 2, ... in order.
+    """
+    from sfmtool.sift import extract_sfmtool
+
+    count = 5
+    monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", str(count))
+    monkeypatch.setattr(extract_sfmtool, "_decode_image", lambda p: (p, p, None))
+
+    def fake_extract_one(image_path, rgb, thumbnail, params, feature_options, rust):
+        idx = int(image_path.name)
+        time.sleep((count - idx) * 0.02)  # idx 0 finishes last, idx 4 first
+        return ("result", idx)
+
+    monkeypatch.setattr(extract_sfmtool, "_extract_one", fake_extract_one)
+
+    paths = [Path(str(i)) for i in range(count)]
+    out = list(extract_sfmtool._stream_sift_with_sfmtool(paths, None, {}, object()))
+    assert [r[1] for r in out] == list(range(count))
+
+
+def test_stream_raises_error_in_input_order_not_completion_order(monkeypatch):
+    """A failure that completes first is still surfaced only at its input slot.
+
+    Image 2 fails *immediately* while 0 and 1 are slow; with several workers in
+    flight its future is the first to finish, but the FIFO must still yield 0 and
+    1 before raising, and must never reach image 3 past the failure.
+    """
+    from sfmtool.sift import extract_sfmtool
+    from sfmtool.sift.file import SiftExtractionError
+
+    count = 4
+    monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", str(count))
+
+    def fake_decode(p):
+        idx = int(p.name)
+        if idx == 2:
+            raise SiftExtractionError("boom on image 2")
+        time.sleep(0.05)
+        return (p, p, None)
+
+    monkeypatch.setattr(extract_sfmtool, "_decode_image", fake_decode)
+    monkeypatch.setattr(
+        extract_sfmtool,
+        "_extract_one",
+        lambda image_path, *a: ("result", int(image_path.name)),
+    )
+
+    paths = [Path(str(i)) for i in range(count)]
+    gen = extract_sfmtool._stream_sift_with_sfmtool(paths, None, {}, object())
+
+    assert next(gen)[1] == 0
+    assert next(gen)[1] == 1
+    with pytest.raises(SiftExtractionError, match="boom on image 2"):
+        next(gen)
+    # The error terminates the generator, so image 3 (past the failure in input
+    # order) is never yielded, even though it may have been decoded in flight.
+    with pytest.raises(StopIteration):
+        next(gen)
 
 
 def test_sift_write_queue_writes_and_propagates_errors(
