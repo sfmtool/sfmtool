@@ -39,6 +39,73 @@ def test_match_no_paths():
     assert "Must provide image paths" in result.output
 
 
+def test_match_stray_mode_option_rejected(isolated_seoul_bull_image: Path):
+    """A method-specific option without its companion method is rejected."""
+    # --sequential-overlap only applies to --sequential.
+    result = CliRunner().invoke(
+        main,
+        [
+            "match",
+            "--exhaustive",
+            "--sequential-overlap",
+            "5",
+            str(isolated_seoul_bull_image),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "--sequential-overlap" in result.output
+    assert "--sequential matching" in result.output
+
+    # --cluster-d only applies to --cluster.
+    result = CliRunner().invoke(
+        main,
+        ["match", "--flow", "--cluster-d", "20", str(isolated_seoul_bull_image)],
+    )
+    assert result.exit_code != 0
+    assert "--cluster-d" in result.output
+
+
+def test_match_merge_rejects_stray_mode_option(tmp_path: Path):
+    """--merge runs no method, so a method-specific option is rejected too."""
+    a = tmp_path / "a.matches"
+    b = tmp_path / "b.matches"
+    a.touch()
+    b.touch()
+    result = CliRunner().invoke(
+        main,
+        ["match", "--merge", str(a), str(b), "--sequential-overlap", "5"],
+    )
+    assert result.exit_code != 0
+    assert "--sequential-overlap" in result.output
+
+
+def test_match_companion_option_accepted(isolated_seoul_bull_image: Path):
+    """A method-specific option with its companion method passes validation."""
+    # Reaches matching (and fails later for lack of SIFT), not the mode guard.
+    result = CliRunner().invoke(
+        main,
+        [
+            "match",
+            "--sequential",
+            "--sequential-overlap",
+            "5",
+            str(isolated_seoul_bull_image),
+        ],
+    )
+    assert "only applies" not in result.output
+
+
+def test_match_camera_model_full_opencv(isolated_seoul_bull_image: Path):
+    """FULL_OPENCV is accepted by --camera-model (shared vocabulary, B5)."""
+    result = CliRunner().invoke(
+        main,
+        ["match", "--exhaustive", "--camera-model", "FULL_OPENCV", "nonexistent/"],
+    )
+    # Fails for the missing path, but the camera-model choice itself is valid:
+    # an invalid choice would print "Invalid value for '--camera-model'".
+    assert "Invalid value for '--camera-model'" not in result.output
+
+
 def test_match_exhaustive(isolated_seoul_bull_17_images: list[Path]):
     """Test exhaustive matching on a small set of images."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent

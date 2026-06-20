@@ -8,7 +8,7 @@ from pathlib import Path
 
 import click
 
-from ..camera.cameras import _CAMERA_PARAM_NAMES
+from ..camera.cameras import CAMERA_MODEL_NAMES
 from .._cli_utils import timed_command
 
 
@@ -21,16 +21,16 @@ def camrig():
     """
 
 
-# COLMAP camera-model names accepted by `--camera-model`, taken from the
-# canonical parameter-name table so the two cannot drift apart.
-_CAMERA_MODELS = tuple(_CAMERA_PARAM_NAMES)
+# COLMAP camera-model names accepted by `--camera-model`, shared with `solve`
+# and `match` so the three commands cannot drift apart.
+_CAMERA_MODELS = CAMERA_MODEL_NAMES
 
 
 @camrig.command("create")
 @timed_command
 @click.help_option("--help", "-h")
-@click.argument("output_file", type=click.Path(dir_okay=False))
 @click.argument("image_pattern")
+@click.argument("output_file", type=click.Path(dir_okay=False))
 @click.option(
     "--camera-model",
     type=click.Choice(_CAMERA_MODELS, case_sensitive=False),
@@ -86,8 +86,8 @@ _CAMERA_MODELS = tuple(_CAMERA_PARAM_NAMES)
     help="Rig name stored in the file (default: the output file stem).",
 )
 def create(
-    output_file,
     image_pattern,
+    output_file,
     camera_model,
     resolution,
     focal_length,
@@ -110,9 +110,9 @@ def create(
 
     Example usage:
 
-        sfm camrig create my_images.camrig 'images/*'
+        sfm camrig create 'images/*' my_images.camrig
 
-        sfm camrig create rig.camrig '*.jpg' --camera-model OPENCV \\
+        sfm camrig create '*.jpg' rig.camrig --camera-model OPENCV \\
             --resolution 4000x3000 \\
             --params 2800,2800,2000,1500,-0.08,0.01,0,0
 

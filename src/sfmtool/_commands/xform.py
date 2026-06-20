@@ -271,6 +271,20 @@ def xform(ctx, input_path, output_path, **kwargs):
     except ValueError as e:
         raise click.UsageError(str(e))
 
+    # --max-features only feeds --find-points-at-infinity; reject it when that
+    # operation isn't in the chain so it isn't silently ignored.
+    from ..xform import FindPointsAtInfinityTransform
+
+    if ctx.get_parameter_source(
+        "max_features"
+    ) == click.ParameterSource.COMMANDLINE and not any(
+        isinstance(t, FindPointsAtInfinityTransform) for t in transforms
+    ):
+        raise click.UsageError(
+            "--max-features only applies to --find-points-at-infinity, "
+            "which was not requested."
+        )
+
     if not transforms:
         raise click.UsageError(
             "At least one transformation must be specified. "

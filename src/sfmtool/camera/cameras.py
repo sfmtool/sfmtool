@@ -124,6 +124,11 @@ _CAMERA_PARAM_NAMES = {
     ],
 }
 
+# Canonical COLMAP camera-model vocabulary accepted by every `--camera-model`
+# flag (`solve`, `match`, `camrig create`). Sourced from the parameter-name
+# table so the commands cannot drift apart.
+CAMERA_MODEL_NAMES = tuple(_CAMERA_PARAM_NAMES)
+
 
 def get_intrinsic_matrix(camera) -> np.ndarray:
     """Extract intrinsic matrix K from a camera object.

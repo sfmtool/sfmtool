@@ -225,7 +225,7 @@ class TestClusterCli:
         db_path = tmp_path / "colmap.db"
         result = CliRunner().invoke(
             main,
-            ["to-colmap-db", str(output_path), "--out-db", str(db_path)],
+            ["to-colmap-db", str(output_path), str(db_path)],
         )
         assert result.exit_code == 0, result.output
         assert db_path.exists()

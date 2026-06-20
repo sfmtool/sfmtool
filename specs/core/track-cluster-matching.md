@@ -882,7 +882,7 @@ The emitted `.matches` flows through the existing consumers unchanged:
 
 ```bash
 pixi run sfm match --cluster images -o tvg-matches/cluster.matches
-pixi run sfm to-colmap-db tvg-matches/cluster.matches --out-db colmap.db
+pixi run sfm to-colmap-db tvg-matches/cluster.matches colmap.db
 pixi run sfm solve -i tvg-matches/cluster.matches                       # incremental SfM
 ```
 

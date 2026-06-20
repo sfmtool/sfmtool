@@ -38,7 +38,7 @@ Exactly one is required:
 | `--flow-preset` | `fast` \| `default` \| `high_quality` | `default` | Flow quality preset |
 | `--flow-skip` | int | 5 | Sliding window size for flow matching |
 | `--max-features` | int | | Maximum features per image |
-| `--camera-model` | choice | auto | Camera model override; one of the 10 supported COLMAP model names (`SIMPLE_PINHOLE`, `PINHOLE`, `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `OPENCV_FISHEYE`, `SIMPLE_RADIAL_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`, `RAD_TAN_THIN_PRISM_FISHEYE`) |
+| `--camera-model` | choice | auto | Camera model override; one of the 11 supported COLMAP model names (`PINHOLE`, `SIMPLE_PINHOLE`, `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `OPENCV_FISHEYE`, `FULL_OPENCV`, `SIMPLE_RADIAL_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`, `RAD_TAN_THIN_PRISM_FISHEYE`). The same vocabulary is accepted by `match` and `camrig create`. |
 | `--range / -r` | string | | Range expression for file numbers |
 | `--detect-infinity / --no-detect-infinity` | bool | `true` | Reclassify points whose depth the solve could not pin down as points at infinity (`w = 0`). See [sfmr file format §7](../formats/sfmr-file-format.md). |
 

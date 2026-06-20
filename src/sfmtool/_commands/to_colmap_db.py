@@ -8,19 +8,14 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
+from ..camera.cameras import CAMERA_MODEL_NAMES
 
 
 @click.command("to-colmap-db")
 @timed_command
 @click.help_option("--help", "-h")
 @click.argument("input_path", type=click.Path(exists=True))
-@click.option(
-    "--out-db",
-    "output_db_path",
-    required=True,
-    type=click.Path(),
-    help="Output path for the COLMAP database file (e.g., database.db).",
-)
+@click.argument("output_db_path", type=click.Path())
 @click.option(
     "--max-features",
     "max_features",
@@ -35,7 +30,7 @@ from .._cli_utils import timed_command
 )
 @click.option(
     "--camera-model",
-    type=str,
+    type=click.Choice(CAMERA_MODEL_NAMES, case_sensitive=False),
     default=None,
     help="Camera model override (e.g., OPENCV, PINHOLE). Only for .matches input.",
 )
@@ -49,6 +44,7 @@ def to_colmap_db(
     """Create a COLMAP database from a .sfmr or .matches file.
 
     INPUT_PATH must be either a .sfmr reconstruction file or a .matches file.
+    OUTPUT_DB_PATH is where the COLMAP database file is written (e.g. database.db).
 
     \b
     From a .sfmr file:
@@ -65,13 +61,13 @@ def to_colmap_db(
 
     \b
         # From a reconstruction (with guided matching data)
-        sfm to-colmap-db reconstruction.sfmr --out-db database.db
+        sfm to-colmap-db reconstruction.sfmr database.db
 
         # From a reconstruction, skip two-view geometry pre-population
-        sfm to-colmap-db reconstruction.sfmr --out-db database.db --no-guided-matching
+        sfm to-colmap-db reconstruction.sfmr database.db --no-guided-matching
 
         # From pre-computed matches
-        sfm to-colmap-db matches.matches --out-db database.db
+        sfm to-colmap-db matches.matches database.db
     """
     input_path = Path(input_path)
     output_db_path = Path(output_db_path)

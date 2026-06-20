@@ -193,6 +193,12 @@ typed error; validate intrinsics (finite, positive focal) at the PyO3 boundary.
 
 ### B1. The three export commands use three different output conventions
 
+> _Status (2026-06-20): Done — unified on a positional `OUTPUT`. `to-colmap-db`
+> now takes `OUTPUT_DB_PATH` as a required positional (dropped `--out-db`);
+> `to-nerfstudio` takes an optional positional `OUTPUT_DIR` (dropped `-o/--output`),
+> keeping its `<input>_nerfstudio/` default. `to-colmap-bin` was already
+> positional. Specs and tests updated. Clean break (no deprecated aliases)._
+
 **Severity: medium (papercut, but they're a single cohesive family).**
 
 ```
@@ -207,6 +213,10 @@ Pick one convention (a positional `OUTPUT` reads best, matching `to-colmap-bin`
 and `xform`).
 
 ### B2. `camrig create` reverses the input/output positional order
+
+> _Status (2026-06-20): Done — reordered to `camrig create IMAGE_PATTERN OUTPUT_FILE`,
+> matching the `INPUT … OUTPUT` convention of `xform`, `to-colmap-bin`, and
+> `camrig cp`. Spec and tests updated. Clean break._
 
 **Severity: low.**
 
@@ -244,6 +254,15 @@ error out.
 
 ### B4. Options silently ignored when their companion mode isn't selected
 
+> _Status (2026-06-20): Done — both runtime-confirmed cases now raise a
+> `UsageError` (matching the existing `align`/`to-nerfstudio` option-dependency
+> precedent) instead of being silently dropped. `match` rejects any
+> method-specific option (`--sequential-overlap`, `--flow-preset`/`--flow-skip`,
+> `--cluster-*`) passed without its companion method, detected via click's
+> parameter-source so it is robust to default values; `xform` rejects
+> `--max-features` without `--find-points-at-infinity`. Specs and regression
+> tests updated. (RANSAC-under-`--method cameras` was already handled by `align`.)_
+
 **Severity: low–medium (no feedback → silent wrong results).**
 
 Confirmed cases (command accepts the flag, exits 0, ignores it):
@@ -259,6 +278,14 @@ under `--method cameras`, etc.; the two above are the runtime-confirmed ones.)
 
 ### B5. `--camera-model` accepts a different model set across commands
 
+> _Status (2026-06-20): Done — `solve`, `match`, `camrig create`, and
+> `to-colmap-db` now share a single `CAMERA_MODEL_NAMES` tuple (derived from the
+> canonical parameter-name table in `camera/cameras.py`), so all four accept the
+> same 11 COLMAP models including `FULL_OPENCV`. `to-colmap-db`'s `--camera-model`
+> was switched from free-form `str` to the shared `click.Choice` in the same
+> pass (post-review follow-up), so a typo'd model name no longer forwards
+> silently to COLMAP. Specs and a regression test updated._
+
 **Severity: low.**
 
 `camrig create --camera-model` includes `full_opencv`; `solve`/`match`
@@ -267,6 +294,11 @@ opencv/opencv_fisheye … rad_tan_thin_prism_fisheye`). Same flag name, differen
 accepted vocabulary depending on the subcommand.
 
 ### B6. One `--draw`/`-o` path can emit several files
+
+> _Status (2026-06-20): Done — the `--draw` help for both `epipolar` and `flow`
+> now spells out the sibling files written (`<stem>_other<ext>` for epipolar;
+> `<stem>_flow<ext>` plus `<stem>_A/_B<ext>` for flow). Help-text only; behavior
+> unchanged._
 
 **Severity: low (surprising, mostly undocumented).**
 
@@ -336,6 +368,14 @@ rig datasets. Type/extension validation and "exactly one mode" checks
 ---
 
 ## Suggested follow-ups (priority order)
+
+> _Status (2026-06-20): Items 1–3 and most of 4 are done. A1–A3 closed earlier;
+> B1/B3 (export conventions + align collision) and B4 (ignored-option errors)
+> done; B2/B5/B6 papercuts done. **Remaining open:** the Section C wording items
+> — the `--find-points-at-infinity` "kept 0 finite" summary reword (a Rust
+> `eprintln` in `infinity/discover.rs`, deferred to keep the CLI papercut PR
+> Python-only) and the `analyze --depth-reliability` insensitivity to broken
+> intrinsics._
 
 1. **Harden the intrinsics/COLMAP ingress (A1–A3).** Validate finite, positive
    focal length and invertible `K` on import and at the PyO3 boundary; bound

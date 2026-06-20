@@ -26,6 +26,13 @@ or `--merge` to combine existing `.matches` files.
 | `--cluster` | Cluster all images' descriptors at once (background-floor track-cluster matching) |
 | `--merge` | Merge multiple `.matches` files into one |
 
+Exactly one matching method must be given. Each method has its own tuning
+options (`--sequential-overlap` for `--sequential`; `--flow-preset` /
+`--flow-skip` for `--flow`; `--cluster-alpha` / `--cluster-d` /
+`--cluster-preset` for `--cluster`). Passing a method-specific option without
+its companion method is rejected with a `UsageError` rather than silently
+ignored.
+
 ## Options
 
 | Option | Type | Default | Description |
@@ -39,7 +46,7 @@ or `--merge` to combine existing `.matches` files.
 | `--max-features` | int | | Maximum features per image |
 | `--output / -o` | path | auto | Output `.matches` file path (default: timestamped, required for `--merge`) |
 | `--range / -r` | string | | Range expression for file numbers |
-| `--camera-model` | string | auto | Camera model override (e.g., `SIMPLE_RADIAL`, `OPENCV`) |
+| `--camera-model` | choice | auto | Camera model override (e.g., `SIMPLE_RADIAL`, `OPENCV`). Accepts the same 11 COLMAP model names as `solve` and `camrig create`. |
 
 ## Process
 

@@ -188,7 +188,6 @@ def test_to_colmap_db_rejects_camera_model_with_camera_config(
         [
             "to-colmap-db",
             str(matches_path),
-            "--out-db",
             str(out_db),
             "--camera-model",
             "PINHOLE",

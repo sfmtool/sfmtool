@@ -26,8 +26,12 @@ See `specs/formats/camrig-file-format.md` for the file format and
 ### Syntax
 
 ```bash
-sfm camrig create <OUTPUT_FILE> <IMAGE_PATTERN> [OPTIONS...]
+sfm camrig create <IMAGE_PATTERN> <OUTPUT_FILE> [OPTIONS...]
 ```
+
+The input pattern comes first and the output file second, matching the
+`INPUT … OUTPUT` ordering used by `xform`, `densify`, `to-colmap-bin`, and the
+sibling `camrig cp`.
 
 Builds a single-sensor, single-camera `.camrig` for a directory of images.
 The intended use is dropping a `.camrig` file alongside a folder of photos:
@@ -41,8 +45,8 @@ later applies to it, so what `create` scans is exactly what `solve` covers.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `OUTPUT_FILE` | path | required | Path of the `.camrig` file to write. Its directory is the rig root. |
 | `IMAGE_PATTERN` | pattern | required | `.camrig` image pattern identifying the images, relative to the rig root (e.g. `*.jpg`, `images/**/*.png`, `cam_%04d.jpg`). Stored verbatim as the sensor's image pattern. |
+| `OUTPUT_FILE` | path | required | Path of the `.camrig` file to write. Its directory is the rig root. |
 | `--camera-model` | choice | — | COLMAP camera model. Overrides the EXIF-inferred model; required with `--params`. |
 | `--resolution` | `WxH` | — | Image resolution as `WIDTHxHEIGHT`. Every matched image must have it. |
 | `--focal-length` | float | — | Focal length in pixels; sets both `fx` and `fy`. |
@@ -88,13 +92,13 @@ images so the caller can split the set into separate rigs — when:
 
 ```bash
 # Drop a .camrig beside a folder of photos, intrinsics inferred from EXIF
-sfm camrig create my_images.camrig 'images/*'
+sfm camrig create 'images/*' my_images.camrig
 
 # Force a fisheye model, let pycolmap infer the focal length
-sfm camrig create rig.camrig '*.jpg' --camera-model OPENCV_FISHEYE
+sfm camrig create '*.jpg' rig.camrig --camera-model OPENCV_FISHEYE
 
 # Explicit OpenCV calibration in COLMAP parameter order
-sfm camrig create rig.camrig '*.jpg' --camera-model OPENCV \
+sfm camrig create '*.jpg' rig.camrig --camera-model OPENCV \
     --resolution 4000x3000 \
     --params 2800,2800,2000,1500,-0.08,0.01,0,0
 ```

@@ -9,7 +9,7 @@ processing:
 
 ```bash
 sfm undistort source.sfmr
-sfm to-nerfstudio source_undistorted/sfmr/undistorted.sfmr -o my_dataset/
+sfm to-nerfstudio source_undistorted/sfmr/undistorted.sfmr my_dataset/
 ns-train nerfacto --data my_dataset/
 ns-train splatfacto --data my_dataset/
 ```
@@ -24,14 +24,17 @@ nerfstudio reads (schema, coordinate frame, PLY structure).
 ## Command Syntax
 
 ```bash
-sfm to-nerfstudio <INPUT.sfmr> [--output <OUTPUT_DIR>] [OPTIONS...]
+sfm to-nerfstudio <INPUT.sfmr> [<OUTPUT_DIR>] [OPTIONS...]
 ```
+
+`OUTPUT_DIR` is an optional positional argument (matching the positional
+`OUTPUT` convention of `to-colmap-bin` and `to-colmap-db`).
 
 ## Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--output / -o` | path | `{stem}_nerfstudio/` next to input | Output dataset directory |
+| `OUTPUT_DIR` (positional) | path | `{stem}_nerfstudio/` next to input | Output dataset directory |
 | `--num-downscales` | int ≥ 0 | 3 | Number of downsampled image pyramid levels (0 disables the pyramid) |
 | `--jpeg-quality` | int 1–100 | 95 | JPEG quality for downsampled pyramid images |
 | `--include-colmap` | flag | off | Also emit a `sparse/` directory with COLMAP `.bin` files |

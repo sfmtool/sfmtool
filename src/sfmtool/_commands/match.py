@@ -10,6 +10,43 @@ import click
 
 from .._cli_utils import timed_command
 from .._filenames import expand_paths
+from ..camera.cameras import CAMERA_MODEL_NAMES
+
+
+# Options that only have an effect under one matching method. Passing one of
+# these without its companion method silently did nothing before; we now reject
+# it so the mistake surfaces instead of producing wrong-looking results.
+_MODE_OPTIONS: dict[str, list[tuple[str, str]]] = {
+    "sequential": [("sequential_overlap", "--sequential-overlap")],
+    "flow": [
+        ("flow_preset", "--flow-preset"),
+        ("flow_wide_baseline_skip", "--flow-skip"),
+    ],
+    "cluster": [
+        ("cluster_alpha", "--cluster-alpha"),
+        ("cluster_d", "--cluster-d"),
+        ("cluster_preset", "--cluster-preset"),
+    ],
+}
+
+
+def _reject_stray_mode_options(selected: str) -> None:
+    """Error if a mode-specific option was passed for an unselected method."""
+    ctx = click.get_current_context()
+    for mode, opts in _MODE_OPTIONS.items():
+        if mode == selected:
+            continue
+        stray = [
+            flag
+            for attr, flag in opts
+            if ctx.get_parameter_source(attr) == click.ParameterSource.COMMANDLINE
+        ]
+        if stray:
+            verb = "only applies" if len(stray) == 1 else "only apply"
+            raise click.UsageError(
+                f"{', '.join(stray)} {verb} to --{mode} matching, "
+                f"but --{selected} was selected."
+            )
 
 
 @click.command("match")
@@ -110,21 +147,7 @@ from .._filenames import expand_paths
 @click.option(
     "--camera-model",
     "camera_model",
-    type=click.Choice(
-        [
-            "SIMPLE_PINHOLE",
-            "PINHOLE",
-            "SIMPLE_RADIAL",
-            "RADIAL",
-            "OPENCV",
-            "OPENCV_FISHEYE",
-            "SIMPLE_RADIAL_FISHEYE",
-            "RADIAL_FISHEYE",
-            "THIN_PRISM_FISHEYE",
-            "RAD_TAN_THIN_PRISM_FISHEYE",
-        ],
-        case_sensitive=False,
-    ),
+    type=click.Choice(CAMERA_MODEL_NAMES, case_sensitive=False),
     default=None,
     help="Camera model to use (overrides auto-detection).",
 )
@@ -178,6 +201,10 @@ def match(
         sfm match --merge seq.matches exhaustive.matches -o combined.matches
     """
     if merge:
+        # --merge runs no matching method, so any method-specific option is a
+        # no-op; reject it rather than silently ignoring it (B4).
+        _reject_stray_mode_options(selected="merge")
+
         from ..feature_match._run import _run_merge
 
         try:
@@ -204,6 +231,17 @@ def match(
             "--exhaustive (-e), --sequential (-s), --flow, or --cluster"
         )
 
+    matching_method = (
+        "flow"
+        if flow_match
+        else "cluster"
+        if cluster_match
+        else "sequential"
+        if sequential
+        else "exhaustive"
+    )
+    _reject_stray_mode_options(selected=matching_method)
+
     numbers = None
     if range_expr:
         from .._sfmtool import RangeExpr
@@ -228,14 +266,6 @@ def match(
     _check_camera_model_conflict(absolute_paths, camera_config_resolver, camera_model)
 
     try:
-        if flow_match:
-            matching_method = "flow"
-        elif cluster_match:
-            matching_method = "cluster"
-        elif sequential:
-            matching_method = "sequential"
-        else:
-            matching_method = "exhaustive"
         _run_matching(
             absolute_paths,
             workspace_dir,
