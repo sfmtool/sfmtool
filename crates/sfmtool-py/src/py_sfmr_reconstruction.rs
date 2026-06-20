@@ -369,6 +369,16 @@ impl PySfmrReconstruction {
         })
     }
 
+    /// The per-3D-point RGBA patch bitmaps as a ``(N, R, R, 4)`` uint8 array, or
+    /// ``None`` when none are stored. Rows for points with no patch are zero; the
+    /// alpha channel holds a per-pixel cross-view agreement confidence. Attach via
+    /// ``clone_with_changes(patch_bitmaps=…)`` (the patch frame must be present).
+    #[getter]
+    fn patch_bitmaps<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray4<u8>>> {
+        let b = self.inner.patch_bitmaps_y_x_rgba.as_ref()?;
+        Some(b.clone().into_pyarray(py))
+    }
+
     // ── Track data array getters ─────────────────────────────────────
 
     /// Image indexes for track observations, shape `(K,)`.
@@ -816,6 +826,8 @@ impl PySfmrReconstruction {
     /// ``quaternions_wxyz``, ``translations``, ``track_image_indexes``,
     /// ``track_feature_indexes``, ``track_point_ids``, ``observation_counts``,
     /// ``normals``, ``patches`` (a ``PatchCloud`` or ``None``),
+    /// ``patch_bitmaps`` (an ``(N, R, R, 4)`` uint8 array or ``None``; requires
+    /// the patch frame, so pass ``patches`` too unless one is already attached),
     /// ``image_names``, ``camera_indexes``, ``cameras``,
     /// ``feature_tool_hashes``, ``sift_content_hashes``, ``thumbnails_y_x_rgb``,
     /// ``rig_frame_data``, ``world_space_unit``.

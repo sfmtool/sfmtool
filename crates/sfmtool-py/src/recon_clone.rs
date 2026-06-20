@@ -322,6 +322,10 @@ pub(crate) fn clone_with_changes(
                 // These must all be set together to rebuild tracks
                 // Defer to after the loop
             }
+            "patch_bitmaps" => {
+                // Deferred to after the loop so it always runs *after* 'patches'
+                // (which clears any bitmaps), regardless of kwargs order.
+            }
             "observation_counts" => {
                 let arr = extract_array1!(value, "observation_counts", u32)?;
                 recon.observation_counts = arr
@@ -466,6 +470,40 @@ pub(crate) fn clone_with_changes(
     if recon.depth_histogram_counts.len() != recon.images.len() {
         let num_buckets = recon.depth_statistics.num_histogram_buckets as usize;
         recon.depth_histogram_counts = vec![vec![0u32; num_buckets]; recon.images.len()];
+    }
+
+    // Per-point patch bitmaps (deferred so this wins over the 'patches' clear,
+    // regardless of kwargs order). Requires the patch frame to be present —
+    // either already on the reconstruction or attached via 'patches' in the same
+    // call (which is processed in the loop above).
+    if let Some(value) = kw.get_item("patch_bitmaps")? {
+        if value.is_none() {
+            recon.patch_bitmaps_y_x_rgba = None;
+        } else {
+            let arr = extract_ndarray!(
+                value,
+                "patch_bitmaps",
+                numpy::PyReadonlyArray4<u8>,
+                "a 4D contiguous ndarray",
+                "uint8 and shape (N, R, R, 4)"
+            )?;
+            let shape = arr.shape();
+            let npoints = recon.points.len();
+            if shape[0] != npoints || shape[1] != shape[2] || shape[3] != 4 {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'patch_bitmaps' must have shape (N, R, R, 4) with \
+                     N = point count ({npoints}), got shape {shape:?}"
+                )));
+            }
+            if recon.patch_u_halfvec_xyz.is_none() {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "clone_with_changes(): 'patch_bitmaps' requires the patch frame; pass \
+                     'patches=<cloud>' in the same call (or on a reconstruction that already \
+                     carries one)",
+                ));
+            }
+            recon.patch_bitmaps_y_x_rgba = Some(arr.as_array().to_owned());
+        }
     }
 
     // Rebuild tracks if any track arrays were provided

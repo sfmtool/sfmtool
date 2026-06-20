@@ -185,8 +185,12 @@ centre is not stored (it is the point's position). See
 `specs/formats/sfmr-file-format.md` for the on-disk layout. On the Python side,
 `recon.clone_with_changes(patches=cloud)` attaches a cloud and `recon.patches`
 reads it back; `recon.save` writes the `patch_*` arrays beside the normals. Patch
-bitmaps are supported by the format but not yet emitted by the refinement
-pipeline.
+bitmaps are attached separately via
+`recon.clone_with_changes(patch_bitmaps=<(N, R, R, 4) uint8>)` (the frame must be
+present, so pass `patches=` in the same call unless one is already attached); the
+patch-normal refinement pipeline emits them when asked (see
+`PatchCloud.refine_normals(render_bitmaps=True)` and
+`specs/core/patch-normal-refinement.md`).
 
 The per-point patch frame rides along with the reconstruction's editing
 operations rather than being discarded: image subsetting and point-mask filtering

@@ -65,6 +65,9 @@ class RefineNormalsTransform:
         *,
         # whether to persist the full patch cloud, not just per-point normals
         save_patches: bool = False,
+        # whether to also render and persist the per-point RGBA patch bitmaps
+        # (implies save_patches: the bitmaps require the patch frame)
+        bitmaps: bool = False,
         # forwarded to PatchCloud.refine_normals
         angular_range_deg: float = 25.0,
         init_steps: int = 7,
@@ -139,8 +142,13 @@ class RefineNormalsTransform:
             raise ValueError(f"extent_value must be positive, got {extent_value}")
         if not isinstance(save_patches, bool):
             raise ValueError(f"save_patches must be a bool, got {save_patches!r}")
+        if not isinstance(bitmaps, bool):
+            raise ValueError(f"bitmaps must be a bool, got {bitmaps!r}")
 
-        self.save_patches = save_patches
+        self.bitmaps = bitmaps
+        # Bitmaps need the patch frame on disk, so persisting them implies
+        # persisting the patch cloud.
+        self.save_patches = save_patches or bitmaps
         self.angular_range_deg = angular_range_deg
         self.init_steps = init_steps
         self.refine_levels = refine_levels
@@ -214,6 +222,7 @@ class RefineNormalsTransform:
             cache=self.cache,
             cache_supersample=self.cache_supersample,
             compute_confidence=self.confidence,
+            render_bitmaps=self.bitmaps,
         )
 
         refined = np.asarray(result["normal"], dtype=np.float32)
@@ -231,7 +240,18 @@ class RefineNormalsTransform:
 
         # With save_patches, persist the full refined patch cloud (the per-point
         # u/v half-extent vectors) in the .sfmr points3d/ section, in addition to
-        # scattering the per-point normals.
+        # scattering the per-point normals. With bitmaps, also persist the fused
+        # per-point RGBA patch textures (already scattered to per-point rows by the
+        # binding), which require the patch frame — hence save_patches is forced on.
+        if self.bitmaps:
+            n_filled = int(np.count_nonzero(result["bitmaps"].any(axis=(1, 2, 3))))
+            print(
+                f"  Saving {len(point_ids)} patches and {n_filled} bitmaps "
+                f"to the reconstruction"
+            )
+            return recon.clone_with_changes(
+                normals=normals, patches=cloud, patch_bitmaps=result["bitmaps"]
+            )
         if self.save_patches:
             print(f"  Saving {len(point_ids)} patches to the reconstruction")
             return recon.clone_with_changes(normals=normals, patches=cloud)
@@ -265,7 +285,8 @@ class RefineNormalsTransform:
         )
 
     def description(self) -> str:
-        patches = ", save_patches" if self.save_patches else ""
+        patches = ", save_patches" if self.save_patches and not self.bitmaps else ""
+        patches += ", bitmaps" if self.bitmaps else ""
         return (
             f"Refine normals (initial={self.initial_normals}, extent={self.extent}, "
             f"range={self.angular_range_deg}°, objective={self.objective}, "

@@ -95,6 +95,7 @@ def _parse_opt_int(value: str) -> int | None:
 # PatchCloud.refine_normals / from_reconstruction binding parameters one-to-one.
 _REFINE_NORMALS_KEYS: dict[str, Callable[[str], object]] = {
     "save_patches": _parse_bool,
+    "bitmaps": _parse_bool,
     "angular_range_deg": float,
     "init_steps": int,
     "refine_levels": int,

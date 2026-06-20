@@ -578,7 +578,7 @@ pub fn write_sfmr_with_options(
 
 /// Validate the optional per-point patch frame arrays: `patch_u_halfvec_xyz`
 /// and `patch_v_halfvec_xyz` must be present together and shaped `(P, 3)`;
-/// bitmaps require the frame and must be shaped `(P, R, R, 3)`.
+/// bitmaps require the frame and must be shaped `(P, R, R, 4)`.
 fn validate_patch_dimensions(data: &SfmrData, point_count: usize) -> Result<(), SfmrError> {
     let check = |name: &str, got: &[usize]| -> Result<(), SfmrError> {
         if got != [point_count, 3] {

@@ -247,18 +247,27 @@ impl PyPatchCloud {
     ///     point_ids: If given, refine only the patches with these source point
     ///         ids (the rest keep their input normal) — cheap when refining a few
     ///         patches out of a large cloud. ``None`` refines every patch.
+    ///     render_bitmaps: If true, also render each refined patch's RGBA
+    ///         representative texture at the found normal and return them scattered
+    ///         to per-3D-point rows (see ``bitmaps`` below). Costs one extra
+    ///         full-grid source render per kept view per patch, so it is off by
+    ///         default.
     ///
     /// Returns a dict of per-patch results (numpy arrays parallel to the cloud):
     /// ``normal`` (Nx3), ``photoconsistency`` (N), ``init_photoconsistency`` (N),
     /// ``confidence`` (N), ``valid_view_count`` (N). The cloud's patches are
-    /// updated to the refined normals in place.
+    /// updated to the refined normals in place. When ``render_bitmaps`` is true,
+    /// also ``bitmaps``: a ``(P, R, R, 4)`` uint8 array of fused RGBA patch
+    /// textures scattered to **per-3D-point** rows (``P`` = ``recon`` point count,
+    /// ``R`` = ``resolution``), zero rows for points with no refined patch — ready
+    /// to pass straight to ``clone_with_changes(patch_bitmaps=...)``.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         recon, images, *, resolution=24, angular_range_deg=25.0, init_steps=7,
         refine_levels=3, objective="robust", robust_iters=3, window="gaussian_disk",
         window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="bilinear",
         cache="fronto", cache_supersample=2.0, compute_confidence=false,
-        search_robust_iters=None, point_ids=None
+        search_robust_iters=None, point_ids=None, render_bitmaps=false
     ))]
     #[allow(clippy::too_many_arguments)]
     fn refine_normals<'py>(
@@ -282,6 +291,7 @@ impl PyPatchCloud {
         compute_confidence: bool,
         search_robust_iters: Option<u32>,
         point_ids: Option<Vec<u32>>,
+        render_bitmaps: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         let recon = &recon.inner;
         if images.len() != recon.images.len() {
@@ -374,6 +384,7 @@ impl PyPatchCloud {
             cache_supersample,
             compute_confidence,
             search_robust_iters,
+            render_bitmap: render_bitmaps,
         };
 
         // Build one pyramid + pose per reconstruction image; the ProjectedImages
@@ -463,6 +474,28 @@ impl PyPatchCloud {
         out.set_item("init_photoconsistency", init_photo.into_pyarray(py))?;
         out.set_item("confidence", conf.into_pyarray(py))?;
         out.set_item("valid_view_count", vvc.into_pyarray(py))?;
+
+        // Scatter the per-patch representative textures into per-3D-point rows so
+        // the result drops straight into `clone_with_changes(patch_bitmaps=...)`.
+        // Points with no refined patch (and patches that produced no render) keep
+        // their zero rows, mirroring `PatchCloud::to_halfvec_arrays`.
+        if render_bitmaps {
+            let r = resolution as usize;
+            let npoints = recon.points.len();
+            let stride = r * r * 4;
+            let mut flat = vec![0u8; npoints * stride];
+            for (res, &pid) in results.iter().zip(&self.inner.point_ids) {
+                if let Some(rep) = &res.representative {
+                    let pid = pid as usize;
+                    if pid < npoints && rep.len() == stride {
+                        flat[pid * stride..(pid + 1) * stride].copy_from_slice(rep);
+                    }
+                }
+            }
+            let arr = ndarray::Array4::from_shape_vec((npoints, r, r, 4), flat)
+                .expect("bitmap scatter shape matches");
+            out.set_item("bitmaps", arr.into_pyarray(py))?;
+        }
         Ok(out)
     }
 }
