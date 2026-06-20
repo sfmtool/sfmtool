@@ -16,11 +16,11 @@
 use std::arch::x86_64::*;
 
 /// Cached `avx2 && fma` runtime support (shared with the blur path). The
-/// `SFM_SIFT_NO_AVX2` env var forces the scalar fallbacks everywhere, for A-B
+/// `SFMTOOL_SIFT_NO_AVX2` env var forces the scalar fallbacks everywhere, for A-B
 /// timing and reproducibility.
 #[cfg(target_arch = "x86_64")]
 pub(crate) static HAS_AVX2_FMA: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
-    std::env::var_os("SFM_SIFT_NO_AVX2").is_none()
+    std::env::var_os("SFMTOOL_SIFT_NO_AVX2").is_none()
         && std::is_x86_feature_detected!("avx2")
         && std::is_x86_feature_detected!("fma")
 });

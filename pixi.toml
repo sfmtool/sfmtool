@@ -65,6 +65,7 @@ coverage = "cargo llvm-cov --workspace --lcov --output-path lcov.info"
 coverage-all = "bash scripts/coverage.sh"
 coverage-html = "cargo llvm-cov --workspace --html --open"
 maturin = "maturin"
+bench-sift = "python scripts/benchmark_sift.py"
 
 [feature.dev.tasks]
 ipython = "ipython"

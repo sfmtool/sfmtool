@@ -54,7 +54,7 @@ use std::arch::x86_64::*;
 // SIMD path; see `super::simd::HAS_AVX2_FMA`. When set, the blur interior loops
 // use the 8-wide AVX2 + FMA path, else the 4-wide SSE2 path. (FMA fuses each tap
 // into one rounded op, so the AVX2 output differs from SSE2 in the last ULP —
-// both are valid Gaussian blurs.) `SFM_SIFT_NO_AVX2` forces the SSE2 path.
+// both are valid Gaussian blurs.) `SFMTOOL_SIFT_NO_AVX2` forces the SSE2 path.
 #[cfg(target_arch = "x86_64")]
 use super::simd::HAS_AVX2_FMA;
 
@@ -452,7 +452,7 @@ fn gaussian_kernel(sigma: f64, radius_factor: f64) -> Vec<f32> {
     kernel.iter().map(|&v| v as f32).collect()
 }
 
-/// Emit one `SIFT_OP` detail line for a scale-space operator when `SFM_SIFT_OPS`
+/// Emit one `SIFT_OP` detail line for a scale-space operator when `SFMTOOL_SIFT_OPS`
 /// is set (see [`crate::sift::SIFT_OPS`]). `taps` is the 1D kernel length for
 /// blur (0 for operators without a kernel). `px = w · h` is the operated pixel
 /// count (output pixels for resampling operators). Zero-cost when the flag is

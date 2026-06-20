@@ -37,7 +37,7 @@ fn launch() -> Child {
     // enough, and forcing ControlFlow::Poll there would disturb its
     // DirectManipulation timer.
     #[cfg(target_os = "macos")]
-    cmd.env("SFM_EXPLORER_FORCE_REPAINT", "1");
+    cmd.env("SFMTOOL_EXPLORER_FORCE_REPAINT", "1");
     cmd.spawn().expect("failed to spawn sfm-explorer")
 }
 

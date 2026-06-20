@@ -59,9 +59,9 @@ const MAX_INTERP_STEPS: usize = 5;
 /// Each stripe materializes its `s+2` DoG levels into a scratch buffer of
 /// `(s+2) × (STRIPE_ROWS+2) × W × f32`; the value trades cache residency
 /// (smaller = better L2/L3 fit, more tasks) against a little halo recompute and
-/// per-task overhead. Overridable via `SFM_SIFT_STRIPE_ROWS` for tuning.
+/// per-task overhead. Overridable via `SFMTOOL_SIFT_STRIPE_ROWS` for tuning.
 static STRIPE_ROWS: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
-    std::env::var("SFM_SIFT_STRIPE_ROWS")
+    std::env::var("SFMTOOL_SIFT_STRIPE_ROWS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n >= 1)
