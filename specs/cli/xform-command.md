@@ -205,7 +205,8 @@ largest features (by scale). Bounds memory and runtime on dense or many-image
 solves; the largest-scale features tend to be the most repeatable across the
 wide viewpoint changes a distant point is seen under. This is a single global
 value (not an ordered transform), shared by every `--find-points-at-infinity`
-in the chain.
+in the chain. Passing `--max-features` without any `--find-points-at-infinity`
+operation is rejected with a `UsageError` rather than silently ignored.
 
 ```bash
 sfm xform in.sfmr out.sfmr --find-points-at-infinity 0.1,200,2 --max-features 2000

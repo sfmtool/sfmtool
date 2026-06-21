@@ -85,7 +85,8 @@ def resolve_image_name(image_input: str, recon) -> str:
     "-d",
     "output_path",
     type=click.Path(),
-    help="Draw epipolar visualization and save to this path.",
+    help="Draw epipolar visualization and save to this path. Writes two files: "
+    "the given PATH plus a sibling '<stem>_other<ext>' for the second image.",
 )
 @click.option(
     "--max-features",

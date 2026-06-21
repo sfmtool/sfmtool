@@ -17,13 +17,11 @@ from .._sfmtool import RangeExpr
 @timed_command
 @click.help_option("--help", "-h")
 @click.argument("input_sfmr", type=click.Path(exists=True, dir_okay=False))
-@click.option(
-    "-o",
-    "--output",
+@click.argument(
     "output_dir",
     type=click.Path(file_okay=False),
+    required=False,
     default=None,
-    help="Output dataset directory (default: <input>_nerfstudio/ next to the .sfmr).",
 )
 @click.option(
     "--num-downscales",
@@ -79,11 +77,13 @@ def to_nerfstudio(
     Input cameras must be pinhole (zero distortion). Run `sfm undistort`
     first if your reconstruction has lens distortion.
 
+    OUTPUT_DIR defaults to <input>_nerfstudio/ next to the .sfmr.
+
     Example usage:
 
     \b
-        sfm to-nerfstudio undistorted.sfmr -o my_dataset/
-        sfm to-nerfstudio undistorted.sfmr -o my_dataset/ -r 10-50
+        sfm to-nerfstudio undistorted.sfmr my_dataset/
+        sfm to-nerfstudio undistorted.sfmr my_dataset/ -r 10-50
         ns-train nerfacto --data my_dataset/
     """
     from .._sfmtool import SfmrReconstruction

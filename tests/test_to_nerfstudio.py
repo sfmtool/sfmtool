@@ -156,7 +156,6 @@ class TestToNerfstudioCLI:
             [
                 "to-nerfstudio",
                 str(seoul_bull_workspace),
-                "-o",
                 str(tmp_path / "ns_out"),
             ],
         )
@@ -176,7 +175,6 @@ class TestToNerfstudioE2E:
             [
                 "to-nerfstudio",
                 str(pinhole_sfmr_17_images),
-                "-o",
                 str(out),
                 "--num-downscales",
                 "2",
@@ -200,7 +198,6 @@ class TestToNerfstudioE2E:
             [
                 "to-nerfstudio",
                 str(pinhole_sfmr_17_images),
-                "-o",
                 str(out),
                 "--num-downscales",
                 "0",
@@ -253,7 +250,6 @@ class TestToNerfstudioE2E:
             [
                 "to-nerfstudio",
                 str(pinhole_sfmr_17_images),
-                "-o",
                 str(out),
                 "--num-downscales",
                 "1",
@@ -278,7 +274,6 @@ class TestToNerfstudioE2E:
             [
                 "to-nerfstudio",
                 str(pinhole_sfmr_17_images),
-                "-o",
                 str(out),
                 "--num-downscales",
                 "0",
@@ -305,7 +300,6 @@ class TestToNerfstudioE2E:
             [
                 "to-nerfstudio",
                 str(pinhole_sfmr_17_images),
-                "-o",
                 str(out),
                 "--num-downscales",
                 "0",
@@ -335,7 +329,6 @@ class TestToNerfstudioE2E:
             [
                 "to-nerfstudio",
                 str(pinhole_sfmr_17_images),
-                "-o",
                 str(out),
                 "-r",
                 "100-200",
@@ -353,7 +346,6 @@ class TestToNerfstudioE2E:
             [
                 "to-nerfstudio",
                 str(pinhole_sfmr_17_images),
-                "-o",
                 str(out),
                 "--filter-points",
             ],
@@ -370,7 +362,6 @@ class TestToNerfstudioE2E:
             [
                 "to-nerfstudio",
                 str(pinhole_sfmr_17_images),
-                "-o",
                 str(out),
                 "--num-downscales",
                 "0",

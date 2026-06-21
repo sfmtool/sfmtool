@@ -225,7 +225,7 @@ def test_write_camrig_binding_rejects_two_frame_fields(tmp_path: Path):
 def test_camrig_create_from_directory(tmp_path: Path):
     _copy_images(tmp_path / "imgs", "seoul_bull_sculpture", 5)
     out = tmp_path / "rig.camrig"
-    result = CliRunner().invoke(main, ["camrig", "create", str(out), "imgs/*.jpg"])
+    result = CliRunner().invoke(main, ["camrig", "create", "imgs/*.jpg", str(out)])
     assert result.exit_code == 0, result.output
     assert out.exists()
     assert "pattern:  imgs/*.jpg" in result.output
@@ -249,7 +249,7 @@ def test_camrig_create_frame_field_pattern(tmp_path: Path):
     out = tmp_path / "rig.camrig"
     result = CliRunner().invoke(
         main,
-        ["camrig", "create", str(out), "imgs/seoul_bull_sculpture_%d.jpg"],
+        ["camrig", "create", "imgs/seoul_bull_sculpture_%d.jpg", str(out)],
     )
     assert result.exit_code == 0, result.output
     assert "images:   4" in result.output
@@ -271,8 +271,8 @@ def test_camrig_create_explicit_params(tmp_path: Path):
         [
             "camrig",
             "create",
-            str(out),
             "imgs/*.jpg",
+            str(out),
             "--camera-model",
             "PINHOLE",
             "--params",
@@ -291,7 +291,7 @@ def test_camrig_create_camera_model_override(tmp_path: Path):
     out = tmp_path / "rig.camrig"
     result = CliRunner().invoke(
         main,
-        ["camrig", "create", str(out), "imgs/*.jpg", "--camera-model", "OPENCV"],
+        ["camrig", "create", "imgs/*.jpg", str(out), "--camera-model", "OPENCV"],
     )
     assert result.exit_code == 0, result.output
     assert "OPENCV 270x480" in result.output
@@ -305,8 +305,8 @@ def test_camrig_create_focal_length_override(tmp_path: Path):
         [
             "camrig",
             "create",
-            str(out),
             "imgs/*.jpg",
+            str(out),
             "--camera-model",
             "PINHOLE",
             "--focal-length",
@@ -325,7 +325,7 @@ def test_camrig_create_rejects_mixed_resolution(tmp_path: Path):
         imgs / "dino_dog_toy_01.jpg",
     )
     out = tmp_path / "rig.camrig"
-    result = CliRunner().invoke(main, ["camrig", "create", str(out), "imgs/*.jpg"])
+    result = CliRunner().invoke(main, ["camrig", "create", "imgs/*.jpg", str(out)])
     assert result.exit_code != 0
     assert "inconsistent resolutions" in result.output
     assert not out.exists()
@@ -336,14 +336,14 @@ def test_camrig_create_rejects_non_image(tmp_path: Path):
     _copy_images(imgs, "seoul_bull_sculpture", 2)
     (imgs / "notes.txt").write_text("not an image")
     out = tmp_path / "rig.camrig"
-    result = CliRunner().invoke(main, ["camrig", "create", str(out), "imgs/*"])
+    result = CliRunner().invoke(main, ["camrig", "create", "imgs/*", str(out)])
     assert result.exit_code != 0
     assert "non-image" in result.output
 
 
 def test_camrig_create_no_match(tmp_path: Path):
     out = tmp_path / "rig.camrig"
-    result = CliRunner().invoke(main, ["camrig", "create", str(out), "missing/*.jpg"])
+    result = CliRunner().invoke(main, ["camrig", "create", "missing/*.jpg", str(out)])
     assert result.exit_code != 0
     assert "no files match" in result.output
 
@@ -354,7 +354,7 @@ def test_camrig_create_rejects_two_frame_fields(tmp_path: Path):
     _copy_images(tmp_path / "imgs", "seoul_bull_sculpture", 2)
     out = tmp_path / "rig.camrig"
     result = CliRunner().invoke(
-        main, ["camrig", "create", str(out), "imgs/cam_%d_%04d.jpg"]
+        main, ["camrig", "create", "imgs/cam_%d_%04d.jpg", str(out)]
     )
     assert result.exit_code != 0
     assert "at most one" in result.output
@@ -366,7 +366,7 @@ def test_camrig_create_params_requires_camera_model(tmp_path: Path):
     out = tmp_path / "rig.camrig"
     result = CliRunner().invoke(
         main,
-        ["camrig", "create", str(out), "imgs/*.jpg", "--params", "1,2,3,4"],
+        ["camrig", "create", "imgs/*.jpg", str(out), "--params", "1,2,3,4"],
     )
     assert result.exit_code != 0
     assert "--params requires --camera-model" in result.output
@@ -380,8 +380,8 @@ def test_camrig_create_params_wrong_count(tmp_path: Path):
         [
             "camrig",
             "create",
-            str(out),
             "imgs/*.jpg",
+            str(out),
             "--camera-model",
             "PINHOLE",
             "--params",
@@ -400,8 +400,8 @@ def test_camrig_create_params_conflicts_with_focal(tmp_path: Path):
         [
             "camrig",
             "create",
-            str(out),
             "imgs/*.jpg",
+            str(out),
             "--camera-model",
             "PINHOLE",
             "--params",
@@ -690,7 +690,7 @@ def test_solve_uses_camrig(isolated_seoul_bull_17_images: list[Path]):
     camrig_path = workspace_dir / "rig.camrig"
     create = runner.invoke(
         main,
-        ["camrig", "create", str(camrig_path), "*.jpg", "--camera-model", "PINHOLE"],
+        ["camrig", "create", "*.jpg", str(camrig_path), "--camera-model", "PINHOLE"],
     )
     assert create.exit_code == 0, create.output
 

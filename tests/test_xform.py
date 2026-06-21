@@ -22,6 +22,26 @@ def test_xform_no_transforms(tmp_path: Path):
     assert "At least one transformation must be specified" in result.output
 
 
+def test_xform_max_features_without_find_infinity_rejected(tmp_path: Path):
+    """--max-features without --find-points-at-infinity is rejected (B4)."""
+    input_path = tmp_path / "input.sfmr"
+    input_path.touch()
+    output_path = tmp_path / "output.sfmr"
+    args = [
+        "xform",
+        str(input_path),
+        str(output_path),
+        "--scale",
+        "2",
+        "--max-features",
+        "500",
+    ]
+    with patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code != 0
+    assert "--max-features only applies to --find-points-at-infinity" in result.output
+
+
 def test_xform_non_sfmr_input(tmp_path: Path):
     """Test that xform with non-.sfmr input raises an error."""
     input_path = tmp_path / "input.txt"

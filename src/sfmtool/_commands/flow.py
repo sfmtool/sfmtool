@@ -21,7 +21,10 @@ from ..visualization._flow_display import draw_flow_visualization
     "-d",
     "output_path",
     type=click.Path(),
-    help="Save flow visualization to this path. If omitted, only prints statistics.",
+    help="Save flow visualization to this path. If omitted, only prints "
+    "statistics. Writes derived files next to PATH: '<stem>_flow<ext>' for the "
+    "flow field, plus '<stem>_A<ext>'/'<stem>_B<ext>' for the annotated images "
+    "(or PATH itself with --side-by-side).",
 )
 @click.option(
     "--preset",

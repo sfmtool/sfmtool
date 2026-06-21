@@ -49,7 +49,7 @@ class TestToColmapDbCLI:
         result = runner.invoke(main, ["to-colmap-db", "--help"])
         assert result.exit_code == 0
         assert "colmap" in result.output.lower()
-        assert "--out-db" in result.output
+        assert "OUTPUT_DB_PATH" in result.output
 
     def test_rejects_non_sfmr_non_matches(self, tmp_path):
         fake = tmp_path / "test.txt"
@@ -57,16 +57,14 @@ class TestToColmapDbCLI:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["to-colmap-db", str(fake), "--out-db", str(tmp_path / "db.db")],
+            ["to-colmap-db", str(fake), str(tmp_path / "db.db")],
         )
         assert result.exit_code != 0
         assert ".sfmr" in result.output or ".matches" in result.output
 
     def test_missing_input(self):
         runner = CliRunner()
-        result = runner.invoke(
-            main, ["to-colmap-db", "nonexistent.sfmr", "--out-db", "db.db"]
-        )
+        result = runner.invoke(main, ["to-colmap-db", "nonexistent.sfmr", "db.db"])
         assert result.exit_code != 0
 
     def test_out_db_required(self, tmp_path):

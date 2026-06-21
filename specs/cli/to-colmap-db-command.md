@@ -11,19 +11,20 @@ workspace data into a COLMAP .db, running the COLMAP operation, then converting 
 ## Command Syntax
 
 ```bash
-sfm to-colmap-db <INPUT_PATH> --out-db <DATABASE.db> [OPTIONS...]
+sfm to-colmap-db <INPUT_PATH> <DATABASE.db> [OPTIONS...]
 ```
 
-`INPUT_PATH` can be a `.sfmr` or `.matches` file.
+`INPUT_PATH` can be a `.sfmr` or `.matches` file. The output database path is a
+required positional argument (matching the positional `OUTPUT` convention of
+`to-colmap-bin` and `to-nerfstudio`).
 
 ## Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--out-db` | path | required | Output database file path |
 | `--max-features` | int | all | Maximum features per image (`.sfmr` only) |
 | `--no-guided-matching` | flag | | Disable two-view geometry pre-population (`.sfmr` only) |
-| `--camera-model` | string | auto | Camera model override (`.matches` only) |
+| `--camera-model` | choice | auto | Camera model override (`.matches` only); one of the 11 shared COLMAP model names (same vocabulary as `solve` / `match` / `camrig create`) |
 
 ## Input Modes
 
@@ -48,11 +49,11 @@ walk from its parent directory up to the workspace root), the file's intrinsics 
 
 ```bash
 # Create database from reconstruction
-sfm to-colmap-db sfmr/solve_001.sfmr --out-db colmap/database.db
+sfm to-colmap-db sfmr/solve_001.sfmr colmap/database.db
 
 # From matches, with camera model override
-sfm to-colmap-db matches/match_001.matches --out-db colmap/database.db --camera-model OPENCV
+sfm to-colmap-db matches/match_001.matches colmap/database.db --camera-model OPENCV
 
 # Without guided matching
-sfm to-colmap-db solve.sfmr --out-db database.db --no-guided-matching
+sfm to-colmap-db solve.sfmr database.db --no-guided-matching
 ```
