@@ -247,6 +247,16 @@ impl PyPatchCloud {
     ///     point_ids: If given, refine only the patches with these source point
     ///         ids (the rest keep their input normal) — cheap when refining a few
     ///         patches out of a large cloud. ``None`` refines every patch.
+    ///     view_indices: If given, a per-patch list of image indices to refine
+    ///         that patch over (parallel to the cloud's patches), *overriding* the
+    ///         reconstruction's track-based observing-view lists. This lets a
+    ///         caller refine against an arbitrary view set — e.g. every image that
+    ///         geometrically sees the point, not just the ones that matched a
+    ///         feature there (an MVS-style expansion). Indices must be in range for
+    ///         the reconstruction; duplicates within a patch are ignored (the
+    ///         consensus counts each view once). ``None`` (default) uses the track
+    ///         observations. Combines with ``point_ids`` (which still selects
+    ///         *which* patches to refine).
     ///     render_bitmaps: If true, also render each refined patch's RGBA
     ///         representative texture at the found normal and return them scattered
     ///         to per-3D-point rows (see ``bitmaps`` below). Costs one extra
@@ -267,7 +277,7 @@ impl PyPatchCloud {
         refine_levels=3, objective="robust", robust_iters=3, window="gaussian_disk",
         window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="bilinear",
         cache="fronto", cache_supersample=2.0, compute_confidence=false,
-        search_robust_iters=None, point_ids=None, render_bitmaps=false
+        search_robust_iters=None, point_ids=None, view_indices=None, render_bitmaps=false
     ))]
     #[allow(clippy::too_many_arguments)]
     fn refine_normals<'py>(
@@ -291,6 +301,7 @@ impl PyPatchCloud {
         compute_confidence: bool,
         search_robust_iters: Option<u32>,
         point_ids: Option<Vec<u32>>,
+        view_indices: Option<Vec<Vec<u32>>>,
         render_bitmaps: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         let recon = &recon.inner;
@@ -435,7 +446,38 @@ impl PyPatchCloud {
                 pyramid: &pyramids[i],
             })
             .collect();
-        let mut patch_views = patch_view_indices_from_reconstruction(recon, &self.inner);
+        // The per-patch view sets the consensus is scored over. By default these
+        // are the reconstruction's track observations; `view_indices` overrides
+        // them with an explicit per-patch list (e.g. every geometrically-visible
+        // image, for an MVS-style refinement).
+        let mut patch_views = match view_indices {
+            Some(mut views) => {
+                if views.len() != self.inner.len() {
+                    return Err(PyValueError::new_err(format!(
+                        "view_indices must be parallel to the cloud's {} patches, got {}",
+                        self.inner.len(),
+                        views.len()
+                    )));
+                }
+                let n_images = recon.images.len() as u32;
+                if views.iter().flatten().any(|&i| i >= n_images) {
+                    return Err(PyValueError::new_err(
+                        "view_indices contains an image index out of range for this \
+                         reconstruction",
+                    ));
+                }
+                // Drop repeated views within a patch: the consensus weights each
+                // view once, so a duplicate would silently double-count it. Order
+                // is preserved (it does not affect the consensus).
+                let mut seen = std::collections::HashSet::new();
+                for pv in &mut views {
+                    seen.clear();
+                    pv.retain(|&i| seen.insert(i));
+                }
+                views
+            }
+            None => patch_view_indices_from_reconstruction(recon, &self.inner),
+        };
         // Optional subset: refine only patches whose point id is listed. Cleared
         // view-lists make `refine_patch_normal` skip a patch immediately (it sees
         // too few views), so a handful of patches can be refined out of a large
