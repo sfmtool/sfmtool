@@ -10,7 +10,10 @@ algorithms, file-format I/O, GUI viewer, and PyO3 bindings. Config lives in
 This repo uses [Pixi](https://pixi.sh). Run everything via `pixi run …`.
 Environments: `default` (runtime), `test` (adds pytest, ruff, maturin,
 cargo-llvm-cov), `dev` (ipython), `docs` (zensical), `cuda` (CUDA-enabled
-pycolmap). See `pixi.toml` for the full task list.
+pycolmap). `test-ci` is `test` minus the editable `sfmtool` self-install, so
+`pixi install` does no Rust build — CI uses it and compiles the extension once
+via `maturin develop --release`; locally prefer `test` (imports work with no
+extra step). See `pixi.toml` for the full task list.
 
 ```bash
 pixi run test                       # Python tests (pytest)

@@ -13,16 +13,21 @@ version = "0.2"
 [dependencies]
 rust = ">=1.94.0,<1.95"
 
-# The SfM runtime: the Python interpreter, the pycolmap solver, and the editable
-# sfmtool package (which compiles the PyO3 extension via maturin). Only
+# The SfM runtime: the Python interpreter and the pycolmap solver. Only
 # environments that actually run the Python tool pull this in — keeping it out
-# of the base deps lets the `lint` and `ui` environments skip the ~6 min
-# extension build and the heavy pycolmap/Qt/CUDA/opencv closure.
+# of the base deps lets the `lint` and `ui` environments skip the heavy
+# pycolmap/Qt/CUDA/opencv closure.
 [feature.runtime.dependencies]
 python = ">=3.14.4,<3.15"
 pycolmap = ">=4.0.3,<5"
 
-[feature.runtime.pypi-dependencies]
+# The editable sfmtool self-install compiles the PyO3 extension via maturin at
+# `pixi install` time. It lives in its own feature so CI can build a runtime
+# environment *without* it (`test-ci`) and compile the extension exactly once,
+# explicitly, via `maturin develop --release` — instead of building it twice
+# (once at install, once in the explicit step). Every local environment still
+# includes it so imports work straight out of `pixi install`.
+[feature.editable.pypi-dependencies]
 sfmtool = { path = ".", editable = true }
 
 [tasks]
@@ -90,10 +95,14 @@ pycolmap = { version = ">=4.0.3,<5", build = "cuda*" }
 cuda = "12.9"
 
 [environments]
-default = { features = ["runtime"], solve-group = "default" }
+default = { features = ["runtime", "editable"], solve-group = "default" }
 lint = { features = ["lint"], solve-group = "default" }
 ui = { solve-group = "default" }
-test = { features = ["runtime", "lint", "test"], solve-group = "default" }
-dev = { features = ["runtime", "dev"], solve-group = "default" }
-docs = { features = ["runtime", "docs"], solve-group = "default" }
-cuda = { features = ["runtime", "cuda"], solve-group = "cuda" }
+test = { features = ["runtime", "editable", "lint", "test"], solve-group = "default" }
+# Same packages as `test` but without the editable self-install, so `pixi
+# install` does no Rust build. CI installs this and compiles the extension
+# explicitly with `maturin develop --release` (test-os) / coverage.sh (test-linux).
+test-ci = { features = ["runtime", "lint", "test"], solve-group = "default" }
+dev = { features = ["runtime", "editable", "dev"], solve-group = "default" }
+docs = { features = ["runtime", "editable", "docs"], solve-group = "default" }
+cuda = { features = ["runtime", "editable", "cuda"], solve-group = "cuda" }
