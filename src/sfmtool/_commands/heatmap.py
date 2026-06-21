@@ -40,6 +40,18 @@ def _insert_metric_before_number(stem: str, metric: str) -> str:
         return f"{stem}_{metric}"
 
 
+def _output_stem(image_name: str, metric: str) -> str:
+    """Output stem for an image's heatmap, with the metric inserted.
+
+    The image's full relative path is flattened (``/`` -> ``__``) before the
+    metric is inserted, so per-sensor rig frames that share a basename
+    (e.g. ``fisheye_left/frame_05`` and ``fisheye_right/frame_05``) do not
+    collide on output.
+    """
+    flat = Path(image_name).with_suffix("").as_posix().replace("/", "__")
+    return _insert_metric_before_number(flat, metric)
+
+
 @click.command("heatmap")
 @timed_command
 @click.help_option("--help", "-h")
@@ -224,9 +236,7 @@ def heatmap(
                 cmap = colormap if colormap else default_colormaps[m]
 
                 # Generate output filename with metric before number
-                stem = Path(image_name).stem
-                output_stem = _insert_metric_before_number(stem, m)
-                output_path = output_dir / f"{output_stem}.png"
+                output_path = output_dir / f"{_output_stem(image_name, m)}.png"
 
                 # Render heatmap
                 render_heatmap_overlay(

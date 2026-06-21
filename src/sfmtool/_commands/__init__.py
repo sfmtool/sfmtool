@@ -20,6 +20,7 @@ from .merge import merge
 from .motion import motion
 from .pano2rig import pano2rig
 from .panorama import panorama
+from .render_patches import render_patches_command
 from .sift import sift
 from .solve import solve
 from .to_colmap_bin import to_colmap_bin
@@ -47,6 +48,7 @@ __all__ = [
     "motion",
     "pano2rig",
     "panorama",
+    "render_patches_command",
     "sift",
     "solve",
     "to_colmap_bin",

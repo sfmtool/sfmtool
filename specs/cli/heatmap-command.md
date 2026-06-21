@@ -40,6 +40,11 @@ metric `reproj` becomes `image_reproj_001.png`; a stem with no trailing number
 just gets `_{metric}` appended). When `--metric all` is used, three images are
 generated per input image.
 
+The image's full relative path is flattened (`/` replaced by `__`) before the
+metric is inserted, so per-sensor rig frames that share a basename (e.g.
+`fisheye_left/frame_05` and `fisheye_right/frame_05`) do not collide on output.
+
+
 ## Usage Examples
 
 ```bash
