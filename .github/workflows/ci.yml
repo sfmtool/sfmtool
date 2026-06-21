@@ -122,9 +122,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      # Restore the Rust cache before setup-pixi: installing the `test` env
-      # compiles the editable sfmtool PyO3 extension via maturin, so a warm
-      # target makes that build incremental instead of a cold ~6 min compile.
+      # The `test-ci` env install does no Rust build (unlike `test`, it omits the
+      # editable sfmtool); coverage.sh compiles the extension once via
+      # `maturin develop --release`. Restore the cache first so that build is
+      # incremental instead of a cold ~6 min compile.
       - name: Cache cargo home
         uses: actions/cache@v5
         with:
@@ -154,11 +155,11 @@ jobs:
             ${{ runner.os }}-cargo-coverage-target-
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
-          environments: test
+          environments: test-ci
           cache: true
 
       - name: Run tests with combined coverage
-        run: pixi run -e test coverage-all
+        run: pixi run -e test-ci coverage-all
         shell: bash
 
       - name: Upload coverage
@@ -197,10 +198,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-      # Restore the Rust cache before setup-pixi: installing the `test` env
-      # compiles the editable sfmtool PyO3 extension via maturin, so a warm
-      # target makes that build incremental instead of a cold compile. The key
-      # is namespaced by runner.os, so each matrix OS keeps its own cache.
+      # The `test-ci` env install does no Rust build (unlike `test`, it omits the
+      # editable sfmtool); the extension is compiled once by the explicit
+      # `maturin develop --release` step below. Restore the cache first so that
+      # build is incremental instead of a cold compile. The key is namespaced by
+      # runner.os, so each matrix OS keeps its own cache.
       - name: Cache cargo home
         uses: actions/cache@v5
         with:
@@ -230,7 +232,7 @@ jobs:
             ${{ runner.os }}-cargo-test-target-
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
-          environments: test
+          environments: test-ci
           cache: true
 
       - name: Build Python extension
@@ -238,13 +240,13 @@ jobs:
         # kernels ~10-15x slower, which both inflates test time and makes any
         # timing comparison (e.g. sfmtool vs COLMAP) meaningless. Tests exercise
         # the same optimized build that ships.
-        run: pixi run -e test maturin develop --release
+        run: pixi run -e test-ci maturin develop --release
 
       - name: Rust tests
-        run: pixi run -e test cargo test --workspace --exclude sfm-explorer
+        run: pixi run -e test-ci cargo test --workspace --exclude sfm-explorer
 
       - name: Python tests
-        run: pixi run -e test pytest
+        run: pixi run -e test-ci pytest
 
       - name: Save Rust target
         # Save only on main: branch scoping means PR-written caches help nobody
