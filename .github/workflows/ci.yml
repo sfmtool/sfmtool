@@ -16,6 +16,14 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+env:
+  # Incremental compilation only pays off across edit/rebuild cycles on a warm
+  # tree; in CI each job compiles roughly once, so the large target/**/incremental
+  # dirs are pure overhead that bloat the Rust cache (and slow its save/restore,
+  # painfully so on Windows). Disable it everywhere and drop those dirs from the
+  # cache below.
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -51,21 +59,33 @@ jobs:
         with:
           environments: lint
           cache: true
-      - name: Cache Rust build
+      - name: Cache cargo home
         uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
+          # Registry index + downloads and git checkouts are fully determined by
+          # Cargo.lock, so key on it alone (no run_id): the save is skipped on an
+          # unchanged lockfile — no per-run resave of this bulk — and refreshed
+          # only when dependencies change. Shared across all same-OS jobs.
+          key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-home-
+      - name: Restore Rust target
+        uses: actions/cache/restore@v5
+        with:
+          path: |
             target
-          # run_id rotates the key so the cache refreshes each run (actions/cache
-          # skips saving on an existing key, which otherwise freezes a stale
-          # cache); restore-keys falls back to the latest prior cache.
-          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+            !target/**/incremental/**
+          # The exact key never matches (run_id), so restore always falls back via
+          # restore-keys to the latest cache — which is only ever written on main
+          # (see the Save step). Caches are branch-scoped: a main-saved cache is
+          # the one every PR can read, so PRs restore a warm target for free.
+          key: ${{ runner.os }}-cargo-lint-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
-            ${{ runner.os }}-cargo-lint-${{ hashFiles('Cargo.lock') }}-
-            ${{ runner.os }}-cargo-lint-
+            ${{ runner.os }}-cargo-lint-target-${{ hashFiles('Cargo.lock') }}-
+            ${{ runner.os }}-cargo-lint-target-
 
       - name: Ruff format
         run: pixi run -e lint ruff format --check src tests
@@ -78,6 +98,19 @@ jobs:
 
       - name: Cargo clippy
         run: pixi run -e lint cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Save Rust target
+        # Save only on main: branch scoping means PR-written caches help nobody
+        # else, so PR runs skip the save entirely (and dodge the slow Windows
+        # compression). run_id keeps the key unique so each main push refreshes
+        # the cache instead of freezing on an already-existing key.
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            target
+            !target/**/incremental/**
+          key: ${{ runner.os }}-cargo-lint-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
 
   # Full instrumented build + combined Rust/Python coverage, uploaded to
   # codecov. Coverage line numbers are platform-independent, so we only pay
@@ -92,21 +125,33 @@ jobs:
       # Restore the Rust cache before setup-pixi: installing the `test` env
       # compiles the editable sfmtool PyO3 extension via maturin, so a warm
       # target makes that build incremental instead of a cold ~6 min compile.
-      - name: Cache Rust build
+      - name: Cache cargo home
         uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
+          # Registry index + downloads and git checkouts are fully determined by
+          # Cargo.lock, so key on it alone (no run_id): the save is skipped on an
+          # unchanged lockfile — no per-run resave of this bulk — and refreshed
+          # only when dependencies change. Shared across all same-OS jobs.
+          key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-home-
+      - name: Restore Rust target
+        uses: actions/cache/restore@v5
+        with:
+          path: |
             target
-          # run_id rotates the key so the cache refreshes each run (actions/cache
-          # skips saving on an existing key, which otherwise freezes a stale
-          # cache); restore-keys falls back to the latest prior cache.
-          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+            !target/**/incremental/**
+          # The exact key never matches (run_id), so restore always falls back via
+          # restore-keys to the latest cache — which is only ever written on main
+          # (see the Save step). Caches are branch-scoped: a main-saved cache is
+          # the one every PR can read, so PRs restore a warm target for free.
+          key: ${{ runner.os }}-cargo-coverage-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
-            ${{ runner.os }}-cargo-coverage-${{ hashFiles('Cargo.lock') }}-
-            ${{ runner.os }}-cargo-coverage-
+            ${{ runner.os }}-cargo-coverage-target-${{ hashFiles('Cargo.lock') }}-
+            ${{ runner.os }}-cargo-coverage-target-
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: test
@@ -123,6 +168,19 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info,python-lcov.info
           flags: ubuntu-latest
+
+      - name: Save Rust target
+        # Save only on main: branch scoping means PR-written caches help nobody
+        # else, so PR runs skip the save entirely (and dodge the slow Windows
+        # compression). run_id keeps the key unique so each main push refreshes
+        # the cache instead of freezing on an already-existing key.
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            target
+            !target/**/incremental/**
+          key: ${{ runner.os }}-cargo-coverage-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
 
   # Non-Linux correctness check: runs the same Rust + Python suites as the
   # coverage job, but without LLVM coverage instrumentation (much faster to
@@ -143,22 +201,33 @@ jobs:
       # compiles the editable sfmtool PyO3 extension via maturin, so a warm
       # target makes that build incremental instead of a cold compile. The key
       # is namespaced by runner.os, so each matrix OS keeps its own cache.
-      - name: Cache Rust build
+      - name: Cache cargo home
         uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
+          # Registry index + downloads and git checkouts are fully determined by
+          # Cargo.lock, so key on it alone (no run_id): the save is skipped on an
+          # unchanged lockfile — no per-run resave of this bulk — and refreshed
+          # only when dependencies change. Shared across all same-OS jobs.
+          key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-home-
+      - name: Restore Rust target
+        uses: actions/cache/restore@v5
+        with:
+          path: |
             target
-          # run_id rotates the key so the cache refreshes each run (actions/cache
-          # skips saving on an existing key, which otherwise freezes a stale
-          # cache — this is why the Windows release build was cold every run);
-          # restore-keys falls back to the latest prior cache for incrementality.
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+            !target/**/incremental/**
+          # The exact key never matches (run_id), so restore always falls back via
+          # restore-keys to the latest cache — which is only ever written on main
+          # (see the Save step). Caches are branch-scoped: a main-saved cache is
+          # the one every PR can read, so PRs restore a warm target for free.
+          key: ${{ runner.os }}-cargo-test-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
-            ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}-
-            ${{ runner.os }}-cargo-test-
+            ${{ runner.os }}-cargo-test-target-${{ hashFiles('Cargo.lock') }}-
+            ${{ runner.os }}-cargo-test-target-
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: test
@@ -177,6 +246,19 @@ jobs:
       - name: Python tests
         run: pixi run -e test pytest
 
+      - name: Save Rust target
+        # Save only on main: branch scoping means PR-written caches help nobody
+        # else, so PR runs skip the save entirely (and dodge the slow Windows
+        # compression). run_id keeps the key unique so each main push refreshes
+        # the cache instead of freezing on an already-existing key.
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            target
+            !target/**/incremental/**
+          key: ${{ runner.os }}-cargo-test-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+
   ui-test-windows:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -187,24 +269,49 @@ jobs:
         with:
           environments: ui
           cache: true
-      - name: Cache Rust build
+      - name: Cache cargo home
         uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
+          # Registry index + downloads and git checkouts are fully determined by
+          # Cargo.lock, so key on it alone (no run_id): the save is skipped on an
+          # unchanged lockfile — no per-run resave of this bulk — and refreshed
+          # only when dependencies change. Shared across all same-OS jobs.
+          key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-home-
+      - name: Restore Rust target
+        uses: actions/cache/restore@v5
+        with:
+          path: |
             target
-          # run_id rotates the key so the cache refreshes each run (actions/cache
-          # skips saving on an existing key, which otherwise freezes a stale
-          # cache); restore-keys falls back to the latest prior cache.
-          key: ${{ runner.os }}-cargo-ui-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+            !target/**/incremental/**
+          # The exact key never matches (run_id), so restore always falls back via
+          # restore-keys to the latest cache — which is only ever written on main
+          # (see the Save step). Caches are branch-scoped: a main-saved cache is
+          # the one every PR can read, so PRs restore a warm target for free.
+          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
-            ${{ runner.os }}-cargo-ui-${{ hashFiles('Cargo.lock') }}-
-            ${{ runner.os }}-cargo-ui-
+            ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}-
+            ${{ runner.os }}-cargo-ui-target-
 
       - name: UI tests
         run: pixi run -e ui ui-test
+
+      - name: Save Rust target
+        # Save only on main: branch scoping means PR-written caches help nobody
+        # else, so PR runs skip the save entirely (and dodge the slow Windows
+        # compression). run_id keeps the key unique so each main push refreshes
+        # the cache instead of freezing on an already-existing key.
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            target
+            !target/**/incremental/**
+          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
 
   # macOS accessibility UI tests. Same xa11y-driven suite as the
   # ui-test-windows job, but macOS gates the AX API behind a TCC grant
@@ -223,21 +330,33 @@ jobs:
         with:
           environments: ui
           cache: true
-      - name: Cache Rust build
+      - name: Cache cargo home
         uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
+          # Registry index + downloads and git checkouts are fully determined by
+          # Cargo.lock, so key on it alone (no run_id): the save is skipped on an
+          # unchanged lockfile — no per-run resave of this bulk — and refreshed
+          # only when dependencies change. Shared across all same-OS jobs.
+          key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-home-
+      - name: Restore Rust target
+        uses: actions/cache/restore@v5
+        with:
+          path: |
             target
-          # run_id rotates the key so the cache refreshes each run (actions/cache
-          # skips saving on an existing key, which otherwise freezes a stale
-          # cache); restore-keys falls back to the latest prior cache.
-          key: ${{ runner.os }}-cargo-ui-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+            !target/**/incremental/**
+          # The exact key never matches (run_id), so restore always falls back via
+          # restore-keys to the latest cache — which is only ever written on main
+          # (see the Save step). Caches are branch-scoped: a main-saved cache is
+          # the one every PR can read, so PRs restore a warm target for free.
+          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
-            ${{ runner.os }}-cargo-ui-${{ hashFiles('Cargo.lock') }}-
-            ${{ runner.os }}-cargo-ui-
+            ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}-
+            ${{ runner.os }}-cargo-ui-target-
 
       # Compile the test binary (and the sfm-explorer bin it launches) without
       # running, then resolve the test binary's hashed path from cargo's JSON
@@ -262,6 +381,19 @@ jobs:
 
       - name: UI tests
         run: "${{ steps.build.outputs.bin }} --test-threads=1"
+
+      - name: Save Rust target
+        # Save only on main: branch scoping means PR-written caches help nobody
+        # else, so PR runs skip the save entirely. run_id keeps the key unique so
+        # each main push refreshes the cache instead of freezing on an
+        # already-existing key.
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            target
+            !target/**/incremental/**
+          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
 
   # Single stable check to mark as required in branch protection. Always runs
   # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.
