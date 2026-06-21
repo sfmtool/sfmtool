@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._commands.heatmap import _insert_metric_before_number
+from sfmtool._commands.heatmap import _insert_metric_before_number, _output_stem
 from sfmtool.cli import main
 from sfmtool.visualization._colormap import COLORMAPS, apply_colormap, value_to_color
 from sfmtool.visualization._heatmap_renderer import (
@@ -117,6 +117,21 @@ class TestInsertMetricBeforeNumber:
 
     def test_dash_separator(self):
         assert _insert_metric_before_number("img-03", "tracks") == "img_tracks-03"
+
+
+class TestOutputStem:
+    def test_flat_image_name(self):
+        assert (
+            _output_stem("images/seoul_bull_07.jpg", "reproj")
+            == "images__seoul_bull_reproj_07"
+        )
+
+    def test_rig_sensors_do_not_collide(self):
+        left = _output_stem("fisheye_left/frame_05.jpg", "reproj")
+        right = _output_stem("fisheye_right/frame_05.jpg", "reproj")
+        assert left == "fisheye_left__frame_reproj_05"
+        assert right == "fisheye_right__frame_reproj_05"
+        assert left != right
 
 
 # =============================================================================
