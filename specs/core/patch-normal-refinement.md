@@ -370,7 +370,11 @@ reference-view objective unnecessary. What remains open:
    candidate. Beyond the soft IRLS weights, an explicit **good-view set** —
    refine, drop views whose residual to `x̄` stays high (occluded / wrong
    surface), re-refine — is the discrete complement to `RobustWeighted` and the
-   most impactful add for scenes with real occlusion.
+   most impactful add for scenes with real occlusion. The per-patch view set is
+   already a first-class input: `PatchCloud.refine_normals(view_indices=…)`
+   overrides the track-based lists with an explicit per-patch view set, so a
+   good-view (or MVS-expanded) set can be vetted in the caller and fed straight
+   back in without touching the core search.
 
 3. **Stochastic view subsets (for large `V`).** The per-step cost is rendering the
    `V` patches, so scoring a candidate on a random `S < V` subset cuts it to `S/V`
