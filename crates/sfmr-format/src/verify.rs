@@ -64,6 +64,26 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     // `points3d/normals_xyz` and added the optional per-point patch frame in the
     // points3d section.
     let is_pre_v3 = metadata.version < 3;
+    // Version 4 added `embedded_patches`: per-observation keypoints inline and a
+    // direct image-bytes hash, in place of the `.sift`-link arrays.
+    match metadata.feature_source.as_str() {
+        FEATURE_SOURCE_SIFT_FILES | FEATURE_SOURCE_EMBEDDED_PATCHES => {}
+        other => errors.push(format!(
+            "unknown feature_source {other:?} (expected {FEATURE_SOURCE_SIFT_FILES:?} \
+             or {FEATURE_SOURCE_EMBEDDED_PATCHES:?})"
+        )),
+    }
+    let is_embedded = metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
+
+    // A version newer than this build understands has an unknown layout; report it
+    // and stop rather than emit confusing per-file hash mismatches.
+    if metadata.version > 4 {
+        errors.push(format!(
+            "unsupported .sfmr format version {} (this build supports up to 4)",
+            metadata.version
+        ));
+        return Ok((false, errors));
+    }
 
     let mut section_digests: Vec<u128> = Vec::with_capacity(5);
 
@@ -80,6 +100,8 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
 
     // === Cameras hash ===
     let cameras_raw = read_zst_entry(&mut archive, "cameras/metadata.json.zst")?;
+    // Parsed lazily for the embedded-patches keypoint bounds check below.
+    let cameras: Vec<SfmrCamera> = serde_json::from_slice(&cameras_raw).unwrap_or_default();
     let cameras_hash = xxhash_rust::xxh3::xxh3_128(&cameras_raw);
     if format_hash(cameras_hash) != stored.cameras_xxh128 {
         errors.push(format!(
@@ -176,18 +198,27 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     let depth_stats: DepthStatistics = serde_json::from_slice(&depth_stats_raw)?;
     let num_buckets = depth_stats.num_histogram_buckets;
 
-    // images/camera_indexes
-    images_hasher.update(&read_zst_entry(
+    // images/camera_indexes (captured for the keypoint bounds check below)
+    let camera_indexes_raw = read_zst_entry(
         &mut archive,
         &format!("images/camera_indexes.{image_count}.uint32.zst"),
-    )?);
+    )?;
+    images_hasher.update(&camera_indexes_raw);
     // images/depth_statistics.json
     images_hasher.update(&depth_stats_raw);
-    // images/feature_tool_hashes
-    images_hasher.update(&read_zst_entry(
-        &mut archive,
-        &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
-    )?);
+    // images/feature_tool_hashes (sift_files) or image_file_hashes
+    // (embedded_patches) — same lexicographic slot, mirrors the writer.
+    if is_embedded {
+        images_hasher.update(&read_zst_entry(
+            &mut archive,
+            &format!("images/image_file_hashes.{image_count}.uint128.zst"),
+        )?);
+    } else {
+        images_hasher.update(&read_zst_entry(
+            &mut archive,
+            &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
+        )?);
+    }
     // images/metadata.json
     images_hasher.update(&read_zst_entry(&mut archive, "images/metadata.json.zst")?);
     // images/names.json
@@ -202,11 +233,13 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         &mut archive,
         &format!("images/quaternions_wxyz.{image_count}.4.float64.zst"),
     )?);
-    // images/sift_content_hashes
-    images_hasher.update(&read_zst_entry(
-        &mut archive,
-        &format!("images/sift_content_hashes.{image_count}.uint128.zst"),
-    )?);
+    // images/sift_content_hashes (sift_files only)
+    if !is_embedded {
+        images_hasher.update(&read_zst_entry(
+            &mut archive,
+            &format!("images/sift_content_hashes.{image_count}.uint128.zst"),
+        )?);
+    }
     // images/thumbnails_y_x_rgb
     images_hasher.update(&read_zst_entry(
         &mut archive,
@@ -358,19 +391,33 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     // === Tracks hash (lexicographic path order) ===
     let mut tracks_hasher = Xxh3::new();
 
-    // tracks/feature_indexes
-    tracks_hasher.update(&read_zst_entry(
-        &mut archive,
-        &format!("tracks/feature_indexes.{observation_count}.uint32.zst"),
-    )?);
+    // tracks/feature_indexes (sift_files only; sorts before image_indexes)
+    if !is_embedded {
+        tracks_hasher.update(&read_zst_entry(
+            &mut archive,
+            &format!("tracks/feature_indexes.{observation_count}.uint32.zst"),
+        )?);
+    }
     // tracks/image_indexes
     let track_image_indexes_raw = read_zst_entry(
         &mut archive,
         &format!("tracks/image_indexes.{observation_count}.uint32.zst"),
     )?;
     tracks_hasher.update(&track_image_indexes_raw);
+    // tracks/keypoints_xy (embedded_patches only; sorts after image_indexes)
+    let keypoints_raw = if is_embedded {
+        let raw = read_zst_entry(
+            &mut archive,
+            &format!("tracks/keypoints_xy.{observation_count}.2.float32.zst"),
+        )?;
+        tracks_hasher.update(&raw);
+        Some(raw)
+    } else {
+        None
+    };
     // tracks/metadata.json
-    tracks_hasher.update(&read_zst_entry(&mut archive, "tracks/metadata.json.zst")?);
+    let tracks_meta_raw = read_zst_entry(&mut archive, "tracks/metadata.json.zst")?;
+    tracks_hasher.update(&tracks_meta_raw);
     // tracks/observation_counts
     let track_obs_counts_raw = read_zst_entry(
         &mut archive,
@@ -423,6 +470,59 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         }
         if obs_counts.iter().any(|&c| c < 1) {
             errors.push("observation_counts contains values < 1".into());
+        }
+    }
+
+    // === Validate feature_source vs tracks-metadata flags (v4) ===
+    // Exactly one of has_feature_indexes / has_keypoints_xy is true, matching
+    // feature_source. Only enforced when the flags are present (v4 writers always
+    // emit them; an upgraded pre-v4 file has none).
+    let tracks_meta: serde_json::Value =
+        serde_json::from_slice(&tracks_meta_raw).unwrap_or(serde_json::Value::Null);
+    if let Some(hfi) = tracks_meta
+        .get("has_feature_indexes")
+        .and_then(|v| v.as_bool())
+    {
+        if hfi == is_embedded {
+            errors.push(format!(
+                "tracks/metadata.json has_feature_indexes={hfi} contradicts \
+                 feature_source (embedded={is_embedded})"
+            ));
+        }
+    }
+    if let Some(hk) = tracks_meta
+        .get("has_keypoints_xy")
+        .and_then(|v| v.as_bool())
+    {
+        if hk != is_embedded {
+            errors.push(format!(
+                "tracks/metadata.json has_keypoints_xy={hk} contradicts \
+                 feature_source (embedded={is_embedded})"
+            ));
+        }
+    }
+
+    // === Validate embedded keypoints (finite + within image bounds) ===
+    // Each keypoint row is two little-endian f32s (u, v).
+    const KEYPOINT_ROW_BYTES: usize = 2 * std::mem::size_of::<f32>();
+    if let Some(kp_raw) = &keypoints_raw {
+        if kp_raw.len() == observation_count * KEYPOINT_ROW_BYTES {
+            let floats: Vec<f32> = kp_raw
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            let kp = ndarray::Array2::from_shape_vec((observation_count, 2), floats).unwrap();
+            let img_idx = raw_to_u32(&track_image_indexes_raw);
+            let cam_idx = raw_to_u32(&camera_indexes_raw);
+            if let Err(e) = validate_keypoints(&kp, img_idx.as_ref(), cam_idx.as_ref(), &cameras) {
+                errors.push(e);
+            }
+        } else {
+            errors.push(format!(
+                "keypoints_xy byte length {} != observation_count {observation_count} * \
+                 {KEYPOINT_ROW_BYTES}",
+                kp_raw.len()
+            ));
         }
     }
 

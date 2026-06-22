@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use sfmr_format::{self, ContentHash, DepthStatistics, SfmrData, SfmrMetadata, WriteOptions};
 
 use crate::helpers::{
-    extract_cameras_as_sfmr, extract_rig_frame_data, get_item, py_to_serde, py_to_u128_bytes,
-    rig_frame_data_to_py, serde_to_py, u128_bytes_to_py,
+    extract_cameras_as_sfmr, extract_rig_frame_data, get_item, get_optional_item, py_to_serde,
+    py_to_u128_bytes, rig_frame_data_to_py, serde_to_py, u128_bytes_to_py,
 };
 use crate::PyCameraIntrinsics;
 
@@ -66,15 +66,19 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     // String list
     dict.set_item("image_names", &data.image_names)?;
 
-    // uint128 hashes as list[bytes]
-    dict.set_item(
-        "feature_tool_hashes",
-        u128_bytes_to_py(py, &data.feature_tool_hashes)?,
-    )?;
-    dict.set_item(
-        "sift_content_hashes",
-        u128_bytes_to_py(py, &data.sift_content_hashes)?,
-    )?;
+    // uint128 hashes as list[bytes] — mode-dependent, `None` when absent.
+    match &data.feature_tool_hashes {
+        Some(v) => dict.set_item("feature_tool_hashes", u128_bytes_to_py(py, v)?)?,
+        None => dict.set_item("feature_tool_hashes", py.None())?,
+    }
+    match &data.sift_content_hashes {
+        Some(v) => dict.set_item("sift_content_hashes", u128_bytes_to_py(py, v)?)?,
+        None => dict.set_item("sift_content_hashes", py.None())?,
+    }
+    match &data.image_file_hashes {
+        Some(v) => dict.set_item("image_file_hashes", u128_bytes_to_py(py, v)?)?,
+        None => dict.set_item("image_file_hashes", py.None())?,
+    }
 
     // Numpy arrays (ownership transferred)
     dict.set_item("camera_indexes", data.camera_indexes.into_pyarray(py))?;
@@ -92,7 +96,16 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         None => dict.set_item("normals_xyz", py.None())?,
     }
     dict.set_item("image_indexes", data.image_indexes.into_pyarray(py))?;
-    dict.set_item("feature_indexes", data.feature_indexes.into_pyarray(py))?;
+    // feature_indexes (sift_files) / keypoints_xy (embedded_patches) are
+    // mode-dependent: emit the present one, `None` for the absent one.
+    match data.feature_indexes {
+        Some(f) => dict.set_item("feature_indexes", f.into_pyarray(py))?,
+        None => dict.set_item("feature_indexes", py.None())?,
+    }
+    match data.keypoints_xy {
+        Some(k) => dict.set_item("keypoints_xy", k.into_pyarray(py))?,
+        None => dict.set_item("keypoints_xy", py.None())?,
+    }
     dict.set_item("point_indexes", data.point_indexes.into_pyarray(py))?;
     dict.set_item(
         "observation_counts",
@@ -156,13 +169,32 @@ pub(crate) fn parse_sfmr_data_from_dict(
     let reprojection_errors: PyReadonlyArray1<f32> =
         get_item(data, "reprojection_errors")?.extract()?;
     let image_indexes: PyReadonlyArray1<u32> = get_item(data, "image_indexes")?.extract()?;
-    let feature_indexes: PyReadonlyArray1<u32> = get_item(data, "feature_indexes")?.extract()?;
     let point_indexes: PyReadonlyArray1<u32> = get_item(data, "point_indexes")?.extract()?;
     let observation_counts: PyReadonlyArray1<u32> =
         get_item(data, "observation_counts")?.extract()?;
 
-    let feature_tool_hashes = py_to_u128_bytes(&get_item(data, "feature_tool_hashes")?)?;
-    let sift_content_hashes = py_to_u128_bytes(&get_item(data, "sift_content_hashes")?)?;
+    // Mode-dependent columns: exactly one of feature_indexes / keypoints_xy and
+    // one of the per-image hash sets is present (the others None or absent).
+    let feature_indexes = match get_optional_item(data, "feature_indexes")? {
+        Some(v) => Some(v.extract::<PyReadonlyArray1<u32>>()?.as_array().to_owned()),
+        None => None,
+    };
+    let keypoints_xy = match get_optional_item(data, "keypoints_xy")? {
+        Some(v) => Some(v.extract::<PyReadonlyArray2<f32>>()?.as_array().to_owned()),
+        None => None,
+    };
+    let feature_tool_hashes = match get_optional_item(data, "feature_tool_hashes")? {
+        Some(v) => Some(py_to_u128_bytes(&v)?),
+        None => None,
+    };
+    let sift_content_hashes = match get_optional_item(data, "sift_content_hashes")? {
+        Some(v) => Some(py_to_u128_bytes(&v)?),
+        None => None,
+    };
+    let image_file_hashes = match get_optional_item(data, "image_file_hashes")? {
+        Some(v) => Some(py_to_u128_bytes(&v)?),
+        None => None,
+    };
     let thumbnails_y_x_rgb: PyReadonlyArray4<u8> =
         get_item(data, "thumbnails_y_x_rgb")?.extract()?;
 
@@ -224,6 +256,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
         translations_xyz: translations_xyz.as_array().to_owned(),
         feature_tool_hashes,
         sift_content_hashes,
+        image_file_hashes,
         thumbnails_y_x_rgb: thumbnails_y_x_rgb.as_array().to_owned(),
         positions_xyzw: positions_xyzw.as_array().to_owned(),
         colors_rgb: colors_rgb.as_array().to_owned(),
@@ -235,7 +268,8 @@ pub(crate) fn parse_sfmr_data_from_dict(
         patch_v_halfvec_xyz: None,
         patch_bitmaps_y_x_rgba: None,
         image_indexes: image_indexes.as_array().to_owned(),
-        feature_indexes: feature_indexes.as_array().to_owned(),
+        feature_indexes,
+        keypoints_xy,
         point_indexes: point_indexes.as_array().to_owned(),
         observation_counts: observation_counts.as_array().to_owned(),
         depth_statistics,

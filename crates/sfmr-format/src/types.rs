@@ -143,6 +143,65 @@ pub struct SfmrMetadata {
     /// an SfM solve.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub world_space_unit: Option<String>,
+    /// Observation source (format version 4+):
+    /// [`FEATURE_SOURCE_SIFT_FILES`] — observations reference external `.sift`
+    /// files via `feature_indexes`; or [`FEATURE_SOURCE_EMBEDDED_PATCHES`] —
+    /// per-observation keypoints are stored inline in `tracks/keypoints_xy`.
+    /// Legacy version 1–3 files have no key and read as `sift_files`.
+    #[serde(default = "default_feature_source")]
+    pub feature_source: String,
+}
+
+/// Validate per-observation keypoints: every `(u, v)` must be finite and lie
+/// within `[0, width) × [0, height)` of the image's camera intrinsics. Returns a
+/// descriptive message on the first violation. Used on both read and verify of
+/// `embedded_patches` files. Index arrays are bounds-checked so malformed input
+/// yields an error rather than a panic.
+pub fn validate_keypoints(
+    keypoints: &Array2<f32>,
+    image_indexes: &[u32],
+    camera_indexes: &[u32],
+    cameras: &[SfmrCamera],
+) -> Result<(), String> {
+    if keypoints.nrows() != image_indexes.len() {
+        return Err(format!(
+            "keypoints_xy rows {} != observation count {}",
+            keypoints.nrows(),
+            image_indexes.len()
+        ));
+    }
+    for j in 0..keypoints.nrows() {
+        let (u, v) = (keypoints[[j, 0]], keypoints[[j, 1]]);
+        if !u.is_finite() || !v.is_finite() {
+            return Err(format!("keypoints_xy row {j} is not finite: ({u}, {v})"));
+        }
+        let img = image_indexes[j] as usize;
+        let cam = *camera_indexes
+            .get(img)
+            .ok_or_else(|| format!("keypoints_xy row {j}: image index {img} out of range"))?
+            as usize;
+        let c = cameras
+            .get(cam)
+            .ok_or_else(|| format!("keypoints_xy row {j}: camera index {cam} out of range"))?;
+        if !(u >= 0.0 && u < c.width as f32 && v >= 0.0 && v < c.height as f32) {
+            return Err(format!(
+                "keypoints_xy row {j} = ({u}, {v}) is outside image bounds \
+                 [0, {}) x [0, {})",
+                c.width, c.height
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `feature_source` value: observations reference external `.sift` files.
+pub const FEATURE_SOURCE_SIFT_FILES: &str = "sift_files";
+/// `feature_source` value: per-observation keypoints stored inline in the
+/// `.sfmr`, with no `.sift` companion.
+pub const FEATURE_SOURCE_EMBEDDED_PATCHES: &str = "embedded_patches";
+
+fn default_feature_source() -> String {
+    FEATURE_SOURCE_SIFT_FILES.to_string()
 }
 
 /// Content integrity hashes from `content_hash.json.zst`.
@@ -274,9 +333,16 @@ pub struct SfmrData {
     /// `(N, 3)` XYZ translations (world-to-camera).
     pub translations_xyz: Array2<f64>,
     /// `N` x 16-byte XXH128 hashes identifying feature extraction tool.
-    pub feature_tool_hashes: Vec<[u8; 16]>,
+    /// `Some` in a `sift_files` file; `None` in an `embedded_patches` file.
+    pub feature_tool_hashes: Option<Vec<[u8; 16]>>,
     /// `N` x 16-byte XXH128 hashes of `.sift` file contents.
-    pub sift_content_hashes: Vec<[u8; 16]>,
+    /// `Some` in a `sift_files` file; `None` in an `embedded_patches` file.
+    pub sift_content_hashes: Option<Vec<[u8; 16]>>,
+    /// `N` x 16-byte XXH128 hashes of the source image file bytes (the same
+    /// value the `.sift` records as `image_file_xxh128`). `Some` in an
+    /// `embedded_patches` file (the direct image-identity link that substitutes
+    /// for the `.sift`-mediated one); `None` in a `sift_files` file.
+    pub image_file_hashes: Option<Vec<[u8; 16]>>,
     /// `(N, 128, 128, 3)` RGB thumbnails of the source images.
     pub thumbnails_y_x_rgb: Array4<u8>,
 
@@ -325,8 +391,13 @@ pub struct SfmrData {
     // Tracks
     /// `(M,)` image index per observation.
     pub image_indexes: Array1<u32>,
-    /// `(M,)` feature index per observation.
-    pub feature_indexes: Array1<u32>,
+    /// `(M,)` feature index per observation (index into the per-image `.sift`).
+    /// `Some` in a `sift_files` file; `None` in an `embedded_patches` file.
+    pub feature_indexes: Option<Array1<u32>>,
+    /// `(M, 2)` sub-pixel `(u, v)` keypoint per observation, in image pixel
+    /// coordinates. `Some` in an `embedded_patches` file; `None` in a
+    /// `sift_files` file.
+    pub keypoints_xy: Option<Array2<f32>>,
     /// `(M,)` point index per observation.
     pub point_indexes: Array1<u32>,
     /// `(P,)` number of observations per 3D point.
