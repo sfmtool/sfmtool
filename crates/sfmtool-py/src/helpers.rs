@@ -36,6 +36,18 @@ pub(crate) fn get_item<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Bo
         .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key.to_string()))
 }
 
+/// Get an optional key: `Some` only when the key is present and not `None`,
+/// so a missing key and an explicit `None` are treated alike.
+pub(crate) fn get_optional_item<'py>(
+    dict: &Bound<'py, PyDict>,
+    key: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    Ok(match dict.get_item(key)? {
+        Some(v) if !v.is_none() => Some(v),
+        _ => None,
+    })
+}
+
 /// Convert `Vec<[u8; 16]>` to a Python `list[bytes]` of 16-byte elements.
 pub(crate) fn u128_bytes_to_py<'py>(
     py: Python<'py>,

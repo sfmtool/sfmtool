@@ -79,8 +79,10 @@ fn merge_preserving_normals<'a>(
 ///
 /// Sorts tracks by `(point_indexes, image_indexes)` if not already sorted.
 /// Computes content hashes and writes all section metadata files.
-/// Always writes format version 3; the `content_hash` field in `data` is
-/// ignored on write (recomputed).
+/// Always writes format version 4; the `content_hash` field in `data` is
+/// ignored on write (recomputed). The per-observation and per-image columns
+/// written depend on `metadata.feature_source` (`sift_files` vs
+/// `embedded_patches`).
 pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
     write_sfmr_with_options(path, data, &WriteOptions::default())
 }
@@ -95,12 +97,17 @@ pub fn write_sfmr_with_options(
     data: &mut SfmrData,
     options: &WriteOptions,
 ) -> Result<(), SfmrError> {
+    // Validate the feature_source and that the mode-appropriate columns are
+    // present (and the others absent) before mutating or writing anything.
+    validate_feature_source(data)?;
+    let is_embedded = data.metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
+
     // Ensure tracks are sorted by (point_indexes, image_indexes)
     ensure_tracks_sorted(data);
 
-    // Always emit format version 3, and keep `infinity_point_count` consistent
+    // Always emit format version 4, and keep `infinity_point_count` consistent
     // with the actual `w` column.
-    data.metadata.version = 3;
+    data.metadata.version = 4;
     data.metadata.infinity_point_count = (0..data.positions_xyzw.shape()[0])
         .filter(|&i| data.positions_xyzw[[i, 3]] == 0.0)
         .count() as u32;
@@ -315,19 +322,40 @@ pub fn write_sfmr_with_options(
     )?;
     images_hasher.update(&bytes);
 
-    // images/feature_tool_hashes
-    let hash_bytes: Vec<u8> = data
-        .feature_tool_hashes
-        .iter()
-        .flat_map(|h| h.iter().copied())
-        .collect();
-    let bytes = write_binary_entry(
-        &mut zip,
-        &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
-        &hash_bytes,
-        options.zstd_level,
-    )?;
-    images_hasher.update(&bytes);
+    // images/feature_tool_hashes (sift_files) or images/image_file_hashes
+    // (embedded_patches). Files are emitted in lexicographic path order (see
+    // spec §Hashing); both names occupy the same slot, after depth_statistics.json.
+    if is_embedded {
+        let hash_bytes: Vec<u8> = data
+            .image_file_hashes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .flat_map(|h| h.iter().copied())
+            .collect();
+        let bytes = write_binary_entry(
+            &mut zip,
+            &format!("images/image_file_hashes.{image_count}.uint128.zst"),
+            &hash_bytes,
+            options.zstd_level,
+        )?;
+        images_hasher.update(&bytes);
+    } else {
+        let hash_bytes: Vec<u8> = data
+            .feature_tool_hashes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .flat_map(|h| h.iter().copied())
+            .collect();
+        let bytes = write_binary_entry(
+            &mut zip,
+            &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
+            &hash_bytes,
+            options.zstd_level,
+        )?;
+        images_hasher.update(&bytes);
+    }
 
     // images/metadata.json
     let images_meta = serde_json::json!({"image_count": image_count, "thumbnail_size": 128});
@@ -366,19 +394,23 @@ pub fn write_sfmr_with_options(
     )?;
     images_hasher.update(&bytes);
 
-    // images/sift_content_hashes
-    let hash_bytes: Vec<u8> = data
-        .sift_content_hashes
-        .iter()
-        .flat_map(|h| h.iter().copied())
-        .collect();
-    let bytes = write_binary_entry(
-        &mut zip,
-        &format!("images/sift_content_hashes.{image_count}.uint128.zst"),
-        &hash_bytes,
-        options.zstd_level,
-    )?;
-    images_hasher.update(&bytes);
+    // images/sift_content_hashes (sift_files only; absent in embedded_patches)
+    if !is_embedded {
+        let hash_bytes: Vec<u8> = data
+            .sift_content_hashes
+            .as_ref()
+            .unwrap()
+            .iter()
+            .flat_map(|h| h.iter().copied())
+            .collect();
+        let bytes = write_binary_entry(
+            &mut zip,
+            &format!("images/sift_content_hashes.{image_count}.uint128.zst"),
+            &hash_bytes,
+            options.zstd_level,
+        )?;
+        images_hasher.update(&bytes);
+    }
 
     // images/thumbnails_y_x_rgb
     let bytes = write_binary_entry(
@@ -499,14 +531,16 @@ pub fn write_sfmr_with_options(
     // === Tracks (hashed in lexicographic path order) ===
     let mut tracks_hasher = Xxh3::new();
 
-    // tracks/feature_indexes
-    let bytes = write_binary_entry(
-        &mut zip,
-        &format!("tracks/feature_indexes.{observation_count}.uint32.zst"),
-        bytemuck::cast_slice(data.feature_indexes.as_slice().unwrap()),
-        options.zstd_level,
-    )?;
-    tracks_hasher.update(&bytes);
+    // tracks/feature_indexes (sift_files only; lexicographically before image_indexes)
+    if !is_embedded {
+        let bytes = write_binary_entry(
+            &mut zip,
+            &format!("tracks/feature_indexes.{observation_count}.uint32.zst"),
+            bytemuck::cast_slice(data.feature_indexes.as_ref().unwrap().as_slice().unwrap()),
+            options.zstd_level,
+        )?;
+        tracks_hasher.update(&bytes);
+    }
 
     // tracks/image_indexes
     let bytes = write_binary_entry(
@@ -517,8 +551,24 @@ pub fn write_sfmr_with_options(
     )?;
     tracks_hasher.update(&bytes);
 
+    // tracks/keypoints_xy (embedded_patches only; lexicographically after
+    // image_indexes, before metadata.json)
+    if is_embedded {
+        let bytes = write_binary_entry(
+            &mut zip,
+            &format!("tracks/keypoints_xy.{observation_count}.2.float32.zst"),
+            bytemuck::cast_slice(data.keypoints_xy.as_ref().unwrap().as_slice().unwrap()),
+            options.zstd_level,
+        )?;
+        tracks_hasher.update(&bytes);
+    }
+
     // tracks/metadata.json
-    let tracks_meta = serde_json::json!({"observation_count": observation_count});
+    let tracks_meta = serde_json::json!({
+        "observation_count": observation_count,
+        "has_feature_indexes": !is_embedded,
+        "has_keypoints_xy": is_embedded,
+    });
     let bytes = write_json_entry(
         &mut zip,
         "tracks/metadata.json.zst",
@@ -639,7 +689,7 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
     let mut perm: Vec<usize> = (0..n).collect();
     perm.sort_unstable_by(|&a, &b| p3d[a].cmp(&p3d[b]).then_with(|| img[a].cmp(&img[b])));
 
-    // Apply permutation to all three track arrays
+    // Apply permutation to every present per-observation array.
     let reorder = |arr: &mut ndarray::Array1<u32>, perm: &[usize]| {
         let old: Vec<u32> = arr.as_slice().unwrap().to_vec();
         for (i, &pi) in perm.iter().enumerate() {
@@ -648,7 +698,63 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
     };
     reorder(&mut data.point_indexes, &perm);
     reorder(&mut data.image_indexes, &perm);
-    reorder(&mut data.feature_indexes, &perm);
+    if let Some(fi) = data.feature_indexes.as_mut() {
+        reorder(fi, &perm);
+    }
+    if let Some(kp) = data.keypoints_xy.as_mut() {
+        let old = kp.clone();
+        for (i, &pi) in perm.iter().enumerate() {
+            kp[[i, 0]] = old[[pi, 0]];
+            kp[[i, 1]] = old[[pi, 1]];
+        }
+    }
+}
+
+/// Validate that `feature_source` is recognized and the mode-appropriate columns
+/// are present *and the opposite-mode columns absent* — the two modes never mix,
+/// so a contradictory `SfmrData` is rejected rather than silently dropping the
+/// column the chosen mode does not write.
+fn validate_feature_source(data: &SfmrData) -> Result<(), SfmrError> {
+    let src = data.metadata.feature_source.as_str();
+    let present = |name: &str, ok: bool| -> Result<(), SfmrError> {
+        if !ok {
+            return Err(SfmrError::InvalidFormat(format!(
+                "feature_source = {src:?} requires {name}"
+            )));
+        }
+        Ok(())
+    };
+    let absent = |name: &str, ok: bool| -> Result<(), SfmrError> {
+        if !ok {
+            return Err(SfmrError::InvalidFormat(format!(
+                "feature_source = {src:?} must not carry {name}"
+            )));
+        }
+        Ok(())
+    };
+    match src {
+        FEATURE_SOURCE_SIFT_FILES => {
+            present("feature_indexes", data.feature_indexes.is_some())?;
+            present("feature_tool_hashes", data.feature_tool_hashes.is_some())?;
+            present("sift_content_hashes", data.sift_content_hashes.is_some())?;
+            absent("keypoints_xy", data.keypoints_xy.is_none())?;
+            absent("image_file_hashes", data.image_file_hashes.is_none())?;
+        }
+        FEATURE_SOURCE_EMBEDDED_PATCHES => {
+            present("keypoints_xy", data.keypoints_xy.is_some())?;
+            present("image_file_hashes", data.image_file_hashes.is_some())?;
+            absent("feature_indexes", data.feature_indexes.is_none())?;
+            absent("feature_tool_hashes", data.feature_tool_hashes.is_none())?;
+            absent("sift_content_hashes", data.sift_content_hashes.is_none())?;
+        }
+        other => {
+            return Err(SfmrError::InvalidFormat(format!(
+                "unknown feature_source {other:?} (expected {FEATURE_SOURCE_SIFT_FILES:?} \
+                 or {FEATURE_SOURCE_EMBEDDED_PATCHES:?})"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -706,20 +812,33 @@ fn validate_dimensions_with(
             data.translations_xyz.shape()
         )
     );
-    check!(
-        data.feature_tool_hashes.len() == image_count,
-        format!(
-            "feature_tool_hashes len {} != image_count {image_count}",
-            data.feature_tool_hashes.len()
-        )
-    );
-    check!(
-        data.sift_content_hashes.len() == image_count,
-        format!(
-            "sift_content_hashes len {} != image_count {image_count}",
-            data.sift_content_hashes.len()
-        )
-    );
+    if let Some(v) = &data.feature_tool_hashes {
+        check!(
+            v.len() == image_count,
+            format!(
+                "feature_tool_hashes len {} != image_count {image_count}",
+                v.len()
+            )
+        );
+    }
+    if let Some(v) = &data.sift_content_hashes {
+        check!(
+            v.len() == image_count,
+            format!(
+                "sift_content_hashes len {} != image_count {image_count}",
+                v.len()
+            )
+        );
+    }
+    if let Some(v) = &data.image_file_hashes {
+        check!(
+            v.len() == image_count,
+            format!(
+                "image_file_hashes len {} != image_count {image_count}",
+                v.len()
+            )
+        );
+    }
     check!(
         data.thumbnails_y_x_rgb.shape() == [image_count, 128, 128, 3],
         format!(
@@ -764,13 +883,24 @@ fn validate_dimensions_with(
             data.image_indexes.len()
         )
     );
-    check!(
-        data.feature_indexes.len() == observation_count,
-        format!(
-            "feature_indexes len {} != observation_count {observation_count}",
-            data.feature_indexes.len()
-        )
-    );
+    if let Some(fi) = &data.feature_indexes {
+        check!(
+            fi.len() == observation_count,
+            format!(
+                "feature_indexes len {} != observation_count {observation_count}",
+                fi.len()
+            )
+        );
+    }
+    if let Some(kp) = &data.keypoints_xy {
+        check!(
+            kp.shape() == [observation_count, 2],
+            format!(
+                "keypoints_xy shape {:?} != [{observation_count}, 2]",
+                kp.shape()
+            )
+        );
+    }
     check!(
         data.point_indexes.len() == observation_count,
         format!(

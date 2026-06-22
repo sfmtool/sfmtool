@@ -144,3 +144,26 @@ fn test_subset_filters_rig_frame_data() {
     assert_eq!(rf.rigs_metadata.rig_count, 1);
     assert_eq!(rf.sensor_camera_indexes.to_vec(), vec![0]);
 }
+
+#[test]
+fn test_from_sfmr_data_rejects_embedded_patches() {
+    // SfmrReconstruction does not yet model patch observations, so loading an
+    // embedded_patches file must fail with a clear error rather than half-load.
+    let mut data = SfmrReconstruction::demo(10).to_sfmr_data();
+    data.metadata.feature_source = FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
+    let err = SfmrReconstruction::from_sfmr_data(data).err().unwrap();
+    assert!(
+        format!("{err}").contains("embedded_patches"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_to_sfmr_data_is_sift_files() {
+    // A reconstruction round-trips as a sift_files v4 file.
+    let data = SfmrReconstruction::demo(10).to_sfmr_data();
+    assert_eq!(data.metadata.feature_source, FEATURE_SOURCE_SIFT_FILES);
+    assert!(data.feature_indexes.is_some());
+    assert!(data.keypoints_xy.is_none());
+    assert!(data.image_file_hashes.is_none());
+}

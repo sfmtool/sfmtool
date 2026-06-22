@@ -79,6 +79,7 @@ mod tests {
                 sensor_count: None,
                 frame_count: None,
                 world_space_unit: None,
+                feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
             },
             content_hash: ContentHash {
                 metadata_xxh128: String::new(),
@@ -132,8 +133,9 @@ mod tests {
                 .unwrap()
             },
             translations_xyz: Array2::zeros((image_count, 3)),
-            feature_tool_hashes: vec![[0u8; 16]; image_count],
-            sift_content_hashes: vec![[1u8; 16]; image_count],
+            feature_tool_hashes: Some(vec![[0u8; 16]; image_count]),
+            sift_content_hashes: Some(vec![[1u8; 16]; image_count]),
+            image_file_hashes: None,
             thumbnails_y_x_rgb: Array4::zeros((image_count, 128, 128, 3)),
             positions_xyzw: Array2::from_shape_vec(
                 (point_count, 4),
@@ -165,7 +167,8 @@ mod tests {
             patch_v_halfvec_xyz: None,
             patch_bitmaps_y_x_rgba: None,
             image_indexes,
-            feature_indexes,
+            feature_indexes: Some(feature_indexes),
+            keypoints_xy: None,
             point_indexes,
             observation_counts,
             depth_statistics: DepthStatistics {
@@ -278,6 +281,187 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// Convert the SIFT-referenced test fixture into an `embedded_patches` one:
+    /// drop the `.sift`-link arrays, add inline keypoints and a direct image hash.
+    fn make_embedded_test_data() -> SfmrData {
+        let mut data = make_test_data();
+        let m = data.metadata.observation_count as usize;
+        let n = data.metadata.image_count as usize;
+        data.metadata.feature_source = FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
+        data.feature_tool_hashes = None;
+        data.sift_content_hashes = None;
+        data.image_file_hashes = Some(vec![[2u8; 16]; n]);
+        data.feature_indexes = None;
+        // Sub-pixel keypoints inside the 1920x1080 camera, one per observation.
+        let kp: Vec<f32> = (0..m)
+            .flat_map(|i| [100.5 + i as f32, 200.25 + i as f32])
+            .collect();
+        data.keypoints_xy = Some(Array2::from_shape_vec((m, 2), kp).unwrap());
+        data
+    }
+
+    #[test]
+    fn test_embedded_patches_round_trip() {
+        let mut data = make_embedded_test_data();
+        let dir = std::env::temp_dir().join("sfmr_test_embedded_round_trip");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sfmr");
+
+        let options = WriteOptions {
+            skip_recompute_depth_stats: true,
+            ..Default::default()
+        };
+        write_sfmr_with_options(&path, &mut data, &options).unwrap();
+
+        // Written as version 4 with the embedded_patches source.
+        let loaded = read_sfmr(&path).unwrap();
+        assert_eq!(loaded.metadata.version, 4);
+        assert_eq!(
+            loaded.metadata.feature_source,
+            FEATURE_SOURCE_EMBEDDED_PATCHES
+        );
+
+        // The inline keypoints and direct image hash round-trip; the .sift-link
+        // arrays are absent.
+        assert_eq!(loaded.keypoints_xy, data.keypoints_xy);
+        assert_eq!(loaded.image_file_hashes, data.image_file_hashes);
+        assert!(loaded.feature_indexes.is_none());
+        assert!(loaded.feature_tool_hashes.is_none());
+        assert!(loaded.sift_content_hashes.is_none());
+
+        // The shared columns are unchanged.
+        assert_eq!(loaded.image_indexes, data.image_indexes);
+        assert_eq!(loaded.point_indexes, data.point_indexes);
+        assert_eq!(loaded.observation_counts, data.observation_counts);
+
+        // Integrity verification passes for the embedded-patches layout.
+        let (valid, errors) = verify_sfmr(&path).unwrap();
+        assert!(valid, "verification failed: {errors:?}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_write_rejects_contradictory_columns() {
+        // sift_files must not also carry keypoints_xy.
+        let mut d = make_test_data();
+        d.keypoints_xy = Some(Array2::zeros((d.metadata.observation_count as usize, 2)));
+        let dir = std::env::temp_dir().join("sfmr_test_contradiction1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let err = write_sfmr(&dir.join("a.sfmr"), &mut d).unwrap_err();
+        assert!(
+            format!("{err}").contains("must not carry keypoints_xy"),
+            "{err}"
+        );
+
+        // embedded_patches must not also carry feature_indexes.
+        let mut e = make_embedded_test_data();
+        e.feature_indexes = Some(Array1::from_vec(vec![
+            0u32;
+            e.metadata.observation_count as usize
+        ]));
+        let err = write_sfmr(&dir.join("b.sfmr"), &mut e).unwrap_err();
+        assert!(
+            format!("{err}").contains("must not carry feature_indexes"),
+            "{err}"
+        );
+
+        // An unknown feature_source is rejected outright.
+        let mut f = make_test_data();
+        f.metadata.feature_source = "bogus".into();
+        let err = write_sfmr(&dir.join("c.sfmr"), &mut f).unwrap_err();
+        assert!(format!("{err}").contains("unknown feature_source"), "{err}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_embedded_keypoints_validated_on_read_and_verify() {
+        let dir = std::env::temp_dir().join("sfmr_test_kp_validate");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Out-of-bounds keypoint (camera is 1920x1080) is rejected on read+verify.
+        let mut oob = make_embedded_test_data();
+        oob.keypoints_xy.as_mut().unwrap()[[0, 0]] = 5000.0;
+        let path = dir.join("oob.sfmr");
+        write_sfmr(&path, &mut oob).unwrap(); // write does not bounds-check
+        let err = read_sfmr(&path).err().unwrap();
+        assert!(format!("{err}").contains("image bounds"), "{err}");
+        let (valid, errors) = verify_sfmr(&path).unwrap();
+        assert!(
+            !valid && errors.iter().any(|e| e.contains("image bounds")),
+            "{errors:?}"
+        );
+
+        // A non-finite keypoint is rejected too.
+        let mut nan = make_embedded_test_data();
+        nan.keypoints_xy.as_mut().unwrap()[[1, 1]] = f32::NAN;
+        let path = dir.join("nan.sfmr");
+        write_sfmr(&path, &mut nan).unwrap();
+        let err = read_sfmr(&path).err().unwrap();
+        assert!(format!("{err}").contains("not finite"), "{err}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_keypoints_are_folded_into_tracks_hash() {
+        let dir = std::env::temp_dir().join("sfmr_test_kp_hash");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut a = make_embedded_test_data();
+        write_sfmr(&dir.join("a.sfmr"), &mut a).unwrap();
+        let ha = read_sfmr(&dir.join("a.sfmr"))
+            .unwrap()
+            .content_hash
+            .tracks_xxh128;
+
+        let mut b = make_embedded_test_data();
+        b.keypoints_xy.as_mut().unwrap()[[0, 0]] += 1.0; // still in bounds
+        write_sfmr(&dir.join("b.sfmr"), &mut b).unwrap();
+        let hb = read_sfmr(&dir.join("b.sfmr"))
+            .unwrap()
+            .content_hash
+            .tracks_xxh128;
+
+        assert_ne!(ha, hb, "changing a keypoint must change the tracks hash");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_embedded_sort_reorders_keypoints_in_lockstep() {
+        // Deliberately unsorted tracks, each keypoint tagged (image+0.25,
+        // point+0.25). After the write-time sort, every row's keypoint must still
+        // match its own (point, image) — proving keypoints are permuted with the
+        // index arrays.
+        let mut d = make_embedded_test_data();
+        let pts = [2u32, 0, 4, 1, 0, 3, 1, 1];
+        let imgs = [0u32, 0, 2, 0, 1, 1, 1, 2];
+        d.point_indexes = Array1::from_vec(pts.to_vec());
+        d.image_indexes = Array1::from_vec(imgs.to_vec());
+        d.observation_counts = Array1::from_vec(vec![2, 3, 1, 1, 1]); // per point 0..4
+        let kp: Vec<f32> = (0..8)
+            .flat_map(|j| [imgs[j] as f32 + 0.25, pts[j] as f32 + 0.25])
+            .collect();
+        d.keypoints_xy = Some(Array2::from_shape_vec((8, 2), kp).unwrap());
+
+        let dir = std::env::temp_dir().join("sfmr_test_kp_reorder");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("u.sfmr");
+        write_sfmr(&path, &mut d).unwrap();
+        let loaded = read_sfmr(&path).unwrap();
+
+        let kp = loaded.keypoints_xy.unwrap();
+        for j in 0..8 {
+            let p = loaded.point_indexes[j] as f32 + 0.25;
+            let i = loaded.image_indexes[j] as f32 + 0.25;
+            assert_eq!(
+                (kp[[j, 0]], kp[[j, 1]]),
+                (i, p),
+                "row {j} keypoint misaligned"
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn test_round_trip_verify() {
         let mut data = make_test_data();
@@ -327,6 +511,66 @@ mod tests {
         assert_eq!(loaded.content_hash.points3d_xxh128.len(), 32);
         assert_eq!(loaded.content_hash.tracks_xxh128.len(), 32);
         assert_eq!(loaded.content_hash.content_xxh128.len(), 32);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_unsupported_future_version_rejected() {
+        use std::io::{Read, Write};
+
+        let mut data = make_test_data();
+        let dir = std::env::temp_dir().join("sfmr_test_future_version");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("v4.sfmr");
+        write_sfmr(&src, &mut data).unwrap();
+
+        // Copy the archive verbatim except for metadata.json.zst, whose version
+        // is bumped to a value this build does not understand.
+        let dst = dir.join("v5.sfmr");
+        let archive_file = std::fs::File::open(&src).unwrap();
+        let mut archive = zip::ZipArchive::new(archive_file).unwrap();
+        let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+        let out = std::fs::File::create(&dst).unwrap();
+        let mut zip = zip::ZipWriter::new(out);
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for name in &names {
+            let mut compressed = Vec::new();
+            archive
+                .by_name(name)
+                .unwrap()
+                .read_to_end(&mut compressed)
+                .unwrap();
+            zip.start_file(name, stored).unwrap();
+            if name == "metadata.json.zst" {
+                let mut json: serde_json::Value =
+                    serde_json::from_slice(&zstd::stream::decode_all(&compressed[..]).unwrap())
+                        .unwrap();
+                json.as_object_mut()
+                    .unwrap()
+                    .insert("version".into(), serde_json::json!(5));
+                let bytes = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
+                zip.write_all(&bytes).unwrap();
+            } else {
+                zip.write_all(&compressed).unwrap();
+            }
+        }
+        zip.finish().unwrap();
+
+        let err = read_sfmr(&dst).err().unwrap();
+        assert!(
+            format!("{err}").contains("unsupported .sfmr format version 5"),
+            "{err}"
+        );
+        let (valid, errors) = verify_sfmr(&dst).unwrap();
+        assert!(
+            !valid
+                && errors
+                    .iter()
+                    .any(|e| e.contains("unsupported .sfmr format version 5")),
+            "{errors:?}"
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -426,7 +670,14 @@ mod tests {
 
         // Full read upgrades version 1 to the current in-memory model.
         let loaded = read_sfmr(&v1_path).unwrap();
-        assert_eq!(loaded.metadata.version, 3);
+        assert_eq!(loaded.metadata.version, 4);
+        // A legacy file upgrades to the sift_files source with its .sift-link
+        // columns present and the embedded columns absent.
+        assert_eq!(loaded.metadata.feature_source, FEATURE_SOURCE_SIFT_FILES);
+        assert!(loaded.feature_indexes.is_some());
+        assert!(loaded.feature_tool_hashes.is_some());
+        assert!(loaded.keypoints_xy.is_none());
+        assert!(loaded.image_file_hashes.is_none());
         assert_eq!(loaded.metadata.point_count, 5);
         assert_eq!(loaded.metadata.infinity_point_count, 0);
         assert_eq!(loaded.positions_xyzw.shape(), &[5, 4]);
@@ -510,6 +761,7 @@ mod tests {
                 sensor_count: None,
                 frame_count: None,
                 world_space_unit: None,
+                feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
             },
             content_hash: ContentHash {
                 metadata_xxh128: String::new(),
@@ -527,8 +779,9 @@ mod tests {
             camera_indexes: Array1::from_vec(vec![]),
             quaternions_wxyz: Array2::zeros((0, 4)),
             translations_xyz: Array2::zeros((0, 3)),
-            feature_tool_hashes: vec![],
-            sift_content_hashes: vec![],
+            feature_tool_hashes: Some(vec![]),
+            sift_content_hashes: Some(vec![]),
+            image_file_hashes: None,
             thumbnails_y_x_rgb: Array4::zeros((0, 128, 128, 3)),
             positions_xyzw: Array2::zeros((0, 4)),
             colors_rgb: Array2::zeros((0, 3)),
@@ -538,7 +791,8 @@ mod tests {
             patch_v_halfvec_xyz: None,
             patch_bitmaps_y_x_rgba: None,
             image_indexes: Array1::from_vec(vec![]),
-            feature_indexes: Array1::from_vec(vec![]),
+            feature_indexes: Some(Array1::from_vec(vec![])),
+            keypoints_xy: None,
             point_indexes: Array1::from_vec(vec![]),
             observation_counts: Array1::from_vec(vec![]),
             depth_statistics: DepthStatistics {
@@ -931,7 +1185,7 @@ mod tests {
         write_sfmr(&path, &mut data).unwrap();
 
         let meta = read_sfmr_metadata(&path).unwrap();
-        assert_eq!(meta.version, 3);
+        assert_eq!(meta.version, 4);
 
         let loaded = read_sfmr(&path).unwrap();
         // Patch arrays are parallel to the points and round-trip exactly.

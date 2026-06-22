@@ -32,7 +32,8 @@ the `tracks/` and `images/` sections:
 | 2D coordinate source | `.sift[feature_indexes[j]]` | `keypoints_xy[j]` directly |
 
 A `sift_files` v4 file is byte-equivalent to a v3 file except for the `version`
-field and the new `feature_source` / `has_keypoints_xy` metadata keys. An
+and `feature_source` keys in the top-level metadata and the new
+`has_feature_indexes` / `has_keypoints_xy` keys in `tracks/metadata.json`. An
 `embedded_patches` file is self-contained — it needs no `.sift` companion.
 
 **Image identity in `embedded_patches`.** A `sift_files` file pins each source image

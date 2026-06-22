@@ -52,6 +52,15 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     let mut metadata: SfmrMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
     let content_hash: ContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
 
+    // Reject versions newer than this build understands; their layout is unknown
+    // so reading with v4 assumptions would misparse silently.
+    if metadata.version > 4 {
+        return Err(SfmrError::InvalidFormat(format!(
+            "unsupported .sfmr format version {} (this build supports up to 4)",
+            metadata.version
+        )));
+    }
+
     let image_count = metadata.image_count as usize;
     let point_count = metadata.point_count as usize;
     let observation_count = metadata.observation_count as usize;
@@ -140,17 +149,48 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     let translations_xyz = Array2::from_shape_vec((image_count, 3), translations_vec)
         .map_err(|e| SfmrError::ShapeMismatch(format!("translations reshape: {e}")))?;
 
-    let feature_tool_hashes = read_uint128_array(
-        &mut archive,
-        &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
-        image_count,
-    )?;
+    // Observation source (version 4+). Legacy v1–v3 files have no key and
+    // `serde(default)` reads them as `sift_files`. Reject any unrecognized value
+    // rather than silently treating it as `sift_files`.
+    match metadata.feature_source.as_str() {
+        FEATURE_SOURCE_SIFT_FILES | FEATURE_SOURCE_EMBEDDED_PATCHES => {}
+        other => {
+            return Err(SfmrError::InvalidFormat(format!(
+                "unknown feature_source {other:?} (expected {FEATURE_SOURCE_SIFT_FILES:?} \
+                 or {FEATURE_SOURCE_EMBEDDED_PATCHES:?})"
+            )));
+        }
+    }
+    // The top-level `feature_source` is the authoritative discriminator for which
+    // per-observation / per-image columns exist (a file is wholly one mode — the
+    // spec's "no mixing"). The `tracks/metadata.json` `has_feature_indexes` /
+    // `has_keypoints_xy` flags mirror it for section-local readers and are
+    // cross-checked in `verify_sfmr`; they intentionally do not gate reading here
+    // the way the independent `points3d` `has_*` flags do.
+    let is_embedded = metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
 
-    let sift_content_hashes = read_uint128_array(
-        &mut archive,
-        &format!("images/sift_content_hashes.{image_count}.uint128.zst"),
-        image_count,
-    )?;
+    // A `sift_files` file links to `.sift` via per-image tool/content hashes; an
+    // `embedded_patches` file substitutes the direct image-bytes hash instead.
+    let (feature_tool_hashes, sift_content_hashes, image_file_hashes) = if is_embedded {
+        let image_file_hashes = read_uint128_array(
+            &mut archive,
+            &format!("images/image_file_hashes.{image_count}.uint128.zst"),
+            image_count,
+        )?;
+        (None, None, Some(image_file_hashes))
+    } else {
+        let feature_tool_hashes = read_uint128_array(
+            &mut archive,
+            &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
+            image_count,
+        )?;
+        let sift_content_hashes = read_uint128_array(
+            &mut archive,
+            &format!("images/sift_content_hashes.{image_count}.uint128.zst"),
+            image_count,
+        )?;
+        (Some(feature_tool_hashes), Some(sift_content_hashes), None)
+    };
 
     // Thumbnails
     let thumbnails_vec: Vec<u8> = read_binary_array(
@@ -301,12 +341,32 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     )?;
     let image_indexes = Array1::from_vec(image_indexes_vec);
 
-    let feature_indexes_vec: Vec<u32> = read_binary_array(
-        &mut archive,
-        &format!("tracks/feature_indexes.{observation_count}.uint32.zst"),
-        observation_count,
-    )?;
-    let feature_indexes = Array1::from_vec(feature_indexes_vec);
+    // A `sift_files` file references `.sift` features by index; an
+    // `embedded_patches` file carries the sub-pixel `(u, v)` coordinate inline.
+    let (feature_indexes, keypoints_xy) = if is_embedded {
+        let kp_vec: Vec<f32> = read_binary_array(
+            &mut archive,
+            &format!("tracks/keypoints_xy.{observation_count}.2.float32.zst"),
+            observation_count * 2,
+        )?;
+        let keypoints_xy = Array2::from_shape_vec((observation_count, 2), kp_vec)
+            .map_err(|e| SfmrError::ShapeMismatch(format!("keypoints_xy reshape: {e}")))?;
+        validate_keypoints(
+            &keypoints_xy,
+            image_indexes.as_slice().unwrap(),
+            camera_indexes.as_slice().unwrap(),
+            &cameras,
+        )
+        .map_err(SfmrError::InvalidFormat)?;
+        (None, Some(keypoints_xy))
+    } else {
+        let feature_indexes_vec: Vec<u32> = read_binary_array(
+            &mut archive,
+            &format!("tracks/feature_indexes.{observation_count}.uint32.zst"),
+            observation_count,
+        )?;
+        (Some(Array1::from_vec(feature_indexes_vec)), None)
+    };
 
     // Version 1 named this array `points3d_indexes`; version 2 renames it to
     // `point_indexes`.
@@ -407,11 +467,12 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         None
     };
 
-    // Upgrade older metadata to the current (version 3) in-memory model: the
+    // Upgrade older metadata to the current (version 4) in-memory model: the
     // in-memory data is always the latest version. Recompute
     // `infinity_point_count` from the `w` column so it is correct regardless of
-    // the source version (version 1 has none).
-    metadata.version = 3;
+    // the source version (version 1 has none). `feature_source` already defaulted
+    // to `sift_files` for pre-v4 files on deserialization.
+    metadata.version = 4;
     metadata.infinity_point_count = (0..point_count)
         .filter(|&i| positions_xyzw[[i, 3]] == 0.0)
         .count() as u32;
@@ -431,6 +492,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         translations_xyz,
         feature_tool_hashes,
         sift_content_hashes,
+        image_file_hashes,
         thumbnails_y_x_rgb,
         positions_xyzw,
         colors_rgb,
@@ -441,6 +503,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         patch_bitmaps_y_x_rgba,
         image_indexes,
         feature_indexes,
+        keypoints_xy,
         point_indexes,
         observation_counts,
         depth_statistics,

@@ -16,6 +16,7 @@ use ndarray::{Array2, Array4};
 use sfmr_format::{
     resolve_workspace_dir, ContentHash, DepthStatistics, FramesMetadata, ImageDepthStats,
     ObservedDepthStats, RigFrameData, SfmrCamera, SfmrData, SfmrError, SfmrMetadata,
+    FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES,
 };
 
 use crate::camera_intrinsics::CameraIntrinsics;
@@ -478,6 +479,25 @@ impl SfmrReconstruction {
 
     /// Convert from the raw columnar I/O representation.
     pub fn from_sfmr_data(data: SfmrData) -> Result<Self, SfmrError> {
+        // The geometric `SfmrReconstruction` models SIFT-referenced observations
+        // (per-image tool/content hashes, per-observation feature index). An
+        // `embedded_patches` file carries inline keypoints instead and has no
+        // `.sift` linkage, which this type does not yet represent.
+        if data.metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES {
+            return Err(SfmrError::InvalidFormat(
+                "SfmrReconstruction does not yet support embedded_patches .sfmr files".into(),
+            ));
+        }
+        let feature_tool_hashes = data.feature_tool_hashes.as_ref().ok_or_else(|| {
+            SfmrError::InvalidFormat("sift_files file missing feature_tool_hashes".into())
+        })?;
+        let sift_content_hashes = data.sift_content_hashes.as_ref().ok_or_else(|| {
+            SfmrError::InvalidFormat("sift_files file missing sift_content_hashes".into())
+        })?;
+        let feature_indexes = data.feature_indexes.as_ref().ok_or_else(|| {
+            SfmrError::InvalidFormat("sift_files file missing feature_indexes".into())
+        })?;
+
         let image_count = data.metadata.image_count as usize;
         let point_count = data.metadata.point_count as usize;
         let observation_count = data.metadata.observation_count as usize;
@@ -502,8 +522,8 @@ impl SfmrReconstruction {
                 camera_index: data.camera_indexes[i],
                 quaternion_wxyz: quaternion,
                 translation_xyz: Vector3::new(tx, ty, tz),
-                feature_tool_hash: data.feature_tool_hashes[i],
-                sift_content_hash: data.sift_content_hashes[i],
+                feature_tool_hash: feature_tool_hashes[i],
+                sift_content_hash: sift_content_hashes[i],
             });
         }
 
@@ -549,7 +569,7 @@ impl SfmrReconstruction {
         for i in 0..observation_count {
             tracks.push(TrackObservation {
                 image_index: data.image_indexes[i],
-                feature_index: data.feature_indexes[i],
+                feature_index: feature_indexes[i],
                 point_index: data.point_indexes[i],
             });
         }
@@ -730,15 +750,17 @@ impl SfmrReconstruction {
             camera_indexes,
             quaternions_wxyz,
             translations_xyz,
-            feature_tool_hashes,
-            sift_content_hashes,
+            feature_tool_hashes: Some(feature_tool_hashes),
+            sift_content_hashes: Some(sift_content_hashes),
+            image_file_hashes: None,
             thumbnails_y_x_rgb: self.thumbnails_y_x_rgb.clone(),
             positions_xyzw,
             colors_rgb,
             reprojection_errors,
             normals_xyz,
             image_indexes,
-            feature_indexes,
+            feature_indexes: Some(feature_indexes),
+            keypoints_xy: None,
             point_indexes,
             observation_counts,
             depth_statistics: self.depth_statistics.clone(),
@@ -896,6 +918,7 @@ impl SfmrReconstruction {
             sensor_count: None,
             frame_count: None,
             world_space_unit: None,
+            feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
         };
 
         let observation_offsets = compute_observation_offsets(&observation_counts);
