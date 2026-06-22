@@ -23,8 +23,8 @@ use nalgebra::{Point3, Vector3};
 use sfmtool_core::camera::remap::{
     remap_aniso_with_pyramid, remap_bilinear, sample_bilinear_u8, ImageU8, ImageU8Pyramid,
 };
-use sfmtool_core::camera::warp_map::WarpMap;
-use sfmtool_core::geometry::rigid_transform::RigidTransform;
+use sfmtool_core::camera::WarpMap;
+use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::patch::normal_refine::{
     refine_patch_normal, NormalRefineParams, ProjectedImage, Sampler,

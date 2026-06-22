@@ -25,7 +25,7 @@ use super::{
     consensus_phi, repose_patch, LevelContext, NormalRefineParams, Objective, ProjectedImage,
 };
 use crate::camera::remap::remap_bilinear;
-use crate::camera::warp_map::WarpMap;
+use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
 
 /// Replicate-padded border (base pixels) around each fronto base. A tilted

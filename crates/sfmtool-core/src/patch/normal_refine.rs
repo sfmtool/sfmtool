@@ -13,10 +13,10 @@
 use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
 
-use crate::camera::intrinsics::CameraIntrinsics;
 use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, ImageU8Pyramid};
-use crate::camera::warp_map::WarpMap;
-use crate::geometry::rigid_transform::RigidTransform;
+use crate::camera::CameraIntrinsics;
+use crate::camera::WarpMap;
+use crate::geometry::RigidTransform;
 use crate::patch::cloud::{mean_viewing_normal, OrientedPatch, PatchCloud};
 use crate::reconstruction::SfmrReconstruction;
 
@@ -1739,7 +1739,7 @@ impl PatchViewStack {
 /// Batch [`refine_patch_normal`] over a [`PatchCloud`], parallel across
 /// patches (rayon). `patch_views[i]` lists, for patch `i`, the indices into
 /// `views` of the cameras observing it (see
-/// [`patch_view_indices_from_reconstruction`]). Each patch is replaced with
+/// [`view_indices_from_reconstruction`]). Each patch is replaced with
 /// its refined copy; the per-patch results are returned in order.
 ///
 /// # Panics
@@ -1786,7 +1786,7 @@ pub fn refine_patch_cloud(
 /// # Panics
 ///
 /// Panics if `cloud.point_ids` is not parallel to its patches.
-pub fn patch_view_indices_from_reconstruction(
+pub fn view_indices_from_reconstruction(
     recon: &SfmrReconstruction,
     cloud: &PatchCloud,
 ) -> Vec<Vec<u32>> {

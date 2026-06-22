@@ -36,7 +36,7 @@
 
 use rayon::prelude::*;
 
-use crate::camera::intrinsics::{CameraIntrinsics, CameraIntrinsicsError, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraIntrinsicsError, CameraModel};
 
 /// Maximum iterations for iterative undistortion.
 const UNDISTORT_MAX_ITER: usize = 100;

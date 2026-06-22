@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use sfmtool_core::camera::intrinsics::CameraIntrinsics;
+use sfmtool_core::camera::CameraIntrinsics;
 
 use super::gpu_types::BgDistortedVertex;
 

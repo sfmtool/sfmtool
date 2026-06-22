@@ -12,9 +12,9 @@ use std::f64::consts::PI;
 use nalgebra::Vector3;
 
 use super::*;
-use crate::camera::intrinsics::{CameraIntrinsics, CameraModel};
 use crate::camera::remap::ImageU8;
-use crate::geometry::rot_quaternion::RotQuaternion;
+use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::geometry::RotQuaternion;
 use crate::spherical::per_tile_source_stack::{BuildParams, PerSphericalTileSourceStack};
 use crate::spherical::photometric_ransac::refine_photometric_ransac;
 use crate::spherical::sphere_points::RelaxConfig;

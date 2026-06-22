@@ -23,10 +23,10 @@
 use nalgebra::Vector3;
 use rayon::prelude::*;
 
-use crate::camera::intrinsics::{CameraIntrinsics, CameraModel};
-use crate::camera::warp_map::WarpMap;
-use crate::geometry::rot_quaternion::RotQuaternion;
-use crate::geometry::se3_transform::Se3Transform;
+use crate::camera::WarpMap;
+use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::geometry::RotQuaternion;
+use crate::geometry::Se3Transform;
 use crate::spatial::PointCloud3;
 use crate::spherical::sphere_points::{
     evenly_distributed_sphere_points, random_sphere_points, RelaxConfig,

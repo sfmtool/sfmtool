@@ -13,9 +13,9 @@
 use nalgebra::{Matrix3, Vector3};
 use rayon::prelude::*;
 
-use crate::camera::intrinsics::CameraIntrinsics;
-use crate::geometry::rigid_transform::RigidTransform;
-use crate::geometry::rot_quaternion::RotQuaternion;
+use crate::camera::CameraIntrinsics;
+use crate::geometry::RigidTransform;
+use crate::geometry::RotQuaternion;
 use crate::patch::cloud::OrientedPatch;
 
 /// A dense pixel-to-pixel warp map from a destination image to a source image.
@@ -79,7 +79,7 @@ impl WarpMap {
     /// corresponding location in `src_camera`.
     ///
     /// For each destination pixel center `(col + 0.5, row + 0.5)`:
-    /// - If either camera [`needs_ray_path`](crate::camera::intrinsics::CameraModel::needs_ray_path)
+    /// - If either camera [`needs_ray_path`](crate::camera::CameraModel::needs_ray_path)
     ///   (fisheye or equirectangular), the ray-based path is used:
     ///   `dst_camera.pixel_to_ray()` then `src_camera.ray_to_pixel()`.
     /// - Otherwise both cameras are perspective and the image-plane path is

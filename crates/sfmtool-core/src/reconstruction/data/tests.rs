@@ -1,3 +1,5 @@
+use sfmr_format::{RigFrameData, FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES};
+
 use super::*;
 
 #[test]
@@ -229,7 +231,7 @@ fn test_filter_points_keeps_embedded_keypoints_parallel() {
 
 #[test]
 fn test_se3_transform_preserves_embedded_columns() {
-    use crate::geometry::rot_quaternion::RotQuaternion;
+    use crate::geometry::RotQuaternion;
     use crate::Se3Transform;
     use nalgebra::{UnitQuaternion, Vector3};
 

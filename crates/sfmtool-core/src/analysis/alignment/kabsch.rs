@@ -8,8 +8,8 @@
 
 use nalgebra::{Matrix3, Vector3};
 
-use crate::geometry::rot_quaternion::RotQuaternion;
-use crate::geometry::se3_transform::Se3Transform;
+use crate::geometry::RotQuaternion;
+use crate::geometry::Se3Transform;
 
 /// Compute the optimal rotation, translation, and scale to align source points
 /// to target points using the Kabsch algorithm.

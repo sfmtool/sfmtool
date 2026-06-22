@@ -391,7 +391,7 @@ impl PySfmrReconstruction {
         // The patch center for each point is the point's own position.
         let centers: Vec<Point3<f64>> = self.inner.points.iter().map(|p| p.position).collect();
         Some(crate::py_patch_cloud::PyPatchCloud {
-            inner: sfmtool_core::patch::cloud::PatchCloud::from_halfvec_arrays(u, v, &centers),
+            inner: sfmtool_core::patch::PatchCloud::from_halfvec_arrays(u, v, &centers),
         })
     }
 
