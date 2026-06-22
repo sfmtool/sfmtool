@@ -205,7 +205,7 @@ fn test_intersection_volume_identical() {
 // Distorted frustum grid tests
 // -----------------------------------------------------------------------
 
-use crate::camera::intrinsics::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel};
 
 #[test]
 fn distorted_grid_pinhole_matches_corners() {

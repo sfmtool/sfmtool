@@ -20,9 +20,9 @@
 //! *global* tile index via [`RansacPhotometricParams::tile_index_base`], and
 //! every other per-tile reduction in the chain is order-independent.
 
-use crate::camera::intrinsics::CameraIntrinsics;
 use crate::camera::remap::ImageU8;
-use crate::geometry::rot_quaternion::RotQuaternion;
+use crate::camera::CameraIntrinsics;
+use crate::geometry::RotQuaternion;
 use crate::spherical::per_tile_source_stack::{
     BuildError, BuildParams, ConsensusAtlasError, PatchPixel, PerSphericalTileSourceStack,
 };

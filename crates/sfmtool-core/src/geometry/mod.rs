@@ -9,3 +9,7 @@ pub mod rotation;
 pub mod se3_transform;
 pub mod transform;
 pub mod viewing_angle;
+
+pub use rigid_transform::RigidTransform;
+pub use rot_quaternion::RotQuaternion;
+pub use se3_transform::Se3Transform;

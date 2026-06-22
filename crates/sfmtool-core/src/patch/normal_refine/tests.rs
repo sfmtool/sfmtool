@@ -2,8 +2,8 @@ use approx::assert_relative_eq;
 use nalgebra::{Point3, Vector3};
 
 use super::*;
-use crate::camera::intrinsics::CameraModel;
 use crate::camera::remap::ImageU8;
+use crate::camera::CameraModel;
 
 /// Helper: build a simple pinhole camera.
 fn pinhole(width: u32, height: u32, focal: f64) -> CameraIntrinsics {

@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::camera::intrinsics::CameraIntrinsics;
+use crate::camera::CameraIntrinsics;
 use nalgebra::{Matrix3, Vector3};
 use rand::RngExt;
 

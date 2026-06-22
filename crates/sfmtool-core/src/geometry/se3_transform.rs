@@ -8,8 +8,8 @@
 
 use nalgebra::{Point3, Vector3};
 
-use crate::geometry::rigid_transform::RigidTransform;
-use crate::geometry::rot_quaternion::RotQuaternion;
+use crate::geometry::RigidTransform;
+use crate::geometry::RotQuaternion;
 
 /// SE(3) similarity transformation: rotation, translation, and uniform scale.
 ///

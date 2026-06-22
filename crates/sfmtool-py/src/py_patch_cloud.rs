@@ -10,11 +10,11 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::camera::remap::ImageU8Pyramid;
-use sfmtool_core::geometry::rigid_transform::RigidTransform;
+use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::{OrientedPatch, PatchCloud, PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::normal_refine::{
-    patch_view_indices_from_reconstruction, refine_patch_cloud, CacheMode, NormalRefineParams,
-    Objective, PatchWindow, ProjectedImage, Sampler,
+    refine_patch_cloud, view_indices_from_reconstruction, CacheMode, NormalRefineParams, Objective,
+    PatchWindow, ProjectedImage, Sampler,
 };
 
 use crate::py_rigid_transform::PyRigidTransform;
@@ -476,7 +476,7 @@ impl PyPatchCloud {
                 }
                 views
             }
-            None => patch_view_indices_from_reconstruction(recon, &self.inner),
+            None => view_indices_from_reconstruction(recon, &self.inner),
         };
         // Optional subset: refine only patches whose point id is listed. Cleared
         // view-lists make `refine_patch_normal` skip a patch immediately (it sees

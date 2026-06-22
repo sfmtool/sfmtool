@@ -3,10 +3,10 @@
 **Status:** Builds on `specs/core/patch-cloud.md`
 (`OrientedPatch`, `WarpMap::from_patch`, `remap_*`).
 
-> _Status (2026-06-12): v1 implemented — `sfmtool-core/src/patch_normal_refine.rs`
+> _Status (2026-06-12): v1 implemented — `sfmtool-core/src/patch/normal_refine.rs`
 > (`ProjectedImage`, `Objective`, `PatchWindow`, `NormalRefineParams`,
 > `NormalRefineResult`, `refine_patch_normal`, `refine_patch_cloud`,
-> `patch_view_indices_from_reconstruction`) and the PyO3 binding
+> `view_indices_from_reconstruction`) and the PyO3 binding
 > `PatchCloud.refine_normals`. Deferred from v1: the analytic Gauss-Newton polish
 > and its centered-Hessian confidence (v1 uses a finite-difference grid-curvature
 > confidence and does not yet gate on a confidence threshold to keep the init

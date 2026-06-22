@@ -8,6 +8,14 @@
 //! types, accessors, and file I/O. These are inherent methods on
 //! `SfmrReconstruction`, so callers are unaffected by the move.
 
+use std::collections::HashMap;
+
+use nalgebra::Point3;
+use ndarray::Array4;
+
+use sfmr_format::{DepthStatistics, FramesMetadata, ImageDepthStats, RigFrameData};
+
+use super::data::{compute_observation_offsets, count_points_at_infinity};
 use super::*;
 
 /// Select rows `idx` (along the point axis) of an optional per-point patch
@@ -34,7 +42,7 @@ impl SfmrReconstruction {
     /// Transforms all 3D point positions and camera poses. Returns a new
     /// reconstruction with the transformed data; `self` is not modified.
     pub fn apply_se3_transform(&self, transform: &crate::Se3Transform) -> Self {
-        use crate::geometry::rot_quaternion::RotQuaternion;
+        use crate::geometry::RotQuaternion;
 
         // Transform 3D points. A finite point gets the full similarity; a
         // point at infinity is a direction, so only the rotation acts on it
@@ -614,7 +622,7 @@ fn subset_rig_frame_data(rf: &RigFrameData, image_indices: &[u32]) -> RigFrameDa
 #[cfg(test)]
 mod patch_frame_tests {
     use super::*;
-    use crate::geometry::rot_quaternion::RotQuaternion;
+    use crate::geometry::RotQuaternion;
     use crate::Se3Transform;
     use nalgebra::{UnitQuaternion, Vector3 as V3};
     use ndarray::{Array2, Array4};

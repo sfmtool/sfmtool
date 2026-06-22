@@ -23,7 +23,7 @@ use nalgebra::{Matrix3, Quaternion, Rotation3, UnitQuaternion};
 use ndarray::Array2;
 use sfmr_format::SfmrCamera;
 
-use crate::camera::intrinsics::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel};
 
 use super::{SphericalTileRig, SphericalTileRigError, SphericalTileRigParts};
 
