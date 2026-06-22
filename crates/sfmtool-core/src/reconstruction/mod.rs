@@ -21,6 +21,11 @@ use sfmr_format::{
 use crate::camera_intrinsics::CameraIntrinsics;
 
 mod edit;
+pub mod filter;
+pub mod image_pair_graph;
+pub mod point_correspondence;
+pub mod point_inspect;
+pub mod triangulation;
 
 /// Errors from reconstruction operations that require external data.
 #[derive(Debug)]
