@@ -27,7 +27,9 @@ use super::convert::{
     DEFAULT_INVERSE_DEPTH_Z_CUTOFF,
 };
 use crate::features::feature_match::descriptor::descriptor_distance_l2_squared;
-use crate::reconstruction::{Point3D, ReconstructionError, SfmrReconstruction, TrackObservation};
+use crate::reconstruction::{
+    ObservationSource, Point3D, ReconstructionError, SfmrReconstruction, TrackObservation,
+};
 
 /// Parameters governing the points-at-infinity search.
 #[derive(Debug, Clone, Copy)]
@@ -366,6 +368,17 @@ impl SfmrReconstruction {
         max_features: Option<usize>,
         noise_floor_px: f64,
     ) -> Result<Self, ReconstructionError> {
+        // Discovery un-projects keypoints read from per-image `.sift` files and
+        // appends new sift_files observations, so it only applies to a
+        // sift_files reconstruction. Refuse embedded_patches up front rather
+        // than failing obscurely at the first `.sift` read.
+        if self.feature_indexes().is_none() {
+            return Err(ReconstructionError::Unsupported(format!(
+                "find_points_at_infinity is not supported for {} reconstructions",
+                self.feature_source()
+            )));
+        }
+
         // Un-project every keypoint in every image to a world-space direction.
         let read_count = max_features.unwrap_or(usize::MAX);
         let mut dirs: Vec<Vector3<f64>> = Vec::new();
@@ -490,12 +503,21 @@ impl SfmrReconstruction {
                 error: 0.0,
                 normal: Vector3::zeros(),
             });
-            for (img, feat) in &track.members {
+            for (img, _feat) in &track.members {
                 recon.tracks.push(TrackObservation {
                     image_index: *img,
-                    feature_index: *feat,
                     point_index: new_point_id,
                 });
+            }
+            // Infinity discovery runs on sift_files reconstructions; append the
+            // new observations' feature indices to the parallel column.
+            if let ObservationSource::SiftFiles {
+                feature_indexes, ..
+            } = &mut recon.observations
+            {
+                for (_img, feat) in &track.members {
+                    feature_indexes.push(*feat);
+                }
             }
             recon.observation_counts.push(track.members.len() as u32);
         }

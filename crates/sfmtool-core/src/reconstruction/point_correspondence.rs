@@ -134,11 +134,30 @@ pub struct MergedPointsAndTracks {
 ///   the same physical 3D point.
 /// * `reverse_image_mapping` — Per-reconstruction mapping from old image index
 ///   to merged image index.
+///
+/// # Errors
+/// Returns an error if any input reconstruction is `embedded_patches`. Merge
+/// keys observations on `(image, feature_index)` identity, which an
+/// `embedded_patches` reconstruction has no feature index to provide; merging
+/// those is not supported.
 pub fn merge_points_and_tracks(
     reconstructions: &[&SfmrReconstruction],
     correspondence_groups: &[Vec<(usize, u32)>],
     reverse_image_mapping: &[HashMap<u32, u32>],
-) -> MergedPointsAndTracks {
+) -> Result<MergedPointsAndTracks, String> {
+    // Merge identity is `(image, feature_index)`, a sift_files notion. Refuse
+    // embedded_patches up front rather than silently substituting a placeholder
+    // feature index (which would collapse distinct observations in an image).
+    for (i, recon) in reconstructions.iter().enumerate() {
+        if recon.feature_indexes().is_none() {
+            return Err(format!(
+                "merge_points_and_tracks is not supported for embedded_patches \
+                 reconstructions (reconstruction {i} is {})",
+                recon.feature_source()
+            ));
+        }
+    }
+
     struct TempPoint {
         position: [f64; 3],
         color: [f64; 3],
@@ -154,10 +173,19 @@ pub fn merge_points_and_tracks(
     let collect_observations = |recon_idx: usize, point_id: u32| -> HashSet<(u32, u32)> {
         let recon = reconstructions[recon_idx];
         let mapping = &reverse_image_mapping[recon_idx];
+        // sift_files-only: guaranteed `Some` by the embedded_patches check above.
+        let feature_indexes = recon
+            .feature_indexes()
+            .expect("embedded_patches rejected above");
+        let start = recon.observation_offsets[point_id as usize];
         let mut obs = HashSet::new();
-        for track in recon.observations_for_point(point_id as usize) {
+        for (k, track) in recon
+            .observations_for_point(point_id as usize)
+            .iter()
+            .enumerate()
+        {
             if let Some(&merged_img_idx) = mapping.get(&track.image_index) {
-                obs.insert((merged_img_idx, track.feature_index));
+                obs.insert((merged_img_idx, feature_indexes[start + k]));
             }
         }
         obs
@@ -304,7 +332,7 @@ pub fn merge_points_and_tracks(
         }
     }
 
-    result
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -445,5 +473,30 @@ mod tests {
         );
 
         assert!(result.source_ids.is_empty());
+    }
+
+    #[test]
+    fn test_merge_rejects_embedded_patches() {
+        use crate::reconstruction::ObservationSource;
+
+        // Merge keys on (image, feature_index), which embedded_patches lacks, so
+        // the guard must refuse it up front rather than substitute a placeholder.
+        let mut recon = SfmrReconstruction::demo(2);
+        let n_obs = recon.tracks.len();
+        let n_img = recon.images.len();
+        recon.observations = ObservationSource::EmbeddedPatches {
+            keypoints_xy: ndarray::Array2::zeros((n_obs, 2)),
+            image_file_hashes: vec![[0u8; 16]; n_img],
+        };
+
+        let mapping = vec![HashMap::new()];
+        // (MergedPointsAndTracks is not Debug, so match rather than expect_err.)
+        let Err(err) = merge_points_and_tracks(&[&recon], &[], &mapping) else {
+            panic!("merge must reject embedded_patches");
+        };
+        assert!(
+            err.contains("embedded_patches"),
+            "unexpected error message: {err}"
+        );
     }
 }

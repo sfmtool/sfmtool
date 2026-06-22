@@ -234,16 +234,23 @@ impl PatchCloud {
             let img_scales: Vec<Option<Vec<f64>>> = (0..recon.images.len())
                 .map(|i| read_image_scales(recon, i))
                 .collect();
+            // Feature scales index `.sift` files, so this sizing applies to
+            // sift_files reconstructions; an embedded_patches recon has no scales
+            // and falls through to the "no readable scale" error below.
+            let feature_indexes = recon.feature_indexes();
             let mut halves = vec![f64::NAN; finite.len()];
             for (fi, &p) in finite.iter().enumerate() {
                 let center = recon.points[p].position;
-                let obs =
-                    &recon.tracks[recon.observation_offsets[p]..recon.observation_offsets[p + 1]];
+                let start = recon.observation_offsets[p];
+                let obs = &recon.tracks[start..recon.observation_offsets[p + 1]];
                 let mut sizes: Vec<f64> = Vec::new();
-                for o in obs {
+                for (k, o) in obs.iter().enumerate() {
                     let im = &recon.images[o.image_index as usize];
+                    let Some(feature_index) = feature_indexes.map(|f| f[start + k]) else {
+                        continue;
+                    };
                     if let Some(Some(scales)) = img_scales.get(o.image_index as usize) {
-                        if let Some(&sigma) = scales.get(o.feature_index as usize) {
+                        if let Some(&sigma) = scales.get(feature_index as usize) {
                             let d =
                                 (im.quaternion_wxyz * center.coords + im.translation_xyz).norm();
                             if d > 1e-6 {

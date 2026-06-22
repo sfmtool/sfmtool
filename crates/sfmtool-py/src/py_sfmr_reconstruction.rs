@@ -237,28 +237,54 @@ impl PySfmrReconstruction {
         PyArray2::from_vec2(py, &vec2).unwrap()
     }
 
-    /// Feature tool hashes as `list[bytes]` (16 bytes each).
+    /// Per-image feature tool hashes as ``list[bytes]`` (16 bytes each), or
+    /// ``None`` unless :attr:`feature_source` is ``"sift_files"`` (an
+    /// ``embedded_patches`` reconstruction has no `.sift` link).
     #[getter]
-    fn feature_tool_hashes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let hashes: Vec<[u8; 16]> = self
-            .inner
-            .images
-            .iter()
-            .map(|im| im.feature_tool_hash)
-            .collect();
-        u128_bytes_to_py(py, &hashes)
+    fn feature_tool_hashes<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyList>>> {
+        self.inner
+            .feature_tool_hashes()
+            .map(|h| u128_bytes_to_py(py, h))
+            .transpose()
     }
 
-    /// SIFT content hashes as `list[bytes]` (16 bytes each).
+    /// Per-image SIFT content hashes as ``list[bytes]`` (16 bytes each), or
+    /// ``None`` unless :attr:`feature_source` is ``"sift_files"``.
     #[getter]
-    fn sift_content_hashes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let hashes: Vec<[u8; 16]> = self
-            .inner
-            .images
-            .iter()
-            .map(|im| im.sift_content_hash)
-            .collect();
-        u128_bytes_to_py(py, &hashes)
+    fn sift_content_hashes<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyList>>> {
+        self.inner
+            .sift_content_hashes()
+            .map(|h| u128_bytes_to_py(py, h))
+            .transpose()
+    }
+
+    /// Observation source: ``"sift_files"`` (observations reference ``.sift``
+    /// features) or ``"embedded_patches"`` (per-observation keypoints stored
+    /// inline). See ``specs/formats/sfmr-v4-patch-keypoints.md``.
+    #[getter]
+    fn feature_source(&self) -> &str {
+        self.inner.feature_source()
+    }
+
+    /// Per-observation sub-pixel keypoints ``(K, 2)`` (image-space ``(u, v)``),
+    /// parallel to the track arrays. ``None`` unless :attr:`feature_source` is
+    /// ``"embedded_patches"``.
+    #[getter]
+    fn keypoints_xy<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray2<f32>>> {
+        self.inner
+            .keypoints_xy()
+            .map(|kp| kp.clone().into_pyarray(py))
+    }
+
+    /// Per-image source-image hashes as ``list[bytes]`` (16-byte XXH128 each), or
+    /// ``None`` unless :attr:`feature_source` is ``"embedded_patches"``. The same
+    /// value the image's ``.sift`` records as ``image_file_xxh128``.
+    #[getter]
+    fn image_file_hashes<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyList>>> {
+        self.inner
+            .image_file_hashes()
+            .map(|h| u128_bytes_to_py(py, h))
+            .transpose()
     }
 
     // ── Point data array getters ─────────────────────────────────────
@@ -388,11 +414,14 @@ impl PySfmrReconstruction {
         PyArray1::from_vec(py, vec)
     }
 
-    /// Feature indexes for track observations, shape `(K,)`.
+    /// Feature indexes for track observations, shape `(K,)`, or ``None`` unless
+    /// :attr:`feature_source` is ``"sift_files"`` (an ``embedded_patches``
+    /// reconstruction has none; use :attr:`keypoints_xy` instead).
     #[getter]
-    fn track_feature_indexes<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
-        let vec: Vec<u32> = self.inner.tracks.iter().map(|t| t.feature_index).collect();
-        PyArray1::from_vec(py, vec)
+    fn track_feature_indexes<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u32>>> {
+        self.inner
+            .feature_indexes()
+            .map(|f| PyArray1::from_vec(py, f.to_vec()))
     }
 
     /// 3D point indexes for track observations, shape `(K,)`.
@@ -831,7 +860,15 @@ impl PySfmrReconstruction {
     /// the patch frame, so pass ``patches`` too unless one is already attached),
     /// ``image_names``, ``camera_indexes``, ``cameras``,
     /// ``feature_tool_hashes``, ``sift_content_hashes``, ``thumbnails_y_x_rgb``,
-    /// ``rig_frame_data``, ``world_space_unit``.
+    /// ``rig_frame_data``, ``world_space_unit``, ``feature_source``,
+    /// ``keypoints_xy`` (a ``(K, 2)`` float32 array or ``None``),
+    /// ``image_file_hashes`` (a ``list[bytes]`` or ``None``). To produce an
+    /// ``embedded_patches`` reconstruction, set ``feature_source``,
+    /// ``keypoints_xy``, and ``image_file_hashes`` together.
+    ///
+    /// When the track arrays are replaced, ``observation_counts`` is recomputed
+    /// from the new tracks (which must stay grouped by point), so an
+    /// ``observation_counts`` value passed in the same call is ignored.
     #[pyo3(signature = (**kwargs))]
     fn clone_with_changes(
         &self,

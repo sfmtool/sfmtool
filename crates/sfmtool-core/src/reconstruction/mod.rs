@@ -33,6 +33,9 @@ pub mod triangulation;
 pub enum ReconstructionError {
     /// Failed to read a `.sift` file.
     SiftRead { path: PathBuf, source: String },
+    /// The operation is not supported for this reconstruction's feature source
+    /// (e.g. a `.sift`-dependent step run on an `embedded_patches` recon).
+    Unsupported(String),
 }
 
 impl std::fmt::Display for ReconstructionError {
@@ -46,6 +49,7 @@ impl std::fmt::Display for ReconstructionError {
                     source
                 )
             }
+            ReconstructionError::Unsupported(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -93,10 +97,6 @@ pub struct SfmrImage {
     pub quaternion_wxyz: UnitQuaternion<f64>,
     /// World-to-camera translation vector.
     pub translation_xyz: Vector3<f64>,
-    /// XXH128 hash identifying the feature extraction tool.
-    pub feature_tool_hash: [u8; 16],
-    /// XXH128 hash of the `.sift` file content.
-    pub sift_content_hash: [u8; 16],
 }
 
 impl SfmrImage {
@@ -129,15 +129,53 @@ impl SfmrImage {
     }
 }
 
-/// A single track observation linking a 2D feature to a 3D point.
+/// A single track observation linking an image to a 3D point.
+///
+/// The mode-specific 2D pixel — a `.sift` feature index (`sift_files`) or an
+/// inline keypoint (`embedded_patches`) — lives in
+/// [`SfmrReconstruction::observations`], a column parallel to the track array,
+/// rather than in this struct (so neither mode pays for the other's field).
 #[derive(Debug, Clone, Copy)]
 pub struct TrackObservation {
     /// Index into the images array.
     pub image_index: u32,
-    /// Index into the feature file for the corresponding image.
-    pub feature_index: u32,
     /// Index into the points array.
     pub point_index: u32,
+}
+
+/// The observation-source-specific columns of a reconstruction, selected once at
+/// the array level (the file is wholly one mode — see
+/// `specs/formats/sfmr-v4-patch-keypoints.md`). Each variant owns exactly its
+/// mode's per-observation and per-image data, so neither carries placeholders
+/// for the other.
+#[derive(Debug, Clone)]
+pub enum ObservationSource {
+    /// Observations reference external `.sift` features.
+    SiftFiles {
+        /// `(M,)` feature index per observation, parallel to `tracks`.
+        feature_indexes: Vec<u32>,
+        /// XXH128 of the feature-extraction tool config, per image.
+        feature_tool_hashes: Vec<[u8; 16]>,
+        /// XXH128 of the `.sift` file content, per image.
+        sift_content_hashes: Vec<[u8; 16]>,
+    },
+    /// Per-observation keypoints stored inline (no `.sift` companion).
+    EmbeddedPatches {
+        /// `(M, 2)` sub-pixel `(u, v)` per observation, parallel to `tracks`.
+        keypoints_xy: Array2<f32>,
+        /// XXH128 of the source image bytes, per image.
+        image_file_hashes: Vec<[u8; 16]>,
+    },
+}
+
+impl ObservationSource {
+    /// The `feature_source` discriminator string for this variant.
+    pub fn name(&self) -> &'static str {
+        match self {
+            ObservationSource::SiftFiles { .. } => FEATURE_SOURCE_SIFT_FILES,
+            ObservationSource::EmbeddedPatches { .. } => FEATURE_SOURCE_EMBEDDED_PATCHES,
+        }
+    }
 }
 
 /// A full SfM reconstruction with all `.sfmr` data in ergonomic Rust types.
@@ -185,6 +223,10 @@ pub struct SfmrReconstruction {
     /// is neither built nor written. `true` for everything loaded from versions 1
     /// and 2.
     pub has_normals: bool,
+    /// The observation-source-specific columns (per-observation feature index or
+    /// keypoint, per-image hashes), selected by variant. The feature→point maps
+    /// below are meaningful only for [`ObservationSource::SiftFiles`].
+    pub observations: ObservationSource,
 
     // --- Derived data (computed from the fields above, not stored in .sfmr) ---
     /// Prefix sum of `observation_counts`: `observation_offsets[i]` is the
@@ -233,6 +275,121 @@ impl SfmrReconstruction {
     pub fn save(&self, path: &Path) -> Result<(), SfmrError> {
         let mut data = self.to_sfmr_data();
         sfmr_format::write_sfmr(path, &mut data)
+    }
+
+    /// The `feature_source` discriminator (`"sift_files"` / `"embedded_patches"`).
+    pub fn feature_source(&self) -> &str {
+        self.observations.name()
+    }
+
+    /// Per-observation feature indexes (parallel to `tracks`), or `None` for an
+    /// `embedded_patches` reconstruction.
+    pub fn feature_indexes(&self) -> Option<&[u32]> {
+        match &self.observations {
+            ObservationSource::SiftFiles {
+                feature_indexes, ..
+            } => Some(feature_indexes),
+            ObservationSource::EmbeddedPatches { .. } => None,
+        }
+    }
+
+    /// Per-observation sub-pixel keypoints `(M, 2)`, or `None` for a `sift_files`
+    /// reconstruction.
+    pub fn keypoints_xy(&self) -> Option<&Array2<f32>> {
+        match &self.observations {
+            ObservationSource::EmbeddedPatches { keypoints_xy, .. } => Some(keypoints_xy),
+            ObservationSource::SiftFiles { .. } => None,
+        }
+    }
+
+    /// Per-image feature-tool hashes, or `None` for `embedded_patches`.
+    pub fn feature_tool_hashes(&self) -> Option<&[[u8; 16]]> {
+        match &self.observations {
+            ObservationSource::SiftFiles {
+                feature_tool_hashes,
+                ..
+            } => Some(feature_tool_hashes),
+            ObservationSource::EmbeddedPatches { .. } => None,
+        }
+    }
+
+    /// Per-image `.sift`-content hashes, or `None` for `embedded_patches`.
+    pub fn sift_content_hashes(&self) -> Option<&[[u8; 16]]> {
+        match &self.observations {
+            ObservationSource::SiftFiles {
+                sift_content_hashes,
+                ..
+            } => Some(sift_content_hashes),
+            ObservationSource::EmbeddedPatches { .. } => None,
+        }
+    }
+
+    /// Per-image source-image hashes, or `None` for `sift_files`.
+    pub fn image_file_hashes(&self) -> Option<&[[u8; 16]]> {
+        match &self.observations {
+            ObservationSource::EmbeddedPatches {
+                image_file_hashes, ..
+            } => Some(image_file_hashes),
+            ObservationSource::SiftFiles { .. } => None,
+        }
+    }
+
+    /// Check that the observation-source columns are parallel to the structures
+    /// they annotate: per-observation columns (`feature_indexes` / `keypoints_xy`)
+    /// must match the track count, and per-image columns (the hashes) must match
+    /// the image count. Returns an error message describing the first mismatch.
+    ///
+    /// `from_sfmr_data` builds these in lockstep, but the in-memory editors
+    /// (notably `clone_with_changes`, which can replace tracks and columns
+    /// independently) can leave them out of step; this is the guard those paths
+    /// run before handing back a reconstruction.
+    pub fn validate_observation_columns(&self) -> Result<(), String> {
+        let n_obs = self.tracks.len();
+        let n_img = self.images.len();
+        match &self.observations {
+            ObservationSource::SiftFiles {
+                feature_indexes,
+                feature_tool_hashes,
+                sift_content_hashes,
+            } => {
+                if feature_indexes.len() != n_obs {
+                    return Err(format!(
+                        "feature_indexes length ({}) must match observation count ({n_obs})",
+                        feature_indexes.len()
+                    ));
+                }
+                if feature_tool_hashes.len() != n_img {
+                    return Err(format!(
+                        "feature_tool_hashes length ({}) must match image count ({n_img})",
+                        feature_tool_hashes.len()
+                    ));
+                }
+                if sift_content_hashes.len() != n_img {
+                    return Err(format!(
+                        "sift_content_hashes length ({}) must match image count ({n_img})",
+                        sift_content_hashes.len()
+                    ));
+                }
+            }
+            ObservationSource::EmbeddedPatches {
+                keypoints_xy,
+                image_file_hashes,
+            } => {
+                if keypoints_xy.nrows() != n_obs {
+                    return Err(format!(
+                        "keypoints_xy row count ({}) must match observation count ({n_obs})",
+                        keypoints_xy.nrows()
+                    ));
+                }
+                if image_file_hashes.len() != n_img {
+                    return Err(format!(
+                        "image_file_hashes length ({}) must match image count ({n_img})",
+                        image_file_hashes.len()
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Number of registered images.
@@ -479,24 +636,9 @@ impl SfmrReconstruction {
 
     /// Convert from the raw columnar I/O representation.
     pub fn from_sfmr_data(data: SfmrData) -> Result<Self, SfmrError> {
-        // The geometric `SfmrReconstruction` models SIFT-referenced observations
-        // (per-image tool/content hashes, per-observation feature index). An
-        // `embedded_patches` file carries inline keypoints instead and has no
-        // `.sift` linkage, which this type does not yet represent.
-        if data.metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES {
-            return Err(SfmrError::InvalidFormat(
-                "SfmrReconstruction does not yet support embedded_patches .sfmr files".into(),
-            ));
-        }
-        let feature_tool_hashes = data.feature_tool_hashes.as_ref().ok_or_else(|| {
-            SfmrError::InvalidFormat("sift_files file missing feature_tool_hashes".into())
-        })?;
-        let sift_content_hashes = data.sift_content_hashes.as_ref().ok_or_else(|| {
-            SfmrError::InvalidFormat("sift_files file missing sift_content_hashes".into())
-        })?;
-        let feature_indexes = data.feature_indexes.as_ref().ok_or_else(|| {
-            SfmrError::InvalidFormat("sift_files file missing feature_indexes".into())
-        })?;
+        // Both observation sources load; the mode picks which columns the
+        // `ObservationSource` enum carries (built at the end).
+        let is_embedded = data.metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
 
         let image_count = data.metadata.image_count as usize;
         let point_count = data.metadata.point_count as usize;
@@ -522,8 +664,6 @@ impl SfmrReconstruction {
                 camera_index: data.camera_indexes[i],
                 quaternion_wxyz: quaternion,
                 translation_xyz: Vector3::new(tx, ty, tz),
-                feature_tool_hash: feature_tool_hashes[i],
-                sift_content_hash: sift_content_hashes[i],
             });
         }
 
@@ -564,27 +704,62 @@ impl SfmrReconstruction {
             });
         }
 
-        // Convert tracks
+        // Convert tracks (the mode-specific column is held in `observations`).
         let mut tracks = Vec::with_capacity(observation_count);
         for i in 0..observation_count {
             tracks.push(TrackObservation {
                 image_index: data.image_indexes[i],
-                feature_index: feature_indexes[i],
                 point_index: data.point_indexes[i],
             });
         }
+
+        // Build the observation-source columns from the mode-appropriate arrays.
+        let observations = if is_embedded {
+            ObservationSource::EmbeddedPatches {
+                keypoints_xy: data.keypoints_xy.ok_or_else(|| {
+                    SfmrError::InvalidFormat("embedded_patches file missing keypoints_xy".into())
+                })?,
+                image_file_hashes: data.image_file_hashes.ok_or_else(|| {
+                    SfmrError::InvalidFormat(
+                        "embedded_patches file missing image_file_hashes".into(),
+                    )
+                })?,
+            }
+        } else {
+            ObservationSource::SiftFiles {
+                feature_indexes: data
+                    .feature_indexes
+                    .ok_or_else(|| {
+                        SfmrError::InvalidFormat("sift_files file missing feature_indexes".into())
+                    })?
+                    .to_vec(),
+                feature_tool_hashes: data.feature_tool_hashes.ok_or_else(|| {
+                    SfmrError::InvalidFormat("sift_files file missing feature_tool_hashes".into())
+                })?,
+                sift_content_hashes: data.sift_content_hashes.ok_or_else(|| {
+                    SfmrError::InvalidFormat("sift_files file missing sift_content_hashes".into())
+                })?,
+            }
+        };
 
         // Convert observation counts and compute prefix sum offsets
         let observation_counts = data.observation_counts.to_vec();
         let observation_offsets = compute_observation_offsets(&observation_counts);
 
-        // Build per-image feature→point mapping and max feature index
+        // Build per-image feature→point mapping and max feature index. These index
+        // `.sift` features, so they are meaningful only for `sift_files`; an
+        // `embedded_patches` reconstruction leaves them empty.
         let mut image_feature_to_point = vec![HashMap::new(); image_count];
         let mut max_track_feature_index = vec![0u32; image_count];
-        for obs in &tracks {
-            let img = obs.image_index as usize;
-            image_feature_to_point[img].insert(obs.feature_index, obs.point_index);
-            max_track_feature_index[img] = max_track_feature_index[img].max(obs.feature_index);
+        if let ObservationSource::SiftFiles {
+            feature_indexes, ..
+        } = &observations
+        {
+            for (obs, &feat) in tracks.iter().zip(feature_indexes) {
+                let img = obs.image_index as usize;
+                image_feature_to_point[img].insert(feat, obs.point_index);
+                max_track_feature_index[img] = max_track_feature_index[img].max(feat);
+            }
         }
 
         // Convert depth histogram counts: (N, num_buckets) array → Vec<Vec<u32>>
@@ -609,7 +784,7 @@ impl SfmrReconstruction {
 
         let infinity_point_count = count_points_at_infinity(&points);
 
-        Ok(SfmrReconstruction {
+        let recon = SfmrReconstruction {
             workspace_dir: data.workspace_dir.unwrap_or_default(),
             metadata: data.metadata,
             content_hash: data.content_hash,
@@ -627,10 +802,20 @@ impl SfmrReconstruction {
             patch_v_halfvec_xyz: data.patch_v_halfvec_xyz,
             patch_bitmaps_y_x_rgba: data.patch_bitmaps_y_x_rgba,
             has_normals,
+            observations,
             image_feature_to_point,
             max_track_feature_index,
             infinity_point_count,
-        })
+        };
+
+        // The `load()` path is already protected by the format reader's
+        // validation, but `from_sfmr_data` is also reached from the raw PyO3
+        // `from_data` builder, so confirm the observation columns are parallel
+        // before handing back a reconstruction.
+        recon
+            .validate_observation_columns()
+            .map_err(SfmrError::InvalidFormat)?;
+        Ok(recon)
     }
 
     /// Rebuild derived fields (observation offsets, feature→point maps, and the
@@ -645,11 +830,15 @@ impl SfmrReconstruction {
         let image_count = self.images.len();
         self.image_feature_to_point = vec![HashMap::new(); image_count];
         self.max_track_feature_index = vec![0u32; image_count];
-        for obs in &self.tracks {
-            let img = obs.image_index as usize;
-            self.image_feature_to_point[img].insert(obs.feature_index, obs.point_index);
-            self.max_track_feature_index[img] =
-                self.max_track_feature_index[img].max(obs.feature_index);
+        if let ObservationSource::SiftFiles {
+            feature_indexes, ..
+        } = &self.observations
+        {
+            for (obs, &feat) in self.tracks.iter().zip(feature_indexes) {
+                let img = obs.image_index as usize;
+                self.image_feature_to_point[img].insert(feat, obs.point_index);
+                self.max_track_feature_index[img] = self.max_track_feature_index[img].max(feat);
+            }
         }
 
         self.infinity_point_count = count_points_at_infinity(&self.points);
@@ -663,14 +852,22 @@ impl SfmrReconstruction {
         let point_count = self.points.len();
         let observation_count = self.tracks.len();
         let num_buckets = self.depth_statistics.num_histogram_buckets as usize;
+        // Keep the emitted metadata's discriminator in sync with the variant,
+        // and its derived counts in sync with the actual arrays (in-memory
+        // editors such as clone_with_changes can change the array sizes without
+        // touching metadata).
+        let mut metadata = self.metadata.clone();
+        metadata.feature_source = self.feature_source().to_string();
+        metadata.image_count = image_count as u32;
+        metadata.point_count = point_count as u32;
+        metadata.observation_count = observation_count as u32;
+        metadata.infinity_point_count = self.infinity_point_count as u32;
 
         // Images
         let image_names: Vec<String> = self.images.iter().map(|im| im.name.clone()).collect();
         let mut camera_indexes = Array1::<u32>::zeros(image_count);
         let mut quaternions_wxyz = Array2::<f64>::zeros((image_count, 4));
         let mut translations_xyz = Array2::<f64>::zeros((image_count, 3));
-        let mut feature_tool_hashes = Vec::with_capacity(image_count);
-        let mut sift_content_hashes = Vec::with_capacity(image_count);
 
         for (i, im) in self.images.iter().enumerate() {
             camera_indexes[i] = im.camera_index;
@@ -682,8 +879,6 @@ impl SfmrReconstruction {
             translations_xyz[[i, 0]] = im.translation_xyz.x;
             translations_xyz[[i, 1]] = im.translation_xyz.y;
             translations_xyz[[i, 2]] = im.translation_xyz.z;
-            feature_tool_hashes.push(im.feature_tool_hash);
-            sift_content_hashes.push(im.sift_content_hash);
         }
 
         // Points. The ergonomic form is normalised — finite points have w = 1
@@ -713,16 +908,45 @@ impl SfmrReconstruction {
             }
         }
 
-        // Tracks
+        // Tracks (the mode-specific column comes from `observations` below).
         let mut image_indexes = Array1::<u32>::zeros(observation_count);
-        let mut feature_indexes = Array1::<u32>::zeros(observation_count);
         let mut point_indexes = Array1::<u32>::zeros(observation_count);
 
         for (i, obs) in self.tracks.iter().enumerate() {
             image_indexes[i] = obs.image_index;
-            feature_indexes[i] = obs.feature_index;
             point_indexes[i] = obs.point_index;
         }
+
+        // Split the observation source back into the mode-appropriate columns.
+        let (
+            feature_indexes,
+            feature_tool_hashes,
+            sift_content_hashes,
+            keypoints_xy,
+            image_file_hashes,
+        ) = match &self.observations {
+            ObservationSource::SiftFiles {
+                feature_indexes,
+                feature_tool_hashes,
+                sift_content_hashes,
+            } => (
+                Some(Array1::from_vec(feature_indexes.clone())),
+                Some(feature_tool_hashes.clone()),
+                Some(sift_content_hashes.clone()),
+                None,
+                None,
+            ),
+            ObservationSource::EmbeddedPatches {
+                keypoints_xy,
+                image_file_hashes,
+            } => (
+                None,
+                None,
+                None,
+                Some(keypoints_xy.clone()),
+                Some(image_file_hashes.clone()),
+            ),
+        };
 
         let observation_counts = Array1::from_vec(self.observation_counts.clone());
 
@@ -739,7 +963,7 @@ impl SfmrReconstruction {
 
         SfmrData {
             workspace_dir: Some(self.workspace_dir.clone()),
-            metadata: self.metadata.clone(),
+            metadata,
             content_hash: self.content_hash.clone(),
             cameras,
             rig_frame_data: self.rig_frame_data.clone(),
@@ -750,17 +974,19 @@ impl SfmrReconstruction {
             camera_indexes,
             quaternions_wxyz,
             translations_xyz,
-            feature_tool_hashes: Some(feature_tool_hashes),
-            sift_content_hashes: Some(sift_content_hashes),
-            image_file_hashes: None,
+            // Each mode emits only its own columns (computed above from the
+            // ObservationSource variant).
+            feature_tool_hashes,
+            sift_content_hashes,
+            image_file_hashes,
             thumbnails_y_x_rgb: self.thumbnails_y_x_rgb.clone(),
             positions_xyzw,
             colors_rgb,
             reprojection_errors,
             normals_xyz,
             image_indexes,
-            feature_indexes: Some(feature_indexes),
-            keypoints_xy: None,
+            feature_indexes,
+            keypoints_xy,
             point_indexes,
             observation_counts,
             depth_statistics: self.depth_statistics.clone(),
@@ -821,8 +1047,6 @@ impl SfmrReconstruction {
                 camera_index: 0,
                 quaternion_wxyz: rotation,
                 translation_xyz: translation,
-                feature_tool_hash: [0u8; 16],
-                sift_content_hash: [0u8; 16],
             });
         }
 
@@ -848,8 +1072,10 @@ impl SfmrReconstruction {
             });
         }
 
-        // Simple tracks: each point observed by 2 adjacent cameras
+        // Simple tracks: each point observed by 2 adjacent cameras. The parallel
+        // feature_indexes column goes into the sift_files ObservationSource.
         let mut tracks = Vec::new();
+        let mut feature_indexes = Vec::new();
         let mut observation_counts = Vec::with_capacity(num_points);
         for i in 0..num_points {
             let cam1 = (i % num_images) as u32;
@@ -861,14 +1087,14 @@ impl SfmrReconstruction {
             };
             tracks.push(TrackObservation {
                 image_index: first,
-                feature_index: i as u32,
                 point_index: i as u32,
             });
             tracks.push(TrackObservation {
                 image_index: second,
-                feature_index: i as u32,
                 point_index: i as u32,
             });
+            feature_indexes.push(i as u32);
+            feature_indexes.push(i as u32);
             observation_counts.push(2);
         }
 
@@ -926,10 +1152,10 @@ impl SfmrReconstruction {
         // Build per-image feature→point mapping
         let mut image_feature_to_point = vec![HashMap::new(); num_images];
         let mut max_track_feature_index = vec![0u32; num_images];
-        for obs in &tracks {
+        for (obs, &feat) in tracks.iter().zip(&feature_indexes) {
             let img = obs.image_index as usize;
-            image_feature_to_point[img].insert(obs.feature_index, obs.point_index);
-            max_track_feature_index[img] = max_track_feature_index[img].max(obs.feature_index);
+            image_feature_to_point[img].insert(feat, obs.point_index);
+            max_track_feature_index[img] = max_track_feature_index[img].max(feat);
         }
 
         let infinity_point_count = count_points_at_infinity(&points);
@@ -942,6 +1168,11 @@ impl SfmrReconstruction {
             patch_v_halfvec_xyz: None,
             patch_bitmaps_y_x_rgba: None,
             has_normals: true,
+            observations: ObservationSource::SiftFiles {
+                feature_indexes,
+                feature_tool_hashes: vec![[0u8; 16]; num_images],
+                sift_content_hashes: vec![[0u8; 16]; num_images],
+            },
             content_hash: ContentHash {
                 metadata_xxh128: String::new(),
                 cameras_xxh128: String::new(),

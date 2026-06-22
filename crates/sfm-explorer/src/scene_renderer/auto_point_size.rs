@@ -330,8 +330,6 @@ mod tests {
             camera_index: 0,
             quaternion_wxyz: q,
             translation_xyz: t,
-            feature_tool_hash: [0; 16],
-            sift_content_hash: [0; 16],
         }
     }
 

@@ -145,17 +145,47 @@ fn test_subset_filters_rig_frame_data() {
     assert_eq!(rf.sensor_camera_indexes.to_vec(), vec![0]);
 }
 
-#[test]
-fn test_from_sfmr_data_rejects_embedded_patches() {
-    // SfmrReconstruction does not yet model patch observations, so loading an
-    // embedded_patches file must fail with a clear error rather than half-load.
-    let mut data = SfmrReconstruction::demo(10).to_sfmr_data();
+/// Build an `embedded_patches` reconstruction from the sift_files `demo`, by
+/// dropping the `.sift`-link arrays and substituting inline keypoints + a
+/// per-image hash. Keypoint row `i` holds `[2i, 2i+1]` so a test can assert
+/// exactly which observation rows survive an edit. Every image hash is `[7; 16]`.
+fn demo_embedded(num_points: usize) -> SfmrReconstruction {
+    let mut data = SfmrReconstruction::demo(num_points).to_sfmr_data();
+    let m = data.metadata.observation_count as usize;
+    let n = data.metadata.image_count as usize;
     data.metadata.feature_source = FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
-    let err = SfmrReconstruction::from_sfmr_data(data).err().unwrap();
-    assert!(
-        format!("{err}").contains("embedded_patches"),
-        "unexpected error: {err}"
-    );
+    data.feature_indexes = None;
+    data.feature_tool_hashes = None;
+    data.sift_content_hashes = None;
+    data.image_file_hashes = Some(vec![[7u8; 16]; n]);
+    data.keypoints_xy = Some(ndarray::Array2::from_shape_fn((m, 2), |(i, c)| {
+        (i * 2 + c) as f32
+    }));
+    SfmrReconstruction::from_sfmr_data(data).expect("embedded should load")
+}
+
+#[test]
+fn test_embedded_patches_round_trips_through_reconstruction() {
+    // Build an embedded_patches SfmrData by hand (drop the .sift-link arrays, add
+    // inline keypoints + image hash), load it, and round-trip it back.
+    let recon = demo_embedded(10);
+    let n = recon.images.len();
+    let kp_expected = recon.keypoints_xy().unwrap().clone();
+
+    assert_eq!(recon.feature_source(), FEATURE_SOURCE_EMBEDDED_PATCHES);
+    assert_eq!(recon.keypoints_xy().unwrap(), &kp_expected);
+    assert_eq!(recon.image_file_hashes().unwrap().len(), n);
+    // Feature-index machinery is empty for embedded (placeholders only).
+    assert!(recon.image_feature_to_point.iter().all(|m| m.is_empty()));
+
+    // Round-trips back to embedded columns, .sift-link arrays absent.
+    let out = recon.to_sfmr_data();
+    assert_eq!(out.metadata.feature_source, FEATURE_SOURCE_EMBEDDED_PATCHES);
+    assert_eq!(out.keypoints_xy.unwrap(), kp_expected);
+    assert!(out.image_file_hashes.is_some());
+    assert!(out.feature_indexes.is_none());
+    assert!(out.feature_tool_hashes.is_none());
+    assert!(out.sift_content_hashes.is_none());
 }
 
 #[test]
@@ -166,4 +196,106 @@ fn test_to_sfmr_data_is_sift_files() {
     assert!(data.feature_indexes.is_some());
     assert!(data.keypoints_xy.is_none());
     assert!(data.image_file_hashes.is_none());
+}
+
+#[test]
+fn test_filter_points_keeps_embedded_keypoints_parallel() {
+    // demo observes each point by 2 cameras, so observations are grouped by
+    // point: point i owns keypoint rows 2i and 2i+1 (values [2k] / [2k+1]).
+    let recon = demo_embedded(4);
+    let mask = vec![true, false, true, false];
+    let out = recon.filter_points_by_mask(&mask);
+
+    assert_eq!(out.feature_source(), FEATURE_SOURCE_EMBEDDED_PATCHES);
+    assert_eq!(out.point_count(), 2);
+
+    // Surviving observations are the rows for points 0 and 2 — source rows
+    // [0, 1, 4, 5] — kept in order and still parallel to the new tracks.
+    let kp = out.keypoints_xy().unwrap();
+    assert_eq!(kp.nrows(), out.tracks.len());
+    assert_eq!(kp.nrows(), 4);
+    assert_eq!([kp[[0, 0]], kp[[0, 1]]], [0.0, 1.0]); // source row 0
+    assert_eq!([kp[[1, 0]], kp[[1, 1]]], [2.0, 3.0]); // source row 1
+    assert_eq!([kp[[2, 0]], kp[[2, 1]]], [8.0, 9.0]); // source row 4
+    assert_eq!([kp[[3, 0]], kp[[3, 1]]], [10.0, 11.0]); // source row 5
+
+    // Images are untouched, so the per-image hashes pass through unchanged.
+    assert_eq!(
+        out.image_file_hashes().unwrap(),
+        recon.image_file_hashes().unwrap()
+    );
+    out.validate_observation_columns().unwrap();
+}
+
+#[test]
+fn test_se3_transform_preserves_embedded_columns() {
+    use crate::geometry::rot_quaternion::RotQuaternion;
+    use crate::Se3Transform;
+    use nalgebra::{UnitQuaternion, Vector3};
+
+    let recon = demo_embedded(4);
+    let kp0 = recon.keypoints_xy().unwrap().clone();
+
+    // 2D features are pose-invariant: a similarity transform must not touch the
+    // keypoints or the per-image hashes.
+    let rot = RotQuaternion::from_nalgebra(UnitQuaternion::from_axis_angle(
+        &Vector3::z_axis(),
+        std::f64::consts::FRAC_PI_3,
+    ));
+    let t = Se3Transform::new(rot, Vector3::new(1.0, -2.0, 0.5), 1.5);
+    let out = recon.apply_se3_transform(&t);
+
+    assert_eq!(out.feature_source(), FEATURE_SOURCE_EMBEDDED_PATCHES);
+    assert_eq!(out.keypoints_xy().unwrap(), &kp0);
+    assert_eq!(
+        out.image_file_hashes().unwrap(),
+        recon.image_file_hashes().unwrap()
+    );
+    out.validate_observation_columns().unwrap();
+}
+
+#[test]
+fn test_subset_by_image_indices_rejects_embedded() {
+    let recon = demo_embedded(4);
+    let all: Vec<u32> = (0..recon.images.len() as u32).collect();
+    // (SfmrReconstruction is not Debug, so match rather than expect_err.)
+    let Err(err) = recon.subset_by_image_indices(&all, true) else {
+        panic!("subset must reject embedded_patches");
+    };
+    assert!(
+        err.contains("embedded_patches"),
+        "unexpected error message: {err}"
+    );
+}
+
+#[test]
+fn test_find_points_at_infinity_rejects_embedded() {
+    let recon = demo_embedded(4);
+    let Err(err) = recon.find_points_at_infinity(1.0, 0.7, 0.8, 2, None, 1.0) else {
+        panic!("find_points_at_infinity must reject embedded_patches");
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("embedded_patches"),
+        "unexpected message: {msg}"
+    );
+}
+
+#[test]
+fn test_validate_observation_columns_detects_desync() {
+    // Healthy reconstructions in both modes pass.
+    SfmrReconstruction::demo(4)
+        .validate_observation_columns()
+        .unwrap();
+    demo_embedded(4).validate_observation_columns().unwrap();
+
+    // Truncating keypoints below the observation count is caught.
+    let mut recon = demo_embedded(4);
+    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.observations {
+        *keypoints_xy = keypoints_xy.select(ndarray::Axis(0), &[0, 1]);
+    }
+    let err = recon
+        .validate_observation_columns()
+        .expect_err("desynced keypoints must be rejected");
+    assert!(err.contains("keypoints_xy"), "unexpected message: {err}");
 }

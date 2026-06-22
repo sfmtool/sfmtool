@@ -755,10 +755,15 @@ impl SceneRenderer {
             0.0
         };
 
+        // SIFT feature indices for this point's observations (sift_files only;
+        // an embedded_patches recon has none, so these rays are skipped).
+        let feature_indexes = recon.feature_indexes();
+        let obs_start = recon.observation_offsets[point_idx];
         let observations = recon.observations_for_point(point_idx);
         let edges: Vec<EdgeInstance> = observations
             .iter()
-            .filter_map(|obs| {
+            .enumerate()
+            .filter_map(|(k, obs)| {
                 let image = &recon.images[obs.image_index as usize];
                 let camera = &recon.cameras[image.camera_index as usize];
                 let center = image.camera_center();
@@ -766,7 +771,7 @@ impl SceneRenderer {
 
                 // Look up the SIFT feature position from the shared cache.
                 let cached = sift_cache.get(&(obs.image_index as usize))?;
-                let fi = obs.feature_index as usize;
+                let fi = feature_indexes?[obs_start + k] as usize;
                 if fi >= cached.positions_xy.len() {
                     return None;
                 }

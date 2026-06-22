@@ -67,6 +67,14 @@ impl SfmrReconstruction {
         noise_floor_px: f64,
     ) -> Result<PointInspection, ReconstructionError> {
         let pt = &self.points[point_idx];
+        // Inspection reads `.sift` features, so it requires a sift_files recon.
+        let feature_indexes =
+            self.feature_indexes()
+                .ok_or_else(|| ReconstructionError::SiftRead {
+                    path: self.workspace_dir.clone(),
+                    source: "inspect_point requires a sift_files reconstruction".into(),
+                })?;
+        let start = self.observation_offsets[point_idx];
         let observations = self.observations_for_point(point_idx);
         let noise = (pt.error as f64).max(noise_floor_px);
 
@@ -75,19 +83,20 @@ impl SfmrReconstruction {
         let mut sigma_rad: Vec<f64> = Vec::with_capacity(observations.len());
         let mut obs_out: Vec<ObservationInspection> = Vec::with_capacity(observations.len());
 
-        for obs in observations {
+        for (k, obs) in observations.iter().enumerate() {
+            let feature_index = feature_indexes[start + k];
             let img_idx = obs.image_index as usize;
             let image = &self.images[img_idx];
             let camera = &self.cameras[image.camera_index as usize];
             let (fx, fy) = camera.focal_lengths();
 
             let sift_path = self.sift_path_for_image(img_idx);
-            let sift = sift_format::read_sift_partial(&sift_path, obs.feature_index as usize + 1)
+            let sift = sift_format::read_sift_partial(&sift_path, feature_index as usize + 1)
                 .map_err(|e| ReconstructionError::SiftRead {
-                path: sift_path.clone(),
-                source: e.to_string(),
-            })?;
-            let f = obs.feature_index as usize;
+                    path: sift_path.clone(),
+                    source: e.to_string(),
+                })?;
+            let f = feature_index as usize;
             let u = sift.positions_xy[[f, 0]] as f64;
             let v = sift.positions_xy[[f, 1]] as f64;
 
@@ -108,7 +117,7 @@ impl SfmrReconstruction {
             obs_out.push(ObservationInspection {
                 image_index: img_idx,
                 image_name: image.name.clone(),
-                feature_index: obs.feature_index,
+                feature_index,
                 incidence_deg,
             });
         }

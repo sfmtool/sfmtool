@@ -3,6 +3,11 @@
 _Status: draft for review. Intended to be folded into `sfmr-file-format.md` once
 implemented._
 
+> **Implementation status:** Stages 1 (Rust `sfmr-format`) and 2 (PyO3 bindings
+> + in-memory `SfmrReconstruction` support) are landed. The Python producer
+> command (Stage 3, item 3 below), the round-trip/cross-hash tests still pending
+> (parts of item 4), and the fold-in into `sfmr-file-format.md` (item 5) remain.
+
 ## Motivation
 
 Today every observation in `.sfmr` is a reference into an external `.sift` file:
