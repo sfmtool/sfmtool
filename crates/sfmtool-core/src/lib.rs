@@ -37,7 +37,8 @@ pub use geometry::rigid_transform::RigidTransform;
 pub use geometry::rot_quaternion::RotQuaternion;
 pub use geometry::se3_transform::Se3Transform;
 pub use reconstruction::{
-    Point3D, ReconstructionError, SfmrImage, SfmrReconstruction, TrackObservation,
+    ObservationSource, Point3D, ReconstructionError, SfmrImage, SfmrReconstruction,
+    TrackObservation,
 };
 pub use spherical::consensus_atlas::{
     render_consensus_atlas, ConsensusAtlasBatchError, ConsensusAtlasBatchParams,

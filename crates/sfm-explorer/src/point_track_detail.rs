@@ -572,15 +572,20 @@ impl PointTrackDetail {
         self.thumbnail_textures.clear();
 
         let point_pos = recon.points[point_idx].position;
+        // SIFT feature indices for this point's observations (sift_files only;
+        // an embedded_patches recon has none, so the cache lookups below fall
+        // back to defaults).
+        let feature_indexes = recon.feature_indexes();
+        let obs_start = recon.observation_offsets[point_idx];
         let observations = recon.observations_for_point(point_idx);
 
         // Collect world-space rays from each camera center to the point
         // for max-angle computation.
         let mut world_rays: Vec<[f64; 3]> = Vec::with_capacity(observations.len());
 
-        for obs in observations {
+        for (k, obs) in observations.iter().enumerate() {
             let img_idx = obs.image_index as usize;
-            let feat_idx = obs.feature_index as usize;
+            let feat_idx = feature_indexes.map_or(0, |f| f[obs_start + k] as usize);
             let image = &recon.images[img_idx];
             let camera = &recon.cameras[image.camera_index as usize];
 

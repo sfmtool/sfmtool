@@ -89,8 +89,13 @@ pub(crate) fn clone_with_changes(
     // Track whether we need to rebuild images from scratch
     let mut new_image_names: Option<Vec<String>> = None;
     let mut new_camera_indexes: Option<Vec<u32>> = None;
+    // Observation-source columns collected here and recombined into the
+    // `ObservationSource` enum after the image count is settled.
     let mut new_feature_tool_hashes: Option<Vec<[u8; 16]>> = None;
     let mut new_sift_content_hashes: Option<Vec<[u8; 16]>> = None;
+    let mut new_image_file_hashes: Option<Vec<[u8; 16]>> = None;
+    let mut new_keypoints_xy: Option<ndarray::Array2<f32>> = None;
+    let mut new_feature_source: Option<String> = None;
 
     for (key, value) in kw.iter() {
         let key_str: String = key.extract()?;
@@ -275,8 +280,6 @@ pub(crate) fn clone_with_changes(
                         camera_index: 0,
                         quaternion_wxyz: UnitQuaternion::identity(),
                         translation_xyz: Vector3::zeros(),
-                        feature_tool_hash: [0u8; 16],
-                        sift_content_hash: [0u8; 16],
                     });
                 }
                 recon.images.truncate(n);
@@ -372,6 +375,41 @@ pub(crate) fn clone_with_changes(
             "sift_content_hashes" => {
                 new_sift_content_hashes = Some(py_to_u128_bytes(&value)?);
             }
+            "feature_source" => {
+                new_feature_source = Some(value.extract()?);
+            }
+            "keypoints_xy" => {
+                let arr = extract_array2!(value, "keypoints_xy", f32)?;
+                if arr.shape()[1] != 2 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "clone_with_changes(): 'keypoints_xy' must have shape (K, 2), \
+                         got shape {:?}",
+                        arr.shape()
+                    )));
+                }
+                // Validate the row count eagerly only when the tracks are not
+                // also being replaced in this call (in which case the count is
+                // fixed). When tracks change too, the observation count isn't
+                // known until they're rebuilt, so defer to the final
+                // `validate_observation_columns`.
+                let replacing_tracks = kw.contains("track_image_indexes")?
+                    || kw.contains("track_feature_indexes")?
+                    || kw.contains("track_point_ids")?;
+                if !replacing_tracks && arr.shape()[0] != recon.tracks.len() {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "clone_with_changes(): 'keypoints_xy' must have shape (K, 2) with \
+                         K = observation count ({}), got shape {:?}",
+                        recon.tracks.len(),
+                        arr.shape()
+                    )));
+                }
+                new_keypoints_xy = Some(arr.as_array().to_owned());
+            }
+            "image_file_hashes" => {
+                if !value.is_none() {
+                    new_image_file_hashes = Some(py_to_u128_bytes(&value)?);
+                }
+            }
             "thumbnails_y_x_rgb" => {
                 // The `$dtype` slot also carries the shape suffix here so the
                 // rendered message reproduces the legacy thumbnails wording.
@@ -419,8 +457,6 @@ pub(crate) fn clone_with_changes(
                 camera_index: 0,
                 quaternion_wxyz: UnitQuaternion::identity(),
                 translation_xyz: Vector3::zeros(),
-                feature_tool_hash: [0u8; 16],
-                sift_content_hash: [0u8; 16],
             });
         }
         recon.images.truncate(n);
@@ -440,30 +476,16 @@ pub(crate) fn clone_with_changes(
             im.camera_index = indexes[i];
         }
     }
-    if let Some(ref hashes) = new_feature_tool_hashes {
-        if hashes.len() != recon.images.len() {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "clone_with_changes(): 'feature_tool_hashes' length ({}) must match image count ({})",
-                hashes.len(),
-                recon.images.len()
-            )));
-        }
-        for (i, im) in recon.images.iter_mut().enumerate() {
-            im.feature_tool_hash = hashes[i];
-        }
-    }
-    if let Some(ref hashes) = new_sift_content_hashes {
-        if hashes.len() != recon.images.len() {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "clone_with_changes(): 'sift_content_hashes' length ({}) must match image count ({})",
-                hashes.len(),
-                recon.images.len()
-            )));
-        }
-        for (i, im) in recon.images.iter_mut().enumerate() {
-            im.sift_content_hash = hashes[i];
-        }
-    }
+    // Recombine the observation-source columns into the enum once the image
+    // count is settled. Any column not supplied falls back to the current value.
+    rebuild_observation_source(
+        &mut recon,
+        new_feature_source,
+        new_feature_tool_hashes,
+        new_sift_content_hashes,
+        new_image_file_hashes,
+        new_keypoints_xy,
+    )?;
 
     // Resize depth_histogram_counts to match the (possibly new) image count.
     // When the image count changes, histogram data becomes stale so we reset it.
@@ -566,14 +588,149 @@ pub(crate) fn clone_with_changes(
         recon.tracks = (0..img_s.len())
             .map(|i| sfmtool_core::TrackObservation {
                 image_index: img_s[i],
-                feature_index: feat_s[i],
                 point_index: pt_s[i],
             })
             .collect();
+        // Per-observation feature indices live in the observation source for
+        // sift_files reconstructions; keep them in step with the new tracks.
+        // (embedded_patches has no feature indices — its per-observation data
+        // is keypoints_xy, updated via the 'keypoints_xy' kwarg.)
+        if let sfmtool_core::ObservationSource::SiftFiles {
+            feature_indexes, ..
+        } = &mut recon.observations
+        {
+            *feature_indexes = feat_s.to_vec();
+        }
+
+        // Derive observation_counts from the new tracks (which are grouped by
+        // point) so the per-point counts/offsets don't go stale relative to the
+        // replaced tracks. This overrides any 'observation_counts' kwarg, since
+        // the tracks are authoritative.
+        let point_count = recon.points.len();
+        let mut new_counts = vec![0u32; point_count];
+        for t in &recon.tracks {
+            let p = t.point_index as usize;
+            if p >= point_count {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'track_point_ids' contains point index {p} \
+                     out of range (point count {point_count})"
+                )));
+            }
+            new_counts[p] += 1;
+        }
+        recon.observation_counts = new_counts;
     }
 
     // Recompute derived fields
     recon.rebuild_derived_fields();
 
+    // The track arrays and the observation-source columns can be supplied in the
+    // same call (and are applied in separate passes), so guard against leaving a
+    // per-observation column out of step with the new track count — e.g.
+    // replacing the tracks of an embedded_patches recon without also passing a
+    // matching `keypoints_xy`.
+    recon.validate_observation_columns().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {e}"))
+    })?;
+
     Ok(recon)
+}
+
+/// Recombine the (optionally updated) observation-source columns into the
+/// `ObservationSource` enum, falling back to the reconstruction's current values
+/// for any column not supplied. The target mode is `feature_source` if given,
+/// else the current one.
+fn rebuild_observation_source(
+    recon: &mut SfmrReconstruction,
+    new_feature_source: Option<String>,
+    new_feature_tool_hashes: Option<Vec<[u8; 16]>>,
+    new_sift_content_hashes: Option<Vec<[u8; 16]>>,
+    new_image_file_hashes: Option<Vec<[u8; 16]>>,
+    new_keypoints_xy: Option<ndarray::Array2<f32>>,
+) -> PyResult<()> {
+    use sfmtool_core::ObservationSource;
+
+    // Nothing to do when no observation-source kwarg was passed.
+    if new_feature_source.is_none()
+        && new_feature_tool_hashes.is_none()
+        && new_sift_content_hashes.is_none()
+        && new_image_file_hashes.is_none()
+        && new_keypoints_xy.is_none()
+    {
+        return Ok(());
+    }
+
+    let n_img = recon.images.len();
+    let require_img_len = |name: &str, len: usize| -> PyResult<()> {
+        if len != n_img {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "clone_with_changes(): '{name}' length ({len}) must match image count ({n_img})"
+            )));
+        }
+        Ok(())
+    };
+
+    let target = new_feature_source.unwrap_or_else(|| recon.feature_source().to_string());
+
+    let observations = match target.as_str() {
+        "sift_files" => {
+            let feature_indexes = recon.feature_indexes().map(|f| f.to_vec()).ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "clone_with_changes(): converting to sift_files is not supported \
+                     (feature indices cannot be supplied)",
+                )
+            })?;
+            let feature_tool_hashes = new_feature_tool_hashes
+                .or_else(|| recon.feature_tool_hashes().map(|h| h.to_vec()))
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(
+                        "clone_with_changes(): sift_files requires feature_tool_hashes",
+                    )
+                })?;
+            require_img_len("feature_tool_hashes", feature_tool_hashes.len())?;
+            let sift_content_hashes = new_sift_content_hashes
+                .or_else(|| recon.sift_content_hashes().map(|h| h.to_vec()))
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(
+                        "clone_with_changes(): sift_files requires sift_content_hashes",
+                    )
+                })?;
+            require_img_len("sift_content_hashes", sift_content_hashes.len())?;
+            ObservationSource::SiftFiles {
+                feature_indexes,
+                feature_tool_hashes,
+                sift_content_hashes,
+            }
+        }
+        "embedded_patches" => {
+            let keypoints_xy = new_keypoints_xy
+                .or_else(|| recon.keypoints_xy().cloned())
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(
+                        "clone_with_changes(): embedded_patches requires keypoints_xy",
+                    )
+                })?;
+            let image_file_hashes = new_image_file_hashes
+                .or_else(|| recon.image_file_hashes().map(|h| h.to_vec()))
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(
+                        "clone_with_changes(): embedded_patches requires image_file_hashes",
+                    )
+                })?;
+            require_img_len("image_file_hashes", image_file_hashes.len())?;
+            ObservationSource::EmbeddedPatches {
+                keypoints_xy,
+                image_file_hashes,
+            }
+        }
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "clone_with_changes(): unknown feature_source {other:?}"
+            )));
+        }
+    };
+
+    recon.metadata.feature_source = target;
+    recon.observations = observations;
+    Ok(())
 }

@@ -213,3 +213,222 @@ class TestOptionalNormals:
         restored = cleared.clone_with_changes(normals=normals)
         assert restored.has_normals is True
         np.testing.assert_allclose(np.asarray(restored.normals), normals)
+
+
+class TestEmbeddedPatches:
+    """Format v4 embedded_patches: read accessors and the clone path."""
+
+    def test_sift_files_defaults(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        assert recon.feature_source == "sift_files"
+        assert recon.keypoints_xy is None
+        assert recon.image_file_hashes is None
+
+    def test_clone_to_embedded_round_trips(self, seoul_bull_sfmr_only, tmp_path):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        n_obs = int(np.asarray(recon.track_image_indexes).shape[0])
+        n_img = len(recon.image_names)
+
+        keypoints = np.arange(n_obs * 2, dtype=np.float32).reshape(n_obs, 2)
+        # Keep keypoints inside the image bounds so the format's read/verify
+        # validation accepts them.
+        cam = recon.cameras[0]
+        keypoints[:, 0] %= cam.width
+        keypoints[:, 1] %= cam.height
+        img_hashes = [bytes([i % 256] * 16) for i in range(n_img)]
+
+        embedded = recon.clone_with_changes(
+            feature_source="embedded_patches",
+            keypoints_xy=keypoints,
+            image_file_hashes=img_hashes,
+        )
+        assert embedded.feature_source == "embedded_patches"
+        np.testing.assert_array_equal(np.asarray(embedded.keypoints_xy), keypoints)
+        assert embedded.image_file_hashes == img_hashes
+
+        # Survives a save / load through the v4 format.
+        out = tmp_path / "embedded.sfmr"
+        embedded.save(out)
+        reloaded = SfmrReconstruction.load(out)
+        assert reloaded.feature_source == "embedded_patches"
+        np.testing.assert_array_equal(np.asarray(reloaded.keypoints_xy), keypoints)
+        assert reloaded.image_file_hashes == img_hashes
+
+    def test_clone_keypoints_wrong_length_rejected(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        bad = np.zeros((3, 2), dtype=np.float32)  # not observation_count rows
+        with pytest.raises(ValueError, match="observation count"):
+            recon.clone_with_changes(keypoints_xy=bad)
+
+    def _make_embedded(self, recon):
+        """Clone `recon` (a sift_files recon) into an embedded_patches one."""
+        n_obs = int(np.asarray(recon.track_image_indexes).shape[0])
+        n_img = len(recon.image_names)
+        keypoints = np.zeros((n_obs, 2), dtype=np.float32)
+        img_hashes = [bytes([i % 256] * 16) for i in range(n_img)]
+        return recon.clone_with_changes(
+            feature_source="embedded_patches",
+            keypoints_xy=keypoints,
+            image_file_hashes=img_hashes,
+        )
+
+    def test_embedded_sift_only_getters_are_none(self, seoul_bull_sfmr_only):
+        # The sift_files-only columns report None (not an empty array) in
+        # embedded mode, matching keypoints_xy/image_file_hashes in sift mode.
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        # sift_files mode: these are present, the embedded ones are None.
+        assert recon.track_feature_indexes is not None
+        assert recon.feature_tool_hashes is not None
+        assert recon.sift_content_hashes is not None
+
+        embedded = self._make_embedded(recon)
+        assert embedded.track_feature_indexes is None
+        assert embedded.feature_tool_hashes is None
+        assert embedded.sift_content_hashes is None
+        assert embedded.image_file_hashes is not None
+        assert embedded.keypoints_xy is not None
+
+    def test_clone_embedded_to_sift_files_rejected(self, seoul_bull_sfmr_only):
+        # Embedded → sift_files has no source for per-observation feature
+        # indices, so the conversion is refused.
+        embedded = self._make_embedded(SfmrReconstruction.load(seoul_bull_sfmr_only))
+        n_img = len(embedded.image_names)
+        hashes = [bytes(16) for _ in range(n_img)]
+        with pytest.raises(
+            ValueError, match="converting to sift_files is not supported"
+        ):
+            embedded.clone_with_changes(
+                feature_source="sift_files",
+                feature_tool_hashes=hashes,
+                sift_content_hashes=hashes,
+            )
+
+    def test_clone_to_embedded_requires_image_file_hashes(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        n_obs = int(np.asarray(recon.track_image_indexes).shape[0])
+        keypoints = np.zeros((n_obs, 2), dtype=np.float32)
+        with pytest.raises(
+            ValueError, match="embedded_patches requires image_file_hashes"
+        ):
+            recon.clone_with_changes(
+                feature_source="embedded_patches",
+                keypoints_xy=keypoints,
+            )
+
+    def test_clone_unknown_feature_source_rejected(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        with pytest.raises(ValueError, match="unknown feature_source"):
+            recon.clone_with_changes(feature_source="bogus")
+
+    def test_clone_embedded_track_replacement_without_keypoints_rejected(
+        self, seoul_bull_sfmr_only
+    ):
+        # Replacing the tracks of an embedded recon changes the observation
+        # count; without a matching keypoints_xy the columns would desync, so
+        # the final validation must reject it.
+        embedded = self._make_embedded(SfmrReconstruction.load(seoul_bull_sfmr_only))
+        n_new = int(np.asarray(embedded.track_image_indexes).shape[0]) + 2
+        img_idx = np.zeros(n_new, dtype=np.uint32)
+        feat_idx = np.zeros(n_new, dtype=np.uint32)
+        pt_ids = np.zeros(n_new, dtype=np.uint32)
+        with pytest.raises(ValueError, match="keypoints_xy"):
+            embedded.clone_with_changes(
+                track_image_indexes=img_idx,
+                track_feature_indexes=feat_idx,
+                track_point_ids=pt_ids,
+            )
+
+    def test_clone_embedded_track_and_keypoints_replacement_to_new_size(
+        self, seoul_bull_sfmr_only
+    ):
+        # Replacing tracks AND keypoints together to a new observation count is
+        # accepted: the keypoint row count is validated against the *new* track
+        # count, not the old one.
+        embedded = self._make_embedded(SfmrReconstruction.load(seoul_bull_sfmr_only))
+        n_new = int(np.asarray(embedded.track_image_indexes).shape[0]) + 2
+        img_idx = np.zeros(n_new, dtype=np.uint32)
+        feat_idx = np.zeros(n_new, dtype=np.uint32)
+        pt_ids = np.zeros(n_new, dtype=np.uint32)
+        keypoints = np.zeros((n_new, 2), dtype=np.float32)
+        out = embedded.clone_with_changes(
+            track_image_indexes=img_idx,
+            track_feature_indexes=feat_idx,
+            track_point_ids=pt_ids,
+            keypoints_xy=keypoints,
+        )
+        assert out.feature_source == "embedded_patches"
+        assert np.asarray(out.keypoints_xy).shape == (n_new, 2)
+
+    def test_clone_track_replacement_recomputes_observation_counts(
+        self, seoul_bull_sfmr_only
+    ):
+        # Replacing tracks recomputes observation_counts from the new tracks
+        # (grouped by point) instead of leaving the old per-point counts stale.
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        # Point 0 gets 3 observations, point 1 gets 1; all later points get 0.
+        img_idx = np.array([0, 1, 2, 0], dtype=np.uint32)
+        feat_idx = np.array([0, 1, 2, 3], dtype=np.uint32)
+        pt_ids = np.array([0, 0, 0, 1], dtype=np.uint32)
+        out = recon.clone_with_changes(
+            track_image_indexes=img_idx,
+            track_feature_indexes=feat_idx,
+            track_point_ids=pt_ids,
+        )
+        counts = np.asarray(out.observation_counts)
+        assert counts.shape[0] == recon.point_count  # one entry per point
+        assert counts[0] == 3
+        assert counts[1] == 1
+        assert counts[2:].sum() == 0
+        assert int(counts.sum()) == out.observation_count == 4
+
+    def test_clone_track_replacement_rejects_out_of_range_point(
+        self, seoul_bull_sfmr_only
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        bad_pt = recon.point_count  # one past the last valid point index
+        img_idx = np.array([0], dtype=np.uint32)
+        feat_idx = np.array([0], dtype=np.uint32)
+        pt_ids = np.array([bad_pt], dtype=np.uint32)
+        with pytest.raises(ValueError, match="out of range"):
+            recon.clone_with_changes(
+                track_image_indexes=img_idx,
+                track_feature_indexes=feat_idx,
+                track_point_ids=pt_ids,
+            )
+
+    def test_clone_multipoint_track_replacement_survives_round_trip(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        # End-to-end: replace the points and tracks with a multi-point,
+        # point-grouped layout, then save and reload. The recomputed
+        # observation_counts must drive offsets that keep the tracks consistent
+        # across the format round trip. (Also exercises the points-resize +
+        # track-replacement interaction: the point-index bound is the new count.)
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        # Three points (the format requires every point to be observed) with
+        # 2/3/1 observations, grouped contiguously by point.
+        positions = np.array(
+            [[0.0, 0.0, 1.0], [0.0, 0.0, 2.0], [0.0, 0.0, 3.0]], dtype=np.float64
+        )
+        img_idx = np.array([0, 1, 0, 1, 2, 0], dtype=np.uint32)
+        feat_idx = np.array([0, 1, 2, 3, 4, 5], dtype=np.uint32)
+        pt_ids = np.array([0, 0, 1, 1, 1, 2], dtype=np.uint32)
+        out = recon.clone_with_changes(
+            positions=positions,
+            track_image_indexes=img_idx,
+            track_feature_indexes=feat_idx,
+            track_point_ids=pt_ids,
+        )
+        assert out.point_count == 3
+        counts = np.asarray(out.observation_counts)
+        assert counts.shape[0] == 3
+        assert counts[0] == 2
+        assert counts[1] == 3
+        assert counts[2] == 1
+
+        path = tmp_path / "regrouped.sfmr"
+        out.save(path)
+        reloaded = SfmrReconstruction.load(path)
+        np.testing.assert_array_equal(np.asarray(reloaded.observation_counts), counts)
+        np.testing.assert_array_equal(np.asarray(reloaded.track_point_ids), pt_ids)
+        np.testing.assert_array_equal(np.asarray(reloaded.track_image_indexes), img_idx)

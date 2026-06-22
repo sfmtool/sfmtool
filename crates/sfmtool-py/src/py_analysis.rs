@@ -318,7 +318,8 @@ pub fn merge_points_and_tracks_py(
         &inner_refs,
         &groups,
         &reverse_mapping,
-    );
+    )
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     // Build output dict with numpy arrays.
     let dict = PyDict::new(py);

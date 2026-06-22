@@ -146,6 +146,10 @@ impl SfmrReconstruction {
             // the whole scene leaves their appearance unchanged.
             patch_bitmaps_y_x_rgba: self.patch_bitmaps_y_x_rgba.clone(),
             has_normals: self.has_normals,
+            // A 3D similarity leaves the 2D image keypoints, feature indices, and
+            // image identity untouched, so the observation source passes through
+            // for both modes.
+            observations: self.observations.clone(),
             // All other fields are unchanged
             workspace_dir: self.workspace_dir.clone(),
             metadata: self.metadata.clone(),
@@ -180,6 +184,19 @@ impl SfmrReconstruction {
         image_indices: &[u32],
         drop_orphaned_points: bool,
     ) -> Result<Self, String> {
+        // Subsetting an embedded_patches reconstruction would have to filter the
+        // parallel keypoints_xy / image_file_hashes too; not supported yet.
+        let ObservationSource::SiftFiles {
+            feature_indexes: self_feature_indexes,
+            feature_tool_hashes: self_feature_tool_hashes,
+            sift_content_hashes: self_sift_content_hashes,
+        } = &self.observations
+        else {
+            return Err(
+                "subset_by_image_indices is not supported for embedded_patches reconstructions"
+                    .into(),
+            );
+        };
         let old_image_count = self.images.len();
         let new_image_count = image_indices.len();
 
@@ -233,15 +250,18 @@ impl SfmrReconstruction {
             .collect();
 
         // Filter and remap tracks. Input tracks are grouped by point_index, so
-        // a simple single-pass filter preserves that grouping.
+        // a simple single-pass filter preserves that grouping. The parallel
+        // feature_indexes column is filtered in lockstep (point-id remapping
+        // below preserves order, so it stays parallel to the final tracks).
         let mut new_tracks: Vec<TrackObservation> = Vec::with_capacity(self.tracks.len());
-        for obs in &self.tracks {
+        let mut new_feature_indexes: Vec<u32> = Vec::with_capacity(self.tracks.len());
+        for (i, obs) in self.tracks.iter().enumerate() {
             if let Some(new_img_idx) = old_to_new[obs.image_index as usize] {
                 new_tracks.push(TrackObservation {
                     image_index: new_img_idx,
-                    feature_index: obs.feature_index,
                     point_index: obs.point_index,
                 });
+                new_feature_indexes.push(self_feature_indexes[i]);
             }
         }
 
@@ -276,7 +296,6 @@ impl SfmrReconstruction {
                 .into_iter()
                 .map(|obs| TrackObservation {
                     image_index: obs.image_index,
-                    feature_index: obs.feature_index,
                     point_index: point_remap[obs.point_index as usize],
                 })
                 .collect();
@@ -330,12 +349,21 @@ impl SfmrReconstruction {
         // Rebuild per-image feature→point mapping and max feature indexes.
         let mut new_image_feature_to_point = vec![HashMap::new(); new_image_count];
         let mut new_max_track_feature_index = vec![0u32; new_image_count];
-        for obs in &new_tracks {
+        for (obs, &feat) in new_tracks.iter().zip(&new_feature_indexes) {
             let img = obs.image_index as usize;
-            new_image_feature_to_point[img].insert(obs.feature_index, obs.point_index);
-            new_max_track_feature_index[img] =
-                new_max_track_feature_index[img].max(obs.feature_index);
+            new_image_feature_to_point[img].insert(feat, obs.point_index);
+            new_max_track_feature_index[img] = new_max_track_feature_index[img].max(feat);
         }
+
+        // The per-image hashes follow the image subset.
+        let new_feature_tool_hashes: Vec<[u8; 16]> = image_indices
+            .iter()
+            .map(|&i| self_feature_tool_hashes[i as usize])
+            .collect();
+        let new_sift_content_hashes: Vec<[u8; 16]> = image_indices
+            .iter()
+            .map(|&i| self_sift_content_hashes[i as usize])
+            .collect();
 
         // Filter rig/frame data.
         let new_rig_frame_data = self
@@ -363,6 +391,11 @@ impl SfmrReconstruction {
             patch_v_halfvec_xyz: new_patch_v,
             patch_bitmaps_y_x_rgba: new_patch_bitmaps,
             has_normals: self.has_normals,
+            observations: ObservationSource::SiftFiles {
+                feature_indexes: new_feature_indexes,
+                feature_tool_hashes: new_feature_tool_hashes,
+                sift_content_hashes: new_sift_content_hashes,
+            },
             image_feature_to_point: new_image_feature_to_point,
             max_track_feature_index: new_max_track_feature_index,
         })
@@ -414,37 +447,64 @@ impl SfmrReconstruction {
             .map(|(&count, _)| count)
             .collect();
 
-        // Filter and remap tracks using the existing filter function
-        let track_image_indexes: Vec<u32> = self.tracks.iter().map(|t| t.image_index).collect();
-        let track_feature_indexes: Vec<u32> = self.tracks.iter().map(|t| t.feature_index).collect();
-        let track_point_ids: Vec<u32> = self.tracks.iter().map(|t| t.point_index).collect();
-
-        let filtered = crate::reconstruction::filter::filter_tracks_by_point_mask(
-            mask,
-            &track_image_indexes,
-            &track_feature_indexes,
-            &track_point_ids,
-        );
-
-        let new_tracks: Vec<TrackObservation> = (0..filtered.track_image_indexes.len())
-            .map(|i| TrackObservation {
-                image_index: filtered.track_image_indexes[i],
-                feature_index: filtered.track_feature_indexes[i],
-                point_index: filtered.track_point_ids[i],
+        // Remap surviving point ids to be contiguous, then filter observations
+        // (preserving order) and the parallel observation-source column. Works
+        // for both modes — keypoints are filtered in lockstep with the tracks.
+        let mut point_remap = vec![u32::MAX; self.points.len()];
+        let mut next_id = 0u32;
+        for (old, &keep) in mask.iter().enumerate() {
+            if keep {
+                point_remap[old] = next_id;
+                next_id += 1;
+            }
+        }
+        let kept: Vec<usize> = (0..self.tracks.len())
+            .filter(|&i| mask[self.tracks[i].point_index as usize])
+            .collect();
+        let new_tracks: Vec<TrackObservation> = kept
+            .iter()
+            .map(|&i| TrackObservation {
+                image_index: self.tracks[i].image_index,
+                point_index: point_remap[self.tracks[i].point_index as usize],
             })
             .collect();
 
+        // Images are unchanged, so per-image hashes pass through; the
+        // per-observation column is filtered by `kept`.
+        let new_observations = match &self.observations {
+            ObservationSource::SiftFiles {
+                feature_indexes,
+                feature_tool_hashes,
+                sift_content_hashes,
+            } => ObservationSource::SiftFiles {
+                feature_indexes: kept.iter().map(|&i| feature_indexes[i]).collect(),
+                feature_tool_hashes: feature_tool_hashes.clone(),
+                sift_content_hashes: sift_content_hashes.clone(),
+            },
+            ObservationSource::EmbeddedPatches {
+                keypoints_xy,
+                image_file_hashes,
+            } => ObservationSource::EmbeddedPatches {
+                keypoints_xy: keypoints_xy.select(ndarray::Axis(0), &kept),
+                image_file_hashes: image_file_hashes.clone(),
+            },
+        };
+
         let new_observation_offsets = compute_observation_offsets(&new_observation_counts);
 
-        // Rebuild per-image feature→point mapping
+        // Rebuild per-image feature→point mapping (sift_files only).
         let image_count = self.images.len();
         let mut new_image_feature_to_point = vec![HashMap::new(); image_count];
         let mut new_max_track_feature_index = vec![0u32; image_count];
-        for obs in &new_tracks {
-            let img = obs.image_index as usize;
-            new_image_feature_to_point[img].insert(obs.feature_index, obs.point_index);
-            new_max_track_feature_index[img] =
-                new_max_track_feature_index[img].max(obs.feature_index);
+        if let ObservationSource::SiftFiles {
+            feature_indexes, ..
+        } = &new_observations
+        {
+            for (obs, &feat) in new_tracks.iter().zip(feature_indexes) {
+                let img = obs.image_index as usize;
+                new_image_feature_to_point[img].insert(feat, obs.point_index);
+                new_max_track_feature_index[img] = new_max_track_feature_index[img].max(feat);
+            }
         }
 
         let infinity_point_count = count_points_at_infinity(&new_points);
@@ -467,6 +527,7 @@ impl SfmrReconstruction {
             patch_v_halfvec_xyz: new_patch_v,
             patch_bitmaps_y_x_rgba: new_patch_bitmaps,
             has_normals: self.has_normals,
+            observations: new_observations,
             image_feature_to_point: new_image_feature_to_point,
             max_track_feature_index: new_max_track_feature_index,
         }
