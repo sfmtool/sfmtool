@@ -9,13 +9,13 @@ use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::patch_cloud::{OrientedPatch, PatchCloud, PatchExtent, PatchNormal, ViewReduce};
-use sfmtool_core::patch_normal_refine::{
+use sfmtool_core::camera::remap::ImageU8Pyramid;
+use sfmtool_core::geometry::rigid_transform::RigidTransform;
+use sfmtool_core::patch::cloud::{OrientedPatch, PatchCloud, PatchExtent, PatchNormal, ViewReduce};
+use sfmtool_core::patch::normal_refine::{
     patch_view_indices_from_reconstruction, refine_patch_cloud, CacheMode, NormalRefineParams,
     Objective, PatchWindow, ProjectedImage, Sampler,
 };
-use sfmtool_core::remap::ImageU8Pyramid;
-use sfmtool_core::rigid_transform::RigidTransform;
 
 use crate::py_rigid_transform::PyRigidTransform;
 use crate::py_sfmr_reconstruction::PySfmrReconstruction;

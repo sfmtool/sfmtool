@@ -16,7 +16,7 @@ import numpy as np
 from .._sfmtool import KdTree3d, SfmrReconstruction
 from .._histogram_utils import print_histogram
 
-# Matches sfmtool_core::infinity::DEFAULT_INVERSE_DEPTH_Z_CUTOFF: below this a
+# Matches sfmtool_core::analysis::infinity::DEFAULT_INVERSE_DEPTH_Z_CUTOFF: below this a
 # point's depth is statistically indistinguishable from infinity.
 DEPTH_RELIABILITY_Z_CUTOFF = 4.0
 

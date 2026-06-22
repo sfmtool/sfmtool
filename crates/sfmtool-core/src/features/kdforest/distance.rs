@@ -5,7 +5,7 @@
 //!
 //! The forest is generic over a scalar type `S: ForestScalar`. The trait keeps
 //! squared-distance arithmetic in the scalar's natural domain — integer (`i64`)
-//! for `u8` descriptors (matching [`crate::feature_match::descriptor`]) and
+//! for `u8` descriptors (matching [`crate::features::feature_match::descriptor`]) and
 //! `f32` for general vectors — so the priority-queue lower bounds, the
 //! bounded-result cutoff, and the leaf scan all compose without lossy
 //! conversions. `sqrt` is taken only when a distance is reported to a caller.
@@ -191,7 +191,7 @@ static KDFOREST_NO_SIMD: std::sync::LazyLock<bool> =
 /// This is the forest's hottest loop (the leaf scan). Dispatches at runtime to
 /// an AVX2 then SSE2 sum-of-squared-differences kernel on x86_64, falling back
 /// to scalar elsewhere / for the tail. All paths produce the identical integer
-/// result as [`crate::feature_match::descriptor::descriptor_distance_l2_squared`]
+/// result as [`crate::features::feature_match::descriptor::descriptor_distance_l2_squared`]
 /// (integer accumulation is exact regardless of reduction order).
 #[inline]
 pub fn u8_dist_sq(a: &[u8], b: &[u8]) -> i64 {
@@ -259,13 +259,13 @@ unsafe fn u8_dist_sq_avx2(a: &[u8], b: &[u8]) -> i64 {
 
 /// Scalar sum of squared `u8` differences.
 ///
-/// Delegates to [`crate::feature_match::descriptor::descriptor_distance_l2_squared`]
+/// Delegates to [`crate::features::feature_match::descriptor::descriptor_distance_l2_squared`]
 /// so the crate keeps a single definition of the scalar `u8` squared-L2 metric.
 /// The SIMD paths above must stay bit-identical to it; `u8_kernel_matches_scalar`
 /// checks the path selected by feature detection on the test host.
 #[inline]
 fn u8_dist_sq_scalar(a: &[u8], b: &[u8]) -> i64 {
-    crate::feature_match::descriptor::descriptor_distance_l2_squared(a, b)
+    crate::features::feature_match::descriptor::descriptor_distance_l2_squared(a, b)
 }
 
 /// SSE2 sum of squared `u8` differences, 16 bytes per iteration.

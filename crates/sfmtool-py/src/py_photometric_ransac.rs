@@ -11,7 +11,7 @@
 use numpy::PyArray1;
 use pyo3::prelude::*;
 
-use sfmtool_core::photometric_ransac::{
+use sfmtool_core::spherical::photometric_ransac::{
     refine_photometric_ransac, RansacPhotometricError, RansacPhotometricOutput,
     RansacPhotometricParams,
 };

@@ -19,7 +19,7 @@ use sfmr_format::{
     FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES,
 };
 
-use crate::camera_intrinsics::CameraIntrinsics;
+use crate::camera::intrinsics::CameraIntrinsics;
 
 mod edit;
 pub mod filter;
@@ -111,7 +111,7 @@ impl SfmrImage {
     /// Compute the camera-to-world rotation matrix as a row-major `[f64; 9]`.
     ///
     /// This is R^T where R is the world-to-camera rotation from `quaternion_wxyz`.
-    /// The result is in the format expected by [`crate::frustum::compute_frustum_corners`].
+    /// The result is in the format expected by [`crate::camera::frustum::compute_frustum_corners`].
     pub fn camera_to_world_rotation_flat(&self) -> [f64; 9] {
         let r = self.quaternion_wxyz.inverse().to_rotation_matrix();
         let m = r.matrix();
@@ -174,7 +174,7 @@ pub struct SfmrReconstruction {
     /// in `points3d/` (version 3+). `patch_u_halfvec_xyz` and
     /// `patch_v_halfvec_xyz` are the in-plane half-extent vectors (both present
     /// or both `None`); a patch's center is its point's position and its normal
-    /// is the point's `normal`. See [`crate::patch_cloud::PatchCloud`].
+    /// is the point's `normal`. See [`crate::patch::cloud::PatchCloud`].
     pub patch_u_halfvec_xyz: Option<Array2<f32>>,
     pub patch_v_halfvec_xyz: Option<Array2<f32>>,
     /// Optional `(P, R, R, 4)` per-point RGBA patch bitmaps; the alpha channel
@@ -774,8 +774,8 @@ impl SfmrReconstruction {
     /// (offset to sit in front of the camera arc), observed by 8 cameras
     /// arranged in a circle around the origin.
     pub fn demo(num_points: usize) -> Self {
-        use crate::camera_intrinsics::CameraModel;
-        use crate::sphere_points::{evenly_distributed_sphere_points, RelaxConfig};
+        use crate::camera::intrinsics::CameraModel;
+        use crate::spherical::sphere_points::{evenly_distributed_sphere_points, RelaxConfig};
         use std::collections::HashMap;
 
         let num_images = 8;

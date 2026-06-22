@@ -8,7 +8,7 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use std::borrow::Cow;
 
-use sfmtool_core::feature_match;
+use sfmtool_core::features::feature_match;
 
 /// Unified image pair matching: automatically selects rectified sweep or polar matching.
 ///

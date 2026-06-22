@@ -12,8 +12,8 @@
 //!   cargo bench -p sfmtool-core --bench kdtree_forest
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use sfmtool_core::feature_match::descriptor::descriptor_distance_l2_squared;
-use sfmtool_core::kdforest::{KdForestParams, KdForestU8};
+use sfmtool_core::features::feature_match::descriptor::descriptor_distance_l2_squared;
+use sfmtool_core::features::kdforest::{KdForestParams, KdForestU8};
 use std::hint::black_box;
 
 const DIM: usize = 128;

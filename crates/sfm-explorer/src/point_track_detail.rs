@@ -728,7 +728,7 @@ pub(crate) fn compute_point_diagnostics(
     recon: &SfmrReconstruction,
     point_idx: usize,
 ) -> (f32, f32) {
-    use sfmtool_core::triangulation::{depth_uncertainty_batch, triangulate_batch};
+    use sfmtool_core::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
 
     let Some(pt) = recon.points.get(point_idx) else {
         return (f32::NAN, f32::NAN);

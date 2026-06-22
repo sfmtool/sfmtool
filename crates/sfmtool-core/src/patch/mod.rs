@@ -3,5 +3,5 @@
 
 //! Patch clouds: point-patch storage and normal refinement.
 
-pub mod patch_cloud;
-pub mod patch_normal_refine;
+pub mod cloud;
+pub mod normal_refine;

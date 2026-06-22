@@ -1,6 +1,6 @@
 use super::*;
-use crate::sphere_points::RelaxConfig;
-use crate::spherical_tile_rig::SphericalTileRigParams;
+use crate::spherical::sphere_points::RelaxConfig;
+use crate::spherical::tile_rig::SphericalTileRigParams;
 
 fn sample_rig(n: usize) -> SphericalTileRig {
     SphericalTileRig::new(&SphericalTileRigParams {

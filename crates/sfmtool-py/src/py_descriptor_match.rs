@@ -7,7 +7,7 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use std::borrow::Cow;
 
-use sfmtool_core::feature_match;
+use sfmtool_core::features::feature_match;
 
 /// Compute L2 distance between two SIFT descriptors (1D uint8 arrays).
 #[pyfunction]

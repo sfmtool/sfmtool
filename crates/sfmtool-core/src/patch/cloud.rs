@@ -4,14 +4,14 @@
 //! Oriented 3D patches (surfels) and patch clouds.
 //!
 //! See `specs/core/patch-cloud.md`. An [`OrientedPatch`] is a small planar
-//! surface element in world space; [`crate::warp_map::WarpMap::from_patch`]
+//! surface element in world space; [`crate::camera::warp_map::WarpMap::from_patch`]
 //! projects a camera's image onto one to render its canonical appearance.
 
 use nalgebra::{Matrix3, Point3, Vector3};
 use ndarray::Array2;
 
+use crate::geometry::rigid_transform::RigidTransform;
 use crate::reconstruction::SfmrReconstruction;
-use crate::rigid_transform::RigidTransform;
 use crate::spatial::PointCloud;
 
 /// Errors from [`PatchCloud::from_reconstruction`].

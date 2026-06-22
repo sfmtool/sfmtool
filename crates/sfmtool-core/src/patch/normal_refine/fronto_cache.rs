@@ -24,9 +24,9 @@ use nalgebra::{SMatrix, Vector3};
 use super::{
     consensus_phi, repose_patch, LevelContext, NormalRefineParams, Objective, ProjectedImage,
 };
-use crate::patch_cloud::OrientedPatch;
-use crate::remap::remap_bilinear;
-use crate::warp_map::WarpMap;
+use crate::camera::remap::remap_bilinear;
+use crate::camera::warp_map::WarpMap;
+use crate::patch::cloud::OrientedPatch;
 
 /// Replicate-padded border (base pixels) around each fronto base. A tilted
 /// candidate's footprint *mostly* shrinks inside the fronto base, but a

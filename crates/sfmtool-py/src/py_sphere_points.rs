@@ -6,7 +6,9 @@
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
 
-use sfmtool_core::sphere_points::{evenly_distributed_sphere_points as core_generate, RelaxConfig};
+use sfmtool_core::spherical::sphere_points::{
+    evenly_distributed_sphere_points as core_generate, RelaxConfig,
+};
 
 /// Generate N points evenly distributed on the unit sphere.
 ///

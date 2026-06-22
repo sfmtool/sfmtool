@@ -21,11 +21,11 @@
 //! `f32` for general vectors) and works on flat row-major coordinate arrays,
 //! mirroring [`crate::spatial::PointCloud`]. Descriptor distances stay in the
 //! integer domain (`i64` squared-L2), matching
-//! [`crate::feature_match::descriptor`]; `sqrt` is taken only when reporting.
+//! [`crate::features::feature_match::descriptor`]; `sqrt` is taken only when reporting.
 //!
 //! # Example
 //! ```
-//! use sfmtool_core::kdforest::{KdForestU8, KdForestParams};
+//! use sfmtool_core::features::kdforest::{KdForestU8, KdForestParams};
 //!
 //! // Three 4-D u8 points, row-major.
 //! let points: Vec<u8> = vec![

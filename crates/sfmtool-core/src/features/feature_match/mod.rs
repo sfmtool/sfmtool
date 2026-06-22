@@ -67,7 +67,7 @@ pub fn match_image_pair(
     affines2: Option<&[f64]>,
     geometric_config: Option<&GeometricFilterConfig>,
 ) -> Vec<(usize, usize, f64)> {
-    use crate::{epipolar, rectification};
+    use crate::camera::{epipolar, rectification};
 
     // A singular intrinsic matrix (e.g. a degenerate camera with zero focal
     // length) has no fundamental matrix; such a pair cannot be matched.

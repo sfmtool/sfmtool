@@ -10,7 +10,7 @@ use super::auto_point_size::{
 use super::distorted_mesh::generate_bg_distorted_mesh;
 use super::gpu_types::*;
 use super::SceneRenderer;
-use sfmtool_core::frustum::{compute_distorted_frustum_grid, compute_frustum_corners};
+use sfmtool_core::camera::frustum::{compute_distorted_frustum_grid, compute_frustum_corners};
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
 

@@ -12,13 +12,13 @@ use std::f64::consts::PI;
 use nalgebra::Vector3;
 
 use super::*;
-use crate::camera_intrinsics::{CameraIntrinsics, CameraModel};
-use crate::per_spherical_tile_source_stack::{BuildParams, PerSphericalTileSourceStack};
-use crate::photometric_ransac::refine_photometric_ransac;
-use crate::remap::ImageU8;
-use crate::rot_quaternion::RotQuaternion;
-use crate::sphere_points::RelaxConfig;
-use crate::spherical_tile_rig::{SphericalTileRig, SphericalTileRigParams};
+use crate::camera::intrinsics::{CameraIntrinsics, CameraModel};
+use crate::camera::remap::ImageU8;
+use crate::geometry::rot_quaternion::RotQuaternion;
+use crate::spherical::per_tile_source_stack::{BuildParams, PerSphericalTileSourceStack};
+use crate::spherical::photometric_ransac::refine_photometric_ransac;
+use crate::spherical::sphere_points::RelaxConfig;
+use crate::spherical::tile_rig::{SphericalTileRig, SphericalTileRigParams};
 
 type SourceList = Vec<(CameraIntrinsics, RotQuaternion, ImageU8)>;
 

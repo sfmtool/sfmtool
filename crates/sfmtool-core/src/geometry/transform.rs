@@ -5,8 +5,8 @@
 
 use nalgebra::Vector3;
 
-use crate::rot_quaternion::RotQuaternion;
-use crate::se3_transform::Se3Transform;
+use crate::geometry::rot_quaternion::RotQuaternion;
+use crate::geometry::se3_transform::Se3Transform;
 
 /// Apply an SE3 similarity transform to batched camera poses.
 ///
@@ -182,7 +182,7 @@ mod tests {
         );
 
         // Compute inverse transform using Se3Transform
-        let se3 = crate::se3_transform::Se3Transform::new(
+        let se3 = crate::geometry::se3_transform::Se3Transform::new(
             RotQuaternion::from_wxyz_array(world_q),
             Vector3::new(world_trans[0], world_trans[1], world_trans[2]),
             scale,
@@ -324,7 +324,7 @@ mod tests {
         );
 
         // Compute inverse using Se3Transform
-        let se3 = crate::se3_transform::Se3Transform::new(
+        let se3 = crate::geometry::se3_transform::Se3Transform::new(
             RotQuaternion::from_wxyz_array(world_q),
             Vector3::new(world_trans[0], world_trans[1], world_trans[2]),
             scale,

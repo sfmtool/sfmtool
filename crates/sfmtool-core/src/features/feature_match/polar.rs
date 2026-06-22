@@ -13,7 +13,7 @@ use std::f64::consts::PI;
 
 use nalgebra::Matrix3;
 
-use crate::epipolar;
+use crate::camera::epipolar;
 
 use super::descriptor::find_best_match_contiguous;
 use super::geometric_filter::{

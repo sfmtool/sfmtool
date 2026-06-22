@@ -5,7 +5,7 @@
 
 use rayon::prelude::*;
 
-use crate::warp_map::{WarpMap, PAR_MIN_PIXELS};
+use crate::camera::warp_map::{WarpMap, PAR_MIN_PIXELS};
 
 /// Run `fill_row` over every destination row, sequentially for small outputs
 /// (where rayon scaffolding dwarfs the row work — e.g. patch-sized remaps

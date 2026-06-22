@@ -8,7 +8,7 @@
 //!
 //! This crate implements SIFT directly (no OpenCV/COLMAP round-trip), structured
 //! to mirror the optical-flow module's house conventions: it operates on
-//! [`GrayImage`] (reused from [`crate::optical_flow`]), uses separable Gaussian
+//! [`GrayImage`] (reused from [`crate::features::optical_flow`]), uses separable Gaussian
 //! blur with an SSE2 inner loop plus scalar fallback, and parallelizes with
 //! rayon. See `specs/core/sift.md` for the authoritative design.
 //!
@@ -38,7 +38,7 @@ pub use scale_space::ScaleSpace;
 // Reuse the optical-flow grayscale image type rather than duplicating it; the
 // coordinate convention (pixel centers at col+0.5, row+0.5) matches what SIFT
 // needs.
-pub use crate::optical_flow::GrayImage;
+pub use crate::features::optical_flow::GrayImage;
 
 /// Env-gated stage timing for the keypoint-finding pipeline. Enabled by setting
 /// the `SFMTOOL_SIFT_TIMING` environment variable; effectively zero-cost otherwise

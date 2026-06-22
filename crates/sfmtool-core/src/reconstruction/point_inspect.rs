@@ -11,11 +11,11 @@
 
 use nalgebra::{Point3, Vector3};
 
-use crate::infinity::{
+use crate::analysis::infinity::{
     camera_extents, classify_rays_at_infinity, Classification, DEFAULT_INVERSE_DEPTH_Z_CUTOFF,
 };
+use crate::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
 use crate::reconstruction::{ReconstructionError, SfmrReconstruction};
-use crate::triangulation::{depth_uncertainty_batch, triangulate_batch};
 
 /// One observation in a point's track, with where it lands in its image.
 pub struct ObservationInspection {

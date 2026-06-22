@@ -44,11 +44,11 @@
 use nalgebra::{Matrix3, Vector3};
 use rayon::prelude::*;
 
-use crate::camera_intrinsics::CameraIntrinsics;
-use crate::remap::{remap_bilinear, ImageU8};
-use crate::rot_quaternion::RotQuaternion;
-use crate::spherical_tile_rig::SphericalTileRig;
-use crate::warp_map::WarpMap;
+use crate::camera::intrinsics::CameraIntrinsics;
+use crate::camera::remap::{remap_bilinear, ImageU8};
+use crate::camera::warp_map::WarpMap;
+use crate::geometry::rot_quaternion::RotQuaternion;
+use crate::spherical::tile_rig::SphericalTileRig;
 
 /// Pixel-element storage trait for [`PerSphericalTileSourceStack`].
 ///

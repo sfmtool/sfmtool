@@ -46,7 +46,7 @@ pub fn apply_se3_to_camera_poses_py(
     let mut out_quats = vec![0.0f64; n * 4];
     let mut out_trans = vec![0.0f64; n * 3];
 
-    sfmtool_core::transform::apply_se3_to_camera_poses(
+    sfmtool_core::geometry::transform::apply_se3_to_camera_poses(
         rot_wxyz,
         trans_xyz,
         scale,
@@ -95,7 +95,7 @@ pub fn compute_narrow_track_mask(
     let point_ids_data = to_contiguous!(track_point_ids);
     let img_idx_data = to_contiguous!(track_image_indexes);
 
-    let keep = sfmtool_core::viewing_angle::compute_narrow_track_mask(
+    let keep = sfmtool_core::geometry::viewing_angle::compute_narrow_track_mask(
         &q_data,
         &t_data,
         num_images,
@@ -125,8 +125,9 @@ pub fn kabsch_algorithm_rs(
     let src_data = to_contiguous!(source_points);
     let tgt_data = to_contiguous!(target_points);
 
-    let transform = sfmtool_core::alignment::kabsch_algorithm(&src_data, &tgt_data, n_points)
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let transform =
+        sfmtool_core::analysis::alignment::kabsch_algorithm(&src_data, &tgt_data, n_points)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     Ok(PySe3Transform { inner: transform })
 }
@@ -149,7 +150,7 @@ pub fn ransac_alignment_rs(
     let src_data = to_contiguous!(source_points);
     let tgt_data = to_contiguous!(target_points);
 
-    let mask = sfmtool_core::alignment::ransac_alignment(
+    let mask = sfmtool_core::analysis::alignment::ransac_alignment(
         &src_data,
         &tgt_data,
         n_points,
@@ -190,7 +191,7 @@ pub fn find_point_correspondences_py(
     let shared_src = to_contiguous!(shared_images_source);
     let shared_tgt = to_contiguous!(shared_images_target);
 
-    let result = sfmtool_core::point_correspondence::find_point_correspondences(
+    let result = sfmtool_core::reconstruction::point_correspondence::find_point_correspondences(
         &src_img,
         &src_feat,
         &src_pts,
@@ -228,7 +229,7 @@ pub fn filter_tracks_by_point_mask_py(
     let feat_data = to_contiguous!(track_feature_indexes);
     let point_data = to_contiguous!(track_point_ids);
 
-    let result = sfmtool_core::filter::filter_tracks_by_point_mask(
+    let result = sfmtool_core::reconstruction::filter::filter_tracks_by_point_mask(
         &mask_data,
         &img_data,
         &feat_data,
@@ -313,7 +314,7 @@ pub fn merge_points_and_tracks_py(
     }
 
     // Call the Rust core function.
-    let result = sfmtool_core::point_correspondence::merge_points_and_tracks(
+    let result = sfmtool_core::reconstruction::point_correspondence::merge_points_and_tracks(
         &inner_refs,
         &groups,
         &reverse_mapping,

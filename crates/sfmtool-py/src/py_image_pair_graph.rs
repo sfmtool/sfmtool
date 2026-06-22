@@ -7,7 +7,7 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use std::borrow::Cow;
 
-use sfmtool_core::image_pair_graph;
+use sfmtool_core::reconstruction::image_pair_graph;
 
 /// Build covisibility pairs from track observations.
 /// Returns list of (i, j, count) tuples sorted by count descending.

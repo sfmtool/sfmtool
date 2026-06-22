@@ -1,16 +1,16 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python wrapper for [`sfmtool_core::per_spherical_tile_source_stack::PerSphericalTileSourceStack`].
+//! Python wrapper for [`sfmtool_core::spherical::per_tile_source_stack::PerSphericalTileSourceStack`].
 
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
-use sfmtool_core::per_spherical_tile_source_stack::{
+use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::spherical::per_tile_source_stack::{
     BuildError, BuildParams, ConsensusAtlasError, PerSphericalTileSourceStack,
 };
-use sfmtool_core::remap::ImageU8;
 
 use crate::py_camera_intrinsics::PyCameraIntrinsics;
 use crate::py_rot_quaternion::PyRotQuaternion;

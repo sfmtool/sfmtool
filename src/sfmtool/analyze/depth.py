@@ -16,7 +16,7 @@ from .._histogram_utils import (
 )
 from .._image_pair_graph import _has_valid_depth_statistics
 
-# Matches sfmtool_core::infinity::DEFAULT_INVERSE_DEPTH_Z_CUTOFF: below this a
+# Matches sfmtool_core::analysis::infinity::DEFAULT_INVERSE_DEPTH_Z_CUTOFF: below this a
 # point's depth is statistically indistinguishable from infinity.
 DEPTH_RELIABILITY_Z_CUTOFF = 4.0
 

@@ -94,8 +94,8 @@ impl ScaleSpace {
         let k = 2.0f64.powf(1.0 / s as f64);
         let gaussians_per_octave = (s + 3) as usize;
 
-        // Env-gated per-stage timers (see `crate::sift::SIFT_TIMING`).
-        let timing = *crate::sift::SIFT_TIMING;
+        // Env-gated per-stage timers (see `crate::features::sift::SIFT_TIMING`).
+        let timing = *crate::features::sift::SIFT_TIMING;
         let mut t_base = std::time::Duration::ZERO;
         let mut t_blur = std::time::Duration::ZERO;
         let mut t_decimate = std::time::Duration::ZERO;
@@ -453,13 +453,13 @@ fn gaussian_kernel(sigma: f64, radius_factor: f64) -> Vec<f32> {
 }
 
 /// Emit one `SIFT_OP` detail line for a scale-space operator when `SFMTOOL_SIFT_OPS`
-/// is set (see [`crate::sift::SIFT_OPS`]). `taps` is the 1D kernel length for
+/// is set (see [`crate::features::sift::SIFT_OPS`]). `taps` is the 1D kernel length for
 /// blur (0 for operators without a kernel). `px = w · h` is the operated pixel
 /// count (output pixels for resampling operators). Zero-cost when the flag is
 /// off — only a cached bool check and one `Instant::now()` at each call site.
 #[inline]
 fn log_op(op: &str, w: u32, h: u32, taps: u32, t0: std::time::Instant) {
-    if *crate::sift::SIFT_OPS {
+    if *crate::features::sift::SIFT_OPS {
         eprintln!(
             "SIFT_OP op={} w={} h={} px={} taps={} ms={:.4}",
             op,

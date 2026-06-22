@@ -23,12 +23,14 @@
 use nalgebra::Vector3;
 use rayon::prelude::*;
 
-use crate::camera_intrinsics::{CameraIntrinsics, CameraModel};
-use crate::rot_quaternion::RotQuaternion;
-use crate::se3_transform::Se3Transform;
+use crate::camera::intrinsics::{CameraIntrinsics, CameraModel};
+use crate::camera::warp_map::WarpMap;
+use crate::geometry::rot_quaternion::RotQuaternion;
+use crate::geometry::se3_transform::Se3Transform;
 use crate::spatial::PointCloud3;
-use crate::sphere_points::{evenly_distributed_sphere_points, random_sphere_points, RelaxConfig};
-use crate::warp_map::WarpMap;
+use crate::spherical::sphere_points::{
+    evenly_distributed_sphere_points, random_sphere_points, RelaxConfig,
+};
 
 mod camrig;
 pub use camrig::CamRigConversionError;
@@ -713,7 +715,7 @@ impl SphericalTileRig {
     /// `atlas_size().0 * atlas_size().1 * channels`.
     ///
     /// [`PerSphericalTileSourceStack::primary_consensus_atlas`]:
-    ///     crate::per_spherical_tile_source_stack::PerSphericalTileSourceStack::primary_consensus_atlas
+    ///     crate::spherical::per_tile_source_stack::PerSphericalTileSourceStack::primary_consensus_atlas
     pub fn resample_atlas(
         &self,
         atlas: &[f32],

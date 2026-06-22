@@ -26,7 +26,7 @@ use super::convert::{
     camera_extents, classify_rays_at_infinity, Classification, RayClassification,
     DEFAULT_INVERSE_DEPTH_Z_CUTOFF,
 };
-use crate::feature_match::descriptor::descriptor_distance_l2_squared;
+use crate::features::feature_match::descriptor::descriptor_distance_l2_squared;
 use crate::reconstruction::{Point3D, ReconstructionError, SfmrReconstruction, TrackObservation};
 
 /// Parameters governing the points-at-infinity search.

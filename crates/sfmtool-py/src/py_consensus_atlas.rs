@@ -11,10 +11,10 @@
 use numpy::{PyArray1, PyArrayMethods};
 use pyo3::prelude::*;
 
-use sfmtool_core::consensus_atlas::{
+use sfmtool_core::spherical::consensus_atlas::{
     render_consensus_atlas, ConsensusAtlasBatchError, ConsensusAtlasBatchParams,
 };
-use sfmtool_core::photometric_ransac::RansacPhotometricParams;
+use sfmtool_core::spherical::photometric_ransac::RansacPhotometricParams;
 
 use crate::py_per_spherical_tile_source_stack::parse_sources;
 use crate::py_spherical_tile_rig::PySphericalTileRig;
