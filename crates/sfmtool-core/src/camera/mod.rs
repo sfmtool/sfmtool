@@ -1,10 +1,16 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Camera representation for 3D viewing.
-//!
-//! Provides a unified camera model with quaternion-based orientation that can be
-//! used for both viewport navigation and SfM camera representation.
+//! Camera model: a 3D-viewport Camera plus SfM camera intrinsics, distortion,
+//! frustum / epipolar geometry, rectification, and image warping.
+
+pub mod camera_intrinsics;
+pub mod distortion;
+pub mod epipolar;
+pub mod frustum;
+pub mod rectification;
+pub mod remap;
+pub mod warp_map;
 
 use nalgebra::{Matrix3, Matrix4, Point3, Rotation3, UnitQuaternion, Vector3};
 
