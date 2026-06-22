@@ -9,10 +9,10 @@ from click.testing import CliRunner
 
 from sfmtool._sfmtool import compute_optical_flow as _rust_compute_optical_flow
 from sfmtool.feature_match._flow_matching import _flow_match_pair, flow_match_sequential
+from sfmtool.visualization._common import get_color_palette
 from sfmtool.visualization._flow_display import (
     _find_nearest_within_tolerance,
     _flow_to_color,
-    _get_color_palette,
     _save_output,
 )
 from sfmtool.cli import main
@@ -62,23 +62,23 @@ def _shift_image(img: np.ndarray, dx: float, dy: float) -> np.ndarray:
 
 class TestGetColorPalette:
     def test_count(self):
-        colors = _get_color_palette(10)
+        colors = get_color_palette(10)
         assert len(colors) == 10
 
     def test_valid_bgr(self):
-        colors = _get_color_palette(5)
+        colors = get_color_palette(5)
         for b, g, r in colors:
             assert 0 <= b <= 255
             assert 0 <= g <= 255
             assert 0 <= r <= 255
 
     def test_single(self):
-        colors = _get_color_palette(1)
+        colors = get_color_palette(1)
         assert len(colors) == 1
 
     def test_deterministic(self):
-        c1 = _get_color_palette(8)
-        c2 = _get_color_palette(8)
+        c1 = get_color_palette(8)
+        c2 = get_color_palette(8)
         assert c1 == c2
 
 

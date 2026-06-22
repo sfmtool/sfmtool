@@ -126,6 +126,30 @@ def print_depth_reliability(
     )
     click.echo(f"Noise floor: {noise_px:g} px")
 
+    # The condition number is purely geometric (camera centers + ray directions)
+    # and so will look healthy even when the camera intrinsics are degenerate;
+    # the inverse-depth z column is the only one that reflects bad focals
+    # (via sigma_rad = noise / focal_max, which goes to inf for focal=0). Flag
+    # the case loudly so users do not read a normal-looking condition-number
+    # histogram as a clean bill of health.
+    bad_cameras = sum(
+        1
+        for cam in recon.cameras
+        if not all(np.isfinite(f) and f > 0.0 for f in cam.focal_lengths)
+    )
+    if bad_cameras:
+        click.echo(
+            click.style(
+                f"\nWARNING: {bad_cameras} of {recon.camera_count} camera(s) have "
+                "non-positive or non-finite focal length. The inverse-depth z "
+                "column collapses to ~0 for their points; the condition number "
+                "is a purely geometric proxy and does not reflect the broken "
+                "intrinsics.",
+                fg="yellow",
+                bold=True,
+            )
+        )
+
     finite = np.isfinite(z)
     n = int(finite.sum())
     if n == 0:

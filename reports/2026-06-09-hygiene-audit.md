@@ -44,6 +44,8 @@ duplicated helper. The remaining work is concentrated in the Rust crates.
 - Proposed fix: extract into a shared `visualization/_common.py` (or fold into an existing utility module) and import from both.
 - Effort: low
 - Risk: low — two internal call sites.
+> _Status (2026-06-22): Done — extracted to `visualization/_common.py::get_color_palette`
+> (with the more defensive `max(n_colors, 1)` divisor); both modules now import it._
 
 ---
 

@@ -9,8 +9,6 @@ two images, optionally comparing flow-based keypoint advection against
 correspondences from an SfM reconstruction.
 """
 
-import colorsys
-import random
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,6 +19,7 @@ from .._sfmtool import KdTree2d, advect_points as _rust_advect_points
 from .._sfmtool import compute_optical_flow as _rust_compute_optical_flow
 from .._histogram_utils import print_histogram
 from ..sift.file import SiftReader, get_sift_path_for_image
+from ._common import get_color_palette
 
 if TYPE_CHECKING:
     from .._sfmtool import SfmrReconstruction
@@ -52,20 +51,6 @@ def _find_nearest_within_tolerance(
         result[int(qi)] = (int(nearest_idx[qi]), float(distances[qi]))
 
     return result
-
-
-def _get_color_palette(n_colors: int) -> list:
-    """Generate a cycling color palette with distinct colors randomized.
-
-    Returns list of (B, G, R) tuples for use with cv2.
-    """
-    colors = []
-    for i in range(n_colors):
-        hue = i / max(n_colors, 1)
-        r, g, b = colorsys.hsv_to_rgb(hue, 0.9, 0.9)
-        colors.append((int(b * 255), int(g * 255), int(r * 255)))
-    random.Random(42).shuffle(colors)
-    return colors
 
 
 def _flow_to_color(flow_u: np.ndarray, flow_v: np.ndarray) -> np.ndarray:
@@ -443,7 +428,7 @@ def _draw_flow_only_mode(
     if max_features is not None:
         hit_pairs = hit_pairs[:max_features]
 
-    colors = _get_color_palette(max(len(hit_pairs), 1))
+    colors = get_color_palette(len(hit_pairs))
     for i, (qi, _ti) in enumerate(hit_pairs):
         pt = (int(positions1[qi, 0]), int(positions1[qi, 1]))
         cv2.circle(vis1, pt, feature_size, colors[i % len(colors)], -1)
