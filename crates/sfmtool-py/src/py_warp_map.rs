@@ -6,10 +6,10 @@
 use numpy::{PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
-use sfmtool_core::remap::{
+use sfmtool_core::camera::remap::{
     remap_aniso, remap_aniso_with_pyramid, remap_bilinear, ImageU8, ImageU8Pyramid,
 };
-use sfmtool_core::warp_map::WarpMap;
+use sfmtool_core::camera::warp_map::WarpMap;
 
 use crate::py_patch_cloud::PyOrientedPatch;
 use crate::py_rigid_transform::PyRigidTransform;

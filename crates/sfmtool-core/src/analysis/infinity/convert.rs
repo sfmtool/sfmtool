@@ -14,9 +14,9 @@
 
 use nalgebra::{Point3, Vector3};
 
+use crate::geometry::viewing_angle::viewing_rays;
+use crate::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
 use crate::reconstruction::{count_points_at_infinity, SfmrReconstruction};
-use crate::triangulation::{depth_uncertainty_batch, triangulate_batch};
-use crate::viewing_angle::viewing_rays;
 
 /// SIFT keypoint localisation noise floor (pixels).
 ///

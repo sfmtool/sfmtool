@@ -10,8 +10,8 @@
 
 use nalgebra::{Matrix3, Matrix3x4, Vector3};
 
-use crate::epipolar::{compute_epipole, compute_fundamental_matrix};
-use crate::rotation::{axis_angle_to_rotation_matrix, rotation_matrix_to_axis_angle};
+use crate::camera::epipolar::{compute_epipole, compute_fundamental_matrix};
+use crate::geometry::rotation::{axis_angle_to_rotation_matrix, rotation_matrix_to_axis_angle};
 
 /// Check if rectification is safe (epipole outside image bounds + margin).
 ///

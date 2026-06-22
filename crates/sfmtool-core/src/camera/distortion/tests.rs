@@ -2,7 +2,7 @@ use super::*;
 use approx::assert_relative_eq;
 
 // -----------------------------------------------------------------------
-// Test camera constructors (reused from camera_intrinsics tests)
+// Test camera constructors (reused from camera::intrinsics tests)
 // -----------------------------------------------------------------------
 
 fn pinhole() -> CameraIntrinsics {

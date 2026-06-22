@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::camera_intrinsics::{CameraIntrinsics, CameraModel};
-use crate::warp_map::WarpMap;
+use crate::camera::intrinsics::{CameraIntrinsics, CameraModel};
+use crate::camera::warp_map::WarpMap;
 use nalgebra::{Point3, Vector3};
 
 fn pinhole(f: f64, cx: f64, cy: f64, w: u32, h: u32) -> CameraIntrinsics {

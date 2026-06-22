@@ -3,7 +3,7 @@
 
 //! Python bindings for the background-floor track-cluster matcher.
 //!
-//! Exposes [`sfmtool_core::cluster_match`] as two functions:
+//! Exposes [`sfmtool_core::features::cluster_match`] as two functions:
 //! `background_floor_clusters` materializes the track clusters (the primary
 //! artefact) from a concatenated descriptor corpus, and
 //! `clusters_to_pair_matches` expands those clusters into the per-image-pair
@@ -16,7 +16,7 @@ use ndarray::ArrayView2;
 use numpy::{PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
-use sfmtool_core::cluster_match::{self, BackgroundFloorParams, Clusters};
+use sfmtool_core::features::cluster_match::{self, BackgroundFloorParams, Clusters};
 
 use crate::py_kdforest::{extract_u8_2d, resolve_forest_params};
 

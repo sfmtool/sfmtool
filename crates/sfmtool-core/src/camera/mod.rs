@@ -4,10 +4,10 @@
 //! Camera model: a 3D-viewport Camera plus SfM camera intrinsics, distortion,
 //! frustum / epipolar geometry, rectification, and image warping.
 
-pub mod camera_intrinsics;
 pub mod distortion;
 pub mod epipolar;
 pub mod frustum;
+pub mod intrinsics;
 pub mod rectification;
 pub mod remap;
 pub mod warp_map;

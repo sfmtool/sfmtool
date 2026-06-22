@@ -6,7 +6,7 @@
 //! Instead of matching image pairs, this matcher clusters the whole corpus of
 //! SIFT descriptors directly: each track's observations form a tight cluster in
 //! descriptor space, so a single k-NN query per descriptor over a randomized
-//! kd-tree forest ([`crate::kdforest`]) recovers candidate co-observations. Each
+//! kd-tree forest ([`crate::features::kdforest`]) recovers candidate co-observations. Each
 //! descriptor sets its own membership radius from its *background floor* — its
 //! `d`-th-nearest distance marks the shell of unrelated features, and neighbours
 //! within `alpha` of that floor are kept as candidates. Clusters are then
@@ -29,7 +29,7 @@ use std::borrow::Cow;
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use rayon::prelude::*;
 
-use crate::kdforest::{KdForestParams, KdForestU8};
+use crate::features::kdforest::{KdForestParams, KdForestU8};
 
 /// Tuning for the background-floor matcher. `Default` is the production config.
 /// The k-NN query width is derived, not configured: `d + 1` (self + the `d`

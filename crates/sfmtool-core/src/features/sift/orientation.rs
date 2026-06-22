@@ -333,7 +333,7 @@ pub fn assign_orientations(
 mod tests {
     use super::super::detect_keypoints;
     use super::*;
-    use crate::optical_flow::GrayImage;
+    use crate::features::optical_flow::GrayImage;
     use std::f32::consts::PI;
 
     /// A smooth image with a single dominant gradient direction: a linear ramp

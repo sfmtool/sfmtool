@@ -9,7 +9,7 @@
 use nalgebra::{Matrix3, Point3, Vector3};
 use rayon::prelude::*;
 
-use crate::rotation::skew_symmetric;
+use crate::geometry::rotation::skew_symmetric;
 use crate::{CameraIntrinsics, RigidTransform};
 
 /// Compute the fundamental matrix F from two camera poses and intrinsics.

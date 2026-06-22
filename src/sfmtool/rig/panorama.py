@@ -38,7 +38,7 @@ def _next_pow2(x: int) -> int:
     return 1 << (x - 1).bit_length()
 
 
-# Mirrors `sfmtool_core::spherical_tile_rig::MIN_PATCH_SIZE`.
+# Mirrors `sfmtool_core::spherical::tile_rig::MIN_PATCH_SIZE`.
 _MIN_PATCH_SIZE = 5
 
 

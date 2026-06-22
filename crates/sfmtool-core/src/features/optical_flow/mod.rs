@@ -7,7 +7,7 @@
 //!
 //! # Example
 //! ```
-//! use sfmtool_core::optical_flow::{compute_optical_flow, DisFlowParams, GrayImage};
+//! use sfmtool_core::features::optical_flow::{compute_optical_flow, DisFlowParams, GrayImage};
 //!
 //! let img_a = GrayImage::new_constant(64, 64, 0.5);
 //! let img_b = GrayImage::new_constant(64, 64, 0.5);
@@ -18,7 +18,7 @@
 //!
 //! # Flow composition and initialization
 //! ```
-//! use sfmtool_core::optical_flow::{
+//! use sfmtool_core::features::optical_flow::{
 //!     compute_optical_flow, compute_optical_flow_with_init, compose_flow,
 //!     DisFlowParams, GrayImage,
 //! };

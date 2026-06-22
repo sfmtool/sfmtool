@@ -7,8 +7,8 @@ use numpy::{IntoPyArray, PyArrayMethods, PyReadonlyArray2, PyUntypedArrayMethods
 use pyo3::prelude::*;
 use std::sync::OnceLock;
 
-use sfmtool_core::feature_match::descriptor;
-use sfmtool_core::optical_flow;
+use sfmtool_core::features::feature_match::descriptor;
+use sfmtool_core::features::optical_flow;
 
 /// Lazily initialized GPU context, shared across all calls.
 /// Returns `None` if no GPU is available.

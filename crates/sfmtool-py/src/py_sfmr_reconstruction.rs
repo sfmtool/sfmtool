@@ -9,9 +9,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::path::PathBuf;
 
-use sfmtool_core::infinity::Classification;
-use sfmtool_core::triangulation::{depth_uncertainty_batch, triangulate_batch};
-use sfmtool_core::viewing_angle::viewing_rays;
+use sfmtool_core::analysis::infinity::Classification;
+use sfmtool_core::geometry::viewing_angle::viewing_rays;
+use sfmtool_core::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
 use sfmtool_core::SfmrReconstruction;
 
 use crate::helpers::{serde_to_py, u128_bytes_to_py};
@@ -365,7 +365,7 @@ impl PySfmrReconstruction {
         // The patch center for each point is the point's own position.
         let centers: Vec<Point3<f64>> = self.inner.points.iter().map(|p| p.position).collect();
         Some(crate::py_patch_cloud::PyPatchCloud {
-            inner: sfmtool_core::patch_cloud::PatchCloud::from_halfvec_arrays(u, v, &centers),
+            inner: sfmtool_core::patch::cloud::PatchCloud::from_halfvec_arrays(u, v, &centers),
         })
     }
 
@@ -564,7 +564,8 @@ impl PySfmrReconstruction {
     ///         to 1.0.
     #[pyo3(signature = (noise_floor_px=None))]
     fn classify_points_at_infinity(&self, noise_floor_px: Option<f64>) -> Self {
-        let floor = noise_floor_px.unwrap_or(sfmtool_core::infinity::DEFAULT_NOISE_FLOOR_PX);
+        let floor =
+            noise_floor_px.unwrap_or(sfmtool_core::analysis::infinity::DEFAULT_NOISE_FLOOR_PX);
         Self {
             inner: self.inner.classify_points_at_infinity(floor),
         }

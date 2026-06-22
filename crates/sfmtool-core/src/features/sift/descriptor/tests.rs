@@ -1,6 +1,6 @@
 use super::*;
-use crate::optical_flow::GrayImage;
-use crate::sift::SiftParams;
+use crate::features::optical_flow::GrayImage;
+use crate::features::sift::SiftParams;
 
 // Default magnification / clamp (mirroring `SiftParams::default`) for the
 // tests that call the descriptor functions directly.

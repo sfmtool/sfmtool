@@ -1,15 +1,15 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python wrapper for [`sfmtool_core::spherical_tile_rig::SphericalTileRig`].
+//! Python wrapper for [`sfmtool_core::spherical::tile_rig::SphericalTileRig`].
 
 use std::path::PathBuf;
 
 use numpy::{PyArray1, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
-use sfmtool_core::sphere_points::RelaxConfig;
-use sfmtool_core::spherical_tile_rig::{
+use sfmtool_core::spherical::sphere_points::RelaxConfig;
+use sfmtool_core::spherical::tile_rig::{
     CamRigConversionError, SphericalTileRig, SphericalTileRigError, SphericalTileRigParams,
 };
 

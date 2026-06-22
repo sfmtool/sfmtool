@@ -1,5 +1,5 @@
 use super::*;
-use crate::camera_intrinsics::CameraModel;
+use crate::camera::intrinsics::CameraModel;
 
 /// Helper: build a simple pinhole camera.
 fn pinhole(width: u32, height: u32, focal: f64) -> CameraIntrinsics {

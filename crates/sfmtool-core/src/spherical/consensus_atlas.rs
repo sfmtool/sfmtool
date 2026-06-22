@@ -20,16 +20,16 @@
 //! *global* tile index via [`RansacPhotometricParams::tile_index_base`], and
 //! every other per-tile reduction in the chain is order-independent.
 
-use crate::camera_intrinsics::CameraIntrinsics;
-use crate::per_spherical_tile_source_stack::{
+use crate::camera::intrinsics::CameraIntrinsics;
+use crate::camera::remap::ImageU8;
+use crate::geometry::rot_quaternion::RotQuaternion;
+use crate::spherical::per_tile_source_stack::{
     BuildError, BuildParams, ConsensusAtlasError, PatchPixel, PerSphericalTileSourceStack,
 };
-use crate::photometric_ransac::{
+use crate::spherical::photometric_ransac::{
     refine_photometric_ransac, RansacPhotometricError, RansacPhotometricParams,
 };
-use crate::remap::ImageU8;
-use crate::rot_quaternion::RotQuaternion;
-use crate::spherical_tile_rig::SphericalTileRig;
+use crate::spherical::tile_rig::SphericalTileRig;
 
 /// Tunables for [`render_consensus_atlas`].
 #[derive(Debug, Clone)]

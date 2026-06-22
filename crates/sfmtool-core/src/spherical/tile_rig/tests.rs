@@ -6,9 +6,9 @@ use std::f64::consts::PI;
 use nalgebra::Vector3;
 
 use super::*;
-use crate::camera_intrinsics::{CameraIntrinsics, CameraModel};
-use crate::sphere_points::{random_sphere_points, RelaxConfig};
-use crate::warp_map::WarpMap;
+use crate::camera::intrinsics::{CameraIntrinsics, CameraModel};
+use crate::camera::warp_map::WarpMap;
+use crate::spherical::sphere_points::{random_sphere_points, RelaxConfig};
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 

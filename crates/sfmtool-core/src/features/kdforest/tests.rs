@@ -4,7 +4,7 @@
 //! Unit tests for the randomized kd-tree forest.
 
 use super::*;
-use crate::feature_match::descriptor::descriptor_distance_l2_squared;
+use crate::features::feature_match::descriptor::descriptor_distance_l2_squared;
 use rand::rngs::StdRng;
 use rand::RngExt;
 use rand::SeedableRng;

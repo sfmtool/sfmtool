@@ -3,8 +3,8 @@
 
 //! Python bindings for the sfmtool Rust SIFT detector and descriptor.
 //!
-//! Wraps [`sfmtool_core::sift::detect_keypoints`] and
-//! [`sfmtool_core::sift::extract_sift`]. Mirrors the `py_optical_flow.rs` house
+//! Wraps [`sfmtool_core::features::sift::detect_keypoints`] and
+//! [`sfmtool_core::features::sift::extract_sift`]. Mirrors the `py_optical_flow.rs` house
 //! conventions: numpy in, `IntoPyArray` out, the heavy compute wrapped in
 //! `py.detach(...)`, and `PyValueError` for bad inputs.
 
@@ -12,7 +12,7 @@ use numpy::{IntoPyArray, PyReadonlyArrayDyn, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::sift::{
+use sfmtool_core::features::sift::{
     self, detect_keypoints, extract_sift_partial as core_extract_sift_partial, gray, SiftKeypoint,
     SiftParams,
 };

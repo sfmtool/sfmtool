@@ -24,7 +24,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
-use crate::per_spherical_tile_source_stack::{PatchPixel, PerSphericalTileSourceStack};
+use crate::spherical::per_tile_source_stack::{PatchPixel, PerSphericalTileSourceStack};
 
 /// Tuning knobs; defaults match the spec's recommendations.
 #[derive(Debug, Clone)]

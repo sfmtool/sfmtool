@@ -13,12 +13,12 @@
 use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
 
-use crate::camera_intrinsics::CameraIntrinsics;
-use crate::patch_cloud::{mean_viewing_normal, OrientedPatch, PatchCloud};
+use crate::camera::intrinsics::CameraIntrinsics;
+use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, ImageU8Pyramid};
+use crate::camera::warp_map::WarpMap;
+use crate::geometry::rigid_transform::RigidTransform;
+use crate::patch::cloud::{mean_viewing_normal, OrientedPatch, PatchCloud};
 use crate::reconstruction::SfmrReconstruction;
-use crate::remap::{remap_aniso_with_pyramid, remap_bilinear, ImageU8Pyramid};
-use crate::rigid_transform::RigidTransform;
-use crate::warp_map::WarpMap;
 
 mod fronto_cache;
 pub mod prof;
@@ -788,7 +788,7 @@ fn median(values: &mut [f64]) -> f64 {
 /// 8-wide. With `xbar` also f32 there is no per-element narrowing. The residual
 /// only feeds the Tukey reweight (median/MAD/cutoff), so f32 precision is ample
 /// and the found weights — hence normals — are unaffected in practice. Mirrors
-/// the runtime-dispatch pattern of [`fronto_cache`] and [`crate::sift::simd`].
+/// the runtime-dispatch pattern of [`fronto_cache`] and [`crate::features::sift::simd`].
 #[inline]
 fn sum_sq_diff(row: &[f32], xbar: &[f32]) -> f32 {
     debug_assert_eq!(row.len(), xbar.len());
@@ -1523,7 +1523,7 @@ const AGREEMENT_SIGMA: f64 = 24.0;
 /// Map a rendered source pixel to RGB, replicating a single channel to grey and
 /// taking the first three of a multi-channel image (matching the thumbnail RGB
 /// convention).
-fn sample_rgb(img: &crate::remap::ImageU8, col: u32, row: u32, channels: u32) -> [f64; 3] {
+fn sample_rgb(img: &crate::camera::remap::ImageU8, col: u32, row: u32, channels: u32) -> [f64; 3] {
     match channels {
         0 => [0.0; 3],
         1 | 2 => {
@@ -1554,7 +1554,7 @@ fn sample_rgb(img: &crate::remap::ImageU8, col: u32, row: u32, channels: u32) ->
 struct PatchViewStack {
     resolution: u32,
     /// One full `R×R` render per kept view.
-    images: Vec<crate::remap::ImageU8>,
+    images: Vec<crate::camera::remap::ImageU8>,
     /// Full-grid per-pixel validity per kept view (row-major, length `R²`),
     /// parallel to `images`.
     valid: Vec<Vec<bool>>,

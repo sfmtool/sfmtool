@@ -15,7 +15,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
-use crate::frustum;
+use crate::camera::frustum;
 
 /// Compute camera viewing directions from quaternions.
 ///

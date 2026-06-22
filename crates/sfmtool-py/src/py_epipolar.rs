@@ -8,7 +8,7 @@ use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
-use sfmtool_core::epipolar::{plot_epipolar_curves_batch, EpipolarCurveOptions};
+use sfmtool_core::camera::epipolar::{plot_epipolar_curves_batch, EpipolarCurveOptions};
 use sfmtool_core::RigidTransform;
 
 use crate::PyCameraIntrinsics;

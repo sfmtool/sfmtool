@@ -6,13 +6,13 @@ use std::f64::consts::PI;
 use nalgebra::Vector3;
 
 use super::*;
-use crate::camera_intrinsics::{CameraIntrinsics, CameraModel};
-use crate::photometric_ransac::{refine_photometric_ransac, RansacPhotometricParams};
-use crate::remap::{remap_bilinear, ImageU8};
-use crate::rot_quaternion::RotQuaternion;
-use crate::sphere_points::RelaxConfig;
-use crate::spherical_tile_rig::{SphericalTileRig, SphericalTileRigParams};
-use crate::warp_map::WarpMap;
+use crate::camera::intrinsics::{CameraIntrinsics, CameraModel};
+use crate::camera::remap::{remap_bilinear, ImageU8};
+use crate::camera::warp_map::WarpMap;
+use crate::geometry::rot_quaternion::RotQuaternion;
+use crate::spherical::photometric_ransac::{refine_photometric_ransac, RansacPhotometricParams};
+use crate::spherical::sphere_points::RelaxConfig;
+use crate::spherical::tile_rig::{SphericalTileRig, SphericalTileRigParams};
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 use super::super::detect_keypoints;
 use super::*;
-use crate::optical_flow::GrayImage;
+use crate::features::optical_flow::GrayImage;
 
 /// Render a Gaussian blob (bright on a flat mid-gray background) centered at
 /// `(cx, cy)` with standard deviation `blob_sigma`.

@@ -34,7 +34,7 @@ impl SfmrReconstruction {
     /// Transforms all 3D point positions and camera poses. Returns a new
     /// reconstruction with the transformed data; `self` is not modified.
     pub fn apply_se3_transform(&self, transform: &crate::Se3Transform) -> Self {
-        use crate::rot_quaternion::RotQuaternion;
+        use crate::geometry::rot_quaternion::RotQuaternion;
 
         // Transform 3D points. A finite point gets the full similarity; a
         // point at infinity is a direction, so only the rotation acts on it
@@ -419,7 +419,7 @@ impl SfmrReconstruction {
         let track_feature_indexes: Vec<u32> = self.tracks.iter().map(|t| t.feature_index).collect();
         let track_point_ids: Vec<u32> = self.tracks.iter().map(|t| t.point_index).collect();
 
-        let filtered = crate::filter::filter_tracks_by_point_mask(
+        let filtered = crate::reconstruction::filter::filter_tracks_by_point_mask(
             mask,
             &track_image_indexes,
             &track_feature_indexes,
@@ -553,7 +553,7 @@ fn subset_rig_frame_data(rf: &RigFrameData, image_indices: &[u32]) -> RigFrameDa
 #[cfg(test)]
 mod patch_frame_tests {
     use super::*;
-    use crate::rot_quaternion::RotQuaternion;
+    use crate::geometry::rot_quaternion::RotQuaternion;
     use crate::Se3Transform;
     use nalgebra::{UnitQuaternion, Vector3 as V3};
     use ndarray::{Array2, Array4};

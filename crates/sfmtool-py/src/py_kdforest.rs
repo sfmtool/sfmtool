@@ -3,7 +3,7 @@
 
 //! Python bindings for the randomized kd-tree forest ANN index.
 //!
-//! [`PyKdForest`] wraps [`sfmtool_core::kdforest::KdForestU8`]: it builds once
+//! [`PyKdForest`] wraps [`sfmtool_core::features::kdforest::KdForestU8`]: it builds once
 //! from an `(N, D)` `uint8` descriptor array and answers batched approximate
 //! k-NN queries. The `(indices, distances)` output is exactly the layout the
 //! `sfmtool.feature_match` ratio test consumes, so an approximate matcher
@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use numpy::{PyArrayMethods, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
-use sfmtool_core::kdforest::{KdForestParams, KdForestU8};
+use sfmtool_core::features::kdforest::{KdForestParams, KdForestU8};
 
 /// Extract an `(N, D)` `uint8` array, with a clear error if the dtype is wrong.
 ///

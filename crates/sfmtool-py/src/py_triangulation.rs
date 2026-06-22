@@ -11,7 +11,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::triangulation::triangulate_batch as core_triangulate_batch;
+use sfmtool_core::reconstruction::triangulation::triangulate_batch as core_triangulate_batch;
 
 /// Triangulate a batch of tracks from world-space rays, returning each track's
 /// least-squares point and the observability diagnostics the solve computes.
