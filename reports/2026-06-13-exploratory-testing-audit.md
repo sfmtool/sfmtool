@@ -320,6 +320,9 @@ makes the extra siblings a surprise; worth a one-line note in `--help`.
   discovered candidates (which are added on top of the existing cloud), not the
   whole reconstruction, so "kept 0 finite" next to a growing total reads as a
   contradiction. Consider "discovered 7 new points at infinity (+7)".
+  > _Status (2026-06-22): Done — `infinity/discover.rs` now prints
+  > `discovered N new finite + M new at-infinity points, dropped K indeterminate
+  > (finite_horizon=…)`._
 - **`densify` produces *fewer* points than its input** (seoul 1108 → 325; it
   re-triangulates covisible pairs rather than augmenting). Counterintuitive for
   a command named "densify". The spec already flags densify as experimental and
@@ -331,6 +334,12 @@ makes the extra siblings a surprise; worth a one-line note in `--help`.
   reconstruction (median 41.1, max 4778.9). Not a crash, but the
   condition-number path appears not to reflect the degenerate camera, which
   could mask a real problem.
+  > _Status (2026-06-22): Done — kept the condition number's purely-geometric
+  > definition (it depends only on camera centers and ray directions, not on
+  > intrinsics), but `print_depth_reliability` now scans `recon.cameras` up
+  > front and prints a yellow `WARNING: N of M camera(s) have non-positive or
+  > non-finite focal length …` explaining that the inverse-depth z column
+  > collapses for those points and the condition number is geometry-only._
 - **Same latent `cast_slice` pattern lived across the other format crates.**
   > _Status (2026-06-13): Done — the A2 alignment fix was generalized. Every
   > read path that reinterpreted a freshly decompressed `Vec<u8>` as a wider
@@ -369,13 +378,14 @@ rig datasets. Type/extension validation and "exactly one mode" checks
 
 ## Suggested follow-ups (priority order)
 
-> _Status (2026-06-20): Items 1–3 and most of 4 are done. A1–A3 closed earlier;
-> B1/B3 (export conventions + align collision) and B4 (ignored-option errors)
-> done; B2/B5/B6 papercuts done. **Remaining open:** the Section C wording items
-> — the `--find-points-at-infinity` "kept 0 finite" summary reword (a Rust
-> `eprintln` in `infinity/discover.rs`, deferred to keep the CLI papercut PR
-> Python-only) and the `analyze --depth-reliability` insensitivity to broken
-> intrinsics._
+> _Status (2026-06-22): All numbered follow-ups (1–4) closed. A1–A3 closed
+> earlier; B1/B3 (export conventions + align collision) and B4 (ignored-option
+> errors) done; B2/B5/B6 papercuts done; and the two remaining Section C wording
+> items — the `--find-points-at-infinity` summary reword and the
+> `analyze --depth-reliability` broken-intrinsics warning — landed this run.
+> The `densify`-shrinks-the-cloud note from Section C is documented as
+> expected-but-rough in `specs/cli/densify-command.md` (it stays a feature note,
+> not a fix item)._
 
 1. **Harden the intrinsics/COLMAP ingress (A1–A3).** Validate finite, positive
    focal length and invertible `K` on import and at the PyO3 boundary; bound

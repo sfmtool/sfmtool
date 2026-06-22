@@ -7,11 +7,11 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
+from sfmtool.visualization._common import get_color_palette
 from sfmtool.visualization._epipolar_display import (
     _compute_fundamental_matrix,
     _draw_epipolar_line,
     _draw_polyline,
-    _get_color_palette,
 )
 from sfmtool._sfmtool import CameraIntrinsics, RotQuaternion, epipolar_curves
 
@@ -21,28 +21,28 @@ from sfmtool._sfmtool import CameraIntrinsics, RotQuaternion, epipolar_curves
 
 class TestGetColorPalette:
     def test_correct_count(self):
-        colors = _get_color_palette(10)
+        colors = get_color_palette(10)
         assert len(colors) == 10
 
     def test_valid_bgr_tuples(self):
-        colors = _get_color_palette(10)
+        colors = get_color_palette(10)
         for color in colors:
             assert len(color) == 3
             assert all(0 <= c <= 255 for c in color)
 
     def test_distinct_colors(self):
-        colors = _get_color_palette(10)
+        colors = get_color_palette(10)
         colors_array = np.array(colors)
         std_dev = np.std(colors_array, axis=0)
         assert np.all(std_dev > 10), "Colors should have some variation"
 
     def test_single_color(self):
-        colors = _get_color_palette(1)
+        colors = get_color_palette(1)
         assert len(colors) == 1
 
     def test_deterministic(self):
-        colors1 = _get_color_palette(5)
-        colors2 = _get_color_palette(5)
+        colors1 = get_color_palette(5)
+        colors2 = get_color_palette(5)
         assert colors1 == colors2
 
 

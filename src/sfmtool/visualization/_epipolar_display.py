@@ -3,9 +3,7 @@
 
 """Epipolar geometry visualization for SfM reconstructions."""
 
-import colorsys
 import os
-import random
 from pathlib import Path
 
 import cv2
@@ -16,21 +14,7 @@ from ..camera.cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
 from .._rectification import compute_stereo_rectification
 from ..sift.file import SiftReader, get_sift_path_for_image
 from .._sfmtool import RotQuaternion, epipolar_curves
-
-
-def _get_color_palette(n_colors: int) -> list:
-    """Generate a cycling color palette with distinct colors randomized.
-
-    Returns:
-        List of (B, G, R) tuples for use with cv2
-    """
-    colors = []
-    for i in range(n_colors):
-        hue = i / n_colors
-        r, g, b = colorsys.hsv_to_rgb(hue, 0.9, 0.9)
-        colors.append((int(b * 255), int(g * 255), int(r * 255)))
-    random.Random(42).shuffle(colors)
-    return colors
+from ._common import get_color_palette
 
 
 def _compute_fundamental_matrix(
@@ -408,7 +392,7 @@ def draw_epipolar_visualization(
             positions2 = reader.read_positions()
 
     # Generate color palette
-    colors = _get_color_palette(len(feature_pairs))
+    colors = get_color_palette(len(feature_pairs))
 
     # Handle rectification fallback for in-frame epipole
     if rectify and sweep_max_features is not None and rectification is None:

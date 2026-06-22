@@ -500,8 +500,9 @@ impl SfmrReconstruction {
             recon.observation_counts.push(track.members.len() as u32);
         }
         eprintln!(
-            "[find-infinity] kept {n_finite} finite + {n_infinity} at-infinity, \
-             dropped {n_dropped} indeterminate (finite_horizon={finite_horizon:.2})"
+            "[find-infinity] discovered {n_finite} new finite + {n_infinity} new \
+             at-infinity points, dropped {n_dropped} indeterminate \
+             (finite_horizon={finite_horizon:.2})"
         );
 
         debug_assert!(recon.points.len() >= old_point_count);
