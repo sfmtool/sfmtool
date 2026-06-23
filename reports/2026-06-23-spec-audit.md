@@ -307,7 +307,7 @@ to the Click handler is a refactor, not a bug fix.
 
 ### specs/core/sift.md
 **Summary:** Pure-Rust SIFT detector + descriptor. Status: Implemented; on-disk incremental extension still future.
-**Implementing code:** `features/sift/`, `sfmtool-py/src/py_sift.rs`, `py_sift_io.rs`.
+**Implementing code:** `features/sift/`, `sfmtool-py/src/py_sift.rs`, `sfmtool-py/src/io/sift.rs`.
 **Inconsistencies:** L4 Status, L463, L686 cite `sfmtool-core/src/sift/` → `features/sift/`.
 **Recommendation:** update spec — repath.
 

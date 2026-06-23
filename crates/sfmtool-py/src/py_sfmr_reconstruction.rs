@@ -15,7 +15,7 @@ use sfmtool_core::reconstruction::triangulation::{depth_uncertainty_batch, trian
 use sfmtool_core::SfmrReconstruction;
 
 use crate::helpers::{serde_to_py, u128_bytes_to_py};
-use crate::py_sfmr_io::parse_sfmr_data_from_dict;
+use crate::io::sfmr::parse_sfmr_data_from_dict;
 use crate::PyCameraIntrinsics;
 
 /// A loaded SfM reconstruction from a `.sfmr` file.

@@ -55,12 +55,7 @@ pub use py_range_expr::PyRangeExpr;
 
 // ── File I/O ──────────────────────────────────────────────────────────────
 
-mod py_camrig_io;
-mod py_colmap_binary;
-mod py_colmap_db;
-mod py_matches_io;
-mod py_sfmr_io;
-mod py_sift_io;
+mod io;
 
 // ── Image inspection ──────────────────────────────────────────────────────
 
@@ -123,48 +118,45 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(build_profile, m)?)?;
 
     // .sfmr file I/O
-    m.add_function(wrap_pyfunction!(py_sfmr_io::read_sfmr, m)?)?;
-    m.add_function(wrap_pyfunction!(py_sfmr_io::read_sfmr_metadata, m)?)?;
-    m.add_function(wrap_pyfunction!(py_sfmr_io::read_sfmr_content_hash, m)?)?;
-    m.add_function(wrap_pyfunction!(py_sfmr_io::write_sfmr, m)?)?;
-    m.add_function(wrap_pyfunction!(py_sfmr_io::verify_sfmr, m)?)?;
+    m.add_function(wrap_pyfunction!(io::sfmr::read_sfmr, m)?)?;
+    m.add_function(wrap_pyfunction!(io::sfmr::read_sfmr_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(io::sfmr::read_sfmr_content_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(io::sfmr::write_sfmr, m)?)?;
+    m.add_function(wrap_pyfunction!(io::sfmr::verify_sfmr, m)?)?;
 
     // COLMAP binary I/O
-    m.add_function(wrap_pyfunction!(py_colmap_binary::read_colmap_binary, m)?)?;
-    m.add_function(wrap_pyfunction!(py_colmap_binary::write_colmap_binary, m)?)?;
+    m.add_function(wrap_pyfunction!(io::colmap_binary::read_colmap_binary, m)?)?;
+    m.add_function(wrap_pyfunction!(io::colmap_binary::write_colmap_binary, m)?)?;
 
     // COLMAP SQLite database I/O
-    m.add_function(wrap_pyfunction!(py_colmap_db::write_colmap_db, m)?)?;
-    m.add_function(wrap_pyfunction!(py_colmap_db::read_colmap_db_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(io::colmap_db::write_colmap_db, m)?)?;
+    m.add_function(wrap_pyfunction!(io::colmap_db::read_colmap_db_matches, m)?)?;
 
     // .matches file I/O
-    m.add_function(wrap_pyfunction!(py_matches_io::read_matches, m)?)?;
-    m.add_function(wrap_pyfunction!(py_matches_io::read_matches_metadata, m)?)?;
-    m.add_function(wrap_pyfunction!(py_matches_io::write_matches, m)?)?;
-    m.add_function(wrap_pyfunction!(py_matches_io::verify_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(io::matches::read_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(io::matches::read_matches_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(io::matches::write_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(io::matches::verify_matches, m)?)?;
 
     // .camrig file I/O
-    m.add_function(wrap_pyfunction!(py_camrig_io::read_camrig_metadata, m)?)?;
-    m.add_function(wrap_pyfunction!(py_camrig_io::read_camrig, m)?)?;
-    m.add_function(wrap_pyfunction!(py_camrig_io::verify_camrig, m)?)?;
-    m.add_function(wrap_pyfunction!(py_camrig_io::write_camrig, m)?)?;
+    m.add_function(wrap_pyfunction!(io::camrig::read_camrig_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(io::camrig::read_camrig, m)?)?;
+    m.add_function(wrap_pyfunction!(io::camrig::verify_camrig, m)?)?;
+    m.add_function(wrap_pyfunction!(io::camrig::write_camrig, m)?)?;
 
     // .camrig image patterns
-    m.add_function(wrap_pyfunction!(py_camrig_io::validate_camrig_pattern, m)?)?;
-    m.add_function(wrap_pyfunction!(py_camrig_io::camrig_pattern_to_glob, m)?)?;
-    m.add_function(wrap_pyfunction!(py_camrig_io::camrig_pattern_matches, m)?)?;
-    m.add_function(wrap_pyfunction!(
-        py_camrig_io::camrig_pattern_frame_index,
-        m
-    )?)?;
+    m.add_function(wrap_pyfunction!(io::camrig::validate_camrig_pattern, m)?)?;
+    m.add_function(wrap_pyfunction!(io::camrig::camrig_pattern_to_glob, m)?)?;
+    m.add_function(wrap_pyfunction!(io::camrig::camrig_pattern_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(io::camrig::camrig_pattern_frame_index, m)?)?;
 
     // .sift file I/O
-    m.add_function(wrap_pyfunction!(py_sift_io::read_sift, m)?)?;
-    m.add_function(wrap_pyfunction!(py_sift_io::read_sift_metadata, m)?)?;
-    m.add_function(wrap_pyfunction!(py_sift_io::read_sift_partial, m)?)?;
-    m.add_function(wrap_pyfunction!(py_sift_io::write_sift, m)?)?;
-    m.add_class::<py_sift_io::SiftWriteQueue>()?;
-    m.add_function(wrap_pyfunction!(py_sift_io::verify_sift, m)?)?;
+    m.add_function(wrap_pyfunction!(io::sift::read_sift, m)?)?;
+    m.add_function(wrap_pyfunction!(io::sift::read_sift_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(io::sift::read_sift_partial, m)?)?;
+    m.add_function(wrap_pyfunction!(io::sift::write_sift, m)?)?;
+    m.add_class::<io::sift::SiftWriteQueue>()?;
+    m.add_function(wrap_pyfunction!(io::sift::verify_sift, m)?)?;
 
     // sfmtool SIFT detection / extraction
     m.add_function(wrap_pyfunction!(py_sift::detect_sift_keypoints, m)?)?;
