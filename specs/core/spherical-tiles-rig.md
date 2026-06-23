@@ -1,7 +1,7 @@
 # Spherical tile rig: discretizing the sphere as a rig of pinhole tiles
 
 **Status:** Implemented in
-`crates/sfmtool-core/src/spherical_tile_rig.rs` and exposed to Python as
+`crates/sfmtool-core/src/spherical/tile_rig.rs` and exposed to Python as
 `sfmtool._sfmtool.SphericalTileRig`. The atlas → destination resampler is
 the Rust method `SphericalTileRig::resample_atlas` (also exposed as
 `SphericalTileRig.resample_atlas` in Python). A thin Python convenience
@@ -66,7 +66,7 @@ rotation matrix without a trig call.
 ## Tile layout
 
 Tile look directions are produced by `evenly_distributed_sphere_points(n, …)`
-(`crates/sfmtool-core/src/sphere_points.rs`), which
+(`crates/sfmtool-core/src/spherical/sphere_points.rs`), which
 uniformly samples `n` points and then applies a KD-tree-accelerated
 Thomson-style 1/r² repulsion relaxation. The result is a free-form,
 near-uniform distribution: any `n` is allowed, the tile count is decoupled

@@ -1,10 +1,10 @@
 # Photometric refinement via per-tile RANSAC subset partition
 
-**Status:** Implemented — `crates/sfmtool-core/src/photometric_ransac.rs`
+**Status:** Implemented — `crates/sfmtool-core/src/spherical/photometric_ransac.rs`
 (`refine_photometric_ransac`, `RansacPhotometricParams`), with PyO3 bindings
 (`py_photometric_ransac.rs`). Consumed in production by the tile-batched
 consensus-atlas pipeline ([tile-batched-consensus-atlas.md](tile-batched-consensus-atlas.md)
-→ `consensus_atlas.rs`), which `sfm panorama` drives via `rig/panorama.py`.
+→ `spherical/consensus_atlas.rs`), which `sfm panorama` drives via `rig/panorama.py`.
 Originally a standalone draft; promoted to `specs/core/` once the production
 pipeline consumed its outputs, per its own graduation trigger.
 

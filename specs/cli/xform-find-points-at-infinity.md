@@ -6,7 +6,7 @@ points at infinity (and near-infinite distant points) in an already-solved
 images and confirming clusters with SIFT descriptors. Complements the existing
 [`classify_points_at_infinity`](../formats/sfmr-file-format.md), which only
 *reclassifies* points that the solve already triangulated. The clustering /
-matching / classification core lives in `crates/sfmtool-core/src/infinity/discover.rs`,
+matching / classification core lives in `crates/sfmtool-core/src/analysis/infinity/discover.rs`,
 exposed via the PyO3 method `SfmrReconstruction.find_points_at_infinity`; the
 CLI surface is `sfm xform --find-points-at-infinity` (plus
 `--classify-points-at-infinity` and `--max-features`), wired through the thin
@@ -47,7 +47,7 @@ the rays converge on the point, and the angle between them (the parallax) is
 what triangulation needs. Matching finite points across images therefore
 requires epipolar search: given a feature in image *i*, its match in image *j*
 lies somewhere along an epipolar curve, because its depth is unknown. That is
-what `feature_match/` does today (rectified / polar sweep along epipolar
+what `features/feature_match/` does today (rectified / polar sweep along epipolar
 curves).
 
 A point at infinity is different. Its rays are **parallel**: every camera sees
@@ -107,13 +107,13 @@ For each direction, query neighbours within the chord radius corresponding to
 `ε`, keep neighbour pairs that (a) come from *different* images and (b) pass a
 SIFT descriptor test, and assemble the surviving pairs into tracks. Assign each
 track a direction by the bearing mean `normalise(Σ rᵢ)` (the same rule
-`infinity/convert.rs` already uses) and emit it as a `w = 0` point with a new track.
+`analysis/infinity/convert.rs` already uses) and emit it as a `w = 0` point with a new track.
 
 This needs only one global structure, `O(N log N)` to build and near-linear to
 query, with no need to enumerate image pairs, and it naturally finds tracks
 spanning many images at once. It reuses `pixel_to_ray_batch`, `KdTree3d`, the
-descriptor L2 in `feature_match/descriptor.rs`, and the bearing-mean from
-`infinity/convert.rs`.
+descriptor L2 in `features/feature_match/descriptor.rs`, and the bearing-mean from
+`analysis/infinity/convert.rs`.
 
 Tests show that mutual descriptor agreement and **at most one feature per image**
 per track (a single infinite point cannot appear twice in one image) turn the
@@ -298,8 +298,8 @@ What the numbers say:
 | pixel → camera-frame unit ray (all models, fisheye) | `CameraIntrinsics::pixel_to_ray[_batch]` |
 | camera → world rotation | `quaternion_wxyz`, `R_iᵀ` (`camera_to_world_rotation_flat`) |
 | direction KD-tree, radius query | `KdTree3d` (PyO3) / `spatial.rs` `PointCloud3` |
-| descriptor L2 / best-match | `feature_match/descriptor.rs` |
+| descriptor L2 / best-match | `features/feature_match/descriptor.rs` |
 | all keypoints + descriptors per image | `get_sift_path_for_image` + `SiftReader` |
-| bearing-mean direction for a track | `infinity/convert.rs` (`normalise(Σ rᵢ)`) |
+| bearing-mean direction for a track | `analysis/infinity/convert.rs` (`normalise(Σ rᵢ)`) |
 | emit new points/tracks | `SfmrReconstruction.clone_with_changes` |
 | reclassify existing points | `classify_points_at_infinity` |

@@ -315,5 +315,5 @@ already achieves 7–13x speedup on large images.
 
 ## References
 
-- `crates/sfmtool-core/src/optical_flow/` — Rust optical flow implementation
-- `crates/sfmtool-core/src/optical_flow/gpu/` — GPU compute shaders and pipeline code
+- `crates/sfmtool-core/src/features/optical_flow/` — Rust optical flow implementation
+- `crates/sfmtool-core/src/features/optical_flow/gpu/` — GPU compute shaders and pipeline code

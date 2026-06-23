@@ -168,24 +168,27 @@ for the technical architecture.
 
 ## Multi-Panel Layout
 
-The viewer uses an `egui_dock`-based dockable, tabbed interface with three
+The viewer uses an `egui_dock`-based dockable, tabbed interface with four
 panels. Panels can be re-docked, reordered, and resized:
 
 - **3D Viewer** — Top-left (~67% width). Point cloud, frustums, navigation.
 - **Image Detail** — Top-right (~33% width). Full-resolution image of the
-  selected camera.
+  selected camera, with a 7-mode overlay toolbar (features, reproj error,
+  track length, max track angle, depth reliability, condition number, none).
+- **Point Track Detail** — Tabbed beside Image Detail. Per-observation
+  diagnostics for the selected 3D point: per-image reprojection error, ray
+  angle, thumbnails, copy-`pt3d_<hash>_<index>`.
 - **Image Browser** — Bottom strip (~20% height). Horizontally-scrollable
-  thumbnails with click-to-select and gesture-driven panning.
+  thumbnails with click-to-select, gesture-driven panning, and a navigation
+  minibar with animation playback.
 
-Selecting a camera in any panel updates all others — clicking a frustum in the
-3D viewer highlights it in the browser and loads the image in the detail panel,
-and vice versa.
+Selecting a camera or point in any panel updates all others — clicking a
+frustum in the 3D viewer highlights it in the browser and loads the image in
+the detail panel, and vice versa; clicking a point exposes its track across
+the panels.
 
 ## Future Directions
 
-- **Feature overlays**: Visualize tracked features, reprojection error, and
-  track length on images
 - **Point coloring modes**: Color by reprojection error, track length, or
   triangulation angle
-- **Animation playback**: Fly through the camera path as a sequence
 - **Image browser grid mode**: Multi-row thumbnail layout

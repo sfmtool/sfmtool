@@ -565,6 +565,11 @@ to the Click handler is a refactor, not a bug fix.
 1. **Fold `sfmr-v4-patch-keypoints.md` into `sfmr-file-format.md` and bump the headline version to 4.** The format spec is one version stale; the v4 changes (`feature_source`, `keypoints_xy`, `image_file_hashes`, the two new `tracks/metadata.json` keys, the two new archive entries) are described only in the still-marked-Draft v4 patch doc. This is the largest single spec/code divergence in the audit.
 
 2. **Sweep post-regroup path drift across `specs/core/` (14 of 16 specs) and the three GUI specs that name files.** Mechanical, doc-only, low risk; restores grep-ability of every "implementing code" pointer.
+   > _Status (2026-06-23): Done — scripted sweep rewrote 79 path mentions
+   > across 19 files in `specs/` (`triangulation` → `reconstruction/triangulation`,
+   > `epipolar` → `camera/epipolar`, etc.). All 14 core specs and the
+   > three CLI/workspace/GUI specs the audit flagged are repathed. See
+   > the `cleanup: inline-tests sweep + post-regroup spec drift` commit._
 
 3. **Fix the real CLI bugs:**
    - `flow.py` accepts `--pairs-dir` but ignores it (silent data-loss footgun).
@@ -574,5 +579,16 @@ to the Click handler is a refactor, not a bug fix.
    - `ws-init-command.md`'s `--max-features` mis-scoped ("COLMAP only") when code allows COLMAP+sfmtool.
 
 4. **Sync the three GUI specs that miss the 4th panel.** `gui-architecture.md`, `gui-multi-panel-image-browser.md`, and `gui-user-experience.md` still describe a 3-panel layout. `Tab::PointTrackDetail` shipped per `gui-point-track-detail.md`. Plus: the two new `OverlayMode` variants (`DepthReliability`, `ConditionNumber`) and the already-shipped infinity point-size slider need their status flipped from TODO to DONE in the relevant specs.
+   > _Status (2026-06-23): Done. All three specs document `Tab::PointTrackDetail`;
+   > the `gui-architecture.md` directory tree + Module Responsibilities table
+   > were fully rewritten to reflect the current `main.rs` / `lib.rs` / `app.rs`
+   > / `dock.rs` / `viewer_3d/` structure (and the dead `bg_image.wgsl` shader
+   > entry was removed); the overlay-mode table grew the `DepthReliability` and
+   > `ConditionNumber` rows; the `hovered_point_index` → `hovered_point` field
+   > rename landed; the `infinity_point_px` slider flipped from "Remaining UI
+   > work" to "shipped"; "Animation playback" moved out of
+   > `gui-user-experience.md`'s Future Directions; and `randomized-kdtree-forest.md`
+   > retired its stale "matcher CLI integration is a follow-up" note. Same
+   > commit as Top Priority #2._
 
 5. **Write three small specs for currently-undocumented but user-facing code.** `specs/core/reconstruction-alignment.md` for `analysis/alignment/{kabsch,ransac}.rs` (drives `sfm align`); a brief `specs/core/point-correspondence.md` for `reconstruction/point_correspondence.rs` (drives `sfm align`/`sfm merge`); an inventory note in `specs/cli/xform-command.md` pointing at `reconstruction/edit.rs` (drives most of `sfm xform`). These are the only substantial pieces of user-facing code with no spec coverage.

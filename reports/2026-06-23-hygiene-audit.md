@@ -127,6 +127,11 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
   wins. Roll in the smaller stragglers and `camera/viewport.rs` for uniformity.
 - Effort: low — purely mechanical per file.
 - Risk: low — test-only; `cargo test --workspace` covers.
+> _Status (2026-06-23): Done — all 18 in-scope files lifted into sibling
+> `tests.rs` (geometry ×5, analysis/alignment ×2, camera/viewport, plus the
+> 10 stragglers). `patch/normal_refine/fronto_cache.rs` deliberately excluded
+> per the user's scope direction (slated for the normal_refine split). See
+> the `cleanup: inline-tests sweep + post-regroup spec drift` commit._
 
 ---
 
@@ -336,6 +341,9 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
   543→28.
 - Effort: low — mechanical, mirrors the prior in-tree precedent.
 - Risk: low.
+> _Status (2026-06-23): Done — `sfmr-format/src/lib.rs` 1302 → 31,
+> `camrig-format/src/lib.rs` 671 → 35, `matches-format/src/lib.rs` 543 → 28.
+> `sift-format` left alone (below threshold). Same commit as Finding 3._
 
 > **Surveyed and cleared:** `crates/sfmr-format/src/write.rs` (1024) and
 > `depth_stats.rs` (500) — single coherent purpose, well-sectioned.

@@ -186,7 +186,7 @@ it only when you want to re-infer every sensor.
 For ~180° FOV fisheye rigs (e.g. OPENCV_FISHEYE with k1–k4):
 
 - **Undistortion blends to identity past ~90°** off-axis. See
-  `crates/sfmtool-core/src/distortion.rs` (search for
+  `crates/sfmtool-core/src/camera/distortion.rs` (search for
   `blend_fisheye_ray`). The k1–k4 polynomial is unreliable at extreme
   angles; sfmtool smoothstep-blends the recovered ray to the identity
   (small-angle) ray over 90°–100°. Solver output near the image border

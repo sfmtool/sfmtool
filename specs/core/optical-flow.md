@@ -116,7 +116,7 @@ Three quality/speed presets correspond to the DIS paper's operating points:
 ### Module Structure
 
 ```
-sfmtool-core/src/optical_flow/
+sfmtool-core/src/features/optical_flow/
 ├── mod.rs          # Public API: FlowField, compute_optical_flow(), presets
 ├── dis.rs          # DIS algorithm core
 ├── pyramid.rs      # Gaussian image pyramid
@@ -253,11 +253,11 @@ datasets (dino_dog_toy 2040x1536, seattle_backyard 360x640):
 
 | Group | What it measures |
 |-------|-----------------|
-| `optical_flow/end_to_end` | Full pipeline, fast + default presets |
-| `optical_flow/pyramid` | Gaussian pyramid construction (8 levels) |
-| `optical_flow/dis_refine` | Single-level DIS refinement at full resolution |
-| `optical_flow/variational` | Variational refinement at full resolution |
-| `optical_flow/bilinear` | 1M bilinear samples |
+| `features/optical_flow/end_to_end` | Full pipeline, fast + default presets |
+| `features/optical_flow/pyramid` | Gaussian pyramid construction (8 levels) |
+| `features/optical_flow/dis_refine` | Single-level DIS refinement at full resolution |
+| `features/optical_flow/variational` | Variational refinement at full resolution |
+| `features/optical_flow/bilinear` | 1M bilinear samples |
 
 ### Cross-Validation Against OpenCV
 

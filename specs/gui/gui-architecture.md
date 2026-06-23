@@ -95,8 +95,15 @@ sfmtool/
 │   ├── sfm-explorer/              # GUI application
 │   │   ├── examples/             # DirectManipulation reference examples (feature-gated)
 │   │   └── src/
-│   │       ├── main.rs           # Entry point, winit event loop, wgpu setup, egui_dock layout
-│   │       ├── viewer_3d.rs      # ViewportCamera, interaction, fly navigation
+│   │       ├── main.rs           # Thin entry-point shim (calls into lib.rs)
+│   │       ├── lib.rs            # Winit event loop, wgpu setup, window/DPI plumbing
+│   │       ├── app.rs            # Per-frame pipeline: uploads, render passes, egui pass
+│   │       ├── dock.rs           # egui_dock Tab enum and TabViewer impl (4 tabs)
+│   │       ├── viewer_3d/        # ViewportCamera, interaction, fly navigation
+│   │       │   ├── mod.rs        # Viewer3D state and per-frame `show`
+│   │       │   ├── camera.rs     # ViewportCamera + clip-plane / FOV control
+│   │       │   ├── input.rs      # Mouse / scroll / pinch / keyboard dispatch
+│   │       │   └── overlay.rs    # Status text + grid overlay
 │   │       ├── scene_renderer/   # GPU rendering pipeline (~14 modules)
 │   │       │   ├── mod.rs        # SceneRenderer struct, initialization
 │   │       │   ├── render.rs     # Multi-pass render method
@@ -118,9 +125,12 @@ sfmtool/
 │   │       │       ├── bg_distorted.rs # Background image pipeline (distorted/fisheye)
 │   │       │       ├── target.rs       # Target indicator pipeline
 │   │       │       └── track_ray.rs    # Track ray pipeline
-│   │       ├── state.rs          # Shared application state (AppState)
-│   │       ├── image_browser.rs  # Thumbnail strip with horizontal scrolling
-│   │       ├── image_detail.rs   # Full-resolution image display panel
+│   │       ├── state.rs              # Shared application state (AppState)
+│   │       ├── image_browser.rs      # Thumbnail strip with horizontal scrolling
+│   │       ├── image_detail.rs       # Full-resolution image display panel
+│   │       ├── point_track_detail.rs # Per-observation diagnostics for the
+│   │       │                         # selected 3D point (4th panel)
+│   │       ├── colormap.rs           # Shared colour ramps for overlays
 │   │       ├── platform/
 │   │       │   ├── mod.rs
 │   │       │   └── windows.rs    # DirectManipulation touchpad integration
@@ -130,7 +140,6 @@ sfmtool/
 │   │           ├── frustum.wgsl        # Frustum wireframe rendering
 │   │           ├── image_quad.wgsl     # Image texture on frustum far plane (pinhole)
 │   │           ├── distorted_quad.wgsl # Tessellated image quad (distorted cameras)
-│   │           ├── bg_image.wgsl       # Background image rendering (pinhole)
 │   │           ├── bg_image_distorted.wgsl # Background image rendering (distorted)
 │   │           ├── target_indicator.wgsl # Rotating octahedron at target
 │   │           └── track_ray.wgsl       # Track ray visualization
@@ -147,12 +156,17 @@ sfmtool/
 
 | Module | Responsibility |
 |--------|---------------|
-| `main.rs` | Window creation, wgpu device/surface, DirectManipulation init, event dispatch, egui integration, `egui_dock` layout with three tabs (3D Viewer, Image Browser, Image Detail) |
-| `viewer_3d.rs` | `ViewportCamera` (wraps `Camera` from sfmtool-core with FOV/clip planes), orbit/pan/zoom math, WASD fly navigation with Q/E tilt, input handling (mouse/trackpad/keyboard), Alt-mode target control, camera view mode, grid drawing |
-| `scene_renderer/` | All GPU pipeline management across ~14 modules: texture creation/resize, point upload, frustum upload (pinhole + distorted), thumbnail texture array atlas loading, uniform updates, multi-pass rendering, GPU readback, per-pass pipeline creation (`pipelines/` subdirectory) |
-| `state.rs` | `AppState` struct: reconstruction data, visibility toggles, selected image/points, rendering parameters |
-| `image_browser.rs` | Horizontally-scrollable thumbnail strip with click-to-select, double-click to enter camera view, gesture-driven panning, lazy thumbnail loading |
-| `image_detail.rs` | Full-resolution image display for the selected camera, with lazy loading and aspect-ratio-preserving fit |
+| `main.rs` | Thin entry-point shim (~6 lines) that calls into `lib::run`. |
+| `lib.rs` | Window creation, wgpu device/surface, DirectManipulation init, `winit` event loop, Windows DPI awareness, `egui_dock` `DockState` initialization with four tabs (3D Viewer, Image Browser, Image Detail, Point Track Detail). |
+| `app.rs` | The per-frame pipeline (`App::run_ui_and_paint`): per-frame uploads (points, frustums, frustum colors, thumbnails, track rays, bg image, clip planes), camera-uniform updates, scene encoder + render passes, egui pass with the dock UI, AccessKit propagation, surface acquire/present, pick-result dispatch. |
+| `dock.rs` | `Tab` enum (4 variants) and `egui_dock::TabViewer` implementation: routes each tab to its panel's `show()` and threads the cross-panel `*Response` shape into `AppState`. |
+| `viewer_3d/` | `ViewportCamera` (wraps `Camera` from sfmtool-core with FOV/clip planes), orbit/pan/zoom math, WASD fly navigation with Q/E tilt, input handling (mouse/trackpad/keyboard), Alt-mode target control, camera view mode, grid drawing. `mod.rs` orchestrates; `camera.rs`/`input.rs`/`overlay.rs` own the sub-concerns. |
+| `scene_renderer/` | All GPU pipeline management across ~14 modules: texture creation/resize, point upload, frustum upload (pinhole + distorted), thumbnail texture array atlas loading, uniform updates, multi-pass rendering, GPU readback, per-pass pipeline creation (`pipelines/` subdirectory). |
+| `state.rs` | `AppState` struct: reconstruction data, visibility toggles, selected image/points, hover state, rendering parameters. |
+| `image_browser.rs` | Horizontally-scrollable thumbnail strip with click-to-select, double-click to enter camera view, gesture-driven panning, lazy thumbnail loading, navigation minibar + animation playback. |
+| `image_detail.rs` | Full-resolution image display for the selected camera, with lazy loading, aspect-ratio-preserving fit, pan/zoom, and 7 overlay modes. |
+| `point_track_detail.rs` | Per-observation diagnostics for the selected 3D point: per-image reprojection error, ray angle, thumbnails, `pt3d_<hash>_<index>` ID copy. |
+| `colormap.rs` | Shared color ramps used by the overlay modes and point-cloud colorings. |
 
 ---
 
