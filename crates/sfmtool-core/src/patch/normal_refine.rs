@@ -224,7 +224,7 @@ pub struct NormalRefineResult {
 /// Windowed norm² below which a colour channel counts as flat (no texture
 /// signal); flat channels are dropped from the consensus so the z-normalized
 /// identity stays well-defined.
-const FLAT_NORM_SQ_EPS: f64 = 1e-6;
+pub(super) const FLAT_NORM_SQ_EPS: f64 = 1e-6;
 
 /// Minimum number of commonly-valid pixels for a support to be scoreable.
 const MIN_MASK_PIXELS: usize = 8;
@@ -290,7 +290,7 @@ fn exp_map_in_basis(
 // ---------------------------------------------------------------------------
 
 /// Per-pixel window weight over the `R×R` patch grid, in row-major order.
-fn window_weights(window: PatchWindow, resolution: u32) -> Vec<f64> {
+pub(super) fn window_weights(window: PatchWindow, resolution: u32) -> Vec<f64> {
     let r = resolution as usize;
     let step = 2.0 / r as f64;
     let mut w = Vec::with_capacity(r * r);
@@ -318,7 +318,7 @@ fn window_weights(window: PatchWindow, resolution: u32) -> Vec<f64> {
 
 /// Rebuild the patch on a new plane: same `center` / `half_extent`, the input
 /// `u_axis` reprojected onto the plane of `n` (`v = n × u`).
-fn repose_patch(base: &OrientedPatch, n: &Vector3<f64>) -> OrientedPatch {
+pub(super) fn repose_patch(base: &OrientedPatch, n: &Vector3<f64>) -> OrientedPatch {
     OrientedPatch::from_center_normal(base.center, *n, base.u_axis, base.half_extent)
 }
 
@@ -330,13 +330,13 @@ fn repose_patch(base: &OrientedPatch, n: &Vector3<f64>) -> OrientedPatch {
 /// commonly-valid masked pixels (computed at the level's *center* normal and
 /// held fixed across that level's candidates, so `Φ` stays continuous and
 /// tilts can't shrink the support onto an easy region).
-struct LevelContext {
+pub(super) struct LevelContext {
     /// Indices into the caller's `views` slice.
-    kept: Vec<usize>,
+    pub(super) kept: Vec<usize>,
     /// Linear `row * R + col` indices of the masked pixels.
-    pixels: Vec<usize>,
+    pub(super) pixels: Vec<usize>,
     /// Window weight per masked pixel (parallel to `pixels`).
-    weights: Vec<f64>,
+    pub(super) weights: Vec<f64>,
 }
 
 /// Per-pixel validity of `patch` in `view` (window support only).
@@ -365,7 +365,7 @@ fn view_valid_mask(
 /// view on its window-weighted valid fraction, intersect the survivors'
 /// validity. `None` when fewer than `min_views` views (or too few pixels)
 /// survive.
-fn build_level_context(
+pub(super) fn build_level_context(
     base: &OrientedPatch,
     center_n: &Vector3<f64>,
     views: &[ProjectedImage<'_>],
@@ -432,7 +432,7 @@ fn build_level_context(
 /// Channels that are flat (windowed norm ≈ 0) in *any* kept view are dropped
 /// for every view, keeping all inner products in one space; `None` when no
 /// channel survives.
-fn normalized_stack(
+pub(super) fn normalized_stack(
     patch: &OrientedPatch,
     ctx: &LevelContext,
     views: &[ProjectedImage<'_>],
@@ -508,7 +508,7 @@ fn normalized_stack(
 /// by the source-render path ([`normalized_stack`]) and the fronto cache
 /// ([`fronto_cache::eval_phi`]) so the two cannot drift.
 #[allow(clippy::too_many_arguments)]
-fn znormalize_into(
+pub(super) fn znormalize_into(
     raw: &[f32],
     views: usize,
     channels: usize,
@@ -518,6 +518,28 @@ fn znormalize_into(
     sqrt_w: &[f32],
     out: &mut Vec<f32>,
 ) -> Option<usize> {
+    znormalize_into_kept(raw, views, channels, n, weights, total_w, sqrt_w, out)
+        .map(|(kept, _)| kept)
+}
+
+/// Like [`znormalize_into`], but also returns the per-*original*-channel keep
+/// mask (length `channels`, parallel to the input channels): `true` where the
+/// channel was textured in every view and survives into the compacted output,
+/// `false` where it was dropped as flat. View selection needs this to anchor a
+/// candidate's score to the *reference's* surviving original channels (so it
+/// never correlates the reference's channel A against a candidate's channel B);
+/// refinement ignores it. Numerically identical to [`znormalize_into`].
+#[allow(clippy::too_many_arguments)]
+pub(super) fn znormalize_into_kept(
+    raw: &[f32],
+    views: usize,
+    channels: usize,
+    n: usize,
+    weights: &[f64],
+    total_w: f64,
+    sqrt_w: &[f32],
+    out: &mut Vec<f32>,
+) -> Option<(usize, Vec<bool>)> {
     let mut keep = vec![true; channels];
     // (mean, inv_norm) per (view, channel), as f32 for the normalize kernel.
     let mut stats = vec![(0.0f32, 0.0f32); views * channels];
@@ -563,7 +585,7 @@ fn znormalize_into(
             kc += 1;
         }
     }
-    Some(kept)
+    Some((kept, keep))
 }
 
 /// Horizontal sum of a 4-lane f64 vector.
@@ -587,6 +609,15 @@ unsafe fn hsum256_pd(v: std::arch::x86_64::__m256d) -> f64 {
 /// f32 accumulation here moves normals (measured). The baseline target limits the
 /// autovectorized fallback to SSE, so an AVX2+FMA kernel (4-wide f64, widening the
 /// f32 `col`) is dispatched at runtime; same pattern as [`sum_sq_diff`].
+/// `pub(super)` re-export of [`weighted_moments`] for view selection, which
+/// computes a candidate channel's windowed mean / norm directly (to score it on
+/// the *reference's* surviving channels) rather than going through the
+/// compacting [`znormalize_into`]. Same `(Σw·x, Σw·x²)` convention.
+#[inline]
+pub(super) fn weighted_moments_pub(col: &[f32], w: &[f64]) -> (f64, f64) {
+    weighted_moments(col, w)
+}
+
 #[inline]
 fn weighted_moments(col: &[f32], w: &[f64]) -> (f64, f64) {
     debug_assert_eq!(col.len(), w.len());
@@ -727,7 +758,7 @@ unsafe fn znorm_write_avx2(
 #[derive(Default)]
 pub(super) struct ConsensusScratch {
     /// View weights (`views`).
-    w: Vec<f64>,
+    pub(super) w: Vec<f64>,
     /// Weighted per-(channel, pixel) consensus (`channels·n`). f32: it is only
     /// consumed by the IRLS residual that feeds the robust reweight, so the
     /// accumulation precision is immaterial, and f32 keeps both the SAXPY and the
@@ -909,7 +940,7 @@ unsafe fn axpy_f32_avx2(xb: &mut [f32], row: &[f32], w: f32, n: usize) {
 /// weights), re-formed `iters` times. All buffers live in `sc` (no per-candidate
 /// / per-iteration allocation); the weighted consensus `xbar` is accumulated by
 /// SAXPY over contiguous per-view rows.
-fn irls_view_weights(
+pub(super) fn irls_view_weights(
     xs: &[f32],
     views: usize,
     channels: usize,
