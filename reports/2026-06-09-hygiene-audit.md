@@ -57,6 +57,17 @@ duplicated helper. The remaining work is concentrated in the Rust crates.
 - Proposed fix: regroup into `geometry/`, `camera/`, `spherical/` with `lib.rs` re-export shims for a transition period.
 - Effort: medium — mechanical mod moves + path updates across the workspace (`sfmtool-py`, `sfm-explorer`, `sfmr-*` import `sfmtool_core::<flat>`).
 - Risk: medium — external `use sfmtool_core::transform::…` paths break (compiler-caught); re-export shims mitigate.
+> _Status (2026-06-22): Done — landed across four PRs over the regroup arc:
+> #107 Phase 1 (move into 7 topic groups with re-export shims), #109 Phase 2
+> (drop shims + rename redundant prefixes), #110 sfmr-v4 stage-2 (upstream,
+> orthogonal — included for chronology), #111 post-regroup cleanups (split
+> `Camera` viewport and `SfmrReconstruction` data out of their `mod.rs` files,
+> add group-level facade re-exports + `*Error` parity, move
+> `image_pair_graph`/`point_inspect` to `analysis/`, drop stuttery
+> `patch_view_indices_from_reconstruction` name). Final layout:
+> `geometry/`, `camera/`, `reconstruction/`, `features/`, `analysis/`,
+> `spherical/`, `patch/`, plus `spatial.rs` at the root. Zero cycles, all
+> `mod.rs` files now thin wiring._
 
 ### 3. `optical_flow/gpu/mod.rs` mixes wgpu plumbing, the variational refiner, and DIS orchestration (carried forward, #13)
 - Location: `crates/sfmtool-core/src/optical_flow/gpu/mod.rs` (1438 lines, unchanged)
