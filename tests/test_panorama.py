@@ -10,7 +10,8 @@ from click.testing import CliRunner
 
 from sfmtool._filenames import number_from_filename
 from sfmtool.rig.panorama import load_panorama_rig, select_source_indices
-from sfmtool._sfmtool import SfmrReconstruction, SphericalTileRig, write_camrig
+from sfmtool._sfmtool import SfmrReconstruction, SphericalTileRig
+from sfmtool._sfmtool.io import write_camrig
 from sfmtool.cli import main
 
 

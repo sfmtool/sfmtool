@@ -100,7 +100,7 @@ def from_colmap_bin(
 
         # We need to do a two-pass: first read to get counts, then build metadata.
         # Use a placeholder metadata, then update after loading.
-        from .._sfmtool import read_colmap_binary
+        from .._sfmtool.io import read_colmap_binary
 
         data = read_colmap_binary(colmap_reconstruction_path)
         num_images = len(data["image_names"])

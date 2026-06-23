@@ -189,3 +189,44 @@ pub(crate) fn extract_optional_3x3_matrix(
         Ok(None)
     }
 }
+
+/// Install a child PyO3 submodule on `parent`.
+///
+/// `public_name` is the `__name__` the binding objects expose to Python
+/// introspection (tracebacks, IPython `?`, Sphinx, `pickle.dumps`,
+/// `inspect.getmodule`). The last `.`-segment of `public_name` becomes the
+/// attribute on `parent` (so `public_name = "sfmtool.io"` makes
+/// `parent.io = child`).
+///
+/// Wires up the three things every PyO3 submodule needs:
+/// 1. `__name__ == public_name`, set at creation so every function and class
+///    registered on the child reports `__module__ == public_name` rather
+///    than the bare attribute (which collides with stdlib for names like
+///    `io`). The Python introspection name is independent of the actual
+///    dotted import path.
+/// 2. An entry in `sys.modules` keyed at the real import path
+///    (`parent.__name__ + "." + attr`), populated before `register` runs so
+///    any class registration that introspects its own module sees the
+///    canonical instance and so `from <real_path> import X` resolves
+///    without a prior `import <real_path>`.
+/// 3. Attachment to `parent` as a regular attribute via `add_submodule`.
+pub(crate) fn install_submodule(
+    parent: &Bound<'_, PyModule>,
+    public_name: &str,
+    register: impl FnOnce(&Bound<'_, PyModule>) -> PyResult<()>,
+) -> PyResult<()> {
+    let py = parent.py();
+    let attr = match public_name.rsplit_once('.') {
+        Some((_, last)) => last,
+        None => public_name,
+    };
+    let parent_name: String = parent.name()?.extract()?;
+    let sys_modules_key = format!("{parent_name}.{attr}");
+
+    let child = PyModule::new(py, public_name)?;
+    py.import("sys")?
+        .getattr("modules")?
+        .set_item(&sys_modules_key, &child)?;
+    register(&child)?;
+    parent.add_submodule(&child)
+}

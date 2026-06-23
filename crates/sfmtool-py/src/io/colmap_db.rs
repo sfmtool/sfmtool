@@ -269,3 +269,9 @@ pub fn read_colmap_db_matches(
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     matches_data_to_py(py, data)
 }
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(write_colmap_db, m)?)?;
+    m.add_function(wrap_pyfunction!(read_colmap_db_matches, m)?)?;
+    Ok(())
+}

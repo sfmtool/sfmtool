@@ -180,3 +180,11 @@ pub fn verify_matches(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
     matches_format::verify_matches(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(read_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(read_matches_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(write_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_matches, m)?)?;
+    Ok(())
+}

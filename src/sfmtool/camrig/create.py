@@ -63,7 +63,7 @@ def normalize_pattern(pattern: str) -> str:
     same rule the format's `validate()` enforces (see
     `specs/formats/camrig-file-format.md`).
     """
-    from .._sfmtool import validate_camrig_pattern
+    from .._sfmtool.io import validate_camrig_pattern
 
     normalized = pattern.replace("\\", "/").strip()
     try:
@@ -301,7 +301,7 @@ def build_camrig_from_images(
     """
     import numpy as np
 
-    from .._sfmtool import write_camrig
+    from .._sfmtool.io import write_camrig
 
     output_file = Path(output_file)
     rig_root = output_file.parent

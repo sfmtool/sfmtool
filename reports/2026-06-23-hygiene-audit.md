@@ -163,6 +163,19 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
   must keep resolving; PyO3 submodules have `sys.modules` quirks; this is the
   only flatness reaching the public Python API.
 
+> _Status (2026-06-23): Partially done — the `io` slice landed. The 24
+> file-format I/O entries (5 `.sfmr` + 2 COLMAP-binary + 2 COLMAP-db + 4
+> `.matches` + 4 `.camrig` + 4 camrig-pattern + 5 `.sift` + `SiftWriteQueue`)
+> are now registered on a `_sfmtool.io` PyO3 submodule via
+> `PyModule::new`/`add_submodule` plus a `sys.modules["sfmtool._sfmtool.io"]`
+> insertion so `from sfmtool._sfmtool.io import …` resolves without an
+> explicit prior `import`. All 30+ Python call sites (src + tests) updated to
+> the new path; the parent `_sfmtool` no longer carries the I/O names. The
+> remaining seams (`.match`, `.geometry`, `.flow`, `.patch`, `.spherical`) and
+> the `from sfmtool._sfmtool import *` wildcard in `src/sfmtool/__init__.py`
+> still need the same treatment. Commit (branch
+> `claude/pyo3-io-submodule`)._
+
 ### 5. First cut of #4: move the six `py_*_io.rs` into `crates/sfmtool-py/src/io/`
 
 - Location: `crates/sfmtool-py/src/` — `py_sfmr_io.rs` (309),

@@ -271,7 +271,7 @@ def test_kerry_park_camrig_parses_as_fisheye_360(
     """The kerry_park.camrig should be a 2-sensor ``fisheye_360`` rig sharing
     one OPENCV_FISHEYE camera, with the right sensor flipped 180° about Y.
     """
-    from sfmtool._sfmtool import read_camrig
+    from sfmtool._sfmtool.io import read_camrig
 
     data = read_camrig(str(isolated_kerry_park_camrig / "kerry_park.camrig"))
     meta = data["metadata"]

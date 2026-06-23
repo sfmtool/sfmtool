@@ -338,7 +338,7 @@ def _patch_save_reconstructions(monkeypatch, fake_models: dict[str, dict]):
     `track_image_indexes` and `cameras`. Returns the `saved` dict that the
     fake reconstructions record their output paths into.
     """
-    import sfmtool._sfmtool as _sfmtool_mod
+    import sfmtool._sfmtool.io as _sfmtool_io
     from sfmtool import _incremental_sfm
 
     def fake_read(recon_dir):
@@ -350,7 +350,7 @@ def _patch_save_reconstructions(monkeypatch, fake_models: dict[str, dict]):
         name = Path(recon_dir).name
         return _FakeRecon(name, len(fake_models[name]["image_names"]), saved)
 
-    monkeypatch.setattr(_sfmtool_mod, "read_colmap_binary", fake_read, raising=False)
+    monkeypatch.setattr(_sfmtool_io, "read_colmap_binary", fake_read)
     monkeypatch.setattr(_incremental_sfm, "colmap_binary_to_rust_sfmr", fake_convert)
     monkeypatch.setattr(_incremental_sfm, "build_metadata", lambda **kwargs: {})
     return saved

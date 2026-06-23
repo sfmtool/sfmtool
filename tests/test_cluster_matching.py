@@ -163,7 +163,7 @@ class TestClusterCli:
         assert result.exit_code == 0, result.output
         assert output_path.exists()
 
-        from sfmtool._sfmtool import read_matches
+        from sfmtool._sfmtool.io import read_matches
 
         matches_data = read_matches(str(output_path))
         # The model fed geometric verification: TVGs are present.
@@ -205,7 +205,7 @@ class TestClusterCli:
         assert "track clusters" in result.output
         assert output_path.exists()
 
-        from sfmtool._sfmtool import read_matches
+        from sfmtool._sfmtool.io import read_matches
 
         matches_data = read_matches(str(output_path))
         meta = matches_data["metadata"]

@@ -270,7 +270,7 @@ def resolve_camrig_for_solve(
     if not camrig_files:
         return None
 
-    from .._sfmtool import read_camrig
+    from .._sfmtool.io import read_camrig
 
     solve_set = {Path(p).resolve() for p in image_paths}
 

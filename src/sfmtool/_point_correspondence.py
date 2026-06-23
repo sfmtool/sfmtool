@@ -10,8 +10,8 @@ import numpy as np
 from ._sfmtool import (
     SfmrReconstruction,
     find_point_correspondences_py,
-    read_sift_partial,
 )
+from ._sfmtool.io import read_sift_partial
 from .sift.file import get_sift_path_from_recon
 
 

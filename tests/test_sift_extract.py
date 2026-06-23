@@ -279,7 +279,7 @@ def test_sift_write_queue_writes_and_propagates_errors(
     it. A good path produces a readable .sift; a save into a missing directory
     surfaces as an IOError from join().
     """
-    from sfmtool._sfmtool import SiftWriteQueue
+    from sfmtool._sfmtool.io import SiftWriteQueue
     from sfmtool.sift.extract_sfmtool import (
         extract_sift_with_sfmtool,
         get_default_sfmtool_feature_options,

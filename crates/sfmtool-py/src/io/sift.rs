@@ -127,7 +127,7 @@ pub fn write_sift(
 // `unsendable`: the queue holds mpsc Receivers (Send but not Sync) and is only
 // ever used from the single Python thread that owns it; the spawned rayon tasks
 // hold the Senders. This avoids the default pyclass `Send + Sync` requirement.
-#[pyclass(unsendable)]
+#[pyclass(unsendable, module = "sfmtool.io")]
 pub struct SiftWriteQueue {
     pending: std::collections::VecDeque<std::sync::mpsc::Receiver<Result<(), String>>>,
 }
@@ -238,4 +238,14 @@ impl Drop for SiftWriteQueue {
 #[pyfunction]
 pub fn verify_sift(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
     sift_format::verify_sift(&path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+}
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(read_sift, m)?)?;
+    m.add_function(wrap_pyfunction!(read_sift_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(read_sift_partial, m)?)?;
+    m.add_function(wrap_pyfunction!(write_sift, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_sift, m)?)?;
+    m.add_class::<SiftWriteQueue>()?;
+    Ok(())
 }
