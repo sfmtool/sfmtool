@@ -45,8 +45,9 @@ reconstruction.sfmr (ZIP archive)
 │   ├── camera_indexes.{N}.uint32.zst          # Camera assignment per image
 │   ├── quaternions_wxyz.{N}.4.float64.zst     # Camera rotations (WXYZ format)
 │   ├── translations_xyz.{N}.3.float64.zst     # Camera translations (XYZ format)
-│   ├── feature_tool_hashes.{N}.uint128.zst    # Feature extraction tool identification
-│   ├── sift_content_hashes.{N}.uint128.zst    # Feature file content verification
+│   ├── feature_tool_hashes.{N}.uint128.zst    # (sift_files only) feature extraction tool identification
+│   ├── sift_content_hashes.{N}.uint128.zst    # (sift_files only) feature file content verification
+│   ├── image_file_hashes.{N}.uint128.zst      # (embedded_patches only) source image identity (version 4+)
 │   ├── thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst # 128x128 image thumbnails (RGB)
 │   ├── metadata.json.zst                      # Image metadata
 │   ├── depth_statistics.json.zst                       # Per-image depth stats
@@ -62,11 +63,21 @@ reconstruction.sfmr (ZIP archive)
 │   └── patch_bitmaps_y_x_rgba.{N}.{R}.{R}.4.uint8.zst # (Optional) R×R RGBA patch textures, alpha = confidence (version 3+)
 └── tracks/
     ├── image_indexes.{M}.uint32.zst           # Image index per observation
-    ├── feature_indexes.{M}.uint32.zst         # Feature index per observation
+    ├── feature_indexes.{M}.uint32.zst         # (sift_files only) feature index per observation
+    ├── keypoints_xy.{M}.2.float32.zst         # (embedded_patches only) inline 2D keypoint (version 4+)
     ├── point_indexes.{M}.uint32.zst           # Point index per observation
     ├── observation_counts.{N}.uint32.zst      # Observations per point
     └── metadata.json.zst                      # Tracks metadata
 ```
+
+**Observation source (version 4+).** A file declares, at the top level, a
+`feature_source ∈ {"sift_files", "embedded_patches"}` selecting how each
+observation's 2D coordinate is carried; there is **no mixing** within a file. The
+two modes differ only in the per-observation and per-image columns above (marked
+*sift_files only* / *embedded_patches only*). A `sift_files` file is the classic
+model (and what versions 1–3 always were); an `embedded_patches` file stores the
+2D coordinate inline, based on patches. See
+[Observation source](#observation-source-version-4) below.
 
 Where:
 - `{N}` = number of items (images, points, etc.)
@@ -83,7 +94,8 @@ JSON structure describing the reconstruction:
 
 ```json
 {
-  "version": 3,
+  "version": 4,
+  "feature_source": "sift_files",
   "operation": "sfm_solve",
   "tool": "colmap",
   "tool_version": "3.10",
@@ -119,9 +131,14 @@ JSON structure describing the reconstruction:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. Must be `3` for this specification. See
-  [Versioning and Migration](#versioning-and-migration) for the relationship
-  to versions `1` and `2`.
+- `version`: Format version number (`1`–`4`).
+  See [Versioning and Migration](#versioning-and-migration) for the relationship
+  to earlier versions.
+- `feature_source`: (version 4+) How each observation's 2D coordinate is carried
+  — `"sift_files"` (a reference into a per-image `.sift` file, the model of
+  versions 1–3) or `"embedded_patches"` (an inline patch-derived keypoint). A
+  file is wholly one mode. Absent in versions 1–3, which are read as
+  `"sift_files"`. See [Observation source](#observation-source-version-4).
 - `operation`: Type of operation that created this reconstruction
   - `"sfm_solve"`: Structure-from-Motion reconstruction
   - `"transform"`: Geometric transformation of an existing reconstruction
@@ -222,9 +239,9 @@ XXH128 hashes for integrity verification:
 - `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`
 - `rigs_xxh128`: (Optional) Hash of all rigs data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Present only when `rigs/` section exists.
 - `frames_xxh128`: (Optional) Hash of all frames data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Present only when `frames/` section exists.
-- `images_xxh128`: Hash of all image data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order (includes depth statistics and histogram files)
+- `images_xxh128`: Hash of all image data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order (includes depth statistics and histogram files). The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file.
 - `points3d_xxh128`: Hash of all points3d data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Includes the optional per-point arrays — `normals_xyz`, and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
-- `tracks_xxh128`: Hash of all tracks data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order
+- `tracks_xxh128`: Hash of all tracks data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. The present per-observation column is mode-dependent: `feature_indexes` for a `sift_files` file, or `keypoints_xy` for an `embedded_patches` file (the other is absent).
 - `content_xxh128`: Hash of all present section hashes concatenated as raw 16-byte big-endian digests in order: metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks.
 
 **Note**: Per-section metadata files (`images/metadata.json.zst`, `points3d/metadata.json.zst`, `tracks/metadata.json.zst`) are included in their respective section hashes.
@@ -481,7 +498,7 @@ Camera translation vectors:
 - **Format**: [x, y, z] translation vector
 - **Convention**: World-to-camera translation (from world coordinates to camera coordinates)
 
-#### `images/feature_tool_hashes.{N}.uint128.zst`
+#### `images/feature_tool_hashes.{N}.uint128.zst` (sift_files only)
 
 XXH128 hashes identifying feature extraction tool:
 
@@ -489,8 +506,10 @@ XXH128 hashes identifying feature extraction tool:
 - **Data type**: `uint128` (little-endian, 16 bytes per hash)
 - **Format**: Hash of feature tool metadata (tool name + options)
 - **Purpose**: Links to specific .sift file version
+- **Presence**: present in `sift_files` files; **absent** in `embedded_patches`
+  files (there is no `.sift` to link to). Always present in versions 1–3.
 
-#### `images/sift_content_hashes.{N}.uint128.zst`
+#### `images/sift_content_hashes.{N}.uint128.zst` (sift_files only)
 
 XXH128 hashes of feature file contents:
 
@@ -498,6 +517,27 @@ XXH128 hashes of feature file contents:
 - **Data type**: `uint128` (little-endian, 16 bytes per hash)
 - **Format**: Hash of .sift file content
 - **Purpose**: Verifies feature data integrity
+- **Presence**: present in `sift_files` files; **absent** in `embedded_patches`
+  files. Always present in versions 1–3.
+
+#### `images/image_file_hashes.{N}.uint128.zst` (embedded_patches only, version 4+)
+
+XXH128 hashes of the source image file bytes — the direct image-identity hash
+that substitutes for the `.sift`-mediated link when there is no `.sift`:
+
+- **Shape**: `(N,)` where N = image_count
+- **Data type**: `uint128` (little-endian, 16 bytes per hash)
+- **Format**: XXH128 of the source image file bytes for `images[i]`, encoded as
+  16 little-endian bytes — the same encoding as `sift_content_hashes`. This is
+  the same value the image's `.sift` records in its `image_file_xxh128` metadata
+  field (see `specs/formats/sift-file-format.md`), where it is a hex string; a
+  producer converting from `.sift` files decodes that hex to the 16-byte form,
+  while one working directly from images computes the XXH128 over the image bytes.
+- **Purpose**: verifies that an `images/names[i]` path still resolves to the same
+  image the reconstruction was built from, with no `.sift` companion required.
+- **Presence**: present only in `embedded_patches` files. In `sift_files` files
+  the hash remains reachable through `sift_content_hashes` → `.sift` →
+  `image_file_xxh128`, so it is absent there.
 
 #### `images/thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst`
 
@@ -597,7 +637,7 @@ The **recommended normalised form** sets two conventions:
 
 The first compresses well: a `w` column that is all `1`s and `0`s is a
 near-constant run that zstd collapses to almost nothing. The second is the
-natural canonical form for a direction. Writers should emit this canonical form.
+natural canonical form for a direction.
 
 Because the format does not *require* the normalised form, a consumer that
 relies on `w ∈ {0, 1}` (or on unit-length directions) must normalise on read.
@@ -675,7 +715,7 @@ Per-point surface normals.
   this array is absent. Versions 1 and 2 always include it.
 - **Naming**: Versions 1 and 2 stored this array under the name
   `points3d/estimated_normals_xyz.{N}.3.float32.zst`; version 3 renamed it to
-  `points3d/normals_xyz`. Readers accept the legacy name in version 1 and 2 files.
+  `points3d/normals_xyz`.
 
 **Use cases**:
 - Visibility testing (front-facing check)
@@ -765,9 +805,21 @@ Tracks link 2D feature observations to 3D points. Each observation has three com
 
 ```json
 {
-  "observation_count": 9427
+  "observation_count": 9427,
+  "has_feature_indexes": true,
+  "has_keypoints_xy": false
 }
 ```
+
+- `observation_count`: number of observations `M`.
+- `has_feature_indexes` / `has_keypoints_xy`: (version 4+) flag the two
+  mutually-exclusive per-observation columns. Exactly one is `true`:
+  `has_feature_indexes` in a `sift_files` file, `has_keypoints_xy` in an
+  `embedded_patches` file. They are redundant with the top-level `feature_source`
+  but kept local to the section so a reader that loads `tracks/metadata.json`
+  alone knows which column to expect (mirroring the `points3d/metadata.json`
+  `has_*` flags). A missing flag is `false`; a version 1–3 file (no flags) is read
+  as `has_feature_indexes = true`, `has_keypoints_xy = false`.
 
 #### `tracks/image_indexes.{M}.uint32.zst`
 
@@ -778,14 +830,37 @@ Image index for each observation:
 - **Format**: Index into images arrays for each observation
 - **Constraint**: MUST be sorted lexicographically by `(point_indexes[i], image_indexes[i])`
 
-#### `tracks/feature_indexes.{M}.uint32.zst`
+#### `tracks/feature_indexes.{M}.uint32.zst` (sift_files only)
 
 Feature index for each observation:
 
 - **Shape**: `(M,)` where M = observation_count
 - **Data type**: `uint32` (little-endian)
-- **Format**: Index into feature file for each observation
+- **Format**: Index into the per-image `.sift` file; the observation's 2D
+  coordinate is `sift[feature_indexes[j]]` for image `image_indexes[j]`.
 - **Constraint**: MUST be sorted lexicographically by `(point_indexes[i], image_indexes[i])`
+- **Presence**: present in `sift_files` files (`has_feature_indexes = true`);
+  **absent** in `embedded_patches` files, where `keypoints_xy` carries the
+  coordinate directly. Always present in versions 1–3.
+
+#### `tracks/keypoints_xy.{M}.2.float32.zst` (embedded_patches only, version 4+)
+
+The inline 2D keypoint for each observation in an `embedded_patches` file:
+
+- **Shape**: `(M, 2)` where M = observation_count
+- **Data type**: `float32` (little-endian)
+- **Format**: `(u, v)` in image pixel coordinates of `images[image_indexes[j]]`,
+  origin = image top-left, half-pixel-center convention (the pixel in column `x`,
+  row `y` has its centre at `(x+0.5, y+0.5)`). Sub-pixel values are expected.
+- **Constraint**: finite, and within `[0, width) × [0, height)` of the image's
+  camera intrinsics (the in-frame test used for a projected point). MUST be
+  sorted lexicographically by `(point_indexes[j], image_indexes[j])`, parallel to
+  the other `tracks/*` arrays.
+- **Meaning**: besides being the observation's 2D coordinate, the keypoint
+  anchors that observation's patch — see
+  [Observation source](#observation-source-version-4).
+- **Presence**: present only in `embedded_patches` files
+  (`has_keypoints_xy = true`).
 
 #### `tracks/point_indexes.{M}.uint32.zst`
 
@@ -809,12 +884,82 @@ Observations per point:
   - Sum must equal observation_count
   - Every value must be >= 1 (every 3D point must have at least one observation)
 
+### Observation source (version 4+)
+
+A version-4 file declares at the top level which kind of observation it carries —
+`feature_source ∈ {"sift_files", "embedded_patches"}` — and there is **no
+mixing** within a file. The two modes differ only in the `tracks/` and `images/`
+columns:
+
+| | `sift_files` (versions 1–3 model) | `embedded_patches` (version 4+) |
+|---|---|---|
+| `tracks/feature_indexes` | **present** (index into `.sift`) | **absent** |
+| `tracks/keypoints_xy` | **absent** | **present** (the coordinate) |
+| `images/feature_tool_hashes` | **present** | **absent** |
+| `images/sift_content_hashes` | **present** | **absent** |
+| `images/image_file_hashes` | **absent** (image hash reachable via the `.sift`) | **present** (direct image identity) |
+| 2D coordinate source | `.sift[feature_indexes[j]]` | `keypoints_xy[j]` directly |
+
+A `sift_files` v4 file is byte-equivalent to a v3 file except for the `version`
+and `feature_source` metadata keys and the `tracks/metadata.json` `has_*` keys.
+An `embedded_patches` file is self-contained — it needs no `.sift` companion, and
+its workspace `feature_prefix_dir` is optional.
+
+**Image identity.** A `sift_files` file pins each source image *indirectly*:
+`.sfmr` → `sift_content_hashes[i]` → the `.sift` file → its `image_file_xxh128`.
+With the `.sift` link gone, an `embedded_patches` file stores that same image hash
+directly in `images/image_file_hashes`, so the reconstruction still verifies
+which image each observation came from.
+
+#### The embedded-patch feature relationship
+
+`keypoints_xy[j]` is the 2D image coordinate of observation `j` — where point
+`point_indexes[j]` is observed in image `image_indexes[j]`. It is the
+`embedded_patches` counterpart of the SIFT detection a `sift_files` file reaches
+through `feature_indexes`: the coordinate a consumer triangulates and
+bundle-adjusts against. How a producer arrives at it — a patch-registration
+pipeline today, a learned detector later — does not change its meaning.
+
+Because the observed point also carries an oriented patch (the version-3 `(u, v)`
+frame, [Per-point patch frame](#per-point-patch-frame-optional-version-3)), the
+keypoint additionally fixes that observation's patch geometrically: the patch is
+the point's surfel re-anchored within its own plane so that its centre projects
+to the keypoint in this view. An `embedded_patches` file therefore requires the
+patch frame (`has_uv_frames = true`).
+
+For observation `j` with `i = image_indexes[j]`, `p = point_indexes[j]`,
+`k = keypoints_xy[j]`, point `X_p`, frame `u = patch_u_halfvec_xyz[p]`,
+`v = patch_v_halfvec_xyz[p]`, `n = normalize(u × v)`, and camera `i`'s
+intrinsics + world→camera pose `(R_i, t_i)`:
+
+1. The surfel lies in the **patch plane** `Π_p` through `X_p` with normal `n`.
+2. The keypoint selects the per-view **anchor** `A_j` — the point on `Π_p` that
+   projects to `k`. Unproject `k` to a world ray (camera centre
+   `o = −R_iᵀ t_i`, direction `d = R_iᵀ · pixel_to_ray(k)`, which inverts
+   distortion for all camera models), then intersect with `Π_p`:
+   `λ = ((X_p − o) · n) / (d · n)`, `A_j = o + λd`.
+3. The observation's patch is the surfel centred at `A_j` carrying the point's
+   frame, `{ A_j + s·u + t·v : (s, t) ∈ [−1, 1]² }`, rendered into image `i` by
+   projecting each grid sample through the camera model.
+
+Setting `k = project_i(X_p)` gives `A_j = X_p` — the patch centred on the point,
+the implicit `sift_files`/v3 behaviour — so a keypoint is exactly a per-view
+in-plane shift of the surfel centre, `δ_j = k − project_i(X_p)`. The patch
+**bitmaps** (`patch_bitmaps_y_x_rgba`, if present) live in the surfel's own
+`(s, t)` frame and are unaffected by the anchor.
+
+Edge cases: the anchor is ill-conditioned for **grazing views** (`|d · n|` near
+zero) — a consumer needing the anchor MAY fall back to `A_j = X_p`; the keypoint
+itself stays a valid 2D observation. For a **point at infinity** (`w = 0`) the
+patch is a region of the direction sphere rather than a plane (see the patch-frame
+section), and the anchor is defined analogously on that frame.
+
 ## Data Ordering and Constraints
 
 ### Critical Ordering Requirements
 
 1. **Tracks must be sorted lexicographically**:
-   - All three track arrays (`image_indexes`, `feature_indexes`, `point_indexes`) MUST be sorted lexicographically by `(point_indexes[i], image_indexes[i])`
+   - The track arrays (`image_indexes`, `point_indexes`, and whichever per-observation column the mode carries — `feature_indexes` for `sift_files` or `keypoints_xy` for `embedded_patches`) MUST be sorted lexicographically by `(point_indexes[i], image_indexes[i])` and remain parallel under that order
    - Primary sort: by point index (all observations of point 0, then point 1, etc.)
    - Secondary sort: by image index within each point's observations
    - This provides deterministic ordering and enables efficient extraction of observations per point
@@ -828,7 +973,7 @@ Observations per point:
 
 - `camera_indexes[i]` → index into `cameras` array
 - `image_indexes[j]` → index into `images` arrays
-- `feature_indexes[j]` → index into feature file for `images[image_indexes[j]]`
+- `feature_indexes[j]` (sift_files) → index into feature file for `images[image_indexes[j]]`; in `embedded_patches`, `keypoints_xy[j]` carries the 2D coordinate directly
 - `point_indexes[j]` → index into `points3d` arrays
 
 ## Compression Details
@@ -863,7 +1008,7 @@ Binary files use self-documenting names:
 
 1. **Metadata hash**: XXH128 of the uncompressed `metadata.json.zst` content bytes
 2. **Cameras hash**: XXH128 of the uncompressed `cameras/metadata.json.zst` content bytes
-3. **Section hashes** (images, points3d, tracks): For each section, feed all files' uncompressed content bytes into a streaming XXH128 hasher in lexicographic path order. The final digest is the section hash. The points3d section includes the optional per-point patch-frame files (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) when present.
+3. **Section hashes** (images, points3d, tracks): For each section, feed all files' uncompressed content bytes into a streaming XXH128 hasher in lexicographic path order. The final digest is the section hash. The points3d section includes the optional per-point patch-frame files (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) when present. The images and tracks sections include only the files present for the file's `feature_source` mode (see [Observation source](#observation-source-version-4)).
 4. **Overall hash**: Concatenate all present section hashes as raw 16-byte big-endian digests (metadata, cameras, rigs if present, frames if present, images, points3d, tracks), then compute XXH128 of the concatenation. Each 128-bit hash digest is serialized as 16 bytes in big-endian (most significant byte first) order before concatenation.
 
 ### Verification Process
@@ -1191,7 +1336,8 @@ All extensions should:
 
 ## Versioning and Migration
 
-The `version` field in `metadata.json.zst` is `3` for this specification.
+The format spans four versions (`1`–`4`), all valid; each extends the previous,
+and how an older file maps to the current model is given below.
 
 ### Version 1 → Version 2 (history)
 
@@ -1226,17 +1372,38 @@ are identical; versions 1 and 2 always carry normals, so `has_normals` is
 effectively `true`); it carries no patch data, so the patch-frame files are
 absent.
 
-**Versions 1, 2, and 3 are all valid**; a reader is expected to accept all three,
-upgrading older files to the version-3 model on read. Writers emit **version 3**.
-As with version 2, a version 3 file is not readable by pre-version-3 tooling
-because of the normals rename, hence the version bump.
+### Version 3 → Version 4
+
+Version 4 adds the `feature_source` discriminator and the `embedded_patches`
+observation mode (see [Observation source](#observation-source-version-4)). The
+differences:
+
+| Version 3 | Version 4 |
+|-----------|-----------|
+| (implicitly SIFT-referenced) | top-level `feature_source` ∈ {`"sift_files"`, `"embedded_patches"`} |
+| `tracks/feature_indexes` (always present) | present in `sift_files`; replaced by `tracks/keypoints_xy` in `embedded_patches` |
+| `images/feature_tool_hashes`, `images/sift_content_hashes` (always present) | present in `sift_files`; replaced by `images/image_file_hashes` in `embedded_patches` |
+| `tracks/metadata.json` `{observation_count}` | adds `has_feature_indexes`, `has_keypoints_xy` |
+
+**Migration is mechanical and lossless.** A version 1–3 file *is* a `sift_files`
+reconstruction: read it with `feature_source = "sift_files"`,
+`has_feature_indexes = true`, `has_keypoints_xy = false`. A `sift_files` v4 file
+is byte-equivalent to a v3 file apart from the `version` / `feature_source`
+metadata keys and the new `tracks/metadata.json` `has_*` keys.
+`embedded_patches` is a new mode with no v3 equivalent.
 
 ## Version History
 
+- **Version 4**: Added the top-level `feature_source` discriminator and the
+  `embedded_patches` observation mode — inline `tracks/keypoints_xy` and
+  `images/image_file_hashes` replacing the `.sift`-link columns
+  (`tracks/feature_indexes`, `images/feature_tool_hashes`,
+  `images/sift_content_hashes`); `tracks/metadata.json` gains `has_feature_indexes`
+  / `has_keypoints_xy`. Versions 1–3 are `sift_files`.
 - **Version 3**: Per-point normals array renamed `estimated_normals_xyz` →
   `normals_xyz` and made optional (flagged by `has_normals`); optional per-point
   patch frame stored in `points3d/` (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, and optional
-  `patch_bitmaps_y_x_rgba`). Reader accepts versions 1, 2, and 3.
+  `patch_bitmaps_y_x_rgba`).
 - **Version 2**: Unified homogeneous point model — points at infinity
-  (`w = 0`) are first-class. Reader accepts version 1 and version 2.
+  (`w = 0`) are first-class.
 - **Version 1.0rc1**: Release candidate

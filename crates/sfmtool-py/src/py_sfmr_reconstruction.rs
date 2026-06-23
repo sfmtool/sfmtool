@@ -260,7 +260,7 @@ impl PySfmrReconstruction {
 
     /// Observation source: ``"sift_files"`` (observations reference ``.sift``
     /// features) or ``"embedded_patches"`` (per-observation keypoints stored
-    /// inline). See ``specs/formats/sfmr-v4-patch-keypoints.md``.
+    /// inline). See "Observation source" in ``specs/formats/sfmr-file-format.md``.
     #[getter]
     fn feature_source(&self) -> &str {
         self.inner.feature_source()
