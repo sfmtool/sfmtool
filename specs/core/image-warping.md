@@ -1,7 +1,7 @@
 # Image Warping for Distortion and Undistortion
 
-**Status:** Implemented — `warp_map.rs` (`WarpMap`, `WarpMapSvd`,
-`from_cameras`, the pose-aware constructors below), `remap.rs` (`ImageU8`,
+**Status:** Implemented — `camera/warp_map.rs` (`WarpMap`, `WarpMapSvd`,
+`from_cameras`, the pose-aware constructors below), `camera/remap.rs` (`ImageU8`,
 `ImageU8Pyramid`, `remap_bilinear`, `remap_aniso`),
 `CameraIntrinsics::ray_to_pixel[_batch]` and the `Equirectangular` camera
 model in the distortion module, with PyO3 bindings in `py_warp_map.rs`. The
@@ -162,7 +162,7 @@ point, and image dimensions — just with all distortion coefficients removed.
 
 `from_cameras` is embarrassingly parallel — each output pixel is independent. The
 implementation uses `rayon` to parallelize over rows, consistent with the existing
-batch operations in `distortion.rs`.
+batch operations in `camera/distortion.rs`.
 
 ### Fisheye and the `ray_to_pixel` Gap
 
@@ -507,7 +507,7 @@ crates/sfmtool-py/src/
 ```
 
 Add `ray_to_pixel` / `distort_ray` to the existing `CameraIntrinsics` / `CameraModel`
-in `crates/sfmtool-core/src/distortion.rs`.
+in `crates/sfmtool-core/src/camera/distortion.rs`.
 
 ## Implementation Order
 

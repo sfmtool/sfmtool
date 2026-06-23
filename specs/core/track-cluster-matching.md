@@ -176,7 +176,7 @@ understand why. Incremental works better on our small set of test datasets.
 
 The corpus is all descriptors `(ΣKᵢ, 128)` (uint8 SIFT). The index is the in-tree
 randomized kd-tree forest (`sfmtool.KdForest`,
-`crates/sfmtool-core/src/kdforest/`, spec `randomized-kdtree-forest.md`). Each row
+`crates/sfmtool-core/src/features/kdforest/`, spec `randomized-kdtree-forest.md`). Each row
 carries its `(image_index, feature_index)` so a hit maps back to a feature.
 
 One query drives everything. For every descriptor we fetch its `d + 1 = 29`
@@ -387,12 +387,12 @@ into the matching step instead of a separate retrieval stage.
 The approach was validated end to end by a Python prototype over the in-tree
 `sfmtool.KdForest` index — the empirical results above are from it. The production
 form is a `sfmtool-core` matcher over the kd-tree forest, exposed as a matching
-method in `feature_match/` and selectable from `sfm match` / `sfm solve`; the
+method in `features/feature_match/` and selectable from `sfm match` / `sfm solve`; the
 per-point background floor is the recommended membership rule, and its production
 API is specified in [Production Implementation](#production-implementation) below.
 
 The production implementation is **done** as specified: the Rust matcher lives in
-`crates/sfmtool-core/src/cluster_match/`, the PyO3 bindings in
+`crates/sfmtool-core/src/features/cluster_match/`, the PyO3 bindings in
 `crates/sfmtool-py/src/py_cluster_match.rs` (exposed as
 `sfmtool.background_floor_clusters` / `sfmtool.clusters_to_pair_matches`), the
 Python matcher layer in `src/sfmtool/feature_match/_cluster_matching.py` with the
@@ -472,7 +472,7 @@ computing the background floor and the radius test.** Distances written to
 
 #### Location
 
-New module `crates/sfmtool-core/src/cluster_match/` with `mod.rs`; declare
+New module `crates/sfmtool-core/src/features/cluster_match/` with `mod.rs`; declare
 `pub mod cluster_match;` in `crates/sfmtool-core/src/lib.rs`. Optionally re-export
 the public types from `lib.rs` alongside the other `pub use` lines.
 
@@ -480,7 +480,7 @@ the public types from `lib.rs` alongside the other `pub use` lines.
 
 ```rust
 use ndarray::{Array1, Array2, ArrayView2};
-use crate::kdforest::KdForestParams;
+use crate::features::kdforest::KdForestParams;
 
 /// Tuning for the background-floor matcher. `Default` is the production config.
 /// The k-NN query width is derived, not configured: `d + 1` (self + the `d`
@@ -666,7 +666,7 @@ order's tie-break is the row index, per-image resolution prefers the smaller
 distance then the smaller row index, and the conversion order is fixed by the
 cluster order. Output arrays are byte-stable across runs and platforms.
 
-#### Tests (`crates/sfmtool-core/src/cluster_match/tests.rs`)
+#### Tests (`crates/sfmtool-core/src/features/cluster_match/tests.rs`)
 
 - **Synthetic clusters.** Build a tiny corpus: a few "points" each with one
   descriptor in 3–4 images (tight intra-cluster distance) plus scattered

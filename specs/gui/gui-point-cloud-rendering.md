@@ -422,9 +422,10 @@ transform.
 - **Visibility toggle** "Show points at infinity" (default on) and the
   **count readout** `N points (M at infinity)` (`infinity_point_count` is
   already in the metadata) — in `state.rs` + dock/overlay.
-- **Infinity point size slider** — `infinity_point_px`, pixel radius, range
-  1–16 px, default 3 (separate from the world-unit `point_size_log2` slider).
-  Whether 1–16 px is the right range is the carried-over open question.
+- **Infinity point size slider** — *shipped*: `infinity_point_px` at
+  `app.rs:384-389`, range 1–16 px, default 3 (`state.rs:205`). Separate
+  from the world-unit `point_size_log2` slider. The 1–16 px range proved
+  fine in practice; the carried-over open question is resolved.
 
 ---
 
@@ -449,9 +450,9 @@ transform.
 
 ### Future Enhancements
 
-- [ ] "Show points at infinity" toggle, `N points (M at infinity)` count
-      readout, and infinity point-size slider (see
-      [Remaining UI work](#remaining-ui-work))
+- [ ] "Show points at infinity" toggle and `N points (M at infinity)` count
+      readout (see [Remaining UI work](#remaining-ui-work)). The
+      `infinity_point_px` slider in that section is already shipped.
 - [ ] Adaptive `length_scale` that updates as you navigate to different parts of the scene
 - [x] Target indicator redesign: 3D compass shape with filled star rose showing `world_up` (see [3D Shape](#3d-shape-rotating-compass))
 - [ ] Target indicator visibility over bright backgrounds (see [open question](#glow-effect))

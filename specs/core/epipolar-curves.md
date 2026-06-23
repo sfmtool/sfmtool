@@ -1,6 +1,6 @@
 # Epipolar Curves for Non-Perspective Cameras
 
-**Status:** Implemented — `crates/sfmtool-core/src/epipolar.rs`
+**Status:** Implemented — `crates/sfmtool-core/src/camera/epipolar.rs`
 (`plot_epipolar_curve`, `plot_epipolar_curves_batch`, `EpipolarCurveOptions`),
 exposed as `sfmtool._sfmtool.epipolar_curves` (`py_epipolar.rs`) and consumed
 by `sfm epipolar` via `visualization/_epipolar_display.py`. As shipped, the
@@ -35,7 +35,7 @@ This is a `sfmtool-core` concern: it needs `CameraIntrinsics`'s full forward and
 inverse projection (`pixel_to_ray` / `ray_to_pixel`, which already invert the
 distortion model including fisheye), the image rectangle (`width` / `height` on
 `CameraIntrinsics`), `RigidTransform` for the poses, and `is_fisheye()` for the
-rectification guard. New API goes in `crates/sfmtool-core/src/epipolar.rs`; a
+rectification guard. New API goes in `crates/sfmtool-core/src/camera/epipolar.rs`; a
 thin PyO3 wrapper exposes it to the `sfm epipolar` visualization
 (`src/sfmtool/visualization/_epipolar_display.py`), which just hands the
 returned vertices to `cv2.polylines`.
@@ -55,7 +55,7 @@ handling).
 ## Rust API
 
 ```rust
-// crates/sfmtool-core/src/epipolar.rs
+// crates/sfmtool-core/src/camera/epipolar.rs
 
 /// Controls how an epipolar curve is sampled into a polyline.
 pub struct EpipolarCurveOptions {
@@ -295,7 +295,7 @@ O(1) lookups against the track-index.
 
 Visualization only (`sfm epipolar`). The polar-sweep and rectified-sweep
 matchers (`feature_match/_polar_sweep.py`, `feature_match/_rectified_sweep.py`,
-`sfmtool-core/src/rectification.rs`) carry the same pinhole assumption; making
+`sfmtool-core/src/camera/rectification.rs`) carry the same pinhole assumption; making
 *matching* fisheye-aware (sweeping along the bearing-space epipolar line) is
 separate, larger work.
 

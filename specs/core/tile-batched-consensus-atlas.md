@@ -4,7 +4,7 @@
 [`PerSphericalTileSourceStack`], [`SphericalTileRig`], and the
 photometric RANSAC ([`refine_photometric_ransac`]) without changing any
 of their algorithms. The orchestrator lives in
-`crates/sfmtool-core/src/consensus_atlas.rs` (`render_consensus_atlas`),
+`crates/sfmtool-core/src/spherical/consensus_atlas.rs` (`render_consensus_atlas`),
 the PyO3 binding in `crates/sfmtool-py/src/py_consensus_atlas.rs`, and
 `sfm panorama` (`src/sfmtool/rig/panorama.py`) consumes it for the production
 panorama render.
@@ -192,11 +192,11 @@ out of scope here.
 ## Mechanism: `tiles_subset` + `consensus_patches_per_tile`
 
 **Where the new code lives:** all of it in `sfmtool-core` —
-`tiles_subset` on `SphericalTileRig` (in `spherical_tile_rig.rs`),
+`tiles_subset` on `SphericalTileRig` (in `spherical/tile_rig.rs`),
 `consensus_patches_per_tile` on `PerSphericalTileSourceStack` (in
-`per_spherical_tile_source_stack.rs`, alongside the
+`spherical/per_tile_source_stack.rs`, alongside the
 `primary_consensus_atlas` it factors out of), and the orchestrator plus
-its `ConsensusAtlasBatch*` types in a new `consensus_atlas.rs`
+its `ConsensusAtlasBatch*` types in a new `spherical/consensus_atlas.rs`
 re-exported from `lib.rs`. The PyO3 wrapper goes in a new
 `crates/sfmtool-py/src/py_consensus_atlas.rs`. No new crates.
 

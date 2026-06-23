@@ -5,7 +5,7 @@ classifier thresholds (`inverse_depth_z` cutoff, condition-number pre-filter)
 remain provisional pending larger-dataset calibration — see Open questions.
 
 Consolidate the scattered triangulation code into one batch API in
-`sfmtool-core` (`triangulation.rs`) that returns each track's solved point
+`sfmtool-core` (`reconstruction/triangulation.rs`) that returns each track's solved point
 **plus the observability diagnostics the solve already computes** (the normal
 matrix's spectrum, and an optional noise-calibrated depth uncertainty). The
 immediate driver was a classification bug: `find_points_at_infinity` and
@@ -26,7 +26,7 @@ A point at infinity is a track whose observation rays are parallel to within
 measurement noise: its depth is unobservable. The current finite-vs-infinity
 test is `parallax_px = alpha_max · f_max` against a 1 px floor, where
 `alpha_max = max_viewing_angle(rays)` is the single widest angle among all
-`K(K−1)/2` ray pairs (`viewing_angle.rs:28`). That statistic is wrong for this
+`K(K−1)/2` ray pairs (`geometry/viewing_angle.rs:28`). That statistic is wrong for this
 job:
 
 - Under pure 1 px localization noise (no real parallax) the **expected** max
@@ -35,10 +35,10 @@ job:
   *more* likely to be called finite. (Measured: a 27-view distant track scored
   2.27 px; a direction-only model reprojected it at 0.61 px RMS, and adding a
   finite depth improved RMS by only 0.025 px — the depth explains nothing.)
-- The midpoint solve in `classify_track` (`infinity/discover.rs:313-352`) already
+- The midpoint solve in `classify_track` (`analysis/infinity/discover.rs:313-352`) already
   builds the normal matrix `A = Σ(I − dᵢdᵢᵀ)` and computes `det(A)`, but only
   uses `det` against an ultra-loose gate (`det < 1e-9·‖A‖³`,
-  `infinity/discover.rs:330`) that fires only for *exactly* singular `A`. The
+  `analysis/infinity/discover.rs:330`) that fires only for *exactly* singular `A`. The
   eigenvalues of `A` — a 1000× separation between genuine and degenerate tracks
   (population medians: condition number 82 vs 89,599; relative depth uncertainty
   1.6% vs 33%) — are discarded.
@@ -49,14 +49,14 @@ classifiers decide on that.
 
 ## Prior state (before this change)
 
-Before this refactor there was no `triangulation.rs` and no batch API.
+Before this refactor there was no `reconstruction/triangulation.rs` and no batch API.
 Triangulation lived in three disconnected places, none sharing a result type,
 none batched, none exposed to Python:
 
 | Site | Method | Returns | Diagnostics | Used by |
 |---|---|---|---|---|
 | `geometric_filter.rs:252` `triangulate_point_dlt` | 2-view DLT (SVD) | `Option<[f64;3]>` (drops `w≈0`) | none | two-view in-front-of-camera check during matching (`:375`) |
-| `infinity/discover.rs:275` `classify_track` (inline) | N-view midpoint | `(Point3, w)` | builds `A`, `det` (gated loosely, then discarded) | `find_points_at_infinity` |
+| `analysis/infinity/discover.rs:275` `classify_track` (inline) | N-view midpoint | `(Point3, w)` | builds `A`, `det` (gated loosely, then discarded) | `find_points_at_infinity` |
 | GUI: `point_track_detail.rs:698`, `image_detail.rs:1022` | **no solve** — max pairwise angle to the *stored* point | `f32` degrees | — | "Max Track Angle" overlay (`state.rs:31`), point/feature detail |
 
 The GUI never triangulates; it reuses the same `max_viewing_angle` statistic (a
@@ -71,17 +71,17 @@ depth is in fact unconstrained. The proposed condition-number / inverse-depth
 diagnostic agrees with the angle on finite points and additionally gets that
 regime right, so it belongs alongside the angle overlay as a complementary view
 rather than a replacement for it.
-`classify_points_at_infinity` (`infinity/convert.rs:50`) is a fourth consumer of
-`max_viewing_angle` (`infinity/convert.rs:78`).
+`classify_points_at_infinity` (`analysis/infinity/convert.rs:50`) is a fourth consumer of
+`max_viewing_angle` (`analysis/infinity/convert.rs:78`).
 
 ## Target Rust API
 
-New module `crates/sfmtool-core/src/triangulation.rs`. Tracks are flattened
+New module `crates/sfmtool-core/src/reconstruction/triangulation.rs`. Tracks are flattened
 CSR-style (the same shape as the reconstruction's `observation_offsets`): track
 `t` owns `dirs[offsets[t]..offsets[t+1]]` and the matching `centers`.
 
 ```rust
-// crates/sfmtool-core/src/triangulation.rs
+// crates/sfmtool-core/src/reconstruction/triangulation.rs
 
 /// One track's triangulation and the observability diagnostics the linear
 /// solve computes alongside the point. Geometric fields are always populated.
@@ -257,7 +257,7 @@ perpendicular spread of the observing cameras about the mean viewing direction.
 **Placement.** `resolvable_distance` is geometry + noise, so it is a field on
 `DepthUncertainty` and adds no input to `depth_uncertainty_batch`.
 `finite_horizon` is policy, so it enters the classifier —
-`infinity/convert.rs::classify_rays_at_infinity` and the public
+`analysis/infinity/convert.rs::classify_rays_at_infinity` and the public
 `classify_points_at_infinity` / `find_points_at_infinity` (and the GUI
 diagnostics) — defaulting to the reconstruction's camera extents.
 
@@ -284,16 +284,16 @@ is for the CLI/inspect/analyze/notebook paths.
 
 Phased so the API lands before any behavior changes:
 
-1. **Phase 1 — core. (done)** Added `triangulation.rs` (struct +
+1. **Phase 1 — core. (done)** Added `reconstruction/triangulation.rs` (struct +
    `triangulate_batch` + `depth_uncertainty_batch`) with unit tests. The
    midpoint solve was extracted out of `classify_track` into it. No behavior
    change.
-2. **Phase 2 — the fix. (done)** `infinity/discover.rs::classify_track` and
-   `infinity/convert.rs::classify_points_at_infinity` now share `classify_rays_at_infinity`,
+2. **Phase 2 — the fix. (done)** `analysis/infinity/discover.rs::classify_track` and
+   `analysis/infinity/convert.rs::classify_points_at_infinity` now share `classify_rays_at_infinity`,
    which decides finite-vs-∞ on `inverse_depth_z` (with `condition_number` as a
    cheap pre-filter) instead of `alpha_max·f_max` and the loose `det` gate. The
    provisional thresholds (`DEFAULT_INVERSE_DEPTH_Z_CUTOFF = 4.0`,
-   `CONDITION_NUMBER_PREFILTER = 1e4`) live in `infinity/convert.rs`; final calibration
+   `CONDITION_NUMBER_PREFILTER = 1e4`) live in `analysis/infinity/convert.rs`; final calibration
    is deferred to larger-dataset evaluation (see Open questions). The noise
    floor is exposed on the `--find-points-at-infinity` CLI as a 4th component
    (`eps_deg[,desc_thresh[,min_views[,noise_floor_px]]]`).
@@ -312,7 +312,7 @@ Phased so the API lands before any behavior changes:
    appear in the point-track header and the image-detail tooltip next to the max
    angle. Additive — no GUI code removed.
 
-**Left in place:** `viewing_angle.rs::max_viewing_angle` stays — it still backs
+**Left in place:** `geometry/viewing_angle.rs::max_viewing_angle` stays — it still backs
 `xform --remove-narrow-tracks` (`compute_narrow_track_mask`) as a fast
 pre-filter. It simply stops being the *classification* signal.
 
@@ -369,7 +369,7 @@ pre-filter. It simply stops being the *classification* signal.
 |---|---|
 | pixel → world ray (all models, fisheye) | `CameraIntrinsics::pixel_to_ray[_batch]` |
 | camera center | `SfmrImage::camera_center` (`= −Rᵀt`) |
-| max pairwise angle (pre-filter only) | `viewing_angle.rs::max_viewing_angle` |
+| max pairwise angle (pre-filter only) | `geometry/viewing_angle.rs::max_viewing_angle` |
 | existing 2-view algebraic triangulation | `geometric_filter.rs::triangulate_point_dlt` |
-| bearing-mean fallback for `w = 0` | `infinity/convert.rs` (`normalise(Σ rᵢ)`) |
+| bearing-mean fallback for `w = 0` | `analysis/infinity/convert.rs` (`normalise(Σ rᵢ)`) |
 | per-track observation slices (CSR) | `observation_offsets` / `observations_for_point` |

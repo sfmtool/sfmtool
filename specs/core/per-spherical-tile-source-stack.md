@@ -1,7 +1,7 @@
 # Per-spherical-tile source patch stack
 
 **Status:** Implemented in
-`crates/sfmtool-core/src/per_spherical_tile_source_stack.rs` (the
+`crates/sfmtool-core/src/spherical/per_tile_source_stack.rs` (the
 rotation-only build) and exposed to Python as
 `sfmtool._sfmtool.PerSphericalTileSourceStack`. The pose-aware variant
 described under "Pose-aware variant" is still future work.

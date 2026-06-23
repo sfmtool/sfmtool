@@ -1,7 +1,7 @@
 # SIFT
 
 > **Status: Implemented (Phase 1 — CPU + SIMD + multithread).** The pure-Rust
-> SIFT detector and descriptor ship in `crates/sfmtool-core/src/sift/`, with
+> SIFT detector and descriptor ship in `crates/sfmtool-core/src/features/sift/`, with
 > PyO3 bindings (`py_sift.rs`, `py_sift_io.rs`) and the `sfmtool` backend of
 > `sfm sift` / `ws init --feature-tool sfmtool`. Structured to mirror the
 > optical-flow implementation (`specs/core/optical-flow.md`). GPU remains
@@ -462,7 +462,7 @@ COLMAP/OpenCV backends share the same queue unchanged (they return eager lists).
 ## Interface: split detection from description
 
 **Yes — split keypoint finding from descriptor creation.** Recommended public API in
-`crates/sfmtool-core/src/sift/`:
+`crates/sfmtool-core/src/features/sift/`:
 
 ```rust
 // Stage 1: detect + localize + assign orientation(s). Cheap and small per
@@ -684,7 +684,7 @@ critical section. Wrap describe-and-append in an advisory file lock on the `.sif
 ### Module structure
 
 ```
-sfmtool-core/src/sift/
+sfmtool-core/src/features/sift/
 ├── mod.rs          # Public API: SiftParams, SiftKeypoint, extract_sift, detect_keypoints, compute_descriptors
 ├── scale_space.rs  # ScaleSpace: Gaussian pyramid + DoG (separable blur, octave downsample)
 ├── detect.rs       # 26-neighbor extrema + subpixel localization + contrast/edge rejection

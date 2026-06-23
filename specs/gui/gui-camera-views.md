@@ -45,7 +45,7 @@ pub struct SfmrCamera {
 The relationship is: `recon.images[i]` (an `SfmrImage`) references
 `recon.cameras[image.camera_index]`.
 
-There is already a `frustum.rs` module with `compute_frustum_corners()` that takes
+There is already a `camera/frustum.rs` module with `compute_frustum_corners()` that takes
 raw arrays (`&[f64; 3]` center, `&[f64; 9]` rotation, individual intrinsic floats).
 It returns `[f64; 24]` (8 corners × 3 coords: near TL/TR/BR/BL then far TL/TR/BR/BL).
 
@@ -838,7 +838,7 @@ coordinates where `u = tan(θ)`. This is why all fisheye models have the
 flat far-plane degeneracy described in
 [Fisheye Camera Rendering](#fisheye-camera-rendering).
 
-Our `distort_fisheye()` in `distortion.rs` combines steps 2+3 of the forward
+Our `distort_fisheye()` in `camera/distortion.rs` combines steps 2+3 of the forward
 path into a single function operating on perspective coordinates `(x, y)`:
 `theta_d = theta * (1 + k1*θ² + ...)`, `scale = theta_d / r`. This is
 mathematically equivalent to COLMAP's separated approach.
@@ -1303,7 +1303,7 @@ distortion magnitude.
 
 ### Changes to `compute_distorted_frustum_grid()`
 
-The grid computation in `frustum.rs` is modified to use spherical placement
+The grid computation in `camera/frustum.rs` is modified to use spherical placement
 for fisheye cameras:
 
 ```rust

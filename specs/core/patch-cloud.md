@@ -201,7 +201,7 @@ bitmaps — parameterised in the patch's own `(s, t)` frame — are carried unch
 The per-point `normal` rotates in step, so `normalize(u × v)` stays consistent
 with it.
 
-> _Status (2026-06-11): Implemented — `patch_cloud.rs`
+> _Status (2026-06-11): Implemented — `patch/cloud.rs`
 > (`OrientedPatch`, `PatchCloud::from_reconstruction`, `PatchNormal`,
 > `PatchExtent`, `mean_viewing_normal`, `pca_plane_normal`), `WarpMap::from_patch`,
 > PyO3 bindings (`OrientedPatch`, `PatchCloud`, `WarpMap.from_patch`). The

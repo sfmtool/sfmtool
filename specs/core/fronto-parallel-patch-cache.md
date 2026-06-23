@@ -4,7 +4,7 @@
 (`CacheMode::FrontoParallel`, `cache_supersample = 2` — the quality-preserving
 operating point; `cache=off` / `quality=fine` opts back into the exact
 source-rendering path). The cache lives in
-`sfmtool-core/src/patch_normal_refine/fronto_cache.rs`, selected by
+`sfmtool-core/src/patch/normal_refine/fronto_cache.rs`, selected by
 `NormalRefineParams { cache: CacheMode, cache_supersample }`, exposed through
 `PatchCloud.refine_normals(cache=…, cache_supersample=…)` and
 `sfm xform --refine-normals cache=…/quality=…`. The resample is runtime-dispatched
@@ -15,7 +15,7 @@ Prototype exploration and measurements: `reports/2026-06-15-patch-cache-status.m
 
 ## Problem
 
-Refinement (`coarse_to_fine` in `patch_normal_refine.rs`) scores each candidate
+Refinement (`coarse_to_fine` in `patch/normal_refine.rs`) scores each candidate
 normal by **re-rendering** the patch into every observing view —
 `WarpMap::from_patch(n') + remap_bilinear` off the source pyramid — and the
 per-candidate render is ~80% of CPU (`reports/2026-06-13-perf-patch-normal-refinement.md`).
@@ -163,7 +163,7 @@ deterministic-first, tested, and exposed. Land it as two reviewable changes —
 
 ### Phase 1 — algorithm, scalar kernel, parameterized (the merge that matters)
 
-> _Status (2026-06-15): done. `patch_normal_refine/fronto_cache.rs`
+> _Status (2026-06-15): done. `patch/normal_refine/fronto_cache.rs`
 > (`FrontoCache`, `prerender`, `eval_phi`, scalar packed/planar/masked-support
 > resample with the guarded base + single int clamp); `CacheMode` +
 > `cache_supersample` on `NormalRefineParams` (default `Off`); the

@@ -8,11 +8,14 @@ selection state lives in `AppState` (`state.rs`).
 ## Overview
 
 An `egui_dock`-based multi-panel layout, replacing the original single
-`CentralPanel` with a dockable tab system. Three panel types:
+`CentralPanel` with a dockable tab system. Four panel types:
 
 1. **3D Viewer** — the existing viewport (point cloud, frustums, navigation)
 2. **Image Browser** — bottom strip of 128×128 thumbnails for browsing the image sequence
 3. **Image Detail** — full-resolution image view for the selected camera
+4. **Point Track Detail** — per-observation diagnostics for the selected 3D point
+   (see `specs/gui/gui-point-track-detail.md`); shares the right-side tab
+   region with Image Detail.
 
 ## Default Layout
 
@@ -43,7 +46,7 @@ resize splits, etc.).
 
 ### Image Selection
 
-All three panels share `AppState::selected_image` as the central image selection state:
+All four panels share `AppState::selected_image` as the central image selection state:
 
 ```
    Image Browser ──click──▶ selected_image ◀──click── 3D Viewer (frustum pick)
@@ -75,7 +78,7 @@ All three panels share `AppState::selected_image` as the central image selection
 
 ### 3D Point Selection
 
-All three panels also share `AppState::selected_point: Option<usize>` for 3D point selection.
+All four panels also share `AppState::selected_point: Option<usize>` for 3D point selection.
 A selected 3D point implies its track — the set of `(image_index, feature_index)` observations
 from `SfmrReconstruction::tracks`.
 
@@ -133,7 +136,7 @@ This derived set drives the cross-panel highlighting described below.
 A single hovered 3D point provides live feedback as the mouse moves over the point cloud.
 This complements the persistent `selected_point` with a transient, softer highlight.
 
-**State**: `AppState::hovered_point_index: Option<usize>`. Updated every frame from the 3D
+**State**: `AppState::hovered_point: Option<usize>`. Updated every frame from the 3D
 viewer's existing GPU pick buffer (`SceneRenderer::hover_pick_id`). Currently
 `hover_pick_id` lives only in `SceneRenderer` and is passed as a parameter to the
 status text overlay in `viewer_3d/overlay.rs`. To enable cross-panel hover, the
@@ -143,7 +146,7 @@ resolved point index is promoted to `AppState`:
 // In AppState:
 /// Transiently hovered 3D point index from the 3D viewer's pick buffer.
 /// Updated every frame; None when the cursor is not over a point.
-pub hovered_point_index: Option<usize>,
+pub hovered_point: Option<usize>,
 ```
 
 Each frame, after `SceneRenderer::read_back_pick()`, main.rs extracts the point index:
@@ -151,14 +154,14 @@ Each frame, after `SceneRenderer::read_back_pick()`, main.rs extracts the point 
 let hover_pick_id = self.scene_renderer.hover_pick_id();
 let tag = hover_pick_id & PICK_TAG_MASK;
 let index = (hover_pick_id & PICK_INDEX_MASK) as usize;
-state.hovered_point_index = if tag == PICK_TAG_POINT { Some(index) } else { None };
+state.hovered_point = if tag == PICK_TAG_POINT { Some(index) } else { None };
 ```
 
 **Cross-panel effects**: The hover point drives the same track-based highlighting as
 point selection, but with a visually softer treatment:
 
 ```
-                          hovered_point_index
+                          hovered_point
                                 │
               ┌─────────────────┼──────────────────┐
               ▼                 ▼                   ▼
@@ -179,7 +182,7 @@ point selection, but with a visually softer treatment:
     dimmed border, subtle background tint, or small indicator dot). This should be
     visually lighter than the selection highlight — enough to notice but not distracting
     as the mouse moves.
-  - The highlight updates every frame as `hovered_point_index` changes. Since the track lookup
+  - The highlight updates every frame as `hovered_point` changes. Since the track lookup
     is O(observation_count) for that point, this is cheap (typical tracks have 2–20
     observations).
 
@@ -198,7 +201,7 @@ point selection, but with a visually softer treatment:
 | Tier | Source | 3D point color | Frustum highlight | Browser highlight | Detail feature |
 |------|--------|---------------|-------------------|-------------------|----------------|
 | **Selection** | `selected_point` | Bold (yellow/magenta) | Yes (secondary color) | Strong border/tint | Bold color/ring |
-| **Hover** | `hovered_point_index` | Soft (brighter/glow) | No | Soft border/dot | Thin outline |
+| **Hover** | `hovered_point` | Soft (brighter/glow) | No | Soft border/dot | Thin outline |
 | **Normal** | — | Original point color | Normal | No highlight | Normal (if overlay on) |
 
 When hover and selection overlap (hovering the selected point, or hovering a point whose
@@ -216,14 +219,18 @@ feature_index)` pairs. This runs every frame but costs negligible time.
 ### Tab Model
 
 ```rust
-// main.rs
+// dock.rs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Viewer3D,
     ImageBrowser,
     ImageDetail,
+    PointTrackDetail,
 }
 ```
+
+The fourth tab, `PointTrackDetail`, is the per-point inspection panel
+documented in `specs/gui/gui-point-track-detail.md`.
 
 ### TabContext and TabViewer
 
@@ -250,8 +257,10 @@ let mut dock_state = DockState::new(vec![Tab::Viewer3D]);
 let surface = dock_state.main_surface_mut();
 // Split bottom strip for image browser (80/20 vertical)
 let [top, _browser] = surface.split_below(NodeIndex::root(), 0.8, vec![Tab::ImageBrowser]);
-// Split top area for detail pane (67/33 horizontal)
-let [_viewer, _detail] = surface.split_right(top, 0.67, vec![Tab::ImageDetail]);
+// Split top area for detail panel: ImageDetail and PointTrackDetail share
+// a tabbed region (67/33 horizontal). See `crates/sfm-explorer/src/lib.rs`.
+let [_viewer, _detail] =
+    surface.split_right(top, 0.67, vec![Tab::ImageDetail, Tab::PointTrackDetail]);
 ```
 
 ### Integration in main.rs
@@ -344,6 +353,8 @@ rendered interactively via egui rather than baked into an output image.
 | **Reproj Error** | Colored circles by reprojection error | `sfm heatmap --metric reproj` |
 | **Track Length** | Colored circles by observation count | `sfm heatmap --metric tracks` |
 | **Max Track Angle** | Colored circles by max pairwise ray angle (triangulation angle) | `sfm heatmap --metric angle` |
+| **Depth Reliability** | Colored circles by inverse-depth z-score (low ⇒ near-infinity) | `sfm analyze --depth-reliability` |
+| **Condition Number** | Colored circles by `log10` of the normal-matrix condition number | the same diagnostic |
 
 #### Feature Filtering
 
@@ -944,7 +955,7 @@ open-ended.
 
 **Potential additions based on evaluation:**
 
-- **Point hover**: Promote `hovered_point_index` to `AppState` (from the
+- **Point hover**: Promote `hovered_point` to `AppState` (from the
   existing hover overlay text). Show soft highlights in all panels for the
   hovered point's track — lighter than selection, updates every frame.
   This was part of the original spec but may be more complexity than value

@@ -1,10 +1,10 @@
 # Randomized KD-Tree Forest
 
 > Status (2026-06-06): Implemented (Phase 1). Pure-Rust ANN index landed in
-> `crates/sfmtool-core/src/kdforest/` (`distance.rs`, `build.rs`, `search.rs`,
+> `crates/sfmtool-core/src/features/kdforest/` (`distance.rs`, `build.rs`, `search.rs`,
 > `calibrate.rs`, `mod.rs`) with PyO3 bindings in
 > `crates/sfmtool-py/src/py_kdforest.rs` (`KdForest` class), Rust unit tests
-> (`kdforest/tests.rs`), a Python binding test
+> (`features/kdforest/tests.rs`), a Python binding test
 > (`tests/rust_bindings/test_kdtree_forest_rust_bindings.py`), and Criterion benchmarks
 > (`crates/sfmtool-core/benches/kdtree_forest.rs`). It mirrors the optical-flow
 > (`specs/core/optical-flow.md`) and SIFT (`specs/core/sift.md`)
@@ -25,16 +25,18 @@
 > - **Python `query` returns Euclidean distances** (sqrt of the internal squared
 >   value), matching the existing `descriptor_distance` binding; the Rust
 >   `search_batch_with_distances` returns squared distances.
-> - **Matcher CLI integration** (an approximate backend wired into
->   `src/sfmtool/feature_match/`) is left as a follow-up; the `KdForest` Python
->   class already emits the `(indices, distances)` layout that pipeline consumes.
+> - **Matcher CLI integration shipped** as the background-floor track-cluster
+>   matcher (`sfm match --cluster`, `specs/core/track-cluster-matching.md`),
+>   which uses `KdForest` for per-descriptor k-NN; see
+>   `crates/sfmtool-core/src/features/cluster_match/` and the Python wrapper
+>   in `src/sfmtool/feature_match/_cluster_matching.py`.
 
 ## Motivation
 
 The most expensive step in descriptor matching is finding, for each query
 descriptor, its nearest neighbor(s) among a large set of candidates. Today
 sfmtool-core matches descriptors with an exhaustive scan
-(`feature_match/descriptor.rs`: `find_best_match`, `find_best_match_contiguous`),
+(`features/feature_match/descriptor.rs`: `find_best_match`, `find_best_match_contiguous`),
 which is fine for many use cases. We want an approximate alternative for large
 feature counts, and potentially for patch matching as well.
 
@@ -245,7 +247,7 @@ Following the optical-flow and SIFT implementations:
   squared-L2 loop (no hand-written SIMD).
 - **Integer distance domain.** Keep SIFT distances in `i64`/`u32` squared-L2 and
   take `sqrt` only when a reported distance is needed, matching
-  `feature_match/descriptor.rs`.
+  `features/feature_match/descriptor.rs`.
 - **Software prefetch in the leaf scan.** The leaf scan is memory-bound, not
   compute-bound: each point row is a random ~128-byte gather from the shared
   corpus, and the gather latency dwarfs the SIMD kernel's ~25 cycles. Because a
@@ -269,7 +271,7 @@ calibrating `L_max`. (Measured precision is reported separately by the tests and
 ### Module structure (as built)
 
 ```
-sfmtool-core/src/kdforest/
+sfmtool-core/src/features/kdforest/
 ├── mod.rs        # Public API: KdForestParams, KdForest, build, search, search_batch
 ├── build.rs      # Randomized tree construction (variance sample, top-D pick, median split)
 ├── search.rs     # Shared-queue BBF search, bounded result set, checked-set dedup
@@ -335,16 +337,16 @@ ratio test, so an approximate matcher backend slots in alongside the exact one.
 
 1. **Phase 1 (this spec): CPU + SIMD + multithread.** Randomized build,
    shared-queue BBF search, SIFT-`u8` specialization, and `L_max` calibration
-   helper, cross-validated against brute-force exact NN. **Done**, except the
-   matcher CLI integration (the `KdForest` building block exists; wiring an
-   approximate backend into `src/sfmtool/feature_match/` is a follow-up).
+   helper, cross-validated against brute-force exact NN. **Done**, including
+   the matcher CLI integration via the background-floor track-cluster matcher
+   (`sfm match --cluster`; see `specs/core/track-cluster-matching.md`).
 2. **Phase 2 (future):** generic `f32` index hardening and benchmarks on
    higher-dimensional / less-correlated data; consider the k-means tree and full
    auto-selection as separate specs if a dataset wants them.
 
 ## Testing & validation
 
-> _Status (2026-06-06): Implemented in `kdforest/tests.rs` and
+> _Status (2026-06-06): Implemented in `features/kdforest/tests.rs` and
 > `tests/rust_bindings/test_kdtree_forest_rust_bindings.py`, plus
 > `benches/kdtree_forest.rs`. The two dataset-driven items below remain as
 > future work; the listed unit tests are covered._
@@ -372,10 +374,11 @@ ratio test, so an approximate matcher backend slots in alongside the exact one.
   counts (each tree is seeded independently as `seed + tree_index` and built by
   an order-preserving parallel map). Covered by `determinism_same_seed` and the
   Python `test_determinism`.
-- **Matcher parity.** _Future, with the matcher CLI integration:_ the
-  approximate matcher's accepted matches should recover ≥0.95 of the exact
-  mutual-best matches at the accurate preset. The exactness/precision tests
-  above bound the index's accuracy in the meantime.
+- **Matcher parity** — verified in production via the track-cluster matcher:
+  the cluster-radius scheme that consumes `KdForest`'s k-NN at the accurate
+  preset is the matcher behind `sfm match --cluster`. See
+  `specs/core/track-cluster-matching.md` for the empirical recall numbers and
+  the dataset sweep results.
 - **Rust unit tests:** high recall across many trees exercising cross-tree
   `checked`-set dedup (`many_trees_full_budget_high_recall`), median split
   balance under heavy duplicates (`duplicate_coordinates_build_and_query`),
