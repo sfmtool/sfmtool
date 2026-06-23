@@ -6,10 +6,10 @@
 //! Exposes file I/O (`.sfmr`, `.sift`, and COLMAP formats), geometric types,
 //! feature matching, alignment, optical flow, and GUI viewer to Python via PyO3.
 //!
-//! File-format I/O lives on the `_sfmtool.io` PyO3 submodule (registered
-//! flat under the actual import path `sfmtool._sfmtool.io`, but its
-//! `__name__` reads as `sfmtool.io` so binding objects report the public
-//! location in tracebacks, IPython, and Sphinx); everything else is
+//! File-format I/O and feature matching each live on their own PyO3
+//! submodule (`_sfmtool.io`, `_sfmtool.matching`); their `__name__` reads
+//! as `sfmtool.io` / `sfmtool.matching` so binding objects report the
+//! public location in tracebacks, IPython, and Sphinx. Everything else is
 //! registered flat on `_sfmtool` for now (see hygiene audit #4 for the
 //! rest).
 //!
@@ -70,11 +70,9 @@ mod py_image;
 
 // ── Feature matching ──────────────────────────────────────────────────────
 
-mod py_cluster_match;
-mod py_descriptor_match;
-mod py_image_match;
+mod matching;
+
 mod py_sift;
-mod py_sweep_match;
 
 // ── Image warping ────────────────────────────────────────────────────────
 
@@ -124,9 +122,7 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Build introspection
     m.add_function(wrap_pyfunction!(build_profile, m)?)?;
 
-    // File-format I/O lives on the `_sfmtool.io` submodule. Its `__name__`
-    // reads as `sfmtool.io` so binding objects report their public location
-    // in tracebacks, IPython, Sphinx, and `pickle`.
+    // File-format I/O: `.sfmr`, `.sift`, `.matches`, `.camrig`, COLMAP binary + db.
     helpers::install_submodule(m, "sfmtool.io", io::register)?;
 
     // sfmtool SIFT detection / extraction
@@ -136,51 +132,8 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Image inspection
     m.add_function(wrap_pyfunction!(py_image::image_dimensions, m)?)?;
 
-    // Feature matching
-    m.add_function(wrap_pyfunction!(
-        py_descriptor_match::descriptor_distance,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        py_descriptor_match::find_best_descriptor_match,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(py_sweep_match::match_one_way_sweep_py, m)?)?;
-    m.add_function(wrap_pyfunction!(
-        py_sweep_match::match_one_way_sweep_geometric_py,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        py_sweep_match::mutual_best_match_sweep_py,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        py_sweep_match::polar_mutual_best_match_py,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        py_sweep_match::mutual_best_match_sweep_geometric_py,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        py_sweep_match::polar_mutual_best_match_geometric_py,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(py_image_match::match_image_pair_py, m)?)?;
-    m.add_function(wrap_pyfunction!(
-        py_image_match::match_image_pairs_batch_py,
-        m
-    )?)?;
-
-    // Background-floor track-cluster matching
-    m.add_function(wrap_pyfunction!(
-        py_cluster_match::background_floor_clusters,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        py_cluster_match::clusters_to_pair_matches,
-        m
-    )?)?;
+    // Feature matching: descriptor + image-pair + sweep + cluster.
+    helpers::install_submodule(m, "sfmtool.matching", matching::register)?;
 
     // SE3 transform acceleration
     m.add_function(wrap_pyfunction!(

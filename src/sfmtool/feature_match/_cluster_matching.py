@@ -19,7 +19,7 @@ from typing import NamedTuple, Optional
 
 import numpy as np
 
-from .._sfmtool import (
+from .._sfmtool.matching import (
     background_floor_clusters as _rust_background_floor_clusters,
     clusters_to_pair_matches as _rust_clusters_to_pair_matches,
 )

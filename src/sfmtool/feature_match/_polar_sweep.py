@@ -21,7 +21,7 @@ import numpy as np
 import pycolmap
 
 from ._geometric_filter import GeometricFilterConfig
-from .._sfmtool import (
+from .._sfmtool.matching import (
     polar_mutual_best_match_py as _rust_polar_mutual_best_match,
     polar_mutual_best_match_geometric_py as _rust_polar_mutual_best_match_geometric,
 )

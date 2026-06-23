@@ -393,7 +393,7 @@ API is specified in [Production Implementation](#production-implementation) belo
 
 The production implementation is **done** as specified: the Rust matcher lives in
 `crates/sfmtool-core/src/features/cluster_match/`, the PyO3 bindings in
-`crates/sfmtool-py/src/py_cluster_match.rs` (exposed as
+`crates/sfmtool-py/src/matching/cluster.rs` (exposed as
 `sfmtool.background_floor_clusters` / `sfmtool.clusters_to_pair_matches`), the
 Python matcher layer in `src/sfmtool/feature_match/_cluster_matching.py` with the
 `_run_cluster_matching` orchestration in `feature_match/_run.py`, and the CLI as
@@ -690,9 +690,11 @@ Run `pixi run cargo test -p sfmtool-core cluster_match` and
 
 #### Location
 
-New file `crates/sfmtool-py/src/py_cluster_match.rs`; `mod py_cluster_match;` and
-registration of both functions in `crates/sfmtool-py/src/lib.rs`’s `#[pymodule]`
-via `m.add_function(wrap_pyfunction!(...))`.
+New file `crates/sfmtool-py/src/matching/cluster.rs`; registered via the
+file's own `pub fn register`, chained into `matching::register`, which
+`crates/sfmtool-py/src/lib.rs`'s `#[pymodule]` installs as the
+`_sfmtool.matching` submodule (`__name__ == "sfmtool.matching"`) through
+`helpers::install_submodule`.
 
 #### Functions
 
@@ -748,7 +750,7 @@ Map `ClusterMatchError` to `PyValueError::new_err(...)`. Validate
 `KdForest` is re-exported as `sfmtool.KdForest` (see `src/sfmtool/__init__.py`).
 Re-export both functions the same way so callers can `from sfmtool import
 background_floor_clusters, clusters_to_pair_matches` (they live in
-`sfmtool._sfmtool`).
+`sfmtool._sfmtool.matching`).
 
 #### Rebuild + tests
 

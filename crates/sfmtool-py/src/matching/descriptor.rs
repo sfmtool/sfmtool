@@ -43,3 +43,9 @@ pub fn find_best_descriptor_match(
         None => Ok((None, f64::INFINITY)),
     }
 }
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(descriptor_distance, m)?)?;
+    m.add_function(wrap_pyfunction!(find_best_descriptor_match, m)?)?;
+    Ok(())
+}

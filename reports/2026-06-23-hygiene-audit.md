@@ -156,25 +156,37 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
   `warp_map`), patch (`patch_cloud`, `consensus_atlas`, `photometric_ransac`),
   kd-spatial (`kdtree`, `kdforest`).
 - Proposed fix: expose child modules via `PyModule::new` + `add_submodule`
-  (`_sfmtool.io`, `.match`, `.geometry`, `.flow`, `.patch`, `.spherical`);
-  group the `py_*.rs` into subdirs; replace `from sfmtool._sfmtool import *`
-  with deliberate re-exports.
+  (`_sfmtool.io`, `.match` — shipped as `.matching` to dodge the Rust
+  keyword, `.geometry`, `.flow`, `.patch`, `.spherical`); group the
+  `py_*.rs` into subdirs; replace `from sfmtool._sfmtool import *` with
+  deliberate re-exports.
 - Effort: high · Risk: medium — every Python consumer of `sfmtool.<symbol>`
   must keep resolving; PyO3 submodules have `sys.modules` quirks; this is the
   only flatness reaching the public Python API.
 
-> _Status (2026-06-23): Partially done — the `io` slice landed. The 24
+> _Status (2026-06-23): Partially done — the `io` slice landed. 24
 > file-format I/O entries (5 `.sfmr` + 2 COLMAP-binary + 2 COLMAP-db + 4
-> `.matches` + 4 `.camrig` + 4 camrig-pattern + 5 `.sift` + `SiftWriteQueue`)
-> are now registered on a `_sfmtool.io` PyO3 submodule via
-> `PyModule::new`/`add_submodule` plus a `sys.modules["sfmtool._sfmtool.io"]`
-> insertion so `from sfmtool._sfmtool.io import …` resolves without an
-> explicit prior `import`. All 30+ Python call sites (src + tests) updated to
-> the new path; the parent `_sfmtool` no longer carries the I/O names. The
-> remaining seams (`.match`, `.geometry`, `.flow`, `.patch`, `.spherical`) and
-> the `from sfmtool._sfmtool import *` wildcard in `src/sfmtool/__init__.py`
-> still need the same treatment. Commit (branch
-> `claude/pyo3-io-submodule`)._
+> `.matches` + 4 `.camrig` + 4 camrig-pattern + 5 `.sift` +
+> `SiftWriteQueue`) are now on a `_sfmtool.io` PyO3 submodule with
+> `__name__ == "sfmtool.io"` so binding objects' `__module__` reads the
+> public location; the real import path stays `sfmtool._sfmtool.io` via
+> a pre-`register` `sys.modules` insert through the new
+> `helpers::install_submodule(parent, public_name, register)`. The
+> remaining seams (`.match`, `.geometry`, `.flow`, `.patch`,
+> `.spherical`) and the `from sfmtool._sfmtool import *` wildcard in
+> `src/sfmtool/__init__.py` still need the same treatment. Commit
+> (branch `claude/pyo3-io-submodule`)._
+>
+> _Status (2026-06-23): Partially done — the `matching` slice landed
+> (shipped as `.matching` because Rust `match` is a keyword). 12 entries
+> (2 cluster + 2 descriptor + 2 image-pair + 6 sweep) follow the io
+> recipe: each source file owns its `pub fn register`,
+> `matching::register` chains them, `lib.rs` installs via
+> `helpers::install_submodule(m, "sfmtool.matching", matching::register)`.
+> Binding objects' `__module__` reads `sfmtool.matching`. The remaining
+> seams (`.geometry`, `.flow`, `.patch`, `.spherical`) and the
+> `__init__.py` wildcard still pending. Commit (branch
+> `claude/pyo3-matching-submodule`)._
 
 ### 5. First cut of #4: move the six `py_*_io.rs` into `crates/sfmtool-py/src/io/`
 

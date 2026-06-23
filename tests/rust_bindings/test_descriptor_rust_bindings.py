@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import (
+from sfmtool._sfmtool.matching import (
     descriptor_distance as rust_descriptor_distance,
     find_best_descriptor_match as rust_find_best_match,
 )
