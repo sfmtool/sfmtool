@@ -444,6 +444,18 @@ class TestEpipolarCLI:
         assert result.exit_code == 0
         assert "epipolar" in result.output.lower()
 
+    def test_side_by_side_help_describes_other_suffix(self):
+        """The `--side-by-side` help previously said `(_A and _B)` while
+        `--draw` and the spec said `_other`. The actual file naming is
+        `_other`; this pins the help text against future drift."""
+        from sfmtool.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["epipolar", "--help"])
+        assert result.exit_code == 0
+        assert "_other" in result.output
+        assert "_A and _B" not in result.output
+
     def test_non_sfmr_rejected(self, tmp_path):
         from sfmtool.cli import main
 

@@ -25,7 +25,6 @@ sfm flow <IMAGE1> <IMAGE2> [OPTIONS...]
 | `--feature-size` | int | 4 | Feature marker size (pixels) |
 | `--line-thickness` | int | 1 | Line thickness (pixels) |
 | `--side-by-side / --separate` | bool | `false` | Single combined image or two separate files |
-| `--pairs-dir` | path | | Process all adjacent pairs from reconstruction |
 
 ## Visualization Modes
 
@@ -53,7 +52,8 @@ sfm flow image_001.jpg image_002.jpg --draw flow.png --preset high_quality
 
 # Compare flow against reconstruction
 sfm flow image_001.jpg image_002.jpg --draw compare.png -r solve.sfmr
-
-# Batch all adjacent pairs
-sfm flow image_001.jpg image_002.jpg --pairs-dir flow_viz/ -r solve.sfmr
 ```
+
+> Adjacent-pairs batch mode is not supported by `sfm flow`. Use `sfm epipolar
+> --pairs-dir` for batched per-image visualizations, or wrap `sfm flow` in a
+> shell loop for batch flow.

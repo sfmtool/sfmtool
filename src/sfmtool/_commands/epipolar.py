@@ -129,7 +129,8 @@ def resolve_image_name(image_input: str, recon) -> str:
     "--side-by-side/--separate",
     "side_by_side",
     default=False,
-    help="Whether to output a single side-by-side image or two separate images (_A and _B).",
+    help="Output a single side-by-side image, or two separate images (the second "
+    "suffixed `_other` per --draw).",
 )
 @click.option(
     "--sweep-with-max-features",

@@ -20,15 +20,16 @@ If `WORKSPACE_DIR` is omitted, the current directory is used.
 |--------|------|---------|-------------|
 | `--feature-tool` | `colmap` \| `opencv` \| `sfmtool` | `colmap` | Feature extraction backend |
 | `--dsp / --no-dsp` | bool | `false` | Enable domain size pooling (COLMAP only) |
-| `--max-features` | int | 8192 | Maximum features per image (COLMAP only) |
+| `--max-features` | int | 8192 | Maximum features per image (COLMAP and sfmtool) |
 | `--gpu / --no-gpu` | bool | `true` | GPU acceleration for SIFT (COLMAP only) |
 | `--affine-shape / --no-affine-shape` | bool | `false` | Affine shape estimation (COLMAP only) |
 | `--force / -f` | flag | | Allow creating workspace even if nested or already exists |
 
 ## Validation Rules
 
-- COLMAP-specific options (`--dsp`, `--max-features`, `--gpu`, `--affine-shape`) cannot be
-  used with any non-`colmap` feature tool (`opencv` or `sfmtool`).
+- COLMAP-specific options (`--dsp`, `--gpu`, `--affine-shape`) cannot be used with any
+  non-`colmap` feature tool (`opencv` or `sfmtool`). `--max-features` is allowed for
+  `colmap` and `sfmtool` (both honour a per-image feature cap), but not `opencv`.
 - `--gpu` and `--affine-shape` cannot both be enabled simultaneously.
 - Without `--force`, the command errors if the directory is already a workspace or is nested
   inside an existing workspace.
