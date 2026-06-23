@@ -307,3 +307,12 @@ pub fn write_sfmr(
 pub fn verify_sfmr(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
     sfmr_format::verify_sfmr(&path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(read_sfmr, m)?)?;
+    m.add_function(wrap_pyfunction!(read_sfmr_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(read_sfmr_content_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(write_sfmr, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_sfmr, m)?)?;
+    Ok(())
+}

@@ -153,7 +153,7 @@ def _find_sfmr_by_content_hash(workspace, hash_prefix):
     (skipping hidden directories). Reading each candidate's hash decompresses
     only ``content_hash.json.zst``, not the reconstruction data.
     """
-    from .._sfmtool import read_sfmr_content_hash
+    from .._sfmtool.io import read_sfmr_content_hash
 
     def matches(path: Path) -> bool:
         try:

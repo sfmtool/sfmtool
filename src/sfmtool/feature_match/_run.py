@@ -123,7 +123,7 @@ def _run_matching(
 
         # Read matches + TVGs back from the DB
         click.echo("Reading matches from database...")
-        from .._sfmtool import read_colmap_db_matches
+        from .._sfmtool.io import read_colmap_db_matches
 
         matches_data = read_colmap_db_matches(str(db_path), include_tvg=True)
 
@@ -211,7 +211,7 @@ def _run_matching(
     ).replace("\\", "/")
 
     # Write the .matches file
-    from .._sfmtool import write_matches
+    from .._sfmtool.io import write_matches
 
     click.echo(f"Writing {out}...")
     write_matches(out, matches_data)
@@ -449,7 +449,7 @@ def _run_merge(paths, output_path):
     """
     from datetime import datetime
 
-    from .._sfmtool import read_matches, write_matches
+    from .._sfmtool.io import read_matches, write_matches
 
     if not paths:
         raise click.UsageError("Must provide .matches file paths.")

@@ -16,7 +16,7 @@ import numpy as np
 import xxhash
 from deadline.job_attachments.api import summarize_path_list
 
-from sfmtool._sfmtool import (
+from sfmtool._sfmtool.io import (
     SiftWriteQueue as _SiftWriteQueue,
     read_sift as _core_read_sift,
     read_sift_metadata,

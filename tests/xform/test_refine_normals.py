@@ -244,7 +244,7 @@ def test_refine_normals_preserves_points_and_improves(
 def test_refine_normals_save_patches_round_trips(seoul_bull_workspace, tmp_path):
     """``save_patches`` attaches the refined patch cloud, which survives a
     save/load round trip through the version-3 ``.sfmr`` points3d patch frame."""
-    from sfmtool._sfmtool import verify_sfmr
+    from sfmtool._sfmtool.io import verify_sfmr
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
 
@@ -299,7 +299,7 @@ def test_refine_normals_save_patches_round_trips(seoul_bull_workspace, tmp_path)
 def test_refine_normals_bitmaps_round_trips(seoul_bull_workspace, tmp_path):
     """``bitmaps`` attaches per-point RGBA patch textures that survive a
     save/load round trip and pass ``verify_sfmr``."""
-    from sfmtool._sfmtool import verify_sfmr
+    from sfmtool._sfmtool.io import verify_sfmr
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
 

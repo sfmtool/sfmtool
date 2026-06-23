@@ -6,11 +6,18 @@
 //! Exposes file I/O (`.sfmr`, `.sift`, and COLMAP formats), geometric types,
 //! feature matching, alignment, optical flow, and GUI viewer to Python via PyO3.
 //!
+//! File-format I/O lives on the `_sfmtool.io` PyO3 submodule (registered
+//! flat under the actual import path `sfmtool._sfmtool.io`, but its
+//! `__name__` reads as `sfmtool.io` so binding objects report the public
+//! location in tracebacks, IPython, and Sphinx); everything else is
+//! registered flat on `_sfmtool` for now (see hygiene audit #4 for the
+//! rest).
+//!
 //! # Example
 //!
 //! ```python
-//! from sfmtool._sfmtool import read_sfmr, write_sfmr, verify_sfmr
-//! from sfmtool._sfmtool import read_sift, write_sift, verify_sift
+//! from sfmtool._sfmtool.io import read_sfmr, write_sfmr, verify_sfmr
+//! from sfmtool._sfmtool.io import read_sift, write_sift, verify_sift
 //!
 //! data = read_sfmr("reconstruction.sfmr")
 //! valid, errors = verify_sfmr("reconstruction.sfmr")
@@ -117,46 +124,10 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Build introspection
     m.add_function(wrap_pyfunction!(build_profile, m)?)?;
 
-    // .sfmr file I/O
-    m.add_function(wrap_pyfunction!(io::sfmr::read_sfmr, m)?)?;
-    m.add_function(wrap_pyfunction!(io::sfmr::read_sfmr_metadata, m)?)?;
-    m.add_function(wrap_pyfunction!(io::sfmr::read_sfmr_content_hash, m)?)?;
-    m.add_function(wrap_pyfunction!(io::sfmr::write_sfmr, m)?)?;
-    m.add_function(wrap_pyfunction!(io::sfmr::verify_sfmr, m)?)?;
-
-    // COLMAP binary I/O
-    m.add_function(wrap_pyfunction!(io::colmap_binary::read_colmap_binary, m)?)?;
-    m.add_function(wrap_pyfunction!(io::colmap_binary::write_colmap_binary, m)?)?;
-
-    // COLMAP SQLite database I/O
-    m.add_function(wrap_pyfunction!(io::colmap_db::write_colmap_db, m)?)?;
-    m.add_function(wrap_pyfunction!(io::colmap_db::read_colmap_db_matches, m)?)?;
-
-    // .matches file I/O
-    m.add_function(wrap_pyfunction!(io::matches::read_matches, m)?)?;
-    m.add_function(wrap_pyfunction!(io::matches::read_matches_metadata, m)?)?;
-    m.add_function(wrap_pyfunction!(io::matches::write_matches, m)?)?;
-    m.add_function(wrap_pyfunction!(io::matches::verify_matches, m)?)?;
-
-    // .camrig file I/O
-    m.add_function(wrap_pyfunction!(io::camrig::read_camrig_metadata, m)?)?;
-    m.add_function(wrap_pyfunction!(io::camrig::read_camrig, m)?)?;
-    m.add_function(wrap_pyfunction!(io::camrig::verify_camrig, m)?)?;
-    m.add_function(wrap_pyfunction!(io::camrig::write_camrig, m)?)?;
-
-    // .camrig image patterns
-    m.add_function(wrap_pyfunction!(io::camrig::validate_camrig_pattern, m)?)?;
-    m.add_function(wrap_pyfunction!(io::camrig::camrig_pattern_to_glob, m)?)?;
-    m.add_function(wrap_pyfunction!(io::camrig::camrig_pattern_matches, m)?)?;
-    m.add_function(wrap_pyfunction!(io::camrig::camrig_pattern_frame_index, m)?)?;
-
-    // .sift file I/O
-    m.add_function(wrap_pyfunction!(io::sift::read_sift, m)?)?;
-    m.add_function(wrap_pyfunction!(io::sift::read_sift_metadata, m)?)?;
-    m.add_function(wrap_pyfunction!(io::sift::read_sift_partial, m)?)?;
-    m.add_function(wrap_pyfunction!(io::sift::write_sift, m)?)?;
-    m.add_class::<io::sift::SiftWriteQueue>()?;
-    m.add_function(wrap_pyfunction!(io::sift::verify_sift, m)?)?;
+    // File-format I/O lives on the `_sfmtool.io` submodule. Its `__name__`
+    // reads as `sfmtool.io` so binding objects report their public location
+    // in tracebacks, IPython, Sphinx, and `pickle`.
+    helpers::install_submodule(m, "sfmtool.io", io::register)?;
 
     // sfmtool SIFT detection / extraction
     m.add_function(wrap_pyfunction!(py_sift::detect_sift_keypoints, m)?)?;

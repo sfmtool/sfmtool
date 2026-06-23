@@ -24,7 +24,7 @@ matches digits only and `*` / `**` respect path-segment boundaries.
 import sys
 from pathlib import Path
 
-from .._sfmtool import (
+from .._sfmtool.io import (
     camrig_pattern_frame_index,
     camrig_pattern_matches,
     camrig_pattern_to_glob,

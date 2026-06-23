@@ -208,7 +208,7 @@ class TestPano2rigCamrig:
     _FACE_NAMES = ["front", "right", "back", "left", "top", "bottom"]
 
     def test_writes_a_valid_cubemap_rig(self, tmp_path):
-        from sfmtool._sfmtool import read_camrig, verify_camrig
+        from sfmtool._sfmtool.io import read_camrig, verify_camrig
 
         camrig_path = tmp_path / "cubemap.camrig"
         write_pano_camrig(
@@ -233,7 +233,7 @@ class TestPano2rigCamrig:
         ]
 
     def test_camera_is_a_square_90deg_pinhole(self, tmp_path):
-        from sfmtool._sfmtool import read_camrig
+        from sfmtool._sfmtool.io import read_camrig
 
         camrig_path = tmp_path / "cubemap.camrig"
         write_pano_camrig(
@@ -253,7 +253,7 @@ class TestPano2rigCamrig:
         assert cam["parameters"]["principal_point_y"] == 256.0
 
     def test_cocentric_zero_translations(self, tmp_path):
-        from sfmtool._sfmtool import read_camrig
+        from sfmtool._sfmtool.io import read_camrig
 
         camrig_path = tmp_path / "cubemap.camrig"
         write_pano_camrig(
@@ -329,7 +329,7 @@ class TestInsv2rigCamrig:
 
     def test_writes_a_valid_fisheye_360_rig(self, tmp_path):
         from sfmtool.rig.insv2rig import write_insv_camrig
-        from sfmtool._sfmtool import read_camrig, verify_camrig
+        from sfmtool._sfmtool.io import read_camrig, verify_camrig
 
         camrig_path = tmp_path / "recording.camrig"
         write_insv_camrig(

@@ -14,8 +14,8 @@ from sfmtool.camrig.resolver import (
     CamrigSolveError,
     resolve_camrig_for_solve,
 )
-from sfmtool._sfmtool import (
-    SphericalTileRig,
+from sfmtool._sfmtool import SphericalTileRig
+from sfmtool._sfmtool.io import (
     camrig_pattern_matches,
     read_camrig,
     read_camrig_metadata,

@@ -409,7 +409,7 @@ low-risk overlaps:
   Rust work.
 - **Overlap the save with the next extract — on the rayon pool, not a thread.**
   `image_files_to_sift_files` drains results into a `SiftWriteQueue` (the
-  `_sfmtool` PyO3 class): `submit` copies the data (GIL held) and `rayon::spawn`s
+  `_sfmtool.io` PyO3 class): `submit` copies the data (GIL held) and `rayon::spawn`s
   the compression+write onto the **same global pool the extract uses**, then
   returns; `join_oldest` (bounded look-ahead for backpressure) and `join` await
   saves and surface their errors in order. The save of image *i* thus overlaps

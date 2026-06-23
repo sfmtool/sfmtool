@@ -137,7 +137,7 @@ def test_match_exhaustive(isolated_seoul_bull_17_images: list[Path]):
     assert len(matches_files) == 1
 
     # Verify the .matches file can be read back
-    from sfmtool._sfmtool import read_matches
+    from sfmtool._sfmtool.io import read_matches
 
     matches_data = read_matches(str(matches_files[0]))
     assert matches_data["metadata"]["matching_method"] == "exhaustive"
@@ -224,7 +224,7 @@ def test_match_flow(isolated_seoul_bull_17_images: list[Path]):
     assert "Done:" in result.output
 
     # Verify the .matches file
-    from sfmtool._sfmtool import read_matches
+    from sfmtool._sfmtool.io import read_matches
 
     matches_data = read_matches(str(output_path))
     assert matches_data["metadata"]["matching_method"] == "flow"
@@ -264,7 +264,7 @@ def test_match_with_range(isolated_seoul_bull_17_images: list[Path]):
     )
     assert result.exit_code == 0, result.output
 
-    from sfmtool._sfmtool import read_matches
+    from sfmtool._sfmtool.io import read_matches
 
     matches_data = read_matches(str(output_path))
     assert matches_data["metadata"]["image_count"] == 5
@@ -321,7 +321,7 @@ def test_match_merge(isolated_seoul_bull_17_images: list[Path]):
     assert "Merged:" in result.output
 
     # Verify the merged file
-    from sfmtool._sfmtool import read_matches
+    from sfmtool._sfmtool.io import read_matches
 
     merged = read_matches(str(merged_path))
     seq = read_matches(str(seq_path))

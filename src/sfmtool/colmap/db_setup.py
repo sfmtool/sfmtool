@@ -182,7 +182,8 @@ def _setup_for_sfm_from_matches(
     import numpy as np
 
     from .._filenames import number_from_filename
-    from .._sfmtool import RangeExpr, read_matches
+    from .._sfmtool import RangeExpr
+    from .._sfmtool.io import read_matches
     from .._workspace import find_workspace_for_path
 
     matches_file = Path(matches_file)

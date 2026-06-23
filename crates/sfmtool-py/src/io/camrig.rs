@@ -190,3 +190,15 @@ pub fn camrig_pattern_frame_index(
 ) -> Option<u64> {
     camrig_format::pattern_frame_index(pattern, relative_path, case_insensitive)
 }
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(read_camrig_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(read_camrig, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_camrig, m)?)?;
+    m.add_function(wrap_pyfunction!(write_camrig, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_camrig_pattern, m)?)?;
+    m.add_function(wrap_pyfunction!(camrig_pattern_to_glob, m)?)?;
+    m.add_function(wrap_pyfunction!(camrig_pattern_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(camrig_pattern_frame_index, m)?)?;
+    Ok(())
+}

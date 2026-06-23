@@ -99,7 +99,7 @@ def _compute_descriptor_distances(matches_data, sift_paths, max_feature_count):
 
 def _fill_sift_hashes(matches_data, sift_paths, image_names, image_paths):
     """Fill feature_tool_hashes and sift_content_hashes from .sift files."""
-    from .._sfmtool import read_sift_metadata
+    from .._sfmtool.io import read_sift_metadata
 
     image_count = len(image_names)
     feature_tool_hashes = np.zeros((image_count, 16), dtype=np.uint8)

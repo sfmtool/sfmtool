@@ -678,3 +678,9 @@ fn extract_colmap_rigs_frames(
 
     Ok((Some(colmap_rigs), Some(colmap_frames)))
 }
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(read_colmap_binary, m)?)?;
+    m.add_function(wrap_pyfunction!(write_colmap_binary, m)?)?;
+    Ok(())
+}

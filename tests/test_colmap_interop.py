@@ -155,7 +155,8 @@ class TestToColmapBinE2E:
     def test_points_at_infinity_materialized(self, tmp_path, seoul_bull_workspace):
         """COLMAP binary export materialises w=0 points to finite landmarks."""
         from sfmtool.colmap.io import save_colmap_binary
-        from sfmtool._sfmtool import SfmrReconstruction, read_colmap_binary
+        from sfmtool._sfmtool import SfmrReconstruction
+        from sfmtool._sfmtool.io import read_colmap_binary
 
         recon = SfmrReconstruction.load(seoul_bull_workspace)
         positions_xyzw = recon.positions_xyzw.copy()
@@ -177,7 +178,8 @@ class TestToColmapBinE2E:
         self, tmp_path, seoul_bull_workspace
     ):
         """--range keeps only the requested images but retains every 3D point."""
-        from sfmtool._sfmtool import SfmrReconstruction, read_colmap_binary
+        from sfmtool._sfmtool import SfmrReconstruction
+        from sfmtool._sfmtool.io import read_colmap_binary
 
         sfmr_path = seoul_bull_workspace
         original = SfmrReconstruction.load(sfmr_path)
@@ -203,7 +205,8 @@ class TestToColmapBinE2E:
         self, tmp_path, seoul_bull_workspace
     ):
         """--filter-points removes 3D points left with no observations."""
-        from sfmtool._sfmtool import SfmrReconstruction, read_colmap_binary
+        from sfmtool._sfmtool import SfmrReconstruction
+        from sfmtool._sfmtool.io import read_colmap_binary
 
         sfmr_path = seoul_bull_workspace
         original = SfmrReconstruction.load(sfmr_path)
