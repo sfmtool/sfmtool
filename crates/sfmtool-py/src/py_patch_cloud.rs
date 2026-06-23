@@ -16,6 +16,7 @@ use sfmtool_core::patch::normal_refine::{
     refine_patch_cloud, view_indices_from_reconstruction, CacheMode, NormalRefineParams, Objective,
     PatchWindow, ProjectedImage, Sampler,
 };
+use sfmtool_core::patch::view_selection::{select_patch_cloud_views, ViewSelectParams};
 
 use crate::py_rigid_transform::PyRigidTransform;
 use crate::py_sfmr_reconstruction::PySfmrReconstruction;
@@ -130,6 +131,59 @@ fn parse_reduce(s: &str) -> PyResult<ViewReduce> {
 #[pyclass(name = "PatchCloud", module = "sfmtool")]
 pub struct PyPatchCloud {
     pub(crate) inner: PatchCloud,
+}
+
+/// Build one source-image pyramid + camera pose per reconstruction image,
+/// validating that each image matches its camera resolution. Shared by
+/// `refine_normals` and `select_views` so they handle imagery identically.
+fn build_pyramids_and_poses(
+    recon: &sfmtool_core::SfmrReconstruction,
+    images: &[Bound<'_, PyAny>],
+) -> PyResult<(Vec<ImageU8Pyramid>, Vec<RigidTransform>)> {
+    if images.len() != recon.images.len() {
+        return Err(PyValueError::new_err(format!(
+            "images must be parallel to the reconstruction's {} images, got {}",
+            recon.images.len(),
+            images.len()
+        )));
+    }
+    let pyramids: Vec<ImageU8Pyramid> = images
+        .iter()
+        .enumerate()
+        .map(|(i, im)| {
+            let src = extract_image_u8(im)?;
+            let cam = &recon.cameras[recon.images[i].camera_index as usize];
+            if src.width() != cam.width || src.height() != cam.height {
+                return Err(PyValueError::new_err(format!(
+                    "image {i} is {}x{} but its camera is {}x{}; \
+                     pass full-resolution images",
+                    src.width(),
+                    src.height(),
+                    cam.width,
+                    cam.height
+                )));
+            }
+            let min_dim = src.width().min(src.height()).max(1);
+            let max_levels = ((min_dim as f32).log2().floor() as usize).max(1) + 1;
+            Ok(ImageU8Pyramid::build(&src, max_levels))
+        })
+        .collect::<PyResult<_>>()?;
+    let poses: Vec<RigidTransform> = recon
+        .images
+        .iter()
+        .map(|im| {
+            let q = im.quaternion_wxyz;
+            RigidTransform::from_wxyz_translation(
+                [q.w, q.i, q.j, q.k],
+                [
+                    im.translation_xyz.x,
+                    im.translation_xyz.y,
+                    im.translation_xyz.z,
+                ],
+            )
+        })
+        .collect();
+    Ok((pyramids, poses))
 }
 
 #[pymethods]
@@ -305,13 +359,6 @@ impl PyPatchCloud {
         render_bitmaps: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         let recon = &recon.inner;
-        if images.len() != recon.images.len() {
-            return Err(PyValueError::new_err(format!(
-                "images must be parallel to the reconstruction's {} images, got {}",
-                recon.images.len(),
-                images.len()
-            )));
-        }
         // The cloud must have been built from this reconstruction: its per-patch
         // point_ids index `recon`'s points. This is a range check only — it
         // catches a too-small recon (and would-be panics in the core), but cannot
@@ -399,46 +446,10 @@ impl PyPatchCloud {
         };
 
         // Build one pyramid + pose per reconstruction image; the ProjectedImages
-        // borrow these for the duration of the refinement.
-        let pyramids: Vec<ImageU8Pyramid> = images
-            .iter()
-            .enumerate()
-            .map(|(i, im)| {
-                let src = extract_image_u8(im)?;
-                // The warp validity / sampling assume the image matches its
-                // camera's resolution; a downscaled image would sample silently
-                // wrong and mis-gate validity.
-                let cam = &recon.cameras[recon.images[i].camera_index as usize];
-                if src.width() != cam.width || src.height() != cam.height {
-                    return Err(PyValueError::new_err(format!(
-                        "image {i} is {}x{} but its camera is {}x{}; \
-                         pass full-resolution images",
-                        src.width(),
-                        src.height(),
-                        cam.width,
-                        cam.height
-                    )));
-                }
-                let min_dim = src.width().min(src.height()).max(1);
-                let max_levels = ((min_dim as f32).log2().floor() as usize).max(1) + 1;
-                Ok(ImageU8Pyramid::build(&src, max_levels))
-            })
-            .collect::<PyResult<_>>()?;
-        let poses: Vec<RigidTransform> = recon
-            .images
-            .iter()
-            .map(|im| {
-                let q = im.quaternion_wxyz;
-                RigidTransform::from_wxyz_translation(
-                    [q.w, q.i, q.j, q.k],
-                    [
-                        im.translation_xyz.x,
-                        im.translation_xyz.y,
-                        im.translation_xyz.z,
-                    ],
-                )
-            })
-            .collect();
+        // borrow these for the duration of the refinement. The warp validity /
+        // sampling assume each image matches its camera's resolution, so the
+        // helper rejects mismatched sizes.
+        let (pyramids, poses) = build_pyramids_and_poses(recon, &images)?;
         let views: Vec<ProjectedImage<'_>> = (0..recon.images.len())
             .map(|i| ProjectedImage {
                 camera: &recon.cameras[recon.images[i].camera_index as usize],
@@ -537,6 +548,163 @@ impl PyPatchCloud {
             let arr = ndarray::Array4::from_shape_vec((npoints, r, r, 4), flat)
                 .expect("bitmap scatter shape matches");
             out.set_item("bitmaps", arr.into_pyarray(py))?;
+        }
+        Ok(out)
+    }
+
+    /// Select, per patch, the **view set** ``G`` that photometrically sees it:
+    /// the point's track views plus every other image that geometrically sees the
+    /// surfel and whose windowed ZNCC to a robust reference appearance (fused from
+    /// the track views) clears ``min_relative_zncc`` × the track's own
+    /// self-agreement. Track views are always admitted. See
+    /// ``specs/core/patch-view-selection.md``.
+    ///
+    /// Args:
+    ///     recon: The reconstruction the cloud was built from (provides cameras,
+    ///         poses, and the per-point track view lists via ``point_ids``).
+    ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
+    ///         image, parallel to ``recon`` (index = image index).
+    ///     min_relative_zncc: Admit a candidate whose ZNCC to the reference clears
+    ///         this fraction of the track's self-agreement (default 0.7).
+    ///     resolution: The R×R patch grid the reference / ZNCC are scored on.
+    ///     window: Per-pixel scoring weight — ``"gaussian_disk"`` (default),
+    ///         ``"gaussian"``, or ``"uniform"``.
+    ///     window_sigma: Window sigma for the gaussian windows.
+    ///     sampler: ``"bilinear"`` (default) or ``"anisotropic"``.
+    ///     min_valid_fraction: Per-view floor on the window-weighted valid-pixel
+    ///         fraction; a view below it does not cover enough of the patch.
+    ///     min_track_views: Minimum number of *valid* track views to build a
+    ///         reference from; a track below this admits its views verbatim with no
+    ///         candidate vetting.
+    ///     robust_iters: IRLS passes for the robust reference consensus.
+    ///     min_self_agreement: Trust gate on the track's self-agreement (default
+    ///         0.3). When the track views' mean ZNCC to the reference is below this,
+    ///         there is no trustworthy reference, so the track is admitted verbatim
+    ///         with no candidate expansion. At or above it, the admission bar is
+    ///         ``min_relative_zncc`` × self-agreement.
+    ///     point_ids: If given, select only for the patches with these source
+    ///         point ids; ``None`` (default) selects for every patch.
+    ///
+    /// Returns a list of per-patch dicts (parallel to the cloud's patches, in
+    /// cloud order): ``point_id`` (int), ``admitted`` (1-D int32 numpy array of
+    /// image indices — the track views first, then the vetted candidates in
+    /// ascending order), ``scores`` (1-D float64 numpy array of the per-admitted
+    /// ZNCC to the reference, parallel to ``admitted``; NaN where a view could not
+    /// be scored), and ``self_agreement`` (float; NaN when no reference could be
+    /// built). Patches excluded by ``point_ids`` are omitted from the list.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        recon, images, *, min_relative_zncc=0.7, resolution=24, window="gaussian_disk",
+        window_sigma=0.6, sampler="bilinear", min_valid_fraction=0.6, min_track_views=2,
+        robust_iters=3, min_self_agreement=0.3, point_ids=None
+    ))]
+    fn select_views<'py>(
+        &self,
+        py: Python<'py>,
+        recon: &PySfmrReconstruction,
+        images: Vec<Bound<'py, PyAny>>,
+        min_relative_zncc: f64,
+        resolution: u32,
+        window: &str,
+        window_sigma: f64,
+        sampler: &str,
+        min_valid_fraction: f64,
+        min_track_views: u32,
+        robust_iters: u32,
+        min_self_agreement: f64,
+        point_ids: Option<Vec<u32>>,
+    ) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        let recon = &recon.inner;
+        if self.inner.point_ids.len() != self.inner.len() {
+            return Err(PyValueError::new_err(
+                "patch cloud has no per-patch point_ids; rebuild it with from_reconstruction",
+            ));
+        }
+        if self
+            .inner
+            .point_ids
+            .iter()
+            .any(|&p| p as usize >= recon.points.len())
+        {
+            return Err(PyValueError::new_err(
+                "patch cloud point_ids are out of range for this reconstruction \
+                 (was the cloud built from a different recon?)",
+            ));
+        }
+
+        let window = match window {
+            "uniform" => PatchWindow::Uniform,
+            "gaussian" => PatchWindow::Gaussian {
+                sigma: window_sigma,
+            },
+            "gaussian_disk" => PatchWindow::GaussianDisk {
+                sigma: window_sigma,
+            },
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown window: {other:?} (expected uniform|gaussian|gaussian_disk)"
+                )))
+            }
+        };
+        let sampler = match sampler {
+            "bilinear" => Sampler::Bilinear,
+            "anisotropic" => Sampler::Anisotropic,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown sampler: {other:?} (expected bilinear|anisotropic)"
+                )))
+            }
+        };
+        let params = ViewSelectParams {
+            min_relative_zncc,
+            resolution,
+            window,
+            sampler,
+            min_valid_fraction,
+            min_track_views,
+            robust_iters,
+            min_self_agreement,
+        };
+
+        let (pyramids, poses) = build_pyramids_and_poses(recon, &images)?;
+        let views: Vec<ProjectedImage<'_>> = (0..recon.images.len())
+            .map(|i| ProjectedImage {
+                camera: &recon.cameras[recon.images[i].camera_index as usize],
+                cam_from_world: &poses[i],
+                pyramid: &pyramids[i],
+            })
+            .collect();
+
+        // Per-patch track view lists from the reconstruction; an empty list makes
+        // a patch's selection trivially empty, so `point_ids` selects a subset by
+        // clearing the rest.
+        let mut track_views = view_indices_from_reconstruction(recon, &self.inner);
+        let selected_mask: Option<std::collections::HashSet<u32>> =
+            point_ids.map(|ids| ids.into_iter().collect());
+        if let Some(keep) = &selected_mask {
+            for (tv, &pid) in track_views.iter_mut().zip(&self.inner.point_ids) {
+                if !keep.contains(&pid) {
+                    tv.clear();
+                }
+            }
+        }
+
+        let results =
+            py.detach(|| select_patch_cloud_views(&self.inner, &views, &track_views, &params));
+
+        let mut out = Vec::new();
+        for (res, &pid) in results.iter().zip(&self.inner.point_ids) {
+            if let Some(keep) = &selected_mask {
+                if !keep.contains(&pid) {
+                    continue;
+                }
+            }
+            let d = PyDict::new(py);
+            d.set_item("point_id", pid)?;
+            d.set_item("admitted", res.admitted.clone().into_pyarray(py))?;
+            d.set_item("scores", res.scores.clone().into_pyarray(py))?;
+            d.set_item("self_agreement", res.self_agreement)?;
+            out.push(d);
         }
         Ok(out)
     }

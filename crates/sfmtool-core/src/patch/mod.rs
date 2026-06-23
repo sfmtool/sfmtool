@@ -5,5 +5,6 @@
 
 pub mod cloud;
 pub mod normal_refine;
+pub mod view_selection;
 
 pub use cloud::{PatchCloud, PatchCloudError};
