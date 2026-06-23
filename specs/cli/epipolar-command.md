@@ -43,10 +43,12 @@ geometry between the two images.
 
 ### Adjacent pairs
 
-Uses `--pairs-dir` to batch-process all adjacent image pairs in the reconstruction. Saves
-one visualization per pair to the output directory, named by the first image's
-stem (`<stem>.png`); when not `--side-by-side`, only the first image's
-visualization is saved.
+Uses `--pairs-dir` to batch-process every image in the reconstruction against its
+neighbour. Saves **one visualization per image** to the output directory, named
+by that image's stem (`<stem>.png`). Each image is paired with its successor;
+the last image is paired backward with its predecessor so it gets a
+visualization too. When not `--side-by-side`, only the named image's frame is
+saved.
 
 ## Camera models and epipolar curves
 

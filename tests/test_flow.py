@@ -309,6 +309,17 @@ class TestFlowCLI:
         assert result.exit_code == 0
         assert "Visualize optical flow" in result.output
 
+    def test_pairs_dir_option_removed(self):
+        """`--pairs-dir` was declared but silently dropped on the floor;
+        removed so users don't build workflows around a no-op."""
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["flow", "a.jpg", "b.jpg", "--pairs-dir", "out_dir/"],
+        )
+        assert result.exit_code != 0
+        assert "No such option" in result.output and "--pairs-dir" in result.output
+
     def test_non_sfmr_reconstruction_rejected(self, tmp_path):
         """Passing a non-.sfmr file as --reconstruction should error."""
         img = tmp_path / "img.jpg"

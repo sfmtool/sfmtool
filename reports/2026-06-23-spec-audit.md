@@ -159,7 +159,16 @@ The canonical relocations callers need to remember for the spec edits:
 **Implementing code:** `_commands/solve.py::solve()`.
 **Inconsistencies:**
   - **Camera-config-vs-`--camera-model` rejection only fires on the image-paths branch** (L262); the `.matches` branch (L194-238) does not invoke `_check_camera_model_conflict`. Per AGENTS.md and the spec's "Camera Intrinsics" section, the rule should apply to any image being processed.
-**Recommendation:** update code — extend `_check_camera_model_conflict` to the `.matches` branch.
+> _Status (2026-06-23): Refuted on closer inspection — the `.matches`
+> branch DOES reject `--camera-model` when a `camera_config.json` resolves,
+> but the check fires inside `_setup_for_sfm_from_matches`
+> (`colmap/db_setup.py:307`) rather than at the Click handler. Both
+> incremental and global SfM go through that setup. Pinned by a new
+> regression test `test_solve_from_matches_rejects_camera_model_with_camera_config`.
+> The deep-call-stack placement is uglier than the image-paths branch's
+> early `solve.py:262` check, but it isn't a bug — declined as a fix._
+**Recommendation:** none (verified). Hoisting the matches-branch check up
+to the Click handler is a refactor, not a bug fix.
 
 ### specs/cli/to-colmap-bin-command.md
 **Summary:** Exports `.sfmr` → COLMAP binary with `--range`/`--filter-points` subsetting.

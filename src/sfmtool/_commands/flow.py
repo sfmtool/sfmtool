@@ -79,12 +79,6 @@ from ..visualization._flow_display import draw_flow_visualization
     default=False,
     help="Output a single side-by-side image or two separate images (_A and _B).",
 )
-@click.option(
-    "--pairs-dir",
-    "pairs_dir",
-    type=click.Path(),
-    help="Process all adjacent image pairs from the reconstruction and save to this directory.",
-)
 def flow(
     image1,
     image2,
@@ -97,7 +91,6 @@ def flow(
     feature_size,
     line_thickness,
     side_by_side,
-    pairs_dir,
 ):
     """Visualize optical flow between two images.
 
