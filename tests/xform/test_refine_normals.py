@@ -33,6 +33,9 @@ def test_parse_empty_runs_defaults():
     assert t.init_steps == 7
     assert t.initial_normals == "stored"
     assert t.extent == "feature_size"
+    # The CLI extent_value is the full patch size (halved internally), so the
+    # default is twice the library's half-extent default of 5.0.
+    assert t.extent_value == 10.0
 
 
 def test_parse_key_value_overrides():
@@ -54,6 +57,17 @@ def test_parse_key_value_overrides():
     assert t.min_views == 4
     assert t.window == "gaussian"
     assert t.window_sigma == 0.8
+
+
+def test_extent_pixel_size_accepted_radius_rejected():
+    """The CLI policy is ``pixel_size`` (full diameter); the library's
+    ``pixel_radius`` name is not a valid CLI extent."""
+    t = parse_refine_normals_params("extent=pixel_size,extent_value=8")
+    assert t.extent == "pixel_size"
+    assert t.extent_value == 8.0
+
+    with pytest.raises(ValueError):
+        parse_refine_normals_params("extent=pixel_radius")
 
 
 def test_parse_tolerates_blank_segments():
@@ -239,6 +253,47 @@ def test_refine_normals_preserves_points_and_improves(
         np.testing.assert_array_equal(
             new_normals[at_infinity], original_normals[at_infinity]
         )
+
+
+def test_apply_halves_full_cli_extent_to_library_half_extent(seoul_bull_workspace):
+    """``apply`` must convert the full CLI ``extent_value`` to the library
+    half-extent (divide by 2). With ``extent=fixed`` the world half-extent is
+    exactly the library value, so the halving is directly observable: a full CLI
+    size of ``W`` must yield patches whose ``half_extent`` is ``W / 2``."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+
+    full_size = 0.1
+    params = RefineNormalsTransform(
+        resolution=12,
+        init_steps=5,
+        refine_levels=2,
+        sampler="bilinear",
+        extent="fixed",
+        extent_value=full_size,
+        save_patches=True,
+    )
+    out = params.apply(recon)
+    assert out.patches is not None and len(out.patches) > 0
+    half = np.asarray([out.patches[i].half_extent for i in range(len(out.patches))])
+    np.testing.assert_allclose(half, full_size / 2.0, rtol=1e-6)
+
+
+def test_apply_maps_pixel_size_to_library_policy(seoul_bull_workspace):
+    """The CLI ``pixel_size`` policy must reach the library (whose policy is
+    named ``pixel_radius``); a broken mapping would raise ``unknown extent
+    policy`` from the binding."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    params = RefineNormalsTransform(
+        resolution=12,
+        init_steps=5,
+        refine_levels=2,
+        sampler="bilinear",
+        extent="pixel_size",
+        extent_value=8.0,
+        save_patches=True,
+    )
+    out = params.apply(recon)
+    assert out.patches is not None and len(out.patches) > 0
 
 
 def test_refine_normals_save_patches_round_trips(seoul_bull_workspace, tmp_path):

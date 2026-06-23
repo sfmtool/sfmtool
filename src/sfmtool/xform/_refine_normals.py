@@ -34,7 +34,23 @@ _OBJECTIVES = ("robust", "mean")
 _WINDOWS = ("gaussian_disk", "gaussian", "uniform")
 _SAMPLERS = ("bilinear", "anisotropic")
 _INITIAL_NORMALS = ("stored", "mean_viewing", "geometric")
-_EXTENTS = ("feature_size", "fixed", "relative_spacing", "pixel_radius")
+# CLI extent policy names. These mirror the library's ``PatchExtent`` policies
+# except that the CLI speaks in **full** patch size (the whole edge length),
+# while the library API stores a half-extent; the conversion happens in
+# ``apply``. ``pixel_size`` is the CLI spelling of the library's ``pixel_radius``.
+_EXTENTS = ("feature_size", "fixed", "relative_spacing", "pixel_size")
+
+# Maps each CLI extent policy to the ``PatchCloud.from_reconstruction`` policy
+# (only ``pixel_size`` differs from its library name).
+_EXTENT_TO_BINDING = {
+    "feature_size": "feature_size",
+    "fixed": "fixed",
+    "relative_spacing": "relative_spacing",
+    "pixel_size": "pixel_radius",
+}
+# Keep the accepted-name list and the binding map in lockstep so a future policy
+# added to one but not the other fails loudly at import, not as a bare KeyError.
+assert set(_EXTENTS) == set(_EXTENT_TO_BINDING), (_EXTENTS, _EXTENT_TO_BINDING)
 _CACHES = ("off", "fronto")
 _QUALITIES = ("none", "coarse", "fine")
 
@@ -88,7 +104,9 @@ class RefineNormalsTransform:
         # forwarded to PatchCloud.from_reconstruction
         initial_normals: str = "stored",
         extent: str = "feature_size",
-        extent_value: float = 5.0,
+        # Full patch size (whole edge length), in the chosen policy's units;
+        # halved to the library's half-extent in ``apply``.
+        extent_value: float = 10.0,
     ):
         if angular_range_deg <= 0:
             raise ValueError(
@@ -192,11 +210,13 @@ class RefineNormalsTransform:
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         images = self._load_images(recon)
 
+        # The CLI ``extent_value`` is the full patch size; the library API takes
+        # a half-extent (or a half-size multiplier / radius), so halve it here.
         cloud = PatchCloud.from_reconstruction(
             recon,
             normal=self.initial_normals,
-            extent=self.extent,
-            extent_value=self.extent_value,
+            extent=_EXTENT_TO_BINDING[self.extent],
+            extent_value=self.extent_value / 2.0,
         )
         point_ids = np.asarray(cloud.point_ids)
         print(

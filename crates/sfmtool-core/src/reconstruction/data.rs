@@ -137,10 +137,10 @@ pub struct TrackObservation {
 }
 
 /// The observation-source-specific columns of a reconstruction, selected once at
-/// the array level (the file is wholly one mode — see
-/// `specs/formats/sfmr-v4-patch-keypoints.md`). Each variant owns exactly its
-/// mode's per-observation and per-image data, so neither carries placeholders
-/// for the other.
+/// the array level (the file is wholly one mode — see "Observation source" in
+/// `specs/formats/sfmr-file-format.md`). Each variant owns exactly its mode's
+/// per-observation and per-image data, so neither carries placeholders for the
+/// other.
 #[derive(Debug, Clone)]
 pub enum ObservationSource {
     /// Observations reference external `.sift` features.

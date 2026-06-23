@@ -102,8 +102,8 @@ so the CLI re-specifies nothing and the two layers cannot drift.
 | `quality`           | `none`          | preset for `cache`/`cache_supersample` (`none`/`coarse`/`fine`) |
 | `confidence`        | `false`         | `refine_normals` (compute + report the Φ-peakedness; see below) |
 | `initial_normals`   | `stored`        | `from_reconstruction` normal policy (below) |
-| `extent`            | `feature_size`  | `from_reconstruction` extent policy |
-| `extent_value`      | `5.0`           | `from_reconstruction`             |
+| `extent`            | `feature_size`  | `from_reconstruction` extent policy (`feature_size`/`fixed`/`relative_spacing`/`pixel_size`) |
+| `extent_value`      | `10.0`          | `from_reconstruction` (full patch size; halved to the library half-extent) |
 | `save_patches`      | `false`         | persist the full refined patch cloud, not just per-point normals (below) |
 | `bitmaps`           | `false`         | also render + persist the per-point RGBA patch bitmaps (implies `save_patches`; below) |
 
@@ -153,7 +153,7 @@ persist it. When off, the summary omits the low-confidence count and the
 `refine_normals` `confidence` array is `NaN`.
 
 **Not surfaced in v1.** The bindings also accept `k_neighbors` (for
-`initial_normals=geometric`), `pixel_reduce` (for `extent=pixel_radius`), and
+`initial_normals=geometric`), `pixel_reduce` (for `extent=pixel_size`), and
 `feature_reduce` (for `extent=feature_size`). These are intentionally left at
 their binding defaults (`12`, `min`, `median`) and **not** exposed as CLI keys
 for v1 — they only matter for the non-default policies and add noise to the
@@ -190,18 +190,27 @@ searched.
 
 ## Patch sizing (`extent=`)
 
-Refinement needs a world-space patch size per point. The default is
-`extent=feature_size` (factor `5.0`, median over views) — **decided**: it sizes
-each patch from the observing keypoints' SIFT scales, tying the patch to the
-real feature support, which is the right size for a photometric match. This
-**requires the workspace `.sift` files**, the same dependency as
-`--remove-large-features`; a point with no readable scale in any view is an
-error (`PatchCloudError::MissingFeatureScale`, surfaced as `ValueError`). The
-`.sift`-requiring default is intentional — `--help` should call this out
-prominently, the same "artifacts must still be present" caveat the SIFT filters
-carry. Operators who do not have `.sift` present (or want size decoupled from
-features) can opt into `extent=relative_spacing`, `extent=pixel_radius`, or
-`extent=fixed`, none of which read `.sift`.
+Refinement needs a world-space patch size per point. `extent_value` is the
+**full** patch size — the whole edge length of the surfel — in the chosen
+policy's units. The CLI deliberately speaks in full size rather than the
+half-extent the library and on-disk format store: a CLI user should not have to
+reason in radii. The transform halves `extent_value` to the library half-extent
+before calling `PatchCloud.from_reconstruction`, so `extent_value=10`
+(`feature_size`, the default) is the same patch the library produces for
+`extent_value=5.0`.
+
+The default is `extent=feature_size` (full factor `10.0`, median over views) —
+**decided**: it sizes each patch from the observing keypoints' SIFT scales,
+tying the patch to the real feature support, which is the right size for a
+photometric match. This **requires the workspace `.sift` files**, the same
+dependency as `--remove-large-features`; a point with no readable scale in any
+view is an error (`PatchCloudError::MissingFeatureScale`, surfaced as
+`ValueError`). The `.sift`-requiring default is intentional — `--help` should
+call this out prominently, the same "artifacts must still be present" caveat the
+SIFT filters carry. Operators who do not have `.sift` present (or want size
+decoupled from features) can opt into `extent=relative_spacing`,
+`extent=pixel_size` (full diameter in pixels, the CLI spelling of the library's
+`pixel_radius` policy), or `extent=fixed`, none of which read `.sift`.
 
 ## Which points are refined
 
@@ -228,7 +237,11 @@ need arises; neither is in scope here.
 class RefineNormalsTransform:
     def apply(self, recon):
         images = [load_full_res(workspace_dir / name) for name in recon.image_names]
-        cloud = PatchCloud.from_reconstruction(recon, normal=initial_normals, extent=extent, ...)
+        # extent_value is the full CLI size; the library takes a half-extent.
+        cloud = PatchCloud.from_reconstruction(
+            recon, normal=initial_normals,
+            extent=_to_library_policy(extent),  # pixel_size -> pixel_radius
+            extent_value=extent_value / 2.0, ...)
         result = cloud.refine_normals(recon, images, angular_range_deg=..., ...)
         normals = np.asarray(recon.normals, np.float32).copy()  # (P, 3)
         for i, pid in enumerate(cloud.point_ids):
