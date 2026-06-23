@@ -182,6 +182,15 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 - Effort: low (file move) / medium (with submodule registration)
 - Risk: low — `pub use` shims keep `sfmtool._sfmtool.read_sfmr` resolving
   during the transition.
+> _Status (2026-06-23): Done — six file moves to `crates/sfmtool-py/src/io/`
+> with redundant `py_` prefix / `_io` suffix dropped (`io/sfmr.rs`,
+> `io/sift.rs`, `io/matches.rs`, `io/camrig.rs`, `io/colmap_binary.rs`,
+> `io/colmap_db.rs`); 23 `wrap_pyfunction!` call sites + 2 internal
+> cross-references updated; new `io/mod.rs`. Python-facing surface
+> unchanged — every function still registers flat under `_sfmtool`.
+> The `_sfmtool.io` Python submodule split (the medium-effort half) is
+> still open as part of the larger #4. Commit (branch
+> `claude/next-step-eval`)._
 
 ### 6. Dtype-tag / array-extraction helper duplicated three ways (carried forward, #6 residual)
 
@@ -211,7 +220,7 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 > `clone_with_changes` + `rebuild_observation_source` + tests.
 > `py_sfmr_reconstruction.rs` (891) — `#[pymethods]` getters / per-method
 > facade; the 14 trivial column accessors are an inevitable shape for a numpy
-> view surface. `py_colmap_binary.rs` (680) — bidirectional COLMAP binary I/O,
+> view surface. `io/colmap_binary.rs` (680) — bidirectional COLMAP binary I/O,
 > single concern. `py_patch_cloud.rs` (543), `py_optical_flow.rs` (474),
 > `py_kdtree.rs` (582) — each single concern. Module-path consistency post
 > the sfmtool-core regroup: facades are uniformly adopted (e.g.

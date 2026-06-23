@@ -2,7 +2,7 @@
 
 > **Status: Implemented (Phase 1 — CPU + SIMD + multithread).** The pure-Rust
 > SIFT detector and descriptor ship in `crates/sfmtool-core/src/features/sift/`, with
-> PyO3 bindings (`py_sift.rs`, `py_sift_io.rs`) and the `sfmtool` backend of
+> PyO3 bindings (`py_sift.rs`, `io/sift.rs`) and the `sfmtool` backend of
 > `sfm sift` / `ws init --feature-tool sfmtool`. Structured to mirror the
 > optical-flow implementation (`specs/core/optical-flow.md`). GPU remains
 > deferred to a later phase (a future `specs/core/gpu-sift.md`); the on-disk
