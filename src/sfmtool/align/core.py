@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .._sfmtool import RotQuaternion, Se3Transform
+from .._sfmtool.geometry import RotQuaternion, Se3Transform
 
 
 @dataclass

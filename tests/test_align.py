@@ -13,7 +13,8 @@ from sfmtool.align.multi import (
     _get_reconstruction_images,
     align_reconstructions,
 )
-from sfmtool._sfmtool import Se3Transform, SfmrReconstruction
+from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.geometry import Se3Transform
 from sfmtool.cli import main
 from sfmtool.xform import IncludeRangeFilter, SimilarityTransform, apply_transforms
 

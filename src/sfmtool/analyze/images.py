@@ -10,7 +10,8 @@ from pathlib import Path
 import click
 import numpy as np
 
-from .._sfmtool import RotQuaternion, SfmrReconstruction
+from .._sfmtool import SfmrReconstruction
+from .._sfmtool.geometry import RotQuaternion
 from .._image_pair_graph import compute_camera_directions
 
 

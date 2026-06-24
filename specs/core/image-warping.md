@@ -463,7 +463,7 @@ is usually sufficient.
 Expose the warp map and resampling through `sfmtool-py`:
 
 ```python
-from sfmtool._sfmtool import CameraIntrinsics
+from sfmtool._sfmtool.geometry import CameraIntrinsics
 from sfmtool._sfmtool.flow import WarpMap
 
 # Build a warp map from camera intrinsics
@@ -684,7 +684,7 @@ a `RigidTransform` built from the same `(quaternion_wxyz, translation_xyz)`
 tuple already stored on reconstruction images:
 
 ```python
-from sfmtool._sfmtool import RigidTransform
+from sfmtool._sfmtool.geometry import RigidTransform
 from sfmtool._sfmtool.flow import WarpMap
 
 src_from_world = RigidTransform.from_wxyz_translation(

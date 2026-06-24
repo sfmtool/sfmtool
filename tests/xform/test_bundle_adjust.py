@@ -5,7 +5,7 @@
 
 import numpy as np
 
-from sfmtool._sfmtool import RotQuaternion
+from sfmtool._sfmtool.geometry import RotQuaternion
 from sfmtool.xform import (
     BundleAdjustTransform,
     RemoveShortTracksFilter,

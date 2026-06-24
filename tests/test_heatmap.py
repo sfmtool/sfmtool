@@ -142,7 +142,7 @@ class TestOutputStem:
 class TestComputeTriangulationAngles:
     def test_two_cameras_known_angle(self):
         """Two cameras separated along X axis, point on Z axis."""
-        from sfmtool._sfmtool import RotQuaternion
+        from sfmtool._sfmtool.geometry import RotQuaternion
 
         # Identity rotation for both cameras
         q = RotQuaternion.identity()
@@ -173,7 +173,7 @@ class TestComputeTriangulationAngles:
 
     def test_single_observer_zero_angle(self):
         """Point observed by only one camera should have zero angle."""
-        from sfmtool._sfmtool import RotQuaternion
+        from sfmtool._sfmtool.geometry import RotQuaternion
 
         q = RotQuaternion.identity()
         qwxyz = q.to_wxyz_array()
@@ -196,7 +196,7 @@ class TestComputeTriangulationAngles:
 
     def test_multiple_points(self):
         """Multiple points with different observer counts."""
-        from sfmtool._sfmtool import RotQuaternion
+        from sfmtool._sfmtool.geometry import RotQuaternion
 
         q = RotQuaternion.identity()
         qwxyz = q.to_wxyz_array()

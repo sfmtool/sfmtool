@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from sfmtool._sfmtool import CameraIntrinsics, OrientedPatch, RigidTransform
+from sfmtool._sfmtool import OrientedPatch
+from sfmtool._sfmtool.geometry import CameraIntrinsics, RigidTransform
 from sfmtool._sfmtool.flow import WarpMap
 
 

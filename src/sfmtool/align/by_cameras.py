@@ -6,7 +6,8 @@
 import numpy as np
 
 from .core import ImageMatch
-from .._sfmtool import RotQuaternion, SfmrReconstruction
+from .._sfmtool import SfmrReconstruction
+from .._sfmtool.geometry import RotQuaternion
 
 
 def get_reconstruction_poses(

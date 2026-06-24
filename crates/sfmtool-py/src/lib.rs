@@ -6,14 +6,15 @@
 //! Exposes file I/O (`.sfmr`, `.sift`, and COLMAP formats), geometric types,
 //! feature matching, alignment, optical flow, and GUI viewer to Python via PyO3.
 //!
-//! File-format I/O, feature matching, optical flow, spatial indices, and
-//! spherical-rig bindings each live on their own PyO3 submodule
-//! (`_sfmtool.io`, `_sfmtool.matching`, `_sfmtool.flow`, `_sfmtool.spatial`,
-//! `_sfmtool.spherical`); their `__name__` reads as `sfmtool.io` /
-//! `sfmtool.matching` / `sfmtool.flow` / `sfmtool.spatial` /
-//! `sfmtool.spherical` so binding objects report the public location in
-//! tracebacks, IPython, and Sphinx. Everything else is registered flat on
-//! `_sfmtool` for now (see hygiene audit #4 for the rest).
+//! Geometric value types, file-format I/O, feature matching, optical flow,
+//! spatial indices, and spherical-rig bindings each live on their own PyO3
+//! submodule (`_sfmtool.geometry`, `_sfmtool.io`, `_sfmtool.matching`,
+//! `_sfmtool.flow`, `_sfmtool.spatial`, `_sfmtool.spherical`); their
+//! `__name__` reads as `sfmtool.geometry` / `sfmtool.io` / `sfmtool.matching`
+//! / `sfmtool.flow` / `sfmtool.spatial` / `sfmtool.spherical` so binding
+//! objects report the public location in tracebacks, IPython, and Sphinx.
+//! Everything else is registered flat on `_sfmtool` for now (see hygiene
+//! audit #4 for the rest).
 //!
 //! # Example
 //!
@@ -43,17 +44,11 @@ pub(crate) mod helpers;
 
 // ── Geometric types ───────────────────────────────────────────────────────
 
-mod py_rot_quaternion;
-pub use py_rot_quaternion::PyRotQuaternion;
-
-mod py_camera_intrinsics;
-pub use py_camera_intrinsics::PyCameraIntrinsics;
-
-mod py_rigid_transform;
-pub use py_rigid_transform::PyRigidTransform;
-
-mod py_se3_transform;
-pub use py_se3_transform::PySe3Transform;
+mod geometry;
+// Re-exported at the crate root so intra-crate users keep referring to these
+// value types as `crate::PyCameraIntrinsics` etc.; the public Python surface
+// lives on the `_sfmtool.geometry` submodule (see `geometry::register`).
+pub use geometry::{PyCameraIntrinsics, PyRigidTransform, PyRotQuaternion, PySe3Transform};
 
 mod py_sfmr_reconstruction;
 pub use py_sfmr_reconstruction::PySfmrReconstruction;
@@ -126,6 +121,9 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Build introspection
     m.add_function(wrap_pyfunction!(build_profile, m)?)?;
 
+    // Geometric value types: camera intrinsics, quaternions, rigid + SE3 transforms.
+    helpers::install_submodule(m, "sfmtool.geometry", geometry::register)?;
+
     // File-format I/O: `.sfmr`, `.sift`, `.matches`, `.camrig`, COLMAP binary + db.
     helpers::install_submodule(m, "sfmtool.io", io::register)?;
 
@@ -194,10 +192,6 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_epipolar::epipolar_curves_py, m)?)?;
 
     // Types
-    m.add_class::<PyCameraIntrinsics>()?;
-    m.add_class::<PyRigidTransform>()?;
-    m.add_class::<PyRotQuaternion>()?;
-    m.add_class::<PySe3Transform>()?;
     m.add_class::<PySfmrReconstruction>()?;
     m.add_class::<PyRangeExpr>()?;
     m.add_class::<PyRansacPhotometricOutput>()?;

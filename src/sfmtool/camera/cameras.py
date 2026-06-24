@@ -141,7 +141,7 @@ def get_intrinsic_matrix(camera) -> np.ndarray:
     Returns:
         3x3 intrinsic matrix K
     """
-    from .._sfmtool import CameraIntrinsics
+    from .._sfmtool.geometry import CameraIntrinsics
 
     if isinstance(camera, CameraIntrinsics):
         return np.asarray(camera.intrinsic_matrix())
@@ -212,7 +212,7 @@ def colmap_camera_from_intrinsics(camera_meta, *, width=None, height=None):
 
 def pycolmap_camera_to_intrinsics(camera):
     """Convert a pycolmap.Camera to a CameraIntrinsics object."""
-    from .._sfmtool import CameraIntrinsics
+    from .._sfmtool.geometry import CameraIntrinsics
 
     model_name = camera.model.name
     params = camera.params

@@ -22,7 +22,7 @@ use sfmtool_core::patch::normal_refine::{
 use sfmtool_core::patch::view_selection::{select_patch_cloud_views, ViewSelectParams};
 
 use crate::flow::warp::extract_image_u8;
-use crate::py_rigid_transform::PyRigidTransform;
+use crate::geometry::rigid_transform::PyRigidTransform;
 use crate::py_sfmr_reconstruction::PySfmrReconstruction;
 
 /// An oriented planar patch (surfel) in world space.

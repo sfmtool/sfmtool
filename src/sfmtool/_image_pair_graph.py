@@ -6,11 +6,11 @@
 import numpy as np
 
 from ._sfmtool import (
-    RotQuaternion,
     SfmrReconstruction,
     build_covisibility_pairs_py as _rust_build_covisibility_pairs,
     build_frustum_intersection_pairs_py as _rust_build_frustum_intersection_pairs,
 )
+from ._sfmtool.geometry import RotQuaternion
 from ._histogram_utils import estimate_z_from_histogram  # noqa: F401
 
 

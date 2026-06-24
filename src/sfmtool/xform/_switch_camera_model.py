@@ -9,7 +9,8 @@ so bundle adjustment has a `k2` parameter to refine.
 """
 
 from ..camera.cameras import _CAMERA_PARAM_NAMES
-from .._sfmtool import CameraIntrinsics, SfmrReconstruction
+from .._sfmtool import SfmrReconstruction
+from .._sfmtool.geometry import CameraIntrinsics
 
 
 class SwitchCameraModelTransform:

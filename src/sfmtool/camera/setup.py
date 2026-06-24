@@ -151,7 +151,7 @@ def build_intrinsics_from_camera_config(
         intrinsics_dict = intrinsics.to_dict()
         for name in _distortion_param_names(model):
             intrinsics_dict["parameters"][name] = float(parameters.get(name, 0.0))
-        from .._sfmtool import CameraIntrinsics
+        from .._sfmtool.geometry import CameraIntrinsics
 
         return CameraIntrinsics.from_dict(intrinsics_dict), False
 
@@ -187,7 +187,7 @@ def build_intrinsics_from_camera_config(
         else:
             scaled_params[name] = value
 
-    from .._sfmtool import CameraIntrinsics
+    from .._sfmtool.geometry import CameraIntrinsics
 
     intrinsics = CameraIntrinsics.from_dict(
         {

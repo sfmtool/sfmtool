@@ -13,7 +13,7 @@ from sfmtool.analyze.images import (
     _slerp_halfway,
     _analyze_motion_path,
 )
-from sfmtool._sfmtool import RotQuaternion
+from sfmtool._sfmtool.geometry import RotQuaternion
 
 
 class TestEstimateZFromHistogram:

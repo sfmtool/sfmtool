@@ -15,10 +15,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from sfmtool._sfmtool import (
-    CameraIntrinsics,
-    RotQuaternion,
-)
+from sfmtool._sfmtool.geometry import CameraIntrinsics, RotQuaternion
 from sfmtool._sfmtool.spherical import SphericalTileRig
 
 if TYPE_CHECKING:

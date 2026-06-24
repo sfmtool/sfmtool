@@ -11,9 +11,9 @@ use sfmtool_core::camera::remap::{
 };
 use sfmtool_core::camera::WarpMap;
 
+use crate::geometry::rigid_transform::PyRigidTransform;
+use crate::geometry::rot_quaternion::PyRotQuaternion;
 use crate::py_patch_cloud::PyOrientedPatch;
-use crate::py_rigid_transform::PyRigidTransform;
-use crate::py_rot_quaternion::PyRotQuaternion;
 use crate::PyCameraIntrinsics;
 
 /// A dense pixel coordinate map for image warping.

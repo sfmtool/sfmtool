@@ -35,7 +35,8 @@ def _make_translation_discontinuity(sfmr_path: Path, *, offset_m: float = 50.0):
     pose break between frame 10 and frame 11.
     """
     from sfmtool._filenames import number_from_filename
-    from sfmtool._sfmtool import RotQuaternion, Se3Transform, SfmrReconstruction
+    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.geometry import RotQuaternion, Se3Transform
 
     recon = SfmrReconstruction.load(sfmr_path)
     image_names = recon.image_names
@@ -185,7 +186,7 @@ def test_recon_json_flags_cov_on_infinite_overlap_drop():
     needs 3*OVERLAP_WINDOW (48) frames before overlap-drop is computed at all,
     which the checked-in datasets don't reach.
     """
-    from sfmtool._sfmtool import RotQuaternion
+    from sfmtool._sfmtool.geometry import RotQuaternion
     from sfmtool.motion.report import reconstruction_results_to_json
 
     identity = RotQuaternion(1.0, 0.0, 0.0, 0.0)

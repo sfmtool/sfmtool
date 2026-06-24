@@ -8,12 +8,12 @@ use numpy::{IntoPyArray, PyArrayMethods, PyReadonlyArray2, PyUntypedArrayMethods
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use crate::py_rot_quaternion::{extract_f64_vec, PyRotQuaternion};
+use super::rot_quaternion::{extract_f64_vec, PyRotQuaternion};
 
 /// SE(3) similarity transform: rotation, translation, and uniform scale.
 ///
 /// Applies as: ``p' = scale * (R * p) + t``
-#[pyclass(name = "Se3Transform", module = "sfmtool", from_py_object)]
+#[pyclass(name = "Se3Transform", module = "sfmtool.geometry", from_py_object)]
 #[derive(Clone)]
 pub struct PySe3Transform {
     pub(crate) inner: sfmtool_core::Se3Transform,

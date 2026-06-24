@@ -17,7 +17,7 @@ from .constants import (
     STEP_RATIO_THRESHOLD,
     STEP_RATIO_WINDOW,
 )
-from .._sfmtool import RotQuaternion
+from .._sfmtool.geometry import RotQuaternion
 
 
 def _rotation_angle_deg(qa: RotQuaternion, qb: RotQuaternion) -> float:
