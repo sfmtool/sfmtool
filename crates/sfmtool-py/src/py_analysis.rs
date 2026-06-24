@@ -11,7 +11,7 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
-use crate::py_se3_transform::PySe3Transform;
+use crate::geometry::se3_transform::PySe3Transform;
 use crate::PySfmrReconstruction;
 
 // ── SE3 transform acceleration ────────────────────────────────────────────

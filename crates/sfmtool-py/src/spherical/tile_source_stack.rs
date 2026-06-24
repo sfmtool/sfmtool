@@ -13,8 +13,8 @@ use sfmtool_core::spherical::per_tile_source_stack::{
 };
 
 use crate::flow::warp::extract_image_u8;
-use crate::py_camera_intrinsics::PyCameraIntrinsics;
-use crate::py_rot_quaternion::PyRotQuaternion;
+use crate::geometry::camera_intrinsics::PyCameraIntrinsics;
+use crate::geometry::rot_quaternion::PyRotQuaternion;
 use crate::spherical::tile_rig::PySphericalTileRig;
 
 fn err_to_py(e: BuildError) -> PyErr {

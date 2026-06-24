@@ -9,10 +9,9 @@ import numpy as np
 import pytest
 
 from sfmtool._sfmtool import (
-    CameraIntrinsics,
-    RotQuaternion,
     SfmrReconstruction,
 )
+from sfmtool._sfmtool.geometry import CameraIntrinsics, RotQuaternion
 from sfmtool._sfmtool.spherical import (
     PerSphericalTileSourceStack,
     SphericalTileRig,

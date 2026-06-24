@@ -11,7 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .._sfmtool import RotQuaternion
+from .._sfmtool.geometry import RotQuaternion
 from ._colormap import value_to_color
 
 

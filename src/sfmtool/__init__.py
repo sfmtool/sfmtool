@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from sfmtool._sfmtool import *  # noqa: F401, F403
+from sfmtool._sfmtool.geometry import *  # noqa: F401, F403
 from sfmtool._sfmtool.io import *  # noqa: F401, F403
 from sfmtool._sfmtool.matching import *  # noqa: F401, F403
 from sfmtool._sfmtool.flow import *  # noqa: F401, F403

@@ -3,7 +3,8 @@
 
 """Scale transformation."""
 
-from .._sfmtool import Se3Transform, SfmrReconstruction
+from .._sfmtool import SfmrReconstruction
+from .._sfmtool.geometry import Se3Transform
 
 
 class ScaleTransform:

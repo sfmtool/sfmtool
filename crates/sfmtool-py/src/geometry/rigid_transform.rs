@@ -7,7 +7,7 @@ use nalgebra::Vector3;
 use numpy::IntoPyArray;
 use pyo3::prelude::*;
 
-use crate::py_rot_quaternion::{extract_f64_vec, PyRotQuaternion};
+use super::rot_quaternion::{extract_f64_vec, PyRotQuaternion};
 
 /// Rigid body transformation: rotation + translation, no scale.
 ///
@@ -16,7 +16,7 @@ use crate::py_rot_quaternion::{extract_f64_vec, PyRotQuaternion};
 /// The rotation is a unit quaternion (det(R) = +1, no reflections).
 /// Distances are preserved. For transforms with uniform scaling,
 /// use :class:`Se3Transform`.
-#[pyclass(name = "RigidTransform", module = "sfmtool", from_py_object)]
+#[pyclass(name = "RigidTransform", module = "sfmtool.geometry", from_py_object)]
 #[derive(Clone)]
 pub struct PyRigidTransform {
     pub(crate) inner: sfmtool_core::RigidTransform,

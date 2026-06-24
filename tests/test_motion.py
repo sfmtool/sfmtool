@@ -204,7 +204,8 @@ def _make_discontinuous_recon(sfmr_path, *, translate=None, rotate_deg=None):
     Shifts or rotates the poses of images 11-17 to create an artificial break.
     Returns the modified reconstruction (not saved to disk).
     """
-    from sfmtool._sfmtool import RotQuaternion, Se3Transform, SfmrReconstruction
+    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.geometry import RotQuaternion, Se3Transform
 
     recon = SfmrReconstruction.load(sfmr_path)
     image_names = recon.image_names

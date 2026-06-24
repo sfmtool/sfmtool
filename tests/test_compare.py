@@ -15,7 +15,8 @@ from click.testing import CliRunner
 from sfmtool import RangeExpr
 from sfmtool._commands.compare import _parse_labels
 from sfmtool._compare import compare_reconstructions
-from sfmtool._sfmtool import Se3Transform, SfmrReconstruction
+from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.geometry import Se3Transform
 from sfmtool.cli import main
 from sfmtool.sift.file import get_sift_path_from_recon
 from sfmtool.xform import IncludeRangeFilter, SimilarityTransform, apply_transforms

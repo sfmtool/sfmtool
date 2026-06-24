@@ -20,11 +20,11 @@ import numpy as np
 import pytest
 
 from sfmtool._sfmtool import (
-    RotQuaternion,
     SfmrReconstruction,
     refine_photometric_ransac,
     render_consensus_atlas,
 )
+from sfmtool._sfmtool.geometry import RotQuaternion
 from sfmtool._sfmtool.spherical import (
     PerSphericalTileSourceStack,
     SphericalTileRig,

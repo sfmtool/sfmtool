@@ -225,6 +225,23 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 > replace-with-deliberate-re-exports cleanup is still deferred. The
 > remaining seams (`.geometry`, `.patch`) and that wildcard cleanup
 > remain pending. Commit (branch `claude/intelligent-archimedes-7i8ruz`)._
+>
+> _Status (2026-06-24): Partially done — the `geometry` slice landed. 4
+> value types (`CameraIntrinsics` + `RigidTransform` + `RotQuaternion` +
+> `Se3Transform`) move to `geometry/{camera_intrinsics,rigid_transform,
+> rot_quaternion,se3_transform}.rs` and register on `_sfmtool.geometry`
+> via `helpers::install_submodule`; all four carry
+> `#[pyclass(module = "sfmtool.geometry")]`. The crate-root `pub use`
+> re-exports are kept (repointed to `geometry::…`) so the ~7 intra-crate
+> users of `crate::PyCameraIntrinsics`/`crate::PySe3Transform` are
+> untouched; only full-path `crate::py_<type>::` references (in `flow/`,
+> `spherical/`, `py_patch_cloud`, `py_analysis`, and the two sibling
+> transform files) repath to `crate::geometry::…` / `super::…`. ~50
+> Python import sites (single-line + parenthesized) across `src`, `tests`,
+> and `scripts` repath to `_sfmtool.geometry`. The `__init__.py` wildcard
+> grew to seven lines — the replace-with-deliberate-re-exports cleanup is
+> still deferred. The remaining seam (`.patch`) and that wildcard cleanup
+> remain pending. Commit (branch `claude/intelligent-archimedes-7i8ruz`)._
 
 ### 5. First cut of #4: move the six `py_*_io.rs` into `crates/sfmtool-py/src/io/`
 

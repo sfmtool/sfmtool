@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import RotQuaternion
+from sfmtool._sfmtool.geometry import RotQuaternion
 
 
 def _reference_matrix() -> np.ndarray:

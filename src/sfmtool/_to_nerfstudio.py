@@ -16,7 +16,8 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
-from ._sfmtool import RotQuaternion, SfmrReconstruction
+from ._sfmtool import SfmrReconstruction
+from ._sfmtool.geometry import RotQuaternion
 
 
 # Nerfstudio's conventional applied_transform: swaps Y<->Z, negates Y.

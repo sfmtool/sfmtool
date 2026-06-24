@@ -30,7 +30,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .._sfmtool import RotQuaternion, SfmrReconstruction
+from .._sfmtool import SfmrReconstruction
+from .._sfmtool.geometry import RotQuaternion
 
 MODES = ("texture", "normal", "flat", "wire")
 

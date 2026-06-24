@@ -13,7 +13,8 @@ from sfmtool.visualization._epipolar_display import (
     _draw_epipolar_line,
     _draw_polyline,
 )
-from sfmtool._sfmtool import CameraIntrinsics, RotQuaternion, epipolar_curves
+from sfmtool._sfmtool import epipolar_curves
+from sfmtool._sfmtool.geometry import CameraIntrinsics, RotQuaternion
 
 
 # ===== Color Palette Tests =====

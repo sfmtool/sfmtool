@@ -10,7 +10,7 @@ import click
 
 from .._cli_utils import timed_command
 from ..rig.insv2rig import _INSV_FRAME_PATTERN, extract_insv_frames, write_insv_camrig
-from .._sfmtool import RotQuaternion
+from .._sfmtool.geometry import RotQuaternion
 from .._workspace import find_workspace_for_path
 
 # Insta360 X5 rig geometry (calibrated from SfM, validated against physical measurement).

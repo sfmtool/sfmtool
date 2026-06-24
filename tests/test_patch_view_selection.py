@@ -86,7 +86,7 @@ def _geometric_candidate_set(recon, pid: int, patch, point_xyz: np.ndarray) -> s
     rejected. It is only an approximation of the Rust gate — this Python recompute
     can disagree at sub-pixel frame/cheirality boundaries — so it must not be used
     for a strict per-point subset assertion."""
-    from sfmtool._sfmtool import RigidTransform
+    from sfmtool._sfmtool.geometry import RigidTransform
 
     cams = recon.cameras
     cam_idx = np.asarray(recon.camera_indexes)

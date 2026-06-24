@@ -56,9 +56,9 @@ import numpy as np
 from sfmtool._sfmtool import (
     OrientedPatch,
     PatchCloud,
-    RigidTransform,
     SfmrReconstruction,
 )
+from sfmtool._sfmtool.geometry import RigidTransform
 from sfmtool._sfmtool.flow import ImagePyramid, WarpMap
 from sfmtool._sfmtool.io import read_matches, read_sift
 

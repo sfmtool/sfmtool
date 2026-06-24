@@ -14,7 +14,8 @@ from ._point_correspondence import (
     find_point_correspondences,
     find_point_correspondences_by_coordinate,
 )
-from ._sfmtool import RotQuaternion, SfmrReconstruction
+from ._sfmtool import SfmrReconstruction
+from ._sfmtool.geometry import RotQuaternion
 
 
 def _characteristic_scene_scale(recon: SfmrReconstruction) -> float:

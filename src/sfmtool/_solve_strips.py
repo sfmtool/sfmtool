@@ -18,9 +18,9 @@ from ._patch_ncc import gauss_window, render_track_strip
 from ._sfmtool import (
     OrientedPatch,
     PatchCloud,
-    RigidTransform,
     SfmrReconstruction,
 )
+from ._sfmtool.geometry import RigidTransform
 from ._sfmtool.flow import WarpMap
 from ._workspace_image import read_workspace_image
 

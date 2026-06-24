@@ -20,9 +20,9 @@ import numpy as np
 from sfmtool._filenames import number_from_filename
 from sfmtool._sfmtool import (
     RangeExpr,
-    RotQuaternion,
     render_consensus_atlas,
 )
+from sfmtool._sfmtool.geometry import RotQuaternion
 from sfmtool._sfmtool.spherical import SphericalTileRig
 from sfmtool.rig.spherical_tile import resample_atlas_to_equirect
 

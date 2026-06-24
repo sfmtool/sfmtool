@@ -260,7 +260,7 @@ def _camera_from_inference(
 
 def _validated_camera(model: str, width: int, height: int, parameters: dict) -> dict:
     """Build a `{model, width, height, parameters}` dict, validating it."""
-    from .._sfmtool import CameraIntrinsics
+    from .._sfmtool.geometry import CameraIntrinsics
 
     try:
         intrinsics = CameraIntrinsics.from_dict(
