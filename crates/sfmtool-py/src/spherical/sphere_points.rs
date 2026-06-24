@@ -49,3 +49,8 @@ pub fn evenly_distributed_sphere_points<'py>(
     let arr = PyArray1::from_vec(py, points).reshape([n, 3])?;
     Ok(arr.into_any().unbind())
 }
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(evenly_distributed_sphere_points, m)?)?;
+    Ok(())
+}

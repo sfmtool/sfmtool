@@ -3,7 +3,7 @@
 **Status:** Implemented in
 `crates/sfmtool-core/src/spherical/per_tile_source_stack.rs` (the
 rotation-only build) and exposed to Python as
-`sfmtool._sfmtool.PerSphericalTileSourceStack`. The pose-aware variant
+`sfmtool._sfmtool.spherical.PerSphericalTileSourceStack`. The pose-aware variant
 described under "Pose-aware variant" is still future work.
 
 The build runs the outer source loop sequentially and parallelises across
@@ -293,7 +293,7 @@ pub enum BuildError {
 ```
 
 The Python wrapper exposes the same shape behind a single class
-`sfmtool._sfmtool.PerSphericalTileSourceStack`, with pixel storage
+`sfmtool._sfmtool.spherical.PerSphericalTileSourceStack`, with pixel storage
 selected via a `dtype="uint8" | "float32"` kwarg on
 `build_rotation_only`. Per-tile and whole-level accessors return numpy
 arrays of the appropriate dtype; `tile_offsets()`, `tile_id()`, and

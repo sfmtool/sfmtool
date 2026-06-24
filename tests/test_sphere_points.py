@@ -6,7 +6,8 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import KdTree3d, evenly_distributed_sphere_points
+from sfmtool._sfmtool import KdTree3d
+from sfmtool._sfmtool.spherical import evenly_distributed_sphere_points
 
 
 def _nn_distances(points: np.ndarray) -> np.ndarray:

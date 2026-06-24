@@ -359,7 +359,7 @@ def spherical_tiles(
             raise click.UsageError("--equirect-width must be >= 1.")
         arc_per_pixel = 2.0 * math.pi / equirect_width
 
-    from .._sfmtool import SphericalTileRig
+    from .._sfmtool.spherical import SphericalTileRig
 
     output_file = Path(output_file)
     try:

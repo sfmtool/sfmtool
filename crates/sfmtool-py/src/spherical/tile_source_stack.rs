@@ -3,7 +3,7 @@
 
 //! Python wrapper for [`sfmtool_core::spherical::per_tile_source_stack::PerSphericalTileSourceStack`].
 
-use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
+use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
@@ -12,9 +12,10 @@ use sfmtool_core::spherical::per_tile_source_stack::{
     BuildError, BuildParams, ConsensusAtlasError, PerSphericalTileSourceStack,
 };
 
+use crate::flow::warp::extract_image_u8;
 use crate::py_camera_intrinsics::PyCameraIntrinsics;
 use crate::py_rot_quaternion::PyRotQuaternion;
-use crate::py_spherical_tile_rig::PySphericalTileRig;
+use crate::spherical::tile_rig::PySphericalTileRig;
 
 fn err_to_py(e: BuildError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("{e}"))
@@ -45,7 +46,7 @@ pub(crate) enum Inner {
 ///
 /// All three preserve the source's 0-255 range (so a u8 value `v` reads back
 /// as the storage type's representation of `v`, not `v / 255.0`).
-#[pyclass(name = "PerSphericalTileSourceStack", module = "sfmtool")]
+#[pyclass(name = "PerSphericalTileSourceStack", module = "sfmtool.spherical")]
 pub struct PyPerSphericalTileSourceStack {
     pub(crate) inner: Inner,
 }
@@ -525,32 +526,7 @@ pub(crate) fn parse_sources(
     Ok(out)
 }
 
-/// Extract a numpy uint8 array (HxW or HxWxC) into an [`ImageU8`].
-fn extract_image_u8(obj: &Bound<'_, PyAny>) -> PyResult<ImageU8> {
-    if let Ok(arr) = obj.extract::<numpy::PyReadonlyArray3<'_, u8>>() {
-        let shape = arr.shape();
-        let (h, w, c) = (shape[0] as u32, shape[1] as u32, shape[2] as u32);
-        if !matches!(c, 1 | 3 | 4) {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "image must have 1, 3, or 4 channels (got {c})"
-            )));
-        }
-        let data: Vec<u8> = match arr.as_slice() {
-            Ok(s) => s.to_vec(),
-            Err(_) => arr.as_array().iter().copied().collect(),
-        };
-        return Ok(ImageU8::new(w, h, c, data));
-    }
-    if let Ok(arr) = obj.extract::<numpy::PyReadonlyArray2<'_, u8>>() {
-        let shape = arr.shape();
-        let (h, w) = (shape[0] as u32, shape[1] as u32);
-        let data: Vec<u8> = match arr.as_slice() {
-            Ok(s) => s.to_vec(),
-            Err(_) => arr.as_array().iter().copied().collect(),
-        };
-        return Ok(ImageU8::new(w, h, 1, data));
-    }
-    Err(pyo3::exceptions::PyTypeError::new_err(
-        "image must be a 2D (HxW) or 3D (HxWxC) numpy uint8 array",
-    ))
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyPerSphericalTileSourceStack>()?;
+    Ok(())
 }

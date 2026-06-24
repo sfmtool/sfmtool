@@ -2,7 +2,7 @@
 
 **Status:** Implemented in
 `crates/sfmtool-core/src/spherical/tile_rig.rs` and exposed to Python as
-`sfmtool._sfmtool.SphericalTileRig`. The atlas → destination resampler is
+`sfmtool._sfmtool.spherical.SphericalTileRig`. The atlas → destination resampler is
 the Rust method `SphericalTileRig::resample_atlas` (also exposed as
 `SphericalTileRig.resample_atlas` in Python). A thin Python convenience
 wrapper at `src/sfmtool/rig/spherical_tile.py::resample_atlas_to_equirect`

@@ -6,13 +6,13 @@
 //! Exposes file I/O (`.sfmr`, `.sift`, and COLMAP formats), geometric types,
 //! feature matching, alignment, optical flow, and GUI viewer to Python via PyO3.
 //!
-//! File-format I/O, feature matching, and optical flow each live on their
-//! own PyO3 submodule (`_sfmtool.io`, `_sfmtool.matching`,
-//! `_sfmtool.flow`); their `__name__` reads as `sfmtool.io` /
-//! `sfmtool.matching` / `sfmtool.flow` so binding objects report the
-//! public location in tracebacks, IPython, and Sphinx. Everything else is
-//! registered flat on `_sfmtool` for now (see hygiene audit #4 for the
-//! rest).
+//! File-format I/O, feature matching, optical flow, and spherical-rig
+//! bindings each live on their own PyO3 submodule (`_sfmtool.io`,
+//! `_sfmtool.matching`, `_sfmtool.flow`, `_sfmtool.spherical`); their
+//! `__name__` reads as `sfmtool.io` / `sfmtool.matching` / `sfmtool.flow`
+//! / `sfmtool.spherical` so binding objects report the public location in
+//! tracebacks, IPython, and Sphinx. Everything else is registered flat on
+//! `_sfmtool` for now (see hygiene audit #4 for the rest).
 //!
 //! # Example
 //!
@@ -92,14 +92,13 @@ mod py_epipolar;
 mod py_image_pair_graph;
 mod py_kdforest;
 mod py_kdtree;
-mod py_per_spherical_tile_source_stack;
 mod py_photometric_ransac;
-mod py_sphere_points;
-mod py_spherical_tile_rig;
 mod py_triangulation;
-pub use py_per_spherical_tile_source_stack::PyPerSphericalTileSourceStack;
 pub use py_photometric_ransac::PyRansacPhotometricOutput;
-pub use py_spherical_tile_rig::PySphericalTileRig;
+
+// ── Spherical (tile rigs, source stacks, sphere points) ──────────────────
+
+mod spherical;
 
 // ── Module registration ───────────────────────────────────────────────────
 
@@ -182,11 +181,8 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Optical flow + warp maps.
     helpers::install_submodule(m, "sfmtool.flow", flow::register)?;
 
-    // Sphere point generation
-    m.add_function(wrap_pyfunction!(
-        py_sphere_points::evenly_distributed_sphere_points,
-        m
-    )?)?;
+    // Spherical: tile rigs + per-tile source stacks + sphere-point generation.
+    helpers::install_submodule(m, "sfmtool.spherical", spherical::register)?;
 
     // Epipolar curves (distortion-aware epipolar lines)
     m.add_function(wrap_pyfunction!(py_epipolar::epipolar_curves_py, m)?)?;
@@ -201,9 +197,7 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<py_kdtree::PyKdTree2d>()?;
     m.add_class::<py_kdtree::PyKdTree3d>()?;
     m.add_class::<py_kdforest::PyKdForest>()?;
-    m.add_class::<PyPerSphericalTileSourceStack>()?;
     m.add_class::<PyRansacPhotometricOutput>()?;
-    m.add_class::<PySphericalTileRig>()?;
     m.add_class::<PyOrientedPatch>()?;
     m.add_class::<PyPatchCloud>()?;
 

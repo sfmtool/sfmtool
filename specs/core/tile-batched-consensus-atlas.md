@@ -289,7 +289,7 @@ at `B = 32`). A Rust `render_consensus_atlas` parses the Python source
 list into Rust images **once** and reuses them across all batches. That,
 not "hiding the intermediate stack", is the load-bearing reason the
 orchestration is a single Rust call. (Mechanically: the `parse_sources`
-helper currently lives in `py_per_spherical_tile_source_stack.rs` as a
+helper currently lives in `crates/sfmtool-py/src/spherical/tile_source_stack.rs` as a
 private helper for the `build_rotation_only` binding — lift it to a
 shared spot, e.g. a `py_sources.rs` module or `pub(crate)`, so both that
 binding and the new `render_consensus_atlas` binding call it.)

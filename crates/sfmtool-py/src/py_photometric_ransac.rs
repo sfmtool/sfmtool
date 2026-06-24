@@ -16,8 +16,7 @@ use sfmtool_core::spherical::photometric_ransac::{
     RansacPhotometricParams,
 };
 
-use crate::py_per_spherical_tile_source_stack::Inner;
-use crate::PyPerSphericalTileSourceStack;
+use crate::spherical::tile_source_stack::{Inner, PyPerSphericalTileSourceStack};
 
 fn err_to_py(e: RansacPhotometricError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("{e}"))
