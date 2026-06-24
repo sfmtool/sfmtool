@@ -40,8 +40,8 @@ from sfmtool._sfmtool import (
     PatchCloud,
     RigidTransform,
     SfmrReconstruction,
-    WarpMap,
 )
+from sfmtool._sfmtool.flow import WarpMap
 
 
 def load_images(recon) -> list[np.ndarray]:

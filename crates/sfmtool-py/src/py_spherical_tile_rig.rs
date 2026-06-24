@@ -13,10 +13,10 @@ use sfmtool_core::spherical::tile_rig::{
     CamRigConversionError, SphericalTileRig, SphericalTileRigError, SphericalTileRigParams,
 };
 
+use crate::flow::warp::PyWarpMap;
 use crate::py_camera_intrinsics::PyCameraIntrinsics;
 use crate::py_rot_quaternion::PyRotQuaternion;
 use crate::py_se3_transform::PySe3Transform;
-use crate::py_warp_map::PyWarpMap;
 
 fn err_to_py(e: SphericalTileRigError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("{e}"))

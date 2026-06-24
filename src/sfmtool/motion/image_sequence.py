@@ -14,7 +14,7 @@ from .flow_stats import (
     _flow_magnitude,
     _load_gray,
 )
-from .._sfmtool import (
+from .._sfmtool.flow import (
     compute_optical_flow,
     compute_optical_flow_with_init,
 )

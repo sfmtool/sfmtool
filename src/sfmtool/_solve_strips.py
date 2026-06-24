@@ -20,8 +20,8 @@ from ._sfmtool import (
     PatchCloud,
     RigidTransform,
     SfmrReconstruction,
-    WarpMap,
 )
+from ._sfmtool.flow import WarpMap
 from ._workspace_image import read_workspace_image
 
 # One rendered strip: (strip image, mean pairwise NCC, number of views shown).

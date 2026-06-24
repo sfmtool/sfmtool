@@ -6,9 +6,10 @@
 //! Exposes file I/O (`.sfmr`, `.sift`, and COLMAP formats), geometric types,
 //! feature matching, alignment, optical flow, and GUI viewer to Python via PyO3.
 //!
-//! File-format I/O and feature matching each live on their own PyO3
-//! submodule (`_sfmtool.io`, `_sfmtool.matching`); their `__name__` reads
-//! as `sfmtool.io` / `sfmtool.matching` so binding objects report the
+//! File-format I/O, feature matching, and optical flow each live on their
+//! own PyO3 submodule (`_sfmtool.io`, `_sfmtool.matching`,
+//! `_sfmtool.flow`); their `__name__` reads as `sfmtool.io` /
+//! `sfmtool.matching` / `sfmtool.flow` so binding objects report the
 //! public location in tracebacks, IPython, and Sphinx. Everything else is
 //! registered flat on `_sfmtool` for now (see hygiene audit #4 for the
 //! rest).
@@ -78,8 +79,10 @@ mod py_sift;
 
 mod py_patch_cloud;
 pub use py_patch_cloud::{PyOrientedPatch, PyPatchCloud};
-mod py_warp_map;
-pub use py_warp_map::{PyImagePyramid, PyWarpMap};
+
+// ── Optical flow + warp maps ─────────────────────────────────────────────
+
+mod flow;
 
 // ── Analysis & algorithms ─────────────────────────────────────────────────
 
@@ -89,7 +92,6 @@ mod py_epipolar;
 mod py_image_pair_graph;
 mod py_kdforest;
 mod py_kdtree;
-mod py_optical_flow;
 mod py_per_spherical_tile_source_stack;
 mod py_photometric_ransac;
 mod py_sphere_points;
@@ -177,23 +179,8 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
 
-    // Optical flow
-    m.add_function(wrap_pyfunction!(py_optical_flow::gpu_available, m)?)?;
-    m.add_function(wrap_pyfunction!(py_optical_flow::compute_optical_flow, m)?)?;
-    m.add_function(wrap_pyfunction!(
-        py_optical_flow::compute_optical_flow_timed,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        py_optical_flow::compute_optical_flow_with_init,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(py_optical_flow::compose_flow, m)?)?;
-    m.add_function(wrap_pyfunction!(py_optical_flow::advect_points, m)?)?;
-    m.add_function(wrap_pyfunction!(
-        py_optical_flow::match_candidates_by_descriptor,
-        m
-    )?)?;
+    // Optical flow + warp maps.
+    helpers::install_submodule(m, "sfmtool.flow", flow::register)?;
 
     // Sphere point generation
     m.add_function(wrap_pyfunction!(
@@ -217,8 +204,6 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPerSphericalTileSourceStack>()?;
     m.add_class::<PyRansacPhotometricOutput>()?;
     m.add_class::<PySphericalTileRig>()?;
-    m.add_class::<PyWarpMap>()?;
-    m.add_class::<PyImagePyramid>()?;
     m.add_class::<PyOrientedPatch>()?;
     m.add_class::<PyPatchCloud>()?;
 

@@ -265,7 +265,7 @@ to the Click handler is a refactor, not a bug fix.
 
 ### specs/core/image-warping.md
 **Summary:** WarpMap (`from_cameras`, pose-aware constructors), ImageU8 / ImageU8Pyramid, `remap_bilinear` / `remap_aniso`, `ray_to_pixel`, Equirectangular model. Marked Implemented.
-**Implementing code:** `camera/warp_map.rs`, `camera/remap.rs`, `camera/distortion.rs`, `sfmtool-py/src/py_warp_map.rs`.
+**Implementing code:** `camera/warp_map.rs`, `camera/remap.rs`, `camera/distortion.rs`, `sfmtool-py/src/flow/warp.rs`.
 **Inconsistencies:** L3-7 Status; L494-501 Module Organization layout box; L509-510 "Add ray_to_pixel..." all cite flat paths.
 **Recommendation:** update spec — paths only.
 

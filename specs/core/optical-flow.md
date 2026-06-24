@@ -183,7 +183,7 @@ used for chaining adjacent-frame flows into long-range estimates.
 
 ### Python Bindings
 
-The Python module `sfmtool._sfmtool` exposes:
+The Python submodule `sfmtool._sfmtool.flow` exposes:
 
 - `compute_optical_flow(img_a, img_b, preset, use_gpu)` — returns `(flow_u, flow_v)`
   as two `(H, W)` float32 arrays

@@ -617,8 +617,8 @@ Code and patterns to build on:
 |---|---|---|
 | Camera center computation | `analyze/images.py:_compute_camera_centers()` | World-space positions |
 | Rotation angle computation | `analyze/images.py:_compute_rotation_angle()` | Rotation between poses |
-| DIS optical flow | `_sfmtool.compute_optical_flow()` | Flow computation |
-| DIS with initial flow | `_sfmtool.compute_optical_flow_with_init()` | Stride flow from scaled local |
+| DIS optical flow | `_sfmtool.flow.compute_optical_flow()` | Flow computation |
+| DIS with initial flow | `_sfmtool.flow.compute_optical_flow_with_init()` | Stride flow from scaled local |
 | Sequence detection | `deadline.job_attachments.api.summarize_paths_by_sequence` | Input grouping |
 | Flow visualization | `visualization/_flow_display.py:_flow_to_color()`, `_draw_flow_legend()` | Middlebury color images |
 | Reprojection errors | `analyze/metrics.py` | Error context for flagged frames |

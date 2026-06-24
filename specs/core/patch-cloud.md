@@ -276,7 +276,7 @@ pub fn warp_maps_for_patch(
 
 ## Python bindings
 
-Mirror the Rust API in `py_warp_map.rs` / a new `py_patch_cloud.rs`:
+Mirror the Rust API in `flow/warp.rs` / a new `py_patch_cloud.rs`:
 
 - `OrientedPatch(center, u_axis, v_axis, half_extent)` and
   `OrientedPatch.from_center_normal(center, normal, up_hint, half_extent)`.

@@ -26,10 +26,12 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from .._sfmtool import (
-    KdTree2d,
+from .._sfmtool import KdTree2d
+from .._sfmtool.flow import (
     advect_points as _rust_advect_points,
     compute_optical_flow as _rust_compute_optical_flow,
+)
+from .._sfmtool.matching import (
     match_candidates_by_descriptor as _rust_match_candidates,
 )
 from ..sift.file import SiftReader

@@ -19,8 +19,8 @@ from sfmtool._sfmtool import (
     RigidTransform,
     RotQuaternion,
     SfmrReconstruction,
-    WarpMap,
 )
+from sfmtool._sfmtool.flow import WarpMap
 
 
 # =============================================================================

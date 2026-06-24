@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from sfmtool._sfmtool import CameraIntrinsics, OrientedPatch, RigidTransform, WarpMap
+from sfmtool._sfmtool import CameraIntrinsics, OrientedPatch, RigidTransform
+from sfmtool._sfmtool.flow import WarpMap
 
 
 def _pinhole(f, cx, cy, w, h):
