@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool import PatchCloud, SfmrReconstruction
 
 
 class TestHomogeneousPointAccessors:
@@ -237,10 +237,20 @@ class TestEmbeddedPatches:
         keypoints[:, 1] %= cam.height
         img_hashes = [bytes([i % 256] * 16) for i in range(n_img)]
 
+        # An embedded_patches file requires a per-point patch frame; attach a
+        # synthetic one (one patch per point) so the v4 writer accepts it.
+        n_pts = recon.point_count
+        u = np.tile([0.1, 0.0, 0.0], (n_pts, 1)).astype(np.float32)
+        v = np.tile([0.0, 0.1, 0.0], (n_pts, 1)).astype(np.float32)
+        cloud = PatchCloud.from_halfvec_arrays(
+            u, v, np.asarray(recon.positions, dtype=np.float64)
+        )
+
         embedded = recon.clone_with_changes(
             feature_source="embedded_patches",
             keypoints_xy=keypoints,
             image_file_hashes=img_hashes,
+            patches=cloud,
         )
         assert embedded.feature_source == "embedded_patches"
         np.testing.assert_array_equal(np.asarray(embedded.keypoints_xy), keypoints)

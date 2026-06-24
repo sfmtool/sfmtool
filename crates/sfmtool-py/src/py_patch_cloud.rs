@@ -4,7 +4,7 @@
 //! Python wrapper for sfmtool-core oriented patches.
 
 use nalgebra::{Point3, Vector3};
-use numpy::{IntoPyArray, PyArray2};
+use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -260,6 +260,50 @@ impl PyPatchCloud {
         };
         let inner = PatchCloud::from_reconstruction(&recon.inner, normal, extent)
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Build a patch cloud from per-point half-extent vector arrays and centers.
+    ///
+    /// The inverse of the per-point ``patch_u_halfvec_xyz`` / ``patch_v_halfvec_xyz``
+    /// layout: each present row (non-zero ``u``) becomes one patch whose
+    /// ``point_ids`` entry is that row index, with the half-extent vectors split
+    /// back into a unit axis and a half-size. Use this to assemble a renumbered or
+    /// culled cloud (e.g. after dropping points) to hand to
+    /// ``SfmrReconstruction.clone_with_changes(patches=...)``.
+    ///
+    /// Args:
+    ///     half_u_xyz: ``(N, 3)`` float32 in-plane half-extent vectors ``u``.
+    ///     half_v_xyz: ``(N, 3)`` float32 in-plane half-extent vectors ``v``.
+    ///     centers: ``(N, 3)`` float64 patch centers (each point's position).
+    #[staticmethod]
+    #[pyo3(signature = (half_u_xyz, half_v_xyz, centers))]
+    fn from_halfvec_arrays(
+        half_u_xyz: PyReadonlyArray2<'_, f32>,
+        half_v_xyz: PyReadonlyArray2<'_, f32>,
+        centers: PyReadonlyArray2<'_, f64>,
+    ) -> PyResult<Self> {
+        let u = half_u_xyz.as_array();
+        let v = half_v_xyz.as_array();
+        let c = centers.as_array();
+        let n = u.shape()[0];
+        if u.shape()[1] != 3 || v.shape()[1] != 3 || c.shape()[1] != 3 {
+            return Err(PyValueError::new_err(
+                "from_halfvec_arrays: half_u_xyz, half_v_xyz, centers must each have shape (N, 3)",
+            ));
+        }
+        if v.shape()[0] != n || c.shape()[0] != n {
+            return Err(PyValueError::new_err(format!(
+                "from_halfvec_arrays: row counts must match (u={}, v={}, centers={})",
+                n,
+                v.shape()[0],
+                c.shape()[0]
+            )));
+        }
+        let centers_vec: Vec<Point3<f64>> = (0..n)
+            .map(|i| Point3::new(c[[i, 0]], c[[i, 1]], c[[i, 2]]))
+            .collect();
+        let inner = PatchCloud::from_halfvec_arrays(&u.to_owned(), &v.to_owned(), &centers_vec);
         Ok(Self { inner })
     }
 

@@ -112,3 +112,17 @@ input track, then is expanded with vetted views and filtered by drops.
 
 - The discard gates (`min_relative_zncc`, `max_shift_px`) want tuning across the
   four datasets before the defaults are fixed.
+
+_Status: the **write/compaction tail** (step 7) is implemented in
+`src/sfmtool/_embed_patches.py` as `compact_to_embedded_patches(recon, cloud,
+localizations, image_file_hashes, *, patch_bitmaps=None, min_views=2)`: it culls
+points left below `min_views`, renumbers the survivors into a dense point set,
+flattens the kept per-point keypoint-localization results into point-then-image
+sorted track + `keypoints_xy` arrays, carries the surviving patch frame (via the
+new `PatchCloud.from_halfvec_arrays`) and bitmaps, and emits an
+`embedded_patches` `SfmrReconstruction` through `clone_with_changes` (ready to
+`save()`). `image_file_hashes_from_images(recon)` supplies the per-image identity
+hashes from the workspace image bytes. The writer requires the patch frame for an
+`embedded_patches` file (`has_uv_frames = true`). The upstream orchestration
+(steps 1–6, running the kernels) and the `sfm embed-patches` CLI are not yet
+wired up — a caller runs the kernels and hands the results to the compaction._
