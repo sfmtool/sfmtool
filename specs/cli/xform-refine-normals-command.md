@@ -215,8 +215,14 @@ decoupled from features) can opt into `extent=relative_spacing`,
 ## Which points are refined
 
 - **Finite points only.** `PatchCloud.from_reconstruction` emits one patch per
-  finite 3D point; points at infinity (`w = 0`) have no surface element and are
-  excluded. Their stored normals pass through unchanged.
+  finite 3D point; points at infinity (`w = 0`) are excluded, and their stored
+  normals pass through unchanged. This pass-through is the **intended end-state**,
+  not just a limitation: a point at infinity has a fixed outward normal
+  (`normalize(-d)`, set by its direction), so there is nothing to refine. Even
+  once infinity points carry frames elsewhere (an `embedded_patches`
+  reconstruction can — see the incompleteness note in
+  [patch-cloud.md](../core/patch-cloud.md)), refinement must continue to leave
+  those frames untouched.
 - **Degenerate / low-view points keep their seed.** The core routine skips a
   patch that has fewer than `min_views` valid views (and honors
   never-worse-than-its-own-init for the rest), so those points retain their

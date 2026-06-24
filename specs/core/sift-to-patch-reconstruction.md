@@ -25,6 +25,17 @@ result into a valid `embedded_patches` reconstruction.
 This is a reconstruction-in / reconstruction-out transform at the
 `SfmrReconstruction` (API) level.
 
+A non-photometric **baseline** conversion also exists —
+`SfmrReconstruction::to_embedded_patches` (exposed as `sfm xform
+--to-embedded-patches`, see [xform-command.md](../cli/xform-command.md)). It skips
+all photometric steps: it gives each finite point a mean-viewing-direction frame
+(and each point at infinity a tangent-sphere frame around its direction, per the
+[format's infinity-patch convention](../formats/sfmr-file-format.md)), copies each
+observation's keypoint and each image's hash straight from the `.sift` files, and
+emits a valid `embedded_patches` reconstruction whose keypoints are exactly the
+original SIFT detections — the whole point set preserved. It runs none of the
+photometric steps of the pipeline below.
+
 ## Inputs
 
 - An in-memory `SfmrReconstruction` (points, tracks, camera poses + intrinsics).

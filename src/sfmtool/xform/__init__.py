@@ -33,6 +33,7 @@ from ._scale_by_measurements import ScaleByMeasurementsTransform
 from ._select_by_distribution import SelectByDistributionFilter
 from ._similarity import SimilarityTransform
 from ._switch_camera_model import SwitchCameraModelTransform
+from ._to_embedded_patches import ToEmbeddedPatchesTransform
 from ._translate import TranslateTransform
 
 __all__ = [
@@ -60,5 +61,6 @@ __all__ = [
     "AlignToInputTransform",
     "SimilarityTransform",
     "SwitchCameraModelTransform",
+    "ToEmbeddedPatchesTransform",
     "apply_transforms",
 ]

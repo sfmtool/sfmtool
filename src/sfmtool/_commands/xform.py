@@ -59,6 +59,20 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
     ),
 )
 @click.option(
+    "--to-embedded-patches",
+    is_flag=False,
+    flag_value="",
+    multiple=True,
+    help=(
+        "Convert sift_files → embedded_patches without photometric adaptation: "
+        "mean-view uv frames, keypoints + image hashes copied from the .sift files. "
+        "Optional comma-separated key=value params (e.g. "
+        "'normal=mean_viewing,extent=feature_size,extent_value=10'). Reads the "
+        ".sift files, which must still be present where the reconstruction was "
+        "created. After this op the reconstruction is embedded_patches."
+    ),
+)
+@click.option(
     "--remove-narrow-tracks",
     multiple=True,
     help="Remove points with viewing angle < threshold (e.g., '5deg')",
@@ -196,6 +210,10 @@ def xform(ctx, input_path, output_path, **kwargs):
       --refine-normals [PARAMS]           Refine per-point normals by photometric consensus (reads source images)
 
     \b
+    Representation:
+      --to-embedded-patches [PARAMS]      Convert sift_files → embedded_patches (no photometric adaptation; reads .sift)
+
+    \b
     Alignment:
       --align-to path.sfmr                Align to another reconstruction
       --align-to-input                    Align back to original input
@@ -294,7 +312,8 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--remove-large-features, --remove-isolated, --filter-by-reprojection-error, "
             "--include-by-distribution, "
             "--find-points-at-infinity, --classify-points-at-infinity, "
-            "--camera-model, --bundle-adjust, --refine-normals, --align-to, --align-to-input"
+            "--camera-model, --bundle-adjust, --refine-normals, --to-embedded-patches, "
+            "--align-to, --align-to-input"
         )
 
     try:

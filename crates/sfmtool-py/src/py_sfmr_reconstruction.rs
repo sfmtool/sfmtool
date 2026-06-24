@@ -5,18 +5,33 @@
 
 use nalgebra::Point3;
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray4, PyReadonlyArray1};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::path::PathBuf;
 
 use sfmtool_core::analysis::infinity::Classification;
 use sfmtool_core::geometry::viewing_angle::viewing_rays;
+use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
 use sfmtool_core::SfmrReconstruction;
 
 use crate::helpers::{serde_to_py, u128_bytes_to_py};
 use crate::io::sfmr::parse_sfmr_data_from_dict;
 use crate::PyCameraIntrinsics;
+
+/// Parse a per-view reduce policy name into a [`ViewReduce`].
+fn parse_view_reduce(s: &str) -> PyResult<ViewReduce> {
+    match s {
+        "min" => Ok(ViewReduce::Min),
+        "max" => Ok(ViewReduce::Max),
+        "median" => Ok(ViewReduce::Median),
+        "mean" => Ok(ViewReduce::Mean),
+        other => Err(PyValueError::new_err(format!(
+            "unknown reduce: {other:?} (expected min|max|median|mean)"
+        ))),
+    }
+}
 
 /// A loaded SfM reconstruction from a `.sfmr` file.
 ///
@@ -573,6 +588,79 @@ impl PySfmrReconstruction {
         Self {
             inner: self.inner.apply_se3_transform(&transform.inner),
         }
+    }
+
+    /// Convert this ``sift_files`` reconstruction into an ``embedded_patches`` one
+    /// **without photometric adaptation**, returning a new reconstruction.
+    ///
+    /// Each point gets a ``(u, v)`` patch frame from the chosen ``normal`` /
+    /// ``extent`` policy (no normal refinement) — finite points get a planar
+    /// surfel frame, points at infinity a tangent-sphere frame around their
+    /// direction (normal ``normalize(-d)``), so the point set is preserved; each
+    /// observation's inline ``keypoints_xy`` is copied verbatim from its
+    /// ``.sift`` feature; and each
+    /// image's ``image_file_hashes`` entry is read from the ``.sift`` metadata
+    /// (``image_file_xxh128`` — a minimal metadata read). The ``.sift`` files must
+    /// still be present where the reconstruction was created.
+    ///
+    /// Args:
+    ///     normal: Patch-frame normal policy — ``"mean_viewing"`` (default; mean
+    ///         direction to the observing cameras), ``"stored"``, or
+    ///         ``"geometric"`` (local PCA fit over ``k_neighbors`` points).
+    ///     k_neighbors: Neighbor count for the ``"geometric"`` policy.
+    ///     extent: Half-size policy — ``"feature_size"`` (default; ``extent_value``
+    ///         × each observation's keypoint scale), ``"fixed"``,
+    ///         ``"relative_spacing"``, or ``"pixel_radius"``.
+    ///     extent_value: The scalar for the chosen extent policy (a half-extent).
+    ///     pixel_reduce: View reduce for ``"pixel_radius"``.
+    ///     feature_reduce: View reduce for ``"feature_size"``.
+    #[pyo3(signature = (
+        *, normal="mean_viewing", k_neighbors=12, extent="feature_size",
+        extent_value=5.0, pixel_reduce="min", feature_reduce="median"
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn to_embedded_patches(
+        &self,
+        normal: &str,
+        k_neighbors: usize,
+        extent: &str,
+        extent_value: f64,
+        pixel_reduce: &str,
+        feature_reduce: &str,
+    ) -> PyResult<Self> {
+        let normal = match normal {
+            "stored" => PatchNormal::Stored,
+            "mean_viewing" | "mean" => PatchNormal::MeanViewing,
+            "geometric" => PatchNormal::Geometric { k_neighbors },
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown normal policy: {other:?} (expected stored|mean_viewing|geometric)"
+                )))
+            }
+        };
+        let extent = match extent {
+            "fixed" => PatchExtent::Fixed(extent_value),
+            "relative_spacing" => PatchExtent::RelativeToSpacing(extent_value),
+            "pixel_radius" => PatchExtent::PixelRadius {
+                radius_px: extent_value,
+                across: parse_view_reduce(pixel_reduce)?,
+            },
+            "feature_size" => PatchExtent::FeatureSize {
+                factor: extent_value,
+                across: parse_view_reduce(feature_reduce)?,
+            },
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown extent policy: {other:?} \
+                     (expected fixed|relative_spacing|pixel_radius|feature_size)"
+                )))
+            }
+        };
+        let inner = self
+            .inner
+            .to_embedded_patches(normal, extent)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
     }
 
     /// Reclassify finite points whose depth is unconstrained as points at

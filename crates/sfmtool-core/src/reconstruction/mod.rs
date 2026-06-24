@@ -6,6 +6,7 @@
 
 pub(crate) mod data;
 mod edit;
+mod embed;
 pub mod filter;
 pub mod point_correspondence;
 pub mod triangulation;
