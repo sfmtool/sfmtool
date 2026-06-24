@@ -127,11 +127,18 @@ def sharpness(img) -> float:
     return float((gx * gx + gy * gy).mean())
 
 
-def plane_hit(cam, rot, t, kpt, center, normal):
-    """Unproject keypoint `kpt` onto the patch plane (point `center`, `normal`):
-    the world point where that view's ray meets the plane."""
+def plane_hit(cam, rot, t, kpt, center, normal, w=1.0):
+    """Unproject keypoint `kpt` to a re-anchored patch center.
+
+    Finite patch (`w == 1`): the world point where the view's ray meets the
+    patch plane (point `center`, `normal`). Point at infinity (`w == 0`): every
+    ray to it is parallel to its direction, so the re-anchored "center" is simply
+    the world ray direction the keypoint points along."""
     ray_cam = np.asarray(cam.pixel_to_ray(float(kpt[0]), float(kpt[1])))
     dir_world = rot.T @ ray_cam
+    if w == 0.0:
+        n = float(np.linalg.norm(dir_world))
+        return dir_world / n if n > 0.0 else None
     cam_center = -rot.T @ t
     denom = float(dir_world @ normal)
     if abs(denom) < 1e-12:
@@ -140,15 +147,42 @@ def plane_hit(cam, rot, t, kpt, center, normal):
     return cam_center + s * dir_world
 
 
-def render_at(images, cams, cam_idx, t, quats, i, center, normal, up, half_extent, res):
+def render_at(images, cams, cam_idx, t, quats, i, center, normal, up, half_extent, res, w=1.0):
     """Render view `i`'s patch tile for a surfel centred at `center` (with `normal`,
-    in-plane up `up`, and per-axis `half_extent`)."""
-    patch = OrientedPatch.from_center_normal(
-        list(center), list(normal), list(up), list(half_extent)
-    )
+    in-plane up `up`, and per-axis `half_extent`). For a point at infinity
+    (`w == 0`), `center` is a direction and the patch is tangent to the sphere."""
+    if w == 0.0:
+        patch = OrientedPatch.from_infinity_direction(
+            list(center), list(up), list(half_extent)
+        )
+    else:
+        patch = OrientedPatch.from_center_normal(
+            list(center), list(normal), list(up), list(half_extent)
+        )
     pose = RigidTransform.from_wxyz_translation(quats[i].tolist(), t[i].tolist())
     wm = WarpMap.from_patch(patch, cams[int(cam_idx[i])], pose, res)
     return np.asarray(wm.remap_bilinear(images[i]), dtype=np.float32)
+
+
+def _infinity_first_sample(recon, ids, sample_size, rng):
+    """A point-id sample that interleaves ALL points at infinity with random
+    finite points (infinity leading each pair), capped at ``sample_size`` — so a
+    prioritized montage shows BOTH kinds even when infinity is a tiny fraction of
+    the cloud."""
+    from itertools import zip_longest
+
+    is_inf = np.asarray(recon.point_is_at_infinity)
+    ids = [int(i) for i in np.asarray(ids).tolist()]
+    inf_ids = [i for i in ids if is_inf[i]]
+    fin_ids = [i for i in ids if not is_inf[i]]
+    k = max(0, min(sample_size, len(ids)) - len(inf_ids))
+    fin = (
+        sorted(int(x) for x in rng.choice(fin_ids, size=min(k, len(fin_ids)), replace=False))
+        if fin_ids and k
+        else []
+    )
+    merged = [x for pair in zip_longest(inf_ids, fin) for x in pair if x is not None]
+    return merged[:sample_size]
 
 
 def render_rows(recon, cloud, images, args):
@@ -161,9 +195,12 @@ def render_rows(recon, cloud, images, args):
 
     ids = np.asarray(cloud.point_ids)
     rng = np.random.default_rng(args.seed)
-    sample = np.sort(
-        rng.choice(ids, size=min(args.sample, len(ids)), replace=False)
-    ).tolist()
+    if args.prioritize_infinity:
+        sample = _infinity_first_sample(recon, ids, args.sample, rng)
+    else:
+        sample = np.sort(
+            rng.choice(ids, size=min(args.sample, len(ids)), replace=False)
+        ).tolist()
 
     sel = cloud.select_views(
         recon, images, point_ids=sample, resolution=args.resolution
@@ -196,6 +233,7 @@ def render_rows(recon, cloud, images, args):
         normal = np.asarray(patch_obj.normal, dtype=np.float64)
         up = np.asarray(patch_obj.u_axis, dtype=np.float64)
         he = list(patch_obj.half_extent)
+        pw = float(patch_obj.w)  # patch homogeneous weight (w shadows gauss window)
 
         before, after = [], []
         for k, i in enumerate(views):
@@ -212,10 +250,11 @@ def render_rows(recon, cloud, images, args):
                     up,
                     he,
                     args.resolution,
+                    pw,
                 )
             )
             hit = plane_hit(
-                cams[int(cam_idx[i])], rot[i], t[i], kpts[k], center, normal
+                cams[int(cam_idx[i])], rot[i], t[i], kpts[k], center, normal, pw
             )
             c = center if hit is None else hit
             after.append(
@@ -231,6 +270,7 @@ def render_rows(recon, cloud, images, args):
                     up,
                     he,
                     args.resolution,
+                    pw,
                 )
             )
 
@@ -350,6 +390,11 @@ def main(argv=None):
     p.add_argument("sfmr", nargs="+", type=Path, help="one or more solved .sfmr files")
     p.add_argument("--out-dir", type=Path, default=Path("."))
     p.add_argument("--rows", type=int, default=8, help="points (rows) per montage")
+    p.add_argument(
+        "--prioritize-infinity",
+        action="store_true",
+        help="order the sample so points at infinity (w=0) lead the montage",
+    )
     p.add_argument("--sample", type=int, default=300, help="random points per recon")
     p.add_argument("--resolution", type=int, default=24, help="patch grid (R x R)")
     p.add_argument("--max-shift-px", type=float, default=3.0)

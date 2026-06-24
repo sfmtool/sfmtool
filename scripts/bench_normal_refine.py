@@ -135,8 +135,14 @@ class Workload:
         )
 
     def fresh_cloud(self):
+        # Benchmark normal refinement, a finite-point operation; opt out of the
+        # default that includes (refinement-skipped) infinity points so timings
+        # and counts stay comparable to historical runs.
         return self._s.PatchCloud.from_reconstruction(
-            self.recon, normal="mean_viewing", extent_value=5.0
+            self.recon,
+            normal="mean_viewing",
+            extent_value=5.0,
+            exclude_points_at_infinity=True,
         )
 
     def overhead_seconds(self) -> float:

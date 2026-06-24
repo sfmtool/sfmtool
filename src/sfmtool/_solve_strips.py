@@ -63,11 +63,14 @@ class _SolveStrips:
         self._images: dict[int, np.ndarray] = {}
         self._feat_sizes: dict[int, np.ndarray] = {}
 
+        # Finite points only for this comparison montage (opt out of the default,
+        # which includes points at infinity).
         self.cloud = PatchCloud.from_reconstruction(
             recon,
             normal="stored",
             k_neighbors=k_neighbors,
             extent_value=extent_factor,
+            exclude_points_at_infinity=True,
         )
         self._cloud_index = {int(p): i for i, p in enumerate(self.cloud.point_ids)}
 

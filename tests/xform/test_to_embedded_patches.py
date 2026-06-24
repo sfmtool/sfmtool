@@ -104,21 +104,32 @@ def test_to_embedded_patches_frames_points_at_infinity(
     assert len(emb.patches) == emb.point_count
 
     # The infinity point's frame is tangent to the unit sphere around its
-    # direction d: u, v ⊥ d and the outward normal is normalize(-d).
+    # direction d: u, v ⊥ d, the outward normal is normalize(-d), and the patch
+    # is flagged at infinity (w == 0) so rendering treats its corners as
+    # directions.
     patches = emb.patches
-    idx = list(patches.point_ids).index(pi)
-    patch = patches[idx]
+    ids = list(patches.point_ids)
+    patch = patches[ids.index(pi)]
     d = np.asarray(emb.positions_xyzw, dtype=np.float64)[pi, :3]
     d = d / np.linalg.norm(d)
     np.testing.assert_allclose(np.asarray(patch.normal), -d, atol=1e-5)
     assert abs(float(np.dot(np.asarray(patch.u_axis), d))) < 1e-5
     assert abs(float(np.dot(np.asarray(patch.v_axis), d))) < 1e-5
+    assert patch.w == 0.0
+    # A finite point's patch keeps w == 1.
+    finite_pi = next(p for p in ids if p != pi)
+    assert patches[ids.index(finite_pi)].w == 1.0
 
     # Still a valid embedded_patches file.
     out = tmp_path / "infinity.sfmr"
     emb.save(str(out), operation="xform")
     valid, errors = verify_sfmr(str(out))
     assert valid, f"integrity check failed: {errors}"
+    # The frame survives a save/load round-trip (w is re-derived from the
+    # reloaded point's homogeneous coordinate).
+    reloaded = SfmrReconstruction.load(str(out))
+    rids = list(reloaded.patches.point_ids)
+    assert reloaded.patches[rids.index(pi)].w == 0.0
 
 
 def test_to_embedded_patches_rejects_already_embedded(seoul_bull_workspace: Path):

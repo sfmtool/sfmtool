@@ -41,13 +41,15 @@ class PatchRenderError(ValueError):
 
 def collect_patches(
     recon: SfmrReconstruction,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Pull per-patch geometry into parallel numpy arrays.
 
-    Returns ``(centers, u_vec, v_vec, normals, point_ids)`` where ``u_vec`` and
+    Returns ``(centers, u_vec, v_vec, normals, point_ids, w)`` where ``u_vec`` and
     ``v_vec`` are the world-space half-extent vectors (axis * half_extent), so a
     patch covers ``center + s*u_vec + t*v_vec`` for ``(s, t)`` in ``[-1, 1]^2``
-    -- the same parametrisation used to render the patch bitmaps.
+    -- the same parametrisation used to render the patch bitmaps. ``w`` is the
+    homogeneous weight per patch (``1.0`` finite; ``0.0`` for a point at infinity,
+    whose ``center`` is a direction and corners are directions).
 
     Raises:
         PatchRenderError: the reconstruction carries no patch cloud.
@@ -63,6 +65,7 @@ def collect_patches(
     u_vec = np.empty((n, 3), np.float64)
     v_vec = np.empty((n, 3), np.float64)
     normals = np.empty((n, 3), np.float64)
+    w = np.empty(n, np.float64)
     for i in range(n):
         p = cloud[i]
         hu, hv = p.half_extent
@@ -70,8 +73,9 @@ def collect_patches(
         u_vec[i] = np.asarray(p.u_axis) * hu
         v_vec[i] = np.asarray(p.v_axis) * hv
         normals[i] = p.normal
+        w[i] = p.w
     point_ids = np.asarray(cloud.point_ids, dtype=np.int64)
-    return centers, u_vec, v_vec, normals, point_ids
+    return centers, u_vec, v_vec, normals, point_ids, w
 
 
 def _quad_corners(
@@ -110,6 +114,7 @@ def _render_image(
     point_ids: np.ndarray,
     colors_bgr: np.ndarray,
     bitmaps: np.ndarray | None,
+    patch_w: np.ndarray,
     *,
     mode: str,
     border: bool,
@@ -144,14 +149,22 @@ def _render_image(
     h, w = canvas.shape[:2]
 
     p = quads_world.shape[0]
-    cam_pts = quads_world.reshape(-1, 3) @ rot.T + trans  # (P*4, 3)
-    px = np.asarray(cam.ray_to_pixel_batch(cam_pts)).reshape(p, 4, 2) * upscale
-    depth = cam_pts.reshape(p, 4, 3)[:, :, 2].mean(axis=1)
+    # Homogeneous projection: a finite corner (w == 1) translates and projects as
+    # a point; a point at infinity (w == 0) is a direction, so it rotates without
+    # translating and projects as a ray. The cheirality (depth > 0) and backface
+    # tests then hold for both — an infinity patch is front-facing iff its ray
+    # R·d points forward.
+    cam_pts = quads_world @ rot.T + trans * patch_w[:, None, None]  # (P, 4, 3)
+    px = (
+        np.asarray(cam.ray_to_pixel_batch(cam_pts.reshape(-1, 3))).reshape(p, 4, 2)
+        * upscale
+    )
+    depth = cam_pts[:, :, 2].mean(axis=1)
 
     visible = np.isfinite(px).all(axis=(1, 2)) & (depth > 0)
     if backface_cull:
         normal_cam = normals @ rot.T
-        center_cam = centers @ rot.T + trans
+        center_cam = centers @ rot.T + trans * patch_w[:, None]
         visible &= np.einsum("ij,ij->i", normal_cam, center_cam) < 0
 
     xs, ys = px[:, :, 0], px[:, :, 1]
@@ -274,7 +287,7 @@ def render_patches(
             f"unknown mode {mode!r} (expected one of {', '.join(MODES)})"
         )
 
-    centers, u_vec, v_vec, normals, point_ids = collect_patches(recon)
+    centers, u_vec, v_vec, normals, point_ids, w = collect_patches(recon)
     colors_bgr = np.asarray(recon.colors)[point_ids][:, ::-1]
     bitmaps = recon.patch_bitmaps
     if bitmaps is not None:
@@ -307,6 +320,7 @@ def render_patches(
             point_ids,
             colors_bgr,
             bitmaps,
+            w,
             mode=mode,
             border=border,
             border_color=border_color,

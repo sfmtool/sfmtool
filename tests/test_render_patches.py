@@ -42,6 +42,26 @@ def _attach_patches(sfmr_path, *, with_bitmaps=False, bitmap_alpha=255, resoluti
     return out
 
 
+def _attach_patches_with_infinity(sfmr_path):
+    """Like ``_attach_patches`` but first turns one well-observed point into a
+    point at infinity, so the saved cloud carries a ``w == 0`` tangent-sphere
+    patch alongside the finite ones. Returns ``(path, infinity_point_id)``."""
+    recon = SfmrReconstruction.load(str(sfmr_path))
+    pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
+    counts = np.bincount(np.asarray(recon.track_point_ids), minlength=recon.point_count)
+    pi = int(np.argmax(counts))
+    xyz = pos[pi, :3]
+    pos[pi] = np.append(xyz / np.linalg.norm(xyz), 0.0)
+    recon = recon.clone_with_changes(positions=pos)
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent="fixed", extent_value=0.05
+    )
+    recon = recon.clone_with_changes(patches=cloud)
+    out = sfmr_path.parent / "patched_inf.sfmr"
+    recon.save(str(out), operation="test")
+    return out, pi
+
+
 # =============================================================================
 # Renderer unit behaviour
 # =============================================================================
@@ -56,12 +76,35 @@ class TestCollectPatches:
     def test_returns_parallel_arrays(self, seoul_bull_workspace):
         patched = _attach_patches(seoul_bull_workspace)
         recon = SfmrReconstruction.load(str(patched))
-        centers, u_vec, v_vec, normals, point_ids = collect_patches(recon)
+        centers, u_vec, v_vec, normals, point_ids, w = collect_patches(recon)
         n = len(centers)
         assert n > 0
         for arr in (u_vec, v_vec, normals):
             assert arr.shape == (n, 3)
         assert point_ids.shape == (n,)
+        assert w.shape == (n,)
+
+    def test_reports_w_for_points_at_infinity(self, seoul_bull_workspace):
+        patched, pi = _attach_patches_with_infinity(seoul_bull_workspace)
+        recon = SfmrReconstruction.load(str(patched))
+        _, _, _, _, point_ids, w = collect_patches(recon)
+        # Exactly the injected infinity point's patch is flagged w == 0; the rest
+        # stay finite (w == 1).
+        inf_rows = w == 0.0
+        assert inf_rows.sum() == 1
+        assert int(point_ids[inf_rows][0]) == pi
+        assert np.all(w[~inf_rows] == 1.0)
+
+    def test_renders_points_at_infinity(self, seoul_bull_workspace, tmp_path):
+        """The renderer composites a w == 0 patch (direction corners projected as
+        rays, no translation) without crashing or culling it as behind-camera."""
+        patched, _ = _attach_patches_with_infinity(seoul_bull_workspace)
+        recon = SfmrReconstruction.load(str(patched))
+        results = render_patches(
+            recon, tmp_path / "inf", mode="flat", backface_cull=True
+        )
+        assert results, "no images rendered"
+        assert sum(n for _, n, _ in results) > 0, "no patches drawn"
 
 
 class TestRenderPatches:

@@ -337,8 +337,15 @@ def strips_mode_3d(
     }[normal]
     # extent defaults to "feature_size" (factor = extent_value, default 5,
     # median over views).
+    # Normal cross-validation is a finite-point operation (a point at infinity
+    # has a fixed normal normalize(-d) with nothing to validate), so opt out of
+    # the default that includes infinity points.
     cloud = PatchCloud.from_reconstruction(
-        recon, normal=policy, k_neighbors=k_neighbors, extent_value=radius
+        recon,
+        normal=policy,
+        k_neighbors=k_neighbors,
+        extent_value=radius,
+        exclude_points_at_infinity=True,
     )
     pid_normal = {
         int(p): np.asarray(cloud[i].normal, np.float64)

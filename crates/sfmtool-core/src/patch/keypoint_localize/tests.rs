@@ -102,6 +102,25 @@ impl Scene {
         Self { cams, poses, pyrs }
     }
 
+    /// Cameras at `centers` (identity rotation), each viewing the **same**
+    /// direction-only texture for a point at infinity — appearance depends only on
+    /// the ray direction, so camera translation is irrelevant (no parallax). Per
+    /// view the directional texture is shifted by the matching angular `offset`.
+    fn infinity(centers: &[[f64; 3]], offsets: &[[f64; 2]]) -> Self {
+        let cams = centers.iter().map(|_| pinhole()).collect();
+        let poses = centers
+            .iter()
+            .map(|c| {
+                RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [-c[0], -c[1], -c[2]])
+            })
+            .collect();
+        let pyrs = offsets
+            .iter()
+            .map(|o| ImageU8Pyramid::build(&render_infinity_view(*o), 5))
+            .collect();
+        Self { cams, poses, pyrs }
+    }
+
     fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cams
             .iter()
@@ -116,6 +135,32 @@ impl Scene {
     }
 }
 
+/// Texture as a function of ray direction `(dx, dy)` (small-angle pinhole
+/// coords); the `30·` factor gives spatial frequency over the angular patch.
+fn dir_texture(dx: f64, dy: f64) -> f64 {
+    texture(dx * 30.0, dy * 30.0)
+}
+
+/// Synthesize what an identity-rotation pinhole sees of a point at infinity in
+/// the `+z` direction: each pixel's value is `dir_texture` of its ray direction,
+/// shifted by the angular offset `off`. Independent of camera position.
+fn render_infinity_view(off: [f64; 2]) -> ImageU8 {
+    let (cx, cy) = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
+    let mut data = Vec::with_capacity((IMG_W * IMG_H) as usize);
+    for row in 0..IMG_H {
+        for col in 0..IMG_W {
+            let dx = (col as f64 + 0.5 - cx) / FOCAL;
+            let dy = (row as f64 + 0.5 - cy) / FOCAL;
+            data.push(
+                dir_texture(dx - off[0], dy - off[1])
+                    .clamp(0.0, 255.0)
+                    .round() as u8,
+            );
+        }
+    }
+    ImageU8::new(IMG_W, IMG_H, 1, data)
+}
+
 /// Patch on the plane, normal toward the cameras (-z).
 fn plane_patch() -> OrientedPatch {
     OrientedPatch::from_center_normal(
@@ -123,6 +168,16 @@ fn plane_patch() -> OrientedPatch {
         Vector3::new(0.0, 0.0, -1.0),
         Vector3::new(0.0, 1.0, 0.0),
         [HALF_EXTENT, HALF_EXTENT],
+    )
+}
+
+/// Tangent-sphere patch for a point at infinity in the `+z` direction. Angular
+/// half-extent `0.05` rad.
+fn infinity_patch() -> OrientedPatch {
+    OrientedPatch::from_infinity_direction(
+        Point3::new(0.0, 0.0, 1.0),
+        Vector3::new(0.0, -1.0, 0.0),
+        [0.05, 0.05],
     )
 }
 
@@ -166,6 +221,83 @@ fn aligned_views_keep_all_and_barely_shift() {
 }
 
 #[test]
+fn infinity_point_views_co_register_independent_of_translation() {
+    // A point at infinity (+z) seen by identity-rotation cameras at very different
+    // positions: appearance depends only on ray direction, so all views see the
+    // same content and co-register. Each keypoint lands on the projection of the
+    // direction (the principal point), independent of camera translation — the
+    // defining homogeneous behavior.
+    let scene = Scene::infinity(
+        &[
+            [0.0, 0.0, 0.0],
+            [8.0, 0.0, 0.0],
+            [0.0, -5.0, 3.0],
+            [2.0, 2.0, 9.0],
+        ],
+        &[[0.0; 2]; 4],
+    );
+    let views = scene.views();
+    let patch = infinity_patch();
+
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
+
+    assert_eq!(
+        res.views,
+        vec![0, 1, 2, 3],
+        "all aligned infinity views kept"
+    );
+    let (cx, cy) = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
+    for (k, &i) in res.views.iter().enumerate() {
+        // +z projects to the principal point under identity rotation, the same in
+        // every camera regardless of translation.
+        let pj = project(&views[i as usize], &patch.center, patch.w).unwrap();
+        assert!((pj.0 - cx).abs() < 1e-6 && (pj.1 - cy).abs() < 1e-6);
+        assert!((res.keypoints[k][0] - cx).abs() < 0.6 && (res.keypoints[k][1] - cy).abs() < 0.6);
+        assert!(
+            res.offsets_px[k] < 0.6,
+            "aligned infinity view barely moves"
+        );
+    }
+    for &z in &res.loo_zncc {
+        assert!(z > 0.8, "infinity views co-register, LOO {z}");
+    }
+}
+
+#[test]
+fn infinity_point_seed_offsets_congeal_back() {
+    // Identical content across views; three views seeded at the projection pin the
+    // gauge, the fourth is seeded a few source px off. Congealing must pull the
+    // off view back to alignment — exercises the w == 0 branch of seed_offset
+    // (angular ray→offset inversion) and the w == 0 render/project path through
+    // the congealing loop.
+    let scene = Scene::infinity(
+        &[
+            [0.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [0.0, 4.0, 0.0],
+            [3.0, 0.0, 2.0],
+        ],
+        &[[0.0; 2]; 4],
+    );
+    let views = scene.views();
+    let patch = infinity_patch();
+    let (cx, cy) = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
+    let seeds = [[cx, cy], [cx, cy], [cx, cy], [cx + 4.0, cy]];
+
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), &params());
+
+    let p3 = pos(&res, 3).expect("the seeded-off view congeals back and is kept");
+    assert!(
+        (res.keypoints[p3][0] - cx).abs() < 1.0 && (res.keypoints[p3][1] - cy).abs() < 1.0,
+        "seeded-off infinity view should congeal back to the projection, got {:?}",
+        res.keypoints[p3]
+    );
+    for &z in &res.loo_zncc {
+        assert!(z > 0.8, "post-congeal infinity LOO should be high, got {z}");
+    }
+}
+
+#[test]
 fn congeals_misregistered_view_into_alignment() {
     // Views 0,1,2 are aligned (they pin the gauge); view 3 sees the texture shifted
     // by +1 patch-grid px in x. Congealing should recover acc_3 ≈ +1, putting its
@@ -194,7 +326,7 @@ fn congeals_misregistered_view_into_alignment() {
     // so a wrong-direction recovery — which `offsets_px` magnitude would hide —
     // fails here). The y-component must stay put.
     let expected_px = shift_grid * src_per_grid();
-    let proj3 = project(&views[3], &patch.center).unwrap();
+    let proj3 = project(&views[3], &patch.center, patch.w).unwrap();
     let dx = res.keypoints[p3][0] - proj3.0;
     let dy = res.keypoints[p3][1] - proj3.1;
     assert!(
@@ -208,7 +340,7 @@ fn congeals_misregistered_view_into_alignment() {
     // The aligned views barely move (in either axis).
     for i in [0u32, 1, 2] {
         let pi = pos(&res, i).unwrap();
-        let pj = project(&views[i as usize], &patch.center).unwrap();
+        let pj = project(&views[i as usize], &patch.center, patch.w).unwrap();
         assert!(
             (res.keypoints[pi][0] - pj.0).abs() < 0.4 * src_per_grid()
                 && (res.keypoints[pi][1] - pj.1).abs() < 0.4 * src_per_grid(),
@@ -301,7 +433,7 @@ fn grazing_views_are_prefiltered() {
     // Sanity: the oblique view is in front, front-facing, and projects in-frame
     // (so only the grazing gate, not projection, can exclude it).
     assert!(patch.is_front_facing(views[3].cam_from_world));
-    assert!(project(&views[3], &patch.center).is_some());
+    assert!(project(&views[3], &patch.center, patch.w).is_some());
 
     let strict = KeypointLocalizeParams {
         min_grazing_cos: 0.95,
@@ -338,7 +470,7 @@ fn fewer_than_two_views_returns_seed_projection() {
 
     let res = localize_patch_keypoints(&patch, &views, &[0], None, &params());
     assert_eq!(res.views, vec![0]);
-    let proj = project(&views[0], &patch.center).unwrap();
+    let proj = project(&views[0], &patch.center, patch.w).unwrap();
     assert!((res.keypoints[0][0] - proj.0).abs() < 1e-9);
     assert!((res.keypoints[0][1] - proj.1).abs() < 1e-9);
     assert!(res.loo_zncc[0].is_nan(), "no LOO consensus for a lone view");
@@ -405,7 +537,7 @@ fn seed_keypoint_offset_round_trips() {
 
     let seeds: Vec<[f64; 2]> = (0..3)
         .map(|i| {
-            let (x, y) = project(&views[i], &patch.center).unwrap();
+            let (x, y) = project(&views[i], &patch.center, patch.w).unwrap();
             [x, y]
         })
         .collect();
@@ -434,7 +566,7 @@ fn seed_offset_unprojection_round_trips_on_lone_view() {
     let views = scene.views();
     let patch = plane_patch();
 
-    let proj = project(&views[0], &patch.center).unwrap();
+    let proj = project(&views[0], &patch.center, patch.w).unwrap();
     let seed = [proj.0 + 5.0, proj.1 - 3.0]; // a few px off the projection
     let res = localize_patch_keypoints(&patch, &views, &[0], Some(&[seed]), &params());
     assert_eq!(res.views, vec![0]);
@@ -528,7 +660,7 @@ fn converges_early_and_extra_rounds_are_idempotent() {
     };
     let res1 = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &one);
     let p3 = pos(&res1, 3).expect("one round keeps the misregistered view");
-    let proj3 = project(&views[3], &patch.center).unwrap();
+    let proj3 = project(&views[3], &patch.center, patch.w).unwrap();
     let dx = res1.keypoints[p3][0] - proj3.0;
     // ox = 1 grid px, so the expected source-px recovery is src_per_grid().
     assert!(

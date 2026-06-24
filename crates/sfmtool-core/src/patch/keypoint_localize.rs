@@ -144,16 +144,18 @@ struct ContextTile {
     channels: usize,
 }
 
-/// Project a world point into a view; `None` when it falls behind the camera or
-/// outside the frame.
-fn project(view: &ProjectedImage<'_>, p: &Point3<f64>) -> Option<(f64, f64)> {
-    let pc = view.cam_from_world.transform_point(p);
+/// Project a homogeneous world point `(p, w)` into a view; `None` when it falls
+/// behind the camera or outside the frame. `w = 1` is a finite point; `w = 0` is
+/// a direction (a point at infinity), rotated into the camera frame without
+/// translation and projected as a ray.
+fn project(view: &ProjectedImage<'_>, p: &Point3<f64>, w: f64) -> Option<(f64, f64)> {
+    let pc = view.cam_from_world.transform_point_homogeneous(p.coords, w);
     if pc.z <= 0.0 {
         return None;
     }
     let (px, py) = view.camera.ray_to_pixel([pc.x, pc.y, pc.z])?;
-    let (w, h) = (view.camera.width as f64, view.camera.height as f64);
-    (px >= 0.0 && py >= 0.0 && px < w && py < h).then_some((px, py))
+    let (iw, ih) = (view.camera.width as f64, view.camera.height as f64);
+    (px >= 0.0 && py >= 0.0 && px < iw && py < ih).then_some((px, py))
 }
 
 /// The patch centre re-anchored on the plane by an in-plane offset `(au, av)` in
@@ -181,12 +183,15 @@ fn render_context(
 ) -> ContextTile {
     let center = shifted_center(patch, au, av, wpp_u, wpp_v);
     let scale = context_res as f64 / resolution as f64;
-    let ctx_patch = OrientedPatch::from_center_normal(
+    let mut ctx_patch = OrientedPatch::from_center_normal(
         center,
         patch.normal(),
         patch.u_axis,
         [patch.half_extent[0] * scale, patch.half_extent[1] * scale],
     );
+    // Preserve the anchor's homogeneous weight so a point at infinity renders as
+    // a direction patch (corners are directions), not a finite surfel.
+    ctx_patch.w = patch.w;
     let mut map = WarpMap::from_patch(&ctx_patch, view.camera, view.cam_from_world, context_res);
     let img = match sampler {
         Sampler::Anisotropic => {
@@ -511,15 +516,21 @@ pub fn localize_patch_keypoints(
         }
         let view = &views[i as usize];
         // Grazing pre-filter: drop a view whose ray is near-parallel to the plane.
-        let cam_c = view.cam_from_world.inverse_translation_origin();
-        let d = patch.center - cam_c;
+        // The viewing direction is camera→point: `center − cam_c` for a finite
+        // point, or the direction `d` itself for a point at infinity (every ray to
+        // it is parallel to `d`, so it is always fully frontal — cos = 1).
+        let d = if patch.w == 0.0 {
+            patch.center.coords
+        } else {
+            patch.center - view.cam_from_world.inverse_translation_origin()
+        };
         let dn = d.norm();
         if dn <= 1e-12 || (d.dot(&normal) / dn).abs() < params.min_grazing_cos {
             continue;
         }
         // The point's own projection (the keypoint anchor). A view that can't
         // project the point in-frame can't be refined; skip it.
-        let Some(proj) = project(view, &patch.center) else {
+        let Some(proj) = project(view, &patch.center, patch.w) else {
             continue;
         };
         // Seed offset: unproject the starting keypoint onto the plane, else zero.
@@ -673,7 +684,7 @@ pub fn localize_patch_keypoints(
                 continue;
             }
             let center = shifted_center(patch, st.acc[0], st.acc[1], wpp_u, wpp_v);
-            let shift_px = match project(&views[st.idx as usize], &center) {
+            let shift_px = match project(&views[st.idx as usize], &center, patch.w) {
                 Some((x, y)) => (x - st.proj[0]).hypot(y - st.proj[1]),
                 None => f64::INFINITY, // keypoint left the frame
             };
@@ -723,20 +734,36 @@ fn seed_offset(
     let r = view.cam_from_world.to_rotation_matrix();
     // World ray direction: R^T · ray_cam (camera-to-world rotation).
     let dir = r.transpose() * Vector3::new(ray_cam[0], ray_cam[1], ray_cam[2]);
-    let cam_c = view.cam_from_world.inverse_translation_origin();
-    let n = patch.normal();
-    let denom = dir.dot(&n);
-    if denom.abs() < 1e-12 {
-        return None;
-    }
-    let s = (patch.center - cam_c).dot(&n) / denom;
-    let hit = cam_c + dir * s;
-    let off = hit - patch.center;
     // A zero patch extent would make `wpp` zero; guard so a degenerate patch seeds
     // at the projection (`acc = 0`) rather than propagating a NaN/inf offset.
     if wpp_u <= 0.0 || wpp_v <= 0.0 {
         return None;
     }
+    let off = if patch.w == 0.0 {
+        // Point at infinity: `center` is the unit direction `d`, the patch corner
+        // `d + a·û + b·v̂` is a direction, and the observed ray is parallel to it:
+        // `dir ∝ d + a·û + b·v̂`. With `û, v̂ ⊥ d`, `a = (dir·û)/(dir·d)` and
+        // `b = (dir·v̂)/(dir·d)`. `dir·d ≤ 0` means the ray points away from `d`.
+        let d = patch.center.coords;
+        let denom = dir.dot(&d);
+        if denom <= 1e-12 {
+            return None;
+        }
+        patch.u_axis * (dir.dot(&patch.u_axis) / denom)
+            + patch.v_axis * (dir.dot(&patch.v_axis) / denom)
+    } else {
+        // Finite point: intersect the ray with the patch plane and offset from the
+        // centre.
+        let cam_c = view.cam_from_world.inverse_translation_origin();
+        let n = patch.normal();
+        let denom = dir.dot(&n);
+        if denom.abs() < 1e-12 {
+            return None;
+        }
+        let s = (patch.center - cam_c).dot(&n) / denom;
+        let hit = cam_c + dir * s;
+        hit - patch.center
+    };
     Some([
         off.dot(&patch.u_axis) / wpp_u,
         off.dot(&patch.v_axis) / wpp_v,
@@ -759,7 +786,7 @@ fn finalize(
         let center = shifted_center(patch, st.acc[0], st.acc[1], wpp_u, wpp_v);
         // The refined keypoint is the projection of the re-anchored centre. Fall
         // back to the point's own projection if the shifted centre fails to project.
-        let (kx, ky) = project(view, &center).unwrap_or((st.proj[0], st.proj[1]));
+        let (kx, ky) = project(view, &center, patch.w).unwrap_or((st.proj[0], st.proj[1]));
         out.views.push(st.idx);
         out.keypoints.push([kx, ky]);
         out.offsets_px

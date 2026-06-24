@@ -212,11 +212,16 @@ class RefineNormalsTransform:
 
         # The CLI ``extent_value`` is the full patch size; the library API takes
         # a half-extent (or a half-size multiplier / radius), so halve it here.
+        # Finite points only: a point at infinity has a fixed normal
+        # (normalize(-d)) with nothing to refine, and the copy-and-scatter
+        # write-back below must leave its (0, 0, 0) normal untouched. So opt out
+        # of the default (which includes infinity points).
         cloud = PatchCloud.from_reconstruction(
             recon,
             normal=self.initial_normals,
             extent=_EXTENT_TO_BINDING[self.extent],
             extent_value=self.extent_value / 2.0,
+            exclude_points_at_infinity=True,
         )
         point_ids = np.asarray(cloud.point_ids)
         print(

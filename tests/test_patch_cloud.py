@@ -54,6 +54,37 @@ def test_feature_size_scales_linearly_with_factor(
     np.testing.assert_allclose(h10, 2.0 * h5, rtol=1e-12)
 
 
+def test_from_reconstruction_excludes_or_includes_points_at_infinity(
+    seoul_bull_workspace: Path,
+):
+    """exclude_points_at_infinity gates whether infinity points get a frame."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
+    counts = np.bincount(np.asarray(recon.track_point_ids), minlength=recon.point_count)
+    pi = int(np.argmax(counts))
+    xyz = pos[pi, :3]
+    pos[pi] = np.append(xyz / np.linalg.norm(xyz), 0.0)
+    recon = recon.clone_with_changes(positions=pos)
+
+    # Default (exclude=False): the infinity point gets a tangent-sphere frame.
+    default_cloud = PatchCloud.from_reconstruction(
+        recon, extent="fixed", extent_value=1.0
+    )
+    ids = list(default_cloud.point_ids)
+    assert pi in set(ids)
+    patch = default_cloud[ids.index(pi)]
+    assert patch.w == 0.0
+    d = xyz / np.linalg.norm(xyz)
+    np.testing.assert_allclose(np.asarray(patch.normal), -d, atol=1e-6)
+
+    # exclude=True: finite only — the infinity point gets no patch.
+    finite_only = PatchCloud.from_reconstruction(
+        recon, extent="fixed", extent_value=1.0, exclude_points_at_infinity=True
+    )
+    assert pi not in set(finite_only.point_ids)
+    assert len(default_cloud) == len(finite_only) + 1
+
+
 def test_feature_size_handles_fisheye(kerry_park_workspace: Path):
     """FeatureSize sizes every point of a fisheye (FoV > 180°) rig.
 

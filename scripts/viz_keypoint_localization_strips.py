@@ -93,10 +93,17 @@ def track_views(recon) -> dict[int, set[int]]:
     return tracks
 
 
-def plane_hit(cam, rot, t, kpt, center, normal):
-    """World point where view's ray through `kpt` meets the patch plane."""
+def plane_hit(cam, rot, t, kpt, center, normal, w=1.0):
+    """Re-anchored patch center for the view's ray through `kpt`.
+
+    Finite patch (`w == 1`): the world point where the ray meets the patch plane.
+    Point at infinity (`w == 0`): the (unit) world ray direction itself — every
+    ray to the point is parallel to its direction."""
     ray_cam = np.asarray(cam.pixel_to_ray(float(kpt[0]), float(kpt[1])))
     dir_world = rot.T @ ray_cam
+    if w == 0.0:
+        n = float(np.linalg.norm(dir_world))
+        return dir_world / n if n > 0.0 else None
     cam_center = -rot.T @ t
     denom = float(dir_world @ normal)
     if abs(denom) < 1e-12:
@@ -105,11 +112,18 @@ def plane_hit(cam, rot, t, kpt, center, normal):
     return cam_center + s * dir_world
 
 
-def render_patch(image, cam, t_i, quat_i, center, normal, up, half_extent, res):
-    """Render one view's `res × res` tile for a surfel centred at `center`."""
-    patch = OrientedPatch.from_center_normal(
-        list(center), list(normal), list(up), list(half_extent)
-    )
+def render_patch(image, cam, t_i, quat_i, center, normal, up, half_extent, res, w=1.0):
+    """Render one view's `res × res` tile for a surfel centred at `center`. For a
+    point at infinity (`w == 0`), `center` is a direction and the patch is tangent
+    to the unit sphere."""
+    if w == 0.0:
+        patch = OrientedPatch.from_infinity_direction(
+            list(center), list(up), list(half_extent)
+        )
+    else:
+        patch = OrientedPatch.from_center_normal(
+            list(center), list(normal), list(up), list(half_extent)
+        )
     pose = RigidTransform.from_wxyz_translation(quat_i.tolist(), t_i.tolist())
     wm = WarpMap.from_patch(patch, cam, pose, res)
     return np.asarray(wm.remap_bilinear(image), dtype=np.float32)
@@ -182,15 +196,39 @@ def _ctx_tile(ctx_img, disp, margin, res, border, top_label, acc=None, bot_label
     return bgr
 
 
+def _infinity_first_sample(recon, ids, sample_size, rng):
+    """A point-id sample that interleaves ALL points at infinity with random
+    finite points (infinity leading each pair), capped at ``sample_size`` — so a
+    prioritized montage shows BOTH kinds even when infinity is a tiny fraction of
+    the cloud."""
+    from itertools import zip_longest
+
+    is_inf = np.asarray(recon.point_is_at_infinity)
+    ids = [int(i) for i in np.asarray(ids).tolist()]
+    inf_ids = [i for i in ids if is_inf[i]]
+    fin_ids = [i for i in ids if not is_inf[i]]
+    k = max(0, min(sample_size, len(ids)) - len(inf_ids))
+    fin = (
+        sorted(int(x) for x in rng.choice(fin_ids, size=min(k, len(fin_ids)), replace=False))
+        if fin_ids and k
+        else []
+    )
+    merged = [x for pair in zip_longest(inf_ids, fin) for x in pair if x is not None]
+    return merged[:sample_size]
+
+
 def gather(recon, cloud, images, args):
     """Run select_views + localize for the sample; return lightweight per-point
     metadata (no rendering yet, so only the chosen rows pay for tiles)."""
     tracks = track_views(recon)
     ids = np.asarray(cloud.point_ids)
     rng = np.random.default_rng(args.seed)
-    sample = np.sort(
-        rng.choice(ids, size=min(args.sample, len(ids)), replace=False)
-    ).tolist()
+    if args.prioritize_infinity:
+        sample = _infinity_first_sample(recon, ids, args.sample, rng)
+    else:
+        sample = np.sort(
+            rng.choice(ids, size=min(args.sample, len(ids)), replace=False)
+        ).tolist()
 
     sel = cloud.select_views(
         recon, images, point_ids=sample, resolution=args.resolution
@@ -245,6 +283,7 @@ def render_row(meta, trk, recon, cloud, images, geom, args):
     he = list(patch_obj.half_extent)
     he_ctx = [he[0] * ctx / res, he[1] * ctx / res]
     wpp_u, wpp_v = 2.0 * he[0] / res, 2.0 * he[1] / res
+    w = float(patch_obj.w)
 
     before_cores, after_cores = [], []
     tiles = []
@@ -254,10 +293,10 @@ def render_row(meta, trk, recon, cloud, images, geom, args):
     for v in shown[: args.max_views]:
         cam = cams[int(cam_idx[v])]
         ctx_tile = render_patch(
-            images[v], cam, t[v], quats[v], center, normal, u_axis, he_ctx, ctx
+            images[v], cam, t[v], quats[v], center, normal, u_axis, he_ctx, ctx, w
         )
         if v in kept_set:
-            hit = plane_hit(cam, rot[v], t[v], kept_kpt[v], center, normal)
+            hit = plane_hit(cam, rot[v], t[v], kept_kpt[v], center, normal, w)
             c = center if hit is None else hit
             off = (c - center) if hit is not None else np.zeros(3)
             acc = (float(off @ u_axis) / wpp_u, float(off @ v_axis) / wpp_v)
@@ -280,13 +319,13 @@ def render_row(meta, trk, recon, cloud, images, geom, args):
         cam = cams[int(cam_idx[v])]
         before_cores.append(
             render_patch(
-                images[v], cam, t[v], quats[v], center, normal, u_axis, he, res
+                images[v], cam, t[v], quats[v], center, normal, u_axis, he, res, w
             )
         )
-        hit = plane_hit(cam, rot[v], t[v], kept_kpt[v], center, normal)
+        hit = plane_hit(cam, rot[v], t[v], kept_kpt[v], center, normal, w)
         c = center if hit is None else hit
         after_cores.append(
-            render_patch(images[v], cam, t[v], quats[v], c, normal, u_axis, he, res)
+            render_patch(images[v], cam, t[v], quats[v], c, normal, u_axis, he, res, w)
         )
     ref_before = consensus(before_cores)
     ref_after = consensus(after_cores)
@@ -399,6 +438,11 @@ def main(argv=None):
     p.add_argument("--out-dir", type=Path, default=Path("."))
     p.add_argument("--rows", type=int, default=10, help="points (rows) per montage")
     p.add_argument("--sample", type=int, default=300, help="random points per recon")
+    p.add_argument(
+        "--prioritize-infinity",
+        action="store_true",
+        help="order the sample so points at infinity (w=0) lead the montage",
+    )
     p.add_argument("--max-views", type=int, default=9, help="max view tiles per point")
     p.add_argument(
         "--resolution", type=int, default=24, help="scored core grid (R x R)"
