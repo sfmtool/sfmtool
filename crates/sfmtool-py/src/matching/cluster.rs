@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 
 use sfmtool_core::features::cluster_match::{self, BackgroundFloorParams, Clusters};
 
-use crate::py_kdforest::{extract_u8_2d, resolve_forest_params};
+use crate::spatial::kdforest::{extract_u8_2d, resolve_forest_params};
 
 /// Extract a 1-D `uint32` array, with a clear error if the dtype is wrong.
 fn extract_u32_1d<'py>(

@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import KdTree2d, KdTree3d
+from sfmtool._sfmtool.spatial import KdTree2d, KdTree3d
 
 
 class TestKdTree2dF64:

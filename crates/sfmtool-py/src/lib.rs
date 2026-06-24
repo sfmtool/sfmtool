@@ -6,11 +6,12 @@
 //! Exposes file I/O (`.sfmr`, `.sift`, and COLMAP formats), geometric types,
 //! feature matching, alignment, optical flow, and GUI viewer to Python via PyO3.
 //!
-//! File-format I/O, feature matching, optical flow, and spherical-rig
-//! bindings each live on their own PyO3 submodule (`_sfmtool.io`,
-//! `_sfmtool.matching`, `_sfmtool.flow`, `_sfmtool.spherical`); their
-//! `__name__` reads as `sfmtool.io` / `sfmtool.matching` / `sfmtool.flow`
-//! / `sfmtool.spherical` so binding objects report the public location in
+//! File-format I/O, feature matching, optical flow, spatial indices, and
+//! spherical-rig bindings each live on their own PyO3 submodule
+//! (`_sfmtool.io`, `_sfmtool.matching`, `_sfmtool.flow`, `_sfmtool.spatial`,
+//! `_sfmtool.spherical`); their `__name__` reads as `sfmtool.io` /
+//! `sfmtool.matching` / `sfmtool.flow` / `sfmtool.spatial` /
+//! `sfmtool.spherical` so binding objects report the public location in
 //! tracebacks, IPython, and Sphinx. Everything else is registered flat on
 //! `_sfmtool` for now (see hygiene audit #4 for the rest).
 //!
@@ -90,11 +91,13 @@ mod py_analysis;
 mod py_consensus_atlas;
 mod py_epipolar;
 mod py_image_pair_graph;
-mod py_kdforest;
-mod py_kdtree;
 mod py_photometric_ransac;
 mod py_triangulation;
 pub use py_photometric_ransac::PyRansacPhotometricOutput;
+
+// ── Spatial indices (KD-trees, kd-tree forest) ───────────────────────────
+
+mod spatial;
 
 // ── Spherical (tile rigs, source stacks, sphere points) ──────────────────
 
@@ -181,6 +184,9 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Optical flow + warp maps.
     helpers::install_submodule(m, "sfmtool.flow", flow::register)?;
 
+    // Spatial indices: 2D/3D KD-trees + randomized kd-tree forest.
+    helpers::install_submodule(m, "sfmtool.spatial", spatial::register)?;
+
     // Spherical: tile rigs + per-tile source stacks + sphere-point generation.
     helpers::install_submodule(m, "sfmtool.spherical", spherical::register)?;
 
@@ -194,9 +200,6 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySe3Transform>()?;
     m.add_class::<PySfmrReconstruction>()?;
     m.add_class::<PyRangeExpr>()?;
-    m.add_class::<py_kdtree::PyKdTree2d>()?;
-    m.add_class::<py_kdtree::PyKdTree3d>()?;
-    m.add_class::<py_kdforest::PyKdForest>()?;
     m.add_class::<PyRansacPhotometricOutput>()?;
     m.add_class::<PyOrientedPatch>()?;
     m.add_class::<PyPatchCloud>()?;

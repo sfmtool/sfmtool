@@ -34,7 +34,7 @@ enum Inner2d {
 /// Build once from an (N, 2) float32 or float64 array, then issue batch queries.
 /// The dtype of the positions array determines the internal precision; query
 /// arrays must use the same dtype.
-#[pyclass(name = "KdTree2d", module = "sfmtool")]
+#[pyclass(name = "KdTree2d", module = "sfmtool.spatial")]
 pub struct PyKdTree2d {
     inner: Inner2d,
 }
@@ -321,7 +321,7 @@ enum Inner3d {
 /// Build once from an (N, 3) float32 or float64 array, then issue batch queries.
 /// The dtype of the positions array determines the internal precision; query
 /// arrays must use the same dtype.
-#[pyclass(name = "KdTree3d", module = "sfmtool")]
+#[pyclass(name = "KdTree3d", module = "sfmtool.spatial")]
 pub struct PyKdTree3d {
     inner: Inner3d,
 }
@@ -579,4 +579,12 @@ fn to_cow_slice<'a, T: numpy::Element + Copy>(arr: &'a PyReadonlyArray2<'a, T>) 
         Ok(s) => Cow::Borrowed(s),
         Err(_) => Cow::Owned(arr.as_array().iter().copied().collect()),
     }
+}
+
+// ── Registration ──────────────────────────────────────────────────────────
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyKdTree2d>()?;
+    m.add_class::<PyKdTree3d>()?;
+    Ok(())
 }

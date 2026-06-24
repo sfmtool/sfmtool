@@ -26,7 +26,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from .._sfmtool import KdTree2d
+from .._sfmtool.spatial import KdTree2d
 from .._sfmtool.flow import (
     advect_points as _rust_advect_points,
     compute_optical_flow as _rust_compute_optical_flow,
