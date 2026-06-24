@@ -58,6 +58,12 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: lint
+          # Pin pixi: 0.71.0 (2026-06-24) regressed multi-platform environment
+          # resolution — `pixi list --locked -e test-ci` (run by setup-pixi's
+          # cache step) reports "no platform supported by environment" on Windows
+          # even though the manifest and lock both include win-64. 0.70.2 is the
+          # last release before that change. Revisit once the regression is fixed.
+          pixi-version: v0.70.2
           cache: true
       - name: Cache cargo home
         uses: actions/cache@v5
@@ -156,6 +162,12 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: test-ci
+          # Pin pixi: 0.71.0 (2026-06-24) regressed multi-platform environment
+          # resolution — `pixi list --locked -e test-ci` (run by setup-pixi's
+          # cache step) reports "no platform supported by environment" on Windows
+          # even though the manifest and lock both include win-64. 0.70.2 is the
+          # last release before that change. Revisit once the regression is fixed.
+          pixi-version: v0.70.2
           cache: true
 
       - name: Run tests with combined coverage
@@ -233,6 +245,12 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: test-ci
+          # Pin pixi: 0.71.0 (2026-06-24) regressed multi-platform environment
+          # resolution — `pixi list --locked -e test-ci` (run by setup-pixi's
+          # cache step) reports "no platform supported by environment" on Windows
+          # even though the manifest and lock both include win-64. 0.70.2 is the
+          # last release before that change. Revisit once the regression is fixed.
+          pixi-version: v0.70.2
           cache: true
 
       - name: Build Python extension
@@ -270,6 +288,12 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: ui
+          # Pin pixi: 0.71.0 (2026-06-24) regressed multi-platform environment
+          # resolution — `pixi list --locked -e test-ci` (run by setup-pixi's
+          # cache step) reports "no platform supported by environment" on Windows
+          # even though the manifest and lock both include win-64. 0.70.2 is the
+          # last release before that change. Revisit once the regression is fixed.
+          pixi-version: v0.70.2
           cache: true
       - name: Cache cargo home
         uses: actions/cache@v5
@@ -331,6 +355,12 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: ui
+          # Pin pixi: 0.71.0 (2026-06-24) regressed multi-platform environment
+          # resolution — `pixi list --locked -e test-ci` (run by setup-pixi's
+          # cache step) reports "no platform supported by environment" on Windows
+          # even though the manifest and lock both include win-64. 0.70.2 is the
+          # last release before that change. Revisit once the regression is fixed.
+          pixi-version: v0.70.2
           cache: true
       - name: Cache cargo home
         uses: actions/cache@v5
