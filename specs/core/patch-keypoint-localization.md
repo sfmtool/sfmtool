@@ -76,8 +76,9 @@ from `X_p` and **initialized by unprojecting the starting keypoint onto `Π_p`**
    maximizes windowed ZNCC against the **leave-one-out** consensus of the *other*
    views (so a view is never aligned to a template its own pixels polluted): a
    full-res integer search then a separable parabolic sub-pixel fit.
-4. **Accumulate** `acc[v] += δ_v`, clipping the total move from the starting
-   keypoint to `±search`.
+4. **Accumulate** `acc[v] += δ_v`, clipping the total move from the point's
+   projection (`acc[v]`, which `project_i(X_p)` sets to zero) to `±search` — the
+   same anchor the `max_shift_px` gate below uses.
 5. **Drop failing views.** Remove any view whose keypoint has left the frame,
    whose keypoint sits more than `max_shift_px` from the point's projection
    (`|acc[v]|` mapped to source-image px — an *absolute* distance from
@@ -151,9 +152,44 @@ point the pipeline calls per point. It reuses the existing patch machinery:
 | parameter | default | meaning |
 |---|---|---|
 | `max_iters` | 5 | max congealing rounds (stops early at convergence) |
-| `search` | 6 px | max total per-view drift (patch-grid px), bounds runaway |
+| `search` | 6 px | max total per-view drift from the projection (patch-grid px), bounds runaway; also the context-tile margin |
 | `max_shift_px` | ~3 | drop a view whose keypoint sits more than this from the point's projection (source-image px) |
 | `min_relative_zncc` | ~0.7 | drop a view whose LOO ZNCC falls below this fraction of the views' median LOO ZNCC |
+| `min_grazing_cos` | 0.1 | pre-filter a view whose ray is near-parallel to the plane (`|d̂·n̂|` below this) |
+| `resolution` | 24 | the `R×R` patch grid the consensus / ZNCC are scored on |
+| `robust_iters` | 3 | IRLS passes for the robust consensus |
+| `convergence_px` | 0.05 | stop once the mean per-view residual shift of a round is below this (patch-grid px) |
+
+(plus `window` and `sampler`, shared with [normal refinement](patch-normal-refinement.md).)
 
 The patch size is carried by the frame the algorithm is handed (the `(u, v)`
 half-vectors).
+
+_Status: v1 implemented in
+`crates/sfmtool-core/src/patch/keypoint_localize.rs`
+(`localize_patch_keypoints` / `localize_patch_cloud_keypoints`), exposed as
+`PatchCloud.localize_keypoints(recon, images, *, view_sets=None,
+max_iters=5, search=6.0, max_shift_px=3.0, min_relative_zncc=0.7,
+min_grazing_cos=0.1, resolution=24, …, point_ids=None)` returning a per-point
+`{point_id, views, keypoints, offsets_px, loo_zncc}`. Each round renders a
+**context tile** per view (the scored `R×R` core extended by `±⌈search⌉` px so the
+shift search slides without re-warping), z-normalizes the cores into a shared
+compacted channel space (a channel flat in any view is dropped, as in normal
+refinement), builds the leave-one-out IRLS consensus of the *other* views, and
+runs a full-res integer windowed-ZNCC search refined by a separable parabolic fit;
+the per-view offset accumulates and is clipped to `±search`. A view is dropped when
+its core leaves the frame (any window-support pixel out of frame), its keypoint
+sits more than `max_shift_px` from the projection, or its leave-one-out ZNCC falls
+below `min_relative_zncc ×` the views' median — all subject to the two-view
+leave-one-out floor (when the gates would leave fewer than two, the two
+best-agreeing views are kept, so a kept pair can exceed `max_shift_px`). Grazing
+views (`|d̂·n̂| < min_grazing_cos`) are pre-filtered. The view set is deduped
+order-preserving, and seeds default to the point's own projection (`acc = 0`); a
+supplied starting keypoint is unprojected onto the plane to initialize `acc`. The
+render → z-normalize → robust-consensus primitives are shared with `normal_refine`
+(widened to `pub(super)`), not duplicated. Defaults match the table above with
+`min_grazing_cos = 0.1`, `robust_iters = 3`, and `convergence_px = 0.05`. The
+starting-keypoint seed is a kernel-level input
+(`localize_patch_keypoints(..., starting_keypoints, ...)`); the v1 PyO3 binding
+does not expose it and always seeds at the projection, which is exactly the
+pipeline's "project starting keypoints" step._

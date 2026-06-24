@@ -4,6 +4,7 @@
 //! Patch clouds: point-patch storage and normal refinement.
 
 pub mod cloud;
+pub mod keypoint_localize;
 pub mod normal_refine;
 pub mod view_selection;
 
