@@ -169,3 +169,70 @@ def test_compact_min_views_culls_points(seoul_bull_workspace: Path):
     assert high.point_count < low.point_count
     assert np.asarray(high.observation_counts).min() >= 4
     assert np.asarray(low.observation_counts).min() >= 2
+
+
+def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
+    """A surviving point at infinity (w = 0) stays at infinity through compaction —
+    the rebuild carries the homogeneous w, not just the Euclidean position."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    # Turn one well-observed point into a point at infinity.
+    pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
+    counts = np.bincount(np.asarray(recon.track_point_ids), minlength=recon.point_count)
+    pi = int(np.argmax(counts))
+    xyz = pos[pi, :3]
+    pos[pi] = np.append(xyz / np.linalg.norm(xyz), 0.0)
+    recon = recon.clone_with_changes(positions=pos)
+    assert bool(np.asarray(recon.point_is_at_infinity)[pi])
+
+    # A cloud that includes infinity points (fixed extent needs no .sift scales).
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent="fixed", extent_value=0.05
+    )
+
+    # Fabricate localizations (point center per view) for the infinity point plus
+    # two finite points, each kept with >= min_views observations.
+    tpids = np.asarray(recon.track_point_ids)
+    timgs = np.asarray(recon.track_image_indexes)
+    cam_idx = np.asarray(recon.camera_indexes)
+    cams = recon.cameras
+    chosen = [pi] + [p for p in (0, 1, 2) if p != pi][:2]
+    locs = []
+    for p in chosen:
+        views = np.unique(timgs[tpids == p])[:3]
+        if len(views) < 2:
+            continue
+        kpts = np.array(
+            [
+                [cams[int(cam_idx[v])].width / 2.0, cams[int(cam_idx[v])].height / 2.0]
+                for v in views
+            ],
+            dtype=np.float64,
+        )
+        locs.append(
+            {
+                "point_id": int(p),
+                "views": views.astype(np.uint32),
+                "keypoints": kpts,
+                "offsets_px": np.zeros(len(views)),
+                "loo_zncc": np.full(len(views), np.nan),
+            }
+        )
+    hashes = [b"\x00" * 16] * recon.image_count
+
+    out = compact_to_embedded_patches(recon, cloud, locs, hashes, min_views=2)
+
+    # The infinity point survived and is still at infinity in the output.
+    is_inf = np.asarray(out.point_is_at_infinity)
+    assert is_inf.sum() == 1, "the one infinity point should survive as w = 0"
+    valid, errors = verify_sfmr_to_temp(out)
+    assert valid, f"integrity check failed: {errors}"
+
+
+def verify_sfmr_to_temp(recon) -> tuple[bool, list]:
+    """Save to a temp .sfmr and run the format integrity check."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        path = str(Path(d) / "out.sfmr")
+        recon.save(path, operation="test")
+        return verify_sfmr(path)

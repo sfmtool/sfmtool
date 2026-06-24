@@ -224,20 +224,19 @@ def parse_to_embedded_patches_params(param: str) -> ToEmbeddedPatchesTransform:
     return ToEmbeddedPatchesTransform(**kwargs)
 
 
-def auto_output_path(input_path: Path) -> Path:
-    """Generate an output path of the form {stem}-transformed[-N].sfmr next to the input.
+def auto_output_path(input_path: Path, suffix: str = "transformed") -> Path:
+    """Generate an output path of the form {stem}-{suffix}[-N].sfmr next to the input.
 
-    Picks ``{stem}-transformed.sfmr`` if available, otherwise the smallest
-    counter starting at 2: ``{stem}-transformed-2.sfmr``, ``-3.sfmr``, ...
+    Picks ``{stem}-{suffix}.sfmr`` if available, otherwise the smallest counter
+    starting at 2: ``{stem}-{suffix}-2.sfmr``, ``-3.sfmr``, ... ``suffix`` defaults
+    to ``transformed`` (``sfm xform``); ``sfm embed-patches`` passes ``embedded``.
     """
-    base = input_path.with_name(f"{input_path.stem}-transformed.sfmr")
+    base = input_path.with_name(f"{input_path.stem}-{suffix}.sfmr")
     if not base.exists():
         return base
     counter = 2
     while True:
-        candidate = input_path.with_name(
-            f"{input_path.stem}-transformed-{counter}.sfmr"
-        )
+        candidate = input_path.with_name(f"{input_path.stem}-{suffix}-{counter}.sfmr")
         if not candidate.exists():
             return candidate
         counter += 1

@@ -124,16 +124,25 @@ input track, then is expanded with vetted views and filtered by drops.
 - The discard gates (`min_relative_zncc`, `max_shift_px`) want tuning across the
   four datasets before the defaults are fixed.
 
-_Status: the **write/compaction tail** (step 7) is implemented in
-`src/sfmtool/_embed_patches.py` as `compact_to_embedded_patches(recon, cloud,
-localizations, image_file_hashes, *, patch_bitmaps=None, min_views=2)`: it culls
-points left below `min_views`, renumbers the survivors into a dense point set,
-flattens the kept per-point keypoint-localization results into point-then-image
-sorted track + `keypoints_xy` arrays, carries the surviving patch frame (via the
-new `PatchCloud.from_halfvec_arrays`) and bitmaps, and emits an
-`embedded_patches` `SfmrReconstruction` through `clone_with_changes` (ready to
-`save()`). `image_file_hashes_from_images(recon)` supplies the per-image identity
-hashes from the workspace image bytes. The writer requires the patch frame for an
-`embedded_patches` file (`has_uv_frames = true`). The upstream orchestration
-(steps 1–6, running the kernels) and the `sfm embed-patches` CLI are not yet
-wired up — a caller runs the kernels and hands the results to the compaction._
+_Status: **fully wired** in `src/sfmtool/_embed_patches.py`. `embed_patches(recon,
+images, *, min_relative_zncc, patch_size, max_shift_px, min_views, max_iters,
+search, resolution)` runs the whole pipeline (steps 1–7): it builds each point's
+frame from the mean viewing direction and refines the normal photometrically
+(`render_bitmaps=True` for the reference textures), selects + vets the view set per
+point, congeals the keypoints, and hands the results to
+`compact_to_embedded_patches` (the step-7 write/compaction tail). The
+`sfm embed-patches` CLI (`src/sfmtool/_commands/embed_patches.py`) is a thin
+wrapper over it. `image_file_hashes_from_sift(recon)` supplies the per-image
+identity hashes read from each image's `.sift` `image_file_xxh128` metadata (the
+command's source, matching the baseline `to_embedded_patches`);
+`image_file_hashes_from_images` re-hashing the image bytes remains available. The
+writer requires the patch frame for an `embedded_patches` file (`has_uv_frames =
+true`)._
+
+_Points at infinity flow through end to end (the kernels are first-class on them
+since the patch pipeline gained `w`-aware rendering/selection/localization), and
+`compact_to_embedded_patches` preserves their `w = 0` via `positions_xyzw`. **v1
+limitation:** normal refinement is finite-only, so an infinity point keeps its
+fixed tangent-sphere frame and gets keypoints, but **no reference bitmap** (its
+`patch_bitmaps` row is zero); a `--mode texture` render shows it blank. Giving
+infinity points a rendered reference bitmap is future work._

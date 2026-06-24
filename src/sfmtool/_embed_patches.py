@@ -13,9 +13,11 @@ a valid ``embedded_patches`` :class:`SfmrReconstruction` (inline ``keypoints_xy`
 per-point patch frame + optional bitmaps, ``image_file_hashes``,
 ``feature_source = "embedded_patches"``).
 
-It does **not** run the upstream kernels (normal refinement, view selection,
-keypoint localization) — the caller does that and hands the results in. The full
-orchestration and the ``sfm embed-patches`` CLI are a later step.
+:func:`embed_patches` runs the whole pipeline end to end (steps 1–7): it builds
+and photometrically refines each point's patch frame, selects + vets the view set
+per point, congeals the keypoints, then hands the results to
+:func:`compact_to_embedded_patches`. The ``sfm embed-patches`` CLI is a thin
+wrapper over it.
 """
 
 from __future__ import annotations
@@ -42,6 +44,37 @@ def image_file_hashes_from_images(recon: SfmrReconstruction) -> list[bytes]:
 
     ws = Path(recon.workspace_dir)
     return [bytes.fromhex(xxh128_of_file(ws / name)) for name in recon.image_names]
+
+
+def image_file_hashes_from_sift(recon: SfmrReconstruction) -> list[bytes]:
+    """The per-image ``image_file_hashes`` read from each image's ``.sift``
+    ``image_file_xxh128`` metadata (hex → 16 bytes).
+
+    This is the image-identity hash recorded when the features were extracted —
+    the same value :func:`image_file_hashes_from_images` would recompute, but read
+    straight from the ``.sift`` rather than re-hashing the (potentially large)
+    image bytes. It matches the baseline ``SfmrReconstruction.to_embedded_patches``
+    and is what the ``sfm embed-patches`` command uses (its input is ``sift_files``,
+    so a ``.sift`` resolves for every image).
+
+    Raises:
+        FileNotFoundError: naming the image whose ``.sift`` cannot be resolved (the
+            hash source the format requires for an ``embedded_patches`` file).
+    """
+    from sfmtool.sift.file import SiftReader, get_sift_path_from_recon
+
+    hashes: list[bytes] = []
+    for name in recon.image_names:
+        sift_path = get_sift_path_from_recon(recon, name)
+        try:
+            meta = SiftReader(sift_path).metadata
+        except FileNotFoundError as e:
+            raise FileNotFoundError(
+                f"no resolvable .sift for image {name!r} (needed for "
+                f"image_file_hashes): {sift_path}"
+            ) from e
+        hashes.append(bytes.fromhex(meta["image_file_xxh128"]))
+    return hashes
 
 
 def compact_to_embedded_patches(
@@ -107,8 +140,13 @@ def compact_to_embedded_patches(
             f"({len(loc_by_pid)} points localized)"
         )
 
-    # Per-point arrays, sliced to survivors in the new dense order.
-    positions = np.asarray(recon.positions, dtype=np.float64)[survivors]
+    # Per-point arrays, sliced to survivors in the new dense order. `positions_xyzw`
+    # (homogeneous) carries each point's `w`, so a point at infinity (`w == 0`)
+    # stays at infinity through the rebuild; `centers` (the Euclidean position, or
+    # the unit direction for an infinity point) is only the patch-frame anchor for
+    # `from_halfvec_arrays`.
+    positions_xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64)[survivors]
+    centers = np.asarray(recon.positions, dtype=np.float64)[survivors]
     colors = np.asarray(recon.colors, dtype=np.uint8)[survivors]
     errors = np.asarray(recon.errors, dtype=np.float32)[survivors]
     normals = (
@@ -127,7 +165,7 @@ def compact_to_embedded_patches(
         he = patch.half_extent
         u_xyz[new_id] = np.asarray(patch.u_axis, dtype=np.float64) * he[0]
         v_xyz[new_id] = np.asarray(patch.v_axis, dtype=np.float64) * he[1]
-    culled_cloud = PatchCloud.from_halfvec_arrays(u_xyz, v_xyz, positions)
+    culled_cloud = PatchCloud.from_halfvec_arrays(u_xyz, v_xyz, centers)
     # from_halfvec_arrays drops zero-`u` rows; every survivor must keep a frame, or
     # the cloud's point_ids would no longer be the dense 0..P_new-1 the scatter
     # below relies on (and the survivor would be left frameless).
@@ -180,7 +218,7 @@ def compact_to_embedded_patches(
     # `positions` first so the point set is resized before the per-point arrays and
     # the patch frame are applied (clone_with_changes processes kwargs in order).
     kwargs: dict[str, Any] = {
-        "positions": positions,
+        "positions": positions_xyzw,
         "colors": colors,
         "errors": errors,
     }
@@ -197,3 +235,90 @@ def compact_to_embedded_patches(
         kwargs["patch_bitmaps"] = new_bitmaps
 
     return recon.clone_with_changes(**kwargs)
+
+
+def embed_patches(
+    recon: SfmrReconstruction,
+    images: list[np.ndarray],
+    *,
+    min_relative_zncc: float = 0.7,
+    patch_size: float = 10.0,
+    max_shift_px: float = 3.0,
+    min_views: int = 2,
+    max_iters: int = 5,
+    search: float = 6.0,
+    resolution: int = 24,
+) -> SfmrReconstruction:
+    """Convert a ``sift_files`` reconstruction to ``embedded_patches``, running the
+    full photometric pipeline (steps 1–7 of
+    ``specs/core/sift-to-patch-reconstruction.md``).
+
+    1. **Build a patch frame** per point from the mean viewing direction, then
+       **refine its normal** photometrically (rendering each point's reference
+       bitmap). Points at infinity keep their fixed tangent-sphere frame untouched.
+    2. **Select the view set** per point: the track plus other views that
+       geometrically see the surfel and clear ``min_relative_zncc`` against a
+       track-seeded template.
+    3. **Project + congeal** each view's keypoint to sub-pixel, dropping views that
+       won't co-register (grazing, out-of-frame, ``max_shift_px``, low LOO ZNCC).
+    4. **Cull + compact**: drop points left below ``min_views`` and renumber the
+       survivors into a valid ``embedded_patches`` reconstruction.
+
+    Args:
+        recon: A ``sift_files`` reconstruction (the caller validates this).
+        images: One full-resolution image per ``recon.image_names`` entry, matching
+            each camera's dimensions (e.g. via ``read_workspace_image``).
+        patch_size: Surfel size — the full patch edge (feature-size multiples),
+            halved to the library half-extent (matching ``refine-normals``).
+        min_relative_zncc, max_shift_px, min_views, max_iters, search: The pipeline
+            knobs documented in ``specs/cli/embed-patches-command.md``.
+        resolution: The ``R × R`` patch grid the kernels render/score on.
+
+    Returns:
+        A new ``embedded_patches`` :class:`SfmrReconstruction`, ready to ``save()``.
+    """
+    # 1. Frame from the mean viewing direction (finite surfels + tangent-sphere
+    #    frames for points at infinity), then refine the normal photometrically and
+    #    render each point's reference bitmap. `patch_size` is the full edge; the
+    #    library takes a half-extent.
+    cloud = PatchCloud.from_reconstruction(
+        recon,
+        normal="mean_viewing",
+        extent="feature_size",
+        extent_value=patch_size / 2.0,
+    )
+    refine = cloud.refine_normals(
+        recon, images, resolution=resolution, render_bitmaps=True
+    )
+
+    # 2. Expand + vet the view set per point.
+    selections = cloud.select_views(
+        recon, images, min_relative_zncc=min_relative_zncc, resolution=resolution
+    )
+    view_sets = {
+        int(s["point_id"]): np.asarray(s["admitted"]).tolist() for s in selections
+    }
+
+    # 3. Project starting keypoints (implicit) and congeal them, dropping views that
+    #    won't co-register in-loop.
+    localizations = cloud.localize_keypoints(
+        recon,
+        images,
+        view_sets=view_sets,
+        max_iters=max_iters,
+        search=search,
+        max_shift_px=max_shift_px,
+        min_relative_zncc=min_relative_zncc,
+        resolution=resolution,
+    )
+
+    # 4. Cull under-supported points and compact into an embedded_patches recon.
+    hashes = image_file_hashes_from_sift(recon)
+    return compact_to_embedded_patches(
+        recon,
+        cloud,
+        localizations,
+        hashes,
+        patch_bitmaps=refine.get("bitmaps"),
+        min_views=min_views,
+    )
