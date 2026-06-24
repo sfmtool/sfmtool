@@ -20,7 +20,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ._sfmtool import SfmrReconstruction, WarpMap
+from ._sfmtool import SfmrReconstruction
+from ._sfmtool.flow import WarpMap
 
 
 def _print_camera_params(label: str, cam) -> None:

@@ -12,7 +12,7 @@ every expected binding is present so a drop fails fast at collection time.
 
 import sfmtool._sfmtool.matching as matching
 
-# The 12 symbols carried by the matching submodule. Mirrors the four per-file
+# The 13 symbols carried by the matching submodule. Mirrors the four per-file
 # `pub fn register` bodies in `crates/sfmtool-py/src/matching/`.
 _EXPECTED = (
     # cluster.rs
@@ -21,6 +21,7 @@ _EXPECTED = (
     # descriptor.rs
     "descriptor_distance",
     "find_best_descriptor_match",
+    "match_candidates_by_descriptor",
     # image.rs
     "match_image_pair_py",
     "match_image_pairs_batch_py",

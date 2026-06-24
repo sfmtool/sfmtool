@@ -32,7 +32,7 @@ use crate::PyCameraIntrinsics;
 ///     })
 ///     warp = WarpMap.from_cameras(src=camera, dst=pinhole)
 ///     undistorted = warp.remap_bilinear(image)
-#[pyclass(name = "WarpMap", module = "sfmtool")]
+#[pyclass(name = "WarpMap", module = "sfmtool.flow")]
 pub struct PyWarpMap {
     pub(crate) inner: WarpMap,
 }
@@ -305,7 +305,7 @@ impl PyWarpMap {
 ///     pyr = ImagePyramid(image)
 ///     for warp in keypoint_warps:
 ///         patch = pyr.remap_aniso(warp)
-#[pyclass(name = "ImagePyramid", module = "sfmtool")]
+#[pyclass(name = "ImagePyramid", module = "sfmtool.flow")]
 pub struct PyImagePyramid {
     inner: ImageU8Pyramid,
 }
@@ -406,4 +406,10 @@ fn image_u8_to_pyobject(py: Python<'_>, img: &ImageU8) -> PyResult<Py<PyAny>> {
         ])?;
         Ok(arr.into_any().unbind())
     }
+}
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyWarpMap>()?;
+    m.add_class::<PyImagePyramid>()?;
+    Ok(())
 }

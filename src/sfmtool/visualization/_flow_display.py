@@ -15,8 +15,11 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
-from .._sfmtool import KdTree2d, advect_points as _rust_advect_points
-from .._sfmtool import compute_optical_flow as _rust_compute_optical_flow
+from .._sfmtool import KdTree2d
+from .._sfmtool.flow import (
+    advect_points as _rust_advect_points,
+    compute_optical_flow as _rust_compute_optical_flow,
+)
 from .._histogram_utils import print_histogram
 from ..sift.file import SiftReader, get_sift_path_for_image
 from ._common import get_color_palette

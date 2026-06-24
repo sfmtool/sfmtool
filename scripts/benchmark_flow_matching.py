@@ -110,7 +110,7 @@ def main():
 
     # Import after arg parsing for fast --help
     import cv2
-    from sfmtool._sfmtool import compute_optical_flow, gpu_available
+    from sfmtool._sfmtool.flow import compute_optical_flow, gpu_available
     from sfmtool.feature_match._flow_matching import flow_match_sequential
 
     # Print setup info

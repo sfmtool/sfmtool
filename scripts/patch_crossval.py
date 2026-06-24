@@ -53,14 +53,14 @@ from collections import defaultdict
 import cv2
 import numpy as np
 
-import sfmtool._sfmtool as s
 from sfmtool._sfmtool import (
-    ImagePyramid,
     OrientedPatch,
     PatchCloud,
     RigidTransform,
-    WarpMap,
+    SfmrReconstruction,
 )
+from sfmtool._sfmtool.flow import ImagePyramid, WarpMap
+from sfmtool._sfmtool.io import read_matches, read_sift
 
 
 def find_sift_paths(workspace: str, names: list[str]) -> dict[str, str]:
@@ -146,7 +146,7 @@ def make_renderer(
             if img is None:
                 raise FileNotFoundError(names[idx])
             images[idx] = np.ascontiguousarray(img)
-            d = s.read_sift(sift_paths[names[idx]])
+            d = read_sift(sift_paths[names[idx]])
             kpts[idx] = (
                 np.asarray(d["positions_xy"], np.float64),
                 np.asarray(d["affine_shapes"], np.float64),
@@ -183,7 +183,7 @@ def evaluate(
     seed=0,
 ):
     """Score every match and return inlier/outlier/random NCC arrays."""
-    m = s.read_matches(matches_path)
+    m = read_matches(matches_path)
     names = list(m["image_names"])
     pairs = np.asarray(m["image_index_pairs"])
     counts = np.asarray(m["match_counts"])
@@ -318,7 +318,7 @@ def strips_mode_3d(
     (``refine_range`` / ``refine_steps`` set its search cone and grid resolution),
     and each track is shown as a before/after pair.
     """
-    recon = s.SfmrReconstruction.load(sfmr_path)
+    recon = SfmrReconstruction.load(sfmr_path)
     names = list(recon.image_names)
     positions = np.asarray(recon.positions, np.float64)
     cam_idx = np.asarray(recon.camera_indexes)
@@ -730,7 +730,7 @@ def main(argv=None):
                 k_neighbors=args.k_neighbors,
                 refine=args.refine_normal,
             )
-        m = s.read_matches(matches)
+        m = read_matches(matches)
         names = list(m["image_names"])
         tracks = build_tracks(
             np.asarray(m["image_index_pairs"]),

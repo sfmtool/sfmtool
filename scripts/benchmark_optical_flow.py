@@ -22,7 +22,7 @@ import time
 import cv2
 import numpy as np
 
-from sfmtool._sfmtool import compute_optical_flow, gpu_available
+from sfmtool._sfmtool.flow import compute_optical_flow, gpu_available
 
 
 def load_grayscale(path: str) -> np.ndarray:

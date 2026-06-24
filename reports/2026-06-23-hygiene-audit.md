@@ -187,6 +187,17 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 > seams (`.geometry`, `.flow`, `.patch`, `.spherical`) and the
 > `__init__.py` wildcard still pending. Commit (branch
 > `claude/pyo3-matching-submodule`)._
+>
+> _Status (2026-06-23): Partially done — the `flow` slice landed. 9
+> entries (7 optical-flow functions + `WarpMap` + `ImagePyramid`) move
+> to `flow/{optical,warp}.rs` and register on `_sfmtool.flow` via the
+> shared `helpers::install_submodule`. Both classes carry
+> `#[pyclass(module = "sfmtool.flow")]` so their `__module__` reads
+> `sfmtool.flow`. Two intra-crate cross-references
+> (`py_patch_cloud.rs`, `py_spherical_tile_rig.rs`) repath to
+> `crate::flow::warp::…`. The remaining seams (`.geometry`, `.patch`,
+> `.spherical`) and the `__init__.py` wildcard still pending. Commit
+> (branch `claude/pyo3-flow-submodule`)._
 
 ### 5. First cut of #4: move the six `py_*_io.rs` into `crates/sfmtool-py/src/io/`
 

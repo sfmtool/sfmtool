@@ -695,7 +695,7 @@ sfmtool-core/src/features/sift/
 ### Python bindings
 
 `crates/sfmtool-py/src/py_sift.rs`, registered in `sfmtool-py/src/lib.rs`, following
-`py_optical_flow.rs` conventions (`PyReadonlyArray2` in, `IntoPyArray` out,
+`flow/optical.rs` conventions (`PyReadonlyArray2` in, `IntoPyArray` out,
 `py.detach(...)` around the compute):
 
 - `detect_sift_keypoints(image, params=None) -> (positions (N,2) f32, affine_shapes (N,2,2) f32, responses (N,) f32)`

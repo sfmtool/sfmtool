@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import ImagePyramid, WarpMap
+from sfmtool._sfmtool.flow import ImagePyramid, WarpMap
 
 
 def test_from_numpy_roundtrips_through_to_numpy():

@@ -4,7 +4,7 @@
 `from_cameras`, the pose-aware constructors below), `camera/remap.rs` (`ImageU8`,
 `ImageU8Pyramid`, `remap_bilinear`, `remap_aniso`),
 `CameraIntrinsics::ray_to_pixel[_batch]` and the `Equirectangular` camera
-model in the distortion module, with PyO3 bindings in `py_warp_map.rs`. The
+model in the distortion module, with PyO3 bindings in `flow/warp.rs`. The
 GPU-acceleration question at the end remains open/deferred.
 
 ## Motivation
@@ -463,7 +463,8 @@ is usually sufficient.
 Expose the warp map and resampling through `sfmtool-py`:
 
 ```python
-from sfmtool._sfmtool import CameraIntrinsics, WarpMap
+from sfmtool._sfmtool import CameraIntrinsics
+from sfmtool._sfmtool.flow import WarpMap
 
 # Build a warp map from camera intrinsics
 camera = reconstruction.cameras[0]
@@ -503,7 +504,7 @@ New file in `sfmtool-py`:
 
 ```
 crates/sfmtool-py/src/
-├── py_warp_map.rs       # PyWarpMap Python wrapper
+├── flow/warp.rs       # PyWarpMap Python wrapper
 ```
 
 Add `ray_to_pixel` / `distort_ray` to the existing `CameraIntrinsics` / `CameraModel`
@@ -678,12 +679,13 @@ callers who want a fronto-parallel plane can convert.
 
 ### Python bindings
 
-Exposed via `py_warp_map.rs`. Rotations accept a `RotQuaternion`; poses accept
+Exposed via `flow/warp.rs`. Rotations accept a `RotQuaternion`; poses accept
 a `RigidTransform` built from the same `(quaternion_wxyz, translation_xyz)`
 tuple already stored on reconstruction images:
 
 ```python
-from sfmtool._sfmtool import WarpMap, RigidTransform
+from sfmtool._sfmtool import RigidTransform
+from sfmtool._sfmtool.flow import WarpMap
 
 src_from_world = RigidTransform.from_wxyz_translation(
     recon.quaternions_wxyz[src_idx].tolist(),

@@ -319,7 +319,7 @@ Flat row-major arrays at the boundary, mirroring `spatial.rs`:
 ### Python bindings (as built)
 
 `crates/sfmtool-py/src/py_kdforest.rs`, registered in `sfmtool-py/src/lib.rs`,
-following `py_optical_flow.rs` conventions (`PyReadonlyArray2` in, `IntoPyArray`
+following `flow/optical.rs` conventions (`PyReadonlyArray2` in, `IntoPyArray`
 out, `py.detach(...)` around build and query):
 
 - `KdForest(descriptors (N,D) u8, preset=None, num_trees=None, leaf_size=None, max_leaf_checks=None, seed=None)`
