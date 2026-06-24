@@ -28,7 +28,8 @@ from collections import defaultdict
 import numpy as np
 
 from ..analyze.images import _compute_camera_centers
-from .._sfmtool import KdTree3d, SfmrReconstruction
+from .._sfmtool import SfmrReconstruction
+from .._sfmtool.spatial import KdTree3d
 from ._filter_by_image_range import _filter_images
 
 # Thinning / well-covered angle (radians): two observers of a point count as

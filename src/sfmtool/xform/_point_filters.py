@@ -134,7 +134,7 @@ class RemoveIsolatedPointsFilter:
             f"  Computing nearest neighbor distances for {len(finite_idx)} finite points..."
         )
 
-        from .._sfmtool import KdTree3d
+        from .._sfmtool.spatial import KdTree3d
 
         nn_distances = KdTree3d(
             recon.positions[finite_idx]

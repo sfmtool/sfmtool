@@ -13,7 +13,8 @@ from pathlib import Path
 import click
 import numpy as np
 
-from .._sfmtool import KdTree3d, SfmrReconstruction
+from .._sfmtool import SfmrReconstruction
+from .._sfmtool.spatial import KdTree3d
 from .._histogram_utils import print_histogram
 
 # Matches sfmtool_core::analysis::infinity::DEFAULT_INVERSE_DEPTH_Z_CUTOFF: below this a

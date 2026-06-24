@@ -19,7 +19,7 @@ use sfmtool_core::features::kdforest::{KdForestParams, KdForestU8};
 /// Extract an `(N, D)` `uint8` array, with a clear error if the dtype is wrong.
 ///
 /// PyO3's own extraction failure for a mismatched dtype is opaque; this mirrors
-/// the explicit dtype errors the sibling `py_kdtree` bindings give.
+/// the explicit dtype errors the sibling `kdtree` bindings give.
 pub(crate) fn extract_u8_2d<'py>(
     arr: &Bound<'py, PyAny>,
     what: &str,
@@ -84,7 +84,7 @@ pub(crate) fn resolve_forest_params(
 /// Build once from an `(N, D)` uint8 array, then issue batched approximate
 /// nearest-neighbor queries. Squared-L2 distance is used internally (integer
 /// domain); reported distances are Euclidean.
-#[pyclass(name = "KdForest", module = "sfmtool")]
+#[pyclass(name = "KdForest", module = "sfmtool.spatial")]
 pub struct PyKdForest {
     inner: KdForestU8,
 }
@@ -221,4 +221,11 @@ impl PyKdForest {
         let dist_arr = numpy::PyArray1::from_vec(py, distances).reshape([m, k])?;
         Ok((idx_arr.into_any().unbind(), dist_arr.into_any().unbind()))
     }
+}
+
+// ── Registration ──────────────────────────────────────────────────────────
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyKdForest>()?;
+    Ok(())
 }

@@ -212,6 +212,19 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 > still deferred. The remaining seams (`.geometry`, `.patch`) and that
 > wildcard cleanup remain pending. Commit (branch
 > `claude/pyo3-spherical-submodule`)._
+>
+> _Status (2026-06-24): Partially done — the `spatial` slice landed. 3
+> entries (`KdTree2d` + `KdTree3d` + `KdForest`) move to
+> `spatial/{kdtree,kdforest}.rs` and register on `_sfmtool.spatial` via
+> `helpers::install_submodule`. All three classes carry
+> `#[pyclass(module = "sfmtool.spatial")]`. One intra-crate
+> cross-reference (`matching/cluster.rs`'s use of `extract_u8_2d` /
+> `resolve_forest_params`) repaths to `crate::spatial::kdforest::…`. The
+> `__init__.py` wildcard grew to six lines (`_sfmtool` + `.io` +
+> `.matching` + `.flow` + `.spatial` + `.spherical`) — the audit's stated
+> replace-with-deliberate-re-exports cleanup is still deferred. The
+> remaining seams (`.geometry`, `.patch`) and that wildcard cleanup
+> remain pending. Commit (branch `claude/intelligent-archimedes-7i8ruz`)._
 
 ### 5. First cut of #4: move the six `py_*_io.rs` into `crates/sfmtool-py/src/io/`
 
@@ -265,6 +278,12 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 - Effort: low — three call-site rewrites.
 - Risk: low — Python error-message text changes (covered by
   `tests/rust_bindings/`).
+
+> _Status (2026-06-24): Not done — still open, but the two kd files moved
+> under the new `spatial` submodule (finding #4): `dtype_tag` now lives at
+> `crates/sfmtool-py/src/spatial/kdtree.rs:19-23` and `extract_u8_2d` at
+> `spatial/kdforest.rs:23-35`. The duplication and proposed
+> `helpers::extract_array_nd` consolidation are unchanged._
 
 > **Surveyed and cleared:** `recon_clone.rs` (736) — coherent
 > `clone_with_changes` + `rebuild_observation_source` + tests.
