@@ -256,6 +256,7 @@ fn make_embedded_test_data() -> SfmrData {
     let mut data = make_test_data();
     let m = data.metadata.observation_count as usize;
     let n = data.metadata.image_count as usize;
+    let p = data.metadata.point_count as usize;
     data.metadata.feature_source = FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
     data.feature_tool_hashes = None;
     data.sift_content_hashes = None;
@@ -266,6 +267,11 @@ fn make_embedded_test_data() -> SfmrData {
         .flat_map(|i| [100.5 + i as f32, 200.25 + i as f32])
         .collect();
     data.keypoints_xy = Some(Array2::from_shape_vec((m, 2), kp).unwrap());
+    // An embedded_patches file requires the per-point patch frame (has_uv_frames).
+    let u: Vec<f32> = (0..p).flat_map(|_| [0.5f32, 0.0, 0.0]).collect();
+    let v: Vec<f32> = (0..p).flat_map(|_| [0.0f32, 0.5, 0.0]).collect();
+    data.patch_u_halfvec_xyz = Some(Array2::from_shape_vec((p, 3), u).unwrap());
+    data.patch_v_halfvec_xyz = Some(Array2::from_shape_vec((p, 3), v).unwrap());
     data
 }
 
@@ -303,11 +309,37 @@ fn test_embedded_patches_round_trip() {
     assert_eq!(loaded.point_indexes, data.point_indexes);
     assert_eq!(loaded.observation_counts, data.observation_counts);
 
+    // The required patch frame round-trips.
+    assert_eq!(loaded.patch_u_halfvec_xyz, data.patch_u_halfvec_xyz);
+    assert_eq!(loaded.patch_v_halfvec_xyz, data.patch_v_halfvec_xyz);
+
     // Integrity verification passes for the embedded-patches layout.
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "verification failed: {errors:?}");
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_embedded_patches_requires_patch_frame() {
+    // An embedded_patches file without the per-point patch frame is rejected
+    // (the keypoint anchors a patch that only exists with a u/v frame).
+    let mut data = make_embedded_test_data();
+    data.patch_u_halfvec_xyz = None;
+    data.patch_v_halfvec_xyz = None;
+    let dir = std::env::temp_dir().join("sfmr_test_embedded_no_frame");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sfmr");
+    let options = WriteOptions {
+        skip_recompute_depth_stats: true,
+        ..Default::default()
+    };
+    let err = write_sfmr_with_options(&path, &mut data, &options).unwrap_err();
+    assert!(
+        err.to_string().contains("patch_u_halfvec_xyz"),
+        "expected a patch-frame requirement error, got: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

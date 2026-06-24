@@ -743,6 +743,12 @@ fn validate_feature_source(data: &SfmrData) -> Result<(), SfmrError> {
         FEATURE_SOURCE_EMBEDDED_PATCHES => {
             present("keypoints_xy", data.keypoints_xy.is_some())?;
             present("image_file_hashes", data.image_file_hashes.is_some())?;
+            // An embedded_patches file is patch-based: the keypoint anchors the
+            // observation's patch, which only exists if the per-point frame is
+            // present. The format spec ("Observation source") requires
+            // has_uv_frames = true here.
+            present("patch_u_halfvec_xyz", data.patch_u_halfvec_xyz.is_some())?;
+            present("patch_v_halfvec_xyz", data.patch_v_halfvec_xyz.is_some())?;
             absent("feature_indexes", data.feature_indexes.is_none())?;
             absent("feature_tool_hashes", data.feature_tool_hashes.is_none())?;
             absent("sift_content_hashes", data.sift_content_hashes.is_none())?;
