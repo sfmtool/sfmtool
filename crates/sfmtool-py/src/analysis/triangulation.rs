@@ -106,3 +106,10 @@ pub fn triangulate_batch(
     dict.set_item("in_front_of_all_cameras", PyArray1::from_vec(py, in_front))?;
     Ok(dict.into_any().unbind())
 }
+
+// ── Registration ──────────────────────────────────────────────────────────
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(triangulate_batch, m)?)?;
+    Ok(())
+}

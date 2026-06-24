@@ -69,7 +69,7 @@ def extract_rust(image_path: Path):
     """Run the sfmtool Rust SIFT on an RGB image; returns (positions, affine, desc)."""
     import cv2
 
-    from sfmtool._sfmtool import extract_sift as rust_extract_sift
+    from sfmtool._sfmtool.sift import extract_sift as rust_extract_sift
 
     bgr = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if bgr is None:

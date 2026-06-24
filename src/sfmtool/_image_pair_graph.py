@@ -5,8 +5,8 @@
 
 import numpy as np
 
-from ._sfmtool import (
-    SfmrReconstruction,
+from ._sfmtool import SfmrReconstruction
+from ._sfmtool.analysis import (
     build_covisibility_pairs_py as _rust_build_covisibility_pairs,
     build_frustum_intersection_pairs_py as _rust_build_frustum_intersection_pairs,
 )

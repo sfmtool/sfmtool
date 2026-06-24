@@ -165,7 +165,7 @@ def extract_sift_with_sfmtool(
     Raises:
         SiftExtractionError: If image loading fails or feature extraction fails
     """
-    from sfmtool._sfmtool import extract_sift as _rust_extract_sift
+    from sfmtool._sfmtool.sift import extract_sift as _rust_extract_sift
 
     image_filename_list = [
         Path(os.path.normpath(os.path.abspath(p))) for p in image_filename_list

@@ -356,3 +356,16 @@ pub fn merge_points_and_tracks_py(
 
     Ok(dict.unbind())
 }
+
+// ── Registration ──────────────────────────────────────────────────────────
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(apply_se3_to_camera_poses_py, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_narrow_track_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(kabsch_algorithm_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(ransac_alignment_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(find_point_correspondences_py, m)?)?;
+    m.add_function(wrap_pyfunction!(merge_points_and_tracks_py, m)?)?;
+    m.add_function(wrap_pyfunction!(filter_tracks_by_point_mask_py, m)?)?;
+    Ok(())
+}

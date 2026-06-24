@@ -242,6 +242,24 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 > grew to seven lines — the replace-with-deliberate-re-exports cleanup is
 > still deferred. The remaining seam (`.patch`) and that wildcard cleanup
 > remain pending. Commit (branch `claude/intelligent-archimedes-7i8ruz`)._
+>
+> _Status (2026-06-24): Partially done — the `analysis` and `sift` slices
+> landed together. `analysis` collects 11 functions from four files into
+> `analysis/{core,triangulation,epipolar,image_pair_graph}.rs` (pose/track
+> ops, Kabsch + RANSAC alignment, point correspondence, batch
+> triangulation, epipolar curves, covisibility/frustum graphs) on
+> `_sfmtool.analysis`. `sift` moves `py_sift.rs` →
+> `sift/extract.rs` (`detect_sift_keypoints` + `extract_sift`) onto
+> `_sfmtool.sift`. Because `sfmtool.sift` is a real Python subpackage,
+> the bindings are re-exported through `src/sfmtool/sift/__init__.py`
+> (not just the top-level wildcard) so their `__module__ == "sfmtool.sift"`
+> is truthful and `from sfmtool.sift import extract_sift` resolves. No
+> intra-crate cross-references needed repathing (all moved files use
+> absolute `crate::`/`sfmtool_core::` paths). `image_dimensions`
+> (`py_image.rs`) stays flat — it is image inspection, not a SIFT or
+> analysis op. The `__init__.py` wildcard grew to nine lines. Remaining:
+> the `.patch` seam and the deliberate-re-export cleanup of that wildcard.
+> Commit (branch `claude/pyo3-analysis-sift-submodules`)._
 
 ### 5. First cut of #4: move the six `py_*_io.rs` into `crates/sfmtool-py/src/io/`
 

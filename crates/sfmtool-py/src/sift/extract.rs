@@ -296,3 +296,11 @@ pub fn extract_sift(
 
     Ok((positions, affine_shapes, desc_arr.into_pyarray(py).into()))
 }
+
+// ── Registration ──────────────────────────────────────────────────────────
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(detect_sift_keypoints, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_sift, m)?)?;
+    Ok(())
+}
