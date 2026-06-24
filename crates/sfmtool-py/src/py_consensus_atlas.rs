@@ -16,8 +16,8 @@ use sfmtool_core::spherical::consensus_atlas::{
 };
 use sfmtool_core::spherical::photometric_ransac::RansacPhotometricParams;
 
-use crate::py_per_spherical_tile_source_stack::parse_sources;
-use crate::py_spherical_tile_rig::PySphericalTileRig;
+use crate::spherical::tile_rig::PySphericalTileRig;
+use crate::spherical::tile_source_stack::parse_sources;
 
 fn err_to_py(e: ConsensusAtlasBatchError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("{e}"))

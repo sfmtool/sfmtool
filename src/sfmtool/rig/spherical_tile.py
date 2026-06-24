@@ -1,7 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""High-level helpers built on top of :class:`sfmtool._sfmtool.SphericalTileRig`.
+"""High-level helpers built on top of :class:`sfmtool._sfmtool.spherical.SphericalTileRig`.
 
 The Rust binding owns the per-tile warps, atlas packing, KD-tree NN, and the
 atlas → equirect resampler. This module wires those primitives into the
@@ -18,8 +18,8 @@ import numpy as np
 from sfmtool._sfmtool import (
     CameraIntrinsics,
     RotQuaternion,
-    SphericalTileRig,
 )
+from sfmtool._sfmtool.spherical import SphericalTileRig
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray

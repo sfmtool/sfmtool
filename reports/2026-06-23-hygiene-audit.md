@@ -198,6 +198,20 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 > `crate::flow::warp::…`. The remaining seams (`.geometry`, `.patch`,
 > `.spherical`) and the `__init__.py` wildcard still pending. Commit
 > (branch `claude/pyo3-flow-submodule`)._
+>
+> _Status (2026-06-24): Partially done — the `spherical` slice landed.
+> 3 entries (`evenly_distributed_sphere_points` + `SphericalTileRig` +
+> `PerSphericalTileSourceStack`) move to `spherical/{sphere_points,
+> tile_rig,tile_source_stack}.rs` and register on `_sfmtool.spherical`
+> via `helpers::install_submodule`. Both classes carry
+> `#[pyclass(module = "sfmtool.spherical")]`. Two intra-crate
+> cross-references (`py_consensus_atlas.rs`, `py_photometric_ransac.rs`)
+> repath to `crate::spherical::…`. The `__init__.py` wildcard grew to
+> five lines (`_sfmtool` + `.io` + `.matching` + `.flow` + `.spherical`)
+> — the audit's stated replace-with-deliberate-re-exports cleanup is
+> still deferred. The remaining seams (`.geometry`, `.patch`) and that
+> wildcard cleanup remain pending. Commit (branch
+> `claude/pyo3-spherical-submodule`)._
 
 ### 5. First cut of #4: move the six `py_*_io.rs` into `crates/sfmtool-py/src/io/`
 

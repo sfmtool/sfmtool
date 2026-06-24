@@ -5,6 +5,7 @@ from sfmtool._sfmtool import *  # noqa: F401, F403
 from sfmtool._sfmtool.io import *  # noqa: F401, F403
 from sfmtool._sfmtool.matching import *  # noqa: F401, F403
 from sfmtool._sfmtool.flow import *  # noqa: F401, F403
+from sfmtool._sfmtool.spherical import *  # noqa: F401, F403
 from sfmtool._filenames import (  # noqa: F401
     expand_paths,
     normalize_workspace_path,

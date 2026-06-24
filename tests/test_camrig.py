@@ -14,7 +14,6 @@ from sfmtool.camrig.resolver import (
     CamrigSolveError,
     resolve_camrig_for_solve,
 )
-from sfmtool._sfmtool import SphericalTileRig
 from sfmtool._sfmtool.io import (
     camrig_pattern_matches,
     read_camrig,
@@ -22,6 +21,7 @@ from sfmtool._sfmtool.io import (
     verify_camrig,
     write_camrig,
 )
+from sfmtool._sfmtool.spherical import SphericalTileRig
 from sfmtool.cli import main
 
 _IMAGE_DATA = Path(__file__).parent.parent / "test-data" / "images"

@@ -289,7 +289,7 @@ to the Click handler is a refactor, not a bug fix.
 
 ### specs/core/per-spherical-tile-source-stack.md
 **Summary:** Per-(tile, source) CSR-packed image-pyramid stack. Implemented.
-**Implementing code:** `spherical/per_tile_source_stack.rs`, `sfmtool-py/src/py_per_spherical_tile_source_stack.rs`.
+**Implementing code:** `spherical/per_tile_source_stack.rs`, `sfmtool-py/src/spherical/tile_source_stack.rs`.
 **Inconsistencies:** L4 Status cites `crates/sfmtool-core/src/per_spherical_tile_source_stack.rs` → `spherical/per_tile_source_stack.rs`.
 **Recommendation:** update spec — one-line path fix.
 
@@ -313,7 +313,7 @@ to the Click handler is a refactor, not a bug fix.
 
 ### specs/core/spherical-tiles-rig.md
 **Summary:** SphericalTileRig discretization. Status: Implemented.
-**Implementing code:** `spherical/tile_rig.rs`, `spherical/tile_rig/camrig.rs`, `spherical/sphere_points.rs`, `sfmtool-py/src/py_spherical_tile_rig.rs`.
+**Implementing code:** `spherical/tile_rig.rs`, `spherical/tile_rig/camrig.rs`, `spherical/sphere_points.rs`, `sfmtool-py/src/spherical/tile_rig.rs`.
 **Inconsistencies:** L4 Status and L69 cite `spherical_tile_rig.rs` and `sphere_points.rs` → `spherical/tile_rig.rs` and `spherical/sphere_points.rs`.
 **Recommendation:** update spec — repath.
 

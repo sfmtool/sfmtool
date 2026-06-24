@@ -34,7 +34,7 @@ fn camrig_err_to_py(e: CamRigConversionError) -> PyErr {
 /// Every tile has identical intrinsics (focal length, half-FOV, patch
 /// resolution); only the rotation differs per tile so the tiles look in
 /// different directions on the unit sphere around the rig centre.
-#[pyclass(name = "SphericalTileRig", module = "sfmtool")]
+#[pyclass(name = "SphericalTileRig", module = "sfmtool.spherical")]
 pub struct PySphericalTileRig {
     pub(crate) inner: SphericalTileRig,
 }
@@ -410,4 +410,9 @@ fn extract_atlas_f32(obj: &Bound<'_, pyo3::types::PyAny>) -> PyResult<(Vec<f32>,
     Err(pyo3::exceptions::PyTypeError::new_err(
         "atlas must be a 2D (HxW) or 3D (HxWxC) numpy float32 array",
     ))
+}
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PySphericalTileRig>()?;
+    Ok(())
 }

@@ -11,8 +11,8 @@ from sfmtool._sfmtool import (
     CameraIntrinsics,
     RotQuaternion,
     Se3Transform,
-    SphericalTileRig,
 )
+from sfmtool._sfmtool.spherical import SphericalTileRig
 
 
 def _equirect(width: int, height: int) -> CameraIntrinsics:

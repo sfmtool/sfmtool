@@ -366,10 +366,10 @@ pub(crate) fn extract_image_u8(obj: &Bound<'_, pyo3::types::PyAny>) -> PyResult<
     if let Ok(arr) = obj.extract::<numpy::PyReadonlyArray3<'_, u8>>() {
         let shape = arr.shape();
         let (h, w, c) = (shape[0] as u32, shape[1] as u32, shape[2] as u32);
-        if c != 1 && c != 3 && c != 4 {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "image must have 1, 3, or 4 channels",
-            ));
+        if !matches!(c, 1 | 3 | 4) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "image must have 1, 3, or 4 channels (got {c})"
+            )));
         }
         let data: Vec<u8> = match arr.as_slice() {
             Ok(s) => s.to_vec(),

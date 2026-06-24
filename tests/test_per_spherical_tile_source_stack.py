@@ -10,9 +10,11 @@ import pytest
 
 from sfmtool._sfmtool import (
     CameraIntrinsics,
-    PerSphericalTileSourceStack,
     RotQuaternion,
     SfmrReconstruction,
+)
+from sfmtool._sfmtool.spherical import (
+    PerSphericalTileSourceStack,
     SphericalTileRig,
 )
 
