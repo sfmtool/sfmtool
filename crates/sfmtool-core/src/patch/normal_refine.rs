@@ -319,7 +319,9 @@ pub(super) fn window_weights(window: PatchWindow, resolution: u32) -> Vec<f64> {
 /// Rebuild the patch on a new plane: same `center` / `half_extent`, the input
 /// `u_axis` reprojected onto the plane of `n` (`v = n × u`).
 pub(super) fn repose_patch(base: &OrientedPatch, n: &Vector3<f64>) -> OrientedPatch {
-    OrientedPatch::from_center_normal(base.center, *n, base.u_axis, base.half_extent)
+    let mut p = OrientedPatch::from_center_normal(base.center, *n, base.u_axis, base.half_extent);
+    p.w = base.w;
+    p
 }
 
 // ---------------------------------------------------------------------------
@@ -1421,6 +1423,13 @@ fn refine_patch_normal_impl(
         confidence: 0.0,
         representative: None,
     };
+
+    // A point at infinity has a fixed outward normal (`normalize(-d)`, set by its
+    // direction) — there is nothing to refine, and the finite-depth render path
+    // is invalid for it. Leave its frame untouched.
+    if patch.w == 0.0 {
+        return unrefined(0);
+    }
 
     // Degenerate points skip the search outright.
     if views.len() < params.min_views.max(2) as usize {

@@ -84,14 +84,18 @@ def track_views(recon) -> dict[int, set[int]]:
 
 
 def geometric_candidates(
-    recon, patch, point_xyz, rot, t, quats, cams, cam_idx
+    recon, patch, point_xyz, rot, t, quats, cams, cam_idx, w=1.0
 ) -> set[int]:
     """Image indices that geometrically see the surfel: point in front of the
     camera, patch front-facing, and the projection inside the frame — the same
-    gate the keypoint pipeline uses (see tests/test_patch_view_selection.py)."""
+    gate the keypoint pipeline uses (see tests/test_patch_view_selection.py).
+
+    For a point at infinity (`w == 0`) `point_xyz` is a direction `d`: the
+    camera-frame point is `R·d` with no translation (every ray to it is parallel
+    to `d`), and cheirality is `(R·d).z > 0`."""
     out = set()
     for i in range(recon.image_count):
-        x_cam = rot[i] @ point_xyz + t[i]
+        x_cam = rot[i] @ point_xyz + (t[i] if w != 0.0 else 0.0)
         if x_cam[2] <= 0:
             continue
         pose = RigidTransform.from_wxyz_translation(quats[i].tolist(), t[i].tolist())
@@ -145,6 +149,24 @@ def _draw_tile(tile, idx, score, color, kind, tile_px):
     return bgr
 
 
+def _infinity_first_sample(recon, ids, sample_size, rng):
+    """A point-id sample that includes ALL points at infinity plus random finite
+    points up to ``sample_size`` — guaranteeing infinity points reach row
+    selection even when they are a tiny fraction of the cloud. (The montage row
+    mix is balanced separately in ``render_strips``.)"""
+    is_inf = np.asarray(recon.point_is_at_infinity)
+    ids = [int(i) for i in np.asarray(ids).tolist()]
+    inf_ids = [i for i in ids if is_inf[i]]
+    fin_ids = [i for i in ids if not is_inf[i]]
+    k = max(0, min(sample_size, len(ids)) - len(inf_ids))
+    fin = (
+        sorted(int(x) for x in rng.choice(fin_ids, size=min(k, len(fin_ids)), replace=False))
+        if fin_ids and k
+        else []
+    )
+    return (inf_ids + fin)[:sample_size]
+
+
 def render_strips(recon, cloud, images, args) -> tuple[np.ndarray | None, dict]:
     """Build the montage canvas (or None if nothing to show) and a stats dict."""
     positions = np.asarray(recon.positions, dtype=np.float64)
@@ -158,9 +180,12 @@ def render_strips(recon, cloud, images, args) -> tuple[np.ndarray | None, dict]:
 
     ids = np.asarray(cloud.point_ids)
     rng = np.random.default_rng(args.seed)
-    sample = np.sort(
-        rng.choice(ids, size=min(args.sample, len(ids)), replace=False)
-    ).tolist()
+    if args.prioritize_infinity:
+        sample = _infinity_first_sample(recon, ids, args.sample, rng)
+    else:
+        sample = np.sort(
+            rng.choice(ids, size=min(args.sample, len(ids)), replace=False)
+        ).tolist()
     results = cloud.select_views(
         recon,
         images,
@@ -172,6 +197,14 @@ def render_strips(recon, cloud, images, args) -> tuple[np.ndarray | None, dict]:
     w = gauss_window(args.resolution)
 
     def patch_geo(patch_obj):
+        # Preserve the homogeneous weight: a point at infinity (w == 0) rebuilds
+        # as a tangent-sphere patch so WarpMap renders its direction corners.
+        if float(patch_obj.w) == 0.0:
+            return OrientedPatch.from_infinity_direction(
+                list(patch_obj.center),
+                list(patch_obj.u_axis),
+                list(patch_obj.half_extent),
+            )
         return OrientedPatch.from_center_normal(
             list(patch_obj.center),
             list(patch_obj.normal),
@@ -188,7 +221,15 @@ def render_strips(recon, cloud, images, args) -> tuple[np.ndarray | None, dict]:
         scores = {int(a): float(s) for a, s in zip(r["admitted"], r["scores"])}
         patch_obj = cloud[pid_to_patch[pid]]
         cand = geometric_candidates(
-            recon, patch_geo(patch_obj), positions[pid], rot, t, quats, cams, cam_idx
+            recon,
+            patch_geo(patch_obj),
+            positions[pid],
+            rot,
+            t,
+            quats,
+            cams,
+            cam_idx,
+            float(patch_obj.w),
         )
         track = tracks[pid]
         rows_info.append(
@@ -210,7 +251,20 @@ def render_strips(recon, cloud, images, args) -> tuple[np.ndarray | None, dict]:
     rest = [x for x in rows_info if not x["rejected"] and not x["expanded"]]
     for group in (with_rej, expanded_only, rest):
         rng.shuffle(group)
-    chosen = (with_rej + expanded_only + rest)[: args.rows]
+    ordered = with_rej + expanded_only + rest
+    if args.prioritize_infinity:
+        # Balance the montage: interleave infinity and finite rows (infinity
+        # leading each pair) so both kinds show even though the grouping above
+        # would otherwise bury the rare infinity points.
+        from itertools import zip_longest
+
+        is_inf = np.asarray(recon.point_is_at_infinity)
+        inf_rows = [x for x in ordered if is_inf[int(x["pid"])]]
+        fin_rows = [x for x in ordered if not is_inf[int(x["pid"])]]
+        ordered = [
+            x for pair in zip_longest(inf_rows, fin_rows) for x in pair if x is not None
+        ]
+    chosen = ordered[: args.rows]
 
     rej_scores_all = []
     rendered = []
@@ -371,6 +425,11 @@ def main(argv=None):
     )
     p.add_argument(
         "--rows", type=int, default=9, help="points (rows) to show per montage"
+    )
+    p.add_argument(
+        "--prioritize-infinity",
+        action="store_true",
+        help="order rows so points at infinity (w=0) lead the montage",
     )
     p.add_argument(
         "--sample", type=int, default=400, help="random points to evaluate per recon"

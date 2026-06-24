@@ -93,6 +93,15 @@ impl RigidTransform {
         let r = self.rotation.to_rotation_matrix();
         Point3::from(r * point.coords + self.translation)
     }
+
+    /// Apply the transform to a homogeneous point `(coords, w)`, computing
+    /// `R * coords + t * w`. With `w = 1` this matches [`Self::transform_point`];
+    /// with `w = 0` it rotates a direction without translating it (the correct
+    /// treatment for a point at infinity).
+    pub fn transform_point_homogeneous(&self, coords: Vector3<f64>, w: f64) -> Vector3<f64> {
+        let r = self.rotation.to_rotation_matrix();
+        r * coords + self.translation * w
+    }
 }
 
 impl Default for RigidTransform {

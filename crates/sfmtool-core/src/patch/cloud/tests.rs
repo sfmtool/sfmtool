@@ -147,13 +147,18 @@ fn feature_size_without_sift_is_an_error() {
             factor: 5.0,
             across: ViewReduce::Median,
         },
+        true,
     )
     .unwrap_err();
     assert!(matches!(err, PatchCloudError::MissingFeatureScale { .. }));
 
-    let cloud =
-        PatchCloud::from_reconstruction(&recon, PatchNormal::MeanViewing, PatchExtent::Fixed(0.1))
-            .expect("Fixed extent needs no sift files");
+    let cloud = PatchCloud::from_reconstruction(
+        &recon,
+        PatchNormal::MeanViewing,
+        PatchExtent::Fixed(0.1),
+        true,
+    )
+    .expect("Fixed extent needs no sift files");
     assert_eq!(cloud.len(), 12);
 }
 
@@ -169,4 +174,39 @@ fn from_patch_behind_camera_is_invalid() {
     );
     let wm = WarpMap::from_patch(&patch, &cam, &pose, 4);
     assert!(!wm.is_valid(0, 0));
+}
+
+#[test]
+fn from_patch_infinity_ignores_camera_translation() {
+    // A point at infinity in the +Z direction; its corners are directions, so
+    // its projection is translation-invariant (every viewing ray is parallel to
+    // d). Rendering it must rotate the corners without translating.
+    let cam = pinhole(500.0, 320.0, 240.0, 640, 480);
+    let patch = OrientedPatch::from_infinity_direction(
+        Point3::new(0.0, 0.0, 1.0),
+        Vector3::new(0.0, -1.0, 0.0),
+        [0.02, 0.02],
+    );
+    assert_eq!(patch.w, 0.0);
+    // Outward normal faces back toward the observers: normalize(-d).
+    assert!((patch.normal() - Vector3::new(0.0, 0.0, -1.0)).norm() < 1e-9);
+
+    let at_origin = RigidTransform::identity();
+    let translated = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [12.0, -7.0, 4.0]);
+    let a = WarpMap::from_patch(&patch, &cam, &at_origin, 6);
+    let b = WarpMap::from_patch(&patch, &cam, &translated, 6);
+    for row in 0..6 {
+        for col in 0..6 {
+            assert_eq!(a.is_valid(col, row), b.is_valid(col, row));
+            if a.is_valid(col, row) {
+                let (ax, ay) = a.get(col, row);
+                let (bx, by) = b.get(col, row);
+                assert!((ax - bx).abs() < 1e-3 && (ay - by).abs() < 1e-3);
+            }
+        }
+    }
+    // The patch is in view and lands near the principal point.
+    assert!(a.is_valid(3, 3));
+    let (px, py) = a.get(3, 3);
+    assert!((px - 320.0).abs() < 5.0 && (py - 240.0).abs() < 5.0);
 }

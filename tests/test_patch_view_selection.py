@@ -270,11 +270,16 @@ def test_select_views_admitted_points_are_in_front_of_camera(
 ):
     """B1 cheirality: no admitted view may have the point behind its camera, even
     on the wide-fisheye kerry_park rig where a behind-camera point can project
-    in-frame."""
+    in-frame.
+
+    This is the *finite*-point cheirality invariant (`R·X + t`.z > 0), so build a
+    finite-only cloud; a point at infinity has a different in-front test (`R·d`.z,
+    no translation) and is covered by the core tests.
+    """
     recon = SfmrReconstruction.load(kerry_park_workspace)
     images = _load_images(recon)
     cloud = PatchCloud.from_reconstruction(
-        recon, normal="mean_viewing", extent_value=5.0
+        recon, normal="mean_viewing", extent_value=5.0, exclude_points_at_infinity=True
     )
     positions = np.asarray(recon.positions, dtype=np.float64)
 
@@ -290,3 +295,36 @@ def test_select_views_admitted_points_are_in_front_of_camera(
                 f"point {pid} admitted into image {image_idx} but is behind that "
                 f"camera (depth {x_cam[2]})"
             )
+
+
+def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path):
+    """w == 0 cheirality: an admitted view of a point at infinity must look toward
+    its direction — `(R·d).z > 0`, with no translation (every ray to the point is
+    parallel to `d`). Complements the finite-point B1 test above, on the same
+    wide-fisheye rig (kerry_park carries points at infinity)."""
+    recon = SfmrReconstruction.load(kerry_park_workspace)
+    images = _load_images(recon)
+    # Default includes points at infinity.
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    is_inf = np.asarray(recon.point_is_at_infinity)
+    positions = np.asarray(recon.positions, dtype=np.float64)
+    rot = _rotation_matrices(recon)
+
+    inf_ids = [int(p) for p in np.asarray(cloud.point_ids) if is_inf[int(p)]]
+    assert inf_ids, "kerry_park should carry points at infinity"
+    results = cloud.select_views(recon, images, point_ids=inf_ids, resolution=12)
+
+    checked = 0
+    for r in results:
+        pid = int(r["point_id"])
+        d = positions[pid]  # unit direction for a w == 0 point
+        for image_idx in np.asarray(r["admitted"], dtype=np.int64).tolist():
+            z = float((rot[image_idx] @ d)[2])
+            assert z > 0, (
+                f"infinity point {pid} admitted into image {image_idx} but its "
+                f"direction points away from the camera (R·d).z = {z}"
+            )
+            checked += 1
+    assert checked > 0, "no admitted infinity views were checked"

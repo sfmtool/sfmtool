@@ -403,11 +403,19 @@ impl PySfmrReconstruction {
     fn patches(&self) -> Option<crate::py_patch_cloud::PyPatchCloud> {
         let u = self.inner.patch_u_halfvec_xyz.as_ref()?;
         let v = self.inner.patch_v_halfvec_xyz.as_ref()?;
-        // The patch center for each point is the point's own position.
+        // The patch center for each point is the point's own position (a
+        // direction for a point at infinity).
         let centers: Vec<Point3<f64>> = self.inner.points.iter().map(|p| p.position).collect();
-        Some(crate::py_patch_cloud::PyPatchCloud {
-            inner: sfmtool_core::patch::PatchCloud::from_halfvec_arrays(u, v, &centers),
-        })
+        let mut cloud = sfmtool_core::patch::PatchCloud::from_halfvec_arrays(u, v, &centers);
+        // from_halfvec_arrays builds every patch finite; mark the rows whose
+        // source point is at infinity so rendering treats their corners as
+        // directions.
+        for (patch, &pid) in cloud.patches.iter_mut().zip(cloud.point_ids.iter()) {
+            if self.inner.points[pid as usize].is_at_infinity() {
+                patch.w = 0.0;
+            }
+        }
+        Some(crate::py_patch_cloud::PyPatchCloud { inner: cloud })
     }
 
     /// The per-3D-point RGBA patch bitmaps as a ``(N, R, R, 4)`` uint8 array, or

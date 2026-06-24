@@ -57,30 +57,59 @@ A planar surface element (surfel) in world space.
 /// axis, so the patch covers the world points
 /// `center + s·half_extent[0]·u_axis + t·half_extent[1]·v_axis` for
 /// `(s, t) ∈ [-1, 1]²`.
+///
+/// `w` is the homogeneous weight of the anchor: `1.0` for a finite point
+/// (`center` is a Euclidean position) and `0.0` for a point at infinity
+/// (`center` is a direction `d`, the patch is tangent to the unit sphere around
+/// `d`, and the corners are themselves directions). Rendering and visibility
+/// branch on it.
 pub struct OrientedPatch {
     pub center: Point3<f64>,
     pub u_axis: Vector3<f64>,     // unit, in-plane
     pub v_axis: Vector3<f64>,     // unit, in-plane, ⟂ u_axis
-    pub half_extent: [f64; 2],    // world units, along (u, v)
+    pub half_extent: [f64; 2],    // world units (or angular at infinity), along (u, v)
+    pub w: f64,                   // 1.0 finite, 0.0 at infinity
 }
 
 impl OrientedPatch {
     /// Outward normal (`u_axis × v_axis`).
     pub fn normal(&self) -> Vector3<f64>;
 
-    /// World point for a normalized patch coordinate `(s, t) ∈ [-1, 1]²`.
+    /// World point for a normalized patch coordinate `(s, t) ∈ [-1, 1]²`
+    /// (Euclidean; meaningful for a finite patch only).
     pub fn to_world(&self, s: f64, t: f64) -> Point3<f64>;
 
-    /// Build from a center, a normal, and an `up_hint` used to pin the in-plane
-    /// rotation: `u_axis` is `up_hint` projected onto the plane (Gram-Schmidt)
-    /// and normalized, `v_axis = normal × u_axis`. `half_extent` may be a scalar
-    /// (square) or per-axis.
+    /// The patch corner for `(s, t)` as a homogeneous world point `(xyz, w)`:
+    /// `(center + s·u + t·v, w)`. Finite (`w = 1`) gives a Euclidean point; at
+    /// infinity (`w = 0`) `center` is a direction and the corner is again a
+    /// direction. This is what rendering projects (see `WarpMap::from_patch`).
+    pub fn corner_homogeneous(&self, s: f64, t: f64) -> (Vector3<f64>, f64);
+
+    /// Build a **finite** patch (`w = 1`) from a center, a normal, and an
+    /// `up_hint` used to pin the in-plane rotation: `u_axis` is `up_hint`
+    /// projected onto the plane (Gram-Schmidt) and normalized,
+    /// `v_axis = normal × u_axis`. `half_extent` may be a scalar (square) or
+    /// per-axis.
     pub fn from_center_normal(
         center: Point3<f64>,
         normal: Vector3<f64>,
         up_hint: Vector3<f64>,
         half_extent: [f64; 2],
     ) -> Self;
+
+    /// Build the tangent-sphere frame for a **point at infinity** (`w = 0`) with
+    /// direction `d`: outward normal `normalize(-d)`, `u, v ⊥ d`, in-plane
+    /// rotation pinned by `up_hint`. `center` stores `d`.
+    pub fn from_infinity_direction(
+        direction: Point3<f64>,
+        up_hint: Vector3<f64>,
+        half_extent: [f64; 2],
+    ) -> Self;
+
+    /// Whether `cam_from_world` looks at the front face. A point at infinity is
+    /// always front-facing (its normal `normalize(-d)` faces every observer;
+    /// cheirality is enforced by the projection).
+    pub fn is_front_facing(&self, cam_from_world: &RigidTransform) -> bool;
 }
 ```
 
@@ -109,27 +138,24 @@ impl PatchCloud {
     /// first observing camera, normal and half-size per the given policies.
     /// Errors with `PatchCloudError::MissingFeatureScale` under
     /// `PatchExtent::FeatureSize` when a point has no readable keypoint scale in
-    /// any view (no silent size fallback). Points at infinity are **excluded**
-    /// (see `append_infinity_frames`).
+    /// any view (no silent size fallback).
+    ///
+    /// When `exclude_points_at_infinity` is `false` (the binding default — every
+    /// patch operation handles infinity patches), each point at infinity also gets
+    /// a tangent-sphere frame (`w = 0`) around its direction `d` — outward normal
+    /// `normalize(-d)`, `u, v ⊥ d`, with an angular half-size from the
+    /// distance-free form of `extent` (`FeatureSize`/`PixelRadius`: `σ_i/f_i` /
+    /// `radius_px/f_i` reduced across views; `Fixed`/`RelativeToSpacing`: their
+    /// scalar as the tangent magnitude). Pass `true` to emit finite points only —
+    /// needed by an operation that scatters per-point results back and must leave
+    /// infinity points untouched (normal refinement's normal write-back), or that
+    /// wants the historical finite-only behavior (e.g. the strips viz).
     pub fn from_reconstruction(
         recon: &SfmrReconstruction,
         normal: PatchNormal,
         extent: PatchExtent,
+        exclude_points_at_infinity: bool,
     ) -> Result<Self, PatchCloudError>;
-
-    /// Append one patch per **point at infinity** (`w = 0`): a frame tangent to
-    /// the unit sphere around the point's direction `d` (`u, v ⊥ d`, outward
-    /// normal `normalize(-d)` — the normal is fixed by the direction, not free),
-    /// the counterpart to `from_reconstruction`'s finite patches. The angular
-    /// half-size follows `extent` (`FeatureSize`/`PixelRadius` use the
-    /// distance-free angular form `σ_i/f_i` / `radius_px/f_i`; `Fixed`/
-    /// `RelativeToSpacing` reuse their scalar as the tangent magnitude). Same
-    /// `MissingFeatureScale` error contract under `FeatureSize`.
-    pub fn append_infinity_frames(
-        &mut self,
-        recon: &SfmrReconstruction,
-        extent: PatchExtent,
-    ) -> Result<(), PatchCloudError>;
 }
 
 /// How to choose each patch's surface normal.
@@ -181,23 +207,34 @@ pub enum ViewReduce { Min, Max, Median, Mean }
 `SfmrReconstruction` exposes `positions`, `normals`, cameras and poses, so
 `from_reconstruction` is the bridge from a solved model to a patch cloud.
 
-> **Incomplete: points at infinity across patch operations.** Today only
-> `append_infinity_frames` (reached via `SfmrReconstruction::to_embedded_patches`,
-> the baseline sift→patch conversion) builds patches for points at infinity;
-> `from_reconstruction` and everything downstream of it are finite-only. The
-> intended end-state is:
-> - **Normal refinement leaves infinity-point frames untouched.** A point at
->   infinity has a *fixed* outward normal (`normalize(-d)`, set by its direction),
->   so there is nothing to refine — the refiner should skip these patches and
->   pass their frames through unchanged (it must not rotate them).
-> - **The other patch operations should process them appropriately.** View
->   selection, keypoint localization, and patch rendering should handle the
->   angular sphere-tangent patch of a point at infinity (its corners are
->   homogeneous directions, per
->   [sfmr-file-format.md](../formats/sfmr-file-format.md)) rather than excluding
->   it — so an `embedded_patches` reconstruction with points at infinity is a
->   first-class input. Until that lands, callers that need finite-only behavior
->   keep using `from_reconstruction` alone.
+**Points at infinity across patch operations.** `from_reconstruction` builds the
+tangent-sphere frame for points at infinity when asked
+(`exclude_points_at_infinity = false`), and every patch operation handles them per
+its nature — a `w = 0` patch is first-class throughout:
+- **Rendering.** `WarpMap::from_patch` projects each homogeneous corner
+  ([`OrientedPatch::corner_homogeneous`]) — a finite corner translates and
+  projects normally, a direction (`w = 0`) rotates without translating, then
+  projects as a ray — so an infinity patch renders correctly (its projection is
+  translation-invariant). The `recon.patches` getter re-flags the reloaded
+  infinity rows (`w = 0`) so this survives a save/load round-trip.
+- **Normal refinement leaves infinity-point frames untouched.** A point at
+  infinity has a *fixed* outward normal (`normalize(-d)`), so there is nothing to
+  refine: `refine_patch_normal` skips `w = 0` patches and returns them unchanged.
+- **View selection** handles them: the cheirality gate (`is_in_front`) and
+  front-facing test use the homogeneous direction (a `w = 0` patch is always
+  front-facing; cheirality is `R·d` forward), and vetting renders through the
+  homogeneous `WarpMap` path.
+- **Keypoint localization** handles them: `project`, the grazing pre-filter,
+  `render_context`, and `seed_offset` all branch on `w`. For `w = 0` the keypoint
+  is the projection of the direction, the seed→offset inversion is angular
+  (`a = (ray·û)/(ray·d)`), and re-centring shifts the direction within its tangent
+  frame.
+- **Included by default.** Since every operation handles them, the binding
+  defaults `exclude_points_at_infinity = false`, so a cloud built from a
+  reconstruction carries its points at infinity. Operations that are finite by
+  nature opt out with `exclude_points_at_infinity = true`: **normal refinement**
+  (its normal write-back scatters per-point results back and must leave the
+  `(0, 0, 0)` normal of an infinity point untouched) and the **strips viz**.
 
 ### Serialization
 
@@ -209,7 +246,10 @@ A `PatchCloud` round-trips to the per-point patch frame in the `.sfmr`
 `point_ids`, folding each unit axis and half-extent into one vector and leaving
 zero rows elsewhere; `from_halfvec_arrays` takes the points' positions as
 `centers`, keeps the present rows (non-zero `u`), and recovers their point
-indices.
+indices. The half-vector arrays don't encode the homogeneous weight (it lives in
+the points' `w`), so `from_halfvec_arrays` builds every patch finite (`w = 1`);
+the `recon.patches` getter, which knows each point's `w`, marks the infinity rows
+(`w = 0`) afterward.
 
 The two arrays (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) and the optional
 `patch_bitmaps_y_x_rgba` are stored on `SfmrData`/`SfmrReconstruction` as plain

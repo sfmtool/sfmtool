@@ -510,6 +510,30 @@ fn recovers_fronto_parallel_normal_from_tilted_init() {
 }
 
 #[test]
+fn refine_leaves_points_at_infinity_untouched() {
+    // A point at infinity has a fixed outward normal (`normalize(-d)`); the
+    // refiner must skip it and return its frame byte-for-byte unchanged, even
+    // when given enough views that a finite patch would be refined.
+    let scene = Scene::new(&[[0.8, 0.0, 0.0], [-0.8, 0.0, 0.0], [0.0, 0.7, 0.0]]);
+    let views = scene.views();
+    let patch = OrientedPatch::from_infinity_direction(
+        Point3::new(0.0, 0.0, 1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.02, 0.02],
+    );
+    let params = test_params(Objective::MeanPairwise);
+
+    let result = refine_patch_normal(&patch, &views, 16, &params);
+
+    assert_eq!(result.patch.w, 0.0);
+    assert_eq!(result.patch.center, patch.center);
+    assert_eq!(result.patch.u_axis, patch.u_axis);
+    assert_eq!(result.patch.v_axis, patch.v_axis);
+    assert_eq!(result.patch.half_extent, patch.half_extent);
+    assert_eq!(result.valid_view_count, 0);
+}
+
+#[test]
 fn representative_is_none_unless_requested() {
     let scene = Scene::new(&[[0.8, 0.0, 0.0], [-0.8, 0.0, 0.0], [0.0, 0.7, 0.0]]);
     let views = scene.views();

@@ -269,11 +269,15 @@ impl WarpMap {
     ///
     /// The destination is the patch's canonical `(s, t) ∈ [-1, 1]²` grid (pixel
     /// centers at `(col + 0.5, row + 0.5)`). Each entry is the source-image
-    /// `(x, y)` where that patch pixel projects: the patch point is mapped to the
-    /// camera frame via `cam_from_world` and projected with `ray_to_pixel`, so
-    /// all camera models (including distortion / fisheye) are handled. Pixels are
-    /// `(NaN, NaN)` when behind the camera, outside the model domain, or outside
-    /// the image bounds — matching the other constructors.
+    /// `(x, y)` where that patch pixel projects: each homogeneous corner
+    /// ([`OrientedPatch::corner_homogeneous`]) is mapped to the camera frame via
+    /// `cam_from_world` and projected with `ray_to_pixel`, so all camera models
+    /// (including distortion / fisheye) are handled. This works for a finite
+    /// patch (`w = 1`, a planar surfel) and a point at infinity (`w = 0`, a
+    /// region of the sphere of directions — the corner is a direction, rotated
+    /// without translation, then projected as a ray). Pixels are `(NaN, NaN)`
+    /// when behind the camera, outside the model domain, or outside the image
+    /// bounds — matching the other constructors.
     ///
     /// Generalizes [`Self::from_cameras_with_pose`] from a fronto-parallel depth
     /// plane to an arbitrary oriented plane. See `specs/core/patch-cloud.md`.
@@ -293,8 +297,12 @@ impl WarpMap {
             let t = (row as f64 + 0.5) * step - 1.0;
             for col in 0..r {
                 let s = (col as f64 + 0.5) * step - 1.0;
-                let world = patch.to_world(s, t);
-                let p_cam = cam_from_world.transform_point(&world);
+                // Homogeneous corner: a finite patch (w = 1) yields a Euclidean
+                // point transformed by R·x + t; a point at infinity (w = 0)
+                // yields a direction, rotated only (no translation), then
+                // projected as a ray.
+                let (xyz, w) = patch.corner_homogeneous(s, t);
+                let p_cam = cam_from_world.transform_point_homogeneous(xyz, w);
                 let (sx, sy) = match camera.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z]) {
                     Some((px, py)) if px >= 0.0 && py >= 0.0 && px < src_w && py < src_h => {
                         (px, py)

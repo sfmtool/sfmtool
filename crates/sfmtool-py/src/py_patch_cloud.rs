@@ -80,6 +80,28 @@ impl PyOrientedPatch {
         }
     }
 
+    /// Build the tangent-sphere frame for a **point at infinity** with direction
+    /// ``direction`` (``w == 0``): outward normal ``normalize(-direction)``,
+    /// ``u, v`` perpendicular to the direction, the in-plane rotation pinned by
+    /// ``up_hint``. ``center`` stores the direction itself. Pair with
+    /// :meth:`WarpMap.from_patch`, which projects the (direction-valued) corners
+    /// without applying the camera translation.
+    #[staticmethod]
+    #[pyo3(signature = (direction, up_hint, half_extent))]
+    fn from_infinity_direction(
+        direction: [f64; 3],
+        up_hint: [f64; 3],
+        half_extent: [f64; 2],
+    ) -> Self {
+        Self {
+            inner: OrientedPatch::from_infinity_direction(
+                Point3::new(direction[0], direction[1], direction[2]),
+                Vector3::new(up_hint[0], up_hint[1], up_hint[2]),
+                half_extent,
+            ),
+        }
+    }
+
     #[getter]
     fn center(&self) -> [f64; 3] {
         let c = self.inner.center;
@@ -101,6 +123,14 @@ impl PyOrientedPatch {
     #[getter]
     fn half_extent(&self) -> [f64; 2] {
         self.inner.half_extent
+    }
+
+    /// Homogeneous weight of the anchor: ``1.0`` for a finite patch (``center``
+    /// is a position), ``0.0`` for a point at infinity (``center`` is a direction
+    /// and the patch is tangent to the unit sphere).
+    #[getter]
+    fn w(&self) -> f64 {
+        self.inner.w
     }
 
     /// Outward normal (``u_axis × v_axis``).
@@ -215,12 +245,19 @@ impl PyPatchCloud {
     ///         (default), ``"max"``, ``"median"``, or ``"mean"``.
     ///     feature_reduce: For ``"feature_size"``, the view reduce (default
     ///         ``"median"``).
+    ///     exclude_points_at_infinity: When ``False`` (default), each point at
+    ///         infinity also gets a tangent-sphere frame (``w = 0``) around its
+    ///         direction; every patch operation handles these. Pass ``True`` to
+    ///         emit patches for finite points only (e.g. an operation that scatters
+    ///         per-point results back and must leave infinity points untouched).
     #[staticmethod]
     #[pyo3(signature = (
         recon, normal="stored", k_neighbors=12,
         extent="feature_size", extent_value=5.0,
-        pixel_reduce="min", feature_reduce="median"
+        pixel_reduce="min", feature_reduce="median",
+        exclude_points_at_infinity=false
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn from_reconstruction(
         recon: &PySfmrReconstruction,
         normal: &str,
@@ -229,6 +266,7 @@ impl PyPatchCloud {
         extent_value: f64,
         pixel_reduce: &str,
         feature_reduce: &str,
+        exclude_points_at_infinity: bool,
     ) -> PyResult<Self> {
         let normal = match normal {
             "stored" => PatchNormal::Stored,
@@ -258,8 +296,13 @@ impl PyPatchCloud {
                 )))
             }
         };
-        let inner = PatchCloud::from_reconstruction(&recon.inner, normal, extent)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let inner = PatchCloud::from_reconstruction(
+            &recon.inner,
+            normal,
+            extent,
+            exclude_points_at_infinity,
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
 

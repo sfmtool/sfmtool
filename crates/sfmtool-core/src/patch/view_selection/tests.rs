@@ -58,6 +58,33 @@ fn render_plane_view(center: [f64; 3], tex: fn(f64, f64) -> f64) -> ImageU8 {
     ImageU8::new(IMG_W, IMG_H, 1, data)
 }
 
+/// Direction-only texture for a point at infinity (function of the ray direction
+/// `(dx, dy)`); the `30·` factor gives spatial frequency over the angular patch.
+fn dir_texture(dx: f64, dy: f64) -> f64 {
+    texture(dx * 30.0, dy * 30.0)
+}
+
+/// A different directional surface (an infinity view showing this disagrees).
+fn dir_occluder(dx: f64, dy: f64) -> f64 {
+    occluder_texture(dx * 30.0, dy * 30.0)
+}
+
+/// Synthesize what an identity-rotation pinhole sees of a point at infinity in
+/// the `+z` direction: each pixel's value is `tex` of its ray direction,
+/// independent of camera position (no parallax).
+fn render_infinity_view(tex: fn(f64, f64) -> f64) -> ImageU8 {
+    let (cx, cy) = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
+    let mut data = Vec::with_capacity((IMG_W * IMG_H) as usize);
+    for row in 0..IMG_H {
+        for col in 0..IMG_W {
+            let dx = (col as f64 + 0.5 - cx) / FOCAL;
+            let dy = (row as f64 + 0.5 - cy) / FOCAL;
+            data.push(tex(dx, dy).clamp(0.0, 255.0).round() as u8);
+        }
+    }
+    ImageU8::new(IMG_W, IMG_H, 1, data)
+}
+
 struct Scene {
     cams: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
@@ -77,6 +104,24 @@ impl Scene {
             .iter()
             .zip(texs)
             .map(|(c, tex)| ImageU8Pyramid::build(&render_plane_view(*c, *tex), 5))
+            .collect();
+        Self { cams, poses, pyrs }
+    }
+
+    /// Identity-rotation cameras at `centers`, each viewing a direction-only
+    /// texture for a point at infinity (`+z`); camera translation is irrelevant
+    /// (no parallax), so views differ only by their `tex` function.
+    fn infinity(centers: &[[f64; 3]], texs: &[fn(f64, f64) -> f64]) -> Self {
+        let cams = centers.iter().map(|_| pinhole()).collect();
+        let poses = centers
+            .iter()
+            .map(|c| {
+                RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [-c[0], -c[1], -c[2]])
+            })
+            .collect();
+        let pyrs = texs
+            .iter()
+            .map(|&tex| ImageU8Pyramid::build(&render_infinity_view(tex), 5))
             .collect();
         Self { cams, poses, pyrs }
     }
@@ -102,6 +147,15 @@ fn plane_patch() -> OrientedPatch {
         Vector3::new(0.0, 0.0, -1.0),
         Vector3::new(0.0, 1.0, 0.0),
         [0.4, 0.4],
+    )
+}
+
+/// Tangent-sphere patch for a point at infinity in the `+z` direction.
+fn infinity_patch() -> OrientedPatch {
+    OrientedPatch::from_infinity_direction(
+        Point3::new(0.0, 0.0, 1.0),
+        Vector3::new(0.0, -1.0, 0.0),
+        [0.05, 0.05],
     )
 }
 
@@ -253,6 +307,45 @@ fn admits_agreeing_views_keeps_track_rejects_disagreeing() {
         sel.scores[pos]
     );
     assert_eq!(sel.admitted.len(), sel.scores.len());
+}
+
+#[test]
+fn infinity_point_admits_agreeing_views() {
+    // A point at infinity (+z) seen by identity-rotation cameras at different
+    // positions: appearance is direction-only (no parallax), so the track and an
+    // agreeing candidate are admitted while a candidate showing a different
+    // directional surface is rejected. Exercises the w == 0 cheirality gate
+    // (is_in_front) and rendering an infinity patch through the vetting path.
+    let centers = [
+        [0.0, 0.0, 0.0], // 0 track
+        [6.0, 0.0, 0.0], // 1 track (far translation, same content)
+        [0.0, 5.0, 0.0], // 2 agreeing candidate
+        [2.0, 2.0, 3.0], // 3 disagreeing candidate
+    ];
+    let texs: Vec<fn(f64, f64) -> f64> = vec![dir_texture, dir_texture, dir_texture, dir_occluder];
+    let scene = Scene::infinity(&centers, &texs);
+    let views = scene.views();
+    let patch = infinity_patch();
+    let track = vec![0u32, 1];
+
+    let sel = select_patch_views(&patch, &views, &track, &params());
+
+    assert_eq!(&sel.admitted[..2], &[0, 1], "track views come first");
+    assert!(
+        sel.admitted.contains(&2),
+        "agreeing infinity candidate should be admitted: {:?}",
+        sel.admitted
+    );
+    assert!(
+        !sel.admitted.contains(&3),
+        "disagreeing infinity candidate should be rejected: {:?}",
+        sel.admitted
+    );
+    assert!(
+        sel.self_agreement > 0.8,
+        "infinity track self-agreement should be high, got {}",
+        sel.self_agreement
+    );
 }
 
 #[test]

@@ -27,13 +27,13 @@ impl SfmrReconstruction {
     /// **without photometric adaptation**, returning a new reconstruction (the
     /// input is unchanged).
     ///
-    /// - **Patch frame:** each point gets a `(u, v)` half-vector frame built from
-    ///   `normal` (e.g. [`PatchNormal::MeanViewing`]) and `extent`, with no normal
-    ///   refinement. Finite points get a planar surfel frame
-    ///   ([`PatchCloud::from_reconstruction`]); points at infinity get a
-    ///   tangent-sphere frame around their direction `d` (`u, v ⊥ d`, normal
-    ///   `normalize(-d)`) via [`PatchCloud::append_infinity_frames`], so **every**
-    ///   point carries a real frame and the point set is preserved.
+    /// - **Patch frame:** each point gets a `(u, v)` half-vector frame from
+    ///   [`PatchCloud::from_reconstruction`] (with `exclude_points_at_infinity =
+    ///   false`) built from `normal` (e.g. [`PatchNormal::MeanViewing`]) and
+    ///   `extent`, with no normal refinement. Finite points get a planar surfel
+    ///   frame; points at infinity get a tangent-sphere frame around their
+    ///   direction `d` (`u, v ⊥ d`, normal `normalize(-d)`), so **every** point
+    ///   carries a real frame and the point set is preserved.
     /// - **Keypoints:** each observation's inline `keypoints_xy` is copied
     ///   verbatim from its `.sift` feature (`sift.positions_xy[feature_index]`),
     ///   so the 2D coordinate is exactly the original SIFT detection.
@@ -67,17 +67,12 @@ impl SfmrReconstruction {
         };
 
         // Patch frames from the chosen normal/extent policy — no refinement.
-        // `from_reconstruction` covers the finite points; `append_infinity_frames`
-        // adds the tangent-sphere frame for each point at infinity, so every point
-        // ends up with a real (non-zero) frame.
-        let mut cloud = PatchCloud::from_reconstruction(self, normal, extent).map_err(|e| {
+        // Build frames for every point: finite surfels plus the tangent-sphere
+        // frames for points at infinity (exclude_points_at_infinity = false), so
+        // every point ends up with a real (non-zero) frame.
+        let cloud = PatchCloud::from_reconstruction(self, normal, extent, false).map_err(|e| {
             ReconstructionError::Unsupported(format!(
                 "to_embedded_patches: building patch frames failed: {e}"
-            ))
-        })?;
-        cloud.append_infinity_frames(self, extent).map_err(|e| {
-            ReconstructionError::Unsupported(format!(
-                "to_embedded_patches: building infinity patch frames failed: {e}"
             ))
         })?;
         let (patch_u, patch_v) = cloud.to_halfvec_arrays(self.points.len());
