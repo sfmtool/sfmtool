@@ -16,7 +16,7 @@ import numpy as np
 import pycolmap
 
 from ._geometric_filter import GeometricFilterConfig
-from .._sfmtool import (
+from .._sfmtool.matching import (
     match_one_way_sweep_py as _rust_match_one_way_sweep,
     match_one_way_sweep_geometric_py as _rust_match_one_way_sweep_geometric,
     mutual_best_match_sweep_py as _rust_mutual_best_match_sweep,

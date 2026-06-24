@@ -1,14 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python bindings for the background-floor track-cluster matcher.
-//!
-//! Exposes [`sfmtool_core::features::cluster_match`] as two functions:
-//! `background_floor_clusters` materializes the track clusters (the primary
-//! artefact) from a concatenated descriptor corpus, and
-//! `clusters_to_pair_matches` expands those clusters into the per-image-pair
-//! match arrays the `.matches` pipeline consumes. See
-//! `specs/core/track-cluster-matching.md`.
+//! Python bindings for the background-floor track-cluster matcher (see
+//! `specs/core/track-cluster-matching.md`).
 
 use std::borrow::Cow;
 
@@ -243,4 +237,10 @@ pub fn clusters_to_pair_matches(
         match_feature_indexes.into_any().unbind(),
         match_descriptor_distances.into_any().unbind(),
     ))
+}
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(background_floor_clusters, m)?)?;
+    m.add_function(wrap_pyfunction!(clusters_to_pair_matches, m)?)?;
+    Ok(())
 }

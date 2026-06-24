@@ -243,3 +243,9 @@ pub fn match_image_pairs_batch_py(
         ))
     })
 }
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(match_image_pair_py, m)?)?;
+    m.add_function(wrap_pyfunction!(match_image_pairs_batch_py, m)?)?;
+    Ok(())
+}

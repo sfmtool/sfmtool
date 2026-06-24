@@ -325,7 +325,7 @@ to the Click handler is a refactor, not a bug fix.
 
 ### specs/core/track-cluster-matching.md
 **Summary:** Background-floor track-cluster matcher. Status: "production form done".
-**Implementing code:** `features/cluster_match/`, `sfmtool-py/src/py_cluster_match.rs`, `src/sfmtool/feature_match/_cluster_matching.py`, CLI `sfm match --cluster`.
+**Implementing code:** `features/cluster_match/`, `sfmtool-py/src/matching/cluster.rs`, `src/sfmtool/feature_match/_cluster_matching.py`, CLI `sfm match --cluster`.
 **Inconsistencies:** L395, L475, L669 cite `cluster_match/` → `features/cluster_match/`. L179 references `kdforest/` → `features/kdforest/`.
 **Recommendation:** update spec — repath.
 

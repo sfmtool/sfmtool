@@ -387,3 +387,13 @@ pub fn polar_mutual_best_match_geometric_py(
         &config,
     ))
 }
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(match_one_way_sweep_py, m)?)?;
+    m.add_function(wrap_pyfunction!(match_one_way_sweep_geometric_py, m)?)?;
+    m.add_function(wrap_pyfunction!(mutual_best_match_sweep_py, m)?)?;
+    m.add_function(wrap_pyfunction!(polar_mutual_best_match_py, m)?)?;
+    m.add_function(wrap_pyfunction!(mutual_best_match_sweep_geometric_py, m)?)?;
+    m.add_function(wrap_pyfunction!(polar_mutual_best_match_geometric_py, m)?)?;
+    Ok(())
+}
