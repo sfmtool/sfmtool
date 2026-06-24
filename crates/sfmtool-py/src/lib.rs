@@ -6,15 +6,16 @@
 //! Exposes file I/O (`.sfmr`, `.sift`, and COLMAP formats), geometric types,
 //! feature matching, alignment, optical flow, and GUI viewer to Python via PyO3.
 //!
-//! Geometric value types, file-format I/O, feature matching, optical flow,
-//! spatial indices, and spherical-rig bindings each live on their own PyO3
-//! submodule (`_sfmtool.geometry`, `_sfmtool.io`, `_sfmtool.matching`,
+//! Geometric value types, file-format I/O, SIFT extraction, feature matching,
+//! reconstruction analysis, optical flow, spatial indices, and spherical-rig
+//! bindings each live on their own PyO3 submodule (`_sfmtool.geometry`,
+//! `_sfmtool.io`, `_sfmtool.sift`, `_sfmtool.matching`, `_sfmtool.analysis`,
 //! `_sfmtool.flow`, `_sfmtool.spatial`, `_sfmtool.spherical`); their
-//! `__name__` reads as `sfmtool.geometry` / `sfmtool.io` / `sfmtool.matching`
-//! / `sfmtool.flow` / `sfmtool.spatial` / `sfmtool.spherical` so binding
-//! objects report the public location in tracebacks, IPython, and Sphinx.
-//! Everything else is registered flat on `_sfmtool` for now (see hygiene
-//! audit #4 for the rest).
+//! `__name__` reads as `sfmtool.geometry` / `sfmtool.io` / `sfmtool.sift` /
+//! `sfmtool.matching` / `sfmtool.analysis` / `sfmtool.flow` /
+//! `sfmtool.spatial` / `sfmtool.spherical` so binding objects report the
+//! public location in tracebacks, IPython, and Sphinx. Everything else is
+//! registered flat on `_sfmtool` for now (see hygiene audit #4 for the rest).
 //!
 //! # Example
 //!
@@ -69,7 +70,7 @@ mod py_image;
 
 mod matching;
 
-mod py_sift;
+mod sift;
 
 // ── Image warping ────────────────────────────────────────────────────────
 
@@ -82,12 +83,9 @@ mod flow;
 
 // ── Analysis & algorithms ─────────────────────────────────────────────────
 
-mod py_analysis;
+mod analysis;
 mod py_consensus_atlas;
-mod py_epipolar;
-mod py_image_pair_graph;
 mod py_photometric_ransac;
-mod py_triangulation;
 pub use py_photometric_ransac::PyRansacPhotometricOutput;
 
 // ── Spatial indices (KD-trees, kd-tree forest) ───────────────────────────
@@ -127,9 +125,8 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // File-format I/O: `.sfmr`, `.sift`, `.matches`, `.camrig`, COLMAP binary + db.
     helpers::install_submodule(m, "sfmtool.io", io::register)?;
 
-    // sfmtool SIFT detection / extraction
-    m.add_function(wrap_pyfunction!(py_sift::detect_sift_keypoints, m)?)?;
-    m.add_function(wrap_pyfunction!(py_sift::extract_sift, m)?)?;
+    // sfmtool SIFT detection / extraction.
+    helpers::install_submodule(m, "sfmtool.sift", sift::register)?;
 
     // Image inspection
     m.add_function(wrap_pyfunction!(py_image::image_dimensions, m)?)?;
@@ -137,47 +134,9 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Feature matching: descriptor + image-pair + sweep + cluster.
     helpers::install_submodule(m, "sfmtool.matching", matching::register)?;
 
-    // SE3 transform acceleration
-    m.add_function(wrap_pyfunction!(
-        py_analysis::apply_se3_to_camera_poses_py,
-        m
-    )?)?;
-
-    // Viewing angle analysis
-    m.add_function(wrap_pyfunction!(py_analysis::compute_narrow_track_mask, m)?)?;
-
-    // Batch triangulation
-    m.add_function(wrap_pyfunction!(py_triangulation::triangulate_batch, m)?)?;
-
-    // Alignment (Kabsch + RANSAC)
-    m.add_function(wrap_pyfunction!(py_analysis::kabsch_algorithm_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(py_analysis::ransac_alignment_rs, m)?)?;
-
-    // Point correspondence
-    m.add_function(wrap_pyfunction!(
-        py_analysis::find_point_correspondences_py,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        py_analysis::merge_points_and_tracks_py,
-        m
-    )?)?;
-
-    // Track filtering
-    m.add_function(wrap_pyfunction!(
-        py_analysis::filter_tracks_by_point_mask_py,
-        m
-    )?)?;
-
-    // Image pair graph
-    m.add_function(wrap_pyfunction!(
-        py_image_pair_graph::build_covisibility_pairs_py,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        py_image_pair_graph::build_frustum_intersection_pairs_py,
-        m
-    )?)?;
+    // Reconstruction analysis: pose/track ops, alignment, correspondence,
+    // triangulation, epipolar curves, image-pair graphs.
+    helpers::install_submodule(m, "sfmtool.analysis", analysis::register)?;
 
     // Optical flow + warp maps.
     helpers::install_submodule(m, "sfmtool.flow", flow::register)?;
@@ -187,9 +146,6 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Spherical: tile rigs + per-tile source stacks + sphere-point generation.
     helpers::install_submodule(m, "sfmtool.spherical", spherical::register)?;
-
-    // Epipolar curves (distortion-aware epipolar lines)
-    m.add_function(wrap_pyfunction!(py_epipolar::epipolar_curves_py, m)?)?;
 
     // Types
     m.add_class::<PySfmrReconstruction>()?;

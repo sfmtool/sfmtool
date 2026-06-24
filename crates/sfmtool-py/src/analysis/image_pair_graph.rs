@@ -99,3 +99,11 @@ pub fn build_frustum_intersection_pairs_py(
         seed,
     ))
 }
+
+// ── Registration ──────────────────────────────────────────────────────────
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(build_covisibility_pairs_py, m)?)?;
+    m.add_function(wrap_pyfunction!(build_frustum_intersection_pairs_py, m)?)?;
+    Ok(())
+}

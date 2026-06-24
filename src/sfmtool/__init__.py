@@ -4,7 +4,9 @@
 from sfmtool._sfmtool import *  # noqa: F401, F403
 from sfmtool._sfmtool.geometry import *  # noqa: F401, F403
 from sfmtool._sfmtool.io import *  # noqa: F401, F403
+from sfmtool._sfmtool.sift import *  # noqa: F401, F403
 from sfmtool._sfmtool.matching import *  # noqa: F401, F403
+from sfmtool._sfmtool.analysis import *  # noqa: F401, F403
 from sfmtool._sfmtool.flow import *  # noqa: F401, F403
 from sfmtool._sfmtool.spatial import *  # noqa: F401, F403
 from sfmtool._sfmtool.spherical import *  # noqa: F401, F403

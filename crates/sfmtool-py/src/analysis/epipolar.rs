@@ -96,3 +96,10 @@ pub fn epipolar_curves_py(
         })
         .collect())
 }
+
+// ── Registration ──────────────────────────────────────────────────────────
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(epipolar_curves_py, m)?)?;
+    Ok(())
+}

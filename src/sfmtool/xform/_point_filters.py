@@ -76,7 +76,7 @@ class RemoveNarrowTracksFilter:
             f"  Computing viewing angles for {recon.point_count} points across {recon.image_count} images..."
         )
 
-        from .._sfmtool import compute_narrow_track_mask
+        from .._sfmtool.analysis import compute_narrow_track_mask
 
         # The narrow-track mask scores each point from its own observation
         # rays; for a point at infinity the stored position is a direction, so

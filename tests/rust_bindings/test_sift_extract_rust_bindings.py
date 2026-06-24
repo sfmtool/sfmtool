@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import detect_sift_keypoints, extract_sift
+from sfmtool._sfmtool.sift import detect_sift_keypoints, extract_sift
 
 
 def _noise_image(n: int = 224, seed: int = 0) -> np.ndarray:
