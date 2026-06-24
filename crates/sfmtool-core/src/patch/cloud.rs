@@ -431,6 +431,160 @@ impl PatchCloud {
         }
         PatchCloud { patches, point_ids }
     }
+
+    /// Append a tangent-sphere patch for each of the reconstruction's points at
+    /// infinity (`w = 0`), the counterpart to [`Self::from_reconstruction`],
+    /// which emits finite points only.
+    ///
+    /// Per the `.sfmr` format's infinity-patch convention (see
+    /// `specs/formats/sfmr-file-format.md`, "Per-point patch frame"): a point at
+    /// infinity with direction `d` gets a frame tangent to the unit sphere around
+    /// `d` — `u` and `v` are `⊥ d` and `u × v` points along `-d`, so the implied
+    /// normal `normalize(u × v)` is `normalize(-d)` (every viewing ray to the
+    /// point is parallel to `d`, so the visible side faces back toward the
+    /// observers). The in-plane rotation is pinned by the first observing
+    /// camera's up, matching the finite path.
+    ///
+    /// The angular half-size (the tangent vectors' magnitude) follows `extent`:
+    /// [`PatchExtent::FeatureSize`] and [`PatchExtent::PixelRadius`] have a
+    /// natural distance-free angular form (`σ_i / f_i` and `radius_px / f_i` per
+    /// view, reduced across views — the finite formulas with the ray distance
+    /// dropped), while [`PatchExtent::Fixed`] and [`PatchExtent::RelativeToSpacing`]
+    /// reuse their world half-size as the tangent magnitude (there is no ray
+    /// distance at infinity to convert it through).
+    ///
+    /// Each patch's `point_ids` entry is its source point index, so
+    /// [`Self::to_halfvec_arrays`] scatters it into that point's row. Errors with
+    /// [`PatchCloudError::MissingFeatureScale`] under [`PatchExtent::FeatureSize`]
+    /// if a point has no readable keypoint scale in any view.
+    pub fn append_infinity_frames(
+        &mut self,
+        recon: &SfmrReconstruction,
+        extent: PatchExtent,
+    ) -> Result<(), PatchCloudError> {
+        let infinity: Vec<usize> = (0..recon.points.len())
+            .filter(|&i| recon.points[i].is_at_infinity())
+            .collect();
+        if infinity.is_empty() {
+            return Ok(());
+        }
+
+        // FeatureSize sizes from the observing keypoints' scales.
+        let img_scales: Vec<Option<Vec<f64>>> = if matches!(extent, PatchExtent::FeatureSize { .. })
+        {
+            (0..recon.images.len())
+                .map(|i| read_image_scales(recon, i))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let feature_indexes = recon.feature_indexes();
+
+        // RelativeToSpacing: factor × the finite cloud's median NN spacing, reused
+        // as the tangent magnitude (no ray distance at infinity to scale by).
+        let spacing_half = if let PatchExtent::RelativeToSpacing(factor) = extent {
+            median_finite_spacing(recon) * factor
+        } else {
+            0.0
+        };
+
+        self.patches.reserve(infinity.len());
+        self.point_ids.reserve(infinity.len());
+        for &p in &infinity {
+            let dir = recon.points[p].position;
+            let start = recon.observation_offsets[p];
+            let obs = &recon.tracks[start..recon.observation_offsets[p + 1]];
+
+            let half = match extent {
+                PatchExtent::Fixed(w) => w,
+                PatchExtent::RelativeToSpacing(_) => spacing_half,
+                PatchExtent::PixelRadius { radius_px, across } => {
+                    if obs.is_empty() {
+                        radius_px
+                    } else {
+                        let mut angles: Vec<f64> = obs
+                            .iter()
+                            .map(|o| {
+                                let im = &recon.images[o.image_index as usize];
+                                let (fx, _) =
+                                    recon.cameras[im.camera_index as usize].focal_lengths();
+                                radius_px / fx
+                            })
+                            .collect();
+                        reduce(&mut angles, across)
+                    }
+                }
+                PatchExtent::FeatureSize { factor, across } => {
+                    let mut angles: Vec<f64> = Vec::new();
+                    for (k, o) in obs.iter().enumerate() {
+                        let im = &recon.images[o.image_index as usize];
+                        let Some(fidx) = feature_indexes.map(|f| f[start + k]) else {
+                            continue;
+                        };
+                        if let Some(Some(scales)) = img_scales.get(o.image_index as usize) {
+                            if let Some(&sigma) = scales.get(fidx as usize) {
+                                let (fx, _) =
+                                    recon.cameras[im.camera_index as usize].focal_lengths();
+                                angles.push(sigma / fx);
+                            }
+                        }
+                    }
+                    if angles.is_empty() {
+                        return Err(PatchCloudError::MissingFeatureScale { point_id: p as u32 });
+                    }
+                    factor * reduce(&mut angles, across)
+                }
+            };
+
+            // Implied normal `normalize(-d)`; the in-plane rotation follows the
+            // first observing camera's up (as in the finite path). `center` is the
+            // direction itself and is unused by `to_halfvec_arrays`.
+            let up = match obs.first() {
+                Some(o0) => {
+                    recon.images[o0.image_index as usize]
+                        .quaternion_wxyz
+                        .inverse()
+                        * Vector3::new(0.0, -1.0, 0.0)
+                }
+                None => Vector3::y(),
+            };
+            self.patches.push(OrientedPatch::from_center_normal(
+                dir,
+                -dir.coords,
+                up,
+                [half, half],
+            ));
+            self.point_ids.push(p as u32);
+        }
+        Ok(())
+    }
+}
+
+/// Median nearest-neighbor spacing of the reconstruction's finite points (`1.0`
+/// if there are fewer than two finite points).
+fn median_finite_spacing(recon: &SfmrReconstruction) -> f64 {
+    let finite: Vec<usize> = (0..recon.points.len())
+        .filter(|&i| !recon.points[i].is_at_infinity())
+        .collect();
+    if finite.len() < 2 {
+        return 1.0;
+    }
+    let mut flat = Vec::with_capacity(finite.len() * 3);
+    for &i in &finite {
+        let p = recon.points[i].position;
+        flat.extend_from_slice(&[p.x, p.y, p.z]);
+    }
+    let cloud = PointCloud::<f64, 3>::new(&flat, finite.len());
+    let mut d: Vec<f64> = cloud
+        .nearest_neighbor_distances()
+        .into_iter()
+        .filter(|x| x.is_finite())
+        .collect();
+    if d.is_empty() {
+        return 1.0;
+    }
+    d.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    d[d.len() / 2]
 }
 
 /// How to choose each patch's surface normal in [`PatchCloud::from_reconstruction`].

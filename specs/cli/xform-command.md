@@ -273,6 +273,37 @@ full parameter list and semantics.
 --bundle-adjust --refine-normals
 ```
 
+### Representation
+
+#### `--to-embedded-patches [<params>]`
+
+Converts a `sift_files` reconstruction into an `embedded_patches` one
+([sfmr-file-format.md](../formats/sfmr-file-format.md), "Observation source")
+**without any photometric adaptation**: each point gets a `(u, v)` patch frame
+from the mean viewing direction (no normal refinement), each observation's inline
+`keypoints_xy` is copied verbatim from its `.sift` feature, and each image's
+`image_file_hashes` entry is read from the `.sift` metadata
+(`image_file_xxh128` — a minimal metadata read). The point count, positions,
+poses, and cameras are unchanged; the keypoints are exactly the original SIFT
+detections. It runs none of the photometric steps of the
+[sift→patch pipeline](../core/sift-to-patch-reconstruction.md) (normal refinement
++ view selection + keypoint localization).
+
+It reads the `.sift` files (keypoints, image hashes, and the default
+`extent=feature_size` patch sizing), so they must still be present where the
+reconstruction was created. After this op the reconstruction is
+`embedded_patches`, so any later `.sift`-dependent operation in the same chain
+will fail. The optional value is a comma-separated `key=value` string
+(`normal`, `extent`, `extent_value`, `feature_reduce`, `pixel_reduce`,
+`k_neighbors`); with no value it runs the defaults (`normal=mean_viewing`,
+`extent=feature_size`).
+
+```bash
+--to-embedded-patches
+--to-embedded-patches normal=mean_viewing,extent=feature_size,extent_value=10
+--to-embedded-patches extent=fixed,extent_value=1.0
+```
+
 ### Scaling to Physical Units
 
 #### `--scale-by-measurements <measurements.yaml>`

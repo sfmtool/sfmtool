@@ -109,12 +109,27 @@ impl PatchCloud {
     /// first observing camera, normal and half-size per the given policies.
     /// Errors with `PatchCloudError::MissingFeatureScale` under
     /// `PatchExtent::FeatureSize` when a point has no readable keypoint scale in
-    /// any view (no silent size fallback).
+    /// any view (no silent size fallback). Points at infinity are **excluded**
+    /// (see `append_infinity_frames`).
     pub fn from_reconstruction(
         recon: &SfmrReconstruction,
         normal: PatchNormal,
         extent: PatchExtent,
     ) -> Result<Self, PatchCloudError>;
+
+    /// Append one patch per **point at infinity** (`w = 0`): a frame tangent to
+    /// the unit sphere around the point's direction `d` (`u, v ⊥ d`, outward
+    /// normal `normalize(-d)` — the normal is fixed by the direction, not free),
+    /// the counterpart to `from_reconstruction`'s finite patches. The angular
+    /// half-size follows `extent` (`FeatureSize`/`PixelRadius` use the
+    /// distance-free angular form `σ_i/f_i` / `radius_px/f_i`; `Fixed`/
+    /// `RelativeToSpacing` reuse their scalar as the tangent magnitude). Same
+    /// `MissingFeatureScale` error contract under `FeatureSize`.
+    pub fn append_infinity_frames(
+        &mut self,
+        recon: &SfmrReconstruction,
+        extent: PatchExtent,
+    ) -> Result<(), PatchCloudError>;
 }
 
 /// How to choose each patch's surface normal.
@@ -165,6 +180,24 @@ pub enum ViewReduce { Min, Max, Median, Mean }
 
 `SfmrReconstruction` exposes `positions`, `normals`, cameras and poses, so
 `from_reconstruction` is the bridge from a solved model to a patch cloud.
+
+> **Incomplete: points at infinity across patch operations.** Today only
+> `append_infinity_frames` (reached via `SfmrReconstruction::to_embedded_patches`,
+> the baseline sift→patch conversion) builds patches for points at infinity;
+> `from_reconstruction` and everything downstream of it are finite-only. The
+> intended end-state is:
+> - **Normal refinement leaves infinity-point frames untouched.** A point at
+>   infinity has a *fixed* outward normal (`normalize(-d)`, set by its direction),
+>   so there is nothing to refine — the refiner should skip these patches and
+>   pass their frames through unchanged (it must not rotate them).
+> - **The other patch operations should process them appropriately.** View
+>   selection, keypoint localization, and patch rendering should handle the
+>   angular sphere-tangent patch of a point at infinity (its corners are
+>   homogeneous directions, per
+>   [sfmr-file-format.md](../formats/sfmr-file-format.md)) rather than excluding
+>   it — so an `embedded_patches` reconstruction with points at infinity is a
+>   first-class input. Until that lands, callers that need finite-only behavior
+>   keep using `from_reconstruction` alone.
 
 ### Serialization
 

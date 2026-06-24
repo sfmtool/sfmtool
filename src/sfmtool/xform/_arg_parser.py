@@ -41,6 +41,7 @@ from . import (
     ScaleTransform,
     SelectByDistributionFilter,
     SwitchCameraModelTransform,
+    ToEmbeddedPatchesTransform,
     TranslateTransform,
 )
 
@@ -164,6 +165,63 @@ def parse_refine_normals_params(param: str) -> RefineNormalsTransform:
                 )
 
     return RefineNormalsTransform(**kwargs)
+
+
+# Each --to-embedded-patches key maps to a caster; the transform constructor owns
+# range/enum validation. Keys mirror the ToEmbeddedPatchesTransform parameters.
+_TO_EMBEDDED_PATCHES_KEYS: dict[str, Callable[[str], object]] = {
+    "normal": str,
+    "k_neighbors": int,
+    "extent": str,
+    "extent_value": float,
+    "feature_reduce": str,
+    "pixel_reduce": str,
+}
+
+
+def parse_to_embedded_patches_params(param: str) -> ToEmbeddedPatchesTransform:
+    """Parse a ``--to-embedded-patches`` comma-separated ``key=value`` string.
+
+    An empty string runs the defaults. Unknown keys, malformed tokens, and
+    unparseable values raise ``click.UsageError``; range/enum validation is the
+    transform constructor's job.
+    """
+    kwargs: dict = {}
+    for token in param.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            raise click.UsageError(
+                f"Invalid --to-embedded-patches token '{token}': expected key=value"
+            )
+        key, value = token.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            raise click.UsageError(
+                f"Invalid --to-embedded-patches token '{token}': empty key"
+            )
+        if key not in _TO_EMBEDDED_PATCHES_KEYS:
+            raise click.UsageError(
+                f"Unknown --to-embedded-patches key '{key}' "
+                f"(expected one of: {', '.join(sorted(_TO_EMBEDDED_PATCHES_KEYS))})"
+            )
+        if key in kwargs:
+            raise click.UsageError(f"Duplicate --to-embedded-patches key '{key}'")
+        caster = _TO_EMBEDDED_PATCHES_KEYS[key]
+        if caster is str:
+            kwargs[key] = value
+        else:
+            try:
+                kwargs[key] = caster(value)
+            except ValueError:
+                raise click.UsageError(
+                    f"Invalid value for --to-embedded-patches key '{key}': "
+                    f"'{value}' is not a valid {caster.__name__}"
+                )
+
+    return ToEmbeddedPatchesTransform(**kwargs)
 
 
 def auto_output_path(input_path: Path) -> Path:
@@ -292,6 +350,21 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
                 transforms.append(parse_refine_normals_params(param))
             except ValueError as e:
                 raise click.UsageError(f"Invalid --refine-normals parameter: {e}")
+
+        elif arg == "--to-embedded-patches" or arg.startswith("--to-embedded-patches="):
+            # Optional value, same tokenization as --refine-normals.
+            if arg.startswith("--to-embedded-patches="):
+                param = arg[len("--to-embedded-patches=") :]
+            elif i + 1 < len(args) and not args[i + 1].startswith("-"):
+                i += 1
+                param = args[i]
+            else:
+                param = ""
+
+            try:
+                transforms.append(parse_to_embedded_patches_params(param))
+            except ValueError as e:
+                raise click.UsageError(f"Invalid --to-embedded-patches parameter: {e}")
 
         elif arg == "--remove-narrow-tracks":
             if i + 1 >= len(args):
