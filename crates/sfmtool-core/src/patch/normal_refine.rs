@@ -18,6 +18,7 @@ use crate::camera::CameraIntrinsics;
 use crate::camera::WarpMap;
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::{mean_viewing_normal, OrientedPatch, PatchCloud};
+use crate::patch::keypoint_localize;
 use crate::reconstruction::SfmrReconstruction;
 
 mod fronto_cache;
@@ -324,6 +325,38 @@ pub(super) fn repose_patch(base: &OrientedPatch, n: &Vector3<f64>) -> OrientedPa
     p
 }
 
+/// The patch to render into `view`: when `keypoint` is given, recenter `patch`
+/// in-plane so it projects at that keypoint (falling back to `patch` if the ray
+/// is degenerate); otherwise `patch` unchanged.
+///
+/// Borrows `patch` in the no-keypoint hot path (and on a degenerate ray), so a
+/// refinement without keypoints allocates nothing extra. With a keypoint, the
+/// `wpp` factors cancel in the `seed_offset → shifted_center` round trip, so they
+/// are passed as `1.0`.
+///
+// TODO(perf): the keypoint's world ray in `seed_offset` is invariant across
+// candidate normals (only the ray∩plane intersection depends on the plane), but
+// it is recomputed every candidate/level here. If keypoint-anchored refine ever
+// becomes hot, precompute the per-view world ray once per refine call.
+fn view_render_patch<'a>(
+    patch: &'a OrientedPatch,
+    view: &ProjectedImage<'_>,
+    keypoint: Option<[f64; 2]>,
+) -> std::borrow::Cow<'a, OrientedPatch> {
+    use std::borrow::Cow;
+    let Some(kp) = keypoint else {
+        return Cow::Borrowed(patch);
+    };
+    let Some([au, av]) = keypoint_localize::seed_offset(patch, view, kp, 1.0, 1.0) else {
+        return Cow::Borrowed(patch);
+    };
+    let center = keypoint_localize::shifted_center(patch, au, av, 1.0, 1.0);
+    let mut shifted =
+        OrientedPatch::from_center_normal(center, patch.normal(), patch.u_axis, patch.half_extent);
+    shifted.w = patch.w;
+    Cow::Owned(shifted)
+}
+
 // ---------------------------------------------------------------------------
 // Validity / common support
 // ---------------------------------------------------------------------------
@@ -341,15 +374,19 @@ pub(super) struct LevelContext {
     pub(super) weights: Vec<f64>,
 }
 
-/// Per-pixel validity of `patch` in `view` (window support only).
+/// Per-pixel validity of `patch` in `view` (window support only). When
+/// `keypoint` is given, the patch is recentered in-plane so the mask matches
+/// where pixels are actually sampled (the keypoint-anchored render).
 fn view_valid_mask(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
     resolution: u32,
     w_full: &[f64],
+    keypoint: Option<[f64; 2]>,
 ) -> Vec<bool> {
+    let patch = view_render_patch(patch, view, keypoint);
     let map = prof::MASK
-        .time(|| WarpMap::from_patch(patch, view.camera, view.cam_from_world, resolution));
+        .time(|| WarpMap::from_patch(&patch, view.camera, view.cam_from_world, resolution));
     let r = resolution;
     let mut mask = vec![false; (r as usize) * (r as usize)];
     for row in 0..r {
@@ -374,6 +411,7 @@ pub(super) fn build_level_context(
     resolution: u32,
     w_full: &[f64],
     params: &NormalRefineParams,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
 ) -> Option<LevelContext> {
     let patch = repose_patch(base, center_n);
     let support_mass: f64 = w_full.iter().filter(|&&w| w > 0.0).sum();
@@ -388,7 +426,13 @@ pub(super) fn build_level_context(
         if !patch.is_front_facing(view.cam_from_world) {
             continue;
         }
-        let mask = view_valid_mask(&patch, view, resolution, w_full);
+        let mask = view_valid_mask(
+            &patch,
+            view,
+            resolution,
+            w_full,
+            view_keypoints.and_then(|k| k[i]),
+        );
         let mass: f64 = mask
             .iter()
             .zip(w_full)
@@ -440,6 +484,7 @@ pub(super) fn normalized_stack(
     views: &[ProjectedImage<'_>],
     resolution: u32,
     sampler: Sampler,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
 ) -> Option<(Vec<f32>, usize)> {
     let n_views = ctx.kept.len();
     let channels = ctx
@@ -460,8 +505,9 @@ pub(super) fn normalized_stack(
     let mut raw = vec![0f32; n_views * channels * n];
     for (vk, &vi) in ctx.kept.iter().enumerate() {
         let view = &views[vi];
+        let rpatch = view_render_patch(patch, view, view_keypoints.and_then(|k| k[vi]));
         let mut map = prof::WARP
-            .time(|| WarpMap::from_patch(patch, view.camera, view.cam_from_world, resolution));
+            .time(|| WarpMap::from_patch(&rpatch, view.camera, view.cam_from_world, resolution));
         // Reject a candidate that pushes any frozen-support pixel out of frame in
         // any kept view: such a pixel renders as 0 (zero-fill on a NaN warp), and
         // several views going black at the same pixels fake cross-view agreement,
@@ -1096,6 +1142,7 @@ fn consensus_phi_with_weights(
 /// scoring with `objective` (the search path passes a possibly-cheaper
 /// objective than `params.objective`; the final / confidence passes pass
 /// `params.objective`).
+#[allow(clippy::too_many_arguments)]
 fn eval_phi(
     base: &OrientedPatch,
     n: &Vector3<f64>,
@@ -1104,10 +1151,18 @@ fn eval_phi(
     resolution: u32,
     params: &NormalRefineParams,
     objective: Objective,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
 ) -> Option<f64> {
     prof::count(&prof::N_EVAL, 1);
     let patch = repose_patch(base, n);
-    let (raw, channels) = normalized_stack(&patch, ctx, views, resolution, params.sampler)?;
+    let (raw, channels) = normalized_stack(
+        &patch,
+        ctx,
+        views,
+        resolution,
+        params.sampler,
+        view_keypoints,
+    )?;
     let n = ctx.pixels.len();
     let total_w: f64 = ctx.weights.iter().sum();
     if total_w <= 0.0 {
@@ -1140,6 +1195,7 @@ fn eval_phi(
 /// (`‖δ‖ ≤ range`), recenters on the best candidate, and shrinks the cone to
 /// one previous grid spacing. Returns the seed's winning normal, or `None`
 /// when nothing could be evaluated from this seed.
+#[allow(clippy::too_many_arguments)]
 fn coarse_to_fine(
     base: &OrientedPatch,
     seed: Vector3<f64>,
@@ -1147,6 +1203,7 @@ fn coarse_to_fine(
     resolution: u32,
     w_full: &[f64],
     params: &NormalRefineParams,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
 ) -> Option<Vector3<f64>> {
     // At least 3 grid samples per axis: with 2 the only nonzero candidates land
     // on the disk corners and are clamped away, leaving the center as the sole
@@ -1171,6 +1228,7 @@ fn coarse_to_fine(
                 resolution,
                 params.cache_supersample,
                 params,
+                view_keypoints,
             )
         }),
         CacheMode::Off => None,
@@ -1179,8 +1237,15 @@ fn coarse_to_fine(
     let mut scratch = fronto_cache::Scratch::default();
 
     for _ in 0..params.refine_levels.max(1) {
-        let Some(ctx) = build_level_context(base, &center, views, resolution, w_full, params)
-        else {
+        let Some(ctx) = build_level_context(
+            base,
+            &center,
+            views,
+            resolution,
+            w_full,
+            params,
+            view_keypoints,
+        ) else {
             break;
         };
         let (u, v) = tangent_basis(&center);
@@ -1223,7 +1288,16 @@ fn coarse_to_fine(
                     &mut scratch,
                     search_obj,
                 ),
-                None => eval_phi(base, n, &ctx, views, resolution, params, search_obj),
+                None => eval_phi(
+                    base,
+                    n,
+                    &ctx,
+                    views,
+                    resolution,
+                    params,
+                    search_obj,
+                    view_keypoints,
+                ),
             }
         };
         let mut best_n = center;
@@ -1267,6 +1341,7 @@ fn coarse_to_fine(
 /// init and every winner are scored over the same pixel set. Winners that are
 /// back-facing in a kept view are discarded. Returns the context and the
 /// surviving winners.
+#[allow(clippy::too_many_arguments)]
 fn build_final_context(
     base: &OrientedPatch,
     init_n: &Vector3<f64>,
@@ -1275,8 +1350,17 @@ fn build_final_context(
     resolution: u32,
     w_full: &[f64],
     params: &NormalRefineParams,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
 ) -> Option<(LevelContext, Vec<Vector3<f64>>)> {
-    let mut ctx = build_level_context(base, init_n, views, resolution, w_full, params)?;
+    let mut ctx = build_level_context(
+        base,
+        init_n,
+        views,
+        resolution,
+        w_full,
+        params,
+        view_keypoints,
+    )?;
     let mut survivors = Vec::new();
     for n in winners {
         let patch = repose_patch(base, n);
@@ -1292,7 +1376,15 @@ fn build_final_context(
         let masks: Vec<Vec<bool>> = ctx
             .kept
             .iter()
-            .map(|&i| view_valid_mask(&patch, &views[i], resolution, w_full))
+            .map(|&i| {
+                view_valid_mask(
+                    &patch,
+                    &views[i],
+                    resolution,
+                    w_full,
+                    view_keypoints.and_then(|k| k[i]),
+                )
+            })
             .collect();
         for (k, &p) in ctx.pixels.iter().enumerate() {
             if masks.iter().all(|m| m[p]) {
@@ -1322,6 +1414,7 @@ fn build_final_context(
 /// (`H̃ = Σ wᵢ JᵢᵀJᵢ − J̄ᵀJ̄`) is the fast-follow; this grid estimate is
 /// GN-free and captures the same degeneracy because `Φ` itself is genuinely
 /// flat there.
+#[allow(clippy::too_many_arguments)]
 fn grid_confidence(
     base: &OrientedPatch,
     n: &Vector3<f64>,
@@ -1330,6 +1423,7 @@ fn grid_confidence(
     resolution: u32,
     params: &NormalRefineParams,
     h: f64,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
 ) -> f64 {
     let (u, v) = tangent_basis(n);
     let phi = |a: f64, b: f64| -> Option<f64> {
@@ -1341,6 +1435,7 @@ fn grid_confidence(
             resolution,
             params,
             params.objective,
+            view_keypoints,
         )
     };
     let stencil = [
@@ -1396,13 +1491,19 @@ fn grid_confidence(
 /// Not idempotent by design: feeding a refined normal back in can improve it
 /// further (each pass re-seeds and re-explores), so running to convergence is the
 /// thorough setting — this is intentional, not a fixed-point operation.
+/// `view_keypoints`, when given, is parallel to `views` (one entry per view, by
+/// the view's index): `Some([x, y])` positions that view's patch at the given
+/// source-image keypoint instead of the reprojected point center, `None` leaves
+/// it centered. Passing `None` for the whole slice (or `view_keypoints = None`)
+/// is byte-for-byte the no-keypoint behavior.
 pub fn refine_patch_normal(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     resolution: u32,
     params: &NormalRefineParams,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
 ) -> NormalRefineResult {
-    prof::TOTAL.time(|| refine_patch_normal_impl(patch, views, resolution, params))
+    prof::TOTAL.time(|| refine_patch_normal_impl(patch, views, resolution, params, view_keypoints))
 }
 
 fn refine_patch_normal_impl(
@@ -1410,10 +1511,23 @@ fn refine_patch_normal_impl(
     views: &[ProjectedImage<'_>],
     resolution: u32,
     params: &NormalRefineParams,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
 ) -> NormalRefineResult {
     let resolution = resolution.max(2);
+    if let Some(kps) = view_keypoints {
+        debug_assert_eq!(
+            kps.len(),
+            views.len(),
+            "view_keypoints must be parallel to views"
+        );
+    }
     let init_n = patch.normal();
     let w_full = window_weights(params.window, resolution);
+    // The fronto cache is keypoint-aware: `prerender` renders each view's base at
+    // its keypoint-anchored center and `eval_phi` recenters candidates to match
+    // (the offset is held at the seed normal — a second-order approximation inside
+    // the cache's resampling budget), so keypoints use the same `params.cache`
+    // (no special-casing in coarse_to_fine).
 
     let unrefined = |valid_view_count: u32| NormalRefineResult {
         patch: patch.clone(),
@@ -1451,15 +1565,30 @@ fn refine_patch_normal_impl(
     // Stage 1: coarse-to-fine grid per seed; keep each seed's winner.
     let mut winners: Vec<Vector3<f64>> = Vec::new();
     for seed in &seeds {
-        if let Some(n) = coarse_to_fine(patch, *seed, views, resolution, &w_full, params) {
+        if let Some(n) = coarse_to_fine(
+            patch,
+            *seed,
+            views,
+            resolution,
+            &w_full,
+            params,
+            view_keypoints,
+        ) {
             winners.push(n);
         }
     }
 
     // Final pass: one frozen support for the init and all winners.
-    let Some((ctx, survivors)) =
-        build_final_context(patch, &init_n, &winners, views, resolution, &w_full, params)
-    else {
+    let Some((ctx, survivors)) = build_final_context(
+        patch,
+        &init_n,
+        &winners,
+        views,
+        resolution,
+        &w_full,
+        params,
+        view_keypoints,
+    ) else {
         return unrefined(0);
     };
     let valid_view_count = ctx.kept.len() as u32;
@@ -1481,11 +1610,21 @@ fn refine_patch_normal_impl(
                 &ctx.kept,
                 resolution,
                 params.sampler,
+                view_keypoints,
             );
             let (phi, weights) = stack.score(&ctx, params)?;
             Some((phi, Some((weights, stack))))
         } else {
-            let phi = eval_phi(patch, n, &ctx, views, resolution, params, params.objective)?;
+            let phi = eval_phi(
+                patch,
+                n,
+                &ctx,
+                views,
+                resolution,
+                params,
+                params.objective,
+                view_keypoints,
+            )?;
             Some((phi, None))
         }
     };
@@ -1521,8 +1660,18 @@ fn refine_patch_normal_impl(
         let h = (params.angular_range_deg.to_radians()
             * shrink.powi(params.refine_levels.max(1) as i32))
         .clamp(0.2f64.to_radians(), 5.0f64.to_radians());
-        prof::CONFIDENCE
-            .time(|| grid_confidence(patch, &best_n, &ctx, views, resolution, params, h))
+        prof::CONFIDENCE.time(|| {
+            grid_confidence(
+                patch,
+                &best_n,
+                &ctx,
+                views,
+                resolution,
+                params,
+                h,
+                view_keypoints,
+            )
+        })
     } else {
         f64::NAN
     };
@@ -1610,6 +1759,7 @@ impl PatchViewStack {
         kept: &[usize],
         resolution: u32,
         sampler: Sampler,
+        view_keypoints: Option<&[Option<[f64; 2]>]>,
     ) -> Self {
         let r = resolution as usize;
         let npix = r * r;
@@ -1625,8 +1775,10 @@ impl PatchViewStack {
         let mut valid = Vec::with_capacity(kept.len());
         for &vi in kept {
             let view = &views[vi];
-            let mut map = prof::WARP
-                .time(|| WarpMap::from_patch(patch, view.camera, view.cam_from_world, resolution));
+            let rpatch = view_render_patch(patch, view, view_keypoints.and_then(|k| k[vi]));
+            let mut map = prof::WARP.time(|| {
+                WarpMap::from_patch(&rpatch, view.camera, view.cam_from_world, resolution)
+            });
             let mut vmask = vec![false; npix];
             for row in 0..resolution {
                 for col in 0..resolution {
@@ -1782,21 +1934,36 @@ impl PatchViewStack {
 /// [`view_indices_from_reconstruction`]). Each patch is replaced with
 /// its refined copy; the per-patch results are returned in order.
 ///
+/// `patch_view_keypoints`, when given, is parallel to the cloud (one entry per
+/// patch); entry `i` is parallel to `patch_views[i]` (one `Option<[x, y]>` per
+/// view in that patch's view list, in the same order). `Some([x, y])` positions
+/// that view's patch at the keypoint; `None` leaves it at the point center.
+/// Passing `None` is byte-for-byte the no-keypoint behavior.
+///
 /// # Panics
 ///
-/// Panics if `patch_views.len() != cloud.len()` or an index is out of range.
+/// Panics if `patch_views.len() != cloud.len()` (or `patch_view_keypoints` is
+/// given and not parallel to the cloud) or an index is out of range.
 pub fn refine_patch_cloud(
     cloud: &mut PatchCloud,
     views: &[ProjectedImage<'_>],
     patch_views: &[Vec<u32>],
     resolution: u32,
     params: &NormalRefineParams,
+    patch_view_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
 ) -> Vec<NormalRefineResult> {
     assert_eq!(
         patch_views.len(),
         cloud.len(),
         "patch_views must be parallel to the cloud"
     );
+    if let Some(kps) = patch_view_keypoints {
+        assert_eq!(
+            kps.len(),
+            cloud.len(),
+            "patch_view_keypoints must be parallel to the cloud"
+        );
+    }
     if prof::enabled() {
         prof::reset();
     }
@@ -1804,10 +1971,12 @@ pub fn refine_patch_cloud(
     let results: Vec<NormalRefineResult> = cloud
         .patches
         .par_iter()
+        .enumerate()
         .zip(patch_views.par_iter())
-        .map(|(patch, vidx)| {
+        .map(|((i, patch), vidx)| {
             let pv: Vec<ProjectedImage<'_>> = vidx.iter().map(|&i| views[i as usize]).collect();
-            refine_patch_normal(patch, &pv, resolution, params)
+            let kps = patch_view_keypoints.map(|k| k[i].as_slice());
+            refine_patch_normal(patch, &pv, resolution, params, kps)
         })
         .collect();
     if prof::enabled() {

@@ -307,7 +307,7 @@ fn bench_refine(crit: &mut Criterion) {
             ..NormalRefineParams::default()
         };
         group.bench_function(BenchmarkId::new(name, 16), |b| {
-            b.iter(|| black_box(refine_patch_normal(&patch, &views, 16, &params)))
+            b.iter(|| black_box(refine_patch_normal(&patch, &views, 16, &params, None)))
         });
     }
     group.finish();

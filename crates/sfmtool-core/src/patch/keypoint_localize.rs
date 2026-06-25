@@ -160,7 +160,13 @@ fn project(view: &ProjectedImage<'_>, p: &Point3<f64>, w: f64) -> Option<(f64, f
 
 /// The patch centre re-anchored on the plane by an in-plane offset `(au, av)` in
 /// patch-grid px: `X_p + au·wpp_u·û + av·wpp_v·v̂`.
-fn shifted_center(patch: &OrientedPatch, au: f64, av: f64, wpp_u: f64, wpp_v: f64) -> Point3<f64> {
+pub(super) fn shifted_center(
+    patch: &OrientedPatch,
+    au: f64,
+    av: f64,
+    wpp_u: f64,
+    wpp_v: f64,
+) -> Point3<f64> {
     patch.center + patch.u_axis * (au * wpp_u) + patch.v_axis * (av * wpp_v)
 }
 
@@ -723,7 +729,7 @@ pub fn localize_patch_keypoints(
 /// Unproject a starting keypoint onto the patch plane and express the in-plane
 /// offset of its hit point (from the patch centre) in patch-grid px. `None` when
 /// the ray is parallel to the plane.
-fn seed_offset(
+pub(super) fn seed_offset(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
     keypoint: [f64; 2],

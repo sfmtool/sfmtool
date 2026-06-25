@@ -27,6 +27,7 @@ use super::{
 use crate::camera::remap::remap_bilinear;
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
+use crate::patch::keypoint_localize::{seed_offset, shifted_center};
 
 /// Replicate-padded border (base pixels) around each fronto base. A tilted
 /// candidate's footprint *mostly* shrinks inside the fronto base, but a
@@ -52,6 +53,14 @@ struct FrontoBase {
     /// 3×3). Precomputed once per view: it is candidate-independent, so the
     /// per-candidate composition `a0⁻¹·ap` is a matmul, not an inverse.
     a0_inv: SMatrix<f64, 3, 3>,
+    /// World-space offset of this view's surfel center from `base.center`,
+    /// anchoring the base on the view's stored keypoint (zero when none). Computed
+    /// once at the seed normal in [`prerender`]; [`eval_phi`] recenters each
+    /// candidate patch by it so base and candidate stay registered. Holding it at
+    /// the seed normal (rather than recomputing per candidate, as the exact path
+    /// does) is a second-order approximation well inside the cache's resampling
+    /// budget.
+    center_offset: Vector3<f64>,
 }
 
 /// Per-view fronto bases, parallel to the caller's `views` slice (`None` where
@@ -157,21 +166,32 @@ pub(super) fn prerender(
     resolution: u32,
     supersample: f64,
     params: &NormalRefineParams,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
 ) -> Option<FrontoCache> {
     let ss = supersample.max(1.0);
     let rb = (((resolution as f64) * ss).round() as u32).max(resolution);
     let seed_patch = repose_patch(base, seed);
     let mut bases: Vec<Option<FrontoBase>> = Vec::with_capacity(views.len());
-    for view in views {
+    for (vi, view) in views.iter().enumerate() {
         if !seed_patch.is_front_facing(view.cam_from_world) {
             bases.push(None);
             continue;
         }
+        // Anchor on this view's stored keypoint (when given): the surfel center
+        // for this view is the keypoint's ray ∩ the *seed* surfel plane, held fixed
+        // across candidates. Render the fronto base — and later recenter every
+        // candidate (`eval_phi`) — from that point so they stay registered.
+        let center_offset = view_keypoints
+            .and_then(|k| k[vi])
+            .and_then(|kp| seed_offset(&seed_patch, view, kp, 1.0, 1.0))
+            .map(|[au, av]| shifted_center(&seed_patch, au, av, 1.0, 1.0) - base.center)
+            .unwrap_or_else(Vector3::zeros);
+        let center_pt = base.center + center_offset;
         // Patch plane faces this camera (least foreshortening → most resolution).
         let cam_c = view.cam_from_world.inverse_translation_origin();
-        let fronto_n = (cam_c - base.center).normalize();
+        let fronto_n = (cam_c - center_pt).normalize();
         let fp =
-            OrientedPatch::from_center_normal(base.center, fronto_n, base.u_axis, base.half_extent);
+            OrientedPatch::from_center_normal(center_pt, fronto_n, base.u_axis, base.half_extent);
         let map = WarpMap::from_patch(&fp, view.camera, view.cam_from_world, rb);
         let img = remap_bilinear(view.pyramid.level(0), &map);
         if img.channels() as usize != CHANNELS {
@@ -194,6 +214,7 @@ pub(super) fn prerender(
                 patch: pad_replicate(&packed, rb as usize, FRONTO_GUARD as usize),
                 bw_pad: rb + 2 * FRONTO_GUARD,
                 a0_inv,
+                center_offset,
             });
         bases.push(fb);
     }
@@ -389,12 +410,21 @@ pub(super) fn eval_phi(
     for (k, &vi) in ctx.kept.iter().enumerate() {
         let fb = cache.bases[vi].as_ref()?;
         let view = &views[vi];
+        // Recenter the candidate to this view's keypoint-anchored center so it
+        // registers with the base (which was rendered there). Zero offset → `cp`
+        // unchanged, no allocation.
+        let cp_anchored = (fb.center_offset.norm_squared() != 0.0).then(|| {
+            let mut p = cp.clone();
+            p.center += fb.center_offset;
+            p
+        });
+        let cp_ref = cp_anchored.as_ref().unwrap_or(&cp);
         // Both operands are affine (last row [0,0,1]), so the composition is too;
         // the resampler only needs the 2×3 part (candidate-grid → base-grid). The
         // base inverse is precomputed, so this is a matmul, not a per-candidate
         // inverse.
         let phi = super::prof::CACHE_MAP.time(|| {
-            let ap = corner_norm_pts(&cp, view, resolution)
+            let ap = corner_norm_pts(cp_ref, view, resolution)
                 .map(|p| affine_grid_to_img(&p, resolution))?;
             let m = fb.a0_inv * ap;
             Some([
@@ -503,6 +533,7 @@ mod tests {
             patch,
             bw_pad: bw as u32,
             a0_inv: SMatrix::identity(),
+            center_offset: Vector3::zeros(),
         }
     }
 

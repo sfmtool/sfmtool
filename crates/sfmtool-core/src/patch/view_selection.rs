@@ -146,14 +146,21 @@ fn build_reference(
         params.resolution,
         w_full,
         &normal_refine_shim(params),
+        None,
     )?;
     if ctx.kept.len() < params.min_track_views.max(2) as usize {
         return None;
     }
 
     // Render + z-normalize the kept track views over the frozen support.
-    let (raw, channels) =
-        normalized_stack(patch, &ctx, &track_proj, params.resolution, params.sampler)?;
+    let (raw, channels) = normalized_stack(
+        patch,
+        &ctx,
+        &track_proj,
+        params.resolution,
+        params.sampler,
+        None,
+    )?;
     let n = ctx.pixels.len();
     let total_w: f64 = ctx.weights.iter().sum();
     if total_w <= 0.0 {
@@ -296,6 +303,7 @@ fn candidate_zncc(
         &single,
         params.resolution,
         params.sampler,
+        None,
     )?;
     let n = reference.n;
     let total_w: f64 = single_ctx.weights.iter().sum();
