@@ -266,6 +266,12 @@ geometry).
 See [xform-refine-normals-command.md](xform-refine-normals-command.md) for the
 full parameter list and semantics.
 
+> _**Planned precondition (2026-06-25):** `--refine-normals` will require an
+> `embedded_patches` reconstruction and reject `sift_files`, so the canonical
+> chain becomes `--to-embedded-patches --refine-normals` (convert first, then
+> refine — the refine then positions views on the stored keypoints). Design
+> lock: `reports/2026-06-25-embedded-patches-precondition-plan.md`._
+
 ```bash
 --refine-normals
 --refine-normals angular_range_deg=25,init_steps=7

@@ -11,6 +11,12 @@ registered image and composites them onto the source frame.
 This is a qualitative aid for visually inspecting a reconstruction's geometry
 and patches.
 
+> _**Planned precondition (2026-06-25):** `render-patches` will **require** a
+> `feature_source == "embedded_patches"` reconstruction (which carries real
+> per-point patch frames and reference bitmaps) and **reject** `sift_files` with
+> an error pointing at `sfm xform --to-embedded-patches`. Design lock:
+> `reports/2026-06-25-embedded-patches-precondition-plan.md`._
+
 ## Command Syntax
 
 ```bash

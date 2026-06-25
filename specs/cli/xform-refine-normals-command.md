@@ -19,6 +19,18 @@ cloud (`save_patches`).
 > count uses a fixed reporting threshold (0.1) on the normalized confidence; it
 > is diagnostic only (no per-point gating), as specified below._
 
+> _**Planned precondition (2026-06-25):** `--refine-normals` will **require** a
+> `feature_source == "embedded_patches"` reconstruction and **reject**
+> `sift_files` with an error pointing at `sfm xform --to-embedded-patches`. On an
+> `embedded_patches` recon it positions each view's patch at that observation's
+> **stored keypoint** (not the reprojected point center), which is the win
+> measured in
+> the keypoint-source experiments (`reports/exp/2026-06-21-mvs-normal-refinement.md`).
+> It re-refines the normal (and optionally re-renders the bitmap) over the
+> stored keypoints/view set; it does not re-run view selection or keypoint
+> localization. Design lock:
+> `reports/2026-06-25-embedded-patches-precondition-plan.md`._
+
 ## Why this fits `xform` (and how)
 
 `xform` is the reconstruction-in / reconstruction-out pipeline. Normal

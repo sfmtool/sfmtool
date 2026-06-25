@@ -36,6 +36,50 @@ emits a valid `embedded_patches` reconstruction whose keypoints are exactly the
 original SIFT detections — the whole point set preserved. It runs none of the
 photometric steps of the pipeline below.
 
+## Operating contract: surfel ops require `embedded_patches`
+
+> _Status: **planned** (2026-06-25). Design lock for the rollout in
+> `reports/2026-06-25-embedded-patches-precondition-plan.md`; implemented over
+> PRs 2–4 there. The paragraphs below describe the target contract, not yet the
+> shipped behavior._
+
+The surfel operations — `sfm xform --refine-normals`, `sfm render-patches`, and
+`compare --strips` — **require** a `feature_source == "embedded_patches"`
+reconstruction and **reject** `sift_files` with an error naming the fix (run
+`sfm xform --to-embedded-patches` first). The motivation is in the plan doc and
+in the keypoint-source experiments (`reports/exp/2026-06-21-mvs-normal-refinement.md`):
+an `embedded_patches` reconstruction *stores* a per-observation keypoint, so
+refinement can position each view on its real detected feature instead of the
+reprojected point center — which gives a cleaner cross-view consensus (and a
+sharper reference bitmap), scaling with the solve's reprojection error.
+
+Consequences of the contract:
+
+- **The Rust `to_embedded_patches` is the one sift-consuming step.** That
+  function — `SfmrReconstruction.to_embedded_patches` (the PyO3 binding, also
+  surfaced as `sfm xform --to-embedded-patches`) — is the only place that reads
+  `.sift` files to build patches; everything downstream is
+  `embedded_patches → embedded_patches`.
+- **`embed-patches` calls `to_embedded_patches` as its first pipeline step.**
+  `embed_patches()` step 1 is a single call to
+  `SfmrReconstruction.to_embedded_patches(extent="feature_size",
+  extent_value=patch_size/2, …)`, which returns a baseline `embedded_patches`
+  reconstruction: a mean-viewing `(u, v)` frame per point, each observation's
+  keypoint copied verbatim from its `.sift` detection, and each image's hash from
+  the `.sift` metadata. Steps 2+ (normal refinement, view selection, keypoint
+  localization) then run on that `embedded_patches` reconstruction. The pipeline
+  no longer builds a patch cloud directly from the `sift_files` recon — the only
+  `.sift` read is inside that one `to_embedded_patches` call.
+- **Normal refinement positions views from the stored keypoints.** On an
+  `embedded_patches` reconstruction each view's patch is rendered at its stored
+  per-observation keypoint, not at `project_i(X_p)`. (`embed-patches`'s first
+  refine therefore runs over the SIFT-detection keypoints that
+  `to_embedded_patches` carried in.)
+- **The low-level builder stays dual-mode.** `PatchCloud::from_reconstruction`
+  (and the diagnostic `_solve_strips` engine and `scripts/exp_*`/`cmp_*`) may
+  still build a cloud from either source by projecting; the precondition is
+  enforced at the command / `xform` transform layer, not in the kernel.
+
 ## Inputs
 
 - An in-memory `SfmrReconstruction` (points, tracks, camera poses + intrinsics).
