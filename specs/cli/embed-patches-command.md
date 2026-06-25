@@ -7,6 +7,16 @@ _Status: implemented (`src/sfmtool/_commands/embed_patches.py`, orchestration in
 Pipeline and the per-point algorithms it calls:
 [sift-to-patch-reconstruction.md](../core/sift-to-patch-reconstruction.md)._
 
+> _**Planned (2026-06-25):** `embed-patches` remains the `sift_files` entry
+> point. Its first pipeline step becomes a single call to the Rust
+> `SfmrReconstruction.to_embedded_patches` binding (the sole sift-consuming
+> step — it reads the `.sift` files for keypoints, frames, and image hashes);
+> normal refinement, view selection, and keypoint localization then run as
+> `embedded_patches → embedded_patches` steps on its result. See the operating
+> contract in
+> [sift-to-patch-reconstruction.md](../core/sift-to-patch-reconstruction.md) and
+> the design lock in `reports/2026-06-25-embedded-patches-precondition-plan.md`._
+
 ## Overview
 
 Convert a `sift_files` reconstruction into an `embedded_patches` `.sfmr` — a
