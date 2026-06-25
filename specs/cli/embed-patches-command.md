@@ -7,15 +7,15 @@ _Status: implemented (`src/sfmtool/_commands/embed_patches.py`, orchestration in
 Pipeline and the per-point algorithms it calls:
 [sift-to-patch-reconstruction.md](../core/sift-to-patch-reconstruction.md)._
 
-> _**Planned (2026-06-25):** `embed-patches` remains the `sift_files` entry
-> point. Its first pipeline step becomes a single call to the Rust
+> _**Re-layered (2026-06-25):** `embed-patches` remains the `sift_files` entry
+> point, but its first pipeline step is now a single call to the Rust
 > `SfmrReconstruction.to_embedded_patches` binding (the sole sift-consuming
 > step — it reads the `.sift` files for keypoints, frames, and image hashes);
-> normal refinement, view selection, and keypoint localization then run as
+> normal refinement (anchored on the stored keypoints via
+> `use_stored_keypoints`), view selection, and keypoint localization then run as
 > `embedded_patches → embedded_patches` steps on its result. See the operating
 > contract in
-> [sift-to-patch-reconstruction.md](../core/sift-to-patch-reconstruction.md) and
-> the design lock in `reports/2026-06-25-embedded-patches-precondition-plan.md`._
+> [sift-to-patch-reconstruction.md](../core/sift-to-patch-reconstruction.md)._
 
 ## Overview
 
@@ -125,11 +125,15 @@ sfm embed-patches solve.sfmr out.sfmr \
 
 - `src/sfmtool/_commands/embed_patches.py` — the Click command (argument
   parsing, validation, default-output derivation, image load, write-out).
-- `src/sfmtool/_embed_patches.py::embed_patches` — the orchestration: it chains the
-  Rust patch kernels exposed on `PatchCloud` (`from_reconstruction` →
-  `refine_normals` → `select_views` → `localize_keypoints`) and the
-  `compact_to_embedded_patches` write tail. `image_file_hashes_from_sift` reads the
-  per-image identity hashes from the `.sift` metadata. See the [pipeline
+- `src/sfmtool/_embed_patches.py::embed_patches` — the orchestration: a single
+  `SfmrReconstruction.to_embedded_patches` bridge (the only `.sift` read) followed
+  by the Rust patch kernels exposed on `PatchCloud`, run over the embedded recon
+  (`refine_normals(use_stored_keypoints=True)` → `select_views` →
+  `localize_keypoints`) and the `compact_to_embedded_patches` write tail. The
+  cloud is read from the embedded recon's stored frames (`recon.patches`) and the
+  image hashes from `recon.image_file_hashes`, both set by the bridge — no second
+  `.sift` read. (`image_file_hashes_from_sift` / `image_file_hashes_from_images`
+  remain available helpers.) See the [pipeline
   spec](../core/sift-to-patch-reconstruction.md) for where the hot loops live in
   `sfmtool-core`.
 

@@ -132,3 +132,60 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     assert out.feature_source == "embedded_patches"
     # The run completed and verifies; any kept infinity point is still w = 0.
     assert int(np.asarray(out.point_is_at_infinity).sum()) <= 1
+
+
+def test_embed_patches_sources_hashes_from_embedded_not_sift(
+    monkeypatch, seoul_bull_workspace
+):
+    """The re-layered pipeline's only ``.sift`` read is the ``to_embedded_patches``
+    bridge; it sources image hashes from the embedded recon, not by re-reading the
+    ``.sift`` files. Make the sift-hash helper blow up — the run must still succeed.
+    """
+    import cv2
+
+    def _boom(_recon):
+        raise AssertionError("embed_patches should not re-read .sift for hashes")
+
+    monkeypatch.setattr(ep, "image_file_hashes_from_sift", _boom)
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    ws = recon.workspace_dir
+    images = [
+        np.ascontiguousarray(cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR))
+        for name in recon.image_names
+    ]
+    out = ep.embed_patches(recon, images, resolution=12)
+    assert out.feature_source == "embedded_patches"
+    # The hashes are exactly the bridge's (images aren't culled, only points), so
+    # they match what to_embedded_patches set — not a re-hash or a .sift re-read.
+    expected = recon.to_embedded_patches(extent_value=5.0).image_file_hashes
+    assert [bytes(h) for h in out.image_file_hashes] == [bytes(h) for h in expected]
+
+
+def test_embed_patches_refine_anchors_on_stored_keypoints(
+    monkeypatch, seoul_bull_workspace
+):
+    """The re-layer's intent: normal refinement runs with use_stored_keypoints=True
+    (anchoring on the carried-in SIFT detections), not the reprojected center.
+    Spy on PatchCloud.refine_normals to capture the flag the pipeline passes."""
+    import cv2
+
+    from sfmtool._sfmtool import PatchCloud
+
+    captured: dict = {}
+    orig = PatchCloud.refine_normals
+
+    def spy(self, recon, images, **kwargs):
+        captured["use_stored_keypoints"] = kwargs.get("use_stored_keypoints")
+        return orig(self, recon, images, **kwargs)
+
+    monkeypatch.setattr(PatchCloud, "refine_normals", spy)
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    ws = recon.workspace_dir
+    images = [
+        np.ascontiguousarray(cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR))
+        for name in recon.image_names
+    ]
+    ep.embed_patches(recon, images, resolution=12)
+    assert captured.get("use_stored_keypoints") is True

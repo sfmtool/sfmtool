@@ -38,10 +38,12 @@ photometric steps of the pipeline below.
 
 ## Operating contract: surfel ops require `embedded_patches`
 
-> _Status: **planned** (2026-06-25). Design lock for the rollout in
-> `reports/2026-06-25-embedded-patches-precondition-plan.md`; implemented over
-> PRs 2–4 there. The paragraphs below describe the target contract, not yet the
-> shipped behavior._
+> _Status: **partially shipped** (2026-06-25). **Done:** the keypoint-aware
+> refine kernel (`refine_normals(use_stored_keypoints=...)`) and the
+> `embed-patches` re-layer onto `to_embedded_patches` with `use_stored_keypoints`
+> — see the bullets below. **Pending:** the hard precondition that makes the
+> surfel operations reject `sift_files` (the next paragraph describes that target;
+> today they still accept either source by projecting)._
 
 The surfel operations — `sfm xform --refine-normals`, `sfm render-patches`, and
 `compare --strips` — **require** a `feature_source == "embedded_patches"`
@@ -61,7 +63,7 @@ Consequences of the contract:
   `.sift` files to build patches; everything downstream is
   `embedded_patches → embedded_patches`.
 - **`embed-patches` calls `to_embedded_patches` as its first pipeline step.**
-  `embed_patches()` step 1 is a single call to
+  `embed_patches()` step 0 is a single call to
   `SfmrReconstruction.to_embedded_patches(extent="feature_size",
   extent_value=patch_size/2, …)`, which returns a baseline `embedded_patches`
   reconstruction: a mean-viewing `(u, v)` frame per point, each observation's
@@ -70,11 +72,12 @@ Consequences of the contract:
   localization) then run on that `embedded_patches` reconstruction. The pipeline
   no longer builds a patch cloud directly from the `sift_files` recon — the only
   `.sift` read is inside that one `to_embedded_patches` call.
-- **Normal refinement positions views from the stored keypoints.** On an
-  `embedded_patches` reconstruction each view's patch is rendered at its stored
-  per-observation keypoint, not at `project_i(X_p)`. (`embed-patches`'s first
-  refine therefore runs over the SIFT-detection keypoints that
-  `to_embedded_patches` carried in.)
+- **Normal refinement can position views from the stored keypoints.** With
+  `use_stored_keypoints=True`, each view's patch on an `embedded_patches` recon is
+  rendered at its stored per-observation keypoint rather than at `project_i(X_p)`.
+  `embed-patches` enables this, so its refine runs over the SIFT-detection
+  keypoints `to_embedded_patches` carried in; `sfm xform --refine-normals` will
+  adopt it once it is gated to `embedded_patches` (the pending precondition).
 - **The low-level builder stays dual-mode.** `PatchCloud::from_reconstruction`
   (and the diagnostic `_solve_strips` engine and `scripts/exp_*`/`cmp_*`) may
   still build a cloud from either source by projecting; the precondition is
@@ -118,9 +121,12 @@ The producer is Python (`src/sfmtool/`) **orchestration** — the per-point loop
 point culling, and compaction — over Rust kernels reached through the PyO3
 bindings:
 
-- Building the patch frame reuses [normal
-  refinement](patch-normal-refinement.md): `PatchCloud.from_reconstruction`
-  with the `mean_viewing` seed + `refine_normals` + `save_patches` (steps 1–2).
+- The patch frame is built once by `SfmrReconstruction.to_embedded_patches`
+  (mean-viewing seed, feature-size extent) and read back as the cloud via
+  `recon.patches`; its normal is then refined by [normal
+  refinement](patch-normal-refinement.md) (`refine_normals`,
+  `use_stored_keypoints=True`, `render_bitmaps=True`) anchored on the carried-in
+  SIFT keypoints (steps 0–2).
 - Per-point view selection is [patch-view selection](patch-view-selection.md), in
   `sfmtool-core::patch` — geometric candidacy plus photometric vetting against a
   track-seeded template.
@@ -170,18 +176,19 @@ input track, then is expanded with vetted views and filtered by drops.
 
 _Status: **fully wired** in `src/sfmtool/_embed_patches.py`. `embed_patches(recon,
 images, *, min_relative_zncc, patch_size, max_shift_px, min_views, max_iters,
-search, resolution)` runs the whole pipeline (steps 1–7): it builds each point's
-frame from the mean viewing direction and refines the normal photometrically
-(`render_bitmaps=True` for the reference textures), selects + vets the view set per
-point, congeals the keypoints, and hands the results to
-`compact_to_embedded_patches` (the step-7 write/compaction tail). The
-`sfm embed-patches` CLI (`src/sfmtool/_commands/embed_patches.py`) is a thin
-wrapper over it. `image_file_hashes_from_sift(recon)` supplies the per-image
-identity hashes read from each image's `.sift` `image_file_xxh128` metadata (the
-command's source, matching the baseline `to_embedded_patches`);
-`image_file_hashes_from_images` re-hashing the image bytes remains available. The
-writer requires the patch frame for an `embedded_patches` file (`has_uv_frames =
-true`)._
+search, resolution)` runs the whole pipeline (steps 0–7): a single
+`recon.to_embedded_patches(...)` bridge (the only `.sift` read) builds the
+mean-viewing, feature-sized frames + inline SIFT keypoints + image hashes; the
+cloud is read back via `embedded.patches` and its normal refined photometrically
+over the embedded recon (`use_stored_keypoints=True`, `render_bitmaps=True` for
+the reference textures), anchored on the carried-in keypoints; then view selection,
+keypoint congealing, and `compact_to_embedded_patches` (the write/compaction tail,
+given the original `recon` for geometry carry-over and `embedded.image_file_hashes`
+so there is no second `.sift` read). The `sfm embed-patches` CLI
+(`src/sfmtool/_commands/embed_patches.py`) is a thin wrapper over it.
+`image_file_hashes_from_sift` / `image_file_hashes_from_images` remain available
+helpers. The writer requires the patch frame for an `embedded_patches` file
+(`has_uv_frames = true`)._
 
 _Points at infinity flow through end to end (the kernels are first-class on them
 since the patch pipeline gained `w`-aware rendering/selection/localization), and

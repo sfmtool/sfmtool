@@ -13,11 +13,11 @@ a valid ``embedded_patches`` :class:`SfmrReconstruction` (inline ``keypoints_xy`
 per-point patch frame + optional bitmaps, ``image_file_hashes``,
 ``feature_source = "embedded_patches"``).
 
-:func:`embed_patches` runs the whole pipeline end to end (steps 1–7): it builds
-and photometrically refines each point's patch frame, selects + vets the view set
-per point, congeals the keypoints, then hands the results to
-:func:`compact_to_embedded_patches`. The ``sfm embed-patches`` CLI is a thin
-wrapper over it.
+:func:`embed_patches` runs the whole pipeline end to end: it converts to the
+baseline embedded form, photometrically refines each point's patch normal,
+selects + vets the view set per point, congeals the keypoints, then hands the
+results to :func:`compact_to_embedded_patches`. The ``sfm embed-patches`` CLI is
+a thin wrapper over it.
 """
 
 from __future__ import annotations
@@ -53,9 +53,10 @@ def image_file_hashes_from_sift(recon: SfmrReconstruction) -> list[bytes]:
     This is the image-identity hash recorded when the features were extracted —
     the same value :func:`image_file_hashes_from_images` would recompute, but read
     straight from the ``.sift`` rather than re-hashing the (potentially large)
-    image bytes. It matches the baseline ``SfmrReconstruction.to_embedded_patches``
-    and is what the ``sfm embed-patches`` command uses (its input is ``sift_files``,
-    so a ``.sift`` resolves for every image).
+    image bytes. It matches the value ``SfmrReconstruction.to_embedded_patches``
+    reads internally; :func:`embed_patches` now sources its hashes from the
+    converted recon (``embedded.image_file_hashes``), so this is retained as a
+    standalone helper rather than a pipeline step.
 
     Raises:
         FileNotFoundError: naming the image whose ``.sift`` cannot be resolved (the
@@ -250,12 +251,19 @@ def embed_patches(
     resolution: int = 24,
 ) -> SfmrReconstruction:
     """Convert a ``sift_files`` reconstruction to ``embedded_patches``, running the
-    full photometric pipeline (steps 1–7 of
+    full photometric pipeline (see
     ``specs/core/sift-to-patch-reconstruction.md``).
 
-    1. **Build a patch frame** per point from the mean viewing direction, then
-       **refine its normal** photometrically (rendering each point's reference
-       bitmap). Points at infinity keep their fixed tangent-sphere frame untouched.
+    0. **Convert to the baseline ``embedded_patches`` form** with a single call to
+       the Rust ``SfmrReconstruction.to_embedded_patches`` — the only step that
+       reads the ``.sift`` files: it gives each point a mean-viewing ``(u, v)``
+       frame, copies each observation's SIFT detection keypoint inline, and reads
+       each image's hash from the ``.sift`` metadata. Everything below runs
+       ``embedded_patches → embedded_patches``.
+    1. **Refine each normal** photometrically, anchoring every view on its stored
+       (SIFT) keypoint rather than the reprojected point center
+       (``use_stored_keypoints``), and render each point's reference bitmap. Points
+       at infinity keep their fixed tangent-sphere frame untouched.
     2. **Select the view set** per point: the track plus other views that
        geometrically see the surfel and clear ``min_relative_zncc`` against a
        track-seeded template.
@@ -277,23 +285,35 @@ def embed_patches(
     Returns:
         A new ``embedded_patches`` :class:`SfmrReconstruction`, ready to ``save()``.
     """
-    # 1. Frame from the mean viewing direction (finite surfels + tangent-sphere
-    #    frames for points at infinity), then refine the normal photometrically and
-    #    render each point's reference bitmap. `patch_size` is the full edge; the
-    #    library takes a half-extent.
-    cloud = PatchCloud.from_reconstruction(
-        recon,
-        normal="mean_viewing",
-        extent="feature_size",
-        extent_value=patch_size / 2.0,
+    half_extent = patch_size / 2.0
+
+    # 0. The single `.sift`-consuming step: baseline embedded conversion. It sizes
+    #    each point's mean-viewing frame by SIFT feature scale, copies the SIFT
+    #    detection keypoints inline, and reads the image hashes from `.sift`
+    #    metadata. Its frame, keypoints, and hashes are all consumed below.
+    embedded = recon.to_embedded_patches(
+        normal="mean_viewing", extent="feature_size", extent_value=half_extent
     )
+
+    # 1. Take the patch cloud `to_embedded_patches` built (mean-viewing frames
+    #    sized by SIFT feature scale — read from the embedded recon's stored frames,
+    #    so no second `.sift` read), then refine each normal over the embedded recon,
+    #    anchoring every view on its stored SIFT keypoint (use_stored_keypoints)
+    #    instead of the reprojected center; render each point's reference bitmap.
+    cloud = embedded.patches
+    if cloud is None:
+        raise ValueError("to_embedded_patches produced no patch frames to refine")
     refine = cloud.refine_normals(
-        recon, images, resolution=resolution, render_bitmaps=True
+        embedded,
+        images,
+        resolution=resolution,
+        use_stored_keypoints=True,
+        render_bitmaps=True,
     )
 
     # 2. Expand + vet the view set per point.
     selections = cloud.select_views(
-        recon, images, min_relative_zncc=min_relative_zncc, resolution=resolution
+        embedded, images, min_relative_zncc=min_relative_zncc, resolution=resolution
     )
     view_sets = {
         int(s["point_id"]): np.asarray(s["admitted"]).tolist() for s in selections
@@ -302,7 +322,7 @@ def embed_patches(
     # 3. Project starting keypoints (implicit) and congeal them, dropping views that
     #    won't co-register in-loop.
     localizations = cloud.localize_keypoints(
-        recon,
+        embedded,
         images,
         view_sets=view_sets,
         max_iters=max_iters,
@@ -312,8 +332,11 @@ def embed_patches(
         resolution=resolution,
     )
 
-    # 4. Cull under-supported points and compact into an embedded_patches recon.
-    hashes = image_file_hashes_from_sift(recon)
+    # 4. Cull under-supported points and compact into an embedded_patches recon. The
+    #    image hashes already live on the embedded recon (set in step 0), so there
+    #    is no second `.sift` read; the original `recon` carries the per-point
+    #    geometry (its point indexing matches `embedded` one-to-one).
+    hashes = embedded.image_file_hashes
     return compact_to_embedded_patches(
         recon,
         cloud,
