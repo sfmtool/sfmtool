@@ -28,7 +28,8 @@ _NORMALS = ("mean_viewing", "stored", "geometric")
 # CLI extent policy names mirror the library's ``PatchExtent`` policies, except
 # the CLI speaks in **full** patch size (the whole edge length) while the library
 # API stores a half-extent (halved in ``apply``), and ``pixel_size`` is the CLI
-# spelling of the library's ``pixel_radius``. Mirrors ``_refine_normals``.
+# spelling of the library's ``pixel_radius``. This is the live extent-sizing
+# path (``--refine-normals`` no longer sizes frames; it reuses the stored one).
 _EXTENT_TO_BINDING = {
     "feature_size": "feature_size",
     "fixed": "fixed",

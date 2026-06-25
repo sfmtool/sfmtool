@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
+from .._feature_source import require_embedded_patches
 from ..visualization._patch_renderer import MODES, PatchRenderError, render_patches
 
 
@@ -118,11 +119,13 @@ def render_patches_command(
     the frame and composited onto the source image, for visually inspecting the
     reconstruction's geometry and patches.
 
-    The reconstruction must carry a patch cloud, e.g. from:
+    The reconstruction must be ``embedded_patches`` (it carries the per-point
+    patch frames), e.g. from:
 
     \b
-        sfm xform in.sfmr out.sfmr --refine-normals save_patches=true
-        # add bitmaps=true for --mode texture
+        sfm xform in.sfmr out.sfmr --to-embedded-patches
+        # for --mode texture, build bitmaps too:
+        sfm xform in.sfmr out.sfmr --to-embedded-patches --refine-normals bitmaps=true
 
     Patches are painted back-to-front (painter's algorithm); there is no true
     occlusion, so a distant patch can show through a nearer one.
@@ -153,6 +156,7 @@ def render_patches_command(
 
         click.echo(f"Loading reconstruction: {reconstruction_path}")
         recon = SfmrReconstruction.load(reconstruction_path)
+        require_embedded_patches(recon, "sfm render-patches")
         click.echo(f"  Images: {recon.image_count}")
         click.echo(f"  3D points: {recon.point_count}")
 
@@ -176,6 +180,8 @@ def render_patches_command(
         )
     except PatchRenderError as e:
         raise click.UsageError(str(e))
+    except click.UsageError:
+        raise  # the embedded_patches precondition (and any other UsageError)
     except Exception as e:
         raise click.ClickException(str(e))
 

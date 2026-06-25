@@ -64,7 +64,7 @@ from .._cli_utils import timed_command
     show_default=True,
     help=(
         "Surfel size — the full patch edge length (in feature-size multiples), "
-        "halved to the library half-extent (matching --refine-normals)."
+        "halved to the library half-extent and passed to to_embedded_patches."
     ),
 )
 def embed_patches_command(

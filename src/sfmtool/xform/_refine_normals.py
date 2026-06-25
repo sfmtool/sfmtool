@@ -8,13 +8,18 @@ removes no points and moves nothing — it only rewrites each finite point's
 ``normal`` to the one that maximizes cross-view photometric consensus. Because
 the refinement is photometric it reads the workspace's source images
 (``workspace_dir / image_name``), the same way the SIFT-reading filters reach
-back for the ``.sift`` files; a missing image is a hard error. The default
-``extent=feature_size`` patch sizing additionally reads the ``.sift`` files.
+back for the ``.sift`` files; a missing image is a hard error.
 
-When ``save_patches`` is set, the full refined patch cloud (each point's
-``u``/``v`` in-plane half-extent vectors, alongside the normal) is attached to
-the reconstruction and written as the per-point patch frame in the ``.sfmr``
-``points3d/`` section (format version 3+), not just the per-point normal.
+The operation requires an ``embedded_patches`` reconstruction (enforced by
+``apply_transforms``): it reads the point's stored patch frame back
+(``recon.patches``) and refines the normal over the stored per-observation
+keypoints, anchoring each view on its real detected feature. The refined patch
+cloud is always re-persisted as the per-point patch frame in the ``.sfmr``
+``points3d/`` section (format version 3+) so the frame stays consistent with the
+rewritten normal; with ``bitmaps`` the per-point RGBA patch textures are rendered
+and persisted too. Frame *sizing* and *seeding* (``extent`` / ``extent_value`` /
+``normal``) belong to ``--to-embedded-patches``, the step that builds the frame;
+refine-normals reuses that frame and takes none of those knobs.
 
 See ``specs/cli/xform-refine-normals-command.md`` and
 ``specs/core/patch-normal-refinement.md``.
@@ -22,7 +27,7 @@ See ``specs/cli/xform-refine-normals-command.md`` and
 
 import numpy as np
 
-from .._sfmtool import PatchCloud, SfmrReconstruction
+from .._sfmtool import SfmrReconstruction
 
 # Confidence (the peakedness of Φ at the optimum) is normalized to roughly
 # [0, 1] by the core routine; below this it is reported — but not acted on — as
@@ -33,24 +38,6 @@ _LOW_CONFIDENCE_THRESHOLD = 0.1
 _OBJECTIVES = ("robust", "mean")
 _WINDOWS = ("gaussian_disk", "gaussian", "uniform")
 _SAMPLERS = ("bilinear", "anisotropic")
-_INITIAL_NORMALS = ("stored", "mean_viewing", "geometric")
-# CLI extent policy names. These mirror the library's ``PatchExtent`` policies
-# except that the CLI speaks in **full** patch size (the whole edge length),
-# while the library API stores a half-extent; the conversion happens in
-# ``apply``. ``pixel_size`` is the CLI spelling of the library's ``pixel_radius``.
-_EXTENTS = ("feature_size", "fixed", "relative_spacing", "pixel_size")
-
-# Maps each CLI extent policy to the ``PatchCloud.from_reconstruction`` policy
-# (only ``pixel_size`` differs from its library name).
-_EXTENT_TO_BINDING = {
-    "feature_size": "feature_size",
-    "fixed": "fixed",
-    "relative_spacing": "relative_spacing",
-    "pixel_size": "pixel_radius",
-}
-# Keep the accepted-name list and the binding map in lockstep so a future policy
-# added to one but not the other fails loudly at import, not as a bare KeyError.
-assert set(_EXTENTS) == set(_EXTENT_TO_BINDING), (_EXTENTS, _EXTENT_TO_BINDING)
 _CACHES = ("off", "fronto")
 _QUALITIES = ("none", "coarse", "fine")
 
@@ -68,21 +55,28 @@ _QUALITY_PRESETS = {
 class RefineNormalsTransform:
     """Refine per-point surface normals by photometric cross-view consensus.
 
-    All knobs default to the ``PatchCloud.refine_normals`` /
-    ``PatchCloud.from_reconstruction`` binding defaults, so the two layers
-    cannot drift. The point count, positions, poses, and cameras are unchanged;
-    only ``normals`` is rewritten (finite points only — points at infinity have
-    no surface element and pass through). With ``save_patches``, the refined
-    patch geometry is additionally attached to the reconstruction.
+    All knobs default to the ``PatchCloud.refine_normals`` binding defaults, so
+    the two layers cannot drift. The point count, positions, poses, and cameras
+    are unchanged; only ``normals`` is rewritten (finite points only — points at
+    infinity have no surface element and pass through). The refined patch
+    geometry is always re-persisted alongside the normals (the stored frame must
+    stay consistent with them).
+
+    Requires an ``embedded_patches`` reconstruction (enforced by
+    ``apply_transforms``): it refines over the stored per-observation keypoints
+    and reuses the stored per-point patch frame, both of which only that source
+    carries. Convert first with ``--to-embedded-patches`` (the step that builds
+    the frame — its ``extent`` / ``extent_value`` / ``normal`` knobs size and
+    seed it; refine-normals takes none of those).
     """
+
+    # Precondition checked per-step by `apply_transforms` (see `_apply.py`).
+    required_feature_source = "embedded_patches"
 
     def __init__(
         self,
         *,
-        # whether to persist the full patch cloud, not just per-point normals
-        save_patches: bool = False,
-        # whether to also render and persist the per-point RGBA patch bitmaps
-        # (implies save_patches: the bitmaps require the patch frame)
+        # whether to render and persist the per-point RGBA patch bitmaps
         bitmaps: bool = False,
         # forwarded to PatchCloud.refine_normals
         angular_range_deg: float = 25.0,
@@ -101,12 +95,6 @@ class RefineNormalsTransform:
         cache_supersample: float = 2.0,
         quality: str = "none",
         confidence: bool = False,
-        # forwarded to PatchCloud.from_reconstruction
-        initial_normals: str = "stored",
-        extent: str = "feature_size",
-        # Full patch size (whole edge length), in the chosen policy's units;
-        # halved to the library's half-extent in ``apply``.
-        extent_value: float = 10.0,
     ):
         if angular_range_deg <= 0:
             raise ValueError(
@@ -150,23 +138,10 @@ class RefineNormalsTransform:
             raise ValueError(f"quality must be one of {_QUALITIES}, got {quality!r}")
         if not isinstance(confidence, bool):
             raise ValueError(f"confidence must be a bool, got {confidence!r}")
-        if initial_normals not in _INITIAL_NORMALS:
-            raise ValueError(
-                f"initial_normals must be one of {_INITIAL_NORMALS}, got {initial_normals!r}"
-            )
-        if extent not in _EXTENTS:
-            raise ValueError(f"extent must be one of {_EXTENTS}, got {extent!r}")
-        if extent_value <= 0:
-            raise ValueError(f"extent_value must be positive, got {extent_value}")
-        if not isinstance(save_patches, bool):
-            raise ValueError(f"save_patches must be a bool, got {save_patches!r}")
         if not isinstance(bitmaps, bool):
             raise ValueError(f"bitmaps must be a bool, got {bitmaps!r}")
 
         self.bitmaps = bitmaps
-        # Bitmaps need the patch frame on disk, so persisting them implies
-        # persisting the patch cloud.
-        self.save_patches = save_patches or bitmaps
         self.angular_range_deg = angular_range_deg
         self.init_steps = init_steps
         self.refine_levels = refine_levels
@@ -188,9 +163,6 @@ class RefineNormalsTransform:
             self.cache_supersample = cache_supersample
         self.quality = quality
         self.confidence = confidence
-        self.initial_normals = initial_normals
-        self.extent = extent
-        self.extent_value = extent_value
 
     def _load_images(self, recon: SfmrReconstruction) -> list[np.ndarray]:
         """Load every source image, parallel to the reconstruction's images.
@@ -210,22 +182,23 @@ class RefineNormalsTransform:
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         images = self._load_images(recon)
 
-        # The CLI ``extent_value`` is the full patch size; the library API takes
-        # a half-extent (or a half-size multiplier / radius), so halve it here.
-        # Finite points only: a point at infinity has a fixed normal
-        # (normalize(-d)) with nothing to refine, and the copy-and-scatter
-        # write-back below must leave its (0, 0, 0) normal untouched. So opt out
-        # of the default (which includes infinity points).
-        cloud = PatchCloud.from_reconstruction(
-            recon,
-            normal=self.initial_normals,
-            extent=_EXTENT_TO_BINDING[self.extent],
-            extent_value=self.extent_value / 2.0,
-            exclude_points_at_infinity=True,
-        )
+        # The reconstruction is embedded_patches (enforced by apply_transforms), so
+        # the patch frame is already stored — read it back as the cloud rather than
+        # rebuilding it (frame sizing/seeding happened in --to-embedded-patches). The
+        # normal is refined over the stored per-observation keypoints
+        # (use_stored_keypoints), anchoring each view on its real detected feature.
+        cloud = recon.patches
+        if cloud is None:
+            raise ValueError(
+                "reconstruction has no patch frames to refine; expected "
+                "embedded_patches (run `sfm xform --to-embedded-patches` first)"
+            )
         point_ids = np.asarray(cloud.point_ids)
+        # A point at infinity has a fixed normal (normalize(-d)) the refiner skips;
+        # keep its stored (0, 0, 0) normal untouched in the write-back below.
+        finite = ~np.asarray(recon.point_is_at_infinity)[point_ids]
         print(
-            f"  Refining normals for {len(point_ids)} finite points "
+            f"  Refining normals for {int(finite.sum())} finite points "
             f"across {recon.image_count} images..."
         )
 
@@ -247,6 +220,7 @@ class RefineNormalsTransform:
             cache=self.cache,
             cache_supersample=self.cache_supersample,
             compute_confidence=self.confidence,
+            use_stored_keypoints=True,
             render_bitmaps=self.bitmaps,
         )
 
@@ -255,19 +229,20 @@ class RefineNormalsTransform:
         init = np.asarray(result["init_photoconsistency"], dtype=np.float64)
         conf = np.asarray(result["confidence"], dtype=np.float64)
 
-        # Copy-and-scatter keeps the normals of excluded (infinity) points
-        # intact while overwriting every finite point. point_ids are 3D-point
-        # indices, so normals[pid] indexes the right row directly.
+        # Copy-and-scatter the refined normals to finite points only; infinity
+        # points keep their stored normal. point_ids are 3D-point indices, so
+        # normals[pid] indexes the right row directly.
         normals = np.asarray(recon.normals, dtype=np.float32).copy()
-        normals[point_ids] = refined
+        finite_pids = point_ids[finite]
+        normals[finite_pids] = refined[finite]
 
         self._print_summary(photo, init, conf)
 
-        # With save_patches, persist the full refined patch cloud (the per-point
-        # u/v half-extent vectors) in the .sfmr points3d/ section, in addition to
-        # scattering the per-point normals. With bitmaps, also persist the fused
-        # per-point RGBA patch textures (already scattered to per-point rows by the
-        # binding), which require the patch frame — hence save_patches is forced on.
+        # The input is already embedded_patches, so always persist the refined
+        # patch cloud (its u/v frame now matches the refined normal) — otherwise the
+        # stored frame would disagree with the rewritten normals. With `bitmaps`,
+        # also persist the fused per-point RGBA patch textures (scattered to
+        # per-point rows by the binding).
         if self.bitmaps:
             n_filled = int(np.count_nonzero(result["bitmaps"].any(axis=(1, 2, 3))))
             print(
@@ -277,10 +252,7 @@ class RefineNormalsTransform:
             return recon.clone_with_changes(
                 normals=normals, patches=cloud, patch_bitmaps=result["bitmaps"]
             )
-        if self.save_patches:
-            print(f"  Saving {len(point_ids)} patches to the reconstruction")
-            return recon.clone_with_changes(normals=normals, patches=cloud)
-        return recon.clone_with_changes(normals=normals)
+        return recon.clone_with_changes(normals=normals, patches=cloud)
 
     def _print_summary(
         self, photo: np.ndarray, init: np.ndarray, conf: np.ndarray
@@ -310,10 +282,10 @@ class RefineNormalsTransform:
         )
 
     def description(self) -> str:
-        patches = ", save_patches" if self.save_patches and not self.bitmaps else ""
-        patches += ", bitmaps" if self.bitmaps else ""
+        # This string is also reused as the operation name in the precondition
+        # error. `bitmaps` gates whether the RGBA textures are rendered.
+        bitmaps = ", bitmaps" if self.bitmaps else ""
         return (
-            f"Refine normals (initial={self.initial_normals}, extent={self.extent}, "
-            f"range={self.angular_range_deg}°, objective={self.objective}, "
-            f"sampler={self.sampler}{patches})"
+            f"Refine normals (range={self.angular_range_deg}°, "
+            f"objective={self.objective}, sampler={self.sampler}{bitmaps})"
         )

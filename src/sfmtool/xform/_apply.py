@@ -3,6 +3,7 @@
 
 """Apply transformation pipeline to reconstructions."""
 
+from .._feature_source import require_embedded_patches
 from .._sfmtool import SfmrReconstruction
 from ._interface import Transform
 
@@ -19,6 +20,11 @@ def apply_transforms(
 
     print(f"\nApplying {len(transforms)} transformation(s):")
     for i, transform in enumerate(transforms, 1):
+        # Per-step precondition, checked against the *current* recon so a chain
+        # like `--to-embedded-patches --refine-normals` passes (the conversion
+        # runs before the surfel op that requires it).
+        if getattr(transform, "required_feature_source", None) == "embedded_patches":
+            require_embedded_patches(recon, transform.description())
         print(f"  [{i}/{len(transforms)}] {transform.description()}")
         recon = transform.apply(recon)
 

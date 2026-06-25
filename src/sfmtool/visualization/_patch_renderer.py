@@ -59,7 +59,7 @@ def collect_patches(
     if cloud is None:
         raise PatchRenderError(
             "reconstruction has no patch cloud; produce one with "
-            "`sfm xform in.sfmr out.sfmr --refine-normals save_patches=true`"
+            "`sfm xform in.sfmr out.sfmr --to-embedded-patches` (or `sfm embed-patches`)"
         )
     n = len(cloud)
     centers = np.empty((n, 3), np.float64)
