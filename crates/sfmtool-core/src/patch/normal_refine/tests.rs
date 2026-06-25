@@ -455,7 +455,7 @@ fn confidence_is_nan_when_not_requested() {
         ..test_params(Objective::MeanPairwise)
     };
 
-    let result = refine_patch_normal(&patch, &views, 15, &params);
+    let result = refine_patch_normal(&patch, &views, 15, &params, None);
 
     assert!(result.photoconsistency.is_finite());
     assert!(result.confidence.is_nan());
@@ -475,7 +475,7 @@ fn recovers_fronto_parallel_normal_from_tilted_init() {
     let patch = plane_patch(init_n);
     let params = test_params(Objective::MeanPairwise);
 
-    let result = refine_patch_normal(&patch, &views, 15, &params);
+    let result = refine_patch_normal(&patch, &views, 15, &params, None);
 
     let init_err = angle_between(&init_n, &truth);
     let refined_err = angle_between(&result.patch.normal(), &truth);
@@ -523,7 +523,7 @@ fn refine_leaves_points_at_infinity_untouched() {
     );
     let params = test_params(Objective::MeanPairwise);
 
-    let result = refine_patch_normal(&patch, &views, 16, &params);
+    let result = refine_patch_normal(&patch, &views, 16, &params, None);
 
     assert_eq!(result.patch.w, 0.0);
     assert_eq!(result.patch.center, patch.center);
@@ -540,7 +540,7 @@ fn representative_is_none_unless_requested() {
     let patch = plane_patch(true_normal());
     // test_params leaves render_bitmap at its default (false).
     let params = test_params(Objective::MeanPairwise);
-    let result = refine_patch_normal(&patch, &views, 16, &params);
+    let result = refine_patch_normal(&patch, &views, 16, &params, None);
     assert!(result.representative.is_none());
 }
 
@@ -559,7 +559,7 @@ fn representative_fuses_consistent_views_with_high_agreement() {
     let resolution = 16u32;
     let r = resolution as usize;
 
-    let result = refine_patch_normal(&patch, &views, resolution, &params);
+    let result = refine_patch_normal(&patch, &views, resolution, &params, None);
     let rep = result.representative.expect("bitmap should be rendered");
     assert_eq!(rep.len(), r * r * 4);
 
@@ -604,7 +604,7 @@ fn representative_is_none_when_too_few_views() {
     let patch = plane_patch(true_normal());
     let mut params = test_params(Objective::MeanPairwise);
     params.render_bitmap = true; // min_views is 2, so a single view skips the search
-    let result = refine_patch_normal(&patch, &views, 16, &params);
+    let result = refine_patch_normal(&patch, &views, 16, &params, None);
     assert!(result.representative.is_none());
 }
 
@@ -642,7 +642,7 @@ fn recovers_normal_when_no_seed_is_at_the_optimum() {
 
     let patch = plane_patch(init_n);
     let params = test_params(Objective::MeanPairwise);
-    let result = refine_patch_normal(&patch, &views, 15, &params);
+    let result = refine_patch_normal(&patch, &views, 15, &params, None);
 
     let refined_err = angle_between(&result.patch.normal(), &truth);
     assert!(
@@ -676,7 +676,7 @@ fn robust_objective_downweights_occluded_view() {
     let patch = plane_patch(init_n);
     let params = test_params(Objective::RobustWeighted { iters: 3 });
 
-    let result = refine_patch_normal(&patch, &views, 15, &params);
+    let result = refine_patch_normal(&patch, &views, 15, &params, None);
 
     let refined_err = angle_between(&result.patch.normal(), &truth);
     assert!(
@@ -721,7 +721,7 @@ fn cheap_search_objective_still_recovers_normal_with_honest_phi() {
     let mut params = test_params(Objective::RobustWeighted { iters: 3 });
     params.search_robust_iters = Some(0);
 
-    let result = refine_patch_normal(&patch, &views, 15, &params);
+    let result = refine_patch_normal(&patch, &views, 15, &params, None);
 
     let refined_err = angle_between(&result.patch.normal(), &truth);
     assert!(
@@ -745,7 +745,7 @@ fn robust_objective_scores_a_min_view_track() {
     params.min_views = 3;
     let patch = plane_patch(exp_map_normal(&true_normal(), [8.0f64.to_radians(), 0.0]));
 
-    let result = refine_patch_normal(&patch, &views, 15, &params);
+    let result = refine_patch_normal(&patch, &views, 15, &params, None);
 
     assert_eq!(result.valid_view_count, 3);
     assert!(
@@ -773,7 +773,7 @@ fn never_returns_worse_photoconsistency_than_init() {
             [14.0f64.to_radians(), 10.0f64.to_radians()],
         ] {
             let patch = plane_patch(exp_map_normal(&truth, delta));
-            let result = refine_patch_normal(&patch, &views, 13, &test_params(objective));
+            let result = refine_patch_normal(&patch, &views, 13, &test_params(objective), None);
             assert!(result.photoconsistency.is_finite());
             assert!(result.init_photoconsistency.is_finite());
             assert!(
@@ -799,7 +799,7 @@ fn too_few_views_skips_search() {
     let mut params = test_params(Objective::MeanPairwise);
     params.min_views = 3;
 
-    let result = refine_patch_normal(&patch, &views, 15, &params);
+    let result = refine_patch_normal(&patch, &views, 15, &params, None);
 
     // Unrefined: input patch returned verbatim, NaN scores, zero confidence.
     assert_eq!(result.patch.u_axis, patch.u_axis);
@@ -816,7 +816,13 @@ fn back_facing_init_normal_is_returned_unrefined() {
     let views = scene.views();
     // Normal pointing away from every camera: the init support is undefined.
     let patch = plane_patch(-true_normal());
-    let result = refine_patch_normal(&patch, &views, 15, &test_params(Objective::MeanPairwise));
+    let result = refine_patch_normal(
+        &patch,
+        &views,
+        15,
+        &test_params(Objective::MeanPairwise),
+        None,
+    );
     assert!(result.photoconsistency.is_nan());
     assert_eq!(result.valid_view_count, 0);
     assert_eq!(result.confidence, 0.0);
@@ -834,7 +840,13 @@ fn min_valid_fraction_drops_offscreen_view() {
     let views = scene.views();
     let patch = plane_patch(exp_map_normal(&true_normal(), [6.0f64.to_radians(), 0.0]));
 
-    let result = refine_patch_normal(&patch, &views, 15, &test_params(Objective::MeanPairwise));
+    let result = refine_patch_normal(
+        &patch,
+        &views,
+        15,
+        &test_params(Objective::MeanPairwise),
+        None,
+    );
     assert_eq!(result.valid_view_count, 3);
     assert!(result.photoconsistency.is_finite());
 }
@@ -860,8 +872,8 @@ fn confidence_flags_narrow_baseline_degeneracy() {
 
     let wide_views = wide.views();
     let narrow_views = narrow.views();
-    let wide_result = refine_patch_normal(&patch, &wide_views, 15, &params);
-    let narrow_result = refine_patch_normal(&patch, &narrow_views, 15, &params);
+    let wide_result = refine_patch_normal(&patch, &wide_views, 15, &params, None);
+    let narrow_result = refine_patch_normal(&patch, &narrow_views, 15, &params, None);
 
     assert!(wide_result.confidence.is_finite() && wide_result.confidence >= 0.0);
     assert!(narrow_result.confidence.is_finite() && narrow_result.confidence >= 0.0);
@@ -912,6 +924,7 @@ fn refine_patch_cloud_refines_in_place() {
         &patch_views,
         15,
         &test_params(Objective::MeanPairwise),
+        None,
     );
 
     assert_eq!(results.len(), 3);
@@ -926,4 +939,304 @@ fn refine_patch_cloud_refines_in_place() {
             err.to_degrees()
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Keypoint-anchored refinement
+// ---------------------------------------------------------------------------
+
+/// Project the patch center into a view, returning the source-image pixel — the
+/// reprojection `project_i(X_p)` that the keypoint plumbing recenters against.
+fn project_center(patch: &OrientedPatch, view: &ProjectedImage<'_>) -> [f64; 2] {
+    let pc = view
+        .cam_from_world
+        .transform_point_homogeneous(patch.center.coords, patch.w);
+    let (px, py) = view
+        .camera
+        .ray_to_pixel([pc.x, pc.y, pc.z])
+        .expect("in frame");
+    [px, py]
+}
+
+#[test]
+fn keypoints_at_reprojection_match_no_keypoint_refine() {
+    // Invariant: anchoring every view at exactly its own reprojection of the
+    // point center (offset ≈ 0) must reproduce the no-keypoint refine to a tight
+    // tolerance — proving the plumbing doesn't perturb the no-offset case. Use the
+    // exact (cache-off) path on both sides so only the keypoint argument differs.
+    let scene = Scene::new(&[
+        [0.8, 0.0, 0.0],
+        [-0.8, 0.0, 0.0],
+        [0.0, 0.7, 0.0],
+        [0.0, -0.7, 0.0],
+    ]);
+    let views = scene.views();
+    let truth = true_normal();
+    let init_n = exp_map_normal(&truth, [12.0f64.to_radians(), 0.0]);
+    let patch = plane_patch(init_n);
+    let params = NormalRefineParams {
+        cache: CacheMode::Off,
+        ..test_params(Objective::RobustWeighted { iters: 3 })
+    };
+
+    let baseline = refine_patch_normal(&patch, &views, 15, &params, None);
+
+    // Keypoint = each view's reprojection of the (unrefined) center.
+    let kps: Vec<Option<[f64; 2]>> = views
+        .iter()
+        .map(|v| Some(project_center(&patch, v)))
+        .collect();
+    let anchored = refine_patch_normal(&patch, &views, 15, &params, Some(&kps));
+
+    let dn = angle_between(&baseline.patch.normal(), &anchored.patch.normal());
+    assert!(
+        dn < 1e-6,
+        "zero-offset keypoints must match no-keypoint normal: Δ {} rad",
+        dn
+    );
+    assert_relative_eq!(
+        baseline.photoconsistency,
+        anchored.photoconsistency,
+        epsilon = 1e-9
+    );
+    assert_eq!(baseline.valid_view_count, anchored.valid_view_count);
+}
+
+#[test]
+fn offset_keypoints_change_the_refined_result() {
+    // A real in-plane keypoint offset positions the patches off the point center,
+    // so the rendered tiles (and hence the refined normal / Φ) differ from the
+    // no-keypoint refine. Sanity that the offset is actually applied.
+    let scene = Scene::new(&[
+        [0.8, 0.0, 0.0],
+        [-0.8, 0.0, 0.0],
+        [0.0, 0.7, 0.0],
+        [0.0, -0.7, 0.0],
+    ]);
+    let views = scene.views();
+    let patch = plane_patch(exp_map_normal(&true_normal(), [10.0f64.to_radians(), 0.0]));
+    let params = NormalRefineParams {
+        cache: CacheMode::Off,
+        ..test_params(Objective::MeanPairwise)
+    };
+
+    let baseline = refine_patch_normal(&patch, &views, 15, &params, None);
+
+    // Shift each view's keypoint by a sizeable, view-dependent amount in pixels,
+    // so the anchored patches sample a different part of the textured plane.
+    let kps: Vec<Option<[f64; 2]>> = views
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let c = project_center(&patch, v);
+            let s = 1.0 + i as f64;
+            Some([c[0] + 14.0 + 3.0 * s, c[1] - 11.0 - 2.0 * s])
+        })
+        .collect();
+    let anchored = refine_patch_normal(&patch, &views, 15, &params, Some(&kps));
+
+    let dn = angle_between(&baseline.patch.normal(), &anchored.patch.normal());
+    let dphi = (baseline.photoconsistency - anchored.photoconsistency).abs();
+    assert!(
+        dn > 1e-4 || dphi > 1e-4,
+        "offset keypoints should change the refined result: Δnormal {} rad, ΔΦ {}",
+        dn,
+        dphi
+    );
+}
+
+#[test]
+fn view_render_patch_anchors_center_at_keypoint() {
+    // Provable anchoring: recentering a view's patch onto a keypoint makes the
+    // recentered center reproject to *exactly* that keypoint. Guards the
+    // seed_offset axis order (x before y) and the round-trip math — a transposition
+    // would fail since the offset is deliberately asymmetric in x and y.
+    let scene = Scene::new(&[
+        [0.8, 0.0, 0.0],
+        [-0.8, 0.0, 0.0],
+        [0.0, 0.7, 0.0],
+        [0.0, -0.7, 0.0],
+    ]);
+    let views = scene.views();
+    let patch = plane_patch(true_normal());
+    for v in &views {
+        let c = project_center(&patch, v);
+        let kp = [c[0] + 9.0, c[1] - 6.0]; // asymmetric in x and y
+        let rp = view_render_patch(&patch, v, Some(kp));
+        let pc = v
+            .cam_from_world
+            .transform_point_homogeneous(rp.center.coords, rp.w);
+        let (px, py) = v.camera.ray_to_pixel([pc.x, pc.y, pc.z]).expect("in frame");
+        assert_relative_eq!(px, kp[0], epsilon = 1e-6);
+        assert_relative_eq!(py, kp[1], epsilon = 1e-6);
+    }
+}
+
+#[test]
+fn mixed_some_none_keypoints_apply_per_view() {
+    // A keypoint on only some views (None on the rest) must still apply the offset
+    // on the Some views — exercising the mixed Some/None indexing. With one view
+    // offset and the rest centered (None), the refined result differs from the
+    // all-None baseline.
+    let scene = Scene::new(&[
+        [0.8, 0.0, 0.0],
+        [-0.8, 0.0, 0.0],
+        [0.0, 0.7, 0.0],
+        [0.0, -0.7, 0.0],
+    ]);
+    let views = scene.views();
+    let patch = plane_patch(exp_map_normal(&true_normal(), [10.0f64.to_radians(), 0.0]));
+    let params = NormalRefineParams {
+        cache: CacheMode::Off,
+        ..test_params(Objective::MeanPairwise)
+    };
+    let baseline = refine_patch_normal(&patch, &views, 15, &params, None);
+
+    let mut kps: Vec<Option<[f64; 2]>> = vec![None; views.len()];
+    let c0 = project_center(&patch, &views[0]);
+    kps[0] = Some([c0[0] + 16.0, c0[1] - 13.0]);
+    let mixed = refine_patch_normal(&patch, &views, 15, &params, Some(&kps));
+
+    let dn = angle_between(&baseline.patch.normal(), &mixed.patch.normal());
+    let dphi = (baseline.photoconsistency - mixed.photoconsistency).abs();
+    assert!(
+        dn > 1e-4 || dphi > 1e-4,
+        "a single offset view (rest None) must perturb the result: Δn {} ΔΦ {}",
+        dn,
+        dphi
+    );
+}
+
+#[test]
+fn keypoints_leave_points_at_infinity_untouched() {
+    // An infinity patch (w==0) is skipped before any keypoint is indexed; passing
+    // Some(keypoints) must not panic and must leave the frame byte-for-byte.
+    let scene = Scene::new(&[[0.8, 0.0, 0.0], [-0.8, 0.0, 0.0], [0.0, 0.7, 0.0]]);
+    let views = scene.views();
+    let patch = OrientedPatch::from_infinity_direction(
+        Point3::new(0.0, 0.0, 1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.02, 0.02],
+    );
+    let params = test_params(Objective::MeanPairwise);
+    let kps: Vec<Option<[f64; 2]>> = views.iter().map(|_| Some([10.0, 12.0])).collect();
+
+    let result = refine_patch_normal(&patch, &views, 16, &params, Some(&kps));
+
+    assert_eq!(result.patch.w, 0.0);
+    assert_eq!(result.patch.center, patch.center);
+    assert_eq!(result.patch.u_axis, patch.u_axis);
+    assert_eq!(result.patch.v_axis, patch.v_axis);
+    assert_eq!(result.valid_view_count, 0);
+}
+
+#[test]
+fn cache_matches_exact_with_keypoints() {
+    // Approximation-budget check: the fronto cache holds the keypoint offset at the
+    // seed normal (vs the exact path recomputing it per candidate), so the cached
+    // keypoint-anchored refine must land within the cache's resampling tolerance of
+    // the exact one. (This bounds the approximation; the *honoring* of the keypoint
+    // is guarded by `cache_honors_keypoints`, since on a flat plane the normal is
+    // nearly invariant to an in-plane shift.)
+    let scene = Scene::new(&[
+        [0.8, 0.0, 0.0],
+        [-0.8, 0.0, 0.0],
+        [0.0, 0.7, 0.0],
+        [0.0, -0.7, 0.0],
+    ]);
+    let views = scene.views();
+    let patch = plane_patch(exp_map_normal(&true_normal(), [12.0f64.to_radians(), 0.0]));
+    // Real (a few px), view-dependent keypoint offsets from the projection.
+    let kps: Vec<Option<[f64; 2]>> = views
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let c = project_center(&patch, v);
+            let s = 1.0 + i as f64;
+            Some([c[0] + 0.6 * s, c[1] - 0.4 * s])
+        })
+        .collect();
+    let exact = NormalRefineParams {
+        cache: CacheMode::Off,
+        ..test_params(Objective::RobustWeighted { iters: 3 })
+    };
+    let cached = NormalRefineParams {
+        cache: CacheMode::FrontoParallel,
+        ..test_params(Objective::RobustWeighted { iters: 3 })
+    };
+    let r_exact = refine_patch_normal(&patch, &views, 24, &exact, Some(&kps));
+    let r_cached = refine_patch_normal(&patch, &views, 24, &cached, Some(&kps));
+
+    let dn = angle_between(&r_exact.patch.normal(), &r_cached.patch.normal());
+    assert!(
+        dn < 2.0f64.to_radians(),
+        "cache vs exact (keypoints) normal Δ {} rad exceeds the resampling budget",
+        dn
+    );
+}
+
+#[test]
+fn cache_honors_keypoints() {
+    // Guard that the cache path actually *applies* the keypoint offset: with a
+    // large, view-dependent offset the cached refine WITH keypoints must differ
+    // from the cached refine WITHOUT keypoints. If `prerender` ignored the
+    // keypoint (center_offset == 0) the two would be byte-identical and this fails
+    // — the regression an "anchored ≈ exact" tolerance test cannot catch on a flat
+    // plane.
+    let scene = Scene::new(&[
+        [0.8, 0.0, 0.0],
+        [-0.8, 0.0, 0.0],
+        [0.0, 0.7, 0.0],
+        [0.0, -0.7, 0.0],
+    ]);
+    let views = scene.views();
+    let patch = plane_patch(exp_map_normal(&true_normal(), [10.0f64.to_radians(), 0.0]));
+    let params = NormalRefineParams {
+        cache: CacheMode::FrontoParallel,
+        ..test_params(Objective::MeanPairwise)
+    };
+    let kps: Vec<Option<[f64; 2]>> = views
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let c = project_center(&patch, v);
+            let s = 1.0 + i as f64;
+            Some([c[0] + 14.0 + 3.0 * s, c[1] - 11.0 - 2.0 * s])
+        })
+        .collect();
+
+    let no_kp = refine_patch_normal(&patch, &views, 15, &params, None);
+    let with_kp = refine_patch_normal(&patch, &views, 15, &params, Some(&kps));
+
+    let dn = angle_between(&no_kp.patch.normal(), &with_kp.patch.normal());
+    let dphi = (no_kp.photoconsistency - with_kp.photoconsistency).abs();
+    assert!(
+        dn > 1e-4 || dphi > 1e-4,
+        "cached refine must apply the keypoint offset: Δn {} rad ΔΦ {}",
+        dn,
+        dphi
+    );
+}
+
+#[test]
+fn all_none_keypoints_match_no_keypoints() {
+    // An all-`None` keypoint slice must reproduce the no-keypoint refine exactly —
+    // the documented `Cow::Borrowed` no-op path, locked byte-for-byte.
+    let scene = Scene::new(&[
+        [0.8, 0.0, 0.0],
+        [-0.8, 0.0, 0.0],
+        [0.0, 0.7, 0.0],
+        [0.0, -0.7, 0.0],
+    ]);
+    let views = scene.views();
+    let patch = plane_patch(exp_map_normal(&true_normal(), [12.0f64.to_radians(), 0.0]));
+    let params = test_params(Objective::RobustWeighted { iters: 3 });
+
+    let baseline = refine_patch_normal(&patch, &views, 15, &params, None);
+    let all_none: Vec<Option<[f64; 2]>> = vec![None; views.len()];
+    let anchored = refine_patch_normal(&patch, &views, 15, &params, Some(&all_none));
+
+    assert_eq!(baseline.patch.normal(), anchored.patch.normal());
+    assert_eq!(baseline.photoconsistency, anchored.photoconsistency);
+    assert_eq!(baseline.valid_view_count, anchored.valid_view_count);
 }
