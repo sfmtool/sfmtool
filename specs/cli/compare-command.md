@@ -61,13 +61,13 @@ the right. Each tile is the point's oriented surfel projected into one observing
 clean column means the solve placed a real, photoconsistent surface point there. The point
 normals are refined for cross-view photoconsistency first (`--strips-no-refine` to skip).
 
-> _**Planned precondition (2026-06-25):** `--strips` will **require** both inputs to be
-> `feature_source == "embedded_patches"` reconstructions and **reject** `sift_files` with an
-> error pointing at `sfm xform --to-embedded-patches` (run it on each solve first). This is a
-> workflow change for the strips montage — it currently builds patch clouds from raw solves on
-> the fly; the diagnostic `_solve_strips` engine and the `scripts/exp_*`/`cmp_*` probes call the
-> low-level `PatchCloud.from_reconstruction` directly and are unaffected. Design lock:
-> `reports/2026-06-25-embedded-patches-precondition-plan.md`._
+> _**Precondition — left ungated (2026-06-25):** unlike `--refine-normals` and `render-patches`
+> (which now require `embedded_patches`), `compare --strips` is **intentionally not gated**. It
+> remains a dual-source diagnostic that builds patch clouds from raw solves on the fly: the strip
+> montage is deeply `.sift`-tied (its frame sizing and ranking metrics read feature scales), and
+> as a comparison/inspection tool it is most useful directly on solves without a conversion step.
+> The diagnostic `_solve_strips` engine and the `scripts/exp_*`/`cmp_*` probes likewise keep
+> calling the low-level `PatchCloud.from_reconstruction` directly._
 
 The strip view always puts points in correspondence by keypoint coordinate (the robust choice
 across SIFT backends), independent of the `--by-coordinate`/`--by-feature-index` choice used for

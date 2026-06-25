@@ -277,7 +277,7 @@ def embed_patches(
         images: One full-resolution image per ``recon.image_names`` entry, matching
             each camera's dimensions (e.g. via ``read_workspace_image``).
         patch_size: Surfel size — the full patch edge (feature-size multiples),
-            halved to the library half-extent (matching ``refine-normals``).
+            halved to the library half-extent and passed to ``to_embedded_patches``.
         min_relative_zncc, max_shift_px, min_views, max_iters, search: The pipeline
             knobs documented in ``specs/cli/embed-patches-command.md``.
         resolution: The ``R × R`` patch grid the kernels render/score on.

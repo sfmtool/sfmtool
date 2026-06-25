@@ -11,11 +11,11 @@ registered image and composites them onto the source frame.
 This is a qualitative aid for visually inspecting a reconstruction's geometry
 and patches.
 
-> _**Planned precondition (2026-06-25):** `render-patches` will **require** a
+> _**Precondition — shipped (2026-06-25):** `render-patches` now **requires** a
 > `feature_source == "embedded_patches"` reconstruction (which carries real
-> per-point patch frames and reference bitmaps) and **reject** `sift_files` with
-> an error pointing at `sfm xform --to-embedded-patches`. Design lock:
-> `reports/2026-06-25-embedded-patches-precondition-plan.md`._
+> per-point patch frames and reference bitmaps) and **rejects** `sift_files` with
+> a `UsageError` pointing at `sfm xform --to-embedded-patches` (the gate runs in
+> the command right after load, before any rendering)._
 
 ## Command Syntax
 
@@ -23,11 +23,13 @@ and patches.
 sfm render-patches <RECONSTRUCTION.sfmr> --output <DIR> [OPTIONS...]
 ```
 
-The reconstruction must carry a patch cloud. Produce one with:
+The reconstruction must be `embedded_patches` (it carries the per-point patch
+frames). Produce one with:
 
 ```bash
-sfm xform in.sfmr out.sfmr --refine-normals save_patches=true
-# add bitmaps=true as well for --mode texture
+sfm xform in.sfmr out.sfmr --to-embedded-patches
+# for --mode texture, build the bitmaps too:
+sfm xform in.sfmr out.sfmr --to-embedded-patches --refine-normals bitmaps=true
 ```
 
 ## Options

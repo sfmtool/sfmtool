@@ -93,9 +93,11 @@ def _parse_opt_int(value: str) -> int | None:
 
 # Each --refine-normals key maps to a caster for its value; the
 # RefineNormalsTransform constructor owns range/enum validation. Keys mirror the
-# PatchCloud.refine_normals / from_reconstruction binding parameters one-to-one.
+# PatchCloud.refine_normals binding parameters. (Frame-sizing / cloud-building
+# knobs — extent, extent_value, initial_normals — and the save_patches opt-in
+# live on `--to-embedded-patches`, the step that actually builds the patch frame;
+# refine-normals reuses the stored frame, so it doesn't take them.)
 _REFINE_NORMALS_KEYS: dict[str, Callable[[str], object]] = {
-    "save_patches": _parse_bool,
     "bitmaps": _parse_bool,
     "angular_range_deg": float,
     "init_steps": int,
@@ -113,9 +115,6 @@ _REFINE_NORMALS_KEYS: dict[str, Callable[[str], object]] = {
     "cache_supersample": float,
     "quality": str,
     "confidence": _parse_bool,
-    "initial_normals": str,
-    "extent": str,
-    "extent_value": float,
 }
 
 

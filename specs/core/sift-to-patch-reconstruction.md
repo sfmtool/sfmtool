@@ -38,18 +38,22 @@ photometric steps of the pipeline below.
 
 ## Operating contract: surfel ops require `embedded_patches`
 
-> _Status: **partially shipped** (2026-06-25). **Done:** the keypoint-aware
-> refine kernel (`refine_normals(use_stored_keypoints=...)`) and the
-> `embed-patches` re-layer onto `to_embedded_patches` with `use_stored_keypoints`
-> — see the bullets below. **Pending:** the hard precondition that makes the
-> surfel operations reject `sift_files` (the next paragraph describes that target;
-> today they still accept either source by projecting)._
+> _Status: **shipped** (2026-06-25). **Done:** the keypoint-aware refine kernel
+> (`refine_normals(use_stored_keypoints=...)`), the `embed-patches` re-layer onto
+> `to_embedded_patches` with `use_stored_keypoints`, and the hard precondition
+> gating `sfm xform --refine-normals` and `sfm render-patches` to
+> `embedded_patches` (both reject `sift_files` with a `UsageError` naming the
+> fix). **Scoped out:** `compare --strips` is intentionally left ungated — it
+> stays a dual-source diagnostic that builds patch clouds from raw solves on the
+> fly (its strip montage is deeply `.sift`-tied; see
+> `specs/cli/compare-command.md`). See the bullets below._
 
-The surfel operations — `sfm xform --refine-normals`, `sfm render-patches`, and
-`compare --strips` — **require** a `feature_source == "embedded_patches"`
+The gated surfel operations — `sfm xform --refine-normals` and `sfm
+render-patches` — **require** a `feature_source == "embedded_patches"`
 reconstruction and **reject** `sift_files` with an error naming the fix (run
-`sfm xform --to-embedded-patches` first). The motivation is in the plan doc and
-in the keypoint-source experiments (`reports/exp/2026-06-21-mvs-normal-refinement.md`):
+`sfm xform --to-embedded-patches` first). `compare --strips` is the deliberate
+exception (ungated, dual-source). The motivation is in the keypoint-source
+experiments (`reports/exp/2026-06-21-mvs-normal-refinement.md`):
 an `embedded_patches` reconstruction *stores* a per-observation keypoint, so
 refinement can position each view on its real detected feature instead of the
 reprojected point center — which gives a cleaner cross-view consensus (and a
@@ -76,8 +80,13 @@ Consequences of the contract:
   `use_stored_keypoints=True`, each view's patch on an `embedded_patches` recon is
   rendered at its stored per-observation keypoint rather than at `project_i(X_p)`.
   `embed-patches` enables this, so its refine runs over the SIFT-detection
-  keypoints `to_embedded_patches` carried in; `sfm xform --refine-normals` will
-  adopt it once it is gated to `embedded_patches` (the pending precondition).
+  keypoints `to_embedded_patches` carried in. `sfm xform --refine-normals` now
+  does the same: gated to `embedded_patches`, its `apply` reads the stored frame
+  back (`recon.patches`) and refines with `use_stored_keypoints=True`. Because it
+  reuses that frame, it has no frame-sizing / seeding (`extent` /
+  `extent_value` / `initial_normals`) or `save_patches` knobs — those live on
+  `to_embedded_patches`, the step that builds the frame (see
+  `specs/cli/xform-refine-normals-command.md`).
 - **The low-level builder stays dual-mode.** `PatchCloud::from_reconstruction`
   (and the diagnostic `_solve_strips` engine and `scripts/exp_*`/`cmp_*`) may
   still build a cloud from either source by projecting; the precondition is
@@ -94,10 +103,10 @@ Consequences of the contract:
 
 1. **Initialize a patch frame.** Seed each point's `(u, v)` frame with a starting
    normal from the mean viewing direction — the average of its point→camera
-   directions (`initial_normals=mean_viewing`).
+   directions (`to_embedded_patches`'s `normal="mean_viewing"`).
 2. **Refine the normal photometrically.** Rotate each frame to maximize
    cross-view photometric consensus — [normal
-   refinement](patch-normal-refinement.md), with `save_patches`.
+   refinement](patch-normal-refinement.md); the refined frame is re-persisted.
 3. **Select the views (per point).** Run [patch-view
    selection](patch-view-selection.md): geometric candidacy plus photometric
    vetting against a track-seeded template yields the view set `G`.
@@ -144,7 +153,7 @@ keypoint-localization spec).
 | parameter | default | forwarded to / meaning |
 |---|---|---|
 | `min_relative_zncc` | ~0.7 | view selection **and** keypoint refiner: a view must agree at least this fraction as well as the reference (the track's self-agreement on admission; the views' median LOO ZNCC during refinement) |
-| `patch_size` | inherits `refine-normals`' `extent_value` | frame init: surfel size — full patch edge length, halved to the library half-extent (see `refine-normals`) |
+| `patch_size` | `10.0` | frame init: surfel size — full patch edge length, halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`) |
 | `max_shift_px` | ~3 | keypoint refiner: drop a view whose keypoint sits more than this from the point's projection (source-image px) |
 | `min_views` | 2 | pipeline cull: drop a point left with fewer kept views |
 

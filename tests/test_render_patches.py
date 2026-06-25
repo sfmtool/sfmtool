@@ -42,6 +42,26 @@ def _attach_patches(sfmr_path, *, with_bitmaps=False, bitmap_alpha=255, resoluti
     return out
 
 
+def _embed(sfmr_path, *, with_bitmaps=False, bitmap_alpha=255, resolution=8):
+    """Convert to ``embedded_patches`` and save a copy, optionally with bitmaps.
+
+    ``sfm render-patches`` requires an ``embedded_patches`` reconstruction, so
+    the CLI tests feed it the converted recon (the ``to_embedded_patches``
+    bridge reads the workspace's ``.sift`` files for the patch frames).
+    """
+    recon = SfmrReconstruction.load(str(sfmr_path))
+    recon = recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
+    if with_bitmaps:
+        # One RGBA bitmap per 3D point (parallel to points).
+        bmps = np.zeros((recon.point_count, resolution, resolution, 4), np.uint8)
+        bmps[..., :3] = 128
+        bmps[..., 3] = bitmap_alpha
+        recon = recon.clone_with_changes(patch_bitmaps=bmps)
+    out = sfmr_path.parent / "embedded.sfmr"
+    recon.save(str(out), operation="test")
+    return out
+
+
 def _attach_patches_with_infinity(sfmr_path):
     """Like ``_attach_patches`` but first turns one well-observed point into a
     point at infinity, so the saved cloud carries a ``w == 0`` tangent-sphere
@@ -291,7 +311,9 @@ class TestRenderPatchesCLI:
         result = CliRunner().invoke(main, ["render-patches", "dummy.sfmr"])
         assert result.exit_code != 0
 
-    def test_no_patches_reports_usage_error(self, seoul_bull_sfmr_only, tmp_path):
+    def test_rejects_sift_files(self, seoul_bull_sfmr_only, tmp_path):
+        """A sift_files recon is rejected up front (the surfel precondition),
+        with a pointer to the conversion bridge."""
         result = CliRunner().invoke(
             main,
             [
@@ -304,7 +326,7 @@ class TestRenderPatchesCLI:
             ],
         )
         assert result.exit_code != 0
-        assert "no patch cloud" in result.output
+        assert "embedded_patches" in result.output
 
     def test_bad_border_color(self, seoul_bull_workspace, tmp_path):
         patched = _attach_patches(seoul_bull_workspace)
@@ -342,7 +364,7 @@ class TestRenderPatchesCLI:
         assert "between 0 and 1" in result.output
 
     def test_bare_opaque_defaults(self, seoul_bull_workspace, tmp_path):
-        patched = _attach_patches(seoul_bull_workspace, with_bitmaps=True)
+        patched = _embed(seoul_bull_workspace, with_bitmaps=True)
         out = tmp_path / "out"
         result = CliRunner().invoke(
             main,
@@ -360,7 +382,7 @@ class TestRenderPatchesCLI:
         assert list(out.glob("*_texture.png"))
 
     def test_e2e_wire(self, seoul_bull_workspace, tmp_path):
-        patched = _attach_patches(seoul_bull_workspace)
+        patched = _embed(seoul_bull_workspace)
         out = tmp_path / "out"
         result = CliRunner().invoke(
             main,

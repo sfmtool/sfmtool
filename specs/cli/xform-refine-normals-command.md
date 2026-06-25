@@ -7,8 +7,8 @@
 (`specs/core/patch-normal-refinement.md`, v1 implemented in
 `sfmtool-core/src/patch/normal_refine.rs` + the `PatchCloud.refine_normals`
 PyO3 binding) as an `sfm xform` operation that rewrites a reconstruction's
-per-point `normals` in place, and can optionally persist the full refined patch
-cloud (`save_patches`).
+per-point `normals` in place, and re-persists the refined patch cloud alongside
+them.
 
 > _Note (2026-06-13): the Click option is declared `is_flag=False,
 > flag_value=""` so the optional value accepts all three forms — bare
@@ -19,17 +19,29 @@ cloud (`save_patches`).
 > count uses a fixed reporting threshold (0.1) on the normalized confidence; it
 > is diagnostic only (no per-point gating), as specified below._
 
-> _**Planned precondition (2026-06-25):** `--refine-normals` will **require** a
-> `feature_source == "embedded_patches"` reconstruction and **reject**
-> `sift_files` with an error pointing at `sfm xform --to-embedded-patches`. On an
+> _**Precondition — shipped (2026-06-25):** `--refine-normals` now **requires** a
+> `feature_source == "embedded_patches"` reconstruction and **rejects**
+> `sift_files` with a `UsageError` pointing at `sfm xform --to-embedded-patches`
+> (enforced per-step in `xform/_apply.py` via the
+> `RefineNormalsTransform.required_feature_source` attribute, so a
+> `--to-embedded-patches --refine-normals` chain converts first and passes). On an
 > `embedded_patches` recon it positions each view's patch at that observation's
 > **stored keypoint** (not the reprojected point center), which is the win
 > measured in
 > the keypoint-source experiments (`reports/exp/2026-06-21-mvs-normal-refinement.md`).
 > It re-refines the normal (and optionally re-renders the bitmap) over the
 > stored keypoints/view set; it does not re-run view selection or keypoint
-> localization. Design lock:
-> `reports/2026-06-25-embedded-patches-precondition-plan.md`._
+> localization._
+>
+> _Because the input already carries a per-point patch frame, `apply` reads the
+> stored frame back (`recon.patches`) instead of rebuilding one, and always
+> re-persists it (the `u`/`v` frame stays consistent with the rewritten normal).
+> Consequently the frame-building knobs that were `sift_files`-era levers —
+> `extent`, `extent_value`, `initial_normals`, and the `save_patches` opt-in —
+> **no longer exist on `--refine-normals`** (it takes none of them). Frame sizing
+> and seeding now belong solely to `--to-embedded-patches` (`extent` /
+> `extent_value` / `normal`); `--refine-normals` reuses that frame. `bitmaps=true`
+> still controls whether the RGBA textures are (re)rendered._
 
 ## Why this fits `xform` (and how)
 
@@ -42,8 +54,8 @@ naturally — with two characteristics that shape the design:
    et al. it removes no points and changes no positions; it only rewrites the
    per-point `normal` field (stored in the `.sfmr` version 3+ as `normals_xyz`,
    surfaced as `recon.normals` and writable via
-   `recon.clone_with_changes(normals=...)`). With `save_patches` it additionally
-   attaches the refined patch geometry to the reconstruction. It therefore belongs
+   `recon.clone_with_changes(normals=...)`). It also re-persists the refined patch
+   geometry (the stored frame stays consistent with the normals). It therefore belongs
    in the **Optimization** group of `xform-command.md` next to `--bundle-adjust`,
    not under "Filtering Operations." (The user's "filter" is loose usage; the
    operation is a refinement transform.) The point count is unchanged.
@@ -79,7 +91,7 @@ order-free and self-documenting however many knobs are set:
 --refine-normals
 --refine-normals angular_range_deg=25,init_steps=7
 --refine-normals angular_range_deg=25,init_steps=7,sampler=anisotropic,objective=mean
---refine-normals resolution=32,initial_normals=geometric
+--refine-normals resolution=32,bitmaps=true
 ```
 
 (This differs from the older `xform` mini-DSLs — `--remove-isolated
@@ -89,11 +101,9 @@ long positional tuple.)
 
 ### `key=value` modifiers
 
-These pass straight through to `PatchCloud.refine_normals` /
-`PatchCloud.from_reconstruction`, reusing the binding's own defaults — the
-"Default" column matches each binding default exactly (including
-`initial_normals=stored`, which is the `from_reconstruction` `normal` default),
-so the CLI re-specifies nothing and the two layers cannot drift.
+These pass straight through to `PatchCloud.refine_normals`, reusing the binding's
+own defaults — the "Default" column matches each binding default exactly, so the
+CLI re-specifies nothing and the two layers cannot drift.
 
 | Key                 | Default         | Forwards to                       |
 |---------------------|-----------------|-----------------------------------|
@@ -113,11 +123,7 @@ so the CLI re-specifies nothing and the two layers cannot drift.
 | `cache_supersample` | `2.0`           | `refine_normals` (fronto base density, ≥ 1) |
 | `quality`           | `none`          | preset for `cache`/`cache_supersample` (`none`/`coarse`/`fine`) |
 | `confidence`        | `false`         | `refine_normals` (compute + report the Φ-peakedness; see below) |
-| `initial_normals`   | `stored`        | `from_reconstruction` normal policy (below) |
-| `extent`            | `feature_size`  | `from_reconstruction` extent policy (`feature_size`/`fixed`/`relative_spacing`/`pixel_size`) |
-| `extent_value`      | `10.0`          | `from_reconstruction` (full patch size; halved to the library half-extent) |
-| `save_patches`      | `false`         | persist the full refined patch cloud, not just per-point normals (below) |
-| `bitmaps`           | `false`         | also render + persist the per-point RGBA patch bitmaps (implies `save_patches`; below) |
+| `bitmaps`           | `false`         | render + persist the per-point RGBA patch bitmaps (below) |
 
 Unknown keys, malformed `key=value` tokens (no `=`, empty key), or out-of-range
 values raise `click.UsageError`, consistent with the other parsers in
@@ -164,78 +170,37 @@ the optimum) and includes a `… N low-confidence` count in the summary. It is
 persist it. When off, the summary omits the low-confidence count and the
 `refine_normals` `confidence` array is `NaN`.
 
-**Not surfaced in v1.** The bindings also accept `k_neighbors` (for
-`initial_normals=geometric`), `pixel_reduce` (for `extent=pixel_size`), and
-`feature_reduce` (for `extent=feature_size`). These are intentionally left at
-their binding defaults (`12`, `min`, `median`) and **not** exposed as CLI keys
-for v1 — they only matter for the non-default policies and add noise to the
-common case. Add them later if a use case appears; the parser should reject them
-as unknown keys until then.
+**Not surfaced in v1.** The `refine_normals` binding also accepts tuning knobs
+(e.g. for the non-default window/sampler combinations) that are left at their
+binding defaults and **not** exposed as CLI keys for v1 — they add noise to the
+common case. Add them later if a use case appears; the parser rejects unknown
+keys until then.
 
-## Initial normals (`initial_normals=`)
+## Patch frame: built upstream, reused here
 
-`from_reconstruction` needs a starting normal per patch; that starting normal is
-also one of the search seeds. (The parameter is named `initial_normals`, not
-`seed`, to avoid any confusion with a random-number seed — there is no RNG in
-the search.) Choices map to `PatchNormal`:
-
-- `stored` *(default, decided)* — refine the reconstruction's existing
-  `normals` (falls back to mean-viewing where a stored normal is
-  zero/degenerate). This makes `--refine-normals` read as "improve the normals
-  already in this model," and lets a second `--refine-normals` in the chain
-  continue from the first (refinement is intentionally **not idempotent** — each
-  pass re-seeds and can improve further; see the core spec). `stored` is the
-  right default precisely because the op's job is to *improve what's there*; the
-  core routine still adds its own mean-viewing seed internally, so starting from
-  `stored` never does worse than a fresh mean-viewing start. This is now also the
-  `PatchCloud.from_reconstruction` `normal` default, so the CLI and the binding
-  agree.
-- `mean_viewing` — seed every patch from the mean viewing direction, ignoring
-  whatever is stored. Useful when the stored normals are absent or untrusted.
-- `geometric` — local PCA plane fit over k nearest points (`k_neighbors`
-  defaults to the binding's `12`; exposed as `k_neighbors=` if needed).
-
-The core routine internally also tries the mean-viewing seed regardless of this
-choice, so `initial_normals=` selects the *cloud's* initial normal (the one
-written back for points that are skipped or not improved), not the only basin
-searched.
-
-## Patch sizing (`extent=`)
-
-Refinement needs a world-space patch size per point. `extent_value` is the
-**full** patch size — the whole edge length of the surfel — in the chosen
-policy's units. The CLI deliberately speaks in full size rather than the
-half-extent the library and on-disk format store: a CLI user should not have to
-reason in radii. The transform halves `extent_value` to the library half-extent
-before calling `PatchCloud.from_reconstruction`, so `extent_value=10`
-(`feature_size`, the default) is the same patch the library produces for
-`extent_value=5.0`.
-
-The default is `extent=feature_size` (full factor `10.0`, median over views) —
-**decided**: it sizes each patch from the observing keypoints' SIFT scales,
-tying the patch to the real feature support, which is the right size for a
-photometric match. This **requires the workspace `.sift` files**, the same
-dependency as `--remove-large-features`; a point with no readable scale in any
-view is an error (`PatchCloudError::MissingFeatureScale`, surfaced as
-`ValueError`). The `.sift`-requiring default is intentional — `--help` should
-call this out prominently, the same "artifacts must still be present" caveat the
-SIFT filters carry. Operators who do not have `.sift` present (or want size
-decoupled from features) can opt into `extent=relative_spacing`,
-`extent=pixel_size` (full diameter in pixels, the CLI spelling of the library's
-`pixel_radius` policy), or `extent=fixed`, none of which read `.sift`.
+Refinement needs a per-point patch frame — a starting normal and a world-space
+patch size. On an `embedded_patches` reconstruction that frame is **already
+stored**, so `--refine-normals` reads it back (`recon.patches`) and never builds
+one. The frame's seeding (`normal`) and sizing (`extent` / `extent_value`) are
+therefore set by the upstream `--to-embedded-patches` step — see
+[xform-to-embedded-patches](xform-command.md) and the core pipeline spec
+[sift-to-patch-reconstruction.md](../core/sift-to-patch-reconstruction.md). The
+refine pass only rotates each stored normal toward the photometric optimum (it
+re-seeds from the stored normal plus the routine's internal mean-viewing seed;
+refinement is intentionally **not idempotent** — a second `--refine-normals` can
+improve further). It does **not** resize the patch.
 
 ## Which points are refined
 
-- **Finite points only.** This command **opts out** of the default by building
-  its cloud with `PatchCloud.from_reconstruction(..., exclude_points_at_infinity=True)`,
-  so only finite points are refined; points at infinity (`w = 0`) are excluded and
-  their stored normals pass through unchanged. The opt-out is required: the
-  copy-and-scatter write-back below would otherwise overwrite an infinity point's
-  `(0, 0, 0)` normal with the skipped patch's `normalize(-d)`. Leaving them
-  untouched is also the right behavior — a point at infinity has a fixed outward
-  normal (`normalize(-d)`, set by its direction), so there is nothing to refine.
-  Even if an infinity-bearing cloud were passed, `refine_patch_normal` skips
-  `w = 0` patches and returns their frame unchanged (it never rotates them).
+- **Finite points only.** `--refine-normals` masks the stored cloud to finite
+  points (`finite = ~recon.point_is_at_infinity[cloud.point_ids]`) and scatters
+  only those refined normals back; points at infinity (`w = 0`) keep their stored
+  normal. The mask is required: the copy-and-scatter write-back would otherwise
+  overwrite an infinity point's `(0, 0, 0)` normal with the skipped patch's
+  `normalize(-d)`. Leaving them untouched is also the right behavior — a point at
+  infinity has a fixed outward normal (`normalize(-d)`, set by its direction), so
+  there is nothing to refine. `refine_patch_normal` itself also skips `w = 0`
+  patches and returns their frame unchanged (it never rotates them).
 - **Degenerate / low-view points keep their seed.** The core routine skips a
   patch that has fewer than `min_views` valid views (and honors
   never-worse-than-its-own-init for the rest), so those points retain their
@@ -254,38 +219,37 @@ need arises; neither is in scope here.
 
 ```python
 class RefineNormalsTransform:
-    def apply(self, recon):
+    def apply(self, recon):  # recon is embedded_patches (gate-enforced)
         images = [load_full_res(workspace_dir / name) for name in recon.image_names]
-        # extent_value is the full CLI size; the library takes a half-extent.
-        cloud = PatchCloud.from_reconstruction(
-            recon, normal=initial_normals,
-            extent=_to_library_policy(extent),  # pixel_size -> pixel_radius
-            extent_value=extent_value / 2.0, ...)
-        result = cloud.refine_normals(recon, images, angular_range_deg=..., ...)
+        cloud = recon.patches            # the stored per-point frame; not rebuilt
+        point_ids = cloud.point_ids
+        finite = ~recon.point_is_at_infinity[point_ids]   # refiner skips infinity
+        result = cloud.refine_normals(
+            recon, images, use_stored_keypoints=True, angular_range_deg=..., ...)
         normals = np.asarray(recon.normals, np.float32).copy()  # (P, 3)
-        for i, pid in enumerate(cloud.point_ids):
-            normals[pid] = result["normal"][i]
-        if save_patches:
-            return recon.clone_with_changes(normals=normals, patches=cloud)
-        return recon.clone_with_changes(normals=normals)
+        normals[point_ids[finite]] = result["normal"][finite]
+        # The frame is always re-persisted (it must match the rewritten normals).
+        return recon.clone_with_changes(normals=normals, patches=cloud)
 ```
 
 `recon.normals` is always point-count-sized (each point carries a `normal`), so
-the copy-and-scatter keeps the normals of excluded (infinity) points intact while
+the copy-and-scatter keeps the normals of infinity points intact while
 overwriting every refined finite point. `clone_with_changes` validates the
 `(point_count, 3)` shape. The scatter relies on `cloud.point_ids` being
 **point-array indices** (the 3D-point index, not a track id) — which is what
-`from_reconstruction` emits and what the binding range-checks — so
-`normals[pid] = …` indexes the right row directly.
+`recon.patches` emits and what the binding range-checks — so `normals[pid] = …`
+indexes the right row directly. The `finite` mask is keyed off the cloud's own
+`point_ids`, so it stays aligned with both `point_ids` and the per-patch
+`result["normal"]` rows.
 
-**Persisting the full patch cloud (`save_patches`).** By default only the
-per-point normal is written. With `save_patches=true`, the refined `PatchCloud`
-is attached to the reconstruction via `clone_with_changes(patches=cloud)` and
+**Persisting the patch cloud (always).** The refined `PatchCloud` is always
+attached to the reconstruction via `clone_with_changes(patches=cloud)` and
 written as a per-point patch frame beside the normals in the `.sfmr` `points3d/`
 section (format version 3+; see `specs/formats/sfmr-file-format.md`): two
 in-plane half-extent vectors `u` and `v` per point (the patch centre is the
 point's position, and `normalize(u × v)` is the per-point normal scattered
-above).
+above). There is no opt-out — the stored frame must stay consistent with the
+rewritten normals.
 
 **Persisting the patch bitmaps (`bitmaps`).** With `bitmaps=true` the command
 additionally renders each refined patch's canonical RGBA texture at the found
@@ -293,8 +257,7 @@ normal and writes the per-point `patch_bitmaps_y_x_rgba` array
 (`(point_count, R, R, 4)` uint8, `R = resolution`) beside the frame. The binding
 (`PatchCloud.refine_normals(render_bitmaps=True)`) returns the textures already
 scattered to per-3D-point rows (zero rows for points with no refined patch), and
-the command attaches them via `clone_with_changes(patch_bitmaps=…)`. Because the
-bitmaps require the frame, `bitmaps=true` forces `save_patches` on. Each patch
+the command attaches them via `clone_with_changes(patch_bitmaps=…)`. Each patch
 texture is the cross-view **fusion** of the kept views at the optimum: RGB is the
 robust IRLS-weighted mean (the same per-view weights the consensus uses; an
 unweighted mean under `objective=mean`), and the **alpha channel is a per-pixel
@@ -344,11 +307,9 @@ position in the command line — the pipeline never reorders. The points below a
 **recommendations** about where to place it for the best result, not behavior
 the op enforces.
 
-- **Recommended after `--bundle-adjust`.** BA moves points and poses; normals
-  are most accurate when refined against the final geometry, so
-  `--bundle-adjust … --refine-normals` is the suggested sequence. Placing it
-  *before* BA is allowed and simply refines against the pre-BA geometry (and BA
-  does not re-refine normals afterward).
+- **Order relative to `--bundle-adjust`.** BA moves points and poses; whichever
+  geometry is current when `--refine-normals` runs is the geometry it refines
+  against (BA does not re-refine normals afterward). Both orders are allowed.
 - **Invariant to global similarity.** `--rotate` / `--translate` / `--scale`
   move points and poses together, so the projected patches — and thus the
   photometric consensus — are unchanged; ordering relative to those is
@@ -360,8 +321,8 @@ the op enforces.
   cost consideration only; the refined normals of any surviving point are the
   same either way.
 - **Repeatable.** Because refinement is not idempotent, `--refine-normals
-  --refine-normals` runs two passes (the second starting from the first via
-  `initial_normals=stored`), each driving Φ further toward the continuous optimum — the
+  --refine-normals` runs two passes (the second starting from the first's stored
+  normals), each driving Φ further toward the continuous optimum — the
   "thorough" setting. Documented, not special-cased.
 - **Images must be resolvable.** The op fails fast if `workspace_dir` or any
   image is missing, exactly like the `.sift`-reading ops.
@@ -384,8 +345,8 @@ decoded pixel volume × ~1.33 for the pyramid). This is a known limitation —
 there is no streaming/tiling of the image set in v1.
 
 **Disk.** Read-only: the op reads each source image once from the workspace
-(`workspace_dir / image_name`) and, under the default `extent=feature_size`, the
-`.sift` files. It writes only the output `.sfmr`.
+(`workspace_dir / image_name`); it needs no `.sift` files (the patch frame is
+already stored on the `embedded_patches` input). It writes only the output `.sfmr`.
 
 Unlike `scripts/patch_crossval.py`, the CLI op refines the **whole** cloud (no
 `point_ids` subset) — the subset argument exists for the strip renderer's

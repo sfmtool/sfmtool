@@ -29,8 +29,8 @@ The conversion:
 
 1. **Build a patch frame.** A keypoint anchors the point's surfel, so each point
    needs a `(u, v)` frame. The command initializes each frame (normal from the
-   mean viewing direction) and refines that normal photometrically (the
-   `refine-normals` machinery, with `save_patches`).
+   mean viewing direction, via `to_embedded_patches`) and refines that normal
+   photometrically (the `refine_normals` kernel, which re-persists the frame).
 2. **Derive the keypoints over an expanded, vetted view set.** For each point,
    expand the track with the other views that geometrically see the surfel,
    photometrically vet them against a track-seeded template, and
@@ -66,7 +66,7 @@ as `OUTPUT`.
 | `--search` | float | 6 | Max total per-view in-plane drift, in **patch-grid** pixels. |
 | `--max-shift-px` | float | 3.0 | Discard an **observation** whose keypoint sits more than this from the point's projection, in **source-image** pixels (an absolute distance, not the move from the seed). |
 | `--min-views` | int | 2 | Drop a point left with fewer surviving observations after discards. |
-| `--patch-size` | float | inherits `refine-normals`' `extent_value` | Surfel size — the full patch edge length (in feature-size multiples) used to render the patch. Halved to the library half-extent, matching `refine-normals`. |
+| `--patch-size` | float | `10.0` | Surfel size — the full patch edge length (in feature-size multiples) used to render the patch. Halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`), the step that builds the frame. |
 
 The two `--search` / `--max-shift-px` budgets are in different units on purpose:
 `--search` bounds the registration in the patch's own grid (the congealing

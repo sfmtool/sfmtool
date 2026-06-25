@@ -31,43 +31,38 @@ def test_parse_empty_runs_defaults():
     assert isinstance(t, RefineNormalsTransform)
     assert t.angular_range_deg == 25.0
     assert t.init_steps == 7
-    assert t.initial_normals == "stored"
-    assert t.extent == "feature_size"
-    # The CLI extent_value is the full patch size (halved internally), so the
-    # default is twice the library's half-extent default of 5.0.
-    assert t.extent_value == 10.0
+    assert t.objective == "robust"
 
 
 def test_parse_key_value_overrides():
     """Each key=value token overrides the matching default with the right type."""
     t = parse_refine_normals_params(
         "angular_range_deg=30,init_steps=9,sampler=anisotropic,"
-        "objective=mean,initial_normals=geometric,resolution=32,extent=fixed,"
-        "extent_value=0.05,min_views=4,window=gaussian,window_sigma=0.8"
+        "objective=mean,resolution=32,"
+        "min_views=4,window=gaussian,window_sigma=0.8"
     )
     assert t.angular_range_deg == 30.0
     assert t.init_steps == 9
     assert isinstance(t.init_steps, int)
     assert t.sampler == "anisotropic"
     assert t.objective == "mean"
-    assert t.initial_normals == "geometric"
     assert t.resolution == 32
-    assert t.extent == "fixed"
-    assert t.extent_value == 0.05
     assert t.min_views == 4
     assert t.window == "gaussian"
     assert t.window_sigma == 0.8
 
 
-def test_extent_pixel_size_accepted_radius_rejected():
-    """The CLI policy is ``pixel_size`` (full diameter); the library's
-    ``pixel_radius`` name is not a valid CLI extent."""
-    t = parse_refine_normals_params("extent=pixel_size,extent_value=8")
-    assert t.extent == "pixel_size"
-    assert t.extent_value == 8.0
+@pytest.mark.parametrize(
+    "key", ["extent", "extent_value", "initial_normals", "save_patches"]
+)
+def test_frame_building_keys_rejected(key):
+    """Frame-sizing / cloud-building knobs live on ``--to-embedded-patches``,
+    not ``--refine-normals`` (which reuses the stored frame). They are rejected
+    as unknown keys here."""
+    import click
 
-    with pytest.raises(ValueError):
-        parse_refine_normals_params("extent=pixel_radius")
+    with pytest.raises(click.UsageError, match="Unknown --refine-normals key"):
+        parse_refine_normals_params(f"{key}=foo")
 
 
 def test_parse_tolerates_blank_segments():
@@ -123,9 +118,6 @@ def test_parse_duplicate_key_rejected():
         "sampler=bogus",
         "min_valid_fraction=1.5",
         "min_views=1",
-        "initial_normals=bogus",
-        "extent=bogus",
-        "extent_value=0",
         "cache=bogus",
         "cache_supersample=0.5",
         "quality=bogus",
@@ -187,27 +179,19 @@ def test_quality_preset_overrides_cache_knobs():
 
 
 def test_constructor_description_mentions_key_settings():
-    desc = RefineNormalsTransform(initial_normals="mean_viewing").description()
+    desc = RefineNormalsTransform(objective="mean", sampler="anisotropic").description()
     assert "Refine normals" in desc
-    assert "mean_viewing" in desc
-
-
-def test_parse_save_patches():
-    """``save_patches`` is a recognized boolean key (default False)."""
-    assert parse_refine_normals_params("").save_patches is False
-    assert parse_refine_normals_params("save_patches=true").save_patches is True
-    assert parse_refine_normals_params("save_patches=false").save_patches is False
-    desc = RefineNormalsTransform(save_patches=True).description()
-    assert "save_patches" in desc
+    # The live knobs are surfaced; the inert sizing knobs are not.
+    assert "mean" in desc
+    assert "anisotropic" in desc
 
 
 def test_parse_bitmaps():
-    """``bitmaps`` is a recognized boolean key (default False) and implies
-    ``save_patches`` (the bitmaps need the patch frame)."""
+    """``bitmaps`` is a recognized boolean key (default False); it controls
+    whether the per-point RGBA patch textures are rendered and persisted."""
     assert parse_refine_normals_params("").bitmaps is False
     t = parse_refine_normals_params("bitmaps=true")
     assert t.bitmaps is True
-    assert t.save_patches is True  # forced on
     assert parse_refine_normals_params("bitmaps=false").bitmaps is False
     desc = RefineNormalsTransform(bitmaps=True).description()
     assert "bitmaps" in desc
@@ -223,10 +207,23 @@ def _modest_params() -> RefineNormalsTransform:
     )
 
 
+def _embedded(workspace) -> SfmrReconstruction:
+    """Convert the sift_files workspace recon to embedded_patches.
+
+    ``--refine-normals`` requires an ``embedded_patches`` reconstruction (it
+    anchors each view on its stored keypoint), so the integration tests feed it
+    the converted recon — the same bridge the CLI's
+    ``--to-embedded-patches --refine-normals`` chain runs.
+    """
+    return SfmrReconstruction.load(workspace).to_embedded_patches(
+        normal="mean_viewing", extent_value=5.0
+    )
+
+
 def test_refine_normals_preserves_points_and_improves(
     seoul_bull_workspace,
 ):
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = _embedded(seoul_bull_workspace)
     original_normals = np.asarray(recon.normals).copy()
     original_positions = np.asarray(recon.positions).copy()
     at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
@@ -255,67 +252,19 @@ def test_refine_normals_preserves_points_and_improves(
         )
 
 
-def test_apply_halves_full_cli_extent_to_library_half_extent(seoul_bull_workspace):
-    """``apply`` must convert the full CLI ``extent_value`` to the library
-    half-extent (divide by 2). With ``extent=fixed`` the world half-extent is
-    exactly the library value, so the halving is directly observable: a full CLI
-    size of ``W`` must yield patches whose ``half_extent`` is ``W / 2``."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-
-    full_size = 0.1
-    params = RefineNormalsTransform(
-        resolution=12,
-        init_steps=5,
-        refine_levels=2,
-        sampler="bilinear",
-        extent="fixed",
-        extent_value=full_size,
-        save_patches=True,
-    )
-    out = params.apply(recon)
-    assert out.patches is not None and len(out.patches) > 0
-    half = np.asarray([out.patches[i].half_extent for i in range(len(out.patches))])
-    np.testing.assert_allclose(half, full_size / 2.0, rtol=1e-6)
-
-
-def test_apply_maps_pixel_size_to_library_policy(seoul_bull_workspace):
-    """The CLI ``pixel_size`` policy must reach the library (whose policy is
-    named ``pixel_radius``); a broken mapping would raise ``unknown extent
-    policy`` from the binding."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    params = RefineNormalsTransform(
-        resolution=12,
-        init_steps=5,
-        refine_levels=2,
-        sampler="bilinear",
-        extent="pixel_size",
-        extent_value=8.0,
-        save_patches=True,
-    )
-    out = params.apply(recon)
-    assert out.patches is not None and len(out.patches) > 0
-
-
-def test_refine_normals_save_patches_round_trips(seoul_bull_workspace, tmp_path):
-    """``save_patches`` attaches the refined patch cloud, which survives a
-    save/load round trip through the version-3 ``.sfmr`` points3d patch frame."""
+def test_refine_normals_persists_patch_cloud_round_trips(
+    seoul_bull_workspace, tmp_path
+):
+    """On an ``embedded_patches`` recon, refine-normals always re-persists the
+    refined patch cloud (its ``u``/``v`` frame now matches the refined normal),
+    which survives a save/load round trip through the version-3 ``.sfmr``
+    points3d patch frame. The frame is always saved (it must stay consistent
+    with the rewritten normals); there is no opt-out knob."""
     from sfmtool._sfmtool.io import verify_sfmr
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = _embedded(seoul_bull_workspace)
 
-    # Without save_patches, no patch data is attached.
-    plain = _modest_params().apply(recon)
-    assert plain.patches is None
-
-    # With save_patches, the refined patch cloud is attached.
-    params = RefineNormalsTransform(
-        resolution=12,
-        init_steps=5,
-        refine_levels=2,
-        sampler="bilinear",
-        save_patches=True,
-    )
-    out = params.apply(recon)
+    out = _modest_params().apply(recon)
     cloud = out.patches
     assert cloud is not None
     n = len(cloud)
@@ -356,9 +305,10 @@ def test_refine_normals_bitmaps_round_trips(seoul_bull_workspace, tmp_path):
     save/load round trip and pass ``verify_sfmr``."""
     from sfmtool._sfmtool.io import verify_sfmr
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = _embedded(seoul_bull_workspace)
 
-    # Without bitmaps, no bitmap array is attached.
+    # Without bitmaps, no bitmap array is attached (the frame is still
+    # re-persisted, but no RGBA textures are rendered).
     plain = _modest_params().apply(recon)
     assert plain.patch_bitmaps is None
 
@@ -371,7 +321,7 @@ def test_refine_normals_bitmaps_round_trips(seoul_bull_workspace, tmp_path):
     )
     out = params.apply(recon)
 
-    # bitmaps imply save_patches, so the frame is attached too.
+    # The frame is always persisted; with bitmaps the textures are too.
     assert out.patches is not None
     bitmaps = out.patch_bitmaps
     assert bitmaps is not None
@@ -394,7 +344,7 @@ def test_refine_normals_bitmaps_round_trips(seoul_bull_workspace, tmp_path):
 
 def test_refine_normals_does_not_lower_consensus(seoul_bull_workspace, capsys):
     """The summary reports a non-negative mean Φ delta."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = _embedded(seoul_bull_workspace)
     _modest_params().apply(recon)
     summary = capsys.readouterr().out
     assert "Refined" in summary
@@ -412,7 +362,10 @@ def test_missing_image_is_hard_error(seoul_bull_workspace):
 
 
 def test_cli_refine_normals(seoul_bull_workspace):
-    """End-to-end CLI run rewrites normals; the sys.argv reparse needs patching."""
+    """End-to-end CLI run rewrites normals; the sys.argv reparse needs patching.
+
+    ``--refine-normals`` requires embedded_patches, so the run converts first in
+    the same pipeline (``--to-embedded-patches --refine-normals``)."""
     input_sfmr = seoul_bull_workspace
     output_sfmr = input_sfmr.with_name("refined.sfmr")
 
@@ -420,6 +373,7 @@ def test_cli_refine_normals(seoul_bull_workspace):
         "xform",
         str(input_sfmr),
         str(output_sfmr),
+        "--to-embedded-patches",
         "--refine-normals",
         "resolution=12,init_steps=5,refine_levels=2",
     ]
@@ -452,11 +406,14 @@ def test_cli_refine_normals_bare_before_other_option(
     output_sfmr = input_sfmr.with_name("refined_bare.sfmr")
 
     # --refine-normals (bare) then --scale: the scale must still be parsed as
-    # its own transform, not swallowed as the refine-normals value.
+    # its own transform, not swallowed as the refine-normals value. The leading
+    # --to-embedded-patches satisfies refine-normals' embedded_patches
+    # precondition (its real apply runs; refine-normals' apply is stubbed).
     args = [
         "xform",
         str(input_sfmr),
         str(output_sfmr),
+        "--to-embedded-patches",
         "--refine-normals",
         "--scale",
         "2.0",
@@ -491,3 +448,45 @@ def test_cli_refine_normals_bare_before_other_option(
     np.testing.assert_allclose(
         np.asarray(refined.positions), np.asarray(original.positions) * 2.0, rtol=1e-5
     )
+
+
+def test_refine_normals_rejects_sift_files(seoul_bull_workspace):
+    """``--refine-normals`` on a sift_files recon is rejected up front (before
+    any image load or refinement) with a pointer to the conversion bridge."""
+    input_sfmr = seoul_bull_workspace
+    output_sfmr = input_sfmr.with_name("rejected.sfmr")
+
+    args = [
+        "xform",
+        str(input_sfmr),
+        str(output_sfmr),
+        "--refine-normals",
+    ]
+    with patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+
+    assert result.exit_code != 0
+    assert "embedded_patches" in result.output
+    assert not output_sfmr.exists()
+
+
+def test_refine_normals_rejects_wrong_chain_order(seoul_bull_workspace):
+    """The gate is per-step against the *current* recon, so ``--refine-normals``
+    *before* ``--to-embedded-patches`` is rejected (the conversion hasn't run
+    yet) — only the convert-then-refine order works."""
+    input_sfmr = seoul_bull_workspace
+    output_sfmr = input_sfmr.with_name("wrong_order.sfmr")
+
+    args = [
+        "xform",
+        str(input_sfmr),
+        str(output_sfmr),
+        "--refine-normals",
+        "--to-embedded-patches",
+    ]
+    with patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+
+    assert result.exit_code != 0
+    assert "embedded_patches" in result.output
+    assert not output_sfmr.exists()

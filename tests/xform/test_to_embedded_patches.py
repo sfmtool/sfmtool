@@ -132,6 +132,34 @@ def test_to_embedded_patches_frames_points_at_infinity(
     assert reloaded.patches[rids.index(pi)].w == 0.0
 
 
+def test_apply_halves_full_cli_extent_to_library_half_extent(
+    seoul_bull_workspace: Path,
+):
+    """``apply`` must convert the full CLI ``extent_value`` to the library
+    half-extent (divide by 2). With ``extent=fixed`` the world half-extent is
+    exactly the library value, so a full CLI size of ``W`` must yield patches
+    whose ``half_extent`` is ``W / 2``. (This sizing used to live on
+    ``--refine-normals``; it now happens only here.)"""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    full_size = 0.1
+    out = ToEmbeddedPatchesTransform(extent="fixed", extent_value=full_size).apply(
+        recon
+    )
+    cloud = out.patches
+    assert cloud is not None and len(cloud) > 0
+    half = np.asarray([cloud[i].half_extent for i in range(len(cloud))])
+    np.testing.assert_allclose(half, full_size / 2.0, rtol=1e-6)
+
+
+def test_apply_maps_pixel_size_to_library_policy(seoul_bull_workspace: Path):
+    """The CLI ``pixel_size`` policy must reach the library (whose policy is
+    named ``pixel_radius``); a broken mapping would raise ``unknown extent
+    policy`` from the binding."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    out = ToEmbeddedPatchesTransform(extent="pixel_size", extent_value=8.0).apply(recon)
+    assert out.patches is not None and len(out.patches) > 0
+
+
 def test_to_embedded_patches_rejects_already_embedded(seoul_bull_workspace: Path):
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     emb = recon.to_embedded_patches()
