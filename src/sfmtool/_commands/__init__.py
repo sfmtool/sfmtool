@@ -8,6 +8,7 @@ from .analyze import analyze
 from .camrig import camrig
 from .compare import compare
 from .densify import densify
+from .embed_patches import embed_patches_command
 from .epipolar import epipolar
 from .explorer import explorer
 from .flow import flow
@@ -36,6 +37,7 @@ __all__ = [
     "camrig",
     "compare",
     "densify",
+    "embed_patches_command",
     "epipolar",
     "explorer",
     "flow",

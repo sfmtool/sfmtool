@@ -15,6 +15,7 @@ from ._commands import (
     camrig,
     compare,
     densify,
+    embed_patches_command,
     epipolar,
     explorer,
     flow,
@@ -66,6 +67,7 @@ main.add_command_with_category(align, category="Reconstruction")
 main.add_command_with_category(merge, category="Reconstruction")
 main.add_command_with_category(densify, category="Reconstruction")
 main.add_command_with_category(motion, category="Reconstruction")
+main.add_command_with_category(embed_patches_command, category="Reconstruction")
 main.add_command_with_category(explorer, category="Visualization")
 main.add_command_with_category(epipolar, category="Visualization")
 main.add_command_with_category(flow, category="Image Processing")

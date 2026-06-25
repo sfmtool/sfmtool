@@ -1,7 +1,8 @@
 # `sfm embed-patches` Command
 
-_Status: draft for review. Converts a reconstruction from `sift_files` to
-`embedded_patches` (the modes are specified in
+_Status: implemented (`src/sfmtool/_commands/embed_patches.py`, orchestration in
+`src/sfmtool/_embed_patches.py::embed_patches`). Converts a reconstruction from
+`sift_files` to `embedded_patches` (the modes are specified in
 [sfmr-file-format.md](../formats/sfmr-file-format.md), "Observation source").
 Pipeline and the per-point algorithms it calls:
 [sift-to-patch-reconstruction.md](../core/sift-to-patch-reconstruction.md)._
@@ -113,13 +114,14 @@ sfm embed-patches solve.sfmr out.sfmr \
 ## Module Layout
 
 - `src/sfmtool/_commands/embed_patches.py` — the Click command (argument
-  parsing, validation, default-output derivation, write-out).
-- The expansion + vetting + congealing localization lives in a helper module
-  (e.g. `src/sfmtool/patch/` or a dedicated `embed_patches` helper), orchestrating
-  the Rust patch-render / warp bindings, the `refine-normals` machinery (frame
-  attach + view vetting), and the robust consensus; see the [pipeline
-  spec](../core/sift-to-patch-reconstruction.md) for where the hot loops may move
-  to `sfmtool-core`.
+  parsing, validation, default-output derivation, image load, write-out).
+- `src/sfmtool/_embed_patches.py::embed_patches` — the orchestration: it chains the
+  Rust patch kernels exposed on `PatchCloud` (`from_reconstruction` →
+  `refine_normals` → `select_views` → `localize_keypoints`) and the
+  `compact_to_embedded_patches` write tail. `image_file_hashes_from_sift` reads the
+  per-image identity hashes from the `.sift` metadata. See the [pipeline
+  spec](../core/sift-to-patch-reconstruction.md) for where the hot loops live in
+  `sfmtool-core`.
 
 ## Open questions
 
