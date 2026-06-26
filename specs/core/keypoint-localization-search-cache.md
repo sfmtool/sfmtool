@@ -24,6 +24,21 @@ score many"). The kernel lives in
 > alone cut `search_shift` ~2.5× (602→241 µs/call) and `localize` wall ~2.1×.
 > This spec is the next step: a render-once per-view cache and a hand-rolled AVX2
 > kernel._
+>
+> _**Phase 1 landed** (branch `keypoint-localization-cache`): the **per-view
+> render-once cache** (sized `R + 4·search`) plus **integer-tracked reads**. The
+> congealer now renders each view's frame-oriented cache once and every round
+> reads its core and scores its shift grid from that cache at the view's current
+> **integer** offset `iacc`; the parabolic sub-pixel residual is tracked alongside
+> (convergence + final keypoint) but never folded back into the read position, so
+> every cache read is exact. `render_context` collapses from per-(view, round) to
+> per-view. The `search_resolution_multiplier` knob (default `1.0`, a no-op) is in
+> place. Still scalar — the centered-`f32`/planar AVX2 kernel and the `i16` path
+> are later phases. The `search_shift` accumulation math is unchanged (the
+> `search_shift_matches_reference*` equivalence tests still pass, now also
+> asserting integer-argmax agreement). Integer-tracked reads build the consensus
+> from integer-aligned cores, a deliberate sub-px change from the
+> fractionally-rendered reference; the existing congealing tests pass unchanged._
 
 ## Problem
 

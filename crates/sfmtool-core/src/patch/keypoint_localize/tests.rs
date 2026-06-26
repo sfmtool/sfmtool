@@ -354,6 +354,84 @@ fn congeals_misregistered_view_into_alignment() {
 }
 
 #[test]
+fn search_resolution_multiplier_one_is_a_noop() {
+    // `search_resolution_multiplier = 1.0` (the explicit default) must produce
+    // byte-identical results to leaving the knob at its `Default`, on a scene that
+    // exercises both congealing (view 3 shifted) and the kept-view set.
+    let ox = 1.0 * wpp();
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let offs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [ox, 0.0]];
+    let texs = vec![texture as fn(f64, f64) -> f64; 4];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    let baseline = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
+    let explicit_one = KeypointLocalizeParams {
+        search_resolution_multiplier: 1.0,
+        ..params()
+    };
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &explicit_one);
+
+    assert_eq!(res.views, baseline.views);
+    for (a, b) in res.keypoints.iter().zip(&baseline.keypoints) {
+        assert!(
+            (a[0] - b[0]).abs() < 1e-12 && (a[1] - b[1]).abs() < 1e-12,
+            "m = 1.0 must be a no-op: {a:?} vs {b:?}"
+        );
+    }
+}
+
+#[test]
+fn supersampled_search_resolution_still_congeals() {
+    // With `m = 2.0` the search runs at R_s = 2·R (a finer grid; one integer step
+    // is 1/2 patch-grid px). A 1-grid-px misregistration must still be recovered and
+    // the recovered keypoint scaled back to patch-grid px (the `1/m` factor folded
+    // into the R_s `wpp`), so the same +src_per_grid x-recovery as at m = 1.
+    let shift_grid = 1.0;
+    let ox = shift_grid * wpp();
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let offs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [ox, 0.0]];
+    let texs = vec![texture as fn(f64, f64) -> f64; 4];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    let p = KeypointLocalizeParams {
+        search_resolution_multiplier: 2.0,
+        ..params()
+    };
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &p);
+
+    let p3 = pos(&res, 3).expect("the misregistered view co-registers and is kept");
+    let expected_px = shift_grid * src_per_grid();
+    let proj3 = project(&views[3], &patch.center, patch.w).unwrap();
+    let dx = res.keypoints[p3][0] - proj3.0;
+    let dy = res.keypoints[p3][1] - proj3.1;
+    assert!(
+        (dx - expected_px).abs() < 0.4 * src_per_grid(),
+        "m = 2 should still recover +{expected_px:.2}px in x, got {dx:.2}px"
+    );
+    assert!(
+        dy.abs() < 0.4 * src_per_grid(),
+        "m = 2: view 3 should not move in y, got {dy:.2}px"
+    );
+    for &z in &res.loo_zncc {
+        assert!(z > 0.9, "m = 2 post-congeal LOO should be high, got {z}");
+    }
+}
+
+#[test]
 fn drops_disagreeing_surface_view() {
     // Three views see the same surface; view 3 shows a different surface. It cannot
     // register, so its leave-one-out ZNCC falls below the relative bar and it is
@@ -766,6 +844,7 @@ fn synthetic_tile(cr: usize, channels: usize, flat_last: bool) -> ContextTile {
         }
     }
     ContextTile {
+        res: cr,
         px,
         valid: vec![true; cr * cr],
         channels,
@@ -780,7 +859,6 @@ fn template_at(
     support: &Support,
     keep_mask: &[bool],
     channels: usize,
-    cr: usize,
     resolution: usize,
     margin: i64,
     dy0: i64,
@@ -790,20 +868,26 @@ fn template_at(
     let mut raw = vec![0f32; tile.channels * n];
     let oy = (margin + dy0) as usize;
     let ox = (margin + dx0) as usize;
-    assert!(extract_core(
-        tile, support, cr, resolution, oy, ox, &mut raw
-    ));
+    assert!(extract_core(tile, support, resolution, oy, ox, &mut raw));
     let mut tmpl = vec![0f32; channels * n];
     znorm_core(&raw, support, keep_mask, &mut tmpl);
     tmpl
 }
 
-fn assert_search_eq(got: Option<(f64, f64, f64)>, want: Option<(f64, f64, f64)>) {
+fn assert_search_eq(got: Option<ShiftResult>, want: Option<ShiftResult>) {
     match (got, want) {
         (Some(g), Some(w)) => {
-            assert!((g.0 - w.0).abs() < 1e-4, "dx {} vs {}", g.0, w.0);
-            assert!((g.1 - w.1).abs() < 1e-4, "dy {} vs {}", g.1, w.1);
-            assert!((g.2 - w.2).abs() < 1e-5, "peak {} vs {}", g.2, w.2);
+            assert!((g.dx - w.dx).abs() < 1e-4, "dx {} vs {}", g.dx, w.dx);
+            assert!((g.dy - w.dy).abs() < 1e-4, "dy {} vs {}", g.dy, w.dy);
+            assert!(
+                (g.peak - w.peak).abs() < 1e-5,
+                "peak {} vs {}",
+                g.peak,
+                w.peak
+            );
+            // The integer argmax must agree exactly (it drives the read accumulator).
+            assert_eq!(g.ix, w.ix, "ix {} vs {}", g.ix, w.ix);
+            assert_eq!(g.iy, w.iy, "iy {} vs {}", g.iy, w.iy);
         }
         (None, None) => {}
         _ => panic!("one returned None: got={got:?} want={want:?}"),
@@ -822,8 +906,9 @@ fn search_shift_matches_reference() {
 
     // Template from a known shift → unambiguous peak there.
     let (dy0, dx0) = (1i64, -2i64);
+    let base = margin as usize; // search centred on the tile (base offset = margin)
     let tmpl = template_at(
-        &tile, &support, &keep_mask, channels, cr, resolution, margin, dy0, dx0,
+        &tile, &support, &keep_mask, channels, resolution, margin, dy0, dx0,
     );
 
     let mut sc = SearchScratch {
@@ -831,16 +916,20 @@ fn search_shift_matches_reference() {
         ..Default::default()
     };
     let got = search_shift(
-        &tile, &mut sc, &support, &keep_mask, channels, cr, resolution, margin,
+        &tile, &mut sc, &support, &keep_mask, channels, resolution, margin, base, base,
     );
     let want = search_shift_ref(
-        &tile, &tmpl, &support, &keep_mask, channels, cr, resolution, margin,
+        &tile, &tmpl, &support, &keep_mask, channels, resolution, margin, base, base,
     );
     assert_search_eq(got, want);
     // And it actually recovered the planted shift.
     let g = got.unwrap();
-    assert!((g.0 - dx0 as f64).abs() < 0.25 && (g.1 - dy0 as f64).abs() < 0.25);
-    assert!(g.2 > 0.99, "self-template peak should be ≈1, got {}", g.2);
+    assert!((g.dx - dx0 as f64).abs() < 0.25 && (g.dy - dy0 as f64).abs() < 0.25);
+    assert!(
+        g.peak > 0.99,
+        "self-template peak should be ≈1, got {}",
+        g.peak
+    );
 }
 
 #[test]
@@ -863,18 +952,19 @@ fn search_shift_matches_reference_flat_channel_and_invalid() {
     }
 
     let (dy0, dx0) = (2i64, 1i64);
+    let base = margin as usize;
     let tmpl = template_at(
-        &tile, &support, &keep_mask, channels, cr, resolution, margin, dy0, dx0,
+        &tile, &support, &keep_mask, channels, resolution, margin, dy0, dx0,
     );
     let mut sc = SearchScratch {
         tmpl: tmpl.clone(),
         ..Default::default()
     };
     let got = search_shift(
-        &tile, &mut sc, &support, &keep_mask, channels, cr, resolution, margin,
+        &tile, &mut sc, &support, &keep_mask, channels, resolution, margin, base, base,
     );
     let want = search_shift_ref(
-        &tile, &tmpl, &support, &keep_mask, channels, cr, resolution, margin,
+        &tile, &tmpl, &support, &keep_mask, channels, resolution, margin, base, base,
     );
     assert_search_eq(got, want);
 }
@@ -893,18 +983,19 @@ fn search_shift_matches_reference_dropped_channel() {
     let tile = synthetic_tile(cr, tile_channels, false);
 
     let (dy0, dx0) = (-1i64, 2i64);
+    let base = margin as usize;
     let tmpl = template_at(
-        &tile, &support, &keep_mask, channels, cr, resolution, margin, dy0, dx0,
+        &tile, &support, &keep_mask, channels, resolution, margin, dy0, dx0,
     );
     let mut sc = SearchScratch {
         tmpl: tmpl.clone(),
         ..Default::default()
     };
     let got = search_shift(
-        &tile, &mut sc, &support, &keep_mask, channels, cr, resolution, margin,
+        &tile, &mut sc, &support, &keep_mask, channels, resolution, margin, base, base,
     );
     let want = search_shift_ref(
-        &tile, &tmpl, &support, &keep_mask, channels, cr, resolution, margin,
+        &tile, &tmpl, &support, &keep_mask, channels, resolution, margin, base, base,
     );
     assert_search_eq(got, want);
 }

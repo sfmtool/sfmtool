@@ -66,8 +66,8 @@ impl Phase {
 pub static TOTAL: Phase = Phase::new("localize_total");
 
 // Leaf phases (non-overlapping; they partition the bulk of TOTAL).
-/// Per-round context-tile render of every live view (`render_context` +
-/// `extract_core`).
+/// Per-view render-once cache build (`render_context`), run a single time per view
+/// before the round loop rather than per (view, round).
 pub static RENDER: Phase = Phase::new("render_context");
 /// Per-round z-normalization of the live cores into shared channel space.
 pub static ZNORM: Phase = Phase::new("znormalize");
@@ -81,8 +81,8 @@ pub static SEARCH: Phase = Phase::new("search_shift");
 // Event counters (no time attached).
 /// Congealing rounds executed (summed over points).
 pub static N_ROUNDS: AtomicU64 = AtomicU64::new(0);
-/// Context-tile renders attempted (one per view in the round's state set, before
-/// the extract-core liveness filter — i.e. every `render_context` call).
+/// Cache renders performed (one per view, total — the render-once collapse means
+/// this no longer scales with rounds).
 pub static N_RENDER: AtomicU64 = AtomicU64::new(0);
 /// Sub-pixel shift searches (one per live view per round).
 pub static N_SEARCH: AtomicU64 = AtomicU64::new(0);
