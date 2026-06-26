@@ -21,6 +21,8 @@
 //! [view selection](super::view_selection); the new kernel here is the per-view
 //! windowed-ZNCC translation search against the leave-one-out consensus.
 
+pub mod prof;
+
 use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear};
 use crate::camera::WarpMap;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
@@ -559,38 +561,42 @@ pub fn localize_patch_keypoints(
     let mut sc = ConsensusScratch::default();
     let mut search = SearchScratch::default();
     for _round in 0..params.max_iters.max(1) {
+        prof::count(&prof::N_ROUNDS, 1);
         // 1. Render every view's context tile at its accumulated offset; a view
         //    whose core has left the frame (any support pixel invalid) is dropped.
         let mut tiles: Vec<ContextTile> = Vec::with_capacity(states.len());
         let mut live: Vec<usize> = Vec::with_capacity(states.len());
         let mut base_raw = Vec::new();
-        for (si, st) in states.iter().enumerate() {
-            let tile = render_context(
-                patch,
-                &views[st.idx as usize],
-                st.acc[0],
-                st.acc[1],
-                wpp_u,
-                wpp_v,
-                resolution,
-                context_res,
-                params.sampler,
-            );
-            let mut raw = vec![0f32; tile.channels * support.pixels.len()];
-            if extract_core(
-                &tile,
-                &support,
-                cr,
-                r,
-                margin as usize,
-                margin as usize,
-                &mut raw,
-            ) {
-                live.push(si);
-                base_raw.push(raw);
-                tiles.push(tile);
+        prof::count(&prof::N_RENDER, states.len() as u64);
+        prof::RENDER.time(|| {
+            for (si, st) in states.iter().enumerate() {
+                let tile = render_context(
+                    patch,
+                    &views[st.idx as usize],
+                    st.acc[0],
+                    st.acc[1],
+                    wpp_u,
+                    wpp_v,
+                    resolution,
+                    context_res,
+                    params.sampler,
+                );
+                let mut raw = vec![0f32; tile.channels * support.pixels.len()];
+                if extract_core(
+                    &tile,
+                    &support,
+                    cr,
+                    r,
+                    margin as usize,
+                    margin as usize,
+                    &mut raw,
+                ) {
+                    live.push(si);
+                    base_raw.push(raw);
+                    tiles.push(tile);
+                }
             }
-        }
+        });
         if live.len() < 2 {
             // Too few views still see the patch to congeal; keep the in-frame ones
             // (with their current offsets) and finalize.
@@ -608,16 +614,19 @@ pub fn localize_patch_keypoints(
             flat[vk * channels0 * n..][..channels0 * n].copy_from_slice(&raw[..channels0 * n]);
         }
         let mut xs = Vec::new();
-        let Some((kept_ch, keep_mask)) = znormalize_into_kept(
-            &flat,
-            live.len(),
-            channels0,
-            n,
-            &support.weights,
-            support.total_w,
-            &support.sqrt_w,
-            &mut xs,
-        ) else {
+        let znorm = prof::ZNORM.time(|| {
+            znormalize_into_kept(
+                &flat,
+                live.len(),
+                channels0,
+                n,
+                &support.weights,
+                support.total_w,
+                &support.sqrt_w,
+                &mut xs,
+            )
+        });
+        let Some((kept_ch, keep_mask)) = znorm else {
             break; // no textured channel — leave the seeds in place
         };
 
@@ -629,27 +638,33 @@ pub fn localize_patch_keypoints(
         for v in 0..live.len() {
             // Copy the other views' rows contiguously and build their robust
             // consensus template (the leave-one-out reference for view v).
-            let mut w = 0;
-            for u in 0..live.len() {
-                if u == v {
-                    continue;
+            prof::TEMPLATE.time(|| {
+                let mut w = 0;
+                for u in 0..live.len() {
+                    if u == v {
+                        continue;
+                    }
+                    loo_xs[w * kept_ch * n..][..kept_ch * n]
+                        .copy_from_slice(&xs[u * kept_ch * n..][..kept_ch * n]);
+                    w += 1;
                 }
-                loo_xs[w * kept_ch * n..][..kept_ch * n]
-                    .copy_from_slice(&xs[u * kept_ch * n..][..kept_ch * n]);
-                w += 1;
-            }
-            irls_view_weights(&loo_xs, w, kept_ch, n, params.robust_iters, &mut sc);
-            weighted_unit_template_into(&loo_xs, &sc.w, w, kept_ch, n, &mut search.tmpl);
-            if let Some((dx, dy, peak)) = search_shift(
-                &tiles[v],
-                &mut search,
-                &support,
-                &keep_mask,
-                kept_ch,
-                cr,
-                r,
-                margin,
-            ) {
+                irls_view_weights(&loo_xs, w, kept_ch, n, params.robust_iters, &mut sc);
+                weighted_unit_template_into(&loo_xs, &sc.w, w, kept_ch, n, &mut search.tmpl);
+            });
+            prof::count(&prof::N_SEARCH, 1);
+            let shift = prof::SEARCH.time(|| {
+                search_shift(
+                    &tiles[v],
+                    &mut search,
+                    &support,
+                    &keep_mask,
+                    kept_ch,
+                    cr,
+                    r,
+                    margin,
+                )
+            });
+            if let Some((dx, dy, peak)) = shift {
                 deltas[v] = [dx, dy];
                 loos[v] = peak;
             }
@@ -831,15 +846,24 @@ pub fn localize_patch_cloud_keypoints(
             "starting_keypoints must be parallel to the cloud"
         );
     }
-    cloud
+    if prof::enabled() {
+        prof::reset();
+    }
+    let wall_start = std::time::Instant::now();
+    let out: Vec<KeypointLocalization> = cloud
         .patches
         .par_iter()
         .enumerate()
         .map(|(i, patch)| {
             let seeds = starting_keypoints.map(|s| s[i].as_slice());
-            localize_patch_keypoints(patch, views, &view_sets[i], seeds, params)
+            prof::TOTAL
+                .time(|| localize_patch_keypoints(patch, views, &view_sets[i], seeds, params))
         })
-        .collect()
+        .collect();
+    if prof::enabled() {
+        prof::report(cloud.len(), wall_start.elapsed().as_secs_f64());
+    }
+    out
 }
 
 /// For each patch of `cloud` (linked to `recon` via `point_ids`), the track image
