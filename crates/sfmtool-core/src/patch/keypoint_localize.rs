@@ -27,9 +27,12 @@ use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear};
 use crate::camera::WarpMap;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
-    irls_view_weights, weighted_moments_pub, window_weights, znormalize_into_kept,
-    ConsensusScratch, PatchWindow, ProjectedImage, Sampler, FLAT_NORM_SQ_EPS,
+    irls_view_weights, window_weights, znormalize_into_kept, ConsensusScratch, PatchWindow,
+    ProjectedImage, Sampler, FLAT_NORM_SQ_EPS,
 };
+// Only the reference scorer (`znorm_core`, test-only) needs the moment helper.
+#[cfg(test)]
+use crate::patch::normal_refine::weighted_moments_pub;
 use crate::reconstruction::SfmrReconstruction;
 use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
@@ -263,6 +266,10 @@ fn extract_core(
 /// plain dot is a windowed ZNCC. A kept channel that is flat in this core
 /// (windowed norm² below [`FLAT_NORM_SQ_EPS`]) is written as zeros (contributes
 /// `0` to the ZNCC rather than a misaligned dot), matching view selection.
+///
+/// Production [`search_shift`] folds this z-normalization into its correlation
+/// maps; this remains the reference the equivalence test scores against.
+#[cfg(test)]
 fn znorm_core(raw: &[f32], support: &Support, keep_mask: &[bool], out: &mut [f32]) {
     let n = support.pixels.len();
     let mut kc = 0;
@@ -330,7 +337,9 @@ fn weighted_unit_template_into(
 }
 
 /// Per-channel-averaged ZNCC of a z-normalized core against a unit-norm template
-/// (both laid out `[c * n + k]`).
+/// (both laid out `[c * n + k]`). Reference scoring for the equivalence test;
+/// production [`search_shift`] computes the same value by accumulation.
+#[cfg(test)]
 fn template_zncc(core: &[f32], tmpl: &[f32], channels: usize, n: usize) -> f64 {
     let mut s = 0.0;
     for c in 0..channels {
@@ -371,25 +380,50 @@ fn median(values: &mut [f64]) -> f64 {
 
 /// Reused per-call scratch for [`search_shift`], created once per
 /// [`localize_patch_keypoints`] and shared across every view and round (the
-/// inner candidate loop then allocates nothing), mirroring [`ConsensusScratch`].
+/// search then allocates nothing after warm-up), mirroring [`ConsensusScratch`].
 #[derive(Default)]
 struct SearchScratch {
-    /// Raw extracted core for one candidate position (`tile.channels · n`).
-    raw: Vec<f32>,
-    /// z-normalized compacted core for one candidate position (`kept_ch · n`).
-    core: Vec<f32>,
-    /// Dense ZNCC grid over the `±margin` window (`(2·margin+1)²`).
-    grid: Vec<f64>,
-    /// The leave-one-out template the candidates score against (`kept_ch · n`).
+    /// The leave-one-out template the candidates score against (`kept_ch · n`),
+    /// laid out `[c · n + k]`; the caller writes it each round.
     tmpl: Vec<f32>,
+    /// Kept tile-channel indices (the `c` where `keep_mask[c]`), len `channels`.
+    kept_ch_idx: Vec<usize>,
+    /// The context tile deinterleaved into planar kept channels —
+    /// `[kc · (cr·cr) + row·cr + col]` — the SIMD-friendly base (rendered once
+    /// per round) the whole shift grid is scored against, mirroring the fronto
+    /// cache's planar layout.
+    planes: Vec<f32>,
+    /// Per-tile-pixel invalidity (`1.0` out of frame, else `0.0`), `[row·cr+col]`.
+    invalid: Vec<f32>,
+    /// Per-support-pixel kernel `√w · tmpl` for the channel being accumulated.
+    kern: Vec<f64>,
+    /// Per-channel correlation maps over the shift grid (`(2·margin+1)²`): the
+    /// numerator `Σ kern·I` and the window moments `Σ w·I`, `Σ w·I²`.
+    g_n: Vec<f64>,
+    g_s1: Vec<f64>,
+    g_s2: Vec<f64>,
+    /// Per-shift count of out-of-frame support pixels (a shift is scorable iff 0).
+    ginv: Vec<f64>,
+    /// Combined ZNCC grid over the `±margin` window (`(2·margin+1)²`).
+    grid: Vec<f64>,
 }
 
-/// Full-res integer windowed-ZNCC translation search of view `v`'s context tile
-/// against `sc.tmpl`, refined to sub-pixel by a separable parabolic fit. Returns
+/// Integer windowed-ZNCC translation search of view `v`'s context tile against
+/// `sc.tmpl`, refined to sub-pixel by a separable parabolic fit. Returns
 /// `(δx, δy, peak_zncc)` — the residual shift in patch-grid px and the ZNCC at
 /// the integer peak — or `None` if no in-frame window position could be scored.
 /// `margin` is the base window offset (`(context_res − R) / 2`); the search slides
 /// the window over `±margin`.
+///
+/// Rather than re-extract + z-normalize + dot each of the `(2·margin+1)²`
+/// candidates (a strided gather and a horizontal reduction per candidate), the
+/// whole grid is scored by accumulation. Because the template carries a fixed
+/// weighted mean, the windowed ZNCC of every shift factors into three
+/// correlation maps per channel — `Σ kern·I`, `Σ w·I`, `Σ w·I²` — whose inner
+/// loop is a contiguous fused SAXPY across the shift row (the vectorizable core).
+/// `zncc = (Σkern·I − mean·Σ√w·tmpl) / √(Σw·I² − mean·Σw·I)`, averaged over
+/// channels — algebraically identical to the per-candidate z-normalize-then-dot
+/// path (see [`search_shift_ref`]).
 #[allow(clippy::too_many_arguments)]
 fn search_shift(
     tile: &ContextTile,
@@ -402,28 +436,98 @@ fn search_shift(
     margin: i64,
 ) -> Option<(f64, f64, f64)> {
     let n = support.pixels.len();
-    sc.raw.clear();
-    sc.raw.resize(tile.channels * n, 0.0);
-    sc.core.clear();
-    sc.core.resize(channels * n, 0.0);
-    // Score on a dense grid so the parabolic refine has both neighbours; an
-    // out-of-frame position scores -inf (never chosen).
+    let cr = context_res;
     let span = (2 * margin + 1) as usize;
+    let gsz = span * span;
+    let tc = tile.channels;
+    let plane_len = cr * cr;
+
+    // The kept tile-channel indices (where `keep_mask` is set).
+    sc.kept_ch_idx.clear();
+    sc.kept_ch_idx
+        .extend((0..keep_mask.len()).filter(|&c| keep_mask[c]));
+    debug_assert_eq!(sc.kept_ch_idx.len(), channels);
+
+    // Deinterleave the kept channels into planar f32, plus the per-pixel
+    // invalidity plane — the base the shift grid scores against.
+    sc.planes.clear();
+    sc.planes.resize(channels * plane_len, 0.0);
+    sc.invalid.clear();
+    sc.invalid.resize(plane_len, 0.0);
+    for i in 0..plane_len {
+        if !tile.valid[i] {
+            sc.invalid[i] = 1.0;
+        }
+        let base = i * tc;
+        for (kc, &c) in sc.kept_ch_idx.iter().enumerate() {
+            sc.planes[kc * plane_len + i] = tile.px[base + c];
+        }
+    }
+
+    // Validity: count out-of-frame support pixels per shift (channel-independent);
+    // a shift with any is unscorable, matching `extract_core`'s all-valid gate.
+    sc.ginv.clear();
+    sc.ginv.resize(gsz, 0.0);
+    accumulate_count(&sc.invalid, support, resolution, cr, span, &mut sc.ginv);
+
+    // Per kept channel: accumulate the three correlation maps, then fold the
+    // channel's ZNCC into the combined grid. The numerator's mean term is carried
+    // explicitly (`mean·Σ√w·tmpl`) so this matches the per-candidate path even
+    // when the template is not exactly zero-weighted-mean.
     sc.grid.clear();
-    sc.grid.resize(span * span, f64::NEG_INFINITY);
+    sc.grid.resize(gsz, 0.0);
+    sc.g_n.resize(gsz, 0.0);
+    sc.g_s1.resize(gsz, 0.0);
+    sc.g_s2.resize(gsz, 0.0);
+    let inv_total_w = 1.0 / support.total_w;
+    for kc in 0..channels {
+        let tmpl_c = &sc.tmpl[kc * n..][..n];
+        sc.kern.clear();
+        let mut tsum = 0.0;
+        for (&sw, &t) in support.sqrt_w.iter().zip(tmpl_c) {
+            let kk = sw as f64 * t as f64;
+            sc.kern.push(kk);
+            tsum += kk;
+        }
+        sc.g_n.fill(0.0);
+        sc.g_s1.fill(0.0);
+        sc.g_s2.fill(0.0);
+        accumulate_channel(
+            &sc.planes[kc * plane_len..][..plane_len],
+            support,
+            &sc.kern,
+            resolution,
+            cr,
+            span,
+            &mut sc.g_n,
+            &mut sc.g_s1,
+            &mut sc.g_s2,
+        );
+        for s in 0..gsz {
+            let s1 = sc.g_s1[s];
+            let mean = s1 * inv_total_w;
+            let norm_sq = sc.g_s2[s] - s1 * mean;
+            // A channel flat in this window contributes 0 (matches `znorm_core`).
+            if norm_sq >= FLAT_NORM_SQ_EPS {
+                sc.grid[s] += (sc.g_n[s] - mean * tsum) / norm_sq.sqrt();
+            }
+        }
+    }
+
+    // Average over channels; out-of-frame shifts score −∞ (never chosen).
+    let chf = channels as f64;
     let at =
         |dy: i64, dx: i64| -> usize { ((dy + margin) as usize) * span + (dx + margin) as usize };
     let mut best = (f64::NEG_INFINITY, 0i64, 0i64);
     for dy in -margin..=margin {
         for dx in -margin..=margin {
-            let oy = (margin + dy) as usize;
-            let ox = (margin + dx) as usize;
-            if !extract_core(tile, support, context_res, resolution, oy, ox, &mut sc.raw) {
-                continue;
-            }
-            znorm_core(&sc.raw, support, keep_mask, &mut sc.core);
-            let z = template_zncc(&sc.core, &sc.tmpl, channels, n);
-            sc.grid[at(dy, dx)] = z;
+            let s = at(dy, dx);
+            let z = if sc.ginv[s] > 0.5 {
+                f64::NEG_INFINITY
+            } else {
+                sc.grid[s] / chf
+            };
+            sc.grid[s] = z;
             if z > best.0 {
                 best = (z, dy, dx);
             }
@@ -453,6 +557,70 @@ fn search_shift(
         _ => 0.0,
     };
     Some((px as f64 + sx, py as f64 + sy, peak))
+}
+
+/// Accumulate, over the support pixels, one channel's per-shift correlation maps:
+/// numerator `g_n[s] = Σ_k kern[k]·I[s+k]` and window moments
+/// `g_s1[s] = Σ_k w[k]·I[s+k]`, `g_s2[s] = Σ_k w[k]·I[s+k]²`, where `I` is the
+/// channel's planar context tile and `s` runs over the `span×span` shift grid.
+/// The inner `gx` loop walks a contiguous tile row and a contiguous grid row (a
+/// fused SAXPY) — the vectorizable core of the search.
+#[allow(clippy::too_many_arguments)]
+fn accumulate_channel(
+    plane: &[f32],
+    support: &Support,
+    kern: &[f64],
+    resolution: usize,
+    cr: usize,
+    span: usize,
+    g_n: &mut [f64],
+    g_s1: &mut [f64],
+    g_s2: &mut [f64],
+) {
+    for (k, &p) in support.pixels.iter().enumerate() {
+        let r_k = p / resolution;
+        let c_k = p % resolution;
+        let w_k = support.weights[k];
+        let kern_k = kern[k];
+        for gy in 0..span {
+            let src = &plane[(gy + r_k) * cr + c_k..][..span];
+            let gbase = gy * span;
+            let on = &mut g_n[gbase..][..span];
+            let o1 = &mut g_s1[gbase..][..span];
+            let o2 = &mut g_s2[gbase..][..span];
+            for gx in 0..span {
+                let v = src[gx] as f64;
+                on[gx] += kern_k * v;
+                o1[gx] += w_k * v;
+                o2[gx] += w_k * v * v;
+            }
+        }
+    }
+}
+
+/// Accumulate the per-shift count of out-of-frame support pixels (`invalid` is
+/// `1.0` where the tile pixel is invalid, else `0.0`). A shift is scorable iff its
+/// count is `0` (every support pixel in frame), the grid analogue of
+/// [`extract_core`] returning `false` for any invalid support pixel.
+fn accumulate_count(
+    invalid: &[f32],
+    support: &Support,
+    resolution: usize,
+    cr: usize,
+    span: usize,
+    g: &mut [f64],
+) {
+    for &p in &support.pixels {
+        let r_k = p / resolution;
+        let c_k = p % resolution;
+        for gy in 0..span {
+            let src = &invalid[(gy + r_k) * cr + c_k..][..span];
+            let gr = &mut g[gy * span..][..span];
+            for gx in 0..span {
+                gr[gx] += src[gx] as f64;
+            }
+        }
+    }
 }
 
 /// One view's mutable congealing state.
@@ -880,6 +1048,67 @@ pub fn track_views_from_reconstruction(
     cloud: &PatchCloud,
 ) -> Vec<Vec<u32>> {
     super::normal_refine::view_indices_from_reconstruction(recon, cloud)
+}
+
+/// Reference (pre-optimization) translation search: score each candidate by
+/// extract → z-normalize → template dot. Kept as the oracle the accumulation
+/// [`search_shift`] is checked against in [`tests`]; not used in production.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn search_shift_ref(
+    tile: &ContextTile,
+    tmpl: &[f32],
+    support: &Support,
+    keep_mask: &[bool],
+    channels: usize,
+    context_res: usize,
+    resolution: usize,
+    margin: i64,
+) -> Option<(f64, f64, f64)> {
+    let n = support.pixels.len();
+    let mut raw = vec![0f32; tile.channels * n];
+    let mut core = vec![0f32; channels * n];
+    let span = (2 * margin + 1) as usize;
+    let mut grid = vec![f64::NEG_INFINITY; span * span];
+    let at =
+        |dy: i64, dx: i64| -> usize { ((dy + margin) as usize) * span + (dx + margin) as usize };
+    let mut best = (f64::NEG_INFINITY, 0i64, 0i64);
+    for dy in -margin..=margin {
+        for dx in -margin..=margin {
+            let oy = (margin + dy) as usize;
+            let ox = (margin + dx) as usize;
+            if !extract_core(tile, support, context_res, resolution, oy, ox, &mut raw) {
+                continue;
+            }
+            znorm_core(&raw, support, keep_mask, &mut core);
+            let z = template_zncc(&core, tmpl, channels, n);
+            grid[at(dy, dx)] = z;
+            if z > best.0 {
+                best = (z, dy, dx);
+            }
+        }
+    }
+    if !best.0.is_finite() {
+        return None;
+    }
+    let (peak, py, px) = best;
+    let nb = |dy: i64, dx: i64| -> Option<f64> {
+        if dy.abs() <= margin && dx.abs() <= margin {
+            let g = grid[at(dy, dx)];
+            g.is_finite().then_some(g)
+        } else {
+            None
+        }
+    };
+    let sy = match (nb(py - 1, px), nb(py + 1, px)) {
+        (Some(l), Some(r)) => parabolic(peak, l, r),
+        _ => 0.0,
+    };
+    let sx = match (nb(py, px - 1), nb(py, px + 1)) {
+        (Some(l), Some(r)) => parabolic(peak, l, r),
+        _ => 0.0,
+    };
+    Some((px as f64 + sx, py as f64 + sy, peak))
 }
 
 #[cfg(test)]
