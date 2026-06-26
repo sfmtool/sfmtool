@@ -75,7 +75,11 @@ from `X_p` and **initialized by unprojecting the starting keypoint onto `Π_p`**
 3. **Per-view shift.** For each view `v`, search the residual in-plane shift that
    maximizes windowed ZNCC against the **leave-one-out** consensus of the *other*
    views (so a view is never aligned to a template its own pixels polluted): a
-   full-res integer search then a separable parabolic sub-pixel fit.
+   full-res integer search then a separable parabolic sub-pixel fit. The parabolic
+   fit is a cheap estimate to converge and seed on; an accurate sub-pixel keypoint
+   is a separate continuous-photometric algorithm
+   ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)) that runs
+   after this converges.
 4. **Accumulate** `acc[v] += δ_v`, clipping the total move from the point's
    projection (`acc[v]`, which `project_i(X_p)` sets to zero) to `±search` — the
    same anchor the `max_shift_px` gate below uses.
@@ -98,9 +102,12 @@ view's projection, is `δ_j`; the emitted keypoint is `project_i(X_p) + δ_j`.
 - **No compounding blur.** Each round re-renders the tile from the source at the
   accumulated offset instead of re-warping an already-warped tile, so
   interpolation blur can't compound across iterations. Re-rendering from the
-  source every round is just the simple thing to start with — rendering a
-  higher-resolution temporary once and resampling each round from *that* would
-  cut the per-round cost while keeping the extra blur negligible.
+  source every round is the simple thing to start with; rendering one expanded
+  cache per view up front and reading each round's core from *that* removes the
+  redundant renders — and because an in-plane shift maps to an integer index
+  shift in the cache, the read is **exact** for integer offsets (no extra blur),
+  not an approximation. That cache, plus a SIMD search over it, is specified in
+  [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md).
 - **Leave-one-out scoring** is the honest "did it register?" signal: mean per-view
   ZNCC against the consensus of the *others* can only rise if the views genuinely
   co-register; a template fitting its own noise would inflate self-agreement but
