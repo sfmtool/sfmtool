@@ -4,15 +4,22 @@
 //! Patch-keypoint localization by group-wise translation registration
 //! (congealing).
 //!
-//! See `specs/core/patch-keypoint-localization.md`. Given one 3D point with its
-//! oriented patch, a view set `G`, and a starting keypoint per view,
+//! See `specs/core/patch-keypoint-localization.md` and
+//! `specs/core/keypoint-localization-search-cache.md`. Given one 3D point with
+//! its oriented patch, a view set `G`, and a starting keypoint per view,
 //! [`localize_patch_keypoints`] refines each keypoint to sub-pixel and reports
-//! which views it kept. Each round it renders every view's patch tile at its
-//! accumulated in-plane offset (a *single* resample of the source, never
-//! re-warping an already-warped tile, so blur cannot compound), builds the
-//! robust (IRLS) consensus, and searches each view's residual in-plane shift
-//! against the **leave-one-out** consensus of the *others* (so a view is never
-//! aligned to a template its own pixels polluted). Views that drift too far,
+//! which views it kept. The patch frame is fixed during localization, so each
+//! view's source is resampled into an expanded, frame-oriented **cache exactly
+//! once** (sized to cover the whole search drift); since an integer in-plane
+//! shift is an integer cache-index shift, reading the cache at an integer offset
+//! is bit-identical to re-warping the patch there. Each round then reads every
+//! view's core from its cache at the view's current **integer** offset (no
+//! render), builds the robust (IRLS) consensus, and searches each view's residual
+//! in-plane shift against the **leave-one-out** consensus of the *others* (so a
+//! view is never aligned to a template its own pixels polluted). The integer
+//! argmax moves the cache-read accumulator while the parabolic sub-pixel residual
+//! rides alongside (it gates convergence and seeds the final keypoint but never
+//! moves the read position — keeping every read exact). Views that drift too far,
 //! leave the frame, or stop agreeing are dropped in-loop, so the survivors
 //! register against a cleaner template.
 //!
@@ -80,6 +87,15 @@ pub struct KeypointLocalizeParams {
     /// Convergence threshold: stop once the mean per-view residual shift of a
     /// round is below this many patch-grid px.
     pub convergence_px: f64,
+    /// Search-resolution multiplier `m` (default `1.0`, a no-op). The discrete
+    /// cross-view search is run at resolution `R_s = round(m·R)`: the per-view
+    /// cache, window support, and shift grid are all built at `R_s`, so one
+    /// integer step in the search grid is `1/m` patch-grid px. The found shift is
+    /// scaled by `1/m` back to patch-grid px before it moves the accumulator and
+    /// is reported. `m < 1` smooths the correlation surface for a speed fallback;
+    /// `m > 1` resolves sub-pixel offsets directly on a finer grid. See
+    /// `specs/core/keypoint-localization-search-cache.md`.
+    pub search_resolution_multiplier: f32,
 }
 
 impl Default for KeypointLocalizeParams {
@@ -95,6 +111,7 @@ impl Default for KeypointLocalizeParams {
             sampler: Sampler::Bilinear,
             robust_iters: 3,
             convergence_px: 0.05,
+            search_resolution_multiplier: 1.0,
         }
     }
 }
@@ -137,13 +154,24 @@ struct Support {
 }
 
 /// A rendered context tile for one view: source colour over a
-/// `context_res × context_res` grid (larger than the scored `R×R` core so the
-/// shift search can slide), plus per-pixel validity from the warp map (an
-/// invalid pixel is out of frame, rendered black, and must not be scored).
+/// `cache_res × cache_res` grid (larger than the scored `R×R` core so the shift
+/// search can slide), plus per-pixel validity from the warp map (an invalid pixel
+/// is out of frame, rendered black, and must not be scored).
+///
+/// In the cached congealing loop this is the **per-view render-once cache**: it
+/// is rendered a single time per view, frame-oriented at the seed (`acc = 0`,
+/// centred on `project_i(X_p)`), sized to cover the full search drift, and every
+/// round reads its core / scores its shift grid from it at the view's current
+/// **integer** offset. Because the patch frame is fixed during localization, an
+/// integer in-plane shift is an integer cache-index shift, so a read at an
+/// integer offset is bit-identical to re-warping the patch at that offset (see
+/// `specs/core/keypoint-localization-search-cache.md`).
 struct ContextTile {
-    /// Colour, flat `[(row * context_res + col) * channels + channel]` (f32).
+    /// Side length of the (square) tile, in patch-grid px.
+    res: usize,
+    /// Colour, flat `[(row * res + col) * channels + channel]` (f32).
     px: Vec<f32>,
-    /// Per-pixel validity, `[row * context_res + col]`.
+    /// Per-pixel validity, `[row * res + col]`.
     valid: Vec<bool>,
     /// Channel count.
     channels: usize,
@@ -175,11 +203,13 @@ pub(super) fn shifted_center(
     patch.center + patch.u_axis * (au * wpp_u) + patch.v_axis * (av * wpp_v)
 }
 
-/// Render one view's context tile with the patch centre at in-plane offset
-/// `(au, av)` (patch-grid px). The context patch spans `context_res / R` times
-/// the core extent, rendered at `context_res`, so each context pixel equals one
-/// core pixel in world units and the scored core sits centred at offset
-/// `margin = (context_res − R) / 2`.
+/// Render one view's context tile / cache with the patch centre at in-plane
+/// offset `(au, av)` (patch-grid px). The context patch spans `context_res / R`
+/// times the core extent, rendered at `context_res`, so each context pixel equals
+/// one core pixel in world units. In the cached loop this is called **once per
+/// view** with `(au, av) = (0, 0)` to build the per-view cache: the scored core
+/// at the view's accumulated integer offset `iacc` then sits at cache offset
+/// `(context_res − R) / 2 + iacc`.
 #[allow(clippy::too_many_arguments)]
 fn render_context(
     patch: &OrientedPatch,
@@ -226,6 +256,7 @@ fn render_context(
         }
     }
     ContextTile {
+        res: cr,
         px,
         valid,
         channels,
@@ -239,7 +270,6 @@ fn render_context(
 fn extract_core(
     tile: &ContextTile,
     support: &Support,
-    context_res: usize,
     resolution: usize,
     oy: usize,
     ox: usize,
@@ -247,9 +277,10 @@ fn extract_core(
 ) -> bool {
     let ch = tile.channels;
     let n = support.pixels.len();
+    let tile_res = tile.res;
     for (k, &p) in support.pixels.iter().enumerate() {
         let (r, c) = (p / resolution, p % resolution);
-        let cp = (oy + r) * context_res + (ox + c);
+        let cp = (oy + r) * tile_res + (ox + c);
         if !tile.valid[cp] {
             return false;
         }
@@ -408,12 +439,34 @@ struct SearchScratch {
     grid: Vec<f64>,
 }
 
-/// Integer windowed-ZNCC translation search of view `v`'s context tile against
-/// `sc.tmpl`, refined to sub-pixel by a separable parabolic fit. Returns
-/// `(δx, δy, peak_zncc)` — the residual shift in patch-grid px and the ZNCC at
-/// the integer peak — or `None` if no in-frame window position could be scored.
-/// `margin` is the base window offset (`(context_res − R) / 2`); the search slides
-/// the window over `±margin`.
+/// The result of a [`search_shift`] — the residual shift of one view relative to
+/// its current integer base offset, in `R_s`-grid steps.
+#[derive(Debug, Clone, Copy)]
+struct ShiftResult {
+    /// Sub-pixel-refined shift in the grid's x (column) axis: integer argmax plus
+    /// the separable parabolic residual.
+    dx: f64,
+    /// Sub-pixel-refined shift in the grid's y (row) axis.
+    dy: f64,
+    /// The integer argmax shift in x — the part that moves the integer read
+    /// accumulator `iacc` (every cache read stays at an integer index).
+    ix: i64,
+    /// The integer argmax shift in y.
+    iy: i64,
+    /// ZNCC at the integer peak.
+    peak: f64,
+}
+
+/// Integer windowed-ZNCC translation search of view `v`'s cache against
+/// `sc.tmpl`, refined to sub-pixel by a separable parabolic fit. Returns a
+/// [`ShiftResult`] — the integer argmax shift `(ix, iy)`, its sub-pixel-refined
+/// counterpart `(dx, dy)`, and the ZNCC `peak` at the integer peak — or `None` if
+/// no in-frame window position could be scored. The search centres on
+/// the view's current integer offset `iacc`: the `(dy, dx) = (0, 0)` shift scores
+/// the `R×R` core window whose top-left support pixel sits at cache index
+/// `(base_y, base_x) = ((cache_res − R) / 2 + iacc_y, … + iacc_x)`, and the search
+/// slides the window over `±margin` around it. Both `base ± margin` are guaranteed
+/// in-bounds by the cache sizing (`cache_res = R + 4·margin`, `|iacc| ≤ search`).
 ///
 /// Rather than re-extract + z-normalize + dot each of the `(2·margin+1)²`
 /// candidates (a strided gather and a horizontal reduction per candidate), the
@@ -431,12 +484,16 @@ fn search_shift(
     support: &Support,
     keep_mask: &[bool],
     channels: usize,
-    context_res: usize,
     resolution: usize,
     margin: i64,
-) -> Option<(f64, f64, f64)> {
+    base_y: usize,
+    base_x: usize,
+) -> Option<ShiftResult> {
     let n = support.pixels.len();
-    let cr = context_res;
+    let cr = tile.res;
+    // The search grid's origin (`gy = gx = 0`) reads the window at `base − margin`.
+    let win_oy = base_y - margin as usize;
+    let win_ox = base_x - margin as usize;
     let span = (2 * margin + 1) as usize;
     let gsz = span * span;
     let tc = tile.channels;
@@ -468,7 +525,16 @@ fn search_shift(
     // a shift with any is unscorable, matching `extract_core`'s all-valid gate.
     sc.ginv.clear();
     sc.ginv.resize(gsz, 0.0);
-    accumulate_count(&sc.invalid, support, resolution, cr, span, &mut sc.ginv);
+    accumulate_count(
+        &sc.invalid,
+        support,
+        resolution,
+        cr,
+        span,
+        win_oy,
+        win_ox,
+        &mut sc.ginv,
+    );
 
     // Per kept channel: accumulate the three correlation maps, then fold the
     // channel's ZNCC into the combined grid. The numerator's mean term is carried
@@ -499,6 +565,8 @@ fn search_shift(
             resolution,
             cr,
             span,
+            win_oy,
+            win_ox,
             &mut sc.g_n,
             &mut sc.g_s1,
             &mut sc.g_s2,
@@ -556,13 +624,21 @@ fn search_shift(
         (Some(l), Some(r)) => parabolic(peak, l, r),
         _ => 0.0,
     };
-    Some((px as f64 + sx, py as f64 + sy, peak))
+    Some(ShiftResult {
+        dx: px as f64 + sx,
+        dy: py as f64 + sy,
+        ix: px,
+        iy: py,
+        peak,
+    })
 }
 
 /// Accumulate, over the support pixels, one channel's per-shift correlation maps:
 /// numerator `g_n[s] = Σ_k kern[k]·I[s+k]` and window moments
 /// `g_s1[s] = Σ_k w[k]·I[s+k]`, `g_s2[s] = Σ_k w[k]·I[s+k]²`, where `I` is the
 /// channel's planar context tile and `s` runs over the `span×span` shift grid.
+/// `(win_oy, win_ox)` is the cache index of the search grid's `(gy, gx) = (0, 0)`
+/// cell (the window's top-left, at the view's integer base offset minus `margin`).
 /// The inner `gx` loop walks a contiguous tile row and a contiguous grid row (a
 /// fused SAXPY) — the vectorizable core of the search.
 #[allow(clippy::too_many_arguments)]
@@ -573,6 +649,8 @@ fn accumulate_channel(
     resolution: usize,
     cr: usize,
     span: usize,
+    win_oy: usize,
+    win_ox: usize,
     g_n: &mut [f64],
     g_s1: &mut [f64],
     g_s2: &mut [f64],
@@ -583,7 +661,7 @@ fn accumulate_channel(
         let w_k = support.weights[k];
         let kern_k = kern[k];
         for gy in 0..span {
-            let src = &plane[(gy + r_k) * cr + c_k..][..span];
+            let src = &plane[(gy + win_oy + r_k) * cr + (win_ox + c_k)..][..span];
             let gbase = gy * span;
             let on = &mut g_n[gbase..][..span];
             let o1 = &mut g_s1[gbase..][..span];
@@ -602,19 +680,22 @@ fn accumulate_channel(
 /// `1.0` where the tile pixel is invalid, else `0.0`). A shift is scorable iff its
 /// count is `0` (every support pixel in frame), the grid analogue of
 /// [`extract_core`] returning `false` for any invalid support pixel.
+#[allow(clippy::too_many_arguments)]
 fn accumulate_count(
     invalid: &[f32],
     support: &Support,
     resolution: usize,
     cr: usize,
     span: usize,
+    win_oy: usize,
+    win_ox: usize,
     g: &mut [f64],
 ) {
     for &p in &support.pixels {
         let r_k = p / resolution;
         let c_k = p % resolution;
         for gy in 0..span {
-            let src = &invalid[(gy + r_k) * cr + c_k..][..span];
+            let src = &invalid[(gy + win_oy + r_k) * cr + (win_ox + c_k)..][..span];
             let gr = &mut g[gy * span..][..span];
             for gx in 0..span {
                 gr[gx] += src[gx] as f64;
@@ -624,17 +705,70 @@ fn accumulate_count(
 }
 
 /// One view's mutable congealing state.
+///
+/// The accumulated in-plane offset is split into an **integer** read accumulator
+/// `iacc` and a **sub-pixel residual** (both in `R_s`-grid steps, where `R_s` is
+/// the search resolution): `iacc` is the only thing that indexes the per-view
+/// cache, so every cache read stays exact (an integer cache-index shift is a
+/// bit-exact re-warp); the parabolic residual rides alongside for convergence
+/// detection and the final reported keypoint but is **never folded back into the
+/// read position**. The patch-grid in-plane offset is `(iacc + residual) / m` —
+/// see [`shifted_center`] / [`finalize`] and
+/// `specs/core/keypoint-localization-search-cache.md`.
 struct ViewState {
     /// Image index into the caller's `views` slice.
     idx: u32,
-    /// Accumulated in-plane offset `(au, av)` of the patch centre, patch-grid px.
-    acc: [f64; 2],
+    /// Integer read accumulator `(iau, iav)` in `R_s`-grid steps: the cache index
+    /// (relative to the cache centre) the core and search candidates are read at.
+    iacc: [i64; 2],
+    /// The latest parabolic sub-pixel residual `(ru, rv)` in `R_s`-grid steps from
+    /// the last round that scored this view; used for convergence and the final
+    /// keypoint only, never for cache reads.
+    residual: [f64; 2],
     /// The view's projection of the point `project_i(X_p)`, source-image px — the
     /// anchor the keypoint and its `max_shift_px` gate are measured from.
     proj: [f64; 2],
     /// The latest leave-one-out ZNCC (peak from the round's search); `NaN` until
     /// a round scores it.
     loo: f64,
+}
+
+impl ViewState {
+    /// The total in-plane offset `(au, av)` in **`R_s`-grid steps**: the integer
+    /// read accumulator plus the sub-pixel residual. This is the unit
+    /// [`shifted_center`] expects when paired with the `R_s`-resolution
+    /// world-per-grid-px (`wpp`), so the `1/m` scaling back to patch-grid px is
+    /// absorbed into `wpp` rather than applied here.
+    fn offset_steps(&self) -> [f64; 2] {
+        [
+            self.iacc[0] as f64 + self.residual[0],
+            self.iacc[1] as f64 + self.residual[1],
+        ]
+    }
+}
+
+/// Drop the `(state, cache)` pairs for which `keep` returns `false`, keeping the
+/// two vectors parallel. `keep` is evaluated once per state in order; the cache at
+/// the same index is dropped with it. Cold path (runs only on view drops).
+fn retain_states_and_caches(
+    states: &mut Vec<ViewState>,
+    caches: &mut Vec<ContextTile>,
+    mut keep: impl FnMut(&ViewState) -> bool,
+) {
+    debug_assert_eq!(states.len(), caches.len());
+    let mask: Vec<bool> = states.iter().map(&mut keep).collect();
+    let mut i = 0;
+    states.retain(|_| {
+        let k = mask[i];
+        i += 1;
+        k
+    });
+    let mut i = 0;
+    caches.retain(|_| {
+        let k = mask[i];
+        i += 1;
+        k
+    });
 }
 
 /// Localize the keypoints of one oriented patch over a view set by congealing.
@@ -653,16 +787,30 @@ pub fn localize_patch_keypoints(
     starting_keypoints: Option<&[[f64; 2]]>,
     params: &KeypointLocalizeParams,
 ) -> KeypointLocalization {
-    let resolution = params.resolution.max(2);
-    let margin = params.search.ceil().max(1.0) as i64;
-    let context_res = resolution + 2 * margin as u32;
+    // Search resolution `R_s = round(m·R)`: the cache, support, and shift grid all
+    // build at `R_s`. An integer step in this grid is `1/m` patch-grid px, so the
+    // found shift is scaled by `inv_m = 1/m` back to patch-grid px (`m = 1` — the
+    // default — is a no-op). See `specs/core/keypoint-localization-search-cache.md`.
+    let m = (params.search_resolution_multiplier as f64).max(1e-3);
+    let base_res = params.resolution.max(2);
+    let resolution = ((m * base_res as f64).round() as u32).max(2);
+    // In-round search radius, in `R_s`-grid steps (`search` is patch-grid px, an
+    // `R_s` step is `1/m` patch-grid px). At `m = 1` this is the old `margin`.
+    let margin = (params.search * m).ceil().max(1.0) as i64;
+    // The accumulated integer drift is clipped to `±search_steps`; `search_steps =
+    // margin` keeps the larger `R_s + 4·margin` cache exactly covering every round.
+    let search_steps = margin;
+    // Render-once cache size: `R_s + 4·search`, the unconditionally-correct option
+    // (covers a window centre at `iacc + d` with `|iacc| ≤ search`, `|d| ≤ margin`).
+    let context_res = resolution + 4 * margin as u32;
+    // Cache index of the `R×R` core at zero offset (`iacc = 0`).
+    let cache_c0 = (2 * margin) as usize;
     let r = resolution as usize;
-    let cr = context_res as usize;
 
     let wpp_u = 2.0 * patch.half_extent[0] / resolution as f64;
     let wpp_v = 2.0 * patch.half_extent[1] / resolution as f64;
 
-    // Window support over the R×R core.
+    // Window support over the R_s×R_s core.
     let w_full = window_weights(params.window, resolution);
     let mut pixels = Vec::new();
     let mut weights = Vec::new();
@@ -709,14 +857,25 @@ pub fn localize_patch_keypoints(
         let Some(proj) = project(view, &patch.center, patch.w) else {
             continue;
         };
-        // Seed offset: unproject the starting keypoint onto the plane, else zero.
-        let acc = match starting_keypoints {
+        // Seed offset (in `R_s`-grid steps, since `wpp` is at `R_s`): unproject the
+        // starting keypoint onto the plane, else zero. Split into the integer read
+        // accumulator (clipped to the cache's drift bound) and a sub-pixel residual
+        // — the residual keeps a lone-view seed exact through `finalize` while the
+        // congealing read position stays integer.
+        let off = match starting_keypoints {
             Some(seeds) => seed_offset(patch, view, seeds[k], wpp_u, wpp_v).unwrap_or([0.0, 0.0]),
             None => [0.0, 0.0],
         };
+        // `off = [u, v]` (u-axis, v-axis components, in `R_s`-grid steps). Split each
+        // axis into the clamped integer read accumulator and a pure sub-pixel
+        // residual — the residual keeps a lone-view seed exact through `finalize`; a
+        // seed beyond `±search` is clamped on the integer part, as the round drift is.
+        let iu = (off[0].round() as i64).clamp(-search_steps, search_steps);
+        let iv = (off[1].round() as i64).clamp(-search_steps, search_steps);
         states.push(ViewState {
             idx: i,
-            acc,
+            iacc: [iu, iv],
+            residual: [off[0] - off[0].round(), off[1] - off[1].round()],
             proj: [proj.0, proj.1],
             loo: f64::NAN,
         });
@@ -726,56 +885,61 @@ pub fn localize_patch_keypoints(
         return finalize(patch, views, &states, wpp_u, wpp_v);
     }
 
+    // Render each view's expanded cache **once** (frame-oriented at the seed,
+    // `acc = 0`), sized `R_s + 4·margin` to cover the full search drift. Every
+    // round reads its core and scores its shift grid from this cache at the view's
+    // current integer offset `iacc` — no per-round render. `caches` stays parallel
+    // to `states`; the view-dropping retain below filters both together.
+    let mut caches: Vec<ContextTile> = Vec::with_capacity(states.len());
+    prof::count(&prof::N_RENDER, states.len() as u64);
+    prof::RENDER.time(|| {
+        for st in &states {
+            caches.push(render_context(
+                patch,
+                &views[st.idx as usize],
+                0.0,
+                0.0,
+                wpp_u,
+                wpp_v,
+                resolution,
+                context_res,
+                params.sampler,
+            ));
+        }
+    });
+
     let mut sc = ConsensusScratch::default();
     let mut search = SearchScratch::default();
     for _round in 0..params.max_iters.max(1) {
         prof::count(&prof::N_ROUNDS, 1);
-        // 1. Render every view's context tile at its accumulated offset; a view
-        //    whose core has left the frame (any support pixel invalid) is dropped.
-        let mut tiles: Vec<ContextTile> = Vec::with_capacity(states.len());
+        // 1. Read every view's R_s×R_s core from its cache at the integer offset
+        //    `iacc` (no render — exact). A view whose core has left the frame (any
+        //    support pixel invalid) is dropped for this round.
         let mut live: Vec<usize> = Vec::with_capacity(states.len());
         let mut base_raw = Vec::new();
-        prof::count(&prof::N_RENDER, states.len() as u64);
-        prof::RENDER.time(|| {
-            for (si, st) in states.iter().enumerate() {
-                let tile = render_context(
-                    patch,
-                    &views[st.idx as usize],
-                    st.acc[0],
-                    st.acc[1],
-                    wpp_u,
-                    wpp_v,
-                    resolution,
-                    context_res,
-                    params.sampler,
-                );
-                let mut raw = vec![0f32; tile.channels * support.pixels.len()];
-                if extract_core(
-                    &tile,
-                    &support,
-                    cr,
-                    r,
-                    margin as usize,
-                    margin as usize,
-                    &mut raw,
-                ) {
-                    live.push(si);
-                    base_raw.push(raw);
-                    tiles.push(tile);
-                }
+        for (si, st) in states.iter().enumerate() {
+            let cache = &caches[si];
+            let mut raw = vec![0f32; cache.channels * support.pixels.len()];
+            // `iacc[0]` is the u-axis (column/x) accumulator, `iacc[1]` the v-axis
+            // (row/y) — matching the search grid's `(dx, dy)` and `shifted_center`.
+            let ox = (cache_c0 as i64 + st.iacc[0]) as usize;
+            let oy = (cache_c0 as i64 + st.iacc[1]) as usize;
+            if extract_core(cache, &support, r, oy, ox, &mut raw) {
+                live.push(si);
+                base_raw.push(raw);
             }
-        });
+        }
         if live.len() < 2 {
             // Too few views still see the patch to congeal; keep the in-frame ones
             // (with their current offsets) and finalize.
             let live_set: std::collections::HashSet<u32> =
                 live.iter().map(|&si| states[si].idx).collect();
-            states.retain(|st| live_set.contains(&st.idx));
+            retain_states_and_caches(&mut states, &mut caches, |st| live_set.contains(&st.idx));
             break;
         }
 
         // 2. z-normalize the live cores into a shared compacted channel space.
-        let channels0 = tiles.iter().map(|t| t.channels).min().unwrap();
+        let channels0 = live.iter().map(|&si| caches[si].channels).min().unwrap();
         let n = support.pixels.len();
         let mut flat = vec![0f32; live.len() * channels0 * n];
         for (vk, raw) in base_raw.iter().enumerate() {
@@ -800,10 +964,9 @@ pub fn localize_patch_keypoints(
 
         // 3-4. Per live view: search its residual shift against the leave-one-out
         //      consensus of the others, then accumulate (clipped to ±search).
-        let mut deltas = vec![[0.0f64; 2]; live.len()];
-        let mut loos = vec![f64::NAN; live.len()];
+        let mut shifts: Vec<Option<ShiftResult>> = vec![None; live.len()];
         let mut loo_xs = vec![0f32; (live.len() - 1) * kept_ch * n];
-        for v in 0..live.len() {
+        for (v, &si) in live.iter().enumerate() {
             // Copy the other views' rows contiguously and build their robust
             // consensus template (the leave-one-out reference for view v).
             prof::TEMPLATE.time(|| {
@@ -820,32 +983,46 @@ pub fn localize_patch_keypoints(
                 weighted_unit_template_into(&loo_xs, &sc.w, w, kept_ch, n, &mut search.tmpl);
             });
             prof::count(&prof::N_SEARCH, 1);
-            let shift = prof::SEARCH.time(|| {
+            // Score the shift grid in view `si`'s cache around its current integer
+            // base offset `cache_c0 + iacc`. The returned shift is in `R_s`-grid
+            // steps relative to that base.
+            let st = &states[si];
+            let base_x = (cache_c0 as i64 + st.iacc[0]) as usize;
+            let base_y = (cache_c0 as i64 + st.iacc[1]) as usize;
+            shifts[v] = prof::SEARCH.time(|| {
                 search_shift(
-                    &tiles[v],
+                    &caches[si],
                     &mut search,
                     &support,
                     &keep_mask,
                     kept_ch,
-                    cr,
                     r,
                     margin,
+                    base_y,
+                    base_x,
                 )
             });
-            if let Some((dx, dy, peak)) = shift {
-                deltas[v] = [dx, dy];
-                loos[v] = peak;
-            }
         }
 
-        // Accumulate onto the (still full) `states`, clipping the total drift.
+        // Accumulate onto the (still full) `states`. The integer argmax moves the
+        // read accumulator `iacc` (clipped to the cache drift bound); the sub-pixel
+        // parabolic residual is stored separately and never fed back into the read
+        // position — keeping every cache read exact.
         let mut shift_sum = 0.0;
         for (v, &si) in live.iter().enumerate() {
             let st = &mut states[si];
-            st.acc[0] = (st.acc[0] + deltas[v][0]).clamp(-params.search, params.search);
-            st.acc[1] = (st.acc[1] + deltas[v][1]).clamp(-params.search, params.search);
-            st.loo = loos[v];
-            shift_sum += deltas[v][0].hypot(deltas[v][1]);
+            match shifts[v] {
+                Some(sh) => {
+                    st.iacc[0] = (st.iacc[0] + sh.ix).clamp(-search_steps, search_steps);
+                    st.iacc[1] = (st.iacc[1] + sh.iy).clamp(-search_steps, search_steps);
+                    st.residual = [sh.dx - sh.ix as f64, sh.dy - sh.iy as f64];
+                    st.loo = sh.peak;
+                    shift_sum += sh.dx.hypot(sh.dy);
+                }
+                // No scorable window this round: leave `iacc`/`residual` in place and
+                // mark the LOO unknown (matches the pre-cache None handling).
+                None => st.loo = f64::NAN,
+            }
         }
 
         // 5. Drop failing views (out-of-frame already removed above): keypoint too
@@ -872,7 +1049,8 @@ pub fn localize_patch_keypoints(
             if !live_idx.contains(&st.idx) {
                 continue;
             }
-            let center = shifted_center(patch, st.acc[0], st.acc[1], wpp_u, wpp_v);
+            let off = st.offset_steps();
+            let center = shifted_center(patch, off[0], off[1], wpp_u, wpp_v);
             let shift_px = match project(&views[st.idx as usize], &center, patch.w) {
                 Some((x, y)) => (x - st.proj[0]).hypot(y - st.proj[1]),
                 None => f64::INFINITY, // keypoint left the frame
@@ -892,10 +1070,10 @@ pub fn localize_patch_keypoints(
             kept.sort_unstable();
         }
         let keep_set: std::collections::HashSet<usize> = kept.into_iter().collect();
-        let mut si = 0;
-        states.retain(|_| {
-            let keep = keep_set.contains(&si);
-            si += 1;
+        let mut idx = 0;
+        retain_states_and_caches(&mut states, &mut caches, |_| {
+            let keep = keep_set.contains(&idx);
+            idx += 1;
             keep
         });
 
@@ -972,7 +1150,10 @@ fn finalize(
     let mut out = KeypointLocalization::default();
     for st in states {
         let view = &views[st.idx as usize];
-        let center = shifted_center(patch, st.acc[0], st.acc[1], wpp_u, wpp_v);
+        // `offset_steps` is in `R_s`-grid steps (integer read accumulator + the
+        // sub-pixel residual); `wpp` is the matching `R_s`-resolution world-per-step.
+        let off = st.offset_steps();
+        let center = shifted_center(patch, off[0], off[1], wpp_u, wpp_v);
         // The refined keypoint is the projection of the re-anchored centre. Fall
         // back to the point's own projection if the shifted centre fails to project.
         let (kx, ky) = project(view, &center, patch.w).unwrap_or((st.proj[0], st.proj[1]));
@@ -1061,10 +1242,11 @@ fn search_shift_ref(
     support: &Support,
     keep_mask: &[bool],
     channels: usize,
-    context_res: usize,
     resolution: usize,
     margin: i64,
-) -> Option<(f64, f64, f64)> {
+    base_y: usize,
+    base_x: usize,
+) -> Option<ShiftResult> {
     let n = support.pixels.len();
     let mut raw = vec![0f32; tile.channels * n];
     let mut core = vec![0f32; channels * n];
@@ -1075,9 +1257,12 @@ fn search_shift_ref(
     let mut best = (f64::NEG_INFINITY, 0i64, 0i64);
     for dy in -margin..=margin {
         for dx in -margin..=margin {
-            let oy = (margin + dy) as usize;
-            let ox = (margin + dx) as usize;
-            if !extract_core(tile, support, context_res, resolution, oy, ox, &mut raw) {
+            // The shift `(dy, dx)` window's top-left support pixel sits at the base
+            // offset plus the shift — matching `search_shift`'s grid (whose `gy =
+            // margin` row is `dy = 0`, reading at `win_oy + margin = base_y`).
+            let oy = (base_y as i64 + dy) as usize;
+            let ox = (base_x as i64 + dx) as usize;
+            if !extract_core(tile, support, resolution, oy, ox, &mut raw) {
                 continue;
             }
             znorm_core(&raw, support, keep_mask, &mut core);
@@ -1108,7 +1293,13 @@ fn search_shift_ref(
         (Some(l), Some(r)) => parabolic(peak, l, r),
         _ => 0.0,
     };
-    Some((px as f64 + sx, py as f64 + sy, peak))
+    Some(ShiftResult {
+        dx: px as f64 + sx,
+        dy: py as f64 + sy,
+        ix: px,
+        iy: py,
+        peak,
+    })
 }
 
 #[cfg(test)]

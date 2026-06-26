@@ -986,6 +986,9 @@ impl PyPatchCloud {
             sampler,
             robust_iters,
             convergence_px,
+            // Phase-1 search cache: the resolution multiplier is not yet plumbed
+            // through the Python binding, so keep the no-op default (`1.0`).
+            ..Default::default()
         };
 
         let (pyramids, poses) = build_pyramids_and_poses(recon, &images)?;
