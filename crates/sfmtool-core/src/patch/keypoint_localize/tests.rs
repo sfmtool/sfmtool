@@ -720,3 +720,191 @@ fn empty_view_set_returns_empty() {
     assert!(res.offsets_px.is_empty());
     assert!(res.loo_zncc.is_empty());
 }
+
+// ── Accumulation search_shift vs. the per-candidate reference ────────────────
+
+/// Build a window support over the `R×R` core (mirrors `localize_patch_keypoints`).
+fn disk_support(resolution: usize) -> Support {
+    let w_full = window_weights(PatchWindow::GaussianDisk { sigma: 0.6 }, resolution as u32);
+    let mut pixels = Vec::new();
+    let mut weights = Vec::new();
+    for (p, &w) in w_full.iter().enumerate() {
+        if w > 0.0 {
+            pixels.push(p);
+            weights.push(w);
+        }
+    }
+    let total_w: f64 = weights.iter().sum();
+    let sqrt_w: Vec<f32> = weights.iter().map(|&w| w.sqrt() as f32).collect();
+    Support {
+        pixels,
+        weights,
+        sqrt_w,
+        total_w,
+    }
+}
+
+/// A deterministic, textured `cr×cr×channels` context tile. `flat_last` forces the
+/// final channel constant (to exercise the flat-channel path).
+fn synthetic_tile(cr: usize, channels: usize, flat_last: bool) -> ContextTile {
+    let mut px = vec![0f32; cr * cr * channels];
+    for row in 0..cr {
+        for col in 0..cr {
+            let i = (row * cr + col) * channels;
+            let x = col as f64 * 0.11;
+            let y = row as f64 * 0.13;
+            for c in 0..channels {
+                let v = if flat_last && c == channels - 1 {
+                    100.0
+                } else {
+                    127.5
+                        + 55.0 * (x * (5.0 + c as f64) + 0.3 * c as f64).sin()
+                        + 45.0 * (y * (7.0 + c as f64)).cos()
+                };
+                px[i + c] = v as f32;
+            }
+        }
+    }
+    ContextTile {
+        px,
+        valid: vec![true; cr * cr],
+        channels,
+    }
+}
+
+/// Build the unit template (`[c·n+k]`) from the tile's own core at a known shift,
+/// so the ZNCC peak sits unambiguously at that shift (≈1) — a clean oracle target.
+#[allow(clippy::too_many_arguments)]
+fn template_at(
+    tile: &ContextTile,
+    support: &Support,
+    keep_mask: &[bool],
+    channels: usize,
+    cr: usize,
+    resolution: usize,
+    margin: i64,
+    dy0: i64,
+    dx0: i64,
+) -> Vec<f32> {
+    let n = support.pixels.len();
+    let mut raw = vec![0f32; tile.channels * n];
+    let oy = (margin + dy0) as usize;
+    let ox = (margin + dx0) as usize;
+    assert!(extract_core(
+        tile, support, cr, resolution, oy, ox, &mut raw
+    ));
+    let mut tmpl = vec![0f32; channels * n];
+    znorm_core(&raw, support, keep_mask, &mut tmpl);
+    tmpl
+}
+
+fn assert_search_eq(got: Option<(f64, f64, f64)>, want: Option<(f64, f64, f64)>) {
+    match (got, want) {
+        (Some(g), Some(w)) => {
+            assert!((g.0 - w.0).abs() < 1e-4, "dx {} vs {}", g.0, w.0);
+            assert!((g.1 - w.1).abs() < 1e-4, "dy {} vs {}", g.1, w.1);
+            assert!((g.2 - w.2).abs() < 1e-5, "peak {} vs {}", g.2, w.2);
+        }
+        (None, None) => {}
+        _ => panic!("one returned None: got={got:?} want={want:?}"),
+    }
+}
+
+#[test]
+fn search_shift_matches_reference() {
+    let resolution = 20usize;
+    let margin = 4i64;
+    let cr = resolution + 2 * margin as usize;
+    let channels = 3usize;
+    let support = disk_support(resolution);
+    let keep_mask = vec![true; channels];
+    let tile = synthetic_tile(cr, channels, false);
+
+    // Template from a known shift → unambiguous peak there.
+    let (dy0, dx0) = (1i64, -2i64);
+    let tmpl = template_at(
+        &tile, &support, &keep_mask, channels, cr, resolution, margin, dy0, dx0,
+    );
+
+    let mut sc = SearchScratch {
+        tmpl: tmpl.clone(),
+        ..Default::default()
+    };
+    let got = search_shift(
+        &tile, &mut sc, &support, &keep_mask, channels, cr, resolution, margin,
+    );
+    let want = search_shift_ref(
+        &tile, &tmpl, &support, &keep_mask, channels, cr, resolution, margin,
+    );
+    assert_search_eq(got, want);
+    // And it actually recovered the planted shift.
+    let g = got.unwrap();
+    assert!((g.0 - dx0 as f64).abs() < 0.25 && (g.1 - dy0 as f64).abs() < 0.25);
+    assert!(g.2 > 0.99, "self-template peak should be ≈1, got {}", g.2);
+}
+
+#[test]
+fn search_shift_matches_reference_flat_channel_and_invalid() {
+    let resolution = 20usize;
+    let margin = 4i64;
+    let cr = resolution + 2 * margin as usize;
+    let channels = 3usize;
+    let support = disk_support(resolution);
+    let keep_mask = vec![true; channels];
+    // Channel 2 flat (exercises FLAT_NORM_SQ_EPS), and a border band invalid
+    // (exercises the validity grid → some shifts unscorable).
+    let mut tile = synthetic_tile(cr, channels, true);
+    for row in 0..cr {
+        for col in 0..cr {
+            if row < 2 || col < 2 {
+                tile.valid[row * cr + col] = false;
+            }
+        }
+    }
+
+    let (dy0, dx0) = (2i64, 1i64);
+    let tmpl = template_at(
+        &tile, &support, &keep_mask, channels, cr, resolution, margin, dy0, dx0,
+    );
+    let mut sc = SearchScratch {
+        tmpl: tmpl.clone(),
+        ..Default::default()
+    };
+    let got = search_shift(
+        &tile, &mut sc, &support, &keep_mask, channels, cr, resolution, margin,
+    );
+    let want = search_shift_ref(
+        &tile, &tmpl, &support, &keep_mask, channels, cr, resolution, margin,
+    );
+    assert_search_eq(got, want);
+}
+
+#[test]
+fn search_shift_matches_reference_dropped_channel() {
+    // A kept-mask that drops the middle channel (kept channels need not be
+    // contiguous tile channels).
+    let resolution = 16usize;
+    let margin = 3i64;
+    let cr = resolution + 2 * margin as usize;
+    let tile_channels = 3usize;
+    let keep_mask = vec![true, false, true];
+    let channels = 2usize; // kept
+    let support = disk_support(resolution);
+    let tile = synthetic_tile(cr, tile_channels, false);
+
+    let (dy0, dx0) = (-1i64, 2i64);
+    let tmpl = template_at(
+        &tile, &support, &keep_mask, channels, cr, resolution, margin, dy0, dx0,
+    );
+    let mut sc = SearchScratch {
+        tmpl: tmpl.clone(),
+        ..Default::default()
+    };
+    let got = search_shift(
+        &tile, &mut sc, &support, &keep_mask, channels, cr, resolution, margin,
+    );
+    let want = search_shift_ref(
+        &tile, &tmpl, &support, &keep_mask, channels, cr, resolution, margin,
+    );
+    assert_search_eq(got, want);
+}
