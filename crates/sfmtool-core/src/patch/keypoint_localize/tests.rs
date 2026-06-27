@@ -807,7 +807,8 @@ fn disk_support(resolution: usize) -> Support {
 }
 
 /// A deterministic, textured `cr×cr×channels` context tile. `flat_last` forces the
-/// final channel constant (to exercise the flat-channel path).
+/// final channel constant (to exercise the flat-channel path). Builds the
+/// centered-planar / `istride`-padded `ContextTile` the production cache uses.
 fn synthetic_tile(cr: usize, channels: usize, flat_last: bool) -> ContextTile {
     let mut px = vec![0f32; cr * cr * channels];
     for row in 0..cr {
@@ -827,11 +828,70 @@ fn synthetic_tile(cr: usize, channels: usize, flat_last: bool) -> ContextTile {
             }
         }
     }
+    build_tile_from_interleaved(&px, cr, channels, &vec![true; cr * cr])
+}
+
+/// Round-trip a [`ContextTile`] back to interleaved raw f32 values
+/// `[(row·cr+col)·channels+c]`, undoing the centering. Used by tests that need to
+/// rebuild the tile with a different validity mask after construction.
+fn unpack_tile_to_interleaved(tile: &ContextTile) -> Vec<f32> {
+    let cr = tile.res;
+    let ch = tile.channels;
+    let mut raw = vec![0f32; cr * cr * ch];
+    for row in 0..cr {
+        for col in 0..cr {
+            let row_off = row * tile.istride + col;
+            let base = (row * cr + col) * ch;
+            for c in 0..ch {
+                raw[base + c] = tile.planes[c][row_off] + tile.means[c];
+            }
+        }
+    }
+    raw
+}
+
+/// Build a [`ContextTile`] from interleaved raw values `[(row·cr+col)·channels+c]`
+/// plus a per-pixel validity mask — mirroring `render_context` (centered planes +
+/// `istride` padding + invalid plane). Test-only helper.
+fn build_tile_from_interleaved(
+    raw: &[f32],
+    cr: usize,
+    channels: usize,
+    valid: &[bool],
+) -> ContextTile {
+    let istride = cache_istride(cr);
+    let mut sums = vec![0.0f64; channels];
+    for row in 0..cr {
+        for col in 0..cr {
+            let base = (row * cr + col) * channels;
+            for c in 0..channels {
+                sums[c] += raw[base + c] as f64;
+            }
+        }
+    }
+    let total = (cr * cr) as f64;
+    let means: Vec<f32> = sums.iter().map(|&s| (s / total) as f32).collect();
+    let mut planes: Vec<Vec<f32>> = (0..channels).map(|_| vec![0.0f32; istride * cr]).collect();
+    let mut invalid_plane = vec![0.0f32; istride * cr];
+    for row in 0..cr {
+        for col in 0..cr {
+            let row_off = row * istride + col;
+            let v = valid[row * cr + col];
+            invalid_plane[row_off] = if v { 0.0 } else { 1.0 };
+            let base = (row * cr + col) * channels;
+            for c in 0..channels {
+                planes[c][row_off] = raw[base + c] - means[c];
+            }
+        }
+    }
     ContextTile {
         res: cr,
-        px,
-        valid: vec![true; cr * cr],
+        istride,
         channels,
+        means,
+        planes,
+        invalid_plane,
+        valid: valid.to_vec(),
     }
 }
 
@@ -925,15 +985,21 @@ fn search_shift_matches_reference_flat_channel_and_invalid() {
     let support = disk_support(resolution);
     let keep_mask = vec![true; channels];
     // Channel 2 flat (exercises FLAT_NORM_SQ_EPS), and a border band invalid
-    // (exercises the validity grid → some shifts unscorable).
-    let mut tile = synthetic_tile(cr, channels, true);
+    // (exercises the validity grid → some shifts unscorable). Rebuild from
+    // interleaved raw + a custom validity mask (the production cache layout
+    // co-locates the validity plane with the centered planes; flipping a `bool`
+    // post-hoc would leave the SIMD validity plane stale).
+    let tile0 = synthetic_tile(cr, channels, true);
+    let raw = unpack_tile_to_interleaved(&tile0);
+    let mut valid = vec![true; cr * cr];
     for row in 0..cr {
         for col in 0..cr {
             if row < 2 || col < 2 {
-                tile.valid[row * cr + col] = false;
+                valid[row * cr + col] = false;
             }
         }
     }
+    let tile = build_tile_from_interleaved(&raw, cr, channels, &valid);
 
     let (dy0, dx0) = (2i64, 1i64);
     let base = margin as usize;
@@ -951,6 +1017,145 @@ fn search_shift_matches_reference_flat_channel_and_invalid() {
         &tile, &tmpl, &support, &keep_mask, channels, resolution, margin, base, base,
     );
     assert_search_eq(got, want);
+}
+
+/// The dispatched (AVX2-where-available) `compute_channel_grids` agrees with
+/// the scalar reference within tight `f32` tolerance, across:
+///
+///   * the typical default (`span = 13`),
+///   * the tightest AVX2-path boundary reachable via integer margin
+///     (`span = 15`; `span = 16` is unreachable since `span = 2·margin + 1` is
+///     always odd — the 16-lane store still exercises by spilling 15 lanes),
+///   * a span that overflows the AVX2 kernel's 16-lane cap (`span = 17`),
+///     which forces the dispatcher to the scalar fallback (verifies the gate).
+///
+/// Mirrors `super::normal_refine::fronto_cache::tests::resample_avx2_matches_scalar`.
+#[test]
+fn compute_channel_grids_avx2_matches_scalar() {
+    for &(resolution, margin) in &[
+        (20usize, 4i64), // span = 9
+        (24, 6),         // span = 13 (production default)
+        (16, 7),         // span = 15 (AVX2 path, tightest reachable boundary)
+        (24, 7),         // span = 15, larger core
+        (20, 8),         // span = 17 (overflows AVX2 cap → scalar fallback)
+    ] {
+        run_compute_channel_grids_equivalence(resolution, margin);
+    }
+}
+
+fn run_compute_channel_grids_equivalence(resolution: usize, margin: i64) {
+    let span = (2 * margin + 1) as usize;
+    let cr = resolution + 2 * margin as usize;
+    let channels = 3usize;
+    let support = disk_support(resolution);
+    let tile = synthetic_tile(cr, channels, false);
+    let n = support.pixels.len();
+    let w_f32: Vec<f32> = support.weights.iter().map(|&w| w as f32).collect();
+    let kern: Vec<f32> = (0..n)
+        .map(|k| support.sqrt_weights[k] * (0.7 + 0.3 * ((k as f32) * 0.13).sin()))
+        .collect();
+    let base = margin as usize;
+    let win_oy = base - margin as usize;
+    let win_ox = base - margin as usize;
+    let gsz = span * span;
+    // Exercise every channel — the AVX2 kernel is channel-agnostic but a real
+    // bug could hide in plane indexing under a non-zero channel.
+    for c in 0..channels {
+        let mut g_n_s = vec![0f32; gsz];
+        let mut g_s1_s = vec![0f32; gsz];
+        let mut g_s2_s = vec![0f32; gsz];
+        compute_channel_grids_scalar(
+            &tile.planes[c],
+            &support,
+            &kern,
+            &w_f32,
+            resolution,
+            tile.istride,
+            span,
+            win_oy,
+            win_ox,
+            &mut g_n_s,
+            &mut g_s1_s,
+            &mut g_s2_s,
+        );
+        let mut g_n_d = vec![0f32; gsz];
+        let mut g_s1_d = vec![0f32; gsz];
+        let mut g_s2_d = vec![0f32; gsz];
+        compute_channel_grids(
+            &tile.planes[c],
+            &support,
+            &kern,
+            &w_f32,
+            resolution,
+            tile.istride,
+            span,
+            win_oy,
+            win_ox,
+            &mut g_n_d,
+            &mut g_s1_d,
+            &mut g_s2_d,
+        );
+        // Tight tolerance: scalar and AVX2 compute the same algebra in `f32`,
+        // but scalar's mul-then-add takes two roundings per term while AVX2's
+        // FMA takes one, so the per-cell drift is bounded by `~n · ε_f32` over
+        // ~400 support pixels — empirically a few ×1e-5 relative on the worst
+        // cells. 5e-5 covers this with margin while still being 20× tighter
+        // than the spec's "relative tolerance ~1e-3" guideline, so a real
+        // precision regression of 0.01%+ still fails the test.
+        let tol = |a: f32, b: f32| -> bool { (a - b).abs() <= 5e-5 * (1.0 + a.abs().max(b.abs())) };
+        for s in 0..gsz {
+            assert!(
+                tol(g_n_s[s], g_n_d[s]),
+                "ch {c} n[{s}] {} vs {}",
+                g_n_s[s],
+                g_n_d[s]
+            );
+            assert!(
+                tol(g_s1_s[s], g_s1_d[s]),
+                "ch {c} s1[{s}] {} vs {}",
+                g_s1_s[s],
+                g_s1_d[s]
+            );
+            assert!(
+                tol(g_s2_s[s], g_s2_d[s]),
+                "ch {c} s2[{s}] {} vs {}",
+                g_s2_s[s],
+                g_s2_d[s]
+            );
+        }
+    }
+}
+
+/// The whole dispatched `search_shift` agrees with the per-candidate `f64`
+/// oracle (`search_shift_ref`) — exercising the AVX2 inner loop end-to-end on
+/// the same clear-peak fixtures `search_shift_matches_reference*` use. The
+/// integer argmax must match exactly (it drives the read accumulator).
+#[test]
+fn search_shift_avx2_matches_scalar() {
+    for &(resolution, margin, dy0, dx0) in
+        &[(20usize, 4i64, 1i64, -2i64), (24, 6, -3, 2), (16, 3, -1, 2)]
+    {
+        let cr = resolution + 2 * margin as usize;
+        let channels = 3usize;
+        let support = disk_support(resolution);
+        let keep_mask = vec![true; channels];
+        let tile = synthetic_tile(cr, channels, false);
+        let base = margin as usize;
+        let tmpl = template_at(
+            &tile, &support, &keep_mask, channels, resolution, margin, dy0, dx0,
+        );
+        let mut sc = SearchScratch {
+            tmpl: tmpl.clone(),
+            ..Default::default()
+        };
+        let got = search_shift(
+            &tile, &mut sc, &support, &keep_mask, channels, resolution, margin, base, base,
+        );
+        let want = search_shift_ref(
+            &tile, &tmpl, &support, &keep_mask, channels, resolution, margin, base, base,
+        );
+        assert_search_eq(got, want);
+    }
 }
 
 #[test]
