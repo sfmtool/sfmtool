@@ -218,6 +218,45 @@ impl ImageU8Pyramid {
 /// returns the exact value of the top-left pixel. Out-of-bounds coordinates
 /// are clamped to the nearest edge pixel.
 pub fn sample_bilinear_u8(img: &ImageU8, x: f32, y: f32, channel: u32) -> f32 {
+    let (v00, v10, v01, v11, fx, fy) = bilinear_taps(img, x, y, channel);
+    (1.0 - fx) * (1.0 - fy) * v00 + fx * (1.0 - fy) * v10 + (1.0 - fx) * fy * v01 + fx * fy * v11
+}
+
+/// Bilinear sample plus the analytic image gradient `(∂I/∂x, ∂I/∂y)` in
+/// source-pixel coords, from the same four taps as [`sample_bilinear_u8`] (no
+/// extra fetch). Returns `(value, dI_dx, dI_dy)`.
+///
+/// Gradient closed-forms (with `fx, fy ∈ [0, 1]` the in-cell fractions):
+///
+/// ```text
+/// dI_dx = (1-fy)·(v10 − v00) + fy·(v11 − v01)
+/// dI_dy = (1-fx)·(v01 − v00) + fx·(v11 − v10)
+/// ```
+///
+/// At the image boundary the gradient is *clamped*: when both taps fall on the
+/// same clamped pixel the per-axis difference is zero by construction, so the
+/// returned gradient is the natural extension of bilinear's edge-clamping.
+pub fn sample_bilinear_with_grad_u8(
+    img: &ImageU8,
+    x: f32,
+    y: f32,
+    channel: u32,
+) -> (f32, f32, f32) {
+    let (v00, v10, v01, v11, fx, fy) = bilinear_taps(img, x, y, channel);
+    let val = (1.0 - fx) * (1.0 - fy) * v00
+        + fx * (1.0 - fy) * v10
+        + (1.0 - fx) * fy * v01
+        + fx * fy * v11;
+    let di_dx = (1.0 - fy) * (v10 - v00) + fy * (v11 - v01);
+    let di_dy = (1.0 - fx) * (v01 - v00) + fx * (v11 - v10);
+    (val, di_dx, di_dy)
+}
+
+/// Fetch the four bilinear taps `(v00, v10, v01, v11)` plus the in-cell
+/// fractions `(fx, fy)` for the sample at `(x, y)` in channel `channel`. Shared
+/// fetch logic used by both the value-only and value+gradient bilinear samplers.
+#[inline]
+fn bilinear_taps(img: &ImageU8, x: f32, y: f32, channel: u32) -> (f32, f32, f32, f32, f32, f32) {
     let gx = x - 0.5;
     let gy = y - 0.5;
 
@@ -246,7 +285,7 @@ pub fn sample_bilinear_u8(img: &ImageU8, x: f32, y: f32, channel: u32) -> f32 {
     let v01 = img.data[cy1 * stride + cx0 * c + ch] as f32;
     let v11 = img.data[cy1 * stride + cx1 * c + ch] as f32;
 
-    (1.0 - fx) * (1.0 - fy) * v00 + fx * (1.0 - fy) * v10 + (1.0 - fx) * fy * v01 + fx * fy * v11
+    (v00, v10, v01, v11, fx, fy)
 }
 
 /// Apply a warp map to an image using bilinear interpolation.
@@ -408,6 +447,371 @@ pub fn remap_aniso_with_pyramid(
         channels: c,
         data,
     }
+}
+
+/// Per-pixel value+gradient anisotropic sample, mirroring the LOD selection /
+/// footprint walk of [`remap_aniso_with_pyramid`]. Returns
+/// `(value, dI_dx, dI_dy)` where the gradient is expressed in **level-0**
+/// source-pixel coords — each per-level bilinear gradient is **divided** by the
+/// level's `2^level` (i.e. multiplied by `1/2^level`) before being blended with
+/// the same `frac` the value uses, so `x_level = x_0 / 2^level` gives
+/// `∂I/∂x_0 = (∂I/∂x_level) / 2^level`.
+///
+/// `(sx, sy)` is the level-0 source coordinate; `(sigma_major, sigma_minor,
+/// major_dx, major_dy)` comes from `WarpMap::get_svd`. Caller is responsible for
+/// the NaN-guard on `(sx, sy)`.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn sample_aniso_with_grad(
+    pyramid: &ImageU8Pyramid,
+    sx: f32,
+    sy: f32,
+    sigma_major: f32,
+    sigma_minor: f32,
+    major_dx: f32,
+    major_dy: f32,
+    max_anisotropy: u32,
+    channel: u32,
+) -> (f32, f32, f32) {
+    let num_levels = pyramid.num_levels();
+
+    // Non-compressive case: single bilinear sample from level 0 (no scaling).
+    if sigma_major <= 1.0 {
+        return sample_bilinear_with_grad_u8(pyramid.level(0), sx, sy, channel);
+    }
+
+    // Mirror the value-only LOD selection.
+    let level_f = sigma_minor.max(1.0_f32).log2();
+    let level_lo = (level_f.floor() as usize).min(num_levels - 1);
+    let level_hi = (level_lo + 1).min(num_levels - 1);
+    let frac = if level_lo == level_hi {
+        0.0
+    } else {
+        level_f - level_lo as f32
+    };
+
+    let ratio = sigma_major / sigma_minor.max(1.0);
+    let n = (ratio.ceil() as u32).clamp(1, max_anisotropy);
+
+    let scale_lo = (1u32 << level_lo) as f32;
+    let scale_hi = (1u32 << level_hi) as f32;
+    let need_hi = frac > 0.0;
+
+    let mut sum_lo = 0.0f32;
+    let mut sum_hi = 0.0f32;
+    let mut sum_gx_lo = 0.0f32;
+    let mut sum_gy_lo = 0.0f32;
+    let mut sum_gx_hi = 0.0f32;
+    let mut sum_gy_hi = 0.0f32;
+
+    for i in 0..n {
+        let t = (i as f32 + 0.5) / n as f32 - 0.5;
+        let sample_x = sx + t * sigma_major * major_dx;
+        let sample_y = sy + t * sigma_major * major_dy;
+
+        let (v_lo, gx_lo, gy_lo) = sample_bilinear_with_grad_u8(
+            pyramid.level(level_lo),
+            sample_x / scale_lo,
+            sample_y / scale_lo,
+            channel,
+        );
+        sum_lo += v_lo;
+        // Per-level bilinear gradient is in that level's pixel coords; the
+        // change of variables `x_level = x_0 / scale` gives
+        // `∂I/∂x_0 = (∂I/∂x_level) / scale`.
+        sum_gx_lo += gx_lo / scale_lo;
+        sum_gy_lo += gy_lo / scale_lo;
+
+        if need_hi {
+            let (v_hi, gx_hi, gy_hi) = sample_bilinear_with_grad_u8(
+                pyramid.level(level_hi),
+                sample_x / scale_hi,
+                sample_y / scale_hi,
+                channel,
+            );
+            sum_hi += v_hi;
+            sum_gx_hi += gx_hi / scale_hi;
+            sum_gy_hi += gy_hi / scale_hi;
+        }
+    }
+
+    let avg_lo = sum_lo / n as f32;
+    let avg_hi = sum_hi / n as f32;
+    let g_lo_x = sum_gx_lo / n as f32;
+    let g_lo_y = sum_gy_lo / n as f32;
+    let g_hi_x = sum_gx_hi / n as f32;
+    let g_hi_y = sum_gy_hi / n as f32;
+
+    let val = avg_lo * (1.0 - frac) + avg_hi * frac;
+    let di_dx = g_lo_x * (1.0 - frac) + g_hi_x * frac;
+    let di_dy = g_lo_y * (1.0 - frac) + g_hi_y * frac;
+    (val, di_dx, di_dy)
+}
+
+/// Float image plus per-channel image gradient `(∂I/∂x, ∂I/∂y)` in source-pixel
+/// coords. Produced by [`remap_aniso_with_grad`] / [`remap_bilinear_with_grad`]
+/// (or the `_into` variants) and consumed by the photometric subpixel refiner;
+/// the values are *not* rounded to `u8` (the refiner needs the unquantized
+/// gradient and an in-range float value for the GN normal equations).
+///
+/// Storage layout per output pixel `(col, row)` and channel `ch`:
+/// `idx = (row * width + col) * channels + ch` for each of the three buffers.
+///
+/// Designed for scratch reuse: callers that render many tiles back-to-back
+/// (e.g. the per-GN-step gradient build in
+/// [`keypoint_subpixel`](crate::patch::keypoint_subpixel)) hold one of these as
+/// a scratch field, [`resize`](Self::resize) it for the new tile's shape (cheap
+/// when shape is unchanged), and pass it as the `out` of an `_into` variant.
+pub struct ImageF32WithGrad {
+    width: u32,
+    height: u32,
+    channels: u32,
+    value: Vec<f32>,
+    grad_x: Vec<f32>,
+    grad_y: Vec<f32>,
+}
+
+impl ImageF32WithGrad {
+    /// An empty image, sized 0×0×0. Reuse via [`resize`](Self::resize).
+    pub fn empty() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            channels: 0,
+            value: Vec::new(),
+            grad_x: Vec::new(),
+            grad_y: Vec::new(),
+        }
+    }
+
+    /// Resize the buffers to fit a `width × height × channels` image, zeroing
+    /// every pixel. Reuses the existing allocation when the new total fits.
+    pub fn resize(&mut self, width: u32, height: u32, channels: u32) {
+        let total = width as usize * height as usize * channels as usize;
+        self.width = width;
+        self.height = height;
+        self.channels = channels;
+        self.value.clear();
+        self.value.resize(total, 0.0);
+        self.grad_x.clear();
+        self.grad_x.resize(total, 0.0);
+        self.grad_y.clear();
+        self.grad_y.resize(total, 0.0);
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+    pub fn channels(&self) -> u32 {
+        self.channels
+    }
+
+    /// `(value, ∂I/∂x, ∂I/∂y)` at output pixel `(col, row)`, channel `ch`. Mirrors
+    /// [`ImageU8::get_pixel`]'s pattern; in inner-loop callers prefer
+    /// [`value`](Self::value) / [`grad_x`](Self::grad_x) / [`grad_y`](Self::grad_y)
+    /// and walk by raw index to avoid the per-access bounds check.
+    pub fn get_pixel_with_grad(&self, col: u32, row: u32, ch: u32) -> (f32, f32, f32) {
+        let idx = (row as usize * self.width as usize + col as usize) * self.channels as usize
+            + ch as usize;
+        (self.value[idx], self.grad_x[idx], self.grad_y[idx])
+    }
+
+    /// Raw value slice (`channels`-interleaved, row-major). Use with the public
+    /// `width()`/`height()`/`channels()` to compute the per-pixel index. Public
+    /// so hot inner-loop callers (the photometric refiner) can index without
+    /// per-access bounds checks beyond the slice's own range check.
+    pub fn value(&self) -> &[f32] {
+        &self.value
+    }
+    pub fn grad_x(&self) -> &[f32] {
+        &self.grad_x
+    }
+    pub fn grad_y(&self) -> &[f32] {
+        &self.grad_y
+    }
+}
+
+/// Walk `out_h` rows of an `ImageF32WithGrad`-shaped output, invoking
+/// `fill_row(row, value_row, grad_x_row, grad_y_row)` to fill the per-row stride
+/// slices of each of the three buffers. Switches to a per-row rayon pass when
+/// `out_w * out_h > PAR_MIN_PIXELS`. Factored from the otherwise-duplicated
+/// scaffolding in [`remap_bilinear_with_grad_into`] /
+/// [`remap_aniso_with_grad_into`].
+fn remap_rows_f32x3_into(
+    out_w: u32,
+    out_h: u32,
+    channels: u32,
+    value: &mut [f32],
+    grad_x: &mut [f32],
+    grad_y: &mut [f32],
+    fill_row: impl Fn(u32, &mut [f32], &mut [f32], &mut [f32]) + Sync,
+) {
+    let stride = out_w as usize * channels as usize;
+    let total = stride * out_h as usize;
+    debug_assert_eq!(value.len(), total);
+    debug_assert_eq!(grad_x.len(), total);
+    debug_assert_eq!(grad_y.len(), total);
+    if (out_w as usize) * (out_h as usize) <= PAR_MIN_PIXELS {
+        for row in 0..out_h {
+            let off = row as usize * stride;
+            fill_row(
+                row,
+                &mut value[off..off + stride],
+                &mut grad_x[off..off + stride],
+                &mut grad_y[off..off + stride],
+            );
+        }
+    } else {
+        // Parallel: rayon needs disjoint row slices. `par_chunks_exact_mut` over
+        // each of the three buffers gives independent row views; `zip` them and
+        // walk in parallel. The closure borrows `fill_row` by reference (Sync).
+        // `IndexedParallelIterator` (for `.enumerate()` and `.zip()`) is in
+        // scope via the `rayon::prelude::*` import at the top of the module.
+        value
+            .par_chunks_exact_mut(stride)
+            .zip(grad_x.par_chunks_exact_mut(stride))
+            .zip(grad_y.par_chunks_exact_mut(stride))
+            .enumerate()
+            .for_each(|(row, ((val_row, gx_row), gy_row))| {
+                fill_row(row as u32, val_row, gx_row, gy_row);
+            });
+    }
+}
+
+/// Like [`remap_aniso_with_pyramid`], but additionally returns the analytic
+/// image gradient `(∂I/∂x, ∂I/∂y)` in source-pixel coords per output pixel and
+/// channel. Value and gradient are computed at the same LOD(s) / footprint
+/// (see [`sample_aniso_with_grad`]).
+///
+/// Owning version that allocates a fresh [`ImageF32WithGrad`] each call. For
+/// repeated rendering (e.g. the photometric refiner's per-GN-step gradient
+/// build) prefer [`remap_aniso_with_grad_into`] with a reused scratch.
+///
+/// Requires [`WarpMap::compute_svd`] to have been called first.
+pub fn remap_aniso_with_grad(
+    pyramid: &ImageU8Pyramid,
+    map: &WarpMap,
+    max_anisotropy: u32,
+) -> ImageF32WithGrad {
+    let mut out = ImageF32WithGrad::empty();
+    remap_aniso_with_grad_into(pyramid, map, max_anisotropy, &mut out);
+    out
+}
+
+/// [`remap_aniso_with_grad`] writing into an `out` scratch, resized in place to
+/// fit the warp's dimensions. Reuse `out` across calls to avoid the per-call
+/// `~3·W·H·C·sizeof(f32)` allocation.
+///
+/// Requires [`WarpMap::compute_svd`] to have been called first.
+pub fn remap_aniso_with_grad_into(
+    pyramid: &ImageU8Pyramid,
+    map: &WarpMap,
+    max_anisotropy: u32,
+    out: &mut ImageF32WithGrad,
+) {
+    assert!(
+        map.has_svd(),
+        "remap_aniso_with_grad requires WarpMap SVD data; call compute_svd() first"
+    );
+    let out_w = map.width();
+    let out_h = map.height();
+    let c = pyramid.level(0).channels();
+    out.resize(out_w, out_h, c);
+
+    let fill_row = |row: u32, val_row: &mut [f32], gx_row: &mut [f32], gy_row: &mut [f32]| {
+        for col in 0..out_w {
+            let (sx, sy) = map.get(col, row);
+            let base = col as usize * c as usize;
+            if sx.is_nan() || sy.is_nan() {
+                for ch in 0..c as usize {
+                    val_row[base + ch] = 0.0;
+                    gx_row[base + ch] = 0.0;
+                    gy_row[base + ch] = 0.0;
+                }
+                continue;
+            }
+            let (sigma_major, sigma_minor, major_dx, major_dy) = map.get_svd(col, row);
+            for ch in 0..c {
+                let (v, gx, gy) = sample_aniso_with_grad(
+                    pyramid,
+                    sx,
+                    sy,
+                    sigma_major,
+                    sigma_minor,
+                    major_dx,
+                    major_dy,
+                    max_anisotropy,
+                    ch,
+                );
+                val_row[base + ch as usize] = v;
+                gx_row[base + ch as usize] = gx;
+                gy_row[base + ch as usize] = gy;
+            }
+        }
+    };
+
+    remap_rows_f32x3_into(
+        out_w,
+        out_h,
+        c,
+        &mut out.value,
+        &mut out.grad_x,
+        &mut out.grad_y,
+        fill_row,
+    );
+}
+
+/// Float bilinear remap that additionally returns the analytic image gradient
+/// `(∂I/∂x, ∂I/∂y)` per output pixel and channel. Mirrors [`remap_bilinear`] in
+/// layout/looping; the per-pixel sampler is [`sample_bilinear_with_grad_u8`].
+///
+/// Owning version. For repeated rendering prefer [`remap_bilinear_with_grad_into`].
+pub fn remap_bilinear_with_grad(src: &ImageU8, map: &WarpMap) -> ImageF32WithGrad {
+    let mut out = ImageF32WithGrad::empty();
+    remap_bilinear_with_grad_into(src, map, &mut out);
+    out
+}
+
+/// [`remap_bilinear_with_grad`] writing into an `out` scratch, resized in place.
+pub fn remap_bilinear_with_grad_into(src: &ImageU8, map: &WarpMap, out: &mut ImageF32WithGrad) {
+    let out_w = map.width();
+    let out_h = map.height();
+    let c = src.channels;
+    out.resize(out_w, out_h, c);
+
+    let fill_row = |row: u32, val_row: &mut [f32], gx_row: &mut [f32], gy_row: &mut [f32]| {
+        for col in 0..out_w {
+            let (sx, sy) = map.get(col, row);
+            let base = col as usize * c as usize;
+            if sx.is_nan() || sy.is_nan() {
+                for ch in 0..c as usize {
+                    val_row[base + ch] = 0.0;
+                    gx_row[base + ch] = 0.0;
+                    gy_row[base + ch] = 0.0;
+                }
+                continue;
+            }
+            for ch in 0..c {
+                let (v, gx, gy) = sample_bilinear_with_grad_u8(src, sx, sy, ch);
+                val_row[base + ch as usize] = v;
+                gx_row[base + ch as usize] = gx;
+                gy_row[base + ch as usize] = gy;
+            }
+        }
+    };
+
+    remap_rows_f32x3_into(
+        out_w,
+        out_h,
+        c,
+        &mut out.value,
+        &mut out.grad_x,
+        &mut out.grad_y,
+        fill_row,
+    );
 }
 
 #[cfg(test)]
