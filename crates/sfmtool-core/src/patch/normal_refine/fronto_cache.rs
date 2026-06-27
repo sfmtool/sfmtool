@@ -375,7 +375,7 @@ unsafe fn resample_support_avx2(
 
 /// `Φ` for `candidate_n` evaluated by affine-resampling the cached fronto bases
 /// instead of re-rendering from the source images. `cols`/`rows` are the level's
-/// frozen support grid coords and `sqrt_w`/`total_w` its window weights —
+/// frozen support grid coords and `sqrt_weights`/`total_weight` its window weights —
 /// candidate-independent, so the caller computes them once per level. `scratch`
 /// holds reused buffers so a candidate allocates nothing after warm-up. Mirrors
 /// [`super::normalized_stack`] + [`consensus_phi`]; `None` if a candidate map
@@ -390,13 +390,13 @@ pub(super) fn eval_phi(
     resolution: u32,
     cols: &[i32],
     rows: &[i32],
-    sqrt_w: &[f32],
-    total_w: f64,
+    sqrt_weights: &[f32],
+    total_weight: f64,
     scratch: &mut Scratch,
     objective: Objective,
 ) -> Option<f64> {
     super::prof::count(&super::prof::N_EVAL, 1);
-    if total_w <= 0.0 {
+    if total_weight <= 0.0 {
         return None;
     }
     let cp = repose_patch(base, candidate_n);
@@ -456,8 +456,8 @@ pub(super) fn eval_phi(
             CHANNELS,
             n,
             &ctx.weights,
-            total_w,
-            sqrt_w,
+            total_weight,
+            sqrt_weights,
             &mut scratch.xs,
         )
     })?;

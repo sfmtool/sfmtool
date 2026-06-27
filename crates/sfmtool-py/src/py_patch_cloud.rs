@@ -15,6 +15,9 @@ use sfmtool_core::patch::cloud::{OrientedPatch, PatchCloud, PatchExtent, PatchNo
 use sfmtool_core::patch::keypoint_localize::{
     localize_patch_cloud_keypoints, KeypointLocalizeParams,
 };
+use sfmtool_core::patch::keypoint_subpixel::{
+    refine_patch_cloud_keypoints, KeypointSubpixelParams,
+};
 use sfmtool_core::patch::normal_refine::{
     refine_patch_cloud, view_indices_from_reconstruction, CacheMode, NormalRefineParams, Objective,
     PatchWindow, ProjectedImage, Sampler,
@@ -1055,6 +1058,195 @@ impl PyPatchCloud {
             d.set_item("keypoints", kpts.into_pyarray(py))?;
             d.set_item("offsets_px", res.offsets_px.clone().into_pyarray(py))?;
             d.set_item("loo_zncc", res.loo_zncc.clone().into_pyarray(py))?;
+            out.push(d);
+        }
+        Ok(out)
+    }
+
+    /// Refine, per patch, the per-view 2D keypoints to **sub-pixel** by a local
+    /// continuous photometric solve: forward-additive ECC (Enhanced Correlation
+    /// Coefficient) Gauss–Newton against a single **frozen** robust cross-view
+    /// consensus (the cheapest spec variant). This is the high-accuracy reference
+    /// refiner — it does no grid search, changes no view membership, and is
+    /// **never worse than the seed** (a step is accepted only if it raises the ECC
+    /// score and stays in frame). Points at infinity (``w == 0``) are refined like
+    /// finite ones, not skipped. The seed must already be close (≲ 1 px) — putting
+    /// it in the basin is the caller's job (e.g. :meth:`localize_keypoints`). See
+    /// ``specs/core/keypoint-subpixel-refinement.md``.
+    ///
+    /// Args:
+    ///     recon: The reconstruction the cloud was built from (cameras, poses, and
+    ///         the per-point track view lists via ``point_ids``).
+    ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
+    ///         image, parallel to ``recon`` (index = image index).
+    ///     view_sets: Optional mapping ``point_id -> [image_index, ...]`` giving the
+    ///         view set to refine per point. Points absent fall back to their track;
+    ///         ``None`` (default) uses the track for every point.
+    ///     resolution: The R×R patch grid the consensus / ECC are scored on.
+    ///     window: ``"gaussian_disk"`` (default), ``"gaussian"``, or ``"uniform"``.
+    ///     window_sigma: Window sigma for the gaussian windows.
+    ///     sampler: ``"bilinear"`` (default) or ``"anisotropic"`` (the MVP uses a
+    ///         bilinear finite-difference Jacobian for both).
+    ///     robust_iters: IRLS passes for the robust consensus.
+    ///     max_outer_sweeps: Max outer sweeps of the alternating loop (refresh
+    ///         consensus → move every view). ``1`` (default) is the
+    ///         single-pass-frozen variant — build the consensus once at the seed,
+    ///         hold it fixed. ``> 1`` enables per-sweep refresh: each subsequent
+    ///         sweep re-renders the views at their current offsets and rebuilds the
+    ///         consensus from those. Exits early once the mean per-view move of a
+    ///         sweep falls below ``outer_convergence_px``.
+    ///     outer_convergence_px: Stop the outer (consensus-refresh) loop once the
+    ///         mean per-view move across a sweep is below this many patch-grid px.
+    ///         Ignored when ``max_outer_sweeps == 1``.
+    ///     max_gn_steps: Max forward-additive Gauss–Newton steps per view per outer
+    ///         sweep.
+    ///     convergence_px: Stop a view's solve once an accepted step is below this
+    ///         many patch-grid px.
+    ///     max_offset_px: Max total per-view drift from the seed, in patch-grid px.
+    ///     point_ids: If given, refine only the patches with these source point ids;
+    ///         ``None`` (default) refines every patch.
+    ///
+    /// Returns:
+    ///     A list of per-point dicts ``{point_id, views (uint32[K]),
+    ///     keypoints (float64[K, 2]), offsets_px (float64[K]),
+    ///     scores (float64[K])}`` over the views, in **input order** (the view set
+    ///     is unchanged; a guard-failed view keeps its seed). ``scores`` is the
+    ///     final ECC score (channel-averaged windowed ZNCC), NaN for a view with no
+    ///     consensus (fewer than two views).
+    #[pyo3(signature = (
+        recon, images, *, view_sets=None, resolution=24, window="gaussian_disk",
+        window_sigma=0.6, sampler="bilinear", robust_iters=3, max_outer_sweeps=1,
+        outer_convergence_px=0.005, max_gn_steps=10, convergence_px=0.01,
+        max_offset_px=2.0, point_ids=None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn refine_keypoints<'py>(
+        &self,
+        py: Python<'py>,
+        recon: &PySfmrReconstruction,
+        images: Vec<Bound<'py, PyAny>>,
+        view_sets: Option<std::collections::HashMap<u32, Vec<u32>>>,
+        resolution: u32,
+        window: &str,
+        window_sigma: f64,
+        sampler: &str,
+        robust_iters: u32,
+        max_outer_sweeps: u32,
+        outer_convergence_px: f64,
+        max_gn_steps: u32,
+        convergence_px: f64,
+        max_offset_px: f64,
+        point_ids: Option<Vec<u32>>,
+    ) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        let recon = &recon.inner;
+        if self.inner.point_ids.len() != self.inner.len() {
+            return Err(PyValueError::new_err(
+                "patch cloud has no per-patch point_ids; rebuild it with from_reconstruction",
+            ));
+        }
+        if self
+            .inner
+            .point_ids
+            .iter()
+            .any(|&p| p as usize >= recon.points.len())
+        {
+            return Err(PyValueError::new_err(
+                "patch cloud point_ids are out of range for this reconstruction \
+                 (was the cloud built from a different recon?)",
+            ));
+        }
+
+        let window = match window {
+            "uniform" => PatchWindow::Uniform,
+            "gaussian" => PatchWindow::Gaussian {
+                sigma: window_sigma,
+            },
+            "gaussian_disk" => PatchWindow::GaussianDisk {
+                sigma: window_sigma,
+            },
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown window: {other:?} (expected uniform|gaussian|gaussian_disk)"
+                )))
+            }
+        };
+        let sampler = match sampler {
+            "bilinear" => Sampler::Bilinear,
+            "anisotropic" => Sampler::Anisotropic,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown sampler: {other:?} (expected bilinear|anisotropic)"
+                )))
+            }
+        };
+        let params = KeypointSubpixelParams {
+            resolution,
+            window,
+            sampler,
+            robust_iters,
+            max_outer_sweeps,
+            outer_convergence_px,
+            max_gn_steps,
+            convergence_px,
+            max_offset_px,
+            ..Default::default()
+        };
+
+        let (pyramids, poses) = build_pyramids_and_poses(recon, &images)?;
+        let views: Vec<ProjectedImage<'_>> = (0..recon.images.len())
+            .map(|i| ProjectedImage {
+                camera: &recon.cameras[recon.images[i].camera_index as usize],
+                cam_from_world: &poses[i],
+                pyramid: &pyramids[i],
+            })
+            .collect();
+
+        let mut sets = view_indices_from_reconstruction(recon, &self.inner);
+        if let Some(map) = &view_sets {
+            let n_images = recon.images.len() as u32;
+            for vs in map.values() {
+                if let Some(&bad) = vs.iter().find(|&&i| i >= n_images) {
+                    return Err(PyValueError::new_err(format!(
+                        "view_sets contains image index {bad} out of range for this \
+                         reconstruction's {n_images} images"
+                    )));
+                }
+            }
+            for (set, &pid) in sets.iter_mut().zip(&self.inner.point_ids) {
+                if let Some(vs) = map.get(&pid) {
+                    *set = vs.clone();
+                }
+            }
+        }
+        let selected_mask: Option<std::collections::HashSet<u32>> =
+            point_ids.map(|ids| ids.into_iter().collect());
+        if let Some(keep) = &selected_mask {
+            for (set, &pid) in sets.iter_mut().zip(&self.inner.point_ids) {
+                if !keep.contains(&pid) {
+                    set.clear();
+                }
+            }
+        }
+
+        let results =
+            py.detach(|| refine_patch_cloud_keypoints(&self.inner, &views, &sets, None, &params));
+
+        let mut out = Vec::new();
+        for (res, &pid) in results.iter().zip(&self.inner.point_ids) {
+            if let Some(keep) = &selected_mask {
+                if !keep.contains(&pid) {
+                    continue;
+                }
+            }
+            let flat: Vec<f64> = res.keypoints.iter().flat_map(|k| [k[0], k[1]]).collect();
+            let kpts = ndarray::Array2::from_shape_vec((res.keypoints.len(), 2), flat)
+                .expect("keypoints shape matches");
+            let d = PyDict::new(py);
+            d.set_item("point_id", pid)?;
+            d.set_item("views", res.views.clone().into_pyarray(py))?;
+            d.set_item("keypoints", kpts.into_pyarray(py))?;
+            d.set_item("offsets_px", res.offsets_px.clone().into_pyarray(py))?;
+            d.set_item("scores", res.scores.clone().into_pyarray(py))?;
             out.push(d);
         }
         Ok(out)
