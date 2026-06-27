@@ -379,3 +379,343 @@ fn test_remap_aniso_panics_without_svd() {
     let map = identity_warp_map(4, 4);
     remap_aniso(&src, &map, 16);
 }
+
+// -----------------------------------------------------------------------
+// Value+gradient sampler tests (Phase 3B analytic Jacobian)
+// -----------------------------------------------------------------------
+
+/// Build a 32x32 single-channel test image with a smoothly varying sinusoidal
+/// intensity. Use a low spatial frequency so a small h central difference is a
+/// good approximation to the analytic bilinear gradient inside one cell.
+fn smooth_test_image() -> ImageU8 {
+    let w: u32 = 32;
+    let h: u32 = 32;
+    let mut data = Vec::with_capacity((w * h) as usize);
+    for row in 0..h {
+        for col in 0..w {
+            let x = col as f64 / w as f64;
+            let y = row as f64 / h as f64;
+            let v = 128.0
+                + 60.0 * (2.0 * std::f64::consts::PI * x).sin()
+                + 40.0 * (2.0 * std::f64::consts::PI * y).cos();
+            data.push(v.clamp(0.0, 255.0).round() as u8);
+        }
+    }
+    ImageU8::new(w, h, 1, data)
+}
+
+#[test]
+fn sample_bilinear_with_grad_matches_value_only() {
+    let img = smooth_test_image();
+    // Pick a handful of interior sample points (avoid integer pixel centers
+    // where the cell-boundary changes hit identically in both paths).
+    let samples = [
+        (10.3, 12.7),
+        (5.0, 7.0),
+        (15.5, 4.25),
+        (20.9, 20.1),
+        (1.5, 1.5),
+    ];
+    for &(x, y) in &samples {
+        let v_only = sample_bilinear_u8(&img, x, y, 0);
+        let (v_grad, _, _) = sample_bilinear_with_grad_u8(&img, x, y, 0);
+        assert!(
+            (v_only - v_grad).abs() < 1e-5,
+            "value mismatch at ({x}, {y}): value-only={v_only}, value+grad={v_grad}"
+        );
+    }
+}
+
+#[test]
+fn sample_bilinear_with_grad_matches_finite_difference() {
+    let img = smooth_test_image();
+    // Interior sample points well away from cell boundaries. Bilinear's
+    // analytic gradient is piecewise-constant within one cell (pixel-center
+    // grid; cells are split at integer + 0.5 coordinates). A central
+    // difference must stay inside one cell to recover the analytic value
+    // exactly — so pick coordinates well clear of `.5` fractional parts.
+    let samples: &[(f32, f32)] = &[
+        (10.3, 12.7),
+        (5.4, 7.2),
+        (15.2, 4.1),
+        (20.9, 20.1),
+        (8.6, 18.4),
+    ];
+    let h = 1e-3_f32;
+    for &(x, y) in samples {
+        let (_, gx_analytic, gy_analytic) = sample_bilinear_with_grad_u8(&img, x, y, 0);
+        let vxp = sample_bilinear_u8(&img, x + h, y, 0);
+        let vxm = sample_bilinear_u8(&img, x - h, y, 0);
+        let vyp = sample_bilinear_u8(&img, x, y + h, 0);
+        let vym = sample_bilinear_u8(&img, x, y - h, 0);
+        let gx_fd = (vxp - vxm) / (2.0 * h);
+        let gy_fd = (vyp - vym) / (2.0 * h);
+        // Bilinear is piecewise-bilinear in (x, y); within a cell the gradient
+        // is constant, so FD recovers the analytic value to within the f32
+        // numerical noise of the `(v(x+h) - v(x-h)) / (2h)` evaluation on
+        // u8-valued taps. 0.05 grayscale units / pixel is well below the
+        // textured-image gradient magnitudes (~tens of units/pixel here).
+        let tol = 0.05_f32;
+        assert!(
+            (gx_analytic - gx_fd).abs() < tol,
+            "dI/dx mismatch at ({x}, {y}): analytic={gx_analytic}, fd={gx_fd}"
+        );
+        assert!(
+            (gy_analytic - gy_fd).abs() < tol,
+            "dI/dy mismatch at ({x}, {y}): analytic={gy_analytic}, fd={gy_fd}"
+        );
+    }
+}
+
+#[test]
+fn remap_bilinear_with_grad_value_matches_remap_bilinear() {
+    // remap_bilinear quantizes to u8 with round; remap_bilinear_with_grad
+    // returns the raw f32. The two should agree to within rounding.
+    let img = smooth_test_image();
+    let map = translation_warp_map(20, 20, 0.37, 0.21);
+    let v_only = remap_bilinear(&img, &map);
+    let vg = remap_bilinear_with_grad(&img, &map);
+    for row in 0..20u32 {
+        for col in 0..20u32 {
+            let want = v_only.get_pixel(col, row, 0) as f32;
+            let (got, _, _) = vg.get_pixel_with_grad(col, row, 0);
+            assert!(
+                (want - got.round()).abs() < 1.0,
+                "value mismatch at ({col}, {row}): u8={want}, f32={got}"
+            );
+        }
+    }
+}
+
+#[test]
+fn remap_aniso_with_grad_value_matches_remap_aniso_with_pyramid() {
+    // Same identity warp + isotropic SVD as in
+    // test_remap_aniso_isotropic_matches_bilinear: the value path should
+    // agree, and the gradient path should be non-zero on the smooth image.
+    let img = smooth_test_image();
+    let pyr = ImageU8Pyramid::build(&img, 4);
+    let mut map = identity_warp_map(20, 20);
+    map.compute_svd();
+    let v_only = remap_aniso_with_pyramid(&pyr, &map, 16);
+    let vg = remap_aniso_with_grad(&pyr, &map, 16);
+    for row in 0..20u32 {
+        for col in 0..20u32 {
+            let want = v_only.get_pixel(col, row, 0) as f32;
+            let (got, _, _) = vg.get_pixel_with_grad(col, row, 0);
+            assert!(
+                (want - got.round()).abs() < 1.0,
+                "value mismatch at ({col}, {row}): u8={want}, f32={got}"
+            );
+        }
+    }
+}
+
+#[test]
+fn remap_aniso_with_grad_matches_finite_difference_within_lod_cell() {
+    // Identity warp + isotropic SVD: sigma_major == sigma_minor == 1, which
+    // triggers the non-compressive single-bilinear-sample path. So the aniso
+    // gradient should match the bilinear gradient pixel-for-pixel.
+    let img = smooth_test_image();
+    let pyr = ImageU8Pyramid::build(&img, 4);
+    let mut map = identity_warp_map(20, 20);
+    map.compute_svd();
+
+    let vg_aniso = remap_aniso_with_grad(&pyr, &map, 16);
+    let vg_bi = remap_bilinear_with_grad(&img, &map);
+    let (ax, ay) = (vg_aniso.grad_x(), vg_aniso.grad_y());
+    let (bx, by) = (vg_bi.grad_x(), vg_bi.grad_y());
+    for i in 0..(20 * 20) {
+        let dx = (ax[i] - bx[i]).abs();
+        let dy = (ay[i] - by[i]).abs();
+        assert!(
+            dx < 1e-4,
+            "aniso vs bilinear dI/dx mismatch at idx {i}: aniso={}, bi={}",
+            ax[i],
+            bx[i]
+        );
+        assert!(
+            dy < 1e-4,
+            "aniso vs bilinear dI/dy mismatch at idx {i}: aniso={}, bi={}",
+            ay[i],
+            by[i]
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "requires WarpMap SVD")]
+fn remap_aniso_with_grad_panics_without_svd() {
+    let img = ImageU8::from_channels(4, 4, 1);
+    let pyr = ImageU8Pyramid::build(&img, 2);
+    let map = identity_warp_map(4, 4);
+    remap_aniso_with_grad(&pyr, &map, 16);
+}
+
+/// Build a uniformly-compressive warp: each dest pixel `(col, row)` maps to
+/// source `(scale_x * (col + 0.5), scale_y * (row + 0.5))`. The local Jacobian
+/// is diagonal `[[scale_x, 0], [0, scale_y]]`, so the SVD gives
+/// `sigma_major = max(scale_x, scale_y)`, `sigma_minor = min(...)`. With both
+/// scales > 1 (compressive on both axes) the aniso path takes its full
+/// `n`-footprint walk and active mip blend — the case the within-LOD-cell test
+/// can't reach.
+fn scaled_warp_map(width: u32, height: u32, scale_x: f32, scale_y: f32) -> WarpMap {
+    let mut data = vec![0.0f32; 2 * (width as usize) * (height as usize)];
+    for row in 0..height {
+        for col in 0..width {
+            let idx = (row as usize * width as usize + col as usize) * 2;
+            data[idx] = scale_x * (col as f32 + 0.5);
+            data[idx + 1] = scale_y * (row as f32 + 0.5);
+        }
+    }
+    WarpMap::new(width, height, data)
+}
+
+/// Build a 256×256 single-channel source image with a smoothly varying intensity
+/// (low spatial frequency so an `h ≈ 0.5` FD is a good reference for the analytic
+/// gradient at sub-pixel offsets), and the matching 5-level pyramid.
+fn smooth_compressive_test_pyramid() -> ImageU8Pyramid {
+    let w_src: u32 = 256;
+    let mut data = Vec::with_capacity((w_src * w_src) as usize);
+    for row in 0..w_src {
+        for col in 0..w_src {
+            let x = col as f64 / w_src as f64;
+            let y = row as f64 / w_src as f64;
+            let v = 128.0
+                + 50.0 * (2.0 * std::f64::consts::PI * x).sin()
+                + 40.0 * (2.0 * std::f64::consts::PI * y).cos();
+            data.push(v.clamp(0.0, 255.0).round() as u8);
+        }
+    }
+    ImageU8Pyramid::build(&ImageU8::new(w_src, w_src, 1, data), 5)
+}
+
+/// Drive [`remap_aniso_with_grad`] over a per-axis-scaled compressive warp and
+/// compare against an FD of the value-only `remap_aniso_with_pyramid` at
+/// sub-pixel source-coord offsets `±h`. Diagonal `J = diag(scale_x, scale_y)`,
+/// so a dest-translation `(dx, dy)` is exactly a source-translation
+/// `(scale_x·dx, scale_y·dy)` — pin `dx = h / scale_x` and `dy = h / scale_y`
+/// per axis to get a uniform source-pixel step. Asserts `(min_smaj, min_smin)`
+/// hold at the centre pixel so each caller picks a `(scale_x, scale_y)` that
+/// genuinely engages the path being tested.
+fn assert_compressive_aniso_gradient_matches_fd(
+    scale_x: f32,
+    scale_y: f32,
+    min_smaj: f32,
+    min_smin: f32,
+    min_n: u32,
+    why: &str,
+) {
+    let pyr = smooth_compressive_test_pyramid();
+
+    // Dest grid that maps fully into the source: `dst_size * scale ≤ src_size`.
+    let w_dst: u32 = 32;
+    let mut map = scaled_warp_map(w_dst, w_dst, scale_x, scale_y);
+    map.compute_svd();
+    // Sanity: the warp is genuinely compressive in the way the caller intended.
+    let (smaj, smin, _, _) = map.get_svd(w_dst / 2, w_dst / 2);
+    assert!(
+        smaj >= min_smaj && smin >= min_smin,
+        "fixture not compressive enough ({why}): \
+         sigma_major={smaj}, sigma_minor={smin}, wanted ≥({min_smaj}, {min_smin})"
+    );
+    let ratio = smaj / smin.max(1.0);
+    let n = (ratio.ceil() as u32).clamp(1, 16);
+    assert!(
+        n >= min_n,
+        "fixture does not drive enough footprint samples ({why}): \
+         n={n}, wanted ≥ {min_n} (sigma_major/sigma_minor={ratio})"
+    );
+
+    let vg_analytic = remap_aniso_with_grad(&pyr, &map, 16);
+
+    let h: f32 = 0.5; // source-pixel step; small enough vs. the smooth texture
+    let h_dest_x = h / scale_x; // dest step that = h in source x
+    let h_dest_y = h / scale_y;
+
+    fn shifted_scaled_warp_map(w: u32, h: u32, sx: f32, sy: f32, dx: f32, dy: f32) -> WarpMap {
+        let mut data = vec![0.0f32; 2 * (w as usize) * (h as usize)];
+        for row in 0..h {
+            for col in 0..w {
+                let idx = (row as usize * w as usize + col as usize) * 2;
+                data[idx] = sx * (col as f32 + 0.5 + dx);
+                data[idx + 1] = sy * (row as f32 + 0.5 + dy);
+            }
+        }
+        WarpMap::new(w, h, data)
+    }
+    let mut map_xp = shifted_scaled_warp_map(w_dst, w_dst, scale_x, scale_y, h_dest_x, 0.0);
+    let mut map_xm = shifted_scaled_warp_map(w_dst, w_dst, scale_x, scale_y, -h_dest_x, 0.0);
+    let mut map_yp = shifted_scaled_warp_map(w_dst, w_dst, scale_x, scale_y, 0.0, h_dest_y);
+    let mut map_ym = shifted_scaled_warp_map(w_dst, w_dst, scale_x, scale_y, 0.0, -h_dest_y);
+    for m in [&mut map_xp, &mut map_xm, &mut map_yp, &mut map_ym] {
+        m.compute_svd();
+    }
+    let v_xp = remap_aniso_with_pyramid(&pyr, &map_xp, 16);
+    let v_xm = remap_aniso_with_pyramid(&pyr, &map_xm, 16);
+    let v_yp = remap_aniso_with_pyramid(&pyr, &map_yp, 16);
+    let v_ym = remap_aniso_with_pyramid(&pyr, &map_ym, 16);
+
+    // Compare at the interior — skip the 2-pixel boundary band where the warp's
+    // own Jacobian uses one-sided differences (and where FD on the value path
+    // can pick up boundary artifacts of the source image).
+    let mut max_dx_err = 0.0f32;
+    let mut max_dy_err = 0.0f32;
+    let mut max_grad_mag = 0.0f32;
+    for row in 4..w_dst - 4 {
+        for col in 4..w_dst - 4 {
+            let (_, gx, gy) = vg_analytic.get_pixel_with_grad(col, row, 0);
+            let vxp = v_xp.get_pixel(col, row, 0) as f32;
+            let vxm = v_xm.get_pixel(col, row, 0) as f32;
+            let vyp = v_yp.get_pixel(col, row, 0) as f32;
+            let vym = v_ym.get_pixel(col, row, 0) as f32;
+            let gx_fd = (vxp - vxm) / (2.0 * h);
+            let gy_fd = (vyp - vym) / (2.0 * h);
+            max_dx_err = max_dx_err.max((gx - gx_fd).abs());
+            max_dy_err = max_dy_err.max((gy - gy_fd).abs());
+            max_grad_mag = max_grad_mag.max(gx.abs().max(gy.abs()));
+        }
+    }
+    // Tolerance: the value-only path quantizes to u8 (`round`), so its FD has
+    // ±1-LSB-per-sample noise on a difference, plus footprint-walk + mip-blend
+    // discretization. Empirically the analytic gradient agrees to within a few
+    // grayscale units / source-px on this texture; absolute tolerance is the
+    // right thing to set since grads pass through zero. Sanity-check that the
+    // gradient is non-trivial — a slack test on flat content would prove
+    // nothing.
+    assert!(
+        max_grad_mag > 1.0,
+        "fixture's gradient is too small to validate ({why}): max |g| = {max_grad_mag}"
+    );
+    assert!(
+        max_dx_err < 5.0,
+        "compressive aniso dI/dx vs FD ({why}): max err = {max_dx_err} (max |g| = {max_grad_mag})"
+    );
+    assert!(
+        max_dy_err < 5.0,
+        "compressive aniso dI/dy vs FD ({why}): max err = {max_dy_err} (max |g| = {max_grad_mag})"
+    );
+}
+
+#[test]
+fn remap_aniso_with_grad_compressive_isotropic_matches_finite_difference() {
+    // Isotropic compression: `scale_x == scale_y == 3` ⇒ `sigma_major =
+    // sigma_minor = 3` ⇒ `ratio = 1` ⇒ `n = 1`. Drives the mip blend
+    // (`level_f = log2(3) ≈ 1.585`, `level_lo = 1`, `level_hi = 2`,
+    // `frac ≈ 0.585`) — exercises that branch and the per-level `1/scale`
+    // gradient scaling. **Does NOT** exercise the multi-sample footprint walk,
+    // which needs `sigma_major > sigma_minor`; the anisotropic test below does.
+    assert_compressive_aniso_gradient_matches_fd(3.0, 3.0, 2.5, 2.5, 1, "isotropic 3×3");
+}
+
+#[test]
+fn remap_aniso_with_grad_compressive_anisotropic_matches_finite_difference() {
+    // Anisotropic compression: `scale_x = 4`, `scale_y = 1.2` ⇒ `sigma_major =
+    // 4`, `sigma_minor = 1.2` ⇒ `ratio = 3.33` ⇒ `n = 4`. The for-loop in
+    // `sample_aniso_with_grad` runs four times, walking four samples along the
+    // major axis — this is the case the reviewer flagged as missing from the
+    // isotropic-only test, where the `t * sigma_major * major_d{x,y}` step,
+    // per-sample summation, and `sum / n` normalization are all exercised.
+    // Mip blend is active here too (`level_f = log2(1.2) ≈ 0.263`,
+    // `level_lo = 0`, `level_hi = 1`, `frac ≈ 0.263`).
+    assert_compressive_aniso_gradient_matches_fd(4.0, 1.2, 3.5, 1.0, 4, "anisotropic 4×1.2");
+}

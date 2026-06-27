@@ -1,15 +1,19 @@
 # Photometric Subpixel Keypoint Refinement
 
-_Status: **MVP implemented** (Phase 2). The forward-additive ECC Gauss–Newton
-refiner lives in `crates/sfmtool-core/src/patch/keypoint_subpixel.rs` (exposed to
-Python as `PatchCloud.refine_keypoints`). Both the single-pass-frozen variant
+_Status: **MVP + analytic Jacobian implemented** (Phases 2 and 3B). The
+forward-additive ECC Gauss–Newton refiner lives in
+`crates/sfmtool-core/src/patch/keypoint_subpixel.rs` (exposed to Python as
+`PatchCloud.refine_keypoints`). Both the single-pass-frozen variant
 (`max_outer_sweeps = 1`, the default) and the per-sweep-refresh variant
 (`max_outer_sweeps > 1`, with mean-per-view-move early-exit) are wired so the
-trade-off is measurable, not chosen at design time. The deferred work — per-move
-(Gauss–Seidel) incremental consensus, leave-one-out consensus, the sampler
-value+gradient interface and anisotropic value+gradient Jacobian,
-inverse-compositional ECC, and the joint bundle — remains as described in
-"Open questions" / "Design details" below. A
+trade-off is measurable, not chosen at design time. The sampler value+gradient
+interface (`remap_bilinear_with_grad`, `remap_aniso_with_grad`,
+`WarpMap::get_jacobian`) is implemented per the "Design details" section below,
+collapsing the per-GN-step gradient build from 5 renders (value + 4 FD) to 1
+(value + analytic gradient composed with the warp Jacobian). The deferred work
+— per-move (Gauss–Seidel) incremental consensus, leave-one-out consensus,
+inverse-compositional ECC, the joint bundle, and SIMD of the new sampler
+functions — remains as described in "Open questions" below. A
 **standalone** algorithm: given a keypoint that
 is **already close** to correct, refine it to sub-pixel by **local** continuous
 optimization of image photoconsistency (gradients, fractional sampling). It does
@@ -110,13 +114,13 @@ mean/norm. Because the reference (consensus) depends on where the views sit, it 
    - Sample the view's patch core at the current `δ` (fractional, via the `Sampler`).
    - z-normalize it; form the ECC residual against `T`.
    - Take the ECC Gauss–Newton step on the 2-DOF in-plane offset, using the image
-     Jacobian `∂I/∂δ` of the sampled core. The **target** is the sampler's analytic
-     image-gradient Jacobian (see Sampling) — composed with the warp's
-     `∂(image coords)/∂δ` — so the gradient is LOD-consistent with the value. The
-     **MVP** computes `∂I/∂δ` by central finite differences on the warp/sample
-     coords instead (one extra render per axis); the analytic path is deferred to
-     a later phase (see "Design details"). Update `δ`. Stop at `‖Δδ‖ < ε` (e.g.
-     0.01 px) or the cap.
+     Jacobian `∂I/∂δ` of the sampled core. `∂I/∂δ = ∇_src I · J` where `∇_src I`
+     comes from the sampler's analytic image-gradient interface (see Sampling and
+     "Design details") and `J = ∂(image coords)/∂(patch grid)` is the warp
+     Jacobian (`WarpMap::get_jacobian`) — so the gradient is LOD-consistent with
+     the value. One value+gradient render per GN step replaces the MVP's previous
+     5 renders (value + 4 axis-FD); the FD path is gone. Update `δ`. Stop at
+     `‖Δδ‖ < ε` (e.g. 0.01 px) or the cap.
 3. **Repeat** from 1 until the mean per-view move is below `ε` or the sweep cap;
    one or two sweeps usually suffice (the seed is close, so the consensus barely
    moves — see the single-pass note).
@@ -280,10 +284,11 @@ New interface functions to add:
 2. **Aniso/pyramid value+gradient** — `remap_aniso_with_grad(...)` (and a per-pixel
    `sample_aniso_with_grad`) returning `(val, dI_dx, dI_dy)` computed at the **same
    level(s)/footprint as the value**: take the per-level bilinear gradient (via #1),
-   scale by the level's `2^level` to express it in level-0 source px, and blend the
-   two levels with the same `frac` the value uses. (Finite differences across a mip
-   boundary would not be LOD-consistent — this is the whole reason to compute it
-   inside the sampler.)
+   **divide** by the level's `2^level` (i.e. multiply by `1/2^level`) to express it
+   in level-0 source px (`x_level = x_0 / 2^level` ⇒
+   `∂I/∂x_0 = (∂I/∂x_level) / 2^level`), and blend the two levels with the same
+   `frac` the value uses. (Finite differences across a mip boundary would not be
+   LOD-consistent — this is the whole reason to compute it inside the sampler.)
 
 3. **Warp-Jacobian accessor** — expose the raw per-pixel `J`
    (`WarpMap::get_jacobian(col, row) -> [[f32; 2]; 2]`); `compute_svd` already

@@ -603,3 +603,199 @@ fn from_cameras_with_pose_equirect_dst() {
     let cy = warp.height() / 2;
     assert!(warp.is_valid(cx, cy));
 }
+
+// -----------------------------------------------------------------------
+// get_jacobian / compute_jacobians (Phase 3B analytic Jacobian)
+// -----------------------------------------------------------------------
+
+/// Central-difference reference computation of the per-pixel 2x2 Jacobian for
+/// an arbitrary warp map, mirroring the implementation in `jacobian_at`.
+fn ref_jacobian_at(map: &WarpMap, col: u32, row: u32) -> [[f32; 2]; 2] {
+    let w = map.width() as i32;
+    let h = map.height() as i32;
+    let c = col as i32;
+    let r = row as i32;
+    if c == 0 || c >= w - 1 || r == 0 || r >= h - 1 {
+        return [[1.0, 0.0], [0.0, 1.0]];
+    }
+    let (xl, yl) = map.get((c - 1) as u32, r as u32);
+    let (xr, yr) = map.get((c + 1) as u32, r as u32);
+    let (xt, yt) = map.get(c as u32, (r - 1) as u32);
+    let (xb, yb) = map.get(c as u32, (r + 1) as u32);
+    if [xl, yl, xr, yr, xt, yt, xb, yb].iter().any(|v| v.is_nan()) {
+        return [[1.0, 0.0], [0.0, 1.0]];
+    }
+    [
+        [(xr - xl) * 0.5, (xb - xt) * 0.5],
+        [(yr - yl) * 0.5, (yb - yt) * 0.5],
+    ]
+}
+
+#[test]
+fn get_jacobian_matches_central_difference_on_pose_warp() {
+    // A pose-built warp gives a smoothly varying Jacobian that's not the
+    // identity, exercising the non-trivial central-difference path.
+    let src = pinhole(200, 150, 200.0);
+    let dst = pinhole(200, 150, 220.0);
+    let mut warp = WarpMap::from_cameras(&src, &dst);
+    warp.compute_jacobians();
+
+    for row in [10, 50, 100u32] {
+        for col in [10, 50, 100, 150u32] {
+            let got = warp.get_jacobian(col, row);
+            let want = ref_jacobian_at(&warp, col, row);
+            for i in 0..2 {
+                for j in 0..2 {
+                    let d = (got[i][j] - want[i][j]).abs();
+                    assert!(
+                        d < 1e-6,
+                        "J[{i}][{j}] mismatch at ({col},{row}): got={} want={}",
+                        got[i][j],
+                        want[i][j]
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn compute_svd_populates_jacobians_matching_compute_jacobians() {
+    // compute_svd() must populate the raw Jacobian as a free by-product, and
+    // must match what compute_jacobians() would produce — on a non-trivial pose
+    // warp where J is not identity, so a future refactor that splits the two
+    // paths can't silently drift. (The previous version of this test only
+    // checked an identity warp, which trivially passes for any reasonable code.)
+    let src = pinhole(200, 150, 200.0);
+    let dst = pinhole(200, 150, 220.0);
+
+    let mut warp_svd = WarpMap::from_cameras(&src, &dst);
+    assert!(!warp_svd.has_jacobians());
+    warp_svd.compute_svd();
+    assert!(warp_svd.has_jacobians());
+
+    let mut warp_jac = WarpMap::from_cameras(&src, &dst);
+    warp_jac.compute_jacobians();
+
+    for row in [10, 50, 100u32] {
+        for col in [10, 50, 100, 150u32] {
+            let j_svd = warp_svd.get_jacobian(col, row);
+            let j_jac = warp_jac.get_jacobian(col, row);
+            assert_eq!(j_svd, j_jac, "({col},{row}): SVD path vs jacobian path");
+        }
+    }
+}
+
+#[test]
+fn compute_jacobians_and_compute_svd_are_idempotent() {
+    let cam = pinhole(64, 48, 100.0);
+    let mut warp = WarpMap::from_cameras(&cam, &cam);
+    warp.compute_jacobians();
+    let j_before = warp.get_jacobian(30, 20);
+    warp.compute_jacobians(); // second call is a no-op (jacobians already set)
+    assert_eq!(warp.get_jacobian(30, 20), j_before);
+
+    // compute_svd() is symmetrically idempotent (was a regression risk: the
+    // previous compute_svd had no early-exit guard while compute_jacobians did).
+    let mut warp_svd = WarpMap::from_cameras(&cam, &cam);
+    warp_svd.compute_svd();
+    let (smaj, smin, dx, dy) = warp_svd.get_svd(30, 20);
+    warp_svd.compute_svd(); // no-op
+    let (smaj2, smin2, dx2, dy2) = warp_svd.get_svd(30, 20);
+    assert_eq!((smaj, smin, dx, dy), (smaj2, smin2, dx2, dy2));
+}
+
+#[test]
+#[should_panic(expected = "Jacobians not computed")]
+fn get_jacobian_panics_without_compute() {
+    let cam = pinhole(8, 8, 100.0);
+    let warp = WarpMap::from_cameras(&cam, &cam);
+    let _ = warp.get_jacobian(4, 4);
+}
+
+#[test]
+fn get_jacobian_boundary_uses_one_sided_differences() {
+    // Boundary pixels of a non-trivial warp use a **one-sided** difference —
+    // not the previous identity fallback that silently injected the wrong scale
+    // for ~20% of patch support pixels (the boundary ring on a default 24×24
+    // patch with GaussianDisk{sigma:0.6} weights). Verify by comparing to a
+    // hand-rolled one-sided central reference at the four image corners.
+    let src = pinhole(200, 150, 200.0);
+    let dst = pinhole(200, 150, 220.0);
+    let mut warp = WarpMap::from_cameras(&src, &dst);
+    warp.compute_jacobians();
+
+    let w = warp.width();
+    let h = warp.height();
+    for (col, row) in [
+        (0u32, 0u32),
+        (w - 1, 0),
+        (0, h - 1),
+        (w - 1, h - 1),
+        (0, 75),
+        (199, 75),
+        (100, 0),
+        (100, 149),
+    ] {
+        let got = warp.get_jacobian(col, row);
+        let want = ref_one_sided_jacobian_at(&warp, col, row);
+        for i in 0..2 {
+            for j in 0..2 {
+                let d = (got[i][j] - want[i][j]).abs();
+                assert!(
+                    d < 1e-6,
+                    "boundary J[{i}][{j}] mismatch at ({col},{row}): \
+                     got={} want={} (not identity {})",
+                    got[i][j],
+                    want[i][j],
+                    if i == j { 1.0 } else { 0.0 },
+                );
+            }
+        }
+        // And: the value is NOT the old identity fallback — the test would be
+        // hollow if the one-sided FD happened to be identity at the corners too.
+        // For these pinhole-pose warps the off-diagonal is tiny but the diagonal
+        // is meaningfully non-1 (focals differ).
+        assert!(
+            (got[0][0] - 1.0).abs() > 1e-4 || (got[1][1] - 1.0).abs() > 1e-4,
+            "boundary J at ({col},{row}) collapsed to identity — test fixture is too benign"
+        );
+    }
+
+    // Identity warp's boundary one-sided FD is still identity (1.0 on diagonals,
+    // 0 off), so a benign caller doesn't regress.
+    let cam = pinhole(16, 16, 100.0);
+    let mut idw = WarpMap::from_cameras(&cam, &cam);
+    idw.compute_jacobians();
+    assert_eq!(idw.get_jacobian(0, 0), [[1.0, 0.0], [0.0, 1.0]]);
+    assert_eq!(idw.get_jacobian(15, 15), [[1.0, 0.0], [0.0, 1.0]]);
+}
+
+/// One-sided / central-difference reference on the warp coords, matching
+/// `WarpMap::jacobian_at`'s convention. Used to validate the boundary handling.
+fn ref_one_sided_jacobian_at(warp: &WarpMap, col: u32, row: u32) -> [[f32; 2]; 2] {
+    let w = warp.width();
+    let h = warp.height();
+    let (xl, xr, col_den) = if col == 0 {
+        (col, col + 1, 1.0)
+    } else if col == w - 1 {
+        (col - 1, col, 1.0)
+    } else {
+        (col - 1, col + 1, 2.0)
+    };
+    let (yt, yb, row_den) = if row == 0 {
+        (row, row + 1, 1.0)
+    } else if row == h - 1 {
+        (row - 1, row, 1.0)
+    } else {
+        (row - 1, row + 1, 2.0)
+    };
+    let (sx_l, sy_l) = warp.get(xl, row);
+    let (sx_r, sy_r) = warp.get(xr, row);
+    let (sx_t, sy_t) = warp.get(col, yt);
+    let (sx_b, sy_b) = warp.get(col, yb);
+    [
+        [(sx_r - sx_l) / col_den, (sx_b - sx_t) / row_den],
+        [(sy_r - sy_l) / col_den, (sy_b - sy_t) / row_den],
+    ]
+}

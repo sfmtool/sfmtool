@@ -50,11 +50,17 @@
 //! — and `b = C·∇S` because `Σ_k (∂ẑ_c[k]/∂δ)·ẑ_c[k] = ½∂‖ẑ_c‖²/∂δ = 0`. So the
 //! step rises along the score gradient with the natural GN Hessian. The
 //! z-normalization derivative `∂ẑ` is taken analytically (see [`view_jacobian`]);
-//! only the raw sampled core's image Jacobian `∂g/∂δ` is finite-differenced — on
-//! the warp/sample coords, the simplest correct route the MVP spec permits (no new
-//! value+gradient sampler interface, which is deferred to a later phase).
+//! the raw image Jacobian `∂g/∂δ` is now also analytic, via the sampler's
+//! value+gradient interface (`remap_bilinear_with_grad` / `remap_aniso_with_grad`,
+//! returning `(I, ∂I/∂x, ∂I/∂y)` in source-pixel coords per support pixel and
+//! channel) composed pixel-wise with the warp Jacobian
+//! (`WarpMap::get_jacobian`): `∂I/∂δ = ∇_src I · J`. The previous finite-difference
+//! path took five renders per GN step; the analytic path takes one.
 
-use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear};
+use crate::camera::remap::{
+    remap_aniso_with_grad_into, remap_aniso_with_pyramid, remap_bilinear,
+    remap_bilinear_with_grad_into, ImageF32WithGrad,
+};
 use crate::camera::WarpMap;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::keypoint_localize::{project, seed_offset, shifted_center};
@@ -79,14 +85,16 @@ pub struct KeypointSubpixelParams {
     pub resolution: u32,
     /// Per-pixel scoring weight / support.
     pub window: PatchWindow,
-    /// How to sample the source pyramids when rendering patch tiles. Both
-    /// [`Sampler::Bilinear`] and [`Sampler::Anisotropic`] use the same sampler for
-    /// every render in the GN step (value + four `±h` finite-difference renders),
-    /// so the per-axis FD `(I(δ + h) − I(δ − h)) / (2h)` is consistent within a
-    /// single LOD. The MVP simplification is that this FD can straddle an
-    /// anisotropic mip-level boundary, which then mixes gradients from two LODs;
-    /// the LOD-consistent analytic Jacobian (the spec's "Design details") is
-    /// deferred to a later phase.
+    /// How to sample the source pyramids when rendering patch tiles. The GN inner
+    /// step uses the **value+gradient** variant of the chosen sampler — one render
+    /// returns `(value, ∂I/∂x, ∂I/∂y)` per support pixel and channel — composed
+    /// per-pixel with the warp Jacobian `J = WarpMap::get_jacobian(col, row)` to
+    /// give the analytic `∂I/∂δ` the GN normal equations need. The
+    /// [`Sampler::Anisotropic`] gradient is computed at the same LOD(s) /
+    /// footprint as the value (per-level bilinear gradient **divided** by the
+    /// level's `2^level` to convert from level-pixel to level-0 source-pixel
+    /// coords, blended with the same `frac` the value uses), so value and
+    /// gradient stay LOD-consistent.
     pub sampler: Sampler,
     /// IRLS reweighting passes for the robust consensus.
     pub robust_iters: u32,
@@ -118,9 +126,6 @@ pub struct KeypointSubpixelParams {
     /// would carry `|δ − δ_seed|` past this is rejected (keeps the local-refiner
     /// contract; the seed must already be in the basin).
     pub max_offset_px: f64,
-    /// Finite-difference step (patch-grid px) for the raw image Jacobian
-    /// `∂g/∂δ`. Small enough to be local, large enough to clear sampling noise.
-    pub fd_step_px: f64,
     /// Backtracking line-search shrink factor (`0 < γ < 1`) and attempt cap: a
     /// rejected step is retried at `γ·step`, up to [`line_search_max`].
     pub line_search_shrink: f64,
@@ -141,7 +146,6 @@ impl Default for KeypointSubpixelParams {
             max_gn_steps: 10,
             convergence_px: 0.01,
             max_offset_px: 2.0,
-            fd_step_px: 0.5,
             line_search_shrink: 0.5,
             line_search_max: 8,
         }
@@ -175,6 +179,10 @@ pub struct KeypointRefinement {
 /// `out` (flat `[channel * n + support_index]`), reading only the window-support
 /// pixels. Returns `false` (leaving `out` untouched) when any support pixel is out
 /// of frame — a δ whose core left the frame is invalid and can't be scored.
+///
+/// Value-only path used during scoring (initial seed, line-search candidates).
+/// The GN normal-equations build uses [`render_core_with_jg`] for the value plus
+/// the per-pixel analytic image Jacobian in one render.
 #[allow(clippy::too_many_arguments)]
 fn render_core(
     patch: &OrientedPatch,
@@ -212,6 +220,81 @@ fn render_core(
         }
         for c in 0..channels {
             out[c * n + k] = img.get_pixel(col, row, c as u32) as f32;
+        }
+    }
+    true
+}
+
+/// Render one view's `R×R` core at offset `(au, av)` and also fill the analytic
+/// image Jacobian `∂I/∂δ` in patch-grid coords per support pixel and channel
+/// — one render that returns value + gradient (instead of the previous 5×
+/// finite-difference pattern). Returns `false` (leaving outputs untouched) when
+/// any support pixel is out of frame.
+///
+/// Per pixel the sampler returns `(I, ∂I/∂x, ∂I/∂y)` in **source-pixel** coords;
+/// composing with the warp Jacobian `J = ∂(source)/∂(grid)` gives `∂I/∂δ` in
+/// **patch-grid** coords (`δ = (δ_col, δ_row)`):
+///
+/// ```text
+/// Jg_u = J[0][0] · dI_dx + J[1][0] · dI_dy   (column = u axis)
+/// Jg_v = J[0][1] · dI_dx + J[1][1] · dI_dy   (row    = v axis)
+/// ```
+///
+/// where `J[0][0] = dx/dcol`, `J[0][1] = dx/drow`, `J[1][0] = dy/dcol`,
+/// `J[1][1] = dy/drow` (the convention `WarpMap::get_jacobian` stores).
+#[allow(clippy::too_many_arguments)]
+fn render_core_with_jg(
+    patch: &OrientedPatch,
+    view: &ProjectedImage<'_>,
+    au: f64,
+    av: f64,
+    wpp_u: f64,
+    wpp_v: f64,
+    resolution: u32,
+    sampler: Sampler,
+    support: &Support,
+    channels: usize,
+    g: &mut [f32],
+    jg_u: &mut [f32],
+    jg_v: &mut [f32],
+    img_scratch: &mut ImageF32WithGrad,
+) -> bool {
+    let center = shifted_center(patch, au, av, wpp_u, wpp_v);
+    let mut core_patch =
+        OrientedPatch::from_center_normal(center, patch.normal(), patch.u_axis, patch.half_extent);
+    core_patch.w = patch.w;
+    let mut map = WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
+    match sampler {
+        Sampler::Anisotropic => {
+            map.compute_svd(); // also populates jacobians as a by-product
+            remap_aniso_with_grad_into(view.pyramid, &map, MAX_ANISOTROPY, img_scratch);
+        }
+        Sampler::Bilinear => {
+            map.compute_jacobians();
+            remap_bilinear_with_grad_into(view.pyramid.level(0), &map, img_scratch);
+        }
+    };
+    let n = support.pixels.len();
+    let stride = img_scratch.width() as usize * channels;
+    let value = img_scratch.value();
+    let grad_x = img_scratch.grad_x();
+    let grad_y = img_scratch.grad_y();
+    for (k, &p) in support.pixels.iter().enumerate() {
+        let col = (p % resolution as usize) as u32;
+        let row = (p / resolution as usize) as u32;
+        if !map.is_valid(col, row) {
+            return false;
+        }
+        let j = map.get_jacobian(col, row);
+        let row_off = row as usize * stride + col as usize * channels;
+        for c in 0..channels {
+            let idx = row_off + c;
+            let v = value[idx];
+            let gx = grad_x[idx];
+            let gy = grad_y[idx];
+            g[c * n + k] = v;
+            jg_u[c * n + k] = j[0][0] * gx + j[1][0] * gy;
+            jg_v[c * n + k] = j[0][1] * gx + j[1][1] * gy;
         }
     }
     true
@@ -257,27 +340,26 @@ fn ecc_score(znorm: &[f32], tmpl: &[f32], channels: usize, n: usize) -> f64 {
     s / channels as f64
 }
 
-/// The analytic ECC Gauss–Newton normal equations at the current offset. Given the
-/// raw core `g` at `δ` and the raw cores `g±` finite-differenced `±h` along each
-/// patch-grid axis, this composes the z-normalization derivative
-/// `∂ẑ_c[k]/∂δ = (∂a/∂δ)/N − a·(a·∂a/∂δ)/N³` (with `a = √w(g − μ)`, `N = ‖a‖`) and
-/// accumulates `H = Σ(∂ẑ)(∂ẑ)ᵀ` and `b = Σ(∂ẑ)·T`. Returns `(H, b)` as
-/// `([Hxx, Hxy, Hyy], [bx, by])`, or `None` if every channel is flat (no texture
-/// to localize on — the aperture/low-texture case the guard keeps the seed for).
+/// The analytic ECC Gauss–Newton normal equations at the current offset. Given
+/// the raw core `g` at `δ` and the **pre-composed** raw image Jacobian
+/// `Jg = (Jg_u, Jg_v) = ∇_src I · J` (one render of the value+gradient sampler
+/// composed per-pixel with the warp Jacobian — see [`render_core_with_jg`]),
+/// this composes the z-normalization derivative
+/// `∂ẑ_c[k]/∂δ = (∂a/∂δ)/N − a·(a·∂a/∂δ)/N³` (with `a = √w(g − μ)`, `N = ‖a‖`)
+/// and accumulates `H = Σ(∂ẑ)(∂ẑ)ᵀ` and `b = Σ(∂ẑ)·T`. Returns `(H, b)` as
+/// `([Hxx, Hxy, Hyy], [bx, by])`, or `None` if every channel is flat (no
+/// texture to localize on — the aperture/low-texture case the guard keeps the
+/// seed for).
 #[allow(clippy::too_many_arguments)]
 fn view_jacobian(
     g: &[f32],
-    g_um: &[f32],
-    g_up: &[f32],
-    g_vm: &[f32],
-    g_vp: &[f32],
+    jg_u: &[f32],
+    jg_v: &[f32],
     tmpl: &[f32],
     support: &Support,
     channels: usize,
-    h: f64,
 ) -> Option<([f64; 3], [f64; 2])> {
     let n = support.pixels.len();
-    let inv_2h = 1.0 / (2.0 * h);
     let mut hxx = 0.0;
     let mut hxy = 0.0;
     let mut hyy = 0.0;
@@ -301,22 +383,18 @@ fn view_jacobian(
         let inv_n = 1.0 / nrm;
         let inv_n3 = inv_n / norm_sq;
 
-        // a = √w (g − μ); raw image Jacobian Jg = ∂g/∂δ by central differences.
+        // a = √w (g − μ); raw image Jacobian Jg = ∂g/∂δ supplied analytically.
         // ∂a/∂δ = √w (Jg − μ'), where μ' = Σ_k w_k·Jg_k / W (∂(weighted mean)/∂δ).
-        let gum = &g_um[c * n..][..n];
-        let gup = &g_up[c * n..][..n];
-        let gvm = &g_vm[c * n..][..n];
-        let gvp = &g_vp[c * n..][..n];
+        let jgu_c = &jg_u[c * n..][..n];
+        let jgv_c = &jg_v[c * n..][..n];
 
         // ∂(weighted mean)/∂δ (the centering's mean term).
         let mut mu_du = 0.0;
         let mut mu_dv = 0.0;
         for k in 0..n {
-            let jgu = (gup[k] as f64 - gum[k] as f64) * inv_2h;
-            let jgv = (gvp[k] as f64 - gvm[k] as f64) * inv_2h;
             let w = support.weights[k];
-            mu_du += w * jgu;
-            mu_dv += w * jgv;
+            mu_du += w * jgu_c[k] as f64;
+            mu_dv += w * jgv_c[k] as f64;
         }
         mu_du /= support.total_weight;
         mu_dv /= support.total_weight;
@@ -327,10 +405,8 @@ fn view_jacobian(
         for k in 0..n {
             let sw = support.sqrt_weights[k] as f64;
             let a = sw * (gc[k] as f64 - mean);
-            let jgu = (gup[k] as f64 - gum[k] as f64) * inv_2h;
-            let jgv = (gvp[k] as f64 - gvm[k] as f64) * inv_2h;
-            let dau = sw * (jgu - mu_du);
-            let dav = sw * (jgv - mu_dv);
+            let dau = sw * (jgu_c[k] as f64 - mu_du);
+            let dav = sw * (jgv_c[k] as f64 - mu_dv);
             a_dau += a * dau;
             a_dav += a * dav;
         }
@@ -340,10 +416,8 @@ fn view_jacobian(
         for k in 0..n {
             let sw = support.sqrt_weights[k] as f64;
             let a = sw * (gc[k] as f64 - mean);
-            let jgu = (gup[k] as f64 - gum[k] as f64) * inv_2h;
-            let jgv = (gvp[k] as f64 - gvm[k] as f64) * inv_2h;
-            let dau = sw * (jgu - mu_du);
-            let dav = sw * (jgv - mu_dv);
+            let dau = sw * (jgu_c[k] as f64 - mu_du);
+            let dav = sw * (jgv_c[k] as f64 - mu_dv);
             dzu[k] = dau * inv_n - a * a_dau * inv_n3;
             dzv[k] = dav * inv_n - a * a_dav * inv_n3;
         }
@@ -467,7 +541,6 @@ pub fn refine_patch_keypoints(
     let mut tmpl = Vec::new();
     let mut xs: Vec<f32> = Vec::new();
     let mut scratch = GnScratch::new(channels * n);
-    let h = params.fd_step_px.max(1e-3);
 
     // Outer sweeps: each sweep re-renders the views at their current offsets,
     // rebuilds the robust consensus from them, and refines every view against it.
@@ -531,7 +604,6 @@ pub fn refine_patch_keypoints(
                 wpp_u,
                 wpp_v,
                 params,
-                h,
                 &mut scratch,
             );
             let after = states[si].off;
@@ -549,34 +621,43 @@ pub fn refine_patch_keypoints(
     finalize(patch, views, &states, wpp_u, wpp_v)
 }
 
-/// Reused per-view scratch for [`refine_one_view`]: the value core `g`, the four
-/// finite-difference renders, and a z-normalize buffer — all `channels · n`,
-/// allocated once per patch and shared across its views.
+/// Reused per-view scratch for [`refine_one_view`]: the value core `g`, the two
+/// pre-composed per-axis image-Jacobian buffers `Jg_u`/`Jg_v` produced by
+/// [`render_core_with_jg`], a z-normalize buffer (all `channels · n`), and a
+/// reused [`ImageF32WithGrad`] for the value+gradient render
+/// (`~3·R²·channels·4 B`, resized in place by the `_into` samplers — after
+/// warm-up the **gradient render's own buffer** no longer reallocates per call).
+/// All buffers are allocated once per patch and shared across its views.
+///
+/// Still-allocating-per-call (not scratchified here, follow-up): the
+/// per-`render_core_with_jg` `WarpMap` (`data` + `jacobians` + optional `svd`),
+/// and the value-only `score_at` render path (which goes through
+/// [`render_core`] and allocates an `ImageU8` + `WarpMap` per line-search
+/// candidate). These are smaller than the `ImageF32WithGrad` allocation that
+/// was just removed, but the per-step budget is not "zero allocations."
 struct GnScratch {
     g: Vec<f32>,
-    g_um: Vec<f32>,
-    g_up: Vec<f32>,
-    g_vm: Vec<f32>,
-    g_vp: Vec<f32>,
+    jg_u: Vec<f32>,
+    jg_v: Vec<f32>,
     zbuf: Vec<f32>,
+    img: ImageF32WithGrad,
 }
 
 impl GnScratch {
     fn new(len: usize) -> Self {
         Self {
             g: vec![0.0; len],
-            g_um: vec![0.0; len],
-            g_up: vec![0.0; len],
-            g_vm: vec![0.0; len],
-            g_vp: vec![0.0; len],
+            jg_u: vec![0.0; len],
+            jg_v: vec![0.0; len],
             zbuf: vec![0.0; len],
+            img: ImageF32WithGrad::empty(),
         }
     }
 }
 
 /// Solve one view's offset by forward-additive ECC Gauss–Newton against the frozen
 /// `tmpl`, with the never-worse guard. `scratch` holds the reused render / z-norm
-/// buffers (value plus the four finite-difference renders).
+/// buffers (value plus the per-axis pre-composed image Jacobian).
 #[allow(clippy::too_many_arguments)]
 fn refine_one_view(
     patch: &OrientedPatch,
@@ -589,16 +670,14 @@ fn refine_one_view(
     wpp_u: f64,
     wpp_v: f64,
     params: &KeypointSubpixelParams,
-    h: f64,
     scratch: &mut GnScratch,
 ) {
     let GnScratch {
         g,
-        g_um,
-        g_up,
-        g_vm,
-        g_vp,
+        jg_u,
+        jg_v,
         zbuf,
+        img,
     } = scratch;
     let n = support.pixels.len();
 
@@ -633,9 +712,10 @@ fn refine_one_view(
     let mut cur = st.off;
 
     for _ in 0..params.max_gn_steps {
-        // Render the value core and the four finite-difference cores at `cur`. If
-        // any leaves the frame, the local Jacobian is ill-defined here: stop.
-        if !render_core(
+        // One render: value core plus per-pixel ∂I/∂δ in patch-grid coords
+        // (∇_src I composed with the warp Jacobian). If any support pixel is out
+        // of frame the local Jacobian is ill-defined here: stop.
+        if !render_core_with_jg(
             patch,
             view,
             cur[0],
@@ -647,64 +727,14 @@ fn refine_one_view(
             support,
             channels,
             g,
+            jg_u,
+            jg_v,
+            img,
         ) {
             break;
         }
-        let ok = render_core(
-            patch,
-            view,
-            cur[0] - h,
-            cur[1],
-            wpp_u,
-            wpp_v,
-            resolution,
-            params.sampler,
-            support,
-            channels,
-            g_um,
-        ) && render_core(
-            patch,
-            view,
-            cur[0] + h,
-            cur[1],
-            wpp_u,
-            wpp_v,
-            resolution,
-            params.sampler,
-            support,
-            channels,
-            g_up,
-        ) && render_core(
-            patch,
-            view,
-            cur[0],
-            cur[1] - h,
-            wpp_u,
-            wpp_v,
-            resolution,
-            params.sampler,
-            support,
-            channels,
-            g_vm,
-        ) && render_core(
-            patch,
-            view,
-            cur[0],
-            cur[1] + h,
-            wpp_u,
-            wpp_v,
-            resolution,
-            params.sampler,
-            support,
-            channels,
-            g_vp,
-        );
-        if !ok {
-            break;
-        }
 
-        let Some((hess, b)) = view_jacobian(g, g_um, g_up, g_vm, g_vp, tmpl, support, channels, h)
-        else {
+        let Some((hess, b)) = view_jacobian(g, jg_u, jg_v, tmpl, support, channels) else {
             break; // no textured channel — aperture/low-texture, keep current δ
         };
         let Some(step) = solve_2x2(hess, b) else {
