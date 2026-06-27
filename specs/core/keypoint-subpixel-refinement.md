@@ -1,20 +1,39 @@
 # Photometric Subpixel Keypoint Refinement
 
-_Status: **MVP + analytic Jacobian implemented** (Phases 2 and 3B). The
-forward-additive ECC Gauss–Newton refiner lives in
+_Status: **MVP + analytic Jacobian + per-move consensus implemented** (Phases 2
+and 3B). The forward-additive ECC Gauss–Newton refiner lives in
 `crates/sfmtool-core/src/patch/keypoint_subpixel.rs` (exposed to Python as
-`PatchCloud.refine_keypoints`). Both the single-pass-frozen variant
-(`max_outer_sweeps = 1`, the default) and the per-sweep-refresh variant
-(`max_outer_sweeps > 1`, with mean-per-view-move early-exit) are wired so the
-trade-off is measurable, not chosen at design time. The sampler value+gradient
+`PatchCloud.refine_keypoints`). All three "Consensus refresh granularity"
+variants are wired so the trade-off is measurable: the single-pass-frozen
+variant (`max_outer_sweeps = 1`, the default), the per-sweep-refresh variant
+(`max_outer_sweeps > 1`, `consensus_refresh = "per_sweep"`, with
+mean-per-view-move early-exit), and the per-move (Gauss–Seidel) incremental
+variant (`consensus_refresh = "per_move"`, IRLS weights refreshed at the
+per-sweep boundary — the spec's two-frequency design). The sampler value+gradient
 interface (`remap_bilinear_with_grad`, `remap_aniso_with_grad`,
 `WarpMap::get_jacobian`) is implemented per the "Design details" section below,
 collapsing the per-GN-step gradient build from 5 renders (value + 4 FD) to 1
-(value + analytic gradient composed with the warp Jacobian). The deferred work
-— per-move (Gauss–Seidel) incremental consensus, leave-one-out consensus,
+(value + analytic gradient composed with the warp Jacobian). The remaining
+deferred work — leave-one-out consensus (measured-and-rejected; see below),
 inverse-compositional ECC, the joint bundle, and SIMD of the new sampler
-functions — remains as described in "Open questions" below. A
-**standalone** algorithm: given a keypoint that
+functions — is described in "Open questions" below._
+
+_**Per-move shared T (not LOO).** The "free with running sum" leave-one-out
+bonus the spec lists as the incremental variant's natural default was
+measured against the shared running consensus on `dino_dog_toy` (300 patches,
+1369 views): LOO yielded mean ECC **0.82** at 5 sweeps vs shared T's **0.87**
+— a clear regression at the small view counts of real tracks (3–5 views),
+where the chain of LOO updates amplifies drift more than the self-pollution it
+removes. The per-move path therefore uses shared `T`. This is recorded as the
+measured negative result; LOO remains a one-line cost change if a future
+measurement (large-N tracks?) shifts the verdict. See
+`crates/sfmtool-core/src/patch/keypoint_subpixel.rs::RunningConsensus`. On real
+data per-move (shared) matches per-sweep within noise (mean ECC 0.8725 vs
+0.8716 at 5 sweeps), with a small one-sweep convergence advantage (0.8610 vs
+0.8584). It lands as **opt-in** behind `consensus_refresh = "per_move"`; the
+default stays `per_sweep`._
+
+A **standalone** algorithm: given a keypoint that
 is **already close** to correct, refine it to sub-pixel by **local** continuous
 optimization of image photoconsistency (gradients, fractional sampling). It does
 no global search and no view selection. Its typical caller is keypoint
@@ -145,14 +164,24 @@ to finest:
   approximation at sub-pixel scale.
 - **Per-sweep refresh.** Rebuild `T` between sweeps (the alternating loop above).
 - **Per-move (Gauss–Seidel) incremental.** Update `T` after *each* view moves, so
-  the next view aligns to a consensus that already reflects the last (fastest
-  convergence). Cheap if `T` is kept as a **running sum** `S = Σ_v w_v · ẑ_v` of
+  the next view aligns to a consensus that already reflects the last (the
+  intuition: tighter coupling within a sweep). Cheap if `T` is kept as a **running
+  sum** `S = Σ_v w_v · ẑ_v` of
   the z-normalized view patches: moving view `v` from `δ` to `δ'` is
   `S += w_v · (ẑ_v' − ẑ_v)` (O(`n·channels`)), then renormalize `S → T`. The moved
   view's `ẑ_v'` is already computed by its GN step, so the only added work per move
   is the delta plus one renormalization — negligible next to sampling/gradients.
   **Bonus:** leave-one-out is then free — view `v`'s reference is
   `normalize(S − w_v·ẑ_v)`.
+  - _Measured outcome (see implementation status above): on dino_dog_toy
+    per-move matched per-sweep within noise at converged sweep counts; per-move
+    at a single sweep narrowly beat single-pass-frozen at the same cost
+    (ECC 0.8610 vs 0.8584). LOO regressed (0.82 vs 0.87 shared at 5 sweeps) at
+    real-track view counts (3–5), so the implementation uses shared `T`. The
+    "fastest convergence" intuition above does not strictly hold on this data —
+    treat the variant as "tighter within-sweep coupling" rather than a
+    convergence-speed claim, and `N = 2` is not recommended (shared-`T`
+    self-pollution dominates at the minimal view count)._
 
 **Robustness with the incremental sum: two update frequencies.** A robust (IRLS)
 consensus couples every view's weight to all residuals, so one move perturbs them
@@ -240,12 +269,20 @@ estimate, so it is *not* validated by equivalence to one:
   precompute is per refresh (per view, for leave-one-out) not once-ever; and the
   forward-additive per-step gradient is already cheap via the sampler's Jacobian.
   Start forward-additive; adopt IC only if the precompute clearly amortizes.
-- Consensus refresh granularity: is the single-pass frozen consensus enough, or do
-  per-sweep / per-move (incremental) refreshes measurably help? For the incremental
-  variant, how stale can the lower-frequency IRLS weights get before it hurts?
-  And **shared** vs **leave-one-out** consensus — LOO (free with the running sum)
-  avoids a view aligning to itself; is the self-pollution at sub-pixel scale even
-  worth caring about?
+- Consensus refresh granularity: now measurable — all three variants are
+  implemented. On real data (dino_dog_toy, 300 patches, 1369 views) per-sweep
+  and per-move (shared T) are within noise at 5 sweeps (mean ECC 0.8716 vs
+  0.8725); per-move at 1 sweep has a small edge (0.8610 vs 0.8584). The
+  open sub-question is when per-move's slightly faster convergence is worth
+  its small per-call overhead in production — a wiring/decision-gate question
+  to revisit when the refiner is wired into `_embed_patches.py`.
+  **Shared vs LOO**: measured-and-rejected. LOO consistently underperformed
+  shared T on real-data tracks (mean ECC 0.82 vs 0.87 at 5 sweeps) because at
+  N ≈ 3–5 views LOO drops effective averaging enough that the per-view
+  template is noisier than shared, and the within-sweep LOO chain amplifies
+  drift more than the self-pollution it removes. The self-pollution at
+  sub-pixel scale turns out to be a damping term that helps. LOO remains a
+  one-line cost change if a future large-N measurement shifts the verdict.
 - Which `Sampler` — does bilinear suffice, or do grazing / foreshortened views
   need anisotropic? Pick the default.
 - Per-view vs. joint — does the joint bundle beat per-view enough to justify the
