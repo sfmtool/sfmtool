@@ -245,12 +245,12 @@ fn znorm_write_avx2_matches_scalar() {
         let src: Vec<f32> = (0..len)
             .map(|i| ((i * 11 % 41) as f32) * 0.9 - 7.0)
             .collect();
-        let sqrt_w: Vec<f32> = (0..len).map(|i| 0.5 + (i % 7) as f32 * 0.05).collect();
+        let sqrt_weights: Vec<f32> = (0..len).map(|i| 0.5 + (i % 7) as f32 * 0.05).collect();
         let (mean, inv_norm) = (12.5f32, 0.031f32);
         let mut want = vec![0f32; len];
-        znorm_write_scalar(&src, &sqrt_w, mean, inv_norm, &mut want, 0, len);
+        znorm_write_scalar(&src, &sqrt_weights, mean, inv_norm, &mut want, 0, len);
         let mut got = vec![0f32; len];
-        znorm_write(&src, &sqrt_w, mean, inv_norm, &mut got);
+        znorm_write(&src, &sqrt_weights, mean, inv_norm, &mut got);
         for (a, b) in want.iter().zip(&got) {
             assert!((a - b).abs() <= 1e-6 * (1.0 + a.abs()), "{a} vs {b}");
         }

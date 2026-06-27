@@ -162,11 +162,11 @@ fn build_reference(
         None,
     )?;
     let n = ctx.pixels.len();
-    let total_w: f64 = ctx.weights.iter().sum();
-    if total_w <= 0.0 {
+    let total_weight: f64 = ctx.weights.iter().sum();
+    if total_weight <= 0.0 {
         return None;
     }
-    let sqrt_w: Vec<f32> = ctx.weights.iter().map(|&w| w.sqrt() as f32).collect();
+    let sqrt_weights: Vec<f32> = ctx.weights.iter().map(|&w| w.sqrt() as f32).collect();
     let mut xs = Vec::new();
     let (kept, keep_mask) = znormalize_into_kept(
         &raw,
@@ -174,8 +174,8 @@ fn build_reference(
         channels,
         n,
         &ctx.weights,
-        total_w,
-        &sqrt_w,
+        total_weight,
+        &sqrt_weights,
         &mut xs,
     )?;
     // The *original* source-channel index of each compacted reference channel, so
@@ -274,7 +274,7 @@ fn is_in_front(patch: &OrientedPatch, cam_from_world: &crate::geometry::RigidTra
 /// `single_ctx` is the reference's frozen support re-expressed as a one-view
 /// context (`kept = [0]`, the reference's `pixels` / `weights`); it is built once
 /// by the caller and shared across candidates, so scoring a candidate clones no
-/// per-call support. `sqrt_w` is `√weight` per support pixel (also caller-built).
+/// per-call support. `sqrt_weights` is `√weight` per support pixel (also caller-built).
 ///
 /// **Channel alignment (A1).** The candidate is rendered into the *full* original
 /// channel stack and scored only on the reference's surviving *original* channels
@@ -289,7 +289,7 @@ fn candidate_zncc(
     view: &ProjectedImage<'_>,
     reference: &Reference,
     single_ctx: &LevelContext,
-    sqrt_w: &[f32],
+    sqrt_weights: &[f32],
     params: &ViewSelectParams,
 ) -> Option<f64> {
     let single = [*view];
@@ -306,8 +306,8 @@ fn candidate_zncc(
         None,
     )?;
     let n = reference.n;
-    let total_w: f64 = single_ctx.weights.iter().sum();
-    if total_w <= 0.0 {
+    let total_weight: f64 = single_ctx.weights.iter().sum();
+    if total_weight <= 0.0 {
         return None;
     }
 
@@ -325,13 +325,13 @@ fn candidate_zncc(
         }
         let col = &raw[orig_c * n..][..n];
         let (s1, s2) = weighted_moments_pub(col, &single_ctx.weights);
-        let mean = (s1 / total_w) as f32;
+        let mean = (s1 / total_weight) as f32;
         let norm_sq = s2 - s1 * (mean as f64);
         if norm_sq < FLAT_NORM_SQ_EPS {
             continue; // Flat in the candidate -> 0 contribution, not a bad dot.
         }
         let inv_norm = (1.0 / norm_sq.sqrt()) as f32;
-        for (out, (&x, &sw)) in scratch.iter_mut().zip(col.iter().zip(sqrt_w)) {
+        for (out, (&x, &sw)) in scratch.iter_mut().zip(col.iter().zip(sqrt_weights)) {
             *out = sw * (x - mean) * inv_norm;
         }
         let tmpl = &reference.template[tc * n..][..n];
@@ -424,7 +424,7 @@ pub fn select_patch_views(
         pixels: reference.ctx.pixels.clone(),
         weights: reference.ctx.weights.clone(),
     };
-    let sqrt_w: Vec<f32> = single_ctx
+    let sqrt_weights: Vec<f32> = single_ctx
         .weights
         .iter()
         .map(|&w| w.sqrt() as f32)
@@ -443,7 +443,7 @@ pub fn select_patch_views(
                 &views[ti as usize],
                 &reference,
                 &single_ctx,
-                &sqrt_w,
+                &sqrt_weights,
                 &params,
             )
             .unwrap_or(f64::NAN),
@@ -483,7 +483,8 @@ pub fn select_patch_views(
             }
             // Photometric vetting (also enforces in-frame coverage: a candidate
             // whose render misses the reference support is unscoreable -> rejected).
-            let zncc = candidate_zncc(patch, view, &reference, &single_ctx, &sqrt_w, &params)?;
+            let zncc =
+                candidate_zncc(patch, view, &reference, &single_ctx, &sqrt_weights, &params)?;
             (zncc >= bar).then_some((i, zncc))
         })
         .collect();

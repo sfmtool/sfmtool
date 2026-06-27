@@ -317,6 +317,41 @@ pub(super) fn window_weights(window: PatchWindow, resolution: u32) -> Vec<f64> {
     w
 }
 
+/// The frozen window support over the `R×R` core: the linear `row * R + col`
+/// indices of the positive-weight pixels, their window weights, `√weight` per
+/// pixel (folded into the z-normalized space so a plain dot product realizes the
+/// windowed inner product), and the total weight (the windowed mean's
+/// denominator). Shared by the per-point patch operations (keypoint localize,
+/// keypoint subpixel refine) that score on a fixed `R×R` core.
+pub(super) struct Support {
+    pub pixels: Vec<usize>,
+    pub weights: Vec<f64>,
+    pub sqrt_weights: Vec<f32>,
+    pub total_weight: f64,
+}
+
+/// Build the frozen [`Support`] for the `R×R` core from the window kernel — keep
+/// only pixels whose window weight is positive, in row-major order.
+pub(super) fn build_support(window: PatchWindow, resolution: u32) -> Support {
+    let w_full = window_weights(window, resolution);
+    let mut pixels = Vec::new();
+    let mut weights = Vec::new();
+    for (p, &w) in w_full.iter().enumerate() {
+        if w > 0.0 {
+            pixels.push(p);
+            weights.push(w);
+        }
+    }
+    let total_weight: f64 = weights.iter().sum();
+    let sqrt_weights: Vec<f32> = weights.iter().map(|&w| w.sqrt() as f32).collect();
+    Support {
+        pixels,
+        weights,
+        sqrt_weights,
+        total_weight,
+    }
+}
+
 /// Rebuild the patch on a new plane: same `center` / `half_extent`, the input
 /// `u_axis` reprojected onto the plane of `n` (`v = n × u`).
 pub(super) fn repose_patch(base: &OrientedPatch, n: &Vector3<f64>) -> OrientedPatch {
@@ -562,12 +597,21 @@ pub(super) fn znormalize_into(
     channels: usize,
     n: usize,
     weights: &[f64],
-    total_w: f64,
-    sqrt_w: &[f32],
+    total_weight: f64,
+    sqrt_weights: &[f32],
     out: &mut Vec<f32>,
 ) -> Option<usize> {
-    znormalize_into_kept(raw, views, channels, n, weights, total_w, sqrt_w, out)
-        .map(|(kept, _)| kept)
+    znormalize_into_kept(
+        raw,
+        views,
+        channels,
+        n,
+        weights,
+        total_weight,
+        sqrt_weights,
+        out,
+    )
+    .map(|(kept, _)| kept)
 }
 
 /// Like [`znormalize_into`], but also returns the per-*original*-channel keep
@@ -584,8 +628,8 @@ pub(super) fn znormalize_into_kept(
     channels: usize,
     n: usize,
     weights: &[f64],
-    total_w: f64,
-    sqrt_w: &[f32],
+    total_weight: f64,
+    sqrt_weights: &[f32],
     out: &mut Vec<f32>,
 ) -> Option<(usize, Vec<bool>)> {
     let mut keep = vec![true; channels];
@@ -601,7 +645,7 @@ pub(super) fn znormalize_into_kept(
             // `FLAT_NORM_SQ_EPS` and is dropped by the flat gate (shared across
             // views) before `1/√norm_sq` is taken, so it never reaches a NaN.
             let (s1, s2) = weighted_moments(col, weights);
-            let mean = s1 / total_w;
+            let mean = s1 / total_weight;
             let norm_sq = s2 - s1 * mean;
             if norm_sq < FLAT_NORM_SQ_EPS {
                 keep[c] = false;
@@ -629,7 +673,7 @@ pub(super) fn znormalize_into_kept(
             let (mean, inv_norm) = stats[v * channels + c];
             let src = &raw[(v * channels + c) * n..][..n];
             let base = (v * kept + kc) * n;
-            znorm_write(src, sqrt_w, mean, inv_norm, &mut out[base..base + n]);
+            znorm_write(src, sqrt_weights, mean, inv_norm, &mut out[base..base + n]);
             kc += 1;
         }
     }
@@ -735,29 +779,29 @@ unsafe fn weighted_moments_avx2(col: &[f32], w: &[f64], n: usize) -> (f64, f64) 
     (s1 + t1, s2 + t2)
 }
 
-/// `out[k] = sqrt_w[k] · (src[k] − mean) · inv_norm`, all f32 — the per-pixel
+/// `out[k] = sqrt_weights[k] · (src[k] − mean) · inv_norm`, all f32 — the per-pixel
 /// z-normalize write. AVX2+FMA (8-wide) dispatched at runtime; same pattern as
 /// [`sum_sq_diff`].
 #[inline]
-fn znorm_write(src: &[f32], sqrt_w: &[f32], mean: f32, inv_norm: f32, out: &mut [f32]) {
-    let n = src.len().min(sqrt_w.len()).min(out.len());
+fn znorm_write(src: &[f32], sqrt_weights: &[f32], mean: f32, inv_norm: f32, out: &mut [f32]) {
+    let n = src.len().min(sqrt_weights.len()).min(out.len());
     #[cfg(target_arch = "x86_64")]
     {
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: guarded by the runtime feature check above.
             unsafe {
-                znorm_write_avx2(src, sqrt_w, mean, inv_norm, out, n);
+                znorm_write_avx2(src, sqrt_weights, mean, inv_norm, out, n);
             }
             return;
         }
     }
-    znorm_write_scalar(src, sqrt_w, mean, inv_norm, out, 0, n);
+    znorm_write_scalar(src, sqrt_weights, mean, inv_norm, out, 0, n);
 }
 
 /// Scalar reference for [`znorm_write`] over `[i0, i1)` (also the AVX2 tail).
 fn znorm_write_scalar(
     src: &[f32],
-    sqrt_w: &[f32],
+    sqrt_weights: &[f32],
     mean: f32,
     inv_norm: f32,
     out: &mut [f32],
@@ -765,11 +809,11 @@ fn znorm_write_scalar(
     i1: usize,
 ) {
     for k in i0..i1 {
-        out[k] = sqrt_w[k] * (src[k] - mean) * inv_norm;
+        out[k] = sqrt_weights[k] * (src[k] - mean) * inv_norm;
     }
 }
 
-/// AVX2+FMA `out[k] = sqrt_w[k]·(src[k] − mean)·inv_norm` over the first `n`
+/// AVX2+FMA `out[k] = sqrt_weights[k]·(src[k] − mean)·inv_norm` over the first `n`
 /// elements (8 f32/iteration). The `n % 8` tail falls back to
 /// [`znorm_write_scalar`].
 ///
@@ -779,7 +823,7 @@ fn znorm_write_scalar(
 #[target_feature(enable = "avx2,fma")]
 unsafe fn znorm_write_avx2(
     src: &[f32],
-    sqrt_w: &[f32],
+    sqrt_weights: &[f32],
     mean: f32,
     inv_norm: f32,
     out: &mut [f32],
@@ -791,13 +835,13 @@ unsafe fn znorm_write_avx2(
     let mut i = 0usize;
     while i + 8 <= n {
         let x = _mm256_loadu_ps(src.as_ptr().add(i));
-        let sw = _mm256_loadu_ps(sqrt_w.as_ptr().add(i));
+        let sw = _mm256_loadu_ps(sqrt_weights.as_ptr().add(i));
         let d = _mm256_sub_ps(x, m);
         let scale = _mm256_mul_ps(sw, s);
         _mm256_storeu_ps(out.as_mut_ptr().add(i), _mm256_mul_ps(scale, d));
         i += 8;
     }
-    znorm_write_scalar(src, sqrt_w, mean, inv_norm, out, i, n);
+    znorm_write_scalar(src, sqrt_weights, mean, inv_norm, out, i, n);
 }
 
 /// Reused buffers for the consensus / IRLS reductions, so scoring a candidate
@@ -1067,6 +1111,48 @@ pub(super) fn irls_view_weights(
     }
 }
 
+/// Build the unit-norm-per-channel template of a z-normalized stack `xs`
+/// (`xs[(v*channels + c)*n + k]`) weighted by `weights` into `out` (resized and
+/// overwritten). The result is directly dot-able against another z-normalized core
+/// to yield a per-channel ZNCC. `out` is a reused scratch buffer, mirroring the
+/// scratch-reuse discipline of [`ConsensusScratch`]. The natural follow-on to
+/// [`irls_view_weights`] (which fills the per-view weights this consumes).
+pub(super) fn weighted_unit_template_into(
+    xs: &[f32],
+    weights: &[f64],
+    views: usize,
+    channels: usize,
+    n: usize,
+    out: &mut Vec<f32>,
+) {
+    out.clear();
+    out.resize(channels * n, 0.0);
+    for (v, &w) in weights.iter().enumerate().take(views) {
+        let wv = w as f32;
+        for c in 0..channels {
+            let src = &xs[(v * channels + c) * n..][..n];
+            let dst = &mut out[c * n..][..n];
+            for (d, &s) in dst.iter_mut().zip(src) {
+                *d += wv * s;
+            }
+        }
+    }
+    for c in 0..channels {
+        let col = &mut out[c * n..][..n];
+        let norm = col
+            .iter()
+            .map(|&x| (x as f64) * (x as f64))
+            .sum::<f64>()
+            .sqrt();
+        if norm > 1e-12 {
+            let inv = (1.0 / norm) as f32;
+            for x in col.iter_mut() {
+                *x *= inv;
+            }
+        }
+    }
+}
+
 /// Consensus photoconsistency `Φ` over the normalized stack, per the
 /// objective. `None` when fewer than 2 views, or when the robust effective
 /// view count `1/Σwᵢ²` drops below [`MIN_EFFECTIVE_VIEWS`] (weights collapsed
@@ -1164,11 +1250,11 @@ fn eval_phi(
         view_keypoints,
     )?;
     let n = ctx.pixels.len();
-    let total_w: f64 = ctx.weights.iter().sum();
-    if total_w <= 0.0 {
+    let total_weight: f64 = ctx.weights.iter().sum();
+    if total_weight <= 0.0 {
         return None;
     }
-    let sqrt_w: Vec<f32> = ctx.weights.iter().map(|&w| w.sqrt() as f32).collect();
+    let sqrt_weights: Vec<f32> = ctx.weights.iter().map(|&w| w.sqrt() as f32).collect();
     let mut xs = Vec::new();
     let kept = prof::ZNORM.time(|| {
         znormalize_into(
@@ -1177,8 +1263,8 @@ fn eval_phi(
             channels,
             n,
             &ctx.weights,
-            total_w,
-            &sqrt_w,
+            total_weight,
+            &sqrt_weights,
             &mut xs,
         )
     })?;
@@ -1264,7 +1350,7 @@ fn coarse_to_fine(
         } else {
             (Vec::new(), Vec::new())
         };
-        let (sqrt_w, total_w): (Vec<f32>, f64) = if cache.is_some() {
+        let (sqrt_weights, total_weight): (Vec<f32>, f64) = if cache.is_some() {
             (
                 ctx.weights.iter().map(|&w| w.sqrt() as f32).collect(),
                 ctx.weights.iter().sum(),
@@ -1283,8 +1369,8 @@ fn coarse_to_fine(
                     resolution,
                     &cols,
                     &rows,
-                    &sqrt_w,
-                    total_w,
+                    &sqrt_weights,
+                    total_weight,
                     &mut scratch,
                     search_obj,
                 ),
@@ -1849,11 +1935,11 @@ impl PatchViewStack {
     fn score(&self, ctx: &LevelContext, params: &NormalRefineParams) -> Option<(f64, Vec<f64>)> {
         let raw = self.gather(&ctx.pixels)?;
         let n = ctx.pixels.len();
-        let total_w: f64 = ctx.weights.iter().sum();
-        if total_w <= 0.0 {
+        let total_weight: f64 = ctx.weights.iter().sum();
+        if total_weight <= 0.0 {
             return None;
         }
-        let sqrt_w: Vec<f32> = ctx.weights.iter().map(|&w| w.sqrt() as f32).collect();
+        let sqrt_weights: Vec<f32> = ctx.weights.iter().map(|&w| w.sqrt() as f32).collect();
         let mut xs = Vec::new();
         let kept = prof::ZNORM.time(|| {
             znormalize_into(
@@ -1862,8 +1948,8 @@ impl PatchViewStack {
                 self.channels,
                 n,
                 &ctx.weights,
-                total_w,
-                &sqrt_w,
+                total_weight,
+                &sqrt_weights,
                 &mut xs,
             )
         })?;

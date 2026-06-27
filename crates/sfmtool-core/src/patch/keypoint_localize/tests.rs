@@ -803,23 +803,7 @@ fn empty_view_set_returns_empty() {
 
 /// Build a window support over the `R×R` core (mirrors `localize_patch_keypoints`).
 fn disk_support(resolution: usize) -> Support {
-    let w_full = window_weights(PatchWindow::GaussianDisk { sigma: 0.6 }, resolution as u32);
-    let mut pixels = Vec::new();
-    let mut weights = Vec::new();
-    for (p, &w) in w_full.iter().enumerate() {
-        if w > 0.0 {
-            pixels.push(p);
-            weights.push(w);
-        }
-    }
-    let total_w: f64 = weights.iter().sum();
-    let sqrt_w: Vec<f32> = weights.iter().map(|&w| w.sqrt() as f32).collect();
-    Support {
-        pixels,
-        weights,
-        sqrt_w,
-        total_w,
-    }
+    build_support(PatchWindow::GaussianDisk { sigma: 0.6 }, resolution as u32)
 }
 
 /// A deterministic, textured `cr×cr×channels` context tile. `flat_last` forces the

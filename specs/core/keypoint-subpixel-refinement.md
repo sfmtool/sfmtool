@@ -1,6 +1,16 @@
 # Photometric Subpixel Keypoint Refinement
 
-_Status: **proposed** (design). A **standalone** algorithm: given a keypoint that
+_Status: **MVP implemented** (Phase 2). The forward-additive ECC Gauss–Newton
+refiner lives in `crates/sfmtool-core/src/patch/keypoint_subpixel.rs` (exposed to
+Python as `PatchCloud.refine_keypoints`). Both the single-pass-frozen variant
+(`max_outer_sweeps = 1`, the default) and the per-sweep-refresh variant
+(`max_outer_sweeps > 1`, with mean-per-view-move early-exit) are wired so the
+trade-off is measurable, not chosen at design time. The deferred work — per-move
+(Gauss–Seidel) incremental consensus, leave-one-out consensus, the sampler
+value+gradient interface and anisotropic value+gradient Jacobian,
+inverse-compositional ECC, and the joint bundle — remains as described in
+"Open questions" / "Design details" below. A
+**standalone** algorithm: given a keypoint that
 is **already close** to correct, refine it to sub-pixel by **local** continuous
 optimization of image photoconsistency (gradients, fractional sampling). It does
 no global search and no view selection. Its typical caller is keypoint
@@ -27,11 +37,20 @@ This is a **local refiner**, and its guarantees hold only inside that scope:
 - **Scope: local only.** It searches no grid and visits no distant candidates; it
   takes a few Gauss–Newton steps from the seed. It will not recover a grossly
   mislocalized keypoint.
-- **Does not change membership.** It moves keypoints; it never adds or drops
-  views/observations. Selection belongs to whoever produced the set.
-- **Never worse than the seed.** A step is accepted only if it raises the score
-  (and stays in frame); if none does, the seed is kept — so refining is safe even
-  when a particular keypoint turns out not to be refinable.
+- **Does not change membership (one exception).** It moves keypoints; it never
+  *adds* a view, and the only drop is the projection gate: a view in which the
+  patch centre fails to project (behind the camera or outside the frame) is
+  dropped, since the per-view offset is reported relative to that projection.
+  Selection beyond that belongs to whoever produced the set.
+- **Never worse than the seed.** A step is accepted only if it raises the ECC
+  score against the **current** consensus `T` (and stays in frame); if none does,
+  the seed is kept — so refining is safe even when a particular keypoint turns
+  out not to be refinable. With a refreshed consensus (`max_outer_sweeps > 1`)
+  the guarantee is **within a sweep**: each accepted step is non-decreasing
+  against that sweep's `T`. Across sweeps `T` changes, so the final score against
+  the final `T` is not bit-bounded below by the seed score against the seed `T`
+  (the single-pass-frozen default `max_outer_sweeps = 1` is the case where the
+  two coincide).
 
 ## Objective
 
@@ -90,10 +109,14 @@ mean/norm. Because the reference (consensus) depends on where the views sit, it 
 2. **Move each view (inner, 2–3 GN steps from its current `δ`), holding `T` fixed:**
    - Sample the view's patch core at the current `δ` (fractional, via the `Sampler`).
    - z-normalize it; form the ECC residual against `T`.
-   - Take the ECC Gauss–Newton step on the 2-DOF in-plane offset, using the
-     sampler's analytic image-gradient Jacobian (see Sampling) — composed with the
-     warp's `∂(image coords)/∂δ` — rather than finite differences; update `δ`. Stop
-     at `‖Δδ‖ < ε` (e.g. 0.01 px) or the cap.
+   - Take the ECC Gauss–Newton step on the 2-DOF in-plane offset, using the image
+     Jacobian `∂I/∂δ` of the sampled core. The **target** is the sampler's analytic
+     image-gradient Jacobian (see Sampling) — composed with the warp's
+     `∂(image coords)/∂δ` — so the gradient is LOD-consistent with the value. The
+     **MVP** computes `∂I/∂δ` by central finite differences on the warp/sample
+     coords instead (one extra render per axis); the analytic path is deferred to
+     a later phase (see "Design details"). Update `δ`. Stop at `‖Δδ‖ < ε` (e.g.
+     0.01 px) or the cap.
 3. **Repeat** from 1 until the mean per-view move is below `ε` or the sweep cap;
    one or two sweeps usually suffice (the seed is close, so the consensus barely
    moves — see the single-pass note).

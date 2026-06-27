@@ -34,8 +34,8 @@ use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear};
 use crate::camera::WarpMap;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
-    irls_view_weights, window_weights, znormalize_into_kept, ConsensusScratch, PatchWindow,
-    ProjectedImage, Sampler, FLAT_NORM_SQ_EPS,
+    build_support, irls_view_weights, weighted_unit_template_into, znormalize_into_kept,
+    ConsensusScratch, PatchWindow, ProjectedImage, Sampler, Support, FLAT_NORM_SQ_EPS,
 };
 // Only the reference scorer (`znorm_core`, test-only) needs the moment helper.
 #[cfg(test)]
@@ -139,20 +139,6 @@ pub struct KeypointLocalization {
     pub loo_zncc: Vec<f64>,
 }
 
-/// The frozen window support over the `R×R` core: the linear `row * R + col`
-/// indices of the positive-weight pixels, their window weights, and `√weight`.
-struct Support {
-    /// Linear `row * R + col` indices of the window-support pixels.
-    pixels: Vec<usize>,
-    /// Window weight per support pixel (parallel to `pixels`).
-    weights: Vec<f64>,
-    /// `√weight` per support pixel (folded into the z-normalized space so a plain
-    /// dot product realizes the windowed inner product).
-    sqrt_w: Vec<f32>,
-    /// Sum of `weights` (the windowed mean's denominator).
-    total_w: f64,
-}
-
 /// A rendered context tile for one view: source colour over a
 /// `cache_res × cache_res` grid (larger than the scored `R×R` core so the shift
 /// search can slide), plus per-pixel validity from the warp map (an invalid pixel
@@ -181,7 +167,7 @@ struct ContextTile {
 /// behind the camera or outside the frame. `w = 1` is a finite point; `w = 0` is
 /// a direction (a point at infinity), rotated into the camera frame without
 /// translation and projected as a ray.
-fn project(view: &ProjectedImage<'_>, p: &Point3<f64>, w: f64) -> Option<(f64, f64)> {
+pub(super) fn project(view: &ProjectedImage<'_>, p: &Point3<f64>, w: f64) -> Option<(f64, f64)> {
     let pc = view.cam_from_world.transform_point_homogeneous(p.coords, w);
     if pc.z <= 0.0 {
         return None;
@@ -310,60 +296,18 @@ fn znorm_core(raw: &[f32], support: &Support, keep_mask: &[bool], out: &mut [f32
         }
         let col = &raw[c * n..][..n];
         let (s1, s2) = weighted_moments_pub(col, &support.weights);
-        let mean = (s1 / support.total_w) as f32;
+        let mean = (s1 / support.total_weight) as f32;
         let norm_sq = s2 - s1 * (mean as f64);
         let dst = &mut out[kc * n..][..n];
         if norm_sq < FLAT_NORM_SQ_EPS {
             dst.fill(0.0);
         } else {
             let inv = (1.0 / norm_sq.sqrt()) as f32;
-            for (d, (&x, &sw)) in dst.iter_mut().zip(col.iter().zip(&support.sqrt_w)) {
+            for (d, (&x, &sw)) in dst.iter_mut().zip(col.iter().zip(&support.sqrt_weights)) {
                 *d = sw * (x - mean) * inv;
             }
         }
         kc += 1;
-    }
-}
-
-/// Build the unit-norm-per-channel template of a z-normalized stack `xs`
-/// (`xs[(v*channels + c)*n + k]`) weighted by `weights` into `out` (resized and
-/// overwritten). The result is directly dot-able against another z-normalized core
-/// to yield a per-channel ZNCC. `out` is a reused scratch buffer (this runs once
-/// per view per round, inside a per-point rayon batch), mirroring the
-/// scratch-reuse discipline of [`ConsensusScratch`].
-fn weighted_unit_template_into(
-    xs: &[f32],
-    weights: &[f64],
-    views: usize,
-    channels: usize,
-    n: usize,
-    out: &mut Vec<f32>,
-) {
-    out.clear();
-    out.resize(channels * n, 0.0);
-    for (v, &w) in weights.iter().enumerate().take(views) {
-        let wv = w as f32;
-        for c in 0..channels {
-            let src = &xs[(v * channels + c) * n..][..n];
-            let dst = &mut out[c * n..][..n];
-            for (d, &s) in dst.iter_mut().zip(src) {
-                *d += wv * s;
-            }
-        }
-    }
-    for c in 0..channels {
-        let col = &mut out[c * n..][..n];
-        let norm = col
-            .iter()
-            .map(|&x| (x as f64) * (x as f64))
-            .sum::<f64>()
-            .sqrt();
-        if norm > 1e-12 {
-            let inv = (1.0 / norm) as f32;
-            for x in col.iter_mut() {
-                *x *= inv;
-            }
-        }
     }
 }
 
@@ -545,12 +489,12 @@ fn search_shift(
     sc.g_n.resize(gsz, 0.0);
     sc.g_s1.resize(gsz, 0.0);
     sc.g_s2.resize(gsz, 0.0);
-    let inv_total_w = 1.0 / support.total_w;
+    let inv_total_weight = 1.0 / support.total_weight;
     for kc in 0..channels {
         let tmpl_c = &sc.tmpl[kc * n..][..n];
         sc.kern.clear();
         let mut tsum = 0.0;
-        for (&sw, &t) in support.sqrt_w.iter().zip(tmpl_c) {
+        for (&sw, &t) in support.sqrt_weights.iter().zip(tmpl_c) {
             let kk = sw as f64 * t as f64;
             sc.kern.push(kk);
             tsum += kk;
@@ -573,7 +517,7 @@ fn search_shift(
         );
         for s in 0..gsz {
             let s1 = sc.g_s1[s];
-            let mean = s1 * inv_total_w;
+            let mean = s1 * inv_total_weight;
             let norm_sq = sc.g_s2[s] - s1 * mean;
             // A channel flat in this window contributes 0 (matches `znorm_core`).
             if norm_sq >= FLAT_NORM_SQ_EPS {
@@ -811,23 +755,7 @@ pub fn localize_patch_keypoints(
     let wpp_v = 2.0 * patch.half_extent[1] / resolution as f64;
 
     // Window support over the R_s×R_s core.
-    let w_full = window_weights(params.window, resolution);
-    let mut pixels = Vec::new();
-    let mut weights = Vec::new();
-    for (p, &w) in w_full.iter().enumerate() {
-        if w > 0.0 {
-            pixels.push(p);
-            weights.push(w);
-        }
-    }
-    let total_w: f64 = weights.iter().sum();
-    let sqrt_w: Vec<f32> = weights.iter().map(|&w| w.sqrt() as f32).collect();
-    let support = Support {
-        pixels,
-        weights,
-        sqrt_w,
-        total_w,
-    };
+    let support = build_support(params.window, resolution);
 
     // Dedup the view set order-preserving (a point can carry two observations in
     // one image; refining it twice double-weights that view in the consensus).
@@ -953,8 +881,8 @@ pub fn localize_patch_keypoints(
                 channels0,
                 n,
                 &support.weights,
-                support.total_w,
-                &support.sqrt_w,
+                support.total_weight,
+                &support.sqrt_weights,
                 &mut xs,
             )
         });
