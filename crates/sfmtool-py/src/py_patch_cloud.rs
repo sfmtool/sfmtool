@@ -16,7 +16,7 @@ use sfmtool_core::patch::keypoint_localize::{
     localize_patch_cloud_keypoints, KeypointLocalizeParams,
 };
 use sfmtool_core::patch::keypoint_subpixel::{
-    refine_patch_cloud_keypoints, KeypointSubpixelParams,
+    refine_patch_cloud_keypoints, ConsensusRefresh, KeypointSubpixelParams,
 };
 use sfmtool_core::patch::normal_refine::{
     refine_patch_cloud, view_indices_from_reconstruction, CacheMode, NormalRefineParams, Objective,
@@ -1098,6 +1098,19 @@ impl PyPatchCloud {
     ///     outer_convergence_px: Stop the outer (consensus-refresh) loop once the
     ///         mean per-view move across a sweep is below this many patch-grid px.
     ///         Ignored when ``max_outer_sweeps == 1``.
+    ///     consensus_refresh: Within-sweep consensus refresh granularity.
+    ///         ``"per_sweep"`` (default) holds the consensus fixed for the
+    ///         duration of a sweep (current behavior). ``"per_move"`` is the
+    ///         spec's Gauss–Seidel incremental variant: after each view's GN
+    ///         solve, its z-normalized core delta-updates a running weighted
+    ///         sum, and the next view aligns to a freshly-incrementalized
+    ///         **shared** consensus ``normalize(S)``. (The spec's leave-one-out
+    ///         alternative was measured-and-rejected on real-track view counts
+    ///         — see the Rust ``ConsensusRefresh::PerMove`` doc.) IRLS weights
+    ///         are refreshed only at the per-sweep boundary either way.
+    ///         **Limitation:** at ``N = 2`` views ``per_move`` underestimates
+    ///         the relative offset by ~3% (the moved view's own contribution
+    ///         dominates the shared ``T``); ``N ≥ 3`` is recommended.
     ///     max_gn_steps: Max forward-additive Gauss–Newton steps per view per outer
     ///         sweep.
     ///     convergence_px: Stop a view's solve once an accepted step is below this
@@ -1117,7 +1130,7 @@ impl PyPatchCloud {
         recon, images, *, view_sets=None, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear", robust_iters=3, max_outer_sweeps=1,
         outer_convergence_px=0.005, max_gn_steps=10, convergence_px=0.01,
-        max_offset_px=2.0, point_ids=None
+        max_offset_px=2.0, consensus_refresh="per_sweep", point_ids=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn refine_keypoints<'py>(
@@ -1136,6 +1149,7 @@ impl PyPatchCloud {
         max_gn_steps: u32,
         convergence_px: f64,
         max_offset_px: f64,
+        consensus_refresh: &str,
         point_ids: Option<Vec<u32>>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let recon = &recon.inner;
@@ -1179,6 +1193,15 @@ impl PyPatchCloud {
                 )))
             }
         };
+        let consensus_refresh = match consensus_refresh {
+            "per_sweep" => ConsensusRefresh::PerSweep,
+            "per_move" => ConsensusRefresh::PerMove,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown consensus_refresh: {other:?} (expected per_sweep|per_move)"
+                )))
+            }
+        };
         let params = KeypointSubpixelParams {
             resolution,
             window,
@@ -1189,6 +1212,7 @@ impl PyPatchCloud {
             max_gn_steps,
             convergence_px,
             max_offset_px,
+            consensus_refresh,
             ..Default::default()
         };
 

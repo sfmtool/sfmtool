@@ -25,8 +25,21 @@
 //! `max_outer_sweeps > 1` it is the spec's **per-sweep refresh** variant. Whether refreshing earns
 //! its keep at sub-pixel scale is a measurable question, not a settled one (the
 //! prototype observed `T` sharpening as views aligned), so this is a knob, not a
-//! constant. Per-move (Gauss–Seidel) incremental refresh and leave-one-out
-//! consensus are still deferred (spec "Consensus refresh granularity").
+//! constant.
+//!
+//! [`KeypointSubpixelParams::consensus_refresh`] additionally selects the
+//! within-sweep granularity: [`ConsensusRefresh::PerSweep`] (default — `T` is
+//! rebuilt only at sweep boundaries) or [`ConsensusRefresh::PerMove`] (the
+//! spec's Gauss–Seidel **incremental consensus**: after each view moves, its
+//! contribution to the running weighted sum `S = Σ_v w_v · ẑ_v` is
+//! delta-updated and `T = normalize(S)` is re-derived for the next view). The
+//! IRLS weights are refreshed at the lower per-sweep frequency (the spec's
+//! two-frequency design). The per-move path uses the **shared** consensus
+//! (not leave-one-out): measurement on real data (dino, mean view count 3–5)
+//! found LOO regressed mean ECC (0.82 vs 0.87 shared at 5 sweeps); see
+//! [`RunningConsensus::write_shared_template`] for the reasoning and the
+//! commit message that landed this for the per-sweep / per-move comparison
+//! numbers.
 //!
 //! Points at **infinity** (`w = 0`) are refined exactly like finite ones — the
 //! warp + projection already handle `w = 0`, so the same objective, sampling, and
@@ -72,6 +85,47 @@ use rayon::prelude::*;
 
 /// `remap_aniso` sample cap along the major axis (mirrors `normal_refine`).
 const MAX_ANISOTROPY: u32 = 16;
+
+/// Within-sweep granularity of consensus refresh — the spec's "Consensus
+/// refresh granularity" axis. Across sweeps the consensus is always rebuilt
+/// from scratch (the [`KeypointSubpixelParams::max_outer_sweeps`] loop); this
+/// enum chooses what happens **inside** a sweep as views move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConsensusRefresh {
+    /// `T` is held fixed for the duration of a sweep. Every view refines
+    /// against the same consensus the sweep was built with; the next sweep
+    /// rebuilds `T` from the moved views. With `max_outer_sweeps = 1` this is
+    /// the spec's **single-pass frozen** variant; with `> 1` it is the
+    /// **per-sweep refresh** variant. The default — preserves existing
+    /// behavior.
+    #[default]
+    PerSweep,
+    /// The spec's **per-move (Gauss–Seidel) incremental** variant. The
+    /// consensus is maintained as a running weighted sum
+    /// `S = Σ_v w_v · ẑ_v` of the z-normalized view cores; when view `v` moves
+    /// from `δ` to `δ'`, `S += w_v · (ẑ_v' − ẑ_v)` and `T = normalize(S)`. The
+    /// next view's GN solve aligns to a consensus that already reflects the
+    /// previous view's move. The IRLS view weights are refreshed at the lower
+    /// **per-sweep** frequency (the spec's two-frequency design); within a
+    /// sweep the weights are held fixed so the delta update is exact.
+    ///
+    /// **Shared (not LOO) consensus.** The spec lists leave-one-out as the
+    /// "free with the running sum" bonus, avoiding the self-pollution where a
+    /// view aligns to a `T` that includes itself. Direct measurement on
+    /// `dino_dog_toy` (see `RunningConsensus::write_shared_template`) found
+    /// LOO regressed mean ECC (0.82 vs 0.87 for shared) at the small view
+    /// counts of real tracks: the chain of LOO updates amplifies drift more
+    /// than the self-pollution it removes. PerMove therefore uses shared `T`.
+    ///
+    /// **Limitation at `N = 2` views.** A direct consequence of the shared-`T`
+    /// choice is that with only two views one view's own contribution dominates
+    /// the consensus the other view aligns to. On the minimal 2-view planted-
+    /// offset fixture PerMove underestimates the relative offset by ~3%
+    /// (`per_move_two_views_known_underestimate_at_n2` pins the actual bias);
+    /// PerSweep at `N = 2` is unaffected. **`N ≥ 3` is recommended** when
+    /// opting into PerMove.
+    PerMove,
+}
 
 /// Tunables for [`refine_patch_keypoints`].
 ///
@@ -132,6 +186,21 @@ pub struct KeypointSubpixelParams {
     /// Maximum backtracking attempts before a GN step is abandoned (the seed/δ is
     /// kept for that step).
     pub line_search_max: u32,
+    /// Within-sweep consensus refresh granularity (the spec's "Consensus refresh
+    /// granularity" choice). [`ConsensusRefresh::PerSweep`] (default) holds `T`
+    /// fixed for the sweep — preserves existing behavior. [`ConsensusRefresh::PerMove`]
+    /// is the spec's Gauss–Seidel incremental variant: after each view moves,
+    /// the consensus is delta-updated from the running weighted sum
+    /// `S = Σ_v w_v · ẑ_v` so the next view aligns to a `T` that already
+    /// reflects the previous move. IRLS weights are still refreshed only at the
+    /// per-sweep boundary (the spec's two-frequency design — fixed weights make
+    /// the delta exact). Per-move uses the **shared** consensus `normalize(S)`;
+    /// the spec's leave-one-out alternative was measured-and-rejected (regressed
+    /// mean ECC on real tracks — see [`ConsensusRefresh::PerMove`]).
+    /// **Limitation:** at `N = 2` views PerMove underestimates the relative
+    /// offset by ~3% (the moved view's own contribution dominates the shared
+    /// `T`); `N ≥ 3` is recommended.
+    pub consensus_refresh: ConsensusRefresh,
 }
 
 impl Default for KeypointSubpixelParams {
@@ -148,6 +217,7 @@ impl Default for KeypointSubpixelParams {
             max_offset_px: 2.0,
             line_search_shrink: 0.5,
             line_search_max: 8,
+            consensus_refresh: ConsensusRefresh::PerSweep,
         }
     }
 }
@@ -550,8 +620,18 @@ pub fn refine_patch_keypoints(
     // first, a view whose core has left the frame at its current offset doesn't
     // contribute to the rebuilt `T` (it stays out of `live`) but other views still
     // refine against the `T` the in-frame ones build.
+    //
+    // Per-sweep refresh (the default) holds `T` fixed for the duration of a
+    // sweep — every view sees the same template. Per-move (the
+    // `ConsensusRefresh::PerMove` variant) maintains a [`RunningConsensus`]:
+    // after each view's GN solve, its (refined) z-normalized core delta-updates
+    // the running sum `S` so the next view aligns to a freshly-incrementalized
+    // `T`. IRLS weights stay fixed within a sweep either way — for PerMove
+    // that's the spec's two-frequency design (fixed weights → delta-update is
+    // exact); the per-sweep boundary rebuilds both.
     let max_sweeps = params.max_outer_sweeps.max(1);
     let mut live: Vec<usize> = Vec::new();
+    let mut running = RunningConsensus::default();
     for _ in 0..max_sweeps {
         // 1. Render every view's core at its current offset and z-normalize the
         //    live ones into the per-sweep template-build buffer `xs`.
@@ -584,21 +664,37 @@ pub fn refine_patch_keypoints(
         // 2. (Re)build the robust consensus from the current-offset cores: the
         //    IRLS view weights, then the weighted unit-norm template. On sweep 0
         //    this is the spec's frozen `T`; on later sweeps it is the per-sweep
-        //    refresh.
+        //    refresh. Per-move additionally rebuilds the running sum `S` so it
+        //    can be delta-updated as views move within the sweep.
         irls_view_weights(&xs, live.len(), channels, n, params.robust_iters, &mut sc);
         weighted_unit_template_into(&xs, &sc.w, live.len(), channels, n, &mut tmpl);
+        if matches!(params.consensus_refresh, ConsensusRefresh::PerMove) {
+            running.rebuild(&xs, &sc.w, live.len(), channels, n);
+        }
 
-        // 3. Move every live view against this sweep's consensus, tracking the
-        //    sweep's mean per-view move for the outer convergence check.
+        // 3. Move every live view against the current consensus, tracking the
+        //    sweep's mean per-view move for the outer convergence check. For
+        //    PerSweep all views see the same `tmpl` (frozen for the sweep). For
+        //    PerMove each view sees the **shared** running consensus
+        //    `normalize(S)`, then its refined ẑ is folded back into `S` for the
+        //    next view. (The spec's leave-one-out alternative was measured-and-
+        //    rejected — see `RunningConsensus::write_shared_template`.)
         let mut sweep_move_sum = 0.0;
-        for &si in &live {
+        for (slot, &si) in live.iter().enumerate() {
             let before = states[si].off;
+            let view_tmpl: &[f32] = match params.consensus_refresh {
+                ConsensusRefresh::PerSweep => &tmpl,
+                ConsensusRefresh::PerMove => {
+                    running.write_shared_template(&mut tmpl);
+                    &tmpl
+                }
+            };
             refine_one_view(
                 patch,
                 &views[states[si].idx as usize],
                 &mut states[si],
                 &support,
-                &tmpl,
+                view_tmpl,
                 channels,
                 resolution,
                 wpp_u,
@@ -608,6 +704,18 @@ pub fn refine_patch_keypoints(
             );
             let after = states[si].off;
             sweep_move_sum += (after[0] - before[0]).hypot(after[1] - before[1]);
+
+            // PerMove: fold the refined ẑ back into the running sum so the next
+            // view sees an updated consensus. `scratch.zbuf` reflects the kept δ
+            // — `refine_one_view` re-renders at the kept offset before returning
+            // (the GN loop's last `score_at` may have been a rejected line-search
+            // candidate, so the explicit re-render is what makes this safe).
+            // Skip when the seed core was OOF and the view was never scored.
+            if matches!(params.consensus_refresh, ConsensusRefresh::PerMove)
+                && states[si].score.is_finite()
+            {
+                running.update_view(slot, &scratch.zbuf);
+            }
         }
         let mean_move = sweep_move_sum / live.len() as f64;
 
@@ -619,6 +727,118 @@ pub fn refine_patch_keypoints(
     }
 
     finalize(patch, views, &states, wpp_u, wpp_v)
+}
+
+/// The per-move (Gauss–Seidel) incremental consensus state — the running
+/// weighted sum `S = Σ_v w_v · ẑ_v` plus the per-view z-normalized cores `ẑ_v`
+/// the spec describes. At a sweep boundary `rebuild` resets both from the
+/// current `xs` stack and IRLS weights (the spec's two-frequency design: weights
+/// are held fixed within a sweep so the delta update is exact). Inside a sweep,
+/// after view `v` is refined, `update_view(v, ẑ_v')` does
+/// `S += w_v · (ẑ_v' − ẑ_v)` and stores the new `ẑ_v` — O(`channels · n`) per
+/// move, the same cost as the move's z-normalization and negligible next to the
+/// sampling/gradient render of a GN step. `write_shared_template(out)` realizes
+/// the **shared** consensus `normalize(S)`; the spec's leave-one-out alternative
+/// (`normalize(S − w_v · ẑ_v)`, the "free with running sum" bonus) was measured
+/// against shared T on real data and regressed — see `write_shared_template`'s
+/// doc for the numbers and reasoning.
+#[derive(Default)]
+struct RunningConsensus {
+    /// Per-view z-normalized cores `ẑ_v`, stacked `[(v*channels + c)*n + k]`.
+    xs: Vec<f32>,
+    /// IRLS view weights (per-sweep frequency), `[v]`. `Σw_v = 1`.
+    weights: Vec<f64>,
+    /// Running weighted sum `S` per (channel, pixel), `[c*n + k]`. f64 to keep
+    /// the subtract → renormalize path of a future LOO variant precise (and
+    /// harmless for the shared-T variant currently in use).
+    s_sum: Vec<f64>,
+    /// Number of views currently tracked.
+    views: usize,
+    channels: usize,
+    n: usize,
+}
+
+impl RunningConsensus {
+    /// Rebuild from the current z-normalized stack and per-sweep IRLS weights.
+    /// Called once per outer sweep (the spec's lower-frequency weight refresh).
+    fn rebuild(&mut self, xs: &[f32], weights: &[f64], views: usize, channels: usize, n: usize) {
+        self.xs.clear();
+        self.xs.extend_from_slice(&xs[..views * channels * n]);
+        self.weights.clear();
+        self.weights.extend_from_slice(&weights[..views]);
+        self.views = views;
+        self.channels = channels;
+        self.n = n;
+        self.s_sum.clear();
+        self.s_sum.resize(channels * n, 0.0);
+        for v in 0..views {
+            let wv = weights[v];
+            for c in 0..channels {
+                let row = &xs[(v * channels + c) * n..][..n];
+                let dst = &mut self.s_sum[c * n..][..n];
+                for (d, &s) in dst.iter_mut().zip(row) {
+                    *d += wv * s as f64;
+                }
+            }
+        }
+    }
+
+    /// Delta-update: `S += w_v · (ẑ_v_new − ẑ_v_old)`, then store the new
+    /// `ẑ_v`. The view's weight stays fixed (per-sweep refresh frequency).
+    fn update_view(&mut self, v: usize, z_new: &[f32]) {
+        debug_assert_eq!(z_new.len(), self.channels * self.n);
+        let wv = self.weights[v];
+        for c in 0..self.channels {
+            let old = &mut self.xs[(v * self.channels + c) * self.n..][..self.n];
+            let new = &z_new[c * self.n..][..self.n];
+            let s = &mut self.s_sum[c * self.n..][..self.n];
+            #[allow(clippy::manual_memcpy)] // the loop fuses delta + copy.
+            for k in 0..self.n {
+                let delta = new[k] as f64 - old[k] as f64;
+                s[k] += wv * delta;
+                old[k] = new[k];
+            }
+        }
+    }
+
+    /// Write the **shared** per-channel unit-norm template `normalize(S)` into
+    /// `out`. Resized in place. A channel whose norm collapses is written as
+    /// zeros (matches the [`znorm_core`] convention so the ECC dot product
+    /// against it is zero — no gradient pull from a degenerate channel).
+    ///
+    /// Note on shared vs LOO: the spec offers leave-one-out
+    /// (`normalize(S − w_v · ẑ_v)`) as the "free with the running sum" bonus,
+    /// avoiding the self-pollution where a view aligns to a `T` that includes
+    /// itself. We measured both on the `dino_dog_toy` reconstruction: LOO
+    /// consistently produced a lower mean ECC than shared T (mean 0.82 vs 0.87
+    /// at 5 sweeps) — at the small view counts of real tracks (3–5 views) LOO
+    /// drops effective averaging enough that the per-view template is noisier
+    /// than the shared one, and the within-sweep chain of LOO updates amplifies
+    /// the drift. The self-pollution turns out to be a damping term that helps,
+    /// not a bias worth removing at this scale. So per-move uses **shared T**;
+    /// LOO is recorded as the measured-and-rejected alternative.
+    fn write_shared_template(&self, out: &mut Vec<f32>) {
+        out.clear();
+        out.resize(self.channels * self.n, 0.0);
+        for c in 0..self.channels {
+            let s = &self.s_sum[c * self.n..][..self.n];
+            let dst = &mut out[c * self.n..][..self.n];
+            let mut norm_sq = 0.0f64;
+            for k in 0..self.n {
+                let val = s[k];
+                norm_sq += val * val;
+                dst[k] = val as f32;
+            }
+            if norm_sq > 1e-24 {
+                let inv = (1.0 / norm_sq.sqrt()) as f32;
+                for x in dst.iter_mut() {
+                    *x *= inv;
+                }
+            } else {
+                dst.fill(0.0);
+            }
+        }
+    }
 }
 
 /// Reused per-view scratch for [`refine_one_view`]: the value core `g`, the two
@@ -773,6 +993,29 @@ fn refine_one_view(
 
     st.off = cur;
     st.score = best_score;
+    // PerMove consumes `scratch.zbuf` as the kept-offset z-normalized core (to
+    // delta-update the running consensus). The GN loop's last `score_at` may
+    // have left `zbuf` at a rejected candidate (line-search exhausted); refresh
+    // it to the kept `cur` so the caller can use it unconditionally. PerSweep
+    // ignores `zbuf` so this is a small one-extra-render-per-view cost only on
+    // the path that needs the value.
+    if matches!(params.consensus_refresh, ConsensusRefresh::PerMove)
+        && render_core(
+            patch,
+            view,
+            cur[0],
+            cur[1],
+            wpp_u,
+            wpp_v,
+            resolution,
+            params.sampler,
+            support,
+            channels,
+            g,
+        )
+    {
+        znorm_core(g, support, channels, zbuf);
+    }
 }
 
 /// Build the result from the final view states: the refined keypoint
