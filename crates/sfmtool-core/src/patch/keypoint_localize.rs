@@ -152,15 +152,55 @@ pub struct KeypointLocalization {
 /// integer in-plane shift is an integer cache-index shift, so a read at an
 /// integer offset is bit-identical to re-warping the patch at that offset (see
 /// `specs/core/keypoint-localization-search-cache.md`).
+///
+/// **Layout (stage 1 of the SIMD search kernel).** The cache is **planar per
+/// channel** in **centered `f32`**: `planes[c][row · istride + col]` holds
+/// `I − means[c]` (the channel mean over the cache). Centering is load-bearing —
+/// the windowed-ZNCC denominator `S2 − S1²/W` is a catastrophic-cancellation trap
+/// in `f32` when `I ~ 10²` (`S2 ~ 10⁷`); centering makes `S1 ≈ 0` and `S2 ≈
+/// variance · W`, so `f32` accumulation is accurate. The numerator is recovered
+/// exactly by `Ncross = Ncross' + mean · Σ kern` — algebraically identical to
+/// z-normalize-then-dot for any template. Rows are padded to `istride =
+/// align_up(cacheW − 1 + 16, 8)` so a 16-wide aligned `f32` load from any support
+/// column stays in bounds; the pad columns hold `0` (= the mean after centering,
+/// harmless — they only feed discarded grid cells). The per-pixel invalidity
+/// plane (`1.0` out of frame, else `0.0`) lives alongside in the same `istride`
+/// row layout for the SIMD validity pass; the `bool` `valid` map is kept too for
+/// the integer-tracked consensus core read.
 struct ContextTile {
     /// Side length of the (square) tile, in patch-grid px.
     res: usize,
-    /// Colour, flat `[(row * res + col) * channels + channel]` (f32).
-    px: Vec<f32>,
-    /// Per-pixel validity, `[row * res + col]`.
-    valid: Vec<bool>,
+    /// Row stride of each plane in `f32` lanes: `align_up(res − 1 + 16, 8)` so a
+    /// 16-wide aligned load from any support column stays in bounds.
+    istride: usize,
     /// Channel count.
     channels: usize,
+    /// Per-channel mean over the cache (the value subtracted to produce
+    /// [`planes`](Self::planes)). Used to recover original-scale values on the
+    /// consensus-core read (`extract_core`) and to fold back into the numerator
+    /// (`Ncross = Ncross' + mean · Σ kern`).
+    means: Vec<f32>,
+    /// Centered per-channel planes: `planes[c][row · istride + col] = I_c − means[c]`.
+    /// Length `channels`, each plane length `istride · res`.
+    planes: Vec<Vec<f32>>,
+    /// Per-pixel invalidity plane in the same `istride` row layout (`1.0` invalid,
+    /// `0.0` valid). Drives the SIMD validity count pass that gates `−∞` shifts.
+    invalid_plane: Vec<f32>,
+    /// Per-pixel validity (`true` in frame), `[row · res + col]`. The `bool` form
+    /// is what the round-loop consensus-core read (`extract_core`) checks.
+    valid: Vec<bool>,
+}
+
+/// Compute the row stride for the centered planar cache: enough lanes to admit a
+/// 16-wide aligned `f32` load starting at any column in `[0, res)`. `align_up`
+/// to 8 lanes (one `__m256`) keeps row starts naturally aligned for AVX2.
+#[inline]
+fn cache_istride(res: usize) -> usize {
+    // The widest load needed is 16 f32s (two `__m256`s) starting at column
+    // `res − 1`, which reads through `res − 1 + 15`; the buffer must hold
+    // through `res − 1 + 16` (cap). Round up to a multiple of 8.
+    let need = res - 1 + 16;
+    need.div_ceil(8) * 8
 }
 
 /// Project a homogeneous world point `(p, w)` into a view; `None` when it falls
@@ -229,23 +269,49 @@ fn render_context(
     };
     let cr = context_res as usize;
     let channels = img.channels() as usize;
-    let mut px = vec![0f32; cr * cr * channels];
+    let istride = cache_istride(cr);
+
+    // Per-channel sum → mean over the cache. We accumulate in `f64` to keep the
+    // centering exact to the last `f32` ulp (one mean per channel; cheap).
+    let mut sums = vec![0.0f64; channels];
+    let total = (cr * cr) as f64;
+    for row in 0..context_res {
+        for col in 0..context_res {
+            for (ch, slot) in sums.iter_mut().enumerate() {
+                *slot += img.get_pixel(col, row, ch as u32) as f64;
+            }
+        }
+    }
+    let means: Vec<f32> = sums.iter().map(|&s| (s / total) as f32).collect();
+
+    // Centered planar planes. Pad columns past `cr` stay at `0.0` (= the mean
+    // after centering, harmless — those columns only feed discarded grid cells
+    // past the search window).
+    let mut planes: Vec<Vec<f32>> = (0..channels).map(|_| vec![0.0f32; istride * cr]).collect();
+    let mut invalid_plane = vec![0.0f32; istride * cr];
     let mut valid = vec![false; cr * cr];
     for row in 0..context_res {
         for col in 0..context_res {
-            let p = row as usize * cr + col as usize;
-            valid[p] = map.is_valid(col, row);
-            let base = p * channels;
+            let r = row as usize;
+            let c = col as usize;
+            let row_off = r * istride + c;
+            let v = map.is_valid(col, row);
+            valid[r * cr + c] = v;
+            invalid_plane[row_off] = if v { 0.0 } else { 1.0 };
             for ch in 0..channels {
-                px[base + ch] = img.get_pixel(col, row, ch as u32) as f32;
+                let p = img.get_pixel(col, row, ch as u32) as f32;
+                planes[ch][row_off] = p - means[ch];
             }
         }
     }
     ContextTile {
         res: cr,
-        px,
-        valid,
+        istride,
         channels,
+        means,
+        planes,
+        invalid_plane,
+        valid,
     }
 }
 
@@ -264,15 +330,22 @@ fn extract_core(
     let ch = tile.channels;
     let n = support.pixels.len();
     let tile_res = tile.res;
+    let istride = tile.istride;
     for (k, &p) in support.pixels.iter().enumerate() {
         let (r, c) = (p / resolution, p % resolution);
-        let cp = (oy + r) * tile_res + (ox + c);
-        if !tile.valid[cp] {
+        // The `valid` plane stays in the tight `tile_res`-stride layout (it's a
+        // per-pixel mask for the consensus core read, not part of the SIMD hot
+        // loop); the centered planes live in the padded `istride` layout.
+        if !tile.valid[(oy + r) * tile_res + (ox + c)] {
             return false;
         }
-        let base = cp * ch;
+        let cp = (oy + r) * istride + (ox + c);
+        // Add back the per-channel mean so a core read recovers the original
+        // source value (the centered representation is an internal optimization
+        // for the SIMD search; `znorm_core` and the rest of the pipeline see
+        // the same values as the old interleaved cache).
         for cc in 0..ch {
-            out[cc * n + k] = tile.px[base + cc];
+            out[cc * n + k] = tile.planes[cc][cp] + tile.means[cc];
         }
     }
     true
@@ -356,29 +429,32 @@ fn median(values: &mut [f64]) -> f64 {
 /// Reused per-call scratch for [`search_shift`], created once per
 /// [`localize_patch_keypoints`] and shared across every view and round (the
 /// search then allocates nothing after warm-up), mirroring [`ConsensusScratch`].
+///
+/// The cache itself (centered planar `f32` planes + invalidity plane) lives on
+/// the [`ContextTile`] now, so the per-call scratch holds only the per-channel
+/// kernel, the running correlation maps, and the combined grid.
 #[derive(Default)]
 struct SearchScratch {
     /// The leave-one-out template the candidates score against (`kept_ch · n`),
     /// laid out `[c · n + k]`; the caller writes it each round.
     tmpl: Vec<f32>,
-    /// Kept tile-channel indices (the `c` where `keep_mask[c]`), len `channels`.
-    kept_ch_idx: Vec<usize>,
-    /// The context tile deinterleaved into planar kept channels —
-    /// `[kc · (cr·cr) + row·cr + col]` — the SIMD-friendly base (rendered once
-    /// per round) the whole shift grid is scored against, mirroring the fronto
-    /// cache's planar layout.
-    planes: Vec<f32>,
-    /// Per-tile-pixel invalidity (`1.0` out of frame, else `0.0`), `[row·cr+col]`.
-    invalid: Vec<f32>,
-    /// Per-support-pixel kernel `√w · tmpl` for the channel being accumulated.
-    kern: Vec<f64>,
+    /// Per-support-pixel kernel `√w · tmpl` for the channel being accumulated
+    /// (`f32` — the AVX2 kernel broadcasts these as `f32` lanes).
+    kern: Vec<f32>,
+    /// Per-support-pixel window weight `w` as `f32` (one-time conversion from the
+    /// `f64` `support.weights`; broadcast each k-step).
+    w_f32: Vec<f32>,
     /// Per-channel correlation maps over the shift grid (`(2·margin+1)²`): the
-    /// numerator `Σ kern·I` and the window moments `Σ w·I`, `Σ w·I²`.
-    g_n: Vec<f64>,
-    g_s1: Vec<f64>,
-    g_s2: Vec<f64>,
+    /// numerator `Σ kern·I_c` and the centered window moments `Σ w·I_c`,
+    /// `Σ w·I_c²` (`I_c = I − cache_mean`, so the centering algebra absorbs the
+    /// mean: the windowed ZNCC formula on centered S1/S2 is identical to the
+    /// raw-value form — see the [`ContextTile`] doc and `search_shift_scalar`).
+    g_n: Vec<f32>,
+    g_s1: Vec<f32>,
+    g_s2: Vec<f32>,
     /// Per-shift count of out-of-frame support pixels (a shift is scorable iff 0).
-    ginv: Vec<f64>,
+    /// `f32` — values are small integers (≤ `n`).
+    ginv: Vec<f32>,
     /// Combined ZNCC grid over the `±margin` window (`(2·margin+1)²`).
     grid: Vec<f64>,
 }
@@ -434,80 +510,70 @@ fn search_shift(
     base_x: usize,
 ) -> Option<ShiftResult> {
     let n = support.pixels.len();
-    let cr = tile.res;
+    let istride = tile.istride;
     // The search grid's origin (`gy = gx = 0`) reads the window at `base − margin`.
     let win_oy = base_y - margin as usize;
     let win_ox = base_x - margin as usize;
     let span = (2 * margin + 1) as usize;
     let gsz = span * span;
-    let tc = tile.channels;
-    let plane_len = cr * cr;
 
-    // The kept tile-channel indices (where `keep_mask` is set).
-    sc.kept_ch_idx.clear();
-    sc.kept_ch_idx
-        .extend((0..keep_mask.len()).filter(|&c| keep_mask[c]));
-    debug_assert_eq!(sc.kept_ch_idx.len(), channels);
+    debug_assert_eq!(keep_mask.iter().filter(|&&k| k).count(), channels);
 
-    // Deinterleave the kept channels into planar f32, plus the per-pixel
-    // invalidity plane — the base the shift grid scores against.
-    sc.planes.clear();
-    sc.planes.resize(channels * plane_len, 0.0);
-    sc.invalid.clear();
-    sc.invalid.resize(plane_len, 0.0);
-    for i in 0..plane_len {
-        if !tile.valid[i] {
-            sc.invalid[i] = 1.0;
-        }
-        let base = i * tc;
-        for (kc, &c) in sc.kept_ch_idx.iter().enumerate() {
-            sc.planes[kc * plane_len + i] = tile.px[base + c];
-        }
-    }
+    // Per-support `w` as f32 (one-time conversion the AVX2 kernel can broadcast).
+    sc.w_f32.clear();
+    sc.w_f32.extend(support.weights.iter().map(|&w| w as f32));
 
     // Validity: count out-of-frame support pixels per shift (channel-independent);
     // a shift with any is unscorable, matching `extract_core`'s all-valid gate.
     sc.ginv.clear();
     sc.ginv.resize(gsz, 0.0);
     accumulate_count(
-        &sc.invalid,
+        &tile.invalid_plane,
         support,
         resolution,
-        cr,
+        istride,
         span,
         win_oy,
         win_ox,
         &mut sc.ginv,
     );
 
-    // Per kept channel: accumulate the three correlation maps, then fold the
-    // channel's ZNCC into the combined grid. The numerator's mean term is carried
-    // explicitly (`mean·Σ√w·tmpl`) so this matches the per-candidate path even
-    // when the template is not exactly zero-weighted-mean.
+    // Per kept channel: accumulate the three correlation maps over the centered
+    // plane, then fold the channel's ZNCC into the combined grid. With centered
+    // values, `S2 − S1²/W` is the same algebra as raw and the mean offset in the
+    // numerator cancels (`Σkern = tsum` exactly by construction), so the combine
+    // step is identical to the raw-value formula — see the [`ContextTile`] doc.
+    // The combined `grid` accumulates across channels and must start at zero;
+    // `clear()` + `resize()` so a reused scratch is reliably zeroed up front,
+    // not only on grow. `g_n / g_s1 / g_s2` are sized here (overwritten per
+    // channel by `compute_channel_grids`, no pre-zero needed).
     sc.grid.clear();
     sc.grid.resize(gsz, 0.0);
     sc.g_n.resize(gsz, 0.0);
     sc.g_s1.resize(gsz, 0.0);
     sc.g_s2.resize(gsz, 0.0);
     let inv_total_weight = 1.0 / support.total_weight;
-    for kc in 0..channels {
-        let tmpl_c = &sc.tmpl[kc * n..][..n];
-        sc.kern.clear();
-        let mut tsum = 0.0;
-        for (&sw, &t) in support.sqrt_weights.iter().zip(tmpl_c) {
-            let kk = sw as f64 * t as f64;
-            sc.kern.push(kk);
-            tsum += kk;
+    let mut kc_out = 0usize;
+    for (c, &keep) in keep_mask.iter().enumerate() {
+        if !keep {
+            continue;
         }
-        sc.g_n.fill(0.0);
-        sc.g_s1.fill(0.0);
-        sc.g_s2.fill(0.0);
-        accumulate_channel(
-            &sc.planes[kc * plane_len..][..plane_len],
+        let tmpl_c = &sc.tmpl[kc_out * n..][..n];
+        sc.kern.clear();
+        let mut tsum = 0.0f64;
+        for (&sw, &t) in support.sqrt_weights.iter().zip(tmpl_c) {
+            let kk = sw * t;
+            sc.kern.push(kk);
+            tsum += kk as f64;
+        }
+        // `compute_channel_grids` overwrites; no pre-zero needed.
+        compute_channel_grids(
+            &tile.planes[c],
             support,
             &sc.kern,
+            &sc.w_f32,
             resolution,
-            cr,
+            istride,
             span,
             win_oy,
             win_ox,
@@ -516,14 +582,17 @@ fn search_shift(
             &mut sc.g_s2,
         );
         for s in 0..gsz {
-            let s1 = sc.g_s1[s];
+            let s1 = sc.g_s1[s] as f64;
+            let s2 = sc.g_s2[s] as f64;
+            let nval = sc.g_n[s] as f64;
             let mean = s1 * inv_total_weight;
-            let norm_sq = sc.g_s2[s] - s1 * mean;
+            let norm_sq = s2 - s1 * mean;
             // A channel flat in this window contributes 0 (matches `znorm_core`).
             if norm_sq >= FLAT_NORM_SQ_EPS {
-                sc.grid[s] += (sc.g_n[s] - mean * tsum) / norm_sq.sqrt();
+                sc.grid[s] += (nval - mean * tsum) / norm_sq.sqrt();
             }
         }
+        kc_out += 1;
     }
 
     // Average over channels; out-of-frame shifts score −∞ (never chosen).
@@ -577,41 +646,95 @@ fn search_shift(
     })
 }
 
-/// Accumulate, over the support pixels, one channel's per-shift correlation maps:
-/// numerator `g_n[s] = Σ_k kern[k]·I[s+k]` and window moments
-/// `g_s1[s] = Σ_k w[k]·I[s+k]`, `g_s2[s] = Σ_k w[k]·I[s+k]²`, where `I` is the
-/// channel's planar context tile and `s` runs over the `span×span` shift grid.
-/// `(win_oy, win_ox)` is the cache index of the search grid's `(gy, gx) = (0, 0)`
-/// cell (the window's top-left, at the view's integer base offset minus `margin`).
-/// The inner `gx` loop walks a contiguous tile row and a contiguous grid row (a
-/// fused SAXPY) — the vectorizable core of the search.
+/// **Compute and overwrite** one channel's per-shift correlation grids over the
+/// `span × span` shift window: numerator `g_n[s] = Σ_k kern[k]·I[s+k]` and the
+/// centered window moments `g_s1[s] = Σ_k w[k]·I[s+k]`,
+/// `g_s2[s] = Σ_k w[k]·I[s+k]²`. `I` is the channel's **centered** planar plane
+/// (`I = I_raw − cache_mean`, stored in the `istride`-row-stride
+/// [`ContextTile::planes`]). `(win_oy, win_ox)` is the cache index of the search
+/// grid's `(gy, gx) = (0, 0)` cell (the window's top-left, at the view's integer
+/// base offset minus `margin`). On return, `g_n / g_s1 / g_s2` hold the per-shift
+/// grids — they are overwritten, not accumulated; the caller does **not** need to
+/// pre-zero them.
+///
+/// Runtime-dispatched to a hand-rolled AVX2 kernel where available (mirrors
+/// [`super::normal_refine::fronto_cache::resample_support_avx2`]); the scalar
+/// form is the reference, the non-x86 / non-AVX2 fallback, and the path for spans
+/// larger than the AVX2 kernel's 16-lane row.
 #[allow(clippy::too_many_arguments)]
-fn accumulate_channel(
+fn compute_channel_grids(
     plane: &[f32],
     support: &Support,
-    kern: &[f64],
+    kern: &[f32],
+    w: &[f32],
     resolution: usize,
-    cr: usize,
+    istride: usize,
     span: usize,
     win_oy: usize,
     win_ox: usize,
-    g_n: &mut [f64],
-    g_s1: &mut [f64],
-    g_s2: &mut [f64],
+    g_n: &mut [f32],
+    g_s1: &mut [f32],
+    g_s2: &mut [f32],
 ) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // The AVX2 kernel handles spans up to 16 (one pair of `__m256` lanes per
+        // gy row). The default `span = 13` fits; larger spans fall back to scalar.
+        if span <= 16 && is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: see `compute_channel_grids_avx2`'s SAFETY block — the runtime
+            // feature check, `span ≤ 16`, and the cache's `istride` padding plus the
+            // `win_o*`/`r_k`/`c_k` invariants ensure every 16-wide load stays in
+            // bounds of `plane[..istride * cache_rows]`.
+            unsafe {
+                return compute_channel_grids_avx2(
+                    plane, support, kern, w, resolution, istride, span, win_oy, win_ox, g_n, g_s1,
+                    g_s2,
+                );
+            }
+        }
+    }
+    compute_channel_grids_scalar(
+        plane, support, kern, w, resolution, istride, span, win_oy, win_ox, g_n, g_s1, g_s2,
+    );
+}
+
+/// Scalar reference for [`compute_channel_grids`]: the algebra the AVX2 kernel
+/// must match, the non-x86 / non-AVX2 fallback, and the equivalence test's oracle.
+/// Internally uses a k-outer in-memory accumulator over the `(N, S1, S2)` grids;
+/// the function owns its outputs (zeroes them before accumulating) so the external
+/// contract is "overwrite", matching the AVX2 path.
+#[allow(clippy::too_many_arguments)]
+fn compute_channel_grids_scalar(
+    plane: &[f32],
+    support: &Support,
+    kern: &[f32],
+    w: &[f32],
+    resolution: usize,
+    istride: usize,
+    span: usize,
+    win_oy: usize,
+    win_ox: usize,
+    g_n: &mut [f32],
+    g_s1: &mut [f32],
+    g_s2: &mut [f32],
+) {
+    let gsz = span * span;
+    g_n[..gsz].fill(0.0);
+    g_s1[..gsz].fill(0.0);
+    g_s2[..gsz].fill(0.0);
     for (k, &p) in support.pixels.iter().enumerate() {
         let r_k = p / resolution;
         let c_k = p % resolution;
-        let w_k = support.weights[k];
+        let w_k = w[k];
         let kern_k = kern[k];
         for gy in 0..span {
-            let src = &plane[(gy + win_oy + r_k) * cr + (win_ox + c_k)..][..span];
+            let src = &plane[(gy + win_oy + r_k) * istride + (win_ox + c_k)..][..span];
             let gbase = gy * span;
             let on = &mut g_n[gbase..][..span];
             let o1 = &mut g_s1[gbase..][..span];
             let o2 = &mut g_s2[gbase..][..span];
             for gx in 0..span {
-                let v = src[gx] as f64;
+                let v = src[gx];
                 on[gx] += kern_k * v;
                 o1[gx] += w_k * v;
                 o2[gx] += w_k * v * v;
@@ -620,29 +743,154 @@ fn accumulate_channel(
     }
 }
 
+/// Hand-rolled AVX2 implementation of [`compute_channel_grids`]. Per `gy` row,
+/// holds the row's `span ≤ 16` cells of `(N, S1, S2)` in 6 YMM accumulators
+/// (two `__m256` each) across the `k`-loop; the centered plane streams through
+/// once. Inner loop: **2 loads, 2 mul, 6 FMA, 2 broadcasts** for 16 lanes — the
+/// whole plane is in L1, so every load hits L1. Overwrites the output grids
+/// (per [`compute_channel_grids`]); the lanes past `span` are spilled to a stack
+/// scratch and discarded by the `copy_from_slice` that follows.
+///
+/// The `span → 16` lane padding wastes `(16 − span) / 16` of the FMA throughput
+/// (~19% at `span = 13`), per the spec — acceptable for the gain of holding the
+/// row's accumulators in registers. Combine (per-row, after the k-loop) is scalar
+/// over `span` cells — small relative to the inner loop (AVX2 `rsqrt` is an open
+/// question called out in the spec; skip for stage 1).
+///
+/// # Safety
+///
+/// The caller must uphold:
+///
+/// 1. **CPU features:** `is_x86_feature_detected!("avx2") &&
+///    is_x86_feature_detected!("fma")` (the `#[target_feature]` enable is
+///    sound only when the runtime has these).
+/// 2. **Span fits in 16 lanes:** `span ≤ 16` (one pair of `__m256` per `gy`
+///    row); larger spans must take the scalar fallback.
+/// 3. **Plane buffer covers every 16-wide load:** for every support pixel `k`
+///    with `r_k = pixel/resolution`, `c_k = pixel%resolution`, and every
+///    `gy ∈ [0, span)`,
+///    `(gy + win_oy + r_k) * istride + (win_ox + c_k) + 16 ≤ plane.len()`.
+///    This is what the cache's `istride = align_up(cacheW − 1 + 16, 8)`
+///    padding plus the `win_o*`/`r_k`/`c_k` bounds in `search_shift` guarantee.
+/// 4. **Output buffers cover the span × span grid:**
+///    `g_n.len()`, `g_s1.len()`, `g_s2.len() ≥ span * span`.
+/// 5. **`support.pixels` is laid out as `row * resolution + col`** so `r_k <
+///    resolution` and `c_k < resolution` — both contribute to invariant 3.
+///
+/// `debug_assert!`s spot-check (2), (4), and the tight per-call worst case of
+/// (3); release builds rely on the caller's contract.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn compute_channel_grids_avx2(
+    plane: &[f32],
+    support: &Support,
+    kern: &[f32],
+    w: &[f32],
+    resolution: usize,
+    istride: usize,
+    span: usize,
+    win_oy: usize,
+    win_ox: usize,
+    g_n: &mut [f32],
+    g_s1: &mut [f32],
+    g_s2: &mut [f32],
+) {
+    use std::arch::x86_64::*;
+    debug_assert!(span <= 16, "AVX2 kernel handles spans up to 16, got {span}");
+    let gsz = span * span;
+    debug_assert!(
+        g_n.len() >= gsz && g_s1.len() >= gsz && g_s2.len() >= gsz,
+        "output grids must cover span * span"
+    );
+    // Worst-case 16-wide load index: largest `r_k`, `c_k`, and `gy`. The support
+    // is `row * resolution + col` with both `< resolution`, so `r_k, c_k ≤
+    // resolution − 1`; `gy ≤ span − 1`. (Spot-check the bound at the per-call
+    // worst case; the caller is responsible per the SAFETY contract.)
+    if let Some(&p_max) = support.pixels.iter().max() {
+        let r_max = p_max / resolution;
+        let c_max = p_max % resolution;
+        let worst_base = (span - 1 + win_oy + r_max) * istride + (win_ox + c_max);
+        debug_assert!(
+            worst_base + 16 <= plane.len(),
+            "AVX2 load would read past the centered plane: \
+             worst_base+16={} > plane.len()={} (span={span}, istride={istride}, \
+             win_oy={win_oy}, win_ox={win_ox}, r_max={r_max}, c_max={c_max})",
+            worst_base + 16,
+            plane.len(),
+        );
+    }
+    let plane_ptr = plane.as_ptr();
+    let pixels = support.pixels.as_ptr();
+    let n = support.pixels.len();
+    let kern_ptr = kern.as_ptr();
+    let w_ptr = w.as_ptr();
+    // Per-row temporaries that mirror the YMM accumulators when we store them.
+    let mut tmp = [0.0f32; 16];
+    for gy in 0..span {
+        let row_y = gy + win_oy;
+        let mut n_lo = _mm256_setzero_ps();
+        let mut n_hi = _mm256_setzero_ps();
+        let mut s1_lo = _mm256_setzero_ps();
+        let mut s1_hi = _mm256_setzero_ps();
+        let mut s2_lo = _mm256_setzero_ps();
+        let mut s2_hi = _mm256_setzero_ps();
+        for k in 0..n {
+            let p = *pixels.add(k);
+            let r_k = p / resolution;
+            let c_k = p % resolution;
+            let base = (row_y + r_k) * istride + (win_ox + c_k);
+            let src_lo = _mm256_loadu_ps(plane_ptr.add(base));
+            let src_hi = _mm256_loadu_ps(plane_ptr.add(base + 8));
+            let kb = _mm256_set1_ps(*kern_ptr.add(k));
+            let wb = _mm256_set1_ps(*w_ptr.add(k));
+            n_lo = _mm256_fmadd_ps(kb, src_lo, n_lo);
+            n_hi = _mm256_fmadd_ps(kb, src_hi, n_hi);
+            s1_lo = _mm256_fmadd_ps(wb, src_lo, s1_lo);
+            s1_hi = _mm256_fmadd_ps(wb, src_hi, s1_hi);
+            let sq_lo = _mm256_mul_ps(src_lo, src_lo);
+            let sq_hi = _mm256_mul_ps(src_hi, src_hi);
+            s2_lo = _mm256_fmadd_ps(wb, sq_lo, s2_lo);
+            s2_hi = _mm256_fmadd_ps(wb, sq_hi, s2_hi);
+        }
+        // Combine: spill the row's 16-lane accumulators and copy the first `span`
+        // lanes into the channel-shared grid maps. The spilled buffer is `[lo|hi]`.
+        let gbase = gy * span;
+        let mut store_first = |acc_lo: __m256, acc_hi: __m256, dst: &mut [f32]| {
+            _mm256_storeu_ps(tmp.as_mut_ptr(), acc_lo);
+            _mm256_storeu_ps(tmp.as_mut_ptr().add(8), acc_hi);
+            dst[..span].copy_from_slice(&tmp[..span]);
+        };
+        store_first(n_lo, n_hi, &mut g_n[gbase..][..span]);
+        store_first(s1_lo, s1_hi, &mut g_s1[gbase..][..span]);
+        store_first(s2_lo, s2_hi, &mut g_s2[gbase..][..span]);
+    }
+}
+
 /// Accumulate the per-shift count of out-of-frame support pixels (`invalid` is
 /// `1.0` where the tile pixel is invalid, else `0.0`). A shift is scorable iff its
 /// count is `0` (every support pixel in frame), the grid analogue of
-/// [`extract_core`] returning `false` for any invalid support pixel.
+/// [`extract_core`] returning `false` for any invalid support pixel. The invalidity
+/// plane lives in the same `istride` row layout as the centered planes.
 #[allow(clippy::too_many_arguments)]
 fn accumulate_count(
     invalid: &[f32],
     support: &Support,
     resolution: usize,
-    cr: usize,
+    istride: usize,
     span: usize,
     win_oy: usize,
     win_ox: usize,
-    g: &mut [f64],
+    g: &mut [f32],
 ) {
     for &p in &support.pixels {
         let r_k = p / resolution;
         let c_k = p % resolution;
         for gy in 0..span {
-            let src = &invalid[(gy + win_oy + r_k) * cr + (win_ox + c_k)..][..span];
+            let src = &invalid[(gy + win_oy + r_k) * istride + (win_ox + c_k)..][..span];
             let gr = &mut g[gy * span..][..span];
             for gx in 0..span {
-                gr[gx] += src[gx] as f64;
+                gr[gx] += src[gx];
             }
         }
     }
