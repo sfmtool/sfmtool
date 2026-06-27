@@ -567,82 +567,88 @@ fn search_shift(
             tsum += kk as f64;
         }
         // `compute_channel_grids` overwrites; no pre-zero needed.
-        compute_channel_grids(
-            &tile.planes[c],
-            support,
-            &sc.kern,
-            &sc.w_f32,
-            resolution,
-            istride,
-            span,
-            win_oy,
-            win_ox,
-            &mut sc.g_n,
-            &mut sc.g_s1,
-            &mut sc.g_s2,
-        );
-        for s in 0..gsz {
-            let s1 = sc.g_s1[s] as f64;
-            let s2 = sc.g_s2[s] as f64;
-            let nval = sc.g_n[s] as f64;
-            let mean = s1 * inv_total_weight;
-            let norm_sq = s2 - s1 * mean;
-            // A channel flat in this window contributes 0 (matches `znorm_core`).
-            if norm_sq >= FLAT_NORM_SQ_EPS {
-                sc.grid[s] += (nval - mean * tsum) / norm_sq.sqrt();
+        prof::SEARCH_ACC.time(|| {
+            compute_channel_grids(
+                &tile.planes[c],
+                support,
+                &sc.kern,
+                &sc.w_f32,
+                resolution,
+                istride,
+                span,
+                win_oy,
+                win_ox,
+                &mut sc.g_n,
+                &mut sc.g_s1,
+                &mut sc.g_s2,
+            );
+        });
+        prof::SEARCH_COMBINE.time(|| {
+            for s in 0..gsz {
+                let s1 = sc.g_s1[s] as f64;
+                let s2 = sc.g_s2[s] as f64;
+                let nval = sc.g_n[s] as f64;
+                let mean = s1 * inv_total_weight;
+                let norm_sq = s2 - s1 * mean;
+                // A channel flat in this window contributes 0 (matches `znorm_core`).
+                if norm_sq >= FLAT_NORM_SQ_EPS {
+                    sc.grid[s] += (nval - mean * tsum) / norm_sq.sqrt();
+                }
             }
-        }
+        });
         kc_out += 1;
     }
 
-    // Average over channels; out-of-frame shifts score −∞ (never chosen).
-    let chf = channels as f64;
-    let at =
-        |dy: i64, dx: i64| -> usize { ((dy + margin) as usize) * span + (dx + margin) as usize };
-    let mut best = (f64::NEG_INFINITY, 0i64, 0i64);
-    for dy in -margin..=margin {
-        for dx in -margin..=margin {
-            let s = at(dy, dx);
-            let z = if sc.ginv[s] > 0.5 {
-                f64::NEG_INFINITY
-            } else {
-                sc.grid[s] / chf
-            };
-            sc.grid[s] = z;
-            if z > best.0 {
-                best = (z, dy, dx);
+    // Average over channels, find the integer argmax, and refine sub-pixel by a
+    // separable parabolic fit. Out-of-frame shifts score −∞ (never chosen).
+    prof::SEARCH_ARGMAX.time(|| {
+        let chf = channels as f64;
+        let at = |dy: i64, dx: i64| -> usize {
+            ((dy + margin) as usize) * span + (dx + margin) as usize
+        };
+        let mut best = (f64::NEG_INFINITY, 0i64, 0i64);
+        for dy in -margin..=margin {
+            for dx in -margin..=margin {
+                let s = at(dy, dx);
+                let z = if sc.ginv[s] > 0.5 {
+                    f64::NEG_INFINITY
+                } else {
+                    sc.grid[s] / chf
+                };
+                sc.grid[s] = z;
+                if z > best.0 {
+                    best = (z, dy, dx);
+                }
             }
         }
-    }
-    if !best.0.is_finite() {
-        return None;
-    }
-    let (peak, py, px) = best;
-    let grid = &sc.grid;
-    // Separable parabolic sub-pixel using the integer neighbours, when both are
-    // finite (fall back to the integer peak at a frame edge).
-    let nb = |dy: i64, dx: i64| -> Option<f64> {
-        if dy.abs() <= margin && dx.abs() <= margin {
-            let g = grid[at(dy, dx)];
-            g.is_finite().then_some(g)
-        } else {
-            None
+        if !best.0.is_finite() {
+            return None;
         }
-    };
-    let sy = match (nb(py - 1, px), nb(py + 1, px)) {
-        (Some(l), Some(r)) => parabolic(peak, l, r),
-        _ => 0.0,
-    };
-    let sx = match (nb(py, px - 1), nb(py, px + 1)) {
-        (Some(l), Some(r)) => parabolic(peak, l, r),
-        _ => 0.0,
-    };
-    Some(ShiftResult {
-        dx: px as f64 + sx,
-        dy: py as f64 + sy,
-        ix: px,
-        iy: py,
-        peak,
+        let (peak, py, px) = best;
+        let grid = &sc.grid;
+        let nb = |dy: i64, dx: i64| -> Option<f64> {
+            if dy.abs() <= margin && dx.abs() <= margin {
+                let g = grid[at(dy, dx)];
+                g.is_finite().then_some(g)
+            } else {
+                None
+            }
+        };
+        let sy = match (nb(py - 1, px), nb(py + 1, px)) {
+            (Some(l), Some(r)) => parabolic(peak, l, r),
+            _ => 0.0,
+        };
+        let sx = match (nb(py, px - 1), nb(py, px + 1)) {
+            (Some(l), Some(r)) => parabolic(peak, l, r),
+            _ => 0.0,
+        };
+        Some(ShiftResult {
+            dx: px as f64 + sx,
+            dy: py as f64 + sy,
+            ix: px,
+            iy: py,
+            peak,
+        })
     })
 }
 

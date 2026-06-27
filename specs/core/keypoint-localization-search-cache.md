@@ -289,11 +289,11 @@ chosen `m`, and revisit a non-exhaustive strategy only if the grid search is
 still hot — guarding robustness, since the fine tune does not backstop a missed
 cell.
 
-## Stage 2 (follow-up): integer `i16` correlation
+## Stage 2 (follow-up): integer `i16` correlation — investigated, dropped
 
-The source is `u8`, so the cache can be `u8`/`i16` and the hot accumulation can
-use integer SIMD (`_mm256_madd_epi16` fuses mul+add at 16 `i16` lanes;
-`_mm256_sad_epu8` sums `u8` nearly free) — potentially 2× the f32 lanes.
+The source is `u8`, so in principle the cache can be `u8`/`i16` and the hot
+accumulation can use integer SIMD (`_mm256_madd_epi16` fuses mul+add at 16 `i16`
+lanes; `_mm256_sad_epu8` sums `u8` nearly free) — potentially 2× the f32 lanes.
 `Ncross` (`Σ kern_q·I`) and `S1` (`Σ I`) integerize cleanly.
 
 **The snag is `S2 = Σ w·I²`**: `I²` is 16-bit and the per-pixel weight does not
@@ -304,8 +304,36 @@ kernel — an *approximation* of the ZNCC denominator. It is no longer
 bit-equivalent to the reference, so stage 2 is gated on **argmax agreement**
 (does it pick the same shifts?) and a real speedup over stage 1, not a tolerance.
 
-Build stage 1 first (provably equivalent), then prototype stage 2 and keep it
-only if it is meaningfully faster *and* the registrations don't drift.
+> _**Investigated 2026-06-27 (branch `keypoint-localize-i16`, not merged).**_
+> A prototype implementation (scalar reference + AVX2 with `vpmulld`/`vpaddd`
+> over i32 lanes, plus a u8 cache plane and an `SFMTOOL_LOCALIZE_KERNEL`
+> dispatcher in `f32` / `i16` / `compare` modes) was benchmarked head-to-head
+> against stage 1 on dino (18 961 points). **Both gates failed:**
+>
+> - **No speedup.** `search_shift` i16: **98.7 µs/call** vs stage-1 f32 **93.6
+>   µs/call** (~5% slower). Root cause: `vpmulld` is 5c/2c vs FMA at 4c/0.5c,
+>   and the i32-lane design (8 cells/half, same lane count as f32) doesn't
+>   recover throughput against the FMA-saturated f32 inner loop. The "2× lane
+>   count" potential needs the trickier `_mm256_madd_epi16` horizontal-pair-sum
+>   design, which the prototype didn't attempt because the surrounding gather
+>   pattern (now ~88% of `search_shift` per the new `search_acc` sub-phase
+>   timer) is already the bottleneck and the multiplies aren't the dominant
+>   cost.
+> - **14.67% argmax disagreement** in compare mode (1 410 766 agree /
+>   242 472 disagree out of 1 653 238 calls). The kept point count is
+>   nevertheless identical to f32 (18 961) — the multi-round congealing
+>   loop absorbs per-call disagreements via parabolic residuals and view-
+>   selection gates. Acceptable in isolation but no speedup to trade for it.
+>
+> The investigation's permanent residue in the codebase is just the
+> `search_acc` / `search_combine` / `search_argmax` sub-phase timers in
+> `keypoint_localize::prof`, which proved valuable in isolating where time
+> goes inside `search_shift` and would inform any future revisit. The i16
+> kernel itself, the u8 cache plane, the dispatcher, and the compare-mode
+> agreement counters were not committed — they would have bloated the f32 hot
+> path (the u8 plane is built every render at ~20 KB/view extra) for no
+> measured benefit. Future revisit should start from the `madd_epi16` lane-
+> packing design or take a different angle (e.g. attack the gather pattern).
 
 ## Numerical fidelity & validation
 
