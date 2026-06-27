@@ -77,6 +77,17 @@ pub static TEMPLATE: Phase = Phase::new("loo_template");
 /// Per-view sub-pixel translation search against the LOO reference
 /// (`search_shift`).
 pub static SEARCH: Phase = Phase::new("search_shift");
+/// Sub-phase of [`SEARCH`]: the per-channel correlation-grid accumulation
+/// (`compute_channel_grids` — the dispatched inner kernel, `f32` or `i16`).
+/// Includes the validity-count pass on the invalidity plane.
+pub static SEARCH_ACC: Phase = Phase::new("search_acc");
+/// Sub-phase of [`SEARCH`]: the per-channel grid combine into the per-shift ZNCC
+/// (denominator + numerator-fold) and the cross-channel sum into the combined
+/// grid. Captures the non-vectorized "after the inner loop" cost.
+pub static SEARCH_COMBINE: Phase = Phase::new("search_combine");
+/// Sub-phase of [`SEARCH`]: the argmax pass + separable parabolic sub-pixel fit
+/// on the combined grid.
+pub static SEARCH_ARGMAX: Phase = Phase::new("search_argmax");
 
 // Event counters (no time attached).
 /// Congealing rounds executed (summed over points).
@@ -95,7 +106,16 @@ pub fn count(c: &AtomicU64, n: u64) {
     }
 }
 
-const PHASES: [&Phase; 5] = [&TOTAL, &RENDER, &ZNORM, &TEMPLATE, &SEARCH];
+const PHASES: [&Phase; 8] = [
+    &TOTAL,
+    &RENDER,
+    &ZNORM,
+    &TEMPLATE,
+    &SEARCH,
+    &SEARCH_ACC,
+    &SEARCH_COMBINE,
+    &SEARCH_ARGMAX,
+];
 
 /// Zero all counters (start of a profiled batch).
 pub fn reset() {
