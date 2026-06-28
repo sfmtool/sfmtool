@@ -608,7 +608,7 @@ def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None)
     # Get track arrays
     track_image_indexes = recon.track_image_indexes
     track_feature_indexes = recon.track_feature_indexes
-    track_point3d_indexes = recon.track_point_ids
+    track_point3d_indexes = recon.track_point_indexes
     positions_xyz = recon.positions
     colors_rgb = recon.colors
     reprojection_errors = recon.errors

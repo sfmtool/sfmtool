@@ -181,7 +181,7 @@ def refine_camera_poses(
     for img_idx, feat_idx, point_id in zip(
         merged_tracks["image_indexes"],
         merged_tracks["feature_indexes"],
-        merged_tracks["point_ids"],
+        merged_tracks["point_indexes"],
     ):
         if img_idx not in image_observations:
             image_observations[img_idx] = []

@@ -157,14 +157,14 @@ class TestComputeTriangulationAngles:
         positions = np.array([[1.0, 0.0, 1.0]])
 
         track_image_indexes = np.array([0, 1], dtype=np.uint32)
-        track_point_ids = np.array([0, 0], dtype=np.uint32)
+        track_point_indexes = np.array([0, 0], dtype=np.uint32)
 
         angles = compute_triangulation_angles(
             positions,
             quaternions,
             translations,
             track_image_indexes,
-            track_point_ids,
+            track_point_indexes,
         )
 
         # Expected angle: arctan(1/1) * 2 = 90 degrees
@@ -182,14 +182,14 @@ class TestComputeTriangulationAngles:
         positions = np.array([[1.0, 0.0, 5.0]])
 
         track_image_indexes = np.array([0], dtype=np.uint32)
-        track_point_ids = np.array([0], dtype=np.uint32)
+        track_point_indexes = np.array([0], dtype=np.uint32)
 
         angles = compute_triangulation_angles(
             positions,
             quaternions,
             translations,
             track_image_indexes,
-            track_point_ids,
+            track_point_indexes,
         )
 
         assert angles[0] == 0.0
@@ -216,14 +216,14 @@ class TestComputeTriangulationAngles:
         )
 
         track_image_indexes = np.array([0, 1, 0, 1, 2], dtype=np.uint32)
-        track_point_ids = np.array([0, 0, 1, 1, 1], dtype=np.uint32)
+        track_point_indexes = np.array([0, 0, 1, 1, 1], dtype=np.uint32)
 
         angles = compute_triangulation_angles(
             positions,
             quaternions,
             translations,
             track_image_indexes,
-            track_point_ids,
+            track_point_indexes,
         )
 
         assert angles.shape == (2,)

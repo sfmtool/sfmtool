@@ -42,7 +42,7 @@ def build_covisibility_pairs(
     """Build covisibility pairs from a reconstruction."""
     result = _rust_build_covisibility_pairs(
         recon.quaternions_wxyz,
-        recon.track_point_ids.astype(np.uint32),
+        recon.track_point_indexes.astype(np.uint32),
         recon.track_image_indexes.astype(np.uint32),
         angle_threshold_deg,
     )

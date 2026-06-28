@@ -127,7 +127,7 @@ pub struct PatchCloud {
     pub patches: Vec<OrientedPatch>,
     /// Source reconstruction 3D-point index for each patch (parallel to
     /// `patches`).
-    pub point_ids: Vec<u32>,
+    pub point_indexes: Vec<u32>,
 }
 
 impl PatchCloud {
@@ -243,7 +243,7 @@ A `PatchCloud` round-trips to the per-point patch frame in the `.sfmr`
 `PatchCloud::to_halfvec_arrays(point_count)` /
 `PatchCloud::from_halfvec_arrays(half_u_xyz, half_v_xyz, centers)`.
 `to_halfvec_arrays` scatters the cloud's patches into per-point rows by
-`point_ids`, folding each unit axis and half-extent into one vector and leaving
+`point_indexes`, folding each unit axis and half-extent into one vector and leaving
 zero rows elsewhere; `from_halfvec_arrays` takes the points' positions as
 `centers`, keeps the present rows (non-zero `u`), and recovers their point
 indices. The half-vector arrays don't encode the homogeneous weight (it lives in

@@ -75,7 +75,7 @@ def rotation_matrices(recon) -> np.ndarray:
 
 
 def track_views(recon) -> dict[int, set[int]]:
-    pids = np.asarray(recon.track_point_ids)
+    pids = np.asarray(recon.track_point_indexes)
     imgs = np.asarray(recon.track_image_indexes)
     tracks: dict[int, set[int]] = {}
     for pid, im in zip(pids.tolist(), imgs.tolist()):
@@ -176,9 +176,9 @@ def render_strips(recon, cloud, images, args) -> tuple[np.ndarray | None, dict]:
     cams = recon.cameras
     cam_idx = np.asarray(recon.camera_indexes)
     tracks = track_views(recon)
-    pid_to_patch = {int(p): i for i, p in enumerate(np.asarray(cloud.point_ids))}
+    pid_to_patch = {int(p): i for i, p in enumerate(np.asarray(cloud.point_indexes))}
 
-    ids = np.asarray(cloud.point_ids)
+    ids = np.asarray(cloud.point_indexes)
     rng = np.random.default_rng(args.seed)
     if args.prioritize_infinity:
         sample = _infinity_first_sample(recon, ids, args.sample, rng)
@@ -189,11 +189,11 @@ def render_strips(recon, cloud, images, args) -> tuple[np.ndarray | None, dict]:
     results = cloud.select_views(
         recon,
         images,
-        point_ids=sample,
+        point_indexes=sample,
         resolution=args.resolution,
         min_relative_zncc=args.min_relative_zncc,
     )
-    res_by_pid = {int(r["point_id"]): r for r in results}
+    res_by_pid = {int(r["point_index"]): r for r in results}
     w = gauss_window(args.resolution)
 
     def patch_geo(patch_obj):

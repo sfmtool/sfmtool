@@ -33,7 +33,7 @@ def _load_images(recon) -> list[np.ndarray]:
 
 
 def _sample_point_ids(cloud, n: int = 200, seed: int = 0) -> list[int]:
-    ids = np.asarray(cloud.point_ids)
+    ids = np.asarray(cloud.point_indexes)
     rng = np.random.default_rng(seed)
     return np.sort(rng.choice(ids, size=min(n, len(ids)), replace=False)).tolist()
 
@@ -53,7 +53,7 @@ def test_use_stored_keypoints_runs_on_embedded_patches(seoul_bull_workspace: Pat
     res = cloud.refine_normals(
         recon,
         images,
-        point_ids=point_ids,
+        point_indexes=point_ids,
         use_stored_keypoints=True,
         resolution=12,
         init_steps=5,
@@ -89,7 +89,7 @@ def test_use_stored_keypoints_differs_from_centered(seoul_bull_workspace: Path):
         recon, normal="mean_viewing", extent="fixed", extent_value=5.0
     )
     common = dict(
-        point_ids=point_ids,
+        point_indexes=point_ids,
         resolution=12,
         init_steps=5,
         refine_levels=2,
@@ -203,7 +203,7 @@ def test_stored_keypoints_at_reprojection_match_centered(seoul_bull_workspace: P
         )
         for i in range(len(quats))
     ]
-    tpid = np.asarray(recon.track_point_ids)
+    tpid = np.asarray(recon.track_point_indexes)
     timg = np.asarray(recon.track_image_indexes)
     reproj = np.zeros((len(tpid), 2), np.float32)
     for j in range(len(tpid)):
@@ -224,10 +224,10 @@ def test_stored_keypoints_at_reprojection_match_centered(seoul_bull_workspace: P
     )
     pids = _sample_point_ids(cloud_c, n=120)
     centered = cloud_c.refine_normals(
-        recon, images, point_ids=pids, use_stored_keypoints=False, **common
+        recon, images, point_indexes=pids, use_stored_keypoints=False, **common
     )
     anchored = cloud_a.refine_normals(
-        recon_reproj, images, point_ids=pids, use_stored_keypoints=True, **common
+        recon_reproj, images, point_indexes=pids, use_stored_keypoints=True, **common
     )
 
     # Reprojection-anchored ≈ centered (zero offset). A mis-mapping would diverge
@@ -254,14 +254,14 @@ def test_use_stored_keypoints_with_view_indices(seoul_bull_workspace: Path):
     num_images = len(recon.image_names)
     by_point: dict[int, set[int]] = {}
     for p, im in zip(
-        np.asarray(recon.track_point_ids).tolist(),
+        np.asarray(recon.track_point_indexes).tolist(),
         np.asarray(recon.track_image_indexes).tolist(),
     ):
         by_point.setdefault(int(p), set()).add(int(im))
 
     # view_indices must be parallel to every cloud patch.
     view_indices: list[list[int]] = []
-    for pid in np.asarray(cloud.point_ids).tolist():
+    for pid in np.asarray(cloud.point_indexes).tolist():
         obs = set(by_point.get(int(pid), set()))
         extra = next((i for i in range(num_images) if i not in obs), None)
         if extra is not None:
@@ -272,7 +272,7 @@ def test_use_stored_keypoints_with_view_indices(seoul_bull_workspace: Path):
     res = cloud.refine_normals(
         recon,
         images,
-        point_ids=point_ids,
+        point_indexes=point_ids,
         view_indices=view_indices,
         use_stored_keypoints=True,
         resolution=12,

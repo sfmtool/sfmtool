@@ -45,13 +45,13 @@ fn test_covisibility_simple() {
 
     // Point 0 observed by images 0 and 1
     // Point 1 observed by images 0 and 2
-    let track_point_ids = [0_u32, 0, 1, 1];
+    let track_point_indexes = [0_u32, 0, 1, 1];
     let track_image_indexes = [0_u32, 1, 0, 2];
 
     let pairs = build_covisibility_pairs(
         &quaternions,
         3,
-        &track_point_ids,
+        &track_point_indexes,
         &track_image_indexes,
         90.0,
     );
@@ -76,14 +76,14 @@ fn test_covisibility_angle_culling() {
     let quaternions: Vec<f64> = [identity_quat(), quat_180_around_y()].concat();
 
     // Point 0 observed by both images
-    let track_point_ids = [0_u32, 0];
+    let track_point_indexes = [0_u32, 0];
     let track_image_indexes = [0_u32, 1];
 
     // Angle between directions is 180° which exceeds 90° threshold
     let pairs = build_covisibility_pairs(
         &quaternions,
         2,
-        &track_point_ids,
+        &track_point_indexes,
         &track_image_indexes,
         90.0,
     );

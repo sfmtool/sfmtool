@@ -1397,7 +1397,7 @@ pub fn localize_patch_cloud_keypoints(
     out
 }
 
-/// For each patch of `cloud` (linked to `recon` via `point_ids`), the track image
+/// For each patch of `cloud` (linked to `recon` via `point_indexes`), the track image
 /// indices observing its source 3D point — a convenience default `view_sets` for
 /// [`localize_patch_cloud_keypoints`] when no view selection has been run.
 /// Identical to
@@ -1405,7 +1405,7 @@ pub fn localize_patch_cloud_keypoints(
 ///
 /// # Panics
 ///
-/// Panics if `cloud.point_ids` is not parallel to its patches.
+/// Panics if `cloud.point_indexes` is not parallel to its patches.
 pub fn track_views_from_reconstruction(
     recon: &SfmrReconstruction,
     cloud: &PatchCloud,

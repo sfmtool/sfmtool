@@ -521,7 +521,7 @@ class TestUndistortWorkspace:
         )
 
         track_img_idxs = np.asarray(undistorted_recon.track_image_indexes)
-        track_pt3d_idxs = np.asarray(undistorted_recon.track_point_ids)
+        track_pt3d_idxs = np.asarray(undistorted_recon.track_point_indexes)
         obs_counts = np.asarray(undistorted_recon.observation_counts)
 
         # All image indexes valid

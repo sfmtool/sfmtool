@@ -20,7 +20,7 @@ def compute_triangulation_angles(
     quaternions_wxyz: np.ndarray,
     translations: np.ndarray,
     track_image_indexes: np.ndarray,
-    track_point_ids: np.ndarray,
+    track_point_indexes: np.ndarray,
 ) -> np.ndarray:
     """Compute maximum triangulation angle for each 3D point.
 
@@ -32,7 +32,7 @@ def compute_triangulation_angles(
         quaternions_wxyz: (N, 4) array of camera quaternions
         translations: (N, 3) array of camera translations
         track_image_indexes: Array of image indices for track observations
-        track_point_ids: Array of 3D point indices for track observations
+        track_point_indexes: Array of 3D point indices for track observations
 
     Returns:
         (M,) array of maximum triangulation angles in degrees for each point
@@ -50,7 +50,7 @@ def compute_triangulation_angles(
     # Build list of observing cameras for each point
     point_observers = [[] for _ in range(num_points)]
     for obs_idx in range(len(track_image_indexes)):
-        point_idx = track_point_ids[obs_idx]
+        point_idx = track_point_indexes[obs_idx]
         img_idx = track_image_indexes[obs_idx]
         point_observers[point_idx].append(img_idx)
 

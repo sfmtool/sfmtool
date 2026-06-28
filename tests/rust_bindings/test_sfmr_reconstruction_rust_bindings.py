@@ -345,7 +345,7 @@ class TestEmbeddedPatches:
             embedded.clone_with_changes(
                 track_image_indexes=img_idx,
                 track_feature_indexes=feat_idx,
-                track_point_ids=pt_ids,
+                track_point_indexes=pt_ids,
             )
 
     def test_clone_embedded_track_and_keypoints_replacement_to_new_size(
@@ -363,7 +363,7 @@ class TestEmbeddedPatches:
         out = embedded.clone_with_changes(
             track_image_indexes=img_idx,
             track_feature_indexes=feat_idx,
-            track_point_ids=pt_ids,
+            track_point_indexes=pt_ids,
             keypoints_xy=keypoints,
         )
         assert out.feature_source == "embedded_patches"
@@ -382,7 +382,7 @@ class TestEmbeddedPatches:
         out = recon.clone_with_changes(
             track_image_indexes=img_idx,
             track_feature_indexes=feat_idx,
-            track_point_ids=pt_ids,
+            track_point_indexes=pt_ids,
         )
         counts = np.asarray(out.observation_counts)
         assert counts.shape[0] == recon.point_count  # one entry per point
@@ -403,7 +403,7 @@ class TestEmbeddedPatches:
             recon.clone_with_changes(
                 track_image_indexes=img_idx,
                 track_feature_indexes=feat_idx,
-                track_point_ids=pt_ids,
+                track_point_indexes=pt_ids,
             )
 
     def test_clone_multipoint_track_replacement_survives_round_trip(
@@ -427,7 +427,7 @@ class TestEmbeddedPatches:
             positions=positions,
             track_image_indexes=img_idx,
             track_feature_indexes=feat_idx,
-            track_point_ids=pt_ids,
+            track_point_indexes=pt_ids,
         )
         assert out.point_count == 3
         counts = np.asarray(out.observation_counts)
@@ -440,5 +440,5 @@ class TestEmbeddedPatches:
         out.save(path)
         reloaded = SfmrReconstruction.load(path)
         np.testing.assert_array_equal(np.asarray(reloaded.observation_counts), counts)
-        np.testing.assert_array_equal(np.asarray(reloaded.track_point_ids), pt_ids)
+        np.testing.assert_array_equal(np.asarray(reloaded.track_point_indexes), pt_ids)
         np.testing.assert_array_equal(np.asarray(reloaded.track_image_indexes), img_idx)

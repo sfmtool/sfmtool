@@ -127,7 +127,7 @@ def _drop_camera_coincident_points(sfmr_path: Path) -> None:
     quat = np.asarray(recon.quaternions_wxyz)
     trans = np.asarray(recon.translations)
     tii = np.asarray(recon.track_image_indexes)
-    tpid = np.asarray(recon.track_point_ids)
+    tpid = np.asarray(recon.track_point_indexes)
     at_inf = np.asarray(recon.point_is_at_infinity)
 
     # Per-observation ray distance d = ‖R(q)·X + t‖ in the camera frame, using

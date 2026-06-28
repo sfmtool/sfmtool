@@ -84,7 +84,7 @@ def _build_observation_index(
     obs_index: dict[tuple[int, int], int] = {}
     for i in range(len(recon.track_image_indexes)):
         key = (int(recon.track_image_indexes[i]), int(recon.track_feature_indexes[i]))
-        obs_index[key] = int(recon.track_point_ids[i])
+        obs_index[key] = int(recon.track_point_indexes[i])
 
     return name_to_idx, obs_index
 
@@ -96,7 +96,7 @@ def _resolve_point_cross_recon(
     input_name_to_idx: dict[str, int],
     input_obs_index: dict[tuple[int, int], int],
 ) -> tuple[int, str]:
-    obs_mask = source_recon.track_point_ids == point_index
+    obs_mask = source_recon.track_point_indexes == point_index
     src_image_idxs = source_recon.track_image_indexes[obs_mask]
     src_feat_idxs = source_recon.track_feature_indexes[obs_mask]
 

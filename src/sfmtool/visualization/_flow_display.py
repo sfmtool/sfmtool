@@ -92,7 +92,7 @@ def _get_shared_feature_pairs(
     image_names = recon.image_names
     image_indexes = recon.track_image_indexes
     feature_indexes = recon.track_feature_indexes
-    point_ids = recon.track_point_ids
+    point_ids = recon.track_point_indexes
 
     observations = np.column_stack([image_indexes, feature_indexes])
 

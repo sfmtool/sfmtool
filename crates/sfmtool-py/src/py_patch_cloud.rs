@@ -311,7 +311,7 @@ impl PyPatchCloud {
     ///
     /// The inverse of the per-point ``patch_u_halfvec_xyz`` / ``patch_v_halfvec_xyz``
     /// layout: each present row (non-zero ``u``) becomes one patch whose
-    /// ``point_ids`` entry is that row index, with the half-extent vectors split
+    /// ``point_indexes`` entry is that row index, with the half-extent vectors split
     /// back into a unit axis and a half-size. Use this to assemble a renumbered or
     /// culled cloud (e.g. after dropping points) to hand to
     /// ``SfmrReconstruction.clone_with_changes(patches=...)``.
@@ -367,8 +367,8 @@ impl PyPatchCloud {
 
     /// Source 3D-point index for each patch (parallel to the cloud).
     #[getter]
-    fn point_ids(&self) -> Vec<u32> {
-        self.inner.point_ids.clone()
+    fn point_indexes(&self) -> Vec<u32> {
+        self.inner.point_indexes.clone()
     }
 
     /// Refine every patch's normal in place by photometric consistency across
@@ -377,7 +377,7 @@ impl PyPatchCloud {
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from (provides cameras,
-    ///         poses, and the per-point observing-image lists via ``point_ids``).
+    ///         poses, and the per-point observing-image lists via ``point_indexes``).
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
     ///         image, parallel to ``recon`` (index = image index).
     ///     resolution: The R×R patch grid the consensus is scored on.
@@ -389,7 +389,7 @@ impl PyPatchCloud {
     ///         fastest, and the found normal barely differs) or ``"anisotropic"``
     ///         (anti-aliased oblique views; keeps the reported Φ/confidence
     ///         unbiased, ~1.6-3x slower).
-    ///     point_ids: If given, refine only the patches with these source point
+    ///     point_indexes: If given, refine only the patches with these source point
     ///         ids (the rest keep their input normal) — cheap when refining a few
     ///         patches out of a large cloud. ``None`` refines every patch.
     ///     view_indices: If given, a per-patch list of image indices to refine
@@ -400,7 +400,7 @@ impl PyPatchCloud {
     ///         feature there (an MVS-style expansion). Indices must be in range for
     ///         the reconstruction; duplicates within a patch are ignored (the
     ///         consensus counts each view once). ``None`` (default) uses the track
-    ///         observations. Combines with ``point_ids`` (which still selects
+    ///         observations. Combines with ``point_indexes`` (which still selects
     ///         *which* patches to refine).
     ///     use_stored_keypoints: When ``True`` (the default), anchor each
     ///         view's patch at that observation's stored per-observation 2D
@@ -437,7 +437,7 @@ impl PyPatchCloud {
         refine_levels=3, objective="robust", robust_iters=3, window="gaussian_disk",
         window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="bilinear",
         cache="fronto", cache_supersample=2.0, compute_confidence=false,
-        search_robust_iters=None, point_ids=None, view_indices=None,
+        search_robust_iters=None, point_indexes=None, view_indices=None,
         use_stored_keypoints=true, render_bitmaps=false
     ))]
     fn refine_normals<'py>(
@@ -460,30 +460,30 @@ impl PyPatchCloud {
         cache_supersample: f64,
         compute_confidence: bool,
         search_robust_iters: Option<u32>,
-        point_ids: Option<Vec<u32>>,
+        point_indexes: Option<Vec<u32>>,
         view_indices: Option<Vec<Vec<u32>>>,
         use_stored_keypoints: bool,
         render_bitmaps: bool,
     ) -> PyResult<Bound<'py, PyDict>> {
         let recon = &recon.inner;
         // The cloud must have been built from this reconstruction: its per-patch
-        // point_ids index `recon`'s points. This is a range check only — it
+        // point_indexes index `recon`'s points. This is a range check only — it
         // catches a too-small recon (and would-be panics in the core), but cannot
         // detect a *different* recon with at least as many points; the caller is
         // responsible for passing the recon the cloud was built from.
-        if self.inner.point_ids.len() != self.inner.len() {
+        if self.inner.point_indexes.len() != self.inner.len() {
             return Err(PyValueError::new_err(
-                "patch cloud has no per-patch point_ids; rebuild it with from_reconstruction",
+                "patch cloud has no per-patch point_indexes; rebuild it with from_reconstruction",
             ));
         }
         if self
             .inner
-            .point_ids
+            .point_indexes
             .iter()
             .any(|&p| p as usize >= recon.points.len())
         {
             return Err(PyValueError::new_err(
-                "patch cloud point_ids are out of range for this reconstruction \
+                "patch cloud point_indexes are out of range for this reconstruction \
                  (was the cloud built from a different recon?)",
             ));
         }
@@ -599,9 +599,9 @@ impl PyPatchCloud {
         // view-lists make `refine_patch_normal` skip a patch immediately (it sees
         // too few views), so a handful of patches can be refined out of a large
         // cloud cheaply — the rest keep their input normal.
-        if let Some(ids) = point_ids {
+        if let Some(ids) = point_indexes {
             let keep: std::collections::HashSet<u32> = ids.into_iter().collect();
-            for (pv, &pid) in patch_views.iter_mut().zip(&self.inner.point_ids) {
+            for (pv, &pid) in patch_views.iter_mut().zip(&self.inner.point_indexes) {
                 if !keep.contains(&pid) {
                     pv.clear();
                 }
@@ -631,15 +631,15 @@ impl PyPatchCloud {
                     );
                 }
                 // Build per-patch keypoints parallel to `patch_views`: for each
-                // patch's (point_id, image_index) view, the stored keypoint when
+                // patch's (point_index, image_index) view, the stored keypoint when
                 // present (else `None`, which the core treats as "anchor at the
                 // reprojected center for this view").
                 patch_views
                     .iter()
-                    .zip(&self.inner.point_ids)
-                    .map(|(pv, &pid)| {
+                    .zip(&self.inner.point_indexes)
+                    .map(|(pv, &pidx)| {
                         pv.iter()
-                            .map(|&img| kp_map.get(&(pid, img)).copied())
+                            .map(|&img| kp_map.get(&(pidx, img)).copied())
                             .collect()
                     })
                     .collect()
@@ -687,7 +687,7 @@ impl PyPatchCloud {
             let npoints = recon.points.len();
             let stride = r * r * 4;
             let mut flat = vec![0u8; npoints * stride];
-            for (res, &pid) in results.iter().zip(&self.inner.point_ids) {
+            for (res, &pid) in results.iter().zip(&self.inner.point_indexes) {
                 if let Some(rep) = &res.representative {
                     let pid = pid as usize;
                     if pid < npoints && rep.len() == stride {
@@ -711,7 +711,7 @@ impl PyPatchCloud {
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from (provides cameras,
-    ///         poses, and the per-point track view lists via ``point_ids``).
+    ///         poses, and the per-point track view lists via ``point_indexes``).
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
     ///         image, parallel to ``recon`` (index = image index).
     ///     min_relative_zncc: Admit a candidate whose ZNCC to the reference clears
@@ -732,21 +732,21 @@ impl PyPatchCloud {
     ///         there is no trustworthy reference, so the track is admitted verbatim
     ///         with no candidate expansion. At or above it, the admission bar is
     ///         ``min_relative_zncc`` × self-agreement.
-    ///     point_ids: If given, select only for the patches with these source
+    ///     point_indexes: If given, select only for the patches with these source
     ///         point ids; ``None`` (default) selects for every patch.
     ///
     /// Returns a list of per-patch dicts (parallel to the cloud's patches, in
-    /// cloud order): ``point_id`` (int), ``admitted`` (1-D int32 numpy array of
+    /// cloud order): ``point_index`` (int), ``admitted`` (1-D int32 numpy array of
     /// image indices — the track views first, then the vetted candidates in
     /// ascending order), ``scores`` (1-D float64 numpy array of the per-admitted
     /// ZNCC to the reference, parallel to ``admitted``; NaN where a view could not
     /// be scored), and ``self_agreement`` (float; NaN when no reference could be
-    /// built). Patches excluded by ``point_ids`` are omitted from the list.
+    /// built). Patches excluded by ``point_indexes`` are omitted from the list.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         recon, images, *, min_relative_zncc=0.7, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear", min_valid_fraction=0.6, min_track_views=2,
-        robust_iters=3, min_self_agreement=0.3, point_ids=None
+        robust_iters=3, min_self_agreement=0.3, point_indexes=None
     ))]
     fn select_views<'py>(
         &self,
@@ -762,22 +762,22 @@ impl PyPatchCloud {
         min_track_views: u32,
         robust_iters: u32,
         min_self_agreement: f64,
-        point_ids: Option<Vec<u32>>,
+        point_indexes: Option<Vec<u32>>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let recon = &recon.inner;
-        if self.inner.point_ids.len() != self.inner.len() {
+        if self.inner.point_indexes.len() != self.inner.len() {
             return Err(PyValueError::new_err(
-                "patch cloud has no per-patch point_ids; rebuild it with from_reconstruction",
+                "patch cloud has no per-patch point_indexes; rebuild it with from_reconstruction",
             ));
         }
         if self
             .inner
-            .point_ids
+            .point_indexes
             .iter()
             .any(|&p| p as usize >= recon.points.len())
         {
             return Err(PyValueError::new_err(
-                "patch cloud point_ids are out of range for this reconstruction \
+                "patch cloud point_indexes are out of range for this reconstruction \
                  (was the cloud built from a different recon?)",
             ));
         }
@@ -826,13 +826,13 @@ impl PyPatchCloud {
             .collect();
 
         // Per-patch track view lists from the reconstruction; an empty list makes
-        // a patch's selection trivially empty, so `point_ids` selects a subset by
+        // a patch's selection trivially empty, so `point_indexes` selects a subset by
         // clearing the rest.
         let mut track_views = view_indices_from_reconstruction(recon, &self.inner);
         let selected_mask: Option<std::collections::HashSet<u32>> =
-            point_ids.map(|ids| ids.into_iter().collect());
+            point_indexes.map(|ids| ids.into_iter().collect());
         if let Some(keep) = &selected_mask {
-            for (tv, &pid) in track_views.iter_mut().zip(&self.inner.point_ids) {
+            for (tv, &pid) in track_views.iter_mut().zip(&self.inner.point_indexes) {
                 if !keep.contains(&pid) {
                     tv.clear();
                 }
@@ -843,14 +843,14 @@ impl PyPatchCloud {
             py.detach(|| select_patch_cloud_views(&self.inner, &views, &track_views, &params));
 
         let mut out = Vec::new();
-        for (res, &pid) in results.iter().zip(&self.inner.point_ids) {
+        for (res, &pid) in results.iter().zip(&self.inner.point_indexes) {
             if let Some(keep) = &selected_mask {
                 if !keep.contains(&pid) {
                     continue;
                 }
             }
             let d = PyDict::new(py);
-            d.set_item("point_id", pid)?;
+            d.set_item("point_index", pid)?;
             d.set_item("admitted", res.admitted.clone().into_pyarray(py))?;
             d.set_item("scores", res.scores.clone().into_pyarray(py))?;
             d.set_item("self_agreement", res.self_agreement)?;
@@ -869,10 +869,10 @@ impl PyPatchCloud {
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from (cameras, poses, and
-    ///         the per-point track view lists via ``point_ids``).
+    ///         the per-point track view lists via ``point_indexes``).
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
     ///         image, parallel to ``recon`` (index = image index).
-    ///     view_sets: Optional mapping ``point_id -> [image_index, ...]`` giving the
+    ///     view_sets: Optional mapping ``point_index -> [image_index, ...]`` giving the
     ///         view set to refine per point (typically the output of
     ///         :meth:`select_views`). Points absent from the map fall back to their
     ///         track; ``None`` (default) uses the track for every point.
@@ -892,7 +892,7 @@ impl PyPatchCloud {
     ///     robust_iters: IRLS passes for the robust consensus.
     ///     convergence_px: Stop once the mean per-view residual shift of a round is
     ///         below this many patch-grid px.
-    ///     point_ids: If given, localize only for the patches with these source
+    ///     point_indexes: If given, localize only for the patches with these source
     ///         point ids; ``None`` (default) localizes for every patch.
     ///     search_resolution_multiplier: ``m`` for the discrete cross-view search;
     ///         the search runs at resolution ``R_s = round(m·R)``. ``m = 1.0``
@@ -901,7 +901,7 @@ impl PyPatchCloud {
     ///         ``specs/core/keypoint-localization-search-cache.md``.
     ///
     /// Returns:
-    ///     A list of per-point dicts ``{point_id, views (uint32[K]),
+    ///     A list of per-point dicts ``{point_index, views (uint32[K]),
     ///     keypoints (float64[K, 2]), offsets_px (float64[K]),
     ///     loo_zncc (float64[K])}`` over the **kept** views. ``loo_zncc`` is NaN for
     ///     a view no round scored (a lone input view, or a view kept by the two-view
@@ -910,7 +910,7 @@ impl PyPatchCloud {
         recon, images, *, view_sets=None, max_iters=5, search=6.0, max_shift_px=3.0,
         min_relative_zncc=0.7, min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear", robust_iters=3, convergence_px=0.05,
-        point_ids=None, search_resolution_multiplier=1.0
+        point_indexes=None, search_resolution_multiplier=1.0
     ))]
     #[allow(clippy::too_many_arguments)]
     fn localize_keypoints<'py>(
@@ -930,23 +930,23 @@ impl PyPatchCloud {
         sampler: &str,
         robust_iters: u32,
         convergence_px: f64,
-        point_ids: Option<Vec<u32>>,
+        point_indexes: Option<Vec<u32>>,
         search_resolution_multiplier: f32,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let recon = &recon.inner;
-        if self.inner.point_ids.len() != self.inner.len() {
+        if self.inner.point_indexes.len() != self.inner.len() {
             return Err(PyValueError::new_err(
-                "patch cloud has no per-patch point_ids; rebuild it with from_reconstruction",
+                "patch cloud has no per-patch point_indexes; rebuild it with from_reconstruction",
             ));
         }
         if self
             .inner
-            .point_ids
+            .point_indexes
             .iter()
             .any(|&p| p as usize >= recon.points.len())
         {
             return Err(PyValueError::new_err(
-                "patch cloud point_ids are out of range for this reconstruction \
+                "patch cloud point_indexes are out of range for this reconstruction \
                  (was the cloud built from a different recon?)",
             ));
         }
@@ -1004,7 +1004,7 @@ impl PyPatchCloud {
 
         // Per-patch view sets: the supplied map where present, else the track. An
         // empty view set makes a patch's localization trivially empty, so
-        // `point_ids` selects a subset by clearing the rest.
+        // `point_indexes` selects a subset by clearing the rest.
         let mut sets = view_indices_from_reconstruction(recon, &self.inner);
         if let Some(map) = &view_sets {
             // Reject out-of-range image indices up front so the kernel never indexes
@@ -1019,16 +1019,16 @@ impl PyPatchCloud {
                     )));
                 }
             }
-            for (set, &pid) in sets.iter_mut().zip(&self.inner.point_ids) {
+            for (set, &pid) in sets.iter_mut().zip(&self.inner.point_indexes) {
                 if let Some(vs) = map.get(&pid) {
                     *set = vs.clone();
                 }
             }
         }
         let selected_mask: Option<std::collections::HashSet<u32>> =
-            point_ids.map(|ids| ids.into_iter().collect());
+            point_indexes.map(|ids| ids.into_iter().collect());
         if let Some(keep) = &selected_mask {
-            for (set, &pid) in sets.iter_mut().zip(&self.inner.point_ids) {
+            for (set, &pid) in sets.iter_mut().zip(&self.inner.point_indexes) {
                 if !keep.contains(&pid) {
                     set.clear();
                 }
@@ -1039,7 +1039,7 @@ impl PyPatchCloud {
             py.detach(|| localize_patch_cloud_keypoints(&self.inner, &views, &sets, None, &params));
 
         let mut out = Vec::new();
-        for (res, &pid) in results.iter().zip(&self.inner.point_ids) {
+        for (res, &pid) in results.iter().zip(&self.inner.point_indexes) {
             if let Some(keep) = &selected_mask {
                 if !keep.contains(&pid) {
                     continue;
@@ -1052,7 +1052,7 @@ impl PyPatchCloud {
             let kpts = ndarray::Array2::from_shape_vec((res.keypoints.len(), 2), flat)
                 .expect("keypoints shape matches");
             let d = PyDict::new(py);
-            d.set_item("point_id", pid)?;
+            d.set_item("point_index", pid)?;
             d.set_item("views", res.views.clone().into_pyarray(py))?;
             d.set_item("keypoints", kpts.into_pyarray(py))?;
             d.set_item("offsets_px", res.offsets_px.clone().into_pyarray(py))?;
@@ -1075,10 +1075,10 @@ impl PyPatchCloud {
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from (cameras, poses, and
-    ///         the per-point track view lists via ``point_ids``).
+    ///         the per-point track view lists via ``point_indexes``).
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
     ///         image, parallel to ``recon`` (index = image index).
-    ///     view_sets: Optional mapping ``point_id -> [image_index, ...]`` giving the
+    ///     view_sets: Optional mapping ``point_index -> [image_index, ...]`` giving the
     ///         view set to refine per point. Points absent fall back to their track;
     ///         ``None`` (default) uses the track for every point.
     ///     resolution: The R×R patch grid the consensus / ECC are scored on.
@@ -1115,22 +1115,23 @@ impl PyPatchCloud {
     ///     convergence_px: Stop a view's solve once an accepted step is below this
     ///         many patch-grid px.
     ///     max_offset_px: Max total per-view drift from the seed, in patch-grid px.
-    ///     point_ids: If given, refine only the patches with these source point ids;
-    ///         ``None`` (default) refines every patch.
+    ///     point_indexes: If given, refine only the patches with these source point
+    ///         indexes; ``None`` (default) refines every patch.
     ///     starting_keypoints: Optional explicit per-view seed overrides:
-    ///         ``point_id -> [[x, y], ...]`` in **source-image** pixels, parallel
-    ///         to that point's entry in ``view_sets`` (one ``[x, y]`` per view, in
-    ///         order). When ``view_sets`` is also given, each point's
-    ///         ``starting_keypoints`` length must match its ``view_sets`` length.
-    ///         These seeds **override** the recon-default seeds for those points
-    ///         and let the refiner align to keypoints produced by an upstream
-    ///         localizer (e.g. :meth:`localize_keypoints`) rather than the
-    ///         per-observation seeds the recon already carries.
+    ///         ``point_index -> [[x, y], ...]`` in **source-image** pixels,
+    ///         parallel to that point's entry in ``view_sets`` (one ``[x, y]``
+    ///         per view, in order). When ``view_sets`` is also given, each
+    ///         point's ``starting_keypoints`` length must match its
+    ///         ``view_sets`` length. These seeds **override** the recon-default
+    ///         seeds for those points and let the refiner align to keypoints
+    ///         produced by an upstream localizer (e.g.
+    ///         :meth:`localize_keypoints`) rather than the per-observation
+    ///         seeds the recon already carries.
     ///
     ///         For a point absent from this map (or for the whole map when
     ///         ``starting_keypoints=None``, the default), seeds come from the
     ///         **recon**: each view's seed is the per-observation inline keypoint
-    ///         stored on the embedded_patches recon for that ``(point_id,
+    ///         stored on the embedded_patches recon for that ``(point_index,
     ///         image_index)``, and views with no inline observation seed at their
     ///         own projection ``project_i(X_p)``.
     ///
@@ -1143,7 +1144,7 @@ impl PyPatchCloud {
     ///         point to refine.
     ///
     /// Returns:
-    ///     A list of per-point dicts ``{point_id, views (uint32[K]),
+    ///     A list of per-point dicts ``{point_index, views (uint32[K]),
     ///     keypoints (float64[K, 2]), offsets_px (float64[K]),
     ///     scores (float64[K])}`` over the views, in **input order** (the view set
     ///     is unchanged; a guard-failed view keeps its seed). ``scores`` is the
@@ -1153,7 +1154,7 @@ impl PyPatchCloud {
         recon, images, *, view_sets=None, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear", robust_iters=3, max_outer_sweeps=1,
         outer_convergence_px=0.005, max_gn_steps=10, convergence_px=0.01,
-        max_offset_px=2.0, consensus_refresh="per_sweep", point_ids=None,
+        max_offset_px=2.0, consensus_refresh="per_sweep", point_indexes=None,
         starting_keypoints=None
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -1174,23 +1175,23 @@ impl PyPatchCloud {
         convergence_px: f64,
         max_offset_px: f64,
         consensus_refresh: &str,
-        point_ids: Option<Vec<u32>>,
+        point_indexes: Option<Vec<u32>>,
         starting_keypoints: Option<std::collections::HashMap<u32, Vec<[f64; 2]>>>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let recon = &recon.inner;
-        if self.inner.point_ids.len() != self.inner.len() {
+        if self.inner.point_indexes.len() != self.inner.len() {
             return Err(PyValueError::new_err(
-                "patch cloud has no per-patch point_ids; rebuild it with from_reconstruction",
+                "patch cloud has no per-patch point_indexes; rebuild it with from_reconstruction",
             ));
         }
         if self
             .inner
-            .point_ids
+            .point_indexes
             .iter()
             .any(|&p| p as usize >= recon.points.len())
         {
             return Err(PyValueError::new_err(
-                "patch cloud point_ids are out of range for this reconstruction \
+                "patch cloud point_indexes are out of range for this reconstruction \
                  (was the cloud built from a different recon?)",
             ));
         }
@@ -1277,16 +1278,16 @@ impl PyPatchCloud {
                     )));
                 }
             }
-            for (set, &pid) in sets.iter_mut().zip(&self.inner.point_ids) {
+            for (set, &pid) in sets.iter_mut().zip(&self.inner.point_indexes) {
                 if let Some(vs) = map.get(&pid) {
                     *set = vs.clone();
                 }
             }
         }
         let selected_mask: Option<std::collections::HashSet<u32>> =
-            point_ids.map(|ids| ids.into_iter().collect());
+            point_indexes.map(|ids| ids.into_iter().collect());
         if let Some(keep) = &selected_mask {
-            for (set, &pid) in sets.iter_mut().zip(&self.inner.point_ids) {
+            for (set, &pid) in sets.iter_mut().zip(&self.inner.point_indexes) {
                 if !keep.contains(&pid) {
                     set.clear();
                 }
@@ -1307,12 +1308,12 @@ impl PyPatchCloud {
         // The caller's explicit overrides are validated up front; recon-default
         // seeds are built lazily in the per-patch loop.
         if let Some(seed_map) = &starting_keypoints {
-            // Build a pid -> index map once so every per-pid lookup below is O(1);
-            // the seed map may cover every patch, in which case the previous
-            // per-pid linear scan was O(N²).
+            // Build a point_index -> array-position map once so every per-pid
+            // lookup below is O(1); the seed map may cover every patch, in
+            // which case the previous per-pid linear scan was O(N²).
             let pid_to_idx: std::collections::HashMap<u32, usize> = self
                 .inner
-                .point_ids
+                .point_indexes
                 .iter()
                 .enumerate()
                 .map(|(i, &p)| (p, i))
@@ -1326,8 +1327,8 @@ impl PyPatchCloud {
                 if let Some(keep) = &selected_mask {
                     if !keep.contains(pid) {
                         return Err(PyValueError::new_err(format!(
-                            "starting_keypoints[{pid}] is excluded by point_ids; \
-                             drop the entry or include {pid} in point_ids",
+                            "starting_keypoints[{pid}] is excluded by point_indexes; \
+                             drop the entry or include {pid} in point_indexes",
                         )));
                     }
                 }
@@ -1342,8 +1343,8 @@ impl PyPatchCloud {
             }
         }
 
-        // Build the (point_id, image_index) -> stored keypoint lookup once for
-        // embedded_patches recons; sift-files recons return None and the
+        // Build the (point_index, image_index) -> stored keypoint lookup once
+        // for embedded_patches recons; sift-files recons return None and the
         // per-patch loop just falls through to the projection-seed path. The
         // map is keyed identically to the one in `refine_normals`'s
         // `use_stored_keypoints` path; duplicate observations of the same
@@ -1368,7 +1369,7 @@ impl PyPatchCloud {
                 .par_iter()
                 .enumerate()
                 .map(|(i, patch)| {
-                    let pid = self.inner.point_ids[i];
+                    let pid = self.inner.point_indexes[i];
                     let set = &sets[i];
                     let per_view_seeds: Option<Vec<Option<[f64; 2]>>> = if let Some(user_seeds) =
                         starting_keypoints.as_ref().and_then(|m| m.get(&pid))
@@ -1385,7 +1386,7 @@ impl PyPatchCloud {
         });
 
         let mut out = Vec::new();
-        for (res, &pid) in results.iter().zip(&self.inner.point_ids) {
+        for (res, &pid) in results.iter().zip(&self.inner.point_indexes) {
             if let Some(keep) = &selected_mask {
                 if !keep.contains(&pid) {
                     continue;
@@ -1395,7 +1396,7 @@ impl PyPatchCloud {
             let kpts = ndarray::Array2::from_shape_vec((res.keypoints.len(), 2), flat)
                 .expect("keypoints shape matches");
             let d = PyDict::new(py);
-            d.set_item("point_id", pid)?;
+            d.set_item("point_index", pid)?;
             d.set_item("views", res.views.clone().into_pyarray(py))?;
             d.set_item("keypoints", kpts.into_pyarray(py))?;
             d.set_item("offsets_px", res.offsets_px.clone().into_pyarray(py))?;

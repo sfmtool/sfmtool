@@ -75,7 +75,7 @@ def collect_patches(
         v_vec[i] = np.asarray(p.v_axis) * hv
         normals[i] = p.normal
         w[i] = p.w
-    point_ids = np.asarray(cloud.point_ids, dtype=np.int64)
+    point_ids = np.asarray(cloud.point_indexes, dtype=np.int64)
     return centers, u_vec, v_vec, normals, point_ids, w
 
 

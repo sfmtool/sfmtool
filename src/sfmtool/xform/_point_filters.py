@@ -87,7 +87,7 @@ class RemoveNarrowTracksFilter:
                 recon.quaternions_wxyz,
                 recon.translations,
                 recon.positions,
-                recon.track_point_ids,
+                recon.track_point_indexes,
                 recon.track_image_indexes,
                 self.min_angle_rad,
             ),
@@ -208,7 +208,7 @@ class RemoveLargeFeaturesFilter:
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         track_image_indexes = np.asarray(recon.track_image_indexes)
         track_feature_indexes = np.asarray(recon.track_feature_indexes)
-        track_point_ids = np.asarray(recon.track_point_ids)
+        track_point_indexes = np.asarray(recon.track_point_indexes)
         point_count = recon.point_count
 
         # Load feature sizes per image (lazily, once per unique image)
@@ -256,7 +256,7 @@ class RemoveLargeFeaturesFilter:
             obs_sizes[obs_positions[valid]] = sizes[feat_idxs[valid]]
 
         max_feature_size_per_point = np.zeros(point_count, dtype=np.float32)
-        np.maximum.at(max_feature_size_per_point, track_point_ids, obs_sizes)
+        np.maximum.at(max_feature_size_per_point, track_point_indexes, obs_sizes)
 
         # Feature size is well-defined regardless of w, so score points at
         # infinity normally rather than passing them through.

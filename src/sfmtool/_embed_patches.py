@@ -93,10 +93,10 @@ def compact_to_embedded_patches(
     Args:
         recon: The source reconstruction (provides camera poses/intrinsics, image
             names, and the per-point geometry to carry over).
-        cloud: The refined patch cloud (its ``point_ids`` index ``recon``'s points);
-            supplies each surviving point's ``(u, v)`` frame.
+        cloud: The refined patch cloud (its ``point_indexes`` index ``recon``'s
+            points); supplies each surviving point's ``(u, v)`` frame.
         localizations: The per-point dicts returned by
-            :meth:`PatchCloud.localize_keypoints` — each ``{point_id, views,
+            :meth:`PatchCloud.localize_keypoints` — each ``{point_index, views,
             keypoints, ...}`` with the kept image indices and refined keypoints.
         image_file_hashes: One 16-byte XXH128 per image (see
             :func:`image_file_hashes_from_images`), parallel to ``recon.image_names``.
@@ -124,9 +124,9 @@ def compact_to_embedded_patches(
         # meaningful floor is >= 1 here and the pipeline default is 2.
         raise ValueError(f"min_views must be >= 1, got {min_views}")
 
-    cloud_pids = np.asarray(cloud.point_ids)
+    cloud_pids = np.asarray(cloud.point_indexes)
     pid_to_cloud = {int(p): i for i, p in enumerate(cloud_pids)}
-    loc_by_pid = {int(loc["point_id"]): loc for loc in localizations}
+    loc_by_pid = {int(loc["point_index"]): loc for loc in localizations}
 
     # Survivors: points with a patch and at least `min_views` kept observations,
     # in ascending source-point order (so the renumbering is deterministic).
@@ -157,7 +157,7 @@ def compact_to_embedded_patches(
     )
 
     # Surviving patch frame as half-extent vectors, then a renumbered cloud whose
-    # point_ids are the new dense indices (0..len(survivors)-1).
+    # point_indexes are the new dense indices (0..len(survivors)-1).
     p_new = len(survivors)
     u_xyz = np.zeros((p_new, 3), dtype=np.float32)
     v_xyz = np.zeros((p_new, 3), dtype=np.float32)
@@ -168,7 +168,7 @@ def compact_to_embedded_patches(
         v_xyz[new_id] = np.asarray(patch.v_axis, dtype=np.float64) * he[1]
     culled_cloud = PatchCloud.from_halfvec_arrays(u_xyz, v_xyz, centers)
     # from_halfvec_arrays drops zero-`u` rows; every survivor must keep a frame, or
-    # the cloud's point_ids would no longer be the dense 0..P_new-1 the scatter
+    # the cloud's point_indexes would no longer be the dense 0..P_new-1 the scatter
     # below relies on (and the survivor would be left frameless).
     if len(culled_cloud) != p_new:
         raise ValueError(
@@ -184,7 +184,7 @@ def compact_to_embedded_patches(
 
     # Flat, point-then-image-sorted observations and parallel keypoints.
     track_image_indexes: list[int] = []
-    track_point_ids: list[int] = []
+    track_point_indexes: list[int] = []
     keypoints: list[np.ndarray] = []
     for new_id, old_id in enumerate(survivors):
         loc = loc_by_pid[old_id]
@@ -192,12 +192,12 @@ def compact_to_embedded_patches(
         kpts = np.asarray(loc["keypoints"], dtype=np.float32).reshape(-1, 2)
         for j in np.argsort(views, kind="stable"):
             track_image_indexes.append(int(views[j]))
-            track_point_ids.append(new_id)
+            track_point_indexes.append(new_id)
             keypoints.append(kpts[j])
 
     keypoints_xy = np.asarray(keypoints, dtype=np.float32).reshape(-1, 2)
     track_image_indexes_arr = np.asarray(track_image_indexes, dtype=np.uint32)
-    track_point_ids_arr = np.asarray(track_point_ids, dtype=np.uint32)
+    track_point_indexes_arr = np.asarray(track_point_indexes, dtype=np.uint32)
 
     # The localizer keeps keypoints strictly in-frame in f64, but the f32 the format
     # stores can round a near-edge value up to exactly the width/height, which the
@@ -231,7 +231,7 @@ def compact_to_embedded_patches(
     kwargs["keypoints_xy"] = keypoints_xy
     kwargs["track_image_indexes"] = track_image_indexes_arr
     kwargs["track_feature_indexes"] = track_feature_indexes
-    kwargs["track_point_ids"] = track_point_ids_arr
+    kwargs["track_point_indexes"] = track_point_indexes_arr
     if new_bitmaps is not None:
         kwargs["patch_bitmaps"] = new_bitmaps
 
@@ -276,7 +276,7 @@ def _refine_subpixel(
     view_sets: dict[int, list[int]] = {}
     seeds: dict[int, list[list[float]]] = {}
     for loc in localizations:
-        pid = int(loc["point_id"])
+        pid = int(loc["point_index"])
         views = np.asarray(loc["views"], dtype=np.uint32).tolist()
         kpts = np.asarray(loc["keypoints"], dtype=np.float64).reshape(-1, 2)
         if not views:
@@ -292,7 +292,7 @@ def _refine_subpixel(
         images,
         view_sets=view_sets,
         starting_keypoints=seeds,
-        point_ids=list(view_sets.keys()),
+        point_indexes=list(view_sets.keys()),
         resolution=resolution,
         **kwargs,
     )
@@ -304,10 +304,10 @@ def _refine_subpixel(
     # that *does* happen here (a different image was somehow rejected by the
     # refiner's gate), we fall back to the localizer's keypoint for any view
     # the refiner didn't return — preserving the compaction-side membership.
-    refined_by_pid = {int(r["point_id"]): r for r in refined}
+    refined_by_pid = {int(r["point_index"]): r for r in refined}
     out: list[dict[str, Any]] = []
     for loc in localizations:
-        pid = int(loc["point_id"])
+        pid = int(loc["point_index"])
         r = refined_by_pid.get(pid)
         if r is None:
             out.append(loc)
@@ -421,7 +421,7 @@ def embed_patches(
         embedded, images, min_relative_zncc=min_relative_zncc, resolution=resolution
     )
     view_sets = {
-        int(s["point_id"]): np.asarray(s["admitted"]).tolist() for s in selections
+        int(s["point_index"]): np.asarray(s["admitted"]).tolist() for s in selections
     }
 
     # 3. Project starting keypoints (implicit) and congeal them, dropping views that

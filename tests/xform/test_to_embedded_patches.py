@@ -89,7 +89,9 @@ def test_to_embedded_patches_frames_points_at_infinity(
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     # Turn one point into a point at infinity: keep its direction, set w = 0.
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
-    counts = np.bincount(np.asarray(recon.track_point_ids), minlength=recon.point_count)
+    counts = np.bincount(
+        np.asarray(recon.track_point_indexes), minlength=recon.point_count
+    )
     pi = int(np.argmax(counts))  # a well-observed point (scales available)
     xyz = pos[pi, :3]
     pos[pi] = np.append(xyz / np.linalg.norm(xyz), 0.0)
@@ -108,7 +110,7 @@ def test_to_embedded_patches_frames_points_at_infinity(
     # is flagged at infinity (w == 0) so rendering treats its corners as
     # directions.
     patches = emb.patches
-    ids = list(patches.point_ids)
+    ids = list(patches.point_indexes)
     patch = patches[ids.index(pi)]
     d = np.asarray(emb.positions_xyzw, dtype=np.float64)[pi, :3]
     d = d / np.linalg.norm(d)
@@ -128,7 +130,7 @@ def test_to_embedded_patches_frames_points_at_infinity(
     # The frame survives a save/load round-trip (w is re-derived from the
     # reloaded point's homogeneous coordinate).
     reloaded = SfmrReconstruction.load(str(out))
-    rids = list(reloaded.patches.point_ids)
+    rids = list(reloaded.patches.point_indexes)
     assert reloaded.patches[rids.index(pi)].w == 0.0
 
 

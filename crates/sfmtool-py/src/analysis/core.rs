@@ -82,7 +82,7 @@ pub fn compute_narrow_track_mask(
     quaternions_wxyz: PyReadonlyArray2<f64>,
     translations: PyReadonlyArray2<f64>,
     positions: PyReadonlyArray2<f64>,
-    track_point_ids: PyReadonlyArray1<u32>,
+    track_point_indexes: PyReadonlyArray1<u32>,
     track_image_indexes: PyReadonlyArray1<u32>,
     min_angle_rad: f64,
 ) -> PyResult<Py<PyAny>> {
@@ -92,7 +92,7 @@ pub fn compute_narrow_track_mask(
     let q_data = to_contiguous!(quaternions_wxyz);
     let t_data = to_contiguous!(translations);
     let pos_data = to_contiguous!(positions);
-    let point_ids_data = to_contiguous!(track_point_ids);
+    let point_ids_data = to_contiguous!(track_point_indexes);
     let img_idx_data = to_contiguous!(track_image_indexes);
 
     let keep = sfmtool_core::geometry::viewing_angle::compute_narrow_track_mask(
@@ -175,19 +175,19 @@ pub fn find_point_correspondences_py(
     py: Python<'_>,
     source_track_image_indexes: PyReadonlyArray1<u32>,
     source_track_feature_indexes: PyReadonlyArray1<u32>,
-    source_track_point_ids: PyReadonlyArray1<u32>,
+    source_track_point_indexes: PyReadonlyArray1<u32>,
     target_track_image_indexes: PyReadonlyArray1<u32>,
     target_track_feature_indexes: PyReadonlyArray1<u32>,
-    target_track_point_ids: PyReadonlyArray1<u32>,
+    target_track_point_indexes: PyReadonlyArray1<u32>,
     shared_images_source: PyReadonlyArray1<u32>,
     shared_images_target: PyReadonlyArray1<u32>,
 ) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
     let src_img = to_contiguous!(source_track_image_indexes);
     let src_feat = to_contiguous!(source_track_feature_indexes);
-    let src_pts = to_contiguous!(source_track_point_ids);
+    let src_pts = to_contiguous!(source_track_point_indexes);
     let tgt_img = to_contiguous!(target_track_image_indexes);
     let tgt_feat = to_contiguous!(target_track_feature_indexes);
-    let tgt_pts = to_contiguous!(target_track_point_ids);
+    let tgt_pts = to_contiguous!(target_track_point_indexes);
     let shared_src = to_contiguous!(shared_images_source);
     let shared_tgt = to_contiguous!(shared_images_target);
 
@@ -215,19 +215,19 @@ pub fn find_point_correspondences_py(
 
 /// Filter tracks by point mask and remap point IDs.
 ///
-/// Returns (track_image_indexes, track_feature_indexes, track_point_ids) as 1D uint32 arrays.
+/// Returns (track_image_indexes, track_feature_indexes, track_point_indexes) as 1D uint32 arrays.
 #[pyfunction]
 pub fn filter_tracks_by_point_mask_py(
     py: Python<'_>,
     points_to_keep_mask: PyReadonlyArray1<bool>,
     track_image_indexes: PyReadonlyArray1<u32>,
     track_feature_indexes: PyReadonlyArray1<u32>,
-    track_point_ids: PyReadonlyArray1<u32>,
+    track_point_indexes: PyReadonlyArray1<u32>,
 ) -> PyResult<(Py<PyAny>, Py<PyAny>, Py<PyAny>)> {
     let mask_data = to_contiguous!(points_to_keep_mask);
     let img_data = to_contiguous!(track_image_indexes);
     let feat_data = to_contiguous!(track_feature_indexes);
-    let point_data = to_contiguous!(track_point_ids);
+    let point_data = to_contiguous!(track_point_indexes);
 
     let result = sfmtool_core::reconstruction::filter::filter_tracks_by_point_mask(
         &mask_data,
@@ -243,7 +243,7 @@ pub fn filter_tracks_by_point_mask_py(
         numpy::PyArray1::from_vec(py, result.track_feature_indexes)
             .into_any()
             .unbind(),
-        numpy::PyArray1::from_vec(py, result.track_point_ids)
+        numpy::PyArray1::from_vec(py, result.track_point_indexes)
             .into_any()
             .unbind(),
     ))
@@ -260,7 +260,7 @@ pub fn filter_tracks_by_point_mask_py(
 ///
 /// Returns:
 ///     Dict with keys: positions, colors, errors, track_image_indexes,
-///     track_feature_indexes, track_point_ids.
+///     track_feature_indexes, track_point_indexes.
 #[pyfunction]
 pub fn merge_points_and_tracks_py(
     py: Python<'_>,
@@ -350,8 +350,8 @@ pub fn merge_points_and_tracks_py(
         numpy::PyArray1::from_vec(py, result.track_feature_indexes),
     )?;
     dict.set_item(
-        "point_ids",
-        numpy::PyArray1::from_vec(py, result.track_point_ids),
+        "point_indexes",
+        numpy::PyArray1::from_vec(py, result.track_point_indexes),
     )?;
 
     Ok(dict.unbind())

@@ -12,17 +12,17 @@ use sfmtool_core::analysis::image_pair_graph;
 /// Build covisibility pairs from track observations.
 /// Returns list of (i, j, count) tuples sorted by count descending.
 #[pyfunction]
-#[pyo3(signature = (quaternions_wxyz, track_point_ids, track_image_indexes, angle_threshold_deg=90.0))]
+#[pyo3(signature = (quaternions_wxyz, track_point_indexes, track_image_indexes, angle_threshold_deg=90.0))]
 pub fn build_covisibility_pairs_py(
     quaternions_wxyz: PyReadonlyArray2<f64>,
-    track_point_ids: PyReadonlyArray1<u32>,
+    track_point_indexes: PyReadonlyArray1<u32>,
     track_image_indexes: PyReadonlyArray1<u32>,
     angle_threshold_deg: f64,
 ) -> PyResult<Vec<(u32, u32, u32)>> {
     let num_images = quaternions_wxyz.shape()[0];
 
     let q_data = to_contiguous!(quaternions_wxyz);
-    let point_ids_data = to_contiguous!(track_point_ids);
+    let point_ids_data = to_contiguous!(track_point_indexes);
     let img_idx_data = to_contiguous!(track_image_indexes);
 
     Ok(image_pair_graph::build_covisibility_pairs(

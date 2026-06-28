@@ -530,7 +530,7 @@ pub fn select_patch_cloud_views(
         .collect()
 }
 
-/// For each patch of `cloud` (linked to `recon` via `point_ids`), the track image
+/// For each patch of `cloud` (linked to `recon` via `point_indexes`), the track image
 /// indices observing its source 3D point — ready to use as the `track_views` of
 /// [`select_patch_cloud_views`]. Identical to
 /// [`view_indices_from_reconstruction`](super::normal_refine::view_indices_from_reconstruction);
@@ -538,7 +538,7 @@ pub fn select_patch_cloud_views(
 ///
 /// # Panics
 ///
-/// Panics if `cloud.point_ids` is not parallel to its patches.
+/// Panics if `cloud.point_indexes` is not parallel to its patches.
 pub fn track_views_from_reconstruction(
     recon: &SfmrReconstruction,
     cloud: &PatchCloud,

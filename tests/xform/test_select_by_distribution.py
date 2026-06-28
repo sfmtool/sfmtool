@@ -27,7 +27,7 @@ def _max_triangulation_angles_deg(path) -> np.ndarray:
     )
     positions = np.asarray(recon.positions)
     track_img = np.asarray(recon.track_image_indexes).astype(np.int64)
-    track_pt = np.asarray(recon.track_point_ids).astype(np.int64)
+    track_pt = np.asarray(recon.track_point_indexes).astype(np.int64)
     vec = positions[track_pt] - centers[track_img]
     vec = vec / np.maximum(np.linalg.norm(vec, axis=1, keepdims=True), 1e-12)
     rays_by_point: dict[int, list[np.ndarray]] = {}

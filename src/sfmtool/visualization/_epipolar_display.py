@@ -76,7 +76,7 @@ def _draw_epipolar_line(
 
 def _curve_anchor_depths(
     recon,
-    track_point_ids: np.ndarray,
+    track_point_indexes: np.ndarray,
     R_from: np.ndarray,
     t_from: np.ndarray,
     R_other: np.ndarray,
@@ -86,7 +86,7 @@ def _curve_anchor_depths(
 
     Uses the reconstructed track depth when a triangulated 3D point is
     available (and is in front of the camera); otherwise the baseline length
-    `‖C_other − C_from‖`. `track_point_ids` is one entry per feature pair with
+    `‖C_other − C_from‖`. `track_point_indexes` is one entry per feature pair with
     `-1` marking unmatched features. See specs/core/epipolar-curves.md
     ("Caller-side seeding strategy") for the rationale.
     """
@@ -96,11 +96,11 @@ def _curve_anchor_depths(
     if baseline < 1e-9:
         baseline = 1.0  # degenerate; Rust returns empty anyway.
 
-    depths = np.full(len(track_point_ids), baseline, dtype=np.float64)
-    valid = track_point_ids >= 0
+    depths = np.full(len(track_point_indexes), baseline, dtype=np.float64)
+    valid = track_point_indexes >= 0
     if not valid.any():
         return depths
-    pids = track_point_ids[valid]
+    pids = track_point_indexes[valid]
     points = np.asarray(recon.positions)[pids]
     track_depths = points @ R_from[2, :] + t_from[2]
     in_front = track_depths > 0
@@ -175,7 +175,7 @@ def draw_epipolar_visualization(
     cameras = recon.cameras
     image_indexes = recon.track_image_indexes
     feature_indexes = recon.track_feature_indexes
-    point_ids = recon.track_point_ids
+    point_ids = recon.track_point_indexes
 
     observations = np.column_stack([image_indexes, feature_indexes])
 
@@ -351,7 +351,7 @@ def draw_epipolar_visualization(
         # Sweep matches aren't tied to triangulated 3D points, so per-feature
         # track depth is unavailable; -1 sentinel routes the caller to the
         # baseline-length fallback.
-        feature_track_point_ids = np.full(len(feature_pairs), -1, dtype=np.int64)
+        feature_track_point_indexes = np.full(len(feature_pairs), -1, dtype=np.int64)
         print(f"Found {len(mutual_matches)} matches using {match_method}")
 
     else:
@@ -373,18 +373,22 @@ def draw_epipolar_visualization(
             )
 
         feature_pairs = []
-        feature_track_point_ids = []
+        feature_track_point_indexes = []
         for point_id in shared_point_ids:
             feat1_idx = obs1[point_ids1 == point_id, 1][0]
             feat2_idx = obs2[point_ids2 == point_id, 1][0]
             feature_pairs.append((feat1_idx, feat2_idx))
-            feature_track_point_ids.append(point_id)
+            feature_track_point_indexes.append(point_id)
 
         if max_features is not None and len(feature_pairs) > max_features:
             indices = np.linspace(0, len(feature_pairs) - 1, max_features, dtype=int)
             feature_pairs = [feature_pairs[i] for i in indices]
-            feature_track_point_ids = [feature_track_point_ids[i] for i in indices]
-        feature_track_point_ids = np.asarray(feature_track_point_ids, dtype=np.int64)
+            feature_track_point_indexes = [
+                feature_track_point_indexes[i] for i in indices
+            ]
+        feature_track_point_indexes = np.asarray(
+            feature_track_point_indexes, dtype=np.int64
+        )
 
         with SiftReader(sift1_path) as reader:
             positions1 = reader.read_positions()
@@ -544,10 +548,10 @@ def draw_epipolar_visualization(
 
         if draw_lines:
             anchors_from_cam1 = _curve_anchor_depths(
-                recon, feature_track_point_ids, R1, t1, R2, t2
+                recon, feature_track_point_indexes, R1, t1, R2, t2
             )
             anchors_from_cam2 = _curve_anchor_depths(
-                recon, feature_track_point_ids, R2, t2, R1, t1
+                recon, feature_track_point_indexes, R2, t2, R1, t1
             )
             curves_in_2 = epipolar_curves(
                 pts1,

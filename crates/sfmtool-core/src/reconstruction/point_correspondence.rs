@@ -27,10 +27,10 @@ pub struct PointCorrespondenceResult {
 /// # Arguments
 /// * `source_track_image_indexes` - Image index for each source track observation
 /// * `source_track_feature_indexes` - Feature index for each source track observation
-/// * `source_track_point_ids` - Point ID for each source track observation
+/// * `source_track_point_indexes` - Point ID for each source track observation
 /// * `target_track_image_indexes` - Image index for each target track observation
 /// * `target_track_feature_indexes` - Feature index for each target track observation
-/// * `target_track_point_ids` - Point ID for each target track observation
+/// * `target_track_point_indexes` - Point ID for each target track observation
 /// * `shared_images_source` - Source image indices for shared image pairs
 /// * `shared_images_target` - Target image indices for shared image pairs
 ///
@@ -40,22 +40,22 @@ pub struct PointCorrespondenceResult {
 pub fn find_point_correspondences(
     source_track_image_indexes: &[u32],
     source_track_feature_indexes: &[u32],
-    source_track_point_ids: &[u32],
+    source_track_point_indexes: &[u32],
     target_track_image_indexes: &[u32],
     target_track_feature_indexes: &[u32],
-    target_track_point_ids: &[u32],
+    target_track_point_indexes: &[u32],
     shared_images_source: &[u32],
     shared_images_target: &[u32],
 ) -> PointCorrespondenceResult {
     let source_map = build_feature_to_point_map(
         source_track_image_indexes,
         source_track_feature_indexes,
-        source_track_point_ids,
+        source_track_point_indexes,
     );
     let target_map = build_feature_to_point_map(
         target_track_image_indexes,
         target_track_feature_indexes,
-        target_track_point_ids,
+        target_track_point_indexes,
     );
 
     let mut correspondences: HashMap<u32, u32> = HashMap::new();
@@ -116,7 +116,7 @@ pub struct MergedPointsAndTracks {
     /// Feature indexes for all track observations.
     pub track_feature_indexes: Vec<u32>,
     /// Point IDs for all track observations.
-    pub track_point_ids: Vec<u32>,
+    pub track_point_indexes: Vec<u32>,
 }
 
 /// Merge 3D points and tracks from multiple aligned reconstructions.
@@ -291,7 +291,7 @@ pub fn merge_points_and_tracks(
         errors: Vec::with_capacity(point_groups.len()),
         track_image_indexes: Vec::new(),
         track_feature_indexes: Vec::new(),
-        track_point_ids: Vec::new(),
+        track_point_indexes: Vec::new(),
     };
 
     for group_ids in point_groups.values() {
@@ -328,7 +328,7 @@ pub fn merge_points_and_tracks(
         for (merged_img_idx, feat_idx) in all_observations {
             result.track_image_indexes.push(merged_img_idx);
             result.track_feature_indexes.push(feat_idx);
-            result.track_point_ids.push(merged_point_id);
+            result.track_point_indexes.push(merged_point_id);
         }
     }
 

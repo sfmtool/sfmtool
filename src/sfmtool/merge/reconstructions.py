@@ -87,7 +87,7 @@ def merge_reconstructions(
     merged_tracks = {
         "image_indexes": merge_result["image_indexes"],
         "feature_indexes": merge_result["feature_indexes"],
-        "point_ids": merge_result["point_ids"],
+        "point_indexes": merge_result["point_indexes"],
     }
     click.echo(f"  Merged 3D points: {len(merged_points['positions'])}")
     click.echo(f"  Total observations: {len(merged_tracks['image_indexes'])}")
@@ -315,7 +315,7 @@ def _create_merged_reconstruction(
     first_recon = source_reconstructions[0]
 
     observation_counts = np.bincount(
-        tracks["point_ids"], minlength=len(points["positions"])
+        tracks["point_indexes"], minlength=len(points["positions"])
     ).astype(np.uint32)
 
     # Build merged rig_frame_data if source reconstructions have it
@@ -345,7 +345,9 @@ def _create_merged_reconstruction(
         track_feature_indexes=np.ascontiguousarray(
             tracks["feature_indexes"], dtype=np.uint32
         ),
-        track_point_ids=np.ascontiguousarray(tracks["point_ids"], dtype=np.uint32),
+        track_point_indexes=np.ascontiguousarray(
+            tracks["point_indexes"], dtype=np.uint32
+        ),
         observation_counts=observation_counts,
         rig_frame_data=rig_frame_data,
     )

@@ -75,7 +75,7 @@ pub fn compute_camera_directions(quaternions_wxyz: &[f64], num_images: usize) ->
 /// # Arguments
 /// * `quaternions_wxyz` - Flat `N*4` slice of quaternions in WXYZ format
 /// * `num_images` - Number of images
-/// * `track_point_ids` - Point ID for each observation
+/// * `track_point_indexes` - Point ID for each observation
 /// * `track_image_indexes` - Image index for each observation
 /// * `angle_threshold_deg` - Max angle between camera directions (90.0 typical)
 ///
@@ -85,15 +85,15 @@ pub fn compute_camera_directions(quaternions_wxyz: &[f64], num_images: usize) ->
 pub fn build_covisibility_pairs(
     quaternions_wxyz: &[f64],
     num_images: usize,
-    track_point_ids: &[u32],
+    track_point_indexes: &[u32],
     track_image_indexes: &[u32],
     angle_threshold_deg: f64,
 ) -> Vec<(u32, u32, u32)> {
-    debug_assert_eq!(track_point_ids.len(), track_image_indexes.len());
+    debug_assert_eq!(track_point_indexes.len(), track_image_indexes.len());
 
     // Step 1: Build mapping from point_id -> list of image_ids
     let mut point_to_images: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (obs_idx, &point_id) in track_point_ids.iter().enumerate() {
+    for (obs_idx, &point_id) in track_point_indexes.iter().enumerate() {
         let image_id = track_image_indexes[obs_idx];
         point_to_images.entry(point_id).or_default().push(image_id);
     }

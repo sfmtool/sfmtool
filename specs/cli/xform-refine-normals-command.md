@@ -193,7 +193,7 @@ improve further). It does **not** resize the patch.
 ## Which points are refined
 
 - **Finite points only.** `--refine-normals` masks the stored cloud to finite
-  points (`finite = ~recon.point_is_at_infinity[cloud.point_ids]`) and scatters
+  points (`finite = ~recon.point_is_at_infinity[cloud.point_indexes]`) and scatters
   only those refined normals back; points at infinity (`w = 0`) keep their stored
   normal. The mask is required: the copy-and-scatter write-back would otherwise
   overwrite an infinity point's `(0, 0, 0)` normal with the skipped patch's
@@ -222,12 +222,12 @@ class RefineNormalsTransform:
     def apply(self, recon):  # recon is embedded_patches (gate-enforced)
         images = [load_full_res(workspace_dir / name) for name in recon.image_names]
         cloud = recon.patches            # the stored per-point frame; not rebuilt
-        point_ids = cloud.point_ids
-        finite = ~recon.point_is_at_infinity[point_ids]   # refiner skips infinity
+        point_indexes = cloud.point_indexes
+        finite = ~recon.point_is_at_infinity[point_indexes]   # refiner skips infinity
         result = cloud.refine_normals(
             recon, images, use_stored_keypoints=True, angular_range_deg=..., ...)
         normals = np.asarray(recon.normals, np.float32).copy()  # (P, 3)
-        normals[point_ids[finite]] = result["normal"][finite]
+        normals[point_indexes[finite]] = result["normal"][finite]
         # The frame is always re-persisted (it must match the rewritten normals).
         return recon.clone_with_changes(normals=normals, patches=cloud)
 ```
@@ -235,11 +235,11 @@ class RefineNormalsTransform:
 `recon.normals` is always point-count-sized (each point carries a `normal`), so
 the copy-and-scatter keeps the normals of infinity points intact while
 overwriting every refined finite point. `clone_with_changes` validates the
-`(point_count, 3)` shape. The scatter relies on `cloud.point_ids` being
+`(point_count, 3)` shape. The scatter relies on `cloud.point_indexes` being
 **point-array indices** (the 3D-point index, not a track id) — which is what
 `recon.patches` emits and what the binding range-checks — so `normals[pid] = …`
 indexes the right row directly. The `finite` mask is keyed off the cloud's own
-`point_ids`, so it stays aligned with both `point_ids` and the per-patch
+`point_indexes`, so it stays aligned with both `point_indexes` and the per-patch
 `result["normal"]` rows.
 
 **Persisting the patch cloud (always).** The refined `PatchCloud` is always
@@ -349,7 +349,7 @@ there is no streaming/tiling of the image set in v1.
 already stored on the `embedded_patches` input). It writes only the output `.sfmr`.
 
 Unlike `scripts/patch_crossval.py`, the CLI op refines the **whole** cloud (no
-`point_ids` subset) — the subset argument exists for the strip renderer's
+`point_indexes` subset) — the subset argument exists for the strip renderer's
 "only the displayed tracks" case, which has no CLI analogue.
 
 ## Integration points

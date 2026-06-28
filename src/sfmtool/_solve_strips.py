@@ -72,13 +72,13 @@ class _SolveStrips:
             extent_value=extent_factor,
             exclude_points_at_infinity=True,
         )
-        self._cloud_index = {int(p): i for i, p in enumerate(self.cloud.point_ids)}
+        self._cloud_index = {int(p): i for i, p in enumerate(self.cloud.point_indexes)}
 
         self.obs: dict[int, list[int]] = {}
         # Per-observation (image_index, feature_index) for feature-size lookups.
         self.feat_obs: dict[int, list[tuple[int, int]]] = {}
         for pid, im, feat in zip(
-            np.asarray(recon.track_point_ids).tolist(),
+            np.asarray(recon.track_point_indexes).tolist(),
             np.asarray(recon.track_image_indexes).tolist(),
             np.asarray(recon.track_feature_indexes).tolist(),
         ):
@@ -107,7 +107,7 @@ class _SolveStrips:
             resolution=self.patch,
             angular_range_deg=angular_range_deg,
             init_steps=init_steps,
-            point_ids=[int(p) for p in point_ids],
+            point_indexes=[int(p) for p in point_ids],
             # `compare --strips` is the strip-render reference: anchor every
             # view at the reprojected center so the comparison metric is the
             # same regardless of whether the recon happens to carry inline
