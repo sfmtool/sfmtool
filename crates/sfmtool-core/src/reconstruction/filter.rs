@@ -8,7 +8,7 @@ pub struct FilteredTracksResult {
     /// Filtered track feature indexes (only observations of kept points)
     pub track_feature_indexes: Vec<u32>,
     /// Remapped track point IDs (contiguous from 0)
-    pub track_point_ids: Vec<u32>,
+    pub track_point_indexes: Vec<u32>,
 }
 
 /// Filter tracks based on a point keep mask, and remap point IDs to be contiguous.
@@ -21,7 +21,7 @@ pub struct FilteredTracksResult {
 /// * `points_to_keep_mask` - Boolean slice of length num_points. true = keep.
 /// * `track_image_indexes` - Image index for each track observation
 /// * `track_feature_indexes` - Feature index for each track observation
-/// * `track_point_ids` - Point ID for each track observation
+/// * `track_point_indexes` - Point ID for each track observation
 ///
 /// # Returns
 /// FilteredTracksResult with filtered and remapped track data
@@ -29,7 +29,7 @@ pub fn filter_tracks_by_point_mask(
     points_to_keep_mask: &[bool],
     track_image_indexes: &[u32],
     track_feature_indexes: &[u32],
-    track_point_ids: &[u32],
+    track_point_indexes: &[u32],
 ) -> FilteredTracksResult {
     let num_points = points_to_keep_mask.len();
 
@@ -44,13 +44,13 @@ pub fn filter_tracks_by_point_mask(
     }
 
     // Filter and remap tracks in a single pass
-    let n_tracks = track_point_ids.len();
+    let n_tracks = track_point_indexes.len();
     let mut new_image_indexes = Vec::with_capacity(n_tracks);
     let mut new_feature_indexes = Vec::with_capacity(n_tracks);
     let mut new_point_ids = Vec::with_capacity(n_tracks);
 
     for i in 0..n_tracks {
-        let point_id = track_point_ids[i] as usize;
+        let point_id = track_point_indexes[i] as usize;
         if point_id < num_points && points_to_keep_mask[point_id] {
             new_image_indexes.push(track_image_indexes[i]);
             new_feature_indexes.push(track_feature_indexes[i]);
@@ -61,7 +61,7 @@ pub fn filter_tracks_by_point_mask(
     FilteredTracksResult {
         track_image_indexes: new_image_indexes,
         track_feature_indexes: new_feature_indexes,
-        track_point_ids: new_point_ids,
+        track_point_indexes: new_point_ids,
     }
 }
 

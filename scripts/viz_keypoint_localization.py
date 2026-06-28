@@ -191,9 +191,9 @@ def render_rows(recon, cloud, images, args):
     quats = np.asarray(recon.quaternions_wxyz, dtype=np.float64)
     cams = recon.cameras
     cam_idx = np.asarray(recon.camera_indexes)
-    pid_to_patch = {int(p): i for i, p in enumerate(np.asarray(cloud.point_ids))}
+    pid_to_patch = {int(p): i for i, p in enumerate(np.asarray(cloud.point_indexes))}
 
-    ids = np.asarray(cloud.point_ids)
+    ids = np.asarray(cloud.point_indexes)
     rng = np.random.default_rng(args.seed)
     if args.prioritize_infinity:
         sample = _infinity_first_sample(recon, ids, args.sample, rng)
@@ -203,18 +203,18 @@ def render_rows(recon, cloud, images, args):
         ).tolist()
 
     sel = cloud.select_views(
-        recon, images, point_ids=sample, resolution=args.resolution
+        recon, images, point_indexes=sample, resolution=args.resolution
     )
-    view_sets = {int(r["point_id"]): np.asarray(r["admitted"]).tolist() for r in sel}
+    view_sets = {int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel}
     loc = cloud.localize_keypoints(
         recon,
         images,
         view_sets=view_sets,
-        point_ids=sample,
+        point_indexes=sample,
         resolution=args.resolution,
         max_shift_px=args.max_shift_px,
     )
-    loc_by_pid = {int(r["point_id"]): r for r in loc}
+    loc_by_pid = {int(r["point_index"]): r for r in loc}
     w = gauss_window(args.resolution)
 
     rows = []

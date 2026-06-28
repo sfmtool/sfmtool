@@ -726,7 +726,7 @@ fn batch_matches_per_patch() {
     let views = scene.views();
     let cloud = PatchCloud {
         patches: vec![plane_patch(), plane_patch()],
-        point_ids: vec![0, 1],
+        point_indexes: vec![0, 1],
     };
     let view_sets = vec![vec![0u32, 1, 2, 3], vec![0u32, 1, 2, 3]];
 

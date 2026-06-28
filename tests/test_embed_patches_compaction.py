@@ -46,7 +46,7 @@ def _run_pipeline(recon, images, resolution=12):
         recon, images, resolution=resolution, render_bitmaps=True
     )
     sel = cloud.select_views(recon, images, resolution=resolution)
-    view_sets = {int(r["point_id"]): np.asarray(r["admitted"]).tolist() for r in sel}
+    view_sets = {int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel}
     locs = cloud.localize_keypoints(
         recon, images, view_sets=view_sets, resolution=resolution
     )
@@ -63,7 +63,7 @@ def test_from_halfvec_arrays_round_trips_a_cloud():
     )
     cloud = PatchCloud.from_halfvec_arrays(u, v, centers)
     # Row 1 has a zero u -> dropped; rows 0 and 2 survive with their indices.
-    assert list(cloud.point_ids) == [0, 2]
+    assert list(cloud.point_indexes) == [0, 2]
     assert len(cloud) == 2
     p0 = cloud[0]
     assert np.allclose(p0.center, [1.0, 1.0, 1.0])
@@ -109,16 +109,16 @@ def test_compact_to_embedded_patches_round_trip(
     # Association: each new point's (image, keypoint) rows and geometry match the
     # source point's localization — proving the renumbering kept everything aligned,
     # not just that the keypoint multiset round-trips.
-    cloud_pids = {int(p) for p in cloud.point_ids}
+    cloud_pids = {int(p) for p in cloud.point_indexes}
     survivors = sorted(
-        int(loc["point_id"])
+        int(loc["point_index"])
         for loc in locs
-        if int(loc["point_id"]) in cloud_pids and len(np.asarray(loc["views"])) >= 2
+        if int(loc["point_index"]) in cloud_pids and len(np.asarray(loc["views"])) >= 2
     )
-    loc_by_pid = {int(loc["point_id"]): loc for loc in locs}
+    loc_by_pid = {int(loc["point_index"]): loc for loc in locs}
     src_pos = np.asarray(recon.positions)
     new_pos = np.asarray(new.positions)
-    tpid = np.asarray(new.track_point_ids)
+    tpid = np.asarray(new.track_point_indexes)
     timg = np.asarray(new.track_image_indexes)
     for new_id, old_id in enumerate(survivors):
         loc = loc_by_pid[old_id]
@@ -177,7 +177,9 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     # Turn one well-observed point into a point at infinity.
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
-    counts = np.bincount(np.asarray(recon.track_point_ids), minlength=recon.point_count)
+    counts = np.bincount(
+        np.asarray(recon.track_point_indexes), minlength=recon.point_count
+    )
     pi = int(np.argmax(counts))
     xyz = pos[pi, :3]
     pos[pi] = np.append(xyz / np.linalg.norm(xyz), 0.0)
@@ -191,7 +193,7 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
 
     # Fabricate localizations (point center per view) for the infinity point plus
     # two finite points, each kept with >= min_views observations.
-    tpids = np.asarray(recon.track_point_ids)
+    tpids = np.asarray(recon.track_point_indexes)
     timgs = np.asarray(recon.track_image_indexes)
     cam_idx = np.asarray(recon.camera_indexes)
     cams = recon.cameras
@@ -210,7 +212,7 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
         )
         locs.append(
             {
-                "point_id": int(p),
+                "point_index": int(p),
                 "views": views.astype(np.uint32),
                 "keypoints": kpts,
                 "offsets_px": np.zeros(len(views)),

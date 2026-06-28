@@ -116,7 +116,7 @@ class BundleAdjustTransform:
 
         track_image_indexes_list = []
         track_feature_indexes_list = []
-        track_point_ids_list = []
+        track_point_indexes_list = []
         observation_counts = np.zeros(len(point_ids), dtype=np.uint32)
 
         for new_pid, old_pid in enumerate(point_ids):
@@ -129,11 +129,11 @@ class BundleAdjustTransform:
                 if image_idx is not None:
                     track_image_indexes_list.append(image_idx)
                     track_feature_indexes_list.append(element.point2D_idx)
-                    track_point_ids_list.append(new_pid)
+                    track_point_indexes_list.append(new_pid)
 
         track_image_indexes = np.array(track_image_indexes_list, dtype=np.uint32)
         track_feature_indexes = np.array(track_feature_indexes_list, dtype=np.uint32)
-        track_point_ids = np.array(track_point_ids_list, dtype=np.uint32)
+        track_point_indexes = np.array(track_point_indexes_list, dtype=np.uint32)
 
         rig_frame_data = _extract_rig_frame_data(
             reconstruction, camera_id_to_index, image_id_to_index
@@ -149,7 +149,7 @@ class BundleAdjustTransform:
             errors=errors,
             track_image_indexes=track_image_indexes,
             track_feature_indexes=track_feature_indexes,
-            track_point_ids=track_point_ids,
+            track_point_indexes=track_point_indexes,
             observation_counts=observation_counts,
         )
         if rig_frame_data is not None:

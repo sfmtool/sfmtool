@@ -227,7 +227,7 @@ class TestMergeQuality:
             for img_idx, feat_idx, pt_id in zip(
                 recon.track_image_indexes,
                 recon.track_feature_indexes,
-                recon.track_point_ids,
+                recon.track_point_indexes,
             ):
                 img_name = Path(recon.image_names[img_idx]).name
                 result[(img_name, int(feat_idx))] = int(pt_id)

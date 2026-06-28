@@ -170,7 +170,7 @@ def heatmap(
                 recon.quaternions_wxyz,
                 recon.translations,
                 recon.track_image_indexes,
-                recon.track_point_ids,
+                recon.track_point_indexes,
             )
         else:
             tri_angles = None
@@ -183,7 +183,7 @@ def heatmap(
         for obs_idx in range(len(recon.track_image_indexes)):
             img_idx = recon.track_image_indexes[obs_idx]
             feat_idx = recon.track_feature_indexes[obs_idx]
-            point_idx = recon.track_point_ids[obs_idx]
+            point_idx = recon.track_point_indexes[obs_idx]
 
             if img_idx not in image_features:
                 image_features[img_idx] = []

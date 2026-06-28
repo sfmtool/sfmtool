@@ -283,7 +283,7 @@ def test_refine_normals_persists_patch_cloud_round_trips(
     assert len(rcloud) == n
 
     np.testing.assert_array_equal(
-        np.asarray(rcloud.point_ids), np.asarray(cloud.point_ids)
+        np.asarray(rcloud.point_indexes), np.asarray(cloud.point_indexes)
     )
 
     # Per-patch geometry round-trips (half-vectors are float32 on disk).
@@ -296,7 +296,7 @@ def test_refine_normals_persists_patch_cloud_round_trips(
     # The patch outward normal agrees with the per-point normal it was scattered
     # into, for the linked point.
     normals = np.asarray(reloaded.normals)
-    pid = int(np.asarray(rcloud.point_ids)[0])
+    pid = int(np.asarray(rcloud.point_indexes)[0])
     np.testing.assert_allclose(after.normal, normals[pid], atol=1e-5)
 
 

@@ -128,7 +128,7 @@ def _remap_tracks(
     """
     src_img_idxs = np.asarray(recon.track_image_indexes)
     src_feat_idxs = np.asarray(recon.track_feature_indexes)
-    src_pt3d_idxs = np.asarray(recon.track_point_ids)
+    src_pt3d_idxs = np.asarray(recon.track_point_indexes)
     num_points = recon.point_count
 
     # Remap feature indexes, dropping observations whose features were dropped

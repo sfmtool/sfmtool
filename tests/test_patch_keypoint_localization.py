@@ -38,7 +38,7 @@ def _load_images(recon) -> list[np.ndarray]:
 
 def _sample_point_ids(cloud, n: int = 200, seed: int = 0) -> list[int]:
     """A deterministic point-id subset, to keep the per-point search fast."""
-    ids = np.asarray(cloud.point_ids)
+    ids = np.asarray(cloud.point_indexes)
     rng = np.random.default_rng(seed)
     return np.sort(rng.choice(ids, size=min(n, len(ids)), replace=False)).tolist()
 
@@ -75,8 +75,8 @@ def _project(recon, point_xyz: np.ndarray, image_idx: int):
 
 def _view_sets_from_selection(cloud, recon, images, sample):
     """Photometric view sets keyed by point id, for the sampled points."""
-    sel = cloud.select_views(recon, images, point_ids=sample, resolution=12)
-    return {int(r["point_id"]): np.asarray(r["admitted"]).tolist() for r in sel}
+    sel = cloud.select_views(recon, images, point_indexes=sample, resolution=12)
+    return {int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel}
 
 
 def test_localize_keypoints_convex_dataset(seoul_bull_workspace: Path):
@@ -95,17 +95,17 @@ def test_localize_keypoints_convex_dataset(seoul_bull_workspace: Path):
         recon,
         images,
         view_sets=view_sets,
-        point_ids=sample,
+        point_indexes=sample,
         resolution=12,
         max_shift_px=max_shift_px,
     )
 
-    assert {int(r["point_id"]) for r in results} == set(sample)
+    assert {int(r["point_index"]) for r in results} == set(sample)
     positions = np.asarray(recon.positions, dtype=np.float64)
 
     refined_any = False
     for r in results:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         views = np.asarray(r["views"], dtype=np.int64)
         kpts = np.asarray(r["keypoints"], dtype=np.float64)
         offs = np.asarray(r["offsets_px"], dtype=np.float64)
@@ -151,9 +151,11 @@ def test_localize_keypoints_nonconvex_fisheye_rig(kerry_park_workspace: Path):
     assert len(cloud) > 0
 
     sample = _sample_point_ids(cloud, n=120)
-    results = cloud.localize_keypoints(recon, images, point_ids=sample, resolution=12)
+    results = cloud.localize_keypoints(
+        recon, images, point_indexes=sample, resolution=12
+    )
 
-    assert {int(r["point_id"]) for r in results} == set(sample)
+    assert {int(r["point_index"]) for r in results} == set(sample)
     for r in results:
         views = np.asarray(r["views"], dtype=np.int64)
         kpts = np.asarray(r["keypoints"], dtype=np.float64)
@@ -173,17 +175,19 @@ def test_localize_keypoints_defaults_to_track(seoul_bull_workspace: Path):
     )
 
     # The track view set per point.
-    point_ids = np.asarray(recon.track_point_ids)
+    point_ids = np.asarray(recon.track_point_indexes)
     image_idxs = np.asarray(recon.track_image_indexes)
     tracks: dict[int, set[int]] = {}
     for pid, im in zip(point_ids.tolist(), image_idxs.tolist()):
         tracks.setdefault(int(pid), set()).add(int(im))
 
     sample = _sample_point_ids(cloud, n=120)
-    results = cloud.localize_keypoints(recon, images, point_ids=sample, resolution=12)
+    results = cloud.localize_keypoints(
+        recon, images, point_indexes=sample, resolution=12
+    )
 
     for r in results:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         views = set(np.asarray(r["views"], dtype=np.int64).tolist())
         assert views.issubset(tracks[pid]), (
             f"point {pid}: kept {sorted(views)} not within track {sorted(tracks[pid])}"
@@ -191,7 +195,7 @@ def test_localize_keypoints_defaults_to_track(seoul_bull_workspace: Path):
 
 
 def _tracks(recon) -> dict[int, set[int]]:
-    point_ids = np.asarray(recon.track_point_ids)
+    point_ids = np.asarray(recon.track_point_indexes)
     image_idxs = np.asarray(recon.track_image_indexes)
     out: dict[int, set[int]] = {}
     for pid, im in zip(point_ids.tolist(), image_idxs.tolist()):
@@ -217,14 +221,14 @@ def test_localize_keypoints_view_sets_override_is_honored(seoul_bull_workspace: 
         recon,
         images,
         view_sets={pid: sorted(tracks[pid]) for pid in sample},
-        point_ids=sample,
+        point_indexes=sample,
         resolution=12,
     )
     # Pick a point with >=3 track views where some kept view can be dropped while
     # leaving >=2 — so the override stays above the two-view floor.
     target_pid, drop_view = None, None
     for r in base:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         kept = np.asarray(r["views"], dtype=np.int64).tolist()
         if len(kept) >= 3 and len(tracks[pid]) >= 3:
             target_pid, drop_view = pid, kept[0]
@@ -236,7 +240,7 @@ def test_localize_keypoints_view_sets_override_is_honored(seoul_bull_workspace: 
         recon,
         images,
         view_sets={target_pid: override},
-        point_ids=[target_pid],
+        point_indexes=[target_pid],
         resolution=12,
     )
     assert len(res) == 1
@@ -251,7 +255,7 @@ def test_localize_keypoints_view_sets_override_is_honored(seoul_bull_workspace: 
     # A point left out of view_sets entirely still localizes over its track.
     uncovered = next(p for p in sample if p != target_pid)
     res2 = cloud.localize_keypoints(
-        recon, images, view_sets={}, point_ids=[uncovered], resolution=12
+        recon, images, view_sets={}, point_indexes=[uncovered], resolution=12
     )
     got2 = set(np.asarray(res2[0]["views"], dtype=np.int64).tolist())
     assert got2.issubset(tracks[uncovered])
@@ -271,7 +275,7 @@ def test_localize_keypoints_grazing_cutoff_drops_views(kerry_park_workspace: Pat
         res = cloud.localize_keypoints(
             recon,
             images,
-            point_ids=sample,
+            point_indexes=sample,
             resolution=12,
             min_grazing_cos=min_grazing_cos,
         )
@@ -294,9 +298,9 @@ def test_localize_keypoints_empty_view_set_yields_empty_arrays(
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
-    pid = int(np.asarray(cloud.point_ids)[0])
+    pid = int(np.asarray(cloud.point_indexes)[0])
     res = cloud.localize_keypoints(
-        recon, images, view_sets={pid: []}, point_ids=[pid], resolution=12
+        recon, images, view_sets={pid: []}, point_indexes=[pid], resolution=12
     )
     assert len(res) == 1
     assert np.asarray(res[0]["views"]).shape == (0,)
@@ -316,9 +320,9 @@ def test_localize_keypoints_rejects_out_of_range_view_index(
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
-    pid = int(np.asarray(cloud.point_ids)[0])
+    pid = int(np.asarray(cloud.point_indexes)[0])
     bad = {pid: [0, len(images)]}  # len(images) is one past the last valid index
     with pytest.raises(ValueError):
         cloud.localize_keypoints(
-            recon, images, view_sets=bad, point_ids=[pid], resolution=12
+            recon, images, view_sets=bad, point_indexes=[pid], resolution=12
         )

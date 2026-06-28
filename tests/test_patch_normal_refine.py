@@ -40,7 +40,7 @@ def _sample_point_ids(cloud, n: int = 500, seed: int = 0) -> list[int]:
     leaving the statistical assertions (consensus improves, cache equivalence)
     well-populated. ``min(n, …)`` keeps it robust to small clouds.
     """
-    ids = np.asarray(cloud.point_ids)
+    ids = np.asarray(cloud.point_indexes)
     rng = np.random.default_rng(seed)
     return np.sort(rng.choice(ids, size=min(n, len(ids)), replace=False)).tolist()
 
@@ -62,7 +62,7 @@ def test_refine_normals_improves_consensus(
     res = cloud.refine_normals(
         recon,
         images,
-        point_ids=_sample_point_ids(cloud),
+        point_indexes=_sample_point_ids(cloud),
         resolution=12,
         init_steps=5,
         refine_levels=2,
@@ -121,7 +121,7 @@ def test_confidence_is_opt_in(seoul_bull_workspace: Path):
         res = cloud.refine_normals(
             recon,
             images,
-            point_ids=sample,
+            point_indexes=sample,
             resolution=12,
             init_steps=5,
             refine_levels=2,
@@ -155,7 +155,7 @@ def test_render_bitmaps_scatters_to_points(seoul_bull_workspace: Path):
     res = cloud.refine_normals(
         recon,
         images,
-        point_ids=sample,
+        point_indexes=sample,
         resolution=resolution,
         init_steps=5,
         refine_levels=2,
@@ -172,7 +172,7 @@ def test_render_bitmaps_scatters_to_points(seoul_bull_workspace: Path):
 
     # Only refined (scored) patches get a filled row; everything else is zero.
     photo = np.asarray(res["photoconsistency"])
-    point_ids = np.asarray(cloud.point_ids)
+    point_ids = np.asarray(cloud.point_indexes)
     filled = bitmaps.any(axis=(1, 2, 3))
     assert filled.sum() > 0
     # Every filled row belongs to a scored patch's point id.
@@ -195,7 +195,7 @@ def test_render_bitmaps_round_trips_through_sfmr(seoul_bull_workspace: Path, tmp
     res = cloud.refine_normals(
         recon,
         images,
-        point_ids=_sample_point_ids(cloud, n=200),
+        point_indexes=_sample_point_ids(cloud, n=200),
         resolution=10,
         init_steps=5,
         refine_levels=2,
@@ -230,7 +230,7 @@ def test_view_indices_override_expands_view_set(seoul_bull_workspace: Path):
 
     cloud = PatchCloud.from_reconstruction(recon, normal="stored", extent_value=5.0)
     pids = _sample_point_ids(cloud, n=40)
-    base = cloud.refine_normals(recon, images, point_ids=pids, **common)
+    base = cloud.refine_normals(recon, images, point_indexes=pids, **common)
     base_vvc = np.asarray(base["valid_view_count"])
 
     # Override every patch's view set with *all* images (a superset of any track).
@@ -238,11 +238,11 @@ def test_view_indices_override_expands_view_set(seoul_bull_workspace: Path):
     cloud2 = PatchCloud.from_reconstruction(recon, normal="stored", extent_value=5.0)
     all_views = [list(range(n_images))] * len(cloud2)
     expanded = cloud2.refine_normals(
-        recon, images, point_ids=pids, view_indices=all_views, **common
+        recon, images, point_indexes=pids, view_indices=all_views, **common
     )
     exp_vvc = np.asarray(expanded["valid_view_count"])
 
-    idx = {int(p): k for k, p in enumerate(cloud.point_ids)}
+    idx = {int(p): k for k, p in enumerate(cloud.point_indexes)}
     # The validity gates can only keep at least as many views from the full set as
     # from the track subset, for every refined point.
     for p in pids:
@@ -280,7 +280,7 @@ def test_view_indices_dedupes_repeated_views(seoul_bull_workspace: Path):
     uniq = cloud.refine_normals(
         recon,
         images,
-        point_ids=pids,
+        point_indexes=pids,
         view_indices=[list(range(n_images))] * len(cloud),
         **common,
     )
@@ -289,7 +289,7 @@ def test_view_indices_dedupes_repeated_views(seoul_bull_workspace: Path):
     dup = cloud2.refine_normals(
         recon,
         images,
-        point_ids=pids,
+        point_indexes=pids,
         view_indices=[list(range(n_images)) * 2] * len(cloud2),
         **common,
     )
@@ -298,14 +298,14 @@ def test_view_indices_dedupes_repeated_views(seoul_bull_workspace: Path):
     np.testing.assert_allclose(uniq["normal"], dup["normal"], atol=1e-9)
 
 
-def _refine(recon, images, cache, cache_supersample, point_ids):
+def _refine(recon, images, cache, cache_supersample, point_indexes):
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
     return cloud.refine_normals(
         recon,
         images,
-        point_ids=point_ids,
+        point_indexes=point_indexes,
         resolution=16,
         init_steps=5,
         refine_levels=2,
@@ -330,8 +330,12 @@ def test_fronto_cache_matches_source_rendering(
         PatchCloud.from_reconstruction(recon, normal="mean_viewing", extent_value=5.0)
     )
 
-    off = _refine(recon, images, cache="off", cache_supersample=1.0, point_ids=sample)
-    on = _refine(recon, images, cache="fronto", cache_supersample=2.0, point_ids=sample)
+    off = _refine(
+        recon, images, cache="off", cache_supersample=1.0, point_indexes=sample
+    )
+    on = _refine(
+        recon, images, cache="fronto", cache_supersample=2.0, point_indexes=sample
+    )
 
     # Cached normals are unit length and finite.
     norms = np.linalg.norm(on["normal"], axis=1)
@@ -382,7 +386,7 @@ def test_fronto_cache_handles_fisheye_distortion(
             recon, normal="mean_viewing", extent_value=5.0
         )
 
-    ids = np.asarray(build().point_ids)
+    ids = np.asarray(build().point_indexes)
     rng = np.random.default_rng(0)
     sample = np.sort(rng.choice(ids, size=min(300, len(ids)), replace=False)).tolist()
 
@@ -390,7 +394,7 @@ def test_fronto_cache_handles_fisheye_distortion(
         return build().refine_normals(
             recon,
             images,
-            point_ids=sample,
+            point_indexes=sample,
             resolution=16,
             init_steps=5,
             refine_levels=2,

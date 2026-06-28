@@ -193,7 +193,7 @@ class RefineNormalsTransform:
                 "reconstruction has no patch frames to refine; expected "
                 "embedded_patches (run `sfm xform --to-embedded-patches` first)"
             )
-        point_ids = np.asarray(cloud.point_ids)
+        point_ids = np.asarray(cloud.point_indexes)
         # A point at infinity has a fixed normal (normalize(-d)) the refiner skips;
         # keep its stored (0, 0, 0) normal untouched in the write-back below.
         finite = ~np.asarray(recon.point_is_at_infinity)[point_ids]

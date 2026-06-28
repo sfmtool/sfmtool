@@ -68,7 +68,9 @@ def _attach_patches_with_infinity(sfmr_path):
     patch alongside the finite ones. Returns ``(path, infinity_point_id)``."""
     recon = SfmrReconstruction.load(str(sfmr_path))
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
-    counts = np.bincount(np.asarray(recon.track_point_ids), minlength=recon.point_count)
+    counts = np.bincount(
+        np.asarray(recon.track_point_indexes), minlength=recon.point_count
+    )
     pi = int(np.argmax(counts))
     xyz = pos[pi, :3]
     pos[pi] = np.append(xyz / np.linalg.norm(xyz), 0.0)

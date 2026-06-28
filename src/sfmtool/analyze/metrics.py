@@ -20,7 +20,7 @@ def _compute_per_image_metrics(
     """Compute per-image metrics using true per-observation reprojection errors."""
     num_images = rust_recon.image_count
     track_image_indexes = rust_recon.track_image_indexes
-    track_point_ids = rust_recon.track_point_ids
+    track_point_indexes = rust_recon.track_point_indexes
     observation_counts = rust_recon.observation_counts
     image_names = rust_recon.image_names
 
@@ -31,7 +31,7 @@ def _compute_per_image_metrics(
             if file_number is None or file_number not in range_numbers:
                 continue
         obs_mask = track_image_indexes == img_idx
-        obs_point_ids = track_point_ids[obs_mask]
+        obs_point_ids = track_point_indexes[obs_mask]
         obs_count = len(obs_point_ids)
 
         if obs_count == 0:

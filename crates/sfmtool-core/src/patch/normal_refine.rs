@@ -2074,24 +2074,24 @@ pub fn refine_patch_cloud(
     results
 }
 
-/// For each patch of `cloud` (linked to `recon` via `point_ids`), the image
+/// For each patch of `cloud` (linked to `recon` via `point_indexes`), the image
 /// indices observing its source 3D point — ready to use as the `patch_views`
 /// of [`refine_patch_cloud`] with one [`ProjectedImage`] per reconstruction image.
 ///
 /// # Panics
 ///
-/// Panics if `cloud.point_ids` is not parallel to its patches.
+/// Panics if `cloud.point_indexes` is not parallel to its patches.
 pub fn view_indices_from_reconstruction(
     recon: &SfmrReconstruction,
     cloud: &PatchCloud,
 ) -> Vec<Vec<u32>> {
     assert_eq!(
-        cloud.point_ids.len(),
+        cloud.point_indexes.len(),
         cloud.len(),
-        "cloud must carry a point_id per patch"
+        "cloud must carry a point_index per patch"
     );
     cloud
-        .point_ids
+        .point_indexes
         .iter()
         .map(|&p| {
             let p = p as usize;

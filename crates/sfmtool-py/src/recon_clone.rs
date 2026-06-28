@@ -321,7 +321,7 @@ pub(crate) fn clone_with_changes(
                     im.translation_xyz = Vector3::new(s[off], s[off + 1], s[off + 2]);
                 }
             }
-            "track_image_indexes" | "track_feature_indexes" | "track_point_ids" => {
+            "track_image_indexes" | "track_feature_indexes" | "track_point_indexes" => {
                 // These must all be set together to rebuild tracks
                 // Defer to after the loop
             }
@@ -394,7 +394,7 @@ pub(crate) fn clone_with_changes(
                 // `validate_observation_columns`.
                 let replacing_tracks = kw.contains("track_image_indexes")?
                     || kw.contains("track_feature_indexes")?
-                    || kw.contains("track_point_ids")?;
+                    || kw.contains("track_point_indexes")?;
                 if !replacing_tracks && arr.shape()[0] != recon.tracks.len() {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
                         "clone_with_changes(): 'keypoints_xy' must have shape (K, 2) with \
@@ -531,13 +531,13 @@ pub(crate) fn clone_with_changes(
     // Rebuild tracks if any track arrays were provided
     let has_tracks = kw.contains("track_image_indexes")?
         || kw.contains("track_feature_indexes")?
-        || kw.contains("track_point_ids")?;
+        || kw.contains("track_point_indexes")?;
 
     if has_tracks {
         let img_idx = kw.get_item("track_image_indexes")?.ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "clone_with_changes(): track_image_indexes, track_feature_indexes, and \
-                 track_point_ids must all be provided together",
+                 track_point_indexes must all be provided together",
             )
         })?;
         let img_idx: PyReadonlyArray1<u32> = extract_array1!(img_idx, "track_image_indexes", u32)?;
@@ -545,19 +545,19 @@ pub(crate) fn clone_with_changes(
         let feat_idx = kw.get_item("track_feature_indexes")?.ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "clone_with_changes(): track_image_indexes, track_feature_indexes, and \
-                 track_point_ids must all be provided together",
+                 track_point_indexes must all be provided together",
             )
         })?;
         let feat_idx: PyReadonlyArray1<u32> =
             extract_array1!(feat_idx, "track_feature_indexes", u32)?;
 
-        let pt_idx = kw.get_item("track_point_ids")?.ok_or_else(|| {
+        let pt_idx = kw.get_item("track_point_indexes")?.ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "clone_with_changes(): track_image_indexes, track_feature_indexes, and \
-                 track_point_ids must all be provided together",
+                 track_point_indexes must all be provided together",
             )
         })?;
-        let pt_idx: PyReadonlyArray1<u32> = extract_array1!(pt_idx, "track_point_ids", u32)?;
+        let pt_idx: PyReadonlyArray1<u32> = extract_array1!(pt_idx, "track_point_indexes", u32)?;
 
         let img_s = img_idx.as_slice().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!(
@@ -571,14 +571,14 @@ pub(crate) fn clone_with_changes(
         })?;
         let pt_s = pt_idx.as_slice().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!(
-                "clone_with_changes(): 'track_point_ids' must be C-contiguous: {e}"
+                "clone_with_changes(): 'track_point_indexes' must be C-contiguous: {e}"
             ))
         })?;
 
         if img_s.len() != feat_s.len() || img_s.len() != pt_s.len() {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "clone_with_changes(): track arrays must all have the same length, \
-                 got track_image_indexes={}, track_feature_indexes={}, track_point_ids={}",
+                 got track_image_indexes={}, track_feature_indexes={}, track_point_indexes={}",
                 img_s.len(),
                 feat_s.len(),
                 pt_s.len()
@@ -612,7 +612,7 @@ pub(crate) fn clone_with_changes(
             let p = t.point_index as usize;
             if p >= point_count {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "clone_with_changes(): 'track_point_ids' contains point index {p} \
+                    "clone_with_changes(): 'track_point_indexes' contains point index {p} \
                      out of range (point count {point_count})"
                 )));
             }

@@ -204,7 +204,7 @@ def _filter_images(
     )
     filtered_track_image_indexes = recon.track_image_indexes[track_mask]
     filtered_track_feature_indexes = recon.track_feature_indexes[track_mask]
-    filtered_track_point_ids = recon.track_point_ids[track_mask]
+    filtered_track_point_indexes = recon.track_point_indexes[track_mask]
 
     # Remap image indexes
     image_id_mapping = np.full(len(recon.image_names), -1, dtype=np.int32)
@@ -215,7 +215,7 @@ def _filter_images(
 
     # Recompute observation counts and filter points
     points_to_keep, new_observation_counts = np.unique(
-        filtered_track_point_ids, return_counts=True
+        filtered_track_point_indexes, return_counts=True
     )
 
     print(
@@ -230,7 +230,9 @@ def _filter_images(
     # Remap point IDs
     point_id_mapping = np.full(len(recon.positions), -1, dtype=np.int32)
     point_id_mapping[points_to_keep] = np.arange(len(points_to_keep), dtype=np.int32)
-    new_track_point_ids = point_id_mapping[filtered_track_point_ids].astype(np.uint32)
+    new_track_point_indexes = point_id_mapping[filtered_track_point_indexes].astype(
+        np.uint32
+    )
 
     new_observation_counts = new_observation_counts.astype(np.uint32)
 
@@ -246,7 +248,7 @@ def _filter_images(
         errors=new_errors,
         track_image_indexes=new_track_image_indexes,
         track_feature_indexes=filtered_track_feature_indexes,
-        track_point_ids=new_track_point_ids,
+        track_point_indexes=new_track_point_indexes,
         observation_counts=new_observation_counts,
         feature_tool_hashes=new_feature_tool_hashes,
         sift_content_hashes=new_sift_content_hashes,

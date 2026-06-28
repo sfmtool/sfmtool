@@ -37,14 +37,14 @@ def _load_images(recon) -> list[np.ndarray]:
 
 def _sample_point_ids(cloud, n: int = 300, seed: int = 0) -> list[int]:
     """A deterministic point-id subset, to keep the per-point search fast."""
-    ids = np.asarray(cloud.point_ids)
+    ids = np.asarray(cloud.point_indexes)
     rng = np.random.default_rng(seed)
     return np.sort(rng.choice(ids, size=min(n, len(ids)), replace=False)).tolist()
 
 
 def _track_views(recon) -> dict[int, set[int]]:
     """Map each 3D-point id to the set of image indices in its track."""
-    point_ids = np.asarray(recon.track_point_ids)
+    point_ids = np.asarray(recon.track_point_indexes)
     image_idxs = np.asarray(recon.track_image_indexes)
     tracks: dict[int, set[int]] = {}
     for pid, image_idx in zip(point_ids.tolist(), image_idxs.tolist()):
@@ -122,19 +122,19 @@ def test_select_views_superset_of_track_on_convex_dataset(seoul_bull_workspace: 
     results = cloud.select_views(
         recon,
         images,
-        point_ids=sample,
+        point_indexes=sample,
         resolution=12,
     )
 
     # Only the sampled patches are returned.
     assert len(results) == len(sample)
-    returned_pids = {int(r["point_id"]) for r in results}
+    returned_pids = {int(r["point_index"]) for r in results}
     assert returned_pids == set(sample)
 
     tracks = _track_views(recon)
     expanded_any = False
     for r in results:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         admitted = np.asarray(r["admitted"], dtype=np.int64)
         scores = np.asarray(r["scores"], dtype=np.float64)
 
@@ -169,7 +169,7 @@ def test_select_views_self_agreement_and_threshold(seoul_bull_workspace: Path):
     results = cloud.select_views(
         recon,
         images,
-        point_ids=_sample_point_ids(cloud),
+        point_indexes=_sample_point_ids(cloud),
         resolution=12,
         min_relative_zncc=min_rel,
         min_self_agreement=0.3,
@@ -180,7 +180,7 @@ def test_select_views_self_agreement_and_threshold(seoul_bull_workspace: Path):
         sa = float(r["self_agreement"])
         if not np.isfinite(sa):
             continue  # no reference: track admitted verbatim
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         track = tracks[pid]
         admitted = np.asarray(r["admitted"], dtype=np.int64)
         scores = np.asarray(r["scores"], dtype=np.float64)
@@ -206,12 +206,12 @@ def test_select_views_runs_on_nonconvex_fisheye_rig(kerry_park_workspace: Path):
     assert len(cloud) > 0
 
     sample = _sample_point_ids(cloud, n=150)
-    results = cloud.select_views(recon, images, point_ids=sample, resolution=12)
+    results = cloud.select_views(recon, images, point_indexes=sample, resolution=12)
 
     assert len(results) == len(sample)
     tracks = _track_views(recon)
     for r in results:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         admitted = np.asarray(r["admitted"], dtype=np.int64)
         scores = np.asarray(r["scores"], dtype=np.float64)
         assert admitted.shape == scores.shape
@@ -242,15 +242,17 @@ def test_select_views_rejects_some_geometrically_visible_candidate(
         recon, normal="mean_viewing", extent_value=5.0
     )
     positions = np.asarray(recon.positions, dtype=np.float64)
-    pid_to_patch_idx = {int(p): i for i, p in enumerate(np.asarray(cloud.point_ids))}
+    pid_to_patch_idx = {
+        int(p): i for i, p in enumerate(np.asarray(cloud.point_indexes))
+    }
     tracks = _track_views(recon)
 
     sample = _sample_point_ids(cloud)
-    results = cloud.select_views(recon, images, point_ids=sample, resolution=12)
+    results = cloud.select_views(recon, images, point_indexes=sample, resolution=12)
 
     rejected_any = False
     for r in results:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         admitted = set(np.asarray(r["admitted"], dtype=np.int64).tolist())
         patch = cloud[pid_to_patch_idx[pid]]
         cand = _geometric_candidate_set(recon, pid, patch, positions[pid])
@@ -284,10 +286,10 @@ def test_select_views_admitted_points_are_in_front_of_camera(
     positions = np.asarray(recon.positions, dtype=np.float64)
 
     sample = _sample_point_ids(cloud, n=150)
-    results = cloud.select_views(recon, images, point_ids=sample, resolution=12)
+    results = cloud.select_views(recon, images, point_indexes=sample, resolution=12)
 
     for r in results:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         admitted = np.asarray(r["admitted"], dtype=np.int64)
         for image_idx in admitted.tolist():
             x_cam = _camera_frame_point(recon, positions[pid], image_idx)
@@ -312,13 +314,13 @@ def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path)
     positions = np.asarray(recon.positions, dtype=np.float64)
     rot = _rotation_matrices(recon)
 
-    inf_ids = [int(p) for p in np.asarray(cloud.point_ids) if is_inf[int(p)]]
+    inf_ids = [int(p) for p in np.asarray(cloud.point_indexes) if is_inf[int(p)]]
     assert inf_ids, "kerry_park should carry points at infinity"
-    results = cloud.select_views(recon, images, point_ids=inf_ids, resolution=12)
+    results = cloud.select_views(recon, images, point_indexes=inf_ids, resolution=12)
 
     checked = 0
     for r in results:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         d = positions[pid]  # unit direction for a w == 0 point
         for image_idx in np.asarray(r["admitted"], dtype=np.int64).tolist():
             z = float((rot[image_idx] @ d)[2])

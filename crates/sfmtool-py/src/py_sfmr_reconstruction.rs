@@ -410,7 +410,7 @@ impl PySfmrReconstruction {
         // from_halfvec_arrays builds every patch finite; mark the rows whose
         // source point is at infinity so rendering treats their corners as
         // directions.
-        for (patch, &pid) in cloud.patches.iter_mut().zip(cloud.point_ids.iter()) {
+        for (patch, &pid) in cloud.patches.iter_mut().zip(cloud.point_indexes.iter()) {
             if self.inner.points[pid as usize].is_at_infinity() {
                 patch.w = 0.0;
             }
@@ -449,7 +449,7 @@ impl PySfmrReconstruction {
 
     /// 3D point indexes for track observations, shape `(K,)`.
     #[getter]
-    fn track_point_ids<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
+    fn track_point_indexes<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
         let vec: Vec<u32> = self.inner.tracks.iter().map(|t| t.point_index).collect();
         PyArray1::from_vec(py, vec)
     }
@@ -950,7 +950,7 @@ impl PySfmrReconstruction {
     ///
     /// Supported fields: ``positions``, ``colors``, ``errors``,
     /// ``quaternions_wxyz``, ``translations``, ``track_image_indexes``,
-    /// ``track_feature_indexes``, ``track_point_ids``, ``observation_counts``,
+    /// ``track_feature_indexes``, ``track_point_indexes``, ``observation_counts``,
     /// ``normals``, ``patches`` (a ``PatchCloud`` or ``None``),
     /// ``patch_bitmaps`` (an ``(N, R, R, 4)`` uint8 array or ``None``; requires
     /// the patch frame, so pass ``patches`` too unless one is already attached),

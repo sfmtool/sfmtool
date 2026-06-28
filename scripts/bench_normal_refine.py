@@ -121,7 +121,7 @@ class Workload:
         self.load_s = time.perf_counter() - t0
 
         cloud = self.fresh_cloud()
-        all_ids = np.asarray(cloud.point_ids, dtype=np.uint32)
+        all_ids = np.asarray(cloud.point_indexes, dtype=np.uint32)
         rng = np.random.default_rng(seed)
         if n_points and n_points < len(all_ids):
             self.ids = np.sort(rng.choice(all_ids, size=n_points, replace=False))
@@ -150,9 +150,9 @@ class Workload:
         empty-subset call that refines nothing. Warmed up once: the very
         first call pays cold caches / page faults and is not representative."""
         cloud = self.fresh_cloud()
-        cloud.refine_normals(self.recon, self.images, point_ids=[])
+        cloud.refine_normals(self.recon, self.images, point_indexes=[])
         t0 = time.perf_counter()
-        cloud.refine_normals(self.recon, self.images, point_ids=[])
+        cloud.refine_normals(self.recon, self.images, point_indexes=[])
         return time.perf_counter() - t0
 
     def run(self, params: dict, repeats: int) -> dict:
@@ -164,7 +164,7 @@ class Workload:
             res = cloud.refine_normals(
                 self.recon,
                 self.images,
-                point_ids=self.ids.tolist(),
+                point_indexes=self.ids.tolist(),
                 **params,
             )
             walls.append(time.perf_counter() - t0)

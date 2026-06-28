@@ -25,10 +25,10 @@ def _find_pairwise_correspondences(
     return find_point_correspondences_py(
         recon_a.track_image_indexes.astype(np.uint32),
         recon_a.track_feature_indexes.astype(np.uint32),
-        recon_a.track_point_ids.astype(np.uint32),
+        recon_a.track_point_indexes.astype(np.uint32),
         recon_b.track_image_indexes.astype(np.uint32),
         recon_b.track_feature_indexes.astype(np.uint32),
-        recon_b.track_point_ids.astype(np.uint32),
+        recon_b.track_point_indexes.astype(np.uint32),
         shared_a,
         shared_b,
     )
@@ -198,7 +198,7 @@ def merge_points_and_tracks(
     merged_errors = []
     merged_track_image_indexes = []
     merged_track_feature_indexes = []
-    merged_track_point_ids = []
+    merged_track_point_indexes = []
 
     merged_points_set = set()
     obs_to_points = defaultdict(list)
@@ -218,7 +218,7 @@ def merge_points_and_tracks(
             errors.append(recon.errors[point_id])
             merged_points_set.add((recon_idx, point_id))
 
-            mask = recon.track_point_ids == point_id
+            mask = recon.track_point_indexes == point_id
             for img_idx, feat_idx in zip(
                 recon.track_image_indexes[mask],
                 recon.track_feature_indexes[mask],
@@ -247,7 +247,7 @@ def merge_points_and_tracks(
                 continue
 
             observations = []
-            mask = recon.track_point_ids == point_id
+            mask = recon.track_point_indexes == point_id
             for img_idx, feat_idx in zip(
                 recon.track_image_indexes[mask],
                 recon.track_feature_indexes[mask],
@@ -310,7 +310,7 @@ def merge_points_and_tracks(
         for merged_img_idx, feat_idx in all_observations:
             merged_track_image_indexes.append(merged_img_idx)
             merged_track_feature_indexes.append(feat_idx)
-            merged_track_point_ids.append(merged_point_id)
+            merged_track_point_indexes.append(merged_point_id)
 
     merged_points = {
         "positions": np.array(merged_positions),
@@ -321,7 +321,7 @@ def merge_points_and_tracks(
     merged_tracks = {
         "image_indexes": np.array(merged_track_image_indexes, dtype=np.int32),
         "feature_indexes": np.array(merged_track_feature_indexes, dtype=np.int32),
-        "point_ids": np.array(merged_track_point_ids, dtype=np.int32),
+        "point_indexes": np.array(merged_track_point_indexes, dtype=np.int32),
     }
 
     return merged_points, merged_tracks

@@ -44,10 +44,10 @@ def find_point_correspondences(
     source_ids, target_ids = find_point_correspondences_py(
         source_recon.track_image_indexes.astype(np.uint32),
         source_recon.track_feature_indexes.astype(np.uint32),
-        source_recon.track_point_ids.astype(np.uint32),
+        source_recon.track_point_indexes.astype(np.uint32),
         target_recon.track_image_indexes.astype(np.uint32),
         target_recon.track_feature_indexes.astype(np.uint32),
-        target_recon.track_point_ids.astype(np.uint32),
+        target_recon.track_point_indexes.astype(np.uint32),
         shared_src,
         shared_tgt,
     )
@@ -77,7 +77,7 @@ def _observation_xy_by_image(
     """
     track_image_indexes = np.asarray(recon.track_image_indexes)
     track_feature_indexes = np.asarray(recon.track_feature_indexes)
-    track_point_ids = np.asarray(recon.track_point_ids)
+    track_point_indexes = np.asarray(recon.track_point_indexes)
 
     image_names = recon.image_names
 
@@ -86,7 +86,7 @@ def _observation_xy_by_image(
         img_idx = int(img_idx)
         mask = track_image_indexes == img_idx
         feat_idxs = track_feature_indexes[mask]
-        point_ids = track_point_ids[mask]
+        point_ids = track_point_indexes[mask]
 
         image_rel = image_names[img_idx]
         sift_path = get_sift_path_from_recon(recon, image_rel)

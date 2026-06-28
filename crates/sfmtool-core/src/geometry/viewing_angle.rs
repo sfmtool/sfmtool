@@ -46,7 +46,7 @@ pub fn max_viewing_angle(rays: &[(usize, Vector3<f64>)]) -> f64 {
 /// * `num_images` - Number of camera images
 /// * `positions` - Flat slice of 3D point positions [x0,y0,z0, ...], length num_points*3
 /// * `num_points` - Number of 3D points
-/// * `track_point_ids` - Point ID for each track observation
+/// * `track_point_indexes` - Point ID for each track observation
 /// * `track_image_indexes` - Image index for each track observation
 /// * `min_angle_rad` - Minimum angle threshold in radians
 ///
@@ -59,7 +59,7 @@ pub fn compute_narrow_track_mask(
     num_images: usize,
     positions: &[f64],
     num_points: usize,
-    track_point_ids: &[u32],
+    track_point_indexes: &[u32],
     track_image_indexes: &[u32],
     min_angle_rad: f64,
 ) -> Vec<bool> {
@@ -83,7 +83,7 @@ pub fn compute_narrow_track_mask(
 
     // Step 2: Build point -> list of observing image indices
     let mut point_observations: Vec<Vec<u32>> = vec![Vec::new(); num_points];
-    for (point_id, &img_idx) in track_point_ids.iter().zip(track_image_indexes.iter()) {
+    for (point_id, &img_idx) in track_point_indexes.iter().zip(track_image_indexes.iter()) {
         let pid = *point_id as usize;
         if pid < num_points {
             point_observations[pid].push(img_idx);

@@ -258,7 +258,7 @@ def print_images_table(recon: SfmrReconstruction, recon_name: str | None = None)
     quaternions = recon.quaternions_wxyz
     translations = recon.translations
     image_indexes = recon.track_image_indexes
-    points3d_indexes = recon.track_point_ids
+    points3d_indexes = recon.track_point_indexes
     click.echo(f"Loading data: {time.perf_counter() - step_start:.2f}s")
 
     click.echo(f"\nPer-image connectivity table for: {recon_name}")

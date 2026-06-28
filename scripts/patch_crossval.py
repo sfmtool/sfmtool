@@ -349,10 +349,10 @@ def strips_mode_3d(
     )
     pid_normal = {
         int(p): np.asarray(cloud[i].normal, np.float64)
-        for i, p in enumerate(cloud.point_ids)
+        for i, p in enumerate(cloud.point_indexes)
     }
     pid_half = {
-        int(p): float(cloud[i].half_extent[0]) for i, p in enumerate(cloud.point_ids)
+        int(p): float(cloud[i].half_extent[0]) for i, p in enumerate(cloud.point_indexes)
     }
 
     cam_of = [cameras[int(cam_idx[i])] for i in range(len(names))]
@@ -372,7 +372,7 @@ def strips_mode_3d(
         return images[i]
 
     # Group observations by 3D point id.
-    pids = np.asarray(recon.track_point_ids).tolist()
+    pids = np.asarray(recon.track_point_indexes).tolist()
     timg = np.asarray(recon.track_image_indexes).tolist()
     tfeat = np.asarray(recon.track_feature_indexes).tolist()
     by_point: dict = defaultdict(list)
@@ -435,7 +435,7 @@ def strips_mode_3d(
             resolution=patch,
             angular_range_deg=refine_range,
             init_steps=refine_steps,
-            point_ids=[int(pid) for pid, _ in tracks],
+            point_indexes=[int(pid) for pid, _ in tracks],
             # Cross-validation baseline: anchor at the reprojected center so
             # the Φ delta isn't sensitive to whether the recon happens to
             # carry inline keypoints (the auto-default would switch to
@@ -444,15 +444,15 @@ def strips_mode_3d(
         )
         pid_refined = {
             int(p): np.asarray(cloud[i].normal, np.float64)
-            for i, p in enumerate(cloud.point_ids)
+            for i, p in enumerate(cloud.point_indexes)
         }
         pid_phi = {
             int(p): float(res["photoconsistency"][i])
-            for i, p in enumerate(cloud.point_ids)
+            for i, p in enumerate(cloud.point_indexes)
         }
         pid_init_phi = {
             int(p): float(res["init_photoconsistency"][i])
-            for i, p in enumerate(cloud.point_ids)
+            for i, p in enumerate(cloud.point_indexes)
         }
 
     rows = []

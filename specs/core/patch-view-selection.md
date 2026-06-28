@@ -69,7 +69,7 @@ refinement and keypoint localization.
 _Status: v1 implemented in `crates/sfmtool-core/src/patch/view_selection.rs`
 (`select_patch_views` / `select_patch_cloud_views`), exposed as
 `PatchCloud.select_views(recon, images, *, min_relative_zncc=0.7, …,
-min_self_agreement=0.3, point_ids=None)`. The reference appearance is the
+min_self_agreement=0.3, point_indexes=None)`. The reference appearance is the
 IRLS-weighted consensus of the track views' z-normalized patch renders over a
 frozen common support (re-normalized per channel so a dot product is a windowed
 ZNCC). A candidate is scored on the **reference's** surviving original channels

@@ -46,7 +46,7 @@ def test_feature_size_scales_linearly_with_factor(
         recon, extent="feature_size", extent_value=10.0
     )
 
-    assert list(cloud5.point_ids) == list(cloud10.point_ids)
+    assert list(cloud5.point_indexes) == list(cloud10.point_indexes)
     h5 = np.array([cloud5[i].half_extent[0] for i in range(len(cloud5))])
     h10 = np.array([cloud10[i].half_extent[0] for i in range(len(cloud10))])
     # half = factor * reduce(per-view feature size): doubling the factor doubles
@@ -60,7 +60,9 @@ def test_from_reconstruction_excludes_or_includes_points_at_infinity(
     """exclude_points_at_infinity gates whether infinity points get a frame."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
-    counts = np.bincount(np.asarray(recon.track_point_ids), minlength=recon.point_count)
+    counts = np.bincount(
+        np.asarray(recon.track_point_indexes), minlength=recon.point_count
+    )
     pi = int(np.argmax(counts))
     xyz = pos[pi, :3]
     pos[pi] = np.append(xyz / np.linalg.norm(xyz), 0.0)
@@ -70,7 +72,7 @@ def test_from_reconstruction_excludes_or_includes_points_at_infinity(
     default_cloud = PatchCloud.from_reconstruction(
         recon, extent="fixed", extent_value=1.0
     )
-    ids = list(default_cloud.point_ids)
+    ids = list(default_cloud.point_indexes)
     assert pi in set(ids)
     patch = default_cloud[ids.index(pi)]
     assert patch.w == 0.0
@@ -81,7 +83,7 @@ def test_from_reconstruction_excludes_or_includes_points_at_infinity(
     finite_only = PatchCloud.from_reconstruction(
         recon, extent="fixed", extent_value=1.0, exclude_points_at_infinity=True
     )
-    assert pi not in set(finite_only.point_ids)
+    assert pi not in set(finite_only.point_indexes)
     assert len(default_cloud) == len(finite_only) + 1
 
 

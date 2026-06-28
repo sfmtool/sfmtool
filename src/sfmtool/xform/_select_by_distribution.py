@@ -120,7 +120,7 @@ def _select_images(
     recon: SfmrReconstruction, count: int, verbose: bool = False
 ) -> list[int]:
     track_img = np.asarray(recon.track_image_indexes).astype(np.int64)
-    track_pt = np.asarray(recon.track_point_ids).astype(np.int64)
+    track_pt = np.asarray(recon.track_point_indexes).astype(np.int64)
 
     # Distribution is reasoned about from the finite point cloud: a point at
     # infinity is a direction, not a location, so it carries no triangulation

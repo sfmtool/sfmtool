@@ -38,7 +38,7 @@ def _load_images(recon) -> list[np.ndarray]:
 
 
 def _sample_point_ids(cloud, n: int = 200, seed: int = 0) -> list[int]:
-    ids = np.asarray(cloud.point_ids)
+    ids = np.asarray(cloud.point_indexes)
     rng = np.random.default_rng(seed)
     return np.sort(rng.choice(ids, size=min(n, len(ids)), replace=False)).tolist()
 
@@ -85,29 +85,29 @@ def test_refine_keypoints_array_contract_and_never_worse(seoul_bull_workspace: P
 
     sample = _sample_point_ids(cloud)
     view_sets = {
-        int(r["point_id"]): np.asarray(r["admitted"]).tolist()
-        for r in cloud.select_views(recon, images, point_ids=sample, resolution=12)
+        int(r["point_index"]): np.asarray(r["admitted"]).tolist()
+        for r in cloud.select_views(recon, images, point_indexes=sample, resolution=12)
     }
 
     common = dict(
         recon=recon,
         images=images,
         view_sets=view_sets,
-        point_ids=sample,
+        point_indexes=sample,
         resolution=12,
     )
     # Seed-only baseline (no GN steps) and the full continuous refine.
     seed = cloud.refine_keypoints(**common, max_gn_steps=0)
     refined = cloud.refine_keypoints(**common, max_gn_steps=10)
 
-    assert {int(r["point_id"]) for r in refined} == set(sample)
-    seed_by_pid = {int(r["point_id"]): r for r in seed}
+    assert {int(r["point_index"]) for r in refined} == set(sample)
+    seed_by_pid = {int(r["point_index"]): r for r in seed}
     positions = np.asarray(recon.positions, dtype=np.float64)
 
     moved_any = False
     improved_any = False
     for r in refined:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         views = np.asarray(r["views"], dtype=np.int64)
         kpts = np.asarray(r["keypoints"], dtype=np.float64)
         offs = np.asarray(r["offsets_px"], dtype=np.float64)
@@ -161,16 +161,16 @@ def test_refine_keypoints_defaults_to_track(seoul_bull_workspace: Path):
     images = _load_images(recon)
     cloud = recon.patches
     assert cloud is not None
-    point_ids = np.asarray(recon.track_point_ids)
+    point_ids = np.asarray(recon.track_point_indexes)
     image_idxs = np.asarray(recon.track_image_indexes)
     tracks: dict[int, set[int]] = {}
     for pid, im in zip(point_ids.tolist(), image_idxs.tolist()):
         tracks.setdefault(int(pid), set()).add(int(im))
 
     sample = _sample_point_ids(cloud, n=120)
-    results = cloud.refine_keypoints(recon, images, point_ids=sample, resolution=12)
+    results = cloud.refine_keypoints(recon, images, point_indexes=sample, resolution=12)
     for r in results:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         views = set(np.asarray(r["views"], dtype=np.int64).tolist())
         assert views.issubset(tracks[pid])
 
@@ -184,9 +184,9 @@ def test_refine_keypoints_empty_view_set_yields_empty_arrays(
     images = _load_images(recon)
     cloud = recon.patches
     assert cloud is not None
-    pid = int(np.asarray(cloud.point_ids)[0])
+    pid = int(np.asarray(cloud.point_indexes)[0])
     res = cloud.refine_keypoints(
-        recon, images, view_sets={pid: []}, point_ids=[pid], resolution=12
+        recon, images, view_sets={pid: []}, point_indexes=[pid], resolution=12
     )
     assert len(res) == 1
     assert np.asarray(res[0]["views"]).shape == (0,)
@@ -204,11 +204,11 @@ def test_refine_keypoints_rejects_out_of_range_view_index(seoul_bull_workspace: 
     images = _load_images(recon)
     cloud = recon.patches
     assert cloud is not None
-    pid = int(np.asarray(cloud.point_ids)[0])
+    pid = int(np.asarray(cloud.point_indexes)[0])
     bad = {pid: [0, len(images)]}
     with pytest.raises(ValueError):
         cloud.refine_keypoints(
-            recon, images, view_sets=bad, point_ids=[pid], resolution=12
+            recon, images, view_sets=bad, point_indexes=[pid], resolution=12
         )
 
 
@@ -256,14 +256,14 @@ def test_refine_keypoints_honors_starting_keypoints(seoul_bull_workspace: Path):
     assert cloud is not None
     sample = _sample_point_ids(cloud, n=50)
     view_sets = {
-        int(r["point_id"]): np.asarray(r["admitted"]).tolist()
-        for r in cloud.select_views(recon, images, point_ids=sample, resolution=12)
+        int(r["point_index"]): np.asarray(r["admitted"]).tolist()
+        for r in cloud.select_views(recon, images, point_indexes=sample, resolution=12)
     }
     common = dict(
         recon=recon,
         images=images,
         view_sets=view_sets,
-        point_ids=sample,
+        point_indexes=sample,
         resolution=12,
         max_gn_steps=10,
     )
@@ -271,9 +271,9 @@ def test_refine_keypoints_honors_starting_keypoints(seoul_bull_workspace: Path):
     # Baseline: seeds default to the recon's inline stored keypoints (the
     # SIFT detections an embedded_patches recon carries inline).
     baseline = cloud.refine_keypoints(**common)
-    baseline_by_pid = {int(r["point_id"]): r for r in baseline}
+    baseline_by_pid = {int(r["point_index"]): r for r in baseline}
     stored_xy = np.asarray(recon.keypoints_xy, dtype=np.float64)
-    track_pids = np.asarray(recon.track_point_ids, dtype=np.int64)
+    track_pids = np.asarray(recon.track_point_indexes, dtype=np.int64)
     track_imgs = np.asarray(recon.track_image_indexes, dtype=np.int64)
     kp_by_obs = {
         (int(p), int(i)): stored_xy[k]
@@ -290,7 +290,7 @@ def test_refine_keypoints_honors_starting_keypoints(seoul_bull_workspace: Path):
     seeds: dict[int, list[list[float]]] = {}
     seeded_pids: list[int] = []
     for r in baseline:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         views = view_sets[pid]
         if len(views) < 2:
             continue
@@ -319,7 +319,7 @@ def test_refine_keypoints_honors_starting_keypoints(seoul_bull_workspace: Path):
     # quantitative claim about which local optimum the refiner finds.
     moved_any = False
     for r in shifted:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         if pid not in seeds:
             continue
         b = baseline_by_pid[pid]
@@ -347,7 +347,7 @@ def test_refine_keypoints_honors_starting_keypoints(seoul_bull_workspace: Path):
     # Unknown pid (not a point in this patch cloud) is rejected with a clear
     # message — silently passing it through hid bugs in callers that built
     # seed maps off a stale recon.
-    max_pid = int(np.asarray(cloud.point_ids).max())
+    max_pid = int(np.asarray(cloud.point_indexes).max())
     unknown_pid = max_pid + 1000
     with pytest.raises(
         ValueError,
@@ -362,10 +362,10 @@ def test_refine_keypoints_honors_starting_keypoints(seoul_bull_workspace: Path):
     # rejected (rather than producing the confusing "has K seeds but view set
     # has 0 views" message the cleared set would otherwise yield).
     excluded_pid = next(
-        int(p) for p in np.asarray(cloud.point_ids).tolist() if p not in sample
+        int(p) for p in np.asarray(cloud.point_indexes).tolist() if p not in sample
     )
     with pytest.raises(
-        ValueError, match=r"starting_keypoints\[\d+\] is excluded by point_ids"
+        ValueError, match=r"starting_keypoints\[\d+\] is excluded by point_indexes"
     ):
         cloud.refine_keypoints(
             **common,
@@ -388,7 +388,7 @@ def test_refine_keypoints_default_seeds_from_embedded_recon(
     assert cloud is not None
 
     stored_xy = np.asarray(emb.keypoints_xy, dtype=np.float64)
-    track_pids = np.asarray(emb.track_point_ids, dtype=np.int64)
+    track_pids = np.asarray(emb.track_point_indexes, dtype=np.int64)
     track_imgs = np.asarray(emb.track_image_indexes, dtype=np.int64)
     kp_by_obs = {
         (int(p), int(i)): stored_xy[k]
@@ -397,7 +397,7 @@ def test_refine_keypoints_default_seeds_from_embedded_recon(
 
     sample = _sample_point_ids(cloud, n=50)
     seed_only = cloud.refine_keypoints(
-        emb, images, point_ids=sample, resolution=12, max_gn_steps=0
+        emb, images, point_indexes=sample, resolution=12, max_gn_steps=0
     )
 
     # Every (point_id, view) the seed-only refinement reports lands at the
@@ -406,7 +406,7 @@ def test_refine_keypoints_default_seeds_from_embedded_recon(
     # the per-track views here).
     checked = 0
     for r in seed_only:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         views = np.asarray(r["views"], dtype=np.int64)
         kpts = np.asarray(r["keypoints"], dtype=np.float64).reshape(-1, 2)
         for k, img in enumerate(views.tolist()):
@@ -438,7 +438,7 @@ def test_refine_keypoints_default_falls_back_to_projection_for_non_track_view(
     assert cloud is not None
 
     stored_xy = np.asarray(emb.keypoints_xy, dtype=np.float64)
-    track_pids = np.asarray(emb.track_point_ids, dtype=np.int64)
+    track_pids = np.asarray(emb.track_point_indexes, dtype=np.int64)
     track_imgs = np.asarray(emb.track_image_indexes, dtype=np.int64)
     track_by_pid: dict[int, set[int]] = {}
     for p, i in zip(track_pids.tolist(), track_imgs.tolist()):
@@ -457,10 +457,10 @@ def test_refine_keypoints_default_falls_back_to_projection_for_non_track_view(
     # view. ``select_views`` admits the SIFT track plus extra views that
     # pass its visibility + ZNCC checks — guaranteed visible to the refiner.
     sample = _sample_point_ids(cloud, n=120)
-    selections = cloud.select_views(emb, images, point_ids=sample, resolution=12)
+    selections = cloud.select_views(emb, images, point_indexes=sample, resolution=12)
     pid, non_track_img, projection = None, None, None
     for sel in selections:
-        candidate_pid = int(sel["point_id"])
+        candidate_pid = int(sel["point_index"])
         admitted = set(np.asarray(sel["admitted"], dtype=np.int64).tolist())
         candidates = admitted - track_by_pid.get(candidate_pid, set())
         for img in sorted(candidates):
@@ -484,7 +484,7 @@ def test_refine_keypoints_default_falls_back_to_projection_for_non_track_view(
         emb,
         images,
         view_sets=view_sets,
-        point_ids=[pid],
+        point_indexes=[pid],
         resolution=12,
         max_gn_steps=0,
     )
@@ -525,7 +525,7 @@ def test_refine_keypoints_explicit_seeds_override_recon_default_on_embedded(
     assert cloud is not None
 
     stored_xy = np.asarray(recon.keypoints_xy, dtype=np.float64)
-    track_pids = np.asarray(recon.track_point_ids, dtype=np.int64)
+    track_pids = np.asarray(recon.track_point_indexes, dtype=np.int64)
     track_imgs = np.asarray(recon.track_image_indexes, dtype=np.int64)
     kp_by_obs = {
         (int(p), int(i)): stored_xy[k]
@@ -548,7 +548,7 @@ def test_refine_keypoints_explicit_seeds_override_recon_default_on_embedded(
         recon,
         images,
         view_sets={pid: views},
-        point_ids=[pid],
+        point_indexes=[pid],
         starting_keypoints={pid: override},
         resolution=12,
         max_gn_steps=0,

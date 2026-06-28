@@ -85,7 +85,7 @@ def rotation_matrices(recon) -> np.ndarray:
 
 
 def track_views(recon) -> dict[int, set[int]]:
-    pids = np.asarray(recon.track_point_ids)
+    pids = np.asarray(recon.track_point_indexes)
     imgs = np.asarray(recon.track_image_indexes)
     tracks: dict[int, set[int]] = {}
     for pid, im in zip(pids.tolist(), imgs.tolist()):
@@ -221,7 +221,7 @@ def gather(recon, cloud, images, args):
     """Run select_views + localize for the sample; return lightweight per-point
     metadata (no rendering yet, so only the chosen rows pay for tiles)."""
     tracks = track_views(recon)
-    ids = np.asarray(cloud.point_ids)
+    ids = np.asarray(cloud.point_indexes)
     rng = np.random.default_rng(args.seed)
     if args.prioritize_infinity:
         sample = _infinity_first_sample(recon, ids, args.sample, rng)
@@ -231,21 +231,21 @@ def gather(recon, cloud, images, args):
         ).tolist()
 
     sel = cloud.select_views(
-        recon, images, point_ids=sample, resolution=args.resolution
+        recon, images, point_indexes=sample, resolution=args.resolution
     )
-    view_sets = {int(r["point_id"]): np.asarray(r["admitted"]).tolist() for r in sel}
+    view_sets = {int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel}
     loc = cloud.localize_keypoints(
         recon,
         images,
         view_sets=view_sets,
-        point_ids=sample,
+        point_indexes=sample,
         resolution=args.resolution,
         search=args.search,
         max_shift_px=args.max_shift_px,
     )
     out = []
     for r in loc:
-        pid = int(r["point_id"])
+        pid = int(r["point_index"])
         kept = np.asarray(r["views"], dtype=np.int64).tolist()
         in_set = view_sets.get(pid, sorted(tracks.get(pid, set())))
         if len(kept) < 2 or len(in_set) < 2:
@@ -475,7 +475,7 @@ def main(argv=None):
             np.asarray(recon.quaternions_wxyz, dtype=np.float64),
             recon.cameras,
             np.asarray(recon.camera_indexes),
-            {int(p): i for i, p in enumerate(np.asarray(cloud.point_ids))},
+            {int(p): i for i, p in enumerate(np.asarray(cloud.point_indexes))},
         )
         rows = [
             render_row(m, tracks.get(m["pid"], set()), recon, cloud, images, geom, args)

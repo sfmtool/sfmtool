@@ -19,7 +19,7 @@ def _compute_max_feature_sizes(sfmr_path):
     recon = SfmrReconstruction.load(sfmr_path)
     track_image_indexes = np.asarray(recon.track_image_indexes)
     track_feature_indexes = np.asarray(recon.track_feature_indexes)
-    track_point_ids = np.asarray(recon.track_point_ids)
+    track_point_indexes = np.asarray(recon.track_point_indexes)
 
     metadata = recon.metadata()
     feature_prefix_dir = metadata["workspace"]["contents"]["feature_prefix_dir"]
@@ -55,7 +55,7 @@ def _compute_max_feature_sizes(sfmr_path):
         obs_sizes[obs_positions[valid]] = sizes[feat_idxs[valid]]
 
     max_sizes = np.zeros(recon.point_count, dtype=np.float32)
-    np.maximum.at(max_sizes, track_point_ids, obs_sizes)
+    np.maximum.at(max_sizes, track_point_indexes, obs_sizes)
     return max_sizes
 
 

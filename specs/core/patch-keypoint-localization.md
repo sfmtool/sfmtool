@@ -177,8 +177,8 @@ _Status: v1 implemented in
 (`localize_patch_keypoints` / `localize_patch_cloud_keypoints`), exposed as
 `PatchCloud.localize_keypoints(recon, images, *, view_sets=None,
 max_iters=5, search=6.0, max_shift_px=3.0, min_relative_zncc=0.7,
-min_grazing_cos=0.1, resolution=24, …, point_ids=None)` returning a per-point
-`{point_id, views, keypoints, offsets_px, loo_zncc}`. Each round renders a
+min_grazing_cos=0.1, resolution=24, …, point_indexes=None)` returning a per-point
+`{point_index, views, keypoints, offsets_px, loo_zncc}`. Each round renders a
 **context tile** per view (the scored `R×R` core extended by `±⌈search⌉` px so the
 shift search slides without re-warping), z-normalizes the cores into a shared
 compacted channel space (a channel flat in any view is dropped, as in normal

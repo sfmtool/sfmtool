@@ -914,7 +914,7 @@ fn refine_patch_cloud_refines_in_place() {
             .iter()
             .map(|&d| plane_patch(exp_map_normal(&truth, d)))
             .collect(),
-        point_ids: vec![0, 1, 2],
+        point_indexes: vec![0, 1, 2],
     };
     let patch_views: Vec<Vec<u32>> = vec![vec![0, 1, 2, 3]; 3];
 

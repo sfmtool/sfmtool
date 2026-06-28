@@ -115,7 +115,9 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     # Turn one well-observed point into a point at infinity.
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
-    counts = np.bincount(np.asarray(recon.track_point_ids), minlength=recon.point_count)
+    counts = np.bincount(
+        np.asarray(recon.track_point_indexes), minlength=recon.point_count
+    )
     pi = int(np.argmax(counts))
     xyz = pos[pi, :3]
     pos[pi] = np.append(xyz / np.linalg.norm(xyz), 0.0)

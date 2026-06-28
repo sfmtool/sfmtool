@@ -12,7 +12,7 @@ fn test_cameras_at_same_position_filtered() {
     let quaternions = [identity_quat(), identity_quat()].concat();
     let translations = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
     let positions = [0.0, 0.0, 5.0]; // point in front
-    let track_point_ids = [0_u32, 0];
+    let track_point_indexes = [0_u32, 0];
     let track_image_indexes = [0_u32, 1];
 
     let keep = compute_narrow_track_mask(
@@ -21,7 +21,7 @@ fn test_cameras_at_same_position_filtered() {
         2,
         &positions,
         1,
-        &track_point_ids,
+        &track_point_indexes,
         &track_image_indexes,
         0.1, // any positive threshold
     );
@@ -51,7 +51,7 @@ fn test_cameras_90_degrees_apart_kept() {
     let quaternions = [identity_quat(), identity_quat()].concat();
     let translations = [0.0, 0.0, 0.0, -5.0, 0.0, 0.0];
     let positions = [0.0, 0.0, 5.0];
-    let track_point_ids = [0_u32, 0];
+    let track_point_indexes = [0_u32, 0];
     let track_image_indexes = [0_u32, 1];
 
     // Threshold at 30° (pi/6) - the actual angle is ~45°, so point should be kept
@@ -61,7 +61,7 @@ fn test_cameras_90_degrees_apart_kept() {
         2,
         &positions,
         1,
-        &track_point_ids,
+        &track_point_indexes,
         &track_image_indexes,
         PI / 6.0,
     );
@@ -78,7 +78,7 @@ fn test_cameras_90_degrees_apart_kept() {
         2,
         &positions,
         1,
-        &track_point_ids,
+        &track_point_indexes,
         &track_image_indexes,
         80.0_f64.to_radians(),
     );
@@ -94,7 +94,7 @@ fn test_single_observation_removed() {
     let quaternions = identity_quat().to_vec();
     let translations = [0.0, 0.0, 0.0];
     let positions = [1.0, 2.0, 3.0];
-    let track_point_ids = [0_u32];
+    let track_point_indexes = [0_u32];
     let track_image_indexes = [0_u32];
 
     let keep = compute_narrow_track_mask(
@@ -103,7 +103,7 @@ fn test_single_observation_removed() {
         1,
         &positions,
         1,
-        &track_point_ids,
+        &track_point_indexes,
         &track_image_indexes,
         0.01,
     );
@@ -122,7 +122,7 @@ fn test_angle_threshold_boundary() {
     let quaternions = [identity_quat(), identity_quat()].concat();
     let translations = [0.0, 0.0, 0.0, -10.0, 0.0, 0.0];
     let positions = [0.0, 0.0, 10.0];
-    let track_point_ids = [0_u32, 0];
+    let track_point_indexes = [0_u32, 0];
     let track_image_indexes = [0_u32, 1];
 
     // The actual angle: atan2(10, 10) = 45°
@@ -136,7 +136,7 @@ fn test_angle_threshold_boundary() {
         2,
         &positions,
         1,
-        &track_point_ids,
+        &track_point_indexes,
         &track_image_indexes,
         threshold_below,
     );
@@ -146,7 +146,7 @@ fn test_angle_threshold_boundary() {
         2,
         &positions,
         1,
-        &track_point_ids,
+        &track_point_indexes,
         &track_image_indexes,
         threshold_above,
     );
@@ -172,7 +172,7 @@ fn test_multiple_points_mixed() {
     // Point 2 at (5,5,5) - moderate
     let positions = [0.0, 0.0, 1.0, 0.0, 0.0, 100.0, 5.0, 5.0, 5.0];
 
-    let track_point_ids = [0_u32, 0, 1, 1, 2, 2];
+    let track_point_indexes = [0_u32, 0, 1, 1, 2, 2];
     let track_image_indexes = [0_u32, 1, 0, 1, 0, 2];
 
     let keep = compute_narrow_track_mask(
@@ -181,7 +181,7 @@ fn test_multiple_points_mixed() {
         3,
         &positions,
         3,
-        &track_point_ids,
+        &track_point_indexes,
         &track_image_indexes,
         10.0_f64.to_radians(),
     );

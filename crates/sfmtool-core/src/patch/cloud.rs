@@ -18,18 +18,18 @@ use crate::spatial::PointCloud;
 #[derive(Debug)]
 pub enum PatchCloudError {
     /// [`PatchExtent::FeatureSize`] could not read a keypoint scale for any
-    /// observation of point `point_id` — its `.sift` files were unreadable (or,
+    /// observation of point `point_index` — its `.sift` files were unreadable (or,
     /// degenerately, every observation coincides with a camera centre) — so the
     /// patch has no defined world size.
-    MissingFeatureScale { point_id: u32 },
+    MissingFeatureScale { point_index: u32 },
 }
 
 impl std::fmt::Display for PatchCloudError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PatchCloudError::MissingFeatureScale { point_id } => write!(
+            PatchCloudError::MissingFeatureScale { point_index } => write!(
                 f,
-                "no readable keypoint scale for any observation of point {point_id}; \
+                "no readable keypoint scale for any observation of point {point_index}; \
                  cannot size its patch from FeatureSize"
             ),
         }
@@ -195,7 +195,7 @@ pub struct PatchCloud {
     pub patches: Vec<OrientedPatch>,
     /// Optional per-patch link back to a reconstruction 3D-point id (empty if
     /// unused). When present, parallel to `patches`.
-    pub point_ids: Vec<u32>,
+    pub point_indexes: Vec<u32>,
 }
 
 impl PatchCloud {
@@ -215,7 +215,7 @@ impl PatchCloud {
     ///
     /// One patch per finite point: center = position, in-plane up from the
     /// first observing camera, normal and half-size per the given policies.
-    /// `point_ids` records the source point index for each patch.
+    /// `point_indexes` records the source point index for each patch.
     ///
     /// When `exclude_points_at_infinity` is `false`, each point at infinity
     /// (`w = 0`) additionally gets a tangent-sphere frame (`w = 0` patch) around
@@ -331,7 +331,9 @@ impl PatchCloud {
                     }
                 }
                 if sizes.is_empty() {
-                    return Err(PatchCloudError::MissingFeatureScale { point_id: p as u32 });
+                    return Err(PatchCloudError::MissingFeatureScale {
+                        point_index: p as u32,
+                    });
                 }
                 halves[fi] = factor * reduce(&mut sizes, across);
             }
@@ -341,7 +343,7 @@ impl PatchCloud {
         };
 
         let mut patches = Vec::with_capacity(finite.len());
-        let mut point_ids = Vec::with_capacity(finite.len());
+        let mut point_indexes = Vec::with_capacity(finite.len());
 
         for (fi, &p) in finite.iter().enumerate() {
             let pt = &recon.points[p];
@@ -417,10 +419,13 @@ impl PatchCloud {
                 up,
                 [half, half],
             ));
-            point_ids.push(p as u32);
+            point_indexes.push(p as u32);
         }
 
-        let mut cloud = PatchCloud { patches, point_ids };
+        let mut cloud = PatchCloud {
+            patches,
+            point_indexes,
+        };
         if !exclude_points_at_infinity {
             cloud.push_infinity_patches(
                 recon,
@@ -438,7 +443,7 @@ impl PatchCloud {
     /// `points3d/` arrays.
     ///
     /// The arrays are **per 3D point** (parallel to the points arrays), so the
-    /// patches are scattered into `point_count` rows by their `point_ids`; every
+    /// patches are scattered into `point_count` rows by their `point_indexes`; every
     /// row this cloud has no patch for is left as a zero row (a row is "present"
     /// iff its `u` is non-zero). The center is not stored (it is the point's own
     /// position — a Euclidean point for a finite point, a direction for a point
@@ -449,7 +454,7 @@ impl PatchCloud {
         let mut u_xyz = Array2::<f32>::zeros((point_count, 3));
         let mut v_xyz = Array2::<f32>::zeros((point_count, 3));
         for (k, patch) in self.patches.iter().enumerate() {
-            let i = self.point_ids.get(k).copied().unwrap_or(k as u32) as usize;
+            let i = self.point_indexes.get(k).copied().unwrap_or(k as u32) as usize;
             if i >= point_count {
                 continue;
             }
@@ -467,7 +472,7 @@ impl PatchCloud {
 
     /// Reconstruct a patch cloud from the per-point half-extent vector arrays,
     /// keeping only the present rows (non-zero `u`) and recording each one's
-    /// point index in `point_ids`. `centers[i]` supplies the patch center for
+    /// point index in `point_indexes`. `centers[i]` supplies the patch center for
     /// point `i` (its position). The half-extent vectors are split back into a
     /// unit axis and a half-size.
     ///
@@ -481,7 +486,7 @@ impl PatchCloud {
         centers: &[Point3<f64>],
     ) -> Self {
         let mut patches = Vec::new();
-        let mut point_ids = Vec::new();
+        let mut point_indexes = Vec::new();
         for i in 0..half_u_xyz.shape()[0] {
             let u = Vector3::new(
                 half_u_xyz[[i, 0]] as f64,
@@ -503,9 +508,12 @@ impl PatchCloud {
             let v_axis = if hv > 1e-12 { v / hv } else { v };
             let center = centers.get(i).copied().unwrap_or_else(Point3::origin);
             patches.push(OrientedPatch::new(center, u_axis, v_axis, [hu, hv]));
-            point_ids.push(i as u32);
+            point_indexes.push(i as u32);
         }
-        PatchCloud { patches, point_ids }
+        PatchCloud {
+            patches,
+            point_indexes,
+        }
     }
 
     /// Push a tangent-sphere patch for each of the reconstruction's points at
@@ -530,7 +538,7 @@ impl PatchCloud {
     /// reuse their world half-size as the tangent magnitude (there is no ray
     /// distance at infinity to convert it through).
     ///
-    /// Each patch's `point_ids` entry is its source point index, so
+    /// Each patch's `point_indexes` entry is its source point index, so
     /// [`Self::to_halfvec_arrays`] scatters it into that point's row. Errors with
     /// [`PatchCloudError::MissingFeatureScale`] under [`PatchExtent::FeatureSize`]
     /// if a point has no readable keypoint scale in any view.
@@ -554,7 +562,7 @@ impl PatchCloud {
         // shared with the finite path — no second `.sift` read or spatial index.
 
         self.patches.reserve(infinity.len());
-        self.point_ids.reserve(infinity.len());
+        self.point_indexes.reserve(infinity.len());
         for &p in &infinity {
             let dir = recon.points[p].position;
             let start = recon.observation_offsets[p];
@@ -595,7 +603,9 @@ impl PatchCloud {
                         }
                     }
                     if angles.is_empty() {
-                        return Err(PatchCloudError::MissingFeatureScale { point_id: p as u32 });
+                        return Err(PatchCloudError::MissingFeatureScale {
+                            point_index: p as u32,
+                        });
                     }
                     factor * reduce(&mut angles, across)
                 }
@@ -610,7 +620,7 @@ impl PatchCloud {
                 up,
                 [half, half],
             ));
-            self.point_ids.push(p as u32);
+            self.point_indexes.push(p as u32);
         }
         Ok(())
     }
