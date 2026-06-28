@@ -25,7 +25,7 @@ def test_sift_workspace_mode(isolated_seoul_bull_image: Path):
     )
     assert result.exit_code == 0, result.output
     assert "Using workspace:" in result.output
-    assert "Feature tool: colmap" in result.output
+    assert "Feature tool: sfmtool" in result.output
 
     config = json.load(open(workspace_dir / ".sfm-workspace.json"))
     sift_dir = workspace_dir / config["feature_prefix_dir"]
@@ -37,7 +37,9 @@ def test_sift_workspace_with_dsp(isolated_seoul_bull_image: Path):
     workspace_dir = isolated_seoul_bull_image.parent
     workspace_config_file = workspace_dir / ".sfm-workspace.json"
 
-    result = CliRunner().invoke(main, ["ws", "init", "--dsp", str(workspace_dir)])
+    result = CliRunner().invoke(
+        main, ["ws", "init", "--feature-tool", "colmap", "--dsp", str(workspace_dir)]
+    )
     assert result.exit_code == 0
 
     with open(workspace_config_file) as f:
