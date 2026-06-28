@@ -8,8 +8,9 @@ import pytest
 
 from sfmtool import RangeExpr
 from sfmtool._filenames import number_from_filename
+from sfmtool._sfmtool import SfmrReconstruction
 from sfmtool.xform import ExcludeRangeFilter, IncludeRangeFilter
-from sfmtool.xform._filter_by_image_range import _filter_rig_frame_data
+from sfmtool.xform._filter_by_image_range import _filter_images
 
 from .conftest import apply_transforms_to_file, load_reconstruction_data
 
@@ -222,75 +223,65 @@ def test_range_filter_preserves_observation_counts(seoul_bull_workspace, tmp_pat
 
 
 # =============================================================================
-# Rig-Aware Filtering Tests (_filter_rig_frame_data standalone)
+# Points at Infinity
 # =============================================================================
 
 
-def test_filter_rig_frame_data_standalone():
-    """Test _filter_rig_frame_data directly with specific scenarios."""
-    # Create rig data for 3 sensors, 4 frames (12 images)
-    rig_data = {
-        "rigs_metadata": {"rig_count": 1, "sensor_count": 3},
-        "sensor_camera_indexes": np.array([0, 0, 0], dtype=np.uint32),
-        "sensor_quaternions_wxyz": np.tile([1.0, 0, 0, 0], (3, 1)),
-        "sensor_translations_xyz": np.zeros((3, 3)),
-        "frames_metadata": {"frame_count": 4},
-        "rig_indexes": np.zeros(4, dtype=np.uint32),
-        # sensor 0: images 0-3 (frames 0-3)
-        # sensor 1: images 4-7 (frames 0-3)
-        # sensor 2: images 8-11 (frames 0-3)
-        "image_sensor_indexes": np.array(
-            [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2], dtype=np.uint32
-        ),
-        "image_frame_indexes": np.array(
-            [0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3], dtype=np.uint32
-        ),
-    }
+def test_range_filter_preserves_points_at_infinity(seoul_bull_workspace):
+    """Image filtering must preserve w=0 points.
 
-    # Keep images 0, 1, 4, 5, 8, 9 (frames 0 and 1 from all sensors)
-    images_to_keep = np.array([0, 1, 4, 5, 8, 9], dtype=np.uint32)
-    result = _filter_rig_frame_data(rig_data, images_to_keep)
+    Regression: ``_filter_images`` used to rebuild from the ``(N, 3)`` Euclidean
+    positions, which ``clone_with_changes`` interprets as ``w = 1`` — silently
+    materialising every point at infinity. Delegating to the Rust
+    ``subset_by_image_indices`` primitive keeps ``w = 0`` intact.
+    """
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
 
-    assert result is not None
-    assert result["frames_metadata"]["frame_count"] == 2
-    assert len(result["rig_indexes"]) == 2
-    np.testing.assert_array_equal(result["image_sensor_indexes"], [0, 0, 1, 1, 2, 2])
-    np.testing.assert_array_equal(result["image_frame_indexes"], [0, 1, 0, 1, 0, 1])
+    # Mark the first few points as at infinity (w = 0 directions).
+    xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
+    xyzw[:5, 3] = 0.0
+    injected = recon.clone_with_changes(positions=xyzw)
+    n_inf = int(np.asarray(injected.point_is_at_infinity).sum())
+    assert n_inf >= 5
 
-    # Sensor data unchanged
-    assert result["sensor_quaternions_wxyz"].shape == (3, 4)
+    # Keep every image: no point is orphaned, so all infinity points survive.
+    kept = np.arange(injected.image_count, dtype=np.uint32)
+    result = _filter_images(injected, kept)
+
+    assert int(np.asarray(result.point_is_at_infinity).sum()) == n_inf
+    assert result.infinity_point_count == n_inf
 
 
-def test_filter_rig_frame_data_none():
-    """Test _filter_rig_frame_data returns None when input is None."""
-    result = _filter_rig_frame_data(None, np.array([0, 1], dtype=np.uint32))
-    assert result is None
+# =============================================================================
+# Rig-Aware Filtering (end-to-end through subset_by_image_indices)
+# =============================================================================
 
 
-def test_filter_rig_all_frames_remain():
-    """Test filtering that removes images but keeps all frames populated."""
-    # 2 sensors, 2 frames = 4 images
-    # sensor 0: images 0, 1 (frames 0, 1)
-    # sensor 1: images 2, 3 (frames 0, 1)
-    rig_data = {
-        "rigs_metadata": {"rig_count": 1, "sensor_count": 2},
-        "sensor_camera_indexes": np.array([0, 0], dtype=np.uint32),
-        "sensor_quaternions_wxyz": np.tile([1.0, 0, 0, 0], (2, 1)),
-        "sensor_translations_xyz": np.zeros((2, 3)),
-        "frames_metadata": {"frame_count": 2},
-        "rig_indexes": np.zeros(2, dtype=np.uint32),
-        "image_sensor_indexes": np.array([0, 0, 1, 1], dtype=np.uint32),
-        "image_frame_indexes": np.array([0, 1, 0, 1], dtype=np.uint32),
-    }
+def test_range_filter_keeps_rig_frame_data_consistent(kerry_park_workspace, tmp_path):
+    """Filtering a rig reconstruction by image range keeps rig/frame data
+    internally consistent — the Rust subset primitive owns the frame remap; this
+    is the integration check across the CLI transform path."""
+    recon = SfmrReconstruction.load(kerry_park_workspace)
+    assert recon.rig_frame_data is not None
+    before_frames = recon.rig_frame_data["frames_metadata"]["frame_count"]
 
-    # Remove only sensor 1's images -- both frames still have sensor 0
-    images_to_keep = np.array([0, 1], dtype=np.uint32)
-    result = _filter_rig_frame_data(rig_data, images_to_keep)
+    # Drop one frame number (files are numbered 1-8), which removes that frame
+    # from every sensor.
+    output_path = tmp_path / "rig_filtered.sfmr"
+    apply_transforms_to_file(
+        kerry_park_workspace, output_path, [ExcludeRangeFilter(RangeExpr("1"))]
+    )
 
-    assert result is not None
-    # Both frames should still be present
-    assert result["frames_metadata"]["frame_count"] == 2
-    assert len(result["rig_indexes"]) == 2
-    # Only sensor 0 images remain
-    np.testing.assert_array_equal(result["image_sensor_indexes"], [0, 0])
-    np.testing.assert_array_equal(result["image_frame_indexes"], [0, 1])
+    filtered = SfmrReconstruction.load(output_path)
+    rfd = filtered.rig_frame_data
+    assert rfd is not None
+    # One whole frame removed, and the frame index column was remapped to stay
+    # contiguous and aligned with the surviving images.
+    assert rfd["frames_metadata"]["frame_count"] == before_frames - 1
+    assert len(rfd["image_sensor_indexes"]) == filtered.image_count
+    assert len(rfd["image_frame_indexes"]) == filtered.image_count
+    assert len(rfd["rig_indexes"]) == rfd["frames_metadata"]["frame_count"]
+    assert (
+        int(rfd["image_frame_indexes"].max())
+        == rfd["frames_metadata"]["frame_count"] - 1
+    )

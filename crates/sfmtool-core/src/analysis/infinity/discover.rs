@@ -20,13 +20,14 @@
 
 use std::collections::HashMap;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, Rotation3, Vector3};
 
 use super::convert::{
     camera_extents, classify_rays_at_infinity, Classification, RayClassification,
     DEFAULT_INVERSE_DEPTH_Z_CUTOFF,
 };
 use crate::features::feature_match::descriptor::descriptor_distance_l2_squared;
+use crate::reconstruction::data::observation_reprojection_error;
 use crate::reconstruction::{
     ObservationSource, Point3D, ReconstructionError, SfmrReconstruction, TrackObservation,
 };
@@ -385,6 +386,10 @@ impl SfmrReconstruction {
         let mut descriptors: Vec<[u8; 128]> = Vec::new();
         let mut image_index: Vec<u32> = Vec::new();
         let mut feature_index: Vec<u32> = Vec::new();
+        // Observed pixel position of each candidate keypoint, keyed by
+        // (image, feature). Retained so a discovered point's reprojection error
+        // can be measured inline against the features it was built from.
+        let mut obs_xy: HashMap<(u32, u32), [f64; 2]> = HashMap::new();
 
         for (img_idx, image) in self.images.iter().enumerate() {
             let camera = &self.cameras[image.camera_index as usize];
@@ -418,6 +423,7 @@ impl SfmrReconstruction {
                 let norm = world.norm();
                 let unit = if norm > 0.0 { world / norm } else { world };
                 dirs.push(unit);
+                obs_xy.insert((img_idx as u32, f as u32), [u, v]);
 
                 let mut desc = [0u8; 128];
                 for (k, slot) in desc.iter_mut().enumerate() {
@@ -457,6 +463,47 @@ impl SfmrReconstruction {
             finite_horizon,
         );
 
+        // World→camera rotations, one per image, computed once and reused across
+        // every discovered track that observes the image.
+        let rotations: Vec<Rotation3<f64>> = self
+            .images
+            .iter()
+            .map(|im| im.quaternion_wxyz.to_rotation_matrix())
+            .collect();
+
+        // Mean reprojection error (pixels) of a discovered point against the
+        // features it was built from, via the shared single-observation helper
+        // (handles the w = 0 vs finite projection). A point with no in-front
+        // observation scores 0.0.
+        let reprojection_error =
+            |position: &Point3<f64>, at_infinity: bool, members: &[(u32, u32)]| -> f32 {
+                let mut sum = 0.0f64;
+                let mut count = 0u32;
+                for &(img, feat) in members {
+                    let Some(&observed) = obs_xy.get(&(img, feat)) else {
+                        continue;
+                    };
+                    let image = &self.images[img as usize];
+                    let camera = &self.cameras[image.camera_index as usize];
+                    if let Some(e) = observation_reprojection_error(
+                        &rotations[img as usize],
+                        &image.translation_xyz,
+                        camera,
+                        position,
+                        at_infinity,
+                        observed,
+                    ) {
+                        sum += e;
+                        count += 1;
+                    }
+                }
+                if count > 0 {
+                    (sum / count as f64) as f32
+                } else {
+                    0.0
+                }
+            };
+
         // Append finite and at-infinity tracks; drop indeterminate ones (the
         // baseline couldn't adjudicate them) with a debug line for review. Every
         // member is a previously untracked feature, so no appended observation
@@ -495,12 +542,13 @@ impl SfmrReconstruction {
                     continue;
                 }
             };
+            let error = reprojection_error(&position, w == 0.0, &track.members);
             let new_point_id = recon.points.len() as u32;
             recon.points.push(Point3D {
                 position,
                 w,
                 color: [200, 200, 200],
-                error: 0.0,
+                error,
                 normal: Vector3::zeros(),
             });
             for (img, _feat) in &track.members {

@@ -150,13 +150,19 @@ nothing new.
    observability diagnostics (`classify_rays_at_infinity`, see
    [batch-triangulation-api.md](../core/batch-triangulation-api.md)): the
    inverse-depth z-score — computed against a per-ray angular noise of
-   `noise_floor_px / f_max`, since discovered tracks carry no reprojection
-   error — decides finite vs at infinity, and tracks whose depth the
-   diagnostics cannot pin down either way come back *indeterminate* and are
-   dropped.
+   `noise_floor_px / f_max`, since at classification time a discovered track has
+   no reprojection error yet — decides finite vs at infinity, and tracks whose
+   depth the diagnostics cannot pin down either way come back *indeterminate*
+   and are dropped.
 7. **Emit.** Each surviving track becomes a new point (direction
    `normalise(Σ rᵢ)` for `w = 0`, the triangulated position for finite), plus
    its observations, appended to the reconstruction via `clone_with_changes`.
+   Each new point is assigned its mean reprojection error, measured inline
+   against the member keypoints it was built from: a `w = 0` point projects its
+   bearing through rotation + intrinsics only (translation is negligible at
+   infinity), a finite point projects `R·p + t`. The error is therefore
+   well-defined for both kinds, so downstream filters (e.g.
+   `--filter-by-reprojection-error`) score discovered points like any other.
    Because step 1 excluded already-tracked keypoints, no appended observation
    reuses a feature an existing point already owns — a 2D feature still observes
    exactly one 3D point, which COLMAP export and bundle adjustment require.

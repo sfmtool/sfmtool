@@ -61,6 +61,36 @@ def test_find_is_additive_and_consistent(seoul_bull_workspace):
     )
 
 
+def test_find_assigns_finite_reprojection_errors(seoul_bull_workspace):
+    """Discovered points carry a real, inline-computed reprojection error.
+
+    A point at infinity still projects its bearing (rotation + intrinsics), so
+    its error is well-defined — discovery measures it against the features the
+    track was built from rather than leaving a 0.0 placeholder. This is what
+    lets the reprojection-error filter score discovered infinity points.
+    """
+    original = SfmrReconstruction.load(seoul_bull_workspace)
+    n0 = original.point_count
+
+    result = FindPointsAtInfinityTransform(0.1, 300.0, 2, max_features=1500).apply(
+        original
+    )
+    assert result.point_count > n0
+
+    # The appended (discovered) points: every error is finite.
+    new_errors = np.asarray(result.errors)[n0:]
+    assert np.all(np.isfinite(new_errors))
+
+    # The discovered points at infinity are scored, not left at the 0.0
+    # placeholder: errors are finite, some are nonzero, and the bearing
+    # reprojects close to its member keypoints (a few pixels).
+    at_inf = np.asarray(result.point_is_at_infinity)[n0:]
+    inf_errors = new_errors[at_inf]
+    assert inf_errors.size > 0
+    assert np.any(inf_errors > 0.0)
+    assert float(np.median(inf_errors)) < 10.0
+
+
 def test_min_views_three_yields_fewer(seoul_bull_workspace):
     """Requiring 3 views finds no more new points than requiring 2."""
     original = SfmrReconstruction.load(seoul_bull_workspace)

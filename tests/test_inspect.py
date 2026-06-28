@@ -5,6 +5,7 @@
 
 from pathlib import Path
 
+import numpy as np
 from click.testing import CliRunner
 
 from sfmtool._sfmtool import SfmrReconstruction
@@ -72,6 +73,34 @@ def test_inspect_sfmr_verbose(seoul_bull_workspace):
     assert "Reconstruction summary:" in out
     assert "3D Point statistics:" in out
     assert "Nearest neighbor distances:" in out
+
+
+def test_inspect_sfmr_verbose_with_points_at_infinity(
+    seoul_bull_workspace, tmp_path: Path
+):
+    """A point at infinity (w=0) projects its bearing to a finite pixel, so it
+    has a well-defined reprojection error. Verbose inspect must report finite
+    error stats (no inf) rather than crashing in the histogram range."""
+    recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+
+    # Mark the first point as at infinity: homogeneous w=0 (a bearing direction).
+    xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
+    xyzw[0, 3] = 0.0
+    modified = recon.clone_with_changes(positions=xyzw)
+    assert modified.infinity_point_count >= 1
+
+    # recompute_point_errors must yield a finite error for the w=0 point.
+    modified.recompute_point_errors()
+    assert np.all(np.isfinite(modified.errors))
+
+    out_path = tmp_path / "with_infinity.sfmr"
+    modified.save(str(out_path))
+
+    result = CliRunner().invoke(main, ["inspect", "-v", str(out_path)])
+    assert result.exit_code == 0, result.output
+    out = result.output
+    assert "Reprojection error:" in out
+    assert "Mean: inf" not in out
 
 
 # ── .sift feature files ──────────────────────────────────────────────────────

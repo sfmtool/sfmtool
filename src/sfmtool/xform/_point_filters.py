@@ -17,11 +17,13 @@ def keep_infinity_points(
     """Combine a finite-point keep mask with a pass-through for infinity points.
 
     Some xform point filters score a quantity that is undefined for a point at
-    infinity — a triangulation angle, neighbour distance, or reprojection error
-    computed from a direction rather than a location. Those filters keep such
-    points unconditionally via this helper. Filters scoring track length or
-    feature size, which are well-defined regardless of ``w``, score points at
-    infinity normally instead. See specs/formats/sfmr-file-format.md.
+    infinity — a triangulation angle or neighbour distance, both meaningless for
+    a direction rather than a location. Those filters keep such points
+    unconditionally via this helper. Filters scoring a quantity that is
+    well-defined regardless of ``w`` — track length, feature size, or
+    reprojection error (a ``w = 0`` point still projects through rotation +
+    intrinsics) — score points at infinity normally instead. See
+    specs/formats/sfmr-file-format.md.
     """
     at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
     return np.asarray(finite_keep_mask, dtype=bool) | at_infinity

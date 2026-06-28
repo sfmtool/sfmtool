@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use nalgebra::{Point3, UnitQuaternion, Vector3};
+use nalgebra::{Point3, Rotation3, UnitQuaternion, Vector3};
 use ndarray::{Array2, Array4};
 
 use sfmr_format::{
@@ -416,7 +416,9 @@ impl SfmrReconstruction {
     ///
     /// Loads feature positions from the image's `.sift` file, projects each
     /// observed 3D point through the camera, and measures pixel distance to
-    /// the observed feature position.
+    /// the observed feature position. Points at infinity (`w = 0`) project
+    /// their stored bearing direction (translation-free), so their error is
+    /// well-defined like any finite point's.
     ///
     /// Returns a vector of `(feature_index, reprojection_error_px)` pairs,
     /// one per track observation for this image. Points behind the camera
@@ -458,26 +460,20 @@ impl SfmrReconstruction {
                 }
             };
 
-            let point_pos = &self.points[point_idx as usize].position;
-
-            // Transform point from world to camera space: p_cam = R * p_world + t
-            let p_cam = r * point_pos.coords + t;
-
-            // Point behind camera
-            if p_cam.z <= 0.0 {
-                results.push((feat_idx, f32::NAN));
-                continue;
-            }
-
-            // Project to normalized image plane, then through camera model
-            let x = p_cam.x / p_cam.z;
-            let y = p_cam.y / p_cam.z;
-            let (u_proj, v_proj) = camera.project(x, y);
-
-            // Pixel distance
-            let du = u_proj - feature_xy[0] as f64;
-            let dv = v_proj - feature_xy[1] as f64;
-            let error = (du * du + dv * dv).sqrt() as f32;
+            let point = &self.points[point_idx as usize];
+            let observed = [feature_xy[0] as f64, feature_xy[1] as f64];
+            let error = match observation_reprojection_error(
+                &r,
+                t,
+                camera,
+                &point.position,
+                point.is_at_infinity(),
+                observed,
+            ) {
+                Some(e) => e as f32,
+                // Point behind the camera: no defined reprojection.
+                None => f32::NAN,
+            };
 
             results.push((feat_idx, error));
         }
@@ -521,6 +517,59 @@ impl SfmrReconstruction {
             } else {
                 0.0
             };
+        }
+
+        Ok(())
+    }
+
+    /// Recompute mean reprojection errors for points at infinity only, leaving
+    /// finite points' errors untouched.
+    ///
+    /// Used after bundle adjustment: a point that was materialised to a finite
+    /// landmark, refined, then reclassified back to `w = 0` carries an error
+    /// describing the landmark, not its bearing. Only those points need fixing,
+    /// so finite points keep the errors the solve produced and `.sift` files are
+    /// read only for images that observe a point at infinity.
+    pub fn recompute_infinity_point_errors(&mut self) -> Result<(), ReconstructionError> {
+        let num_points = self.points.len();
+        let is_infinity: Vec<bool> = self.points.iter().map(|p| p.is_at_infinity()).collect();
+        if !is_infinity.iter().any(|&b| b) {
+            return Ok(());
+        }
+
+        let mut error_sums = vec![0.0f64; num_points];
+        let mut error_counts = vec![0u32; num_points];
+
+        for img_idx in 0..self.images.len() {
+            let feat_to_point = &self.image_feature_to_point[img_idx];
+            // Skip images observing no point at infinity — avoids reading their
+            // `.sift` file just to discard every observation.
+            if !feat_to_point.values().any(|&p| is_infinity[p as usize]) {
+                continue;
+            }
+            let results = self.compute_observation_reprojection_errors(img_idx)?;
+            let feat_to_point = &self.image_feature_to_point[img_idx];
+            for (feat_idx, error) in results {
+                if error.is_nan() {
+                    continue;
+                }
+                if let Some(&point_idx) = feat_to_point.get(&feat_idx) {
+                    if is_infinity[point_idx as usize] {
+                        error_sums[point_idx as usize] += error as f64;
+                        error_counts[point_idx as usize] += 1;
+                    }
+                }
+            }
+        }
+
+        for i in 0..num_points {
+            if is_infinity[i] {
+                self.points[i].error = if error_counts[i] > 0 {
+                    (error_sums[i] / error_counts[i] as f64) as f32
+                } else {
+                    0.0
+                };
+            }
         }
 
         Ok(())
@@ -1196,6 +1245,37 @@ impl SfmrReconstruction {
 /// consistent.
 pub(crate) fn count_points_at_infinity(points: &[Point3D]) -> usize {
     points.iter().filter(|p| p.is_at_infinity()).count()
+}
+
+/// Reprojection error (pixels) of one observation, or `None` if the point is
+/// behind the camera.
+///
+/// `rotation`/`translation` are the world→camera pose; `point` is the 3D point's
+/// stored coordinate. A point at infinity (`at_infinity`) projects its bearing
+/// direction through rotation + intrinsics only — the camera translation is
+/// negligible at infinity — while a finite point projects `R·p + t`. Shared by
+/// per-image error computation and points-at-infinity discovery so the two stay
+/// in sync.
+pub(crate) fn observation_reprojection_error(
+    rotation: &Rotation3<f64>,
+    translation: &Vector3<f64>,
+    camera: &CameraIntrinsics,
+    point: &Point3<f64>,
+    at_infinity: bool,
+    observed_xy: [f64; 2],
+) -> Option<f64> {
+    let p_cam = if at_infinity {
+        rotation * point.coords
+    } else {
+        rotation * point.coords + translation
+    };
+    if p_cam.z <= 0.0 {
+        return None;
+    }
+    let (u_proj, v_proj) = camera.project(p_cam.x / p_cam.z, p_cam.y / p_cam.z);
+    let du = u_proj - observed_xy[0];
+    let dv = v_proj - observed_xy[1];
+    Some((du * du + dv * dv).sqrt())
 }
 
 /// Compute prefix sum offsets from observation counts.

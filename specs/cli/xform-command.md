@@ -153,6 +153,9 @@ A missing file raises `FileNotFoundError`.
 #### `--filter-by-reprojection-error <threshold>`
 
 Removes 3D points with reprojection error exceeding the threshold (in pixels).
+Points at infinity (`w = 0`) are scored too: a point at infinity still projects
+its bearing through rotation + intrinsics, so its reprojection error is
+well-defined and a high-error point at infinity is removed like any other.
 
 ```bash
 --filter-by-reprojection-error 2.0

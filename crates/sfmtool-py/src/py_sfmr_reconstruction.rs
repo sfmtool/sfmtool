@@ -588,6 +588,18 @@ impl PySfmrReconstruction {
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
     }
 
+    /// Recompute mean reprojection errors for points at infinity only.
+    ///
+    /// Finite points keep their existing errors. Reads `.sift` files only for
+    /// images that observe a point at infinity. Intended for use after bundle
+    /// adjustment, where points reclassified back to ``w = 0`` carry an error
+    /// describing their materialised landmark rather than their bearing.
+    fn recompute_infinity_point_errors(&mut self) -> PyResult<()> {
+        self.inner
+            .recompute_infinity_point_errors()
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    }
+
     /// Apply an SE(3) similarity transform to this reconstruction.
     ///
     /// Transforms all 3D point positions and camera poses. Returns a new

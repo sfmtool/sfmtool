@@ -700,7 +700,9 @@ Reprojection errors:
 - **Shape**: `(N,)` where N = point_count
 - **Data type**: `float32` (little-endian)
 - **Format**: RMS reprojection error in pixels. A `w = 0` point still projects
-  (rotation + intrinsics only), so its reprojection error stays well-defined.
+  (rotation + intrinsics only), so its reprojection error stays well-defined —
+  consumers (e.g. the reprojection-error point filter) score points at infinity
+  by it like any finite point.
 
 #### `points3d/normals_xyz.{N}.3.float32.zst` (Optional)
 

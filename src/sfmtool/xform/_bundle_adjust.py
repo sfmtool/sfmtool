@@ -61,6 +61,11 @@ class BundleAdjustTransform:
         n_after = int(np.count_nonzero(result.point_is_at_infinity))
         if n_after:
             print(f"    Reclassified {n_after} point(s) as at infinity")
+            # The errors read back from the (materialised) BA solve describe the
+            # finite landmark, not the w = 0 bearing the point reverted to.
+            # Recompute only those points from the feature positions; finite
+            # points keep the errors the BA solve produced.
+            result.recompute_infinity_point_errors()
         return result
 
     def _reconstruction_to_data(
