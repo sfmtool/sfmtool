@@ -108,6 +108,58 @@ class TestAlignReconstructionsPoints:
         assert result.aligned[0] is None
 
 
+class TestAlignPointsAtInfinity:
+    """Point alignment must ignore points at infinity (directions, not metric
+    locations) so they cannot corrupt the similarity fit."""
+
+    def test_correspondences_exclude_points_at_infinity(self, seoul_bull_sfmr_only):
+        """find_point_correspondences drops pairs where either point is w=0."""
+        from sfmtool._point_correspondence import find_point_correspondences
+
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        shared = [(i, i) for i in range(recon.image_count)]
+
+        corr_all, _, _ = find_point_correspondences(recon, recon, shared)
+
+        # Mark the first five points as at infinity.
+        xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
+        xyzw[:5, 3] = 0.0
+        inf_recon = recon.clone_with_changes(positions=xyzw)
+        inf_ids = set(
+            np.flatnonzero(np.asarray(inf_recon.point_is_at_infinity)).tolist()
+        )
+        assert len(inf_ids) >= 5
+
+        corr_inf, src_pos, tgt_pos = find_point_correspondences(
+            inf_recon, inf_recon, shared
+        )
+
+        # No infinity point survives as a correspondence (either side).
+        assert inf_ids.isdisjoint(corr_inf.keys())
+        assert inf_ids.isdisjoint(corr_inf.values())
+        # Returned positions are all finite.
+        assert np.all(np.isfinite(src_pos))
+        assert np.all(np.isfinite(tgt_pos))
+        # Exactly the infinity points were removed vs. the all-finite run.
+        assert len(corr_inf) == len(corr_all) - len(inf_ids & set(corr_all.keys()))
+
+    def test_align_succeeds_with_shared_infinity_points(self, seoul_bull_sfmr_only):
+        """Point alignment runs cleanly when shared w=0 points are present."""
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
+        xyzw[:20, 3] = 0.0
+        inf_recon = recon.clone_with_changes(positions=xyzw)
+
+        transform = Se3Transform(translation=[5, 0, 0], scale=2.0)
+        transformed = apply_transforms(inf_recon, [SimilarityTransform(transform)])
+
+        result = align_reconstructions(
+            reference=inf_recon, to_align=[transformed], method="points"
+        )
+        assert result.aligned[0] is not None
+        assert result.total_shared_images == 17
+
+
 class TestAlignReconstructionsCameras:
     """Test align_reconstructions with camera-based method."""
 

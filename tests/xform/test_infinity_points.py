@@ -3,9 +3,10 @@
 
 """Tests that xform point filters and bundle adjustment handle points at infinity.
 
-Filters whose score is undefined for a direction (reprojection error,
-triangulation angle, neighbour distance) pass points at infinity through
-untouched; filters scoring track length or feature size score them normally.
+Filters whose score is undefined for a direction (triangulation angle, neighbour
+distance) pass points at infinity through untouched; filters scoring a quantity
+that is well-defined regardless of ``w`` — track length, feature size, or
+reprojection error (a ``w = 0`` point still projects) — score them normally.
 Bundle adjustment materialises them, refines, then reclassifies. See
 specs/formats/sfmr-file-format.md.
 """
@@ -30,28 +31,29 @@ def _inject_infinity(recon: SfmrReconstruction, indices) -> SfmrReconstruction:
     return recon.clone_with_changes(positions=positions)
 
 
-def test_reprojection_filter_keeps_high_error_infinity_points(
+def test_reprojection_filter_scores_infinity_points(
     seoul_bull_sfmr_only,
 ):
     recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
     indices = list(range(5))
 
-    # The injected points are at infinity AND given a huge reprojection error:
-    # a finite point with that error would be filtered out.
+    # A point at infinity has a well-defined reprojection error, so it is scored
+    # by the filter like any finite point. Give the injected infinity points a
+    # huge error (filtered) and a tiny error (kept) to prove both outcomes.
     positions = recon.positions_xyzw.copy()
     errors = recon.errors.copy()
     for i in indices:
         positions[i] = [0.0, 0.0, 1.0, 0.0]
-        errors[i] = 1000.0
+    errors[indices[0]] = 1000.0  # fails the criterion -> removed
+    errors[indices[1:]] = 0.1  # passes the criterion -> kept
     recon = recon.clone_with_changes(positions=positions, errors=errors)
     assert recon.point_is_at_infinity[indices].all()
+    n_infinity_before = int(recon.point_is_at_infinity.sum())
 
     result = FilterByReprojectionErrorTransform(threshold=2.0).apply(recon)
 
-    # Every infinity point survived despite failing the error criterion.
-    assert int(result.point_is_at_infinity.sum()) == len(indices)
-    # Finite points were still filtered.
-    assert result.point_count < recon.point_count
+    # The high-error infinity point was removed; the low-error ones survived.
+    assert int(result.point_is_at_infinity.sum()) == n_infinity_before - 1
 
 
 def test_short_tracks_filter_scores_infinity_points(

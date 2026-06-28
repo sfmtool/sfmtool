@@ -13,6 +13,24 @@ from ._sfmtool.io import read_sift_partial
 from .sift.file import get_sift_path_from_recon
 
 
+def _finite_pair_mask(
+    source_recon: SfmrReconstruction,
+    source_ids: np.ndarray,
+    target_recon: SfmrReconstruction,
+    target_ids: np.ndarray,
+) -> np.ndarray:
+    """Boolean mask of correspondence pairs whose source AND target are finite.
+
+    A point at infinity (``w = 0``) stores a unit bearing direction in
+    ``positions``, not a metric location, so it cannot anchor a similarity fit
+    (alignment) or a positional comparison — including one would corrupt the
+    Kabsch/RANSAC solve. Such pairs are dropped before positions are read.
+    """
+    src_inf = np.asarray(source_recon.point_is_at_infinity, dtype=bool)
+    tgt_inf = np.asarray(target_recon.point_is_at_infinity, dtype=bool)
+    return ~(src_inf[source_ids] | tgt_inf[target_ids])
+
+
 def find_point_correspondences(
     source_recon: SfmrReconstruction,
     target_recon: SfmrReconstruction,
@@ -56,6 +74,17 @@ def find_point_correspondences(
         raise ValueError(
             "No point correspondences found. "
             "This may indicate no shared features or incompatible reconstructions."
+        )
+
+    # Drop pairs involving a point at infinity: its position is a direction, not
+    # a metric location, and would corrupt any positional/similarity use.
+    finite = _finite_pair_mask(source_recon, source_ids, target_recon, target_ids)
+    source_ids = source_ids[finite]
+    target_ids = target_ids[finite]
+    if len(source_ids) == 0:
+        raise ValueError(
+            "No finite point correspondences found "
+            "(every shared 3D point is at infinity)."
         )
 
     correspondences = dict(zip(source_ids.tolist(), target_ids.tolist()))
@@ -229,6 +258,18 @@ def find_point_correspondences_by_coordinate(
 
     source_ids = np.array(list(correspondences.keys()), dtype=np.int64)
     target_ids = np.array(list(correspondences.values()), dtype=np.int64)
+
+    # Drop pairs involving a point at infinity (a direction, not a location).
+    finite = _finite_pair_mask(source_recon, source_ids, target_recon, target_ids)
+    source_ids = source_ids[finite]
+    target_ids = target_ids[finite]
+    if len(source_ids) == 0:
+        raise ValueError(
+            "No finite point correspondences found by coordinate matching "
+            "(every matched 3D point is at infinity)."
+        )
+    correspondences = dict(zip(source_ids.tolist(), target_ids.tolist()))
+
     source_positions = source_recon.positions[source_ids]
     target_positions = target_recon.positions[target_ids]
     return correspondences, source_positions, target_positions

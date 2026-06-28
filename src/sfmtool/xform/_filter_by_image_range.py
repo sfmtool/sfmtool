@@ -104,43 +104,6 @@ class ExcludeGlobFilter:
         return f"Exclude images matching '{self.pattern}'"
 
 
-def _filter_rig_frame_data(
-    rig_frame_data: dict | None,
-    images_to_keep: np.ndarray,
-) -> dict | None:
-    """Update rig_frame_data after image filtering."""
-    if rig_frame_data is None:
-        return None
-
-    new_image_sensor_indexes = rig_frame_data["image_sensor_indexes"][images_to_keep]
-    new_image_frame_indexes = rig_frame_data["image_frame_indexes"][images_to_keep]
-
-    remaining_frames = np.unique(new_image_frame_indexes)
-    old_frame_count = rig_frame_data["frames_metadata"]["frame_count"]
-    new_frame_count = len(remaining_frames)
-
-    if new_frame_count < old_frame_count:
-        frame_id_mapping = np.full(old_frame_count, -1, dtype=np.int32)
-        frame_id_mapping[remaining_frames] = np.arange(new_frame_count, dtype=np.int32)
-        new_image_frame_indexes = frame_id_mapping[new_image_frame_indexes].astype(
-            np.uint32
-        )
-        new_rig_indexes = rig_frame_data["rig_indexes"][remaining_frames]
-    else:
-        new_rig_indexes = rig_frame_data["rig_indexes"]
-
-    return {
-        "rigs_metadata": rig_frame_data["rigs_metadata"],
-        "sensor_camera_indexes": rig_frame_data["sensor_camera_indexes"],
-        "sensor_quaternions_wxyz": rig_frame_data["sensor_quaternions_wxyz"],
-        "sensor_translations_xyz": rig_frame_data["sensor_translations_xyz"],
-        "frames_metadata": {"frame_count": new_frame_count},
-        "rig_indexes": new_rig_indexes,
-        "image_sensor_indexes": new_image_sensor_indexes,
-        "image_frame_indexes": new_image_frame_indexes,
-    }
-
-
 def _filter_images_by_range(
     recon: SfmrReconstruction,
     range_numbers: set[int],
@@ -187,71 +150,23 @@ def _filter_images(
     recon: SfmrReconstruction,
     images_to_keep: np.ndarray,
 ) -> SfmrReconstruction:
-    """Filter a reconstruction to keep only the specified images."""
-    # Filter image data
-    new_image_names = [recon.image_names[i] for i in images_to_keep]
-    new_camera_indexes = recon.camera_indexes[images_to_keep]
-    new_quaternions_wxyz = recon.quaternions_wxyz[images_to_keep]
-    new_translations = recon.translations[images_to_keep]
-    new_feature_tool_hashes = [recon.feature_tool_hashes[i] for i in images_to_keep]
-    new_sift_content_hashes = [recon.sift_content_hashes[i] for i in images_to_keep]
-    new_thumbnails_y_x_rgb = recon.thumbnails_y_x_rgb[images_to_keep]
+    """Filter a reconstruction to keep only the specified images.
 
-    # Filter tracks
-    images_to_keep_set = set(images_to_keep)
-    track_mask = np.array(
-        [idx in images_to_keep_set for idx in recon.track_image_indexes], dtype=bool
+    Delegates to the Rust ``subset_by_image_indices`` primitive, which drops
+    points orphaned by the removed images, remaps image and point indexes,
+    recomputes observation counts, and carries rig/frame data. Crucially — and
+    unlike a manual rebuild from the ``(N, 3)`` Euclidean positions, which would
+    force ``w = 1`` — it preserves points at infinity (``w = 0`` directions),
+    rather than silently materialising them.
+    """
+    before = recon.point_count
+    result = recon.subset_by_image_indices(
+        np.ascontiguousarray(images_to_keep, dtype=np.uint32),
+        drop_orphaned_points=True,
     )
-    filtered_track_image_indexes = recon.track_image_indexes[track_mask]
-    filtered_track_feature_indexes = recon.track_feature_indexes[track_mask]
-    filtered_track_point_indexes = recon.track_point_indexes[track_mask]
-
-    # Remap image indexes
-    image_id_mapping = np.full(len(recon.image_names), -1, dtype=np.int32)
-    image_id_mapping[images_to_keep] = np.arange(len(images_to_keep), dtype=np.int32)
-    new_track_image_indexes = image_id_mapping[filtered_track_image_indexes].astype(
-        np.uint32
-    )
-
-    # Recompute observation counts and filter points
-    points_to_keep, new_observation_counts = np.unique(
-        filtered_track_point_indexes, return_counts=True
-    )
-
+    removed = before - result.point_count
     print(
-        f"  Keeping {len(points_to_keep)} of {len(recon.positions)} points "
-        f"(removed {len(recon.positions) - len(points_to_keep)} points with no remaining observations)"
+        f"  Keeping {result.point_count} of {before} points "
+        f"(removed {removed} points with no remaining observations)"
     )
-
-    new_positions = recon.positions[points_to_keep]
-    new_colors = recon.colors[points_to_keep]
-    new_errors = recon.errors[points_to_keep]
-
-    # Remap point IDs
-    point_id_mapping = np.full(len(recon.positions), -1, dtype=np.int32)
-    point_id_mapping[points_to_keep] = np.arange(len(points_to_keep), dtype=np.int32)
-    new_track_point_indexes = point_id_mapping[filtered_track_point_indexes].astype(
-        np.uint32
-    )
-
-    new_observation_counts = new_observation_counts.astype(np.uint32)
-
-    new_rig_frame_data = _filter_rig_frame_data(recon.rig_frame_data, images_to_keep)
-
-    return recon.clone_with_changes(
-        image_names=new_image_names,
-        camera_indexes=new_camera_indexes,
-        quaternions_wxyz=new_quaternions_wxyz,
-        translations=new_translations,
-        positions=new_positions,
-        colors=new_colors,
-        errors=new_errors,
-        track_image_indexes=new_track_image_indexes,
-        track_feature_indexes=filtered_track_feature_indexes,
-        track_point_indexes=new_track_point_indexes,
-        observation_counts=new_observation_counts,
-        feature_tool_hashes=new_feature_tool_hashes,
-        sift_content_hashes=new_sift_content_hashes,
-        thumbnails_y_x_rgb=new_thumbnails_y_x_rgb,
-        rig_frame_data=new_rig_frame_data,
-    )
+    return result
