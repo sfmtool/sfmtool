@@ -189,3 +189,55 @@ def test_embed_patches_refine_anchors_on_stored_keypoints(
     ]
     ep.embed_patches(recon, images, resolution=12)
     assert captured.get("use_stored_keypoints") is True
+
+
+def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
+    monkeypatch, seoul_bull_workspace, tmp_path
+):
+    """End-to-end CLI plumbing for the two new opt-in knobs: the values
+    parsed from the command line reach `embed_patches`'s kwargs. Spying on
+    the function rather than running the full pipeline keeps this test cheap
+    while covering the Click choice validation + kwarg threading."""
+    captured: dict = {}
+    real = ep.embed_patches
+
+    def spy(recon, images, **kwargs):
+        captured["subpixel"] = kwargs.get("subpixel")
+        captured["search_resolution_multiplier"] = kwargs.get(
+            "search_resolution_multiplier"
+        )
+        return real(recon, images, **{**kwargs, "resolution": 12})
+
+    monkeypatch.setattr(ep, "embed_patches", spy)
+
+    out = tmp_path / "out.sfmr"
+    args = [
+        "embed-patches",
+        str(seoul_bull_workspace),
+        str(out),
+        "--subpixel",
+        "lk",
+        "--search-resolution-multiplier",
+        "2.0",
+    ]
+    with mock_patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert captured["subpixel"] == "lk"
+    assert captured["search_resolution_multiplier"] == 2.0
+
+
+def test_embed_patches_cli_rejects_unknown_subpixel(seoul_bull_workspace, tmp_path):
+    """Click validates `--subpixel` against the known choices; a typo errors
+    out before any work happens."""
+    args = [
+        "embed-patches",
+        str(seoul_bull_workspace),
+        str(tmp_path / "out.sfmr"),
+        "--subpixel",
+        "lq",  # typo for "lk"
+    ]
+    with mock_patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code != 0
+    assert "subpixel" in result.output.lower()

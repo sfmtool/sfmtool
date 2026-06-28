@@ -238,6 +238,97 @@ def compact_to_embedded_patches(
     return recon.clone_with_changes(**kwargs)
 
 
+def _refine_subpixel(
+    cloud: PatchCloud,
+    embedded: SfmrReconstruction,
+    images: list[np.ndarray],
+    localizations: list[dict[str, Any]],
+    *,
+    mode: str,
+    resolution: int,
+) -> list[dict[str, Any]]:
+    """Run :meth:`PatchCloud.refine_keypoints` seeded at ``localizations``'s
+    per-view keypoints, and splice the refined source-px keypoints back into the
+    localizer's per-point dicts (preserving the kept-view membership, order, and
+    every other field — only the per-view ``keypoints`` array is replaced).
+
+    Per-point view sets and seeds are derived from the localizer's output so the
+    refiner sees exactly the same membership the localizer chose; a point the
+    localizer dropped (or never localized) keeps its localization dict
+    unchanged. ``mode`` selects the variant:
+
+    - ``"lk"`` — per-sweep consensus, ``max_outer_sweeps = 1`` (the simple variant)
+    - ``"lk_per_move"`` — per-move (Gauss–Seidel) incremental consensus,
+      ``max_outer_sweeps = 5`` (the variant from #142)
+    """
+    if mode == "lk":
+        kwargs = dict(max_outer_sweeps=1, consensus_refresh="per_sweep")
+    elif mode == "lk_per_move":
+        kwargs = dict(max_outer_sweeps=5, consensus_refresh="per_move")
+    else:
+        raise ValueError(
+            f"unknown subpixel mode {mode!r} (expected 'none', 'lk', or 'lk_per_move')"
+        )
+
+    # Build per-point view sets + starting keypoints parallel to each other (the
+    # refiner reads `starting_keypoints[pid][k]` as the seed for the k'th view
+    # of `view_sets[pid]`, in order — so the two MUST be built in the same loop).
+    view_sets: dict[int, list[int]] = {}
+    seeds: dict[int, list[list[float]]] = {}
+    for loc in localizations:
+        pid = int(loc["point_id"])
+        views = np.asarray(loc["views"], dtype=np.uint32).tolist()
+        kpts = np.asarray(loc["keypoints"], dtype=np.float64).reshape(-1, 2)
+        if not views:
+            continue
+        view_sets[pid] = views
+        seeds[pid] = [[float(p[0]), float(p[1])] for p in kpts]
+
+    if not view_sets:
+        return localizations
+
+    refined = cloud.refine_keypoints(
+        embedded,
+        images,
+        view_sets=view_sets,
+        starting_keypoints=seeds,
+        point_ids=list(view_sets.keys()),
+        resolution=resolution,
+        **kwargs,
+    )
+
+    # Splice the refined keypoints back into each point's localization dict.
+    # The refiner returns views in input order and never changes membership
+    # (the only drop is the projection gate — a view in which `project_i(X_p)`
+    # fails to land in frame — which the localizer already filtered out). If
+    # that *does* happen here (a different image was somehow rejected by the
+    # refiner's gate), we fall back to the localizer's keypoint for any view
+    # the refiner didn't return — preserving the compaction-side membership.
+    refined_by_pid = {int(r["point_id"]): r for r in refined}
+    out: list[dict[str, Any]] = []
+    for loc in localizations:
+        pid = int(loc["point_id"])
+        r = refined_by_pid.get(pid)
+        if r is None:
+            out.append(loc)
+            continue
+        r_views = np.asarray(r["views"], dtype=np.uint32)
+        r_kpts = np.asarray(r["keypoints"], dtype=np.float64).reshape(-1, 2)
+        l_views = np.asarray(loc["views"], dtype=np.uint32)
+        l_kpts = np.asarray(loc["keypoints"], dtype=np.float64).reshape(-1, 2)
+        # Map refiner's per-view keypoints by image index, then walk the
+        # localizer's view order to keep the membership identical.
+        r_map = {int(v): r_kpts[i] for i, v in enumerate(r_views.tolist())}
+        new_kpts = np.array(
+            [r_map.get(int(v), l_kpts[i]) for i, v in enumerate(l_views.tolist())],
+            dtype=np.float64,
+        ).reshape(-1, 2)
+        new_loc = dict(loc)
+        new_loc["keypoints"] = new_kpts
+        out.append(new_loc)
+    return out
+
+
 def embed_patches(
     recon: SfmrReconstruction,
     images: list[np.ndarray],
@@ -249,6 +340,8 @@ def embed_patches(
     max_iters: int = 5,
     search: float = 6.0,
     resolution: int = 24,
+    search_resolution_multiplier: float = 1.0,
+    subpixel: str = "none",
 ) -> SfmrReconstruction:
     """Convert a ``sift_files`` reconstruction to ``embedded_patches``, running the
     full photometric pipeline (see
@@ -281,6 +374,18 @@ def embed_patches(
         min_relative_zncc, max_shift_px, min_views, max_iters, search: The pipeline
             knobs documented in ``specs/cli/embed-patches-command.md``.
         resolution: The ``R × R`` patch grid the kernels render/score on.
+        search_resolution_multiplier: ``m`` for the discrete cross-view search in
+            :meth:`PatchCloud.localize_keypoints` (step 3). ``1.0`` (default) is the
+            no-op; ``> 1`` runs the supersampled grid (cost grows ~``m²``) — see
+            ``specs/core/keypoint-localization-search-cache.md``.
+        subpixel: Optional photometric sub-pixel pass applied to the localizer's
+            output (step 3.5 in the pipeline). One of:
+            ``"none"`` (default) — no refinement; the localizer's keypoints are
+            used as-is.
+            ``"lk"`` — LK / ECC Gauss–Newton refinement seeded at the localizer's
+            keypoints; per-sweep consensus, ``max_outer_sweeps = 1``.
+            ``"lk_per_move"`` — same but the per-move (Gauss–Seidel) incremental
+            consensus variant with ``max_outer_sweeps = 5``.
 
     Returns:
         A new ``embedded_patches`` :class:`SfmrReconstruction`, ready to ``save()``.
@@ -330,7 +435,23 @@ def embed_patches(
         max_shift_px=max_shift_px,
         min_relative_zncc=min_relative_zncc,
         resolution=resolution,
+        search_resolution_multiplier=search_resolution_multiplier,
     )
+
+    # 3.5. Optional photometric sub-pixel refinement, seeded at the localizer's
+    #      kept keypoints. The localizer's output IS the precondition that lets
+    #      the local refiner work — it puts each view in the basin of the true
+    #      optimum (≲ 1 px). The refiner moves the per-view keypoints; the
+    #      kept-view membership stays exactly as the localizer chose it.
+    if subpixel != "none":
+        localizations = _refine_subpixel(
+            cloud,
+            embedded,
+            images,
+            localizations,
+            mode=subpixel,
+            resolution=resolution,
+        )
 
     # 4. Cull under-supported points and compact into an embedded_patches recon. The
     #    image hashes already live on the embedded recon (set in step 0), so there

@@ -67,6 +67,32 @@ from .._cli_utils import timed_command
         "halved to the library half-extent and passed to to_embedded_patches."
     ),
 )
+@click.option(
+    "--search-resolution-multiplier",
+    "search_resolution_multiplier",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help=(
+        "Multiplier m for the discrete cross-view search: it runs at resolution "
+        "round(m·R). 1.0 is the no-op; >1 (the supersampled grid) resolves "
+        "sub-pixel offsets at a cost that grows ~m². See "
+        "specs/core/keypoint-localization-search-cache.md."
+    ),
+)
+@click.option(
+    "--subpixel",
+    type=click.Choice(["none", "lk", "lk_per_move"]),
+    default="none",
+    show_default=True,
+    help=(
+        "Optional photometric sub-pixel pass applied to the localizer's output. "
+        "'none' (default) skips it; 'lk' runs LK / ECC Gauss-Newton refinement "
+        "with the per-sweep consensus (max_outer_sweeps=1); 'lk_per_move' uses "
+        "the per-move (Gauss-Seidel) incremental consensus with "
+        "max_outer_sweeps=5. See specs/core/keypoint-subpixel-refinement.md."
+    ),
+)
 def embed_patches_command(
     input_path,
     output_path,
@@ -76,6 +102,8 @@ def embed_patches_command(
     max_shift_px,
     min_views,
     patch_size,
+    search_resolution_multiplier,
+    subpixel,
 ):
     """Convert a sift_files reconstruction to embedded_patches.
 
@@ -150,6 +178,8 @@ def embed_patches_command(
             min_views=min_views,
             max_iters=max_iters,
             search=search,
+            search_resolution_multiplier=search_resolution_multiplier,
+            subpixel=subpixel,
         )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)

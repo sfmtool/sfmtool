@@ -611,7 +611,7 @@ fn out_of_frame_seed_keeps_seed() {
     // Seed view 1 at a keypoint far outside the frame: seed_offset maps it to a huge
     // in-plane offset whose core is out of frame. It must keep that seed (no panic).
     let proj1 = project(&views[1], &patch.center, patch.w).unwrap();
-    let seeds = [[proj1.0, proj1.1], [proj1.0 + 5000.0, proj1.1]];
+    let seeds = [Some([proj1.0, proj1.1]), Some([proj1.0 + 5000.0, proj1.1])];
     let res = refine_patch_keypoints(&patch, &views, &[0, 1], Some(&seeds), &params());
     assert_eq!(
         res.views,

@@ -72,12 +72,16 @@ def _project(recon, point_xyz: np.ndarray, image_idx: int):
 
 
 def test_refine_keypoints_array_contract_and_never_worse(seoul_bull_workspace: Path):
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
-    cloud = PatchCloud.from_reconstruction(
-        recon, normal="mean_viewing", extent_value=5.0
+    # `refine_keypoints` requires starting keypoints (a local refiner needs to
+    # seed in the basin of the true optimum, and the projection isn't a "real"
+    # keypoint). Embed first so the recon carries inline per-observation
+    # keypoints that the default seeding can use.
+    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
+        extent_value=5.0
     )
-    assert len(cloud) > 0
+    images = _load_images(recon)
+    cloud = recon.patches
+    assert cloud is not None and len(cloud) > 0
 
     sample = _sample_point_ids(cloud)
     view_sets = {
@@ -151,11 +155,12 @@ def test_refine_keypoints_array_contract_and_never_worse(seoul_bull_workspace: P
 def test_refine_keypoints_defaults_to_track(seoul_bull_workspace: Path):
     """With no view_sets, each point refines over its track; the view set is the
     track's views, in order, unchanged by the local refiner."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
-    cloud = PatchCloud.from_reconstruction(
-        recon, normal="mean_viewing", extent_value=5.0
+    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
+        extent_value=5.0
     )
+    images = _load_images(recon)
+    cloud = recon.patches
+    assert cloud is not None
     point_ids = np.asarray(recon.track_point_ids)
     image_idxs = np.asarray(recon.track_image_indexes)
     tracks: dict[int, set[int]] = {}
@@ -173,11 +178,12 @@ def test_refine_keypoints_defaults_to_track(seoul_bull_workspace: Path):
 def test_refine_keypoints_empty_view_set_yields_empty_arrays(
     seoul_bull_workspace: Path,
 ):
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
-    cloud = PatchCloud.from_reconstruction(
-        recon, normal="mean_viewing", extent_value=5.0
+    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
+        extent_value=5.0
     )
+    images = _load_images(recon)
+    cloud = recon.patches
+    assert cloud is not None
     pid = int(np.asarray(cloud.point_ids)[0])
     res = cloud.refine_keypoints(
         recon, images, view_sets={pid: []}, point_ids=[pid], resolution=12
@@ -192,14 +198,374 @@ def test_refine_keypoints_empty_view_set_yields_empty_arrays(
 def test_refine_keypoints_rejects_out_of_range_view_index(seoul_bull_workspace: Path):
     import pytest
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
-    cloud = PatchCloud.from_reconstruction(
-        recon, normal="mean_viewing", extent_value=5.0
+    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
+        extent_value=5.0
     )
+    images = _load_images(recon)
+    cloud = recon.patches
+    assert cloud is not None
     pid = int(np.asarray(cloud.point_ids)[0])
     bad = {pid: [0, len(images)]}
     with pytest.raises(ValueError):
         cloud.refine_keypoints(
             recon, images, view_sets=bad, point_ids=[pid], resolution=12
+        )
+
+
+def test_refine_keypoints_rejects_sift_files_recon_without_starting_keypoints(
+    seoul_bull_workspace: Path,
+):
+    """The strict requirement: a local refiner needs starting keypoints. A
+    sift-files recon without explicit `starting_keypoints` errors fast — before
+    any pyramid decode — so callers don't accidentally refine off the bare
+    projection."""
+    import pytest
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    assert recon.feature_source == "sift_files"
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    # Pass no images so the test verifies the require-check fires before any
+    # pyramid decode (an empty list would otherwise produce a count mismatch).
+    with pytest.raises(
+        ValueError,
+        match="refine_keypoints requires starting keypoints",
+    ):
+        cloud.refine_keypoints(recon, [], resolution=12)
+
+
+def test_refine_keypoints_honors_starting_keypoints(seoul_bull_workspace: Path):
+    """``starting_keypoints`` shifts the GN seed off the recon's default
+    inline stored keypoint: a refinement seeded ~0.5 px away lands somewhere
+    subtly different from the stored-seeded refinement, because GN's basin
+    is *local* — the seed direction biases which side of the photometric
+    peak it climbs from.
+
+    The check is the binding contract: a different seed produces a different
+    refined keypoint for at least one view, and ``len(seeds) != len(views)``
+    is rejected.
+    """
+    import pytest
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
+        extent_value=5.0
+    )
+    images = _load_images(recon)
+    cloud = recon.patches
+    assert cloud is not None
+    sample = _sample_point_ids(cloud, n=50)
+    view_sets = {
+        int(r["point_id"]): np.asarray(r["admitted"]).tolist()
+        for r in cloud.select_views(recon, images, point_ids=sample, resolution=12)
+    }
+    common = dict(
+        recon=recon,
+        images=images,
+        view_sets=view_sets,
+        point_ids=sample,
+        resolution=12,
+        max_gn_steps=10,
+    )
+
+    # Baseline: seeds default to the recon's inline stored keypoints (the
+    # SIFT detections an embedded_patches recon carries inline).
+    baseline = cloud.refine_keypoints(**common)
+    baseline_by_pid = {int(r["point_id"]): r for r in baseline}
+    stored_xy = np.asarray(recon.keypoints_xy, dtype=np.float64)
+    track_pids = np.asarray(recon.track_point_ids, dtype=np.int64)
+    track_imgs = np.asarray(recon.track_image_indexes, dtype=np.int64)
+    kp_by_obs = {
+        (int(p), int(i)): stored_xy[k]
+        for k, (p, i) in enumerate(zip(track_pids, track_imgs))
+    }
+    positions = np.asarray(recon.positions, dtype=np.float64)
+
+    # Build seeds offset 0.5 px in +x from each view's stored keypoint (or
+    # the projection for views without a stored observation, the same
+    # per-view fallback the recon-default uses). Only the subset of points
+    # with at least 2 views (the only ones the refiner actually GN-steps)
+    # is in scope; for the rest the refiner short-circuits to "no
+    # consensus" and the seed change is invisible.
+    seeds: dict[int, list[list[float]]] = {}
+    seeded_pids: list[int] = []
+    for r in baseline:
+        pid = int(r["point_id"])
+        views = view_sets[pid]
+        if len(views) < 2:
+            continue
+        per_view = []
+        for image_idx in views:
+            stored = kp_by_obs.get((pid, int(image_idx)))
+            if stored is not None:
+                per_view.append([float(stored[0]) + 0.5, float(stored[1])])
+                continue
+            proj = _project(recon, positions[pid], image_idx)
+            if proj is None:
+                # The projection gate would drop this view anyway; seed at
+                # something arbitrary, the refiner won't read it.
+                per_view.append([0.0, 0.0])
+            else:
+                per_view.append([float(proj[0]) + 0.5, float(proj[1])])
+        seeds[pid] = per_view
+        seeded_pids.append(pid)
+
+    assert seeded_pids, "no multi-view point to seed-shift"
+
+    shifted = cloud.refine_keypoints(**common, starting_keypoints=seeds)
+
+    # At least one point's refined keypoints actually move when the seed is
+    # shifted. This is the binding contract (seeds are honored), not a
+    # quantitative claim about which local optimum the refiner finds.
+    moved_any = False
+    for r in shifted:
+        pid = int(r["point_id"])
+        if pid not in seeds:
+            continue
+        b = baseline_by_pid[pid]
+        b_kpts = np.asarray(b["keypoints"], dtype=np.float64).reshape(-1, 2)
+        s_kpts = np.asarray(r["keypoints"], dtype=np.float64).reshape(-1, 2)
+        if b_kpts.shape == s_kpts.shape and np.any(
+            np.linalg.norm(b_kpts - s_kpts, axis=1) > 1e-3
+        ):
+            moved_any = True
+            break
+    assert moved_any, (
+        "shifting the GN seed by 0.5 px never changed any refined keypoint"
+    )
+
+    # Length mismatch is rejected up front (per-point seeds must be parallel
+    # to that point's view set).
+    bad_pid = seeded_pids[0]
+    bad_seeds = {bad_pid: seeds[bad_pid][:-1]}  # one short
+    with pytest.raises(
+        ValueError,
+        match=r"starting_keypoints\[\d+\] has \d+ seeds but the view set has \d+ views",
+    ):
+        cloud.refine_keypoints(**common, starting_keypoints=bad_seeds)
+
+    # Unknown pid (not a point in this patch cloud) is rejected with a clear
+    # message — silently passing it through hid bugs in callers that built
+    # seed maps off a stale recon.
+    max_pid = int(np.asarray(cloud.point_ids).max())
+    unknown_pid = max_pid + 1000
+    with pytest.raises(
+        ValueError,
+        match=r"starting_keypoints\[\d+\] is not a point in this patch cloud",
+    ):
+        cloud.refine_keypoints(
+            **common,
+            starting_keypoints={unknown_pid: [[0.0, 0.0]]},
+        )
+
+    # A pid that exists in the cloud but is excluded by ``point_ids`` is also
+    # rejected (rather than producing the confusing "has K seeds but view set
+    # has 0 views" message the cleared set would otherwise yield).
+    excluded_pid = next(
+        int(p) for p in np.asarray(cloud.point_ids).tolist() if p not in sample
+    )
+    with pytest.raises(
+        ValueError, match=r"starting_keypoints\[\d+\] is excluded by point_ids"
+    ):
+        cloud.refine_keypoints(
+            **common,
+            starting_keypoints={excluded_pid: [[0.0, 0.0]]},
+        )
+
+
+def test_refine_keypoints_default_seeds_from_embedded_recon(
+    seoul_bull_workspace: Path,
+):
+    """On an embedded_patches recon, the default (``starting_keypoints=None``)
+    seeds each view at that observation's inline keypoint — not the projection.
+    A zero-step "seed only" refinement reproduces the recon's stored keypoints
+    bit-for-bit, confirming the seed source.
+    """
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    emb = recon.to_embedded_patches(extent_value=5.0)
+    images = _load_images(emb)
+    cloud = emb.patches
+    assert cloud is not None
+
+    stored_xy = np.asarray(emb.keypoints_xy, dtype=np.float64)
+    track_pids = np.asarray(emb.track_point_ids, dtype=np.int64)
+    track_imgs = np.asarray(emb.track_image_indexes, dtype=np.int64)
+    kp_by_obs = {
+        (int(p), int(i)): stored_xy[k]
+        for k, (p, i) in enumerate(zip(track_pids, track_imgs))
+    }
+
+    sample = _sample_point_ids(cloud, n=50)
+    seed_only = cloud.refine_keypoints(
+        emb, images, point_ids=sample, resolution=12, max_gn_steps=0
+    )
+
+    # Every (point_id, view) the seed-only refinement reports lands at the
+    # inline stored keypoint — the default seed for an embedded_patches recon
+    # (projection only for views with no inline observation, which is none of
+    # the per-track views here).
+    checked = 0
+    for r in seed_only:
+        pid = int(r["point_id"])
+        views = np.asarray(r["views"], dtype=np.int64)
+        kpts = np.asarray(r["keypoints"], dtype=np.float64).reshape(-1, 2)
+        for k, img in enumerate(views.tolist()):
+            stored = kp_by_obs.get((pid, int(img)))
+            if stored is None:
+                continue  # view added by some non-track admission; skip
+            assert np.allclose(kpts[k], stored, atol=1e-9), (
+                f"seed-only refinement at (pid={pid}, image={img}) returned "
+                f"{kpts[k].tolist()}, expected stored {stored.tolist()}"
+            )
+            checked += 1
+    assert checked > 0, "no (pid, view) pair had a stored keypoint to check"
+
+
+def test_refine_keypoints_default_falls_back_to_projection_for_non_track_view(
+    seoul_bull_workspace: Path,
+):
+    """The third branch of the seed-source ladder: on an embedded_patches recon,
+    a view that's in the refiner's view set but NOT in the point's SIFT track
+    has no inline stored keypoint, so its seed falls back to the projection
+    ``project_i(X_p)``. Track views in the same call still seed at their
+    inline keypoint (covered by the test above); this one pins the per-view
+    fall-through within the recon-default branch.
+    """
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    emb = recon.to_embedded_patches(extent_value=5.0)
+    images = _load_images(emb)
+    cloud = emb.patches
+    assert cloud is not None
+
+    stored_xy = np.asarray(emb.keypoints_xy, dtype=np.float64)
+    track_pids = np.asarray(emb.track_point_ids, dtype=np.int64)
+    track_imgs = np.asarray(emb.track_image_indexes, dtype=np.int64)
+    track_by_pid: dict[int, set[int]] = {}
+    for p, i in zip(track_pids.tolist(), track_imgs.tolist()):
+        track_by_pid.setdefault(int(p), set()).add(int(i))
+    kp_by_obs = {
+        (int(p), int(i)): stored_xy[k]
+        for k, (p, i) in enumerate(zip(track_pids, track_imgs))
+    }
+    positions = np.asarray(emb.positions, dtype=np.float64)
+
+    # Find a (pid, non_track_img) pair where the refiner will actually keep
+    # the view. ``_project`` only checks ``z > 0``, but the refiner also gates
+    # on front-facing + projection-in-frame; the cleanest way to get a view
+    # that survives all the refiner's guards is to ask ``select_views`` for
+    # the photometrically-vetted candidate set and pick a non-track admitted
+    # view. ``select_views`` admits the SIFT track plus extra views that
+    # pass its visibility + ZNCC checks — guaranteed visible to the refiner.
+    sample = _sample_point_ids(cloud, n=120)
+    selections = cloud.select_views(emb, images, point_ids=sample, resolution=12)
+    pid, non_track_img, projection = None, None, None
+    for sel in selections:
+        candidate_pid = int(sel["point_id"])
+        admitted = set(np.asarray(sel["admitted"], dtype=np.int64).tolist())
+        candidates = admitted - track_by_pid.get(candidate_pid, set())
+        for img in sorted(candidates):
+            proj = _project(emb, positions[candidate_pid], img)
+            if proj is None:
+                continue
+            pid, non_track_img, projection = candidate_pid, img, proj
+            break
+        if pid is not None:
+            break
+    assert pid is not None, (
+        "select_views admitted no non-track candidate view on the sampled points; "
+        "either pick a larger sample or another dataset"
+    )
+
+    # Construct a view set that mixes one track view (seeded at its stored
+    # keypoint) and the non-track view (which must seed at the projection).
+    track_img = next(iter(track_by_pid[pid]))
+    view_sets = {pid: [track_img, non_track_img]}
+    seed_only = cloud.refine_keypoints(
+        emb,
+        images,
+        view_sets=view_sets,
+        point_ids=[pid],
+        resolution=12,
+        max_gn_steps=0,
+    )
+    [r] = seed_only
+    views_out = np.asarray(r["views"], dtype=np.int64).tolist()
+    kpts_out = np.asarray(r["keypoints"], dtype=np.float64).reshape(-1, 2)
+    seed_by_img = dict(zip(views_out, kpts_out))
+
+    # Track view: seeded at the inline stored keypoint.
+    assert np.allclose(
+        seed_by_img[track_img], kp_by_obs[(pid, track_img)], atol=1e-9
+    ), (
+        f"track view {track_img} of pid {pid} should seed at the stored keypoint "
+        f"{kp_by_obs[(pid, track_img)].tolist()}, got {seed_by_img[track_img].tolist()}"
+    )
+    # Non-track view: no stored keypoint; per-view fall-through to projection.
+    assert np.allclose(seed_by_img[non_track_img], projection, atol=1e-6), (
+        f"non-track view {non_track_img} of pid {pid} should seed at the projection "
+        f"{projection.tolist()}, got {seed_by_img[non_track_img].tolist()}"
+    )
+
+
+def test_refine_keypoints_explicit_seeds_override_recon_default_on_embedded(
+    seoul_bull_workspace: Path,
+):
+    """The override branch of the seed-source ladder on an embedded_patches
+    recon: explicit ``starting_keypoints`` for a point silence the recon-default
+    (the inline stored keypoint) and the refiner takes the explicit seed
+    instead. Verified by a ``max_gn_steps=0`` "seed only" refine: the result
+    keypoints for overridden points must equal the override, not the stored
+    inline keypoint.
+    """
+    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
+        extent_value=5.0
+    )
+    images = _load_images(recon)
+    cloud = recon.patches
+    assert cloud is not None
+
+    stored_xy = np.asarray(recon.keypoints_xy, dtype=np.float64)
+    track_pids = np.asarray(recon.track_point_ids, dtype=np.int64)
+    track_imgs = np.asarray(recon.track_image_indexes, dtype=np.int64)
+    kp_by_obs = {
+        (int(p), int(i)): stored_xy[k]
+        for k, (p, i) in enumerate(zip(track_pids, track_imgs))
+    }
+    track_by_pid: dict[int, list[int]] = {}
+    for p, i in zip(track_pids.tolist(), track_imgs.tolist()):
+        track_by_pid.setdefault(int(p), []).append(int(i))
+
+    # Pick a point with at least two track views, build explicit seeds that
+    # are 0.5 px in +x off the stored keypoints.
+    pid = next(p for p, views in track_by_pid.items() if len(views) >= 2)
+    views = track_by_pid[pid]
+    override = [
+        [float(kp_by_obs[(pid, img)][0] + 0.5), float(kp_by_obs[(pid, img)][1])]
+        for img in views
+    ]
+
+    seed_only = cloud.refine_keypoints(
+        recon,
+        images,
+        view_sets={pid: views},
+        point_ids=[pid],
+        starting_keypoints={pid: override},
+        resolution=12,
+        max_gn_steps=0,
+    )
+    [r] = seed_only
+    views_out = np.asarray(r["views"], dtype=np.int64).tolist()
+    kpts_out = np.asarray(r["keypoints"], dtype=np.float64).reshape(-1, 2)
+    for k, img in enumerate(views_out):
+        stored = kp_by_obs[(pid, img)]
+        expected_override = np.array(
+            [float(stored[0] + 0.5), float(stored[1])], dtype=np.float64
+        )
+        assert np.allclose(kpts_out[k], expected_override, atol=1e-9), (
+            f"override should win over recon-default at (pid={pid}, image={img}): "
+            f"expected {expected_override.tolist()}, got {kpts_out[k].tolist()} "
+            f"(stored is {stored.tolist()})"
+        )
+        assert not np.allclose(kpts_out[k], stored, atol=1e-3), (
+            f"override at (pid={pid}, image={img}) silently fell back to stored"
         )

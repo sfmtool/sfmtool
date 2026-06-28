@@ -436,6 +436,11 @@ def strips_mode_3d(
             angular_range_deg=refine_range,
             init_steps=refine_steps,
             point_ids=[int(pid) for pid, _ in tracks],
+            # Cross-validation baseline: anchor at the reprojected center so
+            # the Φ delta isn't sensitive to whether the recon happens to
+            # carry inline keypoints (the auto-default would switch to
+            # stored on embedded_patches recons).
+            use_stored_keypoints=False,
         )
         pid_refined = {
             int(p): np.asarray(cloud[i].normal, np.float64)

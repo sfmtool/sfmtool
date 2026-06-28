@@ -236,3 +236,72 @@ def verify_sfmr_to_temp(recon) -> tuple[bool, list]:
         path = str(Path(d) / "out.sfmr")
         recon.save(path, operation="test")
         return verify_sfmr(path)
+
+
+def test_embed_patches_default_is_no_subpixel(
+    seoul_bull_workspace: Path, tmp_path: Path
+):
+    """The default ``embed_patches`` call (no ``subpixel=`` kwarg) is bit-for-bit
+    equivalent to passing ``subpixel="none"``. Pins the default so flipping it
+    in code can't slip in silently.
+
+    Scope: this only pins the **default kwarg value** to ``"none"``. It does
+    NOT pin behavioral equivalence to the pre-``subpixel``-knob pipeline — a
+    regression that changed *what* ``subpixel="none"`` does would slip
+    through here. Defending the broader contract would need a baseline
+    artifact compared against this build's output, which this test does not
+    carry.
+    """
+    from sfmtool._embed_patches import embed_patches
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    assert recon.feature_source == "sift_files"
+    images = _load_images(recon)
+
+    default = embed_patches(recon, images, patch_size=10.0)
+    explicit_none = embed_patches(recon, images, patch_size=10.0, subpixel="none")
+
+    assert default.point_count == explicit_none.point_count
+    np.testing.assert_array_equal(
+        np.asarray(default.keypoints_xy), np.asarray(explicit_none.keypoints_xy)
+    )
+
+
+def test_embed_patches_subpixel_lk_round_trips(
+    seoul_bull_workspace: Path, tmp_path: Path
+):
+    """``embed_patches(subpixel="lk")`` produces a valid ``embedded_patches``
+    reconstruction that round-trips through ``.sfmr``, and its per-view
+    keypoints differ from the no-refinement baseline (the refiner actually
+    moved something — i.e. it ran end-to-end, not just was a no-op spliced
+    back over the baseline).
+    """
+    from sfmtool._embed_patches import embed_patches
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+
+    baseline = embed_patches(recon, images, patch_size=10.0, subpixel="none")
+    refined = embed_patches(recon, images, patch_size=10.0, subpixel="lk")
+
+    # Same membership shape (the subpixel refiner is local — it changes no
+    # kept-view set), so a per-row keypoint comparison is meaningful.
+    assert baseline.point_count == refined.point_count
+    assert baseline.feature_source == refined.feature_source == "embedded_patches"
+    base_kp = np.asarray(baseline.keypoints_xy)
+    ref_kp = np.asarray(refined.keypoints_xy)
+    assert base_kp.shape == ref_kp.shape
+    # At least some observations must move (otherwise the splice was a no-op
+    # and the wiring is broken).
+    moved = np.linalg.norm(ref_kp - base_kp, axis=1) > 1e-3
+    assert moved.any(), "subpixel='lk' moved zero keypoints (wiring is a no-op?)"
+
+    # Round-trip the refined recon through .sfmr to confirm it's structurally
+    # valid (the path the CLI takes).
+    out = tmp_path / "refined.sfmr"
+    refined.save(str(out), operation="embed-patches subpixel=lk")
+    valid, errors = verify_sfmr(str(out))
+    assert valid, f"integrity check failed: {errors}"
+    reloaded = SfmrReconstruction.load(str(out))
+    assert reloaded.feature_source == "embedded_patches"
+    assert reloaded.point_count == refined.point_count

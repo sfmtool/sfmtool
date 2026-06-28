@@ -15,9 +15,7 @@ use sfmtool_core::patch::cloud::{OrientedPatch, PatchCloud, PatchExtent, PatchNo
 use sfmtool_core::patch::keypoint_localize::{
     localize_patch_cloud_keypoints, KeypointLocalizeParams,
 };
-use sfmtool_core::patch::keypoint_subpixel::{
-    refine_patch_cloud_keypoints, ConsensusRefresh, KeypointSubpixelParams,
-};
+use sfmtool_core::patch::keypoint_subpixel::{ConsensusRefresh, KeypointSubpixelParams};
 use sfmtool_core::patch::normal_refine::{
     refine_patch_cloud, view_indices_from_reconstruction, CacheMode, NormalRefineParams, Objective,
     PatchWindow, ProjectedImage, Sampler,
@@ -404,18 +402,21 @@ impl PyPatchCloud {
     ///         consensus counts each view once). ``None`` (default) uses the track
     ///         observations. Combines with ``point_ids`` (which still selects
     ///         *which* patches to refine).
-    ///     use_stored_keypoints: If true, position each view's patch at that
-    ///         observation's stored per-observation 2D keypoint (instead of the
-    ///         reprojected point center), which gives a cleaner cross-view
-    ///         consensus. **Requires** an ``embedded_patches`` reconstruction
-    ///         (the only source that stores per-observation keypoints); raises
-    ///         ``ValueError`` on a ``sift_files`` recon. An observation with no
-    ///         stored keypoint is left centered — so when combined with
-    ///         ``view_indices``, only views that are track observations of a point
-    ///         are anchored; extra (e.g. MVS) views are left centered. Works with
-    ///         the fronto ``cache`` (each view's base is rendered at its anchored
-    ///         center), so there is no speed penalty. ``False`` (default) keeps
-    ///         every view at the point center.
+    ///     use_stored_keypoints: When ``True`` (the default), anchor each
+    ///         view's patch at that observation's stored per-observation 2D
+    ///         keypoint (the inline keypoint an ``embedded_patches`` recon
+    ///         carries) — the stored anchor gives a cleaner cross-view
+    ///         consensus than the reprojected point center. A view with no
+    ///         stored keypoint — either a candidate from ``view_indices`` /
+    ///         ``select_views`` that the SIFT track didn't observe, or any
+    ///         view on a ``sift_files`` recon (which has no inline keypoints
+    ///         at all) — falls back per-view to the reprojected center.
+    ///         When ``False``, every view is anchored at the reprojected
+    ///         center regardless of what the recon carries — useful for
+    ///         callers (e.g. ``sfm compare --strips``) that want a defined
+    ///         comparison reference independent of recon kind. Works with
+    ///         the fronto ``cache`` (each view's base is rendered at its
+    ///         anchored center), so there is no speed penalty either way.
     ///     render_bitmaps: If true, also render each refined patch's RGBA
     ///         representative texture at the found normal and return them scattered
     ///         to per-3D-point rows (see ``bitmaps`` below). Costs one extra
@@ -437,7 +438,7 @@ impl PyPatchCloud {
         window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="bilinear",
         cache="fronto", cache_supersample=2.0, compute_confidence=false,
         search_robust_iters=None, point_ids=None, view_indices=None,
-        use_stored_keypoints=false, render_bitmaps=false
+        use_stored_keypoints=true, render_bitmaps=false
     ))]
     fn refine_normals<'py>(
         &mut self,
@@ -486,15 +487,6 @@ impl PyPatchCloud {
                  (was the cloud built from a different recon?)",
             ));
         }
-        // Fail fast before decoding images / building pyramids: stored keypoints
-        // only exist on an embedded_patches recon.
-        if use_stored_keypoints && recon.keypoints_xy().is_none() {
-            return Err(PyValueError::new_err(
-                "use_stored_keypoints requires an embedded_patches reconstruction \
-                 (this one is sift_files; run `sfm xform --to-embedded-patches` first)",
-            ));
-        }
-
         let objective = match objective {
             "mean" | "mean_pairwise" => Objective::MeanPairwise,
             "robust" | "robust_weighted" => Objective::RobustWeighted {
@@ -618,42 +610,40 @@ impl PyPatchCloud {
 
         // Optional stored-keypoint anchoring: position each view's patch at that
         // observation's stored per-observation keypoint instead of the reprojected
-        // point center. This requires an `embedded_patches` reconstruction (the
-        // only source that stores per-observation keypoints); `sift_files` has none.
-        let patch_view_keypoints: Option<Vec<Vec<Option<[f64; 2]>>>> = if use_stored_keypoints {
-            // The fail-fast check above already rejected a sift_files recon, so this
-            // is Some.
-            let keypoints_xy = recon
-                .keypoints_xy()
-                .expect("use_stored_keypoints validated above");
-            // (point_index, image_index) -> stored keypoint. `keypoints_xy` is
-            // parallel to `recon.tracks`, so walk the tracks once and index by
-            // observation row. Duplicate (point, image) observations all key to the
-            // same map entry, so any duplicate view resolves to the same keypoint
-            // (last write wins, harmless).
-            let mut kp_map: std::collections::HashMap<(u32, u32), [f64; 2]> =
-                std::collections::HashMap::with_capacity(recon.tracks.len());
-            for (j, obs) in recon.tracks.iter().enumerate() {
-                kp_map.insert(
-                    (obs.point_index, obs.image_index),
-                    [keypoints_xy[[j, 0]] as f64, keypoints_xy[[j, 1]] as f64],
-                );
-            }
-            // Build per-patch keypoints parallel to `patch_views`: for each patch's
-            // (point_id, image_index) view, the stored keypoint when present.
-            let kps: Vec<Vec<Option<[f64; 2]>>> = patch_views
-                .iter()
-                .zip(&self.inner.point_ids)
-                .map(|(pv, &pid)| {
-                    pv.iter()
-                        .map(|&img| kp_map.get(&(pid, img)).copied())
-                        .collect()
-                })
-                .collect();
-            Some(kps)
-        } else {
-            None
-        };
+        // point center. Only an `embedded_patches` recon carries inline keypoints;
+        // a `sift_files` recon (or any other view without a stored keypoint) falls
+        // through per-view to the reprojected center.
+        let patch_view_keypoints: Option<Vec<Vec<Option<[f64; 2]>>>> = use_stored_keypoints
+            .then(|| recon.keypoints_xy())
+            .flatten()
+            .map(|keypoints_xy| {
+                // (point_index, image_index) -> stored keypoint. `keypoints_xy` is
+                // parallel to `recon.tracks`, so walk the tracks once and index by
+                // observation row. Duplicate (point, image) observations all key to
+                // the same map entry, so any duplicate view resolves to the same
+                // keypoint (last write wins, harmless).
+                let mut kp_map: std::collections::HashMap<(u32, u32), [f64; 2]> =
+                    std::collections::HashMap::with_capacity(recon.tracks.len());
+                for (j, obs) in recon.tracks.iter().enumerate() {
+                    kp_map.insert(
+                        (obs.point_index, obs.image_index),
+                        [keypoints_xy[[j, 0]] as f64, keypoints_xy[[j, 1]] as f64],
+                    );
+                }
+                // Build per-patch keypoints parallel to `patch_views`: for each
+                // patch's (point_id, image_index) view, the stored keypoint when
+                // present (else `None`, which the core treats as "anchor at the
+                // reprojected center for this view").
+                patch_views
+                    .iter()
+                    .zip(&self.inner.point_ids)
+                    .map(|(pv, &pid)| {
+                        pv.iter()
+                            .map(|&img| kp_map.get(&(pid, img)).copied())
+                            .collect()
+                    })
+                    .collect()
+            });
 
         let results = py.detach(|| {
             refine_patch_cloud(
@@ -904,6 +894,11 @@ impl PyPatchCloud {
     ///         below this many patch-grid px.
     ///     point_ids: If given, localize only for the patches with these source
     ///         point ids; ``None`` (default) localizes for every patch.
+    ///     search_resolution_multiplier: ``m`` for the discrete cross-view search;
+    ///         the search runs at resolution ``R_s = round(m·R)``. ``m = 1.0``
+    ///         (default) is the no-op; ``m > 1`` (the supersampled grid) resolves
+    ///         sub-pixel offsets directly at a cost that grows ~``m²``. See
+    ///         ``specs/core/keypoint-localization-search-cache.md``.
     ///
     /// Returns:
     ///     A list of per-point dicts ``{point_id, views (uint32[K]),
@@ -915,7 +910,7 @@ impl PyPatchCloud {
         recon, images, *, view_sets=None, max_iters=5, search=6.0, max_shift_px=3.0,
         min_relative_zncc=0.7, min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear", robust_iters=3, convergence_px=0.05,
-        point_ids=None
+        point_ids=None, search_resolution_multiplier=1.0
     ))]
     #[allow(clippy::too_many_arguments)]
     fn localize_keypoints<'py>(
@@ -936,6 +931,7 @@ impl PyPatchCloud {
         robust_iters: u32,
         convergence_px: f64,
         point_ids: Option<Vec<u32>>,
+        search_resolution_multiplier: f32,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let recon = &recon.inner;
         if self.inner.point_ids.len() != self.inner.len() {
@@ -978,6 +974,11 @@ impl PyPatchCloud {
                 )))
             }
         };
+        if !(search_resolution_multiplier.is_finite() && search_resolution_multiplier > 0.0) {
+            return Err(PyValueError::new_err(format!(
+                "search_resolution_multiplier must be > 0, got {search_resolution_multiplier}"
+            )));
+        }
         let params = KeypointLocalizeParams {
             max_iters,
             search,
@@ -989,9 +990,7 @@ impl PyPatchCloud {
             sampler,
             robust_iters,
             convergence_px,
-            // Phase-1 search cache: the resolution multiplier is not yet plumbed
-            // through the Python binding, so keep the no-op default (`1.0`).
-            ..Default::default()
+            search_resolution_multiplier,
         };
 
         let (pyramids, poses) = build_pyramids_and_poses(recon, &images)?;
@@ -1118,6 +1117,30 @@ impl PyPatchCloud {
     ///     max_offset_px: Max total per-view drift from the seed, in patch-grid px.
     ///     point_ids: If given, refine only the patches with these source point ids;
     ///         ``None`` (default) refines every patch.
+    ///     starting_keypoints: Optional explicit per-view seed overrides:
+    ///         ``point_id -> [[x, y], ...]`` in **source-image** pixels, parallel
+    ///         to that point's entry in ``view_sets`` (one ``[x, y]`` per view, in
+    ///         order). When ``view_sets`` is also given, each point's
+    ///         ``starting_keypoints`` length must match its ``view_sets`` length.
+    ///         These seeds **override** the recon-default seeds for those points
+    ///         and let the refiner align to keypoints produced by an upstream
+    ///         localizer (e.g. :meth:`localize_keypoints`) rather than the
+    ///         per-observation seeds the recon already carries.
+    ///
+    ///         For a point absent from this map (or for the whole map when
+    ///         ``starting_keypoints=None``, the default), seeds come from the
+    ///         **recon**: each view's seed is the per-observation inline keypoint
+    ///         stored on the embedded_patches recon for that ``(point_id,
+    ///         image_index)``, and views with no inline observation seed at their
+    ///         own projection ``project_i(X_p)``.
+    ///
+    ///         **Refinement requires starting keypoints.** Calling
+    ///         ``refine_keypoints`` on a ``sift_files`` reconstruction without
+    ///         supplying ``starting_keypoints`` raises ``ValueError`` — the
+    ///         projection alone isn't a "real" keypoint for the purposes of a
+    ///         local refiner. Either run ``sfm xform --to-embedded-patches``
+    ///         first or pass explicit ``starting_keypoints`` covering every
+    ///         point to refine.
     ///
     /// Returns:
     ///     A list of per-point dicts ``{point_id, views (uint32[K]),
@@ -1130,7 +1153,8 @@ impl PyPatchCloud {
         recon, images, *, view_sets=None, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear", robust_iters=3, max_outer_sweeps=1,
         outer_convergence_px=0.005, max_gn_steps=10, convergence_px=0.01,
-        max_offset_px=2.0, consensus_refresh="per_sweep", point_ids=None
+        max_offset_px=2.0, consensus_refresh="per_sweep", point_ids=None,
+        starting_keypoints=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn refine_keypoints<'py>(
@@ -1151,6 +1175,7 @@ impl PyPatchCloud {
         max_offset_px: f64,
         consensus_refresh: &str,
         point_ids: Option<Vec<u32>>,
+        starting_keypoints: Option<std::collections::HashMap<u32, Vec<[f64; 2]>>>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let recon = &recon.inner;
         if self.inner.point_ids.len() != self.inner.len() {
@@ -1167,6 +1192,22 @@ impl PyPatchCloud {
             return Err(PyValueError::new_err(
                 "patch cloud point_ids are out of range for this reconstruction \
                  (was the cloud built from a different recon?)",
+            ));
+        }
+        // `refine_keypoints` is a *local* refiner: it needs a starting
+        // keypoint in the basin of the true optimum, and the projection
+        // alone isn't a "real" keypoint for that purpose. Require either an
+        // embedded_patches recon (which carries inline per-observation
+        // keypoints) or explicit ``starting_keypoints`` from the caller.
+        // Fail fast before any pyramid decode.
+        if starting_keypoints.is_none() && recon.keypoints_xy().is_none() {
+            return Err(PyValueError::new_err(
+                "refine_keypoints requires starting keypoints — either an \
+                 embedded_patches reconstruction (which carries inline \
+                 per-observation keypoints; run `sfm xform --to-embedded-patches` \
+                 first) or explicit `starting_keypoints` covering every point \
+                 to refine. This recon is sift_files and no `starting_keypoints` \
+                 were provided.",
             ));
         }
 
@@ -1252,8 +1293,96 @@ impl PyPatchCloud {
             }
         }
 
-        let results =
-            py.detach(|| refine_patch_cloud_keypoints(&self.inner, &views, &sets, None, &params));
+        // Per-view seeds in source-image px, one per view in the (final) view
+        // set, in order. Sourced in priority:
+        //   1. Explicit `starting_keypoints[pid]` from the caller — wraps every
+        //      slot in `Some(...)`, overriding any recon-default for that point.
+        //   2. Otherwise, when the recon has inline per-observation keypoints
+        //      (an embedded_patches recon), each view's slot is `Some(stored)`
+        //      where the track has an observation for that (pid, image_index),
+        //      and `None` (= project for that view) where it doesn't.
+        //   3. Otherwise (a sift-files recon, no inline keypoints), the whole
+        //      seed slice is `None` (= project every view).
+        //
+        // The caller's explicit overrides are validated up front; recon-default
+        // seeds are built lazily in the per-patch loop.
+        if let Some(seed_map) = &starting_keypoints {
+            // Build a pid -> index map once so every per-pid lookup below is O(1);
+            // the seed map may cover every patch, in which case the previous
+            // per-pid linear scan was O(N²).
+            let pid_to_idx: std::collections::HashMap<u32, usize> = self
+                .inner
+                .point_ids
+                .iter()
+                .enumerate()
+                .map(|(i, &p)| (p, i))
+                .collect();
+            for (pid, seeds) in seed_map {
+                let Some(&idx) = pid_to_idx.get(pid) else {
+                    return Err(PyValueError::new_err(format!(
+                        "starting_keypoints[{pid}] is not a point in this patch cloud",
+                    )));
+                };
+                if let Some(keep) = &selected_mask {
+                    if !keep.contains(pid) {
+                        return Err(PyValueError::new_err(format!(
+                            "starting_keypoints[{pid}] is excluded by point_ids; \
+                             drop the entry or include {pid} in point_ids",
+                        )));
+                    }
+                }
+                let set_len = sets[idx].len();
+                if seeds.len() != set_len {
+                    return Err(PyValueError::new_err(format!(
+                        "starting_keypoints[{pid}] has {} seeds but the view set has {} views",
+                        seeds.len(),
+                        set_len,
+                    )));
+                }
+            }
+        }
+
+        // Build the (point_id, image_index) -> stored keypoint lookup once for
+        // embedded_patches recons; sift-files recons return None and the
+        // per-patch loop just falls through to the projection-seed path. The
+        // map is keyed identically to the one in `refine_normals`'s
+        // `use_stored_keypoints` path; duplicate observations of the same
+        // (point, image) all hash to the same slot (last write wins, harmless).
+        let stored_kp_map: Option<std::collections::HashMap<(u32, u32), [f64; 2]>> =
+            recon.keypoints_xy().map(|keypoints_xy| {
+                let mut m = std::collections::HashMap::with_capacity(recon.tracks.len());
+                for (j, obs) in recon.tracks.iter().enumerate() {
+                    m.insert(
+                        (obs.point_index, obs.image_index),
+                        [keypoints_xy[[j, 0]] as f64, keypoints_xy[[j, 1]] as f64],
+                    );
+                }
+                m
+            });
+
+        let results = py.detach(|| {
+            use rayon::prelude::*;
+            use sfmtool_core::patch::keypoint_subpixel::refine_patch_keypoints;
+            self.inner
+                .patches
+                .par_iter()
+                .enumerate()
+                .map(|(i, patch)| {
+                    let pid = self.inner.point_ids[i];
+                    let set = &sets[i];
+                    let per_view_seeds: Option<Vec<Option<[f64; 2]>>> = if let Some(user_seeds) =
+                        starting_keypoints.as_ref().and_then(|m| m.get(&pid))
+                    {
+                        Some(user_seeds.iter().map(|&kp| Some(kp)).collect())
+                    } else {
+                        stored_kp_map
+                            .as_ref()
+                            .map(|m| set.iter().map(|&img| m.get(&(pid, img)).copied()).collect())
+                    };
+                    refine_patch_keypoints(patch, &views, set, per_view_seeds.as_deref(), &params)
+                })
+                .collect::<Vec<_>>()
+        });
 
         let mut out = Vec::new();
         for (res, &pid) in results.iter().zip(&self.inner.point_ids) {

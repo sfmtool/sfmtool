@@ -108,6 +108,13 @@ class _SolveStrips:
             angular_range_deg=angular_range_deg,
             init_steps=init_steps,
             point_ids=[int(p) for p in point_ids],
+            # `compare --strips` is the strip-render reference: anchor every
+            # view at the reprojected center so the comparison metric is the
+            # same regardless of whether the recon happens to carry inline
+            # keypoints. Without this lock the auto-default would silently
+            # switch to stored keypoints on embedded_patches recons and
+            # change strip output / ΔΦ values.
+            use_stored_keypoints=False,
         )
         phi = np.asarray(res["photoconsistency"])
         init = np.asarray(res["init_photoconsistency"])
