@@ -5,7 +5,19 @@
 authors = ["Mark <399551+mwiebe@users.noreply.github.com>"]
 channels = ["conda-forge"]
 name = "sfmtool"
-platforms = ["win-64", "linux-64", "osx-arm64"]
+# The bare subdirs are the CUDA-free platforms every normal environment uses.
+# The `*-cuda` named platforms attach the `__cuda` virtual package (Pixi's
+# rich-platform replacement for the deprecated `[system-requirements]` table)
+# and are opted into only by the `cuda` feature/environment. Non-CUDA
+# environments pin the bare subdirs via the `cpu` feature so the named CUDA
+# platforms never leak a `cuda*` pycolmap build into them.
+platforms = [
+    "win-64",
+    "linux-64",
+    "osx-arm64",
+    { name = "win-64-cuda", platform = "win-64", cuda = "12.9" },
+    { name = "linux-64-cuda", platform = "linux-64", cuda = "12.9" },
+]
 version = "0.2"
 
 # Universal build dependency: the Rust toolchain is needed to build any crate in
@@ -82,27 +94,35 @@ zensical = ">=0.0.43, <0.0.44"
 docs-serve = "zensical serve"
 docs-build = "zensical build"
 
+# Pins every non-CUDA environment to the bare CUDA-free subdirs. A feature's
+# `platforms` can only name workspace platforms (not inline rich tables), so the
+# `__cuda` virtual package has to live on named workspace platforms; without
+# this pin the unrestricted features would inherit those named platforms and
+# Pixi would resolve the CUDA pycolmap build for `default`, `test`, etc.
+[feature.cpu]
+platforms = ["win-64", "linux-64", "osx-arm64"]
+
 # CUDA-enabled pycolmap is only published for Linux and Windows, so restrict the
-# cuda feature (and any environment that uses it) to those platforms — otherwise
-# the lock solve fails for osx-arm64, which has no CUDA builds.
+# cuda feature (and any environment that uses it) to the `*-cuda` named
+# platforms — otherwise the lock solve fails for osx-arm64, which has no CUDA
+# builds. Those named platforms also carry the `__cuda` virtual package the
+# `cuda*` builds require (the rich-platform replacement for the deprecated
+# `[feature.cuda.system-requirements]` table).
 [feature.cuda]
-platforms = ["win-64", "linux-64"]
+platforms = ["win-64-cuda", "linux-64-cuda"]
 
 [feature.cuda.dependencies]
 pycolmap = { version = ">=4.0.3,<5", build = "cuda*" }
 
-[feature.cuda.system-requirements]
-cuda = "12.9"
-
 [environments]
-default = { features = ["runtime", "editable"], solve-group = "default" }
-lint = { features = ["lint"], solve-group = "default" }
-ui = { solve-group = "default" }
-test = { features = ["runtime", "editable", "lint", "test"], solve-group = "default" }
+default = { features = ["runtime", "editable", "cpu"], solve-group = "default" }
+lint = { features = ["lint", "cpu"], solve-group = "default" }
+ui = { features = ["cpu"], solve-group = "default" }
+test = { features = ["runtime", "editable", "lint", "test", "cpu"], solve-group = "default" }
 # Same packages as `test` but without the editable self-install, so `pixi
 # install` does no Rust build. CI installs this and compiles the extension
 # explicitly with `maturin develop --release` (test-os) / coverage.sh (test-linux).
-test-ci = { features = ["runtime", "lint", "test"], solve-group = "default" }
-dev = { features = ["runtime", "editable", "dev"], solve-group = "default" }
-docs = { features = ["runtime", "editable", "docs"], solve-group = "default" }
+test-ci = { features = ["runtime", "lint", "test", "cpu"], solve-group = "default" }
+dev = { features = ["runtime", "editable", "dev", "cpu"], solve-group = "default" }
+docs = { features = ["runtime", "editable", "docs", "cpu"], solve-group = "default" }
 cuda = { features = ["runtime", "editable", "cuda"], solve-group = "cuda" }

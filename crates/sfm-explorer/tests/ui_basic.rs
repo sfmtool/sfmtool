@@ -4,10 +4,28 @@
 #![cfg(any(windows, target_os = "macos"))]
 
 use std::process::{Child, Command};
-use std::sync::Once;
+use std::sync::{Mutex, MutexGuard, Once};
 use std::time::Duration;
 
 use xa11y::{App, AppExt, Toggled};
+
+/// Serializes the UI tests so at most one `sfm-explorer` window is alive at a
+/// time. `cargo test` runs tests on multiple threads by default, and several
+/// identically-titled "SfM Explorer" windows (plus concurrent accessibility
+/// tree walks) make the Windows UI Automation backend fail with
+/// `E_UNEXPECTED` (0x8000FFFF, "Catastrophic failure"). Each test holds this
+/// lock for its whole body, so a plain `cargo test` behaves the same as
+/// `--test-threads=1` without the caller having to remember the flag.
+static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn ui_test_lock() -> MutexGuard<'static, ()> {
+    // A panicking test (every assertion failure here panics) would otherwise
+    // poison the mutex and turn every later test into a spurious failure;
+    // recover the guard instead so the suite keeps running serially.
+    UI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// xa11y 0.9 no longer hardcodes a 5s default; an unset default means
 /// single-attempt, no-polling. The polling locator ops here (`exists`,
@@ -41,12 +59,34 @@ fn launch() -> Child {
     cmd.spawn().expect("failed to spawn sfm-explorer")
 }
 
-struct Guard(Child);
+/// Owns a launched `sfm-explorer` process and the serialization lock for the
+/// test that spawned it. Fields drop in declaration order, so `child` is killed
+/// (its window torn down) *before* `_lock` is released and the next test may
+/// launch — keeping windows strictly non-overlapping.
+struct Guard {
+    child: Child,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl Guard {
+    /// Acquire the serialization lock, then launch the app under it.
+    fn new() -> Self {
+        let _lock = ui_test_lock();
+        Guard {
+            child: launch(),
+            _lock,
+        }
+    }
+
+    fn child(&self) -> &Child {
+        &self.child
+    }
+}
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        self.0.kill().ok();
-        self.0.wait().ok();
+        self.child.kill().ok();
+        self.child.wait().ok();
     }
 }
 
@@ -94,15 +134,15 @@ fn attach_app(child: &Child) -> App {
 /// App process appears in the accessibility tree.
 #[test]
 fn window_appears() {
-    let _guard = Guard(launch());
-    attach(&_guard.0);
+    let _guard = Guard::new();
+    attach(_guard.child());
 }
 
 /// The window respects the 800×600 minimum size constraint.
 #[test]
 fn window_min_size() {
-    let _guard = Guard(launch());
-    let app = attach(&_guard.0);
+    let _guard = Guard::new();
+    let app = attach(_guard.child());
     // The attached root is the window itself on Windows but the AXApplication on
     // macOS, whose own bounds are unset — fall back to the window element there.
     let b = app
@@ -125,8 +165,8 @@ fn window_min_size() {
 /// Both top-level menu buttons are exposed in the accessibility tree.
 #[test]
 fn menu_bar_buttons_present() {
-    let _guard = Guard(launch());
-    let app = attach(&_guard.0);
+    let _guard = Guard::new();
+    let app = attach(_guard.child());
     for name in ["File", "View"] {
         app.locator(&format!(r#"button[name="{name}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
@@ -137,8 +177,8 @@ fn menu_bar_buttons_present() {
 /// The empty-state placeholder text is shown before any file is loaded.
 #[test]
 fn empty_state_placeholder_text() {
-    let _guard = Guard(launch());
-    let app = attach(&_guard.0);
+    let _guard = Guard::new();
+    let app = attach(_guard.child());
     app.locator(r#"static_text[name="No reconstruction loaded."]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("placeholder text 'No reconstruction loaded.' not found");
@@ -147,8 +187,8 @@ fn empty_state_placeholder_text() {
 /// Opening the File menu exposes all three items in the accessibility tree.
 #[test]
 fn file_menu_items() {
-    let _guard = Guard(launch());
-    let app = attach(&_guard.0);
+    let _guard = Guard::new();
+    let app = attach(_guard.child());
 
     app.locator(r#"button[name="File"]"#)
         .press()
@@ -165,8 +205,8 @@ fn file_menu_items() {
 /// checkboxes all checked by default.
 #[test]
 fn view_checkboxes_checked_by_default() {
-    let _guard = Guard(launch());
-    let app = attach(&_guard.0);
+    let _guard = Guard::new();
+    let app = attach(_guard.child());
 
     app.locator(r#"button[name="View"]"#)
         .press()
@@ -188,8 +228,8 @@ fn view_checkboxes_checked_by_default() {
 /// Toggling the Show Points checkbox via accessibility updates its checked state.
 #[test]
 fn toggle_show_points() {
-    let _guard = Guard(launch());
-    let app = attach(&_guard.0);
+    let _guard = Guard::new();
+    let app = attach(_guard.child());
 
     app.locator(r#"button[name="View"]"#)
         .press()
@@ -224,8 +264,8 @@ fn toggle_show_points() {
 #[ignore]
 fn dump_tree_after_view() {
     init();
-    let _guard = Guard(launch());
-    let pid = _guard.0.id();
+    let _guard = Guard::new();
+    let pid = _guard.child().id();
     let app = App::by_pid(pid, Duration::from_secs(15)).expect("app not found");
     app.locator(r#"button[name="View"]"#)
         .press()
@@ -242,9 +282,8 @@ fn dump_tree_after_view() {
 #[test]
 #[ignore]
 fn dump_tree() {
-    let child = launch();
-    let pid = child.id();
-    let _guard = Guard(child);
+    let _guard = Guard::new();
+    let pid = _guard.child().id();
     let app = App::by_pid(pid, Duration::from_secs(15)).expect("app not found");
     println!(
         "{}",
