@@ -215,8 +215,9 @@ def match(
 
     from ..cli import deduce_workspace
 
+    # Default to the current directory when no paths are given
     if not paths:
-        raise click.UsageError("Must provide image paths.")
+        paths = (".",)
 
     method_count = sum([exhaustive, sequential, flow_match, cluster_match])
     if method_count > 1:

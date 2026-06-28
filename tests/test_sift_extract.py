@@ -30,11 +30,22 @@ def test_default_feature_tool():
     assert all(c in "0123456789abcdef" for c in EXPECTED_FEATURE_TOOL_HASH)
 
 
-def test_sift_cli_no_paths():
-    """Tests that 'sift --extract' fails with --extract but no paths."""
-    result = CliRunner().invoke(main, ["sift", "--extract"])
-    assert result.exit_code != 0
-    assert "Must provide a list of paths to process" in result.output
+def test_sift_cli_no_paths_defaults_to_cwd(
+    isolated_seoul_bull_image: Path, monkeypatch
+):
+    """'sift --extract' with no paths processes the current directory."""
+    expected_sift_path = (
+        isolated_seoul_bull_image.parent
+        / "features"
+        / f"sift-colmap-{EXPECTED_FEATURE_TOOL_HASH}"
+        / (isolated_seoul_bull_image.name + ".sift")
+    )
+
+    monkeypatch.chdir(isolated_seoul_bull_image.parent)
+    result = CliRunner().invoke(main, ["sift", "--extract", "--tool", "colmap"])
+    assert result.exit_code == 0, result.output
+    assert "New SIFT feature extraction: 1 / 1 image(s)" in result.output
+    assert expected_sift_path.is_file()
 
 
 @pytest.mark.parametrize("provide_dir", [True, False])

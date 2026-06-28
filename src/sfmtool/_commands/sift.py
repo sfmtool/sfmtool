@@ -94,8 +94,9 @@ def sift(
     if filter_sfm_path and not draw_output_dir:
         raise click.UsageError("--filter-sfm can only be used with --draw mode.")
 
+    # Default to the current directory when no paths are given
     if not paths:
-        raise click.UsageError("Must provide a list of paths to process.")
+        paths = (".",)
 
     paths = [Path(p) for p in paths]
     if draw_output_dir:

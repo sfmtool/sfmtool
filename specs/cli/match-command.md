@@ -13,8 +13,9 @@ sfm match [PATHS...] --exhaustive | --sequential | --flow | --cluster [OPTIONS..
 sfm match --merge FILE1.matches FILE2.matches ... -o OUTPUT.matches
 ```
 
-`PATHS` are image directories or files. Exactly one matching method must be specified,
-or `--merge` to combine existing `.matches` files.
+`PATHS` are image directories or files; when omitted, the current directory is used
+(except with `--merge`, which requires explicit `.matches` paths). Exactly one matching
+method must be specified, or `--merge` to combine existing `.matches` files.
 
 ## Matching Methods
 

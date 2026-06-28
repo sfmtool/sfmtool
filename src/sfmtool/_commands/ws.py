@@ -22,8 +22,8 @@ def ws():
 @click.option(
     "--feature-tool",
     type=click.Choice(["colmap", "opencv", "sfmtool"], case_sensitive=False),
-    default="colmap",
-    help="Feature extraction tool: colmap (default), opencv, or sfmtool",
+    default="sfmtool",
+    help="Feature extraction tool: sfmtool (default), colmap, or opencv",
 )
 @click.option(
     "--dsp/--no-dsp",

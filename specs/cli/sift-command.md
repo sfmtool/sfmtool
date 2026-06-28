@@ -13,7 +13,8 @@ To inspect an existing `.sift` file, use `sfm inspect <FILE.sift>`.
 sfm sift [PATHS...] --extract | --draw <DIR> [OPTIONS...]
 ```
 
-`PATHS` are image files or directories, and at least one is required.
+`PATHS` are image files or directories. When omitted, the current directory is
+used.
 
 ## Action Modes
 

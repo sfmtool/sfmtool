@@ -32,11 +32,14 @@ def test_match_multiple_methods(isolated_seoul_bull_image: Path):
     assert "Cannot specify more than one matching method" in result.output
 
 
-def test_match_no_paths():
-    """Test that match without paths raises an error."""
+def test_match_no_paths_defaults_to_cwd(tmp_path: Path, monkeypatch):
+    """match without paths defaults to the current directory."""
+    monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(main, ["match", "--exhaustive"])
+    # The cwd has no images, so it gets past the (removed) "must provide paths"
+    # error and fails on image discovery instead.
     assert result.exit_code != 0
-    assert "Must provide image paths" in result.output
+    assert "No image files found in the provided paths" in result.output
 
 
 def test_match_stray_mode_option_rejected(isolated_seoul_bull_image: Path):

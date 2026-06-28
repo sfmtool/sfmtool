@@ -18,7 +18,7 @@ If `WORKSPACE_DIR` is omitted, the current directory is used.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--feature-tool` | `colmap` \| `opencv` \| `sfmtool` | `colmap` | Feature extraction backend |
+| `--feature-tool` | `sfmtool` \| `colmap` \| `opencv` | `sfmtool` | Feature extraction backend |
 | `--dsp / --no-dsp` | bool | `false` | Enable domain size pooling (COLMAP only) |
 | `--max-features` | int | 8192 | Maximum features per image (COLMAP and sfmtool) |
 | `--gpu / --no-gpu` | bool | `true` | GPU acceleration for SIFT (COLMAP only) |
@@ -50,11 +50,14 @@ existed hash identically.
 ## Usage Examples
 
 ```bash
-# Initialize with defaults (COLMAP, GPU, 8192 features)
+# Initialize with defaults (sfmtool, 8192 features)
 sfm ws init
 
 # Initialize a specific directory with OpenCV
 sfm ws init ./my_project --feature-tool opencv
+
+# Use the COLMAP backend instead
+sfm ws init --feature-tool colmap
 
 # COLMAP with domain size pooling, more features
 sfm ws init --feature-tool colmap --dsp --max-features 16384
