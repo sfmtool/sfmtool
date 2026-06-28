@@ -67,6 +67,8 @@ as `OUTPUT`.
 | `--max-shift-px` | float | 3.0 | Discard an **observation** whose keypoint sits more than this from the point's projection, in **source-image** pixels (an absolute distance, not the move from the seed). |
 | `--min-views` | int | 2 | Drop a point left with fewer surviving observations after discards. |
 | `--patch-size` | float | `10.0` | Surfel size — the full patch edge length (in feature-size multiples) used to render the patch. Halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`), the step that builds the frame. |
+| `--search-resolution-multiplier` | float | `1.0` | Multiplier `m` for the discrete cross-view search; the search runs at resolution `round(m·R)`. `1.0` is the no-op; `>1` (the supersampled grid) resolves sub-pixel offsets directly at a cost that grows ~`m²`. See [`specs/core/keypoint-localization-search-cache.md`](../core/keypoint-localization-search-cache.md). |
+| `--subpixel` | choice | `none` | Optional photometric sub-pixel pass run on the localizer's output. `none` (default) skips it; `lk` runs LK / ECC Gauss–Newton refinement with the per-sweep consensus (`max_outer_sweeps=1`); `lk_per_move` uses the per-move (Gauss–Seidel) incremental consensus with `max_outer_sweeps=5`. See [`specs/core/keypoint-subpixel-refinement.md`](../core/keypoint-subpixel-refinement.md). |
 
 The two `--search` / `--max-shift-px` budgets are in different units on purpose:
 `--search` bounds the registration in the patch's own grid (the congealing

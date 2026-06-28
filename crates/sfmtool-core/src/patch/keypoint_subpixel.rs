@@ -560,7 +560,7 @@ pub fn refine_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     view_set: &[u32],
-    starting_keypoints: Option<&[[f64; 2]]>,
+    starting_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &KeypointSubpixelParams,
 ) -> KeypointRefinement {
     let resolution = params.resolution.max(2);
@@ -584,8 +584,8 @@ pub fn refine_patch_keypoints(
         let Some(proj) = project(view, &patch.center, patch.w) else {
             continue;
         };
-        let off = match starting_keypoints {
-            Some(seeds) => seed_offset(patch, view, seeds[k], wpp_u, wpp_v).unwrap_or([0.0, 0.0]),
+        let off = match starting_keypoints.and_then(|seeds| seeds[k]) {
+            Some(kp) => seed_offset(patch, view, kp, wpp_u, wpp_v).unwrap_or([0.0, 0.0]),
             None => [0.0, 0.0],
         };
         states.push(ViewState {
@@ -1048,6 +1048,14 @@ fn finalize(
 /// view); `None` seeds every view at the point's projection. Results are returned
 /// in cloud order.
 ///
+/// Note: the PyO3 binding for `PatchCloud.refine_keypoints` does NOT call this
+/// wrapper — it inlines its own `par_iter` so it can build per-patch seed slices
+/// **lazily** (most patches typically have no caller-provided seed, and the
+/// recon-default path picks per-view from a shared `(pid, image_index)` map).
+/// Building the full-cloud `Vec<Vec<Option<[f64;2]>>>` up front would force an
+/// allocation the binding can avoid. This entry stays as the cloud-level API
+/// for Rust callers that already have a parallel-to-cloud seed slice in hand.
+///
 /// # Panics
 ///
 /// Panics if `view_sets.len() != cloud.len()` (or `starting_keypoints` is given
@@ -1056,7 +1064,7 @@ pub fn refine_patch_cloud_keypoints(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
     view_sets: &[Vec<u32>],
-    starting_keypoints: Option<&[Vec<[f64; 2]>]>,
+    starting_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     params: &KeypointSubpixelParams,
 ) -> Vec<KeypointRefinement> {
     assert_eq!(

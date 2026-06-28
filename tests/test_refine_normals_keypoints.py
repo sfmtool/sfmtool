@@ -16,7 +16,6 @@ import os
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 from sfmtool._sfmtool import PatchCloud, SfmrReconstruction
 
@@ -112,27 +111,69 @@ def test_use_stored_keypoints_differs_from_centered(seoul_bull_workspace: Path):
     )
 
 
-def test_use_stored_keypoints_rejects_sift_files(seoul_bull_workspace: Path):
+def test_use_stored_keypoints_default_true_on_embedded_uses_stored(
+    seoul_bull_workspace: Path,
+):
+    """The default (``use_stored_keypoints=True``) on an embedded_patches recon
+    anchors at the inline stored keypoints — bit-equal to passing
+    ``use_stored_keypoints=True`` explicitly. Pins the default value to True
+    so a code flip can't silently change anchor source."""
+    sift_recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = sift_recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
+    images = _load_images(recon)
+
+    cloud_true = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent="fixed", extent_value=5.0
+    )
+    cloud_default = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent="fixed", extent_value=5.0
+    )
+    common = dict(
+        resolution=12, init_steps=5, refine_levels=2, sampler="bilinear", cache="off"
+    )
+    out_true = cloud_true.refine_normals(
+        recon, images, use_stored_keypoints=True, **common
+    )
+    out_default = cloud_default.refine_normals(recon, images, **common)
+
+    # Embedded-patches recon: default must match explicit-True bit-for-bit.
+    assert np.array_equal(
+        np.asarray(out_true["normal"]),
+        np.asarray(out_default["normal"]),
+    )
+
+
+def test_use_stored_keypoints_default_true_on_sift_files_falls_back_to_projection(
+    seoul_bull_workspace: Path,
+):
+    """The default (``use_stored_keypoints=True``) on a sift-files recon
+    silently falls back per-view to the reprojected center (the recon has no
+    inline keypoints to anchor on) — bit-equal to passing
+    ``use_stored_keypoints=False`` explicitly. No error: ``True`` is a
+    request, not a requirement."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     assert recon.feature_source == "sift_files"
 
-    cloud = PatchCloud.from_reconstruction(
+    images = _load_images(recon)
+    cloud_false = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent="fixed", extent_value=5.0
     )
-    # Pass NO images: the rejection must fire before any image decode / pyramid
-    # build (fail-fast), so an empty image list still raises the right error
-    # rather than an image-count mismatch.
-    with pytest.raises(
-        ValueError, match="use_stored_keypoints requires an embedded_patches"
-    ):
-        cloud.refine_normals(
-            recon,
-            [],
-            use_stored_keypoints=True,
-            resolution=12,
-            init_steps=5,
-            refine_levels=2,
-        )
+    cloud_default = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent="fixed", extent_value=5.0
+    )
+
+    common = dict(resolution=12, init_steps=5, refine_levels=2)
+    out_false = cloud_false.refine_normals(
+        recon, images, use_stored_keypoints=False, **common
+    )
+    out_default = cloud_default.refine_normals(recon, images, **common)
+
+    # Sift-files recon: default-True (per-view fall-through to projection)
+    # and explicit-False (projection everywhere) must match bit-for-bit.
+    assert np.array_equal(
+        np.asarray(out_false["normal"]),
+        np.asarray(out_default["normal"]),
+    )
 
 
 def test_stored_keypoints_at_reprojection_match_centered(seoul_bull_workspace: Path):

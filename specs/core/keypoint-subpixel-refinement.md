@@ -1,7 +1,8 @@
 # Photometric Subpixel Keypoint Refinement
 
-_Status: **MVP + analytic Jacobian + per-move consensus implemented** (Phases 2
-and 3B). The forward-additive ECC Gauss–Newton refiner lives in
+_Status: **MVP + analytic Jacobian + per-move consensus implemented + wired
+into `embed_patches` as opt-in** (Phases 2 and 3B). The
+forward-additive ECC Gauss–Newton refiner lives in
 `crates/sfmtool-core/src/patch/keypoint_subpixel.rs` (exposed to Python as
 `PatchCloud.refine_keypoints`). All three "Consensus refresh granularity"
 variants are wired so the trade-off is measurable: the single-pass-frozen
@@ -13,10 +14,38 @@ per-sweep boundary — the spec's two-frequency design). The sampler value+gradi
 interface (`remap_bilinear_with_grad`, `remap_aniso_with_grad`,
 `WarpMap::get_jacobian`) is implemented per the "Design details" section below,
 collapsing the per-GN-step gradient build from 5 renders (value + 4 FD) to 1
-(value + analytic gradient composed with the warp Jacobian). The remaining
-deferred work — leave-one-out consensus (measured-and-rejected; see below),
-inverse-compositional ECC, the joint bundle, and SIMD of the new sampler
-functions — is described in "Open questions" below._
+(value + analytic gradient composed with the warp Jacobian). The
+`embed_patches` wiring exposes LK behind a new `subpixel: str = "none"`
+kwarg (`"lk"` for per-sweep, `"lk_per_move"` for the incremental variant)
+and exposes the supersampled grid in parallel via a new
+`search_resolution_multiplier` kwarg on `PatchCloud.localize_keypoints`
+(and pass-through on `embed_patches`). The production default is
+`subpixel="none"`, `search_resolution_multiplier=1.0`; all variants are
+opt-in. `PatchCloud.refine_keypoints` and `PatchCloud.refine_normals`
+both default to seeding each view at that observation's inline
+stored keypoint when the recon carries them (an embedded_patches
+recon), with per-view fall-through to the reprojected center for views
+that have no inline observation (e.g. ones admitted by `select_views`
+beyond the SIFT track). The two functions diverge on what to do when
+the recon has no inline keypoints at all (a sift-files recon):
+`refine_keypoints` is a **local refiner — it strictly requires
+starting keypoints**, so a sift-files call without explicit
+`starting_keypoints` raises `ValueError` (the projection alone isn't
+a "real" keypoint for the purposes of a local refiner; convert the
+recon to embedded_patches first, or supply explicit per-point seeds).
+`refine_normals` is a normal optimizer that can legitimately anchor
+each view at the reprojected center, so its `use_stored_keypoints`
+flag stays a plain bool (default `True`): when set, anchor at the
+stored keypoint per view with per-view fall-through to the reprojected
+center; when explicitly `False`, anchor every view at the reprojected
+center regardless of recon kind (used by callers like
+`sfm compare --strips` and the cross-validation script that want a
+defined comparison reference independent of whether the recon
+carries inline keypoints). The remaining deferred work —
+leave-one-out consensus
+(measured-and-rejected; see below), inverse-compositional ECC, the joint
+bundle, and SIMD of the new sampler functions — is described in "Open
+questions" below._
 
 _**Per-move shared T (not LOO).** The "free with running sum" leave-one-out
 bonus the spec lists as the incremental variant's natural default was
