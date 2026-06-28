@@ -9,7 +9,7 @@ from typing import Optional
 def init_workspace(
     workspace_dir: str | Path,
     *,
-    feature_tool: str = "colmap",
+    feature_tool: str = "sfmtool",
     domain_size_pooling: bool = False,
     max_num_features: int | None = None,
     estimate_affine_shape: bool = False,
@@ -21,7 +21,7 @@ def init_workspace(
 
     Args:
         workspace_dir: The SfM workspace directory.
-        feature_tool: Name of the feature tool (default: "colmap")
+        feature_tool: Name of the feature tool (default: "sfmtool")
         domain_size_pooling: Enable domain size pooling for SIFT (default: False)
         max_num_features: Maximum number of features per image (COLMAP and
                          sfmtool backends). If None, uses the backend default

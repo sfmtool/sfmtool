@@ -23,7 +23,7 @@ def test_init_basic(tmp_path: Path):
 
     with open(config_file) as f:
         config = json.load(f)
-    assert config["feature_tool"] == "colmap"
+    assert config["feature_tool"] == "sfmtool"
     assert "feature_options" in config
 
 
