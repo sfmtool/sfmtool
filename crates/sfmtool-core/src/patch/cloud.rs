@@ -679,11 +679,13 @@ pub enum PatchExtent {
 }
 
 impl Default for PatchExtent {
-    /// `FeatureSize { factor: 5.0, across: Median }` — size each patch from the
-    /// observing keypoints' scales (the default sizing policy).
+    /// `FeatureSize { factor: 2.5, across: Median }` — size each patch from the
+    /// observing keypoints' scales (the default sizing policy). `factor` is a
+    /// half-extent multiplier, so the full patch edge is `5 ×` the projected
+    /// feature size.
     fn default() -> Self {
         PatchExtent::FeatureSize {
-            factor: 5.0,
+            factor: 2.5,
             across: ViewReduce::Median,
         }
     }

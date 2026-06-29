@@ -60,7 +60,7 @@ from .._cli_utils import timed_command
 @click.option(
     "--patch-size",
     type=float,
-    default=10.0,
+    default=5.0,
     show_default=True,
     help=(
         "Surfel size — the full patch edge length (in feature-size multiples), "

@@ -334,7 +334,7 @@ def embed_patches(
     images: list[np.ndarray],
     *,
     min_relative_zncc: float = 0.7,
-    patch_size: float = 10.0,
+    patch_size: float = 5.0,
     max_shift_px: float = 3.0,
     min_views: int = 2,
     max_iters: int = 5,

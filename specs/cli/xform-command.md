@@ -306,7 +306,7 @@ will fail. The optional value is a comma-separated `key=value` string
 
 ```bash
 --to-embedded-patches
---to-embedded-patches normal=mean_viewing,extent=feature_size,extent_value=10
+--to-embedded-patches normal=mean_viewing,extent=feature_size,extent_value=5
 --to-embedded-patches extent=fixed,extent_value=1.0
 ```
 

@@ -12,6 +12,7 @@ assembly live in ``_compare_strips``.
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 
 from ._patch_ncc import gauss_window, render_track_strip
@@ -28,6 +29,20 @@ from ._workspace_image import read_workspace_image
 Strip = tuple[np.ndarray, float, int]
 
 
+def _corner_label(tile: np.ndarray, text: str) -> None:
+    """Draw a small yellow label in the bottom-left of ``tile`` (in place)."""
+    cv2.putText(
+        tile,
+        text,
+        (3, tile.shape[0] - 5),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.32,
+        (0, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+
+
 class _SolveStrips:
     """Renders one reconstruction's points as oriented-surfel patch strips."""
 
@@ -39,6 +54,7 @@ class _SolveStrips:
         patch: int,
         extent_factor: float,
         k_neighbors: int = 12,
+        exclude_points_at_infinity: bool = True,
     ) -> None:
         self.recon = recon
         self.workspace = workspace
@@ -62,30 +78,62 @@ class _SolveStrips:
         self.centers = [-self.rot_of[i].T @ trans[i] for i in range(len(self.names))]
         self._images: dict[int, np.ndarray] = {}
         self._feat_sizes: dict[int, np.ndarray] = {}
+        # Stored per-point RGBA patch bitmaps (embedded_patches with bitmaps),
+        # indexed by 3D-point id; None when the recon carries no bitmaps. Used as
+        # the reference patch when present (see `reference_patch`).
+        bitmaps = recon.patch_bitmaps
+        self._bitmaps = np.asarray(bitmaps) if bitmaps is not None else None
 
-        # Finite points only for this comparison montage (opt out of the default,
-        # which includes points at infinity).
-        self.cloud = PatchCloud.from_reconstruction(
-            recon,
-            normal="stored",
-            k_neighbors=k_neighbors,
-            extent_value=extent_factor,
-            exclude_points_at_infinity=True,
-        )
+        # An embedded_patches recon already carries a per-point patch frame (with
+        # its sizing baked in); read it back rather than re-deriving extents from
+        # keypoint scales (which embedded keypoints don't carry). A sift_files
+        # recon has no stored frame, so build one — sizing the extent from the
+        # .sift feature sizes. `compare --strips` excludes points at infinity (it
+        # cannot render a cross-recon surfel for them); `inspect --strips` keeps
+        # them and renders each as a tangent-sphere infinity patch.
+        stored = recon.patches
+        if stored is not None:
+            self.cloud = stored
+        else:
+            self.cloud = PatchCloud.from_reconstruction(
+                recon,
+                normal="stored",
+                k_neighbors=k_neighbors,
+                extent_value=extent_factor,
+                exclude_points_at_infinity=exclude_points_at_infinity,
+            )
         self._cloud_index = {int(p): i for i, p in enumerate(self.cloud.point_indexes)}
 
         self.obs: dict[int, list[int]] = {}
         # Per-observation (image_index, feature_index) for feature-size lookups.
+        # `track_feature_indexes` is sift_files-only (None on embedded_patches),
+        # and only the feature-size/world-size rankings need it, so build feat_obs
+        # only when it's present.
         self.feat_obs: dict[int, list[tuple[int, int]]] = {}
-        for pid, im, feat in zip(
-            np.asarray(recon.track_point_indexes).tolist(),
-            np.asarray(recon.track_image_indexes).tolist(),
-            np.asarray(recon.track_feature_indexes).tolist(),
+        track_feats = recon.track_feature_indexes
+        feats = np.asarray(track_feats).tolist() if track_feats is not None else None
+        # Per-observation 2D keypoint, keyed by (point, image), for per-observation
+        # reprojection error. `keypoints_xy` is embedded_patches-only (None on
+        # sift_files); when absent, reprojection error is unavailable.
+        kxy = recon.keypoints_xy
+        kxy = np.asarray(kxy, np.float64) if kxy is not None else None
+        self.kpt_obs: dict[int, dict[int, tuple[float, float]]] = {}
+        for k, (pid, im) in enumerate(
+            zip(
+                np.asarray(recon.track_point_indexes).tolist(),
+                np.asarray(recon.track_image_indexes).tolist(),
+            )
         ):
             lst = self.obs.setdefault(int(pid), [])
             if im not in lst:
                 lst.append(int(im))
-            self.feat_obs.setdefault(int(pid), []).append((int(im), int(feat)))
+            if feats is not None:
+                self.feat_obs.setdefault(int(pid), []).append((int(im), int(feats[k])))
+            if kxy is not None:
+                self.kpt_obs.setdefault(int(pid), {})[int(im)] = (
+                    float(kxy[k, 0]),
+                    float(kxy[k, 1]),
+                )
 
     def image(self, i: int) -> np.ndarray:
         if i not in self._images:
@@ -98,6 +146,12 @@ class _SolveStrips:
                     "the .sfmr."
                 ) from e
         return self._images[i]
+
+    def prime_images(self, images: list[np.ndarray]) -> None:
+        """Seed the image cache with already-loaded frames (parallel to
+        ``recon.image_names``), so callers that loaded the images for refinement
+        avoid reading them a second time."""
+        self._images = {i: images[i] for i in range(len(images))}
 
     def refine(self, point_ids, *, angular_range_deg: float, init_steps: int) -> float:
         """Refine the listed points' normals in place; return mean ΔΦ over them."""
@@ -136,6 +190,83 @@ class _SolveStrips:
         i = self._cloud_index.get(int(pid))
         return float(self.cloud[i].half_extent[0]) if i is not None else 1e-2
 
+    def _w(self, pid: int) -> float:
+        """Homogeneous weight of the point's patch: ``1.0`` finite, ``0.0`` at
+        infinity (a direction rather than a position)."""
+        i = self._cloud_index.get(int(pid))
+        return float(self.cloud[i].w) if i is not None else 1.0
+
+    def _oriented_patch(self, pid: int, *, up: np.ndarray, ext: float) -> OrientedPatch:
+        """Build the surfel for ``pid``: a finite oriented patch, or a
+        tangent-sphere patch when the point is at infinity (``w == 0``)."""
+        center = self.positions[int(pid)]
+        if self._w(pid) == 0.0:
+            return OrientedPatch.from_infinity_direction(
+                center.tolist(), up.tolist(), [ext, ext]
+            )
+        return OrientedPatch.from_center_normal(
+            center.tolist(), self._normal(pid).tolist(), up.tolist(), [ext, ext]
+        )
+
+    def _render_view(self, patch: OrientedPatch, i: int, res: int) -> np.ndarray:
+        """Render image ``i``'s ``res``x``res`` tile of ``patch`` as float32."""
+        wm = WarpMap.from_patch(patch, self.cam_of[i], self.pose_of[i], res)
+        return np.asarray(wm.remap_bilinear(self.image(i)), np.float32)
+
+    def _stored_bitmap(self, pid: int) -> np.ndarray | None:
+        """The raw stored patch bitmap for ``pid`` (RGBA, colour channels already
+        BGR), or ``None`` if the recon carries no (non-empty) bitmap for it."""
+        if self._bitmaps is None or not (0 <= int(pid) < len(self._bitmaps)):
+            return None
+        bmp = self._bitmaps[int(pid)]
+        return bmp if bmp.any() else None
+
+    def _bitmap_ref_tile(self, bmp: np.ndarray, tile: int) -> np.ndarray:
+        """Reference tile for a stored bitmap: the RGB patch rendered *without*
+        alpha blending, and — when the bitmap carries an alpha channel — its alpha
+        shown as a grayscale tile beside it."""
+        rgb = bmp[..., :3] if bmp.ndim == 3 else cv2.cvtColor(bmp, cv2.COLOR_GRAY2BGR)
+        rgb_t = cv2.resize(
+            np.ascontiguousarray(rgb), (tile, tile), interpolation=cv2.INTER_NEAREST
+        )
+        _corner_label(rgb_t, "rgb")
+        if not (bmp.ndim == 3 and bmp.shape[-1] == 4):
+            return rgb_t
+        alpha = cv2.cvtColor(np.ascontiguousarray(bmp[..., 3]), cv2.COLOR_GRAY2BGR)
+        a_t = cv2.resize(alpha, (tile, tile), interpolation=cv2.INTER_NEAREST)
+        _corner_label(a_t, "A")
+        sep = np.full((tile, 2, 3), 60, np.uint8)
+        return np.hstack([rgb_t, sep, a_t])
+
+    def reference_patch(
+        self, pid: int, *, tile: int, max_views: int | None = None
+    ) -> np.ndarray | None:
+        """Render the point's reference patch as a BGR tile (``tile`` tall).
+
+        For a stored bitmap, the un-blended RGB patch plus its alpha as a
+        grayscale tile beside it (so the tile is wider than it is tall).
+        Otherwise the cross-view consensus: the mean of the point's per-view core
+        patches rendered at the surfel orientation, a single ``tile``x``tile``
+        square. ``None`` if the point has no observations and no stored bitmap.
+        """
+        pid = int(pid)
+        bmp = self._stored_bitmap(pid)
+        if bmp is not None:
+            return self._bitmap_ref_tile(bmp, tile)
+        obs_imgs = sorted(self.obs.get(pid, []))
+        if not obs_imgs:
+            return None
+        if max_views and len(obs_imgs) > max_views:
+            sel = np.linspace(0, len(obs_imgs) - 1, max_views).round().astype(int)
+            obs_imgs = [obs_imgs[i] for i in dict.fromkeys(sel.tolist())]
+        up = self.rot_of[obs_imgs[0]].T @ np.array([0.0, -1.0, 0.0])
+        patch = self._oriented_patch(pid, up=up, ext=self._half(pid))
+        cores = [self._render_view(patch, i, self.patch) for i in obs_imgs]
+        mean = np.stack([np.asarray(c, np.float64) for c in cores]).mean(0)
+        p8 = np.clip(mean, 0, 255).astype(np.uint8)
+        bgr = p8 if p8.ndim == 3 else cv2.cvtColor(p8, cv2.COLOR_GRAY2BGR)
+        return cv2.resize(bgr, (tile, tile), interpolation=cv2.INTER_NEAREST)
+
     def tri_angle(self, pid: int) -> float:
         """Max angle (degrees) between viewing rays to this point — its
         triangulation angle. Small angles mean the point's depth is weakly
@@ -169,6 +300,25 @@ class _SolveStrips:
             half_diag = 0.5 * float(np.hypot(cam.width, cam.height))
             radii.append(float(np.hypot(u - cx, v - cy)) / half_diag)
         return float(np.median(radii)) if radii else 0.0
+
+    def reproj_error(self, pid: int, i: int) -> float:
+        """Reprojection error (px) of point ``pid`` in image ``i``: the distance
+        between the point's projection and its stored 2D keypoint. ``nan`` when
+        the recon carries no keypoint for the observation or the point is behind
+        the camera. For a point at infinity (``w == 0``) the camera-frame point is
+        ``R · direction`` (no translation)."""
+        kpt = self.kpt_obs.get(int(pid), {}).get(int(i))
+        if kpt is None:
+            return float("nan")
+        center = self.positions[int(pid)]
+        if self._w(pid) == 0.0:
+            pc = self.rot_of[i] @ center
+        else:
+            pc = self.rot_of[i] @ (center - self.centers[i])
+        if pc[2] <= 1e-9:
+            return float("nan")
+        u, v = self.cam_of[i].project(pc[0] / pc[2], pc[1] / pc[2])
+        return float(np.hypot(u - kpt[0], v - kpt[1]))
 
     def _image_feature_sizes(self, i: int) -> np.ndarray:
         """Per-keypoint image-plane feature size (pixels) for image ``i``,
@@ -228,6 +378,7 @@ class _SolveStrips:
         tile: int,
         max_views: int | None = None,
         context: int | None = None,
+        annotate: bool = False,
     ) -> Strip | None:
         """Render point ``pid`` as a patch strip; ``(strip, mean_ncc, n)`` or None.
 
@@ -235,6 +386,9 @@ class _SolveStrips:
         ``context``x``context`` window around the point at the same sampling
         density, with a 1px box marking the validated extent; NCC is still scored
         on that inner region.
+
+        With ``annotate`` each tile is also labeled with that observation's NCC
+        against the other views and its reprojection error (px).
         """
         obs_imgs = sorted(self.obs.get(int(pid), []))
         if not obs_imgs:
@@ -244,7 +398,6 @@ class _SolveStrips:
             # columns stay compact (already deduplicated when self.obs is built).
             sel = np.linspace(0, len(obs_imgs) - 1, max_views).round().astype(int)
             obs_imgs = [obs_imgs[i] for i in dict.fromkeys(sel.tolist())]
-        center = self.positions[int(pid)]
         up = self.rot_of[obs_imgs[0]].T @ np.array([0.0, -1.0, 0.0])
 
         if context and context > self.patch:
@@ -255,13 +408,19 @@ class _SolveStrips:
             render_res = self.patch
             ext = self._half(pid)
             inner = None
-        patch = OrientedPatch.from_center_normal(
-            center.tolist(), self._normal(pid).tolist(), up.tolist(), [ext, ext]
-        )
+        patch = self._oriented_patch(pid, up=up, ext=ext)
 
         def patch_of(i: int) -> np.ndarray:
-            wm = WarpMap.from_patch(patch, self.cam_of[i], self.pose_of[i], render_res)
-            return np.asarray(wm.remap_bilinear(self.image(i)), np.float32)
+            return self._render_view(patch, i, render_res)
 
+        reproj = [self.reproj_error(pid, i) for i in obs_imgs] if annotate else None
         w = gauss_window(self.patch)
-        return render_track_strip(obs_imgs, patch_of, w, tile=tile, inner=inner)
+        return render_track_strip(
+            obs_imgs,
+            patch_of,
+            w,
+            tile=tile,
+            inner=inner,
+            reproj_errs=reproj,
+            per_view_scores=annotate,
+        )

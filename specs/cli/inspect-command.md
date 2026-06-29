@@ -16,6 +16,7 @@ frustum intersection, depth ranges, per-image metrics), use `sfm analyze`
 ```bash
 sfm inspect <PATH> [--verbose / -v]
 sfm inspect <POINT_ID> [WORKSPACE] [--verbose / -v]
+sfm inspect --strips <FILE.sfmr> [POINT ...] [-o OUT.png] [--strips-views N] [--context FRACTION]
 ```
 
 `PATH` is a single file. Directories and multiple paths are not accepted.
@@ -64,6 +65,75 @@ A missing match, or an index beyond the file's point count, is a clear error.
   sufficient/insufficient verdict, observing-camera baseline span, ray spread,
   and a per-observation list with each ray's incidence angle off the optical
   axis (flagging the near-fisheye-edge observations).
+
+## Point Strips (`--strips`)
+
+`sfm inspect --strips <FILE.sfmr> [POINT ...]` renders a chosen set of 3D points
+as a patch-strip montage for visually evaluating point quality. `TARGET` is the
+`.sfmr`; every remaining positional argument is a **point spec**, and the points
+are rendered as montage rows **in the order listed**. Each row is laid out, from
+the left:
+
+1. a **label panel** — the point's `pt3d_<hash>_<index>` id, finite (`w=1`) vs
+   `infinity` (`w=0`), the mean pairwise NCC (`NCC`) of its observation patches,
+   the triangulation angle (`a`, finite points only), and `shown/total` views;
+2. the **reference patch** — the stored per-point patch bitmap when the recon
+   carries one (the un-blended RGB patch, with the bitmap's alpha channel shown
+   as a grayscale tile beside it), otherwise the cross-view consensus (the mean
+   of the point's per-view core patches at the surfel orientation);
+3. the **observation strip** — one tile per observing view, the point's oriented
+   surfel projected into that view, padded with surrounding context and a border
+   at the patch extent (see `--context`). Each tile is labeled with the image
+   index (top) and, at the bottom, that observation's per-view NCC against the
+   other views (`n`) and its reprojection error in pixels (`e`).
+
+### Point specs
+
+Each spec is either:
+
+- a **point id** `pt3d_<hash>_<index>` — its `<hash>` must match this
+  reconstruction's content hash (the first 8 hex chars of `content_xxh128`);
+  a mismatch is an error (the point id belongs to a different `.sfmr`); or
+- a **point-index range expression** — `5`, `5-12`, `1,4,7`, … (the same
+  `RangeExpr` grammar used by `--range` elsewhere), naming point indexes directly.
+
+Indexes are kept in listed order and de-duplicated. An index beyond the
+reconstruction's point count is an error.
+
+### Feature source
+
+- **`sift_files`** — first converted to `embedded_patches` (the minimal
+  `--to-embedded-patches` bridge: mean-viewing patch frames, keypoints copied
+  from `.sift`), then a light normal refinement runs over **only the listed
+  finite points** (rendering their patch bitmaps, used as the reference patch).
+  The default keypoint-preserving conversion makes these good. Reads the
+  workspace `.sift` files and source images.
+- **`embedded_patches`** — rendered as stored (no conversion or refinement); the
+  stored patch frames and bitmaps are used directly.
+
+See `specs/core/sift-to-patch-reconstruction.md` for the conversion.
+
+### Points at infinity
+
+A listed point at infinity (`w=0`) is rendered via its tangent-sphere infinity
+patch (`OrientedPatch.from_infinity_direction`); its reference patch is the
+cross-view consensus (the refiner does not adapt infinity normals, so no bitmap
+is produced).
+
+### Options
+
+- `-o` / `--output` — output PNG path (default: `<stem>_strips.png` in the
+  current directory).
+- `--strips-views N` — cap the observation tiles (views) per point (`0` = all;
+  default 8). When capped, an evenly-spaced representative subset is shown and
+  the label reports `shown/total`.
+- `--context FRACTION` — pad each per-observation tile with `FRACTION` of extra
+  field of view around the patch (default `1.0`, i.e. +100%), drawing a green
+  border at the patch extent; NCC is still scored on the inner patch only. `0`
+  renders tight, borderless tiles. The reference patch always renders tight (no
+  context), sized to match the boxed patch region in the observation tiles.
+
+`-o` / `--strips-views` / `--context` are rejected unless `--strips` is given.
 
 ## Integrity
 
@@ -128,4 +198,7 @@ sfm inspect tiles.camrig
 
 # Inspect an image
 sfm inspect photo.jpg -v
+
+# Render chosen points as a patch-strip montage
+sfm inspect --strips sfmr/solve_001.sfmr 0-9 pt3d_220747a8_96414 -o strips.png
 ```

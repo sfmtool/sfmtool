@@ -76,6 +76,17 @@ def _short(name: str, limit: int = 36) -> str:
     return name if len(name) <= limit else ".." + name[-(limit - 2) :]
 
 
+def _center_in(img: np.ndarray, width: int, height: int) -> np.ndarray:
+    """Place ``img`` centered on a black ``height``x``width`` canvas (cropping if
+    larger). Used for the reference tile, which may be smaller than the row when a
+    context padding grows the observation tiles."""
+    out = np.zeros((height, width, 3), np.uint8)
+    h, w = min(img.shape[0], height), min(img.shape[1], width)
+    y0, x0 = (height - h) // 2, (width - w) // 2
+    out[y0 : y0 + h, x0 : x0 + w] = img[:h, :w]
+    return out
+
+
 def assemble_montage(
     out_path,
     rows: list[MontageRow],
@@ -135,5 +146,65 @@ def assemble_montage(
         scale=0.45,
     )
     montage = np.vstack([title_bar, legend_bar, cols_bar, body])
+    cv2.imwrite(str(out_path), montage)
+    return montage.shape[1], montage.shape[0]
+
+
+# One point-strips row: (label_lines, reference_tile_or_None, strip_or_None).
+PointRow = tuple[list[str], "np.ndarray | None", "np.ndarray | None"]
+
+
+def assemble_point_strips(
+    out_path,
+    rows: list[PointRow],
+    *,
+    title: str,
+    legend: str | list[str],
+    tile: int,
+) -> tuple[int, int]:
+    """Stack single-reconstruction point rows into the montage, write it to
+    ``out_path``, and return its ``(width, height)`` in pixels.
+
+    Each row is laid out as ``labels | reference patch | observation strip``. The
+    reference tile is square at ``tile`` px; strips are padded to the widest strip
+    across all rows. ``legend`` may be a single string or a list of strings, one
+    stacked bar per line (so a long legend isn't clipped on narrow montages). This
+    backs ``sfm inspect --strips``; the two-column ``assemble_montage`` backs
+    ``sfm compare --strips``.
+    """
+    strip_w = max((r[2].shape[1] for r in rows if r[2] is not None), default=tile)
+    # The reference column is as wide as the widest reference tile — a stored
+    # bitmap renders RGB plus its alpha grayscale side by side, so it is wider
+    # than the square consensus tile.
+    ref_w = max((r[1].shape[1] for r in rows if r[1] is not None), default=tile)
+    div = np.full((tile, 6, 3), 110, np.uint8)
+    sep = np.full((tile, 3, 3), 70, np.uint8)
+    blank_ref = np.zeros((tile, ref_w, 3), np.uint8)
+    blank_strip = np.zeros((tile, strip_w, 3), np.uint8)
+
+    body_rows: list[np.ndarray] = []
+    for labels, ref, strip in rows:
+        label = _label_panel(tile, labels)
+        ref_slot = _center_in(ref, ref_w, tile) if ref is not None else blank_ref
+        right = _pad_to(strip, strip_w, tile) if strip is not None else blank_strip
+        row = np.hstack([label, sep, ref_slot, div, right])
+        body_rows.append(row)
+        body_rows.append(np.full((2, row.shape[1], 3), 40, np.uint8))
+    body = np.vstack(body_rows[:-1])
+    width = body.shape[1]
+
+    title_bar = _text_bar(width, [(0, title)], height=22, bg=45, scale=0.45)
+    legend_lines = [legend] if isinstance(legend, str) else list(legend)
+    legend_bars = [
+        _text_bar(width, [(0, line)], height=18, bg=55, scale=0.42)
+        for line in legend_lines
+    ]
+    cols_bar = _text_bar(
+        width,
+        [(_LABEL_W + 3, "REF"), (_LABEL_W + 3 + ref_w + 6, "OBSERVATIONS")],
+        height=22,
+        scale=0.45,
+    )
+    montage = np.vstack([title_bar, *legend_bars, cols_bar, body])
     cv2.imwrite(str(out_path), montage)
     return montage.shape[1], montage.shape[0]
