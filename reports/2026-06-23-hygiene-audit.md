@@ -61,7 +61,7 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
   `parameterization.rs` (226–323), `level.rs` (324–422), `znorm.rs` (423–910,
   the numeric kernels), `consensus.rs` (911–1099), `search.rs` (1100–1364),
   `view_stack.rs` (1520–1737). `normal_refine.rs` keeps `refine_patch_normal`,
-  `refine_patch_normal_impl`, `refine_patch_cloud`, `view_indices_from_reconstruction`
+  `refine_patch_normal_impl`, `refine_patch_cloud_normals`, `view_indices_from_reconstruction`
   (~250 lines of orchestration).
 - Effort: medium — mechanical move + `pub(super)` threading on `LevelContext`,
   `ProjectedImage`, `Objective`, `PatchWindow`.

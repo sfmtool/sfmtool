@@ -7,7 +7,7 @@
 //! the views that observe it, [`refine_patch_normal`] searches the 2-DOF
 //! normal (the only thing that affects cross-view consistency) for the plane
 //! whose rendered patches agree the most, scored by the consensus all-pairs
-//! mean ZNCC. [`refine_patch_cloud`] batches the routine over a [`PatchCloud`]
+//! mean ZNCC. [`refine_patch_cloud_normals`] batches the routine over a [`PatchCloud`]
 //! in parallel.
 
 use nalgebra::{Point3, Vector3};
@@ -2030,7 +2030,7 @@ impl PatchViewStack {
 ///
 /// Panics if `patch_views.len() != cloud.len()` (or `patch_view_keypoints` is
 /// given and not parallel to the cloud) or an index is out of range.
-pub fn refine_patch_cloud(
+pub fn refine_patch_cloud_normals(
     cloud: &mut PatchCloud,
     views: &[ProjectedImage<'_>],
     patch_views: &[Vec<u32>],
@@ -2076,7 +2076,7 @@ pub fn refine_patch_cloud(
 
 /// For each patch of `cloud` (linked to `recon` via `point_indexes`), the image
 /// indices observing its source 3D point — ready to use as the `patch_views`
-/// of [`refine_patch_cloud`] with one [`ProjectedImage`] per reconstruction image.
+/// of [`refine_patch_cloud_normals`] with one [`ProjectedImage`] per reconstruction image.
 ///
 /// # Panics
 ///

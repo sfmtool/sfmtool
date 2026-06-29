@@ -5,7 +5,7 @@
 //!
 //! Set `SFMTOOL_PROFILE=1` to accumulate per-phase wall time (atomic
 //! nanosecond counters, summed across rayon threads) during
-//! [`refine_patch_cloud`](super::refine_patch_cloud); a summary is printed to
+//! [`refine_patch_cloud_normals`](super::refine_patch_cloud_normals); a summary is printed to
 //! stderr when the batch finishes. With the variable unset the timers compile
 //! to a single branch on a cached flag, so the hot path is unaffected.
 //!
@@ -152,7 +152,7 @@ pub fn reset() {
 pub fn report(patches: usize, wall_secs: f64) {
     let total_ns = TOTAL.ns.load(Ordering::Relaxed).max(1);
     eprintln!(
-        "[sfmtool-profile] refine_patch_cloud: {patches} patches, wall {wall_secs:.3}s \
+        "[sfmtool-profile] refine_patch_cloud_normals: {patches} patches, wall {wall_secs:.3}s \
          (phase times are thread-summed CPU time; % of refine_total)"
     );
     for p in PHASES {

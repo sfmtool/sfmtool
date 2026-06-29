@@ -19,7 +19,7 @@ Tooling added on this branch (all committed):
 
 - `SFMTOOL_PROFILE=1` phase timers in the refinement hot path
   (`patch_normal_refine/prof.rs`) — atomic per-phase counters, a stderr
-  summary per `refine_patch_cloud` batch, a single cached-flag branch when
+  summary per `refine_patch_cloud_normals` batch, a single cached-flag branch when
   off. Profiling skews wall time by ~2% (checked seoul base with/without).
 - `cargo bench -p sfmtool-core --bench patch_render` — criterion bench of the
   per-candidate render primitives at R = 8..32.
@@ -67,7 +67,7 @@ hold up).
 
 ## 2. Where the time goes
 
-Phase shares of thread-summed CPU during `refine_patch_cloud` (base config:
+Phase shares of thread-summed CPU during `refine_patch_cloud_normals` (base config:
 R=16, anisotropic, robust 3, steps 7, levels 3; 300-point subsets; after the
 §1 fixes). `ms/pt` is wall time per scored patch on 4 cores, net of the
 per-call overhead.

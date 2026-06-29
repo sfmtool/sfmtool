@@ -895,7 +895,7 @@ fn confidence_flags_narrow_baseline_degeneracy() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn refine_patch_cloud_refines_in_place() {
+fn refine_patch_cloud_normals_refines_in_place() {
     let scene = Scene::new(&[
         [0.8, 0.0, 0.0],
         [-0.8, 0.0, 0.0],
@@ -918,7 +918,7 @@ fn refine_patch_cloud_refines_in_place() {
     };
     let patch_views: Vec<Vec<u32>> = vec![vec![0, 1, 2, 3]; 3];
 
-    let results = refine_patch_cloud(
+    let results = refine_patch_cloud_normals(
         &mut cloud,
         &views,
         &patch_views,
