@@ -60,7 +60,7 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
   selects a handful of points.
 - **Scope:**
   - Add `compute_confidence: bool` (default true) to
-    `refine_patch_cloud` / `PatchCloud.refine_normals`. Skip the stencil
+    `refine_patch_cloud_normals` / `PatchCloud.refine_normals`. Skip the stencil
     when the caller doesn't need it (parameter sweeps, quick passes). The
     report projects ~1.1× and there are no design questions.
   - Subset-aware pyramid build in the PyO3 binding: build pyramids only
@@ -137,7 +137,7 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
 - **Scope:** Split into sibling files under `patch/normal_refine/`:
   `params.rs`, `parameterization.rs`, `level.rs`, `znorm.rs`,
   `consensus.rs`, `search.rs`, `view_stack.rs`. `normal_refine.rs` keeps
-  `refine_patch_normal[_impl]`, `refine_patch_cloud`,
+  `refine_patch_normal[_impl]`, `refine_patch_cloud_normals`,
   `view_indices_from_reconstruction` (~250 lines of orchestration).
   Mostly `pub(super)` threading on `LevelContext`, `ProjectedImage`,
   `Objective`, `PatchWindow`.

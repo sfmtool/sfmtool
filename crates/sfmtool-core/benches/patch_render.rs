@@ -10,7 +10,7 @@
 //! library call with a hand-inlined *sequential* re-implementation to expose
 //! how much of the cost is rayon parallel scaffolding (the library versions
 //! parallelize over the R rows of a tiny grid, nested inside
-//! `refine_patch_cloud`'s per-patch parallelism in real use).
+//! `refine_patch_cloud_normals`'s per-patch parallelism in real use).
 //!
 //! Run with:
 //!   cargo bench -p sfmtool-core --bench patch_render

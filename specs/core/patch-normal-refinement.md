@@ -5,7 +5,7 @@
 
 > _Status (2026-06-12): v1 implemented — `sfmtool-core/src/patch/normal_refine.rs`
 > (`ProjectedImage`, `Objective`, `PatchWindow`, `NormalRefineParams`,
-> `NormalRefineResult`, `refine_patch_normal`, `refine_patch_cloud`,
+> `NormalRefineResult`, `refine_patch_normal`, `refine_patch_cloud_normals`,
 > `view_indices_from_reconstruction`) and the PyO3 binding
 > `PatchCloud.refine_normals`. Deferred from v1: the analytic Gauss-Newton polish
 > and its centered-Hessian confidence (v1 uses a finite-difference grid-curvature
@@ -343,7 +343,7 @@ pub fn refine_patch_normal(
 
 /// Batch over a PatchCloud (parallel across patches). Replaces each patch with
 /// the refined one (same `center`/`half_extent`/in-plane convention, new normal).
-pub fn refine_patch_cloud(cloud: &mut PatchCloud, views: ..., params: ...) -> Vec<NormalRefineResult>;
+pub fn refine_patch_cloud_normals(cloud: &mut PatchCloud, views: ..., params: ...) -> Vec<NormalRefineResult>;
 ```
 
 `refine_patch_normal` composes `WarpMap::from_patch` + `remap` over the
@@ -478,5 +478,5 @@ good-view set are fast-follows.
 - **Confidence threshold** below which we keep the init normal — and how to
   normalize the smaller eigenvalue of the centered Hessian `H̃` for scale (it
   grows with texture contrast, `R`, and window mass).
-- **Batch placement:** Rust `refine_patch_cloud` (parallel, pyramids per view) vs
+- **Batch placement:** Rust `refine_patch_cloud_normals` (parallel, pyramids per view) vs
   leaving orchestration to callers.

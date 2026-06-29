@@ -17,8 +17,8 @@ use sfmtool_core::patch::keypoint_localize::{
 };
 use sfmtool_core::patch::keypoint_subpixel::{ConsensusRefresh, KeypointSubpixelParams};
 use sfmtool_core::patch::normal_refine::{
-    refine_patch_cloud, view_indices_from_reconstruction, CacheMode, NormalRefineParams, Objective,
-    PatchWindow, ProjectedImage, Sampler,
+    refine_patch_cloud_normals, view_indices_from_reconstruction, CacheMode, NormalRefineParams,
+    Objective, PatchWindow, ProjectedImage, Sampler,
 };
 use sfmtool_core::patch::view_selection::{select_patch_cloud_views, ViewSelectParams};
 
@@ -647,7 +647,7 @@ impl PyPatchCloud {
             });
 
         let results = py.detach(|| {
-            refine_patch_cloud(
+            refine_patch_cloud_normals(
                 &mut self.inner,
                 &views,
                 &patch_views,
