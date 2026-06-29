@@ -34,7 +34,7 @@ from ._strip_montage import MontageRow, assemble_montage
 # Render/selection constants. These are not user-facing knobs; they are tuned
 # defaults shared by every invocation.
 _PATCH = 32  # surfel patch render resolution (px)
-_EXTENT_FACTOR = 5.0  # PatchCloud extent as a multiple of feature size
+_EXTENT_FACTOR = 2.5  # PatchCloud half-extent as a multiple of feature size
 _DISP = 72  # tile size shown when no wider --strips-context is requested
 _MIN_TRACK = 3  # minimum observing views for a point to be renderable
 _MIN_VOTES = 2  # minimum coordinate-match votes to accept a correspondence

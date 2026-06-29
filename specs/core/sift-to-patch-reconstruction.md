@@ -153,7 +153,7 @@ keypoint-localization spec).
 | parameter | default | forwarded to / meaning |
 |---|---|---|
 | `min_relative_zncc` | ~0.7 | view selection **and** keypoint refiner: a view must agree at least this fraction as well as the reference (the track's self-agreement on admission; the views' median LOO ZNCC during refinement) |
-| `patch_size` | `10.0` | frame init: surfel size — full patch edge length, halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`) |
+| `patch_size` | `5.0` | frame init: surfel size — full patch edge length, halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`) |
 | `max_shift_px` | ~3 | keypoint refiner: drop a view whose keypoint sits more than this from the point's projection (source-image px) |
 | `min_views` | 2 | pipeline cull: drop a point left with fewer kept views |
 

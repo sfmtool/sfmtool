@@ -50,6 +50,8 @@ def render_track_strip(
     tile: int,
     inner: tuple[int, int] | None = None,
     sep: int = 2,
+    reproj_errs: list[float] | None = None,
+    per_view_scores: bool = False,
 ) -> tuple[np.ndarray, float, int]:
     """Render a point's observations as a horizontal BGR patch strip, returning
     ``(strip, mean_pairwise_ncc, n_views)``. Tiles are labeled by image index;
@@ -59,6 +61,11 @@ def render_track_strip(
     than the validated extent; NCC is scored on the central ``size`` sub-patch
     and a 1px box is drawn around it, so the surrounding scene context is visible
     while the score still reflects the point's own surfel.
+
+    With ``per_view_scores`` each tile is additionally labeled (bottom-left) with
+    that observation's NCC against the other views (the mean of its pairwise
+    scores), and, when ``reproj_errs`` is given (parallel to ``obs_imgs``), its
+    reprojection error in pixels.
     """
     obs = obs_imgs
     patches = [patch_of(i) for i in obs]
@@ -67,15 +74,23 @@ def render_track_strip(
         cores = [p[off : off + sz, off : off + sz] for p in patches]
     else:
         cores = patches
-    sims = [
-        _wncc_color(cores[a], cores[b], w)
-        for a in range(len(cores))
-        for b in range(a + 1, len(cores))
-    ]
-    mean_ncc = float(np.mean(sims)) if sims else float("nan")
+    n = len(cores)
+    # Symmetric pairwise NCC matrix; the mean of all pairs is the strip score, and
+    # each view's mean over the others is its per-view (leave-one-out) score.
+    pair = np.full((n, n), np.nan)
+    for a in range(n):
+        for b in range(a + 1, n):
+            pair[a, b] = pair[b, a] = _wncc_color(cores[a], cores[b], w)
+    sims = pair[np.triu_indices(n, k=1)]
+    mean_ncc = float(np.nanmean(sims)) if sims.size else float("nan")
+    per_view = (
+        [float(np.nanmean(pair[k])) if n > 1 else float("nan") for k in range(n)]
+        if per_view_scores
+        else None
+    )
 
     tiles = []
-    for img_idx, pf in zip(obs, patches):
+    for k, (img_idx, pf) in enumerate(zip(obs, patches)):
         p8 = np.clip(pf, 0, 255).astype(np.uint8)
         src_sz = p8.shape[0]
         p8 = cv2.resize(p8, (tile, tile), interpolation=cv2.INTER_NEAREST)
@@ -95,6 +110,28 @@ def render_track_strip(
             1,
             cv2.LINE_AA,
         )
+        if per_view is not None:
+            cv2.putText(
+                bgr,
+                f"n{per_view[k]:+.2f}",
+                (2, tile - 16),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.34,
+                (0, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+            if reproj_errs is not None:
+                cv2.putText(
+                    bgr,
+                    f"e{reproj_errs[k]:.1f}",
+                    (2, tile - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.34,
+                    (0, 255, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
         tiles.append(bgr)
 
     sep_col = np.full((tile, sep, 3), 40, np.uint8)

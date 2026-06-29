@@ -631,12 +631,13 @@ impl PySfmrReconstruction {
     ///     extent: Half-size policy — ``"feature_size"`` (default; ``extent_value``
     ///         × each observation's keypoint scale), ``"fixed"``,
     ///         ``"relative_spacing"``, or ``"pixel_radius"``.
-    ///     extent_value: The scalar for the chosen extent policy (a half-extent).
+    ///     extent_value: The scalar for the chosen extent policy (a half-extent;
+    ///         default 2.5, so the full patch edge is ``5 ×`` the feature size).
     ///     pixel_reduce: View reduce for ``"pixel_radius"``.
     ///     feature_reduce: View reduce for ``"feature_size"``.
     #[pyo3(signature = (
         *, normal="mean_viewing", k_neighbors=12, extent="feature_size",
-        extent_value=5.0, pixel_reduce="min", feature_reduce="median"
+        extent_value=2.5, pixel_reduce="min", feature_reduce="median"
     ))]
     #[allow(clippy::too_many_arguments)]
     fn to_embedded_patches(

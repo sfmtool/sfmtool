@@ -57,7 +57,7 @@ class ToEmbeddedPatchesTransform:
         k_neighbors: int = 12,
         extent: str = "feature_size",
         # Full patch size (whole edge length); halved to the library half-extent.
-        extent_value: float = 10.0,
+        extent_value: float = 5.0,
         feature_reduce: str = "median",
         pixel_reduce: str = "min",
     ):

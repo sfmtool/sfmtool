@@ -240,8 +240,9 @@ impl PyPatchCloud {
     ///         units = ``extent_value``), ``"relative_spacing"`` (``extent_value`` ×
     ///         median point spacing), or ``"pixel_radius"`` (back-project
     ///         ``extent_value`` px in each observing view, reduced by ``pixel_reduce``).
-    ///     extent_value: The scalar for the chosen extent policy (default 5.0; for
-    ///         ``"feature_size"`` the keypoint-scale multiplier).
+    ///     extent_value: The scalar for the chosen extent policy (default 2.5; for
+    ///         ``"feature_size"`` the keypoint-scale half-extent multiplier, so the
+    ///         full patch edge is ``5 ×`` the projected feature size).
     ///     pixel_reduce: For ``"pixel_radius"``, the view reduce — ``"min"``
     ///         (default), ``"max"``, ``"median"``, or ``"mean"``.
     ///     feature_reduce: For ``"feature_size"``, the view reduce (default
@@ -254,7 +255,7 @@ impl PyPatchCloud {
     #[staticmethod]
     #[pyo3(signature = (
         recon, normal="stored", k_neighbors=12,
-        extent="feature_size", extent_value=5.0,
+        extent="feature_size", extent_value=2.5,
         pixel_reduce="min", feature_reduce="median",
         exclude_points_at_infinity=false
     ))]

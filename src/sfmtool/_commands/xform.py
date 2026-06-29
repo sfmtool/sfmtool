@@ -67,7 +67,7 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
         "Convert sift_files → embedded_patches without photometric adaptation: "
         "mean-view uv frames, keypoints + image hashes copied from the .sift files. "
         "Optional comma-separated key=value params (e.g. "
-        "'normal=mean_viewing,extent=feature_size,extent_value=10'). Reads the "
+        "'normal=mean_viewing,extent=feature_size,extent_value=5'). Reads the "
         ".sift files, which must still be present where the reconstruction was "
         "created. After this op the reconstruction is embedded_patches."
     ),
