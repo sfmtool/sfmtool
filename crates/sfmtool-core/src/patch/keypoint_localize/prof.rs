@@ -97,6 +97,14 @@ pub static N_ROUNDS: AtomicU64 = AtomicU64::new(0);
 pub static N_RENDER: AtomicU64 = AtomicU64::new(0);
 /// Sub-pixel shift searches (one per live view per round).
 pub static N_SEARCH: AtomicU64 = AtomicU64::new(0);
+/// Cells scored by [`SearchStrategy::PlusDescent`](super::SearchStrategy::PlusDescent)
+/// (one per visited-cache **miss** inside `search_shift_plus_descent`; visited-
+/// cache **hits** do not count, since they re-use a prior cell's score). Always
+/// `0` for [`SearchStrategy::Exhaustive`](super::SearchStrategy::Exhaustive) —
+/// the SAXPY accumulator scores all `(2·margin+1)²` cells in one streaming
+/// pass and has no per-cell event. Average cells per search call is
+/// `N_CELLS / N_SEARCH`; the spec's per-call cells claim is derived here.
+pub static N_CELLS: AtomicU64 = AtomicU64::new(0);
 
 /// Count one event on `c` when profiling is on.
 #[inline]
@@ -122,7 +130,7 @@ pub fn reset() {
     for p in PHASES {
         p.reset();
     }
-    for c in [&N_ROUNDS, &N_RENDER, &N_SEARCH] {
+    for c in [&N_ROUNDS, &N_RENDER, &N_SEARCH, &N_CELLS] {
         c.store(0, Ordering::Relaxed);
     }
 }
@@ -160,10 +168,18 @@ pub fn report(patches: usize, wall_secs: f64) {
         (total_ns.saturating_sub(leaves)) as f64 * 1e-9,
         100.0 * total_ns.saturating_sub(leaves) as f64 / total_ns as f64,
     );
+    let n_search = N_SEARCH.load(Ordering::Relaxed);
+    let n_cells = N_CELLS.load(Ordering::Relaxed);
     eprintln!(
-        "[sfmtool-profile]   rounds {}  renders {}  searches {}",
+        "[sfmtool-profile]   rounds {}  renders {}  searches {}  cells {} ({:.2}/search)",
         N_ROUNDS.load(Ordering::Relaxed),
         N_RENDER.load(Ordering::Relaxed),
-        N_SEARCH.load(Ordering::Relaxed),
+        n_search,
+        n_cells,
+        if n_search > 0 {
+            n_cells as f64 / n_search as f64
+        } else {
+            0.0
+        },
     );
 }

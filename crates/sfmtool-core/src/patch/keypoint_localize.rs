@@ -47,6 +47,40 @@ use rayon::prelude::*;
 /// `remap_aniso` sample cap along the major axis (mirrors `normal_refine`).
 const MAX_ANISOTROPY: u32 = 16;
 
+/// How the per-(view, round) shift grid is traversed inside `search_shift`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchStrategy {
+    /// "+"-descent on the integer shift grid: starts at `(dy, dx) = (0, 0)`,
+    /// evaluates the 4 axis neighbors per step, moves to the best improver,
+    /// and stops when no neighbor beats the current cell. Each cell is scored
+    /// at most once via a per-cell ZNCC kernel
+    /// ([`score_cell_one_channel`] — AVX2-gather when available, scalar
+    /// otherwise); the visited cache stores `(n, s1, s2, ginv)` per cell. The
+    /// final-cell separable parabolic sub-pixel fit reuses the 4
+    /// cardinal-neighbor cells already in the cache (each was evaluated to
+    /// discover the STOP condition).
+    ///
+    /// **The default.** Late-round congealing typically leaves a view's
+    /// argmax at `(0, 0)`, so the descent stops after 5 cell scores; on the
+    /// dino dataset this drives per-`search_shift` cost from ~145 µs
+    /// ([`Exhaustive`](Self::Exhaustive)) to ~32 µs and total localize wall
+    /// down ~1.9× at comparable accuracy (median per-observation keypoint
+    /// shift vs `Exhaustive` is ~0.05 px, 91 % of observations within 1 px on
+    /// dino). The accuracy tail is the local-optima failure mode of any
+    /// descent on a multi-modal ZNCC landscape; pick
+    /// [`Exhaustive`](Self::Exhaustive) when the tail matters or for
+    /// bit-equivalent comparisons.
+    #[default]
+    PlusDescent,
+    /// Score every cell of the `(2·margin+1) × (2·margin+1)` shift grid via
+    /// the hand-rolled SIMD SAXPY accumulator (`compute_channel_grids`), then
+    /// argmax + separable parabolic. The original whole-grid path; retained
+    /// as the global-argmax fallback (no local-optima risk) and as the
+    /// per-cell reference both equivalence tests and the per-cell ZNCC kernel
+    /// (`score_cell_one_channel`) check against.
+    Exhaustive,
+}
+
 /// Tunables for [`localize_patch_keypoints`].
 ///
 /// The render/window knobs mirror
@@ -96,6 +130,9 @@ pub struct KeypointLocalizeParams {
     /// `m > 1` resolves sub-pixel offsets directly on a finer grid. See
     /// `specs/core/keypoint-localization-search-cache.md`.
     pub search_resolution_multiplier: f32,
+    /// Per-(view, round) shift-grid traversal — see [`SearchStrategy`].
+    /// Defaults to [`SearchStrategy::PlusDescent`].
+    pub search_strategy: SearchStrategy,
 }
 
 impl Default for KeypointLocalizeParams {
@@ -112,6 +149,7 @@ impl Default for KeypointLocalizeParams {
             robust_iters: 3,
             convergence_px: 0.05,
             search_resolution_multiplier: 1.0,
+            search_strategy: SearchStrategy::PlusDescent,
         }
     }
 }
@@ -457,6 +495,39 @@ struct SearchScratch {
     ginv: Vec<f32>,
     /// Combined ZNCC grid over the `±margin` window (`(2·margin+1)²`).
     grid: Vec<f64>,
+    /// [`SearchStrategy::PlusDescent`]-only: flat per-(kept channel, support
+    /// pixel) kernel buffer, `[c · n + k]`, built once per
+    /// `search_shift_plus_descent` call and reused across every cell scored.
+    /// The exhaustive path's `kern` rebuilds per channel inside its loop; the
+    /// descent visits ~10 cells per call, so amortising the kern build over all
+    /// of them takes the per-cell rebuild off the hot path. Reused here so the
+    /// descent allocates nothing per cell in the steady state.
+    pd_kerns: Vec<f32>,
+    /// [`SearchStrategy::PlusDescent`]-only: per-kept-channel `tsum_c =
+    /// Σ kern[c · n + k]`, parallel to the channel dimension of [`pd_kerns`].
+    pd_tsums: Vec<f64>,
+    /// [`SearchStrategy::PlusDescent`]-only: per-kept-channel `(n, s1, s2)`
+    /// scratch, overwritten by every cell the descent scores. The combine
+    /// pass reads it back to fold into the cell's ZNCC. Sized once per
+    /// `search_shift_plus_descent` call (`resize(channels, ..)`); the
+    /// per-cell scoring writes by index, so no Vec bookkeeping happens
+    /// inside the timed `SEARCH_ACC` block.
+    pd_per_channel: Vec<(f32, f32, f32)>,
+    /// [`SearchStrategy::PlusDescent`]-only: kept-channel index → tile-channel
+    /// index lookup, parallel to the channel dimension of [`pd_kerns`].
+    /// Walked once at the top of every `search_shift_plus_descent` call so
+    /// per-cell scoring can index this rather than re-walking `keep_mask`.
+    pd_kept_channels: Vec<usize>,
+    /// [`SearchStrategy::PlusDescent`]-only: dense visited cache sized
+    /// `(2·margin+1)²`, indexed `((dy + margin) · span + (dx + margin))`.
+    /// Sentinel-encoded to avoid carrying a separate "visited" bitmap:
+    /// `f64::NAN` = unvisited (skip the score, evaluate it),
+    /// `f64::NEG_INFINITY` = visited and unscorable (oob / oof / disk —
+    /// don't re-evaluate, don't admit as a neighbor),
+    /// any other finite value = visited and that cell's combined ZNCC.
+    /// Reset to all-NaN at the start of every `search_shift_plus_descent`
+    /// call. Replaces a per-call `HashMap<(i64,i64), Option<f64>>`.
+    pd_visited: Vec<f64>,
 }
 
 /// The result of a [`search_shift`] — the residual shift of one view relative to
@@ -648,6 +719,272 @@ fn search_shift(
             ix: px,
             iy: py,
             peak,
+        })
+    })
+}
+
+/// [`SearchStrategy::PlusDescent`] counterpart to [`search_shift`]: starts at
+/// `(dy, dx) = (0, 0)` (the view's current integer base offset), evaluates the
+/// 4 axis neighbors per step, moves to the best improver, and stops when no
+/// neighbor beats the current cell. Each cell is scored at most once via
+/// [`score_cell_one_channel`]; the visited cache stores the combined ZNCC per
+/// cell. The final separable parabolic sub-pixel fit reuses the 4 cardinal
+/// neighbors already in the cache (each was evaluated to discover the STOP
+/// condition).
+///
+/// Same `ShiftResult` contract as `search_shift` — the integer argmax `(ix, iy)`
+/// drives the read accumulator, `(dx, dy)` carry the sub-pixel residual, and
+/// `peak` is the combined ZNCC at the integer cell. Bounded to `|dy|, |dx| ≤
+/// margin`; neighbors past the bound or with any out-of-frame support pixel
+/// score `None` (skipped, never chosen).
+///
+/// Cells visited per call: `5 + 3 · walk_steps` (1 seed + 4 neighbors per step,
+/// with 1 cache hit per move). On dino the average is ~6 cells per call — vs
+/// the 169 cells of the default ±6 grid `search_shift` processes — at ~32 µs
+/// per call (the per-cell `vgatherdps` kernel) vs ~145 µs (the SAXPY). The
+/// crossover with `search_shift`'s whole-grid SIMD is around 50–80 cells
+/// visited, so the descent loses on pathological long walks; `Exhaustive`
+/// remains the right pick for the global-argmax fallback. See
+/// `specs/core/keypoint-localization-search-cache.md` for the strategy
+/// trade-off discussion.
+///
+/// **Profile attribution** (`SFMTOOL_PROFILE=1`): the descent reports per-cell
+/// `SEARCH_ACC` (invalidity-count + per-channel scoring), per-cell
+/// `SEARCH_COMBINE` (mean / ZNCC fold + cross-channel sum), and per-call
+/// `SEARCH_ARGMAX` (the final parabolic). The `N_CELLS` event counter bumps
+/// once per cell scored (visited-cache hits and oob/oof/disk skips do not
+/// count), so `N_CELLS / N_SEARCH` is the average cells-per-call directly out
+/// of the profile output. `N_CELLS` is `0` under `Exhaustive` — its whole-
+/// grid SAXPY has no per-cell event.
+#[allow(clippy::too_many_arguments)]
+fn search_shift_plus_descent(
+    tile: &ContextTile,
+    sc: &mut SearchScratch,
+    support: &Support,
+    keep_mask: &[bool],
+    channels: usize,
+    resolution: usize,
+    margin: i64,
+    base_y: usize,
+    base_x: usize,
+) -> Option<ShiftResult> {
+    let n = support.pixels.len();
+    let istride = tile.istride;
+    debug_assert_eq!(keep_mask.iter().filter(|&&k| k).count(), channels);
+
+    // Per-support `w` as f32 — mirrors `search_shift`'s one-time conversion.
+    sc.w_f32.clear();
+    sc.w_f32.extend(support.weights.iter().map(|&w| w as f32));
+
+    // Build the flat per-(kept channel, support pixel) kern + per-channel
+    // tsum into the reused `SearchScratch` slots. Layout: `pd_kerns[c · n + k]
+    // = √w[k] · tmpl[c · n + k]` for `c in 0..channels` (kept-channel index).
+    // The SAXPY path rebuilds these per channel inside its loop; the descent
+    // visits ~10 cells per call, so amortising the rebuild across all of them
+    // takes the kern build off the per-cell hot path. Reusing the
+    // `SearchScratch` buffers means no allocation per `search_shift` call
+    // after the first.
+    sc.pd_kerns.clear();
+    sc.pd_kerns.resize(channels * n, 0.0);
+    sc.pd_tsums.clear();
+    sc.pd_tsums.resize(channels, 0.0);
+    // Precompute the kept-channel-index → tile-channel-index lookup once per
+    // call; the per-cell scoring loop indexes into this rather than walking
+    // `keep_mask` linearly each time. Drops the per-cell scoring's keep_mask
+    // dispatch from O(channels) (one walk per kept channel) to O(1).
+    sc.pd_kept_channels.clear();
+    sc.pd_kept_channels.extend(
+        keep_mask
+            .iter()
+            .enumerate()
+            .filter_map(|(c, &k)| k.then_some(c)),
+    );
+    debug_assert_eq!(sc.pd_kept_channels.len(), channels);
+    for kc_out in 0..channels {
+        let tmpl_c = &sc.tmpl[kc_out * n..][..n];
+        let kern_c = &mut sc.pd_kerns[kc_out * n..][..n];
+        let mut tsum = 0.0f64;
+        for ((&sw, &t), kk) in support
+            .sqrt_weights
+            .iter()
+            .zip(tmpl_c)
+            .zip(kern_c.iter_mut())
+        {
+            let v = sw * t;
+            *kk = v;
+            tsum += v as f64;
+        }
+        sc.pd_tsums[kc_out] = tsum;
+    }
+
+    // Dense visited cache, sentinel-encoded in `pd_visited[idx(dy, dx)]`:
+    // `f64::NAN` = unvisited, `f64::NEG_INFINITY` = visited+unscorable,
+    // any other finite value = visited+scored. Replaces the previous
+    // `HashMap<(i64, i64), Option<f64>>` — the dense Vec is sized
+    // `(2·margin+1)²` (169 for the production default), fits in one cache
+    // line of pointers, and the index→slot lookup is a couple of arithmetic
+    // ops vs a hash + bucket walk.
+    let span_axis = (2 * margin + 1) as usize;
+    let gsz = span_axis * span_axis;
+    sc.pd_visited.clear();
+    sc.pd_visited.resize(gsz, f64::NAN);
+    let idx_of = |dy: i64, dx: i64| -> usize {
+        ((dy + margin) as usize) * span_axis + ((dx + margin) as usize)
+    };
+
+    // Pre-size the per-cell `(n, s1, s2)` scratch to exactly `channels` slots
+    // so the per-cell SEARCH_ACC block writes by index — no Vec bookkeeping
+    // (clear/push) inside the timed kernel block. Initial value is overwritten
+    // by every scoreable cell before COMBINE reads it.
+    sc.pd_per_channel.clear();
+    sc.pd_per_channel.resize(channels, (0.0, 0.0, 0.0));
+
+    let inv_total_weight = 1.0 / support.total_weight;
+    let chf = channels as f64;
+
+    // Score one (dy, dx) cell across all kept channels and combine into the
+    // mean-over-channels ZNCC. Returns `None` for out-of-bounds, out-of-disk,
+    // or any-invalid-support-pixel cells; cached either way so neighbors
+    // revisited by the descent walk hit the slot. Profile attribution:
+    // `SEARCH_ACC` wraps the data-touching kernel (invalidity-count +
+    // per-channel scoring), `SEARCH_COMBINE` wraps the per-channel ZNCC
+    // algebra + cross-channel sum, and `N_CELLS` is bumped once per cell that
+    // gets actually scored (visited-cache hits and oob/oof/disk skips do not
+    // count).
+    macro_rules! score_cell {
+        ($dy:expr, $dx:expr) => {{
+            let dy_: i64 = $dy;
+            let dx_: i64 = $dx;
+            if dy_.abs() > margin || dx_.abs() > margin {
+                None
+            } else {
+                let slot = sc.pd_visited[idx_of(dy_, dx_)];
+                if slot.is_nan() {
+                    // First visit: compute the score (or detect unscorable).
+                    let win_y = (base_y as i64 + dy_) as usize;
+                    let win_x = (base_x as i64 + dx_) as usize;
+                    let ginv = prof::SEARCH_ACC.time(|| {
+                        let ginv = count_invalid_at_cell(
+                            &tile.invalid_plane,
+                            support,
+                            resolution,
+                            istride,
+                            win_y,
+                            win_x,
+                        );
+                        if ginv <= 0.5 {
+                            for k in 0..channels {
+                                let tile_c = sc.pd_kept_channels[k];
+                                let kern_k = &sc.pd_kerns[k * n..][..n];
+                                sc.pd_per_channel[k] = score_cell_one_channel(
+                                    &tile.planes[tile_c],
+                                    support,
+                                    kern_k,
+                                    &sc.w_f32,
+                                    resolution,
+                                    istride,
+                                    win_y,
+                                    win_x,
+                                );
+                            }
+                        }
+                        ginv
+                    });
+                    let result = if ginv > 0.5 {
+                        sc.pd_visited[idx_of(dy_, dx_)] = f64::NEG_INFINITY;
+                        None
+                    } else {
+                        let zncc = prof::SEARCH_COMBINE.time(|| {
+                            let mut combined = 0.0_f64;
+                            for (k, &(n_acc, s1_acc, s2_acc)) in
+                                sc.pd_per_channel.iter().enumerate()
+                            {
+                                let s1 = s1_acc as f64;
+                                let s2 = s2_acc as f64;
+                                let nval = n_acc as f64;
+                                let mean = s1 * inv_total_weight;
+                                let norm_sq = s2 - s1 * mean;
+                                if norm_sq >= FLAT_NORM_SQ_EPS {
+                                    combined += (nval - mean * sc.pd_tsums[k]) / norm_sq.sqrt();
+                                }
+                            }
+                            combined / chf
+                        });
+                        prof::count(&prof::N_CELLS, 1);
+                        sc.pd_visited[idx_of(dy_, dx_)] = zncc;
+                        Some(zncc)
+                    };
+                    result
+                } else if slot == f64::NEG_INFINITY {
+                    None
+                } else {
+                    Some(slot)
+                }
+            }
+        }};
+    }
+
+    // Seed at the cache's centre (current integer base offset).
+    let mut current_phi = score_cell!(0_i64, 0_i64)?;
+    let mut current = (0_i64, 0_i64);
+
+    // Steepest-descent walk: pick the best improving neighbor, stop when none.
+    // The per-neighbor best-of-4 pick is a handful of `f64` comparisons —
+    // small enough relative to the score_cell calls driving it that it is not
+    // separately timed.
+    loop {
+        let mut best_move: Option<((i64, i64), f64)> = None;
+        for (dy_step, dx_step) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let next = (current.0 + dy_step, current.1 + dx_step);
+            if let Some(phi) = score_cell!(next.0, next.1) {
+                if phi > current_phi && best_move.is_none_or(|(_, bs)| phi > bs) {
+                    best_move = Some((next, phi));
+                }
+            }
+        }
+        match best_move {
+            None => break,
+            Some((next, phi)) => {
+                current = next;
+                current_phi = phi;
+            }
+        }
+    }
+
+    // SEARCH_ARGMAX: separable parabolic sub-pixel refinement from the 4
+    // cardinal-neighbor cells — all already in the visited cache (each was
+    // evaluated by the STOP-check loop above). A neighbor that scored `None`
+    // (out-of-grid / out-of-disk / out-of-frame) drops its axis to the
+    // integer offset. Matches `search_shift`'s SEARCH_ARGMAX wrap, which
+    // similarly times the argmax + parabolic.
+    prof::SEARCH_ARGMAX.time(|| {
+        let py = current.0;
+        let px = current.1;
+        let nb = |dy: i64, dx: i64| -> Option<f64> {
+            if dy.abs() > margin || dx.abs() > margin {
+                return None;
+            }
+            let v = sc.pd_visited[idx_of(dy, dx)];
+            if v.is_finite() {
+                Some(v)
+            } else {
+                None
+            }
+        };
+        let sy = match (nb(py - 1, px), nb(py + 1, px)) {
+            (Some(l), Some(r)) => parabolic(current_phi, l, r),
+            _ => 0.0,
+        };
+        let sx = match (nb(py, px - 1), nb(py, px + 1)) {
+            (Some(l), Some(r)) => parabolic(current_phi, l, r),
+            _ => 0.0,
+        };
+        Some(ShiftResult {
+            dx: px as f64 + sx,
+            dy: py as f64 + sy,
+            ix: px,
+            iy: py,
+            peak: current_phi,
         })
     })
 }
@@ -900,6 +1237,194 @@ fn accumulate_count(
             }
         }
     }
+}
+
+/// Per-cell counterpart to [`compute_channel_grids`]: score one (and only one)
+/// shift `(win_y, win_x)` in the cache plane, returning the three correlation
+/// sums needed to assemble the windowed ZNCC at that single cell:
+///
+///   `n  = Σ_k kern[k] · I[(win_y + r_k, win_x + c_k)]`
+///   `s1 = Σ_k w[k]    · I[(win_y + r_k, win_x + c_k)]`
+///   `s2 = Σ_k w[k]    · I[(win_y + r_k, win_x + c_k)]²`
+///
+/// Algebraically a single shift's slice of the grid form, but evaluated by a
+/// direct loop over support pixels (no SAXPY across the grid row) — the
+/// fundamental primitive for the "+"-descent search strategy, where each call
+/// scores one cell and the descent visits ≲ 10 cells per search instead of
+/// 169 = `(2·6+1)²`. Mirrors [`compute_channel_grids_scalar`]'s algebra
+/// pixel-for-pixel; the AVX2 form below uses `vgatherdps`.
+///
+/// Runtime-dispatched to the AVX2 kernel where available; otherwise scalar.
+#[allow(clippy::too_many_arguments)]
+fn score_cell_one_channel(
+    plane: &[f32],
+    support: &Support,
+    kern: &[f32],
+    w: &[f32],
+    resolution: usize,
+    istride: usize,
+    win_y: usize,
+    win_x: usize,
+) -> (f32, f32, f32) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            // SAFETY: the runtime feature check is the `#[target_feature]`
+            // pre-condition; the per-pixel cache index is the same expression
+            // `compute_channel_grids_avx2` validates, so its in-bounds-load
+            // contract carries over for the gather lanes here.
+            unsafe {
+                return score_cell_one_channel_avx2(
+                    plane, support, kern, w, resolution, istride, win_y, win_x,
+                );
+            }
+        }
+    }
+    score_cell_one_channel_scalar(plane, support, kern, w, resolution, istride, win_y, win_x)
+}
+
+/// Scalar reference for [`score_cell_one_channel`]: the algebra the AVX2 kernel
+/// must match, and the non-x86 / non-AVX2 fallback.
+#[allow(clippy::too_many_arguments)]
+fn score_cell_one_channel_scalar(
+    plane: &[f32],
+    support: &Support,
+    kern: &[f32],
+    w: &[f32],
+    resolution: usize,
+    istride: usize,
+    win_y: usize,
+    win_x: usize,
+) -> (f32, f32, f32) {
+    let mut n = 0.0_f32;
+    let mut s1 = 0.0_f32;
+    let mut s2 = 0.0_f32;
+    for (k, &p) in support.pixels.iter().enumerate() {
+        let r_k = p / resolution;
+        let c_k = p % resolution;
+        let v = plane[(win_y + r_k) * istride + (win_x + c_k)];
+        n += kern[k] * v;
+        s1 += w[k] * v;
+        s2 += w[k] * v * v;
+    }
+    (n, s1, s2)
+}
+
+/// Hand-rolled AVX2 implementation of [`score_cell_one_channel`]: 8 support
+/// pixels per iteration via `_mm256_i32gather_ps` against a freshly-built
+/// per-batch index vector, three FMAs per iteration into 8-lane accumulators
+/// (`n`, `s1`, `s2`), with a horizontal reduce at the end and a scalar tail for
+/// the support's remainder.
+///
+/// The gather is the path's bottleneck (Intel `vgatherdps` is roughly
+/// 10-12 cycles per lane on this generation, so 8 lanes ≈ 80 cycles); even so,
+/// the per-call total stays well under the SAXPY's per-cell amortized cost
+/// because we only visit a handful of cells per descent. The lane-fill of the
+/// index vector is done from a stack buffer, so the gather sees a fresh
+/// 8-element index array each iteration.
+///
+/// # Safety
+///
+/// 1. **CPU features:** `is_x86_feature_detected!("avx2") &&
+///    is_x86_feature_detected!("fma")`.
+/// 2. **Plane covers every gathered index:** for each support pixel `k` with
+///    `r_k = pixel/resolution`, `c_k = pixel%resolution`, the byte offset
+///    `(win_y + r_k) * istride + (win_x + c_k)` must lie within
+///    `plane[..]` — exactly the contract `compute_channel_grids_avx2` already
+///    relies on for one shift cell, and the same `cache_res = R + 4·margin`
+///    plus `|win_y - cache_c0|, |win_x - cache_c0| ≤ margin` invariants guard
+///    it.
+/// 3. **Kern / weight slices cover the support:** `kern.len() >=
+///    support.pixels.len()`, `w.len() >= support.pixels.len()`.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn score_cell_one_channel_avx2(
+    plane: &[f32],
+    support: &Support,
+    kern: &[f32],
+    w: &[f32],
+    resolution: usize,
+    istride: usize,
+    win_y: usize,
+    win_x: usize,
+) -> (f32, f32, f32) {
+    use std::arch::x86_64::*;
+    let n = support.pixels.len();
+    let pixels = support.pixels.as_ptr();
+    let kern_ptr = kern.as_ptr();
+    let w_ptr = w.as_ptr();
+    let plane_ptr = plane.as_ptr();
+
+    let mut acc_n = _mm256_setzero_ps();
+    let mut acc_s1 = _mm256_setzero_ps();
+    let mut acc_s2 = _mm256_setzero_ps();
+
+    let chunks = n / 8;
+    let mut idx_buf = [0_i32; 8];
+    for chunk in 0..chunks {
+        let k0 = chunk * 8;
+        // Build the 8 cache indices for this batch (per-pixel `(win_y + r_k) *
+        // istride + (win_x + c_k)`; the `* 4` byte-scaling lives in the gather's
+        // scale argument). `usize` → `i32` is sound here because the cache size
+        // is bounded by `cache_res² < i32::MAX` for any realistic patch.
+        for (lane, slot) in idx_buf.iter_mut().enumerate() {
+            let p = *pixels.add(k0 + lane);
+            let r_k = p / resolution;
+            let c_k = p % resolution;
+            *slot = ((win_y + r_k) * istride + (win_x + c_k)) as i32;
+        }
+        let indices = _mm256_loadu_si256(idx_buf.as_ptr().cast::<__m256i>());
+        // `vgatherdps` with scale = 4 (f32 stride).
+        let v8 = _mm256_i32gather_ps::<4>(plane_ptr, indices);
+        let kern8 = _mm256_loadu_ps(kern_ptr.add(k0));
+        let w8 = _mm256_loadu_ps(w_ptr.add(k0));
+        acc_n = _mm256_fmadd_ps(kern8, v8, acc_n);
+        acc_s1 = _mm256_fmadd_ps(w8, v8, acc_s1);
+        let v_sq = _mm256_mul_ps(v8, v8);
+        acc_s2 = _mm256_fmadd_ps(w8, v_sq, acc_s2);
+    }
+
+    // Horizontal-reduce the three accumulators into scalar sums.
+    let mut tmp = [0.0_f32; 8];
+    _mm256_storeu_ps(tmp.as_mut_ptr(), acc_n);
+    let mut n_acc = tmp.iter().sum::<f32>();
+    _mm256_storeu_ps(tmp.as_mut_ptr(), acc_s1);
+    let mut s1_acc = tmp.iter().sum::<f32>();
+    _mm256_storeu_ps(tmp.as_mut_ptr(), acc_s2);
+    let mut s2_acc = tmp.iter().sum::<f32>();
+
+    // Scalar tail for the trailing support pixels (`n % 8`).
+    for k in (chunks * 8)..n {
+        let p = *pixels.add(k);
+        let r_k = p / resolution;
+        let c_k = p % resolution;
+        let v = *plane_ptr.add((win_y + r_k) * istride + (win_x + c_k));
+        n_acc += *kern_ptr.add(k) * v;
+        s1_acc += *w_ptr.add(k) * v;
+        s2_acc += *w_ptr.add(k) * v * v;
+    }
+    (n_acc, s1_acc, s2_acc)
+}
+
+/// Per-cell counterpart to [`accumulate_count`]: count out-of-frame support
+/// pixels at one shift `(win_y, win_x)`. A shift is scorable iff this returns
+/// `0` (every support pixel in frame).
+fn count_invalid_at_cell(
+    invalid: &[f32],
+    support: &Support,
+    resolution: usize,
+    istride: usize,
+    win_y: usize,
+    win_x: usize,
+) -> f32 {
+    let mut acc = 0.0_f32;
+    for &p in &support.pixels {
+        let r_k = p / resolution;
+        let c_k = p % resolution;
+        acc += invalid[(win_y + r_k) * istride + (win_x + c_k)];
+    }
+    acc
 }
 
 /// One view's mutable congealing state.
@@ -1171,8 +1696,8 @@ pub fn localize_patch_keypoints(
             let st = &states[si];
             let base_x = (cache_c0 as i64 + st.iacc[0]) as usize;
             let base_y = (cache_c0 as i64 + st.iacc[1]) as usize;
-            shifts[v] = prof::SEARCH.time(|| {
-                search_shift(
+            shifts[v] = prof::SEARCH.time(|| match params.search_strategy {
+                SearchStrategy::Exhaustive => search_shift(
                     &caches[si],
                     &mut search,
                     &support,
@@ -1182,7 +1707,18 @@ pub fn localize_patch_keypoints(
                     margin,
                     base_y,
                     base_x,
-                )
+                ),
+                SearchStrategy::PlusDescent => search_shift_plus_descent(
+                    &caches[si],
+                    &mut search,
+                    &support,
+                    &keep_mask,
+                    kept_ch,
+                    r,
+                    margin,
+                    base_y,
+                    base_x,
+                ),
             });
         }
 
