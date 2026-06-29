@@ -14,6 +14,7 @@ use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::{OrientedPatch, PatchCloud, PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::keypoint_localize::{
     localize_patch_cloud_keypoints, KeypointLocalizeParams,
+    SearchStrategy as LocalizeSearchStrategy,
 };
 use sfmtool_core::patch::keypoint_subpixel::{ConsensusRefresh, KeypointSubpixelParams};
 use sfmtool_core::patch::normal_refine::{
@@ -911,7 +912,8 @@ impl PyPatchCloud {
         recon, images, *, view_sets=None, max_iters=5, search=6.0, max_shift_px=3.0,
         min_relative_zncc=0.7, min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear", robust_iters=3, convergence_px=0.05,
-        point_indexes=None, search_resolution_multiplier=1.0
+        point_indexes=None, search_resolution_multiplier=1.0,
+        search_strategy="plus_descent"
     ))]
     #[allow(clippy::too_many_arguments)]
     fn localize_keypoints<'py>(
@@ -933,6 +935,7 @@ impl PyPatchCloud {
         convergence_px: f64,
         point_indexes: Option<Vec<u32>>,
         search_resolution_multiplier: f32,
+        search_strategy: &str,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let recon = &recon.inner;
         if self.inner.point_indexes.len() != self.inner.len() {
@@ -980,6 +983,15 @@ impl PyPatchCloud {
                 "search_resolution_multiplier must be > 0, got {search_resolution_multiplier}"
             )));
         }
+        let search_strategy = match search_strategy {
+            "exhaustive" => LocalizeSearchStrategy::Exhaustive,
+            "plus_descent" => LocalizeSearchStrategy::PlusDescent,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown search_strategy: {other:?} (expected exhaustive|plus_descent)"
+                )))
+            }
+        };
         let params = KeypointLocalizeParams {
             max_iters,
             search,
@@ -992,6 +1004,7 @@ impl PyPatchCloud {
             robust_iters,
             convergence_px,
             search_resolution_multiplier,
+            search_strategy,
         };
 
         let (pyramids, poses) = build_pyramids_and_poses(recon, &images)?;

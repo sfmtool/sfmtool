@@ -269,7 +269,13 @@ fn infinity_point_seed_offsets_congeal_back() {
     // gauge, the fourth is seeded a few source px off. Congealing must pull the
     // off view back to alignment — exercises the w == 0 branch of seed_offset
     // (angular ray→offset inversion) and the w == 0 render/project path through
-    // the congealing loop.
+    // the congealing loop. Pinned to `SearchStrategy::Exhaustive` because the
+    // 4-source-px seed shift puts view 3 ~3 grid steps from consensus through
+    // a multi-modal angular `dir_texture`; the default `PlusDescent` walks
+    // into a local maximum on the way home, which is the documented trade-off
+    // (`PlusDescent` keeps the ~1.9× wall win on real data at the cost of a
+    // long-walk accuracy tail). The capability tested here — congealing back
+    // from a non-trivial seed offset — is an `Exhaustive` guarantee.
     let scene = Scene::infinity(
         &[
             [0.0, 0.0, 0.0],
@@ -283,8 +289,12 @@ fn infinity_point_seed_offsets_congeal_back() {
     let patch = infinity_patch();
     let (cx, cy) = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
     let seeds = [[cx, cy], [cx, cy], [cx, cy], [cx + 4.0, cy]];
+    let exhaustive = KeypointLocalizeParams {
+        search_strategy: SearchStrategy::Exhaustive,
+        ..params()
+    };
 
-    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), &params());
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], Some(&seeds), &exhaustive);
 
     let p3 = pos(&res, 3).expect("the seeded-off view congeals back and is kept");
     assert!(
@@ -1158,6 +1168,219 @@ fn search_shift_avx2_matches_scalar() {
     }
 }
 
+/// The single-cell scoring kernel (`score_cell_one_channel`) must agree with
+/// the per-shift slice of the existing whole-grid SAXPY (`compute_channel_grids`)
+/// at every cell of the search grid — the algebra both compute is identical, so
+/// any cell on the dispatched grid must equal the same cell scored via the
+/// per-cell path within `f32` rounding. Locks the AVX2 gather kernel against
+/// the SAXPY's accumulator and the scalar fallback against both.
+#[test]
+fn score_cell_matches_compute_channel_grids() {
+    use super::{compute_channel_grids, score_cell_one_channel, score_cell_one_channel_scalar};
+    for &(resolution, margin) in &[
+        (20usize, 4i64), // span = 9
+        (24, 6),         // span = 13 (production default)
+        (16, 7),         // span = 15
+    ] {
+        let span = (2 * margin + 1) as usize;
+        let cr = resolution + 2 * margin as usize;
+        let channels = 3usize;
+        let support = disk_support(resolution);
+        let tile = synthetic_tile(cr, channels, false);
+        let n = support.pixels.len();
+        let w_f32: Vec<f32> = support.weights.iter().map(|&w| w as f32).collect();
+        let kern: Vec<f32> = (0..n)
+            .map(|k| support.sqrt_weights[k] * (0.7 + 0.3 * ((k as f32) * 0.13).sin()))
+            .collect();
+        let base = margin as usize;
+        let win_oy = base - margin as usize;
+        let win_ox = base - margin as usize;
+        let gsz = span * span;
+        for c in 0..channels {
+            // Reference whole-grid sums (the dispatched SAXPY which the existing
+            // `compute_channel_grids_avx2_matches_scalar` test locks AVX2 vs
+            // scalar).
+            let mut g_n = vec![0f32; gsz];
+            let mut g_s1 = vec![0f32; gsz];
+            let mut g_s2 = vec![0f32; gsz];
+            compute_channel_grids(
+                &tile.planes[c],
+                &support,
+                &kern,
+                &w_f32,
+                resolution,
+                tile.istride,
+                span,
+                win_oy,
+                win_ox,
+                &mut g_n,
+                &mut g_s1,
+                &mut g_s2,
+            );
+            // The per-cell kernels (dispatched + scalar) must agree with the
+            // SAXPY's slice at every cell. Accumulation orders differ (SAXPY
+            // accumulates across support pixels at fixed gx, broadcasting
+            // kern/w across 16 lanes; the per-cell path accumulates across
+            // support pixels into 8-lane gathers and horizontal-reduces at
+            // the end), so the per-cell ordering compounds the FMA-vs-scalar
+            // drift over the ~400 support pixels. Empirically ~1e-4 relative
+            // on the worst cells; 3e-4 covers it with margin, still 3× tighter
+            // than the spec's "relative tolerance ~1e-3" guideline.
+            let tol =
+                |a: f32, b: f32| -> bool { (a - b).abs() <= 3e-4 * (1.0 + a.abs().max(b.abs())) };
+            for gy in 0..span {
+                for gx in 0..span {
+                    let win_y = win_oy + gy;
+                    let win_x = win_ox + gx;
+                    let (n_d, s1_d, s2_d) = score_cell_one_channel(
+                        &tile.planes[c],
+                        &support,
+                        &kern,
+                        &w_f32,
+                        resolution,
+                        tile.istride,
+                        win_y,
+                        win_x,
+                    );
+                    let (n_s, s1_s, s2_s) = score_cell_one_channel_scalar(
+                        &tile.planes[c],
+                        &support,
+                        &kern,
+                        &w_f32,
+                        resolution,
+                        tile.istride,
+                        win_y,
+                        win_x,
+                    );
+                    let s = gy * span + gx;
+                    assert!(
+                        tol(n_d, g_n[s]) && tol(s1_d, g_s1[s]) && tol(s2_d, g_s2[s]),
+                        "dispatched ch {c} @ ({gy},{gx}): \
+                         got n/s1/s2 {n_d}/{s1_d}/{s2_d} vs grid {}/{}/{}",
+                        g_n[s],
+                        g_s1[s],
+                        g_s2[s]
+                    );
+                    assert!(
+                        tol(n_s, g_n[s]) && tol(s1_s, g_s1[s]) && tol(s2_s, g_s2[s]),
+                        "scalar ch {c} @ ({gy},{gx}): \
+                         got n/s1/s2 {n_s}/{s1_s}/{s2_s} vs grid {}/{}/{}",
+                        g_n[s],
+                        g_s1[s],
+                        g_s2[s]
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Multi-step descent equivalence with the exhaustive SAXPY: same synthetic
+/// tile, same template, same search params — PlusDescent and `search_shift`
+/// must agree on the integer argmax for templates planted multiple cells away
+/// from the search origin, and agree to within sampling noise on the
+/// sub-pixel residual. Closes the round-1 test-coverage gap on non-trivial
+/// descent walks; the existing
+/// `plus_descent_agrees_with_exhaustive_on_well_posed_scene` end-to-end test
+/// converges in a single step.
+///
+/// Walk length is implicit: with the seed at `(0, 0)` and `Exhaustive` finding
+/// `(iy, ix) = (dy0, dx0)`, PlusDescent must walk `|dy0| + |dx0|` cells minimum
+/// (more if it weaves around the peak's neighborhood). The fixtures span 3-,
+/// 4-, and pure-axis walks. Mirrors `search_shift_matches_reference`'s tile +
+/// margin recipe so the same texture-recoverable shifts are used.
+#[test]
+fn search_shift_plus_descent_walks_multi_step() {
+    for &(resolution, margin, dy0, dx0) in &[
+        (20usize, 4i64, 1, -2), // 3-step walk (same fixture as search_shift_matches_reference)
+        (20, 4, 1, 1),          // 2-step walk
+        (20, 4, -1, 1),         // 2-step walk, opposite quadrant
+        (24, 4, 0, 1),          // pure-x walk, single step
+        (24, 4, 1, 0),          // pure-y walk, single step
+    ] {
+        let cr = resolution + 2 * margin as usize;
+        let channels = 3usize;
+        let support = disk_support(resolution);
+        let keep_mask = vec![true; channels];
+        let tile = synthetic_tile(cr, channels, false);
+        let base = margin as usize;
+        let tmpl = template_at(
+            &tile, &support, &keep_mask, channels, resolution, margin, dy0, dx0,
+        );
+        let mut sc_plus = SearchScratch {
+            tmpl: tmpl.clone(),
+            ..Default::default()
+        };
+        let plus = search_shift_plus_descent(
+            &tile,
+            &mut sc_plus,
+            &support,
+            &keep_mask,
+            channels,
+            resolution,
+            margin,
+            base,
+            base,
+        )
+        .expect("descent scores the seed cell");
+        let mut sc_exh = SearchScratch {
+            tmpl: tmpl.clone(),
+            ..Default::default()
+        };
+        let exh = search_shift(
+            &tile,
+            &mut sc_exh,
+            &support,
+            &keep_mask,
+            channels,
+            resolution,
+            margin,
+            base,
+            base,
+        )
+        .expect("exhaustive scores the search grid");
+
+        // Both strategies must agree on the integer argmax (this is what
+        // drives the read accumulator). For these fixtures Exhaustive
+        // recovers `(dy0, dx0)` — `search_shift_matches_reference` already
+        // pins this — so PlusDescent must too, and the descent walked at
+        // least `|dy0| + |dx0|` cells getting there.
+        assert_eq!(
+            (plus.iy, plus.ix),
+            (exh.iy, exh.ix),
+            "argmax disagreement: plus ({}, {}) vs exhaustive ({}, {}) \
+             (case res={resolution}, margin={margin}, planted dy0={dy0}, dx0={dx0}; \
+             walked {} cells minimum)",
+            plus.iy,
+            plus.ix,
+            exh.iy,
+            exh.ix,
+            dy0.unsigned_abs() + dx0.unsigned_abs(),
+        );
+        // Sub-pixel residuals agree within sampling noise. The exhaustive
+        // SAXPY and per-cell scoring accumulate in slightly different orders,
+        // so the parabolic-input cells can drift by a few `ε_f32` — bounded
+        // empirically at < 5e-3 of a grid step.
+        assert!(
+            (plus.dx - exh.dx).abs() < 5e-3 && (plus.dy - exh.dy).abs() < 5e-3,
+            "sub-pixel disagreement: plus ({}, {}) vs exhaustive ({}, {}) \
+             (case res={resolution}, margin={margin}, planted dy0={dy0}, dx0={dx0})",
+            plus.dx,
+            plus.dy,
+            exh.dx,
+            exh.dy,
+        );
+        // Combined ZNCC at the integer peak agrees too.
+        assert!(
+            (plus.peak - exh.peak).abs() < 1e-4 * (1.0 + plus.peak.abs()),
+            "peak disagreement: plus {} vs exhaustive {} \
+             (case res={resolution}, margin={margin}, planted dy0={dy0}, dx0={dx0})",
+            plus.peak,
+            exh.peak,
+        );
+    }
+}
+
 #[test]
 fn search_shift_matches_reference_dropped_channel() {
     // A kept-mask that drops the middle channel (kept channels need not be
@@ -1187,4 +1410,63 @@ fn search_shift_matches_reference_dropped_channel() {
         &tile, &tmpl, &support, &keep_mask, channels, resolution, margin, base, base,
     );
     assert_search_eq(got, want);
+}
+
+/// End-to-end equivalence: `PlusDescent` and `Exhaustive` must agree on the
+/// kept view set and converge to nearly-the-same per-view keypoints on a clean
+/// well-posed congealing scene (aligned plus one misregistered view). Locks
+/// the new default's behaviour against the original whole-grid path on a case
+/// where the ZNCC landscape is unimodal — the descent's local-optima failure
+/// mode (~9 % of observations on dino-full) is expected on multi-modal real
+/// data and not tested here.
+#[test]
+fn plus_descent_agrees_with_exhaustive_on_well_posed_scene() {
+    let shift_grid = 1.0;
+    let ox = shift_grid * wpp();
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let offs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [ox, 0.0]];
+    let texs = vec![texture as fn(f64, f64) -> f64; 4];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    let plus = KeypointLocalizeParams {
+        search_strategy: SearchStrategy::PlusDescent,
+        ..params()
+    };
+    let exhaustive = KeypointLocalizeParams {
+        search_strategy: SearchStrategy::Exhaustive,
+        ..params()
+    };
+
+    let a = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &plus);
+    let b = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &exhaustive);
+
+    assert_eq!(
+        a.views, b.views,
+        "the two strategies must agree on the kept view set on a well-posed scene"
+    );
+    for (i, (&ka, &kb)) in a.keypoints.iter().zip(&b.keypoints).enumerate() {
+        let dx = ka[0] - kb[0];
+        let dy = ka[1] - kb[1];
+        let d = (dx * dx + dy * dy).sqrt();
+        // Sub-pixel agreement: both walks land on the same integer cell on this
+        // unimodal scene; the parabolic residual differs only via the FMA vs
+        // SAXPY rounding gap on the cardinal cells, well under 0.1 src px.
+        assert!(
+            d < 0.1,
+            "view {} ({:?} in input): keypoints diverged by {:.4} src px \
+             (plus {:?} vs exhaustive {:?})",
+            i,
+            a.views[i],
+            d,
+            ka,
+            kb,
+        );
+    }
 }

@@ -93,6 +93,23 @@ from .._cli_utils import timed_command
         "max_outer_sweeps=5. See specs/core/keypoint-subpixel-refinement.md."
     ),
 )
+@click.option(
+    "--localize-search-strategy",
+    "localize_search_strategy",
+    type=click.Choice(["plus_descent", "exhaustive"]),
+    default="plus_descent",
+    show_default=True,
+    help=(
+        "Per-(view, round) shift-grid traversal inside the keypoint localizer's "
+        "search_shift. 'plus_descent' (default) is steepest-descent on the 4 "
+        "axis neighbors, scoring ~6 cells per call via an AVX2 single-position "
+        "vgather kernel; ~1.9× faster end-to-end on dino at comparable accuracy "
+        "(median per-observation keypoint shift vs exhaustive ~0.05 px, 91 % "
+        "within 1 px). 'exhaustive' scores the full (2·margin+1)² grid via the "
+        "SIMD SAXPY accumulator — the global-argmax fallback, no local-optima "
+        "risk. See specs/core/keypoint-localization-search-cache.md."
+    ),
+)
 def embed_patches_command(
     input_path,
     output_path,
@@ -104,6 +121,7 @@ def embed_patches_command(
     patch_size,
     search_resolution_multiplier,
     subpixel,
+    localize_search_strategy,
 ):
     """Convert a sift_files reconstruction to embedded_patches.
 
@@ -180,6 +198,7 @@ def embed_patches_command(
             search=search,
             search_resolution_multiplier=search_resolution_multiplier,
             subpixel=subpixel,
+            localize_search_strategy=localize_search_strategy,
         )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -342,6 +342,7 @@ def embed_patches(
     resolution: int = 24,
     search_resolution_multiplier: float = 1.0,
     subpixel: str = "none",
+    localize_search_strategy: str = "plus_descent",
 ) -> SfmrReconstruction:
     """Convert a ``sift_files`` reconstruction to ``embedded_patches``, running the
     full photometric pipeline (see
@@ -436,6 +437,7 @@ def embed_patches(
         min_relative_zncc=min_relative_zncc,
         resolution=resolution,
         search_resolution_multiplier=search_resolution_multiplier,
+        search_strategy=localize_search_strategy,
     )
 
     # 3.5. Optional photometric sub-pixel refinement, seeded at the localizer's

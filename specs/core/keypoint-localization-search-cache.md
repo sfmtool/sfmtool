@@ -259,35 +259,99 @@ true optimum and remains the high-accuracy / ground-truth option. So they
 matters; the LK fine tune when quality matters most. Where that line falls is a
 measurement question.
 
-## Open topic: search strategy (dense vs. non-exhaustive)
+## Search strategy: dense vs "+"-descent
 
-Whether the grid search visits **every** cell is an open design axis, not a
-settled decision. The baseline here is a **dense** grid because the
-correlation-accumulation kernel computes the whole grid efficiently — the support
-reads amortize across all candidates — which is especially attractive when the
-grid is small (low `m`). But the search need not be exhaustive.
+Whether the grid search visits **every** cell is a per-call axis exposed as the
+`SearchStrategy` enum on `KeypointLocalizeParams`. Both variants share the same
+cache, support, IRLS template, and `ShiftResult` contract; they differ only in
+which cells inside the `(2·margin+1)²` shift grid get scored. See the doc
+comments on `keypoint_localize::SearchStrategy` for the per-variant detail.
 
 The choice is **coupled to the kernel**:
 
-- **Dense grid → accumulation kernel.** Cost is ~independent of how peaked the
-  surface is; amortized, SIMD-friendly, robust (can't miss a cell). Best when the
-  grid is small.
-- **Non-exhaustive (hill-climb / local / early-out) → per-candidate scoring.**
-  Visits few candidates but forfeits the amortization, so each candidate pays the
-  full support gather. Wins only if it visits *few enough* candidates to beat the
-  dense kernel's amortized total — and it risks landing in a wrong local peak,
-  which the fine tune (a *local* solve) cannot rescue.
+- **Dense grid → accumulation kernel** (`Exhaustive`). Cost is ~independent of
+  how peaked the surface is; amortized, SIMD-friendly, robust (can't miss a
+  cell). Best when the grid is small.
+- **Non-exhaustive (hill-climb / local / early-out) → per-candidate scoring**
+  (`PlusDescent`). Visits few candidates but forfeits the amortization, so
+  each candidate pays the full support gather. Wins only if it visits *few
+  enough* candidates to beat the dense kernel's amortized total — and it
+  risks landing in a wrong local peak, which the fine tune (a *local* solve)
+  cannot rescue.
 
 The earlier rejection of coarse-to-fine was specifically that it was the wrong
 *SIMD lever* (it prunes candidates but leaves each scalar and risks the peak);
-with the cache + accumulation, dense became cheap. A non-exhaustive strategy
-reopens as a *separate* axis now — and it could even be **round-dependent** (a
-wider search in round 1, a tight local search once the offset is near-converged).
+with the cache + accumulation, dense became cheap. The "+"-descent variant
+reopens that axis at the per-call level, with a hand-rolled AVX2 single-
+position kernel so each visited cell stays in the SIMD register file.
 
-Defer the decision: start dense (simplest, matches the kernel), measure at the
-chosen `m`, and revisit a non-exhaustive strategy only if the grid search is
-still hot — guarding robustness, since the fine tune does not backstop a missed
-cell.
+### "+"-descent (the default)
+
+Steepest descent on the integer shift grid: seed at `(dy, dx) = (0, 0)` (the
+view's current integer base offset), evaluate the 4 axis neighbors per step,
+move to the best improver, stop when no neighbor beats the current cell. Each
+cell is scored at most once (visited-cache keyed by `(dy, dx)`); the final
+separable parabolic sub-pixel fit reuses the 4 cardinal neighbors already in
+the cache.
+
+**Per-cell scoring (`score_cell_one_channel`).** A hand-rolled AVX2 kernel
+processes 8 support pixels per iteration via `_mm256_i32gather_ps` against a
+per-batch index vector (`(win_y + r_k)·istride + (win_x + c_k)`), with three
+FMAs per iteration into 8-lane accumulators for `Σ kern·I` / `Σ w·I` /
+`Σ w·I²`, then a horizontal reduce + scalar tail. The gather is the path's
+bottleneck (~10–12 cycles per lane on this generation) but the per-call total
+stays well below the SAXPY's amortized cost because the descent visits only
+a handful of cells. Scalar fallback for non-x86 / non-AVX2; equivalence test
+(`score_cell_matches_compute_channel_grids`) locks both forms against the
+existing SAXPY's per-cell slice at every cell of the search grid.
+
+**Cells per call.** `5 + 3 · walk_steps` (1 seed + 4 neighbors at each step,
+with 1 cache hit per move). When the seed wins immediately (common in late-
+round congealing), exactly 5 cells scored.
+
+**Measured on dino-full** (85 images, 19 077 points, 87 632 obs; `sfm
+embed-patches dino_dog_toy_ws/sfmr/inf.sfmr`, `SFMTOOL_PROFILE=1`):
+
+|  | `Exhaustive` | `PlusDescent` | Δ |
+|---|---|---|---|
+| Total command wall | 3 m 51.6 s | 2 m 01.2 s | **1.91×** |
+| Localize wall | 139.1 s | 70.4 s | **1.98×** |
+| `search_shift` CPU | 240.5 s (42 % of localize) | 55.0 s (19 %) | **4.4×** |
+| per-`search_shift` | 145 µs | 31.3 µs | **4.6×** |
+| Avg cells visited / call | 169 (SAXPY) | 6.76 (from `N_CELLS / N_SEARCH` directly off the profile output) | < 10 ✓ |
+| Points kept | 19 012 | 19 068 | within rayon scheduling noise (±0.3 %) |
+
+The `search_shift` per-call cost is dominated by the per-cell AVX2
+gather kernel (`search_acc`, 4.14 µs/cell × 6.76 cells/call ≈ 28 µs);
+combine + argmax + the descent's own overhead account for the rest.
+The PlusDescent path allocates nothing per call after the first
+`search_shift_plus_descent` invocation on a given `SearchScratch` —
+`pd_kerns`, `pd_tsums`, `pd_per_channel`, and a dense
+`pd_visited: Vec<f64>` of size `(2·margin+1)²` are reused across every
+`(view, round)` call for a point, with the visited cache sentinel-
+encoded (NaN = unvisited, -Inf = visited+unscorable, finite = scored).
+
+**Accuracy** (per-observation keypoint shift vs `Exhaustive`, 297 240 matched
+observations on dino):
+- median 0.048 px, 51 % within 0.05 px, 87 % within 0.5 px, **91 % within 1 px**
+- tail: p99 3.13 px, max 64.5 px — the local-optima failure mode the descent
+  risks on multi-modal ZNCC landscapes (same shape as the
+  `normal_refine::SearchStrategy::PlusDescent` prototype).
+- `PlusDescent` kept +22 k observations (321 k vs 299 k) — its view-drop
+  decisions diverge from `Exhaustive`'s on some patches.
+
+**When to pick `Exhaustive` instead.** When the keypoint-tail matters more than
+wall time (e.g. ground-truth registration runs), or for any bit-equivalent
+A/B comparison. The dense kernel remains the global-argmax fallback with no
+local-optima risk; the strategies share everything else.
+
+**Round-dependent strategy** is not currently exposed —
+`KeypointLocalizeParams::search_strategy` is one value for the whole call, and
+the match at the per-(view, round) `search_shift` call site dispatches on it
+unchanged. A future revisit could split this into per-round strategy (e.g.
+`Exhaustive` in round 1 to lock the basin, `PlusDescent` in later rounds to
+refine cheaply) but it would require a new params field and call-site
+plumbing.
 
 ## Stage 2 (follow-up): integer `i16` correlation — investigated, dropped
 
