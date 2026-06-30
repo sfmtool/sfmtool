@@ -297,51 +297,57 @@ fn render_context(
     // Preserve the anchor's homogeneous weight so a point at infinity renders as
     // a direction patch (corners are directions), not a finite surfel.
     ctx_patch.w = patch.w;
-    let mut map = WarpMap::from_patch(&ctx_patch, view.camera, view.cam_from_world, context_res);
-    let img = match sampler {
-        Sampler::Anisotropic => {
-            map.compute_svd();
-            remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY)
-        }
+    let mut map = prof::RENDER_PROJECT
+        .time(|| WarpMap::from_patch(&ctx_patch, view.camera, view.cam_from_world, context_res));
+    if matches!(sampler, Sampler::Anisotropic) {
+        prof::RENDER_SVD.time(|| map.compute_svd());
+    }
+    let img = prof::RENDER_REMAP.time(|| match sampler {
+        Sampler::Anisotropic => remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY),
         Sampler::Bilinear => remap_bilinear(view.pyramid.level(0), &map),
-    };
+    });
     let cr = context_res as usize;
     let channels = img.channels() as usize;
     let istride = cache_istride(cr);
 
     // Per-channel sum → mean over the cache. We accumulate in `f64` to keep the
     // centering exact to the last `f32` ulp (one mean per channel; cheap).
-    let mut sums = vec![0.0f64; channels];
-    let total = (cr * cr) as f64;
-    for row in 0..context_res {
-        for col in 0..context_res {
-            for (ch, slot) in sums.iter_mut().enumerate() {
-                *slot += img.get_pixel(col, row, ch as u32) as f64;
+    let means: Vec<f32> = prof::RENDER_MEAN.time(|| {
+        let mut sums = vec![0.0f64; channels];
+        let total = (cr * cr) as f64;
+        for row in 0..context_res {
+            for col in 0..context_res {
+                for (ch, slot) in sums.iter_mut().enumerate() {
+                    *slot += img.get_pixel(col, row, ch as u32) as f64;
+                }
             }
         }
-    }
-    let means: Vec<f32> = sums.iter().map(|&s| (s / total) as f32).collect();
+        sums.iter().map(|&s| (s / total) as f32).collect()
+    });
 
     // Centered planar planes. Pad columns past `cr` stay at `0.0` (= the mean
     // after centering, harmless — those columns only feed discarded grid cells
     // past the search window).
-    let mut planes: Vec<Vec<f32>> = (0..channels).map(|_| vec![0.0f32; istride * cr]).collect();
-    let mut invalid_plane = vec![0.0f32; istride * cr];
-    let mut valid = vec![false; cr * cr];
-    for row in 0..context_res {
-        for col in 0..context_res {
-            let r = row as usize;
-            let c = col as usize;
-            let row_off = r * istride + c;
-            let v = map.is_valid(col, row);
-            valid[r * cr + c] = v;
-            invalid_plane[row_off] = if v { 0.0 } else { 1.0 };
-            for ch in 0..channels {
-                let p = img.get_pixel(col, row, ch as u32) as f32;
-                planes[ch][row_off] = p - means[ch];
+    let (planes, invalid_plane, valid) = prof::RENDER_CENTER.time(|| {
+        let mut planes: Vec<Vec<f32>> = (0..channels).map(|_| vec![0.0f32; istride * cr]).collect();
+        let mut invalid_plane = vec![0.0f32; istride * cr];
+        let mut valid = vec![false; cr * cr];
+        for row in 0..context_res {
+            for col in 0..context_res {
+                let r = row as usize;
+                let c = col as usize;
+                let row_off = r * istride + c;
+                let v = map.is_valid(col, row);
+                valid[r * cr + c] = v;
+                invalid_plane[row_off] = if v { 0.0 } else { 1.0 };
+                for ch in 0..channels {
+                    let p = img.get_pixel(col, row, ch as u32) as f32;
+                    planes[ch][row_off] = p - means[ch];
+                }
             }
         }
-    }
+        (planes, invalid_plane, valid)
+    });
     ContextTile {
         res: cr,
         istride,
