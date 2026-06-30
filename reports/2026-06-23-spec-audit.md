@@ -342,6 +342,13 @@ to the Click handler is a refactor, not a bug fix.
   - `tool_options` typing claim ("use empty object `{}` if none"): code types it as `HashMap<String, serde_json::Value>` without `#[serde(default)]`, so an absent key fails to deserialize. Worth flagging that "use empty object" is enforced as "must be present".
   - `EQUIRECTANGULAR` camera-model omitted from the spec's camera-model table (used by camrig).
 **Recommendation:** **Update spec.** Fold `sfmr-v4-patch-keypoints.md` into this file per the patch doc's "Stage 5" plan: bump headlined version to 4, add `feature_source` to the top-level metadata, add the new archive entries, document the `has_feature_indexes`/`has_keypoints_xy` keys, add a v3→v4 migration table and v4 history bullet. Code is already a strict superset of the spec.
+> _Status (2026-06-30): Done (version-drift / fold-in bullets) — commit 6e13efc
+> (PR #117) folded the v4 doc in and bumped the headline to v4; the
+> `feature_source` field, the two new archive entries, the `has_*` keys, the
+> v3 → v4 migration table, and a Version 4 history bullet are all present now.
+> The other two bullets in this section (`tool_options` `#[serde(default)]`,
+> `EQUIRECTANGULAR` in the camera-model table) are separate and not covered by
+> this annotation._
 
 ### specs/formats/sfmr-v4-patch-keypoints.md
 **Summary:** Draft spec for `.sfmr` v4 introducing `feature_source ∈ {sift_files, embedded_patches}` plus per-mode columns.
@@ -351,6 +358,11 @@ to the Click handler is a refactor, not a bug fix.
   - Cross-language hash claim not verified by the current test set; only Rust round-trip is exercised.
 **Recommendation:** **Update spec and fold in.** Drop the "stages pending" banner; fold this file into `sfmr-file-format.md` per its own Stage 5 plan.
 **Suspicious:** File-level claim "exactly one of `{feature_indexes, keypoints_xy}` is present" is enforced on write but on read a malformed `embedded_patches` file with a stray `feature_indexes` is silently tolerated. Worth tightening.
+> _Status (2026-06-30): Resolved (the doc findings) — `sfmr-v4-patch-keypoints.md`
+> was folded into `sfmr-file-format.md` and deleted in commit 6e13efc (PR #117),
+> so the stale-banner and fold-in items are moot. The **Suspicious** item is a
+> read-validation gap in `sfmr-format` code, independent of the deleted doc — it
+> is not addressed by the fold-in and remains open if still present._
 
 ### specs/formats/sift-file-format.md
 **Summary:** Specifies `.sift` v1 (current) and v2 (Draft) — ZIP+zstd columnar features.
@@ -563,6 +575,12 @@ to the Click handler is a refactor, not a bug fix.
 ## Top priorities
 
 1. **Fold `sfmr-v4-patch-keypoints.md` into `sfmr-file-format.md` and bump the headline version to 4.** The format spec is one version stale; the v4 changes (`feature_source`, `keypoints_xy`, `image_file_hashes`, the two new `tracks/metadata.json` keys, the two new archive entries) are described only in the still-marked-Draft v4 patch doc. This is the largest single spec/code divergence in the audit.
+   > _Status (2026-06-30): Done — folded in by commit 6e13efc (PR #117, the
+   > same afternoon this snapshot was taken). `sfmr-v4-patch-keypoints.md` is
+   > deleted and `sfmr-file-format.md` now carries the `feature_source`
+   > discriminator, the `images/image_file_hashes` + `tracks/keypoints_xy`
+   > archive entries, the `has_*` keys, a v3 → v4 migration table, and a Version
+   > 4 history entry. See the per-section annotations above._
 
 2. **Sweep post-regroup path drift across `specs/core/` (14 of 16 specs) and the three GUI specs that name files.** Mechanical, doc-only, low risk; restores grep-ability of every "implementing code" pointer.
    > _Status (2026-06-23): Done — scripted sweep rewrote 79 path mentions

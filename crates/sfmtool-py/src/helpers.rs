@@ -75,6 +75,17 @@ pub(crate) fn py_to_u128_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<[u8; 16]>
         .collect()
 }
 
+/// The numpy dtype name (`"float64"`, `"uint8"`, …) of an array-like object.
+///
+/// Reads `obj.dtype.name`. The single shared spelling of the
+/// `getattr("dtype").getattr("name")` chain that the array-taking bindings use
+/// both to dispatch on precision (propagate the error) and to name the offending
+/// dtype in a `TypeError` (callers `unwrap_or_else` to a placeholder for the
+/// latter), so the diagnostics stay consistent.
+pub(crate) fn dtype_name(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+    obj.getattr("dtype")?.getattr("name")?.extract()
+}
+
 /// Extract a cameras list from Python as `Vec<SfmrCamera>`.
 ///
 /// Accepts `list[CameraIntrinsics]` (typed Rust objects).

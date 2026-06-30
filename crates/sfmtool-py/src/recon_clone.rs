@@ -33,12 +33,8 @@ macro_rules! extract_ndarray {
                 .qualname()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|_| "unknown".to_string());
-            let actual_dtype = $value
-                .getattr("dtype")
-                .ok()
-                .and_then(|d| d.str().ok())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+            let actual_dtype =
+                $crate::helpers::dtype_name(&$value).unwrap_or_else(|_| "unknown".to_string());
             pyo3::exceptions::PyTypeError::new_err(format!(
                 "clone_with_changes(): '{}' must be {} with dtype {}, got {} with dtype {}",
                 $param, $shape, $dtype, actual_type, actual_dtype

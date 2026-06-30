@@ -13,14 +13,7 @@ use std::borrow::Cow;
 
 use sfmtool_core::spatial::{PointCloud2, PointCloud3};
 
-// ── Helper: dtype tag ───────────────────────────────────────────────────
-
-/// Extract a simple dtype tag from a numpy array's dtype string.
-fn dtype_tag(_py: Python<'_>, obj: &Bound<'_, pyo3::types::PyAny>) -> PyResult<String> {
-    let dtype = obj.getattr("dtype")?;
-    let name: String = dtype.getattr("name")?.extract()?;
-    Ok(name)
-}
+use crate::helpers::dtype_name;
 
 // ── 2D KD-tree ──────────────────────────────────────────────────────────
 
@@ -43,8 +36,8 @@ pub struct PyKdTree2d {
 impl PyKdTree2d {
     /// Build a KD-tree from an (N, 2) float32 or float64 array of positions.
     #[new]
-    fn new(py: Python<'_>, positions: &Bound<'_, pyo3::types::PyAny>) -> PyResult<Self> {
-        let tag = dtype_tag(py, positions)?;
+    fn new(positions: &Bound<'_, pyo3::types::PyAny>) -> PyResult<Self> {
+        let tag = dtype_name(positions)?;
         match tag.as_str() {
             "float32" => {
                 let arr: PyReadonlyArray2<f32> = positions.extract()?;
@@ -330,8 +323,8 @@ pub struct PyKdTree3d {
 impl PyKdTree3d {
     /// Build a KD-tree from an (N, 3) float32 or float64 array of positions.
     #[new]
-    fn new(py: Python<'_>, positions: &Bound<'_, pyo3::types::PyAny>) -> PyResult<Self> {
-        let tag = dtype_tag(py, positions)?;
+    fn new(positions: &Bound<'_, pyo3::types::PyAny>) -> PyResult<Self> {
+        let tag = dtype_name(positions)?;
         match tag.as_str() {
             "float32" => {
                 let arr: PyReadonlyArray2<f32> = positions.extract()?;

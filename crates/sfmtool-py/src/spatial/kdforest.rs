@@ -25,11 +25,7 @@ pub(crate) fn extract_u8_2d<'py>(
     what: &str,
 ) -> PyResult<PyReadonlyArray2<'py, u8>> {
     arr.extract::<PyReadonlyArray2<u8>>().map_err(|_| {
-        let dtype = arr
-            .getattr("dtype")
-            .and_then(|d| d.getattr("name"))
-            .and_then(|n| n.extract::<String>())
-            .unwrap_or_else(|_| "?".to_string());
+        let dtype = crate::helpers::dtype_name(arr).unwrap_or_else(|_| "?".to_string());
         pyo3::exceptions::PyTypeError::new_err(format!("{what} must be a uint8 array, got {dtype}"))
     })
 }

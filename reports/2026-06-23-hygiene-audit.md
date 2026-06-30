@@ -332,6 +332,20 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 > `crates/sfmtool-py/src/spatial/kdtree.rs:19-23` and `extract_u8_2d` at
 > `spatial/kdforest.rs:23-35`. The duplication and proposed
 > `helpers::extract_array_nd` consolidation are unchanged._
+>
+> _Status (2026-06-30): Done — hoisted the one genuinely-shared primitive, the
+> `obj.dtype.name` read, into `helpers::dtype_name` and routed all four sites
+> through it: `spatial/kdtree.rs` (dispatch — `dtype_tag` removed, the now-unused
+> `py` constructor arg dropped), `spatial/kdforest.rs::extract_u8_2d`, and the
+> `recon_clone.rs` `extract_ndarray!` macro. Each call site keeps its own error
+> wording (so the `"uint8"` / `clone_with_changes(): …` messages and the
+> per-site `"?"` / `"unknown"` fallbacks are unchanged — behavior-preserving, no
+> test churn); only the duplicated getattr chain is gone. The fuller
+> `extract_array_nd<T,D>` extractor was deliberately not pursued: the two
+> extract sites want genuinely different messages (kdforest names the concrete
+> dtype; recon_clone also reports shape + Python type), so unifying the read but
+> not the message is the right cut. `cargo clippy`/`fmt` clean; binding tests
+> run in CI. Commit (branch `claude/report-fixes`)._
 
 > **Surveyed and cleared:** `recon_clone.rs` (736) — coherent
 > `clone_with_changes` + `rebuild_observation_source` + tests.
@@ -444,6 +458,12 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 - Effort: medium — new crate in workspace + 4 import updates + Cargo.toml
   editing; tests already cover the behavior.
 - Risk: low — pure refactor; the implementations are already byte-similar.
+> _Status (2026-06-30): Deferred — still open and unchanged (4 copies, no
+> shared crate, `sift` still missing the empty-bytes guard), but explicitly
+> deprioritized for now per maintainer direction. Carry forward to a future
+> pass / regenerated snapshot. The drifted `sift` empty-bytes guard is the one
+> latent-bug nugget worth grabbing opportunistically if `sift-format` is
+> touched before then._
 
 ### 10. ~1200-line `#[cfg(test)] mod tests` block still inline in `sfmr-format/src/lib.rs`
 
@@ -590,6 +610,11 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 - Proposed fix: flip Status to "Partially implemented", cross-reference the
   implementing modules; defer the fold-in until Stage 3 ships.
 - Effort: low · Risk: low.
+> _Status (2026-06-30): Done — resolved by the fold-in (commit 6e13efc, PR #117,
+> the same afternoon this snapshot was taken). Rather than re-marking the draft,
+> `sfmr-v4-patch-keypoints.md` was folded into `sfmr-file-format.md` and deleted,
+> so the mismarked-Draft finding is moot. Stage 3 (the Python producer) also
+> shipped in #117._
 
 ### 15. `reports/2026-06-09-spec-audit.md` (501 lines) is ~99% actioned and ready to retire
 
@@ -645,6 +670,7 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
    the empty-bytes guard), and converts future cast-slice / zstd / hash
    changes into a single edit. Plus it gives the workspace its first proper
    shared utility crate.
+   > _Status (2026-06-30): Deferred per maintainer direction — see Finding 9._
 
 > Larger items still open and worth scheduling beyond the Top 3: the
 > `optical_flow/gpu/mod.rs` split (#2, medium-high effort, hardware-gated test
