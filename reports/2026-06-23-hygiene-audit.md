@@ -67,6 +67,19 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
   `ProjectedImage`, `Objective`, `PatchWindow`.
 - Risk: low — internal restructure; tests already sibling-extracted, so the
   test surface is unaffected.
+> _Status (2026-06-30): Done — split into the `patch/normal_refine/` subdir:
+> `params.rs`, `parameterization.rs`, `support.rs`, `level.rs`, `znorm.rs`,
+> `consensus.rs`, `search.rs`, `view_stack.rs`. `mod.rs` keeps the `refine_*`
+> orchestration + `view_indices_from_reconstruction` and re-exports the public
+> and patch-internal API at the historical `crate::patch::normal_refine::<name>`
+> paths (`pub use` for the crate API, `pub(in crate::patch) use` for the helpers
+> consumed by `keypoint_localize` / `keypoint_subpixel` / `view_selection`).
+> The file grew to 2107 by the time it was split; the largest resulting file is
+> 389 lines. Sibling-module / bench / py-binding imports are untouched; only
+> `fronto_cache.rs` (repointed `super::` imports) and `tests.rs` (explicit
+> imports for the unit-tested kernels) changed. `cargo clippy -p sfmtool-core
+> --tests --benches` clean; 113 patch tests green. Commit (branch
+> `claude/next-steps-reports-sh73d6`)._
 
 ### 2. `features/optical_flow/gpu/mod.rs` — still 1438 lines, still three concerns (carried forward, #3)
 
@@ -623,6 +636,8 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
    already drew the six cut lines with `// ---` banners, and `fronto_cache.rs`
    is precedent for sibling extraction under `normal_refine/`. Biggest
    navigability win in `sfmtool-core` now that the regroup has landed.
+   > _Status (2026-06-30): Done — see Finding 1 above (branch
+   > `claude/next-steps-reports-sh73d6`)._
 
 3. **Consolidate `archive_io.rs` across the four format crates (#9).** A
    small `archive-format-common` crate eliminates 4-way duplication of an
