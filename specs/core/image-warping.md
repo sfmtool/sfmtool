@@ -201,8 +201,24 @@ impl CameraIntrinsics {
 
     /// Batch version.
     pub fn ray_to_pixel_batch(&self, rays: &[[f64; 3]]) -> Vec<Option<[f64; 2]>>;
+
+    /// Grid version: project an affine grid of camera-frame rays
+    /// (`origin + col·col_step + row·row_step`) to interleaved (sx, sy), with
+    /// `(NaN, NaN)` for invalid nodes. Exact for perspective models; bounded
+    /// coarse-grid interpolation for fisheye/equirectangular. See
+    /// [ray-grid-projection.md](ray-grid-projection.md).
+    pub fn ray_to_pixel_grid(
+        &self,
+        origin: [f64; 3], col_step: [f64; 3], row_step: [f64; 3],
+        cols: u32, rows: u32, out: &mut [f32],
+    );
 }
 ```
+
+`WarpMap::from_patch` builds its grid through `ray_to_pixel_grid`: it forms the
+affine ray basis from the patch plane + pose (model-free, infinity-aware) and the
+camera owns the projection. This is the dominant cost in `sfm embed-patches`; see
+[ray-grid-projection.md](ray-grid-projection.md) for the seam and measured impact.
 
 For perspective models, `ray_to_pixel` divides by `rz` and calls the existing
 `distort()` + focal/principal point transform. For fisheye models, it computes:

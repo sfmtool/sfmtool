@@ -300,49 +300,39 @@ impl WarpMap {
         resolution: u32,
     ) -> Self {
         let r = resolution.max(1);
-        let src_w = camera.width as f64;
-        let src_h = camera.height as f64;
-        let row_len = 2 * r as usize;
+
+        // Stage 1 — geometry (no camera model). The patch → camera-frame map is
+        // affine in `(s, t)`: `Q(s, t) = q0 + s·qu + t·qv`. A finite patch
+        // (`w = 1`) gets `R·x + t`; a point at infinity (`w = 0`) is rotated only
+        // — the weight is folded into `q0` exactly as
+        // [`RigidTransform::transform_point_homogeneous`] would. Building the
+        // affine basis once replaces the per-pixel corner build + pose multiply.
+        let rot = cam_from_world.rotation.to_rotation_matrix();
+        let q0 = rot * patch.center.coords + cam_from_world.translation * patch.w;
+        let qu = (rot * patch.u_axis) * patch.half_extent[0];
+        let qv = (rot * patch.v_axis) * patch.half_extent[1];
+
+        // Re-express on the integer `(col, row)` grid: pixel centers sit at
+        // `s = (col + 0.5)·step − 1`, `step = 2/r`, so the ray at `(col, row)` is
+        // `origin + col·col_step + row·row_step`.
         let step = 2.0 / r as f64;
+        let s0 = 0.5 * step - 1.0;
+        let origin = q0 + (qu + qv) * s0;
+        let col_step = qu * step;
+        let row_step = qv * step;
 
-        let fill_row = |row: u32, row_data: &mut [f32]| {
-            let t = (row as f64 + 0.5) * step - 1.0;
-            for col in 0..r {
-                let s = (col as f64 + 0.5) * step - 1.0;
-                // Homogeneous corner: a finite patch (w = 1) yields a Euclidean
-                // point transformed by R·x + t; a point at infinity (w = 0)
-                // yields a direction, rotated only (no translation), then
-                // projected as a ray.
-                let (xyz, w) = patch.corner_homogeneous(s, t);
-                let p_cam = cam_from_world.transform_point_homogeneous(xyz, w);
-                let (sx, sy) = match camera.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z]) {
-                    Some((px, py)) if px >= 0.0 && py >= 0.0 && px < src_w && py < src_h => {
-                        (px, py)
-                    }
-                    _ => (f64::NAN, f64::NAN),
-                };
-                let idx = 2 * col as usize;
-                row_data[idx] = sx as f32;
-                row_data[idx + 1] = sy as f32;
-            }
-        };
-
-        let data: Vec<f32> = if (r as usize) * (r as usize) <= PAR_MIN_PIXELS {
-            let mut data = vec![0.0f32; row_len * r as usize];
-            for (row, row_data) in data.chunks_exact_mut(row_len).enumerate() {
-                fill_row(row as u32, row_data);
-            }
-            data
-        } else {
-            (0..r)
-                .into_par_iter()
-                .flat_map(|row| {
-                    let mut row_data = vec![0.0f32; row_len];
-                    fill_row(row, &mut row_data);
-                    row_data
-                })
-                .collect()
-        };
+        // Stage 2 — projection (camera-owned; exact for perspective, bounded
+        // coarse-grid interpolation for fisheye/equirectangular). Invalid pixels
+        // come back as `(NaN, NaN)`, matching the other constructors.
+        let mut data = vec![0.0f32; 2 * r as usize * r as usize];
+        camera.ray_to_pixel_grid(
+            [origin.x, origin.y, origin.z],
+            [col_step.x, col_step.y, col_step.z],
+            [row_step.x, row_step.y, row_step.z],
+            r,
+            r,
+            &mut data,
+        );
 
         WarpMap {
             width: r,

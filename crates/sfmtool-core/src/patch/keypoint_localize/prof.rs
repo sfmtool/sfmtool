@@ -69,6 +69,20 @@ pub static TOTAL: Phase = Phase::new("localize_total");
 /// Per-view render-once cache build (`render_context`), run a single time per view
 /// before the round loop rather than per (view, round).
 pub static RENDER: Phase = Phase::new("render_context");
+/// Sub-phase of [`RENDER`]: `WarpMap::from_patch` — the per-pixel camera
+/// projection of the context tile.
+pub static RENDER_PROJECT: Phase = Phase::new("render_project");
+/// Sub-phase of [`RENDER`]: `compute_svd` — the per-pixel anisotropic Jacobian
+/// SVD (anisotropic sampler only).
+pub static RENDER_SVD: Phase = Phase::new("render_svd");
+/// Sub-phase of [`RENDER`]: the resample into the tile
+/// (`remap_aniso_with_pyramid` / `remap_bilinear`).
+pub static RENDER_REMAP: Phase = Phase::new("render_remap");
+/// Sub-phase of [`RENDER`]: per-channel mean accumulation over the rendered tile.
+pub static RENDER_MEAN: Phase = Phase::new("render_mean");
+/// Sub-phase of [`RENDER`]: building the centered/padded planes + valid/invalid
+/// masks.
+pub static RENDER_CENTER: Phase = Phase::new("render_center");
 /// Per-round z-normalization of the live cores into shared channel space.
 pub static ZNORM: Phase = Phase::new("znormalize");
 /// Per-view leave-one-out consensus template (LOO copy + IRLS reweight +
@@ -114,9 +128,14 @@ pub fn count(c: &AtomicU64, n: u64) {
     }
 }
 
-const PHASES: [&Phase; 8] = [
+const PHASES: [&Phase; 13] = [
     &TOTAL,
     &RENDER,
+    &RENDER_PROJECT,
+    &RENDER_SVD,
+    &RENDER_REMAP,
+    &RENDER_MEAN,
+    &RENDER_CENTER,
     &ZNORM,
     &TEMPLATE,
     &SEARCH,

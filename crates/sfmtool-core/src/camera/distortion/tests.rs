@@ -1491,3 +1491,301 @@ fn best_fit_pinhole_radial_model() {
     let (fo, _) = outside.focal_lengths();
     assert!(fi > fo);
 }
+
+// -----------------------------------------------------------------------
+// ray_to_pixel_grid: perspective exactness + fisheye coarse-grid bound
+// -----------------------------------------------------------------------
+
+/// Affine ray basis for an `r×r` grid spanning camera-frame image-plane coords
+/// `(x, y) ∈ [x0, x0+span]²` at unit depth, optionally tilted in depth by `tilt`
+/// across columns so `z` varies (exercising foreshortening). Mirrors the basis
+/// `WarpMap::from_patch` hands to `ray_to_pixel_grid`.
+fn grid_basis(x0: f64, y0: f64, span: f64, r: u32, tilt: f64) -> ([f64; 3], [f64; 3], [f64; 3]) {
+    let step = span / r as f64;
+    let origin = [x0 + 0.5 * step, y0 + 0.5 * step, 1.0];
+    let col_step = [step, 0.0, tilt * step];
+    let row_step = [0.0, step, 0.0];
+    (origin, col_step, row_step)
+}
+
+#[test]
+fn ray_to_pixel_grid_perspective_matches_scalar() {
+    // The perspective path is exact: every node equals scalar ray_to_pixel with
+    // the same in-frame test, bit-for-bit (same f64 math, same f32 cast).
+    let r = 48u32;
+    for cam in [
+        pinhole(),
+        simple_pinhole(),
+        simple_radial(),
+        radial(),
+        opencv(),
+    ] {
+        let (o, cs, rs) = grid_basis(-0.4, -0.3, 0.9, r, 0.2);
+        let mut out = vec![0f32; 2 * (r * r) as usize];
+        cam.ray_to_pixel_grid(o, cs, rs, r, r, &mut out);
+        let (w, h) = (cam.width as f64, cam.height as f64);
+        for row in 0..r {
+            for col in 0..r {
+                let ray = [
+                    o[0] + col as f64 * cs[0] + row as f64 * rs[0],
+                    o[1] + col as f64 * cs[1] + row as f64 * rs[1],
+                    o[2] + col as f64 * cs[2] + row as f64 * rs[2],
+                ];
+                let expect = match cam.ray_to_pixel(ray) {
+                    Some((px, py)) if px >= 0.0 && py >= 0.0 && px < w && py < h => {
+                        [px as f32, py as f32]
+                    }
+                    _ => [f32::NAN, f32::NAN],
+                };
+                let i = 2 * (row * r + col) as usize;
+                for k in 0..2 {
+                    if expect[k].is_nan() {
+                        assert!(out[i + k].is_nan(), "expected NaN at ({col},{row})");
+                    } else {
+                        assert_eq!(out[i + k], expect[k], "mismatch at ({col},{row})");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn coarse_grid_error_within_bound() {
+    // Fisheye/equirect take the coarse sub-grid + bilinear path. Compare it to
+    // the exact per-node projection over a spread of placements/spans — including
+    // wide-angle off-center tiles (worst-case curvature) and depth tilt — and
+    // bound both the photometric (sub-pixel) error and the validity disagreement.
+    let r = 48u32;
+    // Gentle, realistic patch tiles (small source span) where interpolation is
+    // accepted, plus aggressive wide-angle tiles (worst-case curvature) that the
+    // probe demotes to exact.
+    let configs = [
+        (-0.05, -0.05, 0.10, 0.0),
+        (0.10, -0.05, 0.12, 0.1),
+        (-0.20, 0.10, 0.20, 0.0),
+        (-0.30, -0.30, 0.60, 0.3),
+        (0.50, 0.30, 0.90, 0.2),
+        (-0.90, -0.20, 1.20, 0.0),
+        (0.80, 0.80, 1.00, 0.4),
+    ];
+    let mut max_err = 0f32;
+    let mut sse = 0f64;
+    let mut n_both = 0u64;
+    let mut n_disagree = 0u64;
+    let mut n_total = 0u64;
+    let mut interp_cells = 0usize;
+    let mut total_cells = 0usize;
+    // All `needs_ray_path` models take the coarse path, including equirectangular.
+    for cam in [
+        simple_radial_fisheye(),
+        radial_fisheye(),
+        opencv_fisheye(),
+        equirectangular(),
+    ] {
+        for &(x0, y0, span, tilt) in &configs {
+            let (o, cs, rs) = grid_basis(x0, y0, span, r, tilt);
+            let mut coarse = vec![0f32; 2 * (r * r) as usize];
+            let mut exact = vec![0f32; 2 * (r * r) as usize];
+            let (ic, tc) = cam.ray_to_pixel_grid_coarse(o, cs, rs, r, r, &mut coarse);
+            interp_cells += ic;
+            total_cells += tc;
+            cam.ray_to_pixel_grid_exact(o, cs, rs, r, r, &mut exact);
+            for i in (0..coarse.len()).step_by(2) {
+                n_total += 1;
+                let (cf, ef) = (coarse[i].is_finite(), exact[i].is_finite());
+                if cf != ef {
+                    n_disagree += 1;
+                    continue;
+                }
+                if ef {
+                    let d = ((coarse[i] - exact[i]).powi(2)
+                        + (coarse[i + 1] - exact[i + 1]).powi(2))
+                    .sqrt();
+                    max_err = max_err.max(d);
+                    sse += (d as f64).powi(2);
+                    n_both += 1;
+                }
+            }
+        }
+    }
+    let rms = (sse / n_both.max(1) as f64).sqrt();
+    let disagree_frac = n_disagree as f64 / n_total as f64;
+    let interp_frac = interp_cells as f64 / total_cells as f64;
+    eprintln!(
+        "[coarse-grid] stride={COARSE_GRID_STRIDE} tol={COARSE_GRID_TOL_PX} r={r} valid_px={n_both} \
+         max_err={max_err:.4}px rms_err={rms:.5}px \
+         validity_disagree={n_disagree}/{n_total} ({:.3}%) \
+         interpolated_cells={interp_cells}/{total_cells} ({:.1}%)",
+        100.0 * disagree_frac,
+        100.0 * interp_frac,
+    );
+    // The fast path must actually be exercised (else the test is vacuous).
+    assert!(interp_cells > 0, "no cells were interpolated");
+    // The per-cell probe demotes any cell that would exceed COARSE_GRID_TOL_PX to
+    // exact, so the worst-case error tracks the tolerance (a hair above it from
+    // non-probe interior points of accepted cells). Validity disagreements are
+    // confined to a sub-pixel band at the frame/domain edge, so they stay rare.
+    assert!(
+        max_err < 2.0 * COARSE_GRID_TOL_PX,
+        "coarse-grid max error {max_err} px exceeds 2x tol ({}px)",
+        2.0 * COARSE_GRID_TOL_PX,
+    );
+    assert!(
+        disagree_frac < 0.01,
+        "coarse-grid validity disagreement {disagree_frac} exceeds 1%"
+    );
+}
+
+#[test]
+fn coarse_grid_jacobian_degradation() {
+    // Numeric analysis: how much does the piecewise-bilinear coarse warp degrade
+    // the central-difference Jacobian (and the SVD derived from it) vs the exact
+    // per-node map? Compares J/sigma/anisotropy/major-dir pixel-by-pixel, split by
+    // cell-seam (central diff straddles a stride-8 node) vs cell-interior pixels.
+    use crate::camera::warp_map::WarpMap;
+    const MAX_ANISOTROPY: f32 = 16.0; // mirrors keypoint_subpixel.rs
+    let r = 48u32;
+    // Gentle/realistic tiles where interpolation is actually accepted (so seams
+    // exist), plus a couple of moderately curved ones.
+    let configs = [
+        (-0.05, -0.05, 0.10, 0.0),
+        (0.10, -0.05, 0.12, 0.1),
+        (-0.20, 0.10, 0.20, 0.0),
+        (0.15, 0.15, 0.25, 0.15),
+        (-0.30, -0.10, 0.35, 0.0),
+        // Strongly oblique, small span: anisotropic Jacobian at low curvature
+        // (cells stay interpolated) — stresses sigma/anisotropy/major-dir.
+        (-0.05, -0.05, 0.10, 1.5),
+        (0.08, -0.04, 0.12, 2.5),
+        (-0.15, 0.05, 0.14, 3.5),
+    ];
+    let fin = |d: &[f32], c: u32, rr: u32| d[2 * (rr * r + c) as usize].is_finite();
+    let nb_ok = |d: &[f32], c: u32, rr: u32| {
+        fin(d, c, rr)
+            && fin(d, c - 1, rr)
+            && fin(d, c + 1, rr)
+            && fin(d, c, rr - 1)
+            && fin(d, c, rr + 1)
+    };
+
+    let (mut jac_abs_max, mut jac_rel_max) = (0f32, 0f32);
+    let (mut jac_sse, mut jmag_sse, mut n) = (0f64, 0f64, 0u64);
+    let (mut sig_maj_rel_max, mut aniso_abs_max, mut ang_max) = (0f32, 0f32, 0f32);
+    let mut aniso_max_e = 1f32;
+    let mut aniso_cross = 0u64;
+    let (mut seam_sse, mut seam_n, mut int_sse, mut int_n) = (0f64, 0u64, 0f64, 0u64);
+
+    for cam in [simple_radial_fisheye(), radial_fisheye(), opencv_fisheye()] {
+        for &(x0, y0, span, tilt) in &configs {
+            let (o, cs, rs) = grid_basis(x0, y0, span, r, tilt);
+            let mut cd = vec![0f32; 2 * (r * r) as usize];
+            let mut ed = vec![0f32; 2 * (r * r) as usize];
+            cam.ray_to_pixel_grid(o, cs, rs, r, r, &mut cd); // coarse (fisheye)
+            cam.ray_to_pixel_grid_exact(o, cs, rs, r, r, &mut ed); // exact ground truth
+            let mut cw = WarpMap::new(r, r, cd.clone());
+            cw.compute_svd();
+            let mut ew = WarpMap::new(r, r, ed.clone());
+            ew.compute_svd();
+            for row in 1..r - 1 {
+                for col in 1..r - 1 {
+                    if !(nb_ok(&cd, col, row) && nb_ok(&ed, col, row)) {
+                        continue;
+                    }
+                    let jc = cw.get_jacobian(col, row);
+                    let je = ew.get_jacobian(col, row);
+                    let mut df = 0f32;
+                    let mut ef = 0f32;
+                    for i in 0..2 {
+                        for j in 0..2 {
+                            df += (jc[i][j] - je[i][j]).powi(2);
+                            ef += je[i][j].powi(2);
+                        }
+                    }
+                    let df = df.sqrt();
+                    let ef = ef.sqrt().max(1e-12);
+                    let rel = df / ef;
+                    jac_abs_max = jac_abs_max.max(df);
+                    jac_rel_max = jac_rel_max.max(rel);
+                    jac_sse += (df as f64).powi(2);
+                    jmag_sse += (ef as f64).powi(2);
+                    n += 1;
+
+                    let (smaj_c, smin_c, vx_c, vy_c) = cw.get_svd(col, row);
+                    let (smaj_e, smin_e, vx_e, vy_e) = ew.get_svd(col, row);
+                    sig_maj_rel_max =
+                        sig_maj_rel_max.max((smaj_c - smaj_e).abs() / smaj_e.max(1e-6));
+                    let an_c = smaj_c / smin_c.max(1e-6);
+                    let an_e = smaj_e / smin_e.max(1e-6);
+                    aniso_max_e = aniso_max_e.max(an_e);
+                    aniso_abs_max = aniso_abs_max.max((an_c - an_e).abs());
+                    if (an_c >= MAX_ANISOTROPY) != (an_e >= MAX_ANISOTROPY) {
+                        aniso_cross += 1;
+                    }
+                    // Major-direction angle error (only meaningful when anisotropic).
+                    if an_e > 1.2 {
+                        let cross = vx_c * vy_e - vy_c * vx_e;
+                        let dot = vx_c * vx_e + vy_c * vy_e;
+                        ang_max = ang_max.max(cross.atan2(dot).abs().to_degrees());
+                    }
+
+                    let seam = col % 8 == 0 || row % 8 == 0;
+                    if seam {
+                        seam_sse += (rel as f64).powi(2);
+                        seam_n += 1;
+                    } else {
+                        int_sse += (rel as f64).powi(2);
+                        int_n += 1;
+                    }
+                }
+            }
+        }
+    }
+    let jac_rms = (jac_sse / n.max(1) as f64).sqrt();
+    let jmag_rms = (jmag_sse / n.max(1) as f64).sqrt();
+    eprintln!("[jac-degradation] pixels={n}  |J|_F rms={jmag_rms:.3} (scale of the Jacobian)");
+    eprintln!(
+        "[jac-degradation] dJ_F: abs_max={jac_abs_max:.4} rms={jac_rms:.4}  rel_max={:.2}% rel_rms={:.3}%",
+        100.0 * jac_rel_max,
+        100.0 * jac_rms / jmag_rms,
+    );
+    eprintln!(
+        "[jac-degradation] sigma_major rel_max={:.3}%  anisotropy abs_max={aniso_abs_max:.4}  max_anisotropy_observed={aniso_max_e:.3} (clamp={MAX_ANISOTROPY})  crossings={aniso_cross}/{n}  major-dir angle_max={ang_max:.3}deg",
+        100.0 * sig_maj_rel_max,
+    );
+    let seam_rms = (seam_sse / seam_n.max(1) as f64).sqrt();
+    let int_rms = (int_sse / int_n.max(1) as f64).sqrt();
+    eprintln!(
+        "[jac-degradation] dJ rel-RMS  seam(col|row%8==0)={:.3}% ({seam_n}px)  interior={:.3}% ({int_n}px)  ratio={:.2}x",
+        100.0 * seam_rms,
+        100.0 * int_rms,
+        seam_rms / int_rms.max(1e-12),
+    );
+
+    // The position probe (COARSE_GRID_TOL_PX) bounds the warp, not its
+    // derivative, so guard the central-difference Jacobian that compute_svd /
+    // compute_jacobians feed to the anisotropic sampler and the GN gradient.
+    // Empirically the degradation is deep sub-percent and the kink at stride
+    // boundaries is harmless (central differencing averages across it, so seam
+    // pixels are no worse than cell interiors).
+    assert!(
+        jac_rel_max < 0.01,
+        "coarse-grid Jacobian worst-case rel error {jac_rel_max} exceeds 1%"
+    );
+    assert!(
+        jac_rms / jmag_rms < 0.005,
+        "coarse-grid Jacobian rel-RMS exceeds 0.5%"
+    );
+    assert_eq!(
+        aniso_cross, 0,
+        "coarse grid flipped a pixel across the MAX_ANISOTROPY clamp"
+    );
+    assert!(
+        ang_max < 1.0,
+        "major-direction error {ang_max} deg exceeds 1 deg"
+    );
+    assert!(
+        seam_rms <= int_rms * 2.0,
+        "seam Jacobian error unexpectedly dominates interior (kink not averaged out)"
+    );
+}
