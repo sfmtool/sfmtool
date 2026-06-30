@@ -97,6 +97,15 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
   audit. Every `.sfmr` file written today is v4 but the spec describes v3.
   Spec-only edit, but high readability value.
 
+> _Status (2026-06-30): Done — folded in by commit 6e13efc (PR #117, landed
+> the same afternoon this snapshot was taken). `sfmr-v4-patch-keypoints.md` is
+> deleted; `sfmr-file-format.md` now carries the `feature_source` discriminator,
+> the `images/image_file_hashes` + `tracks/keypoints_xy` archive entries (marked
+> "version 4+"), the `has_feature_indexes` / `has_keypoints_xy` keys, a v3 → v4
+> migration table, and a Version 4 history entry. The Stage 3 Python producer
+> (`sfm patches-to-keypoints` / `embed-patches`) also shipped (PR #117 et al.),
+> so this whole item is closed._
+
 ### 4. Inline-tests regression sweep across the workspace
 
 - **Spec reference:** `reports/2026-06-23-hygiene-audit.md` Top 3 #1 (Finding
