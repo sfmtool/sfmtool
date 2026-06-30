@@ -1,9 +1,16 @@
 use approx::assert_relative_eq;
 use nalgebra::{Point3, Vector3};
 
+use super::consensus::{
+    axpy_f32, axpy_f32_scalar, consensus_phi, mean_pairwise_channel, sum_sq_diff,
+    sum_sq_diff_scalar,
+};
+use super::support::view_render_patch;
+use super::znorm::{weighted_moments, weighted_moments_scalar, znorm_write, znorm_write_scalar};
 use super::*;
-use crate::camera::remap::ImageU8;
-use crate::camera::CameraModel;
+use crate::camera::remap::{remap_bilinear, ImageU8, ImageU8Pyramid};
+use crate::camera::{CameraIntrinsics, CameraModel, WarpMap};
+use crate::geometry::RigidTransform;
 
 /// Helper: build a simple pinhole camera.
 fn pinhole(width: u32, height: u32, focal: f64) -> CameraIntrinsics {

@@ -21,9 +21,11 @@
 
 use nalgebra::{SMatrix, Vector3};
 
-use super::{
-    consensus_phi, repose_patch, LevelContext, NormalRefineParams, Objective, ProjectedImage,
-};
+use super::consensus::{consensus_phi, ConsensusScratch};
+use super::level::LevelContext;
+use super::params::{NormalRefineParams, Objective, ProjectedImage};
+use super::support::repose_patch;
+use super::znorm::znormalize_into;
 use crate::camera::remap::remap_bilinear;
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
@@ -82,7 +84,7 @@ pub(super) struct Scratch {
     /// Flat z-normalized stack handed to `consensus_phi`.
     xs: Vec<f32>,
     /// Reused buffers for the consensus / IRLS reductions.
-    cons: super::ConsensusScratch,
+    cons: ConsensusScratch,
 }
 
 /// Undistorted-normalized projection `(x/z, y/z)` of the four patch grid corners
@@ -378,7 +380,7 @@ unsafe fn resample_support_avx2(
 /// frozen support grid coords and `sqrt_weights`/`total_weight` its window weights —
 /// candidate-independent, so the caller computes them once per level. `scratch`
 /// holds reused buffers so a candidate allocates nothing after warm-up. Mirrors
-/// [`super::normalized_stack`] + [`consensus_phi`]; `None` if a candidate map
+/// [`super::znorm::normalized_stack`] + [`consensus_phi`]; `None` if a candidate map
 /// fails or no channel survives.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn eval_phi(
@@ -450,7 +452,7 @@ pub(super) fn eval_phi(
     // Same z-normalization + consensus as the source-render path, on the shared
     // flat f32 buffers.
     let kept = super::prof::CACHE_ZNORM.time(|| {
-        super::znormalize_into(
+        znormalize_into(
             &scratch.raw[..vn * stride],
             vn,
             CHANNELS,

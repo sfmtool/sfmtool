@@ -147,6 +147,14 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
   `normal_refine/`. Tests already sibling-extracted in
   `normal_refine/tests.rs`, so the test surface is unaffected.
 
+> _Status (2026-06-30): Done — split into `normal_refine/{params,
+> parameterization,support,level,znorm,consensus,search,view_stack}.rs`;
+> `mod.rs` keeps the `refine_*` orchestration + re-exports. Largest resulting
+> file is 389 lines (was 1812 at audit time, 2107 when split). Public API and
+> the `crate::patch::normal_refine::*` paths are unchanged. clippy clean, 113
+> patch tests green. See `reports/2026-06-23-hygiene-audit.md` Finding 1.
+> Commit (branch `claude/next-steps-reports-sh73d6`)._
+
 > Larger items still open and worth scheduling beyond the Top 5: post-regroup
 > path drift sweep across 14 of 16 core specs and 3 GUI specs (mechanical
 > doc-only, high readability value); `archive_io.rs` consolidation into a
