@@ -1692,7 +1692,7 @@ pub fn localize_patch_keypoints(
                         .copy_from_slice(&xs[u * kept_ch * n..][..kept_ch * n]);
                     w += 1;
                 }
-                irls_view_weights(&loo_xs, w, kept_ch, n, params.robust_iters, &mut sc);
+                irls_view_weights(&loo_xs, w, kept_ch, n, params.robust_iters, None, &mut sc);
                 weighted_unit_template_into(&loo_xs, &sc.w, w, kept_ch, n, &mut search.tmpl);
             });
             prof::count(&prof::N_SEARCH, 1);

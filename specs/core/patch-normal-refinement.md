@@ -120,6 +120,38 @@ as weight concentrates on one view `Σwᵢ² → 1` and `ρ̄_w → 0/0`. (Don't
 `min_views` for this: `1/Σwᵢ² ≤ V` with equality only for exactly uniform weights,
 so a clean `V == min_views` track would be falsely rejected.)
 
+**View obliquity priors (opt-in).** Two independent uses of the per-view cosine
+`cos θᵢ = v̂ᵢ·n` between a view's surface→camera direction `v̂ᵢ` and the candidate
+normal `n`, both off by default (`obliquity_weight_power = 0`,
+`fronto_prior_weight = 0`) so the objective above is unchanged:
+
+- **(A) obliquity view-weight** `|cos θ|^p` (`obliquity_weight_power = p`): a
+  multiplicative prior folded into the IRLS weights (`wᵢ ← wᵢ·|cos θᵢ|^p`, seeded
+  and re-multiplied every reweight), so an oblique view contributes less to the
+  consensus template and score — a soft, continuous version of a hard grazing-view
+  cut. `p = 2` is the `cos²θ` foreshortening weight. On a point whose views span a
+  range of obliquities it down-weights the grazing ones; on a low-parallax point
+  (all views near-collinear, hence near-equal `cos θ`) the weights renormalize
+  away, so it does nothing there — that case is (B). Robust objective only
+  (`MeanPairwise` is unweighted by definition).
+- **(B) fronto-parallel prior** `λ·mean_v cos²θ` (`fronto_prior_weight = λ`): an
+  additive reward on the candidate normal, `Φ' = Φ + λ·mean_v (v̂ᵢ·n)²`, added
+  wherever candidates are ranked (the coarse-to-fine search and the final winner
+  pass, **not** the confidence stencil — confidence must report the data curvature
+  alone). Its maximizer is the normal facing the observing cameras, so it supplies
+  the constraint the data can't in the **narrow-baseline degeneracy**: when `Φ` is
+  flat (tilting the plane shifts every view's patch almost identically) the tilt is
+  unconstrained and a low-parallax surfel drifts to a photometrically-equivalent
+  edge-on orientation that renders distorted (a stop sign's octagon shears into a
+  cross-view-consistent smear). The prior lands it fronto-parallel instead. It only
+  tips near-ties — wherever real parallax curves `Φ` the small prior is overruled,
+  so well-constrained normals are unaffected — and self-scales with `mean cos²θ`.
+  With the prior active the ranking is `Φ + λ·mean cos²θ`, so the reported (pure)
+  `Φ` can dip below `init_photoconsistency` by up to the prior gap (a more-frontal
+  normal winning a near-tie). Measured on south-building: with `λ = 0.05`, `p = 2`,
+  the surfel of a near-collinear (2° triangulation angle) stop-sign point went from
+  ~69° off every view (a smear) to ~2° (a regular octagon) at no NCC cost.
+
 **Validity.** A candidate normal can project the patch partly out of frame (NaN)
 or behind a camera in some views. Score only over commonly-valid pixels; require a
 per-view minimum valid fraction and a minimum number of valid views, else mark the

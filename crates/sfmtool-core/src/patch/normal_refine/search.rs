@@ -12,6 +12,7 @@ use crate::patch::cloud::OrientedPatch;
 
 use super::consensus::{consensus_phi, ConsensusScratch};
 use super::level::{build_level_context, view_valid_mask, LevelContext};
+use super::obliquity::{fill_kept_obliquity_priors, fronto_prior};
 use super::parameterization::{exp_map_in_basis, tangent_basis};
 use super::params::{CacheMode, NormalRefineParams, Objective, ProjectedImage, MIN_MASK_PIXELS};
 use super::support::repose_patch;
@@ -28,6 +29,7 @@ pub(super) fn eval_phi(
     n: &Vector3<f64>,
     ctx: &LevelContext,
     views: &[ProjectedImage<'_>],
+    view_dirs: &[Vector3<f64>],
     resolution: u32,
     params: &NormalRefineParams,
     objective: Objective,
@@ -35,6 +37,18 @@ pub(super) fn eval_phi(
 ) -> Option<f64> {
     prof::count(&prof::N_EVAL, 1);
     let patch = repose_patch(base, n);
+    // Obliquity view-weight (A): |v̂·n|^power per kept view, filled before `n` is
+    // shadowed by the pixel count below. Inactive (`power == 0`) leaves `priors`
+    // empty and heap-free; this un-cached source path already builds a fresh
+    // `ConsensusScratch` per call, so a local buffer matches its allocation class.
+    let mut priors = Vec::new();
+    let priors_active = fill_kept_obliquity_priors(
+        &mut priors,
+        view_dirs,
+        &ctx.kept,
+        n,
+        params.obliquity_weight_power,
+    );
     let (raw, channels) = normalized_stack(
         &patch,
         ctx,
@@ -63,7 +77,9 @@ pub(super) fn eval_phi(
         )
     })?;
     let mut cons = ConsensusScratch::default();
-    prof::CONSENSUS.time(|| consensus_phi(&xs, ctx.kept.len(), kept, n, objective, &mut cons))
+    let priors = priors_active.then_some(priors.as_slice());
+    prof::CONSENSUS
+        .time(|| consensus_phi(&xs, ctx.kept.len(), kept, n, objective, priors, &mut cons))
 }
 
 /// Coarse-to-fine exp-map grid search from one seed normal. Each level
@@ -76,6 +92,7 @@ pub(super) fn coarse_to_fine(
     base: &OrientedPatch,
     seed: Vector3<f64>,
     views: &[ProjectedImage<'_>],
+    view_dirs: &[Vector3<f64>],
     resolution: u32,
     w_full: &[f64],
     params: &NormalRefineParams,
@@ -148,19 +165,24 @@ pub(super) fn coarse_to_fine(
         } else {
             (Vec::new(), 0.0)
         };
+        // Rank candidates by Φ plus the fronto-parallel prior (B); the prior is a
+        // geometric function of the candidate normal (independent of the render),
+        // so it is added to each Φ here. It only tips near-ties where Φ is flat.
         let mut eval = |n: &Vector3<f64>| -> Option<f64> {
-            match &cache {
+            let phi = match &cache {
                 Some(c) => fronto_cache::eval_phi(
                     base,
                     n,
                     c,
                     &ctx,
                     views,
+                    view_dirs,
                     resolution,
                     &cols,
                     &rows,
                     &sqrt_weights,
                     total_weight,
+                    params.obliquity_weight_power,
                     &mut scratch,
                     search_obj,
                 ),
@@ -169,12 +191,14 @@ pub(super) fn coarse_to_fine(
                     n,
                     &ctx,
                     views,
+                    view_dirs,
                     resolution,
                     params,
                     search_obj,
                     view_keypoints,
                 ),
-            }
+            }?;
+            Some(phi + fronto_prior(view_dirs, n, params.fronto_prior_weight))
         };
         let mut best_n = center;
         let mut best_phi = f64::NEG_INFINITY;
@@ -296,18 +320,24 @@ pub(super) fn grid_confidence(
     n: &Vector3<f64>,
     ctx: &LevelContext,
     views: &[ProjectedImage<'_>],
+    view_dirs: &[Vector3<f64>],
     resolution: u32,
     params: &NormalRefineParams,
     h: f64,
     view_keypoints: Option<&[Option<[f64; 2]>]>,
 ) -> f64 {
     let (u, v) = tangent_basis(n);
+    // Pure-Φ curvature: the obliquity view-weight (A) is part of the objective and
+    // flows through `eval_phi`, but the fronto prior (B) is deliberately excluded —
+    // confidence must report how tightly the *data* pins the normal, not how hard
+    // the prior pulls it fronto-parallel (which would fake confidence on flat Φ).
     let phi = |a: f64, b: f64| -> Option<f64> {
         eval_phi(
             base,
             &exp_map_in_basis(n, &u, &v, [a, b]),
             ctx,
             views,
+            view_dirs,
             resolution,
             params,
             params.objective,

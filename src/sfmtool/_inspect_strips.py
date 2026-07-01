@@ -191,7 +191,12 @@ def render_inspect_strips(
     skipped: list[int] = []
     for idx in point_indexes:
         strip = engine.strip(
-            idx, tile=tile, max_views=cap, context=ctx or None, annotate=True
+            idx,
+            tile=tile,
+            max_views=cap,
+            context=ctx or None,
+            annotate=True,
+            normal_dot=True,
         )
         ref = engine.reference_patch(idx, tile=ref_tile, max_views=cap)
         if strip is None or ref is None:
@@ -227,6 +232,7 @@ def render_inspect_strips(
         "right tiles -- top: image index;  bottom: n = NCC vs other views, "
         "e = reprojection error px",
         f"NCC = mean pairwise photoconsistency, a = triangulation angle (deg){suffix}",
+        "magenta dot = view obliquity (centre = fronto-parallel, box edge = grazing)",
     ]
     width, height = assemble_point_strips(
         out_path, rows, title=title, legend=legend, tile=tile

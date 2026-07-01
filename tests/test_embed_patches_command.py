@@ -205,9 +205,12 @@ def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
 
     def spy(recon, images, **kwargs):
         captured["subpixel"] = kwargs.get("subpixel")
+        captured["rounds"] = kwargs.get("rounds")
         captured["search_resolution_multiplier"] = kwargs.get(
             "search_resolution_multiplier"
         )
+        captured["obliquity_weight_power"] = kwargs.get("obliquity_weight_power")
+        captured["fronto_prior_weight"] = kwargs.get("fronto_prior_weight")
         return real(recon, images, **{**kwargs, "resolution": 12})
 
     monkeypatch.setattr(ep, "embed_patches", spy)
@@ -218,26 +221,35 @@ def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
         str(seoul_bull_workspace),
         str(out),
         "--subpixel",
-        "lk",
+        "2",
+        "--rounds",
+        "3",
         "--search-resolution-multiplier",
         "2.0",
+        "--obliquity-weight-power",
+        "2",
+        "--fronto-prior-weight",
+        "0.05",
     ]
     with mock_patch("sys.argv", ["sfm"] + args):
         result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
-    assert captured["subpixel"] == "lk"
+    assert captured["subpixel"] == 2
+    assert captured["rounds"] == 3
     assert captured["search_resolution_multiplier"] == 2.0
+    assert captured["obliquity_weight_power"] == 2.0
+    assert captured["fronto_prior_weight"] == 0.05
 
 
-def test_embed_patches_cli_rejects_unknown_subpixel(seoul_bull_workspace, tmp_path):
-    """Click validates `--subpixel` against the known choices; a typo errors
-    out before any work happens."""
+def test_embed_patches_cli_rejects_bad_subpixel(seoul_bull_workspace, tmp_path):
+    """`--subpixel` is a non-negative integer; a non-integer (or negative) value
+    errors out before any work happens."""
     args = [
         "embed-patches",
         str(seoul_bull_workspace),
         str(tmp_path / "out.sfmr"),
         "--subpixel",
-        "lq",  # typo for "lk"
+        "lk",  # no longer a valid value — it's an int now
     ]
     with mock_patch("sys.argv", ["sfm"] + args):
         result = CliRunner().invoke(main, args)

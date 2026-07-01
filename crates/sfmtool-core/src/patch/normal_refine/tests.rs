@@ -5,6 +5,7 @@ use super::consensus::{
     axpy_f32, axpy_f32_scalar, consensus_phi, mean_pairwise_channel, sum_sq_diff,
     sum_sq_diff_scalar,
 };
+use super::obliquity::{fill_kept_obliquity_priors, fronto_prior, OBLIQUITY_PRIOR_FLOOR};
 use super::support::view_render_patch;
 use super::znorm::{weighted_moments, weighted_moments_scalar, znorm_write, znorm_write_scalar};
 use super::*;
@@ -294,7 +295,7 @@ fn consensus_identity_matches_brute_force_pairwise_mean() {
         assert_relative_eq!(closed, brute, epsilon = 1e-5);
 
         // The full objective averages channels; with one channel it matches.
-        let phi = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise, &mut sc).unwrap();
+        let phi = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise, None, &mut sc).unwrap();
         assert_relative_eq!(phi, brute, epsilon = 1e-5);
     }
 }
@@ -330,13 +331,14 @@ fn robust_consensus_with_uniform_weights_matches_unweighted() {
         .collect();
     let (d, vw, ch, nn) = flatten_stack(&xs);
     let mut sc = ConsensusScratch::default();
-    let unweighted = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise, &mut sc).unwrap();
+    let unweighted = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise, None, &mut sc).unwrap();
     let robust = consensus_phi(
         &d,
         vw,
         ch,
         nn,
         Objective::RobustWeighted { iters: 3 },
+        None,
         &mut sc,
     )
     .unwrap();
@@ -360,13 +362,14 @@ fn robust_consensus_beats_unweighted_with_an_outlier() {
     ];
     let (d, vw, ch, nn) = flatten_stack(&xs);
     let mut sc = ConsensusScratch::default();
-    let unweighted = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise, &mut sc).unwrap();
+    let unweighted = consensus_phi(&d, vw, ch, nn, Objective::MeanPairwise, None, &mut sc).unwrap();
     let robust = consensus_phi(
         &d,
         vw,
         ch,
         nn,
         Objective::RobustWeighted { iters: 5 },
+        None,
         &mut sc,
     )
     .unwrap();
@@ -377,6 +380,136 @@ fn robust_consensus_beats_unweighted_with_an_outlier() {
     assert!(
         robust > 0.9,
         "robust should reject the outlier and recover inlier agreement, got {robust}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Obliquity priors (A: consensus view-weight, B: fronto-parallel prior)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn kept_obliquity_priors_are_cos_pow_and_off_at_zero() {
+    // Three view directions at 0°, 60°, 90° off the normal.
+    let n = Vector3::new(0.0, 0.0, 1.0);
+    let dirs = vec![
+        Vector3::new(0.0, 0.0, 1.0),               // cos = 1
+        Vector3::new(3f64.sqrt() / 2.0, 0.0, 0.5), // cos = 0.5 (60°)
+        Vector3::new(1.0, 0.0, 0.0),               // cos = 0 (90°, grazing)
+    ];
+    let kept = [0usize, 1, 2];
+    let mut pr = Vec::new();
+
+    // power == 0 disables the prior entirely (consensus runs prior-free): returns
+    // false and leaves the buffer empty.
+    assert!(!fill_kept_obliquity_priors(&mut pr, &dirs, &kept, &n, 0.0));
+    assert!(pr.is_empty());
+
+    // power == 2 is the cos² foreshortening weight, floored for the grazing view.
+    assert!(fill_kept_obliquity_priors(&mut pr, &dirs, &kept, &n, 2.0));
+    assert_relative_eq!(pr[0], 1.0, epsilon = 1e-12);
+    assert_relative_eq!(pr[1], 0.25, epsilon = 1e-12);
+    assert_relative_eq!(pr[2], OBLIQUITY_PRIOR_FLOOR, epsilon = 1e-12);
+
+    // `kept` selects and orders the priors — only the grazing view, in that order.
+    // Refilling reuses the same buffer (clear + extend), so it is exactly the
+    // subset with no stale tail.
+    let mut sub = pr;
+    assert!(fill_kept_obliquity_priors(
+        &mut sub,
+        &dirs,
+        &[2usize, 0],
+        &n,
+        2.0
+    ));
+    assert_eq!(sub.len(), 2);
+    assert_relative_eq!(sub[0], OBLIQUITY_PRIOR_FLOOR, epsilon = 1e-12);
+    assert_relative_eq!(sub[1], 1.0, epsilon = 1e-12);
+}
+
+#[test]
+fn fronto_prior_rewards_facing_the_cameras() {
+    // Two views clustered around +z: the prior is maximized by the normal that
+    // faces them and is sign-agnostic (squared), and it is exactly zero when off.
+    let dirs = vec![
+        Vector3::new(0.1, 0.0, 1.0).normalize(),
+        Vector3::new(-0.1, 0.0, 1.0).normalize(),
+    ];
+    let frontal = Vector3::new(0.0, 0.0, 1.0);
+    let tilted = exp_map_normal(&frontal, [35.0f64.to_radians(), 0.0]);
+
+    assert_eq!(fronto_prior(&dirs, &frontal, 0.0), 0.0);
+    assert_eq!(fronto_prior(&[], &frontal, 0.5), 0.0);
+
+    let pf = fronto_prior(&dirs, &frontal, 0.5);
+    let pt = fronto_prior(&dirs, &tilted, 0.5);
+    assert!(pf > pt, "frontal {pf} should score above tilted {pt}");
+    // Sign-agnostic: flipping the normal does not change the reward.
+    assert_relative_eq!(fronto_prior(&dirs, &(-frontal), 0.5), pf, epsilon = 1e-12);
+    // Scales linearly with the weight.
+    assert_relative_eq!(
+        fronto_prior(&dirs, &frontal, 1.0),
+        2.0 * pf,
+        epsilon = 1e-12
+    );
+}
+
+#[test]
+fn view_prior_downweights_a_view_in_the_robust_consensus() {
+    // Four mutually-consistent views: with a uniform prior (None) the IRLS weights
+    // stay near-uniform, but a prior that suppresses view 0 (the obliquity weight
+    // for a grazing view) drives its final consensus weight far below the others.
+    let base = synthetic_normalized(7, 24);
+    let xs: Vec<Vec<Vec<f64>>> = (0..4)
+        .map(|i| vec![consistent_view(&base, 100 + i as u64, 0.1)])
+        .collect();
+    let (d, vw, ch, nn) = flatten_stack(&xs);
+
+    let mut sc = ConsensusScratch::default();
+    irls_view_weights(&d, vw, ch, nn, 3, None, &mut sc);
+    let uniform = sc.w.clone();
+    assert!(
+        uniform[0] > 0.15,
+        "unpriored view 0 weight {} too low",
+        uniform[0]
+    );
+
+    // Obliquity prior: view 0 grazing (tiny), the rest frontal.
+    let priors = [OBLIQUITY_PRIOR_FLOOR, 1.0, 1.0, 1.0];
+    irls_view_weights(&d, vw, ch, nn, 3, Some(&priors), &mut sc);
+    assert!(
+        sc.w[0] < 1e-3,
+        "priored grazing view 0 weight {} should be suppressed",
+        sc.w[0]
+    );
+    assert!(
+        sc.w[1] > 0.3,
+        "frontal view 1 weight {} should dominate",
+        sc.w[1]
+    );
+}
+
+#[test]
+fn fronto_prior_recovers_frontal_normal_at_low_parallax() {
+    // Near-zero baseline: tilting the plane shifts every view's patch almost
+    // identically, so Φ is flat and photoconsistency alone can't pin the normal —
+    // the degeneracy that lets a tilted surfel survive (the distorted-stop-sign
+    // failure). Seeded from an 18°-tilted init, the fronto-parallel prior (B)
+    // supplies the missing constraint and lands the normal facing the cameras
+    // (≈ the true frontal normal).
+    let scene = Scene::new(&[[0.002, 0.0, 0.0], [-0.002, 0.0, 0.0], [0.0, 0.002, 0.0]]);
+    let views = scene.views();
+    let init_n = exp_map_normal(&true_normal(), [18.0f64.to_radians(), 0.0]);
+    let patch = plane_patch(init_n);
+    let params = NormalRefineParams {
+        fronto_prior_weight: 0.3,
+        ..test_params(Objective::RobustWeighted { iters: 3 })
+    };
+
+    let result = refine_patch_normal(&patch, &views, 15, &params, None);
+    let off = angle_between(&result.patch.normal(), &true_normal()).to_degrees();
+    assert!(
+        off < 6.0,
+        "fronto prior should recover the frontal normal at low parallax, got {off} deg off"
     );
 }
 

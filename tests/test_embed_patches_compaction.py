@@ -240,19 +240,17 @@ def verify_sfmr_to_temp(recon) -> tuple[bool, list]:
         return verify_sfmr(path)
 
 
-def test_embed_patches_default_is_no_subpixel(
+def test_embed_patches_default_is_two_rounds_one_sweep(
     seoul_bull_workspace: Path, tmp_path: Path
 ):
-    """The default ``embed_patches`` call (no ``subpixel=`` kwarg) is bit-for-bit
-    equivalent to passing ``subpixel="none"``. Pins the default so flipping it
-    in code can't slip in silently.
+    """The default ``embed_patches`` call (no ``subpixel=`` / ``rounds=`` kwargs) is
+    bit-for-bit equivalent to passing ``subpixel=1, rounds=2``. Pins the default so
+    flipping it in code can't slip in silently.
 
-    Scope: this only pins the **default kwarg value** to ``"none"``. It does
-    NOT pin behavioral equivalence to the pre-``subpixel``-knob pipeline — a
-    regression that changed *what* ``subpixel="none"`` does would slip
-    through here. Defending the broader contract would need a baseline
-    artifact compared against this build's output, which this test does not
-    carry.
+    Scope: this only pins the **default kwarg values** (one LK sweep, two rounds).
+    It does NOT pin the broader behavioral contract — defending that would need a
+    baseline artifact compared against this build's output, which this test does
+    not carry.
     """
     from sfmtool._embed_patches import embed_patches
 
@@ -261,30 +259,34 @@ def test_embed_patches_default_is_no_subpixel(
     images = _load_images(recon)
 
     default = embed_patches(recon, images, patch_size=10.0)
-    explicit_none = embed_patches(recon, images, patch_size=10.0, subpixel="none")
+    explicit = embed_patches(recon, images, patch_size=10.0, subpixel=1, rounds=2)
 
-    assert default.point_count == explicit_none.point_count
+    assert default.point_count == explicit.point_count
     np.testing.assert_array_equal(
-        np.asarray(default.keypoints_xy), np.asarray(explicit_none.keypoints_xy)
+        np.asarray(default.keypoints_xy), np.asarray(explicit.keypoints_xy)
     )
 
 
 def test_embed_patches_subpixel_lk_round_trips(
     seoul_bull_workspace: Path, tmp_path: Path
 ):
-    """``embed_patches(subpixel="lk")`` produces a valid ``embedded_patches``
+    """``embed_patches(subpixel=1)`` produces a valid ``embedded_patches``
     reconstruction that round-trips through ``.sfmr``, and its per-view
-    keypoints differ from the no-refinement baseline (the refiner actually
-    moved something — i.e. it ran end-to-end, not just was a no-op spliced
-    back over the baseline).
+    keypoints differ from the no-refinement baseline (``subpixel=0``) — the
+    refiner actually moved something (it ran end-to-end, not a no-op splice).
     """
     from sfmtool._embed_patches import embed_patches
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = _load_images(recon)
 
-    baseline = embed_patches(recon, images, patch_size=10.0, subpixel="none")
-    refined = embed_patches(recon, images, patch_size=10.0, subpixel="lk")
+    # Pin rounds=1 so the subpixel pass is the terminal step: at rounds=1 it
+    # feeds nothing downstream, so it changes no kept-view set and a per-row
+    # keypoint comparison is meaningful. (At rounds>=2 the round-1 keypoints feed
+    # the next round's normal refinement + grazing drop, which can shift
+    # membership — covered by test_embed_patches_multiple_rounds_round_trips.)
+    baseline = embed_patches(recon, images, patch_size=10.0, subpixel=0, rounds=1)
+    refined = embed_patches(recon, images, patch_size=10.0, subpixel=1, rounds=1)
 
     # Same membership shape (the subpixel refiner is local — it changes no
     # kept-view set), so a per-row keypoint comparison is meaningful.
@@ -296,14 +298,101 @@ def test_embed_patches_subpixel_lk_round_trips(
     # At least some observations must move (otherwise the splice was a no-op
     # and the wiring is broken).
     moved = np.linalg.norm(ref_kp - base_kp, axis=1) > 1e-3
-    assert moved.any(), "subpixel='lk' moved zero keypoints (wiring is a no-op?)"
+    assert moved.any(), "subpixel=1 moved zero keypoints (wiring is a no-op?)"
 
     # Round-trip the refined recon through .sfmr to confirm it's structurally
     # valid (the path the CLI takes).
     out = tmp_path / "refined.sfmr"
-    refined.save(str(out), operation="embed-patches subpixel=lk")
+    refined.save(str(out), operation="embed-patches subpixel=1")
     valid, errors = verify_sfmr(str(out))
     assert valid, f"integrity check failed: {errors}"
     reloaded = SfmrReconstruction.load(str(out))
     assert reloaded.feature_source == "embedded_patches"
     assert reloaded.point_count == refined.point_count
+
+
+def test_embed_patches_multiple_rounds_round_trips(
+    seoul_bull_workspace: Path, tmp_path: Path
+):
+    """``rounds > 1`` alternates normal- and keypoint-refinement, feeding each
+    round into the next and re-pruning grazing observations. The output is a valid
+    ``embedded_patches`` recon; the per-round grazing drop can only shrink the
+    observation/point set, never grow it. A per-round ``progress`` callback fires
+    once per round."""
+    from sfmtool._embed_patches import embed_patches
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+
+    one = embed_patches(recon, images, patch_size=10.0, subpixel=1, rounds=1)
+
+    lines: list[str] = []
+    three = embed_patches(
+        recon,
+        images,
+        patch_size=10.0,
+        subpixel=1,
+        rounds=3,
+        progress=lines.append,
+    )
+
+    assert three.feature_source == "embedded_patches"
+    # Per-round grazing pruning can only remove points/observations, so three
+    # rounds keeps no more points than one.
+    assert three.point_count <= one.point_count
+    assert three.point_count > 0
+    assert (
+        np.asarray(three.keypoints_xy).shape[0] <= np.asarray(one.keypoints_xy).shape[0]
+    )
+
+    # One progress line per round.
+    assert sum(line.strip().startswith("round ") for line in lines) == 3
+
+    out = tmp_path / "rounds.sfmr"
+    three.save(str(out), operation="embed-patches rounds=3")
+    valid, errors = verify_sfmr(str(out))
+    assert valid, f"integrity check failed: {errors}"
+
+
+def test_drop_grazing_observations_skips_points_at_infinity():
+    """A point at infinity has a unit *direction* in ``positions`` (not a location),
+    so its view-vs-normal obliquity is meaningless and the Rust refinement leaves
+    its frame alone. The grazing drop must therefore skip it entirely — keeping all
+    its observations — while still pruning a genuinely grazing finite point."""
+    from sfmtool._embed_patches import _drop_grazing_observations
+    from sfmtool._sfmtool import PatchCloud
+
+    # Two dense points, both with normal u x v = +z (f32 half-vectors, f64
+    # centers — the dtypes from_halfvec_arrays expects, as in compaction).
+    u = np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float32)
+    v = np.array([[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+    centers_pts = np.zeros((2, 3), dtype=np.float64)
+    cloud = PatchCloud.from_halfvec_arrays(u, v, centers_pts)
+
+    # One camera off to the side: its view direction is ~+x, ~90 deg off the +z
+    # normal — grazing, so it would be dropped for a finite point.
+    cam_centers = np.array([[10.0, 0.0, 1e-3]])
+    positions = np.zeros((2, 3))
+    at_infinity = np.array([False, True])
+    loc = [
+        {
+            "point_index": 0,
+            "views": np.array([0], dtype=np.uint32),
+            "keypoints": np.zeros((1, 2)),
+        },
+        {
+            "point_index": 1,
+            "views": np.array([0], dtype=np.uint32),
+            "keypoints": np.zeros((1, 2)),
+        },
+    ]
+
+    out, dropped = _drop_grazing_observations(
+        loc, cloud, cam_centers, positions, at_infinity, 80.0
+    )
+    by_pid = {int(o["point_index"]): o for o in out}
+    # Finite grazing point: its lone view is culled.
+    assert len(by_pid[0]["views"]) == 0
+    # Infinity point: untouched despite the (meaningless) grazing geometry.
+    assert len(by_pid[1]["views"]) == 1
+    assert dropped == 1

@@ -134,6 +134,25 @@ pub struct NormalRefineParams {
     /// knob has no benefit (and `Some(k ≥ 1)` would make the search dearer than
     /// the final pass).
     pub search_robust_iters: Option<u32>,
+    /// Exponent `p` of the multiplicative **obliquity view-weight** `|v̂·n|^p`
+    /// folded into the robust IRLS consensus weights (see
+    /// [`obliquity`](super::obliquity), use A). `0` (default) disables it — the
+    /// consensus runs exactly as before. `2` is the `cos²θ` foreshortening weight:
+    /// it softly down-weights a view the more oblique it sees the surfel, a
+    /// continuous replacement for a hard grazing-view cut. Only affects
+    /// [`Objective::RobustWeighted`] (the [`Objective::MeanPairwise`] search
+    /// ranking ignores it); the default `objective` is robust.
+    pub obliquity_weight_power: f64,
+    /// Weight `λ` of the additive **fronto-parallel prior** `λ·mean_v (v̂·n)²`
+    /// added to a candidate normal's `Φ` when ranking (see
+    /// [`obliquity`](super::obliquity), use B). `0` (default) disables it. It
+    /// rewards normals that face the observing cameras, supplying the missing
+    /// constraint on a low-parallax point (flat `Φ`) so the normal settles
+    /// fronto-parallel instead of drifting to a photometrically-equivalent tilt;
+    /// wherever real parallax curves `Φ` the (small) prior is overruled. Applied in
+    /// the coarse-to-fine search and the final winner pass, but **not** in the
+    /// confidence stencil (which reports the data curvature alone).
+    pub fronto_prior_weight: f64,
     /// Whether to render the per-patch RGBA representative texture
     /// ([`NormalRefineResult::representative`]) at the found normal. Off by
     /// default: it is one extra full-grid source render per kept view per patch
@@ -172,6 +191,8 @@ impl Default for NormalRefineParams {
             cache_supersample: 2.0,
             compute_confidence: false,
             search_robust_iters: None,
+            obliquity_weight_power: 0.0,
+            fronto_prior_weight: 0.0,
             render_bitmap: false,
         }
     }

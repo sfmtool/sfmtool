@@ -159,10 +159,14 @@ impl PatchViewStack {
     /// consensus), but reads the already-rendered images and also returns the
     /// weights, so the representative fusion reuses them. `None` when the support
     /// can't be scored.
+    /// `view_priors` (if given, in the stack's view order — the `ctx.kept` order
+    /// the stack was rendered in) is the multiplicative obliquity view-weight (A)
+    /// for the robust consensus; `None` runs it prior-free.
     pub(super) fn score(
         &self,
         ctx: &LevelContext,
         params: &NormalRefineParams,
+        view_priors: Option<&[f64]>,
     ) -> Option<(f64, Vec<f64>)> {
         let raw = self.gather(&ctx.pixels)?;
         let n = ctx.pixels.len();
@@ -186,7 +190,15 @@ impl PatchViewStack {
         })?;
         let mut sc = ConsensusScratch::default();
         prof::CONSENSUS.time(|| {
-            consensus_phi_with_weights(&xs, self.images.len(), kept, n, params.objective, &mut sc)
+            consensus_phi_with_weights(
+                &xs,
+                self.images.len(),
+                kept,
+                n,
+                params.objective,
+                view_priors,
+                &mut sc,
+            )
         })
     }
 

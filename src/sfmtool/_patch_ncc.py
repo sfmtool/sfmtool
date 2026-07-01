@@ -52,6 +52,7 @@ def render_track_strip(
     sep: int = 2,
     reproj_errs: list[float] | None = None,
     per_view_scores: bool = False,
+    normal_offsets: list[tuple[float, float] | None] | None = None,
 ) -> tuple[np.ndarray, float, int]:
     """Render a point's observations as a horizontal BGR patch strip, returning
     ``(strip, mean_pairwise_ncc, n_views)``. Tiles are labeled by image index;
@@ -66,6 +67,14 @@ def render_track_strip(
     that observation's NCC against the other views (the mean of its pairwise
     scores), and, when ``reproj_errs`` is given (parallel to ``obs_imgs``), its
     reprojection error in pixels.
+
+    With ``normal_offsets`` (parallel to ``obs_imgs``, each an ``(s, t)`` in the
+    patch tangent frame or ``None``) each tile gets an obliquity marker: a line
+    from the patch-extent centre (fronto-parallel, i.e. viewing straight down the
+    surface normal) to a dot at ``(s, t)`` mapped onto the patch-extent box. The
+    dot reaches the box edge as the view grazes the surface (90 deg off the
+    normal), so its displacement shows how oblique — and thus how distortion-prone
+    — that view of the surfel is, and in which in-plane direction the camera lies.
     """
     obs = obs_imgs
     patches = [patch_of(i) for i in obs]
@@ -100,6 +109,27 @@ def render_track_strip(
             scale = tile / src_sz
             x0, x1 = round(off * scale), round((off + sz) * scale)
             cv2.rectangle(bgr, (x0, x0), (x1 - 1, x1 - 1), (0, 255, 0), 1)
+        if normal_offsets is not None and normal_offsets[k] is not None:
+            # Obliquity marker: box centre = fronto-parallel; the dot at (s, t)
+            # (patch tangent frame, |(s,t)| <= 1) drifts to the box edge as the
+            # view grazes. Box maps [-1, 1] to the patch-extent box (the green box
+            # in context mode, else the whole tile).
+            s, t = normal_offsets[k]
+            if inner is not None:
+                off, sz = inner
+                scale = tile / src_sz
+                bx0, bx1 = round(off * scale), round((off + sz) * scale)
+            else:
+                bx0, bx1 = 0, tile
+            bc = 0.5 * (bx0 + bx1)
+            bh = 0.5 * (bx1 - bx0)
+            dx, dy = round(bc + s * bh), round(bc + t * bh)
+            c0 = round(bc)
+            cv2.line(bgr, (c0, c0), (dx, dy), (255, 0, 255), 1, cv2.LINE_AA)
+            cv2.circle(
+                bgr, (dx, dy), max(2, tile // 36), (255, 0, 255), -1, cv2.LINE_AA
+            )
+            cv2.circle(bgr, (c0, c0), 1, (255, 255, 255), -1)
         cv2.putText(
             bgr,
             str(img_idx),

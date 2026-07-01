@@ -27,6 +27,7 @@ use crate::reconstruction::SfmrReconstruction;
 mod consensus;
 mod fronto_cache;
 mod level;
+mod obliquity;
 mod parameterization;
 mod params;
 pub mod prof;
@@ -54,6 +55,7 @@ pub(in crate::patch) use support::{build_support, window_weights, Support};
 pub(in crate::patch) use znorm::{normalized_stack, weighted_moments_pub, znormalize_into_kept};
 
 // Internal helpers used by the orchestration below.
+use obliquity::{fill_kept_obliquity_priors, fronto_prior};
 use search::{build_final_context, coarse_to_fine, eval_phi, grid_confidence};
 use support::repose_patch;
 use view_stack::{PatchViewStack, AGREEMENT_SIGMA};
@@ -69,9 +71,13 @@ use view_stack::{PatchViewStack, AGREEMENT_SIGMA};
 /// The search is seeded from the patch's current normal and the mean-viewing
 /// normal of the supplied views, runs a coarse-to-fine exp-map grid per seed,
 /// then scores every seed winner *and* the init normal over one final frozen
-/// support — so the returned `photoconsistency` is never below
-/// `init_photoconsistency` when both are finite. Patches whose validity gates
-/// fail outright are returned unrefined (NaN scores, zero confidence).
+/// support. With the fronto-parallel prior off
+/// ([`NormalRefineParams::fronto_prior_weight`] `== 0`, the default) the returned
+/// `photoconsistency` is never below `init_photoconsistency` when both are finite;
+/// with the prior active the ranking is `Φ + λ·mean cos²θ`, so a more-frontal
+/// normal can win a near-tie and the reported (pure) `Φ` may dip below the init's
+/// by up to the prior gap. Patches whose validity gates fail outright are returned
+/// unrefined (NaN scores, zero confidence).
 ///
 /// Not idempotent by design: feeding a refined normal back in can improve it
 /// further (each pass re-seeds and re-explores), so running to convergence is the
@@ -142,6 +148,22 @@ fn refine_patch_normal_impl(
         .iter()
         .map(|v| v.cam_from_world.inverse_translation_origin())
         .collect();
+    // Unit surface→camera direction per view (full `views` order), for the
+    // obliquity priors (A) and the fronto-parallel prior (B). A degenerate zero
+    // vector (camera at the point) falls back to the init normal, so its cosine is
+    // ~1 (no penalty) — a pathological case that shouldn't arise for a real point.
+    let view_dirs: Vec<Vector3<f64>> = centers
+        .iter()
+        .map(|c| {
+            let d = c - patch.center;
+            let nrm = d.norm();
+            if nrm > 1e-12 {
+                d / nrm
+            } else {
+                init_n
+            }
+        })
+        .collect();
     let mean_view = mean_viewing_normal(&patch.center, &centers);
     if mean_view.dot(&init_n) < (0.5f64).to_radians().cos() {
         seeds.push(mean_view);
@@ -154,6 +176,7 @@ fn refine_patch_normal_impl(
             patch,
             *seed,
             views,
+            &view_dirs,
             resolution,
             &w_full,
             params,
@@ -197,7 +220,20 @@ fn refine_patch_normal_impl(
                 params.sampler,
                 view_keypoints,
             );
-            let (phi, weights) = stack.score(&ctx, params)?;
+            // Obliquity view-weight (A) for this candidate, in the stack's (=
+            // ctx.kept) view order; the fused representative reuses these weights.
+            // This pass runs once per survivor (not per grid candidate) and already
+            // renders a full stack, so a local prior buffer is negligible here.
+            let mut priors = Vec::new();
+            let priors_active = fill_kept_obliquity_priors(
+                &mut priors,
+                &view_dirs,
+                &ctx.kept,
+                n,
+                params.obliquity_weight_power,
+            );
+            let (phi, weights) =
+                stack.score(&ctx, params, priors_active.then_some(priors.as_slice()))?;
             Some((phi, Some((weights, stack))))
         } else {
             let phi = eval_phi(
@@ -205,6 +241,7 @@ fn refine_patch_normal_impl(
                 n,
                 &ctx,
                 views,
+                &view_dirs,
                 resolution,
                 params,
                 params.objective,
@@ -214,16 +251,25 @@ fn refine_patch_normal_impl(
         }
     };
 
+    // Rank by the objective Φ + fronto prior (B); report the *pure* Φ. The prior
+    // lets a more-frontal normal win a near-tie the flat-Φ regime produces, so the
+    // reported `photoconsistency` can dip below `init_photoconsistency` (by at most
+    // the prior gap) when the prior is active — the intended fronto-parallel pull.
     let init = score(&init_n);
     let phi_init = init.as_ref().map(|(phi, _)| *phi);
     let mut best_n = init_n;
     let mut best_phi = phi_init.unwrap_or(f64::NEG_INFINITY);
+    let mut best_obj = phi_init.map_or(f64::NEG_INFINITY, |p| {
+        p + fronto_prior(&view_dirs, &init_n, params.fronto_prior_weight)
+    });
     // The winner's rendered stack + consensus weights (bitmap path only).
     let mut best: Winner = init.and_then(|(_, extra)| extra);
     let mut improved = false;
     for n in &survivors {
         if let Some((phi, extra)) = score(n) {
-            if phi > best_phi {
+            let obj = phi + fronto_prior(&view_dirs, n, params.fronto_prior_weight);
+            if obj > best_obj {
+                best_obj = obj;
                 best_phi = phi;
                 best_n = *n;
                 best = extra;
@@ -251,6 +297,7 @@ fn refine_patch_normal_impl(
                 &best_n,
                 &ctx,
                 views,
+                &view_dirs,
                 resolution,
                 params,
                 h,

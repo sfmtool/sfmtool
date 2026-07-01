@@ -190,7 +190,7 @@ fn build_reference(
 
     // Robust per-view weights for the reference consensus (same IRLS as Φ).
     let mut sc = ConsensusScratch::default();
-    irls_view_weights(&xs, views_kept, kept, n, params.robust_iters, &mut sc);
+    irls_view_weights(&xs, views_kept, kept, n, params.robust_iters, None, &mut sc);
     let weights = &sc.w;
 
     // Weighted consensus template per channel, then unit-normalize per channel so

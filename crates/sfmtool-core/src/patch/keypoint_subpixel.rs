@@ -668,7 +668,15 @@ pub fn refine_patch_keypoints(
         //    this is the spec's frozen `T`; on later sweeps it is the per-sweep
         //    refresh. Per-move additionally rebuilds the running sum `S` so it
         //    can be delta-updated as views move within the sweep.
-        irls_view_weights(&xs, live.len(), channels, n, params.robust_iters, &mut sc);
+        irls_view_weights(
+            &xs,
+            live.len(),
+            channels,
+            n,
+            params.robust_iters,
+            None,
+            &mut sc,
+        );
         weighted_unit_template_into(&xs, &sc.w, live.len(), channels, n, &mut tmpl);
         if matches!(params.consensus_refresh, ConsensusRefresh::PerMove) {
             running.rebuild(&xs, &sc.w, live.len(), channels, n);
