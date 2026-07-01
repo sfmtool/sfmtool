@@ -83,6 +83,8 @@ use crate::patch::normal_refine::{
 };
 use rayon::prelude::*;
 
+pub mod prof;
+
 /// `remap_aniso` sample cap along the major axis (mirrors `normal_refine`).
 const MAX_ANISOTROPY: u32 = 16;
 
@@ -1079,7 +1081,9 @@ pub fn refine_patch_cloud_keypoints(
             "starting_keypoints must be parallel to the cloud"
         );
     }
-    cloud
+    prof::reset();
+    let wall_start = std::time::Instant::now();
+    let out = cloud
         .patches
         .par_iter()
         .enumerate()
@@ -1087,7 +1091,9 @@ pub fn refine_patch_cloud_keypoints(
             let seeds = starting_keypoints.map(|s| s[i].as_slice());
             refine_patch_keypoints(patch, views, &view_sets[i], seeds, params)
         })
-        .collect()
+        .collect();
+    prof::report(cloud.len(), wall_start.elapsed().as_secs_f64());
+    out
 }
 
 #[cfg(test)]

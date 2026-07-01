@@ -387,6 +387,19 @@ For performance, bilinear interpolation on `u8` data should:
 - Parallelize over rows with `rayon`
 - Clamp source coordinates to image bounds (same as `sample_bilinear` in the
   optical flow module)
+- **Compute the corner geometry once per pixel, not once per channel.** The
+  half-pixel offset, `floor`/`clamp` edge handling, and stride index depend only
+  on `(sx, sy)`, so for a 3-channel (RGB) source they are identical across
+  channels. A per-channel sampler re-derives them 3× per pixel; a channel-batched
+  gather (`bilinear_corners` → the four corner base indices + blend weights, then
+  `data[idx[k] + ch]` per channel) does the address math once and only varies the
+  fetch. On `dino_dog_toy` this roughly halved `render_remap` (~2.1× on the value
+  path; ~41→21 ns/tap) with **bit-identical** output. The single-source-of-truth
+  geometry helper (`bilinear_geometry`) also backs the value+gradient sampler used
+  by keypoint-subpixel refinement (`remap_bilinear_with_grad`), so both the value
+  and gradient batched gathers stay in lockstep with the per-channel path.
+  Opt-in sampler counters live in `camera::remap::prof` (gated on
+  `SFMTOOL_PROFILE`); see `specs/core/ray-grid-projection.md` for the measurements.
 
 ### Anisotropic Filtering
 

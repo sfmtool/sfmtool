@@ -235,6 +235,79 @@ fn test_sample_bilinear_four_pixel_average() {
     assert!((val - 90.0).abs() < 1e-3, "got {}", val);
 }
 
+#[test]
+fn sample_bilinear_u8_all_matches_per_channel() {
+    // The channel-batched gather must be bit-identical to per-channel
+    // `sample_bilinear_u8` + round/clamp across every channel count and a range
+    // of in-, edge-, and out-of-bounds coordinates (clamping paths included).
+    for channels in [1u32, 3, 4] {
+        let w = 5u32;
+        let h = 4u32;
+        let n = (w * h * channels) as usize;
+        // Deterministic pseudo-random-ish byte pattern.
+        let data: Vec<u8> = (0..n).map(|i| ((i * 37 + 11) % 256) as u8).collect();
+        let img = ImageU8::new(w, h, channels, data);
+
+        for &y in &[-1.3f32, 0.0, 0.5, 1.7, 2.5, 3.9, 5.2] {
+            for &x in &[-0.7f32, 0.0, 0.5, 1.25, 2.5, 4.5, 6.1] {
+                let mut got = vec![0u8; channels as usize];
+                sample_bilinear_u8_all(&img, x, y, &mut got);
+                for ch in 0..channels {
+                    let val = sample_bilinear_u8(&img, x, y, ch);
+                    let want = (val + 0.5).clamp(0.0, 255.0) as u8;
+                    assert_eq!(
+                        got[ch as usize], want,
+                        "channels={channels} x={x} y={y} ch={ch}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn sample_bilinear_with_grad_u8_all_matches_per_channel() {
+    // The channel-batched value+gradient gather must be bit-identical to
+    // per-channel `sample_bilinear_with_grad_u8` for value AND both gradients,
+    // across channel counts and in-/edge-/out-of-bounds coordinates.
+    for channels in [1u32, 3, 4] {
+        let w = 5u32;
+        let h = 4u32;
+        let n = (w * h * channels) as usize;
+        let data: Vec<u8> = (0..n).map(|i| ((i * 37 + 11) % 256) as u8).collect();
+        let img = ImageU8::new(w, h, channels, data);
+
+        for &y in &[-1.3f32, 0.0, 0.5, 1.7, 2.5, 3.9, 5.2] {
+            for &x in &[-0.7f32, 0.0, 0.5, 1.25, 2.5, 4.5, 6.1] {
+                let c = channels as usize;
+                let mut val = vec![0f32; c];
+                let mut gx = vec![0f32; c];
+                let mut gy = vec![0f32; c];
+                sample_bilinear_with_grad_u8_all(&img, x, y, &mut val, &mut gx, &mut gy);
+                for ch in 0..channels {
+                    let (wv, wgx, wgy) = sample_bilinear_with_grad_u8(&img, x, y, ch);
+                    let k = ch as usize;
+                    assert_eq!(
+                        val[k].to_bits(),
+                        wv.to_bits(),
+                        "value channels={channels} x={x} y={y} ch={ch}"
+                    );
+                    assert_eq!(
+                        gx[k].to_bits(),
+                        wgx.to_bits(),
+                        "grad_x channels={channels} x={x} y={y} ch={ch}"
+                    );
+                    assert_eq!(
+                        gy[k].to_bits(),
+                        wgy.to_bits(),
+                        "grad_y channels={channels} x={x} y={y} ch={ch}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 // -----------------------------------------------------------------------
 // remap_bilinear tests
 // -----------------------------------------------------------------------

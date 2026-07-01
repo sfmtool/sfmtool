@@ -155,7 +155,53 @@ Both `from_patch` consumers benefit (shared primitive: localization's
 | `cache_prerender` (refine, CPU) | 5.5 s | **1.6 s** |
 
 After this change, localization is no longer projection-bound: `render_remap`,
-`loo_template`, and `search_shift` become the co-dominant terms (~25–29% each on
-dino). A `pixel_to_ray_grid` sibling — the undistort direction — would accelerate
-`render_remap` and the rectification/undistort consumers next; it can reuse the
-same coarse-grid-with-probe helper.
+`loo_template`, and `search_shift` become the co-dominant terms. `render_remap` is
+**not** a projection cost — it consumes an **already-built** `WarpMap` (reads the
+precomputed `(sx, sy)` per pixel) and does a bilinear/anisotropic *gather*. No
+projection or distortion happens there, so a `pixel_to_ray_grid` sibling would not
+help it; that sibling only accelerates code that *builds a forward warp map* per
+pixel — the rectification/undistort consumers (`_undistort_images`,
+`_rectification`), which can reuse the same coarse-grid-with-probe helper.
+
+## Follow-up: channel-batched bilinear gather (`render_remap`)
+
+Profiling the post-projection state showed `render_remap` (the resample, default
+`Sampler::Bilinear`) is a pure scalar gather: instrumented over dino it sampled
+**99.9%** of every context tile (essentially no out-of-frame waste to reclaim) at
+exactly **3.00 bilinear taps/pixel** — one `sample_bilinear_u8` call per RGB
+channel, each **recomputing** the whole corner geometry (`floor`, four `clamp`s,
+fractions, stride index) for the *same* `(sx, sy)`. So two-thirds of the address
+math was redundant.
+
+The fix gathers all channels from **one** corner-geometry computation per pixel,
+keeping the exact multiply/add associativity of the per-channel path so the output
+is **bit-identical**. A single geometry helper, `bilinear_geometry` (the half-pixel
+offset, `floor`/`clamp` edge handling, stride index, and `(fx, fy)` fractions),
+backs every sampler so they cannot drift: `bilinear_taps` (per-channel value /
+value+grad), `bilinear_corners` (weights) → `sample_bilinear_u8_all`, and the
+value+gradient `sample_bilinear_with_grad_u8_all`. Bit-exactness is locked by
+`sample_bilinear_u8_all_matches_per_channel` and
+`sample_bilinear_with_grad_u8_all_matches_per_channel`.
+
+Counted/optimized paths: `remap_bilinear`, the anisotropic `σ_major ≤ 1` fast
+path, and the bilinear **gradient** path `remap_bilinear_with_grad_into` (the
+default sampler for keypoint-subpixel refinement). Measured on dino (instrumented,
+same taps / sampled % before and after):
+
+| | before | after |
+|---|--:|--:|
+| `render_remap` (localize, CPU) | 312.6 s | **~150 s** (~2.1×; ~41→21 ns/tap) |
+| `remap` (refine, CPU) | 29.8 s | **~15 s** (~2.0×) |
+| localize wall | 29.5 s | **~25.9 s** |
+| **embed-patches total wall** | 54.3 s | **~48.5 s** |
+
+`render_remap` drops from ~34% to ~18% of `localize_total`, roughly tied with
+`loo_template`/`search_shift` now. The gradient path benefits the same way per tap,
+but the effect on the `sfm embed-patches --subpixel lk` stage is within run-to-run
+noise (~24.1 vs ~24.8 s wall): its 22.9 B-tap remap is a minority of that stage's
+cost, which is dominated by the Gauss–Newton solve, so the batching there is mostly
+a correctness-preserving consistency win. The opt-in sampler counters live in
+`camera::remap::prof` (gated on `SFMTOOL_PROFILE`); the subpixel stage brackets
+them via `keypoint_subpixel::prof` so `--subpixel lk` reports its own remap line.
+The remaining `render_remap` headroom is SIMD across the 4 corners × channels; the
+search phases are the other co-dominant targets.

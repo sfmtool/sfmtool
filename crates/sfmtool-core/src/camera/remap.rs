@@ -7,6 +7,118 @@ use rayon::prelude::*;
 
 use crate::camera::warp_map::{WarpMap, PAR_MIN_PIXELS};
 
+/// Opt-in resample-sampler counters, shared by both patch phases (localization's
+/// `render_remap` and refinement's `remap`). Gated on `SFMTOOL_PROFILE`; with the
+/// variable unset the increments compile to a single branch on a cached flag, so
+/// the hot path is unaffected. The per-phase prof modules
+/// (`keypoint_localize::prof`, `normal_refine::prof`) call [`reset`] at the start
+/// of their batch and [`report`] at the end, so each phase reads its own totals.
+///
+/// Counting happens per output row (one atomic add per row, not per pixel), so the
+/// inner bilinear loop is untouched; the small per-row atomics still inflate the
+/// `render_remap`/`remap` *timing* slightly when profiling is on, so take the
+/// counts from an instrumented run and the timings from a clean run.
+///
+/// Counted paths: `remap_bilinear`, `remap_aniso_with_pyramid`, and the bilinear
+/// gradient path `remap_bilinear_with_grad_into` (the default subpixel sampler).
+/// The anisotropic *gradient* path (`remap_aniso_with_grad_into`) is not
+/// tap-counted yet — it is only reached when the subpixel stage runs with
+/// `Sampler::Anisotropic`, which is not the default.
+pub mod prof {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::OnceLock;
+
+    /// Whether `SFMTOOL_PROFILE` is set (cached on first query).
+    pub fn enabled() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var("SFMTOOL_PROFILE").is_ok_and(|v| !v.is_empty() && v != "0")
+        })
+    }
+
+    /// `remap_*` calls (one per (patch, view) render).
+    pub static CALLS: AtomicU64 = AtomicU64::new(0);
+    /// Output pixels visited (`out_w * out_h`, summed over calls).
+    pub static PX_TOTAL: AtomicU64 = AtomicU64::new(0);
+    /// Output pixels actually sampled (source coord not NaN — the rest are
+    /// out-of-frame / behind-camera and written black for free).
+    pub static PX_SAMPLED: AtomicU64 = AtomicU64::new(0);
+    /// Bilinear taps issued: one per sampled pixel per channel for
+    /// `remap_bilinear`; for the anisotropic sampler also × the footprint walk ×
+    /// pyramid levels. A "tap" is one `bilinear_taps` 4-corner fetch.
+    pub static TAPS: AtomicU64 = AtomicU64::new(0);
+    /// Anisotropic-only: pixels taking the single-bilinear fast path
+    /// (`sigma_major <= 1`).
+    pub static ANISO_FAST: AtomicU64 = AtomicU64::new(0);
+    /// Anisotropic-only: pixels taking the multi-tap footprint walk.
+    pub static ANISO_MULTI: AtomicU64 = AtomicU64::new(0);
+    /// Anisotropic-only: summed footprint length `n` over multi-tap pixels
+    /// (mean `n = ANISO_SUM_N / ANISO_MULTI`).
+    pub static ANISO_SUM_N: AtomicU64 = AtomicU64::new(0);
+
+    /// Add `n` to `c` when profiling is on.
+    #[inline]
+    pub fn add(c: &AtomicU64, n: u64) {
+        if enabled() {
+            c.fetch_add(n, Ordering::Relaxed);
+        }
+    }
+
+    /// Zero all sampler counters (start of a profiled batch).
+    pub fn reset() {
+        for c in [
+            &CALLS,
+            &PX_TOTAL,
+            &PX_SAMPLED,
+            &TAPS,
+            &ANISO_FAST,
+            &ANISO_MULTI,
+            &ANISO_SUM_N,
+        ] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Print the sampler summary to stderr (end of a profiled batch). No-op when
+    /// profiling is off or no remap ran.
+    pub fn report() {
+        if !enabled() {
+            return;
+        }
+        let calls = CALLS.load(Ordering::Relaxed);
+        if calls == 0 {
+            return;
+        }
+        let total = PX_TOTAL.load(Ordering::Relaxed).max(1);
+        let sampled = PX_SAMPLED.load(Ordering::Relaxed);
+        let taps = TAPS.load(Ordering::Relaxed);
+        let fast = ANISO_FAST.load(Ordering::Relaxed);
+        let multi = ANISO_MULTI.load(Ordering::Relaxed);
+        let sum_n = ANISO_SUM_N.load(Ordering::Relaxed);
+        eprintln!(
+            "[sfmtool-profile]   remap-sampler: {calls} calls, {sampled}/{total} px sampled \
+             ({:.1}%), {taps} taps ({:.2} taps/sampled-px)",
+            100.0 * sampled as f64 / total as f64,
+            if sampled > 0 {
+                taps as f64 / sampled as f64
+            } else {
+                0.0
+            },
+        );
+        if fast > 0 || multi > 0 {
+            eprintln!(
+                "[sfmtool-profile]   remap-aniso: {fast} fast-path px, {multi} multi-tap px, \
+                 mean footprint n {:.2}",
+                if multi > 0 {
+                    sum_n as f64 / multi as f64
+                } else {
+                    0.0
+                },
+            );
+        }
+    }
+}
+
 /// Run `fill_row` over every destination row, sequentially for small outputs
 /// (where rayon scaffolding dwarfs the row work — e.g. patch-sized remaps
 /// nested inside an already-parallel caller) and via rayon otherwise.
@@ -217,6 +329,12 @@ impl ImageU8Pyramid {
 /// Coordinates use the pixel-center-at-0.5 convention: sampling at (0.5, 0.5)
 /// returns the exact value of the top-left pixel. Out-of-bounds coordinates
 /// are clamped to the nearest edge pixel.
+///
+/// `#[inline]` because the anisotropic multi-tap footprint walk
+/// ([`sample_aniso_with_grad`] / `remap_aniso_with_pyramid`) calls this up to
+/// `channels · n · 2` times per output pixel; inlining lets the corner geometry
+/// fold across taps and removes the call overhead on that hot path.
+#[inline]
 pub fn sample_bilinear_u8(img: &ImageU8, x: f32, y: f32, channel: u32) -> f32 {
     let (v00, v10, v01, v11, fx, fy) = bilinear_taps(img, x, y, channel);
     (1.0 - fx) * (1.0 - fy) * v00 + fx * (1.0 - fy) * v10 + (1.0 - fx) * fy * v01 + fx * fy * v11
@@ -252,11 +370,19 @@ pub fn sample_bilinear_with_grad_u8(
     (val, di_dx, di_dy)
 }
 
-/// Fetch the four bilinear taps `(v00, v10, v01, v11)` plus the in-cell
-/// fractions `(fx, fy)` for the sample at `(x, y)` in channel `channel`. Shared
-/// fetch logic used by both the value-only and value+gradient bilinear samplers.
+/// Channel-independent bilinear geometry for a sample at `(x, y)`: the four
+/// corner *base* indices (channel 0 of `v00, v10, v01, v11` — top-left,
+/// top-right, bottom-left, bottom-right) and the in-cell fractions `(fx, fy)`.
+///
+/// This is the single source of truth for the `x - 0.5` half-pixel convention,
+/// the `floor`/`saturating_add`/`clamp` edge handling, and the stride index math.
+/// Every bilinear sampler in this module — the per-channel [`bilinear_taps`], the
+/// weight-based [`bilinear_corners`], and the channel-batched value / value+grad
+/// gathers — builds on it, so they cannot drift apart (a fix here fixes all of
+/// them, keeping the "bit-identical to per-channel" guarantee intact). `(fx, fy)`
+/// feed both the bilinear weights ([`corner_weights`]) and the analytic gradient.
 #[inline]
-fn bilinear_taps(img: &ImageU8, x: f32, y: f32, channel: u32) -> (f32, f32, f32, f32, f32, f32) {
+fn bilinear_geometry(img: &ImageU8, x: f32, y: f32) -> ([usize; 4], f32, f32) {
     let gx = x - 0.5;
     let gy = y - 0.5;
 
@@ -278,14 +404,120 @@ fn bilinear_taps(img: &ImageU8, x: f32, y: f32, channel: u32) -> (f32, f32, f32,
     let cy1 = y1.clamp(0, h - 1) as usize;
 
     let stride = img.width as usize * c;
+    let idx = [
+        cy0 * stride + cx0 * c,
+        cy0 * stride + cx1 * c,
+        cy1 * stride + cx0 * c,
+        cy1 * stride + cx1 * c,
+    ];
+    (idx, fx, fy)
+}
+
+/// The four bilinear blend weights for `(v00, v10, v01, v11)` from the in-cell
+/// fractions. Grouped exactly as the `(1.0 - fx) * (1.0 - fy) * v` products in
+/// [`sample_bilinear_u8`], so weight-based gathers stay bit-identical to the
+/// per-channel path.
+#[inline]
+fn corner_weights(fx: f32, fy: f32) -> [f32; 4] {
+    [
+        (1.0 - fx) * (1.0 - fy),
+        fx * (1.0 - fy),
+        (1.0 - fx) * fy,
+        fx * fy,
+    ]
+}
+
+/// Fetch the four bilinear taps `(v00, v10, v01, v11)` plus the in-cell fractions
+/// `(fx, fy)` for the sample at `(x, y)` in channel `channel`. Shared by the
+/// value-only and value+gradient single-channel samplers; builds on
+/// [`bilinear_geometry`].
+#[inline]
+fn bilinear_taps(img: &ImageU8, x: f32, y: f32, channel: u32) -> (f32, f32, f32, f32, f32, f32) {
+    let (idx, fx, fy) = bilinear_geometry(img, x, y);
     let ch = channel as usize;
+    let data = &img.data;
+    (
+        data[idx[0] + ch] as f32,
+        data[idx[1] + ch] as f32,
+        data[idx[2] + ch] as f32,
+        data[idx[3] + ch] as f32,
+        fx,
+        fy,
+    )
+}
 
-    let v00 = img.data[cy0 * stride + cx0 * c + ch] as f32;
-    let v10 = img.data[cy0 * stride + cx1 * c + ch] as f32;
-    let v01 = img.data[cy1 * stride + cx0 * c + ch] as f32;
-    let v11 = img.data[cy1 * stride + cx1 * c + ch] as f32;
+/// Corner *base* indices + blend weights for a sample at `(x, y)` — the
+/// channel-independent inputs a batched gather needs. Builds on
+/// [`bilinear_geometry`] + [`corner_weights`].
+#[inline]
+fn bilinear_corners(img: &ImageU8, x: f32, y: f32) -> ([usize; 4], [f32; 4]) {
+    let (idx, fx, fy) = bilinear_geometry(img, x, y);
+    (idx, corner_weights(fx, fy))
+}
 
-    (v00, v10, v01, v11, fx, fy)
+/// Bilinearly sample **every channel** of `img` at `(x, y)` in one shot, writing
+/// the rounded/clamped `u8` result to `dst[0..channels]`. The corner geometry is
+/// computed once (via [`bilinear_corners`]) and reused across channels, where
+/// per-channel [`sample_bilinear_u8`] recomputed floor/clamp/index/fractions for
+/// each channel. Output is bit-identical to calling `sample_bilinear_u8` per
+/// channel and rounding with `(val + 0.5).clamp(0.0, 255.0)`.
+///
+/// `dst.len()` must be at least `img.channels`.
+#[inline]
+fn sample_bilinear_u8_all(img: &ImageU8, x: f32, y: f32, dst: &mut [u8]) {
+    let c = img.channels as usize;
+    debug_assert!(
+        dst.len() >= c,
+        "sample_bilinear_u8_all: dst.len() {} < channels {c}",
+        dst.len()
+    );
+    let (idx, w) = bilinear_corners(img, x, y);
+    let data = &img.data;
+    for (ch, slot) in dst.iter_mut().take(c).enumerate() {
+        let val = w[0] * data[idx[0] + ch] as f32
+            + w[1] * data[idx[1] + ch] as f32
+            + w[2] * data[idx[2] + ch] as f32
+            + w[3] * data[idx[3] + ch] as f32;
+        *slot = (val + 0.5).clamp(0.0, 255.0) as u8;
+    }
+}
+
+/// Bilinearly sample **every channel** of `img` at `(x, y)`, writing the raw
+/// (unrounded) value and the analytic gradient `(∂I/∂x, ∂I/∂y)` for channel `ch`
+/// to `value[ch]` / `grad_x[ch]` / `grad_y[ch]`. The channel-batched counterpart
+/// of [`sample_bilinear_with_grad_u8`]: geometry is computed once and reused
+/// across channels, and the value/gradient closed-forms are identical, so the
+/// per-channel results are bit-identical. Values are *not* rounded to `u8` (the
+/// GN refiner needs the unquantized value and gradient).
+///
+/// `value`, `grad_x`, `grad_y` must each have length at least `img.channels`.
+#[inline]
+fn sample_bilinear_with_grad_u8_all(
+    img: &ImageU8,
+    x: f32,
+    y: f32,
+    value: &mut [f32],
+    grad_x: &mut [f32],
+    grad_y: &mut [f32],
+) {
+    let c = img.channels as usize;
+    debug_assert!(
+        value.len() >= c && grad_x.len() >= c && grad_y.len() >= c,
+        "sample_bilinear_with_grad_u8_all: dst slices too short for {c} channels"
+    );
+    let (idx, fx, fy) = bilinear_geometry(img, x, y);
+    let w = corner_weights(fx, fy);
+    let data = &img.data;
+    for ch in 0..c {
+        let v00 = data[idx[0] + ch] as f32;
+        let v10 = data[idx[1] + ch] as f32;
+        let v01 = data[idx[2] + ch] as f32;
+        let v11 = data[idx[3] + ch] as f32;
+        // Same associativity as `sample_bilinear_with_grad_u8`.
+        value[ch] = w[0] * v00 + w[1] * v10 + w[2] * v01 + w[3] * v11;
+        grad_x[ch] = (1.0 - fy) * (v10 - v00) + fy * (v11 - v01);
+        grad_y[ch] = (1.0 - fx) * (v01 - v00) + fx * (v11 - v10);
+    }
 }
 
 /// Apply a warp map to an image using bilinear interpolation.
@@ -305,19 +537,23 @@ pub fn remap_bilinear(src: &ImageU8, map: &WarpMap) -> ImageU8 {
     let c = src.channels;
 
     let data = remap_rows(out_w, out_h, c, |row, row_data| {
+        let mut sampled = 0u64;
         for col in 0..out_w {
             let (sx, sy) = map.get(col, row);
             if sx.is_nan() || sy.is_nan() {
                 // Leave as zero (black).
                 continue;
             }
+            sampled += 1;
             let base = col as usize * c as usize;
-            for ch in 0..c {
-                let val = sample_bilinear_u8(src, sx, sy, ch);
-                row_data[base + ch as usize] = (val + 0.5).clamp(0.0, 255.0) as u8;
-            }
+            sample_bilinear_u8_all(src, sx, sy, &mut row_data[base..base + c as usize]);
         }
+        prof::add(&prof::PX_SAMPLED, sampled);
+        prof::add(&prof::TAPS, sampled * c as u64);
     });
+
+    prof::add(&prof::CALLS, 1);
+    prof::add(&prof::PX_TOTAL, out_w as u64 * out_h as u64);
 
     ImageU8 {
         width: out_w,
@@ -368,11 +604,17 @@ pub fn remap_aniso_with_pyramid(
     let num_levels = pyramid.num_levels();
 
     let data = remap_rows(out_w, out_h, c, |row, row_data| {
+        let mut sampled = 0u64;
+        let mut fast = 0u64;
+        let mut multi = 0u64;
+        let mut sum_n = 0u64;
+        let mut taps = 0u64;
         for col in 0..out_w {
             let (sx, sy) = map.get(col, row);
             if sx.is_nan() || sy.is_nan() {
                 continue;
             }
+            sampled += 1;
 
             let (sigma_major, sigma_minor, major_dx, major_dy) = map.get_svd(col, row);
 
@@ -380,10 +622,14 @@ pub fn remap_aniso_with_pyramid(
 
             // Non-compressive case: single bilinear sample from level 0.
             if sigma_major <= 1.0 {
-                for ch in 0..c {
-                    let val = sample_bilinear_u8(pyramid.level(0), sx, sy, ch);
-                    row_data[base + ch as usize] = (val + 0.5).clamp(0.0, 255.0) as u8;
-                }
+                fast += 1;
+                taps += c as u64;
+                sample_bilinear_u8_all(
+                    pyramid.level(0),
+                    sx,
+                    sy,
+                    &mut row_data[base..base + c as usize],
+                );
                 continue;
             }
 
@@ -407,6 +653,10 @@ pub fn remap_aniso_with_pyramid(
             // stretched-but-not-minified case): the hi-level taps would be
             // multiplied by zero, so skip computing them entirely.
             let need_hi = frac > 0.0;
+
+            multi += 1;
+            sum_n += n as u64;
+            taps += c as u64 * n as u64 * if need_hi { 2 } else { 1 };
 
             for ch in 0..c {
                 let mut sum_lo = 0.0f32;
@@ -439,7 +689,15 @@ pub fn remap_aniso_with_pyramid(
                 row_data[base + ch as usize] = (val + 0.5).clamp(0.0, 255.0) as u8;
             }
         }
+        prof::add(&prof::PX_SAMPLED, sampled);
+        prof::add(&prof::TAPS, taps);
+        prof::add(&prof::ANISO_FAST, fast);
+        prof::add(&prof::ANISO_MULTI, multi);
+        prof::add(&prof::ANISO_SUM_N, sum_n);
     });
+
+    prof::add(&prof::CALLS, 1);
+    prof::add(&prof::PX_TOTAL, out_w as u64 * out_h as u64);
 
     ImageU8 {
         width: out_w,
@@ -783,6 +1041,7 @@ pub fn remap_bilinear_with_grad_into(src: &ImageU8, map: &WarpMap, out: &mut Ima
     out.resize(out_w, out_h, c);
 
     let fill_row = |row: u32, val_row: &mut [f32], gx_row: &mut [f32], gy_row: &mut [f32]| {
+        let mut sampled = 0u64;
         for col in 0..out_w {
             let (sx, sy) = map.get(col, row);
             let base = col as usize * c as usize;
@@ -794,13 +1053,19 @@ pub fn remap_bilinear_with_grad_into(src: &ImageU8, map: &WarpMap, out: &mut Ima
                 }
                 continue;
             }
-            for ch in 0..c {
-                let (v, gx, gy) = sample_bilinear_with_grad_u8(src, sx, sy, ch);
-                val_row[base + ch as usize] = v;
-                gx_row[base + ch as usize] = gx;
-                gy_row[base + ch as usize] = gy;
-            }
+            sampled += 1;
+            let end = base + c as usize;
+            sample_bilinear_with_grad_u8_all(
+                src,
+                sx,
+                sy,
+                &mut val_row[base..end],
+                &mut gx_row[base..end],
+                &mut gy_row[base..end],
+            );
         }
+        prof::add(&prof::PX_SAMPLED, sampled);
+        prof::add(&prof::TAPS, sampled * c as u64);
     };
 
     remap_rows_f32x3_into(
@@ -812,6 +1077,9 @@ pub fn remap_bilinear_with_grad_into(src: &ImageU8, map: &WarpMap, out: &mut Ima
         &mut out.grad_y,
         fill_row,
     );
+
+    prof::add(&prof::CALLS, 1);
+    prof::add(&prof::PX_TOTAL, out_w as u64 * out_h as u64);
 }
 
 #[cfg(test)]
