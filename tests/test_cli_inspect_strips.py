@@ -145,3 +145,55 @@ def test_strips_options_rejected_without_flag(seoul_bull_sfmr_only):
     )
     assert result.exit_code != 0
     assert "only valid with --strips" in result.output
+
+
+def test_normal_offsets_obliquity_geometry(seoul_bull_workspace):
+    """The per-view obliquity offset is the tangential part of the unit vector
+    toward the camera: 0 fronto-parallel, sin(theta) at angle theta, 1 grazing;
+    None at infinity."""
+    import math
+
+    import numpy as np
+
+    from sfmtool._solve_strips import _SolveStrips
+    from sfmtool._sfmtool import OrientedPatch
+
+    recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+    emb = recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
+    emb_path = seoul_bull_workspace.parent / "embedded_geom.sfmr"
+    emb.save(str(emb_path), operation="test")
+    engine = _SolveStrips(
+        SfmrReconstruction.load(str(emb_path)),
+        seoul_bull_workspace.parent,
+        patch=32,
+        extent_factor=5.0,
+    )
+
+    # A finite point with >=3 observations, so we can place three synthetic views.
+    counts = {p: len(v) for p, v in engine.obs.items() if engine._w(p) != 0.0}
+    pid = max(counts, key=counts.get)
+    obs = sorted(engine.obs[pid])[:3]
+    assert len(obs) == 3
+
+    # Patch at the origin; build the synthetic cameras from the patch's own axes
+    # so the test is independent of the axis convention.
+    patch = OrientedPatch.from_center_normal([0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 1])
+    n = np.asarray(patch.normal, np.float64)
+    u = np.asarray(patch.u_axis, np.float64)
+    engine.positions = np.zeros((engine.positions.shape[0], 3))
+    engine.centers = [np.zeros(3) for _ in engine.centers]
+    engine.centers[obs[0]] = 5.0 * n  # on the normal -> fronto-parallel
+    engine.centers[obs[1]] = 5.0 * (
+        math.cos(math.radians(30)) * n + math.sin(math.radians(30)) * u
+    )  # 30 deg toward +u
+    engine.centers[obs[2]] = 5.0 * u  # in-plane -> grazing
+
+    offs = engine._normal_offsets(pid, patch, obs)
+    assert math.hypot(*offs[0]) < 1e-6  # fronto-parallel -> centre
+    assert abs(math.hypot(*offs[1]) - math.sin(math.radians(30))) < 1e-6
+    assert offs[1][0] > 0  # dot lies toward +u (the camera's in-plane direction)
+    assert abs(math.hypot(*offs[2]) - 1.0) < 1e-6  # grazing -> box edge
+
+    # A point at infinity has no finite camera-to-surface vector -> no markers.
+    engine._w = lambda _pid: 0.0
+    assert engine._normal_offsets(pid, patch, obs) == [None, None, None]

@@ -82,15 +82,68 @@ from .._cli_utils import timed_command
 )
 @click.option(
     "--subpixel",
-    type=click.Choice(["none", "lk", "lk_per_move"]),
-    default="none",
+    type=click.IntRange(min=0),
+    default=1,
     show_default=True,
     help=(
-        "Optional photometric sub-pixel pass applied to the localizer's output. "
-        "'none' (default) skips it; 'lk' runs LK / ECC Gauss-Newton refinement "
-        "with the per-sweep consensus (max_outer_sweeps=1); 'lk_per_move' uses "
-        "the per-move (Gauss-Seidel) incremental consensus with "
-        "max_outer_sweeps=5. See specs/core/keypoint-subpixel-refinement.md."
+        "Number of LK / ECC Gauss-Newton outer sweeps for the photometric "
+        "sub-pixel keypoint refinement (always the per-sweep consensus variant). "
+        "`0` disables the sub-pixel pass (the localizer's keypoints are used as "
+        "is); `N >= 1` runs the refiner with `max_outer_sweeps = N`. Applied once "
+        "per round (see --rounds). See specs/core/keypoint-subpixel-refinement.md."
+    ),
+)
+@click.option(
+    "--rounds",
+    type=click.IntRange(min=1),
+    default=2,
+    show_default=True,
+    help=(
+        "Number of (normal-refinement, keypoint-refinement) rounds, alternating "
+        "the two. Each round photometrically re-refines every patch normal, then "
+        "re-refines its keypoints (the LK sub-pixel pass, see --subpixel), feeding "
+        "each result into the next. The discrete keypoint localizer runs once in "
+        "the first round as the seed; later rounds refine from the previous "
+        "round's normals and keypoints."
+    ),
+)
+@click.option(
+    "--max-obliquity-deg",
+    type=click.FloatRange(min=0.0, max=90.0),
+    default=80.0,
+    show_default=True,
+    help=(
+        "After round 1, drop each observation that views its surfel more than this "
+        "many degrees off the (refined) patch normal — a grazing view renders as a "
+        "cross-view-consistent but degenerate smear that biases the consensus and "
+        "pulls the normal toward grazing over subsequent rounds. `90` keeps all "
+        "views (disables the filter)."
+    ),
+)
+@click.option(
+    "--obliquity-weight-power",
+    type=click.FloatRange(min=0.0),
+    default=2.0,
+    show_default=True,
+    help=(
+        "Exponent p of the multiplicative obliquity view-weight |v̂·n|^p folded "
+        "into the robust normal-refinement consensus (use A). 0 disables it; 2 "
+        "(default) is the cos²θ foreshortening weight that softly down-weights "
+        "oblique views — a continuous complement to the hard --max-obliquity-deg "
+        "cut."
+    ),
+)
+@click.option(
+    "--fronto-prior-weight",
+    type=click.FloatRange(min=0.0),
+    default=0.05,
+    show_default=True,
+    help=(
+        "Weight λ of the additive fronto-parallel prior λ·mean(v̂·n)² on each "
+        "candidate normal during refinement (use B). 0 disables it; the small "
+        "default pulls a low-parallax (flat-Φ) normal toward facing the cameras "
+        "instead of drifting to a photometrically-equivalent tilt (a distorted "
+        "surfel), without overriding a normal that real parallax constrains."
     ),
 )
 @click.option(
@@ -121,6 +174,10 @@ def embed_patches_command(
     patch_size,
     search_resolution_multiplier,
     subpixel,
+    rounds,
+    max_obliquity_deg,
+    obliquity_weight_power,
+    fronto_prior_weight,
     localize_search_strategy,
 ):
     """Convert a sift_files reconstruction to embedded_patches.
@@ -198,7 +255,12 @@ def embed_patches_command(
             search=search,
             search_resolution_multiplier=search_resolution_multiplier,
             subpixel=subpixel,
+            rounds=rounds,
+            max_obliquity_deg=max_obliquity_deg,
+            obliquity_weight_power=obliquity_weight_power,
+            fronto_prior_weight=fronto_prior_weight,
             localize_search_strategy=localize_search_strategy,
+            progress=click.echo,
         )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)

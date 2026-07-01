@@ -404,6 +404,22 @@ impl PyPatchCloud {
     ///         consensus counts each view once). ``None`` (default) uses the track
     ///         observations. Combines with ``point_indexes`` (which still selects
     ///         *which* patches to refine).
+    ///     obliquity_weight_power: Exponent ``p`` of the multiplicative obliquity
+    ///         view-weight ``|v̂·n|^p`` folded into the robust consensus (use A).
+    ///         ``0.0`` (default) disables it — the consensus is byte-for-byte the
+    ///         prior-free result. ``2.0`` is the ``cos²θ`` foreshortening weight:
+    ///         it softly down-weights a view the more obliquely it sees the surfel,
+    ///         a continuous alternative to a hard grazing-view cut (only affects the
+    ///         robust ``objective``).
+    ///     fronto_prior_weight: Weight ``λ`` of the additive fronto-parallel prior
+    ///         ``λ·mean_v (v̂·n)²`` on each candidate normal when ranking (use B).
+    ///         ``0.0`` (default) disables it. It rewards normals that face the
+    ///         observing cameras, supplying the missing constraint on a low-parallax
+    ///         point (flat ``Φ``) so the normal settles fronto-parallel instead of
+    ///         drifting to a photometrically-equivalent tilt; where real parallax
+    ///         curves ``Φ`` the small prior is overruled. With it active the
+    ///         reported ``photoconsistency`` can dip below ``init_photoconsistency``
+    ///         by up to the prior gap (a more-frontal normal winning a near-tie).
     ///     use_stored_keypoints: When ``True`` (the default), anchor each
     ///         view's patch at that observation's stored per-observation 2D
     ///         keypoint (the inline keypoint an ``embedded_patches`` recon
@@ -439,7 +455,8 @@ impl PyPatchCloud {
         refine_levels=3, objective="robust", robust_iters=3, window="gaussian_disk",
         window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="bilinear",
         cache="fronto", cache_supersample=2.0, compute_confidence=false,
-        search_robust_iters=None, point_indexes=None, view_indices=None,
+        search_robust_iters=None, obliquity_weight_power=0.0, fronto_prior_weight=0.0,
+        point_indexes=None, view_indices=None,
         use_stored_keypoints=true, render_bitmaps=false
     ))]
     fn refine_normals<'py>(
@@ -462,6 +479,8 @@ impl PyPatchCloud {
         cache_supersample: f64,
         compute_confidence: bool,
         search_robust_iters: Option<u32>,
+        obliquity_weight_power: f64,
+        fronto_prior_weight: f64,
         point_indexes: Option<Vec<u32>>,
         view_indices: Option<Vec<Vec<u32>>>,
         use_stored_keypoints: bool,
@@ -550,6 +569,8 @@ impl PyPatchCloud {
             cache_supersample,
             compute_confidence,
             search_robust_iters,
+            obliquity_weight_power,
+            fronto_prior_weight,
             render_bitmap: render_bitmaps,
         };
 

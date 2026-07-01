@@ -196,16 +196,35 @@ unsafe fn axpy_f32_avx2(xb: &mut [f32], row: &[f32], w: f32, n: usize) {
 /// weights), re-formed `iters` times. All buffers live in `sc` (no per-candidate
 /// / per-iteration allocation); the weighted consensus `xbar` is accumulated by
 /// SAXPY over contiguous per-view rows.
+///
+/// `view_priors` (length `views`, if given) is a multiplicative per-view prior on
+/// the weights — the obliquity view-weight `|v̂·n|^power` (see
+/// [`obliquity`](super::obliquity), use A). It seeds the initial weights and is
+/// re-multiplied into every Tukey reweight, so an oblique view stays down-weighted
+/// throughout. `None` is the plain uniform-init IRLS (byte-for-byte the prior-free
+/// behavior).
 pub(in crate::patch) fn irls_view_weights(
     xs: &[f32],
     views: usize,
     channels: usize,
     n: usize,
     iters: u32,
+    view_priors: Option<&[f64]>,
     sc: &mut ConsensusScratch,
 ) {
     sc.w.clear();
-    sc.w.resize(views, 1.0 / views as f64);
+    match view_priors {
+        Some(pr) => {
+            debug_assert_eq!(pr.len(), views, "view_priors must be parallel to views");
+            let sum: f64 = pr.iter().take(views).sum();
+            if sum > 0.0 {
+                sc.w.extend(pr.iter().take(views).map(|&p| p / sum));
+            } else {
+                sc.w.resize(views, 1.0 / views as f64);
+            }
+        }
+        None => sc.w.resize(views, 1.0 / views as f64),
+    }
     sc.xbar.resize(channels * n, 0.0);
     sc.resid.resize(views, 0.0);
     sc.sorted.resize(views, 0.0);
@@ -252,12 +271,16 @@ pub(in crate::patch) fn irls_view_weights(
             let mut sum = 0.0;
             for v in 0..views {
                 let r = sc.resid[v];
-                let wt = if r >= cutoff {
+                let tukey = if r >= cutoff {
                     0.0
                 } else {
                     let t = 1.0 - (r / cutoff) * (r / cutoff);
                     t * t
                 };
+                // Fold the obliquity prior back in each iteration so the
+                // down-weighting persists (the Tukey factor alone would let a
+                // grazing but self-consistent view regain full weight).
+                let wt = tukey * view_priors.map_or(1.0, |pr| pr[v]);
                 sc.wt[v] = wt;
                 sum += wt;
             }
@@ -327,9 +350,11 @@ pub(super) fn consensus_phi(
     channels: usize,
     n: usize,
     objective: Objective,
+    view_priors: Option<&[f64]>,
     sc: &mut ConsensusScratch,
 ) -> Option<f64> {
-    consensus_phi_with_weights(xs, views, channels, n, objective, sc).map(|(phi, _)| phi)
+    consensus_phi_with_weights(xs, views, channels, n, objective, view_priors, sc)
+        .map(|(phi, _)| phi)
 }
 
 /// [`consensus_phi`] plus the per-view consensus weights that produced it,
@@ -338,12 +363,18 @@ pub(super) fn consensus_phi(
 /// weights — the representative fusion, which down-weights the same outlier views
 /// in the blended colour as the consensus does in `Φ` — take this variant so the
 /// IRLS pass is not run twice.
+///
+/// `view_priors` (if given, length `views`) is the multiplicative obliquity prior
+/// on the robust weights (use A); it is applied only under
+/// [`Objective::RobustWeighted`] — [`Objective::MeanPairwise`] is unweighted by
+/// definition and ignores it.
 pub(super) fn consensus_phi_with_weights(
     xs: &[f32],
     views: usize,
     channels: usize,
     n: usize,
     objective: Objective,
+    view_priors: Option<&[f64]>,
     sc: &mut ConsensusScratch,
 ) -> Option<(f64, Vec<f64>)> {
     if views < 2 {
@@ -357,7 +388,7 @@ pub(super) fn consensus_phi_with_weights(
             Some((sum / channels as f64, vec![1.0 / views as f64; views]))
         }
         Objective::RobustWeighted { iters } => {
-            irls_view_weights(xs, views, channels, n, iters, sc);
+            irls_view_weights(xs, views, channels, n, iters, view_priors, sc);
             let sum_w2: f64 = sc.w.iter().map(|&x| x * x).sum();
             // Degeneracy gate only (the view *count* is gated by `min_views` per
             // level): as weight concentrates on one view, Σwᵢ² → 1 and ρ̄_w → 0/0.

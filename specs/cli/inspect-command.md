@@ -85,7 +85,14 @@ the left:
    surfel projected into that view, padded with surrounding context and a border
    at the patch extent (see `--context`). Each tile is labeled with the image
    index (top) and, at the bottom, that observation's per-view NCC against the
-   other views (`n`) and its reprojection error in pixels (`e`).
+   other views (`n`) and its reprojection error in pixels (`e`). Each tile also
+   carries a **view-obliquity marker**: a magenta line from the patch-extent box
+   centre to a dot, where the centre is a fronto-parallel view (camera on the
+   surface normal) and the dot reaches the box edge as the view grazes the surface
+   (90° off the normal). The dot is the unit vector from the patch centre toward
+   that view's camera, projected onto the patch tangent plane, so its length and
+   direction show how oblique — and thus how foreshortened/distortion-prone — that
+   view of the surfel is. Points at infinity carry no marker.
 
 ### Point specs
 

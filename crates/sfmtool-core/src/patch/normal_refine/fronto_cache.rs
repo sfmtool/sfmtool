@@ -83,6 +83,9 @@ pub(super) struct Scratch {
     raw: Vec<f32>,
     /// Flat z-normalized stack handed to `consensus_phi`.
     xs: Vec<f32>,
+    /// Reused per-kept-view obliquity prior (use A), refilled per candidate so the
+    /// candidate evaluation stays allocation-free.
+    priors: Vec<f64>,
     /// Reused buffers for the consensus / IRLS reductions.
     cons: ConsensusScratch,
 }
@@ -389,11 +392,13 @@ pub(super) fn eval_phi(
     cache: &FrontoCache,
     ctx: &LevelContext,
     views: &[ProjectedImage<'_>],
+    view_dirs: &[Vector3<f64>],
     resolution: u32,
     cols: &[i32],
     rows: &[i32],
     sqrt_weights: &[f32],
     total_weight: f64,
+    obliquity_power: f64,
     scratch: &mut Scratch,
     objective: Objective,
 ) -> Option<f64> {
@@ -402,6 +407,16 @@ pub(super) fn eval_phi(
         return None;
     }
     let cp = repose_patch(base, candidate_n);
+    // Obliquity view-weight (A): |v̂·candidate_n|^power per kept view, refilled into
+    // the reused scratch buffer (no per-candidate allocation). Inactive (`power ==
+    // 0`) leaves the buffer empty and passes `None` — the prior-free path.
+    let priors_active = super::obliquity::fill_kept_obliquity_priors(
+        &mut scratch.priors,
+        view_dirs,
+        &ctx.kept,
+        candidate_n,
+        obliquity_power,
+    );
     let n = cols.len();
     let vn = ctx.kept.len();
     let stride = CHANNELS * n;
@@ -463,8 +478,18 @@ pub(super) fn eval_phi(
             &mut scratch.xs,
         )
     })?;
-    super::prof::CACHE_CONSENSUS
-        .time(|| consensus_phi(&scratch.xs, vn, kept, n, objective, &mut scratch.cons))
+    let priors = priors_active.then_some(scratch.priors.as_slice());
+    super::prof::CACHE_CONSENSUS.time(|| {
+        consensus_phi(
+            &scratch.xs,
+            vn,
+            kept,
+            n,
+            objective,
+            priors,
+            &mut scratch.cons,
+        )
+    })
 }
 
 #[cfg(test)]

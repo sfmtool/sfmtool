@@ -244,7 +244,7 @@ def _refine_subpixel(
     images: list[np.ndarray],
     localizations: list[dict[str, Any]],
     *,
-    mode: str,
+    sweeps: int,
     resolution: int,
 ) -> list[dict[str, Any]]:
     """Run :meth:`PatchCloud.refine_keypoints` seeded at ``localizations``'s
@@ -254,21 +254,11 @@ def _refine_subpixel(
 
     Per-point view sets and seeds are derived from the localizer's output so the
     refiner sees exactly the same membership the localizer chose; a point the
-    localizer dropped (or never localized) keeps its localization dict
-    unchanged. ``mode`` selects the variant:
-
-    - ``"lk"`` — per-sweep consensus, ``max_outer_sweeps = 1`` (the simple variant)
-    - ``"lk_per_move"`` — per-move (Gauss–Seidel) incremental consensus,
-      ``max_outer_sweeps = 5`` (the variant from #142)
+    localizer dropped (or never localized) keeps its localization dict unchanged.
+    ``sweeps`` is the LK/ECC Gauss–Newton ``max_outer_sweeps`` (>= 1), always with
+    the per-sweep consensus.
     """
-    if mode == "lk":
-        kwargs = dict(max_outer_sweeps=1, consensus_refresh="per_sweep")
-    elif mode == "lk_per_move":
-        kwargs = dict(max_outer_sweeps=5, consensus_refresh="per_move")
-    else:
-        raise ValueError(
-            f"unknown subpixel mode {mode!r} (expected 'none', 'lk', or 'lk_per_move')"
-        )
+    kwargs = dict(max_outer_sweeps=sweeps, consensus_refresh="per_sweep")
 
     # Build per-point view sets + starting keypoints parallel to each other (the
     # refiner reads `starting_keypoints[pid][k]` as the seed for the k'th view
@@ -329,6 +319,142 @@ def _refine_subpixel(
     return out
 
 
+def _localizations_from_recon(recon: SfmrReconstruction) -> list[dict[str, Any]]:
+    """Rebuild the per-point localization dicts (``point_index``, ``views``,
+    ``keypoints``) from an ``embedded_patches`` recon's inline tracks — the seed a
+    later round's sub-pixel refinement starts from once the discrete localizer has
+    run (round 1 only). Membership is exactly the recon's current track set."""
+    pt = np.asarray(recon.track_point_indexes)
+    im = np.asarray(recon.track_image_indexes, dtype=np.uint32)
+    kxy = np.asarray(recon.keypoints_xy, dtype=np.float64).reshape(-1, 2)
+    by_pid: dict[int, dict[str, list]] = {}
+    for k in range(len(pt)):
+        d = by_pid.setdefault(int(pt[k]), {"views": [], "keypoints": []})
+        d["views"].append(int(im[k]))
+        d["keypoints"].append(kxy[k])
+    return [
+        {
+            "point_index": pid,
+            "views": np.asarray(d["views"], dtype=np.uint32),
+            "keypoints": np.asarray(d["keypoints"], dtype=np.float64).reshape(-1, 2),
+        }
+        for pid, d in sorted(by_pid.items())
+    ]
+
+
+def _patch_normals(cloud: PatchCloud) -> np.ndarray:
+    """Per-patch unit normal (``u × v``, normalized) for every patch, as an
+    ``(N, 3)`` array — the quantity ``refine_normals`` moves. Used only to report
+    per-round normal evolution."""
+    return np.asarray(
+        [np.asarray(cloud[i].normal, np.float64) for i in range(len(cloud))]
+    )
+
+
+def _mean_angle_deg(n0: np.ndarray, n1: np.ndarray) -> float:
+    """Mean angle (degrees) between corresponding rows of two ``(N, 3)`` unit-
+    normal arrays."""
+    if n0.size == 0:
+        return 0.0
+    dots = np.clip(np.sum(n0 * n1, axis=1), -1.0, 1.0)
+    return float(np.degrees(np.arccos(dots)).mean())
+
+
+def _camera_centers(recon: SfmrReconstruction) -> np.ndarray:
+    """World-space camera centers ``(n_images, 3)`` — ``-Rᵀ t`` for the
+    ``x_cam = R x_world + t`` pose of each image."""
+    from sfmtool._sfmtool.geometry import RigidTransform
+
+    quats = np.asarray(recon.quaternions_wxyz, np.float64)
+    trans = np.asarray(recon.translations, np.float64)
+    centers = np.empty((len(quats), 3), np.float64)
+    for i in range(len(quats)):
+        rot = np.asarray(
+            RigidTransform.from_wxyz_translation(
+                quats[i].tolist(), trans[i].tolist()
+            ).to_rotation_matrix(),
+            np.float64,
+        )
+        centers[i] = -rot.T @ trans[i]
+    return centers
+
+
+def _drop_grazing_observations(
+    localizations: list[dict[str, Any]],
+    cloud: PatchCloud,
+    centers: np.ndarray,
+    positions: np.ndarray,
+    at_infinity: np.ndarray,
+    max_obliquity_deg: float,
+) -> tuple[list[dict[str, Any]], int]:
+    """Drop observations whose view direction is more than ``max_obliquity_deg``
+    off the surfel normal (``|v̂·n| < cos(max_obliquity_deg)``). A grazing view
+    renders as a cross-view-consistent but degenerate smear that would otherwise
+    bias the consensus and pull the normal toward grazing over subsequent rounds.
+    Returns ``(pruned_localizations, n_dropped)``. ``90°`` is a no-op.
+
+    ``at_infinity`` (bool per point index) flags points at infinity, which are
+    left untouched: their ``positions`` row is a unit *direction*, not a location,
+    so the ``centers - position`` view vector (and its obliquity) is meaningless —
+    and the Rust normal refinement leaves their fixed tangent-sphere frame alone,
+    so there is nothing to grade the view against."""
+    if max_obliquity_deg >= 90.0:
+        return localizations, 0
+    cos_min = float(np.cos(np.radians(max_obliquity_deg)))
+    pids = np.asarray(cloud.point_indexes)
+    normals = {
+        int(pids[i]): np.asarray(cloud[i].normal, np.float64) for i in range(len(cloud))
+    }
+    out: list[dict[str, Any]] = []
+    dropped = 0
+    for loc in localizations:
+        pid = int(loc["point_index"])
+        n = normals.get(pid)
+        views = np.asarray(loc["views"], dtype=np.uint32)
+        kpts = np.asarray(loc["keypoints"], dtype=np.float64).reshape(-1, 2)
+        if n is None or len(views) == 0 or bool(at_infinity[pid]):
+            out.append(loc)
+            continue
+        d = centers[views.astype(np.intp)] - positions[pid]
+        nrm = np.linalg.norm(d, axis=1)
+        valid = nrm > 1e-9
+        cos = np.zeros(len(views))
+        cos[valid] = np.abs((d[valid] / nrm[valid, None]) @ n)
+        keep = valid & (cos >= cos_min)
+        if keep.all():
+            out.append(loc)
+            continue
+        dropped += int((~keep).sum())
+        new_loc = dict(loc)
+        new_loc["views"] = views[keep]
+        new_loc["keypoints"] = kpts[keep]
+        out.append(new_loc)
+    return out, dropped
+
+
+def _mean_keypoint_shift(
+    before: list[dict[str, Any]], after: list[dict[str, Any]]
+) -> float:
+    """Mean per-observation keypoint displacement (source px) between two
+    localization lists, matched by ``(point_index, image_index)``."""
+    after_by_pid = {int(loc["point_index"]): loc for loc in after}
+    shifts: list[float] = []
+    for lb in before:
+        la = after_by_pid.get(int(lb["point_index"]))
+        if la is None:
+            continue
+        b_views = np.asarray(lb["views"], dtype=np.uint32).tolist()
+        b_kpts = np.asarray(lb["keypoints"], dtype=np.float64).reshape(-1, 2)
+        a_views = np.asarray(la["views"], dtype=np.uint32).tolist()
+        a_kpts = np.asarray(la["keypoints"], dtype=np.float64).reshape(-1, 2)
+        a_map = {int(v): a_kpts[i] for i, v in enumerate(a_views)}
+        for i, v in enumerate(b_views):
+            a = a_map.get(int(v))
+            if a is not None:
+                shifts.append(float(np.hypot(a[0] - b_kpts[i, 0], a[1] - b_kpts[i, 1])))
+    return float(np.mean(shifts)) if shifts else 0.0
+
+
 def embed_patches(
     recon: SfmrReconstruction,
     images: list[np.ndarray],
@@ -341,8 +467,13 @@ def embed_patches(
     search: float = 6.0,
     resolution: int = 24,
     search_resolution_multiplier: float = 1.0,
-    subpixel: str = "none",
+    subpixel: int = 1,
+    rounds: int = 2,
+    max_obliquity_deg: float = 80.0,
+    obliquity_weight_power: float = 2.0,
+    fronto_prior_weight: float = 0.05,
     localize_search_strategy: str = "plus_descent",
+    progress: Any = None,
 ) -> SfmrReconstruction:
     """Convert a ``sift_files`` reconstruction to ``embedded_patches``, running the
     full photometric pipeline (see
@@ -379,18 +510,43 @@ def embed_patches(
             :meth:`PatchCloud.localize_keypoints` (step 3). ``1.0`` (default) is the
             no-op; ``> 1`` runs the supersampled grid (cost grows ~``m²``) — see
             ``specs/core/keypoint-localization-search-cache.md``.
-        subpixel: Optional photometric sub-pixel pass applied to the localizer's
-            output (step 3.5 in the pipeline). One of:
-            ``"none"`` (default) — no refinement; the localizer's keypoints are
-            used as-is.
-            ``"lk"`` — LK / ECC Gauss–Newton refinement seeded at the localizer's
-            keypoints; per-sweep consensus, ``max_outer_sweeps = 1``.
-            ``"lk_per_move"`` — same but the per-move (Gauss–Seidel) incremental
-            consensus variant with ``max_outer_sweeps = 5``.
+        subpixel: LK/ECC Gauss–Newton ``max_outer_sweeps`` for the photometric
+            sub-pixel keypoint refinement applied in each round (per-sweep
+            consensus). ``0`` disables it; ``>= 1`` runs it with that many sweeps.
+        rounds: Number of (normal-refinement, keypoint-refinement) rounds. Round 1
+            runs the SIFT-anchored normal refine, the discrete localizer (the
+            seed), then the sub-pixel keypoint refine. Each subsequent round
+            re-refines every normal against the *previous* round's keypoints, then
+            re-refines the keypoints against the new normals — a fixed-point
+            alternation. The per-point view set can only shrink across rounds (the
+            grazing-observation drop below); it is never expanded after round 1.
+        max_obliquity_deg: After **each** round's normal refinement, drop every
+            observation viewing its surfel more than this off the (just-refined)
+            normal (``< 90`` enables the filter). Grazing views render as
+            cross-view-consistent but degenerate smears; the low-parallax
+            degeneracy tilts a normal toward grazing gradually across rounds, so a
+            view only crosses the threshold once the tilt reaches it — pruning each
+            round chases the tilt and culls a surfel that has gone fully edge-on
+            rather than letting it settle into a smear.
+        obliquity_weight_power: Exponent ``p`` of the multiplicative obliquity
+            view-weight ``|v̂·n|^p`` folded into the robust normal-refinement
+            consensus (use A). ``0.0`` disables it; ``2.0`` (default) is the
+            ``cos²θ`` foreshortening weight that softly down-weights oblique views —
+            a continuous complement to the hard ``max_obliquity_deg`` cut.
+        fronto_prior_weight: Weight ``λ`` of the additive fronto-parallel prior
+            ``λ·mean_v (v̂·n)²`` on each candidate normal during refinement (use B).
+            ``0.0`` disables it; the small default (``0.05``) pulls a low-parallax
+            (flat-``Φ``) normal toward facing the cameras instead of drifting to a
+            photometrically-equivalent tilt, without overriding a normal that real
+            parallax constrains.
+        progress: Optional callable (e.g. ``click.echo``) that receives a per-round
+            summary line reporting the mean normal change (deg) and mean keypoint
+            shift (px); when given, those metrics are computed each round.
 
     Returns:
         A new ``embedded_patches`` :class:`SfmrReconstruction`, ready to ``save()``.
     """
+    log = progress if callable(progress) else None
     half_extent = patch_size / 2.0
 
     # 0. The single `.sift`-consuming step: baseline embedded conversion. It sizes
@@ -401,23 +557,25 @@ def embed_patches(
         normal="mean_viewing", extent="feature_size", extent_value=half_extent
     )
 
-    # 1. Take the patch cloud `to_embedded_patches` built (mean-viewing frames
-    #    sized by SIFT feature scale — read from the embedded recon's stored frames,
-    #    so no second `.sift` read), then refine each normal over the embedded recon,
-    #    anchoring every view on its stored SIFT keypoint (use_stored_keypoints)
-    #    instead of the reprojected center; render each point's reference bitmap.
+    # 1. Refine each normal over the embedded recon, anchoring every view on its
+    #    stored SIFT keypoint (use_stored_keypoints) instead of the reprojected
+    #    center; render each point's reference bitmap.
     cloud = embedded.patches
     if cloud is None:
         raise ValueError("to_embedded_patches produced no patch frames to refine")
+    n_before = _patch_normals(cloud) if log else None
     refine = cloud.refine_normals(
         embedded,
         images,
         resolution=resolution,
         use_stored_keypoints=True,
+        obliquity_weight_power=obliquity_weight_power,
+        fronto_prior_weight=fronto_prior_weight,
         render_bitmaps=True,
     )
 
-    # 2. Expand + vet the view set per point.
+    # 2. Expand + vet the view set per point (round 1 only; membership is fixed
+    #    afterwards).
     selections = cloud.select_views(
         embedded, images, min_relative_zncc=min_relative_zncc, resolution=resolution
     )
@@ -425,8 +583,8 @@ def embed_patches(
         int(s["point_index"]): np.asarray(s["admitted"]).tolist() for s in selections
     }
 
-    # 3. Project starting keypoints (implicit) and congeal them, dropping views that
-    #    won't co-register in-loop.
+    # 3. Discrete localizer (the seed): project starting keypoints and congeal them,
+    #    dropping views that won't co-register in-loop. Runs once, in round 1.
     localizations = cloud.localize_keypoints(
         embedded,
         images,
@@ -440,31 +598,103 @@ def embed_patches(
         search_strategy=localize_search_strategy,
     )
 
-    # 3.5. Optional photometric sub-pixel refinement, seeded at the localizer's
-    #      kept keypoints. The localizer's output IS the precondition that lets
-    #      the local refiner work — it puts each view in the basin of the true
-    #      optimum (≲ 1 px). The refiner moves the per-view keypoints; the
-    #      kept-view membership stays exactly as the localizer chose it.
-    if subpixel != "none":
+    # 3.5. Sub-pixel keypoint refinement, seeded at the localizer's kept keypoints
+    #      (the localizer put each view in the basin; the LK refiner sharpens it).
+    seed_loc = localizations
+    if subpixel >= 1:
         localizations = _refine_subpixel(
             cloud,
             embedded,
             images,
             localizations,
-            mode=subpixel,
+            sweeps=subpixel,
             resolution=resolution,
         )
+    if log:
+        ndeg = _mean_angle_deg(n_before, _patch_normals(cloud))
+        kpx = _mean_keypoint_shift(seed_loc, localizations)
+        log(
+            f"  round 1/{rounds}: normal Δ {ndeg:.3f}°, keypoint Δ {kpx:.3f}px (vs seed)"
+        )
 
-    # 4. Cull under-supported points and compact into an embedded_patches recon. The
-    #    image hashes already live on the embedded recon (set in step 0), so there
-    #    is no second `.sift` read; the original `recon` carries the per-point
-    #    geometry (its point indexing matches `embedded` one-to-one).
-    hashes = embedded.image_file_hashes
-    return compact_to_embedded_patches(
-        recon,
-        cloud,
+    # After round 1: drop grazing observations against the refined normal, so the
+    # subsequent rounds' consensus is not dragged toward a degenerate grazing smear.
+    localizations, n_dropped = _drop_grazing_observations(
         localizations,
+        cloud,
+        _camera_centers(embedded),
+        np.asarray(embedded.positions, np.float64),
+        np.asarray(embedded.point_is_at_infinity),
+        max_obliquity_deg,
+    )
+    if log and n_dropped:
+        log(
+            f"  dropped {n_dropped} grazing obs (> {max_obliquity_deg:.0f} deg off normal)"
+        )
+
+    # Rounds 2..N: compact the current state into a self-contained embedded recon
+    # (keeping every localized point, min_views=1), re-refine its normals against
+    # the carried-forward keypoints, then re-refine the keypoints against the new
+    # normals. Each iteration's (recon, cloud, localizations) are mutually
+    # consistent in the compacted dense indexing.
+    work_recon, work_cloud, work_loc = recon, cloud, localizations
+    hashes = embedded.image_file_hashes
+    bitmaps = refine.get("bitmaps")
+    for r in range(2, rounds + 1):
+        emb_r = compact_to_embedded_patches(
+            work_recon, work_cloud, work_loc, hashes, patch_bitmaps=bitmaps, min_views=1
+        )
+        cloud_r = emb_r.patches
+        n_before = _patch_normals(cloud_r) if log else None
+        refine_r = cloud_r.refine_normals(
+            emb_r,
+            images,
+            resolution=resolution,
+            use_stored_keypoints=True,
+            obliquity_weight_power=obliquity_weight_power,
+            fronto_prior_weight=fronto_prior_weight,
+            render_bitmaps=True,
+        )
+        base_loc = _localizations_from_recon(emb_r)
+        # Re-prune grazing observations against THIS round's refined normal: the
+        # low-parallax degeneracy tilts a normal toward grazing gradually over
+        # rounds, so a view that was near-frontal at round 1 only crosses the
+        # threshold now. Pruning each round chases the tilt and culls a surfel that
+        # has gone fully edge-on rather than letting it settle into a smear.
+        base_loc, n_dropped = _drop_grazing_observations(
+            base_loc,
+            cloud_r,
+            _camera_centers(emb_r),
+            np.asarray(emb_r.positions, np.float64),
+            np.asarray(emb_r.point_is_at_infinity),
+            max_obliquity_deg,
+        )
+        loc_r = (
+            _refine_subpixel(
+                cloud_r, emb_r, images, base_loc, sweeps=subpixel, resolution=resolution
+            )
+            if subpixel >= 1
+            else base_loc
+        )
+        if log:
+            ndeg = _mean_angle_deg(n_before, _patch_normals(cloud_r))
+            kpx = _mean_keypoint_shift(base_loc, loc_r)
+            drop_note = f", dropped {n_dropped} grazing obs" if n_dropped else ""
+            log(
+                f"  round {r}/{rounds}: normal Δ {ndeg:.3f}°, "
+                f"keypoint Δ {kpx:.3f}px{drop_note}"
+            )
+        work_recon, work_cloud, work_loc = emb_r, cloud_r, loc_r
+        hashes = emb_r.image_file_hashes
+        bitmaps = refine_r.get("bitmaps")
+
+    # 4. Cull under-supported points (the real min_views) and compact into the final
+    #    embedded_patches recon.
+    return compact_to_embedded_patches(
+        work_recon,
+        work_cloud,
+        work_loc,
         hashes,
-        patch_bitmaps=refine.get("bitmaps"),
+        patch_bitmaps=bitmaps,
         min_views=min_views,
     )

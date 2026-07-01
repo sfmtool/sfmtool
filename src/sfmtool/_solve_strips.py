@@ -379,6 +379,7 @@ class _SolveStrips:
         max_views: int | None = None,
         context: int | None = None,
         annotate: bool = False,
+        normal_dot: bool = False,
     ) -> Strip | None:
         """Render point ``pid`` as a patch strip; ``(strip, mean_ncc, n)`` or None.
 
@@ -389,6 +390,13 @@ class _SolveStrips:
 
         With ``annotate`` each tile is also labeled with that observation's NCC
         against the other views and its reprojection error (px).
+
+        With ``normal_dot`` each tile gets an obliquity marker (see
+        ``render_track_strip``): the unit vector from the patch centre toward that
+        view's camera, projected onto the patch tangent plane, drawn as a dot on
+        the patch-extent box — centre = fronto-parallel, edge = grazing view.
+        Points at infinity (``w == 0``) have no finite camera-to-surface vector,
+        so they get no marker.
         """
         obs_imgs = sorted(self.obs.get(int(pid), []))
         if not obs_imgs:
@@ -414,6 +422,9 @@ class _SolveStrips:
             return self._render_view(patch, i, render_res)
 
         reproj = [self.reproj_error(pid, i) for i in obs_imgs] if annotate else None
+        normal_offsets = (
+            self._normal_offsets(pid, patch, obs_imgs) if normal_dot else None
+        )
         w = gauss_window(self.patch)
         return render_track_strip(
             obs_imgs,
@@ -423,4 +434,35 @@ class _SolveStrips:
             inner=inner,
             reproj_errs=reproj,
             per_view_scores=annotate,
+            normal_offsets=normal_offsets,
         )
+
+    def _normal_offsets(
+        self, pid: int, patch: OrientedPatch, obs_imgs: list[int]
+    ) -> list[tuple[float, float] | None]:
+        """Per-view obliquity offsets ``(s, t)`` in the patch tangent frame: the
+        unit vector from the patch centre toward each view's camera, projected
+        onto ``(u_axis, v_axis)``. ``(0, 0)`` is a fronto-parallel view (camera on
+        the surface normal); ``|(s, t)| -> 1`` as the view grazes the surface. The
+        half-edge scaling cancels, so this is just the tangential part of the unit
+        view direction. ``None`` for a point at infinity (no finite camera-to-
+        surface vector)."""
+        if self._w(pid) == 0.0:
+            return [None] * len(obs_imgs)
+        u = np.asarray(patch.u_axis, np.float64)
+        v = np.asarray(patch.v_axis, np.float64)
+        center = self.positions[int(pid)]
+        offsets: list[tuple[float, float] | None] = []
+        for i in obs_imgs:
+            d = self.centers[i] - center
+            norm = float(np.linalg.norm(d))
+            if norm < 1e-9:
+                offsets.append(None)
+                continue
+            d = d / norm
+            s, t = float(d @ u), float(d @ v)
+            r = float(np.hypot(s, t))
+            if r > 1.0:  # numerical guard; |(s,t)| = sin(theta) <= 1 in exact math
+                s, t = s / r, t / r
+            offsets.append((s, t))
+        return offsets
