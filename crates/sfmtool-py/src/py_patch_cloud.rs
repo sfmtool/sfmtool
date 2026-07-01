@@ -1375,6 +1375,13 @@ impl PyPatchCloud {
                 m
             });
 
+        // This binding inlines its own per-patch loop (for lazy per-point seed
+        // construction) rather than calling `refine_patch_cloud_keypoints`, so it
+        // brackets the shared remap-sampler counters itself; under
+        // `SFMTOOL_PROFILE` this reports the stage's value + GN-gradient render
+        // taps instead of leaving them unaccounted.
+        sfmtool_core::patch::keypoint_subpixel::prof::reset();
+        let subpixel_wall = std::time::Instant::now();
         let results = py.detach(|| {
             use rayon::prelude::*;
             use sfmtool_core::patch::keypoint_subpixel::refine_patch_keypoints;
@@ -1398,6 +1405,10 @@ impl PyPatchCloud {
                 })
                 .collect::<Vec<_>>()
         });
+        sfmtool_core::patch::keypoint_subpixel::prof::report(
+            self.inner.patches.len(),
+            subpixel_wall.elapsed().as_secs_f64(),
+        );
 
         let mut out = Vec::new();
         for (res, &pid) in results.iter().zip(&self.inner.point_indexes) {

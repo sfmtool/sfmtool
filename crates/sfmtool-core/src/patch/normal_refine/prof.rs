@@ -146,6 +146,7 @@ pub fn reset() {
     for c in [&N_EVAL, &N_RENDER, &N_REJECT] {
         c.store(0, Ordering::Relaxed);
     }
+    crate::camera::remap::prof::reset();
 }
 
 /// Print the accumulated summary to stderr (end of a profiled batch).
@@ -198,4 +199,5 @@ pub fn report(patches: usize, wall_secs: f64) {
         N_RENDER.load(Ordering::Relaxed),
         N_REJECT.load(Ordering::Relaxed),
     );
+    crate::camera::remap::prof::report();
 }
