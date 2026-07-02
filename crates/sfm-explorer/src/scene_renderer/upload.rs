@@ -595,6 +595,231 @@ impl SceneRenderer {
         );
     }
 
+    /// Upload embedded patch surfels into a GPU instance buffer + texture atlas.
+    ///
+    /// Walks the per-point patch frame arrays, skipping points without a patch
+    /// (all-zero `u` row), and packs each point's `(R, R, 4)` RGBA bitmap into a
+    /// 2D texture array atlas with page-grid packing (mirroring the thumbnail
+    /// atlas), so the patch count can exceed the GPU array-layer limit.
+    ///
+    /// v1 renders textured patches only: a reconstruction that carries patch
+    /// frames but no bitmaps uploads nothing (flat-shaded fallback is deferred).
+    pub fn upload_patches(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        recon: &SfmrReconstruction,
+    ) {
+        // The bind group below needs the patch pipeline's layout + uniform
+        // buffer, which may not exist yet if no frame has been rendered.
+        self.ensure_pipelines(device);
+
+        // Reset so reloading a reconstruction without patches clears the old ones.
+        self.patch_instance_buffer = None;
+        self.patch_atlas_texture = None;
+        self.patch_bind_group = None;
+        self.patch_count = 0;
+
+        let (Some(u_halfvecs), Some(v_halfvecs)) =
+            (&recon.patch_u_halfvec_xyz, &recon.patch_v_halfvec_xyz)
+        else {
+            return;
+        };
+        let Some(bitmaps) = &recon.patch_bitmaps_y_x_rgba else {
+            return;
+        };
+        // Tiles must be square and fit the GPU's 2D texture limit; on-disk files
+        // are shape-verified, but an in-memory recon (e.g. built in Python) may
+        // not be, so guard rather than trip a wgpu validation error.
+        let resolution = bitmaps.shape()[1] as u32;
+        let tile_cols = bitmaps.shape()[2] as u32;
+        if resolution == 0 {
+            return;
+        }
+        if tile_cols != resolution {
+            log::warn!("patch bitmaps are non-square ({resolution}×{tile_cols}); skipping patches");
+            return;
+        }
+        let max_texture_dim = device.limits().max_texture_dimension_2d;
+        let max_array_layers = device.limits().max_texture_array_layers;
+        if resolution > max_texture_dim {
+            log::warn!(
+                "patch bitmap resolution {resolution} exceeds the GPU texture limit \
+                 {max_texture_dim}; skipping patches",
+            );
+            return;
+        }
+
+        // Collect the points that carry a patch: a point with no patch is an
+        // all-zero `u` row. Bound the scan by every parallel array's length so a
+        // short frame/bitmap array can't index out of range. The instance/atlas
+        // buffers are compacted, so an instance's atlas slot is not its point
+        // index.
+        let n_rows = recon
+            .points
+            .len()
+            .min(bitmaps.shape()[0])
+            .min(u_halfvecs.nrows())
+            .min(v_halfvecs.nrows());
+        let point_indices: Vec<usize> = (0..n_rows)
+            .filter(|&i| (0..3).any(|k| u_halfvecs[[i, k]] != 0.0))
+            .collect();
+        let patch_count = point_indices.len() as u32;
+        if patch_count == 0 {
+            return;
+        }
+
+        // Atlas grid dimensions: each layer ("page") holds a cols×rows grid of
+        // patch tiles, respecting GPU texture size limits.
+        let max_cells_per_axis = (max_texture_dim / resolution).max(1);
+        let cols = ((patch_count as f32).sqrt().ceil() as u32).clamp(1, max_cells_per_axis);
+        let rows_per_page = max_cells_per_axis;
+        let patches_per_page = cols * rows_per_page;
+        let num_pages = patch_count.div_ceil(patches_per_page).min(max_array_layers);
+        let max_patches = patches_per_page * num_pages;
+        let patch_count_clamped = patch_count.min(max_patches);
+        if patch_count_clamped < patch_count {
+            log::warn!(
+                "GPU limits can only fit {patch_count_clamped} of {patch_count} patches \
+                 in {num_pages} atlas pages; extra patches will not be displayed",
+            );
+        }
+        // Shrink the last page's row count so the texture isn't larger than needed
+        let total_rows = patch_count_clamped.div_ceil(cols);
+        let actual_rows_per_page = total_rows.min(rows_per_page);
+        let atlas_width = cols * resolution;
+        let atlas_height = actual_rows_per_page * resolution;
+
+        self.patch_atlas_cols = cols;
+        self.patch_atlas_rows = actual_rows_per_page;
+        self.patches_per_page = patches_per_page;
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("patch atlas"),
+            size: wgpu::Extent3d {
+                width: atlas_width,
+                height: atlas_height,
+                depth_or_array_layers: num_pages,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        // Write each patch's RGBA tile into its atlas cell and build the
+        // corresponding instance.
+        let mut instances: Vec<PatchInstance> = Vec::with_capacity(patch_count_clamped as usize);
+        for (slot, &i) in point_indices
+            .iter()
+            .enumerate()
+            .take(patch_count_clamped as usize)
+        {
+            let tile = bitmaps.index_axis(ndarray::Axis(0), i);
+            let page = slot as u32 / patches_per_page;
+            let idx_in_page = slot as u32 % patches_per_page;
+            let col = idx_in_page % cols;
+            let row = idx_in_page / cols;
+
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: col * resolution,
+                        y: row * resolution,
+                        z: page,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                tile.as_slice().unwrap(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(resolution * 4),
+                    rows_per_image: Some(resolution),
+                },
+                wgpu::Extent3d {
+                    width: resolution,
+                    height: resolution,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            let p = &recon.points[i];
+            instances.push(PatchInstance {
+                center: [
+                    p.position.x as f32,
+                    p.position.y as f32,
+                    p.position.z as f32,
+                ],
+                w: p.w as f32,
+                u_halfvec: [u_halfvecs[[i, 0]], u_halfvecs[[i, 1]], u_halfvecs[[i, 2]]],
+                _pad0: 0.0,
+                v_halfvec: [v_halfvecs[[i, 0]], v_halfvecs[[i, 1]], v_halfvecs[[i, 2]]],
+                atlas_layer: slot as u32,
+                point_index: i as u32,
+            });
+        }
+
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("patch instances"),
+            contents: bytemuck::cast_slice(&instances),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("patch sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        if let (Some(layout), Some(uniform_buf)) =
+            (&self.patch_bind_group_layout, &self.patch_uniform_buffer)
+        {
+            self.patch_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("patch bind group"),
+                layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&texture_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            }));
+        }
+
+        self.patch_instance_buffer = Some(instance_buffer);
+        self.patch_atlas_texture = Some(texture);
+        self.patch_count = patch_count_clamped;
+
+        let atlas_bytes = atlas_width as u64 * atlas_height as u64 * 4 * num_pages as u64;
+        log::info!(
+            "Uploaded {} patches ({}×{} px) as {}×{} × {} page(s) atlas ({:.1} MiB)",
+            patch_count_clamped,
+            resolution,
+            resolution,
+            atlas_width,
+            atlas_height,
+            num_pages,
+            atlas_bytes as f64 / (1024.0 * 1024.0),
+        );
+    }
+
     /// Load a full-resolution camera image for the background in camera view mode.
     ///
     /// Creates a single 2D texture at the image's native resolution and rebuilds
@@ -755,9 +980,14 @@ impl SceneRenderer {
             0.0
         };
 
-        // SIFT feature indices for this point's observations (sift_files only;
-        // an embedded_patches recon has none, so these rays are skipped).
+        // The observation keypoint lives in one of two places: SIFT feature
+        // positions read from `.sift` companions (`sift_files`, indexed through
+        // `feature_indexes` into the shared cache) or keypoints stored inline in
+        // the reconstruction (`embedded_patches`). Both are photometrically
+        // placed and need not point exactly at the 3D point, so the ray is
+        // unprojected from whichever the reconstruction carries.
         let feature_indexes = recon.feature_indexes();
+        let keypoints_xy = recon.keypoints_xy();
         let obs_start = recon.observation_offsets[point_idx];
         let observations = recon.observations_for_point(point_idx);
         let edges: Vec<EdgeInstance> = observations
@@ -769,19 +999,24 @@ impl SceneRenderer {
                 let center = image.camera_center();
                 let endpoint_a = [center.x as f32, center.y as f32, center.z as f32];
 
-                // Look up the SIFT feature position from the shared cache.
-                let cached = sift_cache.get(&(obs.image_index as usize))?;
-                let fi = feature_indexes?[obs_start + k] as usize;
-                if fi >= cached.positions_xy.len() {
-                    return None;
-                }
-                let px = cached.positions_xy[fi][0] as f64;
-                let py = cached.positions_xy[fi][1] as f64;
+                // The observed keypoint pixel for this observation, from the
+                // SIFT feature or the inline embedded keypoint. Skip the
+                // observation when neither source yields one (e.g. a missing or
+                // truncated `.sift` file) rather than drawing a misleading ray.
+                let obs_pixel: [f64; 2] = if let Some(fis) = feature_indexes {
+                    let fi = fis[obs_start + k] as usize;
+                    let cached = sift_cache.get(&(obs.image_index as usize))?;
+                    let xy = cached.positions_xy.get(fi)?;
+                    [xy[0] as f64, xy[1] as f64]
+                } else {
+                    let kxy = keypoints_xy?;
+                    let row = obs_start + k;
+                    [kxy[[row, 0]] as f64, kxy[[row, 1]] as f64]
+                };
 
-                // Unproject the feature to a camera-local unit ray direction.
-                let d_cam = camera.pixel_to_ray(px, py);
-
-                // Rotate to world space: d_world = R^T * d_cam
+                // Unproject the keypoint to a camera-local unit ray, then rotate
+                // to world space: d_world = R^T * d_cam.
+                let d_cam = camera.pixel_to_ray(obs_pixel[0], obs_pixel[1]);
                 let r_flat = image.camera_to_world_rotation_flat();
                 let d_world = [
                     r_flat[0] * d_cam[0] + r_flat[1] * d_cam[1] + r_flat[2] * d_cam[2],
@@ -790,14 +1025,16 @@ impl SceneRenderer {
                 ];
 
                 let endpoint_b = if at_infinity {
-                    // Feature is at infinity along d_world — shoot the ray outward.
+                    // Point at infinity: shoot the ray outward along the
+                    // observed bearing (a point at infinity has no parallax).
                     [
                         (center.x + infinity_ray_length * d_world[0]) as f32,
                         (center.y + infinity_ray_length * d_world[1]) as f32,
                         (center.z + infinity_ray_length * d_world[2]) as f32,
                     ]
                 } else {
-                    // Finite point: terminate at the nearest point on the ray,
+                    // Finite point: terminate at the nearest point on the
+                    // observed ray (so reprojection error shows),
                     // t = dot(P - C, d_world) clamped to the forward direction.
                     let cp = [
                         point_pos.x - center.x,

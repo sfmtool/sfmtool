@@ -108,6 +108,7 @@ impl SceneRenderer {
         encoder: &mut wgpu::CommandEncoder,
         show_points: bool,
         show_camera_images: bool,
+        show_patches: bool,
         in_camera_view: bool,
     ) {
         let Some(edl_output_view) = &self.edl_output_view else {
@@ -295,6 +296,27 @@ impl SceneRenderer {
                         pass.set_vertex_buffer(0, vbuf.slice(..));
                         pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
                         pass.draw_indexed(0..self.distorted_quad_index_count, 0, 0..1);
+                    }
+                }
+            }
+
+            // ── Pass 1d: Patch surfels (textured oriented quads) ──
+            // Writes real hardware depth (occludes/occluded by points and
+            // image quads) but 0.0 linear depth (EDL passthrough), and
+            // PICK_TAG_POINT | point_index so clicks select the patch's point.
+            if show_patches {
+                if let (Some(pipeline), Some(bind_group), Some(quad_vb), Some(instance_buf)) = (
+                    &self.patch_pipeline,
+                    &self.patch_bind_group,
+                    &self.quad_vertex_buffer,
+                    &self.patch_instance_buffer,
+                ) {
+                    if self.patch_count > 0 {
+                        pass.set_pipeline(pipeline);
+                        pass.set_bind_group(0, bind_group, &[]);
+                        pass.set_vertex_buffer(0, quad_vb.slice(..));
+                        pass.set_vertex_buffer(1, instance_buf.slice(..));
+                        pass.draw(0..4, 0..self.patch_count);
                     }
                 }
             }

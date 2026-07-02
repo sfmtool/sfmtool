@@ -23,6 +23,9 @@ impl SceneRenderer {
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
         hovered_image: Option<usize>,
+        patch_size_log2: f32,
+        patch_opacity: f32,
+        patch_alpha_cutoff: f32,
     ) {
         let (w, h) = self.current_size;
         if w == 0 || h == 0 {
@@ -86,6 +89,30 @@ impl SceneRenderer {
             };
 
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
+        }
+
+        // ── Patch uniforms (surfel atlas + controls) ──
+        if let Some(buf) = &self.patch_uniform_buffer {
+            if self.patch_count > 0 {
+                let view = camera.view_matrix();
+                let view_proj = camera.projection_matrix(aspect) * view;
+
+                let cam_pos = camera.position();
+                let uniforms = PatchUniforms {
+                    view_proj: mat4_to_cols(&view_proj),
+                    atlas_cols: self.patch_atlas_cols,
+                    atlas_rows: self.patch_atlas_rows,
+                    patches_per_page: self.patches_per_page,
+                    patch_scale: 2.0f32.powf(patch_size_log2),
+                    patch_opacity,
+                    alpha_cutoff: patch_alpha_cutoff,
+                    _pad0: [0.0; 2],
+                    camera_pos: [cam_pos.x as f32, cam_pos.y as f32, cam_pos.z as f32],
+                    _pad1: 0.0,
+                };
+
+                queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
+            }
         }
 
         // ── EDL uniforms ──

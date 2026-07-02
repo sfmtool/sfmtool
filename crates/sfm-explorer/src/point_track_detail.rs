@@ -572,10 +572,14 @@ impl PointTrackDetail {
         self.thumbnail_textures.clear();
 
         let point_pos = recon.points[point_idx].position;
-        // SIFT feature indices for this point's observations (sift_files only;
-        // an embedded_patches recon has none, so the cache lookups below fall
-        // back to defaults).
+        // Keypoints come from one of two sources: SIFT feature positions read
+        // into the cache (`sift_files`, via `feature_indexes`) or keypoints
+        // stored inline on the reconstruction (`embedded_patches`, via
+        // `keypoints_xy`, indexed per observation). For embedded keypoints the
+        // affine shape (and hence size) is derived by projecting the point's
+        // patch frame into the view (`observation_affine_shape`).
         let feature_indexes = recon.feature_indexes();
+        let keypoints_xy = recon.keypoints_xy();
         let obs_start = recon.observation_offsets[point_idx];
         let observations = recon.observations_for_point(point_idx);
 
@@ -585,24 +589,44 @@ impl PointTrackDetail {
 
         for (k, obs) in observations.iter().enumerate() {
             let img_idx = obs.image_index as usize;
-            let feat_idx = feature_indexes.map_or(0, |f| f[obs_start + k] as usize);
+            let obs_global = obs_start + k;
             let image = &recon.images[img_idx];
             let camera = &recon.cameras[image.camera_index as usize];
 
-            // Get feature position and size from SIFT cache
-            let cached_sift = sift_cache.get(&img_idx);
-            let feature_xy = cached_sift
-                .and_then(|sift| sift.positions_xy.get(feat_idx))
-                .copied()
-                .unwrap_or([0.0, 0.0]);
-            let feature_size = cached_sift
-                .and_then(|sift| sift.affine_shapes.get(feat_idx))
-                .map(|a| {
-                    let col0 = (a[0][0] * a[0][0] + a[1][0] * a[1][0]).sqrt();
-                    let col1 = (a[0][1] * a[0][1] + a[1][1] * a[1][1]).sqrt();
-                    0.5 * (col0 + col1)
-                })
-                .unwrap_or(0.0);
+            // Feature index (SIFT), position, and size for this observation.
+            let (feature_index, feature_xy, feature_size) = if let Some(fis) = feature_indexes {
+                let feat_idx = fis[obs_global] as usize;
+                let cached_sift = sift_cache.get(&img_idx);
+                let xy = cached_sift
+                    .and_then(|sift| sift.positions_xy.get(feat_idx))
+                    .copied()
+                    .unwrap_or([0.0, 0.0]);
+                let size = cached_sift
+                    .and_then(|sift| sift.affine_shapes.get(feat_idx))
+                    .map(|a| {
+                        let col0 = (a[0][0] * a[0][0] + a[1][0] * a[1][0]).sqrt();
+                        let col1 = (a[0][1] * a[0][1] + a[1][1] * a[1][1]).sqrt();
+                        0.5 * (col0 + col1)
+                    })
+                    .unwrap_or(0.0);
+                (feat_idx, xy, size)
+            } else if let Some(kxy) = keypoints_xy {
+                // Embedded keypoint: no SIFT feature index, so report the
+                // observation index. The affine shape (and hence size) is derived
+                // by projecting the point's patch frame into this image.
+                let xy = [kxy[[obs_global, 0]], kxy[[obs_global, 1]]];
+                let size = recon
+                    .observation_affine_shape(point_idx, img_idx, xy)
+                    .map(|a| {
+                        let col0 = (a[0][0] * a[0][0] + a[1][0] * a[1][0]).sqrt();
+                        let col1 = (a[0][1] * a[0][1] + a[1][1] * a[1][1]).sqrt();
+                        0.5 * (col0 + col1)
+                    })
+                    .unwrap_or(0.0);
+                (obs_global, xy, size)
+            } else {
+                (0, [0.0, 0.0], 0.0)
+            };
 
             // --- Compute per-observation reprojection error and ray angle ---
             let (reproj_error, ray_angle_deg) =
@@ -621,7 +645,7 @@ impl PointTrackDetail {
 
             self.observations.push(TrackObservationData {
                 image_index: img_idx,
-                feature_index: feat_idx,
+                feature_index,
                 feature_xy,
                 reproj_error,
                 ray_angle_deg,

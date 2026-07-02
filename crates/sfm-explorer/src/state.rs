@@ -129,6 +129,24 @@ pub struct AppState {
     /// Whether to show the ground plane grid.
     pub show_grid: bool,
 
+    /// Whether to show patch surfels (textured oriented quads). Only has an
+    /// effect when the loaded reconstruction carries patch frames + bitmaps.
+    pub show_patches: bool,
+
+    /// Global opacity multiplier for patch surfel color.
+    pub patch_opacity: f32,
+
+    /// Log2 multiplier on the stored patch half-extents, mirroring
+    /// `point_size_log2`. Actual multiplier = 2^patch_size_log2.
+    pub patch_size_log2: f32,
+
+    /// Coverage cutoff on the patch bitmap alpha (per-pixel cross-view
+    /// confidence): fragments below this are discarded so ragged patch edges
+    /// drop out. Defaults to `0.0` — render every texel opaque, discarding
+    /// nothing — since the alpha look reads better fully filled; raise it to
+    /// carve ragged edges away.
+    pub patch_alpha_cutoff: f32,
+
     /// Status message shown in the UI (e.g. loading errors).
     pub status_message: Option<String>,
 
@@ -199,6 +217,10 @@ impl AppState {
             show_points: true,
             show_camera_images: true,
             show_grid: true,
+            show_patches: true,
+            patch_opacity: 1.0,
+            patch_size_log2: 0.0,
+            patch_alpha_cutoff: 0.0,
             status_message: None,
             points_need_upload: false,
             point_size_log2: 0.0,

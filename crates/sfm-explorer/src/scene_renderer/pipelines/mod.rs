@@ -7,6 +7,7 @@ pub(super) mod distorted_quad;
 pub(super) mod edl;
 pub(super) mod frustum;
 pub(super) mod image_quad;
+pub(super) mod patch;
 pub(super) mod points;
 pub(super) mod target;
 pub(super) mod track_ray;

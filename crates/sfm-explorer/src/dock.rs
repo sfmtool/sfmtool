@@ -167,7 +167,11 @@ impl TabViewer for TabContext<'_> {
                         }
                     };
 
+                    // Only `sift_files` reconstructions have `.sift` companions;
+                    // an embedded_patches recon reads its keypoints inline, so
+                    // skip the (always-failing, per-frame) cache probe.
                     let sift = self.state.selected_image.and_then(|idx| {
+                        recon.feature_indexes()?;
                         let read_count = read_count_for_image(idx);
                         crate::state::ensure_sift_cached(
                             &mut self.state.sift_cache,
@@ -206,17 +210,21 @@ impl TabViewer for TabContext<'_> {
             }
             Tab::PointTrackDetail => {
                 if let Some(ref recon) = self.state.reconstruction {
-                    // Ensure SIFT positions are cached for all images in the track.
-                    if let Some(pt_idx) = self.state.selected_point {
-                        if pt_idx < recon.points.len() {
-                            for img_idx in recon.track_image_indices(pt_idx) {
-                                let need = recon.max_track_feature_index[img_idx] as usize + 1;
-                                crate::state::ensure_sift_cached(
-                                    &mut self.state.sift_cache,
-                                    recon,
-                                    img_idx,
-                                    need,
-                                );
+                    // Ensure SIFT positions are cached for all images in the
+                    // track (sift_files only; embedded_patches reads keypoints
+                    // inline, so the `.sift` probe would fail every time).
+                    if recon.feature_indexes().is_some() {
+                        if let Some(pt_idx) = self.state.selected_point {
+                            if pt_idx < recon.points.len() {
+                                for img_idx in recon.track_image_indices(pt_idx) {
+                                    let need = recon.max_track_feature_index[img_idx] as usize + 1;
+                                    crate::state::ensure_sift_cached(
+                                        &mut self.state.sift_cache,
+                                        recon,
+                                        img_idx,
+                                        need,
+                                    );
+                                }
                             }
                         }
                     }

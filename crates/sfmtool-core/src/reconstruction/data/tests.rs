@@ -30,6 +30,121 @@ fn test_track_image_indices() {
 }
 
 #[test]
+fn test_observation_affine_shape_frontoparallel() {
+    use nalgebra::{Point3, UnitQuaternion, Vector3};
+    use ndarray::Array2;
+
+    let mut recon = SfmrReconstruction::demo(16);
+
+    // Pinhole with principal point at the origin, for easy arithmetic.
+    recon.cameras[0] = crate::CameraIntrinsics {
+        model: crate::camera::CameraModel::Pinhole {
+            focal_length_x: 100.0,
+            focal_length_y: 100.0,
+            principal_point_x: 0.0,
+            principal_point_y: 0.0,
+        },
+        width: 4096,
+        height: 4096,
+    };
+    // Image 0 at the origin looking down +Z (identity world->camera).
+    recon.images[0].camera_index = 0;
+    recon.images[0].quaternion_wxyz = UnitQuaternion::identity();
+    recon.images[0].translation_xyz = Vector3::zeros();
+    // Point 0 at (0, 0, 2) with a fronto-parallel patch: half-extent 0.05 along
+    // world X (u) and Y (v), normal +Z.
+    recon.points[0].position = Point3::new(0.0, 0.0, 2.0);
+    recon.points[0].w = 1.0;
+    let n = recon.points.len();
+    let mut u = Array2::<f32>::zeros((n, 3));
+    let mut v = Array2::<f32>::zeros((n, 3));
+    u[[0, 0]] = 0.05;
+    v[[0, 1]] = 0.05;
+    recon.patch_u_halfvec_xyz = Some(u);
+    recon.patch_v_halfvec_xyz = Some(v);
+
+    // Keypoint = projection of the point centre = (0, 0). Expected shape is
+    // axis-aligned with scale f * half_extent / depth = 100 * 0.05 / 2 = 2.5.
+    let shape = recon
+        .observation_affine_shape(0, 0, [0.0, 0.0])
+        .expect("a finite patch projects to a shape");
+    assert!((shape[0][0] - 2.5).abs() < 1e-3, "a11 = {}", shape[0][0]);
+    assert!((shape[1][1] - 2.5).abs() < 1e-3, "a22 = {}", shape[1][1]);
+    assert!(shape[0][1].abs() < 1e-3, "a12 = {}", shape[0][1]);
+    assert!(shape[1][0].abs() < 1e-3, "a21 = {}", shape[1][0]);
+
+    // A point at infinity still has a shape: its patch is tangent to the
+    // direction sphere, and here the tangent frame projects to the same
+    // axis-aligned (roughly circular) footprint.
+    recon.points[0].w = 0.0;
+    let inf_shape = recon
+        .observation_affine_shape(0, 0, [0.0, 0.0])
+        .expect("an infinity patch projects to a shape");
+    assert!(
+        (inf_shape[0][0] - 2.5).abs() < 1e-3,
+        "inf a11 = {}",
+        inf_shape[0][0]
+    );
+    assert!(
+        (inf_shape[1][1] - 2.5).abs() < 1e-3,
+        "inf a22 = {}",
+        inf_shape[1][1]
+    );
+
+    // No patch arrays at all -> None.
+    recon.points[0].w = 1.0;
+    recon.patch_u_halfvec_xyz = None;
+    assert!(recon.observation_affine_shape(0, 0, [0.0, 0.0]).is_none());
+}
+
+#[test]
+fn test_observation_affine_shape_rotated_camera() {
+    use nalgebra::{Point3, Rotation3, UnitQuaternion, Vector3};
+    use ndarray::Array2;
+
+    let mut recon = SfmrReconstruction::demo(16);
+    recon.cameras[0] = crate::CameraIntrinsics {
+        model: crate::camera::CameraModel::Pinhole {
+            focal_length_x: 100.0,
+            focal_length_y: 100.0,
+            principal_point_x: 0.0,
+            principal_point_y: 0.0,
+        },
+        width: 4096,
+        height: 4096,
+    };
+    // World->camera rotation = +90° about Z; camera at the origin.
+    let rot = Rotation3::from_axis_angle(&Vector3::z_axis(), std::f64::consts::FRAC_PI_2);
+    recon.images[0].camera_index = 0;
+    recon.images[0].quaternion_wxyz = UnitQuaternion::from_rotation_matrix(&rot);
+    recon.images[0].translation_xyz = Vector3::zeros();
+    recon.points[0].position = Point3::new(0.0, 0.0, 2.0);
+    recon.points[0].w = 1.0;
+    let n = recon.points.len();
+    let mut u = Array2::<f32>::zeros((n, 3));
+    let mut v = Array2::<f32>::zeros((n, 3));
+    u[[0, 0]] = 0.05; // world +X
+    v[[0, 1]] = 0.05; // world +Y
+    recon.patch_u_halfvec_xyz = Some(u);
+    recon.patch_v_halfvec_xyz = Some(v);
+
+    // The point still projects to (0, 0). The world->camera rotation R sends
+    // world +X -> +Y and world +Y -> -X in the image, so the columns rotate 90°:
+    // u -> (0, 2.5), v -> (-2.5, 0). Projecting with R^T (a transpose bug) would
+    // rotate the other way, so this pins the rotation direction.
+    let s = recon
+        .observation_affine_shape(0, 0, [0.0, 0.0])
+        .expect("shape");
+    assert!(s[0][0].abs() < 1e-3, "a11 = {}", s[0][0]);
+    assert!((s[1][0] - 2.5).abs() < 1e-3, "a21 = {}", s[1][0]);
+    assert!((s[0][1] + 2.5).abs() < 1e-3, "a12 = {}", s[0][1]);
+    assert!(s[1][1].abs() < 1e-3, "a22 = {}", s[1][1]);
+
+    // A point whose frame row is all-zero (no patch) -> None.
+    assert!(recon.observation_affine_shape(1, 0, [0.0, 0.0]).is_none());
+}
+
+#[test]
 fn test_subset_keep_all_images_is_identity() {
     let recon = SfmrReconstruction::demo(1000);
     let indices: Vec<u32> = (0..recon.images.len() as u32).collect();
