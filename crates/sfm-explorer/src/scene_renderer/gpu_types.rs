@@ -77,6 +77,52 @@ pub(super) struct ImageQuadInstance {
     pub _pad2: u32,
 }
 
+/// Per-instance data for one patch surfel (an oriented, textured quad).
+///
+/// The four corners are expanded in the vertex shader from the static unit
+/// quad: `corner = center + s·u_halfvec + t·v_halfvec` for `(s, t) ∈ {±1}²`.
+/// `atlas_layer` is the compacted cell index into the patch texture atlas
+/// (patch-less points are skipped, so it is *not* the point index);
+/// `point_index` is carried separately so picking resolves to the point.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct PatchInstance {
+    /// World position (unit direction when `w == 0`).
+    pub center: [f32; 3],
+    /// Homogeneous flag: 1.0 finite, 0.0 at infinity.
+    pub w: f32,
+    /// World-space u axis × half-extent.
+    pub u_halfvec: [f32; 3],
+    pub _pad0: f32,
+    /// World-space v axis × half-extent.
+    pub v_halfvec: [f32; 3],
+    /// Compacted cell index into the patch atlas (page decoded in the shader).
+    pub atlas_layer: u32,
+    /// Global `recon.points` index, for the pick buffer.
+    pub point_index: u32,
+}
+
+/// Uniforms for patch surfel rendering: view-projection plus the atlas grid
+/// dimensions (mirroring [`ImageQuadUniforms`]) and the user patch controls.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct PatchUniforms {
+    pub view_proj: [[f32; 4]; 4],
+    pub atlas_cols: u32,
+    pub atlas_rows: u32,
+    pub patches_per_page: u32,
+    /// User scale multiplier on the stored half-vecs (`2^patch_size_log2`).
+    pub patch_scale: f32,
+    /// Global opacity multiplier for patch color.
+    pub patch_opacity: f32,
+    /// Coverage discard threshold on the bitmap alpha (per-pixel confidence).
+    pub alpha_cutoff: f32,
+    pub _pad0: [f32; 2],
+    /// Camera world position, for front-face culling of patch surfels.
+    pub camera_pos: [f32; 3],
+    pub _pad1: f32,
+}
+
 /// Vertex for a tessellated (distorted) image quad.
 ///
 /// All cameras' tessellated meshes are concatenated into a single vertex buffer

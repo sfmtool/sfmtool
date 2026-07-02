@@ -10,6 +10,7 @@ an interactive GUI for exploring Structure-from-Motion reconstructions.
 | [gui-user-experience.md](gui-user-experience.md) | Vision, design principles, and product design. Start here to understand what the viewer is and why it's built this way. |
 | [gui-viewport-navigation.md](gui-viewport-navigation.md) | Orbit camera model, input controls (mouse, trackpad, keyboard), and the Alt-mode target control system. Includes Windows DirectManipulation touchpad integration. |
 | [gui-point-cloud-rendering.md](gui-point-cloud-rendering.md) | Point splat rendering, Eye-Dome Lighting post-processing, target indicator (rotating compass), and supernova lighting effect. |
+| [gui-patch-rendering.md](gui-patch-rendering.md) | Embedded-patch (surfel) rendering: textured oriented quads in the 3D viewport, one per 3D point carrying a patch frame. Mirrors the camera image-quad pipeline; front-face culled. |
 | [gui-camera-views.md](gui-camera-views.md) | Camera frustum wireframes, image texture projection onto frustum far planes, GPU pick buffer, selection/hover interaction, and distorted frustum rendering. |
 | [gui-multi-panel-image-browser.md](gui-multi-panel-image-browser.md) | Multi-panel layout (egui_dock), image browser strip, image detail pane, cross-panel selection model, and feature overlay design. |
 | [gui-point-track-detail.md](gui-point-track-detail.md) | Point Track Detail panel: per-point track inspector showing observation thumbnails, per-observation reprojection error, and cross-panel navigation. |

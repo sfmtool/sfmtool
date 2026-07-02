@@ -110,6 +110,18 @@ pub struct SceneRenderer {
     atlas_rows: u32,
     images_per_page: u32,
 
+    // ── Patch (surfel) rendering ──
+    patch_pipeline: Option<wgpu::RenderPipeline>,
+    patch_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    patch_uniform_buffer: Option<wgpu::Buffer>,
+    patch_instance_buffer: Option<wgpu::Buffer>,
+    patch_atlas_texture: Option<wgpu::Texture>,
+    patch_bind_group: Option<wgpu::BindGroup>,
+    patch_count: u32,
+    patch_atlas_cols: u32,
+    patch_atlas_rows: u32,
+    patches_per_page: u32,
+
     // ── Background image (camera view mode) ──
     bg_image_distorted_pipeline: Option<wgpu::RenderPipeline>,
     bg_image_distorted_vertex_buffer: Option<wgpu::Buffer>,
@@ -216,6 +228,16 @@ impl SceneRenderer {
             atlas_cols: 0,
             atlas_rows: 0,
             images_per_page: 0,
+            patch_pipeline: None,
+            patch_bind_group_layout: None,
+            patch_uniform_buffer: None,
+            patch_instance_buffer: None,
+            patch_atlas_texture: None,
+            patch_bind_group: None,
+            patch_count: 0,
+            patch_atlas_cols: 0,
+            patch_atlas_rows: 0,
+            patches_per_page: 0,
             bg_image_distorted_pipeline: None,
             bg_image_distorted_vertex_buffer: None,
             bg_image_distorted_index_buffer: None,
@@ -314,6 +336,12 @@ impl SceneRenderer {
         let iq = pipelines::image_quad::create(device);
         self.image_quad_pipeline = Some(iq.pipeline);
         self.image_quad_bind_group_layout = Some(iq.bind_group_layout);
+
+        // ── Patch surfel pipeline ──
+        let pa = pipelines::patch::create(device);
+        self.patch_pipeline = Some(pa.pipeline);
+        self.patch_bind_group_layout = Some(pa.bind_group_layout);
+        self.patch_uniform_buffer = Some(pa.uniform_buffer);
 
         // ── Distorted image quad pipeline ──
         self.distorted_quad_pipeline = Some(pipelines::distorted_quad::create(

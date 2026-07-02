@@ -308,6 +308,31 @@ impl ImageDetail {
         img_idx: usize,
         cached_sift: Option<&CachedSiftFeatures>,
     ) {
+        // Embedded-patches reconstructions keep keypoints inline (no `.sift`
+        // cache, empty `image_feature_to_point`); build the tracked-feature list
+        // from the per-observation keypoints. Every embedded observation belongs
+        // to a point, so all are tracked.
+        if recon.feature_indexes().is_none() {
+            let features = embedded_image_features(recon, img_idx);
+            let tree = build_feature_tree(&features);
+            log::info!(
+                "Loaded {} embedded tracked features for image {}",
+                features.len(),
+                img_idx,
+            );
+            self.feature_overlay = Some(FeatureOverlayState {
+                image_idx: img_idx,
+                overlay_mode: OverlayMode::None,
+                tracked_only: true,
+                max_features: None,
+                min_feature_size: None,
+                max_feature_size: None,
+                features,
+                tree,
+            });
+            return;
+        }
+
         let feature_to_point = &recon.image_feature_to_point[img_idx];
         if feature_to_point.is_empty() || cached_sift.is_none() {
             self.feature_overlay = Some(FeatureOverlayState {
@@ -367,6 +392,49 @@ impl ImageDetail {
         cached_sift: Option<&CachedSiftFeatures>,
         settings: &FeatureDisplaySettings,
     ) {
+        // Embedded-patches: build features from the inline per-observation
+        // keypoints, with affine shapes derived by projecting each point's patch
+        // frame. Every embedded observation is tracked (no untracked keypoints),
+        // so `tracked_only` is a no-op; size filters and the max-features cap
+        // apply just like the SIFT path.
+        if recon.feature_indexes().is_none() {
+            let mut features = embedded_image_features(recon, img_idx);
+            features.retain(|f| {
+                let size = feature_size(&f.affine_shape);
+                settings.min_feature_size.is_none_or(|mn| size >= mn)
+                    && settings.max_feature_size.is_none_or(|mx| size <= mx)
+            });
+            // Keep the largest features when capping, mirroring the SIFT path
+            // (whose cache is pre-sorted by decreasing size).
+            if let Some(max) = settings.max_features {
+                if features.len() > max {
+                    features.sort_by(|a, b| {
+                        feature_size(&b.affine_shape).total_cmp(&feature_size(&a.affine_shape))
+                    });
+                    features.truncate(max);
+                }
+            }
+            populate_feature_diagnostics(&mut features, recon, settings.overlay_mode);
+            let tree = build_feature_tree(&features);
+            log::info!(
+                "Loaded {} embedded features for image {} (mode: {:?})",
+                features.len(),
+                img_idx,
+                settings.overlay_mode,
+            );
+            self.feature_overlay = Some(FeatureOverlayState {
+                image_idx: img_idx,
+                overlay_mode: settings.overlay_mode,
+                tracked_only: settings.tracked_only,
+                max_features: settings.max_features,
+                min_feature_size: settings.min_feature_size,
+                max_feature_size: settings.max_feature_size,
+                features,
+                tree,
+            });
+            return;
+        }
+
         let Some(cached) = cached_sift else {
             self.feature_overlay = Some(FeatureOverlayState {
                 image_idx: img_idx,
@@ -438,34 +506,9 @@ impl ImageDetail {
 
         // Populate per-point diagnostics only when the active overlay consumes
         // them. Each iterates a point's observations, so we pay only on demand.
-        match settings.overlay_mode {
-            OverlayMode::MaxTrackAngle => {
-                for feature in features.iter_mut() {
-                    if feature.is_tracked() {
-                        feature.max_track_angle_deg =
-                            compute_max_track_angle_deg(recon, feature.point_index as usize);
-                    }
-                }
-            }
-            OverlayMode::DepthReliability | OverlayMode::ConditionNumber => {
-                for feature in features.iter_mut() {
-                    if feature.is_tracked() {
-                        let (cond, z) = crate::point_track_detail::compute_point_diagnostics(
-                            recon,
-                            feature.point_index as usize,
-                        );
-                        feature.condition_number = cond;
-                        feature.inverse_depth_z = z;
-                    }
-                }
-            }
-            _ => {}
-        }
+        populate_feature_diagnostics(&mut features, recon, settings.overlay_mode);
 
-        let mut tree = kiddo::KdTree::<f32, 2>::new();
-        for (i, feature) in features.iter().enumerate() {
-            tree.add(&feature.position, i as u64);
-        }
+        let tree = build_feature_tree(&features);
 
         let tracked_count = features.iter().filter(|f| f.is_tracked()).count();
         log::info!(
@@ -503,6 +546,84 @@ fn feature_size(affine: &[[f32; 2]; 2]) -> f32 {
     let col0_norm = (affine[0][0] * affine[0][0] + affine[1][0] * affine[1][0]).sqrt();
     let col1_norm = (affine[0][1] * affine[0][1] + affine[1][1] * affine[1][1]).sqrt();
     0.5 * (col0_norm + col1_norm)
+}
+
+/// Build a 2-D kd-tree over feature positions for hit-testing / hover.
+fn build_feature_tree(features: &[DisplayFeature]) -> kiddo::KdTree<f32, 2> {
+    let mut tree = kiddo::KdTree::<f32, 2>::new();
+    for (i, feature) in features.iter().enumerate() {
+        tree.add(&feature.position, i as u64);
+    }
+    tree
+}
+
+/// Feature list for an `embedded_patches` reconstruction: every observation
+/// landing in `img_idx`, as a tracked feature at its inline keypoint. The affine
+/// shape is derived by projecting the point's patch frame into this image
+/// (`observation_affine_shape`); it falls back to a degenerate (zero) shape when
+/// the point has no usable patch frame, in which case [`draw_feature_ellipse`]
+/// skips the ellipse and only the centre dot draws. O(total observations):
+/// embedded recons have no per-image keypoint index (`image_feature_to_point`
+/// is empty).
+fn embedded_image_features(recon: &SfmrReconstruction, img_idx: usize) -> Vec<DisplayFeature> {
+    let Some(kxy) = recon.keypoints_xy() else {
+        return Vec::new();
+    };
+    let mut features = Vec::new();
+    for point_idx in 0..recon.points.len() {
+        let obs_start = recon.observation_offsets[point_idx];
+        for (k, obs) in recon.observations_for_point(point_idx).iter().enumerate() {
+            if obs.image_index as usize == img_idx {
+                let row = obs_start + k;
+                let position = [kxy[[row, 0]], kxy[[row, 1]]];
+                let affine_shape = recon
+                    .observation_affine_shape(point_idx, img_idx, position)
+                    .unwrap_or([[0.0; 2]; 2]);
+                features.push(DisplayFeature {
+                    position,
+                    affine_shape,
+                    point_index: point_idx as u32,
+                    max_track_angle_deg: f32::NAN,
+                    inverse_depth_z: f32::NAN,
+                    condition_number: f32::NAN,
+                });
+            }
+        }
+    }
+    features
+}
+
+/// Populate the per-point diagnostics an overlay mode consumes (only for the
+/// modes that need them; each iterates a point's observations, so we pay only
+/// on demand).
+fn populate_feature_diagnostics(
+    features: &mut [DisplayFeature],
+    recon: &SfmrReconstruction,
+    mode: OverlayMode,
+) {
+    match mode {
+        OverlayMode::MaxTrackAngle => {
+            for feature in features.iter_mut() {
+                if feature.is_tracked() {
+                    feature.max_track_angle_deg =
+                        compute_max_track_angle_deg(recon, feature.point_index as usize);
+                }
+            }
+        }
+        OverlayMode::DepthReliability | OverlayMode::ConditionNumber => {
+            for feature in features.iter_mut() {
+                if feature.is_tracked() {
+                    let (cond, z) = crate::point_track_detail::compute_point_diagnostics(
+                        recon,
+                        feature.point_index as usize,
+                    );
+                    feature.condition_number = cond;
+                    feature.inverse_depth_z = z;
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Compute the max pairwise angle (degrees) between world-space rays from

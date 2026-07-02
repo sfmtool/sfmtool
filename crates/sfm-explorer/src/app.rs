@@ -234,6 +234,7 @@ impl App {
                     None => point_scale,
                 };
                 self.scene_renderer.upload_thumbnails(device, queue, recon);
+                self.scene_renderer.upload_patches(device, queue, recon);
                 self.scene_renderer.upload_frustums(
                     device,
                     recon,
@@ -309,15 +310,20 @@ impl App {
                 if let Some(point_idx) = self.state.selected_point {
                     if point_idx < recon.points.len() {
                         // Pre-populate SIFT cache for all images in the track
-                        for obs in recon.observations_for_point(point_idx) {
-                            let img_idx = obs.image_index as usize;
-                            let read_count = recon.max_track_feature_index[img_idx] as usize + 1;
-                            crate::state::ensure_sift_cached(
-                                &mut self.state.sift_cache,
-                                recon,
-                                img_idx,
-                                read_count,
-                            );
+                        // (sift_files only; embedded_patches has no `.sift`
+                        // files and reads its keypoints inline).
+                        if recon.feature_indexes().is_some() {
+                            for obs in recon.observations_for_point(point_idx) {
+                                let img_idx = obs.image_index as usize;
+                                let read_count =
+                                    recon.max_track_feature_index[img_idx] as usize + 1;
+                                crate::state::ensure_sift_cached(
+                                    &mut self.state.sift_cache,
+                                    recon,
+                                    img_idx,
+                                    read_count,
+                                );
+                            }
                         }
                         self.scene_renderer.upload_track_rays(
                             device,
@@ -377,6 +383,9 @@ impl App {
             self.state
                 .hovered_image
                 .filter(|h| self.state.selected_image != Some(*h)),
+            self.state.patch_size_log2,
+            self.state.patch_opacity,
+            self.state.patch_alpha_cutoff,
         );
 
         // Update background image uniforms every frame in camera view (viewport
@@ -397,6 +406,9 @@ impl App {
             encoder,
             self.state.show_points,
             self.state.show_camera_images,
+            // At zero opacity patches are invisible; skip the draw so they don't
+            // still write depth/pick and swallow track rays and point clicks.
+            self.state.show_patches && self.state.patch_opacity > 0.0,
             in_camera_view,
         );
 
@@ -523,6 +535,33 @@ impl App {
                                 .text("px")
                                 .fixed_decimals(1),
                         );
+                        ui.separator();
+                        // Patch surfel controls — disabled unless the loaded
+                        // reconstruction carries patch frames with bitmaps.
+                        let has_patches = app_state.reconstruction.as_ref().is_some_and(|r| {
+                            r.patch_u_halfvec_xyz.is_some()
+                                && r.patch_v_halfvec_xyz.is_some()
+                                && r.patch_bitmaps_y_x_rgba.is_some()
+                        });
+                        ui.add_enabled_ui(has_patches, |ui| {
+                            ui.checkbox(&mut app_state.show_patches, "Show Patches");
+                            ui.label("Patch Opacity");
+                            ui.add(
+                                egui::Slider::new(&mut app_state.patch_opacity, 0.0..=1.0)
+                                    .fixed_decimals(2),
+                            );
+                            ui.label("Patch Size");
+                            ui.add(
+                                egui::Slider::new(&mut app_state.patch_size_log2, -3.0..=3.0)
+                                    .text("log₂")
+                                    .fixed_decimals(1),
+                            );
+                            ui.label("Patch Edge Cutoff");
+                            ui.add(
+                                egui::Slider::new(&mut app_state.patch_alpha_cutoff, 0.0..=1.0)
+                                    .fixed_decimals(2),
+                            );
+                        });
                         ui.separator();
                         ui.label("Length Scale");
                         ui.add(

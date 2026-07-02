@@ -956,6 +956,45 @@ itself stays a valid 2D observation. For a **point at infinity** (`w = 0`) the
 patch is a region of the direction sphere rather than a plane (see the patch-frame
 section), and the anchor is defined analogously on that frame.
 
+##### Deriving keypoint shape, scale, and orientation
+
+The keypoint is stored as a bare 2D coordinate, but its local **affine shape**
+— the `sift_files` counterpart being the `.sift` affine frame — is not lost: it
+is the image-space projection of the point's patch frame, evaluated at the
+observation's anchor. No shape data is stored per observation because it is
+fully determined by `(u, v)`, the anchor `A_j`, and the camera model.
+
+For observation `j` with anchor `A_j` (from the construction above), point
+frame `u = patch_u_halfvec_xyz[p]`, `v = patch_v_halfvec_xyz[p]`, and camera
+`i`'s projection `project_i(·)` (intrinsics ∘ distortion ∘ world→camera):
+
+1. `k  = project_i(A_j)` — the keypoint (≈ `keypoints_xy[j]` by construction).
+2. `pu = project_i(A_j + u)`, `pv = project_i(A_j + v)` — the projected tips of
+   the two half-axes.
+3. The local affine matrix is `A = [ pu − k | pv − k ]` (2×2, columns are the
+   projected half-axes). It maps the unit square `(s, t) ∈ [−1, 1]²` to the
+   patch's image footprint, so it is the linearization (Jacobian) of the
+   projection restricted to the patch plane, scaled by the half-extents.
+
+From `A` a consumer recovers the usual keypoint attributes: **scale** from the
+column norms (or `√|det A|` for the area-equivalent radius), **orientation**
+from `atan2` of a chosen column, and **anisotropy** from the ratio of the two
+singular values. An overlay that draws oriented ellipses (an SVD of `A` gives
+the semi-axes and rotation) can therefore treat an `embedded_patches`
+observation exactly like a `sift_files` one.
+
+This is an approximation valid over the patch footprint: for wide-baseline or
+strongly distorted views the true footprint is not an exact ellipse. For a
+**grazing view** the anchor falls back to `A_j = X_p`, so the shape degrades to
+the frame projected at the point centre. For a **point at infinity** (`w = 0`)
+there is no anchor plane: the frame is tangent to the direction sphere, so `A_j`
+and the two half-axis tips are projected as *directions* (`w = 0` folds out the
+camera translation), giving a roughly circular footprint. Because the patch
+frame is per point (not per observation), two views of the same point share
+`(u, v)` in the world but generally yield **different** `A` matrices, since
+`project_i` differs per camera. This is implemented as
+`SfmrReconstruction::observation_affine_shape`.
+
 ## Data Ordering and Constraints
 
 ### Critical Ordering Requirements
