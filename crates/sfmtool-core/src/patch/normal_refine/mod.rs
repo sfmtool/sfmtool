@@ -52,13 +52,13 @@ pub(in crate::patch) use consensus::{
 pub(in crate::patch) use level::{build_level_context, LevelContext};
 pub(in crate::patch) use params::FLAT_NORM_SQ_EPS;
 pub(in crate::patch) use support::{build_support, window_weights, Support};
+pub(in crate::patch) use view_stack::{PatchViewStack, AGREEMENT_SIGMA};
 pub(in crate::patch) use znorm::{normalized_stack, weighted_moments_pub, znormalize_into_kept};
 
 // Internal helpers used by the orchestration below.
 use obliquity::{fill_kept_obliquity_priors, fronto_prior};
 use search::{build_final_context, coarse_to_fine, eval_phi, grid_confidence};
 use support::repose_patch;
-use view_stack::{PatchViewStack, AGREEMENT_SIGMA};
 
 /// Refine one patch's normal photometrically. Takes the patch and returns an
 /// updated copy plus diagnostics; see `specs/core/patch-normal-refinement.md`.

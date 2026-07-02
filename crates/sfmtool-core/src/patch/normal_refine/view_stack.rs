@@ -20,7 +20,7 @@ use super::znorm::znormalize_into;
 /// the weighted cross-view colour RMS deviation `σ` at which agreement decays to
 /// `e^{-1/2}`. Larger tolerates more cross-view colour spread before the alpha
 /// drops.
-pub(super) const AGREEMENT_SIGMA: f64 = 24.0;
+pub(in crate::patch) const AGREEMENT_SIGMA: f64 = 24.0;
 
 /// Map a rendered source pixel to RGB, replicating a single channel to grey and
 /// taking the first three of a multi-channel image (matching the thumbnail RGB
@@ -53,7 +53,11 @@ fn sample_rgb(img: &crate::camera::remap::ImageU8, col: u32, row: u32, channels:
 /// It is the natural input for future per-view operations too — cross-validation
 /// strips, the per-pixel robust template (`patch-normal-refinement.md` item 7),
 /// per-view patch export, and GPU textured-surfel rendering.
-pub(super) struct PatchViewStack {
+///
+/// Shared with the sibling `keypoint_subpixel` module (via the
+/// `normal_refine` re-export), which fuses each point's representative bitmap
+/// at the final refined keypoints.
+pub(in crate::patch) struct PatchViewStack {
     resolution: u32,
     /// One full `R×R` render per kept view.
     images: Vec<crate::camera::remap::ImageU8>,
@@ -66,7 +70,7 @@ pub(super) struct PatchViewStack {
 
 impl PatchViewStack {
     /// Render `patch` into every view in `kept` (full grid + per-pixel validity).
-    pub(super) fn render(
+    pub(in crate::patch) fn render(
         patch: &OrientedPatch,
         views: &[ProjectedImage<'_>],
         kept: &[usize],
@@ -208,7 +212,7 @@ impl PatchViewStack {
     /// views); only views that cover a pixel contribute, renormalized there. Alpha
     /// is `0` where no kept view covers a pixel and for a pixel seen by a single
     /// view (no cross-view evidence). Returns the flat `R·R·4` row-major texture.
-    pub(super) fn fuse(&self, weights: &[f64], sigma: f64) -> Vec<u8> {
+    pub(in crate::patch) fn fuse(&self, weights: &[f64], sigma: f64) -> Vec<u8> {
         let r = self.resolution as usize;
         let npix = r * r;
         let mut out = vec![0u8; npix * 4];

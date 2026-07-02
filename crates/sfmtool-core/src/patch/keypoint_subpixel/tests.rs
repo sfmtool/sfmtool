@@ -1541,3 +1541,113 @@ fn max_outer_sweeps_per_sweep_guard_does_not_regress_below_seed_at_sweep_t() {
         );
     }
 }
+
+// ── render_bitmaps: the fused representative at the final keypoints ──────────
+//
+// With `render_bitmaps = true` the refiner also fuses each point's RGBA
+// representative texture at the FINAL per-view keypoints (final IRLS weights,
+// `PatchViewStack::fuse`). The representative is the uniform "valid consensus"
+// signal: a well-observed point — finite OR at infinity — gets a real (nonzero)
+// texture, and a point with no cross-view consensus (< 2 usable views) gets
+// `None`, which `sfm embed-patches` uses to drop it.
+
+/// True when some pixel of the flat R·R·4 texture carries cross-view agreement
+/// (alpha > 0).
+fn has_nonzero_alpha(rep: &[u8]) -> bool {
+    rep.chunks_exact(4).any(|px| px[3] > 0)
+}
+
+#[test]
+fn render_bitmaps_fuses_representative_for_finite_point() {
+    // Four aligned, textured views: a strong consensus, so the representative
+    // must exist, have the R·R·4 shape, and carry nonzero RGB + alpha.
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let offs = [[0.0; 2]; 4];
+    let texs = vec![texture as fn(f64, f64) -> f64; 4];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    let p = KeypointSubpixelParams {
+        render_bitmaps: true,
+        ..params()
+    };
+    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &p);
+    let rep = res
+        .representative
+        .expect("a well-observed finite point fuses a representative");
+    assert_eq!(rep.len(), (RES * RES * 4) as usize);
+    assert!(
+        has_nonzero_alpha(&rep),
+        "aligned views must agree somewhere (alpha > 0)"
+    );
+    assert!(
+        rep.chunks_exact(4).any(|px| px[0] > 0),
+        "the fused texture must carry real image content"
+    );
+}
+
+#[test]
+fn render_bitmaps_fuses_representative_for_infinity_point() {
+    // The same contract for a w = 0 point at infinity: it is NOT skipped (unlike
+    // normal refinement) — the direction-patch render path fuses a real
+    // representative, fixing the all-black infinity bitmaps.
+    let scene = Scene::infinity(
+        &[[0.0, 0.0, 0.0], [8.0, 0.0, 0.0], [0.0, -5.0, 3.0]],
+        &[[0.0; 2]; 3],
+    );
+    let views = scene.views();
+    let patch = infinity_patch();
+
+    let p = KeypointSubpixelParams {
+        render_bitmaps: true,
+        ..params()
+    };
+    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2], None, &p);
+    let rep = res
+        .representative
+        .expect("a well-observed infinity point fuses a representative");
+    assert_eq!(rep.len(), (RES * RES * 4) as usize);
+    assert!(
+        has_nonzero_alpha(&rep),
+        "aligned infinity views must agree somewhere (alpha > 0)"
+    );
+}
+
+#[test]
+fn render_bitmaps_lone_view_has_no_representative() {
+    // One view = no cross-view consensus: the representative must be `None` (the
+    // culled-point signal), not a single-view or zero texture.
+    let centers = [[0.4, 0.0, 0.0]];
+    let offs = [[0.0; 2]];
+    let texs = vec![texture as fn(f64, f64) -> f64];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    let p = KeypointSubpixelParams {
+        render_bitmaps: true,
+        ..params()
+    };
+    let res = refine_patch_keypoints(&patch, &views, &[0], None, &p);
+    assert!(res.representative.is_none(), "no consensus, no bitmap");
+}
+
+#[test]
+fn render_bitmaps_off_by_default() {
+    // Without the opt-in the refiner must not pay for (or return) the texture.
+    let centers = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0], [0.0, 0.4, 0.0]];
+    let offs = [[0.0; 2]; 3];
+    let texs = vec![texture as fn(f64, f64) -> f64; 3];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2], None, &params());
+    assert!(res.representative.is_none());
+}
