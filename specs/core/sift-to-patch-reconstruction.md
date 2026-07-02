@@ -118,11 +118,18 @@ Consequences of the contract:
    views that won't
    co-register (grazing, out-of-frame, large-shift `max_shift_px`, low-agreement
    `min_relative_zncc`) in-loop, and returns the kept views with their refined
-   keypoints and quality signals.
-6. **Cull under-supported points (per point).** Drop any point whose kept-view
-   count fell below `min_views`.
+   keypoints and quality signals. The sub-pixel pass
+   ([keypoint-subpixel-refinement](keypoint-subpixel-refinement.md)) then settles
+   the final keypoints **and fuses each point's consensus bitmap at them**
+   (`refine_keypoints(render_bitmaps=True)`) — points at infinity included, via
+   the same `w`-aware render path — reporting per-point validity (a point with
+   no cross-view consensus gets no bitmap).
+6. **Cull unsupported points (per point).** Drop any point whose kept-view count
+   fell below `min_views`, **and** any point the sub-pixel pass produced no
+   valid consensus bitmap for — one uniform rule for finite and infinity points
+   (no point is kept with an all-black bitmap).
 7. **Compact.** Renumber the surviving points and observations into a dense,
-   valid `embedded_patches` reconstruction.
+   valid `embedded_patches` reconstruction carrying the fused bitmaps.
 
 ## Where it lives
 
@@ -134,8 +141,11 @@ bindings:
   (mean-viewing seed, feature-size extent) and read back as the cloud via
   `recon.patches`; its normal is then refined by [normal
   refinement](patch-normal-refinement.md) (`refine_normals`,
-  `use_stored_keypoints=True`, `render_bitmaps=True`) anchored on the carried-in
-  SIFT keypoints (steps 0–2).
+  `use_stored_keypoints=True`) anchored on the carried-in SIFT keypoints
+  (steps 0–2). The pipeline no longer asks normal refinement for bitmaps
+  (`render_bitmaps` stays available there for the strips diagnostics); the
+  stored reference bitmaps come from the sub-pixel keypoint refinement (step 5),
+  fused at the final keypoints.
 - Per-point view selection is [patch-view selection](patch-view-selection.md), in
   `sfmtool-core::patch` — geometric candidacy plus photometric vetting against a
   track-seeded template.
@@ -189,11 +199,14 @@ search, resolution)` runs the whole pipeline (steps 0–7): a single
 `recon.to_embedded_patches(...)` bridge (the only `.sift` read) builds the
 mean-viewing, feature-sized frames + inline SIFT keypoints + image hashes; the
 cloud is read back via `embedded.patches` and its normal refined photometrically
-over the embedded recon (`use_stored_keypoints=True`, `render_bitmaps=True` for
-the reference textures), anchored on the carried-in keypoints; then view selection,
-keypoint congealing, and `compact_to_embedded_patches` (the write/compaction tail,
+over the embedded recon (`use_stored_keypoints=True`), anchored on the carried-in
+keypoints; then view selection, keypoint congealing, the sub-pixel refinement
+(which fuses the reference textures at the final keypoints and reports per-point
+validity — with `subpixel=0` it runs render-only so the bitmaps/validity are
+still produced), and `compact_to_embedded_patches` (the write/compaction tail,
 given the original `recon` for geometry carry-over and `embedded.image_file_hashes`
-so there is no second `.sift` read). The `sfm embed-patches` CLI
+so there is no second `.sift` read; its `valid` mask drops the points with no
+consensus bitmap). The `sfm embed-patches` CLI
 (`src/sfmtool/_commands/embed_patches.py`) is a thin wrapper over it.
 `image_file_hashes_from_sift` / `image_file_hashes_from_images` remain available
 helpers. The writer requires the patch frame for an `embedded_patches` file
@@ -201,8 +214,12 @@ helpers. The writer requires the patch frame for an `embedded_patches` file
 
 _Points at infinity flow through end to end (the kernels are first-class on them
 since the patch pipeline gained `w`-aware rendering/selection/localization), and
-`compact_to_embedded_patches` preserves their `w = 0` via `positions_xyzw`. **v1
-limitation:** normal refinement is finite-only, so an infinity point keeps its
-fixed tangent-sphere frame and gets keypoints, but **no reference bitmap** (its
-`patch_bitmaps` row is zero); a `--mode texture` render shows it blank. Giving
-infinity points a rendered reference bitmap is future work._
+`compact_to_embedded_patches` preserves their `w = 0` via `positions_xyzw`.
+Normal refinement remains finite-only (an infinity point keeps its fixed
+tangent-sphere frame), but the **reference bitmap no longer depends on it**: the
+sub-pixel keypoint refinement fuses every point's consensus bitmap — infinity
+points included, through the same `w`-aware render path — so a surviving
+infinity point carries a real texture (the former "zero `patch_bitmaps` row"
+limitation is fixed). The flip side is uniform: any point (finite or infinity)
+for which no valid consensus bitmap could be fused is **dropped** by the final
+compaction rather than kept with an all-black bitmap._

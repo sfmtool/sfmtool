@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from sfmtool._embed_patches import (
+    _refine_subpixel,
     compact_to_embedded_patches,
     image_file_hashes_from_images,
 )
@@ -172,9 +173,13 @@ def test_compact_min_views_culls_points(seoul_bull_workspace: Path):
 
 
 def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
-    """A surviving point at infinity (w = 0) stays at infinity through compaction —
-    the rebuild carries the homogeneous w, not just the Euclidean position."""
+    """A point at infinity (w = 0) with enough covering views produces a real
+    cross-view **consensus bitmap** in the sub-pixel refiner (it is refined, not
+    skipped), passes the uniform validity cull — there is no infinity exemption
+    any more — and stays at infinity through compaction, carrying that bitmap
+    (nonzero alpha) instead of the zero row the old pipeline stored."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
     # Turn one well-observed point into a point at infinity.
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
     counts = np.bincount(
@@ -191,25 +196,39 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
         recon, normal="mean_viewing", extent="fixed", extent_value=0.05
     )
 
-    # Fabricate localizations (point center per view) for the infinity point plus
-    # two finite points, each kept with >= min_views observations.
+    # Localizations for the infinity point plus two finite points, each kept with
+    # >= min_views observations. The finite points seed at their stored SIFT
+    # keypoints (real image content); the infinity point seeds at its
+    # *direction's* projection in the views that actually see the direction —
+    # a w = 0 point projects translation-invariantly, so the original track's
+    # keypoints (of the once-finite point) are not where the direction appears.
     tpids = np.asarray(recon.track_point_indexes)
     timgs = np.asarray(recon.track_image_indexes)
-    cam_idx = np.asarray(recon.camera_indexes)
-    cams = recon.cameras
-    chosen = [pi] + [p for p in (0, 1, 2) if p != pi][:2]
-    locs = []
-    for p in chosen:
-        views = np.unique(timgs[tpids == p])[:3]
+    d = np.asarray(recon.positions, dtype=np.float64)[pi]
+    inf_views, inf_kpts = [], []
+    for v in range(recon.image_count):
+        uv = _project_direction(recon, d, v, margin=40.0)
+        if uv is not None:
+            inf_views.append(v)
+            inf_kpts.append(uv)
+        if len(inf_views) == 3:
+            break
+    assert len(inf_views) >= 2, "fixture: the direction must be seen by >= 2 views"
+    locs = [
+        {
+            "point_index": pi,
+            "views": np.asarray(inf_views, dtype=np.uint32),
+            "keypoints": np.asarray(inf_kpts, dtype=np.float64),
+            "offsets_px": np.zeros(len(inf_views)),
+            "loo_zncc": np.full(len(inf_views), np.nan),
+        }
+    ]
+    for p in [q for q in (0, 1, 2) if q != pi][:2]:
+        rows = np.flatnonzero(tpids == p)[:3]
+        views = timgs[rows]
         if len(views) < 2:
             continue
-        kpts = np.array(
-            [
-                [cams[int(cam_idx[v])].width / 2.0, cams[int(cam_idx[v])].height / 2.0]
-                for v in views
-            ],
-            dtype=np.float64,
-        )
+        kpts = _sift_keypoints_for_observations(recon, rows)
         locs.append(
             {
                 "point_index": int(p),
@@ -221,13 +240,99 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
         )
     hashes = [b"\x00" * 16] * recon.image_count
 
-    out = compact_to_embedded_patches(recon, cloud, locs, hashes, min_views=2)
+    # The sub-pixel refiner fuses the consensus bitmaps + validity — the pipeline
+    # source for both (points at infinity go through the same path).
+    locs, bitmaps, valid = _refine_subpixel(
+        cloud, recon, images, locs, sweeps=1, resolution=12, render_bitmaps=True
+    )
+    assert valid is not None and bool(valid[pi]), (
+        "the well-observed infinity point must produce a consensus bitmap"
+    )
+    assert bitmaps[pi][..., 3].any(), "its consensus bitmap has real agreement"
 
-    # The infinity point survived and is still at infinity in the output.
+    out = compact_to_embedded_patches(
+        recon, cloud, locs, hashes, patch_bitmaps=bitmaps, valid=valid, min_views=2
+    )
+
+    # The infinity point survived, is still at infinity, and carries its nonzero
+    # consensus bitmap (not the old zero row).
     is_inf = np.asarray(out.point_is_at_infinity)
     assert is_inf.sum() == 1, "the one infinity point should survive as w = 0"
-    valid, errors = verify_sfmr_to_temp(out)
-    assert valid, f"integrity check failed: {errors}"
+    out_bitmaps = np.asarray(out.patch_bitmaps)
+    inf_row = out_bitmaps[int(np.flatnonzero(is_inf)[0])]
+    assert inf_row[..., 3].any(), "the surviving infinity point keeps its bitmap"
+    valid_file, errors = verify_sfmr_to_temp(out)
+    assert valid_file, f"integrity check failed: {errors}"
+
+
+def _sift_keypoints_for_observations(recon, rows: np.ndarray) -> np.ndarray:
+    """The stored SIFT keypoints for the given observation rows (source px)."""
+    from sfmtool.sift.file import SiftReader, get_sift_path_from_recon
+
+    timgs = np.asarray(recon.track_image_indexes)
+    tfeats = np.asarray(recon.track_feature_indexes)
+    kpts = np.empty((len(rows), 2), dtype=np.float64)
+    for k, j in enumerate(rows.tolist()):
+        name = recon.image_names[int(timgs[j])]
+        positions = SiftReader(get_sift_path_from_recon(recon, name)).read_positions()
+        kpts[k] = np.asarray(positions, dtype=np.float64)[int(tfeats[j])]
+    return kpts
+
+
+def _project_direction(recon, d: np.ndarray, image_idx: int, margin: float = 0.0):
+    """Project a w = 0 direction into an image (translation-invariant): the pixel
+    of ``R @ d``, or ``None`` when behind the camera or within ``margin`` px of
+    (or beyond) the frame edge."""
+    from sfmtool._sfmtool.geometry import RigidTransform
+
+    q = np.asarray(recon.quaternions_wxyz, np.float64)[image_idx]
+    t = np.asarray(recon.translations, np.float64)[image_idx]
+    rot = np.asarray(
+        RigidTransform.from_wxyz_translation(
+            q.tolist(), t.tolist()
+        ).to_rotation_matrix(),
+        np.float64,
+    )
+    x = rot @ d
+    if x[2] <= 0:
+        return None
+    cam = recon.cameras[int(np.asarray(recon.camera_indexes)[image_idx])]
+    uv = np.asarray(cam.project(x[0] / x[2], x[1] / x[2]), dtype=np.float64)
+    if not (
+        margin <= uv[0] < cam.width - margin and margin <= uv[1] < cam.height - margin
+    ):
+        return None
+    return uv
+
+
+def test_compact_drops_points_without_consensus_bitmap(seoul_bull_workspace: Path):
+    """The validity mask is a hard cull: a point with enough kept views but no
+    valid consensus bitmap (``valid[pid] == False`` — the refiner produced no
+    representative) is dropped by the final compact instead of being kept with an
+    all-black bitmap."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+    cloud, bitmaps, locs = _run_pipeline(recon, images)
+    hashes = image_file_hashes_from_images(recon)
+
+    cloud_pids = {int(p) for p in cloud.point_indexes}
+    survivors = sorted(
+        int(loc["point_index"])
+        for loc in locs
+        if int(loc["point_index"]) in cloud_pids and len(np.asarray(loc["views"])) >= 2
+    )
+    victim = survivors[0]
+    valid = np.ones(recon.point_count, dtype=bool)
+    valid[victim] = False
+
+    out = compact_to_embedded_patches(
+        recon, cloud, locs, hashes, patch_bitmaps=bitmaps, valid=valid, min_views=2
+    )
+
+    # Exactly the victim is gone; the remaining survivors keep their geometry.
+    assert out.point_count == len(survivors) - 1
+    expected = np.asarray(recon.positions)[[p for p in survivors if p != victim]]
+    np.testing.assert_allclose(np.asarray(out.positions), expected, atol=1e-6)
 
 
 def verify_sfmr_to_temp(recon) -> tuple[bool, list]:

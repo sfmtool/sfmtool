@@ -79,7 +79,8 @@ use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::keypoint_localize::{project, seed_offset, shifted_center};
 use crate::patch::normal_refine::{
     build_support, irls_view_weights, weighted_moments_pub, weighted_unit_template_into,
-    ConsensusScratch, PatchWindow, ProjectedImage, Sampler, Support, FLAT_NORM_SQ_EPS,
+    ConsensusScratch, PatchViewStack, PatchWindow, ProjectedImage, Sampler, Support,
+    AGREEMENT_SIGMA, FLAT_NORM_SQ_EPS,
 };
 use rayon::prelude::*;
 
@@ -203,6 +204,22 @@ pub struct KeypointSubpixelParams {
     /// offset by ~3% (the moved view's own contribution dominates the shared
     /// `T`); `N ≥ 3` is recommended.
     pub consensus_refresh: ConsensusRefresh,
+    /// Also fuse each point's **representative RGBA texture** at the FINAL
+    /// per-view keypoints (see [`KeypointRefinement::representative`]): after the
+    /// last sweep the views are re-rendered at their final offsets, the final IRLS
+    /// view weights are rebuilt from those cores, and the kept views are rendered
+    /// full-grid ([`PatchViewStack`]) at the final keypoints and fused
+    /// (weighted-mean RGB + agreement·coverage alpha, exactly the normal-refine
+    /// representative). Points at infinity go through the same path (`w = 0`
+    /// rendering is first-class here). Costs one extra full-grid source render per
+    /// live view per point, so it is off by default.
+    pub render_bitmaps: bool,
+    /// Sampler for the representative render ([`render_bitmaps`](Self::render_bitmaps)
+    /// path only). Defaults to [`Sampler::Anisotropic`] — the representative is a
+    /// stored texture (quality matters more than the per-step refine cost), and the
+    /// aniso footprint avoids the bilinear shimmer on foreshortened views. The
+    /// refine loop itself keeps using [`sampler`](Self::sampler).
+    pub representative_sampler: Sampler,
 }
 
 impl Default for KeypointSubpixelParams {
@@ -220,6 +237,8 @@ impl Default for KeypointSubpixelParams {
             line_search_shrink: 0.5,
             line_search_max: 8,
             consensus_refresh: ConsensusRefresh::PerSweep,
+            render_bitmaps: false,
+            representative_sampler: Sampler::Anisotropic,
         }
     }
 }
@@ -245,6 +264,13 @@ pub struct KeypointRefinement {
     /// refined core against the frozen consensus). `NaN` when the view could not be
     /// scored (e.g. fewer than two views, so no consensus was built).
     pub scores: Vec<f64>,
+    /// The point's fused representative RGBA texture (`R·R·4`, row-major), rendered
+    /// at the **final** per-view keypoints and fused with the final IRLS view
+    /// weights — only when [`KeypointSubpixelParams::render_bitmaps`] is set.
+    /// `None` when the point produced no valid cross-view consensus (fewer than
+    /// two views survive the projection gate / render at their final offsets) —
+    /// the uniform "culled point" signal, for finite and infinity points alike.
+    pub representative: Option<Vec<u8>>,
 }
 
 /// Render one view's `R×R` core at in-plane offset `(au, av)` (patch-grid px) into
@@ -736,7 +762,100 @@ pub fn refine_patch_keypoints(
         }
     }
 
-    finalize(patch, views, &states, wpp_u, wpp_v)
+    let mut out = finalize(patch, views, &states, wpp_u, wpp_v);
+    if params.render_bitmaps {
+        out.representative =
+            render_representative(patch, views, &states, &support, wpp_u, wpp_v, params);
+    }
+    out
+}
+
+/// Fuse the point's representative RGBA texture at the **final** per-view
+/// keypoints (the [`KeypointSubpixelParams::render_bitmaps`] path). The views are
+/// re-rendered (support-only) at their final offsets to rebuild the final IRLS
+/// view weights — the sweep loop's weights predate the last moves — then the live
+/// views are rendered full-grid ([`PatchViewStack`]) at the finalize-identical
+/// keypoints and fused with those weights ([`AGREEMENT_SIGMA`]). Returns `None`
+/// when fewer than two views render in frame at their final offsets — no
+/// cross-view consensus exists, so the point has no valid representative (the
+/// caller's culled-point signal). Infinity patches (`w = 0`) take the same path.
+fn render_representative(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    states: &[ViewState],
+    support: &Support,
+    wpp_u: f64,
+    wpp_v: f64,
+    params: &KeypointSubpixelParams,
+) -> Option<Vec<u8>> {
+    if states.len() < 2 {
+        return None;
+    }
+    let resolution = params.resolution.max(2);
+    let channels = views[states[0].idx as usize].pyramid.level(0).channels() as usize;
+    let n = support.pixels.len();
+    let mut raw = vec![0f32; channels * n];
+    let mut znorm = vec![0f32; channels * n];
+    let mut xs: Vec<f32> = Vec::new();
+    let mut live: Vec<usize> = Vec::new();
+    for (si, st) in states.iter().enumerate() {
+        if render_core(
+            patch,
+            &views[st.idx as usize],
+            st.off[0],
+            st.off[1],
+            wpp_u,
+            wpp_v,
+            resolution,
+            params.sampler,
+            support,
+            channels,
+            &mut raw,
+        ) {
+            znorm_core(&raw, support, channels, &mut znorm);
+            live.push(si);
+            xs.extend_from_slice(&znorm);
+        }
+    }
+    if live.len() < 2 {
+        return None;
+    }
+
+    // Final IRLS view weights over the final-offset cores (parallel to `live`).
+    let mut sc = ConsensusScratch::default();
+    irls_view_weights(
+        &xs,
+        live.len(),
+        channels,
+        n,
+        params.robust_iters,
+        None,
+        &mut sc,
+    );
+    let weights: Vec<f64> = sc.w[..live.len()].to_vec();
+
+    // Anchor each live view's full-grid render at its final keypoint — the same
+    // `shifted_center → project` (with projection fallback) `finalize` reports, so
+    // the stored bitmap matches the keypoints the caller writes out.
+    let mut view_keypoints: Vec<Option<[f64; 2]>> = vec![None; views.len()];
+    let mut kept: Vec<usize> = Vec::with_capacity(live.len());
+    for &si in &live {
+        let st = &states[si];
+        let center = shifted_center(patch, st.off[0], st.off[1], wpp_u, wpp_v);
+        let (kx, ky) =
+            project(&views[st.idx as usize], &center, patch.w).unwrap_or((st.proj[0], st.proj[1]));
+        view_keypoints[st.idx as usize] = Some([kx, ky]);
+        kept.push(st.idx as usize);
+    }
+    let stack = PatchViewStack::render(
+        patch,
+        views,
+        &kept,
+        resolution,
+        params.representative_sampler,
+        Some(&view_keypoints),
+    );
+    Some(stack.fuse(&weights, AGREEMENT_SIGMA))
 }
 
 /// The per-move (Gauss–Seidel) incremental consensus state — the running
