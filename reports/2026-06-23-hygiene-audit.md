@@ -106,6 +106,13 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 - Risk: medium — GPU code is excluded from `pixi run test-rust` llvm-cov and
   is hardware-gated; regressions can slip past the default test path. Cover
   with `pixi run cargo test --workspace`.
+> _Status (2026-07-01): Done — split into `gpu/context.rs` (GpuContext, the 5
+> POD `*Params` structs, and the layout/pipeline/buffer helpers) and
+> `gpu/variational.rs` (VariationalBufferPool + GpuVariationalRefiner);
+> `gpu/mod.rs` keeps GpuFlowContext + the DIS/variational orchestration.
+> mod.rs 1438 → 740 lines. Public paths preserved (GpuContext /
+> GpuVariationalRefiner re-exported). Verified on GPU hardware: all 12 `gpu::`
+> tests pass, clippy clean. Commit a1fa614 (branch `gui-gpu-work`)._
 
 ### 3. Inline-`mod tests;` regression — `geometry/` and `analysis/alignment/` missed by the 2026-06-10 sweep
 
@@ -389,6 +396,13 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
 - Effort: medium · Risk: low — single binary, no public API; the borrow
   ergonomics of `&mut self` across upload/render phases need care but the data
   is already separable (`scene_renderer`, `viewer_3d`, `state`).
+> _Status (2026-07-01): Done — `run_ui_and_paint` decomposed into a ~133-line
+> orchestrator plus four phase methods: `prepare_uploads`, `render_scene`,
+> `run_egui_pass`, and `process_pick_readback`. The orchestrator clones the
+> Arc-backed device/queue handles up front so the `&mut self` phases don't
+> conflict with field borrows. Verified: ui_basic tests pass, clippy clean, GUI
+> launches + renders a reconstruction on GPU hardware. Commit 97812b1
+> (branch `gui-gpu-work`)._
 
 ### 8. `image_detail.rs::show()` — still a 625-line method in a 1190-line file (carried forward, #7)
 
@@ -410,6 +424,15 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
   orchestration plus `load_image`/`load_*_features`.
 - Effort: medium · Risk: low — intra-crate, no public API; covered by
   `tests/ui_basic.rs`.
+> _Status (2026-07-01): Done — `image_detail.rs` converted to a directory
+> module: `mod.rs` (state + `show` orchestration + image/feature loading),
+> `input.rs` (`handle_input`: drag/zoom/scroll/pinch/keyboard/gesture), and
+> `overlay.rs` (`draw_overlays`: the 7-branch OverlayMode match, hit-testing,
+> hover highlight, tooltip, and the draw/metric helpers). `show` drops from 625
+> lines to ~148. Child modules reach ImageDetail's private fields/methods
+> directly; only the two extracted methods are `pub(super)`. Verified:
+> ui_basic tests pass, clippy clean, GUI renders on GPU hardware. Commit
+> 1450b09 (branch `gui-gpu-work`)._
 
 > **Surveyed and cleared:** `scene_renderer/upload.rs` (852) — six independent
 > `upload_*` methods on `SceneRenderer`, each topical. `viewer_3d/mod.rs`

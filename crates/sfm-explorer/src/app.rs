@@ -5,12 +5,20 @@
 //!
 //! Contains the core rendering loop (`run_ui_and_paint`), GPU state
 //! synchronization, readback processing, and platform-specific helpers.
+//!
+//! `run_ui_and_paint` is a thin orchestrator that wires four per-frame phases:
+//! - [`App::prepare_uploads`] — sync GPU buffers/uniforms from app state.
+//! - [`App::render_scene`] — encode the 3D scene render passes.
+//! - [`App::run_egui_pass`] — run the egui/dock UI and tessellate.
+//! - [`App::process_pick_readback`] — apply hover/selection from GPU pick.
 
 #[cfg(target_os = "windows")]
 use std::time::Instant;
 
 use egui_dock::DockArea;
+use egui_winit::State as EguiWinitState;
 use sfmtool_core::SfmrReconstruction;
+use winit::window::Window;
 
 use crate::dock::{self, TabContext};
 use crate::platform;
@@ -64,35 +72,156 @@ impl App {
         }
     }
 
+    /// Per-frame render + UI loop. Orchestrates the four phase methods below.
     pub(crate) fn run_ui_and_paint(&mut self) {
-        let Some(window) = self.window.as_ref() else {
+        // Bail unless every GPU resource is initialized. The phase helpers take
+        // `&mut self`, so we clone the cheap Arc-backed device/queue handles up
+        // front to avoid holding conflicting borrows of `self` across the calls.
+        if self.window.is_none()
+            || self.egui_winit_state.is_none()
+            || self.wgpu_device.is_none()
+            || self.wgpu_queue.is_none()
+            || self.wgpu_surface.is_none()
+            || self.wgpu_surface_config.is_none()
+            || self.egui_renderer.is_none()
+        {
             return;
-        };
-        let Some(egui_winit_state) = self.egui_winit_state.as_mut() else {
-            return;
-        };
-        let Some(device) = self.wgpu_device.as_ref() else {
-            return;
-        };
-        let Some(queue) = self.wgpu_queue.as_ref() else {
-            return;
-        };
-        let Some(surface) = self.wgpu_surface.as_ref() else {
-            return;
-        };
-        let Some(surface_config) = self.wgpu_surface_config.as_ref() else {
-            return;
-        };
-        let Some(renderer) = self.egui_renderer.as_mut() else {
-            return;
-        };
+        }
+        let device = self.wgpu_device.clone().unwrap();
+        let queue = self.wgpu_queue.clone().unwrap();
+        // `Arc<Window>` is cheap to clone; owning it here (rather than borrowing
+        // `self.window`) frees `self` for the `&mut self` phase methods below and
+        // lets `run_egui_pass` take a non-`Option` `&Window`.
+        let window = self.window.clone().unwrap();
 
         // Ensure scene texture and pipeline match the 3D panel size
         let [pw, ph] = self.viewer_3d.panel_size;
         if pw > 0 && ph > 0 {
-            self.scene_renderer.ensure_size(device, renderer, pw, ph);
+            let renderer = self.egui_renderer.as_mut().unwrap();
+            self.scene_renderer.ensure_size(&device, renderer, pw, ph);
         }
 
+        // Phase 1: sync all GPU buffers/uniforms from the current app state.
+        self.prepare_uploads(&device, &queue);
+
+        // Phase 2: render the 3D scene into the offscreen texture. The encoder is
+        // created here (not inside `render_scene`) because it is shared with the
+        // egui pass below — both run in the same submission.
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("render encoder"),
+        });
+        self.render_scene(&queue, &mut encoder);
+
+        // Phase 3: run the egui/dock UI, publish accessibility, and tessellate.
+        // `egui_winit::State` is not `Clone` and `run_egui_pass` needs it `&mut`,
+        // so move it out of `self` for the call and restore it afterward — this
+        // hands the phase method a non-`Option` `&mut State` rather than relying
+        // on it to re-unwrap a field the top-of-function guard already checked.
+        let mut egui_winit_state = self.egui_winit_state.take().unwrap();
+        let (clipped_primitives, textures_delta, pixels_per_point) =
+            self.run_egui_pass(&window, &mut egui_winit_state);
+        self.egui_winit_state = Some(egui_winit_state);
+
+        // --- Acquire the surface, encode the egui pass, submit, and present. ---
+        let renderer = self.egui_renderer.as_mut().unwrap();
+
+        // Apply egui's texture set-deltas now, before acquiring the surface. Doing
+        // this unconditionally keeps the renderer's texture set in sync with the
+        // egui context even on frames we cannot present (see below); otherwise a
+        // skipped `set` makes a later partial update panic with "texture has not
+        // been allocated yet".
+        for (id, image_delta) in &textures_delta.set {
+            renderer.update_texture(&device, &queue, *id, image_delta);
+        }
+
+        let surface = self.wgpu_surface.as_ref().unwrap();
+        let surface_config = self.wgpu_surface_config.as_ref().unwrap();
+
+        // Acquire the surface texture only now, after the egui pass above has
+        // already published the AccessKit tree via handle_platform_output. A
+        // window that can't present its surface — e.g. occluded / off-screen on
+        // a headless CI runner — still updates its accessibility tree each
+        // frame; we just skip the GPU submit and present. Free released egui
+        // textures before returning so the renderer stays in sync.
+        let output = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(output)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                surface.configure(&device, surface_config);
+                for id in &textures_delta.free {
+                    renderer.free_texture(id);
+                }
+                return;
+            }
+            other => {
+                log::error!("wgpu surface error: {:?}", other);
+                for id in &textures_delta.free {
+                    renderer.free_texture(id);
+                }
+                return;
+            }
+        };
+        let view = output.texture.create_view(&Default::default());
+
+        let screen_descriptor = eframe::egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [surface_config.width, surface_config.height],
+            pixels_per_point,
+        };
+
+        // Update buffers and render (encoder was created earlier for the scene pass)
+        let user_cmd_bufs = renderer.update_buffers(
+            &device,
+            &queue,
+            &mut encoder,
+            &clipped_primitives,
+            &screen_descriptor,
+        );
+
+        let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("egui render pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.1,
+                        g: 0.1,
+                        b: 0.12,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            ..Default::default()
+        });
+        renderer.render(
+            &mut render_pass.forget_lifetime(),
+            &clipped_primitives,
+            &screen_descriptor,
+        );
+
+        // Submit
+        let mut cmd_bufs: Vec<wgpu::CommandBuffer> = user_cmd_bufs;
+        cmd_bufs.push(encoder.finish());
+        queue.submit(cmd_bufs);
+        output.present();
+
+        // Phase 4: apply hover/selection from the 5x5 depth + pick readback.
+        self.process_pick_readback(&device);
+
+        // Free textures released by egui this frame.
+        let renderer = self.egui_renderer.as_mut().unwrap();
+        for id in &textures_delta.free {
+            renderer.free_texture(id);
+        }
+    }
+
+    /// Phase 1: upload/refresh all GPU buffers and uniforms from app state —
+    /// point cloud, frustum geometry + colors, track rays, camera-view
+    /// background image, adaptive clip planes, and per-frame camera uniforms.
+    fn prepare_uploads(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         // Upload point cloud data to GPU if the reconstruction changed
         let hidden_image = self.viewer_3d.camera_view.as_ref().map(|cv| cv.image_index);
         if self.state.points_need_upload {
@@ -230,7 +359,6 @@ impl App {
         let target_radius = self.state.target_size_multiplier
             * self.viewer_3d.target_indicator_radius_scale
             * self.state.length_scale;
-        let in_camera_view = self.viewer_3d.camera_view.is_some();
         self.scene_renderer.update_uniforms(
             queue,
             &self.viewer_3d.camera,
@@ -257,16 +385,16 @@ impl App {
             self.scene_renderer
                 .update_bg_image_uniforms(queue, &self.viewer_3d.camera);
         }
+    }
 
-        // Create the command encoder early so the scene render pass runs
-        // before the egui render pass (both in the same encoder).
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("render encoder"),
-        });
+    /// Phase 2: encode the 3D scene render passes (scene, target indicator,
+    /// track rays) and the depth/pick readback copy into `encoder`.
+    fn render_scene(&mut self, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder) {
+        let in_camera_view = self.viewer_3d.camera_view.is_some();
 
         // Render the 3D scene to the offscreen texture
         self.scene_renderer.render(
-            &mut encoder,
+            encoder,
             self.state.show_points,
             self.state.show_camera_images,
             in_camera_view,
@@ -289,20 +417,28 @@ impl App {
                 self.state.target_fog_multiplier,
                 self.state.length_scale,
             );
-            self.scene_renderer.render_target_indicator(&mut encoder);
+            self.scene_renderer.render_target_indicator(encoder);
         }
 
         // Render track rays (after target indicator, also post-EDL)
         self.scene_renderer
             .update_track_ray_uniforms(queue, &self.viewer_3d.camera);
-        self.scene_renderer.render_track_rays(&mut encoder);
+        self.scene_renderer.render_track_rays(encoder);
 
         // Copy 5x5 depth + pick region under the mouse (shared by hover + click)
         if let Some([px, py]) = self.viewer_3d.hover_pixel {
-            self.scene_renderer
-                .copy_readback_region(&mut encoder, px, py);
+            self.scene_renderer.copy_readback_region(encoder, px, py);
         }
+    }
 
+    /// Phase 3: run the egui/dock UI for this frame, publish the AccessKit tree
+    /// via `handle_platform_output`, and tessellate. Returns the tessellated
+    /// primitives, the frame's texture deltas, and the pixels-per-point scale.
+    fn run_egui_pass(
+        &mut self,
+        window: &Window,
+        egui_winit_state: &mut EguiWinitState,
+    ) -> (Vec<egui::ClippedPrimitive>, egui::TexturesDelta, f32) {
         let scene_texture_id = self.scene_renderer.texture_id();
         let hover_depth = self.scene_renderer.hover_depth();
         let hover_pick_id = self.scene_renderer.hover_pick_id();
@@ -472,162 +608,89 @@ impl App {
 
         egui_winit_state.handle_platform_output(window, full_output.platform_output);
 
-        // Tessellate and apply egui's texture set-deltas now, before acquiring
-        // the surface. Doing this unconditionally keeps the renderer's texture
-        // set in sync with the egui context even on frames we cannot present
-        // (see below); otherwise a skipped `set` makes a later partial update
-        // panic with "texture has not been allocated yet".
+        // Tessellate now so the caller only has to update textures + present.
         let pixels_per_point = full_output.pixels_per_point;
         let clipped_primitives = self
             .egui_ctx
             .tessellate(full_output.shapes, pixels_per_point);
-        for (id, image_delta) in &full_output.textures_delta.set {
-            renderer.update_texture(device, queue, *id, image_delta);
-        }
-
-        // Acquire the surface texture only now, after the egui pass above has
-        // already published the AccessKit tree via handle_platform_output. A
-        // window that can't present its surface — e.g. occluded / off-screen on
-        // a headless CI runner — still updates its accessibility tree each
-        // frame; we just skip the GPU submit and present. Free released egui
-        // textures before returning so the renderer stays in sync.
-        let output = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(output)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                surface.configure(device, surface_config);
-                for id in &full_output.textures_delta.free {
-                    renderer.free_texture(id);
-                }
-                return;
-            }
-            other => {
-                log::error!("wgpu surface error: {:?}", other);
-                for id in &full_output.textures_delta.free {
-                    renderer.free_texture(id);
-                }
-                return;
-            }
-        };
-        let view = output.texture.create_view(&Default::default());
-
-        let screen_descriptor = eframe::egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [surface_config.width, surface_config.height],
+        (
+            clipped_primitives,
+            full_output.textures_delta,
             pixels_per_point,
+        )
+    }
+
+    /// Phase 4: read back the 5x5 depth + pick region (shared by hover + click)
+    /// and update transient hover state plus pending-click selection.
+    fn process_pick_readback(&mut self, device: &wgpu::Device) {
+        let Some(readback) = self.scene_renderer.read_readback_result(device) else {
+            return;
         };
 
-        // Update buffers and render (encoder was created earlier for the scene pass)
-        let user_cmd_bufs = renderer.update_buffers(
-            device,
-            queue,
-            &mut encoder,
-            &clipped_primitives,
-            &screen_descriptor,
-        );
-
-        let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("egui render pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
-                        g: 0.1,
-                        b: 0.12,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            ..Default::default()
-        });
-        renderer.render(
-            &mut render_pass.forget_lifetime(),
-            &clipped_primitives,
-            &screen_descriptor,
-        );
-
-        // Submit
-        let mut cmd_bufs: Vec<wgpu::CommandBuffer> = user_cmd_bufs;
-        cmd_bufs.push(encoder.finish());
-        queue.submit(cmd_bufs);
-        output.present();
-
-        // Read back the 5x5 depth + pick region (shared by hover + click)
-        if let Some(readback) = self.scene_renderer.read_readback_result(device) {
-            // Update transient hover state from GPU pick buffer.
-            // Only when the 3D viewer has pointer focus (hover_pixel is set for
-            // the current frame). This avoids stale one-frame-delayed readback
-            // results from overwriting hover state after the pointer left.
-            if self.viewer_3d.hover_pixel.is_some() {
-                if let Some((tag, index)) = readback.pick {
-                    if tag == scene_renderer::PICK_TAG_FRUSTUM {
-                        self.state.hovered_image = Some(index as usize);
-                        self.state.hovered_point = None;
-                    } else if tag == scene_renderer::PICK_TAG_POINT {
-                        self.state.hovered_point = Some(index as usize);
-                        self.state.hovered_image = None;
-                    } else {
-                        self.state.hovered_image = None;
-                        self.state.hovered_point = None;
-                    }
+        // Update transient hover state from GPU pick buffer.
+        // Only when the 3D viewer has pointer focus (hover_pixel is set for
+        // the current frame). This avoids stale one-frame-delayed readback
+        // results from overwriting hover state after the pointer left.
+        if self.viewer_3d.hover_pixel.is_some() {
+            if let Some((tag, index)) = readback.pick {
+                if tag == scene_renderer::PICK_TAG_FRUSTUM {
+                    self.state.hovered_image = Some(index as usize);
+                    self.state.hovered_point = None;
+                } else if tag == scene_renderer::PICK_TAG_POINT {
+                    self.state.hovered_point = Some(index as usize);
+                    self.state.hovered_image = None;
                 } else {
                     self.state.hovered_image = None;
                     self.state.hovered_point = None;
                 }
-            }
-
-            // Handle click using the same readback result
-            if let Some(click_pixel) = self.viewer_3d.pending_click.take() {
-                // Alt+Click: set orbit target from depth
-                if self.viewer_3d.pending_click_is_alt {
-                    if let Some(depth) = readback.depth {
-                        let current_time = self.egui_ctx.input(|i| i.time);
-                        self.viewer_3d
-                            .apply_pick_result(depth, click_pixel, current_time);
-                    }
-                }
-
-                // Entity pick: select frustum or point
-                if let Some((tag, index)) = readback.pick {
-                    if tag == scene_renderer::PICK_TAG_FRUSTUM {
-                        let idx = index as usize;
-                        if self.viewer_3d.pending_click_is_double {
-                            // Double-click on frustum → enter/switch camera view mode
-                            self.state.selected_image = Some(idx);
-                            if let Some(ref recon) = self.state.reconstruction {
-                                let current_time = self.egui_ctx.input(|i| i.time);
-                                if self.viewer_3d.camera_view.is_some() {
-                                    self.viewer_3d.animated_switch_camera_view(
-                                        idx,
-                                        recon,
-                                        current_time,
-                                    );
-                                } else {
-                                    self.viewer_3d.enter_camera_view(idx, recon, current_time);
-                                }
-                            }
-                        } else {
-                            self.state.selected_image = Some(idx);
-                        }
-                    } else if tag == scene_renderer::PICK_TAG_POINT {
-                        let idx = index as usize;
-                        self.state.selected_point = Some(idx);
-                    }
-                } else if !self.viewer_3d.pending_click_is_alt {
-                    // Clicked on background (non-Alt) — deselect
-                    self.state.selected_image = None;
-                    self.state.selected_point = None;
-                }
+            } else {
+                self.state.hovered_image = None;
+                self.state.hovered_point = None;
             }
         }
 
-        // Free textures
-        for id in &full_output.textures_delta.free {
-            renderer.free_texture(id);
+        // Handle click using the same readback result
+        if let Some(click_pixel) = self.viewer_3d.pending_click.take() {
+            // Alt+Click: set orbit target from depth
+            if self.viewer_3d.pending_click_is_alt {
+                if let Some(depth) = readback.depth {
+                    let current_time = self.egui_ctx.input(|i| i.time);
+                    self.viewer_3d
+                        .apply_pick_result(depth, click_pixel, current_time);
+                }
+            }
+
+            // Entity pick: select frustum or point
+            if let Some((tag, index)) = readback.pick {
+                if tag == scene_renderer::PICK_TAG_FRUSTUM {
+                    let idx = index as usize;
+                    if self.viewer_3d.pending_click_is_double {
+                        // Double-click on frustum → enter/switch camera view mode
+                        self.state.selected_image = Some(idx);
+                        if let Some(ref recon) = self.state.reconstruction {
+                            let current_time = self.egui_ctx.input(|i| i.time);
+                            if self.viewer_3d.camera_view.is_some() {
+                                self.viewer_3d.animated_switch_camera_view(
+                                    idx,
+                                    recon,
+                                    current_time,
+                                );
+                            } else {
+                                self.viewer_3d.enter_camera_view(idx, recon, current_time);
+                            }
+                        }
+                    } else {
+                        self.state.selected_image = Some(idx);
+                    }
+                } else if tag == scene_renderer::PICK_TAG_POINT {
+                    let idx = index as usize;
+                    self.state.selected_point = Some(idx);
+                }
+            } else if !self.viewer_3d.pending_click_is_alt {
+                // Clicked on background (non-Alt) — deselect
+                self.state.selected_image = None;
+                self.state.selected_point = None;
+            }
         }
     }
 }
