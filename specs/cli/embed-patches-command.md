@@ -68,7 +68,7 @@ as `OUTPUT`.
 | `--min-views` | int | 2 | Drop a point left with fewer surviving observations after discards. |
 | `--patch-size` | float | `5.0` | Surfel size — the full patch edge length (in feature-size multiples) used to render the patch. Halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`), the step that builds the frame. |
 | `--search-resolution-multiplier` | float | `1.0` | Multiplier `m` for the discrete cross-view search; the search runs at resolution `round(m·R)`. `1.0` is the no-op; `>1` (the supersampled grid) resolves sub-pixel offsets directly at a cost that grows ~`m²`. See [`specs/core/keypoint-localization-search-cache.md`](../core/keypoint-localization-search-cache.md). |
-| `--subpixel` | int ≥ 0 | `1` | LK / ECC Gauss–Newton `max_outer_sweeps` for the photometric sub-pixel keypoint refinement (always the per-sweep consensus variant), applied once per round. `0` disables the sub-pixel pass (the localizer's keypoints are used as is); `N ≥ 1` runs the refiner with that many sweeps. See [`specs/core/keypoint-subpixel-refinement.md`](../core/keypoint-subpixel-refinement.md). |
+| `--subpixel` | int ≥ 0 | `1` | LK / ECC Gauss–Newton `max_outer_sweeps` for the photometric sub-pixel keypoint refinement (always the per-sweep consensus variant), applied once per round. `0` disables the keypoint movement (the localizer's keypoints are used as is; the final round still runs the stage render-only to fuse each point's consensus bitmap + validity at those keypoints); `N ≥ 1` runs the refiner with that many sweeps. See [`specs/core/keypoint-subpixel-refinement.md`](../core/keypoint-subpixel-refinement.md). |
 | `--rounds` | int ≥ 1 | `2` | Number of (normal-refinement, keypoint-refinement) rounds, alternating the two. Round 1 runs the SIFT-anchored normal refine, the discrete localizer (the seed), then the sub-pixel keypoint refine; each subsequent round re-refines every normal against the previous round's keypoints, then re-refines the keypoints against the new normals — a fixed-point alternation. The default `2` runs one refinement pass on top of the seed round (most of the normal/keypoint convergence gain lands in the first extra round); raise it for the tail. The per-point view set (membership) is fixed after round 1 (and per-round grazing drops only shrink it). With a `progress` sink (the CLI wires `click.echo`) each round prints its mean normal change (deg) and mean keypoint shift (px). |
 | `--max-obliquity-deg` | float 0–90 | `80` | After round 1, drop every observation viewing its surfel more than this many degrees off the refined normal (`\|v̂·n\| < cos θ`). A grazing view renders as a cross-view-consistent but **degenerate smear** that satisfies the consensus yet erases surface texture, so over multiple rounds it drags the normal toward grazing (a self-reinforcing failure). Dropping those views keeps the round alternation on the well-observed, near-frontal views. `90` disables the filter. The obliquity is exactly the `inspect --strips` magenta-dot radius (`sin θ`). (With the fronto prior on by default, surfels stay near-frontal, so this cut fires far less often — it is the backstop for the residual grazing observations.) |
 | `--obliquity-weight-power` | float ≥ 0 | `2` | Exponent `p` of the multiplicative **obliquity view-weight** `\|v̂·n\|^p` folded into the robust normal-refinement consensus (use A). `0` disables it — the consensus runs as before. `2` (default) is the `cos²θ` foreshortening weight: it softly down-weights a view the more obliquely it sees the surfel — a continuous complement to the hard `--max-obliquity-deg` cut, on points whose views span a range of obliquities. On a low-parallax point (all views near-collinear, hence near-equal obliquity) it renormalizes away; that case is what `--fronto-prior-weight` addresses. See [`specs/core/patch-normal-refinement.md`](../core/patch-normal-refinement.md). |
@@ -97,8 +97,18 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   cleanly (grazing view, out-of-frame keypoint), if its keypoint sits more than
   `--max-shift-px` from the point's projection, or if its leave-one-out ZNCC
   agreement falls below `--min-relative-zncc` of the views' median LOO ZNCC.
-- **Track thresholds.** The only point-level cull is support count: a point left
-  with fewer than `--min-views` kept views is dropped whole.
+- **Reference bitmaps.** Each surviving point's stored bitmap is the cross-view
+  **consensus texture fused in the sub-pixel keypoint-refinement stage** at the
+  final per-view keypoints (`refine_keypoints(render_bitmaps=True)`; with
+  `--subpixel 0` the stage still runs render-only at the localizer's keypoints).
+  Points at infinity go through the same `w`-aware render path and get a real
+  consensus bitmap — no zero-row exemption. (Bitmaps are no longer sourced from
+  normal refinement, whose render lagged the final keypoints by one round.)
+- **Track thresholds.** A point is dropped whole when its support count falls
+  below `--min-views`, or when the sub-pixel stage produced **no valid consensus
+  bitmap** for it (fewer than two of its views render at their final keypoints) —
+  the same rule for finite and infinity points, so no kept point carries an
+  all-black bitmap.
 - **Image identity.** For each surviving image, `images/image_file_hashes[i]` is
   copied from the image's `.sift` `image_file_xxh128` metadata field (hex → 16
   bytes, the same decode already used for `sift_content_hashes`).

@@ -569,3 +569,42 @@ def test_refine_keypoints_explicit_seeds_override_recon_default_on_embedded(
         assert not np.allclose(kpts_out[k], stored, atol=1e-3), (
             f"override at (pid={pid}, image={img}) silently fell back to stored"
         )
+
+
+def test_refine_keypoints_render_bitmaps_returns_consensus_bitmaps(
+    seoul_bull_workspace: Path,
+):
+    """``render_bitmaps=True`` adds a per-point ``bitmap``: an ``(R, R, 4)`` uint8
+    consensus texture fused at the final keypoints for a point with a valid
+    cross-view consensus, or ``None`` for one without (fewer than two usable
+    views — the culled-point signal). Without the flag the key is absent, so the
+    existing return shape is preserved."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
+        extent_value=5.0
+    )
+    images = _load_images(recon)
+    cloud = recon.patches
+    assert cloud is not None
+    sample = _sample_point_ids(cloud, n=40)
+
+    plain = cloud.refine_keypoints(recon, images, point_indexes=sample, resolution=12)
+    assert all("bitmap" not in r for r in plain)
+
+    results = cloud.refine_keypoints(
+        recon, images, point_indexes=sample, resolution=12, render_bitmaps=True
+    )
+    got_bitmap = False
+    for r in results:
+        assert "bitmap" in r
+        bm = r["bitmap"]
+        if len(np.asarray(r["views"])) < 2:
+            assert bm is None, "no cross-view consensus below two views"
+            continue
+        if bm is None:
+            continue  # a view can drop out at its final offset (render gate)
+        bm = np.asarray(bm)
+        assert bm.shape == (12, 12, 4)
+        assert bm.dtype == np.uint8
+        if bm[..., 3].any():
+            got_bitmap = True
+    assert got_bitmap, "no sampled point produced a nonzero consensus bitmap"
