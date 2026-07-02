@@ -168,11 +168,14 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
 > path drift sweep across 14 of 16 core specs and 3 GUI specs (mechanical
 > doc-only, high readability value); `archive_io.rs` consolidation into a
 > new `archive-format-common` crate (eliminates 4-way duplication with one
-> already-drifted copy); `optical_flow/gpu/mod.rs` split (carried-forward
-> hygiene #3, hardware-gated test risk); the `sfm-explorer` mega-method
-> splits (`app::run_ui_and_paint` 566 lines new, `image_detail::show` 625
-> lines carried forward); PyO3 submodule restructure (grew 74 → 80
+> already-drifted copy); PyO3 submodule restructure (grew 74 → 80
 > registrations; first cut is the `io/` subdir move).
+>
+> _Status (2026-07-01): the three GPU/GUI splits from this list are done on
+> branch `gui-gpu-work` — `optical_flow/gpu/mod.rs` (commit a1fa614),
+> `app::run_ui_and_paint` (97812b1), and `image_detail::show` (1450b09), all
+> verified on GPU + display hardware. See the marked-off findings 2/7/8 in
+> `reports/2026-06-23-hygiene-audit.md`._
 
 ---
 
