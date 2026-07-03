@@ -41,9 +41,16 @@ impl std::error::Error for PatchCloudError {}
 /// An oriented planar patch (surfel) in world space.
 ///
 /// The plane is spanned by orthonormal in-plane axes `u_axis` and `v_axis`; the
-/// outward normal is `u_axis × v_axis`. The patch covers the world points
+/// outward normal is `v_axis × u_axis`. The patch covers the world points
 /// `center + s·half_extent[0]·u_axis + t·half_extent[1]·v_axis` for
 /// `(s, t) ∈ [-1, 1]²`.
+///
+/// The handedness is chosen to match the image raster: a `(col, row)` render
+/// steps `col` along `+u_axis` and `row` along `+v_axis` (row increasing
+/// downward), so `u_axis × v_axis` points *into* the scene (along the viewing
+/// ray) and the front face renders un-mirrored — the same chirality the camera
+/// sees. (Using `u_axis × v_axis` as the outward normal would render the back
+/// face, i.e. a mirror image.)
 ///
 /// `w` is the homogeneous weight of the patch's anchor, mirroring the source 3D
 /// point: `1.0` for a finite point (`center` is a Euclidean position) and `0.0`
@@ -79,9 +86,10 @@ impl OrientedPatch {
         }
     }
 
-    /// Outward normal (`u_axis × v_axis`, normalized).
+    /// Outward normal (`v_axis × u_axis`, normalized). See the type docs for why
+    /// the outward normal is `v × u` and not `u × v` (image-raster handedness).
     pub fn normal(&self) -> Vector3<f64> {
-        self.u_axis.cross(&self.v_axis).normalize()
+        self.v_axis.cross(&self.u_axis).normalize()
     }
 
     /// World point for a normalized patch coordinate `(s, t) ∈ [-1, 1]²`.
@@ -114,8 +122,9 @@ impl OrientedPatch {
     ///
     /// `u_axis` is `up_hint` projected onto the plane and normalized; if
     /// `up_hint` is (near-)parallel to the normal, an arbitrary in-plane axis is
-    /// chosen instead. `v_axis = normal × u_axis`, so `u_axis × v_axis` recovers
-    /// the (normalized) normal.
+    /// chosen instead. `v_axis = u_axis × normal`, so `v_axis × u_axis` recovers
+    /// the (normalized) normal — the image-raster handedness that renders the
+    /// front face un-mirrored (see the type docs).
     pub fn from_center_normal(
         center: Point3<f64>,
         normal: Vector3<f64>,
@@ -129,7 +138,7 @@ impl OrientedPatch {
         } else {
             any_orthonormal(&n)
         };
-        let v = n.cross(&u);
+        let v = u.cross(&n);
         Self {
             center,
             u_axis: u,
@@ -140,7 +149,7 @@ impl OrientedPatch {
     }
 
     /// Build the tangent-sphere frame for a **point at infinity** with direction
-    /// `d` (`w == 0`): outward normal `normalize(-d)`, `u, v ⊥ d` with `u × v`
+    /// `d` (`w == 0`): outward normal `normalize(-d)`, `u, v ⊥ d` with `v × u`
     /// along `-d`, the in-plane rotation pinned by `up_hint`. `center` stores the
     /// direction `d` itself. Per the `.sfmr` format's infinity-patch convention
     /// (see `specs/formats/sfmr-file-format.md`).

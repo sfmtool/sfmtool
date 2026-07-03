@@ -29,7 +29,8 @@ fn to_world_and_normal() {
     );
     assert!((p.to_world(0.0, 0.0) - Point3::new(1.0, 2.0, 3.0)).norm() < 1e-12);
     assert!((p.to_world(1.0, 1.0) - Point3::new(3.0, 6.0, 3.0)).norm() < 1e-12);
-    assert!((p.normal() - Vector3::z()).norm() < 1e-12);
+    // normal = v_axis × u_axis = ŷ × x̂ = -ẑ (image-raster handedness).
+    assert!((p.normal() + Vector3::z()).norm() < 1e-12);
 }
 
 #[test]
@@ -91,6 +92,44 @@ fn from_patch_projects_fronto_parallel_plane() {
             assert!((gy as f64 - exp_y).abs() < 1e-3, "y {gy} vs {exp_y}");
         }
     }
+}
+
+#[test]
+fn from_center_normal_render_is_not_mirrored() {
+    // Regression: a fronto-parallel patch built via `from_center_normal` (normal
+    // toward the camera) must render un-mirrored — the source→grid map must be a
+    // proper (orientation-preserving) map, i.e. its Jacobian determinant is
+    // positive. The old frame convention (`v = n × u`, outward normal `u × v`)
+    // produced a reflection (negative determinant), which showed up as
+    // mirror-imaged `inspect --strips` tiles and stored patch bitmaps.
+    let (f, cx, cy) = (500.0, 320.0, 240.0);
+    let cam = pinhole(f, cx, cy, 640, 480);
+    let pose = RigidTransform::identity(); // world == camera frame, looking +Z
+    let patch = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, 4.0),
+        Vector3::new(0.0, 0.0, -1.0), // outward normal toward the camera
+        Vector3::new(0.0, -1.0, 0.0), // world "up on screen"
+        [0.5, 0.5],
+    );
+    // The outward normal is preserved regardless of the in-plane handedness.
+    assert!((patch.normal() - Vector3::new(0.0, 0.0, -1.0)).norm() < 1e-9);
+
+    let r = 3u32;
+    let wm = WarpMap::from_patch(&patch, &cam, &pose, r);
+    // Discrete source→grid Jacobian at the centre pixel from its 4-neighbours.
+    let (xl, yl) = wm.get(0, 1);
+    let (xr, yr) = wm.get(2, 1);
+    let (xt, yt) = wm.get(1, 0);
+    let (xb, yb) = wm.get(1, 2);
+    let dx_dcol = (xr - xl) as f64;
+    let dy_dcol = (yr - yl) as f64;
+    let dx_drow = (xb - xt) as f64;
+    let dy_drow = (yb - yt) as f64;
+    let det = dx_dcol * dy_drow - dx_drow * dy_dcol;
+    assert!(
+        det > 0.0,
+        "render must be orientation-preserving (not mirrored); det = {det}",
+    );
 }
 
 #[test]
