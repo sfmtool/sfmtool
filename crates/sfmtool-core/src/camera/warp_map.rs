@@ -280,10 +280,12 @@ impl WarpMap {
     /// an oriented 3D `patch`.
     ///
     /// The destination is the patch's canonical `(s, t) ∈ [-1, 1]²` grid (pixel
-    /// centers at `(col + 0.5, row + 0.5)`). Each entry is the source-image
-    /// `(x, y)` where that patch pixel projects: each homogeneous corner
-    /// ([`OrientedPatch::corner_homogeneous`]) is mapped to the camera frame via
-    /// `cam_from_world` and projected with `ray_to_pixel`, so all camera models
+    /// centers at `(col + 0.5, row + 0.5)`), with `col` stepping along `+u_axis`
+    /// and `row` along `−v_axis` — the row index counts downward, so the frame's
+    /// `v_axis` ("up") is reversed to render the front face un-mirrored (see
+    /// [`OrientedPatch`]). Each entry is the source-image `(x, y)` where that
+    /// patch pixel projects: the homogeneous corner is mapped to the camera frame
+    /// via `cam_from_world` and projected with `ray_to_pixel`, so all camera models
     /// (including distortion / fisheye) are handled. This works for a finite
     /// patch (`w = 1`, a planar surfel) and a point at infinity (`w = 0`, a
     /// region of the sphere of directions — the corner is a direction, rotated
@@ -310,7 +312,11 @@ impl WarpMap {
         let rot = cam_from_world.rotation.to_rotation_matrix();
         let q0 = rot * patch.center.coords + cam_from_world.translation * patch.w;
         let qu = (rot * patch.u_axis) * patch.half_extent[0];
-        let qv = (rot * patch.v_axis) * patch.half_extent[1];
+        // The row index increases *downward*, so we step along `−v_axis`: the
+        // patch frame is right-handed (outward normal `u × v`), and walking
+        // `−v` for the raster row is what renders the front face un-mirrored —
+        // walking `+v` would bake a mirror image. See `OrientedPatch`.
+        let qv = (rot * patch.v_axis) * (-patch.half_extent[1]);
 
         // Re-express on the integer `(col, row)` grid: pixel centers sit at
         // `s = (col + 0.5)·step − 1`, `step = 2/r`, so the ray at `(col, row)` is

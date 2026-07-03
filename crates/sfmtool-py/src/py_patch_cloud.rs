@@ -30,9 +30,10 @@ use crate::py_sfmr_reconstruction::PySfmrReconstruction;
 /// An oriented planar patch (surfel) in world space.
 ///
 /// The plane is spanned by orthonormal in-plane axes ``u_axis`` and ``v_axis``;
-/// the outward normal is ``v_axis × u_axis`` (image-raster handedness: a
+/// the frame is right-handed with outward normal ``u_axis × v_axis``. A
 /// ``(col, row)`` render steps ``col`` along ``+u_axis`` and ``row`` along
-/// ``+v_axis``, so the front face renders un-mirrored). The patch covers the world points
+/// ``−v_axis`` (rows count downward), so the front face renders un-mirrored.
+/// The patch covers the world points
 /// ``center + s·half_extent[0]·u_axis + t·half_extent[1]·v_axis`` for
 /// ``(s, t)`` in ``[-1, 1]²``. Pair with :meth:`WarpMap.from_patch` to render its
 /// appearance in a camera. See ``specs/core/patch-cloud.md``.
@@ -137,7 +138,7 @@ impl PyOrientedPatch {
         self.inner.w
     }
 
-    /// Outward normal (``v_axis × u_axis``).
+    /// Outward normal (``u_axis × v_axis``).
     #[getter]
     fn normal(&self) -> [f64; 3] {
         let n = self.inner.normal();

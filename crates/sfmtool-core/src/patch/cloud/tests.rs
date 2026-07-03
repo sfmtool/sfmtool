@@ -29,8 +29,8 @@ fn to_world_and_normal() {
     );
     assert!((p.to_world(0.0, 0.0) - Point3::new(1.0, 2.0, 3.0)).norm() < 1e-12);
     assert!((p.to_world(1.0, 1.0) - Point3::new(3.0, 6.0, 3.0)).norm() < 1e-12);
-    // normal = v_axis × u_axis = ŷ × x̂ = -ẑ (image-raster handedness).
-    assert!((p.normal() + Vector3::z()).norm() < 1e-12);
+    // normal = u_axis × v_axis = x̂ × ŷ = ẑ (right-handed frame).
+    assert!((p.normal() - Vector3::z()).norm() < 1e-12);
 }
 
 #[test]
@@ -85,8 +85,10 @@ fn from_patch_projects_fronto_parallel_plane() {
         for row in 0..r {
             let s = (col as f64 + 0.5) * step - 1.0;
             let t = (row as f64 + 0.5) * step - 1.0;
+            // Columns run with +u_axis (+x); rows run with −v_axis (−y), since
+            // the raster reverses `v` to render un-mirrored.
             let exp_x = f * (s * h) / d + cx;
-            let exp_y = f * (t * h) / d + cy;
+            let exp_y = f * (-t * h) / d + cy;
             let (gx, gy) = wm.get(col, row);
             assert!((gx as f64 - exp_x).abs() < 1e-3, "x {gx} vs {exp_x}");
             assert!((gy as f64 - exp_y).abs() < 1e-3, "y {gy} vs {exp_y}");
@@ -99,9 +101,10 @@ fn from_center_normal_render_is_not_mirrored() {
     // Regression: a fronto-parallel patch built via `from_center_normal` (normal
     // toward the camera) must render un-mirrored — the source→grid map must be a
     // proper (orientation-preserving) map, i.e. its Jacobian determinant is
-    // positive. The old frame convention (`v = n × u`, outward normal `u × v`)
-    // produced a reflection (negative determinant), which showed up as
-    // mirror-imaged `inspect --strips` tiles and stored patch bitmaps.
+    // positive. The frame is right-handed (`v = n × u`, outward normal `u × v`),
+    // so `WarpMap::from_patch` reverses `v` for the raster row; walking `+v`
+    // instead would reflect (negative determinant) and bake mirror-imaged
+    // `inspect --strips` tiles and patch bitmaps.
     let (f, cx, cy) = (500.0, 320.0, 240.0);
     let cam = pinhole(f, cx, cy, 640, 480);
     let pose = RigidTransform::identity(); // world == camera frame, looking +Z

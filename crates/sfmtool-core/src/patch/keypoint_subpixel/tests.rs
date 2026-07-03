@@ -527,8 +527,8 @@ fn consensus_sharpens_after_refinement() {
         let proj = project(&views[i as usize], &patch.center, patch.w).unwrap();
         let dx = res.keypoints[k][0] - proj.0;
         let dy = res.keypoints[k][1] - proj.1;
-        // For this patch u_axis = world +y and v_axis = world -x (the frame's
-        // image-raster handedness flips v). So image-y (world +y) maps to the
+        // For this patch u_axis = world +y and v_axis = world +x, but the raster
+        // steps rows along −v_axis (world −x). So image-y (world +y) maps to the
         // u-grid directly, and image-x (world +x) maps to the v-grid negated.
         // Sign handled by the consensus render (it re-renders at these grid
         // offsets), so convert source px back to patch-grid px per axis.

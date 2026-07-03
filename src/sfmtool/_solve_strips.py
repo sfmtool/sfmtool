@@ -440,13 +440,16 @@ class _SolveStrips:
     def _normal_offsets(
         self, pid: int, patch: OrientedPatch, obs_imgs: list[int]
     ) -> list[tuple[float, float] | None]:
-        """Per-view obliquity offsets ``(s, t)`` in the patch tangent frame: the
-        unit vector from the patch centre toward each view's camera, projected
-        onto ``(u_axis, v_axis)``. ``(0, 0)`` is a fronto-parallel view (camera on
-        the surface normal); ``|(s, t)| -> 1`` as the view grazes the surface. The
-        half-edge scaling cancels, so this is just the tangential part of the unit
-        view direction. ``None`` for a point at infinity (no finite camera-to-
-        surface vector)."""
+        """Per-view obliquity offsets ``(s, t)`` in the *displayed tile* frame:
+        the unit vector from the patch centre toward each view's camera, projected
+        onto ``(u_axis, -v_axis)``. The tile's ``+x`` is ``+u_axis`` and its
+        ``+y`` (downward) is ``-v_axis`` -- the raster reverses ``v`` -- so ``t``
+        projects onto ``-v_axis`` to land the dot on the same side of the tile as
+        the camera. ``(0, 0)`` is a fronto-parallel view (camera on the surface
+        normal); ``|(s, t)| -> 1`` as the view grazes the surface. The half-edge
+        scaling cancels, so this is just the tangential part of the unit view
+        direction. ``None`` for a point at infinity (no finite camera-to-surface
+        vector)."""
         if self._w(pid) == 0.0:
             return [None] * len(obs_imgs)
         u = np.asarray(patch.u_axis, np.float64)
@@ -460,7 +463,9 @@ class _SolveStrips:
                 offsets.append(None)
                 continue
             d = d / norm
-            s, t = float(d @ u), float(d @ v)
+            # Tile down (+y) maps to -v_axis (raster reverses v), so t projects
+            # onto -v_axis to place the dot on the camera's side of the tile.
+            s, t = float(d @ u), float(-(d @ v))
             r = float(np.hypot(s, t))
             if r > 1.0:  # numerical guard; |(s,t)| = sin(theta) <= 1 in exact math
                 s, t = s / r, t / r

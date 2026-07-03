@@ -52,19 +52,19 @@ A planar surface element (surfel) in world space.
 /// An oriented planar patch (surfel) in world space.
 ///
 /// The patch plane is spanned by two orthonormal in-plane axes; `u_axis` and
-/// `v_axis` define both the plane and its in-plane rotation. The outward normal
-/// is `v_axis × u_axis`. `half_extent` is the world-space half-size along each
-/// axis, so the patch covers the world points
+/// `v_axis` define both the plane and its in-plane rotation. The frame is
+/// right-handed with outward normal `u_axis × v_axis`. `half_extent` is the
+/// world-space half-size along each axis, so the patch covers the world points
 /// `center + s·half_extent[0]·u_axis + t·half_extent[1]·v_axis` for
 /// `(s, t) ∈ [-1, 1]²`.
 ///
-/// The handedness is image-raster aligned: a `(col, row)` render (see
-/// `WarpMap::from_patch`) steps `col` along `+u_axis` and `row` along `+v_axis`
-/// with `row` increasing downward, so the front face renders un-mirrored — the
-/// same chirality the camera sees. That is why the outward normal is
-/// `v_axis × u_axis` (which points toward the camera for a front-facing patch)
-/// and not `u_axis × v_axis` (which would render the back face, i.e. a mirror
-/// image).
+/// The frame is right-handed (`u × v` is the geometric outward normal), but the
+/// image raster increases its row index downward, so a `(col, row)` render (see
+/// `WarpMap::from_patch`) steps `col` along `+u_axis` and `row` along `−v_axis`.
+/// That reversal is what renders the front face un-mirrored — the same chirality
+/// the camera sees; stepping `row` along `+v_axis` would render the back face
+/// (a mirror image). So `v_axis` points "up" in the patch plane while the raster
+/// counts pixel rows downward from it, and the normal is unaffected.
 ///
 /// `w` is the homogeneous weight of the anchor: `1.0` for a finite point
 /// (`center` is a Euclidean position) and `0.0` for a point at infinity
@@ -80,7 +80,7 @@ pub struct OrientedPatch {
 }
 
 impl OrientedPatch {
-    /// Outward normal (`v_axis × u_axis`).
+    /// Outward normal (`u_axis × v_axis`).
     pub fn normal(&self) -> Vector3<f64>;
 
     /// World point for a normalized patch coordinate `(s, t) ∈ [-1, 1]²`
@@ -279,7 +279,7 @@ keep the rows of the surviving points, and an SE(3) similarity (`--rotate` /
 `--translate` / `--scale`) reorients and rescales the half-vectors with the
 geometry (rotation only for a point at infinity, whose patch is angular) while the
 bitmaps — parameterised in the patch's own `(s, t)` frame — are carried unchanged.
-The per-point `normal` rotates in step, so `normalize(v × u)` stays consistent
+The per-point `normal` rotates in step, so `normalize(u × v)` stays consistent
 with it.
 
 > _Status (2026-06-11): Implemented — `patch/cloud.rs`

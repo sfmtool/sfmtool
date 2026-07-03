@@ -256,7 +256,9 @@ pub(super) fn project(view: &ProjectedImage<'_>, p: &Point3<f64>, w: f64) -> Opt
 }
 
 /// The patch centre re-anchored on the plane by an in-plane offset `(au, av)` in
-/// patch-grid px: `X_p + au·wpp_u·û + av·wpp_v·v̂`.
+/// patch-grid px: `X_p + au·wpp_u·û − av·wpp_v·v̂`. Grid rows count *downward*
+/// from `+v̂` (they map to `−v_axis`, matching `WarpMap::from_patch`), so a
+/// positive `av` steps along `−v̂`.
 pub(super) fn shifted_center(
     patch: &OrientedPatch,
     au: f64,
@@ -264,7 +266,7 @@ pub(super) fn shifted_center(
     wpp_u: f64,
     wpp_v: f64,
 ) -> Point3<f64> {
-    patch.center + patch.u_axis * (au * wpp_u) + patch.v_axis * (av * wpp_v)
+    patch.center + patch.u_axis * (au * wpp_u) - patch.v_axis * (av * wpp_v)
 }
 
 /// Render one view's context tile / cache with the patch centre at in-plane
@@ -1855,9 +1857,12 @@ pub(super) fn seed_offset(
         let hit = cam_c + dir * s;
         hit - patch.center
     };
+    // Grid rows count downward from `+v̂` (they map to `−v_axis`), so the
+    // v-grid coordinate negates the in-plane `v̂` component — the inverse of
+    // `shifted_center`.
     Some([
         off.dot(&patch.u_axis) / wpp_u,
-        off.dot(&patch.v_axis) / wpp_v,
+        -off.dot(&patch.v_axis) / wpp_v,
     ])
 }
 
