@@ -32,13 +32,14 @@ as columnar per-3D-point arrays parallel to `points`:
 | `patch_bitmaps_y_x_rgba` | `Option<Array4<u8>>` `(P, R, R, 4)` | per-point RGBA tile; **alpha = per-pixel cross-view agreement confidence** |
 | `points[i].position` | `Point3<f64>` | patch **center** (not stored on the patch — it *is* the point) |
 | `points[i].w` | `f64` | `1.0` finite, `0.0` at infinity |
-| `points[i].normal` | `Vector3<f32>` | outward normal (`= normalize(v × u)`) |
+| `points[i].normal` | `Vector3<f32>` | outward normal (`= normalize(u × v)`) |
 
 Key facts that shape the design:
 
-- **The center is the point position; the normal is derived** from `v × u` (the
-  image-raster handedness — `v × u`, not `u × v`, points back toward the camera
-  for a front-facing patch and renders un-mirrored). There
+- **The center is the point position; the normal is derived** from `u × v` (a
+  right-handed frame — `u × v` points back toward the camera for a front-facing
+  patch). The raster reverses `v` (steps rows along `−v`) to render un-mirrored,
+  which is why the vertex shader flips the bitmap's `v` texture coordinate. There
   is no separate patch struct at rest — the frame is the two half-vectors.
 - **A point with no patch is an all-zero row** (present iff `u` is non-zero). The
   uploader skips zero rows.
@@ -353,7 +354,9 @@ pick tag.
 - [x] `patch.wgsl` textured oriented-quad pipeline in Pass 1
       (`pipelines/patch.rs`, premultiplied alpha)
 - [x] Front-face-only culling via a vertex-shader facing test
-      (`dot(v × u, camera_pos − center) ≤ 0`; infinity patches always render)
+      (`dot(u × v, camera_pos − center) ≤ 0`; infinity patches always render)
+- [x] Bitmap `v` texture coordinate flipped in the vertex shader (rows are baked
+      along `−v`, so `uv.y = (1 − t) / 2`) — keeps the textured quad un-mirrored
 - [x] Real HW depth / `0.0` linear depth / `PICK_TAG_POINT` targets
 - [x] Points-at-infinity `w = 0` corner path (direction transform +
       `INF_DEPTH` bias, matching the infinity point splats)

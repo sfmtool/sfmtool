@@ -51,20 +51,23 @@ struct VertexOutput {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    // Map patch coordinate to bitmap UV: (-1,-1)->(0,0), (1,1)->(1,1)
-    out.uv = (in.quad_pos + vec2<f32>(1.0, 1.0)) * 0.5;
+    // Map patch coordinate to bitmap UV. Columns run with +u: s=-1 -> u=0.
+    // Rows run *against* +v: the bitmap was baked with its top scanline toward
+    // +v_axis (WarpMap::from_patch steps rows along −v), so t=+1 -> v=0 and
+    // t=-1 -> v=1. Hence the y flip (1 - t)/2.
+    out.uv = vec2<f32>((in.quad_pos.x + 1.0) * 0.5, (1.0 - in.quad_pos.y) * 0.5);
     out.atlas_layer = in.atlas_layer;
     out.point_index = in.point_index;
 
-    // Front-face only: cull a patch whose outward normal (v × u) points away
-    // from the camera. cross(v_halfvec, u_halfvec) is a positive multiple of
+    // Front-face only: cull a patch whose outward normal (u × v) points away
+    // from the camera. cross(u_halfvec, v_halfvec) is a positive multiple of
     // the outward normal, so its sign is all we need — no normalize. (The frame
-    // is image-raster handed, so the outward normal is v × u, not u × v; see
-    // OrientedPatch.) A point at infinity (w == 0) has a normal that faces every
-    // observer, so it is never culled. Collapse all 4 corners to a clipped
-    // vertex so the quad drops out.
+    // is right-handed: outward normal u × v; the raster reverses v, not the
+    // normal — see OrientedPatch.) A point at infinity (w == 0) has a normal
+    // that faces every observer, so it is never culled. Collapse all 4 corners
+    // to a clipped vertex so the quad drops out.
     if in.w != 0.0 {
-        let outward = cross(in.v_halfvec, in.u_halfvec);
+        let outward = cross(in.u_halfvec, in.v_halfvec);
         if dot(outward, uniforms.camera_pos - in.center) <= 0.0 {
             out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
             return out;

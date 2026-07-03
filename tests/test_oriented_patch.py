@@ -47,8 +47,10 @@ def test_from_patch_projects_fronto_parallel_plane():
         for row in range(r):
             s = (col + 0.5) * step - 1.0
             t = (row + 0.5) * step - 1.0
+            # Columns run with +u_axis; rows run with -v_axis (the raster
+            # reverses v to render un-mirrored), so image-y uses -t.
             assert abs(map_x[row, col] - (f * s * h / d + cx)) < 1e-2
-            assert abs(map_y[row, col] - (f * t * h / d + cy)) < 1e-2
+            assert abs(map_y[row, col] - (f * -t * h / d + cy)) < 1e-2
 
 
 def test_from_center_normal_and_front_facing():

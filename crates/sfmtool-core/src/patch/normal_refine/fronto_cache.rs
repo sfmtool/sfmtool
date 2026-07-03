@@ -105,7 +105,11 @@ fn corner_norm_pts(
     for (k, &(c, rw)) in corners.iter().enumerate() {
         let s = (c as f64 + 0.5) * step - 1.0;
         let t = (rw as f64 + 0.5) * step - 1.0;
-        let world = patch.to_world(s, t);
+        // Grid rows step along −v_axis (matching `WarpMap::from_patch`, which
+        // reverses `v` to render un-mirrored), so the row coordinate is `−t`.
+        // The base image is rendered by that same raster, so the grid→image
+        // affine built from these corners must use the identical mapping.
+        let world = patch.to_world(s, -t);
         let p = view.cam_from_world.transform_point(&world);
         if p.z <= 1e-9 {
             return None;

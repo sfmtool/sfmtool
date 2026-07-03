@@ -247,7 +247,7 @@ attached to the reconstruction via `clone_with_changes(patches=cloud)` and
 written as a per-point patch frame beside the normals in the `.sfmr` `points3d/`
 section (format version 3+; see `specs/formats/sfmr-file-format.md`): two
 in-plane half-extent vectors `u` and `v` per point (the patch centre is the
-point's position, and `normalize(v × u)` is the per-point normal scattered
+point's position, and `normalize(u × v)` is the per-point normal scattered
 above). There is no opt-out — the stored frame must stay consistent with the
 rewritten normals.
 

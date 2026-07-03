@@ -84,9 +84,11 @@ def _quad_corners(
 ) -> np.ndarray:
     """World-space quad corners, shape ``(P, 4, 3)``.
 
-    Corner order matches the patch bitmap layout (bitmap ``[row=y, col=x]`` maps
-    to ``s`` along ``u`` and ``t`` along ``v``, both in ``[-1, 1]``):
-    ``(-u,-v), (+u,-v), (+u,+v), (-u,+v)``.
+    Corner order is ``(-u,-v), (+u,-v), (+u,+v), (-u,+v)`` -- ``s`` along ``u``
+    and ``t`` along ``v``, both in ``[-1, 1]``. The frame is right-handed
+    (``normal = u x v``); the patch raster steps bitmap rows along ``-v`` (rows
+    count downward), so the texture branch flips the bitmap vertically to land
+    on this ``+v``-up geometry.
     """
     return np.stack(
         [
@@ -192,7 +194,10 @@ def _render_image(
             continue
 
         if mode == "texture":
-            bmp = bitmaps[int(point_ids[i])]  # (R, R, 4); colour channels are BGR
+            # (R, R, 4); colour channels are BGR. Bitmap rows run along -v_axis
+            # (the raster reverses v to bake un-mirrored), so flip vertically to
+            # map row 0 onto the +v corners of the right-handed quad.
+            bmp = bitmaps[int(point_ids[i])][::-1]
             r = bmp.shape[0]
             src = np.array([[0, 0], [r, 0], [r, r], [0, r]], np.float32)
             dst = (quad - [cx0, cy0]).astype(np.float32)
