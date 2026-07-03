@@ -109,7 +109,10 @@ def test_image_file_hashes_from_sift_matches_metadata(seoul_bull_workspace):
 def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     """The full orchestration runs on an infinity-bearing input (feature_size
     sizing doesn't choke on w=0 points) and produces a valid embedded_patches
-    reconstruction; any surviving infinity point stays at infinity."""
+    reconstruction; any surviving infinity point stays at infinity. Every kept
+    point — finite or infinity — carries a real consensus bitmap (nonzero alpha):
+    culled points are dropped instead of kept with an all-black bitmap, and
+    infinity points get a fused consensus texture, not a zero row."""
     import cv2
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
@@ -134,6 +137,15 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     assert out.feature_source == "embedded_patches"
     # The run completed and verifies; any kept infinity point is still w = 0.
     assert int(np.asarray(out.point_is_at_infinity).sum()) <= 1
+
+    # The two-bugs invariant: every surviving point has a consensus bitmap with
+    # cross-view agreement somewhere (alpha > 0) — no all-black rows survive.
+    bitmaps = np.asarray(out.patch_bitmaps)
+    assert bitmaps.shape[0] == out.point_count
+    alpha_nonzero = bitmaps[..., 3].reshape(out.point_count, -1).any(axis=1)
+    assert alpha_nonzero.all(), (
+        f"{int((~alpha_nonzero).sum())} surviving points have an all-black bitmap"
+    )
 
 
 def test_embed_patches_sources_hashes_from_embedded_not_sift(

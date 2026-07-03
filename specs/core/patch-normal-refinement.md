@@ -27,6 +27,16 @@
 > **joint normal + per-pixel robust template** of item 7 (a free latent `m`,
 > super-resolvable, atlas-backed) remains beyond v1._
 >
+> _Status (2026-07-01): the `sfm embed-patches` pipeline **no longer sources its
+> stored bitmaps from this refinement** — the sub-pixel keypoint refiner now
+> fuses each point's representative at the *final* per-view keypoints
+> (`refine_keypoints(render_bitmaps=True)`, reusing this module's
+> `PatchViewStack::render`/`fuse`), fixing the one-round staleness and covering
+> points at infinity, which this refinement skips. The `render_bitmaps`
+> capability here remains in place and in use — `sfm xform --refine-normals
+> bitmaps=true` and the strips diagnostics (`compare --strips` /
+> `inspect --strips`) still render through it._
+>
 > _Status (2026-06-13): performance characterized — see
 > `reports/2026-06-13-perf-patch-normal-refinement.md` (phase breakdown,
 > per-knob perf-vs-benefit, prioritized optimization list). The search defaults

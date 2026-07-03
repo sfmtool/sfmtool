@@ -41,7 +41,11 @@ center; when explicitly `False`, anchor every view at the reprojected
 center regardless of recon kind (used by callers like
 `sfm compare --strips` and the cross-validation script that want a
 defined comparison reference independent of whether the recon
-carries inline keypoints). The remaining deferred work —
+carries inline keypoints). The refiner can additionally fuse each
+point's **representative bitmap** at the final keypoints
+(`render_bitmaps` — see "Outputs" below); `embed-patches` sources its
+stored `patch_bitmaps` and its culled-point drop signal from that,
+no longer from normal refinement. The remaining deferred work —
 leave-one-out consensus
 (measured-and-rejected; see below), inverse-compositional ECC, the joint
 bundle, and SIMD of the new sampler functions — is described in "Open
@@ -248,6 +252,28 @@ naturally comes from. The cache is the grid search's, not the fine tune's.)
 Per view: the refined sub-pixel `keypoint_v`, its offset from the projection, and
 the final score. The view set is returned unchanged (a guard-failed view stays at
 its seed, so set and ordering are preserved).
+
+Per point (opt-in, `KeypointSubpixelParams::render_bitmaps` / the binding's
+`refine_keypoints(render_bitmaps=True)`): the fused **representative RGBA
+texture** (`R·R·4`), rendered at the **final** per-view keypoints and fused with
+the final IRLS view weights — the same weighted-mean-RGB +
+agreement·coverage-alpha fusion normal refinement uses (`PatchViewStack::fuse`,
+shared across the two modules). Because the refiner settles the final keypoints,
+this is where the pipeline's stored reference bitmaps come from (they previously
+came from normal refinement and lagged the final sub-pixel refinement by one
+round). Two properties matter to consumers:
+
+- **The representative render uses the refine `sampler`** — the same knob the
+  refine loop samples with (bilinear by default, anisotropic when requested). The
+  stored texture and the cores the IRLS weights are scored against are then
+  sampled the same way, so the fused reference bitmap matches the pixels that
+  drove the refinement.
+- **`None` is the uniform culled-point signal.** A point whose final-offset
+  renders leave fewer than two usable views has no cross-view consensus and gets
+  no representative — finite and infinity alike (a `w = 0` point renders through
+  the same path and gets a *real* consensus bitmap, not a zero row).
+  `sfm embed-patches` **drops** such points instead of keeping them with an
+  all-black bitmap.
 
 ## Validation
 

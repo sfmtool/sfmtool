@@ -100,12 +100,17 @@ def compute_stereo_rectification(
     K2 = get_intrinsic_matrix(cam2_undistorted)
 
     img_size1 = (cam1_undistorted.width, cam1_undistorted.height)
-    D = np.zeros(5)
+    D = np.zeros((5, 1), dtype=np.float64)
+
+    # OpenCV 5.0 is strict about argument shapes/dtypes: R must be a
+    # contiguous 3x3 float64 matrix and t a 3x1 float64 column vector.
+    R_rel = np.ascontiguousarray(R_rel, dtype=np.float64).reshape(3, 3)
+    t_rel = np.ascontiguousarray(t_rel, dtype=np.float64).reshape(3, 1)
 
     R1_rect, R2_rect, P1, P2, Q, roi1, roi2 = cv2.stereoRectify(
-        K1,
+        np.ascontiguousarray(K1, dtype=np.float64),
         D,
-        K2,
+        np.ascontiguousarray(K2, dtype=np.float64),
         D,
         img_size1,
         R_rel,
