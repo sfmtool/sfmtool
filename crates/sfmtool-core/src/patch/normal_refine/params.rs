@@ -203,7 +203,7 @@ impl Default for NormalRefineParams {
 pub struct NormalRefineResult {
     /// The input patch with its normal replaced by the optimum; `center`,
     /// `half_extent`, and the in-plane convention are preserved (the input
-    /// `u_axis` is reprojected onto the new plane, `v = n × u`).
+    /// `u_axis` is reprojected onto the new plane, `v = u × n`).
     pub patch: OrientedPatch,
     /// Consensus photoconsistency `Φ` at the returned normal (NaN if it could
     /// not be evaluated).

@@ -56,13 +56,15 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.atlas_layer = in.atlas_layer;
     out.point_index = in.point_index;
 
-    // Front-face only: cull a patch whose outward normal (u × v) points away
-    // from the camera. cross(u_halfvec, v_halfvec) is a positive multiple of
-    // the outward normal, so its sign is all we need — no normalize. A point at
-    // infinity (w == 0) has a normal that faces every observer, so it is never
-    // culled. Collapse all 4 corners to a clipped vertex so the quad drops out.
+    // Front-face only: cull a patch whose outward normal (v × u) points away
+    // from the camera. cross(v_halfvec, u_halfvec) is a positive multiple of
+    // the outward normal, so its sign is all we need — no normalize. (The frame
+    // is image-raster handed, so the outward normal is v × u, not u × v; see
+    // OrientedPatch.) A point at infinity (w == 0) has a normal that faces every
+    // observer, so it is never culled. Collapse all 4 corners to a clipped
+    // vertex so the quad drops out.
     if in.w != 0.0 {
-        let outward = cross(in.u_halfvec, in.v_halfvec);
+        let outward = cross(in.v_halfvec, in.u_halfvec);
         if dot(outward, uniforms.camera_pos - in.center) <= 0.0 {
             out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
             return out;

@@ -636,14 +636,14 @@ fn recovers_fronto_parallel_normal_from_tilted_init() {
     assert!(result.confidence.is_finite() && result.confidence >= 0.0);
 
     // Frame conventions preserved: same center / half_extent, u reprojected
-    // onto the new plane, v = n × u.
+    // onto the new plane, v = u × n (image-raster handedness; normal = v × u).
     assert_eq!(result.patch.center, patch.center);
     assert_eq!(result.patch.half_extent, patch.half_extent);
     let n = result.patch.normal();
     assert_relative_eq!(result.patch.u_axis.norm(), 1.0, epsilon = 1e-9);
     assert_relative_eq!(result.patch.u_axis.dot(&n), 0.0, epsilon = 1e-9);
     assert_relative_eq!(
-        (n.cross(&result.patch.u_axis) - result.patch.v_axis).norm(),
+        (result.patch.u_axis.cross(&n) - result.patch.v_axis).norm(),
         0.0,
         epsilon = 1e-9
     );

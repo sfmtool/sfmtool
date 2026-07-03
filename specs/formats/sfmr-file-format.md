@@ -729,17 +729,22 @@ Per-point surface normals.
 A **patch** is an oriented surface element (surfel) centred on a 3D point. Only
 its in-plane frame is stored here — two **half-extent vectors** `u` and `v` —
 because the centre is the point's own position and the outward normal is
-`normalize(u × v)`. The patch spans `center + s·u + t·v` for `(s, t) ∈ [-1, 1]²`,
+`normalize(v × u)`. The patch spans `center + s·u + t·v` for `(s, t) ∈ [-1, 1]²`,
 each vector carrying both its in-plane orientation and half-size (no separate unit
 axes or extents).
+
+The `v × u` handedness (rather than `u × v`) is image-raster aligned: a render
+steps its column axis along `+u` and its row axis along `+v` (row increasing
+downward), so a front-facing patch renders un-mirrored and `v × u` is the
+outward normal that points back toward the observers.
 
 The corner offset is **homogeneous**: with the point's coordinate `(center, w)`,
 a patch corner is `(center + s·u + t·v, w)`, so a patch is well-defined for finite
 and infinity points alike:
 
 - **Finite point** (`w = 1`): a planar surfel at the Euclidean position
-  `center`. Its outward normal `normalize(u × v)` agrees with the point's
-  `normals_xyz` (a unit vector; `u × v` itself is only parallel to it, scaled by
+  `center`. Its outward normal `normalize(v × u)` agrees with the point's
+  `normals_xyz` (a unit vector; `v × u` itself is only parallel to it, scaled by
   the half-extents).
 - **Point at infinity** (`w = 0`, direction `d`): the corner `d + s·u + t·v` is
   again a direction, so the patch is a small oriented region of the sphere of
@@ -747,9 +752,9 @@ and infinity points alike:
   a point at infinity is parallel to `d`, so the visible side faces back toward
   the observers and the normal is fixed at `normalize(-d)`. Accordingly `u` and
   `v` are tangent to the unit sphere (`⊥ d`) — carrying only the in-plane rotation
-  and the angular half-sizes — and `u × v` points along `-d`. The per-point
+  and the angular half-sizes — and `v × u` points along `-d`. The per-point
   `normals_xyz` entry is `(0, 0, 0)` here, so unlike a finite point the patch's
-  `normalize(u × v)` is implied by the direction rather than read from
+  `normalize(v × u)` is implied by the direction rather than read from
   `normals_xyz`.
 
 These arrays are **optional** (present only in format version 3+, when
@@ -760,7 +765,7 @@ independent of finiteness: a finite point may lack a patch, and a point at
 infinity may carry one.
 
 These are **producer conventions, not format-enforced invariants**: the format
-constrains only array shapes — not handedness, that `normalize(u × v)` matches
+constrains only array shapes — not handedness, that `normalize(v × u)` matches
 `normals_xyz`, or that unpatched rows are exactly zero. A consumer relying on these
 must not assume an arbitrary v3 file honours them.
 
@@ -931,7 +936,7 @@ patch frame (`has_uv_frames = true`).
 
 For observation `j` with `i = image_indexes[j]`, `p = point_indexes[j]`,
 `k = keypoints_xy[j]`, point `X_p`, frame `u = patch_u_halfvec_xyz[p]`,
-`v = patch_v_halfvec_xyz[p]`, `n = normalize(u × v)`, and camera `i`'s
+`v = patch_v_halfvec_xyz[p]`, `n = normalize(v × u)`, and camera `i`'s
 intrinsics + world→camera pose `(R_i, t_i)`:
 
 1. The surfel lies in the **patch plane** `Π_p` through `X_p` with normal `n`.

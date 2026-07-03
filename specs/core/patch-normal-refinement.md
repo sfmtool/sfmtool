@@ -373,7 +373,7 @@ pub struct NormalRefineResult {
 /// Refine one patch's normal. Takes the patch and returns an updated copy.
 ///
 /// In-plane rotation can't affect photoconsistency, so the routine searches only
-/// the 2-DOF normal; it reprojects the input `u_axis` onto each plane (`v = n × u`)
+/// the 2-DOF normal; it reprojects the input `u_axis` onto each plane (`v = u × n`)
 /// and keeps the input's `center`/`half_extent`, so the frame moves as little as
 /// the new plane forces and no `up` hint is needed.
 pub fn refine_patch_normal(

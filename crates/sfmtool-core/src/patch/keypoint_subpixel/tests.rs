@@ -527,11 +527,12 @@ fn consensus_sharpens_after_refinement() {
         let proj = project(&views[i as usize], &patch.center, patch.w).unwrap();
         let dx = res.keypoints[k][0] - proj.0;
         let dy = res.keypoints[k][1] - proj.1;
-        // image-x is world-x (v_axis), image-y is world-y (u_axis) for this patch;
-        // map source px back to patch-grid px. Sign handled by the consensus render
-        // (it re-renders at these grid offsets), so use the magnitude per axis with
-        // the recovered sign.
-        after_offsets[k] = [dy / src_per_grid(), dx / src_per_grid()];
+        // For this patch u_axis = world +y and v_axis = world -x (the frame's
+        // image-raster handedness flips v). So image-y (world +y) maps to the
+        // u-grid directly, and image-x (world +x) maps to the v-grid negated.
+        // Sign handled by the consensus render (it re-renders at these grid
+        // offsets), so convert source px back to patch-grid px per axis.
+        after_offsets[k] = [dy / src_per_grid(), -dx / src_per_grid()];
     }
     let after = consensus_sharpness(&patch, &views, &view_set, &after_offsets, &p);
 

@@ -75,7 +75,7 @@ pub(in crate::patch) fn build_support(window: PatchWindow, resolution: u32) -> S
 }
 
 /// Rebuild the patch on a new plane: same `center` / `half_extent`, the input
-/// `u_axis` reprojected onto the plane of `n` (`v = n × u`).
+/// `u_axis` reprojected onto the plane of `n` (`v = u × n`).
 pub(super) fn repose_patch(base: &OrientedPatch, n: &Vector3<f64>) -> OrientedPatch {
     let mut p = OrientedPatch::from_center_normal(base.center, *n, base.u_axis, base.half_extent);
     p.w = base.w;
