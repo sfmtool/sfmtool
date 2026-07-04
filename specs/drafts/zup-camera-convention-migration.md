@@ -572,6 +572,16 @@ compiling, full green only at the end):
 1. **Primitives** — add `sfmtool-core` `convention` module (D2) + unit tests
    for `S`/`W` algebra (pose/point/relative-pose round trips). *Verify:*
    `pixi run cargo test -p sfmtool-core`.
+
+   > _Status (2026-07-03): Done — `crates/sfmtool-core/src/geometry/convention.rs`
+   > implements `s_matrix`/`w_matrix`, `pose_colmap_to_canonical`,
+   > `pose_canonical_to_colmap`, `relative_pose_conjugate_s`,
+   > `world_rotate_w`/`world_rotate_w_inverse` with 13 unit tests; exposed as
+   > batch functions on `_sfmtool.geometry` and wrapped by
+   > `src/sfmtool/colmap/convention.py` (single/batch numpy +
+   > `pycolmap.Rigid3d` helpers), tests in
+   > `tests/rust_bindings/test_convention_rust_bindings.py`. Additive only —
+   > no boundary site converted yet._
 2. **Core flip** — areas A.1–A.7 and the `sfmr-format` depth change (B),
    updating Rust unit tests (G) in the same commits, module by module
    (camera models → frustum/epipolar/rectification → reconstruction →
