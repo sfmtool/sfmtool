@@ -123,7 +123,8 @@ in-image predicate
 
 ```
 in_image(λ) := let Xc = pose2.transform_point(X(λ));
-               Xc.z > 0
+               Xc.z < 0        // in front of the camera (canonical −Z-forward
+                               // frame; see sfmr-file-format.md conventions)
                && let Some((u, v)) = cam2.ray_to_pixel(Xc)
                && 0.0 <= u && u < cam2.width as f64
                && 0.0 <= v && v < cam2.height as f64

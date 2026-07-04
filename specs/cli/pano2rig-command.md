@@ -50,6 +50,16 @@ sensor 0 (`front`) sits at the identity pose. Each sensor's image pattern is
 SfM; see [`solve-command.md`](solve-command.md) and
 [`../formats/camrig-file-format.md`](../formats/camrig-file-format.md).
 
+Sensor frames follow the canonical `.camrig`/`.sfmr` camera convention —
+each face looks down its local **−Z** with **+X right, +Y up** (see the
+"Coordinate and quaternion conventions" section of
+[`camrig-file-format.md`](../formats/camrig-file-format.md)). With sensor 0
+at the identity, the `front` face looks along the rig's −Z axis and the
+panorama's up direction is the rig's +Y; `right`/`back`/`left` rotate
+about the rig's up axis and `top`/`bottom` about the rig's X axis. The
+extracted face images themselves are pinhole renders of the equirectangular
+panorama with pano-up as image up.
+
 ## Constraints
 
 The output directory must be inside an initialized workspace (`sfm ws init`).

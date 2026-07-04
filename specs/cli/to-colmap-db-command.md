@@ -8,6 +8,22 @@ re-running COLMAP operations on existing data or for interoperability with COLMA
 The `sfm` CLI uses this general approach to implement many of its operations, converting the
 workspace data into a COLMAP .db, running the COLMAP operation, then converting back to `.sfmr`.
 
+## Coordinate Convention
+
+This command is a convention boundary: `.sfmr` and `.matches` data are
+stored in the canonical Z-up / −Z-forward convention, while a COLMAP
+database holds COLMAP-convention (+Z-forward, Y-down) data. On export the
+canonical→COLMAP conversion is applied: relative and rig poses are
+S-conjugated into COLMAP camera frames, and world-space data such as pose
+priors gets the inverse world canonicalization `W⁻¹` — so a solver run
+against the database, whose output is imported back through the forward
+conversion (see `solve-command.md`), round-trips stably. Pixel-space
+two-view geometry (fundamental/essential matrices, keypoints, matches) is
+invariant under the camera-frame flip and is written unchanged. See the
+"Coordinate System Conventions" section of
+[`sfmr-file-format.md`](../formats/sfmr-file-format.md) for the transform
+definitions.
+
 ## Command Syntax
 
 ```bash

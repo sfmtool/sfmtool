@@ -5,6 +5,19 @@
 Imports a COLMAP binary reconstruction into `.sfmr` format. Reads COLMAP's `cameras.bin`,
 `images.bin`, and `points3D.bin` files and converts them to a single `.sfmr` file.
 
+## Coordinate Convention
+
+This command is a convention boundary: COLMAP binary files use COLMAP's
++Z-forward, Y-down convention, while `.sfmr` data is stored in the
+canonical Z-up / −Z-forward convention. On import the COLMAP→canonical
+conversion is applied — the camera-frame flip `S` on every pose and the
+world canonicalization `W` on world-space data (points, infinity
+directions) — so poses and points are never copied verbatim. `sfm
+to-colmap-bin` applies the inverse, so an import/export round trip is
+stable. See the "Coordinate System Conventions" section of
+[`sfmr-file-format.md`](../formats/sfmr-file-format.md) for the transform
+definitions.
+
 ## Command Syntax
 
 ```bash

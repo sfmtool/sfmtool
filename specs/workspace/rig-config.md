@@ -22,7 +22,9 @@ A single file may declare multiple independent rigs.
 [`rig_configurator` rig config](https://colmap.github.io/rigs.html) file —
 sfmtool reads and writes exactly that format, with no sfmtool-specific
 extensions. See [*Relationship to the COLMAP Rig Format*](#relationship-to-the-colmap-rig-format)
-below.
+below. That includes the coordinate convention: unlike sfmtool's own
+formats, this file stays in **COLMAP convention** — see
+[*Coordinate Convention*](#coordinate-convention).
 
 ## File Format
 
@@ -111,6 +113,26 @@ sfmtool does not invoke `colmap rig_configurator`; it builds rigs directly
 through pycolmap. Matching the format exactly means the same
 `rig_config.json` can be fed to either tool.
 
+## Coordinate Convention
+
+`rig_config.json` remains in **COLMAP convention** — its `cam_from_rig`
+poses map into COLMAP-style camera frames (camera looks down **+Z** with
+**Y down**), *not* the canonical −Z-forward frames used by `.sfmr` and
+`.camrig` (see the "Coordinate System Conventions" section of
+[`sfmr-file-format.md`](../formats/sfmr-file-format.md)). This is
+deliberate: the file mirrors COLMAP's own rig-config schema and exists to
+feed COLMAP database setup, so it is treated as a COLMAP-side artifact and
+converted at ingestion like every other COLMAP input (conjugation with the
+camera-frame flip `S = diag(1, −1, −1)`; rig-relative poses never touch
+the world frame). Keeping the file COLMAP-convention means a
+`rig_config.json` authored for COLMAP — including
+`test-data/images/kerry_park/rig_config.json` — stays valid unchanged.
+
+This is the migration plan's decision D4
+(`specs/drafts/zup-camera-convention-migration.md`); contrast `.camrig`,
+sfmtool's own rig format, which adopts the canonical convention (see
+[`camrig-file-format.md`](../formats/camrig-file-format.md)).
+
 ## Quaternion Convention
 
 `cam_from_rig_rotation` is stored as **WXYZ** to match the COLMAP rig file
@@ -129,7 +151,10 @@ Examples:
 
 A back-to-back rig (right sensor pointing opposite the left) flips the
 optical axis with `[0, 0, 1, 0]` (180° about Y, "look behind"). This is
-the value used by the kerry_park dataset.
+the value used by the kerry_park dataset. (A 180° rotation about Y happens
+to read the same in both camera-frame conventions — `S · Ry(180°) · S =
+Ry(180°)` — but the translation does not: `[0, 0, -0.0307]` here is the
+COLMAP-convention value; see [*Coordinate Convention*](#coordinate-convention).)
 
 ## Per-Sensor Intrinsics
 

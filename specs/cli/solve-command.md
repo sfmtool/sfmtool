@@ -6,6 +6,18 @@ Runs Structure from Motion to produce a 3D reconstruction (`.sfmr` file) from im
 pre-computed matches. Uses pycolmap to run either COLMAP's incremental mapper
 or GLOMAP's global mapper.
 
+## Coordinate Convention
+
+The solvers work in COLMAP's +Z-forward, Y-down convention; the `.sfmr`
+output is canonical Z-up / −Z-forward. Saving the solver's result is
+therefore a convention boundary: the COLMAP→canonical conversion is
+applied — the camera-frame flip `S` on every pose (including rig
+`sensor_from_rig` poses) and the world canonicalization `W` on 3D points —
+before the reconstruction is written, exactly as `sfm from-colmap-bin`
+does for external COLMAP output. See the "Coordinate System Conventions"
+section of [`sfmr-file-format.md`](../formats/sfmr-file-format.md) for the
+transform definitions.
+
 ## Command Syntax
 
 ```bash

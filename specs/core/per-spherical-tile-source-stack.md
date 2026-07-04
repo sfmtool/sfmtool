@@ -355,7 +355,9 @@ per-tile locks and no thread-local-then-merge phase.
 Sequentially over sources, in source-index order: for every tile
 `t = 0..n-1`, compute `d_src_t = R_src_from_world_i · rig.direction(t)`,
 project through `src_intrinsics_i`, and record
-`visibility[t][i] = (finite & in_bounds & z > 0)` into a packed bitmap.
+`visibility[t][i] = (finite & in_bounds & z < 0)` (negative camera-space
+`z` is in front under the canonical −Z-forward convention) into a packed
+bitmap.
 `O(n · N)` total.
 
 From the matrix, derive:

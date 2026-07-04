@@ -55,8 +55,13 @@ tile-rig representation drops the redundant fields:
 - A flat `Vec<[f64; 6]>` of `(e_right, e_up)` tangent-plane bases, also in
   the world frame, completing the per-tile rotation.
 
-The per-tile rotation `R_world_from_tile` has columns `[e_right | e_up |
-direction]`, so a tile-frame ray `v_tile` maps to world as
+Tile frames are canonical camera frames — each tile looks down its local
+**−Z** with **+X right, +Y up** (the `.sfmr` camera convention; see the
+"Coordinate System Conventions" section of
+[`sfmr-file-format.md`](../formats/sfmr-file-format.md)). The per-tile
+rotation `R_world_from_tile` therefore has columns `[e_right | e_up |
+−direction]` (the tile's +Z axis points *away* from its look direction),
+so a tile-frame ray `v_tile` maps to world as
 `v_world = R_world_from_tile · v_tile`. Storing `(direction, e_right, e_up)`
 explicitly (rather than a quaternion or just `direction` with a derived
 basis) keeps the data laid out for SoA / GPU consumption: each per-tile
@@ -161,11 +166,13 @@ pub struct SphericalTileRig {
     directions: Vec<[f64; 3]>,
     /// World-frame tangent-plane basis per tile: (e_right, e_up).
     /// e_right, e_up are unit, orthogonal to the tile's direction, and
-    /// right-handed: `e_right × e_up = direction`.
+    /// oriented so `e_right × e_up = −direction` (right × up = the
+    /// canonical camera's backward +Z axis).
     /// Together with `direction` they form the columns of
-    /// `R_world_from_tile`: the tile-frame x axis maps to e_right in
-    /// world, the tile-frame y axis maps to e_up, and the tile-frame z
-    /// axis (the optical axis) maps to direction.
+    /// `R_world_from_tile = [e_right | e_up | −direction]`: the
+    /// tile-frame x axis maps to e_right in world, the tile-frame y axis
+    /// maps to e_up, and the tile-frame −Z axis (the optical axis)
+    /// maps to direction.
     bases: Vec<[f64; 6]>,
     /// Half-FOV of each tile in radians. Uniform across tiles.
     /// `half_fov_rad = measured_max_coverage_angle · overlap_factor`.
@@ -286,9 +293,9 @@ impl SphericalTileRig {
     pub fn set_patch_size(&mut self, patch_size: u32);
 
     /// Build `R_world_from_tile` for tile `idx`. Columns are
-    /// `[e_right | e_up | direction]`, so for a tile-frame ray
-    /// `v_tile`, `R · v_tile` is the world-frame ray. The transpose
-    /// gives `R_tile_from_world`.
+    /// `[e_right | e_up | −direction]` (canonical −Z-forward tile
+    /// frame), so for a tile-frame ray `v_tile`, `R · v_tile` is the
+    /// world-frame ray. The transpose gives `R_tile_from_world`.
     pub fn tile_rotation(&self, idx: usize) -> [f64; 9];
 
     /// Apply an `Se3Transform` to the rig: rotates and translates
@@ -325,7 +332,7 @@ impl SphericalTileRig {
     /// 2. The in-tile pixel is unprojected through `tile_camera()` to a
     ///    ray in the tile's local frame.
     /// 3. The ray is rotated to world frame via
-    ///    `R_world_from_tile = [e_right | e_up | direction]` (columns).
+    ///    `R_world_from_tile = [e_right | e_up | −direction]` (columns).
     /// 4. The ray is rotated to the src-camera frame via
     ///    `rot_src_from_world`.
     /// 5. The src-camera ray is projected through `src` to pixel

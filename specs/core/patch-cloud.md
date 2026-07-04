@@ -35,11 +35,13 @@ shape. That has three limitations the 3D formulation removes:
 
 ## Coordinate conventions
 
-- World, camera, and pixel conventions follow the rest of the codebase: pixel
-  centers at `(col + 0.5, row + 0.5)` (see `image-warping.md`), camera looks down
-  +Z, extrinsics are **camera-from-world** (matching
-  `SfmrReconstruction.quaternions_wxyz` / `translations`, constructible via
-  `RigidTransform::from_wxyz_translation`).
+- World, camera, and pixel conventions follow the canonical `.sfmr`
+  convention (see the "Coordinate System Conventions" section of
+  [`sfmr-file-format.md`](../formats/sfmr-file-format.md)): pixel centers at
+  `(col + 0.5, row + 0.5)` (see `image-warping.md`), right-handed Z-up
+  world, camera looks down **−Z** with **+X right, +Y up**, extrinsics are
+  **camera-from-world** (matching `SfmrReconstruction.quaternions_wxyz` /
+  `translations`, constructible via `RigidTransform::from_wxyz_translation`).
 - A patch has a local 2D frame `(s, t) ∈ [-1, 1]²`. The `R×R` patch grid samples
   it at pixel centers: grid pixel `(col, row)` maps to
   `s = 2·(col + 0.5)/R − 1`, `t = 2·(row + 0.5)/R − 1`.
@@ -196,10 +198,11 @@ pub enum PatchExtent {
     /// scale back-projected to world (`sigma_i · d_i / f_i`, where `d_i` is the
     /// ray distance `‖X − C_i‖`), reduced across views by `across` (`Median`
     /// recommended; the scales are consistent across a track's views). Using the
-    /// ray distance rather than the optical-axis depth `z_i` makes this
+    /// ray distance rather than the optical-axis depth makes this
     /// camera-agnostic: a fisheye (FoV > 180°) sees points past 90° off axis at
-    /// `z_i ≤ 0`, which a pinhole `σ·z/f` could not size. On-axis `d = z`, so it
-    /// reduces to the pinhole form. Reads the workspace `.sift` files. A point
+    /// zero or negative depth, which a pinhole `σ·depth/f` could not size.
+    /// On-axis `d = depth`, so it reduces to the pinhole form. Reads the
+    /// workspace `.sift` files. A point
     /// with no readable scale in any view is an error
     /// (`PatchCloudError::MissingFeatureScale`) — there is no silent size fallback.
     FeatureSize { factor: f64, across: ViewReduce },

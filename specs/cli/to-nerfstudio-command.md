@@ -75,33 +75,41 @@ the fly.
 
 ### 1. Coordinate Conversion
 
-COLMAP / sfmtool stores extrinsics as **camera-from-world** in OpenCV axes
-(+x right, +y down, +z forward). Nerfstudio expects **world-from-camera** in
-OpenGL axes (+x right, +y up, +z back).
-
-For each image:
+Nerfstudio's target convention is the same as `.sfmr`'s canonical
+convention: a Z-up world with **world-from-camera** poses in OpenGL camera
+axes (+x right, +y up, +z back — the camera looks down −Z). See the
+"Coordinate System Conventions" section of
+[`sfmr-file-format.md`](../formats/sfmr-file-format.md). The exporter
+therefore performs **no axis conversion**:
 
 1. Build the 4×4 camera-from-world matrix from the WXYZ quaternion and
    translation in the reconstruction.
-2. Invert to get world-from-camera.
-3. Negate the Y and Z columns (OpenCV → OpenGL camera axes).
-4. Left-multiply by `applied_transform` (the world-axis remap below) so the
-   serialized matrix is in post-applied space, matching what
-   `ns-process-data` emits.
+2. Invert to get world-from-camera. That matrix is serialized as-is.
 
-The `applied_transform` (3×4) we emit is:
+The `applied_transform` (3×4) we emit is the **identity**:
 
 ```
-[[ 1,  0, 0, 0],
- [ 0,  0, 1, 0],
- [ 0, -1, 0, 0]]
+[[1, 0, 0, 0],
+ [0, 1, 0, 0],
+ [0, 0, 1, 0]]
 ```
 
-This permutes Y↔Z and negates Y. The same transform is applied to the
-point cloud positions before they are written to `sparse_pc.ply`, so cameras
-and points stay aligned.
+The field is still written — Nerfstudio consumers expect it — but it is a
+no-op, and point cloud positions are written to `sparse_pc.ply` unchanged.
 
-Implementation: `frame_transform_matrix` and `apply_transform_to_points` in
+**Relationship to the old COLMAP-based export.** Before the `.sfmr` format
+adopted the canonical convention, reconstructions held COLMAP-convention
+data verbatim, and this exporter did the conversion itself: it negated the
+Y and Z camera columns (OpenCV → OpenGL camera axes) and emitted
+`applied_transform = [[1,0,0,0],[0,0,1,0],[0,-1,0,0]]` — the world
+rotation `W` that Nerfstudio applies to COLMAP input. Exactly that
+conversion now happens once, at the COLMAP import boundary (see
+`from-colmap-bin` / `solve`), so the exporter's transform collapses to
+identity. Exporting a canonical-convention file produces numerically
+identical output to the old exporter run on the same scene's
+COLMAP-convention file.
+
+Implementation: `frame_transform_matrix` in
 `src/sfmtool/_to_nerfstudio.py`. Quaternion → rotation matrix uses
 `RotQuaternion.to_rotation_matrix` from the Rust bindings.
 
@@ -129,7 +137,7 @@ Single-camera reconstructions hoist intrinsics to the top level (matches
       "colmap_im_id": 1
     }
   ],
-  "applied_transform": [[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0]],
+  "applied_transform": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]],
   "ply_file_path": "sparse_pc.ply"
 }
 ```
@@ -170,8 +178,9 @@ end_header
 ```
 
 Point positions come from `recon.positions`, colors from `recon.colors`.
-Positions are pre-transformed by `applied_transform` so they share a frame
-with the camera poses.
+Positions are written as stored — the `.sfmr` world frame is already the
+Nerfstudio world frame (`applied_transform` is identity), so cameras and
+points share a frame with no re-transformation.
 
 Hand-rolled writer (`write_sparse_ply`) — the format has one element type
 and six fixed properties, so an external PLY library would add more
