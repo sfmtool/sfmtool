@@ -103,7 +103,14 @@ def render_track_strip(
         p8 = np.clip(pf, 0, 255).astype(np.uint8)
         src_sz = p8.shape[0]
         p8 = cv2.resize(p8, (tile, tile), interpolation=cv2.INTER_NEAREST)
-        bgr = p8 if p8.ndim == 3 else cv2.cvtColor(p8, cv2.COLOR_GRAY2BGR)
+        # Patches arrive RGB (the source images are loaded RGB); this is the cv2
+        # boundary where the tile is annotated and handed to the BGR montage, so
+        # convert RGB→BGR here.
+        bgr = (
+            cv2.cvtColor(p8, cv2.COLOR_RGB2BGR)
+            if p8.ndim == 3
+            else cv2.cvtColor(p8, cv2.COLOR_GRAY2BGR)
+        )
         if inner is not None:
             off, sz = inner
             scale = tile / src_sz

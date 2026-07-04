@@ -129,7 +129,11 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
 
     ws = recon.workspace_dir
     images = [
-        np.ascontiguousarray(cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR))
+        np.ascontiguousarray(
+            cv2.cvtColor(
+                cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
+            )
+        )
         for name in recon.image_names
     ]
 
@@ -165,7 +169,11 @@ def test_embed_patches_sources_hashes_from_embedded_not_sift(
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
     images = [
-        np.ascontiguousarray(cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR))
+        np.ascontiguousarray(
+            cv2.cvtColor(
+                cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
+            )
+        )
         for name in recon.image_names
     ]
     out = ep.embed_patches(recon, images, resolution=12)
@@ -198,7 +206,11 @@ def test_embed_patches_refine_anchors_on_stored_keypoints(
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
     images = [
-        np.ascontiguousarray(cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR))
+        np.ascontiguousarray(
+            cv2.cvtColor(
+                cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
+            )
+        )
         for name in recon.image_names
     ]
     ep.embed_patches(recon, images, resolution=12)
@@ -267,3 +279,56 @@ def test_embed_patches_cli_rejects_bad_subpixel(seoul_bull_workspace, tmp_path):
         result = CliRunner().invoke(main, args)
     assert result.exit_code != 0
     assert "subpixel" in result.output.lower()
+
+
+def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
+    """Regression (channel order): the stored ``patch_bitmaps_y_x_rgba`` is RGB,
+    not BGR — so the GUI, which uploads channel 0 as red, shows true colours.
+
+    Repaint the workspace images red-dominant on disk (blue heavily suppressed;
+    red + green carry the grayscale texture), then drive the pipeline through
+    ``read_workspace_image`` — the exact load boundary the bug lived in. Every
+    rendered consensus bitmap must then carry a much larger red channel (0) than
+    blue channel (2). Under the old BGR behaviour ``read_workspace_image`` handed
+    the renderer blue in channel 0, so the stored channel 0 held the (suppressed)
+    blue and channel 2 held the red — inverting this ratio and FAILING the test.
+    """
+    import cv2
+
+    from sfmtool._embed_patches import embed_patches
+    from sfmtool._workspace_image import read_workspace_image
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    ws = recon.workspace_dir
+
+    # Repaint each source image: red + green carry the grayscale texture, blue is
+    # divided by 6 (kept nonzero so no channel is degenerate for registration, but
+    # far below red). cv2.imwrite expects BGR, so write [blue, green, red].
+    for name in recon.image_names:
+        path = str(Path(ws) / name)
+        bgr = cv2.imread(path, cv2.IMREAD_COLOR)
+        assert bgr is not None
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        repainted = np.zeros_like(bgr)
+        repainted[..., 0] = gray // 6  # blue (BGR channel 0)
+        repainted[..., 1] = gray  # green
+        repainted[..., 2] = gray  # red (BGR channel 2)
+        assert cv2.imwrite(path, repainted)
+
+    images = [read_workspace_image(ws, name) for name in recon.image_names]
+    out = embed_patches(recon, images, resolution=12, patch_size=10.0)
+
+    bitmaps = np.asarray(out.patch_bitmaps)
+    assert out.point_count > 0 and bitmaps.shape[0] == out.point_count
+    opaque = bitmaps[..., 3] > 0
+    assert opaque.any(), "no opaque texels were rendered"
+    red = bitmaps[..., 0][opaque].astype(np.float64)
+    blue = bitmaps[..., 2][opaque].astype(np.float64)
+    # Red carries the full texture (channel 0); blue was 1/6 of it (channel 2).
+    # The ratio is scale-independent, so this locks the channel order robustly:
+    # under the old BGR bug it inverts to ~1/6 and fails.
+    assert red.mean() > 30.0, f"red channel unexpectedly dark ({red.mean():.1f})"
+    assert red.mean() > 2.5 * blue.mean(), (
+        f"stored bitmaps look BGR: red(ch0)={red.mean():.1f} "
+        f"is not >> blue(ch2)={blue.mean():.1f}"
+    )

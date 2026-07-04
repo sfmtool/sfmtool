@@ -214,8 +214,8 @@ class _SolveStrips:
         return np.asarray(wm.remap_bilinear(self.image(i)), np.float32)
 
     def _stored_bitmap(self, pid: int) -> np.ndarray | None:
-        """The raw stored patch bitmap for ``pid`` (RGBA, colour channels already
-        BGR), or ``None`` if the recon carries no (non-empty) bitmap for it."""
+        """The raw stored patch bitmap for ``pid`` (RGBA, colour channels RGB),
+        or ``None`` if the recon carries no (non-empty) bitmap for it."""
         if self._bitmaps is None or not (0 <= int(pid) < len(self._bitmaps)):
             return None
         bmp = self._bitmaps[int(pid)]
@@ -224,11 +224,15 @@ class _SolveStrips:
     def _bitmap_ref_tile(self, bmp: np.ndarray, tile: int) -> np.ndarray:
         """Reference tile for a stored bitmap: the RGB patch rendered *without*
         alpha blending, and — when the bitmap carries an alpha channel — its alpha
-        shown as a grayscale tile beside it."""
-        rgb = bmp[..., :3] if bmp.ndim == 3 else cv2.cvtColor(bmp, cv2.COLOR_GRAY2BGR)
-        rgb_t = cv2.resize(
-            np.ascontiguousarray(rgb), (tile, tile), interpolation=cv2.INTER_NEAREST
-        )
+        shown as a grayscale tile beside it.
+
+        The stored colour channels are RGB; this tile feeds the BGR montage
+        (written via cv2), so convert RGB→BGR here."""
+        if bmp.ndim == 3:
+            color = cv2.cvtColor(np.ascontiguousarray(bmp[..., :3]), cv2.COLOR_RGB2BGR)
+        else:
+            color = cv2.cvtColor(bmp, cv2.COLOR_GRAY2BGR)
+        rgb_t = cv2.resize(color, (tile, tile), interpolation=cv2.INTER_NEAREST)
         _corner_label(rgb_t, "rgb")
         if not (bmp.ndim == 3 and bmp.shape[-1] == 4):
             return rgb_t
@@ -264,7 +268,13 @@ class _SolveStrips:
         cores = [self._render_view(patch, i, self.patch) for i in obs_imgs]
         mean = np.stack([np.asarray(c, np.float64) for c in cores]).mean(0)
         p8 = np.clip(mean, 0, 255).astype(np.uint8)
-        bgr = p8 if p8.ndim == 3 else cv2.cvtColor(p8, cv2.COLOR_GRAY2BGR)
+        # `cores` are RGB (rendered from RGB source images); convert to BGR for
+        # the cv2-written montage.
+        bgr = (
+            cv2.cvtColor(p8, cv2.COLOR_RGB2BGR)
+            if p8.ndim == 3
+            else cv2.cvtColor(p8, cv2.COLOR_GRAY2BGR)
+        )
         return cv2.resize(bgr, (tile, tile), interpolation=cv2.INTER_NEAREST)
 
     def tri_angle(self, pid: int) -> float:

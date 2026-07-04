@@ -17,7 +17,15 @@ import numpy as np
 
 
 def read_workspace_image(workspace_dir: str | Path, image_name: str) -> np.ndarray:
-    """Read one workspace image as a contiguous BGR array.
+    """Read one workspace image as a contiguous **RGB** array.
+
+    The whole sfmtool-side image pipeline works in RGB (matching the SIFT
+    extractor, which converts right after ``imread``), so this load boundary
+    converts BGR→RGB once. The Rust patch/bitmap renderers sample source pixels
+    in their native channel order, so feeding them RGB makes the stored
+    ``patch_bitmaps_y_x_rgba`` genuinely RGB (as its name, the ``.sfmr`` spec,
+    and the GUI atlas all require). Consumers that hand an array to cv2 for
+    drawing or ``imwrite`` must convert RGB→BGR at that sink.
 
     ``image_name`` is the workspace-relative path as stored in
     ``recon.image_names``. Raises ``FileNotFoundError`` if the file is missing
@@ -29,4 +37,4 @@ def read_workspace_image(workspace_dir: str | Path, image_name: str) -> np.ndarr
     bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if bgr is None:
         raise FileNotFoundError(f"Source image not found or unreadable: {path}")
-    return np.ascontiguousarray(bgr)
+    return np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))

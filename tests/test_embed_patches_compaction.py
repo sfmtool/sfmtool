@@ -34,7 +34,7 @@ def _load_images(recon) -> list[np.ndarray]:
     for name in recon.image_names:
         bgr = cv2.imread(os.path.join(ws, name), cv2.IMREAD_COLOR)
         assert bgr is not None, f"could not read {name}"
-        out.append(np.ascontiguousarray(bgr))
+        out.append(np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)))
     return out
 
 
