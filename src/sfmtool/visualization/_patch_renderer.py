@@ -195,20 +195,22 @@ def _render_image(
             continue
 
         if mode == "texture":
-            # (R, R, 4); colour channels are BGR. Bitmap rows run along -v_axis
-            # (the raster reverses v to bake un-mirrored), so flip vertically to
-            # map row 0 onto the +v corners of the right-handed quad.
+            # (R, R, 4); colour channels are RGB (the stored patch bitmap
+            # follows the RGB pipeline). Bitmap rows run along -v_axis (the
+            # raster reverses v to bake un-mirrored), so flip vertically to map
+            # row 0 onto the +v corners of the right-handed quad.
             bmp = bitmaps[int(point_ids[i])][::-1]
             r = bmp.shape[0]
             src = np.array([[0, 0], [r, 0], [r, r], [0, r]], np.float32)
             dst = (quad - [cx0, cy0]).astype(np.float32)
             m = cv2.getPerspectiveTransform(src, dst)
             tw, th = cx1 - cx0, cy1 - cy0
-            # Patch bitmaps are rendered from cv2-loaded (BGR) source images, so
-            # the colour channels are already BGR -- use them directly.
-            warped = cv2.warpPerspective(
-                np.ascontiguousarray(bmp[:, :, :3]), m, (tw, th)
+            # The canvas is a cv2-loaded BGR frame, so convert the stored RGB
+            # bitmap to BGR before compositing onto it.
+            bmp_bgr = cv2.cvtColor(
+                np.ascontiguousarray(bmp[:, :, :3]), cv2.COLOR_RGB2BGR
             )
+            warped = cv2.warpPerspective(bmp_bgr, m, (tw, th))
             warped_a = cv2.warpPerspective(bmp[:, :, 3], m, (tw, th))
             norm_a = warped_a.astype(np.float32) / 255.0
             if opaque_threshold is not None:
