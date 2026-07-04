@@ -35,7 +35,10 @@ def test_from_patch_projects_fronto_parallel_plane():
     cam = _pinhole(f, cx, cy, 640, 480)
     pose = _identity()  # world == camera frame
     d, h = 4.0, 0.5
-    patch = OrientedPatch([0, 0, d], [1, 0, 0], [0, 1, 0], [h, h])
+    # Canonical cameras look down -Z, so a visible patch sits at z = -d (in
+    # front). The projection formulas below are unchanged: the normalized coords
+    # divide by the depth -z = d.
+    patch = OrientedPatch([0, 0, -d], [1, 0, 0], [0, 1, 0], [h, h])
 
     r = 8
     wm = WarpMap.from_patch(patch, cam, pose, r)
@@ -48,9 +51,12 @@ def test_from_patch_projects_fronto_parallel_plane():
             s = (col + 0.5) * step - 1.0
             t = (row + 0.5) * step - 1.0
             # Columns run with +u_axis; rows run with -v_axis (the raster
-            # reverses v to render un-mirrored), so image-y uses -t.
+            # reverses v to render un-mirrored). The canonical camera projects
+            # with +Y up (image-y = cy - fy·y_n), which cancels that raster
+            # reversal, so image-y tracks +t (was -t under the old +Y-down
+            # COLMAP camera). The patch is at z = -d, so x_n = s·h/d, y_n = t·h/d.
             assert abs(map_x[row, col] - (f * s * h / d + cx)) < 1e-2
-            assert abs(map_y[row, col] - (f * -t * h / d + cy)) < 1e-2
+            assert abs(map_y[row, col] - (f * t * h / d + cy)) < 1e-2
 
 
 def test_from_center_normal_and_front_facing():
@@ -64,7 +70,7 @@ def test_from_center_normal_and_front_facing():
 
 def test_from_patch_remaps_an_image():
     cam = _pinhole(500.0, 320.0, 240.0, 640, 480)
-    patch = OrientedPatch([0, 0, 4], [1, 0, 0], [0, 1, 0], [0.5, 0.5])
+    patch = OrientedPatch([0, 0, -4], [1, 0, 0], [0, 1, 0], [0.5, 0.5])
     img = np.zeros((480, 640, 3), np.uint8)
     img[:, :320] = (255, 0, 0)
     out = np.asarray(

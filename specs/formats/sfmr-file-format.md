@@ -248,7 +248,7 @@ JSON structure describing the reconstruction:
 ```
 
 **Field descriptions:**
-- `version`: Format version number (`1`–`4`).
+- `version`: Format version number (`1`–`5`).
   See [Versioning and Migration](#versioning-and-migration) for the relationship
   to earlier versions.
 - `feature_source`: (version 4+) How each observation's 2D coordinate is carried
@@ -1515,7 +1515,7 @@ All extensions should:
 
 ## Versioning and Migration
 
-The format spans four versions (`1`–`4`), all valid; each extends the previous,
+The format spans five versions (`1`–`5`), all valid; each extends the previous,
 and how an older file maps to the current model is given below.
 
 ### Version 1 → Version 2 (history)
@@ -1571,7 +1571,7 @@ is byte-equivalent to a v3 file apart from the `version` / `feature_source`
 metadata keys and the new `tracks/metadata.json` `has_*` keys.
 `embedded_patches` is a new mode with no v3 equivalent.
 
-### Version 4 → Version 5 (planned)
+### Version 4 → Version 5
 
 Version 5 makes the
 [Coordinate System Conventions](#coordinate-system-conventions) normative. No
@@ -1590,7 +1590,7 @@ half-vectors; saving always writes version 5. The implementation roadmap is
 
 ## Version History
 
-- **Version 5** (planned): Canonical coordinate convention — right-handed
+- **Version 5**: Canonical coordinate convention — right-handed
   Z-up world, −Z-forward / +Y-up cameras — becomes normative; version ≤ 4
   files (COLMAP convention) upgrade on load via the fixed `S`/`W` conversion.
 - **Version 4**: Added the top-level `feature_source` discriminator and the

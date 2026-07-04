@@ -26,11 +26,19 @@ use crate::{CameraIntrinsics, RigidTransform};
 /// defined. Callers should treat this as "these two views cannot be related"
 /// rather than crashing.
 ///
+/// **Convention.** This is pure `K`-matrix pixel algebra: the poses must be
+/// in the COLMAP/OpenCV **optical** camera convention (+Z forward, y down),
+/// where `K · p_cam` dehomogenizes to the pixel. A caller holding canonical
+/// `.sfmr` poses (−Z forward, +Y up) must pre-multiply each pose by
+/// `S = diag(1, −1, −1)` first (`r → S·r`, `t → S·t`; see
+/// [`crate::geometry::convention`]) — feeding canonical poses directly would
+/// conjugate the essential matrix by `S` and yield a wrong pixel-space `F`.
+///
 /// # Parameters
 ///
 /// * `k1`, `k2` - 3x3 intrinsic matrices.
-/// * `r1`, `r2` - 3x3 cam_from_world rotation matrices.
-/// * `t1`, `t2` - cam_from_world translation vectors.
+/// * `r1`, `r2` - 3x3 cam_from_world rotation matrices (optical convention).
+/// * `t1`, `t2` - cam_from_world translation vectors (optical convention).
 #[allow(clippy::too_many_arguments)]
 pub fn compute_fundamental_matrix(
     k1: &Matrix3<f64>,
@@ -175,7 +183,8 @@ pub fn plot_epipolar_curve(
         let lambda = log_lambda.exp();
         let world = Point3::from(c1.coords + lambda * d1_world);
         let xc = pose2.transform_point(&world);
-        if xc.z <= 0.0 {
+        // Cheirality: a point in front of a canonical camera has z < 0.
+        if xc.z >= 0.0 {
             return None;
         }
         let (u, v) = cam2.ray_to_pixel([xc.x, xc.y, xc.z])?;

@@ -294,10 +294,12 @@ def _project_direction(recon, d: np.ndarray, image_idx: int, margin: float = 0.0
         np.float64,
     )
     x = rot @ d
-    if x[2] <= 0:
+    # Canonical cameras look down -Z: a direction is in front when (R·d).z < 0,
+    # and normalized coords divide by the depth -z (> 0 in front).
+    if x[2] >= 0:
         return None
     cam = recon.cameras[int(np.asarray(recon.camera_indexes)[image_idx])]
-    uv = np.asarray(cam.project(x[0] / x[2], x[1] / x[2]), dtype=np.float64)
+    uv = np.asarray(cam.project(x[0] / -x[2], x[1] / -x[2]), dtype=np.float64)
     if not (
         margin <= uv[0] < cam.width - margin and margin <= uv[1] < cam.height - margin
     ):

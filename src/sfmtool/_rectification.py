@@ -85,13 +85,19 @@ def compute_stereo_rectification(
 ) -> StereoRectification:
     """Compute stereo rectification parameters for undistorted PINHOLE cameras.
 
+    ``cv2.stereoRectify`` expects OpenCV/COLMAP-frame (+Z-forward, Y-down)
+    poses, so the relative pose ``(R_rel, t_rel)`` must be built from
+    OpenCV-frame camera poses, not canonical (``.sfmr``) ones. Callers holding
+    canonical poses S-flip them first (see ``colmap.convention`` and the §1
+    invariant in ``specs/drafts/zup-camera-convention-migration.md``).
+
     Args:
         cam1_distorted: Original camera 1 with distortion
         cam2_distorted: Original camera 2 with distortion
         cam1_undistorted: Undistorted PINHOLE camera 1
         cam2_undistorted: Undistorted PINHOLE camera 2
-        R_rel: Relative rotation from cam1 to cam2 (3x3)
-        t_rel: Relative translation from cam1 to cam2 (3x1)
+        R_rel: Relative rotation from cam1 to cam2 (3x3), OpenCV frame
+        t_rel: Relative translation from cam1 to cam2 (3x1), OpenCV frame
 
     Returns:
         StereoRectification object with all parameters and convenience methods

@@ -250,6 +250,93 @@ def build_metadata(
     return metadata
 
 
+def _colmap_poses_points_to_canonical(
+    quaternions_wxyz: np.ndarray,
+    translations_xyz: np.ndarray,
+    positions_xyz: np.ndarray,
+    apply_world_rotation: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Convert COLMAP-frame poses/points to canonical on import.
+
+    With ``apply_world_rotation`` (external import — a fresh solver output or
+    ``from-colmap-bin``): apply the full COLMAP -> canonical conversion
+    (``S`` on poses, ``W`` on points). Without it (an in-pipeline pycolmap
+    round trip, per D3): apply ``S`` on the camera frames only and leave the
+    world frame untouched.
+    """
+    from .convention import (
+        flip_camera_pose_s,
+        pose_colmap_to_canonical,
+        world_rotate_w,
+    )
+
+    q = np.asarray(quaternions_wxyz, dtype=np.float64)
+    t = np.asarray(translations_xyz, dtype=np.float64)
+    p = np.asarray(positions_xyz, dtype=np.float64).reshape(-1, 3)
+    if apply_world_rotation:
+        q, t = pose_colmap_to_canonical(q, t)
+        if len(p):
+            p = world_rotate_w(p)
+    else:
+        q, t = flip_camera_pose_s(q, t)
+    return q, t, p
+
+
+def _canonical_poses_points_to_colmap(
+    quaternions_wxyz: np.ndarray,
+    translations_xyz: np.ndarray,
+    positions_xyz: np.ndarray,
+    apply_world_rotation: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Convert canonical poses/points to COLMAP frame on export (inverse of
+    :func:`_colmap_poses_points_to_canonical`).
+
+    With ``apply_world_rotation`` (external export — ``to-colmap-bin`` /
+    ``to-colmap-db``): apply ``S`` on poses and ``W^-1`` on points. Without it
+    (an in-pipeline round trip): apply ``S`` on camera frames only (D3).
+    """
+    from .convention import (
+        flip_camera_pose_s,
+        pose_canonical_to_colmap,
+        world_rotate_w_inverse,
+    )
+
+    q = np.asarray(quaternions_wxyz, dtype=np.float64)
+    t = np.asarray(translations_xyz, dtype=np.float64)
+    p = np.asarray(positions_xyz, dtype=np.float64).reshape(-1, 3)
+    if apply_world_rotation:
+        q, t = pose_canonical_to_colmap(q, t)
+        if len(p):
+            p = world_rotate_w_inverse(p)
+    else:
+        q, t = flip_camera_pose_s(q, t)
+    return q, t, p
+
+
+def _conjugate_rig_sensor_poses(rig_frame_data: dict | None) -> dict | None:
+    """S-conjugate the ``sensor_from_rig`` poses of rig-frame data.
+
+    ``sensor_from_rig`` is a rig-relative pose, so COLMAP <-> canonical is a
+    plain ``S``-conjugation (``W`` cancels, per the migration spec). The
+    conversion is involutive, so this single helper serves both import
+    (COLMAP -> canonical) and export (canonical -> COLMAP). Returns a shallow
+    copy with converted sensor pose arrays; other keys are shared.
+    """
+    if rig_frame_data is None:
+        return None
+
+    from .convention import relative_pose_conjugate_s
+
+    q = np.asarray(rig_frame_data["sensor_quaternions_wxyz"], dtype=np.float64)
+    t = np.asarray(rig_frame_data["sensor_translations_xyz"], dtype=np.float64)
+    if len(q):
+        q, t = relative_pose_conjugate_s(q, t)
+    out = dict(rig_frame_data)
+    out["sensor_quaternions_wxyz"] = np.asarray(q, dtype=np.float64)
+    out["sensor_translations_xyz"] = np.asarray(t, dtype=np.float64)
+    return out
+
+
 def _detect_infinity_points(recon):
     """Classify points at infinity on a freshly imported reconstruction.
 
@@ -271,8 +358,14 @@ def colmap_binary_to_rust_sfmr(
     image_dir: str | Path,
     metadata: dict,
     classify_infinity: bool = True,
+    apply_world_rotation: bool = True,
 ):
     """Load a COLMAP binary reconstruction as a Rust SfmrReconstruction.
+
+    COLMAP-frame poses and points are converted to the canonical convention on
+    the way in (see :func:`_colmap_poses_points_to_canonical`). Pass
+    ``apply_world_rotation=False`` for an in-pipeline round trip (D3), which
+    applies ``S`` on the camera frames only and leaves the world untouched.
 
     When ``classify_infinity`` is true (the default), points whose depth the
     solve could not pin down are reclassified as points at infinity.
@@ -296,15 +389,24 @@ def colmap_binary_to_rust_sfmr(
         thumbnails,
     ) = _resolve_workspace_and_sift(data["image_names"], image_dir)
 
-    rig_frame_data = data.get("rig_frame_data")
+    rig_frame_data = _conjugate_rig_sensor_poses(data.get("rig_frame_data"))
+
+    quaternions_wxyz, translations_xyz, positions_xyz = (
+        _colmap_poses_points_to_canonical(
+            data["quaternions_wxyz"],
+            data["translations_xyz"],
+            data["positions_xyz"],
+            apply_world_rotation,
+        )
+    )
 
     sfmr_dict = _build_sfmr_data_dict(
         cameras=list(data["cameras"]),
         image_names=resolved_names,
         camera_indexes=data["camera_indexes"],
-        quaternions_wxyz=data["quaternions_wxyz"],
-        translations_xyz=data["translations_xyz"],
-        positions_xyzw=finite_positions_xyzw(data["positions_xyz"]),
+        quaternions_wxyz=quaternions_wxyz,
+        translations_xyz=translations_xyz,
+        positions_xyzw=finite_positions_xyzw(positions_xyz),
         colors_rgb=data["colors_rgb"],
         reprojection_errors=data["reprojection_errors"],
         track_image_indexes=data["track_image_indexes"],
@@ -329,8 +431,13 @@ def pycolmap_to_rust_sfmr(
     image_dir: str | Path,
     metadata: dict,
     classify_infinity: bool = True,
+    apply_world_rotation: bool = True,
 ):
     """Convert a pycolmap.Reconstruction to a Rust SfmrReconstruction.
+
+    COLMAP-frame poses and points are converted to the canonical convention on
+    the way in. Pass ``apply_world_rotation=False`` for an in-pipeline round
+    trip (D3), applying ``S`` on the camera frames only (world untouched).
 
     When ``classify_infinity`` is true (the default), points whose depth the
     solve could not pin down are reclassified as points at infinity.
@@ -416,17 +523,27 @@ def pycolmap_to_rust_sfmr(
             feature_indexes_list.append(te.point2D_idx)
             points3d_indexes_list.append(pt_index)
 
-    # Extract rig/frame data
+    # Extract rig/frame data (sensor_from_rig poses are S-conjugated inside
+    # _extract_rig_frame_data as part of the COLMAP -> canonical conversion).
     rig_frame_data = _extract_rig_frame_data(
         reconstruction, camera_id_to_index, image_id_to_index
+    )
+
+    quaternions_wxyz, translations_xyz, point_positions = (
+        _colmap_poses_points_to_canonical(
+            np.array(quaternions_wxyz, dtype=np.float64),
+            np.array(translations_xyz, dtype=np.float64),
+            np.asarray(point_positions, dtype=np.float64),
+            apply_world_rotation,
+        )
     )
 
     sfmr_dict = _build_sfmr_data_dict(
         cameras=cameras_list,
         image_names=resolved_names,
         camera_indexes=np.array(camera_indexes, dtype=np.uint32),
-        quaternions_wxyz=np.array(quaternions_wxyz, dtype=np.float64),
-        translations_xyz=np.array(translations_xyz, dtype=np.float64),
+        quaternions_wxyz=quaternions_wxyz,
+        translations_xyz=translations_xyz,
         positions_xyzw=finite_positions_xyzw(point_positions),
         colors_rgb=np.array(point_colors, dtype=np.uint8),
         reprojection_errors=np.array(point_errors, dtype=np.float32),
@@ -555,27 +672,38 @@ def _extract_rig_frame_data(
             image_sensor_indexes[img_idx] = global_sensor_idx
             image_frame_indexes[img_idx] = frame_idx
 
-    return {
-        "rigs_metadata": {
-            "rig_count": len(sorted_rig_ids),
-            "sensor_count": total_sensors,
-            "rigs": rig_defs,
-        },
-        "sensor_camera_indexes": np.array(all_sensor_camera_indexes, dtype=np.uint32),
-        "sensor_quaternions_wxyz": np.array(
-            all_sensor_quaternions_wxyz, dtype=np.float64
-        ),
-        "sensor_translations_xyz": np.array(
-            all_sensor_translations_xyz, dtype=np.float64
-        ),
-        "frames_metadata": {"frame_count": num_frames},
-        "rig_indexes": rig_indexes,
-        "image_sensor_indexes": image_sensor_indexes,
-        "image_frame_indexes": image_frame_indexes,
-    }
+    # sensor_from_rig poses come out of pycolmap in COLMAP convention;
+    # _conjugate_rig_sensor_poses S-conjugates them to canonical.
+    return _conjugate_rig_sensor_poses(
+        {
+            "rigs_metadata": {
+                "rig_count": len(sorted_rig_ids),
+                "sensor_count": total_sensors,
+                "rigs": rig_defs,
+            },
+            "sensor_camera_indexes": np.array(
+                all_sensor_camera_indexes, dtype=np.uint32
+            ),
+            "sensor_quaternions_wxyz": np.array(
+                all_sensor_quaternions_wxyz, dtype=np.float64
+            ),
+            "sensor_translations_xyz": np.array(
+                all_sensor_translations_xyz, dtype=np.float64
+            ),
+            "frames_metadata": {"frame_count": num_frames},
+            "rig_indexes": rig_indexes,
+            "image_sensor_indexes": image_sensor_indexes,
+            "image_frame_indexes": image_frame_indexes,
+        }
+    )
 
 
-def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None):
+def save_colmap_binary(
+    recon,
+    output_dir: Path,
+    max_features: int | None = None,
+    apply_world_rotation: bool = True,
+):
     """Export a SfmrReconstruction to COLMAP binary format.
 
     Creates cameras.bin, images.bin, points3D.bin, rigs.bin, and frames.bin
@@ -584,10 +712,17 @@ def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None)
     .sfmr spec (one trivial single-sensor rig per camera, one frame per
     image) so rigs.bin and frames.bin are always present.
 
+    The canonical poses/points are converted back to COLMAP convention on the
+    way out (inverse of the import conversion). Pass
+    ``apply_world_rotation=False`` for an in-pipeline round trip (D3), applying
+    ``S`` on the camera frames only and leaving the world untouched.
+
     Args:
         recon: SfmrReconstruction object to export
         output_dir: Directory to write COLMAP binary files
         max_features: Maximum features to export per image (None = all features)
+        apply_world_rotation: Apply the ``W^-1`` world rotation (external
+            export). False for an S-only in-pipeline round trip.
     """
     from .._sfmtool.io import write_colmap_binary
 
@@ -639,12 +774,21 @@ def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None)
             reprojection_errors = reprojection_errors[surviving_point_ids]
             track_point3d_indexes = old_to_new[track_point3d_indexes].astype(np.uint32)
 
+    quaternions_wxyz, translations_xyz, positions_xyz = (
+        _canonical_poses_points_to_colmap(
+            recon.quaternions_wxyz,
+            recon.translations,
+            positions_xyz,
+            apply_world_rotation,
+        )
+    )
+
     data = {
         "cameras": recon.cameras,
         "image_names": recon.image_names,
         "camera_indexes": recon.camera_indexes,
-        "quaternions_wxyz": recon.quaternions_wxyz,
-        "translations_xyz": recon.translations,
+        "quaternions_wxyz": quaternions_wxyz,
+        "translations_xyz": translations_xyz,
         "positions_xyz": positions_xyz,
         "colors_rgb": colors_rgb,
         "reprojection_errors": reprojection_errors,
@@ -654,8 +798,10 @@ def save_colmap_binary(recon, output_dir: Path, max_features: int | None = None)
         "keypoints_per_image": keypoints_per_image,
     }
 
-    if recon.rig_frame_data is not None:
-        data["rig_frame_data"] = recon.rig_frame_data
+    # sensor_from_rig poses convert with a plain S-conjugation (involutive).
+    rig_frame_data = _conjugate_rig_sensor_poses(recon.rig_frame_data)
+    if rig_frame_data is not None:
+        data["rig_frame_data"] = rig_frame_data
 
     num_cameras = len(recon.cameras)
     num_images = len(recon.image_names)

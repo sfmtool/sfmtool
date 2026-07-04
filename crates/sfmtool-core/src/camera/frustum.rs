@@ -7,13 +7,17 @@ use rand::RngExt;
 
 /// Compute 8 corners of a camera frustum in world coordinates.
 ///
+/// The camera frame is the canonical convention: the camera looks down −Z
+/// with +X right and +Y up; `near_z` / `far_z` are positive **depths**
+/// (camera-space `−z`).
+///
 /// # Arguments
 /// * `camera_center` - Camera center in world coordinates
 /// * `r_world_from_cam` - Row-major 3x3 rotation matrix (camera to world)
 /// * `fx`, `fy` - Focal lengths
 /// * `cx`, `cy` - Principal point
 /// * `width`, `height` - Image dimensions in pixels
-/// * `near_z`, `far_z` - Near and far plane Z distances
+/// * `near_z`, `far_z` - Near and far plane depths (positive in front)
 ///
 /// # Returns
 /// `[f64; 24]` containing 8 corners x 3 coordinates.
@@ -58,10 +62,14 @@ pub fn compute_frustum_corners(
         let x_norm = (px - cx) / fx;
         let y_norm = (py - cy) / fy;
 
-        let dir_cam = Vector3::new(x_norm, y_norm, 1.0).normalize();
+        // Canonical pinhole ray: pixel y grows down, camera +Y is up, and the
+        // optical axis is −Z.
+        let dir_cam = Vector3::new(x_norm, -y_norm, -1.0).normalize();
 
-        let t_near = near_z / dir_cam[2];
-        let t_far = far_z / dir_cam[2];
+        // Intersect the ray with the plane of depth `near_z`/`far_z`
+        // (camera-space z = −near_z / −far_z). dir_cam[2] < 0, so t > 0.
+        let t_near = -near_z / dir_cam[2];
+        let t_far = -far_z / dir_cam[2];
 
         let point_near_cam = dir_cam * t_near;
         let point_far_cam = dir_cam * t_far;
@@ -377,7 +385,7 @@ pub struct DistortedFrustumGrid {
 /// * `camera_center` - Camera center in world coordinates
 /// * `r_world_from_cam` - Row-major 3×3 rotation matrix (camera to world)
 /// * `camera` - Camera intrinsics (includes model, width, height)
-/// * `far_z` - Far plane Z distance
+/// * `far_z` - Far plane depth (positive in front; camera-space z = −far_z)
 /// * `subdivisions` - Number of subdivisions per edge (N-1); grid has N×N vertices
 pub fn compute_distorted_frustum_grid(
     camera_center: &[f64; 3],
@@ -420,8 +428,10 @@ pub fn compute_distorted_frustum_grid(
                 // Spherical: place at distance far_z along ray
                 dir * far_z
             } else {
-                // Flat: perspective projection, intersect ray with z = far_z plane
-                dir * (far_z / dir[2])
+                // Flat: perspective projection, intersect the ray with the
+                // plane at depth far_z (camera-space z = −far_z; dir[2] < 0
+                // for a canonical in-front ray, so the factor is positive).
+                dir * (-far_z / dir[2])
             };
 
             // Transform to world space

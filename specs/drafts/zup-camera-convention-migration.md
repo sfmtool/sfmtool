@@ -1,8 +1,12 @@
 # Z-Up / −Z-Forward Coordinate Convention — Migration Plan
 
-**Status**: Draft roadmap (documentation only — no code changed yet beyond the
-prerequisites noted in §3).
-**Date**: 2026-07-03. **Branch**: `sfmr-z-up`.
+**Status**: **IMPLEMENTED** (2026-07-04, branch `zup-core-flip`). All steps 1–6
+complete and reviewed; the tree is green in both languages and end-to-end
+acceptance passes (see the §12 step status notes). The only open item is the
+human-in-the-loop GUI visual confirmation (§12 step 4/6). Originally authored
+as a draft roadmap; the per-step status notes below record what landed.
+**Date**: 2026-07-03 (authored); 2026-07-04 (implemented). **Branch**: `zup-core-flip`
+(cut from `sfmr-z-up`).
 **Companion spec change**: `specs/formats/sfmr-file-format.md` § "Coordinate
 System Conventions" (added in the same change as this document).
 
@@ -199,6 +203,18 @@ The heart of the change. All paths below are relative to
   supplied poses; the *callers* must supply OpenCV-frame relative poses or the
   S-conjugated equivalents consistently (see §1 invariant). Audit callers.
 
+> _Status (2026-07-04, step 2): chose **caller-converts** for the whole
+> pixel-space pipeline — `compute_fundamental_matrix`, `check_rectification_safe`,
+> `compute_stereo_rectification`, `rectify_points`, and
+> `features/feature_match/mod.rs::match_image_pair` keep their math unchanged and
+> now **document an OpenCV/optical-frame pose contract** (callers S-premultiply /
+> S-conjugate first, via `geometry::convention`). Rationale: F → epipoles →
+> rectification homographies → sweep/polar matching is one pixel-space K-matrix
+> system; converting inside `compute_stereo_rectification` only would split one
+> pipeline across conventions and double-convert `match_image_pair`. Consistent
+> with §1 and C.3 (Python callers convert in step 5). **Confirm before wiring the
+> Python side (step 5).**_
+
 ### A.4 Reconstruction data — `reconstruction/data.rs`
 
 - [ ] `observation_reprojection_error` (~L1348–1368): `p_cam.z <= 0` gate →
@@ -226,6 +242,14 @@ The heart of the change. All paths below are relative to
   world-space or already image-raster-correct; **no change**, verified by the
   Jacobian regression test and existing photometric tests (§3).
 
+> _Status (2026-07-04, step 2): plan gap — `normal_refine/fronto_cache.rs`
+> `corner_norm_pts` had a real camera-frame cheirality gate (`p.z <= 1e-9`)
+> despite this section declaring `normal_refine` unchanged; without flipping it
+> (now rejects `p.z >= −1e-9`) every fronto base is rejected and the cached
+> normal-refine path silently dies. The `(x/z, y/z)` divide is left as-is: it
+> differs from true normalized coords by a fixed mirror that provably cancels in
+> the composed `a0_inv · ap` same-view grid→grid affine (comment added in code)._
+
 ### A.6 Analysis — `analysis/`
 
 - [ ] `image_pair_graph.rs` `compute_camera_directions` (~L32–69): code uses
@@ -240,12 +264,30 @@ The heart of the change. All paths below are relative to
   rides on `pixel_to_ray`; verify classification tests still pass.
 - `geometry/viewing_angle.rs`, `spatial.rs`: world-space; no change.
 
+> _Status (2026-07-04, step 2): plan gap — `analysis/point_inspect.rs`
+> incidence angle was `acos(ray.z)`; flipped to `acos(−ray.z)` (angle off the
+> −Z optical axis). Not enumerated above but a baked camera-axis sign. The A.6
+> direction-sign lock test (`test_camera_direction_sign_matches_look_at_forward`)
+> was added as planned._
+
 ### A.7 Spherical tiles — `spherical/tile_rig.rs`
 
 - [ ] Tile frames are equirect/pinhole camera frames: flip the cheirality
   gates `tz <= 1e-9` (~L806, ~L926) and re-derive the tile forward axis for
   −Z-forward tile cameras; `sphere_points.rs` / `per_tile_source_stack.rs`
   ride along.
+
+> _Status (2026-07-04, step 2): implemented via a new
+> `SphericalTileRig::tile_camera_rotation(idx)` = columns
+> `[e_right | −e_up | −direction]` (content-preserving: tile raster stays
+> bit-identical to pre-flip); `warp_to_atlas_with_rotation`, `resample_atlas`
+> (gate rejects `tz >= −1e-9`), `warp_from_atlas_with_rotation`, and
+> `per_tile_source_stack.rs` use it. The stored tangent bases, `build_basis`,
+> `tile_rotation()`, and the `.camrig` round trip are **left byte-stable** —
+> the `.camrig` flip is D5/step 3. Note: `build_basis`'s world-up reference is
+> still ±Y, so under the Z-up world tiles are internally rolled vs. gravity
+> (harmless, write/read-symmetric) — **revisit the up reference in step 3
+> alongside D5.**_
 
 ### A.8 Convention-agnostic core (verify, don't touch)
 
@@ -549,18 +591,44 @@ kerry_park rig artifacts (D.4).
   field notes, v5 migration (done with this plan).
 - [x] `specs/formats/camrig-file-format.md` — sensor-frame convention (D5).
 - [x] `specs/formats/matches-file-format.md` — relative-pose convention (D6).
-- [ ] `specs/workspace/rig-config.md` — explicitly COLMAP-convention (D4).
-- [ ] `specs/cli/to-nerfstudio-command.md` — "Coordinate Conversion" section.
-- [ ] `specs/cli/{to,from}-colmap-bin-command.md`,
+- [x] `specs/workspace/rig-config.md` — explicitly COLMAP-convention (D4).
+- [x] `specs/cli/to-nerfstudio-command.md` — "Coordinate Conversion" section.
+- [x] `specs/cli/{to,from}-colmap-bin-command.md`,
   `specs/cli/to-colmap-db-command.md`, `specs/cli/solve-command.md` — note
   the boundary conversion.
-- [ ] `specs/gui/gui-camera-views.md` — remove the COLMAP bridge description.
-- [ ] `specs/cli/pano2rig-command.md`, `specs/cli/insv2rig-command.md`.
-- [ ] Sweep remaining specs for "+Z", "Y down", "COLMAP convention"
+- [x] `specs/gui/gui-camera-views.md` — remove the COLMAP bridge description.
+- [x] `specs/cli/pano2rig-command.md`, `specs/cli/insv2rig-command.md`.
+- [x] Sweep remaining specs for "+Z", "Y down", "COLMAP convention"
   (`specs/core/epipolar-curves.md`, `ray-grid-projection.md`,
   `spherical-tiles-rig.md`, `image-warping.md`, `patch-*.md`, …) and fix
   narratives.
-- [ ] `docs/` tutorials if any mention axes.
+- [x] `docs/` tutorials if any mention axes.
+
+> _Status (2026-07-04): Done — all Area-H spec/doc updates landed in **#163**
+> (`d5dcfa8`, 16 files). `docs/` checked: no tutorial mentions camera/world
+> axes, so no docs changes were needed. Three items the sweep flagged for
+> confirmation as later steps land the code:_
+> 1. _**`spherical-tiles-rig.md` vs. Step-2 code — real divergence, resolve in
+>    Step 3 (D5).** #163 documents the stored tangent basis as
+>    `e_right × e_up = −direction` with `R_world_from_tile = [e_right | e_up |
+>    −direction]` (a canonical −Z-forward frame, stored basis flipped). But the
+>    landed Step-2 code (A.7) kept the stored basis **byte-stable** at
+>    `e_right × e_up = direction` (`tile_rig.rs:148,289`), left `tile_rotation()`
+>    as `[e_right | e_up | direction]`, and added a separate
+>    `tile_camera_rotation()` = `[e_right | −e_up | −direction]`. The spec is
+>    ahead of the code. **Recommended resolution:** in Step 3, flip the stored
+>    basis to match the spec (makes `R_world_from_tile` the canonical camera
+>    rotation directly, retires `tile_camera_rotation()`, and aligns with the
+>    `.camrig` flip D5 performs anyway); regenerate the tile-rig `.camrig` test
+>    data with it. Alternatively keep byte-stable and walk the spec back — but
+>    the flip is cleaner and D5 touches this data regardless._
+> 2. _**`image-warping.md` equirect formulas** (`longitude = atan2(rx, −rz)`,
+>    positive-up latitude, `v = fy·(−latitude)+cy`) were written self-consistent
+>    but ahead of code; A.1 has since landed — treat the code as source of truth
+>    and confirm the spec matches during Step-3 verification._
+> 3. _**`epipolar-curves.md` cheirality** flipped to `Xc.z < 0` mirrors the
+>    landed A.3 gate; the >180°-FOV exclusion it now states explicitly is
+>    pre-existing, not introduced by the migration._
 
 ---
 
@@ -587,19 +655,62 @@ compiling, full green only at the end):
    (camera models → frustum/epipolar/rectification → reconstruction →
    patch → analysis → spherical). *Verify:* `pixi run cargo test --workspace`
    (GUI compiles; its data still looks wrong until step 4).
+
+   > _Status (2026-07-04): Done on branch `zup-core-flip` (commits `40b4848`,
+   > `b88e58f`, `edb6455`, `d80530b`). D7 `S`-boundary applied in
+   > `camera/distortion.rs` (`project`/`unproject`/`distort_ray`/
+   > `undistort_to_ray`), cheirality gates flipped (`z < 0` in front, depth
+   > `−z`), `demo()` look-at rebuilt to canonical rows `[right, up, −forward]`,
+   > `depth_stats.rs` depth negated. `cargo test --workspace` green
+   > (932 passed / 0 failed); `fmt`/`clippy --workspace` clean. Python
+   > intentionally left inconsistent (its suite is red until steps 3–5).
+   > Four judgement calls beyond the plan text — see the dated notes at A.3,
+   > A.5, A.6, A.7 — need confirmation before the dependent later steps._
 3. **Format v5 + boundaries** — upgrade-on-load (B), COLMAP boundary (C),
    camrig/matches (B, D5/D6), nerfstudio/pano2rig/insv2rig (D). Rebuild
    bindings: `pixi run maturin develop --release`. *Verify:*
    `pixi run test -- tests/test_colmap_interop.py tests/test_solve.py
    tests/test_to_nerfstudio.py tests/test_camrig.py tests/test_pano2rig.py
    tests/test_fisheye_rig.py`.
+
+   > _Status (2026-07-04): Done. **3a (Rust format layer)** commits `944eca8`
+   > (`.sfmr`→v5 upgrade-on-load in `SfmrReconstruction::load` — the conversion
+   > lives in `sfmtool-core`, not `sfmr-format`, per crate layering), `ef74c66`
+   > (`.matches`→v2 + `sfmr-colmap` DB↔matches conjugation moved into Rust),
+   > `7a1d454` (`.camrig`→v2), `caadde1` (tile-basis flip; `tile_camera_rotation`
+   > retired — the §11 A.7 divergence resolved by adopting the spec's stored
+   > basis). **3b (Python boundaries)** commits `04f721f`/`1af1d80`/`32f7fe2`/
+   > `d442913`: `colmap/io.py` S+W import/export with `apply_world_rotation`
+   > flag; S-only in-pipeline pycolmap round trips (BA, densify, merge-PnP,
+   > sweeps); DB export/setup convert only where Rust doesn't (NOT around
+   > `*_colmap_db_matches`); nerfstudio identity, pano2rig/insv2rig, kerry_park
+   > `.camrig` regenerated to v2. Both reviewed (approve / approve-with-nits);
+   > primary gate 127 passed. Key correction: merge-PnP feeds world points
+   > **as-is**, S-flips only the returned pose (world is convention-agnostic)._
 4. **GUI** — area F. *Verify:* `pixi run gui -- <freshly solved .sfmr>` —
    scene sits on the grid right-side-up; Z-key camera view matches the
    photo (un-mirrored, upright); frusta point at the point cloud.
+
+   > _Status (2026-07-04): Done — commit `5bfcc24`. Removed the COLMAP→GL
+   > 180°-about-X bridge in `viewer_3d/mod.rs` `enter_camera_view`
+   > (`end_orientation = image.quaternion_wxyz` directly); frustum/background/
+   > patch-cull passenger paths ride the Step-2 core changes unchanged.
+   > `cargo test -p sfm-explorer` green; reviewed. **The live visual check
+   > above still needs a human with a display — deferred to step 6/human.**_
 5. **Python internal + full sweep** — area E, remaining tests (G), specs (H).
    *Verify:* `pixi run test`, `pixi run cargo test --workspace`,
    `pixi run fmt && pixi run check`,
    `pixi run cargo fmt && pixi run cargo clippy --workspace`.
+
+   > _Status (2026-07-04): Done — commits `35fc804` (Area-E sign flips:
+   > `_patch_renderer`, `_epipolar_display`, `feature_match/_geometry`,
+   > `_image_pair_graph`, `_solve_strips`, `_rectification` — camera-space
+   > flips only; world-space sites verified untouched) and `d9758cc` (test
+   > fixtures corrected to canonical truth + new `compute_camera_directions`
+   > sign test; `_inject_infinity` now uses a world mean-look-direction
+   > bearing). Specs (H) were already done in #163. Full green:
+   > `pixi run test` **1579 passed / 0 failed**, `cargo test --workspace` 0
+   > failed, `fmt`/`check`/`clippy` clean. Reviewed — approve, no bugs._
 6. **End-to-end acceptance** — re-run `scripts/init_dataset_seoul_bull.sh`
    and `init_dataset_kerry_park.sh` into fresh workspaces; `sfm solve` both;
    inspect in the GUI; `sfm to-colmap-bin` → COLMAP GUI/`from-colmap-bin`
@@ -608,6 +719,17 @@ compiling, full green only at the end):
    (old-pipeline export of an old file should be *numerically identical* to
    new-pipeline export of the upgraded file — a strong global check, since
    Nerfstudio's target convention equals our new one).
+
+   > _Status (2026-07-04): PASS (automated checks). Full suite green
+   > (1579 Python + Rust workspace, 0 failed; fmt/check/clippy clean).
+   > seoul_bull incremental solve → v5 `.sfmr`, cameras upright
+   > (mean up_z +0.797), all depths positive. `to-colmap-bin`→`from-colmap-bin`
+   > round trip is identity to float noise (max |Δquat| 2.2e-16, |Δt| 0,
+   > |Δpoint| 0). `to-nerfstudio` `applied_transform` = exact identity 3×4,
+   > PLY 852 finite verts. kerry_park fisheye rig solves to v5 with
+   > `rig_frame_data`, rig upright (up_z 0.993). **Open:** the human GUI
+   > visual confirmation (scene upright on grid, Z-key view matches photo
+   > un-mirrored, frusta at the cloud) — needs a display._
 
 Key dependencies:
 

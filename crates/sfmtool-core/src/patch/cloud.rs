@@ -640,14 +640,14 @@ impl PatchCloud {
     }
 }
 
-/// In-plane "up" hint for a patch frame: the first observing camera's down axis
-/// (`-y`) rotated into world, or world `+y` when the point has no observation.
-/// Shared by the finite and infinity patch builders so they pin the in-plane
-/// rotation identically.
+/// In-plane "up" hint for a patch frame: the first observing camera's up axis
+/// (canonical camera `+y` — image up) rotated into world, or world `+y` when
+/// the point has no observation. Shared by the finite and infinity patch
+/// builders so they pin the in-plane rotation identically.
 fn first_view_up(recon: &SfmrReconstruction, first_image_index: Option<u32>) -> Vector3<f64> {
     match first_image_index {
         Some(idx) => {
-            recon.images[idx as usize].quaternion_wxyz.inverse() * Vector3::new(0.0, -1.0, 0.0)
+            recon.images[idx as usize].quaternion_wxyz.inverse() * Vector3::new(0.0, 1.0, 0.0)
         }
         None => Vector3::y(),
     }

@@ -18,28 +18,6 @@ from .._sfmtool.geometry import RotQuaternion
 from ._common import get_color_palette
 
 
-def _compute_fundamental_matrix(
-    K1: np.ndarray,
-    R1: np.ndarray,
-    t1: np.ndarray,
-    K2: np.ndarray,
-    R2: np.ndarray,
-    t2: np.ndarray,
-) -> np.ndarray:
-    """Compute fundamental matrix from two camera poses.
-
-    F relates corresponding points: x2^T F x1 = 0.
-    """
-    R_rel = R2 @ R1.T
-    t_rel = t2 - R_rel @ t1
-    t_skew = np.array(
-        [[0, -t_rel[2], t_rel[1]], [t_rel[2], 0, -t_rel[0]], [-t_rel[1], t_rel[0], 0]]
-    )
-    E = t_skew @ R_rel
-    F = np.linalg.inv(K2).T @ E @ np.linalg.inv(K1)
-    return F
-
-
 def _draw_epipolar_line(
     image: np.ndarray,
     line: np.ndarray,
@@ -102,7 +80,9 @@ def _curve_anchor_depths(
         return depths
     pids = track_point_indexes[valid]
     points = np.asarray(recon.positions)[pids]
-    track_depths = points @ R_from[2, :] + t_from[2]
+    # Canonical cameras look down -Z, so depth (positive in front) is -z, where
+    # z = R_from[2, :] · X + t_from[2] is the camera-space z of the track point.
+    track_depths = -(points @ R_from[2, :] + t_from[2])
     in_front = track_depths > 0
     if in_front.any():
         valid_idx = np.where(valid)[0]
@@ -219,13 +199,25 @@ def draw_epipolar_visualization(
             "the original images) or --undistort."
         )
 
-    # Get camera poses (cam_from_world)
+    # Get camera poses (cam_from_world). These are canonical (.sfmr) poses:
+    # cameras look down -Z. They drive the canonical epipolar-curve renderer and
+    # the depth seeding directly.
     quat1 = quaternions[image1_idx]
     quat2 = quaternions[image2_idx]
     R1 = RotQuaternion.from_wxyz_array(quat1).to_rotation_matrix()
-    t1 = translations[image1_idx]
+    t1 = np.asarray(translations[image1_idx], dtype=np.float64)
     R2 = RotQuaternion.from_wxyz_array(quat2).to_rotation_matrix()
-    t2 = translations[image2_idx]
+    t2 = np.asarray(translations[image2_idx], dtype=np.float64)
+
+    # OpenCV/COLMAP-frame poses for the pixel-space consumers below (pycolmap
+    # epipolar-guided matching and cv2.stereoRectify, which both expect +Z-forward
+    # camera frames): S-flip the canonical camera frames (S-only; §1 invariant).
+    from ..colmap.convention import flip_camera_pose_s
+
+    q1_cv, t1_cv = flip_camera_pose_s(quat1, t1)
+    q2_cv, t2_cv = flip_camera_pose_s(quat2, t2)
+    R1_cv = RotQuaternion.from_wxyz_array(q1_cv).to_rotation_matrix()
+    R2_cv = RotQuaternion.from_wxyz_array(q2_cv).to_rotation_matrix()
 
     # Load SIFT features
     image1_path = workspace_dir / image_names[image1_idx]
@@ -284,14 +276,9 @@ def draw_epipolar_visualization(
             K1_check, R1, t1, K2_check, R2, t2, width=w1, height=h1, margin=50
         )
 
-        # Create pycolmap poses
-        quat1_wxyz = quaternions[image1_idx]
-        quat1_xyzw = np.roll(quat1_wxyz, -1)
-        pose1 = pycolmap.Rigid3d(pycolmap.Rotation3d(quat1_xyzw), t1)
-
-        quat2_wxyz = quaternions[image2_idx]
-        quat2_xyzw = np.roll(quat2_wxyz, -1)
-        pose2 = pycolmap.Rigid3d(pycolmap.Rotation3d(quat2_xyzw), t2)
+        # Create pycolmap poses in OpenCV frame for the epipolar-guided matcher.
+        pose1 = pycolmap.Rigid3d(pycolmap.Rotation3d(np.roll(q1_cv, -1)), t1_cv)
+        pose2 = pycolmap.Rigid3d(pycolmap.Rotation3d(np.roll(q2_cv, -1)), t2_cv)
 
         from ..feature_match import match_image_pair
 
@@ -317,8 +304,8 @@ def draw_epipolar_visualization(
                 options, bitmap2, cam2
             )
 
-            R_rel = R2 @ R1.T
-            t_rel = t2 - R_rel @ t1
+            R_rel = R2_cv @ R1_cv.T
+            t_rel = t2_cv - R_rel @ t1_cv
 
             rectification = compute_stereo_rectification(
                 cam1, cam2, undist_cam1, undist_cam2, R_rel, t_rel
@@ -335,8 +322,8 @@ def draw_epipolar_visualization(
                 options, bitmap2, cam2
             )
 
-            R_rel = R2 @ R1.T
-            t_rel = t2 - R_rel @ t1
+            R_rel = R2_cv @ R1_cv.T
+            t_rel = t2_cv - R_rel @ t1_cv
             rect_pts1 = None
             rect_pts2 = None
 
@@ -433,8 +420,8 @@ def draw_epipolar_visualization(
                 options, bitmap2, cam2
             )
 
-            R_rel = R2 @ R1.T
-            t_rel = t2 - R_rel @ t1
+            R_rel = R2_cv @ R1_cv.T
+            t_rel = t2_cv - R_rel @ t1_cv
 
             rectification = compute_stereo_rectification(
                 cam1, cam2, undist_cam1, undist_cam2, R_rel, t_rel
@@ -501,9 +488,11 @@ def draw_epipolar_visualization(
         undist_pts1 = np.array([undist_cam1.img_from_cam(p) for p in undist_pts1])
         undist_pts2 = np.array([undist_cam2.img_from_cam(p) for p in undist_pts2])
 
+        from ..feature_match._geometry import get_fundamental_matrix
+
         K1_undist = get_intrinsic_matrix(undist_cam1)
         K2_undist = get_intrinsic_matrix(undist_cam2)
-        F_undist = _compute_fundamental_matrix(K1_undist, R1, t1, K2_undist, R2, t2)
+        F_undist = get_fundamental_matrix(K1_undist, R1, t1, K2_undist, R2, t2)
 
         for i in range(len(undist_pts1)):
             color = colors[i]

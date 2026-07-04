@@ -283,15 +283,22 @@ def _setup_db_with_rigs(
 def _rigid3d_sensor_from_rig(rig_data: dict, sensor_idx: int) -> pycolmap.Rigid3d:
     """Build the `sensor_from_rig` pose of a `.camrig` sensor as a Rigid3d.
 
-    The `.camrig` format stores quaternions WXYZ; pycolmap's `Rotation3d`
-    takes XYZW.
+    The `.camrig` stores canonical `sensor_from_rig` poses (WXYZ); this COLMAP
+    database is a COLMAP-convention artifact, so S-conjugate the rig-relative
+    pose to COLMAP here (`W` cancels for relative poses). pycolmap's
+    `Rotation3d` takes XYZW.
     """
     import numpy as np
 
-    q = rig_data["quaternions_wxyz"][sensor_idx]
-    t = rig_data["translations_xyz"][sensor_idx]
-    xyzw = np.array([q[1], q[2], q[3], q[0]], dtype=np.float64)
-    return pycolmap.Rigid3d(pycolmap.Rotation3d(xyzw), np.asarray(t, dtype=np.float64))
+    from .convention import relative_pose_conjugate_s
+
+    q = np.asarray(rig_data["quaternions_wxyz"][sensor_idx], dtype=np.float64)
+    t = np.asarray(rig_data["translations_xyz"][sensor_idx], dtype=np.float64)
+    q_colmap, t_colmap = relative_pose_conjugate_s(q, t)
+    xyzw = np.array(
+        [q_colmap[1], q_colmap[2], q_colmap[3], q_colmap[0]], dtype=np.float64
+    )
+    return pycolmap.Rigid3d(pycolmap.Rotation3d(xyzw), t_colmap)
 
 
 def _setup_db_with_camrig(

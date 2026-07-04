@@ -123,7 +123,7 @@ pub fn write_camrig<'py>(
 
     let data = camrig_format::CamRigData {
         metadata: camrig_format::CamRigMetadata {
-            version: 1,
+            version: camrig_format::CAMRIG_FORMAT_VERSION,
             name,
             sensor_count: camera_indexes.len() as u32,
             camera_count: cameras.len() as u32,

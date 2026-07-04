@@ -11,7 +11,7 @@ fn make_test_data() -> MatchesData {
 
     MatchesData {
         metadata: MatchesMetadata {
-            version: 1,
+            version: MATCHES_FORMAT_VERSION,
             matching_method: "sequential".into(),
             matching_tool: "colmap".into(),
             matching_tool_version: "4.02".into(),
@@ -118,11 +118,22 @@ fn make_test_data_with_tvg() -> MatchesData {
         h_matrices: Array3::zeros((pair_count, 3, 3)),
         quaternions_wxyz: {
             let mut q = Array2::zeros((pair_count, 4));
-            q[[0, 0]] = 1.0; // identity for pair 0
-            q[[1, 0]] = 1.0; // identity for pair 1
+            // Non-trivial pose for pair 0 so convention tests can observe
+            // the S-conjugation; identity for pair 1.
+            q[[0, 0]] = 0.9;
+            q[[0, 1]] = 0.1;
+            q[[0, 2]] = 0.2;
+            q[[0, 3]] = 0.3;
+            q[[1, 0]] = 1.0;
             q
         },
-        translations_xyz: Array2::zeros((pair_count, 3)),
+        translations_xyz: {
+            let mut t = Array2::zeros((pair_count, 3));
+            t[[0, 0]] = 1.0;
+            t[[0, 1]] = 0.5;
+            t[[0, 2]] = 0.25;
+            t
+        },
     });
 
     data
@@ -292,7 +303,7 @@ fn test_content_hash_with_tvg() {
 fn test_empty_matches() {
     let data = MatchesData {
         metadata: MatchesMetadata {
-            version: 1,
+            version: MATCHES_FORMAT_VERSION,
             matching_method: "exhaustive".into(),
             matching_tool: "colmap".into(),
             matching_tool_version: "4.02".into(),
@@ -481,6 +492,162 @@ fn test_two_view_geometry_config_round_trip() {
 fn test_invalid_config_string() {
     let result = "bogus".parse::<TwoViewGeometryConfig>();
     assert!(result.is_err());
+}
+
+/// Copy a written `.matches` archive, rewriting `metadata.json.zst` so its
+/// `version` field reads `version`, and recomputing the stored hashes so the
+/// result is an internally consistent file of that version — for authoring
+/// old- or future-version fixture bytes.
+fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version: u32) {
+    use std::io::{Read, Write};
+
+    use crate::archive_io::format_hash;
+
+    let archive_file = std::fs::File::open(src).unwrap();
+    let mut archive = zip::ZipArchive::new(archive_file).unwrap();
+    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+
+    // Author the new metadata JSON and its hash (hashes cover the
+    // uncompressed JSON bytes).
+    let mut meta_compressed = Vec::new();
+    archive
+        .by_name("metadata.json.zst")
+        .unwrap()
+        .read_to_end(&mut meta_compressed)
+        .unwrap();
+    let mut meta_json: serde_json::Value =
+        serde_json::from_slice(&zstd::stream::decode_all(&meta_compressed[..]).unwrap()).unwrap();
+    meta_json
+        .as_object_mut()
+        .unwrap()
+        .insert("version".into(), serde_json::json!(version));
+    let meta_bytes = serde_json::to_vec(&meta_json).unwrap();
+    let meta_hash = xxhash_rust::xxh3::xxh3_128(&meta_bytes);
+
+    // Rebuild the content hash from the stored per-section digests with the
+    // metadata digest replaced (writer order: metadata, images, pairs, tvg).
+    let mut hash_compressed = Vec::new();
+    archive
+        .by_name("content_hash.json.zst")
+        .unwrap()
+        .read_to_end(&mut hash_compressed)
+        .unwrap();
+    let mut stored_hashes: MatchesContentHash =
+        serde_json::from_slice(&zstd::stream::decode_all(&hash_compressed[..]).unwrap()).unwrap();
+    let parse = |hex: &str| u128::from_str_radix(hex, 16).unwrap();
+    let mut digests = vec![meta_hash, parse(&stored_hashes.images_xxh128)];
+    digests.push(parse(&stored_hashes.image_pairs_xxh128));
+    if let Some(tvg) = &stored_hashes.two_view_geometries_xxh128 {
+        digests.push(parse(tvg));
+    }
+    let all_digests_bytes: Vec<u8> = digests.iter().flat_map(|d| d.to_be_bytes()).collect();
+    stored_hashes.metadata_xxh128 = format_hash(meta_hash);
+    stored_hashes.content_xxh128 = format_hash(xxhash_rust::xxh3::xxh3_128(&all_digests_bytes));
+
+    let out = std::fs::File::create(dst).unwrap();
+    let mut zip_out = zip::ZipWriter::new(out);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for name in &names {
+        let mut compressed = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        zip_out.start_file(name, stored).unwrap();
+        if name == "metadata.json.zst" {
+            let bytes = zstd::bulk::compress(&meta_bytes, 3).unwrap();
+            zip_out.write_all(&bytes).unwrap();
+        } else if name == "content_hash.json.zst" {
+            let bytes =
+                zstd::bulk::compress(&serde_json::to_vec(&stored_hashes).unwrap(), 3).unwrap();
+            zip_out.write_all(&bytes).unwrap();
+        } else {
+            zip_out.write_all(&compressed).unwrap();
+        }
+    }
+    zip_out.finish().unwrap();
+}
+
+#[test]
+fn test_writer_always_writes_current_version() {
+    let mut data = make_test_data();
+    data.metadata.version = 1; // stale caller-supplied version is overridden
+    let dir = std::env::temp_dir().join("matches_test_write_version");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.matches");
+
+    write_matches(&path, &data, 3).unwrap();
+    let metadata = read_matches_metadata(&path).unwrap();
+    assert_eq!(metadata.version, MATCHES_FORMAT_VERSION);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_version_1_relative_poses_upgrade_on_load() {
+    let data = make_test_data_with_tvg();
+    let dir = std::env::temp_dir().join("matches_test_v1_upgrade");
+    std::fs::create_dir_all(&dir).unwrap();
+    let v2_path = dir.join("v2.matches");
+    let v1_path = dir.join("v1.matches");
+
+    write_matches(&v2_path, &data, 3).unwrap();
+    rewrite_matches_version(&v2_path, &v1_path, 1);
+    assert_eq!(read_matches_metadata(&v1_path).unwrap().version, 1);
+
+    // Hashes cover the stored bytes: the v1 file verifies as written,
+    // before any in-memory conversion.
+    let (valid, errors) = verify_matches(&v1_path).unwrap();
+    assert!(valid, "v1 fixture failed verification: {errors:?}");
+
+    let loaded = read_matches(&v1_path).unwrap();
+    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
+    let tvg = loaded.two_view_geometries.as_ref().unwrap();
+    let orig = data.two_view_geometries.as_ref().unwrap();
+
+    // Relative poses are S-conjugated: w/x keep, y/z negate; same for t.
+    for k in 0..tvg.quaternions_wxyz.nrows() {
+        assert_eq!(tvg.quaternions_wxyz[[k, 0]], orig.quaternions_wxyz[[k, 0]]);
+        assert_eq!(tvg.quaternions_wxyz[[k, 1]], orig.quaternions_wxyz[[k, 1]]);
+        assert_eq!(tvg.quaternions_wxyz[[k, 2]], -orig.quaternions_wxyz[[k, 2]]);
+        assert_eq!(tvg.quaternions_wxyz[[k, 3]], -orig.quaternions_wxyz[[k, 3]]);
+        assert_eq!(tvg.translations_xyz[[k, 0]], orig.translations_xyz[[k, 0]]);
+        assert_eq!(tvg.translations_xyz[[k, 1]], -orig.translations_xyz[[k, 1]]);
+        assert_eq!(tvg.translations_xyz[[k, 2]], -orig.translations_xyz[[k, 2]]);
+    }
+
+    // Pixel-space F/E/H matrices are untouched by the upgrade.
+    assert_eq!(tvg.f_matrices, orig.f_matrices);
+    assert_eq!(tvg.e_matrices, orig.e_matrices);
+    assert_eq!(tvg.h_matrices, orig.h_matrices);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_unsupported_future_version_rejected() {
+    let data = make_test_data();
+    let dir = std::env::temp_dir().join("matches_test_future_version");
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("current.matches");
+    let dst = dir.join("future.matches");
+
+    write_matches(&src, &data, 3).unwrap();
+    let future_version = MATCHES_FORMAT_VERSION + 1;
+    rewrite_matches_version(&src, &dst, future_version);
+
+    let expected = format!("unsupported .matches format version {future_version}");
+    let err = read_matches(&dst).err().unwrap();
+    assert!(format!("{err}").contains(&expected), "{err}");
+    let (valid, errors) = verify_matches(&dst).unwrap();
+    assert!(
+        !valid && errors.iter().any(|e| e.contains(&expected)),
+        "{errors:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 // Every entry in a .matches archive MUST use ZIP's STORE method. Entries are already

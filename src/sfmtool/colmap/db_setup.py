@@ -481,10 +481,26 @@ def _write_matches_to_db(
                 )
                 is_zero_t = all(abs(v) < 1e-15 for v in t)
                 if not (is_identity_q and is_zero_t):
-                    quat_xyzw = [q[1], q[2], q[3], q[0]]
+                    # `.matches` stores canonical relative poses (cam2_from_cam1);
+                    # this DB is a COLMAP-convention artifact written directly via
+                    # pycolmap (bypassing the Rust matches<->DB path that would
+                    # convert), so S-conjugate to COLMAP here. The stored F/E/H
+                    # matrices are pixel-space and stay unchanged.
+                    from .convention import relative_pose_conjugate_s
+
+                    q_colmap, t_colmap = relative_pose_conjugate_s(
+                        np.asarray(q, dtype=np.float64),
+                        np.asarray(t, dtype=np.float64),
+                    )
+                    quat_xyzw = [
+                        q_colmap[1],
+                        q_colmap[2],
+                        q_colmap[3],
+                        q_colmap[0],
+                    ]
                     pose = pycolmap.Rigid3d(
                         rotation=pycolmap.Rotation3d(quat_xyzw),
-                        translation=t,
+                        translation=t_colmap,
                     )
                     tvg.cam2_from_cam1 = pose
 

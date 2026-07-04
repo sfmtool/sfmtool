@@ -162,7 +162,8 @@ def _render_image(
         np.asarray(cam.ray_to_pixel_batch(cam_pts.reshape(-1, 3))).reshape(p, 4, 2)
         * upscale
     )
-    depth = cam_pts[:, :, 2].mean(axis=1)
+    # Canonical cameras look down -Z, so depth (positive in front) is -z.
+    depth = -cam_pts[:, :, 2].mean(axis=1)
 
     visible = np.isfinite(px).all(axis=(1, 2)) & (depth > 0)
     if backface_cull:

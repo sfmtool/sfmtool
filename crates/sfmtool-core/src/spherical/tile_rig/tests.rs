@@ -111,9 +111,11 @@ fn equirect_pattern(width: u32, height: u32) -> Vec<f32> {
         for c in 0..width {
             let lon = -PI + 2.0 * PI * (c as f64 + 0.5) / width as f64;
             let cos_lat = lat.cos();
+            // Canonical equirect direction: longitude 0 looks down −Z,
+            // +X right, +Y (latitude) up.
             let dx = lon.sin() * cos_lat;
             let dy = lat.sin();
-            let dz = lon.cos() * cos_lat;
+            let dz = -(lon.cos() * cos_lat);
             img.push(smooth_pattern(dx, dy, dz) as f32);
         }
     }
@@ -415,9 +417,9 @@ fn basis_is_orthonormal_and_right_handed() {
         assert!(er_v.dot(&d_v).abs() < 1e-9);
         assert!(eu_v.dot(&d_v).abs() < 1e-9);
 
-        // Right-handed: e_right × e_up = direction.
+        // Canonical camera handedness: e_right × e_up = −direction.
         let cross = er_v.cross(&eu_v);
-        assert!((cross - d_v).norm() < 1e-9);
+        assert!((cross + d_v).norm() < 1e-9);
     }
 }
 
@@ -480,7 +482,8 @@ fn from_parts_rejects_non_orthonormal_basis() {
     bases[0][0] *= 2.0;
     expect_invalid(build(directions, bases));
 
-    // e_right and e_up of tile 0 swapped: orthonormal but left-handed.
+    // e_right and e_up of tile 0 swapped: orthonormal but wrongly oriented
+    // (the swap makes e_right × e_up = +direction instead of −direction).
     let (_, directions, mut bases) = rig_parts(&rig);
     bases[0].swap(0, 3);
     bases[0].swap(1, 4);
@@ -514,17 +517,17 @@ fn tile_camera_centre_pixel_unprojects_to_tile_direction() {
     let half = cam.width as f64 / 2.0;
 
     for i in 0..rig.len() {
-        // Centre pixel = (cx, cy); tile-frame ray must be (0, 0, 1).
+        // Centre pixel = (cx, cy); the canonical tile-camera ray must be
+        // (0, 0, −1).
         let ray = cam.pixel_to_ray(half, half);
-        // Rotate to world via R_world_from_tile · (0,0,1) = direction.
-        let basis = rig.basis(i);
+        // Rotate to world via R_world_from_tile_camera · (0,0,−1): the third
+        // column is −direction, so the world ray is the tile direction.
+        let rc = rig.tile_rotation(i);
         let dir = rig.direction(i);
-        // R · (0,0,1) is the third column = direction itself.
-        // Sanity: numerical equivalence.
         let world = [
-            basis.0[0] * ray[0] + basis.1[0] * ray[1] + dir[0] * ray[2],
-            basis.0[1] * ray[0] + basis.1[1] * ray[1] + dir[1] * ray[2],
-            basis.0[2] * ray[0] + basis.1[2] * ray[1] + dir[2] * ray[2],
+            rc[0] * ray[0] + rc[3] * ray[1] + rc[6] * ray[2],
+            rc[1] * ray[0] + rc[4] * ray[1] + rc[7] * ray[2],
+            rc[2] * ray[0] + rc[5] * ray[1] + rc[8] * ray[2],
         ];
         assert!(
             ((world[0] - dir[0]).abs() < 1e-6)
@@ -568,7 +571,7 @@ fn apply_transform_rotates_centre_and_directions() {
     let eu_v = Vector3::new(eu[0], eu[1], eu[2]);
     let d_v = Vector3::new(new_d[0], new_d[1], new_d[2]);
     assert!(er_v.dot(&eu_v).abs() < 1e-9);
-    assert!((er_v.cross(&eu_v) - d_v).norm() < 1e-9);
+    assert!((er_v.cross(&eu_v) + d_v).norm() < 1e-9);
 }
 
 // ── End-to-end: equirect ↔ atlas round-trip ────────────────────────────
@@ -632,14 +635,15 @@ fn equirect_atlas_round_trip() {
     let mut interior_max_err = 0.0f64;
     let half_half_fov = 0.5 * rig.half_fov_rad();
     for r in 0..h {
-        let lat = -PI / 2.0 + PI * (r as f64 + 0.5) / h as f64;
+        let lat = PI / 2.0 - PI * (r as f64 + 0.5) / h as f64;
         for c in 0..w {
             let lon = -PI + 2.0 * PI * (c as f64 + 0.5) / w as f64;
-            // Equirect ray (longitude, latitude) → unit vector.
+            // Canonical equirect ray (longitude, latitude) → unit vector,
+            // matching `equirect_pattern`.
             let dir = [
                 (lat.cos() * lon.sin()) as f32,
                 lat.sin() as f32,
-                (lat.cos() * lon.cos()) as f32,
+                (-lat.cos() * lon.cos()) as f32,
             ];
             // Find single closest tile + test angular distance.
             let nn = cloud.nearest(&dir, 1);
@@ -708,12 +712,12 @@ fn warp_seam_overlap_agrees_within_bilinear_tolerance() {
     };
 
     let project_through = |idx: usize| -> Option<(f64, f64)> {
-        let basis = rig.basis(idx);
-        let dir = rig.direction(idx);
-        // R^T · mid: rows of [er|eu|dir] · mid
-        let tx = basis.0[0] * mid[0] + basis.0[1] * mid[1] + basis.0[2] * mid[2];
-        let ty = basis.1[0] * mid[0] + basis.1[1] * mid[1] + basis.1[2] * mid[2];
-        let tz = dir[0] * mid[0] + dir[1] * mid[1] + dir[2] * mid[2];
+        // World → tile camera frame: R_world_from_tile^T · mid, with
+        // the canonical camera columns [e_right | e_up | −direction].
+        let rc = rig.tile_rotation(idx);
+        let tx = rc[0] * mid[0] + rc[1] * mid[1] + rc[2] * mid[2];
+        let ty = rc[3] * mid[0] + rc[4] * mid[1] + rc[5] * mid[2];
+        let tz = rc[6] * mid[0] + rc[7] * mid[1] + rc[8] * mid[2];
         cam.ray_to_pixel([tx, ty, tz])
     };
     let pa = project_through(i_a);
@@ -775,21 +779,23 @@ fn fill_atlas_with_pattern(rig: &SphericalTileRig) -> Vec<f32> {
     let aw_us = aw as usize;
     for idx in 0..rig.len() {
         let (ox, oy) = rig.tile_atlas_origin(idx);
-        let basis = rig.basis(idx);
-        let dir = rig.direction(idx);
+        // Canonical tile camera frame, columns [e_right | e_up | −direction].
+        let rc = rig.tile_rotation(idx);
         for in_y in 0..p {
             for in_x in 0..p {
                 let u = in_x as f64 + 0.5;
                 let v = in_y as f64 + 0.5;
+                // Canonical pinhole ray (x, −y, −1)/len — pixel y down,
+                // camera +Y up, optical axis −Z.
                 let x = (u - cx) / fx;
-                let y = (v - cy) / fy;
-                let z = 1.0_f64;
+                let y = -((v - cy) / fy);
+                let z = -1.0_f64;
                 let inv = 1.0 / (x * x + y * y + z * z).sqrt();
                 let (rx, ry, rz) = (x * inv, y * inv, z * inv);
-                // tile → world: R · ray, columns [e_right | e_up | direction].
-                let wx = basis.0[0] * rx + basis.1[0] * ry + dir[0] * rz;
-                let wy = basis.0[1] * rx + basis.1[1] * ry + dir[1] * rz;
-                let wz = basis.0[2] * rx + basis.1[2] * ry + dir[2] * rz;
+                // tile camera → world: R · ray (column-major rc).
+                let wx = rc[0] * rx + rc[3] * ry + rc[6] * rz;
+                let wy = rc[1] * rx + rc[4] * ry + rc[7] * rz;
+                let wz = rc[2] * rx + rc[5] * ry + rc[8] * rz;
                 let px_x = ox as usize + in_x;
                 let px_y = oy as usize + in_y;
                 atlas[px_y * aw_us + px_x] = smooth_pattern(wx, wy, wz) as f32;

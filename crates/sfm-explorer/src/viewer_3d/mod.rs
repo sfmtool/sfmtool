@@ -474,8 +474,10 @@ impl Viewer3D {
 
         // Compute end state
         let end_position = image.camera_center();
-        let flip = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), std::f64::consts::PI);
-        let end_orientation = flip * image.quaternion_wxyz;
+        // The image quaternion is a canonical +Y-up / −Z-forward camera
+        // orientation (OpenGL-style), which is exactly the viewport camera
+        // convention, so it is used directly with no convention bridge.
+        let end_orientation = image.quaternion_wxyz;
 
         let end_distance = reconstruction
             .depth_statistics

@@ -120,7 +120,7 @@ impl SphericalTileRig {
 
         CamRigData {
             metadata: CamRigMetadata {
-                version: 1,
+                version: camrig_format::CAMRIG_FORMAT_VERSION,
                 name: name.to_string(),
                 sensor_count: n as u32,
                 camera_count: 1,
@@ -312,10 +312,13 @@ fn tile_params_from_camera(cam: &CamRigCamera) -> Result<(u32, f64), CamRigConve
 }
 
 /// WXYZ quaternion of `R_sensor_from_rig` for a tile, given its
-/// `R_world_from_tile` as a column-major 3x3 (`[e_right | e_up | direction]`).
+/// `R_world_from_tile` as a column-major 3x3 (`[e_right | e_up | −direction]`,
+/// the tile's canonical −Z-forward camera rotation).
 ///
 /// The rig frame is the world frame, so `R_rig_from_sensor = R_world_from_tile`
-/// and the stored `sensor_from_rig` rotation is its transpose.
+/// and the stored `sensor_from_rig` rotation is its transpose. The stored
+/// pose is therefore a canonical-convention sensor pose, exactly what
+/// `.camrig` version 2 mandates.
 fn sensor_from_rig_quat(world_from_tile_cols: &[f64; 9]) -> [f64; 4] {
     let r_world_from_tile = Matrix3::from_column_slice(world_from_tile_cols);
     let rot = Rotation3::from_matrix_unchecked(r_world_from_tile.transpose());
@@ -325,14 +328,15 @@ fn sensor_from_rig_quat(world_from_tile_cols: &[f64; 9]) -> [f64; 4] {
 
 /// Inverse of [`sensor_from_rig_quat`]: recover a tile's `(direction, basis)`
 /// from its WXYZ `sensor_from_rig` quaternion. `basis` is `(e_right, e_up)`
-/// flattened, matching `SphericalTileRig::bases`.
+/// flattened, matching `SphericalTileRig::bases`; the look direction is the
+/// **negated** third column of `R_world_from_tile` (canonical −Z forward).
 fn world_from_tile_parts(wxyz: &[f64; 4]) -> ([f64; 3], [f64; 6]) {
     let q = UnitQuaternion::from_quaternion(Quaternion::new(wxyz[0], wxyz[1], wxyz[2], wxyz[3]));
     // q is R_sensor_from_rig; R_world_from_tile = transpose.
     let m = q.to_rotation_matrix().matrix().transpose();
     let e_right = [m[(0, 0)], m[(1, 0)], m[(2, 0)]];
     let e_up = [m[(0, 1)], m[(1, 1)], m[(2, 1)]];
-    let direction = [m[(0, 2)], m[(1, 2)], m[(2, 2)]];
+    let direction = [-m[(0, 2)], -m[(1, 2)], -m[(2, 2)]];
     (
         direction,
         [

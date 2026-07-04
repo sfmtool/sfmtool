@@ -126,16 +126,18 @@ def _match_single_pair(
     cam_i = cameras[camera_indexes[img_i]]
     cam_j = cameras[camera_indexes[img_j]]
 
-    # Convert quaternions from WXYZ to XYZW format for pycolmap
-    quat_i_xyzw = np.roll(quaternions[img_i], -1)
-    quat_j_xyzw = np.roll(quaternions[img_j], -1)
+    # The .sfmr poses are canonical; the epipolar-guided matcher expects
+    # COLMAP/OpenCV-frame poses, so S-flip the camera frames (S-only, D3), then
+    # convert WXYZ -> XYZW for pycolmap.
+    from .colmap.convention import flip_camera_pose_s
 
-    img_i_cam_from_world = pycolmap.Rigid3d(
-        pycolmap.Rotation3d(quat_i_xyzw), translations[img_i]
-    )
-    img_j_cam_from_world = pycolmap.Rigid3d(
-        pycolmap.Rotation3d(quat_j_xyzw), translations[img_j]
-    )
+    q_i, t_i = flip_camera_pose_s(quaternions[img_i], translations[img_i])
+    q_j, t_j = flip_camera_pose_s(quaternions[img_j], translations[img_j])
+    quat_i_xyzw = np.roll(q_i, -1)
+    quat_j_xyzw = np.roll(q_j, -1)
+
+    img_i_cam_from_world = pycolmap.Rigid3d(pycolmap.Rotation3d(quat_i_xyzw), t_i)
+    img_j_cam_from_world = pycolmap.Rigid3d(pycolmap.Rotation3d(quat_j_xyzw), t_j)
 
     matches = match_image_pair(
         img_i_cam_from_world,
@@ -211,9 +213,15 @@ def triangulate_new_tracks(
     """Build tracks from new matches and triangulate using known camera poses."""
     from .colmap.io import save_colmap_binary
 
-    # Step 1: Export reconstruction to COLMAP binary format
+    # Step 1: Export reconstruction to COLMAP binary format. This is the entry
+    # of an in-pipeline pycolmap round trip, so use the S-only export (D3): the
+    # camera frames flip to COLMAP, the world stays canonical. Every pose that
+    # flows through pycolmap below (triangulation, BA, alignment) stays in that
+    # COLMAP camera frame until the final S-only re-import.
     colmap_input_dir = temp_dir / "colmap_input"
-    save_colmap_binary(recon, colmap_input_dir, max_features=max_features)
+    save_colmap_binary(
+        recon, colmap_input_dir, max_features=max_features, apply_world_rotation=False
+    )
 
     # Step 2: Load the COLMAP binary reconstruction
     click.echo("  Loading reconstruction from COLMAP binary...")
@@ -494,16 +502,20 @@ def _align_to_original(
         orig_rot_matrix = orig_quat.to_rotation_matrix()
         orig_center = -orig_rot_matrix.T @ orig_trans
 
-        # Get densified camera pose
+        # Get densified camera pose. The densified reconstruction is in the
+        # COLMAP camera frame (S-only export); flip it back to canonical so its
+        # orientation compares against the canonical original pose (D3). Camera
+        # centers are S-invariant, but the orientation feeds the alignment
+        # rotation estimate, so both sides must be in one convention.
+        from .colmap.convention import flip_camera_pose_s
+
         densified_pose = densified_img.cam_from_world()
-        densified_quat_xyzw = densified_pose.rotation.quat
-        densified_quat = RotQuaternion(
-            densified_quat_xyzw[3],
-            densified_quat_xyzw[0],
-            densified_quat_xyzw[1],
-            densified_quat_xyzw[2],
+        dq_xyzw = densified_pose.rotation.quat
+        densified_quat_wxyz, densified_trans = flip_camera_pose_s(
+            np.array([dq_xyzw[3], dq_xyzw[0], dq_xyzw[1], dq_xyzw[2]]),
+            np.asarray(densified_pose.translation, dtype=np.float64),
         )
-        densified_trans = densified_pose.translation
+        densified_quat = RotQuaternion.from_wxyz_array(densified_quat_wxyz)
         densified_rot_matrix = densified_quat.to_rotation_matrix()
         densified_center = -densified_rot_matrix.T @ densified_trans
 
@@ -738,9 +750,15 @@ def densify_reconstruction(
     metadata["camera_count"] = num_cameras
 
     # Densify produces a dense finite point cloud; leave infinity
-    # classification to a later solve/import step.
+    # classification to a later solve/import step. This closes the in-pipeline
+    # round trip, so re-import S-only (D3): flip the camera frames back to
+    # canonical, leaving the (already canonical) world untouched.
     result = pycolmap_to_rust_sfmr(
-        densified_reconstruction, workspace_dir_abs, metadata, classify_infinity=False
+        densified_reconstruction,
+        workspace_dir_abs,
+        metadata,
+        classify_infinity=False,
+        apply_world_rotation=False,
     )
 
     click.echo("Densification complete!")

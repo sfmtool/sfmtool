@@ -34,6 +34,10 @@ bytemuck = { version = "1.25", features = ["derive"], optional = true }
 approx = "0.5"
 criterion = { version = "0.8", features = ["html_reports"] }
 image = "0.25"
+# Used by the .sfmr v4→v5 upgrade-on-load tests to author version-4 fixture
+# bytes (rewriting the archive's metadata.json.zst version field).
+zip = { version = "8", default-features = false, features = ["deflate"] }
+zstd = "0.13"
 
 [[bench]]
 name = "optical_flow"

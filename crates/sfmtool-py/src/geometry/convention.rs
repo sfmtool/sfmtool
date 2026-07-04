@@ -137,6 +137,24 @@ pub fn relative_poses_conjugate_s<'py>(
     )
 }
 
+/// Flip only the camera frame of world-to-camera poses by ``S``: ``R' = S·R``,
+/// ``t' = S·t`` (the world frame is left untouched — no ``W``). Involutive;
+/// used for in-pipeline pycolmap round trips (D3). Distinct from
+/// ``relative_poses_conjugate_s`` (``S·R·S``).
+#[pyfunction]
+pub fn flip_camera_poses_s<'py>(
+    py: Python<'py>,
+    quats_wxyz: PyReadonlyArray2<f64>,
+    translations_xyz: PyReadonlyArray2<f64>,
+) -> PyResult<PosePairArrays<'py>> {
+    map_poses(
+        py,
+        quats_wxyz,
+        translations_xyz,
+        convention::flip_camera_pose_s,
+    )
+}
+
 /// Rotate world-space vectors by ``W``: ``(x, y, z) → (x, z, −y)``.
 ///
 /// Applies to finite point xyz, infinity directions, normals, and patch
@@ -164,6 +182,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(poses_colmap_to_canonical, m)?)?;
     m.add_function(wrap_pyfunction!(poses_canonical_to_colmap, m)?)?;
     m.add_function(wrap_pyfunction!(relative_poses_conjugate_s, m)?)?;
+    m.add_function(wrap_pyfunction!(flip_camera_poses_s, m)?)?;
     m.add_function(wrap_pyfunction!(world_rotate_w, m)?)?;
     m.add_function(wrap_pyfunction!(world_rotate_w_inverse, m)?)?;
     Ok(())

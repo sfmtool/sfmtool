@@ -20,18 +20,18 @@ from ._sfmtool import SfmrReconstruction
 from ._sfmtool.geometry import RotQuaternion
 
 
-# Nerfstudio's conventional applied_transform: swaps Y<->Z, negates Y.
-# Stored as 3x4 in transforms.json; embedded in 4x4 form here for chained matmuls.
+# The canonical `.sfmr` is already OpenGL-camera (+x right, +y up, -z forward)
+# and Z-up world, which is exactly Nerfstudio's target convention. So the
+# applied_transform is the identity; it is still written to transforms.json
+# (as identity) for Nerfstudio compatibility.
 _APPLIED_TRANSFORM_3x4 = np.array(
     [
         [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.0],
-        [0.0, -1.0, 0.0, 0.0],
     ],
     dtype=np.float64,
 )
-
-_APPLIED_TRANSFORM_4x4 = np.vstack([_APPLIED_TRANSFORM_3x4, [0.0, 0.0, 0.0, 1.0]])
 
 
 def frame_transform_matrix(
@@ -39,10 +39,10 @@ def frame_transform_matrix(
 ) -> np.ndarray:
     """Return the 4x4 transform_matrix Nerfstudio expects for one frame.
 
-    Input is COLMAP-style camera-from-world (OpenCV axes: +x right, +y down,
-    +z forward). Output is world-from-camera in OpenGL axes (+x right, +y up,
-    +z back), composed with the standard nerfstudio applied_transform so the
-    matrix is in the same post-applied space ns-process-data writes.
+    Input is canonical camera-from-world (OpenGL axes: +x right, +y up,
+    -z forward). Output is world-from-camera in the same OpenGL axes, which is
+    what Nerfstudio consumes directly — no axis flip and no applied_transform
+    pre-rotation are needed (the world is already Z-up).
     """
     q = RotQuaternion(
         float(quaternion_wxyz[0]),
@@ -56,17 +56,16 @@ def frame_transform_matrix(
     cam_from_world[:3, :3] = np.asarray(R_cam_from_world, dtype=np.float64)
     cam_from_world[:3, 3] = np.asarray(translation_xyz, dtype=np.float64)
 
-    world_from_cam = np.linalg.inv(cam_from_world)
-    world_from_cam[:, 1] *= -1.0  # OpenCV +y down -> OpenGL +y up
-    world_from_cam[:, 2] *= -1.0  # OpenCV +z forward -> OpenGL +z back
-
-    return _APPLIED_TRANSFORM_4x4 @ world_from_cam
+    return np.linalg.inv(cam_from_world)
 
 
 def apply_transform_to_points(positions: np.ndarray) -> np.ndarray:
-    """Apply the applied_transform to (N, 3) world-space points."""
-    pos = np.asarray(positions, dtype=np.float64)
-    return pos @ _APPLIED_TRANSFORM_3x4[:, :3].T + _APPLIED_TRANSFORM_3x4[:, 3]
+    """Apply the applied_transform to (N, 3) world-space points.
+
+    The canonical world is already Z-up, so the applied_transform is the
+    identity and points pass through unchanged.
+    """
+    return np.asarray(positions, dtype=np.float64).reshape(-1, 3).copy()
 
 
 def write_sparse_ply(path: Path, positions: np.ndarray, colors: np.ndarray) -> None:
@@ -264,7 +263,13 @@ def export_to_nerfstudio(
 
         sparse_dir = output_dir / "sparse"
         sparse_dir.mkdir(parents=True, exist_ok=True)
-        save_colmap_binary(recon, sparse_dir)
+        # transforms.json declares an identity applied_transform and its frames
+        # and sparse_pc.ply are in the canonical Z-up world, so the exported
+        # COLMAP model must share that world for a colmap-aware consumer (which
+        # maps the sparse world into the transforms world via applied_transform)
+        # to line up. Keep the world untouched (S-only camera-frame flip); the
+        # default W^-1 world rotation would offset sparse/ by 90 deg about X.
+        save_colmap_binary(recon, sparse_dir, apply_world_rotation=False)
 
     return {
         "output_dir": str(output_dir),

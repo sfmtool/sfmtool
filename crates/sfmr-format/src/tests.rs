@@ -106,14 +106,16 @@ fn make_test_data() -> SfmrData {
         sift_content_hashes: Some(vec![[1u8; 16]; image_count]),
         image_file_hashes: None,
         thumbnails_y_x_rgb: Array4::zeros((image_count, 128, 128, 3)),
+        // Points sit at negative z: in front of the identity camera in the
+        // canonical convention (the camera looks down −Z).
         positions_xyzw: Array2::from_shape_vec(
             (point_count, 4),
             vec![
-                0.0, 0.0, 5.0, 1.0, // finite point, w=1
-                1.0, 0.0, 6.0, 1.0, //
-                -1.0, 1.0, 4.0, 1.0, //
-                0.5, -0.5, 7.0, 1.0, //
-                -0.5, 0.5, 3.0, 1.0, //
+                0.0, 0.0, -5.0, 1.0, // finite point, w=1
+                1.0, 0.0, -6.0, 1.0, //
+                -1.0, 1.0, -4.0, 1.0, //
+                0.5, -0.5, -7.0, 1.0, //
+                -0.5, 0.5, -3.0, 1.0, //
             ],
         )
         .unwrap(),
@@ -288,9 +290,9 @@ fn test_embedded_patches_round_trip() {
     };
     write_sfmr_with_options(&path, &mut data, &options).unwrap();
 
-    // Written as version 4 with the embedded_patches source.
+    // Written as the current version with the embedded_patches source.
     let loaded = read_sfmr(&path).unwrap();
-    assert_eq!(loaded.metadata.version, 4);
+    assert_eq!(loaded.metadata.version, SFMR_FORMAT_VERSION);
     assert_eq!(
         loaded.metadata.feature_source,
         FEATURE_SOURCE_EMBEDDED_PATCHES
@@ -523,12 +525,13 @@ fn test_unsupported_future_version_rejected() {
     let mut data = make_test_data();
     let dir = std::env::temp_dir().join("sfmr_test_future_version");
     std::fs::create_dir_all(&dir).unwrap();
-    let src = dir.join("v4.sfmr");
+    let src = dir.join("current.sfmr");
     write_sfmr(&src, &mut data).unwrap();
 
     // Copy the archive verbatim except for metadata.json.zst, whose version
     // is bumped to a value this build does not understand.
-    let dst = dir.join("v5.sfmr");
+    let future_version = SFMR_FORMAT_VERSION + 1;
+    let dst = dir.join("future.sfmr");
     let archive_file = std::fs::File::open(&src).unwrap();
     let mut archive = zip::ZipArchive::new(archive_file).unwrap();
     let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
@@ -550,7 +553,7 @@ fn test_unsupported_future_version_rejected() {
                     .unwrap();
             json.as_object_mut()
                 .unwrap()
-                .insert("version".into(), serde_json::json!(5));
+                .insert("version".into(), serde_json::json!(future_version));
             let bytes = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
             zip.write_all(&bytes).unwrap();
         } else {
@@ -559,17 +562,12 @@ fn test_unsupported_future_version_rejected() {
     }
     zip.finish().unwrap();
 
+    let expected = format!("unsupported .sfmr format version {future_version}");
     let err = read_sfmr(&dst).err().unwrap();
-    assert!(
-        format!("{err}").contains("unsupported .sfmr format version 5"),
-        "{err}"
-    );
+    assert!(format!("{err}").contains(&expected), "{err}");
     let (valid, errors) = verify_sfmr(&dst).unwrap();
     assert!(
-        !valid
-            && errors
-                .iter()
-                .any(|e| e.contains("unsupported .sfmr format version 5")),
+        !valid && errors.iter().any(|e| e.contains(&expected)),
         "{errors:?}"
     );
 
@@ -669,9 +667,11 @@ fn test_read_version_1_layout() {
     assert_eq!(meta.version, 1);
     assert_eq!(meta.point_count, 5);
 
-    // Full read upgrades version 1 to the current in-memory model.
+    // Full read upgrades the arrays to the current structural layout while
+    // preserving the stored version number (the convention upgrade is gated
+    // on it by the consumer — see SFMR_FORMAT_VERSION).
     let loaded = read_sfmr(&v1_path).unwrap();
-    assert_eq!(loaded.metadata.version, 4);
+    assert_eq!(loaded.metadata.version, 1);
     // A legacy file upgrades to the sift_files source with its .sift-link
     // columns present and the embedded columns absent.
     assert_eq!(loaded.metadata.feature_source, FEATURE_SOURCE_SIFT_FILES);
@@ -688,7 +688,7 @@ fn test_read_version_1_layout() {
     }
     // Euclidean coordinates survive the round trip.
     assert_eq!(loaded.positions_xyzw[[0, 0]], 0.0);
-    assert_eq!(loaded.positions_xyzw[[0, 2]], 5.0);
+    assert_eq!(loaded.positions_xyzw[[0, 2]], -5.0);
     // The renamed track point-index array is read correctly.
     assert_eq!(loaded.point_indexes, data.point_indexes);
 
@@ -702,7 +702,7 @@ fn test_point_at_infinity_round_trip() {
     // a unit direction with `w == 0`.
     data.positions_xyzw[[4, 0]] = 0.0;
     data.positions_xyzw[[4, 1]] = 0.0;
-    data.positions_xyzw[[4, 2]] = 1.0;
+    data.positions_xyzw[[4, 2]] = -1.0; // toward the content seen by image 0 (−Z)
     data.positions_xyzw[[4, 3]] = 0.0;
 
     let dir = std::env::temp_dir().join("sfmr_test_infinity_round_trip");
@@ -912,12 +912,13 @@ fn test_write_preserves_set_normals_and_fills_missing() {
     // normal that disagrees with it.
     let mut data = make_test_data();
 
-    // Point 0 is at +z (0, 0, 5); its mean-viewing normal would be (0, 0, -1).
-    // Store the opposite, (0, 0, 1): a *set* normal that recompute would flip.
+    // Point 0 is at (0, 0, -5); its mean-viewing normal (toward the origin
+    // cameras) would be (0, 0, 1). Store the opposite, (0, 0, -1): a *set*
+    // normal that recompute would flip.
     let set = data.normals_xyz.as_mut().unwrap();
     set[[0, 0]] = 0.0;
     set[[0, 1]] = 0.0;
-    set[[0, 2]] = 1.0;
+    set[[0, 2]] = -1.0;
     // Point 1 has no normal yet — the zero vector. It must be filled.
     set[[1, 0]] = 0.0;
     set[[1, 1]] = 0.0;
@@ -930,16 +931,16 @@ fn test_write_preserves_set_normals_and_fills_missing() {
     let loaded = read_sfmr(&path).unwrap();
     let normals = loaded.normals_xyz.expect("normals present");
 
-    // Point 0's set normal is preserved (z = +1), not overwritten with the
-    // recomputed mean-viewing normal (which would have z = -1).
+    // Point 0's set normal is preserved (z = -1), not overwritten with the
+    // recomputed mean-viewing normal (which would have z = +1).
     assert!(
-        normals[[0, 2]] > 0.5,
+        normals[[0, 2]] < -0.5,
         "set normal should be preserved, got {:?}",
         normals.row(0)
     );
 
     // Point 1's missing normal is filled from the recompute: a non-zero unit
-    // vector pointing roughly toward -P = -(1, 0, 6).
+    // vector pointing roughly toward -P = -(1, 0, -6).
     let n1 = normals.row(1);
     let norm1 = (n1[0] * n1[0] + n1[1] * n1[1] + n1[2] * n1[2]).sqrt();
     assert!(
@@ -947,7 +948,7 @@ fn test_write_preserves_set_normals_and_fills_missing() {
         "missing normal should be filled"
     );
     assert!(
-        n1[0] < 0.0 && n1[2] < 0.0,
+        n1[0] < 0.0 && n1[2] > 0.0,
         "filled normal should point toward -P"
     );
 
@@ -1185,7 +1186,7 @@ fn test_round_trip_with_patches_and_bitmaps() {
     write_sfmr(&path, &mut data).unwrap();
 
     let meta = read_sfmr_metadata(&path).unwrap();
-    assert_eq!(meta.version, 4);
+    assert_eq!(meta.version, SFMR_FORMAT_VERSION);
 
     let loaded = read_sfmr(&path).unwrap();
     // Patch arrays are parallel to the points and round-trip exactly.

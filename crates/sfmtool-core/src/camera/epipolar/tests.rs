@@ -173,7 +173,8 @@ fn epipolar_curve_passes_through_true_correspondence_fisheye() {
     let pose1 = RigidTransform::identity();
     let pose2 = RigidTransform::new(RotQuaternion::identity(), Vector3::new(0.5, 0.1, 0.0));
 
-    let x_world = Point3::new(0.3, -0.2, 4.0);
+    // In front of both identity-rotation canonical cameras (they look −Z).
+    let x_world = Point3::new(0.3, -0.2, -4.0);
     let xc1 = pose1.transform_point(&x_world);
     let xc2 = pose2.transform_point(&x_world);
     let (u1, v1) = cam.ray_to_pixel([xc1.x, xc1.y, xc1.z]).unwrap();
@@ -218,14 +219,16 @@ fn epipolar_curve_empty_for_zero_baseline() {
 
 #[test]
 fn epipolar_curve_empty_when_ray_entirely_behind_cam2() {
-    // Camera 2 rotated 180° about Y and pushed behind camera 1: the
-    // back-projected ray of (320,240) — straight down +Z in world — sits
-    // entirely behind camera 2, so the in-image predicate is never true.
+    // Camera 1 (identity, canonical) back-projects (320,240) straight down
+    // world −Z. Camera 2 is rotated 180° about Y (looking down world +Z)
+    // and placed at world z = +10, so every point of that ray sits at
+    // z ≤ 0 < 10 — entirely behind camera 2 — and the in-image predicate
+    // is never true.
     let cam = pinhole_cam();
     let pose1 = RigidTransform::identity();
     let pose2 = RigidTransform::new(
         RotQuaternion::from_axis_angle(Vector3::y(), std::f64::consts::PI).unwrap(),
-        Vector3::new(0.0, 0.0, -10.0),
+        Vector3::new(0.0, 0.0, 10.0),
     );
     let curve = plot_epipolar_curve(
         [320.0, 240.0],

@@ -96,13 +96,15 @@ def _geometric_candidate_set(recon, pid: int, patch, point_xyz: np.ndarray) -> s
     out: set[int] = set()
     for i in range(recon.image_count):
         x_cam = R[i] @ point_xyz + t[i]
-        if x_cam[2] <= 0:
+        # Canonical cameras look down -Z: in front means camera-space z < 0, and
+        # the normalized image coords divide by the depth -z (> 0 in front).
+        if x_cam[2] >= 0:
             continue  # behind camera
         pose = RigidTransform.from_wxyz_translation(quats[i].tolist(), t[i].tolist())
         if not patch.is_front_facing(pose):
             continue
         cam = cams[int(cam_idx[i])]
-        u, v = cam.project(x_cam[0] / x_cam[2], x_cam[1] / x_cam[2])
+        u, v = cam.project(x_cam[0] / -x_cam[2], x_cam[1] / -x_cam[2])
         if 0 <= u < cam.width and 0 <= v < cam.height:
             out.add(i)
     return out
@@ -274,9 +276,10 @@ def test_select_views_admitted_points_are_in_front_of_camera(
     on the wide-fisheye kerry_park rig where a behind-camera point can project
     in-frame.
 
-    This is the *finite*-point cheirality invariant (`R·X + t`.z > 0), so build a
-    finite-only cloud; a point at infinity has a different in-front test (`R·d`.z,
-    no translation) and is covered by the core tests.
+    This is the *finite*-point cheirality invariant (`R·X + t`.z < 0 — canonical
+    cameras look down -Z), so build a finite-only cloud; a point at infinity has a
+    different in-front test (`R·d`.z, no translation) and is covered by the core
+    tests.
     """
     recon = SfmrReconstruction.load(kerry_park_workspace)
     images = _load_images(recon)
@@ -293,17 +296,18 @@ def test_select_views_admitted_points_are_in_front_of_camera(
         admitted = np.asarray(r["admitted"], dtype=np.int64)
         for image_idx in admitted.tolist():
             x_cam = _camera_frame_point(recon, positions[pid], image_idx)
-            assert x_cam[2] > 0, (
+            assert x_cam[2] < 0, (
                 f"point {pid} admitted into image {image_idx} but is behind that "
-                f"camera (depth {x_cam[2]})"
+                f"camera (canonical depth -z = {-x_cam[2]})"
             )
 
 
 def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path):
     """w == 0 cheirality: an admitted view of a point at infinity must look toward
-    its direction — `(R·d).z > 0`, with no translation (every ray to the point is
-    parallel to `d`). Complements the finite-point B1 test above, on the same
-    wide-fisheye rig (kerry_park carries points at infinity)."""
+    its direction — `(R·d).z < 0` (canonical cameras look down -Z), with no
+    translation (every ray to the point is parallel to `d`). Complements the
+    finite-point B1 test above, on the same wide-fisheye rig (kerry_park carries
+    points at infinity)."""
     recon = SfmrReconstruction.load(kerry_park_workspace)
     images = _load_images(recon)
     # Default includes points at infinity.
@@ -324,7 +328,7 @@ def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path)
         d = positions[pid]  # unit direction for a w == 0 point
         for image_idx in np.asarray(r["admitted"], dtype=np.int64).tolist():
             z = float((rot[image_idx] @ d)[2])
-            assert z > 0, (
+            assert z < 0, (
                 f"infinity point {pid} admitted into image {image_idx} but its "
                 f"direction points away from the camera (R·d).z = {z}"
             )

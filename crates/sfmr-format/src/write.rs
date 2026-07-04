@@ -79,10 +79,11 @@ fn merge_preserving_normals<'a>(
 ///
 /// Sorts tracks by `(point_indexes, image_indexes)` if not already sorted.
 /// Computes content hashes and writes all section metadata files.
-/// Always writes format version 4; the `content_hash` field in `data` is
-/// ignored on write (recomputed). The per-observation and per-image columns
-/// written depend on `metadata.feature_source` (`sift_files` vs
-/// `embedded_patches`).
+/// Always writes the current format version ([`SFMR_FORMAT_VERSION`]); the
+/// caller must supply data in the canonical coordinate convention. The
+/// `content_hash` field in `data` is ignored on write (recomputed). The
+/// per-observation and per-image columns written depend on
+/// `metadata.feature_source` (`sift_files` vs `embedded_patches`).
 pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
     write_sfmr_with_options(path, data, &WriteOptions::default())
 }
@@ -105,9 +106,9 @@ pub fn write_sfmr_with_options(
     // Ensure tracks are sorted by (point_indexes, image_indexes)
     ensure_tracks_sorted(data);
 
-    // Always emit format version 4, and keep `infinity_point_count` consistent
-    // with the actual `w` column.
-    data.metadata.version = 4;
+    // Always emit the current format version, and keep `infinity_point_count`
+    // consistent with the actual `w` column.
+    data.metadata.version = SFMR_FORMAT_VERSION;
     data.metadata.infinity_point_count = (0..data.positions_xyzw.shape()[0])
         .filter(|&i| data.positions_xyzw[[i, 3]] == 0.0)
         .count() as u32;

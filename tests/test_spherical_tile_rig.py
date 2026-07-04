@@ -52,10 +52,14 @@ def _atlas_pattern(rig: SphericalTileRig) -> np.ndarray:
         ix = np.arange(p) + 0.5
         iy = np.arange(p) + 0.5
         u, v = np.meshgrid(ix, iy, indexing="xy")
-        # Tile-frame rays.
+        # Tile-frame rays in the canonical camera frame: the tile camera looks
+        # down -Z with +Y up, so the pixel ray is (x_n, -y_n, -1) — the inverse
+        # of the canonical projection (pixel v grows downward, camera +Y up).
+        # tile_rotation is [e_right | e_up | -direction], so this ray maps to
+        # +direction at the tile centre.
         x = (u - cx) / fx
-        y = (v - cy) / fy
-        z = np.ones_like(x)
+        y = -(v - cy) / fy
+        z = -np.ones_like(x)
         rays = np.stack([x, y, z], axis=-1)  # (p, p, 3)
         norms = np.linalg.norm(rays, axis=-1, keepdims=True)
         rays /= norms
@@ -77,9 +81,12 @@ def _equirect_pattern_reference(width: int, height: int) -> np.ndarray:
     sin_lat = np.sin(lat)[:, None]
     sin_lon = np.sin(lon)[None, :]
     cos_lon = np.cos(lon)[None, :]
+    # Canonical EQUIRECTANGULAR: lon=0/lat=0 looks down -Z, so
+    # dz = -cos(lon)cos(lat) (was +cos·cos under the old +Z-forward convention);
+    # dx and dy are unchanged.
     dx = sin_lon * cos_lat
     dy = np.broadcast_to(sin_lat, (height, width))
-    dz = cos_lon * cos_lat
+    dz = -cos_lon * cos_lat
     return _smooth_pattern(dx, dy, dz).astype(np.float32)
 
 
@@ -132,7 +139,10 @@ class TestSphericalTileRigBasics:
             assert abs(np.dot(er, eu)) < 1e-9
             assert abs(np.dot(er, d)) < 1e-9
             assert abs(np.dot(eu, d)) < 1e-9
-            np.testing.assert_allclose(np.cross(er, eu), d, atol=1e-9)
+            # Canonical camera frame: the stored basis is oriented so
+            # e_right × e_up = -direction, i.e. [e_right | e_up | -direction] is
+            # the tile's world-from-camera rotation (camera looks down -Z).
+            np.testing.assert_allclose(np.cross(er, eu), -d, atol=1e-9)
 
     def test_tile_atlas_origin_matches_packing(self):
         rig = SphericalTileRig(n=80, arc_per_pixel=2 * np.pi / 256, seed=3)

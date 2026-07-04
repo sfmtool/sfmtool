@@ -33,24 +33,26 @@ fn test_frustum_corners_identity_camera() {
 
     let corners = compute_frustum_corners(&center, &r, fx, fy, cx, cy, w, h, near, far);
 
+    // The identity camera is canonical: it looks down −Z, so the near plane
+    // at depth 1 sits at z = −1.
     // Near top-left corner (index 0): pixel (0,0)
     // x_norm = (0 - 320)/500 = -0.64, y_norm = (0 - 240)/500 = -0.48
-    // dir = normalize([-0.64, -0.48, 1.0])
-    // t_near = 1.0 / dir_z
-    // At near plane z should be ~1.0
+    // dir = normalize([-0.64, +0.48, -1.0]) (pixel y down, camera +Y up)
     let ntl = Vector3::new(corners[0], corners[1], corners[2]);
-    assert_relative_eq!(ntl[2], 1.0, epsilon = 1e-10);
+    assert_relative_eq!(ntl[2], -1.0, epsilon = 1e-10);
+    // Pixel row 0 is the top of the image, which is +Y in camera space.
+    assert!(ntl[1] > 0.0, "Top-left y should be positive (up)");
 
     // Near top-right corner (index 1): pixel (640, 0)
     // x_norm = (640 - 320)/500 = 0.64
     let ntr = Vector3::new(corners[3], corners[4], corners[5]);
-    assert_relative_eq!(ntr[2], 1.0, epsilon = 1e-10);
+    assert_relative_eq!(ntr[2], -1.0, epsilon = 1e-10);
     assert!(ntr[0] > 0.0, "Top-right x should be positive");
     assert!(ntl[0] < 0.0, "Top-left x should be negative");
 
-    // Far corners should be at z ~ 10.0
+    // Far corners should be at z ~ -10.0 (depth 10)
     let ftl = Vector3::new(corners[12], corners[13], corners[14]);
-    assert_relative_eq!(ftl[2], 10.0, epsilon = 1e-10);
+    assert_relative_eq!(ftl[2], -10.0, epsilon = 1e-10);
 
     // Far corners should be 10x the near corners (linear scaling)
     assert_relative_eq!(ftl[0], ntl[0] * 10.0, epsilon = 1e-10);
@@ -110,9 +112,10 @@ fn test_frustum_volume() {
 fn test_points_in_frustum() {
     let (corners, planes, _) = make_test_frustum();
 
-    // A point in the middle of the frustum should be inside
-    // Camera looking along +Z, center at origin. Mid-z = 5.5
-    let inside_point = [0.0, 0.0, 5.5];
+    // A point in the middle of the frustum should be inside.
+    // The canonical camera looks along −Z, center at origin. Mid depth 5.5
+    // sits at z = −5.5.
+    let inside_point = [0.0, 0.0, -5.5];
 
     // A point far outside
     let outside_point = [100.0, 100.0, 100.0];
@@ -291,7 +294,8 @@ fn distorted_grid_has_correct_size() {
 
 #[test]
 fn distorted_grid_all_at_far_z() {
-    // For identity rotation pinhole camera, all grid z-coordinates should be far_z
+    // For an identity-rotation (canonical, −Z-forward) pinhole camera, all
+    // grid z-coordinates should be −far_z.
     let center = [0.0, 0.0, 0.0];
     let r = identity_rotation();
     let far_z = 7.5;
@@ -311,7 +315,7 @@ fn distorted_grid_all_at_far_z() {
     for j in 0..n {
         for i in 0..n {
             let z = grid.positions[(j * n + i) * 3 + 2];
-            assert_relative_eq!(z, far_z, epsilon = 1e-10);
+            assert_relative_eq!(z, -far_z, epsilon = 1e-10);
         }
     }
 }
@@ -411,7 +415,8 @@ fn distorted_grid_fisheye_spherical_placement() {
 
 #[test]
 fn distorted_grid_pinhole_not_spherical() {
-    // For a pinhole camera, vertices should be on a flat plane at z = far_z (NOT spherical)
+    // For a pinhole camera, vertices should be on a flat plane at z = −far_z
+    // (NOT spherical)
     let center = [0.0, 0.0, 0.0];
     let r = identity_rotation();
     let far_z = 5.0;
@@ -428,11 +433,12 @@ fn distorted_grid_pinhole_not_spherical() {
 
     let grid = compute_distorted_frustum_grid(&center, &r, &camera, far_z, 4);
     let n = grid.grid_size;
-    // All z coordinates should be far_z (flat plane)
+    // All z coordinates should be −far_z (flat plane in front of the
+    // canonical −Z-forward camera)
     for j in 0..n {
         for i in 0..n {
             let z = grid.positions[(j * n + i) * 3 + 2];
-            assert_relative_eq!(z, far_z, epsilon = 1e-10);
+            assert_relative_eq!(z, -far_z, epsilon = 1e-10);
         }
     }
     // Corner vertices should NOT all be at the same distance from center

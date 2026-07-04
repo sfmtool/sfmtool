@@ -191,7 +191,7 @@ pub fn read_colmap_db_matches(
 
     Ok(MatchesData {
         metadata: MatchesMetadata {
-            version: 1,
+            version: matches_format::MATCHES_FORMAT_VERSION,
             matching_method: "unknown".into(),
             matching_tool: "colmap".into(),
             matching_tool_version: String::new(),
@@ -390,6 +390,13 @@ fn read_tvg_from_db(
             all_inlier_fi.push(*fi);
             all_inlier_fi.push(*fj);
         }
+
+        // The COLMAP database stores relative poses in the COLMAP camera
+        // convention; the in-memory MatchesData is canonical (`.matches`
+        // version 2), so S-conjugate at this boundary. The pixel-space
+        // F/E/H matrices are convention-independent and copied verbatim.
+        let (mut q, mut t) = (q, t);
+        matches_format::s_conjugate_relative_pose(&mut q, &mut t);
 
         f_data.extend_from_slice(&f);
         e_data.extend_from_slice(&e);

@@ -131,10 +131,21 @@ def _refine_single_camera_pose(
                 ]
             )
 
+            # PnP returns a COLMAP-frame cam_from_world. The merged 3D points
+            # were fed in the canonical world frame (world untouched — feeding
+            # world points through S would be wrong), so flip only the camera
+            # frame back to canonical (S-only, D3).
+            from ..colmap.convention import flip_camera_pose_s
+
+            wxyz_quat, refined_trans = flip_camera_pose_s(
+                wxyz_quat,
+                np.asarray(cam_from_world.translation, dtype=np.float64),
+            )
+
             return (
                 img_idx,
                 wxyz_quat,
-                cam_from_world.translation,
+                refined_trans,
                 "success",
                 io_time,
                 compute_time,

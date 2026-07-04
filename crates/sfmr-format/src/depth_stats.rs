@@ -105,9 +105,11 @@ fn compute_mean_viewing_normals(
     result
 }
 
-/// Compute z-depths of observed 3D points in a single camera's coordinate frame.
+/// Compute depths of observed 3D points in a single camera's coordinate frame.
 ///
-/// Returns only positive depths (points in front of the camera).
+/// In the canonical `.sfmr` convention the camera looks down **−Z**, so a
+/// point's depth is `−z` in camera coordinates — positive in front. Returns
+/// only positive depths (points in front of the camera).
 ///
 /// - `rotation_matrix`: `3x3` world-to-camera rotation for this image.
 /// - `camera_center`: camera center in world coordinates for this image
@@ -129,13 +131,14 @@ fn compute_observed_depths(
         let py = positions_xyz[[pt_idx, 1]] - camera_center.y;
         let pz = positions_xyz[[pt_idx, 2]] - camera_center.z;
 
-        // z-component in camera coordinates = third row of R dot (point - center)
-        let z = rotation_matrix[(2, 0)] * px
+        // Depth = −z in camera coordinates, where z is the third row of R
+        // dotted with (point − center); the canonical camera looks down −Z.
+        let depth = -(rotation_matrix[(2, 0)] * px
             + rotation_matrix[(2, 1)] * py
-            + rotation_matrix[(2, 2)] * pz;
+            + rotation_matrix[(2, 2)] * pz);
 
-        if z > 0.0 {
-            depths.push(z);
+        if depth > 0.0 {
+            depths.push(depth);
         }
     }
 
@@ -387,14 +390,15 @@ mod tests {
 
     #[test]
     fn test_single_camera_single_point() {
-        // Camera at origin looking along +Z (identity rotation, zero translation)
+        // Camera at origin looking along −Z (identity rotation, zero
+        // translation; canonical convention).
         let mut q = Array2::<f64>::zeros((1, 4));
         q[[0, 0]] = 1.0; // w=1, identity quaternion
         let t = Array2::<f64>::zeros((1, 3));
 
-        // Point at (0, 0, 5) - should be at depth 5
+        // Point at (0, 0, −5) — in front of the camera at depth −z = 5.
         let mut p = Array2::<f64>::zeros((1, 4));
-        p[[0, 2]] = 5.0;
+        p[[0, 2]] = -5.0;
         p[[0, 3]] = 1.0;
 
         let ii = Array1::from_vec(vec![0u32]);
@@ -414,16 +418,16 @@ mod tests {
 
     #[test]
     fn test_point_at_infinity_counted_separately() {
-        // Camera at origin looking along +Z.
+        // Camera at origin looking along −Z (canonical convention).
         let mut q = Array2::<f64>::zeros((1, 4));
         q[[0, 0]] = 1.0;
         let t = Array2::<f64>::zeros((1, 3));
 
-        // Point 0: finite at (0, 0, 5). Point 1: at infinity (w = 0).
+        // Point 0: finite at (0, 0, −5), in front. Point 1: at infinity (w = 0).
         let mut p = Array2::<f64>::zeros((2, 4));
-        p[[0, 2]] = 5.0;
+        p[[0, 2]] = -5.0;
         p[[0, 3]] = 1.0;
-        p[[1, 2]] = 1.0; // direction (0, 0, 1), w = 0
+        p[[1, 2]] = -1.0; // direction (0, 0, −1), w = 0
 
         let ii = Array1::from_vec(vec![0u32, 0]);
         let pi = Array1::from_vec(vec![0u32, 1]);
@@ -438,6 +442,27 @@ mod tests {
         assert_eq!(result.mean_viewing_normals_xyz[[1, 0]], 0.0);
         assert_eq!(result.mean_viewing_normals_xyz[[1, 1]], 0.0);
         assert_eq!(result.mean_viewing_normals_xyz[[1, 2]], 0.0);
+    }
+
+    #[test]
+    fn test_point_behind_camera_excluded() {
+        // Identity pose: canonical camera looks down −Z, so a point at
+        // +Z is behind the camera and must not contribute a depth.
+        let mut q = Array2::<f64>::zeros((1, 4));
+        q[[0, 0]] = 1.0;
+        let t = Array2::<f64>::zeros((1, 3));
+
+        let mut p = Array2::<f64>::zeros((1, 4));
+        p[[0, 2]] = 5.0; // behind: camera-space z = +5, depth −z = −5
+        p[[0, 3]] = 1.0;
+
+        let ii = Array1::from_vec(vec![0u32]);
+        let pi = Array1::from_vec(vec![0u32]);
+
+        let result = compute_depth_statistics(&q, &t, &p, &ii, &pi).unwrap();
+        let stats = &result.depth_statistics.images[0];
+        assert_eq!(stats.observed.count, 0);
+        assert!(stats.observed.min_z.is_none());
     }
 
     #[test]

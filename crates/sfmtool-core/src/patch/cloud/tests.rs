@@ -53,7 +53,9 @@ fn from_center_normal_handles_up_hint_parallel_to_normal() {
 
 #[test]
 fn is_front_facing_uses_outward_normal() {
-    let pose = RigidTransform::identity(); // camera at origin looking +Z
+    // Camera at origin looking down world +Z: the canonical (−Z-forward)
+    // camera rotated 180° about X.
+    let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
     let front = OrientedPatch::from_center_normal(
         Point3::new(0.0, 0.0, 5.0),
         Vector3::new(0.0, 0.0, -1.0),
@@ -74,7 +76,9 @@ fn is_front_facing_uses_outward_normal() {
 fn from_patch_projects_fronto_parallel_plane() {
     let (f, cx, cy) = (500.0, 320.0, 240.0);
     let cam = pinhole(f, cx, cy, 640, 480);
-    let pose = RigidTransform::identity(); // world == camera frame
+    // Camera at origin looking down world +Z (canonical camera rotated 180°
+    // about X), so the plane at +z is in front.
+    let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
     let (d, h) = (4.0, 0.5);
     let patch = OrientedPatch::new(Point3::new(0.0, 0.0, d), Vector3::x(), Vector3::y(), [h, h]);
     let r = 2u32;
@@ -107,7 +111,9 @@ fn from_center_normal_render_is_not_mirrored() {
     // `inspect --strips` tiles and patch bitmaps.
     let (f, cx, cy) = (500.0, 320.0, 240.0);
     let cam = pinhole(f, cx, cy, 640, 480);
-    let pose = RigidTransform::identity(); // world == camera frame, looking +Z
+    // Camera at origin looking down world +Z (canonical camera rotated 180°
+    // about X).
+    let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
     let patch = OrientedPatch::from_center_normal(
         Point3::new(0.0, 0.0, 4.0),
         Vector3::new(0.0, 0.0, -1.0), // outward normal toward the camera
@@ -207,9 +213,11 @@ fn feature_size_without_sift_is_an_error() {
 #[test]
 fn from_patch_behind_camera_is_invalid() {
     let cam = pinhole(500.0, 320.0, 240.0, 640, 480);
+    // Identity pose: the canonical camera looks down −Z, so a patch at +z is
+    // behind it.
     let pose = RigidTransform::identity();
     let patch = OrientedPatch::new(
-        Point3::new(0.0, 0.0, -4.0),
+        Point3::new(0.0, 0.0, 4.0),
         Vector3::x(),
         Vector3::y(),
         [0.5, 0.5],
@@ -220,18 +228,19 @@ fn from_patch_behind_camera_is_invalid() {
 
 #[test]
 fn from_patch_infinity_ignores_camera_translation() {
-    // A point at infinity in the +Z direction; its corners are directions, so
-    // its projection is translation-invariant (every viewing ray is parallel to
-    // d). Rendering it must rotate the corners without translating.
+    // A point at infinity in the −Z direction (in front of identity-pose
+    // canonical cameras); its corners are directions, so its projection is
+    // translation-invariant (every viewing ray is parallel to d). Rendering it
+    // must rotate the corners without translating.
     let cam = pinhole(500.0, 320.0, 240.0, 640, 480);
     let patch = OrientedPatch::from_infinity_direction(
-        Point3::new(0.0, 0.0, 1.0),
-        Vector3::new(0.0, -1.0, 0.0),
+        Point3::new(0.0, 0.0, -1.0),
+        Vector3::new(0.0, 1.0, 0.0),
         [0.02, 0.02],
     );
     assert_eq!(patch.w, 0.0);
     // Outward normal faces back toward the observers: normalize(-d).
-    assert!((patch.normal() - Vector3::new(0.0, 0.0, -1.0)).norm() < 1e-9);
+    assert!((patch.normal() - Vector3::new(0.0, 0.0, 1.0)).norm() < 1e-9);
 
     let at_origin = RigidTransform::identity();
     let translated = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [12.0, -7.0, 4.0]);

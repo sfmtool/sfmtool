@@ -21,51 +21,38 @@ from sfmtool.cli import main
 
 
 class TestFrameTransformMatrix:
-    def test_identity_pose_yields_applied_transform(self):
+    def test_identity_pose_yields_identity(self):
         """Identity cam-from-world inverts to identity world-from-cam.
 
-        After flipping Y/Z and applying the nerfstudio applied_transform, the
-        result should match _APPLIED_TRANSFORM_3x4 with [-1, -1] flips on the
-        OpenGL columns.
+        The canonical .sfmr is already OpenGL-camera / Z-up-world, so there is
+        no axis flip and the applied_transform is the identity: the result is
+        the identity matrix.
         """
         q = np.array([1.0, 0.0, 0.0, 0.0])  # identity wxyz
         t = np.zeros(3)
         m = frame_transform_matrix(q, t)
         assert m.shape == (4, 4)
-        np.testing.assert_array_almost_equal(m[3], [0.0, 0.0, 0.0, 1.0])
-
-        # With identity input, world_from_cam is identity; after flipping Y/Z
-        # columns we get diag(1, -1, -1, 1). Then applied_transform left-mults.
-        flipped = np.diag([1.0, -1.0, -1.0, 1.0])
-        expected = np.vstack([_APPLIED_TRANSFORM_3x4, [0, 0, 0, 1]]) @ flipped
-        np.testing.assert_array_almost_equal(m, expected)
+        np.testing.assert_array_almost_equal(m, np.eye(4))
+        # applied_transform is the identity 3x4.
+        np.testing.assert_array_almost_equal(_APPLIED_TRANSFORM_3x4, np.eye(3, 4))
 
     def test_translation_only_pose(self):
-        """A translation in cam-from-world flips sign in world-from-cam, then
-        gets remapped by the applied_transform. Verify the final translation
-        column matches the manual computation."""
+        """A translation in cam-from-world flips sign in world-from-cam, with no
+        further remapping (identity applied_transform)."""
         q = np.array([1.0, 0.0, 0.0, 0.0])
         t = np.array([1.0, 2.0, 3.0])  # cam_from_world translation
         m = frame_transform_matrix(q, t)
 
-        # world_from_cam translation = -R^T @ t = -t (since R=I)
-        # Then [:, 1] *= -1 leaves translation column unchanged (only flips
-        # rotation columns 1,2). applied_transform permutes Y<->Z, negates Y.
-        # So expected translation = applied_transform[:3, :3] @ (-t).
-        wfc_t = -t
-        expected_t = _APPLIED_TRANSFORM_3x4[:, :3] @ wfc_t
-        np.testing.assert_array_almost_equal(m[:3, 3], expected_t)
+        # world_from_cam translation = -R^T @ t = -t (since R = I).
+        np.testing.assert_array_almost_equal(m[:3, 3], -t)
 
 
 class TestApplyTransformToPoints:
-    def test_axes_permuted(self):
-        """applied_transform is [[1,0,0,0],[0,0,1,0],[0,-1,0,0]]:
-        x -> x, y -> -z (output y), z -> y (output z) ... actually:
-        out_x = x; out_y = z; out_z = -y.
-        """
+    def test_identity_passthrough(self):
+        """The canonical world is already Z-up, so points pass through unchanged."""
         pts = np.array([[1.0, 2.0, 3.0]])
         out = apply_transform_to_points(pts)
-        np.testing.assert_array_almost_equal(out, [[1.0, 3.0, -2.0]])
+        np.testing.assert_array_almost_equal(out, [[1.0, 2.0, 3.0]])
 
     def test_empty_input(self):
         out = apply_transform_to_points(np.zeros((0, 3)))

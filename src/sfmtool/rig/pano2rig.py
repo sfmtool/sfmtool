@@ -20,20 +20,23 @@ from .._sfmtool.geometry import RotQuaternion
 # face images and the rig's image pattern.
 _PANO_FRAME_PATTERN = "frame_%06d.jpg"
 
-# Standard cubemap: 6 faces looking along +Z, +X, -Z, -X, +Y, -Y
+# Standard cubemap: 6 faces in the canonical camera convention (each sensor
+# looks down its own -Z, with +Y up).
 #
-# Convention: sensor_from_rig rotation. The rig frame is the front camera frame.
-# So front is identity, and other faces rotate the rig frame to point in their direction.
+# Convention: sensor_from_rig rotation. The rig frame is the front camera frame,
+# so front is identity. With canonical (-Z-forward) sensors, the rig axes map to
+# pano directions as: front = rig -Z, right = rig +X, back = rig +Z, left =
+# rig -X, top = rig +Y, bottom = rig -Y (see `extract_perspective_face`'s
+# equirect mapping below).
 #
-# These are defined as rig_from_sensor (where each sensor looks in rig coords),
-# then inverted to get sensor_from_rig.
-#
-# Front: looks along +Z (identity)
-# Right: looks along +X (rotate -90° around Y)
-# Back: looks along -Z (rotate 180° around Y)
-# Left: looks along -X (rotate +90° around Y)
-# Top: looks along +Y (rotate -90° around X)
-# Bottom: looks along -Y (rotate +90° around X)
+# The sensor_from_rig rotations are derived so that each canonical sensor's
+# forward (-Z) maps to the face direction in rig coordinates:
+#   front:  identity                     (looks rig -Z)
+#   right:  +90° around Y                (looks rig +X)
+#   back:   180° around Y                (looks rig +Z)
+#   left:   -90° around Y                (looks rig -X)
+#   top:    -90° around X                (looks rig +Y)
+#   bottom: +90° around X                (looks rig -Y)
 
 _CUBEMAP_FACE_NAMES = ["front", "right", "back", "left", "top", "bottom"]
 
@@ -42,21 +45,19 @@ _X_AXIS = [1.0, 0.0, 0.0]
 
 
 def _cubemap_rotations() -> list[RotQuaternion]:
-    """Get sensor_from_rig rotations for 6 cubemap faces.
+    """Get sensor_from_rig rotations for 6 cubemap faces (canonical convention).
 
-    The rig frame is defined as the front camera frame (looking along +Z).
-    Each rotation transforms from rig coordinates to sensor coordinates.
+    The rig frame is the front camera frame (a canonical camera looking rig
+    -Z). Each rotation transforms from rig coordinates to sensor coordinates.
     """
-    # rig_from_sensor rotations, then invert to get sensor_from_rig
-    rig_from_sensor = [
-        RotQuaternion.identity(),  # front: +Z
-        RotQuaternion.from_axis_angle(_Y_AXIS, math.radians(-90)),  # right: +X
-        RotQuaternion.from_axis_angle(_Y_AXIS, math.radians(180)),  # back: -Z
-        RotQuaternion.from_axis_angle(_Y_AXIS, math.radians(90)),  # left: -X
-        RotQuaternion.from_axis_angle(_X_AXIS, math.radians(-90)),  # top: +Y
-        RotQuaternion.from_axis_angle(_X_AXIS, math.radians(90)),  # bottom: -Y
+    return [
+        RotQuaternion.identity(),  # front: rig -Z
+        RotQuaternion.from_axis_angle(_Y_AXIS, math.radians(90)),  # right: rig +X
+        RotQuaternion.from_axis_angle(_Y_AXIS, math.radians(180)),  # back: rig +Z
+        RotQuaternion.from_axis_angle(_Y_AXIS, math.radians(-90)),  # left: rig -X
+        RotQuaternion.from_axis_angle(_X_AXIS, math.radians(-90)),  # top: rig +Y
+        RotQuaternion.from_axis_angle(_X_AXIS, math.radians(90)),  # bottom: rig -Y
     ]
-    return [q.inverse() for q in rig_from_sensor]
 
 
 def extract_perspective_face(
@@ -82,8 +83,9 @@ def extract_perspective_face(
     v = np.arange(face_size, dtype=np.float64) - (face_size - 1) / 2.0
     uu, vv = np.meshgrid(u, v)
 
-    # 3D ray directions in face-local coordinates (camera looks along +Z)
-    rays = np.stack([uu / f, -vv / f, np.ones_like(uu)], axis=-1)  # (S, S, 3)
+    # 3D ray directions in the canonical camera frame: +x right, +y up (hence
+    # -vv), camera looks along -z.
+    rays = np.stack([uu / f, -vv / f, -np.ones_like(uu)], axis=-1)  # (S, S, 3)
 
     # Transform rays to rig/world coordinates
     # rotation is sensor_from_rig, so rig_from_sensor = inverse = transpose
@@ -91,9 +93,10 @@ def extract_perspective_face(
     R_rig_from_sensor = R_sensor_from_rig.T
     rays_world = rays @ R_rig_from_sensor.T  # broadcast matmul: (S,S,3) @ (3,3)
 
-    # Convert to spherical coordinates
+    # Convert to spherical coordinates. Front (rig -Z) is longitude 0, and +Y
+    # is pano-up, so longitude uses -z.
     x, y, z = rays_world[..., 0], rays_world[..., 1], rays_world[..., 2]
-    lon = np.arctan2(x, z)  # longitude: [-pi, pi], 0 = front (+Z)
+    lon = np.arctan2(x, -z)  # longitude: [-pi, pi], 0 = front (rig -Z)
     lat = np.arctan2(y, np.sqrt(x**2 + z**2))  # latitude: [-pi/2, pi/2]
 
     # Map to equirectangular pixel coordinates
@@ -216,12 +219,11 @@ def write_pano_camrig(
 
     All six faces share one square 90°-FOV ``PINHOLE`` camera and one optical
     centre, so the camera pool holds a single entry and every translation is
-    zero. ``rotations`` are the ``sensor_from_rig`` rotations in the Y-up ray
-    convention ``extract_perspective_face`` uses; conjugating by the Y-flip
-    (negating the x and z quaternion components) converts each to COLMAP's
-    Y-down camera convention, which the ``.camrig`` format stores. Each
-    sensor's image pattern is ``<face>/frame_%06d.jpg``, relative to the
-    directory holding the ``.camrig`` file (the rig root).
+    zero. ``rotations`` are the canonical ``sensor_from_rig`` rotations
+    ``extract_perspective_face`` uses, and the ``.camrig`` stores canonical
+    sensor poses directly (D5), so they are written verbatim — no Y-flip
+    conjugation. Each sensor's image pattern is ``<face>/frame_%06d.jpg``,
+    relative to the directory holding the ``.camrig`` file (the rig root).
     """
     from .._sfmtool.geometry import CameraIntrinsics
     from .._sfmtool.io import write_camrig
@@ -245,7 +247,7 @@ def write_pano_camrig(
     ).to_dict()
 
     quaternions_wxyz = np.array(
-        [[q.w, -q.x, q.y, -q.z] for q in rotations], dtype=np.float64
+        [[q.w, q.x, q.y, q.z] for q in rotations], dtype=np.float64
     )
     translations_xyz = np.zeros((len(face_names), 3), dtype=np.float64)
 

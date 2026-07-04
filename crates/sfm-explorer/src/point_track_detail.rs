@@ -718,14 +718,16 @@ fn compute_observation_metrics(
     let r = image.quaternion_wxyz.to_rotation_matrix();
     let p_cam = r * point_pos.coords + image.translation_xyz;
 
-    // Point behind camera — return NaN to signal invalid.
-    if p_cam.z <= 0.0 {
+    // Canonical cameras look down -Z, so in-front points have z < 0 and depth
+    // is -z. Point behind camera — return NaN to signal invalid.
+    let depth = -p_cam.z;
+    if depth <= 0.0 {
         return (f32::NAN, f32::NAN);
     }
 
-    // Project to image plane (undistorted normalized coords)
-    let x = p_cam.x / p_cam.z;
-    let y = p_cam.y / p_cam.z;
+    // Project to image plane (undistorted normalized canonical coords, p/(-z))
+    let x = p_cam.x / depth;
+    let y = p_cam.y / depth;
 
     // Apply distortion + intrinsics to get pixel coordinates
     let (u_proj, v_proj) = camera.project(x, y);

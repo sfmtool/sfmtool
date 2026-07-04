@@ -406,7 +406,7 @@ def strips_mode_3d(
         # Every cloud point has a half-size; the default only guards a pid that
         # isn't in the cloud (e.g. a point at infinity), which shouldn't reach here.
         half = pid_half.get(int(pid), 1e-2)
-        up = rot_of[obs[0][0]].T @ np.array([0.0, -1.0, 0.0])  # first camera's up
+        up = rot_of[obs[0][0]].T @ np.array([0.0, 1.0, 0.0])  # first camera's up (+Y)
         return center, up, half
 
     def make_patch(center, up, ext, n):

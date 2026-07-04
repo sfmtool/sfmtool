@@ -9,7 +9,7 @@ use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RigidTransform;
 
 // A synthetic scene mirroring the keypoint_localize tests: pinhole cameras
-// (identity rotation, looking down +z) viewing a textured world plane at
+// (rotated 180° about X so the canonical −Z-forward camera looks down world +z) viewing a textured world plane at
 // z = PLANE_Z. The patch sits on that plane with a normal pointing back toward
 // the cameras (-z). Each view can render the plane texture translated in-plane by
 // a per-view world offset `o_k`: the patch then renders, in view k, content
@@ -62,7 +62,7 @@ fn flat_texture(_x: f64, _y: f64) -> f64 {
     127.0
 }
 
-/// Synthesize the image a pinhole camera at `center` (looking down +z) sees of
+/// Synthesize the image a pinhole camera at `center` (looking down world +z) sees of
 /// the textured plane z = PLANE_Z, with the texture pattern translated in-plane
 /// by the (possibly fractional) world offset `off`. The texture is sampled
 /// continuously, so a fractional `off` plants a genuine sub-pixel shift.
@@ -94,7 +94,7 @@ impl Scene {
         let poses = centers
             .iter()
             .map(|c| {
-                RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [-c[0], -c[1], -c[2]])
+                RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
         let pyrs = centers
@@ -106,7 +106,7 @@ impl Scene {
         Self { cams, poses, pyrs }
     }
 
-    /// Cameras at `centers` (identity rotation), each viewing the **same**
+    /// Cameras at `centers` (looking down world +z), each viewing the **same**
     /// direction-only texture for a point at infinity — appearance depends only on
     /// ray direction (no parallax). Per view the directional texture is shifted by
     /// the matching angular `offset`.
@@ -115,7 +115,7 @@ impl Scene {
         let poses = centers
             .iter()
             .map(|c| {
-                RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [-c[0], -c[1], -c[2]])
+                RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
         let pyrs = offsets
@@ -144,7 +144,7 @@ fn dir_texture(dx: f64, dy: f64) -> f64 {
     texture(dx * 30.0, dy * 30.0)
 }
 
-/// Synthesize what an identity-rotation pinhole sees of a point at infinity in the
+/// Synthesize what an plus-z-looking pinhole sees of a point at infinity in the
 /// `+z` direction: each pixel's value is `dir_texture` of its ray direction,
 /// shifted by the (fractional) angular offset `off`. Independent of camera position.
 fn render_infinity_view(off: [f64; 2]) -> ImageU8 {

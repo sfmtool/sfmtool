@@ -221,6 +221,24 @@ fn relative_pose_conjugate_s_matches_formula() {
 }
 
 #[test]
+fn flip_camera_pose_s_is_involutive_and_matches_formula() {
+    for (q, t) in fixture_poses() {
+        let (q1, t1) = flip_camera_pose_s(&q, &t);
+        // R' = S·R, t' = S·t (world frame untouched — no W).
+        assert_mat_eq(
+            &q1.to_rotation_matrix(),
+            &(s_matrix() * q.to_rotation_matrix()),
+        );
+        assert_vec_eq(&t1, &(s_matrix() * t));
+
+        // Involutive: applying it twice returns the original.
+        let (q2, t2) = flip_camera_pose_s(&q1, &t1);
+        assert_eq!(q2, q);
+        assert_vec_eq(&t2, &t);
+    }
+}
+
+#[test]
 fn relative_pose_conjugate_s_consistent_with_absolute_conversion() {
     // cam2_from_cam1 = pose2 ∘ pose1⁻¹; converting the absolute poses and
     // recomposing must equal S-conjugating the relative pose directly.

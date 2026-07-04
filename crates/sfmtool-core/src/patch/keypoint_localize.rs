@@ -247,7 +247,8 @@ fn cache_istride(res: usize) -> usize {
 /// translation and projected as a ray.
 pub(super) fn project(view: &ProjectedImage<'_>, p: &Point3<f64>, w: f64) -> Option<(f64, f64)> {
     let pc = view.cam_from_world.transform_point_homogeneous(p.coords, w);
-    if pc.z <= 0.0 {
+    // Cheirality: a point in front of a canonical camera has z < 0.
+    if pc.z >= 0.0 {
         return None;
     }
     let (px, py) = view.camera.ray_to_pixel([pc.x, pc.y, pc.z])?;

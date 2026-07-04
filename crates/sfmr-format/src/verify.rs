@@ -77,9 +77,10 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
 
     // A version newer than this build understands has an unknown layout; report it
     // and stop rather than emit confusing per-file hash mismatches.
-    if metadata.version > 4 {
+    if metadata.version > SFMR_FORMAT_VERSION {
         errors.push(format!(
-            "unsupported .sfmr format version {} (this build supports up to 4)",
+            "unsupported .sfmr format version {} (this build supports up to \
+             {SFMR_FORMAT_VERSION})",
             metadata.version
         ));
         return Ok((false, errors));

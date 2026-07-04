@@ -17,11 +17,14 @@ use rayon::prelude::*;
 
 use crate::camera::frustum;
 
-/// Compute camera viewing directions from quaternions.
+/// Compute camera viewing directions from world-to-camera quaternions in the
+/// canonical `.sfmr` convention (camera looks down **−Z**, +Y up).
 ///
 /// For each quaternion, builds a rotation matrix `R_cam_from_world`, transposes to get
-/// `R_world_from_cam`, then computes `direction = -R_world_from_cam[:, 2]` (the camera
-/// looks down -Z in camera space).
+/// `R_world_from_cam`, then computes `direction = R_world_from_cam · (0, 0, −1)
+/// = −column(2)` — the world-space viewing direction of a −Z-forward camera.
+/// (Sign locked by `camera_direction_sign_*` tests: an identity pose views
+/// along world −Z; the canonical look-at fixture views toward its target.)
 ///
 /// # Arguments
 /// * `quaternions_wxyz` - Flat slice of `N*4` values `[w0,x0,y0,z0, w1,...]`
@@ -46,8 +49,8 @@ pub fn compute_camera_directions(quaternions_wxyz: &[f64], num_images: usize) ->
         let r_cam_from_world = quat.to_rotation_matrix();
         let r_world_from_cam = r_cam_from_world.transpose();
 
-        // Camera looks down -Z in camera space, so direction = -R_world_from_cam * [0,0,1]
-        // which is -column(2) of R_world_from_cam
+        // The canonical camera looks down −Z in camera space, so
+        // direction = R_world_from_cam · (0, 0, −1) = −column(2).
         let col2 = r_world_from_cam.matrix().column(2);
         let mut dir = [-col2[0], -col2[1], -col2[2]];
 

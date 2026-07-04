@@ -30,6 +30,12 @@ def compute_camera_directions(quaternions: np.ndarray) -> np.ndarray:
         quat = RotQuaternion.from_wxyz_array(quaternions[img_idx])
         R_cam_from_world = quat.to_rotation_matrix()
         R_world_from_cam = R_cam_from_world.T
+        # Canonical cameras look down -Z in camera space, so the world-space
+        # forward (look) direction is R_world_from_cam @ (0, 0, -1) =
+        # -R_world_from_cam[:, 2]. (Under the old COLMAP +Z-forward convention
+        # this expression was the *negated* view direction; it self-cancelled in
+        # the pairwise angle comparisons downstream, and is now genuinely the
+        # forward direction — see area A.6.)
         direction = -R_world_from_cam[:, 2]
         directions[img_idx] = direction / np.linalg.norm(direction)
 

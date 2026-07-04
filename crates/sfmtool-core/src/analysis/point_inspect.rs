@@ -103,8 +103,9 @@ impl SfmrReconstruction {
             let ray_cam = camera.pixel_to_ray(u, v);
             let ray_cam = Vector3::new(ray_cam[0], ray_cam[1], ray_cam[2]);
             let rc_norm = ray_cam.norm();
+            // Angle off the optical axis, which is −Z in the canonical frame.
             let incidence_deg = if rc_norm > 0.0 {
-                (ray_cam.z / rc_norm).clamp(-1.0, 1.0).acos().to_degrees()
+                (-ray_cam.z / rc_norm).clamp(-1.0, 1.0).acos().to_degrees()
             } else {
                 0.0
             };
