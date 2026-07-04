@@ -45,7 +45,42 @@ See the [.sfmr file format](sfmr-file-format.md) for design principles behind th
 This format largely adopts the semantics of the [COLMAP Database Format](https://colmap.github.io/database.html)
 as the basis for image pairs and two view geometries. It uses indexes that are always a
 contiguous range from 0 to N-1, different from the potentially non-contiguous IDs in a 
-COLMAP database starting from 1.
+COLMAP database starting from 1. One deliberate divergence is the camera-frame
+convention: two-view relative poses are stored in the canonical −Z-forward camera
+convention described below, **not** in COLMAP's +Z-forward, Y-down convention.
+
+## Coordinate Conventions
+
+Match data (feature indexes, descriptor distances) lives in pixel space and carries no
+camera-frame convention. The only convention-bearing data in a `.matches` file is the
+pair of relative-pose arrays in the optional two-view geometries section:
+
+- **Relative poses follow the canonical `.sfmr` camera convention.**
+  `two_view_geometries/quaternions_wxyz` and `two_view_geometries/translations_xyz`
+  store the relative pose `cam2_from_cam1` — the rigid transform taking a point from
+  image `idx_i`'s camera frame (cam1) to image `idx_j`'s camera frame (cam2),
+  `p_2 = R · p_1 + t`, matching the COLMAP `two_view_geometries` table semantics. Both
+  camera frames are right-handed with the camera **looking down −Z**: in the image
+  plane **+X points right** and **+Y points up** — the opposite of COLMAP/OpenCV,
+  where the camera looks down +Z with Y down. See the "Coordinate System Conventions"
+  section of [`sfmr-file-format.md`](sfmr-file-format.md) for the full statement;
+  `.matches` relative poses, `.sfmr` poses, and `.camrig` sensor poses share it, so
+  they compose without conversion.
+- **The stored F/E/H matrices are pixel-space quantities and are NOT affected by the
+  camera convention.** The fundamental matrix and homography relate pixel coordinates
+  directly (`x_2ᵀ F x_1 = 0`), and the essential matrix relates `K`-normalized pixel
+  coordinates — all are defined by image measurements, which the camera-axis
+  convention does not touch (pixel space keeps its top-left origin with y down). A
+  reader might expect `E` to flip along with the poses; it does not, because the
+  stored `E` is a constraint on normalized pixel coordinates, not on canonical
+  camera-frame rays. A consumer that instead *derives* `E` or `F` from the stored
+  relative pose plus intrinsics must first map the pose back to the COLMAP/OpenCV
+  frame by conjugating with the camera-frame flip `S = diag(1, −1, −1)`.
+
+> **Migration note.** The canonical camera convention was formalized after the format
+> was already in use; files written by earlier sfmtool releases (format version 1)
+> hold COLMAP-convention relative poses (cameras looking down +Z with Y down). See
+> [Versioning and Migration](#versioning-and-migration).
 
 ## File Structure
 
@@ -123,7 +158,8 @@ Where:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. Must be `1` for this specification
+- `version`: Format version number. Currently `1`; version `2` is planned (see
+  [Versioning and Migration](#versioning-and-migration))
 - `matching_method`: Type of matching used to produce these matches
   - `"exhaustive"`: Exhaustive pairwise matching
   - `"sequential"`: Sequential matching with overlap
@@ -392,14 +428,18 @@ Example:
 
 - **Shape**: `(P, 4)` where P = pair_count
 - **Data type**: `float64` (little-endian)
-- Relative rotation quaternion in WXYZ format
+- Relative rotation quaternion in WXYZ format — the rotation part of the
+  `cam2_from_cam1` pose, in the canonical camera convention (see
+  [Coordinate Conventions](#coordinate-conventions))
 - `[1, 0, 0, 0]` (identity) when not applicable
 
 #### `two_view_geometries/translations_xyz.{P}.3.float64.zst`
 
 - **Shape**: `(P, 3)` where P = pair_count
 - **Data type**: `float64` (little-endian)
-- Relative translation vector
+- Relative translation vector — the translation part of the `cam2_from_cam1`
+  pose, in the canonical camera convention (see
+  [Coordinate Conventions](#coordinate-conventions))
 - `[0, 0, 0]` when not applicable
 
 ## File Naming and Path Convention
@@ -668,6 +708,42 @@ modifying an existing file.
    .sfmr file (reconstruction)
 ```
 
+## Versioning and Migration
+
+The format has one released version (`1`); version `2` is planned. The format is
+versioned (`metadata.json` `version`) precisely so that convention changes like the
+one below can upgrade on load instead of breaking old files.
+
+### Version 1 → Version 2 (planned)
+
+Version 2 makes the canonical camera convention normative for the stored two-view
+relative poses (see [Coordinate Conventions](#coordinate-conventions)), mirroring the
+`.sfmr` version 5 and `.camrig` version 2 bumps. No member is added, removed, or
+renamed; the change is purely semantic:
+
+| Version 1 | Version 2 |
+|-----------|-----------|
+| `cam2_from_cam1` poses in COLMAP convention (cameras look down +Z with Y down) | Canonical convention: cameras look down −Z with +Y up |
+| F/E/H matrices in pixel space | Unchanged — pixel space |
+
+**Migration is mechanical and lossless.** A version 1 file upgrades on load by
+conjugating each stored relative pose with the camera-frame flip
+`S = diag(1, −1, −1)`: `R' = S · R · S`, `t' = S · t`. The F/E/H matrices are
+untouched — they are pixel-space quantities, identical in both versions. Relative
+poses never touch the world frame, so the `.sfmr` world canonicalization `W` does not
+apply. Saving always writes version 2. Content hashes cover the stored bytes, so
+hashes verify before conversion; a converted-then-saved file is a new version 2 file
+with new hashes.
+
+As a consequence, consumers that export two-view geometries to a COLMAP database
+(`sfm to-colmap-db` via `src/sfmtool/colmap/db_setup.py`) S-conjugate the canonical
+poses back to COLMAP convention when building `pycolmap.Rigid3d`. The implementation
+roadmap is `specs/drafts/zup-camera-convention-migration.md` (decision D6).
+
 ## Version History
 
+- **Version 2** (planned): Canonical camera convention — `cam2_from_cam1` relative
+  poses in −Z-forward / +Y-up camera frames, matching `.sfmr` and `.camrig` — becomes
+  normative; version 1 files (COLMAP convention) upgrade on load via `S`-conjugation
+  of the stored poses. F/E/H matrices unchanged.
 - **Version 1.0rc1**: Release candidate

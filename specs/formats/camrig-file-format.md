@@ -56,7 +56,8 @@ Each sensor has:
   index.
 - **Extrinsics** — the sensor's pose within the rig, `sensor_from_rig`: the
   rigid transform that takes a point from rig coordinates to that sensor's
-  camera coordinates, `p_sensor = R · p_rig + t`.
+  camera coordinates, `p_sensor = R · p_rig + t`. Sensor camera frames are
+  canonical −Z-forward frames (see *Coordinate and quaternion conventions*).
 
 The rig has its own coordinate frame, chosen by the producer. For a
 co-centric rig the frame is conventionally placed with its origin at the
@@ -80,6 +81,16 @@ be recorded in `rig_attributes` as a hint; see *Rig type and attributes*.)
 
 ### Coordinate and quaternion conventions
 
+- **Sensor frames follow the canonical `.sfmr` camera convention.** Each
+  sensor's frame is right-handed with the sensor **looking down −Z**: the
+  sensor's optical axis is its local **−Z**, and in the image plane **+X
+  points right** and **+Y points up** — the opposite of COLMAP/OpenCV, where
+  the camera looks down +Z with Y down. `sensor_from_rig` poses (and any
+  pose derived from them) map into frames of this convention. See the
+  "Coordinate System Conventions" section of
+  [`sfmr-file-format.md`](sfmr-file-format.md) for the full statement;
+  `.camrig` sensor poses and `.sfmr` rig sensor poses share it, so they are
+  interchangeable without conversion.
 - **Quaternions are WXYZ** — stored `[w, x, y, z]`, scalar first. This
   matches `.sfmr` and the COLMAP rig format. Quaternions are unit
   quaternions.
@@ -90,7 +101,13 @@ be recorded in `rig_attributes` as a hint; see *Rig type and attributes*.)
   `[0,0,0]` and only the rotation varies per sensor.
 - Camera-model parameter conventions (image-plane vs pixel coordinates,
   principal-point origin, distortion model) follow COLMAP, as documented for
-  `.sfmr` cameras.
+  `.sfmr` cameras — only the camera-space axes differ.
+
+> **Migration note.** The canonical sensor-frame convention was formalized
+> after the format was already in use; files written by earlier sfmtool
+> releases (format version 1) hold COLMAP-convention sensor poses (sensors
+> looking down +Z with Y down). See
+> [Versioning and migration](#versioning-and-migration).
 
 ## Specification
 
@@ -112,7 +129,8 @@ content_hash.json.zst
 Compact JSON, zstd-compressed. Fields (consumers ignore unknown fields, for
 forward-compatible extension):
 
-* `version`: (integer) Format version. Must be `1`.
+* `version`: (integer) Format version. Currently `1`; version `2` is
+  planned (see [Versioning and migration](#versioning-and-migration)).
 * `name`: (string) A human-readable name for the rig, e.g. `"insv2_x5"`,
   `"cubemap"`, `"spherical_tiles_n1280"`. May be empty.
 * `sensor_count`: (integer) Number of sensors, `S ≥ 1`.
@@ -197,7 +215,8 @@ sfmtool formats.
 
 ## Data ordering and constraints
 
-- `version` is `1`.
+- `version` is a known version (`1`, or `2` once implemented — see
+  [Versioning and migration](#versioning-and-migration)).
 - `sensor_count ≥ 1`, `camera_count ≥ 1`.
 - `sensor_count` equals the length of every per-sensor table
   (`camera_indexes`, `quaternions_wxyz`, `translations_xyz`, and
@@ -352,13 +371,33 @@ Structural differences:
 
 Field correspondences:
 
-- Both store a rig→sensor transform in the same WXYZ convention. COLMAP
-  defines its rig frame by the reference sensor, whose `cam_from_rig` is the
-  identity; `.camrig` does not constrain any pose. `.camrig` → COLMAP picks
-  sensor 0 (the primary sensor) as the reference and rebases each pose by
-  sensor 0's inverse:
-  `cam_from_rig[i] = sensor_from_rig[i] · sensor_from_rig[0]⁻¹`.
-  COLMAP → `.camrig` needs no rebasing.
+- Both store a rig→sensor transform with WXYZ quaternions, but in
+  **different camera-frame conventions**: COLMAP poses map into
+  +Z-forward / Y-down camera frames, `.camrig` poses into canonical
+  −Z-forward / +Y-up frames (see *Coordinate and quaternion conventions*).
+  Conversion conjugates each pose with the camera-frame flip
+  `S = diag(1, −1, −1)`: `R_colmap = S · R · S`, `t_colmap = S · t`
+  (`S` is involutive, so the reverse direction is the same formula).
+- COLMAP defines its rig frame by the reference sensor, whose `cam_from_rig`
+  is the identity; `.camrig` does not constrain any pose. `.camrig` → COLMAP
+  therefore does two things: **rebase** so sensor 0 (the primary sensor) is
+  the reference, and **S-conjugate** each sensor's canonical camera frame to
+  COLMAP's. Rebasing is the sensor-0→sensor-i relative transform (the rig
+  frame cancels), `sensor_from_rig[i] · sensor_from_rig[0]⁻¹`; S-conjugation
+  re-expresses that transform's two endpoint camera frames in COLMAP
+  convention. Composed:
+
+  ```
+  cam_from_rig[i] = S · sensor_from_rig[i] · sensor_from_rig[0]⁻¹ · S
+  ```
+
+  The order of the two operations does not matter: `X ↦ S · X · S` is an
+  automorphism (`S · S = I`), so conjugating each pose first
+  (`S · sensor_from_rig[k] · S`) and then rebasing yields the same result —
+  the inner `S · S` on the reference term cancels, leaving exactly the
+  expression above. COLMAP → `.camrig` inverts it: S-conjugate the COLMAP
+  poses back (`sensor_from_rig[i] = S · cam_from_rig[i] · S`); no rebasing is
+  needed, since `.camrig` does not require sensor 0 at identity.
 - A COLMAP sensor's `image_prefix` corresponds to a `.camrig` sensor image
   file pattern.
 
@@ -410,6 +449,40 @@ $ jq . cameras/metadata.json
 ]
 ```
 
+## Versioning and migration
+
+The format has one released version (`1`); version `2` is planned. The
+format is versioned (`metadata.json` `version`) precisely so that convention
+changes like the one below can upgrade on load instead of breaking old
+files.
+
+### Version 1 → Version 2 (planned)
+
+Version 2 makes the canonical `.sfmr` coordinate convention normative for
+sensor poses (see *Coordinate and quaternion conventions*), mirroring the
+`.sfmr` version 5 bump. No member is added, removed, or renamed; the change
+is purely semantic:
+
+| Version 1 | Version 2 |
+|-----------|-----------|
+| `sensor_from_rig` poses in COLMAP convention (sensors look down +Z with Y down) | Canonical convention: sensors look down −Z with +Y up |
+
+**Migration is mechanical and lossless.** A version 1 file upgrades on load
+by conjugating each stored `sensor_from_rig` pose with the camera-frame flip
+`S = diag(1, −1, −1)`: `R' = S · R · S`, `t' = S · t`. Rig-relative poses
+never touch the world frame, so the `.sfmr` world canonicalization `W` does
+not apply. Saving always writes version 2. Content hashes cover the stored
+bytes, so hashes verify before conversion; a converted-then-saved file is a
+new version 2 file with new hashes.
+
+As a consequence, `test-data/images/kerry_park/kerry_park.camrig` must be
+regenerated in the canonical convention. The implementation roadmap is
+`specs/drafts/zup-camera-convention-migration.md` (decision D5).
+
 ## Version history
 
+- **Version 2** (planned): Canonical coordinate convention — sensor frames
+  look down −Z with +Y up, matching `.sfmr` — becomes normative; version 1
+  files (COLMAP convention) upgrade on load via `S`-conjugation of the
+  stored `sensor_from_rig` poses.
 - **Version 1**: Initial release.

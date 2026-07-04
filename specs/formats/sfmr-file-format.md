@@ -18,7 +18,124 @@ The `.sfmr` file format provides a portable, self-contained format for storing S
 This format largely adopts the semantics of the [COLMAP Output Format](https://colmap.github.io/format.html)
 as the basis for a reconstruction. It uses indexes that are always a
 contiguous range from 0 to N-1, different from the potentially non-contiguous IDs in a 
-COLMAP binary file starting from 1.
+COLMAP binary file starting from 1. One deliberate divergence is the coordinate
+system: `.sfmr` data is stored in the canonical right-handed, Z-up world /
+−Z-forward camera convention described below, **not** in COLMAP's
++Z-forward, Y-down convention.
+
+## Coordinate System Conventions
+
+All geometric data in a `.sfmr` file — camera poses, 3D point positions,
+points-at-infinity directions, normals, and patch frames — is expressed in one
+canonical coordinate convention. There are no per-file alternatives and no
+convention flag: a conforming `.sfmr` file is always in this convention.
+
+### World space
+
+- **Right-handed, Z-up.** The world frame is a right-handed Cartesian frame
+  whose **+Z axis points up** (against gravity, when gravity is known). The
+  **X-Y plane is the ground plane**.
+- SfM cannot always observe gravity, so the world orientation of a freshly
+  solved reconstruction is a best-effort canonicalization (see
+  [Conversions happen at the I/O boundary](#conversions-happen-at-the-io-boundary)).
+  The convention states what the axes *mean*; tools like `sfm xform --rotate`
+  and `--align-to` refine the orientation afterwards. Regardless of how well
+  "up" was recovered, the frame is always right-handed.
+- `points3d/positions_xyzw` are world coordinates. A `w = 0` row is a unit
+  direction in this frame, pointing **from each camera centre toward the
+  observed content**.
+- The optional `world_space_unit` (see [World-Space Unit](#world-space-unit))
+  gives this frame's physical unit.
+
+### Camera space
+
+- Each camera (and each rig sensor) has a right-handed local frame in which
+  the camera **looks down −Z**: the optical axis is **−Z**, and in the image
+  plane **+X points right** and **+Y points up**. This is the OpenGL /
+  Blender-style camera convention — the opposite of COLMAP/OpenCV, where the
+  camera looks down +Z with Y down.
+- The stored per-image pose (`images/quaternions_wxyz`,
+  `images/translations_xyz`) is world-to-camera into this frame:
+  `p_cam = R · p_world + t`, camera center `C = −Rᵀ · t`.
+- A point is **in front of a camera iff its camera-space `z < 0`**, and its
+  **depth is `−z`** (positive in front). All depth statistics
+  ([Depth Statistics](#depth-statistics)) use this depth.
+- Rig `sensor_from_rig` poses map rig-frame coordinates into a sensor's
+  camera frame; both frames follow this camera convention (the rig frame is
+  the reference sensor's camera frame).
+
+### Pixel space
+
+Pixel coordinates are unchanged by the camera-axis convention and follow the
+usual raster layout: origin at the image **top-left**, `x`/`u` increasing
+right, `y`/`v` increasing **down**, half-pixel centers (the pixel in column
+`x`, row `y` has its centre at `(x + 0.5, y + 0.5)`).
+
+Because pixel `v` grows downward while camera **+Y** points up, projecting a
+camera-space point `p` (with `z < 0`) reads:
+
+```
+x_n =  p.x / (−p.z)                # normalized image coords, y up
+y_n =  p.y / (−p.z)
+(x_d, y_d) = distort(x_n, −y_n)    # distortion models operate in y-down coords
+u = fx · x_d + cx
+v = fy · y_d + cy
+```
+
+Equivalently: convert the camera-space point to the OpenCV optical frame with
+`S = diag(1, −1, −1)` (a 180° rotation about X) and apply the classic
+COLMAP/OpenCV projection. The camera models and parameters in
+[Cameras](#3-cameras-camerasmetadatajsonzst) are exactly COLMAP's; only the
+camera-space axes differ.
+
+### Rationale
+
+- **Z-up world**: the SfM Explorer viewport, ground grid, and navigation are
+  already right-handed Z-up, and geospatial, CAD, and Blender conventions
+  agree. Making the format match means a reconstruction loads "right side up"
+  with a meaningful X-Y ground plane.
+- **−Z-forward, Y-up cameras**: the standard rendering-side (OpenGL, Blender,
+  Nerfstudio) camera frame. Camera "up" is +Y instead of −Y, and camera
+  frames compose with the Z-up world without a handedness bridge.
+- **One canonical convention, converted at the boundary**: mixing conventions
+  per file or per field is the classic source of silent mirror-image and
+  upside-down bugs. Keeping every in-memory and on-disk `.sfmr` in a single
+  convention makes all internal geometry code unambiguous.
+
+### Conversions happen at the I/O boundary
+
+All conversion to and from other conventions **MUST** happen at the I/O
+boundary, so that in-memory and on-disk `.sfmr` data is always canonical. In
+particular, COLMAP interop (binary models, databases, pycolmap objects) must
+convert on import and on export; a COLMAP pose or point must never be copied
+verbatim into a `.sfmr`.
+
+For COLMAP (+Z-forward, Y-down cameras; arbitrary world orientation), with the
+camera-frame flip `S = diag(1, −1, −1)` and the fixed world rotation
+`W : (x, y, z) → (x, z, −y)` — i.e. `W = [[1,0,0],[0,0,1],[0,−1,0]]`, the same
+rotation Nerfstudio applies as its `applied_transform`, mapping COLMAP's
+typical −Y-up worlds to +Z-up:
+
+```
+poses:            R_sfmr = S · R_colmap · Wᵀ        t_sfmr = S · t_colmap
+world data:       X_sfmr = W · X_colmap             (finite points, with w carried
+                                                     through; infinity directions,
+                                                     normals, and patch u/v
+                                                     half-vectors rotate the same way)
+sensor_from_rig:  R_sfmr = S · R_colmap · S         t_sfmr = S · t_colmap
+```
+
+The camera-frame flip `S` is exact and unconditional. The world rotation `W`
+is a canonicalization heuristic (COLMAP does not define gravity): importers
+apply it so that the common upright-camera case lands roughly Z-up, and
+exporters apply its inverse, keeping import/export round trips stable.
+
+> **Migration note.** This convention was formalized after the format was
+> already in use; files written by earlier sfmtool releases (format
+> versions ≤ 4) hold COLMAP-convention data. See
+> [Versioning and Migration](#versioning-and-migration) and the
+> implementation roadmap in
+> `specs/drafts/zup-camera-convention-migration.md`.
 
 ## File Structure
 
@@ -357,6 +474,9 @@ The `rigs/` and `frames/` sections must both be present or both be absent.
   The rig coordinate frame is defined by the reference sensor, so this rotation
   expresses each sensor's orientation relative to the reference sensor.
   The reference sensor has quaternion `[1, 0, 0, 0]` (identity).
+  Both the rig frame and each sensor frame are camera frames in the canonical
+  convention (−Z forward, +Y up); see
+  [Coordinate System Conventions](#coordinate-system-conventions).
 
 #### `rigs/sensor_translations_xyz.{S}.3.float64.zst`
 
@@ -487,7 +607,10 @@ Camera rotation quaternions in WXYZ format:
 - **Shape**: `(N, 4)` where N = image_count
 - **Data type**: `float64` (little-endian)
 - **Format**: [w, x, y, z] quaternion components (unit quaternions)
-- **Convention**: World-to-camera rotation (world point → camera point)
+- **Convention**: World-to-camera rotation (world point → camera point). The
+  camera frame follows the
+  [Coordinate System Conventions](#coordinate-system-conventions): the camera
+  looks down **−Z** with **+X right, +Y up**.
 
 #### `images/translations_xyz.{N}.3.float64.zst`
 
@@ -496,7 +619,9 @@ Camera translation vectors:
 - **Shape**: `(N, 3)` where N = image_count
 - **Data type**: `float64` (little-endian)
 - **Format**: [x, y, z] translation vector
-- **Convention**: World-to-camera translation (from world coordinates to camera coordinates)
+- **Convention**: World-to-camera translation (from world coordinates to
+  camera coordinates): `p_cam = R · p_world + t`, so the camera center in
+  world space is `C = −Rᵀ · t`.
 
 #### `images/feature_tool_hashes.{N}.uint128.zst` (sift_files only)
 
@@ -557,6 +682,11 @@ The `thumbnail_size` field in `images/metadata.json.zst` records the dimension (
 #### Depth Statistics
 
 Per-image depth statistics and histograms computed from the 3D structure.
+Throughout this section, the "z"/"depth" of a point in an image is its
+distance along the camera's viewing direction — **`−z` in camera space**
+(cameras look down −Z; see
+[Coordinate System Conventions](#coordinate-system-conventions)) — which is
+positive for points in front of the camera.
 
 #### `images/depth_statistics.json.zst`
 
@@ -615,7 +745,8 @@ Every point — finite or at infinity — is one homogeneous coordinate
 `(x, y, z, w)`:
 
 - `w ≠ 0` — a finite point at Euclidean position `(x/w, y/w, z/w)`.
-- `w = 0` — a point at infinity; `(x, y, z)` is a direction in the world frame.
+- `w = 0` — a point at infinity; `(x, y, z)` is a direction in the world
+  frame, pointing from each camera centre toward the observed content.
 
 `w` is the kind: the representation is self-describing, with no separate flag.
 A point at infinity is the `w → 0` limit, not a special case bolted on.
@@ -1440,8 +1571,28 @@ is byte-equivalent to a v3 file apart from the `version` / `feature_source`
 metadata keys and the new `tracks/metadata.json` `has_*` keys.
 `embedded_patches` is a new mode with no v3 equivalent.
 
+### Version 4 → Version 5 (planned)
+
+Version 5 makes the
+[Coordinate System Conventions](#coordinate-system-conventions) normative. No
+array is added, removed, or renamed; the change is purely semantic:
+
+| Version ≤ 4 | Version 5 |
+|-------------|-----------|
+| Poses and world data in COLMAP convention (cameras look down +Z with Y down; world orientation as produced by the solver) | Canonical convention: right-handed Z-up world; cameras look down −Z with +Y up |
+
+**Migration is mechanical and lossless.** A version ≤ 4 file upgrades on load
+by applying the fixed COLMAP→canonical conversion (`S` and `W` from
+[Conversions happen at the I/O boundary](#conversions-happen-at-the-io-boundary))
+to poses, point positions, infinity directions, normals, and patch `u`/`v`
+half-vectors; saving always writes version 5. The implementation roadmap is
+`specs/drafts/zup-camera-convention-migration.md`.
+
 ## Version History
 
+- **Version 5** (planned): Canonical coordinate convention — right-handed
+  Z-up world, −Z-forward / +Y-up cameras — becomes normative; version ≤ 4
+  files (COLMAP convention) upgrade on load via the fixed `S`/`W` conversion.
 - **Version 4**: Added the top-level `feature_source` discriminator and the
   `embedded_patches` observation mode — inline `tracks/keypoints_xy` and
   `images/image_file_hashes` replacing the `.sift`-link columns
