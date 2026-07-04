@@ -3,6 +3,7 @@
 
 //! Geometric primitives: rotations, rigid transforms, and ray geometry.
 
+pub mod convention;
 pub mod rigid_transform;
 pub mod rot_quaternion;
 pub mod rotation;
