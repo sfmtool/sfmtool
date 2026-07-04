@@ -658,9 +658,14 @@ pub fn write_colmap_db_matches(
             let e: [f64; 9] = std::array::from_fn(|i| tvg.e_matrices[[k, i / 3, i % 3]]);
             let h: [f64; 9] = std::array::from_fn(|i| tvg.h_matrices[[k, i / 3, i % 3]]);
 
-            // Quaternion and translation — extract row k
-            let q: [f64; 4] = std::array::from_fn(|i| tvg.quaternions_wxyz[[k, i]]);
-            let t: [f64; 3] = std::array::from_fn(|i| tvg.translations_xyz[[k, i]]);
+            // Quaternion and translation — extract row k. The in-memory
+            // MatchesData poses are canonical (`.matches` version 2); the
+            // COLMAP database expects COLMAP-convention poses, so
+            // S-conjugate at this boundary (S is involutive — the same
+            // conversion the DB reader applies in the other direction).
+            let mut q: [f64; 4] = std::array::from_fn(|i| tvg.quaternions_wxyz[[k, i]]);
+            let mut t: [f64; 3] = std::array::from_fn(|i| tvg.translations_xyz[[k, i]]);
+            matches_format::s_conjugate_relative_pose(&mut q, &mut t);
 
             stmt.execute(rusqlite::params![
                 pair_id,

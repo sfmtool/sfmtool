@@ -583,7 +583,7 @@ fn make_feature_data() -> (
 fn make_matches_data() -> MatchesData {
     MatchesData {
         metadata: MatchesMetadata {
-            version: 1,
+            version: matches_format::MATCHES_FORMAT_VERSION,
             matching_method: "sequential".into(),
             matching_tool: "colmap".into(),
             matching_tool_version: "4.02".into(),
@@ -672,6 +672,7 @@ fn make_matches_data_with_tvg() -> MatchesData {
             let mut t = Array2::zeros((2, 3));
             t[[0, 0]] = 1.0;
             t[[0, 1]] = 0.5;
+            t[[0, 2]] = 0.25;
             t
         },
     });
@@ -744,6 +745,35 @@ fn test_feature_then_matches_with_tvg_round_trip() {
     let id_map = write_colmap_db_features(&db_path, &feature_data).unwrap();
     let matches_data = make_matches_data_with_tvg();
     write_colmap_db_matches(&db_path, &matches_data, &id_map).unwrap();
+
+    // The database itself holds COLMAP-convention poses: the canonical
+    // `.matches` pose (w, x, y, z) / (tx, ty, tz) is stored S-conjugated,
+    // i.e. with y/z components negated.
+    {
+        let conn = Connection::open(&db_path).unwrap();
+        let (qvec_blob, tvec_blob): (Vec<u8>, Vec<u8>) = conn
+            .query_row(
+                "SELECT qvec, tvec FROM two_view_geometries ORDER BY pair_id LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let qvec: Vec<f64> = qvec_blob
+            .chunks_exact(8)
+            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+        let tvec: Vec<f64> = tvec_blob
+            .chunks_exact(8)
+            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .collect();
+        assert!((qvec[0] - 0.9).abs() < 1e-10);
+        assert!((qvec[1] - 0.1).abs() < 1e-10);
+        assert!((qvec[2] - (-0.2)).abs() < 1e-10);
+        assert!((qvec[3] - (-0.3)).abs() < 1e-10);
+        assert!((tvec[0] - 1.0).abs() < 1e-10);
+        assert!((tvec[1] - (-0.5)).abs() < 1e-10);
+        assert!((tvec[2] - (-0.25)).abs() < 1e-10);
+    }
 
     let loaded = read_colmap_db_matches(&db_path, true).unwrap();
     assert!(loaded.metadata.has_two_view_geometries);

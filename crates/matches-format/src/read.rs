@@ -22,6 +22,14 @@ pub fn read_matches_metadata(path: &Path) -> Result<MatchesMetadata, MatchesErro
 }
 
 /// Read a complete `.matches` file into columnar data.
+///
+/// Version 1 files store their two-view relative poses in the COLMAP camera
+/// convention and are upgraded to the canonical convention on load by
+/// S-conjugating every pose ([`s_conjugate_relative_pose`]); the pixel-space
+/// F/E/H matrices are identical in both versions and are left untouched.
+/// Content hashes cover the stored bytes ([`crate::verify_matches`] re-reads
+/// the file), so integrity verification is unaffected by the in-memory
+/// upgrade; a re-written file is a new version-2 file with new hashes.
 pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     let file = std::fs::File::open(path).map_err(|e| MatchesError::IoPath {
         operation: "Failed to open file",
@@ -31,8 +39,19 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     let mut archive = zip::ZipArchive::new(file)?;
 
     // Top-level metadata
-    let metadata: MatchesMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
+    let mut metadata: MatchesMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
     let content_hash: MatchesContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
+
+    // Reject versions newer than this build understands; their semantics are
+    // unknown so reading with current-version assumptions would mislead.
+    if metadata.version > MATCHES_FORMAT_VERSION {
+        return Err(MatchesError::InvalidFormat(format!(
+            "unsupported .matches format version {} (this build supports up to \
+             {MATCHES_FORMAT_VERSION})",
+            metadata.version
+        )));
+    }
+    let needs_convention_upgrade = metadata.version < MATCHES_FORMAT_VERSION;
 
     let image_count = metadata.image_count as usize;
     let pair_count = metadata.image_pair_count as usize;
@@ -220,7 +239,7 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
         let translations_xyz = Array2::from_shape_vec((pair_count, 3), trans_vec)
             .map_err(|e| MatchesError::ShapeMismatch(format!("translations reshape: {e}")))?;
 
-        Some(TwoViewGeometryData {
+        let mut tvg = TwoViewGeometryData {
             metadata: tvg_metadata,
             config_types,
             config_indexes,
@@ -231,10 +250,20 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
             h_matrices,
             quaternions_wxyz,
             translations_xyz,
-        })
+        };
+        // Version 1 → 2 upgrade: relative poses were stored in the COLMAP
+        // camera convention; S-conjugate them to canonical. F/E/H are
+        // pixel-space and unchanged.
+        if needs_convention_upgrade {
+            tvg.s_conjugate_poses();
+        }
+        Some(tvg)
     } else {
         None
     };
+    if needs_convention_upgrade {
+        metadata.version = MATCHES_FORMAT_VERSION;
+    }
 
     Ok(MatchesData {
         metadata,

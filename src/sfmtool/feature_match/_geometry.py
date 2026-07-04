@@ -18,7 +18,14 @@ import numpy as np
 def get_essential_matrix(
     R1: np.ndarray, t1: np.ndarray, R2: np.ndarray, t2: np.ndarray
 ) -> np.ndarray:
-    """Compute the essential matrix E from two camera poses.
+    """Compute the essential matrix E from two canonical camera poses.
+
+    The input poses are canonical (``.sfmr``) world-to-camera poses (cameras
+    look down -Z). E/F are pixel-space quantities that must be derived in the
+    OpenCV camera frame, so the poses are first mapped back to OpenCV frames by
+    an S-only flip (``R' = S.R``, ``t' = S.t``); see the §1 invariant in
+    ``specs/drafts/zup-camera-convention-migration.md``. The resulting E is
+    identical to the pre-migration OpenCV-frame E (pixels don't change).
 
     Args:
         R1: 3x3 rotation matrix for camera 1 (world to camera)
@@ -29,6 +36,10 @@ def get_essential_matrix(
     Returns:
         3x3 essential matrix E
     """
+    from ..colmap.convention import flip_camera_pose_matrix_s
+
+    R1, t1 = flip_camera_pose_matrix_s(R1, t1)
+    R2, t2 = flip_camera_pose_matrix_s(R2, t2)
     R_rel = R2 @ R1.T
     t_rel = t2 - R_rel @ t1
 

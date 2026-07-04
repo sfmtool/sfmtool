@@ -385,9 +385,10 @@ fn project_pinhole_matches_intrinsic_matrix() {
     let cam = pinhole();
     let (x, y) = (0.3, -0.2);
     let (u, v) = cam.project(x, y);
-    // For pinhole: u = fx * x + cx, v = fy * y + cy
+    // For pinhole: u = fx * x + cx, v = fy * (−y) + cy — the canonical
+    // image-plane y is up, pixel v is down.
     assert_relative_eq!(u, 500.0 * 0.3 + 320.0, epsilon = 1e-12);
-    assert_relative_eq!(v, 502.0 * -0.2 + 240.0, epsilon = 1e-12);
+    assert_relative_eq!(v, 502.0 * 0.2 + 240.0, epsilon = 1e-12);
 }
 
 #[test]
@@ -490,11 +491,12 @@ fn fisheye_round_trip_wide_angle() {
 
 #[test]
 fn undistort_to_ray_at_origin_is_optical_axis() {
+    // The canonical optical axis is −Z.
     for cam in all_cameras() {
         let ray = cam.model.undistort_to_ray(0.0, 0.0);
         assert_relative_eq!(ray[0], 0.0, epsilon = 1e-15);
         assert_relative_eq!(ray[1], 0.0, epsilon = 1e-15);
-        assert_relative_eq!(ray[2], 1.0, epsilon = 1e-15);
+        assert_relative_eq!(ray[2], -1.0, epsilon = 1e-15);
     }
 }
 
@@ -511,8 +513,9 @@ fn undistort_to_ray_produces_unit_vectors() {
 
 #[test]
 fn undistort_to_ray_agrees_with_undistort_for_perspective() {
-    // For perspective models, undistort_to_ray should give the same
-    // direction as normalize(undistort(x_d, y_d), 1)
+    // For perspective models, undistort_to_ray should give the S-mapped
+    // (canonical) direction of normalize(undistort(x_d, y_d), 1):
+    // (x, −y, −1) / len.
     for cam in [
         pinhole(),
         simple_pinhole(),
@@ -526,8 +529,8 @@ fn undistort_to_ray_agrees_with_undistort_for_perspective() {
             let (x, y) = cam.model.undistort(x_d, y_d);
             let len = (x * x + y * y + 1.0).sqrt();
             assert_relative_eq!(ray[0], x / len, epsilon = 1e-10);
-            assert_relative_eq!(ray[1], y / len, epsilon = 1e-10);
-            assert_relative_eq!(ray[2], 1.0 / len, epsilon = 1e-10);
+            assert_relative_eq!(ray[1], -y / len, epsilon = 1e-10);
+            assert_relative_eq!(ray[2], -1.0 / len, epsilon = 1e-10);
         }
     }
 }
@@ -535,7 +538,8 @@ fn undistort_to_ray_agrees_with_undistort_for_perspective() {
 #[test]
 fn undistort_to_ray_agrees_with_undistort_for_small_angles() {
     // For fisheye models at small angles, undistort_to_ray should agree
-    // with normalize(undistort(x_d, y_d), 1) since tan(theta) ≈ theta
+    // with the S-mapped normalize(undistort(x_d, y_d), 1) — i.e.
+    // (x, −y, −1)/len — since tan(theta) ≈ theta.
     let small_points = [[0.01, 0.0], [0.0, 0.01], [0.01, 0.01], [-0.02, 0.015]];
     let fisheye_cameras = vec![
         opencv_fisheye(),
@@ -550,8 +554,8 @@ fn undistort_to_ray_agrees_with_undistort_for_small_angles() {
             let (x, y) = cam.model.undistort(x_d, y_d);
             let len = (x * x + y * y + 1.0).sqrt();
             assert_relative_eq!(ray[0], x / len, epsilon = 1e-6);
-            assert_relative_eq!(ray[1], y / len, epsilon = 1e-6);
-            assert_relative_eq!(ray[2], 1.0 / len, epsilon = 1e-6);
+            assert_relative_eq!(ray[1], -y / len, epsilon = 1e-6);
+            assert_relative_eq!(ray[2], -1.0 / len, epsilon = 1e-6);
         }
     }
 }
@@ -559,8 +563,9 @@ fn undistort_to_ray_agrees_with_undistort_for_small_angles() {
 #[test]
 fn undistort_to_ray_fisheye_beyond_90_degrees() {
     // For a pure equidistant fisheye (no distortion coefficients),
-    // a distorted radius of π/2 corresponds to theta = 90°,
-    // and beyond that the ray should point backward (z < 0).
+    // a distorted radius of π/2 corresponds to theta = 90° off the −Z
+    // optical axis, and beyond that the ray should point backward
+    // (canonical z > 0).
     let cam = CameraIntrinsics {
         model: CameraModel::OpenCVFisheye {
             focal_length_x: 500.0,
@@ -582,12 +587,12 @@ fn undistort_to_ray_fisheye_beyond_90_degrees() {
     assert_relative_eq!(ray[2], 0.0, epsilon = 1e-10); // z ≈ 0 at 90°
     assert!(ray[0] > 0.0); // pointing rightward
 
-    // Beyond 90°: theta > π/2, z should be negative
+    // Beyond 90°: theta > π/2, canonical z should be positive (behind)
     let r_d_120 = std::f64::consts::FRAC_PI_3 * 2.0; // 120° = 2π/3
     let ray = cam.model.undistort_to_ray(r_d_120, 0.0);
     assert!(
-        ray[2] < 0.0,
-        "Ray beyond 90° should have negative z, got {}",
+        ray[2] > 0.0,
+        "Ray beyond 90° should have positive canonical z, got {}",
         ray[2]
     );
     assert!(ray[0] > 0.0, "Ray should still point rightward");
@@ -644,9 +649,12 @@ fn thin_prism_fisheye_undistort_to_ray_wide_angle() {
         );
         assert_relative_eq!(len, 1.0, epsilon = 1e-6);
 
-        // Exact round-trip only below the blend range (80°)
+        // Exact round-trip only below the blend range (80°). The kernel
+        // helper produces optical-frame rays; the public API returns the
+        // canonical S-mapped ray (x, −y, −z).
         if deg < 90 {
-            let expected = equidistant_to_ray(uu, vv);
+            let e = equidistant_to_ray(uu, vv);
+            let expected = [e[0], -e[1], -e[2]];
             let err = ((ray[0] - expected[0]).powi(2)
                 + (ray[1] - expected[1]).powi(2)
                 + (ray[2] - expected[2]).powi(2))
@@ -719,7 +727,9 @@ fn rad_tan_thin_prism_fisheye_undistort_to_ray_wide_angle() {
         assert_relative_eq!(len, 1.0, epsilon = 1e-6);
 
         if deg < 90 {
-            let expected = equidistant_to_ray(uu, vv);
+            // Kernel helper is optical-frame; the public API is canonical.
+            let e = equidistant_to_ray(uu, vv);
+            let expected = [e[0], -e[1], -e[2]];
             let err = ((ray[0] - expected[0]).powi(2)
                 + (ray[1] - expected[1]).powi(2)
                 + (ray[2] - expected[2]).powi(2))
@@ -847,10 +857,11 @@ fn kerry_park_pixel_to_ray_smooth_across_blend_region() {
         );
     }
 
-    // 3. The ray at the principal point must be (0, 0, 1) exactly.
+    // 3. The ray at the principal point must be (0, 0, −1) exactly — the
+    //    canonical optical axis.
     assert_relative_eq!(rays[0][0], 0.0, epsilon = 1e-15);
     assert_relative_eq!(rays[0][1], 0.0, epsilon = 1e-15);
-    assert_relative_eq!(rays[0][2], 1.0, epsilon = 1e-15);
+    assert_relative_eq!(rays[0][2], -1.0, epsilon = 1e-15);
 
     // 4. By the image edge (240 px out, well past the 100° blend end) the
     //    ray must be pointing strongly sideways: z component small, x large.
@@ -873,12 +884,13 @@ fn kerry_park_pixel_to_ray_smooth_across_blend_region() {
 
 #[test]
 fn pixel_to_ray_at_principal_point() {
+    // The principal point looks down the canonical optical axis, −Z.
     for cam in all_cameras() {
         let (cx, cy) = cam.principal_point();
         let ray = cam.pixel_to_ray(cx, cy);
         assert_relative_eq!(ray[0], 0.0, epsilon = 1e-15);
         assert_relative_eq!(ray[1], 0.0, epsilon = 1e-15);
-        assert_relative_eq!(ray[2], 1.0, epsilon = 1e-15);
+        assert_relative_eq!(ray[2], -1.0, epsilon = 1e-15);
     }
 }
 
@@ -913,7 +925,8 @@ fn pixel_to_ray_batch_matches_single() {
 #[test]
 fn pixel_to_ray_round_trip_fisheye() {
     let cameras = vec![simple_radial_fisheye(), radial_fisheye(), opencv_fisheye()];
-    // Undistorted normalized coords → 3D directions
+    // Undistorted canonical (y-up) image-plane coords → canonical 3D
+    // directions (x, y, −1)/len, in front of the −Z-forward camera.
     let test_dirs: Vec<[f64; 3]> = [
         [0.1, 0.0],
         [0.0, 0.1],
@@ -925,15 +938,15 @@ fn pixel_to_ray_round_trip_fisheye() {
     .iter()
     .map(|&[x, y]: &[f64; 2]| {
         let len = (x * x + y * y + 1.0).sqrt();
-        [x / len, y / len, 1.0 / len]
+        [x / len, y / len, -1.0 / len]
     })
     .collect();
 
     for cam in &cameras {
         for &dir in &test_dirs {
-            // Normalized coords from direction
-            let x: f64 = dir[0] / dir[2];
-            let y: f64 = dir[1] / dir[2];
+            // Canonical normalized coords from direction: divide by −z.
+            let x: f64 = dir[0] / -dir[2];
+            let y: f64 = dir[1] / -dir[2];
             // Project to pixel
             let (u, v) = cam.project(x, y);
             // Recover ray
@@ -978,10 +991,11 @@ fn pixel_to_ray_simple_radial_fisheye_corners() {
                 "k={k}, pixel=({u},{v}): ray is not finite: {ray:?}"
             );
             assert_relative_eq!(len, 1.0, epsilon = 1e-10,);
-            // z should be positive for this camera (half-diagonal FoV ~53°)
+            // z should be negative (in front of the canonical −Z-forward
+            // camera) — half-diagonal FoV is only ~53°.
             assert!(
-                ray[2] > 0.0,
-                "k={k}, pixel=({u},{v}): ray z should be positive, got {}",
+                ray[2] < 0.0,
+                "k={k}, pixel=({u},{v}): ray z should be negative, got {}",
                 ray[2]
             );
         }
@@ -1006,18 +1020,19 @@ fn pixel_to_ray_simple_radial_fisheye_wide_angle() {
         height: 1000,
     };
 
-    // Principal point → straight ahead
+    // Principal point → straight ahead (canonical −Z)
     let ray = cam.pixel_to_ray(500.0, 500.0);
-    assert_relative_eq!(ray[2], 1.0, epsilon = 1e-10);
+    assert_relative_eq!(ray[2], -1.0, epsilon = 1e-10);
 
-    // Edge midpoint: r_d = 500/300 ≈ 1.667 rad ≈ 95° → just past 90°
+    // Edge midpoint: r_d = 500/300 ≈ 1.667 rad ≈ 95° → just past 90°,
+    // so the ray points behind the camera (canonical z > 0).
     let ray = cam.pixel_to_ray(1000.0, 500.0);
     let len = (ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]).sqrt();
     assert_relative_eq!(len, 1.0, epsilon = 1e-10);
     assert!(ray[0] > 0.0, "should point rightward");
     assert!(
-        ray[2] < 0.0,
-        "edge at ~95° should have z < 0, got {}",
+        ray[2] > 0.0,
+        "edge at ~95° should have canonical z > 0, got {}",
         ray[2]
     );
 
@@ -1026,15 +1041,19 @@ fn pixel_to_ray_simple_radial_fisheye_wide_angle() {
     let len = (ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]).sqrt();
     assert_relative_eq!(len, 1.0, epsilon = 1e-10);
     assert!(ray[0] > 0.0, "corner should point right");
-    assert!(ray[1] > 0.0, "corner should point down");
     assert!(
-        ray[2] < 0.0,
-        "corner at ~135° should have z < 0, got {}",
+        ray[1] < 0.0,
+        "corner (below image centre) should point down (canonical −Y)"
+    );
+    assert!(
+        ray[2] > 0.0,
+        "corner at ~135° should have canonical z > 0, got {}",
         ray[2]
     );
 
-    // Verify the angle is approximately correct: theta ≈ r_d for k=0
-    let theta = ray[2].acos();
+    // Verify the angle is approximately correct: theta ≈ r_d for k=0,
+    // measured off the canonical −Z optical axis.
+    let theta = (-ray[2]).acos();
     let expected_theta = (500.0_f64 * 2.0_f64.sqrt()) / 300.0;
     assert_relative_eq!(theta, expected_theta, epsilon = 1e-6);
 }
@@ -1079,9 +1098,9 @@ fn pixel_to_ray_simple_radial_fisheye_wide_angle_with_distortion() {
         let len = (ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]).sqrt();
         assert_relative_eq!(len, 1.0, epsilon = 1e-10);
 
-        // Expected ray direction: normalize(x, 0, 1)
+        // Expected canonical ray direction: normalize(x, 0, −1)
         let expected_len = (x * x + 1.0).sqrt();
-        let expected = [x / expected_len, 0.0, 1.0 / expected_len];
+        let expected = [x / expected_len, 0.0, -1.0 / expected_len];
 
         assert_relative_eq!(ray[0], expected[0], epsilon = 1e-6,);
         assert_relative_eq!(ray[1], expected[1], epsilon = 1e-6,);
@@ -1130,9 +1149,10 @@ fn ray_to_pixel_round_trip_all_models() {
 #[test]
 fn ray_to_pixel_returns_none_behind_camera_perspective() {
     let cam = pinhole();
-    // Ray pointing backward
-    assert!(cam.ray_to_pixel([0.0, 0.0, -1.0]).is_none());
-    assert!(cam.ray_to_pixel([0.5, 0.3, -0.1]).is_none());
+    // Rays pointing backward (canonical camera looks down −Z, so +z rays
+    // are behind).
+    assert!(cam.ray_to_pixel([0.0, 0.0, 1.0]).is_none());
+    assert!(cam.ray_to_pixel([0.5, 0.3, 0.1]).is_none());
 }
 
 /// SimpleRadial with strongly-negative k1 has a non-monotonic forward
@@ -1156,11 +1176,11 @@ fn ray_to_pixel_rejects_folded_simple_radial() {
         height: 480,
     };
 
-    // A ray at lon ≈ 53° (rx/rz ≈ 1.35) is well outside the camera's
+    // A ray at lon ≈ 53° (rx/(−rz) ≈ 1.35) is well outside the camera's
     // physical FOV but, with the folded polynomial, would project to a
     // pixel near x = 7 — visibly inside the source rectangle. This is
     // the spurious mirror; the gate must reject it.
-    let folded_ray = [0.803_f64, 0.0, 0.596];
+    let folded_ray = [0.803_f64, 0.0, -0.596];
     assert!(
         cam.ray_to_pixel(folded_ray).is_none(),
         "expected None for ray in distortion fold-over region"
@@ -1168,7 +1188,7 @@ fn ray_to_pixel_rejects_folded_simple_radial() {
 
     // A ray well inside the monotonic regime (small angle) must still
     // project successfully — the gate isn't allowed to over-reject.
-    let on_axis = [0.0_f64, 0.0, 1.0];
+    let on_axis = [0.0_f64, 0.0, -1.0];
     let pix = cam.ray_to_pixel(on_axis).expect("on-axis ray must project");
     assert_relative_eq!(pix.0, 135.0, epsilon = 1e-6);
     assert_relative_eq!(pix.1, 240.0, epsilon = 1e-6);
@@ -1179,11 +1199,11 @@ fn ray_to_pixel_rejects_folded_simple_radial() {
 #[test]
 fn ray_to_pixel_pinhole_accepts_wide_rays() {
     let cam = pinhole();
-    // Ray well off-axis but still rz > 0; pinhole has no distortion to
-    // fold, so projection lands far outside the image rectangle but the
-    // function must still return Some(_) — it is then up to the caller
-    // to do bounds checking.
-    let result = cam.ray_to_pixel([0.9_f64, 0.0, 0.4]);
+    // Ray well off-axis but still in front (canonical rz < 0); pinhole has
+    // no distortion to fold, so projection lands far outside the image
+    // rectangle but the function must still return Some(_) — it is then up
+    // to the caller to do bounds checking.
+    let result = cam.ray_to_pixel([0.9_f64, 0.0, -0.4]);
     assert!(
         result.is_some(),
         "pinhole ray_to_pixel must not reject wide-angle rays (no distortion)"
@@ -1206,11 +1226,10 @@ fn ray_to_pixel_rejects_folded_radial() {
         height: 480,
     };
     // For k1 = -0.7, det(J) = (1 - 0.7 r²)(1 - 2.1 r²) goes negative
-    // for r² in (1/2.1, 1/0.7) ≈ (0.476, 1.429). A ray at (1.0, 0, 0.7)
-    // gives x=y=1.428, r²=2.04 — past the second root, det(J) > 0 again
-    // but g flipped, so the projection is a fold. Pick a ray squarely
-    // in the fold-zone (r² between the roots).
-    let folded = [0.5_f64, 0.5, 0.6]; // x=y=0.833, r²=1.39 in fold zone
+    // for r² in (1/2.1, 1/0.7) ≈ (0.476, 1.429). Pick a ray squarely
+    // in the fold-zone (r² between the roots), in front of the canonical
+    // camera (rz < 0).
+    let folded = [0.5_f64, 0.5, -0.6]; // |x|=|y|=0.833, r²=1.39 in fold zone
     assert!(
         cam.ray_to_pixel(folded).is_none(),
         "expected None for radial fold-over"
@@ -1220,7 +1239,7 @@ fn ray_to_pixel_rejects_folded_radial() {
 #[test]
 fn ray_to_pixel_batch_matches_single() {
     let cam = opencv();
-    let rays = vec![[0.0, 0.0, 1.0], [0.1, 0.2, 1.0], [-0.3, 0.1, 1.0]];
+    let rays = vec![[0.0, 0.0, -1.0], [0.1, 0.2, -1.0], [-0.3, 0.1, -1.0]];
     let batch = cam.ray_to_pixel_batch(&rays);
     for (ray, result) in rays.iter().zip(batch.iter()) {
         let single = cam.ray_to_pixel(*ray);
@@ -1244,20 +1263,20 @@ fn equirectangular_pixel_to_ray_center() {
     let cam = equirectangular();
     let (cx, cy) = cam.principal_point();
     let ray = cam.pixel_to_ray(cx, cy);
-    // Center should point along +Z
+    // Center (longitude 0) points along the canonical forward axis, −Z
     assert_relative_eq!(ray[0], 0.0, epsilon = 1e-10);
     assert_relative_eq!(ray[1], 0.0, epsilon = 1e-10);
-    assert_relative_eq!(ray[2], 1.0, epsilon = 1e-10);
+    assert_relative_eq!(ray[2], -1.0, epsilon = 1e-10);
 }
 
 #[test]
 fn equirectangular_pixel_to_ray_right_edge() {
-    // Right edge is at longitude = π (pointing along -Z)
+    // Right edge is at longitude = π (pointing backward, canonical +Z)
     let cam = equirectangular();
     let ray = cam.pixel_to_ray(cam.width as f64, cam.height as f64 / 2.0);
     assert_relative_eq!(ray[0], 0.0, epsilon = 1e-10);
     assert_relative_eq!(ray[1], 0.0, epsilon = 1e-10);
-    assert_relative_eq!(ray[2], -1.0, epsilon = 1e-10);
+    assert_relative_eq!(ray[2], 1.0, epsilon = 1e-10);
 }
 
 #[test]
@@ -1325,15 +1344,15 @@ fn equirectangular_distort_undistort_identity() {
 #[test]
 fn ray_to_pixel_fisheye_wide_angle() {
     let cam = opencv_fisheye();
-    // 80° from optical axis
+    // 80° from the canonical −Z optical axis
     let theta = 80.0_f64.to_radians();
-    let ray = [theta.sin(), 0.0, theta.cos()];
+    let ray = [theta.sin(), 0.0, -theta.cos()];
     let result = cam.ray_to_pixel(ray);
     assert!(result.is_some(), "80° should be valid for fisheye");
 
     // 89° should also work
     let theta = 89.0_f64.to_radians();
-    let ray = [theta.sin(), 0.0, theta.cos()];
+    let ray = [theta.sin(), 0.0, -theta.cos()];
     let result = cam.ray_to_pixel(ray);
     assert!(result.is_some(), "89° should be valid for fisheye");
 }
@@ -1343,7 +1362,7 @@ fn ray_to_pixel_fisheye_round_trip_wide_angle() {
     let cam = opencv_fisheye();
     for angle_deg in [10.0_f64, 30.0, 60.0, 80.0, 85.0] {
         let theta = angle_deg.to_radians();
-        let ray_in = [theta.sin(), 0.0, theta.cos()];
+        let ray_in = [theta.sin(), 0.0, -theta.cos()];
         if let Some((u, v)) = cam.ray_to_pixel(ray_in) {
             let ray_out = cam.pixel_to_ray(u, v);
             let len = (ray_out[0] * ray_out[0] + ray_out[1] * ray_out[1] + ray_out[2] * ray_out[2])
@@ -1497,12 +1516,13 @@ fn best_fit_pinhole_radial_model() {
 // -----------------------------------------------------------------------
 
 /// Affine ray basis for an `r×r` grid spanning camera-frame image-plane coords
-/// `(x, y) ∈ [x0, x0+span]²` at unit depth, optionally tilted in depth by `tilt`
-/// across columns so `z` varies (exercising foreshortening). Mirrors the basis
-/// `WarpMap::from_patch` hands to `ray_to_pixel_grid`.
+/// `(x, y) ∈ [x0, x0+span]²` at unit depth in front of the canonical camera
+/// (z = −1), optionally tilted in depth by `tilt` across columns so `z` varies
+/// (exercising foreshortening). Mirrors the basis `WarpMap::from_patch` hands
+/// to `ray_to_pixel_grid`.
 fn grid_basis(x0: f64, y0: f64, span: f64, r: u32, tilt: f64) -> ([f64; 3], [f64; 3], [f64; 3]) {
     let step = span / r as f64;
-    let origin = [x0 + 0.5 * step, y0 + 0.5 * step, 1.0];
+    let origin = [x0 + 0.5 * step, y0 + 0.5 * step, -1.0];
     let col_step = [step, 0.0, tilt * step];
     let row_step = [0.0, step, 0.0];
     (origin, col_step, row_step)

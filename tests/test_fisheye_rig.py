@@ -283,9 +283,11 @@ def test_kerry_park_camrig_parses_as_fisheye_360(
         "fisheye_left/frame_%02d.jpg",
         "fisheye_right/frame_%02d.jpg",
     ]
-    # Sensor 0 identity, sensor 1 = 180° about Y (WXYZ [0, 0, 1, 0]).
-    np.testing.assert_allclose(data["quaternions_wxyz"][0], [1, 0, 0, 0])
-    np.testing.assert_allclose(data["quaternions_wxyz"][1], [0, 0, 1, 0])
+    # Sensor 0 identity, sensor 1 = 180° about Y. In the canonical convention
+    # this is the S-conjugated quaternion (WXYZ [0, 0, -1, 0]); S·Ry(180°)·S is
+    # the same rotation as Ry(180°) but the unit quaternion picks the -Y sign.
+    np.testing.assert_allclose(data["quaternions_wxyz"][0], [1, 0, 0, 0], atol=1e-15)
+    np.testing.assert_allclose(data["quaternions_wxyz"][1], [0, 0, -1, 0], atol=1e-15)
 
 
 def test_kerry_park_camrig_resolves_to_rig(

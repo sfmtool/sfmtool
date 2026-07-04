@@ -1,7 +1,15 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests validating Rust distortion/undistortion against pycolmap."""
+"""Tests validating Rust distortion/undistortion against pycolmap.
+
+The Rust camera model is canonical (cameras look down -Z; image-plane +Y up),
+while pycolmap uses the OpenCV optical frame (+Z forward, +Y down). The two
+frames differ by S = diag(1, -1, -1), which on the z=1 normalized plane is a
+pure y-negation. So a canonical normalized point ``(x, y)`` corresponds to the
+OpenCV normalized point ``(x, -y)``: pycolmap is fed ``[x, -y, 1]`` and its
+``cam_from_img`` output has its y component flipped back before comparison.
+"""
 
 import numpy as np
 import pycolmap
@@ -254,7 +262,7 @@ def test_project_matches_pycolmap(
     py_cam, rust_cam = _make_cameras(
         model_name, width, height, pycolmap_params, rust_params
     )
-    py_pixel = py_cam.img_from_cam(np.array([x, y, 1.0]))
+    py_pixel = py_cam.img_from_cam(np.array([x, -y, 1.0]))
     rust_pixel = rust_cam.project(x, y)
     np.testing.assert_allclose(
         rust_pixel, py_pixel, atol=1e-10, err_msg=f"{model_name} project({x}, {y})"
@@ -273,12 +281,14 @@ def test_unproject_matches_pycolmap(
     py_cam, rust_cam = _make_cameras(
         model_name, width, height, pycolmap_params, rust_params
     )
-    pixel = py_cam.img_from_cam(np.array([x, y, 1.0]))
+    pixel = py_cam.img_from_cam(np.array([x, -y, 1.0]))
     py_result = py_cam.cam_from_img(pixel)
     rust_result = rust_cam.unproject(pixel[0], pixel[1])
+    # pycolmap returns OpenCV-frame normalized coords (+Y down); flip y to the
+    # canonical (+Y up) frame the Rust model returns.
     np.testing.assert_allclose(
         rust_result,
-        py_result,
+        [py_result[0], -py_result[1]],
         atol=1e-8,
         err_msg=f"{model_name} unproject({pixel[0]:.4f}, {pixel[1]:.4f})",
     )
@@ -355,14 +365,15 @@ def test_unproject_batch_matches_pycolmap(
         model_name, width, height, pycolmap_params, rust_params
     )
     pixels = np.array(
-        [py_cam.img_from_cam(np.array([x, y, 1.0])) for x, y in IMAGE_PLANE_POINTS]
+        [py_cam.img_from_cam(np.array([x, -y, 1.0])) for x, y in IMAGE_PLANE_POINTS]
     )
     rust_results = rust_cam.unproject_batch(pixels)
     for i in range(len(IMAGE_PLANE_POINTS)):
         py_result = py_cam.cam_from_img(pixels[i])
+        # Flip y: pycolmap OpenCV frame (+Y down) -> canonical (+Y up).
         np.testing.assert_allclose(
             rust_results[i],
-            py_result,
+            [py_result[0], -py_result[1]],
             atol=1e-8,
             err_msg=f"{model_name} unproject_batch[{i}] vs pycolmap",
         )

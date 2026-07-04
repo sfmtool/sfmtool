@@ -10,29 +10,48 @@
 //!
 //! # Coordinate systems
 //!
-//! This module uses two coordinate systems:
+//! **Camera space** follows the canonical `.sfmr` convention (see
+//! `specs/formats/sfmr-file-format.md` § "Coordinate System Conventions"):
+//! the camera looks down **−Z**, with **+X right** and **+Y up** in the image
+//! plane (OpenGL-style). A point is in front of the camera iff its
+//! camera-space `z < 0`, and its depth is `−z`.
 //!
 //! **Image-plane coordinates** `(x, y)` are obtained by projecting a
-//! camera-space 3D point onto the image plane: `(x, y) = (X/Z, Y/Z)`. The
-//! origin `(0, 0)` is the optical axis (principal ray). Values are unbounded
-//! and represent the tangent of the angle from the optical axis — a point at
-//! 45° off-axis has `|x|` or `|y|` of 1.0. These are **not** the same as
-//! normalized device coordinates (NDC), which typically span `[-1, 1]`.
+//! camera-space 3D point onto the image plane: `(x, y) = (X/(−Z), Y/(−Z))`,
+//! so `+y` points up. The origin `(0, 0)` is the optical axis (principal
+//! ray). Values are unbounded and represent the tangent of the angle from
+//! the optical axis — a point at 45° off-axis has `|x|` or `|y|` of 1.0.
+//! These are **not** normalized device coordinates (NDC).
 //!
 //! **Pixel coordinates** `(u, v)` have the origin at the top-left of the image,
-//! with `u` increasing rightward and `v` increasing downward. The principal
+//! with `u` increasing rightward and `v` increasing **downward**. The principal
 //! point `(cx, cy)` maps to image-plane `(0, 0)`.
 //!
-//! ## COLMAP projection pipeline
+//! ## Projection pipeline and the optical-frame boundary
+//!
+//! The distortion kernels are unchanged COLMAP/OpenCV math and operate in the
+//! legacy **optical frame** (+Z forward, y down). Rather than rewriting them,
+//! the flip `S = diag(1, −1, −1)` is applied exactly once at the camera-model
+//! boundary (design decision D7 in
+//! `specs/drafts/zup-camera-convention-migration.md`):
 //!
 //! ```text
-//! 3D point → image-plane (x = X/Z, y = Y/Z) → distort → pixel (u = fx*x_d + cx)
-//! pixel → distorted image-plane (x_d = (u-cx)/fx) → undistort → ray direction (x, y, 1)
+//! camera-space point p (z < 0 in front)
+//!   → image-plane (x = p.x/(−p.z), y = p.y/(−p.z))     # y up
+//!   → distort(x, −y) = (x_d, y_d)                       # kernels are y-down
+//!   → pixel (u = fx·x_d + cx, v = fy·y_d + cy)
+//!
+//! pixel → distorted image-plane (x_d = (u−cx)/fx, y_d = (v−cy)/fy)
+//!       → undistort → y-down (x, y_k) → y-up (x, −y_k)
+//!       → ray direction (x, −y_k, −1)                   # canonical, −Z forward
 //! ```
 //!
-//! The `distort` and `undistort` methods on [`CameraModel`] operate in
-//! image-plane coordinates. The `project` and `unproject` methods on
-//! [`CameraIntrinsics`] handle the full pixel ↔ image-plane conversion.
+//! The `distort` and `undistort` methods on [`CameraModel`] are the kernel
+//! level: they operate in **y-down** (optical-frame) image-plane coordinates,
+//! matching pixel rows. The `project` / `unproject` / `pixel_to_ray` /
+//! `ray_to_pixel` methods on [`CameraIntrinsics`] (and `distort_ray` /
+//! `undistort_to_ray` on [`CameraModel`]) speak the canonical y-up /
+//! −Z-forward convention and perform the `S` flip internally.
 
 use rayon::prelude::*;
 
@@ -402,30 +421,39 @@ impl CameraModel {
             .collect()
     }
 
-    /// Project a unit ray direction in camera space to distorted normalized
-    /// coordinates.
+    /// Project a ray direction in **canonical camera space** (−Z forward,
+    /// +Y up) to distorted normalized coordinates.
     ///
-    /// For perspective models, computes `(rx/rz, ry/rz)` then applies
-    /// distortion. For fisheye models, computes the distorted coordinates
-    /// directly from the incidence angle `theta = atan2(sqrt(rx² + ry²), rz)`,
-    /// avoiding the `tan(theta)` singularity. For equirectangular, maps via
+    /// The input is mapped through `S = diag(1, −1, −1)` into the optical
+    /// frame the kernels expect (see the module docs). For perspective
+    /// models this computes `(rx/(−rz), ry/(−rz))` y-flipped, then applies
+    /// distortion. For fisheye models, the distorted coordinates come
+    /// directly from the incidence angle off the −Z optical axis, avoiding
+    /// the `tan(theta)` singularity. For equirectangular, maps via
     /// longitude/latitude. This is the true inverse of [`undistort_to_ray`].
     ///
     /// Returns `None` if the ray falls outside the model's valid domain:
-    /// for perspective models, `theta >= pi/2`; for fisheye, only when the
-    /// distortion polynomial's representable range is exceeded.
+    /// for perspective models, when the ray is not in front of the camera
+    /// (`rz >= 0`); for fisheye, only when the distortion polynomial's
+    /// representable range is exceeded.
     pub fn distort_ray(&self, ray: [f64; 3]) -> Option<(f64, f64)> {
-        let [rx, ry, rz] = ray;
+        // Canonical → optical frame: (rx, ry, rz) ← S · ray. Every branch
+        // below operates in the legacy optical frame (+Z forward, y down).
+        let [rx, ry, rz] = [ray[0], -ray[1], -ray[2]];
         match self {
-            // Equirectangular: longitude/latitude mapping
+            // Equirectangular: longitude/latitude mapping. Pano-up is camera
+            // +Y (optical −y): a ray above the horizon must land above the
+            // image centre (y_d < 0), hence `asin(ry_optical)` here.
             CameraModel::Equirectangular { .. } => {
                 let longitude = rx.atan2(rz);
                 let r_len = (rx * rx + ry * ry + rz * rz).sqrt();
-                let latitude = -(ry / r_len).clamp(-1.0, 1.0).asin();
+                let latitude = (ry / r_len).clamp(-1.0, 1.0).asin();
                 Some((longitude, latitude))
             }
 
-            // Perspective models: divide by rz, then distort
+            // Perspective models: divide by the optical-frame rz, then
+            // distort. `rz <= 0` here is a canonical-space z >= 0 — the ray
+            // is not in front of the camera.
             CameraModel::Pinhole { .. }
             | CameraModel::SimplePinhole { .. }
             | CameraModel::SimpleRadial { .. }
@@ -523,27 +551,46 @@ impl CameraModel {
         }
     }
 
-    /// Convert distorted normalized coordinates to a unit ray direction.
+    /// Convert distorted normalized coordinates to a unit ray direction in
+    /// **canonical camera space** (−Z forward, +Y up).
     ///
-    /// For perspective models, equivalent to normalizing `(undistort(x_d, y_d), 1)`.
-    /// For fisheye models, computes the ray directly from the incidence angle
-    /// theta, avoiding the `tan(theta)` singularity that causes [`undistort`]
-    /// to break down at and beyond 90° from the optical axis.
+    /// For perspective models, equivalent to normalizing
+    /// `(undistort(x_d, y_d), 1)` mapped through `S` — i.e.
+    /// `(x, −y, −1)`-style rays. For fisheye models, computes the ray
+    /// directly from the incidence angle theta, avoiding the `tan(theta)`
+    /// singularity that causes [`undistort`] to break down at and beyond 90°
+    /// from the optical axis.
     ///
     /// The returned vector is unit-length and points in the direction the
-    /// camera pixel is looking in camera space (z-forward).
+    /// camera pixel is looking (a pixel at the principal point maps to
+    /// `(0, 0, −1)`).
     pub fn undistort_to_ray(&self, x_d: f64, y_d: f64) -> [f64; 3] {
+        // Equirectangular is derived directly in the canonical frame; every
+        // other model runs the legacy optical-frame kernels and maps the
+        // result back through S = diag(1, −1, −1) (module docs, D7).
+        if let CameraModel::Equirectangular { .. } = self {
+            // x_d is longitude (0 at −Z, +π/2 at +X); y_d is negated
+            // latitude (pixel v grows down, latitude grows up).
+            let longitude = x_d;
+            let latitude = -y_d;
+            let cos_lat = latitude.cos();
+            return [
+                longitude.sin() * cos_lat,
+                latitude.sin(),
+                -(longitude.cos() * cos_lat),
+            ];
+        }
+        let [x, y, z] = self.undistort_to_ray_optical(x_d, y_d);
+        [x, -y, -z]
+    }
+
+    /// Optical-frame (+Z forward, y down) body of [`undistort_to_ray`]: the
+    /// unchanged COLMAP/OpenCV kernel math. Callers outside the D7 boundary
+    /// must use [`undistort_to_ray`].
+    fn undistort_to_ray_optical(&self, x_d: f64, y_d: f64) -> [f64; 3] {
         match self {
-            // Equirectangular: x_d is longitude, y_d is latitude (negated v)
             CameraModel::Equirectangular { .. } => {
-                let longitude = x_d;
-                let latitude = -y_d;
-                let cos_lat = latitude.cos();
-                [
-                    longitude.sin() * cos_lat,
-                    latitude.sin(),
-                    longitude.cos() * cos_lat,
-                ]
+                unreachable!("equirectangular is handled canonically in undistort_to_ray")
             }
 
             // Perspective models: undistort then normalize (x, y, 1)
@@ -637,45 +684,52 @@ impl CameraModel {
 // ---------------------------------------------------------------------------
 
 impl CameraIntrinsics {
-    /// Project undistorted image-plane point to pixel coordinates.
+    /// Project an undistorted **canonical** (y-up) image-plane point to pixel
+    /// coordinates.
     ///
-    /// Applies distortion then converts to pixel coordinates:
-    /// `(x, y)` → distort → `(u, v)` where `u = fx * x_d + cx`.
+    /// `(x, y)` is `(p.x/(−p.z), p.y/(−p.z))` of a canonical camera-space
+    /// point in front of the camera. The y axis is flipped into the y-down
+    /// kernel frame, distortion is applied, and the result is converted to
+    /// pixels: `(x, y)` → distort(x, −y) → `(u, v)` where `u = fx * x_d + cx`.
     pub fn project(&self, x: f64, y: f64) -> (f64, f64) {
-        let (x_d, y_d) = self.model.distort(x, y);
+        let (x_d, y_d) = self.model.distort(x, -y);
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
         (fx * x_d + cx, fy * y_d + cy)
     }
 
-    /// Unproject pixel coordinates to undistorted image-plane coordinates.
+    /// Unproject pixel coordinates to undistorted **canonical** (y-up)
+    /// image-plane coordinates.
     ///
-    /// Converts pixel to distorted image-plane, then removes distortion:
-    /// `(u, v)` → `(x_d, y_d)` → undistort → `(x, y)`.
+    /// Converts pixel to distorted image-plane, removes distortion, then
+    /// flips y back up: `(u, v)` → `(x_d, y_d)` → undistort → `(x, −y)`.
     ///
-    /// The returned `(x, y)` can be used as a ray direction `(x, y, 1)`.
+    /// The returned `(x, y)` can be used as a ray direction `(x, y, −1)`.
     pub fn unproject(&self, u: f64, v: f64) -> (f64, f64) {
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
         let x_d = (u - cx) / fx;
         let y_d = (v - cy) / fy;
-        self.model.undistort(x_d, y_d)
+        let (x, y) = self.model.undistort(x_d, y_d);
+        (x, -y)
     }
 
-    /// Project a batch of undistorted image-plane points to pixel coordinates.
+    /// Project a batch of undistorted canonical image-plane points to pixel
+    /// coordinates. See [`project`](Self::project).
     pub fn project_batch(&self, points: &[[f64; 2]]) -> Vec<[f64; 2]> {
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
         points
             .par_iter()
             .map(|&[x, y]| {
-                let (x_d, y_d) = self.model.distort(x, y);
+                let (x_d, y_d) = self.model.distort(x, -y);
                 [fx * x_d + cx, fy * y_d + cy]
             })
             .collect()
     }
 
-    /// Unproject a batch of pixel coordinates to undistorted image-plane coordinates.
+    /// Unproject a batch of pixel coordinates to undistorted canonical
+    /// image-plane coordinates. See [`unproject`](Self::unproject).
     pub fn unproject_batch(&self, pixels: &[[f64; 2]]) -> Vec<[f64; 2]> {
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
@@ -685,14 +739,15 @@ impl CameraIntrinsics {
                 let x_d = (u - cx) / fx;
                 let y_d = (v - cy) / fy;
                 let (x, y) = self.model.undistort(x_d, y_d);
-                [x, y]
+                [x, -y]
             })
             .collect()
     }
 
-    /// Convert pixel coordinates to a unit ray direction in camera space.
+    /// Convert pixel coordinates to a unit ray direction in canonical camera
+    /// space (−Z forward, +Y up).
     ///
-    /// For perspective models, equivalent to normalizing `(unproject(u, v), 1)`.
+    /// For perspective models, equivalent to normalizing `(unproject(u, v), −1)`.
     /// For fisheye models, computes the ray directly from the incidence angle,
     /// avoiding the `tan(theta)` singularity that causes [`unproject`] to break
     /// down at and beyond 90° from the optical axis. This makes it suitable for
@@ -705,10 +760,11 @@ impl CameraIntrinsics {
         self.model.undistort_to_ray(x_d, y_d)
     }
 
-    /// Project a unit ray direction in camera space to pixel coordinates.
+    /// Project a ray direction in canonical camera space (−Z forward, +Y up)
+    /// to pixel coordinates.
     ///
-    /// For perspective models, equivalent to `project(rx/rz, ry/rz)`, but
-    /// for fisheye models computes the distorted coordinates directly from
+    /// For perspective models, equivalent to `project(rx/(−rz), ry/(−rz))`,
+    /// but for fisheye models computes the distorted coordinates directly from
     /// the incidence angle, avoiding the `tan(theta)` singularity. For
     /// equirectangular, maps via longitude/latitude. This is the true inverse
     /// of [`pixel_to_ray`].

@@ -111,9 +111,14 @@ fn corner_norm_pts(
         // affine built from these corners must use the identical mapping.
         let world = patch.to_world(s, -t);
         let p = view.cam_from_world.transform_point(&world);
-        if p.z <= 1e-9 {
+        // Cheirality: a corner in front of a canonical camera has z < 0.
+        if p.z >= -1e-9 {
             return None;
         }
+        // `(x/z, y/z)` differs from the true undistorted-normalized coords by
+        // a fixed linear map (a mirror) — harmless here, because base and
+        // candidate corners go through this same function in the same view
+        // and the map cancels in the composed `a0_inv · ap` grid→grid affine.
         out[k] = (p.x / p.z, p.y / p.z);
     }
     Some(out)

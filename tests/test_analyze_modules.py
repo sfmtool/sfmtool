@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from sfmtool._histogram_utils import estimate_z_from_histogram
+from sfmtool._image_pair_graph import compute_camera_directions
 from sfmtool.analyze.images import (
     _compute_camera_centers,
     _compute_rotation_angle,
@@ -81,6 +82,42 @@ class TestComputeCameraCenters:
         translations = np.array([[0.0, 0.0, 0.0]])
         centers = _compute_camera_centers(quaternions, translations)
         np.testing.assert_allclose(centers[0], [0.0, 0.0, 0.0])
+
+
+class TestComputeCameraDirections:
+    """Sign lock for the canonical camera look direction (area A.6/E).
+
+    Under the canonical convention cameras look down -Z in camera space, so the
+    world-space forward direction is R_world_from_cam @ (0, 0, -1) =
+    -R_world_from_cam[:, 2]. These pin that sign so it can't silently regress.
+    """
+
+    @staticmethod
+    def _cam_from_world_looking_at(eye, target, up_hint=(0.0, 0.0, 1.0)):
+        eye = np.asarray(eye, dtype=np.float64)
+        target = np.asarray(target, dtype=np.float64)
+        forward = target - eye
+        forward /= np.linalg.norm(forward)
+        right = np.cross(forward, np.asarray(up_hint, dtype=np.float64))
+        right /= np.linalg.norm(right)
+        up = np.cross(right, forward)
+        # Canonical world_from_cam columns: [right, up, -forward] (cam looks -Z).
+        r_world_from_cam = np.column_stack([right, up, -forward])
+        r_cam_from_world = r_world_from_cam.T
+        return (
+            RotQuaternion.from_rotation_matrix(r_cam_from_world).to_wxyz_array(),
+            forward,
+        )
+
+    def test_identity_looks_down_minus_z(self):
+        directions = compute_camera_directions(np.array([[1.0, 0.0, 0.0, 0.0]]))
+        np.testing.assert_allclose(directions[0], [0.0, 0.0, -1.0], atol=1e-12)
+
+    def test_direction_matches_look_at_forward(self):
+        for target in ([5.0, 0.0, 0.0], [1.0, 2.0, 3.0], [-2.0, 4.0, -1.0]):
+            quat, forward = self._cam_from_world_looking_at([0.0, 0.0, 0.0], target)
+            directions = compute_camera_directions(np.array([quat]))
+            np.testing.assert_allclose(directions[0], forward, atol=1e-9)
 
 
 class TestComputeRotationAngle:

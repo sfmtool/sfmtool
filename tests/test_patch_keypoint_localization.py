@@ -67,10 +67,12 @@ def _project(recon, point_xyz: np.ndarray, image_idx: int):
     R = _rotation_matrices(recon)[image_idx]
     t = np.asarray(recon.translations, dtype=np.float64)[image_idx]
     x_cam = R @ point_xyz + t
-    if x_cam[2] <= 0:
+    # Canonical cameras look down -Z: in front means z < 0, and normalized image
+    # coords divide by the depth -z (> 0 in front).
+    if x_cam[2] >= 0:
         return None
     cam = recon.cameras[int(np.asarray(recon.camera_indexes)[image_idx])]
-    return np.asarray(cam.project(x_cam[0] / x_cam[2], x_cam[1] / x_cam[2]))
+    return np.asarray(cam.project(x_cam[0] / -x_cam[2], x_cam[1] / -x_cam[2]))
 
 
 def _view_sets_from_selection(cloud, recon, images, sample):

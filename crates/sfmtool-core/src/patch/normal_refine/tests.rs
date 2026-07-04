@@ -43,8 +43,8 @@ fn occluder_texture(x: f64, y: f64) -> f64 {
     127.5 + 60.0 * (y * 13.0 + 1.7).sin() + 40.0 * (x * 29.0 - 0.4).cos()
 }
 
-/// Synthesize the image a pinhole camera at `center` (identity rotation,
-/// looking down +z) sees of the textured plane `z = PLANE_Z`.
+/// Synthesize the image a pinhole camera at `center` (looking down world +z)
+/// sees of the textured plane `z = PLANE_Z`.
 fn render_plane_view(center: [f64; 3], tex: fn(f64, f64) -> f64) -> ImageU8 {
     let (cx, cy) = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
     let mut data = Vec::with_capacity((IMG_W * IMG_H) as usize);
@@ -85,8 +85,9 @@ impl Scene {
         let poses = centers
             .iter()
             .map(|c| {
-                // Identity rotation; cam_from_world translation = -center.
-                RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [-c[0], -c[1], -c[2]])
+                // Rotated 180° about X (canonical −Z-forward camera looking down world
+                // +z); cam_from_world translation = R · (-center).
+                RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
         let pyrs = centers

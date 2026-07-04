@@ -9,7 +9,7 @@ use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RigidTransform;
 
 // A small synthetic scene mirroring the normal_refine tests: pinhole cameras
-// (identity rotation, looking down +z) viewing a textured world plane at
+// (rotated 180° about X so the canonical −Z-forward camera looks down world +z) viewing a textured world plane at
 // z = PLANE_Z. The patch sits on that plane with a normal pointing back toward
 // the cameras (-z), so a camera in front (z < PLANE_Z) is front-facing.
 
@@ -40,7 +40,7 @@ fn occluder_texture(x: f64, y: f64) -> f64 {
     127.5 + 60.0 * (y * 13.0 + 1.7).sin() + 40.0 * (x * 29.0 - 0.4).cos()
 }
 
-/// Synthesize the image a pinhole camera at `center` (looking down +z) sees of
+/// Synthesize the image a pinhole camera at `center` (looking down world +z) sees of
 /// the textured plane z = PLANE_Z.
 fn render_plane_view(center: [f64; 3], tex: fn(f64, f64) -> f64) -> ImageU8 {
     let (cx, cy) = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
@@ -69,7 +69,7 @@ fn dir_occluder(dx: f64, dy: f64) -> f64 {
     occluder_texture(dx * 30.0, dy * 30.0)
 }
 
-/// Synthesize what an identity-rotation pinhole sees of a point at infinity in
+/// Synthesize what an plus-z-looking pinhole sees of a point at infinity in
 /// the `+z` direction: each pixel's value is `tex` of its ray direction,
 /// independent of camera position (no parallax).
 fn render_infinity_view(tex: fn(f64, f64) -> f64) -> ImageU8 {
@@ -97,7 +97,7 @@ impl Scene {
         let poses = centers
             .iter()
             .map(|c| {
-                RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [-c[0], -c[1], -c[2]])
+                RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
         let pyrs = centers
@@ -116,7 +116,7 @@ impl Scene {
         let poses = centers
             .iter()
             .map(|c| {
-                RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [-c[0], -c[1], -c[2]])
+                RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
         let pyrs = texs
@@ -211,7 +211,7 @@ impl RgbScene {
         let poses = centers
             .iter()
             .map(|c| {
-                RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [-c[0], -c[1], -c[2]])
+                RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
         let pyrs = centers
@@ -311,7 +311,7 @@ fn admits_agreeing_views_keeps_track_rejects_disagreeing() {
 
 #[test]
 fn infinity_point_admits_agreeing_views() {
-    // A point at infinity (+z) seen by identity-rotation cameras at different
+    // A point at infinity (+z) seen by plus-z-looking cameras at different
     // positions: appearance is direction-only (no parallax), so the track and an
     // agreeing candidate are admitted while a candidate showing a different
     // directional surface is rejected. Exercises the w == 0 cheirality gate
@@ -595,7 +595,7 @@ fn track_view_dropped_by_validity_gate_scores_nan() {
 /// B1 regression: a candidate whose camera is in front (front-facing normal,
 /// in-frame projection) but for which the point is *behind* the camera in its
 /// own frame must be rejected by the cheirality gate. We synthesize a pose whose
-/// normal test passes but whose camera-frame depth is negative.
+/// normal test passes but whose camera-frame z is positive (depth −z negative).
 #[test]
 fn behind_camera_candidate_rejected_by_cheirality() {
     // Two front track cameras on the textured plane.
@@ -605,14 +605,15 @@ fn behind_camera_candidate_rejected_by_cheirality() {
     let mut views = scene.views();
 
     // A candidate camera sitting in front of the plane (z = 1 < PLANE_Z, so the
-    // patch is front-facing to it) but rotated 180° about y, so its forward axis
-    // points away from the plane: the patch centre lands behind the camera
-    // (negative camera-frame z). `is_front_facing` (normal vs. centre) still
-    // passes; only the cheirality gate rejects it.
+    // patch is front-facing to it) but looking away from the plane: under the
+    // canonical −Z-forward convention an identity rotation looks down world −z,
+    // so the patch centre lands behind the camera (positive camera-frame z).
+    // `is_front_facing` (normal vs. centre) still passes; only the cheirality
+    // gate rejects it.
     let cam = pinhole();
-    // Rotation 180° about y: quaternion (w=0, x=0, y=1, z=0). cam_from_world with
-    // R = diag(-1, 1, -1); place the centre at world z = 1.
-    let pose = RigidTransform::from_wxyz_translation([0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
+    // Identity rotation (canonical camera looking down world −z); centre at
+    // world z = 1, so cam_from_world translation = -centre.
+    let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
     let extra_pyr = ImageU8Pyramid::build(&render_plane_view([0.0, 0.6, 0.0], texture), 5);
 
     // Sanity: patch is front-facing to this pose, but the point is behind it.
@@ -621,11 +622,12 @@ fn behind_camera_candidate_rejected_by_cheirality() {
         patch.is_front_facing(&pose),
         "test setup: pose must be front-facing so only cheirality can reject"
     );
-    // Camera-frame depth of the patch centre must be negative.
-    let depth = pose.transform_point(&patch.center).z;
+    // The patch centre must be behind the camera: canonical camera-frame z
+    // positive (depth −z negative).
+    let z_cam = pose.transform_point(&patch.center).z;
     assert!(
-        depth < 0.0,
-        "test setup: patch must be behind the camera, depth = {depth}"
+        z_cam > 0.0,
+        "test setup: patch must be behind the camera, camera-frame z = {z_cam}"
     );
 
     views.push(ProjectedImage {

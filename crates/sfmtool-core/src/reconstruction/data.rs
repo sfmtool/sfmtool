@@ -247,13 +247,29 @@ impl SfmrReconstruction {
     /// 1. Try `workspace.relative_path` from the `.sfmr` file's directory
     /// 2. Fall back to `workspace.absolute_path`
     /// 3. Fall back to searching upward from the `.sfmr` file for `.sfm-workspace.json`
+    ///
+    /// Version ≤ 4 files store COLMAP-convention data and are upgraded to the
+    /// canonical convention here (`.sfmr` version 5, design decision D1):
+    /// `S` on camera and rig sensor poses, `W` on world points (including
+    /// `w = 0` infinity directions), normals, and patch half-vectors — see
+    /// [`crate::geometry::convention::sfmr_data_colmap_to_canonical`]. The
+    /// conversion lives in this crate rather than `sfmr-format` because the
+    /// convention math is `sfmtool-core`'s `geometry::convention`, which the
+    /// lower-level format crate cannot depend on. Content hashes cover the
+    /// stored bytes ([`sfmr_format::verify_sfmr`] re-reads the file), so
+    /// integrity checks are unaffected; a subsequent [`save`](Self::save)
+    /// writes a new version-5 file with new hashes.
     pub fn load(path: &Path) -> Result<Self, SfmrError> {
-        let data = sfmr_format::read_sfmr(path)?;
+        let mut data = sfmr_format::read_sfmr(path)?;
         // read_sfmr resolves workspace best-effort; here we require it
         let workspace_dir = match data.workspace_dir {
             Some(ref dir) => dir.clone(),
             None => resolve_workspace_dir(path, &data.metadata)?,
         };
+        if data.metadata.version < sfmr_format::SFMR_FORMAT_VERSION {
+            crate::geometry::convention::sfmr_data_colmap_to_canonical(&mut data);
+            data.metadata.version = sfmr_format::SFMR_FORMAT_VERSION;
+        }
         let mut recon = Self::from_sfmr_data(data)?;
         recon.workspace_dir = workspace_dir;
         Ok(recon)
@@ -1163,10 +1179,11 @@ impl SfmrReconstruction {
             let right = forward.cross(&world_up).normalize();
             let up = right.cross(&forward).normalize();
 
-            // Build rotation matrix (world-to-camera, COLMAP convention: +Z forward)
-            // Rows are camera axes: X=right, Y=down, Z=forward
+            // Build rotation matrix (world-to-camera, canonical convention:
+            // camera looks down −Z with +Y up). Rows are the camera axes
+            // expressed in world coordinates: X=right, Y=up, Z=−forward.
             let r = nalgebra::Matrix3::new(
-                right.x, right.y, right.z, -up.x, -up.y, -up.z, forward.x, forward.y, forward.z,
+                right.x, right.y, right.z, up.x, up.y, up.z, -forward.x, -forward.y, -forward.z,
             );
             let rotation = UnitQuaternion::from_rotation_matrix(
                 &nalgebra::Rotation3::from_matrix_unchecked(r),
@@ -1358,10 +1375,11 @@ pub(crate) fn observation_reprojection_error(
     } else {
         rotation * point.coords + translation
     };
-    if p_cam.z <= 0.0 {
+    // Cheirality: a point in front of a canonical camera has z < 0.
+    if p_cam.z >= 0.0 {
         return None;
     }
-    let (u_proj, v_proj) = camera.project(p_cam.x / p_cam.z, p_cam.y / p_cam.z);
+    let (u_proj, v_proj) = camera.project(p_cam.x / -p_cam.z, p_cam.y / -p_cam.z);
     let du = u_proj - observed_xy[0];
     let dv = v_proj - observed_xy[1];
     Some((du * du + dv * dv).sqrt())

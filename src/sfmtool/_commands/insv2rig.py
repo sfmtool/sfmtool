@@ -16,18 +16,18 @@ from .._workspace import find_workspace_for_path
 # Insta360 X5 rig geometry (calibrated from SfM, validated against physical measurement).
 # The two fisheye lenses are back-to-back, with the right eye rotated 180 degrees
 # around Y relative to the left eye. The optical center baseline is ~30.7mm along
-# the optical axis (-Z in the left/rig camera frame).
+# the optical axis; with canonical -Z-forward cameras the rear lens sits along
+# +Z in the rig frame.
 #
-# These are sensor_from_rig transforms in COLMAP's Y-down convention, stored
-# verbatim in the .camrig file.
+# These are sensor_from_rig transforms in the canonical (.sfmr/.camrig) camera
+# convention, stored verbatim in the .camrig file. Relative to the old COLMAP
+# constants they are S-conjugated: S·Ry(180°)·S = Ry(180°) leaves the rotation
+# unchanged, while S flips the baseline translation sign.
 # Left eye (sensor 0): identity rotation, zero translation.
-# Right eye: 180 deg around Y, translated [0, 0, -0.0307] m in rig frame.
+# Right eye: 180 deg around Y, translated [0, 0, +0.0307] m in rig frame.
 _X5_BASELINE_M = 0.0307
 _X5_RIGHT_ROTATION = RotQuaternion.from_axis_angle([0.0, 1.0, 0.0], math.radians(180))
-# cam_from_rig_translation = -R * center_in_rig
-# center_in_rig = [0, 0, -0.0307], R = Ry(180) = diag(-1,1,-1)
-# t = -R * [0,0,-0.0307] = -[0, 0, 0.0307] = [0, 0, -0.0307]
-_X5_RIGHT_TRANSLATION = [0.0, 0.0, -_X5_BASELINE_M]
+_X5_RIGHT_TRANSLATION = [0.0, 0.0, _X5_BASELINE_M]
 
 # Calibrated OPENCV_FISHEYE intrinsics for the Insta360 X5 at 3840x3840.
 # These were refined via SfM bundle adjustment on a single X5 unit and need

@@ -194,6 +194,21 @@ pub fn validate_keypoints(
     Ok(())
 }
 
+/// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
+/// version; [`crate::read_sfmr`] accepts any version up to it.
+///
+/// Version 5 made the canonical coordinate convention normative (right-handed
+/// Z-up world, cameras looking down −Z with +Y up — see
+/// `specs/formats/sfmr-file-format.md` § "Coordinate System Conventions").
+/// The bump is purely semantic: no array was added, removed, or renamed.
+/// Version ≤ 4 files hold COLMAP-convention poses and world data; this crate
+/// reads them structurally and **preserves the stored version number** so the
+/// consumer can apply the COLMAP→canonical conversion — that conversion lives
+/// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
+/// convention math (`geometry::convention`) that this lower-level crate
+/// cannot depend on.
+pub const SFMR_FORMAT_VERSION: u32 = 5;
+
 /// `feature_source` value: observations reference external `.sift` files.
 pub const FEATURE_SOURCE_SIFT_FILES: &str = "sift_files";
 /// `feature_source` value: per-observation keypoints stored inline in the

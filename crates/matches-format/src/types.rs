@@ -75,9 +75,44 @@ pub struct WorkspaceMetadata {
     pub contents: WorkspaceContents,
 }
 
+/// Current `.matches` format version. [`crate::write_matches`] always writes
+/// this version; [`crate::read_matches`] accepts any version up to it.
+///
+/// Version 2 made the canonical camera convention normative for the stored
+/// two-view relative poses (`cam2_from_cam1` with cameras looking down −Z,
+/// +Y up — see `specs/formats/matches-file-format.md` § "Coordinate
+/// Conventions"). The bump is purely semantic: no member was added, removed,
+/// or renamed. Version 1 files hold COLMAP-convention relative poses and are
+/// upgraded on load by S-conjugation ([`s_conjugate_relative_pose`]); the
+/// pixel-space F/E/H matrices are identical in both versions.
+pub const MATCHES_FORMAT_VERSION: u32 = 2;
+
+/// Conjugate a relative camera pose (`cam2_from_cam1`) with the camera-frame
+/// flip `S = diag(1, −1, −1)`: `R' = S·R·S`, `t' = S·t`.
+///
+/// In quaternion terms, conjugating by the 180°-about-X rotation negates the
+/// y and z components: `(w, x, y, z) → (w, x, −y, −z)`; the translation's y
+/// and z flip likewise. Involutive, so the same function maps COLMAP ↔
+/// canonical in both directions.
+///
+/// This is a local copy of the relative-pose case of
+/// `sfmtool_core::geometry::convention::relative_pose_conjugate_s`
+/// (the single source of truth for the convention math): `matches-format`
+/// sits below `sfmtool-core` in the crate graph and cannot depend on it, and
+/// the operation is an exact component permutation with no rotation-matrix
+/// round trip, so duplicating it here is loss-free.
+pub fn s_conjugate_relative_pose(quaternion_wxyz: &mut [f64; 4], translation_xyz: &mut [f64; 3]) {
+    quaternion_wxyz[2] = -quaternion_wxyz[2];
+    quaternion_wxyz[3] = -quaternion_wxyz[3];
+    translation_xyz[1] = -translation_xyz[1];
+    translation_xyz[2] = -translation_xyz[2];
+}
+
 /// Top-level metadata from `metadata.json.zst`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchesMetadata {
+    /// Format version. The current version is [`MATCHES_FORMAT_VERSION`];
+    /// version 1 files (COLMAP-convention relative poses) upgrade on load.
     pub version: u32,
     /// Type of matching used (e.g., "exhaustive", "sequential", "vocab_tree",
     /// "spatial", "transitive", "custom").
@@ -203,10 +238,41 @@ pub struct TwoViewGeometryData {
     pub e_matrices: Array3<f64>,
     /// `(P, 3, 3)` homography matrices, row-major.
     pub h_matrices: Array3<f64>,
-    /// `(P, 4)` relative rotation quaternions in WXYZ format.
+    /// `(P, 4)` relative rotation quaternions in WXYZ format
+    /// (`cam2_from_cam1`, canonical camera convention — see
+    /// [`MATCHES_FORMAT_VERSION`]).
     pub quaternions_wxyz: Array2<f64>,
-    /// `(P, 3)` relative translation vectors.
+    /// `(P, 3)` relative translation vectors (`cam2_from_cam1`, canonical
+    /// camera convention).
     pub translations_xyz: Array2<f64>,
+}
+
+impl TwoViewGeometryData {
+    /// S-conjugate every stored relative pose in place (COLMAP ↔ canonical;
+    /// see [`s_conjugate_relative_pose`]). The pixel-space F/E/H matrices are
+    /// convention-independent and are not touched.
+    pub fn s_conjugate_poses(&mut self) {
+        for i in 0..self.quaternions_wxyz.nrows() {
+            let mut q = [
+                self.quaternions_wxyz[[i, 0]],
+                self.quaternions_wxyz[[i, 1]],
+                self.quaternions_wxyz[[i, 2]],
+                self.quaternions_wxyz[[i, 3]],
+            ];
+            let mut t = [
+                self.translations_xyz[[i, 0]],
+                self.translations_xyz[[i, 1]],
+                self.translations_xyz[[i, 2]],
+            ];
+            s_conjugate_relative_pose(&mut q, &mut t);
+            for (k, &v) in q.iter().enumerate() {
+                self.quaternions_wxyz[[i, k]] = v;
+            }
+            for (k, &v) in t.iter().enumerate() {
+                self.translations_xyz[[i, k]] = v;
+            }
+        }
+    }
 }
 
 /// Primary data structure for `.matches` files.

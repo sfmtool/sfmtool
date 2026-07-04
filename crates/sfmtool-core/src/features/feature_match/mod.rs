@@ -35,6 +35,13 @@ pub use sweep::{
 /// 3. If safe: computes stereo rectification, rectifies points, runs sweep matching
 /// 4. If unsafe: runs polar sweep matching
 /// 5. Optionally applies geometric filtering
+///
+/// **Convention.** This pipeline is pixel-space `K`-matrix algebra
+/// throughout (F, rectification homographies, epipolar filters), so the
+/// poses must be in the COLMAP/OpenCV **optical** camera convention
+/// (+Z forward, y down). A caller holding canonical `.sfmr` poses must
+/// pre-multiply each pose by `S = diag(1, −1, −1)` (`r → S·r`, `t → S·t`;
+/// see [`crate::geometry::convention`]).
 #[allow(clippy::too_many_arguments)]
 pub fn match_image_pair(
     // Camera intrinsics

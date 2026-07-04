@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from .._sfmtool.geometry import (
+    flip_camera_poses_s as _flip_camera_poses_s,
     poses_canonical_to_colmap,
     poses_colmap_to_canonical,
     relative_poses_conjugate_s,
@@ -37,10 +38,19 @@ from .._sfmtool.geometry import (
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import pycolmap
 
+# S = diag(1, -1, -1): the camera-frame flip (180 deg about the camera X axis),
+# mirroring ``sfmtool_core::geometry::convention::s_matrix()``. This is the one
+# Python definition of ``S``; boundary sites never hardcode it, they call the
+# helpers in this module.
+_S = np.diag([1.0, -1.0, -1.0])
+
 __all__ = [
     "pose_colmap_to_canonical",
     "pose_canonical_to_colmap",
     "relative_pose_conjugate_s",
+    "flip_camera_pose_s",
+    "flip_camera_pose_matrix_s",
+    "rigid3d_flip_camera_s",
     "world_rotate_w",
     "world_rotate_w_inverse",
     "points_xyzw_rotate_w",
@@ -92,6 +102,56 @@ def relative_pose_conjugate_s(quats_wxyz, translations_xyz):
     COLMAP -> canonical and back.
     """
     return _apply_pose_fn(relative_poses_conjugate_s, quats_wxyz, translations_xyz)
+
+
+def flip_camera_pose_s(quats_wxyz, translations_xyz):
+    """S-only camera-frame flip of a world-to-camera pose: ``R' = S.R``, ``t' = S.t``.
+
+    Involutive (``S.S = I``). Used for in-pipeline pycolmap round trips (D3):
+    the camera frame flips both directions while the world frame is left
+    untouched (no ``W``). This is distinct from
+    :func:`relative_pose_conjugate_s` (``S.R.S``), which is for rig-relative /
+    ``cam2_from_cam1`` poses.
+
+    A thin wrapper over the Rust batch primitive
+    ``sfmtool_core::geometry::convention::flip_camera_pose_s`` (the single
+    source of truth for the ``S`` math), so a whole reconstruction's poses
+    convert in one call rather than a per-pose Python loop.
+    """
+    return _apply_pose_fn(_flip_camera_poses_s, quats_wxyz, translations_xyz)
+
+
+def flip_camera_pose_matrix_s(
+    rotation: np.ndarray, translation: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """S-only camera-frame flip of a world-to-camera pose in matrix form.
+
+    ``R' = S.R``, ``t' = S.t``. Matrix-input companion to
+    :func:`flip_camera_pose_s` for callers that already hold a 3x3 rotation
+    matrix (e.g. epipolar/F-matrix construction that must map canonical ``.sfmr``
+    poses back to OpenCV camera frames before combining with ``K``; §1
+    invariant). Involutive (``S.S = I``); the world frame is left untouched.
+    """
+    r = np.asarray(rotation, dtype=np.float64)
+    t = np.asarray(translation, dtype=np.float64)
+    return _S @ r, _S @ t
+
+
+def rigid3d_flip_camera_s(rigid3d: "pycolmap.Rigid3d") -> "pycolmap.Rigid3d":
+    """S-only camera-frame flip of a world-to-camera ``pycolmap.Rigid3d`` (D3).
+
+    Wraps :func:`flip_camera_pose_s` for the pycolmap ``Rigid3d`` shape used at
+    the epipolar-guided matching boundary. Involutive.
+    """
+    import pycolmap
+
+    xyzw = np.asarray(rigid3d.rotation.quat, dtype=np.float64)
+    wxyz = xyzw[[3, 0, 1, 2]]
+    q, t = flip_camera_pose_s(wxyz, np.asarray(rigid3d.translation, dtype=np.float64))
+    return pycolmap.Rigid3d(
+        rotation=pycolmap.Rotation3d([q[1], q[2], q[3], q[0]]),
+        translation=t,
+    )
 
 
 def world_rotate_w(vectors_xyz):

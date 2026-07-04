@@ -103,11 +103,22 @@ def create_colmap_db_from_reconstruction(
 
     print("Creating COLMAP database from reconstruction...")
 
+    from .convention import pose_canonical_to_colmap
+
     cameras_meta = recon.cameras
     image_names = recon.image_names
     camera_indexes = recon.camera_indexes
-    quaternions_wxyz = recon.quaternions_wxyz
-    translations = recon.translations
+
+    # `to-colmap-db` is an external boundary (the generic write_colmap_db writes
+    # poses verbatim), so convert canonical poses to COLMAP convention here:
+    # S on the camera frames + W on the world. Camera centers derived from the
+    # converted poses then carry the W^-1 world rotation automatically, and the
+    # two-view relative poses computed below come out S-conjugated (their
+    # pixel-space F is unchanged, per the migration spec).
+    quaternions_wxyz, translations = pose_canonical_to_colmap(
+        np.asarray(recon.quaternions_wxyz, dtype=np.float64),
+        np.asarray(recon.translations, dtype=np.float64),
+    )
 
     if populate_two_view_geometries:
         covisibility_pairs = build_covisibility_pairs(recon, angle_threshold_deg=180.0)

@@ -29,9 +29,22 @@ pub fn read_camrig_metadata(
 /// inconsistent tables (out-of-range camera index, non-unit quaternion,
 /// mismatched counts) is rejected here rather than panicking a downstream
 /// consumer.
+///
+/// Version 1 files store their `sensor_from_rig` poses in the COLMAP camera
+/// convention and are upgraded to the canonical convention on load
+/// ([`CamRigData::upgrade_sensor_poses_from_v1`], which S-conjugates
+/// body-anchored rigs but left-`S`-multiplies world-anchored `spherical_tiles`
+/// rigs). Content hashes cover the stored bytes ([`crate::verify_camrig`]
+/// re-reads the file), so integrity verification is unaffected by the
+/// in-memory upgrade; a re-written file is a new version-2 file with new
+/// hashes.
 pub fn read_camrig(path: &Path) -> Result<CamRigData, CamRigError> {
-    let data = read_camrig_unchecked(path)?;
+    let mut data = read_camrig_unchecked(path)?;
     data.validate()?;
+    if data.metadata.version < CAMRIG_FORMAT_VERSION {
+        data.upgrade_sensor_poses_from_v1();
+        data.metadata.version = CAMRIG_FORMAT_VERSION;
+    }
     Ok(data)
 }
 

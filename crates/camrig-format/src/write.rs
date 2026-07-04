@@ -13,12 +13,16 @@ use crate::types::*;
 /// Write columnar camera-rig data to a `.camrig` file.
 ///
 /// Validates the structural constraints (see [`CamRigData::validate`]) before
-/// writing, so a `.camrig` file on disk is always well-formed. Computes
-/// content hashes automatically; the `content_hash` field in `data` is
-/// ignored on write and recomputed from the actual data.
+/// writing, so a `.camrig` file on disk is always well-formed. Always writes
+/// the current format version ([`CAMRIG_FORMAT_VERSION`]); the caller must
+/// supply `sensor_from_rig` poses in the canonical camera convention.
+/// Computes content hashes automatically; the `content_hash` field in `data`
+/// is ignored on write and recomputed from the actual data.
 pub fn write_camrig(path: &Path, data: &CamRigData, zstd_level: i32) -> Result<(), CamRigError> {
+    let mut data = data.clone();
+    data.metadata.version = CAMRIG_FORMAT_VERSION;
     data.validate()?;
-    write_camrig_unchecked(path, data, zstd_level)
+    write_camrig_unchecked(path, &data, zstd_level)
 }
 
 /// Write a `.camrig` file without validating structural constraints.

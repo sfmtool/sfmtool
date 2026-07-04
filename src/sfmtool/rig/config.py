@@ -44,6 +44,12 @@ def _infer_frame_key(image_rel_path: str, prefix: str) -> str:
 def _sensor_from_rig_pose(cam_config: dict):
     """Build a pycolmap.Rigid3d sensor_from_rig pose from a rig config camera entry.
 
+    Per D4 of the coordinate-convention migration, ``rig_config.json`` stays in
+    COLMAP convention: it mirrors COLMAP's own rig-config schema and this loader
+    feeds COLMAP DB setup directly, so the pose is used verbatim with **no**
+    S-conjugation (unlike the canonical ``.camrig`` path). If a consumer ever
+    uses these poses on the ``.sfmr`` (canonical) side, it must convert.
+
     Returns pycolmap.Rigid3d or None if no pose is specified.
     """
     if "cam_from_rig_rotation" not in cam_config:

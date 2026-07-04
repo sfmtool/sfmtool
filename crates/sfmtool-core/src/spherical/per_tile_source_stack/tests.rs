@@ -964,9 +964,21 @@ fn build_constant_color_stack() -> (
     (rig, stack, constants)
 }
 
-/// Find a tile with all 3 sources contributing.
+/// Find a tile with all 3 sources contributing *and* a valid level-0 centre
+/// pixel in every contributor's patch, so centre-pixel consensus assertions
+/// see all three constants (a contributor whose warp footprint clips the
+/// frame edge at the centre would silently drop out of the median).
 fn find_full_tile(stack: &PerSphericalTileSourceStack<f32>) -> Option<usize> {
-    (0..stack.n_tiles()).find(|&t| stack.n_contributors(t) == 3)
+    let b = stack.base_patch_size() as usize;
+    let pixel_count = b * b;
+    let centre = (b / 2) * b + b / 2;
+    (0..stack.n_tiles()).find(|&t| {
+        if stack.n_contributors(t) != 3 {
+            return false;
+        }
+        let valid = stack.valid_for_tile(t, 0);
+        (0..3).all(|pos| valid[pos * pixel_count + centre] != 0)
+    })
 }
 
 #[test]

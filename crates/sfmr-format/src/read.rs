@@ -53,10 +53,11 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     let content_hash: ContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
 
     // Reject versions newer than this build understands; their layout is unknown
-    // so reading with v4 assumptions would misparse silently.
-    if metadata.version > 4 {
+    // so reading with current-version assumptions would misparse silently.
+    if metadata.version > SFMR_FORMAT_VERSION {
         return Err(SfmrError::InvalidFormat(format!(
-            "unsupported .sfmr format version {} (this build supports up to 4)",
+            "unsupported .sfmr format version {} (this build supports up to \
+             {SFMR_FORMAT_VERSION})",
             metadata.version
         )));
     }
@@ -467,12 +468,14 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         None
     };
 
-    // Upgrade older metadata to the current (version 4) in-memory model: the
-    // in-memory data is always the latest version. Recompute
-    // `infinity_point_count` from the `w` column so it is correct regardless of
-    // the source version (version 1 has none). `feature_source` already defaulted
-    // to `sift_files` for pre-v4 files on deserialization.
-    metadata.version = 4;
+    // The arrays above are upgraded to the current structural layout, but
+    // `metadata.version` deliberately keeps the **stored** version: version ≤ 4
+    // files hold COLMAP-convention poses/points, and the consumer that can see
+    // the convention math (`SfmrReconstruction::load` in `sfmtool-core`) gates
+    // the COLMAP→canonical upgrade on this value (see [`SFMR_FORMAT_VERSION`]).
+    // Recompute `infinity_point_count` from the `w` column so it is correct
+    // regardless of the source version (version 1 has none). `feature_source`
+    // already defaulted to `sift_files` for pre-v4 files on deserialization.
     metadata.infinity_point_count = (0..point_count)
         .filter(|&i| positions_xyzw[[i, 3]] == 0.0)
         .count() as u32;

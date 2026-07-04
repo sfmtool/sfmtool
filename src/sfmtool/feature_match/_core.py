@@ -152,13 +152,24 @@ def match_registered_images(
         np.asarray(get_intrinsic_matrix(cam), dtype=np.float64) for cam in cameras
     ]
 
+    # The .sfmr poses are canonical; the epipolar-guided matcher expects
+    # COLMAP/OpenCV-frame poses, so S-flip the camera frames (S-only, D3).
+    # Flip the whole batch in one call, then take each flipped rotation as a
+    # matrix (no throwaway pycolmap.Rigid3d per image).
+    from ..colmap.convention import flip_camera_pose_s
+
+    quats_cv, trans_cv = flip_camera_pose_s(
+        np.asarray(quaternions, dtype=np.float64),
+        np.asarray(translations, dtype=np.float64),
+    )
     rotations_list = []
     translations_list = []
     for img_idx in range(len(image_names)):
-        quat_xyzw = np.roll(quaternions[img_idx], -1)
-        pose = pycolmap.Rigid3d(pycolmap.Rotation3d(quat_xyzw), translations[img_idx])
-        rotations_list.append(np.asarray(pose.rotation.matrix(), dtype=np.float64))
-        translations_list.append(np.asarray(pose.translation, dtype=np.float64))
+        quat_xyzw = np.roll(quats_cv[img_idx], -1)
+        rotations_list.append(
+            np.asarray(pycolmap.Rotation3d(quat_xyzw).matrix(), dtype=np.float64)
+        )
+        translations_list.append(np.asarray(trans_cv[img_idx], dtype=np.float64))
 
     num_images = len(image_names)
     positions_list = []

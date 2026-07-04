@@ -252,18 +252,19 @@ fn build_reference(
 }
 
 /// Whether `patch`'s centre is in front of the `cam_from_world` camera —
-/// camera-frame depth `> 0`. [`OrientedPatch::is_front_facing`] only tests the
-/// normal vs. the camera centre and does **not** guarantee positive depth;
-/// equirect / wide-fisheye projection can map behind-camera points in-frame, so
-/// scoring needs this explicit cheirality gate (camera-model agnostic).
+/// camera-frame depth `−z > 0` (the canonical camera looks down −Z).
+/// [`OrientedPatch::is_front_facing`] only tests the normal vs. the camera
+/// centre and does **not** guarantee positive depth; equirect / wide-fisheye
+/// projection can map behind-camera points in-frame, so scoring needs this
+/// explicit cheirality gate (camera-model agnostic).
 ///
 /// For a point at infinity (`w = 0`) the test is on the ray direction `R·d`: the
-/// camera sees the point iff it looks toward `+d` (camera-frame `z > 0`).
+/// camera sees the point iff it looks toward `+d` (camera-frame `z < 0`).
 fn is_in_front(patch: &OrientedPatch, cam_from_world: &crate::geometry::RigidTransform) -> bool {
     cam_from_world
         .transform_point_homogeneous(patch.center.coords, patch.w)
         .z
-        > 0.0
+        < 0.0
 }
 
 /// Windowed ZNCC of `patch` rendered in `view` against the reference template,

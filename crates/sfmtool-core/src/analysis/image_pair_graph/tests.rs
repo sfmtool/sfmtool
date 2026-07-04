@@ -38,6 +38,37 @@ fn test_camera_directions_rotated() {
     assert_relative_eq!(dirs[2], 1.0, epsilon = 1e-10);
 }
 
+/// Locks the viewing-direction sign to the canonical convention (camera
+/// looks down −Z): for a world-to-camera look-at rotation built with rows
+/// `[right, up, −forward]`, `compute_camera_directions` must return the
+/// *forward* vector (toward the target), not its negation. Under the old
+/// COLMAP-convention data the `−column(2)` formula silently produced the
+/// negated direction (which self-cancelled in pairwise comparisons); this
+/// test prevents that regressing again.
+#[test]
+fn test_camera_direction_sign_matches_look_at_forward() {
+    use nalgebra::{Matrix3, Rotation3, UnitQuaternion, Vector3};
+
+    // Camera at `position` looking at the origin, world up = +Z (the same
+    // construction as `SfmrReconstruction::demo`).
+    let position = Vector3::new(3.0, -2.0, 1.5);
+    let forward = (-position).normalize();
+    let world_up = Vector3::z();
+    let right = forward.cross(&world_up).normalize();
+    let up = right.cross(&forward).normalize();
+    // Canonical world-to-camera rows: X=right, Y=up, Z=−forward.
+    let r = Matrix3::new(
+        right.x, right.y, right.z, up.x, up.y, up.z, -forward.x, -forward.y, -forward.z,
+    );
+    let q = UnitQuaternion::from_rotation_matrix(&Rotation3::from_matrix_unchecked(r));
+    let quat = [q.w, q.i, q.j, q.k];
+
+    let dirs = compute_camera_directions(&quat, 1);
+    assert_relative_eq!(dirs[0], forward.x, epsilon = 1e-10);
+    assert_relative_eq!(dirs[1], forward.y, epsilon = 1e-10);
+    assert_relative_eq!(dirs[2], forward.z, epsilon = 1e-10);
+}
+
 #[test]
 fn test_covisibility_simple() {
     // 3 images, all identity quaternions (all pointing same direction)

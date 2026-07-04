@@ -45,17 +45,18 @@ fn quat_axis_angle(axis: [f64; 3], angle: f64) -> [f64; 4] {
     [h.cos(), axis[0] * s, axis[1] * s, axis[2] * s]
 }
 
-/// Shortest-arc quaternion rotating `+Z` onto the unit vector `d`.
-fn shortest_arc_from_z(d: [f64; 3]) -> [f64; 4] {
-    let dot = d[2];
+/// Shortest-arc quaternion rotating `−Z` — the canonical sensor's forward
+/// axis — onto the unit vector `d`.
+fn shortest_arc_from_neg_z(d: [f64; 3]) -> [f64; 4] {
+    let dot = -d[2]; // (−Z) · d
     if dot > 0.999_999 {
-        return [1.0, 0.0, 0.0, 0.0];
+        return [1.0, 0.0, 0.0, 0.0]; // already looking along d
     }
     if dot < -0.999_999 {
-        return [0.0, 1.0, 0.0, 0.0]; // 180° about X
+        return [0.0, 1.0, 0.0, 0.0]; // d = +Z: 180° about X
     }
-    // Half-way quaternion: q = normalize([1 + dot, cross(+Z, d)]).
-    let q = [1.0 + dot, -d[1], d[0], 0.0];
+    // Half-way quaternion: q = normalize([1 + dot, cross(−Z, d)]).
+    let q = [1.0 + dot, d[1], -d[0], 0.0];
     let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
     [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
 }
@@ -93,7 +94,7 @@ fn metadata(
     rig_attributes: serde_json::Value,
 ) -> CamRigMetadata {
     CamRigMetadata {
-        version: 1,
+        version: CAMRIG_FORMAT_VERSION,
         name: name.into(),
         sensor_count: sensor_count as u32,
         camera_count: camera_count as u32,
@@ -149,16 +150,19 @@ fn stereo_pair_rig() -> CamRigData {
 }
 
 /// A back-to-back fisheye pair, as `sfm insv2rig` extracts: the right
-/// sensor faces opposite the left, offset by a small baseline.
+/// sensor faces opposite the left, offset by a small baseline. Canonical
+/// convention: sensors look down −Z, so the rear lens sits along **+Z** of
+/// the reference sensor (the 180°-about-Y rotation is S-invariant; only the
+/// baseline's sign flipped relative to the COLMAP-convention rig).
 fn insv2_rig() -> CamRigData {
     // Both sensors share one fisheye intrinsic (camera pool size 1).
     let cameras = vec![opencv_fisheye(480, 480)];
     let baseline_m = 0.0307;
     let quats = [
         [1.0, 0.0, 0.0, 0.0], // left: reference, identity
-        [0.0, 0.0, 1.0, 0.0], // right: 180° about Y
+        [0.0, 0.0, 1.0, 0.0], // right: 180° about Y (S-invariant)
     ];
-    let trans = [[0.0, 0.0, 0.0], [0.0, 0.0, -baseline_m]];
+    let trans = [[0.0, 0.0, 0.0], [0.0, 0.0, baseline_m]];
     let (quaternions_wxyz, translations_xyz) = pose_arrays(&quats, &trans);
     CamRigData {
         metadata: metadata(
@@ -181,7 +185,10 @@ fn insv2_rig() -> CamRigData {
 }
 
 /// A six-face cubemap, as `sfm pano2rig` produces: six co-centric
-/// pinhole faces (front/right/back/left/top/bottom).
+/// pinhole faces (front/right/back/left/top/bottom). Canonical convention:
+/// the reference face looks down rig −Z; relative to the COLMAP-convention
+/// rig the Y-rotation signs are S-conjugated (`S·Ry(θ)·S = Ry(−θ)`) while
+/// the X-rotations are S-invariant (`S·Rx(θ)·S = Rx(θ)`).
 fn cubemap_rig(face_size: u32) -> CamRigData {
     // 90° FOV per face ⇒ fx = fy = face_size / 2.
     let f = face_size as f64 / 2.0;
@@ -190,9 +197,9 @@ fn cubemap_rig(face_size: u32) -> CamRigData {
     let q = std::f64::consts::FRAC_PI_2;
     let quats = [
         [1.0, 0.0, 0.0, 0.0],                 // front (reference)
-        quat_axis_angle([0.0, 1.0, 0.0], q),  // right: +90° about Y
+        quat_axis_angle([0.0, 1.0, 0.0], -q), // right: -90° about Y
         [0.0, 0.0, 1.0, 0.0],                 // back: 180° about Y
-        quat_axis_angle([0.0, 1.0, 0.0], -q), // left: -90° about Y
+        quat_axis_angle([0.0, 1.0, 0.0], q),  // left: +90° about Y
         quat_axis_angle([1.0, 0.0, 0.0], -q), // top: -90° about X
         quat_axis_angle([1.0, 0.0, 0.0], q),  // bottom: +90° about X
     ];
@@ -228,7 +235,10 @@ fn spherical_tile_rig(n: usize, overlap_factor: f64) -> CamRigData {
     let atlas_cols = (n as f64).sqrt().ceil() as u32;
 
     let cameras = vec![pinhole(patch_size, patch_size, f, f, c, c)];
-    let quats: Vec<[f64; 4]> = directions.iter().map(|&d| shortest_arc_from_z(d)).collect();
+    let quats: Vec<[f64; 4]> = directions
+        .iter()
+        .map(|&d| shortest_arc_from_neg_z(d))
+        .collect();
     let trans = vec![[0.0; 3]; n];
     let (quaternions_wxyz, translations_xyz) = pose_arrays(&quats, &trans);
 
@@ -590,12 +600,129 @@ fn read_rejects_zero_sensors() {
 #[test]
 fn read_rejects_unsupported_version() {
     let mut data = cubemap_rig(256);
-    data.metadata.version = 2;
+    data.metadata.version = CAMRIG_FORMAT_VERSION + 1;
     let path = std::env::temp_dir().join("camrig_read_bad_ver.camrig");
     crate::write::write_camrig_unchecked(&path, &data, 3).unwrap();
 
     let err = read_camrig(&path).unwrap_err();
     assert!(format!("{err}").contains("version"));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn writer_always_writes_current_version() {
+    let mut data = cubemap_rig(256);
+    data.metadata.version = 1; // stale caller-supplied version is overridden
+    let path = std::env::temp_dir().join("camrig_write_version.camrig");
+    write_camrig(&path, &data, 3).unwrap();
+
+    let (meta, _) = read_camrig_metadata(&path).unwrap();
+    assert_eq!(meta.version, CAMRIG_FORMAT_VERSION);
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn version_1_sensor_poses_upgrade_on_load() {
+    // Author a genuine version-1 file: take the canonical insv2 rig,
+    // S-conjugate its poses back to the COLMAP convention (S is involutive),
+    // and write it verbatim with version = 1 via the unchecked writer.
+    let canonical = insv2_rig();
+    let mut v1 = canonical.clone();
+    v1.metadata.version = 1;
+    v1.s_conjugate_sensor_poses();
+    // The COLMAP-convention rig carries the rear lens at −Z.
+    assert_eq!(v1.translations_xyz[[1, 2]], -0.0307);
+
+    let path = std::env::temp_dir().join("camrig_v1_upgrade.camrig");
+    crate::write::write_camrig_unchecked(&path, &v1, 3).unwrap();
+    let (meta, _) = read_camrig_metadata(&path).unwrap();
+    assert_eq!(meta.version, 1);
+
+    // Hashes cover the stored bytes: the v1 file verifies as written,
+    // before any in-memory conversion.
+    let (valid, errors) = verify_camrig(&path).unwrap();
+    assert!(valid, "v1 fixture failed verification: {errors:?}");
+
+    // Loading upgrades to the canonical convention and the current version.
+    let loaded = read_camrig(&path).unwrap();
+    assert_eq!(loaded.metadata.version, CAMRIG_FORMAT_VERSION);
+    assert_eq!(loaded.quaternions_wxyz, canonical.quaternions_wxyz);
+    assert_eq!(loaded.translations_xyz, canonical.translations_xyz);
+
+    std::fs::remove_file(&path).ok();
+}
+
+/// Two unit quaternions describe the same rotation iff they are equal or
+/// exact negatives (`q` and `−q`). Used to compare recovered sensor rotations
+/// without caring about the immaterial global sign.
+fn same_rotation(a: ndarray::ArrayView1<f64>, b: ndarray::ArrayView1<f64>) -> bool {
+    let equal = (0..4).all(|k| (a[k] - b[k]).abs() < 1e-12);
+    let negated = (0..4).all(|k| (a[k] + b[k]).abs() < 1e-12);
+    equal || negated
+}
+
+#[test]
+fn version_1_spherical_tiles_upgrade_uses_world_anchored_flip() {
+    // A spherical_tiles rig is world-anchored: its rig frame *is* the
+    // reconstruction world, so the v1→v2 upgrade must left-S-multiply the
+    // sensor poses (R' = S·R), not S-conjugate them (R' = S·R·S) the way
+    // body-anchored rigs do. S-conjugating a tile rig would rotate every tile
+    // 180° about the world X axis (the wrong hemisphere) while still passing
+    // structural validation.
+    let canonical = spherical_tile_rig(8, 1.3);
+
+    // Author a genuine version-1 file: apply the involutive world-anchored flip
+    // to the canonical poses to land in the COLMAP convention, stamp version 1.
+    let mut v1 = canonical.clone();
+    v1.metadata.version = 1;
+    for i in 0..v1.quaternions_wxyz.nrows() {
+        let mut q = [
+            v1.quaternions_wxyz[[i, 0]],
+            v1.quaternions_wxyz[[i, 1]],
+            v1.quaternions_wxyz[[i, 2]],
+            v1.quaternions_wxyz[[i, 3]],
+        ];
+        let mut t = [0.0; 3];
+        s_premultiply_sensor_pose(&mut q, &mut t);
+        for (k, &val) in q.iter().enumerate() {
+            v1.quaternions_wxyz[[i, k]] = val;
+        }
+    }
+
+    let path = std::env::temp_dir().join("camrig_v1_tiles_upgrade.camrig");
+    crate::write::write_camrig_unchecked(&path, &v1, 3).unwrap();
+    let (meta, _) = read_camrig_metadata(&path).unwrap();
+    assert_eq!(meta.version, 1);
+
+    // Loading upgrades via the world-anchored flip and recovers the canonical
+    // rotations (up to the immaterial global quaternion sign).
+    let loaded = read_camrig(&path).unwrap();
+    assert_eq!(loaded.metadata.version, CAMRIG_FORMAT_VERSION);
+    for i in 0..canonical.quaternions_wxyz.nrows() {
+        assert!(
+            same_rotation(
+                loaded.quaternions_wxyz.row(i),
+                canonical.quaternions_wxyz.row(i)
+            ),
+            "tile {i} did not upgrade to the canonical rotation"
+        );
+    }
+
+    // The body-anchored conjugation the pre-fix code applied would leave at
+    // least one tile pointing at the wrong hemisphere — the dispatch matters.
+    let mut wrong = v1.clone();
+    wrong.s_conjugate_sensor_poses();
+    let any_wrong = (0..canonical.quaternions_wxyz.nrows()).any(|i| {
+        !same_rotation(
+            wrong.quaternions_wxyz.row(i),
+            canonical.quaternions_wxyz.row(i),
+        )
+    });
+    assert!(
+        any_wrong,
+        "S-conjugation unexpectedly matched the canonical rotations"
+    );
+
     std::fs::remove_file(&path).ok();
 }
 

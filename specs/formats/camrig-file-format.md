@@ -129,8 +129,8 @@ content_hash.json.zst
 Compact JSON, zstd-compressed. Fields (consumers ignore unknown fields, for
 forward-compatible extension):
 
-* `version`: (integer) Format version. Currently `1`; version `2` is
-  planned (see [Versioning and migration](#versioning-and-migration)).
+* `version`: (integer) Format version. `1` or `2` (see
+  [Versioning and migration](#versioning-and-migration)).
 * `name`: (string) A human-readable name for the rig, e.g. `"insv2_x5"`,
   `"cubemap"`, `"spherical_tiles_n1280"`. May be empty.
 * `sensor_count`: (integer) Number of sensors, `S ≥ 1`.
@@ -215,7 +215,7 @@ sfmtool formats.
 
 ## Data ordering and constraints
 
-- `version` is a known version (`1`, or `2` once implemented — see
+- `version` is a known version (`1` or `2` — see
   [Versioning and migration](#versioning-and-migration)).
 - `sensor_count ≥ 1`, `camera_count ≥ 1`.
 - `sensor_count` equals the length of every per-sensor table
@@ -451,12 +451,11 @@ $ jq . cameras/metadata.json
 
 ## Versioning and migration
 
-The format has one released version (`1`); version `2` is planned. The
-format is versioned (`metadata.json` `version`) precisely so that convention
-changes like the one below can upgrade on load instead of breaking old
-files.
+The format has two released versions (`1` and `2`). The format is versioned
+(`metadata.json` `version`) precisely so that convention changes like the one
+below can upgrade on load instead of breaking old files.
 
-### Version 1 → Version 2 (planned)
+### Version 1 → Version 2
 
 Version 2 makes the canonical `.sfmr` coordinate convention normative for
 sensor poses (see *Coordinate and quaternion conventions*), mirroring the
@@ -467,11 +466,20 @@ is purely semantic:
 |-----------|-----------|
 | `sensor_from_rig` poses in COLMAP convention (sensors look down +Z with Y down) | Canonical convention: sensors look down −Z with +Y up |
 
-**Migration is mechanical and lossless.** A version 1 file upgrades on load
-by conjugating each stored `sensor_from_rig` pose with the camera-frame flip
-`S = diag(1, −1, −1)`: `R' = S · R · S`, `t' = S · t`. Rig-relative poses
-never touch the world frame, so the `.sfmr` world canonicalization `W` does
-not apply. Saving always writes version 2. Content hashes cover the stored
+**Migration is mechanical and lossless**, but the transport depends on how the
+rig is anchored. Most rigs are **body-anchored** — the rig frame is a
+reference-sensor frame, so both frames flip under the convention change and a
+version 1 file upgrades on load by conjugating each stored `sensor_from_rig`
+pose with the camera-frame flip `S = diag(1, −1, −1)`: `R' = S · R · S`,
+`t' = S · t` (the rig frame never touches the world, so the `.sfmr` world
+canonicalization `W` does not apply). A `spherical_tiles` rig (`rig_type ==
+"spherical_tiles"`) is instead **world-anchored** — its rig frame *is* the
+reconstruction world, which the convention change leaves fixed — so only the
+sensor frame flips and the upgrade is a left multiply `R' = S · R`,
+`t' = S · t`. Applying the body-anchored conjugation to a tile rig would
+leave every sensor rotated 180° about the world X axis (the wrong hemisphere)
+while still passing structural validation, so the upgrade dispatches on
+`rig_type`. Saving always writes version 2. Content hashes cover the stored
 bytes, so hashes verify before conversion; a converted-then-saved file is a
 new version 2 file with new hashes.
 
@@ -481,8 +489,9 @@ regenerated in the canonical convention. The implementation roadmap is
 
 ## Version history
 
-- **Version 2** (planned): Canonical coordinate convention — sensor frames
+- **Version 2**: Canonical coordinate convention — sensor frames
   look down −Z with +Y up, matching `.sfmr` — becomes normative; version 1
-  files (COLMAP convention) upgrade on load via `S`-conjugation of the
-  stored `sensor_from_rig` poses.
+  files (COLMAP convention) upgrade on load by flipping the stored
+  `sensor_from_rig` poses (`S`-conjugation for body-anchored rigs, a left `S`
+  multiply for world-anchored `spherical_tiles` rigs).
 - **Version 1**: Initial release.

@@ -209,7 +209,9 @@ def test_stored_keypoints_at_reprojection_match_centered(seoul_bull_workspace: P
     for j in range(len(tpid)):
         im = int(timg[j])
         pc = rot[im] @ positions[int(tpid[j])] + trans[im]
-        u, v = cams[int(cam_idx[im])].project(pc[0] / pc[2], pc[1] / pc[2])
+        # Canonical cameras look down -Z, so normalized coords divide by the
+        # depth -z (> 0 in front), not +z.
+        u, v = cams[int(cam_idx[im])].project(pc[0] / -pc[2], pc[1] / -pc[2])
         reproj[j] = (u, v)
 
     recon_reproj = recon.clone_with_changes(keypoints_xy=reproj)

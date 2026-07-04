@@ -371,6 +371,9 @@ impl<T: PatchPixel> PerSphericalTileSourceStack<T> {
         // touch disjoint slices — see the SAFETY comment on
         // `SoaWriter::write_level_row`.
         let tile_camera = rig.tile_camera();
+        // Canonical tile-camera frames (−Z forward, +Y up) — the warp below
+        // composes them with `pixel_to_ray` / `ray_to_pixel`, which speak the
+        // canonical convention.
         let tile_rotations: Vec<Matrix3<f64>> = (0..n_tiles)
             .map(|t| {
                 let cols = rig.tile_rotation(t);
@@ -792,7 +795,8 @@ unsafe fn warp_and_downsample_into<T: PatchPixel>(
     channels: u32,
     writer: &SoaWriter<T>,
 ) {
-    // Build R_src_from_tile = R_src_from_world · R_world_from_tile.
+    // Build R_src_from_tile_cam = R_src_from_world · R_world_from_tile
+    // (the canonical tile camera rotation from `tile_rotation`).
     let r_st = r_sw * r_world_from_tile;
     let r_st_quat = RotQuaternion::from_rotation_matrix(r_st);
     let warp = WarpMap::from_cameras_with_rotation(src_intrinsics, tile_camera, &r_st_quat);

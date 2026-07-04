@@ -227,7 +227,8 @@ impl PySphericalTileRig {
     }
 
     /// 3x3 ``R_world_from_tile`` for tile ``idx`` as a row-major (3, 3) float64
-    /// numpy array. Columns are ``[e_right | e_up | direction]``.
+    /// numpy array. Columns are ``[e_right | e_up | -direction]`` — the tile's
+    /// canonical (-Z-forward) camera rotation.
     fn tile_rotation<'py>(&self, py: Python<'py>, idx: usize) -> PyResult<Py<PyAny>> {
         if idx >= self.inner.len() {
             return Err(pyo3::exceptions::PyIndexError::new_err(format!(

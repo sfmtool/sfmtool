@@ -18,6 +18,19 @@ use crate::PyCameraIntrinsics;
 
 /// Read a complete .sfmr file, returning a dict with numpy arrays and metadata.
 ///
+/// KNOWN LIMITATION (convention upgrade not applied): unlike
+/// `SfmrReconstruction::load`, this low-level dict reader does **not** apply the
+/// version ≤ 4 → 5 COLMAP→canonical convention upgrade. A pre-v5 file is
+/// returned with its stored COLMAP-convention poses/points (Y-down/+Z-forward
+/// cameras, un-rotated world) and its stored `metadata["version"]`, while every
+/// other loader returns canonical data. Worse, `write_sfmr` (below) restamps the
+/// version to the current one unconditionally, so a read→write round trip of a
+/// pre-v5 file through this dict API permanently mislabels COLMAP-convention data
+/// as canonical v5 and the upgrade in `SfmrReconstruction::load` never fires
+/// again. Prefer `SfmrReconstruction` for pose/point data; use this dict API only
+/// for v5 files or when you handle the convention yourself. (Tracked as a known
+/// bug in the zup-completion review.)
+///
 /// Returns a dict with keys:
 ///   metadata, content_hash, cameras, depth_statistics (dicts/lists),
 ///   image_names (list[str]),
@@ -281,6 +294,12 @@ pub(crate) fn parse_sfmr_data_from_dict(
 ///
 /// The dict should have the same keys as returned by `read_sfmr`.
 /// The `content_hash` key is ignored (recomputed on write).
+///
+/// KNOWN LIMITATION: this always writes the current [`SFMR_FORMAT_VERSION`]
+/// regardless of the `metadata["version"]` in the dict, and assumes the arrays
+/// are already in the canonical convention — it applies no conversion. Writing a
+/// dict read from a pre-v5 file via `read_sfmr` (which does not upgrade) therefore
+/// stamps COLMAP-convention data as canonical v5. See `read_sfmr` above.
 #[pyfunction]
 #[pyo3(signature = (path, data, zstd_level=3, skip_recompute_depth_stats=false))]
 pub fn write_sfmr(

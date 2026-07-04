@@ -8,8 +8,8 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool.visualization._common import get_color_palette
+from sfmtool.feature_match._geometry import get_fundamental_matrix
 from sfmtool.visualization._epipolar_display import (
-    _compute_fundamental_matrix,
     _draw_epipolar_line,
     _draw_polyline,
 )
@@ -59,7 +59,7 @@ class TestComputeFundamentalMatrix:
         R2 = np.eye(3)
         t2 = np.array([1.0, 0.0, 0.0])
 
-        F = _compute_fundamental_matrix(K1, R1, t1, K2, R2, t2)
+        F = get_fundamental_matrix(K1, R1, t1, K2, R2, t2)
 
         assert F.shape == (3, 3)
         rank = np.linalg.matrix_rank(F)
@@ -72,7 +72,7 @@ class TestComputeFundamentalMatrix:
         R2 = np.eye(3)
         t2 = np.array([1.0, 0.0, 0.0])
 
-        F = _compute_fundamental_matrix(K, R1, t1, K, R2, t2)
+        F = get_fundamental_matrix(K, R1, t1, K, R2, t2)
         assert np.abs(F).max() > 1e-6
 
     def test_epipolar_constraint(self):
@@ -83,7 +83,7 @@ class TestComputeFundamentalMatrix:
         R2 = np.eye(3)
         t2 = np.array([0.5, 0.0, 0.0])
 
-        F = _compute_fundamental_matrix(K, R1, t1, K, R2, t2)
+        F = get_fundamental_matrix(K, R1, t1, K, R2, t2)
 
         # A point at [0, 0, 5] in world coords
         P = np.array([0.0, 0.0, 5.0])
@@ -168,7 +168,7 @@ class TestEpipolarCurves:
 
         K = cam.intrinsic_matrix()
         R = RotQuaternion.from_wxyz_array(q_identity).to_rotation_matrix()
-        F = _compute_fundamental_matrix(K, R, t1, K, R, t2)
+        F = get_fundamental_matrix(K, R, t1, K, R, t2)
         for p1, curve in zip(pts1, curves):
             assert len(curve) >= 2
             p1h = np.array([p1[0], p1[1], 1.0])
@@ -182,12 +182,12 @@ class TestEpipolarCurves:
         R = np.eye(3)
         t1 = np.zeros(3)
         t2 = np.array([0.4, 0.1, 0.0])
-        P = np.array([0.3, -0.2, 5.0])
-        K = cam.intrinsic_matrix()
-        p1 = K @ (R @ P + t1)
-        p1 = p1[:2] / p1[2]
-        p2 = K @ (R @ P + t2)
-        p2 = p2[:2] / p2[2]
+        # z < 0: the point is genuinely in front of the canonical cameras (which
+        # look down -Z). Project through the camera model so the correspondence
+        # matches the canonical projection the epipolar-curve sampler uses.
+        P = np.array([0.3, -0.2, -5.0])
+        p1 = np.array(cam.ray_to_pixel((R @ P + t1).tolist()))
+        p2 = np.array(cam.ray_to_pixel((R @ P + t2).tolist()))
         curves = epipolar_curves(
             np.array([p1]),
             np.array([5.0]),

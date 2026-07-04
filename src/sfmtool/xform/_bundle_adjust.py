@@ -41,7 +41,10 @@ class BundleAdjustTransform:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             colmap_dir = temp_path / "colmap"
-            save_colmap_binary(ba_input, colmap_dir)
+            # In-pipeline pycolmap round trip: S-only (D3). Export flips the
+            # camera frames to COLMAP but leaves the world untouched; the
+            # re-import in _reconstruction_to_data flips the cameras back.
+            save_colmap_binary(ba_input, colmap_dir, apply_world_rotation=False)
 
             reconstruction = pycolmap.Reconstruction()
             reconstruction.read_binary(str(colmap_dir))
@@ -139,6 +142,15 @@ class BundleAdjustTransform:
         track_image_indexes = np.array(track_image_indexes_list, dtype=np.uint32)
         track_feature_indexes = np.array(track_feature_indexes_list, dtype=np.uint32)
         track_point_indexes = np.array(track_point_indexes_list, dtype=np.uint32)
+
+        # The poses read back are in COLMAP camera frame (S-only export);
+        # flip the camera frames back to canonical. Points were exported with
+        # the world untouched, so they are already canonical.
+        from ..colmap.convention import flip_camera_pose_s
+
+        quaternions_wxyz, translations = flip_camera_pose_s(
+            quaternions_wxyz, translations
+        )
 
         rig_frame_data = _extract_rig_frame_data(
             reconstruction, camera_id_to_index, image_id_to_index

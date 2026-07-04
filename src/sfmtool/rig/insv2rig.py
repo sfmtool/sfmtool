@@ -238,9 +238,11 @@ def write_insv_camrig(
 
     The two fisheye sensors share one calibrated camera, so the camera pool
     holds a single entry. ``quaternions_wxyz`` / ``translations_xyz`` are the
-    ``sensor_from_rig`` poses in COLMAP's WXYZ convention and are stored
-    verbatim. Each sensor's image pattern is ``<sensor>/<frame_pattern>``,
-    relative to the directory holding the ``.camrig`` file (the rig root).
+    canonical ``sensor_from_rig`` poses (WXYZ; the ``.camrig`` stores canonical
+    sensor poses directly, D5) and are written verbatim — this function does no
+    convention conversion. Each sensor's image pattern is
+    ``<sensor>/<frame_pattern>``, relative to the directory holding the
+    ``.camrig`` file (the rig root).
     """
     import numpy as np
 

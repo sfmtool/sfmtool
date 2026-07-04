@@ -259,7 +259,7 @@ class _SolveStrips:
         if max_views and len(obs_imgs) > max_views:
             sel = np.linspace(0, len(obs_imgs) - 1, max_views).round().astype(int)
             obs_imgs = [obs_imgs[i] for i in dict.fromkeys(sel.tolist())]
-        up = self.rot_of[obs_imgs[0]].T @ np.array([0.0, -1.0, 0.0])
+        up = self.rot_of[obs_imgs[0]].T @ np.array([0.0, 1.0, 0.0])
         patch = self._oriented_patch(pid, up=up, ext=self._half(pid))
         cores = [self._render_view(patch, i, self.patch) for i in obs_imgs]
         mean = np.stack([np.asarray(c, np.float64) for c in cores]).mean(0)
@@ -292,10 +292,12 @@ class _SolveStrips:
         radii = []
         for i in set(self.obs.get(int(pid), [])):
             pc = self.rot_of[i] @ (center - self.centers[i])
-            if pc[2] <= 1e-9:
+            # Canonical cameras look down -Z, so in-front depth is -z.
+            depth = -pc[2]
+            if depth <= 1e-9:
                 continue
             cam = self.cam_of[i]
-            u, v = cam.project(pc[0] / pc[2], pc[1] / pc[2])
+            u, v = cam.project(pc[0] / depth, pc[1] / depth)
             cx, cy = cam.principal_point
             half_diag = 0.5 * float(np.hypot(cam.width, cam.height))
             radii.append(float(np.hypot(u - cx, v - cy)) / half_diag)
@@ -315,9 +317,11 @@ class _SolveStrips:
             pc = self.rot_of[i] @ center
         else:
             pc = self.rot_of[i] @ (center - self.centers[i])
-        if pc[2] <= 1e-9:
+        # Canonical cameras look down -Z, so in-front depth is -z.
+        depth = -pc[2]
+        if depth <= 1e-9:
             return float("nan")
-        u, v = self.cam_of[i].project(pc[0] / pc[2], pc[1] / pc[2])
+        u, v = self.cam_of[i].project(pc[0] / depth, pc[1] / depth)
         return float(np.hypot(u - kpt[0], v - kpt[1]))
 
     def _image_feature_sizes(self, i: int) -> np.ndarray:
@@ -366,9 +370,11 @@ class _SolveStrips:
                 continue
             pc = self.rot_of[im] @ (center - self.centers[im])
             focal = float(np.mean(self.cam_of[im].focal_lengths))
-            if pc[2] <= 1e-9 or focal <= 0:
+            # Canonical cameras look down -Z, so in-front depth is -z.
+            depth = -float(pc[2])
+            if depth <= 1e-9 or focal <= 0:
                 continue
-            vals.append(float(fs[feat]) * float(pc[2]) / focal)
+            vals.append(float(fs[feat]) * depth / focal)
         return float(np.median(vals)) if vals else 0.0
 
     def strip(
@@ -406,7 +412,7 @@ class _SolveStrips:
             # columns stay compact (already deduplicated when self.obs is built).
             sel = np.linspace(0, len(obs_imgs) - 1, max_views).round().astype(int)
             obs_imgs = [obs_imgs[i] for i in dict.fromkeys(sel.tolist())]
-        up = self.rot_of[obs_imgs[0]].T @ np.array([0.0, -1.0, 0.0])
+        up = self.rot_of[obs_imgs[0]].T @ np.array([0.0, 1.0, 0.0])
 
         if context and context > self.patch:
             render_res = context

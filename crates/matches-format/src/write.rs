@@ -15,8 +15,10 @@ use crate::types::*;
 /// Write match data to a `.matches` file.
 ///
 /// Validates dimensions and structural constraints, computes content hashes,
-/// and writes all sections. The `content_hash` field in `data` is ignored
-/// on write (recomputed).
+/// and writes all sections. Always writes the current format version
+/// ([`MATCHES_FORMAT_VERSION`]); the caller must supply two-view relative
+/// poses in the canonical camera convention. The `content_hash` field in
+/// `data` is ignored on write (recomputed).
 pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result<(), MatchesError> {
     let image_count = data.metadata.image_count as usize;
     let pair_count = data.metadata.image_pair_count as usize;
@@ -41,9 +43,10 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
     let has_tvg = data.two_view_geometries.is_some();
     let mut section_digests: Vec<u128> = Vec::with_capacity(if has_tvg { 4 } else { 3 });
 
-    // === Top-level metadata ===
-    let metadata_bytes =
-        write_json_entry(&mut zip, "metadata.json.zst", &data.metadata, zstd_level)?;
+    // === Top-level metadata (always emitted at the current format version) ===
+    let mut metadata = data.metadata.clone();
+    metadata.version = MATCHES_FORMAT_VERSION;
+    let metadata_bytes = write_json_entry(&mut zip, "metadata.json.zst", &metadata, zstd_level)?;
     let metadata_hash = xxhash_rust::xxh3::xxh3_128(&metadata_bytes);
     section_digests.push(metadata_hash);
 

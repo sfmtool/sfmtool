@@ -18,11 +18,16 @@ use crate::geometry::rotation::{axis_angle_to_rotation_matrix, rotation_matrix_t
 /// Rectification becomes unstable when the epipole is inside or near the image.
 /// This typically occurs during forward/backward camera motion.
 ///
+/// **Convention.** Rides on [`compute_fundamental_matrix`]: the poses must be
+/// in the COLMAP/OpenCV optical camera convention (+Z forward, y down).
+/// Canonical `.sfmr` poses must be pre-multiplied by `S = diag(1, −1, −1)`
+/// by the caller (see [`crate::geometry::convention`]).
+///
 /// # Parameters
 ///
 /// * `k1`, `k2` - 3x3 intrinsic matrices.
-/// * `r1`, `r2` - 3x3 cam_from_world rotation matrices.
-/// * `t1`, `t2` - cam_from_world translation vectors.
+/// * `r1`, `r2` - 3x3 cam_from_world rotation matrices (optical convention).
+/// * `t1`, `t2` - cam_from_world translation vectors (optical convention).
 /// * `width`, `height` - Image dimensions in pixels.
 /// * `margin` - Safety margin in pixels.
 #[allow(clippy::too_many_arguments)]
@@ -95,11 +100,20 @@ pub struct RectificationResult {
 /// the rectification rotations `R1`/`R2`. The caller is responsible for applying
 /// the rotation separately (e.g. via [`rectify_points`]).
 ///
+/// **Convention.** The whole rectification pipeline — this basis
+/// construction, the `P1`/`P2` projection matrices, and [`rectify_points`]'s
+/// `K_new · R_rect · K⁻¹` pixel homography — is `K`-matrix algebra in the
+/// COLMAP/OpenCV **optical** camera frame (+Z forward, y down). `r_rel` /
+/// `t_rel` must therefore be the optical-frame relative pose; a caller
+/// holding the canonical `.sfmr` relative pose (−Z forward, +Y up) must
+/// S-conjugate it first (`R → S·R·S`, `t → S·t`; see
+/// [`crate::geometry::convention::relative_pose_conjugate_s`]).
+///
 /// # Parameters
 ///
 /// * `k1`, `k2` - 3x3 intrinsic matrices.
-/// * `r_rel` - 3x3 relative rotation (camera 2 from camera 1).
-/// * `t_rel` - Relative translation (camera 2 from camera 1).
+/// * `r_rel` - 3x3 relative rotation (camera 2 from camera 1, optical frame).
+/// * `t_rel` - Relative translation (camera 2 from camera 1, optical frame).
 /// * `image_width`, `image_height` - Image dimensions in pixels.
 pub fn compute_stereo_rectification(
     k1: &Matrix3<f64>,

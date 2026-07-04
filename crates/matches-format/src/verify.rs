@@ -59,6 +59,17 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
     let pair_count = metadata.image_pair_count as usize;
     let match_count = metadata.match_count as usize;
 
+    // A version newer than this build understands has unknown semantics;
+    // report it and stop rather than emit confusing per-file findings.
+    if metadata.version > MATCHES_FORMAT_VERSION {
+        errors.push(format!(
+            "unsupported .matches format version {} (this build supports up to \
+             {MATCHES_FORMAT_VERSION})",
+            metadata.version
+        ));
+        return Ok((false, errors));
+    }
+
     let mut section_digests: Vec<u128> = Vec::with_capacity(4);
 
     // === Metadata hash ===

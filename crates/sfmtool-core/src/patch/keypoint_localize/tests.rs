@@ -57,7 +57,7 @@ fn occluder_texture(x: f64, y: f64) -> f64 {
     127.5 + 60.0 * (y * 13.0 + 1.7).sin() + 40.0 * (x * 29.0 - 0.4).cos()
 }
 
-/// Synthesize the image a pinhole camera at `center` (looking down +z) sees of
+/// Synthesize the image a pinhole camera at `center` (looking down world +z) sees of
 /// the textured plane z = PLANE_Z, with the texture pattern translated in-plane
 /// by the world offset `off`.
 fn render_plane_view(center: [f64; 3], off: [f64; 2], tex: fn(f64, f64) -> f64) -> ImageU8 {
@@ -90,7 +90,7 @@ impl Scene {
         let poses = centers
             .iter()
             .map(|c| {
-                RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [-c[0], -c[1], -c[2]])
+                RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
         let pyrs = centers
@@ -102,7 +102,7 @@ impl Scene {
         Self { cams, poses, pyrs }
     }
 
-    /// Cameras at `centers` (identity rotation), each viewing the **same**
+    /// Cameras at `centers` (looking down world +z), each viewing the **same**
     /// direction-only texture for a point at infinity — appearance depends only on
     /// the ray direction, so camera translation is irrelevant (no parallax). Per
     /// view the directional texture is shifted by the matching angular `offset`.
@@ -111,7 +111,7 @@ impl Scene {
         let poses = centers
             .iter()
             .map(|c| {
-                RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [-c[0], -c[1], -c[2]])
+                RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-c[0], c[1], c[2]])
             })
             .collect();
         let pyrs = offsets
@@ -141,7 +141,7 @@ fn dir_texture(dx: f64, dy: f64) -> f64 {
     texture(dx * 30.0, dy * 30.0)
 }
 
-/// Synthesize what an identity-rotation pinhole sees of a point at infinity in
+/// Synthesize what an plus-z-looking pinhole sees of a point at infinity in
 /// the `+z` direction: each pixel's value is `dir_texture` of its ray direction,
 /// shifted by the angular offset `off`. Independent of camera position.
 fn render_infinity_view(off: [f64; 2]) -> ImageU8 {
@@ -222,7 +222,7 @@ fn aligned_views_keep_all_and_barely_shift() {
 
 #[test]
 fn infinity_point_views_co_register_independent_of_translation() {
-    // A point at infinity (+z) seen by identity-rotation cameras at very different
+    // A point at infinity (+z) seen by plus-z-looking cameras at very different
     // positions: appearance depends only on ray direction, so all views see the
     // same content and co-register. Each keypoint lands on the projection of the
     // direction (the principal point), independent of camera translation — the
@@ -248,7 +248,7 @@ fn infinity_point_views_co_register_independent_of_translation() {
     );
     let (cx, cy) = (IMG_W as f64 / 2.0, IMG_H as f64 / 2.0);
     for (k, &i) in res.views.iter().enumerate() {
-        // +z projects to the principal point under identity rotation, the same in
+        // +z projects to the principal point in these +z-looking views, the same in
         // every camera regardless of translation.
         let pj = project(&views[i as usize], &patch.center, patch.w).unwrap();
         assert!((pj.0 - cx).abs() < 1e-6 && (pj.1 - cy).abs() < 1e-6);

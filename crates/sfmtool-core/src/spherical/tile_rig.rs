@@ -20,7 +20,7 @@
 //! [`warp_to_atlas_with_rotation`]: SphericalTileRig::warp_to_atlas_with_rotation
 //! [`warp_from_atlas_with_rotation`]: SphericalTileRig::warp_from_atlas_with_rotation
 
-use nalgebra::Vector3;
+use nalgebra::{Matrix3, Vector3};
 use rayon::prelude::*;
 
 use crate::camera::WarpMap;
@@ -94,6 +94,7 @@ pub struct SphericalTileRigParts {
     /// Per-tile unit look directions in world frame. Length `n >= 2`.
     pub directions: Vec<[f64; 3]>,
     /// Per-tile `(e_right, e_up)` tangent bases, flattened. Length `n`.
+    /// Oriented so `e_right × e_up = −direction` (canonical camera frame).
     pub bases: Vec<[f64; 6]>,
     /// Per-tile half-FOV in radians. Finite and `> 0`.
     pub half_fov_rad: f64,
@@ -145,7 +146,10 @@ pub struct SphericalTileRig {
     /// Unit look directions in world frame. Length `n`.
     directions: Vec<[f64; 3]>,
     /// World-frame `(e_right, e_up)` tangent-plane bases per tile.
-    /// Length `n`. `e_right × e_up = direction`.
+    /// Length `n`. Oriented so `e_right × e_up = −direction` (right × up =
+    /// the canonical camera's backward +Z axis), making
+    /// `[e_right | e_up | −direction]` the tile's canonical camera rotation
+    /// (see [`tile_rotation`](Self::tile_rotation)).
     bases: Vec<[f64; 6]>,
     /// Per-tile half-FOV in radians (uniform).
     half_fov_rad: f64,
@@ -286,10 +290,11 @@ impl SphericalTileRig {
     ///
     /// `parts.directions` and `parts.bases` must have equal length `n >= 2`;
     /// each direction must be unit length; each basis `(e_right, e_up)` must
-    /// form a right-handed orthonormal frame with its direction (i.e.
-    /// `[e_right | e_up | direction]` is a rotation matrix); `half_fov_rad`
-    /// must be finite and positive; the `measured_*` angles must be finite;
-    /// `patch_size` and `atlas_cols` must be `> 0`.
+    /// form an orthonormal frame with `e_right × e_up = −direction` (i.e.
+    /// `[e_right | e_up | −direction]` is a rotation matrix — the tile's
+    /// canonical camera rotation); `half_fov_rad` must be finite and
+    /// positive; the `measured_*` angles must be finite; `patch_size` and
+    /// `atlas_cols` must be `> 0`.
     pub fn from_parts(parts: SphericalTileRigParts) -> Result<Self, SphericalTileRigError> {
         let SphericalTileRigParts {
             centre,
@@ -348,18 +353,18 @@ impl SphericalTileRig {
                     "basis {i} axes e_right and e_up are not orthogonal"
                 )));
             }
-            // [e_right | e_up | direction] must be a right-handed rotation:
-            // e_right x e_up == direction. This also forces direction to be
-            // orthogonal to both axes.
+            // [e_right | e_up | −direction] must be a proper rotation (the
+            // canonical tile camera rotation): e_right × e_up == −direction.
+            // This also forces direction to be orthogonal to both axes.
             let d = directions[i];
             let cross = [
                 e_right[1] * e_up[2] - e_right[2] * e_up[1],
                 e_right[2] * e_up[0] - e_right[0] * e_up[2],
                 e_right[0] * e_up[1] - e_right[1] * e_up[0],
             ];
-            if (0..3).any(|k| (cross[k] - d[k]).abs() > 1e-6) {
+            if (0..3).any(|k| (cross[k] + d[k]).abs() > 1e-6) {
                 return Err(SphericalTileRigError::InvalidParts(format!(
-                    "basis {i} is not a right-handed orthonormal frame with direction {i}"
+                    "basis {i} does not satisfy e_right x e_up == -direction for direction {i}"
                 )));
             }
         }
@@ -486,13 +491,32 @@ impl SphericalTileRig {
         }
     }
 
-    /// Build `R_world_from_tile` for tile `idx`, columns `[e_right | e_up | direction]`.
+    /// Build `R_world_from_tile` for tile `idx`, columns
+    /// `[e_right | e_up | −direction]` — the tile's **canonical camera
+    /// rotation** (the tile looks down its local −Z with +X right, +Y up;
+    /// see `specs/core/spherical-tiles-rig.md`). The stored basis satisfies
+    /// `e_right × e_up = −direction`, so this matrix is a proper rotation
+    /// as-built; it is also what `.camrig` serialises (as its transpose,
+    /// `sensor_from_rig`).
     pub fn tile_rotation(&self, idx: usize) -> [f64; 9] {
         let b = self.bases[idx];
         let d = self.directions[idx];
-        // Column-major 3x3 (matches our convention: first three entries are the
-        // first column, e_right; next three are e_up; last three are direction).
-        [b[0], b[1], b[2], b[3], b[4], b[5], d[0], d[1], d[2]]
+        // Column-major 3x3: first three entries are the first column
+        // (e_right), next three e_up, last three −direction.
+        [
+            b[0], b[1], b[2], //
+            b[3], b[4], b[5], //
+            -d[0], -d[1], -d[2],
+        ]
+    }
+
+    /// `R_world_from_tile` for tile `idx` as a [`Matrix3`] (columns
+    /// `[e_right | e_up | −direction]`; see [`tile_rotation`](Self::tile_rotation)).
+    /// The single owner of the canonical tile-camera rotation, so the atlas
+    /// warp/resample loops multiply by it instead of re-deriving the
+    /// `−direction` negation inline.
+    fn tile_rotation_matrix(&self, idx: usize) -> Matrix3<f64> {
+        Matrix3::from_column_slice(&self.tile_rotation(idx))
     }
 
     /// Apply an `Se3Transform` to the rig: rotates and translates the
@@ -601,8 +625,9 @@ impl SphericalTileRig {
     ///
     /// For each atlas pixel `(u, v)` the owning tile is read off the atlas
     /// row/column, the in-tile pixel is unprojected through `tile_camera()`
-    /// to a tile-frame ray, the ray is rotated to the world frame via
-    /// `R_world_from_tile = [e_right | e_up | direction]`, then to the src
+    /// to a canonical tile-camera ray, the ray is rotated to the world frame
+    /// via `R_world_from_tile = [e_right | e_up | −direction]`
+    /// ([`tile_rotation`](Self::tile_rotation)), then to the src
     /// frame via `rot_src_from_world`, and finally projected through `src`.
     /// Atlas slots that do not belong to any tile (the trailing slots when
     /// `atlas_cols` does not divide `n` evenly) are filled with `NaN`.
@@ -638,17 +663,13 @@ impl SphericalTileRig {
                     let in_col = col - tile_col * patch_size;
                     let u_tile_pix = in_col as f64 + 0.5;
 
-                    // tile-frame ray
+                    // tile-camera-frame ray (canonical: −Z forward, +Y up)
                     let t_ray = tile_cam.pixel_to_ray(u_tile_pix, v_tile_pix);
 
-                    // tile → world via R_world_from_tile = [e_right | e_up | direction]
-                    let basis = self.bases[tile_idx];
-                    let dir = self.directions[tile_idx];
-                    let world = Vector3::new(
-                        basis[0] * t_ray[0] + basis[3] * t_ray[1] + dir[0] * t_ray[2],
-                        basis[1] * t_ray[0] + basis[4] * t_ray[1] + dir[1] * t_ray[2],
-                        basis[2] * t_ray[0] + basis[5] * t_ray[1] + dir[2] * t_ray[2],
-                    );
+                    // tile camera → world via R_world_from_tile =
+                    // [e_right | e_up | −direction] (see `tile_rotation`).
+                    let world = self.tile_rotation_matrix(tile_idx)
+                        * Vector3::new(t_ray[0], t_ray[1], t_ray[2]);
 
                     // world → src via rot_src_from_world
                     let s = r_sw * world;
@@ -793,24 +814,28 @@ impl SphericalTileRig {
                     let mut valid_weight_sum = 0.0_f64;
                     for (i, &idx_u32) in nn.iter().enumerate() {
                         let tile_idx = idx_u32 as usize;
-                        let basis = self.bases[tile_idx];
-                        let dir = self.directions[tile_idx];
-                        // tile-frame ray = R_world_from_tile.transpose() · world
-                        let tx = basis[0] * world.x + basis[1] * world.y + basis[2] * world.z;
-                        let ty = basis[3] * world.x + basis[4] * world.y + basis[5] * world.z;
-                        let tz = dir[0] * world.x + dir[1] * world.y + dir[2] * world.z;
+                        // tile-camera-frame ray = R_world_from_tile
+                        // .transpose() · world (canonical −Z fwd). The
+                        // projection below is kept hand-rolled (rather than
+                        // `tile_cam.ray_to_pixel`) for the tighter `tz >= −1e-9`
+                        // cheirality guard the soft cell-membership blend needs.
+                        let t_local = self.tile_rotation_matrix(tile_idx).transpose() * world;
+                        let (tx, ty, tz) = (t_local.x, t_local.y, t_local.z);
                         // Reject tiles where the dst direction is behind
-                        // (tz <= 0) or projects outside their patch — by
-                        // rig construction the closest tile never falls
-                        // here, but farther neighbours often do.
-                        if tz <= 1e-9 {
+                        // (canonical camera-frame z >= 0) or projects outside
+                        // their patch — by rig construction the closest tile
+                        // never falls here, but farther neighbours often do.
+                        if tz >= -1e-9 {
                             if i == 0 {
                                 break;
                             }
                             continue;
                         }
-                        let in_x = fx_t * (tx / tz) + cx_t;
-                        let in_y = fy_t * (ty / tz) + cy_t;
+                        // Canonical pinhole projection: x_n = tx/(−tz),
+                        // y_n = ty/(−tz), pixel v flips y (v grows down).
+                        let inv_neg = -1.0 / tz;
+                        let in_x = fx_t * (tx * inv_neg) + cx_t;
+                        let in_y = fy_t * (-ty * inv_neg) + cy_t;
                         if in_x < 0.0 || in_x >= patch_size_f || in_y < 0.0 || in_y >= patch_size_f
                         {
                             if i == 0 {
@@ -884,9 +909,10 @@ impl SphericalTileRig {
     ///
     /// For each `dst` pixel `(u, v)` we ray-trace through `dst`, rotate to
     /// world frame via `rot_world_from_dst`, look up the angularly-closest
-    /// tile via the rig's KD-tree, rotate the ray into that tile's local
-    /// frame via `R_tile_from_world = R_world_from_tile.transpose()`,
-    /// project through `tile_camera()` to an in-tile pixel, and offset by
+    /// tile via the rig's KD-tree, rotate the ray into that tile's camera
+    /// frame via `R_world_from_tile.transpose()`
+    /// ([`tile_rotation`](Self::tile_rotation)), project through
+    /// `tile_camera()` to an in-tile pixel, and offset by
     /// `tile_atlas_origin(tile_idx)` to get the atlas pixel.
     pub fn warp_from_atlas_with_rotation(
         &self,
@@ -917,18 +943,15 @@ impl SphericalTileRig {
                     let nn = self.direction_tree.nearest(&q, 1);
                     let tile_idx = nn[0] as usize;
 
-                    // world → tile via R_world_from_tile.transpose() —
-                    // tx = e_right · world, ty = e_up · world, tz = dir · world.
-                    let basis = self.bases[tile_idx];
-                    let dir = self.directions[tile_idx];
-                    let tx = basis[0] * world.x + basis[1] * world.y + basis[2] * world.z;
-                    let ty = basis[3] * world.x + basis[4] * world.y + basis[5] * world.z;
-                    let tz = dir[0] * world.x + dir[1] * world.y + dir[2] * world.z;
+                    // world → tile camera via R_world_from_tile.transpose()
+                    // (camera rotation [e_right | e_up | −direction]).
+                    let t_local = self.tile_rotation_matrix(tile_idx).transpose() * world;
 
-                    let (in_x, in_y) = match tile_cam.ray_to_pixel([tx, ty, tz]) {
-                        Some(p) => p,
-                        None => continue,
-                    };
+                    let (in_x, in_y) =
+                        match tile_cam.ray_to_pixel([t_local.x, t_local.y, t_local.z]) {
+                            Some(p) => p,
+                            None => continue,
+                        };
                     let (ox, oy) = self.tile_atlas_origin(tile_idx);
                     let ax = ox as f64 + in_x;
                     let ay = oy as f64 + in_y;
@@ -1041,7 +1064,13 @@ fn sample_bilinear_f32_nan_aware(
 /// Picks `world_up = ±Y` unless `direction` is near a Y pole
 /// (`|direction.y| > POLE_GUARD_Y`), in which case it falls back to `±X` to
 /// keep `cross(world_up, direction)` well-conditioned. The basis is
-/// right-handed: `e_right × e_up = direction`.
+/// oriented so `e_right × e_up = −direction`, making
+/// `[e_right | e_up | −direction]` the tile's canonical (−Z-forward)
+/// camera rotation.
+///
+/// Note the up reference is still ±Y (pre-Z-up-world legacy): under the
+/// Z-up world convention tiles are internally rolled relative to gravity,
+/// which is harmless (write/read-symmetric) but could be revisited.
 fn build_basis(d: [f64; 3]) -> [f64; 6] {
     let dir = Vector3::new(d[0], d[1], d[2]);
     // Branchless guard: pick world-up = Y unless |y| is near 1.
@@ -1053,7 +1082,7 @@ fn build_basis(d: [f64; 3]) -> [f64; 6] {
     };
 
     let e_right = world_up.cross(&dir).normalize();
-    let e_up = dir.cross(&e_right).normalize();
+    let e_up = e_right.cross(&dir).normalize();
 
     [e_right.x, e_right.y, e_right.z, e_up.x, e_up.y, e_up.z]
 }

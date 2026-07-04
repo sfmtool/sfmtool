@@ -131,10 +131,14 @@ def polar_mutual_best_match(
             )
         return result
 
-    R1 = np.asarray(pose1.rotation.matrix(), dtype=np.float64)
-    t1_vec = np.asarray(pose1.translation, dtype=np.float64)
-    R2 = np.asarray(pose2.rotation.matrix(), dtype=np.float64)
-    t2_vec = np.asarray(pose2.translation, dtype=np.float64)
+    # The Rust geometric matcher expects COLMAP/OpenCV-frame poses; the .sfmr
+    # poses passed in are canonical, so S-flip the camera frames (S-only, D3).
+    # These are consumed as matrices, so flip the matrices directly rather than
+    # round-tripping through a throwaway pycolmap.Rigid3d.
+    from ..colmap.convention import flip_camera_pose_matrix_s
+
+    R1, t1_vec = flip_camera_pose_matrix_s(pose1.rotation.matrix(), pose1.translation)
+    R2, t2_vec = flip_camera_pose_matrix_s(pose2.rotation.matrix(), pose2.translation)
     K1_arr = np.asarray(K1, dtype=np.float64)
     K2_arr = np.asarray(K2, dtype=np.float64)
     aff1_flat = np.asarray(affine_shapes1.reshape(-1, 4), dtype=np.float64)

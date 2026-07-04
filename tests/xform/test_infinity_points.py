@@ -13,6 +13,7 @@ specs/formats/sfmr-file-format.md.
 
 import numpy as np
 
+from sfmtool._image_pair_graph import compute_camera_directions
 from sfmtool._sfmtool import SfmrReconstruction
 from sfmtool.xform import (
     BundleAdjustTransform,
@@ -23,11 +24,28 @@ from sfmtool.xform import (
 )
 
 
+def _canonical_infinity_bearing(recon: SfmrReconstruction) -> np.ndarray:
+    """A world-space bearing along the cameras' mean look direction.
+
+    A point at infinity carries a *world-space* direction (its ``xyzw`` xyz with
+    ``w = 0``), not a camera-space one. To be genuinely in front of the cameras
+    (so bundle adjustment materialises it ahead, not behind, and does not cull
+    it) the bearing must agree with where the cameras actually look. seoul_bull's
+    views are roughly horizontal, so a fixed world axis like ``-Z`` (straight
+    down in the Z-up world) points away from them; the mean camera forward
+    direction is the geometrically valid choice.
+    """
+    dirs = compute_camera_directions(recon.quaternions_wxyz)
+    mean = dirs.mean(axis=0)
+    return mean / np.linalg.norm(mean)
+
+
 def _inject_infinity(recon: SfmrReconstruction, indices) -> SfmrReconstruction:
     """Return a copy with the points at ``indices`` turned into points at infinity."""
     positions = recon.positions_xyzw.copy()
+    bearing = _canonical_infinity_bearing(recon)
     for i in indices:
-        positions[i] = [0.0, 0.0, 1.0, 0.0]
+        positions[i] = [bearing[0], bearing[1], bearing[2], 0.0]
     return recon.clone_with_changes(positions=positions)
 
 
@@ -42,8 +60,9 @@ def test_reprojection_filter_scores_infinity_points(
     # huge error (filtered) and a tiny error (kept) to prove both outcomes.
     positions = recon.positions_xyzw.copy()
     errors = recon.errors.copy()
+    bearing = _canonical_infinity_bearing(recon)
     for i in indices:
-        positions[i] = [0.0, 0.0, 1.0, 0.0]
+        positions[i] = [bearing[0], bearing[1], bearing[2], 0.0]
     errors[indices[0]] = 1000.0  # fails the criterion -> removed
     errors[indices[1:]] = 0.1  # passes the criterion -> kept
     recon = recon.clone_with_changes(positions=positions, errors=errors)

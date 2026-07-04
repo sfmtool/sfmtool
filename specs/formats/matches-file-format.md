@@ -158,7 +158,7 @@ Where:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. Currently `1`; version `2` is planned (see
+- `version`: Format version number. `1` or `2` (see
   [Versioning and Migration](#versioning-and-migration))
 - `matching_method`: Type of matching used to produce these matches
   - `"exhaustive"`: Exhaustive pairwise matching
@@ -710,11 +710,11 @@ modifying an existing file.
 
 ## Versioning and Migration
 
-The format has one released version (`1`); version `2` is planned. The format is
-versioned (`metadata.json` `version`) precisely so that convention changes like the
-one below can upgrade on load instead of breaking old files.
+The format has two released versions (`1` and `2`). The format is versioned
+(`metadata.json` `version`) precisely so that convention changes like the one below
+can upgrade on load instead of breaking old files.
 
-### Version 1 → Version 2 (planned)
+### Version 1 → Version 2
 
 Version 2 makes the canonical camera convention normative for the stored two-view
 relative poses (see [Coordinate Conventions](#coordinate-conventions)), mirroring the
@@ -742,7 +742,7 @@ roadmap is `specs/drafts/zup-camera-convention-migration.md` (decision D6).
 
 ## Version History
 
-- **Version 2** (planned): Canonical camera convention — `cam2_from_cam1` relative
+- **Version 2**: Canonical camera convention — `cam2_from_cam1` relative
   poses in −Z-forward / +Y-up camera frames, matching `.sfmr` and `.camrig` — becomes
   normative; version 1 files (COLMAP convention) upgrade on load via `S`-conjugation
   of the stored poses. F/E/H matrices unchanged.
