@@ -48,8 +48,11 @@ A patch carries a centre `X`, in-plane axes `(u, v)`, and half-extents; its
 `R×R` grid samples `(s, t) ∈ [-1, 1]²` → world via `OrientedPatch::to_world`.
 
 For each view we fit a **grid → undistorted-normalized image** map from the four
-projected grid corners. "Undistorted-normalized" means the pinhole part
-`(x/z, y/z)` of the corner in camera space — the lens distortion is *omitted*.
+projected grid corners. "Undistorted-normalized" means the pinhole part of the
+corner's projection — its normalized image coordinates before distortion (for a
+canonical camera-space corner, `(x/−z, −y/−z)`; see the coordinate conventions
+in [`sfmr-file-format.md`](../formats/sfmr-file-format.md)) — the lens
+distortion is *omitted*.
 This is the key to projection-independence: distortion is the same fixed image
 warp applied to base and candidate, so it **cancels** in the base↔candidate
 correspondence; the map is exact for *any* camera model (pinhole, distorted,

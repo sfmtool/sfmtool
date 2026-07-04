@@ -26,11 +26,23 @@ sfm insv2rig <INPUT_FILE> --output <OUTPUT_DIR>
 
 ## Rig Geometry
 
-The Insta360 X5 rig is modeled as dual back-to-back fisheye cameras:
+The Insta360 X5 rig is modeled as dual back-to-back fisheye cameras, with
+sensor poses in the canonical `.camrig`/`.sfmr` camera convention — each
+sensor looks down its local **−Z** with **+X right, +Y up** (see the
+"Coordinate and quaternion conventions" section of
+[`../formats/camrig-file-format.md`](../formats/camrig-file-format.md)):
 
-- **Left lens**: Forward-facing (identity rotation)
-- **Right lens**: Rotated 180° around Y axis
-- **Baseline**: 30.7 mm between optical centers
+- **Left lens** (sensor 0): identity rotation — it looks along the rig's
+  −Z axis and defines the rig frame.
+- **Right lens**: rotated 180° around the Y axis. This rotation reads the
+  same in the canonical and COLMAP conventions — conjugation with the
+  camera-frame flip leaves it unchanged (`S · Ry(180°) · S = Ry(180°)`).
+- **Baseline**: 30.7 mm between optical centers along the optical axis.
+  The right lens sits *behind* the left one, at rig-frame `+Z` (forward is
+  −Z), giving a `sensor_from_rig` translation of `[0, 0, +0.0307]` m —
+  the sign is opposite the COLMAP-convention value `[0, 0, −0.0307]` used
+  before the canonical convention (the translation, unlike the rotation,
+  flips sign under the convention conjugation).
 
 ## Process
 

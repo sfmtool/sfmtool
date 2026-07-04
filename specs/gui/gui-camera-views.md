@@ -26,7 +26,7 @@ Each registered camera pose lives in `reconstruction::SfmrImage`:
 pub struct SfmrImage {
     pub name: String,                          // relative path to image file
     pub camera_index: u32,                     // index into cameras[] for intrinsics
-    pub quaternion_wxyz: UnitQuaternion<f64>,  // world-to-camera rotation (COLMAP convention)
+    pub quaternion_wxyz: UnitQuaternion<f64>,  // world-to-camera rotation (canonical convention)
     pub translation_xyz: Vector3<f64>,         // world-to-camera translation
 }
 ```
@@ -63,16 +63,22 @@ pub struct Camera {
 ```
 
 Both `SfmrImage.quaternion_wxyz` and `Camera.orientation` store the **same thing**:
-a world-to-camera rotation quaternion. The difference is that `Camera` stores
-the world-space position directly, while `SfmrImage` stores it implicitly as
-`C = -R^T * t`.
+a world-to-camera rotation quaternion, into the **same camera frame**. The
+`.sfmr` canonical convention (right-handed Z-up world; camera looks down
+**−Z** with **+X right, +Y up** — see the "Coordinate System Conventions"
+section of [`sfmr-file-format.md`](../formats/sfmr-file-format.md)) is
+exactly the OpenGL-style frame the viewport camera and its reversed-Z GL
+projection already use, so no axis flip or convention bridge sits between
+reconstruction poses and viewport poses anywhere in the viewer. The only
+difference is that `Camera` stores the world-space position directly, while
+`SfmrImage` stores it implicitly as `C = -R^T * t`.
 
 ---
 
-## Convention Bridge: Image to World-Space Pose
+## Image Pose to World-Space Pose
 
 To render a frustum, we need the camera's world-space position and a
-camera-to-world rotation (the inverse of what's stored). The bridge is:
+camera-to-world rotation (the inverse of what's stored):
 
 ```
 world_position   = -R^T * t           (already: SfmrImage::camera_center())
@@ -460,7 +466,12 @@ behavior differs depending on whether the viewport is already in camera view.
 **Entering from non-camera-view** (Z key, first double-click):
 
 1. **Set the viewport camera pose** to match camera N's extrinsics
-   (position from `camera_center()`, orientation from `quaternion_wxyz`)
+   (position from `camera_center()`, orientation from `quaternion_wxyz`).
+   The stored quaternion is used **directly** — reconstruction camera
+   frames and the viewport camera share the canonical −Z-forward / +Y-up
+   convention, so there is no COLMAP-frame flip here. (Before the
+   canonical convention, `.sfmr` poses were COLMAP-convention and this
+   step conjugated in a 180°-about-X rotation; that bridge is removed.)
 2. **Set `target_distance`** to the median depth of points visible to this
    camera, computed from the per-image depth histogram stored in the `.sfmr`
 3. **Set FOV** to `best_fit_fov()` for perspective cameras; leave unchanged
@@ -732,7 +743,18 @@ shape.
 
 ### Distortion Convention (COLMAP)
 
-COLMAP's camera model projects a 3D point to pixel coordinates in three steps:
+The camera models and parameters are COLMAP's, and their kernel math is
+stated below in COLMAP's **optical frame** (+Z forward, y down). Canonical
+camera space (−Z forward, +Y up) meets that frame at the camera-model
+boundary through the involutive flip `S = diag(1, −1, −1)`: `project`-style
+entry points map their canonical input through `S` before the kernels, and
+`pixel_to_ray`-style entry points map the kernel output back through `S`,
+so rays returned to the rest of the viewer are canonical (a pixel's ray has
+negative z). See the "Coordinate System Conventions" section of
+[`sfmr-file-format.md`](../formats/sfmr-file-format.md).
+
+COLMAP's camera model projects a 3D point to pixel coordinates in three
+steps (optical-frame coordinates):
 
 ```
 1. Normalize:    x = X/Z,  y = Y/Z
@@ -745,7 +767,8 @@ To go from a pixel (u, v) back to a 3D ray direction, we reverse this:
 ```
 1. Normalized distorted:  x_d = (u - cx) / fx,  y_d = (v - cy) / fy
 2. Undistort:             (x, y) = undistort(x_d, y_d, k1, k2, ...)
-3. Ray direction:         normalize(x, y, 1)
+3. Ray direction:         normalize(x, -y, -1)     (canonical camera frame,
+                          i.e. S · normalize(x, y, 1))
 ```
 
 The undistortion step (step 2) requires iterative solving because the distortion
@@ -830,7 +853,8 @@ Inverse (pixel → 3D ray):
   3. Inverse equidistant:    θ = sqrt(uu² + vv²)
                              scale = sin(θ) / (θ * cos(θ))  [= tan(θ)/θ]
                              (u, v) = (uu, vv) * scale
-  4. Ray direction:          (u, v, 1)
+  4. Ray direction:          (u, v, 1) in the optical frame; the boundary
+                             flip returns the canonical ray (u, -v, -1)
 ```
 
 Step 3 (inverse equidistant) produces `(u, v)` in perspective image-plane
@@ -909,8 +933,10 @@ The vertex's world-space position is computed by:
 
 1. Normalized distorted coords: `x_d = (u - cx) / fx`, `y_d = (v - cy) / fy`
 2. Undistort to get the true ray direction: `(x, y) = undistort(x_d, y_d)`
-3. Camera-space point on far plane: `p_cam = (x, y, 1.0) * (far_z / 1.0)`
-   (no normalization; scale so z = far_z)
+3. Camera-space point on far plane: `p_cam = (x, -y, -1.0) * far_z`
+   (no normalization; scale so depth = far_z, i.e. camera-space
+   z = −far_z — the undistorted `(x, y)` are optical-frame image-plane
+   coordinates, mapped through `S` into the canonical camera frame)
 4. Transform to world space: `p_world = camera_center + R_cam_to_world * p_cam`
 
 UV coordinates for texture lookup:
@@ -1202,12 +1228,12 @@ distorted quad selects the same camera as before.
 
 ### Problem: Flat Far-Plane Degeneracy
 
-The existing distorted frustum pipeline places grid vertices on a **flat plane
-at z = far_z** in camera space:
+The existing distorted frustum pipeline places grid vertices on a **flat
+plane at depth far_z** (camera-space `z = −far_z`):
 
 ```rust
-let (x, y) = camera.unproject(u, v);
-let p_cam = Vector3::new(x * far_z, y * far_z, far_z);
+let (x, y) = camera.unproject(u, v);   // optical-frame image plane, y down
+let p_cam = Vector3::new(x * far_z, -y * far_z, -far_z);   // canonical frame
 ```
 
 For perspective-like cameras (SIMPLE_RADIAL, RADIAL, OPENCV, FULL_OPENCV),
@@ -1215,8 +1241,8 @@ the unprojected `(x, y)` values are bounded because FOV is typically < 120°.
 The flat far-plane works well.
 
 For **OPENCV_FISHEYE** cameras, `unproject` returns image-plane coordinates
-`(x, y)` where the ray direction is `(x, y, 1)` and `x = tan(theta)`. At
-wide angles:
+`(x, y)` where the ray direction is `(x, −y, −1)` up to scale and
+`x = tan(theta)`. At wide angles:
 
 | θ (degrees) | tan(θ)  | Lateral offset at far_z |
 |-------------|---------|-------------------------|
@@ -1242,8 +1268,7 @@ centered at the camera, rather than on a flat plane. Each vertex lies along
 the correct ray direction at a fixed distance from the camera:
 
 ```rust
-let (x, y) = camera.unproject(u, v);
-let dir = Vector3::new(x, y, 1.0).normalize();
+let dir = camera.pixel_to_ray(u, v);   // canonical unit ray (forward = −Z)
 let p_cam = dir * far_z;
 ```
 
@@ -1311,15 +1336,17 @@ for j in 0..n {
     for i in 0..n {
         let u = (i as f64 / (n - 1) as f64) * w;
         let v = (j as f64 / (n - 1) as f64) * h;
-        let (x, y) = camera.unproject(u, v);
 
         let p_cam = if camera.model.is_fisheye() {
-            // Spherical: place on sphere of radius far_z
-            let dir = Vector3::new(x, y, 1.0).normalize();
+            // Spherical: place on sphere of radius far_z along the
+            // canonical unit ray
+            let dir = camera.pixel_to_ray(u, v);
             dir * far_z
         } else {
-            // Flat: perspective projection, place on plane at z = far_z
-            Vector3::new(x * far_z, y * far_z, far_z)
+            // Flat: perspective projection, place on plane at depth far_z
+            // (canonical camera-space z = −far_z)
+            let (x, y) = camera.unproject(u, v);
+            Vector3::new(x * far_z, -y * far_z, -far_z)
         };
 
         let p_world = center + r * p_cam;
@@ -1392,9 +1419,10 @@ let clip = bg.view_proj * vec4<f32>(position, 0.0);
 out.clip_pos = vec4<f32>(clip.xy, clip.w, clip.w);
 ```
 
-For rays with negative z (beyond 90 degrees from optical axis), the GPU
-clips triangles that straddle the boundary. Content within the viewport's
-perspective FOV renders correctly.
+For rays beyond 90 degrees from the optical axis (pointing behind the
+camera — positive camera-space z under the canonical −Z-forward
+convention), the GPU clips triangles that straddle the boundary. Content
+within the viewport's perspective FOV renders correctly.
 
 #### Subdivision counts
 

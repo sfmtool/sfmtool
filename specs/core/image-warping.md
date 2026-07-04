@@ -33,8 +33,18 @@ generation cost to near zero.
 
 ## Coordinate Convention
 
-All coordinates use the sfmtool convention: pixel centers at `(col + 0.5, row + 0.5)`.
-This matches the optical flow module, the `.sfmr`/`.sift` formats, and COLMAP.
+All pixel coordinates use the sfmtool convention: pixel centers at
+`(col + 0.5, row + 0.5)`. This matches the optical flow module, the
+`.sfmr`/`.sift` formats, and COLMAP.
+
+Camera-space rays (`pixel_to_ray` output, `ray_to_pixel` input) are in the
+canonical `.sfmr` camera frame: the camera looks down **−Z** with **+X
+right, +Y up**, so a ray through the image has negative z. The distortion
+kernels themselves operate internally in COLMAP's y-down / +Z-forward
+optical frame, reached through the involutive camera-frame flip
+`S = diag(1, −1, −1)` at the camera-model boundary. See the "Coordinate
+System Conventions" section of
+[`sfmr-file-format.md`](../formats/sfmr-file-format.md).
 
 ## Warp Map
 
@@ -173,8 +183,9 @@ image-plane coordinates (approaching infinity at 90° incidence). The existing
 coords that blow up for wide-angle fisheye.
 
 The codebase already solved the *inverse* direction with `pixel_to_ray`, which
-recovers the incidence angle `theta` directly and builds a unit ray as
-`[sin(theta) * x/r, sin(theta) * y/r, cos(theta)]`, sidestepping `tan(theta)`.
+recovers the incidence angle `theta` directly and builds a canonical unit ray as
+`[sin(theta) * x/r, −sin(theta) * y/r, −cos(theta)]` (where `(x, y)` are the
+y-down image-plane coordinates), sidestepping `tan(theta)`.
 
 The forward direction — ray to pixel — is what the warp map needs: for each
 destination pixel, we call `pixel_to_ray` on the destination camera to get a
@@ -185,12 +196,15 @@ coordinates.
 
 ```rust
 impl CameraIntrinsics {
-    /// Project a unit ray direction in camera space to pixel coordinates.
+    /// Project a unit ray direction in (canonical, −Z-forward) camera space
+    /// to pixel coordinates.
     ///
-    /// For perspective models, equivalent to `project(rx/rz, ry/rz)`, but
+    /// For perspective models, equivalent to `project(rx/−rz, −ry/−rz)`
+    /// (the S-flip into the kernels' y-down optical frame, then divide), but
     /// for fisheye models computes the distorted coordinates directly from
-    /// the incidence angle `theta = atan2(sqrt(rx² + ry²), rz)`, avoiding
-    /// the `tan(theta)` singularity. This is the true inverse of `pixel_to_ray`.
+    /// the incidence angle `theta = atan2(sqrt(rx² + ry²), −rz)` off the −Z
+    /// optical axis, avoiding the `tan(theta)` singularity. This is the true
+    /// inverse of `pixel_to_ray`.
     ///
     /// Returns `None` if the ray falls outside the model's valid domain:
     /// for perspective models, `theta >= pi/2` (ray at or behind the camera
@@ -220,13 +234,15 @@ affine ray basis from the patch plane + pose (model-free, infinity-aware) and th
 camera owns the projection. This is the dominant cost in `sfm embed-patches`; see
 [ray-grid-projection.md](ray-grid-projection.md) for the seam and measured impact.
 
-For perspective models, `ray_to_pixel` divides by `rz` and calls the existing
-`distort()` + focal/principal point transform. For fisheye models, it computes:
+For perspective models, `ray_to_pixel` maps the canonical ray through `S`
+into the optical frame, divides by the (positive) forward component and
+calls the existing `distort()` + focal/principal point transform. For
+fisheye models, it computes:
 
 ```
-theta = atan2(sqrt(rx² + ry²), rz)
+theta = atan2(sqrt(rx² + ry²), -rz)   // incidence angle off the −Z optical axis
 r_xy = sqrt(rx² + ry²)
-(dx, dy) = (rx / r_xy, ry / r_xy)   // unit direction in image plane
+(dx, dy) = (rx / r_xy, -ry / r_xy)    // unit direction in the y-down image plane
 ```
 
 Then applies the fisheye distortion polynomial in theta-space to get `theta_d`,
@@ -243,7 +259,7 @@ only returns `None` when the polynomial becomes non-monotonic or the angle
 exceeds the range where `recover_theta_equidistant` converges (the same
 limits already computed for `pixel_to_ray`'s fallback logic).
 
-Internally, `ray_to_pixel` computes `theta = atan2(sqrt(rx² + ry²), rz)` and
+Internally, `ray_to_pixel` computes `theta = atan2(sqrt(rx² + ry²), −rz)` and
 works in theta-space for fisheye models (applying the distortion polynomial to
 theta directly, the same math as `distort_*_fisheye()` but without the `atan(r)`
 preamble). This naturally supports angles beyond 90° since the fisheye distortion
@@ -276,8 +292,8 @@ CameraModel::Equirectangular {
 
 **`ray_to_pixel`:**
 ```
-longitude = atan2(rx, rz)
-latitude  = asin(clamp(ry / |ray|, -1, 1))
+longitude = atan2(rx, -rz)           # 0 straight ahead (along −Z)
+latitude  = asin(clamp(ry / |ray|, -1, 1))   # positive = up (+Y)
 u = focal_length_x * longitude + principal_point_x
 v = focal_length_y * (-latitude) + principal_point_y
 ```
@@ -291,7 +307,7 @@ output format: no pixels are wasted on out-of-bounds regions.
 ```
 longitude = (u - principal_point_x) / focal_length_x
 latitude  = -(v - principal_point_y) / focal_length_y
-ray = [sin(longitude) * cos(latitude), sin(latitude), cos(longitude) * cos(latitude)]
+ray = [sin(longitude) * cos(latitude), sin(latitude), -cos(longitude) * cos(latitude)]
 ```
 
 **Standard full-sphere panorama** (360° x 180°) at a given resolution:

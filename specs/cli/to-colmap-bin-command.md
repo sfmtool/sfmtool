@@ -5,6 +5,20 @@
 Exports a `.sfmr` reconstruction to COLMAP binary format for use with the COLMAP GUI or
 other COLMAP-compatible tools.
 
+## Coordinate Convention
+
+This command is a convention boundary: `.sfmr` data is stored in the
+canonical Z-up / −Z-forward convention, while COLMAP binary files use
+COLMAP's +Z-forward, Y-down convention. On export the canonical→COLMAP
+conversion is applied — the camera-frame flip `S` on every pose (including
+rig `sensor_from_rig` poses) and the inverse world canonicalization `W⁻¹`
+on world-space data — so the written `.bin` files are genuine
+COLMAP-convention data. `sfm from-colmap-bin` applies the forward
+conversion, so an export/import round trip is stable. See the "Coordinate
+System Conventions" section of
+[`sfmr-file-format.md`](../formats/sfmr-file-format.md) for the transform
+definitions.
+
 ## Command Syntax
 
 ```bash

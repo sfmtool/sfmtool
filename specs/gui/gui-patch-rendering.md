@@ -167,8 +167,8 @@ wiring for free — no `PICK_TAG_PATCH`, no new pick decode branch.
 - **Culling:** render **front-face only** — a patch is drawn only from the side
   its outward normal faces. This is a facing test in the vertex shader, not
   hardware winding culling (the pipeline keeps `cull_mode: None`): the
-  reversed-Z, +Z-forward camera has no other culled geometry to anchor a winding
-  convention to, so a per-instance geometric test is unambiguous. Each patch
+  reversed-Z, −Z-forward viewport camera has no other culled geometry to anchor
+  a winding convention to, so a per-instance geometric test is unambiguous. Each patch
   computes `outward = cross(u_halfvec, v_halfvec)` (a positive multiple of the
   normal — no normalize needed) and collapses its quad to a clipped vertex when
   `dot(outward, camera_pos − center) ≤ 0`. A point at infinity is never culled
