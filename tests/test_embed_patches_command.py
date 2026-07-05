@@ -287,7 +287,9 @@ def test_embed_patches_refine_max_views_is_lossless(seoul_bull_workspace):
         for name in recon.image_names
     ]
 
-    baseline = ep.embed_patches(recon, images, resolution=12)
+    # Pin the baseline to all-views (max_refine_views=0) so this stays a
+    # capped-vs-uncapped comparison independent of the pipeline default (8).
+    baseline = ep.embed_patches(recon, images, resolution=12, max_refine_views=0)
     capped = ep.embed_patches(recon, images, resolution=12, max_refine_views=5)
 
     assert capped.feature_source == "embedded_patches"

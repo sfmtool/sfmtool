@@ -10,7 +10,7 @@ per run:
 
 - **Wall time** of every ``refine_patch_cloud_normals`` pass (parsed from the
   profile blocks; round 1 is uncapped by design, rounds 2+ carry the cap) plus
-  the end-to-end wall time, and the subset/fallback patch counters.
+  the end-to-end wall time, and the subset (capped / no-anchor) patch counters.
 - **Normal agreement vs. the baseline**: per-surviving-point angular delta
   between the run's patch normal and the baseline's (points matched by their
   homogeneous position, which embed-patches carries through unchanged) —
@@ -48,7 +48,7 @@ import numpy as np
 PROFILE_PASS_RE = re.compile(
     r"refine_patch_cloud_normals: (\d+) patches, wall ([0-9.]+)s"
 )
-SUBSET_COUNTERS_RE = re.compile(r"view-subsets (\d+)\s+subset-fallbacks (\d+)")
+SUBSET_COUNTERS_RE = re.compile(r"view-subsets (\d+)\s+subset-no-anchor (\d+)")
 
 
 def run_embed_patches(
@@ -80,15 +80,15 @@ def run_embed_patches(
         {"patches": int(m.group(1)), "wall_s": float(m.group(2))}
         for m in PROFILE_PASS_RE.finditer(proc.stderr)
     ]
-    subsets, fallbacks = 0, 0
+    subsets, no_anchor = 0, 0
     for m in SUBSET_COUNTERS_RE.finditer(proc.stderr):
         subsets += int(m.group(1))
-        fallbacks += int(m.group(2))
+        no_anchor += int(m.group(2))
     return {
         "k": k,
         "refine_passes": passes,
         "view_subsets": subsets,
-        "subset_fallbacks": fallbacks,
+        "subset_no_anchor": no_anchor,
         "end_to_end_s": wall,
     }
 

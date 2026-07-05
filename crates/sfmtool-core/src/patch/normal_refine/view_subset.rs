@@ -24,24 +24,9 @@ use crate::patch::cloud::OrientedPatch;
 
 use super::parameterization::tangent_basis;
 
-/// Conditioning floor `γ` for the selected subset: keep it only if the smaller
-/// eigenvalue of its 2×2 information matrix retains at least this fraction of
-/// the full set's (`λ_min(M_S) ≥ γ·λ_min(M_full)`) — a data-derived guard, so a
-/// subset that lost too much observability of one tilt DOF (e.g. a
-/// nearly-frontal-only track) falls back to all views instead of refining over
-/// a degenerate basis.
-pub(super) const SUBSET_CONDITIONING_FLOOR: f64 = 0.5;
-
 /// A perfectly frontal view (`sinθ` below this) carries no tangent direction;
 /// its information vector is zero.
 const MIN_TANGENT_NORM: f64 = 1e-6;
-
-/// Smaller eigenvalue of the symmetric 2×2 matrix `m`.
-fn lambda_min(m: &Matrix2<f64>) -> f64 {
-    let half_trace = (m[(0, 0)] + m[(1, 1)]) / 2.0;
-    let half_gap = (m[(0, 0)] - m[(1, 1)]) / 2.0;
-    half_trace - half_gap.hypot(m[(0, 1)])
-}
 
 /// Select the (at most) `k` most normal-informative views of `patch` — the
 /// D-optimal refinement basis of `specs/core/patch-normal-refine-view-subset.md`.
@@ -49,10 +34,9 @@ fn lambda_min(m: &Matrix2<f64>) -> f64 {
 /// `view_dirs` holds the unit surface→camera direction per view (the caller's
 /// full `views` order); the returned indices index into it, ascending. Returns
 /// **all** indices when the cap is a no-op (`k == 0`, `m ≤ k`, or the point is
-/// at infinity — its normal is fixed, refinement skips it) or when the selection
-/// can't be trusted: no front-facing anchor exists, or the subset trips the
-/// [`SUBSET_CONDITIONING_FLOOR`]. Deterministic: greedy ties break on the lowest
-/// index.
+/// at infinity — its normal is fixed, refinement skips it) or when no
+/// front-facing view exists to anchor on. Deterministic: greedy ties break on
+/// the lowest index.
 pub(super) fn select_refine_subset(
     patch: &OrientedPatch,
     view_dirs: &[Vector3<f64>],
@@ -73,7 +57,6 @@ pub(super) fn select_refine_subset(
     // excluded from selection and carries no information.
     let mut cos = vec![f64::NEG_INFINITY; m];
     let mut w = vec![Vector2::zeros(); m];
-    let mut m_full = Matrix2::zeros();
     for (i, d) in view_dirs.iter().enumerate() {
         let c = d.dot(&n).clamp(-1.0, 1.0);
         if c <= 0.0 {
@@ -84,7 +67,6 @@ pub(super) fn select_refine_subset(
         if g.norm() > MIN_TANGENT_NORM {
             w[i] = Vector2::new(g.dot(&t1), g.dot(&t2));
         }
-        m_full += w[i] * w[i].transpose();
     }
 
     // Anchor: the least-oblique view — a clean, low-foreshortening appearance
@@ -120,11 +102,16 @@ pub(super) fn select_refine_subset(
         m_sel += w[i] * w[i].transpose();
     }
 
-    // Well-conditioning fallback (data-derived): the subset must retain at
-    // least γ of the full set's observability along its weakest tilt DOF.
-    if lambda_min(&m_sel) < SUBSET_CONDITIONING_FLOOR * lambda_min(&m_full) {
-        return all();
-    }
+    // No conditioning fallback to "all views": conditioning is a property of the
+    // view-direction *geometry*, not the count. The greedy above already returns
+    // the best-conditioned K available, and if that still leaves one tilt DOF
+    // loose (a degenerate single-azimuth-arc point), the full view set is no
+    // better conditioned — inflating to all views would only add render cost
+    // without constraining the loose DOF, which the fronto-parallel prior
+    // resolves at refine time exactly as for any low-parallax point. (Photometric
+    // robustness — the one thing more views genuinely buy — is an orthogonal axis
+    // addressed by ZNCC-weighting the pick, not by view count; see the spec's
+    // deferred follow-up.)
     (0..m).filter(|&i| selected[i]).collect()
 }
 
@@ -216,17 +203,30 @@ mod tests {
     }
 
     #[test]
-    fn near_frontal_only_set_trips_the_conditioning_fallback() {
-        // Twenty near-frontal views spread uniformly in azimuth: each carries a
-        // sliver of tangent information, so the full set's λ_min is m/2·sin²θ
-        // while any k-subset retains at most ~k/2·sin²θ — below the γ = 0.5
-        // floor for k << m. The subset would under-constrain a tilt DOF, so the
-        // selection must fall back to all views.
-        let dirs: Vec<_> = (0..20)
-            .map(|i| dir(0.02, i as f64 * std::f64::consts::TAU / 20.0))
+    fn large_view_set_is_capped_to_k() {
+        // A large view set is always capped to the best K — there is no
+        // fall-back-to-all keyed on view count (the original bug) or on subset
+        // conditioning: the greedy returns the best K available regardless.
+        let dirs: Vec<_> = (0..24)
+            .map(|i| dir(0.4, i as f64 * std::f64::consts::TAU / 24.0))
             .collect();
-        let all: Vec<usize> = (0..dirs.len()).collect();
-        assert_eq!(select_refine_subset(&patch(), &dirs, 5), all);
+        let sel = select_refine_subset(&patch(), &dirs, 5);
+        assert_eq!(sel.len(), 5, "large set must be capped to K, got {sel:?}");
+    }
+
+    #[test]
+    fn degenerate_arc_returns_best_k_without_falling_back() {
+        // All views crowded into a narrow azimuth arc: the tilt DOF orthogonal to
+        // the arc is under-constrained no matter how many views are used, so there
+        // is nothing to gain by inflating to all — the selection keeps the best K
+        // (the fronto-parallel prior resolves the loose DOF at refine time).
+        let dirs: Vec<_> = (0..12).map(|i| dir(0.5, 0.02 * i as f64)).collect();
+        let sel = select_refine_subset(&patch(), &dirs, 5);
+        assert_eq!(
+            sel.len(),
+            5,
+            "degenerate geometry still returns best K, got {sel:?}"
+        );
     }
 
     #[test]

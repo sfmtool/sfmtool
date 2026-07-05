@@ -151,15 +151,17 @@ from .._cli_utils import timed_command
     "--refine-max-views",
     "refine_max_views",
     type=click.IntRange(min=0),
-    default=0,
+    default=8,
     show_default=True,
     help=(
         "Cap the round-2+ normal-refinement basis at the N most "
         "normal-informative views per point (a D-optimal geometric pick: "
         "least-oblique anchor plus azimuthally-complementary oblique views). "
-        "0 uses all views. Only the refinement basis shrinks — all observations "
-        "stay in the output, and the consensus bitmaps are still fused over the "
-        "full view set. See specs/core/patch-normal-refine-view-subset.md."
+        "0 uses all views (disables the cap). Only the refinement basis shrinks "
+        "— all observations stay in the output, and the consensus bitmaps are "
+        "still fused over the full view set. The default (8) cuts roughly a "
+        "third off end-to-end time on large view sets (the round-2+ refine pass "
+        "itself drops ~5x). See specs/core/patch-normal-refine-view-subset.md."
     ),
 )
 @click.option(
