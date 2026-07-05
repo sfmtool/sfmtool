@@ -17,20 +17,46 @@ use crate::spatial::PointCloud;
 /// Errors from [`PatchCloud::from_reconstruction`].
 #[derive(Debug)]
 pub enum PatchCloudError {
-    /// [`PatchExtent::FeatureSize`] could not read a keypoint scale for any
-    /// observation of point `point_index` — its `.sift` files were unreadable (or,
-    /// degenerately, every observation coincides with a camera centre) — so the
-    /// patch has no defined world size.
-    MissingFeatureScale { point_index: u32 },
+    /// [`PatchExtent::FeatureSize`] could not derive a world size for point
+    /// `point_index` because none of its observations yielded a usable keypoint
+    /// scale. The counts break the `observations` down by cause so the message
+    /// can name the actual failure:
+    ///
+    /// - `unreadable_scale` — the observation's `.sift` keypoint scale could not
+    ///   be read (missing/stale `.sift`, or the observation carries no feature
+    ///   index). This is an I/O problem.
+    /// - `coincident_with_camera` — the observation's viewing distance
+    ///   `d = ‖X − C‖` is ~0, i.e. the point sits on top of the camera centre.
+    ///   A pixel scale `σ` maps to a world size `σ·d/f`, which vanishes at
+    ///   `d ≈ 0`, so the size is undefined. This is a degenerate *reconstruction*
+    ///   (e.g. a run of frames whose poses collapsed to one point), not an I/O
+    ///   problem — the scales are perfectly readable. Only the finite-point path
+    ///   scales by `d`, so this is always `0` for a point at infinity.
+    MissingFeatureScale {
+        point_index: u32,
+        observations: usize,
+        unreadable_scale: usize,
+        coincident_with_camera: usize,
+    },
 }
 
 impl std::fmt::Display for PatchCloudError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PatchCloudError::MissingFeatureScale { point_index } => write!(
+            PatchCloudError::MissingFeatureScale {
+                point_index,
+                observations,
+                unreadable_scale,
+                coincident_with_camera,
+            } => write!(
                 f,
-                "no readable keypoint scale for any observation of point {point_index}; \
-                 cannot size its patch from FeatureSize"
+                "cannot size point {point_index}'s patch from FeatureSize: none of its \
+                 {observations} observation(s) gave a usable keypoint scale \
+                 ({coincident_with_camera} coincident with the camera centre / zero viewing \
+                 distance, {unreadable_scale} with an unreadable .sift scale). A point \
+                 coincident with its cameras is a degenerate reconstruction artifact (its \
+                 frames' poses have collapsed onto the point); an unreadable scale usually \
+                 means the .sift files are missing or stale."
             ),
         }
     }
@@ -243,7 +269,10 @@ impl PatchCloud {
     ///
     /// Errors with [`PatchCloudError::MissingFeatureScale`] under
     /// [`PatchExtent::FeatureSize`] if a point (finite, or at infinity when
-    /// included) has no readable keypoint scale in any view.
+    /// included) has no observation that yields a usable size — either its
+    /// keypoint scale is unreadable in every view, or (finite points only) it
+    /// coincides with every observing camera centre so the distance-scaled size
+    /// vanishes. The error carries the per-cause breakdown.
     pub fn from_reconstruction(
         recon: &SfmrReconstruction,
         normal: PatchNormal,
@@ -327,26 +356,38 @@ impl PatchCloud {
                 let start = recon.observation_offsets[p];
                 let obs = &recon.tracks[start..recon.observation_offsets[p + 1]];
                 let mut sizes: Vec<f64> = Vec::new();
+                // Per-cause tallies so a failure can name why every observation
+                // was rejected (unreadable .sift scale vs. zero viewing distance).
+                let mut unreadable_scale = 0usize;
+                let mut coincident_with_camera = 0usize;
                 for (k, o) in obs.iter().enumerate() {
                     let im = &recon.images[o.image_index as usize];
-                    let Some(feature_index) = feature_indexes.map(|f| f[start + k]) else {
+                    let scale = feature_indexes
+                        .map(|f| f[start + k])
+                        .and_then(|feature_index| {
+                            img_scales
+                                .get(o.image_index as usize)
+                                .and_then(|s| s.as_ref())
+                                .and_then(|scales| scales.get(feature_index as usize).copied())
+                        });
+                    let Some(sigma) = scale else {
+                        unreadable_scale += 1;
                         continue;
                     };
-                    if let Some(Some(scales)) = img_scales.get(o.image_index as usize) {
-                        if let Some(&sigma) = scales.get(feature_index as usize) {
-                            let d =
-                                (im.quaternion_wxyz * center.coords + im.translation_xyz).norm();
-                            if d > 1e-6 {
-                                let (fx, _) =
-                                    recon.cameras[im.camera_index as usize].focal_lengths();
-                                sizes.push(sigma * d / fx);
-                            }
-                        }
+                    let d = (im.quaternion_wxyz * center.coords + im.translation_xyz).norm();
+                    if d > 1e-6 {
+                        let (fx, _) = recon.cameras[im.camera_index as usize].focal_lengths();
+                        sizes.push(sigma * d / fx);
+                    } else {
+                        coincident_with_camera += 1;
                     }
                 }
                 if sizes.is_empty() {
                     return Err(PatchCloudError::MissingFeatureScale {
                         point_index: p as u32,
+                        observations: obs.len(),
+                        unreadable_scale,
+                        coincident_with_camera,
                     });
                 }
                 halves[fi] = factor * reduce(&mut sizes, across);
@@ -555,7 +596,9 @@ impl PatchCloud {
     /// Each patch's `point_indexes` entry is its source point index, so
     /// [`Self::to_halfvec_arrays`] scatters it into that point's row. Errors with
     /// [`PatchCloudError::MissingFeatureScale`] under [`PatchExtent::FeatureSize`]
-    /// if a point has no readable keypoint scale in any view.
+    /// if an infinity point has no readable keypoint scale in any view (an
+    /// infinity patch's angular size is distance-free, so the coincident-camera
+    /// cause never applies here).
     fn push_infinity_patches(
         &mut self,
         recon: &SfmrReconstruction,
@@ -617,8 +660,14 @@ impl PatchCloud {
                         }
                     }
                     if angles.is_empty() {
+                        // An infinity patch's angular size is `σ/f` (no viewing
+                        // distance), so the only failure cause is an unreadable
+                        // scale — `coincident_with_camera` never applies here.
                         return Err(PatchCloudError::MissingFeatureScale {
                             point_index: p as u32,
+                            observations: obs.len(),
+                            unreadable_scale: obs.len(),
+                            coincident_with_camera: 0,
                         });
                     }
                     factor * reduce(&mut angles, across)

@@ -198,7 +198,18 @@ fn feature_size_without_sift_is_an_error() {
         true,
     )
     .unwrap_err();
-    assert!(matches!(err, PatchCloudError::MissingFeatureScale { .. }));
+    // Every observation fails for the unreadable-scale reason (no `.sift`); none
+    // for the coincident-camera reason, since the demo points are not on top of
+    // their cameras.
+    let PatchCloudError::MissingFeatureScale {
+        observations,
+        unreadable_scale,
+        coincident_with_camera,
+        ..
+    } = err;
+    assert!(observations > 0);
+    assert_eq!(unreadable_scale, observations);
+    assert_eq!(coincident_with_camera, 0);
 
     let cloud = PatchCloud::from_reconstruction(
         &recon,
