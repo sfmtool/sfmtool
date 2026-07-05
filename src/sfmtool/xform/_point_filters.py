@@ -196,10 +196,13 @@ class RemoveIsolatedPointsFilter:
 
 
 class RemoveLargeFeaturesFilter:
-    """Remove 3D points where the largest SIFT feature in the track exceeds a size threshold.
+    """Remove 3D points where the largest feature in the track exceeds a size threshold.
 
-    Feature size is the average radius in pixels, computed as the mean of
-    the two column norms of the affine shape matrix.
+    Feature size is the average radius in pixels, computed as the mean of the
+    two column norms of the affine shape matrix. The shape comes from the
+    external ``.sift`` files for a ``sift_files`` reconstruction, or from each
+    observation's projected patch frame for an ``embedded_patches`` one (the
+    same size measure the Track View reports).
     """
 
     def __init__(self, max_size: float):
@@ -208,6 +211,15 @@ class RemoveLargeFeaturesFilter:
         self.max_size = max_size
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
+        if recon.feature_source == "embedded_patches":
+            max_feature_size_per_point = np.asarray(
+                recon.max_embedded_feature_size_per_point()
+            )
+        else:
+            max_feature_size_per_point = self._sizes_from_sift_files(recon)
+        return self._filter(recon, max_feature_size_per_point)
+
+    def _sizes_from_sift_files(self, recon: SfmrReconstruction) -> np.ndarray:
         track_image_indexes = np.asarray(recon.track_image_indexes)
         track_feature_indexes = np.asarray(recon.track_feature_indexes)
         track_point_indexes = np.asarray(recon.track_point_indexes)
@@ -259,6 +271,14 @@ class RemoveLargeFeaturesFilter:
 
         max_feature_size_per_point = np.zeros(point_count, dtype=np.float32)
         np.maximum.at(max_feature_size_per_point, track_point_indexes, obs_sizes)
+        return max_feature_size_per_point
+
+    def _filter(
+        self,
+        recon: SfmrReconstruction,
+        max_feature_size_per_point: np.ndarray,
+    ) -> SfmrReconstruction:
+        point_count = recon.point_count
 
         # Feature size is well-defined regardless of w, so score points at
         # infinity normally rather than passing them through.
