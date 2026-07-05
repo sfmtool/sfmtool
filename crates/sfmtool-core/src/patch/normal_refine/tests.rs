@@ -1084,6 +1084,101 @@ fn refine_patch_cloud_normals_refines_in_place() {
 }
 
 // ---------------------------------------------------------------------------
+// View-subset cap (max_refine_views)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn max_refine_views_caps_basis_close_to_full_result() {
+    // Six views: four wide-baseline (asymmetric, so the D-optimal pick has a
+    // clear ranking) plus two near-frontal. Capping the refinement basis at 4
+    // actually subsets (6 > 4) yet must land within a degree or two of the
+    // full-set normal, and a cap that is a no-op (0, or >= the view count)
+    // must reproduce the uncapped result byte-for-byte.
+    let scene = Scene::new(&[
+        [1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 0.9, 0.0],
+        [0.0, -0.3, 0.0],
+        [0.03, 0.02, 0.0],
+        [-0.02, 0.04, 0.0],
+    ]);
+    let views = scene.views();
+    let truth = true_normal();
+    let tilts = [
+        [10.0f64.to_radians(), 0.0],
+        [0.0, -12.0f64.to_radians()],
+        [8.0f64.to_radians(), 8.0f64.to_radians()],
+    ];
+    let make_cloud = || PatchCloud {
+        patches: tilts
+            .iter()
+            .map(|&d| plane_patch(exp_map_normal(&truth, d)))
+            .collect(),
+        point_indexes: vec![0, 1, 2],
+    };
+    let patch_views: Vec<Vec<u32>> = vec![vec![0, 1, 2, 3, 4, 5]; 3];
+    let params = test_params(Objective::MeanPairwise);
+
+    let mut full_cloud = make_cloud();
+    let full = refine_patch_cloud_normals(
+        &mut full_cloud,
+        &views,
+        &patch_views,
+        15,
+        &params,
+        None,
+        None,
+    );
+
+    let capped_params = NormalRefineParams {
+        max_refine_views: 4,
+        ..params.clone()
+    };
+    let mut capped_cloud = make_cloud();
+    let capped = refine_patch_cloud_normals(
+        &mut capped_cloud,
+        &views,
+        &patch_views,
+        15,
+        &capped_params,
+        None,
+        None,
+    );
+    for (i, (f, c)) in full.iter().zip(&capped).enumerate() {
+        // The subset reports the basis it refined over, not the full set.
+        assert!(c.valid_view_count <= 4, "patch {i} basis not capped");
+        let dn = angle_between(&f.patch.normal(), &c.patch.normal()).to_degrees();
+        assert!(
+            dn < 2.0,
+            "patch {i}: capped normal {dn:.2}° off the full-set result"
+        );
+        let err = angle_between(&c.patch.normal(), &truth).to_degrees();
+        assert!(err < 5.0, "patch {i}: capped refine {err:.2}° from truth");
+    }
+
+    // A no-op cap (>= view count) is byte-for-byte the uncapped (0) path.
+    let noop_params = NormalRefineParams {
+        max_refine_views: 99,
+        ..params
+    };
+    let mut noop_cloud = make_cloud();
+    let noop = refine_patch_cloud_normals(
+        &mut noop_cloud,
+        &views,
+        &patch_views,
+        15,
+        &noop_params,
+        None,
+        None,
+    );
+    for (f, n) in full.iter().zip(&noop) {
+        assert_eq!(f.patch.normal(), n.patch.normal());
+        assert_eq!(f.photoconsistency, n.photoconsistency);
+        assert_eq!(f.valid_view_count, n.valid_view_count);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Keypoint-anchored refinement
 // ---------------------------------------------------------------------------
 

@@ -109,6 +109,11 @@ pub static N_EVAL: AtomicU64 = AtomicU64::new(0);
 pub static N_RENDER: AtomicU64 = AtomicU64::new(0);
 /// Candidates rejected by the frozen-support validity re-check.
 pub static N_REJECT: AtomicU64 = AtomicU64::new(0);
+/// Patches whose refinement basis was capped by the D-optimal view subset.
+pub static N_SUBSET: AtomicU64 = AtomicU64::new(0);
+/// Patches where the subset selection fell back to all views (no front-facing
+/// anchor, or the conditioning floor tripped).
+pub static N_SUBSET_FALLBACK: AtomicU64 = AtomicU64::new(0);
 
 /// Count one event on `c` when profiling is on.
 #[inline]
@@ -143,7 +148,7 @@ pub fn reset() {
     for p in PHASES {
         p.reset();
     }
-    for c in [&N_EVAL, &N_RENDER, &N_REJECT] {
+    for c in [&N_EVAL, &N_RENDER, &N_REJECT, &N_SUBSET, &N_SUBSET_FALLBACK] {
         c.store(0, Ordering::Relaxed);
     }
     crate::camera::remap::prof::reset();
@@ -194,10 +199,13 @@ pub fn report(patches: usize, wall_secs: f64) {
         100.0 * total_ns.saturating_sub(leaves) as f64 / total_ns as f64,
     );
     eprintln!(
-        "[sfmtool-profile]   evals {}  renders {}  support-rejects {}",
+        "[sfmtool-profile]   evals {}  renders {}  support-rejects {}  \
+         view-subsets {}  subset-fallbacks {}",
         N_EVAL.load(Ordering::Relaxed),
         N_RENDER.load(Ordering::Relaxed),
         N_REJECT.load(Ordering::Relaxed),
+        N_SUBSET.load(Ordering::Relaxed),
+        N_SUBSET_FALLBACK.load(Ordering::Relaxed),
     );
     crate::camera::remap::prof::report();
 }
