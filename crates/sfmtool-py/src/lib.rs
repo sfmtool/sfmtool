@@ -77,6 +77,9 @@ mod sift;
 mod py_patch_cloud;
 pub use py_patch_cloud::{PyOrientedPatch, PyPatchCloud};
 
+mod py_progress;
+pub use py_progress::ProgressCounter;
+
 // ── Optical flow + warp maps ─────────────────────────────────────────────
 
 mod flow;
@@ -153,6 +156,7 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRansacPhotometricOutput>()?;
     m.add_class::<PyOrientedPatch>()?;
     m.add_class::<PyPatchCloud>()?;
+    m.add_class::<ProgressCounter>()?;
 
     // Photometric refinement.
     m.add_function(wrap_pyfunction!(

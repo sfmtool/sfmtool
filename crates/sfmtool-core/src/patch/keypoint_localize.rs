@@ -1912,6 +1912,7 @@ pub fn localize_patch_cloud_keypoints(
     view_sets: &[Vec<u32>],
     starting_keypoints: Option<&[Vec<[f64; 2]>]>,
     params: &KeypointLocalizeParams,
+    progress: Option<&std::sync::atomic::AtomicUsize>,
 ) -> Vec<KeypointLocalization> {
     assert_eq!(
         view_sets.len(),
@@ -1935,8 +1936,13 @@ pub fn localize_patch_cloud_keypoints(
         .enumerate()
         .map(|(i, patch)| {
             let seeds = starting_keypoints.map(|s| s[i].as_slice());
-            prof::TOTAL
-                .time(|| localize_patch_keypoints(patch, views, &view_sets[i], seeds, params))
+            let out = prof::TOTAL
+                .time(|| localize_patch_keypoints(patch, views, &view_sets[i], seeds, params));
+            // Bump the shared work counter per patch for a Python progress poller.
+            if let Some(c) = progress {
+                c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            out
         })
         .collect();
     if prof::enabled() {

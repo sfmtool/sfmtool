@@ -406,7 +406,7 @@ fn batch_matches_per_patch() {
     };
     let track_views = vec![vec![0u32, 1], vec![0u32, 1]];
 
-    let batch = select_patch_cloud_views(&cloud, &views, &track_views, &params());
+    let batch = select_patch_cloud_views(&cloud, &views, &track_views, &params(), None);
     assert_eq!(batch.len(), 2);
     for (i, sel) in batch.iter().enumerate() {
         let single = select_patch_views(&cloud.patches[i], &views, &track_views[i], &params());

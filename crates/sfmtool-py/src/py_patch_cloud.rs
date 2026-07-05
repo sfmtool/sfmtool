@@ -25,6 +25,7 @@ use sfmtool_core::patch::view_selection::{select_patch_cloud_views, ViewSelectPa
 
 use crate::flow::warp::extract_image_u8;
 use crate::geometry::rigid_transform::PyRigidTransform;
+use crate::py_progress::ProgressCounter;
 use crate::py_sfmr_reconstruction::PySfmrReconstruction;
 
 /// An oriented planar patch (surfel) in world space.
@@ -460,7 +461,7 @@ impl PyPatchCloud {
         cache="fronto", cache_supersample=2.0, compute_confidence=false,
         search_robust_iters=None, obliquity_weight_power=0.0, fronto_prior_weight=0.0,
         point_indexes=None, view_indices=None,
-        use_stored_keypoints=true, render_bitmaps=false
+        use_stored_keypoints=true, render_bitmaps=false, progress=None
     ))]
     fn refine_normals<'py>(
         &mut self,
@@ -488,6 +489,7 @@ impl PyPatchCloud {
         view_indices: Option<Vec<Vec<u32>>>,
         use_stored_keypoints: bool,
         render_bitmaps: bool,
+        progress: Option<ProgressCounter>,
     ) -> PyResult<Bound<'py, PyDict>> {
         let recon = &recon.inner;
         // The cloud must have been built from this reconstruction: its per-patch
@@ -671,6 +673,9 @@ impl PyPatchCloud {
                     .collect()
             });
 
+        // Hold a handle to the shared counter across the detach so a Python
+        // poller thread can read it while this pass runs with the GIL released.
+        let progress_handle = progress.as_ref().map(|p| p.handle());
         let results = py.detach(|| {
             refine_patch_cloud_normals(
                 &mut self.inner,
@@ -679,6 +684,7 @@ impl PyPatchCloud {
                 resolution,
                 &params,
                 patch_view_keypoints.as_deref(),
+                progress_handle.as_deref(),
             )
         });
 
@@ -772,7 +778,7 @@ impl PyPatchCloud {
     #[pyo3(signature = (
         recon, images, *, min_relative_zncc=0.7, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear", min_valid_fraction=0.6, min_track_views=2,
-        robust_iters=3, min_self_agreement=0.3, point_indexes=None
+        robust_iters=3, min_self_agreement=0.3, point_indexes=None, progress=None
     ))]
     fn select_views<'py>(
         &self,
@@ -789,6 +795,7 @@ impl PyPatchCloud {
         robust_iters: u32,
         min_self_agreement: f64,
         point_indexes: Option<Vec<u32>>,
+        progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let recon = &recon.inner;
         if self.inner.point_indexes.len() != self.inner.len() {
@@ -865,8 +872,16 @@ impl PyPatchCloud {
             }
         }
 
-        let results =
-            py.detach(|| select_patch_cloud_views(&self.inner, &views, &track_views, &params));
+        let progress_handle = progress.as_ref().map(|p| p.handle());
+        let results = py.detach(|| {
+            select_patch_cloud_views(
+                &self.inner,
+                &views,
+                &track_views,
+                &params,
+                progress_handle.as_deref(),
+            )
+        });
 
         let mut out = Vec::new();
         for (res, &pid) in results.iter().zip(&self.inner.point_indexes) {
@@ -937,7 +952,7 @@ impl PyPatchCloud {
         min_relative_zncc=0.7, min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear", robust_iters=3, convergence_px=0.05,
         point_indexes=None, search_resolution_multiplier=1.0,
-        search_strategy="plus_descent"
+        search_strategy="plus_descent", progress=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn localize_keypoints<'py>(
@@ -960,6 +975,7 @@ impl PyPatchCloud {
         point_indexes: Option<Vec<u32>>,
         search_resolution_multiplier: f32,
         search_strategy: &str,
+        progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let recon = &recon.inner;
         if self.inner.point_indexes.len() != self.inner.len() {
@@ -1073,8 +1089,17 @@ impl PyPatchCloud {
             }
         }
 
-        let results =
-            py.detach(|| localize_patch_cloud_keypoints(&self.inner, &views, &sets, None, &params));
+        let progress_handle = progress.as_ref().map(|p| p.handle());
+        let results = py.detach(|| {
+            localize_patch_cloud_keypoints(
+                &self.inner,
+                &views,
+                &sets,
+                None,
+                &params,
+                progress_handle.as_deref(),
+            )
+        });
 
         let mut out = Vec::new();
         for (res, &pid) in results.iter().zip(&self.inner.point_indexes) {
@@ -1203,7 +1228,7 @@ impl PyPatchCloud {
         window_sigma=0.6, sampler="bilinear", robust_iters=3, max_outer_sweeps=1,
         outer_convergence_px=0.005, max_gn_steps=10, convergence_px=0.01,
         max_offset_px=2.0, consensus_refresh="per_sweep", point_indexes=None,
-        starting_keypoints=None, render_bitmaps=false
+        starting_keypoints=None, render_bitmaps=false, progress=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn refine_keypoints<'py>(
@@ -1226,6 +1251,7 @@ impl PyPatchCloud {
         point_indexes: Option<Vec<u32>>,
         starting_keypoints: Option<std::collections::HashMap<u32, Vec<[f64; 2]>>>,
         render_bitmaps: bool,
+        progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let recon = &recon.inner;
         if self.inner.point_indexes.len() != self.inner.len() {
@@ -1418,6 +1444,7 @@ impl PyPatchCloud {
         // taps instead of leaving them unaccounted.
         sfmtool_core::patch::keypoint_subpixel::prof::reset();
         let subpixel_wall = std::time::Instant::now();
+        let progress_handle = progress.as_ref().map(|p| p.handle());
         let results = py.detach(|| {
             use rayon::prelude::*;
             use sfmtool_core::patch::keypoint_subpixel::refine_patch_keypoints;
@@ -1437,7 +1464,18 @@ impl PyPatchCloud {
                             .as_ref()
                             .map(|m| set.iter().map(|&img| m.get(&(pid, img)).copied()).collect())
                     };
-                    refine_patch_keypoints(patch, &views, set, per_view_seeds.as_deref(), &params)
+                    let out = refine_patch_keypoints(
+                        patch,
+                        &views,
+                        set,
+                        per_view_seeds.as_deref(),
+                        &params,
+                    );
+                    // Bump the shared work counter per patch for a Python progress poller.
+                    if let Some(c) = &progress_handle {
+                        c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    out
                 })
                 .collect::<Vec<_>>()
         });

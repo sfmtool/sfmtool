@@ -600,7 +600,7 @@ fn batch_matches_per_patch() {
     };
     let view_sets = vec![vec![0u32, 1, 2, 3], vec![0u32, 1, 2, 3]];
 
-    let batch = localize_patch_cloud_keypoints(&cloud, &views, &view_sets, None, &params());
+    let batch = localize_patch_cloud_keypoints(&cloud, &views, &view_sets, None, &params(), None);
     assert_eq!(batch.len(), 2);
     for (i, res) in batch.iter().enumerate() {
         let single =

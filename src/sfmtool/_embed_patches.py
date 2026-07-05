@@ -23,12 +23,78 @@ a thin wrapper over it.
 
 from __future__ import annotations
 
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from sfmtool._sfmtool import PatchCloud, SfmrReconstruction
+from sfmtool._sfmtool import PatchCloud, ProgressCounter, SfmrReconstruction
+
+
+@contextmanager
+def _timed_step(log: Any, label: str):
+    """Log ``label`` at the start of a step and its elapsed wall time on
+    completion, so each blocking Rust pass shows a start line (and a "done"
+    line proving it advanced) rather than one silent block. A no-op when
+    ``log`` is ``None``."""
+    if log is None:
+        yield
+        return
+    log(label)
+    t0 = time.perf_counter()
+    yield
+    log(f"    ...done ({time.perf_counter() - t0:.1f}s)")
+
+
+def _progress_poll_loop(
+    log: Any,
+    read: Any,
+    total: int,
+    stop: threading.Event,
+    interval: float,
+) -> None:
+    """Until ``stop`` is set, every ``interval`` seconds read the current work
+    count via ``read()`` and echo a ``done/total`` line through ``log``. Split
+    out from :func:`_poll_progress` so the reporting logic is unit-testable with
+    an injected ``read`` (the live path reads a :class:`ProgressCounter`)."""
+    while not stop.wait(interval):
+        done = read()
+        # `done` can momentarily read 0 before the first patches finish, and
+        # equal `total` just as the pass ends; only report genuine mid-pass
+        # progress so we never print a redundant 0%/100% around the done line.
+        if 0 < done < total:
+            log(f"    {done}/{total} patches ({100 * done // total}%)")
+
+
+@contextmanager
+def _poll_progress(log: Any, total: int, *, interval: float = 5.0):
+    """Yield a :class:`ProgressCounter` and, while the body runs, echo its
+    ``value``/``total`` from a background thread every ``interval`` seconds.
+
+    The counted Rust pass runs with the GIL released (``py.detach``), so the
+    poller thread can read the shared counter and report intra-pass progress
+    that would otherwise be one opaque blocking step. Yields ``None`` (no
+    counter) when ``log`` is ``None`` or ``total`` is trivial, so the caller
+    passes ``progress=None`` and the pass runs uninstrumented."""
+    if log is None or total <= 0:
+        yield None
+        return
+    counter = ProgressCounter()
+    stop = threading.Event()
+    poller = threading.Thread(
+        target=_progress_poll_loop,
+        args=(log, lambda: counter.value, total, stop, interval),
+        daemon=True,
+    )
+    poller.start()
+    try:
+        yield counter
+    finally:
+        stop.set()
+        poller.join(timeout=interval)
 
 
 def image_file_hashes_from_images(recon: SfmrReconstruction) -> list[bytes]:
@@ -262,6 +328,7 @@ def _refine_subpixel(
     sweeps: int,
     resolution: int,
     render_bitmaps: bool = False,
+    progress: Any = None,
 ) -> tuple[list[dict[str, Any]], np.ndarray | None, np.ndarray | None]:
     """Run :meth:`PatchCloud.refine_keypoints` seeded at ``localizations``'s
     per-view keypoints, and splice the refined source-px keypoints back into the
@@ -323,6 +390,7 @@ def _refine_subpixel(
         starting_keypoints=seeds,
         point_indexes=list(view_sets.keys()),
         resolution=resolution,
+        progress=progress,
         **kwargs,
     )
 
@@ -621,9 +689,14 @@ def embed_patches(
     #    each point's mean-viewing frame by SIFT feature scale, copies the SIFT
     #    detection keypoints inline, and reads the image hashes from `.sift`
     #    metadata. Its frame, keypoints, and hashes are all consumed below.
-    embedded = recon.to_embedded_patches(
-        normal="mean_viewing", extent="feature_size", extent_value=half_extent
-    )
+    with _timed_step(
+        log,
+        f"  round 1/{rounds}: converting sift→patches "
+        f"({recon.point_count} pts, {len(images)} imgs)...",
+    ):
+        embedded = recon.to_embedded_patches(
+            normal="mean_viewing", extent="feature_size", extent_value=half_extent
+        )
 
     # 1. Refine each normal over the embedded recon, anchoring every view on its
     #    stored SIFT keypoint (use_stored_keypoints) instead of the reprojected
@@ -633,38 +706,58 @@ def embed_patches(
     if cloud is None:
         raise ValueError("to_embedded_patches produced no patch frames to refine")
     n_before = _patch_normals(cloud) if log else None
-    cloud.refine_normals(
-        embedded,
-        images,
-        resolution=resolution,
-        use_stored_keypoints=True,
-        obliquity_weight_power=obliquity_weight_power,
-        fronto_prior_weight=fronto_prior_weight,
-    )
+    with (
+        _timed_step(log, f"  round 1/{rounds}: refining normals ({len(cloud)} pts)..."),
+        _poll_progress(log, len(cloud)) as counter,
+    ):
+        cloud.refine_normals(
+            embedded,
+            images,
+            resolution=resolution,
+            use_stored_keypoints=True,
+            obliquity_weight_power=obliquity_weight_power,
+            fronto_prior_weight=fronto_prior_weight,
+            progress=counter,
+        )
 
     # 2. Expand + vet the view set per point (round 1 only; membership is fixed
     #    afterwards).
-    selections = cloud.select_views(
-        embedded, images, min_relative_zncc=min_relative_zncc, resolution=resolution
-    )
+    with (
+        _timed_step(log, f"  round 1/{rounds}: selecting views ({len(cloud)} pts)..."),
+        _poll_progress(log, len(cloud)) as counter,
+    ):
+        selections = cloud.select_views(
+            embedded,
+            images,
+            min_relative_zncc=min_relative_zncc,
+            resolution=resolution,
+            progress=counter,
+        )
     view_sets = {
         int(s["point_index"]): np.asarray(s["admitted"]).tolist() for s in selections
     }
 
     # 3. Discrete localizer (the seed): project starting keypoints and congeal them,
     #    dropping views that won't co-register in-loop. Runs once, in round 1.
-    localizations = cloud.localize_keypoints(
-        embedded,
-        images,
-        view_sets=view_sets,
-        max_iters=max_iters,
-        search=search,
-        max_shift_px=max_shift_px,
-        min_relative_zncc=min_relative_zncc,
-        resolution=resolution,
-        search_resolution_multiplier=search_resolution_multiplier,
-        search_strategy=localize_search_strategy,
-    )
+    with (
+        _timed_step(
+            log, f"  round 1/{rounds}: localizing keypoints ({len(cloud)} pts)..."
+        ),
+        _poll_progress(log, len(cloud)) as counter,
+    ):
+        localizations = cloud.localize_keypoints(
+            embedded,
+            images,
+            view_sets=view_sets,
+            max_iters=max_iters,
+            search=search,
+            max_shift_px=max_shift_px,
+            min_relative_zncc=min_relative_zncc,
+            resolution=resolution,
+            search_resolution_multiplier=search_resolution_multiplier,
+            search_strategy=localize_search_strategy,
+            progress=counter,
+        )
 
     # 3.5. Sub-pixel keypoint refinement, seeded at the localizer's kept keypoints
     #      (the localizer put each view in the basin; the LK refiner sharpens it).
@@ -673,15 +766,22 @@ def embed_patches(
     #      and the culled-point drop signal the compaction consumes (with
     #      subpixel=0 the pass is render-only: seeds kept, bitmaps still fused).
     seed_loc = localizations
-    localizations, bitmaps, valid = _refine_subpixel(
-        cloud,
-        embedded,
-        images,
-        localizations,
-        sweeps=subpixel,
-        resolution=resolution,
-        render_bitmaps=rounds == 1,
-    )
+    with (
+        _timed_step(
+            log, f"  round 1/{rounds}: sub-pixel keypoint refine ({len(cloud)} pts)..."
+        ),
+        _poll_progress(log, len(cloud)) as counter,
+    ):
+        localizations, bitmaps, valid = _refine_subpixel(
+            cloud,
+            embedded,
+            images,
+            localizations,
+            sweeps=subpixel,
+            resolution=resolution,
+            render_bitmaps=rounds == 1,
+            progress=counter,
+        )
     if log:
         ndeg = _mean_angle_deg(n_before, _patch_normals(cloud))
         kpx = _mean_keypoint_shift(seed_loc, localizations)
@@ -719,14 +819,21 @@ def embed_patches(
         )
         cloud_r = emb_r.patches
         n_before = _patch_normals(cloud_r) if log else None
-        cloud_r.refine_normals(
-            emb_r,
-            images,
-            resolution=resolution,
-            use_stored_keypoints=True,
-            obliquity_weight_power=obliquity_weight_power,
-            fronto_prior_weight=fronto_prior_weight,
-        )
+        with (
+            _timed_step(
+                log, f"  round {r}/{rounds}: refining normals ({len(cloud_r)} pts)..."
+            ),
+            _poll_progress(log, len(cloud_r)) as counter,
+        ):
+            cloud_r.refine_normals(
+                emb_r,
+                images,
+                resolution=resolution,
+                use_stored_keypoints=True,
+                obliquity_weight_power=obliquity_weight_power,
+                fronto_prior_weight=fronto_prior_weight,
+                progress=counter,
+            )
         base_loc = _localizations_from_recon(emb_r)
         # Re-prune grazing observations against THIS round's refined normal: the
         # low-parallax degeneracy tilts a normal toward grazing gradually over
@@ -741,15 +848,23 @@ def embed_patches(
             np.asarray(emb_r.point_is_at_infinity),
             max_obliquity_deg,
         )
-        loc_r, bitmaps, valid = _refine_subpixel(
-            cloud_r,
-            emb_r,
-            images,
-            base_loc,
-            sweeps=subpixel,
-            resolution=resolution,
-            render_bitmaps=r == rounds,
-        )
+        with (
+            _timed_step(
+                log,
+                f"  round {r}/{rounds}: sub-pixel keypoint refine ({len(cloud_r)} pts)...",
+            ),
+            _poll_progress(log, len(cloud_r)) as counter,
+        ):
+            loc_r, bitmaps, valid = _refine_subpixel(
+                cloud_r,
+                emb_r,
+                images,
+                base_loc,
+                sweeps=subpixel,
+                resolution=resolution,
+                render_bitmaps=r == rounds,
+                progress=counter,
+            )
         if log:
             ndeg = _mean_angle_deg(n_before, _patch_normals(cloud_r))
             kpx = _mean_keypoint_shift(base_loc, loc_r)
@@ -765,12 +880,14 @@ def embed_patches(
     #    final sub-pixel pass produced no valid consensus bitmap for (finite and
     #    infinity alike), and compact into the final embedded_patches recon. The
     #    stored bitmaps are the final-keypoint consensus textures from that pass.
-    return compact_to_embedded_patches(
-        work_recon,
-        work_cloud,
-        work_loc,
-        hashes,
-        patch_bitmaps=bitmaps,
-        valid=valid,
-        min_views=min_views,
-    )
+    with _timed_step(log, "  compacting survivors into embedded_patches..."):
+        result = compact_to_embedded_patches(
+            work_recon,
+            work_cloud,
+            work_loc,
+            hashes,
+            patch_bitmaps=bitmaps,
+            valid=valid,
+            min_views=min_views,
+        )
+    return result

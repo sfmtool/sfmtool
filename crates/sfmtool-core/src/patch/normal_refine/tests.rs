@@ -1066,6 +1066,7 @@ fn refine_patch_cloud_normals_refines_in_place() {
         15,
         &test_params(Objective::MeanPairwise),
         None,
+        None,
     );
 
     assert_eq!(results.len(), 3);

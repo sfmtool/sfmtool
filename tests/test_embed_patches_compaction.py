@@ -13,16 +13,19 @@ reconstruction, and round-trips it through ``.sfmr`` to confirm validity. See
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 import numpy as np
 
 from sfmtool._embed_patches import (
+    _poll_progress,
+    _progress_poll_loop,
     _refine_subpixel,
     compact_to_embedded_patches,
     image_file_hashes_from_images,
 )
-from sfmtool._sfmtool import PatchCloud, SfmrReconstruction
+from sfmtool._sfmtool import PatchCloud, ProgressCounter, SfmrReconstruction
 from sfmtool._sfmtool.io import verify_sfmr
 
 
@@ -452,8 +455,9 @@ def test_embed_patches_multiple_rounds_round_trips(
         np.asarray(three.keypoints_xy).shape[0] <= np.asarray(one.keypoints_xy).shape[0]
     )
 
-    # One progress line per round.
-    assert sum(line.strip().startswith("round ") for line in lines) == 3
+    # One per-round summary line (the "normal Δ ..." metric line) per round.
+    # Phase lines share the "round N/M:" prefix, so match the summary distinctly.
+    assert sum("normal Δ" in line for line in lines) == 3
 
     out = tmp_path / "rounds.sfmr"
     three.save(str(out), operation="embed-patches rounds=3")
@@ -503,3 +507,56 @@ def test_drop_grazing_observations_skips_points_at_infinity():
     # Infinity point: untouched despite the (meaningless) grazing geometry.
     assert len(by_pid[1]["views"]) == 1
     assert dropped == 1
+
+
+def _run_poll_once(value: int, total: int) -> list[str]:
+    """Drive ``_progress_poll_loop`` through exactly one iteration reading
+    ``value``, and return the lines it logged."""
+    lines: list[str] = []
+    stop = threading.Event()
+
+    def read() -> int:
+        stop.set()  # end the loop after this single iteration
+        return value
+
+    _progress_poll_loop(lines.append, read, total, stop, 0.0)
+    return lines
+
+
+def test_progress_poll_loop_reports_midpass_value():
+    """A count strictly between 0 and total is reported as a done/total line."""
+    assert _run_poll_once(500, 1000) == ["    500/1000 patches (50%)"]
+
+
+def test_progress_poll_loop_skips_zero_and_complete():
+    """A 0 count (nothing done yet) and a full count (pass ending) are both
+    suppressed, so the poller never prints a redundant 0%/100% line."""
+    assert _run_poll_once(0, 1000) == []
+    assert _run_poll_once(1000, 1000) == []
+
+
+def test_poll_progress_uninstrumented_when_no_log_or_trivial_total():
+    """``_poll_progress`` yields ``None`` (so the caller passes
+    ``progress=None``) when there is no log sink or no work to report."""
+    with _poll_progress(None, 100) as counter:
+        assert counter is None
+    with _poll_progress(lambda _s: None, 0) as counter:
+        assert counter is None
+
+
+def test_poll_progress_yields_counter_and_emits_nothing_for_fast_body():
+    """With a log sink and real work, ``_poll_progress`` yields a live
+    ``ProgressCounter``; a body that finishes before the poll interval logs
+    nothing (fast passes stay quiet)."""
+    lines: list[str] = []
+    with _poll_progress(lines.append, 100, interval=3600) as counter:
+        assert isinstance(counter, ProgressCounter)
+        assert counter.value == 0
+    assert lines == []
+
+
+def test_progress_counter_starts_at_zero_and_resets():
+    counter = ProgressCounter()
+    assert counter.value == 0
+    counter.reset()
+    assert counter.value == 0
