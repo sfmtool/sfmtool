@@ -12,7 +12,10 @@
 //! never determined, while infinity → finite must *supply* a depth the data
 //! cannot give.
 
+use std::collections::HashMap;
+
 use nalgebra::{Point3, Vector3};
+use ndarray::Array2;
 
 use crate::geometry::viewing_angle::viewing_rays;
 use crate::reconstruction::data::count_points_at_infinity;
@@ -33,6 +36,26 @@ pub const DEFAULT_NOISE_FLOOR_PX: f64 = 1.0;
 /// discovered z ≈ 3.) The scale-free z-score is the decision variable; final
 /// calibration on larger captures is deferred — see the spec's open questions.
 pub const DEFAULT_INVERSE_DEPTH_Z_CUTOFF: f64 = 4.0;
+
+/// The cameras observing a track count as a single viewpoint when their centres
+/// span less than this fraction of the whole camera cloud's extent — i.e. they
+/// all sit at essentially the same optical centre.
+///
+/// This is what happens when the camera stops and pans around from a fixed
+/// optical centre: across those frames the centre never moves, so a point seen
+/// only during that motion carries no depth cue. A genuinely finite point then
+/// looks just like an infinite one — every view sees it in the same direction,
+/// and nothing in the images says how far away it is. (A solver can also
+/// collapse a run of frames onto one centre by mistake, with the same effect.)
+/// Its triangulated position is meaningless — it often lands right on the
+/// cameras — so the track is stored as a point at infinity, with its direction
+/// recovered from the keypoints (see
+/// [`SfmrReconstruction::classify_points_at_infinity`]).
+///
+/// The threshold is deliberately tight: only camera centres orders of magnitude
+/// closer together than the scene is wide count as one viewpoint, so a point
+/// seen from real, if small, camera motion stays finite.
+pub const COINCIDENT_CAMERA_FRACTION: f64 = 1e-4;
 
 /// Cheap geometric pre-filter on the condition number of the normal matrix `A`.
 /// A track this well-conditioned has an observable depth and is finite without
@@ -182,24 +205,88 @@ impl SfmrReconstruction {
             .collect()
     }
 
+    /// Mean world-frame bearing of `point_idx`'s observation keypoints — each
+    /// `.sift` detection unprojected through its camera and rotated into world,
+    /// then averaged and normalised. `None` when the reconstruction has no
+    /// feature indexes (an `embedded_patches` recon), no observation's `.sift`
+    /// keypoint is readable, or the rays sum to zero.
+    ///
+    /// This recovers a direction for a point whose observing cameras have
+    /// collapsed onto one centre: the triangulated position (and hence the
+    /// point-to-camera rays) is degenerate there, but the keypoints still define
+    /// a bearing. `sift_positions` caches each image's `.sift` `positions_xy`
+    /// (read once, `None` when unreadable) across the points of one classify pass.
+    fn keypoint_mean_bearing(
+        &self,
+        point_idx: usize,
+        sift_positions: &mut HashMap<usize, Option<Array2<f32>>>,
+    ) -> Option<Vector3<f64>> {
+        let feature_indexes = self.feature_indexes()?;
+        let start = self.observation_offsets[point_idx];
+        let mut sum = Vector3::zeros();
+        for (k, o) in self.observations_for_point(point_idx).iter().enumerate() {
+            let img = o.image_index as usize;
+            let positions = sift_positions.entry(img).or_insert_with(|| {
+                let count = self.max_track_feature_index[img] as usize + 1;
+                sift_format::read_sift_partial(&self.sift_path_for_image(img), count)
+                    .ok()
+                    .map(|d| d.positions_xy)
+            });
+            let Some(positions) = positions.as_ref() else {
+                continue;
+            };
+            let feat = feature_indexes[start + k] as usize;
+            if feat >= positions.shape()[0] {
+                continue;
+            }
+            let cam = &self.cameras[self.images[img].camera_index as usize];
+            let ray = cam.pixel_to_ray(positions[[feat, 0]] as f64, positions[[feat, 1]] as f64);
+            // `pixel_to_ray` is a camera-frame ray; rotate to world (camera-to-
+            // world is the inverse of the stored world-to-camera rotation).
+            let world =
+                self.images[img].quaternion_wxyz.inverse() * Vector3::new(ray[0], ray[1], ray[2]);
+            let n = world.norm();
+            if n > 0.0 {
+                sum += world / n;
+            }
+        }
+        let norm = sum.norm();
+        (norm > 0.0).then(|| sum / norm)
+    }
+
     /// Reclassify finite points whose depth is unconstrained as points at
     /// infinity, returning a new reconstruction.
     ///
-    /// A finite point becomes `w = 0` only on a **confident** infinity call from
-    /// the triangulation of its observation rays — adequate baseline (resolvable
-    /// distance ≥ the camera extents) and a degenerate/behind solve or an
-    /// inverse-depth z-score below [`DEFAULT_INVERSE_DEPTH_Z_CUTOFF`]. Its
-    /// coordinate is replaced with the bearing-mean direction of its rays. The
-    /// per-ray angular noise is `max(reprojection_error, noise_floor_px) / fᵢ`.
+    /// A finite point becomes `w = 0` in one of two ways:
+    ///
+    /// - **Single viewpoint.** Its cameras all sit at essentially the same
+    ///   optical centre — their centres span less than
+    ///   [`COINCIDENT_CAMERA_FRACTION`] of the camera cloud (a camera that
+    ///   panned in place, or a solver that collapsed a run of frames). With no
+    ///   camera motion there is no depth cue, so a finite point is
+    ///   indistinguishable from an infinite one. It is demoted with a direction
+    ///   recovered from its keypoints ([`Self::keypoint_mean_bearing`]), since
+    ///   its triangulated position is meaningless (often right on the cameras)
+    ///   and its point-to-camera rays are numerical noise.
+    /// - **Confident infinity call.** The cameras do move, but the triangulation
+    ///   still cannot pin the depth: with cameras spread far enough to resolve a
+    ///   scene-scale point, a degenerate/behind solve or an inverse-depth z-score
+    ///   below [`DEFAULT_INVERSE_DEPTH_Z_CUTOFF`]. Its coordinate is replaced
+    ///   with the mean direction of its rays. The per-ray angular noise is
+    ///   `max(reprojection_error, noise_floor_px) / fᵢ`.
     ///
     /// This is non-destructive and relabel-only: a point we lack the baseline to
-    /// adjudicate (indeterminate) is left as the finite point the solve
-    /// produced, never removed. Points already at infinity, and points with
-    /// fewer than two observations, are left unchanged.
+    /// adjudicate (indeterminate, but not fully collapsed) is left as the finite
+    /// point the solve produced, never removed. Points already at infinity, and
+    /// points with fewer than two observations, are left unchanged.
     pub fn classify_points_at_infinity(&self, noise_floor_px: f64) -> Self {
         let centers: Vec<Point3<f64>> = self.images.iter().map(|im| im.camera_center()).collect();
         let focal_max = self.per_image_focal_max();
         let finite_horizon = camera_extents(&centers);
+
+        // `.sift` `positions_xy` per image, read lazily and shared across the
+        // (rare) collapsed-cluster points that need a keypoint-recovered bearing.
+        let mut sift_positions: HashMap<usize, Option<Array2<f32>>> = HashMap::new();
 
         let mut recon = self.clone();
         for (pidx, pt) in recon.points.iter_mut().enumerate() {
@@ -208,6 +295,28 @@ impl SfmrReconstruction {
             }
             let obs = self.observations_for_point(pidx);
             if obs.len() < 2 {
+                continue;
+            }
+
+            // Single viewpoint: the observing cameras all sit at essentially one
+            // optical centre (a camera panning in place, or a collapsed run of
+            // frames), so there is no depth cue and a finite point is
+            // indistinguishable from an infinite one. Demote it to a point at
+            // infinity using the keypoint-recovered direction (its triangulated
+            // position is meaningless and its point-to-camera rays are noise).
+            // Falls through to leave the point finite only if no direction is
+            // readable.
+            let camera_spread = camera_extents(
+                &obs.iter()
+                    .map(|o| centers[o.image_index as usize])
+                    .collect::<Vec<_>>(),
+            );
+            if finite_horizon > 0.0 && camera_spread < COINCIDENT_CAMERA_FRACTION * finite_horizon {
+                if let Some(dir) = self.keypoint_mean_bearing(pidx, &mut sift_positions) {
+                    pt.position = Point3::from(dir);
+                    pt.w = 0.0;
+                    pt.normal = Vector3::zeros();
+                }
                 continue;
             }
 

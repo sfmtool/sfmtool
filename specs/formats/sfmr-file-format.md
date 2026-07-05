@@ -755,6 +755,18 @@ within feature-localisation noise — distant content (a skyline, a far building
 whose depth the SfM solve cannot pin down. Storing it as a finite `(x, y, z)`
 would be lossy and misleading; the homogeneous model represents it faithfully.
 
+The same `w = 0` model also captures a track seen from a **single viewpoint**:
+if the camera stops and pans around from one optical centre, a point seen only
+during that motion has no depth cue — every frame sees it in the same
+direction, so a finite point looks exactly like an infinite one. (A solver can
+also collapse a run of frames onto one centre, with the same effect.) When a
+track's observing cameras all sit at essentially the same centre,
+`classify_points_at_infinity` stores it as `w = 0` with a direction recovered
+from its keypoints, since its triangulated position is meaningless (it often
+lands right on the cameras). This is the correct model — the depth genuinely
+cannot be known — and it lets distance-free operations (angular patch sizing,
+bearing reprojection) proceed where a degenerate finite position could not.
+
 #### `w` normalisation
 
 `w` is a homogeneous coordinate, so `(x, y, z, w)` and `(λx, λy, λz, λw)` denote
