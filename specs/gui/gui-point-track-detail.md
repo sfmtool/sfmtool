@@ -85,6 +85,22 @@ pt3d_a1b2c3d4_12345 | xyz: (1.234, -0.567, 2.891) | error: 0.42px | track: 7 obs
 
 The color swatch is a small filled rectangle drawn with the point's RGB values.
 
+#### Stored-Patch Header Tile
+
+For an **embedded-patches** reconstruction that carries patch bitmaps
+(`recon.patch_bitmaps_y_x_rgba`), a second header row below the point summary
+shows the patch **stored in the reconstruction** for the selected point:
+
+```
+Stored patch: [tile]
+```
+
+The tile is the point's RGBA bitmap drawn at a fixed 64 px square with
+nearest-neighbor filtering (patches are tiny; nearest shows texels). Only the
+RGB channels are shown — the alpha channel (per-texel cross-view confidence)
+is forced opaque. The row is hidden entirely when the reconstruction has no
+bitmaps or the point's bitmap is all-zero.
+
 #### Point ID
 
 The header displays a **Point ID** — a compact, copy-pastable identifier that
@@ -126,12 +142,44 @@ Below the header, the panel shows a vertically scrollable table of observations
 | Column | Content |
 |--------|---------|
 | Thumbnail | Small thumbnail of the image (from `recon.thumbnails_y_x_rgb`), with a dot overlay at the feature position. |
+| Patch | *(embedded-patches only)* The point's patch rendered from this observation's full-res image (see below). Omitted — and all following columns keep their original offsets — when the point has no patch frame. |
 | Image | Image index in the reconstruction. |
 | Name | Image filename (truncated with leading `…/` for long paths). |
 | Feat # | Feature index within the image's SIFT file. |
 | Error | Per-observation reprojection error in pixels. |
 | Angle | Angular discrepancy between observation ray and point direction, in degrees. |
 | Feature (x, y) | Feature position in image pixel coordinates. |
+
+**Patch column** (embedded-patches reconstructions): when the reconstruction
+stores patch frames (`patch_u_halfvec_xyz` / `patch_v_halfvec_xyz`) and the
+selected point's `u` half-vector is non-zero, a patch tile is drawn immediately
+right of each row's thumbnail. The tile is the point's oriented patch
+**re-rendered from that observation's full-resolution source image**: the
+stored half-vectors are split into unit axes + half-extents to build an
+`OrientedPatch` (re-marked `w = 0` for points at infinity), then the full-res
+image is warped through it with `WarpMap::from_patch` + `remap_bilinear` at
+64×64 and displayed at thumbnail size (48 px, nearest filtering, tight at the
+stored patch extent). Tiles are rendered lazily per row and cached per image
+index; an all-black result (patch not visible in that view) is memoized and the
+tile is simply not drawn. Stored bitmaps are **not** required for this column —
+only the frame.
+
+**Shared full-resolution image cache**: the source pixels come from
+`AppState::full_res_cache`, a CPU-side cache of decoded full-res images (RGB
+`ImageU8`, keyed by image index) shared with the Image Detail panel — which
+builds its display texture from the same cache — so no image is decoded from
+disk more than once. Decode failures are memoized (`None`) so missing files
+aren't re-opened every frame. The dock pre-caches every observing image of the
+selected point before the panel draws (only when the reconstruction carries
+patch frames); the cache is cleared when the reconstruction changes.
+
+> **TODO (unbounded growth):** `full_res_cache` currently retains a CPU RGB
+> copy of every image ever selected or observed for the whole session, with no
+> eviction — only cleared on reconstruction load. On large datasets this can
+> retain hundreds of MB (e.g. ~85 images @ 2040×1536×3 ≈ 800 MB). It should
+> become an **LRU cache bounded by total memory usage** (evict the
+> least-recently-used decoded image once an aggregate byte budget is
+> exceeded), re-decoding on demand if an evicted image is needed again.
 
 **Sort order**: Rows are sorted by image index (the natural sequence order),
 matching the order in the Image Browser.
@@ -235,6 +283,16 @@ pub struct PointTrackDetail {
     max_angle_deg: f32,
     /// Cached thumbnail textures keyed by image index.
     thumbnail_textures: HashMap<usize, egui::TextureHandle>,
+    /// The selected point's oriented patch frame (from the stored patch
+    /// half-vectors), or None when the reconstruction carries no frame or the
+    /// point has no patch. Gates the per-observation "Patch" column.
+    patch_frame: Option<OrientedPatch>,
+    /// Stored patch bitmap texture for the selected point (header tile), if any.
+    stored_patch_texture: Option<egui::TextureHandle>,
+    /// Per-observation patch tiles rendered from full-res images, keyed by
+    /// image index (None = all-black render, memoized skip).
+    /// Rebuilt on point-selection change.
+    rendered_patch_textures: HashMap<usize, Option<egui::TextureHandle>>,
     /// The content_xxh128 hash prefix (first 8 hex chars) for Point IDs.
     hash_prefix: String,
 }
@@ -298,10 +356,14 @@ and rendering.
 
 ## Ideas for Future Consideration
 
-- **Cropped feature thumbnails**: Replace the whole-image thumbnails in the
-  table with 128x128 crops centered on each feature position, loaded lazily
-  from full-resolution images. Would give a much closer view of what was
-  actually matched, but adds image I/O complexity.
+- **Cropped feature thumbnails**: *(implemented for embedded-patches
+  reconstructions as the per-observation Patch column — the point's patch
+  re-rendered from each observation's full-res image; see the Observation
+  Table section. Still open for `sift_files` reconstructions, which carry no
+  patch frame to define the crop.)*
+- **Stored-patch alpha tile**: Show the stored bitmap's alpha channel
+  (per-texel cross-view confidence) as a grayscale tile beside the RGB header
+  tile, like `_solve_strips.py`'s `_bitmap_ref_tile`.
 - **Enhanced interactions**: Highlight the corresponding track ray in the 3D
   viewer when hovering a row (requires per-ray hover state in the track ray
   shader). Show the reprojected point position as a second dot on each
