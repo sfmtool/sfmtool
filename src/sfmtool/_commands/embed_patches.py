@@ -3,6 +3,7 @@
 
 """Convert a sift_files reconstruction to embedded_patches (photometric pipeline)."""
 
+import time
 from pathlib import Path
 
 import click
@@ -234,12 +235,23 @@ def embed_patches_command(
             )
         click.echo(f"  Images: {recon.image_count}")
         click.echo(f"  Points: {recon.point_count}")
+        click.echo(f"  Observations: {recon.observation_count}")
 
-        click.echo("Loading source images...")
-        images = [
-            read_workspace_image(recon.workspace_dir, name)
-            for name in recon.image_names
-        ]
+        image_names = recon.image_names
+        n_images = len(image_names)
+        click.echo(f"Loading source images ({n_images})...")
+        # Report every ~5% (min every image) so a large image set (1000+) shows
+        # steady progress through the decode instead of one silent block.
+        report_every = max(1, n_images // 20)
+        load_start = time.perf_counter()
+        images = []
+        for i, name in enumerate(image_names):
+            images.append(read_workspace_image(recon.workspace_dir, name))
+            if (i + 1) % report_every == 0 or (i + 1) == n_images:
+                click.echo(f"  loaded {i + 1}/{n_images} images")
+        click.echo(
+            f"  loaded {n_images} images in {time.perf_counter() - load_start:.1f}s"
+        )
 
         click.echo(
             "Building + refining patches, selecting views, localizing keypoints..."
@@ -264,6 +276,7 @@ def embed_patches_command(
         )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        click.echo(f"Writing {result.point_count} points to {output_path}...")
         result.save(str(output_path), operation="embed-patches")
         click.echo("\nWrote embedded_patches reconstruction:")
         click.echo(f"  {output_path}")

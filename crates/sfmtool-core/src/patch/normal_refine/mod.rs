@@ -354,6 +354,7 @@ pub fn refine_patch_cloud_normals(
     resolution: u32,
     params: &NormalRefineParams,
     patch_view_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    progress: Option<&std::sync::atomic::AtomicUsize>,
 ) -> Vec<NormalRefineResult> {
     assert_eq!(
         patch_views.len(),
@@ -379,7 +380,13 @@ pub fn refine_patch_cloud_normals(
         .map(|((i, patch), vidx)| {
             let pv: Vec<ProjectedImage<'_>> = vidx.iter().map(|&i| views[i as usize]).collect();
             let kps = patch_view_keypoints.map(|k| k[i].as_slice());
-            refine_patch_normal(patch, &pv, resolution, params, kps)
+            let out = refine_patch_normal(patch, &pv, resolution, params, kps);
+            // Bump the shared work counter as each patch finishes, so a Python
+            // poller can report intra-pass progress while the GIL is released.
+            if let Some(c) = progress {
+                c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            out
         })
         .collect();
     if prof::enabled() {

@@ -34,9 +34,13 @@ class TestComputePerImageMetrics:
         for entry in per_image:
             assert 0.1 < entry["mean_error"] < 2.0
 
-    def test_median_le_mean_le_max(self, per_image):
+    def test_median_and_mean_le_max(self, per_image):
+        # Both the median and the mean of a set of errors lie at or below its
+        # max. (There is no fixed median-vs-mean ordering: median <= mean holds
+        # only for a right-skewed distribution, and per-image reprojection errors
+        # are often near-symmetric, so asserting it is flaky.)
         for entry in per_image:
-            assert entry["median_error"] <= entry["mean_error"] + 1e-9
+            assert entry["median_error"] <= entry["max_error"] + 1e-9
             assert entry["mean_error"] <= entry["max_error"] + 1e-9
 
     def test_max_errors_above_one_pixel(self, per_image):

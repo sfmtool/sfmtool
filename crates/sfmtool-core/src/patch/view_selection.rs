@@ -517,6 +517,7 @@ pub fn select_patch_cloud_views(
     views: &[ProjectedImage<'_>],
     track_views: &[Vec<u32>],
     params: &ViewSelectParams,
+    progress: Option<&std::sync::atomic::AtomicUsize>,
 ) -> Vec<ViewSelection> {
     assert_eq!(
         track_views.len(),
@@ -527,7 +528,14 @@ pub fn select_patch_cloud_views(
         .patches
         .par_iter()
         .zip(track_views.par_iter())
-        .map(|(patch, tv)| select_patch_views(patch, views, tv, params))
+        .map(|(patch, tv)| {
+            let out = select_patch_views(patch, views, tv, params);
+            // Bump the shared work counter per patch for a Python progress poller.
+            if let Some(c) = progress {
+                c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            out
+        })
         .collect()
 }
 
