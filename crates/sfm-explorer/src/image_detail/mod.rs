@@ -14,6 +14,7 @@ mod overlay;
 
 use crate::platform::{GestureEvent, ScrollInput};
 use crate::state::{CachedSiftFeatures, FeatureDisplaySettings, OverlayMode};
+use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::SfmrReconstruction;
 
 /// Maximum zoom level (32× = pixel-level inspection).
@@ -133,6 +134,7 @@ impl ImageDetail {
         gesture_events: &[GestureEvent],
         scroll_input: &ScrollInput,
         sift_features: Option<&CachedSiftFeatures>,
+        full_res: Option<&ImageU8>,
         feature_display: &FeatureDisplaySettings,
     ) -> ImageDetailResponse {
         let mut response = ImageDetailResponse {
@@ -163,9 +165,11 @@ impl ImageDetail {
             self.prev_selected_image = Some(img_idx);
         }
 
-        // Load the full-resolution image if it changed
+        // Load the full-resolution image if it changed. The CPU pixels come
+        // from the shared `full_res_cache` (decoded once, in dock.rs); this
+        // panel only uploads them to a GPU texture.
         if self.loaded_image.as_ref().map(|(i, _)| *i) != Some(img_idx) {
-            self.load_image(ui.ctx(), recon, img_idx);
+            self.load_image(ui.ctx(), full_res, img_idx);
             self.feature_overlay = None; // reset overlay on image change
         }
 
@@ -271,34 +275,27 @@ impl ImageDetail {
         response
     }
 
-    fn load_image(&mut self, ctx: &egui::Context, recon: &SfmrReconstruction, img_idx: usize) {
-        let Some(img) = recon.images.get(img_idx) else {
+    /// Build the display texture from the shared full-res CPU image (decoded
+    /// once into `AppState::full_res_cache`). `None` means the decode failed,
+    /// in which case the "Failed to load image" placeholder path applies.
+    fn load_image(&mut self, ctx: &egui::Context, full_res: Option<&ImageU8>, img_idx: usize) {
+        let Some(img) = full_res else {
             self.loaded_image = None;
             return;
         };
-        let image_path = recon.workspace_dir.join(&img.name);
-        match image::open(&image_path) {
-            Ok(dyn_image) => {
-                let rgba = dyn_image.to_rgba8();
-                let size = [rgba.width() as usize, rgba.height() as usize];
-                let pixels = rgba.into_raw();
-                let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
-                let texture = ctx.load_texture(
-                    format!("detail_{img_idx}"),
-                    color_image,
-                    egui::TextureOptions::LINEAR,
-                );
-                self.loaded_image = Some((img_idx, texture));
-            }
-            Err(e) => {
-                log::warn!(
-                    "Failed to load detail image {}: {}",
-                    image_path.display(),
-                    e
-                );
-                self.loaded_image = None;
-            }
+        // Expand 3-channel RGB to RGBA for the GPU upload.
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let mut rgba = Vec::with_capacity(w * h * 4);
+        for px in img.data().chunks_exact(3) {
+            rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
         }
+        let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+        let texture = ctx.load_texture(
+            format!("detail_{img_idx}"),
+            color_image,
+            egui::TextureOptions::LINEAR,
+        );
+        self.loaded_image = Some((img_idx, texture));
     }
 
     /// Build tracked-only feature list from the shared SIFT cache (for None overlay mode).

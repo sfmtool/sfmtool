@@ -9,6 +9,7 @@ use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
 };
+use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::SfmrReconstruction;
 use std::collections::HashMap;
 
@@ -188,6 +189,13 @@ pub struct AppState {
     /// Cleared when the reconstruction changes.
     pub sift_cache: HashMap<usize, CachedSiftFeatures>,
 
+    /// Full-resolution source images decoded to CPU pixels (RGB `ImageU8`),
+    /// keyed by image index. `None` = decode failed (don't retry). Shared by
+    /// ImageDetail (builds its GPU texture from this) and PointTrackDetail
+    /// (CPU-samples it to render per-observation patch tiles). Cleared when the
+    /// reconstruction changes.
+    pub full_res_cache: HashMap<usize, Option<ImageU8>>,
+
     /// Whether the "Load Demo Data" dialog is currently open.
     pub show_demo_dialog: bool,
 
@@ -231,6 +239,7 @@ impl AppState {
             length_scale: DEFAULT_LENGTH_SCALE_MULTIPLIER * 0.03, // fallback until points loaded
             frustum_size_multiplier: DEFAULT_FRUSTUM_SIZE_MULTIPLIER,
             sift_cache: HashMap::new(),
+            full_res_cache: HashMap::new(),
             show_demo_dialog: false,
             demo_num_points: 1000,
         }
@@ -254,6 +263,7 @@ impl AppState {
                 self.hovered_point = None;
                 self.points_need_upload = true;
                 self.sift_cache.clear();
+                self.full_res_cache.clear();
             }
             Err(e) => {
                 let msg = format!("Failed to load {}: {}", path.display(), e);
@@ -334,4 +344,38 @@ pub fn ensure_sift_cached<'a>(
         },
     );
     cache.get(&image_idx)
+}
+
+/// Get the cached full-resolution image for an image index, decoding from disk
+/// if needed.
+///
+/// This is a free function (not a method on `AppState`) so the caller can borrow
+/// `full_res_cache` mutably while simultaneously borrowing other `AppState`
+/// fields (like `reconstruction`) immutably.
+///
+/// Images are decoded to 3-channel RGB [`ImageU8`]. A failed decode is memoized
+/// as `None` so missing files aren't re-opened every frame.
+pub fn ensure_full_res_cached<'a>(
+    cache: &'a mut HashMap<usize, Option<ImageU8>>,
+    recon: &SfmrReconstruction,
+    image_idx: usize,
+) -> Option<&'a ImageU8> {
+    cache
+        .entry(image_idx)
+        .or_insert_with(|| {
+            recon.images.get(image_idx).and_then(|im| {
+                let path = recon.workspace_dir.join(&im.name);
+                match image::open(&path) {
+                    Ok(dyn_image) => {
+                        let rgb = dyn_image.to_rgb8();
+                        Some(ImageU8::new(rgb.width(), rgb.height(), 3, rgb.into_raw()))
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to load full-res image {}: {}", path.display(), e);
+                        None
+                    }
+                }
+            })
+        })
+        .as_ref()
 }

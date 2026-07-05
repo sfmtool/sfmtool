@@ -10,7 +10,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use nalgebra::Vector3;
 use ndarray::Axis;
+use sfmtool_core::camera::remap::{remap_bilinear, ImageU8};
+use sfmtool_core::camera::WarpMap;
+use sfmtool_core::geometry::RigidTransform;
+use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::SfmrReconstruction;
 
 use crate::platform::{self, GestureEvent};
@@ -51,6 +56,17 @@ pub struct PointTrackDetail {
     condition_number: f32,
     /// Cached thumbnail textures keyed by image index.
     thumbnail_textures: HashMap<usize, egui::TextureHandle>,
+    /// The selected point's oriented patch frame (from the stored patch
+    /// half-vectors), or None when the reconstruction carries no frame or the
+    /// point has no patch. Gates the per-observation "Patch" column.
+    patch_frame: Option<OrientedPatch>,
+    /// Stored patch bitmap texture for the selected point (header tile), if any.
+    stored_patch_texture: Option<egui::TextureHandle>,
+    /// Per-observation patch tiles rendered from full-res images, keyed by
+    /// image index. Rebuilt on point-selection change. Tiles where the patch is
+    /// not visible in the view warp to all-black and are drawn as such (a future
+    /// N/A flag may distinguish "not visible" from a genuinely dark surface).
+    rendered_patch_textures: HashMap<usize, egui::TextureHandle>,
     /// The content_xxh128 hash prefix (first 8 hex chars) for Point IDs.
     hash_prefix: String,
     /// Tracked vertical scroll offset for DM gesture scrolling.
@@ -73,6 +89,14 @@ pub struct PointTrackDetailResponse {
 const THUMB_SIZE: f32 = 48.0;
 /// Size of the feature dot overlay on thumbnails.
 const DOT_RADIUS: f32 = 3.0;
+/// Display size of the per-observation rendered patch tile (matches the
+/// thumbnail so the tile sits flush beside it).
+const PATCH_TILE: f32 = THUMB_SIZE;
+/// Render resolution of per-observation patch tiles (rendered crisp at this
+/// resolution, displayed scaled to `PATCH_TILE`).
+const PATCH_RES: u32 = 64;
+/// Display size of the stored-patch header tile.
+const STORED_PATCH_SIZE: f32 = 64.0;
 
 impl PointTrackDetail {
     pub fn new() -> Self {
@@ -83,6 +107,9 @@ impl PointTrackDetail {
             inverse_depth_z: f32::NAN,
             condition_number: f32::NAN,
             thumbnail_textures: HashMap::new(),
+            patch_frame: None,
+            stored_patch_texture: None,
+            rendered_patch_textures: HashMap::new(),
             hash_prefix: String::new(),
             scroll_offset_y: None,
         }
@@ -97,6 +124,7 @@ impl PointTrackDetail {
         selected_point: Option<usize>,
         hovered_image: Option<usize>,
         sift_cache: &HashMap<usize, CachedSiftFeatures>,
+        full_res_cache: &HashMap<usize, Option<ImageU8>>,
         gesture_events: &[GestureEvent],
         scroll_input: &platform::ScrollInput,
     ) -> PointTrackDetailResponse {
@@ -136,7 +164,7 @@ impl PointTrackDetail {
 
         // Prepare observation data if selected point changed
         if self.prepared_point != Some(point_idx) {
-            self.prepare_observations(recon, point_idx, sift_cache);
+            self.prepare_observations(ui.ctx(), recon, point_idx, sift_cache);
             self.prepared_point = Some(point_idx);
             self.scroll_offset_y = None;
             // Update hash prefix from reconstruction
@@ -153,6 +181,23 @@ impl PointTrackDetail {
         // --- Header: Point Summary ---
         self.show_header(ui, recon, point_idx, point);
 
+        // --- Stored-patch header tile (embedded-patches reconstructions) ---
+        if let Some(texture) = &self.stored_patch_texture {
+            ui.horizontal(|ui| {
+                ui.label("Stored patch:");
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(STORED_PATCH_SIZE, STORED_PATCH_SIZE),
+                    egui::Sense::hover(),
+                );
+                ui.painter().image(
+                    texture.id(),
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            });
+        }
+
         ui.separator();
 
         // --- Observation Table ---
@@ -160,6 +205,7 @@ impl PointTrackDetail {
             ui,
             recon,
             hovered_image,
+            full_res_cache,
             gesture_events,
             scroll_input,
             &mut response,
@@ -242,11 +288,13 @@ impl PointTrackDetail {
     }
 
     /// Draw the scrollable observation table.
+    #[allow(clippy::too_many_arguments)]
     fn show_observation_table(
         &mut self,
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
         hovered_image: Option<usize>,
+        full_res_cache: &HashMap<usize, Option<ImageU8>>,
         gesture_events: &[GestureEvent],
         scroll_input: &platform::ScrollInput,
         response: &mut PointTrackDetailResponse,
@@ -285,7 +333,17 @@ impl PointTrackDetail {
         }
 
         // Fixed column x-offsets so headers and row content always align.
-        let col_image = THUMB_SIZE + 8.0;
+        // When the selected point has a patch frame, a rendered-patch tile is
+        // drawn immediately right of the thumbnail and every text column
+        // shifts right by its width; otherwise the layout is unchanged.
+        let has_patch_column = self.patch_frame.is_some();
+        let col_patch = THUMB_SIZE + 8.0;
+        let patch_shift = if has_patch_column {
+            PATCH_TILE + 8.0
+        } else {
+            0.0
+        };
+        let col_image = THUMB_SIZE + 8.0 + patch_shift;
         let col_name = col_image + 50.0;
         let col_feat = col_name + 170.0;
         let col_size = col_feat + 55.0;
@@ -301,7 +359,11 @@ impl PointTrackDetail {
             let painter = ui.painter();
             let header_font = egui::TextStyle::Body.resolve(ui.style());
             let strong_color = ui.visuals().strong_text_color();
-            for (x_off, text) in [
+            let mut header_labels: Vec<(f32, &str)> = Vec::with_capacity(8);
+            if has_patch_column {
+                header_labels.push((col_patch, "Patch"));
+            }
+            header_labels.extend_from_slice(&[
                 (col_image, "Image"),
                 (col_name, "Name"),
                 (col_feat, "Feat #"),
@@ -309,7 +371,8 @@ impl PointTrackDetail {
                 (col_error, "Error"),
                 (col_angle, "Angle"),
                 (col_xy, "Feature (x, y)"),
-            ] {
+            ]);
+            for (x_off, text) in header_labels {
                 painter.text(
                     egui::pos2(x0 + x_off, header_y),
                     egui::Align2::LEFT_TOP,
@@ -386,6 +449,25 @@ impl PointTrackDetail {
                     obs_feature_xy,
                     obs_reproj_error,
                 );
+
+                // Rendered patch tile beside the thumbnail (embedded-patches
+                // reconstructions only; rendered lazily from the shared
+                // full-res image cache and cached per image index).
+                if has_patch_column {
+                    self.ensure_rendered_patch(ui.ctx(), recon, obs_image_index, full_res_cache);
+                    if let Some(texture) = self.rendered_patch_textures.get(&obs_image_index) {
+                        let patch_rect = egui::Rect::from_min_size(
+                            egui::pos2(x0 + col_patch, cy - PATCH_TILE / 2.0),
+                            egui::vec2(PATCH_TILE, PATCH_TILE),
+                        );
+                        ui.painter().image(
+                            texture.id(),
+                            patch_rect,
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+                    }
+                }
 
                 let painter = ui.painter();
                 let font = egui::TextStyle::Body.resolve(ui.style());
@@ -561,15 +643,74 @@ impl PointTrackDetail {
         self.thumbnail_textures.insert(idx, texture);
     }
 
+    /// Render the patch tile for one observation if not already cached: warp
+    /// the observation's full-res image through the selected point's patch
+    /// frame (`WarpMap::from_patch` + `remap_bilinear`). A patch not visible in
+    /// this view warps to an all-black tile and is drawn as such. A missing
+    /// source image is not cached (the dock pre-caches full-res images, so this
+    /// only happens transiently).
+    fn ensure_rendered_patch(
+        &mut self,
+        ctx: &egui::Context,
+        recon: &SfmrReconstruction,
+        img_idx: usize,
+        full_res_cache: &HashMap<usize, Option<ImageU8>>,
+    ) {
+        if self.rendered_patch_textures.contains_key(&img_idx) {
+            return;
+        }
+        let Some(frame) = self.patch_frame.as_ref() else {
+            return;
+        };
+        let Some(src) = full_res_cache.get(&img_idx).and_then(|o| o.as_ref()) else {
+            return;
+        };
+        let image = &recon.images[img_idx];
+        let camera = &recon.cameras[image.camera_index as usize];
+        let q = image.quaternion_wxyz.quaternion();
+        let cam_from_world = RigidTransform::from_wxyz_translation(
+            [q.w, q.i, q.j, q.k],
+            [
+                image.translation_xyz.x,
+                image.translation_xyz.y,
+                image.translation_xyz.z,
+            ],
+        );
+        let map = WarpMap::from_patch(frame, camera, &cam_from_world, PATCH_RES);
+        let tile = remap_bilinear(src, &map);
+        // Expand 3-channel RGB (same channel count as the cached source) to RGBA.
+        let (w, h) = (tile.width() as usize, tile.height() as usize);
+        let mut rgba = Vec::with_capacity(w * h * 4);
+        for px in tile.data().chunks_exact(3) {
+            rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+        }
+        let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+        let point_idx = self.prepared_point.unwrap_or(0);
+        let texture = ctx.load_texture(
+            format!("track_patch_{point_idx}_{img_idx}"),
+            color_image,
+            egui::TextureOptions::NEAREST,
+        );
+        self.rendered_patch_textures.insert(img_idx, texture);
+    }
+
     /// Prepare observation data for a newly selected point.
     fn prepare_observations(
         &mut self,
+        ctx: &egui::Context,
         recon: &SfmrReconstruction,
         point_idx: usize,
         sift_cache: &HashMap<usize, CachedSiftFeatures>,
     ) {
         self.observations.clear();
         self.thumbnail_textures.clear();
+
+        // Per-point patch state (embedded-patches reconstructions): the
+        // oriented patch frame gates the per-observation "Patch" column, the
+        // stored bitmap feeds the header tile. Rendered tiles rebuild lazily.
+        self.patch_frame = build_patch_frame(recon, point_idx);
+        self.stored_patch_texture = build_stored_patch_texture(ctx, recon, point_idx);
+        self.rendered_patch_textures.clear();
 
         let point_pos = recon.points[point_idx].position;
         // Keypoints come from one of two sources: SIFT feature positions read
@@ -676,9 +817,85 @@ impl PointTrackDetail {
         self.inverse_depth_z = f32::NAN;
         self.condition_number = f32::NAN;
         self.thumbnail_textures.clear();
+        self.patch_frame = None;
+        self.stored_patch_texture = None;
+        self.rendered_patch_textures.clear();
         self.hash_prefix.clear();
         self.scroll_offset_y = None;
     }
+}
+
+/// Build the selected point's oriented patch frame from the stored patch
+/// half-vectors, or `None` when the reconstruction carries no frame or the
+/// point's `u` half-vector is zero (no patch for this point). The stored
+/// arrays are half-*vectors* (`axis * half_extent`); split them into unit
+/// axis and half-extent like `PatchCloud::from_halfvec_arrays`. For a point
+/// at infinity the stored u/v are already the tangent frame — the same frame
+/// applies, just re-marked with `w = 0`.
+fn build_patch_frame(recon: &SfmrReconstruction, point_idx: usize) -> Option<OrientedPatch> {
+    let u_arr = recon.patch_u_halfvec_xyz.as_ref()?;
+    let v_arr = recon.patch_v_halfvec_xyz.as_ref()?;
+    if point_idx >= u_arr.nrows() || point_idx >= v_arr.nrows() {
+        return None;
+    }
+    let u = Vector3::new(
+        u_arr[[point_idx, 0]] as f64,
+        u_arr[[point_idx, 1]] as f64,
+        u_arr[[point_idx, 2]] as f64,
+    );
+    let hu = u.norm();
+    if hu <= 1e-12 {
+        return None;
+    }
+    let v = Vector3::new(
+        v_arr[[point_idx, 0]] as f64,
+        v_arr[[point_idx, 1]] as f64,
+        v_arr[[point_idx, 2]] as f64,
+    );
+    let hv = v.norm();
+    let u_axis = u / hu;
+    let v_axis = if hv > 1e-12 { v / hv } else { v };
+    let point = &recon.points[point_idx];
+    let mut patch = OrientedPatch::new(point.position, u_axis, v_axis, [hu, hv]);
+    if point.w == 0.0 {
+        patch.w = 0.0;
+    }
+    Some(patch)
+}
+
+/// Build the stored-patch header texture for the selected point from
+/// `patch_bitmaps_y_x_rgba`, or `None` when the array is absent or the
+/// point's bitmap is all-zero (no stored patch). Displays RGB only: the
+/// alpha channel (per-texel cross-view confidence) is forced opaque.
+fn build_stored_patch_texture(
+    ctx: &egui::Context,
+    recon: &SfmrReconstruction,
+    point_idx: usize,
+) -> Option<egui::TextureHandle> {
+    let bitmaps = recon.patch_bitmaps_y_x_rgba.as_ref()?;
+    if point_idx >= bitmaps.shape()[0] {
+        return None;
+    }
+    let bitmap = bitmaps.index_axis(Axis(0), point_idx);
+    let h = bitmap.shape()[0];
+    let w = bitmap.shape()[1];
+    let mut rgba: Vec<u8> = if let Some(slice) = bitmap.as_slice() {
+        slice.to_vec()
+    } else {
+        bitmap.iter().copied().collect()
+    };
+    if rgba.iter().all(|&b| b == 0) {
+        return None;
+    }
+    for px in rgba.chunks_exact_mut(4) {
+        px[3] = 255;
+    }
+    let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+    Some(ctx.load_texture(
+        format!("stored_patch_{point_idx}"),
+        image,
+        egui::TextureOptions::NEAREST,
+    ))
 }
 
 /// Map reprojection error (pixels) to a green→yellow→red color.
@@ -712,8 +929,6 @@ fn compute_observation_metrics(
     camera: &sfmtool_core::CameraIntrinsics,
     feature_xy: [f32; 2],
 ) -> (f32, f32) {
-    use nalgebra::Vector3;
-
     // Transform point from world to camera space: p_cam = R * p_world + t
     let r = image.quaternion_wxyz.to_rotation_matrix();
     let p_cam = r * point_pos.coords + image.translation_xyz;

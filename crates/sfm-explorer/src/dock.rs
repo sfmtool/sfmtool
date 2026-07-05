@@ -180,6 +180,16 @@ impl TabViewer for TabContext<'_> {
                             read_count,
                         )
                     });
+                    // Full-res CPU pixels come from the shared cache (also
+                    // used by the Point Track Detail patch tiles), so each
+                    // image is decoded from disk at most once.
+                    let full_res = self.state.selected_image.and_then(|idx| {
+                        crate::state::ensure_full_res_cached(
+                            &mut self.state.full_res_cache,
+                            recon,
+                            idx,
+                        )
+                    });
                     let detail_response = self.image_detail.show(
                         ui,
                         recon,
@@ -190,6 +200,7 @@ impl TabViewer for TabContext<'_> {
                         self.gesture_events,
                         self.scroll_input,
                         sift,
+                        full_res,
                         &self.state.feature_display,
                     );
                     if let Some(point_idx) = detail_response.select_point {
@@ -228,12 +239,31 @@ impl TabViewer for TabContext<'_> {
                             }
                         }
                     }
+                    // Pre-cache full-res images for every observing image of
+                    // the selected point so the panel can render per-observation
+                    // patch tiles from an immutable cache reference. Only
+                    // needed when the recon carries patch frames (the tiles
+                    // are gated on them).
+                    if recon.patch_u_halfvec_xyz.is_some() {
+                        if let Some(pt_idx) = self.state.selected_point {
+                            if pt_idx < recon.points.len() {
+                                for img_idx in recon.track_image_indices(pt_idx) {
+                                    crate::state::ensure_full_res_cached(
+                                        &mut self.state.full_res_cache,
+                                        recon,
+                                        img_idx,
+                                    );
+                                }
+                            }
+                        }
+                    }
                     let track_response = self.point_track_detail.show(
                         ui,
                         recon,
                         self.state.selected_point,
                         self.state.hovered_image,
                         &self.state.sift_cache,
+                        &self.state.full_res_cache,
                         self.gesture_events,
                         self.scroll_input,
                     );
