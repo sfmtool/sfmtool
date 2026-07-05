@@ -147,8 +147,13 @@ impl PatchCloud {
     /// One patch per finite 3D point: center = position, in-plane up from the
     /// first observing camera, normal and half-size per the given policies.
     /// Errors with `PatchCloudError::MissingFeatureScale` under
-    /// `PatchExtent::FeatureSize` when a point has no readable keypoint scale in
-    /// any view (no silent size fallback).
+    /// `PatchExtent::FeatureSize` when no observation of a point yields a usable
+    /// size — either its keypoint scale is unreadable in every view (missing/stale
+    /// `.sift`), or (finite points only) it coincides with every observing camera
+    /// centre so the distance-scaled world size `σ·d/f` vanishes at `d ≈ 0` (a
+    /// degenerate reconstruction where the frames' poses collapsed onto the
+    /// point). The error carries a per-cause observation breakdown. No silent size
+    /// fallback.
     ///
     /// When `exclude_points_at_infinity` is `false` (the binding default — every
     /// patch operation handles infinity patches), each point at infinity also gets
@@ -202,8 +207,9 @@ pub enum PatchExtent {
     /// camera-agnostic: a fisheye (FoV > 180°) sees points past 90° off axis at
     /// zero or negative depth, which a pinhole `σ·depth/f` could not size.
     /// On-axis `d = depth`, so it reduces to the pinhole form. Reads the
-    /// workspace `.sift` files. A point
-    /// with no readable scale in any view is an error
+    /// workspace `.sift` files. A point with no readable scale in any view — or a
+    /// finite point coincident with every observing camera centre, where `d ≈ 0`
+    /// makes `σ·d/f` vanish — is an error
     /// (`PatchCloudError::MissingFeatureScale`) — there is no silent size fallback.
     FeatureSize { factor: f64, across: ViewReduce },
 }
