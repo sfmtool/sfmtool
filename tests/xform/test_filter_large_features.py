@@ -160,6 +160,28 @@ def test_remove_large_features_description():
     assert "feature size" in desc.lower()
 
 
+def test_remove_large_features_embedded_patches(seoul_bull_workspace, tmp_path):
+    """On an embedded_patches recon (no external .sift feature-index column),
+    the filter scores each point from its projected patch frame instead."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    emb = recon.to_embedded_patches()
+    assert emb.feature_source == "embedded_patches"
+    assert emb.track_feature_indexes is None  # the sift_files path would crash
+
+    sizes = np.asarray(emb.max_embedded_feature_size_per_point())
+    assert sizes.shape == (emb.point_count,)
+    assert np.all(np.isfinite(sizes))
+    threshold = float(np.median(sizes[sizes > 0]))
+
+    filtered = RemoveLargeFeaturesFilter(threshold).apply(emb)
+    assert filtered.point_count < emb.point_count
+    assert filtered.image_count == emb.image_count
+
+    # Every surviving point is within threshold.
+    kept = np.asarray(filtered.max_embedded_feature_size_per_point())
+    assert np.all(kept <= threshold)
+
+
 def test_remove_large_features_combined_with_short_tracks(
     seoul_bull_workspace, tmp_path
 ):

@@ -302,6 +302,21 @@ impl PySfmrReconstruction {
             .transpose()
     }
 
+    /// Per-point maximum keypoint feature size in pixels ``(M,)``, derived from
+    /// each observation's projected patch frame (the same size the Track View
+    /// reports). ``None`` unless :attr:`feature_source` is ``"embedded_patches"``
+    /// — a ``sift_files`` reconstruction has no inline patch frames, so read the
+    /// per-image ``.sift`` affine shapes instead. A point with no patch, or whose
+    /// observations all project degenerately, reports ``0.0``.
+    fn max_embedded_feature_size_per_point<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> Option<Bound<'py, PyArray1<f32>>> {
+        self.inner
+            .max_embedded_feature_size_per_point()
+            .map(|v| PyArray1::from_vec(py, v))
+    }
+
     // ── Point data array getters ─────────────────────────────────────
 
     /// 3D point positions, shape `(M, 3)`.

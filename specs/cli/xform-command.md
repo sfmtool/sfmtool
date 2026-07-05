@@ -135,16 +135,24 @@ Removes 3D points whose maximum viewing angle span is less than the threshold.
 
 #### `--remove-large-features <size>`
 
-Removes 3D points whose largest SIFT feature in the track exceeds `size` pixels.
-"Feature size" is the average of the two column norms of the SIFT affine-shape matrix
-(an approximate per-feature radius in source-image pixels, with no rescale to the
-reconstructed-image resolution), and the per-track value is the maximum across its
+Removes 3D points whose largest feature in the track exceeds `size` pixels.
+"Feature size" is the average of the two column norms of the feature's affine-shape
+matrix (an approximate per-feature radius in source-image pixels, with no rescale to
+the reconstructed-image resolution), and the per-track value is the maximum across its
 observations.
 
-This filter reads the original `.sift` files associated with the reconstruction's
-workspace (resolved as `<workspace_dir>/<image_parent>/<feature_prefix_dir>/<name>.sift`),
-so the SIFT artifacts must still be present where the reconstruction was created.
-A missing file raises `FileNotFoundError`.
+The feature source determines where the affine shape comes from:
+
+- **`sift_files`** — reads the original `.sift` files associated with the
+  reconstruction's workspace (resolved as
+  `<workspace_dir>/<image_parent>/<feature_prefix_dir>/<name>.sift`), so the SIFT
+  artifacts must still be present where the reconstruction was created. A missing
+  file raises `FileNotFoundError`.
+- **`embedded_patches`** — has no external `.sift` companion (and no per-observation
+  feature-index column), so each observation's shape is derived by projecting the
+  point's stored patch frame into the observing camera
+  (`observation_affine_shape` / `max_embedded_feature_size_per_point`) — the same
+  size measure the Track View reports. No workspace `.sift` files are needed.
 
 ```bash
 --remove-large-features 50

@@ -400,6 +400,39 @@ impl SfmrReconstruction {
         ])
     }
 
+    /// Per-point maximum keypoint feature size (px) for an `embedded_patches`
+    /// reconstruction, derived from each observation's projected patch frame.
+    ///
+    /// For every observation the point's patch frame is projected into the
+    /// observing camera (`observation_affine_shape`) and its size taken as the
+    /// mean of the two projected half-axis column norms — the same size measure
+    /// the Track View reports and that `.sift` affine shapes yield for a
+    /// `sift_files` reconstruction. The per-point value is the maximum over its
+    /// observations. Returns `None` for a `sift_files` source (no inline
+    /// keypoints); a point with no patch, or whose every observation projects
+    /// degenerately, gets `0.0`.
+    pub fn max_embedded_feature_size_per_point(&self) -> Option<Vec<f32>> {
+        let keypoints_xy = self.keypoints_xy()?;
+        let mut out = vec![0.0f32; self.point_count()];
+        for (point_idx, slot) in out.iter_mut().enumerate() {
+            let start = self.observation_offsets[point_idx];
+            let mut max_size = 0.0f32;
+            for (k, obs) in self.observations_for_point(point_idx).iter().enumerate() {
+                let obs_global = start + k;
+                let xy = [keypoints_xy[[obs_global, 0]], keypoints_xy[[obs_global, 1]]];
+                if let Some(a) =
+                    self.observation_affine_shape(point_idx, obs.image_index as usize, xy)
+                {
+                    let col0 = (a[0][0] * a[0][0] + a[1][0] * a[1][0]).sqrt();
+                    let col1 = (a[0][1] * a[0][1] + a[1][1] * a[1][1]).sqrt();
+                    max_size = max_size.max(0.5 * (col0 + col1));
+                }
+            }
+            *slot = max_size;
+        }
+        Some(out)
+    }
+
     /// Per-image feature-tool hashes, or `None` for `embedded_patches`.
     pub fn feature_tool_hashes(&self) -> Option<&[[u8; 16]]> {
         match &self.observations {
