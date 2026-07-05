@@ -34,6 +34,7 @@ pub mod prof;
 mod search;
 mod support;
 mod view_stack;
+mod view_subset;
 mod znorm;
 
 // Public API.
@@ -144,7 +145,7 @@ fn refine_patch_normal_impl(
     // Seeds: the patch's current normal, plus the mean-viewing normal of the
     // supplied views when it differs.
     let mut seeds = vec![init_n];
-    let centers: Vec<Point3<f64>> = views
+    let mut centers: Vec<Point3<f64>> = views
         .iter()
         .map(|v| v.cam_from_world.inverse_translation_origin())
         .collect();
@@ -152,7 +153,7 @@ fn refine_patch_normal_impl(
     // obliquity priors (A) and the fronto-parallel prior (B). A degenerate zero
     // vector (camera at the point) falls back to the init normal, so its cosine is
     // ~1 (no penalty) — a pathological case that shouldn't arise for a real point.
-    let view_dirs: Vec<Vector3<f64>> = centers
+    let mut view_dirs: Vec<Vector3<f64>> = centers
         .iter()
         .map(|c| {
             let d = c - patch.center;
@@ -164,6 +165,44 @@ fn refine_patch_normal_impl(
             }
         })
         .collect();
+
+    // Optional D-optimal restriction of the refinement basis to the K most
+    // normal-informative views (see `specs/core/patch-normal-refine-view-subset.md`).
+    // Off by default (`max_refine_views == 0` — byte-for-byte the uncapped path);
+    // the cap is floored at `min_views` so it can never strand a patch below the
+    // refine floor, and a point at infinity already returned above. The selected
+    // indices rebind the per-view locals to gathered subset copies, so everything
+    // downstream (seeds, coarse-to-fine, final scoring) runs on the subset
+    // unchanged; the returned patch is still a repose of the full input patch, so
+    // the refined normal applies to the whole surfel.
+    let subset_views: Vec<ProjectedImage<'_>>;
+    let subset_kps: Vec<Option<[f64; 2]>>;
+    let mut views = views;
+    let mut view_keypoints = view_keypoints;
+    let cap = params.max_refine_views.max(params.min_views);
+    if params.max_refine_views > 0 && views.len() > cap as usize {
+        let sel = view_subset::select_refine_subset(patch, &view_dirs, cap);
+        prof::count(
+            if sel.len() < views.len() {
+                &prof::N_SUBSET
+            } else {
+                &prof::N_SUBSET_FALLBACK
+            },
+            1,
+        );
+        if sel.len() < views.len() {
+            subset_views = sel.iter().map(|&i| views[i]).collect();
+            views = &subset_views;
+            if let Some(kps) = view_keypoints {
+                subset_kps = sel.iter().map(|&i| kps[i]).collect();
+                view_keypoints = Some(&subset_kps);
+            }
+            let sub_centers = sel.iter().map(|&i| centers[i]).collect();
+            let sub_dirs = sel.iter().map(|&i| view_dirs[i]).collect();
+            centers = sub_centers;
+            view_dirs = sub_dirs;
+        }
+    }
     let mean_view = mean_viewing_normal(&patch.center, &centers);
     if mean_view.dot(&init_n) < (0.5f64).to_radians().cos() {
         seeds.push(mean_view);

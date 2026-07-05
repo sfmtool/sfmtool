@@ -160,6 +160,20 @@ pub struct NormalRefineParams {
     /// computed only when a caller wants to persist the patch bitmaps. When
     /// `false`, [`NormalRefineResult::representative`] is `None`.
     pub render_bitmap: bool,
+    /// Cap on the per-patch **refinement basis**: when `> 0` and a patch has
+    /// more views than this, refine over only the `K` most normal-informative
+    /// views, picked by the D-optimal subset selection of
+    /// [`view_subset`](super::view_subset) (a low-foreshortening anchor plus a
+    /// greedy `det(M + wᵢwᵢᵀ)` fill; see
+    /// `specs/core/patch-normal-refine-view-subset.md`). The normal is 2-DOF, so
+    /// a few azimuthally-spread oblique views already determine it — the cap cuts
+    /// the per-candidate render cost roughly linearly in the views dropped. `0`
+    /// (default) disables the cap (use all views; byte-for-byte the uncapped
+    /// behavior). Internally floored at [`min_views`](Self::min_views) so a cap
+    /// below the refine floor can't strand a patch, and ignored per-patch when
+    /// the selected subset would lose too much observability of one tilt DOF
+    /// (the conditioning fallback).
+    pub max_refine_views: u32,
 }
 
 impl NormalRefineParams {
@@ -194,6 +208,7 @@ impl Default for NormalRefineParams {
             obliquity_weight_power: 0.0,
             fronto_prior_weight: 0.0,
             render_bitmap: false,
+            max_refine_views: 0,
         }
     }
 }

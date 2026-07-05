@@ -599,6 +599,7 @@ def embed_patches(
     max_obliquity_deg: float = 80.0,
     obliquity_weight_power: float = 2.0,
     fronto_prior_weight: float = 0.05,
+    max_refine_views: int = 0,
     localize_search_strategy: str = "plus_descent",
     progress: Any = None,
 ) -> SfmrReconstruction:
@@ -675,6 +676,15 @@ def embed_patches(
             (flat-``Φ``) normal toward facing the cameras instead of drifting to a
             photometrically-equivalent tilt, without overriding a normal that real
             parallax constrains.
+        max_refine_views: When ``> 0``, cap the **round-2+ normal-refinement
+            basis** at this many views per point — the D-optimal geometric pick of
+            the most normal-informative views (see
+            ``specs/core/patch-normal-refine-view-subset.md``). Applied only to the
+            fine-tuning rounds, whose view set is the ``select_views``-expanded one;
+            the round-1 (raw-track) refine is untouched. Lossless for the output:
+            only the refinement basis shrinks — every observation stays, and the
+            consensus bitmaps are still fused over the full view set. ``0``
+            (default) uses all views.
         progress: Optional callable (e.g. ``click.echo``) that receives a per-round
             summary line reporting the mean normal change (deg) and mean keypoint
             shift (px); when given, those metrics are computed each round.
@@ -811,6 +821,11 @@ def embed_patches(
     # consistent in the compacted dense indexing.
     work_recon, work_cloud, work_loc = recon, cloud, localizations
     hashes = embedded.image_file_hashes
+    if log and max_refine_views > 0 and rounds > 1:
+        log(
+            f"  rounds 2+: normal-refinement basis capped at the "
+            f"{max_refine_views} most-informative views per point (D-optimal)"
+        )
     for r in range(2, rounds + 1):
         # Intermediate recons carry no bitmaps — nothing reads them; the final
         # bitmaps are fused by the last round's sub-pixel pass below.
@@ -832,6 +847,10 @@ def embed_patches(
                 use_stored_keypoints=True,
                 obliquity_weight_power=obliquity_weight_power,
                 fronto_prior_weight=fronto_prior_weight,
+                # The round-2+ view set is the select_views-expanded one; the
+                # D-optimal cap (0 = off) trims the refinement basis only —
+                # membership (and the fused bitmaps) still span every view.
+                max_refine_views=max_refine_views,
                 progress=counter,
             )
         base_loc = _localizations_from_recon(emb_r)

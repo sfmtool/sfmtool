@@ -424,6 +424,17 @@ impl PyPatchCloud {
     ///         curves ``Φ`` the small prior is overruled. With it active the
     ///         reported ``photoconsistency`` can dip below ``init_photoconsistency``
     ///         by up to the prior gap (a more-frontal normal winning a near-tie).
+    ///     max_refine_views: Cap on the per-patch **refinement basis**: when
+    ///         ``> 0`` and a patch has more views than this, refine over only the
+    ///         ``K`` most normal-informative views — a D-optimal geometric pick
+    ///         (least-oblique appearance anchor plus a greedy information-matrix
+    ///         determinant fill; see
+    ///         ``specs/core/patch-normal-refine-view-subset.md``). ``0`` (default)
+    ///         disables the cap — byte-for-byte the uncapped behavior. The cap is
+    ///         floored at ``min_views`` internally, and ignored per-patch when the
+    ///         subset would under-constrain one tilt DOF (the conditioning
+    ///         fallback). Only the refinement basis shrinks — no observation is
+    ///         dropped from the reconstruction.
     ///     use_stored_keypoints: When ``True`` (the default), anchor each
     ///         view's patch at that observation's stored per-observation 2D
     ///         keypoint (the inline keypoint an ``embedded_patches`` recon
@@ -460,7 +471,7 @@ impl PyPatchCloud {
         window_sigma=0.6, min_valid_fraction=0.6, min_views=3, sampler="bilinear",
         cache="fronto", cache_supersample=2.0, compute_confidence=false,
         search_robust_iters=None, obliquity_weight_power=0.0, fronto_prior_weight=0.0,
-        point_indexes=None, view_indices=None,
+        max_refine_views=0, point_indexes=None, view_indices=None,
         use_stored_keypoints=true, render_bitmaps=false, progress=None
     ))]
     fn refine_normals<'py>(
@@ -485,6 +496,7 @@ impl PyPatchCloud {
         search_robust_iters: Option<u32>,
         obliquity_weight_power: f64,
         fronto_prior_weight: f64,
+        max_refine_views: u32,
         point_indexes: Option<Vec<u32>>,
         view_indices: Option<Vec<Vec<u32>>>,
         use_stored_keypoints: bool,
@@ -577,6 +589,7 @@ impl PyPatchCloud {
             obliquity_weight_power,
             fronto_prior_weight,
             render_bitmap: render_bitmaps,
+            max_refine_views,
         };
 
         // Build one pyramid + pose per reconstruction image; the ProjectedImages

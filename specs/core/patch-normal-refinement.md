@@ -37,6 +37,14 @@
 > bitmaps=true` and the strips diagnostics (`compare --strips` /
 > `inspect --strips`) still render through it._
 >
+> _Status (2026-07-05): the refinement basis can now be **capped per patch** at
+> the `K` most normal-informative views — a D-optimal geometric subset selection
+> (`NormalRefineParams::max_refine_views`, `0` = off; Python
+> `refine_normals(max_refine_views=…)`, CLI `sfm embed-patches
+> --refine-max-views`). See
+> [patch-normal-refine-view-subset.md](patch-normal-refine-view-subset.md) for
+> the design, algorithm, and validation harness._
+>
 > _Status (2026-06-13): performance characterized — see
 > `reports/2026-06-13-perf-patch-normal-refinement.md` (phase breakdown,
 > per-knob perf-vs-benefit, prioritized optimization list). The search defaults

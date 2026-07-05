@@ -265,6 +265,85 @@ def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
     assert captured["fronto_prior_weight"] == 0.05
 
 
+def test_embed_patches_refine_max_views_is_lossless(seoul_bull_workspace):
+    """`--refine-max-views` caps only the round-2+ normal-refinement *basis*
+    (see specs/core/patch-normal-refine-view-subset.md): every observation stays
+    in the output and the consensus bitmaps are still fused over the full view
+    set, so a capped run must produce the same output shape (point and
+    observation counts) as the all-views default — within a hair's tolerance:
+    the cap never drops an observation itself, but the slightly different
+    round-2 normal can flip a borderline grazing-drop / sub-pixel-cull decision
+    (observed: 1 observation in ~4800 on this fixture)."""
+    import cv2
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    ws = recon.workspace_dir
+    images = [
+        np.ascontiguousarray(
+            cv2.cvtColor(
+                cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
+            )
+        )
+        for name in recon.image_names
+    ]
+
+    baseline = ep.embed_patches(recon, images, resolution=12)
+    capped = ep.embed_patches(recon, images, resolution=12, max_refine_views=5)
+
+    assert capped.feature_source == "embedded_patches"
+    assert abs(capped.point_count - baseline.point_count) <= max(
+        1, baseline.point_count // 100
+    ), f"points: capped {capped.point_count} vs baseline {baseline.point_count}"
+    assert abs(capped.observation_count - baseline.observation_count) <= max(
+        1, baseline.observation_count // 100
+    ), (
+        f"observations: capped {capped.observation_count} "
+        f"vs baseline {baseline.observation_count}"
+    )
+
+
+def test_embed_patches_cli_refine_max_views_forwards(
+    monkeypatch, seoul_bull_workspace, tmp_path
+):
+    """`--refine-max-views` parses (IntRange >= 0) and reaches `embed_patches` as
+    the `max_refine_views` kwarg; the capped end-to-end run succeeds."""
+    captured: dict = {}
+    real = ep.embed_patches
+
+    def spy(recon, images, **kwargs):
+        captured["max_refine_views"] = kwargs.get("max_refine_views")
+        return real(recon, images, **{**kwargs, "resolution": 12})
+
+    monkeypatch.setattr(ep, "embed_patches", spy)
+
+    out = tmp_path / "out.sfmr"
+    args = [
+        "embed-patches",
+        str(seoul_bull_workspace),
+        str(out),
+        "--refine-max-views",
+        "5",
+    ]
+    with mock_patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert captured["max_refine_views"] == 5
+    assert out.exists()
+
+    # A negative cap is rejected up front by the IntRange.
+    args = [
+        "embed-patches",
+        str(seoul_bull_workspace),
+        str(tmp_path / "out2.sfmr"),
+        "--refine-max-views",
+        "-1",
+    ]
+    with mock_patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code != 0
+    assert "refine-max-views" in result.output.lower()
+
+
 def test_embed_patches_cli_rejects_bad_subpixel(seoul_bull_workspace, tmp_path):
     """`--subpixel` is a non-negative integer; a non-integer (or negative) value
     errors out before any work happens."""
