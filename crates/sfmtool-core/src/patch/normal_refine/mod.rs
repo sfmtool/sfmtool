@@ -186,7 +186,10 @@ fn refine_patch_normal_impl(
             if sel.len() < views.len() {
                 &prof::N_SUBSET
             } else {
-                &prof::N_SUBSET_FALLBACK
+                // Selection returned all views: no front-facing view to anchor
+                // on (there is no conditioning fallback — the greedy always
+                // returns the best K it can when an anchor exists).
+                &prof::N_SUBSET_NO_ANCHOR
             },
             1,
         );

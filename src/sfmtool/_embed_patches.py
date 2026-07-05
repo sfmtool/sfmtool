@@ -599,7 +599,7 @@ def embed_patches(
     max_obliquity_deg: float = 80.0,
     obliquity_weight_power: float = 2.0,
     fronto_prior_weight: float = 0.05,
-    max_refine_views: int = 0,
+    max_refine_views: int = 8,
     localize_search_strategy: str = "plus_descent",
     progress: Any = None,
 ) -> SfmrReconstruction:
@@ -683,8 +683,11 @@ def embed_patches(
             fine-tuning rounds, whose view set is the ``select_views``-expanded one;
             the round-1 (raw-track) refine is untouched. Lossless for the output:
             only the refinement basis shrinks — every observation stays, and the
-            consensus bitmaps are still fused over the full view set. ``0``
-            (default) uses all views.
+            consensus bitmaps are still fused over the full view set. ``0`` uses
+            all views (disables the cap); the default is ``8`` (cuts roughly a
+            third off end-to-end time on large view sets — the round-2+ refine
+            pass itself ~5x — at the cost of a different, not necessarily worse,
+            normal on high-view points).
         progress: Optional callable (e.g. ``click.echo``) that receives a per-round
             summary line reporting the mean normal change (deg) and mean keypoint
             shift (px); when given, those metrics are computed each round.

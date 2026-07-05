@@ -1,13 +1,25 @@
 # Patch-normal refinement — view-subset selection (D-optimal refinement basis)
 
-> Status: **implemented (2026-07-05)** —
+> Status: **implemented (2026-07-05), on by default at K=8** —
 > `crates/sfmtool-core/src/patch/normal_refine/view_subset.rs`
-> (`select_refine_subset`, `SUBSET_CONDITIONING_FLOOR`), wired into
-> `refine_patch_normal_impl` via `NormalRefineParams::max_refine_views` (default
-> `0` = off), exposed as `PatchCloud.refine_normals(max_refine_views=…)` and
-> `sfm embed-patches --refine-max-views`; validation harness in
-> `scripts/validate_refine_subset.py`. Design owner: profiling of `embed-patches`
-> on the 250-image Spain Soapmaker reconstruction (2026-07-04).
+> (`select_refine_subset`), wired into
+> `refine_patch_normal_impl` via `NormalRefineParams::max_refine_views` (the
+> low-level default stays `0` = off, so non-embed callers are unaffected),
+> exposed as `PatchCloud.refine_normals(max_refine_views=…)` and
+> `sfm embed-patches --refine-max-views` (**pipeline default `8`**); validation
+> harness in `scripts/validate_refine_subset.py`. Design owner: profiling of
+> `embed-patches` on the 250-image Spain Soapmaker reconstruction (2026-07-04).
+>
+> **Default K=8 (2026-07-05).** The Spain sweep (drop-fallback design) showed
+> R2 refine dropping 3.4–16.8× (K=10→3) and end-to-end ~29–37 %, with normal Δ
+> vs the all-views baseline growing as K shrinks (K=8 sits between the measured
+> K=5 median 6.4° / p95 36° and K=10 median 3.0° / p95 31°). The divergence is
+> **not** established as *error*: reprojection is blind to normals, and the
+> all-views normals are themselves not ground truth (visual inspection in SfM
+> Explorer shows the full-view consensus normals are not all accurate either).
+> K=8 is therefore adopted as a good speed/quality default **for further
+> exploration**, pending a proper normal-quality signal (`Φ_full` comparison or
+> visual) and the ZNCC-weighted selection follow-up.
 
 ## Motivation
 
@@ -80,17 +92,33 @@ centers `cᵢ` for the `m` views in the current set, and a cap `K`
    not-yet-selected view maximising `det(M + wᵢ wᵢᵀ)` until `|S| == K`. (Adding
    the view that most enlarges the information volume — naturally favours
    oblique views that are azimuthally complementary to those already chosen.)
-5. **Well-conditioning fallback (data-derived).** Let `λ_min(M_S)` be the
-   smaller eigenvalue of the selected set's `M`, and `λ_min(M_full)` the same
-   over **all** `m` views. Keep the subset only if
-   `λ_min(M_S) ≥ γ · λ_min(M_full)` (default `γ = 0.5`). Otherwise the subset
-   lost too much observability of one tilt DOF (e.g. a nearly-frontal-only
-   track) — return **all** views for that patch rather than a degenerate `K`.
+5. **No conditioning fallback — always keep the best `K`.** The greedy already
+   returns the best-conditioned `K` views available. If that subset still leaves
+   one tilt DOF loose (a degenerate single-azimuth-arc point), the **full** view
+   set is no better conditioned — conditioning is a property of the
+   view-direction *geometry*, not the count — so falling back to all views would
+   only add render cost without constraining the loose DOF. That DOF is resolved
+   by the fronto-parallel prior at refine time, exactly as for any low-parallax
+   point. So the selection returns the best `K` unconditionally (the only
+   all-views returns are the no-op cases in step 1, and the degenerate case where
+   no view is front-facing).
+
+   > **Design history.** v1 fell back to all views when
+   > `λ_min(M_S) < γ·λ_min(M_full)`. That was doubly wrong: (a) information is
+   > *additive across views* (`M = Σ wᵢwᵢᵀ`), so the ratio was ≈ `K/m` and fired
+   > for essentially every point with `m ≳ 2K` regardless of conditioning — 57 %
+   > of eligible points on the Spain sweep, leaving only 22 % actually capped and
+   > making `K=5` a net ~4 % *slower*; and (b) more fundamentally, falling back to
+   > all views does not improve conditioning on a genuinely degenerate point, so
+   > the fallback had no correct form — it was removed. Photometric **robustness**
+   > (the real reason a many-view consensus beats a 5-view one) is an orthogonal
+   > axis, deferred to the ZNCC-weighting follow-up below.
 
 The function returns the selected view **indices** (into the caller's `views`
-slice), or all indices when any no-op / fallback condition holds. It performs
-**no rendering** — pure geometry, O(`m·K`) per patch, run inside the existing
-per-patch rayon map, so its cost is negligible against the renders it saves.
+slice), or all indices for the step-1 no-op cases (and the no-front-facing-view
+degenerate case). It performs **no rendering** — pure geometry, O(`m·K`) per
+patch, run inside the existing per-patch rayon map, so its cost is negligible
+against the renders it saves.
 
 ### Parameters / constants
 
@@ -98,7 +126,6 @@ per-patch rayon map, so its cost is negligible against the renders it saves.
   **disabled** (use all views; byte-for-byte the current behavior). `K ≥ 1` caps
   the refinement basis at `K`. Guard `K` up to at least `min_views` internally
   so a cap below the refine floor can't strand a patch.
-- `SUBSET_CONDITIONING_FLOOR: f64 = 0.5` (the `γ` above) — a module constant.
 
 ## Where the subset restriction happens
 
@@ -135,28 +162,35 @@ inspect/compare strips, tests) are unaffected.
    - `refine_normals`: add kwarg `max_refine_views=0`; set
      `params.max_refine_views`. Document it in the method docstring.
 3. **Python** (`src/sfmtool/_embed_patches.py`)
-   - `embed_patches(...)`: add `max_refine_views: int = 0`; pass it to the
-     round-2..N `cloud_r.refine_normals(...)` call **only** (leave round 1 — the
-     raw-track pass — untouched). Add a one-line progress note when active.
+   - `embed_patches(...)`: `max_refine_views: int = 8` (the pipeline default);
+     passed to the round-2..N `cloud_r.refine_normals(...)` call **only** (leave
+     round 1 — the raw-track pass — untouched). One-line progress note when
+     active.
 4. **CLI** (`src/sfmtool/_commands/embed_patches.py`)
-   - Add `--refine-max-views` (int, default `0`, `IntRange(min=0)`), forwarded
-     to `embed_patches(max_refine_views=...)`. Document: `0` = use all views;
-     `N` caps the round-2+ normal-refinement basis at the `N` most
-     normal-informative views (D-optimal), leaving all observations in the
+   - `--refine-max-views` (int, default `8`, `IntRange(min=0)`), forwarded to
+     `embed_patches(max_refine_views=...)`. Document: `0` = use all views
+     (disables the cap); `N` caps the round-2+ normal-refinement basis at the `N`
+     most normal-informative views (D-optimal), leaving all observations in the
      output.
 5. **Specs**
    - Update `specs/cli/embed-patches-command.md` with the new flag.
    - Cross-link `specs/core/patch-normal-refinement.md` to this file.
 
-## Deferred (follow-up, not this task)
+## Follow-up — ZNCC-weighted selection (quality-critical, not optional)
 
 - **ZNCC-weighted selection.** Weight each view's information contribution
   `wᵢ wᵢᵀ` by its per-view ZNCC-to-consensus (SNR), so the D-optimal pick
-  discriminates among already-vetted views by photometric quality too. Blocked
-  on persisting `select_views`'s per-view `scores` (currently discarded in
-  `_embed_patches.py`) through the per-round compaction (point indices are
-  renumbered each round). Ties into the separate "persist select_views scores"
-  analysis work.
+  discriminates among already-vetted views by photometric quality too. This is
+  now understood to be **on the critical path for quality, not a nice-to-have**:
+  geometry-only D-optimal deliberately selects the *most oblique* views (highest
+  normal information), which are also the photometrically *noisiest* (most
+  foreshortening / aliasing / partial occlusion). That is the most likely driver
+  of the large per-point normal divergence seen when subsetting (Spain sweep:
+  normal Δ p95 ≫ median). Without ZNCC weighting, any geometric subset trades
+  robustness for observability. Blocked on persisting `select_views`'s per-view
+  `scores` (currently discarded in `_embed_patches.py`) through the per-round
+  compaction (point indices are renumbered each round). Ties into the separate
+  "persist select_views scores" analysis work.
 
 ## Validation harness (required — the risk is under-constraining)
 
