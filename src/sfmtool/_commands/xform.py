@@ -75,6 +75,23 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
     ),
 )
 @click.option(
+    "--localize-keypoints",
+    is_flag=False,
+    flag_value="",
+    multiple=True,
+    help=(
+        "Localize per-observation 2D keypoints by discrete cross-view search "
+        "(congealing). Structural, not in-place: views that don't co-register "
+        "are dropped, points falling below min_views are culled, and the track "
+        "structure is rebuilt from the survivors; stored patch bitmaps are "
+        "dropped (re-run --refine-keypoints bitmaps=true to regenerate). "
+        "Optional comma-separated key=value params (e.g. "
+        "'search=8,min_views=3'). Requires an embedded_patches reconstruction "
+        "(convert first with --to-embedded-patches); reads the workspace "
+        "source images, which must still be present where it was created."
+    ),
+)
+@click.option(
     "--to-embedded-patches",
     is_flag=False,
     flag_value="",
@@ -225,6 +242,7 @@ def xform(ctx, input_path, output_path, **kwargs):
       --bundle-adjust                     Apply bundle adjustment
       --refine-normals [PARAMS]           Refine per-point normals by photometric consensus (reads source images)
       --refine-keypoints [PARAMS]         Refine per-observation keypoints to sub-pixel (reads source images)
+      --localize-keypoints [PARAMS]       Cross-view keypoint search; drops non-registering views (reads source images)
 
     \b
     Representation:
@@ -276,6 +294,11 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
         # Refine keypoints to sub-pixel and refine normals in one pass
         sfm xform in.sfmr out.sfmr --refine-keypoints --refine-normals
+
+    \b
+        # Search keypoints into the photometric basin (drops non-registering
+        # views), then sharpen the survivors to sub-pixel
+        sfm xform in.sfmr out.sfmr --localize-keypoints --refine-keypoints
     """
     from .._sfmtool import SfmrReconstruction
 
@@ -334,7 +357,7 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--include-by-distribution, "
             "--find-points-at-infinity, --classify-points-at-infinity, "
             "--camera-model, --bundle-adjust, --refine-normals, --refine-keypoints, "
-            "--to-embedded-patches, "
+            "--localize-keypoints, --to-embedded-patches, "
             "--align-to, --align-to-input"
         )
 

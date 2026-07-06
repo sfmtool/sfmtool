@@ -26,6 +26,7 @@ See ``specs/cli/xform-refine-keypoints-command.md`` and
 import numpy as np
 
 from .._sfmtool import SfmrReconstruction
+from ._images import load_workspace_images
 
 _WINDOWS = ("gaussian_disk", "gaussian", "uniform")
 _SAMPLERS = ("bilinear", "anisotropic")
@@ -111,24 +112,8 @@ class RefineKeypointsTransform:
         self.max_offset_px = max_offset_px
         self.consensus_refresh = consensus_refresh
 
-    def _load_images(self, recon: SfmrReconstruction) -> list[np.ndarray]:
-        """Load every source image, parallel to the reconstruction's images.
-
-        Resolves ``workspace_dir / image_name`` exactly as the SIFT-reading
-        filters resolve their ``.sift`` paths. A missing image is a hard error.
-        ``refine_keypoints`` requires one full-resolution image per
-        reconstruction image (matching its camera resolution), so all are
-        loaded up front.
-        """
-        from sfmtool._workspace_image import read_workspace_image
-
-        return [
-            read_workspace_image(recon.workspace_dir, name)
-            for name in recon.image_names
-        ]
-
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
-        images = self._load_images(recon)
+        images = load_workspace_images(recon)
 
         # The reconstruction is embedded_patches (enforced by apply_transforms), so
         # the patch frame is already stored — read it back as the cloud rather than
