@@ -31,6 +31,7 @@ from . import (
     FindPointsAtInfinityTransform,
     IncludeGlobFilter,
     IncludeRangeFilter,
+    RefineKeypointsTransform,
     RefineNormalsTransform,
     RemoveIsolatedPointsFilter,
     RemoveLargeFeaturesFilter,
@@ -164,6 +165,75 @@ def parse_refine_normals_params(param: str) -> RefineNormalsTransform:
                 )
 
     return RefineNormalsTransform(**kwargs)
+
+
+# Each --refine-keypoints key maps to a caster for its value; the
+# RefineKeypointsTransform constructor owns range/enum validation. Keys mirror
+# the PatchCloud.refine_keypoints binding parameters. (Frame-sizing knobs live on
+# `--to-embedded-patches`, the step that builds the patch frame; refine-keypoints
+# reuses the stored frame and the stored per-observation seeds.)
+_REFINE_KEYPOINTS_KEYS: dict[str, Callable[[str], object]] = {
+    "bitmaps": _parse_bool,
+    "resolution": int,
+    "window": str,
+    "window_sigma": float,
+    "sampler": str,
+    "robust_iters": int,
+    "max_outer_sweeps": int,
+    "outer_convergence_px": float,
+    "max_gn_steps": int,
+    "convergence_px": float,
+    "max_offset_px": float,
+    "consensus_refresh": str,
+}
+
+
+def parse_refine_keypoints_params(param: str) -> RefineKeypointsTransform:
+    """Parse a ``--refine-keypoints`` comma-separated ``key=value`` string.
+
+    An empty string runs the binding defaults. Unknown keys, malformed tokens
+    (no ``=`` or an empty key), and unparseable values raise
+    ``click.UsageError``; range/enum validation is the transform constructor's
+    job (its ``ValueError`` is re-raised as ``UsageError`` by the caller).
+    """
+    kwargs: dict = {}
+    for token in param.split(","):
+        token = token.strip()
+        if not token:
+            # Tolerate empty segments (e.g. a trailing comma); a bare
+            # ``--refine-keypoints=`` likewise yields no overrides.
+            continue
+        if "=" not in token:
+            raise click.UsageError(
+                f"Invalid --refine-keypoints token '{token}': expected key=value"
+            )
+        key, value = token.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            raise click.UsageError(
+                f"Invalid --refine-keypoints token '{token}': empty key"
+            )
+        if key not in _REFINE_KEYPOINTS_KEYS:
+            raise click.UsageError(
+                f"Unknown --refine-keypoints key '{key}' "
+                f"(expected one of: {', '.join(sorted(_REFINE_KEYPOINTS_KEYS))})"
+            )
+        if key in kwargs:
+            raise click.UsageError(f"Duplicate --refine-keypoints key '{key}'")
+        caster = _REFINE_KEYPOINTS_KEYS[key]
+        if caster is str:
+            kwargs[key] = value
+        else:
+            try:
+                kwargs[key] = caster(value)
+            except ValueError:
+                raise click.UsageError(
+                    f"Invalid value for --refine-keypoints key '{key}': "
+                    f"'{value}' is not a valid {caster.__name__}"
+                )
+
+    return RefineKeypointsTransform(**kwargs)
 
 
 # Each --to-embedded-patches key maps to a caster; the transform constructor owns
@@ -348,6 +418,21 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
                 transforms.append(parse_refine_normals_params(param))
             except ValueError as e:
                 raise click.UsageError(f"Invalid --refine-normals parameter: {e}")
+
+        elif arg == "--refine-keypoints" or arg.startswith("--refine-keypoints="):
+            # Optional value, same tokenization as --refine-normals.
+            if arg.startswith("--refine-keypoints="):
+                param = arg[len("--refine-keypoints=") :]
+            elif i + 1 < len(args) and not args[i + 1].startswith("-"):
+                i += 1
+                param = args[i]
+            else:
+                param = ""
+
+            try:
+                transforms.append(parse_refine_keypoints_params(param))
+            except ValueError as e:
+                raise click.UsageError(f"Invalid --refine-keypoints parameter: {e}")
 
         elif arg == "--to-embedded-patches" or arg.startswith("--to-embedded-patches="):
             # Optional value, same tokenization as --refine-normals.

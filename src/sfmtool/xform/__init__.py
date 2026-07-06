@@ -26,6 +26,7 @@ from ._point_filters import (
     RemoveNarrowTracksFilter,
     RemoveShortTracksFilter,
 )
+from ._refine_keypoints import RefineKeypointsTransform
 from ._refine_normals import RefineNormalsTransform
 from ._rotate import RotateTransform
 from ._scale import ScaleTransform
@@ -56,6 +57,7 @@ __all__ = [
     "ExcludeGlobFilter",
     "SelectByDistributionFilter",
     "BundleAdjustTransform",
+    "RefineKeypointsTransform",
     "RefineNormalsTransform",
     "AlignToTransform",
     "AlignToInputTransform",
