@@ -1,5 +1,7 @@
 # GPU Compute Shaders for DIS Optical Flow
 
+**Status:** Implemented — `crates/sfmtool-core/src/features/optical_flow/gpu/`.
+
 This document describes the wgpu compute shader implementation of the DIS optical
 flow pipeline in `sfmtool-core`. The CPU implementation is documented in
 [optical-flow.md](optical-flow.md); this spec covers the GPU-specific architecture.

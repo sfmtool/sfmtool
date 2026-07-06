@@ -15,7 +15,7 @@ Prototype exploration and measurements: `reports/2026-06-15-patch-cache-status.m
 
 ## Problem
 
-Refinement (`coarse_to_fine` in `patch/normal_refine.rs`) scores each candidate
+Refinement (`coarse_to_fine` in `patch/normal_refine/search.rs`) scores each candidate
 normal by **re-rendering** the patch into every observing view —
 `WarpMap::from_patch(n') + remap_bilinear` off the source pyramid — and the
 per-candidate render is ~80% of CPU (`reports/2026-06-13-perf-patch-normal-refinement.md`).

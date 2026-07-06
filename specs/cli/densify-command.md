@@ -6,9 +6,9 @@ Densifies a 3D point cloud by finding new feature correspondences via sweep matc
 covisible image pairs. Optionally discovers additional pairs through frustum intersection
 analysis.
 
-NOTE: This command is experimental, you may find it creates many false matches, and the default
-settings are not well-tuned. I think it makes sense to somehow merge into the 'sfm xform' as
-a subcommand, where you can pipeline it with point filtering and bundle adjustment in a more generic way.
+NOTE: This command is experimental: it can create many false matches, and the default settings
+are not well tuned. A possible future direction is folding it into `sfm xform` so densification
+can be pipelined with point filtering and bundle adjustment.
 
 ## Command Syntax
 

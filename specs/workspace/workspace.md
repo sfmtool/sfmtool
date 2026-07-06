@@ -80,11 +80,20 @@ The `sfm ws init` command creates the directory (if needed) and writes `.sfm-wor
     "peak_threshold": 0.006666666666666667,
     "edge_threshold": 10.0,
     "upright": false,
-    "normalization": "L1_ROOT"
+    "normalization": "L1_ROOT",
+    "use_gpu": true
   },
   "feature_prefix_dir": "features/sift-colmap-d1245b460906df27ee4730273e0aba41"
 }
 ```
+
+The example shows the `colmap` option shape. Each tool defines its own
+`feature_options` keys: `opencv` uses the OpenCV SIFT parameter names
+(`nfeatures`, `nOctaveLayers`, `contrastThreshold`, `edgeThreshold`, `sigma`),
+and `sfmtool` uses the Rust SIFT's parameters (`octave_layers`,
+`contrast_threshold`, `edge_threshold`, `max_num_features`, descriptor and
+orientation settings, etc.). `use_gpu` (COLMAP only) is excluded from the
+feature-cache hash since it does not affect feature output.
 
 **Fields:**
 
@@ -382,6 +391,9 @@ parent directory up to the workspace root. When present, the file is the sole
 source of camera setup for those images, and `--camera-model` on the command
 line is rejected for the invocation. See
 [`camera-config.md`](camera-config.md) for the file format and semantics.
+
+Multi-sensor rigs are described by an optional `rig_config.json` at the
+workspace root; see [`rig-config.md`](rig-config.md).
 
 ## Design Principles
 

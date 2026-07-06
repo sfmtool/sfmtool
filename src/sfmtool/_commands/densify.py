@@ -144,7 +144,7 @@ def densify(
     geometric_size_ratio_max: float,
     geometric_angle_diff_max: float,
 ):
-    """Densify matches in a .sfmr file.
+    """Densify matches in a .sfmr file (experimental).
 
     By default, finds covisibility pairs (pairs already sharing 3D points) and
     sweep-matches them at higher features to find new correspondences.

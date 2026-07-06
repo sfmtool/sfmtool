@@ -45,10 +45,10 @@ $ cd workspace
 $ sfm ws init .
 Initialized workspace: .../workspace
 Configuration file: .../workspace/.sfm-workspace.json
-  feature_tool: colmap
-  estimate_affine_shape: False
-  domain_size_pooling: False
-  max_num_features: None
+  feature_tool: sfmtool
+  contrast_threshold: 0.0067
+  octave_layers: 3
+  max_num_features: 8192
 
 # Solve SfM for the specified images using the global GLOMAP solver
 $ sfm solve -g images/
@@ -87,7 +87,12 @@ output in SfM tool or using them as part of SfM would be interesting to explore.
 
 ## Installation
 
-Coming soon...
+```
+pip install sfmtool
+```
+
+See the [getting started tutorial](tutorials/getting-started.md) for a full
+walkthrough.
 
 ## About Me
 

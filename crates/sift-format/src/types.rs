@@ -61,6 +61,9 @@ pub struct FeatureToolMetadata {
     pub feature_options: serde_json::Value,
 }
 
+/// Newest `.sift` format version this build understands.
+pub const SIFT_FORMAT_VERSION: u32 = 1;
+
 /// Image and feature metadata from `metadata.json.zst`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiftMetadata {

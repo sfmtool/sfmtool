@@ -49,6 +49,13 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
   small, no design questions, and they're already diagnosed in the audit so
   the implementation effort is just typing.
 
+> _Status (2026-07-06): Done — flow's `--pairs-dir` was removed (spec points
+> at `sfm epipolar --pairs-dir`), epipolar's help/spec now agree on `_other`
+> and one-output-per-image, the solve `.matches`-branch check was refuted
+> (enforced inside `_setup_for_sfm_from_matches`), and the ws-init spec row
+> reads "COLMAP and sfmtool". See the annotations in
+> `reports/2026-06-23-spec-audit.md`._
+
 ### 2. Quick perf wins on `PatchCloud.refine_normals`
 
 - **Spec reference:** `reports/2026-06-13-perf-patch-normal-refinement.md`

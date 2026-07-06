@@ -35,8 +35,8 @@ Exactly one is required:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--range / -r` | string | | Range expression for file numbers (only with `--metrics`) |
-| `--near-percentile` | float | 5.0 | Near depth percentile (only with `--frustum`) |
-| `--far-percentile` | float | 95.0 | Far depth percentile (only with `--frustum`) |
+| `--near-percentile` | float (0–100) | 5.0 | Near depth percentile (only with `--frustum`; must be less than `--far-percentile`) |
+| `--far-percentile` | float (0–100) | 95.0 | Far depth percentile (only with `--frustum`) |
 | `--samples` | int (min 100) | 100 | Monte Carlo samples per frustum pair (only with `--frustum`) |
 
 ## Per-Image Quality Metrics (`--metrics`)

@@ -3,7 +3,7 @@
 **Status:** Builds on `specs/core/patch-cloud.md`
 (`OrientedPatch`, `WarpMap::from_patch`, `remap_*`).
 
-> _Status (2026-06-12): v1 implemented — `sfmtool-core/src/patch/normal_refine.rs`
+> _Status (2026-06-12): v1 implemented — `sfmtool-core/src/patch/normal_refine/`
 > (`ProjectedImage`, `Objective`, `PatchWindow`, `NormalRefineParams`,
 > `NormalRefineResult`, `refine_patch_normal`, `refine_patch_cloud_normals`,
 > `view_indices_from_reconstruction`) and the PyO3 binding

@@ -43,7 +43,8 @@ descriptors as append-only chunks rather than a single array, and redefines `con
 see [Incremental descriptor extraction](#incremental-descriptor-extraction-version-2).
 
 > **Implementation status.** The `sfmtool` codebase currently reads and writes **version 1
-> only** (`sift-format` always writes `metadata.version = 1`). The version 2 layout described
+> only** (`sift-format` always writes `metadata.version = 1`, and its reader rejects files
+> with a newer `metadata.version`). The version 2 layout described
 > below — chunked descriptors, `described_count`, the redefined `content_xxh128`, the
 > `feature_set_xxh128` / `descriptor_prefix_xxh128` / `component_xxh128` hashes, and the
 > `sfm sift --detect` / `--describe` flow — is a **draft design that is not yet implemented**.
@@ -553,7 +554,7 @@ $ jq . content_hash.json
 
 ## Version History
 
-- **Version 1.0rc1**: Release candidate.
+- **Version 1**: Current format (written as integer `1` in `metadata.version`).
 - **Version 2 (draft)**: Incremental chunked descriptors. The single `descriptors` array is
   replaced by append-only `features/descriptors.{start}-{end}.128.uint8` range chunks
   covering the prefix `[0, described_count)` (relies on the existing descending-size feature

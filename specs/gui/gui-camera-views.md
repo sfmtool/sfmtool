@@ -1548,11 +1548,11 @@ need the same spherical far-surface fix. The work is:
 9. ✓ BG mesh projected through `view_proj` matrix (prepared for free-look)
 10. ✓ Higher subdivision count for fisheye background mesh (N=65 vs N=33)
 
-### Step 9: Persistent camera view with free-look navigation
+### Step 9: Persistent camera view with free-look navigation — DONE
 
-Camera view mode currently exits on any navigation input. This step makes the
-background image persist during orientation-only navigation, enabling the user
-to free-look around a fisheye image with a narrower viewport FOV.
+Before this step, camera view mode exited on any navigation input. This step
+makes the background image persist during orientation-only navigation, enabling
+the user to free-look around a fisheye image with a narrower viewport FOV.
 
 #### Background: unit-sphere BG mesh (prerequisite, done)
 
@@ -1616,10 +1616,10 @@ When entering camera view, the FOV behavior depends on the camera model:
 
 #### FOV handling while in camera view
 
-Stop overriding `camera.fov` every frame. Currently `best_fit_fov()` is
-recomputed per-frame to handle window resizes. With persistent camera view,
+`camera.fov` is no longer overridden every frame. Previously `best_fit_fov()`
+was recomputed per-frame to handle window resizes; with persistent camera view
 the user may have changed the FOV via the slider or zoom, so the per-frame
-override must stop.
+override had to go.
 
 For the initial enter from non-camera-view, the FOV is set once (perspective
 cameras only, as described above). After that, the FOV is under user control.
@@ -1700,22 +1700,22 @@ function used only at initial entry.
 
 #### Implementation tasks
 
-1. Store `r_world_from_cam` in `CameraViewMode`; remove `vfov_cam`/`hfov_cam`
-2. On enter from non-camera-view: set pose, set FOV (perspective only),
+1. ✓ Store `r_world_from_cam` in `CameraViewMode`; removed `vfov_cam`/`hfov_cam`
+2. ✓ On enter from non-camera-view: set pose, set FOV (perspective only),
    set `world_up`, load BG image
-3. On camera-to-camera transition: compute relative orientation, apply to new
+3. ✓ On camera-to-camera transition: compute relative orientation, apply to new
    camera, keep FOV, transform `world_up`, load BG image
-4. Stop per-frame FOV override (remove the `best_fit_fov` call in
+4. ✓ Stopped per-frame FOV override (removed the `best_fit_fov` call in
    `handle_3d_panel`)
-5. Per-action camera view exit: replace blanket `self.camera_view = None`
+5. ✓ Per-action camera view exit: blanket `self.camera_view = None` replaced
    with per-action checks (only exit for center-moving operations)
-6. Update `update_bg_image_uniforms` to use standard `projection * view`
+6. ✓ `update_bg_image_uniforms` uses standard `projection * view`
    (BG mesh vertices are pre-rotated to world space during generation)
-7. Test: enter camera view, free-look with unmodified drag, verify BG image rotates; Alt-drag should orbit and exit camera view
-   correctly and 3D points remain aligned at the optical axis
-8. Test: navigate between cameras with `,`/`.`, verify stable relative view
-9. Test: FOV slider in camera view, verify BG image scales correctly
-10. Test: Q/E tilt in camera view, verify BG and horizon rotate together
+7. ✓ Tested: free-look with unmodified drag rotates the BG image; Alt-drag
+   orbits and exits camera view with 3D points aligned at the optical axis
+8. ✓ Tested: navigating between cameras with `,`/`.` keeps a stable relative view
+9. ✓ Tested: FOV slider in camera view scales the BG image correctly
+10. ✓ Tested: Q/E tilt in camera view rotates BG and horizon together
 
 ### Future Enhancements
 

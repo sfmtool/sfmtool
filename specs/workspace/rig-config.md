@@ -18,6 +18,10 @@ independent free-floating camera. With it, sfmtool can:
 
 A single file may declare multiple independent rigs.
 
+The file lives at the workspace root: commands read only
+`{workspace_dir}/rig_config.json`. Unlike `camera_config.json`, there is no
+closest-ancestor search in subdirectories.
+
 `rig_config.json` **is** COLMAP's
 [`rig_configurator` rig config](https://colmap.github.io/rigs.html) file —
 sfmtool reads and writes exactly that format, with no sfmtool-specific

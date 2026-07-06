@@ -617,6 +617,13 @@ previous extraction sweep didn't reach (`geometry/`, `analysis/alignment/`).
   groupings landed.
 - Proposed fix: three small spec edits to retarget the paths.
 - Effort: low · Risk: low — doc-only.
+> _Status (2026-07-06): Done — the 2026-06-23 sweep fixed the Status lines;
+> this pass fixed the stragglers: `image-warping.md`'s Module Organization
+> tree now roots at `camera/`, and `fronto-parallel-patch-cache.md:18` now
+> cites `patch/normal_refine/search.rs` (where `coarse_to_fine` lives after
+> the 2026-06-30 split). `photometric-subsets-ransac.md`'s citation
+> (`spherical/photometric_ransac.rs`) is correct as-is — the file still
+> exists alongside its module directory._
 
 ### 14. `specs/formats/sfmr-v4-patch-keypoints.md` is a partially-implemented Draft mismarked as draft
 

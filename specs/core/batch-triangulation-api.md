@@ -35,10 +35,11 @@ job:
   *more* likely to be called finite. (Measured: a 27-view distant track scored
   2.27 px; a direction-only model reprojected it at 0.61 px RMS, and adding a
   finite depth improved RMS by only 0.025 px — the depth explains nothing.)
-- The midpoint solve in `classify_track` (`analysis/infinity/discover.rs:313-352`) already
-  builds the normal matrix `A = Σ(I − dᵢdᵢᵀ)` and computes `det(A)`, but only
-  uses `det` against an ultra-loose gate (`det < 1e-9·‖A‖³`,
-  `analysis/infinity/discover.rs:330`) that fires only for *exactly* singular `A`. The
+- The midpoint solve in `classify_track` (then inline in
+  `analysis/infinity/discover.rs`) already
+  built the normal matrix `A = Σ(I − dᵢdᵢᵀ)` and computed `det(A)`, but only
+  used `det` against an ultra-loose gate (`det < 1e-9·‖A‖³`)
+  that fires only for *exactly* singular `A`. The
   eigenvalues of `A` — a 1000× separation between genuine and degenerate tracks
   (population medians: condition number 82 vs 89,599; relative depth uncertainty
   1.6% vs 33%) — are discarded.
@@ -55,9 +56,9 @@ none batched, none exposed to Python:
 
 | Site | Method | Returns | Diagnostics | Used by |
 |---|---|---|---|---|
-| `geometric_filter.rs:252` `triangulate_point_dlt` | 2-view DLT (SVD) | `Option<[f64;3]>` (drops `w≈0`) | none | two-view in-front-of-camera check during matching (`:375`) |
-| `analysis/infinity/discover.rs:275` `classify_track` (inline) | N-view midpoint | `(Point3, w)` | builds `A`, `det` (gated loosely, then discarded) | `find_points_at_infinity` |
-| GUI: `point_track_detail.rs:698`, `image_detail.rs:1022` | **no solve** — max pairwise angle to the *stored* point | `f32` degrees | — | "Max Track Angle" overlay (`state.rs:31`), point/feature detail |
+| `features/feature_match/geometric_filter.rs` `triangulate_point_dlt` | 2-view DLT (SVD) | `Option<[f64;3]>` (drops `w≈0`) | none | two-view in-front-of-camera check during matching |
+| `analysis/infinity/discover.rs` `classify_track` (inline) | N-view midpoint | `(Point3, w)` | builds `A`, `det` (gated loosely, then discarded) | `find_points_at_infinity` |
+| GUI: `point_track_detail.rs`, `image_detail/` | **no solve** — max pairwise angle to the *stored* point | `f32` degrees | — | "Max Track Angle" overlay (`state.rs`), point/feature detail |
 
 The GUI never triangulates; it reuses the same `max_viewing_angle` statistic (a
 third copy of it) and presents it as "High = well-triangulated, low =
@@ -71,8 +72,8 @@ depth is in fact unconstrained. The proposed condition-number / inverse-depth
 diagnostic agrees with the angle on finite points and additionally gets that
 regime right, so it belongs alongside the angle overlay as a complementary view
 rather than a replacement for it.
-`classify_points_at_infinity` (`analysis/infinity/convert.rs:50`) is a fourth consumer of
-`max_viewing_angle` (`analysis/infinity/convert.rs:78`).
+`classify_points_at_infinity` (`analysis/infinity/convert.rs`) was a fourth
+consumer of `max_viewing_angle`.
 
 ## Target Rust API
 
@@ -370,6 +371,6 @@ pre-filter. It simply stops being the *classification* signal.
 | pixel → world ray (all models, fisheye) | `CameraIntrinsics::pixel_to_ray[_batch]` |
 | camera center | `SfmrImage::camera_center` (`= −Rᵀt`) |
 | max pairwise angle (pre-filter only) | `geometry/viewing_angle.rs::max_viewing_angle` |
-| existing 2-view algebraic triangulation | `geometric_filter.rs::triangulate_point_dlt` |
+| existing 2-view algebraic triangulation | `features/feature_match/geometric_filter.rs::triangulate_point_dlt` |
 | bearing-mean fallback for `w = 0` | `analysis/infinity/convert.rs` (`normalise(Σ rᵢ)`) |
 | per-track observation slices (CSR) | `observation_offsets` / `observations_for_point` |

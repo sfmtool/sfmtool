@@ -6,6 +6,10 @@ The `sfm xform` command provides a unified interface for applying transformation
 filters to SfM reconstructions. Multiple operations can be chained in a single pass,
 applied sequentially in the order specified on the command line.
 
+Densification is a separate, experimental command today (`sfm densify`); folding it into
+`xform` so it can be pipelined with filtering and bundle adjustment is a possible future
+direction (see [densify-command.md](densify-command.md)).
+
 ## Command Syntax
 
 ```bash
@@ -86,7 +90,7 @@ an error is raised if the filter would keep zero images.
 --exclude-glob "*/fisheye_right/*"
 ```
 
-#### `--include-by-distribution <COUNT>`
+#### `--include-by-distribution <COUNT>[,verbose]`
 
 Keeps a small, strategically-chosen subset of `COUNT` views instead of decimating blindly. A single
 greedy loop drives the choice off the reconstructed point cloud: a farthest-point step always heads
@@ -98,8 +102,11 @@ Operates on the cloud as given — clean it first if needed (e.g. `--filter-by-r
 `--remove-isolated`) — and typically follow with `--remove-short-tracks 1` to drop stranded
 single-observation points.
 
+Append `,verbose` for a per-step trace of the selection loop.
+
 ```bash
 --include-by-distribution 16
+--include-by-distribution 16,verbose
 --filter-by-reprojection-error 2.0 --include-by-distribution 16 --remove-short-tracks 1
 ```
 

@@ -281,6 +281,34 @@ mod tests {
     }
 
     #[test]
+    fn test_read_rejects_future_version() {
+        let mut data = make_test_data();
+        data.metadata.version = SIFT_FORMAT_VERSION + 1;
+
+        let dir = std::env::temp_dir().join("sift_test_future_version");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.sift");
+
+        write_sift(&path, &data, 3).unwrap();
+
+        for result in [
+            read_sift(&path).err(),
+            read_sift_partial(&path, 2).err(),
+            read_sift_positions(&path, 2).err(),
+            read_sift_metadata(&path).err(),
+        ] {
+            let err = result.expect("future-version file must be rejected");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("unsupported .sift format version"),
+                "unexpected error: {msg}"
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn test_read_nonexistent_file() {
         let result = read_sift(std::path::Path::new("nonexistent.sift"));
         match result {
