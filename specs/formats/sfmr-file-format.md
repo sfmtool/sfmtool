@@ -211,7 +211,7 @@ JSON structure describing the reconstruction:
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "feature_source": "sift_files",
   "operation": "sfm_solve",
   "tool": "colmap",
@@ -417,8 +417,14 @@ Array of camera intrinsic parameters:
 | `RADIAL_FISHEYE` | `focal_length`, `principal_point_x`, `principal_point_y`, `radial_distortion_k1`, `radial_distortion_k2` | f, cx, cy, k1, k2 |
 | `THIN_PRISM_FISHEYE` | `focal_length_x`, `focal_length_y`, `principal_point_x`, `principal_point_y`, `radial_distortion_k1`, `radial_distortion_k2`, `tangential_distortion_p1`, `tangential_distortion_p2`, `radial_distortion_k3`, `radial_distortion_k4`, `thin_prism_sx1`, `thin_prism_sy1` | fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, sx1, sy1 |
 | `RAD_TAN_THIN_PRISM_FISHEYE` | `focal_length_x`, `focal_length_y`, `principal_point_x`, `principal_point_y`, `radial_distortion_k0`, `radial_distortion_k1`, `radial_distortion_k2`, `radial_distortion_k3`, `radial_distortion_k4`, `radial_distortion_k5`, `tangential_distortion_p0`, `tangential_distortion_p1`, `thin_prism_s0`, `thin_prism_s1`, `thin_prism_s2`, `thin_prism_s3` | fx, fy, cx, cy, k0, k1, k2, k3, k4, k5, p0, p1, s0, s1, s2, s3 |
+| `EQUIRECTANGULAR` | `focal_length_x`, `focal_length_y`, `principal_point_x`, `principal_point_y` | — (sfmtool extension) |
 
 The "pycolmap" column shows the corresponding short parameter names from COLMAP/pycolmap for reference. The parameter order in the JSON `parameters` object matches the pycolmap parameter array order. Models with a single `focal_length` use the same value for both fx and fy. All fisheye models use equidistant projection.
+
+`EQUIRECTANGULAR` is an sfmtool extension (not a COLMAP model) for panoramic
+imagery, used by the spherical-tile rig pipeline: longitude and latitude map
+linearly to pixels, focal lengths are in pixels per radian, and there are no
+distortion parameters.
 
 ### 4. Rigs (Optional)
 
@@ -1013,6 +1019,11 @@ The inline 2D keypoint for each observation in an `embedded_patches` file:
   [Observation source](#observation-source-version-4).
 - **Presence**: present only in `embedded_patches` files
   (`has_keypoints_xy = true`).
+
+Mode exclusivity is enforced on write: the writer rejects data carrying both
+`feature_indexes` and `keypoints_xy` (or neither). The reader is lenient — it
+reads only the column selected by `feature_source` and ignores a stray
+opposite-mode entry, which is also excluded from `tracks_xxh128` verification.
 
 #### `tracks/point_indexes.{M}.uint32.zst`
 

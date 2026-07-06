@@ -44,7 +44,7 @@ from ..sift.file import (
     "--filter-sfm",
     "filter_sfm_path",
     type=click.Path(exists=True),
-    help="Only draw features used in this .sfm reconstruction file (only with --draw).",
+    help="Only draw features used in this .sfmr reconstruction file (only with --draw).",
 )
 @click.option(
     "--range",
@@ -69,7 +69,8 @@ from ..sift.file import (
     "--dsp/--no-dsp",
     "domain_size_pooling",
     default=None,
-    help="Enable/disable domain size pooling (COLMAP only, default: disabled for better performance)",
+    help="Enable/disable domain size pooling (requires --tool colmap; default: disabled). "
+    "In workspace mode, DSP comes from the workspace configuration.",
 )
 def sift(
     paths,

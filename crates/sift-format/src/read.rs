@@ -21,6 +21,19 @@ fn open_file(path: &Path) -> Result<std::fs::File, SiftError> {
     })
 }
 
+/// Reject versions newer than this build understands; their layout is unknown
+/// so reading with current-version assumptions would misparse silently.
+fn check_version(metadata: &SiftMetadata) -> Result<(), SiftError> {
+    if metadata.version > SIFT_FORMAT_VERSION {
+        return Err(SiftError::InvalidFormat(format!(
+            "unsupported .sift format version {} (this build supports up to \
+             {SIFT_FORMAT_VERSION})",
+            metadata.version
+        )));
+    }
+    Ok(())
+}
+
 /// Read a complete `.sift` file into columnar data.
 pub fn read_sift(path: &Path) -> Result<SiftData, SiftError> {
     let file = open_file(path)?;
@@ -47,6 +60,7 @@ pub fn read_sift_positions(path: &Path, count: usize) -> Result<Vec<[f32; 2]>, S
     let mut archive = ZipArchive::new(file)?;
 
     let metadata: SiftMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
+    check_version(&metadata)?;
     let total = metadata.feature_count as usize;
     let read_count = count.min(total);
 
@@ -74,6 +88,7 @@ pub fn read_sift_metadata(
     let feature_tool_metadata: FeatureToolMetadata =
         read_json_entry(&mut archive, "feature_tool_metadata.json.zst")?;
     let metadata: SiftMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
+    check_version(&metadata)?;
     let content_hash: SiftContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
 
     Ok((feature_tool_metadata, metadata, content_hash))
@@ -88,6 +103,7 @@ fn read_sift_from_archive<R: Read + Seek>(
     let feature_tool_metadata: FeatureToolMetadata =
         read_json_entry(archive, "feature_tool_metadata.json.zst")?;
     let metadata: SiftMetadata = read_json_entry(archive, "metadata.json.zst")?;
+    check_version(&metadata)?;
     let content_hash: SiftContentHash = read_json_entry(archive, "content_hash.json.zst")?;
 
     let total = metadata.feature_count as usize;

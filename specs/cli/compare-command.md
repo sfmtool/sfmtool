@@ -10,7 +10,11 @@ image poses, and feature usage.
 ```bash
 sfm compare <RECONSTRUCTION1> <RECONSTRUCTION2>
              [--by-coordinate | --by-feature-index] [--pixel-threshold PX]
+             [--strips PATH [--strips-* ...]]
 ```
+
+The `--strips*` family renders side-by-side patch-strip montages; see
+"Side-by-side patch strips" below.
 
 `RECONSTRUCTION1` is the reference; `RECONSTRUCTION2` is compared against it.
 

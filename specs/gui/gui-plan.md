@@ -57,7 +57,8 @@ The core 3D viewer is working with these features implemented:
   3D viewport
 - Single 3D point selection with track visualization, including the Point
   Track Detail panel (see [gui-point-track-detail.md](gui-point-track-detail.md))
-- Image detail feature overlay modes (None, Features, Reproj Error, Track Length, Max Track Angle)
+- Image detail feature overlay modes (None, Features, Reproj Error, Track
+  Length, Max Track Angle, Depth Reliability, Condition Number)
 - Feature filtering controls (max features, min/max size, tracked only)
 - Colorbar legend for heatmap overlay modes
 - Image animation & playback (Space/arrows/brackets, minibar transport,

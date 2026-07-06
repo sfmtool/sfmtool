@@ -540,7 +540,7 @@ HxWx3, or HxWx4, dtype `uint8`) and return a numpy array of the same shape.
 New files in `sfmtool-core`:
 
 ```
-crates/sfmtool-core/src/
+crates/sfmtool-core/src/camera/
 ├── warp_map.rs          # WarpMap struct, from_cameras(), Jacobian estimation
 ├── remap.rs             # remap_bilinear(), remap_aniso(), ImageU8, ImageU8Pyramid
 ```

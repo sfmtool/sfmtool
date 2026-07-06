@@ -87,11 +87,6 @@ def _from_sfmr(input_path, output_db_path, max_features, no_guided_matching):
     """Create COLMAP DB from a .sfmr reconstruction."""
     from .._sfmtool import SfmrReconstruction
     from ..colmap.db_export import create_colmap_db_from_reconstruction
-    from .._workspace import find_workspace_for_path, load_workspace_config
-
-    workspace_dir = find_workspace_for_path(input_path.parent)
-    if workspace_dir is not None:
-        load_workspace_config(workspace_dir)
 
     try:
         recon = SfmrReconstruction.load(input_path)

@@ -190,13 +190,13 @@ In this layout, every image under `nikon_z6/` resolves to the workspace-root
 Any command that creates camera entries from images consults
 `camera_config.json` during camera setup. This currently includes:
 
-- `sfm solve` (incremental and global)
+- `sfm solve` (incremental and global, from images or `.matches`)
 - `sfm match` (when computing two-view geometries)
-- `sfm to-colmap-db`
-- `sfm densify` (when adding cameras for newly-registered images)
+- `sfm to-colmap-db` (`.matches` input only; the `.sfmr` path uses the
+  reconstruction's embedded intrinsics)
 
 Commands that operate on existing `.sfmr` files (`sfm xform`, `sfm inspect`,
-`sfm align`, `sfm merge`, the GUI viewer) do **not** consult
+`sfm align`, `sfm merge`, `sfm densify`, the GUI viewer) do **not** consult
 `camera_config.json` — once a `.sfmr` exists, its embedded camera intrinsics are
 authoritative. To apply updated intrinsics to an existing reconstruction, use
 `sfm xform --camera-model` or re-solve.

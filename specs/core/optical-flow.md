@@ -1,5 +1,8 @@
 # Optical Flow
 
+**Status:** Implemented — `crates/sfmtool-core/src/features/optical_flow/`
+(CPU + GPU), Python bindings in `sfmtool-py`.
+
 A pure-Rust DIS (Dense Inverse Search) optical flow implementation in sfmtool-core,
 with Python bindings via sfmtool-py and GPU acceleration via wgpu compute shaders.
 
@@ -124,8 +127,10 @@ sfmtool-core/src/features/optical_flow/
 ├── interp.rs       # Bilinear interpolation, image warping, flow densification
 └── gpu/            # GPU compute shader implementation (wgpu)
     ├── mod.rs
+    ├── context.rs
     ├── dis_pipeline.rs
     ├── pyramid_pipeline.rs
+    ├── variational.rs
     └── shaders/
         ├── apply_flow_update.wgsl
         ├── blur_downsample.wgsl

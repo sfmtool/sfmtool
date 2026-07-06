@@ -73,6 +73,10 @@ def test_inspect_sfmr_verbose(seoul_bull_workspace):
     assert "Reconstruction summary:" in out
     assert "3D Point statistics:" in out
     assert "Nearest neighbor distances:" in out
+    # Regression: the feature tool lives at workspace.contents.feature_tool in
+    # the .sfmr metadata; inspect used to read workspace.feature_tool and
+    # always printed "unknown".
+    assert "Feature tool: sfmtool" in out
 
 
 def test_inspect_sfmr_verbose_with_points_at_infinity(

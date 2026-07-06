@@ -261,6 +261,12 @@ pixi run sfm xform input.sfmr output.sfmr \
   --scale-by-measurements measurements.yaml
 ```
 
+The option may be repeated. Each occurrence is an independent transform in the pipeline,
+applied in argument order: each computes its own median scale factor (from its own
+measurements file) against the already-transformed reconstruction. Measurements from
+separate files are not pooled into one combined median; to combine measurements, put them
+in a single file.
+
 The transform is applied at its position in the argument sequence, like `--scale`. Transforms
 that appear after it (e.g., `--align-to-input`) operate on the already-scaled reconstruction.
 

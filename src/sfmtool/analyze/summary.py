@@ -374,7 +374,8 @@ def print_reconstruction_summary(
     relative_path = workspace_info.get("relative_path", "unknown")
     click.echo(f"  Relative path: {relative_path}")
     click.echo(f"  Resolved workspace: {recon.workspace_dir}")
-    click.echo(f"  Feature tool: {workspace_info.get('feature_tool', 'unknown')}")
+    workspace_contents = workspace_info.get("contents", {})
+    click.echo(f"  Feature tool: {workspace_contents.get('feature_tool', 'unknown')}")
 
     # Counts
     click.echo("\nReconstruction summary:")

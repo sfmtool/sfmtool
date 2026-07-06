@@ -5,7 +5,7 @@
 (`parse_refine_normals_params`) and the `--refine-normals` Click option in
 `_commands/xform.py`. Surfaces the photometric patch-normal refinement
 (`specs/core/patch-normal-refinement.md`, v1 implemented in
-`sfmtool-core/src/patch/normal_refine.rs` + the `PatchCloud.refine_normals`
+`sfmtool-core/src/patch/normal_refine/` + the `PatchCloud.refine_normals`
 PyO3 binding) as an `sfm xform` operation that rewrites a reconstruction's
 per-point `normals` in place, and re-persists the refined patch cloud alongside
 them.

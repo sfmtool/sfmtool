@@ -48,30 +48,44 @@ The canonical relocations callers need to remember for the spec edits:
 **Implementing code:** `src/sfmtool/_commands/align.py` → `align.multi.align_command`.
 **Inconsistencies:** Basename-collision and inside-output-dir rejection promised at spec L46-53 not visible at the Click handler — presumably in `align/multi.py`.
 **Recommendation:** discuss — verify checks live in `align_command`.
+> _Status (2026-07-06): Verified — both checks exist in
+> `align/multi.py::align_command` (inputs-inside-output and basename
+> collision). Spec and code agree; no change needed._
 
 ### specs/cli/analyze-command.md
 **Summary:** Deep-analysis report on a `.sfmr` with six mutually exclusive modes (`--coviz`, `--z-range`, `--frustum`, `--images`, `--metrics`, `--depth-reliability`).
 **Implementing code:** `src/sfmtool/_commands/analyze.py::analyze()`.
 **Inconsistencies:** Spec doesn't note `FloatRange(0.0, 100.0)` constraint on `--near-percentile`/`--far-percentile` (code L67) nor the `near < far` precondition (L180-184).
 **Recommendation:** update spec.
+> _Status (2026-07-06): Done — options table now documents the 0–100 range
+> and the `near < far` rule._
 
 ### specs/cli/camrig-command.md
 **Summary:** `camrig` group with `create`, `cp`, `spherical-tiles`. Documents the arg-order swap: `<IMAGE_PATTERN> <OUTPUT_FILE>` on `create`.
 **Implementing code:** `_commands/camrig.py`.
 **Inconsistencies:** Arg-order swap correct. `cp`'s geometry-only fallback output line (camrig.py L264-268) not documented. Minor wording drift around "rig root" vs OUTPUT_FILE directory.
 **Recommendation:** update spec — polish wording, document the geometry-only fallback.
+> _Status (2026-07-06): Verified — the geometry-only fallback is documented
+> in the spec's cp "Image patterns" section (added since the audit). No
+> change needed._
 
 ### specs/cli/compare-command.md
 **Summary:** Compares two `.sfmr` reconstructions across alignment, intrinsics, poses, features, 3D points; rich `--strips*` family for patch-strip montages.
 **Implementing code:** `_commands/compare.py::compare()` → `_compare.compare_reconstructions`.
 **Inconsistencies:** Spec syntax block (L11-13) omits all `--strips*` options (section is broken out later but the syntax block undersells the surface).
 **Recommendation:** update spec — fold `--strips*` into the syntax block or add a "see below" pointer.
+> _Status (2026-07-06): Done — syntax block now includes `--strips` with a
+> pointer to the "Side-by-side patch strips" section._
 
 ### specs/cli/densify-command.md
 **Summary:** Densifies a `.sfmr` via sweep-matching covisible image pairs, triangulation, BA, filtering.
 **Implementing code:** `_commands/densify.py::densify()`.
 **Inconsistencies:** Spec marks command experimental but code emits no startup warning. Spec's "Process" step 6 ("Align result back to original frame") not visible at Click layer; presumably in `densify_reconstruction`.
 **Recommendation:** update code (surface the experimental warning) or spec (drop the claim). The "merge into xform" note is a design TODO, not a divergence today.
+> _Status (2026-07-06): Done — the command help now says "(experimental)",
+> the spec NOTE was tightened, and `xform-command.md` gained a reciprocal
+> densify note. The "align back to original frame" step is implemented
+> (`_densify.py::_align_to_original`) — that part of the finding was moot._
 
 ### specs/cli/epipolar-command.md
 **Summary:** Epipolar visualization between image pairs (single or batch via `--pairs-dir`), with rectification, line/feature styling, sweep-matching overlay.
@@ -80,6 +94,9 @@ The canonical relocations callers need to remember for the spec edits:
   - **Internal help-text inconsistency**: `--side-by-side` help says outputs are `_A`/`_B` suffixed (L132); `--draw` help and spec say `_other`.
   - **Adjacent-pairs batch mode emits one file per image (N files), not one per pair (N-1)** because of the trailing `last_left` extra (L310-334). Spec implies per-pair output.
 **Recommendation:** update code (or spec) — reconcile `_A`/`_B` vs `_other`; clarify the adjacent-pairs output count.
+> _Status (2026-07-06): Resolved earlier — help texts now agree on `_other`
+> (matching the code), and the spec documents one output per image with the
+> last image paired backward. No further action._
 
 ### specs/cli/flow-command.md
 **Summary:** DIS optical-flow visualization between two image files, optionally compared with `.sfmr` correspondences; supports `--pairs-dir` batch and side-by-side output.
@@ -87,6 +104,9 @@ The canonical relocations callers need to remember for the spec edits:
 **Inconsistencies:**
   - **`--pairs-dir` is declared and bound but never used** in `flow.py` — no batch loop, the parameter is dropped on the floor. The spec example `sfm flow image_001.jpg image_002.jpg --pairs-dir flow_viz/ ...` (L58) would silently process only the single explicit pair.
 **Recommendation:** update code — wire `--pairs-dir` through or remove the option. **Real bug.**
+> _Status (2026-07-06): Resolved earlier — the option was removed from
+> `flow.py`, and the spec now states batch mode is unsupported and points at
+> `sfm epipolar --pairs-dir`. Code and spec agree._
 
 ### specs/cli/from-colmap-bin-command.md
 **Summary:** Imports COLMAP binary reconstruction into `.sfmr`. Options: `--image-dir`, `--output`, `--tool-name`, `--detect-infinity`.
@@ -109,6 +129,9 @@ The canonical relocations callers need to remember for the spec edits:
 **Implementing code:** `_commands/insv2rig.py`.
 **Inconsistencies:** Spec says rig type is `fisheye_360`; code passes `rig_name="insv2_x5"` (L97). "Rig type" vs "rig name" not clarified.
 **Recommendation:** discuss — clarify the type/name distinction; verify `fisheye_360` is actually emitted as the rig type.
+> _Status (2026-07-06): Verified — `rig/insv2rig.py` writes
+> `rig_type="fisheye_360"`; `insv2_x5` is the separate `name` field. Spec is
+> accurate; no change needed._
 
 ### specs/cli/match-command.md
 **Summary:** Feature matcher with four mutually exclusive modes (`--exhaustive`, `--sequential`, `--flow`, `--cluster`) plus `--merge`; method-specific options rejected if paired with wrong method.
@@ -147,12 +170,20 @@ The canonical relocations callers need to remember for the spec edits:
 **Implementing code:** `_commands/xform.py` (`--scale-by-measurements` declared with `multiple=True` ~L93).
 **Inconsistencies:** **Click is `multiple=True` but spec describes a single-file invocation.** Repeating `--scale-by-measurements a.yaml --scale-by-measurements b.yaml` is allowed by the CLI but the spec doesn't describe combined-measurements vs sequential-transforms vs last-wins semantics.
 **Recommendation:** discuss — clarify intended repeat semantics in spec, or change Click to single.
+> _Status (2026-07-06): Done — traced the semantics (each occurrence is an
+> independent sequential transform in argument order, own per-file median
+> scale) and documented them in the spec's Composability section._
 
 ### specs/cli/sift-command.md
 **Summary:** `sfm sift` for extracting/drawing SIFT features; workspace-driven tool selection with overrides for tool, DSP, threading, range.
 **Inconsistencies:** `--dsp` help text says "default: disabled" but actual default is `None` (workspace-driven). `--filter-sfm` help says ".sfm reconstruction file" — wording drift from `.sfmr`.
 **Recommendation:** update code — fix `--dsp` help string and `--filter-sfm` wording.
 **Suspicious:** `sift.py` imports `deadline.job_attachments.api.summarize_path_list` (AWS Deadline) for a path-summary helper — heavy/odd dep; worth checking if it's actually used.
+> _Status (2026-07-06): Done — both help strings fixed (`--dsp` now states
+> "requires --tool colmap; default: disabled" with workspace-mode note;
+> `--filter-sfm` says `.sfmr`). The `deadline` import is used
+> (path-list summaries) and declared in `pyproject.toml`; left as-is —
+> replacing it would be a dependency decision, not a spec fix._
 
 ### specs/cli/solve-command.md
 **Summary:** Incremental (COLMAP) or global (GLOMAP) SfM from images or `.matches`; rig refinement, sequential overlap, camera model, range, points-at-infinity detection, `.camrig`/`camera_config.json` integration.
@@ -182,6 +213,14 @@ to the Click handler is a refactor, not a bug fix.
   - **Dead code:** `_from_sfmr` (L86-105) calls `find_workspace_for_path` + `load_workspace_config` and discards the result.
   - No `--range` here despite `to-colmap-bin` and `to-nerfstudio` having one — cross-exporter inconsistency.
 **Recommendation:** discuss — verify (or add) the camera-config rejection; clean up the dead workspace load.
+> _Status (2026-07-06): Done — rejection verified: the `.matches` path goes
+> through `_setup_for_sfm_from_matches`, which enforces
+> `_check_camera_model_conflict` internally (`--camera-model` is
+> `.matches`-only, so the `.sfmr` path has no conflict to check); the spec
+> already documents this. The dead `find_workspace_for_path` +
+> `load_workspace_config` block in `_from_sfmr` is removed. The missing
+> `--range` is a cross-exporter feature gap, not a spec divergence — left
+> open._
 
 ### specs/cli/to-nerfstudio-command.md
 **Summary:** `.sfmr` → Nerfstudio dataset (`transforms.json`, `sparse_pc.ply`, etc.).
@@ -199,6 +238,8 @@ to the Click handler is a refactor, not a bug fix.
   - **`--max-features` scope drift:** spec table (L23) says "COLMAP only"; code allows `colmap` *and* `sfmtool` (L90-94), and the option help text agrees. Spec is out of date.
   - **`--max-features` default:** spec says `8192`, Click defaults to `None`; the `8192` fallback is applied inside `init_workspace`. Behaviorally consistent.
 **Recommendation:** update spec — change the `--max-features` row to "COLMAP and sfmtool".
+> _Status (2026-07-06): Resolved earlier — the spec row already reads
+> "COLMAP and sfmtool" and documents the opencv rejection. No change needed._
 
 ### specs/cli/xform-command.md
 **Summary:** Top-level overview of the `sfm xform` ordered pipeline.
@@ -206,6 +247,8 @@ to the Click handler is a refactor, not a bug fix.
   - **No densify discussion** — the densify-vs-xform overlap is only mentioned in `densify-command.md`'s NOTE.
   - Spec's `--include-by-distribution` summary entry omits the `[,verbose]` modifier that exists in code.
 **Recommendation:** update spec — add a brief note on the densify relationship and the `[,verbose]` modifier.
+> _Status (2026-07-06): Done — Overview now notes the densify relationship,
+> and the `--include-by-distribution` section documents `[,verbose]`._
 
 ### specs/cli/xform-find-points-at-infinity.md
 **Summary:** `--find-points-at-infinity ...` + `--classify-points-at-infinity ...` + global `--max-features <N>` cap.
@@ -238,6 +281,11 @@ to the Click handler is a refactor, not a bug fix.
 **Implementing code:** `reconstruction/triangulation.rs`, `analysis/infinity/{discover,convert}.rs`, `geometry/viewing_angle.rs`, `features/feature_match/geometric_filter.rs`, `sfmtool-py/src/py_triangulation.rs`.
 **Inconsistencies:** Heavy path drift (`triangulation.rs` → `reconstruction/triangulation.rs`; `viewing_angle.rs:28` → `geometry/viewing_angle.rs:28`; `geometric_filter.rs:252` → `features/feature_match/geometric_filter.rs:252`; `infinity/{discover,convert}.rs` → `analysis/infinity/...`). Line numbers (`:28`, `:330`, `:275`, `:50`, `:78`, `:252`, `:375`) likely stale post-regroup; verify or drop.
 **Recommendation:** update spec — repath; Status accurate.
+> _Status (2026-07-06): Done — fixed the two remaining stale paths
+> (`geometric_filter.rs` → `features/feature_match/geometric_filter.rs`,
+> `image_detail.rs` → the `image_detail/` directory) and dropped the
+> line numbers that had drifted with later refactors; verified-stable ones
+> kept._
 
 ### specs/core/epipolar-curves.md
 **Summary:** `plot_epipolar_curve` / `plot_epipolar_curves_batch` — model-agnostic epipolar polylines. Marked Implemented.
@@ -262,6 +310,8 @@ to the Click handler is a refactor, not a bug fix.
 **Implementing code:** `features/optical_flow/gpu/`.
 **Inconsistencies:** L318-319 references `optical_flow/` and `optical_flow/gpu/` → `features/optical_flow/...`. **No explicit Status block** — should add one for parity with peer specs.
 **Recommendation:** update spec — repath, add Status line.
+> _Status (2026-07-06): Done — Status line added (paths were already fixed
+> by the earlier sweep)._
 
 ### specs/core/image-warping.md
 **Summary:** WarpMap (`from_cameras`, pose-aware constructors), ImageU8 / ImageU8Pyramid, `remap_bilinear` / `remap_aniso`, `ray_to_pixel`, Equirectangular model. Marked Implemented.
@@ -274,6 +324,9 @@ to the Click handler is a refactor, not a bug fix.
 **Implementing code:** `features/optical_flow/{mod,dis,pyramid,variational,interp}.rs`, `features/optical_flow/gpu/`.
 **Inconsistencies:** Module-tree diagram (L119-139) rooted at `sfmtool-core/src/optical_flow/` → `features/optical_flow/`. No formal Status block.
 **Recommendation:** update spec — repath the module tree and add a Status line.
+> _Status (2026-07-06): Done — Status line added, and the `gpu/` subtree in
+> the module diagram now lists `context.rs` and `variational.rs` (split out
+> 2026-07-01)._
 
 ### specs/core/patch-cloud.md
 **Summary:** OrientedPatch + PatchCloud + WarpMap::from_patch. Status block (L204) says Implemented as of 2026-06-11.
@@ -349,6 +402,12 @@ to the Click handler is a refactor, not a bug fix.
 > The other two bullets in this section (`tool_options` `#[serde(default)]`,
 > `EQUIRECTANGULAR` in the camera-model table) are separate and not covered by
 > this annotation._
+> _Status (2026-07-06): Done (remaining bullets) — `EQUIRECTANGULAR` added to
+> the camera-model table (noted as an sfmtool extension). The `tool_options`
+> bullet was re-verified as a non-issue: the spec says "required, use `{}` if
+> none" and the code indeed requires the key — spec and code agree. Also
+> refreshed the example metadata JSON to `"version": 5` (the format moved to
+> v5 after this audit; spec and code are in sync at v5)._
 
 ### specs/formats/sfmr-v4-patch-keypoints.md
 **Summary:** Draft spec for `.sfmr` v4 introducing `feature_source ∈ {sift_files, embedded_patches}` plus per-mode columns.
@@ -363,6 +422,11 @@ to the Click handler is a refactor, not a bug fix.
 > so the stale-banner and fold-in items are moot. The **Suspicious** item is a
 > read-validation gap in `sfmr-format` code, independent of the deleted doc — it
 > is not addressed by the fold-in and remains open if still present._
+> _Status (2026-07-06): Done — re-verified the reader/verifier tolerate a
+> stray opposite-mode entry, and resolved it spec-side:
+> `sfmr-file-format.md` now states mode exclusivity is enforced on write
+> while the reader is lenient (reads only the `feature_source`-selected
+> column; a stray opposite-mode entry is ignored and unhashed)._
 
 ### specs/formats/sift-file-format.md
 **Summary:** Specifies `.sift` v1 (current) and v2 (Draft) — ZIP+zstd columnar features.
@@ -372,6 +436,10 @@ to the Click handler is a refactor, not a bug fix.
   - **No version validation on read.** `read.rs` does not check that `metadata.version` is recognized — a future v2 file would deserialize as v1 with wrong hash semantics. The corresponding `.sfmr` reader rejects unsupported versions; sift reader does not.
 **Recommendation:** No spec change needed today; consider adding a version-bound check in `sift-format/src/read.rs`.
 **Suspicious:** Spec uses "Version 1.0rc1" in Version History but the code/JSON value is the integer `1`. Consider aligning.
+> _Status (2026-07-06): Done — `sift-format` readers now reject
+> `metadata.version > SIFT_FORMAT_VERSION` (mirrors the `.sfmr` reader;
+> covered by `test_read_rejects_future_version`), the spec notes the
+> rejection, and the Version History entry now reads "Version 1"._
 
 ### specs/formats/matches-file-format.md
 **Summary:** `.matches` v1 — candidate matches + optional two-view geometries.
@@ -385,6 +453,10 @@ to the Click handler is a refactor, not a bug fix.
 **Inconsistencies:** None of substance. Code-side additions over spec (`1e-6` quaternion tolerance, positive width/height check) are reasonable defaults the spec deliberately left unspecified.
 **Recommendation:** none.
 **Suspicious:** `rig_attributes` is `serde_json::Value` so no per-`rig_type` schema enforcement — worth a sentence in the spec acknowledging this is producer-honor-system.
+> _Status (2026-07-06): Verified — the spec now states `rig_attributes` is
+> free-form and not load-bearing, its per-`rig_type` table is explicitly
+> "Suggested", and the no-enforcement design is spelled out. No change
+> needed._
 
 ---
 
@@ -415,6 +487,10 @@ to the Click handler is a refactor, not a bug fix.
 **Implementing code:** `scene_renderer/*`, `shaders/*`, `viewer_3d/mod.rs::CameraViewMode`, `viewer_3d/camera.rs::best_fit_fov`, `viewer_3d/input.rs`.
 **Inconsistencies:** Step 9 (persistent camera view + free-look) is implemented but the section header lacks the "— DONE" marker the other 8 steps carry. §"Implementation tasks" subsection still reads in imperative form.
 **Recommendation:** update spec — mark Step 9 DONE and retire/checkmark the imperative tasks.
+> _Status (2026-07-06): Done — Step 9 header marked "— DONE", all ten
+> implementation tasks check-marked, and the per-frame-FOV paragraph
+> reworded to past tense. Implementation re-verified in
+> `viewer_3d/{mod,input}.rs`._
 
 ### specs/gui/gui-cross-panel-hover.md
 **Summary:** Cross-panel hover state (`hovered_image`, `hovered_point`). Marked Implemented.
@@ -439,6 +515,10 @@ to the Click handler is a refactor, not a bug fix.
 **Summary:** Roadmap index with implemented-features list and a "Next Steps" ordered list.
 **Inconsistencies:** "Image Browser / Overlay modes (features/tracks/reproj/triangulation/epipolar)" — overlays moved to Image Detail per `gui-multi-panel-image-browser.md`. Minor browser-overlay note should be updated.
 **Recommendation:** minor spec update.
+> _Status (2026-07-06): Done — the attribution was already fixed ("Image
+> detail feature overlay modes"); the mode list additionally gained the
+> `Depth Reliability` and `Condition Number` entries so it matches the
+> 7-variant `OverlayMode` enum._
 
 ### specs/gui/gui-point-cloud-rendering.md
 **Summary:** Point splats, EDL, target indicator (rotating compass), supernova lighting, points-at-infinity. Mostly DONE.
@@ -475,12 +555,21 @@ to the Click handler is a refactor, not a bug fix.
   - The "Open Question: Comparing Calibrations Side by Side" — `--camera-config PATH` flag undecided. Still genuinely open in the code.
 **Recommendation:** discuss + update — confirm whether `to-colmap-db` and `densify` should honor `camera_config.json`.
 **Suspicious:** Workflow 1 says `.camrig` takes precedence over `camera_config.json` when `sfm solve` discovers both; no `camrig` reference in `_commands/solve.py`.
+> _Status (2026-07-06): Done — command list corrected: `sfm densify` never
+> creates cameras from images (it reprocesses an existing `.sfmr`), so it
+> moved to the does-not-consult list; `sfm to-colmap-db` is now scoped to
+> `.matches` input. The `.camrig`-precedence claim is implemented since the
+> audit (`camrig/resolver.py::resolve_camrig_for_solve`, called from
+> `db_setup._setup_for_sfm`) — Suspicious item cleared. The
+> `--camera-config PATH` open question remains open by design._
 
 ### specs/workspace/rig-config.md
 **Summary:** `rig_config.json` is COLMAP's `rig_configurator` format verbatim.
 **Implementing code:** `src/sfmtool/rig/config.py`, `src/sfmtool/rig/frames.py`.
 **Inconsistencies:** Spec is silent on rig-config location, but `_load_rig_config` only reads `{workspace_dir}/rig_config.json` — it does **not** apply the closest-ancestor walk that `camera_config.json` uses. Meaningful asymmetry worth flagging.
 **Recommendation:** update spec — add a "workspace-root-only" sentence.
+> _Status (2026-07-06): Done — spec now states the file lives at the
+> workspace root with no closest-ancestor search._
 
 ### specs/workspace/workspace.md
 **Summary:** Workspace concept, `.sfm-workspace.json` schema, directory layout, hash-based feature cache, workspace discovery, dual relative/absolute path resolution.
@@ -490,6 +579,10 @@ to the Click handler is a refactor, not a bug fix.
   - `feature_tool` listed as `"colmap" | "opencv" | "sfmtool"` but the spec doesn't acknowledge per-tool option shapes for `opencv`/`sfmtool` (`contrast_threshold`, `octave_layers`, `max_num_features`).
   - No cross-reference between "Camera Intrinsics" section and `rig_config.json`.
 **Recommendation:** update spec — add `use_gpu` to the example, add per-tool option shape note, cross-reference `rig-config.md`.
+> _Status (2026-07-06): Done — all three: `use_gpu` in the example (with a
+> note that it is excluded from the feature-cache hash), a paragraph on the
+> per-tool option shapes, and a rig-config.md cross-reference in Camera
+> Intrinsics._
 
 ---
 
@@ -500,12 +593,23 @@ to the Click handler is a refactor, not a bug fix.
 **Inconsistencies:** Captured `sfm ws init` transcript omits `use_gpu: True` (now printed by `ws.py:146-154` for COLMAP).
 **Recommendation:** update docs — refresh the captured output.
 **Suspicious:** "Installation: Coming soon..." conflicts with `getting-started.md`'s `pip install sfmtool`.
+> _Status (2026-07-06): Done — transcript refreshed for the current default
+> feature tool (`sfmtool`, which prints `contrast_threshold` /
+> `octave_layers` / `max_num_features`), and Installation now says
+> `pip install sfmtool` (the package is live on PyPI), reconciling with
+> `getting-started.md`._
 
 ### docs/tutorials/getting-started.md
 **Summary:** End-to-end tutorial using the `dino_dog_toy` dataset.
 **Inconsistencies:** Same `use_gpu` transcript drift. `pip install sfmtool` at step 1 conflicts with `index.md`'s "Coming soon..."
 **Recommendation:** update docs — refresh transcript and reconcile install instructions across the two pages.
 **Suspicious:** Captured `sfm inspect -v` output shows `Feature tool: unknown` for a GLOMAP recon — worth a sanity check.
+> _Status (2026-07-06): Done — transcript refreshed (default tool is now
+> `sfmtool`). The Suspicious item was a real bug: `analyze/summary.py` read
+> `workspace.feature_tool` but the metadata nests it at
+> `workspace.contents.feature_tool`, so verbose inspect always printed
+> "unknown". Fixed, regression-asserted in `test_inspect_sfmr_verbose`, and
+> the transcript line updated to the real value._
 
 ---
 
@@ -569,6 +673,9 @@ to the Click handler is a refactor, not a bug fix.
 ### Two new `OverlayMode` variants in the GUI (state.rs:37,41)
 **What it is:** `OverlayMode::DepthReliability` and `OverlayMode::ConditionNumber` appear in the runtime dropdown but **no spec describes them.** Neither `gui-multi-panel-image-browser.md` (overlay-mode table lists 5) nor `gui-camera-views.md` mentions them.
 **Recommendation:** document in `gui-multi-panel-image-browser.md`'s overlay-mode section.
+> _Status (2026-07-06): Done — documented in
+> `gui-multi-panel-image-browser.md` (2026-06-23 sweep, Top priority #4) and
+> now also listed in `gui-plan.md`'s implemented-features line._
 
 ---
 
@@ -595,6 +702,11 @@ to the Click handler is a refactor, not a bug fix.
    - `solve.py` does not enforce the camera-config-vs-`--camera-model` rejection on the `.matches` branch.
    - `to_colmap_db.py` camera-config rejection invisible at the CLI shim.
    - `ws-init-command.md`'s `--max-features` mis-scoped ("COLMAP only") when code allows COLMAP+sfmtool.
+   > _Status (2026-07-06): Done — all five closed. flow/epipolar/ws-init were
+   > fixed between the audit and this pass; solve was refuted (see its
+   > section); to-colmap-db's rejection was verified inside
+   > `_setup_for_sfm_from_matches` and its dead workspace load removed. See
+   > the per-command annotations above._
 
 4. **Sync the three GUI specs that miss the 4th panel.** `gui-architecture.md`, `gui-multi-panel-image-browser.md`, and `gui-user-experience.md` still describe a 3-panel layout. `Tab::PointTrackDetail` shipped per `gui-point-track-detail.md`. Plus: the two new `OverlayMode` variants (`DepthReliability`, `ConditionNumber`) and the already-shipped infinity point-size slider need their status flipped from TODO to DONE in the relevant specs.
    > _Status (2026-06-23): Done. All three specs document `Tab::PointTrackDetail`;

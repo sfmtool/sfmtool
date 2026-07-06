@@ -29,9 +29,9 @@ $ cd dino
 $ sfm ws init --max-features 4000
 Initialized workspace: .../dino
 Configuration file: .../dino/.sfm-workspace.json
-  feature_tool: colmap
-  estimate_affine_shape: False
-  domain_size_pooling: False
+  feature_tool: sfmtool
+  contrast_threshold: 0.0067
+  octave_layers: 3
   max_num_features: 4000
 ```
 
@@ -181,7 +181,7 @@ Workspace:
   Absolute path: C:\Dev\dino-test
   Relative path: ..
   Resolved workspace: C:\Dev\dino-test
-  Feature tool: unknown
+  Feature tool: sfmtool
 
 Reconstruction summary:
   Images: 85
