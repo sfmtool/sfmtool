@@ -31,6 +31,7 @@ from . import (
     FindPointsAtInfinityTransform,
     IncludeGlobFilter,
     IncludeRangeFilter,
+    LocalizeKeypointsTransform,
     RefineKeypointsTransform,
     RefineNormalsTransform,
     RemoveIsolatedPointsFilter,
@@ -236,6 +237,79 @@ def parse_refine_keypoints_params(param: str) -> RefineKeypointsTransform:
     return RefineKeypointsTransform(**kwargs)
 
 
+# Each --localize-keypoints key maps to a caster for its value; the
+# LocalizeKeypointsTransform constructor owns range/enum validation. Keys mirror
+# the PatchCloud.localize_keypoints binding parameters, plus the compaction cull
+# `min_views`. (There is no `bitmaps` key: the localizer renders none, and the
+# structural rebuild drops any stored ones as stale — re-run
+# `--refine-keypoints bitmaps=true` afterward to regenerate them.)
+_LOCALIZE_KEYPOINTS_KEYS: dict[str, Callable[[str], object]] = {
+    "min_views": int,
+    "max_iters": int,
+    "search": float,
+    "max_shift_px": float,
+    "min_relative_zncc": float,
+    "min_grazing_cos": float,
+    "resolution": int,
+    "window": str,
+    "window_sigma": float,
+    "sampler": str,
+    "robust_iters": int,
+    "convergence_px": float,
+    "search_resolution_multiplier": float,
+    "search_strategy": str,
+}
+
+
+def parse_localize_keypoints_params(param: str) -> LocalizeKeypointsTransform:
+    """Parse a ``--localize-keypoints`` comma-separated ``key=value`` string.
+
+    An empty string runs the binding defaults (plus ``min_views=2``). Unknown
+    keys, malformed tokens (no ``=`` or an empty key), and unparseable values
+    raise ``click.UsageError``; range/enum validation is the transform
+    constructor's job (its ``ValueError`` is re-raised as ``UsageError`` by the
+    caller).
+    """
+    kwargs: dict = {}
+    for token in param.split(","):
+        token = token.strip()
+        if not token:
+            # Tolerate empty segments (e.g. a trailing comma); a bare
+            # ``--localize-keypoints=`` likewise yields no overrides.
+            continue
+        if "=" not in token:
+            raise click.UsageError(
+                f"Invalid --localize-keypoints token '{token}': expected key=value"
+            )
+        key, value = token.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            raise click.UsageError(
+                f"Invalid --localize-keypoints token '{token}': empty key"
+            )
+        if key not in _LOCALIZE_KEYPOINTS_KEYS:
+            raise click.UsageError(
+                f"Unknown --localize-keypoints key '{key}' "
+                f"(expected one of: {', '.join(sorted(_LOCALIZE_KEYPOINTS_KEYS))})"
+            )
+        if key in kwargs:
+            raise click.UsageError(f"Duplicate --localize-keypoints key '{key}'")
+        caster = _LOCALIZE_KEYPOINTS_KEYS[key]
+        if caster is str:
+            kwargs[key] = value
+        else:
+            try:
+                kwargs[key] = caster(value)
+            except ValueError:
+                raise click.UsageError(
+                    f"Invalid value for --localize-keypoints key '{key}': "
+                    f"'{value}' is not a valid {caster.__name__}"
+                )
+
+    return LocalizeKeypointsTransform(**kwargs)
+
+
 # Each --to-embedded-patches key maps to a caster; the transform constructor owns
 # range/enum validation. Keys mirror the ToEmbeddedPatchesTransform parameters.
 _TO_EMBEDDED_PATCHES_KEYS: dict[str, Callable[[str], object]] = {
@@ -433,6 +507,21 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
                 transforms.append(parse_refine_keypoints_params(param))
             except ValueError as e:
                 raise click.UsageError(f"Invalid --refine-keypoints parameter: {e}")
+
+        elif arg == "--localize-keypoints" or arg.startswith("--localize-keypoints="):
+            # Optional value, same tokenization as --refine-normals.
+            if arg.startswith("--localize-keypoints="):
+                param = arg[len("--localize-keypoints=") :]
+            elif i + 1 < len(args) and not args[i + 1].startswith("-"):
+                i += 1
+                param = args[i]
+            else:
+                param = ""
+
+            try:
+                transforms.append(parse_localize_keypoints_params(param))
+            except ValueError as e:
+                raise click.UsageError(f"Invalid --localize-keypoints parameter: {e}")
 
         elif arg == "--to-embedded-patches" or arg.startswith("--to-embedded-patches="):
             # Optional value, same tokenization as --refine-normals.

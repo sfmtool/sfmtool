@@ -28,6 +28,7 @@ See ``specs/cli/xform-refine-normals-command.md`` and
 import numpy as np
 
 from .._sfmtool import SfmrReconstruction
+from ._images import load_workspace_images
 
 # Confidence (the peakedness of Φ at the optimum) is normalized to roughly
 # [0, 1] by the core routine; below this it is reported — but not acted on — as
@@ -164,23 +165,8 @@ class RefineNormalsTransform:
         self.quality = quality
         self.confidence = confidence
 
-    def _load_images(self, recon: SfmrReconstruction) -> list[np.ndarray]:
-        """Load every source image, parallel to the reconstruction's images.
-
-        Resolves ``workspace_dir / image_name`` exactly as the SIFT-reading
-        filters resolve their ``.sift`` paths. A missing image is a hard error.
-        ``refine_normals`` requires one full-resolution image per reconstruction
-        image (matching its camera resolution), so all are loaded up front.
-        """
-        from sfmtool._workspace_image import read_workspace_image
-
-        return [
-            read_workspace_image(recon.workspace_dir, name)
-            for name in recon.image_names
-        ]
-
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
-        images = self._load_images(recon)
+        images = load_workspace_images(recon)
 
         # The reconstruction is embedded_patches (enforced by apply_transforms), so
         # the patch frame is already stored — read it back as the cloud rather than

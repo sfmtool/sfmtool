@@ -148,3 +148,6 @@ A `--localize-keypoints` op could later surface
 `PatchCloud.localize_keypoints` — basin *search* that can drop views, a
 heavier, structural (filter-like) operation — as the upstream step that puts
 seeds in the basin; this op is subpixel refinement only.
+
+> _Status (2026-07-05): Done —
+> [xform-localize-keypoints-command.md](xform-localize-keypoints-command.md)._

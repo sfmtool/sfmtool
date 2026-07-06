@@ -20,6 +20,7 @@ from ._find_points_at_infinity import (
     FindPointsAtInfinityTransform,
 )
 from ._interface import Transform
+from ._localize_keypoints import LocalizeKeypointsTransform
 from ._point_filters import (
     RemoveIsolatedPointsFilter,
     RemoveLargeFeaturesFilter,
@@ -57,6 +58,7 @@ __all__ = [
     "ExcludeGlobFilter",
     "SelectByDistributionFilter",
     "BundleAdjustTransform",
+    "LocalizeKeypointsTransform",
     "RefineKeypointsTransform",
     "RefineNormalsTransform",
     "AlignToTransform",

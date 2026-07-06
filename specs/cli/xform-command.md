@@ -338,6 +338,39 @@ the full parameter list and semantics.
 --to-embedded-patches --refine-keypoints --refine-normals
 ```
 
+#### `--localize-keypoints [<params>]`
+
+Localizes each observation's 2D keypoint by a discrete cross-view search
+(congealing against a leave-one-out consensus), seeded at each point's own
+projection. **Structural**, unlike the two refine ops: views that won't
+co-register are dropped, points whose kept-view count falls below `min_views`
+(default 2) are culled, and `keypoints_xy` plus the entire track structure are
+rebuilt from the survivors (via the same compaction helper the `embed-patches`
+pipeline uses). Cameras, poses, and each surviving point's 3D geometry are
+unchanged. Stored patch bitmaps are dropped as stale (the frames are kept) —
+re-run `--refine-keypoints bitmaps=true` or `--refine-normals bitmaps=true` to
+regenerate them; there is no `bitmaps` key on this op. Because it is
+photometric it reads the workspace source images, so those must still be
+present where the reconstruction was created. The optional value is a
+comma-separated `key=value` string; with no value it runs the binding defaults
+plus `min_views=2`.
+
+Like the refine ops it requires an `embedded_patches` reconstruction and
+rejects `sift_files` (the stored per-point patch frames are the search
+geometry), so the canonical chain converts first. It pairs naturally with
+`--refine-keypoints` (search into the basin, then sharpen to sub-pixel);
+`--refine-normals` can sit on either side of it — both orderings are
+legitimate, pick per dataset.
+
+See [xform-localize-keypoints-command.md](xform-localize-keypoints-command.md)
+for the full parameter list and semantics.
+
+```bash
+--localize-keypoints
+--localize-keypoints search=8,min_views=3
+--to-embedded-patches --localize-keypoints --refine-keypoints
+```
+
 ### Representation
 
 #### `--to-embedded-patches [<params>]`
