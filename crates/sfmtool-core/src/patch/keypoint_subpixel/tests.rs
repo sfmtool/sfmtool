@@ -225,7 +225,7 @@ fn consensus_sharpness(
         let mut cp = OrientedPatch::from_center_normal(
             center,
             patch.normal(),
-            patch.u_axis,
+            patch.v_axis,
             patch.half_extent,
         );
         cp.w = patch.w;
@@ -523,16 +523,14 @@ fn consensus_sharpens_after_refinement() {
     // known src_per_grid mapping along x/y).
     let res = refine_patch_keypoints(&patch, &views, &view_set, None, &p);
     let mut after_offsets = vec![[0.0, 0.0]; 5];
+    let wpp_u = 2.0 * patch.half_extent[0] / p.resolution as f64;
+    let wpp_v = 2.0 * patch.half_extent[1] / p.resolution as f64;
     for (k, &i) in view_set.iter().enumerate() {
-        let proj = project(&views[i as usize], &patch.center, patch.w).unwrap();
-        let dx = res.keypoints[k][0] - proj.0;
-        let dy = res.keypoints[k][1] - proj.1;
-        // For this patch u_axis = world +y and v_axis = world +x, but the raster
-        // steps rows along −v_axis (world −x). So image-y (world +y) maps to the
-        // u-grid directly, and image-x (world +x) maps to the v-grid negated.
-        // Sign handled by the consensus render (it re-renders at these grid
-        // offsets), so convert source px back to patch-grid px per axis.
-        after_offsets[k] = [dy / src_per_grid(), -dx / src_per_grid()];
+        // Convert each refined source-px keypoint back to a patch-grid offset with
+        // the same inverse mapping production uses (`seed_offset`), so this stays
+        // correct for any patch frame rather than baking in a fixed u/v→x/y layout.
+        after_offsets[k] = seed_offset(&patch, &views[i as usize], res.keypoints[k], wpp_u, wpp_v)
+            .unwrap_or([0.0, 0.0]);
     }
     let after = consensus_sharpness(&patch, &views, &view_set, &after_offsets, &p);
 

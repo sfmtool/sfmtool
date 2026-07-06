@@ -151,11 +151,16 @@ impl OrientedPatch {
     /// Build from a center, a normal, and an `up_hint` that pins the in-plane
     /// rotation about the normal. The result is a **finite** patch (`w == 1`).
     ///
-    /// `u_axis` is `up_hint` projected onto the plane and normalized; if
-    /// `up_hint` is (near-)parallel to the normal, an arbitrary in-plane axis is
-    /// chosen instead. `v_axis = normal × u_axis`, so `u_axis × v_axis` recovers
-    /// the (normalized) normal (a right-handed frame; the raster reverses `v` to
-    /// render un-mirrored — see the type docs).
+    /// `v_axis` is `up_hint` projected onto the plane and normalized (the "up"
+    /// axis — [`WarpMap::from_patch`] steps the raster row along `−v_axis`, so
+    /// `up_hint` maps to the top of the rendered patch); if `up_hint` is
+    /// (near-)parallel to the normal, an arbitrary in-plane axis is chosen
+    /// instead. `u_axis = v_axis × normal` is the in-plane "right" axis (the
+    /// raster steps `col` along `+u_axis`), and `u_axis × v_axis` recovers the
+    /// (normalized) normal — a right-handed frame that renders un-mirrored and
+    /// un-rotated (see the type docs).
+    ///
+    /// [`WarpMap::from_patch`]: crate::camera::WarpMap::from_patch
     pub fn from_center_normal(
         center: Point3<f64>,
         normal: Vector3<f64>,
@@ -164,12 +169,14 @@ impl OrientedPatch {
     ) -> Self {
         let n = normalize_or(normal, Vector3::z());
         let proj = up_hint - n * up_hint.dot(&n);
-        let u = if proj.norm() > 1e-9 {
+        let v = if proj.norm() > 1e-9 {
             proj.normalize()
         } else {
             any_orthonormal(&n)
         };
-        let v = n.cross(&u);
+        // "Right" axis; `u × v = n` keeps the outward normal, and the renderer
+        // draws `col` along `+u` / `row` along `−v`, so `up_hint` → tile up.
+        let u = v.cross(&n);
         Self {
             center,
             u_axis: u,

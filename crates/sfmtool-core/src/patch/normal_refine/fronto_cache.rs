@@ -205,7 +205,7 @@ pub(super) fn prerender(
         let cam_c = view.cam_from_world.inverse_translation_origin();
         let fronto_n = (cam_c - center_pt).normalize();
         let fp =
-            OrientedPatch::from_center_normal(center_pt, fronto_n, base.u_axis, base.half_extent);
+            OrientedPatch::from_center_normal(center_pt, fronto_n, base.v_axis, base.half_extent);
         let map = WarpMap::from_patch(&fp, view.camera, view.cam_from_world, rb);
         let img = remap_bilinear(view.pyramid.level(0), &map);
         if img.channels() as usize != CHANNELS {

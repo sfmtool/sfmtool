@@ -75,9 +75,10 @@ pub(in crate::patch) fn build_support(window: PatchWindow, resolution: u32) -> S
 }
 
 /// Rebuild the patch on a new plane: same `center` / `half_extent`, the input
-/// `u_axis` reprojected onto the plane of `n` (`v = n × u`).
+/// `v_axis` ("up") reprojected onto the plane of `n` (`u = v × n`), which
+/// preserves the in-plane orientation across the normal change.
 pub(super) fn repose_patch(base: &OrientedPatch, n: &Vector3<f64>) -> OrientedPatch {
-    let mut p = OrientedPatch::from_center_normal(base.center, *n, base.u_axis, base.half_extent);
+    let mut p = OrientedPatch::from_center_normal(base.center, *n, base.v_axis, base.half_extent);
     p.w = base.w;
     p
 }
@@ -109,7 +110,7 @@ pub(super) fn view_render_patch<'a>(
     };
     let center = keypoint_localize::shifted_center(patch, au, av, 1.0, 1.0);
     let mut shifted =
-        OrientedPatch::from_center_normal(center, patch.normal(), patch.u_axis, patch.half_extent);
+        OrientedPatch::from_center_normal(center, patch.normal(), patch.v_axis, patch.half_extent);
     shifted.w = patch.w;
     Cow::Owned(shifted)
 }
