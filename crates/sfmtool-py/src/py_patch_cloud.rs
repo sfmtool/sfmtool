@@ -65,8 +65,9 @@ impl PyOrientedPatch {
     /// Args:
     ///     center: Patch center in world coordinates.
     ///     normal: Surface normal (need not be unit length).
-    ///     up_hint: In-plane reference direction; projected onto the plane to set
-    ///         ``u_axis``. If parallel to the normal an arbitrary axis is used.
+    ///     up_hint: The "up" reference direction; projected onto the plane to set
+    ///         ``v_axis`` (``u_axis = v_axis × normal`` is the in-plane "right"
+    ///         axis). If parallel to the normal an arbitrary axis is used.
     ///     half_extent: World-space half-size along ``(u, v)``.
     #[staticmethod]
     #[pyo3(signature = (center, normal, up_hint, half_extent))]

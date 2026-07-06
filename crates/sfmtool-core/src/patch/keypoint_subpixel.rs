@@ -290,7 +290,7 @@ fn render_core(
 ) -> bool {
     let center = shifted_center(patch, au, av, wpp_u, wpp_v);
     let mut core_patch =
-        OrientedPatch::from_center_normal(center, patch.normal(), patch.u_axis, patch.half_extent);
+        OrientedPatch::from_center_normal(center, patch.normal(), patch.v_axis, patch.half_extent);
     // Preserve the homogeneous weight so a point at infinity renders as a
     // direction patch (corners are directions), not a finite surfel.
     core_patch.w = patch.w;
@@ -352,7 +352,7 @@ fn render_core_with_jg(
 ) -> bool {
     let center = shifted_center(patch, au, av, wpp_u, wpp_v);
     let mut core_patch =
-        OrientedPatch::from_center_normal(center, patch.normal(), patch.u_axis, patch.half_extent);
+        OrientedPatch::from_center_normal(center, patch.normal(), patch.v_axis, patch.half_extent);
     core_patch.w = patch.w;
     let mut map = WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
     match sampler {

@@ -636,8 +636,9 @@ fn recovers_fronto_parallel_normal_from_tilted_init() {
     assert_eq!(result.valid_view_count, 4);
     assert!(result.confidence.is_finite() && result.confidence >= 0.0);
 
-    // Frame conventions preserved: same center / half_extent, u reprojected
-    // onto the new plane, v = n × u (right-handed frame; normal = u × v).
+    // Frame conventions preserved: same center / half_extent, v reprojected
+    // onto the new plane, u = v × n (right-handed frame; normal = u × v). The
+    // equivalent identity n × u = v is what the assertion below checks.
     assert_eq!(result.patch.center, patch.center);
     assert_eq!(result.patch.half_extent, patch.half_extent);
     let n = result.patch.normal();

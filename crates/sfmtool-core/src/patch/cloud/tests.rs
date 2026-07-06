@@ -19,6 +19,74 @@ fn pinhole(f: f64, cx: f64, cy: f64, w: u32, h: u32) -> CameraIntrinsics {
     }
 }
 
+/// Source→grid Jacobian at the centre pixel of an `r×r` warp, from the
+/// 4-neighbours of pixel `(1, 1)`: `[dx_dcol, dy_dcol, dx_drow, dy_drow]`.
+fn center_jacobian(wm: &WarpMap) -> [f64; 4] {
+    let (xl, yl) = wm.get(0, 1);
+    let (xr, yr) = wm.get(2, 1);
+    let (xt, yt) = wm.get(1, 0);
+    let (xb, yb) = wm.get(1, 2);
+    [
+        (xr - xl) as f64, // dx_dcol
+        (yr - yl) as f64, // dy_dcol
+        (xb - xt) as f64, // dx_drow
+        (yb - yt) as f64, // dy_drow
+    ]
+}
+
+#[test]
+fn from_center_normal_render_is_upright() {
+    // Regression (patch orientation): a patch built via `from_center_normal`
+    // with the observing camera's up as `up_hint` must render UPRIGHT, not
+    // rotated 90°. Canonical camera at origin looking down −Z (identity pose);
+    // a patch in front sits at −Z, facing the camera. camera up = +Y, right = +X.
+    // Upright means +col → +source_x (right) and +row → +source_y (down), i.e.
+    // the Jacobian is a positive diagonal with ~zero off-diagonals.
+    let (f, cx, cy) = (500.0, 320.0, 240.0);
+    let cam = pinhole(f, cx, cy, 640, 480);
+    let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+    let patch = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, -4.0),
+        Vector3::new(0.0, 0.0, 1.0), // outward normal toward the camera (+Z)
+        Vector3::new(0.0, 1.0, 0.0), // up_hint = camera up (+Y)
+        [0.5, 0.5],
+    );
+    let wm = WarpMap::from_patch(&patch, &cam, &pose, 3);
+    let [dx_dcol, dy_dcol, dx_drow, dy_drow] = center_jacobian(&wm);
+    assert!(
+        dx_dcol > 0.0 && dy_drow > 0.0 && dx_drow.abs() < 1.0 && dy_dcol.abs() < 1.0,
+        "expected upright render; J = [[{dx_dcol:.2}, {dx_drow:.2}], [{dy_dcol:.2}, {dy_drow:.2}]]"
+    );
+}
+
+#[test]
+fn repose_preserves_upright_orientation() {
+    // Reposing a patch onto a new (still camera-facing) normal must keep it
+    // upright — the in-plane orientation is preserved across the normal change,
+    // it does not accumulate a 90° turn per repose. Uses the public
+    // `from_center_normal`/`normal` surface (repose is crate-internal): rebuild
+    // the frame from the patch's own `v_axis`, exactly as `repose_patch` does.
+    let (f, cx, cy) = (500.0, 320.0, 240.0);
+    let cam = pinhole(f, cx, cy, 640, 480);
+    let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+    let base = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, -4.0),
+        Vector3::new(0.0, 0.0, 1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.5, 0.5],
+    );
+    // A slightly tilted, still camera-facing normal.
+    let tilted = Vector3::new(0.1, -0.05, 1.0).normalize();
+    let reposed =
+        OrientedPatch::from_center_normal(base.center, tilted, base.v_axis, base.half_extent);
+    let wm = WarpMap::from_patch(&reposed, &cam, &pose, 3);
+    let [dx_dcol, dy_dcol, dx_drow, dy_drow] = center_jacobian(&wm);
+    assert!(
+        dx_dcol > 0.0 && dy_drow > 0.0 && dx_drow.abs() < dx_dcol && dy_dcol.abs() < dy_drow,
+        "reposed patch must stay upright; J = [[{dx_dcol:.2}, {dx_drow:.2}], [{dy_dcol:.2}, {dy_drow:.2}]]"
+    );
+}
+
 #[test]
 fn to_world_and_normal() {
     let p = OrientedPatch::new(
@@ -105,7 +173,7 @@ fn from_center_normal_render_is_not_mirrored() {
     // Regression: a fronto-parallel patch built via `from_center_normal` (normal
     // toward the camera) must render un-mirrored — the source→grid map must be a
     // proper (orientation-preserving) map, i.e. its Jacobian determinant is
-    // positive. The frame is right-handed (`v = n × u`, outward normal `u × v`),
+    // positive. The frame is right-handed (`u = v × n`, outward normal `u × v`),
     // so `WarpMap::from_patch` reverses `v` for the raster row; walking `+v`
     // instead would reflect (negative determinant) and bake mirror-imaged
     // `inspect --strips` tiles and patch bitmaps.

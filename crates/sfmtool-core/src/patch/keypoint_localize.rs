@@ -294,7 +294,7 @@ fn render_context(
     let mut ctx_patch = OrientedPatch::from_center_normal(
         center,
         patch.normal(),
-        patch.u_axis,
+        patch.v_axis,
         [patch.half_extent[0] * scale, patch.half_extent[1] * scale],
     );
     // Preserve the anchor's homogeneous weight so a point at infinity renders as

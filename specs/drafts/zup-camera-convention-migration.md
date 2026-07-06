@@ -138,7 +138,7 @@ Commits ahead of `main` on `sfmr-z-up`:
 - `3a5eb3c` — fix(patch): store right-handed frame, reverse v in the raster.
 
 Net effect: the stored per-point patch frame is genuinely **right-handed in
-world space** (`u × v` = outward normal; `v = n × u`), and the image raster
+world space** (`u × v` = outward normal; `u = v × n`), and the image raster
 steps rows along `−v` to reconcile with y-down pixel rows. This matters here
 because a right-handed world-space frame **transports correctly under the `W`
 rotation** — patch `u`/`v` half-vectors just rotate with the world and the

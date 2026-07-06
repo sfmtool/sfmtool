@@ -96,10 +96,12 @@ impl OrientedPatch {
     pub fn corner_homogeneous(&self, s: f64, t: f64) -> (Vector3<f64>, f64);
 
     /// Build a **finite** patch (`w = 1`) from a center, a normal, and an
-    /// `up_hint` used to pin the in-plane rotation: `u_axis` is `up_hint`
-    /// projected onto the plane (Gram-Schmidt) and normalized,
-    /// `v_axis = normal × u_axis`. `half_extent` may be a scalar (square) or
-    /// per-axis.
+    /// `up_hint` used to pin the in-plane rotation: `v_axis` (the "up" axis) is
+    /// `up_hint` projected onto the plane (Gram-Schmidt) and normalized, and
+    /// `u_axis = v_axis × normal` is the in-plane "right" axis (so `u × v` is the
+    /// outward normal and the render is upright — `up_hint` maps to the top of
+    /// the patch, see the raster convention above). `half_extent` may be a scalar
+    /// (square) or per-axis.
     pub fn from_center_normal(
         center: Point3<f64>,
         normal: Vector3<f64>,
