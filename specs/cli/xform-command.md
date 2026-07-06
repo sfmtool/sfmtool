@@ -310,6 +310,34 @@ full parameter list and semantics.
 --to-embedded-patches --refine-normals
 ```
 
+#### `--refine-keypoints [<params>]`
+
+Refines each observation's stored 2D keypoint to sub-pixel by a local
+photometric solve (forward-additive ECC Gauss–Newton against a robust
+cross-view consensus; never worse than the seed). A pure in-place modifier: the
+point count, positions, poses, cameras, normals, and the entire track structure
+are unchanged — only `keypoints_xy` values move. It does **not** re-fit the
+stored patch frames; with `bitmaps=true` it additionally re-renders the
+per-point patch textures at the refined keypoints (re-persisting the unchanged
+frame beside them). Because it is photometric it reads the workspace source
+images, so those must still be present where the reconstruction was created.
+The optional value is a comma-separated `key=value` string; with no value it
+runs the binding defaults.
+
+Like `--refine-normals` it requires an `embedded_patches` reconstruction and
+rejects `sift_files` (the stored inline keypoints are the refiner's seeds), so
+the canonical chain converts first.
+
+See [xform-refine-keypoints-command.md](xform-refine-keypoints-command.md) for
+the full parameter list and semantics.
+
+```bash
+--refine-keypoints
+--refine-keypoints max_outer_sweeps=2,sampler=anisotropic
+--refine-keypoints bitmaps=true
+--to-embedded-patches --refine-keypoints --refine-normals
+```
+
 ### Representation
 
 #### `--to-embedded-patches [<params>]`

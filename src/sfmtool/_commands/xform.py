@@ -59,6 +59,22 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
     ),
 )
 @click.option(
+    "--refine-keypoints",
+    is_flag=False,
+    flag_value="",
+    multiple=True,
+    help=(
+        "Refine per-observation 2D keypoints to sub-pixel by photometric "
+        "cross-view alignment (never worse than the seed; the track structure "
+        "is unchanged). Optional comma-separated key=value params (e.g. "
+        "'max_outer_sweeps=2,sampler=anisotropic'; 'bitmaps=true' also "
+        "re-renders the per-point patch textures at the refined keypoints). "
+        "Requires an embedded_patches reconstruction (convert first with "
+        "--to-embedded-patches); reads the workspace source images, which must "
+        "still be present where it was created."
+    ),
+)
+@click.option(
     "--to-embedded-patches",
     is_flag=False,
     flag_value="",
@@ -208,6 +224,7 @@ def xform(ctx, input_path, output_path, **kwargs):
     Optimization:
       --bundle-adjust                     Apply bundle adjustment
       --refine-normals [PARAMS]           Refine per-point normals by photometric consensus (reads source images)
+      --refine-keypoints [PARAMS]         Refine per-observation keypoints to sub-pixel (reads source images)
 
     \b
     Representation:
@@ -255,6 +272,10 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
         # Bundle-adjust, then refine surface normals against the final geometry
         sfm xform in.sfmr out.sfmr --bundle-adjust --refine-normals angular_range_deg=25,init_steps=7
+
+    \b
+        # Refine keypoints to sub-pixel and refine normals in one pass
+        sfm xform in.sfmr out.sfmr --refine-keypoints --refine-normals
     """
     from .._sfmtool import SfmrReconstruction
 
@@ -312,7 +333,8 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--remove-large-features, --remove-isolated, --filter-by-reprojection-error, "
             "--include-by-distribution, "
             "--find-points-at-infinity, --classify-points-at-infinity, "
-            "--camera-model, --bundle-adjust, --refine-normals, --to-embedded-patches, "
+            "--camera-model, --bundle-adjust, --refine-normals, --refine-keypoints, "
+            "--to-embedded-patches, "
             "--align-to, --align-to-input"
         )
 
