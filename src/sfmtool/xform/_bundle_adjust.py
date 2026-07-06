@@ -112,6 +112,23 @@ class BundleAdjustTransform:
                 translations[idx] = cam_from_world.translation
 
         point_ids = sorted(reconstruction.points3D.keys())
+
+        # Bundle adjustment refines geometry; it must not add or drop points.
+        # The result is rebuilt with clone_with_changes, which reindexes points
+        # by position but carries the per-point patch frames/bitmaps through
+        # unchanged — so a changed point count would silently misalign those
+        # arrays (and the observation bookkeeping) with the new points. Fail
+        # loudly instead: if this ever fires, pycolmap dropped a point and the
+        # readback needs to remap the per-point arrays accordingly.
+        if len(point_ids) != original_recon.point_count:
+            raise RuntimeError(
+                "Bundle adjustment changed the point count "
+                f"({original_recon.point_count} -> {len(point_ids)}); this is "
+                "unexpected (BA refines points, it does not add or remove them) "
+                "and would misalign per-point patch data. Aborting rather than "
+                "producing a corrupt reconstruction."
+            )
+
         positions = np.array(
             [reconstruction.points3D[pid].xyz for pid in point_ids], dtype=np.float64
         )
@@ -122,9 +139,16 @@ class BundleAdjustTransform:
             [reconstruction.points3D[pid].error for pid in point_ids], dtype=np.float32
         )
 
+        # An embedded_patches reconstruction has no external .sift files; its 2D
+        # observations live inline as keypoints_xy. Recover each observation's
+        # keypoint from the COLMAP point2D we exported so the refined result can
+        # be rebuilt in embedded_patches mode too.
+        is_embedded = original_recon.feature_source == "embedded_patches"
+
         track_image_indexes_list = []
         track_feature_indexes_list = []
         track_point_indexes_list = []
+        track_keypoints_xy_list = []
         observation_counts = np.zeros(len(point_ids), dtype=np.uint32)
 
         for new_pid, old_pid in enumerate(point_ids):
@@ -132,12 +156,16 @@ class BundleAdjustTransform:
             observation_counts[new_pid] = len(point3d.track.elements)
 
             for element in point3d.track.elements:
-                image_name = reconstruction.images[element.image_id].name
-                image_idx = name_to_idx.get(image_name)
+                image = reconstruction.images[element.image_id]
+                image_idx = name_to_idx.get(image.name)
                 if image_idx is not None:
                     track_image_indexes_list.append(image_idx)
                     track_feature_indexes_list.append(element.point2D_idx)
                     track_point_indexes_list.append(new_pid)
+                    if is_embedded:
+                        track_keypoints_xy_list.append(
+                            image.points2D[element.point2D_idx].xy
+                        )
 
         track_image_indexes = np.array(track_image_indexes_list, dtype=np.uint32)
         track_feature_indexes = np.array(track_feature_indexes_list, dtype=np.uint32)
@@ -169,6 +197,14 @@ class BundleAdjustTransform:
             track_point_indexes=track_point_indexes,
             observation_counts=observation_counts,
         )
+        if is_embedded:
+            # Rebuild in embedded_patches mode: the inline keypoints replace the
+            # (unused) sift feature indices. image_file_hashes is carried over
+            # from the original reconstruction by clone_with_changes.
+            kwargs["feature_source"] = "embedded_patches"
+            kwargs["keypoints_xy"] = np.array(
+                track_keypoints_xy_list, dtype=np.float32
+            ).reshape(-1, 2)
         if rig_frame_data is not None:
             kwargs["rig_frame_data"] = rig_frame_data
 

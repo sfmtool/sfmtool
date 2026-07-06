@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use nalgebra::{Point3, Rotation3, UnitQuaternion, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use ndarray::{Array2, Array4};
 
 use sfmr_format::{
@@ -581,8 +581,9 @@ impl SfmrReconstruction {
             }
         })?;
 
-        // World-to-camera rotation matrix
-        let r = image.quaternion_wxyz.to_rotation_matrix();
+        // World-to-camera rotation (the stored unit quaternion rotates the point
+        // into the camera frame directly, no matrix needed).
+        let r = &image.quaternion_wxyz;
         let t = &image.translation_xyz;
 
         // Iterate all track observations for this image
@@ -601,7 +602,7 @@ impl SfmrReconstruction {
             let point = &self.points[point_idx as usize];
             let observed = [feature_xy[0] as f64, feature_xy[1] as f64];
             let error = match observation_reprojection_error(
-                &r,
+                r,
                 t,
                 camera,
                 &point.position,
@@ -619,6 +620,53 @@ impl SfmrReconstruction {
         Ok(results)
     }
 
+    /// Mean reprojection error (px) per point from the inline `keypoints_xy` of
+    /// an `embedded_patches` reconstruction — one entry per point, parallel to
+    /// `points`. Each observation reprojects its point through the observing
+    /// camera and measures pixel distance to the inline keypoint; points at
+    /// infinity project their bearing (translation-free). A point with no valid
+    /// (in-front) observation gets `0.0`.
+    ///
+    /// Returns `None` for a `sift_files` source, whose 2D observations live in
+    /// external `.sift` files and must be read via
+    /// [`Self::compute_observation_reprojection_errors`] instead.
+    fn embedded_point_reprojection_errors(&self) -> Option<Vec<f32>> {
+        let keypoints_xy = self.keypoints_xy()?;
+        let num_points = self.points.len();
+        let mut out = vec![0.0f32; num_points];
+        for (point_idx, slot) in out.iter_mut().enumerate() {
+            let point = &self.points[point_idx];
+            let at_infinity = point.is_at_infinity();
+            let start = self.observation_offsets[point_idx];
+            let mut sum = 0.0f64;
+            let mut count = 0u32;
+            for (k, obs) in self.observations_for_point(point_idx).iter().enumerate() {
+                let image = &self.images[obs.image_index as usize];
+                let camera = &self.cameras[image.camera_index as usize];
+                let obs_global = start + k;
+                let observed = [
+                    keypoints_xy[[obs_global, 0]] as f64,
+                    keypoints_xy[[obs_global, 1]] as f64,
+                ];
+                if let Some(e) = observation_reprojection_error(
+                    &image.quaternion_wxyz,
+                    &image.translation_xyz,
+                    camera,
+                    &point.position,
+                    at_infinity,
+                    observed,
+                ) {
+                    sum += e;
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                *slot = (sum / count as f64) as f32;
+            }
+        }
+        Some(out)
+    }
+
     /// Recompute per-point mean reprojection errors from scratch.
     ///
     /// For each image, loads feature positions from the `.sift` file and
@@ -630,7 +678,17 @@ impl SfmrReconstruction {
     /// This replaces any errors read from COLMAP/GLOMAP binary files,
     /// which may use different coordinate conventions (GLOMAP stores
     /// errors in normalized image coordinates, not pixels).
+    ///
+    /// An `embedded_patches` reconstruction has no `.sift` files; its inline
+    /// keypoints are used directly.
     pub fn recompute_point_errors(&mut self) -> Result<(), ReconstructionError> {
+        if let Some(errors) = self.embedded_point_reprojection_errors() {
+            for (pt, error) in self.points.iter_mut().zip(errors) {
+                pt.error = error;
+            }
+            return Ok(());
+        }
+
         let num_points = self.points.len();
         let mut error_sums = vec![0.0f64; num_points];
         let mut error_counts = vec![0u32; num_points];
@@ -672,6 +730,18 @@ impl SfmrReconstruction {
         let num_points = self.points.len();
         let is_infinity: Vec<bool> = self.points.iter().map(|p| p.is_at_infinity()).collect();
         if !is_infinity.iter().any(|&b| b) {
+            return Ok(());
+        }
+
+        // An `embedded_patches` reconstruction has no `.sift` files; recompute
+        // the infinity points' errors from the inline keypoints, leaving finite
+        // points untouched.
+        if let Some(errors) = self.embedded_point_reprojection_errors() {
+            for (i, &inf) in is_infinity.iter().enumerate() {
+                if inf {
+                    self.points[i].error = errors[i];
+                }
+            }
             return Ok(());
         }
 
@@ -1396,7 +1466,7 @@ pub(crate) fn count_points_at_infinity(points: &[Point3D]) -> usize {
 /// per-image error computation and points-at-infinity discovery so the two stay
 /// in sync.
 pub(crate) fn observation_reprojection_error(
-    rotation: &Rotation3<f64>,
+    rotation: &UnitQuaternion<f64>,
     translation: &Vector3<f64>,
     camera: &CameraIntrinsics,
     point: &Point3<f64>,
