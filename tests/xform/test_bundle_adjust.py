@@ -5,10 +5,12 @@
 
 import numpy as np
 
+from sfmtool._sfmtool import SfmrReconstruction
 from sfmtool._sfmtool.geometry import RotQuaternion
 from sfmtool.xform import (
     BundleAdjustTransform,
     RemoveShortTracksFilter,
+    ToEmbeddedPatchesTransform,
 )
 
 from .conftest import apply_transforms_to_file, load_reconstruction_data
@@ -221,6 +223,72 @@ def test_bundle_adjust_preserves_rig_data(seoul_bull_workspace, tmp_path):
     assert rfd["rigs_metadata"]["sensor_count"] == 2
     assert rfd["frames_metadata"]["frame_count"] == num_frames
     assert len(rfd["image_sensor_indexes"]) == image_count
+
+
+def test_bundle_adjust_embedded_patches(seoul_bull_workspace, tmp_path):
+    """BA runs on an embedded_patches recon and stays in that mode.
+
+    An embedded_patches reconstruction carries its 2D observations inline
+    (keypoints_xy) with no .sift companion, so BA must build the COLMAP export
+    from the inline keypoints and rebuild the refined result in embedded mode.
+    """
+    output_path = tmp_path / "embedded_ba.sfmr"
+
+    transforms = [ToEmbeddedPatchesTransform(), BundleAdjustTransform()]
+    apply_transforms_to_file(seoul_bull_workspace, output_path, transforms)
+
+    original = load_reconstruction_data(seoul_bull_workspace)
+    adjusted = SfmrReconstruction.load(output_path)
+
+    # Stays embedded, with inline keypoints parallel to the tracks.
+    assert adjusted.feature_source == "embedded_patches"
+    assert adjusted.keypoints_xy is not None
+    assert adjusted.keypoints_xy.shape == (adjusted.observation_count, 2)
+    assert adjusted.image_file_hashes is not None
+    assert len(adjusted.image_file_hashes) == adjusted.image_count
+
+    # Topology is preserved through BA (as with the sift path).
+    assert adjusted.image_count == original["image_count"]
+    assert adjusted.point_count == original["point_count"]
+    assert adjusted.observation_count == original["observation_count"]
+
+    # Refined keypoints stay finite and within their image bounds.
+    kp = np.asarray(adjusted.keypoints_xy)
+    assert np.isfinite(kp).all()
+
+
+def test_bundle_adjust_embedded_matches_sift(seoul_bull_workspace, tmp_path):
+    """BA on a minimally-converted embedded recon matches the sift-path result.
+
+    ToEmbeddedPatchesTransform copies each observation's keypoint verbatim from
+    its .sift detection, so bundle-adjusting the embedded recon should refine
+    poses and points identically to bundle-adjusting the original sift recon.
+    """
+    sift_out = tmp_path / "sift_ba.sfmr"
+    embedded_out = tmp_path / "embedded_ba.sfmr"
+
+    apply_transforms_to_file(seoul_bull_workspace, sift_out, [BundleAdjustTransform()])
+    apply_transforms_to_file(
+        seoul_bull_workspace,
+        embedded_out,
+        [ToEmbeddedPatchesTransform(), BundleAdjustTransform()],
+    )
+
+    sift_ba = SfmrReconstruction.load(sift_out)
+    embedded_ba = SfmrReconstruction.load(embedded_out)
+
+    assert sift_ba.point_count == embedded_ba.point_count
+    # Poses and points land in the same place (same keypoints, same solve).
+    np.testing.assert_allclose(
+        np.asarray(sift_ba.translations),
+        np.asarray(embedded_ba.translations),
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(sift_ba.positions),
+        np.asarray(embedded_ba.positions),
+        atol=1e-4,
+    )
 
 
 def test_bundle_adjust_description():

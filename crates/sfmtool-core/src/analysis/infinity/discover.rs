@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use nalgebra::{Point3, Rotation3, Vector3};
+use nalgebra::{Point3, Vector3};
 
 use super::convert::{
     camera_extents, classify_rays_at_infinity, Classification, RayClassification,
@@ -463,14 +463,6 @@ impl SfmrReconstruction {
             finite_horizon,
         );
 
-        // World→camera rotations, one per image, computed once and reused across
-        // every discovered track that observes the image.
-        let rotations: Vec<Rotation3<f64>> = self
-            .images
-            .iter()
-            .map(|im| im.quaternion_wxyz.to_rotation_matrix())
-            .collect();
-
         // Mean reprojection error (pixels) of a discovered point against the
         // features it was built from, via the shared single-observation helper
         // (handles the w = 0 vs finite projection). A point with no in-front
@@ -486,7 +478,7 @@ impl SfmrReconstruction {
                     let image = &self.images[img as usize];
                     let camera = &self.cameras[image.camera_index as usize];
                     if let Some(e) = observation_reprojection_error(
-                        &rotations[img as usize],
+                        &image.quaternion_wxyz,
                         &image.translation_xyz,
                         camera,
                         position,

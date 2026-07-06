@@ -312,6 +312,32 @@ fn test_embedded_patches_round_trips_through_reconstruction() {
 }
 
 #[test]
+fn test_recompute_point_errors_embedded_uses_inline_keypoints() {
+    // An embedded_patches recon has no `.sift` files; recomputing errors must
+    // use the inline keypoints instead of trying (and failing) to read `.sift`.
+    // The sift_files path on the same synthetic recon would error on the missing
+    // `.sift`, so a successful Ok here proves the embedded branch is taken.
+    let mut recon = demo_embedded(10);
+    recon
+        .recompute_point_errors()
+        .expect("embedded recompute must not read .sift");
+    assert!(recon.points.iter().all(|p| p.error.is_finite()));
+}
+
+#[test]
+fn test_recompute_infinity_point_errors_embedded() {
+    // Flag one point as at-infinity; the infinity-only recompute must run
+    // against the inline keypoints (no `.sift`) and leave a finite error.
+    let mut recon = demo_embedded(10);
+    recon.points[0].position = nalgebra::Point3::new(0.0, 0.0, -1.0);
+    recon.points[0].w = 0.0;
+    recon
+        .recompute_infinity_point_errors()
+        .expect("embedded infinity recompute must not read .sift");
+    assert!(recon.points[0].error.is_finite());
+}
+
+#[test]
 fn test_to_sfmr_data_is_sift_files() {
     // A reconstruction round-trips as a sift_files v4 file.
     let data = SfmrReconstruction::demo(10).to_sfmr_data();

@@ -260,6 +260,29 @@ Applies bundle adjustment via pycolmap to refine camera poses and 3D point posit
 --remove-short-tracks 2 --bundle-adjust
 ```
 
+Works on both `sift_files` and `embedded_patches` reconstructions. The transform
+round-trips through COLMAP binary files, which need a 2D keypoint per
+observation: for a `sift_files` recon these are read from the workspace `.sift`
+files (indexed by each observation's feature index); for an `embedded_patches`
+recon they are taken from the inline `keypoints_xy` (no `.sift` companion is
+required). An `embedded_patches` input is refined and written back in
+`embedded_patches` mode, with the per-observation keypoints and the per-point
+patch frames carried through unchanged — note that the patch `(u, v)` frames are
+*not* re-fit to the adjusted geometry, so re-run `sfm embed-patches` (or
+`--refine-normals`) afterward if the poses/points moved materially.
+
+> **TODO (implementation cleanup):** the "where does an observation's 2D
+> keypoint come from" distinction (`.sift` file vs inline `keypoints_xy`) is
+> currently special-cased at several sites — `save_colmap_binary` and the BA
+> readback in `_bundle_adjust.py`, plus two parallel reprojection-error loops in
+> `reconstruction/data.rs` (`compute_observation_reprojection_errors` for
+> `sift_files`, `embedded_point_reprojection_errors` for `embedded_patches`).
+> These should collapse onto a single source-agnostic accessor on the
+> reconstruction (an "observed keypoint for (point, observation)" lookup, plus a
+> `keypoints_per_image()` helper) so a new feature source or a change to the
+> reprojection/at-infinity semantics is a one-place edit rather than several
+> kept-in-sync copies.
+
 #### `--refine-normals [<params>]`
 
 Refines each finite point's `normal` to the one that maximizes photometric

@@ -698,6 +698,46 @@ def _extract_rig_frame_data(
     )
 
 
+def _embedded_keypoints_for_colmap(keypoints_xy, track_image_indexes, num_images):
+    """Build per-image keypoint arrays and dense feature indices for COLMAP.
+
+    An ``embedded_patches`` reconstruction stores one 2D keypoint per
+    observation inline (``keypoints_xy``, parallel to the track arrays) rather
+    than in external ``.sift`` files. COLMAP's ``images.bin`` instead wants, per
+    image, a list of keypoints plus a feature index per observation into that
+    list. This packs each image's observed keypoints contiguously and assigns
+    every observation a dense index within its image.
+
+    Returns ``(keypoints_per_image, track_feature_indexes)`` where
+    ``keypoints_per_image[i]`` is an ``(k_i, 2)`` float64 array and
+    ``track_feature_indexes`` is parallel to ``track_image_indexes``.
+    """
+    track_image_indexes = np.asarray(track_image_indexes)
+    n_obs = len(track_image_indexes)
+    counts = np.bincount(track_image_indexes, minlength=num_images)
+
+    # Group observations by image via a stable sort, so each image's keypoints
+    # stay in their original (point, image) track order.
+    order = np.argsort(track_image_indexes, kind="stable")
+    sorted_keypoints = keypoints_xy[order]
+    keypoints_per_image = []
+    start = 0
+    for count in counts:
+        end = start + int(count)
+        keypoints_per_image.append(sorted_keypoints[start:end].reshape(-1, 2))
+        start = end
+
+    # Dense per-image feature index for each observation, mapped back to the
+    # original (unsorted) track order.
+    group_start = np.zeros(num_images, dtype=np.int64)
+    group_start[1:] = np.cumsum(counts)[:-1]
+    within_image = np.arange(n_obs) - group_start[track_image_indexes[order]]
+    track_feature_indexes = np.empty(n_obs, dtype=np.uint32)
+    track_feature_indexes[order] = within_image.astype(np.uint32)
+
+    return keypoints_per_image, track_feature_indexes
+
+
 def save_colmap_binary(
     recon,
     output_dir: Path,
@@ -731,19 +771,31 @@ def save_colmap_binary(
     output_dir = Path(output_dir)
     workspace_dir = recon.workspace_dir
 
-    # Read keypoints from .sift files for each image
-    keypoints_per_image = []
-    for img_name in recon.image_names:
-        image_path = Path(workspace_dir) / img_name
-        sift_path = get_sift_path_for_image(image_path)
-        with SiftReader(sift_path) as reader:
-            positions = reader.read_positions(count=max_features)
-        keypoints_per_image.append(np.asarray(positions, dtype=np.float64))
-
     # Get track arrays
     track_image_indexes = recon.track_image_indexes
-    track_feature_indexes = recon.track_feature_indexes
     track_point3d_indexes = recon.track_point_indexes
+
+    if recon.feature_source == "embedded_patches":
+        # An embedded_patches reconstruction carries its 2D keypoints inline
+        # (one per observation), with no external .sift files to read. Build
+        # per-image keypoint arrays from the inline observations and give each
+        # observation a dense per-image feature index so COLMAP's images.bin can
+        # reference it. These synthetic indices are internal to this export.
+        keypoints_per_image, track_feature_indexes = _embedded_keypoints_for_colmap(
+            np.asarray(recon.keypoints_xy, dtype=np.float64),
+            track_image_indexes,
+            len(recon.image_names),
+        )
+    else:
+        # Read keypoints from .sift files for each image
+        keypoints_per_image = []
+        for img_name in recon.image_names:
+            image_path = Path(workspace_dir) / img_name
+            sift_path = get_sift_path_for_image(image_path)
+            with SiftReader(sift_path) as reader:
+                positions = reader.read_positions(count=max_features)
+            keypoints_per_image.append(np.asarray(positions, dtype=np.float64))
+        track_feature_indexes = recon.track_feature_indexes
     positions_xyz = recon.positions
     colors_rgb = recon.colors
     reprojection_errors = recon.errors
