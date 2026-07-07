@@ -4,6 +4,7 @@
 """Convert a sift_files reconstruction to embedded_patches (photometric pipeline)."""
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import click
@@ -262,11 +263,25 @@ def embed_patches_command(
         # steady progress through the decode instead of one silent block.
         report_every = max(1, n_images // 20)
         load_start = time.perf_counter()
-        images = []
-        for i, name in enumerate(image_names):
-            images.append(read_workspace_image(recon.workspace_dir, name))
-            if (i + 1) % report_every == 0 or (i + 1) == n_images:
-                click.echo(f"  loaded {i + 1}/{n_images} images")
+        # Decode in a thread pool (cv2 releases the GIL), collecting results in
+        # submission order so `images` stays parallel to `image_names`.
+        with ThreadPoolExecutor() as pool:
+            futures = [
+                pool.submit(read_workspace_image, recon.workspace_dir, name)
+                for name in image_names
+            ]
+            images = []
+            try:
+                for i, future in enumerate(futures):
+                    images.append(future.result())
+                    if (i + 1) % report_every == 0 or (i + 1) == n_images:
+                        click.echo(f"  loaded {i + 1}/{n_images} images")
+            except BaseException:
+                # Fail fast: without this, the pool's __exit__ would finish
+                # decoding every queued image before the error surfaces.
+                for f in futures:
+                    f.cancel()
+                raise
         click.echo(
             f"  loaded {n_images} images in {time.perf_counter() - load_start:.1f}s"
         )

@@ -26,6 +26,8 @@ use crate::patch::normal_refine::{
 use crate::reconstruction::SfmrReconstruction;
 use rayon::prelude::*;
 
+pub mod prof;
+
 /// Tunables for [`select_patch_views`].
 ///
 /// The render/window/validity knobs mirror
@@ -139,116 +141,122 @@ fn build_reference(
     let track_proj: Vec<ProjectedImage<'_>> =
         track_views.iter().map(|&i| views[i as usize]).collect();
 
-    let ctx = build_level_context(
-        patch,
-        &n_normal,
-        &track_proj,
-        params.resolution,
-        w_full,
-        &normal_refine_shim(params),
-        None,
-    )?;
+    let ctx = prof::REF_SUPPORT.time(|| {
+        build_level_context(
+            patch,
+            &n_normal,
+            &track_proj,
+            params.resolution,
+            w_full,
+            &normal_refine_shim(params),
+            None,
+        )
+    })?;
     if ctx.kept.len() < params.min_track_views.max(2) as usize {
         return None;
     }
 
     // Render + z-normalize the kept track views over the frozen support.
-    let (raw, channels) = normalized_stack(
-        patch,
-        &ctx,
-        &track_proj,
-        params.resolution,
-        params.sampler,
-        None,
-    )?;
+    let (raw, channels) = prof::REF_RENDER.time(|| {
+        normalized_stack(
+            patch,
+            &ctx,
+            &track_proj,
+            params.resolution,
+            params.sampler,
+            None,
+        )
+    })?;
     let n = ctx.pixels.len();
     let total_weight: f64 = ctx.weights.iter().sum();
     if total_weight <= 0.0 {
         return None;
     }
     let sqrt_weights: Vec<f32> = ctx.weights.iter().map(|&w| w.sqrt() as f32).collect();
-    let mut xs = Vec::new();
-    let (kept, keep_mask) = znormalize_into_kept(
-        &raw,
-        ctx.kept.len(),
-        channels,
-        n,
-        &ctx.weights,
-        total_weight,
-        &sqrt_weights,
-        &mut xs,
-    )?;
-    // The *original* source-channel index of each compacted reference channel, so
-    // a candidate is scored on the reference's channel identity (not its own
-    // post-compaction channel order).
-    let kept_channels: Vec<usize> = keep_mask
-        .iter()
-        .enumerate()
-        .filter_map(|(c, &k)| k.then_some(c))
-        .collect();
-    let views_kept = ctx.kept.len();
+    prof::REF_CONSENSUS.time(|| {
+        let mut xs = Vec::new();
+        let (kept, keep_mask) = znormalize_into_kept(
+            &raw,
+            ctx.kept.len(),
+            channels,
+            n,
+            &ctx.weights,
+            total_weight,
+            &sqrt_weights,
+            &mut xs,
+        )?;
+        // The *original* source-channel index of each compacted reference channel, so
+        // a candidate is scored on the reference's channel identity (not its own
+        // post-compaction channel order).
+        let kept_channels: Vec<usize> = keep_mask
+            .iter()
+            .enumerate()
+            .filter_map(|(c, &k)| k.then_some(c))
+            .collect();
+        let views_kept = ctx.kept.len();
 
-    // Robust per-view weights for the reference consensus (same IRLS as Φ).
-    let mut sc = ConsensusScratch::default();
-    irls_view_weights(&xs, views_kept, kept, n, params.robust_iters, None, &mut sc);
-    let weights = &sc.w;
+        // Robust per-view weights for the reference consensus (same IRLS as Φ).
+        let mut sc = ConsensusScratch::default();
+        irls_view_weights(&xs, views_kept, kept, n, params.robust_iters, None, &mut sc);
+        let weights = &sc.w;
 
-    // Weighted consensus template per channel, then unit-normalize per channel so
-    // a dot product against another z-normalized render is a ZNCC. The stack `xs`
-    // already carries the √w window weighting, so the template lives in the same
-    // windowed space and no further weighting is needed.
-    let mut template = vec![0f32; kept * n];
-    for (v, &w) in weights.iter().enumerate().take(views_kept) {
-        let wv = w as f32;
-        for c in 0..kept {
-            let src = &xs[(v * kept + c) * n..][..n];
-            let dst = &mut template[c * n..][..n];
-            for (d, &s) in dst.iter_mut().zip(src) {
-                *d += wv * s;
+        // Weighted consensus template per channel, then unit-normalize per channel so
+        // a dot product against another z-normalized render is a ZNCC. The stack `xs`
+        // already carries the √w window weighting, so the template lives in the same
+        // windowed space and no further weighting is needed.
+        let mut template = vec![0f32; kept * n];
+        for (v, &w) in weights.iter().enumerate().take(views_kept) {
+            let wv = w as f32;
+            for c in 0..kept {
+                let src = &xs[(v * kept + c) * n..][..n];
+                let dst = &mut template[c * n..][..n];
+                for (d, &s) in dst.iter_mut().zip(src) {
+                    *d += wv * s;
+                }
             }
         }
-    }
-    for c in 0..kept {
-        let col = &mut template[c * n..][..n];
-        let norm = (col.iter().map(|&x| (x as f64) * (x as f64)).sum::<f64>()).sqrt();
-        if norm > 1e-12 {
-            let inv = (1.0 / norm) as f32;
-            for x in col.iter_mut() {
-                *x *= inv;
+        for c in 0..kept {
+            let col = &mut template[c * n..][..n];
+            let norm = (col.iter().map(|&x| (x as f64) * (x as f64)).sum::<f64>()).sqrt();
+            if norm > 1e-12 {
+                let inv = (1.0 / norm) as f32;
+                for x in col.iter_mut() {
+                    *x *= inv;
+                }
             }
         }
-    }
 
-    let reference = Reference {
-        ctx,
-        template,
-        kept_channels,
-        channels: kept,
-        n,
-    };
+        let reference = Reference {
+            ctx,
+            template,
+            kept_channels,
+            channels: kept,
+            n,
+        };
 
-    // Self-agreement: the mean ZNCC of the kept track views to the reference. The
-    // template is unit-norm per channel and each view's z-normalized column is
-    // unit-norm too, so the per-channel dot is a correlation; average over
-    // channels, then over views. `views_kept >= 2` (gated above), so the mean is
-    // always well-defined.
-    let mut agree_sum = 0.0;
-    for v in 0..views_kept {
-        let mut s = 0.0;
-        for c in 0..kept {
-            let row = &xs[(v * kept + c) * n..][..n];
-            let tmpl = &reference.template[c * n..][..n];
-            s += row
-                .iter()
-                .zip(tmpl)
-                .map(|(&a, &b)| (a as f64) * (b as f64))
-                .sum::<f64>();
+        // Self-agreement: the mean ZNCC of the kept track views to the reference. The
+        // template is unit-norm per channel and each view's z-normalized column is
+        // unit-norm too, so the per-channel dot is a correlation; average over
+        // channels, then over views. `views_kept >= 2` (gated above), so the mean is
+        // always well-defined.
+        let mut agree_sum = 0.0;
+        for v in 0..views_kept {
+            let mut s = 0.0;
+            for c in 0..kept {
+                let row = &xs[(v * kept + c) * n..][..n];
+                let tmpl = &reference.template[c * n..][..n];
+                s += row
+                    .iter()
+                    .zip(tmpl)
+                    .map(|(&a, &b)| (a as f64) * (b as f64))
+                    .sum::<f64>();
+            }
+            agree_sum += s / kept as f64;
         }
-        agree_sum += s / kept as f64;
-    }
-    let self_agreement = agree_sum / views_kept as f64;
+        let self_agreement = agree_sum / views_kept as f64;
 
-    Some((reference, self_agreement))
+        Some((reference, self_agreement))
+    })
 }
 
 /// Whether `patch`'s centre is in front of the `cam_from_world` camera —
@@ -298,14 +306,16 @@ fn candidate_zncc(
     // *raw* (un-compacted) per-original-channel pixel stack and rejects (returns
     // `None`) if any support pixel is out of frame in this view. The first slot of
     // its tuple is `[(0*channels + c)*n + pixel]` for the single view.
-    let (raw, channels) = normalized_stack(
-        patch,
-        single_ctx,
-        &single,
-        params.resolution,
-        params.sampler,
-        None,
-    )?;
+    let (raw, channels) = prof::ZNCC_RENDER.time(|| {
+        normalized_stack(
+            patch,
+            single_ctx,
+            &single,
+            params.resolution,
+            params.sampler,
+            None,
+        )
+    })?;
     let n = reference.n;
     let total_weight: f64 = single_ctx.weights.iter().sum();
     if total_weight <= 0.0 {
@@ -316,35 +326,37 @@ fn candidate_zncc(
     // the candidate's matching original channel directly and dot it against the
     // reference template column (which already carries the √w window weighting and
     // is unit-norm). A flat candidate channel contributes 0 (no misaligned dot).
-    let mut s = 0.0;
-    let mut scratch = vec![0f32; n];
-    for (tc, &orig_c) in reference.kept_channels.iter().enumerate() {
-        if orig_c >= channels {
-            // The candidate image has fewer channels than the reference space; that
-            // channel is undefined here — no contribution.
-            continue;
+    prof::ZNCC_DOT.time(|| {
+        let mut s = 0.0;
+        let mut scratch = vec![0f32; n];
+        for (tc, &orig_c) in reference.kept_channels.iter().enumerate() {
+            if orig_c >= channels {
+                // The candidate image has fewer channels than the reference space; that
+                // channel is undefined here — no contribution.
+                continue;
+            }
+            let col = &raw[orig_c * n..][..n];
+            let (s1, s2) = weighted_moments_pub(col, &single_ctx.weights);
+            let mean = (s1 / total_weight) as f32;
+            let norm_sq = s2 - s1 * (mean as f64);
+            if norm_sq < FLAT_NORM_SQ_EPS {
+                continue; // Flat in the candidate -> 0 contribution, not a bad dot.
+            }
+            let inv_norm = (1.0 / norm_sq.sqrt()) as f32;
+            for (out, (&x, &sw)) in scratch.iter_mut().zip(col.iter().zip(sqrt_weights)) {
+                *out = sw * (x - mean) * inv_norm;
+            }
+            let tmpl = &reference.template[tc * n..][..n];
+            s += scratch
+                .iter()
+                .zip(tmpl)
+                .map(|(&a, &b)| (a as f64) * (b as f64))
+                .sum::<f64>();
         }
-        let col = &raw[orig_c * n..][..n];
-        let (s1, s2) = weighted_moments_pub(col, &single_ctx.weights);
-        let mean = (s1 / total_weight) as f32;
-        let norm_sq = s2 - s1 * (mean as f64);
-        if norm_sq < FLAT_NORM_SQ_EPS {
-            continue; // Flat in the candidate -> 0 contribution, not a bad dot.
-        }
-        let inv_norm = (1.0 / norm_sq.sqrt()) as f32;
-        for (out, (&x, &sw)) in scratch.iter_mut().zip(col.iter().zip(sqrt_weights)) {
-            *out = sw * (x - mean) * inv_norm;
-        }
-        let tmpl = &reference.template[tc * n..][..n];
-        s += scratch
-            .iter()
-            .zip(tmpl)
-            .map(|(&a, &b)| (a as f64) * (b as f64))
-            .sum::<f64>();
-    }
-    // Average over the reference's channel count, mirroring the self-agreement
-    // convention (channels absent / flat in the candidate score 0 in the mean).
-    Some(s / reference.channels as f64)
+        // Average over the reference's channel count, mirroring the self-agreement
+        // convention (channels absent / flat in the candidate score 0 in the mean).
+        Some(s / reference.channels as f64)
+    })
 }
 
 /// A `NormalRefineParams` shim carrying just the gating knobs
@@ -386,6 +398,17 @@ pub fn select_patch_views(
     track_views: &[u32],
     params: &ViewSelectParams,
 ) -> ViewSelection {
+    prof::TOTAL.time(|| select_patch_views_impl(patch, views, track_views, params))
+}
+
+/// Untimed body of [`select_patch_views`] (split so the enclosing
+/// [`prof::TOTAL`] phase is a single wrap).
+fn select_patch_views_impl(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    track_views: &[u32],
+    params: &ViewSelectParams,
+) -> ViewSelection {
     let resolution = params.resolution.max(2);
     let params = ViewSelectParams {
         resolution,
@@ -405,7 +428,8 @@ pub fn select_patch_views(
     let is_track = seen; // the dedup set doubles as the membership test
 
     // Build the robust reference from the track views.
-    let reference = build_reference(patch, views, &track_views, &w_full, &params);
+    let reference =
+        prof::REFERENCE.time(|| build_reference(patch, views, &track_views, &w_full, &params));
 
     let admit_verbatim = || ViewSelection {
         admitted: track_views.clone(),
@@ -415,6 +439,7 @@ pub fn select_patch_views(
 
     let Some((reference, self_agreement)) = reference else {
         // No reference: admit the track views verbatim, no candidate vetting.
+        prof::count(&prof::N_VERBATIM, 1);
         return admit_verbatim();
     };
 
@@ -439,15 +464,18 @@ pub fn select_patch_views(
     for &ti in &track_views {
         admitted.push(ti);
         scores.push(
-            candidate_zncc(
-                patch,
-                &views[ti as usize],
-                &reference,
-                &single_ctx,
-                &sqrt_weights,
-                &params,
-            )
-            .unwrap_or(f64::NAN),
+            prof::TRACK_SCORE
+                .time(|| {
+                    candidate_zncc(
+                        patch,
+                        &views[ti as usize],
+                        &reference,
+                        &single_ctx,
+                        &sqrt_weights,
+                        &params,
+                    )
+                })
+                .unwrap_or(f64::NAN),
         );
     }
 
@@ -456,6 +484,7 @@ pub fn select_patch_views(
     // reference, so the track is admitted verbatim with no expansion (but we still
     // report the measured self-agreement).
     if self_agreement < params.min_self_agreement {
+        prof::count(&prof::N_VERBATIM, 1);
         return ViewSelection {
             admitted,
             scores,
@@ -484,8 +513,13 @@ pub fn select_patch_views(
             }
             // Photometric vetting (also enforces in-frame coverage: a candidate
             // whose render misses the reference support is unscoreable -> rejected).
-            let zncc =
-                candidate_zncc(patch, view, &reference, &single_ctx, &sqrt_weights, &params)?;
+            prof::count(&prof::N_CANDIDATES, 1);
+            let zncc = prof::CAND_SCORE.time(|| {
+                candidate_zncc(patch, view, &reference, &single_ctx, &sqrt_weights, &params)
+            })?;
+            if zncc >= bar {
+                prof::count(&prof::N_ADMITTED, 1);
+            }
             (zncc >= bar).then_some((i, zncc))
         })
         .collect();
@@ -524,7 +558,11 @@ pub fn select_patch_cloud_views(
         cloud.len(),
         "track_views must be parallel to the cloud"
     );
-    cloud
+    if prof::enabled() {
+        prof::reset();
+    }
+    let wall_start = std::time::Instant::now();
+    let out: Vec<ViewSelection> = cloud
         .patches
         .par_iter()
         .zip(track_views.par_iter())
@@ -536,7 +574,11 @@ pub fn select_patch_cloud_views(
             }
             out
         })
-        .collect()
+        .collect();
+    if prof::enabled() {
+        prof::report(cloud.len(), wall_start.elapsed().as_secs_f64());
+    }
+    out
 }
 
 /// For each patch of `cloud` (linked to `recon` via `point_indexes`), the track image

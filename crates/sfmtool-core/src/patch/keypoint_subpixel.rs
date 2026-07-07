@@ -288,32 +288,39 @@ fn render_core(
     channels: usize,
     out: &mut [f32],
 ) -> bool {
-    let center = shifted_center(patch, au, av, wpp_u, wpp_v);
-    let mut core_patch =
-        OrientedPatch::from_center_normal(center, patch.normal(), patch.v_axis, patch.half_extent);
-    // Preserve the homogeneous weight so a point at infinity renders as a
-    // direction patch (corners are directions), not a finite surfel.
-    core_patch.w = patch.w;
-    let mut map = WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
-    let img = match sampler {
-        Sampler::Anisotropic => {
-            map.compute_svd();
-            remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY)
+    prof::RENDER_VALUE.time(|| {
+        let center = shifted_center(patch, au, av, wpp_u, wpp_v);
+        let mut core_patch = OrientedPatch::from_center_normal(
+            center,
+            patch.normal(),
+            patch.v_axis,
+            patch.half_extent,
+        );
+        // Preserve the homogeneous weight so a point at infinity renders as a
+        // direction patch (corners are directions), not a finite surfel.
+        core_patch.w = patch.w;
+        let mut map =
+            WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
+        let img = match sampler {
+            Sampler::Anisotropic => {
+                map.compute_svd();
+                remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY)
+            }
+            Sampler::Bilinear => remap_bilinear(view.pyramid.level(0), &map),
+        };
+        let n = support.pixels.len();
+        for (k, &p) in support.pixels.iter().enumerate() {
+            let col = (p % resolution as usize) as u32;
+            let row = (p / resolution as usize) as u32;
+            if !map.is_valid(col, row) {
+                return false;
+            }
+            for c in 0..channels {
+                out[c * n + k] = img.get_pixel(col, row, c as u32) as f32;
+            }
         }
-        Sampler::Bilinear => remap_bilinear(view.pyramid.level(0), &map),
-    };
-    let n = support.pixels.len();
-    for (k, &p) in support.pixels.iter().enumerate() {
-        let col = (p % resolution as usize) as u32;
-        let row = (p / resolution as usize) as u32;
-        if !map.is_valid(col, row) {
-            return false;
-        }
-        for c in 0..channels {
-            out[c * n + k] = img.get_pixel(col, row, c as u32) as f32;
-        }
-    }
-    true
+        true
+    })
 }
 
 /// Render one view's `R×R` core at offset `(au, av)` and also fill the analytic
@@ -350,45 +357,52 @@ fn render_core_with_jg(
     jg_v: &mut [f32],
     img_scratch: &mut ImageF32WithGrad,
 ) -> bool {
-    let center = shifted_center(patch, au, av, wpp_u, wpp_v);
-    let mut core_patch =
-        OrientedPatch::from_center_normal(center, patch.normal(), patch.v_axis, patch.half_extent);
-    core_patch.w = patch.w;
-    let mut map = WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
-    match sampler {
-        Sampler::Anisotropic => {
-            map.compute_svd(); // also populates jacobians as a by-product
-            remap_aniso_with_grad_into(view.pyramid, &map, MAX_ANISOTROPY, img_scratch);
+    prof::RENDER_GRAD.time(|| {
+        let center = shifted_center(patch, au, av, wpp_u, wpp_v);
+        let mut core_patch = OrientedPatch::from_center_normal(
+            center,
+            patch.normal(),
+            patch.v_axis,
+            patch.half_extent,
+        );
+        core_patch.w = patch.w;
+        let mut map =
+            WarpMap::from_patch(&core_patch, view.camera, view.cam_from_world, resolution);
+        match sampler {
+            Sampler::Anisotropic => {
+                map.compute_svd(); // also populates jacobians as a by-product
+                remap_aniso_with_grad_into(view.pyramid, &map, MAX_ANISOTROPY, img_scratch);
+            }
+            Sampler::Bilinear => {
+                map.compute_jacobians();
+                remap_bilinear_with_grad_into(view.pyramid.level(0), &map, img_scratch);
+            }
+        };
+        let n = support.pixels.len();
+        let stride = img_scratch.width() as usize * channels;
+        let value = img_scratch.value();
+        let grad_x = img_scratch.grad_x();
+        let grad_y = img_scratch.grad_y();
+        for (k, &p) in support.pixels.iter().enumerate() {
+            let col = (p % resolution as usize) as u32;
+            let row = (p / resolution as usize) as u32;
+            if !map.is_valid(col, row) {
+                return false;
+            }
+            let j = map.get_jacobian(col, row);
+            let row_off = row as usize * stride + col as usize * channels;
+            for c in 0..channels {
+                let idx = row_off + c;
+                let v = value[idx];
+                let gx = grad_x[idx];
+                let gy = grad_y[idx];
+                g[c * n + k] = v;
+                jg_u[c * n + k] = j[0][0] * gx + j[1][0] * gy;
+                jg_v[c * n + k] = j[0][1] * gx + j[1][1] * gy;
+            }
         }
-        Sampler::Bilinear => {
-            map.compute_jacobians();
-            remap_bilinear_with_grad_into(view.pyramid.level(0), &map, img_scratch);
-        }
-    };
-    let n = support.pixels.len();
-    let stride = img_scratch.width() as usize * channels;
-    let value = img_scratch.value();
-    let grad_x = img_scratch.grad_x();
-    let grad_y = img_scratch.grad_y();
-    for (k, &p) in support.pixels.iter().enumerate() {
-        let col = (p % resolution as usize) as u32;
-        let row = (p / resolution as usize) as u32;
-        if !map.is_valid(col, row) {
-            return false;
-        }
-        let j = map.get_jacobian(col, row);
-        let row_off = row as usize * stride + col as usize * channels;
-        for c in 0..channels {
-            let idx = row_off + c;
-            let v = value[idx];
-            let gx = grad_x[idx];
-            let gy = grad_y[idx];
-            g[c * n + k] = v;
-            jg_u[c * n + k] = j[0][0] * gx + j[1][0] * gy;
-            jg_v[c * n + k] = j[0][1] * gx + j[1][1] * gy;
-        }
-    }
-    true
+        true
+    })
 }
 
 /// z-normalize a raw core (`raw[channel * n + k]`, all channels) over the windowed
@@ -397,38 +411,42 @@ fn render_core_with_jg(
 /// norm² below [`FLAT_NORM_SQ_EPS`]) is written as zeros. Mirrors
 /// `keypoint_localize::znorm_core` / `normal_refine::znormalize_into`.
 fn znorm_core(raw: &[f32], support: &Support, channels: usize, out: &mut [f32]) {
-    let n = support.pixels.len();
-    for c in 0..channels {
-        let col = &raw[c * n..][..n];
-        let (s1, s2) = weighted_moments_pub(col, &support.weights);
-        let mean = (s1 / support.total_weight) as f32;
-        let norm_sq = s2 - s1 * (mean as f64);
-        let dst = &mut out[c * n..][..n];
-        if norm_sq < FLAT_NORM_SQ_EPS {
-            dst.fill(0.0);
-        } else {
-            let inv = (1.0 / norm_sq.sqrt()) as f32;
-            for (d, (&x, &sw)) in dst.iter_mut().zip(col.iter().zip(&support.sqrt_weights)) {
-                *d = sw * (x - mean) * inv;
+    prof::ZNORM.time(|| {
+        let n = support.pixels.len();
+        for c in 0..channels {
+            let col = &raw[c * n..][..n];
+            let (s1, s2) = weighted_moments_pub(col, &support.weights);
+            let mean = (s1 / support.total_weight) as f32;
+            let norm_sq = s2 - s1 * (mean as f64);
+            let dst = &mut out[c * n..][..n];
+            if norm_sq < FLAT_NORM_SQ_EPS {
+                dst.fill(0.0);
+            } else {
+                let inv = (1.0 / norm_sq.sqrt()) as f32;
+                for (d, (&x, &sw)) in dst.iter_mut().zip(col.iter().zip(&support.sqrt_weights)) {
+                    *d = sw * (x - mean) * inv;
+                }
             }
         }
-    }
+    })
 }
 
 /// Channel-averaged windowed ZNCC of a z-normalized core against the unit-norm
 /// consensus template (both `[c * n + k]`): the ECC score `S(δ)`.
 fn ecc_score(znorm: &[f32], tmpl: &[f32], channels: usize, n: usize) -> f64 {
-    let mut s = 0.0;
-    for c in 0..channels {
-        let a = &znorm[c * n..][..n];
-        let b = &tmpl[c * n..][..n];
-        s += a
-            .iter()
-            .zip(b)
-            .map(|(&x, &y)| (x as f64) * (y as f64))
-            .sum::<f64>();
-    }
-    s / channels as f64
+    prof::ECC.time(|| {
+        let mut s = 0.0;
+        for c in 0..channels {
+            let a = &znorm[c * n..][..n];
+            let b = &tmpl[c * n..][..n];
+            s += a
+                .iter()
+                .zip(b)
+                .map(|(&x, &y)| (x as f64) * (y as f64))
+                .sum::<f64>();
+        }
+        s / channels as f64
+    })
 }
 
 /// The analytic ECC Gauss–Newton normal equations at the current offset. Given
@@ -443,6 +461,20 @@ fn ecc_score(znorm: &[f32], tmpl: &[f32], channels: usize, n: usize) -> f64 {
 /// seed for).
 #[allow(clippy::too_many_arguments)]
 fn view_jacobian(
+    g: &[f32],
+    jg_u: &[f32],
+    jg_v: &[f32],
+    tmpl: &[f32],
+    support: &Support,
+    channels: usize,
+) -> Option<([f64; 3], [f64; 2])> {
+    prof::JACOBIAN.time(|| view_jacobian_impl(g, jg_u, jg_v, tmpl, support, channels))
+}
+
+/// Untimed body of [`view_jacobian`] (split so the phase timer stays a single
+/// wrap).
+#[allow(clippy::too_many_arguments)]
+fn view_jacobian_impl(
     g: &[f32],
     jg_u: &[f32],
     jg_v: &[f32],
@@ -584,6 +616,20 @@ pub fn refine_patch_keypoints(
     starting_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &KeypointSubpixelParams,
 ) -> KeypointRefinement {
+    prof::TOTAL
+        .time(|| refine_patch_keypoints_impl(patch, views, view_set, starting_keypoints, params))
+}
+
+/// Untimed body of [`refine_patch_keypoints`] (split so the enclosing
+/// [`prof::TOTAL`] phase is a single wrap covering both batch entries — the
+/// Rust [`refine_patch_cloud_keypoints`] and the PyO3 binding's inlined loop).
+fn refine_patch_keypoints_impl(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    view_set: &[u32],
+    starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    params: &KeypointSubpixelParams,
+) -> KeypointRefinement {
     let resolution = params.resolution.max(2);
     let wpp_u = 2.0 * patch.half_extent[0] / resolution as f64;
     let wpp_v = 2.0 * patch.half_extent[1] / resolution as f64;
@@ -654,6 +700,7 @@ pub fn refine_patch_keypoints(
     let mut live: Vec<usize> = Vec::new();
     let mut running = RunningConsensus::default();
     for _ in 0..max_sweeps {
+        prof::count(&prof::N_SWEEPS, 1);
         // 1. Render every view's core at its current offset and z-normalize the
         //    live ones into the per-sweep template-build buffer `xs`.
         live.clear();
@@ -687,19 +734,21 @@ pub fn refine_patch_keypoints(
         //    this is the spec's frozen `T`; on later sweeps it is the per-sweep
         //    refresh. Per-move additionally rebuilds the running sum `S` so it
         //    can be delta-updated as views move within the sweep.
-        irls_view_weights(
-            &xs,
-            live.len(),
-            channels,
-            n,
-            params.robust_iters,
-            None,
-            &mut sc,
-        );
-        weighted_unit_template_into(&xs, &sc.w, live.len(), channels, n, &mut tmpl);
-        if matches!(params.consensus_refresh, ConsensusRefresh::PerMove) {
-            running.rebuild(&xs, &sc.w, live.len(), channels, n);
-        }
+        prof::CONSENSUS.time(|| {
+            irls_view_weights(
+                &xs,
+                live.len(),
+                channels,
+                n,
+                params.robust_iters,
+                None,
+                &mut sc,
+            );
+            weighted_unit_template_into(&xs, &sc.w, live.len(), channels, n, &mut tmpl);
+            if matches!(params.consensus_refresh, ConsensusRefresh::PerMove) {
+                running.rebuild(&xs, &sc.w, live.len(), channels, n);
+            }
+        });
 
         // 3. Move every live view against the current consensus, tracking the
         //    sweep's mean per-view move for the outer convergence check. For
@@ -714,7 +763,7 @@ pub fn refine_patch_keypoints(
             let view_tmpl: &[f32] = match params.consensus_refresh {
                 ConsensusRefresh::PerSweep => &tmpl,
                 ConsensusRefresh::PerMove => {
-                    running.write_shared_template(&mut tmpl);
+                    prof::CONSENSUS_UPDATE.time(|| running.write_shared_template(&mut tmpl));
                     &tmpl
                 }
             };
@@ -743,7 +792,7 @@ pub fn refine_patch_keypoints(
             if matches!(params.consensus_refresh, ConsensusRefresh::PerMove)
                 && states[si].score.is_finite()
             {
-                running.update_view(slot, &scratch.zbuf);
+                prof::CONSENSUS_UPDATE.time(|| running.update_view(slot, &scratch.zbuf));
             }
         }
         let mean_move = sweep_move_sum / live.len() as f64;
@@ -816,15 +865,17 @@ fn render_representative(
 
     // Final IRLS view weights over the final-offset cores (parallel to `live`).
     let mut sc = ConsensusScratch::default();
-    irls_view_weights(
-        &xs,
-        live.len(),
-        channels,
-        n,
-        params.robust_iters,
-        None,
-        &mut sc,
-    );
+    prof::CONSENSUS.time(|| {
+        irls_view_weights(
+            &xs,
+            live.len(),
+            channels,
+            n,
+            params.robust_iters,
+            None,
+            &mut sc,
+        )
+    });
     let weights: Vec<f64> = sc.w[..live.len()].to_vec();
 
     // Anchor each live view's full-grid render at its final keypoint — the same
@@ -840,15 +891,17 @@ fn render_representative(
         view_keypoints[st.idx as usize] = Some([kx, ky]);
         kept.push(st.idx as usize);
     }
-    let stack = PatchViewStack::render(
-        patch,
-        views,
-        &kept,
-        resolution,
-        params.sampler,
-        Some(&view_keypoints),
-    );
-    Some(stack.fuse(&weights, AGREEMENT_SIGMA))
+    Some(prof::REPR_FUSE.time(|| {
+        let stack = PatchViewStack::render(
+            patch,
+            views,
+            &kept,
+            resolution,
+            params.sampler,
+            Some(&view_keypoints),
+        );
+        stack.fuse(&weights, AGREEMENT_SIGMA)
+    }))
 }
 
 /// The per-move (Gauss–Seidel) incremental consensus state — the running
@@ -1054,6 +1107,7 @@ fn refine_one_view(
     let mut cur = st.off;
 
     for _ in 0..params.max_gn_steps {
+        prof::count(&prof::N_GN_STEPS, 1);
         // One render: value core plus per-pixel ∂I/∂δ in patch-grid coords
         // (∇_src I composed with the warp Jacobian). If any support pixel is out
         // of frame the local Jacobian is ill-defined here: stop.
@@ -1092,6 +1146,7 @@ fn refine_one_view(
             let du = cand[0] - st.seed[0];
             let dv = cand[1] - st.seed[1];
             if (du * du + dv * dv).sqrt() <= params.max_offset_px {
+                prof::count(&prof::N_LINE_SEARCH, 1);
                 if let Some(s) = score_at(cand, g, zbuf) {
                     if s > best_score {
                         let mv = (alpha * step[0]).hypot(alpha * step[1]);

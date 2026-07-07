@@ -85,8 +85,12 @@ pub static RENDER_MEAN: Phase = Phase::new("render_mean");
 pub static RENDER_CENTER: Phase = Phase::new("render_center");
 /// Per-round z-normalization of the live cores into shared channel space.
 pub static ZNORM: Phase = Phase::new("znormalize");
-/// Per-view leave-one-out consensus template (LOO copy + IRLS reweight +
-/// weighted unit template).
+/// Per-round shared Gram-matrix build over the live views' z-normalized cores
+/// — the one-per-round accumulation the incremental leave-one-out consensus
+/// derives every holdout's template from.
+pub static TEMPLATE_GRAM: Phase = Phase::new("loo_gram");
+/// Per-view leave-one-out consensus template (Gram-space IRLS reweight +
+/// pixel-space weighted unit template; the holdout-stack copy is gone).
 pub static TEMPLATE: Phase = Phase::new("loo_template");
 /// Per-view sub-pixel translation search against the LOO reference
 /// (`search_shift`).
@@ -128,7 +132,7 @@ pub fn count(c: &AtomicU64, n: u64) {
     }
 }
 
-const PHASES: [&Phase; 13] = [
+const PHASES: [&Phase; 14] = [
     &TOTAL,
     &RENDER,
     &RENDER_PROJECT,
@@ -137,6 +141,7 @@ const PHASES: [&Phase; 13] = [
     &RENDER_MEAN,
     &RENDER_CENTER,
     &ZNORM,
+    &TEMPLATE_GRAM,
     &TEMPLATE,
     &SEARCH,
     &SEARCH_ACC,
@@ -178,7 +183,7 @@ pub fn report(patches: usize, wall_secs: f64) {
             },
         );
     }
-    let leaves: u64 = [&RENDER, &ZNORM, &TEMPLATE, &SEARCH]
+    let leaves: u64 = [&RENDER, &ZNORM, &TEMPLATE_GRAM, &TEMPLATE, &SEARCH]
         .iter()
         .map(|p| p.ns.load(Ordering::Relaxed))
         .sum();

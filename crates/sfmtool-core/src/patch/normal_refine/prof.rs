@@ -82,6 +82,17 @@ pub static CACHE_RESAMPLE: Phase = Phase::new("cache_resample");
 pub static CACHE_ZNORM: Phase = Phase::new("cache_znorm");
 /// `consensus_phi` on the cached stack.
 pub static CACHE_CONSENSUS: Phase = Phase::new("cache_consensus");
+/// Fronto-base packing in `prerender`: the u32 pack, replicate pad, and
+/// base-affine corner fit/inverse (the base *render* itself is attributed to
+/// [`WARP`] / [`REMAP`]).
+pub static CACHE_PACK: Phase = Phase::new("cache_pack");
+/// Per-candidate setup on the cached scoring path: candidate repose, obliquity
+/// prior fill, raw-buffer resize (the keypoint-anchored recenter + affine map
+/// build is attributed to [`CACHE_MAP`]).
+pub static CACHE_SETUP: Phase = Phase::new("cache_setup");
+/// D-optimal refinement-basis subset selection
+/// (`view_subset::select_refine_subset`, the `max_refine_views` cap).
+pub static SUBSET: Phase = Phase::new("view_subset");
 
 // Consensus sub-phases (nest inside CONSENSUS / CACHE_CONSENSUS for the
 // consensus deep-dive; not partitioned into the leaf total).
@@ -123,7 +134,7 @@ pub fn count(c: &AtomicU64, n: u64) {
     }
 }
 
-const PHASES: [&Phase; 17] = [
+const PHASES: [&Phase; 20] = [
     &TOTAL,
     &WARP,
     &SVD,
@@ -135,6 +146,9 @@ const PHASES: [&Phase; 17] = [
     &CACHE_RESAMPLE,
     &CACHE_ZNORM,
     &CACHE_CONSENSUS,
+    &CACHE_PACK,
+    &CACHE_SETUP,
+    &SUBSET,
     &IRLS_XBAR,
     &IRLS_RESID,
     &IRLS_REWEIGHT,
@@ -194,6 +208,9 @@ pub fn report(patches: usize, wall_secs: f64) {
         &CACHE_RESAMPLE,
         &CACHE_ZNORM,
         &CACHE_CONSENSUS,
+        &CACHE_PACK,
+        &CACHE_SETUP,
+        &SUBSET,
     ]
     .iter()
     .map(|p| p.ns.load(Ordering::Relaxed))

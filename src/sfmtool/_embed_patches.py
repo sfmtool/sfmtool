@@ -31,7 +31,12 @@ from typing import Any
 
 import numpy as np
 
-from sfmtool._sfmtool import PatchCloud, ProgressCounter, SfmrReconstruction
+from sfmtool._sfmtool import (
+    ImagePyramidSet,
+    PatchCloud,
+    ProgressCounter,
+    SfmrReconstruction,
+)
 
 
 @contextmanager
@@ -322,7 +327,7 @@ def compact_to_embedded_patches(
 def _refine_subpixel(
     cloud: PatchCloud,
     embedded: SfmrReconstruction,
-    images: list[np.ndarray],
+    images: list[np.ndarray] | ImagePyramidSet,
     localizations: list[dict[str, Any]],
     *,
     sweeps: int,
@@ -698,6 +703,13 @@ def embed_patches(
     log = progress if callable(progress) else None
     half_extent = patch_size / 2.0
 
+    # Decode every source image into its full pyramid ONCE. Each kernel call
+    # below (six on a default two-round run) previously rebuilt all the
+    # pyramids from the numpy list on entry; the shared set removes that
+    # per-call marshalling cost without changing any pyramid content.
+    with _timed_step(log, f"  building image pyramids ({len(images)} imgs)..."):
+        pyramids = ImagePyramidSet(recon, images)
+
     # 0. The single `.sift`-consuming step: baseline embedded conversion. It sizes
     #    each point's mean-viewing frame by SIFT feature scale, copies the SIFT
     #    detection keypoints inline, and reads the image hashes from `.sift`
@@ -725,7 +737,7 @@ def embed_patches(
     ):
         cloud.refine_normals(
             embedded,
-            images,
+            pyramids,
             resolution=resolution,
             use_stored_keypoints=True,
             obliquity_weight_power=obliquity_weight_power,
@@ -741,7 +753,7 @@ def embed_patches(
     ):
         selections = cloud.select_views(
             embedded,
-            images,
+            pyramids,
             min_relative_zncc=min_relative_zncc,
             resolution=resolution,
             progress=counter,
@@ -760,7 +772,7 @@ def embed_patches(
     ):
         localizations = cloud.localize_keypoints(
             embedded,
-            images,
+            pyramids,
             view_sets=view_sets,
             max_iters=max_iters,
             search=search,
@@ -788,7 +800,7 @@ def embed_patches(
         localizations, bitmaps, valid = _refine_subpixel(
             cloud,
             embedded,
-            images,
+            pyramids,
             localizations,
             sweeps=subpixel,
             resolution=resolution,
@@ -845,7 +857,7 @@ def embed_patches(
         ):
             cloud_r.refine_normals(
                 emb_r,
-                images,
+                pyramids,
                 resolution=resolution,
                 use_stored_keypoints=True,
                 obliquity_weight_power=obliquity_weight_power,
@@ -880,7 +892,7 @@ def embed_patches(
             loc_r, bitmaps, valid = _refine_subpixel(
                 cloud_r,
                 emb_r,
-                images,
+                pyramids,
                 base_loc,
                 sweeps=subpixel,
                 resolution=resolution,

@@ -37,20 +37,21 @@ pub(super) fn view_valid_mask(
     w_full: &[f64],
     keypoint: Option<[f64; 2]>,
 ) -> Vec<bool> {
-    let patch = view_render_patch(patch, view, keypoint);
-    let map = prof::MASK
-        .time(|| WarpMap::from_patch(&patch, view.camera, view.cam_from_world, resolution));
-    let r = resolution;
-    let mut mask = vec![false; (r as usize) * (r as usize)];
-    for row in 0..r {
-        for col in 0..r {
-            let p = (row * r + col) as usize;
-            if w_full[p] > 0.0 && map.is_valid(col, row) {
-                mask[p] = true;
+    prof::MASK.time(|| {
+        let patch = view_render_patch(patch, view, keypoint);
+        let map = WarpMap::from_patch(&patch, view.camera, view.cam_from_world, resolution);
+        let r = resolution;
+        let mut mask = vec![false; (r as usize) * (r as usize)];
+        for row in 0..r {
+            for col in 0..r {
+                let p = (row * r + col) as usize;
+                if w_full[p] > 0.0 && map.is_valid(col, row) {
+                    mask[p] = true;
+                }
             }
         }
-    }
-    mask
+        mask
+    })
 }
 
 /// Build the frozen support at `center_n`: cull back-facing views, gate each

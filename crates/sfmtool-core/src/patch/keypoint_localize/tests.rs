@@ -793,6 +793,69 @@ fn converges_early_and_extra_rounds_are_idempotent() {
 }
 
 #[test]
+fn stable_scene_converges_before_max_iters() {
+    // A perfectly aligned scene reaches positional stationarity almost
+    // immediately, so at the DEFAULT `convergence_px` the loop must exit well
+    // before a generous `max_iters` — pinning the round-over-round-change
+    // convergence metric. (Under the old absolute-offset metric the freshly
+    // recomputed parabolic residual kept `mean_shift` above the threshold and
+    // every point ran all `max_iters` rounds; this test would fail with
+    // `rounds == 40`.)
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let offs = [[0.0; 2]; 4];
+    let texs = vec![texture as fn(f64, f64) -> f64; 4];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    let p = KeypointLocalizeParams {
+        max_iters: 40,
+        ..params()
+    };
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &p);
+    assert_eq!(res.views.len(), 4, "aligned views must all be kept");
+    assert!(
+        (1..40).contains(&res.rounds),
+        "a stable scene must converge before max_iters at the default \
+         convergence_px, ran {} rounds",
+        res.rounds
+    );
+}
+
+#[test]
+fn no_convergence_in_a_round_that_dropped_views() {
+    // A round that drops a view changes the consensus the survivors registered
+    // against, so convergence must not fire in that same round — the survivors
+    // get at least one more round against the survivor-only template. With an
+    // unsatisfiable ZNCC bar the first round culls 3 views -> the two-view
+    // floor; positional stationarity is immediate (aligned scene), but the
+    // membership guard must still force a second round.
+    let centers = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0], [0.0, 0.4, 0.0]];
+    let offs = [[0.0; 2]; 3];
+    let texs = vec![texture as fn(f64, f64) -> f64; 3];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    let p = KeypointLocalizeParams {
+        min_relative_zncc: 1.5,
+        ..params()
+    };
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2], None, &p);
+    assert_eq!(res.views.len(), 2, "floor keeps exactly two");
+    assert!(
+        res.rounds >= 2,
+        "convergence fired in the same round that dropped views (rounds = {})",
+        res.rounds
+    );
+}
+
+#[test]
 fn empty_view_set_returns_empty() {
     // A patch with no views to refine yields an empty (but well-formed) result.
     let centers = [[0.4, 0.0, 0.0]];
@@ -1468,5 +1531,73 @@ fn plus_descent_agrees_with_exhaustive_on_well_posed_scene() {
             ka,
             kb,
         );
+    }
+}
+
+#[test]
+fn incremental_loo_template_matches_reference() {
+    // The Gram-space incremental LOO consensus (`loo_consensus_template`) must
+    // reproduce the compacted-holdout-stack reference — copy the other views'
+    // rows, `irls_view_weights`, `weighted_unit_template_into` — for every
+    // holdout, within float-accumulation tolerance (f64 Gram algebra vs the
+    // f32 SAXPY/residual path). Includes an outlier view so the Tukey cutoff
+    // (weight → 0) actually fires on some holdout sets.
+    let (nv, kept_ch, n) = (6usize, 3usize, 40usize);
+    let cn = kept_ch * n;
+
+    // Deterministic pseudo-random stack (LCG), values in [-1, 1]; view 5 is a
+    // gross outlier (a different generator stream, amplified).
+    let mut state = 0x2545F4914F6CDD1Du64;
+    let mut next = move || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((state >> 33) as f64 / (1u64 << 31) as f64) - 1.0
+    };
+    let base: Vec<f32> = (0..cn).map(|_| next() as f32).collect();
+    let mut xs = vec![0f32; nv * cn];
+    for v in 0..nv {
+        for k in 0..cn {
+            let noise = next() as f32 * 0.05;
+            xs[v * cn + k] = if v == 5 {
+                // Outlier: unrelated content at 3x amplitude.
+                3.0 * next() as f32
+            } else {
+                base[k] + noise
+            };
+        }
+    }
+
+    let robust_iters = 3;
+    let mut loo = LooScratch::default();
+    build_loo_gram(&xs, nv, cn, &mut loo);
+
+    let mut sc = ConsensusScratch::default();
+    let mut loo_xs = vec![0f32; (nv - 1) * cn];
+    let mut got = Vec::new();
+    let mut want = Vec::new();
+    for v in 0..nv {
+        // Reference: compact the holdout stack, IRLS, unit template.
+        let mut w = 0;
+        for u in 0..nv {
+            if u == v {
+                continue;
+            }
+            loo_xs[w * cn..][..cn].copy_from_slice(&xs[u * cn..][..cn]);
+            w += 1;
+        }
+        irls_view_weights(&loo_xs, w, kept_ch, n, robust_iters, None, &mut sc);
+        weighted_unit_template_into(&loo_xs, &sc.w, w, kept_ch, n, &mut want);
+
+        // Production: Gram-space IRLS + skip-materialization.
+        loo_consensus_template(&xs, nv, v, kept_ch, n, robust_iters, &mut loo, &mut got);
+
+        assert_eq!(got.len(), want.len(), "holdout {v}: template length");
+        for (k, (&g, &r)) in got.iter().zip(&want).enumerate() {
+            assert!(
+                (g - r).abs() < 1e-4,
+                "holdout {v}, element {k}: incremental {g} vs reference {r}"
+            );
+        }
     }
 }

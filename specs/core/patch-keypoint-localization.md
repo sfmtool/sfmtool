@@ -91,8 +91,17 @@ from `X_p` and **initialized by unprojecting the starting keypoint onto `Π_p`**
    low-texture patch isn't over-dropped); the next round's consensus is rebuilt
    from the survivors, so the remaining views register against a cleaner
    template. Stop dropping once only two views (the LOO floor) remain.
-6. **Repeat** to convergence (mean per-view residual shift `< ~0.05` px) or a
-   small iteration cap (default 5).
+6. **Repeat** to convergence or a small iteration cap (default 5). Convergence
+   is the mean **round-over-round change** of each view's refined position
+   (integer accumulator + sub-pixel residual, this round vs the previous one)
+   dropping below `convergence_px` (`~0.05` px), **and** the view set having
+   survived the round unchanged — a round that dropped a view changed the
+   consensus the survivors registered against, so they always get at least one
+   more round against the survivor-only template before the stationarity test
+   can fire. (The raw per-round search output is *not* the metric: it includes
+   the freshly recomputed parabolic residual, which never moves the read
+   position, so its magnitude has a fraction-of-a-pixel floor even once the
+   search stops moving.)
 
 The converged `acc[v]`, mapped from patch-grid units back to image pixels via the
 view's projection, is `δ_j`; the emitted keypoint is `project_i(X_p) + δ_j`.
@@ -165,7 +174,7 @@ point the pipeline calls per point. It reuses the existing patch machinery:
 | `min_grazing_cos` | 0.1 | pre-filter a view whose ray is near-parallel to the plane (`|d̂·n̂|` below this) |
 | `resolution` | 24 | the `R×R` patch grid the consensus / ZNCC are scored on |
 | `robust_iters` | 3 | IRLS passes for the robust consensus |
-| `convergence_px` | 0.05 | stop once the mean per-view residual shift of a round is below this (patch-grid px) |
+| `convergence_px` | 0.05 | stop once a round's mean round-over-round change of the per-view refined positions is below this (patch-grid px) |
 
 (plus `window` and `sampler`, shared with [normal refinement](patch-normal-refinement.md).)
 
