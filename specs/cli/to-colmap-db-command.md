@@ -42,6 +42,11 @@ required positional argument (matching the positional `OUTPUT` convention of
 | `--no-guided-matching` | flag | | Disable two-view geometry pre-population (`.sfmr` only) |
 | `--camera-model` | choice | auto | Camera model override (`.matches` only); one of the 11 shared COLMAP model names (same vocabulary as `solve` / `match` / `camrig create`) |
 
+> **Known gap (cross-exporter parity):** unlike `to-colmap-bin` and
+> `to-nerfstudio`, this exporter has no `--range` image-subsetting option.
+> Carried forward from the 2026-06-23 spec audit as a feature gap, not a
+> spec/code divergence.
+
 ## Input Modes
 
 ### From `.sfmr`

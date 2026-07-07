@@ -30,6 +30,13 @@ Exactly one is required:
 | `--metrics` | Per-image quality metrics: reprojection error, track length (see below) |
 | `--depth-reliability` | Per-point triangulation conditioning: inverse-depth z-score, condition number |
 
+`--coviz` and `--frustum` are backed by the pair-graph builders in
+`crates/sfmtool-core/src/analysis/image_pair_graph.rs` — covisibility from
+shared track points, frustum overlap by Monte Carlo intersection of
+depth-histogram-sized view frustums. See
+[`specs/core/image-pair-graph.md`](../core/image-pair-graph.md) for the
+algorithms and parameter semantics.
+
 ## Options
 
 | Option | Type | Default | Description |

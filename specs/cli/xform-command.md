@@ -458,6 +458,24 @@ Each operation is a class implementing this interface. The CLI parses arguments 
 ordered list of `Transform` objects and applies them sequentially. The reconstruction is
 loaded once, transformed through the pipeline, and written once.
 
+### Rust primitives behind the operations
+
+Most operations bottom out in one of three editing primitives on
+`SfmrReconstruction` in `crates/sfmtool-core/src/reconstruction/edit.rs`, each of
+which returns a new reconstruction:
+
+| Primitive | Used by | Semantics |
+|-----------|---------|-----------|
+| `apply_se3_transform` | `--rotate`, `--translate`, `--scale`, `--scale-by-measurements`, `--align-to`, `--align-to-input` (invoked as `Se3Transform @ recon` from Python) | Applies a similarity to points and camera poses. Finite points get the full rotation+translation+scale; points at infinity and per-point normals are directions, so only the rotation acts (renormalized). Rig sensor translations are scaled; per-point patch `(u, v)` half-vectors rotate and scale with their point (rotation-only at infinity); patch bitmaps are pose-invariant and pass through unchanged. |
+| `subset_by_image_indices` | `--include-range`, `--exclude-range`, `--include-glob`, `--exclude-glob`, `--include-by-distribution` (via `xform/_filter_by_image_range.py`); also `sfm to-colmap-bin --range`, `sfm to-nerfstudio --range`, and `sfm panorama` source subsetting | Keeps the listed images (in order), drops observations of removed images, and prunes rig frames with no surviving image (remapping frame indices). With `drop_orphaned_points=true` (the xform filters' mode), points with zero remaining observations are removed and point IDs remapped contiguously. `sift_files` reconstructions only. |
+| `filter_points_by_mask` | `--remove-isolated`, `--remove-short-tracks`, `--remove-narrow-tracks`, `--remove-large-features` (`xform/_point_filters.py`), `--filter-by-reprojection-error` | Keeps points where the boolean mask is true, filters their observations, and remaps point IDs contiguously. Images, cameras, and rig data are unchanged. Works for both `sift_files` and `embedded_patches` (inline keypoints are filtered in lockstep); per-point patch rows follow their point. |
+
+A fourth, standalone primitive `reconstruction/filter.rs::filter_tracks_by_point_mask`
+performs the same mask-filter-and-remap on bare track columns (no
+reconstruction object). It is exposed to Python as
+`analysis.filter_tracks_by_point_mask_py` but the xform pipeline uses the
+reconstruction-level `filter_points_by_mask` instead.
+
 ## Usage Examples
 
 ```bash

@@ -79,6 +79,24 @@ from any fixed polyhedral subdivision, and the per-tile FOV / patch
 resolution can be chosen to fit the desired output equirect width without
 quantising to powers of 4.
 
+The scheme, concretely (not Fibonacci-lattice or icosahedral):
+
+- **Initialization** — `random_sphere_points(n, seed)` samples uniformly on
+  the sphere by Marsaglia's method (three i.i.d. N(0, 1) draws,
+  normalized). `seed = Some(s)` uses a seeded `StdRng` for bit-for-bit
+  reproducibility on a platform; `None` uses the thread-local RNG.
+- **Relaxation** — `relax_sphere_points` runs `RelaxConfig::iterations`
+  (default 50) synchronous steps. Each point sums 1/r² chord-direction
+  repulsion from neighbors within `cutoff_multiplier` (default 5.0) times
+  the characteristic nearest-neighbor spacing `√(4π/n)`, found via the
+  `spatial.rs::PointCloud3` KD-tree (O(n log n) per iteration). The force
+  is projected onto the local tangent plane and applied as a fixed-length
+  step of `step_size` (default 0.05) × the characteristic spacing, then the
+  point is renormalized onto the sphere. Expressing both knobs in units of
+  `√(4π/n)` keeps the defaults stable across `n`. The relaxation itself is
+  deterministic, so seeding the initialization makes the whole pipeline
+  reproducible.
+
 ### Sizing parameters
 
 A `SphericalTileRig` is fully described by three knobs:
