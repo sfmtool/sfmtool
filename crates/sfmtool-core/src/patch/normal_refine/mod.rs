@@ -48,7 +48,8 @@ pub use params::{
 // keypoint_subpixel, view_selection) at their historical
 // `crate::patch::normal_refine::<name>` paths.
 pub(in crate::patch) use consensus::{
-    irls_view_weights, weighted_unit_template_into, ConsensusScratch,
+    irls_view_weights, tukey_reweight_from_residuals, weighted_unit_template_into,
+    weighted_unit_template_skip_into, ConsensusScratch,
 };
 pub(in crate::patch) use level::{build_level_context, LevelContext};
 pub(in crate::patch) use params::FLAT_NORM_SQ_EPS;
@@ -181,7 +182,7 @@ fn refine_patch_normal_impl(
     let mut view_keypoints = view_keypoints;
     let cap = params.max_refine_views.max(params.min_views);
     if params.max_refine_views > 0 && views.len() > cap as usize {
-        let sel = view_subset::select_refine_subset(patch, &view_dirs, cap);
+        let sel = prof::SUBSET.time(|| view_subset::select_refine_subset(patch, &view_dirs, cap));
         prof::count(
             if sel.len() < views.len() {
                 &prof::N_SUBSET

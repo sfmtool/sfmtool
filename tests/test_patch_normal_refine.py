@@ -433,3 +433,63 @@ def test_refine_normals_cache_validation(
         cloud.refine_normals(recon, images, resolution=12, cache="bogus")
     with pytest.raises(ValueError):
         cloud.refine_normals(recon, images, resolution=12, cache_supersample=0.5)
+
+
+def test_refine_normals_image_pyramid_set_matches_list(
+    seoul_bull_workspace: Path,
+):
+    """A prebuilt ``ImagePyramidSet`` is a drop-in for the numpy image list:
+    the pyramids are built with the same levels/downsample, so refine_normals
+    output is identical, and both build-time and call-time validation fire."""
+    import pytest
+
+    from sfmtool._sfmtool import ImagePyramidSet
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+    pyramids = ImagePyramidSet(recon, images)
+    assert len(pyramids) == len(images)
+
+    sample = _sample_point_ids(
+        PatchCloud.from_reconstruction(recon, normal="mean_viewing", extent_value=5.0),
+        n=200,
+    )
+
+    def run(imgs):
+        cloud = PatchCloud.from_reconstruction(
+            recon, normal="mean_viewing", extent_value=5.0
+        )
+        return cloud.refine_normals(
+            recon,
+            imgs,
+            point_indexes=sample,
+            resolution=12,
+            init_steps=5,
+            refine_levels=2,
+            sampler="bilinear",
+        )
+
+    from_list = run(images)
+    from_set = run(pyramids)
+    for key in (
+        "normal",
+        "photoconsistency",
+        "init_photoconsistency",
+        "valid_view_count",
+    ):
+        np.testing.assert_array_equal(
+            np.asarray(from_list[key]), np.asarray(from_set[key])
+        )
+
+    # Build-time validation: image count and per-image camera dimensions.
+    with pytest.raises(ValueError):
+        ImagePyramidSet(recon, images[:-1])
+    with pytest.raises(ValueError):
+        ImagePyramidSet(recon, [im[:-2] for im in images])
+
+    # Call-time validation: neither a list nor a set is a TypeError.
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    with pytest.raises(TypeError):
+        cloud.refine_normals(recon, 42, resolution=12)

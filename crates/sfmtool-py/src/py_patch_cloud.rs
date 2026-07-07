@@ -3,13 +3,16 @@
 
 //! Python wrapper for sfmtool-core oriented patches.
 
+use std::sync::Arc;
+
 use nalgebra::{Point3, Vector3};
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
-use pyo3::exceptions::{PyIndexError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use rayon::prelude::*;
 
-use sfmtool_core::camera::remap::ImageU8Pyramid;
+use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::{OrientedPatch, PatchCloud, PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::keypoint_localize::{
@@ -173,13 +176,40 @@ pub struct PyPatchCloud {
     pub(crate) inner: PatchCloud,
 }
 
-/// Build one source-image pyramid + camera pose per reconstruction image,
-/// validating that each image matches its camera resolution. Shared by
-/// `refine_normals` and `select_views` so they handle imagery identically.
-fn build_pyramids_and_poses(
+/// Full pyramid depth for a source image: down to ~1 px on the short side.
+/// The formula is shared by the list path and [`PyImagePyramidSet`] so a
+/// prebuilt set is level-for-level identical to a per-call build.
+fn pyramid_levels(src: &ImageU8) -> usize {
+    let min_dim = src.width().min(src.height()).max(1);
+    ((min_dim as f32).log2().floor() as usize).max(1) + 1
+}
+
+/// Validate that image `i` (dimensions `w × h`) matches its camera's resolution.
+fn check_image_matches_camera(
+    recon: &sfmtool_core::SfmrReconstruction,
+    i: usize,
+    w: u32,
+    h: u32,
+) -> PyResult<()> {
+    let cam = &recon.cameras[recon.images[i].camera_index as usize];
+    if w != cam.width || h != cam.height {
+        return Err(PyValueError::new_err(format!(
+            "image {i} is {w}x{h} but its camera is {}x{}; \
+             pass full-resolution images",
+            cam.width, cam.height
+        )));
+    }
+    Ok(())
+}
+
+/// Extract each numpy image and build its full pyramid, validating dimensions
+/// against the reconstruction's cameras. The extraction runs under the GIL; the
+/// pyramid build (the expensive part) runs GIL-free and rayon-parallel.
+fn build_pyramids_from_arrays(
+    py: Python<'_>,
     recon: &sfmtool_core::SfmrReconstruction,
     images: &[Bound<'_, PyAny>],
-) -> PyResult<(Vec<ImageU8Pyramid>, Vec<RigidTransform>)> {
+) -> PyResult<Vec<ImageU8Pyramid>> {
     if images.len() != recon.images.len() {
         return Err(PyValueError::new_err(format!(
             "images must be parallel to the reconstruction's {} images, got {}",
@@ -187,27 +217,71 @@ fn build_pyramids_and_poses(
             images.len()
         )));
     }
-    let pyramids: Vec<ImageU8Pyramid> = images
+    let srcs: Vec<ImageU8> = images
         .iter()
         .enumerate()
         .map(|(i, im)| {
             let src = extract_image_u8(im)?;
-            let cam = &recon.cameras[recon.images[i].camera_index as usize];
-            if src.width() != cam.width || src.height() != cam.height {
-                return Err(PyValueError::new_err(format!(
-                    "image {i} is {}x{} but its camera is {}x{}; \
-                     pass full-resolution images",
-                    src.width(),
-                    src.height(),
-                    cam.width,
-                    cam.height
-                )));
-            }
-            let min_dim = src.width().min(src.height()).max(1);
-            let max_levels = ((min_dim as f32).log2().floor() as usize).max(1) + 1;
-            Ok(ImageU8Pyramid::build(&src, max_levels))
+            check_image_matches_camera(recon, i, src.width(), src.height())?;
+            Ok(src)
         })
         .collect::<PyResult<_>>()?;
+    Ok(py.detach(|| {
+        srcs.par_iter()
+            .map(|src| ImageU8Pyramid::build(src, pyramid_levels(src)))
+            .collect()
+    }))
+}
+
+/// The per-image pyramids a kernel call reads: either owned (built from a numpy
+/// image list for this one call) or shared (an [`PyImagePyramidSet`] handle,
+/// built once and reused across calls).
+enum PyramidSet {
+    Owned(Vec<ImageU8Pyramid>),
+    Shared(Arc<Vec<ImageU8Pyramid>>),
+}
+
+impl PyramidSet {
+    fn as_slice(&self) -> &[ImageU8Pyramid] {
+        match self {
+            PyramidSet::Owned(v) => v,
+            PyramidSet::Shared(a) => a,
+        }
+    }
+}
+
+/// Resolve the `images` argument of a PatchCloud kernel method — either a
+/// prebuilt [`PyImagePyramidSet`] (validated against `recon`, shared) or a list
+/// of numpy images (pyramids built for this call) — plus one camera pose per
+/// reconstruction image. Shared by `refine_normals`, `select_views`,
+/// `localize_keypoints`, and `refine_keypoints` so they handle imagery
+/// identically.
+fn build_pyramids_and_poses(
+    recon: &sfmtool_core::SfmrReconstruction,
+    images: &Bound<'_, PyAny>,
+) -> PyResult<(PyramidSet, Vec<RigidTransform>)> {
+    let pyramids = if let Ok(set) = images.cast::<PyImagePyramidSet>() {
+        let set = set.get();
+        if set.pyramids.len() != recon.images.len() {
+            return Err(PyValueError::new_err(format!(
+                "ImagePyramidSet holds {} images but the reconstruction has {}; \
+                 build the set from this reconstruction's image list",
+                set.pyramids.len(),
+                recon.images.len()
+            )));
+        }
+        for (i, pyr) in set.pyramids.iter().enumerate() {
+            let l0 = pyr.level(0);
+            check_image_matches_camera(recon, i, l0.width(), l0.height())?;
+        }
+        PyramidSet::Shared(Arc::clone(&set.pyramids))
+    } else if let Ok(list) = images.extract::<Vec<Bound<'_, PyAny>>>() {
+        PyramidSet::Owned(build_pyramids_from_arrays(images.py(), recon, &list)?)
+    } else {
+        return Err(PyTypeError::new_err(
+            "images must be a list of HxW[xC] uint8 numpy arrays or an ImagePyramidSet",
+        ));
+    };
     let poses: Vec<RigidTransform> = recon
         .images
         .iter()
@@ -224,6 +298,53 @@ fn build_pyramids_and_poses(
         })
         .collect();
     Ok((pyramids, poses))
+}
+
+/// Per-image source pyramids prebuilt **once** and shared across PatchCloud
+/// kernel calls.
+///
+/// Every :class:`PatchCloud` kernel method (:meth:`PatchCloud.refine_normals`,
+/// :meth:`PatchCloud.select_views`, :meth:`PatchCloud.localize_keypoints`,
+/// :meth:`PatchCloud.refine_keypoints`) accepts one of these anywhere it accepts
+/// the list of numpy images: rather than rebuilding a full image pyramid per
+/// image on **every** call (the per-call ``images`` list path, kept for
+/// back-compat), build the set once and pass it to each call. The pyramids are
+/// identical to the per-call build (same levels, same box-filter downsample), so
+/// results are unchanged; the build itself is rayon-parallel.
+///
+/// Args:
+///     recon: The reconstruction the images belong to. Each image is validated
+///         against its camera's resolution at build time; kernel calls
+///         re-validate the set against *their* reconstruction (image count and
+///         per-image camera dimensions), so a set built here works for any
+///         reconstruction with the same images (e.g. across ``embed-patches``
+///         rounds).
+///     images: One source image (HxWxC uint8 numpy array) per reconstruction
+///         image, parallel to ``recon`` (index = image index).
+#[pyclass(name = "ImagePyramidSet", module = "sfmtool", frozen)]
+pub struct PyImagePyramidSet {
+    pub(crate) pyramids: Arc<Vec<ImageU8Pyramid>>,
+}
+
+#[pymethods]
+impl PyImagePyramidSet {
+    #[new]
+    #[pyo3(signature = (recon, images))]
+    fn new(
+        py: Python<'_>,
+        recon: &PySfmrReconstruction,
+        images: Vec<Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let pyramids = build_pyramids_from_arrays(py, &recon.inner, &images)?;
+        Ok(Self {
+            pyramids: Arc::new(pyramids),
+        })
+    }
+
+    /// Number of per-image pyramids in the set.
+    fn __len__(&self) -> usize {
+        self.pyramids.len()
+    }
 }
 
 #[pymethods]
@@ -386,7 +507,9 @@ impl PyPatchCloud {
     ///     recon: The reconstruction the cloud was built from (provides cameras,
     ///         poses, and the per-point observing-image lists via ``point_indexes``).
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
-    ///         image, parallel to ``recon`` (index = image index).
+    ///         image, parallel to ``recon`` (index = image index), **or** an
+    ///         :class:`ImagePyramidSet` prebuilt from those images (decode the
+    ///         pyramids once, share them across kernel calls).
     ///     resolution: The R×R patch grid the consensus is scored on.
     ///     objective: ``"robust"`` (IRLS-weighted consensus, default) or
     ///         ``"mean"`` (unweighted all-pairs consensus).
@@ -479,7 +602,7 @@ impl PyPatchCloud {
         &mut self,
         py: Python<'py>,
         recon: &PySfmrReconstruction,
-        images: Vec<Bound<'py, PyAny>>,
+        images: &Bound<'py, PyAny>,
         resolution: u32,
         angular_range_deg: f64,
         init_steps: u32,
@@ -597,7 +720,8 @@ impl PyPatchCloud {
         // borrow these for the duration of the refinement. The warp validity /
         // sampling assume each image matches its camera's resolution, so the
         // helper rejects mismatched sizes.
-        let (pyramids, poses) = build_pyramids_and_poses(recon, &images)?;
+        let (pyramid_set, poses) = build_pyramids_and_poses(recon, images)?;
+        let pyramids = pyramid_set.as_slice();
         let views: Vec<ProjectedImage<'_>> = (0..recon.images.len())
             .map(|i| ProjectedImage {
                 camera: &recon.cameras[recon.images[i].camera_index as usize],
@@ -759,7 +883,9 @@ impl PyPatchCloud {
     ///     recon: The reconstruction the cloud was built from (provides cameras,
     ///         poses, and the per-point track view lists via ``point_indexes``).
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
-    ///         image, parallel to ``recon`` (index = image index).
+    ///         image, parallel to ``recon`` (index = image index), **or** an
+    ///         :class:`ImagePyramidSet` prebuilt from those images (decode the
+    ///         pyramids once, share them across kernel calls).
     ///     min_relative_zncc: Admit a candidate whose ZNCC to the reference clears
     ///         this fraction of the track's self-agreement (default 0.7).
     ///     resolution: The R×R patch grid the reference / ZNCC are scored on.
@@ -798,7 +924,7 @@ impl PyPatchCloud {
         &self,
         py: Python<'py>,
         recon: &PySfmrReconstruction,
-        images: Vec<Bound<'py, PyAny>>,
+        images: &Bound<'py, PyAny>,
         min_relative_zncc: f64,
         resolution: u32,
         window: &str,
@@ -863,7 +989,8 @@ impl PyPatchCloud {
             min_self_agreement,
         };
 
-        let (pyramids, poses) = build_pyramids_and_poses(recon, &images)?;
+        let (pyramid_set, poses) = build_pyramids_and_poses(recon, images)?;
+        let pyramids = pyramid_set.as_slice();
         let views: Vec<ProjectedImage<'_>> = (0..recon.images.len())
             .map(|i| ProjectedImage {
                 camera: &recon.cameras[recon.images[i].camera_index as usize],
@@ -926,7 +1053,9 @@ impl PyPatchCloud {
     ///     recon: The reconstruction the cloud was built from (cameras, poses, and
     ///         the per-point track view lists via ``point_indexes``).
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
-    ///         image, parallel to ``recon`` (index = image index).
+    ///         image, parallel to ``recon`` (index = image index), **or** an
+    ///         :class:`ImagePyramidSet` prebuilt from those images (decode the
+    ///         pyramids once, share them across kernel calls).
     ///     view_sets: Optional mapping ``point_index -> [image_index, ...]`` giving the
     ///         view set to refine per point (typically the output of
     ///         :meth:`select_views`). Points absent from the map fall back to their
@@ -945,8 +1074,8 @@ impl PyPatchCloud {
     ///     window_sigma: Window sigma for the gaussian windows.
     ///     sampler: ``"bilinear"`` (default) or ``"anisotropic"``.
     ///     robust_iters: IRLS passes for the robust consensus.
-    ///     convergence_px: Stop once the mean per-view residual shift of a round is
-    ///         below this many patch-grid px.
+    ///     convergence_px: Stop once a round's mean round-over-round change of
+    ///         the per-view refined positions is below this many patch-grid px.
     ///     point_indexes: If given, localize only for the patches with these source
     ///         point ids; ``None`` (default) localizes for every patch.
     ///     search_resolution_multiplier: ``m`` for the discrete cross-view search;
@@ -973,7 +1102,7 @@ impl PyPatchCloud {
         &self,
         py: Python<'py>,
         recon: &PySfmrReconstruction,
-        images: Vec<Bound<'py, PyAny>>,
+        images: &Bound<'py, PyAny>,
         view_sets: Option<std::collections::HashMap<u32, Vec<u32>>>,
         max_iters: u32,
         search: f64,
@@ -1061,7 +1190,8 @@ impl PyPatchCloud {
             search_strategy,
         };
 
-        let (pyramids, poses) = build_pyramids_and_poses(recon, &images)?;
+        let (pyramid_set, poses) = build_pyramids_and_poses(recon, images)?;
+        let pyramids = pyramid_set.as_slice();
         let views: Vec<ProjectedImage<'_>> = (0..recon.images.len())
             .map(|i| ProjectedImage {
                 camera: &recon.cameras[recon.images[i].camera_index as usize],
@@ -1154,7 +1284,9 @@ impl PyPatchCloud {
     ///     recon: The reconstruction the cloud was built from (cameras, poses, and
     ///         the per-point track view lists via ``point_indexes``).
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
-    ///         image, parallel to ``recon`` (index = image index).
+    ///         image, parallel to ``recon`` (index = image index), **or** an
+    ///         :class:`ImagePyramidSet` prebuilt from those images (decode the
+    ///         pyramids once, share them across kernel calls).
     ///     view_sets: Optional mapping ``point_index -> [image_index, ...]`` giving the
     ///         view set to refine per point. Points absent fall back to their track;
     ///         ``None`` (default) uses the track for every point.
@@ -1249,7 +1381,7 @@ impl PyPatchCloud {
         &self,
         py: Python<'py>,
         recon: &PySfmrReconstruction,
-        images: Vec<Bound<'py, PyAny>>,
+        images: &Bound<'py, PyAny>,
         view_sets: Option<std::collections::HashMap<u32, Vec<u32>>>,
         resolution: u32,
         window: &str,
@@ -1348,7 +1480,8 @@ impl PyPatchCloud {
             ..Default::default()
         };
 
-        let (pyramids, poses) = build_pyramids_and_poses(recon, &images)?;
+        let (pyramid_set, poses) = build_pyramids_and_poses(recon, images)?;
+        let pyramids = pyramid_set.as_slice();
         let views: Vec<ProjectedImage<'_>> = (0..recon.images.len())
             .map(|i| ProjectedImage {
                 camera: &recon.cameras[recon.images[i].camera_index as usize],
@@ -1460,7 +1593,6 @@ impl PyPatchCloud {
         let subpixel_wall = std::time::Instant::now();
         let progress_handle = progress.as_ref().map(|p| p.handle());
         let results = py.detach(|| {
-            use rayon::prelude::*;
             use sfmtool_core::patch::keypoint_subpixel::refine_patch_keypoints;
             self.inner
                 .patches

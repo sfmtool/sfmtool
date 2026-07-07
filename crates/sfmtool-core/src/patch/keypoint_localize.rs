@@ -34,12 +34,15 @@ use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear};
 use crate::camera::WarpMap;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
-    build_support, irls_view_weights, weighted_unit_template_into, znormalize_into_kept,
-    ConsensusScratch, PatchWindow, ProjectedImage, Sampler, Support, FLAT_NORM_SQ_EPS,
+    build_support, tukey_reweight_from_residuals, weighted_unit_template_skip_into,
+    znormalize_into_kept, PatchWindow, ProjectedImage, Sampler, Support, FLAT_NORM_SQ_EPS,
 };
-// Only the reference scorer (`znorm_core`, test-only) needs the moment helper.
+// Only the reference scorer (`znorm_core`, test-only) needs the moment helper;
+// the reference LOO-template test also needs the compacted-stack IRLS pair.
 #[cfg(test)]
-use crate::patch::normal_refine::weighted_moments_pub;
+use crate::patch::normal_refine::{
+    irls_view_weights, weighted_moments_pub, weighted_unit_template_into, ConsensusScratch,
+};
 use crate::reconstruction::SfmrReconstruction;
 use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
@@ -89,7 +92,8 @@ pub enum SearchStrategy {
 #[derive(Debug, Clone)]
 pub struct KeypointLocalizeParams {
     /// Maximum congealing rounds; the loop stops early once the mean per-view
-    /// residual shift falls below [`convergence_px`](Self::convergence_px).
+    /// position change of a round falls below
+    /// [`convergence_px`](Self::convergence_px).
     pub max_iters: u32,
     /// Max total per-view drift from the point's projection (patch-grid px). The
     /// accumulated offset is clipped to `±search` each round, bounding runaway, and
@@ -118,8 +122,10 @@ pub struct KeypointLocalizeParams {
     pub sampler: Sampler,
     /// IRLS reweighting passes for the robust consensus.
     pub robust_iters: u32,
-    /// Convergence threshold: stop once the mean per-view residual shift of a
-    /// round is below this many patch-grid px.
+    /// Convergence threshold: stop once a round's mean **round-over-round
+    /// change** of the per-view refined positions (integer accumulator +
+    /// sub-pixel residual, this round vs the previous one) is below this many
+    /// patch-grid px.
     pub convergence_px: f64,
     /// Search-resolution multiplier `m` (default `1.0`, a no-op). The discrete
     /// cross-view search is run at resolution `R_s = round(m·R)`: the per-view
@@ -175,6 +181,10 @@ pub struct KeypointLocalization {
     /// ever scored — e.g. a lone input view, or a view kept by the early
     /// "fewer than two views remain" exit before any consensus was built.
     pub loo_zncc: Vec<f64>,
+    /// Congealing rounds actually executed (`<= max_iters`; `0` when the input
+    /// had fewer than two views and the loop never ran). Diagnostic: lets tests
+    /// and callers observe the `convergence_px` early exit directly.
+    pub rounds: u32,
 }
 
 /// A rendered context tile for one view: source colour over a
@@ -537,6 +547,160 @@ struct SearchScratch {
     /// Reset to all-NaN at the start of every `search_shift_plus_descent`
     /// call. Replaces a per-call `HashMap<(i64,i64), Option<f64>>`.
     pd_visited: Vec<f64>,
+}
+
+/// Reused scratch for the **incremental leave-one-out consensus**: the
+/// per-round Gram matrix over the live views' z-normalized cores plus the
+/// per-holdout Gram-space IRLS buffers. Created once per
+/// [`localize_patch_keypoints`] call, mirroring [`SearchScratch`].
+#[derive(Default)]
+struct LooScratch {
+    /// Live-view Gram matrix `G[a·nv + b] = ⟨x_a, x_b⟩` (f64, stacked over the
+    /// kept channels), rebuilt once per round.
+    gram: Vec<f64>,
+    /// Per-holdout IRLS weights over the **full** live index range; the
+    /// held-out view's slot is pinned at `0` so `G·w` sums holdout members only.
+    w: Vec<f64>,
+    /// `y = G·w` per live view (only holdout members are read).
+    y: Vec<f64>,
+    /// Per-holdout-member residuals `‖x_u − x̄‖`, compacted (skip the holdout).
+    resid: Vec<f64>,
+    /// Compacted holdout weights, parallel to [`resid`](Self::resid) — the
+    /// in/out slice for the shared Tukey reweight.
+    wh: Vec<f64>,
+    /// Median/MAD sort scratch for the reweight.
+    sorted: Vec<f64>,
+    /// Raw (pre-normalization) Tukey weights scratch for the reweight.
+    wt: Vec<f64>,
+}
+
+/// `Σ_k a[k]·b[k]` accumulated in `f64` over `f32` inputs, with 8 independent
+/// accumulators so the compiler can vectorize the (otherwise
+/// associativity-serialized) f64 adds. Feeds the per-round Gram matrix.
+fn dot_f64(a: &[f32], b: &[f32]) -> f64 {
+    const LANES: usize = 8;
+    let n = a.len().min(b.len());
+    let mut acc = [0f64; LANES];
+    let body = n / LANES * LANES;
+    let mut i = 0;
+    while i < body {
+        for (l, s) in acc.iter_mut().enumerate() {
+            *s += a[i + l] as f64 * b[i + l] as f64;
+        }
+        i += LANES;
+    }
+    let mut s: f64 = acc.iter().sum();
+    for k in body..n {
+        s += a[k] as f64 * b[k] as f64;
+    }
+    s
+}
+
+/// Build the symmetric live-view Gram matrix `G[a][b] = ⟨x_a, x_b⟩` into
+/// `loo.gram` (`nv × nv`, row-major), where `xs` holds `nv` contiguous rows of
+/// `cn` f32s. Computed **once per round** and shared by every holdout's IRLS.
+fn build_loo_gram(xs: &[f32], nv: usize, cn: usize, loo: &mut LooScratch) {
+    loo.gram.resize(nv * nv, 0.0);
+    for a in 0..nv {
+        let xa = &xs[a * cn..][..cn];
+        loo.gram[a * nv + a] = dot_f64(xa, xa);
+        for b in (a + 1)..nv {
+            let d = dot_f64(xa, &xs[b * cn..][..cn]);
+            loo.gram[a * nv + b] = d;
+            loo.gram[b * nv + a] = d;
+        }
+    }
+}
+
+/// Build view `v`'s **leave-one-out robust consensus template** into `out`
+/// from the live stack `xs` (`nv` rows × `kept_ch · n`), using the per-round
+/// Gram matrix in `loo.gram` — the incremental replacement for the
+/// copy-the-holdout-stack + [`irls_view_weights`] +
+/// [`weighted_unit_template_into`] rebuild that ran per (view, round).
+///
+/// The IRLS recursion touches the pixel data only through inner products, so
+/// the whole per-holdout iteration runs in Gram space: with weights `w` (the
+/// holdout's slot pinned at 0), `x̄ = Σ w_u x_u` gives residuals
+/// `r_u² = G[u][u] − 2·(G·w)_u + wᵀ·G·w`, which feed the **exact** shared
+/// Tukey/MAD reweight ([`tukey_reweight_from_residuals`]). Only the final unit
+/// template is materialized in pixel space
+/// ([`weighted_unit_template_skip_into`], no holdout-stack copy).
+///
+/// Real-arithmetic semantics are identical to the compacted-stack path
+/// (uniform `1/(nv−1)` init, `robust_iters` reweights, degenerate-reweight
+/// early-out keeping the previous weights); float results differ only at
+/// accumulation-order level (f64 Gram algebra vs the f32 SAXPY/residual path),
+/// which the `incremental_loo_template_matches_reference` test bounds.
+#[allow(clippy::too_many_arguments)]
+fn loo_consensus_template(
+    xs: &[f32],
+    nv: usize,
+    v: usize,
+    kept_ch: usize,
+    n: usize,
+    robust_iters: u32,
+    loo: &mut LooScratch,
+    out: &mut Vec<f32>,
+) {
+    debug_assert!(nv >= 2 && v < nv);
+    debug_assert_eq!(loo.gram.len(), nv * nv);
+    loo.w.clear();
+    loo.w.resize(nv, 1.0 / (nv - 1) as f64);
+    loo.w[v] = 0.0;
+    for _ in 0..robust_iters {
+        // y = G·w and ‖x̄‖² = wᵀ·y over the holdout members (w[v] = 0 keeps the
+        // held-out view out of both).
+        loo.y.clear();
+        loo.y.resize(nv, 0.0);
+        let mut xbar_sq = 0.0;
+        for u in 0..nv {
+            if u == v {
+                continue;
+            }
+            let row = &loo.gram[u * nv..][..nv];
+            let mut acc = 0.0;
+            for (uu, &wu) in loo.w.iter().enumerate() {
+                acc += wu * row[uu];
+            }
+            loo.y[u] = acc;
+            xbar_sq += loo.w[u] * acc;
+        }
+        // Residuals ‖x_u − x̄‖ per holdout member (compacted). The algebraic r²
+        // can dip epsilon-negative for a view equal to the consensus; clamp.
+        loo.resid.clear();
+        for u in 0..nv {
+            if u == v {
+                continue;
+            }
+            let r2 = loo.gram[u * nv + u] - 2.0 * loo.y[u] + xbar_sq;
+            loo.resid.push(r2.max(0.0).sqrt());
+        }
+        // Shared Tukey/MAD reweight on the compacted weights, scattered back.
+        loo.wh.clear();
+        loo.wh.extend((0..nv).filter(|&u| u != v).map(|u| loo.w[u]));
+        let degenerate = {
+            let LooScratch {
+                resid,
+                sorted,
+                wt,
+                wh,
+                ..
+            } = loo;
+            tukey_reweight_from_residuals(resid, None, sorted, wt, wh)
+        };
+        if degenerate {
+            break; // keep the previous weights, as irls_view_weights does
+        }
+        let mut j = 0;
+        for u in 0..nv {
+            if u == v {
+                continue;
+            }
+            loo.w[u] = loo.wh[j];
+            j += 1;
+        }
+    }
+    weighted_unit_template_skip_into(xs, &loo.w, v, nv, kept_ch, n, out);
 }
 
 /// The result of a [`search_shift`] — the residual shift of one view relative to
@@ -1624,10 +1788,15 @@ pub fn localize_patch_keypoints(
         }
     });
 
-    let mut sc = ConsensusScratch::default();
+    let mut loo = LooScratch::default();
     let mut search = SearchScratch::default();
+    let mut rounds_run = 0u32;
     for _round in 0..params.max_iters.max(1) {
         prof::count(&prof::N_ROUNDS, 1);
+        rounds_run += 1;
+        // View count entering this round: convergence below requires the view
+        // set to have survived the round unchanged (see step 6).
+        let n_entering = states.len();
         // 1. Read every view's R_s×R_s core from its cache at the integer offset
         //    `iacc` (no render — exact). A view whose core has left the frame (any
         //    support pixel invalid) is dropped for this round.
@@ -1680,23 +1849,30 @@ pub fn localize_patch_keypoints(
 
         // 3-4. Per live view: search its residual shift against the leave-one-out
         //      consensus of the others, then accumulate (clipped to ±search).
-        let mut shifts: Vec<Option<ShiftResult>> = vec![None; live.len()];
-        let mut loo_xs = vec![0f32; (live.len() - 1) * kept_ch * n];
+        //
+        // The LOO consensus is built **incrementally**: one shared per-round
+        // accumulation — the Gram matrix over the live views' z-normalized
+        // cores — replaces the per-(view, round) holdout-stack copy + IRLS
+        // rebuild; each view's template then needs only a Gram-space IRLS
+        // (O(V²) scalars per iteration) plus one pixel-space materialization.
+        // See `loo_consensus_template`.
+        let nv = live.len();
+        prof::TEMPLATE_GRAM.time(|| build_loo_gram(&xs, nv, kept_ch * n, &mut loo));
+        let mut shifts: Vec<Option<ShiftResult>> = vec![None; nv];
         for (v, &si) in live.iter().enumerate() {
-            // Copy the other views' rows contiguously and build their robust
-            // consensus template (the leave-one-out reference for view v).
+            // Build the other views' robust consensus template (the
+            // leave-one-out reference for view v) from the shared Gram.
             prof::TEMPLATE.time(|| {
-                let mut w = 0;
-                for u in 0..live.len() {
-                    if u == v {
-                        continue;
-                    }
-                    loo_xs[w * kept_ch * n..][..kept_ch * n]
-                        .copy_from_slice(&xs[u * kept_ch * n..][..kept_ch * n]);
-                    w += 1;
-                }
-                irls_view_weights(&loo_xs, w, kept_ch, n, params.robust_iters, None, &mut sc);
-                weighted_unit_template_into(&loo_xs, &sc.w, w, kept_ch, n, &mut search.tmpl);
+                loo_consensus_template(
+                    &xs,
+                    nv,
+                    v,
+                    kept_ch,
+                    n,
+                    params.robust_iters,
+                    &mut loo,
+                    &mut search.tmpl,
+                );
             });
             prof::count(&prof::N_SEARCH, 1);
             // Score the shift grid in view `si`'s cache around its current integer
@@ -1735,19 +1911,30 @@ pub fn localize_patch_keypoints(
         // read accumulator `iacc` (clipped to the cache drift bound); the sub-pixel
         // parabolic residual is stored separately and never fed back into the read
         // position — keeping every cache read exact.
+        //
+        // The convergence metric is the round-over-round CHANGE of each live
+        // view's refined position (`iacc + residual` before vs after this round's
+        // update). The raw search output `|sh.dx, sh.dy|` is NOT that change: it
+        // bundles the freshly recomputed parabolic residual — which never moves
+        // the read position — so its magnitude has a ~0.1–0.5-step floor even
+        // once the argmax stops moving, and summing it kept `mean_shift` above
+        // `convergence_px` forever (every point ran all `max_iters` rounds).
         let mut shift_sum = 0.0;
         for (v, &si) in live.iter().enumerate() {
             let st = &mut states[si];
             match shifts[v] {
                 Some(sh) => {
+                    let prev = st.offset_steps();
                     st.iacc[0] = (st.iacc[0] + sh.ix).clamp(-search_steps, search_steps);
                     st.iacc[1] = (st.iacc[1] + sh.iy).clamp(-search_steps, search_steps);
                     st.residual = [sh.dx - sh.ix as f64, sh.dy - sh.iy as f64];
                     st.loo = sh.peak;
-                    shift_sum += sh.dx.hypot(sh.dy);
+                    let now = st.offset_steps();
+                    shift_sum += (now[0] - prev[0]).hypot(now[1] - prev[1]);
                 }
                 // No scorable window this round: leave `iacc`/`residual` in place and
-                // mark the LOO unknown (matches the pre-cache None handling).
+                // mark the LOO unknown (matches the pre-cache None handling). The
+                // position did not move, so it contributes 0 to the round's shift.
                 None => st.loo = f64::NAN,
             }
         }
@@ -1804,14 +1991,23 @@ pub fn localize_patch_keypoints(
             keep
         });
 
-        // 6. Converge.
-        let mean_shift = shift_sum / live.len() as f64;
-        if states.len() < 2 || mean_shift < params.convergence_px {
+        // 6. Converge. `shift_sum` is in `R_s`-grid steps; one step is `1/m`
+        //    patch-grid px, so scale before comparing to `convergence_px`.
+        //    Positional stability alone is not enough: a view dropped THIS round
+        //    (step 5, or gone out-of-frame in step 1) changes the consensus the
+        //    survivors registered against, so they get at least one more round to
+        //    re-equilibrate against the survivor-only template before the
+        //    stationarity test can fire. The `< 2` floor exit stays unconditional
+        //    (no leave-one-out consensus exists to re-register against).
+        let mean_shift = shift_sum / (live.len() as f64 * m);
+        if states.len() < 2 || (states.len() == n_entering && mean_shift < params.convergence_px) {
             break;
         }
     }
 
-    finalize(patch, views, &states, wpp_u, wpp_v)
+    let mut out = finalize(patch, views, &states, wpp_u, wpp_v);
+    out.rounds = rounds_run;
+    out
 }
 
 /// Unproject a starting keypoint onto the patch plane and express the in-plane

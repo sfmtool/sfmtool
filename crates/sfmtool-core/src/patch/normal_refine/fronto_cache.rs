@@ -206,30 +206,33 @@ pub(super) fn prerender(
         let fronto_n = (cam_c - center_pt).normalize();
         let fp =
             OrientedPatch::from_center_normal(center_pt, fronto_n, base.v_axis, base.half_extent);
-        let map = WarpMap::from_patch(&fp, view.camera, view.cam_from_world, rb);
-        let img = remap_bilinear(view.pyramid.level(0), &map);
+        let map = super::prof::WARP
+            .time(|| WarpMap::from_patch(&fp, view.camera, view.cam_from_world, rb));
+        let img = super::prof::REMAP.time(|| remap_bilinear(view.pyramid.level(0), &map));
         if img.channels() as usize != CHANNELS {
             bases.push(None);
             continue;
         }
-        let mut packed = vec![0u32; (rb * rb) as usize];
-        for (p, slot) in packed.iter_mut().enumerate() {
-            let (c, rw) = ((p as u32) % rb, (p as u32) / rb);
-            let r = img.get_pixel(c, rw, 0) as u32;
-            let g = img.get_pixel(c, rw, 1) as u32;
-            let b = img.get_pixel(c, rw, 2) as u32;
-            *slot = r | (g << 8) | (b << 16);
-        }
-        // Invert the base affine once per view (None → skip this base, as a
-        // degenerate map could not be used per-candidate anyway).
-        let fb = corner_norm_pts(&fp, view, rb)
-            .and_then(|pts| affine_grid_to_img(&pts, rb).try_inverse())
-            .map(|a0_inv| FrontoBase {
-                patch: pad_replicate(&packed, rb as usize, FRONTO_GUARD as usize),
-                bw_pad: rb + 2 * FRONTO_GUARD,
-                a0_inv,
-                center_offset,
-            });
+        let fb = super::prof::CACHE_PACK.time(|| {
+            let mut packed = vec![0u32; (rb * rb) as usize];
+            for (p, slot) in packed.iter_mut().enumerate() {
+                let (c, rw) = ((p as u32) % rb, (p as u32) / rb);
+                let r = img.get_pixel(c, rw, 0) as u32;
+                let g = img.get_pixel(c, rw, 1) as u32;
+                let b = img.get_pixel(c, rw, 2) as u32;
+                *slot = r | (g << 8) | (b << 16);
+            }
+            // Invert the base affine once per view (None → skip this base, as a
+            // degenerate map could not be used per-candidate anyway).
+            corner_norm_pts(&fp, view, rb)
+                .and_then(|pts| affine_grid_to_img(&pts, rb).try_inverse())
+                .map(|a0_inv| FrontoBase {
+                    patch: pad_replicate(&packed, rb as usize, FRONTO_GUARD as usize),
+                    bw_pad: rb + 2 * FRONTO_GUARD,
+                    a0_inv,
+                    center_offset,
+                })
+        });
         bases.push(fb);
     }
     // A non-invertible base (a degenerate, collinear fronto projection) is `None`
@@ -415,41 +418,46 @@ pub(super) fn eval_phi(
     if total_weight <= 0.0 {
         return None;
     }
-    let cp = repose_patch(base, candidate_n);
-    // Obliquity view-weight (A): |v̂·candidate_n|^power per kept view, refilled into
-    // the reused scratch buffer (no per-candidate allocation). Inactive (`power ==
-    // 0`) leaves the buffer empty and passes `None` — the prior-free path.
-    let priors_active = super::obliquity::fill_kept_obliquity_priors(
-        &mut scratch.priors,
-        view_dirs,
-        &ctx.kept,
-        candidate_n,
-        obliquity_power,
-    );
     let n = cols.len();
     let vn = ctx.kept.len();
     let stride = CHANNELS * n;
-    scratch.raw.resize(vn * stride, 0.0);
+    let (cp, priors_active) = super::prof::CACHE_SETUP.time(|| {
+        let cp = repose_patch(base, candidate_n);
+        // Obliquity view-weight (A): |v̂·candidate_n|^power per kept view, refilled
+        // into the reused scratch buffer (no per-candidate allocation). Inactive
+        // (`power == 0`) leaves the buffer empty and passes `None` — the
+        // prior-free path.
+        let priors_active = super::obliquity::fill_kept_obliquity_priors(
+            &mut scratch.priors,
+            view_dirs,
+            &ctx.kept,
+            candidate_n,
+            obliquity_power,
+        );
+        scratch.raw.resize(vn * stride, 0.0);
+        (cp, priors_active)
+    });
 
     // Flat raw `[(view*CHANNELS + channel)*n + pixel]`: each view's resample
     // writes its `CHANNELS*n` slice in the planar `[R|G|B]` layout directly.
     for (k, &vi) in ctx.kept.iter().enumerate() {
         let fb = cache.bases[vi].as_ref()?;
         let view = &views[vi];
-        // Recenter the candidate to this view's keypoint-anchored center so it
-        // registers with the base (which was rendered there). Zero offset → `cp`
-        // unchanged, no allocation.
-        let cp_anchored = (fb.center_offset.norm_squared() != 0.0).then(|| {
-            let mut p = cp.clone();
-            p.center += fb.center_offset;
-            p
-        });
-        let cp_ref = cp_anchored.as_ref().unwrap_or(&cp);
         // Both operands are affine (last row [0,0,1]), so the composition is too;
         // the resampler only needs the 2×3 part (candidate-grid → base-grid). The
         // base inverse is precomputed, so this is a matmul, not a per-candidate
-        // inverse.
+        // inverse. The keypoint-anchored recenter (a per-view clone when the
+        // stored-keypoint offset is nonzero) is attributed here too.
         let phi = super::prof::CACHE_MAP.time(|| {
+            // Recenter the candidate to this view's keypoint-anchored center so it
+            // registers with the base (which was rendered there). Zero offset →
+            // `cp` unchanged, no allocation.
+            let cp_anchored = (fb.center_offset.norm_squared() != 0.0).then(|| {
+                let mut p = cp.clone();
+                p.center += fb.center_offset;
+                p
+            });
+            let cp_ref = cp_anchored.as_ref().unwrap_or(&cp);
             let ap = corner_norm_pts(cp_ref, view, resolution)
                 .map(|p| affine_grid_to_img(&p, resolution))?;
             let m = fb.a0_inv * ap;

@@ -259,43 +259,70 @@ pub(in crate::patch) fn irls_view_weights(
         });
 
         let should_break = prof::IRLS_REWEIGHT.time(|| {
-            sc.sorted.copy_from_slice(&sc.resid);
-            let med = median(&mut sc.sorted);
-            for (s, &r) in sc.sorted.iter_mut().zip(&sc.resid) {
-                *s = (r - med).abs();
-            }
-            let mad = median(&mut sc.sorted);
-            let scale = (1.4826 * mad).max(0.5 * med).max(1e-12);
-            let cutoff = 4.685 * scale;
-
-            let mut sum = 0.0;
-            for v in 0..views {
-                let r = sc.resid[v];
-                let tukey = if r >= cutoff {
-                    0.0
-                } else {
-                    let t = 1.0 - (r / cutoff) * (r / cutoff);
-                    t * t
-                };
-                // Fold the obliquity prior back in each iteration so the
-                // down-weighting persists (the Tukey factor alone would let a
-                // grazing but self-consistent view regain full weight).
-                let wt = tukey * view_priors.map_or(1.0, |pr| pr[v]);
-                sc.wt[v] = wt;
-                sum += wt;
-            }
-            if sum <= 1e-12 {
-                return true; // Degenerate re-weight; keep the previous weights.
-            }
-            for v in 0..views {
-                sc.w[v] = sc.wt[v] / sum;
-            }
-            false
+            tukey_reweight_from_residuals(
+                &sc.resid,
+                view_priors,
+                &mut sc.sorted,
+                &mut sc.wt,
+                &mut sc.w,
+            )
         });
         if should_break {
             break;
         }
     }
+}
+
+/// One Tukey/MAD IRLS reweight step: from the per-view residuals, form the
+/// MAD-scaled Tukey weights (times the optional multiplicative `view_priors`)
+/// and write them, normalized to `Σw = 1`, into `w`. Returns `true` when the
+/// re-weight is degenerate (`Σ` of the raw weights ≈ 0) — the caller should
+/// keep the previous weights and stop iterating. `sorted` / `wt` are reused
+/// scratch. Extracted from [`irls_view_weights`] so the keypoint localizer's
+/// Gram-space leave-one-out IRLS shares the exact reweight semantics.
+pub(in crate::patch) fn tukey_reweight_from_residuals(
+    resid: &[f64],
+    view_priors: Option<&[f64]>,
+    sorted: &mut Vec<f64>,
+    wt: &mut Vec<f64>,
+    w: &mut [f64],
+) -> bool {
+    let views = resid.len();
+    sorted.clear();
+    sorted.extend_from_slice(resid);
+    let med = median(sorted);
+    for (s, &r) in sorted.iter_mut().zip(resid) {
+        *s = (r - med).abs();
+    }
+    let mad = median(sorted);
+    let scale = (1.4826 * mad).max(0.5 * med).max(1e-12);
+    let cutoff = 4.685 * scale;
+
+    wt.clear();
+    wt.resize(views, 0.0);
+    let mut sum = 0.0;
+    for v in 0..views {
+        let r = resid[v];
+        let tukey = if r >= cutoff {
+            0.0
+        } else {
+            let t = 1.0 - (r / cutoff) * (r / cutoff);
+            t * t
+        };
+        // Fold the obliquity prior back in each iteration so the
+        // down-weighting persists (the Tukey factor alone would let a
+        // grazing but self-consistent view regain full weight).
+        let wv = tukey * view_priors.map_or(1.0, |pr| pr[v]);
+        wt[v] = wv;
+        sum += wv;
+    }
+    if sum <= 1e-12 {
+        return true; // Degenerate re-weight; keep the previous weights.
+    }
+    for v in 0..views {
+        w[v] = wt[v] / sum;
+    }
+    false
 }
 
 /// Build the unit-norm-per-channel template of a z-normalized stack `xs`
@@ -315,6 +342,53 @@ pub(in crate::patch) fn weighted_unit_template_into(
     out.clear();
     out.resize(channels * n, 0.0);
     for (v, &w) in weights.iter().enumerate().take(views) {
+        let wv = w as f32;
+        for c in 0..channels {
+            let src = &xs[(v * channels + c) * n..][..n];
+            let dst = &mut out[c * n..][..n];
+            for (d, &s) in dst.iter_mut().zip(src) {
+                *d += wv * s;
+            }
+        }
+    }
+    for c in 0..channels {
+        let col = &mut out[c * n..][..n];
+        let norm = col
+            .iter()
+            .map(|&x| (x as f64) * (x as f64))
+            .sum::<f64>()
+            .sqrt();
+        if norm > 1e-12 {
+            let inv = (1.0 / norm) as f32;
+            for x in col.iter_mut() {
+                *x *= inv;
+            }
+        }
+    }
+}
+
+/// [`weighted_unit_template_into`] over a **leave-one-out** subset of the
+/// stack: sum every view row except `skip`, weighted by the full-stack-indexed
+/// `weights` (the skipped view's entry is ignored), then unit-normalize per
+/// channel. Iteration order matches copying the hold-out rows into a compacted
+/// stack and calling [`weighted_unit_template_into`] on it, so the result is
+/// identical — without materializing the hold-out copy.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::patch) fn weighted_unit_template_skip_into(
+    xs: &[f32],
+    weights: &[f64],
+    skip: usize,
+    views: usize,
+    channels: usize,
+    n: usize,
+    out: &mut Vec<f32>,
+) {
+    out.clear();
+    out.resize(channels * n, 0.0);
+    for (v, &w) in weights.iter().enumerate().take(views) {
+        if v == skip {
+            continue;
+        }
         let wv = w as f32;
         for c in 0..channels {
             let src = &xs[(v * channels + c) * n..][..n];

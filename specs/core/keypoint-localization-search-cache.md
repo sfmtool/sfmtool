@@ -135,13 +135,42 @@ each round:
                argmax → integer δ_int; parabolic(grid) → δ_sub
                iacc += δ_int   (clip);   residual_v = δ_sub
    drop failing views (max_shift_px / LOO-ZNCC / out-of-frame)
-   converge when mean |δ_int + δ_sub| < convergence_px
+   converge when the mean round-over-round change of each view's refined
+   position (iacc + residual, this round vs last) < convergence_px
+   AND no view was dropped this round (a drop changes the consensus the
+   survivors registered against, so they get >= 1 more round against the
+   survivor-only template)
 ```
+
+> _Incremental LOO consensus (2026-07-06): the per-view leave-one-out template
+> was previously rebuilt from scratch per (view, round) — copy the other
+> views' z-normalized rows into a compacted stack, run the IRLS, build the
+> unit template (3.59M calls / 170s CPU / 29.5% of localize on dino). The IRLS
+> recursion touches the pixel data only through inner products, so the loop
+> now computes **one shared per-round accumulation** — the live-view Gram
+> matrix `G[a][b] = ⟨x_a, x_b⟩` (f64) — and runs each holdout's IRLS entirely
+> in Gram space (`r_u² = G[u][u] − 2(Gw)_u + wᵀGw`, then the exact shared
+> Tukey/MAD reweight); only the final unit template is materialized in pixel
+> space, skipping the held-out row in place (no holdout-stack copy).
+> Real-arithmetic semantics are identical (same uniform init, same iteration
+> count, same degenerate early-out); float output differs only at
+> accumulation-order level, bounded by the
+> `incremental_loo_template_matches_reference` test._
+>
+> _Convergence fix (2026-07-06): the loop originally summed `|δ_int + δ_sub|`
+> per round — the **absolute** search output, whose freshly recomputed
+> parabolic `δ_sub` never feeds back into the read position and so keeps a
+> ~0.1–0.5 grid-px floor. The test could never fire and every point ran all
+> `max_iters` rounds (measured 5.00 avg rounds/point on dino). The metric is
+> now the round-over-round **change** of each live view's refined position
+> `iacc + residual` (scaled to patch-grid px at `m ≠ 1`); a view with no
+> scorable window contributes 0 (its position did not move)._
 
 Both the consensus-core read and the search candidates are at **integer** cache
 positions (`iacc`, `iacc + d`), so they are mutually aligned and exact. `δ_sub`
-is the parabolic estimate off the discrete grid; it gates convergence and seeds
-the sub-pixel hand-off, but does not move `iacc`. Reads are L1 hits (a view's
+is the parabolic estimate off the discrete grid; it contributes to the tracked
+position `iacc + residual` (whose round-over-round change gates convergence)
+and seeds the sub-pixel hand-off, but does not move `iacc`. Reads are L1 hits (a view's
 cache is `cacheW²·channels·4 B ≈ 27 KB` at `cacheW = 48`, ~15 KB at 36). The
 `render_context` phase collapses from per-(view, round) to per-view.
 
