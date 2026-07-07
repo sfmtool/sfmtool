@@ -66,6 +66,18 @@ A missing match, or an index beyond the file's point count, is a clear error.
   and a per-observation list with each ray's incidence angle off the optical
   axis (flagging the near-fisheye-edge observations).
 
+  The implementing module is
+  `crates/sfmtool-core/src/analysis/point_inspect.rs` (bound as
+  `SfmrReconstruction.inspect_point`): it un-projects each member keypoint
+  through its camera to rebuild the observation rays, then runs the same
+  `triangulate_batch` / `depth_uncertainty_batch` /
+  `classify_rays_at_infinity` path the points-at-infinity discovery and
+  reclassify operations use (see
+  [`specs/core/batch-triangulation-api.md`](../core/batch-triangulation-api.md)),
+  so the reported diagnostics match the production gate exactly. It requires
+  a `sift_files` reconstruction (`embedded_patches` is rejected — the rays
+  are re-derived from `.sift` keypoints).
+
 ## Point Strips (`--strips`)
 
 `sfm inspect --strips <FILE.sfmr> [POINT ...]` renders a chosen set of 3D points
