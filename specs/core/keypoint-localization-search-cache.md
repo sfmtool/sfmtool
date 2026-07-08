@@ -1,6 +1,11 @@
 # Per-View Cache + SIMD Search for Keypoint Localization
 
-_Status: **proposed** (design). Accelerates the **integer** cross-view search in
+_Status: **implemented**. The render-once per-view cache (`ContextTile` /
+`render_context`, padded `cache_istride` rows) and the hand-rolled AVX2 search
+kernels (`compute_channel_grids_avx2` for the dense grid,
+`score_cell_one_channel_avx2` for the "+"-descent per-cell path) have landed in
+`sfmtool-core/src/patch/keypoint_localize.rs` (scalar fallbacks retained and
+runtime-dispatched). Accelerates the **integer** cross-view search in
 [patch-keypoint-localization.md](patch-keypoint-localization.md) (the congealing
 algorithm) — the step that dominates `sfm embed-patches`. Scope here is integer
 refinement only: the discrete search, view selection, and consensus. Its job is
@@ -33,8 +38,9 @@ score many"). The kernel lives in
 > (convergence + final keypoint) but never folded back into the read position, so
 > every cache read is exact. `render_context` collapses from per-(view, round) to
 > per-view. The `search_resolution_multiplier` knob (default `1.0`, a no-op) is in
-> place. Still scalar — the centered-`f32`/planar AVX2 kernel and the `i16` path
-> are later phases. The `search_shift` accumulation math is unchanged (the
+> place. _(The centered-`f32`/planar AVX2 kernel has since landed — see "Search
+> kernel" and the "+"-descent section below; the `i16` path was investigated and
+> dropped, see Stage 2.)_ The `search_shift` accumulation math is unchanged (the
 > `search_shift_matches_reference*` equivalence tests still pass, now also
 > asserting integer-argmax agreement). Integer-tracked reads build the consensus
 > from integer-aligned cores, a deliberate sub-px change from the

@@ -123,6 +123,7 @@ world data:       X_sfmr = W · X_colmap             (finite points, with w carr
                                                      normals, and patch u/v
                                                      half-vectors rotate the same way)
 sensor_from_rig:  R_sfmr = S · R_colmap · S         t_sfmr = S · t_colmap
+relative pose:    R_sfmr = S · R_colmap · S         t_sfmr = S · t_colmap   (cam2_from_cam1)
 ```
 
 The camera-frame flip `S` is exact and unconditional. The world rotation `W`
@@ -130,12 +131,35 @@ is a canonicalization heuristic (COLMAP does not define gravity): importers
 apply it so that the common upright-camera case lands roughly Z-up, and
 exporters apply its inverse, keeping import/export round trips stable.
 
+**Export (canonical → COLMAP)** inverts the import (`Sᵀ = S`):
+
+```
+poses:            R_colmap = S · R_sfmr · W          t_colmap = S · t_sfmr
+world data:       X_colmap = Wᵀ · X_sfmr
+sensor / relative: R_colmap = S · R_sfmr · S         t_colmap = S · t_sfmr   (W cancels)
+```
+
+**Invariants.** Two consequences that internal code relies on:
+
+- **Pixel-space epipolar geometry is unchanged.** Fundamental / essential /
+  homography matrices stored in `.matches` files and COLMAP databases relate
+  *pixels*, which do not move, so they cross the boundary verbatim. Only code
+  that *derives* `E`/`F` from stored poses plus `K` must first map the poses
+  back to the OpenCV optical frame — equivalently, conjugate by `S`, since
+  `E' = S · E · S` (`S` is a rotation, so `[S·t]× = S·[t]×·S`).
+- **Internal round trips need only `S`.** When a pipeline exports to
+  pycolmap/COLMAP and re-imports its own output within one operation (bundle
+  adjust, densify, merge PnP, DB-mediated solves), applying `S` on the camera
+  frames both ways and leaving the world frame untouched is self-consistent;
+  `W` is reserved for *external* import/export so those round trips stay
+  stable. World-space geometry that never touches a camera axis (camera
+  centres `C = −Rᵀ·t`, triangulation, Kabsch alignment, kd-trees, patch
+  `u × v` normals) is invariant under `W` and needs no per-site change.
+
 > **Migration note.** This convention was formalized after the format was
 > already in use; files written by earlier sfmtool releases (format
 > versions ≤ 4) hold COLMAP-convention data. See
-> [Versioning and Migration](#versioning-and-migration) and the
-> implementation roadmap in
-> `specs/drafts/zup-camera-convention-migration.md`.
+> [Versioning and Migration](#versioning-and-migration).
 
 ## File Structure
 
@@ -1608,8 +1632,7 @@ array is added, removed, or renamed; the change is purely semantic:
 by applying the fixed COLMAP→canonical conversion (`S` and `W` from
 [Conversions happen at the I/O boundary](#conversions-happen-at-the-io-boundary))
 to poses, point positions, infinity directions, normals, and patch `u`/`v`
-half-vectors; saving always writes version 5. The implementation roadmap is
-`specs/drafts/zup-camera-convention-migration.md`.
+half-vectors; saving always writes version 5.
 
 ## Version History
 

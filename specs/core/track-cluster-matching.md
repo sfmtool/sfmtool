@@ -105,8 +105,10 @@ They fell into a few families:
 The background-level radius — the floor — was the clear winner on every dataset.
 Mutual-agreement tests only hurt, dropping real co-observations. And no single
 shared cut-off, even the best one we could find for a dataset, did as well as
-letting each descriptor set its own radius from its background. Tuning settled on
-keeping neighbours within 0.8× the 28th-nearest distance.
+letting each descriptor set its own radius from its background. Tuning first
+settled on keeping neighbours within 0.8× the 28th-nearest distance; the
+production default was later lowered to the 10th-nearest (`d = 10`, `alpha = 0.8`
+— see the parameter defaults below).
 
 ### End-to-end reconstruction vs the baseline
 
@@ -155,7 +157,7 @@ understand why. Incremental works better on our small set of test datasets.
 
 1. **Index & k-NN query** — concatenate every image's descriptors into one corpus,
    build a nearest-neighbour index, and query it once for the **`d + 1` nearest**
-   (self + the `d` nearest others, `d = 28`) of *every* descriptor. The resulting
+   (self + the `d` nearest others, `d = 10`) of *every* descriptor. The resulting
    `(N, d+1)` table of neighbour ids and aligned distances is the single substrate
    everything below reads from, and the index is not touched again.
 2. **Per-point threshold** — for each descriptor, read a cluster membership radius
@@ -179,10 +181,10 @@ randomized kd-tree forest (`sfmtool.KdForest`,
 `crates/sfmtool-core/src/features/kdforest/`, spec `randomized-kdtree-forest.md`). Each row
 carries its `(image_index, feature_index)` so a hit maps back to a feature.
 
-One query drives everything. For every descriptor we fetch its `d + 1 = 29`
-nearest, yielding an `(N, 29)` array of neighbour ids and an aligned distance
+One query drives everything. For every descriptor we fetch its `d + 1 = 11`
+nearest, yielding an `(N, 11)` array of neighbour ids and an aligned distance
 array, sorted ascending — column 0 is the descriptor itself at distance 0,
-columns 1…28 are its 28 nearest others. The query width is exactly what the
+columns 1…10 are its 10 nearest others. The query width is exactly what the
 membership rule (§2) needs: the last column is the background rank `d`, and the
 candidate members are the columns before it; nothing else queries the index.
 Since members necessarily lie nearer than rank `d`, this also caps a descriptor's
@@ -195,7 +197,7 @@ distances. For descriptor `i`, with neighbour distances `dist[i, 0…]` sorted
 ascending (Euclidean L2), the **background floor** is its `d`-th-nearest distance,
 
 ```
-B_i = dist[i, d]          (d = 28)
+B_i = dist[i, d]          (d = 10)
 ```
 
 — far enough out to land among unrelated background, past the descriptor's few
@@ -655,8 +657,8 @@ Steps 6–7 are embarrassingly parallel over rows — use `rayon` (`par_iter` /
 is already internally parallel. Step 8 is sequential by design (the claim order
 defines the result); it is a single cheap pass. Step 9 parallelises per cluster,
 and step 10 can use a parallel sort (`rayon`'s `par_sort_unstable_by`). Keep
-memory bounded: candidates are `≤ N*d`; for dino (`N ≈ 600k`, `d = 28`) that
-is ~17M before clustering — fine as flat `Vec`s of primitives, but do not build
+memory bounded: candidates are `≤ N*d`; for dino (`N ≈ 600k`, `d = 10`) that
+is ~6M before clustering — fine as flat `Vec`s of primitives, but do not build
 per-edge structs with heap fields.
 
 #### Determinism

@@ -83,9 +83,9 @@ the navigation minibar (no width reduction of the barcode):
 - `ImageBrowser` gains an `animation: AnimationState` field
 - Animation advances are reported through the existing `selection_changed: Option<Option<usize>>`
   field on `ImageBrowserResponse` (no new field needed — reuses the same data path as click
-  selection, which already triggers auto-scroll and camera view updates in `main.rs`)
+  selection, which already triggers auto-scroll and camera view updates in `app.rs`)
 - `ImageBrowserResponse` gains `request_camera_switch: Option<usize>` — when playing in camera
-  view mode, signals `main.rs` to call `switch_camera_view()` (instant, non-animated)
+  view mode, signals `app.rs` to call `switch_camera_view()` (instant, non-animated)
 - Keyboard handling lives inside `ImageBrowser::show()`, matching the existing pattern where
   each panel reads from egui's global input queue in its own `show()` method
 - When playing, `ui.ctx().request_repaint()` is called to ensure continuous rendering
@@ -97,7 +97,7 @@ camera switch via `switch_camera_view()` (the non-animated path used by `,`/`.` 
 This produces a flipbook effect with smooth visual continuity from sequential camera positions.
 
 The `request_camera_switch` response field (distinct from `request_camera_view` which triggers
-animated entry into camera view mode) signals `main.rs` to call the instant switch path.
+animated entry into camera view mode) signals `app.rs` to call the instant switch path.
 
 ## Implementation Plan
 
@@ -121,7 +121,7 @@ Click on the play button area toggles playback.
 
 ### Step 4: Camera view sync
 Add `request_camera_switch: Option<usize>` to `ImageBrowserResponse`.
-In `main.rs`, when this field is set and camera view is active, call the instant
+In `app.rs`, when this field is set and camera view is active, call the instant
 `switch_camera_view()` method (the same path used by `,`/`.` keys, which calls
 `compute_switch_camera_view` without animation).
 

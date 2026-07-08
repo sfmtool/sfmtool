@@ -87,7 +87,14 @@ main.add_command_with_category(to_nerfstudio, category="COLMAP Interop")
 @main.command()
 def version():
     """Print the version."""
-    click.echo("sfmtool 0.1")
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _pkg_version
+
+    try:
+        pkg_version = _pkg_version("sfmtool")
+    except PackageNotFoundError:
+        pkg_version = "unknown"
+    click.echo(f"sfmtool {pkg_version}")
 
 
 def deduce_workspace(paths: set[Path]) -> Path:

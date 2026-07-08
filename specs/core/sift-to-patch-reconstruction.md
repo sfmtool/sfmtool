@@ -18,9 +18,14 @@ reference bitmap — plus a 2D keypoint per observation locating where each imag
 sees that patch. This pipeline performs
 that change of representation on a loaded reconstruction: it builds an oriented
 patch per point (the `(u, v)` frame + normal), then for each point expands its
-track with the other vetted views that see the surfel, refines each
-observation's keypoint, drops the views that won't register, and compacts the
-result into a valid `embedded_patches` reconstruction.
+track with the other vetted views that see the surfel and, over **`rounds`
+alternating passes** (default `rounds = 2`), refines the patch normal and then
+re-localizes each observation's keypoint — dropping the views that won't
+register — before compacting the result into a valid `embedded_patches`
+reconstruction. The photometric normal refinement **down-weights oblique views**
+(and hard-drops grazing ones) and carries a **fronto (front-facing) prior** that
+keeps a low-parallax normal from drifting to a tilted, photometrically-equivalent
+pose.
 
 This is a reconstruction-in / reconstruction-out transform at the
 `SfmrReconstruction` (API) level.
@@ -101,12 +106,28 @@ Consequences of the contract:
 
 ## Pipeline
 
+Steps 2–5 form one **round**; the pipeline runs `rounds` of them (default `2`),
+alternating normal refinement and keypoint refinement so each feeds the next.
+Round 1 seeds from the SIFT detections (normal-refine → localize → sub-pixel
+refine); each later round re-refines every normal against the *previous* round's
+keypoints, then re-localizes the keypoints against the new normals — a fixed-point
+alternation. The view set is expanded once (step 3, round 1) and only ever shrinks
+thereafter (the per-round obliquity drop).
+
 1. **Initialize a patch frame.** Seed each point's `(u, v)` frame with a starting
    normal from the mean viewing direction — the average of its point→camera
    directions (`to_embedded_patches`'s `normal="mean_viewing"`).
 2. **Refine the normal photometrically.** Rotate each frame to maximize
    cross-view photometric consensus — [normal
    refinement](patch-normal-refinement.md); the refined frame is re-persisted.
+   The robust consensus **down-weights oblique views** by
+   `|v̂·n|^obliquity_weight_power` and adds a **fronto-parallel prior**
+   (`fronto_prior_weight · mean(v̂·n)²`); after each round every observation
+   more than `max_obliquity_deg` off the refined normal is dropped. From round 2
+   the refinement basis is capped at the `max_refine_views` most
+   normal-informative views per point (output-lossless — every observation still
+   registers and fuses; see
+   [patch-normal-refine-view-subset.md](patch-normal-refine-view-subset.md)).
 3. **Select the views (per point).** Run [patch-view
    selection](patch-view-selection.md): geometric candidacy plus photometric
    vetting against a track-seeded template yields the view set `G`.
@@ -173,6 +194,14 @@ keypoint-localization spec).
 | `patch_size` | `5.0` | frame init: surfel size — full patch edge length, halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`) |
 | `max_shift_px` | ~3 | keypoint refiner: drop a view whose keypoint sits more than this from the point's projection (source-image px) |
 | `min_views` | 2 | pipeline cull: drop a point left with fewer kept views |
+| `rounds` | `2` | pipeline loop: number of alternating (normal-refine, keypoint-refine) passes (see [Pipeline](#pipeline)) |
+| `max_obliquity_deg` | `80.0` | normal refinement: after each round, drop observations viewing the surfel more than this off the refined normal (`90` disables) |
+| `obliquity_weight_power` | `2.0` | normal refinement: exponent `p` of the multiplicative obliquity view-weight `\|v̂·n\|^p` in the robust consensus (`0` disables; `2` = cos²θ foreshortening) |
+| `fronto_prior_weight` | `0.05` | normal refinement: weight `λ` of the additive fronto-parallel prior `λ·mean(v̂·n)²` pulling a low-parallax normal toward facing the cameras (`0` disables) |
+| `max_refine_views` (`--refine-max-views`) | `8` | normal refinement: cap the round-2+ refinement basis at the N most normal-informative views/point (`0` = all); output-lossless ([patch-normal-refine-view-subset.md](patch-normal-refine-view-subset.md)) |
+| `subpixel` | `1` | keypoint refiner: LK/ECC sub-pixel outer-sweep count applied once per round (per-sweep consensus); `0` disables movement (render-only bitmap fuse still runs), `≥1` = that many sweeps ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)) |
+| `localize_search_strategy` | `plus_descent` | keypoint refiner: discrete shift-grid traversal — `plus_descent` (local descent) or `exhaustive` (full grid); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
+| `search_resolution_multiplier` | `1.0` | keypoint refiner: discrete-search resolution multiplier `m` (`1.0` = no-op; `>1` = supersampled grid); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
 
 ## Scope
 
@@ -202,7 +231,10 @@ input track, then is expanded with vetted views and filtered by drops.
 
 _Status: **fully wired** in `src/sfmtool/_embed_patches.py`. `embed_patches(recon,
 images, *, min_relative_zncc, patch_size, max_shift_px, min_views, max_iters,
-search, resolution)` runs the whole pipeline (steps 0–7): a single
+search, resolution, search_resolution_multiplier, subpixel, rounds,
+max_obliquity_deg, obliquity_weight_power, fronto_prior_weight, max_refine_views,
+localize_search_strategy)` runs the whole pipeline (steps 0–7, iterated over
+`rounds` alternating normal/keypoint passes): a single
 `recon.to_embedded_patches(...)` bridge (the only `.sift` read) builds the
 mean-viewing, feature-sized frames + inline SIFT keypoints + image hashes; the
 cloud is read back via `embedded.patches` and its normal refined photometrically

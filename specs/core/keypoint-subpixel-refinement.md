@@ -1,7 +1,7 @@
 # Photometric Subpixel Keypoint Refinement
 
 _Status: **MVP + analytic Jacobian + per-move consensus implemented + wired
-into `embed_patches` as opt-in** (Phases 2 and 3B). The
+into `embed_patches`, on by default (1 sweep)** (Phases 2 and 3B). The
 forward-additive ECC Gauss–Newton refiner lives in
 `crates/sfmtool-core/src/patch/keypoint_subpixel.rs` (exposed to Python as
 `PatchCloud.refine_keypoints`). All three "Consensus refresh granularity"
@@ -15,13 +15,18 @@ interface (`remap_bilinear_with_grad`, `remap_aniso_with_grad`,
 `WarpMap::get_jacobian`) is implemented per the "Design details" section below,
 collapsing the per-GN-step gradient build from 5 renders (value + 4 FD) to 1
 (value + analytic gradient composed with the warp Jacobian). The
-`embed_patches` wiring exposes LK behind a new `subpixel: str = "none"`
-kwarg (`"lk"` for per-sweep, `"lk_per_move"` for the incremental variant)
-and exposes the supersampled grid in parallel via a new
+`embed_patches` wiring exposes LK as an **integer `subpixel` kwarg** (and
+`--subpixel` CLI option): a per-round outer-sweep count where `0` disables the
+sub-pixel pass (the localizer's keypoints are used as is) and `N >= 1` runs the
+refiner with `max_outer_sweeps = N`. The pipeline always uses the per-sweep
+consensus variant (`consensus_refresh = "per_sweep"`); the per-move
+(Gauss–Seidel) variant is reachable only via the direct
+`PatchCloud.refine_keypoints(consensus_refresh="per_move")` binding, not through
+`embed_patches`. The supersampled grid is exposed in parallel via a new
 `search_resolution_multiplier` kwarg on `PatchCloud.localize_keypoints`
 (and pass-through on `embed_patches`). The production default is
-`subpixel="none"`, `search_resolution_multiplier=1.0`; all variants are
-opt-in. `PatchCloud.refine_keypoints` and `PatchCloud.refine_normals`
+`subpixel=1` (one LK sweep per round — **on by default**),
+`search_resolution_multiplier=1.0`. `PatchCloud.refine_keypoints` and `PatchCloud.refine_normals`
 both default to seeding each view at that observation's inline
 stored keypoint when the recon carries them (an embedded_patches
 recon), with per-view fall-through to the reprojected center for views

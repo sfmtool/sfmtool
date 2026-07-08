@@ -23,9 +23,10 @@ def get_essential_matrix(
     The input poses are canonical (``.sfmr``) world-to-camera poses (cameras
     look down -Z). E/F are pixel-space quantities that must be derived in the
     OpenCV camera frame, so the poses are first mapped back to OpenCV frames by
-    an S-only flip (``R' = S.R``, ``t' = S.t``); see the §1 invariant in
-    ``specs/drafts/zup-camera-convention-migration.md``. The resulting E is
-    identical to the pre-migration OpenCV-frame E (pixels don't change).
+    an S-only flip (``R' = S.R``, ``t' = S.t``); see the epipolar invariant in
+    ``specs/formats/sfmr-file-format.md`` § "Conversions happen at the I/O
+    boundary". The resulting E is identical to the pre-migration OpenCV-frame E
+    (pixels don't change).
 
     Args:
         R1: 3x3 rotation matrix for camera 1 (world to camera)

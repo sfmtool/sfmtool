@@ -44,7 +44,7 @@ The core 3D viewer is working with these features implemented:
 - GPU pick buffer for entity selection (frustums and points)
 - Full orbit/pan/zoom navigation with Alt-mode target control
 - WASD fly navigation with Q/E tilt and Shift sprint
-- Target indicator (rotating octahedron) with supernova lighting effect
+- Target indicator (rotating 3D compass) with supernova lighting effect
 - Windows precision touchpad via DirectManipulation API
 - Ground plane grid, axis lines, orientation gizmo
 - `.sfmr` file loading via File > Open dialog
@@ -57,6 +57,8 @@ The core 3D viewer is working with these features implemented:
   3D viewport
 - Single 3D point selection with track visualization, including the Point
   Track Detail panel (see [gui-point-track-detail.md](gui-point-track-detail.md))
+- Patch/surfel rendering (Point Track Detail patch tiles + point-cloud patch
+  rendering; see [gui-patch-rendering.md](gui-patch-rendering.md))
 - Image detail feature overlay modes (None, Features, Reproj Error, Track
   Length, Max Track Angle, Depth Reliability, Condition Number)
 - Feature filtering controls (max features, min/max size, tracked only)

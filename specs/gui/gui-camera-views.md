@@ -52,7 +52,7 @@ It returns `[f64; 24]` (8 corners × 3 coords: near TL/TR/BR/BL then far TL/TR/B
 ### Viewport Camera (`sfmtool-core`)
 
 The viewport navigation camera is `Camera` (in `sfmtool-core`), wrapped by
-`ViewportCamera` (in `sfmtool-gui`) which adds FOV and clip planes:
+`ViewportCamera` (in `sfm-explorer`) which adds FOV and clip planes:
 
 ```rust
 pub struct Camera {
@@ -512,11 +512,15 @@ vfov_cam = 2 * atan(height / (2 * fy))
 hfov_cam = 2 * atan(width  / (2 * fx))
 ```
 
-While in camera view mode, the viewport FOV is computed each frame so that
+When entering camera view mode, the viewport FOV is computed **once** so that
 the camera's entire field of view fits within the viewport — the image is as
 large as possible without any part being cropped. This is the same logic as
 fitting a rectangle inside another rectangle: match the constraining axis.
-Recomputing each frame keeps the fit correct when the window is resized.
+The best-fit FOV is evaluated on entry (from the viewport aspect at that
+moment) and stored; it is **not** re-evaluated per frame. After entry the FOV
+is under user control (slider, zoom). See
+[Step 9 FOV handling](#fov-handling-while-in-camera-view) for the history of
+why the former per-frame override was removed.
 
 The viewport has its own aspect ratio (`viewport_width / viewport_height`).
 For a given vertical FOV, the viewport's horizontal FOV is determined by:
@@ -1498,7 +1502,8 @@ once on entry so the background image fills the viewport exactly. See
 1. ✓ `CameraViewMode` struct with `image_index` and `best_fit_fov()` method
 2. ✓ `ViewportCamera::vertical_fov()` helper for min-dimension FOV convention
 3. ✓ Z key enters camera view when frustum selected (sets pose, target_distance, intrinsic FOVs)
-4. ✓ Per-frame FOV recomputation from stored intrinsic FOVs and viewport aspect
+4. ✓ Best-fit FOV computed once on entry from intrinsic FOVs and viewport aspect
+   (perspective cameras only; not re-evaluated per frame — see Step 9)
 5. ✓ Camera view exits on any navigation input (drag, scroll, gesture, Home key)
 6. ✓ Full-resolution image background display
 7. ✓ `,`/`.` keys to navigate to previous/next camera image in camera view mode

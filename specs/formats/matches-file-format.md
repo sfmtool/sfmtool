@@ -737,8 +737,10 @@ with new hashes.
 
 As a consequence, consumers that export two-view geometries to a COLMAP database
 (`sfm to-colmap-db` via `src/sfmtool/colmap/db_setup.py`) S-conjugate the canonical
-poses back to COLMAP convention when building `pycolmap.Rigid3d`. The implementation
-roadmap is `specs/drafts/zup-camera-convention-migration.md` (decision D6).
+poses back to COLMAP convention when building `pycolmap.Rigid3d`. The stored
+F/E/H matrices are pixel-space and unchanged by the flip; see
+[`sfmr-file-format.md`](sfmr-file-format.md#conversions-happen-at-the-io-boundary)
+for the invariant and the `S`/`W` conversion math.
 
 ## Version History
 

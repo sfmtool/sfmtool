@@ -440,7 +440,9 @@ transform.
 - [x] EDL post-processing (8-neighbor, two-radius sampling)
 - [x] Adjustable EDL line thickness
 - [x] Three render targets (color + linear depth + pick ID)
-- [x] Target indicator (rotating wireframe octahedron)
+- [x] Target indicator (originally a rotating wireframe octahedron; later
+      redesigned into the 3D compass — see the redesign entry below and
+      [3D Shape](#3d-shape-rotating-compass))
 - [x] Depth-aware transparency with color shift
 - [x] Supernova lighting effect with inverse-square falloff and radiating waves
 - [x] Smooth activation/deactivation fade

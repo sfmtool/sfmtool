@@ -66,8 +66,9 @@ All four panels share `AppState::selected_image` as the central image selection 
 - **Image Detail → others**: The detail pane is display-only (no selection input — it
   shows whatever is selected). `,`/`.` keys on the 3D viewport step the selection
   back/forward (wrapping at the ends) even when not in camera view mode.
-- **Deselect**: Clicking background in 3D viewer or clicking the selected thumbnail again
-  clears `selected_image`. The detail pane shows "No image selected."
+- **Deselect**: Clicking background in the 3D viewer clears `selected_image` and the
+  detail pane shows "No image selected." Re-clicking an already-selected thumbnail keeps
+  it selected (no toggle-off) — thumbnail clicks always set the selection to that image.
 
 **What changes when `selected_image` changes:**
 - Image Browser: cyan highlight border moves to the new thumbnail
@@ -149,7 +150,7 @@ resolved point index is promoted to `AppState`:
 pub hovered_point: Option<usize>,
 ```
 
-Each frame, after `SceneRenderer::read_back_pick()`, main.rs extracts the point index:
+Each frame, after `SceneRenderer::read_readback_result()`, app.rs extracts the point index:
 ```rust
 let hover_pick_id = self.scene_renderer.hover_pick_id();
 let tag = hover_pick_id & PICK_TAG_MASK;
@@ -263,7 +264,7 @@ let [_viewer, _detail] =
     surface.split_right(top, 0.67, vec![Tab::ImageDetail, Tab::PointTrackDetail]);
 ```
 
-### Integration in main.rs
+### Integration in app.rs
 
 Replace the current `egui::CentralPanel` block with:
 
@@ -549,7 +550,8 @@ Run `pixi run cargo-fmt-check && pixi run cargo-clippy` before each commit. Run
 ### Step 1: egui_dock integration with 3D viewer only — DONE
 
 `egui_dock`-based layout with `Tab` enum (`Viewer3D`, `ImageBrowser`, `ImageDetail`),
-`DockState`, `TabContext`, and `TabViewer` implementation in `main.rs`. Default layout:
+`TabContext`, and `TabViewer` implemented in `dock.rs`; the initial `DockState` layout
+is built in `lib.rs` (`run()`) and the `DockArea` is driven from `app.rs`. Default layout:
 3D Viewer top-left (67%), Image Detail top-right (33%), Image Browser bottom (20%).
 
 ### Step 2: Image browser — thumbnail loading and strip layout — DONE
@@ -592,7 +594,7 @@ cross-panel visual effects for a single point.
 Wire up the existing GPU pick buffer for point clicks. The pick buffer already
 writes `PICK_TAG_POINT | point3d_index` per point splat — this step reads it.
 
-**`main.rs`** — extend the click handler (around line 654):
+**`app.rs`** — extend the click handler (in `process_pick_readback`):
 
 Currently only `PICK_TAG_FRUSTUM` is handled. Add a `PICK_TAG_POINT` branch:
 
@@ -765,7 +767,7 @@ let color = if Some(i) == selected_image {
 };
 ```
 
-**`main.rs`** or **`state.rs`**:
+**`app.rs`** or **`state.rs`**:
 
 Compute `track_image_set` when `selected_point` changes. Cache it in
 `AppState` as `track_image_set: HashSet<usize>`. Recompute on
@@ -885,7 +887,7 @@ SVD decomposition of the 2×2 affine shape matrix) with red center dots
 
 **Hit testing**: KD-tree (`kiddo::KdTree<f32, 2>`) for O(log n) nearest
 feature lookup. 8px hit radius in image coordinates. Returns
-`ImageDetailResponse::select_point` which main.rs wires to
+`ImageDetailResponse::select_point` which the `TabViewer` impl in `dock.rs` wires to
 `state.selected_point`.
 
 **Tooltip**: On hover within hit radius, shows "Point3D #N | err: X.XXXpx"
