@@ -39,22 +39,6 @@ from ..align.multi import align_command
     help="Confidence threshold for image matches (camera method only, default: 0.7)",
 )
 @click.option(
-    "--max-error",
-    type=float,
-    default=0.1,
-    help="Maximum acceptable error threshold (default: 0.1)",
-)
-@click.option(
-    "--iterative",
-    is_flag=True,
-    help="Enable iterative refinement of alignment transforms",
-)
-@click.option(
-    "--visualize",
-    is_flag=True,
-    help="Generate visualization data for alignment quality",
-)
-@click.option(
     "--ransac/--no-ransac",
     "use_ransac",
     default=True,
@@ -78,9 +62,6 @@ def align(
     output_dir,
     method,
     confidence,
-    max_error,
-    iterative,
-    visualize,
     use_ransac,
     ransac_percentile,
     ransac_iterations,
@@ -143,9 +124,6 @@ def align(
             output_dir=output_dir,
             method=method,
             confidence=confidence,
-            max_error=max_error,
-            iterative=iterative,
-            visualize=visualize,
             use_ransac=use_ransac,
             ransac_percentile=ransac_percentile,
             ransac_iterations=ransac_iterations,

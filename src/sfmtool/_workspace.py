@@ -109,6 +109,45 @@ def find_workspace_for_path(path: Path) -> Optional[Path]:
         current = parent
 
 
+def find_sfmr_by_content_hash(workspace: Path, hash_prefix: str) -> Optional[Path]:
+    """First .sfmr under `workspace` whose content hash starts with `hash_prefix`.
+
+    Search order follows the sfmr-format spec: the conventional ``sfmr/``
+    subdirectory first, then the workspace root, then the rest of the tree
+    (skipping hidden directories). Reading each candidate's hash decompresses
+    only ``content_hash.json.zst``, not the reconstruction data.
+
+    Returns the matching path, or None if no reconstruction matches.
+    """
+    from ._sfmtool.io import read_sfmr_content_hash
+
+    def matches(path: Path) -> bool:
+        try:
+            return read_sfmr_content_hash(str(path))[:8].lower() == hash_prefix
+        except Exception:
+            return False
+
+    # 1. The conventional sfmr/ subdirectory.
+    sfmr_dir = workspace / "sfmr"
+    if sfmr_dir.is_dir():
+        for path in sorted(sfmr_dir.glob("*.sfmr")):
+            if matches(path):
+                return path
+    # 2. The workspace root.
+    for path in sorted(workspace.glob("*.sfmr")):
+        if matches(path):
+            return path
+    # 3. The rest of the tree, skipping hidden / already-searched directories.
+    for path in sorted(workspace.rglob("*.sfmr")):
+        if path.parent == workspace or path.parent == sfmr_dir:
+            continue
+        if any(part.startswith(".") for part in path.relative_to(workspace).parts):
+            continue
+        if matches(path):
+            return path
+    return None
+
+
 def load_workspace_config(workspace_dir: Path) -> dict:
     """
     Load workspace configuration from .sfm-workspace.json.

@@ -213,14 +213,14 @@ def _inspect_strips_cmd(target, specs, output, strips_views, context):
 def _inspect_point(point_id, hash_prefix, point_index, location, verbose):
     """Resolve a pt3d_ point ID to its .sfmr and print the point summary."""
     from .._sfmtool import SfmrReconstruction
-    from .._workspace import find_workspace_for_path
+    from .._workspace import find_sfmr_by_content_hash, find_workspace_for_path
 
     base = Path(location) if location else Path.cwd()
     if not base.exists():
         raise click.UsageError(f"location does not exist: {base}")
 
     workspace = find_workspace_for_path(base) or base
-    sfmr_path = _find_sfmr_by_content_hash(workspace, hash_prefix)
+    sfmr_path = find_sfmr_by_content_hash(workspace, hash_prefix)
     if sfmr_path is None:
         raise click.ClickException(
             f"no .sfmr under '{workspace}' has content hash '{hash_prefix}' "
@@ -239,40 +239,3 @@ def _inspect_point(point_id, hash_prefix, point_index, location, verbose):
         raise
     except Exception as e:
         raise click.ClickException(str(e))
-
-
-def _find_sfmr_by_content_hash(workspace, hash_prefix):
-    """First .sfmr under `workspace` whose content hash starts with `hash_prefix`.
-
-    Search order follows the sfmr-format spec: the conventional ``sfmr/``
-    subdirectory first, then the workspace root, then the rest of the tree
-    (skipping hidden directories). Reading each candidate's hash decompresses
-    only ``content_hash.json.zst``, not the reconstruction data.
-    """
-    from .._sfmtool.io import read_sfmr_content_hash
-
-    def matches(path: Path) -> bool:
-        try:
-            return read_sfmr_content_hash(str(path))[:8].lower() == hash_prefix
-        except Exception:
-            return False
-
-    # 1. The conventional sfmr/ subdirectory.
-    sfmr_dir = workspace / "sfmr"
-    if sfmr_dir.is_dir():
-        for path in sorted(sfmr_dir.glob("*.sfmr")):
-            if matches(path):
-                return path
-    # 2. The workspace root.
-    for path in sorted(workspace.glob("*.sfmr")):
-        if matches(path):
-            return path
-    # 3. The rest of the tree, skipping hidden / already-searched directories.
-    for path in sorted(workspace.rglob("*.sfmr")):
-        if path.parent == workspace or path.parent == sfmr_dir:
-            continue
-        if any(part.startswith(".") for part in path.relative_to(workspace).parts):
-            continue
-        if matches(path):
-            return path
-    return None

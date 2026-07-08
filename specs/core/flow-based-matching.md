@@ -85,9 +85,9 @@ and wide-baseline matching in a single O(N) sweep with O(window_size) memory:
 1. For each consecutive frame pair (i, i+1), compute dense optical flow
 2. **Advect** all tracked keypoint positions one hop forward through the new adjacent
    flow field — each advection is O(keypoints), just bilinear lookup per point
-3. Match all window source images against the current frame by finding the nearest
-   keypoint in the target frame within spatial tolerance (3px default) of the
-   advected position
+3. Match all window source images against the current frame by finding the K=5
+   nearest keypoints in the target frame within a 10px candidate radius of the
+   advected position, then keeping the one with the best descriptor match
 4. When the window exceeds `window_size`, drop the oldest entry
 
 With `window_size=5`, this produces matches at skip=1 through skip=5 for every frame.
@@ -100,8 +100,10 @@ For each source/target pair with a precomputed flow:
 
 1. Advect all SIFT keypoints from source through the flow field
 2. Filter to advected points that land in-bounds
-3. Find nearest keypoint in target within spatial tolerance using KD-tree
-4. Filter by descriptor L2 distance <= threshold (default 250)
+3. Find the K=5 nearest keypoints in target within a 10px candidate radius using a
+   KD-tree (`nearest_k_within_radius`)
+4. Among those candidates, keep the one with the best (lowest L2) descriptor match,
+   subject to descriptor L2 distance <= threshold (default 250)
 5. Deduplicate: if multiple sources match the same target, keep the pair with the
    lowest descriptor distance
 
@@ -122,8 +124,9 @@ and 250 cleanly separates them across all tested baselines.
 ### Error Accumulation
 
 Per-frame advection error ~0.5px accumulates as ~sqrt(N) * 0.5px for random errors,
-giving ~1.6px at 10 frames — well within the 3px spatial tolerance. The descriptor
-filter catches any advection errors that exceed the tolerance.
+giving ~1.6px at 10 frames — well within the 10px candidate radius. The descriptor
+filter catches any advection errors that survive the radius by keeping only the
+best-matching candidate.
 
 ## Future Directions: Wide-Baseline Pair Selection
 

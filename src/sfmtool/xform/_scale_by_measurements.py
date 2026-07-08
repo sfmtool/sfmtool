@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import statistics
+from collections import Counter
 from pathlib import Path
 
 import click
@@ -100,7 +101,11 @@ def _resolve_point_cross_recon(
     src_image_idxs = source_recon.track_image_indexes[obs_mask]
     src_feat_idxs = source_recon.track_feature_indexes[obs_mask]
 
-    resolved_points: dict[int, str] = {}
+    # Count how many source observations map to each candidate input point.
+    # A feature belongs to at most one track, so all observations should agree;
+    # if they don't, the counts let us fall back to the most common point.
+    counts: Counter[int] = Counter()
+    descriptions: dict[int, str] = {}
     for src_img_idx, src_feat_idx in zip(src_image_idxs, src_feat_idxs):
         src_img_name = source_recon.image_names[int(src_img_idx)]
         input_img_idx = input_name_to_idx.get(src_img_name)
@@ -109,11 +114,12 @@ def _resolve_point_cross_recon(
         key = (input_img_idx, int(src_feat_idx))
         if key in input_obs_index:
             input_pt_idx = input_obs_index[key]
-            img_basename = Path(src_img_name).name
-            desc = f"{img_basename} feat #{src_feat_idx}"
-            resolved_points[input_pt_idx] = desc
+            counts[input_pt_idx] += 1
+            if input_pt_idx not in descriptions:
+                img_basename = Path(src_img_name).name
+                descriptions[input_pt_idx] = f"{img_basename} feat #{src_feat_idx}"
 
-    if not resolved_points:
+    if not counts:
         obs_images = [
             Path(source_recon.image_names[int(i)]).name for i in src_image_idxs
         ]
@@ -123,14 +129,16 @@ def _resolve_point_cross_recon(
             f"None of these (image, feature) pairs appear in the input reconstruction's tracks."
         )
 
-    if len(set(resolved_points.keys())) > 1:
+    if len(counts) > 1:
         click.echo(
             f"  Warning: {point_id} resolved to multiple points in input: "
-            f"{list(resolved_points.keys())}. Using most common."
+            f"{dict(counts)}. Using most common."
         )
 
-    pt_idx = next(iter(resolved_points))
-    return pt_idx, resolved_points[pt_idx]
+    # Most frequently observed input point; ties broken by lowest point index
+    # for deterministic output.
+    pt_idx = min(counts, key=lambda idx: (-counts[idx], idx))
+    return pt_idx, descriptions[pt_idx]
 
 
 def _print_histogram(scale_factors: list[float], target_unit: str) -> None:
@@ -369,9 +377,22 @@ class ScaleByMeasurementsTransform:
                 )
             return source
 
+        # No explicit `sfmr` path: search the workspace for a reconstruction
+        # whose content hash matches the Point ID hash prefix, following the
+        # sfmr-format resolution strategy (shared with `sfm inspect`).
+        from .._workspace import find_sfmr_by_content_hash, find_workspace_for_path
+
+        base = self.yaml_path.parent
+        workspace = find_workspace_for_path(base) or base
+        found = find_sfmr_by_content_hash(workspace, hash_prefix)
+        if found is not None:
+            click.echo(f"  Found source reconstruction for '{hash_prefix}': {found}")
+            return SfmrReconstruction.load(found)
+
         raise ValueError(
             f"Point IDs reference reconstruction with hash prefix '{hash_prefix}' "
-            f"which doesn't match the input reconstruction. "
+            f"which doesn't match the input reconstruction, and no .sfmr under "
+            f"'{workspace}' has that content hash. "
             f"Add an 'sfmr' field to {self.yaml_path.name} with the path to the "
             f"source .sfmr file."
         )

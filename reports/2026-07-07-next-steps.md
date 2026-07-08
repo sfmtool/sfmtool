@@ -51,6 +51,8 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
 
 ### 2. Implement-or-remove the dead CLI surface
 
+> _Status (2026-07-08): Done. Cluster 1 — removed `--max-error`/`--iterative`/`--visualize` from `align`. Cluster 2 — implemented most-common point selection and the workspace hash-prefix source search (reusing `find_sfmr_by_content_hash`, lifted to `_workspace.py`), with new `tests/xform/test_scale_by_measurements.py`. Cluster 3 — deleted the dead `spatial_tolerance` and rewrote `flow-based-matching.md` to document the shipped 10px/K=5 mechanism. Only the `align` "shortest path" spec prose was deferred into item #1's spec sweep._
+
 - **Spec reference:** `reports/2026-07-07-spec-audit.md` Top Priorities #3, #4
   + the flow-matching honorable mention; `specs/cli/align-command.md`,
   `specs/cli/scale-by-measurements-command.md`, `specs/core/flow-based-matching.md`.

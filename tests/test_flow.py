@@ -204,7 +204,6 @@ class TestFlowMatchPair:
             descriptors2,
             flow_u,
             flow_v,
-            spatial_tolerance=3.0,
             descriptor_threshold=100.0,
         )
 
@@ -244,7 +243,6 @@ class TestFlowMatchPair:
             descriptors2,
             flow_u,
             flow_v,
-            spatial_tolerance=3.0,
             descriptor_threshold=50.0,
         )
 
@@ -262,7 +260,6 @@ class TestFlowMatchPair:
             np.zeros((10, 128), dtype=np.uint8),
             flow_u,
             flow_v,
-            spatial_tolerance=3.0,
             descriptor_threshold=100.0,
         )
 
@@ -288,7 +285,6 @@ class TestFlowMatchPair:
             desc,
             flow_u,
             flow_v,
-            spatial_tolerance=5.0,
             descriptor_threshold=200.0,
         )
 
