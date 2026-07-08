@@ -4,7 +4,7 @@
 use nalgebra::{Point3, Vector3};
 
 use super::*;
-use crate::camera::remap::{ImageU8, ImageU8Pyramid};
+use crate::camera::remap::{sample_bilinear_u8_all, ImageU8, ImageU8Pyramid};
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RigidTransform;
 
@@ -644,4 +644,222 @@ fn behind_camera_candidate_rejected_by_cheirality() {
         "behind-camera candidate must be rejected by cheirality: {:?}",
         sel.admitted
     );
+}
+
+// ── Affine candidate-scoring fast path ───────────────────────────────────────
+
+/// A `SimpleRadial` camera with radial distortion `k1` (same frame/focal as
+/// the pinhole helper).
+fn radial_cam(k1: f64) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SimpleRadial {
+            focal_length: FOCAL,
+            principal_point_x: IMG_W as f64 / 2.0,
+            principal_point_y: IMG_H as f64 / 2.0,
+            radial_distortion_k1: k1,
+        },
+        width: IMG_W,
+        height: IMG_H,
+    }
+}
+
+/// A one-view context over every positive-weight pixel of the window (the
+/// affine tests need a full support to compare against the exact render).
+fn full_support_ctx(resolution: u32) -> LevelContext {
+    let w_full = window_weights(PatchWindow::GaussianDisk { sigma: 0.6 }, resolution);
+    let pixels: Vec<usize> = (0..(resolution * resolution) as usize)
+        .filter(|&p| w_full[p] > 0.0)
+        .collect();
+    let weights: Vec<f64> = pixels.iter().map(|&p| w_full[p]).collect();
+    LevelContext {
+        kept: vec![0],
+        pixels,
+        weights,
+    }
+}
+
+#[test]
+fn affine_sampling_matches_exact_render_on_mild_distortion() {
+    // On a mildly distorted camera the 4th-corner residual is inside the
+    // bound, the affine map is accepted, and the sampled support values match
+    // the exact per-pixel warp to within (gradient × residual) — the accepted
+    // approximation. The image content itself is arbitrary; both paths sample
+    // the SAME image through the SAME camera, so this is a pure fidelity test
+    // of the affine position approximation.
+    let cam = radial_cam(0.03);
+    let img = render_plane_view([0.3, 0.1, 0.0], texture);
+    let pyr = ImageU8Pyramid::build(&img, 5);
+    let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-0.3, 0.1, 0.0]);
+    let view = ProjectedImage {
+        camera: &cam,
+        cam_from_world: &pose,
+        pyramid: &pyr,
+    };
+    let patch = plane_patch();
+    let resolution = 16u32;
+    let ctx = full_support_ctx(resolution);
+    let n = ctx.pixels.len();
+
+    let map = affine_core_map(&patch, &view, resolution)
+        .expect("mild distortion must fit the affine map");
+    let mut aff = vec![0f32; n];
+    sample_support_affine(
+        pyr.level(0),
+        &map,
+        &ctx.pixels,
+        resolution as usize,
+        &mut aff,
+    );
+
+    let (exact, channels) =
+        normalized_stack(&patch, &ctx, &[view], resolution, Sampler::Bilinear, None)
+            .expect("patch renders in frame");
+    assert_eq!(channels, 1);
+
+    let mut max_d = 0.0f32;
+    let mut sum_d = 0.0f64;
+    for k in 0..n {
+        let d = (aff[k] - exact[k]).abs();
+        max_d = max_d.max(d);
+        sum_d += d as f64;
+    }
+    let mean_d = sum_d / n as f64;
+    assert!(
+        max_d <= 4.0 && mean_d <= 0.8,
+        "affine samples must track the exact warp: max {max_d}, mean {mean_d:.3}"
+    );
+}
+
+#[test]
+fn affine_score_matches_exact_score() {
+    // The end quantity — the candidate's ZNCC against a real reference — must
+    // agree between the affine fast path (what `candidate_zncc` picks on this
+    // pinhole scene) and the exact-warp leg, well inside any plausible
+    // admission bar's sensitivity.
+    let scene = Scene::new(
+        &[
+            [0.4, 0.0, 0.0],
+            [-0.4, 0.0, 0.0],
+            [0.0, 0.4, 0.0],
+            [0.35, 0.2, 0.1],
+        ],
+        &[texture as fn(f64, f64) -> f64; 4],
+    );
+    let views = scene.views();
+    let patch = plane_patch();
+    let p = params();
+    let w_full = window_weights(p.window, p.resolution);
+    let (reference, _agree) =
+        build_reference(&patch, &views, &[0, 1, 2], &w_full, &p).expect("track builds a reference");
+    let single_ctx = LevelContext {
+        kept: vec![0],
+        pixels: reference.ctx.pixels.clone(),
+        weights: reference.ctx.weights.clone(),
+    };
+    let sqrt_weights: Vec<f32> = single_ctx
+        .weights
+        .iter()
+        .map(|&w| w.sqrt() as f32)
+        .collect();
+
+    // Fast path (the pinhole map is near-affine, so `candidate_zncc` takes it).
+    let mut scratch = Vec::new();
+    let affine_score = candidate_zncc(
+        &patch,
+        &views[3],
+        &reference,
+        &single_ctx,
+        &sqrt_weights,
+        &p,
+        &mut scratch,
+    )
+    .expect("candidate scores");
+
+    // Exact leg, forced.
+    let (raw, channels) = normalized_stack(
+        &patch,
+        &single_ctx,
+        &[views[3]],
+        p.resolution,
+        p.sampler,
+        None,
+    )
+    .expect("candidate renders in frame");
+    let exact_score =
+        score_raw_against_reference(&raw, channels, &reference, &single_ctx, &sqrt_weights)
+            .expect("exact leg scores");
+
+    assert!(
+        (affine_score - exact_score).abs() < 0.02,
+        "affine vs exact score: {affine_score:.5} vs {exact_score:.5}"
+    );
+}
+
+#[test]
+fn affine_declines_strong_distortion_and_border() {
+    let patch = plane_patch();
+    let resolution = 16u32;
+    // Strong radial distortion, patch pushed off-centre: the 4th-corner
+    // residual exceeds the bound -> the fast path declines (exact warp
+    // fallback).
+    let cam = radial_cam(0.8);
+    let img = render_plane_view([0.9, 0.6, 0.0], texture);
+    let pyr = ImageU8Pyramid::build(&img, 5);
+    let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [-0.9, 0.6, 0.0]);
+    let view = ProjectedImage {
+        camera: &cam,
+        cam_from_world: &pose,
+        pyramid: &pyr,
+    };
+    assert!(
+        affine_core_map(&patch, &view, resolution).is_none(),
+        "strong distortion must fall back to the exact warp"
+    );
+
+    // Patch projecting hard against the frame border: the border margin
+    // declines it even though the map itself fits (the exact path owns the
+    // out-of-frame-support semantics).
+    let cam = pinhole();
+    let img = render_plane_view([0.0, 0.0, 0.0], texture);
+    let pyr = ImageU8Pyramid::build(&img, 5);
+    // Camera far off to the side: the patch lands at the frame edge.
+    let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [2.32, 0.0, 0.0]);
+    let view = ProjectedImage {
+        camera: &cam,
+        cam_from_world: &pose,
+        pyramid: &pyr,
+    };
+    assert!(
+        affine_core_map(&patch, &view, resolution).is_none(),
+        "an edge-straddling patch must fall back to the exact warp"
+    );
+}
+
+#[test]
+fn affine_sampler_matches_reference() {
+    // The hand-rolled interior sampler (no per-pixel clamping, licensed by the
+    // border gate) must reproduce the generic clamped reference sampler on an
+    // interior map, up to the shared u8 rounding.
+    let img = render_plane_view([0.2, -0.1, 0.0], texture);
+    let map = AffineCoreMap {
+        a: [3.1, 0.4, 40.0, -0.2, 2.9, 60.0],
+    };
+    let resolution = 16usize;
+    let pixels: Vec<usize> = (0..resolution * resolution).collect();
+    let mut lean = vec![0f32; pixels.len()];
+    sample_support_affine(&img, &map, &pixels, resolution, &mut lean);
+    let mut buf = [0u8; 4];
+    for (k, &p) in pixels.iter().enumerate() {
+        let col = (p % resolution) as f64;
+        let row = (p / resolution) as f64;
+        let x = map.a[0] * col + map.a[1] * row + map.a[2];
+        let y = map.a[3] * col + map.a[4] * row + map.a[5];
+        sample_bilinear_u8_all(&img, x as f32, y as f32, &mut buf[..1]);
+        assert!(
+            (lean[k] - buf[0] as f32).abs() <= 1.0,
+            "pixel {k}: lean {} vs reference {}",
+            lean[k],
+            buf[0]
+        );
+    }
 }

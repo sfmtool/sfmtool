@@ -66,6 +66,56 @@ the patch render + `is_front_facing` for candidacy and the IRLS consensus +
 windowed ZNCC for the reference and scoring — the same machinery as normal
 refinement and keypoint localization.
 
+### Affine candidate scoring (2026-07)
+
+The candidate gate score exists only to admit/reject — nothing downstream
+reuses the candidate render — so scoring does not need the full per-pixel
+projective warp (previously ~86% of selection CPU, one `WarpMap::from_patch` +
+`remap_bilinear` per candidate). With the bilinear sampler, a candidate is now
+scored through an **affine** patch→image map fit on its four exactly-projected
+patch corners, sampling only the reference-support pixels at the affine
+positions (same bilinear taps and `u8` rounding as `remap_bilinear`, so values
+match wherever the positions do). Track-view diagnostic scores share the same
+path. The **exact warp remains the fallback** — and the sole authority on
+rejection — whenever:
+
+- a corner fails to project (behind camera / outside the model domain),
+- the 4th-corner residual exceeds **0.5 px** (`AFFINE_MAX_RESIDUAL_PX` — the
+  residual measures the **asymmetric** component of the projective +
+  distortion curvature of the map over the patch, and bounds the interior
+  position error for that class only; curvature symmetric about the patch
+  centre — e.g. radial distortion around a patch near the principal point —
+  cancels in the residual and folds into the accepted admission-flip loss
+  instead. Large patches and wide-angle / heavily distorted views exceed the
+  bound and fall back), or
+- the mapped quad comes within ~1.5 px of the frame border
+  (`AFFINE_BORDER_MARGIN_PX` — keeps every affine sample safely in-bounds and
+  leaves the out-of-frame-support rejection semantics entirely to the exact
+  path).
+
+**Accepted loss:** admission flips for candidates near the ZNCC bar (the
+affine position error perturbs scores by up to ~gradient × residual).
+Measured on dino (85 imgs / 46k pts, identical inputs): mean per-point
+admitted-set Jaccard vs the exact path **0.9943** (90.3% of points identical;
+1.0% below 0.9), total admitted −0.079% (852 614 vs 853 291), flip rate 0.58%
+of admissions. Cost: candidate scoring 49.2 → 25.5 µs/call, selection CPU
+196 → 108 s, selection wall 6.1 → 3.4 s (70% of candidates take the fast
+path; the rest are residual/border fallbacks). The remaining fast-path cost is
+memory-latency-bound (scattered bilinear gathers over full-resolution
+sources); a coarse-to-fine gate (low-resolution pre-score, full score only
+near the admission bar) is the identified follow-up if selection needs to get
+cheaper still.
+
+Measured on kerry_park fisheye (OPENCV_FISHEYE, 320 imgs @ 960×960 / 12.9k
+pts, identical inputs) — the regime where the residual's blind spot to
+centre-symmetric distortion actually bites: **95%** of candidates take the
+affine path (the radial-distortion curvature largely cancels in the 4th-corner
+residual, so the gate does *not* divert them), and the admission agreement
+degrades measurably but stays bounded: mean Jaccard **0.9833** (74.3%
+identical sets, 0.43% of points below 0.8), total admitted −0.099%, flip rate
+1.46%. This is the accepted symmetric-distortion loss described above, not a
+safety issue (in-bounds sampling is residual-independent).
+
 _Status: v1 implemented in `crates/sfmtool-core/src/patch/view_selection.rs`
 (`select_patch_views` / `select_patch_cloud_views`), exposed as
 `PatchCloud.select_views(recon, images, *, min_relative_zncc=0.7, …,
