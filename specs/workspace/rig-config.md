@@ -132,10 +132,11 @@ the world frame). Keeping the file COLMAP-convention means a
 `rig_config.json` authored for COLMAP — including
 `test-data/images/kerry_park/rig_config.json` — stays valid unchanged.
 
-This is the migration plan's decision D4
-(`specs/drafts/zup-camera-convention-migration.md`); contrast `.camrig`,
-sfmtool's own rig format, which adopts the canonical convention (see
-[`camrig-file-format.md`](../formats/camrig-file-format.md)).
+`rig_config.json` is therefore treated as a COLMAP-side artifact and converted
+at ingestion like every other COLMAP input; contrast `.camrig`, sfmtool's own
+rig format, which adopts the canonical convention (see
+[`camrig-file-format.md`](../formats/camrig-file-format.md) and the
+[canonical convention](../formats/sfmr-file-format.md#coordinate-system-conventions)).
 
 ## Quaternion Convention
 

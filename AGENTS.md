@@ -56,8 +56,8 @@ When finishing a task, run the checks for what you changed:
     `sfmtool` Rust backends)
   - `xform/` — reconstruction transforms (align, filter, rotate, scale, translate, bundle-adjust, …)
   - `visualization/` — colormap, heatmap, discontinuity display
-- `crates/` — Cargo workspace, 7 crates:
-  - `sift-format`, `matches-format`, `sfmr-format` — on-disk formats (`.sfmr` is ZIP + zstd)
+- `crates/` — Cargo workspace, 8 crates:
+  - `sift-format`, `matches-format`, `sfmr-format`, `camrig-format` — on-disk formats (`.sfmr` is ZIP + zstd)
   - `sfmr-colmap` — COLMAP binary + SQLite interop
   - `sfmtool-core` — algorithms: camera, alignment, distortion, epipolar, matching, frustum, optical flow, transforms, spatial indexing
   - `sfm-explorer` — native GUI viewer (winit + wgpu + egui); window title "SfM Explorer"
@@ -85,9 +85,10 @@ When finishing a task, run the checks for what you changed:
 Run `pixi run sfm --help` to list all subcommands grouped by category
 (Workspace / Image Feature / Reconstruction / Visualization / Image Processing
 / COLMAP Interop). Source in `src/sfmtool/_commands/<name>.py`; specs in
-`specs/cli/<name>-command.md`. `sfm ws` and `sfm cam` are command **groups**
-(each with one subcommand today: `ws init` and `cam cp`); every other
-top-level command is flat. Typical reconstruction flow:
+`specs/cli/<name>-command.md`. `sfm ws` and `sfm camrig` are command **groups**
+(`ws` has one subcommand, `ws init`; `camrig` has three: `camrig create`,
+`camrig cp`, `camrig spherical-tiles`); every other top-level command is flat.
+Typical reconstruction flow:
 
 ```bash
 cd workspace-dir

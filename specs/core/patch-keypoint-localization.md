@@ -75,7 +75,15 @@ from `X_p` and **initialized by unprojecting the starting keypoint onto `Π_p`**
 3. **Per-view shift.** For each view `v`, search the residual in-plane shift that
    maximizes windowed ZNCC against the **leave-one-out** consensus of the *other*
    views (so a view is never aligned to a template its own pixels polluted): a
-   full-res integer search then a separable parabolic sub-pixel fit. The parabolic
+   full-res integer search then a separable parabolic sub-pixel fit. That integer
+   search runs one of two strategies (`search_strategy`): by **default**,
+   `PlusDescent` — a local "+"-descent that seeds at the current cell, steps to
+   the best of its 4 axis neighbors, and stops when none improves (~6 cells per
+   call), *not* a scan of the whole grid; `Exhaustive` scores every cell of the
+   `(2·margin+1)²` grid and is retained as the global-argmax fallback (no
+   local-optima risk). See
+   [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md)
+   for the strategy trade-off. The parabolic
    fit is a cheap estimate to converge and seed on; an accurate sub-pixel keypoint
    is a separate continuous-photometric algorithm
    ([keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)) that runs
@@ -175,6 +183,8 @@ point the pipeline calls per point. It reuses the existing patch machinery:
 | `resolution` | 24 | the `R×R` patch grid the consensus / ZNCC are scored on |
 | `robust_iters` | 3 | IRLS passes for the robust consensus |
 | `convergence_px` | 0.05 | stop once a round's mean round-over-round change of the per-view refined positions is below this (patch-grid px) |
+| `search_strategy` | `PlusDescent` | per-(view, round) shift-grid traversal: `PlusDescent` (default, local "+"-descent) or `Exhaustive` (full-grid global-argmax fallback); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
+| `search_resolution_multiplier` | 1.0 | discrete-search resolution multiplier `m` (`1.0` = no-op); see [keypoint-localization-search-cache.md](keypoint-localization-search-cache.md) |
 
 (plus `window` and `sampler`, shared with [normal refinement](patch-normal-refinement.md).)
 

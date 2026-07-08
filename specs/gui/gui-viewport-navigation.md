@@ -604,8 +604,11 @@ in Houdini (Space+Z), CloudCompare (Pick Rotation Center), and Potree/RealityCap
 - Readback runs every frame for hover overlay; click handling uses the same result
 
 **Target indicator rendering**:
-- Render as a small set of instanced lines (wireframe octahedron = 12 edges) in
-  a separate mini-pass or as part of the existing line rendering
+- Render the rotating 3D compass (filled compass-rose star with a 32-segment
+  circular ring plus vertical `world_up` spikes — see the shape description
+  above and [gui-point-cloud-rendering.md](gui-point-cloud-rendering.md#3d-shape-rotating-compass))
+  in a separate mini-pass or as part of the existing line rendering
+  (original MVP design was a wireframe octahedron, since superseded)
 - World-space size: radius = `target_indicator_size_multiplier` × `length_scale`
   (default: 3.0, tunable)
 - Apply a slow rotation (e.g., 30°/sec around the world up axis) for visual life

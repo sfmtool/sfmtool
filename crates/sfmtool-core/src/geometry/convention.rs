@@ -8,8 +8,9 @@
 //! cameras looking down **−Z**, image plane +X right / +Y up (OpenGL-style).
 //! COLMAP/OpenCV uses +Z-forward / Y-down cameras and typically −Y-up worlds.
 //!
-//! This module is the single source of truth for the conversion math
-//! (`specs/drafts/zup-camera-convention-migration.md` §1, design decision D2).
+//! This module is the single source of truth for the conversion math (see
+//! `specs/formats/sfmr-file-format.md` § "Conversions happen at the I/O
+//! boundary" for the import/export formulas and invariants).
 //! Two fixed proper rotations (det = +1) define every conversion:
 //!
 //! ```text

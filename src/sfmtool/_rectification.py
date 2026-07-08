@@ -88,8 +88,9 @@ def compute_stereo_rectification(
     ``cv2.stereoRectify`` expects OpenCV/COLMAP-frame (+Z-forward, Y-down)
     poses, so the relative pose ``(R_rel, t_rel)`` must be built from
     OpenCV-frame camera poses, not canonical (``.sfmr``) ones. Callers holding
-    canonical poses S-flip them first (see ``colmap.convention`` and the §1
-    invariant in ``specs/drafts/zup-camera-convention-migration.md``).
+    canonical poses S-flip them first (see ``colmap.convention`` and the
+    epipolar invariant in ``specs/formats/sfmr-file-format.md`` § "Conversions
+    happen at the I/O boundary").
 
     Args:
         cam1_distorted: Original camera 1 with distortion

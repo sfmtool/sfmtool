@@ -32,8 +32,8 @@
 //! The distortion kernels are unchanged COLMAP/OpenCV math and operate in the
 //! legacy **optical frame** (+Z forward, y down). Rather than rewriting them,
 //! the flip `S = diag(1, −1, −1)` is applied exactly once at the camera-model
-//! boundary (design decision D7 in
-//! `specs/drafts/zup-camera-convention-migration.md`):
+//! boundary (see `specs/formats/sfmr-file-format.md` § "Coordinate System
+//! Conventions" → "Pixel space"):
 //!
 //! ```text
 //! camera-space point p (z < 0 in front)

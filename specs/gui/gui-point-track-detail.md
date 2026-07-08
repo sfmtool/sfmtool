@@ -127,14 +127,14 @@ Below the header, the panel shows a vertically scrollable table of observations
 — one row per image that observes this point.
 
 ```
-+-----+-------+-----------------+--------+--------+-------+----------------+
-|     | Image | Name            | Feat # | Error  | Angle | Feature (x, y) |
-+-----+-------+-----------------+--------+--------+-------+----------------+
-| [t] |     3 | image_003.jpg   |    847 | 0.21px | 0.03° | (1024.3, 512.7)|
-| [t] |    12 | image_012.jpg   |   1247 | 0.38px | 0.05° | ( 983.1, 498.2)|
-| [t] |    15 | image_015.jpg   |    602 | 0.55px | 0.08° | (1051.8, 520.1)|
-| [t] |    23 | image_023.jpg   |   2031 | 0.19px | 0.02° | ( 997.6, 505.9)|
-+-----+-------+-----------------+--------+--------+-------+----------------+
++-----+-------+-----------------+--------+------+--------+-------+----------------+
+|     | Image | Name            | Feat # | Size | Error  | Angle | Feature (x, y) |
++-----+-------+-----------------+--------+------+--------+-------+----------------+
+| [t] |     3 | image_003.jpg   |    847 |  4.2 | 0.21px | 0.03° | (1024.3, 512.7)|
+| [t] |    12 | image_012.jpg   |   1247 |  3.8 | 0.38px | 0.05° | ( 983.1, 498.2)|
+| [t] |    15 | image_015.jpg   |    602 |  5.1 | 0.55px | 0.08° | (1051.8, 520.1)|
+| [t] |    23 | image_023.jpg   |   2031 |  4.5 | 0.19px | 0.02° | ( 997.6, 505.9)|
++-----+-------+-----------------+--------+------+--------+-------+----------------+
 ```
 
 **Columns**:
@@ -145,8 +145,9 @@ Below the header, the panel shows a vertically scrollable table of observations
 | Patch | *(embedded-patches only)* The point's patch rendered from this observation's full-res image (see below). Omitted — and all following columns keep their original offsets — when the point has no patch frame. |
 | Image | Image index in the reconstruction. |
 | Name | Image filename (truncated with leading `…/` for long paths). |
-| Feat # | Feature index within the image's SIFT file. |
-| Error | Per-observation reprojection error in pixels. |
+| Feat # | Feature index within the image's SIFT file (or the observation index for embedded-keypoint reconstructions with no SIFT file). |
+| Size | Feature scale in pixels — the mean of the two column norms of the observation's affine-shape matrix. For SIFT observations this comes from the cached `affine_shapes`; for embedded keypoints it is derived by projecting the point's patch frame into the image. Shows `N/A` when unavailable (zero). |
+| Error | Per-observation reprojection error in pixels (`N/A` when undefined). |
 | Angle | Angular discrepancy between observation ray and point direction, in degrees. |
 | Feature (x, y) | Feature position in image pixel coordinates. |
 
@@ -160,9 +161,10 @@ stored half-vectors are split into unit axes + half-extents to build an
 image is warped through it with `WarpMap::from_patch` + `remap_bilinear` at
 64×64 and displayed at thumbnail size (48 px, nearest filtering, tight at the
 stored patch extent). Tiles are rendered lazily per row and cached per image
-index; an all-black result (patch not visible in that view) is memoized and the
-tile is simply not drawn. Stored bitmaps are **not** required for this column —
-only the frame.
+index. When the patch is not visible in that view it warps to an all-black tile,
+which is still inserted into the cache and drawn as such — the tile is always
+rendered (a future N/A flag may distinguish "not visible" from a genuinely dark
+surface). Stored bitmaps are **not** required for this column — only the frame.
 
 **Shared full-resolution image cache**: the source pixels come from
 `AppState::full_res_cache`, a CPU-side cache of decoded full-res images (RGB
@@ -192,14 +194,23 @@ frame.
 
 **Header-level statistics** (displayed alongside the point summary):
 
+The header renders these alongside the point's `xyz`, `error`, and `track`
+(observation count) fields, separated by `|` dividers:
+
 | Statistic | Description |
 |-----------|-------------|
-| Max angle | The maximum angle between any pair of observation rays in the track. This is the key indicator of triangulation quality — narrow tracks (small max angle) produce poorly constrained depth estimates. |
+| Max angle | The maximum angle between any pair of observation rays in the track (`max pair angle: X.X°`). This is the key indicator of triangulation quality — narrow tracks (small max angle) produce poorly constrained depth estimates. Shown only when it is greater than zero. |
+| Depth z | Inverse-depth z-score `depth / σ_depth` of the triangulation (`depth z: X.X`). A scale-free observability diagnostic that stays correct in the near-infinity regime, complementing the max angle. Shown only when finite (undefined for points at infinity or fewer than two usable rays). |
+| Cond | Condition number of the triangulation's normal matrix (`cond: X`). Large values indicate a poorly conditioned (weakly observable) triangulation. Shown only when finite. |
+
+Both `depth z` and `cond` are computed by `compute_point_diagnostics()` and
+cached on the panel, alongside `max_angle_deg`.
 
 **Per-observation columns** (displayed in each table row):
 
 | Column | Computation |
 |--------|-------------|
+| Size | Feature scale in pixels: the mean of the two column norms of the observation's affine-shape matrix. Sourced from the cached SIFT `affine_shapes` for SIFT observations, or derived by projecting the point's patch frame into the image for embedded keypoints. |
 | Error | Per-observation reprojection error: `\|\| project(R_i * P + t_i) - feature_xy_i \|\|`, where `P` is the 3D point, `(R_i, t_i)` is the world-to-camera transform, `project()` applies intrinsics, and `feature_xy_i` is the observed feature position. |
 | Angle | Angle from this observation ray to the 3D point, measured at the camera center. For a perfectly triangulated point this equals zero; nonzero values indicate the observation ray misses the 3D point (related to reprojection error but in angular units). |
 
@@ -290,9 +301,10 @@ pub struct PointTrackDetail {
     /// Stored patch bitmap texture for the selected point (header tile), if any.
     stored_patch_texture: Option<egui::TextureHandle>,
     /// Per-observation patch tiles rendered from full-res images, keyed by
-    /// image index (None = all-black render, memoized skip).
-    /// Rebuilt on point-selection change.
-    rendered_patch_textures: HashMap<usize, Option<egui::TextureHandle>>,
+    /// image index. Rebuilt on point-selection change. Tiles where the patch is
+    /// not visible in the view warp to all-black and are drawn as such (a future
+    /// N/A flag may distinguish "not visible" from a genuinely dark surface).
+    rendered_patch_textures: HashMap<usize, egui::TextureHandle>,
     /// The content_xxh128 hash prefix (first 8 hex chars) for Point IDs.
     hash_prefix: String,
 }

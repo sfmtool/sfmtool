@@ -7,7 +7,8 @@ Thin wrappers over the Rust primitives in ``sfmtool_core::geometry::convention``
 (exposed on ``sfmtool._sfmtool.geometry``), which are the single source of
 truth for the ``S``/``W`` math. See
 ``specs/formats/sfmr-file-format.md`` section "Coordinate System Conventions"
-and ``specs/drafts/zup-camera-convention-migration.md`` sections 1-2 (D2).
+(the "Conversions happen at the I/O boundary" subsection has the import/export
+formulas and invariants).
 
 Conventions:
 

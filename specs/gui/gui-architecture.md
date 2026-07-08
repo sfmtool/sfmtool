@@ -121,8 +121,9 @@ sfmtool/
 │   │       │       ├── frustum.rs      # Frustum wireframe pipeline
 │   │       │       ├── image_quad.rs   # Pinhole image quad pipeline (instanced)
 │   │       │       ├── distorted_quad.rs # Distorted image quad pipeline (indexed)
-│   │       │       ├── bg_image.rs     # Background image pipeline (pinhole)
-│   │       │       ├── bg_distorted.rs # Background image pipeline (distorted/fisheye)
+│   │       │       ├── bg_image.rs     # Shared background-image bind group resources (layout, uniform, sampler)
+│   │       │       ├── bg_distorted.rs # Background image pipeline (distorted; the only BG mesh pipeline)
+│   │       │       ├── patch.rs        # Patch/surfel rendering pipeline
 │   │       │       ├── target.rs       # Target indicator pipeline
 │   │       │       └── track_ray.rs    # Track ray pipeline
 │   │       ├── state.rs              # Shared application state (AppState)
@@ -141,7 +142,8 @@ sfmtool/
 │   │           ├── image_quad.wgsl     # Image texture on frustum far plane (pinhole)
 │   │           ├── distorted_quad.wgsl # Tessellated image quad (distorted cameras)
 │   │           ├── bg_image_distorted.wgsl # Background image rendering (distorted)
-│   │           ├── target_indicator.wgsl # Rotating octahedron at target
+│   │           ├── patch.wgsl           # Patch/surfel rendering
+│   │           ├── target_indicator.wgsl # Rotating 3D compass / world-up indicator at target
 │   │           └── track_ray.wgsl       # Track ray visualization
 │   │
 │   ├── sfmr-colmap/              # COLMAP format read/write

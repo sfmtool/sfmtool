@@ -64,6 +64,9 @@ sfm ws init --feature-tool sfmtool my_project   # sfmtool's own Rust SIFT
 ```
 
 The `sfm ws init` command creates the directory (if needed) and writes `.sfm-workspace.json`.
+When `--feature-tool` is omitted, the default is `sfmtool` (its own Rust SIFT), so a
+bare `sfm ws init` produces a sfmtool-shaped `feature_options` block — not the
+COLMAP-shaped one shown in the File Format example below.
 
 ### File Format
 
@@ -100,7 +103,7 @@ feature-cache hash since it does not affect feature output.
 | Field | Type | Description |
 |-------|------|-------------|
 | `version` | integer | Format version of the workspace config file. Must be `1` |
-| `feature_tool` | string | Feature extraction tool: `"colmap"`, `"opencv"`, or `"sfmtool"` (the Rust SIFT in `sfmtool-core`) |
+| `feature_tool` | string | Feature extraction tool: `"colmap"`, `"opencv"`, or `"sfmtool"` (the Rust SIFT in `sfmtool-core`; the default when `--feature-tool` is omitted) |
 | `feature_type` | string | Feature type: `"sift"` (future: `"surf"`, `"superpoint"`, etc.) |
 | `feature_options` | object | All parameters that affect feature output. Keys are tool-defined. See the `.sift` format spec for details |
 | `feature_prefix_dir` | string | Relative path to the features subdirectory, including a content hash of the tool configuration |

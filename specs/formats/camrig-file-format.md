@@ -484,8 +484,9 @@ bytes, so hashes verify before conversion; a converted-then-saved file is a
 new version 2 file with new hashes.
 
 As a consequence, `test-data/images/kerry_park/kerry_park.camrig` must be
-regenerated in the canonical convention. The implementation roadmap is
-`specs/drafts/zup-camera-convention-migration.md` (decision D5).
+regenerated in the canonical convention. See
+[`sfmr-file-format.md`](sfmr-file-format.md#coordinate-system-conventions) for
+the canonical convention and the `S`/`W` conversion math.
 
 ## Version history
 
