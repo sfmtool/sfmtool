@@ -48,14 +48,13 @@ def _flow_match_pair(
     descriptors2: np.ndarray,
     flow_u: np.ndarray,
     flow_v: np.ndarray,
-    spatial_tolerance: float,
     descriptor_threshold: float,
 ) -> np.ndarray:
     """Match features between a single image pair using precomputed flow.
 
     Advects keypoints from image 1 through the flow field, finds the closest
-    K candidate keypoints in image 2 within spatial_tolerance, then selects
-    the candidate with the best descriptor match for each source feature.
+    K candidate keypoints in image 2 within ``_SPATIAL_CANDIDATES_RADIUS``, then
+    selects the candidate with the best descriptor match for each source feature.
 
     Args:
         positions1: (N, 2) float32 keypoint positions in image 1 (x, y).
@@ -64,7 +63,6 @@ def _flow_match_pair(
         descriptors2: (M, 128) uint8 descriptors for image 2.
         flow_u: (H, W) float32 horizontal displacement field.
         flow_v: (H, W) float32 vertical displacement field.
-        spatial_tolerance: Max pixel distance for spatial matching.
         descriptor_threshold: Max L2 descriptor distance for filtering.
 
     Returns:
@@ -92,8 +90,8 @@ def _flow_match_pair(
 
     advected_in_bounds = advected[in_bounds_idx]
 
-    # Find the closest K candidate keypoints within spatial_tolerance for each
-    # advected point, then select the one with the best descriptor match.
+    # Find the closest K candidate keypoints within _SPATIAL_CANDIDATES_RADIUS
+    # for each advected point, then select the one with the best descriptor match.
     target_f32 = np.asarray(positions2, dtype=np.float32)
     tree = KdTree2d(target_f32)
     k = _SPATIAL_CANDIDATES_K
@@ -117,7 +115,6 @@ def _flow_match_from_advected(
     descriptors1: np.ndarray,
     positions2: np.ndarray,
     descriptors2: np.ndarray,
-    spatial_tolerance: float,
     descriptor_threshold: float,
 ) -> np.ndarray:
     """Match features using pre-advected positions (no flow field needed).
@@ -128,7 +125,6 @@ def _flow_match_from_advected(
         descriptors1: (N, 128) uint8 descriptors for source image.
         positions2: (M, 2) float32 keypoint positions in target image.
         descriptors2: (M, 128) uint8 descriptors for target image.
-        spatial_tolerance: Max pixel distance for spatial matching.
         descriptor_threshold: Max L2 descriptor distance for filtering.
 
     Returns:
@@ -177,7 +173,6 @@ def flow_match_sequential(
     image_paths: list[Path],
     sift_paths: list[Path],
     preset: str = "default",
-    spatial_tolerance: float = 3.0,
     descriptor_threshold: float = 250.0,
     window_size: int = 5,
     max_feature_count: Optional[int] = None,
@@ -194,7 +189,6 @@ def flow_match_sequential(
         image_paths: Ordered sequence of image file paths.
         sift_paths: Corresponding .sift file paths.
         preset: Optical flow quality preset ("fast", "default", "high_quality").
-        spatial_tolerance: Max pixel distance for advected→keypoint matching.
         descriptor_threshold: Max L2 descriptor distance for filtering.
         window_size: Number of source images to track. Produces matches
             from adjacent (skip=1) up to skip=window_size.
@@ -338,7 +332,6 @@ def flow_match_sequential(
                 src_desc,
                 curr_pos,
                 curr_desc,
-                spatial_tolerance,
                 descriptor_threshold,
             )
             _trace(
