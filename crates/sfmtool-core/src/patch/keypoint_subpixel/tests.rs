@@ -284,6 +284,59 @@ fn consensus_sharpness(
 // ── Validation §1: synthetic recovery to < 0.02 px ───────────────────────────
 
 #[test]
+fn recovers_planted_subpixel_offset_fine_grid() {
+    // Same planted-offset recovery on a *fine-grid* patch (patch grid finer
+    // than the source, `grid_to_source_scale < 1.2`) — the production-typical
+    // case where the refiner builds and reads the render-once context tile
+    // (the coarse default fixture below goes through the exact direct path
+    // instead). Recovery through the tile must stay inside the same < 0.02 px
+    // spec target.
+    let he = 0.15; // grid ≈ 0.98 source px per grid px at RES = 20
+    let patch = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, PLANE_Z),
+        Vector3::new(0.0, 0.0, -1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [he, he],
+    );
+    let wpp_fine = 2.0 * he / RES as f64;
+    let planted_grid = 0.37;
+    let ox = planted_grid * wpp_fine;
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let offs = [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [ox, 0.0]];
+    let texs = vec![texture as fn(f64, f64) -> f64; 4];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    // The gate must actually pick the tile path for this fixture.
+    let s = grid_to_source_scale(&patch, &views[3], RES).expect("corners project");
+    assert!(
+        s <= TILE_MAX_GRID_TO_SOURCE,
+        "fixture must exercise the tile path (grid→source scale {s:.2})"
+    );
+
+    let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
+    assert_eq!(res.views, vec![0, 1, 2, 3], "view set unchanged");
+    let p3 = pos(&res, 3);
+    let proj3 = project(&views[3], &patch.center, patch.w).unwrap();
+    let dx = res.keypoints[p3][0] - proj3.0;
+    let dy = res.keypoints[p3][1] - proj3.1;
+    let expected_px = planted_grid * wpp_fine * FOCAL / PLANE_Z;
+    assert!(
+        (dx - expected_px).abs() < 0.02,
+        "tile-path recovery to < 0.02 px: got dx={dx:.4}, expected {expected_px:.4}"
+    );
+    assert!(dy.abs() < 0.02, "no y motion expected, got {dy:.4}");
+    for i in [0u32, 1, 2] {
+        let pi = pos(&res, i);
+        assert!(res.offsets_px[pi] < 0.02, "aligned view {i} barely moves");
+    }
+}
+
+#[test]
 fn recovers_planted_subpixel_offset_finite() {
     // Three aligned views pin the gauge; view 3's texture is shifted by a fractional
     // 0.37 patch-grid px. Seeding every view at its projection, the refiner must pull
@@ -1152,7 +1205,9 @@ fn per_move_three_views_recovers_planted_offset() {
 /// offset. PerSweep at the same `N = 2` recovers it cleanly. This test documents
 /// the bias quantitatively so a future PerMove change (e.g. a different consensus
 /// formulation that fixes N=2) trips the comparison and the docs get updated in
-/// lockstep with the code.
+/// lockstep with the code. (This fixture's patch grid is coarser than the
+/// source, so it runs the exact direct-render path — the render-once tile's
+/// coarse-grid gate keeps the historical behaviour bit-comparable here.)
 #[test]
 fn per_move_two_views_known_underestimate_at_n2() {
     let planted_grid = 0.30;
@@ -1649,4 +1704,433 @@ fn render_bitmaps_off_by_default() {
 
     let res = refine_patch_keypoints(&patch, &views, &[0, 1, 2], None, &params());
     assert!(res.representative.is_none());
+}
+
+// ── Render-once context tile (RefineTile) ────────────────────────────────────
+
+/// Shared fixture for the tile tests: one slightly off-axis view of the
+/// textured plane, the default support, and a fractional seed offset.
+fn tile_fixture() -> (Scene, OrientedPatch, Support, [f64; 2]) {
+    let scene = Scene::new(
+        &[[0.3, 0.1, 0.0]],
+        &[[0.0, 0.0]],
+        &[texture as fn(f64, f64) -> f64],
+    );
+    let patch = plane_patch();
+    let p = params();
+    let support = build_support(p.window, p.resolution);
+    (scene, patch, support, [0.37, -0.21])
+}
+
+#[test]
+fn coarse_grid_gate_routes_around_the_tile() {
+    // The coarse-grid gate must route by `grid_to_source_scale`: a fine-grid
+    // view (scale <= TILE_MAX_GRID_TO_SOURCE) gets a tile, a coarse-grid view
+    // (a patch spanning many source px per grid px) gets `None` and keeps the
+    // exact direct path. An inverted comparison would flip both arms.
+    // The tile fixture itself is coarse-grid (scale ~2.6 > 1.2 — the tile
+    // mechanics tests bypass the gate on purpose), so it is the natural
+    // coarse case; a 4x-shrunk patch (scale ~0.65) is the fine case.
+    let (scene, coarse, _support, seed) = tile_fixture();
+    let views = scene.views();
+    let p = params();
+    let mut img = ImageF32WithGrad::empty();
+
+    let coarse_scale =
+        grid_to_source_scale(&coarse, &views[0], p.resolution).expect("fixture corners project");
+    assert!(
+        coarse_scale > TILE_MAX_GRID_TO_SOURCE,
+        "fixture patch must be coarse-grid (scale {coarse_scale})"
+    );
+    let cw_u = 2.0 * coarse.half_extent[0] / p.resolution as f64;
+    let cw_v = 2.0 * coarse.half_extent[1] / p.resolution as f64;
+    assert!(
+        try_render_refine_tile(
+            &coarse,
+            &views[0],
+            seed,
+            cw_u,
+            cw_v,
+            p.resolution,
+            4,
+            p.sampler,
+            &mut img,
+        )
+        .is_none(),
+        "coarse-grid view must skip the tile and keep the direct path"
+    );
+
+    let fine = OrientedPatch::from_center_normal(
+        coarse.center,
+        coarse.normal(),
+        coarse.v_axis,
+        [coarse.half_extent[0] * 0.25, coarse.half_extent[1] * 0.25],
+    );
+    let fine_scale =
+        grid_to_source_scale(&fine, &views[0], p.resolution).expect("shrunk patch corners project");
+    assert!(
+        fine_scale <= TILE_MAX_GRID_TO_SOURCE,
+        "shrunk patch must be fine-grid (scale {fine_scale})"
+    );
+    let fw_u = 2.0 * fine.half_extent[0] / p.resolution as f64;
+    let fw_v = 2.0 * fine.half_extent[1] / p.resolution as f64;
+    assert!(
+        try_render_refine_tile(
+            &fine,
+            &views[0],
+            seed,
+            fw_u,
+            fw_v,
+            p.resolution,
+            4,
+            p.sampler,
+            &mut img,
+        )
+        .is_some(),
+        "fine-grid view must get a tile"
+    );
+}
+
+#[test]
+fn tile_read_matches_direct_render_at_integer_shifts() {
+    // A tile read at an integer shift from the tile's seed hits tile texels
+    // exactly, so it must reproduce the direct render up to the direct path's
+    // u8 output quantization (the tile keeps the sampler's unquantized f32).
+    let (scene, patch, support, seed) = tile_fixture();
+    let views = scene.views();
+    let p = params();
+    let wpp_u = 2.0 * patch.half_extent[0] / p.resolution as f64;
+    let wpp_v = 2.0 * patch.half_extent[1] / p.resolution as f64;
+    let n = support.pixels.len();
+    let mut img = ImageF32WithGrad::empty();
+    let tile = render_refine_tile(
+        &patch,
+        &views[0],
+        seed,
+        wpp_u,
+        wpp_v,
+        p.resolution,
+        4,
+        p.sampler,
+        &mut img,
+    );
+    let mut got = vec![0f32; n];
+    let mut want = vec![0f32; n];
+    for (di, dj) in [(0i64, 0i64), (1, 0), (-2, 1), (2, -2), (0, 2)] {
+        let au = seed[0] + di as f64;
+        let av = seed[1] + dj as f64;
+        assert_eq!(
+            tile.read_core(au, av, p.resolution as usize, &support, &mut got),
+            Some(true),
+            "in-coverage integer shift ({di},{dj}) must read"
+        );
+        assert!(render_core(
+            &patch,
+            &views[0],
+            au,
+            av,
+            wpp_u,
+            wpp_v,
+            p.resolution,
+            p.sampler,
+            &support,
+            1,
+            &mut want,
+        ));
+        for (k, (a, b)) in got.iter().zip(&want).enumerate() {
+            assert!(
+                (a - b).abs() <= 0.5 + 1e-2,
+                "shift ({di},{dj}) pixel {k}: tile {a} vs direct {b}"
+            );
+        }
+    }
+}
+
+#[test]
+fn tile_gradient_matches_direct_render_at_integer_shifts() {
+    // The tile's pre-composed gradient planes, read at an integer shift, must
+    // match the direct render's analytic ∂I/∂δ. Interior texels use the same
+    // sampler gradient and (central-difference) warp Jacobian; the direct
+    // path's R×R map falls back to one-sided differences on its boundary ring,
+    // so the tolerance is loose relative to the ~40 intensity/grid-px gradients
+    // of the test texture.
+    let (scene, patch, support, seed) = tile_fixture();
+    let views = scene.views();
+    let p = params();
+    let wpp_u = 2.0 * patch.half_extent[0] / p.resolution as f64;
+    let wpp_v = 2.0 * patch.half_extent[1] / p.resolution as f64;
+    let n = support.pixels.len();
+    let mut img = ImageF32WithGrad::empty();
+    let tile = render_refine_tile(
+        &patch,
+        &views[0],
+        seed,
+        wpp_u,
+        wpp_v,
+        p.resolution,
+        4,
+        p.sampler,
+        &mut img,
+    );
+    let (mut g_t, mut ju_t, mut jv_t) = (vec![0f32; n], vec![0f32; n], vec![0f32; n]);
+    let (mut g_d, mut ju_d, mut jv_d) = (vec![0f32; n], vec![0f32; n], vec![0f32; n]);
+    let mut scratch = ImageF32WithGrad::empty();
+    for (di, dj) in [(0i64, 0i64), (1, -1), (-2, 2)] {
+        let au = seed[0] + di as f64;
+        let av = seed[1] + dj as f64;
+        assert_eq!(
+            tile.read_core(au, av, p.resolution as usize, &support, &mut g_t),
+            Some(true)
+        );
+        assert_eq!(
+            tile.read_jg(
+                au,
+                av,
+                p.resolution as usize,
+                &support,
+                &mut ju_t,
+                &mut jv_t
+            ),
+            Some(true)
+        );
+        assert!(render_core_with_jg(
+            &patch,
+            &views[0],
+            au,
+            av,
+            wpp_u,
+            wpp_v,
+            p.resolution,
+            p.sampler,
+            &support,
+            1,
+            &mut g_d,
+            &mut ju_d,
+            &mut jv_d,
+            &mut scratch,
+        ));
+        for k in 0..n {
+            assert!(
+                (g_t[k] - g_d[k]).abs() <= 1e-2,
+                "value {k}: {} vs {}",
+                g_t[k],
+                g_d[k]
+            );
+            assert!(
+                (ju_t[k] - ju_d[k]).abs() <= 0.15,
+                "jg_u {k}: {} vs {}",
+                ju_t[k],
+                ju_d[k]
+            );
+            assert!(
+                (jv_t[k] - jv_d[k]).abs() <= 0.15,
+                "jg_v {k}: {} vs {}",
+                jv_t[k],
+                jv_d[k]
+            );
+        }
+    }
+}
+
+/// A low-frequency texture whose bilinear source interpolant is smooth at the
+/// FD probe scale: the analytic (per-source-cell) sampler gradient and a small
+/// central difference then measure the same slope. The default [`texture`] has
+/// content at the source-cell scale, where the bilinear interpolant's gradient
+/// is genuinely discontinuous across cell boundaries and a pointwise
+/// FD-vs-analytic comparison is ill-posed (for the direct render path just as
+/// much as for the tile).
+fn smooth_texture(x: f64, y: f64) -> f64 {
+    127.5 + 60.0 * (x * 1.5).sin() + 50.0 * (y * 1.2).cos()
+}
+
+#[test]
+fn tile_gradient_matches_finite_differences() {
+    // At a fractional offset, central differences of the tile's own value
+    // reads must approximate the interpolated analytic gradient planes.
+    let scene = Scene::new(
+        &[[0.3, 0.1, 0.0]],
+        &[[0.0, 0.0]],
+        &[smooth_texture as fn(f64, f64) -> f64],
+    );
+    // Fine-grid patch (the tile's production regime, ≈ 1 source px per grid
+    // px): the quantization slope noise (see the tolerance note below) scales
+    // with the grid→source factor, so the coarse default fixture would triple
+    // it.
+    let patch = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, PLANE_Z),
+        Vector3::new(0.0, 0.0, -1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.15, 0.15],
+    );
+    let support = build_support(params().window, params().resolution);
+    let seed = [0.37, -0.21];
+    let views = scene.views();
+    let p = params();
+    let wpp_u = 2.0 * patch.half_extent[0] / p.resolution as f64;
+    let wpp_v = 2.0 * patch.half_extent[1] / p.resolution as f64;
+    let n = support.pixels.len();
+    let mut img = ImageF32WithGrad::empty();
+    let tile = render_refine_tile(
+        &patch,
+        &views[0],
+        seed,
+        wpp_u,
+        wpp_v,
+        p.resolution,
+        4,
+        p.sampler,
+        &mut img,
+    );
+    let (au, av) = (seed[0] + 0.43, seed[1] - 0.68);
+    let h = 0.1;
+    let read = |a: f64, b: f64, out: &mut [f32]| {
+        assert_eq!(
+            tile.read_core(a, b, p.resolution as usize, &support, out),
+            Some(true)
+        );
+    };
+    let (mut ju, mut jv) = (vec![0f32; n], vec![0f32; n]);
+    assert_eq!(
+        tile.read_jg(au, av, p.resolution as usize, &support, &mut ju, &mut jv),
+        Some(true)
+    );
+    let (mut up, mut um, mut vp, mut vm) =
+        (vec![0f32; n], vec![0f32; n], vec![0f32; n], vec![0f32; n]);
+    read(au + h, av, &mut up);
+    read(au - h, av, &mut um);
+    read(au, av + h, &mut vp);
+    read(au, av - h, &mut vm);
+    // The absolute tolerance term is the u8 quantization floor: the analytic
+    // sampler gradient is built from adjacent-source-pixel differences of
+    // *rounded* values, so per-cell slopes carry ±1-intensity-level jumps
+    // (≈ ±0.5 per grid px at this fixture's ~1 source px per grid px) that a
+    // small FD of the (slightly smoothing) spline value field doesn't
+    // reproduce pointwise.
+    for k in 0..n {
+        let fd_u = (up[k] - um[k]) as f64 / (2.0 * h);
+        let fd_v = (vp[k] - vm[k]) as f64 / (2.0 * h);
+        assert!(
+            (ju[k] as f64 - fd_u).abs() <= 0.1 * fd_u.abs() + 0.8,
+            "jg_u {k}: analytic {} vs FD {fd_u}",
+            ju[k]
+        );
+        assert!(
+            (jv[k] as f64 - fd_v).abs() <= 0.1 * fd_v.abs() + 0.8,
+            "jg_v {k}: analytic {} vs FD {fd_v}",
+            jv[k]
+        );
+    }
+}
+
+/// On-demand micro-benchmark: `cargo test -p sfmtool-core --release
+/// tile_read_bench -- --ignored --nocapture`. Times value and Jacobian tile
+/// reads at a fractional offset on an RGB-like 3-channel tile.
+#[test]
+#[ignore]
+fn tile_read_bench() {
+    use std::time::Instant;
+    // Synthetic 3-channel tile, production-sized (R = 24, pad = 4 -> 32²).
+    let resolution = 24usize;
+    let pad = 4usize;
+    let t = resolution + 2 * pad;
+    let ch = 3usize;
+    let mk = |seed: u32| -> Vec<f32> {
+        (0..t * t * ch)
+            .map(|k| ((k as u32).wrapping_mul(2654435761).wrapping_add(seed) % 256) as f32)
+            .collect()
+    };
+    let tile = RefineTile {
+        res: t,
+        pad,
+        channels: ch,
+        seed: [0.0, 0.0],
+        value: mk(1),
+        jg_u: mk(2),
+        jg_v: mk(3),
+        valid: vec![true; t * t],
+        valid4: vec![true; t * t],
+    };
+    let support = build_support(PatchWindow::GaussianDisk { sigma: 0.6 }, resolution as u32);
+    let n = support.pixels.len();
+    let mut out = vec![0f32; ch * n];
+    let mut ju = vec![0f32; ch * n];
+    let mut jv = vec![0f32; ch * n];
+    let iters = 100_000;
+    let t0 = Instant::now();
+    for i in 0..iters {
+        let au = 0.3 + (i % 7) as f64 * 0.01;
+        std::hint::black_box(tile.read_core(au, -0.4, resolution, &support, &mut out));
+    }
+    let val_us = t0.elapsed().as_secs_f64() * 1e6 / iters as f64;
+    let t0 = Instant::now();
+    for i in 0..iters {
+        let au = 0.3 + (i % 7) as f64 * 0.01;
+        std::hint::black_box(tile.read_jg(au, -0.4, resolution, &support, &mut ju, &mut jv));
+    }
+    let jg_us = t0.elapsed().as_secs_f64() * 1e6 / iters as f64;
+    println!("read_core {val_us:.2} us/call ({n} px, {ch} ch)  read_jg {jg_us:.2} us/call");
+}
+
+#[test]
+fn tile_read_out_of_coverage_falls_back_to_direct_render() {
+    // An offset past the tile's coverage returns `None` from the read; the
+    // `core_value` wrapper must then produce exactly the direct render.
+    let (scene, patch, support, seed) = tile_fixture();
+    let views = scene.views();
+    let p = params();
+    let wpp_u = 2.0 * patch.half_extent[0] / p.resolution as f64;
+    let wpp_v = 2.0 * patch.half_extent[1] / p.resolution as f64;
+    let n = support.pixels.len();
+    let mut img = ImageF32WithGrad::empty();
+    let tile = render_refine_tile(
+        &patch,
+        &views[0],
+        seed,
+        wpp_u,
+        wpp_v,
+        p.resolution,
+        4,
+        p.sampler,
+        &mut img,
+    );
+    let (au, av) = (seed[0] + 10.0, seed[1]);
+    let mut buf = vec![0f32; n];
+    assert_eq!(
+        tile.read_core(au, av, p.resolution as usize, &support, &mut buf),
+        None,
+        "offset outside the tile coverage must not read"
+    );
+    let mut got = vec![0f32; n];
+    let mut want = vec![0f32; n];
+    let ok_got = core_value(
+        &patch,
+        &views[0],
+        Some(&tile),
+        au,
+        av,
+        wpp_u,
+        wpp_v,
+        p.resolution,
+        p.sampler,
+        &support,
+        1,
+        &mut got,
+    );
+    let ok_want = render_core(
+        &patch,
+        &views[0],
+        au,
+        av,
+        wpp_u,
+        wpp_v,
+        p.resolution,
+        p.sampler,
+        &support,
+        1,
+        &mut want,
+    );
+    assert_eq!(ok_got, ok_want, "fallback must mirror the direct render");
+    if ok_got {
+        assert_eq!(got, want, "fallback is the direct render bit-for-bit");
+    }
 }

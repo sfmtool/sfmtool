@@ -233,9 +233,7 @@ scale; an extension, not the default.
 
 The refiner samples each view's patch core from the **source pyramid** at the
 current fractional `δ`, using the **existing** machinery — not a new sampler
-abstraction. (The grid-search cache is *not* used here: it's a fixed render, so an
-LOD-consistent gradient would have to be decoupled from the pyramid the Jacobian
-naturally comes from. The cache is the grid search's, not the fine tune's.)
+abstraction.
 
 - **Interpolation** is the existing `Sampler` enum (`Bilinear` / `Anisotropic`) —
   the same knob `refine-normals` and `localize` already take. Anisotropic suits
@@ -246,6 +244,54 @@ naturally comes from. The cache is the grid search's, not the fine tune's.)
   two functions (Design details), giving the analytic image gradient at the *same
   interpolation/LOD* as the value — no finite differences (which across a mip
   boundary would be LOD-inconsistent).
+
+### Render-once context tile (implemented 2026-07)
+
+An earlier revision of this section argued the grid-search cache could not
+serve the fine tune (fixed render, LOD-decoupled gradient). That objection is
+answered by storing the **gradient planes in the tile**: since the patch frame
+is fixed and only the 2-DOF `δ` moves, every render of a (point, view) pair is
+the same patch→image map at a sub-pixel shift, and the solver evaluates ~10–14
+of them per pair (GN steps + line-search probes). The implementation
+(`RefineTile` in `keypoint_subpixel.rs`) therefore prerenders **one** expanded
+patch-grid-aligned tile per pair — the localizer's `ContextTile` idea (see
+[keypoint-localization-search-cache.md](keypoint-localization-search-cache.md)),
+adapted to fractional reads:
+
+- The tile is centred at the view's **seed** offset and sized
+  `R + 2·(⌈max_offset_px⌉ + 2)` so every offset the line search can accept
+  reads in-bounds (out-of-coverage reads fall back to a direct render; ~0 in
+  practice). It stores the sampler's unquantized values **plus** the
+  pre-composed patch-grid image Jacobian `∇_src I · J` per texel — the same
+  analytic, LOD-consistent gradient the direct path computes — so a GN step is
+  a tile read, not a render.
+- Planes are stored as **cubic B-spline coefficients** (Unser's IIR prefilter)
+  and reads evaluate the cardinal cubic spline (4×4 kernel; integer shifts
+  reproduce texels exactly). The interpolator choice is load-bearing: bilinear
+  reads' phase-dependent smoothing displaced the ECC optimum by up to
+  ~0.065 px (pixel locking) and Catmull-Rom still left ~0.02–0.045 px on
+  near-Nyquist content; the prefiltered spline keeps the planted-offset
+  recovery inside the < 0.02 px target above. (A 2× supersampled bilinear
+  tile was measured-and-rejected: it quadruples the prerender, the new
+  dominant cost.)
+- **Coarse-grid gate:** a tile is built only when the patch grid samples at
+  least as densely as the source (≤ ~1.2 source px per grid px, estimated
+  from the projected core corners). A coarser grid would freeze the sampling
+  phase of above-grid-Nyquist source content that direct rendering samples
+  continuously (measured as spurious displacement on a coarse-grid synthetic
+  fixture), and a source-density supersampled tile costs more than the ~14
+  direct renders it replaces — so coarse views (large-scale keypoints, ~28% of
+  dino's pairs) simply keep the exact direct path.
+- **Measured (dino, 85 imgs / 46k pts, 2 rounds):** subpixel CPU 596 → 401 s
+  and wall 18.6 → 12.6 s (round 1); command wall 101 → 89 s. Membership and
+  point survival vs the direct-render baseline are identical (churn 0.047%
+  over two rounds, 0 in a single round); keypoint deltas are median 0.03 px
+  with a ~2% tail > 0.5 px on weakly-determined patches — re-scoring both
+  keypoint sets with the same scorer shows the tile run's final ECC is equal
+  or better (mean +0.00015 overall; on the tail 88.9% of moved observations
+  score *higher*, mean +0.0028), i.e. the smoother spline value/gradient
+  fields let GN converge further where the u8-quantized direct evaluations
+  stalled.
 
 ## Outputs
 

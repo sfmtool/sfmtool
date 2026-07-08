@@ -91,11 +91,19 @@ pub static REF_RENDER: Phase = Phase::new("ref_render");
 /// Sub-phase of [`REFERENCE`]: z-normalize + IRLS weights + unit template +
 /// self-agreement.
 pub static REF_CONSENSUS: Phase = Phase::new("ref_consensus");
-/// Sub-phase of the two SCORE leaves: the scored view's support render
-/// (`normalized_stack` inside `candidate_zncc`).
+/// Sub-phase of the two SCORE leaves: the scored view's **exact** support
+/// render (`normalized_stack` inside `candidate_zncc`) — the fallback when the
+/// affine fast path declines a view (see [`N_AFFINE_FALLBACK`]).
 pub static ZNCC_RENDER: Phase = Phase::new("zncc_render");
+/// Sub-phase of the two SCORE leaves: the affine fast path's corner
+/// projection + fit + gates (`affine_core_map`).
+pub static AFFINE_MAP: Phase = Phase::new("affine_map");
+/// Sub-phase of the two SCORE leaves: the affine fast path's support sampling
+/// (`sample_support_affine` — bilinear gathers at the affine-mapped support
+/// positions, skipping the per-pixel projective warp).
+pub static AFFINE_SAMPLE: Phase = Phase::new("zncc_affine");
 /// Sub-phase of the two SCORE leaves: the z-normalize + template dot of a
-/// scored view.
+/// scored view (shared by the affine and exact paths).
 pub static ZNCC_DOT: Phase = Phase::new("zncc_dot");
 
 // Event counters (no time attached).
@@ -106,6 +114,13 @@ pub static N_VERBATIM: AtomicU64 = AtomicU64::new(0);
 pub static N_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 /// Candidate views admitted (ZNCC cleared the relative bar).
 pub static N_ADMITTED: AtomicU64 = AtomicU64::new(0);
+/// Views scored via the affine fast path (track diagnostics + candidates).
+pub static N_AFFINE: AtomicU64 = AtomicU64::new(0);
+/// Views the affine fast path declined — corner projection failed, the
+/// 4th-corner residual exceeded the bound (heavy distortion / wide angle), or
+/// the mapped patch came too close to the frame border — scored by the exact
+/// warp instead.
+pub static N_AFFINE_FALLBACK: AtomicU64 = AtomicU64::new(0);
 
 /// Count one event on `c` when profiling is on.
 #[inline]
@@ -115,7 +130,7 @@ pub fn count(c: &AtomicU64, n: u64) {
     }
 }
 
-const PHASES: [&Phase; 9] = [
+const PHASES: [&Phase; 11] = [
     &TOTAL,
     &REFERENCE,
     &REF_SUPPORT,
@@ -124,6 +139,8 @@ const PHASES: [&Phase; 9] = [
     &TRACK_SCORE,
     &CAND_SCORE,
     &ZNCC_RENDER,
+    &AFFINE_MAP,
+    &AFFINE_SAMPLE,
     &ZNCC_DOT,
 ];
 
@@ -132,7 +149,13 @@ pub fn reset() {
     for p in PHASES {
         p.reset();
     }
-    for c in [&N_VERBATIM, &N_CANDIDATES, &N_ADMITTED] {
+    for c in [
+        &N_VERBATIM,
+        &N_CANDIDATES,
+        &N_ADMITTED,
+        &N_AFFINE,
+        &N_AFFINE_FALLBACK,
+    ] {
         c.store(0, Ordering::Relaxed);
     }
     crate::camera::remap::prof::reset();
@@ -177,10 +200,13 @@ pub fn report(patches: usize, wall_secs: f64) {
         100.0 * total_ns.saturating_sub(leaves) as f64 / total_ns as f64,
     );
     eprintln!(
-        "[sfmtool-profile]   verbatim {}  candidates-scored {}  candidates-admitted {}",
+        "[sfmtool-profile]   verbatim {}  candidates-scored {}  candidates-admitted {}  \
+         affine-scored {}  affine-fallbacks {}",
         N_VERBATIM.load(Ordering::Relaxed),
         N_CANDIDATES.load(Ordering::Relaxed),
         N_ADMITTED.load(Ordering::Relaxed),
+        N_AFFINE.load(Ordering::Relaxed),
+        N_AFFINE_FALLBACK.load(Ordering::Relaxed),
     );
     crate::camera::remap::prof::report();
 }

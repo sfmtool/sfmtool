@@ -21,8 +21,9 @@
 //! per-patch [`TOTAL`] phase is timed inside
 //! [`refine_patch_keypoints`](super::refine_patch_keypoints) itself so both
 //! entries are covered. The shared `camera::remap` tap counters are bracketed
-//! too (they cover the value renders + the bilinear GN-gradient renders; the
-//! non-default anisotropic-gradient path is uncounted).
+//! too; with the render-once context tile they mostly count the per-(point,
+//! view) tile prerenders (plus any direct-render fallbacks; the non-default
+//! anisotropic-gradient path is uncounted).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -76,12 +77,26 @@ impl Phase {
 pub static TOTAL: Phase = Phase::new("subpixel_total");
 
 // Leaf phases (non-overlapping; they partition the bulk of TOTAL).
-/// Value-only core renders (`render_core`): the seed score, every line-search
-/// candidate, the per-sweep re-render, the PerMove kept-offset refresh, and the
-/// representative's final-offset cores.
+/// Per-(point, view) context-tile prerenders (`render_refine_tile`): one
+/// expanded value+gradient source render plus the warp-Jacobian composition
+/// into patch-grid gradient planes. Every value / GN-gradient evaluation of
+/// that (point, view) pair then reads this tile.
+pub static TILE_PRERENDER: Phase = Phase::new("tile_prerender");
+/// Value-only tile reads (`RefineTile::read_core`): the seed score, every
+/// line-search candidate, the per-sweep re-render, the PerMove kept-offset
+/// refresh, and the representative's final-offset cores.
+pub static VALUE_READ: Phase = Phase::new("value_read");
+/// Jacobian-plane tile reads for the GN normal equations
+/// (`RefineTile::read_jg`), one per Gauss–Newton step (the value core is
+/// reused from the preceding score read).
+pub static GRAD_READ: Phase = Phase::new("gn_grad_read");
+/// Value-only direct core renders (`render_core`): every evaluation of a
+/// coarse-grid (no-tile) view, plus the rare out-of-coverage fallback on a
+/// tiled view (see [`N_TILE_SKIPPED`] / [`N_TILE_FALLBACK`]).
 pub static RENDER_VALUE: Phase = Phase::new("value_render");
-/// Value+gradient renders for the GN normal equations (`render_core_with_jg`),
-/// one per Gauss–Newton step.
+/// Value+gradient direct renders for the GN normal equations
+/// (`render_core_with_jg`) — the no-tile / out-of-coverage counterpart of
+/// [`GRAD_READ`].
 pub static RENDER_GRAD: Phase = Phase::new("gn_grad_render");
 /// z-normalization of a raw core (`znorm_core`), wherever it runs (sweep
 /// stack build, candidate scoring, PerMove refresh, representative).
@@ -113,6 +128,15 @@ pub static N_SWEEPS: AtomicU64 = AtomicU64::new(0);
 pub static N_GN_STEPS: AtomicU64 = AtomicU64::new(0);
 /// Line-search candidate evaluations (value render + znorm + ECC each).
 pub static N_LINE_SEARCH: AtomicU64 = AtomicU64::new(0);
+/// Evaluations whose offset fell outside the tile's coverage and took the
+/// direct-render fallback (`render_core` / `render_core_with_jg`). Expected to
+/// stay at ~0: the tile is sized to cover the line-search's `max_offset_px`
+/// bound.
+pub static N_TILE_FALLBACK: AtomicU64 = AtomicU64::new(0);
+/// (point, view) pairs that got **no tile** (coarse-grid gate: the patch grid
+/// is coarser than the source, so the pair keeps the exact direct-render
+/// path — see `try_render_refine_tile`).
+pub static N_TILE_SKIPPED: AtomicU64 = AtomicU64::new(0);
 
 /// Count one event on `c` when profiling is on.
 #[inline]
@@ -122,8 +146,11 @@ pub fn count(c: &AtomicU64, n: u64) {
     }
 }
 
-const PHASES: [&Phase; 9] = [
+const PHASES: [&Phase; 12] = [
     &TOTAL,
+    &TILE_PRERENDER,
+    &VALUE_READ,
+    &GRAD_READ,
     &RENDER_VALUE,
     &RENDER_GRAD,
     &ZNORM,
@@ -139,7 +166,13 @@ pub fn reset() {
     for p in PHASES {
         p.reset();
     }
-    for c in [&N_SWEEPS, &N_GN_STEPS, &N_LINE_SEARCH] {
+    for c in [
+        &N_SWEEPS,
+        &N_GN_STEPS,
+        &N_LINE_SEARCH,
+        &N_TILE_FALLBACK,
+        &N_TILE_SKIPPED,
+    ] {
         c.store(0, Ordering::Relaxed);
     }
     crate::camera::remap::prof::reset();
@@ -174,6 +207,9 @@ pub fn report(patches: usize, wall_secs: f64) {
         );
     }
     let leaves: u64 = [
+        &TILE_PRERENDER,
+        &VALUE_READ,
+        &GRAD_READ,
         &RENDER_VALUE,
         &RENDER_GRAD,
         &ZNORM,
@@ -193,10 +229,13 @@ pub fn report(patches: usize, wall_secs: f64) {
         100.0 * total_ns.saturating_sub(leaves) as f64 / total_ns as f64,
     );
     eprintln!(
-        "[sfmtool-profile]   sweeps {}  gn-steps {}  line-search-evals {}",
+        "[sfmtool-profile]   sweeps {}  gn-steps {}  line-search-evals {}  tile-fallbacks {}  \
+         tiles-skipped-coarse {}",
         N_SWEEPS.load(Ordering::Relaxed),
         N_GN_STEPS.load(Ordering::Relaxed),
         N_LINE_SEARCH.load(Ordering::Relaxed),
+        N_TILE_FALLBACK.load(Ordering::Relaxed),
+        N_TILE_SKIPPED.load(Ordering::Relaxed),
     );
     crate::camera::remap::prof::report();
 }

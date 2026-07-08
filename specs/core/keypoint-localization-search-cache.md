@@ -251,6 +251,15 @@ specified in
 separate is what lets the integer search stay integer-exact (and lets stage 2's
 `i16` path work — it never has to resample fractionally).
 
+> _The sub-pixel refiner now has its own render-once tile (`RefineTile`,
+> 2026-07): the same "render one expanded frame-oriented tile per view" idea,
+> but with **fractional** cubic-spline reads (prefiltered B-spline
+> coefficients) plus stored analytic gradient planes, since the continuous GN
+> solve cannot restrict itself to integer reads. Its exactness contract is
+> therefore weaker than this cache's bit-exact integer reads — see the
+> "Render-once context tile" section of
+> [keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md)._
+
 ## Search resolution multiplier (`f32`) — an available knob, not the plan
 
 The expectation is to run the **full-resolution** integer grid (`R`) and let SIMD

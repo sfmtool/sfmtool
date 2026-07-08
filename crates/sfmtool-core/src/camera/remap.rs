@@ -462,9 +462,11 @@ fn bilinear_corners(img: &ImageU8, x: f32, y: f32) -> ([usize; 4], [f32; 4]) {
 /// each channel. Output is bit-identical to calling `sample_bilinear_u8` per
 /// channel and rounding with `(val + 0.5).clamp(0.0, 255.0)`.
 ///
-/// `dst.len()` must be at least `img.channels`.
+/// `dst.len()` must be at least `img.channels`. `pub(crate)` so view
+/// selection's affine fast path samples with exactly [`remap_bilinear`]'s
+/// value convention (same rounding, same clamping).
 #[inline]
-fn sample_bilinear_u8_all(img: &ImageU8, x: f32, y: f32, dst: &mut [u8]) {
+pub(crate) fn sample_bilinear_u8_all(img: &ImageU8, x: f32, y: f32, dst: &mut [u8]) {
     let c = img.channels as usize;
     debug_assert!(
         dst.len() >= c,
