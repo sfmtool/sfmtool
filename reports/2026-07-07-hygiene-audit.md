@@ -20,6 +20,9 @@ drift now affects 2 of 4 copies).
 ## Rust — `sfmtool-core`
 
 **keypoint_localize.rs mixes params, cache, search, SIMD kernels, and orchestration**
+> _Status (2026-07-08): Done — extracted `keypoint_localize/{params,search,kernels}.rs`
+> (top module now 1007 lines, holding cache + orchestration); AVX2 kernels moved
+> intact with SAFETY blocks. Pure code motion, `cargo clippy`/patch tests pass._
 - Location: `crates/sfmtool-core/src/patch/keypoint_localize.rs` (2042 lines)
 - Problem: One flat file holding 6 clearly distinct top-level concerns, well past the point where the sibling `normal_refine/` was broken up:
   1. Params/strategy config: `SearchStrategy`, `KeypointLocalizeParams`, `KeypointLocalization` (lines 48-207, ~110 lines)
@@ -40,6 +43,10 @@ drift now affects 2 of 4 copies).
 - Risk: medium — the conversion methods touch many private struct fields (same-module privacy applies to child modules, so workable); tests call through the public type and need no change.
 
 **keypoint_subpixel.rs repeats the localize file's params+kernels+orchestration mix (smaller, same shape)**
+> _Status (2026-07-08): Done — extracted `keypoint_subpixel/{params,kernels}.rs`
+> (top module now 861 lines, holding the GN orchestration); the tile render +
+> scoring kernels went to `kernels.rs`. Done in the same pass as keypoint_localize
+> so the two stay symmetric. Pure code motion, `cargo clippy`/patch tests pass._
 - Location: `crates/sfmtool-core/src/patch/keypoint_subpixel.rs` (1220 lines)
 - Problem: Structurally parallel to keypoint_localize with the same three concerns interleaved: params/config `ConsensusRefresh`+`KeypointSubpixelParams`+`KeypointRefinement` (97-277, ~150); render/jacobian math `render_core`, `render_core_with_jg`, `znorm_core`, `ecc_score`, `view_jacobian`, `solve_2x2` (278-554, ~260); and Gauss-Newton orchestration `ViewState`, `refine_patch_keypoints`, `render_representative`, `RunningConsensus`, `GnScratch`, `refine_one_view`, `finalize`, `refine_patch_cloud_keypoints` (555-1219, ~640). Crossing the same threshold; benefits from being split consistently with keypoint_localize.
 - Proposed fix: Extract `keypoint_subpixel/params.rs` and `keypoint_subpixel/kernels.rs` (render + `view_jacobian` + `ecc_score` + `solve_2x2`) into the existing sibling dir, keeping the GN orchestration in the top file. Best done in the same pass as keypoint_localize so the two stay symmetric.
@@ -247,6 +254,8 @@ drift now affects 2 of 4 copies).
    (`normal_refine/`) and the sibling dir already existing. Do
    `keypoint_subpixel.rs` in the same pass so the two stay symmetric.
    Medium effort, low risk.
+   > _Status (2026-07-08): Done — both files split (`keypoint_localize` 2238→1007,
+   > `keypoint_subpixel` 1960→861); see the two findings above._
 
 2. **Batch the mechanical inline-test-convention sweep** — five test-only moves
    clear five findings in one low-risk commit: `sift-format/src/lib.rs` (326-line
