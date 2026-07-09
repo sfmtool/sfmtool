@@ -564,6 +564,45 @@ def _drop_grazing_observations(
     return out, dropped
 
 
+def _cull_by_localizability(
+    cloud: PatchCloud,
+    recon: SfmrReconstruction,
+    bitmaps: np.ndarray | None,
+    localizations: list[dict[str, Any]],
+    max_keypoint_uncertainty: float,
+    *,
+    sigma_noise: float = 3.0,
+) -> tuple[list[dict[str, Any]], int]:
+    """Drop poorly-localized points from ``localizations`` — those whose predicted
+    keypoint position uncertainty ``σ_pos`` (**patch-grid px**) exceeds
+    ``max_keypoint_uncertainty`` (``τ``). See ``specs/core/patch-localizability.md``.
+
+    ``σ_pos`` is scored from each point's cross-view consensus ``bitmaps`` (scattered
+    per source point) — the same scorer the ``xform`` filter uses. It is measured in
+    grid px (the intrinsic, resolution-independent unit) rather than source px so a
+    fixed ``τ`` culls a comparable fraction across datasets of different resolution.
+    A point that cannot be scored (empty consensus) has ``σ_pos = NaN``; ``NaN > τ``
+    is ``False``, so it is kept (benefit of the doubt). Because localizability is
+    intrinsic and per-point independent, removing a point here has no feedback on
+    any survivor's consensus, so the cull is safe to run early. Returns
+    ``(kept_localizations, n_culled)``.
+    """
+    if bitmaps is None or not localizations:
+        return localizations, 0
+    result = cloud.score_localizability(recon, bitmaps, sigma_noise=sigma_noise)
+    sigma = np.asarray(result["sigma_pos_grid"], dtype=float)
+    kept: list[dict[str, Any]] = []
+    culled = 0
+    for loc in localizations:
+        pid = int(loc["point_index"])
+        s = sigma[pid] if pid < len(sigma) else np.nan
+        if s > max_keypoint_uncertainty:  # NaN -> False -> kept
+            culled += 1
+        else:
+            kept.append(loc)
+    return kept, culled
+
+
 def _mean_keypoint_shift(
     before: list[dict[str, Any]], after: list[dict[str, Any]]
 ) -> float:
@@ -605,6 +644,7 @@ def embed_patches(
     obliquity_weight_power: float = 2.0,
     fronto_prior_weight: float = 0.05,
     max_refine_views: int = 8,
+    max_keypoint_uncertainty: float = 0.35,
     localize_search_strategy: str = "plus_descent",
     progress: Any = None,
 ) -> SfmrReconstruction:
@@ -693,6 +733,18 @@ def embed_patches(
             third off end-to-end time on large view sets — the round-2+ refine
             pass itself ~5x — at the cost of a different, not necessarily worse,
             normal on high-view points).
+        max_keypoint_uncertainty: Cull points whose predicted keypoint position
+            uncertainty ``σ_pos`` (**patch-grid px**) exceeds this ``τ``, **early**
+            — right after round 1's localize + sub-pixel refine, before the
+            multi-round refinement (see ``specs/core/patch-localizability.md``).
+            ``σ_pos`` is the noise-normalized weak-axis structure-tensor uncertainty
+            of each point's round-1 consensus (the aperture/flat blind spot the
+            cross-view agreement gate misses), in grid px so a fixed ``τ`` transfers
+            across resolutions. Enabling it forces the round-1 consensus render. The
+            cut is a conservative tail threshold that self-limits — it removes
+            egregious points where a dataset has them and little where it doesn't
+            (~1-3% on well-textured sets, more where a poorly-localized tail
+            exists). ``0`` (or a non-positive value) disables the cull.
         progress: Optional callable (e.g. ``click.echo``) that receives a per-round
             summary line reporting the mean normal change (deg) and mean keypoint
             shift (px); when given, those metrics are computed each round.
@@ -702,6 +754,7 @@ def embed_patches(
     """
     log = progress if callable(progress) else None
     half_extent = patch_size / 2.0
+    cull_localizability = max_keypoint_uncertainty and max_keypoint_uncertainty > 0
 
     # Decode every source image into its full pyramid ONCE. Each kernel call
     # below (six on a default two-round run) previously rebuilt all the
@@ -797,6 +850,9 @@ def embed_patches(
         ),
         _poll_progress(log, len(cloud)) as counter,
     ):
+        # Round-1 consensus bitmaps are needed for the final compaction on a
+        # single-round run AND for the early localizability cull (below) on any
+        # run; render them whenever either consumer is active.
         localizations, bitmaps, valid = _refine_subpixel(
             cloud,
             embedded,
@@ -804,7 +860,7 @@ def embed_patches(
             localizations,
             sweeps=subpixel,
             resolution=resolution,
-            render_bitmaps=rounds == 1,
+            render_bitmaps=rounds == 1 or bool(cull_localizability),
             progress=counter,
         )
     if log:
@@ -813,6 +869,22 @@ def embed_patches(
         log(
             f"  round 1/{rounds}: normal Δ {ndeg:.3f}°, keypoint Δ {kpx:.3f}px (vs seed)"
         )
+
+    # Early localizability cull: drop points whose round-1 consensus predicts a
+    # keypoint position uncertainty above τ, before the multi-round refinement that
+    # dominates cost. Intrinsic + per-point independent, so an early cull has no
+    # feedback on the survivors' consensus (unlike view-dropping). Removing a point
+    # from `localizations` propagates cleanly through the compaction renumbering, so
+    # culled points are absent from every later round and the output.
+    if cull_localizability:
+        localizations, n_culled = _cull_by_localizability(
+            cloud, embedded, bitmaps, localizations, max_keypoint_uncertainty
+        )
+        if log and n_culled:
+            log(
+                f"  culled {n_culled} poorly-localized points "
+                f"(keypoint uncertainty > {max_keypoint_uncertainty:.2f} grid px)"
+            )
 
     # After round 1: drop grazing observations against the refined normal, so the
     # subsequent rounds' consensus is not dragged toward a degenerate grazing smear.

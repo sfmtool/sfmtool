@@ -166,6 +166,23 @@ from .._cli_utils import timed_command
     ),
 )
 @click.option(
+    "--max-keypoint-uncertainty",
+    type=click.FloatRange(min=0.0),
+    default=0.35,
+    show_default=True,
+    help=(
+        "Cull points whose predicted keypoint position uncertainty (patch-grid px) "
+        "exceeds this, EARLY — right after round 1's localize + sub-pixel refine, "
+        "before the multi-round refinement. Scores each point's cross-view "
+        "consensus (patch localizability): the noise-normalized structure-tensor "
+        "uncertainty that catches the aperture/flat blind spot the agreement gate "
+        "misses. The grid-px unit lets a fixed value transfer across "
+        "resolutions. A conservative tail cut that self-limits — removing egregious "
+        "points where a dataset has them and little where it doesn't. `0` disables "
+        "the cull. See specs/core/patch-localizability.md."
+    ),
+)
+@click.option(
     "--localize-search-strategy",
     "localize_search_strategy",
     type=click.Choice(["plus_descent", "exhaustive"]),
@@ -198,6 +215,7 @@ def embed_patches_command(
     obliquity_weight_power,
     fronto_prior_weight,
     refine_max_views,
+    max_keypoint_uncertainty,
     localize_search_strategy,
 ):
     """Convert a sift_files reconstruction to embedded_patches.
@@ -305,6 +323,7 @@ def embed_patches_command(
             obliquity_weight_power=obliquity_weight_power,
             fronto_prior_weight=fronto_prior_weight,
             max_refine_views=refine_max_views,
+            max_keypoint_uncertainty=max_keypoint_uncertainty,
             localize_search_strategy=localize_search_strategy,
             progress=click.echo,
         )
