@@ -76,6 +76,16 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
 
 ### 3. Split the two big keypoint kernel files
 
+> _Status (2026-07-08): Done — extracted `keypoint_localize/{params,search,kernels}.rs`
+> (top module 2238→1007 lines) and `keypoint_subpixel/{params,kernels}.rs`
+> (1960→861), keeping the render/cache + orchestration in the top modules per the
+> `normal_refine/` precedent. The AVX2 blocks moved intact with their SAFETY
+> comments. Pure code motion, no public-API change: the public param/result types
+> are re-exported via `pub use params::{…}` at their historical `keypoint_*::`
+> paths, and cross-module helpers are `pub(super)`. `cargo fmt` + `clippy
+> --workspace` clean; all 817 sfmtool-core tests pass (incl. the AVX2↔scalar and
+> tile↔direct equivalence tests)._
+
 - **Spec reference:** `reports/2026-07-07-hygiene-audit.md` Top 3 #1;
   precedent `patch/normal_refine/` (split 2026-06-30, held up well).
 - **Current state:** `patch/keypoint_localize.rs` is 2042 lines / six concerns
