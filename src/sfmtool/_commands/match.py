@@ -26,6 +26,7 @@ _MODE_OPTIONS: dict[str, list[tuple[str, str]]] = {
         ("cluster_alpha", "--cluster-alpha"),
         ("cluster_d", "--cluster-d"),
         ("cluster_preset", "--cluster-preset"),
+        ("clusters_output", "--clusters-output"),
     ],
 }
 
@@ -145,6 +146,15 @@ def _reject_stray_mode_options(selected: str) -> None:
     help="Kd-tree forest preset for --cluster. Default: accurate.",
 )
 @click.option(
+    "--clusters-output",
+    "clusters_output",
+    type=click.Path(),
+    default=None,
+    help="Path for the clusters-bearing .matches file --cluster writes as its "
+    "primary artifact. Default: matches/<verified stem>-clusters.matches "
+    "under the workspace.",
+)
+@click.option(
     "--camera-model",
     "camera_model",
     type=click.Choice(CAMERA_MODEL_NAMES, case_sensitive=False),
@@ -173,6 +183,7 @@ def match(
     cluster_alpha,
     cluster_d,
     cluster_preset,
+    clusters_output,
     camera_model,
     merge,
 ):
@@ -191,7 +202,8 @@ def match(
         # Flow-based matching for sequential video
         sfm match --flow images/
 
-        # Background-floor track-cluster matching
+        # Background-floor track-cluster matching (writes the clusters
+        # .matches primary artifact plus the verified pairwise+TVG file)
         sfm match --cluster images/
 
         # With feature count limit
@@ -280,6 +292,7 @@ def match(
             cluster_d=cluster_d,
             cluster_alpha=cluster_alpha,
             cluster_preset=cluster_preset,
+            clusters_output=clusters_output,
         )
     except Exception as e:
         raise click.ClickException(str(e))

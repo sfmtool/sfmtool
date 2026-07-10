@@ -185,12 +185,17 @@ def _setup_for_sfm_from_matches(
     from .._sfmtool import RangeExpr
     from .._sfmtool.io import read_matches
     from .._workspace import find_workspace_for_path
+    from ..feature_match import pairs_from_matches
 
     matches_file = Path(matches_file)
     colmap_dir = Path(colmap_dir)
 
     print(f"Loading matches from: {matches_file}")
     matches_data = read_matches(matches_file)
+    # The single pairwise view: stored pairs verbatim, or the canonical
+    # cluster expansion for cluster-bearing files (descriptor distances are
+    # not needed to populate the DB).
+    pairs_data = pairs_from_matches(matches_data)
 
     metadata = matches_data["metadata"]
     ws_meta = metadata["workspace"]
@@ -245,15 +250,18 @@ def _setup_for_sfm_from_matches(
             "Ensure the workspace exists and contains .sfm-workspace.json."
         )
 
+    total_pairs = len(pairs_data["image_index_pairs"])
+    total_matches = len(pairs_data["match_feature_indexes"])
+    pairs_label = "Pairs (derived)" if matches_data.get("has_clusters") else "Pairs"
     print(f"Workspace: {workspace_dir}")
     if old_to_new is None:
         print(
-            f"Images: {image_count}, Pairs: {metadata['image_pair_count']}, "
-            f"Matches: {metadata['match_count']}"
+            f"Images: {image_count}, {pairs_label}: {total_pairs}, "
+            f"Matches: {total_matches}"
         )
     else:
-        pairs_arr = matches_data["image_index_pairs"]
-        counts_arr = matches_data["match_counts"]
+        pairs_arr = pairs_data["image_index_pairs"]
+        counts_arr = pairs_data["match_counts"]
         kept_arr = np.fromiter(old_to_new.keys(), dtype=pairs_arr.dtype)
         pair_mask = np.isin(pairs_arr[:, 0], kept_arr) & np.isin(
             pairs_arr[:, 1], kept_arr
@@ -263,8 +271,8 @@ def _setup_for_sfm_from_matches(
         print(
             f"Images: {image_count} (filtered from {full_image_count} "
             f"via --range {range_expr}), "
-            f"Pairs: {kept_pairs} (filtered from {metadata['image_pair_count']}), "
-            f"Matches: {kept_matches} (filtered from {metadata['match_count']})"
+            f"{pairs_label}: {kept_pairs} (filtered from {total_pairs}), "
+            f"Matches: {kept_matches} (filtered from {total_matches})"
         )
 
     # Resolve image paths and .sift paths
@@ -354,7 +362,12 @@ def _setup_for_sfm_from_matches(
 
     # Write matches and TVGs to the database
     _write_matches_to_db(
-        db_path, matches_data, image_names, image_dir, old_to_new=old_to_new
+        db_path,
+        matches_data,
+        image_names,
+        image_dir,
+        old_to_new=old_to_new,
+        pairs_data=pairs_data,
     )
 
     return db_path, image_dir, image_paths, rig_used
@@ -366,8 +379,14 @@ def _write_matches_to_db(
     image_names: list[str],
     image_dir: Path,
     old_to_new: dict[int, int] | None = None,
+    pairs_data: dict | None = None,
 ) -> None:
     """Write matches and TVGs from a read_matches dict into a COLMAP database.
+
+    Pairwise arrays come from `pairs_data` (a `pairs_from_matches` view,
+    derived here when not supplied), so cluster-bearing files work
+    transparently; TVGs only exist for stored-pairs files, and their arrays
+    are keyed per stored pair.
 
     If `old_to_new` is given, it maps original indices in `matches_data` to
     positions in `image_names`; pairs that reference an original index not
@@ -375,6 +394,11 @@ def _write_matches_to_db(
     `match_feature_indexes` / `inlier_feature_indexes` are stepped over).
     """
     import numpy as np
+
+    from ..feature_match import pairs_from_matches
+
+    if pairs_data is None:
+        pairs_data = pairs_from_matches(matches_data)
 
     with pycolmap.Database.open(db_path) as db:
         db_images = db.read_all_images()
@@ -392,9 +416,9 @@ def _write_matches_to_db(
         new_idx = old_to_new.get(idx)
         return None if new_idx is None else db_ids[new_idx]
 
-    image_index_pairs = matches_data["image_index_pairs"]
-    match_counts = matches_data["match_counts"]
-    match_feature_indexes = matches_data["match_feature_indexes"]
+    image_index_pairs = pairs_data["image_index_pairs"]
+    match_counts = pairs_data["match_counts"]
+    match_feature_indexes = pairs_data["match_feature_indexes"]
     pair_count = len(image_index_pairs)
     pairs_written = 0
 

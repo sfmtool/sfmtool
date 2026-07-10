@@ -39,8 +39,17 @@ def _run_matching(
     cluster_alpha: float = 0.8,
     cluster_min_size: int = 2,
     cluster_preset: str = "accurate",
+    clusters_output: str | None = None,
 ):
-    """Run matching and produce a .matches file."""
+    """Run matching and produce a .matches file.
+
+    For ``--cluster``, two files are written: the clusters-bearing `.matches`
+    (the matcher's durable primary artifact, written before geometric
+    verification) and the verified pairwise+TVG `.matches` the solver
+    consumes. ``output_path`` keeps its meaning as the verified output;
+    ``clusters_output`` overrides the cluster file's default location
+    (``matches/<verified stem>-clusters.matches`` under the workspace).
+    """
     import pycolmap
 
     from .._workspace import load_workspace_config
@@ -68,6 +77,40 @@ def _run_matching(
     for p in image_paths:
         rel = os.path.relpath(p, workspace_dir).replace("\\", "/")
         image_names.append(rel)
+
+    matcher_options = None
+    verified_out = None
+    clusters_out = None
+    if matching_method == "cluster":
+        # Sort images lexicographically by workspace-relative name so the
+        # cluster corpus order matches the DB reader's order — the cluster
+        # file and the verified pairwise file then share image indices.
+        order = sorted(range(len(image_names)), key=lambda i: image_names[i])
+        image_names = [image_names[i] for i in order]
+        image_paths = [image_paths[i] for i in order]
+        sift_paths = [sift_paths[i] for i in order]
+
+        matcher_options = {
+            "mode": "background-floor",
+            "d": cluster_d,
+            "alpha": cluster_alpha,
+            "min_size": cluster_min_size,
+            "preset": cluster_preset,
+        }
+        # The verified output always carries TVGs, so its path is known up
+        # front; the cluster file's default name derives from it.
+        if output_path:
+            verified_out = Path(output_path)
+        else:
+            verified_out = _generate_output_path(
+                workspace_dir / "tvg-matches", image_paths, matching_method
+            )
+        if clusters_output:
+            clusters_out = Path(clusters_output)
+        else:
+            clusters_out = (
+                workspace_dir / "matches" / f"{verified_out.stem}-clusters.matches"
+            )
 
     # Create a temporary COLMAP database, populate features, run matching
     with tempfile.TemporaryDirectory(prefix="sfm_match_") as tmpdir:
@@ -106,6 +149,20 @@ def _run_matching(
                 flow_wide_baseline_skip=flow_wide_baseline_skip,
             )
         elif matching_method == "cluster":
+
+            def _persist_clusters(clusters):
+                _write_clusters_matches(
+                    clusters,
+                    clusters_out,
+                    image_paths=image_paths,
+                    sift_paths=sift_paths,
+                    image_names=image_names,
+                    workspace_dir=workspace_dir,
+                    ws_config=ws_config,
+                    matcher_options=matcher_options,
+                    max_feature_count=max_feature_count,
+                )
+
             _run_cluster_matching(
                 image_paths,
                 sift_paths,
@@ -117,6 +174,7 @@ def _run_matching(
                 alpha=cluster_alpha,
                 min_size=cluster_min_size,
                 preset=cluster_preset,
+                on_clusters=_persist_clusters,
             )
         else:
             raise ValueError(f"Unsupported matching method: {matching_method}")
@@ -194,7 +252,9 @@ def _run_matching(
     _fill_sift_hashes(matches_data, sift_paths, image_names, image_paths)
 
     # Determine output path
-    if output_path:
+    if verified_out is not None:
+        out = verified_out
+    elif output_path:
         out = Path(output_path)
     else:
         has_tvg = matches_data["has_two_view_geometries"]
@@ -222,6 +282,98 @@ def _run_matching(
     if matches_data["has_two_view_geometries"]:
         inlier_count = matches_data["tvg_metadata"]["inlier_count"]
         click.echo(f"  Two-view geometries: {inlier_count} total inliers")
+    if clusters_out is not None:
+        click.echo(f"  Clusters artifact: {clusters_out}")
+        click.echo(f"  Verified matches: {out}")
+
+
+def _write_clusters_matches(
+    clusters,
+    out_path: Path,
+    *,
+    image_paths: list[Path],
+    sift_paths: list[Path],
+    image_names: list[str],
+    workspace_dir: Path,
+    ws_config: dict,
+    matcher_options: dict,
+    max_feature_count: int | None,
+) -> None:
+    """Write the cluster matcher's primary artifact: a clusters-bearing
+    `.matches` file (clusters backbone, no pairs, no TVGs).
+
+    Called from the matching flow after cluster materialization and before
+    geometric verification, so the durable artifact exists even if
+    verification fails. `image_names` must be in corpus order (the order
+    `member_images` indexes).
+    """
+    from importlib.metadata import version as get_version
+
+    from .._sfmtool.io import read_sift_metadata, write_matches
+
+    cluster_count = len(clusters.cluster_starts) - 1
+    member_count = len(clusters.member_images)
+
+    # Per-image feature counts as used to build the corpus: the .sift file's
+    # count capped at max_feature_count, so member_features indices line up.
+    feature_counts = np.zeros(len(sift_paths), dtype=np.uint32)
+    for i, sift_path in enumerate(sift_paths):
+        n = int(read_sift_metadata(str(sift_path))["metadata"]["feature_count"])
+        if max_feature_count:
+            n = min(n, max_feature_count)
+        feature_counts[i] = n
+
+    matching_options = dict(matcher_options)
+    if max_feature_count:
+        matching_options["max_feature_count"] = max_feature_count
+
+    out_abs = Path(os.path.abspath(out_path))
+    data = {
+        "metadata": {
+            "version": 3,
+            "matching_method": "cluster",
+            "matching_tool": "sfmtool",
+            "matching_tool_version": get_version("sfmtool"),
+            "matching_options": matching_options,
+            "workspace": {
+                "absolute_path": str(workspace_dir),
+                "relative_path": os.path.relpath(workspace_dir, out_abs.parent).replace(
+                    "\\", "/"
+                ),
+                "contents": {
+                    "feature_tool": ws_config.get("feature_tool", "colmap"),
+                    "feature_type": ws_config.get("feature_type", "sift"),
+                    "feature_options": ws_config.get("feature_options") or {},
+                    "feature_prefix_dir": ws_config.get("feature_prefix_dir") or "",
+                },
+            },
+            "timestamp": datetime.now().astimezone().isoformat(),
+            "image_count": len(image_names),
+            "cluster_count": cluster_count,
+            "cluster_member_count": member_count,
+            "has_two_view_geometries": False,
+            "has_clusters": True,
+            "has_cluster_patches": False,
+        },
+        "image_names": image_names,
+        "feature_counts": feature_counts,
+        "has_clusters": True,
+        "cluster_starts": clusters.cluster_starts,
+        "member_images": clusters.member_images,
+        "member_features": clusters.member_features,
+        "matcher_options": matching_options,
+        "has_cluster_patches": False,
+        "has_two_view_geometries": False,
+    }
+    _fill_sift_hashes(data, sift_paths, image_names, image_paths)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    click.echo(f"Writing {out_path}...")
+    write_matches(out_path, data)
+    click.echo(
+        f"  Clusters: {cluster_count} clusters, {member_count} members "
+        "(primary artifact, written before verification)"
+    )
 
 
 def _generate_output_path(
@@ -356,6 +508,7 @@ def _run_cluster_matching(
     min_size: int = 2,
     preset: str = "accurate",
     exclude_index_pairs: set[tuple[int, int]] | None = None,
+    on_clusters=None,
 ) -> None:
     """Run background-floor track-cluster matching and write results to the DB.
 
@@ -363,13 +516,18 @@ def _run_cluster_matching(
     track clusters with the per-point background floor, expands them into
     per-image-pair matches, writes those to the database, and runs geometric
     verification via pycolmap. The clusters themselves are the matcher's
-    primary artefact; persisting them to disk is a future consumer's job.
+    primary artefact; ``on_clusters``, when given, is called with the
+    materialized ``ClusterSet`` before any pair expansion is written or
+    verified — `sfm match --cluster` uses it to persist the clusters-bearing
+    `.matches` file.
 
     ``exclude_index_pairs`` is a set of normalized ``(i, j)`` image-index pairs
     (indices into ``image_paths``) to drop from the output — used for
     multi-sensor rigs to suppress the spurious same-frame matches that
     back-to-back sensors with no shared view produce, which the clustering
-    cannot know to avoid on descriptors alone.
+    cannot know to avoid on descriptors alone. The exclusion applies to the
+    pair expansion only, never to the clusters handed to ``on_clusters`` —
+    the stored clusters are the raw matcher output.
     """
     import pycolmap
 
@@ -391,6 +549,8 @@ def _run_cluster_matching(
         f"{len(pairs.match_feature_indexes)} candidate matches "
         f"across {pair_count} image pairs"
     )
+    if on_clusters is not None:
+        on_clusters(clusters)
     if pair_count == 0:
         click.echo("Warning: Cluster matching produced no matches")
         return
@@ -469,23 +629,27 @@ def _run_merge(paths, output_path):
     if out.suffix.lower() != ".matches":
         raise click.UsageError(f"Output path must be a .matches file: {output_path}")
 
-    # Read all input files
+    # Read all input files. Pairwise arrays come through the derived-pairs
+    # helper, so cluster-bearing inputs merge like any other (their expanded
+    # matches carry NaN descriptor distances).
+    from ._pairs import pairs_from_matches
+
     click.echo(f"Merging {len(input_paths)} .matches files...")
     all_data = []
     for path in input_paths:
         click.echo(f"  Reading {path.name}...")
         data = read_matches(str(path))
-        pairs = data["metadata"]["image_pair_count"]
-        matches = data["metadata"]["match_count"]
+        pairs_view = pairs_from_matches(data)
         click.echo(
             f"    {data['metadata']['image_count']} images, "
-            f"{pairs} pairs, {matches} matches"
+            f"{len(pairs_view['image_index_pairs'])} pairs, "
+            f"{len(pairs_view['match_feature_indexes'])} matches"
         )
-        all_data.append(data)
+        all_data.append((data, pairs_view))
 
     # Build unified image list and validate consistency
     image_info = {}  # name -> {feature_count, tool_hash, content_hash}
-    for data in all_data:
+    for data, _pairs_view in all_data:
         names = list(data["image_names"])
         for i, name in enumerate(names):
             tool_hash = bytes(data["feature_tool_hashes"][i])
@@ -516,15 +680,15 @@ def _run_merge(paths, output_path):
     pair_matches = {}  # (idx_i, idx_j) -> {(feat_i, feat_j): distance}
     pair_tvg = {}  # (idx_i, idx_j) -> tvg_info dict (best TVG for this pair)
 
-    for data in all_data:
+    for data, pairs_view in all_data:
         names = list(data["image_names"])
         local_to_unified = [name_to_idx[n] for n in names]
         has_tvg = data.get("has_two_view_geometries", False)
 
-        pairs = data["image_index_pairs"]
-        counts = data["match_counts"]
-        feat_idxs = data["match_feature_indexes"]
-        distances = data["match_descriptor_distances"]
+        pairs = pairs_view["image_index_pairs"]
+        counts = pairs_view["match_counts"]
+        feat_idxs = pairs_view["match_feature_indexes"]
+        distances = pairs_view["match_descriptor_distances"]
 
         if has_tvg:
             tvg_config_types = data["config_types"]
@@ -560,10 +724,11 @@ def _run_merge(paths, output_path):
                 if swap:
                     fi, fj = fj, fi
                 feat_key = (fi, fj)
-                # Keep the match with the lowest descriptor distance
-                if (
-                    feat_key not in pair_matches[key]
-                    or dist < pair_matches[key][feat_key]
+                # Keep the match with the lowest descriptor distance; a known
+                # distance beats NaN (cluster-derived matches carry NaN).
+                prev = pair_matches[key].get(feat_key)
+                if prev is None or (
+                    not np.isnan(dist) and (np.isnan(prev) or dist < prev)
                 ):
                     pair_matches[key][feat_key] = dist
 
@@ -709,9 +874,9 @@ def _run_merge(paths, output_path):
     )
 
     # Build metadata from the first input file as a base
-    base_meta = all_data[0]["metadata"]
+    base_meta = all_data[0][0]["metadata"]
     source_methods = []
-    for data in all_data:
+    for data, _pairs_view in all_data:
         method = data["metadata"].get("matching_method", "unknown")
         source_methods.append(method)
 

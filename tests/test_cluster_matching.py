@@ -205,7 +205,7 @@ class TestClusterCli:
         assert "track clusters" in result.output
         assert output_path.exists()
 
-        from sfmtool._sfmtool.io import read_matches
+        from sfmtool._sfmtool.io import read_matches, verify_matches
 
         matches_data = read_matches(str(output_path))
         meta = matches_data["metadata"]
@@ -221,7 +221,79 @@ class TestClusterCli:
         assert matches_data["has_two_view_geometries"]
         assert matches_data["tvg_metadata"]["inlier_count"] > 0
 
-        # The .matches feeds the existing COLMAP DB consumer unchanged.
+        # --cluster also writes the clusters-bearing primary artifact, at the
+        # default location derived from the verified output's stem.
+        clusters_path = workspace_dir / "matches" / "cluster-clusters.matches"
+        assert str(clusters_path) in result.output
+        assert clusters_path.exists()
+        valid, errors = verify_matches(str(clusters_path))
+        assert valid, errors
+
+        cluster_data = read_matches(str(clusters_path))
+        cmeta = cluster_data["metadata"]
+        assert cluster_data["has_clusters"]
+        assert not cluster_data["has_two_view_geometries"]
+        assert cmeta["matching_method"] == "cluster"
+        assert cmeta["cluster_count"] > 0
+        assert cmeta["cluster_member_count"] > 0
+        assert cmeta["matching_options"]["d"] == 10
+        assert cluster_data["matcher_options"]["preset"] == "accurate"
+        # Both files list the same images in the same order, so indices
+        # are directly comparable.
+        assert list(cluster_data["image_names"]) == list(matches_data["image_names"])
+
+        # The derived pairwise view of the cluster file reproduces the
+        # verified file's candidate pairs: verification culls pairs below
+        # COLMAP's min_num_matches (15) from the DB, so the verified file's
+        # pairs are a subset of the expansion, with identical match sets on
+        # every surviving pair.
+        from sfmtool.feature_match import pairs_from_matches
+
+        derived = pairs_from_matches(cluster_data)
+
+        def _per_pair_matches(pairs_dict):
+            out = {}
+            offset = 0
+            for (i, j), count in zip(
+                pairs_dict["image_index_pairs"], pairs_dict["match_counts"]
+            ):
+                count = int(count)
+                block = pairs_dict["match_feature_indexes"][offset : offset + count]
+                out[(int(i), int(j))] = block[np.lexsort((block[:, 1], block[:, 0]))]
+                offset += count
+            return out
+
+        derived_pairs = _per_pair_matches(derived)
+        verified_pairs = _per_pair_matches(matches_data)
+        assert set(verified_pairs) <= set(derived_pairs)
+        assert len(verified_pairs) > 0
+        for key, verified_block in verified_pairs.items():
+            np.testing.assert_array_equal(derived_pairs[key], verified_block)
+        # Only sub-threshold pairs may be culled by verification.
+        for key in set(derived_pairs) - set(verified_pairs):
+            assert len(derived_pairs[key]) < 15, key
+        # No sift lookup: the derived distances are NaN placeholders.
+        assert np.isnan(derived["match_descriptor_distances"]).all()
+
+        # Consumer smoke test: `sfm inspect` reports cluster stats.
+        result = CliRunner().invoke(main, ["inspect", str(clusters_path), "-v"])
+        assert result.exit_code == 0, result.output
+        assert "Backbone" in result.output
+        assert "Cluster size" in result.output
+        assert "Matches per pair (derived)" in result.output
+
+        # Consumer smoke test: the COLMAP DB consumer accepts the cluster
+        # file directly (pairs derived at read time; no TVGs to write).
+        cluster_db_path = tmp_path / "clusters-colmap.db"
+        result = CliRunner().invoke(
+            main,
+            ["to-colmap-db", str(clusters_path), str(cluster_db_path)],
+        )
+        assert result.exit_code == 0, result.output
+        assert cluster_db_path.exists()
+
+        # The verified .matches feeds the existing COLMAP DB consumer
+        # unchanged.
         db_path = tmp_path / "colmap.db"
         result = CliRunner().invoke(
             main,
@@ -229,3 +301,19 @@ class TestClusterCli:
         )
         assert result.exit_code == 0, result.output
         assert db_path.exists()
+
+    def test_clusters_output_requires_cluster_method(
+        self, isolated_seoul_bull_image: Path
+    ):
+        result = CliRunner().invoke(
+            main,
+            [
+                "match",
+                "--exhaustive",
+                "--clusters-output",
+                "x.matches",
+                str(isolated_seoul_bull_image),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "--clusters-output" in result.output

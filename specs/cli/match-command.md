@@ -44,6 +44,7 @@ ignored.
 | `--cluster-alpha` | float | 0.8 | Background-floor radius multiplier for cluster matching |
 | `--cluster-d` | int | 10 | Background rank: the d-th-nearest distance sets the floor for cluster matching |
 | `--cluster-preset` | `accurate` \| `balanced` \| `fast` | `accurate` | Kd-tree forest preset for cluster matching |
+| `--clusters-output` | path | `matches/<verified stem>-clusters.matches` | Path for the clusters-bearing `.matches` file `--cluster` writes as its primary artifact |
 | `--max-features` | int | | Maximum features per image |
 | `--output / -o` | path | auto | Output `.matches` file path (default: timestamped, required for `--merge`) |
 | `--range / -r` | string | | Range expression for file numbers |
@@ -72,9 +73,41 @@ corpus, queries each descriptor's nearest neighbours over a randomized kd-tree
 forest, and keeps the cross-image neighbours within `--cluster-alpha` × its
 `--cluster-d`-th-nearest distance (its *background floor*). Those candidates
 are materialized into track clusters and then expanded into per-image-pair
-matches, which are geometrically verified — so the output `.matches` carries
-two-view geometry and is written under `tvg-matches/`. Image pair selection
-falls out of the clustering: only pairs that share a cluster are verified.
+matches, which are geometrically verified — so the `-o` output `.matches`
+carries two-view geometry and is written under `tvg-matches/`. Image pair
+selection falls out of the clustering: only pairs that share a cluster are
+verified.
+
+### Dual output: the cluster file is the primary artifact
+
+`--cluster` writes **two** files, echoing both paths:
+
+1. **The clusters-bearing `.matches`** (clusters backbone, no pairs, no
+   TVGs; `matching_method: "cluster"`, matcher options recorded, and
+   `cluster_count` / `cluster_member_count` metadata) — the matcher's durable
+   primary artifact, written **before** geometric verification so it survives
+   a verification failure. Default path: the workspace `matches/` directory,
+   named after the verified output's stem plus a `-clusters` suffix; override
+   with `--clusters-output`. This file feeds cluster-native consumers
+   (`sfm cluster-patches`, re-expansion, inspection); pairwise consumers
+   derive pairs from it at read time via
+   `sfmtool.feature_match.pairs_from_matches`.
+2. **The verified pairwise+TVG `.matches`** at `-o` (or the timestamped
+   `tvg-matches/` default) — the solver-facing derivative, unchanged in
+   meaning, produced by materializing the cluster expansion into the COLMAP
+   DB and verifying it. Verification culls pairs below COLMAP's
+   `min_num_matches`, so its candidate pairs are a subset of the cluster
+   file's derived expansion.
+
+Both files list the images in the same (lexicographic) order, so image
+indices are directly comparable between them.
+
+**Rig same-frame pair exclusion applies to the pair expansion only, never to
+the stored clusters.** The clusters persisted to the primary artifact are the
+raw matcher output; for multi-sensor rigs, the same-frame `(i, j)` exclusion
+(back-to-back sensors with no shared view) is applied when the expansion is
+written to the DB for verification — a consumer re-deriving pairs from the
+cluster file must re-apply any rig exclusion it needs.
 
 The clustering itself uses no intrinsics or poses. `--camera-model` is still
 accepted with `--cluster` because it feeds the geometric verification step
