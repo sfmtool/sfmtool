@@ -32,17 +32,15 @@ fn make_test_data() -> MatchesData {
             },
             timestamp: "2026-03-29T10:00:00Z".into(),
             image_count,
-            image_pair_count: pair_count as u32,
-            match_count: match_count as u32,
+            image_pair_count: Some(pair_count as u32),
+            match_count: Some(match_count as u32),
+            cluster_count: None,
+            cluster_member_count: None,
             has_two_view_geometries: false,
+            has_clusters: false,
+            has_cluster_patches: false,
         },
-        content_hash: MatchesContentHash {
-            metadata_xxh128: String::new(),
-            images_xxh128: String::new(),
-            image_pairs_xxh128: String::new(),
-            two_view_geometries_xxh128: None,
-            content_xxh128: String::new(),
-        },
+        content_hash: empty_content_hash(),
         image_names: vec![
             "frames/frame_000.jpg".into(),
             "frames/frame_001.jpg".into(),
@@ -51,22 +49,38 @@ fn make_test_data() -> MatchesData {
         feature_tool_hashes: vec![[0u8; 16]; image_count as usize],
         sift_content_hashes: vec![[1u8; 16]; image_count as usize],
         feature_counts: Array1::from_vec(vec![100, 150, 200]),
-        // Pair (0,1) has 3 matches, pair (0,2) has 2 matches
-        image_index_pairs: Array2::from_shape_vec((pair_count, 2), vec![0, 1, 0, 2]).unwrap(),
-        match_counts: Array1::from_vec(vec![3, 2]),
-        match_feature_indexes: Array2::from_shape_vec(
-            (match_count, 2),
-            vec![
-                0, 0, // pair (0,1) match 0
-                1, 1, // pair (0,1) match 1
-                2, 3, // pair (0,1) match 2
-                5, 10, // pair (0,2) match 0
-                10, 50, // pair (0,2) match 1
-            ],
-        )
-        .unwrap(),
-        match_descriptor_distances: Array1::from_vec(vec![100.0, 120.0, 90.0, 200.0, 180.0]),
+        image_pairs: Some(PairsData {
+            // Pair (0,1) has 3 matches, pair (0,2) has 2 matches
+            image_index_pairs: Array2::from_shape_vec((pair_count, 2), vec![0, 1, 0, 2]).unwrap(),
+            match_counts: Array1::from_vec(vec![3, 2]),
+            match_feature_indexes: Array2::from_shape_vec(
+                (match_count, 2),
+                vec![
+                    0, 0, // pair (0,1) match 0
+                    1, 1, // pair (0,1) match 1
+                    2, 3, // pair (0,1) match 2
+                    5, 10, // pair (0,2) match 0
+                    10, 50, // pair (0,2) match 1
+                ],
+            )
+            .unwrap(),
+            match_descriptor_distances: Array1::from_vec(vec![100.0, 120.0, 90.0, 200.0, 180.0]),
+        }),
+        clusters: None,
+        cluster_patches: None,
         two_view_geometries: None,
+    }
+}
+
+fn empty_content_hash() -> MatchesContentHash {
+    MatchesContentHash {
+        metadata_xxh128: String::new(),
+        images_xxh128: String::new(),
+        image_pairs_xxh128: None,
+        clusters_xxh128: None,
+        cluster_patches_xxh128: None,
+        two_view_geometries_xxh128: None,
+        content_xxh128: String::new(),
     }
 }
 
@@ -75,7 +89,7 @@ fn make_test_data_with_tvg() -> MatchesData {
     let mut data = make_test_data();
     data.metadata.has_two_view_geometries = true;
 
-    let pair_count = data.metadata.image_pair_count as usize;
+    let pair_count = data.metadata.image_pair_count.unwrap() as usize;
     // 2 inliers from pair 0, 1 inlier from pair 1
     let inlier_count = 3usize;
 
@@ -139,14 +153,93 @@ fn make_test_data_with_tvg() -> MatchesData {
     data
 }
 
+/// Create cluster-backbone test data: 3 images, 2 clusters, 5 members.
+///
+/// Cluster 0 = members 0..3 in images (0, 1, 2); cluster 1 = members 3..5
+/// in images (0, 2).
+fn make_cluster_test_data() -> MatchesData {
+    let mut data = make_test_data();
+    data.metadata.image_pair_count = None;
+    data.metadata.match_count = None;
+    data.metadata.cluster_count = Some(2);
+    data.metadata.cluster_member_count = Some(5);
+    data.metadata.has_clusters = true;
+    data.image_pairs = None;
+    data.clusters = Some(ClustersData {
+        cluster_starts: Array1::from_vec(vec![0, 3, 5]),
+        member_images: Array1::from_vec(vec![0, 1, 2, 0, 2]),
+        member_features: Array1::from_vec(vec![0, 1, 2, 5, 10]),
+        matcher_options: serde_json::json!({
+            "d": 8, "alpha": 1.2, "min_size": 2, "preset": "default"
+        }),
+    });
+    data
+}
+
+/// Create cluster test data with the cluster_patches enrichment.
+///
+/// Cluster 0: member 0 is the reference, member 1 kept, member 2 rejected
+/// (low ZNCC). Cluster 1: unrefinable (all members not evaluated).
+fn make_cluster_patch_test_data() -> MatchesData {
+    let mut data = make_cluster_test_data();
+    data.metadata.has_cluster_patches = true;
+    let mut member_affines = Array3::zeros((5, 2, 3));
+    // Reference row: identity | 0.
+    member_affines[[0, 0, 0]] = 1.0;
+    member_affines[[0, 1, 1]] = 1.0;
+    // Kept member: a non-trivial affine.
+    member_affines[[1, 0, 0]] = 1.1;
+    member_affines[[1, 0, 1]] = -0.05;
+    member_affines[[1, 0, 2]] = 42.5;
+    member_affines[[1, 1, 0]] = 0.03;
+    member_affines[[1, 1, 1]] = 0.95;
+    member_affines[[1, 1, 2]] = -17.25;
+    // Rejected member: still carries its refined affine.
+    member_affines[[2, 0, 0]] = 1.0;
+    member_affines[[2, 1, 1]] = 1.0;
+    data.cluster_patches = Some(ClusterPatchData {
+        reference_members: Array1::from_vec(vec![0, CLUSTER_REFERENCE_UNREFINABLE]),
+        member_status: Array1::from_vec(vec![
+            ClusterMemberStatus::Reference as u8,
+            ClusterMemberStatus::Kept as u8,
+            ClusterMemberStatus::RejectedLowZncc as u8,
+            ClusterMemberStatus::NotEvaluated as u8,
+            ClusterMemberStatus::NotEvaluated as u8,
+        ]),
+        member_affines,
+        member_zncc: Array1::from_vec(vec![1.0, 0.93, 0.41, f32::NAN, f32::NAN]),
+        member_shift_px: Array1::from_vec(vec![0.0, 1.25, 0.8, f32::NAN, f32::NAN]),
+        refine_options: serde_json::json!({
+            "radius": 4.0, "resolution": 15, "min_zncc": 0.85, "max_shift_px": 3.0
+        }),
+    });
+    data
+}
+
+fn write_to_temp(name: &str, data: &MatchesData) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.matches");
+    write_matches(&path, data, 3).unwrap();
+    (dir, path)
+}
+
+/// Bit-exact f32 comparison (NaN == NaN).
+fn assert_f32_bits_eq(actual: &Array1<f32>, expected: &Array1<f32>) {
+    assert_eq!(actual.len(), expected.len());
+    for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+        assert_eq!(
+            a.to_bits(),
+            e.to_bits(),
+            "mismatch at index {i}: {a} vs {e}"
+        );
+    }
+}
+
 #[test]
 fn test_round_trip_no_tvg() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("matches_test_round_trip");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
-
-    write_matches(&path, &data, 3).unwrap();
+    let (dir, path) = write_to_temp("matches_test_round_trip", &data);
     let loaded = read_matches(&path).unwrap();
 
     // Verify metadata
@@ -154,9 +247,13 @@ fn test_round_trip_no_tvg() {
     assert_eq!(loaded.metadata.matching_tool, "colmap");
     assert_eq!(loaded.metadata.matching_tool_version, "4.02");
     assert_eq!(loaded.metadata.image_count, 3);
-    assert_eq!(loaded.metadata.image_pair_count, 2);
-    assert_eq!(loaded.metadata.match_count, 5);
+    assert_eq!(loaded.metadata.image_pair_count, Some(2));
+    assert_eq!(loaded.metadata.match_count, Some(5));
     assert!(!loaded.metadata.has_two_view_geometries);
+    assert!(!loaded.metadata.has_clusters);
+    assert!(!loaded.metadata.has_cluster_patches);
+    assert_eq!(loaded.metadata.cluster_count, None);
+    assert_eq!(loaded.metadata.cluster_member_count, None);
 
     // Verify images
     assert_eq!(loaded.image_names, data.image_names);
@@ -165,15 +262,22 @@ fn test_round_trip_no_tvg() {
     assert_eq!(loaded.feature_counts, data.feature_counts);
 
     // Verify pairs
-    assert_eq!(loaded.image_index_pairs, data.image_index_pairs);
-    assert_eq!(loaded.match_counts, data.match_counts);
-    assert_eq!(loaded.match_feature_indexes, data.match_feature_indexes);
+    let pairs = loaded.image_pairs.as_ref().unwrap();
+    let orig_pairs = data.image_pairs.as_ref().unwrap();
+    assert_eq!(pairs.image_index_pairs, orig_pairs.image_index_pairs);
+    assert_eq!(pairs.match_counts, orig_pairs.match_counts);
     assert_eq!(
-        loaded.match_descriptor_distances,
-        data.match_descriptor_distances
+        pairs.match_feature_indexes,
+        orig_pairs.match_feature_indexes
+    );
+    assert_eq!(
+        pairs.match_descriptor_distances,
+        orig_pairs.match_descriptor_distances
     );
 
-    // No TVG
+    // No clusters, no TVG
+    assert!(loaded.clusters.is_none());
+    assert!(loaded.cluster_patches.is_none());
     assert!(loaded.two_view_geometries.is_none());
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -182,11 +286,7 @@ fn test_round_trip_no_tvg() {
 #[test]
 fn test_round_trip_with_tvg() {
     let data = make_test_data_with_tvg();
-    let dir = std::env::temp_dir().join("matches_test_tvg_round_trip");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
-
-    write_matches(&path, &data, 3).unwrap();
+    let (dir, path) = write_to_temp("matches_test_tvg_round_trip", &data);
     let loaded = read_matches(&path).unwrap();
 
     assert!(loaded.metadata.has_two_view_geometries);
@@ -208,13 +308,71 @@ fn test_round_trip_with_tvg() {
 }
 
 #[test]
+fn test_round_trip_clusters_only() {
+    let data = make_cluster_test_data();
+    let (dir, path) = write_to_temp("matches_test_clusters_round_trip", &data);
+    let loaded = read_matches(&path).unwrap();
+
+    assert!(loaded.metadata.has_clusters);
+    assert!(!loaded.metadata.has_cluster_patches);
+    assert!(!loaded.metadata.has_two_view_geometries);
+    assert_eq!(loaded.metadata.cluster_count, Some(2));
+    assert_eq!(loaded.metadata.cluster_member_count, Some(5));
+    assert_eq!(loaded.metadata.image_pair_count, None);
+    assert_eq!(loaded.metadata.match_count, None);
+
+    assert!(loaded.image_pairs.is_none());
+    assert!(loaded.cluster_patches.is_none());
+    assert!(loaded.two_view_geometries.is_none());
+
+    let clusters = loaded.clusters.as_ref().unwrap();
+    let orig = data.clusters.as_ref().unwrap();
+    assert_eq!(clusters.cluster_starts, orig.cluster_starts);
+    assert_eq!(clusters.member_images, orig.member_images);
+    assert_eq!(clusters.member_features, orig.member_features);
+    assert_eq!(clusters.matcher_options, orig.matcher_options);
+
+    // Content hash: clusters digest present, pairs digest absent.
+    assert!(loaded.content_hash.clusters_xxh128.is_some());
+    assert!(loaded.content_hash.image_pairs_xxh128.is_none());
+    assert!(loaded.content_hash.cluster_patches_xxh128.is_none());
+
+    let (valid, errors) = verify_matches(&path).unwrap();
+    assert!(valid, "Verification failed: {errors:?}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_round_trip_clusters_with_patches() {
+    let data = make_cluster_patch_test_data();
+    let (dir, path) = write_to_temp("matches_test_cluster_patches_round_trip", &data);
+    let loaded = read_matches(&path).unwrap();
+
+    assert!(loaded.metadata.has_clusters);
+    assert!(loaded.metadata.has_cluster_patches);
+
+    let cp = loaded.cluster_patches.as_ref().unwrap();
+    let orig = data.cluster_patches.as_ref().unwrap();
+    assert_eq!(cp.reference_members, orig.reference_members);
+    assert_eq!(cp.member_status, orig.member_status);
+    assert_eq!(cp.member_affines, orig.member_affines);
+    assert_f32_bits_eq(&cp.member_zncc, &orig.member_zncc);
+    assert_f32_bits_eq(&cp.member_shift_px, &orig.member_shift_px);
+    assert_eq!(cp.refine_options, orig.refine_options);
+
+    assert!(loaded.content_hash.cluster_patches_xxh128.is_some());
+
+    let (valid, errors) = verify_matches(&path).unwrap();
+    assert!(valid, "Verification failed: {errors:?}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_verify_no_tvg() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("matches_test_verify");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
-
-    write_matches(&path, &data, 3).unwrap();
+    let (dir, path) = write_to_temp("matches_test_verify", &data);
 
     let (valid, errors) = verify_matches(&path).unwrap();
     assert!(valid, "Verification failed: {:?}", errors);
@@ -226,11 +384,7 @@ fn test_verify_no_tvg() {
 #[test]
 fn test_verify_with_tvg() {
     let data = make_test_data_with_tvg();
-    let dir = std::env::temp_dir().join("matches_test_verify_tvg");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
-
-    write_matches(&path, &data, 3).unwrap();
+    let (dir, path) = write_to_temp("matches_test_verify_tvg", &data);
 
     let (valid, errors) = verify_matches(&path).unwrap();
     assert!(valid, "Verification failed: {:?}", errors);
@@ -242,17 +396,14 @@ fn test_verify_with_tvg() {
 #[test]
 fn test_read_metadata_only() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("matches_test_metadata");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
-
-    write_matches(&path, &data, 3).unwrap();
+    let (dir, path) = write_to_temp("matches_test_metadata", &data);
 
     let metadata = read_matches_metadata(&path).unwrap();
     assert_eq!(metadata.matching_method, "sequential");
     assert_eq!(metadata.image_count, 3);
-    assert_eq!(metadata.match_count, 5);
+    assert_eq!(metadata.match_count, Some(5));
     assert!(!metadata.has_two_view_geometries);
+    assert!(!metadata.has_clusters);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -260,17 +411,15 @@ fn test_read_metadata_only() {
 #[test]
 fn test_content_hash_populated() {
     let data = make_test_data();
-    let dir = std::env::temp_dir().join("matches_test_hash");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
-
-    write_matches(&path, &data, 3).unwrap();
+    let (dir, path) = write_to_temp("matches_test_hash", &data);
     let loaded = read_matches(&path).unwrap();
 
     assert_eq!(loaded.content_hash.metadata_xxh128.len(), 32);
     assert_eq!(loaded.content_hash.images_xxh128.len(), 32);
-    assert_eq!(loaded.content_hash.image_pairs_xxh128.len(), 32);
+    assert_eq!(loaded.content_hash.image_pairs_xxh128.unwrap().len(), 32);
     assert_eq!(loaded.content_hash.content_xxh128.len(), 32);
+    assert!(loaded.content_hash.clusters_xxh128.is_none());
+    assert!(loaded.content_hash.cluster_patches_xxh128.is_none());
     assert!(loaded.content_hash.two_view_geometries_xxh128.is_none());
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -279,11 +428,7 @@ fn test_content_hash_populated() {
 #[test]
 fn test_content_hash_with_tvg() {
     let data = make_test_data_with_tvg();
-    let dir = std::env::temp_dir().join("matches_test_hash_tvg");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
-
-    write_matches(&path, &data, 3).unwrap();
+    let (dir, path) = write_to_temp("matches_test_hash_tvg", &data);
     let loaded = read_matches(&path).unwrap();
 
     assert!(loaded.content_hash.two_view_geometries_xxh128.is_some());
@@ -301,56 +446,26 @@ fn test_content_hash_with_tvg() {
 
 #[test]
 fn test_empty_matches() {
-    let data = MatchesData {
-        metadata: MatchesMetadata {
-            version: MATCHES_FORMAT_VERSION,
-            matching_method: "exhaustive".into(),
-            matching_tool: "colmap".into(),
-            matching_tool_version: "4.02".into(),
-            matching_options: HashMap::new(),
-            workspace: WorkspaceMetadata {
-                absolute_path: "/tmp/workspace".into(),
-                relative_path: "..".into(),
-                contents: WorkspaceContents {
-                    feature_tool: "colmap".into(),
-                    feature_type: "sift".into(),
-                    feature_options: serde_json::json!({}),
-                    feature_prefix_dir: String::new(),
-                },
-            },
-            timestamp: "2026-03-29T10:00:00Z".into(),
-            image_count: 0,
-            image_pair_count: 0,
-            match_count: 0,
-            has_two_view_geometries: false,
-        },
-        content_hash: MatchesContentHash {
-            metadata_xxh128: String::new(),
-            images_xxh128: String::new(),
-            image_pairs_xxh128: String::new(),
-            two_view_geometries_xxh128: None,
-            content_xxh128: String::new(),
-        },
-        image_names: vec![],
-        feature_tool_hashes: vec![],
-        sift_content_hashes: vec![],
-        feature_counts: Array1::from_vec(vec![]),
+    let mut data = make_test_data();
+    data.metadata.image_count = 0;
+    data.metadata.image_pair_count = Some(0);
+    data.metadata.match_count = Some(0);
+    data.image_names = vec![];
+    data.feature_tool_hashes = vec![];
+    data.sift_content_hashes = vec![];
+    data.feature_counts = Array1::from_vec(vec![]);
+    data.image_pairs = Some(PairsData {
         image_index_pairs: Array2::zeros((0, 2)),
         match_counts: Array1::from_vec(vec![]),
         match_feature_indexes: Array2::zeros((0, 2)),
         match_descriptor_distances: Array1::from_vec(vec![]),
-        two_view_geometries: None,
-    };
+    });
 
-    let dir = std::env::temp_dir().join("matches_test_empty");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
-
-    write_matches(&path, &data, 3).unwrap();
+    let (dir, path) = write_to_temp("matches_test_empty", &data);
     let loaded = read_matches(&path).unwrap();
 
     assert_eq!(loaded.metadata.image_count, 0);
-    assert_eq!(loaded.metadata.match_count, 0);
+    assert_eq!(loaded.metadata.match_count, Some(0));
     assert_eq!(loaded.image_names.len(), 0);
 
     let (valid, errors) = verify_matches(&path).unwrap();
@@ -359,75 +474,55 @@ fn test_empty_matches() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+fn expect_write_error(name: &str, data: &MatchesData, expected_fragment: &str) {
+    let dir = std::env::temp_dir().join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.matches");
+
+    let result = write_matches(&path, data, 3);
+    assert!(
+        result.is_err(),
+        "expected write to fail: {expected_fragment}"
+    );
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains(expected_fragment),
+        "Error should mention {expected_fragment:?}, got: {msg}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn test_write_validation_unsorted_pairs() {
     let mut data = make_test_data();
     // Swap pair order to make them unsorted
-    data.image_index_pairs = Array2::from_shape_vec(
+    data.image_pairs.as_mut().unwrap().image_index_pairs = Array2::from_shape_vec(
         (2, 2),
         vec![0, 2, 0, 1], // (0,2) before (0,1) — not sorted
     )
     .unwrap();
-
-    let dir = std::env::temp_dir().join("matches_test_unsorted");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
-
-    let result = write_matches(&path, &data, 3);
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
-    assert!(
-        msg.contains("not sorted"),
-        "Error should mention sorting, got: {msg}"
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
+    expect_write_error("matches_test_unsorted", &data, "not sorted");
 }
 
 #[test]
 fn test_write_validation_idx_i_not_less_than_idx_j() {
     let mut data = make_test_data();
     // Make idx_i == idx_j
-    data.image_index_pairs = Array2::from_shape_vec(
+    data.image_pairs.as_mut().unwrap().image_index_pairs = Array2::from_shape_vec(
         (2, 2),
         vec![0, 0, 0, 2], // (0,0) is invalid
     )
     .unwrap();
-
-    let dir = std::env::temp_dir().join("matches_test_bad_pair");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
-
-    let result = write_matches(&path, &data, 3);
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
-    assert!(
-        msg.contains("idx_i must be < idx_j"),
-        "Error should mention idx_i < idx_j, got: {msg}"
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
+    expect_write_error("matches_test_bad_pair", &data, "idx_i must be < idx_j");
 }
 
 #[test]
 fn test_write_validation_feature_index_out_of_bounds() {
     let mut data = make_test_data();
     // Set a feature index beyond feature_counts
-    data.match_feature_indexes[[0, 0]] = 999; // feature_counts[0] = 100
-
-    let dir = std::env::temp_dir().join("matches_test_oob_feat");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
-
-    let result = write_matches(&path, &data, 3);
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
-    assert!(
-        msg.contains("999") && msg.contains("feature_counts"),
-        "Error should mention feature index out of bounds, got: {msg}"
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
+    data.image_pairs.as_mut().unwrap().match_feature_indexes[[0, 0]] = 999; // feature_counts[0] = 100
+    expect_write_error("matches_test_oob_feat", &data, "feature_counts");
 }
 
 #[test]
@@ -436,20 +531,194 @@ fn test_write_validation_inlier_not_subset() {
     // Make an inlier that isn't in the candidate matches
     let tvg = data.two_view_geometries.as_mut().unwrap();
     tvg.inlier_feature_indexes[[0, 0]] = 99; // (99, 0) is not a candidate match
+    expect_write_error(
+        "matches_test_inlier_subset",
+        &data,
+        "not in candidate matches",
+    );
+}
 
-    let dir = std::env::temp_dir().join("matches_test_inlier_subset");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
+#[test]
+fn test_write_validation_both_backbones() {
+    let mut data = make_test_data();
+    data.clusters = make_cluster_test_data().clusters;
+    expect_write_error(
+        "matches_test_both_backbones",
+        &data,
+        "exactly one of image_pairs / clusters",
+    );
+}
 
-    let result = write_matches(&path, &data, 3);
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
-    assert!(
-        msg.contains("not in candidate matches"),
-        "Error should mention inlier subset constraint, got: {msg}"
+#[test]
+fn test_write_validation_neither_backbone() {
+    let mut data = make_test_data();
+    data.image_pairs = None;
+    expect_write_error(
+        "matches_test_neither_backbone",
+        &data,
+        "exactly one of image_pairs / clusters",
+    );
+}
+
+#[test]
+fn test_write_validation_cluster_patches_require_clusters() {
+    let mut data = make_test_data();
+    data.cluster_patches = make_cluster_patch_test_data().cluster_patches;
+    expect_write_error(
+        "matches_test_cp_requires_clusters",
+        &data,
+        "cluster_patches requires the clusters section",
+    );
+}
+
+#[test]
+fn test_write_validation_tvg_requires_pairs() {
+    let mut data = make_cluster_test_data();
+    data.two_view_geometries = make_test_data_with_tvg().two_view_geometries;
+    expect_write_error(
+        "matches_test_tvg_requires_pairs",
+        &data,
+        "two_view_geometries requires the image_pairs section",
+    );
+}
+
+#[test]
+fn test_write_validation_flag_mismatch() {
+    let mut data = make_cluster_test_data();
+    data.metadata.has_clusters = false;
+    expect_write_error("matches_test_flag_mismatch", &data, "metadata.has_clusters");
+}
+
+#[test]
+fn test_write_validation_cluster_file_with_pair_counts() {
+    let mut data = make_cluster_test_data();
+    data.metadata.image_pair_count = Some(2);
+    data.metadata.match_count = Some(5);
+    expect_write_error(
+        "matches_test_cluster_pair_counts",
+        &data,
+        "must not set metadata.image_pair_count",
+    );
+}
+
+#[test]
+fn test_write_validation_bad_csr() {
+    // starts[0] != 0
+    let mut data = make_cluster_test_data();
+    data.clusters.as_mut().unwrap().cluster_starts = Array1::from_vec(vec![1, 3, 5]);
+    expect_write_error("matches_test_csr_start", &data, "cluster_starts[0]");
+
+    // decreasing
+    let mut data = make_cluster_test_data();
+    data.clusters.as_mut().unwrap().cluster_starts = Array1::from_vec(vec![0, 4, 3]);
+    // A 4→3 step is decreasing, but cluster 0 spanning 0..4 then 4..3 first
+    // trips the non-decreasing check.
+    expect_write_error("matches_test_csr_decreasing", &data, "non-decreasing");
+
+    // final value != member count
+    let mut data = make_cluster_test_data();
+    data.clusters.as_mut().unwrap().cluster_starts = Array1::from_vec(vec![0, 2, 4]);
+    expect_write_error(
+        "matches_test_csr_final",
+        &data,
+        "cluster_starts final value 4 != member count 5",
     );
 
-    let _ = std::fs::remove_dir_all(&dir);
+    // cluster with a single member
+    let mut data = make_cluster_test_data();
+    data.clusters.as_mut().unwrap().cluster_starts = Array1::from_vec(vec![0, 1, 5]);
+    expect_write_error("matches_test_csr_singleton", &data, ">= 2");
+}
+
+#[test]
+fn test_write_validation_member_feature_out_of_bounds() {
+    let mut data = make_cluster_test_data();
+    data.clusters.as_mut().unwrap().member_features[1] = 150; // feature_counts[1] = 150
+    expect_write_error(
+        "matches_test_member_feat_oob",
+        &data,
+        "member_features[1] = 150 >= feature_counts[1]",
+    );
+}
+
+#[test]
+fn test_write_validation_member_image_out_of_bounds() {
+    let mut data = make_cluster_test_data();
+    data.clusters.as_mut().unwrap().member_images[0] = 3; // image_count = 3
+    expect_write_error(
+        "matches_test_member_img_oob",
+        &data,
+        "member_images[0] = 3 >= image_count",
+    );
+}
+
+#[test]
+fn test_write_validation_cluster_patches_wrong_lengths() {
+    let mut data = make_cluster_patch_test_data();
+    data.cluster_patches.as_mut().unwrap().reference_members = Array1::from_vec(vec![0]);
+    expect_write_error(
+        "matches_test_cp_wrong_len",
+        &data,
+        "reference_members len 1 != cluster_count 2",
+    );
+
+    let mut data = make_cluster_patch_test_data();
+    data.cluster_patches.as_mut().unwrap().member_zncc = Array1::from_vec(vec![1.0, 0.9, 0.4, 0.0]);
+    expect_write_error(
+        "matches_test_cp_wrong_zncc_len",
+        &data,
+        "member_zncc len 4 != cluster_member_count 5",
+    );
+}
+
+#[test]
+fn test_write_validation_invalid_status() {
+    let mut data = make_cluster_patch_test_data();
+    data.cluster_patches.as_mut().unwrap().member_status[2] = 6;
+    expect_write_error(
+        "matches_test_cp_bad_status",
+        &data,
+        "not a valid ClusterMemberStatus",
+    );
+}
+
+#[test]
+fn test_write_validation_reference_outside_cluster() {
+    let mut data = make_cluster_patch_test_data();
+    // Cluster 0 owns members [0, 3); member 4 is in cluster 1.
+    data.cluster_patches.as_mut().unwrap().reference_members[0] = 4;
+    expect_write_error(
+        "matches_test_cp_ref_range",
+        &data,
+        "outside cluster member range",
+    );
+}
+
+#[test]
+fn test_write_validation_reference_wrong_status() {
+    let mut data = make_cluster_patch_test_data();
+    // Member 1 is Kept, not Reference.
+    data.cluster_patches.as_mut().unwrap().reference_members[0] = 1;
+    expect_write_error(
+        "matches_test_cp_ref_status",
+        &data,
+        "expected 0 (reference)",
+    );
+}
+
+#[test]
+fn test_write_validation_two_kept_members_one_image() {
+    let mut data = make_cluster_patch_test_data();
+    // Cluster 1 = members 3, 4; put both in image 0 and mark both kept.
+    data.clusters.as_mut().unwrap().member_images[4] = 0;
+    let cp = data.cluster_patches.as_mut().unwrap();
+    cp.member_status[3] = ClusterMemberStatus::Kept as u8;
+    cp.member_status[4] = ClusterMemberStatus::Kept as u8;
+    expect_write_error(
+        "matches_test_cp_dup_kept",
+        &data,
+        "both reference/kept for image 0",
+    );
 }
 
 #[test]
@@ -494,91 +763,375 @@ fn test_invalid_config_string() {
     assert!(result.is_err());
 }
 
-/// Copy a written `.matches` archive, rewriting `metadata.json.zst` so its
-/// `version` field reads `version`, and recomputing the stored hashes so the
-/// result is an internally consistent file of that version — for authoring
-/// old- or future-version fixture bytes.
-fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version: u32) {
-    use std::io::{Read, Write};
-
-    use crate::archive_io::format_hash;
-
-    let archive_file = std::fs::File::open(src).unwrap();
-    let mut archive = zip::ZipArchive::new(archive_file).unwrap();
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
-
-    // Author the new metadata JSON and its hash (hashes cover the
-    // uncompressed JSON bytes).
-    let mut meta_compressed = Vec::new();
-    archive
-        .by_name("metadata.json.zst")
-        .unwrap()
-        .read_to_end(&mut meta_compressed)
-        .unwrap();
-    let mut meta_json: serde_json::Value =
-        serde_json::from_slice(&zstd::stream::decode_all(&meta_compressed[..]).unwrap()).unwrap();
-    meta_json
-        .as_object_mut()
-        .unwrap()
-        .insert("version".into(), serde_json::json!(version));
-    let meta_bytes = serde_json::to_vec(&meta_json).unwrap();
-    let meta_hash = xxhash_rust::xxh3::xxh3_128(&meta_bytes);
-
-    // Rebuild the content hash from the stored per-section digests with the
-    // metadata digest replaced (writer order: metadata, images, pairs, tvg).
-    let mut hash_compressed = Vec::new();
-    archive
-        .by_name("content_hash.json.zst")
-        .unwrap()
-        .read_to_end(&mut hash_compressed)
-        .unwrap();
-    let mut stored_hashes: MatchesContentHash =
-        serde_json::from_slice(&zstd::stream::decode_all(&hash_compressed[..]).unwrap()).unwrap();
-    let parse = |hex: &str| u128::from_str_radix(hex, 16).unwrap();
-    let mut digests = vec![meta_hash, parse(&stored_hashes.images_xxh128)];
-    digests.push(parse(&stored_hashes.image_pairs_xxh128));
-    if let Some(tvg) = &stored_hashes.two_view_geometries_xxh128 {
-        digests.push(parse(tvg));
+#[test]
+fn test_cluster_member_status_round_trip() {
+    for value in 0u8..=5 {
+        let status = ClusterMemberStatus::from_u8(value).unwrap();
+        assert_eq!(status as u8, value);
     }
+    assert!(ClusterMemberStatus::from_u8(6).is_none());
+    assert!(ClusterMemberStatus::from_u8(255).is_none());
+}
+
+// ── Archive-crafting helpers for verify-side rejection tests ───────────────
+
+/// Read every entry of a `.matches` archive as (name, decompressed bytes),
+/// excluding `content_hash.json.zst` (rebuilt by [`rebuild_matches_archive`]).
+fn load_archive_entries(src: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(src).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let names: Vec<String> = archive.file_names().map(String::from).collect();
+    let mut entries = Vec::new();
+    for name in names {
+        if name == "content_hash.json.zst" {
+            continue;
+        }
+        let mut compressed = Vec::new();
+        archive
+            .by_name(&name)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        let bytes = zstd::stream::decode_all(&compressed[..]).unwrap();
+        entries.push((name, bytes));
+    }
+    entries
+}
+
+/// Mutate the decompressed bytes of the named entry in place.
+fn mutate_entry(entries: &mut [(String, Vec<u8>)], name: &str, f: impl FnOnce(&mut Vec<u8>)) {
+    let entry = entries
+        .iter_mut()
+        .find(|(n, _)| n == name)
+        .unwrap_or_else(|| panic!("entry {name} not found"));
+    f(&mut entry.1);
+}
+
+/// Mutate the top-level metadata JSON in place.
+fn mutate_metadata(entries: &mut [(String, Vec<u8>)], f: impl FnOnce(&mut serde_json::Value)) {
+    mutate_entry(entries, "metadata.json.zst", |bytes| {
+        let mut json: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        f(&mut json);
+        *bytes = serde_json::to_vec(&json).unwrap();
+    });
+}
+
+/// Overwrite the u32 at `index` in a little-endian uint32 entry.
+fn set_u32(bytes: &mut [u8], index: usize, value: u32) {
+    bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+/// Write entries to a `.matches` archive with a freshly recomputed
+/// `content_hash.json.zst`, so the result is internally consistent except
+/// for whatever the caller mutated. Section membership follows the metadata
+/// flags (mirroring the writer/verifier), so hash checks stay green and the
+/// structural error under test is the one that fires.
+fn rebuild_matches_archive(entries: &[(String, Vec<u8>)], dst: &std::path::Path) {
+    use crate::archive_io::format_hash;
+    use std::io::Write;
+    use xxhash_rust::xxh3::Xxh3;
+
+    let metadata_bytes = &entries
+        .iter()
+        .find(|(n, _)| n == "metadata.json.zst")
+        .unwrap()
+        .1;
+    let metadata: MatchesMetadata = serde_json::from_slice(metadata_bytes).unwrap();
+
+    let section_digest = |prefix: &str| -> Option<u128> {
+        let mut names: Vec<&(String, Vec<u8>)> = entries
+            .iter()
+            .filter(|(n, _)| n.starts_with(prefix))
+            .collect();
+        if names.is_empty() {
+            return None;
+        }
+        names.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut hasher = Xxh3::new();
+        for (_, bytes) in names {
+            hasher.update(bytes);
+        }
+        Some(hasher.digest128())
+    };
+
+    let metadata_hash = xxhash_rust::xxh3::xxh3_128(metadata_bytes);
+    let images_hash = section_digest("images/").unwrap();
+    let pairs_hash = if metadata.has_clusters {
+        None
+    } else {
+        section_digest("image_pairs/")
+    };
+    let clusters_hash = if metadata.has_clusters {
+        section_digest("clusters/")
+    } else {
+        None
+    };
+    let cp_hash = if metadata.has_cluster_patches {
+        section_digest("cluster_patches/")
+    } else {
+        None
+    };
+    let tvg_hash = if metadata.has_two_view_geometries {
+        section_digest("two_view_geometries/")
+    } else {
+        None
+    };
+
+    let mut digests = vec![metadata_hash, images_hash];
+    digests.extend(pairs_hash);
+    digests.extend(clusters_hash);
+    digests.extend(cp_hash);
+    digests.extend(tvg_hash);
     let all_digests_bytes: Vec<u8> = digests.iter().flat_map(|d| d.to_be_bytes()).collect();
-    stored_hashes.metadata_xxh128 = format_hash(meta_hash);
-    stored_hashes.content_xxh128 = format_hash(xxhash_rust::xxh3::xxh3_128(&all_digests_bytes));
+
+    let content_hash = MatchesContentHash {
+        metadata_xxh128: format_hash(metadata_hash),
+        images_xxh128: format_hash(images_hash),
+        image_pairs_xxh128: pairs_hash.map(format_hash),
+        clusters_xxh128: clusters_hash.map(format_hash),
+        cluster_patches_xxh128: cp_hash.map(format_hash),
+        two_view_geometries_xxh128: tvg_hash.map(format_hash),
+        content_xxh128: format_hash(xxhash_rust::xxh3::xxh3_128(&all_digests_bytes)),
+    };
 
     let out = std::fs::File::create(dst).unwrap();
     let mut zip_out = zip::ZipWriter::new(out);
     let stored =
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for name in &names {
-        let mut compressed = Vec::new();
-        archive
-            .by_name(name)
-            .unwrap()
-            .read_to_end(&mut compressed)
-            .unwrap();
+    for (name, bytes) in entries {
         zip_out.start_file(name, stored).unwrap();
-        if name == "metadata.json.zst" {
-            let bytes = zstd::bulk::compress(&meta_bytes, 3).unwrap();
-            zip_out.write_all(&bytes).unwrap();
-        } else if name == "content_hash.json.zst" {
-            let bytes =
-                zstd::bulk::compress(&serde_json::to_vec(&stored_hashes).unwrap(), 3).unwrap();
-            zip_out.write_all(&bytes).unwrap();
-        } else {
-            zip_out.write_all(&compressed).unwrap();
-        }
+        zip_out
+            .write_all(&zstd::bulk::compress(bytes, 3).unwrap())
+            .unwrap();
     }
+    zip_out.start_file("content_hash.json.zst", stored).unwrap();
+    zip_out
+        .write_all(&zstd::bulk::compress(&serde_json::to_vec(&content_hash).unwrap(), 3).unwrap())
+        .unwrap();
     zip_out.finish().unwrap();
+}
+
+/// Copy a written `.matches` archive, rewriting `metadata.json.zst` so its
+/// `version` field reads `version` (and dropping the version-3 metadata
+/// fields for `version <= 2`, matching what old writers produced), then
+/// recomputing the stored hashes so the result is an internally consistent
+/// file of that version — for authoring old- or future-version fixture bytes.
+fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version: u32) {
+    let mut entries = load_archive_entries(src);
+    mutate_metadata(&mut entries, |json| {
+        let obj = json.as_object_mut().unwrap();
+        obj.insert("version".into(), serde_json::json!(version));
+        if version <= 2 {
+            obj.remove("has_clusters");
+            obj.remove("has_cluster_patches");
+            obj.remove("cluster_count");
+            obj.remove("cluster_member_count");
+        }
+    });
+    rebuild_matches_archive(&entries, dst);
+}
+
+/// Craft an invalid cluster-bearing file from a valid one and assert that
+/// `verify_matches` reports the expected error (with `read+write` untested —
+/// these bytes can't be produced through `write_matches`).
+fn expect_verify_error(
+    name: &str,
+    data: &MatchesData,
+    mutate: impl FnOnce(&mut Vec<(String, Vec<u8>)>),
+    expected_fragment: &str,
+) {
+    let dir = std::env::temp_dir().join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("valid.matches");
+    let dst = dir.join("invalid.matches");
+    write_matches(&src, data, 3).unwrap();
+
+    let mut entries = load_archive_entries(&src);
+    mutate(&mut entries);
+    rebuild_matches_archive(&entries, &dst);
+
+    let (valid, errors) = verify_matches(&dst).unwrap();
+    assert!(!valid, "expected verification failure: {expected_fragment}");
+    assert!(
+        errors.iter().any(|e| e.contains(expected_fragment)),
+        "Expected an error containing {expected_fragment:?}, got: {errors:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_verify_rejects_both_backbones() {
+    // A cluster-bearing file that also contains image_pairs/ entries.
+    let dir = std::env::temp_dir().join("matches_test_verify_both_backbones");
+    std::fs::create_dir_all(&dir).unwrap();
+    let pairwise_path = dir.join("pairwise.matches");
+    write_matches(&pairwise_path, &make_test_data(), 3).unwrap();
+    let pair_entries: Vec<(String, Vec<u8>)> = load_archive_entries(&pairwise_path)
+        .into_iter()
+        .filter(|(n, _)| n.starts_with("image_pairs/"))
+        .collect();
+
+    expect_verify_error(
+        "matches_test_verify_both_backbones",
+        &make_cluster_test_data(),
+        move |entries| entries.extend(pair_entries),
+        "contains image_pairs/ entries",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_verify_rejects_neither_backbone() {
+    // A cluster file whose metadata claims the pairwise backbone: no
+    // image_pairs/ section exists, and the clusters/ entries are orphaned.
+    expect_verify_error(
+        "matches_test_verify_neither_backbone",
+        &make_cluster_test_data(),
+        |entries| {
+            mutate_metadata(entries, |json| {
+                let obj = json.as_object_mut().unwrap();
+                obj.insert("has_clusters".into(), serde_json::json!(false));
+            })
+        },
+        "no backbone",
+    );
+}
+
+#[test]
+fn test_verify_rejects_bad_csr() {
+    expect_verify_error(
+        "matches_test_verify_bad_csr",
+        &make_cluster_test_data(),
+        |entries| {
+            mutate_entry(entries, "clusters/cluster_starts.3.uint32.zst", |bytes| {
+                set_u32(bytes, 0, 1); // cluster_starts[0] != 0
+            })
+        },
+        "cluster_starts[0] = 1 != 0",
+    );
+
+    expect_verify_error(
+        "matches_test_verify_csr_final",
+        &make_cluster_test_data(),
+        |entries| {
+            mutate_entry(entries, "clusters/cluster_starts.3.uint32.zst", |bytes| {
+                set_u32(bytes, 1, 2); // clusters keep >= 2 members ...
+                set_u32(bytes, 2, 4); // ... but the final value != member count 5
+            })
+        },
+        "cluster_starts final value 4 != member count 5",
+    );
+}
+
+#[test]
+fn test_verify_rejects_member_feature_out_of_range() {
+    expect_verify_error(
+        "matches_test_verify_member_feat_oob",
+        &make_cluster_test_data(),
+        |entries| {
+            mutate_entry(entries, "clusters/member_features.5.uint32.zst", |bytes| {
+                set_u32(bytes, 1, 150); // feature_counts[1] = 150
+            })
+        },
+        "member_features[1] = 150 >= feature_counts[1]",
+    );
+}
+
+#[test]
+fn test_verify_rejects_cluster_patches_without_clusters() {
+    expect_verify_error(
+        "matches_test_verify_cp_no_clusters",
+        &make_test_data(),
+        |entries| {
+            mutate_metadata(entries, |json| {
+                let obj = json.as_object_mut().unwrap();
+                obj.insert("has_cluster_patches".into(), serde_json::json!(true));
+            })
+        },
+        "has_cluster_patches requires has_clusters",
+    );
+}
+
+#[test]
+fn test_verify_rejects_wrong_array_lengths() {
+    expect_verify_error(
+        "matches_test_verify_cp_wrong_len",
+        &make_cluster_patch_test_data(),
+        |entries| {
+            mutate_entry(
+                entries,
+                "cluster_patches/member_zncc.5.float32.zst",
+                |bytes| bytes.truncate(4 * 4), // 4 values instead of 5
+            )
+        },
+        "member_zncc byte length 16 != expected 20",
+    );
+}
+
+#[test]
+fn test_verify_rejects_invalid_status() {
+    expect_verify_error(
+        "matches_test_verify_bad_status",
+        &make_cluster_patch_test_data(),
+        |entries| {
+            mutate_entry(
+                entries,
+                "cluster_patches/member_status.5.uint8.zst",
+                |bytes| bytes[3] = 7,
+            )
+        },
+        "not a valid ClusterMemberStatus",
+    );
+}
+
+#[test]
+fn test_verify_rejects_reference_outside_cluster() {
+    expect_verify_error(
+        "matches_test_verify_ref_range",
+        &make_cluster_patch_test_data(),
+        |entries| {
+            mutate_entry(
+                entries,
+                "cluster_patches/reference_members.2.uint32.zst",
+                |bytes| set_u32(bytes, 0, 4), // cluster 0 range is [0, 3)
+            )
+        },
+        "outside cluster member range",
+    );
+}
+
+#[test]
+fn test_verify_rejects_two_kept_members_one_image() {
+    expect_verify_error(
+        "matches_test_verify_dup_kept",
+        &make_cluster_patch_test_data(),
+        |entries| {
+            // Put cluster 1's two members in the same image and keep both.
+            mutate_entry(entries, "clusters/member_images.5.uint32.zst", |bytes| {
+                set_u32(bytes, 4, 0); // member 3 is already in image 0
+            });
+            mutate_entry(
+                entries,
+                "cluster_patches/member_status.5.uint8.zst",
+                |bytes| {
+                    bytes[3] = ClusterMemberStatus::Kept as u8;
+                    bytes[4] = ClusterMemberStatus::Kept as u8;
+                },
+            );
+        },
+        "both reference/kept for image 0",
+    );
 }
 
 #[test]
 fn test_writer_always_writes_current_version() {
     let mut data = make_test_data();
     data.metadata.version = 1; // stale caller-supplied version is overridden
-    let dir = std::env::temp_dir().join("matches_test_write_version");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
+    let (dir, path) = write_to_temp("matches_test_write_version", &data);
 
-    write_matches(&path, &data, 3).unwrap();
     let metadata = read_matches_metadata(&path).unwrap();
     assert_eq!(metadata.version, MATCHES_FORMAT_VERSION);
 
@@ -590,11 +1143,11 @@ fn test_version_1_relative_poses_upgrade_on_load() {
     let data = make_test_data_with_tvg();
     let dir = std::env::temp_dir().join("matches_test_v1_upgrade");
     std::fs::create_dir_all(&dir).unwrap();
-    let v2_path = dir.join("v2.matches");
+    let current_path = dir.join("current.matches");
     let v1_path = dir.join("v1.matches");
 
-    write_matches(&v2_path, &data, 3).unwrap();
-    rewrite_matches_version(&v2_path, &v1_path, 1);
+    write_matches(&current_path, &data, 3).unwrap();
+    rewrite_matches_version(&current_path, &v1_path, 1);
     assert_eq!(read_matches_metadata(&v1_path).unwrap().version, 1);
 
     // Hashes cover the stored bytes: the v1 file verifies as written,
@@ -627,6 +1180,63 @@ fn test_version_1_relative_poses_upgrade_on_load() {
 }
 
 #[test]
+fn test_version_2_loads_without_pose_conjugation() {
+    let data = make_test_data_with_tvg();
+    let dir = std::env::temp_dir().join("matches_test_v2_load");
+    std::fs::create_dir_all(&dir).unwrap();
+    let current_path = dir.join("current.matches");
+    let v2_path = dir.join("v2.matches");
+
+    write_matches(&current_path, &data, 3).unwrap();
+    rewrite_matches_version(&current_path, &v2_path, 2);
+    assert_eq!(read_matches_metadata(&v2_path).unwrap().version, 2);
+
+    let (valid, errors) = verify_matches(&v2_path).unwrap();
+    assert!(valid, "v2 fixture failed verification: {errors:?}");
+
+    // Version 2 poses are already canonical: loaded unchanged, and the
+    // in-memory version upgrades to current.
+    let loaded = read_matches(&v2_path).unwrap();
+    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
+    let tvg = loaded.two_view_geometries.as_ref().unwrap();
+    let orig = data.two_view_geometries.as_ref().unwrap();
+    assert_eq!(tvg.quaternions_wxyz, orig.quaternions_wxyz);
+    assert_eq!(tvg.translations_xyz, orig.translations_xyz);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_version_2_with_clusters_rejected() {
+    // A version <= 2 file can never carry the cluster backbone.
+    let data = make_cluster_test_data();
+    let dir = std::env::temp_dir().join("matches_test_v2_clusters");
+    std::fs::create_dir_all(&dir).unwrap();
+    let current_path = dir.join("current.matches");
+    let v2_path = dir.join("v2.matches");
+
+    write_matches(&current_path, &data, 3).unwrap();
+    let mut entries = load_archive_entries(&current_path);
+    mutate_metadata(&mut entries, |json| {
+        json.as_object_mut()
+            .unwrap()
+            .insert("version".into(), serde_json::json!(2));
+    });
+    rebuild_matches_archive(&entries, &v2_path);
+
+    let expected = "claims clusters/cluster_patches (introduced in version 3)";
+    let err = read_matches(&v2_path).err().unwrap();
+    assert!(format!("{err}").contains(expected), "{err}");
+    let (valid, errors) = verify_matches(&v2_path).unwrap();
+    assert!(
+        !valid && errors.iter().any(|e| e.contains(expected)),
+        "{errors:?}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_unsupported_future_version_rejected() {
     let data = make_test_data();
     let dir = std::env::temp_dir().join("matches_test_future_version");
@@ -636,7 +1246,13 @@ fn test_unsupported_future_version_rejected() {
 
     write_matches(&src, &data, 3).unwrap();
     let future_version = MATCHES_FORMAT_VERSION + 1;
-    rewrite_matches_version(&src, &dst, future_version);
+    let mut entries = load_archive_entries(&src);
+    mutate_metadata(&mut entries, |json| {
+        json.as_object_mut()
+            .unwrap()
+            .insert("version".into(), serde_json::json!(future_version));
+    });
+    rebuild_matches_archive(&entries, &dst);
 
     let expected = format!("unsupported .matches format version {future_version}");
     let err = read_matches(&dst).err().unwrap();
@@ -656,15 +1272,32 @@ fn test_unsupported_future_version_rejected() {
 #[test]
 fn test_archive_uses_stored_compression() {
     let data = make_test_data_with_tvg();
-    let dir = std::env::temp_dir().join("matches_test_stored_compression");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("test.matches");
-
-    write_matches(&path, &data, 3).unwrap();
+    let (dir, path) = write_to_temp("matches_test_stored_compression", &data);
 
     let file = std::fs::File::open(&path).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
     assert!(!archive.is_empty(), "expected a populated archive");
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).unwrap();
+        assert_eq!(
+            entry.compression(),
+            zip::CompressionMethod::Stored,
+            "entry '{}' uses {:?}, expected Stored",
+            entry.name(),
+            entry.compression(),
+        );
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_cluster_archive_uses_stored_compression() {
+    let data = make_cluster_patch_test_data();
+    let (dir, path) = write_to_temp("matches_test_cluster_stored_compression", &data);
+
+    let file = std::fs::File::open(&path).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
     for i in 0..archive.len() {
         let entry = archive.by_index(i).unwrap();
         assert_eq!(

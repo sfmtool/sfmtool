@@ -588,7 +588,14 @@ pub fn write_colmap_db_matches(
     let conn = Connection::open(db_path)?;
     let tx = conn.unchecked_transaction()?;
 
-    let pair_count = matches_data.metadata.image_pair_count as usize;
+    let pairs = matches_data.image_pairs.as_ref().ok_or_else(|| {
+        ColmapDbError::InvalidData(
+            "matches data has no image_pairs section (cluster-bearing files must be expanded \
+             to pairs before COLMAP export)"
+                .into(),
+        )
+    })?;
+    let pair_count = pairs.image_index_pairs.nrows();
 
     // Write matches table
     {
@@ -597,8 +604,8 @@ pub fn write_colmap_db_matches(
 
         let mut match_offset: usize = 0;
         for k in 0..pair_count {
-            let idx_i = matches_data.image_index_pairs[[k, 0]] as usize;
-            let idx_j = matches_data.image_index_pairs[[k, 1]] as usize;
+            let idx_i = pairs.image_index_pairs[[k, 0]] as usize;
+            let idx_j = pairs.image_index_pairs[[k, 1]] as usize;
 
             if idx_i >= id_map.index_to_db_id.len() || idx_j >= id_map.index_to_db_id.len() {
                 return Err(ColmapDbError::InvalidData(format!(
@@ -611,13 +618,13 @@ pub fn write_colmap_db_matches(
             let db_id_j = id_map.index_to_db_id[idx_j];
             let pair_id = compute_pair_id(db_id_i, db_id_j)?;
 
-            let count = matches_data.match_counts[k] as usize;
+            let count = pairs.match_counts[k] as usize;
 
             // Build u32 LE blob for match feature indexes
             let mut blob = Vec::with_capacity(count * 2 * 4);
             for m in match_offset..match_offset + count {
-                blob.extend_from_slice(&matches_data.match_feature_indexes[[m, 0]].to_le_bytes());
-                blob.extend_from_slice(&matches_data.match_feature_indexes[[m, 1]].to_le_bytes());
+                blob.extend_from_slice(&pairs.match_feature_indexes[[m, 0]].to_le_bytes());
+                blob.extend_from_slice(&pairs.match_feature_indexes[[m, 1]].to_le_bytes());
             }
 
             stmt.execute(rusqlite::params![pair_id, count as i32, 2i32, blob])?;
@@ -634,8 +641,8 @@ pub fn write_colmap_db_matches(
 
         let mut inlier_offset: usize = 0;
         for k in 0..pair_count {
-            let idx_i = matches_data.image_index_pairs[[k, 0]] as usize;
-            let idx_j = matches_data.image_index_pairs[[k, 1]] as usize;
+            let idx_i = pairs.image_index_pairs[[k, 0]] as usize;
+            let idx_j = pairs.image_index_pairs[[k, 1]] as usize;
             let db_id_i = id_map.index_to_db_id[idx_i];
             let db_id_j = id_map.index_to_db_id[idx_j];
             let pair_id = compute_pair_id(db_id_i, db_id_j)?;

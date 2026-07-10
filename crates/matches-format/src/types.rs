@@ -78,6 +78,12 @@ pub struct WorkspaceMetadata {
 /// Current `.matches` format version. [`crate::write_matches`] always writes
 /// this version; [`crate::read_matches`] accepts any version up to it.
 ///
+/// Version 3 introduced the cluster backbone: a file stores exactly one of
+/// the `image_pairs/` or `clusters/` sections as its correspondence backbone,
+/// plus the optional `cluster_patches/` enrichment (requires `clusters/`).
+/// Version ≤ 2 files always store the pairwise backbone and never have
+/// clusters, so they load unchanged.
+///
 /// Version 2 made the canonical camera convention normative for the stored
 /// two-view relative poses (`cam2_from_cam1` with cameras looking down −Z,
 /// +Y up — see `specs/formats/matches-file-format.md` § "Coordinate
@@ -85,7 +91,7 @@ pub struct WorkspaceMetadata {
 /// or renamed. Version 1 files hold COLMAP-convention relative poses and are
 /// upgraded on load by S-conjugation ([`s_conjugate_relative_pose`]); the
 /// pixel-space F/E/H matrices are identical in both versions.
-pub const MATCHES_FORMAT_VERSION: u32 = 2;
+pub const MATCHES_FORMAT_VERSION: u32 = 3;
 
 /// Conjugate a relative camera pose (`cam2_from_cam1`) with the camera-frame
 /// flip `S = diag(1, −1, −1)`: `R' = S·R·S`, `t' = S·t`.
@@ -130,12 +136,35 @@ pub struct MatchesMetadata {
     pub timestamp: String,
     /// Number of images referenced.
     pub image_count: u32,
-    /// Number of image pairs with matches.
-    pub image_pair_count: u32,
-    /// Total number of matches across all pairs.
-    pub match_count: u32,
-    /// Whether the optional two-view geometries section is present.
+    /// Number of image pairs with matches. Present exactly when the file
+    /// stores the pairwise backbone (`image_pairs/`); cluster-bearing files
+    /// carry `cluster_count` / `cluster_member_count` instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_pair_count: Option<u32>,
+    /// Total number of matches across all pairs. Present exactly when the
+    /// file stores the pairwise backbone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_count: Option<u32>,
+    /// Number of clusters. Present exactly when the file stores the cluster
+    /// backbone (`clusters/`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster_count: Option<u32>,
+    /// Total number of cluster members. Present exactly when the file stores
+    /// the cluster backbone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster_member_count: Option<u32>,
+    /// Whether the optional two-view geometries section is present (pairwise
+    /// backbone only).
     pub has_two_view_geometries: bool,
+    /// Whether the file stores the cluster backbone (`clusters/`) instead of
+    /// the pairwise backbone (`image_pairs/`). Absent in version ≤ 2 files
+    /// (always pairwise), hence the serde default.
+    #[serde(default)]
+    pub has_clusters: bool,
+    /// Whether the optional `cluster_patches/` enrichment section is present
+    /// (requires `has_clusters`).
+    #[serde(default)]
+    pub has_cluster_patches: bool,
 }
 
 /// Content integrity hashes from `content_hash.json.zst`.
@@ -145,7 +174,14 @@ pub struct MatchesMetadata {
 pub struct MatchesContentHash {
     pub metadata_xxh128: String,
     pub images_xxh128: String,
-    pub image_pairs_xxh128: String,
+    /// Present exactly when the file stores the pairwise backbone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_pairs_xxh128: Option<String>,
+    /// Present exactly when the file stores the cluster backbone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clusters_xxh128: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster_patches_xxh128: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub two_view_geometries_xxh128: Option<String>,
     pub content_xxh128: String,
@@ -275,10 +311,104 @@ impl TwoViewGeometryData {
     }
 }
 
+/// The pairwise correspondence backbone (`image_pairs/` section).
+pub struct PairsData {
+    /// `(P, 2)` image index pairs, `idx_i < idx_j`, sorted lexicographically.
+    pub image_index_pairs: Array2<u32>,
+    /// `(P,)` number of matches per pair. `sum == match_count`.
+    pub match_counts: Array1<u32>,
+    /// `(M, 2)` feature index pairs, flat concatenation across all image pairs.
+    pub match_feature_indexes: Array2<u32>,
+    /// `(M,)` L2 descriptor distance per match.
+    pub match_descriptor_distances: Array1<f32>,
+}
+
+/// The cluster correspondence backbone (`clusters/` section): groups of SIFT
+/// features across images that are likely co-observations of one surface
+/// point, in CSR layout. Cluster `c` owns members
+/// `cluster_starts[c]..cluster_starts[c+1]`.
+pub struct ClustersData {
+    /// `(C+1,)` CSR offsets into the member arrays. `cluster_starts[0] == 0`,
+    /// non-decreasing, final value equals the member count `M`.
+    pub cluster_starts: Array1<u32>,
+    /// `(M,)` index into `images/names.json.zst` per member.
+    pub member_images: Array1<u32>,
+    /// `(M,)` feature index in that image's `.sift` file per member.
+    pub member_features: Array1<u32>,
+    /// Matcher options recorded in `clusters/metadata.json.zst`
+    /// (e.g. `d`, `alpha`, `min_size`, `preset`).
+    pub matcher_options: serde_json::Value,
+}
+
+/// Sentinel in `ClusterPatchData::reference_members` for a cluster that
+/// could not be refined (no usable reference member).
+pub const CLUSTER_REFERENCE_UNREFINABLE: u32 = u32::MAX;
+
+/// Per-member status in the `cluster_patches/` section
+/// (`member_status` discriminants).
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClusterMemberStatus {
+    /// The cluster's reference member (identity affine, ZNCC 1.0).
+    Reference = 0,
+    /// Refined and vetted successfully.
+    Kept = 1,
+    /// Rejected: achieved ZNCC below the acceptance threshold.
+    RejectedLowZncc = 2,
+    /// Rejected: translation drifted too far from the SIFT seed.
+    RejectedShift = 3,
+    /// Outscored by another kept member in the same image, or shares the
+    /// reference's image.
+    DuplicateImage = 4,
+    /// Not evaluated: degenerate shape, template/seed support out of frame,
+    /// or the cluster itself was unrefinable.
+    NotEvaluated = 5,
+}
+
+impl ClusterMemberStatus {
+    /// Decode a stored discriminant; `None` when out of range.
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Reference),
+            1 => Some(Self::Kept),
+            2 => Some(Self::RejectedLowZncc),
+            3 => Some(Self::RejectedShift),
+            4 => Some(Self::DuplicateImage),
+            5 => Some(Self::NotEvaluated),
+            _ => None,
+        }
+    }
+}
+
+/// Optional cluster-patch enrichment (`cluster_patches/` section; requires
+/// the cluster backbone). Arrays parallel the clusters' member arrays.
+pub struct ClusterPatchData {
+    /// `(C,)` global member index of each cluster's reference member;
+    /// [`CLUSTER_REFERENCE_UNREFINABLE`] when the cluster could not be
+    /// refined.
+    pub reference_members: Array1<u32>,
+    /// `(M,)` [`ClusterMemberStatus`] discriminants.
+    pub member_status: Array1<u8>,
+    /// `(M, 2, 3)` absolute affine warps in pixel coordinates:
+    /// `x_member = A·x_ref + t` with `A` the leading 2×2 and `t` the last
+    /// column. Identity|0 for the reference row; zeros where not evaluated.
+    pub member_affines: Array3<f64>,
+    /// `(M,)` achieved windowed ZNCC vs the reference (NaN where not
+    /// evaluated).
+    pub member_zncc: Array1<f32>,
+    /// `(M,)` translation drift in pixels from the SIFT seed (NaN where not
+    /// evaluated).
+    pub member_shift_px: Array1<f32>,
+    /// Refinement options recorded in `cluster_patches/metadata.json.zst`.
+    pub refine_options: serde_json::Value,
+}
+
 /// Primary data structure for `.matches` files.
 ///
 /// Each field corresponds to a file in the archive. This is the primary
-/// type for I/O.
+/// type for I/O. Exactly one of `image_pairs` / `clusters` is present (the
+/// correspondence backbone); `cluster_patches` requires `clusters`, and
+/// `two_view_geometries` requires `image_pairs`.
 pub struct MatchesData {
     pub metadata: MatchesMetadata,
     pub content_hash: MatchesContentHash,
@@ -293,16 +423,12 @@ pub struct MatchesData {
     /// `(N,)` feature count per image as used during matching.
     pub feature_counts: Array1<u32>,
 
-    // Image pairs
-    /// `(P, 2)` image index pairs, `idx_i < idx_j`, sorted lexicographically.
-    pub image_index_pairs: Array2<u32>,
-    /// `(P,)` number of matches per pair. `sum == match_count`.
-    pub match_counts: Array1<u32>,
-    /// `(M, 2)` feature index pairs, flat concatenation across all image pairs.
-    pub match_feature_indexes: Array2<u32>,
-    /// `(M,)` L2 descriptor distance per match.
-    pub match_descriptor_distances: Array1<f32>,
-
-    // Optional two-view geometries
+    /// Pairwise backbone. Exactly one of `image_pairs` / `clusters` is `Some`.
+    pub image_pairs: Option<PairsData>,
+    /// Cluster backbone. Exactly one of `image_pairs` / `clusters` is `Some`.
+    pub clusters: Option<ClustersData>,
+    /// Optional cluster-patch enrichment; requires `clusters`.
+    pub cluster_patches: Option<ClusterPatchData>,
+    /// Optional two-view geometries; requires `image_pairs`.
     pub two_view_geometries: Option<TwoViewGeometryData>,
 }

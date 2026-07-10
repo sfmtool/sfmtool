@@ -5,9 +5,13 @@
 //!
 //! The `.matches` format stores feature match correspondences between images.
 //! It is a ZIP archive with zstandard-compressed JSON metadata and binary
-//! arrays for match data, with an optional two-view geometries section.
+//! arrays for match data. Every file carries exactly one correspondence
+//! backbone — pairwise matches (`image_pairs/`) or feature clusters
+//! (`clusters/`) — plus optional enrichment sections: two-view geometries
+//! (requires the pairwise backbone) and cluster patches (requires the
+//! cluster backbone).
 //!
-//! See `docs/matches-file-format.md` for the specification.
+//! See `specs/formats/matches-file-format.md` for the specification.
 
 #[cfg(not(target_endian = "little"))]
 compile_error!(
