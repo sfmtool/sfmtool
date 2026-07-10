@@ -290,9 +290,10 @@ unsafe fn weighted_moments_avx2(col: &[f32], w: &[f64], n: usize) -> (f64, f64) 
 
 /// `out[k] = sqrt_weights[k] · (src[k] − mean) · inv_norm`, all f32 — the per-pixel
 /// z-normalize write. AVX2+FMA (8-wide) dispatched at runtime; same pattern as
-/// [`sum_sq_diff`].
+/// [`sum_sq_diff`]. `pub(in crate::patch)` so cluster refinement's template
+/// build z-normalizes with the exact same kernel.
 #[inline]
-pub(super) fn znorm_write(
+pub(in crate::patch) fn znorm_write(
     src: &[f32],
     sqrt_weights: &[f32],
     mean: f32,

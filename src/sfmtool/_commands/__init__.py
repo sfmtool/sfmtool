@@ -6,6 +6,7 @@
 from .align import align
 from .analyze import analyze
 from .camrig import camrig
+from .cluster_patches import cluster_patches
 from .compare import compare
 from .densify import densify
 from .embed_patches import embed_patches_command
@@ -35,6 +36,7 @@ __all__ = [
     "align",
     "analyze",
     "camrig",
+    "cluster_patches",
     "compare",
     "densify",
     "embed_patches_command",

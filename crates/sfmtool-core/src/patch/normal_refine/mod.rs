@@ -55,7 +55,9 @@ pub(in crate::patch) use level::{build_level_context, LevelContext};
 pub(in crate::patch) use params::FLAT_NORM_SQ_EPS;
 pub(in crate::patch) use support::{build_support, window_weights, Support};
 pub(in crate::patch) use view_stack::{PatchViewStack, AGREEMENT_SIGMA};
-pub(in crate::patch) use znorm::{normalized_stack, weighted_moments_pub, znormalize_into_kept};
+pub(in crate::patch) use znorm::{
+    normalized_stack, weighted_moments_pub, znorm_write, znormalize_into_kept,
+};
 
 // Internal helpers used by the orchestration below.
 use obliquity::{fill_kept_obliquity_priors, fronto_prior};
