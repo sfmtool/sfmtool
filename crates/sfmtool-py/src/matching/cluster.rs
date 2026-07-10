@@ -2,16 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Python bindings for the background-floor track-cluster matcher (see
-//! `specs/core/track-cluster-matching.md`).
+//! `specs/core/track-cluster-matching.md`) and cluster-patch refinement (see
+//! `specs/core/cluster-patch-refinement.md`).
 
 use std::borrow::Cow;
 
-use ndarray::ArrayView2;
-use numpy::{PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
+use ndarray::{ArrayView2, ArrayView3};
+use numpy::{
+    IntoPyArray, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3,
+    PyUntypedArrayMethods,
+};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use sfmtool_core::features::cluster_match::{self, BackgroundFloorParams, Clusters};
+use sfmtool_core::patch::cluster_refine::{
+    refine_cluster_patches as core_refine_cluster_patches, ClusterRefineParams, FeatureGeometry,
+};
 
+use crate::py_patch_cloud::{build_pyramids_from_image_list, parse_patch_window};
+use crate::py_progress::ProgressCounter;
 use crate::spatial::kdforest::{extract_u8_2d, resolve_forest_params};
 
 /// Extract a 1-D `uint32` array, with a clear error if the dtype is wrong.
@@ -239,8 +249,184 @@ pub fn clusters_to_pair_matches(
     ))
 }
 
+/// Refine SIFT clusters into patch clusters (see
+/// `specs/core/cluster-patch-refinement.md`).
+///
+/// Per cluster: pick a reference member (largest SIFT scale), build a
+/// Gaussian-windowed z-normalized template around its detection, refine an
+/// affine warp to every other member by a shift → similarity → affine
+/// Nelder-Mead cascade on the windowed ZNCC (seeded from the SIFT affine
+/// shapes), vet by achieved ZNCC and translation drift, and keep at most one
+/// member per image.
+///
+/// Args:
+///     images: One HxW / HxWxC uint8 numpy array per image, in the
+///         images-section order the cluster arrays index.
+///     positions: Per image, the (N, 2) float32 SIFT keypoint positions
+///         (COLMAP pixel convention), parallel to ``images``.
+///     affine_shapes: Per image, the (N, 2, 2) float32 SIFT affine shapes,
+///         parallel to ``images``.
+///     cluster_starts: (C+1,) uint32 CSR offsets; cluster c owns members
+///         cluster_starts[c]:cluster_starts[c+1].
+///     member_images: (M,) uint32 member image index.
+///     member_features: (M,) uint32 member feature index. An out-of-range
+///         feature index (or a degenerate affine shape) marks the member
+///         not_evaluated rather than raising.
+///     radius: Template half-width, keypoint-frame units (default 4.0).
+///     resolution: Template samples per axis (default 15).
+///     window: "gaussian_disk" (default), "gaussian", or "uniform".
+///     window_sigma: Window sigma in normalized patch coordinates (the grid
+///         spans [-1, 1]); default 0.5 = the prototype's radius/2
+///         keypoint-frame units.
+///     min_zncc: Member acceptance threshold on the achieved windowed ZNCC
+///         (default 0.85).
+///     max_shift_px: Max translation drift from the SIFT seed, px
+///         (default 3.0).
+///     max_iters: Nelder-Mead iterations per cascade stage (default 120).
+///     progress: Optional ProgressCounter, bumped once per finished cluster.
+///
+/// Returns:
+///     A dict mapping 1:1 onto the ``cluster_patches/`` section:
+///     ``reference_members`` (C,) uint32 (0xFFFFFFFF = unrefinable),
+///     ``member_status`` (M,) uint8, ``member_affines`` (M, 2, 3) float64
+///     (absolute: ``x_member = A·x_ref + t``), ``member_zncc`` (M,) float32,
+///     ``member_shift_px`` (M,) float32.
+#[pyfunction]
+#[pyo3(signature = (images, positions, affine_shapes,
+                    cluster_starts, member_images, member_features, *,
+                    radius = 4.0, resolution = 15,
+                    window = "gaussian_disk", window_sigma = None,
+                    min_zncc = 0.85, max_shift_px = 3.0,
+                    max_iters = 120, progress = None))]
+#[allow(clippy::too_many_arguments)]
+pub fn refine_cluster_patches<'py>(
+    py: Python<'py>,
+    images: Vec<Bound<'py, PyAny>>,
+    positions: Vec<PyReadonlyArray2<'py, f32>>,
+    affine_shapes: Vec<PyReadonlyArray3<'py, f32>>,
+    cluster_starts: &Bound<'py, PyAny>,
+    member_images: &Bound<'py, PyAny>,
+    member_features: &Bound<'py, PyAny>,
+    radius: f64,
+    resolution: u32,
+    window: &str,
+    window_sigma: Option<f64>,
+    min_zncc: f64,
+    max_shift_px: f64,
+    max_iters: u32,
+    progress: Option<ProgressCounter>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let n_images = images.len();
+    if positions.len() != n_images || affine_shapes.len() != n_images {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "images ({n_images}), positions ({}), and affine_shapes ({}) must be parallel",
+            positions.len(),
+            affine_shapes.len()
+        )));
+    }
+    // Per-image feature-array consistency.
+    let mut pos_data: Vec<(Cow<'_, [f32]>, usize)> = Vec::with_capacity(n_images);
+    let mut aff_data: Vec<(Cow<'_, [f32]>, usize)> = Vec::with_capacity(n_images);
+    for (i, (p, a)) in positions.iter().zip(&affine_shapes).enumerate() {
+        let (pn, pc) = (p.shape()[0], p.shape()[1]);
+        let ash = a.shape();
+        if pc != 2 || ash[1] != 2 || ash[2] != 2 {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "image {i}: positions must be (N, 2) and affine_shapes (N, 2, 2)"
+            )));
+        }
+        if ash[0] != pn {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "image {i}: positions ({pn}) and affine_shapes ({}) row counts differ",
+                ash[0]
+            )));
+        }
+        pos_data.push((to_contiguous!(p), pn));
+        aff_data.push((to_contiguous!(a), ash[0]));
+    }
+
+    // CSR consistency (mirrors clusters_to_pair_matches's up-front gate).
+    let cluster_starts = extract_u32_1d(cluster_starts, "cluster_starts")?;
+    let member_images = extract_u32_1d(member_images, "member_images")?;
+    let member_features = extract_u32_1d(member_features, "member_features")?;
+    let starts: Cow<'_, [u32]> = to_contiguous!(cluster_starts);
+    let m_images: Cow<'_, [u32]> = to_contiguous!(member_images);
+    let m_features: Cow<'_, [u32]> = to_contiguous!(member_features);
+    let m = m_images.len();
+    if m_features.len() != m {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "member_images ({m}) and member_features ({}) must have the same length",
+            m_features.len()
+        )));
+    }
+    let csr_valid = !starts.is_empty()
+        && starts[0] == 0
+        && starts.windows(2).all(|w| w[0] <= w[1])
+        && *starts.last().unwrap() as usize == m;
+    if !csr_valid {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "cluster_starts must be non-decreasing, start at 0, and end at M ({m})"
+        )));
+    }
+    if let Some(&bad) = m_images.iter().find(|&&i| i as usize >= n_images) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "member_images contains image index {bad} out of range for {n_images} images"
+        )));
+    }
+
+    let params = ClusterRefineParams {
+        radius,
+        resolution,
+        window: parse_patch_window(window, window_sigma.unwrap_or(0.5))?,
+        min_zncc,
+        max_shift_px,
+        max_iters,
+        ..ClusterRefineParams::default()
+    };
+
+    // Decode images and build the pyramids (rayon, GIL-free); the cluster
+    // path has no reconstruction, so there is no camera-dimension check.
+    let pyramids = build_pyramids_from_image_list(py, &images, |_, _| Ok(()))?;
+
+    let progress_handle = progress.as_ref().map(|p| p.handle());
+    let result = py.detach(|| {
+        let features: Vec<FeatureGeometry<'_>> = pos_data
+            .iter()
+            .zip(&aff_data)
+            .map(|((p, pn), (a, an))| FeatureGeometry {
+                positions_xy: ArrayView2::from_shape((*pn, 2), p.as_ref())
+                    .expect("contiguous positions"),
+                affine_shapes: ArrayView3::from_shape((*an, 2, 2), a.as_ref())
+                    .expect("contiguous affine shapes"),
+            })
+            .collect();
+        core_refine_cluster_patches(
+            &pyramids,
+            &features,
+            &starts,
+            &m_images,
+            &m_features,
+            &params,
+            progress_handle.as_deref(),
+        )
+    });
+
+    let dict = PyDict::new(py);
+    dict.set_item(
+        "reference_members",
+        result.reference_members.into_pyarray(py),
+    )?;
+    let status_u8: Vec<u8> = result.member_status.iter().map(|&s| s as u8).collect();
+    dict.set_item("member_status", status_u8.into_pyarray(py))?;
+    dict.set_item("member_affines", result.member_affines.into_pyarray(py))?;
+    dict.set_item("member_zncc", result.member_zncc.into_pyarray(py))?;
+    dict.set_item("member_shift_px", result.member_shift_px.into_pyarray(py))?;
+    Ok(dict)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(background_floor_clusters, m)?)?;
     m.add_function(wrap_pyfunction!(clusters_to_pair_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(refine_cluster_patches, m)?)?;
     Ok(())
 }

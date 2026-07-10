@@ -13,6 +13,7 @@ from ._commands import (
     align,
     analyze,
     camrig,
+    cluster_patches,
     compare,
     densify,
     embed_patches_command,
@@ -58,6 +59,7 @@ def main():
 main.add_command_with_category(ws, category="Workspace")
 main.add_command_with_category(sift, category="Image Feature")
 main.add_command_with_category(match, category="Image Feature")
+main.add_command_with_category(cluster_patches, category="Image Feature")
 main.add_command_with_category(solve, category="Reconstruction")
 main.add_command_with_category(xform, category="Reconstruction")
 main.add_command_with_category(inspect, category="Reconstruction")

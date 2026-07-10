@@ -173,7 +173,7 @@ fn np_median(v: &mut [f64]) -> f64 {
 }
 
 /// Map a window name + sigma to the shared [`PatchWindow`] kernel.
-fn parse_patch_window(window: &str, sigma: f64) -> PyResult<PatchWindow> {
+pub(crate) fn parse_patch_window(window: &str, sigma: f64) -> PyResult<PatchWindow> {
     match window {
         "uniform" => Ok(PatchWindow::Uniform),
         "gaussian" => Ok(PatchWindow::Gaussian { sigma }),
@@ -230,9 +230,35 @@ fn check_image_matches_camera(
     Ok(())
 }
 
+/// Extract each numpy image and build its full pyramid, running `check` on
+/// every decoded image (index, decoded source). The extraction runs under the
+/// GIL; the pyramid build (the expensive part) runs GIL-free and
+/// rayon-parallel. Shared by the recon-coupled [`build_pyramids_from_arrays`]
+/// (camera-dimension check) and the recon-free cluster-refinement binding
+/// (`matching::cluster`, no check).
+pub(crate) fn build_pyramids_from_image_list(
+    py: Python<'_>,
+    images: &[Bound<'_, PyAny>],
+    mut check: impl FnMut(usize, &ImageU8) -> PyResult<()>,
+) -> PyResult<Vec<ImageU8Pyramid>> {
+    let srcs: Vec<ImageU8> = images
+        .iter()
+        .enumerate()
+        .map(|(i, im)| {
+            let src = extract_image_u8(im)?;
+            check(i, &src)?;
+            Ok(src)
+        })
+        .collect::<PyResult<_>>()?;
+    Ok(py.detach(|| {
+        srcs.par_iter()
+            .map(|src| ImageU8Pyramid::build(src, pyramid_levels(src)))
+            .collect()
+    }))
+}
+
 /// Extract each numpy image and build its full pyramid, validating dimensions
-/// against the reconstruction's cameras. The extraction runs under the GIL; the
-/// pyramid build (the expensive part) runs GIL-free and rayon-parallel.
+/// against the reconstruction's cameras.
 fn build_pyramids_from_arrays(
     py: Python<'_>,
     recon: &sfmtool_core::SfmrReconstruction,
@@ -245,20 +271,9 @@ fn build_pyramids_from_arrays(
             images.len()
         )));
     }
-    let srcs: Vec<ImageU8> = images
-        .iter()
-        .enumerate()
-        .map(|(i, im)| {
-            let src = extract_image_u8(im)?;
-            check_image_matches_camera(recon, i, src.width(), src.height())?;
-            Ok(src)
-        })
-        .collect::<PyResult<_>>()?;
-    Ok(py.detach(|| {
-        srcs.par_iter()
-            .map(|src| ImageU8Pyramid::build(src, pyramid_levels(src)))
-            .collect()
-    }))
+    build_pyramids_from_image_list(py, images, |i, src| {
+        check_image_matches_camera(recon, i, src.width(), src.height())
+    })
 }
 
 /// The per-image pyramids a kernel call reads: either owned (built from a numpy

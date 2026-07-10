@@ -300,8 +300,21 @@ const AFFINE_BORDER_MARGIN_PX: f64 = 1.0 + AFFINE_MAX_RESIDUAL_PX;
 /// The affine patch-grid → source-pixel map of the candidate fast path:
 /// `x = a[0]·col + a[1]·row + a[2]`, `y = a[3]·col + a[4]·row + a[5]` (grid
 /// pixel indices, matching `WarpMap::from_patch`'s pixel-center raster).
-struct AffineCoreMap {
-    a: [f64; 6],
+///
+/// Shared with [`cluster_refine`](crate::patch::cluster_refine), which builds
+/// the map from an explicit SIFT-shape affine ([`AffineCoreMap::from_coeffs`])
+/// instead of projected patch corners; the coefficient convention (grid index
+/// → continuous source pixel, pixel centers at `+0.5`) is identical.
+pub(in crate::patch) struct AffineCoreMap {
+    pub(in crate::patch) a: [f64; 6],
+}
+
+impl AffineCoreMap {
+    /// Build the map from explicit coefficients (`x = a0·col + a1·row + a2`,
+    /// `y = a3·col + a4·row + a5`).
+    pub(in crate::patch) fn from_coeffs(a: [f64; 6]) -> Self {
+        Self { a }
+    }
 }
 
 /// Fit the candidate's patch→image map from three **exactly projected** grid

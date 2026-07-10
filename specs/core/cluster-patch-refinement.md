@@ -1,7 +1,9 @@
 # Cluster-Patch Refinement: Production Implementation
 
-_Status: draft for review; **step 1 (the `.matches` format layer) is
-shipped** — see its section. The implementation spec for the operation
+_Status: **implemented** — steps 1–5 are shipped (see each section's dated
+status block); the derived-pairs helper and the `sfm match --cluster`
+output migration (§1, "Still open") remain open. The implementation spec for
+the operation
 designed in [cluster-patches.md](cluster-patches.md); read that first for
 motivation, the format sections, and the experimental calibration
 (`reports/2026-07-09-exp-pairwise-sift-warp.md`). This document is written so
@@ -83,6 +85,33 @@ currently index the pair keys of `read_matches` output directly):
 that makes `sfm match --cluster` write cluster-bearing files.
 
 ## 2. The Rust kernel: `sfmtool-core::patch::cluster_refine`
+
+> _Status (2026-07-09): **Shipped** — `feat(patch): cluster-patch refinement
+> kernel + binding + CLI`. As specified, with these deviations:_
+>
+> - _**Window sigma units.** The default below is written
+>   `GaussianDisk { sigma: 15.0 / 4.0 }`, but `PatchWindow`'s sigma is in
+>   normalized patch coordinates (the grid spans `[-1, 1]²`), where the
+>   prototype's `radius / 2` keypoint-frame width is **0.5** — the `15/4`
+>   figure is the same width expressed in grid px. The shipped default is
+>   `GaussianDisk { sigma: 0.5 }`._
+> - _**Reuse map.** `AffineCoreMap` was promoted (with a `from_coeffs`
+>   constructor) and is the kernel's map type, but `sample_support_affine`
+>   was **not** shared: its contract (border-gated maps, no validity
+>   reporting, `u8` re-rounding for remap parity) does not fit a sampler
+>   that must express out-of-frame and keep continuous values. The template
+>   sampler and the fused member kernel live in `cluster_refine/kernels.rs`
+>   with the same `bilinear_geometry` convention.
+>   `score_raw_against_reference` was likewise not promoted — the fused
+>   sample+reduce loop realizes the identical algebra (mean-removed dot over
+>   the member's windowed norm, flat member channel → 0 contribution,
+>   averaged over the reference's channel count) in one pass._
+> - _**`NotEvaluated` trigger.** "Seed support out of frame" is decided at
+>   the seed evaluation (`t = 0, D = 0`); once the cascade runs,
+>   out-of-frame proposals score `+1.0` per the all-in-frame rule and the
+>   member still vets on its final ZNCC/shift._
+> - _**Level selection** is evaluated per objective evaluation (the map's
+>   linear part changes as `D` evolves), not once per member._
 
 New module `crates/sfmtool-core/src/patch/cluster_refine/` with `mod.rs`,
 `params.rs`, `kernels.rs`, `tests.rs` (mirroring `keypoint_localize/`).
@@ -245,6 +274,18 @@ the reference-selection / dedupe / status bookkeeping.
 
 ### AVX2
 
+> _Status (2026-07-09): **Shipped.** The fused loop gathers from a
+> per-(member, level) **centered planar-f32 tile** (`LevelTile`), converted
+> once when the level is first touched and grown lazily to cover each
+> evaluation's grid bounding box — the `ContextTile` render-once convention;
+> centering keeps the f32 variance `S2 − S1²/W` cancellation-safe and the
+> windowed ZNCC is shift-invariant, so nothing needs undoing. Because the
+> tile is a subset of the image that always covers the evaluation's clipped
+> footprint, the tile-bounds lane test **is** the in-frame test (out-of-tile
+> tap ⇔ out-of-frame tap). Scalar path and AVX2 agree within 1e-4 (dual-path
+> test); non-finite coordinates from degenerate warps convert to `i32::MIN`
+> in the AVX2 mask and are guarded explicitly in the scalar path._
+
 Runtime dispatch per the house pattern:
 `is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma")`,
 `#[target_feature(enable = "avx2,fma")] unsafe fn`, scalar fallback written
@@ -273,6 +314,19 @@ with 4 independent accumulators so it autovectorizes (see
   render-once convention.
 
 ## 3. PyO3 bindings
+
+> _Status (2026-07-09): **Shipped** as specified: `refine_cluster_patches`
+> in `matching/cluster.rs`, registered beside the two existing cluster
+> functions; validation (parallel list lengths, per-image array shapes, CSR
+> consistency, `member_images` range) raises `PyValueError` before the GIL
+> is released; the kernel runs under `py.detach`. The pyramid build was
+> factored as `py_patch_cloud::build_pyramids_from_image_list` (extraction +
+> rayon build with a per-image `check` callback); the recon-coupled
+> `build_pyramids_from_arrays` supplies the camera-dimension check and the
+> cluster path passes a no-op. `window_sigma = None` resolves to the 0.5
+> default (§2); the `convergence` knob is not exposed (fixed 1e-5), matching
+> the signature below. Out-of-range `member_features` are left to the kernel
+> (→ `not_evaluated`), matching §2 step 1._
 
 In `crates/sfmtool-py/src/matching/cluster.rs`:
 
@@ -317,6 +371,13 @@ The `io/matches.rs` section threading is **shipped** with the format layer
 
 ## 4. CLI command and orchestration
 
+> _Status (2026-07-09): **Shipped** per the sketch below; documented in
+> `specs/cli/cluster-patches-command.md`. Additions: the output path is
+> refused when it already exists (write-once), the workspace resolves via
+> the relative → absolute → ancestor-search chain `to-colmap-db` uses, and
+> progress reporting reuses the `_poll_progress` ProgressCounter poller from
+> `_embed_patches`._
+
 `src/sfmtool/_commands/cluster_patches.py` — flat command, Image Feature
 category, spec to live at `specs/cli/cluster-patches-command.md`:
 
@@ -342,6 +403,20 @@ sfm cluster-patches -i clusters.matches [-o out.matches]
    output: input path with a `-patches` suffix before the extension.
 
 ## 5. Tests
+
+> _Status (2026-07-09): **Shipped** with two deviations from the sketches
+> below. (a) The `RejectedLowZncc` gate is pinned with a **flat** member
+> image (every member channel windowed-flat → score 0): with an *unrelated
+> smooth* texture the affine optimizer can chase a spurious ZNCC above the
+> permissive 0.85 gate over the ~50-effective-sample window, tripping the
+> shift gate instead. (b) `sfm match --cluster` does not yet write
+> cluster-bearing files (the §1 derived-pairs migration), so
+> `tests/test_cluster_patches.py` builds the CLI input programmatically —
+> `cluster_match(...)` over the fixture's `.sift` files, written via
+> `write_matches` — and keeps the spec's assertions (output verifies, > 50%
+> of multi-member clusters keep ≥ 1 member, statuses within the enum with
+> reference/kept present). The synthetic-recovery tolerance held: 0.3 px
+> support-grid RMSE across the specified warp/noise ranges, unmodified._
 
 - **`cluster_refine/tests.rs`**: (a) synthetic recovery — render a textured
   reference patch, warp it into a second image by a known affine (scale
