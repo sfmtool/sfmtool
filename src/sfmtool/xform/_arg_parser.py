@@ -27,6 +27,7 @@ from . import (
     ClassifyPointsAtInfinityTransform,
     ExcludeGlobFilter,
     ExcludeRangeFilter,
+    FilterByLocalizabilityTransform,
     FilterByReprojectionErrorTransform,
     FindPointsAtInfinityTransform,
     IncludeGlobFilter,
@@ -618,6 +619,28 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
                 )
 
             transforms.append(FilterByReprojectionErrorTransform(threshold))
+
+        elif arg == "--filter-by-keypoint-uncertainty":
+            if i + 1 >= len(args):
+                raise click.UsageError(
+                    "--filter-by-keypoint-uncertainty requires an argument"
+                )
+            i += 1
+            param = args[i]
+
+            try:
+                threshold = float(param)
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --filter-by-keypoint-uncertainty parameter '{param}': {e}"
+                )
+
+            try:
+                transforms.append(FilterByLocalizabilityTransform(threshold))
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --filter-by-keypoint-uncertainty parameter '{param}': {e}"
+                )
 
         elif arg == "--include-range":
             if i + 1 >= len(args):

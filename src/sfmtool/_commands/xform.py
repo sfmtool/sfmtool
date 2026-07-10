@@ -137,6 +137,16 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
     help="Remove points with reprojection error > threshold (e.g., '2.0')",
 )
 @click.option(
+    "--filter-by-keypoint-uncertainty",
+    multiple=True,
+    help=(
+        "Remove points whose predicted keypoint position uncertainty (patch-grid "
+        "px) > threshold (e.g., '0.35'). Scores each point's cross-view consensus "
+        "patch (patch localizability); grid px transfers across resolutions. Needs "
+        "an embedded_patches recon with patch bitmaps."
+    ),
+)
+@click.option(
     "--scale-by-measurements",
     multiple=True,
     help="Scale to physical units using a YAML measurements file with known point-pair distances",
@@ -225,6 +235,7 @@ def xform(ctx, input_path, output_path, **kwargs):
       --remove-large-features size        Remove points with max feature size > threshold
       --remove-isolated factor,spec       Remove isolated points (NN distance filter)
       --filter-by-reprojection-error val  Remove points with reprojection error > threshold
+      --filter-by-keypoint-uncertainty val  Remove points with keypoint position uncertainty > threshold (patch-grid px)
       --include-by-distribution COUNT[,verbose]  Keep COUNT well-distributed cameras/rig frames
 
     \b
@@ -354,6 +365,7 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--include-range, --exclude-range, "
             "--include-glob, --exclude-glob, --remove-short-tracks, --remove-narrow-tracks, "
             "--remove-large-features, --remove-isolated, --filter-by-reprojection-error, "
+            "--filter-by-keypoint-uncertainty, "
             "--include-by-distribution, "
             "--find-points-at-infinity, --classify-points-at-infinity, "
             "--camera-model, --bundle-adjust, --refine-normals, --refine-keypoints, "
