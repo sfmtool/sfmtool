@@ -600,14 +600,20 @@ fn make_matches_data() -> MatchesData {
             },
             timestamp: "2026-03-29T10:00:00Z".into(),
             image_count: 3,
-            image_pair_count: 2,
-            match_count: 5,
+            image_pair_count: Some(2),
+            match_count: Some(5),
+            cluster_count: None,
+            cluster_member_count: None,
             has_two_view_geometries: false,
+            has_clusters: false,
+            has_cluster_patches: false,
         },
         content_hash: MatchesContentHash {
             metadata_xxh128: String::new(),
             images_xxh128: String::new(),
-            image_pairs_xxh128: String::new(),
+            image_pairs_xxh128: None,
+            clusters_xxh128: None,
+            cluster_patches_xxh128: None,
             two_view_geometries_xxh128: None,
             content_xxh128: String::new(),
         },
@@ -619,11 +625,18 @@ fn make_matches_data() -> MatchesData {
         feature_tool_hashes: vec![[0u8; 16]; 3],
         sift_content_hashes: vec![[1u8; 16]; 3],
         feature_counts: Array1::from_vec(vec![4, 4, 4]),
-        image_index_pairs: Array2::from_shape_vec((2, 2), vec![0, 1, 0, 2]).unwrap(),
-        match_counts: Array1::from_vec(vec![3, 2]),
-        match_feature_indexes: Array2::from_shape_vec((5, 2), vec![0, 0, 1, 1, 2, 3, 0, 0, 3, 2])
+        image_pairs: Some(matches_format::PairsData {
+            image_index_pairs: Array2::from_shape_vec((2, 2), vec![0, 1, 0, 2]).unwrap(),
+            match_counts: Array1::from_vec(vec![3, 2]),
+            match_feature_indexes: Array2::from_shape_vec(
+                (5, 2),
+                vec![0, 0, 1, 1, 2, 3, 0, 0, 3, 2],
+            )
             .unwrap(),
-        match_descriptor_distances: Array1::from_vec(vec![100.0, 120.0, 90.0, 200.0, 180.0]),
+            match_descriptor_distances: Array1::from_vec(vec![100.0, 120.0, 90.0, 200.0, 180.0]),
+        }),
+        clusters: None,
+        cluster_patches: None,
         two_view_geometries: None,
     }
 }
@@ -707,18 +720,23 @@ fn test_feature_then_matches_round_trip() {
 
     let loaded = read_colmap_db_matches(&db_path, false).unwrap();
     assert_eq!(loaded.metadata.image_count, 3);
-    assert_eq!(loaded.metadata.image_pair_count, 2);
-    assert_eq!(loaded.metadata.match_count, 5);
+    assert_eq!(loaded.metadata.image_pair_count, Some(2));
+    assert_eq!(loaded.metadata.match_count, Some(5));
     assert!(loaded.two_view_geometries.is_none());
     assert_eq!(loaded.image_names, image_names);
     assert_eq!(loaded.feature_counts, Array1::from_vec(vec![4, 4, 4]));
-    assert_eq!(loaded.image_index_pairs, matches_data.image_index_pairs);
-    assert_eq!(loaded.match_counts, matches_data.match_counts);
+    let loaded_pairs = loaded.image_pairs.as_ref().unwrap();
+    let orig_pairs = matches_data.image_pairs.as_ref().unwrap();
+    assert_eq!(loaded_pairs.image_index_pairs, orig_pairs.image_index_pairs);
+    assert_eq!(loaded_pairs.match_counts, orig_pairs.match_counts);
     assert_eq!(
-        loaded.match_feature_indexes,
-        matches_data.match_feature_indexes
+        loaded_pairs.match_feature_indexes,
+        orig_pairs.match_feature_indexes
     );
-    assert!(loaded.match_descriptor_distances.iter().all(|&d| d == 0.0));
+    assert!(loaded_pairs
+        .match_descriptor_distances
+        .iter()
+        .all(|&d| d == 0.0));
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -841,7 +859,7 @@ fn test_read_with_include_tvg_false() {
     let loaded = read_colmap_db_matches(&db_path, false).unwrap();
     assert!(!loaded.metadata.has_two_view_geometries);
     assert!(loaded.two_view_geometries.is_none());
-    assert_eq!(loaded.metadata.match_count, 5);
+    assert_eq!(loaded.metadata.match_count, Some(5));
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -869,8 +887,8 @@ fn test_empty_matches_from_db() {
 
     let loaded = read_colmap_db_matches(&db_path, true).unwrap();
     assert_eq!(loaded.metadata.image_count, 3);
-    assert_eq!(loaded.metadata.image_pair_count, 0);
-    assert_eq!(loaded.metadata.match_count, 0);
+    assert_eq!(loaded.metadata.image_pair_count, Some(0));
+    assert_eq!(loaded.metadata.match_count, Some(0));
     assert!(loaded.two_view_geometries.is_none());
 
     std::fs::remove_dir_all(&dir).unwrap();

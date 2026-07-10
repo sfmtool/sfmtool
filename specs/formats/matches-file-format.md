@@ -16,9 +16,16 @@ the same matches across different solves with different solvers or solver option
 
 A `.matches` file format solves this by storing:
 
-1. **Candidate matches** — raw feature correspondences from a matching step
-2. **Two-view geometries** (optional) — geometrically verified inlier subsets with estimated
-   relative poses such as F/E/H matrices, rotation, translation
+1. **A correspondence backbone** — exactly one of:
+   - **Candidate matches** (`image_pairs/`) — raw pairwise feature correspondences from a
+     matching step, or
+   - **Clusters** (`clusters/`) — groups of features across images that are likely
+     co-observations of one surface point, the primary artifact of the cluster matcher
+     (`sfm match --cluster`); pairwise matches are a derived view obtained by expansion
+2. **Two-view geometries** (optional, requires `image_pairs/`) — geometrically verified
+   inlier subsets with estimated relative poses such as F/E/H matrices, rotation, translation
+3. **Cluster patches** (optional, requires `clusters/`) — per-cluster photometrically
+   refined affine warps from a reference member to every other member, with vetting statuses
 
 Following the approach to data files of an sfmtool workspace, `.matches` files are **write-once**.
 You never edit an existing `.matches` file — instead, you write a new one. Different matching
@@ -94,13 +101,25 @@ match-output-file.matches (ZIP archive)
 │   ├── feature_tool_hashes.{N}.uint128.zst        # Feature tool identification
 │   ├── sift_content_hashes.{N}.uint128.zst        # Feature file content verification
 │   └── feature_counts.{N}.uint32.zst              # Feature count per image (as used in matching)
-├── image_pairs/
+├── image_pairs/                                   # (Backbone alternative A: pairwise)
 │   ├── metadata.json.zst                          # Pair-level metadata
 │   ├── image_index_pairs.{P}.2.uint32.zst         # (idx_i, idx_j) per pair, idx_i < idx_j
 │   ├── match_counts.{P}.uint32.zst                # Number of matches per pair
 │   ├── match_feature_indexes.{M}.2.uint32.zst     # (feat_idx_i, feat_idx_j) per match
 │   └── match_descriptor_distances.{M}.float32.zst # L2 descriptor distance per match
-└── two_view_geometries/                           # (Optional section)
+├── clusters/                                      # (Backbone alternative B: clusters)
+│   ├── metadata.json.zst                          # cluster_count, member_count, matcher options
+│   ├── cluster_starts.{C+1}.uint32.zst            # CSR offsets: cluster c owns members starts[c]..starts[c+1]
+│   ├── member_images.{K}.uint32.zst               # Index into images/names.json.zst per member
+│   └── member_features.{K}.uint32.zst             # Feature index in that image's .sift per member
+├── cluster_patches/                               # (Optional section, requires clusters/)
+│   ├── metadata.json.zst                          # Refinement options + summary counts
+│   ├── reference_members.{C}.uint32.zst           # Global member index of each cluster's reference
+│   ├── member_status.{K}.uint8.zst                # ClusterMemberStatus enum per member
+│   ├── member_affines.{K}.2.3.float64.zst         # x_member = A·x_ref + t, pixel coords
+│   ├── member_zncc.{K}.float32.zst                # Achieved windowed ZNCC vs reference (NaN if n/a)
+│   └── member_shift_px.{K}.float32.zst            # Translation drift from the SIFT seed (NaN if n/a)
+└── two_view_geometries/                           # (Optional section, requires image_pairs/)
     ├── metadata.json.zst                          # TVG metadata
     ├── config_types.json.zst                        # Unique TwoViewGeometryConfig type strings
     ├── config_indexes.{P}.uint8.zst                 # Index into config_types per pair
@@ -117,7 +136,15 @@ Where:
 - `{N}` = number of images
 - `{P}` = number of image pairs
 - `{M}` = total number of matches across all pairs
+- `{C}` = number of clusters
+- `{K}` = total number of cluster members across all clusters
 - `{I}` = total number of inlier matches across all pairs (two-view geometries)
+
+**The backbone rule (version 3):** every `.matches` file stores **exactly one** of
+`image_pairs/` and `clusters/` as its correspondence backbone. The metadata `has_clusters`
+flag selects which. `two_view_geometries/` requires the pairwise backbone (its arrays are
+keyed per stored pair); `cluster_patches/` requires the cluster backbone. Version ≤ 2 files
+always store the pairwise backbone.
 
 ## File Format Details
 
@@ -125,7 +152,7 @@ Where:
 
 ```json
 {
-  "version": 1,
+  "version": 3,
   "matching_method": "sequential",
   "matching_tool": "colmap",
   "matching_tool_version": "4.02",
@@ -153,12 +180,28 @@ Where:
   "image_count": 83,
   "image_pair_count": 332,
   "match_count": 145000,
-  "has_two_view_geometries": false
+  "has_two_view_geometries": false,
+  "has_clusters": false,
+  "has_cluster_patches": false
+}
+```
+
+A cluster-bearing file replaces the pairwise summary fields with cluster counts:
+
+```json
+{
+  "...": "...",
+  "image_count": 83,
+  "cluster_count": 5200,
+  "cluster_member_count": 14100,
+  "has_two_view_geometries": false,
+  "has_clusters": true,
+  "has_cluster_patches": false
 }
 ```
 
 **Field descriptions:**
-- `version`: Format version number. `1` or `2` (see
+- `version`: Format version number. `1`, `2`, or `3` (see
   [Versioning and Migration](#versioning-and-migration))
 - `matching_method`: Type of matching used to produce these matches
   - `"exhaustive"`: Exhaustive pairwise matching
@@ -178,9 +221,20 @@ Where:
   extraction configuration
 - `timestamp`: ISO 8601 format with timezone
 - `image_count`: Number of images referenced
-- `image_pair_count`: Number of image pairs with matches
-- `match_count`: Total number of matches across all pairs
+- `image_pair_count`: Number of image pairs with matches. Present exactly when the file
+  stores the pairwise backbone (`has_clusters` false); absent in cluster-bearing files
+- `match_count`: Total number of matches across all pairs. Present exactly when the file
+  stores the pairwise backbone
+- `cluster_count`: Number of clusters. Present exactly when the file stores the cluster
+  backbone (`has_clusters` true)
+- `cluster_member_count`: Total number of cluster members. Present exactly when the file
+  stores the cluster backbone
 - `has_two_view_geometries`: Whether the optional two-view geometries section is present
+  (pairwise backbone only)
+- `has_clusters`: Whether the file stores the `clusters/` backbone instead of
+  `image_pairs/`. Absent in version ≤ 2 files (readers treat absence as `false`)
+- `has_cluster_patches`: Whether the optional `cluster_patches/` section is present
+  (requires `has_clusters`). Absent in version ≤ 2 files
 
 ### 2. Content Hash (`content_hash.json.zst`)
 
@@ -189,6 +243,8 @@ Where:
   "metadata_xxh128": "...",
   "images_xxh128": "...",
   "image_pairs_xxh128": "...",
+  "clusters_xxh128": "...",
+  "cluster_patches_xxh128": "...",
   "two_view_geometries_xxh128": "...",
   "content_xxh128": "..."
 }
@@ -199,12 +255,21 @@ Where:
 - `images_xxh128`: Hash of all image data files' uncompressed contents, fed sequentially
   into a streaming XXH128 hasher in lexicographic path order
 - `image_pairs_xxh128`: Hash of all image pairs data files' uncompressed contents, fed sequentially
-  into a streaming XXH128 hasher in lexicographic path order
+  into a streaming XXH128 hasher in lexicographic path order. Present exactly when the file
+  stores the pairwise backbone.
+- `clusters_xxh128`: Hash of all clusters data files' uncompressed contents, fed sequentially
+  into a streaming XXH128 hasher in lexicographic path order. Present exactly when the file
+  stores the cluster backbone.
+- `cluster_patches_xxh128`: (Optional) Hash of all cluster patches data files' uncompressed
+  contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order.
+  Present only when the cluster patches section exists.
 - `two_view_geometries_xxh128`: (Optional) Hash of all TVG data files' uncompressed contents,
   fed sequentially into a streaming XXH128 hasher in lexicographic path order. Present only
   when the two-view geometries section exists.
 - `content_xxh128`: Hash of all present section hashes concatenated as raw 16-byte big-endian
-  digests in order: metadata, images, pairs, two_view_geometries (if present)
+  digests in order: metadata, images, pairs, clusters, cluster_patches, two_view_geometries
+  (each only if present). A pairwise file's byte stream is identical to the pre-version-3
+  layout, so version ≤ 2 hashes verify unchanged.
 
 **Note**: All hashes are computed on uncompressed content bytes. For JSON files, hash the raw
 bytes after decompression, NOT re-serialized JSON.
@@ -276,7 +341,10 @@ required to be sorted, but lexicographic ordering by name is recommended.
   feature count in the `.sift` file if `max_feature_count` was set. All `feat_idx` values
   in the match data MUST be less than the corresponding `feature_counts` entry.
 
-### 4. Pairs (Putative Matches)
+### 4. Pairs (Putative Matches — Backbone Alternative A)
+
+Present exactly when `has_clusters` is false. Stores the pairwise correspondence
+backbone: raw feature correspondences grouped per image pair.
 
 #### `image_pairs/metadata.json.zst`
 
@@ -322,10 +390,158 @@ required to be sorted, but lexicographic ordering by name is recommended.
 - L2 descriptor distance for each match, aligned with `match_feature_indexes`
 - Enables re-filtering by descriptor threshold without recomputing matches
 
-### 5. Two-View Geometries (Optional Section)
+### 5. Clusters (Backbone Alternative B)
+
+Present exactly when `has_clusters` is true. Stores the cluster matcher's primary
+artifact **in place of** the `image_pairs/` section: groups of SIFT features across
+images that are likely co-observations of one surface point, in CSR layout (identical
+to the in-memory `ClusterSet`). Cluster `c` owns members
+`cluster_starts[c]..cluster_starts[c+1]` of the member-parallel arrays.
+
+**Pairs are a derived view.** The canonical expansion is `clusters_to_pair_matches`
+(every within-cluster cross-image member pair, grouped and sorted per the
+`image_pairs/` ordering rules). Because `two_view_geometries/` arrays are keyed per
+stored pair, a cluster file cannot carry TVGs directly; the geometric-verification
+step materializes the expansion by writing a new pairwise `.matches` file with
+`image_pairs/` + `two_view_geometries/` (the write-once workflow, unchanged). Pair
+descriptor distances, which the stored pairwise form carries, are recomputed from the
+referenced `.sift` files when a consumer needs them. See
+[`specs/core/cluster-patches.md`](../core/cluster-patches.md) for the design
+rationale.
+
+#### `clusters/metadata.json.zst`
+
+```json
+{
+  "cluster_count": 5200,
+  "member_count": 14100,
+  "matcher_options": {
+    "d": 8,
+    "alpha": 1.2,
+    "min_size": 2,
+    "preset": "default"
+  }
+}
+```
+
+**Field descriptions:**
+- `cluster_count`: Must equal the top-level `cluster_count`
+- `member_count`: Must equal the top-level `cluster_member_count`
+- `matcher_options`: The cluster matcher's parameters (tool-specific key-value pairs)
+
+#### `clusters/cluster_starts.{C+1}.uint32.zst`
+
+- **Shape**: `(C+1,)` where C = cluster_count
+- **Data type**: `uint32` (little-endian)
+- CSR offsets into the member arrays: cluster `c` owns members
+  `cluster_starts[c]..cluster_starts[c+1]`
+- **Constraint**: `cluster_starts[0] == 0`, non-decreasing, final value equals the
+  member count `K`
+- **Constraint**: Every cluster has ≥ 2 members
+
+#### `clusters/member_images.{K}.uint32.zst`
+
+- **Shape**: `(K,)` where K = cluster_member_count
+- **Data type**: `uint32` (little-endian)
+- Index into `images/names.json.zst` per member. A cluster may contain several
+  members from the same image (ambiguous detections); enrichment stages resolve
+  the ambiguity (see `cluster_patches/`)
+- **Constraint**: `member_images[k] < image_count`
+
+#### `clusters/member_features.{K}.uint32.zst`
+
+- **Shape**: `(K,)` where K = cluster_member_count
+- **Data type**: `uint32` (little-endian)
+- Feature index in that image's `.sift` file per member
+- **Constraint**: `member_features[k] < feature_counts[member_images[k]]`
+
+### 6. Cluster Patches (Optional Section)
+
+Written by the cluster-patches operation into a **new** file that copies the source
+file's images and clusters sections (write-once workflow, same as adding TVGs).
+Requires the cluster backbone. Arrays parallel the clusters' member arrays: for each
+cluster, a reference member plus, for every other member, a photometrically refined
+affine warp mapping the reference's local patch onto that member's image, with
+vetting statuses and signals.
+
+#### `cluster_patches/metadata.json.zst`
+
+```json
+{
+  "cluster_count": 5200,
+  "member_count": 14100,
+  "refine_options": {
+    "radius": 4.0,
+    "resolution": 15,
+    "min_zncc": 0.85,
+    "max_shift_px": 3.0
+  }
+}
+```
+
+**Field descriptions:**
+- `cluster_count` / `member_count`: Must equal the top-level `cluster_count` /
+  `cluster_member_count` (and therefore the clusters section counts)
+- `refine_options`: The refinement parameters used
+
+#### `cluster_patches/reference_members.{C}.uint32.zst`
+
+- **Shape**: `(C,)` where C = cluster_count
+- **Data type**: `uint32` (little-endian)
+- Global member index of each cluster's reference member; `0xFFFFFFFF` (`u32::MAX`)
+  when the cluster could not be refined (no usable reference)
+- **Constraint**: When not `0xFFFFFFFF`, `reference_members[c]` lies in cluster `c`'s
+  member range and that member's status is `0` (reference)
+
+#### `cluster_patches/member_status.{K}.uint8.zst`
+
+- **Shape**: `(K,)` where K = cluster_member_count
+- **Data type**: `uint8`
+- Per-member status:
+  - `0 reference` — the cluster's reference member (identity affine, ZNCC 1.0)
+  - `1 kept` — refined and vetted successfully
+  - `2 rejected_low_zncc` — achieved ZNCC below the acceptance threshold
+  - `3 rejected_shift` — translation drifted too far from the SIFT seed
+  - `4 duplicate_image` — outscored by another kept member in the same image, or
+    shares the reference's image
+  - `5 not_evaluated` — degenerate shape, template/seed support out of frame, or the
+    cluster itself was unrefinable
+- A patch cluster = the reference plus its `kept` members; statuses preserve the
+  rejected members so consumers can re-gate without re-running (the ZNCC/shift arrays
+  are the signals, mirroring how `match_descriptor_distances` enables descriptor
+  re-filtering)
+- **Constraint**: Every value is a valid discriminant (`0..=5`)
+- **Constraint**: At most one member with status `0` or `1` per (cluster, image)
+
+#### `cluster_patches/member_affines.{K}.2.3.float64.zst`
+
+- **Shape**: `(K, 2, 3)` where K = cluster_member_count
+- **Data type**: `float64` (little-endian)
+- Absolute affine warp in pixel coordinates (COLMAP pixel convention):
+  `x_member = A·x_ref + t` with `A` the leading 2×2 block and `t` the last column.
+  Stored absolute (not anchored/relative) so it composes directly (`member ← ref`,
+  and member↔member via the reference) without re-deriving the SIFT seed
+- Identity|0 for the reference row; zeros where not evaluated
+
+#### `cluster_patches/member_zncc.{K}.float32.zst`
+
+- **Shape**: `(K,)` where K = cluster_member_count
+- **Data type**: `float32` (little-endian)
+- Achieved windowed ZNCC vs the reference template, aligned with the member arrays;
+  `NaN` where not evaluated
+
+#### `cluster_patches/member_shift_px.{K}.float32.zst`
+
+- **Shape**: `(K,)` where K = cluster_member_count
+- **Data type**: `float32` (little-endian)
+- Translation drift in pixels from the SIFT seed; `NaN` where not evaluated
+
+### 7. Two-View Geometries (Optional Section)
 
 The two-view geometries section stores the results of geometric verification. It is optional —
-a `.matches` file can contain only candidate matches. To add geometric verification results,
+a `.matches` file can contain only candidate matches. It requires the pairwise backbone
+(`image_pairs/`): its arrays are keyed per stored pair, so a cluster-bearing file cannot
+carry TVGs. To add geometric verification results,
 write a new `.matches` file that includes both the candidate matches and the TVGs (see
 "Writing a verified .matches file from an existing one" in Usage Examples). This section
 parallels the `two_view_geometries` table in a COLMAP database.
@@ -481,6 +697,14 @@ is meaningful to the user.
 
 ## Data Ordering and Constraints
 
+### Backbone Rule
+
+Exactly one of `image_pairs/` and `clusters/` is present, selected by the metadata
+`has_clusters` flag. `two_view_geometries/` requires `image_pairs/`;
+`cluster_patches/` requires `clusters/`. The backbone-specific summary counts
+(`image_pair_count`/`match_count` vs `cluster_count`/`cluster_member_count`) follow
+the backbone — a file never carries both sets.
+
 ### Ordering Requirements
 
 1. **Pairs sorted**: `image_index_pairs` MUST be sorted lexicographically by `(idx_i, idx_j)`
@@ -489,7 +713,20 @@ is meaningful to the user.
    belonging to pair `k`. `sum(match_counts) == match_count`
 3. **Inlier counts aligned**: Same relationship for the TVG inlier arrays
 4. **Feature index bounds**: All feature indexes must be less than the corresponding
-   `feature_counts` entry
+   `feature_counts` entry (pairwise match arrays and cluster `member_features` alike)
+
+### Cluster Constraints
+
+1. **CSR well-formed**: `cluster_starts[0] == 0`, non-decreasing, final value equals
+   the member count
+2. **Minimum size**: Every cluster has ≥ 2 members
+3. **Member bounds**: `member_images[k] < image_count` and
+   `member_features[k] < feature_counts[member_images[k]]`
+4. **Cluster patches parallel**: The `cluster_patches/` arrays have lengths `C`
+   (`reference_members`) and `K` (member arrays) matching the clusters section
+5. **Statuses valid**: Every `member_status` value is a valid discriminant (`0..=5`);
+   `reference_members[c]` is `0xFFFFFFFF` or lies in cluster `c`'s member range with
+   status `0`; at most one status-`0`-or-`1` member per (cluster, image)
 
 ### No required ordering within a pair
 
@@ -533,6 +770,18 @@ This means you can:
 1. Write matches immediately after the matching step, inspect them before deciding to verify
 2. Produce multiple verified variants with different parameters, each as a new immutable file
 3. Ship a `.matches` file without TVGs and let the consumer verify
+
+### Why is the cluster backbone exclusive with stored pairs?
+
+A cluster-bearing file stores clusters **instead of** the pairwise expansion. The
+expansion is deterministic and cheap (`clusters_to_pair_matches`), while storing both
+roughly doubles the correspondence payload with derived values: per-pair data grows as
+Σ C(k,2) over cluster sizes versus the Σ k the clusters themselves cost. Consumers
+that need pairs obtain them by calling the expansion at read time; the cluster file
+remains the durable primary artifact, and the geometric-verification step writes the
+solver-facing pairwise derivative as a new file. See
+[`specs/core/cluster-patches.md`](../core/cluster-patches.md) for the full design
+discussion.
 
 ### Why store descriptor distances?
 
@@ -580,17 +829,23 @@ Same as `.sift` and `.sfmr`:
 ### Hash Computation
 
 1. **Metadata hash**: XXH128 of uncompressed `metadata.json.zst` content bytes
-2. **Section hashes** (images, pairs, two_view_geometries): Feed all files' uncompressed
-   content bytes into a streaming XXH128 hasher in lexicographic path order
+2. **Section hashes** (images, pairs, clusters, cluster_patches, two_view_geometries):
+   Feed all files' uncompressed content bytes into a streaming XXH128 hasher in
+   lexicographic path order
 3. **Overall hash**: Concatenate all present section hashes as raw 16-byte big-endian digests
-   in order (metadata, images, pairs, two_view_geometries if present), then compute XXH128
+   in order (metadata, images, pairs, clusters, cluster_patches, two_view_geometries —
+   each only if present), then compute XXH128
 
 ### Verification Process
 
-1. Decompress each file and hash the raw uncompressed bytes
-2. Recompute section and overall hashes
-3. Compare with stored values in `content_hash.json.zst`
-4. Validate structural constraints (feature index bounds, count sums, pair ordering)
+1. Check backbone/flag consistency (exactly one backbone's entries and summary counts
+   present, matching the `has_*` flags); a file that fails these is reported without
+   further section checks
+2. Decompress each file and hash the raw uncompressed bytes
+3. Recompute section and overall hashes
+4. Compare with stored values in `content_hash.json.zst`
+5. Validate structural constraints (feature index bounds, count sums, pair ordering;
+   cluster CSR, member bounds, patch statuses and reference invariants)
 
 ## Usage Examples
 
@@ -710,9 +965,27 @@ modifying an existing file.
 
 ## Versioning and Migration
 
-The format has two released versions (`1` and `2`). The format is versioned
-(`metadata.json` `version`) precisely so that convention changes like the one below
-can upgrade on load instead of breaking old files.
+The format has three released versions (`1`, `2`, and `3`). The format is versioned
+(`metadata.json` `version`) precisely so that changes like the ones below can upgrade
+on load instead of breaking old files. Writers always emit the current version;
+readers accept any version up to it.
+
+### Version 2 → Version 3
+
+Version 3 introduces the cluster backbone: the `clusters/` section (the cluster
+matcher's primary artifact) and the optional `cluster_patches/` enrichment, with the
+`image_pairs/` section — mandatory through version 2 — becoming the stored-pairs
+alternative (exactly one of the two backbones is present per file). Metadata gains
+`has_clusters` / `has_cluster_patches` flags and, in cluster-bearing files,
+`cluster_count` / `cluster_member_count` in place of `image_pair_count` /
+`match_count`; the content hash gains `clusters_xxh128` / `cluster_patches_xxh128`.
+
+**Version ≤ 2 files load unchanged.** They always store the pairwise backbone and
+never have clusters; readers treat the absent `has_clusters` / `has_cluster_patches`
+flags as `false`. No stored byte changes meaning: a pairwise version 3 file has
+exactly the pre-version-3 section layout and hash byte streams (the new metadata
+flags appear only in newly written files). Version 1 files additionally get the
+pose S-conjugation described below.
 
 ### Version 1 → Version 2
 
@@ -731,9 +1004,9 @@ conjugating each stored relative pose with the camera-frame flip
 `S = diag(1, −1, −1)`: `R' = S · R · S`, `t' = S · t`. The F/E/H matrices are
 untouched — they are pixel-space quantities, identical in both versions. Relative
 poses never touch the world frame, so the `.sfmr` world canonicalization `W` does not
-apply. Saving always writes version 2. Content hashes cover the stored bytes, so
-hashes verify before conversion; a converted-then-saved file is a new version 2 file
-with new hashes.
+apply. Saving always writes the current version. Content hashes cover the stored
+bytes, so hashes verify before conversion; a converted-then-saved file is a new
+current-version file with new hashes.
 
 As a consequence, consumers that export two-view geometries to a COLMAP database
 (`sfm to-colmap-db` via `src/sfmtool/colmap/db_setup.py`) S-conjugate the canonical
@@ -744,6 +1017,11 @@ for the invariant and the `S`/`W` conversion math.
 
 ## Version History
 
+- **Version 3**: Cluster backbone — the `clusters/` section (CSR cluster
+  membership, the cluster matcher's primary artifact) becomes the alternative
+  correspondence backbone to `image_pairs/` (exactly one per file), and the optional
+  `cluster_patches/` section stores photometrically refined per-member affine warps.
+  Version ≤ 2 files (always pairwise) load unchanged.
 - **Version 2**: Canonical camera convention — `cam2_from_cam1` relative
   poses in −Z-forward / +Y-up camera frames, matching `.sfmr` and `.camrig` — becomes
   normative; version 1 files (COLMAP convention) upgrade on load via `S`-conjugation

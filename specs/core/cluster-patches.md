@@ -89,8 +89,12 @@ located and content-hash-verified through the images section).
 
 ## Format: two new `.matches` sections
 
-To be folded into `specs/formats/matches-file-format.md` on implementation;
-the format version bumps to **3**. Version ≤ 2 files load unchanged; the
+Both sections are now documented normatively in
+[`specs/formats/matches-file-format.md`](../formats/matches-file-format.md)
+(file-structure tree, section details, metadata and content-hash fields,
+constraints, and the version-3 migration notes); the summary below records the
+design intent. The format version bumped to **3** with the `matches-format`
+implementation. Version ≤ 2 files load unchanged; the
 `image_pairs/` section, mandatory through version 2, becomes the
 stored-pairs alternative to `clusters/` (exactly one of the two is present).
 The overall content hash covers the present sections in the order metadata,
