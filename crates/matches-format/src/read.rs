@@ -379,12 +379,20 @@ fn read_cluster_patches_section<R: std::io::Read + Seek>(
     )?;
     let member_shift_px = Array1::from_vec(member_shift_px_vec);
 
+    let member_consistency_vec: Vec<f32> = read_binary_array(
+        archive,
+        &format!("cluster_patches/member_consistency_residual.{member_count}.float32.zst"),
+        member_count,
+    )?;
+    let member_consistency_residual = Array1::from_vec(member_consistency_vec);
+
     Ok(ClusterPatchData {
         reference_members,
         member_status,
         member_affines,
         member_zncc,
         member_shift_px,
+        member_consistency_residual,
         refine_options,
     })
 }

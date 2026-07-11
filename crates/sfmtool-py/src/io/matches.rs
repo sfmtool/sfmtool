@@ -70,6 +70,10 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
         dict.set_item("member_affines", cp.member_affines.into_pyarray(py))?;
         dict.set_item("member_zncc", cp.member_zncc.into_pyarray(py))?;
         dict.set_item("member_shift_px", cp.member_shift_px.into_pyarray(py))?;
+        dict.set_item(
+            "member_consistency_residual",
+            cp.member_consistency_residual.into_pyarray(py),
+        )?;
         dict.set_item("refine_options", serde_to_py(py, &cp.refine_options)?)?;
     } else {
         dict.set_item("has_cluster_patches", false)?;
@@ -189,6 +193,8 @@ pub fn write_matches(
         let member_zncc: PyReadonlyArray1<f32> = get_item(data, "member_zncc")?.extract()?;
         let member_shift_px: PyReadonlyArray1<f32> =
             get_item(data, "member_shift_px")?.extract()?;
+        let member_consistency_residual: PyReadonlyArray1<f32> =
+            get_item(data, "member_consistency_residual")?.extract()?;
         let refine_options: serde_json::Value =
             py_to_serde(py, &get_item(data, "refine_options")?)?;
         Some(ClusterPatchData {
@@ -197,6 +203,7 @@ pub fn write_matches(
             member_affines: member_affines.as_array().to_owned(),
             member_zncc: member_zncc.as_array().to_owned(),
             member_shift_px: member_shift_px.as_array().to_owned(),
+            member_consistency_residual: member_consistency_residual.as_array().to_owned(),
             refine_options,
         })
     } else {

@@ -67,6 +67,7 @@ class TestRefineClusterPatches:
             "member_affines",
             "member_zncc",
             "member_shift_px",
+            "member_consistency_residual",
         }
         assert result["reference_members"].dtype == np.uint32
         assert result["reference_members"].shape == (1,)
@@ -76,6 +77,11 @@ class TestRefineClusterPatches:
         assert result["member_affines"].shape == (2, 2, 3)
         assert result["member_zncc"].dtype == np.float32
         assert result["member_shift_px"].dtype == np.float32
+        assert result["member_consistency_residual"].dtype == np.float32
+        assert result["member_consistency_residual"].shape == (2,)
+        # A single pure-translation cluster fits the factorization exactly.
+        assert np.isfinite(result["member_consistency_residual"]).all()
+        assert (result["member_consistency_residual"] < 0.05).all()
 
         # Equal scales tie-break to the lowest global member index.
         assert result["reference_members"][0] == 0

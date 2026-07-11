@@ -27,6 +27,7 @@
 //! value of the support map's linear part (sample spacing in source px), with
 //! the map divided by `2^ℓ` before sampling.
 
+mod consistency;
 mod kernels;
 mod params;
 
@@ -48,6 +49,7 @@ use crate::patch::view_selection::AffineCoreMap;
 
 use kernels::{eval_zncc, grid_bbox, nelder_mead, SupportTables, TemplateKernel, TileCache};
 
+pub use consistency::warp_consistency_residuals;
 pub use params::{
     ClusterRefineParams, ClusterRefineResult, FeatureGeometry, MemberStatus, REFERENCE_UNREFINABLE,
 };

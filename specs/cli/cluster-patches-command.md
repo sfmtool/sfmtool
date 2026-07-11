@@ -66,12 +66,16 @@ photometrically yet cannot pin a 2D position.
    shapes, vetting, one kept member per image), with a `ProgressCounter`
    poller reporting per-cluster progress.
 4. **Write.** A new `.matches` file: images + clusters sections copied
-   verbatim, `cluster_patches/` from the kernel output, `refine_options` =
-   the CLI parameters, metadata updated (`has_cluster_patches: true`, fresh
-   timestamp, workspace `relative_path` recomputed from the output location;
-   the content hash is recomputed by the writer). A summary line reports the
-   status breakdown (references / kept / rejected / unlocalizable /
-   duplicate-image / not evaluated).
+   verbatim, `cluster_patches/` from the kernel output — including the
+   per-member warp-consistency residual
+   ([`cluster-warp-consistency.md`](../core/cluster-warp-consistency.md), a
+   stored signal computed in the same kernel call, no CLI knobs) —
+   `refine_options` = the CLI parameters, metadata updated
+   (`has_cluster_patches: true`, fresh timestamp, workspace `relative_path`
+   recomputed from the output location; the content hash is recomputed by
+   the writer). Summary lines report the consistency distribution (median /
+   p90) and the status breakdown (references / kept / rejected /
+   unlocalizable / duplicate-image / not evaluated).
 
 ## Output statuses
 

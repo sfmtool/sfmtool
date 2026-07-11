@@ -522,6 +522,13 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
             )?;
             cp_hasher.update(&affines_raw);
 
+            // cluster_patches/member_consistency_residual
+            let consistency_raw = read_zst_entry(
+                &mut archive,
+                &format!("cluster_patches/member_consistency_residual.{member_count}.float32.zst"),
+            )?;
+            cp_hasher.update(&consistency_raw);
+
             // cluster_patches/member_shift_px
             let shift_raw = read_zst_entry(
                 &mut archive,
@@ -595,6 +602,11 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
             let mut cp_ok = true;
             for (name, raw_len, expected) in [
                 ("member_affines", affines_raw.len(), member_count * 48),
+                (
+                    "member_consistency_residual",
+                    consistency_raw.len(),
+                    member_count * 4,
+                ),
                 ("member_shift_px", shift_raw.len(), member_count * 4),
                 ("member_status", status_raw.len(), member_count),
                 ("member_zncc", zncc_raw.len(), member_count * 4),

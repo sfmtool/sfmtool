@@ -209,6 +209,7 @@ fn make_cluster_patch_test_data() -> MatchesData {
         member_affines,
         member_zncc: Array1::from_vec(vec![1.0, 0.93, 0.41, f32::NAN, f32::NAN]),
         member_shift_px: Array1::from_vec(vec![0.0, 1.25, 0.8, f32::NAN, f32::NAN]),
+        member_consistency_residual: Array1::from_vec(vec![0.02, 0.05, 0.31, f32::NAN, f32::NAN]),
         refine_options: serde_json::json!({
             "radius": 4.0, "resolution": 15, "min_zncc": 0.85, "max_shift_px": 3.0
         }),
@@ -359,6 +360,10 @@ fn test_round_trip_clusters_with_patches() {
     assert_eq!(cp.member_affines, orig.member_affines);
     assert_f32_bits_eq(&cp.member_zncc, &orig.member_zncc);
     assert_f32_bits_eq(&cp.member_shift_px, &orig.member_shift_px);
+    assert_f32_bits_eq(
+        &cp.member_consistency_residual,
+        &orig.member_consistency_residual,
+    );
     assert_eq!(cp.refine_options, orig.refine_options);
 
     assert!(loaded.content_hash.cluster_patches_xxh128.is_some());
@@ -668,6 +673,17 @@ fn test_write_validation_cluster_patches_wrong_lengths() {
         "matches_test_cp_wrong_zncc_len",
         &data,
         "member_zncc len 4 != cluster_member_count 5",
+    );
+
+    let mut data = make_cluster_patch_test_data();
+    data.cluster_patches
+        .as_mut()
+        .unwrap()
+        .member_consistency_residual = Array1::from_vec(vec![0.0, 0.1]);
+    expect_write_error(
+        "matches_test_cp_wrong_consistency_len",
+        &data,
+        "member_consistency_residual len 2 != cluster_member_count 5",
     );
 }
 

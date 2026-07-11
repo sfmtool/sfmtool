@@ -211,6 +211,16 @@ pure: no I/O, no `.sift` reads — the caller supplies decoded pyramids and
 feature geometry (mirrors how `ProjectedImage` isolates the other kernels
 from decoding, `normal_refine/params.rs:20`).
 
+> _Addition (2026-07-10): after refinement, the sibling kernel
+> `warp_consistency_residuals` (`cluster_refine/consistency.rs`) computes a
+> per-member warp-consistency residual from a joint weak-perspective
+> factorization of all cluster warps — a reconstruction-free contamination
+> signal stored as `cluster_patches/member_consistency_residual` (the
+> binding computes it inside the same `refine_cluster_patches` call; the
+> result dict and the format gained the matching member-parallel array).
+> Design, evidence, and references in
+> [cluster-warp-consistency.md](cluster-warp-consistency.md)._
+
 ### Algorithm (per cluster)
 
 Parallelism: `(0..cluster_count).into_par_iter()` over clusters, writing

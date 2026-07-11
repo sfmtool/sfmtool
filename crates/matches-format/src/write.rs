@@ -246,6 +246,15 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         )?;
         cp_hasher.update(&bytes);
 
+        // cluster_patches/member_consistency_residual
+        let bytes = write_binary_entry(
+            &mut zip,
+            &format!("cluster_patches/member_consistency_residual.{member_count}.float32.zst"),
+            bytemuck::cast_slice(cp.member_consistency_residual.as_slice().unwrap()),
+            zstd_level,
+        )?;
+        cp_hasher.update(&bytes);
+
         // cluster_patches/member_shift_px
         let bytes = write_binary_entry(
             &mut zip,
@@ -660,6 +669,13 @@ fn validate_dimensions(data: &MatchesData, image_count: usize) -> Result<(), Mat
             format!(
                 "member_zncc len {} != cluster_member_count {member_count}",
                 cp.member_zncc.len()
+            )
+        );
+        check!(
+            cp.member_consistency_residual.len() == member_count,
+            format!(
+                "member_consistency_residual len {} != cluster_member_count {member_count}",
+                cp.member_consistency_residual.len()
             )
         );
         check!(
