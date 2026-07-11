@@ -151,6 +151,7 @@ def _run_cluster_patches(
     max_keypoint_uncertainty: float,
 ):
     import os
+    from concurrent.futures import ThreadPoolExecutor
     from datetime import datetime
 
     import cv2
@@ -198,14 +199,12 @@ def _run_cluster_patches(
     # feature count used during matching, so member indices line up).
     feature_counts = data["feature_counts"]
     sift_hashes = data["sift_content_hashes"]
-    images, positions, affine_shapes = [], [], []
-    click.echo("Reading images and .sift features...")
-    for i, name in enumerate(image_names):
+
+    def _read_one(i: int, name: str):
         img_path = workspace_dir / name
         img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
         if img is None:
             raise FileNotFoundError(f"Image not found or unreadable: {img_path}")
-        images.append(np.ascontiguousarray(img))
 
         rel = Path(name)
         sift_path = workspace_dir / rel.parent / feature_prefix_dir / f"{rel.name}.sift"
@@ -220,12 +219,33 @@ def _run_cluster_patches(
             )
         sift = read_sift(sift_path)
         count = int(feature_counts[i])
-        positions.append(
-            np.ascontiguousarray(sift["positions_xy"][:count], dtype=np.float32)
+        return (
+            np.ascontiguousarray(img),
+            np.ascontiguousarray(sift["positions_xy"][:count], dtype=np.float32),
+            np.ascontiguousarray(sift["affine_shapes"][:count], dtype=np.float32),
         )
-        affine_shapes.append(
-            np.ascontiguousarray(sift["affine_shapes"][:count], dtype=np.float32)
-        )
+
+    click.echo("Reading images and .sift features...")
+    # Decode in a thread pool (cv2 and the .sift reader release the GIL),
+    # collecting results in submission order so the lists stay parallel to
+    # `image_names` (the embed-patches pattern).
+    with ThreadPoolExecutor() as pool:
+        futures = [
+            pool.submit(_read_one, i, name) for i, name in enumerate(image_names)
+        ]
+        images, positions, affine_shapes = [], [], []
+        try:
+            for future in futures:
+                img, pos, aff = future.result()
+                images.append(img)
+                positions.append(pos)
+                affine_shapes.append(aff)
+        except BaseException:
+            # Fail fast: without this, the pool's __exit__ would finish
+            # decoding every queued image before the error surfaces.
+            for f in futures:
+                f.cancel()
+            raise
 
     click.echo(f"Refining {cluster_count} clusters...")
     with _poll_progress(click.echo, cluster_count) as counter:

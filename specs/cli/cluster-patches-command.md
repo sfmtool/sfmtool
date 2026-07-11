@@ -58,8 +58,10 @@ photometrically yet cannot pin a 2D position.
    the `sift_content_hashes`, and read `positions_xy` / `affine_shapes`
    capped at `feature_counts[i]` (the count used during matching, so member
    feature indices line up).
-3. **Refine.** Load the images with cv2 (color) in images-section order and
-   call `_sfmtool.matching.refine_cluster_patches` (the
+3. **Refine.** Load the images with cv2 (color) and the `.sift` geometry in
+   images-section order — decoded through a thread pool (cv2 releases the
+   GIL; the embed-patches pattern), results collected in submission order —
+   and call `_sfmtool.matching.refine_cluster_patches` (the
    `patch::cluster_refine` kernel — per-member localizability gate,
    reference selection by largest SIFT scale, Gaussian-windowed-ZNCC shift →
    similarity → affine Nelder-Mead cascade seeded from the SIFT affine

@@ -73,8 +73,23 @@ pub struct ClusterRefineParams {
     pub max_keypoint_uncertainty: f64,
     /// Nelder-Mead iterations per cascade stage.
     pub max_iters: u32,
-    /// Simplex value-spread stop threshold.
+    /// Simplex value-spread stop threshold for the affine stage (the stored
+    /// result).
     pub convergence: f64,
+    /// Simplex value-spread stop threshold for the shift and similarity
+    /// stages, which only seed the next stage — looser than
+    /// [`Self::convergence`] (dino_dog_toy: −30% intermediate-stage
+    /// evaluations for a kept-set change under 0.1%).
+    pub intermediate_convergence: f64,
+    /// Stall exit for every stage: stop when the best simplex value has not
+    /// improved by more than [`Self::stall_tol`] for this many consecutive
+    /// iterations. Releases the reflect-heavy affine crawl (which otherwise
+    /// runs into [`Self::max_iters`] long after the score stopped moving)
+    /// without truncating members that are still improving.
+    pub stall_iters: u32,
+    /// Minimum best-value improvement (ZNCC units) that counts as progress
+    /// for the stall exit.
+    pub stall_tol: f64,
 }
 
 impl Default for ClusterRefineParams {
@@ -92,6 +107,15 @@ impl Default for ClusterRefineParams {
             max_keypoint_uncertainty: 0.35,
             max_iters: 120,
             convergence: 1e-5,
+            // Tuned on dino_dog_toy (85 images, 105K clusters): together
+            // these cut objective evaluations ~19% (265 → 213 per member)
+            // for a +0.03% kept-set delta and a slightly better
+            // warp-consistency profile, and they keep the synthetic
+            // warp-recovery suite green. See
+            // specs/core/cluster-patch-refinement.md ("Performance").
+            intermediate_convergence: 1e-4,
+            stall_iters: 20,
+            stall_tol: 1e-4,
         }
     }
 }
