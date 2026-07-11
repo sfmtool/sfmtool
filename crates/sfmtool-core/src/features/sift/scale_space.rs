@@ -71,7 +71,16 @@ struct Octave {
 /// The Gaussian scale-space pyramid for an image (the DoG is computed on the
 /// fly during detection, not stored — see the module docs).
 ///
-/// Built by [`ScaleSpace::build`]. See the module docs for the coordinate and
+/// Built by [`ScaleSpace::build`] (every octave at its full `s + 3` levels) or
+/// lazily by [`ScaleSpace::build_chain`] + [`ScaleSpace::extend_octave`]: the
+/// chain builds only levels `0..=s` per octave (level `s` seeds the next
+/// octave's decimation, so the chain is the minimal pyramid skeleton), and an
+/// octave is extended to its full `s + 3` levels only when detection actually
+/// scans it. The feature-cap detection driver uses this to skip the fine
+/// octaves entirely when the coarser octaves already fill the cap (see
+/// `detect_keypoints`). Levels built lazily are bit-identical to the eager
+/// build — each level is blurred from the previous level with the same
+/// incremental sigma either way. See the module docs for the coordinate and
 /// sigma conventions.
 pub struct ScaleSpace {
     octaves: Vec<Octave>,
@@ -81,12 +90,29 @@ pub struct ScaleSpace {
     sigma: f64,
     /// Whether the input was doubled before octave 0.
     double_image: bool,
+    /// Incremental blur sigmas for levels `1..s+3` (level `i` is level `i−1`
+    /// blurred by `inc_sigmas[i−1]`), retained for [`Self::extend_octave`].
+    inc_sigmas: Vec<f64>,
+    /// The build's `blur_radius_factor`, retained for [`Self::extend_octave`].
+    radius_factor: f64,
 }
 
 impl ScaleSpace {
-    /// Build the Gaussian pyramid for `image` (the DoG is fused into detection,
-    /// not materialized here — see the module docs).
+    /// Build the full Gaussian pyramid for `image`: every octave at its
+    /// complete `s + 3` levels (the DoG is fused into detection, not
+    /// materialized here — see the module docs).
     pub fn build(image: &GrayImage, params: &SiftParams) -> Self {
+        let mut ss = Self::build_chain(image, params);
+        for o in 0..ss.num_octaves() {
+            ss.extend_octave(o);
+        }
+        ss
+    }
+
+    /// Build the minimal pyramid skeleton: levels `0..=s` per octave (enough
+    /// to seed every decimation), leaving each octave's last two levels for
+    /// [`Self::extend_octave`].
+    pub fn build_chain(image: &GrayImage, params: &SiftParams) -> Self {
         let s = params.octave_layers;
         let sigma = params.sigma;
         let double_image = params.double_image;
@@ -100,10 +126,6 @@ impl ScaleSpace {
         let mut t_blur = std::time::Duration::ZERO;
         let mut t_decimate = std::time::Duration::ZERO;
         let t_base_start = std::time::Instant::now();
-
-        // Scratch buffer for every blur's horizontal-pass intermediate, reused
-        // across the whole build (grows to the octave-0 size on first use).
-        let mut blur_scratch: Vec<f32> = Vec::new();
 
         // --- Build octave-0 level 0 (bring the base image to absolute blur σ). ---
         let (base, base_sigma) = if double_image {
@@ -120,7 +142,7 @@ impl ScaleSpace {
         // Incremental blur to lift the base from `base_sigma` to `σ`.
         let level0 = if sigma > base_sigma {
             let inc = (sigma * sigma - base_sigma * base_sigma).sqrt();
-            gaussian_blur(&base, inc, params.blur_radius_factor, &mut blur_scratch)
+            gaussian_blur(&base, inc, params.blur_radius_factor)
         } else {
             base
         };
@@ -155,18 +177,15 @@ impl ScaleSpace {
         let mut current_base = level0;
 
         for o in 0..num_octaves {
-            // Build the Gaussian stack for this octave by incremental blur.
+            // Build this octave's chain levels (`1..=s`) by incremental blur;
+            // levels `s+1, s+2` are added by `extend_octave` when detection
+            // actually scans the octave.
             let tm = std::time::Instant::now();
             let mut gaussians: Vec<GrayImage> = Vec::with_capacity(gaussians_per_octave);
             gaussians.push(current_base);
-            for inc in &inc_sigmas {
+            for inc in &inc_sigmas[..s as usize] {
                 let prev = gaussians.last().unwrap();
-                gaussians.push(gaussian_blur(
-                    prev,
-                    *inc,
-                    params.blur_radius_factor,
-                    &mut blur_scratch,
-                ));
+                gaussians.push(gaussian_blur(prev, *inc, params.blur_radius_factor));
             }
             t_blur += tm.elapsed();
 
@@ -216,7 +235,46 @@ impl ScaleSpace {
             s,
             sigma,
             double_image,
+            inc_sigmas,
+            radius_factor: params.blur_radius_factor,
         }
+    }
+
+    /// Extend octave `o` to its full `s + 3` Gaussian levels by continuing the
+    /// incremental blur chain from the last built level. Idempotent; a no-op
+    /// on an already-full octave. Lazily built levels are bit-identical to the
+    /// eager [`Self::build`] — each level is the previous level blurred by the
+    /// same incremental sigma, in the same order.
+    pub fn extend_octave(&mut self, o: usize) {
+        let full = (self.s + 3) as usize;
+        while self.octaves[o].gaussians.len() < full {
+            let gaussians = &mut self.octaves[o].gaussians;
+            let inc = self.inc_sigmas[gaussians.len() - 1];
+            let next = gaussian_blur(gaussians.last().unwrap(), inc, self.radius_factor);
+            gaussians.push(next);
+        }
+    }
+
+    /// Whether octave `o` carries its full `s + 3` levels (detection needs all
+    /// of them; the chain of [`Self::build_chain`] holds only `0..=s`).
+    pub fn octave_is_full(&self, o: usize) -> bool {
+        self.octaves[o].gaussians.len() == (self.s + 3) as usize
+    }
+
+    /// Strict `f32` upper bound on the scale of any localized candidate octave
+    /// `o` can produce.
+    ///
+    /// Localization clamps the integer layer to `1..=s` and requires the
+    /// converged offset to satisfy `|offset| < 0.5`, so the continuous layer is
+    /// strictly below `s + 0.5` and the candidate scale strictly below
+    /// `abs_sigma_full(o, s + 0.5)` in exact arithmetic. The margin factor
+    /// absorbs the localizer's own f64→f32 rounding and any `powf` slop, so a
+    /// kept scale strictly above this bound provably outranks every candidate
+    /// the octave could yield (the cap-skip guard in `detect_keypoints` only
+    /// gets *more* conservative from the margin).
+    pub fn max_scale_bound(&self, o: usize) -> f32 {
+        let bound = self.abs_sigma_full(o as i32, self.s as f64 + 0.5);
+        (bound * (1.0 + 1e-5)) as f32
     }
 
     /// Number of octaves in the pyramid.
@@ -359,21 +417,23 @@ fn upsample_2x(img: &GrayImage) -> GrayImage {
     GrayImage::new(out_w, out_h, data)
 }
 
-/// Decimate an image 2x by taking every second pixel in x and y.
+/// Decimate an image 2x by taking every second pixel in x and y (rayon row
+/// parallelism; each output row is an independent gather).
 fn decimate_2x(img: &GrayImage) -> GrayImage {
     let t0 = std::time::Instant::now();
     let in_w = img.width() as usize;
     let out_w = (img.width() / 2).max(1) as usize;
     let out_h = (img.height() / 2).max(1) as usize;
     let src = img.data();
-    let mut data = vec![0.0f32; out_w * out_h];
-    for or in 0..out_h {
-        let src_row = (2 * or) * in_w;
-        let dst_row = or * out_w;
-        for oc in 0..out_w {
-            data[dst_row + oc] = src[src_row + 2 * oc];
-        }
-    }
+    let mut data = uninit_vec_f32(out_w * out_h);
+    data.par_chunks_mut(out_w)
+        .enumerate()
+        .for_each(|(or, dst_row)| {
+            let src_row = &src[(2 * or) * in_w..];
+            for (oc, d) in dst_row.iter_mut().enumerate() {
+                *d = src_row[2 * oc];
+            }
+        });
     log_op("decimate", out_w as u32, out_h as u32, 0, t0);
     GrayImage::new(out_w as u32, out_h as u32, data)
 }
@@ -499,75 +559,86 @@ fn resize_uninit_f32(buf: &mut Vec<f32>, n: usize) {
     unsafe { buf.set_len(n) };
 }
 
-/// Separable Gaussian blur with edge clamping. Horizontal pass then vertical
-/// pass; rows are parallelized with rayon and the horizontal inner loop uses an
-/// SSE2/AVX2 path with a scalar fallback for borders / non-x86.
+/// Owned output rows per fused-blur stripe. The stripe's horizontal-pass
+/// buffer is `(STRIPE + 2·radius) × W` — ~1.4 MB at the doubled-4K width with
+/// the widest default kernel, sized to stay cache-resident per worker. Larger
+/// stripes amortize the halo recompute better but push the buffer out of L2.
+const BLUR_STRIPE_ROWS: usize = 32;
+
+/// Separable Gaussian blur with edge clamping, fused into row stripes: each
+/// stripe computes the horizontal pass for its output rows **plus a
+/// `radius`-row halo** into a small per-worker buffer, then runs the vertical
+/// pass from that buffer — so the full-image horizontal intermediate is never
+/// materialized and each source/output pixel crosses memory once (the blur is
+/// bandwidth-bound at scale-space sizes; the halo rows are recomputed by both
+/// adjacent stripes, a few percent of extra arithmetic for half the traffic).
 ///
-/// `scratch` holds the horizontal-pass intermediate and is reused across calls
-/// (a build threads one buffer through every blur), so the only per-call
-/// allocation is the returned image's own pixel buffer.
-fn gaussian_blur(
-    img: &GrayImage,
-    sigma: f64,
-    radius_factor: f64,
-    scratch: &mut Vec<f32>,
-) -> GrayImage {
+/// Bit-identical to the unfused two-pass form: every buffer row is the same
+/// `blur_row` result the full horizontal pass produced (rows outside the image
+/// clamp to the edge row, which the buffer materializes explicitly), and each
+/// vertical output row folds the same taps in the same order — interior rows
+/// on the SSE2/AVX2 path, image-border rows on the scalar clamped path
+/// (reading the clamped rows the buffer already holds).
+fn gaussian_blur(img: &GrayImage, sigma: f64, radius_factor: f64) -> GrayImage {
     let t0 = std::time::Instant::now();
     let kernel = gaussian_kernel(sigma, radius_factor);
     let radius = (kernel.len() / 2) as i32;
     let w = img.width() as usize;
     let h = img.height() as usize;
-
-    // Horizontal pass into the reused `scratch` buffer; `scratch` and `out` are
-    // both fully overwritten before being read (the H pass writes every column of
-    // every row; the V pass writes every pixel), so neither is zero-filled.
+    let r = radius as usize;
     let src = img.data();
-    resize_uninit_f32(scratch, w * h);
-    scratch
-        .par_chunks_mut(w)
-        .enumerate()
-        .for_each(|(row, out_row)| {
-            let row_data = &src[row * w..row * w + w];
-            blur_row(row_data, out_row, &kernel, radius);
-        });
-    // Immutable view of the horizontal-pass result for the vertical pass.
-    let horiz: &[f32] = scratch;
 
-    // Vertical pass: treat columns. Process by output row, gathering the
-    // vertical neighborhood (clamped) for each pixel. Interior rows (where the
-    // full kernel fits without clamping) use an SSE2 path that vectorizes across
-    // columns; border rows fall back to the clamped scalar path.
+    // `out` is fully overwritten before being read, so it is not zero-filled.
     let mut out = uninit_vec_f32(w * h);
-    out.par_chunks_mut(w)
+    out.par_chunks_mut(BLUR_STRIPE_ROWS * w)
         .enumerate()
-        .for_each(|(row, out_row)| {
-            #[cfg(target_arch = "x86_64")]
-            {
-                let radius_us = radius as usize;
-                if row >= radius_us && row + radius_us < h {
-                    // For interior rows every tap row (row-radius ..= row+radius)
-                    // is in bounds, so no clamping is needed.
-                    if *HAS_AVX2_FMA {
-                        // SAFETY: guarded by runtime avx2+fma detection.
-                        unsafe {
-                            blur_col_interior_avx2(horiz, out_row, &kernel, radius_us, row, w)
-                        };
-                    } else {
-                        // SAFETY: SSE2 is baseline on x86_64.
-                        unsafe {
-                            blur_col_interior_sse2(horiz, out_row, &kernel, radius_us, row, w)
-                        };
-                    }
-                    return;
-                }
+        .for_each_init(Vec::<f32>::new, |buf, (si, out_chunk)| {
+            let y0 = si * BLUR_STRIPE_ROWS;
+            let rows_out = out_chunk.len() / w;
+            // Horizontal pass for global rows [y0 − r, y0 + rows_out + r),
+            // clamped to the image; buffer row j holds H(clamp(y0 − r + j)).
+            let rows_buf = rows_out + 2 * r;
+            resize_uninit_f32(buf, rows_buf * w);
+            for j in 0..rows_buf {
+                let gy = (y0 as i64 + j as i64 - r as i64).clamp(0, h as i64 - 1) as usize;
+                blur_row(
+                    &src[gy * w..gy * w + w],
+                    &mut buf[j * w..j * w + w],
+                    &kernel,
+                    radius,
+                );
             }
-            for (col, dst) in out_row.iter_mut().enumerate() {
-                let mut acc = 0.0f32;
-                for (kidx, &kw) in kernel.iter().enumerate() {
-                    let r = (row as i32 + kidx as i32 - radius).clamp(0, h as i32 - 1) as usize;
-                    acc += kw * horiz[r * w + col];
+            // Vertical pass per output row; the buffer covers every tap.
+            for (lr, out_row) in out_chunk.chunks_mut(w).enumerate() {
+                let row = y0 + lr;
+                #[cfg(target_arch = "x86_64")]
+                {
+                    if row >= r && row + r < h {
+                        // Interior row: no clamping; the SIMD path reads
+                        // buffer rows lr..lr+2r+1 (local center lr + r).
+                        if *HAS_AVX2_FMA {
+                            // SAFETY: guarded by runtime avx2+fma detection.
+                            unsafe { blur_col_interior_avx2(buf, out_row, &kernel, r, lr + r, w) };
+                        } else {
+                            // SAFETY: SSE2 is baseline on x86_64.
+                            unsafe { blur_col_interior_sse2(buf, out_row, &kernel, r, lr + r, w) };
+                        }
+                        continue;
+                    }
                 }
-                *dst = acc;
+                // Image-border row: the exact scalar clamped accumulation of
+                // the unfused form. Buffer row for global tap row `t` is
+                // `clamp(t) − (y0 − r)`; the buffer materialized clamped
+                // duplicates, so the values match `horiz[clamp(t)·w + col]`.
+                for (col, dst) in out_row.iter_mut().enumerate() {
+                    let mut acc = 0.0f32;
+                    for (kidx, &kw) in kernel.iter().enumerate() {
+                        let t = (row as i32 + kidx as i32 - radius).clamp(0, h as i32 - 1);
+                        let j = (t - (y0 as i32 - radius)) as usize;
+                        acc += kw * buf[j * w + col];
+                    }
+                    *dst = acc;
+                }
             }
         });
 

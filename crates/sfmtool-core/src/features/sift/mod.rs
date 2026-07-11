@@ -43,9 +43,10 @@ pub use crate::features::optical_flow::GrayImage;
 /// Env-gated stage timing for the keypoint-finding pipeline. Enabled by setting
 /// the `SFMTOOL_SIFT_TIMING` environment variable; effectively zero-cost otherwise
 /// (one cached bool check plus a few `Instant::now()` per image). When on, each
-/// `detect_keypoints` call and each `ScaleSpace::build` prints one
-/// `SIFT_TIMING ...` line to stderr with per-stage wall-clock milliseconds, for
-/// offline aggregation.
+/// chain build (`ScaleSpace::build_chain`), each `detect_keypoints` call (whose
+/// `octaves=detected/total` field reports the cap-aware early stop), and each
+/// descriptor batch (`extract_sift_partial`) prints one `SIFT_TIMING ...` line
+/// to stderr with per-stage wall-clock milliseconds, for offline aggregation.
 pub(crate) static SIFT_TIMING: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var_os("SFMTOOL_SIFT_TIMING").is_some());
 
@@ -274,45 +275,141 @@ pub fn detect_keypoints(image: &GrayImage, params: &SiftParams) -> Detection {
     let timing = *SIFT_TIMING;
 
     let t = std::time::Instant::now();
-    let scale_space = ScaleSpace::build(image, params);
+    // Minimal pyramid skeleton (levels 0..=s per octave); each octave's last
+    // two levels are built lazily right before that octave is detected, so a
+    // skipped octave never pays for them.
+    let mut scale_space = ScaleSpace::build_chain(image, params);
     let t_build = t.elapsed();
 
-    // Stage 3+4: scale-space extrema + subpixel localization (un-oriented).
+    // Stages 3–5 interleaved per octave, coarse→fine, with a cap-aware early
+    // stop. Octave scale ranges are disjoint and ordered — octave o's
+    // localized candidates span σ·k^[0.5, s+0.5]·2^o strictly (the localizer
+    // clamps the integer layer to 1..=s and requires |offset| < 0.5) — so the
+    // running top-`cap` candidate pool built coarse-to-fine equals the global
+    // top-`cap` of a full scan (COLMAP `max_num_features`: keep the
+    // largest-scale candidates, under a *total* order — scale, then response,
+    // then octave/layer/y/x — so the retained set is deterministic when
+    // scales tie; see the reproducible-`.sift` contract in
+    // `specs/core/sift.md`). Each octave's surviving candidates are oriented
+    // as soon as they are admitted (orientation preserves scale, so the
+    // final keypoint ranking follows the candidate ranking), which lets two
+    // guards stop the walk with output identical to scanning everything:
+    //
+    // 1. **Output-fixed:** ≥ `cap` keypoints exist and the cap-th largest
+    //    keypoint scale strictly clears the next octave's `max_scale_bound` —
+    //    every later keypoint would be cut by the final sort+truncate.
+    // 2. **Candidate-set-fixed:** the candidate pool is full and its minimum
+    //    scale strictly clears the bound — every later candidate would be cut
+    //    before orientation (this also covers the corner where orientation
+    //    yields no peak for some candidates, matching the full scan's
+    //    behavior of orienting only the top-`cap` candidates).
+    //
+    // The bound carries a rounding margin; in the (never observed) event an
+    // f32 seam collision makes a fine candidate tie the pool's minimum, the
+    // slow path re-selects over the merged pool and re-orients it, so the
+    // result is *always* the full scan's, not merely almost-always. On a
+    // large image with the default cap the walk stops above the finest
+    // octaves, which hold most of the pixels (with `double_image`, octaves 0
+    // and 1 are ~94% of the pyramid) — skipping their detection scan and
+    // their last two Gaussian levels.
     let t = std::time::Instant::now();
-    let mut localized = detect::detect_and_localize(&scale_space, params);
-    // Feature-count cap (COLMAP `max_num_features`): keep the largest-scale
-    // candidates. Applied here, before orientation and description, so neither
-    // of those (atan2-heavy) stages processes candidates that will be discarded.
-    // `select_nth_unstable_by` partitions in O(n) so the first `cap` entries are
-    // the largest scale. The comparator is a *total* order (scale, then response,
-    // then octave/layer/y/x) so the retained set is deterministic when scales tie
-    // — otherwise an unstable partition could keep a different subset run-to-run,
-    // breaking the reproducible-`.sift` contract (see `specs/core/sift.md`).
-    if let Some(cap) = params.max_num_features {
-        if localized.len() > cap {
-            use std::cmp::Ordering::Equal;
-            localized.select_nth_unstable_by(cap, |a, b| {
-                b.scale
-                    .partial_cmp(&a.scale)
-                    .unwrap_or(Equal)
-                    .then(b.response.partial_cmp(&a.response).unwrap_or(Equal))
-                    .then(a.octave.cmp(&b.octave))
-                    .then(a.layer.partial_cmp(&b.layer).unwrap_or(Equal))
-                    .then(a.y.partial_cmp(&b.y).unwrap_or(Equal))
-                    .then(a.x.partial_cmp(&b.x).unwrap_or(Equal))
-            });
-            localized.truncate(cap);
+    let mut t_orient = std::time::Duration::ZERO;
+    let mut pool: Vec<detect::LocalizedKeypoint> = Vec::new();
+    let mut keypoints: Vec<SiftKeypoint> = Vec::new();
+    let total_octaves = scale_space.num_octaves();
+    let mut detected_octaves = 0usize;
+    use std::cmp::Ordering::Equal;
+    let candidate_order = |a: &detect::LocalizedKeypoint, b: &detect::LocalizedKeypoint| {
+        b.scale
+            .partial_cmp(&a.scale)
+            .unwrap_or(Equal)
+            .then(b.response.partial_cmp(&a.response).unwrap_or(Equal))
+            .then(a.octave.cmp(&b.octave))
+            .then(a.layer.partial_cmp(&b.layer).unwrap_or(Equal))
+            .then(a.y.partial_cmp(&b.y).unwrap_or(Equal))
+            .then(a.x.partial_cmp(&b.x).unwrap_or(Equal))
+    };
+    for o in (0..total_octaves).rev() {
+        if let Some(cap) = params.max_num_features {
+            if cap == 0 {
+                // Degenerate cap: nothing can be kept, so nothing needs
+                // detecting (the final truncate would empty the output anyway).
+                break;
+            }
+            let bound = scale_space.max_scale_bound(o);
+            if keypoints.len() >= cap {
+                // Guard 1: the cap-th largest keypoint scale (select_nth is
+                // O(n); the order it leaves behind is irrelevant — every
+                // downstream selection and sort uses a total order).
+                let (_, kth, _) = keypoints.select_nth_unstable_by(cap - 1, |a, b| {
+                    b.scale().partial_cmp(&a.scale()).unwrap_or(Equal)
+                });
+                if kth.scale() > bound {
+                    break;
+                }
+            }
+            if pool.len() >= cap {
+                // Guard 2: the pool minimum (the cap-th candidate).
+                let pool_min = pool.iter().map(|c| c.scale).fold(f32::INFINITY, f32::min);
+                if pool_min > bound {
+                    break;
+                }
+            }
+        }
+        scale_space.extend_octave(o);
+        let mut new = detect::detect_octave(&scale_space, params, o);
+        detected_octaves += 1;
+        // Dropping candidates from `new` (never orienting them) is sound only
+        // when every pooled (coarser) candidate strictly outranks every new
+        // one — verified by the same margin-guarded bound the break guards
+        // use. If an f32 seam tie makes that uncertain (the pool is full and
+        // guard 2 did not break, or a crossing octave overflows the cap while
+        // the pool minimum does not clear the bound), fall back to a merged
+        // re-selection and a from-scratch re-orientation, which reproduces
+        // the full scan's single global cap exactly.
+        let seam_merge = match params.max_num_features {
+            Some(cap) if pool.len() >= cap => true,
+            Some(cap) if pool.len() + new.len() > cap => {
+                let pool_min = pool.iter().map(|c| c.scale).fold(f32::INFINITY, f32::min);
+                pool_min <= scale_space.max_scale_bound(o)
+            }
+            _ => false,
+        };
+        if seam_merge {
+            // Slow path (f32 seam collision only): merge, re-select the
+            // top-`cap`, and re-orient the whole pool from scratch.
+            let cap = params.max_num_features.unwrap();
+            pool.append(&mut new);
+            if pool.len() > cap {
+                pool.select_nth_unstable_by(cap, candidate_order);
+                pool.truncate(cap);
+            }
+            let to = std::time::Instant::now();
+            keypoints = orientation::assign_orientations(&scale_space, &pool, params);
+            t_orient += to.elapsed();
+        } else {
+            if let Some(cap) = params.max_num_features {
+                // Admit only what fits: the crossing octave contributes its
+                // top-(cap − len) candidates under the same total order the
+                // full scan's single cap would use (sound here: the pool is
+                // empty or its minimum strictly clears the octave's bound).
+                let room = cap - pool.len();
+                if new.len() > room {
+                    new.select_nth_unstable_by(room, candidate_order);
+                    new.truncate(room);
+                }
+            }
+            let to = std::time::Instant::now();
+            keypoints.extend(orientation::assign_orientations(&scale_space, &new, params));
+            t_orient += to.elapsed();
+            pool.append(&mut new);
         }
     }
-    let t_detect = t.elapsed();
+    drop(pool);
+    let t_detect = t.elapsed() - t_orient;
 
     // No DoG pyramid to free — detection computed it per stripe in cache. The
     // Gaussian pyramid is retained for orientation and description.
-
-    // Stage 5: orientation assignment (may emit multiple keypoints per candidate).
-    let t = std::time::Instant::now();
-    let mut keypoints = orientation::assign_orientations(&scale_space, &localized, params);
-    let t_orient = t.elapsed();
 
     // The `.sift` format requires keypoints sorted by descending feature size
     // (size = the affine-shape column-norm average, `SiftKeypoint::scale`). Sort
@@ -320,24 +417,29 @@ pub fn detect_keypoints(image: &GrayImage, params: &SiftParams) -> Detection {
     // ordering. A total-order tie-break (response, octave, layer, y, x,
     // orientation) makes the output order — and thus the `.sift` bytes —
     // reproducible across runs and thread counts, independent of the upstream
-    // (parallel) collection order.
+    // (parallel) collection order. The derived comparison keys (`scale()` /
+    // `orientation()` — a sqrt and an atan2) are computed once per keypoint
+    // rather than per comparison; the comparator over the cached keys is the
+    // same total order, so the result is unchanged.
     let t = std::time::Instant::now();
-    keypoints.sort_by(|a, b| {
-        use std::cmp::Ordering::Equal;
-        b.scale()
-            .partial_cmp(&a.scale())
+    let mut keyed: Vec<(f32, f32, SiftKeypoint)> = keypoints
+        .into_iter()
+        .map(|kp| (kp.scale(), kp.orientation(), kp))
+        .collect();
+    keyed.sort_by(|a, b| {
+        let (a_scale, a_ori, a) = (a.0, a.1, &a.2);
+        let (b_scale, b_ori, b) = (b.0, b.1, &b.2);
+        b_scale
+            .partial_cmp(&a_scale)
             .unwrap_or(Equal)
             .then(b.response.partial_cmp(&a.response).unwrap_or(Equal))
             .then(a.octave.cmp(&b.octave))
             .then(a.layer.partial_cmp(&b.layer).unwrap_or(Equal))
             .then(a.y.partial_cmp(&b.y).unwrap_or(Equal))
             .then(a.x.partial_cmp(&b.x).unwrap_or(Equal))
-            .then(
-                a.orientation()
-                    .partial_cmp(&b.orientation())
-                    .unwrap_or(Equal),
-            )
+            .then(a_ori.partial_cmp(&b_ori).unwrap_or(Equal))
     });
+    let mut keypoints: Vec<SiftKeypoint> = keyed.into_iter().map(|(_, _, kp)| kp).collect();
     // Orientation assignment can emit several keypoints per candidate, pushing
     // the count back above the cap; enforce it as a hard output limit. The sort
     // above already placed the largest-scale keypoints first.
@@ -348,12 +450,15 @@ pub fn detect_keypoints(image: &GrayImage, params: &SiftParams) -> Detection {
 
     if timing {
         eprintln!(
-            "SIFT_TIMING detect build_ms={:.3} detect_ms={:.3} orient_ms={:.3} sort_ms={:.3} n_kp={}",
+            "SIFT_TIMING detect build_ms={:.3} detect_ms={:.3} orient_ms={:.3} sort_ms={:.3} \
+             n_kp={} octaves={}/{}",
             t_build.as_secs_f64() * 1e3,
             t_detect.as_secs_f64() * 1e3,
             t_orient.as_secs_f64() * 1e3,
             t_sort.as_secs_f64() * 1e3,
             keypoints.len(),
+            detected_octaves,
+            total_octaves,
         );
     }
 
@@ -417,12 +522,20 @@ pub fn extract_sift_partial(
     let k = max_described.map_or(detection.keypoints.len(), |m| {
         m.min(detection.keypoints.len())
     });
+    let t = std::time::Instant::now();
     let descriptors = compute_descriptors(
         &detection.scale_space,
         &detection.keypoints[..k],
         params.descriptor_magnification as f32,
         params.descriptor_clamp as f32,
     );
+    if *SIFT_TIMING {
+        eprintln!(
+            "SIFT_TIMING describe describe_ms={:.3} n_desc={}",
+            t.elapsed().as_secs_f64() * 1e3,
+            descriptors.len(),
+        );
+    }
     SiftFeatures {
         keypoints: detection.keypoints,
         descriptors,
