@@ -19,7 +19,7 @@ fn test_gaussian_kernel_normalized() {
 #[test]
 fn test_blur_constant_image_stays_constant() {
     let img = GrayImage::new_constant(40, 30, 0.42);
-    let blurred = gaussian_blur(&img, 2.0, 3.0, &mut Vec::new());
+    let blurred = gaussian_blur(&img, 2.0, 3.0);
     for &v in blurred.data() {
         assert!((v - 0.42).abs() < 1e-4, "got {v}");
     }
@@ -167,7 +167,7 @@ fn test_blur_matches_scalar_reference() {
         .collect();
     let img = GrayImage::new(w as u32, h as u32, data.clone());
     let sigma = 1.6;
-    let got = gaussian_blur(&img, sigma, 3.0, &mut Vec::new());
+    let got = gaussian_blur(&img, sigma, 3.0);
 
     let kernel = gaussian_kernel(sigma, 3.0);
     let radius = (kernel.len() / 2) as i32;

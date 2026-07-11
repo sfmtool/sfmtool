@@ -72,45 +72,47 @@ static STRIPE_ROWS: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
         .unwrap_or(32)
 });
 
-/// Detect scale-space extrema in the DoG and localize each to subpixel
-/// precision, rejecting low-contrast and edge-like responses.
+/// Detect scale-space extrema in one octave's DoG and localize each to
+/// subpixel precision, rejecting low-contrast and edge-like responses — the
+/// per-octave unit the cap-aware coarse-to-fine driver in `detect_keypoints`
+/// iterates. The octave must carry its full `s + 3` Gaussian levels
+/// ([`ScaleSpace::extend_octave`](super::ScaleSpace::extend_octave)).
 ///
-/// The DoG is **not** materialized: detection is tiled into `(octave, row-stripe)`
-/// jobs parallelized with rayon, and each stripe computes its DoG band in a
+/// The DoG is **not** materialized: detection is tiled into row-stripe jobs
+/// parallelized with rayon, and each stripe computes its DoG band in a
 /// cache-resident scratch buffer from the resident Gaussian stack (see
 /// `detect_in_stripe`). Within a stripe the flat pre-reject (`|D| <= 0.8·C`) is
 /// vectorized with SSE2 (scalar fallback), then surviving candidates run the
 /// full 26-neighbor test and the quadratic fit. Stripes own disjoint row bands
 /// and only read a 1-row halo, so the keypoint set is independent of
 /// `STRIPE_ROWS` and thread count.
-pub fn detect_and_localize(
+pub(super) fn detect_octave(
     scale_space: &ScaleSpace,
     params: &SiftParams,
+    o: usize,
 ) -> Vec<LocalizedKeypoint> {
-    let num_octaves = scale_space.num_octaves();
+    debug_assert!(scale_space.octave_is_full(o));
     let contrast_threshold = params.contrast_threshold as f32;
     // Cheap pre-threshold: skip samples whose magnitude is well below contrast.
     let prelim = 0.8 * contrast_threshold;
     let stripe_rows = *STRIPE_ROWS;
 
-    // Build the (octave, [y0, y1)) stripe work list over interior rows.
-    let mut jobs: Vec<(usize, usize, usize)> = Vec::new();
-    for o in 0..num_octaves {
-        let (w, h) = scale_space.octave_dims(o);
-        let (w, h) = (w as usize, h as usize);
-        if w <= 2 * BORDER || h <= 2 * BORDER {
-            continue;
-        }
-        let mut y0 = BORDER;
-        while y0 < h - BORDER {
-            let y1 = y0.saturating_add(stripe_rows).min(h - BORDER);
-            jobs.push((o, y0, y1));
-            y0 = y1;
-        }
+    // Build the [y0, y1) stripe work list over this octave's interior rows.
+    let (w, h) = scale_space.octave_dims(o);
+    let (w, h) = (w as usize, h as usize);
+    if w <= 2 * BORDER || h <= 2 * BORDER {
+        return Vec::new();
+    }
+    let mut jobs: Vec<(usize, usize)> = Vec::new();
+    let mut y0 = BORDER;
+    while y0 < h - BORDER {
+        let y1 = y0.saturating_add(stripe_rows).min(h - BORDER);
+        jobs.push((y0, y1));
+        y0 = y1;
     }
 
     jobs.par_iter()
-        .flat_map(|&(o, y0, y1)| detect_in_stripe(scale_space, params, o, y0, y1, prelim))
+        .flat_map(|&(y0, y1)| detect_in_stripe(scale_space, params, o, y0, y1, prelim))
         .collect()
 }
 

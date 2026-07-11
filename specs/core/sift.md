@@ -213,6 +213,28 @@ the retained set; a final truncation after orientation enforces the cap as a har
 limit (orientation can emit several keypoints per candidate). On images that detect fewer
 than `max_num_features` candidates the cap is a no-op.
 
+> _Revision (2026-07-11): **cap-aware coarse-to-fine detection.** The cap's
+> "keep the largest scales" semantics make fine-octave detection provably dead
+> work once the coarser octaves have filled the cap: octave scale ranges are
+> disjoint and ordered (octave `o`'s localized candidates span
+> `σ·k^[0.5, s+0.5]·2^o` strictly, by the localizer's layer clamp and
+> `|offset| < 0.5` bound). `detect_keypoints` therefore builds only the
+> pyramid *chain* (levels `0..=s` per octave — the decimation skeleton) up
+> front, then walks octaves coarse→fine, lazily extending each octave to its
+> full `s+3` levels right before scanning it, orienting each octave's
+> surviving candidates as they are admitted, and stopping when either the
+> cap-th largest keypoint scale or the full candidate pool's minimum scale
+> strictly clears the next octave's `max_scale_bound` (a margin-guarded
+> strict upper bound; the theoretical f32 seam collision falls back to a
+> merged re-selection and re-orientation, so the output is always the full
+> scan's). A skipped octave saves its whole detection scan **and its last two
+> Gaussian levels**. On 4K images with the default cap this skips octaves 0
+> and 1 — ~94% of the pyramid's detection pixels with `double_image` — with
+> byte-identical output (validated over 1196 DinoLedge frames). Small images
+> that never fill the cap detect every octave, exactly as before. Together
+> with the Tier 1.5 blur fusion this took `sfm sift --extract` over those
+> 1196 frames from 300 s to 141 s (2.1×) on a 24-core i9-14900HX._
+
 ### Parameters
 
 | Symbol | Name | Description | Default |
@@ -319,6 +341,25 @@ What Tier 1 does **not** touch: the blur chain still materializes the gaussians 
 RAM (they must persist for orientation/description), so `base`/`blur`/`decimate`
 are unchanged.
 
+#### Tier 1.5 — fuse each blur's two passes into stripes (implemented 2026-07-11)
+
+Each individual Gaussian blur is itself stripe-fused: a stripe computes the
+horizontal pass for its output rows plus a `radius`-row halo into a small
+per-worker buffer (`(32 + 2r) × W` — ~1.4 MB at the doubled-4K width) and runs
+the vertical pass from that buffer, so the full-image horizontal intermediate
+is never materialized and each source/output pixel crosses RAM once per blur
+instead of twice. Halo rows are recomputed by both adjacent stripes (a few
+percent of extra arithmetic for half the traffic — the blur is
+bandwidth-bound at octave-0 sizes). Bit-identical by construction: every
+buffer row is the same `blur_row` result the full pass produced (edge-clamped
+rows are materialized explicitly), interior output rows keep the SSE2/AVX2
+vertical path, and image-border rows keep the exact scalar clamped
+accumulation. `decimate` was also row-parallelized, and the final keypoint
+sort caches its derived keys (`scale()`/`orientation()`) instead of
+recomputing them per comparison — both output-identical. Measured together
+with the cap-aware walk (4K, defaults): chain build 97 → 72 ms/image, detect
+240 → 13 ms, sort 7 → 2 ms.
+
 #### Tier 2 — fuse the blur chain into the stripe (future)
 
 Keep the gaussians cache-resident too, fusing blur → DoG → detect per stripe so a
@@ -345,8 +386,10 @@ output goes to stderr):
 
 - `SFMTOOL_SIFT_NO_AVX2` — force the SSE2/scalar fallbacks everywhere (skip the AVX2+FMA
   paths), for A-B timing and reproducibility.
-- `SFMTOOL_SIFT_TIMING` — emit per-stage wall-clock timing (`SIFT_TIMING build …` and
-  `SIFT_TIMING detect …` lines).
+- `SFMTOOL_SIFT_TIMING` — emit per-stage wall-clock timing (`SIFT_TIMING build …`,
+  `SIFT_TIMING detect …` — whose `octaves=detected/total` field reports the
+  cap-aware coarse-to-fine walk's early stop — and `SIFT_TIMING describe …`
+  lines).
 - `SFMTOOL_SIFT_OPS` — emit one `SIFT_OP …` line per scale-space operator (`upsample`,
   `blur`, `decimate`) for offline aggregation. Independent of `SFMTOOL_SIFT_TIMING`.
   (No `dog` op: detection fuses the DoG per stripe, so it is never a standalone

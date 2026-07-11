@@ -2,6 +2,15 @@ use super::super::detect_keypoints;
 use super::*;
 use crate::features::optical_flow::GrayImage;
 
+/// The whole-image scan: [`detect_octave`] over every octave of a full
+/// pyramid (the production driver in `detect_keypoints` walks octaves itself
+/// so it can stop early under the feature cap).
+fn detect_and_localize(scale_space: &ScaleSpace, params: &SiftParams) -> Vec<LocalizedKeypoint> {
+    (0..scale_space.num_octaves())
+        .flat_map(|o| detect_octave(scale_space, params, o))
+        .collect()
+}
+
 /// Render a Gaussian blob (bright on a flat mid-gray background) centered at
 /// `(cx, cy)` with standard deviation `blob_sigma`.
 fn gaussian_blob(w: u32, h: u32, cx: f32, cy: f32, blob_sigma: f32, amp: f32) -> GrayImage {
