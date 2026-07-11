@@ -280,6 +280,7 @@ def _run_cluster_patches(
         "member_affines": result["member_affines"],
         "member_zncc": result["member_zncc"],
         "member_shift_px": result["member_shift_px"],
+        "member_consistency_residual": result["member_consistency_residual"],
         "refine_options": {
             "radius": radius,
             "resolution": resolution,
@@ -291,6 +292,14 @@ def _run_cluster_patches(
     }
     click.echo(f"Writing {out}...")
     write_matches(out, out_data)
+    consistency = result["member_consistency_residual"]
+    finite = consistency[np.isfinite(consistency)]
+    if len(finite):
+        click.echo(
+            f"Warp consistency (stored signal, lower = better): median "
+            f"{np.median(finite):.3f}, p90 {np.percentile(finite, 90):.3f} "
+            f"over {len(finite)} fitted members"
+        )
     click.echo(
         f"Done: {n_ref} references, {n_kept} kept, {n_rejected} rejected, "
         f"{n_unloc} unlocalizable, {n_dup} duplicate-image, "

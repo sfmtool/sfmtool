@@ -117,8 +117,9 @@ match-output-file.matches (ZIP archive)
 │   ├── reference_members.{C}.uint32.zst           # Global member index of each cluster's reference
 │   ├── member_status.{K}.uint8.zst                # ClusterMemberStatus enum per member
 │   ├── member_affines.{K}.2.3.float64.zst         # x_member = A·x_ref + t, pixel coords
-│   ├── member_zncc.{K}.float32.zst                # Achieved windowed ZNCC vs reference (NaN if n/a)
-│   └── member_shift_px.{K}.float32.zst            # Translation drift from the SIFT seed (NaN if n/a)
+│   ├── member_consistency_residual.{K}.float32.zst # Warp-consistency residual (NaN if not fitted)
+│   ├── member_shift_px.{K}.float32.zst            # Translation drift from the SIFT seed (NaN if n/a)
+│   └── member_zncc.{K}.float32.zst                # Achieved windowed ZNCC vs reference (NaN if n/a)
 └── two_view_geometries/                           # (Optional section, requires image_pairs/)
     ├── metadata.json.zst                          # TVG metadata
     ├── config_types.json.zst                        # Unique TwoViewGeometryConfig type strings
@@ -539,6 +540,25 @@ vetting statuses and signals.
 - **Shape**: `(K,)` where K = cluster_member_count
 - **Data type**: `float32` (little-endian)
 - Translation drift in pixels from the SIFT seed; `NaN` where not evaluated
+
+#### `cluster_patches/member_consistency_residual.{K}.float32.zst`
+
+- **Shape**: `(K,)` where K = cluster_member_count
+- **Data type**: `float32` (little-endian)
+- Warp-consistency residual: the member warp's relative misfit
+  `‖M_k·T_c − J‖_F / ‖J‖_F` against a joint weak-perspective factorization
+  of all cluster warps (one scaled-orthographic camera per image, one
+  planar tangent frame per cluster; see
+  [`cluster-warp-consistency.md`](../core/cluster-warp-consistency.md)).
+  Lower = more consistent, 0 = perfect; `NaN` where the member did not
+  enter the fit (non-reference/kept status, degenerate warp, or a cluster
+  with fewer than 2 fitted members)
+- A **stored signal, not a gate** — consumers choose their own threshold
+  (e.g. ~0.3 as a RANSAC prefilter, ~0.1 for purity-first harvesting),
+  mirroring how `member_zncc` enables re-vetting without re-running
+- _Added 2026-07-10 to format version 3 without a version bump (no public
+  release had shipped version-3 files); cluster-patch files written before
+  the addition must be regenerated_
 
 ### 7. Two-View Geometries (Optional Section)
 

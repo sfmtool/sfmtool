@@ -17,7 +17,8 @@ use pyo3::types::PyDict;
 
 use sfmtool_core::features::cluster_match::{self, BackgroundFloorParams, Clusters};
 use sfmtool_core::patch::cluster_refine::{
-    refine_cluster_patches as core_refine_cluster_patches, ClusterRefineParams, FeatureGeometry,
+    refine_cluster_patches as core_refine_cluster_patches, warp_consistency_residuals,
+    ClusterRefineParams, FeatureGeometry,
 };
 
 use crate::py_patch_cloud::{build_pyramids_from_image_list, parse_patch_window};
@@ -299,7 +300,12 @@ pub fn clusters_to_pair_matches(
 ///     ``reference_members`` (C,) uint32 (0xFFFFFFFF = unrefinable),
 ///     ``member_status`` (M,) uint8, ``member_affines`` (M, 2, 3) float64
 ///     (absolute: ``x_member = A·x_ref + t``), ``member_zncc`` (M,) float32,
-///     ``member_shift_px`` (M,) float32.
+///     ``member_shift_px`` (M,) float32, ``member_consistency_residual``
+///     (M,) float32 — the member's relative misfit against a joint
+///     weak-perspective factorization of all cluster warps (lower = more
+///     consistent; NaN where not fitted; see
+///     specs/core/cluster-warp-consistency.md). A stored signal, not a
+///     gate.
 #[pyfunction]
 #[pyo3(signature = (images, positions, affine_shapes,
                     cluster_starts, member_images, member_features, *,
@@ -401,7 +407,7 @@ pub fn refine_cluster_patches<'py>(
     let pyramids = build_pyramids_from_image_list(py, &images, |_, _| Ok(()))?;
 
     let progress_handle = progress.as_ref().map(|p| p.handle());
-    let result = py.detach(|| {
+    let (result, consistency) = py.detach(|| {
         let features: Vec<FeatureGeometry<'_>> = pos_data
             .iter()
             .zip(&aff_data)
@@ -412,7 +418,7 @@ pub fn refine_cluster_patches<'py>(
                     .expect("contiguous affine shapes"),
             })
             .collect();
-        core_refine_cluster_patches(
+        let result = core_refine_cluster_patches(
             &pyramids,
             &features,
             &starts,
@@ -420,7 +426,16 @@ pub fn refine_cluster_patches<'py>(
             &m_features,
             &params,
             progress_handle.as_deref(),
-        )
+        );
+        let consistency = warp_consistency_residuals(
+            &starts,
+            &m_images,
+            &result.member_status,
+            &result.reference_members,
+            result.member_affines.view(),
+            n_images,
+        );
+        (result, consistency)
     });
 
     let dict = PyDict::new(py);
@@ -433,6 +448,7 @@ pub fn refine_cluster_patches<'py>(
     dict.set_item("member_affines", result.member_affines.into_pyarray(py))?;
     dict.set_item("member_zncc", result.member_zncc.into_pyarray(py))?;
     dict.set_item("member_shift_px", result.member_shift_px.into_pyarray(py))?;
+    dict.set_item("member_consistency_residual", consistency.into_pyarray(py))?;
     Ok(dict)
 }
 

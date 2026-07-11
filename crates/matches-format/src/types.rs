@@ -404,6 +404,14 @@ pub struct ClusterPatchData {
     /// `(M,)` translation drift in pixels from the SIFT seed (NaN where not
     /// evaluated).
     pub member_shift_px: Array1<f32>,
+    /// `(M,)` warp-consistency residual: the member's relative misfit
+    /// against the jointly-fitted weak-perspective factorization of all
+    /// cluster warps (`‖M_k·T_c − J‖_F / ‖J‖_F`; lower = more consistent, 0
+    /// = perfect; NaN where the member did not participate). A signal, not
+    /// a gate — consumers pick their own threshold, mirroring how
+    /// `member_zncc` enables re-vetting. See
+    /// `specs/core/cluster-warp-consistency.md`.
+    pub member_consistency_residual: Array1<f32>,
     /// Refinement options recorded in `cluster_patches/metadata.json.zst`.
     pub refine_options: serde_json::Value,
 }

@@ -92,6 +92,9 @@ def _cluster_patch_data() -> dict:
             "member_shift_px": np.array(
                 [0.0, 1.25, 0.8, np.nan, np.nan], dtype=np.float32
             ),
+            "member_consistency_residual": np.array(
+                [0.02, 0.05, np.nan, np.nan, np.nan], dtype=np.float32
+            ),
             "refine_options": {
                 "radius": 4.0,
                 "resolution": 15,
@@ -181,6 +184,10 @@ def test_cluster_patches_round_trip(tmp_path):
     # assert_array_equal treats NaN positions as equal.
     npt.assert_array_equal(loaded["member_zncc"], data["member_zncc"])
     npt.assert_array_equal(loaded["member_shift_px"], data["member_shift_px"])
+    npt.assert_array_equal(
+        loaded["member_consistency_residual"], data["member_consistency_residual"]
+    )
+    assert loaded["member_consistency_residual"].dtype == np.float32
     assert loaded["refine_options"] == data["refine_options"]
 
     assert loaded["member_affines"].dtype == np.float64

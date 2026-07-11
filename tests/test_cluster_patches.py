@@ -115,6 +115,16 @@ def test_cluster_patches_end_to_end(cluster_matches_file: Path):
     shift = data["member_shift_px"]
     assert (shift[kept_mask] <= 3.0 + 1e-6).all()
 
+    # Warp-consistency residuals: finite exactly for the fitted population
+    # (kept members and references of clusters with >= 2 fitted members),
+    # non-negative where finite, NaN for rejected/not-evaluated members.
+    consistency = data["member_consistency_residual"]
+    assert consistency.dtype == np.float32
+    finite = np.isfinite(consistency)
+    assert finite.any()
+    assert (consistency[finite] >= 0.0).all()
+    assert not finite[(statuses != STATUS_REFERENCE) & (statuses != STATUS_KEPT)].any()
+
 
 def test_cluster_patches_rejects_existing_output_and_enriched_input(
     cluster_matches_file: Path,
