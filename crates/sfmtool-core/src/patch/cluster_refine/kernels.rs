@@ -17,6 +17,7 @@
 //! `f32` variance `S2 − S1²/W` cancellation-safe, and the windowed ZNCC is
 //! shift-invariant so nothing needs undoing).
 
+use super::prof;
 use crate::camera::remap::{ImageU8, ImageU8Pyramid};
 use crate::patch::normal_refine::{Support, FLAT_NORM_SQ_EPS};
 use crate::patch::view_selection::AffineCoreMap;
@@ -149,6 +150,11 @@ impl LevelTile {
     /// Copy `rect` (already clipped and non-empty) of `img` into a centered
     /// planar tile.
     fn build(img: &ImageU8, level: usize, rect: Rect) -> LevelTile {
+        prof::count(&prof::N_TILE_BUILDS, 1);
+        prof::count(
+            &prof::N_TILE_PIXELS,
+            ((rect.x1 - rect.x0) * (rect.y1 - rect.y0)) as u64 * img.channels() as u64,
+        );
         let w = (rect.x1 - rect.x0) as usize;
         let h = (rect.y1 - rect.y0) as usize;
         let ch = img.channels() as usize;
@@ -220,12 +226,13 @@ impl TileCache {
                     .union(&clipped)
                     .expand(TILE_MARGIN)
                     .clip(w, h);
-                self.tiles[i] = LevelTile::build(img, level, grown);
+                self.tiles[i] = prof::TILE.time(|| LevelTile::build(img, level, grown));
             }
             return Some(&self.tiles[i]);
         }
         let grown = clipped.expand(TILE_MARGIN).clip(w, h);
-        self.tiles.push(LevelTile::build(img, level, grown));
+        let tile = prof::TILE.time(|| LevelTile::build(img, level, grown));
+        self.tiles.push(tile);
         Some(self.tiles.last().unwrap())
     }
 }
@@ -342,7 +349,10 @@ pub(super) fn eval_zncc(
     ];
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+        if tmpl.channels <= MAX_AVX2_CHANNELS
+            && is_x86_feature_detected!("avx2")
+            && is_x86_feature_detected!("fma")
+        {
             // SAFETY: guarded by the runtime feature check above.
             return unsafe { eval_zncc_avx2(al, tile, tables, tmpl) };
         }
@@ -414,6 +424,10 @@ pub(super) fn eval_zncc_scalar(
     Some(score / tmpl.channels as f64)
 }
 
+/// Channel-count ceiling of the AVX2 kernel's fixed pointer tables; templates
+/// wider than this (no real image produces them) take the scalar path.
+pub(super) const MAX_AVX2_CHANNELS: usize = 4;
+
 /// Horizontal sum of an 8-lane f32 vector.
 ///
 /// # Safety
@@ -427,16 +441,55 @@ unsafe fn hsum256_ps(v: std::arch::x86_64::__m256) -> f32 {
     tmp.iter().sum()
 }
 
+/// Gather the horizontally adjacent bilinear tap pairs `(plane[idx],
+/// plane[idx + 1])` for 8 lanes as two deinterleaved vectors, using eight
+/// scalar 64-bit loads (each fetches both taps of a pair in one load)
+/// instead of two 8-element 32-bit gathers — half the fetched elements per
+/// tap row, and plain loads beat microcoded hardware gathers on hybrid
+/// (E-core) parts.
+///
+/// # Safety
+///
+/// Requires `avx2`; every lane of `idx` must satisfy `idx + 1 <
+/// plane.len()` (the caller's lane mask guarantees it).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn gather_pairs(
+    plane: *const f32,
+    idx: &[i32; 8],
+) -> (std::arch::x86_64::__m256, std::arch::x86_64::__m256) {
+    use std::arch::x86_64::*;
+    // 8 bytes at plane + idx·4 = floats idx and idx+1. The f32 plane is only
+    // 4-byte aligned, so the pair loads must be unaligned reads.
+    let pair = |i: usize| (plane.add(idx[i] as usize) as *const i64).read_unaligned();
+    let lo = _mm256_set_epi64x(pair(3), pair(2), pair(1), pair(0));
+    let hi = _mm256_set_epi64x(pair(7), pair(6), pair(5), pair(4));
+    let a = _mm256_castsi256_ps(lo); // [e0 o0 e1 o1 | e2 o2 e3 o3]
+    let b = _mm256_castsi256_ps(hi); // [e4 o4 e5 o5 | e6 o6 e7 o7]
+    let ev = _mm256_shuffle_ps::<0b10_00_10_00>(a, b); // [e0 e1 e4 e5 | e2 e3 e6 e7]
+    let od = _mm256_shuffle_ps::<0b11_01_11_01>(a, b); // [o0 o1 o4 o5 | o2 o3 o6 o7]
+                                                       // Restore lane order (64-bit block permutation 0,2,1,3).
+    let ev = _mm256_castpd_ps(_mm256_permute4x64_pd::<0b11_01_10_00>(_mm256_castps_pd(ev)));
+    let od = _mm256_castpd_ps(_mm256_permute4x64_pd::<0b11_01_10_00>(_mm256_castps_pd(od)));
+    (ev, od)
+}
+
 /// Hand-rolled AVX2 implementation of [`eval_zncc`]: 8 support points per
-/// iteration. Sample coordinates are affine in the grid index, so the `x`/`y`
-/// vectors come from FMA on the lane column/row tables; the four bilinear
-/// taps are `_mm256_i32gather_ps` gathers on the centered plane (precedent:
-/// `score_cell_one_channel_avx2`, `keypoint_localize/kernels.rs`); fractional
-/// blends and the three accumulations (`Σ kern·I`, `Σ w·I`, `Σ w·I²`) are
-/// FMA. The in-frame test is a vectorized integer lane mask on the tap
-/// indices; any failing lane aborts the evaluation (the all-in-frame rule),
-/// so the mask doubles as the early-out. Non-finite coordinates convert to
-/// `i32::MIN` and are caught by the same mask.
+/// iteration, all template channels fused into one pass over the support so
+/// the coordinate generation, in-frame mask, tap indices, and fractional
+/// blend weights are computed once and shared (they are channel-invariant).
+/// Sample coordinates are affine in the grid index, so the `x`/`y` vectors
+/// come from FMA on the lane column/row tables; the four bilinear taps come
+/// from [`gather_pairs`] 64-bit pair gathers on the centered planes;
+/// fractional blends and the three accumulations (`Σ kern·I`, `Σ w·I`,
+/// `Σ w·I²`) are FMA. The in-frame test is a vectorized integer lane mask on
+/// the tap indices; any failing lane aborts the evaluation (the all-in-frame
+/// rule), so the mask doubles as the early-out. Non-finite coordinates
+/// convert to `i32::MIN` and are caught by the same mask.
+///
+/// Per-channel accumulation order matches the channel-major original exactly
+/// (each channel folds the same `v` sequence in the same `k` order into the
+/// same 8-lane accumulators), so the fusion is bit-exact.
 ///
 /// # Safety
 ///
@@ -444,11 +497,13 @@ unsafe fn hsum256_ps(v: std::arch::x86_64::__m256) -> f32 {
 ///    is_x86_feature_detected!("fma")`.
 /// 2. **Gather bounds:** every gathered index is validated by the lane mask
 ///    *before* the gathers (`0 ≤ ix ≤ tile.w − 2`, `0 ≤ iy ≤ tile.h − 2`), so
-///    `iy·w + ix + w + 1 ≤ w·h − 1` and all four tap gathers stay inside the
-///    channel plane.
+///    `iy·w + ix + w + 1 ≤ w·h − 1` and both pair gathers of both tap rows
+///    stay inside the channel plane.
 /// 3. **Table lengths:** `tables.cols/rows/w32` and each `tmpl.kern` channel
 ///    hold `n_padded` (multiple of 8) lanes; pad lanes carry zero weights and
 ///    duplicate a real support point's coordinates ([`SupportTables`]).
+/// 4. **Channel count:** `tmpl.channels ≤ MAX_AVX2_CHANNELS` (the dispatch
+///    gate in [`eval_zncc`]).
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 pub(super) unsafe fn eval_zncc_avx2(
@@ -457,6 +512,57 @@ pub(super) unsafe fn eval_zncc_avx2(
     tables: &SupportTables,
     tmpl: &TemplateKernel,
 ) -> Option<f64> {
+    let n_padded = tables.n_padded;
+    // Compact the active channels (source plane present in this tile) into
+    // fixed pointer tables so the monomorphized bodies can unroll over them.
+    let mut planes = [std::ptr::null::<f32>(); MAX_AVX2_CHANNELS];
+    let mut kerns = [std::ptr::null::<f32>(); MAX_AVX2_CHANNELS];
+    let mut which = [0usize; MAX_AVX2_CHANNELS];
+    let mut n_active = 0usize;
+    for (tc, &src_c) in tmpl.src_channels.iter().enumerate() {
+        if src_c >= tile.channels {
+            continue;
+        }
+        planes[n_active] = tile.plane(src_c).as_ptr();
+        kerns[n_active] = tmpl.kern[tc * n_padded..].as_ptr();
+        which[n_active] = tc;
+        n_active += 1;
+    }
+    if n_active == 0 {
+        return Some(0.0);
+    }
+    // SAFETY: forwarded from this function's contract; `n_active` channels
+    // of `planes`/`kerns` are valid for `n_padded` lanes.
+    let sums = match n_active {
+        1 => eval_zncc_avx2_ch::<1>(a, tile, tables, &planes, &kerns),
+        2 => eval_zncc_avx2_ch::<2>(a, tile, tables, &planes, &kerns),
+        3 => eval_zncc_avx2_ch::<3>(a, tile, tables, &planes, &kerns),
+        _ => eval_zncc_avx2_ch::<4>(a, tile, tables, &planes, &kerns),
+    }?;
+    let mut score = 0.0f64;
+    for (c, sum) in sums.into_iter().take(n_active).enumerate() {
+        score += combine_channel(sum, tables.total_weight, tmpl.kern_sums[which[c]]);
+    }
+    Some(score / tmpl.channels as f64)
+}
+
+/// The monomorphized fused pass of [`eval_zncc_avx2`] over `CH` active
+/// channels: `CH` is a compile-time constant so the per-channel accumulator
+/// arrays stay in registers and the channel loop unrolls.
+///
+/// # Safety
+///
+/// Same contract as [`eval_zncc_avx2`]; additionally the first `CH` entries
+/// of `planes`/`kerns` must be valid.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn eval_zncc_avx2_ch<const CH: usize>(
+    a: [f32; 6],
+    tile: &LevelTile,
+    tables: &SupportTables,
+    planes: &[*const f32; MAX_AVX2_CHANNELS],
+    kerns: &[*const f32; MAX_AVX2_CHANNELS],
+) -> Option<[ChannelSums; MAX_AVX2_CHANNELS]> {
     use std::arch::x86_64::*;
     let n_padded = tables.n_padded;
     let a0 = _mm256_set1_ps(a[0]);
@@ -469,120 +575,168 @@ pub(super) unsafe fn eval_zncc_avx2(
     let max_ix = _mm256_set1_epi32(tile.w as i32 - 2);
     let max_iy = _mm256_set1_epi32(tile.h as i32 - 2);
     let twv = _mm256_set1_epi32(tile.w as i32);
-    let one_i = _mm256_set1_epi32(1);
     let one_ps = _mm256_set1_ps(1.0);
     let cols_ptr = tables.cols.as_ptr();
     let rows_ptr = tables.rows.as_ptr();
     let w_ptr = tables.w32.as_ptr();
 
-    let mut score = 0.0f64;
-    for (tc, &src_c) in tmpl.src_channels.iter().enumerate() {
-        if src_c >= tile.channels {
-            continue;
+    let mut acc_n = [_mm256_setzero_ps(); CH];
+    let mut acc_s1 = [_mm256_setzero_ps(); CH];
+    let mut acc_s2 = [_mm256_setzero_ps(); CH];
+    let mut k = 0usize;
+    while k < n_padded {
+        let col = _mm256_loadu_ps(cols_ptr.add(k));
+        let row = _mm256_loadu_ps(rows_ptr.add(k));
+        let gx = _mm256_fmadd_ps(a0, col, _mm256_fmadd_ps(a1, row, a2));
+        let gy = _mm256_fmadd_ps(a3, col, _mm256_fmadd_ps(a4, row, a5));
+        let x0 = _mm256_floor_ps(gx);
+        let y0 = _mm256_floor_ps(gy);
+        // Exact: x0/y0 are integral; NaN/overflow become i32::MIN and
+        // fail the mask below.
+        let ix = _mm256_cvtps_epi32(x0);
+        let iy = _mm256_cvtps_epi32(y0);
+        let bad = _mm256_or_si256(
+            _mm256_or_si256(
+                _mm256_cmpgt_epi32(zero_i, ix),
+                _mm256_cmpgt_epi32(zero_i, iy),
+            ),
+            _mm256_or_si256(
+                _mm256_cmpgt_epi32(ix, max_ix),
+                _mm256_cmpgt_epi32(iy, max_iy),
+            ),
+        );
+        if _mm256_testz_si256(bad, bad) == 0 {
+            return None;
         }
-        let plane_ptr = tile.plane(src_c).as_ptr();
-        let kern_ptr = tmpl.kern[tc * n_padded..].as_ptr();
-        let mut acc_n = _mm256_setzero_ps();
-        let mut acc_s1 = _mm256_setzero_ps();
-        let mut acc_s2 = _mm256_setzero_ps();
-        let mut k = 0usize;
-        while k < n_padded {
-            let col = _mm256_loadu_ps(cols_ptr.add(k));
-            let row = _mm256_loadu_ps(rows_ptr.add(k));
-            let gx = _mm256_fmadd_ps(a0, col, _mm256_fmadd_ps(a1, row, a2));
-            let gy = _mm256_fmadd_ps(a3, col, _mm256_fmadd_ps(a4, row, a5));
-            let x0 = _mm256_floor_ps(gx);
-            let y0 = _mm256_floor_ps(gy);
-            // Exact: x0/y0 are integral; NaN/overflow become i32::MIN and
-            // fail the mask below.
-            let ix = _mm256_cvtps_epi32(x0);
-            let iy = _mm256_cvtps_epi32(y0);
-            let bad = _mm256_or_si256(
-                _mm256_or_si256(
-                    _mm256_cmpgt_epi32(zero_i, ix),
-                    _mm256_cmpgt_epi32(zero_i, iy),
-                ),
-                _mm256_or_si256(
-                    _mm256_cmpgt_epi32(ix, max_ix),
-                    _mm256_cmpgt_epi32(iy, max_iy),
-                ),
-            );
-            if _mm256_testz_si256(bad, bad) == 0 {
-                return None;
-            }
-            let fx = _mm256_sub_ps(gx, x0);
-            let fy = _mm256_sub_ps(gy, y0);
-            let idx = _mm256_add_epi32(_mm256_mullo_epi32(iy, twv), ix);
-            let v00 = _mm256_i32gather_ps::<4>(plane_ptr, idx);
-            let v10 = _mm256_i32gather_ps::<4>(plane_ptr, _mm256_add_epi32(idx, one_i));
-            let idx_b = _mm256_add_epi32(idx, twv);
-            let v01 = _mm256_i32gather_ps::<4>(plane_ptr, idx_b);
-            let v11 = _mm256_i32gather_ps::<4>(plane_ptr, _mm256_add_epi32(idx_b, one_i));
-            let ofx = _mm256_sub_ps(one_ps, fx);
-            let ofy = _mm256_sub_ps(one_ps, fy);
-            let w00 = _mm256_mul_ps(ofx, ofy);
-            let w10 = _mm256_mul_ps(fx, ofy);
-            let w01 = _mm256_mul_ps(ofx, fy);
-            let w11 = _mm256_mul_ps(fx, fy);
+        let fx = _mm256_sub_ps(gx, x0);
+        let fy = _mm256_sub_ps(gy, y0);
+        let idx = _mm256_add_epi32(_mm256_mullo_epi32(iy, twv), ix);
+        let idx_b = _mm256_add_epi32(idx, twv);
+        let mut idx_arr = [0i32; 8];
+        let mut idx_b_arr = [0i32; 8];
+        _mm256_storeu_si256(idx_arr.as_mut_ptr() as *mut __m256i, idx);
+        _mm256_storeu_si256(idx_b_arr.as_mut_ptr() as *mut __m256i, idx_b);
+        let ofx = _mm256_sub_ps(one_ps, fx);
+        let ofy = _mm256_sub_ps(one_ps, fy);
+        let w00 = _mm256_mul_ps(ofx, ofy);
+        let w10 = _mm256_mul_ps(fx, ofy);
+        let w01 = _mm256_mul_ps(ofx, fy);
+        let w11 = _mm256_mul_ps(fx, fy);
+        let w8 = _mm256_loadu_ps(w_ptr.add(k));
+        for c in 0..CH {
+            let (v00, v10) = gather_pairs(planes[c], &idx_arr);
+            let (v01, v11) = gather_pairs(planes[c], &idx_b_arr);
             let v = _mm256_fmadd_ps(
                 w11,
                 v11,
                 _mm256_fmadd_ps(w01, v01, _mm256_fmadd_ps(w10, v10, _mm256_mul_ps(w00, v00))),
             );
-            let k8 = _mm256_loadu_ps(kern_ptr.add(k));
-            let w8 = _mm256_loadu_ps(w_ptr.add(k));
-            acc_n = _mm256_fmadd_ps(k8, v, acc_n);
-            acc_s1 = _mm256_fmadd_ps(w8, v, acc_s1);
-            acc_s2 = _mm256_fmadd_ps(w8, _mm256_mul_ps(v, v), acc_s2);
-            k += 8;
+            let k8 = _mm256_loadu_ps(kerns[c].add(k));
+            acc_n[c] = _mm256_fmadd_ps(k8, v, acc_n[c]);
+            acc_s1[c] = _mm256_fmadd_ps(w8, v, acc_s1[c]);
+            acc_s2[c] = _mm256_fmadd_ps(w8, _mm256_mul_ps(v, v), acc_s2[c]);
         }
-        let sums = ChannelSums {
-            n_cross: hsum256_ps(acc_n) as f64,
-            s1: hsum256_ps(acc_s1) as f64,
-            s2: hsum256_ps(acc_s2) as f64,
-        };
-        score += combine_channel(sums, tables.total_weight, tmpl.kern_sums[tc]);
+        k += 8;
     }
-    Some(score / tmpl.channels as f64)
+    let mut sums = [const {
+        ChannelSums {
+            n_cross: 0.0,
+            s1: 0.0,
+            s2: 0.0,
+        }
+    }; MAX_AVX2_CHANNELS];
+    for c in 0..CH {
+        sums[c] = ChannelSums {
+            n_cross: hsum256_ps(acc_n[c]) as f64,
+            s1: hsum256_ps(acc_s1[c]) as f64,
+            s2: hsum256_ps(acc_s2[c]) as f64,
+        };
+    }
+    Some(sums)
 }
+
+/// Dimension ceiling of the allocation-free simplex buffers (the affine
+/// stage's 6 parameters — the largest cascade stage).
+pub(super) const NM_MAX_DIM: usize = 6;
 
 /// Minimal deterministic Nelder-Mead: simplex seeded at `x0 + scale_i·e_i`,
 /// standard coefficients (reflect 1, expand 2, contract 0.5, shrink 0.5),
-/// stopping at `max_iters` or a simplex value spread below `tol`. Returns the
-/// best point and its value. The prototype's optimizer, transcribed; ties in
-/// the sort keep insertion order and the returned argmin is the first
-/// minimum, so the routine is fully deterministic.
+/// stopping at `max_iters`, a simplex value spread below `tol`, or a stalled
+/// search — no improvement of the best value by more than `stall_tol` for
+/// `stall_iters` consecutive iterations (effectively clamped to ≥ 1: the
+/// first iteration always resets the counter from the `f64::INFINITY` seed;
+/// `u32::MAX` puts the exit beyond any reachable `max_iters` — the practical
+/// "disabled").
+/// Returns the best point and its value. The prototype's optimizer,
+/// transcribed; ties in the sort keep insertion order and the returned
+/// argmin is the first minimum, so the routine is fully deterministic.
+///
+/// The stall exit exists for the affine stage: a reflect-heavy 6-dim simplex
+/// crawl on a flat objective shrinks its value spread far more slowly than
+/// it stops making progress, so the spread test alone runs most members into
+/// the `max_iters` cap long after the score stopped moving.
+///
+/// The simplex lives in fixed `[f64; NM_MAX_DIM]` buffers (`n ≤` 6 across the
+/// cascade) and the per-iteration reorder is a stable insertion sort, so the
+/// loop allocates nothing — with ~10⁸ iterations per batch the `Vec` churn of
+/// the transcription dominated the optimizer's own cost. Arithmetic, sort
+/// order (stable, `partial_cmp` ties keep insertion order), and evaluation
+/// order are unchanged, so results are bit-identical to the transcription.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn nelder_mead(
     mut f: impl FnMut(&[f64]) -> f64,
     x0: &[f64],
     scales: &[f64],
     max_iters: u32,
     tol: f64,
+    stall_iters: u32,
+    stall_tol: f64,
 ) -> (Vec<f64>, f64) {
     let n = x0.len();
     debug_assert_eq!(scales.len(), n);
-    let mut pts: Vec<Vec<f64>> = Vec::with_capacity(n + 1);
-    pts.push(x0.to_vec());
-    for i in 0..n {
-        let mut p = x0.to_vec();
-        p[i] += scales[i];
-        pts.push(p);
+    debug_assert!(n <= NM_MAX_DIM);
+    let mut pts = [[0.0f64; NM_MAX_DIM]; NM_MAX_DIM + 1];
+    let mut vals = [0.0f64; NM_MAX_DIM + 1];
+    for (i, p) in pts.iter_mut().take(n + 1).enumerate() {
+        p[..n].copy_from_slice(x0);
+        if i > 0 {
+            p[i - 1] += scales[i - 1];
+        }
     }
-    let mut vals: Vec<f64> = pts.iter().map(|p| f(p)).collect();
+    for i in 0..=n {
+        vals[i] = f(&pts[i][..n]);
+    }
+    let mut stall_best = f64::INFINITY;
+    let mut stalled = 0u32;
     for _ in 0..max_iters {
-        // Stable sort by value (ties keep insertion order — deterministic).
-        let mut order: Vec<usize> = (0..pts.len()).collect();
-        order.sort_by(|&i, &j| {
-            vals[i]
-                .partial_cmp(&vals[j])
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        pts = order.iter().map(|&i| std::mem::take(&mut pts[i])).collect();
-        vals = order.iter().map(|&i| vals[i]).collect();
+        // Stable insertion sort by value (ties keep insertion order —
+        // deterministic, the same permutation as the stable `sort_by`).
+        for i in 1..=n {
+            let mut j = i;
+            while j > 0
+                && vals[j]
+                    .partial_cmp(&vals[j - 1])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    == std::cmp::Ordering::Less
+            {
+                vals.swap(j, j - 1);
+                pts.swap(j, j - 1);
+                j -= 1;
+            }
+        }
         if (vals[n] - vals[0]).abs() < tol {
             break;
         }
-        let mut centroid = vec![0.0; n];
+        if vals[0] < stall_best - stall_tol {
+            stall_best = vals[0];
+            stalled = 0;
+        } else {
+            stalled += 1;
+            if stalled >= stall_iters {
+                break;
+            }
+        }
+        let mut centroid = [0.0f64; NM_MAX_DIM];
         for p in &pts[..n] {
             for (c, &x) in centroid.iter_mut().zip(p) {
                 *c += x;
@@ -591,20 +745,18 @@ pub(super) fn nelder_mead(
         for c in centroid.iter_mut() {
             *c /= n as f64;
         }
-        let worst = pts[n].clone();
-        let xr: Vec<f64> = centroid
-            .iter()
-            .zip(&worst)
-            .map(|(&c, &w)| c + (c - w))
-            .collect();
-        let fr = f(&xr);
+        let worst = pts[n];
+        let mut xr = [0.0f64; NM_MAX_DIM];
+        for i in 0..n {
+            xr[i] = centroid[i] + (centroid[i] - worst[i]);
+        }
+        let fr = f(&xr[..n]);
         if fr < vals[0] {
-            let xe: Vec<f64> = centroid
-                .iter()
-                .zip(&worst)
-                .map(|(&c, &w)| c + 2.0 * (c - w))
-                .collect();
-            let fe = f(&xe);
+            let mut xe = [0.0f64; NM_MAX_DIM];
+            for i in 0..n {
+                xe[i] = centroid[i] + 2.0 * (centroid[i] - worst[i]);
+            }
+            let fe = f(&xe[..n]);
             if fe < fr {
                 pts[n] = xe;
                 vals[n] = fe;
@@ -616,33 +768,32 @@ pub(super) fn nelder_mead(
             pts[n] = xr;
             vals[n] = fr;
         } else {
-            let xc: Vec<f64> = centroid
-                .iter()
-                .zip(&worst)
-                .map(|(&c, &w)| c + 0.5 * (w - c))
-                .collect();
-            let fc = f(&xc);
+            let mut xc = [0.0f64; NM_MAX_DIM];
+            for i in 0..n {
+                xc[i] = centroid[i] + 0.5 * (worst[i] - centroid[i]);
+            }
+            let fc = f(&xc[..n]);
             if fc < vals[n] {
                 pts[n] = xc;
                 vals[n] = fc;
             } else {
                 // Shrink every non-best point toward the best.
-                let best = pts[0].clone();
+                let best = pts[0];
                 for i in 1..=n {
-                    for (x, &b) in pts[i].iter_mut().zip(&best) {
+                    for (x, &b) in pts[i][..n].iter_mut().zip(&best[..n]) {
                         *x = b + 0.5 * (*x - b);
                     }
-                    vals[i] = f(&pts[i]);
+                    vals[i] = f(&pts[i][..n]);
                 }
             }
         }
     }
     // First minimum (numpy-argmin convention).
     let mut best = 0;
-    for (i, &v) in vals.iter().enumerate().skip(1) {
+    for (i, &v) in vals.iter().enumerate().take(n + 1).skip(1) {
         if v < vals[best] {
             best = i;
         }
     }
-    (std::mem::take(&mut pts[best]), vals[best])
+    (pts[best][..n].to_vec(), vals[best])
 }

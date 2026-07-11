@@ -171,14 +171,19 @@ pub struct ClusterRefineParams {
                               // template-grid px; 0 disables) — added
                               // 2026-07-10
     pub max_iters: u32,       // Nelder-Mead iterations per stage
-    pub convergence: f64,     // simplex value-spread stop threshold
+    pub convergence: f64,     // simplex value-spread stop, affine stage
+    pub intermediate_convergence: f64, // …the shift/sim stages (looser) —
+                              // added 2026-07-11, see "Performance"
+    pub stall_iters: u32,     // NM stall exit: iterations without progress
+    pub stall_tol: f64,       // …and what counts as progress (ZNCC units)
 }
 impl Default for ClusterRefineParams {
     // radius 4.0, resolution 15,
     // window: PatchWindow::GaussianDisk { sigma: 15.0 / 4.0 }  (= resolution/4,
     //   the prototype's sigma = radius/2 in keypoint-frame units),
     // min_zncc 0.85, max_shift_px 3.0, max_keypoint_uncertainty 0.35,
-    // max_iters 120, convergence 1e-5
+    // max_iters 120, convergence 1e-5,
+    // intermediate_convergence 1e-4, stall_iters 20, stall_tol 1e-4
 }
 
 /// One image's SIFT feature geometry (borrowed views of the `.sift` arrays).
@@ -348,6 +353,24 @@ the reference-selection / dedupe / status bookkeeping.
 > test); non-finite coordinates from degenerate warps convert to `i32::MIN`
 > in the AVX2 mask and are guarded explicitly in the scalar path._
 
+> _Revision (2026-07-11): **Fused-channel pair-load kernel** (bit-identical
+> results, 1.93 → 1.15 µs per evaluation on dino_dog_toy — the channel
+> fusion and the pair loads landed as one revision; see "Performance"). Two
+> restructurings of the shipped kernel, both preserving each channel's
+> accumulation order exactly:_
+>
+> - _**Channels fused into the lane loop.** The loop is now k-major with the
+>   template channels unrolled inside (monomorphized over the active channel
+>   count, ≤ 4), so the coordinate FMAs, in-frame mask, tap indices, and
+>   fractional blend weights — all channel-invariant — are computed once per
+>   8 support points instead of once per channel._
+> - _**Pair loads instead of hardware gathers.** The two horizontal bilinear
+>   taps of a lane are adjacent floats; one unaligned 64-bit scalar load
+>   fetches both, and eight such loads + shuffle/deinterleave replace the
+>   four `_mm256_i32gather_ps` per channel-group. Half the fetched elements,
+>   and plain loads also sidestep the microcoded gather penalty on hybrid
+>   (E-core) parts, where most rayon threads land._
+
 Runtime dispatch per the house pattern:
 `is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma")`,
 `#[target_feature(enable = "avx2,fma")] unsafe fn`, scalar fallback written
@@ -374,6 +397,57 @@ with 4 independent accumulators so it autovectorizes (see
 - u8→f32 channel conversion happens once per (member, level) when the level
   tile is first touched, not per evaluation, following the `ContextTile`
   render-once convention.
+
+### Performance (2026-07-11 profiling pass)
+
+`cluster_refine/prof.rs` carries the house opt-in phase timers
+(`SFMTOOL_PROFILE=1`, the `keypoint_localize::prof` pattern): per-phase
+thread-summed CPU time (gate sample/score, template build, member cascades,
+tile builds, objective evaluations), plus event counters — members, gate
+rejections, cascades, evaluations **per cascade stage**, tile (re)builds and
+their pixel volume. Timers compile to one branch on a cached flag when the
+variable is unset.
+
+Baseline profile (dino_dog_toy: 85 images @ 2040×1536, 105,326 clusters,
+373,194 members, i9-14900HX, 32 threads): kernel wall 6.07 s, 194 CPU-s.
+`refine_member` was 96.5% of cluster CPU; inside it `eval_zncc` 70%
+(70.4M calls, 1.93 µs — 265 per member: shift 36 / sim 82 / affine 147, the
+affine stage crawling into the 120-iteration cap), the Nelder-Mead
+transcription's per-iteration `Vec` churn ~27%, tile builds 2.3%. The
+localizability gate and template builds are noise (≤3% combined).
+
+Changes, in order, with their share of the win:
+
+1. **Fused-channel pair-load AVX2 kernel** (above) — bit-identical,
+   1.93 → 1.15 µs/evaluation.
+2. **Allocation-free Nelder-Mead** — fixed `[f64; 6]` simplex buffers and a
+   stable insertion sort replace the per-iteration `Vec` allocations and
+   `sort_by`; bit-identical (same arithmetic, same tie order), −30 CPU-s.
+3. **Cascade stopping tradeoffs** (the only result-changing change):
+   `intermediate_convergence = 1e-4` for the shift/sim stages (they only
+   seed the next stage), and a **stall exit** (`stall_iters = 20`,
+   `stall_tol = 1e-4`): stop any stage when the best value has not improved
+   by more than the tolerance for that many consecutive iterations. The
+   reflect-heavy 6-dim affine crawl shrinks its value *spread* far more
+   slowly than it stops making *progress*, so the spread test alone ran most
+   members into the iteration cap long after the score stopped moving; the
+   stall exit releases exactly those. Evaluations 265 → 213 per member.
+   Sweep on dino_dog_toy: kept members +0.03%, mean kept ZNCC −0.0001,
+   warp-consistency median 0.0677 → 0.0669 / p90 0.1993 → 0.1972 (slightly
+   better), status flips 0.76% — and the synthetic warp-recovery suite stays
+   green (a tighter `stall_tol = 2e-4` broke the scale-1.25/rot-20° case).
+
+Result: kernel wall 6.07 → 3.23 s (1.9×), 194 → 103 CPU-s on the dataset
+above. End-to-end `sfm cluster-patches` 10.8 → 7.8 s — the CLI now also
+reads images and `.sift` files through a thread pool (the embed-patches
+pattern) instead of serially.
+
+Not pursued, recorded as candidates if this kernel needs another pass:
+replacing the affine NM stage with a Gauss-Newton/ECC step on an analytic
+windowed-ZNCC gradient (the cap-bound crawl is the remaining eval budget:
+~60% of kernel CPU is still `eval_zncc`, mostly affine-stage), and
+luminance-only refinement (3× fewer channel passes, but it changes matching
+semantics — needs its own quality study).
 
 ## 3. PyO3 bindings
 

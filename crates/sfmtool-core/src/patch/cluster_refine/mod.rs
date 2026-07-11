@@ -30,6 +30,7 @@
 mod consistency;
 mod kernels;
 mod params;
+pub mod prof;
 
 #[cfg(test)]
 mod tests;
@@ -459,11 +460,13 @@ fn refine_member(
         let lmap = map_at_level(&map, level);
         let bbox = grid_bbox(&lmap, resolution);
         let tile = tiles.get_or_build(pyramid, level, bbox)?;
-        eval_zncc(&lmap, tile, tables, tmpl)
+        prof::count(&prof::N_EVALS, 1);
+        prof::EVAL.time(|| eval_zncc(&lmap, tile, tables, tmpl))
     };
 
     // Seed support out of frame → the member is not evaluated.
     eval_raw([0.0, 0.0], [[0.0; 2]; 2])?;
+    prof::count(&prof::N_EVALS_SHIFT, 1);
 
     let mut theta = vec![0.0f64; 2];
     let mut prev = Stage::Shift;
@@ -474,8 +477,19 @@ fn refine_member(
         } else {
             promote(&theta, prev, stage)
         };
+        // The affine stage's result is stored; the shift/sim stages only seed
+        // the next stage and get the looser intermediate tolerance.
+        let tol = if stage == Stage::Affine {
+            params.convergence
+        } else {
+            params.intermediate_convergence
+        };
+        let stage_evals = std::cell::Cell::new(0u64);
         let (th, val) = nelder_mead(
             |x| {
+                if prof::enabled() {
+                    stage_evals.set(stage_evals.get() + 1);
+                }
                 let (t, d) = unpack(x, stage);
                 match eval_raw(t, d) {
                     // Any support sample out of frame scores worst (+1.0) so
@@ -487,7 +501,17 @@ fn refine_member(
             &th0,
             stage.scales(),
             params.max_iters,
-            params.convergence,
+            tol,
+            params.stall_iters,
+            params.stall_tol,
+        );
+        prof::count(
+            match stage {
+                Stage::Shift => &prof::N_EVALS_SHIFT,
+                Stage::Sim => &prof::N_EVALS_SIM,
+                Stage::Affine => &prof::N_EVALS_AFFINE,
+            },
+            stage_evals.get(),
         );
         theta = th;
         prev = stage;
@@ -574,6 +598,12 @@ fn refine_cluster(
             scale: det.abs().sqrt(),
         });
     }
+    if prof::enabled() {
+        prof::count(
+            &prof::N_MEMBERS,
+            geo.iter().filter(|s| s.is_some()).count() as u64,
+        );
+    }
     let step = 2.0 * params.radius / resolution as f64;
     let off = 0.5 * step - params.radius;
 
@@ -589,14 +619,20 @@ fn refine_cluster(
             let Some(g) = slot.as_ref() else {
                 continue;
             };
-            let Some(raw) = sample_patch_grid(&pyramids[g.image], g, resolution, step, off) else {
+            let Some(raw) = prof::GATE_SAMPLE
+                .time(|| sample_patch_grid(&pyramids[g.image], g, resolution, step, off))
+            else {
                 continue;
             };
             let r = resolution as usize;
             let channels = raw.len() / (r * r);
-            let loc = patch_localizability(&raw, r, channels, support, LOCALIZABILITY_SIGMA_NOISE);
+            prof::count(&prof::N_GATED, 1);
+            let loc = prof::GATE_SCORE.time(|| {
+                patch_localizability(&raw, r, channels, support, LOCALIZABILITY_SIGMA_NOISE)
+            });
             // NaN (empty patch) compares false -> kept, like embed-patches.
             if loc.sigma_pos_grid > params.max_keypoint_uncertainty {
+                prof::count(&prof::N_GATE_REJECTED, 1);
                 members[j].status = MemberStatus::RejectedUnlocalizable;
                 *slot = None;
             }
@@ -621,15 +657,17 @@ fn refine_cluster(
     let mut reference: Option<(usize, TemplateKernel)> = None;
     for &j in &cands {
         let g = geo[j].as_ref().unwrap();
-        if let Some(t) = build_template(
-            &pyramids[g.image],
-            g,
-            support,
-            tables,
-            resolution,
-            step,
-            off,
-        ) {
+        if let Some(t) = prof::TEMPLATE.time(|| {
+            build_template(
+                &pyramids[g.image],
+                g,
+                support,
+                tables,
+                resolution,
+                step,
+                off,
+            )
+        }) {
             reference = Some((j, t));
             break;
         }
@@ -659,17 +697,20 @@ fn refine_cluster(
             members[j].status = MemberStatus::DuplicateImage;
             continue;
         }
-        if let Some((zncc, shift, affine)) = refine_member(
-            &pyramids[g.image],
-            &ref_geo,
-            g,
-            &tmpl,
-            tables,
-            resolution,
-            step,
-            off,
-            params,
-        ) {
+        prof::count(&prof::N_REFINES, 1);
+        if let Some((zncc, shift, affine)) = prof::REFINE.time(|| {
+            refine_member(
+                &pyramids[g.image],
+                &ref_geo,
+                g,
+                &tmpl,
+                tables,
+                resolution,
+                step,
+                off,
+                params,
+            )
+        }) {
             let status = if zncc < params.min_zncc {
                 MemberStatus::RejectedLowZncc
             } else if shift > params.max_shift_px {
@@ -773,27 +814,36 @@ pub fn refine_cluster_patches(
     let support = build_support(params.window, resolution);
     let tables = SupportTables::new(&support, resolution);
 
+    if prof::enabled() {
+        prof::reset();
+    }
+    let wall_start = std::time::Instant::now();
     let outcomes: Vec<ClusterOutcome> = (0..c_count)
         .into_par_iter()
         .map(|c| {
-            let out = refine_cluster(
-                cluster_starts[c] as usize,
-                cluster_starts[c + 1] as usize,
-                pyramids,
-                features,
-                member_images,
-                member_features,
-                params,
-                &support,
-                &tables,
-                resolution,
-            );
+            let out = prof::TOTAL.time(|| {
+                refine_cluster(
+                    cluster_starts[c] as usize,
+                    cluster_starts[c + 1] as usize,
+                    pyramids,
+                    features,
+                    member_images,
+                    member_features,
+                    params,
+                    &support,
+                    &tables,
+                    resolution,
+                )
+            });
             if let Some(p) = progress {
                 p.fetch_add(1, Ordering::Relaxed);
             }
             out
         })
         .collect();
+    if prof::enabled() {
+        prof::report(c_count, wall_start.elapsed().as_secs_f64());
+    }
 
     let mut result = ClusterRefineResult {
         reference_members: vec![REFERENCE_UNREFINABLE; c_count],
