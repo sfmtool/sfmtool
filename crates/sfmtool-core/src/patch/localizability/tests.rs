@@ -186,6 +186,38 @@ fn matches_python_prototype_numerically() {
 }
 
 #[test]
+fn grayscale_scores_like_the_replicated_rgb() {
+    // A 1-channel patch IS its own luminance: identical content must score
+    // identically whether supplied as grayscale or replicated to R=G=B (the
+    // Rec.601 partial red weight must not shrink single-channel gradients).
+    let gray: Vec<f64> = REF_VAL.iter().map(|&v| v as f64).collect();
+    let gray_f32: Vec<f32> = gray.iter().map(|&v| v as f32).collect();
+    let rgb = rgba_from_gray(&gray);
+    let win = window();
+    let s1 = patch_localizability(&gray_f32, R, 1, &win, 3.0);
+    let s3 = patch_localizability(&rgb, R, C, &win, 3.0);
+    let rel = |got: f64, want: f64| (got - want).abs() / want.abs();
+    assert!(
+        rel(s1.lam1, s3.lam1) < 1e-6,
+        "lam1 {} vs {}",
+        s1.lam1,
+        s3.lam1
+    );
+    assert!(
+        rel(s1.lam2, s3.lam2) < 1e-6,
+        "lam2 {} vs {}",
+        s1.lam2,
+        s3.lam2
+    );
+    assert!(
+        rel(s1.sigma_pos_grid, s3.sigma_pos_grid) < 1e-6,
+        "sigma {} vs {}",
+        s1.sigma_pos_grid,
+        s3.sigma_pos_grid
+    );
+}
+
+#[test]
 fn empty_patch_scores_nan() {
     let empty = vec![0.0f32; R * R * C];
     let s = patch_localizability(&empty, R, C, &window(), 3.0);

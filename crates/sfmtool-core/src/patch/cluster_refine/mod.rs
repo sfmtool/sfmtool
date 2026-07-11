@@ -5,7 +5,11 @@
 //!
 //! See `specs/core/cluster-patch-refinement.md` (implementation) and
 //! `specs/core/cluster-patches.md` (design). Given per-image pyramids, SIFT
-//! feature geometry, and CSR clusters, [`refine_cluster_patches`] picks a
+//! feature geometry, and CSR clusters, [`refine_cluster_patches`] first
+//! gates each member on the localizability of its own patch (the
+//! noise-normalized structure-tensor uncertainty of
+//! `specs/core/patch-localizability.md`; members above
+//! `max_keypoint_uncertainty` are excluded up front), then picks a
 //! reference member per cluster (largest SIFT scale, deterministic
 //! tie-breaks), builds a Gaussian-windowed z-normalized template around the
 //! reference detection, refines an affine warp to every other member by a
@@ -36,6 +40,7 @@ use ndarray::Array3;
 use rayon::prelude::*;
 
 use crate::camera::remap::ImageU8Pyramid;
+use crate::patch::localizability::patch_localizability;
 use crate::patch::normal_refine::{
     build_support, weighted_moments_pub, znorm_write, Support, FLAT_NORM_SQ_EPS,
 };
@@ -53,6 +58,12 @@ const MIN_ABS_DET: f64 = 1e-9;
 /// Log-scale clamp of the similarity stage (`σ ∈ [−1.5, 1.5]`, the
 /// prototype's bound).
 const SIGMA_CLAMP: f64 = 1.5;
+
+/// Global photometric-noise constant (intensity units) for the
+/// localizability gate — sets the absolute px scale of `σ_pos`, matching
+/// the `score_localizability` / `embed-patches` default (see
+/// `specs/core/patch-localizability.md`, "σ_noise (v1: global constant)").
+const LOCALIZABILITY_SIGMA_NOISE: f64 = 3.0;
 
 // ── Small 2×2 matrix helpers ────────────────────────────────────────────────
 
@@ -244,6 +255,71 @@ fn warp_map(pos: [f64; 2], t: [f64; 2], b: &Mat2, step: f64, off: f64) -> Affine
         b[1][1] * step,
         pos[1] + t[1] + (b[1][0] + b[1][1]) * off,
     ])
+}
+
+/// Sample a member's own full `R×R` grid at its SIFT geometry (identity
+/// warp, mip-selected level, bit-exact `bilinear_geometry` convention) into
+/// an interleaved `R×R×C` f32 patch — the layout [`patch_localizability`]
+/// scores. Unlike [`build_template`], every grid pixel is sampled (the
+/// scorer's gradients cover the full grid, not just the windowed support),
+/// and samples outside the frame clamp to the nearest valid pixel (border
+/// replicate) so a border member is scored on its visible content instead
+/// of skipping the gate. `None` only for non-finite coordinates (degenerate
+/// geometry) or a level too small to bilinear-sample.
+fn sample_patch_grid(
+    pyramid: &ImageU8Pyramid,
+    geo: &MemberGeo,
+    resolution: u32,
+    step: f64,
+    off: f64,
+) -> Option<Vec<f32>> {
+    let map = warp_map(geo.pos, [0.0, 0.0], &geo.a, step, off);
+    let level = level_for_map(&map, pyramid.num_levels());
+    let lmap = map_at_level(&map, level);
+    let img = pyramid.level(level);
+    let r = resolution as usize;
+    let ch = img.channels() as usize;
+    let stride = img.width() as usize * ch;
+    let data = img.data();
+    let (w_img, h_img) = (img.width() as i64, img.height() as i64);
+    if w_img < 2 || h_img < 2 {
+        return None;
+    }
+    let (max_gx, max_gy) = ((w_img - 1) as f64, (h_img - 1) as f64);
+    let mut out = vec![0f32; r * r * ch];
+    for px in 0..r * r {
+        let col = (px % r) as f64;
+        let row = (px / r) as f64;
+        let x = lmap.a[0] * col + lmap.a[1] * row + lmap.a[2];
+        let y = lmap.a[3] * col + lmap.a[4] * row + lmap.a[5];
+        // `bilinear_geometry`'s pixel-center convention.
+        let gx = x - 0.5;
+        let gy = y - 0.5;
+        if !gx.is_finite() || !gy.is_finite() {
+            return None;
+        }
+        // Nearest-valid-pixel clamp (border replicate): the coordinate
+        // clamps to the outermost pixel center and the tap base to the last
+        // valid 2x2 cell, so fx/fy saturate and the blend reads the edge
+        // pixel.
+        let gx = gx.clamp(0.0, max_gx);
+        let gy = gy.clamp(0.0, max_gy);
+        let ix = (gx.floor() as i64).min(w_img - 2);
+        let iy = (gy.floor() as i64).min(h_img - 2);
+        let (fx, fy) = ((gx - ix as f64) as f32, (gy - iy as f64) as f32);
+        let base = iy as usize * stride + ix as usize * ch;
+        for c in 0..ch {
+            let v00 = data[base + c] as f32;
+            let v10 = data[base + ch + c] as f32;
+            let v01 = data[base + stride + c] as f32;
+            let v11 = data[base + stride + ch + c] as f32;
+            out[px * ch + c] = (1.0 - fx) * (1.0 - fy) * v00
+                + fx * (1.0 - fy) * v10
+                + (1.0 - fx) * fy * v01
+                + fx * fy * v11;
+        }
+    }
+    Some(out)
 }
 
 /// Build the reference's z-normalized template kernel: sample every image
@@ -496,13 +572,39 @@ fn refine_cluster(
             scale: det.abs().sqrt(),
         });
     }
+    let step = 2.0 * params.radius / resolution as f64;
+    let off = 0.5 * step - params.radius;
+
+    // 1b. Localizability gate: score each usable member's own patch and
+    // exclude members whose weak-axis positional uncertainty exceeds the
+    // threshold — before reference selection, so an unlocalizable patch can
+    // neither anchor nor join the cluster. Border patches sample with a
+    // nearest-valid-pixel clamp, so they are scored on their visible
+    // content; only degenerate geometry (non-finite coordinates, or a
+    // sub-2px pyramid level) skips the gate.
+    if params.max_keypoint_uncertainty > 0.0 {
+        for (j, slot) in geo.iter_mut().enumerate() {
+            let Some(g) = slot.as_ref() else {
+                continue;
+            };
+            let Some(raw) = sample_patch_grid(&pyramids[g.image], g, resolution, step, off) else {
+                continue;
+            };
+            let r = resolution as usize;
+            let channels = raw.len() / (r * r);
+            let loc = patch_localizability(&raw, r, channels, support, LOCALIZABILITY_SIGMA_NOISE);
+            // NaN (empty patch) compares false -> kept, like embed-patches.
+            if loc.sigma_pos_grid > params.max_keypoint_uncertainty {
+                members[j].status = MemberStatus::RejectedUnlocalizable;
+                *slot = None;
+            }
+        }
+    }
+
     let usable: Vec<usize> = (0..size).filter(|&j| geo[j].is_some()).collect();
     if usable.len() < 2 {
         return unrefinable(members);
     }
-
-    let step = 2.0 * params.radius / resolution as f64;
-    let off = 0.5 * step - params.radius;
 
     // 2–3. Reference selection (largest scale, ties to the lowest global
     // member index) with template-usability fallback to the next candidate.
@@ -547,7 +649,9 @@ fn refine_cluster(
             continue;
         }
         let Some(g) = geo[j].as_ref() else {
-            continue; // stays NotEvaluated
+            // Invalid members stay NotEvaluated; gated members keep their
+            // RejectedUnlocalizable status.
+            continue;
         };
         if g.image == ref_geo.image {
             members[j].status = MemberStatus::DuplicateImage;

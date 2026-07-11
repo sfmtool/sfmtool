@@ -226,8 +226,13 @@ fn gate_low_zncc_rejects_flat_member() {
     // ~50-effective-sample Gaussian window the affine optimizer can chase a
     // spurious ZNCC above the permissive 0.85 gate, tripping the shift gate
     // instead — the flat case pins the RejectedLowZncc path
-    // deterministically.)
-    let params = ClusterRefineParams::default();
+    // deterministically.) The localizability gate is disabled: a flat patch
+    // is exactly what it excludes (see gate_unlocalizable_member_excluded),
+    // and this test pins the downstream ZNCC path.
+    let params = ClusterRefineParams {
+        max_keypoint_uncertainty: 0.0,
+        ..Default::default()
+    };
     let img1 = make_image(128, 128, texture);
     let img2 = make_image(128, 128, |_, _| 127.0);
     let a = [[2.5, 0.0], [0.0, 2.5]];
@@ -250,6 +255,111 @@ fn gate_low_zncc_rejects_flat_member() {
     assert_eq!(result.member_status[0], MemberStatus::Reference);
     assert_eq!(result.member_status[1], MemberStatus::RejectedLowZncc);
     assert_eq!(result.member_zncc[1], 0.0);
+}
+
+#[test]
+fn gate_unlocalizable_member_excluded() {
+    // Default params: the flat member's own patch has zero gradients, so its
+    // weak-axis positional uncertainty is enormous and the localizability
+    // gate excludes it before refinement. With one usable member left the
+    // cluster is unrefinable.
+    let params = ClusterRefineParams::default();
+    let img1 = make_image(128, 128, texture);
+    let img2 = make_image(128, 128, |_, _| 127.0);
+    let a = [[2.5, 0.0], [0.0, 2.5]];
+    let feats = [
+        ImageFeatures::new(&[([64.0, 64.0], a)]),
+        ImageFeatures::new(&[([64.0, 64.0], a)]),
+    ];
+    let pyramids = [pyramid(&img1), pyramid(&img2)];
+    let result = refine_cluster_patches(
+        &pyramids,
+        &geometry(&feats),
+        &[0, 2],
+        &[0, 1],
+        &[0, 0],
+        &params,
+        None,
+    );
+    assert_eq!(result.member_status[1], MemberStatus::RejectedUnlocalizable);
+    assert!(result.member_zncc[1].is_nan());
+    assert!(result.member_shift_px[1].is_nan());
+    assert_eq!(result.reference_members[0], REFERENCE_UNREFINABLE);
+    assert_eq!(result.member_status[0], MemberStatus::NotEvaluated);
+}
+
+#[test]
+fn gate_unlocalizable_member_cannot_be_reference() {
+    // The flat-image member has the largest SIFT scale and would win
+    // reference selection, but the gate runs first: the textured members
+    // refine normally among themselves.
+    let params = ClusterRefineParams::default();
+    let img_flat = make_image(128, 128, |_, _| 127.0);
+    let img = make_image(128, 128, texture);
+    let a_big = [[3.0, 0.0], [0.0, 3.0]];
+    let a = [[2.5, 0.0], [0.0, 2.5]];
+    let feats = [
+        ImageFeatures::new(&[([64.0, 64.0], a_big)]),
+        ImageFeatures::new(&[([64.0, 64.0], a)]),
+        ImageFeatures::new(&[([64.0, 64.0], a)]),
+    ];
+    let pyramids = [pyramid(&img_flat), pyramid(&img), pyramid(&img)];
+    let result = refine_cluster_patches(
+        &pyramids,
+        &geometry(&feats),
+        &[0, 3],
+        &[0, 1, 2],
+        &[0, 0, 0],
+        &params,
+        None,
+    );
+    assert_eq!(result.member_status[0], MemberStatus::RejectedUnlocalizable);
+    // Equal scales among the survivors tie-break to the lowest member index.
+    assert_eq!(result.reference_members[0], 1);
+    assert_eq!(result.member_status[1], MemberStatus::Reference);
+    assert_eq!(result.member_status[2], MemberStatus::Kept);
+}
+
+#[test]
+fn gate_scores_border_member_with_clamped_sampling() {
+    // A member whose patch straddles the image border is still scored — the
+    // sampler clamps to the nearest valid pixel instead of skipping the
+    // gate. On a flat image the clamped patch is flat, so the member is
+    // RejectedUnlocalizable (before this behavior it fell through to the
+    // seed frame gate as NotEvaluated).
+    let params = ClusterRefineParams::default();
+    let img1 = make_image(128, 128, texture);
+    let img2 = make_image(128, 128, |_, _| 127.0);
+    let a = [[2.5, 0.0], [0.0, 2.5]];
+    // The member's support (±10 px around x = 3) leaves the frame.
+    let feats = [
+        ImageFeatures::new(&[([64.0, 64.0], a)]),
+        ImageFeatures::new(&[([3.0, 64.0], a)]),
+    ];
+    let pyramids = [pyramid(&img1), pyramid(&img2)];
+    let result = refine_cluster_patches(
+        &pyramids,
+        &geometry(&feats),
+        &[0, 2],
+        &[0, 1],
+        &[0, 0],
+        &params,
+        None,
+    );
+    assert_eq!(result.member_status[1], MemberStatus::RejectedUnlocalizable);
+    // A textured border member passes the gate and proceeds to the seed
+    // frame gate (NotEvaluated), exactly as before.
+    let pyramids = [pyramid(&img1), pyramid(&img1)];
+    let result = refine_cluster_patches(
+        &pyramids,
+        &geometry(&feats),
+        &[0, 2],
+        &[0, 1],
+        &[0, 0],
+        &params,
+        None,
+    );
+    assert_eq!(result.member_status[1], MemberStatus::NotEvaluated);
 }
 
 #[test]

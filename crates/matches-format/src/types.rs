@@ -363,6 +363,10 @@ pub enum ClusterMemberStatus {
     /// Not evaluated: degenerate shape, template/seed support out of frame,
     /// or the cluster itself was unrefinable.
     NotEvaluated = 5,
+    /// Rejected: the member's own patch scored a keypoint position
+    /// uncertainty above the localizability threshold (excluded before
+    /// reference selection and refinement).
+    RejectedUnlocalizable = 6,
 }
 
 impl ClusterMemberStatus {
@@ -375,6 +379,7 @@ impl ClusterMemberStatus {
             3 => Some(Self::RejectedShift),
             4 => Some(Self::DuplicateImage),
             5 => Some(Self::NotEvaluated),
+            6 => Some(Self::RejectedUnlocalizable),
             _ => None,
         }
     }

@@ -252,12 +252,13 @@ pub fn clusters_to_pair_matches(
 /// Refine SIFT clusters into patch clusters (see
 /// `specs/core/cluster-patch-refinement.md`).
 ///
-/// Per cluster: pick a reference member (largest SIFT scale), build a
-/// Gaussian-windowed z-normalized template around its detection, refine an
-/// affine warp to every other member by a shift → similarity → affine
-/// Nelder-Mead cascade on the windowed ZNCC (seeded from the SIFT affine
-/// shapes), vet by achieved ZNCC and translation drift, and keep at most one
-/// member per image.
+/// Per cluster: exclude members whose own patch fails the localizability
+/// gate (see `specs/core/patch-localizability.md`), pick a reference member
+/// (largest SIFT scale), build a Gaussian-windowed z-normalized template
+/// around its detection, refine an affine warp to every other member by a
+/// shift → similarity → affine Nelder-Mead cascade on the windowed ZNCC
+/// (seeded from the SIFT affine shapes), vet by achieved ZNCC and
+/// translation drift, and keep at most one member per image.
 ///
 /// Args:
 ///     images: One HxW / HxWxC uint8 numpy array per image, in the
@@ -282,6 +283,14 @@ pub fn clusters_to_pair_matches(
 ///         (default 0.85).
 ///     max_shift_px: Max translation drift from the SIFT seed, px
 ///         (default 3.0).
+///     max_keypoint_uncertainty: Exclude a member before reference selection
+///         and refinement when its own patch's predicted keypoint position
+///         uncertainty (noise-normalized structure-tensor sigma_pos,
+///         template-grid px) exceeds this; the member is marked
+///         rejected_unlocalizable. 0 disables the gate. Default 0.35 — the
+///         same default value as embed-patches' cull, though scored here on
+///         the member's template-grid patch with the refinement window
+///         rather than on the consensus.
 ///     max_iters: Nelder-Mead iterations per cascade stage (default 120).
 ///     progress: Optional ProgressCounter, bumped once per finished cluster.
 ///
@@ -297,6 +306,7 @@ pub fn clusters_to_pair_matches(
                     radius = 4.0, resolution = 15,
                     window = "gaussian_disk", window_sigma = None,
                     min_zncc = 0.85, max_shift_px = 3.0,
+                    max_keypoint_uncertainty = 0.35,
                     max_iters = 120, progress = None))]
 #[allow(clippy::too_many_arguments)]
 pub fn refine_cluster_patches<'py>(
@@ -313,6 +323,7 @@ pub fn refine_cluster_patches<'py>(
     window_sigma: Option<f64>,
     min_zncc: f64,
     max_shift_px: f64,
+    max_keypoint_uncertainty: f64,
     max_iters: u32,
     progress: Option<ProgressCounter>,
 ) -> PyResult<Bound<'py, PyDict>> {
@@ -380,6 +391,7 @@ pub fn refine_cluster_patches<'py>(
         window: parse_patch_window(window, window_sigma.unwrap_or(0.5))?,
         min_zncc,
         max_shift_px,
+        max_keypoint_uncertainty,
         max_iters,
         ..ClusterRefineParams::default()
     };

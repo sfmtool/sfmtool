@@ -31,12 +31,18 @@ sfm cluster-patches -i clusters.matches [-o out.matches] [OPTIONS...]
 | `--resolution` | int ≥ 3 | 15 | Template samples per axis |
 | `--min-zncc` | float in [−1, 1] | 0.85 | Member acceptance threshold on the achieved windowed ZNCC |
 | `--max-shift` | float ≥ 0 | 3.0 | Max translation drift from the SIFT seed, px |
+| `--max-keypoint-uncertainty` | float ≥ 0 | 0.35 | Localizability gate: exclude members whose own patch scores a predicted keypoint position uncertainty (`σ_pos`, template-grid px) above this, before reference selection and refinement; `0` disables |
 
 The defaults come from the experiment calibration
 (`specs/core/cluster-patches.md`, "The operation"): `radius` 2 is too small
 for the affine DOF and 6–8 buys nothing; `min_zncc` is permissive by design —
 over-culling, not contamination, is the observed failure mode, and downstream
-stages re-gate on the stored signals.
+stages re-gate on the stored signals. `--max-keypoint-uncertainty` shares its
+default value with `embed-patches` (the conservative tail cut of
+[`patch-localizability.md`](../core/patch-localizability.md)); it is scored
+on each member's own template-grid patch with the refinement window (not on
+a consensus), which catches the flat/edge aperture cases that agree
+photometrically yet cannot pin a 2D position.
 
 ## Process
 
@@ -54,26 +60,29 @@ stages re-gate on the stored signals.
    feature indices line up).
 3. **Refine.** Load the images with cv2 (color) in images-section order and
    call `_sfmtool.matching.refine_cluster_patches` (the
-   `patch::cluster_refine` kernel — reference selection by largest SIFT
-   scale, Gaussian-windowed-ZNCC shift → similarity → affine Nelder-Mead
-   cascade seeded from the SIFT affine shapes, vetting, one kept member per
-   image), with a `ProgressCounter` poller reporting per-cluster progress.
+   `patch::cluster_refine` kernel — per-member localizability gate,
+   reference selection by largest SIFT scale, Gaussian-windowed-ZNCC shift →
+   similarity → affine Nelder-Mead cascade seeded from the SIFT affine
+   shapes, vetting, one kept member per image), with a `ProgressCounter`
+   poller reporting per-cluster progress.
 4. **Write.** A new `.matches` file: images + clusters sections copied
    verbatim, `cluster_patches/` from the kernel output, `refine_options` =
    the CLI parameters, metadata updated (`has_cluster_patches: true`, fresh
    timestamp, workspace `relative_path` recomputed from the output location;
    the content hash is recomputed by the writer). A summary line reports the
-   status breakdown (references / kept / rejected / duplicate-image / not
-   evaluated).
+   status breakdown (references / kept / rejected / unlocalizable /
+   duplicate-image / not evaluated).
 
 ## Output statuses
 
 `member_status` values in the written file (see
 [`matches-file-format.md`](../formats/matches-file-format.md), Cluster
 Patches): `0 reference`, `1 kept`, `2 rejected_low_zncc`,
-`3 rejected_shift`, `4 duplicate_image`, `5 not_evaluated`. A patch cluster =
-the reference plus its `kept` members; rejected members keep their measured
-ZNCC / shift signals so consumers can re-gate without re-running.
+`3 rejected_shift`, `4 duplicate_image`, `5 not_evaluated`,
+`6 rejected_unlocalizable`. A patch cluster = the reference plus its `kept`
+members; rejected members keep their measured ZNCC / shift signals so
+consumers can re-gate without re-running (`rejected_unlocalizable` members
+are excluded before refinement, so their ZNCC / shift are NaN).
 
 ## Usage Examples
 
@@ -88,8 +97,7 @@ sfm cluster-patches -i matches/clusters.matches -o matches/strict.matches \
 
 ## Notes
 
-- Until `sfm match --cluster` writes cluster-bearing files (the
-  derived-pairs migration tracked in
-  [`cluster-patch-refinement.md`](../core/cluster-patch-refinement.md) §1),
-  cluster-bearing inputs are produced programmatically — see
-  `tests/test_cluster_patches.py` for the reference construction.
+- `sfm match --cluster` writes the cluster-bearing input file (default
+  `matches/<verified stem>-clusters.matches`; the derived-pairs migration of
+  [`cluster-patch-refinement.md`](../core/cluster-patch-refinement.md) §1,
+  shipped 2026-07-10).

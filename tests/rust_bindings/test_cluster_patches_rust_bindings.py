@@ -12,7 +12,9 @@ from sfmtool._sfmtool.matching import refine_cluster_patches
 # matches_format::ClusterMemberStatus discriminants.
 STATUS_REFERENCE = 0
 STATUS_KEPT = 1
+STATUS_REJECTED_LOW_ZNCC = 2
 STATUS_NOT_EVALUATED = 5
+STATUS_REJECTED_UNLOCALIZABLE = 6
 
 
 def _texture(w: int, h: int) -> np.ndarray:
@@ -104,6 +106,24 @@ class TestRefineClusterPatches:
             STATUS_NOT_EVALUATED,
         ]
         assert np.isnan(result["member_zncc"]).all()
+
+    def test_unlocalizable_member_excluded(self):
+        # The member's image is flat: its own patch has no gradient signal,
+        # so the localizability gate excludes it before refinement and the
+        # 2-member cluster becomes unrefinable.
+        images, pos, aff, starts, m_img, m_feat = _inputs()
+        images[1] = np.full_like(images[1], 127)
+        result = refine_cluster_patches(images, pos, aff, starts, m_img, m_feat)
+        assert result["member_status"][1] == STATUS_REJECTED_UNLOCALIZABLE
+        assert np.isnan(result["member_zncc"][1])
+        assert result["reference_members"][0] == 0xFFFFFFFF
+
+        # Disabling the gate re-admits the member; the flat patch then fails
+        # the downstream ZNCC vet instead.
+        result = refine_cluster_patches(
+            images, pos, aff, starts, m_img, m_feat, max_keypoint_uncertainty=0.0
+        )
+        assert result["member_status"][1] == STATUS_REJECTED_LOW_ZNCC
 
     def test_progress_counter_ticks(self):
         from sfmtool._sfmtool import ProgressCounter

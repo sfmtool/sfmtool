@@ -674,7 +674,7 @@ fn test_write_validation_cluster_patches_wrong_lengths() {
 #[test]
 fn test_write_validation_invalid_status() {
     let mut data = make_cluster_patch_test_data();
-    data.cluster_patches.as_mut().unwrap().member_status[2] = 6;
+    data.cluster_patches.as_mut().unwrap().member_status[2] = 7;
     expect_write_error(
         "matches_test_cp_bad_status",
         &data,
@@ -765,11 +765,11 @@ fn test_invalid_config_string() {
 
 #[test]
 fn test_cluster_member_status_round_trip() {
-    for value in 0u8..=5 {
+    for value in 0u8..=6 {
         let status = ClusterMemberStatus::from_u8(value).unwrap();
         assert_eq!(status as u8, value);
     }
-    assert!(ClusterMemberStatus::from_u8(6).is_none());
+    assert!(ClusterMemberStatus::from_u8(7).is_none());
     assert!(ClusterMemberStatus::from_u8(255).is_none());
 }
 
