@@ -125,6 +125,12 @@ def _run_matching(
             workspace_dir,
             max_feature_count,
             camera_model,
+            # The cluster and flow matchers match outside the database and use
+            # it only for pycolmap geometric verification, which never reads
+            # descriptors — skip writing them (the largest rows by far). Fail
+            # safe for any future method: only the known DB-external matchers
+            # opt out.
+            include_descriptors=matching_method not in ("cluster", "flow"),
         )
 
         # Run matching

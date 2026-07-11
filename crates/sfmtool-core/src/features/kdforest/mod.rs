@@ -220,7 +220,7 @@ impl<S: ForestScalar> KdForest<S> {
         max_leaf_checks: usize,
         max_dist: Option<f32>,
     ) -> Vec<u32> {
-        self.search_batch_inner(queries, n_queries, k, max_leaf_checks, max_dist)
+        self.search_batch_inner(queries, n_queries, k, max_leaf_checks, max_dist, None)
             .0
     }
 
@@ -236,7 +236,65 @@ impl<S: ForestScalar> KdForest<S> {
         max_leaf_checks: usize,
         max_dist: Option<f32>,
     ) -> (Vec<u32>, Vec<f32>) {
-        self.search_batch_inner(queries, n_queries, k, max_leaf_checks, max_dist)
+        self.search_batch_inner(queries, n_queries, k, max_leaf_checks, max_dist, None)
+    }
+
+    /// As [`search_batch_with_distances`](KdForest::search_batch_with_distances),
+    /// but *processing* the queries in the given order (a permutation of
+    /// `0..n_queries`) while still returning results in query order.
+    ///
+    /// Each query is independent and deterministic, so the schedule changes
+    /// nothing about the output — only about cache behavior: batch k-NN over a
+    /// large corpus is bound by random point-row fetches, and queries that are
+    /// neighbors in descriptor space check heavily overlapping row sets. An
+    /// order that keeps similar queries consecutive (e.g.
+    /// [`locality_order`](KdForest::locality_order) for self-join batches)
+    /// turns most of those fetches into cache hits.
+    #[must_use]
+    pub fn search_batch_with_distances_ordered(
+        &self,
+        queries: &[S],
+        n_queries: usize,
+        k: usize,
+        max_leaf_checks: usize,
+        max_dist: Option<f32>,
+        order: &[u32],
+    ) -> (Vec<u32>, Vec<f32>) {
+        assert_eq!(
+            order.len(),
+            n_queries,
+            "order must be a permutation of 0..n_queries",
+        );
+        // A duplicate-bearing `order` of the right length would silently leave
+        // the uncovered queries' rows as padding; catch it where debug
+        // assertions are on (an out-of-range entry panics on its own).
+        debug_assert!(
+            {
+                let mut seen = vec![false; n_queries];
+                order.iter().all(|&i| {
+                    let slot = &mut seen[i as usize];
+                    !std::mem::replace(slot, true)
+                })
+            },
+            "order must be a permutation of 0..n_queries (duplicate entries)",
+        );
+        self.search_batch_inner(
+            queries,
+            n_queries,
+            k,
+            max_leaf_checks,
+            max_dist,
+            Some(order),
+        )
+    }
+
+    /// A descriptor-space locality permutation of the indexed points: tree 0's
+    /// leaf layout, in which neighboring entries fall in the same or nearby
+    /// leaves. The natural processing order for self-join batches (querying
+    /// the corpus against itself) via
+    /// [`search_batch_with_distances_ordered`](KdForest::search_batch_with_distances_ordered).
+    pub fn locality_order(&self) -> &[u32] {
+        &self.trees[0].point_ids
     }
 
     fn search_batch_inner(
@@ -246,6 +304,7 @@ impl<S: ForestScalar> KdForest<S> {
         k: usize,
         max_leaf_checks: usize,
         max_dist: Option<f32>,
+        order: Option<&[u32]>,
     ) -> (Vec<u32>, Vec<f32>) {
         assert_eq!(
             queries.len(),
@@ -264,13 +323,16 @@ impl<S: ForestScalar> KdForest<S> {
 
         // One reusable scratch per rayon worker (allocated once, reset per query)
         // keeps the query inner loop free of per-query heap/bitset allocation.
+        // With an `order`, row `j` of the working arrays holds query
+        // `order[j]`'s results until the scatter below restores query order.
         indices
             .par_chunks_mut(k)
             .zip(distances.par_chunks_mut(k))
             .enumerate()
             .for_each_init(
                 || search::SearchScratch::new(self.n_points),
-                |scratch, (i, (irow, drow))| {
+                |scratch, (j, (irow, drow))| {
+                    let i = order.map_or(j, |o| o[j] as usize);
                     let q = &queries[i * self.dim..(i + 1) * self.dim];
                     let mut s = search::QueryStats::default();
                     self.run_query(q, k, max_leaf_checks, max_dist, scratch, &mut s);
@@ -280,6 +342,19 @@ impl<S: ForestScalar> KdForest<S> {
                     }
                 },
             );
+
+        if let Some(o) = order {
+            // Scatter the processing-order rows back into query order.
+            let mut idx_out = vec![u32::MAX; n_queries * k];
+            let mut dist_out = vec![f32::INFINITY; n_queries * k];
+            for (j, &i) in o.iter().enumerate() {
+                let i = i as usize;
+                idx_out[i * k..(i + 1) * k].copy_from_slice(&indices[j * k..(j + 1) * k]);
+                dist_out[i * k..(i + 1) * k].copy_from_slice(&distances[j * k..(j + 1) * k]);
+            }
+            indices = idx_out;
+            distances = dist_out;
+        }
 
         if let Some(acc) = &stats {
             acc.report(n_queries, k, max_leaf_checks, self.params.num_trees);

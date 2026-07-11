@@ -31,6 +31,15 @@ use rayon::prelude::*;
 
 use crate::features::kdforest::{KdForestParams, KdForestU8};
 
+/// Env-gated stage timing for the matcher. Enabled by setting
+/// `SFMTOOL_CLUSTER_TIMING`; one cached bool check plus a few `Instant::now()`
+/// per call otherwise. When on, [`background_floor_clusters`] and
+/// [`clusters_to_pair_matches`] each print one `CLUSTER_TIMING ...` line to
+/// stderr with per-stage wall-clock milliseconds (the SIFT `SIFT_TIMING`
+/// precedent).
+static CLUSTER_TIMING: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("SFMTOOL_CLUSTER_TIMING").is_some());
+
 /// Tuning for the background-floor matcher. `Default` is the production config.
 /// The k-NN query width is derived, not configured: `d + 1` (self + the `d`
 /// nearest others), exactly enough that the background rank is the last column.
@@ -178,9 +187,24 @@ pub fn background_floor_clusters(
         None => Cow::Owned(descriptors.iter().copied().collect()),
     };
 
+    let timing = *CLUSTER_TIMING;
+    let t = std::time::Instant::now();
     let forest = KdForestU8::build(&corpus, n, dim, params.forest);
-    let (idx, dist_sq) =
-        forest.search_batch_with_distances(&corpus, n, k, params.forest.max_leaf_checks, None);
+    let t_build = t.elapsed();
+    let t = std::time::Instant::now();
+    // Self-join batch: process the queries in the forest's descriptor-space
+    // locality order so consecutive queries hit cache-resident point rows
+    // (identical results in identical positions — only the schedule changes).
+    let (idx, dist_sq) = forest.search_batch_with_distances_ordered(
+        &corpus,
+        n,
+        k,
+        params.forest.max_leaf_checks,
+        None,
+        forest.locality_order(),
+    );
+    let t_query = t.elapsed();
+    let t = std::time::Instant::now();
 
     // Per-row within-radius cross-image candidates, with the L2 distance kept
     // alongside for the per-image nearest resolution below. The stride is the
@@ -215,6 +239,9 @@ pub fn background_floor_clusters(
             }
             *ccount = m as u32;
         });
+
+    let t_radius = t.elapsed();
+    let t = std::time::Instant::now();
 
     // Density-ordered seeding: walk rows densest-first (row index breaks ties,
     // so the order — and the result — is deterministic), claiming members into
@@ -274,6 +301,19 @@ pub fn background_floor_clusters(
         }
     }
 
+    if timing {
+        eprintln!(
+            "CLUSTER_TIMING floor build_ms={:.1} query_ms={:.1} radius_ms={:.1} seed_ms={:.1} \
+             n={} clusters={}",
+            t_build.as_secs_f64() * 1e3,
+            t_query.as_secs_f64() * 1e3,
+            t_radius.as_secs_f64() * 1e3,
+            t.elapsed().as_secs_f64() * 1e3,
+            n,
+            cluster_starts.len() - 1,
+        );
+    }
+
     Ok(Clusters {
         cluster_starts: Array1::from_vec(cluster_starts),
         member_images: Array1::from_vec(member_images),
@@ -290,6 +330,8 @@ pub fn clusters_to_pair_matches(
     descriptors: ArrayView2<'_, u8>,
     image_starts: &[u32],
 ) -> PairMatches {
+    let timing = *CLUSTER_TIMING;
+    let t0 = std::time::Instant::now();
     let starts = clusters.cluster_starts.as_slice().unwrap();
     let images = clusters.member_images.as_slice().unwrap();
     let features = clusters.member_features.as_slice().unwrap();
@@ -336,6 +378,14 @@ pub fn clusters_to_pair_matches(
 
     let pair_count = match_counts.len();
     let match_count = match_descriptor_distances.len();
+    if timing {
+        eprintln!(
+            "CLUSTER_TIMING pairs total_ms={:.1} pairs={} matches={}",
+            t0.elapsed().as_secs_f64() * 1e3,
+            pair_count,
+            match_count,
+        );
+    }
     PairMatches {
         image_index_pairs: Array2::from_shape_vec((pair_count, 2), image_index_pairs).unwrap(),
         match_counts: Array1::from_vec(match_counts),

@@ -53,6 +53,22 @@ pub(super) struct Tree<S: ForestScalar> {
     pub(super) point_ids: Vec<u32>,
 }
 
+/// Per-tree reusable scratch for construction, so the recursion allocates
+/// nothing per node: the partition's class tags and reordered ids, the median
+/// selection's coordinate buffer, and the variance estimator's accumulators.
+/// Buffers are (re)sized inside each helper; contents never carry between
+/// nodes.
+struct BuildScratch<S> {
+    /// Per-id comparison class from the partition's first pass.
+    classes: Vec<std::cmp::Ordering>,
+    /// The partition's `[lt | eq | gt]` reordering, copied back into `ids`.
+    reordered: Vec<u32>,
+    /// Coordinate values for median selection.
+    vals: Vec<S>,
+    /// Variance estimator sums, `2 × dim` (means, then squares).
+    sums: Vec<f64>,
+}
+
 /// Build a single tree over `point_ids` (a fresh `0..n_points` permutation that
 /// this call rearranges in place to match the leaf layout).
 ///
@@ -67,8 +83,23 @@ pub(super) fn build_tree<S: ForestScalar>(
 ) -> Tree<S> {
     let mut nodes = Vec::new();
     let mut rng = StdRng::seed_from_u64(seed);
+    let mut scratch = BuildScratch {
+        classes: Vec::new(),
+        reordered: Vec::new(),
+        vals: Vec::new(),
+        sums: vec![0.0; 2 * dim],
+    };
     if !point_ids.is_empty() {
-        build_node(&mut nodes, points, dim, &mut point_ids, 0, params, &mut rng);
+        build_node(
+            &mut nodes,
+            points,
+            dim,
+            &mut point_ids,
+            0,
+            params,
+            &mut rng,
+            &mut scratch,
+        );
     }
     Tree { nodes, point_ids }
 }
@@ -76,6 +107,7 @@ pub(super) fn build_tree<S: ForestScalar>(
 /// Recursively build the subtree for `ids` (the slice of point ids belonging to
 /// this node), whose first element sits at `offset` within the tree's full
 /// `point_ids` array. Returns the arena index of the created node.
+#[allow(clippy::too_many_arguments)]
 fn build_node<S: ForestScalar>(
     nodes: &mut Vec<Node<S>>,
     points: &[S],
@@ -84,6 +116,7 @@ fn build_node<S: ForestScalar>(
     offset: u32,
     params: &KdForestParams,
     rng: &mut StdRng,
+    scratch: &mut BuildScratch<S>,
 ) -> u32 {
     let n = ids.len();
     if n <= params.leaf_size {
@@ -95,11 +128,11 @@ fn build_node<S: ForestScalar>(
         return idx;
     }
 
-    let variances = estimate_variances(points, dim, ids, rng);
-    let top = top_dims(&variances, params.split_dim_candidates);
+    let variances = estimate_variances(points, dim, ids, rng, &mut scratch.sums);
+    let top = top_dims(variances, params.split_dim_candidates);
     let split_dim = top[rng.random_range(0..top.len())];
-    let split_val = median_value::<S>(points, dim, split_dim, ids);
-    let left_count = partition::<S>(points, dim, split_dim, split_val, ids);
+    let split_val = median_value::<S>(points, dim, split_dim, ids, &mut scratch.vals);
+    let left_count = partition::<S>(points, dim, split_dim, split_val, ids, scratch);
 
     // Reserve this node's slot before building children so child arena indices
     // are assigned after it (children are appended during their recursion). The
@@ -112,7 +145,7 @@ fn build_node<S: ForestScalar>(
     });
 
     let (left_ids, right_ids) = ids.split_at_mut(left_count);
-    let left = build_node(nodes, points, dim, left_ids, offset, params, rng);
+    let left = build_node(nodes, points, dim, left_ids, offset, params, rng, scratch);
     let right = build_node(
         nodes,
         points,
@@ -121,6 +154,7 @@ fn build_node<S: ForestScalar>(
         offset + left_count as u32,
         params,
         rng,
+        scratch,
     );
 
     nodes[node_idx as usize] = Node::Internal {
@@ -133,16 +167,20 @@ fn build_node<S: ForestScalar>(
 }
 
 /// Estimate per-dimension variance from a bounded random sample of `ids`.
-fn estimate_variances<S: ForestScalar>(
+/// `sums` is the caller's `2 × dim` scratch (means, then squares); the
+/// returned variances overwrite its first `dim` slots.
+fn estimate_variances<'a, S: ForestScalar>(
     points: &[S],
     dim: usize,
     ids: &[u32],
     rng: &mut StdRng,
-) -> Vec<f64> {
+    sums: &'a mut [f64],
+) -> &'a [f64] {
     let n = ids.len();
     let take = n.min(VARIANCE_SAMPLE);
-    let mut sum = vec![0.0f64; dim];
-    let mut sum_sq = vec![0.0f64; dim];
+    let (sum, sum_sq) = sums.split_at_mut(dim);
+    sum.fill(0.0);
+    sum_sq.fill(0.0);
     for s in 0..take {
         // Use every id when the node is small; otherwise sample (repeats are
         // harmless — we only need relative variance ordering).
@@ -159,12 +197,11 @@ fn estimate_variances<S: ForestScalar>(
         }
     }
     let inv = 1.0 / take as f64;
-    (0..dim)
-        .map(|d| {
-            let mean = sum[d] * inv;
-            (sum_sq[d] * inv - mean * mean).max(0.0)
-        })
-        .collect()
+    for d in 0..dim {
+        let mean = sum[d] * inv;
+        sum[d] = (sum_sq[d] * inv - mean * mean).max(0.0);
+    }
+    &sums[..dim]
 }
 
 /// Return the `pool` dimensions with the largest variance, ordered by
@@ -192,12 +229,17 @@ fn top_dims(variances: &[f64], pool: usize) -> Vec<usize> {
     idx
 }
 
-/// Median coordinate value along `dim_idx` over the points in `ids`.
-fn median_value<S: ForestScalar>(points: &[S], dim: usize, dim_idx: usize, ids: &[u32]) -> S {
-    let mut vals: Vec<S> = ids
-        .iter()
-        .map(|&id| points[id as usize * dim + dim_idx])
-        .collect();
+/// Median coordinate value along `dim_idx` over the points in `ids`. `vals` is
+/// the caller's reusable coordinate buffer.
+fn median_value<S: ForestScalar>(
+    points: &[S],
+    dim: usize,
+    dim_idx: usize,
+    ids: &[u32],
+    vals: &mut Vec<S>,
+) -> S {
+    vals.clear();
+    vals.extend(ids.iter().map(|&id| points[id as usize * dim + dim_idx]));
     let mid = vals.len() / 2;
     vals.select_nth_unstable_by(mid, |&a, &b| S::coord_cmp(a, b));
     vals[mid]
@@ -211,37 +253,64 @@ fn median_value<S: ForestScalar>(points: &[S], dim: usize, dim_idx: usize, ids: 
 /// when many points share the median value on the split axis (common for `u8`
 /// descriptors, whose coordinates take only 256 distinct values). Both sides are
 /// guaranteed non-empty for `n >= 2`.
+///
+/// The layout is `[ lt | eq | gt ]` with each class keeping its encounter
+/// order (the order matters downstream: the child recursion's variance
+/// sampling indexes into it). Built in two passes over reusable scratch — one
+/// coordinate-comparison pass recording each id's class, one placement pass —
+/// instead of three per-node `Vec`s; with millions of ids per tree the
+/// allocator churn dominated construction.
 fn partition<S: ForestScalar>(
     points: &[S],
     dim: usize,
     split_dim: usize,
     split_val: S,
     ids: &mut [u32],
+    scratch: &mut BuildScratch<S>,
 ) -> usize {
     let n = ids.len();
     let target = n / 2; // >= 1 for n >= 2
 
-    let mut lt = Vec::new();
-    let mut eq = Vec::new();
-    let mut gt = Vec::new();
+    scratch.classes.clear();
+    let mut n_lt = 0usize;
+    let mut n_eq = 0usize;
     for &id in ids.iter() {
         let c = points[id as usize * dim + split_dim];
-        match S::coord_cmp(c, split_val) {
-            std::cmp::Ordering::Less => lt.push(id),
-            std::cmp::Ordering::Equal => eq.push(id),
-            std::cmp::Ordering::Greater => gt.push(id),
+        let class = S::coord_cmp(c, split_val);
+        match class {
+            std::cmp::Ordering::Less => n_lt += 1,
+            std::cmp::Ordering::Equal => n_eq += 1,
+            std::cmp::Ordering::Greater => {}
         }
+        scratch.classes.push(class);
     }
 
-    // Lay the ids out as [ lt | eq | gt ]. All `eq` points share `split_val`, so
-    // they are interchangeable: the left/right boundary is just an index *inside*
-    // the eq run, placed to send enough median-valued points left to reach
-    // `target`. No need to physically split `eq`.
-    let eq_to_left = target.saturating_sub(lt.len()).min(eq.len());
-    let left_count = lt.len() + eq_to_left;
-    for (slot, id) in ids.iter_mut().zip(lt.into_iter().chain(eq).chain(gt)) {
-        *slot = id;
+    let reordered = &mut scratch.reordered;
+    reordered.resize(n, 0);
+    let (mut i_lt, mut i_eq, mut i_gt) = (0usize, n_lt, n_lt + n_eq);
+    for (&id, &class) in ids.iter().zip(&scratch.classes) {
+        match class {
+            std::cmp::Ordering::Less => {
+                reordered[i_lt] = id;
+                i_lt += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                reordered[i_eq] = id;
+                i_eq += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                reordered[i_gt] = id;
+                i_gt += 1;
+            }
+        }
     }
+    ids.copy_from_slice(&reordered[..n]);
+
+    // All `eq` points share `split_val`, so they are interchangeable: the
+    // left/right boundary is just an index *inside* the eq run, placed to send
+    // enough median-valued points left to reach `target`.
+    let eq_to_left = target.saturating_sub(n_lt).min(n_eq);
+    let left_count = n_lt + eq_to_left;
 
     // Guaranteed in `[1, n-1]` for n >= 2 (target <= n/2 < n, and at least one
     // median-valued point exists to seed the left side when `lt` is empty).
