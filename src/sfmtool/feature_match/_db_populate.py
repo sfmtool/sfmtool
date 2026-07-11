@@ -23,8 +23,12 @@ def _populate_db_features(
     max_feature_count: int | None,
     camera_model: str | None,
     camera_config_resolver=None,
+    include_descriptors: bool = True,
 ):
-    """Create a COLMAP DB and populate it with cameras, images, keypoints, descriptors."""
+    """Create a COLMAP DB and populate it with cameras, images, keypoints, and
+    (unless ``include_descriptors=False``) descriptors — matchers that only use
+    the database for geometric verification never read the descriptors back,
+    and they are by far the largest rows."""
     from ..camera.config import CameraConfigResolver
     from ..colmap.db_builders import _setup_db_single_camera, _setup_db_with_rigs
     from ..rig.config import _load_rig_config
@@ -44,6 +48,7 @@ def _populate_db_features(
             rig_configs=rig_config,
             camera_model=camera_model,
             camera_config_resolver=camera_config_resolver,
+            include_descriptors=include_descriptors,
         )
     else:
         _setup_db_single_camera(
@@ -54,47 +59,55 @@ def _populate_db_features(
             max_feature_count,
             camera_model=camera_model,
             camera_config_resolver=camera_config_resolver,
+            include_descriptors=include_descriptors,
         )
 
 
 def _compute_descriptor_distances(matches_data, sift_paths, max_feature_count):
-    """Compute L2 descriptor distances for all matches from .sift files."""
+    """Compute L2 descriptor distances for all matches from .sift files.
+
+    Vectorized per pair: one fancy-indexed gather of each side's matched
+    descriptor rows and a batched norm, instead of a Python loop per match.
+    Exact regardless of summation order — squared u8 differences sum to at
+    most 128·255² < 2²⁴, so every f32 partial sum is an exactly-representable
+    integer. The `.sift` reads are decoded through a thread pool (the reader
+    releases the GIL), keyed off the unique image indices that actually
+    appear in pairs.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     from ..sift.file import SiftReader
 
     pair_count = matches_data["metadata"]["image_pair_count"]
     if pair_count == 0:
         return
 
-    desc_cache = {}
-
-    def get_descriptors(img_idx):
-        if img_idx not in desc_cache:
-            with SiftReader(sift_paths[img_idx]) as reader:
-                desc = reader.read_descriptors(count=max_feature_count)
-            desc_cache[img_idx] = desc.astype(np.float32)
-        return desc_cache[img_idx]
-
     image_index_pairs = matches_data["image_index_pairs"]
     match_counts = matches_data["match_counts"]
     match_feature_indexes = matches_data["match_feature_indexes"]
     distances = matches_data["match_descriptor_distances"]
 
-    offset = 0
+    def read_one(img_idx):
+        with SiftReader(sift_paths[img_idx]) as reader:
+            # Cached as u8 (the f32 upcast happens per gathered batch below):
+            # a whole-corpus f32 cache would be 4x the descriptor bytes.
+            return img_idx, reader.read_descriptors(count=max_feature_count)
+
+    used = np.unique(image_index_pairs)
+    with ThreadPoolExecutor() as pool:
+        desc_cache = dict(pool.map(read_one, (int(i) for i in used)))
+
+    offsets = np.zeros(pair_count + 1, dtype=np.int64)
+    np.cumsum(match_counts, out=offsets[1:])
     for k in range(pair_count):
-        idx_i = int(image_index_pairs[k, 0])
-        idx_j = int(image_index_pairs[k, 1])
-        count = int(match_counts[k])
-
-        desc_i = get_descriptors(idx_i)
-        desc_j = get_descriptors(idx_j)
-
-        for m in range(offset, offset + count):
-            fi = int(match_feature_indexes[m, 0])
-            fj = int(match_feature_indexes[m, 1])
-            diff = desc_i[fi].astype(np.float32) - desc_j[fj].astype(np.float32)
-            distances[m] = float(np.sqrt(np.dot(diff, diff)))
-
-        offset += count
+        lo, hi = offsets[k], offsets[k + 1]
+        if lo == hi:
+            continue
+        desc_i = desc_cache[int(image_index_pairs[k, 0])]
+        desc_j = desc_cache[int(image_index_pairs[k, 1])]
+        diff = desc_i[match_feature_indexes[lo:hi, 0]].astype(np.float32)
+        diff -= desc_j[match_feature_indexes[lo:hi, 1]]
+        np.sqrt(np.einsum("ij,ij->i", diff, diff), out=distances[lo:hi])
 
 
 def _fill_sift_hashes(matches_data, sift_paths, image_names, image_paths):

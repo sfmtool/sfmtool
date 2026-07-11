@@ -14,6 +14,7 @@ The heavy lifting (kd-tree forest build, k-NN query, clustering, pair
 expansion) happens in Rust; see ``specs/core/track-cluster-matching.md``.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import NamedTuple, Optional
 
@@ -66,10 +67,15 @@ def cluster_match(
     """
     assert len(image_paths) == len(sift_paths)
 
-    descriptors = []
-    for sift_path in sift_paths:
+    def read_one(sift_path):
         with SiftReader(sift_path) as reader:
-            descriptors.append(reader.read_descriptors(count=max_feature_count))
+            return reader.read_descriptors(count=max_feature_count)
+
+    # Decode the .sift descriptor blocks through a thread pool (the reader
+    # releases the GIL for the ZIP/zstd work); map preserves input order so
+    # the corpus concatenation order is unchanged.
+    with ThreadPoolExecutor() as pool:
+        descriptors = list(pool.map(read_one, sift_paths))
 
     image_starts = np.zeros(len(descriptors) + 1, dtype=np.uint32)
     image_starts[1:] = np.cumsum([len(desc) for desc in descriptors])

@@ -36,12 +36,17 @@ def _setup_db_single_camera(
     camera_model: str | None = None,
     camera_config_resolver: CameraConfigResolver | None = None,
     camrig_camera: dict | None = None,
+    include_descriptors: bool = True,
 ) -> None:
     """Set up COLMAP database with a single-camera trivial rig.
 
     When `camrig_camera` (a `{model, width, height, parameters}` dict from a
     discovered `.camrig`) is given, it supplies the camera; otherwise the
     intrinsics come from `camera_config.json` / EXIF inference.
+    `include_descriptors=False` skips reading and writing the descriptor
+    blocks — matchers that only use the database for pycolmap geometric
+    verification (cluster, flow) never read them back, and they are by far
+    the largest rows.
     """
     with pycolmap.Database.open(db_path) as db:
         if camrig_camera is not None:
@@ -88,9 +93,10 @@ def _setup_db_single_camera(
                 db.update_image(image)
 
                 keypoints = reader.read_positions(count=max_feature_count)
-                descriptors = reader.read_descriptors(count=max_feature_count)
                 db.write_keypoints(image_id, keypoints)
-                db.write_descriptors(image_id, _wrap_descriptors(descriptors))
+                if include_descriptors:
+                    descriptors = reader.read_descriptors(count=max_feature_count)
+                    db.write_descriptors(image_id, _wrap_descriptors(descriptors))
 
 
 def _camera_from_sensor_entry(
@@ -138,8 +144,13 @@ def _setup_db_with_rigs(
     rig_configs: list[dict],
     camera_model: str | None = None,
     camera_config_resolver: CameraConfigResolver | None = None,
+    include_descriptors: bool = True,
 ) -> None:
-    """Set up COLMAP database with multi-sensor rigs from rig_config.json."""
+    """Set up COLMAP database with multi-sensor rigs from rig_config.json.
+
+    `include_descriptors=False` skips the descriptor blocks (see
+    `_setup_db_single_camera`).
+    """
     with pycolmap.Database.open(db_path) as db:
         # First pass: create cameras per sensor
         sensor_camera_ids: dict[tuple[int, int], int] = {}
@@ -217,9 +228,10 @@ def _setup_db_with_rigs(
                     image_entries.append((image_id, camera_id, sift_path, image))
 
                     keypoints = reader.read_positions(count=max_feature_count)
-                    descriptors = reader.read_descriptors(count=max_feature_count)
                     db.write_keypoints(image_id, keypoints)
-                    db.write_descriptors(image_id, _wrap_descriptors(descriptors))
+                    if include_descriptors:
+                        descriptors = reader.read_descriptors(count=max_feature_count)
+                        db.write_descriptors(image_id, _wrap_descriptors(descriptors))
 
                 frame.add_data_id(
                     pycolmap.data_t(
@@ -275,9 +287,10 @@ def _setup_db_with_rigs(
                     db.update_image(image)
 
                     keypoints = reader.read_positions(count=max_feature_count)
-                    descriptors = reader.read_descriptors(count=max_feature_count)
                     db.write_keypoints(image_id, keypoints)
-                    db.write_descriptors(image_id, _wrap_descriptors(descriptors))
+                    if include_descriptors:
+                        descriptors = reader.read_descriptors(count=max_feature_count)
+                        db.write_descriptors(image_id, _wrap_descriptors(descriptors))
 
 
 def _rigid3d_sensor_from_rig(rig_data: dict, sensor_idx: int) -> pycolmap.Rigid3d:
@@ -308,8 +321,12 @@ def _setup_db_with_camrig(
     db_path: Path,
     max_feature_count: int | None,
     rig: CamrigRig,
+    include_descriptors: bool = True,
 ) -> None:
     """Set up a COLMAP database from a multi-sensor `.camrig`.
+
+    `include_descriptors=False` skips the descriptor blocks (see
+    `_setup_db_single_camera`).
 
     Builds one COLMAP camera per used sensor (intrinsics from the rig's camera
     pool, scaled to the actual image resolution), a single rig whose reference
@@ -389,9 +406,10 @@ def _setup_db_with_camrig(
                     image_entries.append((image_id, image))
 
                     keypoints = reader.read_positions(count=max_feature_count)
-                    descriptors = reader.read_descriptors(count=max_feature_count)
                     db.write_keypoints(image_id, keypoints)
-                    db.write_descriptors(image_id, _wrap_descriptors(descriptors))
+                    if include_descriptors:
+                        descriptors = reader.read_descriptors(count=max_feature_count)
+                        db.write_descriptors(image_id, _wrap_descriptors(descriptors))
 
                 frame.add_data_id(
                     pycolmap.data_t(

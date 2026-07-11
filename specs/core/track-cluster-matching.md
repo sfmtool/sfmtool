@@ -306,6 +306,37 @@ oracle the matcher validates against; the forest is what carries the approach to
 realistic corpus sizes. See `specs/core/randomized-kdtree-forest.md` for the
 index design.
 
+> _Performance pass (2026-07-11), measured on DinoLedge (1196 images ×
+> 8192 features = 9.7M descriptors; 1.7M clusters, 317K candidate pairs,
+> i9-14900HX): `sfm match --cluster` 212 s → 118 s (1.8×), with every
+> deterministic output identical (clusters, pairs, match feature indexes,
+> descriptor distances; the pycolmap TVG inlier sets vary ~0.001% between
+> *identical* runs — inherent multithreaded-RANSAC nondeterminism, verified
+> by back-to-back runs of the same build). `SFMTOOL_CLUSTER_TIMING=1` prints
+> the matcher's stage split. The changes:_
+>
+> - _**Orchestration** (the larger half): the COLMAP database used only for
+>   geometric verification no longer stores descriptors (verification reads
+>   keypoints + matches; the descriptor rows dominated the DB write);
+>   `.sift` descriptor reads go through a thread pool; and the per-match
+>   Python loop that recomputed descriptor distances after verification is
+>   now a per-pair vectorized gather + batched norm (exact — squared-u8 sums
+>   stay below 2²⁴, so f32 accumulation is order-independent)._
+> - _**Forest build** −26%: construction reuses per-tree scratch (partition
+>   class tags + reorder buffer, median values, variance sums) instead of
+>   allocating three `Vec`s per node — same arithmetic, same RNG consumption,
+>   bit-identical trees._
+> - _**Query** −16%: the self-join batch is processed in the forest's
+>   descriptor-space `locality_order` (tree 0's leaf layout), so consecutive
+>   queries check heavily overlapping, cache-resident point rows; results are
+>   scattered back to query order (per-query results are order-independent,
+>   so the output is unchanged)._
+>
+> _Remaining: pycolmap verification (~50 s) is the largest single phase —
+> the planned native TVG verifier would also remove the matches round-trip
+> through sqlite; the k-NN query (~31 s) is memory-latency-bound on corpus
+> row gathers._
+
 ## Parameters
 
 Primary path (the per-point background floor, §2):
