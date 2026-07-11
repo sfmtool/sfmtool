@@ -506,11 +506,15 @@ vetting statuses and signals.
     shares the reference's image
   - `5 not_evaluated` — degenerate shape, template/seed support out of frame, or the
     cluster itself was unrefinable
+  - `6 rejected_unlocalizable` — the member's own patch scored a keypoint position
+    uncertainty above the localizability threshold, so it was excluded before
+    reference selection and refinement (see
+    [`patch-localizability.md`](../core/patch-localizability.md))
 - A patch cluster = the reference plus its `kept` members; statuses preserve the
   rejected members so consumers can re-gate without re-running (the ZNCC/shift arrays
   are the signals, mirroring how `match_descriptor_distances` enables descriptor
   re-filtering)
-- **Constraint**: Every value is a valid discriminant (`0..=5`)
+- **Constraint**: Every value is a valid discriminant (`0..=6`)
 - **Constraint**: At most one member with status `0` or `1` per (cluster, image)
 
 #### `cluster_patches/member_affines.{K}.2.3.float64.zst`
@@ -724,7 +728,7 @@ the backbone — a file never carries both sets.
    `member_features[k] < feature_counts[member_images[k]]`
 4. **Cluster patches parallel**: The `cluster_patches/` arrays have lengths `C`
    (`reference_members`) and `K` (member arrays) matching the clusters section
-5. **Statuses valid**: Every `member_status` value is a valid discriminant (`0..=5`);
+5. **Statuses valid**: Every `member_status` value is a valid discriminant (`0..=6`);
    `reference_members[c]` is `0xFFFFFFFF` or lies in cluster `c`'s member range with
    status `0`; at most one status-`0`-or-`1` member per (cluster, image)
 

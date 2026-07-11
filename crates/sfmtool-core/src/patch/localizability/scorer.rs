@@ -62,11 +62,16 @@ const LAM2_FLOOR: f64 = 1e-12;
 /// consensus reads as empty regardless of the luminance projection. Channels
 /// beyond the first three (the alpha of an RGBA consensus) contribute to the
 /// emptiness test but not the luminance — the scorer ignores alpha per the spec.
+/// Sub-3-channel input is grayscale: channel 0 IS the luminance (weight 1.0 —
+/// Rec.601's partial red weight would shrink gradients ~3.3× and inflate
+/// `σ_pos` by the same factor for identical content), any second channel is
+/// treated as alpha.
 fn luminance_grid(patch: &[f32], resolution: usize, channels: usize) -> (Vec<f64>, bool) {
     let n = resolution * resolution;
     let mut gray = vec![0.0f64; n];
     let mut any_nonzero = false;
-    let luma_channels = channels.min(3);
+    let luma: &[f64] = if channels >= 3 { &LUMA } else { &[1.0] };
+    let luma_channels = luma.len().min(channels);
     for (px, g) in gray.iter_mut().enumerate() {
         let base = px * channels;
         let mut acc = 0.0;
@@ -76,7 +81,7 @@ fn luminance_grid(patch: &[f32], resolution: usize, channels: usize) -> (Vec<f64
                 any_nonzero = true;
             }
             if c < luma_channels {
-                acc += LUMA[c] * v;
+                acc += luma[c] * v;
             }
         }
         *g = acc;

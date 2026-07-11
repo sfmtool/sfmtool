@@ -180,7 +180,11 @@ automatically.)
 
 ## Surfaces
 
-One scorer, three entry points:
+One scorer, three entry points (plus an internal consumer: the
+[cluster-patch refinement](cluster-patch-refinement.md) kernel gates each
+cluster member on the localizability of its own template-grid patch —
+`max_keypoint_uncertainty`, same default `τ`, status
+`rejected_unlocalizable`; added 2026-07-10):
 
 1. **Crate function** (`crates/sfmtool-core/src/patch/localizability/`, a new
    submodule sibling of `keypoint_localize` / `normal_refine`):
@@ -371,7 +375,12 @@ the four repo datasets:
 5. **Channel treatment.** _Settled (v1): luminance_ (`0.299R + 0.587G + 0.114B`),
    RGB only, alpha ignored. Cheap, prototype-validated, and the coverage
    measurement made per-pixel alpha masking a no-op. Per-channel z-normalized
-   summation stays a deferred extension.
+   summation stays a deferred extension. _Amendment (2026-07-10):_
+   sub-3-channel input is grayscale — channel 0 **is** the luminance
+   (weight 1.0; applying only Rec.601's red weight would shrink gradients
+   ~3.3× and inflate `σ_pos` by the same factor for identical content).
+   Consensus stacks are always ≥ 3 channels, so this only affects
+   single-channel callers (the cluster-refine gate on grayscale images).
 6. **`σ_pos` reduction over views.** Median chosen; mean / worst-case are
    alternatives if a specific view's precision should dominate.
 

@@ -59,10 +59,35 @@ from .._cli_utils import timed_command
     show_default=True,
     help="Max translation drift from the SIFT seed, px.",
 )
-def cluster_patches(input_path, output_path, radius, resolution, min_zncc, max_shift):
+@click.option(
+    "--max-keypoint-uncertainty",
+    "max_keypoint_uncertainty",
+    type=click.FloatRange(min=0.0),
+    default=0.35,
+    show_default=True,
+    help=(
+        "Exclude cluster members whose own patch scores a predicted keypoint "
+        "position uncertainty (patch localizability, template-grid px) above "
+        "this, before reference selection and refinement — the flat/edge "
+        "aperture cases that cannot pin a 2D position. Same default value as "
+        "embed-patches' cull (scored here on the template grid with the "
+        "refinement window); `0` disables the gate. See "
+        "specs/core/patch-localizability.md."
+    ),
+)
+def cluster_patches(
+    input_path,
+    output_path,
+    radius,
+    resolution,
+    min_zncc,
+    max_shift,
+    max_keypoint_uncertainty,
+):
     """Refine a cluster-bearing .matches file into patch clusters.
 
-    Per cluster: pick a reference member (largest SIFT scale), refine a
+    Per cluster: exclude members whose patch fails the localizability gate,
+    pick a reference member (largest SIFT scale), refine a
     Gaussian-windowed-ZNCC affine warp from the reference's patch to every
     other member (seeded from the SIFT affine shapes), vet members by
     achieved ZNCC and translation drift, and keep at most one member per
@@ -76,7 +101,13 @@ def cluster_patches(input_path, output_path, radius, resolution, min_zncc, max_s
     """
     try:
         _run_cluster_patches(
-            Path(input_path), output_path, radius, resolution, min_zncc, max_shift
+            Path(input_path),
+            output_path,
+            radius,
+            resolution,
+            min_zncc,
+            max_shift,
+            max_keypoint_uncertainty,
         )
     except click.UsageError:
         raise
@@ -117,6 +148,7 @@ def _run_cluster_patches(
     resolution: int,
     min_zncc: float,
     max_shift: float,
+    max_keypoint_uncertainty: float,
 ):
     import os
     from datetime import datetime
@@ -208,6 +240,7 @@ def _run_cluster_patches(
             resolution=resolution,
             min_zncc=min_zncc,
             max_shift_px=max_shift,
+            max_keypoint_uncertainty=max_keypoint_uncertainty,
             progress=counter,
         )
 
@@ -217,6 +250,7 @@ def _run_cluster_patches(
     n_rejected = int(((statuses == 2) | (statuses == 3)).sum())
     n_dup = int((statuses == 4).sum())
     n_skip = int((statuses == 5).sum())
+    n_unloc = int((statuses == 6).sum())
 
     # New file: images + clusters sections copied verbatim, cluster_patches
     # from the kernel output, metadata updated.
@@ -251,6 +285,7 @@ def _run_cluster_patches(
             "resolution": resolution,
             "min_zncc": min_zncc,
             "max_shift_px": max_shift,
+            "max_keypoint_uncertainty": max_keypoint_uncertainty,
         },
         "has_two_view_geometries": False,
     }
@@ -258,5 +293,6 @@ def _run_cluster_patches(
     write_matches(out, out_data)
     click.echo(
         f"Done: {n_ref} references, {n_kept} kept, {n_rejected} rejected, "
-        f"{n_dup} duplicate-image, {n_skip} not evaluated"
+        f"{n_unloc} unlocalizable, {n_dup} duplicate-image, "
+        f"{n_skip} not evaluated"
     )

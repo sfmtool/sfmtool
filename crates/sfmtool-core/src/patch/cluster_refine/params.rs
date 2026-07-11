@@ -33,6 +33,11 @@ pub enum MemberStatus {
     /// Not evaluated: degenerate shape, template/seed support out of frame,
     /// or the cluster itself was unrefinable.
     NotEvaluated = 5,
+    /// Rejected: the member's own patch scored a keypoint position
+    /// uncertainty above
+    /// [`ClusterRefineParams::max_keypoint_uncertainty`] (excluded before
+    /// reference selection and refinement).
+    RejectedUnlocalizable = 6,
 }
 
 /// Sentinel in [`ClusterRefineResult::reference_members`] for a cluster with
@@ -57,6 +62,15 @@ pub struct ClusterRefineParams {
     pub min_zncc: f64,
     /// Max translation drift from the SIFT seed, source-image pixels.
     pub max_shift_px: f64,
+    /// Localizability gate: exclude a member up front (before reference
+    /// selection and refinement) when its own patch's noise-normalized
+    /// weak-axis positional uncertainty `σ_pos` exceeds this, in
+    /// template-grid px (see `specs/core/patch-localizability.md`). `0`
+    /// disables the gate. The default value matches `embed-patches`'
+    /// `--max-keypoint-uncertainty`, though the score here is measured on
+    /// the member's template-grid patch with [`Self::window`] rather than
+    /// on the consensus with the scorer's frozen window.
+    pub max_keypoint_uncertainty: f64,
     /// Nelder-Mead iterations per cascade stage.
     pub max_iters: u32,
     /// Simplex value-spread stop threshold.
@@ -75,6 +89,7 @@ impl Default for ClusterRefineParams {
             window: PatchWindow::GaussianDisk { sigma: 0.5 },
             min_zncc: 0.85,
             max_shift_px: 3.0,
+            max_keypoint_uncertainty: 0.35,
             max_iters: 120,
             convergence: 1e-5,
         }

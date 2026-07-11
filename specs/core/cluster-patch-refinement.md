@@ -46,7 +46,8 @@ As built, in `crates/matches-format` (`types.rs` / `read.rs` / `write.rs` /
   `two_view_geometries` — exactly one backbone `Some`, `cluster_patches`
   requires `clusters`, TVGs require `image_pairs`.
 - The member-status discriminants live in
-  `matches_format::ClusterMemberStatus` (0 reference … 5 not_evaluated) with
+  `matches_format::ClusterMemberStatus` (0 reference … 5 not_evaluated;
+  6 rejected_unlocalizable added 2026-07-10) with
   the sentinel `CLUSTER_REFERENCE_UNREFINABLE` (`u32::MAX`) for a cluster
   with no usable reference. **The core kernel's `MemberStatus` (§2) must
   emit these same discriminants** — the binding passes the u8 array through
@@ -152,6 +153,11 @@ pub enum MemberStatus {
                           // or shares the reference's image
     NotEvaluated = 5,     // degenerate shape, template/seed support out of
                           // frame, or the cluster itself was unrefinable
+    RejectedUnlocalizable = 6, // the member's own patch scored a keypoint
+                          // position uncertainty above
+                          // max_keypoint_uncertainty (excluded before
+                          // reference selection and refinement; added
+                          // 2026-07-10)
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +167,9 @@ pub struct ClusterRefineParams {
     pub window: PatchWindow,  // reuse normal_refine::params::PatchWindow
     pub min_zncc: f64,
     pub max_shift_px: f64,
+    pub max_keypoint_uncertainty: f64, // localizability gate (σ_pos,
+                              // template-grid px; 0 disables) — added
+                              // 2026-07-10
     pub max_iters: u32,       // Nelder-Mead iterations per stage
     pub convergence: f64,     // simplex value-spread stop threshold
 }
@@ -168,7 +177,8 @@ impl Default for ClusterRefineParams {
     // radius 4.0, resolution 15,
     // window: PatchWindow::GaussianDisk { sigma: 15.0 / 4.0 }  (= resolution/4,
     //   the prototype's sigma = radius/2 in keypoint-frame units),
-    // min_zncc 0.85, max_shift_px 3.0, max_iters 120, convergence 1e-5
+    // min_zncc 0.85, max_shift_px 3.0, max_keypoint_uncertainty 0.35,
+    // max_iters 120, convergence 1e-5
 }
 
 /// One image's SIFT feature geometry (borrowed views of the `.sift` arrays).
@@ -210,8 +220,30 @@ closure, thread-local by construction (the `SearchScratch` convention,
 `keypoint_localize/search.rs:39`).
 
 1. **Validate members.** A member is usable when its feature index is in
-   bounds and `|det A| ≥ 1e-9`. Fewer than 2 usable members → every member
-   `NotEvaluated`, `reference_members[c] = u32::MAX`, done.
+   bounds and `|det A| ≥ 1e-9`. Additionally (added 2026-07-10), when
+   `max_keypoint_uncertainty > 0`, each remaining member must pass the
+   **localizability gate**: sample the member's own full `R×R` grid at its
+   SIFT geometry (identity warp, mip-selected level, same bilinear
+   convention as the template — but every grid pixel, since the scorer's
+   gradients cover the full grid) and score it with
+   [`patch_localizability`](patch-localizability.md) against the shared
+   refinement window (`σ_noise = 3.0`, the global constant). A member whose
+   `σ_pos` exceeds the threshold is `RejectedUnlocalizable` and excluded
+   before reference selection — an unlocalizable patch (flat / straight
+   edge) can neither anchor nor join the cluster. Samples outside the frame
+   clamp to the nearest valid pixel (border replicate), so a border member
+   is scored on its visible content rather than skipping the gate; only
+   degenerate (non-finite) geometry skips it, and the template/seed frame
+   gates downstream still apply.
+   The threshold unit is **template-grid px** (default `0.35`, the same
+   default value as `embed-patches`; the scored quantity differs slightly —
+   the grid here is `resolution = 15` with the refinement window
+   (`GaussianDisk σ = 0.5`) rather than the consensus 24 with the scorer's
+   `σ = 0.6` window, but grid-px `σ_pos` is approximately
+   resolution-invariant for the same physical content — the window mass and
+   per-grid-px gradient scaling nearly cancel). Fewer than 2 usable members → every member not
+   already `RejectedUnlocalizable` is `NotEvaluated`,
+   `reference_members[c] = u32::MAX`, done.
 2. **Reference selection.** The usable member with the largest scale
    `√|det A|`; ties break to the lowest global member index (determinism).
    Reference policy is data, not format — smarter policies (template
@@ -357,6 +389,7 @@ In `crates/sfmtool-py/src/matching/cluster.rs`:
                     radius = 4.0, resolution = 15,
                     window = "gaussian_disk", window_sigma = None,
                     min_zncc = 0.85, max_shift_px = 3.0,
+                    max_keypoint_uncertainty = 0.35,
                     max_iters = 120, progress = None))]
 fn refine_cluster_patches<'py>(
     py: Python<'py>,
@@ -404,6 +437,7 @@ category, spec to live at `specs/cli/cluster-patches-command.md`:
 ```
 sfm cluster-patches -i clusters.matches [-o out.matches]
     [--radius 4.0] [--resolution 15] [--min-zncc 0.85] [--max-shift 3.0]
+    [--max-keypoint-uncertainty 0.35]
 ```
 
 1. `read_matches(input)`; reject unless `has_clusters` (name the fix: run

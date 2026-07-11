@@ -24,6 +24,8 @@ mod tests;
 
 pub use scorer::{score_localizability_stack, Localizability};
 
+pub(in crate::patch) use scorer::patch_localizability;
+
 use crate::patch::normal_refine::{window_weights as kernel_window_weights, PatchWindow};
 
 /// The scorer's `R×R` window weights (row-major) for `window` — the shared patch
