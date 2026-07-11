@@ -3,13 +3,12 @@
 
 """Integration tests for the `sfm cluster-patches` CLI command.
 
-`sfm match --cluster` does not yet write cluster-bearing .matches files (the
-derived-pairs migration is out of scope), so the input file is built
-programmatically: run the cluster matcher on the fixture images' .sift files
-and write the clusters through `write_matches`.
+The cluster-bearing input file is produced the way users produce it: by
+`sfm match --cluster`, which persists the matcher's clusters as its primary
+artifact (programmatic construction of cluster-bearing dicts is covered by
+`test_matches_clusters.py` and `test_pairs_from_matches.py`).
 """
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -24,81 +23,31 @@ STATUS_KEPT = 1
 VALID_STATUSES = {0, 1, 2, 3, 4, 5}
 
 
-def _build_cluster_matches(image_paths: list[Path], out_path: Path) -> dict:
-    """Extract SIFT, run the cluster matcher, and write a cluster-bearing
-    .matches file; returns the written dict."""
-    from sfmtool._sfmtool.io import read_sift, write_matches
-    from sfmtool._workspace import init_workspace
-    from sfmtool.feature_match._cluster_matching import cluster_match
-    from sfmtool.feature_match._db_populate import _fill_sift_hashes
-    from sfmtool.sift.file import image_files_to_sift_files
-
-    workspace_dir = image_paths[0].parent
-    init_workspace(workspace_dir)
-    sift_paths = image_files_to_sift_files(image_paths, feature_tool="opencv")
-    clusters, _pairs = cluster_match(image_paths, sift_paths)
-
-    image_names = [p.name for p in image_paths]
-    feature_counts = np.array(
-        [read_sift(sp)["positions_xy"].shape[0] for sp in sift_paths],
-        dtype=np.uint32,
-    )
-    feature_prefix_dir = os.path.relpath(
-        sift_paths[0].parent, image_paths[0].parent
-    ).replace("\\", "/")
-
-    cluster_count = len(clusters.cluster_starts) - 1
-    member_count = len(clusters.member_images)
-    assert cluster_count > 0, "the fixture must produce clusters"
-
-    data = {
-        "metadata": {
-            "version": 3,
-            "matching_method": "cluster",
-            "matching_tool": "sfmtool",
-            "matching_tool_version": "test",
-            "matching_options": {"mode": "background-floor", "d": 10, "alpha": 0.8},
-            "workspace": {
-                "absolute_path": str(workspace_dir),
-                "relative_path": os.path.relpath(
-                    workspace_dir, out_path.parent
-                ).replace("\\", "/"),
-                "contents": {
-                    "feature_tool": "opencv",
-                    "feature_type": "sift",
-                    "feature_options": {},
-                    "feature_prefix_dir": feature_prefix_dir,
-                },
-            },
-            "timestamp": "2026-07-09T10:00:00Z",
-            "image_count": len(image_names),
-            "cluster_count": cluster_count,
-            "cluster_member_count": member_count,
-            "has_two_view_geometries": False,
-            "has_clusters": True,
-            "has_cluster_patches": False,
-        },
-        "image_names": image_names,
-        "feature_counts": feature_counts,
-        "has_clusters": True,
-        "cluster_starts": clusters.cluster_starts,
-        "member_images": clusters.member_images,
-        "member_features": clusters.member_features,
-        "matcher_options": {"mode": "background-floor", "d": 10, "alpha": 0.8},
-        "has_cluster_patches": False,
-        "has_two_view_geometries": False,
-    }
-    _fill_sift_hashes(data, sift_paths, image_names, image_paths)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    write_matches(out_path, data)
-    return data
-
-
 @pytest.fixture
 def cluster_matches_file(isolated_seoul_bull_17_images) -> Path:
+    """A cluster-bearing .matches file from `sfm match --cluster`."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent
     out = workspace_dir / "matches" / "clusters.matches"
-    _build_cluster_matches(isolated_seoul_bull_17_images, out)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["ws", "init", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(main, ["sift", "--extract", str(workspace_dir)])
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(
+        main,
+        [
+            "match",
+            "--cluster",
+            "--clusters-output",
+            str(out),
+            "--output",
+            str(workspace_dir / "tvg-matches" / "verified.matches"),
+            str(workspace_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert out.exists()
     return out
 
 

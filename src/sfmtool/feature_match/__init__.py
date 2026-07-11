@@ -13,5 +13,11 @@ accuracy and performance.
 
 from ._core import match_image_pair, match_registered_images
 from ._geometric_filter import GeometricFilterConfig
+from ._pairs import pairs_from_matches
 
-__all__ = ["match_image_pair", "match_registered_images", "GeometricFilterConfig"]
+__all__ = [
+    "match_image_pair",
+    "match_registered_images",
+    "GeometricFilterConfig",
+    "pairs_from_matches",
+]

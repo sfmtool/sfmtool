@@ -167,14 +167,30 @@ def print_matches_summary(path: Path, verbose: bool = False) -> None:
     valid, errors = verify_matches(str(path))
     meta = read_matches_metadata(str(path))
 
+    has_clusters = meta.get("has_clusters", False)
     tool_label = f"{meta['matching_tool']} {meta['matching_tool_version']}".strip()
     rows = [
         ("File", path.name),
         ("Format", f".matches version {meta['version']}"),
         ("Matching", f"{meta['matching_method']}  ({tool_label})"),
         ("Images", f"{meta['image_count']:,}"),
-        ("Image pairs", f"{meta['image_pair_count']:,}"),
-        ("Matches", f"{meta['match_count']:,}"),
+    ]
+    if has_clusters:
+        rows += [
+            ("Backbone", "clusters"),
+            ("Clusters", f"{meta['cluster_count']:,}"),
+            ("Cluster members", f"{meta['cluster_member_count']:,}"),
+            (
+                "Cluster patches",
+                "yes" if meta.get("has_cluster_patches", False) else "no",
+            ),
+        ]
+    else:
+        rows += [
+            ("Image pairs", f"{meta['image_pair_count']:,}"),
+            ("Matches", f"{meta['match_count']:,}"),
+        ]
+    rows += [
         ("Two-view geom", "yes" if meta["has_two_view_geometries"] else "no"),
         ("Integrity", "OK" if valid else "FAILED"),
     ]
@@ -194,19 +210,46 @@ def print_matches_summary(path: Path, verbose: bool = False) -> None:
         )
 
         data = read_matches(str(path))
-        match_counts = np.asarray(data["match_counts"])
+
+        if has_clusters:
+            cluster_sizes = np.diff(np.asarray(data["cluster_starts"], dtype=np.int64))
+            if cluster_sizes.size > 0:
+                click.echo(
+                    f"\nCluster sizes: {cluster_sizes.size:,} clusters, "
+                    f"{int(cluster_sizes.sum()):,} members, "
+                    f"min {int(cluster_sizes.min())}, "
+                    f"max {int(cluster_sizes.max())}, "
+                    f"mean {cluster_sizes.mean():.1f}"
+                )
+                print_histogram(
+                    cluster_sizes.astype(np.float64),
+                    "Cluster size (members)",
+                    show_stats=False,
+                )
+
+        # Pairwise view: stored pairs, or the canonical cluster expansion
+        # (descriptor distances are NaN for the latter — no .sift lookup here).
+        from ..feature_match import pairs_from_matches
+
+        pairs_view = pairs_from_matches(data)
+        pair_label = (
+            "Matches per pair (derived)" if has_clusters else "Matches per pair"
+        )
+        match_counts = np.asarray(pairs_view["match_counts"])
         if match_counts.size > 0:
             click.echo(
-                f"\nMatches per pair: min {int(match_counts.min())}, "
+                f"\n{pair_label}: {match_counts.size:,} pairs, "
+                f"min {int(match_counts.min())}, "
                 f"max {int(match_counts.max())}, mean {match_counts.mean():.1f}"
             )
             print_histogram(
                 match_counts.astype(np.float64),
-                "Matches per pair",
+                pair_label,
                 show_stats=False,
             )
 
-        distances = np.asarray(data["match_descriptor_distances"])
+        distances = np.asarray(pairs_view["match_descriptor_distances"])
+        distances = distances[np.isfinite(distances)]
         if distances.size > 0:
             click.echo(
                 f"\nDescriptor distances: min {distances.min():.1f}, "

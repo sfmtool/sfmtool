@@ -1,8 +1,9 @@
 # Cluster-Patch Refinement: Production Implementation
 
-_Status: **implemented** — steps 1–5 are shipped (see each section's dated
-status block); the derived-pairs helper and the `sfm match --cluster`
-output migration (§1, "Still open") remain open. The implementation spec for
+_Status: **implemented** — steps 1–5 are shipped, and the derived-pairs
+helper plus the `sfm match --cluster` output migration (§1) shipped
+2026-07-10 (see each section's dated status block); nothing in this spec
+remains open. The implementation spec for
 the operation
 designed in [cluster-patches.md](cluster-patches.md); read that first for
 motivation, the format sections, and the experimental calibration
@@ -65,6 +66,25 @@ As built, in `crates/matches-format` (`types.rs` / `read.rs` / `write.rs` /
   unchanged. `sfmr-colmap`'s DB export takes the grouped `PairsData` and
   rejects cluster-bearing input with a clear error until the derived-pairs
   migration below lands.
+
+> _Status (2026-07-10): **Shipped** — `feat(match): persist cluster .matches
+> as the primary artifact + derived-pairs migration`. As specified:
+> `pairs_from_matches` lives in `src/sfmtool/feature_match/_pairs.py`
+> (exported from the package `__init__`), and `sfm match --cluster` now
+> writes the clusters-bearing file (default
+> `matches/<verified stem>-clusters.matches`, `--clusters-output` override)
+> before verification, alongside the unchanged verified pairwise+TVG `-o`
+> output. Migration notes: `_db_populate.py`'s
+> `_compute_descriptor_distances` was not reused for the cluster path — the
+> helper reads each image's descriptors capped at the file's
+> `feature_counts` and lets `clusters_to_pair_matches` compute the same L2
+> distances in Rust in one pass. `_densify.py` needed no change: it matches
+> image pairs live and never reads `.matches` pair keys. Consumers that
+> require TVGs are unaffected (cluster files report
+> `has_two_view_geometries: false` and those paths already degrade
+> gracefully); `sfmr-colmap`'s Rust DB export still rejects grouped cluster
+> input with its clear error, but the Python `to-colmap-db`/solve path goes
+> through the helper and accepts cluster files._
 
 **Still open — derived pairs.** `matches-format` does not depend on `sfmtool-core`, so the
 expansion stays where it is (`sfmtool-core`, bound as

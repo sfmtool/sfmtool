@@ -224,6 +224,14 @@ scripts stay as the behavioral reference until the Rust kernel lands.
   read `image_pairs/` directly (TVG verification, `to-colmap-db`, solve
   ingestion) all need to go through the expansion-aware pairs API before
   `sfm match --cluster` switches its output to cluster-bearing files.
+
+  > _Status (2026-07-10): **Resolved** — the pairwise consumers were migrated
+  > to the single `sfmtool.feature_match.pairs_from_matches` helper and
+  > `sfm match --cluster` now persists the cluster file as its primary
+  > artifact (before verification) in the same change, alongside the
+  > unchanged verified pairwise+TVG output. See
+  > [cluster-patch-refinement.md](cluster-patch-refinement.md) §1 and
+  > `specs/cli/match-command.md` for the as-built surface._
 - Whether the operation should also emit a per-cluster fused reference
   template (the 2D analog of the consensus bitmap) for downstream photometric
   gates; deferred until a consumer needs it.
