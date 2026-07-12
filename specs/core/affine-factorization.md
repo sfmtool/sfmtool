@@ -1,6 +1,9 @@
 # Affine Factorization
 
-**Status: design, pre-implementation.** Production spec for promoting the
+**Status:** Implemented —
+`crates/sfmtool-core/src/geometry/affine_factorization.rs`, bindings in
+`crates/sfmtool-py/src/geometry/affine_factorization.rs`
+(`sfmtool._sfmtool.geometry.factorize_affine`). Promotes the
 alternating-least-squares affine factorization from the pinhole bootstrap
 experiments (`scripts/exp_pinhole_bootstrap.py`, notes in
 `cluster-pinhole-bootstrap.md`) into `sfmtool-core` and the bindings.
@@ -67,8 +70,9 @@ beyond conditioning.
       unknowns) over that cluster's kept observations; clusters with fewer
       than 2 kept observations keep their previous values.
    c. **Residuals.** `r = u − (M_i·X_c + t_i)` for every observation.
-   d. **Trimming**, only from round `rounds / 2` (integer division)
-      onward: the kept set becomes the observations whose residual norm is
+   d. **Trimming**, only from round `rounds / 2` (integer division,
+      rounds numbered from 0) onward: the kept set becomes the
+      observations whose residual norm is
       strictly below the `(1 − trim_fraction)` quantile of the
       currently-kept residual norms. The quantile uses linear
       interpolation between order statistics (numpy's default), which is
@@ -109,8 +113,9 @@ Per round, the camera sweep solves N tiny 8-unknown systems and the point
 sweep C tiny 3-unknown systems — linear in observations with small
 constants. The initialization's dense 2N×C matrix and its SVD dominate
 memory and worst-case time; the implementation documents a bound on
-`num_images × num_clusters` and errors clearly above it (the intended
-inputs are small image groups against a few thousand clusters).
+`num_images × num_clusters` (`MAX_DENSE_ENTRIES = 4_194_304`, a 64 MB
+dense matrix) and errors clearly above it (the intended inputs are small
+image groups against a few thousand clusters).
 
 ## Rust API
 

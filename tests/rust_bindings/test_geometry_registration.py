@@ -6,7 +6,9 @@
 import sfmtool._sfmtool.geometry as geometry
 
 _EXPECTED_CLASSES = (
+    "AffineFactorization",
     "CameraIntrinsics",
+    "MetricHypothesis",
     "RigidTransform",
     "RotQuaternion",
     "Se3Transform",
