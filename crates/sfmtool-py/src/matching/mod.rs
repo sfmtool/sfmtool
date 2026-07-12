@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Feature-matching bindings: descriptor, image-pair, sweep, and
-//! background-floor cluster matching.
+//! Feature-matching bindings: descriptor, image-pair, sweep,
+//! background-floor cluster matching, and cluster covisibility.
 //!
 //! Each child file owns its own `pub fn register`; this module just chains
 //! them into the `sfmtool.matching` Python submodule wired up by `lib.rs`.
@@ -10,6 +10,7 @@
 use pyo3::prelude::*;
 
 pub mod cluster;
+pub mod covisibility;
 pub mod descriptor;
 pub mod image;
 pub mod sweep;
@@ -19,5 +20,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     image::register(m)?;
     sweep::register(m)?;
     cluster::register(m)?;
+    covisibility::register(m)?;
     Ok(())
 }

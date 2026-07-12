@@ -24,6 +24,8 @@
 #[cfg(test)]
 mod tests;
 
+pub mod covisibility;
+
 use std::borrow::Cow;
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
