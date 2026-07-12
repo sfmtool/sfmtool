@@ -100,7 +100,8 @@ match-output-file.matches (ZIP archive)
 │   ├── metadata.json.zst                          # Per-image metadata
 │   ├── feature_tool_hashes.{N}.uint128.zst        # Feature tool identification
 │   ├── sift_content_hashes.{N}.uint128.zst        # Feature file content verification
-│   └── feature_counts.{N}.uint32.zst              # Feature count per image (as used in matching)
+│   ├── feature_counts.{N}.uint32.zst              # Feature count per image (as used in matching)
+│   └── image_dims.{N}.2.uint32.zst                # Per-image pixel dimensions (width, height)
 ├── image_pairs/                                   # (Backbone alternative A: pairwise)
 │   ├── metadata.json.zst                          # Pair-level metadata
 │   ├── image_index_pairs.{P}.2.uint32.zst         # (idx_i, idx_j) per pair, idx_i < idx_j
@@ -116,7 +117,7 @@ match-output-file.matches (ZIP archive)
 │   ├── metadata.json.zst                          # Refinement options + summary counts
 │   ├── reference_members.{C}.uint32.zst           # Global member index of each cluster's reference
 │   ├── member_status.{K}.uint8.zst                # ClusterMemberStatus enum per member
-│   ├── member_affines.{K}.2.3.float64.zst         # x_member = A·x_ref + t, pixel coords
+│   ├── member_affines.{K}.2.3.float64.zst         # (2x2 A | refined absolute position p), pixel coords
 │   ├── member_consistency_residual.{K}.float32.zst # Warp-consistency residual (NaN if not fitted)
 │   ├── member_shift_px.{K}.float32.zst            # Translation drift from the SIFT seed (NaN if n/a)
 │   └── member_zncc.{K}.float32.zst                # Achieved windowed ZNCC vs reference (NaN if n/a)
@@ -153,7 +154,7 @@ always store the pairwise backbone.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "matching_method": "sequential",
   "matching_tool": "colmap",
   "matching_tool_version": "4.02",
@@ -202,7 +203,7 @@ A cluster-bearing file replaces the pairwise summary fields with cluster counts:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. `1`, `2`, or `3` (see
+- `version`: Format version number. `1` through `4` (see
   [Versioning and Migration](#versioning-and-migration))
 - `matching_method`: Type of matching used to produce these matches
   - `"exhaustive"`: Exhaustive pairwise matching
@@ -341,6 +342,19 @@ required to be sorted, but lexicographic ordering by name is recommended.
 - Number of features per image as used during matching. This may be less than the total
   feature count in the `.sift` file if `max_feature_count` was set. All `feat_idx` values
   in the match data MUST be less than the corresponding `feature_counts` entry.
+
+#### `images/image_dims.{N}.2.uint32.zst`
+
+- **Shape**: `(N, 2)` where N = image_count
+- **Data type**: `uint32` (little-endian)
+- Each row is `(width, height)` — the image's pixel dimensions, matching the
+  `image_width` / `image_height` recorded in the corresponding `.sift` file's metadata
+  (every writer has that metadata at hand: it already reads it for the hashes and
+  feature counts)
+- Makes the file self-contained for geometric consumers (principal-point priors,
+  normalized coordinates, bounds checks) without opening the referenced `.sift` files
+- **Constraint**: Every value MUST be ≥ 1
+- Mandatory since format version 4; version ≤ 3 files never stored it
 
 ### 4. Pairs (Putative Matches — Backbone Alternative A)
 
@@ -522,11 +536,23 @@ vetting statuses and signals.
 
 - **Shape**: `(K, 2, 3)` where K = cluster_member_count
 - **Data type**: `float64` (little-endian)
-- Absolute affine warp in pixel coordinates (COLMAP pixel convention):
-  `x_member = A·x_ref + t` with `A` the leading 2×2 block and `t` the last column.
-  Stored absolute (not anchored/relative) so it composes directly (`member ← ref`,
-  and member↔member via the reference) without re-deriving the SIFT seed
-- Identity|0 for the reference row; zeros where not evaluated
+- Absolute affine warp in pixel coordinates (COLMAP pixel convention): `A` is the
+  leading 2×2 block and the last column stores `p = A·x_ref + t` — the member's
+  **refined absolute keypoint position** — so the warp reads
+  `x_member = A·(x − x_ref) + p`. Stored absolute (not anchored/relative to the SIFT
+  seed) so it composes directly (`member ← ref`, and member↔member via the reference)
+  without re-deriving the seed, and geometric consumers get every member's refined
+  position straight from the last column without touching the `.sift` files
+- The affine translation stays recoverable: `t = p − A·x_ref`, with `x_ref` read from
+  the cluster's reference row (whose last column is the reference keypoint's own
+  `.sift` position)
+- Reference rows are identity | x_ref; not-evaluated rows stay all-zeros (the status
+  array, not the affine, is the discriminator — some evaluated-but-rejected rows carry
+  refined values while `duplicate_image` rows that shared the reference's image stay
+  zero)
+- **Constraint**: When `reference_members[c]` is not `0xFFFFFFFF`, that member's
+  leading 2×2 block MUST be exactly the identity (the last column, the reference's
+  own absolute position, is not verifiable without the `.sift` data)
 
 #### `cluster_patches/member_zncc.{K}.float32.zst`
 
@@ -738,6 +764,7 @@ the backbone — a file never carries both sets.
 3. **Inlier counts aligned**: Same relationship for the TVG inlier arrays
 4. **Feature index bounds**: All feature indexes must be less than the corresponding
    `feature_counts` entry (pairwise match arrays and cluster `member_features` alike)
+5. **Image dims positive**: Every `image_dims` value is ≥ 1
 
 ### Cluster Constraints
 
@@ -751,6 +778,9 @@ the backbone — a file never carries both sets.
 5. **Statuses valid**: Every `member_status` value is a valid discriminant (`0..=6`);
    `reference_members[c]` is `0xFFFFFFFF` or lies in cluster `c`'s member range with
    status `0`; at most one status-`0`-or-`1` member per (cluster, image)
+6. **Reference rows identity**: For every refinable cluster, the reference member's
+   `member_affines` leading 2×2 block is exactly the identity (its last column is the
+   reference keypoint's own absolute position, identity | x_ref)
 
 ### No required ordering within a pair
 
@@ -885,6 +915,7 @@ write_matches(
         "feature_tool_hashes": feature_tool_hashes,
         "sift_content_hashes": sift_content_hashes,
         "feature_counts": feature_counts,
+        "image_dims": image_dims,                  # (N, 2) uint32 (width, height)
     },
     pairs={
         "image_index_pairs": image_index_pairs,   # (P, 2) uint32
@@ -989,10 +1020,40 @@ modifying an existing file.
 
 ## Versioning and Migration
 
-The format has three released versions (`1`, `2`, and `3`). The format is versioned
+The format has four released versions (`1` through `4`). The format is versioned
 (`metadata.json` `version`) precisely so that changes like the ones below can upgrade
 on load instead of breaking old files. Writers always emit the current version;
 readers accept any version up to it.
+
+### Version 3 → Version 4
+
+Version 4 makes the file self-contained for geometric consumers, with two changes:
+
+1. **Per-image dimensions.** The images section gains a mandatory
+   `image_dims.{N}.2.uint32` array (width, height per image, sourced from the same
+   `.sift` metadata the writers already read for hashes and feature counts).
+2. **Absolute keypoint positions in `member_affines`.** The last column of
+   `cluster_patches/member_affines` changes meaning: it stores the member's refined
+   absolute keypoint position `p = A·x_ref + t` instead of the affine translation `t`.
+   Reference rows become identity | x_ref (previously identity | 0). The translation
+   is recoverable (`t = p − A·x_ref`, with `x_ref` from the reference row), so no
+   information is lost; consumers now read refined positions without opening the
+   referenced `.sift` files. No member is added, removed, or renamed by this change —
+   it is purely semantic.
+
+**Version ≤ 3 files load with one exception.** They never stored `image_dims`, so
+readers expose no dimensions for them (in-memory `image_dims` is absent/None); all
+other data loads with unchanged semantics. The exception is a version ≤ 3 file that
+carries a `cluster_patches/` section: its `member_affines` last column holds `t`,
+which cannot be converted to the absolute-position semantics on load without the
+referenced `.sift` keypoint positions, so readers **reject** such files with guidance
+to regenerate the enrichment (`sfm cluster-patches`) from the cluster backbone file —
+which itself still loads fine. Integrity verification (`verify_matches`) remains
+version-aware and continues to pass structurally sound version ≤ 3 files, including
+cluster-patch ones (hashes cover the stored bytes). Only cluster-patch producers and
+consumers existed at the time of the bump and cluster-patch files are cheap,
+regenerable derivatives, which is why re-generation was preferred over carrying dual
+semantics forward.
 
 ### Version 2 → Version 3
 
@@ -1041,6 +1102,12 @@ for the invariant and the `S`/`W` conversion math.
 
 ## Version History
 
+- **Version 4**: Self-contained geometry — mandatory per-image dimensions
+  (`images/image_dims`), and `cluster_patches/member_affines` stores the member's
+  refined absolute keypoint position `p = A·x_ref + t` in its last column (reference
+  rows identity | x_ref; `t = p − A·x_ref` recoverable). Version ≤ 3 files load
+  without dims; version ≤ 3 cluster-patch files are rejected (regenerate with
+  `sfm cluster-patches`).
 - **Version 3**: Cluster backbone — the `clusters/` section (CSR cluster
   membership, the cluster matcher's primary artifact) becomes the alternative
   correspondence backbone to `image_pairs/` (exactly one per file), and the optional

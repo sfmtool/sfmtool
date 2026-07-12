@@ -24,6 +24,8 @@ use crate::types::*;
 /// correspondence backbone); `cluster_patches` requires `clusters`, and
 /// `two_view_geometries` requires `image_pairs`. The metadata `has_*` flags
 /// and summary counts must be consistent with the supplied sections.
+/// `image_dims` is mandatory (format version 4): `(N, 2)` width/height with
+/// every value ≥ 1.
 pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result<(), MatchesError> {
     let image_count = data.metadata.image_count as usize;
 
@@ -77,6 +79,17 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         &mut zip,
         &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
         &hash_bytes,
+        zstd_level,
+    )?;
+    images_hasher.update(&bytes);
+
+    // images/image_dims (mandatory since format version 4; validated Some
+    // by validate_dimensions)
+    let image_dims = data.image_dims.as_ref().expect("validated Some");
+    let bytes = write_binary_entry(
+        &mut zip,
+        &format!("images/image_dims.{image_count}.2.uint32.zst"),
+        bytemuck::cast_slice(image_dims.as_slice().unwrap()),
         zstd_level,
     )?;
     images_hasher.update(&bytes);
@@ -558,6 +571,27 @@ fn validate_dimensions(data: &MatchesData, image_count: usize) -> Result<(), Mat
             data.feature_counts.len()
         )
     );
+    let Some(image_dims) = &data.image_dims else {
+        return Err(MatchesError::ShapeMismatch(
+            "image_dims is required (mandatory since format version 4): supply an (N, 2) \
+             width/height array"
+                .into(),
+        ));
+    };
+    check!(
+        image_dims.shape() == [image_count, 2],
+        format!(
+            "image_dims shape {:?} != [{image_count}, 2]",
+            image_dims.shape()
+        )
+    );
+    if let Some((k, _)) = image_dims.iter().enumerate().find(|(_, &v)| v == 0) {
+        return Err(MatchesError::ShapeMismatch(format!(
+            "image_dims[{}] has a zero {} (every dimension must be >= 1)",
+            k / 2,
+            if k % 2 == 0 { "width" } else { "height" }
+        )));
+    }
 
     // Image pairs
     if let Some(pairs) = &data.image_pairs {
@@ -967,6 +1001,20 @@ fn validate_cluster_patches_constraints(
                     "reference_members[{c}] = {reference} has status {}, expected {} (reference)",
                     cp.member_status[reference as usize],
                     ClusterMemberStatus::Reference as u8
+                )));
+            }
+            // Reference rows are identity | x_ref: the leading 2×2 is exactly
+            // the identity (the last column — the reference keypoint's own
+            // absolute position — is not checkable without the `.sift` data).
+            let k = reference as usize;
+            let identity = cp.member_affines[[k, 0, 0]] == 1.0
+                && cp.member_affines[[k, 0, 1]] == 0.0
+                && cp.member_affines[[k, 1, 0]] == 0.0
+                && cp.member_affines[[k, 1, 1]] == 1.0;
+            if !identity {
+                return Err(MatchesError::InvalidFormat(format!(
+                    "member_affines[{k}] (cluster {c}'s reference row) must have an identity \
+                     leading 2x2 block"
                 )));
             }
         }

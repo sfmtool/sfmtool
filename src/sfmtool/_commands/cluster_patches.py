@@ -223,6 +223,10 @@ def _run_cluster_patches(
             np.ascontiguousarray(img),
             np.ascontiguousarray(sift["positions_xy"][:count], dtype=np.float32),
             np.ascontiguousarray(sift["affine_shapes"][:count], dtype=np.float32),
+            (
+                int(sift_meta["metadata"]["image_width"]),
+                int(sift_meta["metadata"]["image_height"]),
+            ),
         )
 
     click.echo("Reading images and .sift features...")
@@ -234,12 +238,14 @@ def _run_cluster_patches(
             pool.submit(_read_one, i, name) for i, name in enumerate(image_names)
         ]
         images, positions, affine_shapes = [], [], []
+        image_dims = np.zeros((len(image_names), 2), dtype=np.uint32)
         try:
-            for future in futures:
-                img, pos, aff = future.result()
+            for i, future in enumerate(futures):
+                img, pos, aff, dims = future.result()
                 images.append(img)
                 positions.append(pos)
                 affine_shapes.append(aff)
+                image_dims[i] = dims
         except BaseException:
             # Fail fast: without this, the pool's __exit__ would finish
             # decoding every queued image before the error surfaces.
@@ -289,6 +295,10 @@ def _run_cluster_patches(
         "feature_tool_hashes": data["feature_tool_hashes"],
         "sift_content_hashes": data["sift_content_hashes"],
         "feature_counts": data["feature_counts"],
+        # From the hash-verified .sift metadata rather than the input file,
+        # so a version-3 cluster backbone (which stored no dims) still
+        # enriches into a self-contained version-4 file.
+        "image_dims": image_dims,
         "has_clusters": True,
         "cluster_starts": data["cluster_starts"],
         "member_images": data["member_images"],

@@ -78,6 +78,19 @@ pub struct WorkspaceMetadata {
 /// Current `.matches` format version. [`crate::write_matches`] always writes
 /// this version; [`crate::read_matches`] accepts any version up to it.
 ///
+/// Version 4 makes the file self-contained for geometric consumers: the
+/// images section gains a mandatory per-image dimensions array
+/// (`images/image_dims.{N}.2.uint32`), and the last column of
+/// `cluster_patches/member_affines` changes meaning from the affine
+/// translation `t` to the member's refined absolute keypoint position
+/// `p = A·x_ref + t` (reference rows become identity | x_ref; `t` stays
+/// recoverable as `t = p − A·x_ref`). Version ≤ 3 files load with
+/// `image_dims` absent ([`MatchesData::image_dims`] is `None`); files that
+/// carry a `cluster_patches/` section are rejected — the stored translation
+/// column cannot be upgraded to the absolute-position semantics without the
+/// referenced `.sift` positions, so those files must be regenerated with
+/// `sfm cluster-patches`.
+///
 /// Version 3 introduced the cluster backbone: a file stores exactly one of
 /// the `image_pairs/` or `clusters/` sections as its correspondence backbone,
 /// plus the optional `cluster_patches/` enrichment (requires `clusters/`).
@@ -91,7 +104,7 @@ pub struct WorkspaceMetadata {
 /// or renamed. Version 1 files hold COLMAP-convention relative poses and are
 /// upgraded on load by S-conjugation ([`s_conjugate_relative_pose`]); the
 /// pixel-space F/E/H matrices are identical in both versions.
-pub const MATCHES_FORMAT_VERSION: u32 = 3;
+pub const MATCHES_FORMAT_VERSION: u32 = 4;
 
 /// Conjugate a relative camera pose (`cam2_from_cam1`) with the camera-frame
 /// flip `S = diag(1, −1, −1)`: `R' = S·R·S`, `t' = S·t`.
@@ -394,9 +407,13 @@ pub struct ClusterPatchData {
     pub reference_members: Array1<u32>,
     /// `(M,)` [`ClusterMemberStatus`] discriminants.
     pub member_status: Array1<u8>,
-    /// `(M, 2, 3)` absolute affine warps in pixel coordinates:
-    /// `x_member = A·x_ref + t` with `A` the leading 2×2 and `t` the last
-    /// column. Identity|0 for the reference row; zeros where not evaluated.
+    /// `(M, 2, 3)` absolute affine warps in pixel coordinates: `A` is the
+    /// leading 2×2 and the last column stores `p = A·x_ref + t` — the
+    /// member's refined absolute keypoint position — so
+    /// `x_member = A·(x − x_ref) + p` and the translation stays recoverable
+    /// as `t = p − A·x_ref` (with `x_ref` the reference row's own last
+    /// column). Reference rows are identity | x_ref; all-zeros where not
+    /// evaluated (the status array is the discriminator).
     pub member_affines: Array3<f64>,
     /// `(M,)` achieved windowed ZNCC vs the reference (NaN where not
     /// evaluated).
@@ -435,6 +452,10 @@ pub struct MatchesData {
     pub sift_content_hashes: Vec<[u8; 16]>,
     /// `(N,)` feature count per image as used during matching.
     pub feature_counts: Array1<u32>,
+    /// `(N, 2)` per-image pixel dimensions (width, height). Mandatory since
+    /// format version 4 — [`crate::write_matches`] requires it — and `None`
+    /// only for version ≤ 3 files loaded from disk, which never stored it.
+    pub image_dims: Option<Array2<u32>>,
 
     /// Pairwise backbone. Exactly one of `image_pairs` / `clusters` is `Some`.
     pub image_pairs: Option<PairsData>,
