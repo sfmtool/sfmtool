@@ -1,6 +1,9 @@
 # Cluster Covisibility
 
-**Status: design, pre-implementation.** Production spec for promoting the
+**Status:** Implemented —
+`crates/sfmtool-core/src/features/cluster_match/covisibility.rs`, bindings in
+`crates/sfmtool-py/src/matching/covisibility.rs`
+(`sfmtool._sfmtool.matching.ClusterCovisibility`). Promotes the
 image-grouping-by-shared-clusters machinery from the pinhole bootstrap
 experiments (`scripts/exp_pinhole_bootstrap.py`, notes in
 `cluster-pinhole-bootstrap.md`) into `sfmtool-core` and the bindings.
@@ -84,7 +87,8 @@ Storage is dense row-major `u32`, `4·N²` bytes, and is the actual scaling
 wall: ~25 MB at N = 2,500 images, ~400 MB at N = 10,000. The public API
 does not expose dense-ness (see below), so a sparse/CSR backend can be added
 behind the same type when a >4–5 k-image consumer appears; construction
-errors with a clear message above the documented bound until then. Long
+errors with a clear message above the bound — `MAX_DENSE_IMAGES = 4096`
+(64 MB dense) — until then. Long
 videos — the capture style that produces such N — have banded covisibility,
 so the sparse variant is compact where dense is hopeless.
 

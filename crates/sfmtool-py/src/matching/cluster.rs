@@ -26,7 +26,7 @@ use crate::py_progress::ProgressCounter;
 use crate::spatial::kdforest::{extract_u8_2d, resolve_forest_params};
 
 /// Extract a 1-D `uint32` array, with a clear error if the dtype is wrong.
-fn extract_u32_1d<'py>(
+pub(crate) fn extract_u32_1d<'py>(
     arr: &Bound<'py, PyAny>,
     what: &str,
 ) -> PyResult<PyReadonlyArray1<'py, u32>> {
