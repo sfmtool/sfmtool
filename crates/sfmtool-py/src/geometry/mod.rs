@@ -3,10 +3,11 @@
 
 //! Bindings for the core geometric value types: camera intrinsics, rotation
 //! quaternions, rigid transforms, and SE3 transforms — plus the
-//! coordinate-convention conversion functions.
+//! coordinate-convention conversion functions and the affine factorization.
 
 use pyo3::prelude::*;
 
+pub mod affine_factorization;
 pub mod camera_intrinsics;
 pub mod convention;
 pub mod rigid_transform;
@@ -24,5 +25,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRotQuaternion>()?;
     m.add_class::<PySe3Transform>()?;
     convention::register(m)?;
+    affine_factorization::register(m)?;
     Ok(())
 }
