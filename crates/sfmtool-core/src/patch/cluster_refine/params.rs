@@ -138,9 +138,12 @@ pub struct ClusterRefineResult {
     pub reference_members: Vec<u32>,
     /// `(M,)` per-member statuses.
     pub member_status: Vec<MemberStatus>,
-    /// `(M, 2, 3)` absolute affine warps in pixel coordinates:
-    /// `x_member = A·x_ref + t` with `A` the leading 2×2 and `t` the last
-    /// column. Identity|0 for the reference row; zeros where not evaluated.
+    /// `(M, 2, 3)` absolute affine warps in pixel coordinates: `A` is the
+    /// leading 2×2 and the last column stores `p = A·x_ref + t` — the
+    /// member's refined absolute keypoint position (so
+    /// `x_member = A·(x − x_ref) + p`, and `t = p − A·x_ref` with `x_ref`
+    /// the reference row's own last column). Reference rows are
+    /// identity | x_ref; all-zeros where not evaluated.
     pub member_affines: Array3<f64>,
     /// `(M,)` achieved windowed ZNCC vs the reference (`NaN` if not
     /// evaluated).

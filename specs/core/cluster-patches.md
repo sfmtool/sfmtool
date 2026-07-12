@@ -143,9 +143,10 @@ cluster_patches/
 ├── metadata.json.zst                    # refinement options (below) + summary counts
 ├── reference_members.{C}.uint32.zst     # global member index of each cluster's reference
 ├── member_status.{M}.uint8.zst          # enum, see below
-├── member_affines.{M}.2.3.float64.zst   # x_member = A·x_ref + t, pixel coords (COLMAP
-│                                        # convention); identity|0 for the reference row;
-│                                        # zeros where not evaluated
+├── member_affines.{M}.2.3.float64.zst   # (2x2 A | refined absolute position p), pixel coords
+│                                        # (COLMAP convention); p = A·x_ref + t, so
+│                                        # x_member = A·(x − x_ref) + p; identity|x_ref for the
+│                                        # reference row; zeros where not evaluated
 ├── member_zncc.{M}.float32.zst          # achieved windowed ZNCC vs reference (NaN if n/a)
 └── member_shift_px.{M}.float32.zst      # translation drift from the SIFT seed (NaN if n/a)
 ```
@@ -161,7 +162,12 @@ without re-running (the ZNCC/shift arrays are the signals, mirroring how
 The affine is stored absolute (full 2×3 in pixel coordinates) rather than
 anchored/relative: it composes directly (`member ← ref`, and member↔member
 via the reference) and does not require the consumer to re-derive the SIFT
-seed. Top-level metadata gains `"has_cluster_patches": true`.
+seed. Since format version 4 the last column is the member's **refined
+absolute keypoint position** `p = A·x_ref + t` rather than the translation
+`t` — geometric consumers read every member's refined position straight from
+the array (the reference row is identity | x_ref, its own `.sift` position),
+and `t` stays recoverable as `p − A·x_ref` with `x_ref` taken from the
+reference row. Top-level metadata gains `"has_cluster_patches": true`.
 
 ## The operation
 

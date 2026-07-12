@@ -521,20 +521,21 @@ fn refine_member(
     let (t, d) = unpack(&theta, Stage::Affine);
     let zncc = -best_val;
     let shift = (t[0] * t[0] + t[1] * t[1]).sqrt();
-    // Absolute affine: `A = (I + D)·M₀`, `t_abs = pos_mem + t − A·pos_ref`,
-    // so `x_mem = A·x_ref + t_abs` composes without the seed.
+    // Absolute affine: `A = (I + D)·M₀`; the stored last column is the
+    // member's refined absolute keypoint position `p = pos_mem + t`
+    // (= `A·x_ref + t_abs`), so the warp composes without the seed
+    // (`x_mem = A·(x − x_ref) + p`) and the translation stays recoverable as
+    // `t_abs = p − A·x_ref`, with `x_ref` read from the cluster's reference
+    // row (identity | x_ref).
     let id = [[1.0 + d[0][0], d[0][1]], [d[1][0], 1.0 + d[1][1]]];
     let a_abs = mul2(&id, &m0);
-    let t_abs = [
-        mem_geo.pos[0] + t[0] - (a_abs[0][0] * ref_geo.pos[0] + a_abs[0][1] * ref_geo.pos[1]),
-        mem_geo.pos[1] + t[1] - (a_abs[1][0] * ref_geo.pos[0] + a_abs[1][1] * ref_geo.pos[1]),
-    ];
+    let p = [mem_geo.pos[0] + t[0], mem_geo.pos[1] + t[1]];
     Some((
         zncc,
         shift,
         [
-            [a_abs[0][0], a_abs[0][1], t_abs[0]],
-            [a_abs[1][0], a_abs[1][1], t_abs[1]],
+            [a_abs[0][0], a_abs[0][1], p[0]],
+            [a_abs[1][0], a_abs[1][1], p[1]],
         ],
     ))
 }
@@ -676,9 +677,12 @@ fn refine_cluster(
         return unrefinable(members);
     };
     let ref_geo = geo[ref_j].clone().unwrap();
+    // Reference row: identity | x_ref (its own `.sift` keypoint position),
+    // so consumers can read every member's absolute position — including
+    // the reference's — straight from the affine's last column.
     members[ref_j] = MemberOutcome {
         status: MemberStatus::Reference,
-        affine: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        affine: [[1.0, 0.0, ref_geo.pos[0]], [0.0, 1.0, ref_geo.pos[1]]],
         zncc: 1.0,
         shift: 0.0,
     };
@@ -758,8 +762,9 @@ fn refine_cluster(
 }
 
 /// Refine every cluster into a patch cluster: per cluster, a reference member
-/// plus a vetted absolute affine warp (`x_member = A·x_ref + t`) to every
-/// other member. Parallel over clusters (rayon); results are deterministic
+/// plus a vetted absolute affine warp to every other member (leading 2×2 `A`
+/// plus the member's refined absolute keypoint position `p = A·x_ref + t` in
+/// the last column). Parallel over clusters (rayon); results are deterministic
 /// under any thread schedule (each cluster's work is self-contained and the
 /// scatter preserves cluster order). `progress` is bumped once per finished
 /// cluster.

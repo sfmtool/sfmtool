@@ -166,7 +166,9 @@ fn sub(a: &Mat2, b: &Mat2) -> Mat2 {
 /// Compute the per-member warp-consistency residuals for a refined cluster
 /// set (see the module docs). `member_affines` / `member_status` /
 /// `reference_members` are the [`refine_cluster_patches`] outputs
-/// (member-parallel; `(M, 2, 3)` absolute warps). Members that participate
+/// (member-parallel; `(M, 2, 3)` — only the leading 2×2 warp blocks enter
+/// the fit; the last column, the member's absolute refined keypoint
+/// position, is never read). Members that participate
 /// in the fit — the reference (`J = I`) plus every kept member with a
 /// non-degenerate warp, in clusters with at least 2 such members — get a
 /// residual; everything else is NaN. Deterministic: fixed seed, fixed

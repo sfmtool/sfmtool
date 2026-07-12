@@ -33,6 +33,11 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
         u128_bytes_to_py(py, &data.sift_content_hashes)?,
     )?;
     dict.set_item("feature_counts", data.feature_counts.into_pyarray(py))?;
+    // Present for every version-4+ file (the writer requires it); absent
+    // only when loading a version <= 3 file, which never stored dims.
+    if let Some(image_dims) = data.image_dims {
+        dict.set_item("image_dims", image_dims.into_pyarray(py))?;
+    }
 
     if let Some(pairs) = data.image_pairs {
         dict.set_item(
@@ -146,6 +151,8 @@ pub fn write_matches(
     let feature_tool_hashes = py_to_u128_bytes(&get_item(data, "feature_tool_hashes")?)?;
     let sift_content_hashes = py_to_u128_bytes(&get_item(data, "sift_content_hashes")?)?;
     let feature_counts: PyReadonlyArray1<u32> = get_item(data, "feature_counts")?.extract()?;
+    // Mandatory since format version 4: (N, 2) per-image width/height.
+    let image_dims: PyReadonlyArray2<u32> = get_item(data, "image_dims")?.extract()?;
 
     // Backbone: clusters when the has_clusters flag is set, pairs otherwise.
     let has_clusters = get_flag(data, "has_clusters")?;
@@ -266,6 +273,7 @@ pub fn write_matches(
         feature_tool_hashes,
         sift_content_hashes,
         feature_counts: feature_counts.as_array().to_owned(),
+        image_dims: Some(image_dims.as_array().to_owned()),
         image_pairs,
         clusters,
         cluster_patches,

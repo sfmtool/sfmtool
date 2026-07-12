@@ -625,6 +625,7 @@ fn make_matches_data() -> MatchesData {
         feature_tool_hashes: vec![[0u8; 16]; 3],
         sift_content_hashes: vec![[1u8; 16]; 3],
         feature_counts: Array1::from_vec(vec![4, 4, 4]),
+        image_dims: Some(Array2::from_shape_vec((3, 2), vec![64, 48, 64, 48, 64, 48]).unwrap()),
         image_pairs: Some(matches_format::PairsData {
             image_index_pairs: Array2::from_shape_vec((2, 2), vec![0, 1, 0, 2]).unwrap(),
             match_counts: Array1::from_vec(vec![3, 2]),

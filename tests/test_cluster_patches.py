@@ -71,6 +71,7 @@ def test_cluster_patches_end_to_end(cluster_matches_file: Path):
     assert data["has_cluster_patches"]
     # Images + clusters sections copied verbatim.
     assert data["image_names"] == src["image_names"]
+    np.testing.assert_array_equal(data["image_dims"], src["image_dims"])
     np.testing.assert_array_equal(data["cluster_starts"], src["cluster_starts"])
     np.testing.assert_array_equal(data["member_images"], src["member_images"])
     np.testing.assert_array_equal(data["member_features"], src["member_features"])
@@ -161,7 +162,7 @@ def test_cluster_patches_rejects_pairwise_input(tmp_path: Path):
     path = tmp_path / "pairwise.matches"
     data = {
         "metadata": {
-            "version": 3,
+            "version": 4,
             "matching_method": "exhaustive",
             "matching_tool": "test",
             "matching_tool_version": "0",
@@ -188,6 +189,7 @@ def test_cluster_patches_rejects_pairwise_input(tmp_path: Path):
         "feature_tool_hashes": np.zeros((2, 16), dtype=np.uint8),
         "sift_content_hashes": np.zeros((2, 16), dtype=np.uint8),
         "feature_counts": np.array([1, 1], dtype=np.uint32),
+        "image_dims": np.array([[64, 48], [64, 48]], dtype=np.uint32),
         "image_index_pairs": np.array([[0, 1]], dtype=np.uint32),
         "match_counts": np.array([1], dtype=np.uint32),
         "match_feature_indexes": np.array([[0, 0]], dtype=np.uint32),

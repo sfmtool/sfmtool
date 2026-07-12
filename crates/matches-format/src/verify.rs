@@ -34,6 +34,21 @@ fn raw_to_u32(raw: &[u8]) -> Cow<'_, [u32]> {
     }
 }
 
+/// [`raw_to_u32`] for `f64` entries (8-byte alignment fallback included).
+fn raw_to_f64(raw: &[u8]) -> Cow<'_, [f64]> {
+    let size = std::mem::size_of::<f64>();
+    let n = raw.len() / size;
+    let trimmed = &raw[..n * size];
+    match bytemuck::try_cast_slice::<u8, f64>(trimmed) {
+        Ok(slice) => Cow::Borrowed(slice),
+        Err(_) => {
+            let mut out = vec![0f64; n];
+            bytemuck::cast_slice_mut::<f64, u8>(&mut out).copy_from_slice(trimmed);
+            Cow::Owned(out)
+        }
+    }
+}
+
 /// Check the backbone rule and metadata flag / summary-count / zip-entry
 /// consistency. Returns the errors found; when non-empty the caller reports
 /// them and stops (section hashing assumes a structurally coherent file).
@@ -56,6 +71,21 @@ fn structure_errors(metadata: &MatchesMetadata, entry_names: &[String]) -> Vec<S
             "two_view_geometries requires the image_pairs backbone, but this file stores clusters"
                 .into(),
         );
+    }
+
+    // Per-image dimensions are mandatory since version 4 and never stored
+    // before it.
+    let has_dims = has_prefix("images/image_dims.");
+    if metadata.version >= 4 && !has_dims {
+        errors.push(
+            "version 4+ file is missing images/image_dims (mandatory since version 4)".into(),
+        );
+    }
+    if metadata.version < 4 && has_dims {
+        errors.push(format!(
+            "version {} file contains images/image_dims (introduced in version 4)",
+            metadata.version
+        ));
     }
 
     if metadata.has_clusters {
@@ -200,6 +230,32 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
         &mut archive,
         &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
     )?);
+
+    // images/image_dims (version 4+ only; structure_errors gated presence)
+    if metadata.version >= 4 {
+        let dims_raw = read_zst_entry(
+            &mut archive,
+            &format!("images/image_dims.{image_count}.2.uint32.zst"),
+        )?;
+        images_hasher.update(&dims_raw);
+        if dims_raw.len() != image_count * 8 {
+            errors.push(format!(
+                "image_dims byte length {} != expected {} ({image_count} uint32 pairs)",
+                dims_raw.len(),
+                image_count * 8
+            ));
+        } else if let Some((k, _)) = raw_to_u32(&dims_raw)
+            .iter()
+            .enumerate()
+            .find(|(_, &v)| v == 0)
+        {
+            errors.push(format!(
+                "image_dims[{}] has a zero {} (every dimension must be >= 1)",
+                k / 2,
+                if k % 2 == 0 { "width" } else { "height" }
+            ));
+        }
+    }
 
     // images/metadata.json
     images_hasher.update(&read_zst_entry(&mut archive, "images/metadata.json.zst")?);
@@ -655,6 +711,27 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
                                 ClusterMemberStatus::Reference as u8
                             ));
                             break;
+                        }
+                        // Version 4+: reference rows are identity | x_ref —
+                        // check the leading 2×2 exactly (the last column,
+                        // the reference keypoint's absolute position, is not
+                        // checkable without the `.sift` data). Version ≤ 3
+                        // files stored identity | 0 and are already rejected
+                        // by the reader; verification leaves them untouched.
+                        if metadata.version >= 4 {
+                            let affines = raw_to_f64(&affines_raw);
+                            let base = reference as usize * 6;
+                            let identity = affines[base] == 1.0
+                                && affines[base + 1] == 0.0
+                                && affines[base + 3] == 0.0
+                                && affines[base + 4] == 1.0;
+                            if !identity {
+                                errors.push(format!(
+                                    "member_affines[{reference}] (cluster {c}'s reference row) \
+                                     must have an identity leading 2x2 block"
+                                ));
+                                break;
+                            }
                         }
                     }
 

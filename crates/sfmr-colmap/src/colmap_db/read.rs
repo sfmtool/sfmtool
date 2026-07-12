@@ -229,6 +229,10 @@ pub fn read_colmap_db_matches(
         feature_tool_hashes: vec![[0u8; 16]; image_count],
         sift_content_hashes: vec![[0u8; 16]; image_count],
         feature_counts,
+        // Placeholder like the hashes above: the caller fills the per-image
+        // dimensions in (from the `.sift` metadata) before write_matches,
+        // which requires them.
+        image_dims: None,
         image_pairs: Some(matches_format::PairsData {
             image_index_pairs,
             match_counts,

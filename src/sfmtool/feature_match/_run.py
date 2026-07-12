@@ -336,7 +336,7 @@ def _write_clusters_matches(
     out_abs = Path(os.path.abspath(out_path))
     data = {
         "metadata": {
-            "version": 3,
+            "version": 4,
             "matching_method": "cluster",
             "matching_tool": "sfmtool",
             "matching_tool_version": get_version("sfmtool"),
@@ -654,13 +654,21 @@ def _run_merge(paths, output_path):
         all_data.append((data, pairs_view))
 
     # Build unified image list and validate consistency
-    image_info = {}  # name -> {feature_count, tool_hash, content_hash}
-    for data, _pairs_view in all_data:
+    image_info = {}  # name -> {feature_count, tool_hash, content_hash, dims}
+    for path, (data, _pairs_view) in zip(input_paths, all_data):
         names = list(data["image_names"])
+        # Mandatory since .matches format version 4; a pre-version-4 input
+        # (loaded without dims) cannot produce a valid merged file.
+        if "image_dims" not in data:
+            raise click.ClickException(
+                f"{path.name} predates per-image dimensions (.matches format "
+                "version 4); re-run matching to regenerate it before merging."
+            )
         for i, name in enumerate(names):
             tool_hash = bytes(data["feature_tool_hashes"][i])
             content_hash = bytes(data["sift_content_hashes"][i])
             feature_count = int(data["feature_counts"][i])
+            dims = tuple(int(v) for v in data["image_dims"][i])
             if name in image_info:
                 existing = image_info[name]
                 if existing["content_hash"] != content_hash:
@@ -674,6 +682,7 @@ def _run_merge(paths, output_path):
                     "feature_count": feature_count,
                     "tool_hash": tool_hash,
                     "content_hash": content_hash,
+                    "dims": dims,
                 }
 
     unified_names = sorted(image_info.keys())
@@ -878,6 +887,9 @@ def _run_merge(paths, output_path):
     sift_content_hashes = np.array(
         [list(image_info[n]["content_hash"]) for n in unified_names], dtype=np.uint8
     )
+    image_dims = np.array(
+        [image_info[n]["dims"] for n in unified_names], dtype=np.uint32
+    )
 
     # Build metadata from the first input file as a base
     base_meta = all_data[0][0]["metadata"]
@@ -908,6 +920,7 @@ def _run_merge(paths, output_path):
         "feature_tool_hashes": feature_tool_hashes,
         "sift_content_hashes": sift_content_hashes,
         "feature_counts": feature_counts,
+        "image_dims": image_dims,
         "image_index_pairs": out_image_index_pairs,
         "match_counts": out_match_counts,
         "match_feature_indexes": out_match_feature_indexes,

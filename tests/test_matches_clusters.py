@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Round-trip tests for cluster-bearing `.matches` files through the
-`sfmtool._sfmtool.io` bindings (format version 3: `clusters/` +
-`cluster_patches/` sections, pairs-or-clusters backbone)."""
+`sfmtool._sfmtool.io` bindings (format version 4: `clusters/` +
+`cluster_patches/` sections, pairs-or-clusters backbone, per-image dims,
+absolute keypoint positions in the member_affines last column)."""
 
 import numpy as np
 import numpy.testing as npt
@@ -13,7 +14,7 @@ from sfmtool._sfmtool.io import read_matches, verify_matches, write_matches
 
 def _base_metadata() -> dict:
     return {
-        "version": 3,
+        "version": 4,
         "matching_method": "cluster",
         "matching_tool": "sfmtool",
         "matching_tool_version": "0.2",
@@ -46,6 +47,7 @@ def _images_section() -> dict:
         "feature_tool_hashes": [b"\x00" * 16] * 3,
         "sift_content_hashes": [b"\x01" * 16] * 3,
         "feature_counts": np.array([100, 150, 200], dtype=np.uint32),
+        "image_dims": np.array([[640, 480], [640, 480], [1024, 768]], dtype=np.uint32),
     }
 
 
@@ -76,9 +78,12 @@ def _cluster_patch_data() -> dict:
     data["metadata"]["has_cluster_patches"] = True
     data["has_cluster_patches"] = True
     affines = np.zeros((5, 2, 3), dtype=np.float64)
-    affines[0] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]  # reference: identity | 0
-    affines[1] = [[1.1, -0.05, 42.5], [0.03, 0.95, -17.25]]  # kept
-    affines[2] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]  # rejected, affine retained
+    # Reference: identity | x_ref (its own absolute keypoint position).
+    affines[0] = [[1.0, 0.0, 12.5], [0.0, 1.0, 20.25]]
+    # Kept: last column is the refined absolute position p = A x_ref + t.
+    affines[1] = [[1.1, -0.05, 42.5], [0.03, 0.95, 17.25]]
+    # Rejected, affine + position retained.
+    affines[2] = [[1.0, 0.0, 13.0], [0.0, 1.0, 21.0]]
     data.update(
         {
             "reference_members": np.array(
@@ -136,13 +141,15 @@ def test_clusters_round_trip(tmp_path):
     assert valid, f"verification failed: {errors}"
 
     loaded = read_matches(path)
-    assert loaded["metadata"]["version"] == 3
+    assert loaded["metadata"]["version"] == 4
     assert loaded["metadata"]["has_clusters"] is True
     assert loaded["metadata"]["has_cluster_patches"] is False
     assert loaded["metadata"]["cluster_count"] == 2
     assert loaded["metadata"]["cluster_member_count"] == 5
     assert "image_pair_count" not in loaded["metadata"]
     assert "match_count" not in loaded["metadata"]
+    npt.assert_array_equal(loaded["image_dims"], data["image_dims"])
+    assert loaded["image_dims"].dtype == np.uint32
 
     assert loaded["has_clusters"] is True
     assert loaded["has_cluster_patches"] is False
@@ -220,6 +227,7 @@ def test_pairwise_round_trip_regression(tmp_path):
     loaded = read_matches(path)
     assert loaded["metadata"]["image_pair_count"] == 2
     assert loaded["metadata"]["match_count"] == 5
+    npt.assert_array_equal(loaded["image_dims"], data["image_dims"])
     assert "cluster_count" not in loaded["metadata"]
     assert loaded["has_clusters"] is False
     assert loaded["has_cluster_patches"] is False
@@ -248,4 +256,23 @@ def test_write_rejects_cluster_file_with_stale_pair_counts(tmp_path):
     data["metadata"]["image_pair_count"] = 2
     data["metadata"]["match_count"] = 5
     with pytest.raises(OSError, match="must not set metadata.image_pair_count"):
+        write_matches(tmp_path / "bad.matches", data)
+
+
+def test_write_requires_image_dims(tmp_path):
+    """image_dims is mandatory since format version 4."""
+    import pytest
+
+    data = _cluster_data()
+    del data["image_dims"]
+    with pytest.raises(KeyError, match="image_dims"):
+        write_matches(tmp_path / "bad.matches", data)
+
+
+def test_write_rejects_non_identity_reference_row(tmp_path):
+    import pytest
+
+    data = _cluster_patch_data()
+    data["member_affines"][0, 0, 1] = 0.25  # reference row's A01
+    with pytest.raises(OSError, match="identity leading 2x2"):
         write_matches(tmp_path / "bad.matches", data)

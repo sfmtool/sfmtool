@@ -299,7 +299,9 @@ pub fn clusters_to_pair_matches(
 ///     A dict mapping 1:1 onto the ``cluster_patches/`` section:
 ///     ``reference_members`` (C,) uint32 (0xFFFFFFFF = unrefinable),
 ///     ``member_status`` (M,) uint8, ``member_affines`` (M, 2, 3) float64
-///     (absolute: ``x_member = A·x_ref + t``), ``member_zncc`` (M,) float32,
+///     (leading 2x2 ``A`` plus the member's refined absolute keypoint
+///     position ``p = A·x_ref + t`` in the last column; reference rows are
+///     identity | x_ref), ``member_zncc`` (M,) float32,
 ///     ``member_shift_px`` (M,) float32, ``member_consistency_residual``
 ///     (M,) float32 — the member's relative misfit against a joint
 ///     weak-perspective factorization of all cluster warps (lower = more

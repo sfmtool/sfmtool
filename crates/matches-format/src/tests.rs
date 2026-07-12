@@ -49,6 +49,9 @@ fn make_test_data() -> MatchesData {
         feature_tool_hashes: vec![[0u8; 16]; image_count as usize],
         sift_content_hashes: vec![[1u8; 16]; image_count as usize],
         feature_counts: Array1::from_vec(vec![100, 150, 200]),
+        image_dims: Some(
+            Array2::from_shape_vec((3, 2), vec![640, 480, 640, 480, 1024, 768]).unwrap(),
+        ),
         image_pairs: Some(PairsData {
             // Pair (0,1) has 3 matches, pair (0,2) has 2 matches
             image_index_pairs: Array2::from_shape_vec((pair_count, 2), vec![0, 1, 0, 2]).unwrap(),
@@ -184,19 +187,25 @@ fn make_cluster_patch_test_data() -> MatchesData {
     let mut data = make_cluster_test_data();
     data.metadata.has_cluster_patches = true;
     let mut member_affines = Array3::zeros((5, 2, 3));
-    // Reference row: identity | 0.
+    // Reference row: identity | x_ref (the reference keypoint's own absolute
+    // position).
     member_affines[[0, 0, 0]] = 1.0;
+    member_affines[[0, 0, 2]] = 12.5;
     member_affines[[0, 1, 1]] = 1.0;
-    // Kept member: a non-trivial affine.
+    member_affines[[0, 1, 2]] = 20.25;
+    // Kept member: a non-trivial affine; the last column is the member's
+    // refined absolute keypoint position p = A·x_ref + t.
     member_affines[[1, 0, 0]] = 1.1;
     member_affines[[1, 0, 1]] = -0.05;
     member_affines[[1, 0, 2]] = 42.5;
     member_affines[[1, 1, 0]] = 0.03;
     member_affines[[1, 1, 1]] = 0.95;
-    member_affines[[1, 1, 2]] = -17.25;
-    // Rejected member: still carries its refined affine.
+    member_affines[[1, 1, 2]] = 17.25;
+    // Rejected member: still carries its refined affine + position.
     member_affines[[2, 0, 0]] = 1.0;
+    member_affines[[2, 0, 2]] = 13.0;
     member_affines[[2, 1, 1]] = 1.0;
+    member_affines[[2, 1, 2]] = 21.0;
     data.cluster_patches = Some(ClusterPatchData {
         reference_members: Array1::from_vec(vec![0, CLUSTER_REFERENCE_UNREFINABLE]),
         member_status: Array1::from_vec(vec![
@@ -261,6 +270,7 @@ fn test_round_trip_no_tvg() {
     assert_eq!(loaded.feature_tool_hashes, data.feature_tool_hashes);
     assert_eq!(loaded.sift_content_hashes, data.sift_content_hashes);
     assert_eq!(loaded.feature_counts, data.feature_counts);
+    assert_eq!(loaded.image_dims, data.image_dims);
 
     // Verify pairs
     let pairs = loaded.image_pairs.as_ref().unwrap();
@@ -459,6 +469,7 @@ fn test_empty_matches() {
     data.feature_tool_hashes = vec![];
     data.sift_content_hashes = vec![];
     data.feature_counts = Array1::from_vec(vec![]);
+    data.image_dims = Some(Array2::zeros((0, 2)));
     data.image_pairs = Some(PairsData {
         image_index_pairs: Array2::zeros((0, 2)),
         match_counts: Array1::from_vec(vec![]),
@@ -633,6 +644,36 @@ fn test_write_validation_bad_csr() {
     let mut data = make_cluster_test_data();
     data.clusters.as_mut().unwrap().cluster_starts = Array1::from_vec(vec![0, 1, 5]);
     expect_write_error("matches_test_csr_singleton", &data, ">= 2");
+}
+
+#[test]
+fn test_write_validation_missing_image_dims() {
+    let mut data = make_test_data();
+    data.image_dims = None;
+    expect_write_error("matches_test_missing_dims", &data, "image_dims is required");
+}
+
+#[test]
+fn test_write_validation_zero_image_dims() {
+    let mut data = make_test_data();
+    data.image_dims.as_mut().unwrap()[[1, 1]] = 0;
+    expect_write_error(
+        "matches_test_zero_dims",
+        &data,
+        "image_dims[1] has a zero height",
+    );
+}
+
+#[test]
+fn test_write_validation_reference_row_not_identity() {
+    let mut data = make_cluster_patch_test_data();
+    // Member 0 is cluster 0's reference; corrupt its leading 2×2.
+    data.cluster_patches.as_mut().unwrap().member_affines[[0, 0, 0]] = 1.1;
+    expect_write_error(
+        "matches_test_cp_ref_not_identity",
+        &data,
+        "identity leading 2x2",
+    );
 }
 
 #[test]
@@ -839,6 +880,11 @@ fn set_u32(bytes: &mut [u8], index: usize, value: u32) {
     bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
 }
 
+/// Overwrite the f64 at `index` in a little-endian float64 entry.
+fn set_f64(bytes: &mut [u8], index: usize, value: f64) {
+    bytes[index * 8..index * 8 + 8].copy_from_slice(&value.to_le_bytes());
+}
+
 /// Write entries to a `.matches` archive with a freshly recomputed
 /// `content_hash.json.zst`, so the result is internally consistent except
 /// for whatever the caller mutated. Section membership follows the metadata
@@ -930,10 +976,11 @@ fn rebuild_matches_archive(entries: &[(String, Vec<u8>)], dst: &std::path::Path)
 }
 
 /// Copy a written `.matches` archive, rewriting `metadata.json.zst` so its
-/// `version` field reads `version` (and dropping the version-3 metadata
-/// fields for `version <= 2`, matching what old writers produced), then
-/// recomputing the stored hashes so the result is an internally consistent
-/// file of that version — for authoring old- or future-version fixture bytes.
+/// `version` field reads `version` (dropping the version-3 metadata fields
+/// for `version <= 2` and the version-4 `images/image_dims` entry for
+/// `version <= 3`, matching what old writers produced), then recomputing the
+/// stored hashes so the result is an internally consistent file of that
+/// version — for authoring old- or future-version fixture bytes.
 fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version: u32) {
     let mut entries = load_archive_entries(src);
     mutate_metadata(&mut entries, |json| {
@@ -946,6 +993,9 @@ fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version
             obj.remove("cluster_member_count");
         }
     });
+    if version <= 3 {
+        entries.retain(|(n, _)| !n.starts_with("images/image_dims."));
+    }
     rebuild_matches_archive(&entries, dst);
 }
 
@@ -1120,6 +1170,36 @@ fn test_verify_rejects_reference_outside_cluster() {
 }
 
 #[test]
+fn test_verify_rejects_zero_image_dims() {
+    expect_verify_error(
+        "matches_test_verify_zero_dims",
+        &make_test_data(),
+        |entries| {
+            mutate_entry(entries, "images/image_dims.3.2.uint32.zst", |bytes| {
+                set_u32(bytes, 4, 0); // image 2's width
+            })
+        },
+        "image_dims[2] has a zero width",
+    );
+}
+
+#[test]
+fn test_verify_rejects_reference_row_not_identity() {
+    expect_verify_error(
+        "matches_test_verify_ref_not_identity",
+        &make_cluster_patch_test_data(),
+        |entries| {
+            mutate_entry(
+                entries,
+                "cluster_patches/member_affines.5.2.3.float64.zst",
+                |bytes| set_f64(bytes, 1, 0.25), // reference row's A01
+            )
+        },
+        "identity leading 2x2",
+    );
+}
+
+#[test]
 fn test_verify_rejects_two_kept_members_one_image() {
     expect_verify_error(
         "matches_test_verify_dup_kept",
@@ -1211,13 +1291,72 @@ fn test_version_2_loads_without_pose_conjugation() {
     assert!(valid, "v2 fixture failed verification: {errors:?}");
 
     // Version 2 poses are already canonical: loaded unchanged, and the
-    // in-memory version upgrades to current.
+    // in-memory version upgrades to current. Version ≤ 3 files never stored
+    // per-image dimensions, so they load with image_dims = None.
     let loaded = read_matches(&v2_path).unwrap();
     assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
+    assert_eq!(loaded.image_dims, None);
     let tvg = loaded.two_view_geometries.as_ref().unwrap();
     let orig = data.two_view_geometries.as_ref().unwrap();
     assert_eq!(tvg.quaternions_wxyz, orig.quaternions_wxyz);
     assert_eq!(tvg.translations_xyz, orig.translations_xyz);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_version_3_clusters_load_without_image_dims() {
+    // A version-3 cluster-backbone file (no image_dims, no cluster_patches)
+    // verifies and loads unchanged; image_dims comes back None.
+    let data = make_cluster_test_data();
+    let dir = std::env::temp_dir().join("matches_test_v3_clusters_load");
+    std::fs::create_dir_all(&dir).unwrap();
+    let current_path = dir.join("current.matches");
+    let v3_path = dir.join("v3.matches");
+
+    write_matches(&current_path, &data, 3).unwrap();
+    rewrite_matches_version(&current_path, &v3_path, 3);
+    assert_eq!(read_matches_metadata(&v3_path).unwrap().version, 3);
+
+    let (valid, errors) = verify_matches(&v3_path).unwrap();
+    assert!(valid, "v3 fixture failed verification: {errors:?}");
+
+    let loaded = read_matches(&v3_path).unwrap();
+    assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
+    assert_eq!(loaded.image_dims, None);
+    let clusters = loaded.clusters.as_ref().unwrap();
+    let orig = data.clusters.as_ref().unwrap();
+    assert_eq!(clusters.cluster_starts, orig.cluster_starts);
+    assert_eq!(clusters.member_images, orig.member_images);
+    assert_eq!(clusters.member_features, orig.member_features);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_version_3_cluster_patches_rejected_on_read() {
+    // A version-3 cluster-patch file stores the affine translation in the
+    // member_affines last column — not upgradable without the .sift
+    // positions, so read_matches refuses it (with regeneration guidance)
+    // while verify_matches still validates its stored bytes.
+    let data = make_cluster_patch_test_data();
+    let dir = std::env::temp_dir().join("matches_test_v3_patches_rejected");
+    std::fs::create_dir_all(&dir).unwrap();
+    let current_path = dir.join("current.matches");
+    let v3_path = dir.join("v3.matches");
+
+    write_matches(&current_path, &data, 3).unwrap();
+    rewrite_matches_version(&current_path, &v3_path, 3);
+
+    let (valid, errors) = verify_matches(&v3_path).unwrap();
+    assert!(valid, "v3 patch fixture failed verification: {errors:?}");
+
+    let err = read_matches(&v3_path).err().unwrap();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("regenerate with `sfm cluster-patches`"),
+        "{msg}"
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

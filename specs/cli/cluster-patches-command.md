@@ -68,7 +68,10 @@ photometrically yet cannot pin a 2D position.
    shapes, vetting, one kept member per image), with a `ProgressCounter`
    poller reporting per-cluster progress.
 4. **Write.** A new `.matches` file: images + clusters sections copied
-   verbatim, `cluster_patches/` from the kernel output — including the
+   verbatim (with `image_dims` populated from the hash-verified `.sift`
+   metadata rather than the input file, so a version-3 cluster backbone —
+   which stored no dims — still enriches into a self-contained version-4
+   file), `cluster_patches/` from the kernel output — including the
    per-member warp-consistency residual
    ([`cluster-warp-consistency.md`](../core/cluster-warp-consistency.md), a
    stored signal computed in the same kernel call, no CLI knobs) —

@@ -111,12 +111,14 @@ def _compute_descriptor_distances(matches_data, sift_paths, max_feature_count):
 
 
 def _fill_sift_hashes(matches_data, sift_paths, image_names, image_paths):
-    """Fill feature_tool_hashes and sift_content_hashes from .sift files."""
+    """Fill feature_tool_hashes, sift_content_hashes, and image_dims from
+    .sift files (their metadata records the source image dimensions)."""
     from .._sfmtool.io import read_sift_metadata
 
     image_count = len(image_names)
     feature_tool_hashes = np.zeros((image_count, 16), dtype=np.uint8)
     sift_content_hashes = np.zeros((image_count, 16), dtype=np.uint8)
+    image_dims = np.zeros((image_count, 2), dtype=np.uint32)
 
     for i, sift_path in enumerate(sift_paths):
         result = read_sift_metadata(str(sift_path))
@@ -125,6 +127,9 @@ def _fill_sift_hashes(matches_data, sift_paths, image_names, image_paths):
         ct_hash = bytes.fromhex(content_hash["content_xxh128"])
         feature_tool_hashes[i] = np.frombuffer(ft_hash, dtype=np.uint8)
         sift_content_hashes[i] = np.frombuffer(ct_hash, dtype=np.uint8)
+        meta = result["metadata"]
+        image_dims[i] = (meta["image_width"], meta["image_height"])
 
     matches_data["feature_tool_hashes"] = feature_tool_hashes
     matches_data["sift_content_hashes"] = sift_content_hashes
+    matches_data["image_dims"] = image_dims

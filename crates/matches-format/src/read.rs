@@ -38,6 +38,14 @@ pub fn read_matches_metadata(path: &Path) -> Result<MatchesMetadata, MatchesErro
 /// Content hashes cover the stored bytes ([`crate::verify_matches`] re-reads
 /// the file), so integrity verification is unaffected by the in-memory
 /// upgrade; a re-written file is a new current-version file with new hashes.
+///
+/// Version ≤ 3 files never store `images/image_dims`, so they load with
+/// [`MatchesData::image_dims`] as `None`. A version ≤ 3 file that carries a
+/// `cluster_patches/` section is rejected: its `member_affines` last column
+/// holds the affine translation `t`, which cannot be upgraded to the
+/// version-4 absolute-position semantics (`p = A·x_ref + t`) without the
+/// referenced `.sift` keypoint positions — regenerate the file with
+/// `sfm cluster-patches` from its cluster backbone source.
 pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     let file = std::fs::File::open(path).map_err(|e| MatchesError::IoPath {
         operation: "Failed to open file",
@@ -80,7 +88,21 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
                 .into(),
         ));
     }
+    // Version ≤ 3 cluster-patch files store the affine translation `t` in
+    // the member_affines last column; version 4 stores the absolute refined
+    // keypoint position `p = A·x_ref + t`. The upgrade needs the referenced
+    // `.sift` positions, which the reader does not have — refuse the file
+    // (its cluster-backbone source still loads; regenerate the enrichment).
+    if metadata.version < 4 && metadata.has_cluster_patches {
+        return Err(MatchesError::InvalidFormat(format!(
+            "version {} cluster-patch file: member_affines stores the affine translation, not \
+             the absolute keypoint position introduced in version 4, and cannot be upgraded on \
+             load — regenerate with `sfm cluster-patches` from the cluster backbone file",
+            metadata.version
+        )));
+    }
     let needs_convention_upgrade = metadata.version < 2;
+    let stored_version = metadata.version;
 
     let image_count = metadata.image_count as usize;
 
@@ -119,6 +141,22 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
         image_count,
     )?;
     let feature_counts = Array1::from_vec(feature_counts_vec);
+
+    // Per-image dimensions: mandatory since version 4; version ≤ 3 files
+    // never stored them.
+    let image_dims = if stored_version >= 4 {
+        let dims_vec: Vec<u32> = read_binary_array(
+            &mut archive,
+            &format!("images/image_dims.{image_count}.2.uint32.zst"),
+            image_count * 2,
+        )?;
+        Some(
+            Array2::from_shape_vec((image_count, 2), dims_vec)
+                .map_err(|e| MatchesError::ShapeMismatch(format!("image_dims reshape: {e}")))?,
+        )
+    } else {
+        None
+    };
 
     // === Backbone: image pairs XOR clusters ===
     let image_pairs = if metadata.has_clusters {
@@ -178,6 +216,7 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
         feature_tool_hashes,
         sift_content_hashes,
         feature_counts,
+        image_dims,
         image_pairs,
         clusters,
         cluster_patches,

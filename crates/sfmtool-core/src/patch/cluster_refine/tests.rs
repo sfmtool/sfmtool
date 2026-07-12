@@ -82,10 +82,13 @@ fn matvec(a: &Mat2, x: [f64; 2]) -> [f64; 2] {
     ]
 }
 
-fn apply23(m: &ndarray::ArrayView2<'_, f64>, x: [f64; 2]) -> [f64; 2] {
+/// Apply a stored member row (`A` | absolute position `p`) to `x`, given the
+/// cluster's reference keypoint: `W(x) = A·(x − x_ref) + p`.
+fn apply_member_row(m: &ndarray::ArrayView2<'_, f64>, x_ref: [f64; 2], x: [f64; 2]) -> [f64; 2] {
+    let dx = [x[0] - x_ref[0], x[1] - x_ref[1]];
     [
-        m[[0, 0]] * x[0] + m[[0, 1]] * x[1] + m[[0, 2]],
-        m[[1, 0]] * x[0] + m[[1, 1]] * x[1] + m[[1, 2]],
+        m[[0, 0]] * dx[0] + m[[0, 1]] * dx[1] + m[[0, 2]],
+        m[[1, 0]] * dx[0] + m[[1, 1]] * dx[1] + m[[1, 2]],
     ]
 }
 
@@ -177,6 +180,28 @@ fn run_recovery_case(
         (pos_mem, a_mem)
     };
 
+    // Reference row: identity | x_ref (its own keypoint position, which the
+    // kernel reads from the f32 `.sift` arrays — compare f32-rounded).
+    let pos_r_stored = [pos_r[0] as f32 as f64, pos_r[1] as f32 as f64];
+    let ref_row = result
+        .member_affines
+        .index_axis(ndarray::Axis(0), ref_k as usize);
+    assert_eq!(
+        [
+            ref_row[[0, 0]],
+            ref_row[[0, 1]],
+            ref_row[[1, 0]],
+            ref_row[[1, 1]]
+        ],
+        [1.0, 0.0, 0.0, 1.0],
+        "reference row must carry the identity 2x2"
+    );
+    assert_eq!(
+        [ref_row[[0, 2]], ref_row[[1, 2]]],
+        pos_r_stored,
+        "reference row's last column must be its own keypoint position"
+    );
+
     let rec = result.member_affines.index_axis(ndarray::Axis(0), other);
     let res = params.resolution as usize;
     let step = 2.0 * params.radius / res as f64;
@@ -189,7 +214,7 @@ fn run_recovery_case(
                 pos_r[0] + a_r[0][0] * u[0] + a_r[0][1] * u[1],
                 pos_r[1] + a_r[1][0] * u[0] + a_r[1][1] * u[1],
             ];
-            let p = apply23(&rec, x);
+            let p = apply_member_row(&rec, pos_r_stored, x);
             let q = [
                 w_true[0][0] * x[0] + w_true[0][1] * x[1] + t_w[0],
                 w_true[1][0] * x[0] + w_true[1][1] * x[1] + t_w[1],
