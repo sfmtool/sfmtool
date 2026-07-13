@@ -15,12 +15,117 @@
 use std::collections::HashMap;
 
 use nalgebra::{Point3, Vector3};
-use ndarray::Array2;
+use ndarray::{Array2, Array4, Axis};
 
 use crate::geometry::viewing_angle::viewing_rays;
 use crate::reconstruction::data::count_points_at_infinity;
 use crate::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
 use crate::reconstruction::SfmrReconstruction;
+
+/// Patch-frame adjustment for a point crossing the finite/infinity boundary.
+///
+/// A finite point's patch half-vectors are world-unit in-plane extents; a
+/// point at infinity anchors its patch on a unit *direction*, with `u`, `v`
+/// tangent to the direction sphere and `u × v` along `−d` (see the patch
+/// frame section of `specs/formats/sfmr-file-format.md`). Without an
+/// adjustment a demoted patch keeps world-sized vectors on the unit sphere —
+/// orders of magnitude larger than its own anchor.
+enum PatchFix {
+    /// Finite → infinity: divide the extents by the demotion-time distance
+    /// (world → angular, preserving apparent size), project the frame onto
+    /// the tangent plane of `dir`, and enforce `u × v` along `−dir`.
+    /// Degenerate projections (the surfel plane was parallel to `dir`) clear
+    /// the patch instead.
+    Demote { inv_dist: f64, dir: Vector3<f64> },
+    /// Infinity → finite: angular extents scale by the placement distance
+    /// (the stored tangent frame becomes a fronto-parallel world surfel).
+    Scale(f64),
+    /// The frame is meaningless: zero it (and its bitmap row).
+    Clear,
+}
+
+fn apply_patch_fix(
+    u: &mut Option<Array2<f32>>,
+    v: &mut Option<Array2<f32>>,
+    bitmaps: &mut Option<Array4<u8>>,
+    pidx: usize,
+    fix: PatchFix,
+) {
+    let clear = |u: &mut Option<Array2<f32>>,
+                 v: &mut Option<Array2<f32>>,
+                 bitmaps: &mut Option<Array4<u8>>| {
+        for arr in [u, v] {
+            if let Some(a) = arr.as_mut() {
+                a.row_mut(pidx).fill(0.0);
+            }
+        }
+        if let Some(b) = bitmaps.as_mut() {
+            b.index_axis_mut(Axis(0), pidx).fill(0);
+        }
+    };
+    let read = |a: &Option<Array2<f32>>| -> Option<Vector3<f64>> {
+        a.as_ref().map(|a| {
+            Vector3::new(
+                f64::from(a[[pidx, 0]]),
+                f64::from(a[[pidx, 1]]),
+                f64::from(a[[pidx, 2]]),
+            )
+        })
+    };
+    let write = |a: &mut Option<Array2<f32>>, w: Vector3<f64>| {
+        if let Some(a) = a.as_mut() {
+            a[[pidx, 0]] = w.x as f32;
+            a[[pidx, 1]] = w.y as f32;
+            a[[pidx, 2]] = w.z as f32;
+        }
+    };
+    match fix {
+        PatchFix::Scale(s) => {
+            for arr in [u, v] {
+                if let Some(a) = arr.as_mut() {
+                    for x in a.row_mut(pidx) {
+                        *x = (f64::from(*x) * s) as f32;
+                    }
+                }
+            }
+        }
+        PatchFix::Clear => clear(u, v, bitmaps),
+        PatchFix::Demote { inv_dist, dir } => {
+            let (Some(u0), Some(v0)) = (read(u), read(v)) else {
+                return;
+            };
+            if u0 == Vector3::zeros() {
+                return; // no-patch row stays the no-patch row
+            }
+            let mut ut = (u0 - u0.dot(&dir) * dir) * inv_dist;
+            let mut vt = (v0 - v0.dot(&dir) * dir) * inv_dist;
+            let cross = ut.cross(&vt);
+            let max_sq = ut.norm_squared().max(vt.norm_squared());
+            if max_sq == 0.0 || cross.norm_squared() < 1e-12 * max_sq * max_sq {
+                clear(u, v, bitmaps);
+                return;
+            }
+            if cross.dot(&dir) > 0.0 {
+                std::mem::swap(&mut ut, &mut vt);
+            }
+            write(u, ut);
+            write(v, vt);
+        }
+    }
+}
+
+/// The camera-cloud centroid — the reference origin both conversions measure
+/// point distances from (matching the materialisation placement geometry).
+fn camera_cloud_centroid(centers: &[Point3<f64>]) -> Point3<f64> {
+    if centers.is_empty() {
+        return Point3::origin();
+    }
+    let mut sum = Vector3::zeros();
+    for c in centers {
+        sum += c.coords;
+    }
+    Point3::from(sum / centers.len() as f64)
+}
 
 /// SIFT keypoint localisation noise floor (pixels).
 ///
@@ -283,10 +388,15 @@ impl SfmrReconstruction {
         let centers: Vec<Point3<f64>> = self.images.iter().map(|im| im.camera_center()).collect();
         let focal_max = self.per_image_focal_max();
         let finite_horizon = camera_extents(&centers);
+        let origin = camera_cloud_centroid(&centers);
 
         // `.sift` `positions_xy` per image, read lazily and shared across the
         // (rare) collapsed-cluster points that need a keypoint-recovered bearing.
         let mut sift_positions: HashMap<usize, Option<Array2<f32>>> = HashMap::new();
+
+        // Patch-frame adjustments for demoted points, applied after the loop
+        // (the loop holds `recon.points` mutably).
+        let mut patch_fixes: Vec<(usize, PatchFix)> = Vec::new();
 
         let mut recon = self.clone();
         for (pidx, pt) in recon.points.iter_mut().enumerate() {
@@ -316,6 +426,9 @@ impl SfmrReconstruction {
                     pt.position = Point3::from(dir);
                     pt.w = 0.0;
                     pt.normal = Vector3::zeros();
+                    // The triangulated position was meaningless, so any patch
+                    // frame solved against it is too: clear it.
+                    patch_fixes.push((pidx, PatchFix::Clear));
                 }
                 continue;
             }
@@ -353,10 +466,36 @@ impl SfmrReconstruction {
             // Relabel-only: demote on a confident infinity call; leave finite and
             // indeterminate points exactly as the solve produced them.
             if let Classification::Infinity(direction) = rc.class {
+                // World-unit patch extents become angular extents tangent to
+                // the unit direction sphere: divide by the demotion-time
+                // distance so the patch's apparent size is preserved, and
+                // project the frame per the format's infinity-patch
+                // convention.
+                let dist = (pt.position.coords - origin.coords).norm();
+                let d = direction.coords;
+                let fix = if dist > 0.0 && d.norm() > 0.0 {
+                    PatchFix::Demote {
+                        inv_dist: 1.0 / dist,
+                        dir: d.normalize(),
+                    }
+                } else {
+                    PatchFix::Clear
+                };
+                patch_fixes.push((pidx, fix));
                 pt.position = direction;
                 pt.w = 0.0;
                 pt.normal = Vector3::zeros();
             }
+        }
+
+        for (pidx, fix) in patch_fixes {
+            apply_patch_fix(
+                &mut recon.patch_u_halfvec_xyz,
+                &mut recon.patch_v_halfvec_xyz,
+                &mut recon.patch_bitmaps_y_x_rgba,
+                pidx,
+                fix,
+            );
         }
 
         recon.infinity_point_count = count_points_at_infinity(&recon.points);
@@ -386,11 +525,7 @@ impl SfmrReconstruction {
         let focal_max = self.per_image_focal_max();
 
         // Reference origin: the camera-cloud centroid.
-        let mut sum = Vector3::zeros();
-        for c in &centers {
-            sum += c.coords;
-        }
-        let origin = Point3::from(sum / centers.len() as f64);
+        let origin = camera_cloud_centroid(&centers);
 
         // Fallback placement distance when the pixel-differential geometry is
         // degenerate (every camera lies on the line origin + t·d).
@@ -401,6 +536,7 @@ impl SfmrReconstruction {
             .max(1.0);
 
         let mut recon = self.clone();
+        let mut patch_fixes: Vec<(usize, PatchFix)> = Vec::new();
         for (pidx, pt) in recon.points.iter_mut().enumerate() {
             if !pt.is_at_infinity() {
                 continue;
@@ -429,6 +565,20 @@ impl SfmrReconstruction {
 
             pt.position = Point3::from(origin.coords + t * d);
             pt.w = 1.0;
+            // Angular patch extents on the direction sphere become world-unit
+            // extents at the placement depth (the inverse of the demotion
+            // rescale in `classify_points_at_infinity`).
+            patch_fixes.push((pidx, PatchFix::Scale(t)));
+        }
+
+        for (pidx, fix) in patch_fixes {
+            apply_patch_fix(
+                &mut recon.patch_u_halfvec_xyz,
+                &mut recon.patch_v_halfvec_xyz,
+                &mut recon.patch_bitmaps_y_x_rgba,
+                pidx,
+                fix,
+            );
         }
 
         recon.infinity_point_count = count_points_at_infinity(&recon.points);

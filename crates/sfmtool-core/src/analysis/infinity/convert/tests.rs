@@ -237,3 +237,128 @@ fn materialize_is_inverse_free_but_round_trips_classification() {
     assert!(reclassified.points[0].is_at_infinity());
     assert_eq!(reclassified.infinity_point_count, 1);
 }
+
+/// Attach a patch frame (and a bitmap) to point 0 of a demo reconstruction.
+fn with_patch(recon: &mut SfmrReconstruction, half_u: f32, half_v: f32) {
+    let n = recon.points.len();
+    let mut u = Array2::<f32>::zeros((n, 3));
+    let mut v = Array2::<f32>::zeros((n, 3));
+    u[[0, 0]] = half_u;
+    v[[0, 1]] = half_v;
+    recon.patch_u_halfvec_xyz = Some(u);
+    recon.patch_v_halfvec_xyz = Some(v);
+    let mut b = Array4::<u8>::zeros((n, 2, 2, 4));
+    b.index_axis_mut(Axis(0), 0).fill(200);
+    recon.patch_bitmaps_y_x_rgba = Some(b);
+}
+
+#[test]
+fn classify_rescales_patch_frame_to_angular_extents() {
+    // Demoting a far finite point to infinity turns its anchor into a unit
+    // direction; the world-unit patch half-vectors must become angular
+    // extents (divided by the demotion-time distance from the camera-cloud
+    // centroid, preserving apparent size), tangent to the direction sphere,
+    // with u x v along -d — the format's infinity-patch convention.
+    let mut recon = SfmrReconstruction::demo(1);
+    recon.points[0].position = Point3::new(0.0, 0.0, 10_000.0);
+    recon.points[0].error = 0.5;
+    with_patch(&mut recon, 50.0, 25.0);
+
+    let centers: Vec<Point3<f64>> = recon.images.iter().map(|im| im.camera_center()).collect();
+    let origin = camera_cloud_centroid(&centers);
+    let dist = (recon.points[0].position.coords - origin.coords).norm();
+
+    let classified = recon.classify_points_at_infinity(DEFAULT_NOISE_FLOOR_PX);
+    assert!(classified.points[0].is_at_infinity());
+    let d = classified.points[0].position.coords.normalize();
+    let get = |a: &Option<Array2<f32>>| {
+        let a = a.as_ref().unwrap();
+        Vector3::new(
+            f64::from(a[[0, 0]]),
+            f64::from(a[[0, 1]]),
+            f64::from(a[[0, 2]]),
+        )
+    };
+    let u = get(&classified.patch_u_halfvec_xyz);
+    let v = get(&classified.patch_v_halfvec_xyz);
+    // Tangent to the direction sphere.
+    assert!(u.dot(&d).abs() < 1e-6 * u.norm());
+    assert!(v.dot(&d).abs() < 1e-6 * v.norm());
+    // Right-handed with the outward normal along -d.
+    assert!(u.cross(&v).dot(&d) < 0.0);
+    // Apparent half-sizes preserved (the swap may exchange the axes).
+    let mut sizes = [u.norm(), v.norm()];
+    sizes.sort_by(f64::total_cmp);
+    assert!((sizes[0] - 25.0 / dist).abs() / (25.0 / dist) < 0.01);
+    assert!((sizes[1] - 50.0 / dist).abs() / (50.0 / dist) < 0.01);
+    // The bitmap is untouched by a demotion that keeps the patch.
+    assert_eq!(
+        classified.patch_bitmaps_y_x_rgba.as_ref().unwrap()[[0, 0, 0, 0]],
+        200
+    );
+}
+
+#[test]
+fn classify_leaves_finite_point_patches_untouched() {
+    let mut recon = SfmrReconstruction::demo(1);
+    with_patch(&mut recon, 5.0, 5.0);
+    let classified = recon.classify_points_at_infinity(DEFAULT_NOISE_FLOOR_PX);
+    assert!(!classified.points[0].is_at_infinity());
+    assert_eq!(
+        classified.patch_u_halfvec_xyz.as_ref().unwrap()[[0, 0]],
+        5.0
+    );
+}
+
+#[test]
+fn materialize_rescales_patch_frame_to_world_extents() {
+    // The inverse boundary crossing: angular extents on the direction sphere
+    // become world-unit extents at the placement depth.
+    let mut recon = SfmrReconstruction::demo(1);
+    recon.points[0].position = Point3::from(Vector3::new(0.0, 0.0, 1.0));
+    recon.points[0].w = 0.0;
+    recon.points[0].normal = Vector3::zeros();
+    with_patch(&mut recon, 0.01, 0.005);
+
+    let materialised = recon.materialize_points_at_infinity();
+    let pt = &materialised.points[0];
+    assert_eq!(pt.w, 1.0);
+    let centers: Vec<Point3<f64>> = recon.images.iter().map(|im| im.camera_center()).collect();
+    let origin = camera_cloud_centroid(&centers);
+    let t = (pt.position.coords - origin.coords).norm();
+    let u = materialised.patch_u_halfvec_xyz.as_ref().unwrap();
+    assert!((f64::from(u[[0, 0]]) - 0.01 * t).abs() / (0.01 * t) < 1e-6);
+}
+
+#[test]
+fn classify_then_materialize_preserves_apparent_patch_size() {
+    // Round trip: world extent / distance is invariant across the demotion
+    // and the re-materialisation (the depths differ, the ratio must not).
+    let mut recon = SfmrReconstruction::demo(1);
+    recon.points[0].position = Point3::new(0.0, 0.0, 10_000.0);
+    recon.points[0].error = 0.5;
+    with_patch(&mut recon, 50.0, 25.0);
+
+    let centers: Vec<Point3<f64>> = recon.images.iter().map(|im| im.camera_center()).collect();
+    let origin = camera_cloud_centroid(&centers);
+    let dist0 = (recon.points[0].position.coords - origin.coords).norm();
+    let apparent0 = 50.0 / dist0;
+
+    let round = recon
+        .classify_points_at_infinity(DEFAULT_NOISE_FLOOR_PX)
+        .materialize_points_at_infinity();
+    assert!(!round.points[0].is_at_infinity());
+    let dist1 = (round.points[0].position.coords - origin.coords).norm();
+    let ua = round.patch_u_halfvec_xyz.as_ref().unwrap();
+    let va = round.patch_v_halfvec_xyz.as_ref().unwrap();
+    let norm_row = |a: &Array2<f32>| {
+        (f64::from(a[[0, 0]]).powi(2) + f64::from(a[[0, 1]]).powi(2) + f64::from(a[[0, 2]]).powi(2))
+            .sqrt()
+    };
+    // The demotion may swap the axes (handedness) — compare the larger one.
+    let apparent1 = norm_row(ua).max(norm_row(va)) / dist1;
+    assert!(
+        (apparent0 - apparent1).abs() / apparent0 < 0.01,
+        "apparent size must survive the round trip: {apparent0} vs {apparent1}"
+    );
+}

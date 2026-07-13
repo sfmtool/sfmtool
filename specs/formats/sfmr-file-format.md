@@ -932,6 +932,17 @@ and infinity points alike:
   `normalize(u × v)` is implied by the direction rather than read from
   `normals_xyz`.
 
+The finite ↔ infinity conversions
+(`SfmrReconstruction::classify_points_at_infinity` /
+`materialize_points_at_infinity`) carry patch frames across the boundary
+preserving apparent size: demotion divides the half-vectors by the
+demotion-time distance from the camera-cloud centroid and projects them onto
+the tangent plane of `d` (enforcing `u × v` along `-d`; a degenerate
+projection, or a demotion whose finite position was meaningless, clears the
+patch and its bitmap row); materialisation multiplies the angular
+half-vectors by the placement distance, yielding a fronto-parallel world
+surfel.
+
 These arrays are **optional** (present only in format version 3+, when
 `points3d/metadata.json`'s `has_uv_frames` is `true`) and **per 3D point**,
 parallel to the other `points3d/` arrays. A point with **no patch** stores
