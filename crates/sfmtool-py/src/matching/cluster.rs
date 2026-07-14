@@ -275,7 +275,7 @@ pub fn clusters_to_pair_matches(
 ///         feature index (or a degenerate affine shape) marks the member
 ///         not_evaluated rather than raising.
 ///     radius: Template half-width, keypoint-frame units (default 4.0).
-///     resolution: Template samples per axis (default 15).
+///     resolution: Template samples per axis (default 25).
 ///     window: "gaussian_disk" (default), "gaussian", or "uniform".
 ///     window_sigma: Window sigma in normalized patch coordinates (the grid
 ///         spans [-1, 1]); default 0.5 = the prototype's radius/2
@@ -311,7 +311,7 @@ pub fn clusters_to_pair_matches(
 #[pyfunction]
 #[pyo3(signature = (images, positions, affine_shapes,
                     cluster_starts, member_images, member_features, *,
-                    radius = 4.0, resolution = 15,
+                    radius = 4.0, resolution = 25,
                     window = "gaussian_disk", window_sigma = None,
                     min_zncc = 0.85, max_shift_px = 3.0,
                     max_keypoint_uncertainty = 0.35,

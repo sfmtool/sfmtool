@@ -39,7 +39,7 @@ from .._cli_utils import timed_command
 @click.option(
     "--resolution",
     type=click.IntRange(min=3),
-    default=15,
+    default=25,
     show_default=True,
     help="Template samples per axis.",
 )

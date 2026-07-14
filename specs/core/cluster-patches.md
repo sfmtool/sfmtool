@@ -199,7 +199,7 @@ Defaults (from the experiment calibration):
 | option | default | notes |
 |---|---|---|
 | `radius` | 4.0 | template half-width, keypoint-frame units; 2 is too small for the affine DOF, 6–8 buys nothing |
-| `resolution` | 15 | template samples per axis |
+| `resolution` | 25 | template samples per axis |
 | `min_zncc` | 0.85 | permissive by design — over-culling, not contamination, is the failure mode; downstream stages re-gate |
 | `max_shift_px` | 3.0 | matches the `embed-patches` keypoint-localization gate |
 | warp family | affine | fixed; similarity is a degenerate case the optimizer passes through |

@@ -178,7 +178,7 @@ pub struct ClusterRefineParams {
     pub stall_tol: f64,       // …and what counts as progress (ZNCC units)
 }
 impl Default for ClusterRefineParams {
-    // radius 4.0, resolution 15,
+    // radius 4.0, resolution 25,
     // window: PatchWindow::GaussianDisk { sigma: 15.0 / 4.0 }  (= resolution/4,
     //   the prototype's sigma = radius/2 in keypoint-frame units),
     // min_zncc 0.85, max_shift_px 3.0, max_keypoint_uncertainty 0.35,
@@ -252,13 +252,17 @@ closure, thread-local by construction (the `SearchScratch` convention,
    gates downstream still apply.
    The threshold unit is **template-grid px** (default `0.35`, the same
    default value as `embed-patches`; the scored quantity differs slightly —
-   the grid here is `resolution = 15` with the refinement window
+   the grid here is `resolution = 25` with the refinement window
    (`GaussianDisk σ = 0.5`) rather than the consensus 24 with the scorer's
-   `σ = 0.6` window, but grid-px `σ_pos` is approximately
-   resolution-invariant for the same physical content — the window mass and
-   per-grid-px gradient scaling nearly cancel). Fewer than 2 usable members → every member not
-   already `RejectedUnlocalizable` is `NotEvaluated`,
-   `reference_members[c] = u32::MAX`, done.
+   `σ = 0.6` window). Note the grid-px unit is **not**
+   resolution-invariant in practice: on dino_dog_toy, moving the template
+   from 15 to 31 samples per axis cut `RejectedUnlocalizable` from 1,913
+   to 372 members at the same `0.35` threshold, so the gate weakens as
+   resolution rises. A future update should re-express the threshold in a
+   resolution-independent unit (keypoint-frame or source px) so the gate's
+   physical meaning survives resolution changes. Fewer than 2 usable
+   members → every member not already `RejectedUnlocalizable` is
+   `NotEvaluated`, `reference_members[c] = u32::MAX`, done.
 2. **Reference selection.** The usable member with the largest scale
    `√|det A|`; ties break to the lowest global member index (determinism).
    Reference policy is data, not format — smarter policies (template
@@ -473,7 +477,7 @@ In `crates/sfmtool-py/src/matching/cluster.rs`:
 #[pyfunction]
 #[pyo3(signature = (images, positions, affine_shapes,
                     cluster_starts, member_images, member_features, *,
-                    radius = 4.0, resolution = 15,
+                    radius = 4.0, resolution = 25,
                     window = "gaussian_disk", window_sigma = None,
                     min_zncc = 0.85, max_shift_px = 3.0,
                     max_keypoint_uncertainty = 0.35,
@@ -523,7 +527,7 @@ category, spec to live at `specs/cli/cluster-patches-command.md`:
 
 ```
 sfm cluster-patches -i clusters.matches [-o out.matches]
-    [--radius 4.0] [--resolution 15] [--min-zncc 0.85] [--max-shift 3.0]
+    [--radius 4.0] [--resolution 25] [--min-zncc 0.85] [--max-shift 3.0]
     [--max-keypoint-uncertainty 0.35]
 ```
 
