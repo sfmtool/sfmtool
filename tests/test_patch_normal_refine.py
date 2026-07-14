@@ -106,6 +106,35 @@ def test_refine_normals_improves_consensus(
     assert np.nanmax(moved) > 1e-4
 
 
+def test_bilinear_mip_sampler_runs_end_to_end(seoul_bull_workspace: Path):
+    """``sampler="bilinear_mip"`` is accepted by the binding and carries a
+    refinement end-to-end (unknown samplers are still rejected)."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    sample = _sample_point_ids(cloud, n=50)
+
+    res = cloud.refine_normals(
+        recon,
+        images,
+        point_indexes=sample,
+        resolution=12,
+        init_steps=5,
+        refine_levels=2,
+        sampler="bilinear_mip",
+    )
+    photo = res["photoconsistency"]
+    init = res["init_photoconsistency"]
+    scored = np.isfinite(photo) & np.isfinite(init)
+    assert scored.sum() > 0
+    assert np.all(photo[scored] >= init[scored] - 1e-9)
+
+    with pytest.raises(ValueError, match="unknown sampler"):
+        cloud.refine_normals(recon, images, point_indexes=sample, sampler="bogus")
+
+
 def test_confidence_is_opt_in(seoul_bull_workspace: Path):
     """Confidence is NaN unless ``compute_confidence=True`` (off by default)."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)

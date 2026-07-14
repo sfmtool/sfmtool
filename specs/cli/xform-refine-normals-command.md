@@ -116,7 +116,7 @@ CLI re-specifies nothing and the two layers cannot drift.
 | `search_robust_iters`| `none`         | `refine_normals` (cheaper search-only objective; see below) |
 | `window`            | `gaussian_disk` | `refine_normals`                  |
 | `window_sigma`      | `0.6`           | `refine_normals`                  |
-| `sampler`           | `bilinear`      | `refine_normals` (`bilinear`/`anisotropic`) |
+| `sampler`           | `bilinear`      | `refine_normals` (`bilinear`/`bilinear_mip`/`anisotropic`; `bilinear_mip` takes one bilinear tap from the mip level nearest the warp's compression — use it when cross-scale views alias under `bilinear` but the anisotropic cost is not warranted) |
 | `min_valid_fraction`| `0.6`           | `refine_normals`                  |
 | `min_views`         | `3`             | `refine_normals`                  |
 | `cache`             | `fronto`        | `refine_normals` candidate scoring (`off`/`fronto`; see below) |

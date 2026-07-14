@@ -30,7 +30,7 @@ from .._sfmtool import SfmrReconstruction
 from ._images import load_workspace_images
 
 _WINDOWS = ("gaussian_disk", "gaussian", "uniform")
-_SAMPLERS = ("bilinear", "anisotropic")
+_SAMPLERS = ("bilinear", "bilinear_mip", "anisotropic")
 _SEARCH_STRATEGIES = ("exhaustive", "plus_descent")
 
 

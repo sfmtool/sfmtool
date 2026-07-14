@@ -559,7 +559,9 @@ impl PyPatchCloud {
     ///     window: Per-pixel scoring weight — ``"gaussian_disk"`` (default),
     ///         ``"gaussian"``, or ``"uniform"``.
     ///     sampler: How to sample the source pyramids — ``"bilinear"`` (default;
-    ///         fastest, and the found normal barely differs) or ``"anisotropic"``
+    ///         fastest, and the found normal barely differs), ``"bilinear_mip"``
+    ///         (single bilinear tap from the nearest mip level; bounds aliasing on
+    ///         cross-scale views at ~bilinear cost), or ``"anisotropic"``
     ///         (anti-aliased oblique views; keeps the reported Φ/confidence
     ///         unbiased, ~1.6-3x slower).
     ///     point_indexes: If given, refine only the patches with these source point
@@ -719,10 +721,11 @@ impl PyPatchCloud {
         };
         let sampler = match sampler {
             "bilinear" => Sampler::Bilinear,
+            "bilinear_mip" => Sampler::BilinearMip,
             "anisotropic" => Sampler::Anisotropic,
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "unknown sampler: {other:?} (expected bilinear|anisotropic)"
+                    "unknown sampler: {other:?} (expected bilinear|bilinear_mip|anisotropic)"
                 )))
             }
         };
@@ -935,7 +938,8 @@ impl PyPatchCloud {
     ///     window: Per-pixel scoring weight — ``"gaussian_disk"`` (default),
     ///         ``"gaussian"``, or ``"uniform"``.
     ///     window_sigma: Window sigma for the gaussian windows.
-    ///     sampler: ``"bilinear"`` (default) or ``"anisotropic"``.
+    ///     sampler: ``"bilinear"`` (default), ``"bilinear_mip"``, or
+    ///         ``"anisotropic"``.
     ///     min_valid_fraction: Per-view floor on the window-weighted valid-pixel
     ///         fraction; a view below it does not cover enough of the patch.
     ///     min_track_views: Minimum number of *valid* track views to build a
@@ -1014,10 +1018,11 @@ impl PyPatchCloud {
         };
         let sampler = match sampler {
             "bilinear" => Sampler::Bilinear,
+            "bilinear_mip" => Sampler::BilinearMip,
             "anisotropic" => Sampler::Anisotropic,
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "unknown sampler: {other:?} (expected bilinear|anisotropic)"
+                    "unknown sampler: {other:?} (expected bilinear|bilinear_mip|anisotropic)"
                 )))
             }
         };
@@ -1115,7 +1120,8 @@ impl PyPatchCloud {
     ///     resolution: The R×R patch grid the consensus / ZNCC are scored on.
     ///     window: ``"gaussian_disk"`` (default), ``"gaussian"``, or ``"uniform"``.
     ///     window_sigma: Window sigma for the gaussian windows.
-    ///     sampler: ``"bilinear"`` (default) or ``"anisotropic"``.
+    ///     sampler: ``"bilinear"`` (default), ``"bilinear_mip"``, or
+    ///         ``"anisotropic"``.
     ///     robust_iters: IRLS passes for the robust consensus.
     ///     convergence_px: Stop once a round's mean round-over-round change of
     ///         the per-view refined positions is below this many patch-grid px.
@@ -1197,10 +1203,11 @@ impl PyPatchCloud {
         };
         let sampler = match sampler {
             "bilinear" => Sampler::Bilinear,
+            "bilinear_mip" => Sampler::BilinearMip,
             "anisotropic" => Sampler::Anisotropic,
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "unknown sampler: {other:?} (expected bilinear|anisotropic)"
+                    "unknown sampler: {other:?} (expected bilinear|bilinear_mip|anisotropic)"
                 )))
             }
         };
@@ -1336,8 +1343,9 @@ impl PyPatchCloud {
     ///     resolution: The R×R patch grid the consensus / ECC are scored on.
     ///     window: ``"gaussian_disk"`` (default), ``"gaussian"``, or ``"uniform"``.
     ///     window_sigma: Window sigma for the gaussian windows.
-    ///     sampler: ``"bilinear"`` (default) or ``"anisotropic"`` (the MVP uses a
-    ///         bilinear finite-difference Jacobian for both).
+    ///     sampler: ``"bilinear"`` (default), ``"bilinear_mip"``, or
+    ///         ``"anisotropic"`` (value and gradient are rendered with the same
+    ///         sampler).
     ///     robust_iters: IRLS passes for the robust consensus.
     ///     max_outer_sweeps: Max outer sweeps of the alternating loop (refresh
     ///         consensus → move every view). ``1`` (default) is the
@@ -1492,10 +1500,11 @@ impl PyPatchCloud {
         };
         let sampler = match sampler {
             "bilinear" => Sampler::Bilinear,
+            "bilinear_mip" => Sampler::BilinearMip,
             "anisotropic" => Sampler::Anisotropic,
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "unknown sampler: {other:?} (expected bilinear|anisotropic)"
+                    "unknown sampler: {other:?} (expected bilinear|bilinear_mip|anisotropic)"
                 )))
             }
         };

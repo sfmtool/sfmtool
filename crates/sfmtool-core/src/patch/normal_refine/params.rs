@@ -62,6 +62,14 @@ pub enum Sampler {
     /// moves the found normal (within ~1° of anisotropic on pinhole cameras) at a
     /// fraction of the cost.
     Bilinear,
+    /// Single bilinear sample from the pyramid level nearest the warp's local
+    /// compression (`round(log2(sigma_major))` per pixel, from the Jacobian
+    /// SVD). The middle point between the other two: where `Bilinear` aliases
+    /// on a compressive warp (e.g. cross-scale views with one camera much
+    /// closer), the mip level bounds the aliasing at ≈ bilinear cost — at the
+    /// price of blurring oblique views, whose anisotropic footprint only
+    /// `Anisotropic`'s multi-tap walk resolves.
+    BilinearMip,
     /// Anisotropic sampling over the pyramid — the patch warp's Jacobian SVD picks
     /// the level, de-aliasing oblique / grazing views. Costs ~1.6–3× more but keeps
     /// the reported `Φ`/confidence unbiased (bilinear depresses `Φ` on oblique

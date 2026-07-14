@@ -298,6 +298,7 @@ fn bench_refine(crit: &mut Criterion) {
     group.sample_size(20);
     for (name, sampler) in [
         ("anisotropic", Sampler::Anisotropic),
+        ("bilinear_mip", Sampler::BilinearMip),
         ("bilinear", Sampler::Bilinear),
     ] {
         let params = NormalRefineParams {

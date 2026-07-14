@@ -780,6 +780,259 @@ fn remap_aniso_with_grad_compressive_isotropic_matches_finite_difference() {
     assert_compressive_aniso_gradient_matches_fd(3.0, 3.0, 2.5, 2.5, 1, "isotropic 3×3");
 }
 
+// -----------------------------------------------------------------------
+// remap_bilinear_mip tests
+// -----------------------------------------------------------------------
+
+/// Deterministic pseudo-random single-channel texture with per-pixel detail, so
+/// pyramid levels genuinely differ (a smooth texture box-averages to nearly the
+/// same values, which would let a level-selection bug slip through the u8
+/// rounding).
+fn noisy_test_image(w: u32, h: u32) -> ImageU8 {
+    let data: Vec<u8> = (0..(w as usize * h as usize))
+        .map(|i| ((i * 37 + 11) % 256) as u8)
+        .collect();
+    ImageU8::new(w, h, 1, data)
+}
+
+#[test]
+fn remap_bilinear_mip_matches_bilinear_when_uncompressed() {
+    // Identity warp (sigma_major = 1) and a mild 1.3x compression
+    // (round(log2(1.3)) = 0): every pixel selects level 0, so the output is
+    // bit-exact with remap_bilinear from the full-resolution image.
+    let img = noisy_test_image(32, 32);
+    let pyr = ImageU8Pyramid::build(&img, 4);
+
+    let mut ident = identity_warp_map(20, 20);
+    ident.compute_svd();
+    assert_eq!(
+        remap_bilinear_mip(&pyr, &ident).data(),
+        remap_bilinear(&img, &ident).data(),
+        "identity warp must be bit-exact with remap_bilinear"
+    );
+
+    let mut mild = scaled_warp_map(20, 20, 1.3, 1.3);
+    mild.compute_svd();
+    assert_eq!(
+        remap_bilinear_mip(&pyr, &mild).data(),
+        remap_bilinear(&img, &mild).data(),
+        "sub-sqrt(2) compression must still select level 0 (bit-exact)"
+    );
+}
+
+#[test]
+fn remap_bilinear_mip_selects_level_from_compression() {
+    // A uniformly 2x- (4x-) compressing affine map has sigma_major = 2 (4), so
+    // every pixel selects level 1 (2): the output must equal directly sampling
+    // that pyramid level at (sx / 2^l, sy / 2^l) with remap_bilinear's rounding.
+    let img = noisy_test_image(64, 64);
+    let pyr = ImageU8Pyramid::build(&img, 4);
+
+    for (scale, level) in [(2.0f32, 1usize), (4.0, 2)] {
+        let w_dst = (64.0 / scale) as u32 - 1;
+        // The sub-pixel source offset keeps the sample points off the exact
+        // 2x2 box-average positions, where a level-0 bilinear tap coincides
+        // with the level-1 box downsample and the two levels are
+        // indistinguishable (a pure `scaled_warp_map` at scale 2 lands
+        // exactly there).
+        let mut map = offset_scaled_warp_map(w_dst, w_dst, scale, 0.7, 0.7);
+        map.compute_svd();
+        let out = remap_bilinear_mip(&pyr, &map);
+        let lvl_scale = (1u32 << level) as f32;
+        let mut differs_from_level0 = false;
+        for row in 0..w_dst {
+            for col in 0..w_dst {
+                let (sx, sy) = map.get(col, row);
+                let val = sample_bilinear_u8(pyr.level(level), sx / lvl_scale, sy / lvl_scale, 0);
+                let want = (val + 0.5).clamp(0.0, 255.0) as u8;
+                assert_eq!(
+                    out.get_pixel(col, row, 0),
+                    want,
+                    "scale {scale}: ({col}, {row}) should sample level {level}"
+                );
+                let val0 = sample_bilinear_u8(pyr.level(0), sx, sy, 0);
+                if (val0 + 0.5).clamp(0.0, 255.0) as u8 != want {
+                    differs_from_level0 = true;
+                }
+            }
+        }
+        // Sanity: on this texture the selected level is distinguishable from a
+        // plain level-0 render, so the assertions above genuinely pin the level.
+        assert!(
+            differs_from_level0,
+            "scale {scale}: fixture cannot distinguish level {level} from level 0"
+        );
+    }
+}
+
+#[test]
+fn remap_bilinear_mip_clamps_to_last_level() {
+    // 16x compression wants level 4, but the pyramid only has levels 0..=2:
+    // the selection must clamp to the last built level.
+    let img = noisy_test_image(64, 64);
+    let pyr = ImageU8Pyramid::build(&img, 3);
+    let mut map = scaled_warp_map(4, 4, 16.0, 16.0);
+    map.compute_svd();
+    let out = remap_bilinear_mip(&pyr, &map);
+    let last = pyr.num_levels() - 1;
+    let lvl_scale = (1u32 << last) as f32;
+    for row in 0..4u32 {
+        for col in 0..4u32 {
+            let (sx, sy) = map.get(col, row);
+            let val = sample_bilinear_u8(pyr.level(last), sx / lvl_scale, sy / lvl_scale, 0);
+            let want = (val + 0.5).clamp(0.0, 255.0) as u8;
+            assert_eq!(out.get_pixel(col, row, 0), want, "({col}, {row})");
+        }
+    }
+}
+
+#[test]
+fn remap_bilinear_mip_nan_gives_black() {
+    let img = noisy_test_image(8, 8);
+    let pyr = ImageU8Pyramid::build(&img, 3);
+    // Warp map with NaN entries (same layout as the remap_bilinear NaN test).
+    let data = vec![f32::NAN, f32::NAN, 1.5, 0.5, 0.5, 1.5, f32::NAN, f32::NAN];
+    let mut map = WarpMap::new(2, 2, data);
+    map.compute_svd();
+    let result = remap_bilinear_mip(&pyr, &map);
+    assert_eq!(result.get_pixel(0, 0, 0), 0);
+    assert_eq!(result.get_pixel(1, 1, 0), 0);
+    // Valid pixels sample normally (identity-scale here, so level 0).
+    assert_eq!(
+        result.get_pixel(1, 0, 0),
+        (sample_bilinear_u8(pyr.level(0), 1.5, 0.5, 0) + 0.5).clamp(0.0, 255.0) as u8
+    );
+    assert_eq!(
+        result.get_pixel(0, 1, 0),
+        (sample_bilinear_u8(pyr.level(0), 0.5, 1.5, 0) + 0.5).clamp(0.0, 255.0) as u8
+    );
+}
+
+#[test]
+#[should_panic(expected = "requires WarpMap SVD")]
+fn remap_bilinear_mip_panics_without_svd() {
+    let img = ImageU8::from_channels(4, 4, 1);
+    let pyr = ImageU8Pyramid::build(&img, 2);
+    let map = identity_warp_map(4, 4);
+    remap_bilinear_mip(&pyr, &map);
+}
+
+#[test]
+#[should_panic(expected = "requires WarpMap SVD")]
+fn remap_bilinear_mip_with_grad_panics_without_svd() {
+    let img = ImageU8::from_channels(4, 4, 1);
+    let pyr = ImageU8Pyramid::build(&img, 2);
+    let map = identity_warp_map(4, 4);
+    remap_bilinear_mip_with_grad(&pyr, &map);
+}
+
+/// A uniformly `scale`-compressing warp with a constant sub-pixel source offset
+/// `(ox, oy)` (full-res source px). The offset keeps the level-l sample points
+/// off the bilinear cell boundaries (a pure `scaled_warp_map` at scale 2 lands
+/// exactly on level-1 pixel centers, where the piecewise gradient switches
+/// cells), and shifting it by ±h realizes an exact source-coordinate
+/// translation for finite differencing. The linear part is unchanged, so the
+/// SVD — and hence the selected mip level — is identical across shifts.
+fn offset_scaled_warp_map(width: u32, height: u32, scale: f32, ox: f32, oy: f32) -> WarpMap {
+    let mut data = vec![0.0f32; 2 * (width as usize) * (height as usize)];
+    for row in 0..height {
+        for col in 0..width {
+            let idx = (row as usize * width as usize + col as usize) * 2;
+            data[idx] = scale * (col as f32 + 0.5) + ox;
+            data[idx + 1] = scale * (row as f32 + 0.5) + oy;
+        }
+    }
+    WarpMap::new(width, height, data)
+}
+
+#[test]
+fn remap_bilinear_mip_with_grad_value_matches_value_only() {
+    // The grad variant returns the raw f32 of the same per-level bilinear tap
+    // the value-only path rounds to u8 — they must agree within rounding, on
+    // both a level-0 (identity) and a level-1 (2x-compressive) map.
+    let pyr = smooth_compressive_test_pyramid();
+    for scale in [1.0f32, 2.0] {
+        let w_dst = 20u32;
+        let mut map = offset_scaled_warp_map(w_dst, w_dst, scale, 0.3, 0.37);
+        map.compute_svd();
+        let v_only = remap_bilinear_mip(&pyr, &map);
+        let vg = remap_bilinear_mip_with_grad(&pyr, &map);
+        for row in 0..w_dst {
+            for col in 0..w_dst {
+                let want = v_only.get_pixel(col, row, 0) as f32;
+                let (got, _, _) = vg.get_pixel_with_grad(col, row, 0);
+                assert!(
+                    (want - got.round()).abs() < 1.0,
+                    "scale {scale}: value mismatch at ({col}, {row}): u8={want}, f32={got}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn remap_bilinear_mip_with_grad_matches_finite_difference_in_full_res_coords() {
+    // Gradients must come back in FULL-RES source-pixel coords: a bilinear
+    // gradient at level l is per level-pixel, so the sampler rescales it by
+    // 1/2^l. Verify against central finite differences of the (unquantized)
+    // value path under an exact ±h source-coordinate translation — at level 1
+    // an unscaled gradient would be 2x too large, which this catches.
+    let pyr = smooth_compressive_test_pyramid();
+    let w_dst = 20u32;
+    let h: f32 = 0.05; // full-res source px; well inside one level-1 cell
+    for scale in [2.0f32, 4.0] {
+        // Offset 0.3 full-res px keeps the level sample points off the
+        // pixel-center cell boundaries, so the ±h probes stay inside one
+        // bilinear cell where the analytic gradient is exact.
+        let mk = |ox: f32, oy: f32| {
+            let mut m = offset_scaled_warp_map(w_dst, w_dst, scale, ox, oy);
+            m.compute_svd();
+            m
+        };
+        let map = mk(0.3, 0.37);
+        // Sanity: sigma_major >= scale means a level > 0 is engaged, so the
+        // 1/2^l gradient rescale is actually exercised.
+        let (smaj, _, _, _) = map.get_svd(w_dst / 2, w_dst / 2);
+        assert!(
+            smaj >= scale - 0.1,
+            "fixture not compressive enough: sigma_major={smaj}"
+        );
+
+        let vg = remap_bilinear_mip_with_grad(&pyr, &map);
+        let v_xp = remap_bilinear_mip_with_grad(&pyr, &mk(0.3 + h, 0.37));
+        let v_xm = remap_bilinear_mip_with_grad(&pyr, &mk(0.3 - h, 0.37));
+        let v_yp = remap_bilinear_mip_with_grad(&pyr, &mk(0.3, 0.37 + h));
+        let v_ym = remap_bilinear_mip_with_grad(&pyr, &mk(0.3, 0.37 - h));
+
+        let mut max_grad_mag = 0.0f32;
+        for row in 2..w_dst - 2 {
+            for col in 2..w_dst - 2 {
+                let (_, gx, gy) = vg.get_pixel_with_grad(col, row, 0);
+                let gx_fd = (v_xp.get_pixel_with_grad(col, row, 0).0
+                    - v_xm.get_pixel_with_grad(col, row, 0).0)
+                    / (2.0 * h);
+                let gy_fd = (v_yp.get_pixel_with_grad(col, row, 0).0
+                    - v_ym.get_pixel_with_grad(col, row, 0).0)
+                    / (2.0 * h);
+                max_grad_mag = max_grad_mag.max(gx.abs().max(gy.abs()));
+                assert!(
+                    (gx - gx_fd).abs() < 0.05,
+                    "scale {scale}: dI/dx at ({col}, {row}): analytic={gx}, fd={gx_fd}"
+                );
+                assert!(
+                    (gy - gy_fd).abs() < 0.05,
+                    "scale {scale}: dI/dy at ({col}, {row}): analytic={gy}, fd={gy_fd}"
+                );
+            }
+        }
+        // Sanity: the texture has real gradient signal at this level.
+        assert!(
+            max_grad_mag > 0.1,
+            "scale {scale}: fixture gradient too small to validate ({max_grad_mag})"
+        );
+    }
+}
+
 #[test]
 fn remap_aniso_with_grad_compressive_anisotropic_matches_finite_difference() {
     // Anisotropic compression: `scale_x = 4`, `scale_y = 1.2` ⇒ `sigma_major =

@@ -491,6 +491,25 @@ region — no tangential over-blur.
 pub fn remap_aniso(src: &ImageU8, map: &WarpMap, max_anisotropy: u32) -> ImageU8;
 ```
 
+#### Single-Tap Mip Sampling
+
+`remap_bilinear_mip(pyramid, map)` (and its value+gradient twin
+`remap_bilinear_mip_with_grad[_into]`) is the middle point between
+`remap_bilinear` and the anisotropic path: per output pixel it selects the
+pyramid level nearest the warp's local compression —
+`level = round(log2(max(sigma_major, 1)))`, clamped to the built levels — and
+takes a single bilinear sample there at `(x / 2^level, y / 2^level)`. Using
+`sigma_major` (the larger singular value, the GL texture-LOD convention) means
+the chosen level never aliases in any direction; on anisotropic footprints it
+over-blurs the minor axis, which remains `remap_aniso`'s job. Use it where a
+warp compresses the source (e.g. cross-scale patch renders) but the multi-tap
+anisotropic cost is not warranted: aliasing stays bounded at ≈ bilinear cost.
+Like the anisotropic path it requires `map.compute_svd()` first; on a
+non-compressive map the output is bit-identical to `remap_bilinear`. The
+gradient twin returns `(∂I/∂x, ∂I/∂y)` rescaled to full-resolution source-pixel
+coords (a level-`l` bilinear gradient is per level-pixel, so it is divided by
+`2^l`).
+
 #### Pyramid Construction
 
 The Gaussian pyramid for `ImageU8` is built by repeated box-filter or Gaussian

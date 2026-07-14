@@ -5,7 +5,7 @@
 //! view of a patch once, then score it ([`PatchViewStack::score`]) and fuse the
 //! representative RGBA texture ([`PatchViewStack::fuse`]) without re-rendering.
 
-use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear};
+use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, remap_bilinear_mip};
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
 
@@ -107,6 +107,10 @@ impl PatchViewStack {
                     prof::SVD.time(|| map.compute_svd());
                     prof::REMAP
                         .time(|| remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY))
+                }
+                Sampler::BilinearMip => {
+                    prof::SVD.time(|| map.compute_svd());
+                    prof::REMAP.time(|| remap_bilinear_mip(view.pyramid, &map))
                 }
                 Sampler::Bilinear => {
                     prof::REMAP.time(|| remap_bilinear(view.pyramid.level(0), &map))
