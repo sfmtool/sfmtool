@@ -38,7 +38,7 @@ _LOW_CONFIDENCE_THRESHOLD = 0.1
 
 _OBJECTIVES = ("robust", "mean")
 _WINDOWS = ("gaussian_disk", "gaussian", "uniform")
-_SAMPLERS = ("bilinear", "anisotropic")
+_SAMPLERS = ("bilinear", "bilinear_mip", "anisotropic")
 _CACHES = ("off", "fronto")
 _QUALITIES = ("none", "coarse", "fine")
 

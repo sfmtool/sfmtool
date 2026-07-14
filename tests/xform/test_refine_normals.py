@@ -71,6 +71,12 @@ def test_parse_tolerates_blank_segments():
     assert t.init_steps == 5
 
 
+def test_parse_bilinear_mip_sampler():
+    """The single-tap mip sampler round-trips through the parser."""
+    t = parse_refine_normals_params("sampler=bilinear_mip")
+    assert t.sampler == "bilinear_mip"
+
+
 def test_parse_unknown_key_rejected():
     import click
 

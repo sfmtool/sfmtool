@@ -19,11 +19,12 @@ use crate::camera::warp_map::{WarpMap, PAR_MIN_PIXELS};
 /// `render_remap`/`remap` *timing* slightly when profiling is on, so take the
 /// counts from an instrumented run and the timings from a clean run.
 ///
-/// Counted paths: `remap_bilinear`, `remap_aniso_with_pyramid`, and the bilinear
-/// gradient path `remap_bilinear_with_grad_into` (the default subpixel sampler).
-/// The anisotropic *gradient* path (`remap_aniso_with_grad_into`) is not
-/// tap-counted yet — it is only reached when the subpixel stage runs with
-/// `Sampler::Anisotropic`, which is not the default.
+/// Counted paths: `remap_bilinear`, `remap_bilinear_mip`,
+/// `remap_aniso_with_pyramid`, and the bilinear gradient path
+/// `remap_bilinear_with_grad_into` (the default subpixel sampler).
+/// The anisotropic and mip *gradient* paths (`remap_aniso_with_grad_into`,
+/// `remap_bilinear_mip_with_grad_into`) are not tap-counted yet — they are only
+/// reached when the subpixel stage runs with a non-default sampler.
 pub mod prof {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::OnceLock;
@@ -565,6 +566,95 @@ pub fn remap_bilinear(src: &ImageU8, map: &WarpMap) -> ImageU8 {
     }
 }
 
+/// Pick the pyramid level for a single bilinear tap from the warp's local
+/// compression footprint `rho = sigma_major` (the **larger** singular value of
+/// the local Jacobian — the GL texture-LOD convention: it bounds the source
+/// footprint in every direction, so the chosen level never aliases; on
+/// anisotropic warps it over-blurs the minor axis, which remains
+/// [`remap_aniso_with_pyramid`]'s job to resolve). The level is
+/// `l = round(log2(max(rho, 1)))`, clamped to `[0, num_levels - 1]`.
+///
+/// This deliberately differs from `cluster_refine::level_for_map`, which uses
+/// `floor(log2(s_min))` — a sharpness-biased choice that tolerates up to 2×
+/// aliasing along the compressed axis and is a pinned kernel contract there.
+/// Here the nearest-level rounding on `sigma_major` keeps the residual
+/// aliasing bounded by √2× while staying within half an octave of the ideal
+/// blur.
+///
+/// A NaN `sigma_major` (degenerate local Jacobian) resolves to level 0 via the
+/// `max(rho, 1)` (`f32::max` returns the non-NaN operand).
+#[inline]
+fn mip_level_for_sigma(sigma_major: f32, num_levels: usize) -> usize {
+    let l = sigma_major.max(1.0).log2().round() as usize;
+    l.min(num_levels - 1)
+}
+
+/// Apply a warp map with a single bilinear sample from the nearest mip level.
+///
+/// The middle point between [`remap_bilinear`] (plain bilinear from the
+/// full-resolution image — aliases when the warp compresses the source, e.g.
+/// cross-scale views where one camera is much closer) and
+/// [`remap_aniso_with_pyramid`] (Jacobian-SVD mip selection + multi-tap along
+/// the major axis — de-aliases but costs 1.6–3×): pick the closest pyramid
+/// level from the warp's local compression and take a single bilinear sample
+/// there — aliasing bounded, cost ≈ bilinear.
+///
+/// For each output pixel, reads the precomputed SVD of the local Jacobian and
+/// selects the pyramid level from `sigma_major` (see [`mip_level_for_sigma`],
+/// including how this differs from `cluster_refine::level_for_map`). The
+/// full-resolution source coordinate `(x, y)` maps to `(x / 2^l, y / 2^l)` at
+/// level `l` under the pixel-center-at-0.5 convention (matching
+/// [`ImageU8Pyramid`]'s 2×2 box downsample). NaN map entries stay black,
+/// exactly like [`remap_bilinear`]. On a non-compressive map every pixel
+/// selects level 0, so the output is bit-identical to [`remap_bilinear`].
+///
+/// Requires [`WarpMap::compute_svd`] to have been called first (panics if not).
+pub fn remap_bilinear_mip(pyramid: &ImageU8Pyramid, map: &WarpMap) -> ImageU8 {
+    assert!(
+        map.has_svd(),
+        "remap_bilinear_mip requires WarpMap SVD data; call compute_svd() first"
+    );
+
+    let out_w = map.width();
+    let out_h = map.height();
+    let c = pyramid.level(0).channels();
+    let num_levels = pyramid.num_levels();
+
+    let data = remap_rows(out_w, out_h, c, |row, row_data| {
+        let mut sampled = 0u64;
+        for col in 0..out_w {
+            let (sx, sy) = map.get(col, row);
+            if sx.is_nan() || sy.is_nan() {
+                // Leave as zero (black).
+                continue;
+            }
+            sampled += 1;
+            let (sigma_major, _, _, _) = map.get_svd(col, row);
+            let level = mip_level_for_sigma(sigma_major, num_levels);
+            let scale = (1u32 << level) as f32;
+            let base = col as usize * c as usize;
+            sample_bilinear_u8_all(
+                pyramid.level(level),
+                sx / scale,
+                sy / scale,
+                &mut row_data[base..base + c as usize],
+            );
+        }
+        prof::add(&prof::PX_SAMPLED, sampled);
+        prof::add(&prof::TAPS, sampled * c as u64);
+    });
+
+    prof::add(&prof::CALLS, 1);
+    prof::add(&prof::PX_TOTAL, out_w as u64 * out_h as u64);
+
+    ImageU8 {
+        width: out_w,
+        height: out_h,
+        channels: c,
+        data,
+    }
+}
+
 /// Apply a warp map with anisotropic filtering.
 ///
 /// Requires [`WarpMap::compute_svd`] to have been called first (panics if not).
@@ -1082,6 +1172,93 @@ pub fn remap_bilinear_with_grad_into(src: &ImageU8, map: &WarpMap, out: &mut Ima
 
     prof::add(&prof::CALLS, 1);
     prof::add(&prof::PX_TOTAL, out_w as u64 * out_h as u64);
+}
+
+/// Like [`remap_bilinear_mip`], but additionally returns the analytic image
+/// gradient `(∂I/∂x, ∂I/∂y)` in **full-resolution** source-pixel coords per
+/// output pixel and channel. Value and gradient are computed at the same mip
+/// level: a bilinear gradient at level `l` is per *level*-pixel, and the change
+/// of variables `x_l = x_0 / 2^l` gives `∂I/∂x_0 = (∂I/∂x_l) / 2^l` — the same
+/// convention as [`remap_aniso_with_grad`].
+///
+/// Owning version. For repeated rendering prefer
+/// [`remap_bilinear_mip_with_grad_into`].
+///
+/// Requires [`WarpMap::compute_svd`] to have been called first.
+pub fn remap_bilinear_mip_with_grad(pyramid: &ImageU8Pyramid, map: &WarpMap) -> ImageF32WithGrad {
+    let mut out = ImageF32WithGrad::empty();
+    remap_bilinear_mip_with_grad_into(pyramid, map, &mut out);
+    out
+}
+
+/// [`remap_bilinear_mip_with_grad`] writing into an `out` scratch, resized in
+/// place. Level selection is per pixel from the precomputed SVD (see
+/// [`mip_level_for_sigma`], including how it differs from
+/// `cluster_refine::level_for_map`); NaN map entries write zero value and
+/// gradient, exactly like [`remap_bilinear_with_grad_into`].
+///
+/// Requires [`WarpMap::compute_svd`] to have been called first.
+pub fn remap_bilinear_mip_with_grad_into(
+    pyramid: &ImageU8Pyramid,
+    map: &WarpMap,
+    out: &mut ImageF32WithGrad,
+) {
+    assert!(
+        map.has_svd(),
+        "remap_bilinear_mip_with_grad requires WarpMap SVD data; call compute_svd() first"
+    );
+    let out_w = map.width();
+    let out_h = map.height();
+    let c = pyramid.level(0).channels();
+    let num_levels = pyramid.num_levels();
+    out.resize(out_w, out_h, c);
+
+    let fill_row = |row: u32, val_row: &mut [f32], gx_row: &mut [f32], gy_row: &mut [f32]| {
+        for col in 0..out_w {
+            let (sx, sy) = map.get(col, row);
+            let base = col as usize * c as usize;
+            if sx.is_nan() || sy.is_nan() {
+                for ch in 0..c as usize {
+                    val_row[base + ch] = 0.0;
+                    gx_row[base + ch] = 0.0;
+                    gy_row[base + ch] = 0.0;
+                }
+                continue;
+            }
+            let (sigma_major, _, _, _) = map.get_svd(col, row);
+            let level = mip_level_for_sigma(sigma_major, num_levels);
+            let scale = (1u32 << level) as f32;
+            let end = base + c as usize;
+            sample_bilinear_with_grad_u8_all(
+                pyramid.level(level),
+                sx / scale,
+                sy / scale,
+                &mut val_row[base..end],
+                &mut gx_row[base..end],
+                &mut gy_row[base..end],
+            );
+            // Per-level bilinear gradient is in that level's pixel coords;
+            // rescale to full-res source-pixel coords (`/ scale`). Level 0 is
+            // untouched (division by 1 is exact), keeping the level-0 output
+            // bit-identical to `remap_bilinear_with_grad_into`.
+            if level > 0 {
+                for k in base..end {
+                    gx_row[k] /= scale;
+                    gy_row[k] /= scale;
+                }
+            }
+        }
+    };
+
+    remap_rows_f32x3_into(
+        out_w,
+        out_h,
+        c,
+        &mut out.value,
+        &mut out.grad_x,
+        &mut out.grad_y,
+        fill_row,
+    );
 }
 
 #[cfg(test)]

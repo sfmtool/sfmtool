@@ -75,7 +75,7 @@ exactly, so the CLI re-specifies nothing and the two layers cannot drift.
 | `resolution`           | `24`            | `refine_keypoints` (R×R patch grid)            |
 | `window`               | `gaussian_disk` | `refine_keypoints` (`gaussian_disk`/`gaussian`/`uniform`) |
 | `window_sigma`         | `0.6`           | `refine_keypoints`                             |
-| `sampler`              | `bilinear`      | `refine_keypoints` (`bilinear`/`anisotropic`)  |
+| `sampler`              | `bilinear`      | `refine_keypoints` (`bilinear`/`bilinear_mip`/`anisotropic`; `bilinear_mip` takes one bilinear tap from the mip level nearest the warp's compression — use it when cross-scale views alias under `bilinear` but the anisotropic cost is not warranted) |
 | `robust_iters`         | `3`             | `refine_keypoints` (IRLS passes for the consensus) |
 | `max_outer_sweeps`     | `1`             | `refine_keypoints` (`1` = single-pass frozen consensus; `>1` refreshes per sweep) |
 | `outer_convergence_px` | `0.005`         | `refine_keypoints` (outer-loop stop, patch-grid px; ignored at 1 sweep) |

@@ -240,15 +240,17 @@ The refiner samples each view's patch core from the **source pyramid** at the
 current fractional `δ`, using the **existing** machinery — not a new sampler
 abstraction.
 
-- **Interpolation** is the existing `Sampler` enum (`Bilinear` / `Anisotropic`) —
-  the same knob `refine-normals` and `localize` already take. Anisotropic suits
-  grazing / foreshortened views where bilinear under-samples; bilinear is the cheap
-  default. This enum is "the sampling parameter."
+- **Interpolation** is the existing `Sampler` enum (`Bilinear` / `BilinearMip` /
+  `Anisotropic`) — the same knob `refine-normals` and `localize` already take.
+  Anisotropic suits grazing / foreshortened views where bilinear under-samples;
+  `BilinearMip` (one bilinear tap from the mip level nearest the warp's
+  compression) bounds cross-scale aliasing at ≈ bilinear cost; bilinear is the
+  cheap default. This enum is "the sampling parameter."
 - **Rendering** reuses `WarpMap::from_patch` + `remap_bilinear` /
-  `remap_aniso_with_pyramid`. Gradients come from value+gradient variants of those
-  two functions (Design details), giving the analytic image gradient at the *same
-  interpolation/LOD* as the value — no finite differences (which across a mip
-  boundary would be LOD-inconsistent).
+  `remap_bilinear_mip` / `remap_aniso_with_pyramid`. Gradients come from
+  value+gradient variants of those functions (Design details), giving the
+  analytic image gradient at the *same interpolation/LOD* as the value — no
+  finite differences (which across a mip boundary would be LOD-inconsistent).
 
 ### Render-once context tile (implemented 2026-07)
 

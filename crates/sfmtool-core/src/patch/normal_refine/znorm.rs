@@ -6,7 +6,7 @@
 //! ([`znormalize_into`] / [`znormalize_into_kept`]), and the AVX2 moment /
 //! write kernels they dispatch to.
 
-use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear};
+use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, remap_bilinear_mip};
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
 
@@ -70,6 +70,10 @@ pub(in crate::patch) fn normalized_stack(
             Sampler::Anisotropic => {
                 prof::SVD.time(|| map.compute_svd());
                 prof::REMAP.time(|| remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY))
+            }
+            Sampler::BilinearMip => {
+                prof::SVD.time(|| map.compute_svd());
+                prof::REMAP.time(|| remap_bilinear_mip(view.pyramid, &map))
             }
             Sampler::Bilinear => prof::REMAP.time(|| remap_bilinear(view.pyramid.level(0), &map)),
         };

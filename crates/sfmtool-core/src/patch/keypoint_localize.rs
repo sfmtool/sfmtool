@@ -34,7 +34,7 @@ mod kernels;
 mod params;
 mod search;
 
-use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear};
+use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, remap_bilinear_mip};
 use crate::camera::WarpMap;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
@@ -198,11 +198,12 @@ fn render_context(
     ctx_patch.w = patch.w;
     let mut map = prof::RENDER_PROJECT
         .time(|| WarpMap::from_patch(&ctx_patch, view.camera, view.cam_from_world, context_res));
-    if matches!(sampler, Sampler::Anisotropic) {
+    if matches!(sampler, Sampler::Anisotropic | Sampler::BilinearMip) {
         prof::RENDER_SVD.time(|| map.compute_svd());
     }
     let img = prof::RENDER_REMAP.time(|| match sampler {
         Sampler::Anisotropic => remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY),
+        Sampler::BilinearMip => remap_bilinear_mip(view.pyramid, &map),
         Sampler::Bilinear => remap_bilinear(view.pyramid.level(0), &map),
     });
     let cr = context_res as usize;

@@ -652,6 +652,48 @@ fn recovers_fronto_parallel_normal_from_tilted_init() {
 }
 
 #[test]
+fn bilinear_mip_sampler_recovers_normal_end_to_end() {
+    // Same scene as `recovers_fronto_parallel_normal_from_tilted_init`, driven
+    // with `Sampler::BilinearMip` (cache off, so every candidate render goes
+    // through the mip sampler): the single-tap mip path must carry a full
+    // refinement to the same optimum as the default sampler.
+    let scene = Scene::new(&[
+        [0.8, 0.0, 0.0],
+        [-0.8, 0.0, 0.0],
+        [0.0, 0.7, 0.0],
+        [0.0, -0.7, 0.0],
+    ]);
+    let views = scene.views();
+    let truth = true_normal();
+    let init_n = exp_map_normal(&truth, [15.0f64.to_radians(), 0.0]);
+    let patch = plane_patch(init_n);
+    let params = NormalRefineParams {
+        sampler: Sampler::BilinearMip,
+        cache: CacheMode::Off,
+        ..test_params(Objective::MeanPairwise)
+    };
+
+    let result = refine_patch_normal(&patch, &views, 15, &params, None);
+
+    let init_err = angle_between(&init_n, &truth);
+    let refined_err = angle_between(&result.patch.normal(), &truth);
+    assert!(
+        refined_err < init_err && refined_err < 5.0f64.to_radians(),
+        "refined normal should move toward truth: init {:.2}°, refined {:.2}°",
+        init_err.to_degrees(),
+        refined_err.to_degrees()
+    );
+    assert!(
+        result.photoconsistency > result.init_photoconsistency,
+        "Φ should improve: init {} -> {}",
+        result.init_photoconsistency,
+        result.photoconsistency
+    );
+    assert!(result.photoconsistency > 0.5);
+    assert_eq!(result.valid_view_count, 4);
+}
+
+#[test]
 fn refine_leaves_points_at_infinity_untouched() {
     // A point at infinity has a fixed outward normal (`normalize(-d)`); the
     // refiner must skip it and return its frame byte-for-byte unchanged, even

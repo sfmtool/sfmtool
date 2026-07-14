@@ -16,8 +16,8 @@
 //!   equations), and [`solve_2x2`] (the damped normal-equation solve).
 
 use crate::camera::remap::{
-    remap_aniso_with_grad_into, remap_aniso_with_pyramid, remap_bilinear,
-    remap_bilinear_with_grad_into, ImageF32WithGrad,
+    remap_aniso_with_grad_into, remap_aniso_with_pyramid, remap_bilinear, remap_bilinear_mip,
+    remap_bilinear_mip_with_grad_into, remap_bilinear_with_grad_into, ImageF32WithGrad,
 };
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
@@ -71,6 +71,10 @@ pub(super) fn render_core(
             Sampler::Anisotropic => {
                 map.compute_svd();
                 remap_aniso_with_pyramid(view.pyramid, &map, MAX_ANISOTROPY)
+            }
+            Sampler::BilinearMip => {
+                map.compute_svd();
+                remap_bilinear_mip(view.pyramid, &map)
             }
             Sampler::Bilinear => remap_bilinear(view.pyramid.level(0), &map),
         };
@@ -141,6 +145,10 @@ pub(super) fn render_core_with_jg(
             Sampler::Anisotropic => {
                 map.compute_svd(); // also populates jacobians as a by-product
                 remap_aniso_with_grad_into(view.pyramid, &map, MAX_ANISOTROPY, img_scratch);
+            }
+            Sampler::BilinearMip => {
+                map.compute_svd(); // also populates jacobians as a by-product
+                remap_bilinear_mip_with_grad_into(view.pyramid, &map, img_scratch);
             }
             Sampler::Bilinear => {
                 map.compute_jacobians();
@@ -630,6 +638,10 @@ pub(super) fn render_refine_tile(
             Sampler::Anisotropic => {
                 map.compute_svd(); // also populates jacobians as a by-product
                 remap_aniso_with_grad_into(view.pyramid, &map, MAX_ANISOTROPY, img);
+            }
+            Sampler::BilinearMip => {
+                map.compute_svd(); // also populates jacobians as a by-product
+                remap_bilinear_mip_with_grad_into(view.pyramid, &map, img);
             }
             Sampler::Bilinear => {
                 map.compute_jacobians();

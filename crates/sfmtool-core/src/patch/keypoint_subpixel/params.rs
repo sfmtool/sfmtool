@@ -67,11 +67,12 @@ pub struct KeypointSubpixelParams {
     /// returns `(value, ∂I/∂x, ∂I/∂y)` per support pixel and channel — composed
     /// per-pixel with the warp Jacobian `J = WarpMap::get_jacobian(col, row)` to
     /// give the analytic `∂I/∂δ` the GN normal equations need. The
-    /// [`Sampler::Anisotropic`] gradient is computed at the same LOD(s) /
-    /// footprint as the value (per-level bilinear gradient **divided** by the
-    /// level's `2^level` to convert from level-pixel to level-0 source-pixel
-    /// coords, blended with the same `frac` the value uses), so value and
-    /// gradient stay LOD-consistent.
+    /// [`Sampler::Anisotropic`] and [`Sampler::BilinearMip`] gradients are
+    /// computed at the same LOD(s) / footprint as the value (per-level bilinear
+    /// gradient **divided** by the level's `2^level` to convert from level-pixel
+    /// to level-0 source-pixel coords; the anisotropic path additionally blends
+    /// with the same `frac` the value uses), so value and gradient stay
+    /// LOD-consistent.
     pub sampler: Sampler,
     /// IRLS reweighting passes for the robust consensus.
     pub robust_iters: u32,

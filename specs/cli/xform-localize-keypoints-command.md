@@ -106,7 +106,7 @@ threshold consumed by `compact_to_embedded_patches`.
 | `resolution`                   | `24`            | `localize_keypoints` (R×R patch grid)          |
 | `window`                       | `gaussian_disk` | `localize_keypoints` (`gaussian_disk`/`gaussian`/`uniform`) |
 | `window_sigma`                 | `0.6`           | `localize_keypoints`                           |
-| `sampler`                      | `bilinear`      | `localize_keypoints` (`bilinear`/`anisotropic`) |
+| `sampler`                      | `bilinear`      | `localize_keypoints` (`bilinear`/`bilinear_mip`/`anisotropic`; `bilinear_mip` takes one bilinear tap from the mip level nearest the warp's compression — use it when cross-scale views alias under `bilinear` but the anisotropic cost is not warranted) |
 | `robust_iters`                 | `3`             | `localize_keypoints` (IRLS passes for the consensus) |
 | `convergence_px`               | `0.05`          | `localize_keypoints` (round-level stop, patch-grid px) |
 | `search_resolution_multiplier` | `1.0`           | `localize_keypoints` (supersampled search grid; `> 1` resolves sub-pixel offsets at ~m² cost) |
