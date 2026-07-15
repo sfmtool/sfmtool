@@ -202,25 +202,40 @@ def estimate_pairwise_alignment(
     return AlignmentResult(source_id, target_id, transform, valid_matches)
 
 
-def kabsch_algorithm(
+def estimate_alignment(
     source_points: np.ndarray,
     target_points: np.ndarray,
+    rounds: int = 1,
+    keep_fraction: float = 1.0,
+    estimate_scale: bool = True,
 ) -> Se3Transform:
-    """Kabsch algorithm for finding optimal SE(3) transformation.
+    """Least-squares fit of the SE(3) transform aligning two point sets.
 
-    Finds the rotation, translation, and scale that best aligns
-    source_points to target_points.
+    Finds the rotation, translation, and (optional) scale that best aligns
+    source_points to target_points. With the defaults this is the classical
+    single-shot similarity fit; raising ``rounds`` trims gross mismatches by
+    refitting on the best-fitting ``keep_fraction`` of correspondences.
 
     Args:
         source_points: (N, 3) array of source points
         target_points: (N, 3) array of target points
+        rounds: Refit iterations; 1 (default) disables trimming.
+        keep_fraction: Fraction of correspondences kept each round after the
+            first. Ignored when ``rounds == 1``.
+        estimate_scale: Fit a similarity (True) or a rigid transform (False).
 
     Returns:
-        Se3Transform representing the optimal similarity transform
+        Se3Transform representing the fitted transform
     """
     if source_points.shape != target_points.shape or source_points.shape[0] < 2:
         raise ValueError("Need at least 2 matching points with same shape")
 
-    from .._sfmtool.analysis import kabsch_algorithm_rs
+    from .._sfmtool.analysis import estimate_alignment_rs
 
-    return kabsch_algorithm_rs(source_points, target_points)
+    return estimate_alignment_rs(
+        source_points,
+        target_points,
+        rounds=rounds,
+        keep_fraction=keep_fraction,
+        estimate_scale=estimate_scale,
+    )

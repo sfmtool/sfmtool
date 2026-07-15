@@ -21,7 +21,7 @@ fn test_no_outliers() {
 #[test]
 fn test_known_outliers_rejected() {
     // 8 inliers with pure translation, 2 outliers with big offset
-    // Use non-collinear 3D points so Kabsch can find a valid rotation
+    // Use non-collinear 3D points so the least-squares fit can find a valid rotation
     let inlier_sources: [[f64; 3]; 8] = [
         [0.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],

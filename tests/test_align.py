@@ -29,6 +29,66 @@ def _apply_transforms_to_file(input_path, output_path, transforms):
 
 
 # ---------------------------------------------------------------------------
+# estimate_alignment binding (Rust least-squares fit + trimming, via PyO3)
+# ---------------------------------------------------------------------------
+
+
+class TestEstimateAlignment:
+    """Exercise the estimate_alignment wrapper and its PyO3 params.
+
+    The default (single-shot similarity) path is covered indirectly by the
+    align CLI tests; these drive the trim/rigid keyword arguments through the
+    binding to pin the ``core.py`` <-> ``core.rs`` signature.
+    """
+
+    @staticmethod
+    def _make_similarity(n, scale, translation, seed):
+        # 90-degree rotation about Z, applied as target = scale * R @ src + t.
+        rot = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+        rng = np.random.default_rng(seed)
+        source = rng.uniform(-5.0, 5.0, size=(n, 3))
+        target = scale * (source @ rot.T) + np.asarray(translation)
+        return source, target, rot
+
+    def test_default_is_single_shot_similarity(self):
+        from sfmtool.align.core import estimate_alignment
+
+        source, target, _ = self._make_similarity(12, 1.7, [2.0, -3.0, 1.0], seed=1)
+        t = estimate_alignment(source, target)
+        assert np.isclose(t.scale, 1.7, atol=1e-9)
+        np.testing.assert_allclose(t.apply_to_points(source), target, atol=1e-8)
+
+    def test_trimming_rejects_outliers(self):
+        from sfmtool.align.core import estimate_alignment
+
+        source, target, _ = self._make_similarity(30, 1.7, [2.0, -3.0, 1.0], seed=2)
+        clean = target.copy()
+        # Corrupt ~20% of correspondences with large target offsets.
+        target[::5] += np.array([40.0, -35.0, 30.0])
+
+        # A plain fit is dragged off by the outliers; trimming recovers.
+        plain = estimate_alignment(source, target)
+        trimmed = estimate_alignment(source, target, rounds=5, keep_fraction=0.7)
+        assert not np.isclose(plain.scale, 1.7, atol=1e-3)
+        assert np.isclose(trimmed.scale, 1.7, atol=1e-6)
+        # Inlier rows map back onto their clean targets under the trimmed fit.
+        recovered = trimmed.apply_to_points(source)
+        inliers = np.ones(len(source), dtype=bool)
+        inliers[::5] = False
+        np.testing.assert_allclose(recovered[inliers], clean[inliers], atol=1e-5)
+
+    def test_rigid_fit_keeps_scale_one(self):
+        from sfmtool.align.core import estimate_alignment
+
+        source = np.array(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        )
+        target = source * 3.0  # a scaled target...
+        rigid = estimate_alignment(source, target, estimate_scale=False)
+        assert np.isclose(rigid.scale, 1.0, atol=1e-12)  # ...but rigid pins scale=1
+
+
+# ---------------------------------------------------------------------------
 # Unit tests for helper functions
 # ---------------------------------------------------------------------------
 

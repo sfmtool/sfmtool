@@ -24,7 +24,7 @@ def _finite_pair_mask(
     A point at infinity (``w = 0``) stores a unit bearing direction in
     ``positions``, not a metric location, so it cannot anchor a similarity fit
     (alignment) or a positional comparison — including one would corrupt the
-    Kabsch/RANSAC solve. Such pairs are dropped before positions are read.
+    least-squares/RANSAC solve. Such pairs are dropped before positions are read.
     """
     src_inf = np.asarray(source_recon.point_is_at_infinity, dtype=bool)
     tgt_inf = np.asarray(target_recon.point_is_at_infinity, dtype=bool)

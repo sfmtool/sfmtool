@@ -111,23 +111,50 @@ pub fn compute_narrow_track_mask(
     Ok(arr.into_any().unbind())
 }
 
-// ── Alignment (Kabsch + RANSAC) ───────────────────────────────────────────
+// ── Alignment (least-squares fit + RANSAC) ─────────────────────────────────
 
-/// Kabsch algorithm for optimal rotation, translation, and scale.
+/// Estimate the similarity-or-rigid transform aligning source points to target
+/// points by least squares over corresponded points.
 ///
-/// Returns an SE3Transform representing the optimal similarity transform.
+/// With the defaults this is the classical single-shot similarity fit; raising
+/// ``rounds`` trims gross mismatches by iteratively refitting on the best-fitting
+/// ``keep_fraction`` of correspondences.
+///
+/// Args:
+///     source_points: (N, 3) source points.
+///     target_points: (N, 3) target points.
+///     rounds: Refit iterations; each after the first re-selects the inlier
+///         subset. 1 (default) disables trimming.
+///     keep_fraction: Fraction of correspondences kept each round after the
+///         first. Ignored when ``rounds == 1``.
+///     estimate_scale: Fit a similarity (True) or a rigid transform (False).
+///
+/// Returns:
+///     An ``Se3Transform`` (scale 1.0 when ``estimate_scale`` is False).
 #[pyfunction]
-pub fn kabsch_algorithm_rs(
+#[pyo3(signature = (source_points, target_points, rounds=1, keep_fraction=1.0, estimate_scale=true))]
+pub fn estimate_alignment_rs(
     source_points: PyReadonlyArray2<f64>,
     target_points: PyReadonlyArray2<f64>,
+    rounds: usize,
+    keep_fraction: f64,
+    estimate_scale: bool,
 ) -> PyResult<PySe3Transform> {
     let n_points = source_points.shape()[0];
     let src_data = to_contiguous!(source_points);
     let tgt_data = to_contiguous!(target_points);
 
-    let transform =
-        sfmtool_core::analysis::alignment::kabsch_algorithm(&src_data, &tgt_data, n_points)
-            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let transform = sfmtool_core::analysis::alignment::estimate_alignment(
+        &src_data,
+        &tgt_data,
+        n_points,
+        sfmtool_core::analysis::alignment::AlignmentParams {
+            rounds,
+            keep_fraction,
+            estimate_scale,
+        },
+    )
+    .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
     Ok(PySe3Transform { inner: transform })
 }
@@ -362,7 +389,7 @@ pub fn merge_points_and_tracks_py(
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(apply_se3_to_camera_poses_py, m)?)?;
     m.add_function(wrap_pyfunction!(compute_narrow_track_mask, m)?)?;
-    m.add_function(wrap_pyfunction!(kabsch_algorithm_rs, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_alignment_rs, m)?)?;
     m.add_function(wrap_pyfunction!(ransac_alignment_rs, m)?)?;
     m.add_function(wrap_pyfunction!(find_point_correspondences_py, m)?)?;
     m.add_function(wrap_pyfunction!(merge_points_and_tracks_py, m)?)?;
