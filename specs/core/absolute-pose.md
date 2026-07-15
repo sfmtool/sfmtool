@@ -1,10 +1,26 @@
 # Absolute Pose from 2D-3D Correspondences (P3P + RANSAC)
 
-**Status:** Proposed — design for
-`crates/sfmtool-core/src/geometry/absolute_pose.rs`, bindings in
-`sfmtool._sfmtool.geometry`. Registers one camera against known 3D
-structure from bearing-vector / 3D-point correspondences that may be
-dominated by wrong matches.
+**Status:** Implemented (2026-07-14) —
+`crates/sfmtool-core/src/geometry/absolute_pose.rs` (solver + estimator,
+tests in `absolute_pose/tests.rs`), PyO3 bindings in
+`crates/sfmtool-py/src/geometry/absolute_pose.rs`
+(`sfmtool._sfmtool.geometry.p3p_solve` / `estimate_absolute_pose`), Python
+tests in `tests/rust_bindings/test_absolute_pose_rust_bindings.py`. Registers
+one camera against known 3D structure from bearing-vector / 3D-point
+correspondences that may be dominated by wrong matches.
+
+> _Deviation (2026-07-14): `p3p_solve` returns
+> `Vec<(UnitQuaternion<f64>, Vector3<f64>)>` (allocated with capacity 4), not
+> the specified `ArrayVec<_, 4>` — the workspace has no `arrayvec` dependency
+> and does not use fixed-capacity vectors elsewhere, so a plain `Vec` is the
+> house-style fit. Behaviourally identical: at most four poses, allocated once._
+>
+> _Deviation (2026-07-14): the three-point Kabsch alignment necessarily has a
+> rank-2 cross-covariance (three points are always coplanar), so the collinear
+> degeneracy is detected from the collapse of the **second** singular value,
+> not the third; the third (plane-normal) direction is resolved by the
+> determinant correction. The spec's contract (collinear points ⇒ empty) is
+> unchanged._
 
 ## Purpose
 
