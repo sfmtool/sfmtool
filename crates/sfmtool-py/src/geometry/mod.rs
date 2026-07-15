@@ -7,6 +7,7 @@
 
 use pyo3::prelude::*;
 
+pub mod absolute_pose;
 pub mod affine_factorization;
 pub mod camera_intrinsics;
 pub mod convention;
@@ -26,5 +27,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySe3Transform>()?;
     convention::register(m)?;
     affine_factorization::register(m)?;
+    absolute_pose::register(m)?;
     Ok(())
 }
