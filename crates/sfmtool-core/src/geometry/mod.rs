@@ -6,6 +6,8 @@
 pub mod absolute_pose;
 pub mod affine_factorization;
 pub mod convention;
+pub mod pose_refine;
+pub mod reprojection;
 pub mod rigid_transform;
 pub mod rot_quaternion;
 pub mod rotation;
@@ -13,6 +15,8 @@ pub mod se3_transform;
 pub mod transform;
 pub mod viewing_angle;
 
+pub use pose_refine::{refine_absolute_pose, PoseRefinement};
+pub use reprojection::{inlier_fraction, reprojection_residuals};
 pub use rigid_transform::RigidTransform;
 pub use rot_quaternion::RotQuaternion;
 pub use se3_transform::Se3Transform;

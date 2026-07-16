@@ -9,6 +9,13 @@ tests in `tests/rust_bindings/test_absolute_pose_rust_bindings.py`. Registers
 one camera against known 3D structure from bearing-vector / 3D-point
 correspondences that may be dominated by wrong matches.
 
+Pixel-reprojection refinement of an estimate is implemented in
+`crates/sfmtool-core/src/geometry/pose_refine.rs` (`refine_absolute_pose`,
+tests in `pose_refine/tests.rs`), bound as
+`sfmtool._sfmtool.geometry.refine_absolute_pose`
+(`crates/sfmtool-py/src/geometry/pose_refine.rs`), Python tests in
+`tests/rust_bindings/test_reprojection_rust_bindings.py`.
+
 > _Deviation (2026-07-14): `p3p_solve` returns
 > `Vec<(UnitQuaternion<f64>, Vector3<f64>)>` (allocated with capacity 4), not
 > the specified `ArrayVec<_, 4>` — the workspace has no `arrayvec` dependency
@@ -153,6 +160,61 @@ required trial count is `log(1 − confidence) / log(1 − (n_best/N)³)`;
 stop when the completed trials exceed it, or at `max_iterations`.
 Return `None` when the best consensus is below `min_inliers`.
 
+## Pose refinement
+
+The estimator scores and refits against **angular** residuals over bearings,
+which is what keeps it model-agnostic and robust at tiny inlier fractions. A
+caller that holds full pixel observations — for example after an estimate has
+grown an image's inlier set — can polish the pose against **pixel**
+reprojection error over its six degrees of freedom with
+`refine_absolute_pose`.
+
+```rust
+pub struct PoseRefinement {
+    pub rotation: UnitQuaternion<f64>,   // world-to-camera, canonical
+    pub translation: Vector3<f64>,
+    pub inlier_fraction: f64,            // within inlier_px, over all inputs
+}
+
+pub fn refine_absolute_pose(
+    cam: &CameraIntrinsics,
+    uv: &[[f64; 2]],                     // observed pixels, one per point
+    points: &[[f64; 3]],                 // world points (canonical frame)
+    init_rotation: &UnitQuaternion<f64>,
+    init_translation: &Vector3<f64>,
+    trim_rounds: usize,
+    keep_fraction: f64,
+    inlier_px: f64,
+) -> PoseRefinement;
+```
+
+Refinement is **trimmed least-squares**, not a robust loss: from the initial
+pose, each of `trim_rounds` rounds computes every observation's residual norm,
+keeps those at or below the `keep_fraction`-quantile of the norms, and refits
+on that subset by Levenberg–Marquardt. Each LM step is taken over a local
+`SO(3) × ℝ³` perturbation of the pose (`R ← exp([δθ]ₓ)·R`, `t ← t + δt`), and
+the Jacobian is analytic: the projection block from
+[`ray_to_pixel_with_jacobian`](projection-jacobian.md) composed with the exact
+`−[R·X]ₓ` rotation and identity translation blocks. Models without an analytic
+projection Jacobian (fisheye / equirectangular) fall back to a central
+difference of the projection only, keeping the pose block exact. Damping `λ` is
+adapted down on a cost improvement, up on a rejected step. The trimmed-L2
+choice is deliberate: a plain L2 fit over all correspondences is dragged by the
+leverage of gross outliers, while a robust loss seeded from all-large residuals
+has near-zero gradient — trimmed L2 from a reasonable init avoids both failure
+modes.
+
+After the trim rounds, a final refit runs on the observations with residual
+`< inlier_px` when at least six qualify, and the returned `inlier_fraction` is
+the share of **all** supplied observations within `inlier_px` after
+refinement. An observation that is behind the camera or outside the model
+domain takes a large finite per-component residual, so it is trimmed out
+without making the normal equations singular.
+
+Unlike the estimator, refinement does no sampling and has no notion of a
+minimal set: it assumes the supplied pose is already in the basin of
+attraction and improves it.
+
 ## Bindings
 
 `sfmtool._sfmtool.geometry.estimate_absolute_pose`:
@@ -181,6 +243,22 @@ derives the angular threshold from the camera's mean focal length. With
 directly. The returned pose is canonical world-to-camera, matching
 `.sfmr` reconstructions.
 
+`sfmtool._sfmtool.geometry.refine_absolute_pose`:
+
+```python
+refine_absolute_pose(
+    camera,                   # CameraIntrinsics for the observations
+    uv,                       # (N, 2) observed pixels
+    points,                   # (N, 3) world points (canonical frame)
+    init_quaternion_wxyz,     # (4,) initial world-to-camera rotation (WXYZ)
+    init_translation,         # (3,) initial world-to-camera translation
+    trim_rounds=5,
+    keep_fraction=0.6,
+    inlier_px=3.0,
+) -> dict
+# {"quaternion_wxyz", "translation", "inlier_fraction"}
+```
+
 ## Testing requirements
 
 - **Exactness**: for random non-degenerate poses and points, the
@@ -199,12 +277,17 @@ directly. The returned pose is canonical world-to-camera, matching
 - **Differential**: agreement with an established implementation
   (pycolmap's estimator) on real correspondence sets — same consensus
   size within sampling variation, poses within tolerance.
+- **Refinement**: from a pose perturbed off a known solution,
+  `refine_absolute_pose` recovers the generating pose and reports a high
+  `inlier_fraction`; the trim rounds reject planted outliers a plain L2 fit
+  would follow.
 
 ## Non-goals (v1)
 
 - Large-`N` linear solvers (EPnP) and covariance/uncertainty output.
-- Full robust refinement beyond the local-optimization refit — callers
-  that own a bundle adjustment refine there.
+- Multi-view bundle adjustment — `refine_absolute_pose` polishes a single
+  camera's pose against fixed 3D points; joint refinement over many cameras
+  and structure belongs to a caller's bundle adjustment.
 - Gravity- or focal-estimating variants (P2P+gravity, P4Pf).
 
 ## References
