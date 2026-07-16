@@ -1155,6 +1155,82 @@ fn ray_to_pixel_returns_none_behind_camera_perspective() {
     assert!(cam.ray_to_pixel([0.5, 0.3, 0.1]).is_none());
 }
 
+#[test]
+fn ray_to_pixel_with_jacobian_none_behind_camera() {
+    let cam = pinhole();
+    // Behind the camera: no projection, no Jacobian (same domain as
+    // ray_to_pixel).
+    assert!(cam.ray_to_pixel_with_jacobian([0.0, 0.0, 1.0]).is_none());
+    assert!(cam.ray_to_pixel_with_jacobian([0.5, 0.3, 0.1]).is_none());
+}
+
+/// The analytic `ray_to_pixel_with_jacobian` agrees with a central-difference
+/// of `ray_to_pixel` across every perspective model and a wide sweep of ray
+/// directions and depths. Fisheye / equirectangular models report no analytic
+/// Jacobian. This pins the derivation and guards against regressions in either
+/// the projection math or the Jacobian.
+#[test]
+fn ray_to_pixel_jacobian_matches_central_difference() {
+    let h = 1e-6;
+    for cam in all_cameras() {
+        if !cam.model.supports_pixel_jacobian() {
+            // Ray-path models (fisheye / equirectangular): a forward ray still
+            // projects, but there is no analytic Jacobian yet.
+            assert!(
+                cam.ray_to_pixel_with_jacobian([0.0, 0.0, -1.0]).is_none(),
+                "{} should report no analytic Jacobian",
+                cam.model_name(),
+            );
+            continue;
+        }
+
+        let (cx, cy) = cam.principal_point();
+        let mut samples = 0;
+        // In-image pixels → in-domain rays; several depths exercise the
+        // perspective-divide (1/rz) columns.
+        for du in [-60.0, -25.0, 0.0, 25.0, 60.0] {
+            for dv in [-60.0, -25.0, 0.0, 25.0, 60.0] {
+                let base = cam.pixel_to_ray(cx + du, cy + dv);
+                for scale in [0.5_f64, 1.0, 2.5] {
+                    let ray = [base[0] * scale, base[1] * scale, base[2] * scale];
+                    let Some((_, jac)) = cam.ray_to_pixel_with_jacobian(ray) else {
+                        continue;
+                    };
+                    for c in 0..3 {
+                        let mut rp = ray;
+                        let mut rm = ray;
+                        rp[c] += h;
+                        rm[c] -= h;
+                        let (Some((up, vp)), Some((um, vm))) =
+                            (cam.ray_to_pixel(rp), cam.ray_to_pixel(rm))
+                        else {
+                            continue;
+                        };
+                        let fd_u = (up - um) / (2.0 * h);
+                        let fd_v = (vp - vm) / (2.0 * h);
+                        assert!(
+                            (jac[0][c] - fd_u).abs() <= 1e-4 * (1.0 + jac[0][c].abs()),
+                            "{} ∂u/∂r[{c}]: analytic {} vs central-diff {}",
+                            cam.model_name(),
+                            jac[0][c],
+                            fd_u,
+                        );
+                        assert!(
+                            (jac[1][c] - fd_v).abs() <= 1e-4 * (1.0 + jac[1][c].abs()),
+                            "{} ∂v/∂r[{c}]: analytic {} vs central-diff {}",
+                            cam.model_name(),
+                            jac[1][c],
+                            fd_v,
+                        );
+                        samples += 1;
+                    }
+                }
+            }
+        }
+        assert!(samples > 0, "no in-domain samples for {}", cam.model_name());
+    }
+}
+
 /// SimpleRadial with strongly-negative k1 has a non-monotonic forward
 /// distortion polynomial — past the inflection radius the polynomial
 /// folds and produces ghost projections at the opposite side of the

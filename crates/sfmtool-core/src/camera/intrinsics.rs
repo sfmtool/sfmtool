@@ -308,6 +308,14 @@ impl CameraModel {
     pub fn needs_ray_path(&self) -> bool {
         self.is_fisheye() || self.is_equirectangular()
     }
+
+    /// Whether [`CameraIntrinsics::ray_to_pixel_with_jacobian`] can return an
+    /// analytic pixel Jacobian for this model. True for the perspective family
+    /// (pinhole and polynomial-distortion models), false for fisheye and
+    /// equirectangular, whose forward map takes the ray path.
+    pub fn supports_pixel_jacobian(&self) -> bool {
+        !self.needs_ray_path()
+    }
 }
 
 /// Camera intrinsic parameters with image dimensions.
