@@ -23,6 +23,23 @@ def test_all_geometry_bindings_registered():
         assert isinstance(getattr(geometry, name), type), f"{name} is not a class"
 
 
+_EXPECTED_FUNCTIONS = (
+    "estimate_absolute_pose",
+    "p3p_solve",
+    "reprojection_residuals",
+    "inlier_fraction",
+    "refine_absolute_pose",
+)
+
+
+def test_geometry_functions_registered():
+    """Every expected free function is present and callable."""
+    missing = [name for name in _EXPECTED_FUNCTIONS if not hasattr(geometry, name)]
+    assert not missing, f"missing geometry functions: {missing}"
+    for name in _EXPECTED_FUNCTIONS:
+        assert callable(getattr(geometry, name)), f"{name} is not callable"
+
+
 def test_geometry_submodule_public_name():
     """The submodule reports its public `__name__` so binding objects'
     `__module__` reads `sfmtool.geometry`."""
