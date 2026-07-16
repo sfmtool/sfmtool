@@ -10,7 +10,7 @@ use rand::rngs::StdRng;
 use rand::seq::index::sample;
 use rand::SeedableRng;
 
-use super::kabsch::kabsch_algorithm;
+use super::least_squares::{estimate_alignment, AlignmentParams};
 
 /// RANSAC alignment: identify inlier point correspondences.
 ///
@@ -50,7 +50,12 @@ pub fn ransac_alignment(
         }
 
         // Estimate transform from sample
-        let transform = match kabsch_algorithm(&sample_src, &sample_tgt, min_sample_size) {
+        let transform = match estimate_alignment(
+            &sample_src,
+            &sample_tgt,
+            min_sample_size,
+            AlignmentParams::default(),
+        ) {
             Ok(result) => result,
             Err(_) => continue, // degenerate sample, skip
         };

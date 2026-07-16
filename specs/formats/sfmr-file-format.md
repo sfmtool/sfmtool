@@ -153,7 +153,7 @@ sensor / relative: R_colmap = S · R_sfmr · S         t_colmap = S · t_sfmr   
   frames both ways and leaving the world frame untouched is self-consistent;
   `W` is reserved for *external* import/export so those round trips stay
   stable. World-space geometry that never touches a camera axis (camera
-  centres `C = −Rᵀ·t`, triangulation, Kabsch alignment, kd-trees, patch
+  centres `C = −Rᵀ·t`, triangulation, least-squares alignment, kd-trees, patch
   `u × v` normals) is invariant under `W` and needs no per-site change.
 
 > **Migration note.** This convention was formalized after the format was

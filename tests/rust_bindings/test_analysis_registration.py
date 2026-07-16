@@ -8,7 +8,7 @@ import sfmtool._sfmtool.analysis as analysis
 _EXPECTED_FUNCTIONS = (
     "apply_se3_to_camera_poses_py",
     "compute_narrow_track_mask",
-    "kabsch_algorithm_rs",
+    "estimate_alignment_rs",
     "ransac_alignment_rs",
     "find_point_correspondences_py",
     "merge_points_and_tracks_py",

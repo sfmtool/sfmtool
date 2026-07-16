@@ -5,7 +5,7 @@
 
 import numpy as np
 
-from .core import AlignmentResult, kabsch_algorithm
+from .core import AlignmentResult, estimate_alignment
 from .._point_correspondence import find_point_correspondences
 from .._sfmtool import SfmrReconstruction
 
@@ -23,7 +23,7 @@ def estimate_alignment_from_points(
 
     Finds 3D points that appear in both reconstructions (via shared feature
     observations), then computes the optimal similarity transform using
-    the Kabsch algorithm with optional RANSAC outlier rejection.
+    a least-squares similarity fit with optional RANSAC outlier rejection.
 
     Args:
         source_recon: Source SfmrReconstruction object
@@ -55,7 +55,7 @@ def estimate_alignment_from_points(
     distances_for_stats = None
 
     if use_ransac and n_points > min_points:
-        prelim_transform = kabsch_algorithm(source_positions, target_positions)
+        prelim_transform = estimate_alignment(source_positions, target_positions)
         transformed = prelim_transform.apply_to_points(source_positions)
         distances_for_stats = np.linalg.norm(transformed - target_positions, axis=1)
 
@@ -86,7 +86,7 @@ def estimate_alignment_from_points(
     else:
         n_inliers = n_points
 
-    transform = kabsch_algorithm(source_positions, target_positions)
+    transform = estimate_alignment(source_positions, target_positions)
 
     transformed_source = transform.apply_to_points(source_positions)
     distances = np.linalg.norm(transformed_source - target_positions, axis=1)

@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Reconstruction-analysis bindings: pose/track operations, Kabsch + RANSAC
-//! alignment, point correspondence, batch triangulation, epipolar curves, and
+//! Reconstruction-analysis bindings: pose/track operations, least-squares +
+//! RANSAC alignment, point correspondence, batch triangulation, epipolar curves, and
 //! image-pair graph construction.
 
 use pyo3::prelude::*;

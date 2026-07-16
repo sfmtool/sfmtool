@@ -113,7 +113,7 @@ observations within an image.
 
 | Consumer | Path |
 |----------|------|
-| `sfm align --method points` | `align/by_points.py` → pairwise finder → Kabsch/RANSAC ([reconstruction-alignment.md](reconstruction-alignment.md)) |
+| `sfm align --method points` | `align/by_points.py` → pairwise finder → least-squares/RANSAC ([reconstruction-alignment.md](reconstruction-alignment.md)) |
 | `sfm merge` | `merge/reconstructions.py` → grouping + `merge_points_and_tracks_py` → PnP pose refinement |
 | `sfm xform --align-to` | `xform/_align_to.py` → pairwise finder → similarity fit |
 | `sfm compare` | `_compare.py` → pairwise finder (feature-index or coordinate-based) |
