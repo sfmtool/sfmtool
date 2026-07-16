@@ -57,6 +57,11 @@ use rayon::prelude::*;
 
 use crate::camera::{CameraIntrinsics, CameraIntrinsicsError, CameraModel};
 
+/// A projected pixel `(u, v)` paired with the 2×3 Jacobian `∂(u, v)/∂ray`
+/// (row-major `[[∂u/∂x, ∂u/∂y, ∂u/∂z], [∂v/∂x, ∂v/∂y, ∂v/∂z]]`), returned by
+/// [`CameraIntrinsics::ray_to_pixel_with_jacobian`].
+pub type PixelJacobian = ((f64, f64), [[f64; 3]; 2]);
+
 /// Maximum iterations for iterative undistortion.
 const UNDISTORT_MAX_ITER: usize = 100;
 
@@ -231,6 +236,69 @@ impl CameraModel {
                 ..
             } => distort_full_opencv(x, y, *k1, *k2, *p1, *p2, *k3, *k4, *k5, *k6),
         }
+    }
+
+    /// Analytic Jacobian `∂(x_d, y_d)/∂(x, y)` of [`distort`] at the normalized
+    /// image-plane point `(x, y)`, row-major `[[∂x_d/∂x, ∂x_d/∂y], [∂y_d/∂x,
+    /// ∂y_d/∂y]]`.
+    ///
+    /// Perspective-model family only; returns `None` for fisheye and
+    /// equirectangular models, whose forward map does not go through
+    /// [`distort`] (see [`distort_ray`]) and has no analytic pixel Jacobian yet.
+    ///
+    /// Every perspective model is `x_d = x·g(r²) + T_x`, `y_d = y·g(r²) + T_y`
+    /// with radial factor `g`, `r² = x² + y²`, and tangential
+    /// `T_x = 2 p1 x y + p2 (r² + 2x²)`, `T_y = p1 (r² + 2y²) + 2 p2 x y`. The
+    /// 2×2 follows from `g`, `g' = dg/d(r²)`, and `(p1, p2)`.
+    pub(crate) fn distort_jacobian(&self, x: f64, y: f64) -> Option<[[f64; 2]; 2]> {
+        let s = x * x + y * y;
+        let (g, gp, p1, p2) = match self {
+            CameraModel::Pinhole { .. } | CameraModel::SimplePinhole { .. } => (1.0, 0.0, 0.0, 0.0),
+            CameraModel::SimpleRadial {
+                radial_distortion_k1: k1,
+                ..
+            } => (1.0 + k1 * s, *k1, 0.0, 0.0),
+            CameraModel::Radial {
+                radial_distortion_k1: k1,
+                radial_distortion_k2: k2,
+                ..
+            } => (1.0 + k1 * s + k2 * s * s, k1 + 2.0 * k2 * s, 0.0, 0.0),
+            CameraModel::OpenCV {
+                radial_distortion_k1: k1,
+                radial_distortion_k2: k2,
+                tangential_distortion_p1: p1,
+                tangential_distortion_p2: p2,
+                ..
+            } => (1.0 + k1 * s + k2 * s * s, k1 + 2.0 * k2 * s, *p1, *p2),
+            CameraModel::FullOpenCV {
+                radial_distortion_k1: k1,
+                radial_distortion_k2: k2,
+                tangential_distortion_p1: p1,
+                tangential_distortion_p2: p2,
+                radial_distortion_k3: k3,
+                radial_distortion_k4: k4,
+                radial_distortion_k5: k5,
+                radial_distortion_k6: k6,
+                ..
+            } => {
+                // Rational radial g = N/D, so g' = (N'·D − N·D')/D².
+                let num = 1.0 + k1 * s + k2 * s * s + k3 * s * s * s;
+                let den = 1.0 + k4 * s + k5 * s * s + k6 * s * s * s;
+                let nump = k1 + 2.0 * k2 * s + 3.0 * k3 * s * s;
+                let denp = k4 + 2.0 * k5 * s + 3.0 * k6 * s * s;
+                let g = num / den;
+                let gp = (nump * den - num * denp) / (den * den);
+                (g, gp, *p1, *p2)
+            }
+            // Fisheye / equirectangular: no analytic pixel Jacobian yet.
+            _ => return None,
+        };
+        // Cross term is shared by both off-diagonals (radial `2xy g'` plus the
+        // tangential `2 p1 x + 2 p2 y`).
+        let cross = 2.0 * x * y * gp + 2.0 * p1 * x + 2.0 * p2 * y;
+        let dxdx = g + 2.0 * x * x * gp + 2.0 * p1 * y + 6.0 * p2 * x;
+        let dydy = g + 2.0 * y * y * gp + 6.0 * p1 * y + 2.0 * p2 * x;
+        Some([[dxdx, cross], [cross, dydy]])
     }
 
     /// Whether the normalized image-plane point `(x, y)` lies in the
@@ -775,6 +843,69 @@ impl CameraIntrinsics {
         let (cx, cy) = self.principal_point();
         let (x_d, y_d) = self.model.distort_ray(ray)?;
         Some((fx * x_d + cx, fy * y_d + cy))
+    }
+
+    /// [`ray_to_pixel`] plus the analytic Jacobian `∂(u, v)/∂ray` of the pixel
+    /// with respect to the camera-frame ray direction, row-major
+    /// `[[∂u/∂x, ∂u/∂y, ∂u/∂z], [∂v/∂x, ∂v/∂y, ∂v/∂z]]`.
+    ///
+    /// Perspective models only (`supports_pixel_jacobian`). Returns `None` when
+    /// the ray is outside the model's valid domain — exactly where
+    /// [`ray_to_pixel`] returns `None` — or when the model has no analytic
+    /// Jacobian (fisheye / equirectangular), so a caller can fall back to a
+    /// finite difference for those.
+    ///
+    /// The projection is scale-invariant in the ray, so this is the derivative
+    /// with respect to the supplied (possibly non-unit) ray components — i.e.
+    /// with respect to a camera-frame point when one is passed directly.
+    pub fn ray_to_pixel_with_jacobian(&self, ray: [f64; 3]) -> Option<PixelJacobian> {
+        let (fx, fy) = self.focal_lengths();
+        let (cx, cy) = self.principal_point();
+        // Canonical → optical frame: (rx, ry, rz) = S·ray, S = diag(1, −1, −1).
+        let [rx, ry, rz] = [ray[0], -ray[1], -ray[2]];
+        if rz <= 0.0 {
+            return None;
+        }
+        let x = rx / rz;
+        let y = ry / rz;
+
+        // Pinhole fast path: no distortion, so the domain is unconditionally
+        // valid and D is the identity. Skip the distortion Jacobian and the
+        // 2×2 composition and write J = diag(fx, fy)·(P·S) directly.
+        if matches!(
+            self.model,
+            CameraModel::Pinhole { .. } | CameraModel::SimplePinhole { .. }
+        ) {
+            let inv = 1.0 / rz;
+            return Some((
+                (fx * x + cx, fy * y + cy),
+                [
+                    [fx * inv, 0.0, fx * rx * inv * inv],
+                    [0.0, -fy * inv, fy * ry * inv * inv],
+                ],
+            ));
+        }
+
+        if !self.model.forward_projection_invertible(x, y) {
+            return None;
+        }
+        // 2×2 distortion Jacobian ∂(x_d, y_d)/∂(x, y); None for unsupported models.
+        let d = self.model.distort_jacobian(x, y)?;
+        let (x_d, y_d) = self.model.distort(x, y);
+
+        // ∂(x, y)/∂ray = P·S, where P = ∂(x, y)/∂(rx, ry, rz) and S flips the
+        // sign of the ry, rz columns: [[1/rz, 0, rx/rz²], [0, −1/rz, ry/rz²]].
+        let inv = 1.0 / rz;
+        let ps = [[inv, 0.0, rx * inv * inv], [0.0, -inv, ry * inv * inv]];
+        // J = diag(fx, fy) · D · (P·S).
+        let mut jac = [[0.0f64; 3]; 2];
+        for c in 0..3 {
+            let m0 = d[0][0] * ps[0][c] + d[0][1] * ps[1][c];
+            let m1 = d[1][0] * ps[0][c] + d[1][1] * ps[1][c];
+            jac[0][c] = fx * m0;
+            jac[1][c] = fy * m1;
+        }
+        Some(((fx * x_d + cx, fy * y_d + cy), jac))
     }
 
     /// Batch version of [`ray_to_pixel`].
