@@ -4,7 +4,7 @@
 use super::*;
 use crate::camera::WarpMap;
 use crate::camera::{CameraIntrinsics, CameraModel};
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 
 fn pinhole(f: f64, cx: f64, cy: f64, w: u32, h: u32) -> CameraIntrinsics {
     CameraIntrinsics {
@@ -339,4 +339,315 @@ fn from_patch_infinity_ignores_camera_translation() {
     assert!(a.is_valid(3, 3));
     let (px, py) = a.get(3, 3);
     assert!((px - 320.0).abs() < 5.0 && (py - 240.0).abs() < 5.0);
+}
+
+// ---------------------------------------------------------------------------
+// `PatchCloud::from_tracks` (the array-fed counterpart of `from_reconstruction`)
+// ---------------------------------------------------------------------------
+
+/// The per-image `cam_from_world` quaternions / translations / focal lengths of a
+/// reconstruction, in the layout `from_tracks` consumes.
+fn scene_arrays(
+    recon: &SfmrReconstruction,
+) -> (Vec<UnitQuaternion<f64>>, Vec<Vector3<f64>>, Vec<f64>) {
+    let quats = recon.images.iter().map(|im| im.quaternion_wxyz).collect();
+    let trans = recon.images.iter().map(|im| im.translation_xyz).collect();
+    let focals = recon
+        .images
+        .iter()
+        .map(|im| recon.cameras[im.camera_index as usize].focal_lengths().0)
+        .collect();
+    (quats, trans, focals)
+}
+
+/// Assert two clouds are patch-for-patch identical (point ids + frames + weight).
+fn assert_clouds_equal(a: &PatchCloud, b: &PatchCloud) {
+    assert_eq!(a.len(), b.len(), "patch counts differ");
+    assert_eq!(a.point_indexes, b.point_indexes, "point_indexes differ");
+    for i in 0..a.len() {
+        let (pa, pb) = (a.patch(i), b.patch(i));
+        assert!((pa.center - pb.center).norm() < 1e-12, "center {i}");
+        assert!((pa.u_axis - pb.u_axis).norm() < 1e-12, "u_axis {i}");
+        assert!((pa.v_axis - pb.v_axis).norm() < 1e-12, "v_axis {i}");
+        assert!(
+            (pa.half_extent[0] - pb.half_extent[0]).abs() < 1e-12,
+            "half_u {i}"
+        );
+        assert!(
+            (pa.half_extent[1] - pb.half_extent[1]).abs() < 1e-12,
+            "half_v {i}"
+        );
+        assert_eq!(pa.w, pb.w, "w {i}");
+    }
+}
+
+/// Write a `.sift` file per image of the demo recon under a fresh workspace, with
+/// each feature's affine column-0 norm set to a distinct `σ(image, feature)`, and
+/// point the recon's workspace/prefix at it. Returns the per-observation scale
+/// vector (parallel to `recon.tracks`) that `from_reconstruction` will read back,
+/// ready to hand to `from_tracks`.
+fn write_demo_sift(recon: &mut SfmrReconstruction, tag: &str) -> Vec<f64> {
+    use ndarray::{Array2, Array3};
+
+    // Distinct, positive per-observation scale.
+    let sigma = |img: usize, feat: usize| 2.0 + 0.37 * img as f64 + 0.11 * feat as f64;
+
+    let dir = std::env::temp_dir().join(format!("patch_from_tracks_{tag}_{}", std::process::id()));
+    let features_dir = dir.join("features");
+    std::fs::create_dir_all(&features_dir).unwrap();
+    recon.workspace_dir = dir.clone();
+    recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
+
+    for img in 0..recon.images.len() {
+        let count = recon.max_track_feature_index[img] as usize + 1;
+        let mut affine = Array3::<f32>::zeros((count, 2, 2));
+        for f in 0..count {
+            let s = sigma(img, f) as f32;
+            affine[[f, 0, 0]] = s; // column-0 norm = s (a10 = 0)
+            affine[[f, 1, 1]] = s;
+        }
+        let data = sift_format::SiftData {
+            feature_tool_metadata: sift_format::FeatureToolMetadata {
+                feature_tool: "test".into(),
+                feature_type: "sift".into(),
+                feature_options: serde_json::json!({}),
+            },
+            metadata: sift_format::SiftMetadata {
+                version: sift_format::SIFT_FORMAT_VERSION,
+                image_name: recon.images[img].name.clone(),
+                image_file_xxh128: "0".repeat(32),
+                image_file_size: 1,
+                image_width: recon.cameras[0].width,
+                image_height: recon.cameras[0].height,
+                feature_count: count as u32,
+            },
+            content_hash: sift_format::SiftContentHash::default(),
+            positions_xy: Array2::<f32>::zeros((count, 2)),
+            affine_shapes: affine,
+            descriptors: Array2::<u8>::zeros((count, 128)),
+            thumbnail_y_x_rgb: Array3::<u8>::zeros((128, 128, 3)),
+        };
+        sift_format::write_sift(&recon.sift_path_for_image(img), &data, 3).unwrap();
+    }
+
+    // Per-observation scale in track order, matching what `from_reconstruction`
+    // resolves through feature_index → image `.sift`.
+    // The scale is stored (and read back) as f32, so round-trip through f32 to
+    // match exactly what `read_image_scales` recovers (`a00 as f64`).
+    let feats = recon.feature_indexes().unwrap().to_vec();
+    recon
+        .tracks
+        .iter()
+        .enumerate()
+        .map(|(j, o)| sigma(o.image_index as usize, feats[j] as usize) as f32 as f64)
+        .collect()
+}
+
+#[test]
+fn from_tracks_reproduces_from_reconstruction_feature_size() {
+    // The headline equivalence: `from_tracks` fed the same scales the `.sift`
+    // files carry reproduces `from_reconstruction` patch-for-patch under the
+    // scale-reading FeatureSize policy.
+    let mut recon = SfmrReconstruction::demo(12);
+    let obs_scales = write_demo_sift(&mut recon, "eq");
+
+    let extent = PatchExtent::FeatureSize {
+        factor: 5.0,
+        across: ViewReduce::Median,
+    };
+    let from_recon =
+        PatchCloud::from_reconstruction(&recon, PatchNormal::MeanViewing, extent, false).unwrap();
+
+    let positions: Vec<Point3<f64>> = recon.points.iter().map(|p| p.position).collect();
+    let weights: Vec<f64> = recon.points.iter().map(|p| p.w).collect();
+    let obs_images: Vec<u32> = recon.tracks.iter().map(|o| o.image_index).collect();
+    let (quats, trans, focals) = scene_arrays(&recon);
+    let from_arrays = PatchCloud::from_tracks(
+        &positions,
+        &weights,
+        None,
+        &recon.observation_offsets,
+        &obs_images,
+        Some(&obs_scales),
+        &quats,
+        &trans,
+        &focals,
+        PatchNormal::MeanViewing,
+        extent,
+        false,
+    )
+    .unwrap();
+
+    assert_clouds_equal(&from_recon, &from_arrays);
+    // FeatureSize actually sized the patches (non-trivial equivalence).
+    assert!(from_arrays.len() == 12 && from_arrays.patch(0).half_extent[0] > 0.0);
+
+    std::fs::remove_dir_all(&recon.workspace_dir).ok();
+}
+
+#[test]
+fn from_tracks_matches_reconstruction_pixel_radius_and_stored_normal() {
+    // The non-`.sift` policies match too: PixelRadius extent + Stored normals
+    // (fed as an array) reproduce `from_reconstruction` on the same geometry.
+    let recon = SfmrReconstruction::demo(9);
+    let extent = PatchExtent::PixelRadius {
+        radius_px: 4.0,
+        across: ViewReduce::Min,
+    };
+    let from_recon =
+        PatchCloud::from_reconstruction(&recon, PatchNormal::Stored, extent, false).unwrap();
+
+    let positions: Vec<Point3<f64>> = recon.points.iter().map(|p| p.position).collect();
+    let weights: Vec<f64> = recon.points.iter().map(|p| p.w).collect();
+    let stored: Vec<Vector3<f64>> = recon
+        .points
+        .iter()
+        .map(|p| Vector3::new(p.normal.x as f64, p.normal.y as f64, p.normal.z as f64))
+        .collect();
+    let obs_images: Vec<u32> = recon.tracks.iter().map(|o| o.image_index).collect();
+    let (quats, trans, focals) = scene_arrays(&recon);
+    let from_arrays = PatchCloud::from_tracks(
+        &positions,
+        &weights,
+        Some(&stored),
+        &recon.observation_offsets,
+        &obs_images,
+        None,
+        &quats,
+        &trans,
+        &focals,
+        PatchNormal::Stored,
+        extent,
+        false,
+    )
+    .unwrap();
+    assert_clouds_equal(&from_recon, &from_arrays);
+}
+
+#[test]
+fn from_tracks_nan_scale_counts_as_unreadable() {
+    // Two points, each with one observation. A NaN scale entry is treated exactly
+    // like an unreadable `.sift` scale, so FeatureSize errors with the same
+    // MissingFeatureScale taxonomy (all observations unreadable, none coincident).
+    let positions = vec![Point3::new(0.0, 0.0, 3.0), Point3::new(1.0, 0.0, 3.0)];
+    let weights = vec![1.0, 1.0];
+    let obs_offsets = vec![0usize, 1, 2];
+    let obs_images = vec![0u32, 0];
+    let obs_scales = vec![f64::NAN, f64::NAN];
+    let quats = vec![UnitQuaternion::identity()];
+    // Camera at origin looking down −Z; points at +z=3 are a distance 3 away.
+    let trans = vec![Vector3::zeros()];
+    let focals = vec![500.0];
+
+    let err = PatchCloud::from_tracks(
+        &positions,
+        &weights,
+        None,
+        &obs_offsets,
+        &obs_images,
+        Some(&obs_scales),
+        &quats,
+        &trans,
+        &focals,
+        PatchNormal::MeanViewing,
+        PatchExtent::FeatureSize {
+            factor: 5.0,
+            across: ViewReduce::Median,
+        },
+        false,
+    )
+    .unwrap_err();
+    let PatchCloudError::MissingFeatureScale {
+        point_index,
+        observations,
+        unreadable_scale,
+        coincident_with_camera,
+    } = err;
+    assert_eq!(point_index, 0);
+    assert_eq!(observations, 1);
+    assert_eq!(unreadable_scale, 1);
+    assert_eq!(coincident_with_camera, 0);
+
+    // A readable (finite) scale for the same geometry sizes the patch fine.
+    let ok = PatchCloud::from_tracks(
+        &positions,
+        &weights,
+        None,
+        &obs_offsets,
+        &obs_images,
+        Some(&[3.0, 3.0]),
+        &quats,
+        &trans,
+        &focals,
+        PatchNormal::MeanViewing,
+        PatchExtent::FeatureSize {
+            factor: 5.0,
+            across: ViewReduce::Median,
+        },
+        false,
+    )
+    .unwrap();
+    assert_eq!(ok.len(), 2);
+    // half = factor * σ * d / f = 5 * 3 * 3 / 500.
+    assert!((ok.patch(0).half_extent[0] - 5.0 * 3.0 * 3.0 / 500.0).abs() < 1e-9);
+}
+
+#[test]
+fn from_tracks_builds_infinity_tangent_frames() {
+    // A finite point and a point at infinity (w = 0). Under
+    // exclude_points_at_infinity = false the infinity row gets a tangent-sphere
+    // frame (w = 0, normal = normalize(-d)); the finite one stays w = 1. Fixed
+    // extent needs no scales.
+    let positions = vec![
+        Point3::new(0.0, 0.0, -3.0), // finite, in front of the camera
+        Point3::new(0.0, 0.0, -1.0), // direction (at infinity)
+    ];
+    let weights = vec![1.0, 0.0];
+    let obs_offsets = vec![0usize, 1, 2];
+    let obs_images = vec![0u32, 0];
+    let quats = vec![UnitQuaternion::identity()];
+    let trans = vec![Vector3::zeros()];
+    let focals = vec![500.0];
+
+    let cloud = PatchCloud::from_tracks(
+        &positions,
+        &weights,
+        None,
+        &obs_offsets,
+        &obs_images,
+        None,
+        &quats,
+        &trans,
+        &focals,
+        PatchNormal::MeanViewing,
+        PatchExtent::Fixed(0.1),
+        false,
+    )
+    .unwrap();
+    assert_eq!(cloud.len(), 2);
+    // Finite patch first (point 0), then the infinity patch (point 1).
+    assert_eq!(cloud.point_indexes, vec![0, 1]);
+    assert_eq!(cloud.patch(0).w, 1.0);
+    assert_eq!(cloud.patch(1).w, 0.0);
+    // Infinity normal faces back toward the observers: normalize(-d) with d = -Z.
+    assert!((cloud.patch(1).normal() - Vector3::new(0.0, 0.0, 1.0)).norm() < 1e-9);
+
+    // exclude_points_at_infinity = true drops the infinity row.
+    let finite_only = PatchCloud::from_tracks(
+        &positions,
+        &weights,
+        None,
+        &obs_offsets,
+        &obs_images,
+        None,
+        &quats,
+        &trans,
+        &focals,
+        PatchNormal::MeanViewing,
+        PatchExtent::Fixed(0.1),
+        true,
+    )
+    .unwrap();
+    assert_eq!(finite_only.len(), 1);
+    assert_eq!(finite_only.point_indexes, vec![0]);
 }

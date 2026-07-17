@@ -400,6 +400,31 @@ supplies scales by reading the `.sift` files (behavior unchanged) and
 `from_tracks` supplies the caller's array. One implementation of the sizing
 policies, the infinity frames, and the error taxonomy.
 
+> _Status (2026-07-16): Implemented._
+> - Core: `patch/cloud.rs` — `from_reconstruction` / the new public
+>   `PatchCloud::from_tracks` both build an internal `PatchScene` (positions +
+>   weights, grouped observations, per-image poses/focal, per-observation scale
+>   source, stored normals) and call the shared `build_patch_cloud`; the finite
+>   sizing and `push_infinity_patches` are now one implementation. Scales come
+>   from `.sift` (reconstruction) or the caller's array with `NaN` = unreadable
+>   (tracks). Rust tests in `patch/cloud/tests.rs` cover the patch-for-patch
+>   `from_tracks` ≡ `from_reconstruction` equivalence (FeatureSize via written
+>   `.sift`, and PixelRadius + Stored), NaN-scale-as-unreadable, and the infinity
+>   frames.
+> - Binding: `sfmtool-py/src/py_patch_cloud.rs` — frozen `CameraViews`
+>   (validates shapes / camera-index range / unit quaternions, `__len__`), an
+>   internal `PosedViews` both a reconstruction and a `CameraViews` reduce to,
+>   and `PatchCloud.from_tracks`. `ImagePyramidSet` and the four kernels
+>   (`localize_keypoints`, `refine_keypoints`, `refine_normals`, `select_views`)
+>   accept either as their first argument; in views mode `view_sets` /
+>   `view_indices` / the new `select_views(candidate_views=…)` are required
+>   (`candidate_views` also overrides the track-derived lists in reconstruction
+>   mode). Python coverage in
+>   `tests/rust_bindings/test_camera_views_rust_bindings.py`.
+> - Deviation: the kernels' first parameter keeps the public name `recon` (its
+>   type widened to accept a `CameraViews`) rather than being renamed, so
+>   existing `recon=`-keyword callers keep working.
+
 ## Routine: project an image onto a patch
 
 The core operation. It fits the existing `WarpMap::from_*` constructor family

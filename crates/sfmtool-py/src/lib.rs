@@ -75,7 +75,7 @@ mod sift;
 // ── Image warping ────────────────────────────────────────────────────────
 
 mod py_patch_cloud;
-pub use py_patch_cloud::{PyImagePyramidSet, PyOrientedPatch, PyPatchCloud};
+pub use py_patch_cloud::{PyCameraViews, PyImagePyramidSet, PyOrientedPatch, PyPatchCloud};
 
 mod py_progress;
 pub use py_progress::ProgressCounter;
@@ -157,6 +157,7 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOrientedPatch>()?;
     m.add_class::<PyPatchCloud>()?;
     m.add_class::<PyImagePyramidSet>()?;
+    m.add_class::<PyCameraViews>()?;
     m.add_class::<ProgressCounter>()?;
 
     // Photometric refinement.
