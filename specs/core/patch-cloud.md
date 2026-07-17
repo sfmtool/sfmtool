@@ -303,6 +303,103 @@ with it.
 > photometric normal-refinement prototype lives in `scripts/patch_crossval.py`
 > (`--refine-normal`)._
 
+## Patch operations without a reconstruction
+
+Every patch kernel binding (`PatchCloud.refine_normals`, `select_views`,
+`localize_keypoints`, `refine_keypoints`) and `ImagePyramidSet` takes a
+reconstruction as its first argument, but consumes only three things from it:
+the per-image camera intrinsics, the per-image `cam_from_world` pose, and — as
+defaults — the per-point track view lists. The core kernels are already
+reconstruction-free: they operate on `ProjectedImage` (camera + pose + pyramid)
+plus explicit per-patch view lists. A caller holding in-memory geometry — poses
+and points as arrays, nothing saved — can therefore drive the whole patch stack
+without assembling a full `SfmrReconstruction` (workspace resolution, content
+hashes, thumbnails, metadata), none of which the kernels read.
+
+### `CameraViews`
+
+A binding-layer value object: the posed views of an in-memory scene. Lives in
+`sfmtool-py` only — the core already consumes cameras and poses directly.
+
+```python
+views = CameraViews(
+    cameras,               # list[CameraIntrinsics]
+    quaternions_wxyz,      # float64 (N, 4), unit cam_from_world rotations
+    translations_xyz,      # float64 (N, 3), cam_from_world translations
+    camera_indexes=None,   # uint32 (N,); None -> every view uses cameras[0]
+)
+```
+
+Construction validates shapes, camera indexes, and quaternion norms; the object
+is frozen once built, and `len(views)` is the view count `N`.
+
+A `CameraViews` is accepted anywhere the patch kernel methods take `recon`:
+
+- `ImagePyramidSet(views, images)` — the same per-image camera-dimension check.
+- `PatchCloud.localize_keypoints(views, images, view_sets=..., ...)` and
+  `refine_keypoints`, `refine_normals`, `select_views` likewise.
+
+Because a `CameraViews` carries no tracks, the track-derived per-point view
+defaults do not exist in this mode: `view_sets` (`localize_keypoints`,
+`refine_keypoints`) and `view_indices` (`refine_normals`) are **required** (a
+`ValueError` names the missing argument), and `select_views` grows an optional
+`candidate_views` mapping (`point_index -> [image_index, ...]`, mirroring
+`view_sets`) that is required with a `CameraViews` and, with a reconstruction,
+overrides the track-derived candidate lists. The reconstruction-mode point-range
+validation (cloud `point_indexes` against `recon.points`) does not apply; image
+indexes in the supplied view lists are still validated against `N`.
+
+### `PatchCloud.from_tracks`
+
+`from_reconstruction`'s normal and extent policies, fed by arrays instead of a
+reconstruction. The one on-disk dependency in `from_reconstruction` is the
+`FeatureSize` extent, which reads keypoint scales from the workspace `.sift`
+files; here the caller passes the scales.
+
+```python
+cloud = PatchCloud.from_tracks(
+    views,                    # CameraViews
+    positions_xyzw,           # float64 (P, 4); w = 0 rows are points at infinity
+    track_point_indexes,      # uint32 (M,), grouped by point (nondecreasing)
+    track_image_indexes,      # uint32 (M,)
+    keypoint_scales=None,     # float64 (M,) keypoint scale σ per observation;
+                              #   required for extent="feature_size"
+    normals=None,             # float64 (P, 3); required for normal="stored"
+    normal="mean_viewing",    # "stored" | "mean_viewing" | "geometric"
+    # ... the same extent/k_neighbors/reduce/exclude_points_at_infinity
+    # parameters as from_reconstruction, with the same defaults ...
+)
+```
+
+Semantics match `from_reconstruction` exactly, sourced from the arrays:
+
+- **Observations.** One `(point, image)` observation per row of the two track
+  arrays, grouped by point (`track_point_indexes` nondecreasing — the same
+  ordering `recon.tracks` guarantees; a violation is a `ValueError`). Every
+  point needs at least one observation: the in-plane up hint comes from the
+  first observing camera, and `MeanViewing` / view-dependent extents reduce over
+  the observing views.
+- **`FeatureSize`.** The world half-size is `factor · σ_i · d_i / f_i` reduced
+  across views, with `σ_i` read from `keypoint_scales` instead of the `.sift`
+  affine shapes. A NaN scale entry counts as an unreadable scale, so the
+  `MissingFeatureScale` error and its per-cause breakdown are unchanged.
+- **`normal="stored"`** reads the supplied `normals` rows (zero/degenerate rows
+  fall back to the mean viewing direction, as in `from_reconstruction`); omitting
+  `normals` with `normal="stored"` is a `ValueError`. The default is
+  `"mean_viewing"` since there is usually no stored normal to prefer.
+- **Points at infinity** (`w = 0` rows) get the tangent-sphere frame under
+  `exclude_points_at_infinity=False`, exactly as from a reconstruction.
+- `point_indexes` of the resulting cloud are row indexes into `positions_xyzw`,
+  so the kernels' `view_sets` / `point_indexes` arguments key the same way as in
+  reconstruction mode.
+
+In core, the body of `PatchCloud::from_reconstruction` becomes a shared routine
+over positions + homogeneous weights, grouped observation indexes, poses,
+cameras, and a per-observation keypoint-scale source; `from_reconstruction`
+supplies scales by reading the `.sift` files (behavior unchanged) and
+`from_tracks` supplies the caller's array. One implementation of the sizing
+policies, the infinity frames, and the error taxonomy.
+
 ## Routine: project an image onto a patch
 
 The core operation. It fits the existing `WarpMap::from_*` constructor family
