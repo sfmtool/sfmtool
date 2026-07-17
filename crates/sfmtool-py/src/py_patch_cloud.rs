@@ -5,12 +5,12 @@
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 use numpy::ndarray::Array2;
-use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2, PyReadonlyArray4};
+use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray4};
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use rayon::prelude::*;
 
 use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
@@ -29,6 +29,7 @@ use sfmtool_core::patch::normal_refine::{
     Objective, PatchWindow, ProjectedImage, Sampler,
 };
 use sfmtool_core::patch::view_selection::{select_patch_cloud_views, ViewSelectParams};
+use sfmtool_core::CameraIntrinsics;
 
 use crate::flow::warp::extract_image_u8;
 use crate::geometry::rigid_transform::PyRigidTransform;
@@ -196,6 +197,47 @@ fn parse_reduce(s: &str) -> PyResult<ViewReduce> {
     }
 }
 
+/// Map the binding's `normal` policy string (+ neighbor count) to [`PatchNormal`].
+/// Shared by [`PyPatchCloud::from_reconstruction`] and
+/// [`PyPatchCloud::from_tracks`].
+fn parse_normal(normal: &str, k_neighbors: usize) -> PyResult<PatchNormal> {
+    match normal {
+        "stored" => Ok(PatchNormal::Stored),
+        "mean_viewing" | "mean" => Ok(PatchNormal::MeanViewing),
+        "geometric" => Ok(PatchNormal::Geometric { k_neighbors }),
+        other => Err(PyValueError::new_err(format!(
+            "unknown normal policy: {other:?} (expected stored|mean_viewing|geometric)"
+        ))),
+    }
+}
+
+/// Map the binding's `extent` policy string (+ value and per-axis reduces) to
+/// [`PatchExtent`]. Shared by [`PyPatchCloud::from_reconstruction`] and
+/// [`PyPatchCloud::from_tracks`].
+fn parse_extent(
+    extent: &str,
+    extent_value: f64,
+    pixel_reduce: &str,
+    feature_reduce: &str,
+) -> PyResult<PatchExtent> {
+    match extent {
+        "fixed" => Ok(PatchExtent::Fixed(extent_value)),
+        "relative_spacing" => Ok(PatchExtent::RelativeToSpacing(extent_value)),
+        "pixel_radius" => Ok(PatchExtent::PixelRadius {
+            radius_px: extent_value,
+            across: parse_reduce(pixel_reduce)?,
+        }),
+        "feature_size" => Ok(PatchExtent::FeatureSize {
+            factor: extent_value,
+            across: parse_reduce(feature_reduce)?,
+        }),
+        other => Err(PyValueError::new_err(format!(
+            "unknown extent policy: {other:?} \
+             (expected fixed|relative_spacing|pixel_radius|feature_size)"
+        ))),
+    }
+}
+
 /// A collection of oriented patches built from a reconstruction's 3D points.
 ///
 /// See :meth:`from_reconstruction` and ``specs/core/patch-cloud.md``.
@@ -213,13 +255,7 @@ fn pyramid_levels(src: &ImageU8) -> usize {
 }
 
 /// Validate that image `i` (dimensions `w × h`) matches its camera's resolution.
-fn check_image_matches_camera(
-    recon: &sfmtool_core::SfmrReconstruction,
-    i: usize,
-    w: u32,
-    h: u32,
-) -> PyResult<()> {
-    let cam = &recon.cameras[recon.images[i].camera_index as usize];
+fn check_image_matches_camera(cam: &CameraIntrinsics, i: usize, w: u32, h: u32) -> PyResult<()> {
     if w != cam.width || h != cam.height {
         return Err(PyValueError::new_err(format!(
             "image {i} is {w}x{h} but its camera is {}x{}; \
@@ -258,21 +294,21 @@ pub(crate) fn build_pyramids_from_image_list(
 }
 
 /// Extract each numpy image and build its full pyramid, validating dimensions
-/// against the reconstruction's cameras.
-fn build_pyramids_from_arrays(
+/// against the per-view cameras (one camera per image, parallel to `images`).
+fn build_pyramids_from_cameras(
     py: Python<'_>,
-    recon: &sfmtool_core::SfmrReconstruction,
+    cameras: &[CameraIntrinsics],
     images: &[Bound<'_, PyAny>],
 ) -> PyResult<Vec<ImageU8Pyramid>> {
-    if images.len() != recon.images.len() {
+    if images.len() != cameras.len() {
         return Err(PyValueError::new_err(format!(
-            "images must be parallel to the reconstruction's {} images, got {}",
-            recon.images.len(),
+            "images must be parallel to the scene's {} views, got {}",
+            cameras.len(),
             images.len()
         )));
     }
     build_pyramids_from_image_list(py, images, |i, src| {
-        check_image_matches_camera(recon, i, src.width(), src.height())
+        check_image_matches_camera(&cameras[i], i, src.width(), src.height())
     })
 }
 
@@ -293,54 +329,249 @@ impl PyramidSet {
     }
 }
 
+/// The camera + pose inputs a patch kernel reads, materialized once per call from
+/// either a [`PySfmrReconstruction`] or a [`PyCameraViews`]: one owned camera and
+/// one `cam_from_world` pose per image (index = image index). Both scene sources
+/// reduce to this, so [`resolve_pyramids`] and the kernels' [`ProjectedImage`]
+/// assembly are identical for a reconstruction and a bare set of views.
+pub(crate) struct PosedViews {
+    /// Per-image camera intrinsics (resolved via each view's camera index).
+    cameras: Vec<CameraIntrinsics>,
+    /// Per-image `cam_from_world` pose.
+    poses: Vec<RigidTransform>,
+}
+
+impl PosedViews {
+    fn len(&self) -> usize {
+        self.cameras.len()
+    }
+
+    fn from_reconstruction(recon: &sfmtool_core::SfmrReconstruction) -> Self {
+        let cameras = recon
+            .images
+            .iter()
+            .map(|im| recon.cameras[im.camera_index as usize].clone())
+            .collect();
+        let poses = recon
+            .images
+            .iter()
+            .map(|im| {
+                let q = im.quaternion_wxyz;
+                RigidTransform::from_wxyz_translation(
+                    [q.w, q.i, q.j, q.k],
+                    [
+                        im.translation_xyz.x,
+                        im.translation_xyz.y,
+                        im.translation_xyz.z,
+                    ],
+                )
+            })
+            .collect();
+        Self { cameras, poses }
+    }
+}
+
+/// The scene passed as a patch kernel's first argument, resolved to owned
+/// [`PosedViews`] plus (when it is a reconstruction) a borrow of it for the
+/// track-derived defaults, per-observation keypoints, and point-range check that
+/// only a reconstruction carries. A [`PyCameraViews`] has none of those, so its
+/// `recon` is `None` and the caller must supply the per-patch view lists.
+fn resolve_scene<'py>(
+    scene: &Bound<'py, PyAny>,
+) -> PyResult<(PosedViews, Option<PyRef<'py, PySfmrReconstruction>>)> {
+    if let Ok(views) = scene.cast::<PyCameraViews>() {
+        Ok((views.get().to_posed_views(), None))
+    } else if let Ok(recon) = scene.extract::<PyRef<'py, PySfmrReconstruction>>() {
+        let posed = PosedViews::from_reconstruction(&recon.inner);
+        Ok((posed, Some(recon)))
+    } else {
+        Err(PyTypeError::new_err(
+            "expected an SfmrReconstruction or CameraViews as the first argument",
+        ))
+    }
+}
+
 /// Resolve the `images` argument of a PatchCloud kernel method — either a
-/// prebuilt [`PyImagePyramidSet`] (validated against `recon`, shared) or a list
-/// of numpy images (pyramids built for this call) — plus one camera pose per
-/// reconstruction image. Shared by `refine_normals`, `select_views`,
-/// `localize_keypoints`, and `refine_keypoints` so they handle imagery
-/// identically.
-fn build_pyramids_and_poses(
-    recon: &sfmtool_core::SfmrReconstruction,
-    images: &Bound<'_, PyAny>,
-) -> PyResult<(PyramidSet, Vec<RigidTransform>)> {
-    let pyramids = if let Ok(set) = images.cast::<PyImagePyramidSet>() {
+/// prebuilt [`PyImagePyramidSet`] (validated against the scene, shared) or a list
+/// of numpy images (pyramids built for this call). Shared by `refine_normals`,
+/// `select_views`, `localize_keypoints`, and `refine_keypoints` so they handle
+/// imagery identically for a reconstruction and a `CameraViews`.
+fn resolve_pyramids(posed: &PosedViews, images: &Bound<'_, PyAny>) -> PyResult<PyramidSet> {
+    if let Ok(set) = images.cast::<PyImagePyramidSet>() {
         let set = set.get();
-        if set.pyramids.len() != recon.images.len() {
+        if set.pyramids.len() != posed.len() {
             return Err(PyValueError::new_err(format!(
-                "ImagePyramidSet holds {} images but the reconstruction has {}; \
-                 build the set from this reconstruction's image list",
+                "ImagePyramidSet holds {} images but the scene has {}; \
+                 build the set from this scene's image list",
                 set.pyramids.len(),
-                recon.images.len()
+                posed.len()
             )));
         }
         for (i, pyr) in set.pyramids.iter().enumerate() {
             let l0 = pyr.level(0);
-            check_image_matches_camera(recon, i, l0.width(), l0.height())?;
+            check_image_matches_camera(&posed.cameras[i], i, l0.width(), l0.height())?;
         }
-        PyramidSet::Shared(Arc::clone(&set.pyramids))
+        Ok(PyramidSet::Shared(Arc::clone(&set.pyramids)))
     } else if let Ok(list) = images.extract::<Vec<Bound<'_, PyAny>>>() {
-        PyramidSet::Owned(build_pyramids_from_arrays(images.py(), recon, &list)?)
+        Ok(PyramidSet::Owned(build_pyramids_from_cameras(
+            images.py(),
+            &posed.cameras,
+            &list,
+        )?))
     } else {
-        return Err(PyTypeError::new_err(
+        Err(PyTypeError::new_err(
             "images must be a list of HxW[xC] uint8 numpy arrays or an ImagePyramidSet",
-        ));
-    };
-    let poses: Vec<RigidTransform> = recon
-        .images
-        .iter()
-        .map(|im| {
-            let q = im.quaternion_wxyz;
-            RigidTransform::from_wxyz_translation(
-                [q.w, q.i, q.j, q.k],
-                [
-                    im.translation_xyz.x,
-                    im.translation_xyz.y,
-                    im.translation_xyz.z,
-                ],
-            )
+        ))
+    }
+}
+
+/// Extract a `list[CameraIntrinsics]` as owned core cameras.
+fn extract_camera_list(obj: &Bound<'_, PyAny>) -> PyResult<Vec<CameraIntrinsics>> {
+    let list = obj
+        .cast::<PyList>()
+        .map_err(|_| PyTypeError::new_err("cameras must be a list of CameraIntrinsics"))?;
+    let mut out = Vec::with_capacity(list.len());
+    for item in list.iter() {
+        let cam: crate::PyCameraIntrinsics = item.extract().map_err(|_| {
+            PyTypeError::new_err("cameras must be a list of CameraIntrinsics objects")
+        })?;
+        out.push(cam.inner);
+    }
+    Ok(out)
+}
+
+/// The posed views of an in-memory scene — cameras and `cam_from_world` poses —
+/// accepted anywhere a patch kernel takes a reconstruction (see
+/// ``specs/core/patch-cloud.md``, "Patch operations without a reconstruction").
+///
+/// A ``CameraViews`` carries no tracks, so the per-point view lists the kernels
+/// otherwise derive from the reconstruction's tracks must be supplied explicitly:
+/// ``view_sets`` (:meth:`PatchCloud.localize_keypoints`,
+/// :meth:`PatchCloud.refine_keypoints`), ``view_indices``
+/// (:meth:`PatchCloud.refine_normals`), and ``candidate_views``
+/// (:meth:`PatchCloud.select_views`) become required.
+///
+/// Args:
+///     cameras: ``list[CameraIntrinsics]``; each view uses one of these (see
+///         ``camera_indexes``).
+///     quaternions_wxyz: ``(N, 4)`` float64 unit ``cam_from_world`` rotations.
+///     translations_xyz: ``(N, 3)`` float64 ``cam_from_world`` translations.
+///     camera_indexes: Optional ``(N,)`` uint32 index into ``cameras`` per view;
+///         ``None`` means every view uses ``cameras[0]``.
+#[pyclass(name = "CameraViews", module = "sfmtool", frozen)]
+pub struct PyCameraViews {
+    /// Per-view resolved camera intrinsics (length ``N``).
+    cameras: Vec<CameraIntrinsics>,
+    /// Per-view ``cam_from_world`` rotation (length ``N``).
+    quaternions: Vec<UnitQuaternion<f64>>,
+    /// Per-view ``cam_from_world`` translation (length ``N``).
+    translations: Vec<Vector3<f64>>,
+}
+
+impl PyCameraViews {
+    /// Materialize the owned cameras + poses a kernel reads.
+    fn to_posed_views(&self) -> PosedViews {
+        let poses = (0..self.cameras.len())
+            .map(|i| {
+                let q = self.quaternions[i];
+                RigidTransform::from_wxyz_translation(
+                    [q.w, q.i, q.j, q.k],
+                    [
+                        self.translations[i].x,
+                        self.translations[i].y,
+                        self.translations[i].z,
+                    ],
+                )
+            })
+            .collect();
+        PosedViews {
+            cameras: self.cameras.clone(),
+            poses,
+        }
+    }
+}
+
+#[pymethods]
+impl PyCameraViews {
+    #[new]
+    #[pyo3(signature = (cameras, quaternions_wxyz, translations_xyz, camera_indexes=None))]
+    fn new(
+        cameras: &Bound<'_, PyAny>,
+        quaternions_wxyz: PyReadonlyArray2<'_, f64>,
+        translations_xyz: PyReadonlyArray2<'_, f64>,
+        camera_indexes: Option<PyReadonlyArray1<'_, u32>>,
+    ) -> PyResult<Self> {
+        let cams = extract_camera_list(cameras)?;
+        if cams.is_empty() {
+            return Err(PyValueError::new_err(
+                "cameras must be a non-empty list of CameraIntrinsics",
+            ));
+        }
+        let q = quaternions_wxyz.as_array();
+        let t = translations_xyz.as_array();
+        let n = q.shape()[0];
+        if q.shape()[1] != 4 {
+            return Err(PyValueError::new_err(format!(
+                "quaternions_wxyz must have shape (N, 4), got (_, {})",
+                q.shape()[1]
+            )));
+        }
+        if t.shape()[0] != n || t.shape()[1] != 3 {
+            return Err(PyValueError::new_err(format!(
+                "translations_xyz must have shape ({n}, 3), got ({}, {})",
+                t.shape()[0],
+                t.shape()[1]
+            )));
+        }
+        let cam_idx: Vec<u32> = match &camera_indexes {
+            Some(arr) => {
+                let a = arr.as_array();
+                if a.shape()[0] != n {
+                    return Err(PyValueError::new_err(format!(
+                        "camera_indexes must have length {n} (parallel to the views), got {}",
+                        a.shape()[0]
+                    )));
+                }
+                a.to_vec()
+            }
+            None => vec![0u32; n],
+        };
+
+        let mut resolved = Vec::with_capacity(n);
+        let mut quats = Vec::with_capacity(n);
+        let mut trans = Vec::with_capacity(n);
+        for i in 0..n {
+            let ci = cam_idx[i] as usize;
+            if ci >= cams.len() {
+                return Err(PyValueError::new_err(format!(
+                    "camera_indexes[{i}] = {ci} is out of range for {} cameras",
+                    cams.len()
+                )));
+            }
+            resolved.push(cams[ci].clone());
+            let (qw, qx, qy, qz) = (q[[i, 0]], q[[i, 1]], q[[i, 2]], q[[i, 3]]);
+            let norm = (qw * qw + qx * qx + qy * qy + qz * qz).sqrt();
+            if (norm - 1.0).abs() > 1e-6 {
+                return Err(PyValueError::new_err(format!(
+                    "quaternions_wxyz[{i}] has norm {norm:.6}, expected a unit quaternion"
+                )));
+            }
+            quats.push(UnitQuaternion::from_quaternion(Quaternion::new(
+                qw, qx, qy, qz,
+            )));
+            trans.push(Vector3::new(t[[i, 0]], t[[i, 1]], t[[i, 2]]));
+        }
+        Ok(Self {
+            cameras: resolved,
+            quaternions: quats,
+            translations: trans,
         })
-        .collect();
-    Ok((pyramids, poses))
+    }
+
+    /// The number of views ``N``.
+    fn __len__(&self) -> usize {
+        self.cameras.len()
+    }
 }
 
 /// Per-image source pyramids prebuilt **once** and shared across PatchCloud
@@ -356,14 +587,14 @@ fn build_pyramids_and_poses(
 /// results are unchanged; the build itself is rayon-parallel.
 ///
 /// Args:
-///     recon: The reconstruction the images belong to. Each image is validated
-///         against its camera's resolution at build time; kernel calls
-///         re-validate the set against *their* reconstruction (image count and
-///         per-image camera dimensions), so a set built here works for any
-///         reconstruction with the same images (e.g. across ``embed-patches``
-///         rounds).
-///     images: One source image (HxWxC uint8 numpy array) per reconstruction
-///         image, parallel to ``recon`` (index = image index).
+///     views_or_recon: The scene the images belong to — an
+///         :class:`SfmrReconstruction` or a :class:`CameraViews`. Each image is
+///         validated against its camera's resolution at build time; kernel calls
+///         re-validate the set against *their* scene (image count and per-image
+///         camera dimensions), so a set built here works for any scene with the
+///         same images (e.g. across ``embed-patches`` rounds).
+///     images: One source image (HxWxC uint8 numpy array) per view, parallel to
+///         ``views_or_recon`` (index = image index).
 #[pyclass(name = "ImagePyramidSet", module = "sfmtool", frozen)]
 pub struct PyImagePyramidSet {
     pub(crate) pyramids: Arc<Vec<ImageU8Pyramid>>,
@@ -372,13 +603,14 @@ pub struct PyImagePyramidSet {
 #[pymethods]
 impl PyImagePyramidSet {
     #[new]
-    #[pyo3(signature = (recon, images))]
+    #[pyo3(signature = (views_or_recon, images))]
     fn new(
         py: Python<'_>,
-        recon: &PySfmrReconstruction,
+        views_or_recon: &Bound<'_, PyAny>,
         images: Vec<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
-        let pyramids = build_pyramids_from_arrays(py, &recon.inner, &images)?;
+        let (posed, _recon) = resolve_scene(views_or_recon)?;
+        let pyramids = build_pyramids_from_cameras(py, &posed.cameras, &images)?;
         Ok(Self {
             pyramids: Arc::new(pyramids),
         })
@@ -440,38 +672,203 @@ impl PyPatchCloud {
         feature_reduce: &str,
         exclude_points_at_infinity: bool,
     ) -> PyResult<Self> {
-        let normal = match normal {
-            "stored" => PatchNormal::Stored,
-            "mean_viewing" | "mean" => PatchNormal::MeanViewing,
-            "geometric" => PatchNormal::Geometric { k_neighbors },
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown normal policy: {other:?} (expected stored|mean_viewing|geometric)"
-                )))
-            }
-        };
-        let extent = match extent {
-            "fixed" => PatchExtent::Fixed(extent_value),
-            "relative_spacing" => PatchExtent::RelativeToSpacing(extent_value),
-            "pixel_radius" => PatchExtent::PixelRadius {
-                radius_px: extent_value,
-                across: parse_reduce(pixel_reduce)?,
-            },
-            "feature_size" => PatchExtent::FeatureSize {
-                factor: extent_value,
-                across: parse_reduce(feature_reduce)?,
-            },
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown extent policy: {other:?} \
-                     (expected fixed|relative_spacing|pixel_radius|feature_size)"
-                )))
-            }
-        };
+        let normal = parse_normal(normal, k_neighbors)?;
+        let extent = parse_extent(extent, extent_value, pixel_reduce, feature_reduce)?;
         let inner = PatchCloud::from_reconstruction(
             &recon.inner,
             normal,
             extent,
+            exclude_points_at_infinity,
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Build a patch cloud from in-memory arrays instead of a reconstruction — the
+    /// array counterpart of :meth:`from_reconstruction` (same normal / extent
+    /// policies, up-hint, infinity frames, and errors). See
+    /// ``specs/core/patch-cloud.md``, "Patch operations without a reconstruction".
+    ///
+    /// Args:
+    ///     views: A :class:`CameraViews` — the posed views the patches are sized
+    ///         and oriented against.
+    ///     positions_xyzw: ``(P, 4)`` float64 homogeneous 3D points; a ``w = 0`` row
+    ///         is a point at infinity (its ``xyz`` is a direction).
+    ///     track_point_indexes: ``(M,)`` uint32 point id per observation, grouped by
+    ///         point (**nondecreasing**; a violation is a ``ValueError``). Every
+    ///         point must have at least one observation.
+    ///     track_image_indexes: ``(M,)`` uint32 image (view) index per observation,
+    ///         parallel to ``track_point_indexes``.
+    ///     keypoint_scales: Optional ``(M,)`` float64 keypoint scale ``σ`` per
+    ///         observation; **required** for ``extent="feature_size"``. A ``NaN``
+    ///         entry counts as an unreadable scale (same
+    ///         ``MissingFeatureScale`` handling as a missing ``.sift`` scale).
+    ///     normals: Optional ``(P, 3)`` float64 per-point normals; **required** for
+    ///         ``normal="stored"`` (a zero/degenerate row falls back to the mean
+    ///         viewing direction).
+    ///     normal: Normal policy — ``"mean_viewing"`` (default), ``"stored"``, or
+    ///         ``"geometric"``.
+    ///     k_neighbors, extent, extent_value, pixel_reduce, feature_reduce,
+    ///     exclude_points_at_infinity: As in :meth:`from_reconstruction`
+    ///         (``extent`` defaults to ``"feature_size"``, ``extent_value`` to
+    ///         ``2.5``).
+    ///
+    /// The resulting patches' ``point_indexes`` are row indexes into
+    /// ``positions_xyzw``.
+    #[staticmethod]
+    #[pyo3(signature = (
+        views, positions_xyzw, track_point_indexes, track_image_indexes,
+        keypoint_scales=None, normals=None, normal="mean_viewing", k_neighbors=12,
+        extent="feature_size", extent_value=2.5, pixel_reduce="min",
+        feature_reduce="median", exclude_points_at_infinity=false
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn from_tracks(
+        views: &PyCameraViews,
+        positions_xyzw: PyReadonlyArray2<'_, f64>,
+        track_point_indexes: PyReadonlyArray1<'_, u32>,
+        track_image_indexes: PyReadonlyArray1<'_, u32>,
+        keypoint_scales: Option<PyReadonlyArray1<'_, f64>>,
+        normals: Option<PyReadonlyArray2<'_, f64>>,
+        normal: &str,
+        k_neighbors: usize,
+        extent: &str,
+        extent_value: f64,
+        pixel_reduce: &str,
+        feature_reduce: &str,
+        exclude_points_at_infinity: bool,
+    ) -> PyResult<Self> {
+        let normal_policy = parse_normal(normal, k_neighbors)?;
+        let extent_policy = parse_extent(extent, extent_value, pixel_reduce, feature_reduce)?;
+
+        let pos = positions_xyzw.as_array();
+        if pos.shape()[1] != 4 {
+            return Err(PyValueError::new_err(format!(
+                "positions_xyzw must have shape (P, 4), got (_, {})",
+                pos.shape()[1]
+            )));
+        }
+        let p = pos.shape()[0];
+        let positions: Vec<Point3<f64>> = (0..p)
+            .map(|i| Point3::new(pos[[i, 0]], pos[[i, 1]], pos[[i, 2]]))
+            .collect();
+        let weights: Vec<f64> = (0..p).map(|i| pos[[i, 3]]).collect();
+
+        let tpi = track_point_indexes.as_array();
+        let tii = track_image_indexes.as_array();
+        let m = tpi.shape()[0];
+        if tii.shape()[0] != m {
+            return Err(PyValueError::new_err(format!(
+                "track_point_indexes and track_image_indexes must be the same length \
+                 ({m} vs {})",
+                tii.shape()[0]
+            )));
+        }
+        let n_images = views.cameras.len() as u32;
+
+        // Group the observations into per-point offsets, validating that the point
+        // ids are nondecreasing (the grouping the shared routine assumes), in range,
+        // that image indexes are in range, and that every point has ≥1 observation.
+        let mut obs_offsets = vec![0usize; p + 1];
+        let mut counts = vec![0usize; p];
+        let mut prev: Option<u32> = None;
+        for j in 0..m {
+            let pid = tpi[j];
+            if let Some(pv) = prev {
+                if pid < pv {
+                    return Err(PyValueError::new_err(
+                        "track_point_indexes must be nondecreasing (grouped by point)",
+                    ));
+                }
+            }
+            prev = Some(pid);
+            if pid as usize >= p {
+                return Err(PyValueError::new_err(format!(
+                    "track_point_indexes[{j}] = {pid} is out of range for {p} points"
+                )));
+            }
+            let img = tii[j];
+            if img >= n_images {
+                return Err(PyValueError::new_err(format!(
+                    "track_image_indexes[{j}] = {img} is out of range for {n_images} views"
+                )));
+            }
+            counts[pid as usize] += 1;
+        }
+        for (pid, &c) in counts.iter().enumerate() {
+            if c == 0 {
+                return Err(PyValueError::new_err(format!(
+                    "point {pid} has no observation; every point needs at least one"
+                )));
+            }
+            obs_offsets[pid + 1] = obs_offsets[pid] + c;
+        }
+        let obs_images: Vec<u32> = tii.to_vec();
+
+        // FeatureSize needs the caller's per-observation scales.
+        let scales_vec: Option<Vec<f64>> = match &keypoint_scales {
+            Some(arr) => {
+                let a = arr.as_array();
+                if a.shape()[0] != m {
+                    return Err(PyValueError::new_err(format!(
+                        "keypoint_scales must have length {m} (parallel to the tracks), got {}",
+                        a.shape()[0]
+                    )));
+                }
+                Some(a.to_vec())
+            }
+            None => {
+                if matches!(extent_policy, PatchExtent::FeatureSize { .. }) {
+                    return Err(PyValueError::new_err(
+                        "keypoint_scales is required for extent=\"feature_size\"",
+                    ));
+                }
+                None
+            }
+        };
+
+        // Stored normals (required for normal="stored").
+        let stored_vec: Option<Vec<Vector3<f64>>> = match &normals {
+            Some(arr) => {
+                let a = arr.as_array();
+                if a.shape()[0] != p || a.shape()[1] != 3 {
+                    return Err(PyValueError::new_err(format!(
+                        "normals must have shape ({p}, 3), got ({}, {})",
+                        a.shape()[0],
+                        a.shape()[1]
+                    )));
+                }
+                Some(
+                    (0..p)
+                        .map(|i| Vector3::new(a[[i, 0]], a[[i, 1]], a[[i, 2]]))
+                        .collect(),
+                )
+            }
+            None => {
+                if matches!(normal_policy, PatchNormal::Stored) {
+                    return Err(PyValueError::new_err(
+                        "normals is required for normal=\"stored\"",
+                    ));
+                }
+                None
+            }
+        };
+
+        // Per-view poses + focal lengths from the CameraViews.
+        let cam_focals: Vec<f64> = views.cameras.iter().map(|c| c.focal_lengths().0).collect();
+
+        let inner = PatchCloud::from_tracks(
+            &positions,
+            &weights,
+            stored_vec.as_deref(),
+            &obs_offsets,
+            &obs_images,
+            scales_vec.as_deref(),
+            &views.quaternions,
+            &views.translations,
+            &cam_focals,
+            normal_policy,
+            extent_policy,
             exclude_points_at_infinity,
         )
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -548,7 +945,9 @@ impl PyPatchCloud {
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from (provides cameras,
-    ///         poses, and the per-point observing-image lists via ``point_indexes``).
+    ///         poses, and the per-point observing-image lists via ``point_indexes``),
+    ///         **or** a :class:`CameraViews` — which carries no tracks, so
+    ///         ``view_indices`` becomes required.
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
     ///         image, parallel to ``recon`` (index = image index), **or** an
     ///         :class:`ImagePyramidSet` prebuilt from those images (decode the
@@ -646,7 +1045,7 @@ impl PyPatchCloud {
     fn refine_normals<'py>(
         &mut self,
         py: Python<'py>,
-        recon: &PySfmrReconstruction,
+        recon: &Bound<'py, PyAny>,
         images: &Bound<'py, PyAny>,
         resolution: u32,
         angular_range_deg: f64,
@@ -672,26 +1071,39 @@ impl PyPatchCloud {
         render_bitmaps: bool,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let recon = &recon.inner;
-        // The cloud must have been built from this reconstruction: its per-patch
-        // point_indexes index `recon`'s points. This is a range check only — it
-        // catches a too-small recon (and would-be panics in the core), but cannot
-        // detect a *different* recon with at least as many points; the caller is
-        // responsible for passing the recon the cloud was built from.
+        // Resolve the scene: a reconstruction (track-derived per-patch view
+        // defaults) or a bare CameraViews (no tracks — `view_indices` required).
+        let (posed, recon_guard) = resolve_scene(recon)?;
+        let recon_opt = recon_guard.as_ref().map(|r| &r.inner);
+        let n_images = posed.len() as u32;
         if self.inner.point_indexes.len() != self.inner.len() {
             return Err(PyValueError::new_err(
                 "patch cloud has no per-patch point_indexes; rebuild it with from_reconstruction",
             ));
         }
-        if self
-            .inner
-            .point_indexes
-            .iter()
-            .any(|&p| p as usize >= recon.points.len())
-        {
+        // The cloud's per-patch point_indexes index the reconstruction's points, so
+        // this range check catches a too-small recon (and would-be panics in the
+        // core). A CameraViews carries no points, so it does not apply there;
+        // supplied view lists are still validated against the view count below.
+        if let Some(recon) = recon_opt {
+            if self
+                .inner
+                .point_indexes
+                .iter()
+                .any(|&p| p as usize >= recon.points.len())
+            {
+                return Err(PyValueError::new_err(
+                    "patch cloud point_indexes are out of range for this reconstruction \
+                     (was the cloud built from a different recon?)",
+                ));
+            }
+        }
+        // Without tracks there is no default per-patch view list, so `view_indices`
+        // is required. Fail fast before decoding any imagery.
+        if recon_opt.is_none() && view_indices.is_none() {
             return Err(PyValueError::new_err(
-                "patch cloud point_indexes are out of range for this reconstruction \
-                 (was the cloud built from a different recon?)",
+                "view_indices is required when the first argument is a CameraViews \
+                 (there are no tracks to derive per-patch views from)",
             ));
         }
         let objective = match objective {
@@ -762,23 +1174,22 @@ impl PyPatchCloud {
             max_refine_views,
         };
 
-        // Build one pyramid + pose per reconstruction image; the ProjectedImages
-        // borrow these for the duration of the refinement. The warp validity /
-        // sampling assume each image matches its camera's resolution, so the
-        // helper rejects mismatched sizes.
-        let (pyramid_set, poses) = build_pyramids_and_poses(recon, images)?;
+        // Build one pyramid + pose per image; the ProjectedImages borrow these for
+        // the duration of the refinement. The warp validity / sampling assume each
+        // image matches its camera's resolution, so the helper rejects mismatched
+        // sizes.
+        let pyramid_set = resolve_pyramids(&posed, images)?;
         let pyramids = pyramid_set.as_slice();
-        let views: Vec<ProjectedImage<'_>> = (0..recon.images.len())
+        let views: Vec<ProjectedImage<'_>> = (0..posed.len())
             .map(|i| ProjectedImage {
-                camera: &recon.cameras[recon.images[i].camera_index as usize],
-                cam_from_world: &poses[i],
+                camera: &posed.cameras[i],
+                cam_from_world: &posed.poses[i],
                 pyramid: &pyramids[i],
             })
             .collect();
-        // The per-patch view sets the consensus is scored over. By default these
-        // are the reconstruction's track observations; `view_indices` overrides
-        // them with an explicit per-patch list (e.g. every geometrically-visible
-        // image, for an MVS-style refinement).
+        // The per-patch view sets the consensus is scored over. In reconstruction
+        // mode these default to the track observations; `view_indices` overrides
+        // them with an explicit per-patch list (also the only source in views mode).
         let mut patch_views = match view_indices {
             Some(mut views) => {
                 if views.len() != self.inner.len() {
@@ -788,11 +1199,9 @@ impl PyPatchCloud {
                         views.len()
                     )));
                 }
-                let n_images = recon.images.len() as u32;
                 if views.iter().flatten().any(|&i| i >= n_images) {
                     return Err(PyValueError::new_err(
-                        "view_indices contains an image index out of range for this \
-                         reconstruction",
+                        "view_indices contains an image index out of range for this scene",
                     ));
                 }
                 // Drop repeated views within a patch: the consensus weights each
@@ -805,7 +1214,8 @@ impl PyPatchCloud {
                 }
                 views
             }
-            None => view_indices_from_reconstruction(recon, &self.inner),
+            // Guaranteed `Some` in views mode by the early required-arg check.
+            None => view_indices_from_reconstruction(recon_opt.unwrap(), &self.inner),
         };
         // Optional subset: refine only patches whose point id is listed. Cleared
         // view-lists make `refine_patch_normal` skip a patch immediately (it sees
@@ -825,37 +1235,42 @@ impl PyPatchCloud {
         // point center. Only an `embedded_patches` recon carries inline keypoints;
         // a `sift_files` recon (or any other view without a stored keypoint) falls
         // through per-view to the reprojected center.
-        let patch_view_keypoints: Option<Vec<Vec<Option<[f64; 2]>>>> = use_stored_keypoints
-            .then(|| recon.keypoints_xy())
-            .flatten()
-            .map(|keypoints_xy| {
-                // (point_index, image_index) -> stored keypoint. `keypoints_xy` is
-                // parallel to `recon.tracks`, so walk the tracks once and index by
-                // observation row. Duplicate (point, image) observations all key to
-                // the same map entry, so any duplicate view resolves to the same
-                // keypoint (last write wins, harmless).
-                let mut kp_map: std::collections::HashMap<(u32, u32), [f64; 2]> =
-                    std::collections::HashMap::with_capacity(recon.tracks.len());
-                for (j, obs) in recon.tracks.iter().enumerate() {
-                    kp_map.insert(
-                        (obs.point_index, obs.image_index),
-                        [keypoints_xy[[j, 0]] as f64, keypoints_xy[[j, 1]] as f64],
-                    );
-                }
-                // Build per-patch keypoints parallel to `patch_views`: for each
-                // patch's (point_index, image_index) view, the stored keypoint when
-                // present (else `None`, which the core treats as "anchor at the
-                // reprojected center for this view").
-                patch_views
-                    .iter()
-                    .zip(&self.inner.point_indexes)
-                    .map(|(pv, &pidx)| {
-                        pv.iter()
-                            .map(|&img| kp_map.get(&(pidx, img)).copied())
-                            .collect()
-                    })
-                    .collect()
-            });
+        // Only a reconstruction carries inline keypoints; a CameraViews has none,
+        // so every view falls through per-view to the reprojected center.
+        let patch_view_keypoints: Option<Vec<Vec<Option<[f64; 2]>>>> = if use_stored_keypoints {
+            recon_opt.and_then(|recon| {
+                recon.keypoints_xy().map(|keypoints_xy| {
+                    // (point_index, image_index) -> stored keypoint. `keypoints_xy`
+                    // is parallel to `recon.tracks`, so walk the tracks once and
+                    // index by observation row. Duplicate (point, image)
+                    // observations all key to the same map entry, so any duplicate
+                    // view resolves to the same keypoint (last write wins, harmless).
+                    let mut kp_map: std::collections::HashMap<(u32, u32), [f64; 2]> =
+                        std::collections::HashMap::with_capacity(recon.tracks.len());
+                    for (j, obs) in recon.tracks.iter().enumerate() {
+                        kp_map.insert(
+                            (obs.point_index, obs.image_index),
+                            [keypoints_xy[[j, 0]] as f64, keypoints_xy[[j, 1]] as f64],
+                        );
+                    }
+                    // Build per-patch keypoints parallel to `patch_views`: for each
+                    // patch's (point_index, image_index) view, the stored keypoint
+                    // when present (else `None`, which the core treats as "anchor at
+                    // the reprojected center for this view").
+                    patch_views
+                        .iter()
+                        .zip(&self.inner.point_indexes)
+                        .map(|(pv, &pidx)| {
+                            pv.iter()
+                                .map(|&img| kp_map.get(&(pidx, img)).copied())
+                                .collect()
+                        })
+                        .collect()
+                })
+            })
+        } else {
+            None
+        };
 
         // Hold a handle to the shared counter across the detach so a Python
         // poller thread can read it while this pass runs with the GIL released.
@@ -900,7 +1315,18 @@ impl PyPatchCloud {
         // their zero rows, mirroring `PatchCloud::to_halfvec_arrays`.
         if render_bitmaps {
             let r = resolution as usize;
-            let npoints = recon.points.len();
+            // Scatter per source 3D point. In views mode there is no reconstruction
+            // point count, so size to the highest referenced point id.
+            let npoints = recon_opt
+                .map(|recon| recon.points.len())
+                .unwrap_or_else(|| {
+                    self.inner
+                        .point_indexes
+                        .iter()
+                        .copied()
+                        .max()
+                        .map_or(0, |m| m as usize + 1)
+                });
             let stride = r * r * 4;
             let mut flat = vec![0u8; npoints * stride];
             for (res, &pid) in results.iter().zip(&self.inner.point_indexes) {
@@ -927,7 +1353,9 @@ impl PyPatchCloud {
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from (provides cameras,
-    ///         poses, and the per-point track view lists via ``point_indexes``).
+    ///         poses, and the per-point track view lists via ``point_indexes``),
+    ///         **or** a :class:`CameraViews` — which carries no tracks, so
+    ///         ``candidate_views`` becomes required.
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
     ///         image, parallel to ``recon`` (index = image index), **or** an
     ///         :class:`ImagePyramidSet` prebuilt from those images (decode the
@@ -953,6 +1381,12 @@ impl PyPatchCloud {
     ///         ``min_relative_zncc`` × self-agreement.
     ///     point_indexes: If given, select only for the patches with these source
     ///         point ids; ``None`` (default) selects for every patch.
+    ///     candidate_views: Optional mapping ``point_index -> [image_index, ...]``
+    ///         giving each point's base (always-admitted) view list — the role the
+    ///         track observations play in reconstruction mode. **Required** when the
+    ///         first argument is a :class:`CameraViews` (there are no tracks);
+    ///         with a reconstruction it *overrides* the track-derived list for the
+    ///         points present in the map (points absent keep their track views).
     ///
     /// Returns a list of per-patch dicts (parallel to the cloud's patches, in
     /// cloud order): ``point_index`` (int), ``admitted`` (1-D int32 numpy array of
@@ -965,12 +1399,13 @@ impl PyPatchCloud {
     #[pyo3(signature = (
         recon, images, *, min_relative_zncc=0.7, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear", min_valid_fraction=0.6, min_track_views=2,
-        robust_iters=3, min_self_agreement=0.3, point_indexes=None, progress=None
+        robust_iters=3, min_self_agreement=0.3, point_indexes=None, candidate_views=None,
+        progress=None
     ))]
     fn select_views<'py>(
         &self,
         py: Python<'py>,
-        recon: &PySfmrReconstruction,
+        recon: &Bound<'py, PyAny>,
         images: &Bound<'py, PyAny>,
         min_relative_zncc: f64,
         resolution: u32,
@@ -982,23 +1417,36 @@ impl PyPatchCloud {
         robust_iters: u32,
         min_self_agreement: f64,
         point_indexes: Option<Vec<u32>>,
+        candidate_views: Option<std::collections::HashMap<u32, Vec<u32>>>,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
-        let recon = &recon.inner;
+        let (posed, recon_guard) = resolve_scene(recon)?;
+        let recon_opt = recon_guard.as_ref().map(|r| &r.inner);
+        let n_images = posed.len() as u32;
         if self.inner.point_indexes.len() != self.inner.len() {
             return Err(PyValueError::new_err(
                 "patch cloud has no per-patch point_indexes; rebuild it with from_reconstruction",
             ));
         }
-        if self
-            .inner
-            .point_indexes
-            .iter()
-            .any(|&p| p as usize >= recon.points.len())
-        {
+        if let Some(recon) = recon_opt {
+            if self
+                .inner
+                .point_indexes
+                .iter()
+                .any(|&p| p as usize >= recon.points.len())
+            {
+                return Err(PyValueError::new_err(
+                    "patch cloud point_indexes are out of range for this reconstruction \
+                     (was the cloud built from a different recon?)",
+                ));
+            }
+        }
+        // Without tracks there is no default candidate list, so `candidate_views`
+        // is required. Fail fast before decoding any imagery.
+        if recon_opt.is_none() && candidate_views.is_none() {
             return Err(PyValueError::new_err(
-                "patch cloud point_indexes are out of range for this reconstruction \
-                 (was the cloud built from a different recon?)",
+                "candidate_views is required when the first argument is a CameraViews \
+                 (there are no tracks to derive per-patch candidate views from)",
             ));
         }
 
@@ -1037,20 +1485,40 @@ impl PyPatchCloud {
             min_self_agreement,
         };
 
-        let (pyramid_set, poses) = build_pyramids_and_poses(recon, images)?;
+        let pyramid_set = resolve_pyramids(&posed, images)?;
         let pyramids = pyramid_set.as_slice();
-        let views: Vec<ProjectedImage<'_>> = (0..recon.images.len())
+        let views: Vec<ProjectedImage<'_>> = (0..posed.len())
             .map(|i| ProjectedImage {
-                camera: &recon.cameras[recon.images[i].camera_index as usize],
-                cam_from_world: &poses[i],
+                camera: &posed.cameras[i],
+                cam_from_world: &posed.poses[i],
                 pyramid: &pyramids[i],
             })
             .collect();
 
-        // Per-patch track view lists from the reconstruction; an empty list makes
-        // a patch's selection trivially empty, so `point_indexes` selects a subset by
+        // Per-patch base (always-admitted) view lists. In reconstruction mode these
+        // default to the track observations; `candidate_views` overrides the listed
+        // points (and is the only source in views mode). An empty list makes a
+        // patch's selection trivially empty, so `point_indexes` selects a subset by
         // clearing the rest.
-        let mut track_views = view_indices_from_reconstruction(recon, &self.inner);
+        let mut track_views = match recon_opt {
+            Some(recon) => view_indices_from_reconstruction(recon, &self.inner),
+            None => vec![Vec::new(); self.inner.len()],
+        };
+        if let Some(map) = &candidate_views {
+            for vs in map.values() {
+                if let Some(&bad) = vs.iter().find(|&&i| i >= n_images) {
+                    return Err(PyValueError::new_err(format!(
+                        "candidate_views contains image index {bad} out of range for this \
+                         scene's {n_images} views"
+                    )));
+                }
+            }
+            for (tv, &pid) in track_views.iter_mut().zip(&self.inner.point_indexes) {
+                if let Some(vs) = map.get(&pid) {
+                    *tv = vs.clone();
+                }
+            }
+        }
         let selected_mask: Option<std::collections::HashSet<u32>> =
             point_indexes.map(|ids| ids.into_iter().collect());
         if let Some(keep) = &selected_mask {
@@ -1099,7 +1567,9 @@ impl PyPatchCloud {
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from (cameras, poses, and
-    ///         the per-point track view lists via ``point_indexes``).
+    ///         the per-point track view lists via ``point_indexes``), **or** a
+    ///         :class:`CameraViews` — which carries no tracks, so ``view_sets``
+    ///         becomes required.
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
     ///         image, parallel to ``recon`` (index = image index), **or** an
     ///         :class:`ImagePyramidSet` prebuilt from those images (decode the
@@ -1150,7 +1620,7 @@ impl PyPatchCloud {
     fn localize_keypoints<'py>(
         &self,
         py: Python<'py>,
-        recon: &PySfmrReconstruction,
+        recon: &Bound<'py, PyAny>,
         images: &Bound<'py, PyAny>,
         view_sets: Option<std::collections::HashMap<u32, Vec<u32>>>,
         max_iters: u32,
@@ -1169,21 +1639,33 @@ impl PyPatchCloud {
         search_strategy: &str,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
-        let recon = &recon.inner;
+        let (posed, recon_guard) = resolve_scene(recon)?;
+        let recon_opt = recon_guard.as_ref().map(|r| &r.inner);
+        let n_images = posed.len() as u32;
         if self.inner.point_indexes.len() != self.inner.len() {
             return Err(PyValueError::new_err(
                 "patch cloud has no per-patch point_indexes; rebuild it with from_reconstruction",
             ));
         }
-        if self
-            .inner
-            .point_indexes
-            .iter()
-            .any(|&p| p as usize >= recon.points.len())
-        {
+        if let Some(recon) = recon_opt {
+            if self
+                .inner
+                .point_indexes
+                .iter()
+                .any(|&p| p as usize >= recon.points.len())
+            {
+                return Err(PyValueError::new_err(
+                    "patch cloud point_indexes are out of range for this reconstruction \
+                     (was the cloud built from a different recon?)",
+                ));
+            }
+        }
+        // Without tracks there is no default per-patch view list, so `view_sets` is
+        // required. Fail fast before decoding any imagery.
+        if recon_opt.is_none() && view_sets.is_none() {
             return Err(PyValueError::new_err(
-                "patch cloud point_indexes are out of range for this reconstruction \
-                 (was the cloud built from a different recon?)",
+                "view_sets is required when the first argument is a CameraViews \
+                 (there are no tracks to derive per-patch views from)",
             ));
         }
 
@@ -1240,30 +1722,34 @@ impl PyPatchCloud {
             search_strategy,
         };
 
-        let (pyramid_set, poses) = build_pyramids_and_poses(recon, images)?;
+        let pyramid_set = resolve_pyramids(&posed, images)?;
         let pyramids = pyramid_set.as_slice();
-        let views: Vec<ProjectedImage<'_>> = (0..recon.images.len())
+        let views: Vec<ProjectedImage<'_>> = (0..posed.len())
             .map(|i| ProjectedImage {
-                camera: &recon.cameras[recon.images[i].camera_index as usize],
-                cam_from_world: &poses[i],
+                camera: &posed.cameras[i],
+                cam_from_world: &posed.poses[i],
                 pyramid: &pyramids[i],
             })
             .collect();
 
-        // Per-patch view sets: the supplied map where present, else the track. An
-        // empty view set makes a patch's localization trivially empty, so
-        // `point_indexes` selects a subset by clearing the rest.
-        let mut sets = view_indices_from_reconstruction(recon, &self.inner);
+        // Per-patch view sets: the supplied map where present, else the track (in
+        // views mode there is no track, so the base is empty and `view_sets` — which
+        // is required — supplies every list). An empty view set makes a patch's
+        // localization trivially empty, so `point_indexes` selects a subset by
+        // clearing the rest.
+        let mut sets = match recon_opt {
+            Some(recon) => view_indices_from_reconstruction(recon, &self.inner),
+            None => vec![Vec::new(); self.inner.len()],
+        };
         if let Some(map) = &view_sets {
             // Reject out-of-range image indices up front so the kernel never indexes
             // `views` out of bounds (which would surface as an opaque panic rather
             // than a clean error). The kernel dedups, so duplicates are fine here.
-            let n_images = recon.images.len() as u32;
             for vs in map.values() {
                 if let Some(&bad) = vs.iter().find(|&&i| i >= n_images) {
                     return Err(PyValueError::new_err(format!(
                         "view_sets contains image index {bad} out of range for this \
-                         reconstruction's {n_images} images"
+                         scene's {n_images} views"
                     )));
                 }
             }
@@ -1332,7 +1818,10 @@ impl PyPatchCloud {
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from (cameras, poses, and
-    ///         the per-point track view lists via ``point_indexes``).
+    ///         the per-point track view lists via ``point_indexes``), **or** a
+    ///         :class:`CameraViews` — which carries no tracks, so ``view_sets``
+    ///         becomes required (and, having no inline keypoints, so does
+    ///         ``starting_keypoints``).
     ///     images: One source image (HxWxC uint8 numpy array) per reconstruction
     ///         image, parallel to ``recon`` (index = image index), **or** an
     ///         :class:`ImagePyramidSet` prebuilt from those images (decode the
@@ -1431,7 +1920,7 @@ impl PyPatchCloud {
     fn refine_keypoints<'py>(
         &self,
         py: Python<'py>,
-        recon: &PySfmrReconstruction,
+        recon: &Bound<'py, PyAny>,
         images: &Bound<'py, PyAny>,
         view_sets: Option<std::collections::HashMap<u32, Vec<u32>>>,
         resolution: u32,
@@ -1450,37 +1939,49 @@ impl PyPatchCloud {
         render_bitmaps: bool,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
-        let recon = &recon.inner;
+        let (posed, recon_guard) = resolve_scene(recon)?;
+        let recon_opt = recon_guard.as_ref().map(|r| &r.inner);
+        let n_images = posed.len() as u32;
         if self.inner.point_indexes.len() != self.inner.len() {
             return Err(PyValueError::new_err(
                 "patch cloud has no per-patch point_indexes; rebuild it with from_reconstruction",
             ));
         }
-        if self
-            .inner
-            .point_indexes
-            .iter()
-            .any(|&p| p as usize >= recon.points.len())
-        {
+        if let Some(recon) = recon_opt {
+            if self
+                .inner
+                .point_indexes
+                .iter()
+                .any(|&p| p as usize >= recon.points.len())
+            {
+                return Err(PyValueError::new_err(
+                    "patch cloud point_indexes are out of range for this reconstruction \
+                     (was the cloud built from a different recon?)",
+                ));
+            }
+        }
+        // Without tracks there is no default per-patch view list, so `view_sets` is
+        // required. Fail fast before decoding any imagery.
+        if recon_opt.is_none() && view_sets.is_none() {
             return Err(PyValueError::new_err(
-                "patch cloud point_indexes are out of range for this reconstruction \
-                 (was the cloud built from a different recon?)",
+                "view_sets is required when the first argument is a CameraViews \
+                 (there are no tracks to derive per-patch views from)",
             ));
         }
-        // `refine_keypoints` is a *local* refiner: it needs a starting
-        // keypoint in the basin of the true optimum, and the projection
-        // alone isn't a "real" keypoint for that purpose. Require either an
-        // embedded_patches recon (which carries inline per-observation
-        // keypoints) or explicit ``starting_keypoints`` from the caller.
-        // Fail fast before any pyramid decode.
-        if starting_keypoints.is_none() && recon.keypoints_xy().is_none() {
+        // `refine_keypoints` is a *local* refiner: it needs a starting keypoint in
+        // the basin of the true optimum, and the projection alone isn't a "real"
+        // keypoint for that purpose. Require either an embedded_patches recon (which
+        // carries inline per-observation keypoints) or explicit ``starting_keypoints``
+        // from the caller. A CameraViews carries no keypoints, so it always requires
+        // ``starting_keypoints``. Fail fast before any pyramid decode.
+        if starting_keypoints.is_none() && recon_opt.is_none_or(|r| r.keypoints_xy().is_none()) {
             return Err(PyValueError::new_err(
                 "refine_keypoints requires starting keypoints — either an \
                  embedded_patches reconstruction (which carries inline \
                  per-observation keypoints; run `sfm xform --to-embedded-patches` \
                  first) or explicit `starting_keypoints` covering every point \
-                 to refine. This recon is sift_files and no `starting_keypoints` \
-                 were provided.",
+                 to refine. This scene has no inline keypoints and no \
+                 `starting_keypoints` were provided.",
             ));
         }
 
@@ -1532,24 +2033,26 @@ impl PyPatchCloud {
             ..Default::default()
         };
 
-        let (pyramid_set, poses) = build_pyramids_and_poses(recon, images)?;
+        let pyramid_set = resolve_pyramids(&posed, images)?;
         let pyramids = pyramid_set.as_slice();
-        let views: Vec<ProjectedImage<'_>> = (0..recon.images.len())
+        let views: Vec<ProjectedImage<'_>> = (0..posed.len())
             .map(|i| ProjectedImage {
-                camera: &recon.cameras[recon.images[i].camera_index as usize],
-                cam_from_world: &poses[i],
+                camera: &posed.cameras[i],
+                cam_from_world: &posed.poses[i],
                 pyramid: &pyramids[i],
             })
             .collect();
 
-        let mut sets = view_indices_from_reconstruction(recon, &self.inner);
+        let mut sets = match recon_opt {
+            Some(recon) => view_indices_from_reconstruction(recon, &self.inner),
+            None => vec![Vec::new(); self.inner.len()],
+        };
         if let Some(map) = &view_sets {
-            let n_images = recon.images.len() as u32;
             for vs in map.values() {
                 if let Some(&bad) = vs.iter().find(|&&i| i >= n_images) {
                     return Err(PyValueError::new_err(format!(
                         "view_sets contains image index {bad} out of range for this \
-                         reconstruction's {n_images} images"
+                         scene's {n_images} views"
                     )));
                 }
             }
@@ -1624,16 +2127,18 @@ impl PyPatchCloud {
         // map is keyed identically to the one in `refine_normals`'s
         // `use_stored_keypoints` path; duplicate observations of the same
         // (point, image) all hash to the same slot (last write wins, harmless).
-        let stored_kp_map: Option<std::collections::HashMap<(u32, u32), [f64; 2]>> =
-            recon.keypoints_xy().map(|keypoints_xy| {
-                let mut m = std::collections::HashMap::with_capacity(recon.tracks.len());
-                for (j, obs) in recon.tracks.iter().enumerate() {
-                    m.insert(
-                        (obs.point_index, obs.image_index),
-                        [keypoints_xy[[j, 0]] as f64, keypoints_xy[[j, 1]] as f64],
-                    );
-                }
-                m
+        let stored_kp_map: Option<std::collections::HashMap<(u32, u32), [f64; 2]>> = recon_opt
+            .and_then(|recon| {
+                recon.keypoints_xy().map(|keypoints_xy| {
+                    let mut m = std::collections::HashMap::with_capacity(recon.tracks.len());
+                    for (j, obs) in recon.tracks.iter().enumerate() {
+                        m.insert(
+                            (obs.point_index, obs.image_index),
+                            [keypoints_xy[[j, 0]] as f64, keypoints_xy[[j, 1]] as f64],
+                        );
+                    }
+                    m
+                })
             });
 
         // This binding inlines its own per-patch loop (for lazy per-point seed

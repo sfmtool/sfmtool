@@ -7,7 +7,7 @@
 //! surface element in world space; [`crate::camera::WarpMap::from_patch`]
 //! projects a camera's image onto one to render its canonical appearance.
 
-use nalgebra::{Matrix3, Point3, Vector3};
+use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 use ndarray::Array2;
 
 use crate::geometry::RigidTransform;
@@ -286,57 +286,38 @@ impl PatchCloud {
         extent: PatchExtent,
         exclude_points_at_infinity: bool,
     ) -> Result<Self, PatchCloudError> {
-        let finite: Vec<usize> = (0..recon.points.len())
-            .filter(|&i| !recon.points[i].is_at_infinity())
+        // Per-point geometry.
+        let positions: Vec<Point3<f64>> = recon.points.iter().map(|p| p.position).collect();
+        let weights: Vec<f64> = recon.points.iter().map(|p| p.w).collect();
+        let stored_normals: Vec<Vector3<f64>> = recon
+            .points
+            .iter()
+            .map(|p| Vector3::new(p.normal.x as f64, p.normal.y as f64, p.normal.z as f64))
             .collect();
-        let cam_centers: Vec<Point3<f64>> =
-            recon.images.iter().map(|im| im.camera_center()).collect();
 
-        // Spatial index over finite positions, needed for geometric normals and
-        // spacing-relative extent.
-        let need_spatial = matches!(normal, PatchNormal::Geometric { .. })
-            || matches!(extent, PatchExtent::RelativeToSpacing(_));
-        let cloud = if need_spatial && !finite.is_empty() {
-            let mut flat = Vec::with_capacity(finite.len() * 3);
-            for &i in &finite {
-                let p = recon.points[i].position;
-                flat.extend_from_slice(&[p.x, p.y, p.z]);
-            }
-            Some(PointCloud::<f64, 3>::new(&flat, finite.len()))
-        } else {
-            None
-        };
+        // Per-observation image index (flat, grouped by point — `recon.tracks` is
+        // sorted by point then image, so `observation_offsets` groups it).
+        let obs_images: Vec<u32> = recon.tracks.iter().map(|o| o.image_index).collect();
 
-        let spacing_half = if let PatchExtent::RelativeToSpacing(factor) = extent {
-            let mut d: Vec<f64> = cloud
-                .as_ref()
-                .map(|c| c.nearest_neighbor_distances())
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|x| x.is_finite())
-                .collect();
-            d.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let median = if d.is_empty() { 1.0 } else { d[d.len() / 2] };
-            median * factor
-        } else {
-            0.0
-        };
+        // Per-image pose + focal length (fx of the image's camera).
+        let cam_quats: Vec<UnitQuaternion<f64>> =
+            recon.images.iter().map(|im| im.quaternion_wxyz).collect();
+        let cam_translations: Vec<Vector3<f64>> =
+            recon.images.iter().map(|im| im.translation_xyz).collect();
+        let cam_focals: Vec<f64> = recon
+            .images
+            .iter()
+            .map(|im| recon.cameras[im.camera_index as usize].focal_lengths().0)
+            .collect();
 
-        let geo_k = match normal {
-            PatchNormal::Geometric { k_neighbors } => k_neighbors,
-            _ => 0,
-        };
-        let geo_neighbors = if geo_k > 0 {
-            cloud.as_ref().map(|c| c.self_nearest_k(geo_k))
-        } else {
-            None
-        };
-
-        // Per-image keypoint scales, read from the `.sift` files once and shared
-        // by the finite FeatureSize sizing below and the infinity patches (only
-        // populated under FeatureSize). Feature scales index `.sift` files, so
-        // FeatureSize applies to sift_files reconstructions; an embedded_patches
-        // recon has no scales and hits the "no readable scale" error.
+        // FeatureSize is the one policy that reads the workspace `.sift` files:
+        // resolve every observation's keypoint scale (σ = column-0 norm of the
+        // affine shape) into a per-observation `Option` (`None` = unreadable),
+        // exactly as the historical inline lookup did — the `.sift` files are read
+        // once per image and shared across the finite and infinity paths. Feature
+        // scales index `.sift` files, so FeatureSize applies to sift_files
+        // reconstructions; an embedded_patches recon has no scales, so every
+        // observation resolves to `None` and the "no readable scale" error fires.
         //
         // A σ-pixel keypoint subtends an angle ≈ σ/f, which at ray-distance
         // d = ‖X − C‖ from the camera spans ≈ σ·d/f world units. Using the ray
@@ -344,160 +325,98 @@ impl PatchCloud {
         // this camera-agnostic: a fisheye (FoV > 180°) sees points past 90° off
         // axis at z ≤ 0, where the old pinhole `σ·z/f` (gated on z > 0) could not
         // size them. On-axis d = z, so this reduces to the pinhole formula.
-        let feature_indexes = recon.feature_indexes();
-        let img_scales: Vec<Option<Vec<f64>>> = if matches!(extent, PatchExtent::FeatureSize { .. })
-        {
-            (0..recon.images.len())
+        let obs_scales: Vec<Option<f64>> = if matches!(extent, PatchExtent::FeatureSize { .. }) {
+            let feature_indexes = recon.feature_indexes();
+            let img_scales: Vec<Option<Vec<f64>>> = (0..recon.images.len())
                 .map(|i| read_image_scales(recon, i))
+                .collect();
+            (0..recon.tracks.len())
+                .map(|j| {
+                    let img = recon.tracks[j].image_index as usize;
+                    feature_indexes.map(|f| f[j]).and_then(|feature_index| {
+                        img_scales
+                            .get(img)
+                            .and_then(|s| s.as_ref())
+                            .and_then(|scales| scales.get(feature_index as usize).copied())
+                    })
+                })
                 .collect()
         } else {
             Vec::new()
         };
 
-        // FeatureSize: per-finite-point world half-size from the observing
-        // keypoints' scales. A point with no readable scale in any view is an error.
-        let feature_half: Vec<f64> = if let PatchExtent::FeatureSize { factor, across } = extent {
-            let mut halves = vec![f64::NAN; finite.len()];
-            for (fi, &p) in finite.iter().enumerate() {
-                let center = recon.points[p].position;
-                let start = recon.observation_offsets[p];
-                let obs = &recon.tracks[start..recon.observation_offsets[p + 1]];
-                let mut sizes: Vec<f64> = Vec::new();
-                // Per-cause tallies so a failure can name why every observation
-                // was rejected (unreadable .sift scale vs. zero viewing distance).
-                let mut unreadable_scale = 0usize;
-                let mut coincident_with_camera = 0usize;
-                for (k, o) in obs.iter().enumerate() {
-                    let im = &recon.images[o.image_index as usize];
-                    let scale = feature_indexes
-                        .map(|f| f[start + k])
-                        .and_then(|feature_index| {
-                            img_scales
-                                .get(o.image_index as usize)
-                                .and_then(|s| s.as_ref())
-                                .and_then(|scales| scales.get(feature_index as usize).copied())
-                        });
-                    let Some(sigma) = scale else {
-                        unreadable_scale += 1;
-                        continue;
-                    };
-                    let d = (im.quaternion_wxyz * center.coords + im.translation_xyz).norm();
-                    if d > 1e-6 {
-                        let (fx, _) = recon.cameras[im.camera_index as usize].focal_lengths();
-                        sizes.push(sigma * d / fx);
-                    } else {
-                        coincident_with_camera += 1;
-                    }
-                }
-                if sizes.is_empty() {
-                    return Err(PatchCloudError::MissingFeatureScale {
-                        point_index: p as u32,
-                        observations: obs.len(),
-                        unreadable_scale,
-                        coincident_with_camera,
-                    });
-                }
-                halves[fi] = factor * reduce(&mut sizes, across);
-            }
-            halves
-        } else {
-            Vec::new()
+        let scene = PatchScene {
+            positions: &positions,
+            weights: &weights,
+            stored_normals: &stored_normals,
+            obs_offsets: &recon.observation_offsets,
+            obs_images: &obs_images,
+            obs_scales: &obs_scales,
+            cam_quats: &cam_quats,
+            cam_translations: &cam_translations,
+            cam_focals: &cam_focals,
         };
+        build_patch_cloud(&scene, normal, extent, exclude_points_at_infinity)
+    }
 
-        let mut patches = Vec::with_capacity(finite.len());
-        let mut point_indexes = Vec::with_capacity(finite.len());
-
-        for (fi, &p) in finite.iter().enumerate() {
-            let pt = &recon.points[p];
-            let center = pt.position;
-            let obs = &recon.tracks[recon.observation_offsets[p]..recon.observation_offsets[p + 1]];
-            let view_centers: Vec<Point3<f64>> = obs
-                .iter()
-                .map(|o| cam_centers[o.image_index as usize])
-                .collect();
-            let mean_view = mean_viewing_normal(&center, &view_centers);
-
-            let n = match normal {
-                PatchNormal::Stored => {
-                    let en = pt.normal;
-                    let v = Vector3::new(en.x as f64, en.y as f64, en.z as f64);
-                    if v.norm() > 1e-6 {
-                        v.normalize()
-                    } else {
-                        mean_view
-                    }
-                }
-                PatchNormal::MeanViewing => mean_view,
-                PatchNormal::Geometric { .. } => {
-                    let mut pts = vec![center];
-                    if let Some(neigh) = &geo_neighbors {
-                        for j in 0..geo_k {
-                            let idx = neigh[fi * geo_k + j];
-                            if idx != u32::MAX {
-                                pts.push(recon.points[finite[idx as usize]].position);
-                            }
-                        }
-                    }
-                    let g = pca_plane_normal(&pts);
-                    if g.dot(&mean_view) < 0.0 {
-                        -g
-                    } else {
-                        g
-                    }
-                }
-            };
-
-            let up = first_view_up(recon, obs.first().map(|o| o.image_index));
-
-            let half = match extent {
-                PatchExtent::Fixed(w) => w,
-                PatchExtent::RelativeToSpacing(_) => spacing_half,
-                PatchExtent::FeatureSize { .. } => feature_half[fi],
-                PatchExtent::PixelRadius { radius_px, across } => {
-                    // World half-size that projects to `radius_px` px in each
-                    // observing view, reduced across views.
-                    if obs.is_empty() {
-                        radius_px
-                    } else {
-                        let mut hs: Vec<f64> = obs
-                            .iter()
-                            .map(|o| {
-                                let im = &recon.images[o.image_index as usize];
-                                let p_cam = im.quaternion_wxyz * center.coords + im.translation_xyz;
-                                let depth = p_cam.z.abs().max(1e-6);
-                                let (fx, _) =
-                                    recon.cameras[im.camera_index as usize].focal_lengths();
-                                radius_px * depth / fx
-                            })
-                            .collect();
-                        reduce(&mut hs, across)
-                    }
-                }
-            };
-
-            patches.push(OrientedPatch::from_center_normal(
-                center,
-                n,
-                up,
-                [half, half],
-            ));
-            point_indexes.push(p as u32);
-        }
-
-        let mut cloud = PatchCloud {
-            patches,
-            point_indexes,
+    /// Build a patch cloud from in-memory arrays instead of a reconstruction.
+    ///
+    /// The array counterpart of [`Self::from_reconstruction`]: the same normal and
+    /// extent policies, up-hint (first observing camera), infinity tangent-sphere
+    /// frames, sizing, and error taxonomy — one shared routine, fed by
+    /// caller-supplied geometry rather than a solved `SfmrReconstruction`.
+    ///
+    /// - `positions` / `weights` are per point (`P`): `weights[i] == 0.0` marks a
+    ///   point at infinity (its `positions[i]` is a direction).
+    /// - `obs_offsets` (`P + 1`, prefix sum) groups the flat per-observation
+    ///   `obs_images` (`M`) by point; point `p`'s observations are
+    ///   `obs_images[obs_offsets[p]..obs_offsets[p + 1]]`.
+    /// - `cam_quats` / `cam_translations` / `cam_focals` (`N`) give each image's
+    ///   `cam_from_world` rotation, translation, and focal length (fx).
+    /// - `stored_normals` (`P`) is read only by [`PatchNormal::Stored`]; a
+    ///   zero/missing row falls back to the mean viewing direction.
+    /// - `obs_scales` (`M`, `NaN` = unreadable) supplies the keypoint scale that
+    ///   [`PatchExtent::FeatureSize`] otherwise reads from `.sift`; a `NaN` entry
+    ///   counts as an unreadable scale, so the [`PatchCloudError::MissingFeatureScale`]
+    ///   error and its per-cause breakdown are unchanged.
+    ///
+    /// The resulting patches' `point_indexes` are row indexes into `positions`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_tracks(
+        positions: &[Point3<f64>],
+        weights: &[f64],
+        stored_normals: Option<&[Vector3<f64>]>,
+        obs_offsets: &[usize],
+        obs_images: &[u32],
+        obs_scales: Option<&[f64]>,
+        cam_quats: &[UnitQuaternion<f64>],
+        cam_translations: &[Vector3<f64>],
+        cam_focals: &[f64],
+        normal: PatchNormal,
+        extent: PatchExtent,
+        exclude_points_at_infinity: bool,
+    ) -> Result<Self, PatchCloudError> {
+        // A NaN scale counts as an unreadable scale, mirroring the `.sift` path's
+        // "missing scale" so the MissingFeatureScale taxonomy is unchanged.
+        let obs_scales_opt: Vec<Option<f64>> = obs_scales
+            .map(|s| {
+                s.iter()
+                    .map(|&v| if v.is_nan() { None } else { Some(v) })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let scene = PatchScene {
+            positions,
+            weights,
+            stored_normals: stored_normals.unwrap_or(&[]),
+            obs_offsets,
+            obs_images,
+            obs_scales: &obs_scales_opt,
+            cam_quats,
+            cam_translations,
+            cam_focals,
         };
-        if !exclude_points_at_infinity {
-            cloud.push_infinity_patches(
-                recon,
-                extent,
-                &img_scales,
-                feature_indexes,
-                spacing_half,
-            )?;
-        }
-        Ok(cloud)
+        build_patch_cloud(&scene, normal, extent, exclude_points_at_infinity)
     }
 
     /// Serialize to the per-point in-plane half-extent vector arrays
@@ -577,136 +496,334 @@ impl PatchCloud {
             point_indexes,
         }
     }
+}
 
-    /// Push a tangent-sphere patch for each of the reconstruction's points at
-    /// infinity (`w = 0`), the counterpart to the finite patches
-    /// [`Self::from_reconstruction`] builds (it calls this when
-    /// `exclude_points_at_infinity` is `false`).
-    ///
-    /// Per the `.sfmr` format's infinity-patch convention (see
-    /// `specs/formats/sfmr-file-format.md`, "Per-point patch frame"): a point at
-    /// infinity with direction `d` gets a frame tangent to the unit sphere around
-    /// `d` — `u` and `v` are `⊥ d` and `u × v` points along `-d`, so the implied
-    /// normal `normalize(u × v)` is `normalize(-d)` (every viewing ray to the
-    /// point is parallel to `d`, so the visible side faces back toward the
-    /// observers). The in-plane rotation is pinned by the first observing
-    /// camera's up, matching the finite path. The patch's `w` is `0`.
-    ///
-    /// The angular half-size (the tangent vectors' magnitude) follows `extent`:
-    /// [`PatchExtent::FeatureSize`] and [`PatchExtent::PixelRadius`] have a
-    /// natural distance-free angular form (`σ_i / f_i` and `radius_px / f_i` per
-    /// view, reduced across views — the finite formulas with the ray distance
-    /// dropped), while [`PatchExtent::Fixed`] and [`PatchExtent::RelativeToSpacing`]
-    /// reuse their world half-size as the tangent magnitude (there is no ray
-    /// distance at infinity to convert it through).
-    ///
-    /// Each patch's `point_indexes` entry is its source point index, so
-    /// [`Self::to_halfvec_arrays`] scatters it into that point's row. Errors with
-    /// [`PatchCloudError::MissingFeatureScale`] under [`PatchExtent::FeatureSize`]
-    /// if an infinity point has no readable keypoint scale in any view (an
-    /// infinity patch's angular size is distance-free, so the coincident-camera
-    /// cause never applies here).
-    fn push_infinity_patches(
-        &mut self,
-        recon: &SfmrReconstruction,
-        extent: PatchExtent,
-        img_scales: &[Option<Vec<f64>>],
-        feature_indexes: Option<&[u32]>,
-        spacing_half: f64,
-    ) -> Result<(), PatchCloudError> {
-        let infinity: Vec<usize> = (0..recon.points.len())
-            .filter(|&i| recon.points[i].is_at_infinity())
-            .collect();
-        if infinity.is_empty() {
-            return Ok(());
+/// The reconstruction-independent inputs shared by
+/// [`PatchCloud::from_reconstruction`] and [`PatchCloud::from_tracks`]: per-point
+/// geometry, grouped observations, per-image poses/focal lengths, and a
+/// per-observation keypoint-scale source. One routine ([`build_patch_cloud`])
+/// implements the sizing policies, up-hint, infinity frames, and error taxonomy
+/// over it, so both entry points share a single implementation.
+struct PatchScene<'a> {
+    /// Per-point position (finite) or direction (at infinity). `P` entries.
+    positions: &'a [Point3<f64>],
+    /// Per-point homogeneous weight (`1.0` finite, `0.0` at infinity). `P` entries.
+    weights: &'a [f64],
+    /// Per-point stored normal (read only by [`PatchNormal::Stored`]; a zero or
+    /// missing row falls back to the mean viewing direction). `P` entries or empty.
+    stored_normals: &'a [Vector3<f64>],
+    /// Prefix-sum offsets into the flat observation arrays. `P + 1` entries.
+    obs_offsets: &'a [usize],
+    /// Per-observation image index (flat, grouped by point). `M` entries.
+    obs_images: &'a [u32],
+    /// Per-observation keypoint scale `σ` (`None` = unreadable), or empty when the
+    /// extent policy reads no scales. `M` entries or empty.
+    obs_scales: &'a [Option<f64>],
+    /// Per-image `cam_from_world` rotation. `N` entries.
+    cam_quats: &'a [UnitQuaternion<f64>],
+    /// Per-image `cam_from_world` translation. `N` entries.
+    cam_translations: &'a [Vector3<f64>],
+    /// Per-image focal length (fx). `N` entries.
+    cam_focals: &'a [f64],
+}
+
+impl PatchScene<'_> {
+    /// In-plane "up" hint: the first observing camera's up axis (canonical camera
+    /// `+y` — image up) rotated into world, or world `+y` when the point has no
+    /// observation. Pins the in-plane rotation identically for finite and infinity
+    /// patches.
+    fn up_hint(&self, first_image_index: Option<u32>) -> Vector3<f64> {
+        match first_image_index {
+            Some(idx) => self.cam_quats[idx as usize].inverse() * Vector3::new(0.0, 1.0, 0.0),
+            None => Vector3::y(),
         }
-        // `img_scales` (FeatureSize), `feature_indexes`, and `spacing_half`
-        // (RelativeToSpacing: factor × the finite cloud's median NN spacing,
-        // reused as the tangent magnitude) are computed once by the caller and
-        // shared with the finite path — no second `.sift` read or spatial index.
+    }
 
-        self.patches.reserve(infinity.len());
-        self.point_indexes.reserve(infinity.len());
-        for &p in &infinity {
-            let dir = recon.points[p].position;
-            let start = recon.observation_offsets[p];
-            let obs = &recon.tracks[start..recon.observation_offsets[p + 1]];
-
-            let half = match extent {
-                PatchExtent::Fixed(w) => w,
-                PatchExtent::RelativeToSpacing(_) => spacing_half,
-                PatchExtent::PixelRadius { radius_px, across } => {
-                    if obs.is_empty() {
-                        radius_px
-                    } else {
-                        let mut angles: Vec<f64> = obs
-                            .iter()
-                            .map(|o| {
-                                let im = &recon.images[o.image_index as usize];
-                                let (fx, _) =
-                                    recon.cameras[im.camera_index as usize].focal_lengths();
-                                radius_px / fx
-                            })
-                            .collect();
-                        reduce(&mut angles, across)
-                    }
-                }
-                PatchExtent::FeatureSize { factor, across } => {
-                    let mut angles: Vec<f64> = Vec::new();
-                    for (k, o) in obs.iter().enumerate() {
-                        let im = &recon.images[o.image_index as usize];
-                        let Some(fidx) = feature_indexes.map(|f| f[start + k]) else {
-                            continue;
-                        };
-                        if let Some(Some(scales)) = img_scales.get(o.image_index as usize) {
-                            if let Some(&sigma) = scales.get(fidx as usize) {
-                                let (fx, _) =
-                                    recon.cameras[im.camera_index as usize].focal_lengths();
-                                angles.push(sigma / fx);
-                            }
-                        }
-                    }
-                    if angles.is_empty() {
-                        // An infinity patch's angular size is `σ/f` (no viewing
-                        // distance), so the only failure cause is an unreadable
-                        // scale — `coincident_with_camera` never applies here.
-                        return Err(PatchCloudError::MissingFeatureScale {
-                            point_index: p as u32,
-                            observations: obs.len(),
-                            unreadable_scale: obs.len(),
-                            coincident_with_camera: 0,
-                        });
-                    }
-                    factor * reduce(&mut angles, across)
-                }
-            };
-
-            // Implied normal `normalize(-d)`; the in-plane rotation follows the
-            // first observing camera's up (as in the finite path). `center` is the
-            // direction itself and is unused by `to_halfvec_arrays`.
-            let up = first_view_up(recon, obs.first().map(|o| o.image_index));
-            self.patches.push(OrientedPatch::from_infinity_direction(
-                dir,
-                up,
-                [half, half],
-            ));
-            self.point_indexes.push(p as u32);
-        }
-        Ok(())
+    /// The stored normal for point `p`, or the zero vector when none is supplied.
+    fn stored_normal(&self, p: usize) -> Vector3<f64> {
+        self.stored_normals
+            .get(p)
+            .copied()
+            .unwrap_or_else(Vector3::zeros)
     }
 }
 
-/// In-plane "up" hint for a patch frame: the first observing camera's up axis
-/// (canonical camera `+y` — image up) rotated into world, or world `+y` when
-/// the point has no observation. Shared by the finite and infinity patch
-/// builders so they pin the in-plane rotation identically.
-fn first_view_up(recon: &SfmrReconstruction, first_image_index: Option<u32>) -> Vector3<f64> {
-    match first_image_index {
-        Some(idx) => {
-            recon.images[idx as usize].quaternion_wxyz.inverse() * Vector3::new(0.0, 1.0, 0.0)
+/// The shared body of [`PatchCloud::from_reconstruction`] /
+/// [`PatchCloud::from_tracks`]: one finite patch per finite point (center =
+/// position, in-plane up from the first observing camera, normal and half-size
+/// per the given policies) plus, when `exclude_points_at_infinity` is `false`, one
+/// tangent-sphere frame per point at infinity.
+fn build_patch_cloud(
+    scene: &PatchScene<'_>,
+    normal: PatchNormal,
+    extent: PatchExtent,
+    exclude_points_at_infinity: bool,
+) -> Result<PatchCloud, PatchCloudError> {
+    let n_points = scene.positions.len();
+    let finite: Vec<usize> = (0..n_points).filter(|&i| scene.weights[i] != 0.0).collect();
+
+    // Camera centres in world (`C = -R^T · t`).
+    let cam_centers: Vec<Point3<f64>> = (0..scene.cam_quats.len())
+        .map(|i| {
+            let r = scene.cam_quats[i].to_rotation_matrix();
+            Point3::from(-(r.transpose() * scene.cam_translations[i]))
+        })
+        .collect();
+
+    // Spatial index over finite positions, needed for geometric normals and
+    // spacing-relative extent.
+    let need_spatial = matches!(normal, PatchNormal::Geometric { .. })
+        || matches!(extent, PatchExtent::RelativeToSpacing(_));
+    let cloud = if need_spatial && !finite.is_empty() {
+        let mut flat = Vec::with_capacity(finite.len() * 3);
+        for &i in &finite {
+            let p = scene.positions[i];
+            flat.extend_from_slice(&[p.x, p.y, p.z]);
         }
-        None => Vector3::y(),
+        Some(PointCloud::<f64, 3>::new(&flat, finite.len()))
+    } else {
+        None
+    };
+
+    let spacing_half = if let PatchExtent::RelativeToSpacing(factor) = extent {
+        let mut d: Vec<f64> = cloud
+            .as_ref()
+            .map(|c| c.nearest_neighbor_distances())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|x| x.is_finite())
+            .collect();
+        d.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = if d.is_empty() { 1.0 } else { d[d.len() / 2] };
+        median * factor
+    } else {
+        0.0
+    };
+
+    let geo_k = match normal {
+        PatchNormal::Geometric { k_neighbors } => k_neighbors,
+        _ => 0,
+    };
+    let geo_neighbors = if geo_k > 0 {
+        cloud.as_ref().map(|c| c.self_nearest_k(geo_k))
+    } else {
+        None
+    };
+
+    // FeatureSize: per-finite-point world half-size from the observing keypoints'
+    // scales. A point with no readable scale in any view — or coincident with
+    // every camera centre (`d ≈ 0`) — is an error.
+    let feature_half: Vec<f64> = if let PatchExtent::FeatureSize { factor, across } = extent {
+        let mut halves = vec![f64::NAN; finite.len()];
+        for (fi, &p) in finite.iter().enumerate() {
+            let center = scene.positions[p];
+            let start = scene.obs_offsets[p];
+            let end = scene.obs_offsets[p + 1];
+            let mut sizes: Vec<f64> = Vec::new();
+            // Per-cause tallies so a failure can name why every observation was
+            // rejected (unreadable scale vs. zero viewing distance).
+            let mut unreadable_scale = 0usize;
+            let mut coincident_with_camera = 0usize;
+            for obs in start..end {
+                let img = scene.obs_images[obs] as usize;
+                let Some(sigma) = scene.obs_scales.get(obs).copied().flatten() else {
+                    unreadable_scale += 1;
+                    continue;
+                };
+                let d = (scene.cam_quats[img] * center.coords + scene.cam_translations[img]).norm();
+                if d > 1e-6 {
+                    sizes.push(sigma * d / scene.cam_focals[img]);
+                } else {
+                    coincident_with_camera += 1;
+                }
+            }
+            if sizes.is_empty() {
+                return Err(PatchCloudError::MissingFeatureScale {
+                    point_index: p as u32,
+                    observations: end - start,
+                    unreadable_scale,
+                    coincident_with_camera,
+                });
+            }
+            halves[fi] = factor * reduce(&mut sizes, across);
+        }
+        halves
+    } else {
+        Vec::new()
+    };
+
+    let mut patches = Vec::with_capacity(finite.len());
+    let mut point_indexes = Vec::with_capacity(finite.len());
+
+    for (fi, &p) in finite.iter().enumerate() {
+        let center = scene.positions[p];
+        let start = scene.obs_offsets[p];
+        let end = scene.obs_offsets[p + 1];
+        let view_centers: Vec<Point3<f64>> = (start..end)
+            .map(|o| cam_centers[scene.obs_images[o] as usize])
+            .collect();
+        let mean_view = mean_viewing_normal(&center, &view_centers);
+
+        let n = match normal {
+            PatchNormal::Stored => {
+                let v = scene.stored_normal(p);
+                if v.norm() > 1e-6 {
+                    v.normalize()
+                } else {
+                    mean_view
+                }
+            }
+            PatchNormal::MeanViewing => mean_view,
+            PatchNormal::Geometric { .. } => {
+                let mut pts = vec![center];
+                if let Some(neigh) = &geo_neighbors {
+                    for j in 0..geo_k {
+                        let idx = neigh[fi * geo_k + j];
+                        if idx != u32::MAX {
+                            pts.push(scene.positions[finite[idx as usize]]);
+                        }
+                    }
+                }
+                let g = pca_plane_normal(&pts);
+                if g.dot(&mean_view) < 0.0 {
+                    -g
+                } else {
+                    g
+                }
+            }
+        };
+
+        let up = scene.up_hint((start < end).then(|| scene.obs_images[start]));
+
+        let half = match extent {
+            PatchExtent::Fixed(w) => w,
+            PatchExtent::RelativeToSpacing(_) => spacing_half,
+            PatchExtent::FeatureSize { .. } => feature_half[fi],
+            PatchExtent::PixelRadius { radius_px, across } => {
+                // World half-size that projects to `radius_px` px in each observing
+                // view, reduced across views.
+                if start == end {
+                    radius_px
+                } else {
+                    let mut hs: Vec<f64> = (start..end)
+                        .map(|o| {
+                            let img = scene.obs_images[o] as usize;
+                            let p_cam =
+                                scene.cam_quats[img] * center.coords + scene.cam_translations[img];
+                            let depth = p_cam.z.abs().max(1e-6);
+                            radius_px * depth / scene.cam_focals[img]
+                        })
+                        .collect();
+                    reduce(&mut hs, across)
+                }
+            }
+        };
+
+        patches.push(OrientedPatch::from_center_normal(
+            center,
+            n,
+            up,
+            [half, half],
+        ));
+        point_indexes.push(p as u32);
     }
+
+    let mut cloud_out = PatchCloud {
+        patches,
+        point_indexes,
+    };
+    if !exclude_points_at_infinity {
+        push_infinity_patches(&mut cloud_out, scene, extent, spacing_half)?;
+    }
+    Ok(cloud_out)
+}
+
+/// Push a tangent-sphere patch for each point at infinity (`w = 0`), the
+/// counterpart to the finite patches [`build_patch_cloud`] emits (it calls this
+/// when `exclude_points_at_infinity` is `false`).
+///
+/// Per the `.sfmr` format's infinity-patch convention (see
+/// `specs/formats/sfmr-file-format.md`, "Per-point patch frame"): a point at
+/// infinity with direction `d` gets a frame tangent to the unit sphere around `d`
+/// — `u` and `v` are `⊥ d` and `u × v` points along `-d`, so the implied normal
+/// `normalize(u × v)` is `normalize(-d)`. The in-plane rotation is pinned by the
+/// first observing camera's up, matching the finite path. The patch's `w` is `0`.
+///
+/// The angular half-size (the tangent vectors' magnitude) follows `extent`:
+/// [`PatchExtent::FeatureSize`] and [`PatchExtent::PixelRadius`] have a natural
+/// distance-free angular form (`σ_i / f_i` and `radius_px / f_i` per view, reduced
+/// across views — the finite formulas with the ray distance dropped), while
+/// [`PatchExtent::Fixed`] and [`PatchExtent::RelativeToSpacing`] reuse their world
+/// half-size as the tangent magnitude. Errors with
+/// [`PatchCloudError::MissingFeatureScale`] under [`PatchExtent::FeatureSize`] if
+/// an infinity point has no readable keypoint scale in any view (its angular size
+/// is distance-free, so the coincident-camera cause never applies here).
+fn push_infinity_patches(
+    cloud: &mut PatchCloud,
+    scene: &PatchScene<'_>,
+    extent: PatchExtent,
+    spacing_half: f64,
+) -> Result<(), PatchCloudError> {
+    let infinity: Vec<usize> = (0..scene.positions.len())
+        .filter(|&i| scene.weights[i] == 0.0)
+        .collect();
+    if infinity.is_empty() {
+        return Ok(());
+    }
+    cloud.patches.reserve(infinity.len());
+    cloud.point_indexes.reserve(infinity.len());
+    for &p in &infinity {
+        let dir = scene.positions[p];
+        let start = scene.obs_offsets[p];
+        let end = scene.obs_offsets[p + 1];
+
+        let half = match extent {
+            PatchExtent::Fixed(w) => w,
+            PatchExtent::RelativeToSpacing(_) => spacing_half,
+            PatchExtent::PixelRadius { radius_px, across } => {
+                if start == end {
+                    radius_px
+                } else {
+                    let mut angles: Vec<f64> = (start..end)
+                        .map(|o| radius_px / scene.cam_focals[scene.obs_images[o] as usize])
+                        .collect();
+                    reduce(&mut angles, across)
+                }
+            }
+            PatchExtent::FeatureSize { factor, across } => {
+                let mut angles: Vec<f64> = Vec::new();
+                for obs in start..end {
+                    let img = scene.obs_images[obs] as usize;
+                    if let Some(sigma) = scene.obs_scales.get(obs).copied().flatten() {
+                        angles.push(sigma / scene.cam_focals[img]);
+                    }
+                }
+                if angles.is_empty() {
+                    // An infinity patch's angular size is `σ/f` (no viewing
+                    // distance), so the only failure cause is an unreadable scale —
+                    // `coincident_with_camera` never applies here.
+                    return Err(PatchCloudError::MissingFeatureScale {
+                        point_index: p as u32,
+                        observations: end - start,
+                        unreadable_scale: end - start,
+                        coincident_with_camera: 0,
+                    });
+                }
+                factor * reduce(&mut angles, across)
+            }
+        };
+
+        // Implied normal `normalize(-d)`; the in-plane rotation follows the first
+        // observing camera's up. `center` is the direction itself.
+        let up = scene.up_hint((start < end).then(|| scene.obs_images[start]));
+        cloud.patches.push(OrientedPatch::from_infinity_direction(
+            dir,
+            up,
+            [half, half],
+        ));
+        cloud.point_indexes.push(p as u32);
+    }
+    Ok(())
 }
 
 /// How to choose each patch's surface normal in [`PatchCloud::from_reconstruction`].
