@@ -29,12 +29,15 @@
 
 use pyo3::prelude::*;
 
-/// Try zero-copy `as_slice()` for contiguous arrays, fall back to copying for non-contiguous.
+/// Try zero-copy `as_slice()` for C-contiguous arrays, fall back to copying
+/// in logical (row-major) order otherwise. The C-contiguity guard matters:
+/// `as_slice()` also succeeds for Fortran-contiguous arrays and returns the
+/// raw column-major memory, silently transposing every row of a 2-D input.
 macro_rules! to_contiguous {
     ($arr:expr) => {
         match $arr.as_slice() {
-            Ok(s) => Cow::Borrowed(s),
-            Err(_) => Cow::Owned($arr.as_array().iter().copied().collect::<Vec<_>>()),
+            Ok(s) if $arr.as_array().is_standard_layout() => Cow::Borrowed(s),
+            _ => Cow::Owned($arr.as_array().iter().copied().collect::<Vec<_>>()),
         }
     };
 }
