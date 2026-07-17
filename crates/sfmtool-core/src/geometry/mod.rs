@@ -6,6 +6,8 @@
 pub mod absolute_pose;
 pub mod affine_factorization;
 pub mod convention;
+pub mod epipolar_estimation;
+pub(crate) mod polynomial;
 pub mod pose_refine;
 pub mod reprojection;
 pub mod rigid_transform;

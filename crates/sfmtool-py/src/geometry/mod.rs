@@ -11,6 +11,7 @@ pub mod absolute_pose;
 pub mod affine_factorization;
 pub mod camera_intrinsics;
 pub mod convention;
+pub mod epipolar_estimation;
 pub mod pose_refine;
 pub mod reprojection;
 pub mod rigid_transform;
@@ -30,6 +31,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     convention::register(m)?;
     affine_factorization::register(m)?;
     absolute_pose::register(m)?;
+    epipolar_estimation::register(m)?;
     reprojection::register(m)?;
     pose_refine::register(m)?;
     Ok(())
