@@ -1,13 +1,30 @@
 # Epipolar Geometry from 2D-2D Correspondences (7-point + RANSAC + Bougnoux)
 
-**Status:** Proposed — target `crates/sfmtool-core/src/geometry/epipolar_estimation.rs`
-(solvers + estimator, tests in `epipolar_estimation/tests.rs`), PyO3 bindings
-in `crates/sfmtool-py/src/geometry/epipolar_estimation.rs`
-(`sfmtool._sfmtool.geometry.estimate_fundamental` /
-`focal_from_fundamental`), Python tests in
-`tests/rust_bindings/test_epipolar_estimation_rust_bindings.py`. Estimates the
-fundamental matrix relating two views from pixel correspondences that may be
-contaminated by wrong matches, and extracts a focal-length estimate from it.
+**Status:** Implemented (2026-07-16) —
+`crates/sfmtool-core/src/geometry/epipolar_estimation.rs` (solvers +
+estimator, tests in `epipolar_estimation/tests.rs`), PyO3 bindings in
+`crates/sfmtool-py/src/geometry/epipolar_estimation.rs`
+(`sfmtool._sfmtool.geometry.estimate_fundamental` / `focal_from_fundamental`),
+Python tests in `tests/rust_bindings/test_epipolar_estimation_rust_bindings.py`.
+Estimates the fundamental matrix relating two views from pixel correspondences
+that may be contaminated by wrong matches, and extracts a focal-length estimate
+from it.
+
+> _Deviation (2026-07-16): [`focal_from_fundamental`] adds a floor that treats a
+> (numerically) zero fundamental matrix as degenerate before the denominator /
+> sign tests. Rotation-only (zero-baseline) motion produces `F ≈ 0`, whose
+> normalized direction is pure round-off and whose Bougnoux `f₁²` is an
+> arbitrary value the sign test does not catch; the spec lists rotation-only as
+> a degeneracy that must return `None`, and this floor is what enforces it. The
+> denominator-vanishing and `f₁² ≤ 0` tests still handle the fixating and
+> forward-motion cases as specified._
+>
+> _Deviation (2026-07-16): the in-crate contamination sweep
+> (`epipolar_estimation/tests.rs`) floors at inlier fraction 0.35 rather than
+> the spec's 0.2 — the `w⁷` RANSAC needs ~5×10⁵ trials at 0.2, impractical in
+> the unoptimized test profile. The 0.2 floor is exercised in
+> `test_epipolar_estimation_rust_bindings.py`, which runs against the
+> release-built extension (there it completes in ~2 s)._
 
 The complementary direction — the fundamental matrix **of two known
 cameras**, for epipolar curve rendering — already exists in
