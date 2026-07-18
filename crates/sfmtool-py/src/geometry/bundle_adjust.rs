@@ -33,6 +33,13 @@ use crate::geometry::PyCameraIntrinsics;
 ///     uv: (n_obs, 2) observed pixels.
 ///     obs_image: (n_obs,) uint32 image index per observation.
 ///     obs_point: (n_obs,) uint32 point index per observation.
+///     point_at_infinity: Optional (n_pt,) bool mask marking points at
+///         infinity. A marked row of ``points`` is a world-frame direction
+///         (normalized on input and returned as a unit direction) whose
+///         observations depend on rotation and camera model only; an image
+///         whose surviving observations are all directions keeps its
+///         translation frozen. Absent or all-``False`` reproduces the
+///         finite-only kernel bit for bit.
 ///     opt_f: Release the shared focal (SIMPLE_PINHOLE only).
 ///     schedule: [(trim_px, loss_scale), ...] staged rounds
 ///         (default [(50, 5), (12, 2), (4, 1)]).
@@ -56,6 +63,7 @@ use crate::geometry::PyCameraIntrinsics;
     uv,
     obs_image,
     obs_point,
+    point_at_infinity=None,
     opt_f=false,
     schedule=vec![(50.0, 5.0), (12.0, 2.0), (4.0, 1.0)],
     max_iters=60,
@@ -72,6 +80,7 @@ pub fn bundle_adjust<'py>(
     uv: PyReadonlyArray2<'py, f64>,
     obs_image: PyReadonlyArray1<'py, u32>,
     obs_point: PyReadonlyArray1<'py, u32>,
+    point_at_infinity: Option<PyReadonlyArray1<'py, bool>>,
     opt_f: bool,
     schedule: Vec<(f64, f64)>,
     max_iters: usize,
@@ -116,6 +125,13 @@ pub fn bundle_adjust<'py>(
 
     let n_img = quaternions_wxyz.shape()[0];
     let n_pt = points.shape()[0];
+    if let Some(ref mask) = point_at_infinity {
+        if mask.shape()[0] != n_pt {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "point_at_infinity must have shape (n_pt,)",
+            ));
+        }
+    }
     let q_in = to_contiguous!(quaternions_wxyz);
     let t_in = to_contiguous!(translations);
     let p_in = to_contiguous!(points);
@@ -158,11 +174,25 @@ pub fn bundle_adjust<'py>(
         })
         .collect();
 
+    let inf_mask: Option<Vec<bool>> =
+        point_at_infinity.map(|mask| to_contiguous!(mask).into_owned());
+
     let cam = camera.inner.clone();
     let (out, quats, trans, pts) = py.detach(move || {
         let out = core_bundle_adjust(
-            &cam, &mut quats, &mut trans, &mut pts, &uv_rows, &oi, &op, opt_f, &stages, max_iters,
-            min_track, min_obs,
+            &cam,
+            &mut quats,
+            &mut trans,
+            &mut pts,
+            &uv_rows,
+            &oi,
+            &op,
+            inf_mask.as_deref(),
+            opt_f,
+            &stages,
+            max_iters,
+            min_track,
+            min_obs,
         );
         (out, quats, trans, pts)
     });

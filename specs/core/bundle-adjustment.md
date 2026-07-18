@@ -198,7 +198,9 @@ Python's point of view).
 
 ## Points at infinity
 
-**Status:** Specified — implementation in progress.
+**Status:** Implemented — same locations as the finite kernel above; the
+entry point branches to the untouched finite-only path whenever no direction
+is marked.
 
 A point at infinity is a pure direction: its observations depend on the
 observing image's rotation and the shared camera model, never on any
