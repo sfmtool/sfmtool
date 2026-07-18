@@ -88,6 +88,9 @@ drift now affects 2 of 4 copies).
 - Risk: low — behavior-preserving if the guard is unified in.
 
 **sift-format keeps its entire test suite inline in lib.rs**
+> _Status (2026-07-18): Done — extracted to `crates/sift-format/src/tests.rs`
+> (324 lines); lib.rs now declares `#[cfg(test)] mod tests;`. Test-only code
+> motion; `cargo test -p sift-format` green._
 - Location: `crates/sift-format/src/lib.rs` (lines 28-354, ~326-line inline `#[cfg(test)] mod tests`)
 - Problem: sift-format has no `tests.rs` and stuffs ~326 lines of tests inline at the bottom of lib.rs. Its sibling format crates (sfmr-format, matches-format, camrig-format) all declare `mod tests;` pointing at a dedicated sibling `tests.rs`. sift-format is the odd one out.
 - Proposed fix: extract to `sift-format/src/tests.rs` and change lib.rs to `#[cfg(test)] mod tests;`.
@@ -95,6 +98,10 @@ drift now affects 2 of 4 copies).
 - Risk: low — test-only move.
 
 **colmap_io subdir is inconsistent with colmap_db on test placement**
+> _Status (2026-07-18): Done — extracted the mod.rs block to
+> `crates/sfmr-colmap/src/colmap_io/tests.rs` (665 lines) via `mod tests;`,
+> matching colmap_db. The tiny `read.rs` inline test (~17 lines) left in place
+> per the finding's "optional" note. `cargo test -p sfmr-colmap` green._
 - Location: `crates/sfmr-colmap/src/colmap_io/mod.rs` (~667-line inline `mod tests`, lines 22-688), `colmap_io/read.rs` (~17-line inline test at line 512)
 - Problem: Sibling subdir `colmap_db/` uses a dedicated `colmap_db/tests.rs` (1237 lines) via `mod tests;`. But `colmap_io/mod.rs` (a module-wiring file) carries a ~667-line inline test module — larger than the actual module code. Directly inconsistent within the same crate.
 - Proposed fix: extract to `sfmr-colmap/src/colmap_io/tests.rs` and declare `mod tests;`, matching colmap_db.
@@ -102,6 +109,12 @@ drift now affects 2 of 4 copies).
 - Risk: low — test-only move.
 
 **Scattered inline test modules in format crates that otherwise use sibling tests.rs**
+> _Status (2026-07-18): Done (the two large blocks) — extracted
+> `sfmr-format/src/depth_stats/tests.rs` (151 lines) and
+> `camrig-format/src/pattern/tests.rs` (113 lines), each declared via
+> `#[cfg(test)] mod tests;` (single-file-module → sibling-dir pattern, matching
+> sfmtool-core). The two tiny blocks (`verify.rs` ~26, `colmap_io/read.rs` ~17)
+> left inline per the finding's "optional" note. `cargo test` green._
 - Location: `sfmr-format/src/depth_stats.rs` (~153-line inline test at line 373), `camrig-format/src/pattern.rs` (~115-line inline test at line 304), plus small ones in `sfmr-format/src/verify.rs` (~26 lines) and `sfmr-colmap/src/colmap_io/read.rs` (~17 lines)
 - Problem: These crates already establish the sibling-`tests.rs` convention, but individual modules keep sizeable per-module test blocks inline. The two large ones (depth_stats 153, pattern 115) are the real smell.
 - Proposed fix: move the larger inline blocks into the crate's existing `tests.rs` (or a per-module sibling) per repo convention; the tiny ones are optional.
@@ -141,6 +154,10 @@ drift now affects 2 of 4 copies).
 - Risk: medium — lots of shared locals (`offset_x`, `thumb_positions`, `response`, gesture events) cross section boundaries; needs a small extracted state struct or explicit params.
 
 **Inline `#[cfg(test)] mod tests` violates repo sibling-`tests.rs` convention**
+> _Status (2026-07-18): Done — extracted to
+> `crates/sfm-explorer/src/scene_renderer/auto_point_size/tests.rs` (210 lines)
+> via `#[cfg(test)] mod tests;`. `cargo test -p sfm-explorer auto_point_size`:
+> 10 passed._
 - Location: `crates/sfm-explorer/src/scene_renderer/auto_point_size.rs` (lines 182–393, ~211-line inline `mod tests`)
 - Problem: The only inline test module in the crate, contradicting the dominant repo convention (sibling `tests.rs` via `mod tests;`, used 20+ places in sfmtool-core).
 - Proposed fix: move to `scene_renderer/auto_point_size_tests.rs` (or promote to a dir with `tests.rs`).
@@ -198,6 +215,13 @@ drift now affects 2 of 4 copies).
 - Risk: medium — both fixtures are session-scoped and feed most of the patch/densify/solve suite; a refactor bug (seed handling, best-tracking) would silently degrade every downstream reconstruction fixture. Needs a full-suite run to validate.
 
 **`test_camrig.py` resolver/pattern block split (carried forward from 2026-06-23 #12) — current status: still present, not split**
+> _Status (2026-07-18): Done — lifted the resolver + pattern-matching block (2
+> local helpers + 19 tests) into `tests/test_camrig_resolve.py` (712→474 lines).
+> The block was not fully self-contained as the finding assumed: it shares
+> `_copy_images`/`_camera`/`_pinhole_camera`/`_IMAGE_DATA` with the remaining
+> tests, so those went to a scoped `tests/_camrig_helpers.py` imported by both
+> (matching the repo's `from .conftest import <helper>` sharing convention).
+> `ruff check` clean._
 - Location: `tests/test_camrig.py` (712 lines); proposed `tests/test_camrig_resolve.py` does not exist
 - Problem: The module still spans ~six areas: spherical-tile↔camrig round-trip (57-155), `write_camrig` binding (166-224), `camrig create` CLI (225-419), `read_camrig` binding (420-443), the resolver block (444-637), and solve integration (682-end). The resolver block is the self-contained candidate: helpers `_touch_images` (444) + `_make_camrig` (455) plus 15 `test_resolve_camrig_*` tests (474-635) and 5 `test_pattern_matches_*` tests (639-681) — ~20 tests / ~240 lines sharing only those two helpers with nothing else in the file.
 - Proposed fix: lift lines 444-681 (both helpers + the 20 tests) into `tests/test_camrig_resolve.py`, leaving test_camrig.py at ~470 lines covering create/binding/round-trip/solve.
@@ -264,6 +288,10 @@ drift now affects 2 of 4 copies).
    `camrig-format/src/pattern.rs` (115), `sfm-explorer/src/scene_renderer/auto_point_size.rs`
    (211). Add the carried-forward `test_camrig.py` resolver split (#12, also a pure
    move) to the same batch. Low effort, low risk.
+   > _Status (2026-07-18): Done — all five inline-test extractions plus the
+   > `test_camrig.py` split landed in one commit (the two tiny `verify.rs`/
+   > `colmap_io/read.rs` blocks left inline per their "optional" note). See the
+   > six findings above._
 
 3. **Extract the shared compaction helpers out of `_embed_patches.py`** — fixes a
    real dependency smell (a `xform/` op reaching up into a top-level pipeline driver
