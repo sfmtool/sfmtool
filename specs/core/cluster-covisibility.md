@@ -7,6 +7,8 @@
 image-grouping-by-shared-clusters machinery from the pinhole bootstrap
 experiments (`scripts/exp_pinhole_bootstrap.py`, notes in
 `cluster-pinhole-bootstrap.md`) into `sfmtool-core` and the bindings.
+The selection queries layered on this type (pair displacement, banded
+thinning, reach) are specified separately in `covisibility-selection.md`.
 
 ## Purpose
 

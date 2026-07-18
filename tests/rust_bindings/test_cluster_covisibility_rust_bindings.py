@@ -3,7 +3,9 @@
 
 """Tests for the cluster-covisibility Rust bindings
 (``sfmtool._sfmtool.matching.ClusterCovisibility``; see
-``specs/core/cluster-covisibility.md``)."""
+``specs/core/cluster-covisibility.md`` and, for the selection queries —
+pair displacement, banded thinning, reach —
+``specs/core/covisibility-selection.md``)."""
 
 import numpy as np
 import numpy.testing as npt
@@ -398,3 +400,204 @@ class TestSeedGroups:
         starts, images = _edges_to_arrays(4, edges)
         cov = ClusterCovisibility.from_arrays(starts, images, 4)
         assert list(cov.seed_groups()) == [[0, 1]]
+
+
+# ── Selection queries (specs/core/covisibility-selection.md) ──────────────
+
+
+def _positioned_edges_to_arrays(num_images, edges):
+    """Synthesize positioned cluster arrays: edge (i, j, w, d) becomes w
+    two-member clusters with one member in image i at the origin and one in
+    image j at distance d. Two-member clusters force the sampled pair, so
+    the displacement tables are exact for any seed: mean[i, j] == d and
+    counts[i, j] == w."""
+    starts = [0]
+    images = []
+    positions = []
+    for i, j, w, d in edges:
+        for _ in range(w):
+            images.extend([i, j])
+            positions.extend([[0.0, 0.0], [d, 0.0]])
+            starts.append(len(images))
+    return (
+        np.array(starts, dtype=np.uint32),
+        np.array(images, dtype=np.uint32),
+        np.array(positions, dtype=np.float64),
+    )
+
+
+def _chain8():
+    """An 8-image chain with geometrically decaying covisibility:
+    W[i, j] = 128 >> |i - j|."""
+    edges = [(i, j, 128 >> (j - i)) for i in range(8) for j in range(i + 1, 8)]
+    starts, images = _edges_to_arrays(8, edges)
+    return ClusterCovisibility.from_arrays(starts, images, 8)
+
+
+class TestPairDisplacement:
+    def test_exact_on_forced_two_member_samples(self):
+        # Clusters: (0, 1) at distances 5 and 10; (0, 2) at distance 17.
+        starts = np.array([0, 2, 4, 6], dtype=np.uint32)
+        images = np.array([0, 1, 0, 1, 0, 2], dtype=np.uint32)
+        positions = np.array(
+            [[0, 0], [3, 4], [0, 0], [6, 8], [0, 0], [8, 15]], dtype=np.float64
+        )
+        cov = ClusterCovisibility.from_arrays(
+            starts, images, 3, positions_xy=positions, seed=42
+        )
+        mean = cov.pair_displacement()
+        count = cov.pair_displacement_counts()
+        assert mean.dtype == np.float64 and mean.shape == (3, 3)
+        assert count.dtype == np.uint32 and count.shape == (3, 3)
+        npt.assert_array_equal(mean, mean.T)
+        npt.assert_array_equal(count, count.T)
+        npt.assert_array_equal(np.diag(mean), 0.0)
+        assert mean[0, 1] == 7.5 and count[0, 1] == 2
+        assert mean[0, 2] == 17.0 and count[0, 2] == 1
+        assert mean[1, 2] == 0.0 and count[1, 2] == 0  # unsampled pair
+        # Positions leave the shared-cluster counts unchanged.
+        bare = ClusterCovisibility.from_arrays(starts, images, 3)
+        npt.assert_array_equal(cov.counts, bare.counts)
+
+    def test_seeded_determinism(self):
+        # A four-member cluster exercises the sampling RNG.
+        starts = np.array([0, 4], dtype=np.uint32)
+        images = np.array([0, 1, 2, 3], dtype=np.uint32)
+        positions = np.arange(8, dtype=np.float64).reshape(4, 2)
+        a, b = (
+            ClusterCovisibility.from_arrays(
+                starts, images, 4, positions_xy=positions, seed=7
+            )
+            for _ in range(2)
+        )
+        npt.assert_array_equal(a.pair_displacement(), b.pair_displacement())
+        npt.assert_array_equal(
+            a.pair_displacement_counts(), b.pair_displacement_counts()
+        )
+        # All members sit in distinct images, so the sample always lands.
+        assert a.pair_displacement_counts().sum() == 2
+
+    def test_raises_without_positions(self):
+        cov = ClusterCovisibility.from_arrays(CLUSTER_STARTS, MEMBER_IMAGES, N_IMAGES)
+        with pytest.raises(ValueError, match="without positions_xy"):
+            cov.pair_displacement()
+        with pytest.raises(ValueError, match="without positions_xy"):
+            cov.pair_displacement_counts()
+
+    def test_wrong_positions_dtype_raises(self):
+        positions = np.zeros((len(MEMBER_IMAGES), 2), dtype=np.float32)
+        with pytest.raises(TypeError, match="float64"):
+            ClusterCovisibility.from_arrays(
+                CLUSTER_STARTS, MEMBER_IMAGES, N_IMAGES, positions_xy=positions
+            )
+
+    def test_wrong_positions_width_raises(self):
+        positions = np.zeros((len(MEMBER_IMAGES), 3), dtype=np.float64)
+        with pytest.raises(ValueError, match=r"\(M, 2\)"):
+            ClusterCovisibility.from_arrays(
+                CLUSTER_STARTS, MEMBER_IMAGES, N_IMAGES, positions_xy=positions
+            )
+
+    def test_positions_not_parallel_raises(self):
+        positions = np.zeros((3, 2), dtype=np.float64)
+        with pytest.raises(ValueError, match="parallel"):
+            ClusterCovisibility.from_arrays(
+                CLUSTER_STARTS, MEMBER_IMAGES, N_IMAGES, positions_xy=positions
+            )
+
+
+class TestThin:
+    def test_band_selection_on_chain(self):
+        cov = _chain8()
+        # Band [8, 64): adjacent images (64) duplicate, distance-2 (32)
+        # stays linked — a stride-2 skeleton.
+        kept = cov.thin(64.0)
+        assert kept.dtype == np.uint32
+        npt.assert_array_equal(kept, [0, 2, 4, 6])
+        # Band [16, 128): every image keeps its adjacent link.
+        npt.assert_array_equal(cov.thin(128.0), np.arange(8))
+        # A tau below every count keeps only the first swept image.
+        npt.assert_array_equal(cov.thin(0.5), [0])
+
+    def test_isolation_order_with_positions(self):
+        # W: (0,1)=10, (0,2)=10, (1,2)=3; isolations 0:1, 1:1, 2:9 → the
+        # sweep starts at the most isolated image 2, keeping {1, 2} where
+        # the construction-order fallback keeps only {0}.
+        edges = [(0, 1, 10, 1.0), (0, 2, 10, 2.0), (1, 2, 3, 9.0)]
+        starts, images, positions = _positioned_edges_to_arrays(3, edges)
+        cov = ClusterCovisibility.from_arrays(starts, images, 3, positions_xy=positions)
+        npt.assert_array_equal(cov.thin(8.0), [1, 2])
+        bare = ClusterCovisibility.from_arrays(starts, images, 3)
+        npt.assert_array_equal(bare.thin(8.0), [0])
+
+    def test_permutation_invariance(self):
+        # Isolations [1, 1, 2, 4]: the global-minimum edge ties its
+        # endpoints {0, 1} (ties break by index), so the permutation
+        # preserves the index order inside that tie class; the kept set must
+        # then relabel exactly at every tau.
+        edges = [
+            (0, 1, 10, 1.0),
+            (0, 2, 10, 2.0),
+            (1, 2, 3, 9.0),
+            (2, 3, 20, 4.0),
+            (1, 3, 6, 7.0),
+        ]
+        perm = np.array([1, 3, 0, 2], dtype=np.uint32)  # perm[0] < perm[1]
+        permuted = [(perm[i], perm[j], w, d) for i, j, w, d in edges]
+        starts, images, positions = _positioned_edges_to_arrays(4, edges)
+        cov = ClusterCovisibility.from_arrays(starts, images, 4, positions_xy=positions)
+        pstarts, pimages, ppositions = _positioned_edges_to_arrays(4, permuted)
+        cov_p = ClusterCovisibility.from_arrays(
+            pstarts, pimages, 4, positions_xy=ppositions
+        )
+        for tau in [2.0, 8.0, 16.0, 32.0, 64.0]:
+            npt.assert_array_equal(
+                cov_p.thin(tau), np.sort(perm[cov.thin(tau)]), err_msg=f"tau={tau}"
+            )
+
+    def test_non_finite_tau_raises(self):
+        cov = _chain8()
+        with pytest.raises(ValueError, match="finite"):
+            cov.thin(float("nan"))
+
+
+class TestThinTo:
+    def test_hits_requested_sizes(self):
+        cov = _chain8()
+        # Reachable sizes over tau in (1, median row peak]: 2, 3, 4 (size 1
+        # would need tau <= 1, below the search range).
+        for target in range(2, 5):
+            kept = cov.thin_to(target)
+            assert kept.dtype == np.uint32
+            assert len(kept) == target, target
+        assert len(cov.thin_to(1)) == 2  # closest reachable size
+        # Larger targets saturate at the stride-2 skeleton.
+        npt.assert_array_equal(cov.thin_to(8), [0, 2, 4, 6])
+
+
+class TestReach:
+    def _cov(self):
+        # 5 images; image 4 shares nothing.
+        starts, images = _edges_to_arrays(5, [(0, 1, 8), (1, 2, 7), (0, 3, 9)])
+        return ClusterCovisibility.from_arrays(starts, images, 5)
+
+    def test_exact_fractions(self):
+        cov = self._cov()
+        subset = np.array([0], dtype=np.uint32)
+        assert cov.reach(subset) == 3 / 5  # 0 (member), 1, 3 at min_shared=8
+        assert cov.reach(np.array([1], dtype=np.uint32)) == 2 / 5
+        assert cov.reach(np.array([], dtype=np.uint32)) == 0.0
+        # A member counts as reached even with zero covisibility.
+        assert cov.reach(np.array([4], dtype=np.uint32)) == 1 / 5
+        assert cov.reach(np.arange(5, dtype=np.uint32)) == 1.0
+
+    def test_min_shared_boundary(self):
+        cov = self._cov()
+        # Exactly at the bar counts; one below does not.
+        assert cov.reach(np.array([1], dtype=np.uint32), min_shared=7) == 3 / 5
+        assert cov.reach(np.array([0], dtype=np.uint32), min_shared=9) == 2 / 5
+
+    def test_out_of_range_raises(self):
+        cov = self._cov()
+        with pytest.raises(ValueError, match="out of range"):
+            cov.reach(np.array([5], dtype=np.uint32))
