@@ -159,8 +159,35 @@ jobs:
           cache: true
 
       - name: Run tests with combined coverage
-        run: pixi run -e test-ci coverage-all
         shell: bash
+        run: |
+          # Sample system memory throughout the run. This is the only job that
+          # runs the whole suite under load, so it's where we learn the peak
+          # footprint + whether the box swaps — the data needed to decide how
+          # many pytest-xdist workers the 16 GB / 4-core runner can take.
+          echo "== runner resources =="
+          nproc || true
+          free -h || true
+          bash scripts/ci_mem_sample.sh sample 2 mem-samples.tsv &
+          sampler=$!
+          trap 'kill "$sampler" 2>/dev/null || true' EXIT
+          set +e
+          pixi run -e test-ci coverage-all
+          rc=$?
+          set -e
+          kill "$sampler" 2>/dev/null || true
+          trap - EXIT
+          echo "== memory summary (whole coverage run) =="
+          bash scripts/ci_mem_sample.sh summary mem-samples.tsv || true
+          exit "$rc"
+
+      - name: Upload memory samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-coverage-mem-samples
+          path: mem-samples.tsv
+          if-no-files-found: ignore
 
       - name: Upload coverage
         if: always()

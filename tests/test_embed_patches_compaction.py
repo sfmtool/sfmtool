@@ -369,8 +369,14 @@ def test_embed_patches_default_is_two_rounds_one_sweep(
     assert recon.feature_source == "sift_files"
     images = _load_images(recon)
 
-    default = embed_patches(recon, images, patch_size=10.0)
-    explicit = embed_patches(recon, images, patch_size=10.0, subpixel=1, rounds=2)
+    # resolution=12 (vs the resolution=24 default) keeps this a comparison of
+    # default-vs-explicit kwargs at a cheaper sampling grid — both sides use the
+    # same grid, so the equivalence being pinned is unaffected. The sibling
+    # test_embed_patches_command.py tests run at this same low resolution.
+    default = embed_patches(recon, images, patch_size=10.0, resolution=12)
+    explicit = embed_patches(
+        recon, images, patch_size=10.0, subpixel=1, rounds=2, resolution=12
+    )
 
     assert default.point_count == explicit.point_count
     np.testing.assert_array_equal(
@@ -396,8 +402,14 @@ def test_embed_patches_subpixel_lk_round_trips(
     # keypoint comparison is meaningful. (At rounds>=2 the round-1 keypoints feed
     # the next round's normal refinement + grazing drop, which can shift
     # membership — covered by test_embed_patches_multiple_rounds_round_trips.)
-    baseline = embed_patches(recon, images, patch_size=10.0, subpixel=0, rounds=1)
-    refined = embed_patches(recon, images, patch_size=10.0, subpixel=1, rounds=1)
+    # resolution=12 (vs default 24) is a cheaper sampling grid; the assertion is
+    # a relative baseline-vs-refined comparison at a fixed grid, so it holds.
+    baseline = embed_patches(
+        recon, images, patch_size=10.0, subpixel=0, rounds=1, resolution=12
+    )
+    refined = embed_patches(
+        recon, images, patch_size=10.0, subpixel=1, rounds=1, resolution=12
+    )
 
     # Same membership shape (the subpixel refiner is local — it changes no
     # kept-view set), so a per-row keypoint comparison is meaningful.
@@ -435,7 +447,11 @@ def test_embed_patches_multiple_rounds_round_trips(
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = _load_images(recon)
 
-    one = embed_patches(recon, images, patch_size=10.0, subpixel=1, rounds=1)
+    # resolution=12 (vs default 24) is a cheaper sampling grid; the assertions
+    # are relative (three-rounds vs one-round monotonicity) at a fixed grid.
+    one = embed_patches(
+        recon, images, patch_size=10.0, subpixel=1, rounds=1, resolution=12
+    )
 
     lines: list[str] = []
     three = embed_patches(
@@ -444,6 +460,7 @@ def test_embed_patches_multiple_rounds_round_trips(
         patch_size=10.0,
         subpixel=1,
         rounds=3,
+        resolution=12,
         progress=lines.append,
     )
 

@@ -54,8 +54,12 @@ def cluster_matches_file(isolated_seoul_bull_17_images) -> Path:
 def test_cluster_patches_end_to_end(cluster_matches_file: Path):
     from sfmtool._sfmtool.io import read_matches, verify_matches
 
+    # --resolution 16 (vs the 25-per-axis default) samples a coarser template to
+    # keep this end-to-end test cheap; the assertions below are structural
+    # (status classes, >50% clusters keep a member, gated ZNCC/shift, finite
+    # residuals) and hold at the lower grid.
     result = CliRunner().invoke(
-        main, ["cluster-patches", "-i", str(cluster_matches_file)]
+        main, ["cluster-patches", "-i", str(cluster_matches_file), "--resolution", "16"]
     )
     assert result.exit_code == 0, result.output
 
@@ -131,7 +135,12 @@ def test_cluster_patches_rejects_existing_output_and_enriched_input(
     cluster_matches_file: Path,
 ):
     runner = CliRunner()
-    first = runner.invoke(main, ["cluster-patches", "-i", str(cluster_matches_file)])
+    # --resolution 16 (vs the 25 default): this test only exercises the
+    # write-once / already-enriched guards, so the coarser grid is purely a
+    # speedup and changes none of the assertions.
+    first = runner.invoke(
+        main, ["cluster-patches", "-i", str(cluster_matches_file), "--resolution", "16"]
+    )
     assert first.exit_code == 0, first.output
     out_path = cluster_matches_file.with_name("clusters-patches.matches")
 
