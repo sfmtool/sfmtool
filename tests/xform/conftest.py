@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import apply_transforms as _apply_transforms
 
 

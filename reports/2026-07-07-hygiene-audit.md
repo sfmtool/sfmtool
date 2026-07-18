@@ -65,6 +65,25 @@ drift now affects 2 of 4 copies).
 ## Rust — `sfmtool-py`
 
 **`_sfmtool` submodule split (carried forward from 2026-06-23 #4) — current status: substantially progressed, residual remains**
+> _Status (2026-07-18): Done — migration finished. The residual flat surface had
+> grown to 12 names (4 fns + 8 classes; #213 added `ImagePyramidSet`/`CameraViews`
+> after this snapshot). Grouped as: `reconstruction` (SfmrReconstruction,
+> RangeExpr; binding files → `reconstruction/{sfmr_reconstruction,clone,range_expr}.rs`),
+> `patches` (OrientedPatch, PatchCloud, CameraViews, ImagePyramidSet,
+> RansacPhotometricOutput, refine_photometric_ransac, render_consensus_atlas),
+> and `image_dimensions` folded into the existing `io` (header-only file
+> inspection is I/O; a one-function `image` submodule wasn't warranted).
+> `build_profile` + `ProgressCounter` stay deliberately root-registered —
+> ProgressCounter is consumed by matching kernels too, so `patches` would be a
+> dishonest home — and `__init__.py`'s flat wildcard is replaced by explicit
+> imports of exactly those two names. The "~10 call sites" estimate was off by
+> an order of magnitude: ~170 flat `from ..._sfmtool import` sites were
+> rewritten to the submodule paths, plus two aliased
+> `import sfmtool._sfmtool as s` uses in `scripts/` that the mechanical
+> rewrite missed (caught by independent review — scripts have no pytest
+> coverage). Public `sfmtool.X` surface unchanged. No
+> pickle risk: none of the moved classes implement pickle support. New
+> registration tests cover both submodules + the no-flat-leak invariant._
 - Location: `crates/sfmtool-py/src/lib.rs`, `src/sfmtool/__init__.py`
 - Problem: The 8 slices are now genuinely registered as real Python submodules — all eight (`geometry`, `io`, `sift`, `matching`, `analysis`, `flow`, `spatial`, `spherical`) go through `helpers::install_submodule` (helpers.rs:224), which does the full wiring: `PyModule::new` with the public `__name__`, a `sys.modules` entry at the real dotted path, and `parent.add_submodule`. Flat registrations remaining on `_sfmtool` are down to **10** (from the original 80): `build_profile`, `py_image::image_dimensions`, `refine_photometric_ransac_py`, `render_consensus_atlas_py`, and 6 classes (`PySfmrReconstruction`, `PyRangeExpr`, `PyRansacPhotometricOutput`, `PyOrientedPatch`, `PyPatchCloud`, `ProgressCounter`). However, `src/sfmtool/__init__.py:4` **still does** `from sfmtool._sfmtool import *`, so those 10 flat names still leak via wildcard, and **8 binding files remain flat at `src/` top level** (`py_consensus_atlas.rs`, `py_image.rs`, `py_patch_cloud.rs`, `py_photometric_ransac.rs`, `py_progress.rs`, `py_range_expr.rs`, `py_sfmr_reconstruction.rs`, `recon_clone.rs`) plus shared `helpers.rs`.
 - Proposed fix: Group the residual flat bindings into 2-3 more submodules (e.g. `patches` for patch-cloud/oriented-patch/photometric/consensus, `reconstruction` for reconstruction+range-expr+recon_clone, `image` for image_dimensions) via the same `install_submodule` path; then replace the `import *` in `__init__.py` with explicit re-exports.
@@ -72,6 +91,15 @@ drift now affects 2 of 4 copies).
 - Risk: medium — moving classes between Python submodules changes `__module__` (pickle paths); the ~10 `from sfmtool._sfmtool import ...` call sites (rig/panorama.py, _embed_patches.py, scripts/*) would need updating.
 
 **py_patch_cloud.rs mixes a value type with four heavy refinement algorithms**
+> _Status (2026-07-18): Done — split in the same pass as the submodule-migration
+> finish (the file had grown to 2418 lines with `score_localizability` +
+> `CameraViews`/`ImagePyramidSet` since the snapshot). Now
+> `patches/{oriented_patch,args,views,cloud,refine_normals,select_views,
+> localize_keypoints,refine_keypoints,localizability}.rs` +
+> `photometric_ransac.rs`/`consensus_atlas.rs` moved in beside them; each kernel
+> file is an additional `#[pymethods] impl PyPatchCloud` block (pyo3
+> `multiple-pymethods` feature enabled, per this finding's proposal). Pure code
+> motion; shared plumbing is `pub(super)` in `views.rs`/`args.rs`._
 - Location: `crates/sfmtool-py/src/py_patch_cloud.rs` (1535 lines)
 - Problem: One file holds the small `PyOrientedPatch` value type (lines 42-153) plus `PyPatchCloud`, whose single `#[pymethods]` impl bundles constructors/accessors with four large, independent photometric algorithms: `refine_normals` (~478-774, ~300 lines), `select_views` (~797-918), `localize_keypoints` (~972-1143), and `refine_keypoints` (~1248-1535, ~290 lines). These four are distinct concerns. ("Consensus" is a shared internal notion woven through all four, not a separable fifth.)
 - Proposed fix: split into a `py_patch_cloud/` dir: `mod.rs` (both types + constructors/accessors), `refine_normals.rs`, `select_views.rs`, `localize_keypoints.rs`, `refine_keypoints.rs`, each an additional `#[pymethods] impl PyPatchCloud` block (Rust permits multiple pymethods impls across files).
@@ -311,7 +339,8 @@ drift now affects 2 of 4 copies).
    > (progress utils); both the `xform` and `cluster_patches` upward imports are
    > gone._
 
-Also queued but needing an owner decision rather than mechanical work: finishing the
+Also queued but needing an owner decision rather than mechanical work: ~~finishing the
 `_sfmtool` submodule migration (10 flat names + `import *` remain; touching class
-`__module__` paths), the `scene_renderer/upload.rs` regroup, and whether to delete or
+`__module__` paths)~~ _[Done 2026-07-18 — see the two findings above]_, the
+`scene_renderer/upload.rs` regroup, and whether to delete or
 regroup the four orphaned `scripts/` utilities.

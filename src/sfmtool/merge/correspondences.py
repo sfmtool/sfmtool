@@ -9,7 +9,7 @@ import click
 import numpy as np
 
 from .._histogram_utils import print_histogram
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.analysis import find_point_correspondences_py
 
 

@@ -370,7 +370,7 @@ def colmap_binary_to_rust_sfmr(
     When ``classify_infinity`` is true (the default), points whose depth the
     solve could not pin down are reclassified as points at infinity.
     """
-    from .._sfmtool import SfmrReconstruction
+    from .._sfmtool.reconstruction import SfmrReconstruction
     from .._sfmtool.io import read_colmap_binary
 
     colmap_dir = Path(colmap_dir)
@@ -442,7 +442,7 @@ def pycolmap_to_rust_sfmr(
     When ``classify_infinity`` is true (the default), points whose depth the
     solve could not pin down are reclassified as points at infinity.
     """
-    from .._sfmtool import SfmrReconstruction
+    from .._sfmtool.reconstruction import SfmrReconstruction
 
     image_dir = Path(image_dir).absolute()
 

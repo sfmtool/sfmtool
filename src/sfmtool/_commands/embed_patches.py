@@ -245,7 +245,7 @@ def embed_patches_command(
             --max-iters 3 --search 4 --min-relative-zncc 0.75
     """
     from .._embed_patches import embed_patches
-    from .._sfmtool import SfmrReconstruction
+    from .._sfmtool.reconstruction import SfmrReconstruction
     from .._workspace_image import read_workspace_image
     from ..xform._arg_parser import auto_output_path
 

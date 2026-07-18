@@ -20,7 +20,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ._sfmtool import SfmrReconstruction
+from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.flow import WarpMap
 
 

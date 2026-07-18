@@ -11,7 +11,7 @@ reconstruction's stored points. See specs/core/batch-triangulation-api.md.
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.analysis import triangulate_batch
 
 

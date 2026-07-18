@@ -12,7 +12,7 @@ from deadline.job_attachments.api import summarize_path_list
 
 from .._cli_utils import timed_command
 from .._filenames import expand_paths
-from .._sfmtool import RangeExpr
+from .._sfmtool.reconstruction import RangeExpr
 from .._workspace import find_workspace_for_path, load_workspace_config
 from ..sift.file import (
     SiftExtractionError,
@@ -209,7 +209,7 @@ def sift(
         # Load reconstruction once if --filter-sfm was specified
         filter_recon = None
         if filter_sfm_path:
-            from sfmtool._sfmtool import SfmrReconstruction
+            from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
             filter_recon = SfmrReconstruction.load(filter_sfm_path)
 

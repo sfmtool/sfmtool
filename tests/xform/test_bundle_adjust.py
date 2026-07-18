@@ -5,7 +5,7 @@
 
 import numpy as np
 
-from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.geometry import RotQuaternion
 from sfmtool.xform import (
     BundleAdjustTransform,
@@ -130,7 +130,7 @@ def test_bundle_adjust_quaternion_consistency(seoul_bull_workspace, tmp_path):
 
 def test_bundle_adjust_no_rig_data(seoul_bull_workspace, tmp_path):
     """Test that BA on a non-rig reconstruction doesn't add spurious rig data."""
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     output_path = tmp_path / "ba_no_rig.sfmr"
     transforms = [BundleAdjustTransform()]
@@ -147,7 +147,7 @@ def test_bundle_adjust_preserves_rig_data(seoul_bull_workspace, tmp_path):
     Regression test: before the fix, _reconstruction_to_data did not call
     _extract_rig_frame_data, so rig data was silently dropped.
     """
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     image_count = recon.image_count

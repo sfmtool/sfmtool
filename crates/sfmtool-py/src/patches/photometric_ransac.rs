@@ -31,7 +31,7 @@ fn err_to_py(e: RansacPhotometricError) -> PyErr {
 /// - ``tile_secondary_count`` : int32 ``[n_tiles]``
 /// - ``tile_primary_lum_mad`` : float32 ``[n_tiles]`` (NaN where skipped)
 /// - ``tile_secondary_lum_mad`` : float32 ``[n_tiles]`` (NaN where skipped)
-#[pyclass(name = "RansacPhotometricOutput", module = "sfmtool")]
+#[pyclass(name = "RansacPhotometricOutput", module = "sfmtool.patches")]
 pub struct PyRansacPhotometricOutput {
     inner: RansacPhotometricOutput,
 }

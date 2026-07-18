@@ -82,7 +82,7 @@ def test_xform_on_reconstruction(seoul_bull_workspace: Path):
     assert "Transformation complete" in result.output
 
     # Verify the scaled reconstruction
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     original = SfmrReconstruction.load(output_sfmr)
     scaled = SfmrReconstruction.load(scaled_sfmr)
@@ -104,7 +104,7 @@ def test_xform_remove_short_tracks(seoul_bull_workspace: Path):
     assert filtered_sfmr.exists()
     assert "Remove tracks with length <= 3" in result.output
 
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     original = SfmrReconstruction.load(output_sfmr)
     filtered = SfmrReconstruction.load(filtered_sfmr)
@@ -135,7 +135,7 @@ def test_xform_camera_model_with_bundle_adjust(
     assert switched_sfmr.exists()
     assert "Switch camera model to RADIAL" in result.output
 
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     switched = SfmrReconstruction.load(switched_sfmr)
     for camera in switched.cameras:

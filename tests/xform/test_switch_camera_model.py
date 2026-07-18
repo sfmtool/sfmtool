@@ -5,7 +5,7 @@
 
 import pytest
 
-from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import SwitchCameraModelTransform
 
 from .conftest import apply_transforms_to_file

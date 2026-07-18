@@ -388,7 +388,7 @@ def _generate_output_path(
     """Generate a timestamped output path for a .matches file."""
     from deadline.job_attachments.api import summarize_paths_by_sequence
 
-    from .._sfmtool import RangeExpr
+    from .._sfmtool.reconstruction import RangeExpr
 
     base_dir.mkdir(parents=True, exist_ok=True)
 

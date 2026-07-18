@@ -13,7 +13,7 @@ from pathlib import Path
 import click
 import numpy as np
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.spatial import KdTree3d
 from .._histogram_utils import print_histogram
 

@@ -11,7 +11,7 @@ reconstruction image, loaded up front.
 
 import numpy as np
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 
 
 def load_workspace_images(recon: SfmrReconstruction) -> list[np.ndarray]:

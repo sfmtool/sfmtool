@@ -6,16 +6,17 @@
 //! Exposes file I/O (`.sfmr`, `.sift`, and COLMAP formats), geometric types,
 //! feature matching, alignment, optical flow, and GUI viewer to Python via PyO3.
 //!
-//! Geometric value types, file-format I/O, SIFT extraction, feature matching,
-//! reconstruction analysis, optical flow, spatial indices, and spherical-rig
-//! bindings each live on their own PyO3 submodule (`_sfmtool.geometry`,
-//! `_sfmtool.io`, `_sfmtool.sift`, `_sfmtool.matching`, `_sfmtool.analysis`,
-//! `_sfmtool.flow`, `_sfmtool.spatial`, `_sfmtool.spherical`); their
-//! `__name__` reads as `sfmtool.geometry` / `sfmtool.io` / `sfmtool.sift` /
-//! `sfmtool.matching` / `sfmtool.analysis` / `sfmtool.flow` /
-//! `sfmtool.spatial` / `sfmtool.spherical` so binding objects report the
-//! public location in tracebacks, IPython, and Sphinx. Everything else is
-//! registered flat on `_sfmtool` for now (see hygiene audit #4 for the rest).
+//! Every binding lives on a PyO3 submodule (`_sfmtool.geometry`,
+//! `_sfmtool.io`, `_sfmtool.sift`, `_sfmtool.reconstruction`,
+//! `_sfmtool.patches`, `_sfmtool.matching`, `_sfmtool.analysis`,
+//! `_sfmtool.flow`, `_sfmtool.spatial`, `_sfmtool.spherical`); each
+//! submodule's `__name__` reads as the public `sfmtool.<name>` so binding
+//! objects report the public location in tracebacks, IPython, and Sphinx.
+//! The only root-level registrations are `build_profile` (build
+//! introspection of this extension) and `ProgressCounter` (cross-cutting
+//! progress instrumentation shared by patch and matching kernels); both are
+//! re-exported explicitly by `sfmtool/__init__.py` — the wildcard flat
+//! surface is gone.
 //!
 //! # Example
 //!
@@ -54,20 +55,15 @@ mod geometry;
 // lives on the `_sfmtool.geometry` submodule (see `geometry::register`).
 pub use geometry::{PyCameraIntrinsics, PyRigidTransform, PyRotQuaternion, PySe3Transform};
 
-mod py_sfmr_reconstruction;
-pub use py_sfmr_reconstruction::PySfmrReconstruction;
-mod recon_clone;
+// ── Reconstruction core types ─────────────────────────────────────────────
 
-mod py_range_expr;
-pub use py_range_expr::PyRangeExpr;
+mod reconstruction;
+pub use reconstruction::range_expr::PyRangeExpr;
+pub use reconstruction::sfmr_reconstruction::PySfmrReconstruction;
 
-// ── File I/O ──────────────────────────────────────────────────────────────
+// ── File I/O (incl. header-only image inspection) ─────────────────────────
 
 mod io;
-
-// ── Image inspection ──────────────────────────────────────────────────────
-
-mod py_image;
 
 // ── Feature matching ──────────────────────────────────────────────────────
 
@@ -75,10 +71,12 @@ mod matching;
 
 mod sift;
 
-// ── Image warping ────────────────────────────────────────────────────────
+// ── Patches (surfels) + photometric refinement ───────────────────────────
 
-mod py_patch_cloud;
-pub use py_patch_cloud::{PyCameraViews, PyImagePyramidSet, PyOrientedPatch, PyPatchCloud};
+mod patches;
+pub use patches::{
+    PyCameraViews, PyImagePyramidSet, PyOrientedPatch, PyPatchCloud, PyRansacPhotometricOutput,
+};
 
 mod py_progress;
 pub use py_progress::ProgressCounter;
@@ -90,9 +88,6 @@ mod flow;
 // ── Analysis & algorithms ─────────────────────────────────────────────────
 
 mod analysis;
-mod py_consensus_atlas;
-mod py_photometric_ransac;
-pub use py_photometric_ransac::PyRansacPhotometricOutput;
 
 // ── Spatial indices (KD-trees, kd-tree forest) ───────────────────────────
 
@@ -128,14 +123,19 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Geometric value types: camera intrinsics, quaternions, rigid + SE3 transforms.
     helpers::install_submodule(m, "sfmtool.geometry", geometry::register)?;
 
-    // File-format I/O: `.sfmr`, `.sift`, `.matches`, `.camrig`, COLMAP binary + db.
+    // File-format I/O: `.sfmr`, `.sift`, `.matches`, `.camrig`, COLMAP binary
+    // + db, header-only image inspection.
     helpers::install_submodule(m, "sfmtool.io", io::register)?;
 
     // sfmtool SIFT detection / extraction.
     helpers::install_submodule(m, "sfmtool.sift", sift::register)?;
 
-    // Image inspection
-    m.add_function(wrap_pyfunction!(py_image::image_dimensions, m)?)?;
+    // Reconstruction core types: SfmrReconstruction + RangeExpr.
+    helpers::install_submodule(m, "sfmtool.reconstruction", reconstruction::register)?;
+
+    // Patches (surfels): OrientedPatch, PatchCloud + its kernels, scene
+    // inputs, photometric RANSAC, consensus atlas.
+    helpers::install_submodule(m, "sfmtool.patches", patches::register)?;
 
     // Feature matching: descriptor + image-pair + sweep + cluster.
     helpers::install_submodule(m, "sfmtool.matching", matching::register)?;
@@ -153,27 +153,11 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Spherical: tile rigs + per-tile source stacks + sphere-point generation.
     helpers::install_submodule(m, "sfmtool.spherical", spherical::register)?;
 
-    // Types
-    m.add_class::<PySfmrReconstruction>()?;
-    m.add_class::<PyRangeExpr>()?;
-    m.add_class::<PyRansacPhotometricOutput>()?;
-    m.add_class::<PyOrientedPatch>()?;
-    m.add_class::<PyPatchCloud>()?;
-    m.add_class::<PyImagePyramidSet>()?;
-    m.add_class::<PyCameraViews>()?;
+    // Deliberately root-level: `ProgressCounter` is cross-cutting progress
+    // instrumentation consumed by patch AND matching kernels, so no single
+    // submodule is its honest home. `sfmtool/__init__.py` re-exports both
+    // root names explicitly (no wildcard).
     m.add_class::<ProgressCounter>()?;
-
-    // Photometric refinement.
-    m.add_function(wrap_pyfunction!(
-        py_photometric_ransac::refine_photometric_ransac_py,
-        m
-    )?)?;
-
-    // Tile-batched consensus atlas compositing.
-    m.add_function(wrap_pyfunction!(
-        py_consensus_atlas::render_consensus_atlas_py,
-        m
-    )?)?;
 
     Ok(())
 }

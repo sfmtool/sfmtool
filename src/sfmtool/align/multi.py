@@ -9,7 +9,7 @@ from pathlib import Path
 import click
 
 from .core import estimate_pairwise_alignment
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 
 
 def _get_reconstruction_images(recon: SfmrReconstruction) -> dict[int, str]:

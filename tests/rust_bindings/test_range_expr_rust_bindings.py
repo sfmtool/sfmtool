@@ -5,7 +5,7 @@
 
 import pytest
 
-from sfmtool._sfmtool import RangeExpr
+from sfmtool._sfmtool.reconstruction import RangeExpr
 
 
 class TestConstructor:

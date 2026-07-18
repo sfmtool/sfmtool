@@ -142,7 +142,7 @@ def flow(
             raise click.UsageError(
                 f"Reconstruction path must be a .sfmr file, got: {reconstruction_path}"
             )
-        from .._sfmtool import SfmrReconstruction
+        from .._sfmtool.reconstruction import SfmrReconstruction
 
         recon = SfmrReconstruction.load(reconstruction_path)
 

@@ -21,10 +21,10 @@ def main() -> None:
     ap.add_argument("variant_sfmr", help="plus_descent embed-patches output")
     args = ap.parse_args()
 
-    import sfmtool._sfmtool as s
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
-    a = s.SfmrReconstruction.load(args.baseline_sfmr)
-    b = s.SfmrReconstruction.load(args.variant_sfmr)
+    a = SfmrReconstruction.load(args.baseline_sfmr)
+    b = SfmrReconstruction.load(args.variant_sfmr)
 
     def per_obs(recon):
         """Yield (world_x, world_y, world_z, image_index, kp_x, kp_y) per

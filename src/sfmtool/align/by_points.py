@@ -7,7 +7,7 @@ import numpy as np
 
 from .core import AlignmentResult, estimate_alignment
 from .._point_correspondence import find_point_correspondences
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 
 
 def estimate_alignment_from_points(

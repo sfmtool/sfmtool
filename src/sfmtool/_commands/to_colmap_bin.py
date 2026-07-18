@@ -10,7 +10,7 @@ import numpy as np
 
 from .._cli_utils import timed_command
 from .._filenames import number_from_filename
-from .._sfmtool import RangeExpr
+from .._sfmtool.reconstruction import RangeExpr
 
 
 @click.command("to-colmap-bin")
@@ -64,7 +64,7 @@ def to_colmap_bin(
         colmap gui --import_path colmap_output/
     """
     from ..colmap.io import save_colmap_binary
-    from .._sfmtool import SfmrReconstruction
+    from .._sfmtool.reconstruction import SfmrReconstruction
 
     input_path = Path(input_sfmr)
     output_path = Path(output_dir)

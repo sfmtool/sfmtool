@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import click
 
-from ._sfmtool import SfmrReconstruction
+from ._sfmtool.reconstruction import SfmrReconstruction
 
 
 def require_embedded_patches(recon: SfmrReconstruction, op: str) -> None:

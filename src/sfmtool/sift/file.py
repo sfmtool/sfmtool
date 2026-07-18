@@ -25,7 +25,7 @@ from sfmtool._sfmtool.io import (
 )
 
 if TYPE_CHECKING:
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
 __all__ = [
     "SiftExtractionError",

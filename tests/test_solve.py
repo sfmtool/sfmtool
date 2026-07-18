@@ -62,7 +62,7 @@ def test_solve_incremental(isolated_seoul_bull_17_images: list[Path]):
     assert output_path.exists()
 
     # Verify the .sfmr file can be loaded
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     recon = SfmrReconstruction.load(output_path)
     assert recon.image_count > 0
@@ -189,7 +189,7 @@ def test_solve_from_cluster_matches(isolated_seoul_bull_17_images: list[Path]):
     assert result.exit_code == 0, result.output
     assert output_path.exists()
 
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     recon = SfmrReconstruction.load(output_path)
     assert recon.image_count > 0

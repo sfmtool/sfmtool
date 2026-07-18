@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 from sfmtool.xform import RefineKeypointsTransform
 from sfmtool.xform._arg_parser import parse_refine_keypoints_params

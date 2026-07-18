@@ -4,7 +4,7 @@
 """Apply transformation pipeline to reconstructions."""
 
 from .._feature_source import require_embedded_patches
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from ._interface import Transform
 
 

@@ -10,7 +10,7 @@ import numpy as np
 
 from .._cli_utils import timed_command
 from .._filenames import number_from_filename
-from .._sfmtool import RangeExpr
+from .._sfmtool.reconstruction import RangeExpr
 
 
 @click.command("to-nerfstudio")
@@ -86,7 +86,7 @@ def to_nerfstudio(
         sfm to-nerfstudio undistorted.sfmr my_dataset/ -r 10-50
         ns-train nerfacto --data my_dataset/
     """
-    from .._sfmtool import SfmrReconstruction
+    from .._sfmtool.reconstruction import SfmrReconstruction
     from .._to_nerfstudio import export_to_nerfstudio
 
     input_path = Path(input_sfmr)

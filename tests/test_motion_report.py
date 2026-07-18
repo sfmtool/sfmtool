@@ -35,7 +35,7 @@ def _make_translation_discontinuity(sfmr_path: Path, *, offset_m: float = 50.0):
     pose break between frame 10 and frame 11.
     """
     from sfmtool._filenames import number_from_filename
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
     from sfmtool._sfmtool.geometry import RotQuaternion, Se3Transform
 
     recon = SfmrReconstruction.load(sfmr_path)
@@ -120,7 +120,7 @@ def test_recon_with_no_discontinuity_emits_single_full_length_segment(
 ):
     """An unmodified, smooth reconstruction has no discontinuities and one
     segment covering the whole sequence."""
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     report = _run_recon_to_json(recon)
@@ -140,7 +140,7 @@ def test_recon_thresholds_block_matches_module_constants(
     """The top-level thresholds block echoes the analyzer's module-level
     constants and the resolved per-sequence threshold is derived from
     median_trans."""
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     report = _run_recon_to_json(recon)

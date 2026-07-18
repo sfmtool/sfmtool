@@ -8,7 +8,7 @@ import fnmatch
 import numpy as np
 
 from .._filenames import number_from_filename
-from .._sfmtool import RangeExpr, SfmrReconstruction
+from .._sfmtool.reconstruction import RangeExpr, SfmrReconstruction
 
 
 class IncludeRangeFilter:

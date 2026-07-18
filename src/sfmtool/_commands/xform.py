@@ -311,7 +311,7 @@ def xform(ctx, input_path, output_path, **kwargs):
         # views), then sharpen the survivors to sub-pixel
         sfm xform in.sfmr out.sfmr --localize-keypoints --refine-keypoints
     """
-    from .._sfmtool import SfmrReconstruction
+    from .._sfmtool.reconstruction import SfmrReconstruction
 
     input_path = Path(input_path)
     output_path_provided = output_path is not None

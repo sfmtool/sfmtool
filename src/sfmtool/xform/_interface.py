@@ -5,7 +5,7 @@
 
 from typing import Protocol
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 
 
 class Transform(Protocol):

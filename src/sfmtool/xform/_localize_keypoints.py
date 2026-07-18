@@ -26,7 +26,7 @@ See ``specs/cli/xform-localize-keypoints-command.md`` and
 ``specs/core/patch-keypoint-localization.md``.
 """
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from ._images import load_workspace_images
 
 _WINDOWS = ("gaussian_disk", "gaussian", "uniform")

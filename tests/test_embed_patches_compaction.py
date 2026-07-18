@@ -24,7 +24,9 @@ from sfmtool._patch_compaction import (
     image_file_hashes_from_images,
 )
 from sfmtool._progress import _poll_progress, _progress_poll_loop
-from sfmtool._sfmtool import PatchCloud, ProgressCounter, SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool._sfmtool.patches import PatchCloud
+from sfmtool._sfmtool import ProgressCounter
 from sfmtool._sfmtool.io import verify_sfmr
 
 
@@ -470,7 +472,7 @@ def test_drop_grazing_observations_skips_points_at_infinity():
     its frame alone. The grazing drop must therefore skip it entirely — keeping all
     its observations — while still pruning a genuinely grazing finite point."""
     from sfmtool._embed_patches import _drop_grazing_observations
-    from sfmtool._sfmtool import PatchCloud
+    from sfmtool._sfmtool.patches import PatchCloud
 
     # Two dense points, both with normal u x v = +z (f32 half-vectors, f64
     # centers — the dtypes from_halfvec_arrays expects, as in compaction).

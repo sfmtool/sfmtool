@@ -463,7 +463,7 @@ semantics — needs its own quality study).
 > functions; validation (parallel list lengths, per-image array shapes, CSR
 > consistency, `member_images` range) raises `PyValueError` before the GIL
 > is released; the kernel runs under `py.detach`. The pyramid build was
-> factored as `py_patch_cloud::build_pyramids_from_image_list` (extraction +
+> factored as `patches::views::build_pyramids_from_image_list` (extraction +
 > rayon build with a per-image `check` callback); the recon-coupled
 > `build_pyramids_from_arrays` supplies the camera-dimension check and the
 > cluster path passes a no-op. `window_sigma = None` resolves to the 0.5
@@ -496,14 +496,14 @@ fn refine_cluster_patches<'py>(
 ```
 
 - Image extraction + rayon pyramid build copies
-  `build_pyramids_from_arrays` (`py_patch_cloud.rs:236`) — factor that
+  `build_pyramids_from_arrays` (now `patches/views.rs`) — factor that
   helper so both call sites share it (it currently lives beside the
   recon-based `build_pyramids_and_poses`; the cluster path has no recon and
   no camera dimension check).
 - Validate lengths (`images`, `positions`, `affine_shapes` equal; CSR arrays
   self-consistent) with `PyValueError`s before releasing the GIL, then run
   the kernel under `py.detach(...)` like `localize_keypoints`
-  (`py_patch_cloud.rs:1265`).
+  (now `patches/localize_keypoints.rs`).
 - Return one `PyDict`: `reference_members` (C,) u32, `member_status` (M,)
   u8, `member_affines` (M,2,3) f64, `member_zncc` (M,) f32,
   `member_shift_px` (M,) f32 — all via `.into_pyarray(py)`.

@@ -22,11 +22,8 @@ import numpy as np
 
 from sfmtool._patch_compaction import compact_to_embedded_patches
 from sfmtool._progress import _poll_progress, _timed_step
-from sfmtool._sfmtool import (
-    ImagePyramidSet,
-    PatchCloud,
-    SfmrReconstruction,
-)
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool._sfmtool.patches import ImagePyramidSet, PatchCloud
 
 
 def _refine_subpixel(

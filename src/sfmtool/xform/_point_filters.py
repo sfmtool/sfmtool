@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.io import read_sift_partial
 
 

@@ -11,7 +11,7 @@ import numpy as np
 
 from .correspondences import find_point_correspondences
 from .pose_refinement import refine_camera_poses
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 
 
 def merge_reconstructions(

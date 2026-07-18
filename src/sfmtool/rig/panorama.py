@@ -18,10 +18,8 @@ import cv2
 import numpy as np
 
 from sfmtool._filenames import number_from_filename
-from sfmtool._sfmtool import (
-    RangeExpr,
-    render_consensus_atlas,
-)
+from sfmtool._sfmtool.reconstruction import RangeExpr
+from sfmtool._sfmtool.patches import render_consensus_atlas
 from sfmtool._sfmtool.geometry import RotQuaternion
 from sfmtool._sfmtool.spherical import SphericalTileRig
 from sfmtool.rig.spherical_tile import resample_atlas_to_equirect
@@ -29,7 +27,7 @@ from sfmtool.rig.spherical_tile import resample_atlas_to_equirect
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
 
 def _next_pow2(x: int) -> int:

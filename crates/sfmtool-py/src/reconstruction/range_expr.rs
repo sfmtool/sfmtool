@@ -14,7 +14,7 @@ use std::str::FromStr;
 ///
 /// Parses strings like `"1-10"`, `"1,3,5-7"`, or `"1-10:2"`, and supports
 /// iteration, membership testing, `len()`, hashing, equality, and `str()`.
-#[pyclass(name = "RangeExpr", module = "sfmtool", from_py_object)]
+#[pyclass(name = "RangeExpr", module = "sfmtool.reconstruction", from_py_object)]
 #[derive(Clone)]
 pub struct PyRangeExpr {
     inner: RangeExpr,
@@ -79,7 +79,7 @@ impl PyRangeExpr {
 }
 
 /// Iterator over the integer values of a [`PyRangeExpr`].
-#[pyclass(module = "sfmtool")]
+#[pyclass(module = "sfmtool.reconstruction")]
 pub struct PyRangeExprIter {
     values: Vec<i64>,
     index: usize,

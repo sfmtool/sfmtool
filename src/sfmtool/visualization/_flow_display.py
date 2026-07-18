@@ -25,7 +25,7 @@ from ..sift.file import SiftReader, get_sift_path_for_image
 from ._common import get_color_palette
 
 if TYPE_CHECKING:
-    from .._sfmtool import SfmrReconstruction
+    from .._sfmtool.reconstruction import SfmrReconstruction
 
 
 def _find_nearest_within_tolerance(

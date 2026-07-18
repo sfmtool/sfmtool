@@ -14,7 +14,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._sfmtool import PatchCloud, SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool._sfmtool.patches import PatchCloud
 
 
 def test_feature_size_success_path(seoul_bull_workspace: Path):

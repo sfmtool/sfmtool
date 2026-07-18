@@ -175,7 +175,7 @@ def inspect(target, rest, strips, output, strips_views, context, verbose):
 def _inspect_strips_cmd(target, specs, output, strips_views, context):
     """Render the listed points of a .sfmr as a patch-strip montage."""
     from .._inspect_strips import parse_point_specs, render_inspect_strips
-    from .._sfmtool import SfmrReconstruction
+    from .._sfmtool.reconstruction import SfmrReconstruction
 
     path = Path(target)
     if path.suffix.lower() != ".sfmr" or not path.exists() or path.is_dir():
@@ -212,7 +212,7 @@ def _inspect_strips_cmd(target, specs, output, strips_views, context):
 
 def _inspect_point(point_id, hash_prefix, point_index, location, verbose):
     """Resolve a pt3d_ point ID to its .sfmr and print the point summary."""
-    from .._sfmtool import SfmrReconstruction
+    from .._sfmtool.reconstruction import SfmrReconstruction
     from .._workspace import find_sfmr_by_content_hash, find_workspace_for_path
 
     base = Path(location) if location else Path.cwd()

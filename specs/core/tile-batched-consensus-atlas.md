@@ -5,7 +5,7 @@
 photometric RANSAC ([`refine_photometric_ransac`]) without changing any
 of their algorithms. The orchestrator lives in
 `crates/sfmtool-core/src/spherical/consensus_atlas.rs` (`render_consensus_atlas`),
-the PyO3 binding in `crates/sfmtool-py/src/py_consensus_atlas.rs`, and
+the PyO3 binding in `crates/sfmtool-py/src/patches/consensus_atlas.rs`, and
 `sfm panorama` (`src/sfmtool/rig/panorama.py`) consumes it for the production
 panorama render.
 
@@ -198,7 +198,7 @@ out of scope here.
 `primary_consensus_atlas` it factors out of), and the orchestrator plus
 its `ConsensusAtlasBatch*` types in a new `spherical/consensus_atlas.rs`
 re-exported from `lib.rs`. The PyO3 wrapper goes in a new
-`crates/sfmtool-py/src/py_consensus_atlas.rs`. No new crates.
+`crates/sfmtool-py/src/patches/consensus_atlas.rs`. No new crates.
 
 Two small additions to existing types, no algorithm changes:
 

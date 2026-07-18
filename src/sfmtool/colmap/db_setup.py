@@ -182,7 +182,7 @@ def _setup_for_sfm_from_matches(
     import numpy as np
 
     from .._filenames import number_from_filename
-    from .._sfmtool import RangeExpr
+    from .._sfmtool.reconstruction import RangeExpr
     from .._sfmtool.io import read_matches
     from .._workspace import find_workspace_for_path
     from ..feature_match import pairs_from_matches

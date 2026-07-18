@@ -12,7 +12,7 @@ from deadline.job_attachments.api import summarize_paths_by_sequence
 
 from .._cli_utils import timed_command
 from .._filenames import expand_paths, number_from_filename
-from .._sfmtool import RangeExpr
+from .._sfmtool.reconstruction import RangeExpr
 from ..camera.cameras import CAMERA_MODEL_NAMES
 
 

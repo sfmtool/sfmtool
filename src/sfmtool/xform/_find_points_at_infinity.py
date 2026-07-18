@@ -9,7 +9,7 @@ removing existing geometry, so the point count grows. See
 specs/cli/xform-find-points-at-infinity.md.
 """
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 
 
 class FindPointsAtInfinityTransform:

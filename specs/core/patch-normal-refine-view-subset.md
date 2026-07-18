@@ -158,7 +158,7 @@ inspect/compare strips, tests) are unaffected.
      above; add `mod view_subset;`.
    - `prof.rs` (optional, nice-to-have): a counter for how many patches used the
      subset vs. fell back, reported in the profile summary.
-2. **`crates/sfmtool-py`** (`py_patch_cloud.rs`)
+2. **`crates/sfmtool-py`** (`patches/`)
    - `refine_normals`: add kwarg `max_refine_views=0`; set
      `params.max_refine_views`. Document it in the method docstring.
 3. **Python** (`src/sfmtool/_embed_patches.py`)

@@ -37,7 +37,7 @@ fn parse_view_reduce(s: &str) -> PyResult<ViewReduce> {
 ///
 /// Wraps the Rust `SfmrReconstruction` and exposes scalar properties,
 /// metadata, cameras, and image names to Python.
-#[pyclass(name = "SfmrReconstruction", module = "sfmtool")]
+#[pyclass(name = "SfmrReconstruction", module = "sfmtool.reconstruction")]
 pub struct PySfmrReconstruction {
     pub(crate) inner: SfmrReconstruction,
 }
@@ -415,7 +415,7 @@ impl PySfmrReconstruction {
     /// carries no patch data. The returned cloud is a copy (geometry only;
     /// bitmaps, if stored, are not loaded into the cloud).
     #[getter]
-    fn patches(&self) -> Option<crate::py_patch_cloud::PyPatchCloud> {
+    fn patches(&self) -> Option<crate::PyPatchCloud> {
         let u = self.inner.patch_u_halfvec_xyz.as_ref()?;
         let v = self.inner.patch_v_halfvec_xyz.as_ref()?;
         // The patch center for each point is the point's own position (a
@@ -430,7 +430,7 @@ impl PySfmrReconstruction {
                 patch.w = 0.0;
             }
         }
-        Some(crate::py_patch_cloud::PyPatchCloud { inner: cloud })
+        Some(crate::PyPatchCloud { inner: cloud })
     }
 
     /// The per-3D-point RGBA patch bitmaps as a ``(N, R, R, 4)`` uint8 array, or
@@ -1000,7 +1000,7 @@ impl PySfmrReconstruction {
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
         Ok(Self {
-            inner: crate::recon_clone::clone_with_changes(&self.inner, py, kwargs)?,
+            inner: super::clone::clone_with_changes(&self.inner, py, kwargs)?,
         })
     }
 

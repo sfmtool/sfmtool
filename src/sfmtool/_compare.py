@@ -14,7 +14,7 @@ from ._point_correspondence import (
     find_point_correspondences,
     find_point_correspondences_by_coordinate,
 )
-from ._sfmtool import SfmrReconstruction
+from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.geometry import RotQuaternion
 
 

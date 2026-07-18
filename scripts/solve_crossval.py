@@ -147,7 +147,7 @@ def run_solve(
 
 def best_model(ws: Path):
     """Load every recon*.sfmr in `ws`; return the model with the most posed images."""
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     best, best_n = None, -1
     for f in sorted(ws.glob("recon*.sfmr")):

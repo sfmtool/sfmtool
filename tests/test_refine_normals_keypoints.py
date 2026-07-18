@@ -17,7 +17,8 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._sfmtool import PatchCloud, SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool._sfmtool.patches import PatchCloud
 
 
 def _load_images(recon) -> list[np.ndarray]:

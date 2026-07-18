@@ -208,7 +208,7 @@ def _read_image_size(image_path: Path) -> tuple[int, int]:
     file; EXIF orientation is not applied, matching the rest of the
     intrinsics pipeline.
     """
-    from .._sfmtool import image_dimensions
+    from .._sfmtool.io import image_dimensions
 
     try:
         width, height = image_dimensions(str(image_path))

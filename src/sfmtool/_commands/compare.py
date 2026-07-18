@@ -9,7 +9,7 @@ import click
 
 from .._cli_utils import timed_command
 from .._compare import compare_reconstructions
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 
 
 def _parse_labels(text: str) -> tuple[str, str]:

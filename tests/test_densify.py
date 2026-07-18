@@ -642,7 +642,7 @@ class TestDensifyE2E:
     def test_densify_reconstruction(self, seoul_bull_workspace):
         """Test that densify produces a valid reconstruction with more points."""
         from sfmtool._densify import densify_reconstruction
-        from sfmtool._sfmtool import SfmrReconstruction
+        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
         sfmr_path = seoul_bull_workspace
         recon = SfmrReconstruction.load(sfmr_path)
@@ -679,7 +679,7 @@ class TestDensifyE2E:
         assert result.exit_code == 0, f"CLI failed: {result.output}"
         assert output_path.exists()
 
-        from sfmtool._sfmtool import SfmrReconstruction
+        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
         densified = SfmrReconstruction.load(output_path)
         assert densified.image_count > 0

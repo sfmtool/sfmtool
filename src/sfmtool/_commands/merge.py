@@ -9,7 +9,7 @@ import click
 
 from .._cli_utils import timed_command
 from ..merge.reconstructions import merge_reconstructions
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 
 
 @click.command("merge")

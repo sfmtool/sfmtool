@@ -11,7 +11,7 @@ from .._cli_utils import timed_command
 from ..visualization._epipolar_display import draw_epipolar_visualization
 from .._filenames import number_from_filename
 from .._sfmr_naming import get_image_hint_message
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from .._workspace import load_workspace_config
 
 
@@ -52,7 +52,7 @@ def resolve_image_name(image_input: str, recon) -> str:
         error_msg += "\nPlease specify the full filename instead of the file number."
         raise click.ClickException(error_msg)
     else:
-        from .._sfmtool import RangeExpr
+        from .._sfmtool.reconstruction import RangeExpr
 
         available_numbers = []
         for image_name in image_names:

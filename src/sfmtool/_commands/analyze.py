@@ -12,7 +12,7 @@ from ..analyze.graphs import print_covisibility_graph, print_frustum_intersectio
 from ..analyze.depth import print_depth_reliability, print_z_range
 from ..analyze.images import print_images_table
 from ..analyze.metrics import print_metrics_analysis
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 
 
 @click.command("analyze")

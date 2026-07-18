@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 import numpy as np
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from .._histogram_utils import estimate_z_from_histogram
 from .._image_pair_graph import (
     _has_valid_depth_statistics,

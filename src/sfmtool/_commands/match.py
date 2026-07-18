@@ -257,7 +257,7 @@ def match(
 
     numbers = None
     if range_expr:
-        from .._sfmtool import RangeExpr
+        from .._sfmtool.reconstruction import RangeExpr
 
         numbers = RangeExpr(range_expr)
 

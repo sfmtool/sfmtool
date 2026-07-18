@@ -3,7 +3,7 @@
 
 """Similarity transformation (SE3 with scale)."""
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.geometry import Se3Transform
 
 

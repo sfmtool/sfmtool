@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
 # --------------------------------------------------------------------------- #
 # Cheap fixture-based tests: no SfM solve required.

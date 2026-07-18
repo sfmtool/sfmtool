@@ -183,7 +183,7 @@ def panorama(
         resolve_panorama_rig,
         select_source_indices,
     )
-    from .._sfmtool import SfmrReconstruction
+    from .._sfmtool.reconstruction import SfmrReconstruction
 
     reconstruction_path = Path(reconstruction_path)
     output_path = Path(output_path)

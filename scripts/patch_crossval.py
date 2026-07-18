@@ -53,11 +53,8 @@ from collections import defaultdict
 import cv2
 import numpy as np
 
-from sfmtool._sfmtool import (
-    OrientedPatch,
-    PatchCloud,
-    SfmrReconstruction,
-)
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool._sfmtool.patches import OrientedPatch, PatchCloud
 from sfmtool._sfmtool.geometry import RigidTransform
 from sfmtool._sfmtool.flow import ImagePyramid, WarpMap
 from sfmtool._sfmtool.io import read_matches, read_sift

@@ -547,7 +547,7 @@ class TestEpipolarE2E:
         import cv2
 
         from sfmtool.visualization._epipolar_display import draw_epipolar_visualization
-        from sfmtool._sfmtool import SfmrReconstruction
+        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
         from sfmtool._workspace import load_workspace_config
 
         sfmr_path = seoul_bull_workspace
@@ -580,7 +580,7 @@ class TestEpipolarE2E:
         import cv2
 
         from sfmtool.visualization._epipolar_display import draw_epipolar_visualization
-        from sfmtool._sfmtool import SfmrReconstruction
+        from sfmtool._sfmtool.reconstruction import SfmrReconstruction
         from sfmtool._workspace import load_workspace_config
 
         sfmr_path = seoul_bull_workspace
