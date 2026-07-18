@@ -1,7 +1,12 @@
 # Rotation-Locked Resection
 
-**Status:** Specified — not implemented. Joins the geometry module beside
-`estimate_absolute_pose` / `refine_absolute_pose`.
+**Status:** Implemented (2026-07-18) —
+`crates/sfmtool-core/src/geometry/resect_translation.rs` (kernel, tests in
+`resect_translation/tests.rs`), PyO3 binding in
+`crates/sfmtool-py/src/geometry/resect_translation.rs`
+(`sfmtool._sfmtool.geometry.resect_translation`), Python tests in
+`tests/rust_bindings/test_resect_translation_rust_bindings.py`. Joins the
+geometry module beside `estimate_absolute_pose` / `refine_absolute_pose`.
 
 ## Purpose
 
