@@ -29,6 +29,7 @@ _EXPECTED_FUNCTIONS = (
     "reprojection_residuals",
     "inlier_fraction",
     "refine_absolute_pose",
+    "resect_translation",
 )
 
 

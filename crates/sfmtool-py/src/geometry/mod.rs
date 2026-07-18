@@ -17,6 +17,7 @@ pub mod focal_vote;
 pub mod homography_estimation;
 pub mod pose_refine;
 pub mod reprojection;
+pub mod resect_translation;
 pub mod rigid_transform;
 pub mod rot_quaternion;
 pub mod se3_transform;
@@ -39,6 +40,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     focal_vote::register(m)?;
     reprojection::register(m)?;
     pose_refine::register(m)?;
+    resect_translation::register(m)?;
     bundle_adjust::register(m)?;
     Ok(())
 }
