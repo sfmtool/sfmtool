@@ -411,7 +411,7 @@ policies, the infinity frames, and the error taxonomy.
 >   `from_tracks` ≡ `from_reconstruction` equivalence (FeatureSize via written
 >   `.sift`, and PixelRadius + Stored), NaN-scale-as-unreadable, and the infinity
 >   frames.
-> - Binding: `sfmtool-py/src/py_patch_cloud.rs` — frozen `CameraViews`
+> - Binding: `sfmtool-py/src/patches/views.rs` — frozen `CameraViews`
 >   (validates shapes / camera-index range / unit quaternions, `__len__`), an
 >   internal `PosedViews` both a reconstruction and a `CameraViews` reduce to,
 >   and `PatchCloud.from_tracks`. `ImagePyramidSet` and the four kernels
@@ -490,7 +490,7 @@ pub fn warp_maps_for_patch(
 
 ## Python bindings
 
-Mirror the Rust API in `flow/warp.rs` / a new `py_patch_cloud.rs`:
+Mirror the Rust API in `flow/warp.rs` / the `patches/` binding modules:
 
 - `OrientedPatch(center, u_axis, v_axis, half_extent)` and
   `OrientedPatch.from_center_normal(center, normal, up_hint, half_extent)`.

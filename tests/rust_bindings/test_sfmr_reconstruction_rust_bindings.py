@@ -6,7 +6,8 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import PatchCloud, SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool._sfmtool.patches import PatchCloud
 
 
 class TestHomogeneousPointAccessors:

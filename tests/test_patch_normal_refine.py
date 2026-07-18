@@ -17,7 +17,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import PatchCloud, SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool._sfmtool.patches import PatchCloud
 
 
 def _load_images(recon) -> list[np.ndarray]:
@@ -472,7 +473,7 @@ def test_refine_normals_image_pyramid_set_matches_list(
     output is identical, and both build-time and call-time validation fire."""
     import pytest
 
-    from sfmtool._sfmtool import ImagePyramidSet
+    from sfmtool._sfmtool.patches import ImagePyramidSet
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = _load_images(recon)

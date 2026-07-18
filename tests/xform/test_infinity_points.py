@@ -14,7 +14,7 @@ specs/formats/sfmr-file-format.md.
 import numpy as np
 
 from sfmtool._image_pair_graph import compute_camera_directions
-from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import (
     BundleAdjustTransform,
     FilterByReprojectionErrorTransform,

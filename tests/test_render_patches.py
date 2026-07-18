@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._sfmtool import PatchCloud, SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool._sfmtool.patches import PatchCloud
 from sfmtool.cli import main
 from sfmtool.visualization._patch_renderer import (
     MODES,

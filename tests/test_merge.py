@@ -11,7 +11,7 @@ from click.testing import CliRunner
 
 from sfmtool import RangeExpr
 from sfmtool.merge.reconstructions import merge_reconstructions
-from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 from sfmtool.xform import IncludeRangeFilter, apply_transforms
 

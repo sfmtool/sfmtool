@@ -25,7 +25,7 @@ See ``specs/cli/xform-refine-keypoints-command.md`` and
 
 import numpy as np
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from ._images import load_workspace_images
 
 _WINDOWS = ("gaussian_disk", "gaussian", "uniform")

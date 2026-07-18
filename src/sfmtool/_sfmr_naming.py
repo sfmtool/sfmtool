@@ -14,7 +14,7 @@ from deadline.job_attachments.api import (
     summarize_paths_by_sequence,
 )
 
-from ._sfmtool import RangeExpr
+from ._sfmtool.reconstruction import RangeExpr
 
 
 def get_next_sfm_filename(

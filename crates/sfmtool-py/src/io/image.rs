@@ -16,3 +16,8 @@ use pyo3::prelude::*;
 pub fn image_dimensions(path: PathBuf) -> PyResult<(u32, u32)> {
     image::image_dimensions(&path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(image_dimensions, m)?)?;
+    Ok(())
+}

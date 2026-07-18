@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 
 from ._point_correspondence import find_point_correspondences_by_coordinate
-from ._sfmtool import SfmrReconstruction
+from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.geometry import Se3Transform
 from ._solve_strips import _SolveStrips
 from ._strip_montage import MontageRow, assemble_montage

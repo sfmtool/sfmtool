@@ -25,7 +25,7 @@ from ._image_pair_graph import (
     build_frustum_intersection_pairs,
 )
 from .sift.file import SiftReader, get_sift_path_for_image
-from ._sfmtool import SfmrReconstruction
+from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.geometry import RotQuaternion
 from ._sfmtool.spatial import KdTree3d
 from .feature_match import GeometricFilterConfig, match_image_pair

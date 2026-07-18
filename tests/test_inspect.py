@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from click.testing import CliRunner
 
-from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.analyze.summary import _print_tool_options
 from sfmtool.cli import main
 

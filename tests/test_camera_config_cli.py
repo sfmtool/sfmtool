@@ -42,7 +42,7 @@ def test_solve_uses_camera_config(isolated_seoul_bull_17_images):
     in the resulting .sfmr."""
     from click.testing import CliRunner
 
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
     from sfmtool.cli import main
 
     workspace_dir = isolated_seoul_bull_17_images[0].parent

@@ -106,10 +106,10 @@ class Workload:
     def __init__(self, sfmr_path: str, n_points: int, seed: int):
         import cv2
 
-        import sfmtool._sfmtool as s
+        from sfmtool._sfmtool import patches, reconstruction
 
-        self._s = s
-        self.recon = s.SfmrReconstruction.load(sfmr_path)
+        self._patches = patches
+        self.recon = reconstruction.SfmrReconstruction.load(sfmr_path)
         ws = self.recon.workspace_dir
         t0 = time.perf_counter()
         self.images = [
@@ -138,7 +138,7 @@ class Workload:
         # Benchmark normal refinement, a finite-point operation; opt out of the
         # default that includes (refinement-skipped) infinity points so timings
         # and counts stay comparable to historical runs.
-        return self._s.PatchCloud.from_reconstruction(
+        return self._patches.PatchCloud.from_reconstruction(
             self.recon,
             normal="mean_viewing",
             extent_value=5.0,

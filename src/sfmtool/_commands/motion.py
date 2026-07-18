@@ -107,14 +107,14 @@ def motion(
             reconstruction_results_to_json,
             write_report,
         )
-        from .._sfmtool import SfmrReconstruction
+        from .._sfmtool.reconstruction import SfmrReconstruction
 
         sfmr_path = Path(paths[0])
         recon = SfmrReconstruction.load(sfmr_path)
 
         numbers = None
         if range_expr:
-            from .._sfmtool import RangeExpr
+            from .._sfmtool.reconstruction import RangeExpr
 
             numbers = set(RangeExpr(range_expr))
 
@@ -127,7 +127,7 @@ def motion(
     # Image sequence mode
     numbers = None
     if range_expr:
-        from .._sfmtool import RangeExpr
+        from .._sfmtool.reconstruction import RangeExpr
 
         numbers = RangeExpr(range_expr)
 

@@ -438,7 +438,7 @@ def test_solve_uses_camrig(isolated_seoul_bull_17_images: list[Path]):
     assert "takes precedence over camera_config.json" in result.output
     assert output_path.exists()
 
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     recon = SfmrReconstruction.load(output_path)
     assert recon.image_count > 0

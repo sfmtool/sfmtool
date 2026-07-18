@@ -11,6 +11,15 @@ description = "Python bindings for sfmtool core functionality"
 [lib]
 name = "_sfmtool"
 crate-type = ["cdylib"]
+# No Rust tests live in this crate (its surface is exercised via pytest through
+# the built extension), and an `extension-module` crate's test harness cannot
+# link anyway: the harness is an executable, but pyo3 deliberately leaves the
+# Python C-API symbols undefined for extension modules (they resolve at import
+# time). With `multiple-pymethods`, inventory's link-time constructors pull
+# those symbols into any test binary unconditionally, so `cargo test` would
+# fail at link. Disable the harness outright.
+test = false
+doctest = false
 
 [dependencies]
 sfmtool-core = { path = "../sfmtool-core" }
@@ -19,7 +28,7 @@ sfmr-format = { path = "../sfmr-format" }
 sfmr-colmap = { path = "../sfmr-colmap" }
 matches-format = { path = "../matches-format" }
 camrig-format = { path = "../camrig-format" }
-pyo3 = { version = "0.29", features = ["extension-module"] }
+pyo3 = { version = "0.29", features = ["extension-module", "multiple-pymethods"] }
 rayon = "1.12"
 image = "0.25"
 numpy = { version = "0.29", features = ["half"] }

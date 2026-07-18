@@ -353,7 +353,7 @@ def test_read_image_size_is_header_only(isolated_test_image: Path):
 
 
 def test_image_dimensions_binding_rejects_non_image(tmp_path: Path):
-    from sfmtool._sfmtool import image_dimensions
+    from sfmtool._sfmtool.io import image_dimensions
 
     bogus = tmp_path / "notes.txt"
     bogus.write_text("not an image")

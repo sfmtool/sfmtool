@@ -8,7 +8,7 @@ import pytest
 
 from sfmtool import RangeExpr
 from sfmtool._filenames import number_from_filename
-from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import ExcludeRangeFilter, IncludeRangeFilter
 from sfmtool.xform._filter_by_image_range import _filter_images
 

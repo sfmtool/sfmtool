@@ -9,7 +9,7 @@ import click
 
 from .._cli_utils import timed_command
 from .._densify import densify_reconstruction
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 
 
 @click.command("densify")

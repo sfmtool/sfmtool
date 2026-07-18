@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pycolmap
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 
 
 class BundleAdjustTransform:

@@ -152,7 +152,7 @@ def render_patches_command(
         raise click.UsageError("--opaque threshold must be between 0 and 1")
 
     try:
-        from .._sfmtool import SfmrReconstruction
+        from .._sfmtool.reconstruction import SfmrReconstruction
 
         click.echo(f"Loading reconstruction: {reconstruction_path}")
         recon = SfmrReconstruction.load(reconstruction_path)

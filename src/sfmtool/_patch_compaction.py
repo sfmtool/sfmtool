@@ -27,10 +27,8 @@ from typing import Any
 
 import numpy as np
 
-from sfmtool._sfmtool import (
-    PatchCloud,
-    SfmrReconstruction,
-)
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool._sfmtool.patches import PatchCloud
 
 
 def image_file_hashes_from_images(recon: SfmrReconstruction) -> list[bytes]:

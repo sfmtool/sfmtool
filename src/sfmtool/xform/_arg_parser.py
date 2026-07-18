@@ -19,7 +19,7 @@ from pathlib import Path
 import click
 import numpy as np
 
-from .._sfmtool import RangeExpr
+from .._sfmtool.reconstruction import RangeExpr
 from . import (
     AlignToInputTransform,
     AlignToTransform,

@@ -3,7 +3,7 @@
 
 //! Implementation of `SfmrReconstruction.clone_with_changes`.
 //!
-//! Pulled out of the `#[pymethods]` block in `py_sfmr_reconstruction.rs`: this
+//! Pulled out of the `#[pymethods]` block in `sfmr_reconstruction.rs`: this
 //! is the one large, self-contained kwargs-driven editor that hand-extracts
 //! every mutable reconstruction field and rebuilds the derived caches. Its
 //! Python signature lives on the thin wrapper method there; everything else is
@@ -240,12 +240,11 @@ pub(crate) fn clone_with_changes(
                     recon.patch_v_halfvec_xyz = None;
                     recon.patch_bitmaps_y_x_rgba = None;
                 } else {
-                    let cloud: PyRef<crate::py_patch_cloud::PyPatchCloud> =
-                        value.extract().map_err(|_| {
-                            pyo3::exceptions::PyTypeError::new_err(
-                                "clone_with_changes(): 'patches' must be a PatchCloud or None",
-                            )
-                        })?;
+                    let cloud: PyRef<crate::PyPatchCloud> = value.extract().map_err(|_| {
+                        pyo3::exceptions::PyTypeError::new_err(
+                            "clone_with_changes(): 'patches' must be a PatchCloud or None",
+                        )
+                    })?;
                     let (u, v) = cloud.inner.to_halfvec_arrays(recon.points.len());
                     recon.patch_u_halfvec_xyz = Some(u);
                     recon.patch_v_halfvec_xyz = Some(v);

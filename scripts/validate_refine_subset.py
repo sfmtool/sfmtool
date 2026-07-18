@@ -99,7 +99,7 @@ def load_points(path: Path) -> dict:
     embed-patches carries positions through unchanged (it only culls points), so
     the rounded homogeneous position is a stable cross-run point identity.
     """
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     recon = SfmrReconstruction.load(str(path))
     cloud = recon.patches

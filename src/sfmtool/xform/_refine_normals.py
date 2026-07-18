@@ -27,7 +27,7 @@ See ``specs/cli/xform-refine-normals-command.md`` and
 
 import numpy as np
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from ._images import load_workspace_images
 
 # Confidence (the peakedness of Φ at the optimum) is normalized to roughly

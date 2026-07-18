@@ -27,7 +27,7 @@ use pyo3::prelude::*;
 // `from_py_object`: this class is accepted by value as a kernel argument (e.g.
 // `refine_normals(progress=...)`), which extracts it via a `Clone` — cheap here,
 // as the clone only bumps the `Arc` refcount onto the shared counter.
-#[pyclass(name = "ProgressCounter", module = "sfmtool._sfmtool", from_py_object)]
+#[pyclass(name = "ProgressCounter", module = "sfmtool", from_py_object)]
 #[derive(Clone, Default)]
 pub struct ProgressCounter {
     inner: Arc<AtomicUsize>,

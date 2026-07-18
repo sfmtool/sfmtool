@@ -131,7 +131,7 @@ def _write(
 
 def _parse_sensor_range(expr: str, sensor_count: int, source: Path) -> list[int]:
     """Parse a `--sensors` range expression into sorted, validated indices."""
-    from .._sfmtool import RangeExpr
+    from .._sfmtool.reconstruction import RangeExpr
 
     try:
         selected = sorted(set(RangeExpr(expr)))
@@ -290,7 +290,7 @@ def copy_from_sfmr(
     copies a whole rig. With neither set the selector defaults to the lone rig,
     or the lone camera of a rig-less reconstruction. Returns a summary dict.
     """
-    from .._sfmtool import SfmrReconstruction
+    from .._sfmtool.reconstruction import SfmrReconstruction
 
     source = Path(source)
     output = Path(output)

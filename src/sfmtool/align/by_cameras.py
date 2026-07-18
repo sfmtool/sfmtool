@@ -6,7 +6,7 @@
 import numpy as np
 
 from .core import ImageMatch
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.geometry import RotQuaternion
 
 

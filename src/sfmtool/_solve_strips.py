@@ -16,11 +16,8 @@ import cv2
 import numpy as np
 
 from ._patch_ncc import gauss_window, render_track_strip
-from ._sfmtool import (
-    OrientedPatch,
-    PatchCloud,
-    SfmrReconstruction,
-)
+from ._sfmtool.reconstruction import SfmrReconstruction
+from ._sfmtool.patches import OrientedPatch, PatchCloud
 from ._sfmtool.geometry import RigidTransform
 from ._sfmtool.flow import WarpMap
 from ._workspace_image import read_workspace_image

@@ -85,7 +85,7 @@ def to_colmap_db(
 
 def _from_sfmr(input_path, output_db_path, max_features, no_guided_matching):
     """Create COLMAP DB from a .sfmr reconstruction."""
-    from .._sfmtool import SfmrReconstruction
+    from .._sfmtool.reconstruction import SfmrReconstruction
     from ..colmap.db_export import create_colmap_db_from_reconstruction
 
     try:

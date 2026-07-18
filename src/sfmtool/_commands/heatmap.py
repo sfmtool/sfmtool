@@ -153,7 +153,7 @@ def heatmap(
 
     try:
         # Load reconstruction
-        from .._sfmtool import SfmrReconstruction
+        from .._sfmtool.reconstruction import SfmrReconstruction
 
         click.echo(f"Loading reconstruction: {reconstruction_path}")
         recon = SfmrReconstruction.load(reconstruction_path)

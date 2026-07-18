@@ -79,7 +79,7 @@ def undistort(
         )
 
     try:
-        from .._sfmtool import SfmrReconstruction
+        from .._sfmtool.reconstruction import SfmrReconstruction
         from .._workspace import find_workspace_for_path, load_workspace_config
 
         # Load reconstruction

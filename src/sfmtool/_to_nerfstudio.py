@@ -16,7 +16,7 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
-from ._sfmtool import SfmrReconstruction
+from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.geometry import RotQuaternion
 
 

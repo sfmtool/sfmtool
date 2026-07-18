@@ -131,6 +131,15 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
 
 ### 5. Finish the `_sfmtool` submodule migration (last 10 names + `import *`)
 
+> _Status (2026-07-18): Done — the flat surface (grown to 12 names by #213) is
+> migrated into `_sfmtool.reconstruction` + `_sfmtool.patches`, with
+> `image_dimensions` folded into `io` and `build_profile`/`ProgressCounter`
+> kept deliberately root-level (explicitly re-exported, wildcard gone).
+> The `py_patch_cloud.rs` four-algorithm split was folded into the same move
+> as suggested (pyo3 `multiple-pymethods`). The call-site estimate was low:
+> ~170 flat import sites rewritten, public `sfmtool.X` API unchanged. See the
+> two hygiene-audit annotations for the full shape._
+
 - **Spec reference:** `reports/2026-07-07-hygiene-audit.md` carried-forward #4
   status check.
 - **Current state:** Eight submodules (`io`, `matching`, `geometry`, `flow`,

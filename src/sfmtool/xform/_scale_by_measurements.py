@@ -14,7 +14,7 @@ import click
 import numpy as np
 import yaml
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.geometry import Se3Transform
 
 # Conversion factors: unit -> meters

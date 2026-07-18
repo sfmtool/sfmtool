@@ -3,7 +3,7 @@
 
 """Transformation pipeline for SfM reconstructions."""
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 from ._align_to import AlignToTransform
 from ._align_to_input import AlignToInputTransform
 from ._apply import apply_transforms

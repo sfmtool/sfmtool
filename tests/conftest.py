@@ -94,7 +94,7 @@ def _largest_recon(output_sfm_file: Path):
     returns only the first — which is not always the most complete one. Pick the
     one that registered the most images.
     """
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     candidates = sorted(output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"))
     best_path, best_count = None, -1
@@ -118,7 +118,7 @@ def _drop_camera_coincident_points(sfmr_path: Path) -> None:
     it here keeps every fixture reconstruction clean. A no-op (no resave) for the
     usual case where no point is camera-coincident.
     """
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     recon = SfmrReconstruction.load(sfmr_path)
     pos = np.asarray(recon.positions)
@@ -205,7 +205,7 @@ def build_cluster_reconstruction(
     else:
         from sfmtool._global_sfm import run_global_sfm as _solve
 
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     output_sfm_file = Path(output_sfm_file)
     # Rank attempts by (image_count, point_count): prefer a fully registered
@@ -263,7 +263,7 @@ def seoul_bull_workspace_once(tmp_path_factory) -> Path:
     floor registers all 17 of these small 270x480 images without the wide
     ``d=28`` (and the resulting tracks stay longer).
     """
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     data_dir = TEST_DATA_DIR / "images" / "seoul_bull_sculpture"
     image_files = sorted(data_dir.glob("seoul_bull_sculpture_*.jpg"))
@@ -424,7 +424,7 @@ def kerry_park_workspace_once(tmp_path_factory) -> Path:
     solver reliably registers all of them. The fixture fails fast if it doesn't,
     rather than handing a partial reconstruction to the tests.
     """
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     workspace_dir = tmp_path_factory.mktemp("kerry_park_sfmr")
     _copy_kerry_park_into(workspace_dir)
@@ -492,7 +492,7 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
     solve path.
     """
     from sfmtool._global_sfm import run_global_sfm
-    from sfmtool._sfmtool import SfmrReconstruction
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     workspace_dir = tmp_path_factory.mktemp("kerry_park_camrig_sfmr")
     _copy_kerry_park_camrig_into(workspace_dir)

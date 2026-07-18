@@ -8,9 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import (
-    SfmrReconstruction,
-)
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.geometry import CameraIntrinsics, RotQuaternion
 from sfmtool._sfmtool.spherical import (
     PerSphericalTileSourceStack,

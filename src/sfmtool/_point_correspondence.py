@@ -7,7 +7,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from ._sfmtool import SfmrReconstruction
+from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.analysis import find_point_correspondences_py
 from ._sfmtool.io import read_sift_partial
 from .sift.file import get_sift_path_from_recon

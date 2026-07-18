@@ -22,7 +22,7 @@ will fail.
 See ``specs/cli/xform-command.md`` and ``specs/core/sift-to-patch-reconstruction.md``.
 """
 
-from .._sfmtool import SfmrReconstruction
+from .._sfmtool.reconstruction import SfmrReconstruction
 
 _NORMALS = ("mean_viewing", "stored", "geometric")
 # CLI extent policy names mirror the library's ``PatchExtent`` policies, except

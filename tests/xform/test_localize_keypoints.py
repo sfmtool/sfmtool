@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._sfmtool import SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 from sfmtool.xform import LocalizeKeypointsTransform
 from sfmtool.xform._arg_parser import (

@@ -21,7 +21,8 @@ use sfmtool_core::patch::cluster_refine::{
     ClusterRefineParams, FeatureGeometry,
 };
 
-use crate::py_patch_cloud::{build_pyramids_from_image_list, parse_patch_window};
+use crate::patches::args::parse_patch_window;
+use crate::patches::views::build_pyramids_from_image_list;
 use crate::py_progress::ProgressCounter;
 use crate::spatial::kdforest::{extract_u8_2d, resolve_forest_params};
 

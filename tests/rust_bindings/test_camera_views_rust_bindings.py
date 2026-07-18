@@ -15,12 +15,8 @@ reconstruction"). The equivalence tests prove a reconstruction and an equivalent
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool import (
-    CameraViews,
-    ImagePyramidSet,
-    PatchCloud,
-    SfmrReconstruction,
-)
+from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+from sfmtool._sfmtool.patches import CameraViews, ImagePyramidSet, PatchCloud
 from sfmtool._sfmtool.geometry import CameraIntrinsics
 
 

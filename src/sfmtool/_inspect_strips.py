@@ -24,7 +24,7 @@ from pathlib import Path
 import click
 import numpy as np
 
-from ._sfmtool import SfmrReconstruction
+from ._sfmtool.reconstruction import SfmrReconstruction
 from ._solve_strips import _SolveStrips
 from ._strip_montage import PointRow, assemble_point_strips
 
@@ -45,7 +45,7 @@ def parse_point_specs(recon: SfmrReconstruction, specs: list[str]) -> list[int]:
     ``5``, ``5-12``, ``1,4,7``). Indexes are kept in the order the specs list
     them; out-of-range indexes and id/hash mismatches raise ``click.UsageError``.
     """
-    from ._sfmtool import RangeExpr
+    from ._sfmtool.reconstruction import RangeExpr
 
     hash8 = recon.content_xxh128[:8].lower()
     n = recon.point_count
