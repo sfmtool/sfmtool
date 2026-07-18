@@ -42,7 +42,7 @@ in-place `--refine-keypoints`, with a fundamentally different shape:
   There is no `bitmaps` key on this op.
 
 The write-back is `compact_to_embedded_patches`
-(`src/sfmtool/_embed_patches.py`) — the **same helper the `embed-patches`
+(`src/sfmtool/_patch_compaction.py`) — the **same helper the `embed-patches`
 pipeline uses** to turn localizer output into a valid `embedded_patches`
 reconstruction (survivor selection, dense renumbering, track rebuild, per-image
 in-frame f32 keypoint clamp, culled patch frames). The op hand-rolls none of

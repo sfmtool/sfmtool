@@ -18,13 +18,12 @@ from pathlib import Path
 
 import numpy as np
 
-from sfmtool._embed_patches import (
-    _poll_progress,
-    _progress_poll_loop,
-    _refine_subpixel,
+from sfmtool._embed_patches import _refine_subpixel
+from sfmtool._patch_compaction import (
     compact_to_embedded_patches,
     image_file_hashes_from_images,
 )
+from sfmtool._progress import _poll_progress, _progress_poll_loop
 from sfmtool._sfmtool import PatchCloud, ProgressCounter, SfmrReconstruction
 from sfmtool._sfmtool.io import verify_sfmr
 

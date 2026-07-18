@@ -19,7 +19,8 @@ import numpy as np
 from click.testing import CliRunner
 
 import sfmtool._embed_patches as ep
-from sfmtool._embed_patches import (
+import sfmtool._patch_compaction as pc
+from sfmtool._patch_compaction import (
     image_file_hashes_from_images,
     image_file_hashes_from_sift,
 )
@@ -164,7 +165,7 @@ def test_embed_patches_sources_hashes_from_embedded_not_sift(
     def _boom(_recon):
         raise AssertionError("embed_patches should not re-read .sift for hashes")
 
-    monkeypatch.setattr(ep, "image_file_hashes_from_sift", _boom)
+    monkeypatch.setattr(pc, "image_file_hashes_from_sift", _boom)
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir

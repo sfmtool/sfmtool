@@ -157,7 +157,7 @@ def _run_cluster_patches(
     import cv2
     import numpy as np
 
-    from .._embed_patches import _poll_progress
+    from .._progress import _poll_progress
     from .._sfmtool.io import read_matches, read_sift, read_sift_metadata, write_matches
     from .._sfmtool.matching import refine_cluster_patches as _refine
 

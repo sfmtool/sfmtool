@@ -129,7 +129,7 @@ class LocalizeKeypointsTransform:
         self.search_strategy = search_strategy
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
-        from .._embed_patches import (
+        from .._patch_compaction import (
             compact_to_embedded_patches,
             image_file_hashes_from_images,
         )
