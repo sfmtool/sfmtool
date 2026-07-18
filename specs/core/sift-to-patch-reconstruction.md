@@ -247,8 +247,9 @@ given the original `recon` for geometry carry-over and `embedded.image_file_hash
 so there is no second `.sift` read; its `valid` mask drops the points with no
 consensus bitmap). The `sfm embed-patches` CLI
 (`src/sfmtool/_commands/embed_patches.py`) is a thin wrapper over it.
-`image_file_hashes_from_sift` / `image_file_hashes_from_images` remain available
-helpers. The writer requires the patch frame for an `embedded_patches` file
+`compact_to_embedded_patches` and the `image_file_hashes_from_sift` /
+`image_file_hashes_from_images` helpers live in
+`src/sfmtool/_patch_compaction.py`. The writer requires the patch frame for an `embedded_patches` file
 (`has_uv_frames = true`)._
 
 _Points at infinity flow through end to end (the kernels are first-class on them

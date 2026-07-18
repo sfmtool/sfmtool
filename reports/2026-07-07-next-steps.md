@@ -148,9 +148,11 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
   exactly the high-traffic types — finishing it locks in a deliberate public
   API before more consumers accrete on the wildcard.
 
-> Also queued from the audits, worth scheduling behind the Top 5: extract the
+> Also queued from the audits, worth scheduling behind the Top 5: ~~extract the
 > shared compaction helpers out of `_embed_patches.py` (fixes the
-> `xform/_localize_keypoints.py` → top-level upward import), the `strips/`
+> `xform/_localize_keypoints.py` → top-level upward import)~~ _[Done 2026-07-18:
+> `_patch_compaction.py` + `_progress.py`; both the xform and cluster_patches
+> upward imports removed]_, the `strips/`
 > subpackage regroup (5 modules, 2 external import sites), the
 > `scene_renderer/upload.rs` per-resource split, `tests/patch/` regroup,
 > conftest solve-retry dedup (#11), the subset-aware pyramid build from the

@@ -183,6 +183,15 @@ drift now affects 2 of 4 copies).
 ## Python — `src/sfmtool/`
 
 **`_embed_patches.py` mixes orchestration with shared compaction helpers that another subpackage reaches up to import**
+> _Status (2026-07-18): Done — extracted the compaction + hash helpers
+> (`compact_to_embedded_patches`, `image_file_hashes_from_images`,
+> `image_file_hashes_from_sift`) to a new `src/sfmtool/_patch_compaction.py`, and
+> the 3 progress/timing utils to `src/sfmtool/_progress.py`. Both upward imports
+> are gone: `xform/_localize_keypoints.py` and `_commands/cluster_patches.py` now
+> import from the shared modules, not the pipeline driver. `_embed_patches.py`
+> (999→704 lines; the finding's "915" predates later growth) is now orchestration
+> + refinement only. Pure code motion, no
+> behavior/API change; specs repointed; ruff clean; 64 affected tests pass._
 - Location: `src/sfmtool/_embed_patches.py` (915 lines, largest Python file)
 - Problem: The file bundles four distinct concerns: (a) generic progress/timing utilities (`_timed_step`, `_progress_poll_loop`, `_poll_progress`, lines 38-97), (b) reconstruction **compaction/hashing** (`compact_to_embedded_patches` lines 148-322 (~175 lines), `image_file_hashes_from_images`, `image_file_hashes_from_sift`, lines 100-146), (c) **subpixel wiring** (`_refine_subpixel`, lines 322-449), and (d) the `embed_patches` **pipeline orchestrator + summary printing** (lines 585-915, ~330 lines). The strongest signal is coupling, not just size: `xform/_localize_keypoints.py` (lines 132-186) reaches *up* into this top-level orchestration module to import `compact_to_embedded_patches` and `image_file_hashes_from_images` — a subpackage op depending on a sibling top-level pipeline driver purely for two utilities. Those compaction helpers are a shared concern, not an `embed_patches` internal.
 - Proposed fix: Extract the compaction + hash helpers into a shared module (e.g. `_patch_compaction.py`); both `_embed_patches.py` and `xform/_localize_keypoints.py` import from it. Optionally also lift the 3 progress/timing utils to a small shared helper. Leaves `_embed_patches.py` as orchestration + `_refine_subpixel` (~500 lines, single-purpose) and removes the awkward xform→top-level dependency.
@@ -297,6 +306,10 @@ drift now affects 2 of 4 copies).
    real dependency smell (a `xform/` op reaching up into a top-level pipeline driver
    for `compact_to_embedded_patches` / `image_file_hashes_from_images`) and brings the
    largest Python file back to single-purpose. Medium effort, low risk.
+   > _Status (2026-07-18): Done — see the finding above. Extracted
+   > `_patch_compaction.py` (compaction + hash helpers) and `_progress.py`
+   > (progress utils); both the `xform` and `cluster_patches` upward imports are
+   > gone._
 
 Also queued but needing an owner decision rather than mechanical work: finishing the
 `_sfmtool` submodule migration (10 flat names + `import *` remain; touching class

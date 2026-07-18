@@ -152,10 +152,16 @@ sfm embed-patches solve.sfmr out.sfmr \
   `localize_keypoints`) and the `compact_to_embedded_patches` write tail. The
   cloud is read from the embedded recon's stored frames (`recon.patches`) and the
   image hashes from `recon.image_file_hashes`, both set by the bridge — no second
-  `.sift` read. (`image_file_hashes_from_sift` / `image_file_hashes_from_images`
-  remain available helpers.) See the [pipeline
+  `.sift` read. See the [pipeline
   spec](../core/sift-to-patch-reconstruction.md) for where the hot loops live in
   `sfmtool-core`.
+- `src/sfmtool/_patch_compaction.py` — the write/compaction tail
+  (`compact_to_embedded_patches`, shared with the `xform localize-keypoints` op)
+  plus the `image_file_hashes_from_sift` / `image_file_hashes_from_images`
+  identity-hash helpers (available standalone; the orchestration itself sources
+  hashes from the embedded recon, not these).
+- `src/sfmtool/_progress.py` — the `_timed_step` / `_poll_progress` progress
+  helpers the orchestration wraps each Rust pass in.
 
 ## Open questions
 
