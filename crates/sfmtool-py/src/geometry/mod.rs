@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 
 pub mod absolute_pose;
 pub mod affine_factorization;
+pub mod bundle_adjust;
 pub mod camera_intrinsics;
 pub mod convention;
 pub mod epipolar_estimation;
@@ -34,5 +35,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     epipolar_estimation::register(m)?;
     reprojection::register(m)?;
     pose_refine::register(m)?;
+    bundle_adjust::register(m)?;
     Ok(())
 }

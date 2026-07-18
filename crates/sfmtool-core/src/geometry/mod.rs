@@ -5,6 +5,7 @@
 
 pub mod absolute_pose;
 pub mod affine_factorization;
+pub mod bundle_adjust;
 pub mod convention;
 pub mod epipolar_estimation;
 pub(crate) mod polynomial;
@@ -17,6 +18,7 @@ pub mod se3_transform;
 pub mod transform;
 pub mod viewing_angle;
 
+pub use bundle_adjust::{bundle_adjust, BaSchedule, BundleAdjustment, DEFAULT_SCHEDULE};
 pub use pose_refine::{refine_absolute_pose, PoseRefinement};
 pub use reprojection::{inlier_fraction, reprojection_residuals};
 pub use rigid_transform::RigidTransform;
