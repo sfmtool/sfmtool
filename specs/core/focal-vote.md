@@ -1,5 +1,27 @@
 # Structure-Free Focal Vote
 
+**Status:** Implemented (2026-07-18) —
+`crates/sfmtool-core/src/geometry/focal_vote.rs` (kernel + arbitration) and
+`homography_estimation.rs` (4-point LO-RANSAC), tests in the respective
+`*/tests.rs`; PyO3 bindings in `crates/sfmtool-py/src/geometry/{focal_vote,
+homography_estimation}.rs` (`sfmtool._sfmtool.geometry.focal_vote` /
+`estimate_homography`); Python tests in
+`tests/rust_bindings/test_focal_vote_rust_bindings.py`. The reference
+`scripts/exp_fast_pinhole.py` calls the native kernel.
+
+> _Deviation (2026-07-18): the pair table accumulates the **true**
+> shared-cluster count and mean displacement over every covisible member pair
+> of each cluster, in one pass, rather than the single uniformly-sampled member
+> pair per cluster the Pair-tables section describes. The sampled single-pair
+> count undercounts covisibility so severely that the `30`/`25`-cluster
+> thresholds never reach quorum on parallax-poor captures — the target capture
+> `20240614_225938434` fell one vote short in each family and produced no
+> consensus. The true count is what the original script gated on
+> (`build_covisibility`), and restores the expected Rotation-family selection
+> (structure refines to −0.6% of the ground-truth focal). The pass is
+> deterministic, so the pair table no longer consumes the seed; the seed still
+> drives the RANSAC estimators._
+
 ## Overview
 
 `focal_vote` estimates a shared focal length from cluster-track observations

@@ -8,6 +8,8 @@ pub mod affine_factorization;
 pub mod bundle_adjust;
 pub mod convention;
 pub mod epipolar_estimation;
+pub mod focal_vote;
+pub mod homography_estimation;
 pub(crate) mod polynomial;
 pub mod pose_refine;
 pub mod reprojection;

@@ -13,6 +13,8 @@ pub mod bundle_adjust;
 pub mod camera_intrinsics;
 pub mod convention;
 pub mod epipolar_estimation;
+pub mod focal_vote;
+pub mod homography_estimation;
 pub mod pose_refine;
 pub mod reprojection;
 pub mod rigid_transform;
@@ -33,6 +35,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     affine_factorization::register(m)?;
     absolute_pose::register(m)?;
     epipolar_estimation::register(m)?;
+    homography_estimation::register(m)?;
+    focal_vote::register(m)?;
     reprojection::register(m)?;
     pose_refine::register(m)?;
     bundle_adjust::register(m)?;
