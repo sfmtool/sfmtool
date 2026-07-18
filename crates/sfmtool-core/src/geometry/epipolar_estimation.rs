@@ -54,7 +54,10 @@ const BOUGNOUX_DEN_EPS: f64 = 1e-12;
 /// Translate points to zero mean and scale so the mean distance from the origin
 /// is `√2`. Returns the normalized points and the `3×3` transform `T` with
 /// `x̂ = T·x̃`. `None` when the points are coincident (zero spread).
-fn hartley_normalize(pts: &[[f64; 2]]) -> Option<(Vec<[f64; 2]>, Matrix3<f64>)> {
+///
+/// Shared with [`crate::geometry::homography_estimation`], whose DLT uses the
+/// same conditioning.
+pub(crate) fn hartley_normalize(pts: &[[f64; 2]]) -> Option<(Vec<[f64; 2]>, Matrix3<f64>)> {
     let n = pts.len();
     if n == 0 {
         return None;
@@ -86,7 +89,7 @@ fn hartley_normalize(pts: &[[f64; 2]]) -> Option<(Vec<[f64; 2]>, Matrix3<f64>)> 
 }
 
 /// Reshape a 9-vector (row-major `F`) into a `3×3` matrix.
-fn vec_to_mat3(v: &SVector<f64, 9>) -> Matrix3<f64> {
+pub(crate) fn vec_to_mat3(v: &SVector<f64, 9>) -> Matrix3<f64> {
     Matrix3::new(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8])
 }
 
