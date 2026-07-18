@@ -1,8 +1,18 @@
 # Covisibility Selection: Displacement, Thinning, Reach
 
-**Status:** Specified — not implemented. Extends `ClusterCovisibility`
-(`crates/sfmtool-core/src/matching/covisibility.rs`, bound as
-`sfmtool._sfmtool.matching.ClusterCovisibility`).
+**Status:** Implemented — extends `ClusterCovisibility`
+(`crates/sfmtool-core/src/features/cluster_match/covisibility.rs`, bound as
+`sfmtool._sfmtool.matching.ClusterCovisibility` in
+`crates/sfmtool-py/src/matching/covisibility.rs`).
+
+> _Status (2026-07-18): Implemented. Two additive notes against the text
+> below: (1) the binding keeps the existing `member_accepted` keyword —
+> the full signature is `from_arrays(cluster_starts, member_images,
+> num_images, member_accepted=None, positions_xy=None, seed=0)`, and the
+> acceptance mask also gates which members the displacement pass samples;
+> (2) core-side the optional inputs live on a new
+> `from_clusters_with_positions` constructor so existing `from_clusters`
+> call sites compile unchanged._
 
 ## Purpose
 

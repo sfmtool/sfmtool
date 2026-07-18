@@ -13,7 +13,9 @@
 //! which requires poses and points.
 //!
 //! See `specs/core/cluster-covisibility.md` for the design and the seed-group
-//! algorithm's determinism contract.
+//! algorithm's determinism contract, and `specs/core/covisibility-selection.md`
+//! for the selection queries built on top (pair displacement, banded thinning,
+//! reach).
 
 /// Dense-backend image cap. Storage is a row-major `u32` matrix (`4·N²`
 /// bytes): 64 MB at this bound, which sits inside the spec's ~4–5 k-image
@@ -32,6 +34,8 @@ pub enum CovisibilityError {
     BadClusterStarts { m: usize },
     /// `member_accepted` is not parallel to `member_images`.
     MaskNotParallel { members: usize, mask: usize },
+    /// `positions_xy` is not parallel to `member_images`.
+    PositionsNotParallel { members: usize, positions: usize },
     /// A member's image index is out of range.
     ImageIndexOutOfRange { index: u32, num_images: usize },
 }
@@ -54,6 +58,10 @@ impl std::fmt::Display for CovisibilityError {
             Self::MaskNotParallel { members, mask } => write!(
                 f,
                 "member_accepted ({mask}) must be parallel to member_images ({members})"
+            ),
+            Self::PositionsNotParallel { members, positions } => write!(
+                f,
+                "positions_xy ({positions}) must be parallel to member_images ({members})"
             ),
             Self::ImageIndexOutOfRange { index, num_images } => write!(
                 f,
@@ -85,17 +93,54 @@ impl Default for SeedGroupParams {
     }
 }
 
+/// Deterministic 64-bit generator (splitmix64) behind the sampled
+/// displacement pass. Bounded draws use Lemire's widening multiply; the
+/// modulo bias is ~`bound / 2^64` — irrelevant at cluster sizes.
+struct SplitMix64(u64);
+
+impl SplitMix64 {
+    fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    /// Uniform draw in `[0, bound)`; `bound` must be nonzero.
+    fn below(&mut self, bound: usize) -> usize {
+        ((self.next_u64() as u128 * bound as u128) >> 64) as usize
+    }
+}
+
+/// Sampled per-image-pair feature-displacement tables (row-major
+/// `(num_images, num_images)`, symmetric, zero diagonal). Present only when
+/// positions were supplied at construction.
+#[derive(Debug, Clone, PartialEq)]
+struct DisplacementTables {
+    /// Mean sampled displacement per pair; `0` where no sample landed.
+    mean: Vec<f64>,
+    /// Samples behind each mean.
+    count: Vec<u32>,
+}
+
 /// Symmetric per-image-pair shared-cluster counts (zero diagonal).
 ///
 /// `W[i, j]` = number of clusters with an accepted member in image `i` and
 /// an accepted member in image `j`; each cluster contributes at most 1 to
 /// any pair, and clusters spanning fewer than 2 accepted images contribute
 /// nothing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClusterCovisibility {
     num_images: usize,
     /// Row-major `(num_images, num_images)` counts.
     counts: Vec<u32>,
+    /// Sampled displacement tables; `None` without construction positions.
+    displacement: Option<DisplacementTables>,
 }
 
 impl ClusterCovisibility {
@@ -107,11 +152,44 @@ impl ClusterCovisibility {
     /// member counts. Each cluster's accepted-image list is deduplicated
     /// before counting, so a cluster votes at most once per pair even if the
     /// input holds several members in one image.
+    ///
+    /// Displacement queries stay unavailable; see
+    /// [`Self::from_clusters_with_positions`].
     pub fn from_clusters(
         cluster_starts: &[u32],
         member_images: &[u32],
         member_accepted: Option<&[bool]>,
         num_images: usize,
+    ) -> Result<Self, CovisibilityError> {
+        Self::from_clusters_with_positions(
+            cluster_starts,
+            member_images,
+            member_accepted,
+            num_images,
+            None,
+            0,
+        )
+    }
+
+    /// [`Self::from_clusters`] plus optional per-member observation positions
+    /// (`positions_xy`, parallel to `member_images`, pixel units), which
+    /// enable the displacement queries ([`Self::pair_displacement`],
+    /// [`Self::pair_displacement_counts`]) and the isolation-ordered thinning
+    /// sweep (see [`Self::thin`]).
+    ///
+    /// One sampled displacement pass runs at construction: every cluster with
+    /// two or more accepted members contributes one seeded uniformly-sampled
+    /// distinct-member pair (`seed` drives the sampling; same-image pairs are
+    /// skipped, not resampled), and the pair's Euclidean position distance
+    /// accumulates into its image pair's mean. The shared-cluster counts are
+    /// unchanged by `positions_xy`.
+    pub fn from_clusters_with_positions(
+        cluster_starts: &[u32],
+        member_images: &[u32],
+        member_accepted: Option<&[bool]>,
+        num_images: usize,
+        positions_xy: Option<&[[f64; 2]]>,
+        seed: u64,
     ) -> Result<Self, CovisibilityError> {
         if num_images > MAX_DENSE_IMAGES {
             return Err(CovisibilityError::TooManyImages { num_images });
@@ -132,6 +210,14 @@ impl ClusterCovisibility {
                 });
             }
         }
+        if let Some(pos) = positions_xy {
+            if pos.len() != m {
+                return Err(CovisibilityError::PositionsNotParallel {
+                    members: m,
+                    positions: pos.len(),
+                });
+            }
+        }
         if let Some(&bad) = member_images.iter().find(|&&i| i as usize >= num_images) {
             return Err(CovisibilityError::ImageIndexOutOfRange {
                 index: bad,
@@ -140,16 +226,20 @@ impl ClusterCovisibility {
         }
 
         let mut counts = vec![0u32; num_images * num_images];
+        let mut displacement = positions_xy.map(|_| DisplacementTables {
+            mean: vec![0.0; num_images * num_images],
+            count: vec![0u32; num_images * num_images],
+        });
+        let mut rng = SplitMix64::new(seed);
+        let mut rows: Vec<usize> = Vec::new();
         let mut span: Vec<u32> = Vec::new();
         for c in 0..cluster_starts.len() - 1 {
             let lo = cluster_starts[c] as usize;
             let hi = cluster_starts[c + 1] as usize;
+            rows.clear();
+            rows.extend((lo..hi).filter(|&k| member_accepted.is_none_or(|mask| mask[k])));
             span.clear();
-            span.extend(
-                (lo..hi)
-                    .filter(|&k| member_accepted.is_none_or(|mask| mask[k]))
-                    .map(|k| member_images[k]),
-            );
+            span.extend(rows.iter().map(|&k| member_images[k]));
             span.sort_unstable();
             span.dedup();
             for (a, &i) in span.iter().enumerate() {
@@ -158,9 +248,48 @@ impl ClusterCovisibility {
                     counts[j as usize * num_images + i as usize] += 1;
                 }
             }
+            // One uniformly-sampled distinct-member pair per multi-member
+            // cluster; a pair landing in one image is skipped, not resampled
+            // (the mean displacement tables measure cross-image motion only).
+            if let (Some(tables), Some(pos)) = (displacement.as_mut(), positions_xy) {
+                if rows.len() >= 2 {
+                    let a = rng.below(rows.len());
+                    let mut b = rng.below(rows.len() - 1);
+                    if b >= a {
+                        b += 1;
+                    }
+                    let (ra, rb) = (rows[a], rows[b]);
+                    let (ia, ib) = (member_images[ra] as usize, member_images[rb] as usize);
+                    if ia != ib {
+                        let d = f64::hypot(pos[ra][0] - pos[rb][0], pos[ra][1] - pos[rb][1]);
+                        // Accumulate sums in `mean` (upper triangle); a final
+                        // pass divides and mirrors.
+                        let key = ia.min(ib) * num_images + ia.max(ib);
+                        tables.mean[key] += d;
+                        tables.count[key] += 1;
+                    }
+                }
+            }
+        }
+        if let Some(tables) = displacement.as_mut() {
+            for i in 0..num_images {
+                for j in (i + 1)..num_images {
+                    let (up, lo) = (i * num_images + j, j * num_images + i);
+                    let n = tables.count[up];
+                    if n > 0 {
+                        tables.mean[up] /= n as f64;
+                        tables.mean[lo] = tables.mean[up];
+                        tables.count[lo] = n;
+                    }
+                }
+            }
         }
 
-        Ok(Self { num_images, counts })
+        Ok(Self {
+            num_images,
+            counts,
+            displacement,
+        })
     }
 
     /// Number of images the matrix covers.
@@ -198,6 +327,152 @@ impl ClusterCovisibility {
             .collect();
         ranked.sort_unstable_by(|&a, &b| row[b as usize].cmp(&row[a as usize]).then(a.cmp(&b)));
         ranked
+    }
+
+    /// Row-major `(num_images, num_images)` mean sampled feature
+    /// displacement per covisible pair (symmetric, `0` where no sample
+    /// landed). `None` when constructed without positions.
+    pub fn pair_displacement(&self) -> Option<&[f64]> {
+        self.displacement.as_ref().map(|t| t.mean.as_slice())
+    }
+
+    /// Row-major `(num_images, num_images)` sample counts behind
+    /// [`Self::pair_displacement`], for callers that gate on support.
+    /// `None` when constructed without positions.
+    pub fn pair_displacement_counts(&self) -> Option<&[u32]> {
+        self.displacement.as_ref().map(|t| t.count.as_slice())
+    }
+
+    /// The thinning sweep order: decreasing isolation — largest
+    /// nearest-covisible-partner displacement first (an image's isolation is
+    /// the *smallest* sampled mean displacement to any partner; no sampled
+    /// partner means infinitely isolated), ties and the no-positions case
+    /// falling back to construction order (ascending index).
+    fn sweep_order(&self) -> Vec<u32> {
+        let n = self.num_images;
+        let mut order: Vec<u32> = (0..n as u32).collect();
+        if let Some(tables) = &self.displacement {
+            let isolation: Vec<f64> = (0..n)
+                .map(|i| {
+                    (0..n)
+                        .filter(|&j| tables.count[i * n + j] > 0)
+                        .map(|j| tables.mean[i * n + j])
+                        .fold(f64::INFINITY, f64::min)
+                })
+                .collect();
+            order.sort_by(|&a, &b| {
+                isolation[b as usize]
+                    .partial_cmp(&isolation[a as usize])
+                    .expect("isolation values are never NaN")
+                    .then(a.cmp(&b))
+            });
+        }
+        order
+    }
+
+    /// [`Self::thin`] against a precomputed sweep order.
+    fn thin_in_order(&self, order: &[u32], tau: f64) -> Vec<u32> {
+        let n = self.num_images;
+        let mut kept: Vec<u32> = Vec::new();
+        for &i in order {
+            if kept.is_empty() {
+                kept.push(i);
+                continue;
+            }
+            let row = &self.counts[i as usize * n..(i as usize + 1) * n];
+            let best = kept
+                .iter()
+                .map(|&k| row[k as usize])
+                .max()
+                .expect("kept is non-empty") as f64;
+            if tau / 8.0 <= best && best < tau {
+                kept.push(i);
+            }
+        }
+        kept.sort_unstable();
+        kept
+    }
+
+    /// Redundancy-thinned subset (sorted ascending): a greedy sweep in
+    /// decreasing isolation (see the spec's Thinning section) keeps an image
+    /// only when its best shared-cluster count against the already-kept set
+    /// falls in the band `[tau/8, tau)` — images above the band duplicate a
+    /// kept viewpoint, images below it are disconnected from the skeleton.
+    /// The first swept image is always kept.
+    pub fn thin(&self, tau: f64) -> Vec<u32> {
+        self.thin_in_order(&self.sweep_order(), tau)
+    }
+
+    /// Thin to approximately `target` images: binary-search `tau` (the kept
+    /// count grows monotonically with `tau`) over `[1, median row peak]` and
+    /// return the subset whose size lands closest to `target` (sorted
+    /// ascending; earlier iterations win exact-distance ties).
+    pub fn thin_to(&self, target: usize) -> Vec<u32> {
+        let n = self.num_images;
+        if n == 0 {
+            return Vec::new();
+        }
+        // Median (numpy-style: mean of the middle two for even n) of the
+        // per-image peak covisibility.
+        let mut peaks: Vec<u32> = (0..n)
+            .map(|i| {
+                self.counts[i * n..(i + 1) * n]
+                    .iter()
+                    .copied()
+                    .max()
+                    .expect("rows are non-empty")
+            })
+            .collect();
+        peaks.sort_unstable();
+        let med_peak = if n % 2 == 1 {
+            peaks[n / 2] as f64
+        } else {
+            (peaks[n / 2 - 1] as f64 + peaks[n / 2] as f64) / 2.0
+        };
+
+        let order = self.sweep_order();
+        let (mut lo, mut hi) = (1.0f64, med_peak);
+        let mut best: Option<Vec<u32>> = None;
+        for _ in 0..25 {
+            let mid = (lo + hi) / 2.0;
+            let keep = self.thin_in_order(&order, mid);
+            let closer = best
+                .as_ref()
+                .is_none_or(|b| keep.len().abs_diff(target) < b.len().abs_diff(target));
+            let below = keep.len() < target;
+            if closer {
+                best = Some(keep);
+            }
+            if below {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        best.expect("25 iterations always produce a candidate")
+    }
+
+    /// Fraction of all images sharing at least `min_shared` clusters with at
+    /// least one image of `images` (subset members count as reached). An
+    /// empty subset reaches nothing (`0.0`). Panics if any index is out of
+    /// range.
+    pub fn reach(&self, images: &[u32], min_shared: u32) -> f64 {
+        let n = self.num_images;
+        if images.is_empty() || n == 0 {
+            return 0.0;
+        }
+        let mut connected = vec![false; n];
+        for &s in images {
+            assert!((s as usize) < n, "subset image index out of range");
+            connected[s as usize] = true;
+        }
+        for (i, slot) in connected.iter_mut().enumerate() {
+            *slot = *slot
+                || images
+                    .iter()
+                    .any(|&s| self.counts[i * n + s as usize] >= min_shared);
+        }
+        connected.iter().filter(|&&c| c).count() as f64 / n as f64
     }
 
     /// Lazy iterator of greedy mutually-covisible seed groups (see the
@@ -566,5 +841,278 @@ mod tests {
         let b: Vec<_> = cov.seed_groups(&params).collect();
         assert_eq!(a, b);
         assert_eq!(a, vec![vec![0, 1, 2], vec![3, 4]]);
+    }
+
+    // ── Selection queries (specs/core/covisibility-selection.md) ──────────
+
+    /// Synthesize positioned two-member clusters: edge `(i, j, w, d)` becomes
+    /// `w` clusters, each holding one member in image `i` at the origin and
+    /// one in image `j` at distance `d`. Two-member clusters make the sampled
+    /// displacement pass deterministic regardless of seed (the pair is
+    /// forced), so `mean[i][j] == d` and `count[i][j] == w` exactly.
+    fn from_positioned_edges(
+        num_images: usize,
+        edges: &[(u32, u32, u32, f64)],
+    ) -> ClusterCovisibility {
+        let mut starts = vec![0u32];
+        let mut images = Vec::new();
+        let mut positions = Vec::new();
+        for &(i, j, w, d) in edges {
+            for _ in 0..w {
+                images.extend([i, j]);
+                positions.extend([[0.0, 0.0], [d, 0.0]]);
+                starts.push(images.len() as u32);
+            }
+        }
+        ClusterCovisibility::from_clusters_with_positions(
+            &starts,
+            &images,
+            None,
+            num_images,
+            Some(&positions),
+            0,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn displacement_exact_on_forced_two_member_samples() {
+        // Cluster 0: (0, 1) at distance 5; cluster 1: (0, 1) at distance 10;
+        // cluster 2: (0, 2) at distance 17. Two-member clusters force the
+        // sample, so the means are exact whatever the seed.
+        let starts = [0u32, 2, 4, 6];
+        let images = [0u32, 1, 0, 1, 0, 2];
+        let positions = [
+            [0.0, 0.0],
+            [3.0, 4.0],
+            [0.0, 0.0],
+            [6.0, 8.0],
+            [0.0, 0.0],
+            [8.0, 15.0],
+        ];
+        let cov = ClusterCovisibility::from_clusters_with_positions(
+            &starts,
+            &images,
+            None,
+            3,
+            Some(&positions),
+            42,
+        )
+        .unwrap();
+        let mean = cov.pair_displacement().unwrap();
+        let count = cov.pair_displacement_counts().unwrap();
+        let at = |m: &[f64], i: usize, j: usize| m[i * 3 + j];
+        assert_eq!(at(mean, 0, 1), 7.5);
+        assert_eq!(at(mean, 0, 2), 17.0);
+        assert_eq!(at(mean, 1, 2), 0.0); // no sample landed
+        assert_eq!(count[1], 2);
+        assert_eq!(count[2], 1);
+        assert_eq!(count[5], 0);
+        for i in 0..3 {
+            assert_eq!(at(mean, i, i), 0.0);
+            for j in 0..3 {
+                assert_eq!(at(mean, i, j), at(mean, j, i));
+                assert_eq!(count[i * 3 + j], count[j * 3 + i]);
+            }
+        }
+        // Positions leave the shared-cluster counts unchanged.
+        assert_eq!(cov.count(0, 1), 2);
+        assert_eq!(cov.count(0, 2), 1);
+    }
+
+    #[test]
+    fn displacement_same_image_pairs_skipped() {
+        // Cluster 0's two members both sit in image 0: the forced sample is a
+        // same-image pair and is skipped, not resampled.
+        let cov = ClusterCovisibility::from_clusters_with_positions(
+            &[0, 2, 4],
+            &[0, 0, 0, 1],
+            None,
+            2,
+            Some(&[[0.0, 0.0], [9.0, 0.0], [0.0, 0.0], [4.0, 0.0]]),
+            0,
+        )
+        .unwrap();
+        let count = cov.pair_displacement_counts().unwrap();
+        assert_eq!(count.iter().sum::<u32>(), 2); // cluster 1 only, mirrored
+        assert_eq!(cov.pair_displacement().unwrap()[1], 4.0);
+    }
+
+    #[test]
+    fn displacement_unavailable_without_positions() {
+        let cov = from_edges(3, &[(0, 1, 5)]);
+        assert!(cov.pair_displacement().is_none());
+        assert!(cov.pair_displacement_counts().is_none());
+    }
+
+    #[test]
+    fn displacement_seeded_determinism() {
+        // Clusters with more than two members exercise the RNG; identical
+        // seeds must reproduce the tables exactly, and every sample lands
+        // (all members sit in distinct images), so the total sample count is
+        // the multi-member cluster count for any seed.
+        let starts = [0u32, 4, 7, 9];
+        let images = [0u32, 1, 2, 3, 1, 2, 3, 0, 2];
+        let positions: Vec<[f64; 2]> = (0..9).map(|k| [k as f64 * 3.0, k as f64]).collect();
+        let build = |seed| {
+            ClusterCovisibility::from_clusters_with_positions(
+                &starts,
+                &images,
+                None,
+                4,
+                Some(&positions),
+                seed,
+            )
+            .unwrap()
+        };
+        let (a, b, c) = (build(7), build(7), build(8));
+        assert_eq!(a.pair_displacement(), b.pair_displacement());
+        assert_eq!(a.pair_displacement_counts(), b.pair_displacement_counts());
+        for cov in [&a, &c] {
+            let total: u32 = cov.pair_displacement_counts().unwrap().iter().sum();
+            assert_eq!(total, 2 * 3); // 3 clusters, each mirrored
+        }
+    }
+
+    #[test]
+    fn displacement_sampling_respects_mask() {
+        // Cluster of three members; the image-1 member is masked out, so the
+        // forced sample is (image 0, image 2).
+        let cov = ClusterCovisibility::from_clusters_with_positions(
+            &[0, 3],
+            &[0, 1, 2],
+            Some(&[true, false, true]),
+            3,
+            Some(&[[0.0, 0.0], [100.0, 0.0], [5.0, 12.0]]),
+            0,
+        )
+        .unwrap();
+        let mean = cov.pair_displacement().unwrap();
+        let count = cov.pair_displacement_counts().unwrap();
+        assert_eq!(mean[2], 13.0); // (0, 2)
+        assert_eq!(count[2], 1);
+        assert_eq!(count.iter().sum::<u32>(), 2);
+    }
+
+    #[test]
+    fn positions_not_parallel_error() {
+        assert_eq!(
+            ClusterCovisibility::from_clusters_with_positions(
+                &[0, 2],
+                &[0, 1],
+                None,
+                2,
+                Some(&[[0.0, 0.0]]),
+                0,
+            ),
+            Err(CovisibilityError::PositionsNotParallel {
+                members: 2,
+                positions: 1
+            })
+        );
+    }
+
+    /// An 8-image chain with geometrically decaying covisibility:
+    /// `W[i, j] = 128 >> |i - j|` (64 adjacent, 32 at distance 2, …).
+    fn chain8() -> ClusterCovisibility {
+        let mut edges = Vec::new();
+        for i in 0..8u32 {
+            for j in (i + 1)..8 {
+                edges.push((i, j, 128 >> (j - i)));
+            }
+        }
+        from_edges(8, &edges)
+    }
+
+    #[test]
+    fn thin_reproduces_band_selection_on_chain() {
+        let cov = chain8();
+        // Band [8, 64): adjacent images (64) duplicate, distance-2 (32)
+        // stays linked — a stride-2 skeleton.
+        assert_eq!(cov.thin(64.0), vec![0, 2, 4, 6]);
+        // Band [16, 128): every image keeps its adjacent link.
+        assert_eq!(cov.thin(128.0), vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        // A tau below every count keeps only the first swept image.
+        assert_eq!(cov.thin(0.5), vec![0]);
+    }
+
+    #[test]
+    fn thin_sweeps_in_decreasing_isolation_with_positions() {
+        // W: (0,1)=10, (0,2)=10, (1,2)=3. Displacements: d(0,1)=1,
+        // d(0,2)=2, d(1,2)=9 → isolation 0:1, 1:1, 2:9 → sweep [2, 0, 1].
+        // Band [1, 8): 2 seeds the kept set, 0 duplicates it (10), 1 links
+        // through (1,2)=3. Construction order would keep only image 0.
+        let edges = [(0, 1, 10, 1.0), (0, 2, 10, 2.0), (1, 2, 3, 9.0)];
+        let cov = from_positioned_edges(3, &edges);
+        assert_eq!(cov.thin(8.0), vec![1, 2]);
+        // The no-positions fallback sweeps construction order.
+        let unpositioned = from_edges(3, &[(0, 1, 10), (0, 2, 10), (1, 2, 3)]);
+        assert_eq!(unpositioned.thin(8.0), vec![0]);
+    }
+
+    #[test]
+    fn thin_is_permutation_invariant_with_positions() {
+        // Isolations: [1, 1, 2, 4] — images 0 and 1 tie through their shared
+        // minimum edge (the global-minimum edge always ties its endpoints,
+        // and ties break by index), so the invariance contract is "up to
+        // exact ties": the permutation below preserves the index order
+        // within the {0, 1} tie class, and the kept set must then relabel
+        // exactly.
+        let edges = [
+            (0u32, 1u32, 10u32, 1.0),
+            (0, 2, 10, 2.0),
+            (1, 2, 3, 9.0),
+            (2, 3, 20, 4.0),
+            (1, 3, 6, 7.0),
+        ];
+        let cov = from_positioned_edges(4, &edges);
+        // Relabel via perm[old] = new; perm[0] = 1 < perm[1] = 3.
+        let perm = [1u32, 3, 0, 2];
+        let permuted_edges: Vec<_> = edges
+            .iter()
+            .map(|&(i, j, w, d)| (perm[i as usize], perm[j as usize], w, d))
+            .collect();
+        let cov_p = from_positioned_edges(4, &permuted_edges);
+        for tau in [2.0, 8.0, 16.0, 32.0, 64.0] {
+            let base = cov.thin(tau);
+            let mut mapped: Vec<u32> = base.iter().map(|&i| perm[i as usize]).collect();
+            mapped.sort_unstable();
+            assert_eq!(cov_p.thin(tau), mapped, "tau = {tau}");
+        }
+    }
+
+    #[test]
+    fn thin_to_hits_requested_sizes() {
+        let cov = chain8();
+        // Reachable sizes on the chain over tau in (1, median peak]: 2
+        // (small tau keeps the weight-1 distance-7 link), 3 (~17), 4
+        // (stride 2). thin_to finds each exactly and returns the closest
+        // reachable size at the ends of the sweep.
+        for target in 2..=4usize {
+            assert_eq!(cov.thin_to(target).len(), target, "target = {target}");
+        }
+        assert_eq!(cov.thin_to(1).len(), 2); // size 1 needs tau <= 1
+        assert_eq!(cov.thin_to(8), vec![0, 2, 4, 6]); // saturates at stride 2
+    }
+
+    #[test]
+    fn reach_exact_fractions() {
+        // 5 images; image 4 shares nothing.
+        let cov = from_edges(5, &[(0, 1, 8), (1, 2, 7), (0, 3, 9)]);
+        assert_eq!(cov.reach(&[0], 8), 3.0 / 5.0); // 0 (member), 1, 3
+        assert_eq!(cov.reach(&[1], 8), 2.0 / 5.0); // 1 (member), 0
+        assert_eq!(cov.reach(&[], 8), 0.0);
+        // A member counts as reached even with zero covisibility.
+        assert_eq!(cov.reach(&[4], 8), 1.0 / 5.0);
+        // The whole set reaches everything.
+        assert_eq!(cov.reach(&[0, 1, 2, 3, 4], 8), 1.0);
+    }
+
+    #[test]
+    fn reach_respects_min_shared_boundary() {
+        let cov = from_edges(5, &[(0, 1, 8), (1, 2, 7), (0, 3, 9)]);
+        // Exactly at the bar counts; one below does not.
+        assert_eq!(cov.reach(&[1], 7), 3.0 / 5.0); // adds image 2 (7 >= 7)
+        assert_eq!(cov.reach(&[0], 9), 2.0 / 5.0); // drops image 1 (8 < 9)
     }
 }
