@@ -103,6 +103,18 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
 
 ### 4. Mechanical hygiene batch: inline-test sweep + test_camrig split
 
+> _Status (2026-07-18): Done — five inline `#[cfg(test)] mod tests` blocks
+> extracted to sibling `tests.rs` files (`sift-format/src/tests.rs`,
+> `sfmr-colmap/src/colmap_io/tests.rs`, `sfmr-format/src/depth_stats/tests.rs`,
+> `camrig-format/src/pattern/tests.rs`,
+> `sfm-explorer/src/scene_renderer/auto_point_size/tests.rs`), and
+> `test_camrig.py`'s resolver/pattern block lifted into
+> `tests/test_camrig_resolve.py` (shared helpers extracted to
+> `tests/_camrig_helpers.py`). Pure code motion; `cargo fmt`/`clippy
+> --workspace` clean, affected crate tests + `ruff check` green. The two tiny
+> inline blocks (`verify.rs`, `colmap_io/read.rs`) left in place per the
+> hygiene report's "optional" note._
+
 - **Spec reference:** `reports/2026-07-07-hygiene-audit.md` Top 3 #2 and the
   carried-forward finding #12.
 - **Current state:** Five sizeable inline `#[cfg(test)] mod tests` blocks defy
