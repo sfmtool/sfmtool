@@ -43,6 +43,7 @@ use sfmtool_core::geometry::focal_vote::focal_vote_with_min_disp;
 ///     float | None, "rotation_focal_px": float | None, "n_epipolar": int,
 ///     "n_rotation": int, "parallax_poverty": float}``.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, width, height, *, seed=0, epipolar_min_disp_frac=0.02))]
 pub fn focal_vote<'py>(
     py: Python<'py>,
