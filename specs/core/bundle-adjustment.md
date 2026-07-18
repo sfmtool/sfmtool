@@ -196,6 +196,88 @@ Python's point of view).
 - **Binding behavior**: the Python binding reproduces the kernel's
   behavior on analogous synthetic scenes (`tests/rust_bindings/`).
 
+## Points at infinity
+
+**Status:** Specified — implementation in progress.
+
+A point at infinity is a pure direction: its observations depend on the
+observing image's rotation and the shared camera model, never on any
+translation. Supplying far-field tracks as directions therefore pins
+rotations (and, under `opt_f`, the focal) without touching the
+depth/translation side of the solve — exactly the coupling that lets a
+near-planar or low-parallax scene trade rotation bends against a wrong
+focal.
+
+### State and inputs
+
+- A per-point mask `point_at_infinity: &[bool]` (`n_pt`) marks direction
+  points. A marked point's `X_p` slot holds a **world-frame direction**;
+  the kernel normalizes it on input and returns it normalized. `NaN`
+  directions are allowed and behave like `NaN` finite points (invalid
+  until re-estimated). An absent mask (binding: `point_at_infinity=None`)
+  or an all-`false` mask reproduces the finite-only kernel bit for bit.
+- Directions live in the same `points` array; the mask is the only
+  distinction, and it is not modified — classification belongs to the
+  caller.
+
+### Residuals and derivatives
+
+A direction projects like a point at infinite depth: `uv_pred =
+ray_to_pixel(R_i · d)`. The residual is the same pixel difference as a
+finite observation — same units, same soft-L1 loss, same trim thresholds.
+A direction "in front" satisfies `(R_i · d)_z < 0` (canonical −Z
+forward); a behind-camera or out-of-domain direction contributes the
+standard `(1e6, 0)` penalized residual with a zero Jacobian row.
+
+- **Parameters.** A direction perturbs in the 2-DOF tangent plane of the
+  unit sphere: `d ← normalize(d + B(d) · δ)` with `B(d)` an orthonormal
+  basis of `d⊥` rebuilt at each linearization. Its Schur block is 2×2
+  where a finite point's is 3×3; the translation Jacobian block is zero;
+  the rotation block is `−[R·d]ₓ` composed with the same projection
+  Jacobian as finite points, and the `opt_f` derivative applies
+  unchanged.
+- **Translation observability.** Infinity observations constrain no
+  translation. The `min_obs` degenerate-exit floor counts **finite-point
+  survivors only**, and an image whose surviving observations are all
+  directions has its translation frozen for that round (its rotation
+  still updates); otherwise the reduced camera system would carry a
+  zero-curvature translation block.
+
+### Staged-loop semantics
+
+- **Trim** treats direction observations exactly like finite ones (pixel
+  threshold, `min_track` survivors per point); the in-front check is the
+  cheirality test above instead of the depth floor.
+- **Re-estimation (rounds after the first).** Where finite points
+  retriangulate, a direction re-estimates in closed form as the
+  normalized mean of its observations' back-rotated rays
+  `R_iᵀ · pixel_to_ray(uv)` at the current rotations. A direction track
+  with fewer than 2 observations becomes `NaN`, mirroring finite tracks.
+
+### Binding
+
+`bundle_adjust(..., point_at_infinity=None)` — optional `(n_pt,)` bool
+array. The returned `points` rows of marked points are unit directions.
+All other shapes, validation, and outputs are unchanged.
+
+### Testing requirements (additional)
+
+- **Regression**: an all-`false` mask and an absent mask both reproduce
+  the finite-only kernel's output bit for bit on the existing synthetic
+  scenes.
+- **Direction fixpoint and recovery**: noiseless direction observations
+  stay put; perturbed rotations recover ground truth against a far-field
+  direction set to sub-pixel reprojection.
+- **Rotation lock under `opt_f`**: on a synthetic low-parallax scene
+  (near-planar finite cloud) where a focal started well off converges
+  wrongly without directions, adding far-field direction tracks recovers
+  the true focal.
+- **Frozen translation**: an image observing only directions returns its
+  translation bit-identical while its rotation refines.
+- **Re-estimation**: a `NaN` direction with ≥ 2 observations is reborn in
+  round 2 as the mean back-rotated ray.
+- **Memory order and binding parity** as for the finite kernel.
+
 ## Non-goals
 
 - Per-image or per-observation camera models — one shared
