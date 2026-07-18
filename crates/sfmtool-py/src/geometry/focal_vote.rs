@@ -10,7 +10,7 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::geometry::focal_vote::focal_vote as core_focal_vote;
+use sfmtool_core::geometry::focal_vote::focal_vote_with_min_disp;
 
 /// Estimate a shared focal length from cluster-track observations without any
 /// reconstruction (see ``specs/core/focal-vote.md``).
@@ -32,6 +32,10 @@ use sfmtool_core::geometry::focal_vote::focal_vote as core_focal_vote;
 ///     height: Shared image height.
 ///     seed: SplitMix64 seed for the sampled pair-table pass and the RANSAC
 ///         estimators; same inputs + seed => bit-identical output (default 0).
+///     epipolar_min_disp_frac: Wide-baseline gate for epipolar candidate
+///         pairs, as a fraction of the image diagonal their mean feature
+///         displacement must reach (default 0.02). Too low admits
+///         near-static pairs whose fundamental matrices vote junk focals.
 ///
 /// Returns:
 ///     A dict mirroring the output table: ``{"focal_px": float | None,
@@ -39,7 +43,7 @@ use sfmtool_core::geometry::focal_vote::focal_vote as core_focal_vote;
 ///     float | None, "rotation_focal_px": float | None, "n_epipolar": int,
 ///     "n_rotation": int, "parallax_poverty": float}``.
 #[pyfunction]
-#[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, width, height, *, seed=0))]
+#[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, width, height, *, seed=0, epipolar_min_disp_frac=0.02))]
 pub fn focal_vote<'py>(
     py: Python<'py>,
     cluster_indexes: PyReadonlyArray1<'py, u32>,
@@ -48,6 +52,7 @@ pub fn focal_vote<'py>(
     width: u32,
     height: u32,
     seed: u64,
+    epipolar_min_disp_frac: f64,
 ) -> PyResult<Bound<'py, PyDict>> {
     if positions_xy.shape()[1] != 2 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -73,8 +78,17 @@ pub fn focal_vote<'py>(
         ));
     }
 
-    let result =
-        py.detach(move || core_focal_vote(&clusters, &images, &positions, width, height, seed));
+    let result = py.detach(move || {
+        focal_vote_with_min_disp(
+            &clusters,
+            &images,
+            &positions,
+            width,
+            height,
+            seed,
+            epipolar_min_disp_frac,
+        )
+    });
 
     let d = PyDict::new(py);
     d.set_item("focal_px", result.focal_px)?;
@@ -84,6 +98,8 @@ pub fn focal_vote<'py>(
     d.set_item("n_epipolar", result.n_epipolar)?;
     d.set_item("n_rotation", result.n_rotation)?;
     d.set_item("parallax_poverty", result.parallax_poverty)?;
+    d.set_item("epipolar_spread", result.epipolar_spread)?;
+    d.set_item("rotation_spread", result.rotation_spread)?;
     Ok(d)
 }
 

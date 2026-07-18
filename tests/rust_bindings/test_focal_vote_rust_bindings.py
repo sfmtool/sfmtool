@@ -235,6 +235,8 @@ def test_focal_vote_dict_layout():
         "n_epipolar",
         "n_rotation",
         "parallax_poverty",
+        "epipolar_spread",
+        "rotation_spread",
     }
     assert isinstance(res["n_epipolar"], int)
     assert isinstance(res["n_rotation"], int)

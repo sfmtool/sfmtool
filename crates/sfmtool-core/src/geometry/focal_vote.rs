@@ -69,6 +69,11 @@ pub struct FocalVoteResult {
     pub n_rotation: usize,
     /// Median H/F inlier ratio over the epipolar candidate pairs.
     pub parallax_poverty: f64,
+    /// Interquartile range of the epipolar votes in log-focal space — junk
+    /// vote populations scatter where genuine consensus is tight.
+    pub epipolar_spread: f64,
+    /// Interquartile range of the rotation votes in log-focal space.
+    pub rotation_spread: f64,
 }
 
 // ── Vote thresholds (see the spec) ───────────────────────────────────────────
@@ -98,6 +103,23 @@ const POVERTY_THRESHOLD: f64 = 0.55;
 const ROT_QUORUM_HIGH: usize = 5;
 const EPIPOLAR_QUORUM: usize = 8;
 const ROT_QUORUM_LOW: usize = 6;
+
+/// Interquartile range in log space (linear-interpolated quartiles), `0`
+/// for fewer than 2 votes.
+fn log_iqr(vals: &[f64]) -> f64 {
+    if vals.len() < 2 {
+        return 0.0;
+    }
+    let mut v: Vec<f64> = vals.iter().map(|x| x.ln()).collect();
+    v.sort_by(f64::total_cmp);
+    let q = |p: f64| -> f64 {
+        let t = p * (v.len() - 1) as f64;
+        let lo = t.floor() as usize;
+        let hi = t.ceil() as usize;
+        v[lo] + (v[hi] - v[lo]) * (t - lo as f64)
+    };
+    q(0.75) - q(0.25)
+}
 
 /// numpy-style median (even length averages the two central elements).
 fn median(vals: &[f64]) -> Option<f64> {
@@ -232,6 +254,30 @@ pub fn focal_vote(
     height: u32,
     seed: u64,
 ) -> FocalVoteResult {
+    focal_vote_with_min_disp(
+        cluster_indexes,
+        image_indexes,
+        positions_xy,
+        width,
+        height,
+        seed,
+        EPIPOLAR_MIN_DISP_FRAC,
+    )
+}
+
+/// `focal_vote` with an explicit epipolar displacement floor (fraction of the
+/// image diagonal a candidate pair's mean feature displacement must reach).
+/// The floor is the wide-baseline gate: too low admits near-static pairs whose
+/// ill-conditioned fundamental matrices vote junk focals in quorum.
+pub fn focal_vote_with_min_disp(
+    cluster_indexes: &[u32],
+    image_indexes: &[u32],
+    positions_xy: &[[f64; 2]],
+    width: u32,
+    height: u32,
+    seed: u64,
+    epipolar_min_disp_frac: f64,
+) -> FocalVoteResult {
     let empty = FocalVoteResult {
         focal_px: None,
         family: None,
@@ -240,6 +286,8 @@ pub fn focal_vote(
         n_epipolar: 0,
         n_rotation: 0,
         parallax_poverty: 0.0,
+        epipolar_spread: 0.0,
+        rotation_spread: 0.0,
     };
     let n_obs = cluster_indexes.len();
     if n_obs == 0 || image_indexes.len() != n_obs || positions_xy.len() != n_obs {
@@ -309,7 +357,7 @@ pub fn focal_vote(
         let mut cands: Vec<(f64, u32, u32)> = pair_accum
             .iter()
             .filter(|(_, acc)| {
-                acc.count as usize >= min_shared && acc.mean_disp() >= EPIPOLAR_MIN_DISP_FRAC * diag
+                acc.count as usize >= min_shared && acc.mean_disp() >= epipolar_min_disp_frac * diag
             })
             .map(|(&(a, b), acc)| (acc.count, a, b))
             .collect();
@@ -438,6 +486,8 @@ pub fn focal_vote(
     let rotation_focal_px = median(&rot);
     let n_epipolar = bou.len();
     let n_rotation = rot.len();
+    let epipolar_spread = log_iqr(&bou);
+    let rotation_spread = log_iqr(&rot);
 
     let (focal_px, family) = if n_rotation >= ROT_QUORUM_HIGH && poverty >= POVERTY_THRESHOLD {
         (rotation_focal_px, Some(VoteFamily::Rotation))
@@ -462,6 +512,8 @@ pub fn focal_vote(
         n_epipolar,
         n_rotation,
         parallax_poverty: poverty,
+        epipolar_spread,
+        rotation_spread,
     }
 }
 
