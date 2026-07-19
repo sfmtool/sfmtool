@@ -11,9 +11,9 @@ use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArr
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use sfmtool_core::geometry::batch_resection::{resect_images_batch as core_resect, ResectOptions};
 use sfmtool_core::geometry::reconstruction_growth::{
-    grow_reconstruction as core_grow, resect_images_batch as core_resect, GrowOptions,
-    ResectOptions,
+    grow_reconstruction as core_grow, GrowOptions,
 };
 
 use crate::geometry::PyCameraIntrinsics;

@@ -1,7 +1,8 @@
 # Reconstruction Growth
 
 **Status:** Implemented — `grow_reconstruction` and `resect_images_batch`
-(`crates/sfmtool-core/src/geometry/reconstruction_growth.rs`, bound as
+(`crates/sfmtool-core/src/geometry/reconstruction_growth.rs` and
+`crates/sfmtool-core/src/geometry/batch_resection.rs`, bound as
 `sfmtool._sfmtool.geometry.{grow_reconstruction, resect_images_batch}` in
 `crates/sfmtool-py/src/geometry/reconstruction_growth.rs`). Depends on
 absolute-pose estimation and refinement (specs/core/absolute-pose.md),

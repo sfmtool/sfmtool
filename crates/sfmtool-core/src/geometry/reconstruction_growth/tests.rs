@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::camera::CameraModel;
+use crate::geometry::batch_resection::{resect_images_batch, ResectOptions};
 use nalgebra::{Matrix3, Rotation3};
 
 const W: u32 = 800;
