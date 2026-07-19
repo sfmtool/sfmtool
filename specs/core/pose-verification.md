@@ -12,6 +12,26 @@ array serialization; the substrate queries and serialization live on the
 (specs/core/reconstruction-growth.md), and absolute-pose refinement
 (specs/core/absolute-pose.md).
 
+> _Status (2026-07-19): Implemented, with notes against the text below.
+> (1) A pair's shared count is per-cluster-deduplicated (consistent with
+> `ClusterCovisibility.count`); its mean displacement is exhaustive over
+> cross-image member pairs — the two coincide wherever clusters hold one
+> member per image. (2) The homography's rotation extraction uses the
+> whole-sign polar fix (H ≃ −R ambiguity), the codebase convention.
+> (3) Screen A flags SUPPORT failure, not stored-pose disagreement: a
+> wrong pose with healthy observations re-derives correctly and passes A
+> while B flags it — the screens are complementary, not redundant.
+> (4) Persist/reload lives on `DisplacementNeighborhood` (compact
+> arrays); `ClusterCovisibility` itself is not reloadable from them.
+> (5) The neighbour shared-count floor is an explicit `min_shared`
+> parameter (default 50); repairs walk flagged cameras in ascending image
+> order with accepted repairs feeding later inits. Calibration: the
+> default absolute thresholds suit clean captures; on messy handheld
+> fleets they over-flag, so callers should derive thresholds from the
+> dataset's own score distribution (e.g. flag relative to the median of
+> per-image medians) — the kernels expose the raw scores for exactly
+> this._
+
 ## Purpose
 
 Detect and repair misregistered cameras in a reconstruction without a
