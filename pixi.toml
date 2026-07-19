@@ -66,6 +66,11 @@ maturin = ">=1.13.1, <2"
 pip = ">=26.0.1, <27"
 pytest = ">=9.0.3, <10"
 pytest-cov = ">=7.1.0, <8"
+# Parallel test execution. The suite is dominated by a handful of long
+# reconstruction/patch tests; spreading them across workers is the main lever
+# on the instrumented Linux coverage job. Worker count is capped at min(4, cpu)
+# in CI (see scripts/coverage.sh); pytest-cov auto-combines per-worker data.
+pytest-xdist = ">=3.8, <4"
 
 [feature.test.activation.env]
 # Force UTF-8 stdio on Windows so histogram block characters (▁..█) and other
@@ -76,7 +81,7 @@ pytest-cov = ">=7.1.0, <8"
 PYTHONIOENCODING = "utf-8"
 
 [feature.test.tasks]
-test = "pytest"
+test = "pytest -n auto"
 test-rust = "cargo llvm-cov --workspace --exclude sfmtool-py --exclude sfm-explorer"
 coverage = "cargo llvm-cov --workspace --lcov --output-path lcov.info"
 coverage-all = "bash scripts/coverage.sh"

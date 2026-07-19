@@ -25,8 +25,13 @@ maturin develop --release
 # --test-threads=1 and are run separately in the ui-test CI job.
 cargo test --workspace --exclude sfm-explorer
 
-# Run Python tests (generates Rust coverage from Python calls + Python coverage)
-pytest --cov=sfmtool --cov-report=lcov:python-lcov.info
+# Run Python tests (generates Rust coverage from Python calls + Python coverage).
+# Parallelize across min(4, cpu) xdist workers: the suite's wall time is set by a
+# few long reconstruction/patch tests, and the runner has 4 cores with plenty of
+# RAM headroom (peak ~1.4 GB per worker, measured). pytest-cov auto-detects the
+# xdist workers and combines their coverage data at the end.
+workers=$(python -c 'import os; print(min(4, os.cpu_count() or 1))')
+pytest -n "$workers" --cov=sfmtool --cov-report=lcov:python-lcov.info
 
 # Generate the Rust coverage report
 cargo llvm-cov report --lcov --output-path lcov.info

@@ -120,6 +120,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Let codecov authenticate via the GitHub OIDC token (use_oidc below)
+      # instead of a stored CODECOV_TOKEN. Tokenless upload only works on
+      # pull_request events, so push-to-main coverage was failing to upload.
+      id-token: write
     steps:
       - uses: actions/checkout@v6
       # The `test-ci` env install does no Rust build (unlike `test`, it omits the
@@ -193,7 +199,7 @@ jobs:
         if: always()
         uses: codecov/codecov-action@v7
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          use_oidc: true
           files: lcov.info,python-lcov.info
           flags: ubuntu-latest
 
@@ -273,7 +279,12 @@ jobs:
         run: pixi run -e test-ci cargo test --workspace --exclude sfm-explorer
 
       - name: Python tests
-        run: pixi run -e test-ci pytest
+        shell: bash
+        run: |
+          # Parallelize across min(4, cpu) xdist workers (portable cpu count via
+          # the env's Python so it works on the Windows runner's bash too).
+          workers=$(pixi run -e test-ci python -c 'import os; print(min(4, os.cpu_count() or 1))')
+          pixi run -e test-ci pytest -n "$workers"
 
       - name: Save Rust target
         # Save only on main: branch scoping means PR-written caches help nobody
