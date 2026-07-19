@@ -25,7 +25,14 @@ covisibility (specs/core/cluster-covisibility.md).
 > degrades gracefully: neighbour ranking falls back to first-posed,
 > anchor and finishing subsets to frontier/all-posed. (7) The first
 > resection after the seed is ungated — the gate's median has no
-> accepted samples yet._
+> accepted samples yet. (8) The anchored-beats-frontier testing
+> requirement is only observable on loops longer than the finishing
+> adjustment's ~120-camera spread subset (below that the finishing pass
+> is effectively global and both configurations converge identically, to
+> platform float noise); the default-run unit test therefore asserts
+> anchoring does not degrade a converged loop, and the discriminative
+> 140-camera comparison is an `#[ignore]`d minutes-scale test run
+> manually._
 
 ## Purpose
 
