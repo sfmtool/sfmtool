@@ -185,7 +185,10 @@ fn pair_correspondences(
 
 /// Orthogonality residual `‖G/(tr G/3) − I‖_F` with `G = M Mᵀ`,
 /// `M = K⁻¹ H K`, `K = diag(f, f, 1)`. `+∞` for a degenerate `G`.
-fn ortho_cost(h: &Matrix3<f64>, f: f64) -> f64 {
+/// Shared with the far-field rotation initialization
+/// (`crate::geometry::rotation_init`), which gates its edges on the same
+/// residual.
+pub(crate) fn ortho_cost(h: &Matrix3<f64>, f: f64) -> f64 {
     let kinv = Matrix3::new(1.0 / f, 0.0, 0.0, 0.0, 1.0 / f, 0.0, 0.0, 0.0, 1.0);
     let k = Matrix3::new(f, 0.0, 0.0, 0.0, f, 0.0, 0.0, 0.0, 1.0);
     let m = kinv * h * k;
