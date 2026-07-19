@@ -1,10 +1,35 @@
 # Far-Field Rotation Initialization
 
-**Status:** Specified — not implemented. Depends on `estimate_homography`
-(specs/core/focal-vote.md), covisibility selection
+**Status:** Implemented — `rotation_init`
+(`crates/sfmtool-core/src/geometry/rotation_init.rs`, bound as
+`sfmtool._sfmtool.geometry.rotation_init` in
+`crates/sfmtool-py/src/geometry/rotation_init.rs`). Depends on
+`estimate_homography` (specs/core/focal-vote.md), covisibility selection
 (specs/core/covisibility-selection.md), rotation-locked resection
 (specs/core/rotation-locked-resection.md), and the staged bundle
 adjustment (specs/core/bundle-adjustment.md).
+
+> _Status (2026-07-18): Implemented, with four notes against the text
+> below. (1) The finishing bundle adjustment feeds the far-field cluster
+> ids to its own points-at-infinity mask rather than leaving that to the
+> caller: with the far field modeled as finite points, the LM walks the
+> flat scale gauge downward until the near field crosses the adjustment's
+> trim depth floor and the core collapses to a panorama (observed on the
+> synthetic far-field scene; each stage alone is fine, the walk compounds
+> across the staged rounds). Consequently the far clusters' rows of
+> `points` return as unit world-frame directions, not triangulated
+> positions, and after the adjustment the gauge is renormalized so the
+> seed baseline is unit again. (2) `far_cluster_indexes` is the
+> deduplicated, sorted union over the component's validated edges — the
+> points-at-infinity consumer needs exactly the union, and per-edge lists
+> would need edge identities the output does not otherwise carry. (3) The
+> displacement tables are computed in-kernel with the focal vote's full
+> covisible-pair table (mean displacement over all covisible member pairs
+> of each cluster), not the sampled `ClusterCovisibility` tables — same
+> reasoning as the focal-vote deviation: sampled counts undercount against
+> the 25-shared threshold. (4) The growth resection runs with an 8 px trim
+> gate and a 10-survivor floor (candidacy still requires 12 observed
+> triangulated points, per the text)._
 
 ## Purpose
 

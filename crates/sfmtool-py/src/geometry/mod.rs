@@ -20,6 +20,7 @@ pub mod reprojection;
 pub mod resect_translation;
 pub mod rigid_transform;
 pub mod rot_quaternion;
+pub mod rotation_init;
 pub mod se3_transform;
 
 pub use camera_intrinsics::PyCameraIntrinsics;
@@ -41,6 +42,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     reprojection::register(m)?;
     pose_refine::register(m)?;
     resect_translation::register(m)?;
+    rotation_init::register(m)?;
     bundle_adjust::register(m)?;
     Ok(())
 }
