@@ -19,7 +19,7 @@ use sfmtool_core::geometry::reconstruction_growth::{
 use crate::geometry::PyCameraIntrinsics;
 
 /// Validate an `(n, w)` float64 array and return its rows as fixed arrays.
-fn read_rows<const W: usize>(
+pub(crate) fn read_rows<const W: usize>(
     arr: &PyReadonlyArray2<'_, f64>,
     name: &str,
 ) -> PyResult<Vec<[f64; W]>> {
@@ -41,11 +41,11 @@ fn read_rows<const W: usize>(
 }
 
 /// Validated observation arrays: cluster ids, image ids, and positions.
-type Observations = (Vec<u32>, Vec<u32>, Vec<[f64; 2]>);
+pub(crate) type Observations = (Vec<u32>, Vec<u32>, Vec<[f64; 2]>);
 
 /// Shared observation-array validation: parallel lengths and nondecreasing
 /// cluster ids.
-fn read_observations(
+pub(crate) fn read_observations(
     cluster_indexes: &PyReadonlyArray1<'_, u32>,
     image_indexes: &PyReadonlyArray1<'_, u32>,
     positions_xy: &PyReadonlyArray2<'_, f64>,

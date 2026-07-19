@@ -506,6 +506,80 @@ class TestPairDisplacement:
             )
 
 
+class TestDisplacementNeighborhood:
+    """Sparse displacement-neighborhood substrate queries and serialization
+    (see ``specs/core/pose-verification.md``)."""
+
+    # 4 images. Same-image pairs give exact means: (0, 1) twice at distances
+    # 5 and 15 (mean 10); (0, 2) once at 5; (1, 2) once at 25.
+    EDGES = [(0, 1, 5.0), (0, 1, 15.0), (0, 2, 5.0), (1, 2, 25.0)]
+
+    def _cov(self):
+        starts = [0]
+        images, positions = [], []
+        for i, j, d in self.EDGES:
+            images.extend([i, j])
+            positions.extend([[0.0, 0.0], [d, 0.0]])
+            starts.append(len(images))
+        return ClusterCovisibility.from_arrays(
+            np.array(starts, np.uint32),
+            np.array(images, np.uint32),
+            4,
+            positions_xy=np.array(positions, np.float64),
+        )
+
+    def test_pair_stats_exact(self):
+        cov = self._cov()
+        assert cov.pair_stats(0, 1) == (2, 10.0)
+        assert cov.pair_stats(1, 0) == (2, 10.0)
+        assert cov.pair_stats(0, 2) == (1, 5.0)
+        assert cov.pair_stats(1, 2) == (1, 25.0)
+        assert cov.pair_stats(0, 3) is None  # unrealized
+        assert cov.pair_stats(0, 0) is None  # diagonal
+
+    def test_nearest_and_farthest(self):
+        cov = self._cov()
+        npt.assert_array_equal(cov.nearest(0, 4), [2, 1])  # 5 < 10
+        npt.assert_array_equal(cov.farthest(0, 4), [1, 2])
+        npt.assert_array_equal(cov.nearest(1, 1), [0])
+        # The shared-count floor drops single-cluster pairs.
+        npt.assert_array_equal(cov.nearest(0, 4, min_shared=2), [1])
+        npt.assert_array_equal(cov.nearest(3, 4), [])
+        out = cov.nearest(0, 4)
+        assert out.dtype == np.uint32
+
+    def test_neighborhood_arrays_layout(self):
+        arrs = self._cov().neighborhood_arrays()
+        assert set(arrs) == {"i", "j", "count", "mean_disp"}
+        npt.assert_array_equal(arrs["i"], [0, 0, 1])
+        npt.assert_array_equal(arrs["j"], [1, 2, 2])
+        npt.assert_array_equal(arrs["count"], [2, 1, 1])
+        npt.assert_array_equal(arrs["mean_disp"], [10.0, 5.0, 25.0])
+        assert arrs["i"].dtype == np.uint32
+        assert arrs["count"].dtype == np.uint32
+        assert arrs["mean_disp"].dtype == np.float64
+
+    def test_raises_without_positions(self):
+        cov = ClusterCovisibility.from_arrays(CLUSTER_STARTS, MEMBER_IMAGES, N_IMAGES)
+        with pytest.raises(ValueError, match="without positions_xy"):
+            cov.nearest(0, 4)
+        with pytest.raises(ValueError, match="without positions_xy"):
+            cov.farthest(0, 4)
+        with pytest.raises(ValueError, match="without positions_xy"):
+            cov.pair_stats(0, 1)
+        with pytest.raises(ValueError, match="without positions_xy"):
+            cov.neighborhood_arrays()
+
+    def test_out_of_range_raises(self):
+        cov = self._cov()
+        with pytest.raises(ValueError, match="out of range"):
+            cov.nearest(4, 1)
+        with pytest.raises(ValueError, match="out of range"):
+            cov.farthest(9, 1)
+        with pytest.raises(ValueError, match="out of range"):
+            cov.pair_stats(0, 4)
+
+
 class TestThin:
     def test_band_selection_on_chain(self):
         cov = _chain8()
