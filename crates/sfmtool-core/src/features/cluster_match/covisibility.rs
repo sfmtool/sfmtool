@@ -13,9 +13,12 @@
 //! which requires poses and points.
 //!
 //! See `specs/core/cluster-covisibility.md` for the design and the seed-group
-//! algorithm's determinism contract, and `specs/core/covisibility-selection.md`
+//! algorithm's determinism contract, `specs/core/covisibility-selection.md`
 //! for the selection queries built on top (pair displacement, banded thinning,
-//! reach).
+//! reach), and `specs/core/pose-verification.md` for the sparse
+//! displacement-neighborhood substrate ([`DisplacementNeighborhood`]).
+
+use std::collections::HashMap;
 
 /// Dense-backend image cap. Storage is a row-major `u32` matrix (`4·N²`
 /// bytes): 64 MB at this bound, which sits inside the spec's ~4–5 k-image
@@ -38,6 +41,17 @@ pub enum CovisibilityError {
     PositionsNotParallel { members: usize, positions: usize },
     /// A member's image index is out of range.
     ImageIndexOutOfRange { index: u32, num_images: usize },
+    /// [`DisplacementNeighborhood::from_arrays`]: the four pair arrays do not
+    /// share one length.
+    PairArraysNotParallel {
+        i: usize,
+        j: usize,
+        shared: usize,
+        mean_disp: usize,
+    },
+    /// [`DisplacementNeighborhood::from_arrays`]: a diagonal (`i == j`) or
+    /// repeated pair.
+    BadPair { i: u32, j: u32 },
 }
 
 impl std::fmt::Display for CovisibilityError {
@@ -66,6 +80,21 @@ impl std::fmt::Display for CovisibilityError {
             Self::ImageIndexOutOfRange { index, num_images } => write!(
                 f,
                 "member image index {index} is out of range for {num_images} images"
+            ),
+            Self::PairArraysNotParallel {
+                i,
+                j,
+                shared,
+                mean_disp,
+            } => write!(
+                f,
+                "pair arrays must share one length: i ({i}), j ({j}), shared ({shared}), \
+                 mean_disp ({mean_disp})"
+            ),
+            Self::BadPair { i, j } => write!(
+                f,
+                "pair ({i}, {j}) is diagonal or repeated — pairs must be distinct \
+                 unordered image pairs"
             ),
         }
     }
@@ -128,6 +157,319 @@ struct DisplacementTables {
     count: Vec<u32>,
 }
 
+/// Sparse displacement-neighborhood substrate: per *realized* covisible image
+/// pair, the shared-cluster count and the mean pixel displacement of the
+/// pair's shared-cluster keypoints. Built in one pass over the clusters —
+/// each cluster emits its accepted cross-image member pairs, so under the
+/// cluster matcher's span cap both time and storage are linear in
+/// observations, with no dense matrix anywhere. See
+/// `specs/core/pose-verification.md` (Substrate).
+///
+/// The shared count matches [`ClusterCovisibility::count`] (each cluster
+/// votes at most once per pair); the mean displacement averages over *every*
+/// accepted cross-image member pair of the shared clusters — exhaustive, not
+/// sampled (contrast the seeded one-sample-per-cluster tables behind
+/// [`ClusterCovisibility::pair_displacement`]).
+///
+/// Serialize with [`Self::to_arrays`] / reload with [`Self::from_arrays`], so
+/// one computation serves a multi-stage pipeline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisplacementNeighborhood {
+    num_images: usize,
+    /// CSR row offsets over the adjacency arrays, length `num_images + 1`.
+    nbr_starts: Vec<usize>,
+    /// Partner image per adjacency entry, ascending within each row.
+    nbr_images: Vec<u32>,
+    /// Shared-cluster count per adjacency entry.
+    nbr_shared: Vec<u32>,
+    /// Mean keypoint displacement (pixels) per adjacency entry.
+    nbr_mean_disp: Vec<f64>,
+}
+
+/// Per-pair accumulator for the neighborhood build.
+#[derive(Clone, Copy, Default)]
+struct PairAccum {
+    shared: u32,
+    disp_sum: f64,
+    disp_n: u32,
+}
+
+impl DisplacementNeighborhood {
+    /// Build the substrate from CSR cluster arrays plus per-member positions
+    /// (all parallel to `member_images`, pixel units). `member_accepted` is
+    /// honored exactly as in [`ClusterCovisibility::from_clusters`]: `None`
+    /// means every member counts.
+    ///
+    /// Per cluster: the accepted members' deduplicated image list votes once
+    /// per pair into the shared count, and every accepted cross-image member
+    /// pair contributes its Euclidean position distance to the pair's mean
+    /// displacement. Deterministic — no sampling.
+    pub fn from_clusters(
+        cluster_starts: &[u32],
+        member_images: &[u32],
+        member_accepted: Option<&[bool]>,
+        num_images: usize,
+        positions_xy: &[[f64; 2]],
+    ) -> Result<Self, CovisibilityError> {
+        let m = member_images.len();
+        let csr_valid = !cluster_starts.is_empty()
+            && cluster_starts[0] == 0
+            && cluster_starts.windows(2).all(|w| w[0] <= w[1])
+            && *cluster_starts.last().unwrap() as usize == m;
+        if !csr_valid {
+            return Err(CovisibilityError::BadClusterStarts { m });
+        }
+        if let Some(mask) = member_accepted {
+            if mask.len() != m {
+                return Err(CovisibilityError::MaskNotParallel {
+                    members: m,
+                    mask: mask.len(),
+                });
+            }
+        }
+        if positions_xy.len() != m {
+            return Err(CovisibilityError::PositionsNotParallel {
+                members: m,
+                positions: positions_xy.len(),
+            });
+        }
+        if let Some(&bad) = member_images.iter().find(|&&i| i as usize >= num_images) {
+            return Err(CovisibilityError::ImageIndexOutOfRange {
+                index: bad,
+                num_images,
+            });
+        }
+
+        let mut pairs: HashMap<(u32, u32), PairAccum> = HashMap::new();
+        let mut rows: Vec<usize> = Vec::new();
+        let mut span: Vec<u32> = Vec::new();
+        for c in 0..cluster_starts.len() - 1 {
+            let lo = cluster_starts[c] as usize;
+            let hi = cluster_starts[c + 1] as usize;
+            rows.clear();
+            rows.extend((lo..hi).filter(|&k| member_accepted.is_none_or(|mask| mask[k])));
+            // Shared-cluster votes: once per deduplicated image pair.
+            span.clear();
+            span.extend(rows.iter().map(|&k| member_images[k]));
+            span.sort_unstable();
+            span.dedup();
+            for (a, &i) in span.iter().enumerate() {
+                for &j in &span[a + 1..] {
+                    pairs.entry((i, j)).or_default().shared += 1;
+                }
+            }
+            // Displacement: every accepted cross-image member pair.
+            for (a, &ka) in rows.iter().enumerate() {
+                for &kb in &rows[a + 1..] {
+                    let (ia, ib) = (member_images[ka], member_images[kb]);
+                    if ia == ib {
+                        continue;
+                    }
+                    let d = f64::hypot(
+                        positions_xy[ka][0] - positions_xy[kb][0],
+                        positions_xy[ka][1] - positions_xy[kb][1],
+                    );
+                    let e = pairs.entry((ia.min(ib), ia.max(ib))).or_default();
+                    e.disp_sum += d;
+                    e.disp_n += 1;
+                }
+            }
+        }
+
+        // Deterministic order despite the hash-map accumulator.
+        let mut sorted: Vec<((u32, u32), PairAccum)> = pairs.into_iter().collect();
+        sorted.sort_unstable_by_key(|&(k, _)| k);
+        Ok(Self::from_sorted_pairs(num_images, &sorted))
+    }
+
+    /// Assemble the CSR adjacency from `(i, j) → accum` pairs sorted by key
+    /// (`i < j`, unique).
+    fn from_sorted_pairs(num_images: usize, sorted: &[((u32, u32), PairAccum)]) -> Self {
+        let mut nbr_starts = vec![0usize; num_images + 1];
+        for &((i, j), _) in sorted {
+            nbr_starts[i as usize + 1] += 1;
+            nbr_starts[j as usize + 1] += 1;
+        }
+        for r in 0..num_images {
+            nbr_starts[r + 1] += nbr_starts[r];
+        }
+        let total = nbr_starts[num_images];
+        let mut cursor = nbr_starts.clone();
+        let mut nbr_images = vec![0u32; total];
+        let mut nbr_shared = vec![0u32; total];
+        let mut nbr_mean_disp = vec![0.0f64; total];
+        // Keys ascend by (i, j), so both the row-i entries (partner j,
+        // ascending) and the row-j entries (partner i, ascending) land in
+        // ascending-partner order.
+        for &((i, j), acc) in sorted {
+            let mean = if acc.disp_n > 0 {
+                acc.disp_sum / acc.disp_n as f64
+            } else {
+                0.0
+            };
+            for (row, partner) in [(i as usize, j), (j as usize, i)] {
+                let at = cursor[row];
+                nbr_images[at] = partner;
+                nbr_shared[at] = acc.shared;
+                nbr_mean_disp[at] = mean;
+                cursor[row] += 1;
+            }
+        }
+        Self {
+            num_images,
+            nbr_starts,
+            nbr_images,
+            nbr_shared,
+            nbr_mean_disp,
+        }
+    }
+
+    /// Number of images the substrate covers.
+    pub fn num_images(&self) -> usize {
+        self.num_images
+    }
+
+    /// Number of realized (covisible) pairs.
+    pub fn num_pairs(&self) -> usize {
+        self.nbr_images.len() / 2
+    }
+
+    /// `(shared count, mean displacement)` for the pair `(i, j)`; `None` when
+    /// the pair is unrealized (or `i == j`). Panics if either index is out of
+    /// range.
+    pub fn pair(&self, i: u32, j: u32) -> Option<(u32, f64)> {
+        assert!(
+            (i as usize) < self.num_images && (j as usize) < self.num_images,
+            "image index out of range"
+        );
+        if i == j {
+            return None;
+        }
+        let (lo, hi) = (self.nbr_starts[i as usize], self.nbr_starts[i as usize + 1]);
+        let at = lo + self.nbr_images[lo..hi].binary_search(&j).ok()?;
+        Some((self.nbr_shared[at], self.nbr_mean_disp[at]))
+    }
+
+    /// Image `i`'s realized partners as `(partner, shared count, mean
+    /// displacement)`, ascending partner index. Panics if `i` is out of
+    /// range.
+    pub fn neighbors(&self, i: u32) -> impl Iterator<Item = (u32, u32, f64)> + '_ {
+        let i = i as usize;
+        assert!(i < self.num_images, "image index out of range");
+        let (lo, hi) = (self.nbr_starts[i], self.nbr_starts[i + 1]);
+        (lo..hi).map(move |at| {
+            (
+                self.nbr_images[at],
+                self.nbr_shared[at],
+                self.nbr_mean_disp[at],
+            )
+        })
+    }
+
+    /// Partners of `i` at or above the `min_shared` shared-cluster floor,
+    /// ordered by the displacement key (ties: ascending partner index),
+    /// truncated to `k`.
+    fn ranked_partners(&self, i: u32, k: usize, min_shared: u32, descending: bool) -> Vec<u32> {
+        let mut ranked: Vec<(f64, u32)> = self
+            .neighbors(i)
+            .filter(|&(_, shared, _)| shared >= min_shared)
+            .map(|(j, _, d)| (d, j))
+            .collect();
+        ranked.sort_by(|a, b| {
+            let ord = a.0.total_cmp(&b.0);
+            (if descending { ord.reverse() } else { ord }).then(a.1.cmp(&b.1))
+        });
+        ranked.truncate(k);
+        ranked.into_iter().map(|(_, j)| j).collect()
+    }
+
+    /// The `k` lowest-mean-displacement partners of `i` with at least
+    /// `min_shared` shared clusters (near-duplicate viewpoints; ties break by
+    /// ascending partner index). Panics if `i` is out of range.
+    pub fn nearest(&self, i: u32, k: usize, min_shared: u32) -> Vec<u32> {
+        self.ranked_partners(i, k, min_shared, false)
+    }
+
+    /// The `k` highest-mean-displacement partners of `i` with at least
+    /// `min_shared` shared clusters (wide-baseline pairs; ties break by
+    /// ascending partner index). Panics if `i` is out of range.
+    pub fn farthest(&self, i: u32, k: usize, min_shared: u32) -> Vec<u32> {
+        self.ranked_partners(i, k, min_shared, true)
+    }
+
+    /// Compact serialization: parallel per-pair arrays `(i, j, shared count,
+    /// mean displacement)` with `i < j`, sorted by `(i, j)`. Round-trips
+    /// through [`Self::from_arrays`].
+    pub fn to_arrays(&self) -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<f64>) {
+        let n_pairs = self.num_pairs();
+        let mut pi = Vec::with_capacity(n_pairs);
+        let mut pj = Vec::with_capacity(n_pairs);
+        let mut shared = Vec::with_capacity(n_pairs);
+        let mut mean_disp = Vec::with_capacity(n_pairs);
+        for i in 0..self.num_images as u32 {
+            for (j, s, d) in self.neighbors(i) {
+                if j > i {
+                    pi.push(i);
+                    pj.push(j);
+                    shared.push(s);
+                    mean_disp.push(d);
+                }
+            }
+        }
+        (pi, pj, shared, mean_disp)
+    }
+
+    /// Rebuild the substrate from serialized per-pair arrays (any pair
+    /// order; each unordered pair at most once, off-diagonal, indexes below
+    /// `num_images`). The inverse of [`Self::to_arrays`].
+    pub fn from_arrays(
+        pair_i: &[u32],
+        pair_j: &[u32],
+        shared: &[u32],
+        mean_disp: &[f64],
+        num_images: usize,
+    ) -> Result<Self, CovisibilityError> {
+        let n = pair_i.len();
+        if pair_j.len() != n || shared.len() != n || mean_disp.len() != n {
+            return Err(CovisibilityError::PairArraysNotParallel {
+                i: n,
+                j: pair_j.len(),
+                shared: shared.len(),
+                mean_disp: mean_disp.len(),
+            });
+        }
+        let mut sorted: Vec<((u32, u32), PairAccum)> = Vec::with_capacity(n);
+        for k in 0..n {
+            let (i, j) = (pair_i[k], pair_j[k]);
+            if i == j {
+                return Err(CovisibilityError::BadPair { i, j });
+            }
+            for &idx in &[i, j] {
+                if idx as usize >= num_images {
+                    return Err(CovisibilityError::ImageIndexOutOfRange {
+                        index: idx,
+                        num_images,
+                    });
+                }
+            }
+            sorted.push((
+                (i.min(j), i.max(j)),
+                PairAccum {
+                    shared: shared[k],
+                    disp_sum: mean_disp[k],
+                    disp_n: 1,
+                },
+            ));
+        }
+        sorted.sort_unstable_by_key(|&(k, _)| k);
+        if let Some(w) = sorted.windows(2).find(|w| w[0].0 == w[1].0) {
+            let (i, j) = w[0].0;
+            return Err(CovisibilityError::BadPair { i, j });
+        }
+        Ok(Self::from_sorted_pairs(num_images, &sorted))
+    }
+}
+
 /// Symmetric per-image-pair shared-cluster counts (zero diagonal).
 ///
 /// `W[i, j]` = number of clusters with an accepted member in image `i` and
@@ -141,6 +483,9 @@ pub struct ClusterCovisibility {
     counts: Vec<u32>,
     /// Sampled displacement tables; `None` without construction positions.
     displacement: Option<DisplacementTables>,
+    /// Sparse displacement neighborhood; `None` without construction
+    /// positions.
+    neighborhood: Option<DisplacementNeighborhood>,
 }
 
 impl ClusterCovisibility {
@@ -285,10 +630,24 @@ impl ClusterCovisibility {
             }
         }
 
+        // The sparse displacement neighborhood shares the positioned inputs;
+        // a second linear pass keeps the sampled-table RNG stream untouched.
+        let neighborhood = match positions_xy {
+            Some(pos) => Some(DisplacementNeighborhood::from_clusters(
+                cluster_starts,
+                member_images,
+                member_accepted,
+                num_images,
+                pos,
+            )?),
+            None => None,
+        };
+
         Ok(Self {
             num_images,
             counts,
             displacement,
+            neighborhood,
         })
     }
 
@@ -341,6 +700,15 @@ impl ClusterCovisibility {
     /// `None` when constructed without positions.
     pub fn pair_displacement_counts(&self) -> Option<&[u32]> {
         self.displacement.as_ref().map(|t| t.count.as_slice())
+    }
+
+    /// The sparse displacement-neighborhood substrate (per realized pair:
+    /// shared-cluster count + exhaustive mean keypoint displacement, with the
+    /// `nearest` / `farthest` / `pair` queries and array serialization).
+    /// `None` when constructed without positions. See
+    /// `specs/core/pose-verification.md`.
+    pub fn displacement_neighborhood(&self) -> Option<&DisplacementNeighborhood> {
+        self.neighborhood.as_ref()
     }
 
     /// The thinning sweep order: decreasing isolation — largest
@@ -1114,5 +1482,263 @@ mod tests {
         // Exactly at the bar counts; one below does not.
         assert_eq!(cov.reach(&[1], 7), 3.0 / 5.0); // adds image 2 (7 >= 7)
         assert_eq!(cov.reach(&[0], 9), 2.0 / 5.0); // drops image 1 (8 < 9)
+    }
+
+    // ── Displacement neighborhood (specs/core/pose-verification.md) ────────
+
+    /// A small positioned scene: 4 images, clusters mixing spans, one masked
+    /// member, one duplicate-image member.
+    fn small_scene() -> (Vec<u32>, Vec<u32>, Vec<[f64; 2]>, Vec<bool>) {
+        // Cluster 0: images {0, 1, 2}; cluster 1: {0, 1}; cluster 2: {1, 2}
+        // with a duplicate member in image 1; cluster 3: {2, 3};
+        // cluster 4: {0, 3} but the image-3 member is masked out.
+        let starts = vec![0u32, 3, 5, 8, 10, 12];
+        let images = vec![0u32, 1, 2, 0, 1, 1, 1, 2, 2, 3, 0, 3];
+        let positions: Vec<[f64; 2]> = (0..12).map(|k| [k as f64 * 2.0, k as f64]).collect();
+        let mask = vec![
+            true, true, true, true, true, true, true, true, true, true, true, false,
+        ];
+        (starts, images, positions, mask)
+    }
+
+    /// Dense reference: brute-force per-pair shared counts and displacement
+    /// means straight from the definition.
+    fn dense_reference(
+        starts: &[u32],
+        images: &[u32],
+        positions: &[[f64; 2]],
+        mask: Option<&[bool]>,
+        n: usize,
+    ) -> (Vec<Vec<u32>>, Vec<Vec<f64>>) {
+        let mut shared = vec![vec![0u32; n]; n];
+        let mut sum = vec![vec![0.0f64; n]; n];
+        let mut cnt = vec![vec![0u32; n]; n];
+        for c in 0..starts.len() - 1 {
+            let rows: Vec<usize> = (starts[c] as usize..starts[c + 1] as usize)
+                .filter(|&k| mask.is_none_or(|m| m[k]))
+                .collect();
+            let mut span: Vec<usize> = rows.iter().map(|&k| images[k] as usize).collect();
+            span.sort_unstable();
+            span.dedup();
+            for (a, &i) in span.iter().enumerate() {
+                for &j in &span[a + 1..] {
+                    shared[i][j] += 1;
+                    shared[j][i] += 1;
+                }
+            }
+            for (a, &ka) in rows.iter().enumerate() {
+                for &kb in &rows[a + 1..] {
+                    let (ia, ib) = (images[ka] as usize, images[kb] as usize);
+                    if ia == ib {
+                        continue;
+                    }
+                    let d = f64::hypot(
+                        positions[ka][0] - positions[kb][0],
+                        positions[ka][1] - positions[kb][1],
+                    );
+                    sum[ia][ib] += d;
+                    sum[ib][ia] += d;
+                    cnt[ia][ib] += 1;
+                    cnt[ib][ia] += 1;
+                }
+            }
+        }
+        let mean = (0..n)
+            .map(|i| {
+                (0..n)
+                    .map(|j| {
+                        if cnt[i][j] > 0 {
+                            sum[i][j] / cnt[i][j] as f64
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        (shared, mean)
+    }
+
+    #[test]
+    fn neighborhood_exact_against_dense_reference() {
+        let (starts, images, positions, _) = small_scene();
+        let nb =
+            DisplacementNeighborhood::from_clusters(&starts, &images, None, 4, &positions).unwrap();
+        let (shared, mean) = dense_reference(&starts, &images, &positions, None, 4);
+        for i in 0..4u32 {
+            for j in 0..4u32 {
+                let expected = if i != j && shared[i as usize][j as usize] > 0 {
+                    Some((shared[i as usize][j as usize], mean[i as usize][j as usize]))
+                } else {
+                    None
+                };
+                assert_eq!(nb.pair(i, j), expected, "pair ({i}, {j})");
+            }
+        }
+        // Shared counts agree with the dense ClusterCovisibility matrix.
+        let cov = ClusterCovisibility::from_clusters(&starts, &images, None, 4).unwrap();
+        for i in 0..4u32 {
+            for j in 0..4u32 {
+                assert_eq!(
+                    nb.pair(i, j).map(|(s, _)| s).unwrap_or(0),
+                    cov.count(i, j),
+                    "count ({i}, {j})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn neighborhood_nearest_farthest_exact() {
+        let (starts, images, positions, _) = small_scene();
+        let nb =
+            DisplacementNeighborhood::from_clusters(&starts, &images, None, 4, &positions).unwrap();
+        let (shared, mean) = dense_reference(&starts, &images, &positions, None, 4);
+        for i in 0..4u32 {
+            for min_shared in [1u32, 2] {
+                // Brute-force ranking from the dense reference.
+                let mut cands: Vec<(f64, u32)> = (0..4u32)
+                    .filter(|&j| j != i && shared[i as usize][j as usize] >= min_shared)
+                    .map(|j| (mean[i as usize][j as usize], j))
+                    .collect();
+                cands.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+                let want_near: Vec<u32> = cands.iter().map(|&(_, j)| j).collect();
+                assert_eq!(nb.nearest(i, 4, min_shared), want_near, "nearest({i})");
+                let mut cands_far = cands.clone();
+                cands_far.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+                let want_far: Vec<u32> = cands_far.iter().map(|&(_, j)| j).collect();
+                assert_eq!(nb.farthest(i, 4, min_shared), want_far, "farthest({i})");
+                // Truncation to k.
+                assert_eq!(
+                    nb.nearest(i, 1, min_shared),
+                    want_near[..1.min(want_near.len())]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn neighborhood_honors_mask() {
+        let (starts, images, positions, mask) = small_scene();
+        let nb =
+            DisplacementNeighborhood::from_clusters(&starts, &images, Some(&mask), 4, &positions)
+                .unwrap();
+        // Cluster 4's image-3 member is masked, so pair (0, 3) loses its only
+        // vote; pair (2, 3) from cluster 3 survives.
+        assert_eq!(nb.pair(0, 3), None);
+        assert!(nb.pair(2, 3).is_some());
+        let (shared, mean) = dense_reference(&starts, &images, &positions, Some(&mask), 4);
+        for i in 0..4u32 {
+            for j in 0..4u32 {
+                let expected = if i != j && shared[i as usize][j as usize] > 0 {
+                    Some((shared[i as usize][j as usize], mean[i as usize][j as usize]))
+                } else {
+                    None
+                };
+                assert_eq!(nb.pair(i, j), expected, "pair ({i}, {j})");
+            }
+        }
+    }
+
+    #[test]
+    fn neighborhood_duplicate_image_members_count_once_but_displace() {
+        // Cluster 2 of the small scene holds two members in image 1 and one
+        // in image 2: one shared vote for (1, 2), two displacement samples.
+        let (starts, images, positions, _) = small_scene();
+        let nb =
+            DisplacementNeighborhood::from_clusters(&starts, &images, None, 4, &positions).unwrap();
+        let (s, d) = nb.pair(1, 2).unwrap();
+        assert_eq!(s, 2); // clusters 0 and 2
+                          // Cluster 0 contributes |p1 - p2|; cluster 2 contributes
+                          // |p5 - p7| and |p6 - p7| (members 5, 6 in image 1; 7 in image 2).
+        let dist = |a: usize, b: usize| {
+            f64::hypot(
+                positions[a][0] - positions[b][0],
+                positions[a][1] - positions[b][1],
+            )
+        };
+        let want = (dist(1, 2) + dist(5, 7) + dist(6, 7)) / 3.0;
+        assert!((d - want).abs() < 1e-12);
+    }
+
+    #[test]
+    fn neighborhood_serialization_round_trips() {
+        let (starts, images, positions, mask) = small_scene();
+        let nb =
+            DisplacementNeighborhood::from_clusters(&starts, &images, Some(&mask), 4, &positions)
+                .unwrap();
+        let (pi, pj, shared, mean_disp) = nb.to_arrays();
+        assert_eq!(pi.len(), nb.num_pairs());
+        assert!(pi.iter().zip(&pj).all(|(&i, &j)| i < j));
+        assert!(pi
+            .iter()
+            .zip(&pj)
+            .collect::<Vec<_>>()
+            .windows(2)
+            .all(|w| w[0] < w[1]));
+        let back = DisplacementNeighborhood::from_arrays(&pi, &pj, &shared, &mean_disp, 4).unwrap();
+        assert_eq!(back, nb);
+        // Reversed pair order still reloads to the same substrate.
+        let rev = |v: &[u32]| -> Vec<u32> { v.iter().rev().copied().collect() };
+        let mean_rev: Vec<f64> = mean_disp.iter().rev().copied().collect();
+        let back2 = DisplacementNeighborhood::from_arrays(
+            &rev(&pj), // also swap i/j: (j, i) normalizes to (i, j)
+            &rev(&pi),
+            &rev(&shared),
+            &mean_rev,
+            4,
+        )
+        .unwrap();
+        assert_eq!(back2, nb);
+    }
+
+    #[test]
+    fn neighborhood_from_arrays_validation() {
+        assert_eq!(
+            DisplacementNeighborhood::from_arrays(&[0], &[1, 2], &[3], &[1.0], 3),
+            Err(CovisibilityError::PairArraysNotParallel {
+                i: 1,
+                j: 2,
+                shared: 1,
+                mean_disp: 1
+            })
+        );
+        assert_eq!(
+            DisplacementNeighborhood::from_arrays(&[1], &[1], &[3], &[1.0], 3),
+            Err(CovisibilityError::BadPair { i: 1, j: 1 })
+        );
+        // Duplicate unordered pair (0, 1) given as (0, 1) and (1, 0).
+        assert_eq!(
+            DisplacementNeighborhood::from_arrays(&[0, 1], &[1, 0], &[3, 4], &[1.0, 2.0], 3),
+            Err(CovisibilityError::BadPair { i: 0, j: 1 })
+        );
+        assert_eq!(
+            DisplacementNeighborhood::from_arrays(&[0], &[5], &[3], &[1.0], 3),
+            Err(CovisibilityError::ImageIndexOutOfRange {
+                index: 5,
+                num_images: 3
+            })
+        );
+    }
+
+    #[test]
+    fn neighborhood_available_through_cluster_covisibility() {
+        let (starts, images, positions, _) = small_scene();
+        let cov = ClusterCovisibility::from_clusters_with_positions(
+            &starts,
+            &images,
+            None,
+            4,
+            Some(&positions),
+            0,
+        )
+        .unwrap();
+        let nb = cov.displacement_neighborhood().expect("positions supplied");
+        let direct =
+            DisplacementNeighborhood::from_clusters(&starts, &images, None, 4, &positions).unwrap();
+        assert_eq!(nb, &direct);
+        // Without positions the substrate is absent.
+        let plain = ClusterCovisibility::from_clusters(&starts, &images, None, 4).unwrap();
+        assert!(plain.displacement_neighborhood().is_none());
     }
 }

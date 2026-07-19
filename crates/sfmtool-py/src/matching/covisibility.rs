@@ -14,8 +14,9 @@ use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
 use matches_format::ClusterMemberStatus;
+use pyo3::types::PyDict;
 use sfmtool_core::features::cluster_match::covisibility::{
-    ClusterCovisibility as CoreClusterCovisibility, SeedGroupParams,
+    ClusterCovisibility as CoreClusterCovisibility, DisplacementNeighborhood, SeedGroupParams,
 };
 
 use super::cluster::extract_u32_1d;
@@ -74,6 +75,29 @@ fn extract_bool_1d<'py>(
 #[pyclass(name = "ClusterCovisibility", module = "sfmtool.matching", frozen)]
 pub struct PyClusterCovisibility {
     inner: CoreClusterCovisibility,
+}
+
+impl PyClusterCovisibility {
+    /// The sparse displacement neighborhood, or a ValueError when the matrix
+    /// was constructed without positions.
+    fn neighborhood(&self) -> PyResult<&DisplacementNeighborhood> {
+        self.inner.displacement_neighborhood().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(
+                "constructed without positions_xy — displacement queries are unavailable",
+            )
+        })
+    }
+
+    /// ValueError when `image` is out of range.
+    fn check_image(&self, image: u32) -> PyResult<()> {
+        let n = self.inner.num_images();
+        if image as usize >= n {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "image index {image} out of range for {n} images"
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[pymethods]
@@ -223,6 +247,87 @@ impl PyClusterCovisibility {
             .reshape([n, n])?
             .into_any()
             .unbind())
+    }
+
+    /// The k lowest-mean-displacement partners of ``image`` with at least
+    /// ``min_shared`` shared clusters (near-duplicate viewpoints; ties break
+    /// by ascending partner index), as a uint32 numpy array. Backed by the
+    /// sparse displacement neighborhood (exhaustive per-pair means; see
+    /// ``specs/core/pose-verification.md``), not the sampled tables.
+    ///
+    /// Raises ValueError when constructed without ``positions_xy``.
+    ///
+    /// Args:
+    ///     image: Query image index.
+    ///     k: Maximum partners returned.
+    ///     min_shared: Shared-cluster floor (default 1).
+    #[pyo3(signature = (image, k, min_shared=1))]
+    fn nearest<'py>(
+        &self,
+        py: Python<'py>,
+        image: u32,
+        k: usize,
+        min_shared: u32,
+    ) -> PyResult<Py<PyAny>> {
+        self.check_image(image)?;
+        let nb = self.neighborhood()?;
+        Ok(PyArray1::from_vec(py, nb.nearest(image, k, min_shared))
+            .into_any()
+            .unbind())
+    }
+
+    /// The k highest-mean-displacement partners of ``image`` with at least
+    /// ``min_shared`` shared clusters (wide-baseline pairs; ties break by
+    /// ascending partner index), as a uint32 numpy array.
+    ///
+    /// Raises ValueError when constructed without ``positions_xy``.
+    ///
+    /// Args:
+    ///     image: Query image index.
+    ///     k: Maximum partners returned.
+    ///     min_shared: Shared-cluster floor (default 1).
+    #[pyo3(signature = (image, k, min_shared=1))]
+    fn farthest<'py>(
+        &self,
+        py: Python<'py>,
+        image: u32,
+        k: usize,
+        min_shared: u32,
+    ) -> PyResult<Py<PyAny>> {
+        self.check_image(image)?;
+        let nb = self.neighborhood()?;
+        Ok(PyArray1::from_vec(py, nb.farthest(image, k, min_shared))
+            .into_any()
+            .unbind())
+    }
+
+    /// ``(shared count, mean displacement)`` for the pair ``(i, j)`` from
+    /// the sparse displacement neighborhood, or None when the pair is
+    /// unrealized (or ``i == j``).
+    ///
+    /// Raises ValueError when constructed without ``positions_xy``.
+    fn pair_stats(&self, i: u32, j: u32) -> PyResult<Option<(u32, f64)>> {
+        self.check_image(i)?;
+        self.check_image(j)?;
+        Ok(self.neighborhood()?.pair(i, j))
+    }
+
+    /// The displacement neighborhood's compact serialization: a dict of
+    /// parallel per-pair numpy arrays ``{"i" (n_pairs,) uint32, "j"
+    /// (n_pairs,) uint32, "count" (n_pairs,) uint32, "mean_disp" (n_pairs,)
+    /// float64}`` with ``i < j``, sorted by ``(i, j)``. Persist them (e.g.
+    /// ``np.savez``) and feed them back to ``verify_poses`` /
+    /// ``repair_poses``, so one computation serves a multi-stage pipeline.
+    ///
+    /// Raises ValueError when constructed without ``positions_xy``.
+    fn neighborhood_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let (pi, pj, count, mean_disp) = self.neighborhood()?.to_arrays();
+        let d = PyDict::new(py);
+        d.set_item("i", PyArray1::from_vec(py, pi))?;
+        d.set_item("j", PyArray1::from_vec(py, pj))?;
+        d.set_item("count", PyArray1::from_vec(py, count))?;
+        d.set_item("mean_disp", PyArray1::from_vec(py, mean_disp))?;
+        Ok(d)
     }
 
     /// Redundancy-thinned subset as a sorted uint32 numpy array: a greedy
