@@ -12,6 +12,7 @@ pub mod focal_vote;
 pub mod homography_estimation;
 pub(crate) mod polynomial;
 pub mod pose_refine;
+pub mod reconstruction_growth;
 pub mod reprojection;
 pub mod resect_translation;
 pub mod rigid_transform;
@@ -24,6 +25,10 @@ pub mod viewing_angle;
 
 pub use bundle_adjust::{bundle_adjust, BaSchedule, BundleAdjustment, DEFAULT_SCHEDULE};
 pub use pose_refine::{refine_absolute_pose, PoseRefinement};
+pub use reconstruction_growth::{
+    grow_reconstruction, resect_images_batch, BatchResection, GrowOptions, ReconstructionGrowth,
+    ResectOptions,
+};
 pub use reprojection::{inlier_fraction, reprojection_residuals};
 pub use resect_translation::{resect_translation, TranslationResection};
 pub use rigid_transform::RigidTransform;
