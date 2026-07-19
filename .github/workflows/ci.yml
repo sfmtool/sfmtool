@@ -273,7 +273,12 @@ jobs:
         run: pixi run -e test-ci cargo test --workspace --exclude sfm-explorer
 
       - name: Python tests
-        run: pixi run -e test-ci pytest
+        shell: bash
+        run: |
+          # Parallelize across min(4, cpu) xdist workers (portable cpu count via
+          # the env's Python so it works on the Windows runner's bash too).
+          workers=$(pixi run -e test-ci python -c 'import os; print(min(4, os.cpu_count() or 1))')
+          pixi run -e test-ci pytest -n "$workers"
 
       - name: Save Rust target
         # Save only on main: branch scoping means PR-written caches help nobody
