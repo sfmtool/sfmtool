@@ -30,6 +30,8 @@ _EXPECTED_FUNCTIONS = (
     "inlier_fraction",
     "refine_absolute_pose",
     "resect_translation",
+    "grow_reconstruction",
+    "resect_images_batch",
 )
 
 

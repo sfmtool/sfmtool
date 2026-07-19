@@ -16,6 +16,7 @@ pub mod epipolar_estimation;
 pub mod focal_vote;
 pub mod homography_estimation;
 pub mod pose_refine;
+pub mod reconstruction_growth;
 pub mod reprojection;
 pub mod resect_translation;
 pub mod rigid_transform;
@@ -44,5 +45,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     resect_translation::register(m)?;
     rotation_init::register(m)?;
     bundle_adjust::register(m)?;
+    reconstruction_growth::register(m)?;
     Ok(())
 }
