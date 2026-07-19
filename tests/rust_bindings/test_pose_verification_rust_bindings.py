@@ -96,7 +96,9 @@ def _quat_to_mat(q):
     )
 
 
-def _station_scene(seed, n_stations=4, per_station=5, n_pts=400, noise=0.2, vis_cos=0.4):
+def _station_scene(
+    seed, n_stations=4, per_station=5, n_pts=400, noise=0.2, vis_cos=0.4
+):
     rng = np.random.default_rng(seed)
     r_orbit = 10.0
     n_img = n_stations * per_station
@@ -219,9 +221,9 @@ def _repair(sc, **kwargs):
 
 
 def _corrupt_pose(sc, img, angle_deg=8.0):
-    sc["rots"][img] = _rot_from_rotvec([0.0, np.deg2rad(angle_deg), 0.0]) @ sc["rots"][
-        img
-    ]
+    sc["rots"][img] = (
+        _rot_from_rotvec([0.0, np.deg2rad(angle_deg), 0.0]) @ sc["rots"][img]
+    )
     sc["centers"][img] = sc["centers"][img] + np.array([0.5, 0.3, -0.4])
 
 
@@ -348,20 +350,61 @@ def test_verify_validation_errors():
     args = [sc["cluster"], sc["image"], sc["pos"], cam, sc["world"], q, t, idx]
     # Diagonal pair in the substrate arrays.
     with pytest.raises(ValueError):
-        verify_poses(*args, np.array([1], np.uint32), np.array([1], np.uint32),
-                     np.array([9], np.uint32), np.array([1.0]))
+        verify_poses(
+            *args,
+            np.array([1], np.uint32),
+            np.array([1], np.uint32),
+            np.array([9], np.uint32),
+            np.array([1.0]),
+        )
     # Pair arrays not parallel.
     with pytest.raises(ValueError):
         verify_poses(*args, pi[:-1], pj, pc, pd)
     # Observation arrays not parallel.
     with pytest.raises(ValueError):
-        verify_poses(sc["cluster"], sc["image"][:-1], sc["pos"], cam, sc["world"],
-                     q, t, idx, pi, pj, pc, pd)
+        verify_poses(
+            sc["cluster"],
+            sc["image"][:-1],
+            sc["pos"],
+            cam,
+            sc["world"],
+            q,
+            t,
+            idx,
+            pi,
+            pj,
+            pc,
+            pd,
+        )
     # Poses not parallel to posed_indexes.
     with pytest.raises(ValueError):
-        verify_poses(sc["cluster"], sc["image"], sc["pos"], cam, sc["world"],
-                     q[:-1], t, idx, pi, pj, pc, pd)
+        verify_poses(
+            sc["cluster"],
+            sc["image"],
+            sc["pos"],
+            cam,
+            sc["world"],
+            q[:-1],
+            t,
+            idx,
+            pi,
+            pj,
+            pc,
+            pd,
+        )
     # Cluster ids out of range for the points array.
     with pytest.raises(ValueError):
-        verify_poses(sc["cluster"], sc["image"], sc["pos"], cam, sc["world"][:1],
-                     q, t, idx, pi, pj, pc, pd)
+        verify_poses(
+            sc["cluster"],
+            sc["image"],
+            sc["pos"],
+            cam,
+            sc["world"][:1],
+            q,
+            t,
+            idx,
+            pi,
+            pj,
+            pc,
+            pd,
+        )
