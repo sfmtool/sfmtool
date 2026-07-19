@@ -1,12 +1,31 @@
 # Reconstruction Growth
 
-**Status:** Proposed — `grow_reconstruction` and `resect_images_batch`
-(`crates/sfmtool-core/src/geometry/`, bound under
-`sfmtool._sfmtool.geometry`). Depends on absolute-pose estimation and
-refinement (specs/core/absolute-pose.md), batch triangulation
-(specs/core/batch-triangulation-api.md), the staged bundle adjustment
-(specs/core/bundle-adjustment.md), and cluster covisibility
-(specs/core/cluster-covisibility.md).
+**Status:** Implemented — `grow_reconstruction` and `resect_images_batch`
+(`crates/sfmtool-core/src/geometry/reconstruction_growth.rs`, bound as
+`sfmtool._sfmtool.geometry.{grow_reconstruction, resect_images_batch}` in
+`crates/sfmtool-py/src/geometry/reconstruction_growth.rs`). Depends on
+absolute-pose estimation and refinement (specs/core/absolute-pose.md),
+batch triangulation (specs/core/batch-triangulation-api.md), the staged
+bundle adjustment (specs/core/bundle-adjustment.md), and cluster
+covisibility (specs/core/cluster-covisibility.md).
+
+> _Status (2026-07-19): Implemented, with notes against the text below.
+> (1) `resect_images_batch` takes optional `posed_quaternions_wxyz` /
+> `posed_translations` / `posed_indexes` (all-or-none): the
+> neighbour-initialized fallback needs the registered poses, which the
+> binding line below omitted; without them the primitive is P3P-only.
+> (2) A rejected force-accept restores poses, points, and the adjustment
+> set fully (stronger than the reference implementation, which left the
+> verification adjustment's side effects in place). (3) Consensus
+> promotion/quarantine maintains an adjustment-set mask unconditionally.
+> (4) The growth candidate floor is `min_obs` (default 8) throughout.
+> (5) The finishing "full re-triangulation" refills only clusters the
+> finishing adjustment wiped; clusters it retained keep their refined
+> positions. (6) Above the dense-covisibility image bound the kernel
+> degrades gracefully: neighbour ranking falls back to first-posed,
+> anchor and finishing subsets to frontier/all-posed. (7) The first
+> resection after the seed is ungated — the gate's median has no
+> accepted samples yet._
 
 ## Purpose
 
