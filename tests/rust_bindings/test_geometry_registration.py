@@ -32,6 +32,8 @@ _EXPECTED_FUNCTIONS = (
     "resect_translation",
     "grow_reconstruction",
     "resect_images_batch",
+    "verify_poses",
+    "repair_poses",
 )
 
 

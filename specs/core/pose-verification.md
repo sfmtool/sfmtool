@@ -1,9 +1,13 @@
 # Displacement-Neighborhood Pose Verification
 
-**Status:** Proposed — a displacement-neighborhood substrate on
-`ClusterCovisibility` (specs/core/cluster-covisibility.md) plus
-`verify_poses` / `repair_poses` kernels (`crates/sfmtool-core/src/geometry/`),
-bound under `sfmtool._sfmtool.geometry`. Depends on homography estimation
+**Status:** Implemented (2026-07-19) — the `DisplacementNeighborhood`
+substrate on `ClusterCovisibility`
+(`crates/sfmtool-core/src/features/cluster_match/covisibility.rs`; see
+specs/core/cluster-covisibility.md) plus the `verify_poses` / `repair_poses`
+kernels (`crates/sfmtool-core/src/geometry/pose_verification.rs`), bound
+under `sfmtool._sfmtool.geometry` (the kernels take the substrate's compact
+array serialization; the substrate queries and serialization live on the
+`ClusterCovisibility` pyclass). Depends on homography estimation
 (specs/core/focal-vote.md), batch registration
 (specs/core/reconstruction-growth.md), and absolute-pose refinement
 (specs/core/absolute-pose.md).
