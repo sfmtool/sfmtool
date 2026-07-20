@@ -436,6 +436,114 @@ def test_point_at_infinity_shape_validation():
         _run(s, point_at_infinity=np.zeros(3, dtype=bool))
 
 
+# ── Protected observations ──────────────────────────────────────────────
+
+
+def test_protected_absent_none_and_all_false_match_bitwise():
+    # The unprotected kernel must be reproduced bit for bit by an absent
+    # kwarg, an explicit None, and an all-False mask.
+    runs = []
+    for kw_of_n_obs in (
+        lambda n_obs: {},
+        lambda n_obs: {"protected": None},
+        lambda n_obs: {"protected": np.zeros(n_obs, dtype=bool)},
+    ):
+        s = _scene(n_img=8, n_pt=60)
+        s["cam"] = _cam(600.0)
+        runs.append(_run(s, opt_f=True, **kw_of_n_obs(len(s["uv"]))))
+    ref = runs[0]
+    for out in runs[1:]:
+        assert out["focal"] == ref["focal"]
+        npt.assert_array_equal(out["quaternions_wxyz"], ref["quaternions_wxyz"])
+        npt.assert_array_equal(out["translations"], ref["translations"])
+        npt.assert_array_equal(out["points"], ref["points"])
+        npt.assert_array_equal(out["residual_norms"], ref["residual_norms"])
+
+
+def _corrupt_track(s, victim, rng):
+    """Mutually inconsistent beyond-trim offsets on one track. The signs
+    alternate deterministically per observation so no common component exists
+    for the track's free point to absorb (random signs can come out
+    near-consistent and be fitted away); the magnitude stays moderate so the
+    junk's soft-L1 cost — linear in the offset — cannot outweigh sacrificing
+    the clean fit."""
+    rows = np.nonzero(s["obs_point"] == victim)[0]
+    s["uv"] = s["uv"].copy()
+    for j, k in enumerate(rows):
+        sx = 1.0 if j % 2 == 0 else -1.0
+        sy = 1.0 if (j // 2) % 2 == 0 else -1.0
+        s["uv"][k] += np.array([sx, sy]) * rng.uniform(40.0, 60.0, 2)
+    return rows
+
+
+def test_protected_track_survives_trim_unprotected_is_dropped():
+    def build():
+        s = _scene(n_img=6, n_pt=40)
+        victim = int(s["obs_point"][0])
+        _corrupt_track(s, victim, np.random.default_rng(29))
+        return s, victim
+
+    schedule = [(25.0, 1.0)]
+    # Unprotected: the corrupted track is fully trimmed; under a single-round
+    # schedule its point passes through bit-identical.
+    s, victim = build()
+    before = s["points"][victim].copy()
+    out_plain = _run(s, schedule=schedule)
+    npt.assert_array_equal(out_plain["points"][victim], before)
+    # Protected: the corrupted observations stay in the solve and the point
+    # moves; the junk is pulled toward, never fitted.
+    s, victim = build()
+    protected = s["obs_point"] == victim
+    out = _run(s, protected=protected, schedule=schedule)
+    assert np.any(out["points"][victim] != before)
+    # The junk stays an outlier beyond the trim gate (pulled toward, not
+    # fitted) and the clean majority still fits.
+    assert np.max(out["residual_norms"][protected]) > 25.0
+    assert np.median(out["residual_norms"][~protected]) < 1.0
+
+
+def test_protected_composes_with_point_at_infinity():
+    # Both masks apply with no special casing (smoke): a protected corrupted
+    # direction observation stays in the solve and pulls its direction off
+    # the truth that the clean observations pin.
+    def build():
+        s = _scene(n_img=6, n_pt=40)
+        mask = _add_direction_tracks(s, 8, np.random.default_rng(31))
+        victim = np.nonzero(mask)[0][2]
+        k = int(np.nonzero(s["obs_point"] == victim)[0][0])
+        s["uv"] = s["uv"].copy()
+        s["uv"][k] += np.array([120.0, -90.0])
+        return s, mask, victim, k
+
+    schedule = [(25.0, 1.0)]
+    s, mask, victim, _k = build()
+    d_true = s["points"][victim].copy()
+    out_plain = _run(s, point_at_infinity=mask, schedule=schedule)
+    npt.assert_allclose(out_plain["points"][victim], d_true, atol=1e-9)
+
+    s, mask, victim, k = build()
+    protected = np.zeros(len(s["uv"]), dtype=bool)
+    protected[k] = True
+    out = _run(s, point_at_infinity=mask, protected=protected, schedule=schedule)
+    d = out["points"][victim]
+    npt.assert_allclose(np.linalg.norm(d), 1.0, atol=1e-9)
+    ang = np.arccos(min(1.0, float(np.dot(d, d_true))))
+    assert ang > 1e-6, "protected corrupted direction obs left no trace"
+
+
+def test_protected_shape_validation():
+    s = _scene()
+    with pytest.raises(ValueError, match="protected"):
+        _run(s, protected=np.zeros(3, dtype=bool))
+
+
+@pytest.mark.parametrize("bad_scale", [0.0, -1.0, np.inf, np.nan])
+def test_protected_loss_scale_validation(bad_scale):
+    s = _scene()
+    with pytest.raises(ValueError, match="protected_loss_scale"):
+        _run(s, protected_loss_scale=bad_scale)
+
+
 def test_shape_validation():
     s = _scene()
     with pytest.raises(ValueError, match="uv"):
