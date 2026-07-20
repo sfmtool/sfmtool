@@ -100,13 +100,20 @@ def _observation_xy_by_image(
     coordinates.
 
     Returns a mapping ``image_index -> (xy, point_ids)`` where ``xy`` is an
-    ``(K, 2)`` array of pixel positions (read from each image's ``.sift`` file)
-    and ``point_ids`` is the parallel ``(K,)`` array of 3D point ids. Only the
-    observations actually used by the reconstruction are included.
+    ``(K, 2)`` array of pixel positions (read from each image's ``.sift`` file
+    for ``sift_files`` reconstructions, or from the embedded per-observation
+    keypoints for ``embedded_patches`` ones) and ``point_ids`` is the parallel
+    ``(K,)`` array of 3D point ids. Only the observations actually used by the
+    reconstruction are included.
     """
     track_image_indexes = np.asarray(recon.track_image_indexes)
-    track_feature_indexes = np.asarray(recon.track_feature_indexes)
     track_point_indexes = np.asarray(recon.track_point_indexes)
+
+    embedded_xy = None
+    if recon.feature_source == "embedded_patches":
+        embedded_xy = np.asarray(recon.keypoints_xy, dtype=np.float64)
+    else:
+        track_feature_indexes = np.asarray(recon.track_feature_indexes)
 
     image_names = recon.image_names
 
@@ -114,9 +121,13 @@ def _observation_xy_by_image(
     for img_idx in np.unique(track_image_indexes):
         img_idx = int(img_idx)
         mask = track_image_indexes == img_idx
-        feat_idxs = track_feature_indexes[mask]
         point_ids = track_point_indexes[mask]
 
+        if embedded_xy is not None:
+            out[img_idx] = (embedded_xy[mask], point_ids)
+            continue
+
+        feat_idxs = track_feature_indexes[mask]
         image_rel = image_names[img_idx]
         sift_path = get_sift_path_from_recon(recon, image_rel)
         if not sift_path.exists():
