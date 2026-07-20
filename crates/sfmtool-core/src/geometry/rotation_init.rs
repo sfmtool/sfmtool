@@ -48,7 +48,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use nalgebra::{Matrix3, Point3, Rotation3, UnitQuaternion, Vector3};
 
 use crate::camera::CameraModel;
-use crate::geometry::bundle_adjust::{bundle_adjust, DEFAULT_SCHEDULE};
+use crate::geometry::bundle_adjust::{
+    bundle_adjust, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
+};
 use crate::geometry::focal_vote::ortho_cost;
 use crate::geometry::homography_estimation::{estimate_homography, HomographyOptions};
 use crate::geometry::resect_translation::resect_translation;
@@ -821,6 +823,8 @@ pub fn rotation_init(
         &obs_img,
         &obs_pt,
         Some(&far_mask),
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
         false,
         &DEFAULT_SCHEDULE,
         BA_MAX_ITERS,

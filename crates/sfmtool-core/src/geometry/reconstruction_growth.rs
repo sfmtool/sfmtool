@@ -45,7 +45,9 @@ use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 use crate::camera::CameraModel;
 use crate::features::cluster_match::covisibility::ClusterCovisibility;
 use crate::geometry::absolute_pose::{estimate_absolute_pose, AbsolutePoseOptions};
-use crate::geometry::bundle_adjust::{bundle_adjust, BaSchedule, DEFAULT_SCHEDULE};
+use crate::geometry::bundle_adjust::{
+    bundle_adjust, BaSchedule, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
+};
 use crate::geometry::pose_refine::refine_absolute_pose;
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::CameraIntrinsics;
@@ -688,6 +690,8 @@ pub fn grow_reconstruction(
             &obs_img,
             &obs_pt,
             None,
+            None,
+            DEFAULT_PROTECTED_LOSS_SCALE,
             false,
             &GROW_SCHEDULE,
             BA_MAX_ITERS,
@@ -1082,6 +1086,8 @@ pub fn grow_reconstruction(
         &obs_img,
         &obs_pt,
         None,
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
         true,
         &DEFAULT_SCHEDULE,
         BA_MAX_ITERS,

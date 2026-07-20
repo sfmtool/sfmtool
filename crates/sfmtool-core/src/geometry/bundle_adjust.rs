@@ -52,6 +52,10 @@ pub const DEFAULT_SCHEDULE: [BaSchedule; 3] = [
     },
 ];
 
+/// Default widening multiplier on a stage's `loss_scale` for protected
+/// observations (see [`bundle_adjust`]'s `protected`).
+pub const DEFAULT_PROTECTED_LOSS_SCALE: f64 = 3.0;
+
 /// Result of [`bundle_adjust`]. Poses and points are refined in place; this
 /// carries what has no in-place home.
 #[derive(Clone, Debug)]
@@ -220,7 +224,9 @@ struct ObsBlocks {
     pt_j: SMatrix<f64, 2, 3>,
 }
 
-/// Robust cost over the kept observations at a candidate state.
+/// Robust cost over the kept observations at a candidate state. `s2s` is the
+/// per-kept-observation squared loss scale (uniform except where a protected
+/// observation widens it).
 #[allow(clippy::too_many_arguments)]
 fn robust_cost(
     cam: &CameraIntrinsics,
@@ -231,13 +237,20 @@ fn robust_cost(
     kept: &[usize],
     obs_ci: &[usize],
     obs_cp: &[usize],
-    loss_scale: f64,
+    s2s: &[f64],
 ) -> f64 {
-    let s2 = loss_scale * loss_scale;
     kept.iter()
         .enumerate()
         .map(|(kk, &k)| {
-            let c = quats[obs_ci[kk]] * points[obs_cp[kk]] + trans[obs_ci[kk]];
+            let s2 = s2s[kk];
+            let p = points[obs_cp[kk]];
+            // A non-finite point (possible only for protected observations,
+            // which the trim never excludes) is penalized like an
+            // out-of-domain projection.
+            if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
+                return s2 * rho(INVALID_RESIDUAL * INVALID_RESIDUAL / s2);
+            }
+            let c = quats[obs_ci[kk]] * p + trans[obs_ci[kk]];
             match cam.ray_to_pixel([c.x, c.y, c.z]) {
                 Some((u, v)) => {
                     let dx = u - uv[k][0];
@@ -266,6 +279,8 @@ fn solve_lm(
     opt_f: bool,
     loss_scale: f64,
     max_iters: usize,
+    protected: Option<&[bool]>,
+    protected_loss_scale: f64,
 ) -> f64 {
     // Compact the images and points the kept observations touch.
     let mut img_ids: Vec<usize> = kept.iter().map(|&k| obs_img[k] as usize).collect();
@@ -304,11 +319,23 @@ fn solve_lm(
     // Reduced camera system: [f | 6 per image], the focal slot always present
     // (pinned when !opt_f) to keep the indexing uniform.
     let d = 1 + 6 * n_im;
+    // Per-kept-observation squared loss scale: the round's scale everywhere,
+    // widened by `protected_loss_scale` for protected observations.
     let s2 = loss_scale * loss_scale;
+    let s2s: Vec<f64> = kept
+        .iter()
+        .map(|&k| match protected {
+            Some(m) if m[k] => {
+                let s = loss_scale * protected_loss_scale;
+                s * s
+            }
+            _ => s2,
+        })
+        .collect();
     let mut lambda = 1e-3;
     let mut tiny_steps = 0usize;
     let mut cam = cam_at(cam0, f);
-    let mut prev_cost = robust_cost(&cam, &q, &t, &x, uv, kept, &obs_ci, &obs_cp, loss_scale);
+    let mut prev_cost = robust_cost(&cam, &q, &t, &x, uv, kept, &obs_ci, &obs_cp, &s2s);
 
     let analytic = cam.model.supports_pixel_jacobian();
     for _ in 0..max_iters {
@@ -320,12 +347,21 @@ fn solve_lm(
             .map(|(kk, &k)| {
                 let ci = obs_ci[kk];
                 let cp = obs_cp[kk];
+                let s2 = s2s[kk];
                 let rot_pt = q[ci] * x[cp];
                 let p_cam = rot_pt + t[ci];
                 let mut res = Vector2::new(INVALID_RESIDUAL, 0.0);
                 let mut cam_j = SMatrix::<f64, 2, 7>::zeros();
                 let mut pt_j = SMatrix::<f64, 2, 3>::zeros();
-                if let Some(((u, v), jp)) = project_with_jac(&cam, p_cam, analytic) {
+                // A non-finite point (protected observations only — the trim
+                // never excludes them) keeps the penalized residual and zero
+                // Jacobian rows: penalized, never steering.
+                let proj = if x[cp].x.is_finite() && x[cp].y.is_finite() && x[cp].z.is_finite() {
+                    project_with_jac(&cam, p_cam, analytic)
+                } else {
+                    None
+                };
+                if let Some(((u, v), jp)) = proj {
                     res = Vector2::new(u - uv[k][0], v - uv[k][1]);
                     let jp = SMatrix::<f64, 2, 3>::from_rows(&[
                         SMatrix::<f64, 1, 3>::from_row_slice(&jp[0]),
@@ -512,7 +548,7 @@ fn solve_lm(
 
             let cam_cand = cam_at(cam0, f_cand);
             let new_cost = robust_cost(
-                &cam_cand, &q_cand, &t_cand, &x_cand, uv, kept, &obs_ci, &obs_cp, loss_scale,
+                &cam_cand, &q_cand, &t_cand, &x_cand, uv, kept, &obs_ci, &obs_cp, &s2s,
             );
             if new_cost < prev_cost {
                 let rel = (prev_cost - new_cost) / prev_cost.max(1e-300);
@@ -577,6 +613,16 @@ fn solve_lm(
 /// infinity" in `specs/core/bundle-adjustment.md`. An absent or all-`false`
 /// mask takes the finite-only code path untouched.
 ///
+/// `protected` optionally marks per-observation protection (parallel to the
+/// observation arrays): a protected observation is never removed by the
+/// inter-round trim gates — it stays in the solve set every round regardless
+/// of its residual and always counts toward `min_track` survival — and passes
+/// through the robust loss at the wider scale
+/// `protected_loss_scale · loss_scale` (bounded pull, never trimmed nor
+/// dominating). See "Protected observations" in
+/// `specs/core/bundle-adjustment.md`. An absent or all-`false` mask
+/// reproduces the unprotected behavior bit for bit.
+///
 /// `opt_f` releases the shared focal (SIMPLE_PINHOLE only — the binding
 /// rejects other models loudly; the core silently degrades them to a
 /// fixed-focal solve).
@@ -590,12 +636,23 @@ pub fn bundle_adjust(
     obs_img: &[u32],
     obs_pt: &[u32],
     point_at_infinity: Option<&[bool]>,
+    protected: Option<&[bool]>,
+    protected_loss_scale: f64,
     opt_f: bool,
     schedule: &[BaSchedule],
     max_iters: usize,
     min_track: usize,
     min_obs: usize,
 ) -> BundleAdjustment {
+    if let Some(mask) = protected {
+        assert_eq!(
+            mask.len(),
+            obs_img.len(),
+            "protected and observation length mismatch"
+        );
+    }
+    // An all-`false` protection mask is exactly no mask.
+    let protected = protected.filter(|m| m.iter().any(|&b| b));
     if let Some(mask) = point_at_infinity {
         assert_eq!(
             mask.len(),
@@ -604,13 +661,38 @@ pub fn bundle_adjust(
         );
         if mask.iter().any(|&b| b) {
             return bundle_adjust_mixed(
-                cam, quats, trans, points, uv, obs_img, obs_pt, mask, opt_f, schedule, max_iters,
-                min_track, min_obs,
+                cam,
+                quats,
+                trans,
+                points,
+                uv,
+                obs_img,
+                obs_pt,
+                mask,
+                protected,
+                protected_loss_scale,
+                opt_f,
+                schedule,
+                max_iters,
+                min_track,
+                min_obs,
             );
         }
     }
     bundle_adjust_finite(
-        cam, quats, trans, points, uv, obs_img, obs_pt, opt_f, schedule, max_iters, min_track,
+        cam,
+        quats,
+        trans,
+        points,
+        uv,
+        obs_img,
+        obs_pt,
+        protected,
+        protected_loss_scale,
+        opt_f,
+        schedule,
+        max_iters,
+        min_track,
         min_obs,
     )
 }
@@ -627,6 +709,8 @@ fn bundle_adjust_finite(
     uv: &[[f64; 2]],
     obs_img: &[u32],
     obs_pt: &[u32],
+    protected: Option<&[bool]>,
+    protected_loss_scale: f64,
     opt_f: bool,
     schedule: &[BaSchedule],
     max_iters: usize,
@@ -636,6 +720,7 @@ fn bundle_adjust_finite(
     let n_obs = obs_img.len();
     assert_eq!(obs_pt.len(), n_obs, "obs_img and obs_pt length mismatch");
     assert_eq!(uv.len(), n_obs, "uv and obs_img length mismatch");
+    let is_prot = |k: usize| protected.is_some_and(|m| m[k]);
 
     // Focal release is SIMPLE_PINHOLE-only: `cam_at` applies `f` to no other
     // model, so an opt_f linearization elsewhere would model a focal DOF the
@@ -653,10 +738,13 @@ fn bundle_adjust_finite(
         }
         let (norms, depths) =
             residual_norms_depths(&cam_now, quats, trans, points, uv, obs_img, obs_pt);
+        // Protected observations bypass the trim gates entirely: they stay in
+        // the solve set every round regardless of residual or depth.
         let mut keep: Vec<bool> = (0..n_obs)
-            .map(|k| norms[k] < stage.trim_px && depths[k] > 1e-3 * f)
+            .map(|k| is_prot(k) || (norms[k] < stage.trim_px && depths[k] > 1e-3 * f))
             .collect();
-        // Track survival: drop observations of points with < min_track kept.
+        // Track survival: drop observations of points with < min_track kept
+        // (protected observations count as survivors and are never dropped).
         let mut surv = vec![0usize; points.len()];
         for k in 0..n_obs {
             if keep[k] {
@@ -664,7 +752,7 @@ fn bundle_adjust_finite(
             }
         }
         for k in 0..n_obs {
-            keep[k] = keep[k] && surv[obs_pt[k] as usize] >= min_track;
+            keep[k] = keep[k] && (is_prot(k) || surv[obs_pt[k] as usize] >= min_track);
         }
         let kept: Vec<usize> = (0..n_obs).filter(|&k| keep[k]).collect();
         if kept.len() < min_obs {
@@ -687,6 +775,8 @@ fn bundle_adjust_finite(
             opt_f,
             stage.loss_scale,
             max_iters,
+            protected,
+            protected_loss_scale,
         );
     }
 
@@ -854,7 +944,8 @@ fn reestimate_points(
 }
 
 /// Mixed-path robust cost over the kept observations at a candidate state
-/// (`cp_dir` flags direction points by compact index).
+/// (`cp_dir` flags direction points by compact index; `s2s` is the
+/// per-kept-observation squared loss scale as in [`robust_cost`]).
 #[allow(clippy::too_many_arguments)]
 fn robust_cost_mixed(
     cam: &CameraIntrinsics,
@@ -866,13 +957,20 @@ fn robust_cost_mixed(
     kept: &[usize],
     obs_ci: &[usize],
     obs_cp: &[usize],
-    loss_scale: f64,
+    s2s: &[f64],
 ) -> f64 {
-    let s2 = loss_scale * loss_scale;
     kept.iter()
         .enumerate()
         .map(|(kk, &k)| {
-            let rot = quats[obs_ci[kk]] * points[obs_cp[kk]];
+            let s2 = s2s[kk];
+            let p = points[obs_cp[kk]];
+            // A non-finite point (possible only for protected observations,
+            // which the trim never excludes) is penalized like an
+            // out-of-domain projection.
+            if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
+                return s2 * rho(INVALID_RESIDUAL * INVALID_RESIDUAL / s2);
+            }
+            let rot = quats[obs_ci[kk]] * p;
             let c = if cp_dir[obs_cp[kk]] {
                 rot
             } else {
@@ -911,6 +1009,8 @@ fn solve_lm_mixed(
     opt_f: bool,
     loss_scale: f64,
     max_iters: usize,
+    protected: Option<&[bool]>,
+    protected_loss_scale: f64,
 ) -> f64 {
     // Compact the images and points the kept observations touch.
     let mut img_ids: Vec<usize> = kept.iter().map(|&k| obs_img[k] as usize).collect();
@@ -964,13 +1064,24 @@ fn solve_lm_mixed(
     // Reduced camera system: [f | 6 per image], the focal slot always present
     // (pinned when !opt_f) to keep the indexing uniform.
     let d = 1 + 6 * n_im;
+    // Per-kept-observation squared loss scale: the round's scale everywhere,
+    // widened by `protected_loss_scale` for protected observations.
     let s2 = loss_scale * loss_scale;
+    let s2s: Vec<f64> = kept
+        .iter()
+        .map(|&k| match protected {
+            Some(m) if m[k] => {
+                let s = loss_scale * protected_loss_scale;
+                s * s
+            }
+            _ => s2,
+        })
+        .collect();
     let mut lambda = 1e-3;
     let mut tiny_steps = 0usize;
     let mut cam = cam_at(cam0, f);
-    let mut prev_cost = robust_cost_mixed(
-        &cam, &q, &t, &x, &cp_dir, uv, kept, &obs_ci, &obs_cp, loss_scale,
-    );
+    let mut prev_cost =
+        robust_cost_mixed(&cam, &q, &t, &x, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s);
 
     let analytic = cam.model.supports_pixel_jacobian();
     for _ in 0..max_iters {
@@ -995,13 +1106,22 @@ fn solve_lm_mixed(
             .map(|(kk, &k)| {
                 let ci = obs_ci[kk];
                 let cp = obs_cp[kk];
+                let s2 = s2s[kk];
                 let dir = cp_dir[cp];
                 let rot_pt = q[ci] * x[cp];
                 let p_cam = if dir { rot_pt } else { rot_pt + t[ci] };
                 let mut res = Vector2::new(INVALID_RESIDUAL, 0.0);
                 let mut cam_j = SMatrix::<f64, 2, 7>::zeros();
                 let mut pt_j = SMatrix::<f64, 2, 3>::zeros();
-                if let Some(((u, v), jp)) = project_with_jac(&cam, p_cam, analytic) {
+                // A non-finite point (protected observations only — the trim
+                // never excludes them) keeps the penalized residual and zero
+                // Jacobian rows: penalized, never steering.
+                let proj = if x[cp].x.is_finite() && x[cp].y.is_finite() && x[cp].z.is_finite() {
+                    project_with_jac(&cam, p_cam, analytic)
+                } else {
+                    None
+                };
+                if let Some(((u, v), jp)) = proj {
                     res = Vector2::new(u - uv[k][0], v - uv[k][1]);
                     let jp = SMatrix::<f64, 2, 3>::from_rows(&[
                         SMatrix::<f64, 1, 3>::from_row_slice(&jp[0]),
@@ -1236,8 +1356,7 @@ fn solve_lm_mixed(
 
             let cam_cand = cam_at(cam0, f_cand);
             let new_cost = robust_cost_mixed(
-                &cam_cand, &q_cand, &t_cand, &x_cand, &cp_dir, uv, kept, &obs_ci, &obs_cp,
-                loss_scale,
+                &cam_cand, &q_cand, &t_cand, &x_cand, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s,
             );
             if new_cost < prev_cost {
                 let rel = (prev_cost - new_cost) / prev_cost.max(1e-300);
@@ -1295,6 +1414,8 @@ fn bundle_adjust_mixed(
     obs_img: &[u32],
     obs_pt: &[u32],
     is_dir: &[bool],
+    protected: Option<&[bool]>,
+    protected_loss_scale: f64,
     opt_f: bool,
     schedule: &[BaSchedule],
     max_iters: usize,
@@ -1304,6 +1425,7 @@ fn bundle_adjust_mixed(
     let n_obs = obs_img.len();
     assert_eq!(obs_pt.len(), n_obs, "obs_img and obs_pt length mismatch");
     assert_eq!(uv.len(), n_obs, "uv and obs_img length mismatch");
+    let is_prot = |k: usize| protected.is_some_and(|m| m[k]);
 
     // Direction rows are world-frame directions: normalized on input (and
     // kept normalized throughout, so they return normalized too).
@@ -1326,7 +1448,8 @@ fn bundle_adjust_mixed(
             &cam_now, quats, trans, points, is_dir, uv, obs_img, obs_pt,
         );
         // In-front: canonical depth over the 1e-3·f floor for finite
-        // observations; cheirality (R·d)_z < 0 for directions.
+        // observations; cheirality (R·d)_z < 0 for directions. Protected
+        // observations bypass the trim gates entirely.
         let mut keep: Vec<bool> = (0..n_obs)
             .map(|k| {
                 let floor = if is_dir[obs_pt[k] as usize] {
@@ -1334,10 +1457,11 @@ fn bundle_adjust_mixed(
                 } else {
                     1e-3 * f
                 };
-                norms[k] < stage.trim_px && depths[k] > floor
+                is_prot(k) || (norms[k] < stage.trim_px && depths[k] > floor)
             })
             .collect();
-        // Track survival: drop observations of points with < min_track kept.
+        // Track survival: drop observations of points with < min_track kept
+        // (protected observations count as survivors and are never dropped).
         let mut surv = vec![0usize; points.len()];
         for k in 0..n_obs {
             if keep[k] {
@@ -1345,7 +1469,7 @@ fn bundle_adjust_mixed(
             }
         }
         for k in 0..n_obs {
-            keep[k] = keep[k] && surv[obs_pt[k] as usize] >= min_track;
+            keep[k] = keep[k] && (is_prot(k) || surv[obs_pt[k] as usize] >= min_track);
         }
         let kept: Vec<usize> = (0..n_obs).filter(|&k| keep[k]).collect();
         // The degenerate floor counts finite-point survivors only: direction
@@ -1376,6 +1500,8 @@ fn bundle_adjust_mixed(
             opt_f,
             stage.loss_scale,
             max_iters,
+            protected,
+            protected_loss_scale,
         );
     }
 
