@@ -15,6 +15,11 @@ from click.testing import CliRunner
 from sfmtool import RangeExpr
 from sfmtool._commands.compare import _parse_labels
 from sfmtool._compare import compare_reconstructions
+from sfmtool._compare_fragments import (
+    decompose_fragments,
+    print_fragment_decomposition,
+)
+from sfmtool.align.core import ImageMatch
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.geometry import Se3Transform
 from sfmtool.cli import main
@@ -345,6 +350,166 @@ class TestCompareCLI:
         assert result.exit_code == 0, result.output
         assert "Matching images: 17" in result.output
         assert "Scale:" in result.output
+
+
+def _make_fragment_matches(rng, count, transform, name_offset=0):
+    """Synthetic shared-camera matches whose source poses map to the reference
+    through ``transform`` exactly (zero internal error)."""
+    matches = []
+    for k in range(count):
+        source_center = rng.uniform(-1.0, 1.0, size=3)
+        source_quat = _rot_quat_from_euler_angles(rng.uniform(-1.0, 1.0, size=3))
+        target_center = np.asarray(transform @ source_center)
+        # Same orientation-residual convention as the extrinsics comparison:
+        # a zero-error camera satisfies q_target == q_source * R^-1.
+        target_quat = source_quat * transform.rotation.conjugate()
+        idx = name_offset + k
+        matches.append(
+            ImageMatch(
+                image_name=f"frame_{idx:04d}.jpg",
+                source_index=idx,
+                target_index=idx,
+                source_quat=source_quat,
+                source_camera_center=source_center,
+                target_quat=target_quat,
+                target_camera_center=target_center,
+            )
+        )
+    return matches
+
+
+def _make_outlier_matches(rng, count, transform, name_offset):
+    """Frames whose target pose is far from ``transform`` of the source pose."""
+    matches = _make_fragment_matches(rng, count, transform, name_offset=name_offset)
+    for m in matches:
+        m.target_camera_center = m.target_camera_center + rng.uniform(3.0, 6.0, size=3)
+        m.target_quat = m.target_quat * _rot_quat_from_euler_angles([0.0, 0.0, 1.0])
+    return matches
+
+
+class TestFragmentDecomposition:
+    """RANSAC similarity decomposition of shared cameras into rigid fragments."""
+
+    def _transform_a(self):
+        rotation = _rot_quat_from_euler_angles(np.radians([10, -20, 30]))
+        return Se3Transform(rotation=rotation, translation=[1, 2, 3], scale=2.0)
+
+    def _transform_b(self):
+        rotation = _rot_quat_from_euler_angles(np.radians([-40, 15, 5]))
+        return Se3Transform(rotation=rotation, translation=[-4, 0, 2], scale=0.7)
+
+    def test_two_fragments_and_outliers(self):
+        rng = np.random.default_rng(7)
+        t_a, t_b = self._transform_a(), self._transform_b()
+        matches = (
+            _make_fragment_matches(rng, 12, t_a, name_offset=0)
+            + _make_fragment_matches(rng, 6, t_b, name_offset=12)
+            + _make_outlier_matches(rng, 2, t_a, name_offset=18)
+        )
+
+        decomp = decompose_fragments(matches, scene_scale=1.0)
+
+        assert len(decomp.components) == 2
+        assert not decomp.is_single_rigid
+        # Largest consensus first; exact synthetic poses => exact membership.
+        assert len(decomp.components[0].indices) == 12
+        assert len(decomp.components[1].indices) == 6
+        assert set(decomp.components[0].indices) == set(range(12))
+        assert set(decomp.components[1].indices) == set(range(12, 18))
+        assert set(decomp.outlier_indices) == {18, 19}
+
+        # Recovered per-component similarities match the constructions.
+        assert decomp.components[0].transform.scale == pytest.approx(2.0, abs=1e-6)
+        assert decomp.components[1].transform.scale == pytest.approx(0.7, abs=1e-6)
+        assert np.max(decomp.components[0].pos_errors_pct) < 1e-6
+        # arccos near 1.0 amplifies float noise; anything < 1e-3 deg is "exact".
+        assert np.max(decomp.components[0].rot_errors_deg) < 1e-3
+
+        # Outlier errors are measured against component 1 and are large.
+        assert np.min(decomp.outlier_pos_errors_pct) > 100.0
+
+    def test_single_rigid_set(self):
+        rng = np.random.default_rng(3)
+        matches = _make_fragment_matches(rng, 10, self._transform_a())
+        decomp = decompose_fragments(matches, scene_scale=1.0)
+        assert decomp.is_single_rigid
+        assert len(decomp.components[0].indices) == 10
+        assert len(decomp.outlier_indices) == 0
+
+    def test_single_fragment_with_outliers(self):
+        rng = np.random.default_rng(11)
+        t_a = self._transform_a()
+        matches = _make_fragment_matches(rng, 9, t_a) + _make_outlier_matches(
+            rng, 3, t_a, name_offset=9
+        )
+        decomp = decompose_fragments(matches, scene_scale=1.0)
+        assert len(decomp.components) == 1
+        assert not decomp.is_single_rigid
+        assert set(decomp.outlier_indices) == {9, 10, 11}
+
+    def test_min_size_demotes_small_groups_to_outliers(self):
+        rng = np.random.default_rng(5)
+        matches = _make_fragment_matches(
+            rng, 12, self._transform_a()
+        ) + _make_fragment_matches(rng, 3, self._transform_b(), name_offset=12)
+        decomp = decompose_fragments(matches, scene_scale=1.0, min_size=5)
+        assert len(decomp.components) == 1
+        assert set(decomp.outlier_indices) == {12, 13, 14}
+
+    def test_deterministic(self):
+        rng = np.random.default_rng(7)
+        t_a, t_b = self._transform_a(), self._transform_b()
+        matches = _make_fragment_matches(rng, 12, t_a) + _make_fragment_matches(
+            rng, 6, t_b, name_offset=12
+        )
+        first = decompose_fragments(matches, scene_scale=1.0)
+        second = decompose_fragments(matches, scene_scale=1.0)
+        assert [list(c.indices) for c in first.components] == [
+            list(c.indices) for c in second.components
+        ]
+
+    def test_print_reports_components_and_outliers(self, capsys):
+        rng = np.random.default_rng(7)
+        t_a, t_b = self._transform_a(), self._transform_b()
+        matches = (
+            _make_fragment_matches(rng, 12, t_a)
+            + _make_fragment_matches(rng, 6, t_b, name_offset=12)
+            + _make_outlier_matches(rng, 2, t_a, name_offset=18)
+        )
+        decomp = decompose_fragments(matches, scene_scale=1.0)
+        print_fragment_decomposition(
+            decomp,
+            image_names=[m.image_name for m in matches],
+            pos_threshold_pct=3.5,
+            rot_threshold_deg=5.0,
+            min_size=5,
+        )
+        out = capsys.readouterr().out
+        assert "Fragment decomposition (RANSAC similarity, 20 shared cameras)" in out
+        assert "Components: 2, outlier frames: 2" in out
+        assert "Component 1: 12 cameras" in out
+        assert "Component 2: 6 cameras" in out
+        # Inter-component similarity: scale ratio of the two constructions.
+        assert "Vs component 1: scale x0.3500" in out
+        assert "Outlier frames (errors vs component 1):" in out
+        assert "frame_0018.jpg" in out and "frame_0019.jpg" in out
+
+    def test_cli_no_fragment_section_for_identical(self, seoul_bull_workspace):
+        # Back-compat: a clean single-component comparison with no outliers
+        # prints no fragment section unless --fragments is passed.
+        p = str(seoul_bull_workspace)
+        result = CliRunner().invoke(main, ["compare", p, p])
+        assert result.exit_code == 0, result.output
+        assert "Fragment decomposition" not in result.output
+
+    def test_cli_fragments_flag_forces_section(self, seoul_bull_workspace):
+        p = str(seoul_bull_workspace)
+        result = CliRunner().invoke(main, ["compare", p, p, "--fragments"])
+        assert result.exit_code == 0, result.output
+        assert "Fragment decomposition" in result.output
+        assert "Components: 1, outlier frames: 0" in result.output
+        # A single rigid set does not change the conclusion.
+        assert "decompose into" not in result.output
 
 
 class TestCompareCoordinateAndStrips:

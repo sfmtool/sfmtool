@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from .align.core import ImageMatch, estimate_pairwise_alignment
+from ._compare_fragments import decompose_fragments, print_fragment_decomposition
 from ._histogram_utils import print_histogram
 from ._point_correspondence import (
     find_point_correspondences,
@@ -60,6 +61,10 @@ def compare_reconstructions(
     recon2_name: str | None = None,
     by_coordinate: bool | None = None,
     pixel_threshold: float = 2.0,
+    fragments: bool = False,
+    fragment_pos_threshold: float = 3.5,
+    fragment_rot_threshold: float = 5.0,
+    fragment_min_size: int = 5,
     strips_out: str | None = None,
     strips_num: int = 16,
     strips_views: int = 8,
@@ -77,6 +82,13 @@ def compare_reconstructions(
     across feature backends), and ``None`` (the default) auto-selects coordinate
     matching when the two reconstructions use different SIFT files for every
     shared image.
+
+    The shared cameras are additionally decomposed into internally-rigid
+    similarity components (fragments); the section is printed when the
+    decomposition finds more than one component or any outlier frames, or
+    always when ``fragments`` is True. ``fragment_pos_threshold`` (% of the
+    reference scene scale), ``fragment_rot_threshold`` (degrees), and
+    ``fragment_min_size`` control the consensus.
     """
     if recon1_name is None:
         recon1_name = recon1.source_metadata.get("source_path", "recon1")
@@ -114,34 +126,34 @@ def compare_reconstructions(
 
     # Perform alignment
     print("\n[4/6] Performing alignment...")
+    image_matches = []
+    for idx1, idx2 in matches:
+        quat1_wxyz = recon1.quaternions_wxyz[idx1]
+        trans1 = recon1.translations[idx1]
+        quat2_wxyz = recon2.quaternions_wxyz[idx2]
+        trans2 = recon2.translations[idx2]
+
+        quat1 = RotQuaternion.from_wxyz_array(quat1_wxyz)
+        center1 = quat1.camera_center(trans1)
+
+        quat2 = RotQuaternion.from_wxyz_array(quat2_wxyz)
+        center2 = quat2.camera_center(trans2)
+
+        # source = recon2 (target), target = recon1 (reference)
+        image_name = Path(recon1.image_names[idx1]).name
+        match = ImageMatch(
+            image_name=image_name,
+            source_index=idx2,
+            target_index=idx1,
+            source_quat=quat2,
+            source_camera_center=center2,
+            target_quat=quat1,
+            target_camera_center=center1,
+            quality=1.0,
+        )
+        image_matches.append(match)
+
     try:
-        image_matches = []
-        for idx1, idx2 in matches:
-            quat1_wxyz = recon1.quaternions_wxyz[idx1]
-            trans1 = recon1.translations[idx1]
-            quat2_wxyz = recon2.quaternions_wxyz[idx2]
-            trans2 = recon2.translations[idx2]
-
-            quat1 = RotQuaternion.from_wxyz_array(quat1_wxyz)
-            center1 = quat1.camera_center(trans1)
-
-            quat2 = RotQuaternion.from_wxyz_array(quat2_wxyz)
-            center2 = quat2.camera_center(trans2)
-
-            # source = recon2 (target), target = recon1 (reference)
-            image_name = Path(recon1.image_names[idx1]).name
-            match = ImageMatch(
-                image_name=image_name,
-                source_index=idx2,
-                target_index=idx1,
-                source_quat=quat2,
-                source_camera_center=center2,
-                target_quat=quat1,
-                target_camera_center=center1,
-                quality=1.0,
-            )
-            image_matches.append(match)
-
         alignment_result = estimate_pairwise_alignment(
             matches=image_matches,
             confidence_threshold=0.0,
@@ -162,6 +174,29 @@ def compare_reconstructions(
         recon1, recon2, matches, alignment_result, scene_scale=scene_scale
     )
 
+    # Decompose the shared cameras into internally-rigid similarity components.
+    # A single alignment fits the dominant fragment; the decomposition surfaces
+    # misaligned fragments and individually wrong frames it papers over. The
+    # section is printed when it finds anything beyond one clean component (or
+    # always, with `fragments`).
+    fragment_decomposition = None
+    if len(image_matches) >= 2:
+        fragment_decomposition = decompose_fragments(
+            image_matches,
+            scene_scale=scene_scale,
+            pos_threshold_pct=fragment_pos_threshold,
+            rot_threshold_deg=fragment_rot_threshold,
+            min_size=fragment_min_size,
+        )
+        if fragments or not fragment_decomposition.is_single_rigid:
+            print_fragment_decomposition(
+                fragment_decomposition,
+                image_names=[m.image_name for m in image_matches],
+                pos_threshold_pct=fragment_pos_threshold,
+                rot_threshold_deg=fragment_rot_threshold,
+                min_size=fragment_min_size,
+            )
+
     # Compare feature usage
     print("\n[6/7] Comparing feature usage...")
     _compare_feature_usage(recon1, recon2, matches)
@@ -170,9 +205,12 @@ def compare_reconstructions(
     # image uses a different SIFT file, feature-index correspondence is
     # meaningless, so default to matching by 2D keypoint coordinate.
     if by_coordinate is None:
-        resolved_by_coordinate = bool(matches) and all(
-            recon1.sift_content_hashes[i1] != recon2.sift_content_hashes[i2]
-            for i1, i2 in matches
+        hashes1 = recon1.sift_content_hashes
+        hashes2 = recon2.sift_content_hashes
+        resolved_by_coordinate = bool(matches) and (
+            hashes1 is None
+            or hashes2 is None
+            or all(hashes1[i1] != hashes2[i2] for i1, i2 in matches)
         )
     else:
         resolved_by_coordinate = by_coordinate
@@ -304,6 +342,24 @@ def compare_reconstructions(
                 print(
                     f"            (Ref: +{num_ref_total - num_matching}, Target: +{num_target_total - num_matching} additional images)"
                 )
+
+    if (
+        fragment_decomposition is not None
+        and not fragment_decomposition.is_single_rigid
+    ):
+        n_components = len(fragment_decomposition.components)
+        n_outliers = len(fragment_decomposition.outlier_indices)
+        parts = []
+        if n_components != 1:
+            parts.append(f"{n_components} rigid fragment(s)")
+        else:
+            parts.append("1 rigid fragment")
+        if n_outliers:
+            parts.append(f"{n_outliers} outlier frame(s)")
+        print(
+            f"\nNOTE: The shared cameras decompose into {' + '.join(parts)} "
+            "(see fragment decomposition above)."
+        )
 
 
 def _print_reconstruction_summary(recon: SfmrReconstruction, label: str) -> None:
@@ -551,12 +607,26 @@ def _compare_feature_usage(
     """Compare SIFT feature usage for matching images."""
     print(f"\n  Analyzing feature usage for {len(matches)} matching image(s):")
 
+    hashes1 = recon1.sift_content_hashes
+    hashes2 = recon2.sift_content_hashes
+    if hashes1 is None or hashes2 is None:
+        which = []
+        if hashes1 is None:
+            which.append("reference")
+        if hashes2 is None:
+            which.append("target")
+        print(
+            f"    SIFT content hashes unavailable in {' and '.join(which)}; "
+            "skipping feature-usage comparison."
+        )
+        return
+
     same_sift_count = 0
     different_sift_count = 0
 
     for idx1, idx2 in matches:
-        sift_hash1 = recon1.sift_content_hashes[idx1]
-        sift_hash2 = recon2.sift_content_hashes[idx2]
+        sift_hash1 = hashes1[idx1]
+        sift_hash2 = hashes2[idx2]
 
         if sift_hash1 == sift_hash2:
             same_sift_count += 1

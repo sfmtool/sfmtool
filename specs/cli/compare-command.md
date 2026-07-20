@@ -10,6 +10,8 @@ image poses, and feature usage.
 ```bash
 sfm compare <RECONSTRUCTION1> <RECONSTRUCTION2>
              [--by-coordinate | --by-feature-index] [--pixel-threshold PX]
+             [--fragments] [--fragment-pos-threshold PCT]
+             [--fragment-rot-threshold DEG] [--fragment-min-size N]
              [--strips PATH [--strips-* ...]]
 ```
 
@@ -30,9 +32,12 @@ The `--strips*` family renders side-by-side patch-strip montages; see
    their centroid. This makes the metric independent of each reconstruction's arbitrary SfM
    gauge, so a scene reconstructed 100× larger reports the same percentages. Rotation errors
    are in degrees and need no scaling.
-4. **Feature usage** — Compares which features were triangulated in each reconstruction for
-   shared images that use the same `.sift` file.
-5. **3D points** — Puts the two reconstructions' 3D points in correspondence and reports how
+4. **Fragment decomposition** — Decomposes the shared cameras into internally-rigid
+   similarity components; see "Fragment decomposition" below.
+5. **Feature usage** — Compares which features were triangulated in each reconstruction for
+   shared images that use the same `.sift` file. Skipped (with a note) when either
+   reconstruction stores no SIFT content hashes (e.g. an `embedded_patches` reconstruction).
+6. **3D points** — Puts the two reconstructions' 3D points in correspondence and reports how
    many match / are unique to each side, plus the post-alignment distance distribution of
    the matched pairs (also reported relative to scene scale). Correspondences where either
    point is at infinity (homogeneous `w = 0`) are excluded from the distance statistics
@@ -40,9 +45,48 @@ The `--strips*` family renders side-by-side patch-strip montages; see
    relationship conclusion (`IDENTICAL` / `VERY SIMILAR` / `SIGNIFICANT DIFFERENCES`) uses
    scale-relative thresholds.
 
+## Fragment decomposition
+
+A single least-squares similarity fits the dominant rigid subset of the shared cameras and
+hides structural failures: a solve can consist of several internally-consistent **fragments**
+at different scales and orientations, plus individually misplaced frames, while per-image
+medians still look plausible. The decomposition surfaces both.
+
+**Mechanism.** RANSAC over the not-yet-assigned shared cameras, repeated until exhaustion:
+
+1. **Candidates** — every candidate similarity is estimated from a minimal subset of **two
+   posed cameras**: the rotation comes from the camera orientations, the scale from the ratio
+   of the center distances, the translation follows. All pairs are tried when there are few;
+   otherwise a fixed-seed random sample of pairs (decomposition output is deterministic).
+   Pairs with coincident centers (no scale constraint) are skipped.
+2. **Consensus** — a camera supports a candidate when its position error is below
+   `--fragment-pos-threshold` (default 3.5, as % of the reference scene scale — the same
+   normalization the pose comparison uses) **and** its rotation error is below
+   `--fragment-rot-threshold` (default 5 degrees).
+3. **Extraction** — the largest consensus set is refit (a similarity estimated from all its
+   members, re-collecting consensus until stable) and peeled off as the next component.
+   The loop repeats on the remaining cameras until no consensus reaches
+   `--fragment-min-size` (default 5) members.
+4. **Outliers** — cameras left in no component are individual outlier frames.
+
+**Report.** Components are listed largest-first with their camera count, first/last image
+name, and internal position (% of scene scale) and rotation (degrees) error statistics under
+their own transform. Every component after the first also reports its similarity **relative
+to component 1**: the scale ratio, the rotation delta, and the **displacement** — the mean
+distance between where component 1's transform and the component's own transform place its
+cameras (% of scene scale). A raw translation is not reported: about the origin it would be
+dominated by the scale mismatch. Outlier frames are listed by name (worst first) with their
+position and rotation errors under component 1's transform. When the decomposition finds
+more than one component or any outliers, the final conclusion adds a note.
+
+**Visibility.** The section is printed only when the decomposition finds something beyond a
+single all-inclusive component — more than one component, or outlier frames — so a clean
+comparison's output is unchanged. `--fragments` forces the section (including the
+single-component case). The decomposition needs at least two shared cameras.
+
 ## Point correspondence method
 
-The 3D-point comparison (step 5) can correspond points two ways:
+The 3D-point comparison (step 6) can correspond points two ways:
 
 - **By feature index** (`--by-feature-index`) — keys observations on their feature index,
   which requires both reconstructions to reference the **same** `.sift` files (e.g. two solves
@@ -52,10 +96,13 @@ The 3D-point comparison (step 5) can correspond points two ways:
   *mutual nearest 2D keypoint* within `--pixel-threshold` pixels (default 2.0) and votes
   point-to-point. This works **across different SIFT backends** (e.g. COLMAP SIFT vs the
   sfmtool extractor), where the same scene keypoint lands at the same pixel under a different
-  feature index.
+  feature index. Keypoint coordinates are read from each reconstruction's workspace `.sift`
+  files, or from the inline per-observation keypoints for an `embedded_patches`
+  reconstruction (which has no `.sift` files).
 
 The default is **auto**: coordinate matching is used when every shared image uses a different
-SIFT file, otherwise feature-index matching.
+SIFT file (including when either reconstruction stores no SIFT content hashes at all),
+otherwise feature-index matching.
 
 ## Side-by-side patch strips (`--strips`)
 
@@ -125,6 +172,9 @@ sfm compare sfmr/solve_001.sfmr sfmr/solve_002.sfmr
 
 # Compare against ground truth
 sfm compare ground_truth.sfmr sfmr/my_result.sfmr
+
+# Always show the fragment decomposition, with a tighter consensus
+sfm compare ground_truth.sfmr sfmr/my_result.sfmr --fragments --fragment-pos-threshold 2
 
 # Force coordinate matching with a tighter threshold (e.g. comparing a COLMAP-SIFT
 # solve against an sfmtool-SIFT solve of the same images)
