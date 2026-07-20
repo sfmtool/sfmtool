@@ -42,6 +42,38 @@ def _parse_labels(text: str) -> tuple[str, str]:
     help="Max 2D keypoint distance (pixels) for --by-coordinate matching.",
 )
 @click.option(
+    "--fragments",
+    is_flag=True,
+    default=False,
+    help="Always print the fragment decomposition (RANSAC similarity components "
+    "over the shared cameras). Without the flag the section appears only when "
+    "the decomposition finds more than one component or outlier frames.",
+)
+@click.option(
+    "--fragment-pos-threshold",
+    type=click.FloatRange(min=0, min_open=True),
+    default=3.5,
+    show_default=True,
+    help="Fragment consensus: max position error as % of the reference scene "
+    "scale for a camera to join a component.",
+)
+@click.option(
+    "--fragment-rot-threshold",
+    type=click.FloatRange(min=0, min_open=True),
+    default=5.0,
+    show_default=True,
+    help="Fragment consensus: max rotation error in degrees for a camera to "
+    "join a component.",
+)
+@click.option(
+    "--fragment-min-size",
+    type=click.IntRange(min=2),
+    default=5,
+    show_default=True,
+    help="Smallest camera count that still counts as a fragment component; "
+    "smaller consensus sets are reported as individual outlier frames.",
+)
+@click.option(
     "--strips",
     "strips_out",
     type=click.Path(),
@@ -122,6 +154,10 @@ def compare(
     reconstruction2,
     by_coordinate,
     pixel_threshold,
+    fragments,
+    fragment_pos_threshold,
+    fragment_rot_threshold,
+    fragment_min_size,
     strips_out,
     strips_num,
     strips_views,
@@ -137,8 +173,15 @@ def compare(
     - Aligning them and reporting the transformation
     - Comparing camera intrinsics
     - Comparing images and their extrinsics
+    - Decomposing the shared cameras into internally-rigid fragments
     - Comparing feature usage for matching images
     - Comparing corresponding 3D points
+
+    The fragment decomposition detects solves whose cameras form several
+    internally-consistent groups at different scales/orientations (which a
+    single alignment papers over), plus individually misplaced frames. It is
+    printed when it finds anything beyond one clean component; --fragments
+    prints it always.
 
     RECONSTRUCTION1 and RECONSTRUCTION2 must be .sfmr files.
     RECONSTRUCTION1 will be used as the reference for alignment.
@@ -175,6 +218,10 @@ def compare(
             recon2_name=recon2_path.name,
             by_coordinate=by_coordinate,
             pixel_threshold=pixel_threshold,
+            fragments=fragments,
+            fragment_pos_threshold=fragment_pos_threshold,
+            fragment_rot_threshold=fragment_rot_threshold,
+            fragment_min_size=fragment_min_size,
             strips_out=strips_out,
             strips_num=strips_num,
             strips_views=strips_views,
