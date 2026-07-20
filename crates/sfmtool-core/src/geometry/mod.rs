@@ -26,7 +26,9 @@ pub mod transform;
 pub mod viewing_angle;
 
 pub use batch_resection::{resect_images_batch, BatchResection, ResectOptions};
-pub use bundle_adjust::{bundle_adjust, BaSchedule, BundleAdjustment, DEFAULT_SCHEDULE};
+pub use bundle_adjust::{
+    bundle_adjust, BaSchedule, BundleAdjustment, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
+};
 pub use pose_refine::{refine_absolute_pose, PoseRefinement};
 pub use pose_verification::{
     repair_poses, verify_poses, PoseRepair, PoseVerification, RepairOptions, VerifyOptions,

@@ -280,6 +280,92 @@ All other shapes, validation, and outputs are unchanged.
   round 2 as the mean back-rotated ray.
 - **Memory order and binding parity** as for the finite kernel.
 
+## Protected observations
+
+**Status:** Implemented — same locations as the kernel above; an absent or
+all-`false` mask reproduces the unprotected behavior bit for bit.
+
+Appearance-verified observations (e.g. photometric LOO-ZNCC consensus) can
+carry corrective long-range signal on a drifted reconstruction — but they
+are a 1–2% minority whose *large* residuals are exactly what the staged trim
+classifies as outliers, so the unprotected BA silently removes the
+correction and re-converges inside the drift gauge. The `protected` mask
+lets the caller mark observations whose evidential standing exceeds SIFT
+matches so the trim never discards them.
+
+### State and inputs
+
+- A per-observation mask `protected: Option<&[bool]>` (`n_obs`, parallel to
+  the observation arrays) marks protected observations. Absent (binding:
+  `protected=None`) or all-`false` reproduces the unprotected kernel bit
+  for bit.
+- A scale multiplier `protected_loss_scale` (default 3.0; the binding
+  requires it positive and finite) widens the robust loss for protected
+  observations only.
+
+### Semantics
+
+- **Never trimmed.** A protected observation bypasses the inter-round trim
+  gates entirely: it stays in the solve set every round regardless of its
+  residual, depth, or validity (an invalid protected observation — `NaN`
+  point, behind-camera, out-of-domain — contributes the standard penalized
+  `(1e6, 0)` residual with a zero Jacobian row: penalized, never steering).
+- **Counts toward `min_track`.** Protected observations count as trim
+  survivors for their track — they can keep an otherwise-starved track (and
+  its unprotected survivors) in the solve — and are themselves never
+  dropped by the `min_track` gate. They count toward the `min_obs`
+  degenerate-exit floor like any kept observation.
+- **Wider robust scale, bounded pull.** A protected observation passes
+  through the same soft-L1 loss at scale
+  `protected_loss_scale · loss_scale` for the round. Soft-L1's influence
+  saturates (the per-component gradient is bounded by `2·s`), so protected
+  observations pull with bounded influence rather than being either trimmed
+  or dominating a well-supported fit. The widened scale is applied per
+  observation inside the solve (cost and Triggs weighting); nothing else in
+  the LM changes. Note the saturated cost is still *linear* in the residual
+  — protection is vouching, not a safety net: enough mutually inconsistent
+  protected pixels can outweigh the clean majority's fit, so the caller
+  marks only observations whose evidential standing warrants exactly that
+  trade.
+- **Re-estimation.** Protected observations participate in the inter-round
+  retriangulation / direction re-estimation like any retained observation
+  (retriangulation already consumes every supplied observation).
+- **Composable with `point_at_infinity`.** The masks are independent — a
+  protected direction observation is legal — and both simply apply; there
+  is no special casing.
+
+### Binding
+
+`bundle_adjust(..., protected=None, protected_loss_scale=3.0)` — optional
+`(n_obs,)` bool array plus the widening multiplier. All other shapes,
+validation, and outputs are unchanged.
+
+### Testing requirements (additional)
+
+- **Regression**: an all-`false` mask and an absent mask both reproduce the
+  unprotected kernel's output bit for bit — on the finite path and on the
+  mixed (points-at-infinity) path.
+- **Trim survival**: a track corrupted with large mutually inconsistent
+  offsets is fully trimmed when unprotected (its point passes through
+  bit-identical under a single-round schedule) and stays in the solve when
+  protected — including through every round of the multi-round default
+  schedule — while the clean majority still fits and the junk never gets
+  driven to fit (bounded influence).
+- **`min_track` interaction**: protected survivors keep an
+  otherwise-starved track (and its clean member) in the solve.
+- **Gauge correction (load-bearing)**: two internally rigid fragments tied
+  only by a ~2% minority of long-range tracks, the second fragment drifted
+  by a similarity that leaves every local observation self-consistent.
+  Unprotected, the BA trims the long-range observations and is a fixpoint
+  of the drift gauge; protected, the same solve recovers the true relative
+  gauge (similarity-aligned camera-center RMS, asserted with margin, not
+  bitwise). At least three non-collinear shared points are required — two
+  leave a 1-DOF family that fits every observation without fixing the
+  gauge.
+- **Composability**: a protected corrupted direction observation survives
+  the trim and pulls its direction, where the unprotected one is trimmed
+  (smoke).
+
 ## Non-goals
 
 - Per-image or per-observation camera models — one shared

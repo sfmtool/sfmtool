@@ -40,6 +40,17 @@ use crate::geometry::PyCameraIntrinsics;
 ///         whose surviving observations are all directions keeps its
 ///         translation frozen. Absent or all-``False`` reproduces the
 ///         finite-only kernel bit for bit.
+///     protected: Optional (n_obs,) bool mask marking protected
+///         observations. A protected observation is never removed by the
+///         inter-round trim gates — it stays in the solve set every round
+///         regardless of its residual and always counts toward ``min_track``
+///         survival — and passes through the robust loss at the wider scale
+///         ``protected_loss_scale * loss_scale``. Absent or all-``False``
+///         reproduces the unprotected behavior bit for bit. Composable with
+///         ``point_at_infinity``.
+///     protected_loss_scale: Multiplier on each stage's loss scale for
+///         protected observations (default 3.0; must be positive and
+///         finite).
 ///     opt_f: Release the shared focal (SIMPLE_PINHOLE only).
 ///     schedule: [(trim_px, loss_scale), ...] staged rounds
 ///         (default [(50, 5), (12, 2), (4, 1)]).
@@ -64,6 +75,8 @@ use crate::geometry::PyCameraIntrinsics;
     obs_image,
     obs_point,
     point_at_infinity=None,
+    protected=None,
+    protected_loss_scale=3.0,
     opt_f=false,
     schedule=vec![(50.0, 5.0), (12.0, 2.0), (4.0, 1.0)],
     max_iters=60,
@@ -81,6 +94,8 @@ pub fn bundle_adjust<'py>(
     obs_image: PyReadonlyArray1<'py, u32>,
     obs_point: PyReadonlyArray1<'py, u32>,
     point_at_infinity: Option<PyReadonlyArray1<'py, bool>>,
+    protected: Option<PyReadonlyArray1<'py, bool>>,
+    protected_loss_scale: f64,
     opt_f: bool,
     schedule: Vec<(f64, f64)>,
     max_iters: usize,
@@ -132,6 +147,18 @@ pub fn bundle_adjust<'py>(
             ));
         }
     }
+    if let Some(ref mask) = protected {
+        if mask.shape()[0] != uv.shape()[0] {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "protected must have shape (n_obs,)",
+            ));
+        }
+    }
+    if !(protected_loss_scale.is_finite() && protected_loss_scale > 0.0) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "protected_loss_scale must be positive and finite",
+        ));
+    }
     let q_in = to_contiguous!(quaternions_wxyz);
     let t_in = to_contiguous!(translations);
     let p_in = to_contiguous!(points);
@@ -176,6 +203,7 @@ pub fn bundle_adjust<'py>(
 
     let inf_mask: Option<Vec<bool>> =
         point_at_infinity.map(|mask| to_contiguous!(mask).into_owned());
+    let prot_mask: Option<Vec<bool>> = protected.map(|mask| to_contiguous!(mask).into_owned());
 
     let cam = camera.inner.clone();
     let (out, quats, trans, pts) = py.detach(move || {
@@ -188,6 +216,8 @@ pub fn bundle_adjust<'py>(
             &oi,
             &op,
             inf_mask.as_deref(),
+            prot_mask.as_deref(),
+            protected_loss_scale,
             opt_f,
             &stages,
             max_iters,
