@@ -175,10 +175,11 @@ def compare_reconstructions(
     )
 
     # Decompose the shared cameras into internally-rigid similarity components.
-    # A single alignment fits the dominant fragment; the decomposition surfaces
+    # A single alignment fits the largest fragment; the decomposition surfaces
     # misaligned fragments and individually wrong frames it papers over. The
-    # section is printed when it finds anything beyond one clean component (or
-    # always, with `fragments`).
+    # one-line echo verdict always prints (a standard registration check); the
+    # detailed per-component section is printed when the decomposition finds
+    # anything beyond one clean component (or always, with `fragments`).
     fragment_decomposition = None
     if len(image_matches) >= 2:
         fragment_decomposition = decompose_fragments(
@@ -188,6 +189,7 @@ def compare_reconstructions(
             rot_threshold_deg=fragment_rot_threshold,
             min_size=fragment_min_size,
         )
+        print(f"\n  {fragment_decomposition.echo_summary_line()}")
         if fragments or not fragment_decomposition.is_single_rigid:
             print_fragment_decomposition(
                 fragment_decomposition,
