@@ -192,19 +192,10 @@ impl SfmrReconstruction {
         image_indices: &[u32],
         drop_orphaned_points: bool,
     ) -> Result<Self, String> {
-        // Subsetting an embedded_patches reconstruction would have to filter the
-        // parallel keypoints_xy / image_file_hashes too; not supported yet.
-        let ObservationSource::SiftFiles {
-            feature_indexes: self_feature_indexes,
-            feature_tool_hashes: self_feature_tool_hashes,
-            sift_content_hashes: self_sift_content_hashes,
-        } = &self.observations
-        else {
-            return Err(
-                "subset_by_image_indices is not supported for embedded_patches reconstructions"
-                    .into(),
-            );
-        };
+        // Works for both observation sources: the per-observation parallel
+        // column (SiftFiles `feature_indexes` / EmbeddedPatches `keypoints_xy`
+        // rows) is filtered in lockstep with the tracks below, and the per-image
+        // hashes follow the image subset.
         let old_image_count = self.images.len();
         let new_image_count = image_indices.len();
 
@@ -262,14 +253,14 @@ impl SfmrReconstruction {
         // feature_indexes column is filtered in lockstep (point-id remapping
         // below preserves order, so it stays parallel to the final tracks).
         let mut new_tracks: Vec<TrackObservation> = Vec::with_capacity(self.tracks.len());
-        let mut new_feature_indexes: Vec<u32> = Vec::with_capacity(self.tracks.len());
+        let mut kept_obs: Vec<usize> = Vec::with_capacity(self.tracks.len());
         for (i, obs) in self.tracks.iter().enumerate() {
             if let Some(new_img_idx) = old_to_new[obs.image_index as usize] {
                 new_tracks.push(TrackObservation {
                     image_index: new_img_idx,
                     point_index: obs.point_index,
                 });
-                new_feature_indexes.push(self_feature_indexes[i]);
+                kept_obs.push(i);
             }
         }
 
@@ -354,24 +345,58 @@ impl SfmrReconstruction {
 
         let new_observation_offsets = compute_observation_offsets(&new_observation_counts);
 
-        // Rebuild per-image feature→point mapping and max feature indexes.
+        // Rebuild the observation source: the per-observation parallel column is
+        // subset by the kept-observation indices, the per-image hashes by the
+        // image subset. Matches the input variant.
+        let new_observations = match &self.observations {
+            ObservationSource::SiftFiles {
+                feature_indexes,
+                feature_tool_hashes,
+                sift_content_hashes,
+            } => ObservationSource::SiftFiles {
+                feature_indexes: kept_obs.iter().map(|&i| feature_indexes[i]).collect(),
+                feature_tool_hashes: image_indices
+                    .iter()
+                    .map(|&i| feature_tool_hashes[i as usize])
+                    .collect(),
+                sift_content_hashes: image_indices
+                    .iter()
+                    .map(|&i| sift_content_hashes[i as usize])
+                    .collect(),
+            },
+            ObservationSource::EmbeddedPatches {
+                keypoints_xy,
+                image_file_hashes,
+            } => {
+                let mut new_keypoints = ndarray::Array2::<f32>::zeros((kept_obs.len(), 2));
+                for (new_i, &old_i) in kept_obs.iter().enumerate() {
+                    new_keypoints[[new_i, 0]] = keypoints_xy[[old_i, 0]];
+                    new_keypoints[[new_i, 1]] = keypoints_xy[[old_i, 1]];
+                }
+                ObservationSource::EmbeddedPatches {
+                    keypoints_xy: new_keypoints,
+                    image_file_hashes: image_indices
+                        .iter()
+                        .map(|&i| image_file_hashes[i as usize])
+                        .collect(),
+                }
+            }
+        };
+
+        // The feature→point maps are meaningful only for SiftFiles; an
+        // embedded_patches reconstruction leaves them empty.
         let mut new_image_feature_to_point = vec![HashMap::new(); new_image_count];
         let mut new_max_track_feature_index = vec![0u32; new_image_count];
-        for (obs, &feat) in new_tracks.iter().zip(&new_feature_indexes) {
-            let img = obs.image_index as usize;
-            new_image_feature_to_point[img].insert(feat, obs.point_index);
-            new_max_track_feature_index[img] = new_max_track_feature_index[img].max(feat);
+        if let ObservationSource::SiftFiles {
+            feature_indexes, ..
+        } = &new_observations
+        {
+            for (obs, &feat) in new_tracks.iter().zip(feature_indexes) {
+                let img = obs.image_index as usize;
+                new_image_feature_to_point[img].insert(feat, obs.point_index);
+                new_max_track_feature_index[img] = new_max_track_feature_index[img].max(feat);
+            }
         }
-
-        // The per-image hashes follow the image subset.
-        let new_feature_tool_hashes: Vec<[u8; 16]> = image_indices
-            .iter()
-            .map(|&i| self_feature_tool_hashes[i as usize])
-            .collect();
-        let new_sift_content_hashes: Vec<[u8; 16]> = image_indices
-            .iter()
-            .map(|&i| self_sift_content_hashes[i as usize])
-            .collect();
 
         // Filter rig/frame data.
         let new_rig_frame_data = self
@@ -399,11 +424,7 @@ impl SfmrReconstruction {
             patch_v_halfvec_xyz: new_patch_v,
             patch_bitmaps_y_x_rgba: new_patch_bitmaps,
             has_normals: self.has_normals,
-            observations: ObservationSource::SiftFiles {
-                feature_indexes: new_feature_indexes,
-                feature_tool_hashes: new_feature_tool_hashes,
-                sift_content_hashes: new_sift_content_hashes,
-            },
+            observations: new_observations,
             image_feature_to_point: new_image_feature_to_point,
             max_track_feature_index: new_max_track_feature_index,
         })

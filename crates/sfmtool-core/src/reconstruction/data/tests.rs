@@ -404,17 +404,28 @@ fn test_se3_transform_preserves_embedded_columns() {
 }
 
 #[test]
-fn test_subset_by_image_indices_rejects_embedded() {
+fn test_subset_by_image_indices_keeps_embedded() {
     let recon = demo_embedded(4);
-    let all: Vec<u32> = (0..recon.images.len() as u32).collect();
-    // (SfmrReconstruction is not Debug, so match rather than expect_err.)
-    let Err(err) = recon.subset_by_image_indices(&all, true) else {
-        panic!("subset must reject embedded_patches");
-    };
-    assert!(
-        err.contains("embedded_patches"),
-        "unexpected error message: {err}"
-    );
+    let n_obs_before = recon.tracks.len();
+    // Keep a subset of images; embedded_patches is now supported.
+    let sub = recon
+        .subset_by_image_indices(&[0, 2], true)
+        .expect("subset must support embedded_patches");
+    assert_eq!(sub.images.len(), 2);
+    assert_eq!(sub.feature_source(), FEATURE_SOURCE_EMBEDDED_PATCHES);
+    // The inline keypoints stay parallel to the filtered tracks, and every
+    // observation references a kept (remapped) image.
+    let kp = sub
+        .keypoints_xy()
+        .expect("embedded_patches keeps keypoints");
+    assert_eq!(kp.shape()[0], sub.tracks.len());
+    for obs in &sub.tracks {
+        assert!((obs.image_index as usize) < sub.images.len());
+    }
+    // Observations on the two removed images are gone.
+    assert!(sub.tracks.len() < n_obs_before);
+    // The SIFT-only feature→point maps stay empty for embedded_patches.
+    assert!(sub.image_feature_to_point.iter().all(|m| m.is_empty()));
 }
 
 #[test]
