@@ -4,7 +4,7 @@
 """RANSAC similarity decomposition of shared camera poses into rigid fragments.
 
 A single least-squares similarity alignment between two reconstructions fits
-the dominant rigid subset and hides structural failures: solves frequently
+the largest rigid subset and hides structural failures: solves frequently
 consist of several internally-rigid fragments at different scales and
 orientations, plus isolated wrong frames. This module decomposes the shared
 cameras into such fragments by repeatedly running RANSAC over minimal camera
@@ -67,6 +67,48 @@ class FragmentDecomposition:
     def is_single_rigid(self) -> bool:
         """True when every shared camera sits in one component."""
         return len(self.components) == 1 and len(self.outlier_indices) == 0
+
+    @property
+    def largest_fraction(self) -> float:
+        """Share of shared cameras in the largest rigid fragment.  1.0 means a
+        single consistent gauge; below 1.0 means part of the solve is registered
+        under a different similarity than the rest — an echo / duplicated
+        structure (a returned-to viewpoint or weakly-bridged arc glued at the
+        wrong relative pose)."""
+        total = sum(len(c.indices) for c in self.components) + len(self.outlier_indices)
+        if total == 0:
+            return 1.0
+        return max((len(c.indices) for c in self.components), default=0) / total
+
+    @property
+    def echo_offset_pct(self) -> float:
+        """Median misplacement (% of reference scene scale) of the shared cameras
+        NOT in the largest fragment — how far the echo copy sits from where a
+        single gauge would place it.  0.0 for a single rigid fragment.  Secondary
+        components contribute their displacement-vs-largest; individual outliers
+        their position error under the largest transform."""
+        offsets: list[float] = []
+        for component in self.components[1:]:
+            if component.displacement_vs_first_pct is not None:
+                offsets.extend(
+                    [component.displacement_vs_first_pct] * len(component.indices)
+                )
+        offsets.extend(self.outlier_pos_errors_pct.tolist())
+        return float(np.median(offsets)) if offsets else 0.0
+
+    def echo_summary_line(self) -> str:
+        """One-line echo verdict for the default comparison report. A single
+        rigid fragment is one consistent gauge; anything less means part of the
+        solve is registered under a different similarity than the rest — a
+        duplicated/echoed structure."""
+        if self.is_single_rigid:
+            return "Echo: none — a single rigid fragment (one consistent gauge)."
+        return (
+            "Echo: DETECTED — largest fragment holds "
+            f"{100 * self.largest_fraction:.0f}% of cameras; "
+            f"{100 * (1 - self.largest_fraction):.0f}% misregistered at median "
+            f"offset {self.echo_offset_pct:.1f}% of scene scale (duplicated structure)."
+        )
 
 
 def _quat_multiply_single(q: np.ndarray, p: np.ndarray) -> np.ndarray:

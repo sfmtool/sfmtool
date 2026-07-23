@@ -47,7 +47,7 @@ The `--strips*` family renders side-by-side patch-strip montages; see
 
 ## Fragment decomposition
 
-A single least-squares similarity fits the dominant rigid subset of the shared cameras and
+A single least-squares similarity fits the largest rigid subset of the shared cameras and
 hides structural failures: a solve can consist of several internally-consistent **fragments**
 at different scales and orientations, plus individually misplaced frames, while per-image
 medians still look plausible. The decomposition surfaces both.
@@ -79,10 +79,21 @@ dominated by the scale mismatch. Outlier frames are listed by name (worst first)
 position and rotation errors under component 1's transform. When the decomposition finds
 more than one component or any outliers, the final conclusion adds a note.
 
-**Visibility.** The section is printed only when the decomposition finds something beyond a
-single all-inclusive component — more than one component, or outlier frames — so a clean
-comparison's output is unchanged. `--fragments` forces the section (including the
-single-component case). The decomposition needs at least two shared cameras.
+**Echo verdict.** Every comparison prints a one-line echo verdict as a standard registration
+check (whenever there are at least two shared cameras). A single rigid fragment is one
+consistent gauge — reported as no echo. Otherwise it is an **echo**: part of the solve is
+registered under a different similarity than the rest — a duplicated structure, as when a
+capture returns to a viewpoint or a weakly-bridged arc is glued at the wrong relative pose.
+The verdict quantifies it with the **largest fraction** (share of shared cameras in the
+largest fragment) and the **echo offset** (median misplacement of the remaining cameras, % of
+scene scale — secondary components by their displacement-vs-largest, outliers by their
+position error). Both are available programmatically as `FragmentDecomposition.largest_fraction`
+and `.echo_offset_pct`.
+
+**Visibility.** The one-line echo verdict always prints. The detailed per-component/outlier
+section is printed only when the decomposition finds something beyond a single all-inclusive
+component — more than one component, or outlier frames — so a clean comparison's output stays
+compact. `--fragments` forces the detailed section (including the single-component case).
 
 ## Point correspondence method
 

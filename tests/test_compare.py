@@ -428,6 +428,12 @@ class TestFragmentDecomposition:
         # Outlier errors are measured against component 1 and are large.
         assert np.min(decomp.outlier_pos_errors_pct) > 100.0
 
+        # Echo metric: 12 of 20 shared cameras form the largest gauge; the rest
+        # (fragment 2 + outliers) are the echo, offset from where it places them.
+        assert decomp.largest_fraction == pytest.approx(12 / 20)
+        assert decomp.echo_offset_pct > 0.0
+        assert "DETECTED" in decomp.echo_summary_line()
+
     def test_single_rigid_set(self):
         rng = np.random.default_rng(3)
         matches = _make_fragment_matches(rng, 10, self._transform_a())
@@ -435,6 +441,10 @@ class TestFragmentDecomposition:
         assert decomp.is_single_rigid
         assert len(decomp.components[0].indices) == 10
         assert len(decomp.outlier_indices) == 0
+        # A single rigid gauge has no echo.
+        assert decomp.largest_fraction == 1.0
+        assert decomp.echo_offset_pct == 0.0
+        assert "none" in decomp.echo_summary_line()
 
     def test_single_fragment_with_outliers(self):
         rng = np.random.default_rng(11)
