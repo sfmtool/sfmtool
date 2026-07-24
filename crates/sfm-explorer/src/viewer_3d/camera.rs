@@ -238,16 +238,6 @@ impl ViewportCamera {
         self.set_orientation_from_forward(forward);
     }
 
-    /// Sets the orbit target to a specific world-space point.
-    ///
-    /// The camera position stays fixed. Target distance is updated to the
-    /// actual distance from the camera to the new target.
-    pub fn set_target_to_point(&mut self, target: Point3<f64>) {
-        let new_forward = (target - self.camera.position).normalize();
-        self.set_orientation_from_forward(new_forward);
-        self.camera.target_distance = (target - self.camera.position).norm().max(0.1);
-    }
-
     /// Computes the end state for zoom-to-fit without applying it.
     ///
     /// Returns `(position, target_distance)` or `None` if points is empty.
@@ -384,29 +374,6 @@ impl ViewportCamera {
         self.camera.world_to_camera(point)
     }
 
-    /// Projects a 3D point to normalized device coordinates.
-    /// Returns None if the point is behind the camera.
-    pub fn project(&self, point: &Point3<f64>, aspect: f64) -> Option<(f64, f64, f64)> {
-        let view = self.view_matrix();
-        let proj = self.projection_matrix(aspect);
-        let mvp = proj * view;
-
-        let p = Vector4::new(point.x, point.y, point.z, 1.0);
-        let clip = mvp * p;
-
-        // Behind camera check
-        if clip.w <= 0.0 {
-            return None;
-        }
-
-        // Perspective divide to get NDC
-        let ndc_x = clip.x / clip.w;
-        let ndc_y = clip.y / clip.w;
-        let depth = clip.z / clip.w;
-
-        Some((ndc_x, ndc_y, depth))
-    }
-
     /// Projects a line segment to screen coordinates, clipping against the near plane.
     ///
     /// Returns None if the entire line is behind the camera.
@@ -510,25 +477,6 @@ impl ViewportCamera {
         // View space to world space
         self.camera
             .camera_to_world(&Point3::new(view_x, view_y, view_z))
-    }
-
-    /// Projects a 3D point to screen coordinates.
-    /// Returns None if the point is behind the camera or outside the view.
-    pub fn project_to_screen(&self, point: &Point3<f64>, rect: Rect) -> Option<(Pos2, f64)> {
-        let aspect = rect.width() as f64 / rect.height() as f64;
-        let (ndc_x, ndc_y, depth) = self.project(point, aspect)?;
-
-        // Check if in view frustum (with some margin)
-        let frustum_range = -1.5..=1.5;
-        if !frustum_range.contains(&ndc_x) || !frustum_range.contains(&ndc_y) {
-            return None;
-        }
-
-        // Convert NDC to screen coordinates
-        let screen_x = rect.center().x + (ndc_x as f32) * rect.width() * 0.5;
-        let screen_y = rect.center().y - (ndc_y as f32) * rect.height() * 0.5;
-
-        Some((Pos2::new(screen_x, screen_y), depth))
     }
 }
 

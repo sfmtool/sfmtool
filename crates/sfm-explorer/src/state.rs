@@ -3,8 +3,6 @@
 
 //! Shared application state.
 
-#![allow(dead_code)]
-
 use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,

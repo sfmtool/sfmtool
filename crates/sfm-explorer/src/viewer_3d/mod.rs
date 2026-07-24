@@ -6,8 +6,6 @@
 //! Renders point clouds and camera frustums with orbit/pan/zoom camera
 //! navigation, keyboard fly mode, and animated transitions.
 
-#![allow(dead_code)]
-
 mod camera;
 mod input;
 mod overlay;
@@ -100,10 +98,6 @@ pub struct Viewer3D {
     pub view_initialized: bool,
     /// Camera view mode — active when viewing through a selected camera.
     pub camera_view: Option<CameraViewMode>,
-    /// Accumulated scroll deltas for combining X/Y from separate events.
-    /// Windows precision touchpads send X and Y scrolls as separate events,
-    /// so we accumulate them to enable diagonal scrolling.
-    scroll_accum: egui::Vec2,
     /// Last known panel size in physical pixels, used by SceneRenderer
     /// to create offscreen textures at the correct resolution.
     pub panel_size: [u32; 2],
@@ -165,7 +159,6 @@ impl Viewer3D {
             camera: ViewportCamera::default(),
             view_initialized: false,
             camera_view: None,
-            scroll_accum: egui::Vec2::ZERO,
             panel_size: [0, 0],
             hover_pixel: None,
             alt_held: false,

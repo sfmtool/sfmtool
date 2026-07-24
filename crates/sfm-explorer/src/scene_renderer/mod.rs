@@ -10,6 +10,7 @@
 //! 2. EDL post-process pass — applies Eye-Dome Lighting for depth-aware shading
 
 mod auto_point_size;
+mod compass;
 mod distorted_mesh;
 mod gpu_types;
 mod pipelines;

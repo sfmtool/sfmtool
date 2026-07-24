@@ -1,6 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use super::super::compass::{create_compass_edge_instances, create_compass_star_mesh};
 use super::super::gpu_types::*;
 use wgpu::util::DeviceExt;
 

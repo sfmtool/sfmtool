@@ -73,6 +73,9 @@ pub fn read_binary_array<R: Read + Seek, T: bytemuck::Pod>(
             bytes.len()
         )));
     }
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
     // Fast path: when the decompressed buffer is already aligned for `T` (the
     // common case, since the allocator over-aligns sizeable allocations), borrow
     // it and copy once via `to_vec` — exactly what the original code did. Only
