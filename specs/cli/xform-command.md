@@ -176,6 +176,27 @@ well-defined and a high-error point at infinity is removed like any other.
 --filter-by-reprojection-error 2.0
 ```
 
+#### `--filter-by-patch-size <multiplier>`
+
+Removes 3D points whose world-space patch size exceeds `multiplier` times the
+median patch size across the reconstruction. A patch's characteristic world size
+is the geometric mean of its two world half-extents,
+`sqrt(|half_extent[0]| * |half_extent[1]|)`, so under the `feature_size` extent
+policy it tracks the keypoint's SIFT scale and the largest patches are the
+coarsest features. The keep threshold is data-derived per reconstruction —
+`size <= multiplier * median(size)` — so it adapts to each cloud's own scale
+rather than fixing an absolute world size. `multiplier` must be positive;
+a non-positive value is rejected.
+
+This requires an `embedded_patches` reconstruction, since it reads the per-point
+patch frames that carry the world half-extents. A `sift_files` reconstruction
+(which has no patch frames) is rejected with a message directing the user to
+convert first with `sfm embed-patches` or `--to-embedded-patches`.
+
+```bash
+--filter-by-patch-size 3.0
+```
+
 ### Points at Infinity
 
 `--find-points-at-infinity` is *additive*: it appends new points and tracks, so
@@ -468,7 +489,7 @@ which returns a new reconstruction:
 |-----------|---------|-----------|
 | `apply_se3_transform` | `--rotate`, `--translate`, `--scale`, `--scale-by-measurements`, `--align-to`, `--align-to-input` (invoked as `Se3Transform @ recon` from Python) | Applies a similarity to points and camera poses. Finite points get the full rotation+translation+scale; points at infinity and per-point normals are directions, so only the rotation acts (renormalized). Rig sensor translations are scaled; per-point patch `(u, v)` half-vectors rotate and scale with their point (rotation-only at infinity); patch bitmaps are pose-invariant and pass through unchanged. |
 | `subset_by_image_indices` | `--include-range`, `--exclude-range`, `--include-glob`, `--exclude-glob`, `--include-by-distribution` (via `xform/_filter_by_image_range.py`); also `sfm to-colmap-bin --range`, `sfm to-nerfstudio --range`, and `sfm panorama` source subsetting | Keeps the listed images (in order), drops observations of removed images, and prunes rig frames with no surviving image (remapping frame indices). With `drop_orphaned_points=true` (the xform filters' mode), points with zero remaining observations are removed and point IDs remapped contiguously. `sift_files` reconstructions only. |
-| `filter_points_by_mask` | `--remove-isolated`, `--remove-short-tracks`, `--remove-narrow-tracks`, `--remove-large-features` (`xform/_point_filters.py`), `--filter-by-reprojection-error` | Keeps points where the boolean mask is true, filters their observations, and remaps point IDs contiguously. Images, cameras, and rig data are unchanged. Works for both `sift_files` and `embedded_patches` (inline keypoints are filtered in lockstep); per-point patch rows follow their point. |
+| `filter_points_by_mask` | `--remove-isolated`, `--remove-short-tracks`, `--remove-narrow-tracks`, `--remove-large-features` (`xform/_point_filters.py`), `--filter-by-reprojection-error`, `--filter-by-patch-size` | Keeps points where the boolean mask is true, filters their observations, and remaps point IDs contiguously. Images, cameras, and rig data are unchanged. Works for both `sift_files` and `embedded_patches` (inline keypoints are filtered in lockstep); per-point patch rows follow their point. |
 
 A fourth, standalone primitive `reconstruction/filter.rs::filter_tracks_by_point_mask`
 performs the same mask-filter-and-remap on bare track columns (no

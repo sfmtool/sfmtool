@@ -15,6 +15,7 @@ from ._filter_by_image_range import (
     IncludeRangeFilter,
 )
 from ._filter_by_localizability import FilterByLocalizabilityTransform
+from ._filter_by_patch_size import FilterByPatchSizeTransform
 from ._filter_by_reprojection_error import FilterByReprojectionErrorTransform
 from ._find_points_at_infinity import (
     ClassifyPointsAtInfinityTransform,
@@ -52,6 +53,7 @@ __all__ = [
     "RemoveLargeFeaturesFilter",
     "FilterByReprojectionErrorTransform",
     "FilterByLocalizabilityTransform",
+    "FilterByPatchSizeTransform",
     "FindPointsAtInfinityTransform",
     "ClassifyPointsAtInfinityTransform",
     "IncludeRangeFilter",

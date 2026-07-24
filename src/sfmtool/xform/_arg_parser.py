@@ -28,6 +28,7 @@ from . import (
     ExcludeGlobFilter,
     ExcludeRangeFilter,
     FilterByLocalizabilityTransform,
+    FilterByPatchSizeTransform,
     FilterByReprojectionErrorTransform,
     FindPointsAtInfinityTransform,
     IncludeGlobFilter,
@@ -640,6 +641,26 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             except ValueError as e:
                 raise click.UsageError(
                     f"Invalid --filter-by-keypoint-uncertainty parameter '{param}': {e}"
+                )
+
+        elif arg == "--filter-by-patch-size":
+            if i + 1 >= len(args):
+                raise click.UsageError("--filter-by-patch-size requires an argument")
+            i += 1
+            param = args[i]
+
+            try:
+                multiplier = float(param)
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --filter-by-patch-size parameter '{param}': {e}"
+                )
+
+            try:
+                transforms.append(FilterByPatchSizeTransform(multiplier))
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --filter-by-patch-size parameter '{param}': {e}"
                 )
 
         elif arg == "--include-range":

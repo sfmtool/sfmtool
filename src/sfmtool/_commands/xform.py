@@ -147,6 +147,16 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
     ),
 )
 @click.option(
+    "--filter-by-patch-size",
+    multiple=True,
+    help=(
+        "Remove points whose world-space patch size exceeds a multiple of the "
+        "median (e.g. '3.0'). Size is the geometric mean of a patch's two world "
+        "half-extents; the threshold is data-derived per reconstruction. Needs "
+        "an embedded_patches reconstruction."
+    ),
+)
+@click.option(
     "--scale-by-measurements",
     multiple=True,
     help="Scale to physical units using a YAML measurements file with known point-pair distances",
@@ -236,6 +246,7 @@ def xform(ctx, input_path, output_path, **kwargs):
       --remove-isolated factor,spec       Remove isolated points (NN distance filter)
       --filter-by-reprojection-error val  Remove points with reprojection error > threshold
       --filter-by-keypoint-uncertainty val  Remove points with keypoint position uncertainty > threshold (patch-grid px)
+      --filter-by-patch-size MULT         Remove points with world-space patch size > MULT x median
       --include-by-distribution COUNT[,verbose]  Keep COUNT well-distributed cameras/rig frames
 
     \b
@@ -365,7 +376,7 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--include-range, --exclude-range, "
             "--include-glob, --exclude-glob, --remove-short-tracks, --remove-narrow-tracks, "
             "--remove-large-features, --remove-isolated, --filter-by-reprojection-error, "
-            "--filter-by-keypoint-uncertainty, "
+            "--filter-by-keypoint-uncertainty, --filter-by-patch-size, "
             "--include-by-distribution, "
             "--find-points-at-infinity, --classify-points-at-infinity, "
             "--camera-model, --bundle-adjust, --refine-normals, --refine-keypoints, "
