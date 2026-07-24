@@ -24,8 +24,9 @@ It is therefore a **pure in-place modifier** — the keypoint counterpart of
 - The track structure (`track_image_indexes`, `track_point_indexes`,
   `observation_counts`) is byte-identical to the input; no view or point is
   dropped.
-- Only `keypoints_xy` values move (and, with `bitmaps=true`, the per-point
-  patch textures are re-rendered at the refined keypoints).
+- Only `keypoints_xy` values move (and, with `bitmaps` — on by default, the
+  per-point patch textures are re-rendered at the refined keypoints; disable
+  with `bitmaps=false`).
 
 **Precondition:** requires an `embedded_patches` reconstruction and rejects
 `sift_files` with a `UsageError` pointing at `sfm xform --to-embedded-patches`
@@ -60,7 +61,7 @@ runs the binding defaults.
 ```
 --refine-keypoints
 --refine-keypoints max_outer_sweeps=2,sampler=anisotropic
---refine-keypoints bitmaps=true
+--refine-keypoints bitmaps=false
 --to-embedded-patches --refine-keypoints --refine-normals
 ```
 
@@ -83,7 +84,7 @@ exactly, so the CLI re-specifies nothing and the two layers cannot drift.
 | `convergence_px`       | `0.01`          | `refine_keypoints` (per-view stop, patch-grid px) |
 | `max_offset_px`        | `2.0`           | `refine_keypoints` (max per-view drift from the seed, patch-grid px) |
 | `consensus_refresh`    | `per_sweep`     | `refine_keypoints` (`per_sweep`/`per_move`)    |
-| `bitmaps`              | `false`         | render + persist the per-point RGBA patch bitmaps (below) |
+| `bitmaps`              | `true`          | render + persist the per-point RGBA patch bitmaps (below); `bitmaps=false` skips the render |
 
 Unknown keys, malformed `key=value` tokens (no `=`, empty key), duplicate keys,
 or unparseable values raise `click.UsageError`; range/enum validation lives in
@@ -107,15 +108,18 @@ round a near-edge value up to exactly width/height, which the writer's
 `< width` check rejects — failing the whole save. This mirrors the clamp in the
 `embed-patches` pipeline (`src/sfmtool/_embed_patches.py`).
 
-**Persisting the patch bitmaps (`bitmaps`).** With `bitmaps=true` the binding
-additionally fuses each point's RGBA representative texture at the **final**
-refined keypoints and the command scatters them into a
+**Persisting the patch bitmaps (`bitmaps`).** With `bitmaps` (the default) the
+binding additionally fuses each point's RGBA representative texture at the
+**final** refined keypoints and the command scatters them into a
 `(point_count, R, R, 4)` uint8 array (zero rows where the point produced no
 valid cross-view consensus) attached via
 `clone_with_changes(patches=cloud, patch_bitmaps=…)`; the stored frame is
 re-persisted alongside so the bitmaps have a frame to attach to (the frame
-itself is unchanged — keypoints moved, not the surfel). Off by default: it
-costs one extra full-grid source render per view per point.
+itself is unchanged — keypoints moved, not the surfel). On by default so the
+refined reconstruction carries its per-point patch textures and can display them
+without re-rendering; it costs one extra full-grid source render per view per
+point, so a multi-stage pipeline can pass `bitmaps=false` on intermediate stages
+and render once on the finalizing stage.
 
 The transform prints a one-line summary in the established `xform` style over
 the finitely-scored views (a point with fewer than two views has no consensus;

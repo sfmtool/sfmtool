@@ -40,8 +40,9 @@ them.
 > `extent`, `extent_value`, `initial_normals`, and the `save_patches` opt-in —
 > **no longer exist on `--refine-normals`** (it takes none of them). Frame sizing
 > and seeding now belong solely to `--to-embedded-patches` (`extent` /
-> `extent_value` / `normal`); `--refine-normals` reuses that frame. `bitmaps=true`
-> still controls whether the RGBA textures are (re)rendered._
+> `extent_value` / `normal`); `--refine-normals` reuses that frame. `bitmaps`
+> controls whether the RGBA textures are (re)rendered — it defaults **on** so the
+> refined reconstruction is self-contained; `bitmaps=false` skips the render._
 
 ## Why this fits `xform` (and how)
 
@@ -91,7 +92,7 @@ order-free and self-documenting however many knobs are set:
 --refine-normals
 --refine-normals angular_range_deg=25,init_steps=7
 --refine-normals angular_range_deg=25,init_steps=7,sampler=anisotropic,objective=mean
---refine-normals resolution=32,bitmaps=true
+--refine-normals resolution=32,bitmaps=false
 ```
 
 (This differs from the older `xform` mini-DSLs — `--remove-isolated
@@ -123,7 +124,7 @@ CLI re-specifies nothing and the two layers cannot drift.
 | `cache_supersample` | `2.0`           | `refine_normals` (fronto base density, ≥ 1) |
 | `quality`           | `none`          | preset for `cache`/`cache_supersample` (`none`/`coarse`/`fine`) |
 | `confidence`        | `false`         | `refine_normals` (compute + report the Φ-peakedness; see below) |
-| `bitmaps`           | `false`         | render + persist the per-point RGBA patch bitmaps (below) |
+| `bitmaps`           | `true`          | render + persist the per-point RGBA patch bitmaps (below); `bitmaps=false` skips the render |
 
 Unknown keys, malformed `key=value` tokens (no `=`, empty key), or out-of-range
 values raise `click.UsageError`, consistent with the other parsers in
@@ -251,9 +252,9 @@ point's position, and `normalize(u × v)` is the per-point normal scattered
 above). There is no opt-out — the stored frame must stay consistent with the
 rewritten normals.
 
-**Persisting the patch bitmaps (`bitmaps`).** With `bitmaps=true` the command
-additionally renders each refined patch's canonical RGBA texture at the found
-normal and writes the per-point `patch_bitmaps_y_x_rgba` array
+**Persisting the patch bitmaps (`bitmaps`).** With `bitmaps` (the default) the
+command additionally renders each refined patch's canonical RGBA texture at the
+found normal and writes the per-point `patch_bitmaps_y_x_rgba` array
 (`(point_count, R, R, 4)` uint8, `R = resolution`) beside the frame. The binding
 (`PatchCloud.refine_normals(render_bitmaps=True)`) returns the textures already
 scattered to per-3D-point rows (zero rows for points with no refined patch), and
@@ -264,7 +265,10 @@ unweighted mean under `objective=mean`), and the **alpha channel is a per-pixel
 cross-view agreement confidence** — high where the views agree, `0` where no kept
 view covers the pixel (and `0` for a pixel seen by a single view, which carries no
 cross-view evidence). Rendering costs one extra full-grid source render per kept
-view per patch, so it is off by default.
+view per patch. It is on by default so the refined reconstruction carries its
+per-point patch textures and can display them without re-rendering; a multi-stage
+pipeline can pass `bitmaps=false` on intermediate stages to skip the redundant
+render and render once on the finalizing stage.
 
 **Persisting the refined normals (decided).** `.sfmr` *write* used to recompute
 the per-point normals from geometry (the mean-viewing normals; see

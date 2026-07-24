@@ -40,7 +40,7 @@ def test_parse_empty_runs_defaults():
     assert t.convergence_px == 0.01
     assert t.max_offset_px == 2.0
     assert t.consensus_refresh == "per_sweep"
-    assert t.bitmaps is False
+    assert t.bitmaps is True
 
 
 def test_parse_key_value_overrides():
@@ -146,9 +146,11 @@ def test_parse_out_of_range_or_bad_enum_rejected(param):
 
 
 def test_parse_bitmaps():
-    """``bitmaps`` is a recognized boolean key (default False); it controls
-    whether the per-point RGBA patch textures are rendered and persisted."""
-    assert parse_refine_keypoints_params("").bitmaps is False
+    """``bitmaps`` is a recognized boolean key (default True); it controls
+    whether the per-point RGBA patch textures are rendered and persisted. A bare
+    ``--refine-keypoints`` renders them so the output is self-contained;
+    ``bitmaps=false`` opts out."""
+    assert parse_refine_keypoints_params("").bitmaps is True
     assert parse_refine_keypoints_params("bitmaps=true").bitmaps is True
     assert parse_refine_keypoints_params("bitmaps=false").bitmaps is False
     import click
@@ -159,7 +161,7 @@ def test_parse_bitmaps():
 
 def test_constructor_description_mentions_key_settings():
     desc = RefineKeypointsTransform(
-        max_outer_sweeps=2, sampler="anisotropic"
+        max_outer_sweeps=2, sampler="anisotropic", bitmaps=False
     ).description()
     assert "Refine keypoints" in desc
     assert "sweeps=2" in desc
@@ -172,8 +174,13 @@ def test_constructor_description_mentions_key_settings():
 
 
 def _modest_params(**overrides) -> RefineKeypointsTransform:
-    """Cheap solve params: correctness, not quality."""
-    kwargs = dict(resolution=12, max_gn_steps=3)
+    """Cheap solve params: correctness, not quality.
+
+    ``bitmaps`` defaults to ``False`` here so the integration tests that don't
+    care about the textures stay fast and focused; the bitmaps behavior is
+    covered explicitly by ``test_refine_keypoints_bitmaps``.
+    """
+    kwargs = dict(resolution=12, max_gn_steps=3, bitmaps=False)
     kwargs.update(overrides)
     return RefineKeypointsTransform(**kwargs)
 
@@ -255,14 +262,19 @@ def test_refine_keypoints_stay_in_frame(seoul_bull_workspace):
 
 
 def test_refine_keypoints_bitmaps(seoul_bull_workspace):
-    """``bitmaps=true`` attaches a ``(point_count, R, R, 4)`` uint8 texture
-    array; without it none is attached."""
+    """``bitmaps`` defaults on: a refine with ``bitmaps`` left unset attaches a
+    ``(point_count, R, R, 4)`` uint8 texture array (so the output is
+    self-contained); ``bitmaps=false`` opts out and attaches none."""
     recon = _embedded(seoul_bull_workspace)
 
-    plain = _modest_params().apply(recon)
+    # Opt-out: no texture array is attached.
+    plain = _modest_params(bitmaps=False).apply(recon)
     assert plain.patch_bitmaps is None
 
-    out = _modest_params(bitmaps=True).apply(recon)
+    # Default (bitmaps left unset) renders and persists the textures.
+    default_params = RefineKeypointsTransform(resolution=12, max_gn_steps=3)
+    assert default_params.bitmaps is True
+    out = default_params.apply(recon)
     assert out.patches is not None
     bitmaps = out.patch_bitmaps
     assert bitmaps is not None
@@ -306,7 +318,9 @@ def test_cli_refine_keypoints(seoul_bull_workspace):
         str(output_sfmr),
         "--to-embedded-patches",
         "--refine-keypoints",
-        "resolution=12,max_gn_steps=3",
+        # bitmaps=false keeps this tokenization/keypoints test fast (it asserts
+        # on keypoints, not textures).
+        "resolution=12,max_gn_steps=3,bitmaps=false",
     ]
     with patch("sys.argv", ["sfm"] + args):
         result = CliRunner().invoke(main, args)
@@ -366,10 +380,12 @@ def test_cli_refine_keypoints_bare_before_other_option(seoul_bull_workspace):
     assert result.exit_code == 0, result.output
     assert output_sfmr.exists()
 
-    # The bare --refine-keypoints parsed to the documented defaults.
+    # The bare --refine-keypoints parsed to the documented defaults, including
+    # bitmaps rendering on by default.
     assert len(captured) == 1
     t = captured[0]
     assert (t.resolution, t.max_outer_sweeps, t.max_gn_steps) == (24, 1, 10)
+    assert t.bitmaps is True
 
     original = SfmrReconstruction.load(input_sfmr)
     refined = SfmrReconstruction.load(output_sfmr)

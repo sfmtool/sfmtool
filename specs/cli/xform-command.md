@@ -319,9 +319,10 @@ unchanged. Because it is photometric it reads the workspace source images, so
 those must still be present where the reconstruction was created. The refined
 patch cloud (per-point in-plane `u`/`v` half-extent vectors) is always re-written
 beside the normals in the `.sfmr` `points3d/` section (the stored frame stays
-consistent with them); `bitmaps=true` additionally renders the per-point patch
-textures. The optional value is a comma-separated `key=value` string; with no
-value it runs the v1 defaults.
+consistent with them); `bitmaps` (on by default) additionally renders the
+per-point patch textures so the output is self-contained, and `bitmaps=false`
+skips that render. The optional value is a comma-separated `key=value` string;
+with no value it runs the v1 defaults.
 
 See [xform-refine-normals-command.md](xform-refine-normals-command.md) for the
 full parameter list and semantics.
@@ -334,7 +335,7 @@ full parameter list and semantics.
 ```bash
 --refine-normals
 --refine-normals angular_range_deg=25,init_steps=7
---refine-normals bitmaps=true
+--refine-normals bitmaps=false
 --to-embedded-patches --refine-normals
 ```
 
@@ -345,9 +346,10 @@ photometric solve (forward-additive ECC Gauss–Newton against a robust
 cross-view consensus; never worse than the seed). A pure in-place modifier: the
 point count, positions, poses, cameras, normals, and the entire track structure
 are unchanged — only `keypoints_xy` values move. It does **not** re-fit the
-stored patch frames; with `bitmaps=true` it additionally re-renders the
-per-point patch textures at the refined keypoints (re-persisting the unchanged
-frame beside them). Because it is photometric it reads the workspace source
+stored patch frames; with `bitmaps` (on by default) it additionally re-renders
+the per-point patch textures at the refined keypoints (re-persisting the
+unchanged frame beside them) so the output is self-contained, and `bitmaps=false`
+skips that render. Because it is photometric it reads the workspace source
 images, so those must still be present where the reconstruction was created.
 The optional value is a comma-separated `key=value` string; with no value it
 runs the binding defaults.
@@ -362,7 +364,7 @@ the full parameter list and semantics.
 ```bash
 --refine-keypoints
 --refine-keypoints max_outer_sweeps=2,sampler=anisotropic
---refine-keypoints bitmaps=true
+--refine-keypoints bitmaps=false
 --to-embedded-patches --refine-keypoints --refine-normals
 ```
 
@@ -376,8 +378,8 @@ co-register are dropped, points whose kept-view count falls below `min_views`
 rebuilt from the survivors (via the same compaction helper the `embed-patches`
 pipeline uses). Cameras, poses, and each surviving point's 3D geometry are
 unchanged. Stored patch bitmaps are dropped as stale (the frames are kept) —
-re-run `--refine-keypoints bitmaps=true` or `--refine-normals bitmaps=true` to
-regenerate them; there is no `bitmaps` key on this op. Because it is
+re-run `--refine-keypoints` or `--refine-normals` to regenerate them (both
+render bitmaps by default); there is no `bitmaps` key on this op. Because it is
 photometric it reads the workspace source images, so those must still be
 present where the reconstruction was created. The optional value is a
 comma-separated `key=value` string; with no value it runs the binding defaults
