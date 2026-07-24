@@ -109,6 +109,13 @@ drift now affects 2 of 4 copies).
 ## Rust — format crates
 
 **archive_io.rs duplication (carried forward from 2026-06-23 #9, deferred) — current status: unchanged, drift slightly worse**
+> _Status (2026-07-23): Partially done — the empty-bytes guard drift is closed.
+> Added the explicit `if bytes.is_empty() { return Ok(Vec::new()); }` early return
+> to `sift-format` and `camrig-format`'s `read_binary_array`, matching sfmr-format
+> and matches-format; all four are now consistent. Behavior-preserving (the
+> `try_cast_slice` Err fallback already handled empty input correctly via a
+> zero-length alloc — this just makes it explicit and skips that path). The
+> shared `archive-io` helper crate stays deferred per maintainer direction._
 - Location: `sfmr-format/src/archive_io.rs` (163), `sift-format/src/archive_io.rs` (161), `matches-format/src/archive_io.rs` (164), `camrig-format/src/archive_io.rs` (140)
 - Problem: Still 4 separate copies, all with distinct hashes. The `if bytes.is_empty()` early-return guard ahead of the `try_cast_slice` block is present in sfmr-format (line 76) and matches-format, but **missing in sift-format AND camrig-format** — the new camrig-format crate was created without the guard too, so the drift now affects 2 of 4 copies.
 - Proposed fix: (stays deferred per maintainer direction) extract to a shared `archive-io` helper crate; grab the missing empty-bytes guards opportunistically if either crate is touched.
@@ -193,6 +200,15 @@ drift now affects 2 of 4 copies).
 - Risk: low — test-only move; `use super::*;` already present.
 
 **Blanket module-level `#![allow(dead_code)]` masking dead code**
+> _Status (2026-07-23): Done — removed both `#![allow(dead_code)]` lines. The
+> compiler then flagged exactly four genuinely-dead items, all deleted (none were
+> kept-for-API — this is a binary crate, so the `pub` methods have no external
+> consumers): `Viewer3D::scroll_accum` (written once at construction, never read),
+> `ViewportCamera::set_target_to_point`, and the `ViewportCamera::project` /
+> `project_to_screen` pair (used only by each other). The used projection
+> siblings (`project_line_clipped`, `project_to_screen_unchecked`,
+> `projection_matrix`, `world_to_view`) stay. Clean build, zero dead-code
+> warnings, `cargo test -p sfm-explorer` green._
 - Location: `crates/sfm-explorer/src/state.rs` (line 6) and `crates/sfm-explorer/src/viewer_3d/mod.rs` (line 9)
 - Problem: Both files suppress dead-code warnings for the *entire module* rather than per-item. `state.rs` is the shared-state hub and `viewer_3d/mod.rs` covers the whole 3D viewer subtree — blanket suppression means genuinely-unused fields/methods accumulate invisibly (a clean build emits zero dead-code warnings, confirming everything is hidden). Other files in the crate already use targeted per-item `#[allow(dead_code)]` (`image_browser.rs:34`, `point_track_detail.rs:812`, `image_detail/mod.rs:531`), which is the right pattern.
 - Proposed fix: remove the two `#![allow(dead_code)]` lines, then either delete what the compiler flags or move the `#[allow]` onto the individual items legitimately kept-for-API.
@@ -200,6 +216,12 @@ drift now affects 2 of 4 copies).
 - Risk: low — worst case is re-adding a few targeted attributes; may reveal real dead fields to delete.
 
 **Compass geometry generation living in a GPU-types file (minor)**
+> _Status (2026-07-23): Done — moved `create_compass_edge_instances` +
+> `create_compass_star_mesh` and their six geometry constants into a new
+> `scene_renderer/compass.rs`; the `CompassEdgeInstance` bytemuck layout struct
+> stays in `gpu_types.rs`. The sole consumer (`pipelines/target.rs`) now imports
+> the two functions from `compass`. `gpu_types.rs` is back to pure layout +
+> constants + tiny converters (445→326 lines). Pure code motion._
 - Location: `crates/sfm-explorer/src/scene_renderer/gpu_types.rs` (445 lines)
 - Problem: Lines ~12–300 are pure bytemuck layout structs (the file's stated purpose), but `create_compass_edge_instances` (315) and `create_compass_star_mesh` (360) are ~90 lines of procedural *mesh geometry* generation — a different concern (data generation vs data layout).
 - Proposed fix: move the two `create_compass_*` functions to a small `scene_renderer/compass.rs` (or into the target-indicator pipeline module), leaving `gpu_types.rs` as pure layout + tiny converters.
