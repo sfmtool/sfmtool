@@ -193,9 +193,11 @@ def test_constructor_description_mentions_key_settings():
 
 
 def test_parse_bitmaps():
-    """``bitmaps`` is a recognized boolean key (default False); it controls
-    whether the per-point RGBA patch textures are rendered and persisted."""
-    assert parse_refine_normals_params("").bitmaps is False
+    """``bitmaps`` is a recognized boolean key (default True); it controls
+    whether the per-point RGBA patch textures are rendered and persisted. A bare
+    ``--refine-normals`` renders them so the output is self-contained;
+    ``bitmaps=false`` opts out."""
+    assert parse_refine_normals_params("").bitmaps is True
     t = parse_refine_normals_params("bitmaps=true")
     assert t.bitmaps is True
     assert parse_refine_normals_params("bitmaps=false").bitmaps is False
@@ -206,11 +208,18 @@ def test_parse_bitmaps():
 # ── Integration over a real reconstruction ──────────────────────────────────
 
 
-def _modest_params() -> RefineNormalsTransform:
-    """Cheap search params: correctness, not quality (mirrors the core test)."""
-    return RefineNormalsTransform(
-        resolution=12, init_steps=5, refine_levels=2, sampler="bilinear"
+def _modest_params(**overrides) -> RefineNormalsTransform:
+    """Cheap search params: correctness, not quality (mirrors the core test).
+
+    ``bitmaps`` defaults to ``False`` here so the integration tests that don't
+    care about the textures stay fast and focused; the bitmaps behavior is
+    covered explicitly by ``test_refine_normals_bitmaps_default_and_optout``.
+    """
+    kwargs = dict(
+        resolution=12, init_steps=5, refine_levels=2, sampler="bilinear", bitmaps=False
     )
+    kwargs.update(overrides)
+    return RefineNormalsTransform(**kwargs)
 
 
 def _embedded(workspace) -> SfmrReconstruction:
@@ -306,32 +315,31 @@ def test_refine_normals_persists_patch_cloud_round_trips(
     np.testing.assert_allclose(after.normal, normals[pid], atol=1e-5)
 
 
-def test_refine_normals_bitmaps_round_trips(seoul_bull_workspace, tmp_path):
-    """``bitmaps`` attaches per-point RGBA patch textures that survive a
-    save/load round trip and pass ``verify_sfmr``."""
+def test_refine_normals_bitmaps_default_and_optout(seoul_bull_workspace, tmp_path):
+    """``bitmaps`` defaults on: a refine with ``bitmaps`` left unset attaches
+    per-point RGBA patch textures (so the output is self-contained) that survive
+    a save/load round trip and pass ``verify_sfmr``; ``bitmaps=false`` opts out
+    (the frame is still re-persisted, but no textures are rendered)."""
     from sfmtool._sfmtool.io import verify_sfmr
 
     recon = _embedded(seoul_bull_workspace)
+    npoints = len(np.asarray(recon.positions))
 
-    # Without bitmaps, no bitmap array is attached (the frame is still
-    # re-persisted, but no RGBA textures are rendered).
-    plain = _modest_params().apply(recon)
+    # Opt-out: no bitmap array is attached.
+    plain = _modest_params(bitmaps=False).apply(recon)
     assert plain.patch_bitmaps is None
 
-    params = RefineNormalsTransform(
-        resolution=12,
-        init_steps=5,
-        refine_levels=2,
-        sampler="bilinear",
-        bitmaps=True,
+    # Default (bitmaps left unset) renders and persists the textures.
+    default_params = RefineNormalsTransform(
+        resolution=12, init_steps=5, refine_levels=2, sampler="bilinear"
     )
-    out = params.apply(recon)
+    assert default_params.bitmaps is True
+    out = default_params.apply(recon)
 
-    # The frame is always persisted; with bitmaps the textures are too.
+    # The frame is always persisted; by default the textures are too.
     assert out.patches is not None
     bitmaps = out.patch_bitmaps
     assert bitmaps is not None
-    npoints = len(np.asarray(recon.positions))
     assert bitmaps.shape == (npoints, 12, 12, 4)
     assert bitmaps.dtype == np.uint8
     # At least one patch was rendered (non-zero RGBA somewhere).
@@ -381,7 +389,9 @@ def test_cli_refine_normals(seoul_bull_workspace):
         str(output_sfmr),
         "--to-embedded-patches",
         "--refine-normals",
-        "resolution=12,init_steps=5,refine_levels=2",
+        # bitmaps=false keeps this tokenization/normals test fast (it asserts on
+        # normals, not textures).
+        "resolution=12,init_steps=5,refine_levels=2,bitmaps=false",
     ]
     with patch("sys.argv", ["sfm"] + args):
         result = CliRunner().invoke(main, args)
@@ -442,10 +452,12 @@ def test_cli_refine_normals_bare_before_other_option(
     assert result.exit_code == 0, result.output
     assert output_sfmr.exists()
 
-    # The bare --refine-normals parsed to the documented defaults.
+    # The bare --refine-normals parsed to the documented defaults, including
+    # bitmaps rendering on by default.
     assert len(captured) == 1
     t = captured[0]
     assert (t.init_steps, t.refine_levels, t.resolution) == (7, 3, 24)
+    assert t.bitmaps is True
 
     original = SfmrReconstruction.load(input_sfmr)
     refined = SfmrReconstruction.load(output_sfmr)

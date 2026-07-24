@@ -52,8 +52,10 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
     help=(
         "Refine per-point surface normals by photometric cross-view consensus. "
         "Optional comma-separated key=value params (e.g. "
-        "'angular_range_deg=25,init_steps=7'; 'bitmaps=true' also renders the "
-        "per-point patch textures). Requires an embedded_patches reconstruction "
+        "'angular_range_deg=25,init_steps=7'). Renders and persists the "
+        "per-point RGBA patch textures by default so the output is "
+        "self-contained; pass 'bitmaps=false' to skip the render (e.g. on an "
+        "intermediate stage). Requires an embedded_patches reconstruction "
         "(convert first with --to-embedded-patches); reads the workspace source "
         "images, which must still be present where it was created."
     ),
@@ -67,11 +69,13 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
         "Refine per-observation 2D keypoints to sub-pixel by photometric "
         "cross-view alignment (never worse than the seed; the track structure "
         "is unchanged). Optional comma-separated key=value params (e.g. "
-        "'max_outer_sweeps=2,sampler=anisotropic'; 'bitmaps=true' also "
-        "re-renders the per-point patch textures at the refined keypoints). "
-        "Requires an embedded_patches reconstruction (convert first with "
-        "--to-embedded-patches); reads the workspace source images, which must "
-        "still be present where it was created."
+        "'max_outer_sweeps=2,sampler=anisotropic'). Renders and persists the "
+        "per-point RGBA patch textures at the refined keypoints by default so "
+        "the output is self-contained; pass 'bitmaps=false' to skip the render "
+        "(e.g. on an intermediate stage). Requires an embedded_patches "
+        "reconstruction (convert first with --to-embedded-patches); reads the "
+        "workspace source images, which must still be present where it was "
+        "created."
     ),
 )
 @click.option(
@@ -84,7 +88,8 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
         "(congealing). Structural, not in-place: views that don't co-register "
         "are dropped, points falling below min_views are culled, and the track "
         "structure is rebuilt from the survivors; stored patch bitmaps are "
-        "dropped (re-run --refine-keypoints bitmaps=true to regenerate). "
+        "dropped (re-run --refine-keypoints to regenerate them, since it "
+        "renders bitmaps by default). "
         "Optional comma-separated key=value params (e.g. "
         "'search=8,min_views=3'). Requires an embedded_patches reconstruction "
         "(convert first with --to-embedded-patches); reads the workspace "
@@ -144,6 +149,16 @@ from ..xform._arg_parser import auto_output_path, parse_transform_args
         "px) > threshold (e.g., '0.35'). Scores each point's cross-view consensus "
         "patch (patch localizability); grid px transfers across resolutions. Needs "
         "an embedded_patches recon with patch bitmaps."
+    ),
+)
+@click.option(
+    "--filter-by-patch-size",
+    multiple=True,
+    help=(
+        "Remove points whose world-space patch size exceeds a multiple of the "
+        "median (e.g. '3.0'). Size is the geometric mean of a patch's two world "
+        "half-extents; the threshold is data-derived per reconstruction. Needs "
+        "an embedded_patches reconstruction."
     ),
 )
 @click.option(
@@ -236,6 +251,7 @@ def xform(ctx, input_path, output_path, **kwargs):
       --remove-isolated factor,spec       Remove isolated points (NN distance filter)
       --filter-by-reprojection-error val  Remove points with reprojection error > threshold
       --filter-by-keypoint-uncertainty val  Remove points with keypoint position uncertainty > threshold (patch-grid px)
+      --filter-by-patch-size MULT         Remove points with world-space patch size > MULT x median
       --include-by-distribution COUNT[,verbose]  Keep COUNT well-distributed cameras/rig frames
 
     \b
@@ -365,7 +381,7 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--include-range, --exclude-range, "
             "--include-glob, --exclude-glob, --remove-short-tracks, --remove-narrow-tracks, "
             "--remove-large-features, --remove-isolated, --filter-by-reprojection-error, "
-            "--filter-by-keypoint-uncertainty, "
+            "--filter-by-keypoint-uncertainty, --filter-by-patch-size, "
             "--include-by-distribution, "
             "--find-points-at-infinity, --classify-points-at-infinity, "
             "--camera-model, --bundle-adjust, --refine-normals, --refine-keypoints, "

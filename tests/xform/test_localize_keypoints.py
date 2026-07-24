@@ -98,7 +98,7 @@ def test_parse_unknown_key_rejected():
 def test_parse_bitmaps_key_rejected():
     """There is deliberately no ``bitmaps`` key: the localizer renders none and
     the structural rebuild drops stored ones as stale (re-run
-    ``--refine-keypoints bitmaps=true`` to regenerate)."""
+    ``--refine-keypoints`` to regenerate; it renders bitmaps by default)."""
     import click
 
     with pytest.raises(click.UsageError, match="Unknown --localize-keypoints key"):
@@ -283,7 +283,8 @@ def test_localize_keypoints_stay_in_frame(seoul_bull_workspace):
 def test_localize_keypoints_drops_bitmaps(seoul_bull_workspace):
     """The output keeps patch frames but no bitmaps — the localizer renders
     none, and stored ones would be stale after the keypoints move and views
-    drop (re-run --refine-keypoints bitmaps=true to regenerate)."""
+    drop (re-run --refine-keypoints to regenerate; it renders bitmaps by
+    default)."""
     from sfmtool.xform import RefineKeypointsTransform
 
     recon = _embedded(seoul_bull_workspace)

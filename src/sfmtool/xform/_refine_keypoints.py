@@ -54,8 +54,11 @@ class RefineKeypointsTransform:
     def __init__(
         self,
         *,
-        # whether to render and persist the per-point RGBA patch bitmaps
-        bitmaps: bool = False,
+        # whether to render and persist the per-point RGBA patch bitmaps.
+        # Defaults on so a refined reconstruction is self-contained (carries its
+        # per-point patch textures and can display them without re-rendering);
+        # pass ``bitmaps=false`` on intermediate stages to skip the render.
+        bitmaps: bool = True,
         # forwarded to PatchCloud.refine_keypoints
         resolution: int = 24,
         window: str = "gaussian_disk",

@@ -176,6 +176,27 @@ well-defined and a high-error point at infinity is removed like any other.
 --filter-by-reprojection-error 2.0
 ```
 
+#### `--filter-by-patch-size <multiplier>`
+
+Removes 3D points whose world-space patch size exceeds `multiplier` times the
+median patch size across the reconstruction. A patch's characteristic world size
+is the geometric mean of its two world half-extents,
+`sqrt(|half_extent[0]| * |half_extent[1]|)`, so under the `feature_size` extent
+policy it tracks the keypoint's SIFT scale and the largest patches are the
+coarsest features. The keep threshold is data-derived per reconstruction —
+`size <= multiplier * median(size)` — so it adapts to each cloud's own scale
+rather than fixing an absolute world size. `multiplier` must be positive;
+a non-positive value is rejected.
+
+This requires an `embedded_patches` reconstruction, since it reads the per-point
+patch frames that carry the world half-extents. A `sift_files` reconstruction
+(which has no patch frames) is rejected with a message directing the user to
+convert first with `sfm embed-patches` or `--to-embedded-patches`.
+
+```bash
+--filter-by-patch-size 3.0
+```
+
 ### Points at Infinity
 
 `--find-points-at-infinity` is *additive*: it appends new points and tracks, so
@@ -298,9 +319,10 @@ unchanged. Because it is photometric it reads the workspace source images, so
 those must still be present where the reconstruction was created. The refined
 patch cloud (per-point in-plane `u`/`v` half-extent vectors) is always re-written
 beside the normals in the `.sfmr` `points3d/` section (the stored frame stays
-consistent with them); `bitmaps=true` additionally renders the per-point patch
-textures. The optional value is a comma-separated `key=value` string; with no
-value it runs the v1 defaults.
+consistent with them); `bitmaps` (on by default) additionally renders the
+per-point patch textures so the output is self-contained, and `bitmaps=false`
+skips that render. The optional value is a comma-separated `key=value` string;
+with no value it runs the v1 defaults.
 
 See [xform-refine-normals-command.md](xform-refine-normals-command.md) for the
 full parameter list and semantics.
@@ -313,7 +335,7 @@ full parameter list and semantics.
 ```bash
 --refine-normals
 --refine-normals angular_range_deg=25,init_steps=7
---refine-normals bitmaps=true
+--refine-normals bitmaps=false
 --to-embedded-patches --refine-normals
 ```
 
@@ -324,9 +346,10 @@ photometric solve (forward-additive ECC Gauss–Newton against a robust
 cross-view consensus; never worse than the seed). A pure in-place modifier: the
 point count, positions, poses, cameras, normals, and the entire track structure
 are unchanged — only `keypoints_xy` values move. It does **not** re-fit the
-stored patch frames; with `bitmaps=true` it additionally re-renders the
-per-point patch textures at the refined keypoints (re-persisting the unchanged
-frame beside them). Because it is photometric it reads the workspace source
+stored patch frames; with `bitmaps` (on by default) it additionally re-renders
+the per-point patch textures at the refined keypoints (re-persisting the
+unchanged frame beside them) so the output is self-contained, and `bitmaps=false`
+skips that render. Because it is photometric it reads the workspace source
 images, so those must still be present where the reconstruction was created.
 The optional value is a comma-separated `key=value` string; with no value it
 runs the binding defaults.
@@ -341,7 +364,7 @@ the full parameter list and semantics.
 ```bash
 --refine-keypoints
 --refine-keypoints max_outer_sweeps=2,sampler=anisotropic
---refine-keypoints bitmaps=true
+--refine-keypoints bitmaps=false
 --to-embedded-patches --refine-keypoints --refine-normals
 ```
 
@@ -355,8 +378,8 @@ co-register are dropped, points whose kept-view count falls below `min_views`
 rebuilt from the survivors (via the same compaction helper the `embed-patches`
 pipeline uses). Cameras, poses, and each surviving point's 3D geometry are
 unchanged. Stored patch bitmaps are dropped as stale (the frames are kept) —
-re-run `--refine-keypoints bitmaps=true` or `--refine-normals bitmaps=true` to
-regenerate them; there is no `bitmaps` key on this op. Because it is
+re-run `--refine-keypoints` or `--refine-normals` to regenerate them (both
+render bitmaps by default); there is no `bitmaps` key on this op. Because it is
 photometric it reads the workspace source images, so those must still be
 present where the reconstruction was created. The optional value is a
 comma-separated `key=value` string; with no value it runs the binding defaults
@@ -468,7 +491,7 @@ which returns a new reconstruction:
 |-----------|---------|-----------|
 | `apply_se3_transform` | `--rotate`, `--translate`, `--scale`, `--scale-by-measurements`, `--align-to`, `--align-to-input` (invoked as `Se3Transform @ recon` from Python) | Applies a similarity to points and camera poses. Finite points get the full rotation+translation+scale; points at infinity and per-point normals are directions, so only the rotation acts (renormalized). Rig sensor translations are scaled; per-point patch `(u, v)` half-vectors rotate and scale with their point (rotation-only at infinity); patch bitmaps are pose-invariant and pass through unchanged. |
 | `subset_by_image_indices` | `--include-range`, `--exclude-range`, `--include-glob`, `--exclude-glob`, `--include-by-distribution` (via `xform/_filter_by_image_range.py`); also `sfm to-colmap-bin --range`, `sfm to-nerfstudio --range`, and `sfm panorama` source subsetting | Keeps the listed images (in order), drops observations of removed images, and prunes rig frames with no surviving image (remapping frame indices). With `drop_orphaned_points=true` (the xform filters' mode), points with zero remaining observations are removed and point IDs remapped contiguously. `sift_files` reconstructions only. |
-| `filter_points_by_mask` | `--remove-isolated`, `--remove-short-tracks`, `--remove-narrow-tracks`, `--remove-large-features` (`xform/_point_filters.py`), `--filter-by-reprojection-error` | Keeps points where the boolean mask is true, filters their observations, and remaps point IDs contiguously. Images, cameras, and rig data are unchanged. Works for both `sift_files` and `embedded_patches` (inline keypoints are filtered in lockstep); per-point patch rows follow their point. |
+| `filter_points_by_mask` | `--remove-isolated`, `--remove-short-tracks`, `--remove-narrow-tracks`, `--remove-large-features` (`xform/_point_filters.py`), `--filter-by-reprojection-error`, `--filter-by-patch-size` | Keeps points where the boolean mask is true, filters their observations, and remaps point IDs contiguously. Images, cameras, and rig data are unchanged. Works for both `sift_files` and `embedded_patches` (inline keypoints are filtered in lockstep); per-point patch rows follow their point. |
 
 A fourth, standalone primitive `reconstruction/filter.rs::filter_tracks_by_point_mask`
 performs the same mask-filter-and-remap on bare track columns (no

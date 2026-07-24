@@ -28,6 +28,7 @@ from . import (
     ExcludeGlobFilter,
     ExcludeRangeFilter,
     FilterByLocalizabilityTransform,
+    FilterByPatchSizeTransform,
     FilterByReprojectionErrorTransform,
     FindPointsAtInfinityTransform,
     IncludeGlobFilter,
@@ -242,8 +243,8 @@ def parse_refine_keypoints_params(param: str) -> RefineKeypointsTransform:
 # LocalizeKeypointsTransform constructor owns range/enum validation. Keys mirror
 # the PatchCloud.localize_keypoints binding parameters, plus the compaction cull
 # `min_views`. (There is no `bitmaps` key: the localizer renders none, and the
-# structural rebuild drops any stored ones as stale — re-run
-# `--refine-keypoints bitmaps=true` afterward to regenerate them.)
+# structural rebuild drops any stored ones as stale — run `--refine-keypoints`
+# afterward to regenerate them, since that op renders bitmaps by default.)
 _LOCALIZE_KEYPOINTS_KEYS: dict[str, Callable[[str], object]] = {
     "min_views": int,
     "max_iters": int,
@@ -640,6 +641,26 @@ def parse_transform_args(args: list[str], max_features: int | None = None) -> li
             except ValueError as e:
                 raise click.UsageError(
                     f"Invalid --filter-by-keypoint-uncertainty parameter '{param}': {e}"
+                )
+
+        elif arg == "--filter-by-patch-size":
+            if i + 1 >= len(args):
+                raise click.UsageError("--filter-by-patch-size requires an argument")
+            i += 1
+            param = args[i]
+
+            try:
+                multiplier = float(param)
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --filter-by-patch-size parameter '{param}': {e}"
+                )
+
+            try:
+                transforms.append(FilterByPatchSizeTransform(multiplier))
+            except ValueError as e:
+                raise click.UsageError(
+                    f"Invalid --filter-by-patch-size parameter '{param}': {e}"
                 )
 
         elif arg == "--include-range":
