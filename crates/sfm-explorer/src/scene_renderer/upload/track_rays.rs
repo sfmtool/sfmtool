@@ -27,17 +27,123 @@ fn camera_cloud_extent(recon: &SfmrReconstruction) -> f64 {
     (hi - lo).norm()
 }
 
+/// Build the observation-ray geometry for `point_idx`.
+///
+/// Each ray goes from the camera center along the true observation direction
+/// (unprojected from the SIFT feature position through camera intrinsics) to
+/// the nearest point on the ray to the 3D point. The gap between the ray
+/// endpoint and the 3D point visualizes reprojection error in 3D space.
+///
+/// `sift_cache` is the shared SIFT position cache from `AppState`. Feature
+/// positions are looked up from this cache (the caller must ensure that
+/// relevant images have been cached via `ensure_sift_cached` before calling).
+///
+/// Split out from the upload so the geometry is assertable without a GPU
+/// buffer readback — the edges land in a VERTEX-usage buffer, which is
+/// write-only from the CPU side.
+pub(super) fn track_ray_edges(
+    recon: &SfmrReconstruction,
+    point_idx: usize,
+    sift_cache: &std::collections::HashMap<usize, crate::state::CachedSiftFeatures>,
+) -> Vec<EdgeInstance> {
+    let point = &recon.points[point_idx];
+    let point_pos = point.position;
+    let at_infinity = point.is_at_infinity();
+
+    // A point at infinity has no finite location — its stored position is a
+    // unit direction at the origin, which would project onto every forward
+    // ray at t < 0 and collapse to a zero-length (invisible) ray. Instead,
+    // shoot each ray outward along its own bearing to a fixed, scene-scaled
+    // length (a multiple of the camera-cloud extent) so the bundle is
+    // visible heading off toward infinity.
+    let infinity_ray_length = if at_infinity {
+        INFINITY_RAY_SCENE_MULTIPLE * camera_cloud_extent(recon)
+    } else {
+        0.0
+    };
+
+    // The observation keypoint lives in one of two places: SIFT feature
+    // positions read from `.sift` companions (`sift_files`, indexed through
+    // `feature_indexes` into the shared cache) or keypoints stored inline in
+    // the reconstruction (`embedded_patches`). Both are photometrically
+    // placed and need not point exactly at the 3D point, so the ray is
+    // unprojected from whichever the reconstruction carries.
+    let feature_indexes = recon.feature_indexes();
+    let keypoints_xy = recon.keypoints_xy();
+    let obs_start = recon.observation_offsets[point_idx];
+    let observations = recon.observations_for_point(point_idx);
+    let edges: Vec<EdgeInstance> = observations
+        .iter()
+        .enumerate()
+        .filter_map(|(k, obs)| {
+            let image = &recon.images[obs.image_index as usize];
+            let camera = &recon.cameras[image.camera_index as usize];
+            let center = image.camera_center();
+            let endpoint_a = [center.x as f32, center.y as f32, center.z as f32];
+
+            // The observed keypoint pixel for this observation, from the
+            // SIFT feature or the inline embedded keypoint. Skip the
+            // observation when neither source yields one (e.g. a missing or
+            // truncated `.sift` file) rather than drawing a misleading ray.
+            let obs_pixel: [f64; 2] = if let Some(fis) = feature_indexes {
+                let fi = fis[obs_start + k] as usize;
+                let cached = sift_cache.get(&(obs.image_index as usize))?;
+                let xy = cached.positions_xy.get(fi)?;
+                [xy[0] as f64, xy[1] as f64]
+            } else {
+                let kxy = keypoints_xy?;
+                let row = obs_start + k;
+                [kxy[[row, 0]] as f64, kxy[[row, 1]] as f64]
+            };
+
+            // Unproject the keypoint to a camera-local unit ray, then rotate
+            // to world space: d_world = R^T * d_cam.
+            let d_cam = camera.pixel_to_ray(obs_pixel[0], obs_pixel[1]);
+            let r_flat = image.camera_to_world_rotation_flat();
+            let d_world = [
+                r_flat[0] * d_cam[0] + r_flat[1] * d_cam[1] + r_flat[2] * d_cam[2],
+                r_flat[3] * d_cam[0] + r_flat[4] * d_cam[1] + r_flat[5] * d_cam[2],
+                r_flat[6] * d_cam[0] + r_flat[7] * d_cam[1] + r_flat[8] * d_cam[2],
+            ];
+
+            let endpoint_b = if at_infinity {
+                // Point at infinity: shoot the ray outward along the
+                // observed bearing (a point at infinity has no parallax).
+                [
+                    (center.x + infinity_ray_length * d_world[0]) as f32,
+                    (center.y + infinity_ray_length * d_world[1]) as f32,
+                    (center.z + infinity_ray_length * d_world[2]) as f32,
+                ]
+            } else {
+                // Finite point: terminate at the nearest point on the
+                // observed ray (so reprojection error shows),
+                // t = dot(P - C, d_world) clamped to the forward direction.
+                let cp = [
+                    point_pos.x - center.x,
+                    point_pos.y - center.y,
+                    point_pos.z - center.z,
+                ];
+                let t = (cp[0] * d_world[0] + cp[1] * d_world[1] + cp[2] * d_world[2]).max(0.0);
+                [
+                    (center.x + t * d_world[0]) as f32,
+                    (center.y + t * d_world[1]) as f32,
+                    (center.z + t * d_world[2]) as f32,
+                ]
+            };
+
+            Some(EdgeInstance {
+                endpoint_a,
+                endpoint_b,
+            })
+        })
+        .collect();
+    edges
+}
+
 impl SceneRenderer {
     /// Upload track ray edge geometry for the selected point's observations.
     ///
-    /// Each ray goes from the camera center along the true observation direction
-    /// (unprojected from the SIFT feature position through camera intrinsics) to
-    /// the nearest point on the ray to the 3D point. The gap between the ray
-    /// endpoint and the 3D point visualizes reprojection error in 3D space.
-    ///
-    /// `sift_cache` is the shared SIFT position cache from `AppState`. Feature
-    /// positions are looked up from this cache (the caller must ensure that
-    /// relevant images have been cached via `ensure_sift_cached` before calling).
+    /// See [`track_ray_edges`] for how each ray is built.
     pub fn upload_track_rays(
         &mut self,
         device: &wgpu::Device,
@@ -45,97 +151,7 @@ impl SceneRenderer {
         point_idx: usize,
         sift_cache: &std::collections::HashMap<usize, crate::state::CachedSiftFeatures>,
     ) {
-        let point = &recon.points[point_idx];
-        let point_pos = point.position;
-        let at_infinity = point.is_at_infinity();
-
-        // A point at infinity has no finite location — its stored position is a
-        // unit direction at the origin, which would project onto every forward
-        // ray at t < 0 and collapse to a zero-length (invisible) ray. Instead,
-        // shoot each ray outward along its own bearing to a fixed, scene-scaled
-        // length (a multiple of the camera-cloud extent) so the bundle is
-        // visible heading off toward infinity.
-        let infinity_ray_length = if at_infinity {
-            INFINITY_RAY_SCENE_MULTIPLE * camera_cloud_extent(recon)
-        } else {
-            0.0
-        };
-
-        // The observation keypoint lives in one of two places: SIFT feature
-        // positions read from `.sift` companions (`sift_files`, indexed through
-        // `feature_indexes` into the shared cache) or keypoints stored inline in
-        // the reconstruction (`embedded_patches`). Both are photometrically
-        // placed and need not point exactly at the 3D point, so the ray is
-        // unprojected from whichever the reconstruction carries.
-        let feature_indexes = recon.feature_indexes();
-        let keypoints_xy = recon.keypoints_xy();
-        let obs_start = recon.observation_offsets[point_idx];
-        let observations = recon.observations_for_point(point_idx);
-        let edges: Vec<EdgeInstance> = observations
-            .iter()
-            .enumerate()
-            .filter_map(|(k, obs)| {
-                let image = &recon.images[obs.image_index as usize];
-                let camera = &recon.cameras[image.camera_index as usize];
-                let center = image.camera_center();
-                let endpoint_a = [center.x as f32, center.y as f32, center.z as f32];
-
-                // The observed keypoint pixel for this observation, from the
-                // SIFT feature or the inline embedded keypoint. Skip the
-                // observation when neither source yields one (e.g. a missing or
-                // truncated `.sift` file) rather than drawing a misleading ray.
-                let obs_pixel: [f64; 2] = if let Some(fis) = feature_indexes {
-                    let fi = fis[obs_start + k] as usize;
-                    let cached = sift_cache.get(&(obs.image_index as usize))?;
-                    let xy = cached.positions_xy.get(fi)?;
-                    [xy[0] as f64, xy[1] as f64]
-                } else {
-                    let kxy = keypoints_xy?;
-                    let row = obs_start + k;
-                    [kxy[[row, 0]] as f64, kxy[[row, 1]] as f64]
-                };
-
-                // Unproject the keypoint to a camera-local unit ray, then rotate
-                // to world space: d_world = R^T * d_cam.
-                let d_cam = camera.pixel_to_ray(obs_pixel[0], obs_pixel[1]);
-                let r_flat = image.camera_to_world_rotation_flat();
-                let d_world = [
-                    r_flat[0] * d_cam[0] + r_flat[1] * d_cam[1] + r_flat[2] * d_cam[2],
-                    r_flat[3] * d_cam[0] + r_flat[4] * d_cam[1] + r_flat[5] * d_cam[2],
-                    r_flat[6] * d_cam[0] + r_flat[7] * d_cam[1] + r_flat[8] * d_cam[2],
-                ];
-
-                let endpoint_b = if at_infinity {
-                    // Point at infinity: shoot the ray outward along the
-                    // observed bearing (a point at infinity has no parallax).
-                    [
-                        (center.x + infinity_ray_length * d_world[0]) as f32,
-                        (center.y + infinity_ray_length * d_world[1]) as f32,
-                        (center.z + infinity_ray_length * d_world[2]) as f32,
-                    ]
-                } else {
-                    // Finite point: terminate at the nearest point on the
-                    // observed ray (so reprojection error shows),
-                    // t = dot(P - C, d_world) clamped to the forward direction.
-                    let cp = [
-                        point_pos.x - center.x,
-                        point_pos.y - center.y,
-                        point_pos.z - center.z,
-                    ];
-                    let t = (cp[0] * d_world[0] + cp[1] * d_world[1] + cp[2] * d_world[2]).max(0.0);
-                    [
-                        (center.x + t * d_world[0]) as f32,
-                        (center.y + t * d_world[1]) as f32,
-                        (center.z + t * d_world[2]) as f32,
-                    ]
-                };
-
-                Some(EdgeInstance {
-                    endpoint_a,
-                    endpoint_b,
-                })
-            })
-            .collect();
+        let edges = track_ray_edges(recon, point_idx, sift_cache);
 
         if edges.is_empty() {
             self.track_ray_edge_buffer = None;

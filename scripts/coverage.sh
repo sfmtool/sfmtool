@@ -22,7 +22,11 @@ maturin develop --release
 
 # Run Rust tests (generates Rust-side coverage).
 # sfm-explorer is excluded because its ui_basic integration tests require
-# --test-threads=1 and are run separately in the ui-test CI job.
+# --test-threads=1 and are run separately in the ui-test CI job. Its *lib*
+# tests are headless and run in the test-os jobs (Windows/macOS); they stay
+# out of this instrumented run so uninstrumented artifacts can't land in the
+# shared target dir and degrade the next run's coverage. Locally, use
+# `cargo test -p sfm-explorer --lib`.
 cargo test --workspace --exclude sfm-explorer
 
 # Run Python tests (generates Rust coverage from Python calls + Python coverage).

@@ -646,12 +646,12 @@ contradiction, and the point-track all-black patch-tile behavior.
 
 ### specs/gui/gui-camera-views.md
 **Summary:** Frustum wireframes, image-quad texturing, GPU pick buffer, selection/hover, camera-view mode with full-res background, distorted + fisheye frustum tessellation, and Step-9 persistent-camera-view free-look.
-**Implementing code:** `scene_renderer/upload.rs` (`upload_frustums`, `update_frustum_colors`, `upload_bg_image`), `pipelines/{frustum,image_quad,distorted_quad,bg_distorted}.rs`, `scene_renderer/distorted_mesh.rs`, `viewer_3d/mod.rs` (`enter_camera_view`, `compute_switch_camera_view`), `viewer_3d/camera.rs` (`best_fit_fov`).
+**Implementing code:** `scene_renderer/upload/{frustums,bg_image}.rs` (`upload_frustums`, `update_frustum_colors`, `upload_bg_image`), `pipelines/{frustum,image_quad,distorted_quad,bg_distorted}.rs`, `scene_renderer/distorted_mesh.rs`, `viewer_3d/mod.rs` (`enter_camera_view`, `compute_switch_camera_view`), `viewer_3d/camera.rs` (`best_fit_fov`).
 **Inconsistencies:**
   - **Internal contradiction on FOV recompute.** §FOV best-fit (lines 514-520) and Step-5 checklist item 4 (line 1501) state the viewport FOV is recomputed every frame; Step 9 (lines 1619-1625, 1708 "Stopped per-frame FOV override") states the per-frame override was removed. The **code follows Step 9**: `enter_camera_view` computes `best_fit_fov` once and stores it in the transition (`viewer_3d/mod.rs:492-524`); there is no per-frame recompute. The earlier prose/checklist item is stale — a reader following §FOV best-fit would implement the opposite of shipped behavior.
   - Crate name error: line 55 says `ViewportCamera` is "in `sfmtool-gui`". The GUI crate is `sfm-explorer`; there is no `sfmtool-gui`.
   - Location drift: pick/click handling described as living in `main.rs` is actually in `app.rs::process_pick_readback`; the readback method is `read_readback_result`, not `read_back_pick`.
-  - Addition not in spec: `update_frustum_colors` (`upload.rs:366-388`) has a `color_hidden` (alpha 0) state for the frustum being viewed-through, absent from the selection-color table (lines 172-176).
+  - Addition not in spec: `update_frustum_colors` (`upload/frustums.rs::update_frustum_colors`) has a `color_hidden` (alpha 0) state for the frustum being viewed-through, absent from the selection-color table (lines 172-176).
 **Recommendation:** update spec — reconcile the per-frame-FOV prose with Step 9 (FOV set once on entry), fix the `sfmtool-gui` crate name, refresh `main.rs` references, and document the hidden-frustum color.
 **Unclear / incorrect / suspicious:** The self-contradiction on per-frame FOV is the main hazard.
 
@@ -673,7 +673,7 @@ contradiction, and the point-track all-black patch-tile behavior.
 
 ### specs/gui/gui-multi-panel-image-browser.md
 **Summary:** egui_dock 4-panel layout, image/point selection model, cross-panel hover, image browser, image detail with 7 overlay modes + feature filtering, track ray viz, navigation minibar, image-detail 2D pan/zoom.
-**Implementing code:** `dock.rs`, `image_browser.rs`, `image_detail/`, `state.rs` (`OverlayMode`, `FeatureDisplaySettings`), `scene_renderer/upload.rs::upload_track_rays`.
+**Implementing code:** `dock.rs`, `image_browser.rs`, `image_detail/`, `state.rs` (`OverlayMode`, `FeatureDisplaySettings`), `scene_renderer/upload/track_rays.rs`.
 **Inconsistencies:**
   - **Internal contradiction on deselect.** Overview line 70 says "clicking the selected thumbnail again clears `selected_image`," but the detailed Image-Browser section (line 307) says "Clicking an already-selected thumbnail keeps it selected (no toggle)." The **code matches line 307**: `image_browser.rs:534` always sets `selection_changed = Some(Some(i))` on click — no toggle-off. Line 70 is wrong.
   - Location/method drift: "Integration in main.rs", `read_back_pick()`, and the "around line 654" snippet all refer to `main.rs`; the logic is in `app.rs` (`run_egui_pass`, `process_pick_readback`) and the method is `read_readback_result`. `main.rs` is a 6-line shim.
@@ -683,7 +683,7 @@ contradiction, and the point-track all-black patch-tile behavior.
 
 ### specs/gui/gui-patch-rendering.md
 **Summary:** Embedded-patch surfel rendering — per-instance oriented textured quads in Pass 1, front-face-culled in the vertex shader, page-grid texture-array atlas, `PICK_TAG_POINT` picking, View-menu controls.
-**Implementing code:** `pipelines/patch.rs`, `shaders/patch.wgsl`, `scene_renderer/upload.rs::upload_patches`, `gpu_types.rs` (`PatchInstance`/`PatchUniforms`), `app.rs:539-564`, `state.rs:135-149`.
+**Implementing code:** `pipelines/patch.rs`, `shaders/patch.wgsl`, `scene_renderer/upload/patches.rs`, `gpu_types.rs` (`PatchInstance`/`PatchUniforms`), `app.rs:539-564`, `state.rs:135-149`.
 **Inconsistencies:**
   - None material. `show_patches`/`patch_opacity`/`patch_size_log2`/`patch_alpha_cutoff` defaults (on/1.0/0.0/0.0) match `state.rs:228-231`; UI disabled unless frame+bitmaps present; `patch_opacity > 0.0` skip-draw; front-face cull, v-flip, MRT behavior all match. The flat-shaded frame-without-bitmaps fallback is correctly documented as Planned.
 **Recommendation:** in sync.
@@ -693,7 +693,7 @@ contradiction, and the point-track all-black patch-tile behavior.
 **Summary:** Roadmap and implementation-status tracker for the GUI. Lists completed 3D-viewer features, core-data status, PyO3 status, and next steps.
 **Implementing code:** Whole `sfm-explorer` crate; status cross-checked against `app.rs`, `viewer_3d/`, `scene_renderer/`.
 **Inconsistencies:**
-  - The roadmap has **no mention of patch/surfel rendering** or the Point Track Detail panel's patch tiles, both implemented (`scene_renderer/upload.rs::upload_patches`, `pipelines/patch.rs`; gui-patch-rendering.md marked "Implemented v1"). The "Current Implementation Status" list should include patches.
+  - The roadmap has **no mention of patch/surfel rendering** or the Point Track Detail panel's patch tiles, both implemented (`scene_renderer/upload/patches.rs`, `pipelines/patch.rs`; gui-patch-rendering.md marked "Implemented v1"). The "Current Implementation Status" list should include patches.
   - Stale wording: line 47 "Target indicator (rotating octahedron)" — the indicator is now a compass rose (`CompassEdgeInstance` in `scene_renderer/mod.rs:69-72`, `shaders/target_indicator.wgsl`).
   - Next Steps #1 (grid depth occlusion) and #2 (free-nav FOV gesture) correctly still pending; #3/#4 correctly marked Done.
 **Recommendation:** update spec — add patches to the status list and fix the octahedron wording; otherwise the roadmap assessment is accurate.

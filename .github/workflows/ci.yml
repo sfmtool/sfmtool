@@ -278,6 +278,22 @@ jobs:
       - name: Rust tests
         run: pixi run -e test-ci cargo test --workspace --exclude sfm-explorer
 
+      # sfm-explorer is excluded above only because of its `ui_basic`
+      # integration tests (serialized, and run by the dedicated ui-test jobs).
+      # Its lib tests are headless — the upload tests use wgpu's noop backend —
+      # and thread-safe, so `--lib` runs them here rather than nowhere.
+      #
+      # This is the only job that *executes* them. The Linux coverage job
+      # deliberately doesn't: it excludes sfm-explorer from the instrumented
+      # run, and adding an uninstrumented `cargo test` beside it would write
+      # non-instrumented artifacts into the same target dir (cargo does not
+      # fingerprint llvm-cov's RUSTC_WRAPPER), silently degrading the next
+      # run's coverage via the shared cache. Linux still *compiles* these
+      # tests every PR through `clippy --workspace --all-targets -D warnings`
+      # in the lint job, so a broken test still fails fast there.
+      - name: SfM Explorer lib tests
+        run: pixi run -e test-ci cargo test -p sfm-explorer --lib
+
       - name: Python tests
         shell: bash
         run: |

@@ -135,6 +135,13 @@ backlog and keep them honest as findings get addressed:
 
 - `pixi run test-rust` excludes `sfmtool-py` and `sfm-explorer` (llvm-cov
   limitations). Use `pixi run cargo test --workspace` to cover those.
+  `sfm-explorer` splits in two: its `ui_basic` integration tests need a real
+  window (Windows/macOS only, `pixi run ui-test`), while its **lib** tests are
+  headless — `scene_renderer/upload/tests.rs` drives real `wgpu` uploads on the
+  `noop` backend, so `cargo test -p sfm-explorer --lib` runs anywhere. In CI
+  they execute in the `test-os` (Windows/macOS) jobs only; Linux compiles but
+  does not run them, to keep uninstrumented artifacts out of the coverage
+  job's target dir.
 - The Python package is editable-installed, but the native extension
   `sfmtool._sfmtool` is not auto-rebuilt — remember `maturin develop` after
   Rust changes.

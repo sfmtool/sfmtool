@@ -15,3 +15,6 @@ mod patches;
 mod points;
 mod thumbnails;
 mod track_rays;
+
+#[cfg(test)]
+mod tests;

@@ -1,5 +1,8 @@
 # The sfm-explorer crate is the native GUI viewer (winit + wgpu + egui).
 # Its rendering pipelines and UI callbacks can't be exercised without a GPU
-# and a window, so they have no tests and shouldn't count toward coverage.
+# and a window, so the bulk of it is untestable and shouldn't count toward
+# coverage. (The parts that *are* testable — auto_point_size, and the
+# scene_renderer/upload tests on wgpu's noop backend — run in the test-os
+# jobs, outside the instrumented coverage run; see scripts/coverage.sh.)
 ignore:
   - "crates/sfm-explorer"

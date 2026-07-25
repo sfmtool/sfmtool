@@ -163,7 +163,7 @@ Ranked roughly by value × readiness — cheap, high-leverage wins first.
 > `_patch_compaction.py` + `_progress.py`; both the xform and cluster_patches
 > upward imports removed]_, the `strips/`
 > subpackage regroup (5 modules, 2 external import sites), the
-> `scene_renderer/upload.rs` per-resource split, `tests/patch/` regroup,
+> `scene_renderer/upload.rs` per-resource split _[done 2026-07-25]_, `tests/patch/` regroup,
 > conftest solve-retry dedup (#11), the subset-aware pyramid build from the
 > 2026-06-13 perf report, and the deferred `archive_io` consolidation (drift
 > now affects 2 of 4 copies — the missing empty-bytes guards are worth

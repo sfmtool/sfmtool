@@ -78,6 +78,14 @@ windows-core = "0.62"
 [build-dependencies]
 winres = "0.1"
 
+# The `noop` backend gives the upload tests a real `wgpu::Device` with no GPU:
+# wgpu-core still does its full validation (limits, texture extents, copy sizes,
+# pipeline/shader checks) while wgpu-hal stubs out the actual driver calls. As a
+# dev-dependency the feature is unified only into test builds, so the shipped
+# binary is unaffected.
+[dev-dependencies]
+wgpu = { version = "29", features = ["noop"] }
+
 # UI tests drive the accessibility tree, which xa11y exposes on Windows (UI
 # Automation) and macOS (AXUIElement). Linux (AT-SPI) is intentionally left out:
 # the headless CI display lacks the AT-SPI bridge the tree needs.
