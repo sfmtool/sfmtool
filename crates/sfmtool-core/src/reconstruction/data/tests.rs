@@ -1,4 +1,6 @@
-use sfmr_format::{RigFrameData, FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES};
+use sfmr_format::{
+    RigFrameData, SfmrData, FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES,
+};
 
 use super::*;
 

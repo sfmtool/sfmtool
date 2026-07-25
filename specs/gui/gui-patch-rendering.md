@@ -22,7 +22,7 @@ in the `.sfmr`.
 ## Data source (already present)
 
 Everything this feature needs is already carried on the loaded
-`SfmrReconstruction` (`crates/sfmtool-core/src/reconstruction/data.rs:204-213`),
+`SfmrReconstruction` (`crates/sfmtool-core/src/reconstruction/data.rs:203-212`),
 as columnar per-3D-point arrays parallel to `points`:
 
 | Field | Type | Meaning |

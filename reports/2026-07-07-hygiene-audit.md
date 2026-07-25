@@ -36,6 +36,44 @@ drift now affects 2 of 4 copies).
 - Risk: low — pure move of private free functions within one crate module; the AVX2 `#[target_feature]`/`unsafe` blocks must move intact with their SAFETY comments, and `mod tests;` stays pointing at the same sibling tests.
 
 **reconstruction/data.rs bundles the type model, SfmrData conversion, and error-recompute logic in one 1200-line impl**
+> _Status (2026-07-25): Done — extracted
+> `data/{conversion,recompute,demo}.rs` into the existing sibling dir; `data.rs` is
+> 1505→592 lines, holding the six type definitions, the accessors,
+> `track_image_indices`/`sift_path_for_image`, `rebuild_derived_fields`, and the two
+> free helpers `edit.rs` and `analysis/infinity/convert.rs` import
+> (`count_points_at_infinity`, `compute_observation_offsets`). `conversion.rs` (408)
+> took the whole `.sfmr` boundary — `from_sfmr_data`/`to_sfmr_data` plus the
+> `load`/`save` wrappers around them, which are the same concern and were not worth
+> leaving behind. `recompute.rs` (358) took the four reprojection methods, the
+> depth-statistic recompute, and the free `observation_reprojection_error`; that last
+> one is re-exported from `data.rs` at its old path so `analysis/infinity/discover.rs`
+> needed no edit._
+>
+> _Two deviations from the proposal. (1) Also extracted `demo.rs` (233) — the 203-line
+> synthetic-reconstruction constructor is neither a type definition nor an accessor
+> (the two things the proposal said to leave), and it was the largest single method
+> remaining; without it `data.rs` would still be ~790 lines and a third of that a test
+> fixture. (2) The proposal's name `errors.rs` was not used: `ReconstructionError`
+> itself stays in `data.rs`, so a file named `errors.rs` holding projection algebra
+> would send a reader hunting the error type to the wrong place. `recompute.rs` also
+> covers `recompute_depth_statistics`, which is not reprojection math at all._
+>
+> _The "medium risk" was overstated: same-module privacy does extend to child modules,
+> so the conversion methods reach the private fields with no declared visibility
+> changes. Two scope notes, for accuracy: `observation_reprojection_error` needed the
+> re-export above to keep its `pub(crate)` path, and the private
+> `embedded_point_reprojection_errors` narrowed from the whole `data` module tree to
+> `data::recompute` (benign — both its callers are in that file, but `data/tests.rs`
+> can no longer reach it directly). Verified pure code motion the same way as #233
+> (stripping imports and module docs leaves the old and new bodies line-for-line
+> identical); `cargo clippy --workspace --all-targets` clean, `cargo test -p
+> sfmtool-core` 1011 passed, `cargo doc` adds no new warnings, and the PyO3 surface is
+> unchanged (`maturin develop --release` + 734 `tests/rust_bindings` passed).
+> `specs/cli/xform-command.md`'s reference to the two reprojection loops was repointed
+> to `data/recompute.rs`, and `specs/gui/gui-patch-rendering.md`'s `data.rs:204-213`
+> to `203-212` — the struct did not move, but the import block above it lost a line,
+> which an earlier version of this note wrongly claimed had no effect._
+>
 - Location: `crates/sfmtool-core/src/reconstruction/data.rs` (1505 lines)
 - Problem: A single `impl SfmrReconstruction` (lines 243-1454, ~1210 lines, ~30 methods) spans three separable concerns: (a) serialization/round-trip conversion — `from_sfmr_data` (888-1076) and `to_sfmr_data` (1098-1251), ~340 lines together; (b) reprojection/error recompute — `compute_observation_reprojection_errors`, `embedded_point_reprojection_errors`, `recompute_point_errors`, `recompute_infinity_point_errors`, `recompute_depth_statistics` plus free helpers (~450 lines); (c) the actual data model + small accessors. `data.rs` is now a misleading catch-all name for what is really "types + serde + error-math".
 - Proposed fix: The sibling `data/` dir already exists (holds `tests.rs`). Extract `data/conversion.rs` for the `SfmrData` <-> `SfmrReconstruction` round-trip and `data/errors.rs` for the reprojection/depth recompute methods, leaving type definitions and accessors in `data.rs`.
@@ -168,7 +206,7 @@ drift now affects 2 of 4 copies).
 ## Rust — `sfm-explorer`
 
 **Grab-bag of unrelated GPU uploads in one file**
-> _Status (2026-07-25): Done — regrouped into `scene_renderer/upload/{mod,points,
+> _Status (2026-07-25): Done, commit 343ddb2 (#233) — regrouped into `scene_renderer/upload/{mod,points,
 > frustums,thumbnails,patches,bg_image,track_rays}.rs`, each an `impl SceneRenderer`
 > block, matching the sibling `pipelines/` per-resource layout. The finding's six
 > concerns map one-to-one onto the six files; `rebuild_frustum_bind_group` (private,

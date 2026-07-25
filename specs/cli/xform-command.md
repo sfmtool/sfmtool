@@ -303,7 +303,7 @@ patch frames carried through unchanged — note that the patch `(u, v)` frames a
 > keypoint come from" distinction (`.sift` file vs inline `keypoints_xy`) is
 > currently special-cased at several sites — `save_colmap_binary` and the BA
 > readback in `_bundle_adjust.py`, plus two parallel reprojection-error loops in
-> `reconstruction/data.rs` (`compute_observation_reprojection_errors` for
+> `reconstruction/data/recompute.rs` (`compute_observation_reprojection_errors` for
 > `sift_files`, `embedded_point_reprojection_errors` for `embedded_patches`).
 > These should collapse onto a single source-agnostic accessor on the
 > reconstruction (an "observed keypoint for (point, observation)" lookup, plus a
