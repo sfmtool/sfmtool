@@ -168,6 +168,19 @@ drift now affects 2 of 4 copies).
 ## Rust — `sfm-explorer`
 
 **Grab-bag of unrelated GPU uploads in one file**
+> _Status (2026-07-25): Done — regrouped into `scene_renderer/upload/{mod,points,
+> frustums,thumbnails,patches,bg_image,track_rays}.rs`, each an `impl SceneRenderer`
+> block, matching the sibling `pipelines/` per-resource layout. The finding's six
+> concerns map one-to-one onto the six files; `rebuild_frustum_bind_group` (private,
+> single caller) went with `upload_frustums`, and `clear_track_rays`/`clear_bg_image`
+> with the resources they clear. `camera_cloud_extent` + `INFINITY_RAY_SCENE_MULTIPLE`
+> are used only by track rays and moved there. Largest file is now `frustums.rs` at
+> 381 lines. Verified pure code motion (stripping imports/module docs, the old and
+> new bodies are line-for-line identical); `cargo clippy -p sfm-explorer --all-targets`
+> emits zero warnings, `cargo test -p sfm-explorer` 10 passed. The 11 `upload.rs`
+> references across four GUI specs were repointed to the new files (stale line-number
+> ranges dropped rather than re-derived); `gui-architecture.md`'s source tree also
+> picked up the `image_detail/` split and `compass.rs`, which had gone unrecorded._
 - Location: `crates/sfm-explorer/src/scene_renderer/upload.rs` (1089 lines)
 - Problem: Ten `SceneRenderer` methods each uploading a *different* GPU resource with no shared state between them: `upload_points` (~59 lines), `upload_frustums` + `update_frustum_colors` + `rebuild_frustum_bind_group` (~296), `upload_thumbnails` (~147), `upload_patches` (~221), `upload_bg_image` (~132), `upload_track_rays` + `clear_track_rays` + `clear_bg_image` (~120). Six distinct concerns glued together only by the word "upload." Sibling `render.rs` already splits the render side per-resource, so this file is the odd one out.
 - Proposed fix: regroup under `scene_renderer/upload/` with `{mod, points, frustums, thumbnails, patches, bg_image, track_rays}.rs`, each an `impl SceneRenderer` block (matches the existing `pipelines/` per-resource layout).
@@ -363,6 +376,6 @@ drift now affects 2 of 4 copies).
 
 Also queued but needing an owner decision rather than mechanical work: ~~finishing the
 `_sfmtool` submodule migration (10 flat names + `import *` remain; touching class
-`__module__` paths)~~ _[Done 2026-07-18 — see the two findings above]_, the
-`scene_renderer/upload.rs` regroup, and whether to delete or
-regroup the four orphaned `scripts/` utilities.
+`__module__` paths)~~ _[Done 2026-07-18 — see the two findings above]_, ~~the
+`scene_renderer/upload.rs` regroup~~ _[Done 2026-07-25 — see the finding above]_,
+and whether to delete or regroup the four orphaned `scripts/` utilities.

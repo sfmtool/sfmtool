@@ -104,16 +104,24 @@ sfmtool/
 │   │       │   ├── camera.rs     # ViewportCamera + clip-plane / FOV control
 │   │       │   ├── input.rs      # Mouse / scroll / pinch / keyboard dispatch
 │   │       │   └── overlay.rs    # Status text + grid overlay
-│   │       ├── scene_renderer/   # GPU rendering pipeline (~14 modules)
+│   │       ├── scene_renderer/   # GPU rendering pipeline
 │   │       │   ├── mod.rs        # SceneRenderer struct, initialization
 │   │       │   ├── render.rs     # Multi-pass render method
-│   │       │   ├── upload.rs     # Point/frustum/thumbnail upload
 │   │       │   ├── readback.rs   # GPU pick + depth readback
 │   │       │   ├── sizing.rs     # Texture creation and resize
 │   │       │   ├── uniforms.rs   # Uniform buffer updates
 │   │       │   ├── gpu_types.rs  # GPU data struct definitions, pick tags, constants
 │   │       │   ├── auto_point_size.rs  # Median NN distance computation
+│   │       │   ├── compass.rs          # Orientation-compass mesh generation
 │   │       │   ├── distorted_mesh.rs   # Tessellated mesh for distorted cameras
+│   │       │   ├── upload/       # Per-resource GPU data upload
+│   │       │   │   ├── mod.rs          # Upload module wiring
+│   │       │   │   ├── points.rs       # Point cloud instance buffer
+│   │       │   │   ├── frustums.rs     # Frustum edges, image quads, color buffer
+│   │       │   │   ├── thumbnails.rs   # Camera thumbnail atlas
+│   │       │   │   ├── patches.rs      # Patch instances + bitmap atlas
+│   │       │   │   ├── bg_image.rs     # Camera-view background image
+│   │       │   │   └── track_rays.rs   # Selected-point observation rays
 │   │       │   └── pipelines/    # Per-pass pipeline creation
 │   │       │       ├── mod.rs          # Pipeline module re-exports
 │   │       │       ├── points.rs       # Point splat pipeline
@@ -128,7 +136,10 @@ sfmtool/
 │   │       │       └── track_ray.rs    # Track ray pipeline
 │   │       ├── state.rs              # Shared application state (AppState)
 │   │       ├── image_browser.rs      # Thumbnail strip with horizontal scrolling
-│   │       ├── image_detail.rs       # Full-resolution image display panel
+│   │       ├── image_detail/         # Full-resolution image display panel
+│   │       │   ├── mod.rs            # Panel state and per-frame `show`
+│   │       │   ├── input.rs          # Pan / zoom / hover dispatch
+│   │       │   └── overlay.rs        # Feature + reprojection overlays
 │   │       ├── point_track_detail.rs # Per-observation diagnostics for the
 │   │       │                         # selected 3D point (4th panel)
 │   │       ├── colormap.rs           # Shared colour ramps for overlays

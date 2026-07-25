@@ -693,7 +693,7 @@ When a point is selected, it should be visually distinct from all other
 points. The approach is to re-upload the point buffer with the selected
 point's color changed.
 
-**`scene_renderer/upload.rs`**:
+**`scene_renderer/upload/points.rs`**:
 
 Add a `selected_point: Option<usize>` parameter to the point upload. When
 set, override the color of that point to a highlight color (yellow:
@@ -752,7 +752,7 @@ clear visual hierarchy:
 - Orange = "These cameras see the point I selected"
 - White = normal, unselected
 
-**`scene_renderer/upload.rs`**:
+**`scene_renderer/upload/frustums.rs`**:
 
 Extend `upload_frustums()` to accept `track_image_set: &HashSet<usize>`
 (or a slice). When generating frustum edge colors:
@@ -847,7 +847,7 @@ with UV-based falloff.
 **Pipeline** (`pipelines/track_ray.rs`): Single color target on
 `edl_output` with alpha blending, no depth stencil (shader-based occlusion).
 
-**Data flow** (`upload_track_rays()` in `scene_renderer/upload.rs`):
+**Data flow** (`upload_track_rays()` in `scene_renderer/upload/track_rays.rs`):
 For each `TrackObservation`:
 1. Look up the camera center `C` and camera-to-world rotation `R^T`
 2. Look up the feature position `(px, py)` from the shared SIFT cache

@@ -183,13 +183,13 @@ wiring for free — no `PICK_TAG_PATCH`, no new pick decode branch.
 All patch bitmaps share one resolution `R` (`patch_bitmap_resolution` in
 `points3d/metadata.json`), so they pack naturally into a
 **`texture_2d_array<f32>`** (`Rgba8UnormSrgb`), exactly like the camera-thumbnail
-atlas (`scene_renderer/upload.rs:460-596`). Because `R` is small (typ. 16–64) and
+atlas (`scene_renderer/upload/thumbnails.rs`). Because `R` is small (typ. 16–64) and
 the patch count `P` can exceed the array-layer limit (~2048), reuse the
 thumbnail atlas's **page-grid packing** (multiple patches tiled per layer,
-`atlas_layer` decodes to `(layer, cell)` — `upload.rs:502-515`), or a plain
+`atlas_layer` decodes to `(layer, cell)` — `upload/thumbnails.rs`), or a plain
 one-patch-per-layer array when `P` is small.
 
-Upload path (new `SceneRenderer::upload_patches` in `upload.rs`, gated on the
+Upload path (new `SceneRenderer::upload_patches` in `upload/patches.rs`, gated on the
 frame arrays **and** the bitmaps being `Some`):
 
 1. Return early unless both the `(u, v)` frame arrays and `patch_bitmaps_y_x_rgba`
@@ -200,7 +200,7 @@ frame arrays **and** the bitmaps being `Some`):
    and push a `PatchInstance` (center = `points[i].position`, `w = points[i].w`,
    `u/v` from the half-vec arrays, `atlas_layer`, `point_index = i`).
 3. Build the bind group (uniform + `texture_2d_array` + sampler), mirroring
-   `rebuild_frustum_bind_group` (`upload.rs:422-452`).
+   `rebuild_frustum_bind_group` (`upload/frustums.rs`).
 
 Called from `App::prepare_uploads` (`app.rs:224-388`) beside `upload_thumbnails`.
 
@@ -330,7 +330,7 @@ Ordered, each step compiles:
    `PatchUniforms` (view_proj, atlas grid, size/opacity/cutoff, `camera_pos`).
 4. `SceneRenderer` fields (`mod.rs:37-158`) + `new()` init — pipeline, instance
    buffer, patch atlas texture/view/sampler, bind group, patch count.
-5. `scene_renderer/upload.rs::upload_patches` — mirror `upload_thumbnails`; build
+5. `scene_renderer/upload/patches.rs::upload_patches` — mirror `upload_thumbnails`; build
    atlas + instances from the three reconstruction arrays; skip when `None`.
 6. `scene_renderer/render.rs` — draw block in Pass 1 near the image-quad draw
    (`render.rs:270-283`), gated on `show_patches`.
@@ -349,7 +349,7 @@ pick tag.
 ### Implemented
 
 - [x] Patch instance + atlas upload from `recon.patch_*` arrays
-      (`scene_renderer/upload.rs::upload_patches`, page-grid packed
+      (`scene_renderer/upload/patches.rs::upload_patches`, page-grid packed
       `texture_2d_array`, atlas byte size logged)
 - [x] `patch.wgsl` textured oriented-quad pipeline in Pass 1
       (`pipelines/patch.rs`, premultiplied alpha)

@@ -403,7 +403,7 @@ holding a unit direction when `w = 0`.
    (unit directions cluster at the origin):
    `auto_point_size.rs::compute_scene_bounds` and `compute_auto_point_size`
    skip them (protecting scene center/radius, clip planes, and auto splat
-   size); `upload.rs::upload_track_rays` draws infinity observations as
+   size); `upload/track_rays.rs::upload_track_rays` draws infinity observations as
    fixed-length bearing rays from each camera center (no finite endpoint to
    converge on); `point_track_detail.rs` shows the **direction** plus an "∞ /
    at infinity" badge instead of bogus xyz and projects rotation-only (`R·d`,
