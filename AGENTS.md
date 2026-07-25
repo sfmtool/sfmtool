@@ -138,7 +138,9 @@ backlog and keep them honest as findings get addressed:
   `sfm-explorer` splits in two: its `ui_basic` integration tests need a real
   window (Windows/macOS only, `pixi run ui-test`), while its **lib** tests are
   headless — `scene_renderer/upload/tests.rs` drives real `wgpu` uploads on the
-  `noop` backend, so `cargo test -p sfm-explorer --lib` runs anywhere. In CI
+  `noop` backend and `point_track_detail/tests.rs` runs whole egui frames
+  through `Context::run_ui`, so `cargo test -p sfm-explorer --lib` needs
+  neither a GPU nor a window and runs anywhere. In CI
   they execute in the `test-os` (Windows/macOS) jobs only; Linux compiles but
   does not run them, to keep uninstrumented artifacts out of the coverage
   job's target dir.

@@ -1,8 +1,8 @@
 # Multi-Panel GUI with Image Browser and Detail Pane
 
 **Status:** Implemented — the `egui_dock` layout (`dock.rs`), `ImageBrowser`
-(`image_browser.rs`), `ImageDetail` (`image_detail.rs`), and
-`PointTrackDetail` (`point_track_detail.rs`) panels all shipped; cross-panel
+(`image_browser.rs`), `ImageDetail` (`image_detail/`), and
+`PointTrackDetail` (`point_track_detail/`) panels all shipped; cross-panel
 selection state lives in `AppState` (`state.rs`).
 
 ## Overview
@@ -570,7 +570,7 @@ is built in `lib.rs` (`run()`) and the `DockArea` is driven from `app.rs`. Defau
 
 ### Step 4: Image detail — full-resolution image display — DONE
 
-`image_detail.rs` implemented with:
+`image_detail/` implemented with:
 - Lazy full-res image loading on selection change
 - Aspect-ratio-preserving fit to panel
 - "No image selected" empty state
@@ -1022,7 +1022,7 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
 - **Pan limits**: Clamped so the image overlaps the panel by at least 50px.
 - **Auto-reset**: When `selected_image` changes, pan and zoom reset to fit.
 
-**Rendering** (`image_detail.rs`):
+**Rendering** (`image_detail/`):
 - `base_scale = min(panel_w / tex_w, panel_h / tex_h)` fits the image to panel
 - `effective_scale = base_scale * zoom`, `image_center = panel_center + pan`
 - Image drawn via `egui::Painter::image()` with clip to panel rect

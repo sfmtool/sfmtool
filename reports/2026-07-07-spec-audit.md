@@ -638,6 +638,10 @@ contradiction, and the point-track all-black patch-tile behavior.
 **Implementing code:** `crates/sfm-explorer/src/lib.rs`, `app.rs`, `dock.rs`, `scene_renderer/mod.rs` + `render.rs`, `viewer_3d/`.
 **Inconsistencies:**
   - Module map lists `image_detail.rs` as a single file (lines 131, 167), but it is a directory: `image_detail/{mod,input,overlay}.rs`.
+    > _Status (2026-07-25): Done — the module-table row now reads `image_detail/`
+    > (the tree entry was already correct). The same sweep fixed the stale
+    > `image_detail.rs` references in `gui-multi-panel-image-browser.md`. The
+    > other three items in this finding are untouched._
   - The `shaders/` listing (lines 137-145) omits `patch.wgsl`, which exists and is central to the implemented patch pipeline.
   - `target_indicator.wgsl # Rotating octahedron at target` — stale; geometry is a compass rose (star + spikes + ring).
   - Module table describes `bg_image.rs` as "Background image pipeline (pinhole)" (line 125), but there is no distinct pinhole background pipeline anymore — `scene_renderer/mod.rs` holds only `bg_image_distorted_pipeline`; per gui-camera-views Step 8 the separate pinhole BG pipeline/shader was removed.
@@ -711,6 +715,12 @@ contradiction, and the point-track all-black patch-tile behavior.
 ### specs/gui/gui-point-track-detail.md
 **Summary:** Per-point track inspector — summary header with copy-able Point ID + XYZ, stored-patch header tile, scrollable observation table with per-observation thumbnail/patch/error/angle, cross-panel select/hover.
 **Implementing code:** `point_track_detail.rs`, cached data in `state.rs` (`sift_cache`, `full_res_cache`), dock wiring `dock.rs:222-292`.
+> _Note (2026-07-25): both findings below are still open, but their code anchors
+> have moved — `point_track_detail.rs` is now the `point_track_detail/`
+> directory. `ensure_rendered_patch` lives in `patch.rs`, the "Size" column and
+> row layout in `table.rs`, the header diagnostics in `header.rs`, and
+> `TrackObservationData` in `mod.rs`. Line numbers below are against the
+> pre-split file._
 **Inconsistencies:**
   - **All-black patch-tile behavior diverged.** Spec §Observation Table (line 164) and the panel-state struct (`rendered_patch_textures: HashMap<usize, Option<egui::TextureHandle>>`) say an all-black render "is memoized and the tile is simply not drawn." The code uses `HashMap<usize, egui::TextureHandle>` (no `Option`) and `ensure_rendered_patch` (`point_track_detail.rs:652-695`) always inserts and draws the tile even when the warp is all-black — its own doc comment admits "warps to an all-black tile and is drawn as such."
   - **Code is ahead of spec on columns/diagnostics.** The observation table has a "Size" column (`feature_size`, `point_track_detail.rs:349, 517-529`) not in the spec's column table. The header shows "depth z" (`inverse_depth_z`) and "cond" (`condition_number`) diagnostics (:279-286), whereas the spec's header only documents Max angle. `TrackObservationData` also carries `feature_size`/`image_full_name` beyond the spec's struct.

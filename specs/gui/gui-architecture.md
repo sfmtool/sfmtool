@@ -140,8 +140,14 @@ sfmtool/
 │   │       │   ├── mod.rs            # Panel state and per-frame `show`
 │   │       │   ├── input.rs          # Pan / zoom / hover dispatch
 │   │       │   └── overlay.rs        # Feature + reprojection overlays
-│   │       ├── point_track_detail.rs # Per-observation diagnostics for the
+│   │       ├── point_track_detail/   # Per-observation diagnostics for the
 │   │       │                         # selected 3D point (4th panel)
+│   │       │   ├── mod.rs            # Panel state and per-frame `show`
+│   │       │   ├── prepare.rs        # Per-observation data for a new selection
+│   │       │   ├── header.rs         # Point summary bar + stored-patch tile
+│   │       │   ├── table.rs          # Observation table, rows, thumbnails
+│   │       │   ├── patch.rs          # Oriented-patch frames and textures
+│   │       │   └── metrics.rs        # Errors, ray angles, triangulation stats
 │   │       ├── colormap.rs           # Shared colour ramps for overlays
 │   │       ├── platform/
 │   │       │   ├── mod.rs
@@ -177,8 +183,8 @@ sfmtool/
 | `scene_renderer/` | All GPU pipeline management across ~14 modules: texture creation/resize, point upload, frustum upload (pinhole + distorted), thumbnail texture array atlas loading, uniform updates, multi-pass rendering, GPU readback, per-pass pipeline creation (`pipelines/` subdirectory). |
 | `state.rs` | `AppState` struct: reconstruction data, visibility toggles, selected image/points, hover state, rendering parameters. |
 | `image_browser.rs` | Horizontally-scrollable thumbnail strip with click-to-select, double-click to enter camera view, gesture-driven panning, lazy thumbnail loading, navigation minibar + animation playback. |
-| `image_detail.rs` | Full-resolution image display for the selected camera, with lazy loading, aspect-ratio-preserving fit, pan/zoom, and 7 overlay modes. |
-| `point_track_detail.rs` | Per-observation diagnostics for the selected 3D point: per-image reprojection error, ray angle, thumbnails, `pt3d_<hash>_<index>` ID copy. |
+| `image_detail/` | Full-resolution image display for the selected camera, with lazy loading, aspect-ratio-preserving fit, pan/zoom, and 7 overlay modes. |
+| `point_track_detail/` | Per-observation diagnostics for the selected 3D point: per-image reprojection error, ray angle, thumbnails, `pt3d_<hash>_<index>` ID copy. `mod.rs` holds the panel state and orchestrates a frame; `prepare.rs` builds the per-observation data on selection change, `header.rs`/`table.rs` draw, `patch.rs` builds oriented-patch textures, `metrics.rs` owns the numerics. |
 | `colormap.rs` | Shared color ramps used by the overlay modes and point-cloud colorings. |
 
 ---

@@ -405,7 +405,7 @@ holding a unit direction when `w = 0`.
    skip them (protecting scene center/radius, clip planes, and auto splat
    size); `upload/track_rays.rs::upload_track_rays` draws infinity observations as
    fixed-length bearing rays from each camera center (no finite endpoint to
-   converge on); `point_track_detail.rs` shows the **direction** plus an "∞ /
+   converge on); `point_track_detail/` shows the **direction** plus an "∞ /
    at infinity" badge instead of bogus xyz and projects rotation-only (`R·d`,
    no depth divide); `app.rs` Alt+click does not move the orbit target from an
    infinity-point pick (a point with no location has no pivot — selection and

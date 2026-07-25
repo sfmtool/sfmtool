@@ -36,7 +36,7 @@ drift now affects 2 of 4 copies).
 - Risk: low — pure move of private free functions within one crate module; the AVX2 `#[target_feature]`/`unsafe` blocks must move intact with their SAFETY comments, and `mod tests;` stays pointing at the same sibling tests.
 
 **reconstruction/data.rs bundles the type model, SfmrData conversion, and error-recompute logic in one 1200-line impl**
-> _Status (2026-07-25): Done — extracted
+> _Status (2026-07-25): Done, commit fdab9c7 (#234) — extracted
 > `data/{conversion,recompute,demo}.rs` into the existing sibling dir; `data.rs` is
 > 1505→592 lines, holding the six type definitions, the accessors,
 > `track_image_indices`/`sift_path_for_image`, `rebuild_derived_fields`, and the two
@@ -246,6 +246,80 @@ drift now affects 2 of 4 copies).
 - Risk: low — pure code-motion of `impl` methods; no signature or logic changes.
 
 **Multi-concern point-track detail panel + 283-line method**
+> _Status (2026-07-25): Done — split into `point_track_detail/`: `mod.rs` 232,
+> `table.rs` 447, `prepare.rs` 157, `patch.rs` 156, `header.rs` 144,
+> `metrics.rs` 142, plus a new `tests.rs` 709 (1278 non-test lines, up from
+> 1085 — per-file licence headers, module docs and the extracted signatures).
+> Two deviations from the proposal below:
+> `prepare.rs` was carved out as well (building
+> `TrackObservationData` on selection change is a distinct concern from
+> drawing it, and it left `mod.rs` as a thin shell), and the header moved to
+> `header.rs` rather than staying in `mod.rs`, so it sits beside `table.rs` as
+> a parallel piece of the panel._
+>
+> _`show_observation_table` went from 283 lines to 43, via
+> `draw_observation_row` as proposed plus `draw_table_header` and
+> `gesture_scroll_delta`. To be honest about what that headline number means:
+> `draw_observation_row` is itself 190 lines and still does hit-testing, hover
+> background, click dispatch, thumbnail, patch tile and six painted text
+> columns. The per-row work was named and isolated, not decomposed — the 43
+> lines are the loop shell. Folding the uniform text columns into an
+> offset/label table the way `draw_table_header` already does would be the
+> obvious next cut, and is left open. The eight `col_*` locals became a
+> `ColumnLayout`
+> struct so the header and rows read the same offsets; the borrow plumbing the
+> finding warned about was handled the way the original loop already did it —
+> copying the row's fields out of `self.observations` before the `&mut self`
+> draw calls. `ROW_HEIGHT` replaced a recomputed local. Both
+> `show_observation_table` and `draw_observation_row` keep
+> `#[allow(clippy::too_many_arguments)]`._
+>
+> _Visibility: the two `pub(crate)` helpers `compute_point_diagnostics` and
+> `compute_max_pairwise_angle` moved to `metrics.rs` and are re-exported from
+> `mod.rs` (needed, not decorative — `mod metrics;` is private, so the child's
+> own path is unnameable from `image_detail`), so `image_detail`'s
+> `crate::point_track_detail::…` paths are unchanged. Items called across a
+> module boundary became `pub(super)`; everything used only within its own file
+> — `ColumnLayout`, `draw_observation_row`, `draw_table_header`,
+> `gesture_scroll_delta`, `draw_thumbnail`, `load_thumbnail`, `copy_button`,
+> `truncated_path_suffix`, `mean_affine_radius` — stayed private. Nothing was
+> widened. One small dedup: the identical 4-line affine-radius blocks in the
+> two keypoint branches became `mean_affine_radius`._
+>
+> _Because this was a restructure rather than pure code motion, the panel got
+> its first tests: 25 in `point_track_detail/tests.rs`, driving whole frames
+> through `egui::Context::run_ui` (no GPU and no window needed, so they run in
+> the same `cargo test -p sfm-explorer --lib` the upload tests do). They cover
+> selection handling, the per-observation data, thumbnail and patch-tile
+> caching, pointer hover/click/double-click on rows, and the shared `metrics`
+> helpers `image_detail` also calls._
+>
+> _A caution for whoever extends them: `SfmrReconstruction::demo` is
+> deliberately plain, and three of the first drafts asserted nothing because of
+> it. Its images are named `image_000.jpg` with no parent directory, so the
+> name-truncation test passed against a `truncated_path_suffix` gutted to
+> `path_str.to_string()`; its `content_xxh128` is empty, so the Point-ID test
+> only ever exercised the zero-fill fallback; and passing an empty
+> `full_res_cache` meant `ensure_rendered_patch` returned early every time, so
+> nothing covered the per-row patch tiles at all. The fixtures now enrich the
+> demo (`with_nested_image_paths`, `with_content_hash`, real projected
+> keypoints, populated `full_res_images`). Six mutations confirm the tests
+> bite: gutting `truncated_path_suffix`, pinning the hash prefix to a constant,
+> making `ensure_rendered_patch` a no-op, zeroing the embedded-branch feature
+> size, dropping `select_image` on click, and changing `ROW_HEIGHT` each fail a
+> distinct test._
+>
+> _Also verified: `cargo clippy -p sfm-explorer --all-targets` clean, and a
+> strip-and-sort diff of the old file against the six new ones accounts for
+> every changed line. Still untested: the exact column *offsets* (only
+> observable in painted output — though header and rows now read them off the
+> same `ColumnLayout`, so the two can no longer drift apart) and
+> `gesture_scroll_delta`, which needs synthetic DirectManipulation events the
+> tests do not yet build. The `ui_basic` suite still needs a real window
+> (Windows/macOS). Specs updated:
+> `gui-architecture.md` (tree + module table), plus the `point_track_detail.rs`
+> prose references in `gui-point-cloud-rendering.md`,
+> `gui-multi-panel-image-browser.md` and `batch-triangulation-api.md`._
 - Location: `crates/sfm-explorer/src/point_track_detail.rs` (1085 lines)
 - Problem: Three concerns: (1) the egui panel UI (`show`, `show_header`, `show_observation_table`, `draw_thumbnail`), (2) patch/texture construction (`ensure_rendered_patch`, `build_patch_frame`, `build_stored_patch_texture`), (3) numeric analysis (`compute_observation_metrics`, angle math, `error_color`). `show_observation_table` alone is ~283 lines (292–575), a single method doing per-row layout, hit-testing, hover, and thumbnail draw.
 - Proposed fix: split into `point_track_detail/{mod,table,patch,metrics}.rs`; extract the per-row body of `show_observation_table` into a `draw_observation_row` helper.
@@ -281,7 +355,7 @@ drift now affects 2 of 4 copies).
 > `projection_matrix`, `world_to_view`) stay. Clean build, zero dead-code
 > warnings, `cargo test -p sfm-explorer` green._
 - Location: `crates/sfm-explorer/src/state.rs` (line 6) and `crates/sfm-explorer/src/viewer_3d/mod.rs` (line 9)
-- Problem: Both files suppress dead-code warnings for the *entire module* rather than per-item. `state.rs` is the shared-state hub and `viewer_3d/mod.rs` covers the whole 3D viewer subtree — blanket suppression means genuinely-unused fields/methods accumulate invisibly (a clean build emits zero dead-code warnings, confirming everything is hidden). Other files in the crate already use targeted per-item `#[allow(dead_code)]` (`image_browser.rs:34`, `point_track_detail.rs:812`, `image_detail/mod.rs:531`), which is the right pattern.
+- Problem: Both files suppress dead-code warnings for the *entire module* rather than per-item. `state.rs` is the shared-state hub and `viewer_3d/mod.rs` covers the whole 3D viewer subtree — blanket suppression means genuinely-unused fields/methods accumulate invisibly (a clean build emits zero dead-code warnings, confirming everything is hidden). Other files in the crate already use targeted per-item `#[allow(dead_code)]` (`image_browser.rs:34`, `point_track_detail.rs:812` — now `point_track_detail/mod.rs:218`, `image_detail/mod.rs:531`), which is the right pattern.
 - Proposed fix: remove the two `#![allow(dead_code)]` lines, then either delete what the compiler flags or move the `#[allow]` onto the individual items legitimately kept-for-API.
 - Effort: low
 - Risk: low — worst case is re-adding a few targeted attributes; may reveal real dead fields to delete.

@@ -58,7 +58,7 @@ none batched, none exposed to Python:
 |---|---|---|---|---|
 | `features/feature_match/geometric_filter.rs` `triangulate_point_dlt` | 2-view DLT (SVD) | `Option<[f64;3]>` (drops `w≈0`) | none | two-view in-front-of-camera check during matching |
 | `analysis/infinity/discover.rs` `classify_track` (inline) | N-view midpoint | `(Point3, w)` | builds `A`, `det` (gated loosely, then discarded) | `find_points_at_infinity` |
-| GUI: `point_track_detail.rs`, `image_detail/` | **no solve** — max pairwise angle to the *stored* point | `f32` degrees | — | "Max Track Angle" overlay (`state.rs`), point/feature detail |
+| GUI: `point_track_detail/`, `image_detail/` | **no solve** — max pairwise angle to the *stored* point | `f32` degrees | — | "Max Track Angle" overlay (`state.rs`), point/feature detail |
 
 The GUI never triangulates; it reuses the same `max_viewing_angle` statistic (a
 third copy of it) and presents it as "High = well-triangulated, low =
