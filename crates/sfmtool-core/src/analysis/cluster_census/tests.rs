@@ -97,10 +97,18 @@ impl TwoGroupScene {
     }
 
     fn census(&self, misplace: f64) -> CensusReport {
-        self.census_with(misplace, &self.warp)
+        self.census_full(misplace, &self.warp, &CensusParams::default())
     }
 
     fn census_with(&self, misplace: f64, warp: &[f64]) -> CensusReport {
+        self.census_full(misplace, warp, &CensusParams::default())
+    }
+
+    fn census_params(&self, misplace: f64, params: &CensusParams) -> CensusReport {
+        self.census_full(misplace, &self.warp, params)
+    }
+
+    fn census_full(&self, misplace: f64, warp: &[f64], params: &CensusParams) -> CensusReport {
         let (quats, trans, posed) = self.candidate(misplace);
         cluster_census(
             &self.cluster,
@@ -111,7 +119,7 @@ impl TwoGroupScene {
             &quats,
             &trans,
             &posed,
-            &CensusParams::default(),
+            params,
         )
         .expect("census inputs are well formed")
     }
@@ -157,10 +165,68 @@ fn push_cluster(
     Some(id)
 }
 
+/// Append one cluster observed by `members`, each member projecting a *different*
+/// random world point: a false match — one cluster id over several unrelated
+/// physical points, jointly unsatisfiable by any placement of the cameras.
+#[allow(clippy::too_many_arguments)]
+fn push_incoherent_cluster(
+    members: &[usize],
+    quats: &[UnitQuaternion<f64>],
+    centers: &[Vector3<f64>],
+    rng: &mut Lcg,
+    cluster: &mut Vec<u32>,
+    image: &mut Vec<u32>,
+    pos: &mut Vec<[f64; 2]>,
+    warp: &mut Vec<f64>,
+) -> Option<u32> {
+    let cam = test_cam();
+    let mut rows = Vec::new();
+    for &i in members {
+        let x = Vector3::new(
+            rng.uniform(-2.5, 2.5),
+            rng.uniform(-2.0, 2.0),
+            rng.uniform(-2.5, 2.5),
+        );
+        let xc = quats[i] * (x - centers[i]);
+        match cam.ray_to_pixel([xc.x, xc.y, xc.z]) {
+            Some((u, v)) if u >= 0.0 && v >= 0.0 && u < W as f64 && v < H as f64 => {
+                rows.push((i as u32, [u, v]));
+            }
+            _ => return None,
+        }
+    }
+    let id = cluster.last().map_or(0, |&c| c + 1);
+    for (i, uv) in rows {
+        cluster.push(id);
+        image.push(i);
+        pos.push(uv);
+    }
+    warp.push(rng.uniform(0.05, 0.5));
+    Some(id)
+}
+
 /// `n_a` + `n_b` cameras on two groups, `n_intra` clusters per group, `n_bridge`
 /// clusters spanning both. Every cluster gets a low (genuine)
 /// warp-consistency residual; tests that need phantoms override the array.
 fn two_group_scene(n_a: usize, n_b: usize, n_intra: usize, n_bridge: usize) -> TwoGroupScene {
+    two_group_scene_inner(n_a, n_b, n_intra, n_bridge, true)
+}
+
+/// Same shape as [`two_group_scene`], but the bridges are false matches: each
+/// member sees a different physical point, while the warp-consistency residuals
+/// stay in the genuine range so the eligibility screen admits them. No rigid
+/// correction can satisfy them.
+fn junk_bridge_scene(n_a: usize, n_b: usize, n_intra: usize, n_bridge: usize) -> TwoGroupScene {
+    two_group_scene_inner(n_a, n_b, n_intra, n_bridge, false)
+}
+
+fn two_group_scene_inner(
+    n_a: usize,
+    n_b: usize,
+    n_intra: usize,
+    n_bridge: usize,
+    coherent_bridges: bool,
+) -> TwoGroupScene {
     let mut rng = Lcg(0x5eed_1234);
     let r_orbit = 10.0;
 
@@ -233,7 +299,12 @@ fn two_group_scene(n_a: usize, n_b: usize, n_intra: usize, n_bridge: usize) -> T
             .map(|k| arc_a[(turn + k) % n_a])
             .chain((0..3).map(|k| arc_b[(turn + k) % n_b]))
             .collect();
-        if let Some(id) = push_cluster(
+        let push = if coherent_bridges {
+            push_cluster
+        } else {
+            push_incoherent_cluster
+        };
+        if let Some(id) = push(
             &members,
             &quats,
             &centers,
@@ -481,12 +552,59 @@ fn a_thin_seam_is_shrunk_toward_zero() {
     assert!(thick.score > 0.9, "thick = {}", thick.score);
 }
 
-#[test]
-fn three_groups_fan_bridges_into_pairs_and_score_is_the_max() {
-    // Three camera bands around the same cloud. Cross-group evidence comes in
-    // two flavours: pairwise bridges (three cameras of each of two groups) and
-    // tri-spanning bridges (two cameras of every group) — the latter must fan
-    // into all three pair entries.
+/// Three camera bands around the same cloud. Cross-group evidence comes in two
+/// flavours: pairwise bridges (three cameras of each of two groups) and
+/// tri-spanning bridges (two cameras of every group), which fan into all three
+/// pair entries. The candidate shifts the third band.
+struct ThreeGroupScene {
+    cluster: Vec<u32>,
+    image: Vec<u32>,
+    pos: Vec<[f64; 2]>,
+    warp: Vec<f64>,
+    quats: Vec<UnitQuaternion<f64>>,
+    centers: Vec<Vector3<f64>>,
+    n_per: usize,
+}
+
+impl ThreeGroupScene {
+    fn census(&self, shift_c: f64) -> CensusReport {
+        self.census_params(shift_c, &CensusParams::default())
+    }
+
+    fn census_params(&self, shift_c: f64, params: &CensusParams) -> CensusReport {
+        let n_per = self.n_per;
+        let shift = Vector3::new(0.0, shift_c, 0.0);
+        let mut cq = Vec::new();
+        let mut ct = Vec::new();
+        for i in 0..3 * n_per {
+            let q = self.quats[i];
+            let c = if i >= 2 * n_per {
+                self.centers[i] + shift
+            } else {
+                self.centers[i]
+            };
+            let qi = q.into_inner();
+            cq.push([qi.w, qi.i, qi.j, qi.k]);
+            let t = -(q * c);
+            ct.push([t.x, t.y, t.z]);
+        }
+        let posed: Vec<u32> = (0..(3 * n_per) as u32).collect();
+        cluster_census(
+            &self.cluster,
+            &self.image,
+            &self.pos,
+            &self.warp,
+            &test_cam(),
+            &cq,
+            &ct,
+            &posed,
+            params,
+        )
+        .unwrap()
+    }
+}
+
+fn three_group_scene() -> ThreeGroupScene {
     let mut rng = Lcg(0x5eed_3333);
     let r_orbit = 10.0;
     let n_per = 6usize;
@@ -579,36 +697,22 @@ fn three_groups_fan_bridges_into_pairs_and_score_is_the_max() {
         &mut warp,
     );
 
-    let candidate = |shift_c: f64| {
-        let shift = Vector3::new(0.0, shift_c, 0.0);
-        let mut cq = Vec::new();
-        let mut ct = Vec::new();
-        for i in 0..3 * n_per {
-            let q = quats[i];
-            let c = if i >= 2 * n_per {
-                centers[i] + shift
-            } else {
-                centers[i]
-            };
-            let qi = q.into_inner();
-            cq.push([qi.w, qi.i, qi.j, qi.k]);
-            let t = -(q * c);
-            ct.push([t.x, t.y, t.z]);
-        }
-        let posed: Vec<u32> = (0..(3 * n_per) as u32).collect();
-        cluster_census(
-            &cluster,
-            &image,
-            &pos,
-            &warp,
-            &test_cam(),
-            &cq,
-            &ct,
-            &posed,
-            &CensusParams::default(),
-        )
-        .unwrap()
-    };
+    ThreeGroupScene {
+        cluster,
+        image,
+        pos,
+        warp,
+        quats,
+        centers,
+        n_per,
+    }
+}
+
+#[test]
+fn three_groups_fan_bridges_into_pairs_and_score_is_the_max() {
+    let scene = three_group_scene();
+    let n_per = scene.n_per;
+    let candidate = |shift_c: f64| scene.census(shift_c);
 
     // At the truth every pair entry exists, in ascending (group_a, group_b)
     // order, with more eligible evidence than the 60 pairwise bridges alone
@@ -660,6 +764,180 @@ fn census_is_deterministic() {
     assert_eq!(a.group_of, b.group_of);
     assert_eq!(a.pairs, b.pairs);
     assert_eq!(a.sat_pct, b.sat_pct);
+}
+
+// ── Group consistency (the opt-in companion) ─────────────────────────────
+
+fn with_consistency() -> CensusParams {
+    CensusParams {
+        compute_group_consistency: true,
+        ..CensusParams::default()
+    }
+}
+
+/// Rotation angle (degrees) of a WXYZ quaternion.
+fn angle_deg(q: [f64; 4]) -> f64 {
+    2.0 * q[0].abs().min(1.0).acos().to_degrees()
+}
+
+fn correction_of(gc: &GroupConsistency, group: u32) -> GroupCorrection {
+    *gc.corrections
+        .iter()
+        .find(|c| c.group == group)
+        .expect("every group carries a correction")
+}
+
+#[test]
+fn the_companion_is_opt_in_and_leaves_the_census_untouched() {
+    let scene = two_group_scene(8, 6, 150, 60);
+    let off = scene.census(0.5);
+    let on = scene.census_params(0.5, &with_consistency());
+    assert!(off.group_consistency.is_none());
+    assert!(on.group_consistency.is_some());
+    // Every phase-1 field is bit-identical; only the companion appears.
+    assert_eq!(off.score, on.score);
+    assert_eq!(off.n_groups, on.n_groups);
+    assert_eq!(off.group_of, on.group_of);
+    assert_eq!(off.pairs, on.pairs);
+    assert_eq!(off.sat_pct, on.sat_pct);
+}
+
+#[test]
+fn a_rigidly_misplaced_group_is_coherent() {
+    // Group B is larger-than-life wrong but *rigidly* so: the correction that
+    // undoes the +0.5 shift of its cameras is exactly t = (0, −0.5, 0), and the
+    // solve must recover it from the bridges alone. Group A is the larger group,
+    // so it holds the gauge and group B carries the correction.
+    let scene = two_group_scene(8, 6, 150, 60);
+    let report = scene.census_params(0.5, &with_consistency());
+    assert_eq!(report.n_groups, 2);
+    let gc = report.group_consistency.expect("two groups with bridges");
+    assert_eq!(gc.corrections.len(), 2);
+
+    let gauge = report.group_of[0] as u32;
+    let moved = report.group_of[scene.n_a] as u32;
+    assert_ne!(gauge, moved);
+    let identity = correction_of(&gc, gauge);
+    assert_eq!(identity.rotation_wxyz, [1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(identity.translation, [0.0, 0.0, 0.0]);
+    assert_eq!(identity.log_scale, 0.0);
+
+    let fix = correction_of(&gc, moved);
+    assert!(angle_deg(fix.rotation_wxyz) < 1.0, "fix = {fix:?}");
+    assert!(fix.log_scale.abs() < 0.02, "fix = {fix:?}");
+    for (got, want) in fix.translation.iter().zip([0.0, -0.5, 0.0]) {
+        assert!((got - want).abs() < 0.05, "fix = {fix:?}");
+    }
+
+    // The disagreement is coherent, and the repair is a net gain rather than a
+    // trade of one seam for another.
+    assert!(gc.explained_pct > 90.0, "explained = {}", gc.explained_pct);
+    assert!(
+        gc.net_after > gc.net_before,
+        "net {} -> {}",
+        gc.net_before,
+        gc.net_after
+    );
+}
+
+#[test]
+fn junk_bridges_that_slipped_the_screen_are_incoherent() {
+    // The candidate is at the truth; what it cannot satisfy is a population of
+    // false matches whose warp consistency looks genuine. No similarity of
+    // either group can place unrelated physical points on top of each other, so
+    // the disagreement is incoherent even though the census flags it.
+    let scene = junk_bridge_scene(8, 6, 150, 60);
+    let report = scene.census_params(0.0, &with_consistency());
+    assert_eq!(report.n_groups, 2);
+    assert!(report.score > 0.9, "score = {}", report.score);
+    let gc = report.group_consistency.expect("two groups with bridges");
+    assert!(gc.explained_pct < 10.0, "explained = {}", gc.explained_pct);
+}
+
+#[test]
+fn a_truthful_candidate_needs_no_correction() {
+    let scene = two_group_scene(8, 6, 150, 60);
+    let report = scene.census_params(0.0, &with_consistency());
+    let gc = report.group_consistency.expect("two groups with bridges");
+    for c in &gc.corrections {
+        assert!(angle_deg(c.rotation_wxyz) < 0.05, "correction = {c:?}");
+        assert!(c.log_scale.abs() < 1e-3, "correction = {c:?}");
+        let shift =
+            (c.translation[0].powi(2) + c.translation[1].powi(2) + c.translation[2].powi(2)).sqrt();
+        assert!(shift < 0.02, "correction = {c:?}");
+    }
+    // Nothing was unsatisfied, so there is nothing to explain, and the solve
+    // cannot have broken what was already satisfied.
+    assert_eq!(gc.explained_pct, 0.0);
+    assert_eq!(gc.net_after, gc.net_before);
+}
+
+#[test]
+fn the_joint_solve_separates_one_band_of_three() {
+    // Three groups, one shifted: the joint solve must place the shifted band
+    // relative to the other two, whichever of them holds the gauge. Comparing
+    // corrections *between* groups makes the assertion gauge-independent.
+    let scene = three_group_scene();
+    let report = scene.census_params(0.5, &with_consistency());
+    assert_eq!(report.n_groups, 3);
+    let gc = report.group_consistency.expect("three groups with bridges");
+    assert_eq!(gc.corrections.len(), 3);
+
+    let moved = report.group_of[2 * scene.n_per] as u32;
+    let fix = correction_of(&gc, moved);
+    for g in 0..3u32 {
+        if g == moved {
+            continue;
+        }
+        let still = correction_of(&gc, g);
+        assert!(angle_deg(still.rotation_wxyz) < 1.0, "still = {still:?}");
+        // The shifted band has to fall 0.5 in +Y relative to every band that
+        // stayed put; the two that stayed must agree with each other.
+        let dy = fix.translation[1] - still.translation[1];
+        assert!((dy + 0.5).abs() < 0.06, "dy = {dy}");
+        assert!(
+            (fix.translation[0] - still.translation[0]).abs() < 0.06,
+            "fix = {fix:?} still = {still:?}"
+        );
+        assert!(
+            (fix.translation[2] - still.translation[2]).abs() < 0.06,
+            "fix = {fix:?} still = {still:?}"
+        );
+    }
+    assert!(gc.explained_pct > 80.0, "explained = {}", gc.explained_pct);
+    assert!(
+        gc.net_after > gc.net_before,
+        "net {} -> {}",
+        gc.net_before,
+        gc.net_after
+    );
+}
+
+#[test]
+fn group_consistency_is_deterministic() {
+    let scene = two_group_scene(8, 6, 150, 60);
+    let a = scene.census_params(0.5, &with_consistency());
+    let b = scene.census_params(0.5, &with_consistency());
+    assert_eq!(a.group_consistency, b.group_consistency);
+}
+
+#[test]
+fn group_consistency_declines_without_group_structure_or_evidence() {
+    // One group: nothing to be consistent about.
+    let single = two_group_scene(6, 0, 150, 0).census_params(0.0, &with_consistency());
+    assert_eq!(single.n_groups, 1);
+    assert!(single.group_consistency.is_none());
+
+    // Two groups, but every bridge falls outside the eligibility screen: no
+    // evidence to solve on.
+    let scene = two_group_scene(8, 6, 150, 60);
+    let mut warp = scene.warp.clone();
+    for &id in &scene.bridge_ids {
+        warp[id as usize] = 8.0;
+    }
+    let starved = scene.census_full(0.5, &warp, &with_consistency());
+    assert_eq!(starved.n_groups, 2);
+    assert!(starved.group_consistency.is_none());
 }
 
 // ── Input validation ─────────────────────────────────────────────────────

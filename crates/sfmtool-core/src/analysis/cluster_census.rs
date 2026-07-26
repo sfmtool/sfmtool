@@ -38,11 +38,16 @@
 //! Deterministic: the community merge order, the tie-breaking rule, and every
 //! reduction below are fixed functions of the input arrays.
 //!
-//! Phase 1 (this module) implements the score, the groups, the per-pair stats,
-//! and `sat_pct`. The group-consistency companion ([`GroupConsistency`]) is
-//! phase 2; [`CensusReport::group_consistency`] is always `None` today.
+//! The group-consistency companion ([`GroupConsistency`]) answers the follow-up
+//! question — is the unsatisfied evidence *coherent*, i.e. explainable by
+//! group-level pose error? It is analysis only, never touches the candidate,
+//! and costs a small robust solve, so it is opt-in via
+//! [`CensusParams::compute_group_consistency`]; off, the report's
+//! `group_consistency` is `None`. See [`group_consistency`].
 //!
 //! See `specs/core/cluster-census.md` for the design.
+
+mod group_consistency;
 
 use std::collections::BTreeMap;
 
@@ -75,6 +80,11 @@ pub struct CensusParams {
     pub warp_percentile: f64,
     /// Wilson bound z (1.96 = standard 95 %).
     pub wilson_z: f64,
+    /// Run the group-consistency companion ([`GroupConsistency`]) as well. It
+    /// answers a different question from the score — whether the unsatisfied
+    /// evidence is coherent — at the cost of a robust solve over the eligible
+    /// bridges, and leaves every other field of the report untouched.
+    pub compute_group_consistency: bool,
 }
 
 impl Default for CensusParams {
@@ -84,6 +94,7 @@ impl Default for CensusParams {
             hi_parallax_deg: 5.0,
             warp_percentile: 95.0,
             wilson_z: 1.96,
+            compute_group_consistency: false,
         }
     }
 }
@@ -103,10 +114,13 @@ pub struct PairStats {
     pub wilson_lb: f64,
 }
 
-/// One group's pose correction from the phase-2 group-consistency solve:
-/// the 7-dof similarity that, applied to this group, best satisfies the
-/// eligible bridges (the largest group fixes the gauge with an identity
-/// correction).
+/// One group's pose correction from the group-consistency solve: the 7-dof
+/// similarity that, applied to this group, best satisfies the eligible bridges
+/// (the largest group fixes the gauge with an identity correction).
+///
+/// The similarity acts on the group's content as `W(x) = s·Q·x + t` —
+/// equivalently on its cameras as `R' = R·Qᵀ`, `C' = s·Q·C + t` — with
+/// `Q` = `rotation_wxyz`, `t` = `translation`, `s` = `exp(log_scale)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GroupCorrection {
     /// The corrected group.
@@ -119,9 +133,9 @@ pub struct GroupCorrection {
     pub log_scale: f64,
 }
 
-/// Phase-2 group consistency: the joint per-group corrections that best
-/// explain the cross-group disagreement, and how much of it they explain.
-/// Not yet computed — [`CensusReport::group_consistency`] is always `None`.
+/// Group consistency: the joint per-group corrections that best explain the
+/// cross-group disagreement, and how much of it they explain. Computed only
+/// when [`CensusParams::compute_group_consistency`] is set.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GroupConsistency {
     /// Per-group corrections; the gauge group carries the identity.
@@ -156,7 +170,10 @@ pub struct CensusReport {
     /// globally-deformed solve degrades this without producing a large
     /// pairwise census, so gating callers should test both.
     pub sat_pct: f64,
-    /// Phase 2; always `None` today.
+    /// The group-consistency companion. `None` unless
+    /// [`CensusParams::compute_group_consistency`] is set, and also `None` when
+    /// it has nothing to say: fewer than two groups, or no eligible measurable
+    /// bridge to solve on.
     pub group_consistency: Option<GroupConsistency>,
 }
 
@@ -676,13 +693,43 @@ pub fn cluster_census(
         0.0
     };
 
+    // ── 6. Companion: group consistency (opt-in) ─────────────────────────
+    let consistency = if params.compute_group_consistency {
+        let eval_segs: Vec<usize> = (0..n_seg)
+            .filter(|&s| measurable[s] && eligible[s] && groups_of_seg[s].len() >= 2)
+            .collect();
+        let eval_hi_parallax: Vec<bool> = eval_segs
+            .iter()
+            .map(|&s| parallax[s].is_finite() && parallax[s] >= params.hi_parallax_deg)
+            .collect();
+        let posed_centers: Vec<Point3<f64>> =
+            posed_images.iter().map(|&i| centers[i as usize]).collect();
+        group_consistency::group_consistency(&group_consistency::GroupConsistencyInput {
+            camera,
+            quats: &quats,
+            group_of: &group_of,
+            n_groups,
+            posed_centers: &posed_centers,
+            dirs: &dirs,
+            obs_center: &obs_center,
+            obs_image: &obs_image,
+            obs_uv: &obs_uv,
+            seg_offsets: &seg_offsets,
+            eval_segs: &eval_segs,
+            eval_hi_parallax: &eval_hi_parallax,
+            sat_px: params.sat_px,
+        })
+    } else {
+        None
+    };
+
     Ok(CensusReport {
         score,
         n_groups,
         group_of,
         pairs,
         sat_pct,
-        group_consistency: None,
+        group_consistency: consistency,
     })
 }
 

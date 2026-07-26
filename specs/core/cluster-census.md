@@ -1,14 +1,12 @@
 # Cluster Match Census
 
-_Status: **implemented (phase 1)** —
-`sfmtool_core::analysis::cluster_census`, bound as
+_Status: **implemented** — `sfmtool_core::analysis::cluster_census`, bound as
 `sfmtool._sfmtool.analysis.cluster_census`. The score, the viewpoint groups,
 the per-pair stats, and `sat_pct` are native and at parity with the Python
-prototype (`scripts/seed_census.py`); the group-consistency companion
-(§ [Group consistency](#companion-group-consistency)) remains **phase 2**
-— `CensusReport.group_consistency` is `None` and the binding returns
-`"group_consistency": None`. The `census_echo` seed confidence flag is
-not wired up yet._
+prototype (`scripts/seed_census.py`). The group-consistency companion
+(§ [Group consistency](#companion-group-consistency)) is behind the opt-in
+`compute_group_consistency`; unset, `CensusReport.group_consistency` is
+`None`. The `census_echo` seed confidence flag is not wired up yet._
 
 ## Problem
 
@@ -179,16 +177,36 @@ A globally-deformed solve (every seam slightly wrong, no single worst pair)
 degrades `sat_pct` without producing a large pairwise census. Callers that
 gate should test both.
 
-### <a name="companion-group-consistency"></a>6. Companion: group consistency (phase 2)
+### <a name="companion-group-consistency"></a>6. Companion: group consistency
 
 The census score reports **how much** cross-group evidence the candidate
 leaves unsatisfied; the group-consistency companion asks whether that
 disagreement is **coherent** — explainable by group-level pose error — and
-estimates it. Jointly over all groups (the largest group fixes the gauge),
-estimate the per-group 7-dof similarities (rotation, translation, log
-scale) that minimize a robust cost over the eligible bridges: a global
-pose-consistency solve over the viewpoint-group graph, the group-level
-analogue of the per-cluster census. Report:
+estimates it. Jointly over all groups (the largest group fixes the gauge,
+ties to the lowest group id), estimate the per-group 7-dof similarities
+(rotation, translation, log scale) that minimize a robust cost over the
+eligible bridges: a global pose-consistency solve over the viewpoint-group
+graph, the group-level analogue of the per-cluster census.
+
+A correction `(Q, t, s)` acts on its group's content as the world
+similarity `W(x) = s·Q·x + t`, equivalently on its cameras as
+
+```
+R' = R·Qᵀ        C' = s·Q·C + t
+```
+
+which leaves that group's own projections untouched — its structure moves
+with it — and changes only where its rays meet the other groups'. Bridges
+are therefore **re-triangulated** at the corrected poses and re-scored;
+there is no fixed structure to hold on to. The cost is the soft-L1 sum over
+the bridges' per-observation pixel residuals, minimized by
+Levenberg–Marquardt from the identity correction over 7 × (n_groups − 1)
+parameters — small enough for dense normal equations and a
+central-difference Jacobian of the triangulate-and-project chain. The
+robust loss is what lets the fit run on the eligible bridges directly,
+false matches that survived the screen included. Translation parameters are
+scaled by the scene radius (the median camera distance from the median
+camera center) so all seven parameters of a block are comparable. Report:
 
 - the per-group **corrections** — identity corrections mean the candidate
   is already group-consistent;
@@ -204,7 +222,15 @@ bridges); a false-match population that survived the eligibility screen is
 incoherent (jointly unsatisfiable by any rigid correction — explained
 fraction ≈ 0). The corrections are the natural initialization for callers
 that re-glue a flagged group; the operation itself is analysis only and
-never modifies the candidate.
+never modifies the candidate, and it costs a solve, so it is opt-in
+(`compute_group_consistency`) and leaves every other field of the report
+untouched.
+
+It reports **nothing** — not a vacuous identity — where it has nothing to
+say: fewer than two groups (no group structure), or no eligible measurable
+bridge (no cross-group evidence). A solve that cannot descend (singular
+normal equations, no admissible step) reports the identity corrections it
+started from, which score explained fraction 0 with the net unchanged.
 
 ## Outputs
 
@@ -215,9 +241,9 @@ CensusReport {
     group_of:   Vec<i32>,         // per input image, -1 = unposed
     pairs:      Vec<PairStats>,   // (ga, gb, n_eligible_hi, n_unsatisfied_hi, wilson_lb)
     sat_pct:    f64,
-    // phase 2:
     group_consistency: Option<GroupConsistency>,
-        // per-group corrections, explained fraction, net
+        // per-group corrections, explained fraction, net;
+        // None unless compute_group_consistency, and where § 6 declines
 }
 ```
 
@@ -237,7 +263,7 @@ callers pass a shared pinhole.
 - **Finalization focal arbitration** (`_finalize_seed`): score each candidate
   BA result; keep the lower-scoring candidate, ties to the vote.
 - **`census_echo` seed confidence flag**: after finalization, flag the seed
-  when `score ≥ flag_threshold` (and, with phase 2, explained fraction ≥
+  when `score ≥ flag_threshold` (and, with § 6 enabled, explained fraction ≥
   a coherence threshold to suppress junk-evidence flags). The flag reports the
   failure axis the focal flags cannot see: correct focal, wrong placement.
 - **Fleet / analysis tooling**: per-solve echo screening over a workspace.
@@ -251,6 +277,9 @@ callers pass a shared pinhole.
 | warp-consistency percentile | P95 | tail width of the eligibility threshold; the threshold itself is data-derived, the tail is fixed |
 | Wilson `z` | 1.96 | standard 95 % bound |
 | `flag_threshold` | 0.25 | calibration constant for the flag caller; **not yet data-derived** — revisit with a per-capture null (e.g. the census of a within-group split, which should be ≈ 0) |
+| `compute_group_consistency` | false | opt-in for § 6; it costs a solve and answers a different question from the score |
+| § 6 robust scale | 3.0 px | soft-L1 transition of the group-consistency cost; above `sat_px`, so a satisfied bridge sits in the quadratic regime and a false match cannot drag the solve |
+| § 6 fit-set cap | 1200 bridges | the fit strides down beyond it (the *scoring* set stays complete); 7 dof per group are over-determined by a few hundred bridges and the Jacobian cost is linear in the fit set |
 
 ## Blind spots (by design; callers must know)
 
@@ -272,11 +301,11 @@ The operation composes existing native kernels — `ClusterCovisibility`
 counts, batch triangulation, per-image reprojection residuals — plus three
 small new pieces: CNM modularity grouping (n ≤ a few hundred posed images;
 O(n³) naive is acceptable, the Python prototype's per-merge recompute is
-not), segmented per-cluster medians, and the Wilson bound. Phase 2's group
-consistency needs a small robust LM solve (7 × (n_groups − 1) parameters)
-over re-triangulated bridge residuals. Natural home: `sfmtool-core` alongside the covisibility and
-triangulation kernels, exposed through `sfmtool-py` as
-`analysis.cluster_census(...)`.
+not), segmented per-cluster medians, and the Wilson bound. The group
+consistency of § 6 adds a small robust LM solve (7 × (n_groups − 1)
+parameters) over re-triangulated bridge residuals. Home: `sfmtool-core`
+alongside the covisibility and triangulation kernels, exposed through
+`sfmtool-py` as `analysis.cluster_census(...)`.
 
 ## Evidence
 
