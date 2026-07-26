@@ -213,7 +213,7 @@ CensusReport {
     score:      f64,              // max per-pair Wilson lower bound
     n_groups:   usize,            // < 2 ⇒ unverifiable, score is vacuous
     group_of:   Vec<i32>,         // per input image, -1 = unposed
-    pairs:      Vec<PairStats>,   // (ga, gb, n_eligible_hi, n_unsat_hi, wilson_lb)
+    pairs:      Vec<PairStats>,   // (ga, gb, n_eligible_hi, n_unsatisfied_hi, wilson_lb)
     sat_pct:    f64,
     // phase 2:
     group_consistency: Option<GroupConsistency>,
@@ -292,9 +292,6 @@ misses: one junk-dominated capture inside the phantom blind spot, one
 0.03-margin tie). Pose-error validation (`seedval-report.tsv`): census ≥ 0.7
 on every "ok"-flagged seed with median center error > 9 % of scene radius,
 except the two phantom-seam captures (blind spot 1). The prototype's
-worst-pair variant of the group-consistency solve separated junk flags
-from genuine misregistrations across the fleet (explained fraction
-0–5 % vs 49–97 %). The prototype's
 worst-pair variant of the group-consistency solve separated junk flags
 from genuine misregistrations across the fleet (explained fraction
 0–5 % vs 49–97 %).

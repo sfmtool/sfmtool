@@ -374,7 +374,9 @@ fn two_clean_arcs_score_zero() {
         report.pairs
     );
     assert_eq!(report.pairs[0].n_unsatisfied_hi, 0);
-    assert_eq!(report.score, 0.0);
+    // A zero numerator over a large denominator can leave float dust in the
+    // Wilson bound, not an exact zero.
+    assert!(report.score < 1e-12, "score = {}", report.score);
     assert!(report.sat_pct > 99.0, "sat_pct = {}", report.sat_pct);
     assert!(report.group_consistency.is_none());
 }
@@ -404,7 +406,7 @@ fn score_falls_as_the_candidate_approaches_the_truth() {
     let exact = scene.census(0.0).score;
     assert!(far >= near, "{far} !>= {near}");
     assert!(near >= exact, "{near} !>= {exact}");
-    assert_eq!(exact, 0.0);
+    assert!(exact < 1e-12, "exact = {exact}");
 }
 
 #[test]
@@ -477,6 +479,175 @@ fn a_thin_seam_is_shrunk_toward_zero() {
     );
     assert!(thin.score < 0.7, "thin = {}", thin.score);
     assert!(thick.score > 0.9, "thick = {}", thick.score);
+}
+
+#[test]
+fn three_groups_fan_bridges_into_pairs_and_score_is_the_max() {
+    // Three camera bands around the same cloud. Cross-group evidence comes in
+    // two flavours: pairwise bridges (three cameras of each of two groups) and
+    // tri-spanning bridges (two cameras of every group) — the latter must fan
+    // into all three pair entries.
+    let mut rng = Lcg(0x5eed_3333);
+    let r_orbit = 10.0;
+    let n_per = 6usize;
+    let mut quats = Vec::new();
+    let mut centers = Vec::new();
+    for (lo, hi) in [(-25.0f64, 25.0), (65.0, 115.0), (155.0, 205.0)] {
+        for i in 0..n_per {
+            let az = (lo + (hi - lo) * i as f64 / (n_per - 1) as f64).to_radians();
+            let c = Vector3::new(
+                r_orbit * az.sin(),
+                rng.uniform(-0.3, 0.3),
+                r_orbit * az.cos(),
+            );
+            quats.push(look_at(c, Vector3::zeros()));
+            centers.push(c);
+        }
+    }
+    let mut cluster = Vec::new();
+    let mut image = Vec::new();
+    let mut pos = Vec::new();
+    let mut warp = Vec::new();
+    let groups: Vec<Vec<usize>> = (0..3)
+        .map(|g| (g * n_per..(g + 1) * n_per).collect())
+        .collect();
+    let mut fill = |members_of: &dyn Fn(usize) -> Vec<usize>,
+                    n: usize,
+                    cluster: &mut Vec<u32>,
+                    image: &mut Vec<u32>,
+                    pos: &mut Vec<[f64; 2]>,
+                    warp: &mut Vec<f64>| {
+        let mut made = 0;
+        let mut tries = 0;
+        while made < n {
+            tries += 1;
+            assert!(tries < 100 * n + 100, "scene generation stalled");
+            if push_cluster(
+                &members_of(made),
+                &quats,
+                &centers,
+                &mut rng,
+                cluster,
+                image,
+                pos,
+                warp,
+            )
+            .is_some()
+            {
+                made += 1;
+            }
+        }
+    };
+    for g in &groups {
+        let g = g.clone();
+        fill(
+            &move |_| g.clone(),
+            150,
+            &mut cluster,
+            &mut image,
+            &mut pos,
+            &mut warp,
+        );
+    }
+    for (a, b) in [(0usize, 1usize), (0, 2), (1, 2)] {
+        let (ga, gb) = (groups[a].clone(), groups[b].clone());
+        fill(
+            &move |turn| {
+                (0..3)
+                    .map(|k| ga[(turn + k) % n_per])
+                    .chain((0..3).map(|k| gb[(turn + k) % n_per]))
+                    .collect()
+            },
+            60,
+            &mut cluster,
+            &mut image,
+            &mut pos,
+            &mut warp,
+        );
+    }
+    let tri = groups.clone();
+    fill(
+        &move |turn| {
+            tri.iter()
+                .flat_map(|g| (0..2).map(move |k| g[(turn + k) % n_per]))
+                .collect()
+        },
+        20,
+        &mut cluster,
+        &mut image,
+        &mut pos,
+        &mut warp,
+    );
+
+    let candidate = |shift_c: f64| {
+        let shift = Vector3::new(0.0, shift_c, 0.0);
+        let mut cq = Vec::new();
+        let mut ct = Vec::new();
+        for i in 0..3 * n_per {
+            let q = quats[i];
+            let c = if i >= 2 * n_per {
+                centers[i] + shift
+            } else {
+                centers[i]
+            };
+            let qi = q.into_inner();
+            cq.push([qi.w, qi.i, qi.j, qi.k]);
+            let t = -(q * c);
+            ct.push([t.x, t.y, t.z]);
+        }
+        let posed: Vec<u32> = (0..(3 * n_per) as u32).collect();
+        cluster_census(
+            &cluster,
+            &image,
+            &pos,
+            &warp,
+            &test_cam(),
+            &cq,
+            &ct,
+            &posed,
+            &CensusParams::default(),
+        )
+        .unwrap()
+    };
+
+    // At the truth every pair entry exists, in ascending (group_a, group_b)
+    // order, with more eligible evidence than the 60 pairwise bridges alone
+    // could supply — the tri-spanning bridges fanned into every pair.
+    let clean = candidate(0.0);
+    assert_eq!(clean.n_groups, 3, "group_of = {:?}", clean.group_of);
+    assert_eq!(clean.pairs.len(), 3);
+    for w in clean.pairs.windows(2) {
+        assert!(
+            (w[0].group_a, w[0].group_b) < (w[1].group_a, w[1].group_b),
+            "pairs = {:?}",
+            clean.pairs
+        );
+    }
+    for p in &clean.pairs {
+        assert!(p.group_a < p.group_b, "pairs = {:?}", clean.pairs);
+        assert!(p.n_eligible_hi > 65, "pairs = {:?}", clean.pairs);
+        assert_eq!(p.n_unsatisfied_hi, 0, "pairs = {:?}", clean.pairs);
+    }
+    assert!(clean.score < 1e-12, "score = {}", clean.score);
+
+    // Shift the third band: both of its seams fail while the untouched pair
+    // stays comparatively clean. The score is the max over pairs — a pooled
+    // fraction would dilute the two failing seams with the clean pair's
+    // evidence.
+    let shifted = candidate(0.5);
+    assert_eq!(shifted.n_groups, 3);
+    assert_eq!(shifted.pairs.len(), 3);
+    let gc = shifted.group_of[2 * n_per];
+    let mut max_lb = 0.0f64;
+    for p in &shifted.pairs {
+        max_lb = max_lb.max(p.wilson_lb);
+        if p.group_a as i32 == gc || p.group_b as i32 == gc {
+            assert!(p.wilson_lb > 0.9, "seam pair = {p:?}");
+        } else {
+            assert!(p.wilson_lb < 0.5, "clean pair = {p:?}");
+        }
+    }
+    assert_eq!(shifted.score, max_lb);
 }
 
 #[test]

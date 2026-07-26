@@ -48,7 +48,9 @@ use std::collections::BTreeMap;
 
 use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 
-use crate::features::cluster_match::covisibility::{ClusterCovisibility, CovisibilityError};
+use crate::features::cluster_match::covisibility::{
+    ClusterCovisibility, CovisibilityError, MAX_DENSE_IMAGES,
+};
 use crate::geometry::reprojection::reprojection_residuals;
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::CameraIntrinsics;
@@ -438,6 +440,12 @@ pub fn cluster_census(
         .map(|&i| i as usize + 1)
         .max()
         .unwrap_or(0);
+    // The same bound `from_clusters` enforces, hoisted above the dense
+    // per-image allocations so a stray huge index fails in O(1) instead of
+    // sizing gigabytes first.
+    if n_img > MAX_DENSE_IMAGES {
+        return Err(CovisibilityError::TooManyImages { num_images: n_img }.into());
+    }
 
     // ── Candidate poses ──────────────────────────────────────────────────
     let mut posed = vec![false; n_img];

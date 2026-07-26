@@ -118,6 +118,22 @@ pub fn cluster_census<'py>(
             "warp_percentile must lie in [0, 100]",
         ));
     }
+    // A NaN threshold would leak through every comparison below as "no
+    // cluster qualifies" and report a clean 0.0 — the one silent failure the
+    // census must never produce.
+    if !(sat_px.is_finite() && sat_px > 0.0) {
+        return Err(PyValueError::new_err("sat_px must be finite and positive"));
+    }
+    if !(hi_parallax_deg.is_finite() && hi_parallax_deg >= 0.0) {
+        return Err(PyValueError::new_err(
+            "hi_parallax_deg must be finite and non-negative",
+        ));
+    }
+    if !(wilson_z.is_finite() && wilson_z >= 0.0) {
+        return Err(PyValueError::new_err(
+            "wilson_z must be finite and non-negative",
+        ));
+    }
 
     let cam = camera.inner.clone();
     let params = CensusParams {

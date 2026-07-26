@@ -494,7 +494,9 @@ def test_clean_candidate_scores_zero(scene):
     assert len(set(group_of[: scene.n_a].tolist())) == 1
     assert len(set(group_of[scene.n_a : scene.n_posed].tolist())) == 1
     assert group_of[0] != group_of[scene.n_a]
-    assert report["score"] == 0.0
+    # A zero numerator over a large denominator can leave float dust in the
+    # Wilson bound, not an exact zero.
+    assert report["score"] < 1e-12
     assert len(report["pairs"]) == 1
     assert report["pairs"][0]["n_eligible_hi"] > 100
     assert report["pairs"][0]["n_unsatisfied_hi"] == 0
@@ -547,6 +549,23 @@ def test_parameters_are_honoured(scene):
     loose = scene.native(0.5, scene.n_a, sat_px=1e5)
     assert loose["pairs"][0]["n_unsatisfied_hi"] == 0
     assert loose["score"] < 1e-12
+
+
+def test_malformed_parameters_are_rejected(scene):
+    """A non-finite threshold must raise, not leak through every comparison
+    as "no cluster qualifies" and report a clean 0.0."""
+    for kwargs in (
+        {"sat_px": float("nan")},
+        {"sat_px": 0.0},
+        {"hi_parallax_deg": float("nan")},
+        {"hi_parallax_deg": -1.0},
+        {"wilson_z": float("nan")},
+        {"wilson_z": -1.96},
+        {"warp_percentile": float("nan")},
+        {"warp_percentile": 101.0},
+    ):
+        with pytest.raises(ValueError):
+            scene.native(0.5, scene.n_a, **kwargs)
 
 
 def test_determinism(scene):
