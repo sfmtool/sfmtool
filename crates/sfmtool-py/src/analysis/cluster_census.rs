@@ -62,14 +62,35 @@ use crate::geometry::PyCameraIntrinsics;
 ///         warp-consistency residuals that becomes the eligibility
 ///         threshold (default 95.0).
 ///     wilson_z: Wilson bound z (default 1.96, the 95 % bound).
+///     compute_group_consistency: Also run the group-consistency companion
+///         (default False). It answers a different question from the score —
+///         whether the unsatisfied cross-group evidence is *coherent*,
+///         i.e. explainable by group-level pose error — by jointly estimating
+///         a 7-dof similarity per viewpoint group (the largest group holds the
+///         gauge with an identity correction) against the eligible bridges.
+///         Analysis only: it never modifies the candidate and leaves every
+///         other field of the report untouched.
 ///
 /// Returns:
 ///     A dict ``{"score": float, "n_groups": int, "group_of" (n_img,) int32
 ///     with -1 for an unposed image, "pairs": list of
 ///     ``{"group_a", "group_b", "n_eligible_hi", "n_unsatisfied_hi",
 ///     "wilson_lb"}`` ascending by group pair, "sat_pct": float,
-///     "group_consistency": None}``. ``group_consistency`` is reserved for
-///     the phase-2 companion and is always ``None`` today.
+///     "group_consistency": dict or None}``.
+///
+///     ``group_consistency`` is ``None`` unless ``compute_group_consistency``
+///     is set, and also ``None`` when the companion has nothing to say (fewer
+///     than two groups, or no eligible measurable bridge). Otherwise it is
+///     ``{"corrections": list of {"group": int, "rotation_wxyz": (4,) float64,
+///     "translation": (3,) float64 world units, "log_scale": float} ascending
+///     by group, "explained_pct": float, "net_before": int,
+///     "net_after": int}``. A correction acts on its group's content as
+///     ``W(x) = exp(log_scale) * Q @ x + translation``. ``explained_pct`` is
+///     the percent of the previously-unsatisfied high-parallax bridges the
+///     corrections satisfy (0 when none were unsatisfied); ``net_before`` /
+///     ``net_after`` count the satisfied bridges over the whole eligible
+///     bridge population, so a correction that fixes one seam by breaking
+///     another shows no net gain.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
@@ -86,6 +107,7 @@ use crate::geometry::PyCameraIntrinsics;
     hi_parallax_deg=5.0,
     warp_percentile=95.0,
     wilson_z=1.96,
+    compute_group_consistency=false,
 ))]
 pub fn cluster_census<'py>(
     py: Python<'py>,
@@ -101,6 +123,7 @@ pub fn cluster_census<'py>(
     hi_parallax_deg: f64,
     warp_percentile: f64,
     wilson_z: f64,
+    compute_group_consistency: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
     let (clusters, images, positions) =
         read_observations(&cluster_indexes, &image_indexes, &positions_xy)?;
@@ -141,6 +164,7 @@ pub fn cluster_census<'py>(
         hi_parallax_deg,
         warp_percentile,
         wilson_z,
+        compute_group_consistency,
     };
     let report: CensusReport = py
         .detach(move || {
@@ -167,9 +191,26 @@ pub fn cluster_census<'py>(
     out.set_item("group_of", PyArray1::from_slice(py, &report.group_of))?;
     out.set_item("pairs", pairs)?;
     out.set_item("sat_pct", report.sat_pct)?;
-    // Phase 2: the group-consistency companion is specified but not
-    // implemented.
-    out.set_item("group_consistency", py.None())?;
+    match &report.group_consistency {
+        None => out.set_item("group_consistency", py.None())?,
+        Some(gc) => {
+            let corrections = PyList::empty(py);
+            for c in &gc.corrections {
+                let d = PyDict::new(py);
+                d.set_item("group", c.group)?;
+                d.set_item("rotation_wxyz", PyArray1::from_slice(py, &c.rotation_wxyz))?;
+                d.set_item("translation", PyArray1::from_slice(py, &c.translation))?;
+                d.set_item("log_scale", c.log_scale)?;
+                corrections.append(d)?;
+            }
+            let d = PyDict::new(py);
+            d.set_item("corrections", corrections)?;
+            d.set_item("explained_pct", gc.explained_pct)?;
+            d.set_item("net_before", gc.net_before)?;
+            d.set_item("net_after", gc.net_after)?;
+            out.set_item("group_consistency", d)?;
+        }
+    }
     Ok(out)
 }
 

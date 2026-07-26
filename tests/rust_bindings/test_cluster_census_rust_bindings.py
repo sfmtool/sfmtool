@@ -33,6 +33,8 @@ QUALITY_PCTL = 95
 
 REPORT_KEYS = {"score", "n_groups", "group_of", "pairs", "sat_pct", "group_consistency"}
 PAIR_KEYS = {"group_a", "group_b", "n_eligible_hi", "n_unsatisfied_hi", "wilson_lb"}
+CONSISTENCY_KEYS = {"corrections", "explained_pct", "net_before", "net_after"}
+CORRECTION_KEYS = {"group", "rotation_wxyz", "translation", "log_scale"}
 
 
 def _make_cam(f=F0):
@@ -467,7 +469,7 @@ def scene():
 
 def test_report_shape(scene):
     """The report carries every documented field, with `group_consistency`
-    reserved for phase 2."""
+    absent unless the companion is asked for."""
     report = scene.native(0.0, scene.n_a)
     assert set(report) == REPORT_KEYS
     assert isinstance(report["score"], float)
@@ -613,6 +615,135 @@ def test_input_validation(scene):
             q,
             np.zeros((2, 3)),
             np.array([0], np.uint32),
+        )
+
+
+# ── Group consistency (the opt-in companion) ─────────────────────────────
+
+
+def _correction(report, group):
+    (c,) = [
+        c for c in report["group_consistency"]["corrections"] if c["group"] == group
+    ]
+    return c
+
+
+def _angle_deg(q):
+    return float(np.degrees(2.0 * np.arccos(min(1.0, abs(float(np.asarray(q)[0]))))))
+
+
+def test_group_consistency_shape(scene):
+    """Asking for the companion populates it with every documented field, and
+    leaves every phase-1 field bit-identical."""
+    off = scene.native(0.5, scene.n_a)
+    on = scene.native(0.5, scene.n_a, compute_group_consistency=True)
+    assert off["group_consistency"] is None
+    assert set(on) == REPORT_KEYS
+    assert on["score"] == off["score"]
+    assert on["n_groups"] == off["n_groups"]
+    assert on["sat_pct"] == off["sat_pct"]
+    assert on["pairs"] == off["pairs"]
+    np.testing.assert_array_equal(
+        np.asarray(on["group_of"]), np.asarray(off["group_of"])
+    )
+
+    gc = on["group_consistency"]
+    assert set(gc) == CONSISTENCY_KEYS
+    assert isinstance(gc["explained_pct"], float)
+    assert isinstance(gc["net_before"], int)
+    assert isinstance(gc["net_after"], int)
+    assert len(gc["corrections"]) == on["n_groups"]
+    assert [c["group"] for c in gc["corrections"]] == list(range(on["n_groups"]))
+    for c in gc["corrections"]:
+        assert set(c) == CORRECTION_KEYS
+        assert np.asarray(c["rotation_wxyz"]).shape == (4,)
+        assert np.asarray(c["rotation_wxyz"]).dtype == np.float64
+        assert np.asarray(c["translation"]).shape == (3,)
+        assert isinstance(c["log_scale"], float)
+
+
+def test_a_rigidly_misplaced_group_is_coherent(scene):
+    """One group shifted +0.5 in Y: the correction that re-glues the seam is
+    exactly that shift, so the two groups' corrections must differ by it —
+    whichever of them ended up holding the gauge."""
+    report = scene.native(0.5, scene.n_a, compute_group_consistency=True)
+    group_of = np.asarray(report["group_of"])
+    ga, gb = int(group_of[0]), int(group_of[scene.n_a])
+    assert ga != gb
+    ta = np.asarray(_correction(report, ga)["translation"])
+    tb = np.asarray(_correction(report, gb)["translation"])
+    np.testing.assert_allclose(ta - tb, [0.0, 0.5, 0.0], atol=0.05)
+    for g in (ga, gb):
+        c = _correction(report, g)
+        assert _angle_deg(c["rotation_wxyz"]) < 1.0
+        assert abs(c["log_scale"]) < 0.02
+
+    gc = report["group_consistency"]
+    assert gc["explained_pct"] > 90.0
+    assert gc["net_after"] > gc["net_before"]
+
+
+def test_a_truthful_candidate_needs_no_correction(scene):
+    """Nothing to correct and nothing to explain."""
+    report = scene.native(0.0, scene.n_a, compute_group_consistency=True)
+    gc = report["group_consistency"]
+    for c in gc["corrections"]:
+        assert _angle_deg(c["rotation_wxyz"]) < 0.05
+        assert abs(c["log_scale"]) < 1e-3
+        assert np.linalg.norm(np.asarray(c["translation"])) < 0.02
+    assert gc["explained_pct"] == 0.0
+    assert gc["net_after"] == gc["net_before"]
+
+
+def test_junk_bridges_that_slipped_the_screen_are_incoherent():
+    """A candidate at the truth whose only cross-group evidence is false
+    matches. The census flags it, but no rigid correction can place unrelated
+    physical points on top of each other, so the flag is incoherent."""
+    scene = _two_group_scene(
+        n_intra=600, n_bridge=0, n_phantom=300, n_no_warp=0, n_unposed=0
+    )
+    # The phantoms are the capture's only bridges; relabel their warp
+    # consistency so the eligibility screen admits them as evidence.
+    warp = scene.warp.copy()
+    warp[warp > 1.0] = 0.3
+    report = scene.native(0.0, scene.n_a, warp=warp, compute_group_consistency=True)
+    assert report["n_groups"] == 2
+    assert report["score"] > 0.9
+    assert report["group_consistency"]["explained_pct"] < 10.0
+
+
+def test_group_consistency_declines_without_evidence(scene):
+    """Fewer than two groups, or no eligible bridge, means the companion has
+    nothing to say — `None`, not a vacuous identity."""
+    single = _two_group_scene(
+        n_a=10, n_b=0, n_unposed=0, n_intra=300, n_bridge=0, n_phantom=0
+    )
+    report = single.native(0.0, single.n_a, compute_group_consistency=True)
+    assert report["n_groups"] == 1
+    assert report["group_consistency"] is None
+
+    warp = scene.warp.copy()
+    warp[scene.bridge_ids] = 8.0
+    starved = scene.native(0.5, scene.n_a, warp=warp, compute_group_consistency=True)
+    assert starved["n_groups"] == 2
+    assert starved["group_consistency"] is None
+
+
+def test_group_consistency_determinism(scene):
+    a = scene.native(0.5, scene.n_a, compute_group_consistency=True)
+    b = scene.native(0.5, scene.n_a, compute_group_consistency=True)
+    ga, gb = a["group_consistency"], b["group_consistency"]
+    assert ga["explained_pct"] == gb["explained_pct"]
+    assert ga["net_before"] == gb["net_before"]
+    assert ga["net_after"] == gb["net_after"]
+    for ca, cb in zip(ga["corrections"], gb["corrections"]):
+        assert ca["group"] == cb["group"]
+        assert ca["log_scale"] == cb["log_scale"]
+        np.testing.assert_array_equal(
+            np.asarray(ca["rotation_wxyz"]), np.asarray(cb["rotation_wxyz"])
+        )
+        np.testing.assert_array_equal(
+            np.asarray(ca["translation"]), np.asarray(cb["translation"])
         )
 
 
