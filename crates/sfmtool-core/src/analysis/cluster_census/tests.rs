@@ -1043,6 +1043,214 @@ fn group_consistency_declines_without_group_structure_or_evidence() {
     assert!(starved.group_consistency.is_none());
 }
 
+/// `n_groups` camera bands 90° apart in azimuth, `n_per` cameras each,
+/// `n_intra` clusters per band, and `n_bridge` bridge clusters over drawn band
+/// pairs (three cameras from each side). Every warp-consistency residual is the
+/// same low value, so the eligibility screen admits every bridge and the
+/// eligible-bridge population is exactly `n_bridge` — the knob the § 6 stride
+/// and timing tests scale.
+struct BandScene {
+    cluster: Vec<u32>,
+    image: Vec<u32>,
+    pos: Vec<[f64; 2]>,
+    warp: Vec<f64>,
+    quats: Vec<UnitQuaternion<f64>>,
+    centers: Vec<Vector3<f64>>,
+    n_per: usize,
+    n_groups: usize,
+}
+
+impl BandScene {
+    /// Census of a candidate with the last band shifted `misplace` world units
+    /// along +Y.
+    fn census(&self, misplace: f64, params: &CensusParams) -> CensusReport {
+        let n_img = self.n_per * self.n_groups;
+        let shift = Vector3::new(0.0, misplace, 0.0);
+        let mut cq = Vec::new();
+        let mut ct = Vec::new();
+        for i in 0..n_img {
+            let q = self.quats[i];
+            let c = if i >= n_img - self.n_per {
+                self.centers[i] + shift
+            } else {
+                self.centers[i]
+            };
+            let qi = q.into_inner();
+            cq.push([qi.w, qi.i, qi.j, qi.k]);
+            let t = -(q * c);
+            ct.push([t.x, t.y, t.z]);
+        }
+        let posed: Vec<u32> = (0..n_img as u32).collect();
+        cluster_census(
+            &self.cluster,
+            &self.image,
+            &self.pos,
+            &self.warp,
+            &test_cam(),
+            &cq,
+            &ct,
+            &posed,
+            params,
+        )
+        .unwrap()
+    }
+}
+
+fn band_scene(n_groups: usize, n_per: usize, n_intra: usize, n_bridge: usize) -> BandScene {
+    let mut rng = Lcg(0x5eed_7777);
+    let r_orbit = 10.0;
+    let mut quats = Vec::new();
+    let mut centers = Vec::new();
+    for g in 0..n_groups {
+        let mid = 90.0 * g as f64;
+        for i in 0..n_per {
+            let az = (mid - 25.0 + 50.0 * i as f64 / (n_per - 1) as f64).to_radians();
+            let c = Vector3::new(
+                r_orbit * az.sin(),
+                rng.uniform(-0.3, 0.3),
+                r_orbit * az.cos(),
+            );
+            quats.push(look_at(c, Vector3::zeros()));
+            centers.push(c);
+        }
+    }
+    let groups: Vec<Vec<usize>> = (0..n_groups)
+        .map(|g| (g * n_per..(g + 1) * n_per).collect())
+        .collect();
+    let pairs: Vec<(usize, usize)> = (0..n_groups)
+        .flat_map(|a| ((a + 1)..n_groups).map(move |b| (a, b)))
+        .collect();
+
+    let mut cluster = Vec::new();
+    let mut image = Vec::new();
+    let mut pos = Vec::new();
+    let mut warp = Vec::new();
+    let push = |members: &[usize],
+                rng: &mut Lcg,
+                cluster: &mut Vec<u32>,
+                image: &mut Vec<u32>,
+                pos: &mut Vec<[f64; 2]>,
+                warp: &mut Vec<f64>| {
+        push_cluster(members, &quats, &centers, rng, cluster, image, pos, warp).is_some()
+    };
+
+    for g in &groups {
+        let mut made = 0;
+        while made < n_intra {
+            if push(g, &mut rng, &mut cluster, &mut image, &mut pos, &mut warp) {
+                made += 1;
+            }
+        }
+    }
+    let mut made = 0;
+    let mut turn = 0usize;
+    while made < n_bridge {
+        // Draw the band pair rather than cycling it: a fixed cycle aliases
+        // against the fit stride and can starve a band of fit evidence.
+        let (a, b) = pairs[(rng.next_f64() * pairs.len() as f64) as usize % pairs.len()];
+        let members: Vec<usize> = (0..3)
+            .map(|k| groups[a][(turn + k) % n_per])
+            .chain((0..3).map(|k| groups[b][(turn + k) % n_per]))
+            .collect();
+        if push(
+            &members,
+            &mut rng,
+            &mut cluster,
+            &mut image,
+            &mut pos,
+            &mut warp,
+        ) {
+            made += 1;
+            turn += 1;
+        }
+    }
+
+    let warp = vec![0.1; warp.len()];
+    BandScene {
+        cluster,
+        image,
+        pos,
+        warp,
+        quats,
+        centers,
+        n_per,
+        n_groups,
+    }
+}
+
+#[test]
+fn the_fit_stride_caps_the_fit_set_without_capping_the_scoring_set() {
+    use group_consistency::{fit_stride, MAX_FIT_BRIDGES};
+
+    // Up to the cap every bridge fits; past it the stride is the smallest step
+    // that brings ⌈n / stride⌉ back under the cap.
+    for n in [0usize, 1, 7, MAX_FIT_BRIDGES] {
+        assert_eq!(fit_stride(n), 1, "n = {n}");
+    }
+    assert_eq!(fit_stride(MAX_FIT_BRIDGES + 1), 2);
+    assert_eq!(fit_stride(2 * MAX_FIT_BRIDGES), 3);
+    assert_eq!(fit_stride(10 * MAX_FIT_BRIDGES), 11);
+    for n in [1201usize, 2399, 2400, 2401, 12_000, 1_000_000] {
+        assert!(
+            n.div_ceil(fit_stride(n)) <= MAX_FIT_BRIDGES,
+            "n = {n} leaves {} fit bridges",
+            n.div_ceil(fit_stride(n))
+        );
+    }
+
+    // End to end past the cap: the band scene's uniform warp-consistency admits
+    // every bridge, so the eligible population is exactly the 1250 generated
+    // ones and the fit set strides down to 625. The correction still comes out
+    // of the subsample, and the *scoring* still runs on the whole population —
+    // which is what a denominator above the cap shows.
+    let scene = band_scene(2, 6, 1250, 1250);
+    let report = scene.census(0.3, &with_consistency());
+    assert_eq!(report.n_groups, 2);
+    let gc = report.group_consistency.expect("two groups with bridges");
+    assert!(
+        gc.n_unsatisfied_before > MAX_FIT_BRIDGES,
+        "n_unsat = {} — the scoring set must exceed the fit cap for this to \
+         exercise the stride",
+        gc.n_unsatisfied_before
+    );
+    // The shifted band has to fall 0.3 in +Y relative to the one that stayed,
+    // whichever of them holds the gauge.
+    let moved = correction_of(&gc, report.group_of[scene.n_per] as u32);
+    let still = correction_of(&gc, report.group_of[0] as u32);
+    let dy = moved.translation[1] - still.translation[1];
+    assert!((dy + 0.3).abs() < 0.05, "dy = {dy}");
+    assert!(gc.explained_pct > 90.0, "explained = {}", gc.explained_pct);
+}
+
+/// Wall-clock cost of the § 6 companion, isolated as the difference between a
+/// census with it and one without, over bridge populations and group counts.
+/// Ignored — it is a measurement, not an assertion. Run with
+/// `cargo test --release -p sfmtool-core -- --ignored --nocapture timing_probe`.
+#[test]
+#[ignore]
+fn timing_probe_group_consistency() {
+    for n_groups in [2usize, 4] {
+        for n_bridge in [2400usize, 4800] {
+            let scene = band_scene(n_groups, 6, n_bridge, n_bridge);
+            let t0 = std::time::Instant::now();
+            let off = scene.census(0.3, &CensusParams::default());
+            let census_ms = t0.elapsed().as_secs_f64() * 1e3;
+            let t1 = std::time::Instant::now();
+            let on = scene.census(0.3, &with_consistency());
+            let total_ms = t1.elapsed().as_secs_f64() * 1e3;
+            let gc = on.group_consistency.expect("bridges in every band pair");
+            assert_eq!(off.n_groups, n_groups);
+            println!(
+                "groups={n_groups} bridges={n_bridge} census={census_ms:.1}ms \
+                 companion={:.1}ms explained={:.1}% unsat_before={}",
+                total_ms - census_ms,
+                gc.explained_pct,
+                gc.n_unsatisfied_before,
+            );
+        }
+    }
+}
+
 // ── Input validation ─────────────────────────────────────────────────────
 
 #[test]

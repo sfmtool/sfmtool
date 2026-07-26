@@ -32,6 +32,15 @@
 //! survived the census's eligibility screen, and the answer being extracted is
 //! coherent-or-not rather than a pose to ship.
 //!
+//! The descent only ever touches the **fit** bridges (§ [`MAX_FIT_BRIDGES`]),
+//! and within one finite difference only the fit bridges the perturbed
+//! parameter block actually moves: a bridge is re-triangulated from its own
+//! observations alone, so perturbing block `b` leaves every bridge without an
+//! observation on one of `b`'s images at exactly the residuals the base
+//! evaluation computed, and its Jacobian rows are zero. The whole bridge
+//! population is evaluated twice — at the identity and at the solved
+//! corrections — which is what the net scoring needs and all it needs.
+//!
 //! Deterministic: corrections start at the identity, the fit subsample is a
 //! fixed stride, and every reduction is a fixed function of the inputs.
 
@@ -44,8 +53,9 @@ use crate::CameraIntrinsics;
 /// Largest bridge population the robust fit runs on. Beyond it the fit set is
 /// strided down (the *scoring* set stays complete) — the corrections are a
 /// 7-dof-per-group quantity, so a few hundred bridges already over-determine
-/// them and the Jacobian cost is linear in the fit set.
-const MAX_FIT_BRIDGES: usize = 1200;
+/// them, and the fit set is what bounds every per-iteration cost: the Jacobian,
+/// the normal equations, and the trial evaluations of the damping search.
+pub(super) const MAX_FIT_BRIDGES: usize = 1200;
 
 /// Soft-L1 transition scale (px) of the robust cost. Residuals well under it
 /// are quadratic, residuals well over it linear — set above the `sat_px` bar so
@@ -108,9 +118,24 @@ pub(super) struct GroupConsistencyInput<'a> {
 /// One evaluation of the corrected placement: per-observation pixel residuals
 /// (`None` outside the camera model's domain) and per-segment median residual
 /// norms.
+///
+/// An evaluation may cover a **subset** of the evaluated segments (see
+/// [`Solver::evaluate_into`]). Entries belonging to segments the call did not
+/// cover hold whatever the buffer carried before and must not be read.
 struct Evaluation {
     res: Vec<Option<[f64; 2]>>,
     med: Vec<f64>,
+}
+
+/// Fit stride over the evaluated bridges: every bridge fits up to
+/// [`MAX_FIT_BRIDGES`], beyond it every `stride`-th, which leaves
+/// `⌈n_eval / stride⌉ ≤ MAX_FIT_BRIDGES` of them.
+pub(super) fn fit_stride(n_eval: usize) -> usize {
+    if n_eval > MAX_FIT_BRIDGES {
+        n_eval / MAX_FIT_BRIDGES + 1
+    } else {
+        1
+    }
 }
 
 /// The packed problem: which observations are evaluated, which of them are
@@ -124,18 +149,101 @@ struct Solver<'a> {
     obs: Vec<usize>,
     /// CSR offsets into `obs`, one run per evaluated segment.
     offsets: Vec<usize>,
-    /// Parallel to `obs`: does the observation enter the robust fit?
-    in_fit: Vec<bool>,
+    /// Evaluated segments the robust fit runs on — every `fit_stride`-th.
+    fit_segs: Vec<usize>,
+    /// The packed observations of `fit_segs`, ascending: the Jacobian's row
+    /// order and the cost's summation order.
+    fit_obs: Vec<usize>,
+    /// Jacobian row of each packed observation, `usize::MAX` when it does not
+    /// enter the fit.
+    fit_row: Vec<usize>,
+    /// Per parameter block, the fit segments that block moves — those with at
+    /// least one observation on an image of the block's group. Perturbing the
+    /// block leaves every other segment's rays, centers, triangulation and
+    /// residuals bit-for-bit as the base evaluation left them.
+    block_segs: Vec<Vec<usize>>,
     /// World units per unit of translation parameter.
     scene: f64,
     /// `7 × (n_groups − 1)`.
     n_params: usize,
 }
 
-impl Solver<'_> {
-    /// Corrected placement at `p`: re-triangulate every evaluated segment from
-    /// its corrected rays and centers, then reproject.
-    fn evaluate(&self, p: &[f64]) -> Evaluation {
+impl<'a> Solver<'a> {
+    /// Pack the evaluated observations, stride out the fit subset, and index the
+    /// segments each parameter block moves.
+    fn new(input: &'a GroupConsistencyInput<'a>, block_of_group: Vec<Option<usize>>) -> Self {
+        let n_blocks = input.n_groups - 1;
+        let stride = fit_stride(input.eval_segs.len());
+        let mut obs = Vec::new();
+        let mut offsets = vec![0usize];
+        let mut fit_segs = Vec::new();
+        for (e, &s) in input.eval_segs.iter().enumerate() {
+            if e % stride == 0 {
+                fit_segs.push(e);
+            }
+            obs.extend(input.seg_offsets[s]..input.seg_offsets[s + 1]);
+            offsets.push(obs.len());
+        }
+
+        let mut fit_obs = Vec::new();
+        let mut fit_row = vec![usize::MAX; obs.len()];
+        let mut block_segs = vec![Vec::new(); n_blocks];
+        let mut touched = vec![false; n_blocks];
+        for &s in &fit_segs {
+            for b in touched.iter_mut() {
+                *b = false;
+            }
+            for k in offsets[s]..offsets[s + 1] {
+                fit_row[k] = fit_obs.len();
+                fit_obs.push(k);
+                let img = input.obs_image[obs[k]] as usize;
+                let g = input.group_of[img];
+                if g >= 0 {
+                    if let Some(b) = block_of_group[g as usize] {
+                        touched[b] = true;
+                    }
+                }
+            }
+            for (b, segs) in block_segs.iter_mut().enumerate() {
+                if touched[b] {
+                    segs.push(s);
+                }
+            }
+        }
+
+        Solver {
+            input,
+            block_of_group,
+            obs,
+            offsets,
+            fit_segs,
+            fit_obs,
+            fit_row,
+            block_segs,
+            scene: scene_scale(input.posed_centers),
+            n_params: 7 * n_blocks,
+        }
+    }
+
+    fn n_seg(&self) -> usize {
+        self.offsets.len() - 1
+    }
+
+    /// A residual buffer sized for the whole population, holding no evaluation.
+    fn blank(&self) -> Evaluation {
+        Evaluation {
+            res: vec![None; self.obs.len()],
+            med: vec![INVALID_RESIDUAL_PX; self.n_seg()],
+        }
+    }
+
+    /// Corrected placement at `p` over the segments named by `segs`:
+    /// re-triangulate each from its corrected rays and centers, then reproject
+    /// into `out`. A segment is triangulated and scored from its own
+    /// observations alone, so restricting the call is a restriction of the work
+    /// and not of the arithmetic — every covered entry holds the number a
+    /// whole-population evaluation at `p` would have written.
+    fn evaluate_into(&self, p: &[f64], segs: &[usize], out: &mut Evaluation) {
         let n_blocks = self.n_params / 7;
         let mut rot = Vec::with_capacity(n_blocks);
         let mut scale = Vec::with_capacity(n_blocks);
@@ -151,42 +259,47 @@ impl Solver<'_> {
             scale.push(p[o + 6].exp());
         }
 
-        let n = self.obs.len();
+        let n: usize = segs
+            .iter()
+            .map(|&s| self.offsets[s + 1] - self.offsets[s])
+            .sum();
         let mut dirs = Vec::with_capacity(n);
         let mut centers = Vec::with_capacity(n);
         let mut rots = Vec::with_capacity(n);
-        for &o in &self.obs {
-            let img = self.input.obs_image[o] as usize;
-            let g = self.input.group_of[img];
-            let block = if g >= 0 {
-                self.block_of_group[g as usize]
-            } else {
-                None
-            };
-            match block {
-                Some(b) => {
-                    dirs.push(rot[b] * self.input.dirs[o]);
-                    centers.push(Point3::from(
-                        scale[b] * (rot[b] * self.input.obs_center[o].coords) + shift[b],
-                    ));
-                    rots.push(self.input.quats[img] * rot[b].inverse());
-                }
-                None => {
-                    dirs.push(self.input.dirs[o]);
-                    centers.push(self.input.obs_center[o]);
-                    rots.push(self.input.quats[img]);
+        let mut runs = Vec::with_capacity(segs.len() + 1);
+        runs.push(0usize);
+        for &s in segs {
+            for &o in &self.obs[self.offsets[s]..self.offsets[s + 1]] {
+                let img = self.input.obs_image[o] as usize;
+                let g = self.input.group_of[img];
+                let block = if g >= 0 {
+                    self.block_of_group[g as usize]
+                } else {
+                    None
+                };
+                match block {
+                    Some(b) => {
+                        dirs.push(rot[b] * self.input.dirs[o]);
+                        centers.push(Point3::from(
+                            scale[b] * (rot[b] * self.input.obs_center[o].coords) + shift[b],
+                        ));
+                        rots.push(self.input.quats[img] * rot[b].inverse());
+                    }
+                    None => {
+                        dirs.push(self.input.dirs[o]);
+                        centers.push(self.input.obs_center[o]);
+                        rots.push(self.input.quats[img]);
+                    }
                 }
             }
+            runs.push(dirs.len());
         }
 
-        let tris = triangulate_batch(&dirs, &centers, &self.offsets);
-        let n_seg = self.offsets.len() - 1;
-        let mut res = vec![None; n];
-        let mut med = vec![INVALID_RESIDUAL_PX; n_seg];
+        let tris = triangulate_batch(&dirs, &centers, &runs);
         let mut buf: Vec<f64> = Vec::new();
-        for (s, m) in med.iter_mut().enumerate() {
+        for (i, &s) in segs.iter().enumerate() {
             let (lo, hi) = (self.offsets[s], self.offsets[s + 1]);
-            let x = tris[s].point;
+            let x = tris[i].point;
             let finite = x.x.is_finite() && x.y.is_finite() && x.z.is_finite();
             buf.clear();
             for k in lo..hi {
@@ -194,9 +307,10 @@ impl Solver<'_> {
                 // per-observation residuals use. (`t` is rebuilt from the
                 // center, so the identity correction matches phase 1 to a
                 // quaternion round-trip, not bit-exactly.)
+                let local = runs[i] + (k - lo);
                 let r = if finite {
-                    let rp = rots[k];
-                    let t = -(rp * centers[k].coords);
+                    let rp = rots[local];
+                    let t = -(rp * centers[local].coords);
                     let xc = rp * x.coords + t;
                     self.input
                         .camera
@@ -212,11 +326,20 @@ impl Solver<'_> {
                     Some(v) => (v[0] * v[0] + v[1] * v[1]).sqrt(),
                     None => INVALID_RESIDUAL_PX,
                 });
-                res[k] = r;
+                out.res[k] = r;
             }
-            *m = median_in_place(&mut buf);
+            out.med[s] = median_in_place(&mut buf);
         }
-        Evaluation { res, med }
+    }
+
+    /// Corrected placement at `p` over the whole evaluated population — the
+    /// scoring path, run once at the identity and once at the solved
+    /// corrections.
+    fn evaluate(&self, p: &[f64]) -> Evaluation {
+        let all: Vec<usize> = (0..self.n_seg()).collect();
+        let mut ev = self.blank();
+        self.evaluate_into(p, &all, &mut ev);
+        ev
     }
 
     /// Soft-L1 cost over the fit observations: `Σ 2·f²·(√(1 + ‖r‖²/f²) − 1)`.
@@ -227,11 +350,8 @@ impl Solver<'_> {
     fn cost(&self, ev: &Evaluation) -> f64 {
         let fs2 = ROBUST_SCALE_PX * ROBUST_SCALE_PX;
         let mut total = 0.0;
-        for (k, r) in ev.res.iter().enumerate() {
-            if !self.in_fit[k] {
-                continue;
-            }
-            let n2 = match r {
+        for &k in &self.fit_obs {
+            let n2 = match ev.res[k] {
                 Some(r) => r[0] * r[0] + r[1] * r[1],
                 None => BARRIER_RESIDUAL_PX * BARRIER_RESIDUAL_PX,
             };
@@ -245,47 +365,64 @@ impl Solver<'_> {
     /// observation's normal-equation contribution; observations outside the
     /// model's domain get a zero Jacobian row, so they penalize the cost
     /// without steering the step.
+    ///
+    /// Every evaluation here is over the fit segments — the descent reads
+    /// nothing else — and each finite difference over just the fit segments its
+    /// parameter block moves.
     fn solve(&self) -> Vec<f64> {
         let np = self.n_params;
         let mut p = vec![0.0f64; np];
-        let fit_obs: Vec<usize> = (0..self.obs.len()).filter(|&k| self.in_fit[k]).collect();
-        if np == 0 || fit_obs.is_empty() {
+        if np == 0 || self.fit_obs.is_empty() {
             return p;
         }
         let fs2 = ROBUST_SCALE_PX * ROBUST_SCALE_PX;
-        let mut ev = self.evaluate(&p);
+        let mut ev = self.blank();
+        self.evaluate_into(&p, &self.fit_segs, &mut ev);
         let mut prev = self.cost(&ev);
         let mut lambda = 1e-3f64;
+        // Central-difference Jacobian of the triangulate-and-project chain,
+        // rows in `fit_obs` order, two rows (du, dv) per observation.
+        let mut jac = vec![0.0f64; self.fit_obs.len() * 2 * np];
+        let mut ep = self.blank();
+        let mut em = self.blank();
+        let mut cand_ev = self.blank();
 
         for _ in 0..MAX_ITER {
-            // Central-difference Jacobian of the triangulate-and-project chain,
-            // rows in `fit_obs` order, two rows (du, dv) per observation.
-            let m = fit_obs.len();
-            let mut jac = vec![0.0f64; m * 2 * np];
-            for j in 0..np {
-                let mut pp = p.clone();
-                pp[j] += JACOBIAN_STEP;
-                let mut pm = p.clone();
-                pm[j] -= JACOBIAN_STEP;
-                let ep = self.evaluate(&pp);
-                let em = self.evaluate(&pm);
-                for (i, &k) in fit_obs.iter().enumerate() {
-                    // A perturbation that leaves the model's domain has no
-                    // usable derivative; the row stays zero.
-                    let (Some(a), Some(b)) = (ep.res[k], em.res[k]) else {
-                        continue;
-                    };
-                    if ev.res[k].is_none() {
-                        continue;
+            jac.fill(0.0);
+            for (b, segs) in self.block_segs.iter().enumerate() {
+                // A block no fit segment sees moves nothing: its columns are
+                // zero, which is what the buffer already holds.
+                if segs.is_empty() {
+                    continue;
+                }
+                for j in b * 7..(b + 1) * 7 {
+                    let mut pp = p.clone();
+                    pp[j] += JACOBIAN_STEP;
+                    let mut pm = p.clone();
+                    pm[j] -= JACOBIAN_STEP;
+                    self.evaluate_into(&pp, segs, &mut ep);
+                    self.evaluate_into(&pm, segs, &mut em);
+                    for &s in segs {
+                        for k in self.offsets[s]..self.offsets[s + 1] {
+                            // A perturbation that leaves the model's domain has
+                            // no usable derivative; the row stays zero.
+                            let (Some(a), Some(b)) = (ep.res[k], em.res[k]) else {
+                                continue;
+                            };
+                            if ev.res[k].is_none() {
+                                continue;
+                            }
+                            let i = self.fit_row[k];
+                            jac[(i * 2) * np + j] = (a[0] - b[0]) / (2.0 * JACOBIAN_STEP);
+                            jac[(i * 2 + 1) * np + j] = (a[1] - b[1]) / (2.0 * JACOBIAN_STEP);
+                        }
                     }
-                    jac[(i * 2) * np + j] = (a[0] - b[0]) / (2.0 * JACOBIAN_STEP);
-                    jac[(i * 2 + 1) * np + j] = (a[1] - b[1]) / (2.0 * JACOBIAN_STEP);
                 }
             }
 
             let mut a = DMatrix::<f64>::zeros(np, np);
             let mut g = DVector::<f64>::zeros(np);
-            for (i, &k) in fit_obs.iter().enumerate() {
+            for (i, &k) in self.fit_obs.iter().enumerate() {
                 let Some(r) = ev.res[k] else { continue };
                 // A non-finite residual (NaN input pixels) must not poison the
                 // whole normal system; skip the row like an out-of-domain one.
@@ -326,11 +463,11 @@ impl Solver<'_> {
                     continue;
                 }
                 let cand: Vec<f64> = (0..np).map(|j| p[j] + delta[j]).collect();
-                let cand_ev = self.evaluate(&cand);
+                self.evaluate_into(&cand, &self.fit_segs, &mut cand_ev);
                 let cand_cost = self.cost(&cand_ev);
                 if cand_cost < prev {
                     p = cand;
-                    ev = cand_ev;
+                    std::mem::swap(&mut ev, &mut cand_ev);
                     prev = cand_cost;
                     lambda = (lambda * 0.5).max(1e-12);
                     improved = true;
@@ -409,34 +546,8 @@ pub(super) fn group_consistency(input: &GroupConsistencyInput<'_>) -> Option<Gro
         }
     }
 
-    // Pack the evaluated observations; every `stride`-th bridge also fits.
+    let solver = Solver::new(input, block_of_group);
     let n_eval = input.eval_segs.len();
-    let stride = if n_eval > MAX_FIT_BRIDGES {
-        n_eval / MAX_FIT_BRIDGES + 1
-    } else {
-        1
-    };
-    let mut obs = Vec::new();
-    let mut offsets = vec![0usize];
-    let mut in_fit = Vec::new();
-    for (e, &s) in input.eval_segs.iter().enumerate() {
-        let fits = e % stride == 0;
-        for k in input.seg_offsets[s]..input.seg_offsets[s + 1] {
-            obs.push(k);
-            in_fit.push(fits);
-        }
-        offsets.push(obs.len());
-    }
-
-    let solver = Solver {
-        input,
-        block_of_group,
-        obs,
-        offsets,
-        in_fit,
-        scene: scene_scale(input.posed_centers),
-        n_params: 7 * (input.n_groups - 1),
-    };
 
     let before = solver.evaluate(&vec![0.0f64; solver.n_params]);
     let p = solver.solve();

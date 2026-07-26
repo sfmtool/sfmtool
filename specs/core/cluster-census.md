@@ -203,7 +203,11 @@ there is no fixed structure to hold on to. The cost is the soft-L1 sum over
 the bridges' per-observation pixel residuals, minimized by
 Levenberg–Marquardt from the identity correction over 7 × (n_groups − 1)
 parameters — small enough for dense normal equations and a
-central-difference Jacobian of the triangulate-and-project chain. The
+central-difference Jacobian of the triangulate-and-project chain. A
+bridge is re-triangulated from its own observations alone, so perturbing
+one group's parameter block changes nothing for a bridge with no
+observation on that group's images: each finite difference re-evaluates
+only the bridges its block moves. The
 robust loss is what lets the fit run on the eligible bridges directly,
 false matches that survived the screen included; an observation the
 corrected placement pushes outside the camera model's domain is charged a
@@ -291,7 +295,7 @@ callers pass a shared pinhole.
 | `flag_threshold` | 0.25 | calibration constant for the flag caller; **not yet data-derived** — revisit with a per-capture null (e.g. the census of a within-group split, which should be ≈ 0) |
 | `compute_group_consistency` | false | opt-in for § 6; it costs a solve and answers a different question from the score |
 | § 6 robust scale | 3.0 px | soft-L1 transition of the group-consistency cost; above `sat_px`, so a satisfied bridge sits in the quadratic regime and a false match cannot drag the solve |
-| § 6 fit-set cap | 1200 bridges | the fit strides down beyond it (the *scoring* set stays complete); 7 dof per group are over-determined by a few hundred bridges and the Jacobian cost is linear in the fit set |
+| § 6 fit-set cap | 1200 bridges | 7 dof per group are over-determined by a few hundred bridges, so beyond the cap the fit strides down to it; the fit set bounds the whole descent — Jacobian, normal equations, trial steps — and a finite difference within it touches only the fit bridges its parameter block moves, while the corrections are still *scored* on the complete bridge population |
 
 ## Blind spots (by design; callers must know)
 
