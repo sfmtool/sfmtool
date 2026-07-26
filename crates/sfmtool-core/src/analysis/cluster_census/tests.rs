@@ -123,6 +123,45 @@ impl TwoGroupScene {
         )
         .expect("census inputs are well formed")
     }
+
+    /// Census of a candidate with the whole of group B misplaced by the world
+    /// similarity `x ↦ s·M·x + t` (cameras `C' = s·M·C + t`, `R' = R·Mᵀ`).
+    /// The correction that undoes it is the inverse similarity: `Q = Mᵀ`,
+    /// `log_scale = −ln s`, `t' = −(1/s)·Mᵀ·t`.
+    fn census_similarity(
+        &self,
+        m: UnitQuaternion<f64>,
+        s: f64,
+        t: Vector3<f64>,
+        params: &CensusParams,
+    ) -> CensusReport {
+        let mut quats = Vec::new();
+        let mut trans = Vec::new();
+        for i in 0..self.n_img() {
+            let (q, c) = if i < self.n_a {
+                (self.quats[i], self.centers[i])
+            } else {
+                (self.quats[i] * m.inverse(), s * (m * self.centers[i]) + t)
+            };
+            let qi = q.into_inner();
+            quats.push([qi.w, qi.i, qi.j, qi.k]);
+            let tt = -(q * c);
+            trans.push([tt.x, tt.y, tt.z]);
+        }
+        let posed: Vec<u32> = (0..self.n_img() as u32).collect();
+        cluster_census(
+            &self.cluster,
+            &self.image,
+            &self.pos,
+            &self.warp,
+            &test_cam(),
+            &quats,
+            &trans,
+            &posed,
+            params,
+        )
+        .expect("census inputs are well formed")
+    }
 }
 
 /// Append one cluster observed by `members`, projecting a fresh random world
@@ -833,11 +872,73 @@ fn a_rigidly_misplaced_group_is_coherent() {
     // trade of one seam for another.
     assert!(gc.explained_pct > 90.0, "explained = {}", gc.explained_pct);
     assert!(
+        gc.n_unsatisfied_before > 40,
+        "n_unsat = {}",
+        gc.n_unsatisfied_before
+    );
+    assert_eq!(
+        gc.explained_pct,
+        100.0 * gc.n_explained as f64 / gc.n_unsatisfied_before as f64
+    );
+    assert!(
         gc.net_after > gc.net_before,
         "net {} -> {}",
         gc.net_before,
         gc.net_after
     );
+}
+
+#[test]
+fn a_rotationally_misplaced_group_recovers_the_inverse_rotation() {
+    // Group B rotated +4° about world Y (M = rot_y(4°), s = 1, t = 0). The
+    // correction that undoes it is Q = Mᵀ exactly — a transposed-Q convention
+    // passes every pure-translation fixture and fails only here.
+    let scene = two_group_scene(8, 6, 150, 60);
+    let m = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 4.0f64.to_radians());
+    let report = scene.census_similarity(m, 1.0, Vector3::zeros(), &with_consistency());
+    assert_eq!(report.n_groups, 2);
+    let gc = report.group_consistency.expect("two groups with bridges");
+    let moved = report.group_of[scene.n_a] as u32;
+    let fix = correction_of(&gc, moved);
+    // Q ≈ Mᵀ ⇔ Q·M ≈ I. The transposed reading leaves an 8° residual.
+    let q = UnitQuaternion::from_quaternion(Quaternion::new(
+        fix.rotation_wxyz[0],
+        fix.rotation_wxyz[1],
+        fix.rotation_wxyz[2],
+        fix.rotation_wxyz[3],
+    ));
+    let residual = (q * m).angle().to_degrees();
+    assert!(residual < 0.5, "residual = {residual}° fix = {fix:?}");
+    assert!(fix.log_scale.abs() < 0.01, "fix = {fix:?}");
+    assert!(gc.explained_pct > 90.0, "explained = {}", gc.explained_pct);
+    assert!(gc.net_after > gc.net_before);
+}
+
+#[test]
+fn a_scale_misplaced_group_recovers_the_inverse_log_scale() {
+    // Group B scaled ×1.06 about the world origin: the correction is the
+    // inverse similarity with log_scale = −ln 1.06 — a negated log-scale
+    // convention fails only here.
+    let scene = two_group_scene(8, 6, 150, 60);
+    let report = scene.census_similarity(
+        UnitQuaternion::identity(),
+        1.06,
+        Vector3::zeros(),
+        &with_consistency(),
+    );
+    assert_eq!(report.n_groups, 2);
+    let gc = report.group_consistency.expect("two groups with bridges");
+    let moved = report.group_of[scene.n_a] as u32;
+    let fix = correction_of(&gc, moved);
+    assert!(
+        (fix.log_scale + 1.06f64.ln()).abs() < 0.01,
+        "log_scale = {} want {}",
+        fix.log_scale,
+        -1.06f64.ln()
+    );
+    assert!(angle_deg(fix.rotation_wxyz) < 0.5, "fix = {fix:?}");
+    assert!(gc.explained_pct > 90.0, "explained = {}", gc.explained_pct);
+    assert!(gc.net_after > gc.net_before);
 }
 
 #[test]
@@ -869,6 +970,8 @@ fn a_truthful_candidate_needs_no_correction() {
     // Nothing was unsatisfied, so there is nothing to explain, and the solve
     // cannot have broken what was already satisfied.
     assert_eq!(gc.explained_pct, 0.0);
+    assert_eq!(gc.n_unsatisfied_before, 0);
+    assert_eq!(gc.n_explained, 0);
     assert_eq!(gc.net_after, gc.net_before);
 }
 

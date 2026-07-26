@@ -142,8 +142,16 @@ pub struct GroupConsistency {
     pub corrections: Vec<GroupCorrection>,
     /// Percent of the previously-unsatisfied high-parallax bridges
     /// satisfied at the corrected placements — the coherence of the
-    /// disagreement.
+    /// disagreement. An unshrunk ratio: a high percentage over a small
+    /// [`n_unsatisfied_before`](Self::n_unsatisfied_before) is weak
+    /// evidence, so thresholding callers should look at both.
     pub explained_pct: f64,
+    /// How many previously-unsatisfied high-parallax bridges the
+    /// corrections satisfy — the numerator of `explained_pct`.
+    pub n_explained: usize,
+    /// Previously-unsatisfied high-parallax bridges — the denominator of
+    /// `explained_pct` (0 when nothing was unsatisfied).
+    pub n_unsatisfied_before: usize,
     /// Satisfied bridges before the corrections.
     pub net_before: usize,
     /// Satisfied bridges after them. `net_after > net_before` is a

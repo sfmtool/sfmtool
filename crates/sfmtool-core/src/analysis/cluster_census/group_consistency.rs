@@ -64,6 +64,15 @@ const MAX_DAMPING_STEPS: usize = 12;
 /// step serves every block.
 const JACOBIAN_STEP: f64 = 1e-6;
 
+/// Residual (px) an out-of-domain observation is charged in the robust cost.
+/// Larger than any residual a plausible correction produces in-domain, so
+/// pushing structure behind a camera is never the cheap way out — but bounded,
+/// so one domain crossing costs a handful of bad observations, not ten
+/// thousand of them ([`INVALID_RESIDUAL_PX`] here would let a single flip veto
+/// a seam re-glue the gradient cannot steer around, making the accepted steps
+/// effectively minimize the flip count first and pixels second).
+const BARRIER_RESIDUAL_PX: f64 = 1e3;
+
 /// Everything the solve needs from the census pass. Observation arrays are the
 /// census's posed-observation arrays (`obs_*`, `dirs` in world frame at the
 /// candidate), segmented CSR-style by `seg_offsets`.
@@ -182,8 +191,9 @@ impl Solver<'_> {
             buf.clear();
             for k in lo..hi {
                 // `R·X + t` with `t = −R·C`, the same form the census's
-                // per-observation residuals use, so the identity correction
-                // reproduces them exactly.
+                // per-observation residuals use. (`t` is rebuilt from the
+                // center, so the identity correction matches phase 1 to a
+                // quaternion round-trip, not bit-exactly.)
                 let r = if finite {
                     let rp = rots[k];
                     let t = -(rp * centers[k].coords);
@@ -210,9 +220,10 @@ impl Solver<'_> {
     }
 
     /// Soft-L1 cost over the fit observations: `Σ 2·f²·(√(1 + ‖r‖²/f²) − 1)`.
-    /// An observation outside the model's domain contributes the cost of
-    /// [`INVALID_RESIDUAL_PX`], which makes a step that pushes structure behind
-    /// a camera unacceptable rather than merely expensive.
+    /// An observation outside the model's domain is charged the cost of a
+    /// [`BARRIER_RESIDUAL_PX`] residual — expensive enough that the solve never
+    /// buys anything by pushing structure behind a camera, bounded enough that
+    /// one crossing cannot outweigh the population.
     fn cost(&self, ev: &Evaluation) -> f64 {
         let fs2 = ROBUST_SCALE_PX * ROBUST_SCALE_PX;
         let mut total = 0.0;
@@ -222,7 +233,7 @@ impl Solver<'_> {
             }
             let n2 = match r {
                 Some(r) => r[0] * r[0] + r[1] * r[1],
-                None => INVALID_RESIDUAL_PX * INVALID_RESIDUAL_PX,
+                None => BARRIER_RESIDUAL_PX * BARRIER_RESIDUAL_PX,
             };
             total += 2.0 * fs2 * ((1.0 + n2 / fs2).sqrt() - 1.0);
         }
@@ -276,6 +287,11 @@ impl Solver<'_> {
             let mut g = DVector::<f64>::zeros(np);
             for (i, &k) in fit_obs.iter().enumerate() {
                 let Some(r) = ev.res[k] else { continue };
+                // A non-finite residual (NaN input pixels) must not poison the
+                // whole normal system; skip the row like an out-of-domain one.
+                if !(r[0].is_finite() && r[1].is_finite()) {
+                    continue;
+                }
                 let w = 1.0 / (1.0 + (r[0] * r[0] + r[1] * r[1]) / fs2).sqrt();
                 for c in 0..2 {
                     let row = &jac[(i * 2 + c) * np..(i * 2 + c + 1) * np];
@@ -468,6 +484,8 @@ pub(super) fn group_consistency(input: &GroupConsistencyInput<'_>) -> Option<Gro
     Some(GroupConsistency {
         corrections,
         explained_pct,
+        n_explained: n_fixed,
+        n_unsatisfied_before: n_unsat,
         net_before,
         net_after,
     })

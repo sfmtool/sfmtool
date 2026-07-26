@@ -33,7 +33,14 @@ QUALITY_PCTL = 95
 
 REPORT_KEYS = {"score", "n_groups", "group_of", "pairs", "sat_pct", "group_consistency"}
 PAIR_KEYS = {"group_a", "group_b", "n_eligible_hi", "n_unsatisfied_hi", "wilson_lb"}
-CONSISTENCY_KEYS = {"corrections", "explained_pct", "net_before", "net_after"}
+CONSISTENCY_KEYS = {
+    "corrections",
+    "explained_pct",
+    "n_explained",
+    "n_unsatisfied_before",
+    "net_before",
+    "net_after",
+}
 CORRECTION_KEYS = {"group", "rotation_wxyz", "translation", "log_scale"}
 
 
@@ -650,6 +657,8 @@ def test_group_consistency_shape(scene):
     gc = on["group_consistency"]
     assert set(gc) == CONSISTENCY_KEYS
     assert isinstance(gc["explained_pct"], float)
+    assert isinstance(gc["n_explained"], int)
+    assert isinstance(gc["n_unsatisfied_before"], int)
     assert isinstance(gc["net_before"], int)
     assert isinstance(gc["net_after"], int)
     assert len(gc["corrections"]) == on["n_groups"]
@@ -680,6 +689,12 @@ def test_a_rigidly_misplaced_group_is_coherent(scene):
 
     gc = report["group_consistency"]
     assert gc["explained_pct"] > 90.0
+    # The percentage is the reported ratio, with a denominator big enough
+    # to mean something.
+    assert gc["n_unsatisfied_before"] > 40
+    assert gc["explained_pct"] == pytest.approx(
+        100.0 * gc["n_explained"] / gc["n_unsatisfied_before"]
+    )
     assert gc["net_after"] > gc["net_before"]
 
 

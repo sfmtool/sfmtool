@@ -83,11 +83,14 @@ use crate::geometry::PyCameraIntrinsics;
 ///     than two groups, or no eligible measurable bridge). Otherwise it is
 ///     ``{"corrections": list of {"group": int, "rotation_wxyz": (4,) float64,
 ///     "translation": (3,) float64 world units, "log_scale": float} ascending
-///     by group, "explained_pct": float, "net_before": int,
+///     by group, "explained_pct": float, "n_explained": int,
+///     "n_unsatisfied_before": int, "net_before": int,
 ///     "net_after": int}``. A correction acts on its group's content as
 ///     ``W(x) = exp(log_scale) * Q @ x + translation``. ``explained_pct`` is
-///     the percent of the previously-unsatisfied high-parallax bridges the
-///     corrections satisfy (0 when none were unsatisfied); ``net_before`` /
+///     ``100 * n_explained / n_unsatisfied_before`` — the percent of the
+///     previously-unsatisfied high-parallax bridges the corrections satisfy
+///     (0 when none were unsatisfied). It is unshrunk, so check the
+///     denominator before trusting a high percentage. ``net_before`` /
 ///     ``net_after`` count the satisfied bridges over the whole eligible
 ///     bridge population, so a correction that fixes one seam by breaking
 ///     another shows no net gain.
@@ -206,6 +209,8 @@ pub fn cluster_census<'py>(
             let d = PyDict::new(py);
             d.set_item("corrections", corrections)?;
             d.set_item("explained_pct", gc.explained_pct)?;
+            d.set_item("n_explained", gc.n_explained)?;
+            d.set_item("n_unsatisfied_before", gc.n_unsatisfied_before)?;
             d.set_item("net_before", gc.net_before)?;
             d.set_item("net_after", gc.net_after)?;
             out.set_item("group_consistency", d)?;

@@ -182,8 +182,9 @@ gate should test both.
 The census score reports **how much** cross-group evidence the candidate
 leaves unsatisfied; the group-consistency companion asks whether that
 disagreement is **coherent** — explainable by group-level pose error — and
-estimates it. Jointly over all groups (the largest group fixes the gauge,
-ties to the lowest group id), estimate the per-group 7-dof similarities
+estimates it. Jointly over all groups (the largest group by posed-image
+count fixes the gauge, ties to the lowest group id), estimate the
+per-group 7-dof similarities
 (rotation, translation, log scale) that minimize a robust cost over the
 eligible bridges: a global pose-consistency solve over the viewpoint-group
 graph, the group-level analogue of the per-cluster census.
@@ -204,14 +205,22 @@ Levenberg–Marquardt from the identity correction over 7 × (n_groups − 1)
 parameters — small enough for dense normal equations and a
 central-difference Jacobian of the triangulate-and-project chain. The
 robust loss is what lets the fit run on the eligible bridges directly,
-false matches that survived the screen included. Translation parameters are
-scaled by the scene radius (the median camera distance from the median
-camera center) so all seven parameters of a block are comparable. Report:
+false matches that survived the screen included; an observation the
+corrected placement pushes outside the camera model's domain is charged a
+large bounded residual — never the cheap way out, but one crossing cannot
+outweigh the population. Translation parameters are scaled by the scene
+radius (the median camera distance from the component-wise median of the
+camera centers) so all seven parameters of a block are comparable. Report:
 
 - the per-group **corrections** — identity corrections mean the candidate
-  is already group-consistent;
-- the **explained fraction** — previously-unsatisfied high-parallax
-  bridges satisfied at the corrected placements;
+  is already group-consistent, for every group with eligible bridge
+  evidence (a group with none is unconstrained and carries the identity by
+  construction; its absence from the pair list identifies it);
+- **explained** (`explained_pct`, with its numerator `n_explained` and
+  denominator `n_unsatisfied_before`) — the percent of
+  previously-unsatisfied high-parallax bridges satisfied at the corrected
+  placements. The ratio is unshrunk, so consumers should read the
+  denominator with it: 2 of 2 explained is not 300 of 300;
 - the **net** change in the total number of satisfied bridges — the joint
   solve is scored on **all** bridges, so a correction that fixes one seam
   by breaking another nets ≈ 0 and does not count as an explanation.
@@ -221,7 +230,9 @@ is coherent (a non-trivial correction explains its seam's unsatisfied
 bridges); a false-match population that survived the eligibility screen is
 incoherent (jointly unsatisfiable by any rigid correction — explained
 fraction ≈ 0). The corrections are the natural initialization for callers
-that re-glue a flagged group; the operation itself is analysis only and
+that re-glue a flagged group — after checking the net, which can come out
+*negative* when the group split does not align with the actual
+misplacement; the operation itself is analysis only and
 never modifies the candidate, and it costs a solve, so it is opt-in
 (`compute_group_consistency`) and leaves every other field of the report
 untouched.
@@ -242,7 +253,8 @@ CensusReport {
     pairs:      Vec<PairStats>,   // (ga, gb, n_eligible_hi, n_unsatisfied_hi, wilson_lb)
     sat_pct:    f64,
     group_consistency: Option<GroupConsistency>,
-        // per-group corrections, explained fraction, net;
+        // per-group corrections; explained_pct with n_explained /
+        // n_unsatisfied_before; net_before / net_after;
         // None unless compute_group_consistency, and where § 6 declines
 }
 ```
