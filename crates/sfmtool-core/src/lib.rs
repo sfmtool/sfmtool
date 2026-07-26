@@ -12,7 +12,8 @@
 //!   (triangulation, filtering, point correspondence)
 //! - [`features`] — SIFT, descriptor / cluster / flow matching, KD-forest
 //! - [`analysis`] — alignment, points-at-infinity discovery, covisibility /
-//!   frustum image-pair graphs, per-point triangulation inspection
+//!   frustum image-pair graphs, per-point triangulation inspection, cross-group
+//!   consistency census
 //! - [`spherical`] — spherical-tile rigs, consensus atlases, photometric RANSAC
 //! - [`patch`] — patch clouds and patch-normal refinement
 //! - [`spatial`] — generic KD-tree point-cloud utility used across groups
