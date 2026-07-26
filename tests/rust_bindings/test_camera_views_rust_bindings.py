@@ -383,11 +383,20 @@ class TestReconstructionEquivalence:
             np.testing.assert_array_equal(
                 np.asarray(a["views"]), np.asarray(b["views"])
             )
-            np.testing.assert_array_equal(
-                np.asarray(a["keypoints"]), np.asarray(b["keypoints"])
+            # The two modes run the same kernel through different call paths,
+            # and the compiler does not promise bit-identical float sequences
+            # across them (macOS/aarch64 codegen has drifted by a few ulp).
+            np.testing.assert_allclose(
+                np.asarray(a["keypoints"]),
+                np.asarray(b["keypoints"]),
+                rtol=0,
+                atol=1e-12,
             )
-            np.testing.assert_array_equal(
-                np.asarray(a["offsets_px"]), np.asarray(b["offsets_px"])
+            np.testing.assert_allclose(
+                np.asarray(a["offsets_px"]),
+                np.asarray(b["offsets_px"]),
+                rtol=0,
+                atol=1e-12,
             )
 
     def test_select_views_candidate_override_in_recon_mode(self, seoul_bull_workspace):
