@@ -17,6 +17,7 @@ _EXPECTED_FUNCTIONS = (
     "epipolar_curves",
     "build_covisibility_pairs_py",
     "build_frustum_intersection_pairs_py",
+    "cluster_census",
 )
 
 

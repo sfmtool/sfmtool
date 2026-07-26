@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Reconstruction-analysis bindings: pose/track operations, least-squares +
-//! RANSAC alignment, point correspondence, batch triangulation, epipolar curves, and
-//! image-pair graph construction.
+//! RANSAC alignment, point correspondence, batch triangulation, epipolar curves,
+//! image-pair graph construction, and the cluster match census.
 
 use pyo3::prelude::*;
 
+pub mod cluster_census;
 pub mod core;
 pub mod epipolar;
 pub mod image_pair_graph;
@@ -17,5 +18,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     triangulation::register(m)?;
     epipolar::register(m)?;
     image_pair_graph::register(m)?;
+    cluster_census::register(m)?;
     Ok(())
 }
