@@ -1045,3 +1045,90 @@ fn remap_aniso_with_grad_compressive_anisotropic_matches_finite_difference() {
     // `level_lo = 0`, `level_hi = 1`, `frac ≈ 0.263`).
     assert_compressive_aniso_gradient_matches_fd(4.0, 1.2, 3.5, 1.0, 4, "anisotropic 4×1.2");
 }
+
+// ---------------------------------------------------------------------------
+// Serial / parallel row-loop selection (`parallelize_rows`)
+// ---------------------------------------------------------------------------
+
+/// Run `f` on a rayon worker thread — the nested-caller situation every
+/// patch-sized remap is in. The outer range is wide enough that rayon actually
+/// splits the job onto the pool (a one-element `par_iter` can run inline on the
+/// non-worker calling thread).
+fn on_rayon_worker<T: Send>(f: impl Fn() -> T + Sync + Send) -> T {
+    use rayon::prelude::*;
+    let mut out: Vec<T> = (0..64usize)
+        .into_par_iter()
+        .map(|_| {
+            assert!(
+                rayon::current_thread_index().is_some(),
+                "test helper must run inside the rayon pool"
+            );
+            f()
+        })
+        .collect();
+    out.pop().expect("one result")
+}
+
+/// A textured source image, big enough that the row loops really do take the
+/// parallel branch from a plain caller.
+fn textured_src(w: u32, h: u32, channels: u32) -> ImageU8 {
+    let mut data = Vec::with_capacity((w * h * channels) as usize);
+    for row in 0..h {
+        for col in 0..w {
+            for c in 0..channels {
+                let v = 90.0
+                    + 60.0 * ((col as f64) * 0.21 + (c as f64)).sin()
+                    + 50.0 * ((row as f64) * 0.17).cos();
+                data.push(v.clamp(0.0, 255.0) as u8);
+            }
+        }
+    }
+    ImageU8::new(w, h, channels, data)
+}
+
+#[test]
+fn remap_rows_serial_and_parallel_paths_are_bit_identical() {
+    // `remap_rows` (the u8 walker behind remap_bilinear / _mip / _aniso).
+    let src = textured_src(160, 120, 3);
+    let map = translation_warp_map(160, 120, 3.25, -2.75);
+    assert!(
+        crate::camera::warp_map::parallelize_rows(160 * 120),
+        "test needs the parallel path"
+    );
+
+    let par = remap_bilinear(&src, &map);
+    let ser = on_rayon_worker(|| remap_bilinear(&src, &map));
+    assert_eq!(par.width(), ser.width());
+    assert_eq!(par.height(), ser.height());
+    assert_eq!(
+        par.data(),
+        ser.data(),
+        "remap_rows output must be bit-identical"
+    );
+}
+
+#[test]
+fn remap_rows_f32x3_serial_and_parallel_paths_are_bit_identical() {
+    // `remap_rows_f32x3_into` (the value+gradient walker).
+    let src = textured_src(160, 120, 3);
+    let map = translation_warp_map(160, 120, 1.5, 0.75);
+    assert!(
+        crate::camera::warp_map::parallelize_rows(160 * 120),
+        "test needs the parallel path"
+    );
+
+    let build = || {
+        let mut out = ImageF32WithGrad::empty();
+        remap_bilinear_with_grad_into(&src, &map, &mut out);
+        (
+            out.value().to_vec(),
+            out.grad_x().to_vec(),
+            out.grad_y().to_vec(),
+        )
+    };
+    let par = build();
+    let ser = on_rayon_worker(build);
+    assert_eq!(par.0, ser.0, "values");
+    assert_eq!(par.1, ser.1, "grad_x");
+    assert_eq!(par.2, ser.2, "grad_y");
+}

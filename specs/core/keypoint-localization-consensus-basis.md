@@ -40,8 +40,12 @@ The cap splits localization into two phases:
   plus one small cache render per tail view.
 
 Every observation is still localized and reported; only the *consensus
-membership* shrinks. For `V ≤ K` (and `K = 0`) the path is bit-identical to the
-uncapped implementation.
+membership* shrinks. With `K = 0` — and whenever the point's **candidate count**
+does not exceed `K` — the path is bit-identical to the uncapped implementation.
+The candidate count is what survives the grazing and projection pre-filters and
+the view-set dedup, not the raw `view_set` length: the pick runs on that list,
+so a point with 20 raw views of which 10 survive the filters is uncapped at
+`K = 12`.
 
 ## Parameters
 
@@ -56,10 +60,22 @@ New fields on `KeypointLocalizeParams` (mirrored as PyO3 kwargs):
   provenance and carry its detection keypoints). When the track alone exceeds
   `K`, the track views are themselves ranked by score and truncated at `K`.
 - `basis_pick: BasisPick` — how the ranked candidate list fills the remaining
-  seats: `TopScore` (default; the `K` best-scoring views) or `Strided` (every
-  `ceil(m/K)`-th entry of the ranked list — trades per-view match quality for
-  coverage of the ranked spectrum when the top scores cluster on
-  near-duplicate frames).
+  seats: `TopScore` (default; the best-scoring entries) or `Strided` (every
+  `ceil(m/s)`-th entry — trades per-view match quality for coverage of the
+  ranked spectrum when the top scores cluster on near-duplicate frames). `m`
+  and `s` are the list and seat count the pick is actually filling: with
+  `basis_force_track_views` the track views take their seats first by score and
+  the stride then runs over the **non-track remainder** with the seats that are
+  left, so `m` is the non-track candidate count and `s = K − (seats the track
+  took)`. Without the reservation `m` is the whole candidate list and `s = K`.
+  If the stride runs off the end before the seats are full it tops up in rank
+  order.
+
+Only `basis_max_views` is reachable from the CLI (`sfm embed-patches
+--localize-basis-views`, `sfm xform --localize-keypoints basis_max_views=`);
+`basis_force_track_views` and `basis_pick` are binding-level knobs on
+`PatchCloud.localize_keypoints`, since neither moved a measurable metric in the
+validation below.
 
 ## Basis ranking — score to the starting appearance
 
@@ -96,20 +112,35 @@ first).
 - **Search + gates.** One shift search (same `search_strategy`) against the
   basis template. The existing per-view gates apply verbatim: drop when the
   refined keypoint moves `> max_shift_px` from the projection, or when the ZNCC
-  falls below `min_relative_zncc ×` the **basis members'** median final ZNCC
-  (the tail must meet the same relative bar the basis set). Kept tail views
-  report their ZNCC in `loo_zncc` (for a tail view the reference is the basis
-  template; the field keeps its name — it is still "this view against the
-  consensus of the others").
+  falls below `min_relative_zncc ×` the **basis members'** median final ZNCC.
+  That is the same *threshold rule* the round loop applies, but not the same
+  measurement: a basis member's ZNCC is against a leave-one-out consensus of the
+  other members, a tail view's against the no-holdout template of all of them,
+  and a sharper reference scores lower for the same quality of fit. Kept tail
+  views report their ZNCC in `loo_zncc` (the field keeps its name — it is still
+  "this view against the consensus of the others").
+- **Mixed channel counts.** The template lives in the channel space common to
+  the *basis* caches. A tail view can be narrower (a grayscale frame among
+  colour ones); it is then scored over the channels it has, which is the round
+  loop's own rule ("score in the space common to the participating views")
+  applied pairwise. Only trailing channels drop out, so the template needs no
+  rebuild. A tail view left with no scored channel is unscorable and is dropped
+  by the gates, like one whose window is out of frame.
 - **Result contract.** `KeypointLocalization` keeps its shape: kept views (basis
   survivors + kept tail views) in the input view-set order, with keypoints,
   offsets, ZNCCs, and `rounds` (the basis round count). One field is added —
   `is_basis`, a per-kept-view flag (all `true` when the cap does not bite) —
   because the basis/tail split is otherwise unobservable, and the tail's ZNCC
   distribution is the quality signal the validation below reads.
-- **No usable basis.** When the round loop collapses below two in-frame views
-  there is no template to register against; the tail keeps its seed offsets with
-  an unknown ZNCC, exactly what the loop already does for its own early exits.
+- **No usable basis.** When the round loop collapses below two in-frame views,
+  or leaves no textured channel, there is no template to register against and
+  the tail keeps its seed offsets with an unknown ZNCC. The agreement gate
+  cannot be evaluated without a template, but the positional one still is: a
+  seed can already sit further than `max_shift_px` from the projection and
+  nothing downstream would catch it. This is *not* the same as the round loop's
+  own early exits, whose survivors have at least been read in frame and, past
+  round 1, already faced both gates — so `N_TAIL_NO_BASIS` reports how many tail
+  views took it (244 of 475,645 on the capture measured below).
 
 ## Plumbing
 
@@ -147,6 +178,10 @@ moderate-`V` control (typical `V ≈ 15–40`):
 | `K=12`, `Strided` | does duplicate-frame clustering in the top scores hurt the tail fit? |
 | `K=8`, `K=16` at the winner | sensitivity of the cap |
 
+The moderate-`V` control has **not** been run; every number below is from the
+high-`V` capture. The `seoul_bull` fixture in the test suite covers only the
+`candidates ≤ K` no-op, which is a different question.
+
 Metrics per arm, against `K=0`: localize wall time; per-observation keypoint Δ
 (median / p99 source px); observation drop-set churn; tail-view ZNCC
 distribution (a smeared or arc-biased basis template shows up as depressed tail
@@ -158,9 +193,7 @@ for the candidate default.
 
 `sfmr/cleanup/gt-clean-01-ba.sfmr`, 337 images / 132,965 points, `--patch-size
 5`, `resolution 24`, default `PlusDescent`. `select_views` produces a mean of
-51.7 views/point, p99 236, max 323 — the high-`V` case the cap targets. The
-moderate-`V` control is still outstanding; the `seoul_bull` fixture stands in
-only as a `V ≤ K` no-op check in the test suite.
+51.7 views/point, p99 236, max 323 — the high-`V` case the cap targets.
 
 **Cost** — `SFMTOOL_PROFILE=1` on a 12,000-point subset. Thread-summed CPU
 seconds carry ±20 % run-to-run variance from memory-bandwidth contention on a
@@ -229,6 +262,10 @@ Readings:
 - Capped arms keep **more** observations (+4.5 %): a tail view faces the
   relative-ZNCC gate once against the finished template instead of surviving a
   multi-round cull whose consensus (and therefore whose bar) moves under it.
+  The no-basis path is *not* what produces the surplus: `N_TAIL_NO_BASIS`
+  counts 244 of 475,645 tail views (0.05 %) on this capture, so all but a
+  rounding error of the extra observations are genuinely registered against a
+  template.
 - Tail ZNCC (median 0.918) sits below basis ZNCC (0.970) and below `K=0`'s
   all-view 0.952, but the three are not the same measurement: `K=0` scores each
   view against a leave-one-out consensus of ~50 views, the tail against a sharp
@@ -258,10 +295,19 @@ error and yield can settle but these localizer-internal metrics cannot.
   views recover their planted shifts against a `K`-basis template (accuracy
   bound shared with the existing congealing tests); tail gate drops a
   deliberately-mismatched tail view; result ordering/contract preserved.
-- **Python** (`tests/`): kwargs accepted and threaded; embed pipeline run on
-  the seoul_bull fixture with a small `K` succeeds, keeps observation parity
-  with `K=0` on its (small-`V`) points, and `xform --localize-keypoints` with
-  `basis_max_views` round-trips.
+- **Rust** (mixed channels): a tail view narrower than the basis template's
+  channel space is scored over its own channels, not indexed out of bounds; the
+  same scene through the uncapped path is unchanged.
+- **Rust** (no-basis path): with no template built, an un-registered tail view
+  survives a loose `max_shift_px` and is dropped by a tight one.
+- **Rust** (empty scores): an empty per-point score slice ranks by grazing
+  angle, identically to supplying no scores at all.
+- **Python** (`tests/`): kwargs accepted and threaded; the embed pipeline run on
+  the seoul_bull fixture with a small `K` lands within 5 % of the `K=0` run's
+  point and observation counts (its view sets are mostly at or under the cap, so
+  most points take the uncapped path outright); `xform --localize-keypoints`
+  with `basis_max_views` round-trips; and a whole-cloud `view_scores` map drives
+  chunked `point_indexes` calls to the same result as one shot.
 
 ## Task-completion checks (from AGENTS.md)
 

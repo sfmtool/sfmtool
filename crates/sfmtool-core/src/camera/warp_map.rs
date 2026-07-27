@@ -43,9 +43,11 @@ pub struct WarpMap {
 
 /// Destination-pixel count at or below which the warp / remap row loops run
 /// sequentially. For small destinations (e.g. the `R×R` patch grids of
-/// patch-normal refinement, typically nested inside an already-parallel
-/// per-patch loop) the rayon scaffolding costs an order of magnitude more
-/// than the row work itself; full-image warps stay parallel.
+/// patch-normal refinement) the rayon scaffolding costs an order of magnitude
+/// more than the row work itself. It is only the *size* half of the decision —
+/// see [`parallelize_rows`], which also requires idle parallelism to exist, so
+/// even a full-image warp runs its rows serially when the caller is already a
+/// rayon worker.
 pub(crate) const PAR_MIN_PIXELS: usize = 2048;
 
 /// Whether a row loop over a `pixels`-pixel destination should be handed to
@@ -147,7 +149,9 @@ impl WarpMap {
     /// - Source coordinates outside `[0, src_width) x [0, src_height)` are
     ///   stored as `(NaN, NaN)`.
     ///
-    /// Rows are computed in parallel via rayon.
+    /// Rows go to rayon only when the destination is large enough AND the
+    /// caller is not itself a rayon worker (see [`parallelize_rows`]); either way
+    /// the result is the same buffer.
     pub fn from_cameras(src_camera: &CameraIntrinsics, dst_camera: &CameraIntrinsics) -> Self {
         let dst_w = dst_camera.width;
         let dst_h = dst_camera.height;
@@ -207,7 +211,9 @@ impl WarpMap {
     /// Passing the identity rotation recovers [`from_cameras`] (both code
     /// paths project the same ray through the src camera).
     ///
-    /// Rows are computed in parallel via rayon.
+    /// Rows go to rayon only when the destination is large enough AND the
+    /// caller is not itself a rayon worker (see [`parallelize_rows`]); either way
+    /// the result is the same buffer.
     pub fn from_cameras_with_rotation(
         src_camera: &CameraIntrinsics,
         dst_camera: &CameraIntrinsics,
@@ -239,7 +245,9 @@ impl WarpMap {
     /// so the math involves exactly one 3x3 matrix multiply and one vector
     /// add per dst pixel — no inverse, no small-angle approximation.
     ///
-    /// Rows are computed in parallel via rayon.
+    /// Rows go to rayon only when the destination is large enough AND the
+    /// caller is not itself a rayon worker (see [`parallelize_rows`]); either way
+    /// the result is the same buffer.
     pub fn from_cameras_with_pose(
         src_camera: &CameraIntrinsics,
         dst_camera: &CameraIntrinsics,
