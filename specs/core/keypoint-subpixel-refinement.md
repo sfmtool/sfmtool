@@ -334,7 +334,25 @@ It deliberately produces a **better** sub-pixel result than a parabolic / discre
 estimate, so it is *not* validated by equivalence to one:
 
 - **Synthetic recovery.** On rendered views with a known planted sub-pixel offset
-  (seed within the basin), recover `δ` to < 0.02 px.
+  (seed within the basin), recover `δ` to < 0.02 px when the sampler reads
+  pyramid level 0 — every `Sampler` at a patch grid at least as dense as the
+  source, and `Bilinear` at any density.
+
+  Above level 0 the target loosens with the level, because `δ` is located on a
+  reconstruction whose samples are `2^ℓ` source px apart. A single bilinear tap
+  reconstructs a piecewise-bilinear field whose amplitude response varies with
+  the sub-sample phase; two views at different phases therefore correlate best
+  slightly off the true offset, biased toward the level's own sample positions,
+  by an amount that scales with the sample spacing. `BilinearMip` selects
+  `ℓ = round(log₂ σ_major)` from the patch-grid → source scale, so a patch that
+  minifies the source by ≳ 1.4× is refined on level ≥ 1 and recovers a planted
+  offset a few percent short (a two-view fixture at `σ_major = 2.6` recovers a
+  planted 0.78 px as 0.755 px; the equivalent `Bilinear` run, reading level 0,
+  recovers 0.777 px). This is the accuracy side of the aliasing trade the level
+  choice makes, not a defect of the mip composition: refining through level `ℓ`
+  is numerically identical to refining a natively `2^ℓ`-downsampled image pair
+  through `Bilinear`. `Anisotropic` blends two adjacent levels, which partly
+  averages the per-level bias out.
 - **Quality, not equivalence.** Refined keypoints are **as good or better** than
   the seed by cross-view photoconsistency (mean windowed ZNCC) and/or
   reprojection.

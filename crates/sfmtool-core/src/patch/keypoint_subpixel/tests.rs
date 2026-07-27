@@ -407,11 +407,19 @@ fn recovers_planted_subpixel_offset_two_views() {
     // robust signal (the absolute split depends on the consensus gauge).
     let relative = dx1 - dx0;
     let expected_px = planted_grid * src_per_grid();
-    // The band-limited synthetic is the worst case for the mip default: the
-    // oblique warp rounds to a coarser level whose blur eats ~0.005 px of the
-    // recovery, with no aliasing content for the mip level to win back. The
-    // default must still close the offset; the spec's < 0.02 px target is
-    // pinned on the reference full-resolution sampler below.
+    // This fixture's patch grid minifies the source (`src_per_grid()` = 2.6
+    // source px per grid px — a scale effect, not obliquity; the views are only
+    // ~5.7° off fronto and `sigma_major == sigma_minor` here), so the default
+    // `BilinearMip` sampler refines on pyramid level 1, whose samples are 2
+    // source px apart. A single bilinear tap on that level locates the ECC
+    // optimum a little short of the truth — the phase-dependent interpolation
+    // bias described in the spec's Validation section, which scales with the
+    // level's sample spacing and is not a convergence or scaling artifact
+    // (tightening `convergence_px` to 0 over 200 GN steps moves the answer by
+    // < 1e-4 px). Two views is the weakest case: at N = 4 the same planted
+    // offset comes back within 0.005 px. The default must still close the
+    // offset; the spec's < 0.02 px target is pinned on the level-0 reference
+    // sampler below.
     assert!(
         (relative - expected_px).abs() < 0.03,
         "two-view relative offset to < 0.03 px: got {relative:.4}, expected {expected_px:.4}"
