@@ -544,16 +544,19 @@ def embed_patches(
     # Keep the selection's per-view ZNCC and track-view split alongside the view
     # sets: the localizer's consensus-basis pick ranks candidates by that score
     # and reserves seats for the track views (see
-    # specs/core/keypoint-localization-consensus-basis.md). Both are free here —
-    # select_views already computed them.
+    # specs/core/keypoint-localization-consensus-basis.md). select_views already
+    # computed both, so the only cost is marshalling them across — skipped
+    # entirely when the cap is off, which is the path that would never read them.
+    basis_ranked = localize_basis_views > 0
     view_sets: dict[int, list[int]] = {}
-    view_scores: dict[int, list[float]] = {}
-    track_view_counts: dict[int, int] = {}
+    view_scores: dict[int, list[float]] | None = {} if basis_ranked else None
+    track_view_counts: dict[int, int] | None = {} if basis_ranked else None
     for s in selections:
         pid = int(s["point_index"])
         view_sets[pid] = np.asarray(s["admitted"]).tolist()
-        view_scores[pid] = np.asarray(s["scores"], dtype=np.float64).tolist()
-        track_view_counts[pid] = int(s["track_view_count"])
+        if basis_ranked:
+            view_scores[pid] = np.asarray(s["scores"], dtype=np.float64).tolist()
+            track_view_counts[pid] = int(s["track_view_count"])
 
     # 3. Discrete localizer (the seed): project starting keypoints and congeal them,
     #    dropping views that won't co-register in-loop. Runs once, in round 1.
