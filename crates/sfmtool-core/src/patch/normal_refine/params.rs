@@ -58,16 +58,16 @@ pub enum PatchWindow {
 /// How to sample a [`ProjectedImage`]'s pyramid when rendering a patch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sampler {
-    /// Plain bilinear from the full-resolution level. The **default**: it barely
-    /// moves the found normal (within ~1° of anisotropic on pinhole cameras) at a
-    /// fraction of the cost.
+    /// Plain bilinear from the full-resolution level: the cheapest tap, and
+    /// within ~1° of anisotropic on fronto-parallel pinhole views — but it
+    /// aliases on compressive warps (e.g. cross-scale views with one camera
+    /// much closer), which corrupts the score surface the refiners descend.
     Bilinear,
     /// Single bilinear sample from the pyramid level nearest the warp's local
     /// compression (`round(log2(sigma_major))` per pixel, from the Jacobian
-    /// SVD). The middle point between the other two: where `Bilinear` aliases
-    /// on a compressive warp (e.g. cross-scale views with one camera much
-    /// closer), the mip level bounds the aliasing at ≈ bilinear cost — at the
-    /// price of blurring oblique views, whose anisotropic footprint only
+    /// SVD). The **default**: the mip level bounds the aliasing `Bilinear`
+    /// suffers on compressive warps at ≈ bilinear cost — at the price of
+    /// blurring oblique views, whose anisotropic footprint only
     /// `Anisotropic`'s multi-tap walk resolves.
     BilinearMip,
     /// Anisotropic sampling over the pyramid — the patch warp's Jacobian SVD picks
@@ -208,7 +208,7 @@ impl Default for NormalRefineParams {
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
             min_valid_fraction: 0.6,
             min_views: 3,
-            sampler: Sampler::Bilinear,
+            sampler: Sampler::BilinearMip,
             cache: CacheMode::FrontoParallel,
             cache_supersample: 2.0,
             compute_confidence: false,

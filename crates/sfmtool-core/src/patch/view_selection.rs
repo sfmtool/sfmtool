@@ -83,7 +83,7 @@ impl Default for ViewSelectParams {
             min_relative_zncc: 0.7,
             resolution: 24,
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
-            sampler: Sampler::Bilinear,
+            sampler: Sampler::BilinearMip,
             min_valid_fraction: 0.6,
             min_track_views: 2,
             robust_iters: 3,

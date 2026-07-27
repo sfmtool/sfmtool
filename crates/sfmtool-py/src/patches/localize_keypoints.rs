@@ -55,7 +55,7 @@ impl PyPatchCloud {
     ///     resolution: The R×R patch grid the consensus / ZNCC are scored on.
     ///     window: ``"gaussian_disk"`` (default), ``"gaussian"``, or ``"uniform"``.
     ///     window_sigma: Window sigma for the gaussian windows.
-    ///     sampler: ``"bilinear"`` (default), ``"bilinear_mip"``, or
+    ///     sampler: ``"bilinear_mip"`` (default), ``"bilinear"``, or
     ///         ``"anisotropic"``.
     ///     robust_iters: IRLS passes for the robust consensus.
     ///     convergence_px: Stop once a round's mean round-over-round change of
@@ -77,7 +77,7 @@ impl PyPatchCloud {
     #[pyo3(signature = (
         recon, images, *, view_sets=None, max_iters=5, search=6.0, max_shift_px=3.0,
         min_relative_zncc=0.7, min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
-        window_sigma=0.6, sampler="bilinear", robust_iters=3, convergence_px=0.05,
+        window_sigma=0.6, sampler="bilinear_mip", robust_iters=3, convergence_px=0.05,
         point_indexes=None, search_resolution_multiplier=1.0,
         search_strategy="plus_descent", progress=None
     ))]

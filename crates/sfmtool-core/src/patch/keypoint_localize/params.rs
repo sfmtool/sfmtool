@@ -112,7 +112,7 @@ impl Default for KeypointLocalizeParams {
             min_grazing_cos: 0.1,
             resolution: 24,
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
-            sampler: Sampler::Bilinear,
+            sampler: Sampler::BilinearMip,
             robust_iters: 3,
             convergence_px: 0.05,
             search_resolution_multiplier: 1.0,

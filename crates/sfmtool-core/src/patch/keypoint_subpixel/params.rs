@@ -143,7 +143,7 @@ impl Default for KeypointSubpixelParams {
         Self {
             resolution: 24,
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
-            sampler: Sampler::Bilinear,
+            sampler: Sampler::BilinearMip,
             robust_iters: 3,
             max_outer_sweeps: 1,
             outer_convergence_px: 0.005,

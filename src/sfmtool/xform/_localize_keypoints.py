@@ -68,7 +68,7 @@ class LocalizeKeypointsTransform:
         resolution: int = 24,
         window: str = "gaussian_disk",
         window_sigma: float = 0.6,
-        sampler: str = "bilinear",
+        sampler: str = "bilinear_mip",
         robust_iters: int = 3,
         convergence_px: float = 0.05,
         search_resolution_multiplier: float = 1.0,

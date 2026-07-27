@@ -41,7 +41,7 @@ impl PyPatchCloud {
     ///     window: Per-pixel scoring weight — ``"gaussian_disk"`` (default),
     ///         ``"gaussian"``, or ``"uniform"``.
     ///     window_sigma: Window sigma for the gaussian windows.
-    ///     sampler: ``"bilinear"`` (default), ``"bilinear_mip"``, or
+    ///     sampler: ``"bilinear_mip"`` (default), ``"bilinear"``, or
     ///         ``"anisotropic"``.
     ///     min_valid_fraction: Per-view floor on the window-weighted valid-pixel
     ///         fraction; a view below it does not cover enough of the patch.
@@ -73,7 +73,7 @@ impl PyPatchCloud {
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         recon, images, *, min_relative_zncc=0.7, resolution=24, window="gaussian_disk",
-        window_sigma=0.6, sampler="bilinear", min_valid_fraction=0.6, min_track_views=2,
+        window_sigma=0.6, sampler="bilinear_mip", min_valid_fraction=0.6, min_track_views=2,
         robust_iters=3, min_self_agreement=0.3, point_indexes=None, candidate_views=None,
         progress=None
     ))]

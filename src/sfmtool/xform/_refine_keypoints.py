@@ -63,7 +63,7 @@ class RefineKeypointsTransform:
         resolution: int = 24,
         window: str = "gaussian_disk",
         window_sigma: float = 0.6,
-        sampler: str = "bilinear",
+        sampler: str = "bilinear_mip",
         robust_iters: int = 3,
         max_outer_sweeps: int = 1,
         outer_convergence_px: float = 0.005,
