@@ -138,6 +138,12 @@ pub static N_BASIS: AtomicU64 = AtomicU64::new(0);
 /// Views held out of the consensus and registered once against the finished
 /// basis template (summed over points). `0` when the cap is off.
 pub static N_TAIL: AtomicU64 = AtomicU64::new(0);
+/// Of [`N_TAIL`], the views whose point produced **no** usable basis template
+/// (the congealing loop collapsed below two in-frame views, or no channel
+/// carried texture). Those tail views are never registered: they keep their
+/// seed offsets and face only the `max_shift_px` gate. A large share here means
+/// the cap's reported keypoints are partly un-refined seeds.
+pub static N_TAIL_NO_BASIS: AtomicU64 = AtomicU64::new(0);
 
 /// Count one event on `c` when profiling is on.
 #[inline]
@@ -171,7 +177,15 @@ pub fn reset() {
     for p in PHASES {
         p.reset();
     }
-    for c in [&N_ROUNDS, &N_RENDER, &N_SEARCH, &N_CELLS, &N_BASIS, &N_TAIL] {
+    for c in [
+        &N_ROUNDS,
+        &N_RENDER,
+        &N_SEARCH,
+        &N_CELLS,
+        &N_BASIS,
+        &N_TAIL,
+        &N_TAIL_NO_BASIS,
+    ] {
         c.store(0, Ordering::Relaxed);
     }
     crate::camera::remap::prof::reset();
@@ -221,7 +235,7 @@ pub fn report(patches: usize, wall_secs: f64) {
     let n_cells = N_CELLS.load(Ordering::Relaxed);
     eprintln!(
         "[sfmtool-profile]   rounds {}  renders {}  searches {}  cells {} ({:.2}/search)  \
-         basis {}  tail {}",
+         basis {}  tail {} (no-basis {})",
         N_ROUNDS.load(Ordering::Relaxed),
         N_RENDER.load(Ordering::Relaxed),
         n_search,
@@ -233,6 +247,7 @@ pub fn report(patches: usize, wall_secs: f64) {
         },
         N_BASIS.load(Ordering::Relaxed),
         N_TAIL.load(Ordering::Relaxed),
+        N_TAIL_NO_BASIS.load(Ordering::Relaxed),
     );
     crate::camera::remap::prof::report();
 }

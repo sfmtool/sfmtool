@@ -455,8 +455,10 @@ pub struct BasisEvidence<'a> {
     /// Per-view score to the point's starting appearance, parallel to the
     /// `view_set` (higher is a better match; `NaN` = unscored, which ranks
     /// below every scored view). `sfm embed-patches` passes the `select_views`
-    /// per-admitted-view ZNCC through here. `None` falls back to ranking by
-    /// grazing angle (`|d̂·n̂|`, most frontal first).
+    /// per-admitted-view ZNCC through here. `None` — and, equivalently, an
+    /// **empty** slice, which is how a batch caller says "no scores for *this*
+    /// point" — falls back to ranking by grazing angle (`|d̂·n̂|`, most frontal
+    /// first).
     pub view_scores: Option<&'a [f64]>,
     /// The number of **leading** `view_set` entries that are the point's track
     /// views — the `select_views` output contract, whose `admitted` lists the
@@ -544,8 +546,14 @@ pub fn localize_patch_keypoints_with_basis(
     // Parallel to `states`, consumed only by the consensus-basis pick: each
     // candidate's rank score (the caller's, else the grazing cosine computed
     // just below for free) and whether it is one of the point's track views.
+    // Only built when the cap can bite, so the (default) uncapped path stays
+    // allocation-free.
+    let ranking = params.basis_max_views > 0;
     let mut cand_scores: Vec<f64> = Vec::new();
     let mut cand_is_track: Vec<bool> = Vec::new();
+    // An empty caller slice means "this point is unscored" — the batch entry
+    // point has no per-point `Option`, so it says so with an empty list.
+    let view_scores = evidence.view_scores.filter(|s| !s.is_empty());
     let normal = patch.normal();
     for (k, &i) in view_set.iter().enumerate() {
         if !seen.insert(i) {
@@ -590,13 +598,15 @@ pub fn localize_patch_keypoints_with_basis(
         // seed beyond `±search` is clamped on the integer part, as the round drift is.
         let iu = (off[0].round() as i64).clamp(-search_steps, search_steps);
         let iv = (off[1].round() as i64).clamp(-search_steps, search_steps);
-        cand_scores.push(match evidence.view_scores {
-            // A caller score shorter than the view set leaves the tail
-            // unscored, which ranks it last rather than panicking.
-            Some(s) => s.get(k).copied().unwrap_or(f64::NAN),
-            None => grazing_cos,
-        });
-        cand_is_track.push(k < evidence.track_view_count);
+        if ranking {
+            cand_scores.push(match view_scores {
+                // A caller score shorter than the view set leaves the tail
+                // unscored, which ranks it last rather than panicking.
+                Some(s) => s.get(k).copied().unwrap_or(f64::NAN),
+                None => grazing_cos,
+            });
+            cand_is_track.push(k < evidence.track_view_count);
+        }
         states.push(ViewState {
             idx: i,
             order: states.len() as u32,
@@ -988,6 +998,27 @@ fn basis_template(
     Some((kept_ch, keep_mask))
 }
 
+/// Whether a view's refined keypoint is close enough to the point's projection
+/// to keep — the `max_shift_px` half of the drop gates, shared by the scored
+/// path and the no-template early exit so a tail view is never emitted without
+/// at least this check.
+fn within_max_shift(
+    patch: &OrientedPatch,
+    view: &ProjectedImage<'_>,
+    st: &ViewState,
+    wpp_u: f64,
+    wpp_v: f64,
+    max_shift_px: f64,
+) -> bool {
+    let off = st.offset_steps();
+    let center = shifted_center(patch, off[0], off[1], wpp_u, wpp_v);
+    let shift_px = match project(view, &center, patch.w) {
+        Some((x, y)) => (x - st.proj[0]).hypot(y - st.proj[1]),
+        None => f64::INFINITY, // keypoint left the frame
+    };
+    shift_px <= max_shift_px
+}
+
 /// Phase B: register every `tail` view once against the basis consensus and
 /// apply the per-view drop gates, leaving `tail` holding only the kept views.
 ///
@@ -997,7 +1028,19 @@ fn basis_template(
 /// covers a whole round loop). The gates are the loop's verbatim: drop a view
 /// whose refined keypoint sits more than `max_shift_px` from the projection, or
 /// whose ZNCC falls below `min_relative_zncc ×` the **basis members'** median
-/// final ZNCC.
+/// final ZNCC (the same threshold rule as the round loop, measured against a
+/// different reference — the no-holdout basis template).
+///
+/// **Mixed channel counts.** The template's channel space is the one
+/// [`basis_template`] built, i.e. the minimum over the *basis* caches. A tail
+/// view can be narrower than that (a grayscale frame among colour ones), and
+/// its tile then has no plane for the template's trailing channels. The round
+/// loop's rule is "score in the channel space common to the views taking part",
+/// so the tail applies the same rule pairwise: the mask is truncated to the
+/// tail tile's own width. Only trailing *original* channels drop out, so the
+/// surviving kept channels are a prefix of the template's rows and the template
+/// needs no rebuild. A tail view with no kept channel left is unscorable and is
+/// dropped by the gates below, exactly like one whose window is out of frame.
 #[allow(clippy::too_many_arguments)]
 fn register_tail(
     patch: &OrientedPatch,
@@ -1019,9 +1062,23 @@ fn register_tail(
         &mut search.tmpl,
     ) else {
         // No usable basis consensus (the loop collapsed below two in-frame
-        // views, or no channel carries texture): nothing to register against,
-        // so the tail keeps its seed offsets with an unknown ZNCC — the same
-        // thing the congealing loop does for its own early exits.
+        // views, or no channel carries texture): there is nothing to register
+        // against, so the tail keeps its seed offsets with an unknown ZNCC. The
+        // agreement gate cannot be evaluated without a template, but the
+        // positional one can and still must be — a seed can already sit further
+        // than `max_shift_px` from the projection, and nothing downstream would
+        // catch it.
+        prof::count(&prof::N_TAIL_NO_BASIS, tail.len() as u64);
+        tail.retain(|st| {
+            within_max_shift(
+                patch,
+                &views[st.idx as usize],
+                st,
+                geom.wpp_u,
+                geom.wpp_v,
+                params.max_shift_px,
+            )
+        });
         return;
     };
 
@@ -1059,14 +1116,27 @@ fn register_tail(
                 params.sampler,
             )
         });
+        // Score in the channel space this tail tile actually has (see the
+        // "Mixed channel counts" note above); `sub_mask` is a prefix of the
+        // template's mask, so `search.tmpl`'s leading rows still line up.
+        let sub_mask = &keep_mask[..keep_mask.len().min(cache.channels)];
+        let sub_kept = sub_mask.iter().filter(|&&k| k).count();
+        // Truncating the mask can only remove kept channels, and only trailing
+        // ones — so the template's leading `sub_kept` rows are the right ones.
+        debug_assert!(sub_kept <= kept_ch);
+        if sub_kept == 0 {
+            // No channel the template scores on survives in this view.
+            st.loo = f64::NAN;
+            continue;
+        }
         prof::count(&prof::N_SEARCH, 1);
         let sh = prof::SEARCH.time(|| match params.search_strategy {
             SearchStrategy::Exhaustive => search_shift(
                 &cache,
                 search,
                 support,
-                &keep_mask,
-                kept_ch,
+                sub_mask,
+                sub_kept,
                 r,
                 geom.margin,
                 tail_c0,
@@ -1076,8 +1146,8 @@ fn register_tail(
                 &cache,
                 search,
                 support,
-                &keep_mask,
-                kept_ch,
+                sub_mask,
+                sub_kept,
                 r,
                 geom.margin,
                 tail_c0,
@@ -1097,13 +1167,15 @@ fn register_tail(
     }
 
     tail.retain(|st| {
-        let off = st.offset_steps();
-        let center = shifted_center(patch, off[0], off[1], geom.wpp_u, geom.wpp_v);
-        let shift_px = match project(&views[st.idx as usize], &center, patch.w) {
-            Some((x, y)) => (x - st.proj[0]).hypot(y - st.proj[1]),
-            None => f64::INFINITY, // keypoint left the frame
-        };
-        shift_px <= params.max_shift_px && st.loo.is_finite() && st.loo >= bar
+        within_max_shift(
+            patch,
+            &views[st.idx as usize],
+            st,
+            geom.wpp_u,
+            geom.wpp_v,
+            params.max_shift_px,
+        ) && st.loo.is_finite()
+            && st.loo >= bar
     });
 }
 
@@ -1194,7 +1266,9 @@ fn finalize(
 /// cloud's patches — the batch form of [`BasisEvidence`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BasisInputs<'a> {
-    /// Per patch, the per-view scores parallel to that patch's view set.
+    /// Per patch, the per-view scores parallel to that patch's view set. An
+    /// **empty** entry means that patch is unscored — its basis pick falls back
+    /// to the grazing rank, exactly as if no scores had been supplied at all.
     pub view_scores: Option<&'a [Vec<f64>]>,
     /// Per patch, how many leading view-set entries are track views.
     pub track_view_counts: Option<&'a [u32]>,
