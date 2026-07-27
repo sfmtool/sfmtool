@@ -279,6 +279,16 @@ Readings:
   (26.1 % churn, 0.734 px) and tail ZNCC (0.926) — the top-score band does
   contain redundant near-duplicate frames — but the margin is inside the
   `K=12` → `K=16` gap, so raising `K` is the simpler lever.
+- **Divergence from `K=0` is a measure of change, not of error** — the
+  all-view consensus is the behaviour the cap exists to replace, not a ground
+  truth. Read without that anchor, the internal metrics favour a *smaller*
+  `K`: basis ZNCC rises monotonically as `K` shrinks (0.972 / 0.970 / 0.968
+  for `K` = 8 / 12 / 16 — fewer, better-ranked members give a sharper
+  template), tail ZNCC is flat across `K` (an 8-view template registers the
+  tail as well as a 16-view one), and the exact work counters are lowest at
+  `K=8`. A larger `K` buys only proximity to `K=0`. The choice between the
+  small-`K` and large-`K` ends of the band is therefore delegated entirely to
+  the downstream comparison below, on arms `K ∈ {0, 8, 16}`.
 
 The pipeline default therefore stays `0`. The keypoint divergence is large
 enough that adopting a non-zero default needs the downstream
