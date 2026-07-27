@@ -336,7 +336,7 @@ def embed_patches(
     images: list[np.ndarray],
     *,
     min_relative_zncc: float = 0.7,
-    patch_size: float = 5.0,
+    patch_size: float = 11.0,
     max_shift_px: float = 3.0,
     min_views: int = 2,
     max_iters: int = 5,
@@ -389,6 +389,10 @@ def embed_patches(
             each camera's dimensions (e.g. via ``read_workspace_image``).
         patch_size: Surfel size — the full patch edge (feature-size multiples),
             halved to the library half-extent and passed to ``to_embedded_patches``.
+            The ``11.0`` default sits at SIFT's ~12x descriptor window; smaller
+            patches starve the refiners of texture (weaker normals, more
+            localizability culls), larger ones trade observation yield away to
+            the grazing cull for marginal gains.
         min_relative_zncc, max_shift_px, min_views, max_iters, search: The pipeline
             knobs documented in ``specs/cli/embed-patches-command.md``.
         resolution: The ``R × R`` patch grid the kernels render/score on.

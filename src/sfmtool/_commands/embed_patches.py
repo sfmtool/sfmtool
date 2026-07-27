@@ -62,11 +62,13 @@ from .._cli_utils import timed_command
 @click.option(
     "--patch-size",
     type=float,
-    default=5.0,
+    default=11.0,
     show_default=True,
     help=(
         "Surfel size — the full patch edge length (in feature-size multiples), "
-        "halved to the library half-extent and passed to to_embedded_patches."
+        "halved to the library half-extent and passed to to_embedded_patches. "
+        "The default sits at SIFT's ~12x descriptor window; smaller patches "
+        "starve the normal/keypoint refiners of texture."
     ),
 )
 @click.option(
