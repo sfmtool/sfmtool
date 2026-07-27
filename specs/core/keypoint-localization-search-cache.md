@@ -108,7 +108,11 @@ Per view, render once at the seed (`acc = 0`, i.e. centered on `project_i(X_p)`)
 - **Geometry / size.** The window centre can reach `acc + d` where `|acc| ≤
   search` (the clipped accumulated drift) and `|d| ≤ margin` (the in-round
   search), so it spans `±2·search`; the window itself extends `±R/2`. The cache
-  must cover `R + 4·search` per axis (`= 48` at the defaults). The frame
+  must cover `R + 4·search` per axis (`= 48` at the defaults). A view held out
+  of the consensus by the
+  [consensus-basis cap](keypoint-localization-consensus-basis.md) runs one
+  search around its own seed and so needs no drift headroom: its cache is
+  `R + 2·search`. The frame
   orientation is the patch's fixed `(u, v)`; pixels map to the patch grid 1:1
   (no supersampling — see below).
   - *Alternative (smaller cache):* clamp the **search window** to a global

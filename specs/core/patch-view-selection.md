@@ -43,7 +43,12 @@ would wrongly include.
 ## Output
 
 The selected **view set** `G` — the admitted views for the point (track views
-plus the photometrically-vetted candidates).
+first, then the photometrically-vetted candidates in ascending index order),
+their per-view ZNCC to the reference, the track's self-agreement, and the
+**track-view count**: how many leading admitted entries are track views, so a
+consumer can split `G` by provenance without re-deriving the track. The
+localizer's [consensus-basis pick](keypoint-localization-consensus-basis.md)
+consumes both the scores and that count.
 
 ## Parameters (defaults)
 

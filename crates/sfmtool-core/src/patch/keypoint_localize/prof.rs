@@ -61,11 +61,20 @@ impl Phase {
     }
 }
 
-// Enclosing phase (overlaps the leaves; reported as the 100% denominator).
+// Enclosing phases (overlap the leaves; TOTAL is the 100% denominator).
 /// Whole `localize_patch_keypoints` calls.
 pub static TOTAL: Phase = Phase::new("localize_total");
+/// Whole phase-B tail registration (per point that has a tail): the final
+/// no-holdout basis template, then per tail view one small cache render and one
+/// shift search. **Enclosing** — its render / template / search work is also
+/// attributed to [`RENDER`], [`TEMPLATE`] and [`SEARCH`], so it is excluded from
+/// the leaf sum below (like [`TOTAL`]).
+pub static TAIL_REGISTER: Phase = Phase::new("tail_register");
 
 // Leaf phases (non-overlapping; they partition the bulk of TOTAL).
+/// Per-point consensus-basis pick (`select_basis`) — the ranking sort that
+/// decides which views congeal. Only runs when the cap bites.
+pub static BASIS_PICK: Phase = Phase::new("basis_pick");
 /// Per-view render-once cache build (`render_context`), run a single time per view
 /// before the round loop rather than per (view, round).
 pub static RENDER: Phase = Phase::new("render_context");
@@ -123,6 +132,12 @@ pub static N_SEARCH: AtomicU64 = AtomicU64::new(0);
 /// pass and has no per-cell event. Average cells per search call is
 /// `N_CELLS / N_SEARCH`; the spec's per-call cells claim is derived here.
 pub static N_CELLS: AtomicU64 = AtomicU64::new(0);
+/// Views that entered the congealing loop as consensus-basis members (summed
+/// over points). Equals the total view count when the cap is off.
+pub static N_BASIS: AtomicU64 = AtomicU64::new(0);
+/// Views held out of the consensus and registered once against the finished
+/// basis template (summed over points). `0` when the cap is off.
+pub static N_TAIL: AtomicU64 = AtomicU64::new(0);
 
 /// Count one event on `c` when profiling is on.
 #[inline]
@@ -132,8 +147,10 @@ pub fn count(c: &AtomicU64, n: u64) {
     }
 }
 
-const PHASES: [&Phase; 14] = [
+const PHASES: [&Phase; 16] = [
     &TOTAL,
+    &TAIL_REGISTER,
+    &BASIS_PICK,
     &RENDER,
     &RENDER_PROJECT,
     &RENDER_SVD,
@@ -154,7 +171,7 @@ pub fn reset() {
     for p in PHASES {
         p.reset();
     }
-    for c in [&N_ROUNDS, &N_RENDER, &N_SEARCH, &N_CELLS] {
+    for c in [&N_ROUNDS, &N_RENDER, &N_SEARCH, &N_CELLS, &N_BASIS, &N_TAIL] {
         c.store(0, Ordering::Relaxed);
     }
     crate::camera::remap::prof::reset();
@@ -183,10 +200,17 @@ pub fn report(patches: usize, wall_secs: f64) {
             },
         );
     }
-    let leaves: u64 = [&RENDER, &ZNORM, &TEMPLATE_GRAM, &TEMPLATE, &SEARCH]
-        .iter()
-        .map(|p| p.ns.load(Ordering::Relaxed))
-        .sum();
+    let leaves: u64 = [
+        &BASIS_PICK,
+        &RENDER,
+        &ZNORM,
+        &TEMPLATE_GRAM,
+        &TEMPLATE,
+        &SEARCH,
+    ]
+    .iter()
+    .map(|p| p.ns.load(Ordering::Relaxed))
+    .sum();
     eprintln!(
         "[sfmtool-profile]   {:<16} {:>9.3}s  {:>5.1}%  (localize_total minus leaf phases)",
         "other/overhead",
@@ -196,7 +220,8 @@ pub fn report(patches: usize, wall_secs: f64) {
     let n_search = N_SEARCH.load(Ordering::Relaxed);
     let n_cells = N_CELLS.load(Ordering::Relaxed);
     eprintln!(
-        "[sfmtool-profile]   rounds {}  renders {}  searches {}  cells {} ({:.2}/search)",
+        "[sfmtool-profile]   rounds {}  renders {}  searches {}  cells {} ({:.2}/search)  \
+         basis {}  tail {}",
         N_ROUNDS.load(Ordering::Relaxed),
         N_RENDER.load(Ordering::Relaxed),
         n_search,
@@ -206,6 +231,8 @@ pub fn report(patches: usize, wall_secs: f64) {
         } else {
             0.0
         },
+        N_BASIS.load(Ordering::Relaxed),
+        N_TAIL.load(Ordering::Relaxed),
     );
     crate::camera::remap::prof::report();
 }

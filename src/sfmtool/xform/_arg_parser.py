@@ -260,6 +260,7 @@ _LOCALIZE_KEYPOINTS_KEYS: dict[str, Callable[[str], object]] = {
     "convergence_px": float,
     "search_resolution_multiplier": float,
     "search_strategy": str,
+    "basis_max_views": int,
 }
 
 

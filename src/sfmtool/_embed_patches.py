@@ -351,6 +351,7 @@ def embed_patches(
     max_refine_views: int = 8,
     max_keypoint_uncertainty: float = 0.35,
     localize_search_strategy: str = "plus_descent",
+    localize_basis_views: int = 0,
     sampler: str = "bilinear_mip",
     progress: Any = None,
 ) -> SfmrReconstruction:
@@ -455,6 +456,17 @@ def embed_patches(
             egregious points where a dataset has them and little where it doesn't
             (~1-3% on well-textured sets, more where a poorly-localized tail
             exists). ``0`` (or a non-positive value) disables the cull.
+        localize_basis_views: When ``> 0``, cap the **discrete localizer's
+            consensus basis** at this many views per point: that many congeal
+            against each other (ranked by the ``select_views`` ZNCC, with the
+            track views claiming seats first), and every remaining view registers
+            **once** against the finished basis template. See
+            ``specs/core/keypoint-localization-consensus-basis.md``. Bounds the
+            `O(V²)` consensus terms on the expanded (``select_views``) view sets,
+            whose tail reaches hundreds of views on a long capture. Lossless for
+            membership in the sense the normal-refinement cap is: every
+            observation is still localized and reported — only the consensus
+            *membership* shrinks. ``0`` (the default) congeals all views.
         progress: Optional callable (e.g. ``click.echo``) that receives a per-round
             summary line reporting the mean normal change (deg) and mean keypoint
             shift (px); when given, those metrics are computed each round.
@@ -529,9 +541,19 @@ def embed_patches(
             sampler=sampler,
             progress=counter,
         )
-    view_sets = {
-        int(s["point_index"]): np.asarray(s["admitted"]).tolist() for s in selections
-    }
+    # Keep the selection's per-view ZNCC and track-view split alongside the view
+    # sets: the localizer's consensus-basis pick ranks candidates by that score
+    # and reserves seats for the track views (see
+    # specs/core/keypoint-localization-consensus-basis.md). Both are free here —
+    # select_views already computed them.
+    view_sets: dict[int, list[int]] = {}
+    view_scores: dict[int, list[float]] = {}
+    track_view_counts: dict[int, int] = {}
+    for s in selections:
+        pid = int(s["point_index"])
+        view_sets[pid] = np.asarray(s["admitted"]).tolist()
+        view_scores[pid] = np.asarray(s["scores"], dtype=np.float64).tolist()
+        track_view_counts[pid] = int(s["track_view_count"])
 
     # 3. Discrete localizer (the seed): project starting keypoints and congeal them,
     #    dropping views that won't co-register in-loop. Runs once, in round 1.
@@ -553,6 +575,9 @@ def embed_patches(
             search_resolution_multiplier=search_resolution_multiplier,
             search_strategy=localize_search_strategy,
             sampler=sampler,
+            basis_max_views=localize_basis_views,
+            view_scores=view_scores,
+            track_view_counts=track_view_counts,
             progress=counter,
         )
 

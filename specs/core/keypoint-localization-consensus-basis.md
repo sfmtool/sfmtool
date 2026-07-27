@@ -1,10 +1,13 @@
 # Keypoint localization — consensus-basis cap (basis congealing + tail registration)
 
-> Status: **designed (2026-07-26), not yet implemented** — target:
-> `crates/sfmtool-core/src/patch/keypoint_localize/` (params + orchestration),
-> exposed as `PatchCloud.localize_keypoints(basis_max_views=…)` and threaded
-> through `sfm embed-patches`. The Rust-layer default is `0` = off (bit-identical
-> current behavior); the pipeline default is set by the A/B validation below.
+> Status: **implemented (2026-07-26)** —
+> `crates/sfmtool-core/src/patch/keypoint_localize.rs` (orchestration) and
+> `keypoint_localize/basis.rs` (the ranking pick), exposed as
+> `PatchCloud.localize_keypoints(basis_max_views=…)`,
+> `sfm embed-patches --localize-basis-views` and
+> `sfm xform --localize-keypoints basis_max_views=…`. The Rust-layer **and**
+> pipeline defaults are `0` = off (bit-identical current behavior); flipping the
+> pipeline default is a separate decision from the A/B validation below.
 
 ## Motivation
 
@@ -66,13 +69,11 @@ anchor**, ranked by windowed ZNCC:
    = unscored). `sfm embed-patches` passes the `select_views` per-admitted-view
    `scores` straight through — each view's ZNCC against the point's track-view
    consensus reference, already computed during selection.
-2. **Stored-bitmap fallback.** When no scores are given and the cloud carries
-   consensus `patch_bitmaps` (an already-embedded reconstruction), each view's
-   score is one render + windowed ZNCC against the stored bitmap — `O(V·n)`,
-   linear, computed inside the per-point localization.
-3. **Positional fallback.** When neither exists, rank views by grazing angle
-   (`|d̂·n̂|`, most frontal first). Deterministic and cheap; only reached by
-   callers that supply bare view lists on un-embedded clouds.
+2. **Positional fallback.** With no caller scores, rank views by grazing angle
+   (`|d̂·n̂|`, most frontal first) — the cosine the grazing pre-filter already
+   computes per candidate, so the fallback is free. Deterministic; reached by
+   callers that supply bare view lists, notably
+   `sfm xform --localize-keypoints`.
 
 Unscored (`NaN`) views rank below all scored views within their group. Track
 membership is conveyed by the caller (`track_view_counts`, one integer per
@@ -98,9 +99,15 @@ first).
   report their ZNCC in `loo_zncc` (for a tail view the reference is the basis
   template; the field keeps its name — it is still "this view against the
   consensus of the others").
-- **Result contract.** `KeypointLocalization` is unchanged: kept views (basis
+- **Result contract.** `KeypointLocalization` keeps its shape: kept views (basis
   survivors + kept tail views) in the input view-set order, with keypoints,
-  offsets, ZNCCs, and `rounds` (the basis round count).
+  offsets, ZNCCs, and `rounds` (the basis round count). One field is added —
+  `is_basis`, a per-kept-view flag (all `true` when the cap does not bite) —
+  because the basis/tail split is otherwise unobservable, and the tail's ZNCC
+  distribution is the quality signal the validation below reads.
+- **No usable basis.** When the round loop collapses below two in-frame views
+  there is no template to register against; the tail keeps its seed offsets with
+  an unknown ZNCC, exactly what the loop already does for its own early exits.
 
 ## Plumbing
 
@@ -112,13 +119,15 @@ first).
 2. **`crates/sfmtool-py`** — `localize_keypoints`: kwargs `basis_max_views=0`,
    `basis_force_track_views=True`, `basis_pick="top_score"`, plus optional
    `view_scores` / `track_view_counts` inputs parallel to `view_sets`.
+   `select_views` reports `track_view_count` per patch (how many leading
+   `admitted` entries are track views), which is what feeds
+   `track_view_counts`.
 3. **Python pipeline** — `_embed_patches.py`: keep `selections[i]["scores"]`
    and the track-view counts (currently discarded) and pass both to
    `localize_keypoints`; `embed_patches(localize_basis_views=…)`.
-4. **CLI** — `sfm embed-patches --localize-basis-views N` (default from the A/B
-   validation; `0` = uncapped) and `sfm xform --localize-keypoints`
-   `basis_max_views=N` option. Update `specs/cli/embed-patches-command.md` and
-   the xform spec row.
+4. **CLI** — `sfm embed-patches --localize-basis-views N` (default `0` =
+   uncapped) and `sfm xform --localize-keypoints` `basis_max_views=N` option.
+   Update `specs/cli/embed-patches-command.md` and the xform spec row.
 5. **Cross-links** — `specs/core/patch-keypoint-localization.md` and
    `specs/core/keypoint-localization-search-cache.md` reference this file where
    they describe the consensus membership and cache sizing.

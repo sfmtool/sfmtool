@@ -329,3 +329,175 @@ def test_localize_keypoints_rejects_out_of_range_view_index(
         cloud.localize_keypoints(
             recon, images, view_sets=bad, point_indexes=[pid], resolution=12
         )
+
+
+def _selection(cloud, recon, images, sample):
+    """The full ``select_views`` output keyed by point id, for the sampled points."""
+    sel = cloud.select_views(recon, images, point_indexes=sample, resolution=12)
+    return {int(r["point_index"]): r for r in sel}
+
+
+def test_select_views_reports_the_track_view_count(seoul_bull_workspace: Path):
+    """``track_view_count`` splits ``admitted`` into track views then vetted
+    candidates â€” the provenance split the localizer's basis pick consumes."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    sample = _sample_point_ids(cloud, n=60)
+
+    by_pid: dict[int, set[int]] = {}
+    for pid, img in zip(
+        np.asarray(recon.track_point_indexes).tolist(),
+        np.asarray(recon.track_image_indexes).tolist(),
+    ):
+        by_pid.setdefault(int(pid), set()).add(int(img))
+
+    for pid, r in _selection(cloud, recon, images, sample).items():
+        adm = np.asarray(r["admitted"]).tolist()
+        t = int(r["track_view_count"])
+        assert 0 <= t <= len(adm)
+        # The leading `t` entries are exactly the point's (deduped) track views.
+        assert set(adm[:t]) <= by_pid.get(pid, set())
+        assert set(adm[t:]).isdisjoint(by_pid.get(pid, set()))
+
+
+def test_localize_keypoints_basis_cap_off_matches_uncapped(seoul_bull_workspace: Path):
+    """``basis_max_views=0`` (and a cap above the view count) is the uncapped
+    path, byte-for-byte, even with scores supplied."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    sample = _sample_point_ids(cloud, n=80)
+    sel = _selection(cloud, recon, images, sample)
+    view_sets = {pid: np.asarray(r["admitted"]).tolist() for pid, r in sel.items()}
+    scores = {
+        pid: np.asarray(r["scores"], dtype=np.float64).tolist()
+        for pid, r in sel.items()
+    }
+    counts = {pid: int(r["track_view_count"]) for pid, r in sel.items()}
+
+    common = dict(
+        view_sets=view_sets, point_indexes=sample, resolution=12, max_shift_px=3.0
+    )
+    base = cloud.localize_keypoints(recon, images, **common)
+    off = cloud.localize_keypoints(
+        recon,
+        images,
+        basis_max_views=0,
+        view_scores=scores,
+        track_view_counts=counts,
+        **common,
+    )
+    wide = cloud.localize_keypoints(
+        recon,
+        images,
+        basis_max_views=512,
+        view_scores=scores,
+        track_view_counts=counts,
+        **common,
+    )
+    for other in (off, wide):
+        assert len(other) == len(base)
+        for a, b in zip(base, other):
+            assert int(a["point_index"]) == int(b["point_index"])
+            assert np.array_equal(np.asarray(a["views"]), np.asarray(b["views"]))
+            assert np.array_equal(
+                np.asarray(a["keypoints"]), np.asarray(b["keypoints"])
+            )
+            assert np.all(np.asarray(b["is_basis"]))
+
+
+def test_localize_keypoints_basis_cap_keeps_the_contract(seoul_bull_workspace: Path):
+    """A biting cap still localizes every admitted view it does not gate out, in
+    input order, with parallel arrays and a well-formed basis/tail split."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    sample = _sample_point_ids(cloud, n=80)
+    sel = _selection(cloud, recon, images, sample)
+    view_sets = {pid: np.asarray(r["admitted"]).tolist() for pid, r in sel.items()}
+    scores = {
+        pid: np.asarray(r["scores"], dtype=np.float64).tolist()
+        for pid, r in sel.items()
+    }
+    counts = {pid: int(r["track_view_count"]) for pid, r in sel.items()}
+
+    k = 3
+    res = cloud.localize_keypoints(
+        recon,
+        images,
+        view_sets=view_sets,
+        point_indexes=sample,
+        resolution=12,
+        basis_max_views=k,
+        view_scores=scores,
+        track_view_counts=counts,
+    )
+    assert {int(r["point_index"]) for r in res} == set(sample)
+    saw_tail = False
+    for r in res:
+        pid = int(r["point_index"])
+        views = np.asarray(r["views"], dtype=np.int64)
+        is_basis = np.asarray(r["is_basis"], dtype=bool)
+        assert is_basis.shape == views.shape
+        assert np.asarray(r["keypoints"]).shape == (len(views), 2)
+        assert np.asarray(r["loo_zncc"]).shape == (len(views),)
+        assert set(views.tolist()).issubset(set(view_sets[pid]))
+        # Kept views stay in the input view-set order.
+        order = {v: i for i, v in enumerate(view_sets[pid])}
+        got = [order[v] for v in views.tolist()]
+        assert got == sorted(got), f"point {pid} lost the input order"
+        # Never more than K basis members.
+        assert int(is_basis.sum()) <= max(k, 2)
+        if len(view_sets[pid]) > k and (~is_basis).any():
+            saw_tail = True
+    assert saw_tail, "no point exercised the tail path"
+
+
+def test_localize_keypoints_rejects_mismatched_view_scores(seoul_bull_workspace: Path):
+    """A ``view_scores`` list that is not parallel to the point's view set is a
+    clean ValueError rather than a silently mis-ranked basis."""
+    import pytest
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    pid = int(np.asarray(cloud.point_indexes)[0])
+    with pytest.raises(ValueError):
+        cloud.localize_keypoints(
+            recon,
+            images,
+            view_sets={pid: [0, 1]},
+            view_scores={pid: [0.5]},
+            point_indexes=[pid],
+            resolution=12,
+            basis_max_views=2,
+        )
+
+
+def test_localize_keypoints_rejects_unknown_basis_pick(seoul_bull_workspace: Path):
+    import pytest
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    pid = int(np.asarray(cloud.point_indexes)[0])
+    with pytest.raises(ValueError):
+        cloud.localize_keypoints(
+            recon,
+            images,
+            view_sets={pid: [0, 1]},
+            point_indexes=[pid],
+            resolution=12,
+            basis_pick="nearest",
+        )

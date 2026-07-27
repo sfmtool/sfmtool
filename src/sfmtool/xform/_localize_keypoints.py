@@ -49,6 +49,12 @@ class LocalizeKeypointsTransform:
     patch frame (``recon.patches``), which only that source carries, seeding
     each view at the point's own projection. Convert first with
     ``--to-embedded-patches``.
+
+    ``basis_max_views`` caps the consensus basis (see
+    ``specs/core/keypoint-localization-consensus-basis.md``); ``0`` (default)
+    leaves the uncapped path. This surface runs over each point's own track and
+    supplies no per-view appearance scores, so when the cap bites the basis pick
+    ranks by grazing angle (most frontal first).
     """
 
     # Precondition checked per-step by `apply_transforms` (see `_apply.py`).
@@ -73,6 +79,7 @@ class LocalizeKeypointsTransform:
         convergence_px: float = 0.05,
         search_resolution_multiplier: float = 1.0,
         search_strategy: str = "plus_descent",
+        basis_max_views: int = 0,
     ):
         if min_views < 1:
             raise ValueError(f"min_views must be >= 1, got {min_views}")
@@ -112,6 +119,8 @@ class LocalizeKeypointsTransform:
                 f"search_strategy must be one of {_SEARCH_STRATEGIES}, "
                 f"got {search_strategy!r}"
             )
+        if basis_max_views < 0:
+            raise ValueError(f"basis_max_views must be >= 0, got {basis_max_views}")
 
         self.min_views = min_views
         self.max_iters = max_iters
@@ -127,6 +136,7 @@ class LocalizeKeypointsTransform:
         self.convergence_px = convergence_px
         self.search_resolution_multiplier = search_resolution_multiplier
         self.search_strategy = search_strategy
+        self.basis_max_views = basis_max_views
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         from .._patch_compaction import (
@@ -170,6 +180,7 @@ class LocalizeKeypointsTransform:
             convergence_px=self.convergence_px,
             search_resolution_multiplier=self.search_resolution_multiplier,
             search_strategy=self.search_strategy,
+            basis_max_views=self.basis_max_views,
         )
 
         # An embedded_patches recon already stores its per-image hashes; the

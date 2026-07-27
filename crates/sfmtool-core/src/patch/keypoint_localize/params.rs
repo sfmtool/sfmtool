@@ -45,6 +45,20 @@ pub enum SearchStrategy {
     Exhaustive,
 }
 
+/// How the ranked candidate list fills the consensus basis's remaining seats.
+///
+/// See `specs/core/keypoint-localization-consensus-basis.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BasisPick {
+    /// The `K` best-scoring views. **The default.**
+    #[default]
+    TopScore,
+    /// Every `ceil(m/K)`-th entry of the ranked list — trades per-view match
+    /// quality for coverage of the ranked spectrum when the top scores cluster
+    /// on near-duplicate frames.
+    Strided,
+}
+
 /// Tunables for [`localize_patch_keypoints`](super::localize_patch_keypoints).
 ///
 /// The render/window knobs mirror
@@ -100,6 +114,24 @@ pub struct KeypointLocalizeParams {
     /// Per-(view, round) shift-grid traversal — see [`SearchStrategy`].
     /// Defaults to [`SearchStrategy::PlusDescent`].
     pub search_strategy: SearchStrategy,
+    /// Consensus-basis cap `K`: at most this many views congeal against each
+    /// other; every remaining view registers **once** against the finished
+    /// basis consensus instead of joining it. `0` (the default) disables the
+    /// cap — all views congeal, bit-identically to the uncapped path, which is
+    /// also what a point with `V ≤ K` views gets. Values below `2` are raised
+    /// to `2` (a leave-one-out consensus needs two members). Every observation
+    /// is still localized and reported; only the consensus *membership*
+    /// shrinks. See `specs/core/keypoint-localization-consensus-basis.md`.
+    pub basis_max_views: u32,
+    /// Reserve basis seats for the point's track views ahead of the expansion
+    /// candidates (they are the point's provenance and carry its detection
+    /// keypoints). When the track alone exceeds `K` the track views are
+    /// themselves ranked by score and truncated at `K`. Only consulted when
+    /// [`basis_max_views`](Self::basis_max_views) caps the view set.
+    pub basis_force_track_views: bool,
+    /// How the ranked candidate list fills the basis's remaining seats — see
+    /// [`BasisPick`].
+    pub basis_pick: BasisPick,
 }
 
 impl Default for KeypointLocalizeParams {
@@ -117,6 +149,9 @@ impl Default for KeypointLocalizeParams {
             convergence_px: 0.05,
             search_resolution_multiplier: 1.0,
             search_strategy: SearchStrategy::PlusDescent,
+            basis_max_views: 0,
+            basis_force_track_views: true,
+            basis_pick: BasisPick::TopScore,
         }
     }
 }
@@ -146,4 +181,12 @@ pub struct KeypointLocalization {
     /// had fewer than two views and the loop never ran). Diagnostic: lets tests
     /// and callers observe the `convergence_px` early exit directly.
     pub rounds: u32,
+    /// Per kept view, whether it was a **consensus-basis** member (it congealed
+    /// in the round loop) rather than a tail view registered once against the
+    /// finished basis template, parallel to [`views`](Self::views). Every entry
+    /// is `true` when [`basis_max_views`](KeypointLocalizeParams::basis_max_views)
+    /// does not cap the point's view set. Diagnostic: the tail's
+    /// [`loo_zncc`](Self::loo_zncc) distribution is how a smeared or
+    /// arc-biased basis template shows itself.
+    pub is_basis: Vec<bool>,
 }

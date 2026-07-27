@@ -370,3 +370,37 @@ def test_localize_keypoints_rejects_sift_files(seoul_bull_workspace):
     assert result.exit_code != 0
     assert "embedded_patches" in result.output
     assert not output_sfmr.exists()
+
+
+def test_parse_basis_max_views():
+    """``basis_max_views`` parses as an int and defaults to the uncapped 0."""
+    assert parse_localize_keypoints_params("").basis_max_views == 0
+    t = parse_localize_keypoints_params("basis_max_views=6")
+    assert t.basis_max_views == 6
+    assert isinstance(t.basis_max_views, int)
+    with pytest.raises(ValueError):
+        parse_localize_keypoints_params("basis_max_views=-1")
+
+
+def test_localize_keypoints_basis_cap_round_trips(seoul_bull_workspace):
+    """A capped run produces the same kind of output as the uncapped one: a
+    valid embedded_patches recon whose points/observations do not exceed the
+    input's. The cap changes only which views congeal â€” every observation is
+    still localized â€” so the counts stay in the uncapped run's neighbourhood."""
+    recon = _embedded(seoul_bull_workspace)
+
+    out_uncapped = _modest_params().apply(recon)
+    out_capped = _modest_params(basis_max_views=4).apply(recon)
+
+    assert out_capped.feature_source == "embedded_patches"
+    assert out_capped.point_count <= recon.point_count
+    assert out_capped.observation_count <= recon.observation_count
+    assert (np.asarray(out_capped.observation_counts) >= 2).all()
+    # The seoul_bull tracks are small, so most points are at or under the cap
+    # and take the bit-identical uncapped path; the totals must stay close.
+    assert abs(out_capped.point_count - out_uncapped.point_count) <= max(
+        1, out_uncapped.point_count // 20
+    )
+    assert abs(out_capped.observation_count - out_uncapped.observation_count) <= max(
+        1, out_uncapped.observation_count // 20
+    )

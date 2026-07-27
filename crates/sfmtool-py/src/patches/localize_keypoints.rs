@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::patch::keypoint_localize::{
-    localize_patch_cloud_keypoints, KeypointLocalizeParams,
+    localize_patch_cloud_keypoints, BasisInputs, BasisPick, KeypointLocalizeParams,
     SearchStrategy as LocalizeSearchStrategy,
 };
 use sfmtool_core::patch::normal_refine::{
@@ -67,19 +67,44 @@ impl PyPatchCloud {
     ///         (default) is the no-op; ``m > 1`` (the supersampled grid) resolves
     ///         sub-pixel offsets directly at a cost that grows ~``m²``. See
     ///         ``specs/core/keypoint-localization-search-cache.md``.
+    ///     basis_max_views: Consensus-basis cap ``K`` — at most this many views
+    ///         congeal against each other; every remaining view registers **once**
+    ///         against the finished basis template. ``0`` (default) disables the
+    ///         cap (bit-identical to the uncapped path, as is any point with
+    ///         ``V <= K``). Every observation is still localized and reported; only
+    ///         the consensus membership shrinks. See
+    ///         ``specs/core/keypoint-localization-consensus-basis.md``.
+    ///     basis_force_track_views: Reserve basis seats for the point's track views
+    ///         (the leading ``track_view_counts`` entries of its view set) ahead of
+    ///         the expansion candidates. Default ``True``.
+    ///     basis_pick: How the ranked candidates fill the remaining basis seats —
+    ///         ``"top_score"`` (default) or ``"strided"``.
+    ///     view_scores: Optional mapping ``point_index -> [score, ...]`` parallel to
+    ///         that point's view set: each view's match to the point's starting
+    ///         appearance (``select_views``'s ``scores``), ranking the basis pick.
+    ///         NaN ranks a view below every scored one. Omitted points (and
+    ///         ``None``) fall back to ranking by grazing angle.
+    ///     track_view_counts: Optional mapping ``point_index -> t``: how many
+    ///         **leading** view-set entries are that point's track views
+    ///         (``select_views``'s ``track_view_count``). Omitted points have no
+    ///         reserved seats.
     ///
     /// Returns:
     ///     A list of per-point dicts ``{point_index, views (uint32[K]),
     ///     keypoints (float64[K, 2]), offsets_px (float64[K]),
-    ///     loo_zncc (float64[K])}`` over the **kept** views. ``loo_zncc`` is NaN for
+    ///     loo_zncc (float64[K]), is_basis (bool[K])}`` over the **kept** views.
+    ///     ``loo_zncc`` is NaN for
     ///     a view no round scored (a lone input view, or a view kept by the two-view
     ///     floor before any consensus was built), so guard before reducing it.
+    ///     ``is_basis`` marks the consensus-basis members (all ``True`` unless
+    ///     ``basis_max_views`` capped that point's view set).
     #[pyo3(signature = (
         recon, images, *, view_sets=None, max_iters=5, search=6.0, max_shift_px=3.0,
         min_relative_zncc=0.7, min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear_mip", robust_iters=3, convergence_px=0.05,
         point_indexes=None, search_resolution_multiplier=1.0,
-        search_strategy="plus_descent", progress=None
+        search_strategy="plus_descent", basis_max_views=0, basis_force_track_views=true,
+        basis_pick="top_score", view_scores=None, track_view_counts=None, progress=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn localize_keypoints<'py>(
@@ -102,6 +127,11 @@ impl PyPatchCloud {
         point_indexes: Option<Vec<u32>>,
         search_resolution_multiplier: f32,
         search_strategy: &str,
+        basis_max_views: u32,
+        basis_force_track_views: bool,
+        basis_pick: &str,
+        view_scores: Option<std::collections::HashMap<u32, Vec<f64>>>,
+        track_view_counts: Option<std::collections::HashMap<u32, u32>>,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let (posed, recon_guard) = resolve_scene(recon)?;
@@ -172,6 +202,15 @@ impl PyPatchCloud {
                 )))
             }
         };
+        let basis_pick = match basis_pick {
+            "top_score" => BasisPick::TopScore,
+            "strided" => BasisPick::Strided,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown basis_pick: {other:?} (expected top_score|strided)"
+                )))
+            }
+        };
         let params = KeypointLocalizeParams {
             max_iters,
             search,
@@ -185,6 +224,9 @@ impl PyPatchCloud {
             convergence_px,
             search_resolution_multiplier,
             search_strategy,
+            basis_max_views,
+            basis_force_track_views,
+            basis_pick,
         };
 
         let pyramid_set = resolve_pyramids(&posed, images)?;
@@ -234,6 +276,44 @@ impl PyPatchCloud {
             }
         }
 
+        // Per-patch consensus-basis evidence, parallel to `sets`. A point absent
+        // from `view_scores` gets an empty score list — which the kernel reads as
+        // "unscored", falling back to the grazing rank; a length mismatch against
+        // the point's view set is a caller bug, so reject it up front rather than
+        // silently ranking the tail last.
+        let scores_per_patch: Option<Vec<Vec<f64>>> = match &view_scores {
+            None => None,
+            Some(map) => {
+                let mut out = Vec::with_capacity(self.inner.len());
+                for (set, &pid) in sets.iter().zip(&self.inner.point_indexes) {
+                    match map.get(&pid) {
+                        Some(s) if s.len() != set.len() => {
+                            return Err(PyValueError::new_err(format!(
+                                "view_scores[{pid}] has {} entries but the point's view set \
+                                 has {} — they must be parallel",
+                                s.len(),
+                                set.len()
+                            )))
+                        }
+                        Some(s) => out.push(s.clone()),
+                        None => out.push(Vec::new()),
+                    }
+                }
+                Some(out)
+            }
+        };
+        let counts_per_patch: Option<Vec<u32>> = track_view_counts.as_ref().map(|map| {
+            self.inner
+                .point_indexes
+                .iter()
+                .map(|pid| map.get(pid).copied().unwrap_or(0))
+                .collect()
+        });
+        let basis_inputs = BasisInputs {
+            view_scores: scores_per_patch.as_deref(),
+            track_view_counts: counts_per_patch.as_deref(),
+        };
+
         let progress_handle = progress.as_ref().map(|p| p.handle());
         let results = py.detach(|| {
             localize_patch_cloud_keypoints(
@@ -241,6 +321,7 @@ impl PyPatchCloud {
                 &views,
                 &sets,
                 None,
+                Some(&basis_inputs),
                 &params,
                 progress_handle.as_deref(),
             )
@@ -265,6 +346,7 @@ impl PyPatchCloud {
             d.set_item("keypoints", kpts.into_pyarray(py))?;
             d.set_item("offsets_px", res.offsets_px.clone().into_pyarray(py))?;
             d.set_item("loo_zncc", res.loo_zncc.clone().into_pyarray(py))?;
+            d.set_item("is_basis", res.is_basis.clone())?;
             out.push(d);
         }
         Ok(out)

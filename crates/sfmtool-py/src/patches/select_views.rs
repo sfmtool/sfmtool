@@ -68,8 +68,10 @@ impl PyPatchCloud {
     /// image indices — the track views first, then the vetted candidates in
     /// ascending order), ``scores`` (1-D float64 numpy array of the per-admitted
     /// ZNCC to the reference, parallel to ``admitted``; NaN where a view could not
-    /// be scored), and ``self_agreement`` (float; NaN when no reference could be
-    /// built). Patches excluded by ``point_indexes`` are omitted from the list.
+    /// be scored), ``self_agreement`` (float; NaN when no reference could be
+    /// built), and ``track_view_count`` (int — how many leading ``admitted``
+    /// entries are the point's track views, the rest being vetted candidates).
+    /// Patches excluded by ``point_indexes`` are omitted from the list.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         recon, images, *, min_relative_zncc=0.7, resolution=24, window="gaussian_disk",
@@ -227,6 +229,7 @@ impl PyPatchCloud {
             d.set_item("admitted", res.admitted.clone().into_pyarray(py))?;
             d.set_item("scores", res.scores.clone().into_pyarray(py))?;
             d.set_item("self_agreement", res.self_agreement)?;
+            d.set_item("track_view_count", res.track_view_count)?;
             out.push(d);
         }
         Ok(out)

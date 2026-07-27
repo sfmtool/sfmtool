@@ -58,7 +58,11 @@ recovers it by unprojecting the keypoint onto the patch plane.
 For one point with view set `G` (the `nv` views to refine), first **pre-filter
 grazing views** — drop any whose ray is near-parallel to `Π_p` (`|d · n_p|` below
 the grazing cutoff), where the in-plane anchor is ill-conditioned and the view
-would only contaminate the consensus. Then maintain a per-view in-plane
+would only contaminate the consensus. The surviving views are the consensus
+membership; optionally that membership is *capped* at `K` and the views past the
+cap register once against the finished consensus instead of joining it — see
+[keypoint-localization-consensus-basis.md](keypoint-localization-consensus-basis.md).
+Then maintain a per-view in-plane
 coordinate `acc[v]` (patch-grid units) for the patch centre on `Π_p`, measured
 from `X_p` and **initialized by unprojecting the starting keypoint onto `Π_p`**
 (zero when the seed is the point's own projection). Each round:

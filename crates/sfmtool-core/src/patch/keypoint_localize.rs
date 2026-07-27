@@ -30,6 +30,7 @@
 
 pub mod prof;
 
+mod basis;
 mod kernels;
 mod params;
 mod search;
@@ -38,22 +39,21 @@ use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, remap_bilin
 use crate::camera::WarpMap;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
-    build_support, znormalize_into_kept, ProjectedImage, Sampler, Support,
+    build_support, irls_view_weights, weighted_unit_template_into, znormalize_into_kept,
+    ConsensusScratch, ProjectedImage, Sampler, Support,
 };
 // Only the reference scorer (`znorm_core`, test-only) needs the moment helper and
-// the flat-norm floor; the reference LOO-template test also needs the
-// compacted-stack IRLS pair.
+// the flat-norm floor; the reference LOO-template test also needs the window enum.
 #[cfg(test)]
-use crate::patch::normal_refine::{
-    irls_view_weights, weighted_moments_pub, weighted_unit_template_into, ConsensusScratch,
-    PatchWindow, FLAT_NORM_SQ_EPS,
-};
+use crate::patch::normal_refine::{weighted_moments_pub, PatchWindow, FLAT_NORM_SQ_EPS};
 use crate::reconstruction::SfmrReconstruction;
 use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
 
 // Public API, re-exported at the historical `keypoint_localize::` paths.
-pub use params::{KeypointLocalization, KeypointLocalizeParams, SearchStrategy};
+pub use params::{BasisPick, KeypointLocalization, KeypointLocalizeParams, SearchStrategy};
+
+use basis::select_basis;
 
 // Search machinery consumed by the congealing orchestration below.
 use search::{
@@ -384,6 +384,14 @@ fn median(values: &mut [f64]) -> f64 {
 struct ViewState {
     /// Image index into the caller's `views` slice.
     idx: u32,
+    /// Position in the deduped/filtered candidate list — the input view-set
+    /// order the result contract reports in. Basis and tail members are merged
+    /// back on this key after phase B.
+    order: u32,
+    /// Whether this view congealed as a consensus-basis member (rather than
+    /// being registered once against the finished basis template in phase B).
+    /// Always `true` when the cap is off.
+    is_basis: bool,
     /// Integer read accumulator `(iau, iav)` in `R_s`-grid steps: the cache index
     /// (relative to the cache centre) the core and search candidates are read at.
     iacc: [i64; 2],
@@ -437,6 +445,26 @@ fn retain_states_and_caches(
     });
 }
 
+/// Per-point ranking evidence for the consensus-basis pick.
+///
+/// Only consulted when [`KeypointLocalizeParams::basis_max_views`] caps the
+/// point's view set; the default (all fields empty) leaves the uncapped path
+/// untouched. See `specs/core/keypoint-localization-consensus-basis.md`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BasisEvidence<'a> {
+    /// Per-view score to the point's starting appearance, parallel to the
+    /// `view_set` (higher is a better match; `NaN` = unscored, which ranks
+    /// below every scored view). `sfm embed-patches` passes the `select_views`
+    /// per-admitted-view ZNCC through here. `None` falls back to ranking by
+    /// grazing angle (`|d̂·n̂|`, most frontal first).
+    pub view_scores: Option<&'a [f64]>,
+    /// The number of **leading** `view_set` entries that are the point's track
+    /// views — the `select_views` output contract, whose `admitted` lists the
+    /// track views first. `0` means no track membership is known, which makes
+    /// [`KeypointLocalizeParams::basis_force_track_views`] a no-op.
+    pub track_view_count: usize,
+}
+
 /// Localize the keypoints of one oriented patch over a view set by congealing.
 ///
 /// `views` is one [`ProjectedImage`] per reconstruction image (indexed by image
@@ -446,11 +474,41 @@ fn retain_states_and_caches(
 /// point's own projection `project_i(X_p)`. Returns the kept views and their
 /// refined keypoints; see [`KeypointLocalization`] and
 /// `specs/core/patch-keypoint-localization.md`.
+///
+/// Equivalent to [`localize_patch_keypoints_with_basis`] with no basis
+/// evidence — which is what the uncapped path (the default
+/// `basis_max_views = 0`) needs.
 pub fn localize_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     view_set: &[u32],
     starting_keypoints: Option<&[[f64; 2]]>,
+    params: &KeypointLocalizeParams,
+) -> KeypointLocalization {
+    localize_patch_keypoints_with_basis(
+        patch,
+        views,
+        view_set,
+        starting_keypoints,
+        BasisEvidence::default(),
+        params,
+    )
+}
+
+/// [`localize_patch_keypoints`] with the caller's per-view ranking evidence for
+/// the **consensus-basis cap** (`specs/core/keypoint-localization-consensus-basis.md`).
+///
+/// With [`KeypointLocalizeParams::basis_max_views`] at `0` (the default) — or a
+/// view set no larger than the cap — this is bit-identical to
+/// [`localize_patch_keypoints`] and `evidence` is unread. Otherwise `K` views
+/// are picked as the consensus basis and congeal exactly as before, and every
+/// remaining view registers once against the finished basis template.
+pub fn localize_patch_keypoints_with_basis(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    view_set: &[u32],
+    starting_keypoints: Option<&[[f64; 2]]>,
+    evidence: BasisEvidence<'_>,
     params: &KeypointLocalizeParams,
 ) -> KeypointLocalization {
     // Search resolution `R_s = round(m·R)`: the cache, support, and shift grid all
@@ -483,6 +541,11 @@ pub fn localize_patch_keypoints(
     // one image; refining it twice double-weights that view in the consensus).
     let mut seen = std::collections::HashSet::new();
     let mut states: Vec<ViewState> = Vec::new();
+    // Parallel to `states`, consumed only by the consensus-basis pick: each
+    // candidate's rank score (the caller's, else the grazing cosine computed
+    // just below for free) and whether it is one of the point's track views.
+    let mut cand_scores: Vec<f64> = Vec::new();
+    let mut cand_is_track: Vec<bool> = Vec::new();
     let normal = patch.normal();
     for (k, &i) in view_set.iter().enumerate() {
         if !seen.insert(i) {
@@ -499,7 +562,12 @@ pub fn localize_patch_keypoints(
             patch.center - view.cam_from_world.inverse_translation_origin()
         };
         let dn = d.norm();
-        if dn <= 1e-12 || (d.dot(&normal) / dn).abs() < params.min_grazing_cos {
+        let grazing_cos = if dn > 1e-12 {
+            (d.dot(&normal) / dn).abs()
+        } else {
+            0.0
+        };
+        if dn <= 1e-12 || grazing_cos < params.min_grazing_cos {
             continue;
         }
         // The point's own projection (the keypoint anchor). A view that can't
@@ -522,8 +590,17 @@ pub fn localize_patch_keypoints(
         // seed beyond `±search` is clamped on the integer part, as the round drift is.
         let iu = (off[0].round() as i64).clamp(-search_steps, search_steps);
         let iv = (off[1].round() as i64).clamp(-search_steps, search_steps);
+        cand_scores.push(match evidence.view_scores {
+            // A caller score shorter than the view set leaves the tail
+            // unscored, which ranks it last rather than panicking.
+            Some(s) => s.get(k).copied().unwrap_or(f64::NAN),
+            None => grazing_cos,
+        });
+        cand_is_track.push(k < evidence.track_view_count);
         states.push(ViewState {
             idx: i,
+            order: states.len() as u32,
+            is_basis: true,
             iacc: [iu, iv],
             residual: [off[0] - off[0].round(), off[1] - off[1].round()],
             proj: [proj.0, proj.1],
@@ -534,6 +611,35 @@ pub fn localize_patch_keypoints(
     if states.len() < 2 {
         return finalize(patch, views, &states, wpp_u, wpp_v);
     }
+
+    // Consensus-basis pick: hold every view past the cap out of the congealing
+    // loop; phase B registers them once against the finished basis template.
+    // `K < 2` is raised to 2 — a leave-one-out consensus needs two members.
+    let mut tail: Vec<ViewState> = Vec::new();
+    let k_cap = params.basis_max_views as usize;
+    if k_cap > 0 && states.len() > k_cap {
+        let mask = prof::BASIS_PICK.time(|| {
+            select_basis(
+                &cand_scores,
+                &cand_is_track,
+                k_cap.max(2),
+                params.basis_force_track_views,
+                params.basis_pick,
+            )
+        });
+        let mut kept = Vec::with_capacity(k_cap.max(2));
+        for (i, mut st) in std::mem::take(&mut states).into_iter().enumerate() {
+            if mask[i] {
+                kept.push(st);
+            } else {
+                st.is_basis = false;
+                tail.push(st);
+            }
+        }
+        states = kept;
+    }
+    prof::count(&prof::N_BASIS, states.len() as u64);
+    prof::count(&prof::N_TAIL, tail.len() as u64);
 
     // Render each view's expanded cache **once** (frame-oriented at the seed,
     // `acc = 0`), sized `R_s + 4·margin` to cover the full search drift. Every
@@ -775,9 +881,230 @@ pub fn localize_patch_keypoints(
         }
     }
 
+    // Phase B — register the tail. One final all-basis consensus template (no
+    // holdout: a tail view never contributed to it, so leave-one-out is
+    // unnecessary by construction), then one shift search per tail view against
+    // it. See `specs/core/keypoint-localization-consensus-basis.md`.
+    if !tail.is_empty() {
+        prof::TAIL_REGISTER.time(|| {
+            register_tail(
+                patch,
+                views,
+                &states,
+                &caches,
+                &mut tail,
+                &support,
+                &mut search,
+                TailGeometry {
+                    resolution,
+                    margin,
+                    search_steps,
+                    cache_c0,
+                    wpp_u,
+                    wpp_v,
+                },
+                params,
+            );
+            states.append(&mut tail);
+            // Restore the input view-set order the result contract reports in
+            // (basis and tail were each already ascending in `order`).
+            states.sort_by_key(|st| st.order);
+        });
+    }
+
     let mut out = finalize(patch, views, &states, wpp_u, wpp_v);
     out.rounds = rounds_run;
     out
+}
+
+/// The grid geometry phase-B registration needs, bundled so
+/// [`register_tail`] keeps a readable signature.
+struct TailGeometry {
+    /// Search resolution `R_s`.
+    resolution: u32,
+    /// In-round search radius in `R_s`-grid steps.
+    margin: i64,
+    /// Bound on the accumulated integer drift.
+    search_steps: i64,
+    /// Cache index of the `R_s×R_s` core at zero offset in a **basis** cache.
+    cache_c0: usize,
+    wpp_u: f64,
+    wpp_v: f64,
+}
+
+/// Build the final all-basis consensus template into `out` from the surviving
+/// basis members' cores, read at their final integer offsets. Returns the kept
+/// channel count and mask, or `None` when fewer than two basis cores are still
+/// in frame or no channel carries texture (no template to register against).
+fn basis_template(
+    states: &[ViewState],
+    caches: &[ContextTile],
+    support: &Support,
+    geom: &TailGeometry,
+    robust_iters: u32,
+    out: &mut Vec<f32>,
+) -> Option<(usize, Vec<bool>)> {
+    let r = geom.resolution as usize;
+    let n = support.pixels.len();
+    let mut raws: Vec<Vec<f32>> = Vec::with_capacity(states.len());
+    let mut live_channels: Vec<usize> = Vec::with_capacity(states.len());
+    for (si, st) in states.iter().enumerate() {
+        let cache = &caches[si];
+        let mut raw = vec![0f32; cache.channels * n];
+        let ox = (geom.cache_c0 as i64 + st.iacc[0]) as usize;
+        let oy = (geom.cache_c0 as i64 + st.iacc[1]) as usize;
+        if extract_core(cache, support, r, oy, ox, &mut raw) {
+            raws.push(raw);
+            live_channels.push(cache.channels);
+        }
+    }
+    if raws.len() < 2 {
+        return None;
+    }
+    let channels0 = *live_channels.iter().min().unwrap();
+    let mut flat = vec![0f32; raws.len() * channels0 * n];
+    for (vk, raw) in raws.iter().enumerate() {
+        flat[vk * channels0 * n..][..channels0 * n].copy_from_slice(&raw[..channels0 * n]);
+    }
+    let mut xs = Vec::new();
+    let (kept_ch, keep_mask) = prof::ZNORM.time(|| {
+        znormalize_into_kept(
+            &flat,
+            raws.len(),
+            channels0,
+            n,
+            &support.weights,
+            support.total_weight,
+            &support.sqrt_weights,
+            &mut xs,
+        )
+    })?;
+    // Same robust consensus as a congealing round, without a holdout.
+    prof::TEMPLATE.time(|| {
+        let mut sc = ConsensusScratch::default();
+        irls_view_weights(&xs, raws.len(), kept_ch, n, robust_iters, None, &mut sc);
+        weighted_unit_template_into(&xs, &sc.w, raws.len(), kept_ch, n, out);
+    });
+    Some((kept_ch, keep_mask))
+}
+
+/// Phase B: register every `tail` view once against the basis consensus and
+/// apply the per-view drop gates, leaving `tail` holding only the kept views.
+///
+/// Each tail view renders a cache centred on its **own** seed offset, sized
+/// `R_s + 2·margin` — it searches one `±margin` window around that seed and so
+/// needs no drift headroom (basis caches keep the `R_s + 4·margin` sizing that
+/// covers a whole round loop). The gates are the loop's verbatim: drop a view
+/// whose refined keypoint sits more than `max_shift_px` from the projection, or
+/// whose ZNCC falls below `min_relative_zncc ×` the **basis members'** median
+/// final ZNCC.
+#[allow(clippy::too_many_arguments)]
+fn register_tail(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    states: &[ViewState],
+    caches: &[ContextTile],
+    tail: &mut Vec<ViewState>,
+    support: &Support,
+    search: &mut SearchScratch,
+    geom: TailGeometry,
+    params: &KeypointLocalizeParams,
+) {
+    let Some((kept_ch, keep_mask)) = basis_template(
+        states,
+        caches,
+        support,
+        &geom,
+        params.robust_iters,
+        &mut search.tmpl,
+    ) else {
+        // No usable basis consensus (the loop collapsed below two in-frame
+        // views, or no channel carries texture): nothing to register against,
+        // so the tail keeps its seed offsets with an unknown ZNCC — the same
+        // thing the congealing loop does for its own early exits.
+        return;
+    };
+
+    // The tail's relative-agreement bar, from the basis members' final ZNCCs.
+    let mut basis_loo: Vec<f64> = states
+        .iter()
+        .map(|st| st.loo)
+        .filter(|z| z.is_finite())
+        .collect();
+    let med = median(&mut basis_loo);
+    let bar = if med.is_finite() {
+        params.min_relative_zncc * med
+    } else {
+        f64::NEG_INFINITY
+    };
+
+    let r = geom.resolution as usize;
+    let tail_res = geom.resolution + 2 * geom.margin as u32;
+    // The tail cache is centred on the view's seed, so the `(0, 0)` shift reads
+    // its core at `margin`.
+    let tail_c0 = geom.margin as usize;
+    prof::count(&prof::N_RENDER, tail.len() as u64);
+    for st in tail.iter_mut() {
+        let view = &views[st.idx as usize];
+        let cache = prof::RENDER.time(|| {
+            render_context(
+                patch,
+                view,
+                st.iacc[0] as f64,
+                st.iacc[1] as f64,
+                geom.wpp_u,
+                geom.wpp_v,
+                geom.resolution,
+                tail_res,
+                params.sampler,
+            )
+        });
+        prof::count(&prof::N_SEARCH, 1);
+        let sh = prof::SEARCH.time(|| match params.search_strategy {
+            SearchStrategy::Exhaustive => search_shift(
+                &cache,
+                search,
+                support,
+                &keep_mask,
+                kept_ch,
+                r,
+                geom.margin,
+                tail_c0,
+                tail_c0,
+            ),
+            SearchStrategy::PlusDescent => search_shift_plus_descent(
+                &cache,
+                search,
+                support,
+                &keep_mask,
+                kept_ch,
+                r,
+                geom.margin,
+                tail_c0,
+                tail_c0,
+            ),
+        });
+        match sh {
+            Some(sh) => {
+                st.iacc[0] = (st.iacc[0] + sh.ix).clamp(-geom.search_steps, geom.search_steps);
+                st.iacc[1] = (st.iacc[1] + sh.iy).clamp(-geom.search_steps, geom.search_steps);
+                st.residual = [sh.dx - sh.ix as f64, sh.dy - sh.iy as f64];
+                st.loo = sh.peak;
+            }
+            // No scorable window: the view's core is out of frame at its seed.
+            None => st.loo = f64::NAN,
+        }
+    }
+
+    tail.retain(|st| {
+        let off = st.offset_steps();
+        let center = shifted_center(patch, off[0], off[1], geom.wpp_u, geom.wpp_v);
+        let shift_px = match project(&views[st.idx as usize], &center, patch.w) {
+            Some((x, y)) => (x - st.proj[0]).hypot(y - st.proj[1]),
+            None => f64::INFINITY, // keypoint left the frame
+        };
+        shift_px <= params.max_shift_px && st.loo.is_finite() && st.loo >= bar
+    });
 }
 
 /// Unproject a starting keypoint onto the patch plane and express the in-plane
@@ -858,25 +1185,39 @@ fn finalize(
         out.offsets_px
             .push((kx - st.proj[0]).hypot(ky - st.proj[1]));
         out.loo_zncc.push(st.loo);
+        out.is_basis.push(st.is_basis);
     }
     out
+}
+
+/// Per-patch ranking evidence for the consensus-basis pick, parallel to the
+/// cloud's patches — the batch form of [`BasisEvidence`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BasisInputs<'a> {
+    /// Per patch, the per-view scores parallel to that patch's view set.
+    pub view_scores: Option<&'a [Vec<f64>]>,
+    /// Per patch, how many leading view-set entries are track views.
+    pub track_view_counts: Option<&'a [u32]>,
 }
 
 /// Batch [`localize_patch_keypoints`] over a [`PatchCloud`], parallel across
 /// patches (rayon). `view_sets[i]` lists, for patch `i`, the views to refine
 /// (typically the output of view selection). `starting_keypoints`, when given, is
 /// parallel to `view_sets` (one seed per view); `None` seeds every view at the
-/// point's projection. Results are returned in cloud order.
+/// point's projection. `basis`, when given, carries the per-patch ranking
+/// evidence the [consensus-basis cap](KeypointLocalizeParams::basis_max_views)
+/// consumes (unread when the cap is off). Results are returned in cloud order.
 ///
 /// # Panics
 ///
-/// Panics if `view_sets.len() != cloud.len()` (or `starting_keypoints` is given
-/// and not parallel), or an index is out of range.
+/// Panics if `view_sets.len() != cloud.len()` (or `starting_keypoints` / the
+/// `basis` arrays are given and not parallel), or an index is out of range.
 pub fn localize_patch_cloud_keypoints(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
     view_sets: &[Vec<u32>],
     starting_keypoints: Option<&[Vec<[f64; 2]>]>,
+    basis: Option<&BasisInputs<'_>>,
     params: &KeypointLocalizeParams,
     progress: Option<&std::sync::atomic::AtomicUsize>,
 ) -> Vec<KeypointLocalization> {
@@ -892,6 +1233,22 @@ pub fn localize_patch_cloud_keypoints(
             "starting_keypoints must be parallel to the cloud"
         );
     }
+    if let Some(b) = basis {
+        if let Some(s) = b.view_scores {
+            assert_eq!(
+                s.len(),
+                cloud.len(),
+                "view_scores must be parallel to the cloud"
+            );
+        }
+        if let Some(t) = b.track_view_counts {
+            assert_eq!(
+                t.len(),
+                cloud.len(),
+                "track_view_counts must be parallel to the cloud"
+            );
+        }
+    }
     if prof::enabled() {
         prof::reset();
     }
@@ -902,8 +1259,22 @@ pub fn localize_patch_cloud_keypoints(
         .enumerate()
         .map(|(i, patch)| {
             let seeds = starting_keypoints.map(|s| s[i].as_slice());
-            let out = prof::TOTAL
-                .time(|| localize_patch_keypoints(patch, views, &view_sets[i], seeds, params));
+            let evidence = BasisEvidence {
+                view_scores: basis.and_then(|b| b.view_scores).map(|s| s[i].as_slice()),
+                track_view_count: basis
+                    .and_then(|b| b.track_view_counts)
+                    .map_or(0, |t| t[i] as usize),
+            };
+            let out = prof::TOTAL.time(|| {
+                localize_patch_keypoints_with_basis(
+                    patch,
+                    views,
+                    &view_sets[i],
+                    seeds,
+                    evidence,
+                    params,
+                )
+            });
             // Bump the shared work counter per patch for a Python progress poller.
             if let Some(c) = progress {
                 c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

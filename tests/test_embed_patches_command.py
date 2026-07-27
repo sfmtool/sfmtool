@@ -414,3 +414,78 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
         f"stored bitmaps look BGR: red(ch0)={red.mean():.1f} "
         f"is not >> blue(ch2)={blue.mean():.1f}"
     )
+
+
+def test_embed_patches_localize_basis_views_keeps_observations(seoul_bull_workspace):
+    """`localize_basis_views` caps only the localizer's consensus *membership*
+    (see specs/core/keypoint-localization-consensus-basis.md): every admitted
+    view is still localized and reported, so a capped run must produce the same
+    output shape as the uncapped default. On this 17-image fixture most view
+    sets are at or under the cap and take the bit-identical uncapped path."""
+    import cv2
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    ws = recon.workspace_dir
+    images = [
+        np.ascontiguousarray(
+            cv2.cvtColor(
+                cv2.imread(f"{ws}/{name}", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
+            )
+        )
+        for name in recon.image_names
+    ]
+
+    baseline = ep.embed_patches(recon, images, resolution=12, localize_basis_views=0)
+    capped = ep.embed_patches(recon, images, resolution=12, localize_basis_views=4)
+
+    assert capped.feature_source == "embedded_patches"
+    assert abs(capped.point_count - baseline.point_count) <= max(
+        1, baseline.point_count // 20
+    ), f"points: capped {capped.point_count} vs baseline {baseline.point_count}"
+    assert abs(capped.observation_count - baseline.observation_count) <= max(
+        1, baseline.observation_count // 20
+    ), (
+        f"observations: capped {capped.observation_count} "
+        f"vs baseline {baseline.observation_count}"
+    )
+
+
+def test_embed_patches_cli_localize_basis_views_forwards(
+    monkeypatch, seoul_bull_workspace, tmp_path
+):
+    """`--localize-basis-views` parses (IntRange >= 0) and reaches
+    `embed_patches` as the `localize_basis_views` kwarg."""
+    captured: dict = {}
+    real = ep.embed_patches
+
+    def spy(recon, images, **kwargs):
+        captured["localize_basis_views"] = kwargs.get("localize_basis_views")
+        return real(recon, images, **{**kwargs, "resolution": 12})
+
+    monkeypatch.setattr(ep, "embed_patches", spy)
+
+    out = tmp_path / "basis.sfmr"
+    args = [
+        "embed-patches",
+        str(seoul_bull_workspace),
+        str(out),
+        "--localize-basis-views",
+        "6",
+    ]
+    with mock_patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert captured["localize_basis_views"] == 6
+    assert out.exists()
+
+    args = [
+        "embed-patches",
+        str(seoul_bull_workspace),
+        str(tmp_path / "basis2.sfmr"),
+        "--localize-basis-views",
+        "-1",
+    ]
+    with mock_patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code != 0
+    assert "localize-basis-views" in result.output.lower()

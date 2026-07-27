@@ -115,6 +115,13 @@ pub struct ViewSelection {
     /// track is still admitted verbatim (no candidate expansion) and the measured
     /// value is reported here.
     pub self_agreement: f64,
+    /// How many leading [`admitted`](Self::admitted) entries are the point's
+    /// **track** views (the deduped track, always admitted first); the rest are
+    /// the photometrically-vetted expansion candidates. Lets a consumer split
+    /// the view set by provenance without re-deriving the track — notably the
+    /// keypoint localizer's consensus-basis pick, which reserves seats for them
+    /// (`specs/core/keypoint-localization-consensus-basis.md`).
+    pub track_view_count: usize,
 }
 
 /// The robust reference appearance built from a point's track views: the
@@ -746,6 +753,7 @@ fn select_patch_views_impl(
         admitted: track_views.clone(),
         scores: vec![f64::NAN; track_views.len()],
         self_agreement: f64::NAN,
+        track_view_count: track_views.len(),
     };
 
     let Some((reference, self_agreement)) = reference else {
@@ -805,6 +813,7 @@ fn select_patch_views_impl(
             admitted,
             scores,
             self_agreement,
+            track_view_count: track_views.len(),
         };
     }
 
@@ -858,6 +867,7 @@ fn select_patch_views_impl(
         admitted,
         scores,
         self_agreement,
+        track_view_count: track_views.len(),
     }
 }
 

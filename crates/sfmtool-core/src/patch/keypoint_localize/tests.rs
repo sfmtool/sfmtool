@@ -600,7 +600,8 @@ fn batch_matches_per_patch() {
     };
     let view_sets = vec![vec![0u32, 1, 2, 3], vec![0u32, 1, 2, 3]];
 
-    let batch = localize_patch_cloud_keypoints(&cloud, &views, &view_sets, None, &params(), None);
+    let batch =
+        localize_patch_cloud_keypoints(&cloud, &views, &view_sets, None, None, &params(), None);
     assert_eq!(batch.len(), 2);
     for (i, res) in batch.iter().enumerate() {
         let single =
@@ -1600,4 +1601,277 @@ fn incremental_loo_template_matches_reference() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Consensus-basis cap (specs/core/keypoint-localization-consensus-basis.md)
+// ---------------------------------------------------------------------------
+
+/// A ring of `n` cameras around the patch, all seeing the same aligned texture
+/// except the entries named in `shifted` (which see it translated by that many
+/// patch-grid px in world-x) and those in `odd_tex` (a different surface).
+fn ring_scene(n: usize, shifted: &[(usize, f64)], odd_tex: &[usize]) -> (Scene, Vec<u32>) {
+    let mut centers = Vec::with_capacity(n);
+    for k in 0..n {
+        let a = std::f64::consts::TAU * k as f64 / n as f64;
+        centers.push([0.45 * a.cos(), 0.45 * a.sin(), 0.0]);
+    }
+    let mut offs = vec![[0.0, 0.0]; n];
+    for &(i, s) in shifted {
+        offs[i] = [s * wpp(), 0.0];
+    }
+    let mut texs = vec![texture as fn(f64, f64) -> f64; n];
+    for &i in odd_tex {
+        texs[i] = occluder_texture as fn(f64, f64) -> f64;
+    }
+    let scene = Scene::new(&centers, &offs, &texs);
+    let set: Vec<u32> = (0..n as u32).collect();
+    (scene, set)
+}
+
+fn capped(k: u32) -> KeypointLocalizeParams {
+    KeypointLocalizeParams {
+        basis_max_views: k,
+        ..params()
+    }
+}
+
+/// The kept views that congealed as consensus-basis members.
+fn basis_views(res: &KeypointLocalization) -> Vec<u32> {
+    res.views
+        .iter()
+        .zip(&res.is_basis)
+        .filter_map(|(&v, &b)| b.then_some(v))
+        .collect()
+}
+
+#[test]
+fn basis_cap_off_is_bit_identical_to_the_uncapped_path() {
+    let (scene, set) = ring_scene(10, &[(3, 1.0), (7, -1.0)], &[]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let scores: Vec<f64> = (0..set.len()).map(|i| 0.9 - 0.01 * i as f64).collect();
+    let evidence = BasisEvidence {
+        view_scores: Some(&scores),
+        track_view_count: 3,
+    };
+
+    let base = localize_patch_keypoints(&patch, &views, &set, None, &params());
+    // K = 0 with evidence supplied must not consult it at all.
+    let off = localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(0));
+    // A cap at or above the view count is likewise the uncapped path.
+    let wide =
+        localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(10));
+    let wider =
+        localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(64));
+
+    for other in [&off, &wide, &wider] {
+        assert_eq!(other.views, base.views);
+        assert_eq!(other.keypoints, base.keypoints, "keypoints bit-identical");
+        assert_eq!(other.offsets_px, base.offsets_px);
+        assert_eq!(other.loo_zncc, base.loo_zncc);
+        assert_eq!(other.rounds, base.rounds);
+        assert!(
+            other.is_basis.iter().all(|&b| b),
+            "every kept view is a basis member when the cap does not bite"
+        );
+    }
+}
+
+#[test]
+fn tail_views_recover_their_planted_shifts_against_the_basis_template() {
+    // 12 views; two of them (8 and 11) see the texture shifted by +1 / -1
+    // patch-grid px. With K = 4 both land in the tail (the basis takes the
+    // top-scoring views 0..3), so they must recover their planted shift from a
+    // single search against the finished basis template.
+    let (scene, set) = ring_scene(12, &[(8, 1.0), (11, -1.0)], &[]);
+    let views = scene.views();
+    let patch = plane_patch();
+    // Rank the aligned leading views highest so the basis is exactly 0..3.
+    let scores: Vec<f64> = (0..12).map(|i| 0.9 - 0.01 * i as f64).collect();
+    let evidence = BasisEvidence {
+        view_scores: Some(&scores),
+        track_view_count: 0,
+    };
+    let p = KeypointLocalizeParams {
+        search_strategy: SearchStrategy::Exhaustive,
+        ..capped(4)
+    };
+
+    let res = localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &p);
+
+    assert_eq!(basis_views(&res), vec![0, 1, 2, 3], "exactly K congealed");
+    for (want_sign, i) in [(1.0, 8u32), (-1.0, 11u32)] {
+        let pi = pos(&res, i).expect("planted-shift tail view is kept");
+        assert!(!res.is_basis[pi], "view {i} should be a tail view");
+        let proj = project(&views[i as usize], &patch.center, patch.w).unwrap();
+        let dx = res.keypoints[pi][0] - proj.0;
+        let dy = res.keypoints[pi][1] - proj.1;
+        let expected = want_sign * src_per_grid();
+        assert!(
+            (dx - expected).abs() < 0.35 * src_per_grid(),
+            "tail view {i} should recover dx {expected:.3}, got {dx:.3}"
+        );
+        assert!(dy.abs() < 0.35 * src_per_grid(), "tail view {i} dy {dy:.3}");
+    }
+}
+
+#[test]
+fn tail_gate_drops_a_mismatched_tail_view() {
+    // View 9 renders a different surface entirely; ranked last, it lands in the
+    // tail and must fail the relative-ZNCC gate against the basis template.
+    let (scene, set) = ring_scene(10, &[], &[9]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let mut scores: Vec<f64> = vec![0.9; 10];
+    scores[9] = 0.1;
+    let evidence = BasisEvidence {
+        view_scores: Some(&scores),
+        track_view_count: 0,
+    };
+
+    let res = localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(4));
+
+    assert!(
+        pos(&res, 9).is_none(),
+        "the wrong-surface tail view must be dropped, kept {:?}",
+        res.views
+    );
+    assert_eq!(res.views, vec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(res.is_basis.len(), res.views.len());
+}
+
+#[test]
+fn capped_result_preserves_input_order_and_parallel_arrays() {
+    let (scene, set) = ring_scene(9, &[(5, 1.0)], &[]);
+    let views = scene.views();
+    let patch = plane_patch();
+    // Score the LAST views highest so the basis is not a prefix of the input â€”
+    // the merge must still report kept views in input order.
+    let scores: Vec<f64> = (0..9).map(|i| 0.1 + 0.05 * i as f64).collect();
+    let evidence = BasisEvidence {
+        view_scores: Some(&scores),
+        track_view_count: 0,
+    };
+
+    let res = localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(3));
+
+    assert!(
+        res.views.windows(2).all(|w| w[0] < w[1]),
+        "kept views must stay in input order, got {:?}",
+        res.views
+    );
+    assert_eq!(res.keypoints.len(), res.views.len());
+    assert_eq!(res.offsets_px.len(), res.views.len());
+    assert_eq!(res.loo_zncc.len(), res.views.len());
+    assert_eq!(res.is_basis.len(), res.views.len());
+    assert_eq!(basis_views(&res), vec![6, 7, 8]);
+}
+
+#[test]
+fn force_track_puts_the_track_views_in_the_basis() {
+    // The track views (the leading 3 entries) score worst; with the default
+    // `basis_force_track_views` they still claim the basis seats.
+    let (scene, set) = ring_scene(10, &[], &[]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let mut scores: Vec<f64> = vec![0.9; 10];
+    scores[0] = 0.2;
+    scores[1] = 0.2;
+    scores[2] = 0.2;
+    let evidence = BasisEvidence {
+        view_scores: Some(&scores),
+        track_view_count: 3,
+    };
+
+    let forced =
+        localize_patch_keypoints_with_basis(&patch, &views, &set, None, evidence, &capped(3));
+    assert_eq!(
+        basis_views(&forced),
+        vec![0, 1, 2],
+        "track views claim the basis seats"
+    );
+
+    let free = localize_patch_keypoints_with_basis(
+        &patch,
+        &views,
+        &set,
+        None,
+        evidence,
+        &KeypointLocalizeParams {
+            basis_force_track_views: false,
+            ..capped(3)
+        },
+    );
+    assert_eq!(
+        basis_views(&free),
+        vec![3, 4, 5],
+        "without the reservation, by score"
+    );
+}
+
+#[test]
+fn unscored_views_fall_back_to_the_grazing_rank() {
+    // No caller scores at all: the pick ranks by |dÂ·n| (most frontal first).
+    // The ring cameras are symmetric, so this only has to be deterministic and
+    // produce a well-formed capped result.
+    let (scene, set) = ring_scene(8, &[], &[]);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    let a = localize_patch_keypoints_with_basis(
+        &patch,
+        &views,
+        &set,
+        None,
+        BasisEvidence::default(),
+        &capped(3),
+    );
+    let b = localize_patch_keypoints_with_basis(
+        &patch,
+        &views,
+        &set,
+        None,
+        BasisEvidence::default(),
+        &capped(3),
+    );
+    assert_eq!(a.views, b.views);
+    assert_eq!(a.keypoints, b.keypoints);
+    assert_eq!(a.is_basis, b.is_basis);
+    assert_eq!(a.is_basis.iter().filter(|&&x| x).count(), 3);
+}
+
+#[test]
+fn batch_threads_the_basis_inputs_per_patch() {
+    let (scene, set) = ring_scene(10, &[], &[]);
+    let views = scene.views();
+    let cloud = PatchCloud {
+        patches: vec![plane_patch(), plane_patch()],
+        point_indexes: vec![0, 1],
+    };
+    let view_sets = vec![set.clone(), set.clone()];
+    let scores = vec![
+        (0..10).map(|i| 0.9 - 0.01 * i as f64).collect::<Vec<f64>>(),
+        (0..10).map(|i| 0.1 + 0.05 * i as f64).collect::<Vec<f64>>(),
+    ];
+    let counts = vec![0u32, 0];
+    let inputs = BasisInputs {
+        view_scores: Some(&scores),
+        track_view_counts: Some(&counts),
+    };
+
+    let batch = localize_patch_cloud_keypoints(
+        &cloud,
+        &views,
+        &view_sets,
+        None,
+        Some(&inputs),
+        &capped(3),
+        None,
+    );
+
+    // Patch 0 ranks the leading views highest, patch 1 the trailing ones â€” so
+    // the per-patch scores really did reach the pick.
+    assert_eq!(basis_views(&batch[0]), vec![0, 1, 2]);
+    assert_eq!(basis_views(&batch[1]), vec![7, 8, 9]);
 }

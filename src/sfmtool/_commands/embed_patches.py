@@ -200,6 +200,23 @@ from .._cli_utils import timed_command
     ),
 )
 @click.option(
+    "--localize-basis-views",
+    "localize_basis_views",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help=(
+        "Cap the keypoint localizer's consensus basis at N views per point: N "
+        "congeal against each other (ranked by the select-views ZNCC, track views "
+        "seated first) and every remaining view registers once against the "
+        "finished basis template. Bounds the O(V^2) consensus terms on the "
+        "expanded view sets, whose tail reaches hundreds of views on a long "
+        "capture. Every observation is still localized and reported — only the "
+        "consensus membership shrinks. 0 (default) congeals all views. See "
+        "specs/core/keypoint-localization-consensus-basis.md."
+    ),
+)
+@click.option(
     "--sampler",
     type=click.Choice(["bilinear", "bilinear_mip", "anisotropic"]),
     default="bilinear_mip",
@@ -231,6 +248,7 @@ def embed_patches_command(
     refine_max_views,
     max_keypoint_uncertainty,
     localize_search_strategy,
+    localize_basis_views,
     sampler,
 ):
     """Convert a sift_files reconstruction to embedded_patches.
@@ -340,6 +358,7 @@ def embed_patches_command(
             max_refine_views=refine_max_views,
             max_keypoint_uncertainty=max_keypoint_uncertainty,
             localize_search_strategy=localize_search_strategy,
+            localize_basis_views=localize_basis_views,
             sampler=sampler,
             progress=click.echo,
         )
