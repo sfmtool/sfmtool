@@ -83,7 +83,10 @@ impl PyPatchCloud {
     ///         that point's view set: each view's match to the point's starting
     ///         appearance (``select_views``'s ``scores``), ranking the basis pick.
     ///         NaN ranks a view below every scored one. Omitted points (and
-    ///         ``None``) fall back to ranking by grazing angle.
+    ///         ``None``) fall back to ranking by grazing angle. Each entry must
+    ///         be parallel to that point's **full** view set, checked before
+    ///         ``point_indexes`` narrows the run — so one map from a whole-cloud
+    ///         ``select_views`` can drive chunked localize calls.
     ///     track_view_counts: Optional mapping ``point_index -> t``: how many
     ///         **leading** view-set entries are that point's track views
     ///         (``select_views``'s ``track_view_count``). Omitted points have no
@@ -266,21 +269,16 @@ impl PyPatchCloud {
                 }
             }
         }
-        let selected_mask: Option<std::collections::HashSet<u32>> =
-            point_indexes.map(|ids| ids.into_iter().collect());
-        if let Some(keep) = &selected_mask {
-            for (set, &pid) in sets.iter_mut().zip(&self.inner.point_indexes) {
-                if !keep.contains(&pid) {
-                    set.clear();
-                }
-            }
-        }
-
         // Per-patch consensus-basis evidence, parallel to `sets`. A point absent
         // from `view_scores` gets an empty score list — which the kernel reads as
         // "unscored", falling back to the grazing rank; a length mismatch against
         // the point's view set is a caller bug, so reject it up front rather than
         // silently ranking the tail last.
+        //
+        // Built BEFORE `point_indexes` clears the unselected sets: the natural
+        // "select_views once, then localize in chunks" caller passes the whole
+        // score map with a per-chunk `point_indexes`, and validating against
+        // already-cleared sets would reject it.
         let scores_per_patch: Option<Vec<Vec<f64>>> = match &view_scores {
             None => None,
             Some(map) => {
@@ -302,6 +300,16 @@ impl PyPatchCloud {
                 Some(out)
             }
         };
+
+        let selected_mask: Option<std::collections::HashSet<u32>> =
+            point_indexes.map(|ids| ids.into_iter().collect());
+        if let Some(keep) = &selected_mask {
+            for (set, &pid) in sets.iter_mut().zip(&self.inner.point_indexes) {
+                if !keep.contains(&pid) {
+                    set.clear();
+                }
+            }
+        }
         let counts_per_patch: Option<Vec<u32>> = track_view_counts.as_ref().map(|map| {
             self.inner
                 .point_indexes

@@ -339,7 +339,7 @@ def _selection(cloud, recon, images, sample):
 
 def test_select_views_reports_the_track_view_count(seoul_bull_workspace: Path):
     """``track_view_count`` splits ``admitted`` into track views then vetted
-    candidates â€” the provenance split the localizer's basis pick consumes."""
+    candidates — the provenance split the localizer's basis pick consumes."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = _load_images(recon)
     cloud = PatchCloud.from_reconstruction(
@@ -501,3 +501,61 @@ def test_localize_keypoints_rejects_unknown_basis_pick(seoul_bull_workspace: Pat
             resolution=12,
             basis_pick="nearest",
         )
+
+
+def test_localize_keypoints_chunked_with_whole_cloud_view_scores(
+    seoul_bull_workspace: Path,
+):
+    """The natural caller pattern: run ``select_views`` once over the whole
+    cloud, then localize in chunks with ``point_indexes``. The score map still
+    covers every point, so the parallel-length check must run against each
+    point's own view set — not against the sets ``point_indexes`` cleared."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+    cloud = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    sample = _sample_point_ids(cloud, n=60)
+    sel = _selection(cloud, recon, images, sample)
+    view_sets = {pid: np.asarray(r["admitted"]).tolist() for pid, r in sel.items()}
+    scores = {
+        pid: np.asarray(r["scores"], dtype=np.float64).tolist()
+        for pid, r in sel.items()
+    }
+    counts = {pid: int(r["track_view_count"]) for pid, r in sel.items()}
+
+    # Localize in two chunks, passing the WHOLE score map each time.
+    halves = [sample[: len(sample) // 2], sample[len(sample) // 2 :]]
+    chunked = []
+    for chunk in halves:
+        chunked.extend(
+            cloud.localize_keypoints(
+                recon,
+                images,
+                view_sets=view_sets,
+                view_scores=scores,
+                track_view_counts=counts,
+                point_indexes=chunk,
+                resolution=12,
+                basis_max_views=3,
+            )
+        )
+
+    one_shot = cloud.localize_keypoints(
+        recon,
+        images,
+        view_sets=view_sets,
+        view_scores=scores,
+        track_view_counts=counts,
+        point_indexes=sample,
+        resolution=12,
+        basis_max_views=3,
+    )
+
+    assert {int(r["point_index"]) for r in chunked} == set(sample)
+    by_pid = {int(r["point_index"]): r for r in chunked}
+    for r in one_shot:
+        c = by_pid[int(r["point_index"])]
+        assert np.array_equal(np.asarray(r["views"]), np.asarray(c["views"]))
+        assert np.array_equal(np.asarray(r["keypoints"]), np.asarray(c["keypoints"]))
+        assert np.array_equal(np.asarray(r["is_basis"]), np.asarray(c["is_basis"]))

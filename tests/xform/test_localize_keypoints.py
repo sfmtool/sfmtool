@@ -385,8 +385,8 @@ def test_parse_basis_max_views():
 def test_localize_keypoints_basis_cap_round_trips(seoul_bull_workspace):
     """A capped run produces the same kind of output as the uncapped one: a
     valid embedded_patches recon whose points/observations do not exceed the
-    input's. The cap changes only which views congeal â€” every observation is
-    still localized â€” so the counts stay in the uncapped run's neighbourhood."""
+    input's. The cap changes only which views congeal — every observation is
+    still localized — so the counts stay in the uncapped run's neighbourhood."""
     recon = _embedded(seoul_bull_workspace)
 
     out_uncapped = _modest_params().apply(recon)
