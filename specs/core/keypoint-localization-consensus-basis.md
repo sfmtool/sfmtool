@@ -295,6 +295,49 @@ enough that adopting a non-zero default needs the downstream
 embed→size-cull→BA+refine evidence this section calls for, which reprojection
 error and yield can settle but these localizer-internal metrics cannot.
 
+### Downstream ladder evidence (recorded 2026-07-27)
+
+Arms `K ∈ {0, 8, 16}` through embed → `--filter-by-patch-size 3.0` →
+`--bundle-adjust --refine-normals --refine-keypoints` on the same high-`V`
+capture (same build, sequential runs). Rogue % = normals > 70° off their
+8-NN consensus.
+
+| arm | embed wall | pts | obs | reproj med / p90 | rogue % |
+| --- | --- | --- | --- | --- | --- |
+| `K=0` | 21m 0s | 117,428 | 3.986 M | 1.308 / 1.831 | 3.99 |
+| `K=8` | 10m 22s | 119,411 | 4.180 M | 1.372 / 1.947 | 4.31 |
+| `K=16` | 11m 8s | 118,771 | 4.181 M | 1.357 / 1.926 | 4.13 |
+
+Restricted to the 115,777 points common to all three arms (removes the
+yield-composition confound between arms):
+
+| arm | reproj med / p90 | rogue % | obs/pt |
+| --- | --- | --- | --- |
+| `K=0` | 1.307 / 1.826 | 3.96 | 34.02 |
+| `K=8` | 1.365 / 1.929 | 4.25 | 35.20 |
+| `K=16` | 1.351 / 1.909 | 4.08 | 35.28 |
+
+The capped arms' extra-only points (kept by them, culled by `K=0`): median
+reproj 1.76 px, rogue 6.4–6.9 % — marginal but usable observations, not junk.
+
+Readings:
+
+- The cap halves end-to-end embed wall and raises yield ~1.7 % pts / ~4.9 %
+  obs, at a small error cost that persists on the common subset: +3–4 %
+  median reproj and +0.1–0.3 pp rogue. Even on common points the capped arms
+  carry ~1.2 more obs/pt (the single-shot tail gate keeps marginal
+  observations the moving multi-round bar culls), so the residual deltas
+  conflate keypoint quality with observation composition; separating them
+  needs a tail-bar-tightening arm that matches `K=0`'s obs/pt.
+- Between the capped arms, `K=16` beats `K=8` on every downstream metric
+  (small margins) — the sharper-template internal reading of small `K` did
+  not cash out downstream on this capture.
+- Decision guidance: `K=0` remains the choice where error metrics are the
+  product (e.g. ground-truth cleanup ladders); `K=16` is the evidence-backed
+  cap where wall time or yield matter. The pipeline default stays `0` until
+  the tail-bar experiment separates gate composition from keypoint quality,
+  and the moderate-`V` control remains outstanding.
+
 ## Tests
 
 - **Rust unit** (ranking helper): force-track reserves seats; oversized track
