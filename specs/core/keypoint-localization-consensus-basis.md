@@ -184,6 +184,27 @@ renders a cache (the cap only shrinks the tail's tile from `(R+4m)²` to
 whole `K = 8…16` band lands within measurement noise of each other at ~2.6–3.3×
 the `K=0` pass, and pushing `K` lower buys nothing further.
 
+**End to end** — `sfm embed-patches --patch-size 5` over the full
+reconstruction, `K=0` then `K=12`, back to back:
+
+| stage | `K=0` | `K=12` |
+| --- | --- | --- |
+| round-1 normal refine | 105.0 s | 60.1 s |
+| view selection | 58.1 s | 56.6 s |
+| **keypoint localization** | **484.5 s** | **107.7 s** |
+| round-1 sub-pixel refine | 235.6 s | 194.6 s |
+| round-2 normal refine | 114.7 s | 86.7 s |
+| round-2 sub-pixel refine | 214.9 s | 154.5 s |
+| whole command | 1278 s | 699 s |
+| points written | 126,737 | 128,431 |
+
+Normal refinement and view selection do identical work in both arms, so their
+gap (105.0 vs 60.1 s) is the machine-load difference between the two runs;
+correcting the localize column by it puts the pass at ~2.6× rather than the raw
+4.5×, matching the profiled figure, and the whole command at ~1.3–1.8×. The
+capped arm also writes 1.3 % more points, the compaction's view of the +4.5 %
+observations the localizer kept.
+
 **Quality** — 40,000-point subset, per observation against the `K=0` arm,
 matched on `(point, image)`. Churn is the symmetric difference of the kept
 observation sets over `K=0`'s count. `zncc` columns are the reported per-view
