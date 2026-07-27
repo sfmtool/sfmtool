@@ -700,8 +700,9 @@ fn affine_sampling_matches_exact_render_on_mild_distortion() {
     let ctx = full_support_ctx(resolution);
     let n = ctx.pixels.len();
 
-    let map = affine_core_map(&patch, &view, resolution)
+    let (map, level) = affine_core_map(&patch, &view, resolution, Sampler::Bilinear)
         .expect("mild distortion must fit the affine map");
+    assert_eq!(level, 0, "the bilinear sampler always samples level 0");
     let mut aff = vec![0f32; n];
     sample_support_affine(
         pyr.level(0),
@@ -732,10 +733,36 @@ fn affine_sampling_matches_exact_render_on_mild_distortion() {
 
 #[test]
 fn affine_score_matches_exact_score() {
-    // The end quantity — the candidate's ZNCC against a real reference — must
-    // agree between the affine fast path (what `candidate_zncc` picks on this
-    // pinhole scene) and the exact-warp leg, well inside any plausible
-    // admission bar's sensitivity.
+    // The bilinear pair: fast path vs exact warp, both at level 0.
+    let level = affine_vs_exact_score(Sampler::Bilinear);
+    assert_eq!(level, 0, "the bilinear sampler always samples level 0");
+}
+
+#[test]
+fn affine_mip_score_matches_exact_mip_score() {
+    // The mip pair, held to the same parity budget as the bilinear one: the
+    // fast path must compose the affine map with the level the per-pixel
+    // `remap_bilinear_mip` would pick and sample *that* level, so the two legs
+    // agree. The fixture's patch minifies (≈3.5 source px per grid px at
+    // `params().resolution`), so this genuinely exercises a level above 0 — if
+    // it ever stops doing so, the assertion below turns the test's silent
+    // degradation into a failure.
+    let level = affine_vs_exact_score(Sampler::BilinearMip);
+    assert!(
+        level > 0,
+        "the fixture must exercise a mip level above 0, got {level}"
+    );
+}
+
+/// Score the same candidate through the affine fast path and through the
+/// forced exact-warp leg under `sampler`, assert they agree inside the parity
+/// budget, and return the pyramid level the fast path selected.
+///
+/// The end quantity — the candidate's ZNCC against a real reference — must
+/// agree between the affine fast path (what `candidate_zncc` picks on this
+/// pinhole scene) and the exact-warp leg, well inside any plausible admission
+/// bar's sensitivity.
+fn affine_vs_exact_score(sampler: Sampler) -> usize {
     let scene = Scene::new(
         &[
             [0.4, 0.0, 0.0],
@@ -747,7 +774,10 @@ fn affine_score_matches_exact_score() {
     );
     let views = scene.views();
     let patch = plane_patch();
-    let p = params();
+    let p = ViewSelectParams {
+        sampler,
+        ..params()
+    };
     let w_full = window_weights(p.window, p.resolution);
     let (reference, _agree) =
         build_reference(&patch, &views, &[0, 1, 2], &w_full, &p).expect("track builds a reference");
@@ -763,6 +793,8 @@ fn affine_score_matches_exact_score() {
         .collect();
 
     // Fast path (the pinhole map is near-affine, so `candidate_zncc` takes it).
+    let (_, level) = affine_core_map(&patch, &views[3], p.resolution, sampler)
+        .expect("the pinhole map must fit the affine bound on this fixture");
     let mut scratch = Vec::new();
     let affine_score = candidate_zncc(
         &patch,
@@ -791,8 +823,129 @@ fn affine_score_matches_exact_score() {
 
     assert!(
         (affine_score - exact_score).abs() < 0.02,
-        "affine vs exact score: {affine_score:.5} vs {exact_score:.5}"
+        "{sampler:?} affine vs exact score: {affine_score:.5} vs {exact_score:.5}"
     );
+    level
+}
+
+#[test]
+fn affine_mip_sampling_matches_exact_mip_render() {
+    // Sample-level parity for the mip fast path: composing the affine map with
+    // the selected level must land on the same source content the per-pixel
+    // `remap_bilinear_mip` reads, so the support values track the exact warp
+    // within the same (gradient × residual) band the level-0 pair holds to.
+    let scene = Scene::new(&[[0.3, 0.1, 0.0]], &[texture as fn(f64, f64) -> f64]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let resolution = 15u32;
+    let ctx = full_support_ctx(resolution);
+    let n = ctx.pixels.len();
+
+    let (map, level) = affine_core_map(&patch, &views[0], resolution, Sampler::BilinearMip)
+        .expect("the pinhole map must fit the affine bound");
+    assert!(
+        level > 0,
+        "fixture must minify into a mip level, got {level}"
+    );
+    let mut aff = vec![0f32; n];
+    sample_support_affine(
+        views[0].pyramid.level(level),
+        &map,
+        &ctx.pixels,
+        resolution as usize,
+        &mut aff,
+    );
+
+    let (exact, channels) = normalized_stack(
+        &patch,
+        &ctx,
+        &[views[0]],
+        resolution,
+        Sampler::BilinearMip,
+        None,
+    )
+    .expect("patch renders in frame");
+    assert_eq!(channels, 1);
+
+    let mut max_d = 0.0f32;
+    let mut sum_d = 0.0f64;
+    for k in 0..n {
+        let d = (aff[k] - exact[k]).abs();
+        max_d = max_d.max(d);
+        sum_d += d as f64;
+    }
+    let mean_d = sum_d / n as f64;
+    assert!(
+        max_d <= 4.0 && mean_d <= 0.8,
+        "mip affine samples must track the exact mip warp: max {max_d}, mean {mean_d:.3}"
+    );
+}
+
+#[test]
+fn affine_mip_selection_matches_exact_selection() {
+    // End-to-end under the default mip sampler: every score `select_patch_views`
+    // reports (all of which come from the affine fast path on this near-affine
+    // pinhole scene) must match the exact-warp leg's score for the same view,
+    // inside the same 0.02 parity band the per-candidate test pins — so the
+    // admission decisions the scores drive are the exact path's decisions.
+    let scene = Scene::new(
+        &[
+            [0.4, 0.0, 0.0],
+            [-0.4, 0.0, 0.0],
+            [0.0, 0.4, 0.0],
+            [0.35, 0.2, 0.1],
+            [-0.2, -0.35, 0.05],
+        ],
+        &[texture as fn(f64, f64) -> f64; 5],
+    );
+    let views = scene.views();
+    let patch = plane_patch();
+    let track = [0u32, 1];
+
+    let fast = select_patch_views(&patch, &views, &track, &params());
+    assert!(
+        fast.admitted.len() > track.len(),
+        "the fixture must admit at least one vetted candidate, got {:?}",
+        fast.admitted
+    );
+    // The exact leg, rebuilt against the same reference and re-scored per
+    // admitted view (the residual bound is not reachable through the public
+    // params, so the exact path is driven directly here).
+    let p = params();
+    let w_full = window_weights(p.window, p.resolution);
+    let (reference, _agree) =
+        build_reference(&patch, &views, &track, &w_full, &p).expect("track builds a reference");
+    let single_ctx = LevelContext {
+        kept: vec![0],
+        pixels: reference.ctx.pixels.clone(),
+        weights: reference.ctx.weights.clone(),
+    };
+    let sqrt_weights: Vec<f32> = single_ctx
+        .weights
+        .iter()
+        .map(|&w| w.sqrt() as f32)
+        .collect();
+
+    for (slot, &v) in fast.admitted.iter().enumerate() {
+        let (raw, channels) = normalized_stack(
+            &patch,
+            &single_ctx,
+            &[views[v as usize]],
+            p.resolution,
+            p.sampler,
+            None,
+        )
+        .expect("admitted view renders in frame");
+        let exact =
+            score_raw_against_reference(&raw, channels, &reference, &single_ctx, &sqrt_weights)
+                .expect("exact leg scores");
+        assert!(
+            (fast.scores[slot] - exact).abs() < 0.02,
+            "view {v}: fast {:.5} vs exact {:.5}",
+            fast.scores[slot],
+            exact
+        );
+    }
 }
 
 #[test]
@@ -812,8 +965,12 @@ fn affine_declines_strong_distortion_and_border() {
         pyramid: &pyr,
     };
     assert!(
-        affine_core_map(&patch, &view, resolution).is_none(),
+        affine_core_map(&patch, &view, resolution, Sampler::Bilinear).is_none(),
         "strong distortion must fall back to the exact warp"
+    );
+    assert!(
+        affine_core_map(&patch, &view, resolution, Sampler::BilinearMip).is_none(),
+        "the residual gate is sampler-independent (it bounds the warp curvature)"
     );
 
     // Patch projecting hard against the frame border: the border margin
@@ -830,8 +987,12 @@ fn affine_declines_strong_distortion_and_border() {
         pyramid: &pyr,
     };
     assert!(
-        affine_core_map(&patch, &view, resolution).is_none(),
+        affine_core_map(&patch, &view, resolution, Sampler::Bilinear).is_none(),
         "an edge-straddling patch must fall back to the exact warp"
+    );
+    assert!(
+        affine_core_map(&patch, &view, resolution, Sampler::BilinearMip).is_none(),
+        "the mip border gate (in level px) is at least as strict as level 0's"
     );
 }
 

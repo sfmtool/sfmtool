@@ -71,12 +71,31 @@ refinement and keypoint localization.
 The candidate gate score exists only to admit/reject — nothing downstream
 reuses the candidate render — so scoring does not need the full per-pixel
 projective warp (previously ~86% of selection CPU, one `WarpMap::from_patch` +
-`remap_bilinear` per candidate). With the bilinear sampler, a candidate is now
+`remap_bilinear` per candidate). Under either bilinear sampler a candidate is
 scored through an **affine** patch→image map fit on its four exactly-projected
 patch corners, sampling only the reference-support pixels at the affine
 positions (same bilinear taps and `u8` rounding as `remap_bilinear`, so values
 match wherever the positions do). Track-view diagnostic scores share the same
-path. The **exact warp remains the fallback** — and the sole authority on
+path.
+
+**Mip levels.** Under `BilinearMip` the affine map is additionally composed
+with the pyramid level it minifies into, so the fast path reads the same level
+the per-pixel path would. The map's linear part `∂(source px)/∂(grid px)` is
+constant over the patch, so its larger singular value `σ_major` is evaluated
+once and fed to the **same** level rule the per-pixel path applies
+(`ℓ = round(log₂ max(σ_major, 1))`, clamped to the pyramid). Every coefficient
+is then divided by `2^ℓ` — the level coordinate convention `x_ℓ = x_0 / 2^ℓ`
+that the pyramid's 2×2 box downsample defines, with pixel centres at `+0.5` on
+every level, so no half-pixel term enters — and the support is sampled from
+level `ℓ` with one bilinear tap, which is exactly what `remap_bilinear_mip`
+does per pixel. One level covers the whole patch where the per-pixel path may
+straddle a boundary; that, and `σ_major` computed from the affine fit rather
+than per-pixel central differences, are the two places the mip fast path can
+differ from the slow one, and both fold into the same accepted
+admission-flip loss below. `Anisotropic` has no affine shortcut (its footprint
+walk is not a single tap) and always takes the exact warp.
+
+The **exact warp remains the fallback** — and the sole authority on
 rejection — whenever:
 
 - a corner fails to project (behind camera / outside the model domain),
@@ -87,11 +106,16 @@ rejection — whenever:
   centre — e.g. radial distortion around a patch near the principal point —
   cancels in the residual and folds into the accepted admission-flip loss
   instead. Large patches and wide-angle / heavily distorted views exceed the
-  bound and fall back), or
+  bound and fall back. The bound is in **source** px on every level: it
+  measures the warp's curvature, and holding it in source px is the
+  conservative reading when the samples come from a coarser level, where the
+  same deviation is `2^ℓ` times smaller), or
 - the mapped quad comes within ~1.5 px of the frame border
   (`AFFINE_BORDER_MARGIN_PX` — keeps every affine sample safely in-bounds and
   leaves the out-of-frame-support rejection semantics entirely to the exact
-  path).
+  path). The margin is applied in the **sampled level's** pixels, so the mip
+  path declines a `2^ℓ`-px-wide border band — strictly more conservative than
+  the level-0 path, which is the safe direction.
 
 **Accepted loss:** admission flips for candidates near the ZNCC bar (the
 affine position error perturbs scores by up to ~gradient × residual).
@@ -116,6 +140,16 @@ identical sets, 0.43% of points below 0.8), total admitted −0.099%, flip rate
 1.46%. This is the accepted symmetric-distortion loss described above, not a
 safety issue (in-bounds sampling is residual-independent).
 
+Both figures were measured with `Sampler::Bilinear`, before it stopped being
+the default. The mip composition does not change what the fast path
+approximates — the affine position error and the border/residual gates are
+identical — so the admission-agreement figures carry over; what changes is the
+cost it displaces, since the exact `BilinearMip` warp additionally computes the
+warp map's per-pixel SVD. Measured per candidate-scoring call on the synthetic
+selection fixture: `Bilinear` 13.0 → 3.7 µs (3.5×), `BilinearMip` 25.4 → 3.7 µs
+(6.8×) — the fast path's own cost is level-independent (one bilinear tap per
+support pixel either way, from a smaller and better-cached level).
+
 _Status: v1 implemented in `crates/sfmtool-core/src/patch/view_selection.rs`
 (`select_patch_views` / `select_patch_cloud_views`), exposed as
 `PatchCloud.select_views(recon, images, *, min_relative_zncc=0.7, …,
@@ -132,7 +166,9 @@ in-frame). The track image indices are deduped order-preserving before use, so a
 point with two observations in one image does not double-weight that view. The
 self-agreement is the track views' mean ZNCC to the reference; when it is below
 `min_self_agreement` (default 0.3) the track is admitted verbatim with no
-expansion. A point whose valid track-view count is below `min_track_views`
+expansion. The affine fast path covers `Sampler::Bilinear` and
+`Sampler::BilinearMip` (the default); `Sampler::Anisotropic` always takes the
+exact warp. A point whose valid track-view count is below `min_track_views`
 (default 2) likewise admits its track views verbatim. The render → z-normalize →
 robust-consensus primitives are shared with `normal_refine` (widened to
 `pub(super)`), not duplicated._

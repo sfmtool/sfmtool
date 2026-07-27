@@ -19,17 +19,21 @@
 //!
 //! **Affine candidate scoring.** The gate score exists only to admit/reject —
 //! nothing downstream reuses the candidate render — so scoring a view does not
-//! need the full per-pixel projective warp. With the bilinear sampler, a
+//! need the full per-pixel projective warp. Under either bilinear sampler a
 //! candidate is scored through an **affine** patch→image map fit on its four
 //! exactly-projected patch corners ([`affine_core_map`]), sampling only the
-//! reference-support pixels; the exact warp remains the fallback whenever the
-//! 4th-corner residual shows the affine fit is poor (wide-angle / heavy
-//! distortion), a corner fails to project, or the patch comes close to the
-//! frame border (where the exact path owns the out-of-frame rejection
-//! semantics). See `specs/core/patch-view-selection.md` for the accepted
-//! admission-flip loss and the measured numbers.
+//! reference-support pixels; under [`Sampler::BilinearMip`] that map is first
+//! composed with the pyramid level the map's own compression selects, so the
+//! samples come from the same level the per-pixel path would read. The exact
+//! warp remains the fallback whenever the 4th-corner residual shows the affine
+//! fit is poor (wide-angle / heavy distortion), a corner fails to project, or
+//! the patch comes close to the frame border (where the exact path owns the
+//! out-of-frame rejection semantics); [`Sampler::Anisotropic`] has no affine
+//! shortcut and always takes the exact warp. See
+//! `specs/core/patch-view-selection.md` for the accepted admission-flip loss
+//! and the measured numbers.
 
-use crate::camera::remap::ImageU8;
+use crate::camera::remap::{mip_level_for_sigma, ImageU8};
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
     build_level_context, irls_view_weights, normalized_stack, weighted_moments_pub, window_weights,
@@ -290,12 +294,31 @@ fn build_reference(
 /// / heavily distorted views exceed it and fall back to the exact warp.
 const AFFINE_MAX_RESIDUAL_PX: f64 = 0.5;
 
-/// Frame-border margin (source px): the affine fast path requires the mapped
-/// patch quad to stay this far inside the frame, so (a) every interior sample
-/// is safely in-bounds despite the ≤ [`AFFINE_MAX_RESIDUAL_PX`] position
-/// error, and (b) the exact path keeps sole authority over the
-/// out-of-frame-support rejection semantics near the border.
+/// Frame-border margin, in the pixels of the level actually sampled: the
+/// affine fast path requires the mapped patch quad to stay this far inside the
+/// sampled level's frame, so (a) every interior sample is safely in-bounds
+/// despite the ≤ [`AFFINE_MAX_RESIDUAL_PX`] position error (which is ≤ half
+/// that in level-`ℓ` pixels, since the level's pixels are `2^ℓ` source px
+/// wide), and (b) the exact path keeps sole authority over the
+/// out-of-frame-support rejection semantics near the border. Applying the
+/// margin in level pixels makes the mip fast path strictly more conservative
+/// at the border than the level-0 one — the region it declines is `2^ℓ` source
+/// px wide — which is the safe direction: the exact warp owns those views.
 const AFFINE_BORDER_MARGIN_PX: f64 = 1.0 + AFFINE_MAX_RESIDUAL_PX;
+
+/// Larger singular value of an affine map's linear part
+/// `J = [[a, b], [c, d]] = ∂(source px)/∂(grid px)` — the local compression
+/// footprint [`mip_level_for_sigma`] selects a pyramid level from. Closed form
+/// `σ_major = q + r` with `q = ½‖(a + d, c − b)‖` and `r = ½‖(a − d, c + b)‖`,
+/// algebraically the same quantity `warp_map::svd_2x2` computes per pixel for
+/// the slow path (the two can still land on opposite sides of a level boundary
+/// when `σ` sits within rounding distance of `2^(ℓ+0.5)`, which is the
+/// documented approximation, not a defect).
+fn affine_sigma_major(a: f64, b: f64, c: f64, d: f64) -> f32 {
+    let q = (0.5 * (a + d)).hypot(0.5 * (c - b));
+    let r = (0.5 * (a - d)).hypot(0.5 * (c + b));
+    (q + r) as f32
+}
 
 /// The affine patch-grid → source-pixel map of the candidate fast path:
 /// `x = a[0]·col + a[1]·row + a[2]`, `y = a[3]·col + a[4]·row + a[5]` (grid
@@ -318,17 +341,33 @@ impl AffineCoreMap {
 }
 
 /// Fit the candidate's patch→image map from three **exactly projected** grid
-/// corners and vet it: `None` (→ exact warp) when a corner fails to project,
-/// the 4th-corner residual exceeds [`AFFINE_MAX_RESIDUAL_PX`], or the mapped
-/// quad comes within [`AFFINE_BORDER_MARGIN_PX`] of the frame border. Uses the
-/// same affine camera-frame ray basis as `WarpMap::from_patch` (`w = 0` folds
-/// into the origin identically), so the corner projections are exactly the
-/// warp's own corner samples.
+/// corners, pick the pyramid level to sample it from, and vet the result:
+/// `None` (→ exact warp) when a corner fails to project, the 4th-corner
+/// residual exceeds [`AFFINE_MAX_RESIDUAL_PX`], or the mapped quad comes
+/// within [`AFFINE_BORDER_MARGIN_PX`] of the sampled level's frame border.
+/// Uses the same affine camera-frame ray basis as `WarpMap::from_patch`
+/// (`w = 0` folds into the origin identically), so the corner projections are
+/// exactly the warp's own corner samples.
+///
+/// Returns the map **already expressed in the returned level's pixels**: under
+/// [`Sampler::BilinearMip`] the level is [`mip_level_for_sigma`] of the map's
+/// own `σ_major` — the same rule `remap_bilinear_mip` applies per pixel — and
+/// every coefficient is divided by `2^ℓ`, which is exactly the level
+/// coordinate convention `x_ℓ = x_0 / 2^ℓ` the pyramid's 2×2 box downsample
+/// defines (pixel centres at `+0.5` on every level, so no half-pixel term
+/// appears). The residual gate stays in **source** px: it bounds the warp's
+/// curvature, and a source-px bound is the conservative one to apply when the
+/// samples are read from a coarser level.
+///
+/// Any other sampler resolves to level 0. [`Sampler::Anisotropic`] has no
+/// affine shortcut at all (its footprint walk is not a single tap) and is
+/// gated out by the caller before reaching here.
 fn affine_core_map(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
     resolution: u32,
-) -> Option<AffineCoreMap> {
+    sampler: Sampler,
+) -> Option<(AffineCoreMap, usize)> {
     let rot = view.cam_from_world.rotation.to_rotation_matrix();
     let q0 = rot * patch.center.coords + view.cam_from_world.translation * patch.w;
     let qu = (rot * patch.u_axis) * patch.half_extent[0];
@@ -356,30 +395,56 @@ fn affine_core_map(
         return None;
     }
 
-    // Border gate: the affine image of the grid square is the parallelogram
-    // {p00, p10, p01, p11_pred} (true p11 included for the residual slack);
-    // its bounding box inside the margin keeps every interior sample
-    // in-frame.
-    let (w, h) = (view.camera.width as f64, view.camera.height as f64);
+    // Level-0 affine coefficients (grid index -> continuous source pixel).
+    let a = [
+        (p10.0 - p00.0) / r1,
+        (p01.0 - p00.0) / r1,
+        p00.0,
+        (p10.1 - p00.1) / r1,
+        (p01.1 - p00.1) / r1,
+        p00.1,
+    ];
+
+    // Mip level from the map's own compression, by the slow path's rule. The
+    // affine linear part is constant over the patch, so one level covers the
+    // whole quad where the per-pixel path may straddle a boundary — inside the
+    // accepted approximation, and level 0 (`scale = 1`) leaves the bilinear
+    // path bit-identical to before.
+    let level = match sampler {
+        Sampler::BilinearMip => mip_level_for_sigma(
+            affine_sigma_major(a[0], a[1], a[3], a[4]),
+            view.pyramid.num_levels(),
+        ),
+        _ => 0,
+    };
+    let inv_scale = 1.0 / (1u64 << level) as f64;
+
+    // Border gate, in the sampled level's pixels: the affine image of the grid
+    // square is the parallelogram {p00, p10, p01, p11_pred} (true p11 included
+    // for the residual slack); its bounding box inside the margin keeps every
+    // interior sample in-frame.
+    let img = view.pyramid.level(level);
+    let (w, h) = (img.width() as f64, img.height() as f64);
     let xs = [p00.0, p10.0, p01.0, p11.0, p11_pred.0];
     let ys = [p00.1, p10.1, p01.1, p11.1, p11_pred.1];
     let m = AFFINE_BORDER_MARGIN_PX;
-    let inside = xs.iter().all(|&x| x >= m && x <= w - 1.0 - m)
-        && ys.iter().all(|&y| y >= m && y <= h - 1.0 - m);
+    let inside = xs.iter().all(|&x| {
+        let x = x * inv_scale;
+        x >= m && x <= w - 1.0 - m
+    }) && ys.iter().all(|&y| {
+        let y = y * inv_scale;
+        y >= m && y <= h - 1.0 - m
+    });
     if !inside {
         return None;
     }
 
-    Some(AffineCoreMap {
-        a: [
-            (p10.0 - p00.0) / r1,
-            (p01.0 - p00.0) / r1,
-            p00.0,
-            (p10.1 - p00.1) / r1,
-            (p01.1 - p00.1) / r1,
-            p00.1,
-        ],
-    })
+    Some((
+        AffineCoreMap {
+            a: a.map(|c| c * inv_scale),
+        },
+        level,
+    ))
 }
 
 /// Sample the reference-support pixels of `img` through the affine map into
@@ -388,6 +453,12 @@ fn affine_core_map(
 /// convention (same `x − 0.5` pixel-center geometry, same bilinear blend
 /// grouping, same `u8` rounding), so where the affine position matches the
 /// exact warp the sampled value is bit-identical.
+///
+/// `img` is whichever pyramid level [`affine_core_map`] selected, and `map` is
+/// already expressed in that level's pixels — one bilinear tap on the chosen
+/// level is precisely what
+/// [`remap_bilinear_mip`](crate::camera::remap::remap_bilinear_mip) does per
+/// pixel, so the same value convention carries over to the mip path unchanged.
 ///
 /// The inner loop is hand-rolled rather than calling the generic
 /// [`sample_bilinear_u8_all`]: the [`AFFINE_BORDER_MARGIN_PX`] gate on the map
@@ -486,18 +557,24 @@ fn candidate_zncc(
     params: &ViewSelectParams,
     raw_scratch: &mut Vec<f32>,
 ) -> Option<f64> {
-    // Affine fast path (bilinear sampler only — the anisotropic footprint has
+    // Affine fast path (both bilinear samplers — the anisotropic footprint has
     // no affine shortcut): project the four patch corners exactly, fit the
-    // affine patch→image map, and sample the reference support through it —
-    // skipping the per-pixel camera projection + distortion of the full warp.
-    // A view the fit declines (corner fails to project, residual over the
-    // curvature bound, or too close to the frame border) is scored by the
-    // exact warp below, so the fast path never decides rejection on its own.
-    if matches!(params.sampler, Sampler::Bilinear) {
-        let map = prof::AFFINE_MAP.time(|| affine_core_map(patch, view, params.resolution));
-        if let Some(map) = map {
+    // affine patch→image map, compose it with the pyramid level that map's own
+    // compression selects (level 0 for `Bilinear`), and sample the reference
+    // support through it — skipping the per-pixel camera projection +
+    // distortion of the full warp. A view the fit declines (corner fails to
+    // project, residual over the curvature bound, or too close to the sampled
+    // level's frame border) is scored by the exact warp below, so the fast
+    // path never decides rejection on its own.
+    if matches!(params.sampler, Sampler::Bilinear | Sampler::BilinearMip) {
+        let fit = prof::AFFINE_MAP
+            .time(|| affine_core_map(patch, view, params.resolution, params.sampler));
+        if let Some((map, level)) = fit {
             prof::count(&prof::N_AFFINE, 1);
-            let img = view.pyramid.level(0);
+            if level > 0 {
+                prof::count(&prof::N_AFFINE_MIP, 1);
+            }
+            let img = view.pyramid.level(level);
             let channels = img.channels() as usize;
             let n = reference.n;
             raw_scratch.clear();

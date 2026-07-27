@@ -583,8 +583,13 @@ pub fn remap_bilinear(src: &ImageU8, map: &WarpMap) -> ImageU8 {
 ///
 /// A NaN `sigma_major` (degenerate local Jacobian) resolves to level 0 via the
 /// `max(rho, 1)` (`f32::max` returns the non-NaN operand).
+///
+/// `pub(crate)` so view selection's affine fast path selects its level by the
+/// **same** rule the per-pixel slow path applies, evaluated once on the affine
+/// map's constant linear part (see
+/// [`affine_core_map`](crate::patch::view_selection)).
 #[inline]
-fn mip_level_for_sigma(sigma_major: f32, num_levels: usize) -> usize {
+pub(crate) fn mip_level_for_sigma(sigma_major: f32, num_levels: usize) -> usize {
     let l = sigma_major.max(1.0).log2().round() as usize;
     l.min(num_levels - 1)
 }

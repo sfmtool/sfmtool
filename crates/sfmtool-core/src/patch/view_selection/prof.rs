@@ -116,6 +116,10 @@ pub static N_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 pub static N_ADMITTED: AtomicU64 = AtomicU64::new(0);
 /// Views scored via the affine fast path (track diagnostics + candidates).
 pub static N_AFFINE: AtomicU64 = AtomicU64::new(0);
+/// Subset of [`N_AFFINE`] whose affine map selected a pyramid level above 0
+/// (the `BilinearMip` sampler minifying the patch); the remainder sampled
+/// level 0, where the mip and bilinear fast paths coincide.
+pub static N_AFFINE_MIP: AtomicU64 = AtomicU64::new(0);
 /// Views the affine fast path declined — corner projection failed, the
 /// 4th-corner residual exceeded the bound (heavy distortion / wide angle), or
 /// the mapped patch came too close to the frame border — scored by the exact
@@ -154,6 +158,7 @@ pub fn reset() {
         &N_CANDIDATES,
         &N_ADMITTED,
         &N_AFFINE,
+        &N_AFFINE_MIP,
         &N_AFFINE_FALLBACK,
     ] {
         c.store(0, Ordering::Relaxed);
@@ -201,11 +206,12 @@ pub fn report(patches: usize, wall_secs: f64) {
     );
     eprintln!(
         "[sfmtool-profile]   verbatim {}  candidates-scored {}  candidates-admitted {}  \
-         affine-scored {}  affine-fallbacks {}",
+         affine-scored {} (mip level>0: {})  affine-fallbacks {}",
         N_VERBATIM.load(Ordering::Relaxed),
         N_CANDIDATES.load(Ordering::Relaxed),
         N_ADMITTED.load(Ordering::Relaxed),
         N_AFFINE.load(Ordering::Relaxed),
+        N_AFFINE_MIP.load(Ordering::Relaxed),
         N_AFFINE_FALLBACK.load(Ordering::Relaxed),
     );
     crate::camera::remap::prof::report();
