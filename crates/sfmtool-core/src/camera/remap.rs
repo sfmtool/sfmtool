@@ -5,7 +5,7 @@
 
 use rayon::prelude::*;
 
-use crate::camera::warp_map::{WarpMap, PAR_MIN_PIXELS};
+use crate::camera::warp_map::{parallelize_rows, WarpMap};
 
 /// Opt-in resample-sampler counters, shared by both patch phases (localization's
 /// `render_remap` and refinement's `remap`). Gated on `SFMTOOL_PROFILE`; with the
@@ -122,9 +122,10 @@ pub mod prof {
 }
 
 /// Run `fill_row` over every destination row, sequentially for small outputs
-/// (where rayon scaffolding dwarfs the row work — e.g. patch-sized remaps
-/// nested inside an already-parallel caller) and via rayon otherwise.
-/// Returns the concatenated row data.
+/// and for remaps nested inside an already-parallel caller (where rayon
+/// scaffolding dwarfs the row work — e.g. every patch-sized remap, which runs
+/// from inside the per-patch `par_iter`), and via rayon otherwise. See
+/// [`parallelize_rows`]. Returns the concatenated row data.
 fn remap_rows(
     out_w: u32,
     out_h: u32,
@@ -132,7 +133,7 @@ fn remap_rows(
     fill_row: impl Fn(u32, &mut [u8]) + Sync,
 ) -> Vec<u8> {
     let out_stride = out_w as usize * channels as usize;
-    if (out_w as usize) * (out_h as usize) <= PAR_MIN_PIXELS {
+    if !parallelize_rows((out_w as usize) * (out_h as usize)) {
         let mut data = vec![0u8; out_stride * out_h as usize];
         for (row, row_data) in data.chunks_exact_mut(out_stride).enumerate() {
             fill_row(row as u32, row_data);
@@ -992,8 +993,8 @@ impl ImageF32WithGrad {
 
 /// Walk `out_h` rows of an `ImageF32WithGrad`-shaped output, invoking
 /// `fill_row(row, value_row, grad_x_row, grad_y_row)` to fill the per-row stride
-/// slices of each of the three buffers. Switches to a per-row rayon pass when
-/// `out_w * out_h > PAR_MIN_PIXELS`. Factored from the otherwise-duplicated
+/// slices of each of the three buffers. Switches to a per-row rayon pass per
+/// [`parallelize_rows`]. Factored from the otherwise-duplicated
 /// scaffolding in [`remap_bilinear_with_grad_into`] /
 /// [`remap_aniso_with_grad_into`].
 fn remap_rows_f32x3_into(
@@ -1010,7 +1011,7 @@ fn remap_rows_f32x3_into(
     debug_assert_eq!(value.len(), total);
     debug_assert_eq!(grad_x.len(), total);
     debug_assert_eq!(grad_y.len(), total);
-    if (out_w as usize) * (out_h as usize) <= PAR_MIN_PIXELS {
+    if !parallelize_rows((out_w as usize) * (out_h as usize)) {
         for row in 0..out_h {
             let off = row as usize * stride;
             fill_row(

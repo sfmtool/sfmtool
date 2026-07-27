@@ -799,3 +799,76 @@ fn ref_one_sided_jacobian_at(warp: &WarpMap, col: u32, row: u32) -> [[f32; 2]; 2
         [(sy_r - sy_l) / col_den, (sy_b - sy_t) / row_den],
     ]
 }
+
+// ---------------------------------------------------------------------------
+// Serial / parallel row-loop selection (`parallelize_rows`)
+// ---------------------------------------------------------------------------
+
+/// Run `f` on a rayon worker thread (the nested-caller situation every patch
+/// kernel is in) and return its result. The outer range is wide enough that
+/// rayon actually splits the job onto the pool — a one-element `par_iter` can
+/// be run inline on the (non-worker) calling thread.
+fn on_rayon_worker<T: Send>(f: impl Fn() -> T + Sync + Send) -> T {
+    use rayon::prelude::*;
+    let mut out: Vec<T> = (0..64usize)
+        .into_par_iter()
+        .map(|_| {
+            assert!(
+                rayon::current_thread_index().is_some(),
+                "test helper must run inside the rayon pool"
+            );
+            f()
+        })
+        .collect();
+    out.pop().expect("one result")
+}
+
+#[test]
+fn parallelize_rows_needs_both_size_and_idle_parallelism() {
+    // Small destination: never worth the scaffolding, in or out of the pool.
+    assert!(!parallelize_rows(PAR_MIN_PIXELS));
+    assert!(!on_rayon_worker(|| parallelize_rows(PAR_MIN_PIXELS)));
+    // Large destination: parallel from a plain caller, serial from a rayon
+    // worker (the pool is already saturated by the outer loop — this is the
+    // localization cache tile's situation, 48x48 = 2304 px).
+    assert!(parallelize_rows(PAR_MIN_PIXELS + 1));
+    assert!(!on_rayon_worker(|| parallelize_rows(PAR_MIN_PIXELS + 1)));
+    assert!(!on_rayon_worker(|| parallelize_rows(48 * 48)));
+}
+
+#[test]
+fn serial_and_parallel_paths_are_bit_identical() {
+    // A destination comfortably over PAR_MIN_PIXELS so the plain-caller path
+    // really does go parallel, with a non-trivial (distorted) warp so the
+    // Jacobians and SVD are not the identity everywhere.
+    let src = simple_radial(96, 64, 80.0, -0.2);
+    let dst = pinhole(96, 64, 80.0);
+    assert!(parallelize_rows(96 * 64), "test needs the parallel path");
+
+    let build = || {
+        let mut m = WarpMap::from_cameras(&src, &dst);
+        m.compute_svd();
+        let mut j = WarpMap::from_cameras(&src, &dst);
+        j.compute_jacobians();
+        let svd = m.svd().expect("computed");
+        (
+            m.data.clone(),
+            svd.sigma_major.clone(),
+            svd.sigma_minor.clone(),
+            svd.major_dir.clone(),
+            m.jacobians.clone().expect("svd populates jacobians"),
+            j.jacobians.clone().expect("computed"),
+        )
+    };
+
+    let par = build();
+    let ser = on_rayon_worker(build);
+    // Bit-identical: the parallel paths are row-ordered map/reduces, so
+    // switching execution strategy cannot change a single float.
+    assert_eq!(par.0, ser.0, "warp coords");
+    assert_eq!(par.1, ser.1, "sigma_major");
+    assert_eq!(par.2, ser.2, "sigma_minor");
+    assert_eq!(par.3, ser.3, "major_dir");
+    assert_eq!(par.4, ser.4, "jacobians (via compute_svd)");
+    assert_eq!(par.5, ser.5, "jacobians (via compute_jacobians)");
+}

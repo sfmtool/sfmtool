@@ -48,6 +48,56 @@ pub struct WarpMap {
 /// than the row work itself; full-image warps stay parallel.
 pub(crate) const PAR_MIN_PIXELS: usize = 2048;
 
+/// Whether a row loop over a `pixels`-pixel destination should be handed to
+/// rayon. Two independent conditions, both necessary:
+///
+/// 1. **Enough work to amortize the scaffolding** — `pixels > PAR_MIN_PIXELS`.
+/// 2. **Idle parallelism to exploit** — the caller is not already running on a
+///    rayon worker thread. Every patch kernel (normal refinement, keypoint
+///    localization, sub-pixel refinement, view selection) renders its tiles
+///    from inside an already-saturated `par_iter` over patches, so a nested
+///    `par_iter` over the tile's ~R-long rows contends for the very pool it
+///    runs in rather than adding throughput. The pixel threshold alone does not
+///    catch this: the localizer's search cache is `R + 4·search` on a side
+///    (`48×48 = 2304` px at the production defaults), just over the cutoff, and
+///    the nested split cost `15.2 ms` per `compute_svd` call against `~0.12 ms`
+///    of actual serial work — a 125× per-pixel penalty over the identical
+///    closed-form 2×2 SVD run serially by `normal_refine`'s smaller tiles.
+///
+/// Purely an execution-strategy switch: every parallel path here is a
+/// row-ordered map/reduce, so serial and parallel results are bit-identical
+/// (asserted by `serial_and_parallel_paths_are_bit_identical` in `tests`).
+pub(crate) fn parallelize_rows(pixels: usize) -> bool {
+    pixels > PAR_MIN_PIXELS && rayon::current_thread_index().is_none()
+}
+
+/// Build the concatenated interleaved-`(x, y)` `f32` buffer of a
+/// `cols × rows` warp map by invoking `fill_row(row, row_slice)` per
+/// destination row (each slice `2 · cols` long), serially or via rayon per
+/// [`parallelize_rows`]. Rows are emitted in index order either way, so the two
+/// paths produce bit-identical buffers.
+fn build_rows(cols: u32, rows: u32, fill_row: impl Fn(u32, &mut [f32]) + Sync) -> Vec<f32> {
+    let row_len = 2 * cols as usize;
+    if !parallelize_rows(cols as usize * rows as usize) {
+        let mut data = vec![0.0f32; row_len * rows as usize];
+        if row_len > 0 {
+            for (row, row_data) in data.chunks_exact_mut(row_len).enumerate() {
+                fill_row(row as u32, row_data);
+            }
+        }
+        data
+    } else {
+        (0..rows)
+            .into_par_iter()
+            .flat_map(|row| {
+                let mut row_data = vec![0.0f32; row_len];
+                fill_row(row, &mut row_data);
+                row_data
+            })
+            .collect()
+    }
+}
+
 /// Singular value decomposition of the 2x2 Jacobian at each warp map pixel.
 ///
 /// For each pixel the Jacobian of the warp is decomposed as `J = U * S * V^T`
@@ -106,11 +156,8 @@ impl WarpMap {
         let use_ray_path = src_camera.model.needs_ray_path() || dst_camera.model.needs_ray_path();
 
         // Each row produces 2 * dst_w f32 values.
-        let row_len = 2 * dst_w as usize;
-        let data: Vec<f32> = (0..dst_h)
-            .into_par_iter()
-            .flat_map(|row| {
-                let mut row_data = vec![0.0f32; row_len];
+        let data: Vec<f32> = build_rows(dst_w, dst_h, |row, row_data| {
+            {
                 let v = row as f64 + 0.5;
                 for col in 0..dst_w {
                     let u = col as f64 + 0.5;
@@ -136,9 +183,8 @@ impl WarpMap {
                     row_data[idx] = sx as f32;
                     row_data[idx + 1] = sy as f32;
                 }
-                row_data
-            })
-            .collect();
+            }
+        });
 
         WarpMap {
             width: dst_w,
@@ -230,42 +276,35 @@ impl WarpMap {
         let dst_h = dst_camera.height;
         let src_w = src_camera.width as f64;
         let src_h = src_camera.height as f64;
-        let row_len = 2 * dst_w as usize;
+        let data: Vec<f32> = build_rows(dst_w, dst_h, |row, row_data| {
+            let v = row as f64 + 0.5;
+            for col in 0..dst_w {
+                let u = col as f64 + 0.5;
+                let d_dst = dst_camera.pixel_to_ray(u, v);
+                let d_dst_vec = Vector3::new(d_dst[0], d_dst[1], d_dst[2]);
 
-        let data: Vec<f32> = (0..dst_h)
-            .into_par_iter()
-            .flat_map(|row| {
-                let mut row_data = vec![0.0f32; row_len];
-                let v = row as f64 + 0.5;
-                for col in 0..dst_w {
-                    let u = col as f64 + 0.5;
-                    let d_dst = dst_camera.pixel_to_ray(u, v);
-                    let d_dst_vec = Vector3::new(d_dst[0], d_dst[1], d_dst[2]);
+                let p_src_vec = match t_sd {
+                    Some(t) => r_sd * (depth * d_dst_vec) + t,
+                    None => r_sd * d_dst_vec,
+                };
+                let ray_src = [p_src_vec.x, p_src_vec.y, p_src_vec.z];
 
-                    let p_src_vec = match t_sd {
-                        Some(t) => r_sd * (depth * d_dst_vec) + t,
-                        None => r_sd * d_dst_vec,
-                    };
-                    let ray_src = [p_src_vec.x, p_src_vec.y, p_src_vec.z];
+                let (sx, sy) = match src_camera.ray_to_pixel(ray_src) {
+                    Some((px, py)) => (px, py),
+                    None => (f64::NAN, f64::NAN),
+                };
 
-                    let (sx, sy) = match src_camera.ray_to_pixel(ray_src) {
-                        Some((px, py)) => (px, py),
-                        None => (f64::NAN, f64::NAN),
-                    };
+                let (sx, sy) = if sx >= 0.0 && sy >= 0.0 && sx < src_w && sy < src_h {
+                    (sx, sy)
+                } else {
+                    (f64::NAN, f64::NAN)
+                };
 
-                    let (sx, sy) = if sx >= 0.0 && sy >= 0.0 && sx < src_w && sy < src_h {
-                        (sx, sy)
-                    } else {
-                        (f64::NAN, f64::NAN)
-                    };
-
-                    let idx = 2 * col as usize;
-                    row_data[idx] = sx as f32;
-                    row_data[idx + 1] = sy as f32;
-                }
-                row_data
-            })
-            .collect();
+                let idx = 2 * col as usize;
+                row_data[idx] = sx as f32;
+                row_data[idx + 1] = sy as f32;
+            }
+        });
 
         WarpMap {
             width: dst_w,
@@ -446,7 +485,7 @@ impl WarpMap {
             (j, s_maj, s_min, dx, dy)
         };
 
-        let (sigma_major, sigma_minor, major_dir, jacobians) = if n <= PAR_MIN_PIXELS {
+        let (sigma_major, sigma_minor, major_dir, jacobians) = if !parallelize_rows(n) {
             let mut sigma_major = Vec::with_capacity(n);
             let mut sigma_minor = Vec::with_capacity(n);
             let mut major_dir = Vec::with_capacity(2 * n);
@@ -522,7 +561,7 @@ impl WarpMap {
         let h = self.height as usize;
         let n = w * h;
 
-        let jacobians: Vec<f32> = if n <= PAR_MIN_PIXELS {
+        let jacobians: Vec<f32> = if !parallelize_rows(n) {
             let mut j = Vec::with_capacity(4 * n);
             for row in 0..h {
                 for col in 0..w {
