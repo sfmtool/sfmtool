@@ -48,7 +48,9 @@ uncapped implementation.
 New fields on `KeypointLocalizeParams` (mirrored as PyO3 kwargs):
 
 - `basis_max_views: u32` — consensus-basis cap `K`. `0` (default) disables the
-  cap: all views congeal, exactly the current behavior.
+  cap: all views congeal, exactly the current behavior. A non-zero `K` below `2`
+  is raised to `2` — a leave-one-out consensus needs two members, and a
+  one-member basis would leave the tail nothing to register against.
 - `basis_force_track_views: bool` (default `true`) — reserve basis seats for
   the point's track views ahead of expansion candidates (they are the point's
   provenance and carry its detection keypoints). When the track alone exceeds
@@ -151,6 +153,79 @@ distribution (a smeared or arc-biased basis template shows up as depressed tail
 ZNCC on views far from the basis's viewpoints); and the downstream
 embed→size-cull→BA+refine chain's reprojection / yield / rogue-normal metrics
 for the candidate default.
+
+### Measured (2026-07-26, DnDTabletop)
+
+`sfmr/cleanup/gt-clean-01-ba.sfmr`, 337 images / 132,965 points, `--patch-size
+5`, `resolution 24`, default `PlusDescent`. `select_views` produces a mean of
+51.7 views/point, p99 236, max 323 — the high-`V` case the cap targets. The
+moderate-`V` control is still outstanding; the `seoul_bull` fixture stands in
+only as a `V ≤ K` no-op check in the test suite.
+
+**Cost** — `SFMTOOL_PROFILE=1` on a 12,000-point subset. Thread-summed CPU
+seconds carry ±20 % run-to-run variance from memory-bandwidth contention on a
+shared machine, so the exact work counters (which are deterministic) are the
+reliable signal; `render px` is `Σ` cache area, `basis · (R+4m)² + tail ·
+(R+2m)²`.
+
+| arm | `localize_total` | `loo_gram` + `loo_template` | `render_context` | `search_shift` | searches | render px |
+| --- | --- | --- | --- | --- | --- | --- |
+| `K=0` | 1199.0 s | 519.8 s (43.3 %) | 435.7 s | 189.7 s | 2,130,550 | 1.410 G |
+| `K=8` | 436.1 s | 7.3 s (1.7 %) | 303.6 s | 113.5 s | 871,226 | 0.888 G |
+| `K=12` | 440.0 s | 13.7 s (3.1 %) | 298.4 s | 113.6 s | 989,488 | 0.931 G |
+| `K=16` | 360.1 s | 18.2 s (5.1 %) | 238.1 s | 91.0 s | 1,088,657 | 0.969 G |
+| `K=12`, no force-track | 450.6 s | 14.6 s | 304.1 s | 116.0 s | 992,500 | 0.931 G |
+| `K=12`, `Strided` | 467.3 s | 14.2 s | 316.3 s | 120.4 s | 969,964 | 0.931 G |
+
+The quadratic terms do what the cap is for: 43.3 % of the pass at `K=0`, 2–5 %
+capped. What remains is per-view and barely depends on `K` — every view still
+renders a cache (the cap only shrinks the tail's tile from `(R+4m)²` to
+`(R+2m)²`, a 1.5× total-area cut) and still runs at least one search. So the
+whole `K = 8…16` band lands within measurement noise of each other at ~2.6–3.3×
+the `K=0` pass, and pushing `K` lower buys nothing further.
+
+**Quality** — 40,000-point subset, per observation against the `K=0` arm,
+matched on `(point, image)`. Churn is the symmetric difference of the kept
+observation sets over `K=0`'s count. `zncc` columns are the reported per-view
+ZNCC medians for basis and tail members.
+
+| arm | observations | churn | Δ median | Δ p99 | Δ > 1 px | basis zncc | tail zncc (med / p10) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `K=0` | 1,307,430 | — | — | — | — | 0.952 | — |
+| `K=8` | 1,366,334 | 29.6 % | 0.852 px | 3.42 px | 41.7 % | 0.972 | 0.919 / 0.781 |
+| `K=12` | 1,366,677 | 27.5 % | 0.783 px | 3.31 px | 37.9 % | 0.970 | 0.918 / 0.781 |
+| `K=16` | 1,367,075 | 25.6 % | 0.722 px | 3.22 px | 34.4 % | 0.968 | 0.918 / 0.782 |
+| `K=12`, no force-track | 1,370,195 | 27.1 % | 0.770 px | 3.29 px | 37.0 % | 0.970 | 0.919 / 0.782 |
+| `K=12`, `Strided` | 1,363,888 | 26.1 % | 0.734 px | 3.24 px | 35.0 % | 0.967 | 0.926 / 0.791 |
+
+Readings:
+
+- The cap is **not** a small perturbation. Half the observations move more than
+  ~0.7 px and a quarter of the kept set churns; divergence from `K=0` shrinks
+  monotonically as `K` grows, as it must. The observations `K=0` keeps and a
+  capped arm drops score the same median ZNCC in `K=0` (0.952 vs 0.952) as the
+  ones it keeps, so the churn is not a targeted cull of weak observations.
+- Capped arms keep **more** observations (+4.5 %): a tail view faces the
+  relative-ZNCC gate once against the finished template instead of surviving a
+  multi-round cull whose consensus (and therefore whose bar) moves under it.
+- Tail ZNCC (median 0.918) sits below basis ZNCC (0.970) and below `K=0`'s
+  all-view 0.952, but the three are not the same measurement: `K=0` scores each
+  view against a leave-one-out consensus of ~50 views, the tail against a sharp
+  12-view template, and a sharper reference scores lower for the same fit. The
+  tail p10 (0.78) shows no collapsed lower tail — no evidence of a smeared or
+  arc-biased template.
+- `basis_force_track_views` is **not** load-bearing here: with and without it,
+  every metric agrees to within 0.5 %. It is kept on for provenance, not for a
+  measured gain.
+- `Strided` is marginally the best of the `K=12` variants on divergence
+  (26.1 % churn, 0.734 px) and tail ZNCC (0.926) — the top-score band does
+  contain redundant near-duplicate frames — but the margin is inside the
+  `K=12` → `K=16` gap, so raising `K` is the simpler lever.
+
+The pipeline default therefore stays `0`. The keypoint divergence is large
+enough that adopting a non-zero default needs the downstream
+embed→size-cull→BA+refine evidence this section calls for, which reprojection
+error and yield can settle but these localizer-internal metrics cannot.
 
 ## Tests
 
