@@ -116,12 +116,15 @@ pub struct KeypointLocalizeParams {
     pub search_strategy: SearchStrategy,
     /// Consensus-basis cap `K`: at most this many views congeal against each
     /// other; every remaining view registers **once** against the finished
-    /// basis consensus instead of joining it. `0` (the default) disables the
-    /// cap — all views congeal, bit-identically to the uncapped path, which is
-    /// also what a point with `V ≤ K` views gets. Values below `2` are raised
-    /// to `2` (a leave-one-out consensus needs two members). Every observation
-    /// is still localized and reported; only the consensus *membership*
-    /// shrinks. See `specs/core/keypoint-localization-consensus-basis.md`.
+    /// basis consensus instead of joining it. The default is `8`; `0` disables
+    /// the cap — all views congeal, bit-identically to the uncapped path,
+    /// which is also what a point with `V ≤ K` views gets. Values below `2`
+    /// are raised to `2` (a leave-one-out consensus needs two members). Every
+    /// observation is still localized and reported; only the consensus
+    /// *membership* shrinks. Callers that supply no per-view ranking scores
+    /// get the grazing-angle basis pick — pass scores (the `select_views`
+    /// ZNCC) for the validated ranking.
+    /// See `specs/core/keypoint-localization-consensus-basis.md`.
     pub basis_max_views: u32,
     /// Reserve basis seats for the point's track views ahead of the expansion
     /// candidates (they are the point's provenance and carry its detection
@@ -149,7 +152,7 @@ impl Default for KeypointLocalizeParams {
             convergence_px: 0.05,
             search_resolution_multiplier: 1.0,
             search_strategy: SearchStrategy::PlusDescent,
-            basis_max_views: 0,
+            basis_max_views: 8,
             basis_force_track_views: true,
             basis_pick: BasisPick::TopScore,
         }

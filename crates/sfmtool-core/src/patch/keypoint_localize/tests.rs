@@ -184,6 +184,9 @@ fn infinity_patch() -> OrientedPatch {
 fn params() -> KeypointLocalizeParams {
     KeypointLocalizeParams {
         resolution: RES,
+        // The congealing-behavior tests are the uncapped reference; the cap
+        // (production default 8) is exercised by the basis tests' `capped(k)`.
+        basis_max_views: 0,
         ..KeypointLocalizeParams::default()
     }
 }

@@ -5,12 +5,11 @@
 > `keypoint_localize/basis.rs` (the ranking pick), exposed as
 > `PatchCloud.localize_keypoints(basis_max_views=…)`,
 > `sfm embed-patches --localize-basis-views` and
-> `sfm xform --localize-keypoints basis_max_views=…`. The Rust-layer (and
-> `xform`) default is `0` = off (bit-identical current behavior); the
-> **`embed-patches` pipeline default is `8`** (2026-07-27, adopted from the
-> A/B + downstream ladder evidence below — roughly halves embed wall; pass
-> `--localize-basis-views 0` for the uncapped, cleanest-error path, preferred
-> for ground-truth cleanup).
+> `sfm xform --localize-keypoints basis_max_views=…`. The default is **`8` at
+> every layer** (2026-07-27, adopted from the A/B + downstream ladder evidence
+> below — roughly halves embed wall; a point with `V ≤ 8` views takes the
+> uncapped path unchanged). Pass `0` for the uncapped, cleanest-error path,
+> preferred for ground-truth cleanup.
 
 ## Motivation
 
@@ -54,7 +53,7 @@ so a point with 20 raw views of which 10 survive the filters is uncapped at
 
 New fields on `KeypointLocalizeParams` (mirrored as PyO3 kwargs):
 
-- `basis_max_views: u32` — consensus-basis cap `K`. `0` (default) disables the
+- `basis_max_views: u32` — consensus-basis cap `K`, default `8`. `0` disables the
   cap: all views congeal, exactly the current behavior. A non-zero `K` below `2`
   is raised to `2` — a leave-one-out consensus needs two members, and a
   one-member basis would leave the tail nothing to register against.
@@ -161,8 +160,9 @@ first).
 3. **Python pipeline** — `_embed_patches.py`: keep `selections[i]["scores"]`
    and the track-view counts (currently discarded) and pass both to
    `localize_keypoints`; `embed_patches(localize_basis_views=…)`.
-4. **CLI** — `sfm embed-patches --localize-basis-views N` (default `0` =
-   uncapped) and `sfm xform --localize-keypoints` `basis_max_views=N` option.
+4. **CLI** — `sfm embed-patches --localize-basis-views N` and
+   `sfm xform --localize-keypoints` `basis_max_views=N` (both default `8`;
+   `0` = uncapped).
    Update `specs/cli/embed-patches-command.md` and the xform spec row.
 5. **Cross-links** — `specs/core/patch-keypoint-localization.md` and
    `specs/core/keypoint-localization-search-cache.md` reference this file where
@@ -334,7 +334,7 @@ Readings:
 - Between the capped arms, `K=16` beats `K=8` on every downstream metric
   (small margins) — the sharper-template internal reading of small `K` did
   not cash out downstream on this capture.
-- Decision (2026-07-27): the `embed-patches` pipeline default is **`K=8`** —
+- Decision (2026-07-27): the default is **`K=8`** at every layer —
   the small-`K` end of the validated band, taking the halved wall and the
   extra yield at the measured +3–4 % median-reproj cost. The `K=8` / `K=16`
   downstream margins (1.365 vs 1.351 med, 4.25 vs 4.08 % rogue on the common

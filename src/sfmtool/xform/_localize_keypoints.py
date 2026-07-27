@@ -51,10 +51,12 @@ class LocalizeKeypointsTransform:
     ``--to-embedded-patches``.
 
     ``basis_max_views`` caps the consensus basis (see
-    ``specs/core/keypoint-localization-consensus-basis.md``); ``0`` (default)
-    leaves the uncapped path. This surface runs over each point's own track and
-    supplies no per-view appearance scores, so when the cap bites the basis pick
-    ranks by grazing angle (most frontal first).
+    ``specs/core/keypoint-localization-consensus-basis.md``); the default is
+    ``8``, and ``0`` gives the uncapped path (cleanest error metrics). This
+    surface runs over each point's own track and supplies no per-view
+    appearance scores, so when the cap bites the basis pick ranks by grazing
+    angle (most frontal first). Tracks of ``<= 8`` views — the typical case for
+    an un-expanded reconstruction — take the uncapped path either way.
     """
 
     # Precondition checked per-step by `apply_transforms` (see `_apply.py`).
@@ -79,7 +81,7 @@ class LocalizeKeypointsTransform:
         convergence_px: float = 0.05,
         search_resolution_multiplier: float = 1.0,
         search_strategy: str = "plus_descent",
-        basis_max_views: int = 0,
+        basis_max_views: int = 8,
     ):
         if min_views < 1:
             raise ValueError(f"min_views must be >= 1, got {min_views}")

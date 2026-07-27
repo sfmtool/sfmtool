@@ -111,7 +111,7 @@ threshold consumed by `compact_to_embedded_patches`.
 | `convergence_px`               | `0.05`          | `localize_keypoints` (round-level stop, patch-grid px) |
 | `search_resolution_multiplier` | `1.0`           | `localize_keypoints` (supersampled search grid; `> 1` resolves sub-pixel offsets at ~m² cost) |
 | `search_strategy`              | `plus_descent`  | `localize_keypoints` (`plus_descent`/`exhaustive`) |
-| `basis_max_views`              | `0`             | `localize_keypoints` (consensus-basis cap `K`; `0` congeals all views. This surface runs over each point's own track and supplies no per-view appearance scores, so a biting cap ranks the basis by grazing angle — see [`specs/core/keypoint-localization-consensus-basis.md`](../core/keypoint-localization-consensus-basis.md)) |
+| `basis_max_views`              | `8`             | `localize_keypoints` (consensus-basis cap `K`; `0` congeals all views — the cleanest error metrics. A track of `≤ K` views takes the uncapped path either way. This surface runs over each point's own track and supplies no per-view appearance scores, so a biting cap ranks the basis by grazing angle — see [`specs/core/keypoint-localization-consensus-basis.md`](../core/keypoint-localization-consensus-basis.md)) |
 
 Unknown keys, malformed `key=value` tokens (no `=`, empty key), duplicate keys,
 or unparseable values raise `click.UsageError`; range/enum validation lives in

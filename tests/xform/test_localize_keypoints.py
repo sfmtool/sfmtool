@@ -373,8 +373,8 @@ def test_localize_keypoints_rejects_sift_files(seoul_bull_workspace):
 
 
 def test_parse_basis_max_views():
-    """``basis_max_views`` parses as an int and defaults to the uncapped 0."""
-    assert parse_localize_keypoints_params("").basis_max_views == 0
+    """``basis_max_views`` parses as an int and defaults to the pipeline 8."""
+    assert parse_localize_keypoints_params("").basis_max_views == 8
     t = parse_localize_keypoints_params("basis_max_views=6")
     assert t.basis_max_views == 6
     assert isinstance(t.basis_max_views, int)

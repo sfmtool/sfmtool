@@ -365,7 +365,8 @@ def test_select_views_reports_the_track_view_count(seoul_bull_workspace: Path):
 
 def test_localize_keypoints_basis_cap_off_matches_uncapped(seoul_bull_workspace: Path):
     """``basis_max_views=0`` (and a cap above the view count) is the uncapped
-    path, byte-for-byte, even with scores supplied."""
+    path, byte-for-byte, even with scores supplied. The default is the capped
+    ``8``, so the uncapped reference passes ``basis_max_views=0`` explicitly."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = _load_images(recon)
     cloud = PatchCloud.from_reconstruction(
@@ -383,7 +384,7 @@ def test_localize_keypoints_basis_cap_off_matches_uncapped(seoul_bull_workspace:
     common = dict(
         view_sets=view_sets, point_indexes=sample, resolution=12, max_shift_px=3.0
     )
-    base = cloud.localize_keypoints(recon, images, **common)
+    base = cloud.localize_keypoints(recon, images, basis_max_views=0, **common)
     off = cloud.localize_keypoints(
         recon,
         images,

@@ -69,10 +69,12 @@ impl PyPatchCloud {
     ///         ``specs/core/keypoint-localization-search-cache.md``.
     ///     basis_max_views: Consensus-basis cap ``K`` — at most this many views
     ///         congeal against each other; every remaining view registers **once**
-    ///         against the finished basis template. ``0`` (default) disables the
-    ///         cap (bit-identical to the uncapped path, as is any point with
+    ///         against the finished basis template. Default ``8``; ``0`` disables
+    ///         the cap (bit-identical to the uncapped path, as is any point with
     ///         ``V <= K``). Every observation is still localized and reported; only
-    ///         the consensus membership shrinks. See
+    ///         the consensus membership shrinks. Pass ``view_scores`` for the
+    ///         validated ZNCC ranking — without them the basis pick falls back to
+    ///         grazing angle. See
     ///         ``specs/core/keypoint-localization-consensus-basis.md``.
     ///     basis_force_track_views: Reserve basis seats for the point's track views
     ///         (the leading ``track_view_counts`` entries of its view set) ahead of
@@ -106,7 +108,7 @@ impl PyPatchCloud {
         min_relative_zncc=0.7, min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear_mip", robust_iters=3, convergence_px=0.05,
         point_indexes=None, search_resolution_multiplier=1.0,
-        search_strategy="plus_descent", basis_max_views=0, basis_force_track_views=true,
+        search_strategy="plus_descent", basis_max_views=8, basis_force_track_views=true,
         basis_pick="top_score", view_scores=None, track_view_counts=None, progress=None
     ))]
     #[allow(clippy::too_many_arguments)]

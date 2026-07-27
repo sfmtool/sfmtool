@@ -500,8 +500,8 @@ pub fn localize_patch_keypoints(
 /// [`localize_patch_keypoints`] with the caller's per-view ranking evidence for
 /// the **consensus-basis cap** (`specs/core/keypoint-localization-consensus-basis.md`).
 ///
-/// With [`KeypointLocalizeParams::basis_max_views`] at `0` (the default) — or a
-/// view set no larger than the cap — this is bit-identical to
+/// With [`KeypointLocalizeParams::basis_max_views`] at `0` — or a
+/// view set no larger than the cap (the default `8`) — this is bit-identical to
 /// [`localize_patch_keypoints`] and `evidence` is unread. Otherwise `K` views
 /// are picked as the consensus basis and congeal exactly as before, and every
 /// remaining view registers once against the finished basis template.
