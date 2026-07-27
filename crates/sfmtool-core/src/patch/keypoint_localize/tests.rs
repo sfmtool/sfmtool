@@ -2034,7 +2034,7 @@ fn empty_view_scores_fall_back_to_the_grazing_rank() {
     let batch = localize_patch_cloud_keypoints(
         &cloud,
         &views,
-        &[set.clone()],
+        std::slice::from_ref(&set),
         None,
         Some(&inputs),
         &capped(3),
