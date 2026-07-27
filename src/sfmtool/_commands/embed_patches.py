@@ -199,6 +199,20 @@ from .._cli_utils import timed_command
         "risk. See specs/core/keypoint-localization-search-cache.md."
     ),
 )
+@click.option(
+    "--sampler",
+    type=click.Choice(["bilinear", "bilinear_mip", "anisotropic"]),
+    default="bilinear_mip",
+    show_default=True,
+    help=(
+        "Pyramid sampler for every photometric kernel in the pipeline (normal "
+        "refinement, view selection, keypoint localization, sub-pixel "
+        "refinement). 'bilinear_mip' taps the mip level nearest the warp's "
+        "compression, bounding aliasing on cross-scale views at ~bilinear "
+        "cost; 'anisotropic' also resolves oblique footprints at 1.6-3x the "
+        "cost; 'bilinear' taps the full-resolution level only."
+    ),
+)
 def embed_patches_command(
     input_path,
     output_path,
@@ -217,6 +231,7 @@ def embed_patches_command(
     refine_max_views,
     max_keypoint_uncertainty,
     localize_search_strategy,
+    sampler,
 ):
     """Convert a sift_files reconstruction to embedded_patches.
 
@@ -325,6 +340,7 @@ def embed_patches_command(
             max_refine_views=refine_max_views,
             max_keypoint_uncertainty=max_keypoint_uncertainty,
             localize_search_strategy=localize_search_strategy,
+            sampler=sampler,
             progress=click.echo,
         )
 

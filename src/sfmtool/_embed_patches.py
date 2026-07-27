@@ -34,6 +34,7 @@ def _refine_subpixel(
     *,
     sweeps: int,
     resolution: int,
+    sampler: str = "bilinear_mip",
     render_bitmaps: bool = False,
     progress: Any = None,
 ) -> tuple[list[dict[str, Any]], np.ndarray | None, np.ndarray | None]:
@@ -97,6 +98,7 @@ def _refine_subpixel(
         starting_keypoints=seeds,
         point_indexes=list(view_sets.keys()),
         resolution=resolution,
+        sampler=sampler,
         progress=progress,
         **kwargs,
     )
@@ -348,6 +350,7 @@ def embed_patches(
     max_refine_views: int = 8,
     max_keypoint_uncertainty: float = 0.35,
     localize_search_strategy: str = "plus_descent",
+    sampler: str = "bilinear_mip",
     progress: Any = None,
 ) -> SfmrReconstruction:
     """Convert a ``sift_files`` reconstruction to ``embedded_patches``, running the
@@ -387,6 +390,10 @@ def embed_patches(
         min_relative_zncc, max_shift_px, min_views, max_iters, search: The pipeline
             knobs documented in ``specs/cli/embed-patches-command.md``.
         resolution: The ``R × R`` patch grid the kernels render/score on.
+        sampler: Pyramid sampler for every photometric kernel in the pipeline
+            (normal refinement, view selection, the discrete localizer, and the
+            sub-pixel refiner): ``"bilinear_mip"`` (default), ``"bilinear"``, or
+            ``"anisotropic"``.
         search_resolution_multiplier: ``m`` for the discrete cross-view search in
             :meth:`PatchCloud.localize_keypoints` (step 3). ``1.0`` (default) is the
             no-op; ``> 1`` runs the supersampled grid (cost grows ~``m²``) — see
@@ -497,6 +504,7 @@ def embed_patches(
             use_stored_keypoints=True,
             obliquity_weight_power=obliquity_weight_power,
             fronto_prior_weight=fronto_prior_weight,
+            sampler=sampler,
             progress=counter,
         )
 
@@ -511,6 +519,7 @@ def embed_patches(
             pyramids,
             min_relative_zncc=min_relative_zncc,
             resolution=resolution,
+            sampler=sampler,
             progress=counter,
         )
     view_sets = {
@@ -536,6 +545,7 @@ def embed_patches(
             resolution=resolution,
             search_resolution_multiplier=search_resolution_multiplier,
             search_strategy=localize_search_strategy,
+            sampler=sampler,
             progress=counter,
         )
 
@@ -562,6 +572,7 @@ def embed_patches(
             localizations,
             sweeps=subpixel,
             resolution=resolution,
+            sampler=sampler,
             render_bitmaps=rounds == 1 or bool(cull_localizability),
             progress=counter,
         )
@@ -636,6 +647,7 @@ def embed_patches(
                 use_stored_keypoints=True,
                 obliquity_weight_power=obliquity_weight_power,
                 fronto_prior_weight=fronto_prior_weight,
+                sampler=sampler,
                 # The round-2+ view set is the select_views-expanded one; the
                 # D-optimal cap (0 = off) trims the refinement basis only —
                 # membership (and the fused bitmaps) still span every view.
@@ -670,6 +682,7 @@ def embed_patches(
                 base_loc,
                 sweeps=subpixel,
                 resolution=resolution,
+                sampler=sampler,
                 render_bitmaps=r == rounds,
                 progress=counter,
             )
