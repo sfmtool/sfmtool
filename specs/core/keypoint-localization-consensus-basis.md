@@ -5,9 +5,12 @@
 > `keypoint_localize/basis.rs` (the ranking pick), exposed as
 > `PatchCloud.localize_keypoints(basis_max_views=…)`,
 > `sfm embed-patches --localize-basis-views` and
-> `sfm xform --localize-keypoints basis_max_views=…`. The Rust-layer **and**
-> pipeline defaults are `0` = off (bit-identical current behavior); flipping the
-> pipeline default is a separate decision from the A/B validation below.
+> `sfm xform --localize-keypoints basis_max_views=…`. The Rust-layer (and
+> `xform`) default is `0` = off (bit-identical current behavior); the
+> **`embed-patches` pipeline default is `8`** (2026-07-27, adopted from the
+> A/B + downstream ladder evidence below — roughly halves embed wall; pass
+> `--localize-basis-views 0` for the uncapped, cleanest-error path, preferred
+> for ground-truth cleanup).
 
 ## Motivation
 
@@ -290,10 +293,9 @@ Readings:
   small-`K` and large-`K` ends of the band is therefore delegated entirely to
   the downstream comparison below, on arms `K ∈ {0, 8, 16}`.
 
-The pipeline default therefore stays `0`. The keypoint divergence is large
-enough that adopting a non-zero default needs the downstream
-embed→size-cull→BA+refine evidence this section calls for, which reprojection
-error and yield can settle but these localizer-internal metrics cannot.
+These localizer-internal metrics cannot by themselves justify a default; the
+downstream embed→size-cull→BA+refine evidence below is what a default flip
+rests on.
 
 ### Downstream ladder evidence (recorded 2026-07-27)
 
@@ -332,11 +334,15 @@ Readings:
 - Between the capped arms, `K=16` beats `K=8` on every downstream metric
   (small margins) — the sharper-template internal reading of small `K` did
   not cash out downstream on this capture.
-- Decision guidance: `K=0` remains the choice where error metrics are the
-  product (e.g. ground-truth cleanup ladders); `K=16` is the evidence-backed
-  cap where wall time or yield matter. The pipeline default stays `0` until
-  the tail-bar experiment separates gate composition from keypoint quality,
-  and the moderate-`V` control remains outstanding.
+- Decision (2026-07-27): the `embed-patches` pipeline default is **`K=8`** —
+  the small-`K` end of the validated band, taking the halved wall and the
+  extra yield at the measured +3–4 % median-reproj cost. The `K=8` / `K=16`
+  downstream margins (1.365 vs 1.351 med, 4.25 vs 4.08 % rogue on the common
+  subset) are small; `K=8` congeals the sharpest template and does the least
+  work. `K=0` (`--localize-basis-views 0`) remains the choice where error
+  metrics are the product — e.g. ground-truth cleanup ladders. Still
+  outstanding: the tail-bar experiment separating gate composition from
+  keypoint quality, and the moderate-`V` control.
 
 ## Tests
 

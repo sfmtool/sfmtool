@@ -203,7 +203,7 @@ from .._cli_utils import timed_command
     "--localize-basis-views",
     "localize_basis_views",
     type=click.IntRange(min=0),
-    default=0,
+    default=8,
     show_default=True,
     help=(
         "Cap the keypoint localizer's consensus basis at N views per point: N "
@@ -212,7 +212,8 @@ from .._cli_utils import timed_command
         "finished basis template. Bounds the O(V^2) consensus terms on the "
         "expanded view sets, whose tail reaches hundreds of views on a long "
         "capture. Every observation is still localized and reported — only the "
-        "consensus membership shrinks. 0 (default) congeals all views. See "
+        "consensus membership shrinks. 0 congeals all views (the cleanest error "
+        "metrics; prefer it for ground-truth cleanup). See "
         "specs/core/keypoint-localization-consensus-basis.md."
     ),
 )

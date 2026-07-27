@@ -351,7 +351,7 @@ def embed_patches(
     max_refine_views: int = 8,
     max_keypoint_uncertainty: float = 0.35,
     localize_search_strategy: str = "plus_descent",
-    localize_basis_views: int = 0,
+    localize_basis_views: int = 8,
     sampler: str = "bilinear_mip",
     progress: Any = None,
 ) -> SfmrReconstruction:
@@ -466,7 +466,9 @@ def embed_patches(
             whose tail reaches hundreds of views on a long capture. Lossless for
             membership in the sense the normal-refinement cap is: every
             observation is still localized and reported — only the consensus
-            *membership* shrinks. ``0`` (the default) congeals all views.
+            *membership* shrinks. The default is ``8`` (roughly halves embed
+            wall on expanded view sets); ``0`` congeals all views — the
+            cleanest error metrics, preferred for ground-truth cleanup.
         progress: Optional callable (e.g. ``click.echo``) that receives a per-round
             summary line reporting the mean normal change (deg) and mean keypoint
             shift (px); when given, those metrics are computed each round.
