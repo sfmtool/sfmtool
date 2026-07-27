@@ -187,8 +187,9 @@ Per cluster:
 2. **Seed.** For each other member, seed the warp from the SIFT affine
    shapes: `M₀ = A_member · A_ref⁻¹`, translation from the detections.
 3. **Refine.** Hill-climb Gaussian-windowed ZNCC over a shift → similarity →
-   affine cascade (never perspective) on a template of `radius` keypoint-frame
-   units around the reference detection. No multi-view congealing pass (see
+   affine cascade (never perspective) on a template spanning `patch_size`
+   keypoint-frame units, centred on the reference detection. No multi-view
+   congealing pass (see
    findings above).
 4. **Vet.** Reject members below `min_zncc` or drifting more than
    `max_shift_px` from the seed; keep at most one member per image (best

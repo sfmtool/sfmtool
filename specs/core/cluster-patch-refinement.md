@@ -289,8 +289,11 @@ closure, thread-local by construction (the `SearchScratch` convention,
    image (sample spacing in source pixels), and divide the map by `2^ℓ`
    before sampling — the standard mip rule, preventing the aliasing the
    level-0-only prototype tolerated. (Full anisotropic footprints,
-   `remap_aniso_with_pyramid`, are a later refinement; bilinear-in-level
-   matches the other kernels' `Sampler::Bilinear` default.)
+   `remap_aniso_with_pyramid`, are a later refinement; bilinear-in-level is the
+   same single-tap-from-the-selected-level sampling the other kernels'
+   `Sampler::BilinearMip` default does, differing only in the level rule —
+   `floor(log2 s_min)` here, a pinned kernel contract, vs
+   `round(log2 sigma_major)` there.)
 5. **Per non-reference member** (in member order):
    - Same image as the reference → `DuplicateImage`, skip.
    - Seed `M₀ = A_mem · A_ref⁻¹` (f64), translation anchored at the

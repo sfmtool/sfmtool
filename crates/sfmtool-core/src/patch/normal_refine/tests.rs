@@ -656,7 +656,7 @@ fn bilinear_mip_sampler_recovers_normal_end_to_end() {
     // Same scene as `recovers_fronto_parallel_normal_from_tilted_init`, driven
     // with `Sampler::BilinearMip` (cache off, so every candidate render goes
     // through the mip sampler): the single-tap mip path must carry a full
-    // refinement to the same optimum as the default sampler.
+    // refinement to the same optimum the exact-normal fixture pins.
     let scene = Scene::new(&[
         [0.8, 0.0, 0.0],
         [-0.8, 0.0, 0.0],

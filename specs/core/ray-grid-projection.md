@@ -165,8 +165,10 @@ pixel — the rectification/undistort consumers (`_undistort_images`,
 
 ## Follow-up: channel-batched bilinear gather (`render_remap`)
 
-Profiling the post-projection state showed `render_remap` (the resample, default
-`Sampler::Bilinear`) is a pure scalar gather: instrumented over dino it sampled
+Profiling the post-projection state showed `render_remap` (the resample, then
+defaulting to `Sampler::Bilinear`; the default is now `Sampler::BilinearMip`,
+one bilinear tap from the selected pyramid level — the same gather shape) is a
+pure scalar gather: instrumented over dino it sampled
 **99.9%** of every context tile (essentially no out-of-frame waste to reclaim) at
 exactly **3.00 bilinear taps/pixel** — one `sample_bilinear_u8` call per RGB
 channel, each **recomputing** the whole corner geometry (`floor`, four `clamp`s,
@@ -183,10 +185,11 @@ value+gradient `sample_bilinear_with_grad_u8_all`. Bit-exactness is locked by
 `sample_bilinear_u8_all_matches_per_channel` and
 `sample_bilinear_with_grad_u8_all_matches_per_channel`.
 
-Counted/optimized paths: `remap_bilinear`, the anisotropic `σ_major ≤ 1` fast
-path, and the bilinear **gradient** path `remap_bilinear_with_grad_into` (the
-default sampler for keypoint-subpixel refinement). Measured on dino (instrumented,
-same taps / sampled % before and after):
+Counted/optimized paths: `remap_bilinear`, `remap_bilinear_mip`, the
+anisotropic `σ_major ≤ 1` fast path, and the bilinear **gradient** paths
+`remap_bilinear_with_grad_into` and `remap_bilinear_mip_with_grad_into` (the
+latter is the default sampler for keypoint-subpixel refinement). Measured on
+dino (instrumented, same taps / sampled % before and after):
 
 | | before | after |
 |---|--:|--:|

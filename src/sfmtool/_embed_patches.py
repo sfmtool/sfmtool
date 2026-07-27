@@ -24,6 +24,7 @@ from sfmtool._patch_compaction import compact_to_embedded_patches
 from sfmtool._progress import _poll_progress, _timed_step
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.patches import ImagePyramidSet, PatchCloud
+from sfmtool.xform._refine_normals import _SAMPLERS
 
 
 def _refine_subpixel(
@@ -461,6 +462,12 @@ def embed_patches(
     Returns:
         A new ``embedded_patches`` :class:`SfmrReconstruction`, ready to ``save()``.
     """
+    # Fail before any pyramid is built: the sampler name is threaded into six
+    # kernel calls, so an unknown one would otherwise surface deep in the run.
+    # Shares the xform surfaces' tuple so the two can't drift.
+    if sampler not in _SAMPLERS:
+        raise ValueError(f"sampler must be one of {_SAMPLERS}, got {sampler!r}")
+
     log = progress if callable(progress) else None
     half_extent = patch_size / 2.0
     cull_localizability = max_keypoint_uncertainty and max_keypoint_uncertainty > 0
