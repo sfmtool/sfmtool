@@ -153,7 +153,7 @@ def _write_cluster_matches(path, with_patches):
                 "member_zncc": np.ones(m, dtype=np.float32),
                 "member_shift_px": np.zeros(m, dtype=np.float32),
                 "member_consistency_residual": np.full(m, np.nan, dtype=np.float32),
-                "refine_options": {"radius": 4.0, "resolution": 15},
+                "refine_options": {"patch_size": 8.0, "resolution": 15},
             }
         )
     write_matches(path, data)

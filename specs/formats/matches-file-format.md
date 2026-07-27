@@ -486,7 +486,7 @@ vetting statuses and signals.
   "cluster_count": 5200,
   "member_count": 14100,
   "refine_options": {
-    "radius": 4.0,
+    "patch_size": 8.0,
     "resolution": 15,
     "min_zncc": 0.85,
     "max_shift_px": 3.0

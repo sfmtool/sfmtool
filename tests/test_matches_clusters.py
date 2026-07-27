@@ -101,7 +101,7 @@ def _cluster_patch_data() -> dict:
                 [0.02, 0.05, np.nan, np.nan, np.nan], dtype=np.float32
             ),
             "refine_options": {
-                "radius": 4.0,
+                "patch_size": 8.0,
                 "resolution": 15,
                 "min_zncc": 0.85,
                 "max_shift_px": 3.0,

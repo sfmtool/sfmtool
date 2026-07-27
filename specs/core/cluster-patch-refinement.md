@@ -527,7 +527,7 @@ category, spec to live at `specs/cli/cluster-patches-command.md`:
 
 ```
 sfm cluster-patches -i clusters.matches [-o out.matches]
-    [--radius 4.0] [--resolution 25] [--min-zncc 0.85] [--max-shift 3.0]
+    [--patch-size 8.0] [--resolution 25] [--min-zncc 0.85] [--max-shift 3.0]
     [--max-keypoint-uncertainty 0.35]
 ```
 
@@ -540,7 +540,10 @@ sfm cluster-patches -i clusters.matches [-o out.matches]
    (`read_sift`, capped at `feature_counts[i]`).
 3. Load images with cv2 in the images-section order, call
    `refine_cluster_patches`, with a progress bar via the `ProgressCounter`
-   pattern the other long kernels use.
+   pattern the other long kernels use. `--patch-size` is the **full**
+   template edge length (`embed-patches`' convention); the kernel's `radius`
+   is a half-width, so the command passes `radius = patch_size / 2` — the
+   single conversion site.
 4. Write a **new** `.matches` file: images + clusters sections copied
    verbatim, `cluster_patches` from the kernel output,
    `refine_options` = the CLI parameters, metadata updated

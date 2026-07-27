@@ -30,11 +30,16 @@ from .._cli_utils import timed_command
     help="Output .matches path (default: the input with a -patches suffix).",
 )
 @click.option(
-    "--radius",
+    "--patch-size",
+    "patch_size",
     type=click.FloatRange(min=0.0, min_open=True),
-    default=4.0,
+    default=8.0,
     show_default=True,
-    help="Template half-width, keypoint-frame units.",
+    help=(
+        "Template size — the full patch edge length (in keypoint-frame units), "
+        "halved to the kernel's template half-width and passed to "
+        "refine_cluster_patches."
+    ),
 )
 @click.option(
     "--resolution",
@@ -78,7 +83,7 @@ from .._cli_utils import timed_command
 def cluster_patches(
     input_path,
     output_path,
-    radius,
+    patch_size,
     resolution,
     min_zncc,
     max_shift,
@@ -103,7 +108,7 @@ def cluster_patches(
         _run_cluster_patches(
             Path(input_path),
             output_path,
-            radius,
+            patch_size,
             resolution,
             min_zncc,
             max_shift,
@@ -144,7 +149,7 @@ def _resolve_workspace(matches_file: Path, ws_meta: dict) -> Path:
 def _run_cluster_patches(
     in_path: Path,
     output_path: str | None,
-    radius: float,
+    patch_size: float,
     resolution: int,
     min_zncc: float,
     max_shift: float,
@@ -262,7 +267,10 @@ def _run_cluster_patches(
             data["cluster_starts"],
             data["member_images"],
             data["member_features"],
-            radius=radius,
+            # Sole conversion site: --patch-size is the full template edge
+            # length (embed-patches' convention); the kernel takes the
+            # half-width, so halve it here.
+            radius=patch_size / 2.0,
             resolution=resolution,
             min_zncc=min_zncc,
             max_shift_px=max_shift,
@@ -312,7 +320,7 @@ def _run_cluster_patches(
         "member_shift_px": result["member_shift_px"],
         "member_consistency_residual": result["member_consistency_residual"],
         "refine_options": {
-            "radius": radius,
+            "patch_size": patch_size,
             "resolution": resolution,
             "min_zncc": min_zncc,
             "max_shift_px": max_shift,

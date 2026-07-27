@@ -198,7 +198,7 @@ Defaults (from the experiment calibration):
 
 | option | default | notes |
 |---|---|---|
-| `radius` | 4.0 | template half-width, keypoint-frame units; 2 is too small for the affine DOF, 6–8 buys nothing |
+| `patch_size` | 8.0 | full template edge length, keypoint-frame units (halved to the kernel's `radius` half-width); 4 is too small for the affine DOF, 12–16 buys nothing |
 | `resolution` | 25 | template samples per axis |
 | `min_zncc` | 0.85 | permissive by design — over-culling, not contamination, is the failure mode; downstream stages re-gate |
 | `max_shift_px` | 3.0 | matches the `embed-patches` keypoint-localization gate |
