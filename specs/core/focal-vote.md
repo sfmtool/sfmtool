@@ -72,6 +72,10 @@ two member images contribute nothing.
 | `rotation_focal_px` | `f64?` | Median of rotation votes (diagnostic) |
 | `n_epipolar`, `n_rotation` | `usize` | Vote counts per family |
 | `parallax_poverty` | `f64` | Median H/F inlier ratio over epipolar pairs (see Arbitration) |
+| `epipolar_spread`, `rotation_spread` | `f64` | Interquartile range of each family's votes in log-focal space |
+| `epipolar_votes` | list | Every accepted epipolar vote with its pair covariates: images, shared-cluster count, mean displacement (px), F and H inlier counts, F-vs-Fᵀ direction, focal |
+| `rotation_votes` | list | Every accepted rotation vote with its pair covariates: image, partner, mean displacement (px), H inlier count, focal |
+| `n_h_dominated`, `n_estimator_failed`, `n_band_rejected` | `usize` | Epipolar candidates skipped as homography-dominated, candidates with no usable F, and Bougnoux focals outside the plausibility band |
 
 ## Pair tables
 

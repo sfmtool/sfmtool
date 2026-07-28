@@ -52,6 +52,45 @@ impl VoteFamily {
     }
 }
 
+/// One accepted Bougnoux vote with the candidate-pair covariates that
+/// produced it (diagnostic detail; two entries per pair when both F and Fᵀ
+/// yield an in-band focal).
+#[derive(Clone, Copy, Debug)]
+pub struct EpipolarVote {
+    /// First image of the candidate pair.
+    pub image_a: u32,
+    /// Second image of the candidate pair.
+    pub image_b: u32,
+    /// Shared-cluster covisibility count of the pair.
+    pub shared_clusters: f64,
+    /// Mean feature displacement of the pair in pixels.
+    pub mean_disp_px: f64,
+    /// Fundamental-matrix RANSAC inlier count.
+    pub n_f_inliers: usize,
+    /// Homography RANSAC inlier count on the same correspondences.
+    pub n_h_inliers: usize,
+    /// `false` for the vote from F, `true` for the vote from Fᵀ.
+    pub transposed: bool,
+    /// The Bougnoux focal vote in pixels.
+    pub focal_px: f64,
+}
+
+/// One accepted rotation self-calibration vote with its pair covariates
+/// (diagnostic detail).
+#[derive(Clone, Copy, Debug)]
+pub struct RotationVote {
+    /// The sampled image.
+    pub image: u32,
+    /// Its widest-displacement partner.
+    pub partner: u32,
+    /// Mean feature displacement of the pair in pixels.
+    pub mean_disp_px: f64,
+    /// Homography RANSAC inlier count.
+    pub n_inliers: usize,
+    /// The self-calibration focal vote in pixels.
+    pub focal_px: f64,
+}
+
 /// Result of [`focal_vote`].
 #[derive(Clone, Debug)]
 pub struct FocalVoteResult {
@@ -74,6 +113,16 @@ pub struct FocalVoteResult {
     pub epipolar_spread: f64,
     /// Interquartile range of the rotation votes in log-focal space.
     pub rotation_spread: f64,
+    /// Every accepted epipolar vote with its pair covariates.
+    pub epipolar_votes: Vec<EpipolarVote>,
+    /// Every accepted rotation vote with its pair covariates.
+    pub rotation_votes: Vec<RotationVote>,
+    /// Epipolar candidate pairs skipped as homography-dominated.
+    pub n_h_dominated: usize,
+    /// Epipolar candidate pairs whose estimator produced no usable F.
+    pub n_estimator_failed: usize,
+    /// Bougnoux focals rejected by the plausibility band.
+    pub n_band_rejected: usize,
 }
 
 // ── Vote thresholds (see the spec) ───────────────────────────────────────────
@@ -291,6 +340,11 @@ pub fn focal_vote_with_min_disp(
         parallax_poverty: 0.0,
         epipolar_spread: 0.0,
         rotation_spread: 0.0,
+        epipolar_votes: Vec::new(),
+        rotation_votes: Vec::new(),
+        n_h_dominated: 0,
+        n_estimator_failed: 0,
+        n_band_rejected: 0,
     };
     let n_obs = cluster_indexes.len();
     if n_obs == 0 || image_indexes.len() != n_obs || positions_xy.len() != n_obs {
@@ -401,13 +455,19 @@ pub fn focal_vote_with_min_disp(
     };
 
     let mut bou: Vec<f64> = Vec::new();
+    let mut bou_detail: Vec<EpipolarVote> = Vec::new();
     let mut ratios: Vec<f64> = Vec::new();
+    let mut n_h_dominated = 0usize;
+    let mut n_estimator_failed = 0usize;
+    let mut n_band_rejected = 0usize;
     for (a, b) in epipolar_pairs {
         let (x1, x2) = pair_correspondences(&image_clusters, a as usize, b as usize);
         if x1.len() < 8 {
+            n_estimator_failed += 1;
             continue;
         }
         let Some(fest) = estimate_fundamental(&x1, &x2, &f_opts) else {
+            n_estimator_failed += 1;
             continue;
         };
         let n_f = fest.inliers.iter().filter(|&&b| b).count();
@@ -419,12 +479,26 @@ pub fn focal_vote_with_min_disp(
         }
         // Homography-dominated: F is collapsing toward H, no epipolar vote.
         if (n_h as f64) >= 16.0_f64.max(0.8 * n_f as f64) {
+            n_h_dominated += 1;
             continue;
         }
-        for f_dir in [fest.f_matrix, fest.f_matrix.transpose()] {
+        let acc = pair_accum[&(a, b)];
+        for (transposed, f_dir) in [(false, fest.f_matrix), (true, fest.f_matrix.transpose())] {
             if let Some(v) = focal_from_fundamental(&f_dir, pp, pp) {
                 if v > FOCAL_BAND_LO * max_wh && v < FOCAL_BAND_HI * max_wh {
                     bou.push(v);
+                    bou_detail.push(EpipolarVote {
+                        image_a: a,
+                        image_b: b,
+                        shared_clusters: acc.count,
+                        mean_disp_px: acc.mean_disp(),
+                        n_f_inliers: n_f,
+                        n_h_inliers: n_h,
+                        transposed,
+                        focal_px: v,
+                    });
+                } else {
+                    n_band_rejected += 1;
                 }
             }
         }
@@ -442,6 +516,7 @@ pub fn focal_vote_with_min_disp(
         ..Default::default()
     };
     let mut rot: Vec<f64> = Vec::new();
+    let mut rot_detail: Vec<RotationVote> = Vec::new();
     let mut i = 0usize;
     while i < n_img {
         let mut best: Option<(f64, u32)> = None;
@@ -475,6 +550,13 @@ pub fn focal_vote_with_min_disp(
                     if let Some(fv) = rotation_self_calib_focal(&hest.h_matrix, max_wh) {
                         if fv > FOCAL_BAND_LO * max_wh && fv < FOCAL_BAND_HI * max_wh {
                             rot.push(fv);
+                            rot_detail.push(RotationVote {
+                                image: i as u32,
+                                partner: j,
+                                mean_disp_px: dmean,
+                                n_inliers: hest.inliers.iter().filter(|&&k| k).count(),
+                                focal_px: fv,
+                            });
                         }
                     }
                 }
@@ -517,6 +599,11 @@ pub fn focal_vote_with_min_disp(
         parallax_poverty: poverty,
         epipolar_spread,
         rotation_spread,
+        epipolar_votes: bou_detail,
+        rotation_votes: rot_detail,
+        n_h_dominated,
+        n_estimator_failed,
+        n_band_rejected,
     }
 }
 

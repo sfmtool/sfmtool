@@ -41,7 +41,15 @@ use sfmtool_core::geometry::focal_vote::focal_vote_with_min_disp;
 ///     A dict mirroring the output table: ``{"focal_px": float | None,
 ///     "family": "Epipolar" | "Rotation" | None, "epipolar_focal_px":
 ///     float | None, "rotation_focal_px": float | None, "n_epipolar": int,
-///     "n_rotation": int, "parallax_poverty": float}``.
+///     "n_rotation": int, "parallax_poverty": float, "epipolar_spread":
+///     float, "rotation_spread": float, "epipolar_votes": list[dict],
+///     "rotation_votes": list[dict], "n_h_dominated": int,
+///     "n_estimator_failed": int, "n_band_rejected": int}``. Each
+///     ``epipolar_votes`` entry carries ``image_a``, ``image_b``,
+///     ``shared_clusters``, ``mean_disp_px``, ``n_f_inliers``,
+///     ``n_h_inliers``, ``transposed``, ``focal_px``; each
+///     ``rotation_votes`` entry carries ``image``, ``partner``,
+///     ``mean_disp_px``, ``n_inliers``, ``focal_px``.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, width, height, *, seed=0, epipolar_min_disp_frac=0.02))]
@@ -101,6 +109,34 @@ pub fn focal_vote<'py>(
     d.set_item("parallax_poverty", result.parallax_poverty)?;
     d.set_item("epipolar_spread", result.epipolar_spread)?;
     d.set_item("rotation_spread", result.rotation_spread)?;
+    let evotes = pyo3::types::PyList::empty(py);
+    for v in &result.epipolar_votes {
+        let e = PyDict::new(py);
+        e.set_item("image_a", v.image_a)?;
+        e.set_item("image_b", v.image_b)?;
+        e.set_item("shared_clusters", v.shared_clusters)?;
+        e.set_item("mean_disp_px", v.mean_disp_px)?;
+        e.set_item("n_f_inliers", v.n_f_inliers)?;
+        e.set_item("n_h_inliers", v.n_h_inliers)?;
+        e.set_item("transposed", v.transposed)?;
+        e.set_item("focal_px", v.focal_px)?;
+        evotes.append(e)?;
+    }
+    d.set_item("epipolar_votes", evotes)?;
+    let rvotes = pyo3::types::PyList::empty(py);
+    for v in &result.rotation_votes {
+        let e = PyDict::new(py);
+        e.set_item("image", v.image)?;
+        e.set_item("partner", v.partner)?;
+        e.set_item("mean_disp_px", v.mean_disp_px)?;
+        e.set_item("n_inliers", v.n_inliers)?;
+        e.set_item("focal_px", v.focal_px)?;
+        rvotes.append(e)?;
+    }
+    d.set_item("rotation_votes", rvotes)?;
+    d.set_item("n_h_dominated", result.n_h_dominated)?;
+    d.set_item("n_estimator_failed", result.n_estimator_failed)?;
+    d.set_item("n_band_rejected", result.n_band_rejected)?;
     Ok(d)
 }
 
