@@ -40,10 +40,6 @@ fn rx(a: f64) -> Matrix3<f64> {
     Matrix3::new(1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c)
 }
 
-fn k_mat() -> Matrix3<f64> {
-    Matrix3::new(F_TRUE, 0.0, CX, 0.0, F_TRUE, CY, 0.0, 0.0, 1.0)
-}
-
 struct Cam {
     r: Matrix3<f64>,
     t: Vector3<f64>,
@@ -53,11 +49,18 @@ impl Cam {
     /// Project a world point to pixels, `None` when behind the camera or out of
     /// the image.
     fn project(&self, x: Vector3<f64>) -> Option<[f64; 2]> {
+        self.project_f(x, F_TRUE)
+    }
+
+    /// [`Cam::project`] through an explicit focal (the rest of `K` is the image
+    /// centre), for scenes whose cameras do not share a focal.
+    fn project_f(&self, x: Vector3<f64>, f: f64) -> Option<[f64; 2]> {
         let xc = self.r * x + self.t;
         if xc.z <= 1e-3 {
             return None;
         }
-        let p = k_mat() * xc;
+        let k = Matrix3::new(f, 0.0, CX, 0.0, f, CY, 0.0, 0.0, 1.0);
+        let p = k * xc;
         let u = p.x / p.z;
         let v = p.y / p.z;
         if !(0.0..W as f64).contains(&u) || !(0.0..H as f64).contains(&v) {
@@ -223,10 +226,10 @@ fn roll_only_is_flat_in_focal() {
     }
 }
 
-// ── End-to-end arbitration ───────────────────────────────────────────────────
+// ── End-to-end consensus ─────────────────────────────────────────────────────
 
 #[test]
-fn rotation_scene_arbitrates_to_rotation() {
+fn rotation_scene_pools_a_rotation_majority() {
     let mut rng = Lcg(2024);
     let n = 8;
     let cams = rotation_cameras(n, 0.24, &mut rng); // ±13.7°
@@ -238,6 +241,12 @@ fn rotation_scene_arbitrates_to_rotation() {
         emit_rotation_pair(&mut obs, &cams, i, i + 3, 45, &mut rng); // far (rotation partner)
     }
     let res = obs.run(0);
+    // Parallax-free scene: every epipolar candidate is homography-dominated, so
+    // the pool is all rotation (8 votes) and the majority family is Rotation.
+    assert_eq!(res.n_epipolar, 0);
+    assert_eq!(res.n_rotation, 8);
+    assert_eq!(res.n_pool, res.n_epipolar + res.n_rotation);
+    assert_eq!(res.n_h_dominated, 8);
     assert_eq!(
         res.family,
         Some(VoteFamily::Rotation),
@@ -248,16 +257,24 @@ fn rotation_scene_arbitrates_to_rotation() {
         res.epipolar_focal_px,
         res.rotation_focal_px
     );
+    // The pool is exactly the rotation votes here, so the consensus is their
+    // median: 804.11 px, 0.5% above the true 800.
+    assert_eq!(res.focal_px, res.rotation_focal_px);
     let f = res.focal_px.expect("consensus focal");
     assert!(
-        (f - F_TRUE).abs() / F_TRUE < 0.1,
+        (f - F_TRUE).abs() / F_TRUE < 0.02,
         "rotation focal {f}, true {F_TRUE}"
     );
-    assert!(res.parallax_poverty >= POVERTY_THRESHOLD, "poverty too low");
+    // Every candidate pair's correspondences are explained by a homography.
+    assert!(
+        res.parallax_poverty >= 0.9,
+        "poverty {} — expected a parallax-free regime",
+        res.parallax_poverty
+    );
 }
 
 #[test]
-fn parallax_scene_arbitrates_to_epipolar() {
+fn parallax_scene_pools_an_epipolar_majority() {
     let mut rng = Lcg(4048);
     let n = 8;
     let cams = baseline_cameras(n, 0.35, &mut rng);
@@ -269,6 +286,14 @@ fn parallax_scene_arbitrates_to_epipolar() {
         emit_parallax_pair(&mut obs, &cams, i, i + 2, 45, &mut rng);
     }
     let res = obs.run(0);
+    // 7 candidate pairs survive the homography gate and all 7 are
+    // direction-consistent: 14 in-band directional focals in the detail list
+    // pool as 7 pair votes. No pair displacement reaches the rotation gate.
+    assert_eq!(res.epipolar_votes.len(), 14);
+    assert_eq!(res.n_epipolar, 7);
+    assert_eq!(res.n_inconsistent_pairs, 0);
+    assert_eq!(res.n_rotation, 0);
+    assert_eq!(res.n_pool, 7);
     assert_eq!(
         res.family,
         Some(VoteFamily::Epipolar),
@@ -279,13 +304,64 @@ fn parallax_scene_arbitrates_to_epipolar() {
         res.epipolar_focal_px,
         res.rotation_focal_px
     );
-    assert!(res.n_epipolar >= EPIPOLAR_QUORUM);
+    // The pool is exactly the epipolar pair votes: median 813.92 px, 1.7% above
+    // the true 800.
+    assert_eq!(res.focal_px, res.epipolar_focal_px);
     let f = res.focal_px.expect("consensus focal");
     assert!(
-        (f - F_TRUE).abs() / F_TRUE < 0.15,
+        (f - F_TRUE).abs() / F_TRUE < 0.03,
         "epipolar focal {f}, true {F_TRUE}"
     );
-    assert!(res.parallax_poverty < POVERTY_THRESHOLD, "poverty too high");
+    assert!(
+        res.parallax_poverty <= 0.4,
+        "poverty {} — expected a parallax-rich regime",
+        res.parallax_poverty
+    );
+}
+
+#[test]
+fn direction_disagreement_casts_no_vote() {
+    // Two cameras with genuinely DIFFERENT focals over a finite point cloud.
+    // Each direction of F reports its own camera's focal, so the pair's two
+    // directional Bougnoux focals are far apart (ln ratio ~0.49, ten times the
+    // agreement band) even though both are inside the plausibility band. The
+    // pair is therefore not a consistent measurement of one shared focal and
+    // must cast no vote.
+    let (f_a, f_b) = (800.0, 1300.0);
+    let mut rng = Lcg(31337);
+    let cams = baseline_cameras(2, 1.2, &mut rng);
+    let mut obs = Obs::default();
+    let (mut done, mut guard) = (0, 0);
+    while done < 60 && guard < 20000 {
+        guard += 1;
+        let x = Vector3::new(
+            rng.uniform(-3.0, 3.0),
+            rng.uniform(-3.0, 3.0),
+            rng.uniform(4.0, 9.0),
+        );
+        if let (Some(pa), Some(pb)) = (cams[0].project_f(x, f_a), cams[1].project_f(x, f_b)) {
+            obs.push_pair(0, pa, 1, pb);
+            done += 1;
+        }
+    }
+    let res = obs.run(0);
+    // Both directions are in band and land near their own camera's focal.
+    assert_eq!(res.epipolar_votes.len(), 2, "{:?}", res.epipolar_votes);
+    assert_eq!(res.n_band_rejected, 0);
+    let (v0, v1) = (
+        res.epipolar_votes[0].focal_px,
+        res.epipolar_votes[1].focal_px,
+    );
+    assert!(
+        (v0.ln() - v1.ln()).abs() > DIRECTION_AGREEMENT_BAND,
+        "directional focals {v0} and {v1} should disagree beyond the band"
+    );
+    // ... so the pair casts no pooled vote and is counted as inconsistent.
+    assert_eq!(res.n_epipolar, 0);
+    assert_eq!(res.n_inconsistent_pairs, 1);
+    assert_eq!(res.n_pool, 0);
+    assert_eq!(res.focal_px, None);
+    assert_eq!(res.family, None);
 }
 
 #[test]
@@ -306,6 +382,8 @@ fn determinism_same_seed() {
     assert_eq!(a.family, b.family);
     assert_eq!(a.n_epipolar, b.n_epipolar);
     assert_eq!(a.n_rotation, b.n_rotation);
+    assert_eq!(a.n_pool, b.n_pool);
+    assert_eq!(a.n_inconsistent_pairs, b.n_inconsistent_pairs);
     assert_eq!(a.parallax_poverty.to_bits(), b.parallax_poverty.to_bits());
 }
 
@@ -316,4 +394,24 @@ fn empty_input_no_consensus() {
     assert_eq!(res.family, None);
     assert_eq!(res.n_epipolar, 0);
     assert_eq!(res.n_rotation, 0);
+    assert_eq!(res.n_pool, 0);
+    assert_eq!(res.n_inconsistent_pairs, 0);
+}
+
+#[test]
+fn single_vote_is_not_a_consensus() {
+    // One direction-consistent pair and no rotation partner: a pool of one is
+    // below the 2-vote floor, so there is no consensus focal — but the pair
+    // vote is still visible through the epipolar diagnostics.
+    let mut rng = Lcg(909);
+    let cams = baseline_cameras(2, 0.35, &mut rng);
+    let mut obs = Obs::default();
+    emit_parallax_pair(&mut obs, &cams, 0, 1, 45, &mut rng);
+    let res = obs.run(0);
+    assert_eq!(res.n_epipolar, 1);
+    assert_eq!(res.n_rotation, 0);
+    assert_eq!(res.n_pool, 1);
+    assert_eq!(res.focal_px, None);
+    assert_eq!(res.family, None);
+    assert!(res.epipolar_focal_px.is_some());
 }

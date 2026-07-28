@@ -17,11 +17,12 @@ use sfmtool_core::geometry::focal_vote::focal_vote_with_min_disp;
 ///
 /// Image pairs drawn from the cluster tracks each cast one focal vote through
 /// whichever estimator their geometry can observe — the Bougnoux focal of a
-/// fundamental matrix (parallax-rich pairs) or rotation self-calibration of a
-/// parallax-free homography (far-field pairs) — and the consensus focal is the
-/// median of the winning family. No structure is estimated, so the vote cannot
-/// be biased by the depth/focal (bas-relief) compensation of structure-based
-/// focal estimation.
+/// fundamental matrix (parallax-rich pairs, one vote per pair: the geometric
+/// mean of its two direction-consistent focals) or rotation self-calibration of
+/// a parallax-free homography (far-field pairs) — and the consensus focal is
+/// the median of the pooled votes from both families. No structure is
+/// estimated, so the vote cannot be biased by the depth/focal (bas-relief)
+/// compensation of structure-based focal estimation.
 ///
 /// Args:
 ///     cluster_indexes: (n_obs,) uint32 cluster id per observation,
@@ -41,13 +42,23 @@ use sfmtool_core::geometry::focal_vote::focal_vote_with_min_disp;
 ///     A dict mirroring the output table: ``{"focal_px": float | None,
 ///     "family": "Epipolar" | "Rotation" | None, "epipolar_focal_px":
 ///     float | None, "rotation_focal_px": float | None, "n_epipolar": int,
-///     "n_rotation": int, "parallax_poverty": float, "epipolar_spread":
-///     float, "rotation_spread": float, "epipolar_votes": list[dict],
-///     "rotation_votes": list[dict], "n_h_dominated": int,
-///     "n_estimator_failed": int, "n_band_rejected": int}``. Each
-///     ``epipolar_votes`` entry carries ``image_a``, ``image_b``,
-///     ``shared_clusters``, ``mean_disp_px``, ``n_f_inliers``,
-///     ``n_h_inliers``, ``transposed``, ``focal_px``; each
+///     "n_rotation": int, "n_pool": int, "parallax_poverty": float,
+///     "epipolar_spread": float, "rotation_spread": float,
+///     "epipolar_votes": list[dict], "rotation_votes": list[dict],
+///     "n_h_dominated": int, "n_estimator_failed": int, "n_band_rejected":
+///     int, "n_inconsistent_pairs": int}``.
+///
+///     ``focal_px`` is the median of the pooled votes — one per
+///     direction-consistent epipolar pair plus every rotation vote — and is
+///     ``None`` with fewer than 2 pooled votes; ``n_pool`` is
+///     ``n_epipolar + n_rotation``. ``family`` is the pool's majority
+///     contributor (ties go to ``"Rotation"``), ``None`` when there is no
+///     consensus; it is diagnostic, not a selection.
+///
+///     ``epipolar_votes`` is the diagnostic detail layer, independent of what
+///     pools: every in-band directional Bougnoux focal, both directions, with
+///     ``image_a``, ``image_b``, ``shared_clusters``, ``mean_disp_px``,
+///     ``n_f_inliers``, ``n_h_inliers``, ``transposed``, ``focal_px``. Each
 ///     ``rotation_votes`` entry carries ``image``, ``partner``,
 ///     ``mean_disp_px``, ``n_inliers``, ``focal_px``.
 #[pyfunction]
@@ -106,6 +117,7 @@ pub fn focal_vote<'py>(
     d.set_item("rotation_focal_px", result.rotation_focal_px)?;
     d.set_item("n_epipolar", result.n_epipolar)?;
     d.set_item("n_rotation", result.n_rotation)?;
+    d.set_item("n_pool", result.n_pool)?;
     d.set_item("parallax_poverty", result.parallax_poverty)?;
     d.set_item("epipolar_spread", result.epipolar_spread)?;
     d.set_item("rotation_spread", result.rotation_spread)?;
@@ -137,6 +149,7 @@ pub fn focal_vote<'py>(
     d.set_item("n_h_dominated", result.n_h_dominated)?;
     d.set_item("n_estimator_failed", result.n_estimator_failed)?;
     d.set_item("n_band_rejected", result.n_band_rejected)?;
+    d.set_item("n_inconsistent_pairs", result.n_inconsistent_pairs)?;
     Ok(d)
 }
 

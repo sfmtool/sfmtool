@@ -10,7 +10,8 @@ front has camera-frame ``z > 0``). A pure-rotation rig (all camera centres at
 the world origin) produces parallax-free pairs that vote through rotation
 self-calibration; a baseline camera track over finite structure produces
 parallax-rich pairs that vote through the Bougnoux focal of a fundamental
-matrix. The kernel arbitrates each scene to the correct family.
+matrix. Both families pool into one median; the majority contributor of each
+scene's pool is the family its parallax regime can observe.
 """
 
 import numpy as np
@@ -234,14 +235,47 @@ def test_focal_vote_dict_layout():
         "rotation_focal_px",
         "n_epipolar",
         "n_rotation",
+        "n_pool",
         "parallax_poverty",
         "epipolar_spread",
         "rotation_spread",
+        "epipolar_votes",
+        "rotation_votes",
+        "n_h_dominated",
+        "n_estimator_failed",
+        "n_band_rejected",
+        "n_inconsistent_pairs",
     }
     assert isinstance(res["n_epipolar"], int)
     assert isinstance(res["n_rotation"], int)
+    assert isinstance(res["n_pool"], int)
+    assert isinstance(res["n_inconsistent_pairs"], int)
     assert isinstance(res["parallax_poverty"], float)
     assert res["family"] in ("Epipolar", "Rotation", None)
+    # n_pool is exactly the two families' pooled contributions.
+    assert res["n_pool"] == res["n_epipolar"] + res["n_rotation"]
+    # The per-vote detail lists are the diagnostic layer: epipolar entries are
+    # per DIRECTION (both F and Ft), so they outnumber the pooled pair votes.
+    assert len(res["rotation_votes"]) == res["n_rotation"]
+    for v in res["epipolar_votes"]:
+        assert set(v) == {
+            "image_a",
+            "image_b",
+            "shared_clusters",
+            "mean_disp_px",
+            "n_f_inliers",
+            "n_h_inliers",
+            "transposed",
+            "focal_px",
+        }
+    for v in res["rotation_votes"]:
+        assert set(v) == {
+            "image",
+            "partner",
+            "mean_disp_px",
+            "n_inliers",
+            "focal_px",
+        }
 
 
 def test_focal_vote_shape_validation():
@@ -265,19 +299,28 @@ def test_focal_vote_shape_validation():
 
 
 def test_focal_vote_rotation_scene():
+    # Parallax-free rig: the epipolar candidates are homography-dominated, so
+    # the pool is rotation votes and Rotation is its majority contributor.
     cl, im, pos = _rotation_scene(2024)
     res = focal_vote(cl, im, pos, W, H, seed=0)
     assert res["family"] == "Rotation", res
+    assert res["n_rotation"] > res["n_epipolar"]
+    assert res["n_pool"] == res["n_epipolar"] + res["n_rotation"]
     assert res["focal_px"] is not None
     assert abs(res["focal_px"] - F_TRUE) / F_TRUE < 0.1
     assert res["parallax_poverty"] >= 0.55
 
 
 def test_focal_vote_parallax_scene():
+    # Baseline track over finite structure: direction-consistent epipolar pairs
+    # dominate the pool.
     cl, im, pos = _parallax_scene(4048)
     res = focal_vote(cl, im, pos, W, H, seed=0)
     assert res["family"] == "Epipolar", res
-    assert res["n_epipolar"] >= 8
+    assert res["n_epipolar"] > res["n_rotation"]
+    assert res["n_pool"] >= 2
+    # Detail entries are per direction; pooled votes are per pair.
+    assert len(res["epipolar_votes"]) >= res["n_epipolar"]
     assert res["focal_px"] is not None
     assert abs(res["focal_px"] - F_TRUE) / F_TRUE < 0.15
     assert res["parallax_poverty"] < 0.55
@@ -291,7 +334,11 @@ def test_focal_vote_seed_reproducibility():
     assert a["family"] == b["family"]
     assert a["n_epipolar"] == b["n_epipolar"]
     assert a["n_rotation"] == b["n_rotation"]
+    assert a["n_pool"] == b["n_pool"]
+    assert a["n_inconsistent_pairs"] == b["n_inconsistent_pairs"]
     assert a["parallax_poverty"] == b["parallax_poverty"]
+    assert a["epipolar_votes"] == b["epipolar_votes"]
+    assert a["rotation_votes"] == b["rotation_votes"]
 
 
 def test_focal_vote_noncontiguous_input():
@@ -312,3 +359,5 @@ def test_focal_vote_empty_input():
     assert res["family"] is None
     assert res["n_epipolar"] == 0
     assert res["n_rotation"] == 0
+    assert res["n_pool"] == 0
+    assert res["n_inconsistent_pairs"] == 0
