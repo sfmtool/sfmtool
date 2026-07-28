@@ -27,10 +27,14 @@ homography_estimation}.rs` (`sfmtool._sfmtool.geometry.focal_vote` /
 `focal_vote` estimates a shared focal length from cluster-track observations
 without building any reconstruction. Image pairs vote independently through
 one of two estimators, chosen per pair by what the pair's geometry can
-observe, and the consensus focal is the median of the winning vote family:
+observe, and the consensus focal is the median of the pooled votes from both
+families:
 
 - **Epipolar votes** — pairs whose correspondences carry parallax vote the
-  Bougnoux focal of a robustly estimated fundamental matrix.
+  Bougnoux focal of a robustly estimated fundamental matrix. Both cameras
+  of a pair share the focal, so the two directional Bougnoux focals (from
+  `F` and `Fᵀ`) must agree; a pair whose directions disagree casts no
+  vote (see Epipolar votes).
 - **Rotation votes** — pairs whose correspondences are dominated by a
   parallax-free (far-field) homography vote by rotation self-calibration:
   a parallax-free homography is conjugate to a rotation, `H = K R K⁻¹`, so
@@ -39,8 +43,11 @@ observe, and the consensus focal is the median of the winning vote family:
 Each estimator is degenerate exactly where the other is informative: the
 fundamental matrix collapses toward a homography on parallax-free pairs
 (Bougnoux votes become arbitrary), and a homography fitted across genuine
-parallax is not conjugate to any rotation. The per-pair split plus a
-capture-level arbitration keeps each estimator on its own ground.
+parallax is not conjugate to any rotation. Per-pair gates keep each
+estimator on its own ground — homography domination and direction
+agreement for epipolar pairs, the orthogonality residual for rotation
+pairs — and every vote that survives its gate enters one pooled median
+(see Consensus).
 
 Because no structure is estimated, no bas-relief-type ambiguity can bias
 the result: the vote is an independent witness that callers can hold
@@ -66,16 +73,18 @@ two member images contribute nothing.
 
 | Field | Type | Description |
 |---|---|---|
-| `focal_px` | `f64?` | Consensus focal, `None` when neither family reaches quorum |
-| `family` | enum | `Epipolar` or `Rotation` — which family produced `focal_px` |
-| `epipolar_focal_px` | `f64?` | Median of epipolar votes (diagnostic) |
+| `focal_px` | `f64?` | Consensus focal — median of the pooled votes; `None` with fewer than 2 pooled votes |
+| `family` | enum | Majority contributor to the pool, `Epipolar` or `Rotation` (ties → `Rotation`); `None` when there is no consensus. Diagnostic |
+| `epipolar_focal_px` | `f64?` | Median of the epipolar pair votes (diagnostic) |
 | `rotation_focal_px` | `f64?` | Median of rotation votes (diagnostic) |
-| `n_epipolar`, `n_rotation` | `usize` | Vote counts per family |
-| `parallax_poverty` | `f64` | Median H/F inlier ratio over epipolar pairs (see Arbitration) |
-| `epipolar_spread`, `rotation_spread` | `f64` | Interquartile range of each family's votes in log-focal space |
-| `epipolar_votes` | list | Every accepted epipolar vote with its pair covariates: images, shared-cluster count, mean displacement (px), F and H inlier counts, F-vs-Fᵀ direction, focal |
+| `n_epipolar` | `usize` | Epipolar pair votes entering the pool (one per direction-consistent pair) |
+| `n_rotation` | `usize` | Rotation votes entering the pool |
+| `n_pool` | `usize` | Total pooled votes behind `focal_px` (`n_epipolar + n_rotation`) |
+| `parallax_poverty` | `f64` | Median H/F inlier ratio over epipolar pairs (capture-level parallax diagnostic) |
+| `epipolar_spread`, `rotation_spread` | `f64` | Interquartile range of each family's pool contributions in log-focal space |
+| `epipolar_votes` | list | Every in-band directional Bougnoux focal with its pair covariates: images, shared-cluster count, mean displacement (px), F and H inlier counts, F-vs-Fᵀ direction, focal |
 | `rotation_votes` | list | Every accepted rotation vote with its pair covariates: image, partner, mean displacement (px), H inlier count, focal |
-| `n_h_dominated`, `n_estimator_failed`, `n_band_rejected` | `usize` | Epipolar candidates skipped as homography-dominated, candidates with no usable F, and Bougnoux focals outside the plausibility band |
+| `n_h_dominated`, `n_estimator_failed`, `n_band_rejected`, `n_inconsistent_pairs` | `usize` | Epipolar candidates skipped as homography-dominated; candidates with no usable F; directional Bougnoux focals outside the plausibility band; pairs whose two directions disagree (or only one is in-band) and so cast no vote |
 
 ## Pair tables
 
@@ -102,10 +111,16 @@ Per pair, over the shared clusters' correspondences:
    The ratio `n_H / n_F` feeds the arbitration. When
    `n_H ≥ max(16, 0.8 · n_F)` the pair is homography-dominated: it casts
    no epipolar vote (its F is collapsing toward H).
-3. Otherwise both directions of the fundamental matrix cast a Bougnoux
-   focal vote (existing `focal_from_fundamental`, principal point at the
-   image centre); votes outside `[0.2, 4] × max(width, height)` are
-   discarded.
+3. Otherwise compute the Bougnoux focal of both directions of the
+   fundamental matrix (existing `focal_from_fundamental`, principal point
+   at the image centre); directional focals outside
+   `[0.2, 4] × max(width, height)` are discarded.
+4. The two cameras share the focal, so the two directional focals are two
+   measurements of the same quantity. When both are in-band and agree
+   within `0.05` in log-focal, the pair casts **one** vote: their
+   geometric mean. Otherwise the pair casts no vote — a direction pair
+   that disagrees (or has only one in-band member) reveals a fundamental
+   matrix that does not carry a consistent focal.
 
 ## Rotation votes
 
@@ -139,21 +154,22 @@ sampling (4-point DLT), symmetric transfer error gating, local refit on
 the consensus set, and a `{h_matrix, inliers, iterations}` result. Inputs
 are two `f64 [n, 2]` correspondence arrays and `max_error_px`.
 
-## Arbitration
+## Consensus
 
-`parallax_poverty` is the median `n_H / n_F` over the epipolar candidate
-pairs. High poverty means most correspondences are explained without
-parallax — the regime where Bougnoux votes are structurally degraded.
+The two families' votes pool into a single population: the epipolar pair
+votes (one geometric-mean vote per direction-consistent pair) and the
+rotation votes. The consensus focal is the median of the pool. With fewer
+than 2 pooled votes there is no consensus.
 
-- `n_rotation ≥ 5` **and** `parallax_poverty ≥ 0.55` → the rotation
-  median is the consensus.
-- Otherwise the epipolar median, requiring `n_epipolar ≥ 8`.
-- With fewer than 8 epipolar votes, the rotation median stands in when
-  `n_rotation ≥ 6`; else no consensus.
-
-Both thresholds are calibrated jointly: sparse rotation votes at marginal
-poverty must not override a healthy epipolar consensus, and a rotation
-consensus needs enough independent pairs for its median to be stable.
+Per-pair gating replaces family-level quorums: a pair only enters the
+pool when its own geometry certifies the vote — direction agreement for
+epipolar pairs, the orthogonality-residual floor and shape for rotation
+pairs — so a sparse pool of certified votes is still a consensus. Each
+family's median, count, and log-focal spread remain available as
+diagnostics, as does `parallax_poverty` (the median `n_H / n_F` over the
+epipolar candidate pairs — high poverty means most correspondences are
+explained without parallax, the regime where callers should expect the
+pool to be rotation-dominated).
 
 ## Binding
 
@@ -174,9 +190,11 @@ inputs and seed produce identical output on every platform.
 - Rust: synthetic pure-rotation pairs recover a known focal through the
   orthogonality scan; a finite-plane homography with baseline is rejected
   by the residual floor; a roll-only rotation is rejected as flat; mixed
-  synthetic scenes (near cloud + far cloud) arbitrate to the correct
-  family on both sides of the poverty threshold; homography RANSAC
-  recovers a planted H under outlier contamination; seeded determinism.
+  synthetic scenes (near cloud + far cloud) produce a pooled consensus
+  whose majority family matches the scene's parallax regime; a pair whose
+  two directional Bougnoux focals disagree beyond the agreement band casts
+  no vote; homography RANSAC recovers a planted H under outlier
+  contamination; seeded determinism.
 - Python bindings: array round-trip, dict shape, seed reproducibility,
   and an end-to-end vote on a small fixture agreeing with the Rust
   result.
