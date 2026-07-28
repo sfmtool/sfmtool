@@ -33,12 +33,14 @@ from .._cli_utils import timed_command
     "--patch-size",
     "patch_size",
     type=click.FloatRange(min=0.0, min_open=True),
-    default=8.0,
+    default=12.0,
     show_default=True,
     help=(
         "Template size — the full patch edge length (in keypoint-frame units), "
         "halved to the kernel's template half-width and passed to "
-        "refine_cluster_patches."
+        "refine_cluster_patches. The default sits at SIFT's ~12x descriptor "
+        "window; the larger template vets members against more of the texture "
+        "the detector deemed characteristic."
     ),
 )
 @click.option(

@@ -95,7 +95,7 @@ pub struct ClusterRefineParams {
 impl Default for ClusterRefineParams {
     fn default() -> Self {
         Self {
-            radius: 4.0,
+            radius: 6.0,
             resolution: 25,
             // The prototype's window: a Gaussian of sigma = radius/2 in
             // keypoint-frame units = 0.5 in the normalized [-1, 1] patch

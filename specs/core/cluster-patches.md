@@ -199,7 +199,7 @@ Defaults (from the experiment calibration):
 
 | option | default | notes |
 |---|---|---|
-| `patch_size` | 8.0 | full template edge length, keypoint-frame units (halved to the kernel's `radius` half-width); 4 is too small for the affine DOF, 12–16 buys nothing |
+| `patch_size` | 12.0 | full template edge length, keypoint-frame units (halved to the kernel's `radius` half-width) — SIFT's ~12× descriptor window. 4 is too small for the affine DOF; larger templates vet members more selectively (the members a 12-unit template rejects that an 8-unit one accepts are disproportionately epipolar outliers against reference poses), while sizes past ~12 grow the unjudged drops from template support leaving the frame |
 | `resolution` | 25 | template samples per axis |
 | `min_zncc` | 0.85 | permissive by design — over-culling, not contamination, is the failure mode; downstream stages re-gate |
 | `max_shift_px` | 3.0 | matches the `embed-patches` keypoint-localization gate |

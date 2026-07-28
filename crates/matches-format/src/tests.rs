@@ -220,7 +220,7 @@ fn make_cluster_patch_test_data() -> MatchesData {
         member_shift_px: Array1::from_vec(vec![0.0, 1.25, 0.8, f32::NAN, f32::NAN]),
         member_consistency_residual: Array1::from_vec(vec![0.02, 0.05, 0.31, f32::NAN, f32::NAN]),
         refine_options: serde_json::json!({
-            "patch_size": 8.0, "resolution": 15, "min_zncc": 0.85, "max_shift_px": 3.0
+            "patch_size": 12.0, "resolution": 15, "min_zncc": 0.85, "max_shift_px": 3.0
         }),
     });
     data

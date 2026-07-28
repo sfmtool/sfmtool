@@ -27,16 +27,21 @@ sfm cluster-patches -i clusters.matches [-o out.matches] [OPTIONS...]
 |--------|------|---------|-------------|
 | `-i, --input` | path | required | Cluster-bearing `.matches` file (from `sfm match --cluster`) |
 | `-o, --output` | path | input with a `-patches` suffix | Output `.matches` path; must not already exist |
-| `--patch-size` | float > 0 | 8.0 | Template size — the full patch edge length, keypoint-frame units; halved to the kernel's template half-width |
+| `--patch-size` | float > 0 | 12.0 | Template size — the full patch edge length, keypoint-frame units; halved to the kernel's template half-width. The default sits at SIFT's ~12× descriptor window |
 | `--resolution` | int ≥ 3 | 15 | Template samples per axis |
 | `--min-zncc` | float in [−1, 1] | 0.85 | Member acceptance threshold on the achieved windowed ZNCC |
 | `--max-shift` | float ≥ 0 | 3.0 | Max translation drift from the SIFT seed, px |
 | `--max-keypoint-uncertainty` | float ≥ 0 | 0.35 | Localizability gate: exclude members whose own patch scores a predicted keypoint position uncertainty (`σ_pos`, template-grid px) above this, before reference selection and refinement; `0` disables |
 
-The defaults come from the experiment calibration
-(`specs/core/cluster-patches.md`, "The operation"): a `patch_size` of 4 (half-width
-2) is too small for the affine DOF and 12–16 (half-width 6–8) buys nothing;
-`min_zncc` is permissive by design —
+The `patch_size` default sits at SIFT's ~12× descriptor window — the template
+vets a member against roughly the texture context the detector deemed
+characteristic of the feature. A `patch_size` of 4 (half-width 2) is too small
+for the affine DOF; larger templates vet members more selectively — the
+members a 12-unit template rejects that a smaller one accepts are
+disproportionately epipolar outliers against reference poses — while sizes
+past ~12 grow the fraction of members dropped unjudged because the wider
+template's support leaves the frame (see `specs/core/cluster-patches.md`,
+"The operation"). `min_zncc` is permissive by design —
 over-culling, not contamination, is the observed failure mode, and downstream
 stages re-gate on the stored signals. `--max-keypoint-uncertainty` shares its
 default value with `embed-patches` (the conservative tail cut of

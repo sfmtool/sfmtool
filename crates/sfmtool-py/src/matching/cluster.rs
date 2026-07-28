@@ -275,7 +275,9 @@ pub fn clusters_to_pair_matches(
 ///     member_features: (M,) uint32 member feature index. An out-of-range
 ///         feature index (or a degenerate affine shape) marks the member
 ///         not_evaluated rather than raising.
-///     radius: Template half-width, keypoint-frame units (default 4.0).
+///     radius: Template half-width, keypoint-frame units (default 6.0 — a
+///         full edge of 12 keypoint-frame units, SIFT's ~12x descriptor
+///         window).
 ///     resolution: Template samples per axis (default 25).
 ///     window: "gaussian_disk" (default), "gaussian", or "uniform".
 ///     window_sigma: Window sigma in normalized patch coordinates (the grid
@@ -312,7 +314,7 @@ pub fn clusters_to_pair_matches(
 #[pyfunction]
 #[pyo3(signature = (images, positions, affine_shapes,
                     cluster_starts, member_images, member_features, *,
-                    radius = 4.0, resolution = 25,
+                    radius = 6.0, resolution = 25,
                     window = "gaussian_disk", window_sigma = None,
                     min_zncc = 0.85, max_shift_px = 3.0,
                     max_keypoint_uncertainty = 0.35,

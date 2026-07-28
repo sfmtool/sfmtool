@@ -178,7 +178,7 @@ pub struct ClusterRefineParams {
     pub stall_tol: f64,       // …and what counts as progress (ZNCC units)
 }
 impl Default for ClusterRefineParams {
-    // radius 4.0, resolution 25,
+    // radius 6.0, resolution 25,
     // window: PatchWindow::GaussianDisk { sigma: 15.0 / 4.0 }  (= resolution/4,
     //   the prototype's sigma = radius/2 in keypoint-frame units),
     // min_zncc 0.85, max_shift_px 3.0, max_keypoint_uncertainty 0.35,
@@ -480,7 +480,7 @@ In `crates/sfmtool-py/src/matching/cluster.rs`:
 #[pyfunction]
 #[pyo3(signature = (images, positions, affine_shapes,
                     cluster_starts, member_images, member_features, *,
-                    radius = 4.0, resolution = 25,
+                    radius = 6.0, resolution = 25,
                     window = "gaussian_disk", window_sigma = None,
                     min_zncc = 0.85, max_shift_px = 3.0,
                     max_keypoint_uncertainty = 0.35,
