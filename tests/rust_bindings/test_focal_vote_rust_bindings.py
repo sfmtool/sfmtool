@@ -10,8 +10,10 @@ front has camera-frame ``z > 0``). A pure-rotation rig (all camera centres at
 the world origin) produces parallax-free pairs that vote through rotation
 self-calibration; a baseline camera track over finite structure produces
 parallax-rich pairs that vote through the Bougnoux focal of a fundamental
-matrix. Both families pool into one median; the majority contributor of each
-scene's pool is the family its parallax regime can observe.
+matrix. Both families pool into one log-space median (unless their medians
+disagree beyond 0.25 in log-focal, when the majority family's median stands
+alone); the majority contributor of each scene's pool is the family its
+parallax regime can observe.
 """
 
 import numpy as np
@@ -236,6 +238,8 @@ def test_focal_vote_dict_layout():
         "n_epipolar",
         "n_rotation",
         "n_pool",
+        "pool_spread",
+        "family_disagreement",
         "parallax_poverty",
         "epipolar_spread",
         "rotation_spread",
@@ -244,16 +248,22 @@ def test_focal_vote_dict_layout():
         "n_h_dominated",
         "n_estimator_failed",
         "n_band_rejected",
+        "n_degenerate",
         "n_inconsistent_pairs",
     }
     assert isinstance(res["n_epipolar"], int)
     assert isinstance(res["n_rotation"], int)
     assert isinstance(res["n_pool"], int)
     assert isinstance(res["n_inconsistent_pairs"], int)
+    assert isinstance(res["n_degenerate"], int)
     assert isinstance(res["parallax_poverty"], float)
+    assert isinstance(res["pool_spread"], float)
     assert res["family"] in ("Epipolar", "Rotation", None)
     # n_pool is exactly the two families' pooled contributions.
     assert res["n_pool"] == res["n_epipolar"] + res["n_rotation"]
+    # The inter-family gap exists exactly when both families voted.
+    both_voted = res["n_epipolar"] > 0 and res["n_rotation"] > 0
+    assert (res["family_disagreement"] is not None) == both_voted
     # The per-vote detail lists are the diagnostic layer: epipolar entries are
     # per DIRECTION (both F and Ft), so they outnumber the pooled pair votes.
     assert len(res["rotation_votes"]) == res["n_rotation"]
@@ -309,6 +319,18 @@ def test_focal_vote_rotation_scene():
     assert res["focal_px"] is not None
     assert abs(res["focal_px"] - F_TRUE) / F_TRUE < 0.1
     assert res["parallax_poverty"] >= 0.55
+    # Each unordered image pair votes at most once, so the scan's mutual
+    # widest-partner pairs appear a single time.
+    pairs = {
+        (min(v["image"], v["partner"]), max(v["image"], v["partner"]))
+        for v in res["rotation_votes"]
+    }
+    assert len(pairs) == res["n_rotation"]
+    # No epipolar votes survive the homography gate, so the pool is the
+    # rotation family alone and its spread is that family's.
+    assert res["n_epipolar"] == 0
+    assert res["family_disagreement"] is None
+    assert res["pool_spread"] == res["rotation_spread"]
 
 
 def test_focal_vote_parallax_scene():
@@ -324,6 +346,14 @@ def test_focal_vote_parallax_scene():
     assert res["focal_px"] is not None
     assert abs(res["focal_px"] - F_TRUE) / F_TRUE < 0.15
     assert res["parallax_poverty"] < 0.55
+    # One stray rotation vote (1188 px) joins the 7 epipolar pair votes, and
+    # the two family medians are 0.40 apart in log-focal — past the 0.25 band —
+    # so the majority family's median stands alone rather than blending, and
+    # pool_spread describes that family's votes.
+    assert res["n_rotation"] == 1
+    assert res["family_disagreement"] > 0.25
+    assert res["focal_px"] == res["epipolar_focal_px"]
+    assert res["pool_spread"] == res["epipolar_spread"]
 
 
 def test_focal_vote_seed_reproducibility():
@@ -336,7 +366,10 @@ def test_focal_vote_seed_reproducibility():
     assert a["n_rotation"] == b["n_rotation"]
     assert a["n_pool"] == b["n_pool"]
     assert a["n_inconsistent_pairs"] == b["n_inconsistent_pairs"]
+    assert a["n_degenerate"] == b["n_degenerate"]
     assert a["parallax_poverty"] == b["parallax_poverty"]
+    assert a["pool_spread"] == b["pool_spread"]
+    assert a["family_disagreement"] == b["family_disagreement"]
     assert a["epipolar_votes"] == b["epipolar_votes"]
     assert a["rotation_votes"] == b["rotation_votes"]
 
@@ -361,3 +394,6 @@ def test_focal_vote_empty_input():
     assert res["n_rotation"] == 0
     assert res["n_pool"] == 0
     assert res["n_inconsistent_pairs"] == 0
+    assert res["n_degenerate"] == 0
+    assert res["pool_spread"] == 0.0
+    assert res["family_disagreement"] is None
