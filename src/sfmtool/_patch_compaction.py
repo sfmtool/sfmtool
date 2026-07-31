@@ -96,7 +96,10 @@ def compact_to_embedded_patches(
         recon: The source reconstruction (provides camera poses/intrinsics, image
             names, and the per-point geometry to carry over).
         cloud: The refined patch cloud (its ``point_indexes`` index ``recon``'s
-            points); supplies each surviving point's ``(u, v)`` frame.
+            points); supplies each surviving point's ``(u, v)`` frame **and** the
+            finite points' stored normal, re-derived as ``normalize(u × v)`` so
+            the two agree (``recon``'s own ``normals`` predate the refinement
+            that rotated this cloud).
         localizations: The per-point dicts returned by
             :meth:`PatchCloud.localize_keypoints` — each ``{point_index, views,
             keypoints, ...}`` with the kept image indices and refined keypoints.
@@ -190,6 +193,28 @@ def compact_to_embedded_patches(
             "a surviving point has a degenerate (zero-length) patch u-axis; "
             "cannot build its embedded_patches frame"
         )
+
+    # The stored normal must describe the frame that is actually written. `cloud`
+    # arrives already rotated by `refine_normals` (which mutates it in place),
+    # while `recon.normals` is the pre-refinement array — carrying it through
+    # verbatim would store a plane the refinement has moved away from. Re-derive
+    # each finite survivor's normal from its own surviving half-vectors:
+    # `normalize(u × v)` is the patch frame's outward normal by definition (see
+    # `specs/formats/sfmr-file-format.md`, "Per-point patch frame"). A point at
+    # infinity keeps its stored row — the format leaves its `normals_xyz` at
+    # `(0, 0, 0)` because the normal is implied by the direction, and the refiner
+    # never moves its fixed tangent-sphere frame.
+    if normals is not None:
+        finite = ~np.asarray(recon.point_is_at_infinity)[survivors]
+        cross = np.cross(
+            u_xyz[finite].astype(np.float64), v_xyz[finite].astype(np.float64)
+        )
+        lengths = np.linalg.norm(cross, axis=1)
+        # A collinear u/v spans no plane (from_halfvec_arrays only rejects a zero
+        # `u`); such a row keeps its stored normal rather than dividing by zero.
+        ok = lengths > 0.0
+        rows = np.flatnonzero(finite)[ok]
+        normals[rows] = (cross[ok] / lengths[ok, None]).astype(np.float32)
 
     new_bitmaps = None
     if patch_bitmaps is not None:

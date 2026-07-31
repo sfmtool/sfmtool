@@ -150,7 +150,13 @@ thereafter (the per-round obliquity drop).
    valid consensus bitmap for — one uniform rule for finite and infinity points
    (no point is kept with an all-black bitmap).
 7. **Compact.** Renumber the surviving points and observations into a dense,
-   valid `embedded_patches` reconstruction carrying the fused bitmaps.
+   valid `embedded_patches` reconstruction carrying the fused bitmaps. Each
+   surviving finite point's stored normal is re-derived from the frame being
+   written — `n_p = normalize(u_p × v_p)` — so the two agree in the output; the
+   incoming reconstruction's `normals_xyz` predates the refinement that rotated
+   the frames and is not carried through. A point at infinity keeps its stored
+   `(0, 0, 0)` row: its normal is implied by the direction, and refinement never
+   moves its tangent-sphere frame.
 
 ## Where it lives
 

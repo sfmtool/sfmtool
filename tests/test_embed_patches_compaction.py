@@ -159,6 +159,75 @@ def test_compact_to_embedded_patches_round_trip(
     assert reloaded.patch_bitmaps.shape[0] == reloaded.point_count
 
 
+def _normal_frame_angles_deg(recon) -> np.ndarray:
+    """Per finite patched point, the angle (degrees) between the stored
+    ``normals_xyz`` row and its patch frame's outward normal ``normalize(u × v)``
+    — the coherence the ``.sfmr`` format defines for a finite patch (see
+    ``specs/formats/sfmr-file-format.md``, "Per-point patch frame")."""
+    cloud = recon.patches
+    assert cloud is not None, "expected a patch frame"
+    assert recon.has_normals, "expected stored normals"
+    normals = np.asarray(recon.normals, dtype=np.float64)
+    pids = np.asarray(cloud.point_indexes)
+    finite = ~np.asarray(recon.point_is_at_infinity)[pids]
+    frame = np.asarray(
+        [np.asarray(cloud[i].normal, np.float64) for i in range(len(cloud))]
+    )[finite]
+    stored = normals[pids[finite]]
+    stored = stored / np.linalg.norm(stored, axis=1, keepdims=True)
+    dots = np.clip(np.sum(stored * frame, axis=1), -1.0, 1.0)
+    return np.degrees(np.arccos(dots))
+
+
+def test_compact_normals_match_the_written_patch_frame(
+    seoul_bull_workspace: Path, tmp_path: Path
+):
+    """Regression: the compaction must store the normal of the cloud it *writes*.
+
+    ``refine_normals`` rotates the patch cloud in place, so the source recon's
+    ``normals_xyz`` array describes the pre-refinement plane. Carrying it through
+    verbatim left the written file self-inconsistent (stored normal vs.
+    ``normalize(u × v)`` of the stored frame). Assert the format's finite-patch
+    coherence on the compacted recon, and again after a ``.sfmr`` round trip.
+    """
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = _load_images(recon)
+    cloud, bitmaps, locs = _run_pipeline(recon, images)
+    hashes = image_file_hashes_from_images(recon)
+
+    # The refinement actually moved the frames — otherwise the assertion below
+    # would pass trivially against the stale array.
+    seed = PatchCloud.from_reconstruction(
+        recon, normal="mean_viewing", extent_value=5.0
+    )
+    seed_n = np.asarray(
+        [np.asarray(seed[i].normal, np.float64) for i in range(len(seed))]
+    )
+    ref_n = np.asarray(
+        [np.asarray(cloud[i].normal, np.float64) for i in range(len(cloud))]
+    )
+    assert np.abs(np.sum(seed_n * ref_n, axis=1) - 1.0).max() > 1e-6, (
+        "fixture: refine_normals rotated nothing, so the regression is untestable"
+    )
+
+    new = compact_to_embedded_patches(
+        recon, cloud, locs, hashes, patch_bitmaps=bitmaps, min_views=2
+    )
+    ang = _normal_frame_angles_deg(new)
+    assert ang.max() < 1e-3, (
+        f"stored normals disagree with the written patch frame "
+        f"(max {ang.max():.3f} deg over {len(ang)} finite patched points)"
+    )
+
+    # The coherence survives the .sfmr round trip (both arrays are stored as
+    # float32, so this also pins that the write path keeps them in agreement).
+    out = tmp_path / "coherent.sfmr"
+    new.save(str(out), operation="embed_patches")
+    valid_file, errors = verify_sfmr(str(out))
+    assert valid_file, f"integrity check failed: {errors}"
+    assert _normal_frame_angles_deg(SfmrReconstruction.load(str(out))).max() < 1e-3
+
+
 def test_compact_min_views_culls_points(seoul_bull_workspace: Path):
     """Raising min_views drops more points (and never keeps an under-supported one)."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
