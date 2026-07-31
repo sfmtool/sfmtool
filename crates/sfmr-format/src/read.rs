@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use ndarray::{Array1, Array2, Array4};
 
-use crate::archive_io::{read_binary_array, read_json_entry, read_uint128_array};
+use sfmtool_archive_io::{read_binary_array, read_json_entry, read_uint128_array};
 
 use crate::types::*;
 

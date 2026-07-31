@@ -305,6 +305,22 @@ drifting, and drift here is silent — no compile error, just two behaviours.
   `break` vs `break 'outer`, so verifier output ordering may shift.
 
 **`archive_io.rs` is copy-pasted into all four format crates, and camrig diverged in the right direction**
+
+> _Status (2026-07-31): Done — extracted to a new `sfmtool-archive-io` workspace
+> crate. The four copies are deleted; camrig's non-cloning `write_binary_entry`
+> signature is now the only one. All 51 clone sites in the two big writers are
+> gone: `sfmr-format`/`matches-format` moved to a new `write_binary_entry_hashed`
+> helper that writes the entry and folds the uncompressed bytes into the section
+> hasher in one call, so an entry can no longer be written without being hashed,
+> or hashed out of write order. `raw_to_u32`/`raw_to_f64` moved there too, taking
+> the unaligned-buffer regression test with them (it had only ever guarded the
+> sfmr copy). `read_uint128_array` was **kept**, correcting this finding: it is
+> dead only in `sift-format`, but live in `sfmr-format/src/read.rs:10` and
+> `matches-format/src/read.rs:12`, so the shared copy simply drops sift's
+> `#[allow(dead_code)]`. Verified beyond the suites by cross-verification —
+> archives written by the pre-change tree verify under the new verifier and vice
+> versa, in both formats — so stored content hashes are unchanged._
+
 - Location: `crates/{sfmr,sift,matches,camrig}-format/src/archive_io.rs` (163/164/164/142)
 - Problem: Verified by diff. `sfmr` vs `sift`: one line. `sift` vs `matches`: a doc
   comment plus that line. So three copies are functionally identical. **`camrig` is
@@ -330,6 +346,27 @@ drifting, and drift here is silent — no compile error, just two behaviours.
 - Note: this supersedes the old report's `archive_io` finding, which was deferred
   twice (2026-06-23 #9) on the grounds that the copies were still in sync. They are
   no longer, and the drift now carries a measurable allocation cost.
+
+**Archives are not byte-reproducible: `HashMap` fields serialize in randomized order**
+- _Added 2026-07-31, found while validating the `archive_io` extraction — not part
+  of the original snapshot._
+- Location: `crates/sfmr-format/src/types.rs:66` (`parameters: HashMap<String, f64>`),
+  `:114` (`tool_options: HashMap<String, serde_json::Value>`)
+- Problem: Writing the *same* `SfmrData` twice in two processes produces archives
+  that differ in bytes and in stored `metadata` hash — measured: two runs of one
+  unchanged binary emitted `basic.sfmr` at 4,873 and 4,874 bytes. Rust's `HashMap`
+  iteration order is randomized per process, and `serde_json` serializes in
+  iteration order, so the camera-parameter JSON key order varies run to run.
+  Verification is unaffected (the hash is computed over what was actually
+  written), so this is not a correctness bug — but it rules out byte-comparing
+  two archives as a regression test, which is exactly the check a future change to
+  the write path most wants.
+- Proposed fix: `BTreeMap<String, f64>` for `parameters`, or
+  `#[serde(serialize_with = …)]` sorting keys. Either makes writes reproducible
+  and changes no existing file's validity. Note it *does* change the metadata hash
+  of newly written files relative to old ones, which is already true run-to-run.
+- Effort: low
+- Risk: low
 
 **Four monolithic per-section entry points in the two big format crates**
 - Location: `sfmr-format/src/write.rs:96–628` (`write_sfmr_with_options`, **533**);
@@ -826,7 +863,8 @@ convention and is applied consistently.
    `solve_lm_mixed`. Highest value because every future fix to the damping ladder,
    the Schur accumulation or the convergence test currently has to be made twice,
    and a miss is silent. Gate it on a bit-identity test.
-2. **`archive_io.rs` unification into a shared crate** — the only finding that is
+2. **`archive_io.rs` unification into a shared crate** — _done 2026-07-31 as
+   `sfmtool-archive-io`; see the status note on the finding above._ The only finding that is
    simultaneously a duplication fix (4 copies), a dead-code removal
    (`read_uint128_array`), and a measurable performance fix (51 whole-column clones
    in the two big writers, already avoided in `camrig-format` but unreachable by the

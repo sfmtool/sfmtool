@@ -891,7 +891,7 @@ fn set_f64(bytes: &mut [u8], index: usize, value: f64) {
 /// flags (mirroring the writer/verifier), so hash checks stay green and the
 /// structural error under test is the one that fires.
 fn rebuild_matches_archive(entries: &[(String, Vec<u8>)], dst: &std::path::Path) {
-    use crate::archive_io::format_hash;
+    use sfmtool_archive_io::format_hash;
     use std::io::Write;
     use xxhash_rust::xxh3::Xxh3;
 

@@ -9,8 +9,8 @@ use std::path::Path;
 use ndarray::{Array1, Array2, Array3};
 use zip::ZipArchive;
 
-use crate::archive_io::{read_binary_array, read_json_entry, read_uint128_array};
 use crate::types::*;
+use sfmtool_archive_io::{read_binary_array, read_json_entry, read_uint128_array};
 
 /// Read only the top-level metadata from a `.matches` file (fast, no binary data).
 pub fn read_matches_metadata(path: &Path) -> Result<MatchesMetadata, MatchesError> {

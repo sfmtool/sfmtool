@@ -18,7 +18,6 @@ compile_error!(
     "matches-format requires a little-endian target (binary arrays are stored as little-endian)"
 );
 
-pub(crate) mod archive_io;
 mod read;
 mod types;
 mod verify;

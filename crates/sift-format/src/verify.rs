@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use crate::archive_io::{format_hash, read_zst_entry};
+use sfmtool_archive_io::{format_hash, read_zst_entry};
 
 use crate::types::*;
 

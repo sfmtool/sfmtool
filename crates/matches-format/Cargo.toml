@@ -9,6 +9,7 @@ license = "Apache-2.0"
 description = "Read/write .matches file format for feature match correspondences"
 
 [dependencies]
+sfmtool-archive-io = { path = "../sfmtool-archive-io" }
 ndarray = "0.17"
 bytemuck = { version = "1.25", features = ["derive"] }
 zip = { version = "8", default-features = false, features = ["deflate"] }

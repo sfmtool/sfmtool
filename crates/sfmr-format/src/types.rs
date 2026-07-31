@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
-use crate::archive_io::ArchiveIoError;
+use sfmtool_archive_io::ArchiveIoError;
 
 /// Errors that can occur when reading or writing `.sfmr` files.
 #[derive(Error, Debug)]

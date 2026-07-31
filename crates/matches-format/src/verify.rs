@@ -3,51 +3,12 @@
 
 //! `.matches` file integrity verification.
 
-use std::borrow::Cow;
 use std::path::Path;
 
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::archive_io::{format_hash, read_zst_entry};
 use crate::types::*;
-
-/// Reinterpret a freshly decompressed byte buffer as `u32` values.
-///
-/// `read_zst_entry` returns a `Vec<u8>` whose start address is only guaranteed
-/// to be 1-aligned, so `bytemuck::cast_slice::<u8, u32>` panics when the buffer
-/// is not 4-aligned. Borrow the buffer directly when it is already aligned (the
-/// common case, no copy), and fall back to copying through a freshly aligned
-/// `Vec<u32>` only when it is not. Any trailing bytes that do not form a whole
-/// `u32` (truncated/corrupt entry) are dropped; structural checks downstream
-/// then catch the mismatch.
-fn raw_to_u32(raw: &[u8]) -> Cow<'_, [u32]> {
-    let size = std::mem::size_of::<u32>();
-    let n = raw.len() / size;
-    let trimmed = &raw[..n * size];
-    match bytemuck::try_cast_slice::<u8, u32>(trimmed) {
-        Ok(slice) => Cow::Borrowed(slice),
-        Err(_) => {
-            let mut out = vec![0u32; n];
-            bytemuck::cast_slice_mut::<u32, u8>(&mut out).copy_from_slice(trimmed);
-            Cow::Owned(out)
-        }
-    }
-}
-
-/// [`raw_to_u32`] for `f64` entries (8-byte alignment fallback included).
-fn raw_to_f64(raw: &[u8]) -> Cow<'_, [f64]> {
-    let size = std::mem::size_of::<f64>();
-    let n = raw.len() / size;
-    let trimmed = &raw[..n * size];
-    match bytemuck::try_cast_slice::<u8, f64>(trimmed) {
-        Ok(slice) => Cow::Borrowed(slice),
-        Err(_) => {
-            let mut out = vec![0f64; n];
-            bytemuck::cast_slice_mut::<f64, u8>(&mut out).copy_from_slice(trimmed);
-            Cow::Owned(out)
-        }
-    }
-}
+use sfmtool_archive_io::{format_hash, raw_to_f64, raw_to_u32, read_zst_entry};
 
 /// Check the backbone rule and metadata flag / summary-count / zip-entry
 /// consistency. Returns the errors found; when non-empty the caller reports

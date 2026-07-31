@@ -5,8 +5,8 @@
 
 use std::path::Path;
 
-use crate::archive_io::{format_hash, read_zst_entry};
 use crate::types::*;
+use sfmtool_archive_io::{format_hash, read_zst_entry};
 
 /// Verify a `.camrig` file: content-hash integrity *and* structural validity.
 ///

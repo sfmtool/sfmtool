@@ -9,7 +9,7 @@ use std::path::Path;
 use ndarray::{Array2, Array3};
 use zip::ZipArchive;
 
-use crate::archive_io::{read_binary_array, read_json_entry};
+use sfmtool_archive_io::{read_binary_array, read_json_entry};
 
 use crate::types::*;
 
@@ -196,7 +196,7 @@ fn read_partial_f32_array<R: Read + Seek>(
     count: usize,
     cols: usize,
 ) -> Result<Array2<f32>, SiftError> {
-    let bytes = crate::archive_io::read_zst_entry(archive, name)?;
+    let bytes = sfmtool_archive_io::read_zst_entry(archive, name)?;
     let f32_size = std::mem::size_of::<f32>();
     let item_bytes = count * cols * f32_size;
     // Clamp to the available bytes and round down to a whole number of items
@@ -229,7 +229,7 @@ fn read_partial_u8_array<R: Read + Seek>(
     count: usize,
     cols: usize,
 ) -> Result<Array2<u8>, SiftError> {
-    let bytes = crate::archive_io::read_zst_entry(archive, name)?;
+    let bytes = sfmtool_archive_io::read_zst_entry(archive, name)?;
     let item_bytes = count * cols;
     let read_bytes = item_bytes.min(bytes.len());
     let slice = &bytes[..read_bytes];

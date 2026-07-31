@@ -19,7 +19,6 @@ compile_error!(
     "camrig-format requires a little-endian target (binary arrays are stored as little-endian)"
 );
 
-pub(crate) mod archive_io;
 mod pattern;
 mod read;
 mod types;

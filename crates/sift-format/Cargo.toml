@@ -9,6 +9,7 @@ license = "Apache-2.0"
 description = "Read/write .sift file format for SIFT feature descriptors"
 
 [dependencies]
+sfmtool-archive-io = { path = "../sfmtool-archive-io" }
 ndarray = "0.17"
 bytemuck = { version = "1.25", features = ["derive"] }
 zip = { version = "8", default-features = false, features = ["deflate"] }

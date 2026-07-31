@@ -9,8 +9,8 @@ use ndarray::Array2;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::archive_io::ArchiveIoError;
 use crate::pattern::{count_frame_fields, validate_pattern};
+use sfmtool_archive_io::ArchiveIoError;
 
 /// Errors that can occur when reading or writing `.camrig` files.
 #[derive(Error, Debug)]

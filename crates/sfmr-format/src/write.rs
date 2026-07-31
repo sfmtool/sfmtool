@@ -9,7 +9,7 @@ use std::path::Path;
 use xxhash_rust::xxh3::Xxh3;
 use zip::ZipWriter;
 
-use crate::archive_io::{format_hash, write_binary_entry, write_json_entry};
+use sfmtool_archive_io::{format_hash, write_binary_entry_hashed, write_json_entry};
 
 use crate::depth_stats::{compute_depth_statistics, DepthStatsResult};
 use crate::types::*;
@@ -225,31 +225,31 @@ pub fn write_sfmr_with_options(
         rigs_hasher.update(&bytes);
 
         // rigs/sensor_camera_indexes
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("rigs/sensor_camera_indexes.{sensor_count}.uint32.zst"),
             bytemuck::cast_slice(rf.sensor_camera_indexes.as_slice().unwrap()),
             options.zstd_level,
+            &mut rigs_hasher,
         )?;
-        rigs_hasher.update(&bytes);
 
         // rigs/sensor_quaternions_wxyz
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("rigs/sensor_quaternions_wxyz.{sensor_count}.4.float64.zst"),
             bytemuck::cast_slice(rf.sensor_quaternions_wxyz.as_slice().unwrap()),
             options.zstd_level,
+            &mut rigs_hasher,
         )?;
-        rigs_hasher.update(&bytes);
 
         // rigs/sensor_translations_xyz
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("rigs/sensor_translations_xyz.{sensor_count}.3.float64.zst"),
             bytemuck::cast_slice(rf.sensor_translations_xyz.as_slice().unwrap()),
             options.zstd_level,
+            &mut rigs_hasher,
         )?;
-        rigs_hasher.update(&bytes);
 
         let rigs_digest = rigs_hasher.digest128();
         section_digests.push(rigs_digest);
@@ -259,22 +259,22 @@ pub fn write_sfmr_with_options(
         let mut frames_hasher = Xxh3::new();
 
         // frames/image_frame_indexes
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("frames/image_frame_indexes.{image_count}.uint32.zst"),
             bytemuck::cast_slice(rf.image_frame_indexes.as_slice().unwrap()),
             options.zstd_level,
+            &mut frames_hasher,
         )?;
-        frames_hasher.update(&bytes);
 
         // frames/image_sensor_indexes
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("frames/image_sensor_indexes.{image_count}.uint32.zst"),
             bytemuck::cast_slice(rf.image_sensor_indexes.as_slice().unwrap()),
             options.zstd_level,
+            &mut frames_hasher,
         )?;
-        frames_hasher.update(&bytes);
 
         // frames/metadata.json
         let bytes = write_json_entry(
@@ -286,13 +286,13 @@ pub fn write_sfmr_with_options(
         frames_hasher.update(&bytes);
 
         // frames/rig_indexes
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("frames/rig_indexes.{frame_count}.uint32.zst"),
             bytemuck::cast_slice(rf.rig_indexes.as_slice().unwrap()),
             options.zstd_level,
+            &mut frames_hasher,
         )?;
-        frames_hasher.update(&bytes);
 
         let frames_digest = frames_hasher.digest128();
         section_digests.push(frames_digest);
@@ -306,13 +306,13 @@ pub fn write_sfmr_with_options(
     let mut images_hasher = Xxh3::new();
 
     // images/camera_indexes
-    let bytes = write_binary_entry(
+    write_binary_entry_hashed(
         &mut zip,
         &format!("images/camera_indexes.{image_count}.uint32.zst"),
         bytemuck::cast_slice(data.camera_indexes.as_slice().unwrap()),
         options.zstd_level,
+        &mut images_hasher,
     )?;
-    images_hasher.update(&bytes);
 
     // images/depth_statistics.json
     let bytes = write_json_entry(
@@ -334,13 +334,13 @@ pub fn write_sfmr_with_options(
             .iter()
             .flat_map(|h| h.iter().copied())
             .collect();
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("images/image_file_hashes.{image_count}.uint128.zst"),
             &hash_bytes,
             options.zstd_level,
+            &mut images_hasher,
         )?;
-        images_hasher.update(&bytes);
     } else {
         let hash_bytes: Vec<u8> = data
             .feature_tool_hashes
@@ -349,13 +349,13 @@ pub fn write_sfmr_with_options(
             .iter()
             .flat_map(|h| h.iter().copied())
             .collect();
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
             &hash_bytes,
             options.zstd_level,
+            &mut images_hasher,
         )?;
-        images_hasher.update(&bytes);
     }
 
     // images/metadata.json
@@ -378,22 +378,22 @@ pub fn write_sfmr_with_options(
     images_hasher.update(&bytes);
 
     // images/observed_depth_histogram_counts
-    let bytes = write_binary_entry(
+    write_binary_entry_hashed(
         &mut zip,
         &format!("images/observed_depth_histogram_counts.{image_count}.{num_buckets}.uint32.zst"),
         bytemuck::cast_slice(observed_depth_histogram_counts.as_slice().unwrap()),
         options.zstd_level,
+        &mut images_hasher,
     )?;
-    images_hasher.update(&bytes);
 
     // images/quaternions_wxyz
-    let bytes = write_binary_entry(
+    write_binary_entry_hashed(
         &mut zip,
         &format!("images/quaternions_wxyz.{image_count}.4.float64.zst"),
         bytemuck::cast_slice(data.quaternions_wxyz.as_slice().unwrap()),
         options.zstd_level,
+        &mut images_hasher,
     )?;
-    images_hasher.update(&bytes);
 
     // images/sift_content_hashes (sift_files only; absent in embedded_patches)
     if !is_embedded {
@@ -404,32 +404,32 @@ pub fn write_sfmr_with_options(
             .iter()
             .flat_map(|h| h.iter().copied())
             .collect();
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("images/sift_content_hashes.{image_count}.uint128.zst"),
             &hash_bytes,
             options.zstd_level,
+            &mut images_hasher,
         )?;
-        images_hasher.update(&bytes);
     }
 
     // images/thumbnails_y_x_rgb
-    let bytes = write_binary_entry(
+    write_binary_entry_hashed(
         &mut zip,
         &format!("images/thumbnails_y_x_rgb.{image_count}.128.128.3.uint8.zst"),
         data.thumbnails_y_x_rgb.as_slice().unwrap(),
         options.zstd_level,
+        &mut images_hasher,
     )?;
-    images_hasher.update(&bytes);
 
     // images/translations_xyz
-    let bytes = write_binary_entry(
+    write_binary_entry_hashed(
         &mut zip,
         &format!("images/translations_xyz.{image_count}.3.float64.zst"),
         bytemuck::cast_slice(data.translations_xyz.as_slice().unwrap()),
         options.zstd_level,
+        &mut images_hasher,
     )?;
-    images_hasher.update(&bytes);
 
     let images_hash = images_hasher.digest128();
     section_digests.push(images_hash);
@@ -442,13 +442,13 @@ pub fn write_sfmr_with_options(
     let mut points3d_hasher = Xxh3::new();
 
     // points3d/colors_rgb
-    let bytes = write_binary_entry(
+    write_binary_entry_hashed(
         &mut zip,
         &format!("points3d/colors_rgb.{point_count}.3.uint8.zst"),
         data.colors_rgb.as_slice().unwrap(),
         options.zstd_level,
+        &mut points3d_hasher,
     )?;
-    points3d_hasher.update(&bytes);
 
     // points3d/metadata.json (records which optional per-point arrays are present)
     let patch_bitmap_resolution = data.patch_bitmaps_y_x_rgba.as_ref().map(|b| b.shape()[1]);
@@ -469,62 +469,62 @@ pub fn write_sfmr_with_options(
 
     // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
     if let Some(normals_xyz) = &normals_xyz {
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("points3d/normals_xyz.{point_count}.3.float32.zst"),
             bytemuck::cast_slice(normals_xyz.as_slice().unwrap()),
             options.zstd_level,
+            &mut points3d_hasher,
         )?;
-        points3d_hasher.update(&bytes);
     }
 
     // Optional patch frame, in lexicographic order: bitmaps, u, v.
     if let Some(bitmaps) = &data.patch_bitmaps_y_x_rgba {
         let r = bitmaps.shape()[1];
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("points3d/patch_bitmaps_y_x_rgba.{point_count}.{r}.{r}.4.uint8.zst"),
             bitmaps.as_slice().unwrap(),
             options.zstd_level,
+            &mut points3d_hasher,
         )?;
-        points3d_hasher.update(&bytes);
     }
     if let Some(u) = &data.patch_u_halfvec_xyz {
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("points3d/patch_u_halfvec_xyz.{point_count}.3.float32.zst"),
             bytemuck::cast_slice(u.as_slice().unwrap()),
             options.zstd_level,
+            &mut points3d_hasher,
         )?;
-        points3d_hasher.update(&bytes);
     }
     if let Some(v) = &data.patch_v_halfvec_xyz {
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("points3d/patch_v_halfvec_xyz.{point_count}.3.float32.zst"),
             bytemuck::cast_slice(v.as_slice().unwrap()),
             options.zstd_level,
+            &mut points3d_hasher,
         )?;
-        points3d_hasher.update(&bytes);
     }
 
     // points3d/positions_xyzw
-    let bytes = write_binary_entry(
+    write_binary_entry_hashed(
         &mut zip,
         &format!("points3d/positions_xyzw.{point_count}.4.float64.zst"),
         bytemuck::cast_slice(data.positions_xyzw.as_slice().unwrap()),
         options.zstd_level,
+        &mut points3d_hasher,
     )?;
-    points3d_hasher.update(&bytes);
 
     // points3d/reprojection_errors
-    let bytes = write_binary_entry(
+    write_binary_entry_hashed(
         &mut zip,
         &format!("points3d/reprojection_errors.{point_count}.float32.zst"),
         bytemuck::cast_slice(data.reprojection_errors.as_slice().unwrap()),
         options.zstd_level,
+        &mut points3d_hasher,
     )?;
-    points3d_hasher.update(&bytes);
 
     let points3d_hash = points3d_hasher.digest128();
     section_digests.push(points3d_hash);
@@ -534,34 +534,34 @@ pub fn write_sfmr_with_options(
 
     // tracks/feature_indexes (sift_files only; lexicographically before image_indexes)
     if !is_embedded {
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("tracks/feature_indexes.{observation_count}.uint32.zst"),
             bytemuck::cast_slice(data.feature_indexes.as_ref().unwrap().as_slice().unwrap()),
             options.zstd_level,
+            &mut tracks_hasher,
         )?;
-        tracks_hasher.update(&bytes);
     }
 
     // tracks/image_indexes
-    let bytes = write_binary_entry(
+    write_binary_entry_hashed(
         &mut zip,
         &format!("tracks/image_indexes.{observation_count}.uint32.zst"),
         bytemuck::cast_slice(data.image_indexes.as_slice().unwrap()),
         options.zstd_level,
+        &mut tracks_hasher,
     )?;
-    tracks_hasher.update(&bytes);
 
     // tracks/keypoints_xy (embedded_patches only; lexicographically after
     // image_indexes, before metadata.json)
     if is_embedded {
-        let bytes = write_binary_entry(
+        write_binary_entry_hashed(
             &mut zip,
             &format!("tracks/keypoints_xy.{observation_count}.2.float32.zst"),
             bytemuck::cast_slice(data.keypoints_xy.as_ref().unwrap().as_slice().unwrap()),
             options.zstd_level,
+            &mut tracks_hasher,
         )?;
-        tracks_hasher.update(&bytes);
     }
 
     // tracks/metadata.json
@@ -579,22 +579,22 @@ pub fn write_sfmr_with_options(
     tracks_hasher.update(&bytes);
 
     // tracks/observation_counts
-    let bytes = write_binary_entry(
+    write_binary_entry_hashed(
         &mut zip,
         &format!("tracks/observation_counts.{point_count}.uint32.zst"),
         bytemuck::cast_slice(data.observation_counts.as_slice().unwrap()),
         options.zstd_level,
+        &mut tracks_hasher,
     )?;
-    tracks_hasher.update(&bytes);
 
     // tracks/point_indexes
-    let bytes = write_binary_entry(
+    write_binary_entry_hashed(
         &mut zip,
         &format!("tracks/point_indexes.{observation_count}.uint32.zst"),
         bytemuck::cast_slice(data.point_indexes.as_slice().unwrap()),
         options.zstd_level,
+        &mut tracks_hasher,
     )?;
-    tracks_hasher.update(&bytes);
 
     let tracks_hash = tracks_hasher.digest128();
     section_digests.push(tracks_hash);

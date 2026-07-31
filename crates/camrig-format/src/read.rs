@@ -8,8 +8,8 @@ use std::path::Path;
 use ndarray::Array2;
 use zip::ZipArchive;
 
-use crate::archive_io::{read_binary_array, read_json_entry};
 use crate::types::*;
+use sfmtool_archive_io::{read_binary_array, read_json_entry};
 
 /// Read only metadata from a `.camrig` file (fast, no binary data).
 pub fn read_camrig_metadata(

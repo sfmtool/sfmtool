@@ -14,7 +14,6 @@ compile_error!(
     "sfmr-format requires a little-endian target (binary arrays are stored as little-endian)"
 );
 
-pub(crate) mod archive_io;
 mod depth_stats;
 mod read;
 mod types;

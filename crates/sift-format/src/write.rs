@@ -7,7 +7,7 @@ use std::path::Path;
 
 use zip::ZipWriter;
 
-use crate::archive_io::{format_hash, write_binary_entry, write_json_entry};
+use sfmtool_archive_io::{format_hash, write_binary_entry, write_json_entry};
 
 use crate::types::*;
 
@@ -49,42 +49,44 @@ pub fn write_sift(path: &Path, data: &SiftData, zstd_level: i32) -> Result<(), S
         .extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&metadata_bytes).to_be_bytes());
 
     // Position data
-    let pos_bytes = write_binary_entry(
+    let pos_bytes: &[u8] = bytemuck::cast_slice(data.positions_xy.as_slice().unwrap());
+    write_binary_entry(
         &mut zip,
         &format!("features/positions_xy.{feature_count}.2.float32.zst"),
-        bytemuck::cast_slice(data.positions_xy.as_slice().unwrap()),
+        pos_bytes,
         zstd_level,
     )?;
-    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&pos_bytes).to_be_bytes());
+    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(pos_bytes).to_be_bytes());
 
     // Affine shape data
-    let shape_bytes = write_binary_entry(
+    let shape_bytes: &[u8] = bytemuck::cast_slice(data.affine_shapes.as_slice().unwrap());
+    write_binary_entry(
         &mut zip,
         &format!("features/affine_shapes.{feature_count}.2.2.float32.zst"),
-        bytemuck::cast_slice(data.affine_shapes.as_slice().unwrap()),
+        shape_bytes,
         zstd_level,
     )?;
-    content_hash_digests
-        .extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&shape_bytes).to_be_bytes());
+    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(shape_bytes).to_be_bytes());
 
     // Descriptor data
-    let desc_bytes = write_binary_entry(
+    let desc_bytes: &[u8] = data.descriptors.as_slice().unwrap();
+    write_binary_entry(
         &mut zip,
         &format!("features/descriptors.{feature_count}.128.uint8.zst"),
-        data.descriptors.as_slice().unwrap(),
+        desc_bytes,
         zstd_level,
     )?;
-    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&desc_bytes).to_be_bytes());
+    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(desc_bytes).to_be_bytes());
 
     // Thumbnail data
-    let thumb_bytes = write_binary_entry(
+    let thumb_bytes: &[u8] = data.thumbnail_y_x_rgb.as_slice().unwrap();
+    write_binary_entry(
         &mut zip,
         "thumbnail_y_x_rgb.128.128.3.uint8.zst",
-        data.thumbnail_y_x_rgb.as_slice().unwrap(),
+        thumb_bytes,
         zstd_level,
     )?;
-    content_hash_digests
-        .extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&thumb_bytes).to_be_bytes());
+    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(thumb_bytes).to_be_bytes());
 
     // Compute and write content hash
     let content_xxh128 = xxhash_rust::xxh3::xxh3_128(&content_hash_digests);

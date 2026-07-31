@@ -7,8 +7,8 @@ use std::path::Path;
 
 use zip::ZipWriter;
 
-use crate::archive_io::{format_hash, write_binary_entry, write_json_entry};
 use crate::types::*;
+use sfmtool_archive_io::{format_hash, write_binary_entry, write_json_entry};
 
 /// Write columnar camera-rig data to a `.camrig` file.
 ///

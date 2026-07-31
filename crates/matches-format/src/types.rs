@@ -12,7 +12,7 @@ use ndarray::{Array1, Array2, Array3};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::archive_io::ArchiveIoError;
+use sfmtool_archive_io::ArchiveIoError;
 
 /// Errors that can occur when reading or writing `.matches` files.
 #[derive(Error, Debug)]
