@@ -49,10 +49,7 @@ impl PyKdTree2d {
                     )));
                 }
                 let n = shape[0];
-                let data: Cow<[f32]> = match arr.as_slice() {
-                    Ok(s) => Cow::Borrowed(s),
-                    Err(_) => Cow::Owned(arr.as_array().iter().copied().collect()),
-                };
+                let data: Cow<[f32]> = to_contiguous!(arr);
                 Ok(Self {
                     inner: Inner2d::F32(PointCloud2::<f32>::new(&data, n)),
                 })
@@ -67,10 +64,7 @@ impl PyKdTree2d {
                     )));
                 }
                 let n = shape[0];
-                let data: Cow<[f64]> = match arr.as_slice() {
-                    Ok(s) => Cow::Borrowed(s),
-                    Err(_) => Cow::Owned(arr.as_array().iter().copied().collect()),
-                };
+                let data: Cow<[f64]> = to_contiguous!(arr);
                 Ok(Self {
                     inner: Inner2d::F64(PointCloud2::<f64>::new(&data, n)),
                 })
@@ -116,7 +110,7 @@ impl PyKdTree2d {
                 let arr: PyReadonlyArray2<f32> = query_points.extract()?;
                 check_dim(&arr, 2)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let result = cloud.nearest(&data, n);
                 Ok(numpy::PyArray1::from_vec(py, result).into_any().unbind())
             }
@@ -124,7 +118,7 @@ impl PyKdTree2d {
                 let arr: PyReadonlyArray2<f64> = query_points.extract()?;
                 check_dim(&arr, 2)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let result = cloud.nearest(&data, n);
                 Ok(numpy::PyArray1::from_vec(py, result).into_any().unbind())
             }
@@ -151,7 +145,7 @@ impl PyKdTree2d {
                 let arr: PyReadonlyArray2<f32> = query_points.extract()?;
                 check_dim(&arr, 2)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let flat = cloud.nearest_k(&data, n, k);
                 let out = numpy::PyArray1::from_vec(py, flat).reshape([n, k])?;
                 Ok(out.into_any().unbind())
@@ -160,7 +154,7 @@ impl PyKdTree2d {
                 let arr: PyReadonlyArray2<f64> = query_points.extract()?;
                 check_dim(&arr, 2)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let flat = cloud.nearest_k(&data, n, k);
                 let out = numpy::PyArray1::from_vec(py, flat).reshape([n, k])?;
                 Ok(out.into_any().unbind())
@@ -195,7 +189,7 @@ impl PyKdTree2d {
                 let arr: PyReadonlyArray2<f32> = query_points.extract()?;
                 check_dim(&arr, 2)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let flat = py.detach(|| cloud.nearest_k_within_radius(&data, n, k, radius as f32));
                 let out = numpy::PyArray1::from_vec(py, flat).reshape([n, k])?;
                 Ok(out.into_any().unbind())
@@ -204,7 +198,7 @@ impl PyKdTree2d {
                 let arr: PyReadonlyArray2<f64> = query_points.extract()?;
                 check_dim(&arr, 2)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let flat = py.detach(|| cloud.nearest_k_within_radius(&data, n, k, radius));
                 let out = numpy::PyArray1::from_vec(py, flat).reshape([n, k])?;
                 Ok(out.into_any().unbind())
@@ -234,7 +228,7 @@ impl PyKdTree2d {
                 let arr: PyReadonlyArray2<f32> = query_points.extract()?;
                 check_dim(&arr, 2)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let (offsets, indices) = cloud.within_radius(&data, n, radius as f32);
                 Ok((
                     numpy::PyArray1::from_vec(py, offsets).into_any().unbind(),
@@ -245,7 +239,7 @@ impl PyKdTree2d {
                 let arr: PyReadonlyArray2<f64> = query_points.extract()?;
                 check_dim(&arr, 2)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let (offsets, indices) = cloud.within_radius(&data, n, radius);
                 Ok((
                     numpy::PyArray1::from_vec(py, offsets).into_any().unbind(),
@@ -336,10 +330,7 @@ impl PyKdTree3d {
                     )));
                 }
                 let n = shape[0];
-                let data: Cow<[f32]> = match arr.as_slice() {
-                    Ok(s) => Cow::Borrowed(s),
-                    Err(_) => Cow::Owned(arr.as_array().iter().copied().collect()),
-                };
+                let data: Cow<[f32]> = to_contiguous!(arr);
                 Ok(Self {
                     inner: Inner3d::F32(PointCloud3::<f32>::new(&data, n)),
                 })
@@ -354,10 +345,7 @@ impl PyKdTree3d {
                     )));
                 }
                 let n = shape[0];
-                let data: Cow<[f64]> = match arr.as_slice() {
-                    Ok(s) => Cow::Borrowed(s),
-                    Err(_) => Cow::Owned(arr.as_array().iter().copied().collect()),
-                };
+                let data: Cow<[f64]> = to_contiguous!(arr);
                 Ok(Self {
                     inner: Inner3d::F64(PointCloud3::<f64>::new(&data, n)),
                 })
@@ -397,7 +385,7 @@ impl PyKdTree3d {
                 let arr: PyReadonlyArray2<f32> = query_points.extract()?;
                 check_dim(&arr, 3)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let result = cloud.nearest(&data, n);
                 Ok(numpy::PyArray1::from_vec(py, result).into_any().unbind())
             }
@@ -405,7 +393,7 @@ impl PyKdTree3d {
                 let arr: PyReadonlyArray2<f64> = query_points.extract()?;
                 check_dim(&arr, 3)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let result = cloud.nearest(&data, n);
                 Ok(numpy::PyArray1::from_vec(py, result).into_any().unbind())
             }
@@ -424,7 +412,7 @@ impl PyKdTree3d {
                 let arr: PyReadonlyArray2<f32> = query_points.extract()?;
                 check_dim(&arr, 3)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let flat = cloud.nearest_k(&data, n, k);
                 let out = numpy::PyArray1::from_vec(py, flat).reshape([n, k])?;
                 Ok(out.into_any().unbind())
@@ -433,7 +421,7 @@ impl PyKdTree3d {
                 let arr: PyReadonlyArray2<f64> = query_points.extract()?;
                 check_dim(&arr, 3)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let flat = cloud.nearest_k(&data, n, k);
                 let out = numpy::PyArray1::from_vec(py, flat).reshape([n, k])?;
                 Ok(out.into_any().unbind())
@@ -463,7 +451,7 @@ impl PyKdTree3d {
                 let arr: PyReadonlyArray2<f32> = query_points.extract()?;
                 check_dim(&arr, 3)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let flat = cloud.nearest_k_within_radius(&data, n, k, radius as f32);
                 let out = numpy::PyArray1::from_vec(py, flat).reshape([n, k])?;
                 Ok(out.into_any().unbind())
@@ -472,7 +460,7 @@ impl PyKdTree3d {
                 let arr: PyReadonlyArray2<f64> = query_points.extract()?;
                 check_dim(&arr, 3)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let flat = cloud.nearest_k_within_radius(&data, n, k, radius);
                 let out = numpy::PyArray1::from_vec(py, flat).reshape([n, k])?;
                 Ok(out.into_any().unbind())
@@ -492,7 +480,7 @@ impl PyKdTree3d {
                 let arr: PyReadonlyArray2<f32> = query_points.extract()?;
                 check_dim(&arr, 3)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let (offsets, indices) = cloud.within_radius(&data, n, radius as f32);
                 Ok((
                     numpy::PyArray1::from_vec(py, offsets).into_any().unbind(),
@@ -503,7 +491,7 @@ impl PyKdTree3d {
                 let arr: PyReadonlyArray2<f64> = query_points.extract()?;
                 check_dim(&arr, 3)?;
                 let n = arr.shape()[0];
-                let data = to_cow_slice(&arr);
+                let data = to_contiguous!(arr);
                 let (offsets, indices) = cloud.within_radius(&data, n, radius);
                 Ok((
                     numpy::PyArray1::from_vec(py, offsets).into_any().unbind(),
@@ -564,14 +552,6 @@ fn check_dim<T: numpy::Element>(arr: &PyReadonlyArray2<T>, expected_dim: usize) 
         )));
     }
     Ok(())
-}
-
-/// Zero-copy slice if contiguous, otherwise copy.
-fn to_cow_slice<'a, T: numpy::Element + Copy>(arr: &'a PyReadonlyArray2<'a, T>) -> Cow<'a, [T]> {
-    match arr.as_slice() {
-        Ok(s) => Cow::Borrowed(s),
-        Err(_) => Cow::Owned(arr.as_array().iter().copied().collect()),
-    }
 }
 
 // ── Registration ──────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 
 """sfmtool SIFT extraction backend (the toolkit's own Rust implementation).
 
-Wraps the ``sfmtool._sfmtool.extract_sift`` PyO3 binding so it plugs into the
+Wraps the ``sfmtool._sfmtool.sift.extract_sift`` PyO3 binding so it plugs into the
 same extraction pipeline as the COLMAP and OpenCV backends. The Rust core
 parallelizes within each image (rayon), but on small images that per-image
 parallelism cannot saturate a many-core host on its own, and each image carries
@@ -38,7 +38,7 @@ def get_default_sfmtool_feature_options(max_num_features: int | None = None) -> 
 
     The keys mirror the output-defining fields of ``SiftParams::default()`` in
     ``sfmtool-core`` and are passed straight through to the
-    ``sfmtool._sfmtool.extract_sift`` binding. They also feed the feature-cache
+    ``sfmtool._sfmtool.sift.extract_sift`` binding. They also feed the feature-cache
     hash, so changing any of them yields a distinct cache directory.
 
     Hardware/performance-only knobs (e.g. thread count) are intentionally

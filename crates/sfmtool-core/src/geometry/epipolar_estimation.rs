@@ -27,6 +27,7 @@
 
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 
+use crate::geometry::numeric::splitmix64;
 use crate::geometry::polynomial::{polish_cubic_root, solve_cubic};
 use crate::geometry::rotation::skew_symmetric;
 
@@ -293,17 +294,6 @@ pub struct FundamentalEstimate {
     pub inliers: Vec<bool>,
     /// Trials actually run.
     pub iterations: u32,
-}
-
-/// SplitMix64 — the deterministic index sampler (no `rand` dependency,
-/// identical across platforms). Mirrors the generator in
-/// [`crate::geometry::absolute_pose`].
-fn splitmix64(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9e3779b97f4a7c15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-    z ^ (z >> 31)
 }
 
 /// Draw seven distinct indices in `0..n` with the seeded sampler.

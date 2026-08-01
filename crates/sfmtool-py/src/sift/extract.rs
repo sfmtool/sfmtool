@@ -57,9 +57,8 @@ fn image_to_gray(
     params: &SiftParams,
 ) -> PyResult<sift::GrayImage> {
     let shape = image.shape();
-    let data = image
-        .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("image must be C-contiguous"))?;
+    let data = to_contiguous!(image);
+    let data = &*data;
 
     match shape {
         // (H, W, 3) uint8 RGB -> grayscale via the image-to-gray formula.

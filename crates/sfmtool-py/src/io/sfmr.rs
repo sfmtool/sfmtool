@@ -189,11 +189,21 @@ pub(crate) fn parse_sfmr_data_from_dict(
     // Mode-dependent columns: exactly one of feature_indexes / keypoints_xy and
     // one of the per-image hash sets is present (the others None or absent).
     let feature_indexes = match get_optional_item(data, "feature_indexes")? {
-        Some(v) => Some(v.extract::<PyReadonlyArray1<u32>>()?.as_array().to_owned()),
+        Some(v) => Some(
+            v.extract::<PyReadonlyArray1<u32>>()?
+                .as_array()
+                .as_standard_layout()
+                .into_owned(),
+        ),
         None => None,
     };
     let keypoints_xy = match get_optional_item(data, "keypoints_xy")? {
-        Some(v) => Some(v.extract::<PyReadonlyArray2<f32>>()?.as_array().to_owned()),
+        Some(v) => Some(
+            v.extract::<PyReadonlyArray2<f32>>()?
+                .as_array()
+                .as_standard_layout()
+                .into_owned(),
+        ),
         None => None,
     };
     let feature_tool_hashes = match get_optional_item(data, "feature_tool_hashes")? {
@@ -219,13 +229,17 @@ pub(crate) fn parse_sfmr_data_from_dict(
             let normals: Option<ndarray::Array2<f32>> = match data.get_item("normals_xyz")? {
                 Some(v) if !v.is_none() => {
                     let en: PyReadonlyArray2<f32> = v.extract()?;
-                    Some(en.as_array().to_owned())
+                    Some(en.as_array().as_standard_layout().into_owned())
                 }
                 _ => None,
             };
             let ohc: PyReadonlyArray2<u32> =
                 get_item(data, "observed_depth_histogram_counts")?.extract()?;
-            (ds, normals, ohc.as_array().to_owned())
+            (
+                ds,
+                normals,
+                ohc.as_array().as_standard_layout().into_owned(),
+            )
         } else {
             let image_count = metadata.image_count as usize;
             let point_count = metadata.point_count as usize;
@@ -264,27 +278,42 @@ pub(crate) fn parse_sfmr_data_from_dict(
         cameras,
         rig_frame_data,
         image_names,
-        camera_indexes: camera_indexes.as_array().to_owned(),
-        quaternions_wxyz: quaternions_wxyz.as_array().to_owned(),
-        translations_xyz: translations_xyz.as_array().to_owned(),
+        camera_indexes: camera_indexes.as_array().as_standard_layout().into_owned(),
+        quaternions_wxyz: quaternions_wxyz
+            .as_array()
+            .as_standard_layout()
+            .into_owned(),
+        translations_xyz: translations_xyz
+            .as_array()
+            .as_standard_layout()
+            .into_owned(),
         feature_tool_hashes,
         sift_content_hashes,
         image_file_hashes,
-        thumbnails_y_x_rgb: thumbnails_y_x_rgb.as_array().to_owned(),
-        positions_xyzw: positions_xyzw.as_array().to_owned(),
-        colors_rgb: colors_rgb.as_array().to_owned(),
-        reprojection_errors: reprojection_errors.as_array().to_owned(),
+        thumbnails_y_x_rgb: thumbnails_y_x_rgb
+            .as_array()
+            .as_standard_layout()
+            .into_owned(),
+        positions_xyzw: positions_xyzw.as_array().as_standard_layout().into_owned(),
+        colors_rgb: colors_rgb.as_array().as_standard_layout().into_owned(),
+        reprojection_errors: reprojection_errors
+            .as_array()
+            .as_standard_layout()
+            .into_owned(),
         normals_xyz,
         // The dict-based columnar API does not carry patch data; the
         // patch-aware path is `SfmrReconstruction`.
         patch_u_halfvec_xyz: None,
         patch_v_halfvec_xyz: None,
         patch_bitmaps_y_x_rgba: None,
-        image_indexes: image_indexes.as_array().to_owned(),
+        image_indexes: image_indexes.as_array().as_standard_layout().into_owned(),
         feature_indexes,
         keypoints_xy,
-        point_indexes: point_indexes.as_array().to_owned(),
-        observation_counts: observation_counts.as_array().to_owned(),
+        point_indexes: point_indexes.as_array().as_standard_layout().into_owned(),
+        observation_counts: observation_counts
+            .as_array()
+            .as_standard_layout()
+            .into_owned(),
         depth_statistics,
         observed_depth_histogram_counts,
     })

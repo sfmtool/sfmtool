@@ -6,7 +6,6 @@
 use nalgebra::{Matrix3, Vector3};
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
-use std::borrow::Cow;
 
 use sfmtool_core::features::feature_match;
 

@@ -42,12 +42,12 @@ use std::collections::BTreeSet;
 
 use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 
-use crate::camera::CameraModel;
 use crate::features::cluster_match::covisibility::ClusterCovisibility;
 use crate::geometry::absolute_pose::{estimate_absolute_pose, AbsolutePoseOptions};
 use crate::geometry::bundle_adjust::{
     bundle_adjust, BaSchedule, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
 };
+use crate::geometry::numeric::{cam_at, median, splitmix64};
 use crate::geometry::pose_refine::refine_absolute_pose;
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::CameraIntrinsics;
@@ -160,46 +160,11 @@ pub struct ReconstructionGrowth {
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
-/// SplitMix64 scramble (the deterministic seed mixer; mirrors
-/// `absolute_pose`).
-fn splitmix64(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9e3779b97f4a7c15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-    z ^ (z >> 31)
-}
-
 /// Per-image RANSAC seed: a pure function of `(seed, image index)`, so the
 /// batch registration is order-free and parallel-deterministic.
 pub(crate) fn per_image_seed(seed: u64, image: u32) -> u64 {
     let mut s = seed ^ (image as u64 + 1).wrapping_mul(0x9e3779b97f4a7c15);
     splitmix64(&mut s)
-}
-
-/// numpy-style median (mean of the middle two for even counts).
-fn median(values: &[f64]) -> f64 {
-    let mut s = values.to_vec();
-    s.sort_by(f64::total_cmp);
-    let n = s.len();
-    if n == 0 {
-        return 0.0;
-    }
-    if n % 2 == 1 {
-        s[n / 2]
-    } else {
-        (s[n / 2 - 1] + s[n / 2]) / 2.0
-    }
-}
-
-/// The camera at focal `f` (identity for every model but SIMPLE_PINHOLE,
-/// matching the bundle adjustment's focal handling).
-fn cam_with_focal(cam: &CameraIntrinsics, f: f64) -> CameraIntrinsics {
-    let mut out = cam.clone();
-    if let CameraModel::SimplePinhole { focal_length, .. } = &mut out.model {
-        *focal_length = f;
-    }
-    out
 }
 
 /// The P3P RANSAC's angular inlier threshold from the pixel bound.
@@ -1095,7 +1060,7 @@ pub fn grow_reconstruction(
         BA_MIN_OBS,
     );
     let focal = ba.focal;
-    let cam_final = cam_with_focal(camera, focal);
+    let cam_final = cam_at(camera, focal);
     // Re-triangulation at the released focal (the finishing adjustment wiped
     // every cluster outside its observation set).
     fill_new_points(

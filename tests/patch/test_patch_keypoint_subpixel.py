@@ -17,7 +17,6 @@ zero-step "seed only" run on the same data).
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -25,45 +24,11 @@ import numpy as np
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.patches import PatchCloud
 
-
-def _load_images(recon) -> list[np.ndarray]:
-    import cv2  # heavy module, only needed by this integration test
-
-    ws = recon.workspace_dir
-    images = []
-    for name in recon.image_names:
-        bgr = cv2.imread(os.path.join(ws, name), cv2.IMREAD_COLOR)
-        assert bgr is not None, f"could not read {name}"
-        images.append(np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)))
-    return images
-
-
-def _sample_point_ids(cloud, n: int = 200, seed: int = 0) -> list[int]:
-    ids = np.asarray(cloud.point_indexes)
-    rng = np.random.default_rng(seed)
-    return np.sort(rng.choice(ids, size=min(n, len(ids)), replace=False)).tolist()
-
-
-def _rotation_matrices(recon) -> np.ndarray:
-    q = np.asarray(recon.quaternions_wxyz, dtype=np.float64)
-    w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-    n = w * w + x * x + y * y + z * z
-    s = np.where(n > 0, 2.0 / n, 0.0)
-    R = np.empty((len(q), 3, 3), dtype=np.float64)
-    R[:, 0, 0] = 1 - s * (y * y + z * z)
-    R[:, 0, 1] = s * (x * y - z * w)
-    R[:, 0, 2] = s * (x * z + y * w)
-    R[:, 1, 0] = s * (x * y + z * w)
-    R[:, 1, 1] = 1 - s * (x * x + z * z)
-    R[:, 1, 2] = s * (y * z - x * w)
-    R[:, 2, 0] = s * (x * z - y * w)
-    R[:, 2, 1] = s * (y * z + x * w)
-    R[:, 2, 2] = 1 - s * (x * x + y * y)
-    return R
+from .conftest import load_images, rotation_matrices, sample_point_ids
 
 
 def _project(recon, point_xyz: np.ndarray, image_idx: int):
-    R = _rotation_matrices(recon)[image_idx]
+    R = rotation_matrices(recon)[image_idx]
     t = np.asarray(recon.translations, dtype=np.float64)[image_idx]
     x_cam = R @ point_xyz + t
     # Canonical cameras look down -Z: in front means z < 0, and normalized image
@@ -82,11 +47,11 @@ def test_refine_keypoints_array_contract_and_never_worse(seoul_bull_workspace: P
     recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
         extent_value=5.0
     )
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None and len(cloud) > 0
 
-    sample = _sample_point_ids(cloud)
+    sample = sample_point_ids(cloud)
     view_sets = {
         int(r["point_index"]): np.asarray(r["admitted"]).tolist()
         for r in cloud.select_views(recon, images, point_indexes=sample, resolution=12)
@@ -161,7 +126,7 @@ def test_refine_keypoints_defaults_to_track(seoul_bull_workspace: Path):
     recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
         extent_value=5.0
     )
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None
     point_ids = np.asarray(recon.track_point_indexes)
@@ -170,7 +135,7 @@ def test_refine_keypoints_defaults_to_track(seoul_bull_workspace: Path):
     for pid, im in zip(point_ids.tolist(), image_idxs.tolist()):
         tracks.setdefault(int(pid), set()).add(int(im))
 
-    sample = _sample_point_ids(cloud, n=120)
+    sample = sample_point_ids(cloud, n=120)
     results = cloud.refine_keypoints(recon, images, point_indexes=sample, resolution=12)
     for r in results:
         pid = int(r["point_index"])
@@ -184,7 +149,7 @@ def test_refine_keypoints_empty_view_set_yields_empty_arrays(
     recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
         extent_value=5.0
     )
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None
     pid = int(np.asarray(cloud.point_indexes)[0])
@@ -204,7 +169,7 @@ def test_refine_keypoints_rejects_out_of_range_view_index(seoul_bull_workspace: 
     recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
         extent_value=5.0
     )
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None
     pid = int(np.asarray(cloud.point_indexes)[0])
@@ -254,10 +219,10 @@ def test_refine_keypoints_honors_starting_keypoints(seoul_bull_workspace: Path):
     recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
         extent_value=5.0
     )
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None
-    sample = _sample_point_ids(cloud, n=50)
+    sample = sample_point_ids(cloud, n=50)
     view_sets = {
         int(r["point_index"]): np.asarray(r["admitted"]).tolist()
         for r in cloud.select_views(recon, images, point_indexes=sample, resolution=12)
@@ -386,7 +351,7 @@ def test_refine_keypoints_default_seeds_from_embedded_recon(
     """
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     emb = recon.to_embedded_patches(extent_value=5.0)
-    images = _load_images(emb)
+    images = load_images(emb)
     cloud = emb.patches
     assert cloud is not None
 
@@ -398,7 +363,7 @@ def test_refine_keypoints_default_seeds_from_embedded_recon(
         for k, (p, i) in enumerate(zip(track_pids, track_imgs))
     }
 
-    sample = _sample_point_ids(cloud, n=50)
+    sample = sample_point_ids(cloud, n=50)
     seed_only = cloud.refine_keypoints(
         emb, images, point_indexes=sample, resolution=12, max_gn_steps=0
     )
@@ -436,7 +401,7 @@ def test_refine_keypoints_default_falls_back_to_projection_for_non_track_view(
     """
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     emb = recon.to_embedded_patches(extent_value=5.0)
-    images = _load_images(emb)
+    images = load_images(emb)
     cloud = emb.patches
     assert cloud is not None
 
@@ -459,7 +424,7 @@ def test_refine_keypoints_default_falls_back_to_projection_for_non_track_view(
     # the photometrically-vetted candidate set and pick a non-track admitted
     # view. ``select_views`` admits the SIFT track plus extra views that
     # pass its visibility + ZNCC checks — guaranteed visible to the refiner.
-    sample = _sample_point_ids(cloud, n=120)
+    sample = sample_point_ids(cloud, n=120)
     selections = cloud.select_views(emb, images, point_indexes=sample, resolution=12)
     pid, non_track_img, projection = None, None, None
     for sel in selections:
@@ -523,7 +488,7 @@ def test_refine_keypoints_explicit_seeds_override_recon_default_on_embedded(
     recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
         extent_value=5.0
     )
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None
 
@@ -585,10 +550,10 @@ def test_refine_keypoints_render_bitmaps_returns_consensus_bitmaps(
     recon = SfmrReconstruction.load(seoul_bull_workspace).to_embedded_patches(
         extent_value=5.0
     )
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = recon.patches
     assert cloud is not None
-    sample = _sample_point_ids(cloud, n=40)
+    sample = sample_point_ids(cloud, n=40)
 
     plain = cloud.refine_keypoints(recon, images, point_indexes=sample, resolution=12)
     assert all("bitmap" not in r for r in plain)

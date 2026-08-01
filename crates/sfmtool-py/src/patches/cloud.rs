@@ -320,7 +320,11 @@ impl PyPatchCloud {
         let centers_vec: Vec<Point3<f64>> = (0..n)
             .map(|i| Point3::new(c[[i, 0]], c[[i, 1]], c[[i, 2]]))
             .collect();
-        let inner = PatchCloud::from_halfvec_arrays(&u.to_owned(), &v.to_owned(), &centers_vec);
+        let inner = PatchCloud::from_halfvec_arrays(
+            &u.as_standard_layout().into_owned(),
+            &v.as_standard_layout().into_owned(),
+            &centers_vec,
+        );
         Ok(Self { inner })
     }
 

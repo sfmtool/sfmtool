@@ -98,11 +98,7 @@ pub(crate) fn clone_with_changes(
         match key_str.as_str() {
             "positions" => {
                 let arr = extract_array2!(value, "positions", f64)?;
-                let s = arr.as_slice().map_err(|e| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'positions' must be C-contiguous: {e}"
-                    ))
-                })?;
+                let s = to_contiguous!(arr);
                 let cols = arr.shape()[1];
                 if cols != 3 && cols != 4 {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -153,11 +149,7 @@ pub(crate) fn clone_with_changes(
             }
             "colors" => {
                 let arr = extract_array2!(value, "colors", u8)?;
-                let s = arr.as_slice().map_err(|e| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'colors' must be C-contiguous: {e}"
-                    ))
-                })?;
+                let s = to_contiguous!(arr);
                 if arr.shape()[1] != 3 {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
                         "clone_with_changes(): 'colors' must have shape (N, 3), \
@@ -207,11 +199,7 @@ pub(crate) fn clone_with_changes(
                     }
                 } else {
                     let arr = extract_array2!(value, "normals", f32)?;
-                    let s = arr.as_slice().map_err(|e| {
-                        pyo3::exceptions::PyValueError::new_err(format!(
-                            "clone_with_changes(): 'normals' must be C-contiguous: {e}"
-                        ))
-                    })?;
+                    let s = to_contiguous!(arr);
                     if arr.shape()[1] != 3 {
                         return Err(pyo3::exceptions::PyValueError::new_err(format!(
                             "clone_with_changes(): 'normals' must have shape (N, 3), \
@@ -254,11 +242,7 @@ pub(crate) fn clone_with_changes(
             }
             "quaternions_wxyz" => {
                 let arr = extract_array2!(value, "quaternions_wxyz", f64)?;
-                let s = arr.as_slice().map_err(|e| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'quaternions_wxyz' must be C-contiguous: {e}"
-                    ))
-                })?;
+                let s = to_contiguous!(arr);
                 if arr.shape()[1] != 4 {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
                         "clone_with_changes(): 'quaternions_wxyz' must have shape (N, 4), \
@@ -290,11 +274,7 @@ pub(crate) fn clone_with_changes(
             }
             "translations" => {
                 let arr = extract_array2!(value, "translations", f64)?;
-                let s = arr.as_slice().map_err(|e| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'translations' must be C-contiguous: {e}"
-                    ))
-                })?;
+                let s = to_contiguous!(arr);
                 if arr.shape()[1] != 3 {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
                         "clone_with_changes(): 'translations' must have shape (N, 3), \
@@ -398,7 +378,7 @@ pub(crate) fn clone_with_changes(
                         arr.shape()
                     )));
                 }
-                new_keypoints_xy = Some(arr.as_array().to_owned());
+                new_keypoints_xy = Some(arr.as_array().as_standard_layout().into_owned());
             }
             "image_file_hashes" => {
                 if !value.is_none() {
@@ -415,7 +395,7 @@ pub(crate) fn clone_with_changes(
                     "a 4D contiguous ndarray",
                     "uint8 and shape (N, 128, 128, 3)"
                 )?;
-                recon.thumbnails_y_x_rgb = arr.as_array().to_owned();
+                recon.thumbnails_y_x_rgb = arr.as_array().as_standard_layout().into_owned();
             }
             "rig_frame_data" => {
                 if value.is_none() {
@@ -519,7 +499,7 @@ pub(crate) fn clone_with_changes(
                      carries one)",
                 ));
             }
-            recon.patch_bitmaps_y_x_rgba = Some(arr.as_array().to_owned());
+            recon.patch_bitmaps_y_x_rgba = Some(arr.as_array().as_standard_layout().into_owned());
         }
     }
 

@@ -4,7 +4,6 @@
 //! Python bindings for spatial analysis, SE3 transforms, viewing angles,
 //! alignment, point correspondence, and track filtering.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};

@@ -173,7 +173,7 @@ deterministic-first, tested, and exposed. Land it as two reviewable changes —
 > `PatchCloud.refine_normals(cache=, cache_supersample=)` binding; the
 > `--refine-normals cache=/cache_supersample=/quality=` CLI keys and the
 > coarse/fine preset; unit tests for the affine fit and padding plus
-> `tests/test_patch_normal_refine.py` (Φ-equivalence + population on seoul_bull,
+> `tests/patch/test_patch_normal_refine.py` (Φ-equivalence + population on seoul_bull,
 > distortion-independence on the kerry_park fisheye rig) and
 > `tests/xform/test_refine_normals.py` (preset + validation). Measured ~2.3× at
 > Φ-equivalent median on dino R=32. Phase 2 (AVX2) pending._

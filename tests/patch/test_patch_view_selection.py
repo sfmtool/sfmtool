@@ -15,7 +15,6 @@ non-convex / cluttered stress case, exercised for shape and sanity.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -23,24 +22,7 @@ import numpy as np
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.patches import PatchCloud
 
-
-def _load_images(recon) -> list[np.ndarray]:
-    import cv2  # heavy module, only needed by this integration test
-
-    ws = recon.workspace_dir
-    images = []
-    for name in recon.image_names:
-        bgr = cv2.imread(os.path.join(ws, name), cv2.IMREAD_COLOR)
-        assert bgr is not None, f"could not read {name}"
-        images.append(np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)))
-    return images
-
-
-def _sample_point_ids(cloud, n: int = 300, seed: int = 0) -> list[int]:
-    """A deterministic point-id subset, to keep the per-point search fast."""
-    ids = np.asarray(cloud.point_indexes)
-    rng = np.random.default_rng(seed)
-    return np.sort(rng.choice(ids, size=min(n, len(ids)), replace=False)).tolist()
+from .conftest import load_images, rotation_matrices, sample_point_ids
 
 
 def _track_views(recon) -> dict[int, set[int]]:
@@ -53,28 +35,9 @@ def _track_views(recon) -> dict[int, set[int]]:
     return tracks
 
 
-def _rotation_matrices(recon) -> np.ndarray:
-    """Per-image world-to-camera rotation matrices (Mx3x3) from wxyz quaternions."""
-    q = np.asarray(recon.quaternions_wxyz, dtype=np.float64)
-    w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-    n = w * w + x * x + y * y + z * z
-    s = np.where(n > 0, 2.0 / n, 0.0)
-    R = np.empty((len(q), 3, 3), dtype=np.float64)
-    R[:, 0, 0] = 1 - s * (y * y + z * z)
-    R[:, 0, 1] = s * (x * y - z * w)
-    R[:, 0, 2] = s * (x * z + y * w)
-    R[:, 1, 0] = s * (x * y + z * w)
-    R[:, 1, 1] = 1 - s * (x * x + z * z)
-    R[:, 1, 2] = s * (y * z - x * w)
-    R[:, 2, 0] = s * (x * z - y * w)
-    R[:, 2, 1] = s * (y * z + x * w)
-    R[:, 2, 2] = 1 - s * (x * x + y * y)
-    return R
-
-
 def _camera_frame_point(recon, point_xyz: np.ndarray, image_idx: int) -> np.ndarray:
     """The 3D point in image `image_idx`'s camera frame: X_cam = R·X + t."""
-    R = _rotation_matrices(recon)[image_idx]
+    R = rotation_matrices(recon)[image_idx]
     t = np.asarray(recon.translations, dtype=np.float64)[image_idx]
     return R @ point_xyz + t
 
@@ -91,7 +54,7 @@ def _geometric_candidate_set(recon, pid: int, patch, point_xyz: np.ndarray) -> s
 
     cams = recon.cameras
     cam_idx = np.asarray(recon.camera_indexes)
-    R = _rotation_matrices(recon)
+    R = rotation_matrices(recon)
     t = np.asarray(recon.translations, dtype=np.float64)
     quats = np.asarray(recon.quaternions_wxyz, dtype=np.float64)
     out: set[int] = set()
@@ -114,14 +77,14 @@ def _geometric_candidate_set(recon, pid: int, patch, point_xyz: np.ndarray) -> s
 def test_select_views_superset_of_track_on_convex_dataset(seoul_bull_workspace: Path):
     """On the convex seoul_bull case the selected set contains the whole track."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
 
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
     assert len(cloud) > 0
 
-    sample = _sample_point_ids(cloud)
+    sample = sample_point_ids(cloud, n=300)
     results = cloud.select_views(
         recon,
         images,
@@ -162,7 +125,7 @@ def test_select_views_superset_of_track_on_convex_dataset(seoul_bull_workspace: 
 def test_select_views_self_agreement_and_threshold(seoul_bull_workspace: Path):
     """Where a reference was built, admitted candidates clear the relative bar."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
@@ -172,7 +135,7 @@ def test_select_views_self_agreement_and_threshold(seoul_bull_workspace: Path):
     results = cloud.select_views(
         recon,
         images,
-        point_indexes=_sample_point_ids(cloud),
+        point_indexes=sample_point_ids(cloud, n=300),
         resolution=12,
         min_relative_zncc=min_rel,
         min_self_agreement=0.3,
@@ -202,13 +165,13 @@ def test_select_views_self_agreement_and_threshold(seoul_bull_workspace: Path):
 def test_select_views_runs_on_nonconvex_fisheye_rig(kerry_park_workspace: Path):
     """Shape / sanity on the non-convex kerry_park fisheye-rig stress case."""
     recon = SfmrReconstruction.load(kerry_park_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
     assert len(cloud) > 0
 
-    sample = _sample_point_ids(cloud, n=150)
+    sample = sample_point_ids(cloud, n=150)
     results = cloud.select_views(recon, images, point_indexes=sample, resolution=12)
 
     assert len(results) == len(sample)
@@ -240,7 +203,7 @@ def test_select_views_rejects_some_geometrically_visible_candidate(
     candidate is rejected; admitted views are otherwise covered by the cheirality
     and threshold tests."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
@@ -250,7 +213,7 @@ def test_select_views_rejects_some_geometrically_visible_candidate(
     }
     tracks = _track_views(recon)
 
-    sample = _sample_point_ids(cloud)
+    sample = sample_point_ids(cloud, n=300)
     results = cloud.select_views(recon, images, point_indexes=sample, resolution=12)
 
     rejected_any = False
@@ -283,13 +246,13 @@ def test_select_views_admitted_points_are_in_front_of_camera(
     tests.
     """
     recon = SfmrReconstruction.load(kerry_park_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0, exclude_points_at_infinity=True
     )
     positions = np.asarray(recon.positions, dtype=np.float64)
 
-    sample = _sample_point_ids(cloud, n=150)
+    sample = sample_point_ids(cloud, n=150)
     results = cloud.select_views(recon, images, point_indexes=sample, resolution=12)
 
     for r in results:
@@ -310,14 +273,14 @@ def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path)
     finite-point B1 test above, on the same wide-fisheye rig (kerry_park carries
     points at infinity)."""
     recon = SfmrReconstruction.load(kerry_park_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     # Default includes points at infinity.
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
     is_inf = np.asarray(recon.point_is_at_infinity)
     positions = np.asarray(recon.positions, dtype=np.float64)
-    rot = _rotation_matrices(recon)
+    rot = rotation_matrices(recon)
 
     inf_ids = [int(p) for p in np.asarray(cloud.point_indexes) if is_inf[int(p)]]
     assert inf_ids, "kerry_park should carry points at infinity"

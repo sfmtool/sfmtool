@@ -166,9 +166,9 @@ pub fn write_matches(
         (
             None,
             Some(ClustersData {
-                cluster_starts: cluster_starts.as_array().to_owned(),
-                member_images: member_images.as_array().to_owned(),
-                member_features: member_features.as_array().to_owned(),
+                cluster_starts: cluster_starts.as_array().as_standard_layout().into_owned(),
+                member_images: member_images.as_array().as_standard_layout().into_owned(),
+                member_features: member_features.as_array().as_standard_layout().into_owned(),
                 matcher_options,
             }),
         )
@@ -182,10 +182,19 @@ pub fn write_matches(
             get_item(data, "match_descriptor_distances")?.extract()?;
         (
             Some(PairsData {
-                image_index_pairs: image_index_pairs.as_array().to_owned(),
-                match_counts: match_counts.as_array().to_owned(),
-                match_feature_indexes: match_feature_indexes.as_array().to_owned(),
-                match_descriptor_distances: match_descriptor_distances.as_array().to_owned(),
+                image_index_pairs: image_index_pairs
+                    .as_array()
+                    .as_standard_layout()
+                    .into_owned(),
+                match_counts: match_counts.as_array().as_standard_layout().into_owned(),
+                match_feature_indexes: match_feature_indexes
+                    .as_array()
+                    .as_standard_layout()
+                    .into_owned(),
+                match_descriptor_distances: match_descriptor_distances
+                    .as_array()
+                    .as_standard_layout()
+                    .into_owned(),
             }),
             None,
         )
@@ -205,12 +214,18 @@ pub fn write_matches(
         let refine_options: serde_json::Value =
             py_to_serde(py, &get_item(data, "refine_options")?)?;
         Some(ClusterPatchData {
-            reference_members: reference_members.as_array().to_owned(),
-            member_status: member_status.as_array().to_owned(),
-            member_affines: member_affines.as_array().to_owned(),
-            member_zncc: member_zncc.as_array().to_owned(),
-            member_shift_px: member_shift_px.as_array().to_owned(),
-            member_consistency_residual: member_consistency_residual.as_array().to_owned(),
+            reference_members: reference_members
+                .as_array()
+                .as_standard_layout()
+                .into_owned(),
+            member_status: member_status.as_array().as_standard_layout().into_owned(),
+            member_affines: member_affines.as_array().as_standard_layout().into_owned(),
+            member_zncc: member_zncc.as_array().as_standard_layout().into_owned(),
+            member_shift_px: member_shift_px.as_array().as_standard_layout().into_owned(),
+            member_consistency_residual: member_consistency_residual
+                .as_array()
+                .as_standard_layout()
+                .into_owned(),
             refine_options,
         })
     } else {
@@ -245,14 +260,23 @@ pub fn write_matches(
         Some(TwoViewGeometryData {
             metadata: tvg_metadata,
             config_types,
-            config_indexes: config_indexes.as_array().to_owned(),
-            inlier_counts: inlier_counts.as_array().to_owned(),
-            inlier_feature_indexes: inlier_feature_indexes.as_array().to_owned(),
-            f_matrices: f_matrices.as_array().to_owned(),
-            e_matrices: e_matrices.as_array().to_owned(),
-            h_matrices: h_matrices.as_array().to_owned(),
-            quaternions_wxyz: quaternions_wxyz.as_array().to_owned(),
-            translations_xyz: translations_xyz.as_array().to_owned(),
+            config_indexes: config_indexes.as_array().as_standard_layout().into_owned(),
+            inlier_counts: inlier_counts.as_array().as_standard_layout().into_owned(),
+            inlier_feature_indexes: inlier_feature_indexes
+                .as_array()
+                .as_standard_layout()
+                .into_owned(),
+            f_matrices: f_matrices.as_array().as_standard_layout().into_owned(),
+            e_matrices: e_matrices.as_array().as_standard_layout().into_owned(),
+            h_matrices: h_matrices.as_array().as_standard_layout().into_owned(),
+            quaternions_wxyz: quaternions_wxyz
+                .as_array()
+                .as_standard_layout()
+                .into_owned(),
+            translations_xyz: translations_xyz
+                .as_array()
+                .as_standard_layout()
+                .into_owned(),
         })
     } else {
         None
@@ -272,8 +296,8 @@ pub fn write_matches(
         image_names,
         feature_tool_hashes,
         sift_content_hashes,
-        feature_counts: feature_counts.as_array().to_owned(),
-        image_dims: Some(image_dims.as_array().to_owned()),
+        feature_counts: feature_counts.as_array().as_standard_layout().into_owned(),
+        image_dims: Some(image_dims.as_array().as_standard_layout().into_owned()),
         image_pairs,
         clusters,
         cluster_patches,

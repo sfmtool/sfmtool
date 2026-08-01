@@ -3,7 +3,7 @@
 
 //! Python bindings for optical flow computation.
 
-use numpy::{IntoPyArray, PyArrayMethods, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::{IntoPyArray, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use std::sync::OnceLock;
 
@@ -80,12 +80,8 @@ pub fn compute_optical_flow(
     let params = parse_flow_preset(preset)?;
     let gpu = resolve_gpu(use_gpu)?;
 
-    let data_a: Vec<u8> = img_a
-        .as_slice()
-        .map_or_else(|_| img_a.to_vec().unwrap(), |s| s.to_vec());
-    let data_b: Vec<u8> = img_b
-        .as_slice()
-        .map_or_else(|_| img_b.to_vec().unwrap(), |s| s.to_vec());
+    let data_a: Vec<u8> = to_contiguous!(img_a).into_owned();
+    let data_b: Vec<u8> = to_contiguous!(img_b).into_owned();
 
     let gray_a = optical_flow::GrayImage::from_u8(w, h, &data_a);
     let gray_b = optical_flow::GrayImage::from_u8(w, h, &data_b);
@@ -147,18 +143,10 @@ pub fn compute_optical_flow_with_init(
     let params = parse_flow_preset(preset)?;
     let gpu = resolve_gpu(use_gpu)?;
 
-    let data_a: Vec<u8> = img_a
-        .as_slice()
-        .map_or_else(|_| img_a.to_vec().unwrap(), |s| s.to_vec());
-    let data_b: Vec<u8> = img_b
-        .as_slice()
-        .map_or_else(|_| img_b.to_vec().unwrap(), |s| s.to_vec());
-    let init_u: Vec<f32> = initial_flow_u
-        .as_slice()
-        .map_or_else(|_| initial_flow_u.to_vec().unwrap(), |s| s.to_vec());
-    let init_v: Vec<f32> = initial_flow_v
-        .as_slice()
-        .map_or_else(|_| initial_flow_v.to_vec().unwrap(), |s| s.to_vec());
+    let data_a: Vec<u8> = to_contiguous!(img_a).into_owned();
+    let data_b: Vec<u8> = to_contiguous!(img_b).into_owned();
+    let init_u: Vec<f32> = to_contiguous!(initial_flow_u).into_owned();
+    let init_v: Vec<f32> = to_contiguous!(initial_flow_v).into_owned();
 
     let gray_a = optical_flow::GrayImage::from_u8(w, h, &data_a);
     let gray_b = optical_flow::GrayImage::from_u8(w, h, &data_b);
@@ -213,21 +201,13 @@ pub fn compose_flow(
     let w = shape_ab[1] as u32;
 
     // Borrow flow data directly from numpy arrays (zero-copy)
-    let ab_u = flow_ab_u
-        .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("flow_ab_u must be C-contiguous"))?;
-    let ab_v = flow_ab_v
-        .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("flow_ab_v must be C-contiguous"))?;
-    let bc_u = flow_bc_u
-        .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("flow_bc_u must be C-contiguous"))?;
-    let bc_v = flow_bc_v
-        .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("flow_bc_v must be C-contiguous"))?;
+    let ab_u = to_contiguous!(flow_ab_u);
+    let ab_v = to_contiguous!(flow_ab_v);
+    let bc_u = to_contiguous!(flow_bc_u);
+    let bc_v = to_contiguous!(flow_bc_v);
 
-    let ref_ab = optical_flow::FlowFieldRef::from_slices(w, h, ab_u, ab_v);
-    let ref_bc = optical_flow::FlowFieldRef::from_slices(w, h, bc_u, bc_v);
+    let ref_ab = optical_flow::FlowFieldRef::from_slices(w, h, &ab_u, &ab_v);
+    let ref_bc = optical_flow::FlowFieldRef::from_slices(w, h, &bc_u, &bc_v);
 
     let result = py.detach(|| optical_flow::compose_flow_ref(&ref_ab, &ref_bc));
 
@@ -275,19 +255,13 @@ pub fn advect_points(
     }
 
     // Borrow flow data directly from numpy arrays (zero-copy)
-    let u_slice = flow_u
-        .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("flow_u must be C-contiguous"))?;
-    let v_slice = flow_v
-        .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("flow_v must be C-contiguous"))?;
-    let flow_ref = optical_flow::FlowFieldRef::from_slices(w, h, u_slice, v_slice);
+    let u_slice = to_contiguous!(flow_u);
+    let v_slice = to_contiguous!(flow_v);
+    let flow_ref = optical_flow::FlowFieldRef::from_slices(w, h, &u_slice, &v_slice);
 
     // Borrow points directly from numpy (zero-copy); reinterpret as (f32, f32) pairs
     let n = points_shape[0];
-    let points_slice = points
-        .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("points must be C-contiguous"))?;
+    let points_slice = to_contiguous!(points);
     // Safety: (f32, f32) has the same layout as [f32; 2] with no padding
     let point_pairs: &[(f32, f32)] =
         unsafe { std::slice::from_raw_parts(points_slice.as_ptr().cast(), n) };
@@ -340,12 +314,8 @@ pub fn compute_optical_flow_timed(
     let params = parse_flow_preset(preset)?;
     let gpu = resolve_gpu(use_gpu)?;
 
-    let data_a: Vec<u8> = img_a
-        .as_slice()
-        .map_or_else(|_| img_a.to_vec().unwrap(), |s| s.to_vec());
-    let data_b: Vec<u8> = img_b
-        .as_slice()
-        .map_or_else(|_| img_b.to_vec().unwrap(), |s| s.to_vec());
+    let data_a: Vec<u8> = to_contiguous!(img_a).into_owned();
+    let data_b: Vec<u8> = to_contiguous!(img_b).into_owned();
 
     let gray_a = optical_flow::GrayImage::from_u8(w, h, &data_a);
     let gray_b = optical_flow::GrayImage::from_u8(w, h, &data_b);

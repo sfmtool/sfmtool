@@ -23,7 +23,7 @@ A row kept at exactly two views is the kernel's two-view floor — its LOO is hi
 construction (each view is the other's reference), so treat 2-view rows with care.
 
 This is a dev/inspection tool, not a test — the automated coverage lives in
-``tests/test_patch_keypoint_localization.py``. See
+``tests/patch/test_patch_keypoint_localization.py``. See
 ``specs/core/patch-keypoint-localization.md``.
 
 Example::

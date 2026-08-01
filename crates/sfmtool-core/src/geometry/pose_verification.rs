@@ -52,6 +52,7 @@ use rayon::prelude::*;
 use crate::features::cluster_match::covisibility::DisplacementNeighborhood;
 use crate::geometry::batch_resection::{resect_images_batch, ResectOptions};
 use crate::geometry::homography_estimation::{estimate_homography, HomographyOptions};
+use crate::geometry::numeric::{median, polar_rotation, rotation_angle};
 use crate::geometry::pose_refine::refine_absolute_pose;
 use crate::geometry::reconstruction_growth::per_image_seed;
 use crate::CameraIntrinsics;
@@ -183,40 +184,6 @@ pub struct PoseRepair {
 }
 
 // ── Small numeric helpers ────────────────────────────────────────────────────
-
-/// Nearest rotation to `m` (polar factor `U Vᵀ` of the SVD). A negative
-/// determinant flips the sign of the whole matrix — a homography is defined
-/// up to scale *including sign*, so `M ≈ −R` must come back as `R` (mirrors
-/// `rotation_init`). `None` for a non-finite or degenerate input.
-fn polar_rotation(m: &Matrix3<f64>) -> Option<Matrix3<f64>> {
-    let svd = m.svd(true, true);
-    let (u, v_t) = (svd.u?, svd.v_t?);
-    let p = u * v_t;
-    if !p.iter().all(|v| v.is_finite()) {
-        return None;
-    }
-    Some(if p.determinant() < 0.0 { -p } else { p })
-}
-
-/// Rotation angle of `r` in radians.
-fn rotation_angle(r: &Matrix3<f64>) -> f64 {
-    (((r.trace() - 1.0) / 2.0).clamp(-1.0, 1.0)).acos()
-}
-
-/// numpy-style median (mean of the middle two for even counts).
-fn median(values: &[f64]) -> f64 {
-    let mut s = values.to_vec();
-    s.sort_by(f64::total_cmp);
-    let n = s.len();
-    if n == 0 {
-        return 0.0;
-    }
-    if n % 2 == 1 {
-        s[n / 2]
-    } else {
-        (s[n / 2 - 1] + s[n / 2]) / 2.0
-    }
-}
 
 /// Unit quaternion from a WXYZ row.
 fn quat_of(q: &[f64; 4]) -> UnitQuaternion<f64> {

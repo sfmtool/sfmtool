@@ -371,19 +371,13 @@ pub(crate) fn extract_image_u8(obj: &Bound<'_, pyo3::types::PyAny>) -> PyResult<
                 "image must have 1, 3, or 4 channels (got {c})"
             )));
         }
-        let data: Vec<u8> = match arr.as_slice() {
-            Ok(s) => s.to_vec(),
-            Err(_) => arr.as_array().iter().copied().collect(),
-        };
+        let data: Vec<u8> = to_contiguous!(arr).into_owned();
         return Ok(ImageU8::new(w, h, c, data));
     }
     if let Ok(arr) = obj.extract::<numpy::PyReadonlyArray2<'_, u8>>() {
         let shape = arr.shape();
         let (h, w) = (shape[0] as u32, shape[1] as u32);
-        let data: Vec<u8> = match arr.as_slice() {
-            Ok(s) => s.to_vec(),
-            Err(_) => arr.as_array().iter().copied().collect(),
-        };
+        let data: Vec<u8> = to_contiguous!(arr).into_owned();
         return Ok(ImageU8::new(w, h, 1, data));
     }
     Err(pyo3::exceptions::PyTypeError::new_err(

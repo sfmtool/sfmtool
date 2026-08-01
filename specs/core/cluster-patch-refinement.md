@@ -562,7 +562,7 @@ sfm cluster-patches -i clusters.matches [-o out.matches]
 > permissive 0.85 gate over the ~50-effective-sample window, tripping the
 > shift gate instead. (b) `sfm match --cluster` does not yet write
 > cluster-bearing files (the §1 derived-pairs migration), so
-> `tests/test_cluster_patches.py` builds the CLI input programmatically —
+> `tests/patch/test_cluster_patches.py` builds the CLI input programmatically —
 > `cluster_match(...)` over the fixture's `.sift` files, written via
 > `write_matches` — and keeps the spec's assertions (output verifies, > 50%
 > of multi-member clusters keep ≥ 1 member, statuses within the enum with
@@ -587,7 +587,7 @@ sfm cluster-patches -i clusters.matches [-o out.matches]
   image; plus the Python round-trip module `tests/test_matches_clusters.py`.
 - **Python** `tests/rust_bindings/test_cluster_patches_rust_bindings.py`:
   tiny synthetic images end-to-end through the binding; dict schema and
-  dtypes. `tests/test_cluster_patches.py`: CLI run over the
+  dtypes. `tests/patch/test_cluster_patches.py`: CLI run over the
   `isolated_seoul_bull_17_images` fixture pipeline (extract → match
   --cluster → cluster-patches), asserting the output file verifies, > 50%
   of multi-member clusters keep ≥ 1 member, and statuses cover the enum.

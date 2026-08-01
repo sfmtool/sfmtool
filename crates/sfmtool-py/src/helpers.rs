@@ -171,13 +171,28 @@ pub(crate) fn extract_rig_frame_data(
 
     Ok(Some(RigFrameData {
         rigs_metadata,
-        sensor_camera_indexes: sensor_camera_indexes.as_array().to_owned(),
-        sensor_quaternions_wxyz: sensor_quaternions_wxyz.as_array().to_owned(),
-        sensor_translations_xyz: sensor_translations_xyz.as_array().to_owned(),
+        sensor_camera_indexes: sensor_camera_indexes
+            .as_array()
+            .as_standard_layout()
+            .into_owned(),
+        sensor_quaternions_wxyz: sensor_quaternions_wxyz
+            .as_array()
+            .as_standard_layout()
+            .into_owned(),
+        sensor_translations_xyz: sensor_translations_xyz
+            .as_array()
+            .as_standard_layout()
+            .into_owned(),
         frames_metadata,
-        rig_indexes: rig_indexes.as_array().to_owned(),
-        image_sensor_indexes: image_sensor_indexes.as_array().to_owned(),
-        image_frame_indexes: image_frame_indexes.as_array().to_owned(),
+        rig_indexes: rig_indexes.as_array().as_standard_layout().into_owned(),
+        image_sensor_indexes: image_sensor_indexes
+            .as_array()
+            .as_standard_layout()
+            .into_owned(),
+        image_frame_indexes: image_frame_indexes
+            .as_array()
+            .as_standard_layout()
+            .into_owned(),
     }))
 }
 

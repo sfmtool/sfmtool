@@ -26,6 +26,8 @@
 use ndarray::ArrayView3;
 use rayon::prelude::*;
 
+use crate::geometry::numeric::splitmix64;
+
 use super::params::MemberStatus;
 use super::REFERENCE_UNREFINABLE;
 
@@ -54,16 +56,6 @@ const INIT_NOISE: [f64; 4] = [0.15, 0.5, 1.0, 2.0];
 type Mat2x3 = [[f64; 3]; 2];
 type Mat3x2 = [[f64; 2]; 3];
 type Mat2 = [[f64; 2]; 2];
-
-/// SplitMix64 — the deterministic init-noise generator (no rand dependency,
-/// identical across platforms).
-fn splitmix64(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9e3779b97f4a7c15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-    z ^ (z >> 31)
-}
 
 /// Uniform in [-1, 1) from SplitMix64 (53 mantissa bits -> [0, 2), shifted).
 fn noise(state: &mut u64) -> f64 {

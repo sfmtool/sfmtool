@@ -4,8 +4,6 @@
 //! Bindings for batched reprojection residuals: compose per-image
 //! world-to-camera poses with the shared camera model's canonical projection.
 
-use std::borrow::Cow;
-
 use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 

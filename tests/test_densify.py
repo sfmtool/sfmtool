@@ -18,12 +18,13 @@ from sfmtool.feature_match._geometry import (
     get_essential_matrix,
     get_fundamental_matrix,
 )
-from sfmtool.feature_match._polar_sweep import (
-    _cartesian_to_polar,
-    _compute_epipole_pair_from_F,
-    polar_mutual_best_match,
+from sfmtool.colmap.convention import flip_camera_pose_matrix_s
+from sfmtool._sfmtool.matching import (
+    mutual_best_match_sweep_py,
+    mutual_best_match_sweep_geometric_py,
+    polar_mutual_best_match_py,
+    polar_mutual_best_match_geometric_py,
 )
-from sfmtool.feature_match._rectified_sweep import mutual_best_match_sweep
 
 
 # ===== Geometry Tests =====
@@ -208,6 +209,129 @@ def _make_geometric_params(n_features1, n_features2, forward=False):
     return affine_shapes1, affine_shapes2, K, K, pose1, pose2, R_2d, config
 
 
+def _geometric_args(geometric):
+    """Flatten `_make_geometric_params` output into the Rust matchers' form.
+
+    The Rust geometric matchers take COLMAP/OpenCV-frame poses as matrices,
+    while the poses handed in here are canonical, so the camera frames are
+    S-flipped (S-only, D3) — the same conversion ``match_registered_images``
+    performs at the Rust boundary. Note it is *that* path this mirrors, not
+    ``match_image_pair``, which passes its canonical poses to
+    ``match_image_pair_py`` unflipped and lets Rust convert.
+    """
+    aff1, aff2, K1, K2, pose1, pose2, _R_2d, config = geometric
+    R1, t1 = flip_camera_pose_matrix_s(pose1.rotation.matrix(), pose1.translation)
+    R2, t2 = flip_camera_pose_matrix_s(pose2.rotation.matrix(), pose2.translation)
+    poses = (
+        np.asarray(aff1.reshape(-1, 4), dtype=np.float64),
+        np.asarray(aff2.reshape(-1, 4), dtype=np.float64),
+        np.asarray(K1, dtype=np.float64),
+        np.asarray(K2, dtype=np.float64),
+        R1,
+        R2,
+        t1,
+        t2,
+    )
+    thresholds = (
+        config.max_angle_difference,
+        config.min_triangulation_angle,
+        config.geometric_size_ratio_min,
+        config.geometric_size_ratio_max,
+    )
+    return poses, thresholds
+
+
+def _as_positions(a):
+    return np.asarray(a, dtype=np.float64)
+
+
+def _as_descriptors(a):
+    return np.asarray(a, dtype=np.uint8)
+
+
+def mutual_best_match_sweep(
+    keypoints1,
+    descriptors1,
+    keypoints2,
+    descriptors2,
+    window_size,
+    threshold=None,
+    geometric=None,
+):
+    """Bidirectional rectified sweep match through the Rust matcher."""
+    k1, d1 = _as_positions(keypoints1), _as_descriptors(descriptors1)
+    k2, d2 = _as_positions(keypoints2), _as_descriptors(descriptors2)
+    if geometric is None:
+        return mutual_best_match_sweep_py(k1, d1, k2, d2, window_size, threshold)
+    (aff1, aff2, K1, K2, R1, R2, t1, t2), thresholds = _geometric_args(geometric)
+    return mutual_best_match_sweep_geometric_py(
+        k1,
+        d1,
+        k2,
+        d2,
+        aff1,
+        aff2,
+        K1,
+        K2,
+        R1,
+        R2,
+        t1,
+        t2,
+        window_size,
+        threshold,
+        *thresholds,
+    )
+
+
+def polar_mutual_best_match(
+    positions1,
+    descriptors1,
+    positions2,
+    descriptors2,
+    F,
+    window_size=15,
+    threshold=None,
+    min_radius=10.0,
+    geometric=None,
+):
+    """Bidirectional polar sweep match through the Rust matcher.
+
+    Mirrors the production contract: the Rust matchers return ``None`` when the
+    epipole is at infinity, which callers surface as a ``ValueError``.
+    """
+    p1, d1 = _as_positions(positions1), _as_descriptors(descriptors1)
+    p2, d2 = _as_positions(positions2), _as_descriptors(descriptors2)
+    f_arr = np.asarray(F, dtype=np.float64)
+    if geometric is None:
+        result = polar_mutual_best_match_py(
+            p1, d1, p2, d2, f_arr, window_size, threshold, min_radius
+        )
+    else:
+        (aff1, aff2, K1, K2, R1, R2, t1, t2), thresholds = _geometric_args(geometric)
+        result = polar_mutual_best_match_geometric_py(
+            p1,
+            d1,
+            p2,
+            d2,
+            aff1,
+            aff2,
+            f_arr,
+            K1,
+            K2,
+            R1,
+            R2,
+            t1,
+            t2,
+            window_size,
+            threshold,
+            min_radius,
+            *thresholds,
+        )
+    if result is None:
+        raise ValueError("Epipole is at infinity - use standard rectification instead")
+    return result
+
+
 class TestRectifiedSweepMatching:
     @pytest.mark.parametrize("use_geometric_filter", [False, True])
     def test_sliding_window(self, use_geometric_filter):
@@ -220,22 +344,12 @@ class TestRectifiedSweepMatching:
             dtype=np.float32,
         )
 
-        kwargs = {}
+        geometric = None
         if use_geometric_filter:
-            aff1, aff2, K1, K2, p1, p2, R_2d, config = _make_geometric_params(3, 5)
-            kwargs = {
-                "affine_shapes1": aff1,
-                "affine_shapes2": aff2,
-                "K1": K1,
-                "K2": K2,
-                "pose1": p1,
-                "pose2": p2,
-                "R_2d": R_2d,
-                "geometric_config": config,
-            }
+            geometric = _make_geometric_params(3, 5)
 
         matches = mutual_best_match_sweep(
-            kpts1, descs1, kpts2, descs2, window_size=2, **kwargs
+            kpts1, descs1, kpts2, descs2, window_size=2, geometric=geometric
         )
         assert len(matches) == 3
         actual_pairs = {(m[0], m[1]) for m in matches}
@@ -248,68 +362,18 @@ class TestRectifiedSweepMatching:
         kpts2 = np.array([[0, 11], [0, 31]])
         descs2 = np.array([[1.0] * 128, [3.0] * 128], dtype=np.float32)
 
-        kwargs = {}
+        geometric = None
         if use_geometric_filter:
-            aff1, aff2, K1, K2, p1, p2, R_2d, config = _make_geometric_params(2, 2)
-            kwargs = {
-                "affine_shapes1": aff1,
-                "affine_shapes2": aff2,
-                "K1": K1,
-                "K2": K2,
-                "pose1": p1,
-                "pose2": p2,
-                "R_2d": R_2d,
-                "geometric_config": config,
-            }
+            geometric = _make_geometric_params(2, 2)
 
         matches = mutual_best_match_sweep(
-            kpts1, descs1, kpts2, descs2, window_size=2, **kwargs
+            kpts1, descs1, kpts2, descs2, window_size=2, geometric=geometric
         )
         actual_pairs = {(m[0], m[1]) for m in matches}
         assert actual_pairs == {(1, 0), (0, 1)}
 
 
 # ===== Polar Sweep Matching Tests =====
-
-
-class TestPolarCoordinates:
-    def test_basic(self):
-        epipole = np.array([100.0, 100.0])
-        points = np.array(
-            [
-                [200.0, 100.0],
-                [100.0, 200.0],
-                [0.0, 100.0],
-                [100.0, 0.0],
-            ]
-        )
-        polar = _cartesian_to_polar(points, epipole, min_radius=1.0)
-        assert len(polar.theta) == 4
-        np.testing.assert_allclose(polar.radius, [100, 100, 100, 100], atol=1e-10)
-        np.testing.assert_allclose(
-            polar.theta,
-            [0, np.pi / 2, np.pi, -np.pi / 2],
-            atol=1e-10,
-        )
-
-    def test_excludes_close_points(self):
-        epipole = np.array([100.0, 100.0])
-        points = np.array(
-            [
-                [100.0, 100.0],
-                [105.0, 100.0],
-                [200.0, 100.0],
-            ]
-        )
-        polar = _cartesian_to_polar(points, epipole, min_radius=10.0)
-        assert len(polar.theta) == 1
-        assert polar.original_indices[0] == 2
-
-    def test_epipole_pair_from_F(self):
-        F = np.array([[0, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float64)
-        e1, e2, e1_inf, e2_inf = _compute_epipole_pair_from_F(F)
-        assert e1_inf
-        assert e2_inf
 
 
 class TestPolarSweepMatching:
@@ -350,21 +414,9 @@ class TestPolarSweepMatching:
         descriptors2 = descriptors1.copy()
         positions2 += rng.standard_normal((n_features, 2)) * 2
 
-        kwargs = {}
+        geometric = None
         if use_geometric_filter:
-            aff1, aff2, K1, K2, p1, p2, R_2d, config = _make_geometric_params(
-                n_features, n_features, forward=True
-            )
-            kwargs = {
-                "affine_shapes1": aff1,
-                "affine_shapes2": aff2,
-                "K1": K1,
-                "K2": K2,
-                "pose1": p1,
-                "pose2": p2,
-                "R_2d": R_2d,
-                "geometric_config": config,
-            }
+            geometric = _make_geometric_params(n_features, n_features, forward=True)
 
         matches = polar_mutual_best_match(
             positions1,
@@ -374,7 +426,7 @@ class TestPolarSweepMatching:
             F,
             window_size=15,
             min_radius=10.0,
-            **kwargs,
+            geometric=geometric,
         )
         assert len(matches) >= n_features // 2
 
@@ -404,21 +456,9 @@ class TestPolarSweepMatching:
         descriptors1 = np.zeros((n_features, 128), dtype=np.uint8)
         descriptors2 = np.full((n_features, 128), 255, dtype=np.uint8)
 
-        kwargs = {}
+        geometric = None
         if use_geometric_filter:
-            aff1, aff2, K1, K2, p1, p2, R_2d, config = _make_geometric_params(
-                n_features, n_features, forward=True
-            )
-            kwargs = {
-                "affine_shapes1": aff1,
-                "affine_shapes2": aff2,
-                "K1": K1,
-                "K2": K2,
-                "pose1": p1,
-                "pose2": p2,
-                "R_2d": R_2d,
-                "geometric_config": config,
-            }
+            geometric = _make_geometric_params(n_features, n_features, forward=True)
 
         matches = polar_mutual_best_match(
             positions1,
@@ -429,7 +469,7 @@ class TestPolarSweepMatching:
             window_size=15,
             threshold=100.0,
             min_radius=10.0,
-            **kwargs,
+            geometric=geometric,
         )
         assert len(matches) == 0
 
@@ -441,21 +481,9 @@ class TestPolarSweepMatching:
         descriptors1 = np.zeros((2, 128), dtype=np.uint8)
         descriptors2 = np.zeros((2, 128), dtype=np.uint8)
 
-        kwargs = {}
+        geometric = None
         if use_geometric_filter:
-            aff1, aff2, K1, K2, p1, p2, R_2d, config = _make_geometric_params(
-                2, 2, forward=True
-            )
-            kwargs = {
-                "affine_shapes1": aff1,
-                "affine_shapes2": aff2,
-                "K1": K1,
-                "K2": K2,
-                "pose1": p1,
-                "pose2": p2,
-                "R_2d": R_2d,
-                "geometric_config": config,
-            }
+            geometric = _make_geometric_params(2, 2, forward=True)
 
         with pytest.raises(ValueError, match="at infinity"):
             polar_mutual_best_match(
@@ -464,7 +492,7 @@ class TestPolarSweepMatching:
                 positions2,
                 descriptors2,
                 F,
-                **kwargs,
+                geometric=geometric,
             )
 
     @pytest.mark.parametrize("use_geometric_filter", [False, True])
@@ -482,21 +510,9 @@ class TestPolarSweepMatching:
         descriptors1 = np.zeros((2, 128), dtype=np.uint8)
         descriptors2 = np.zeros((2, 128), dtype=np.uint8)
 
-        kwargs = {}
+        geometric = None
         if use_geometric_filter:
-            aff1, aff2, K1, K2, p1, p2, R_2d, config = _make_geometric_params(
-                2, 2, forward=True
-            )
-            kwargs = {
-                "affine_shapes1": aff1,
-                "affine_shapes2": aff2,
-                "K1": K1,
-                "K2": K2,
-                "pose1": p1,
-                "pose2": p2,
-                "R_2d": R_2d,
-                "geometric_config": config,
-            }
+            geometric = _make_geometric_params(2, 2, forward=True)
 
         matches = polar_mutual_best_match(
             positions1,
@@ -505,7 +521,7 @@ class TestPolarSweepMatching:
             descriptors2,
             F,
             min_radius=50.0,
-            **kwargs,
+            geometric=geometric,
         )
         assert len(matches) == 0
 

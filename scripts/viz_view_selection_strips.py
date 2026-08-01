@@ -17,7 +17,7 @@ admitted-vs-rejected contrast is visible), then expanded points, then the rest.
 One montage image is written per input reconstruction.
 
 This is a dev/inspection tool, not a test — the automated coverage lives in
-``tests/test_patch_view_selection.py``. See
+``tests/patch/test_patch_view_selection.py``. See
 ``specs/core/patch-view-selection.md``.
 
 Example::
@@ -85,7 +85,7 @@ def geometric_candidates(
 ) -> set[int]:
     """Image indices that geometrically see the surfel: point in front of the
     camera, patch front-facing, and the projection inside the frame — the same
-    gate the keypoint pipeline uses (see tests/test_patch_view_selection.py).
+    gate the keypoint pipeline uses (see tests/patch/test_patch_view_selection.py).
 
     For a point at infinity (`w == 0`) `point_xyz` is a direction `d`: the
     camera-frame point is `R·d` with no translation (every ray to it is parallel

@@ -5,7 +5,6 @@
 
 use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
-use std::borrow::Cow;
 
 use sfmtool_core::features::feature_match;
 use sfmtool_core::features::feature_match::descriptor;
@@ -93,25 +92,19 @@ pub fn match_candidates_by_descriptor(
     }
 
     // Borrow all arrays zero-copy
-    let cand_data = candidates
-        .as_slice()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("candidates must be C-contiguous"))?;
+    let cand_data = to_contiguous!(candidates);
     let ibi_data = in_bounds_idx.as_slice().map_err(|_| {
         pyo3::exceptions::PyValueError::new_err("in_bounds_idx must be C-contiguous")
     })?;
-    let desc1_data = descriptors1.as_slice().map_err(|_| {
-        pyo3::exceptions::PyValueError::new_err("descriptors1 must be C-contiguous")
-    })?;
-    let desc2_data = descriptors2.as_slice().map_err(|_| {
-        pyo3::exceptions::PyValueError::new_err("descriptors2 must be C-contiguous")
-    })?;
+    let desc1_data = to_contiguous!(descriptors1);
+    let desc2_data = to_contiguous!(descriptors2);
 
     let matches = py.detach(|| {
         descriptor::match_candidates_and_deduplicate(
-            cand_data,
+            &cand_data,
             ibi_data,
-            desc1_data,
-            desc2_data,
+            &desc1_data,
+            &desc2_data,
             n_queries,
             k,
             desc_len,

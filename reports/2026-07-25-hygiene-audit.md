@@ -129,6 +129,24 @@ drifting, and drift here is silent — no compile error, just two behaviours.
   delicate part. `polar/tests.rs` (433) and `sweep/tests.rs` (355) cover both.
 
 **Numeric helpers copied verbatim across `geometry/` — a silent determinism hazard**
+
+> _Status (2026-08-01): Mostly done — `geometry/numeric.rs` (`pub(crate)`) now
+> holds `splitmix64` (5 copies), `median` (2), `polar_rotation` /
+> `rotation_angle` (2 each), and one `cam_at` unifying the identical-bodied
+> `cam_at` / `cam_with_focal` pair. Pure code motion, bodies moved verbatim;
+> `cargo test -p sfmtool-core --lib` green at 1068 passed. Commit 37a591e._
+>
+> _Two sub-items deliberately left open. (1) `inlier_fraction_of` — the copies
+> are functionally equivalent but **not** textually identical, as this finding
+> implies: `pose_verification` inlines the projection while
+> `reconstruction_growth` routes through its local `residual_norm`, which adds
+> a non-finite guard on the world point. Whether they agree on a NaN input
+> depends on `ray_to_pixel`'s behaviour, so the merge is not compiler-checked
+> and did not belong in a pure-motion change. (2) The larger `PairAccum` +
+> `pair_correspondences` + `ImageClusters` duplication between `focal_vote.rs`
+> and `rotation_init.rs` (~45 lines) is structural, not a scalar helper, and is
+> still open._
+
 - Location: `crates/sfmtool-core/src/geometry/` (6 files) + 2 outside
 - Problem: `splitmix64` is **byte-identical** in four files —
   `homography_estimation.rs:185`, `epipolar_estimation.rs:301`,
@@ -529,6 +547,23 @@ drifting, and drift here is silent — no compile error, just two behaviours.
 ## Python — `src/sfmtool/`
 
 **Dead code: two sweep-matching wrappers reachable only from tests**
+
+> _Status (2026-08-01): Done — both modules deleted, commit 82e89fc._
+>
+> _Correction to this finding: retargeting the tests was **not** mechanical.
+> The tests exercise both matcher paths via a `use_geometric_filter`
+> parametrization, and the wrappers carried real glue — the canonical-to-COLMAP
+> S-flip of the camera frames, the affine reshape to `(-1, 4)`, dtype coercion
+> (the tests pass float32 descriptors), and the `None`-to-`ValueError`
+> translation for an epipole at infinity. That glue moved into
+> `tests/test_densify.py` as ~123 lines of scaffolding, which is where it
+> belongs, but the swap is not a one-line import edit. (Commit 82e89fc's
+> message says "~50 lines" — that figure is wrong.)_
+>
+> _`TestPolarCoordinates` was dropped with them: its three cases covered
+> `_cartesian_to_polar` and `_compute_epipole_pair_from_F`, pure-Python helpers
+> with no production caller. Collection goes 41 -> 38, exactly those three._
+
 - Location: `src/sfmtool/feature_match/_polar_sweep.py` (171), `_rectified_sweep.py` (175) — 346 lines
 - Problem: Verified by full-tree search — the only references anywhere outside
   their own files are `tests/test_densify.py:21` and `:26`. The production path is
@@ -711,6 +746,20 @@ drifting, and drift here is silent — no compile error, just two behaviours.
 ## Tests
 
 **`tests/` needs subdirectories — the patch cluster alone is 15 modules, 4,894 lines**
+
+> _Status (2026-08-01): Partially done — `tests/patch/` landed with all 15
+> modules and a `tests/patch/conftest.py`, commit 69a602c. Collection unchanged
+> at 1932 tests. The remaining four clusters (`tests/rig/`, `tests/matching/`,
+> `tests/sift/`, `tests/camrig/`) are still open._
+>
+> _Note the move was **not** purely `git mv`: three specs and three
+> `scripts/viz_*.py` docstrings cite the old `tests/<module>.py` paths and were
+> updated with it. No tooling depends on the paths, as the finding says._
+>
+> _Measurement correction: the 15 modules are **5,269** lines, not the 4,894
+> this finding records (and which commit 69a602c repeats) — that figure was
+> carried from the snapshot rather than re-measured._
+
 - Location: `tests/` (58 flat `test_*.py`, 20,153 lines; `tests/xform/` 21 modules and `tests/rust_bindings/` 33 already show the pattern, with a per-subdir `tests/xform/conftest.py`)
 - Problem: The old report's `tests/patch/` proposal is now **15 modules / 4,894
   lines** (24% of the top-level suite): `test_patch_keypoint_subpixel.py` 613,
@@ -731,6 +780,19 @@ drifting, and drift here is silent — no compile error, just two behaviours.
   neither `scripts/coverage.sh` nor `ci.yml` hard-codes test paths.
 
 **The conftest solve-retry loop is still duplicated verbatim**
+
+> _Evidence added 2026-08-01, while landing the `tests/patch/` move: the
+> non-determinism these fixtures paper over is **live locally, not just against
+> CI's GLOMAP**. Three consecutive runs of the same 15 patch modules gave
+> 138 passed / 1 failed each time, with a **different** test failing on every
+> run (`test_embed_patches_subpixel_lk_round_trips`,
+> `test_stored_keypoints_at_reprojection_match_centered`,
+> `test_select_views_infinity_admitted_are_in_front`); each passes in
+> isolation. Reproduced identically on the pre-move tree, so it is unrelated to
+> that change. Worth raising this finding's priority: any future work in the
+> patch pipeline currently cannot tell a real regression from the background
+> failure rate._
+
 - Location: `tests/conftest.py` (571) — `build_cluster_reconstruction` 214–249, `kerry_park_camrig_workspace_once` 517–559
 - Problem: Confirmed still present, unchanged since 2026-06-23 (#11). Identical
   algorithm: rmtree `colmap_dir`, glob-unlink stale `.sfmr`,
@@ -748,6 +810,32 @@ drifting, and drift here is silent — no compile error, just two behaviours.
   behaviour change re-flakes the suite against CI's non-deterministic GLOMAP.
 
 **Patch test helpers copy-pasted across six test modules and three scripts**
+
+> _Status (2026-08-01): Partially done — the `tests/` half landed with the
+> `tests/patch/` move (commit 69a602c): 6 copies of `_load_images`, 5 of
+> `_sample_point_ids` and 3 of `_rotation_matrices` collapse to 3 definitions
+> in `tests/patch/conftest.py`. All 14 had identical *bodies*, verified before
+> removal — their signatures did not, which is the wrinkle below.
+> One wrinkle the finding does not mention: the three `_sample_point_ids`
+> defaults disagreed (200 / 300 / 500), so the bare call sites in the
+> 300- and 500-default modules were made explicit to preserve behaviour._
+>
+> _Correction (2026-08-01, from review): there were **seven** such call sites,
+> not the five commit 69a602c claims. The first pass used a line-oriented sweep
+> that missed two multi-line calls in `test_patch_normal_refine.py` (passing
+> `PatchCloud.from_reconstruction(...)` inline across lines), so
+> `test_confidence_is_opt_in` and `test_fronto_cache_matches_source_rendering`
+> silently ran over 200 sampled points instead of 500. The seoul_bull cloud
+> holds roughly 950 points (measured 944-962 across runs — the fixture is one of the
+> non-deterministic ones flagged below), comfortably above both, so
+> `min(n, len(ids))` did not mask it and the sampled sets genuinely differed.
+> Both tests still passed throughout — a silent weakening, which is exactly the
+> failure mode this kind of sweep invites. Now pinned._
+>
+> _The `scripts/_viz_common.py` half is still open — it touches the three
+> `viz_*` scripts whose fate is tied to the unresolved `scripts/` question
+> below._
+
 - Location: `tests/`, `scripts/`
 - Problem: `_load_images(recon)` — byte-identical cv2 BGR→RGB loader, comment and
   all — at `test_patch_keypoint_subpixel.py:29`,
@@ -766,7 +854,13 @@ drifting, and drift here is silent — no compile error, just two behaviours.
 - Risk: low
 
 **`test_densify.py` is misnamed — only 19% of it is about densify**
-- Location: `tests/test_densify.py` (686, 35 tests)
+
+> _Still open, but the line ranges below are stale as of 2026-08-01: this
+> branch's sweep-wrapper deletion rewrote the module (now 702 lines, 38 tests;
+> the polar/rectified sections moved and `TestPolarCoordinates` is gone).
+> Re-derive the ranges before acting; the split proposed here is unaffected._
+
+- Location: `tests/test_densify.py` (686, 35 tests — pre-2026-08-01)
 - Problem: Its own docstring concedes it ("densify command, feature matching module,
   and supporting utilities"). Breakdown: epipolar primitives 32–127,
   `get_intrinsic_matrix` 128–151, `GeometricFilterConfig` 152–210, rectified-sweep
@@ -779,7 +873,13 @@ drifting, and drift here is silent — no compile error, just two behaviours.
 - Risk: low — class-level moves, no fixture rewiring.
 
 **`test_embed_patches_compaction.py` mixes four topics**
-- Location: `tests/test_embed_patches_compaction.py` (580)
+
+> _Still open. Path updated 2026-08-01: the module moved to
+> `tests/patch/test_embed_patches_compaction.py` and is now 638 lines, so the
+> ranges below no longer line up — re-derive before acting. The
+> `sfmtool._progress` tests it flags are still there and still misplaced._
+
+- Location: `tests/patch/test_embed_patches_compaction.py` (638; 580 pre-move)
 - Problem: Confirmed as the old report said, with ranges: compaction round-trips
   61–353, multi-round `embed_patches` pipeline 354–485, grazing-observation drop
   486–543, and five tests of `sfmtool._progress` utilities at **544–580**
@@ -828,6 +928,109 @@ drifting, and drift here is silent — no compile error, just two behaviours.
   the previous two audits).
 
 **Stale prose after the `_sfmtool` migration, and a wrong test count in AGENTS.md**
+
+> _Status (2026-08-01): Done — commit 0e310b1. All five text corrections
+> landed; the `AGENTS.md` count was 113, not 43._
+>
+> _**`to_cow_slice` was a latent bug, not just a duplicate.** This finding
+> calls it "a hand-rolled duplicate of the crate-wide `to_contiguous!` macro"
+> and proposes deleting it — but it had 16 live call sites, and it was not
+> equivalent to the macro. It returned `Cow::Borrowed` whenever `as_slice()`
+> succeeded, omitting the `is_standard_layout()` guard whose absence the
+> macro's own doc comment warns about: `as_slice()` also succeeds for
+> Fortran-contiguous arrays and hands back raw column-major memory, silently
+> transposing every row of a 2-D input. A KD-tree query built from an
+> `order='F'` or transposed array would have returned wrong neighbours with no
+> error._
+>
+> _Correction (2026-08-01, from review): the first pass fixed only
+> `to_cow_slice`'s 16 **query** sites and claimed the bug was gone. It was not
+> — the four KD-tree **constructor** sites carried their own inline copy of the
+> same unguarded pattern, which is strictly worse (it transposes the stored
+> point cloud, so every later query is wrong, not just one call). Demonstrated
+> before the fix: a tree built from the same points in C- vs F-order returned
+> `[3 0 4]` vs `[4 2 2]`. Two more copies in `flow/warp.rs:374,383` would
+> transpose an F-ordered image._
+>
+> _Second correction (2026-08-01, from a second review): "all 22 sites" was
+> **also wrong** — 22 was the number of sites in the two files that had been
+> looked at, not in the crate. A proper enumeration of every `as_slice()` in
+> `sfmtool-py` (66 total, classified by array rank) found **32** vulnerable
+> 2-D/3-D sites across **seven** files, including the direct sibling of the
+> file being fixed:_
+>
+> | file | sites | measured impact |
+> |---|---|---|
+> | `spatial/kdforest.rs` | 2 | F-order descriptor block destroyed SIFT matching |
+> | `flow/optical.rs` | 15 | mean \|Δu\| 3.10 px on the same image pair |
+> | `sift/extract.rs` | 1 | 70 vs 56 keypoints from the same image |
+> | `geometry/se3_transform.rs` | 4 | transformed points differ |
+> | `reconstruction/clone.rs` | 5 | `positions`/`colors`/`normals`/`quats`/`translations` kwargs |
+> | `matching/descriptor.rs` | 3 | descriptor blocks |
+> | `spherical/tile_rig.rs` | 2 | atlas resampling |
+>
+> _All 32 now use the macro; every remaining `as_slice()` in the crate is 1-D
+> (always both C- and F-contiguous, so exempt) or reads crate-internal data.
+> The macro itself was made hygienic (`::std::borrow::Cow`) so it no longer
+> needs a `Cow` import at the call site, and its doc comment now states the
+> rule directly — the previous wording described the hazard without saying
+> "use this for every 2-D input", which is how three sweeps missed it._
+>
+> _Third correction (2026-08-01, from a third review): "crate-wide" was **also**
+> wrong, for a new reason — that sweep enumerated by **token** (`as_slice()`)
+> rather than by **hazard**. `arr.as_array().to_owned()` is the same trap in a
+> different spelling: ndarray's `to_owned` preserves strides whenever the source
+> is contiguous in memory order, and F-contiguous input is. The resulting array
+> is not standard-layout, and the format writers call `.as_slice().unwrap()` on
+> it, so it surfaces as a `PanicException` from inside `sfmr-format` — a crash
+> in a crate the caller never touched, rather than a `ValueError`. Reproduced:
+> `clone_with_changes(thumbnails_y_x_rgb=np.asfortranarray(t)).save(...)` panics
+> at `sfmr-format/src/write.rs:420`._
+>
+> _All **52** `as_array().to_owned()` sites in `sfmtool-py` (helpers 6, clone 3,
+> `io/matches` 23, `io/sfmr` 14, `io/sift` 4, `io/camrig` 2) now use
+> `.as_standard_layout().into_owned()`, which is a no-op cost when the input is
+> already C-ordered. The review found 5 of these by tracing which ones reach a
+> writer; the fix is applied uniformly instead, since the classification of
+> "which ones reach an `unwrap`" is exactly the kind of reasoning that has been
+> wrong four times now. The macro's doc comment documents this second spelling._
+>
+> _Fourth correction (2026-08-01, from a fourth review): the **rule** was wrong,
+> which matters more than any individual site. Every prior note here said "1-D
+> inputs are exempt, since a 1-D array is always both C- and F-contiguous."
+> Both halves are false. A 1-D *numpy* array need not be contiguous (`a[::2]`,
+> `a[::-1]`, `broadcast_to`), and — decisively — ndarray treats a **negative
+> stride as contiguous** (`Dimension::is_contiguous`: `dim[0] <= 1 ||
+> strides[0] == -1`; the N-D branch compares `unsigned_abs()`). So `a[::-1]`
+> survives `to_owned()` with its `-1` stride intact and panics in a format
+> writer — the same bug class, reached with **no Fortran order anywhere**, at
+> 1-D as readily as at 2-D. The 52-site fix happens to cover this only because
+> it was applied uniformly *against* the stated rule; anyone following the rule
+> as documented would have skipped those sites. The macro doc now says the rule
+> is about how the buffer is read, never about rank._
+>
+> _Also from that review: one more site, `patches/cloud.rs:323`, where the
+> `to_owned()` spelling is **split across statements** (`let u =
+> arr.as_array();` … `u.to_owned()`) so a grep for `as_array().to_owned()`
+> misses it — the same enumerate-by-token failure the previous correction
+> claimed to be fixing. Now 53 sites._
+>
+> _Pinned by `tests/rust_bindings/test_fortran_order_bindings.py`. Verified
+> non-vacuous three ways: removing the `is_standard_layout()` guard from the
+> macro reddens the slice-path tests; reverting `clone.rs` to `to_owned()`
+> reddens the F-order round-trip with the panic; and it also reddens the new
+> reversed-view (`[::-1]`) test, which no Fortran-order framing would have
+> thought to write. Coverage gaps the review found are closed too:
+> `matching/descriptor.rs` and the five 2-D `clone_with_changes` kwargs now
+> have tests, and `test_fortran_keypoints_round_trip` — which had been
+> **permanently** skipping, because `seoul_bull_workspace` is always
+> `feature_source="sift_files"` and so carries no `keypoints_xy` — now builds
+> its fixture via `to_embedded_patches` and actually runs._
+>
+> _`geometry/rot_quaternion.rs:80` is worth noting — it already had a
+> hand-written workaround with a comment naming this exact hazard. The
+> knowledge was in the codebase; it just never became a rule._
+
 - Location: `AGENTS.md:65`, `crates/sfmtool-py/src/lib.rs:18–19`, `src/sfmtool/sift/extract_sfmtool.py:6,41`, `specs/core/epipolar-curves.md:5,257`
 - Problem: The PyO3 migration (#217) is structurally clean — ten uniform
   `install_submodule` calls, no duplicate registrations, no migration TODOs. The
@@ -907,7 +1110,9 @@ convention and is applied consistently.
    in the two big writers, already avoided in `camrig-format` but unreachable by the
    others). Low risk, 8 functions, and the four format crates have zero inter-crate
    deps today so there is no cycle to manage.
-3. **`tests/` subdirectories, starting with `tests/patch/`** — 15 modules and 4,894
+3. **`tests/` subdirectories, starting with `tests/patch/`** — _done 2026-08-01
+   for `tests/patch/`; see the status notes on the two `tests/` findings above.
+   The other four clusters remain._ 15 modules and 4,894
    lines, pure `git mv`, no CI or tooling depends on the paths, and it immediately
    unlocks deleting 9 copies of `_load_images` and 6 of `_rotation_matrices` via a
    `tests/patch/conftest.py`. Best effort-to-value ratio in the report.

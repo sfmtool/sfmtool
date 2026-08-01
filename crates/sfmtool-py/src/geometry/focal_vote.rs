@@ -4,8 +4,6 @@
 //! Python binding for the structure-free focal vote
 //! (``sfmtool._sfmtool.geometry.focal_vote``; see ``specs/core/focal-vote.md``).
 
-use std::borrow::Cow;
-
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;

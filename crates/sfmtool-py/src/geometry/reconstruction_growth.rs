@@ -5,8 +5,6 @@
 //! (``sfmtool._sfmtool.geometry.grow_reconstruction`` /
 //! ``resect_images_batch``; see ``specs/core/reconstruction-growth.md``).
 
-use std::borrow::Cow;
-
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;

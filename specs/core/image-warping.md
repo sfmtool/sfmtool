@@ -789,7 +789,7 @@ central differences and is agnostic to how the map was built.
   `from_cameras` selects via `needs_ray_path`).
 - Tested by Rust unit tests in the `warp_map` tests module (identity / INF /
   coincident-pose / known-depth / equirect cases) and
-  `tests/test_warp_map_pose.py`, whose `TestRealReconstruction` cases validate
+  `tests/patch/test_warp_map_pose.py`, whose `TestRealReconstruction` cases validate
   the full world-coordinate chain end-to-end against real seoul_bull geometry.
 
 ### Non-goals

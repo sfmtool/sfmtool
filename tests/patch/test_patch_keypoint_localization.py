@@ -16,7 +16,6 @@ the non-convex / cluttered stress case, exercised for shape and sanity.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -24,48 +23,12 @@ import numpy as np
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.patches import PatchCloud
 
-
-def _load_images(recon) -> list[np.ndarray]:
-    import cv2  # heavy module, only needed by this integration test
-
-    ws = recon.workspace_dir
-    images = []
-    for name in recon.image_names:
-        bgr = cv2.imread(os.path.join(ws, name), cv2.IMREAD_COLOR)
-        assert bgr is not None, f"could not read {name}"
-        images.append(np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)))
-    return images
-
-
-def _sample_point_ids(cloud, n: int = 200, seed: int = 0) -> list[int]:
-    """A deterministic point-id subset, to keep the per-point search fast."""
-    ids = np.asarray(cloud.point_indexes)
-    rng = np.random.default_rng(seed)
-    return np.sort(rng.choice(ids, size=min(n, len(ids)), replace=False)).tolist()
-
-
-def _rotation_matrices(recon) -> np.ndarray:
-    """Per-image world-to-camera rotation matrices (Mx3x3) from wxyz quaternions."""
-    q = np.asarray(recon.quaternions_wxyz, dtype=np.float64)
-    w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-    n = w * w + x * x + y * y + z * z
-    s = np.where(n > 0, 2.0 / n, 0.0)
-    R = np.empty((len(q), 3, 3), dtype=np.float64)
-    R[:, 0, 0] = 1 - s * (y * y + z * z)
-    R[:, 0, 1] = s * (x * y - z * w)
-    R[:, 0, 2] = s * (x * z + y * w)
-    R[:, 1, 0] = s * (x * y + z * w)
-    R[:, 1, 1] = 1 - s * (x * x + z * z)
-    R[:, 1, 2] = s * (y * z - x * w)
-    R[:, 2, 0] = s * (x * z - y * w)
-    R[:, 2, 1] = s * (y * z + x * w)
-    R[:, 2, 2] = 1 - s * (x * x + y * y)
-    return R
+from .conftest import load_images, rotation_matrices, sample_point_ids
 
 
 def _project(recon, point_xyz: np.ndarray, image_idx: int):
     """Project a 3D point into image `image_idx`; ``None`` if behind the camera."""
-    R = _rotation_matrices(recon)[image_idx]
+    R = rotation_matrices(recon)[image_idx]
     t = np.asarray(recon.translations, dtype=np.float64)[image_idx]
     x_cam = R @ point_xyz + t
     # Canonical cameras look down -Z: in front means z < 0, and normalized image
@@ -84,13 +47,13 @@ def _view_sets_from_selection(cloud, recon, images, sample):
 
 def test_localize_keypoints_convex_dataset(seoul_bull_workspace: Path):
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
     assert len(cloud) > 0
 
-    sample = _sample_point_ids(cloud)
+    sample = sample_point_ids(cloud)
     view_sets = _view_sets_from_selection(cloud, recon, images, sample)
 
     max_shift_px = 3.0
@@ -147,13 +110,13 @@ def test_localize_keypoints_convex_dataset(seoul_bull_workspace: Path):
 def test_localize_keypoints_nonconvex_fisheye_rig(kerry_park_workspace: Path):
     """Shape / sanity on the non-convex kerry_park fisheye-rig stress case."""
     recon = SfmrReconstruction.load(kerry_park_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
     assert len(cloud) > 0
 
-    sample = _sample_point_ids(cloud, n=120)
+    sample = sample_point_ids(cloud, n=120)
     results = cloud.localize_keypoints(
         recon, images, point_indexes=sample, resolution=12
     )
@@ -172,7 +135,7 @@ def test_localize_keypoints_nonconvex_fisheye_rig(kerry_park_workspace: Path):
 def test_localize_keypoints_defaults_to_track(seoul_bull_workspace: Path):
     """With no view_sets, each point congeals over its track; kept ⊆ track."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
@@ -184,7 +147,7 @@ def test_localize_keypoints_defaults_to_track(seoul_bull_workspace: Path):
     for pid, im in zip(point_ids.tolist(), image_idxs.tolist()):
         tracks.setdefault(int(pid), set()).add(int(im))
 
-    sample = _sample_point_ids(cloud, n=120)
+    sample = sample_point_ids(cloud, n=120)
     results = cloud.localize_keypoints(
         recon, images, point_indexes=sample, resolution=12
     )
@@ -212,12 +175,12 @@ def test_localize_keypoints_view_sets_override_is_honored(seoul_bull_workspace: 
     then re-run that point with ``v`` removed from the override and assert ``v`` is
     gone (and a point left uncovered keeps falling back to its track)."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
     tracks = _tracks(recon)
-    sample = _sample_point_ids(cloud, n=120)
+    sample = sample_point_ids(cloud, n=120)
 
     # Baseline: localize over the full track per point.
     base = cloud.localize_keypoints(
@@ -268,11 +231,11 @@ def test_localize_keypoints_grazing_cutoff_drops_views(kerry_park_workspace: Pat
     """A strict min_grazing_cos pre-filters oblique views, so far fewer view-tiles
     survive than under a permissive cutoff (the binding plumbs the param through)."""
     recon = SfmrReconstruction.load(kerry_park_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
-    sample = _sample_point_ids(cloud, n=120)
+    sample = sample_point_ids(cloud, n=120)
 
     def total_kept(min_grazing_cos: float) -> int:
         res = cloud.localize_keypoints(
@@ -297,7 +260,7 @@ def test_localize_keypoints_empty_view_set_yields_empty_arrays(
     """An empty view_set override yields a well-formed empty result (the binding's
     explicit (0, 2) keypoints array, not a column-inference failure)."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
@@ -319,7 +282,7 @@ def test_localize_keypoints_rejects_out_of_range_view_index(
     import pytest
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
@@ -341,11 +304,11 @@ def test_select_views_reports_the_track_view_count(seoul_bull_workspace: Path):
     """``track_view_count`` splits ``admitted`` into track views then vetted
     candidates — the provenance split the localizer's basis pick consumes."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
-    sample = _sample_point_ids(cloud, n=60)
+    sample = sample_point_ids(cloud, n=60)
 
     by_pid: dict[int, set[int]] = {}
     for pid, img in zip(
@@ -368,11 +331,11 @@ def test_localize_keypoints_basis_cap_off_matches_uncapped(seoul_bull_workspace:
     path, byte-for-byte, even with scores supplied. The default is the capped
     ``8``, so the uncapped reference passes ``basis_max_views=0`` explicitly."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
-    sample = _sample_point_ids(cloud, n=80)
+    sample = sample_point_ids(cloud, n=80)
     sel = _selection(cloud, recon, images, sample)
     view_sets = {pid: np.asarray(r["admitted"]).tolist() for pid, r in sel.items()}
     scores = {
@@ -416,11 +379,11 @@ def test_localize_keypoints_basis_cap_keeps_the_contract(seoul_bull_workspace: P
     """A biting cap still localizes every admitted view it does not gate out, in
     input order, with parallel arrays and a well-formed basis/tail split."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
-    sample = _sample_point_ids(cloud, n=80)
+    sample = sample_point_ids(cloud, n=80)
     sel = _selection(cloud, recon, images, sample)
     view_sets = {pid: np.asarray(r["admitted"]).tolist() for pid, r in sel.items()}
     scores = {
@@ -467,7 +430,7 @@ def test_localize_keypoints_rejects_mismatched_view_scores(seoul_bull_workspace:
     import pytest
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
@@ -488,7 +451,7 @@ def test_localize_keypoints_rejects_unknown_basis_pick(seoul_bull_workspace: Pat
     import pytest
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
@@ -512,11 +475,11 @@ def test_localize_keypoints_chunked_with_whole_cloud_view_scores(
     covers every point, so the parallel-length check must run against each
     point's own view set — not against the sets ``point_indexes`` cleared."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
-    sample = _sample_point_ids(cloud, n=60)
+    sample = sample_point_ids(cloud, n=60)
     sel = _selection(cloud, recon, images, sample)
     view_sets = {pid: np.asarray(r["admitted"]).tolist() for pid, r in sel.items()}
     scores = {

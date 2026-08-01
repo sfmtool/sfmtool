@@ -393,19 +393,13 @@ fn extract_atlas_f32(obj: &Bound<'_, pyo3::types::PyAny>) -> PyResult<(Vec<f32>,
     if let Ok(arr) = obj.extract::<numpy::PyReadonlyArray3<'_, f32>>() {
         let shape = arr.shape();
         let (h, w, c) = (shape[0] as u32, shape[1] as u32, shape[2]);
-        let data: Vec<f32> = match arr.as_slice() {
-            Ok(s) => s.to_vec(),
-            Err(_) => arr.as_array().iter().copied().collect(),
-        };
+        let data: Vec<f32> = to_contiguous!(arr).into_owned();
         return Ok((data, w, h, c));
     }
     if let Ok(arr) = obj.extract::<numpy::PyReadonlyArray2<'_, f32>>() {
         let shape = arr.shape();
         let (h, w) = (shape[0] as u32, shape[1] as u32);
-        let data: Vec<f32> = match arr.as_slice() {
-            Ok(s) => s.to_vec(),
-            Err(_) => arr.as_array().iter().copied().collect(),
-        };
+        let data: Vec<f32> = to_contiguous!(arr).into_owned();
         return Ok((data, w, h, 1));
     }
     Err(pyo3::exceptions::PyTypeError::new_err(

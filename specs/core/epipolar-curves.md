@@ -2,7 +2,7 @@
 
 **Status:** Implemented — `crates/sfmtool-core/src/camera/epipolar.rs`
 (`plot_epipolar_curve`, `plot_epipolar_curves_batch`, `EpipolarCurveOptions`),
-exposed as `sfmtool._sfmtool.epipolar_curves` (`py_epipolar.rs`) and consumed
+exposed as `sfmtool._sfmtool.epipolar_curves` (`analysis/epipolar.rs`) and consumed
 by `sfm epipolar` via `visualization/_epipolar_display.py`. As shipped, the
 anchor depth is a **per-feature argument** (scalar / array), not an options
 field — the API blocks below reflect that.
@@ -255,7 +255,7 @@ images — is the recommended path for those cameras.
 ## PyO3 Binding
 
 Exposed as `sfmtool._sfmtool.epipolar_curves`
-(`crates/sfmtool-py/src/py_epipolar.rs`):
+(`crates/sfmtool-py/src/analysis/epipolar.rs`):
 
 ```python
 epipolar_curves(
@@ -295,7 +295,7 @@ O(1) lookups against the track-index.
 ## Out of Scope
 
 Visualization only (`sfm epipolar`). The polar-sweep and rectified-sweep
-matchers (`feature_match/_polar_sweep.py`, `feature_match/_rectified_sweep.py`,
+matchers (`sfmtool-core/src/features/feature_match/{polar,sweep}.rs`,
 `sfmtool-core/src/camera/rectification.rs`) carry the same pinhole assumption; making
 *matching* fisheye-aware (sweeping along the bearing-space epipolar line) is
 separate, larger work.

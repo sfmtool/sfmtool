@@ -3,8 +3,6 @@
 
 //! Python bindings for batch triangulation with observability diagnostics.
 
-use std::borrow::Cow;
-
 use nalgebra::{Point3, Vector3};
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;

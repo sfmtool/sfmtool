@@ -118,8 +118,14 @@ pub fn write_camrig<'py>(
         Some(obj) => py_to_serde(py, obj)?,
         None => serde_json::Value::Object(serde_json::Map::new()),
     };
-    let quaternions_wxyz = quaternions_wxyz.as_array().to_owned();
-    let translations_xyz = translations_xyz.as_array().to_owned();
+    let quaternions_wxyz = quaternions_wxyz
+        .as_array()
+        .as_standard_layout()
+        .into_owned();
+    let translations_xyz = translations_xyz
+        .as_array()
+        .as_standard_layout()
+        .into_owned();
 
     let data = camrig_format::CamRigData {
         metadata: camrig_format::CamRigMetadata {

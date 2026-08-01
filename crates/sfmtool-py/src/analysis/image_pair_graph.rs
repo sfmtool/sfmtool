@@ -5,7 +5,6 @@
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
-use std::borrow::Cow;
 
 use sfmtool_core::analysis::image_pair_graph;
 

@@ -5,8 +5,6 @@
 //! (``sfmtool._sfmtool.analysis.cluster_census``; see
 //! ``specs/core/cluster-census.md``).
 
-use std::borrow::Cow;
-
 use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;

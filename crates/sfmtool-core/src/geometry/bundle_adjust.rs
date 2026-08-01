@@ -19,6 +19,7 @@
 use nalgebra::{DMatrix, DVector, Matrix3, Point3, SMatrix, UnitQuaternion, Vector2, Vector3};
 
 use crate::camera::{CameraModel, PixelJacobian};
+use crate::geometry::numeric::cam_at;
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::CameraIntrinsics;
 
@@ -90,17 +91,6 @@ fn robust_scales(z: f64) -> (f64, f64) {
     let js = (1.0 + z).powf(-0.75);
     let rs = (1.0 + z).powf(0.25);
     (js, rs)
-}
-
-/// The shared camera at focal `f` (identity for every model but
-/// SIMPLE_PINHOLE — `opt_f` is gated on that model, so no other ever sees a
-/// moved focal).
-fn cam_at(cam: &CameraIntrinsics, f: f64) -> CameraIntrinsics {
-    let mut out = cam.clone();
-    if let CameraModel::SimplePinhole { focal_length, .. } = &mut out.model {
-        *focal_length = f;
-    }
-    out
 }
 
 /// Per-observation residual norm and canonical in-front depth (`−z_cam`) at

@@ -126,10 +126,7 @@ impl PyKdForest {
             seed,
         )?;
 
-        let data: Cow<[u8]> = match descriptors.as_slice() {
-            Ok(s) => Cow::Borrowed(s),
-            Err(_) => Cow::Owned(descriptors.as_array().iter().copied().collect()),
-        };
+        let data: Cow<[u8]> = to_contiguous!(descriptors);
 
         let inner = py.detach(|| KdForestU8::build(&data, n, dim, params));
         Ok(Self { inner })
@@ -201,10 +198,7 @@ impl PyKdForest {
         }
 
         let budget = max_leaf_checks.unwrap_or_else(|| self.inner.params().max_leaf_checks);
-        let data: Cow<[u8]> = match descriptors.as_slice() {
-            Ok(s) => Cow::Borrowed(s),
-            Err(_) => Cow::Owned(descriptors.as_array().iter().copied().collect()),
-        };
+        let data: Cow<[u8]> = to_contiguous!(descriptors);
 
         let (indices, dist_sq) = py.detach(|| {
             self.inner

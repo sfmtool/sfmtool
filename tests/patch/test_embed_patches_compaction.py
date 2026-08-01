@@ -12,7 +12,6 @@ reconstruction, and round-trips it through ``.sfmr`` to confirm validity. See
 
 from __future__ import annotations
 
-import os
 import threading
 from pathlib import Path
 
@@ -29,17 +28,7 @@ from sfmtool._sfmtool.patches import PatchCloud
 from sfmtool._sfmtool import ProgressCounter
 from sfmtool._sfmtool.io import verify_sfmr
 
-
-def _load_images(recon) -> list[np.ndarray]:
-    import cv2
-
-    ws = recon.workspace_dir
-    out = []
-    for name in recon.image_names:
-        bgr = cv2.imread(os.path.join(ws, name), cv2.IMREAD_COLOR)
-        assert bgr is not None, f"could not read {name}"
-        out.append(np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)))
-    return out
+from .conftest import load_images
 
 
 def _run_pipeline(recon, images, resolution=12):
@@ -88,7 +77,7 @@ def test_compact_to_embedded_patches_round_trip(
 ):
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     assert recon.feature_source == "sift_files"
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud, bitmaps, locs = _run_pipeline(recon, images)
     hashes = image_file_hashes_from_images(recon)
 
@@ -191,7 +180,7 @@ def test_compact_normals_match_the_written_patch_frame(
     coherence on the compacted recon, and again after a ``.sfmr`` round trip.
     """
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud, bitmaps, locs = _run_pipeline(recon, images)
     hashes = image_file_hashes_from_images(recon)
 
@@ -231,7 +220,7 @@ def test_compact_normals_match_the_written_patch_frame(
 def test_compact_min_views_culls_points(seoul_bull_workspace: Path):
     """Raising min_views drops more points (and never keeps an under-supported one)."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud, bitmaps, locs = _run_pipeline(recon, images)
     hashes = image_file_hashes_from_images(recon)
 
@@ -252,7 +241,7 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
     any more — and stays at infinity through compaction, carrying that bitmap
     (nonzero alpha) instead of the zero row the old pipeline stored."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     # Turn one well-observed point into a point at infinity.
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
     counts = np.bincount(
@@ -386,7 +375,7 @@ def test_compact_drops_points_without_consensus_bitmap(seoul_bull_workspace: Pat
     representative) is dropped by the final compact instead of being kept with an
     all-black bitmap."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud, bitmaps, locs = _run_pipeline(recon, images)
     hashes = image_file_hashes_from_images(recon)
 
@@ -436,7 +425,7 @@ def test_embed_patches_default_is_two_rounds_one_sweep(
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     assert recon.feature_source == "sift_files"
-    images = _load_images(recon)
+    images = load_images(recon)
 
     # resolution=12 (vs the resolution=24 default) keeps this a comparison of
     # default-vs-explicit kwargs at a cheaper sampling grid — both sides use the
@@ -464,7 +453,7 @@ def test_embed_patches_subpixel_lk_round_trips(
     from sfmtool._embed_patches import embed_patches
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
 
     # Pin rounds=1 so the subpixel pass is the terminal step: it feeds nothing
     # downstream, so the only membership change it can cause is its own.
@@ -541,7 +530,7 @@ def test_embed_patches_multiple_rounds_round_trips(
     from sfmtool._embed_patches import embed_patches
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _load_images(recon)
+    images = load_images(recon)
 
     # resolution=12 (vs default 24) is a cheaper sampling grid; the assertions
     # are relative (three-rounds vs one-round monotonicity) at a fixed grid.

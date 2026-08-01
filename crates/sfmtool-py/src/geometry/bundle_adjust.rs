@@ -4,8 +4,6 @@
 //! Binding for the staged bundle adjustment
 //! ([`sfmtool_core::geometry::bundle_adjust`]).
 
-use std::borrow::Cow;
-
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;

@@ -33,6 +33,7 @@
 
 use nalgebra::{Matrix3, Matrix6, Point3, UnitQuaternion, Vector3, Vector6};
 
+use crate::geometry::numeric::splitmix64;
 use crate::geometry::polynomial::{polish_cubic_root, solve_cubic, solve_quadratic};
 
 /// A world-to-camera pose: rotation and translation with `x_cam = R·X + t`.
@@ -363,17 +364,6 @@ pub struct AbsolutePoseEstimate {
     pub inliers: Vec<bool>,
     /// Trials actually run.
     pub iterations: u32,
-}
-
-/// SplitMix64 — the deterministic index sampler (no `rand` dependency,
-/// identical across platforms). Mirrors the generator in
-/// `patch/cluster_refine/consistency.rs`.
-fn splitmix64(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9e3779b97f4a7c15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-    z ^ (z >> 31)
 }
 
 /// Predicted unit direction `normalize(R·X + t)` in the canonical frame.

@@ -87,10 +87,13 @@ fn sift_data_from_dict(py: Python<'_>, data: &Bound<'_, PyDict>) -> PyResult<Sif
         feature_tool_metadata,
         metadata,
         content_hash: SiftContentHash::default(),
-        positions_xy: positions_xy.as_array().to_owned(),
-        affine_shapes: affine_shapes.as_array().to_owned(),
-        descriptors: descriptors.as_array().to_owned(),
-        thumbnail_y_x_rgb: thumbnail_y_x_rgb.as_array().to_owned(),
+        positions_xy: positions_xy.as_array().as_standard_layout().into_owned(),
+        affine_shapes: affine_shapes.as_array().as_standard_layout().into_owned(),
+        descriptors: descriptors.as_array().as_standard_layout().into_owned(),
+        thumbnail_y_x_rgb: thumbnail_y_x_rgb
+            .as_array()
+            .as_standard_layout()
+            .into_owned(),
     })
 }
 

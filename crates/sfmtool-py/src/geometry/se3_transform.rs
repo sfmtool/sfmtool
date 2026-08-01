@@ -219,9 +219,7 @@ impl PySe3Transform {
             ));
         }
         let n = shape[0];
-        let slice = points.as_slice().map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("array not contiguous: {e}"))
-        })?;
+        let slice = to_contiguous!(points);
 
         let pts: Vec<Point3<f64>> = (0..n)
             .map(|i| {
@@ -281,18 +279,14 @@ impl PySe3Transform {
         }
 
         let n = q_shape[0];
-        let q_in = quaternions_wxyz.as_slice().map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("quaternions not contiguous: {e}"))
-        })?;
-        let t_in = translations.as_slice().map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("translations not contiguous: {e}"))
-        })?;
+        let q_in = to_contiguous!(quaternions_wxyz);
+        let t_in = to_contiguous!(translations);
 
         let mut q_out = vec![0.0f64; n * 4];
         let mut t_out = vec![0.0f64; n * 3];
 
         self.inner
-            .apply_to_camera_poses_flat(q_in, t_in, &mut q_out, &mut t_out);
+            .apply_to_camera_poses_flat(&q_in, &t_in, &mut q_out, &mut t_out);
 
         let q_arr = numpy::PyArray1::from_vec(py, q_out);
         let t_arr = numpy::PyArray1::from_vec(py, t_out);
@@ -362,9 +356,7 @@ impl PySe3Transform {
                 ));
             }
             let n = shape[0];
-            let slice = arr.as_slice().map_err(|e| {
-                pyo3::exceptions::PyValueError::new_err(format!("array not contiguous: {e}"))
-            })?;
+            let slice = to_contiguous!(arr);
 
             let pts: Vec<Point3<f64>> = (0..n)
                 .map(|i| {

@@ -12,7 +12,6 @@ reconstruction is rejected.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -20,37 +19,21 @@ import numpy as np
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.patches import PatchCloud
 
-
-def _load_images(recon) -> list[np.ndarray]:
-    import cv2  # heavy module, only needed by this integration test
-
-    ws = recon.workspace_dir
-    images = []
-    for name in recon.image_names:
-        bgr = cv2.imread(os.path.join(ws, name), cv2.IMREAD_COLOR)
-        assert bgr is not None, f"could not read {name}"
-        images.append(np.ascontiguousarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)))
-    return images
-
-
-def _sample_point_ids(cloud, n: int = 200, seed: int = 0) -> list[int]:
-    ids = np.asarray(cloud.point_indexes)
-    rng = np.random.default_rng(seed)
-    return np.sort(rng.choice(ids, size=min(n, len(ids)), replace=False)).tolist()
+from .conftest import load_images, sample_point_ids
 
 
 def test_use_stored_keypoints_runs_on_embedded_patches(seoul_bull_workspace: Path):
     sift_recon = SfmrReconstruction.load(seoul_bull_workspace)
     recon = sift_recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
     assert recon.feature_source == "embedded_patches"
-    images = _load_images(recon)
+    images = load_images(recon)
 
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent="fixed", extent_value=5.0
     )
     assert len(cloud) > 0
 
-    point_ids = _sample_point_ids(cloud)
+    point_ids = sample_point_ids(cloud)
     res = cloud.refine_normals(
         recon,
         images,
@@ -80,7 +63,7 @@ def test_use_stored_keypoints_differs_from_centered(seoul_bull_workspace: Path):
     # nonzero reprojection error, so the keypoints sit off the projected center).
     sift_recon = SfmrReconstruction.load(seoul_bull_workspace)
     recon = sift_recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
-    images = _load_images(recon)
+    images = load_images(recon)
     point_ids = None
 
     cloud_a = PatchCloud.from_reconstruction(
@@ -121,7 +104,7 @@ def test_use_stored_keypoints_default_true_on_embedded_uses_stored(
     so a code flip can't silently change anchor source."""
     sift_recon = SfmrReconstruction.load(seoul_bull_workspace)
     recon = sift_recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
-    images = _load_images(recon)
+    images = load_images(recon)
 
     cloud_true = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent="fixed", extent_value=5.0
@@ -155,7 +138,7 @@ def test_use_stored_keypoints_default_true_on_sift_files_falls_back_to_projectio
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     assert recon.feature_source == "sift_files"
 
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud_false = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent="fixed", extent_value=5.0
     )
@@ -188,7 +171,7 @@ def test_stored_keypoints_at_reprojection_match_centered(seoul_bull_workspace: P
 
     sift_recon = SfmrReconstruction.load(seoul_bull_workspace)
     recon = sift_recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
-    images = _load_images(recon)
+    images = load_images(recon)
 
     positions = np.asarray(recon.positions, np.float64)
     quats = np.asarray(recon.quaternions_wxyz, np.float64)
@@ -225,7 +208,7 @@ def test_stored_keypoints_at_reprojection_match_centered(seoul_bull_workspace: P
     cloud_a = PatchCloud.from_reconstruction(
         recon_reproj, normal="mean_viewing", extent="fixed", extent_value=5.0
     )
-    pids = _sample_point_ids(cloud_c, n=120)
+    pids = sample_point_ids(cloud_c, n=120)
     centered = cloud_c.refine_normals(
         recon, images, point_indexes=pids, use_stored_keypoints=False, **common
     )
@@ -254,7 +237,7 @@ def test_use_stored_keypoints_with_view_indices(seoul_bull_workspace: Path):
     # (point, image) -> keypoint map.
     sift_recon = SfmrReconstruction.load(seoul_bull_workspace)
     recon = sift_recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
-    images = _load_images(recon)
+    images = load_images(recon)
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent="fixed", extent_value=5.0
     )
@@ -276,7 +259,7 @@ def test_use_stored_keypoints_with_view_indices(seoul_bull_workspace: Path):
             obs = obs | {extra}  # a non-track image -> None keypoint
         view_indices.append(sorted(obs) if obs else [0])
 
-    point_ids = _sample_point_ids(cloud, n=100)
+    point_ids = sample_point_ids(cloud, n=100)
     res = cloud.refine_normals(
         recon,
         images,
