@@ -471,21 +471,30 @@ def test_embed_patches_subpixel_lk_round_trips(
 
     assert baseline.feature_source == refined.feature_source == "embedded_patches"
 
-    # The subpixel pass refines keypoints in place, but it is *not* purely
-    # local: it drops views that won't co-register (`max_shift_px`, low LOO
-    # ZNCC, grazing) and then culls points left below `min_views`. So it can
-    # only shrink the set, never grow it — assert that direction, and bound
-    # the shrink so a wholesale rebuild would still fail.
+    # The subpixel pass can move the point count in BOTH directions, so bound
+    # the difference symmetrically rather than asserting a direction:
     #
-    # Do not require the counts to be *equal*. The fixture re-solves the
-    # reconstruction every session and the solve is not reproducible (COLMAP's
-    # geometric verification during matching is nondeterministic), so whether
-    # a marginal point clears those gates varies run to run. Measured over 45
-    # solves: 39 identical, and 6 that culled exactly one two-view point (two
-    # observations) — a 13% failure rate for an equality assertion.
-    assert refined.point_count <= baseline.point_count
-    assert baseline.point_count - refined.point_count <= 2, (
-        f"subpixel culled {baseline.point_count - refined.point_count} points; "
+    # - Shrink: it drops views that won't co-register (`max_shift_px`, low LOO
+    #   ZNCC, grazing) and then culls points left below `min_views`.
+    # - Grow: `_refine_subpixel` runs in both configurations (render-only at
+    #   `subpixel=0`), and the compaction's culled-point signal is the
+    #   consensus validity at whatever keypoints the pass ends with — the
+    #   seeds for the baseline, the LK-refined keypoints here. Refinement can
+    #   flip a marginal consensus from invalid to valid, RESCUING a point the
+    #   baseline culls. (`embed_patches` itself is deterministic — 4/4
+    #   bit-identical repeat runs on a fixed solve — so a grown count is this
+    #   rescue, not run-to-run jitter.)
+    #
+    # Do not require the counts to be *equal* either. The fixture re-solves
+    # the reconstruction every session and the solve is not reproducible
+    # (COLMAP's geometric verification during matching is nondeterministic),
+    # so whether a marginal point clears those gates varies run to run.
+    # Measured over 45 solves: 39 identical and 6 that culled exactly one
+    # two-view point; a later CI solve rescued one (937 vs 936).
+    assert abs(refined.point_count - baseline.point_count) <= 2, (
+        f"subpixel moved the point count by "
+        f"{refined.point_count - baseline.point_count} "
+        f"({baseline.point_count} -> {refined.point_count}); "
         "expected a local refinement, not a rebuild"
     )
 
