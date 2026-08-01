@@ -466,11 +466,11 @@ def test_embed_patches_subpixel_lk_round_trips(
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     images = _load_images(recon)
 
-    # Pin rounds=1 so the subpixel pass is the terminal step: at rounds=1 it
-    # feeds nothing downstream, so it changes no kept-view set and a per-row
-    # keypoint comparison is meaningful. (At rounds>=2 the round-1 keypoints feed
-    # the next round's normal refinement + grazing drop, which can shift
-    # membership — covered by test_embed_patches_multiple_rounds_round_trips.)
+    # Pin rounds=1 so the subpixel pass is the terminal step: it feeds nothing
+    # downstream, so the only membership change it can cause is its own.
+    # (At rounds>=2 the round-1 keypoints also feed the next round's normal
+    # refinement + grazing drop — covered by
+    # test_embed_patches_multiple_rounds_round_trips.)
     # resolution=12 (vs default 24) is a cheaper sampling grid; the assertion is
     # a relative baseline-vs-refined comparison at a fixed grid, so it holds.
     baseline = embed_patches(
@@ -480,17 +480,44 @@ def test_embed_patches_subpixel_lk_round_trips(
         recon, images, patch_size=10.0, subpixel=1, rounds=1, resolution=12
     )
 
-    # Same membership shape (the subpixel refiner is local — it changes no
-    # kept-view set), so a per-row keypoint comparison is meaningful.
-    assert baseline.point_count == refined.point_count
     assert baseline.feature_source == refined.feature_source == "embedded_patches"
-    base_kp = np.asarray(baseline.keypoints_xy)
-    ref_kp = np.asarray(refined.keypoints_xy)
-    assert base_kp.shape == ref_kp.shape
-    # At least some observations must move (otherwise the splice was a no-op
-    # and the wiring is broken).
-    moved = np.linalg.norm(ref_kp - base_kp, axis=1) > 1e-3
-    assert moved.any(), "subpixel=1 moved zero keypoints (wiring is a no-op?)"
+
+    # The subpixel pass refines keypoints in place, but it is *not* purely
+    # local: it drops views that won't co-register (`max_shift_px`, low LOO
+    # ZNCC, grazing) and then culls points left below `min_views`. So it can
+    # only shrink the set, never grow it — assert that direction, and bound
+    # the shrink so a wholesale rebuild would still fail.
+    #
+    # Do not require the counts to be *equal*. The fixture re-solves the
+    # reconstruction every session and the solve is not reproducible (COLMAP's
+    # geometric verification during matching is nondeterministic), so whether
+    # a marginal point clears those gates varies run to run. Measured over 45
+    # solves: 39 identical, and 6 that culled exactly one two-view point (two
+    # observations) — a 13% failure rate for an equality assertion.
+    assert refined.point_count <= baseline.point_count
+    assert baseline.point_count - refined.point_count <= 2, (
+        f"subpixel culled {baseline.point_count - refined.point_count} points; "
+        "expected a local refinement, not a rebuild"
+    )
+
+    # The refiner must actually have moved keypoints — otherwise the splice is
+    # a no-op and the wiring is broken. Compare multisets rounded to 1e-3
+    # rather than row-by-row: a cull shifts every later row, so a positional
+    # comparison is only valid when nothing was culled. A keypoint that moved
+    # by less than ~1e-3 rounds into its original bucket and counts as
+    # unmoved, preserving the original threshold's intent.
+    def _buckets(recon):
+        return [(round(float(x), 3), round(float(y), 3)) for x, y in recon.keypoints_xy]
+
+    base_seen = set(_buckets(baseline))
+    ref_buckets = _buckets(refined)
+    moved = sum(1 for b in ref_buckets if b not in base_seen)
+    # Measured 94-95% of observations move; 50% leaves ample headroom while
+    # still failing a no-op (0%) or a near-no-op.
+    assert moved > 0.5 * len(ref_buckets), (
+        f"subpixel=1 moved only {moved}/{len(ref_buckets)} keypoints "
+        "(wiring is a no-op?)"
+    )
 
     # Round-trip the refined recon through .sfmr to confirm it's structurally
     # valid (the path the CLI takes).
