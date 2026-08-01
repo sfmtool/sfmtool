@@ -3,7 +3,8 @@
 
 //! Reconstruction-analysis bindings: pose/track operations, least-squares +
 //! RANSAC alignment, point correspondence, batch triangulation, epipolar curves,
-//! image-pair graph construction, and the cluster match census.
+//! image-pair graph construction, image-space observation adjacency, and the
+//! cluster match census.
 
 use pyo3::prelude::*;
 
@@ -11,6 +12,7 @@ pub mod cluster_census;
 pub mod core;
 pub mod epipolar;
 pub mod image_pair_graph;
+pub mod observation_adjacency;
 pub mod triangulation;
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -18,6 +20,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     triangulation::register(m)?;
     epipolar::register(m)?;
     image_pair_graph::register(m)?;
+    observation_adjacency::register(m)?;
     cluster_census::register(m)?;
     Ok(())
 }
