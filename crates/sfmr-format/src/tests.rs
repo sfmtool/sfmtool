@@ -1,6 +1,6 @@
 use crate::*;
 use ndarray::{Array1, Array2, Array4};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Create minimal valid SfmrData for testing.
 fn make_test_data() -> SfmrData {
@@ -27,7 +27,7 @@ fn make_test_data() -> SfmrData {
             operation: "sfm_solve".into(),
             tool: "colmap".into(),
             tool_version: "3.10".into(),
-            tool_options: HashMap::new(),
+            tool_options: BTreeMap::new(),
             workspace: WorkspaceMetadata {
                 absolute_path: "/tmp/workspace".into(),
                 relative_path: "..".into(),
@@ -741,7 +741,7 @@ fn test_empty_reconstruction() {
             operation: "sfm_solve".into(),
             tool: "colmap".into(),
             tool_version: "3.10".into(),
-            tool_options: HashMap::new(),
+            tool_options: BTreeMap::new(),
             workspace: WorkspaceMetadata {
                 absolute_path: "/tmp/workspace".into(),
                 relative_path: "..".into(),
@@ -1299,4 +1299,71 @@ fn test_patch_frame_half_present_rejected() {
     );
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Camera parameters and `tool_options` serialize in sorted key order.
+///
+/// Both were `HashMap`s until 2026-07-31, and `serde_json` emits a map in
+/// iteration order — which Rust randomizes per process. Two runs writing the
+/// same reconstruction therefore produced different bytes and a different
+/// stored `metadata` hash. Ordered maps make writes reproducible.
+///
+/// An in-process double-write would *not* catch a regression here: within one
+/// process, equal keys inserted into equal-capacity maps iterate identically.
+/// Asserting sorted order does catch it — with eight keys, a `HashMap` landing
+/// on sorted order by chance is a 1-in-40,320 event.
+#[test]
+fn json_maps_serialize_in_sorted_key_order() {
+    let camera = SfmrCamera {
+        model: "OPENCV_FISHEYE".into(),
+        width: 1920,
+        height: 1080,
+        parameters: [
+            ("radial_distortion_k1".into(), 0.1),
+            ("focal_length_x".into(), 1000.0),
+            ("principal_point_y".into(), 540.0),
+            ("radial_distortion_k4".into(), 0.4),
+            ("focal_length_y".into(), 1001.0),
+            ("radial_distortion_k2".into(), 0.2),
+            ("principal_point_x".into(), 960.0),
+            ("radial_distortion_k3".into(), 0.3),
+        ]
+        .into_iter()
+        .collect(),
+    };
+
+    let json = serde_json::to_string(&camera).unwrap();
+    let keys: Vec<&str> = camera.parameters.keys().map(String::as_str).collect();
+    let mut sorted = keys.clone();
+    sorted.sort_unstable();
+    assert_eq!(keys, sorted, "parameters must iterate in sorted order");
+
+    // And the serialized form must follow that order, not just the map.
+    let positions: Vec<usize> = sorted
+        .iter()
+        .map(|k| {
+            json.find(&format!("\"{k}\""))
+                .expect("key missing from JSON")
+        })
+        .collect();
+    let mut ascending = positions.clone();
+    ascending.sort_unstable();
+    assert_eq!(
+        positions, ascending,
+        "JSON key order must be sorted: {json}"
+    );
+
+    // Same property for the free-form options map on the metadata.
+    let mut meta = make_test_data().metadata;
+    for k in ["zebra", "alpha", "mike", "bravo"] {
+        meta.tool_options
+            .insert(k.into(), serde_json::Value::Bool(true));
+    }
+    let opt_keys: Vec<&str> = meta.tool_options.keys().map(String::as_str).collect();
+    let mut opt_sorted = opt_keys.clone();
+    opt_sorted.sort_unstable();
+    assert_eq!(
+        opt_keys, opt_sorted,
+        "tool_options must iterate in sorted order"
+    );
 }

@@ -1,11 +1,11 @@
 use crate::*;
 use ndarray::Array2;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 // ── Construction helpers ────────────────────────────────────────────
 
 fn pinhole(width: u32, height: u32, fx: f64, fy: f64, cx: f64, cy: f64) -> CamRigCamera {
-    let mut parameters = HashMap::new();
+    let mut parameters = BTreeMap::new();
     parameters.insert("focal_length_x".into(), fx);
     parameters.insert("focal_length_y".into(), fy);
     parameters.insert("principal_point_x".into(), cx);
@@ -19,7 +19,7 @@ fn pinhole(width: u32, height: u32, fx: f64, fy: f64, cx: f64, cy: f64) -> CamRi
 }
 
 fn opencv_fisheye(width: u32, height: u32) -> CamRigCamera {
-    let mut parameters = HashMap::new();
+    let mut parameters = BTreeMap::new();
     // kerry_park calibration values.
     parameters.insert("focal_length_x".into(), 129.1499937015594);
     parameters.insert("focal_length_y".into(), 129.2573627423474);

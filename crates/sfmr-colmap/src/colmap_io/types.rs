@@ -3,7 +3,7 @@
 
 //! Types for COLMAP binary I/O.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use thiserror::Error;
 
@@ -349,11 +349,11 @@ pub fn camera_params_to_array(camera: &SfmrCamera) -> Result<Vec<f64>, ColmapIoE
     Ok(out)
 }
 
-/// Convert a positional parameter array to a named `HashMap` for a given camera model.
+/// Convert a positional parameter array to a named `BTreeMap` for a given camera model.
 pub(crate) fn camera_params_from_array(
     model_name: &str,
     params: &[f64],
-) -> Result<HashMap<String, f64>, ColmapIoError> {
+) -> Result<BTreeMap<String, f64>, ColmapIoError> {
     let entry = CAMERA_MODELS
         .iter()
         .find(|(_, name, _, _)| *name == model_name)

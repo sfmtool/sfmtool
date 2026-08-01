@@ -13,8 +13,12 @@ sfmtool-archive-io = { path = "../sfmtool-archive-io" }
 ndarray = "0.17"
 bytemuck = { version = "1.25", features = ["derive"] }
 zip = { version = "8", default-features = false, features = ["deflate"] }
-zstd = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 thiserror = "2"
+
+[dev-dependencies]
+# Only the round-trip tests reach for the compressor directly; the library
+# goes through `sfmtool-archive-io`.
+zstd = "0.13"

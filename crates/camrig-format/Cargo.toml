@@ -13,7 +13,6 @@ sfmtool-archive-io = { path = "../sfmtool-archive-io" }
 ndarray = "0.17"
 bytemuck = "1.25"
 zip = { version = "8", default-features = false, features = ["deflate"] }
-zstd = "0.13"
 serde = { version = "1", features = ["derive"] }
 # float_roundtrip: parse JSON floats with full precision so camera intrinsics
 # and rig_attributes round-trip bit-exact. Cargo feature unification applies

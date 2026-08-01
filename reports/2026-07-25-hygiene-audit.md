@@ -350,8 +350,26 @@ drifting, and drift here is silent — no compile error, just two behaviours.
 **Archives are not byte-reproducible: `HashMap` fields serialize in randomized order**
 - _Added 2026-07-31, found while validating the `archive_io` extraction — not part
   of the original snapshot._
-- Location: `crates/sfmr-format/src/types.rs:66` (`parameters: HashMap<String, f64>`),
-  `:114` (`tool_options: HashMap<String, serde_json::Value>`)
+> _Status (2026-07-31): Done — all five affected fields moved to `BTreeMap`.
+> Verified: three separate processes writing the same reconstruction now emit
+> byte-identical `.sfmr` archives (they differed before). Pre-change archives,
+> whose JSON carries keys in the old arbitrary order, still read and verify —
+> confirmed against the checked-in `kerry_park.camrig` and against `.sfmr`/
+> `.matches` files written by the pre-change tree. Locked in by
+> `sfmr-format/src/tests.rs::json_maps_serialize_in_sorted_key_order`; note an
+> in-process double-write cannot catch a regression here (equal keys in
+> equal-capacity maps iterate identically within one process), so the test
+> asserts sorted key order instead._
+
+- Location — **wider than first recorded**: this is five fields across three
+  crates, not two in one. `crates/sfmr-format/src/types.rs:66`
+  (`parameters: HashMap<String, f64>`), `:114`
+  (`tool_options: HashMap<String, serde_json::Value>`);
+  `crates/matches-format/src/types.rs:145` (`matching_options`), `:270`
+  (`verification_options`); `crates/camrig-format/src/types.rs:125`
+  (`parameters`). `.matches` was affected too — a varying
+  `two_view_geometries_xxh128` is reproducible from the pre-change tree alone,
+  via `TvgMetadata.verification_options`.
 - Problem: Writing the *same* `SfmrData` twice in two processes produces archives
   that differ in bytes and in stored `metadata` hash — measured: two runs of one
   unchanged binary emitted `basic.sfmr` at 4,873 and 4,874 bytes. Rust's `HashMap`

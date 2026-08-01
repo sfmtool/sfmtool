@@ -542,7 +542,7 @@ use matches_format::{
     WorkspaceContents as MatchesWorkspaceContents, WorkspaceMetadata as MatchesWorkspaceMetadata,
 };
 use ndarray::{Array1, Array2, Array3};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use super::read::read_colmap_db_matches;
 use super::write::{write_colmap_db_features, write_colmap_db_matches};
@@ -587,7 +587,7 @@ fn make_matches_data() -> MatchesData {
             matching_method: "sequential".into(),
             matching_tool: "colmap".into(),
             matching_tool_version: "4.02".into(),
-            matching_options: HashMap::new(),
+            matching_options: BTreeMap::new(),
             workspace: MatchesWorkspaceMetadata {
                 absolute_path: "/tmp/ws".into(),
                 relative_path: "..".into(),
@@ -651,7 +651,7 @@ fn make_matches_data_with_tvg() -> MatchesData {
             image_pair_count: 2,
             inlier_count: 3,
             verification_tool: "colmap".into(),
-            verification_options: HashMap::new(),
+            verification_options: BTreeMap::new(),
         },
         config_types: vec![
             matches_format::TwoViewGeometryConfig::Calibrated,

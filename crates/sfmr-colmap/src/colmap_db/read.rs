@@ -3,7 +3,7 @@
 
 //! Read matches and two-view geometries from COLMAP SQLite databases.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use matches_format::{
@@ -195,7 +195,7 @@ pub fn read_colmap_db_matches(
             matching_method: "unknown".into(),
             matching_tool: "colmap".into(),
             matching_tool_version: String::new(),
-            matching_options: HashMap::new(),
+            matching_options: BTreeMap::new(),
             workspace: WorkspaceMetadata {
                 absolute_path: String::new(),
                 relative_path: String::new(),
@@ -426,7 +426,7 @@ fn read_tvg_from_db(
             image_pair_count: pair_count as u32,
             inlier_count: total_inliers as u32,
             verification_tool: "colmap".into(),
-            verification_options: HashMap::new(),
+            verification_options: BTreeMap::new(),
         },
         config_types: config_set,
         config_indexes: Array1::from_vec(config_indexes_vec),

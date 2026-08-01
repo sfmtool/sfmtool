@@ -9,7 +9,7 @@
 //! [`CameraIntrinsics`] is the computation type. For serialization, convert to/from
 //! [`sfmr_format::SfmrCamera`] using the provided `TryFrom` / `From` implementations.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use nalgebra::Matrix3;
@@ -518,7 +518,7 @@ impl CameraIntrinsics {
 
 /// Helper to extract a required parameter from the hashmap.
 fn get_param(
-    params: &HashMap<String, f64>,
+    params: &BTreeMap<String, f64>,
     model: &str,
     name: &str,
 ) -> Result<f64, CameraIntrinsicsError> {
@@ -665,7 +665,7 @@ impl TryFrom<&SfmrCamera> for CameraIntrinsics {
 
 impl From<&CameraIntrinsics> for SfmrCamera {
     fn from(cam: &CameraIntrinsics) -> Self {
-        let mut parameters = HashMap::new();
+        let mut parameters = BTreeMap::new();
 
         match &cam.model {
             CameraModel::Pinhole {

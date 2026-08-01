@@ -3,7 +3,7 @@
 
 //! Data types for the `.matches` file format.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -142,7 +142,7 @@ pub struct MatchesMetadata {
     pub matching_tool_version: String,
     /// Method-specific parameters. Contents depend on `matching_method`
     /// and `matching_tool`.
-    pub matching_options: HashMap<String, serde_json::Value>,
+    pub matching_options: BTreeMap<String, serde_json::Value>,
     /// Workspace reference for relocatability.
     pub workspace: WorkspaceMetadata,
     /// ISO 8601 timestamp with timezone.
@@ -267,7 +267,7 @@ pub struct TvgMetadata {
     pub image_pair_count: u32,
     pub inlier_count: u32,
     pub verification_tool: String,
-    pub verification_options: HashMap<String, serde_json::Value>,
+    pub verification_options: BTreeMap<String, serde_json::Value>,
 }
 
 /// Optional two-view geometry data.

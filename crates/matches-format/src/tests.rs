@@ -1,6 +1,6 @@
 use crate::*;
 use ndarray::{Array1, Array2, Array3};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Create minimal valid MatchesData without TVGs for testing.
 fn make_test_data() -> MatchesData {
@@ -16,7 +16,7 @@ fn make_test_data() -> MatchesData {
             matching_tool: "colmap".into(),
             matching_tool_version: "4.02".into(),
             matching_options: {
-                let mut m = HashMap::new();
+                let mut m = BTreeMap::new();
                 m.insert("overlap".into(), serde_json::json!(10));
                 m
             },
@@ -102,7 +102,7 @@ fn make_test_data_with_tvg() -> MatchesData {
             inlier_count: inlier_count as u32,
             verification_tool: "colmap".into(),
             verification_options: {
-                let mut m = HashMap::new();
+                let mut m = BTreeMap::new();
                 m.insert("min_num_inliers".into(), serde_json::json!(15));
                 m.insert("max_error".into(), serde_json::json!(4.0));
                 m

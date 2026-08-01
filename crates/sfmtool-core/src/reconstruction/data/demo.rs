@@ -35,7 +35,7 @@ impl SfmrReconstruction {
     pub fn demo(num_points: usize) -> Self {
         use crate::camera::CameraModel;
         use crate::spherical::sphere_points::{evenly_distributed_sphere_points, RelaxConfig};
-        use std::collections::HashMap;
+        use std::collections::{BTreeMap, HashMap};
 
         let num_images = 8;
         let num_buckets: u32 = 128;
@@ -157,7 +157,7 @@ impl SfmrReconstruction {
             operation: "demo".into(),
             tool: "sfmtool".into(),
             tool_version: "0.1.0".into(),
-            tool_options: HashMap::new(),
+            tool_options: BTreeMap::new(),
             workspace: sfmr_format::WorkspaceMetadata {
                 absolute_path: String::new(),
                 relative_path: ".".into(),

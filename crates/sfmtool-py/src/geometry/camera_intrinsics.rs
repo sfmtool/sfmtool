@@ -3,7 +3,7 @@
 
 //! Python wrapper for the sfmtool-core CameraIntrinsics type.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyType};
@@ -31,7 +31,7 @@ impl PyCameraIntrinsics {
     ///     height: Image height in pixels
     ///     params: Dict mapping parameter names to float values
     #[new]
-    fn new(model: &str, width: u32, height: u32, params: HashMap<String, f64>) -> PyResult<Self> {
+    fn new(model: &str, width: u32, height: u32, params: BTreeMap<String, f64>) -> PyResult<Self> {
         let sfmr_camera = SfmrCamera {
             model: model.to_string(),
             width,
@@ -140,7 +140,7 @@ impl PyCameraIntrinsics {
             .cast()
             .map_err(|_| pyo3::exceptions::PyTypeError::new_err("'parameters' must be a dict"))?;
 
-        let mut parameters = HashMap::new();
+        let mut parameters = BTreeMap::new();
         for (key, value) in params_dict.iter() {
             let k: String = key.extract()?;
             let v: f64 = value.extract()?;
@@ -402,7 +402,10 @@ impl PyCameraIntrinsics {
     fn __reduce__<'py>(
         &self,
         py: Python<'py>,
-    ) -> PyResult<(Bound<'py, PyType>, (String, u32, u32, HashMap<String, f64>))> {
+    ) -> PyResult<(
+        Bound<'py, PyType>,
+        (String, u32, u32, BTreeMap<String, f64>),
+    )> {
         let sfmr_camera = SfmrCamera::from(&self.inner);
         let cls = PyType::new::<PyCameraIntrinsics>(py);
         Ok((

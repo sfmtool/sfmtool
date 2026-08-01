@@ -496,7 +496,7 @@ fn try_from_unknown_model() {
         model: "UNKNOWN_MODEL".to_string(),
         width: 640,
         height: 480,
-        parameters: HashMap::new(),
+        parameters: BTreeMap::new(),
     };
     let err = CameraIntrinsics::try_from(&sfmr).unwrap_err();
     assert!(
@@ -506,7 +506,7 @@ fn try_from_unknown_model() {
 
 #[test]
 fn try_from_missing_parameter() {
-    let mut params = HashMap::new();
+    let mut params = BTreeMap::new();
     params.insert("focal_length_x".to_string(), 500.0);
     // Missing focal_length_y, principal_point_x, principal_point_y
     let sfmr = SfmrCamera {

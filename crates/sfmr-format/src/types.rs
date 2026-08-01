@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use ndarray::{Array1, Array2, Array4};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use thiserror::Error;
 
 use sfmtool_archive_io::ArchiveIoError;
@@ -63,7 +63,7 @@ pub struct SfmrCamera {
     pub model: String,
     pub width: u32,
     pub height: u32,
-    pub parameters: HashMap<String, f64>,
+    pub parameters: BTreeMap<String, f64>,
 }
 
 impl SfmrCamera {
@@ -111,7 +111,7 @@ pub struct SfmrMetadata {
     pub operation: String,
     pub tool: String,
     pub tool_version: String,
-    pub tool_options: HashMap<String, serde_json::Value>,
+    pub tool_options: BTreeMap<String, serde_json::Value>,
     pub workspace: WorkspaceMetadata,
     pub timestamp: String,
     pub image_count: u32,
