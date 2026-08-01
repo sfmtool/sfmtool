@@ -264,12 +264,15 @@ pub(crate) fn clone_with_changes(
                 recon.images.truncate(n);
                 for (i, im) in recon.images.iter_mut().enumerate() {
                     let off = i * 4;
-                    im.quaternion_wxyz = UnitQuaternion::new_normalize(nalgebra::Quaternion::new(
+                    // Bit-preserving for already-unit inputs, so cloning a
+                    // reconstruction with its own accessor arrays round-trips
+                    // the poses exactly (see the helper's docs).
+                    im.quaternion_wxyz = sfmtool_core::reconstruction::unit_quaternion_preserving(
                         s[off],
                         s[off + 1],
                         s[off + 2],
                         s[off + 3],
-                    ));
+                    );
                 }
             }
             "translations" => {

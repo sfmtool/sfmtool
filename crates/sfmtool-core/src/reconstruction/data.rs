@@ -34,6 +34,8 @@ mod recompute;
 // `crate::reconstruction::data::observation_reprojection_error`.
 pub(crate) use recompute::observation_reprojection_error;
 
+pub use conversion::unit_quaternion_preserving;
+
 /// Errors from reconstruction operations that require external data.
 #[derive(Debug)]
 pub enum ReconstructionError {

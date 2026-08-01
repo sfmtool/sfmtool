@@ -26,6 +26,36 @@ use super::{
     SfmrReconstruction, TrackObservation,
 };
 
+/// Unit quaternion from raw WXYZ components, keeping the caller's bits when
+/// they are already unit.
+///
+/// [`UnitQuaternion::new_normalize`] divides by the computed norm even when
+/// the input is a unit quaternion, and because `‖q‖` itself rounds to
+/// `1 ± ε`, the division can move every component by one ULP. A
+/// reconstruction that merely round-trips its poses (load → save, or
+/// `clone_with_changes` fed the accessors' own arrays) would then not compare
+/// bit-equal to its source. So: when every component of the normalized result
+/// is within `4 ε` of the input — i.e. the input was already unit to working
+/// precision — the input bits are kept verbatim; otherwise the normalized
+/// value is returned exactly as before. Non-finite and zero inputs take the
+/// normalize path unchanged (its NaNs fail the closeness test).
+pub fn unit_quaternion_preserving(qw: f64, qx: f64, qy: f64, qz: f64) -> UnitQuaternion<f64> {
+    let q = nalgebra::Quaternion::new(qw, qx, qy, qz);
+    let normalized = UnitQuaternion::new_normalize(q);
+    let tol = 4.0 * f64::EPSILON;
+    let close = normalized
+        .as_ref()
+        .coords
+        .iter()
+        .zip(q.coords.iter())
+        .all(|(a, b)| (a - b).abs() <= tol);
+    if close {
+        UnitQuaternion::new_unchecked(q)
+    } else {
+        normalized
+    }
+}
+
 impl SfmrReconstruction {
     /// Load a reconstruction from a `.sfmr` file.
     ///
@@ -90,8 +120,7 @@ impl SfmrReconstruction {
             let qx = data.quaternions_wxyz[[i, 1]];
             let qy = data.quaternions_wxyz[[i, 2]];
             let qz = data.quaternions_wxyz[[i, 3]];
-            let quaternion =
-                UnitQuaternion::new_normalize(nalgebra::Quaternion::new(qw, qx, qy, qz));
+            let quaternion = unit_quaternion_preserving(qw, qx, qy, qz);
 
             let tx = data.translations_xyz[[i, 0]];
             let ty = data.translations_xyz[[i, 1]];

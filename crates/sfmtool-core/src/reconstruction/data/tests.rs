@@ -799,3 +799,47 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn test_unit_quaternion_preserving_keeps_unit_bits() {
+    // A solved-pose quaternion whose renormalization is a 1-ULP shift in every
+    // component (the value behind an intermittent CI round-trip failure); the
+    // helper must return the input bits verbatim for this and for any
+    // already-normalized quaternion.
+    let cases = [
+        (
+            -0.3632312664362175_f64,
+            0.3009881287506981,
+            0.3787455030095455,
+            0.7962543798211353,
+        ),
+        (1.0, 0.0, 0.0, 0.0),
+        (0.5, 0.5, 0.5, 0.5),
+        (
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.0,
+            -std::f64::consts::FRAC_1_SQRT_2,
+            0.0,
+        ),
+    ];
+    for (w, x, y, z) in cases {
+        let q = unit_quaternion_preserving(w, x, y, z);
+        assert_eq!(q.w.to_bits(), w.to_bits(), "w changed for {w} {x} {y} {z}");
+        assert_eq!(q.i.to_bits(), x.to_bits(), "x changed for {w} {x} {y} {z}");
+        assert_eq!(q.j.to_bits(), y.to_bits(), "y changed for {w} {x} {y} {z}");
+        assert_eq!(q.k.to_bits(), z.to_bits(), "z changed for {w} {x} {y} {z}");
+    }
+}
+
+#[test]
+fn test_unit_quaternion_preserving_normalizes_non_unit() {
+    // Anything not already unit takes the normalize path bit-for-bit.
+    let (w, x, y, z) = (1.0_f64, -0.4, 0.6, 0.2);
+    let got = unit_quaternion_preserving(w, x, y, z);
+    let expect = nalgebra::UnitQuaternion::new_normalize(nalgebra::Quaternion::new(w, x, y, z));
+    assert_eq!(got.w.to_bits(), expect.w.to_bits());
+    assert_eq!(got.i.to_bits(), expect.i.to_bits());
+    assert_eq!(got.j.to_bits(), expect.j.to_bits());
+    assert_eq!(got.k.to_bits(), expect.k.to_bits());
+    assert!((got.norm() - 1.0).abs() < 1e-15);
+}

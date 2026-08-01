@@ -12,6 +12,6 @@ pub mod point_correspondence;
 pub mod triangulation;
 
 pub use data::{
-    ObservationSource, Point3D, ReconstructionError, SfmrImage, SfmrReconstruction,
-    TrackObservation,
+    unit_quaternion_preserving, ObservationSource, Point3D, ReconstructionError, SfmrImage,
+    SfmrReconstruction, TrackObservation,
 };
