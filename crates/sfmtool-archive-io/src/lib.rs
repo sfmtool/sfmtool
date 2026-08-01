@@ -88,20 +88,34 @@ pub fn read_binary_array<R: Read + Seek, T: bytemuck::Pod>(
             bytes.len()
         )));
     }
+    Ok(cast_or_copy(&bytes, expected_len))
+}
+
+/// Reinterpret `bytes` as `expected_len` values of `T`, copying once.
+///
+/// Fast path: when the buffer is already aligned for `T` (the common case,
+/// since the allocator over-aligns sizeable allocations), borrow it and copy
+/// once via `to_vec` — exactly what the original code did. Only when the buffer
+/// lands on an address `cast_slice` would reject (which used to panic) do we
+/// route through a freshly aligned `Vec<T>`.
+///
+/// Split out from [`read_binary_array`] so the misaligned branch is reachable
+/// from a test: the alignment of a decompressed `Vec<u8>` is the allocator's
+/// choice, so driving that branch through the archive path is not possible.
+///
+/// `bytes.len()` must equal `expected_len * size_of::<T>()`; callers check that
+/// first so they can attach the entry name to the error.
+fn cast_or_copy<T: bytemuck::Pod>(bytes: &[u8], expected_len: usize) -> Vec<T> {
+    debug_assert_eq!(bytes.len(), expected_len * std::mem::size_of::<T>());
     if bytes.is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    // Fast path: when the decompressed buffer is already aligned for `T` (the
-    // common case, since the allocator over-aligns sizeable allocations), borrow
-    // it and copy once via `to_vec` — exactly what the original code did. Only
-    // when the buffer happens to land on an address `cast_slice` would reject
-    // (which used to panic) do we route through a freshly aligned `Vec<T>`.
-    match bytemuck::try_cast_slice::<u8, T>(&bytes) {
-        Ok(slice) => Ok(slice.to_vec()),
+    match bytemuck::try_cast_slice::<u8, T>(bytes) {
+        Ok(slice) => slice.to_vec(),
         Err(_) => {
             let mut out: Vec<T> = vec![T::zeroed(); expected_len];
-            bytemuck::cast_slice_mut::<T, u8>(&mut out).copy_from_slice(&bytes);
-            Ok(out)
+            bytemuck::cast_slice_mut::<T, u8>(&mut out).copy_from_slice(bytes);
+            out
         }
     }
 }

@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 use std::io::Cursor;
 
-use xxhash_rust::xxh3::{xxh3_128, Xxh3};
+use xxhash_rust::xxh3::Xxh3;
 use zip::{ZipArchive, ZipWriter};
 
 use super::*;
@@ -21,6 +21,22 @@ fn round_trip(
     f(&mut zip).expect("write failed");
     let buf = zip.finish().expect("finish failed").into_inner();
     ZipArchive::new(Cursor::new(buf)).expect("archive open failed")
+}
+
+/// Place `payload` at an address that is *guaranteed* congruent to 1 mod
+/// `align`, and return the backing buffer plus that offset.
+///
+/// `Vec<u8>` only promises 1-byte alignment, so "prepend one byte and hope"
+/// happens to work on every mainstream allocator but is not guaranteed by
+/// anything. Deriving the offset from the actual base address makes the
+/// misaligned branch unconditional rather than allocator-dependent.
+fn misaligned(payload: &[u8], align: usize) -> (Vec<u8>, usize) {
+    let mut backing = vec![0u8; align + payload.len()];
+    let base = backing.as_ptr() as usize;
+    let offset = (1 + align - (base % align)) % align;
+    backing[offset..offset + payload.len()].copy_from_slice(payload);
+    debug_assert_eq!((base + offset) % align, 1 % align);
+    (backing, offset)
 }
 
 #[test]
@@ -111,7 +127,7 @@ fn write_binary_entry_hashed_matches_hashing_by_hand() {
     let b: Vec<f64> = (0..8).map(|i| i as f64 * 0.5).collect();
 
     let mut rolling = Xxh3::new();
-    round_trip(|zip| {
+    let mut archive = round_trip(|zip| {
         write_binary_entry_hashed(
             zip,
             "a.16.uint32.zst",
@@ -133,6 +149,13 @@ fn write_binary_entry_hashed_matches_hashing_by_hand() {
     by_hand.update(bytemuck::cast_slice(&b));
 
     assert_eq!(rolling.digest128(), by_hand.digest128());
+
+    // Hashing is only half the contract — the entries must actually be in the
+    // archive. Without this, gutting the write and keeping the hash passes.
+    let read_a: Vec<u32> = read_binary_array(&mut archive, "a.16.uint32.zst", 16).unwrap();
+    let read_b: Vec<f64> = read_binary_array(&mut archive, "b.8.float64.zst", 8).unwrap();
+    assert_eq!(read_a, a);
+    assert_eq!(read_b, b);
 }
 
 #[test]
@@ -140,21 +163,91 @@ fn format_hash_is_zero_padded_lowercase_hex() {
     assert_eq!(format_hash(0), "0".repeat(32));
     assert_eq!(format_hash(0xabcdef), "00000000000000000000000000abcdef");
     assert_eq!(format_hash(u128::MAX), "f".repeat(32));
-    // Round-trips against the digest the format crates store.
-    assert_eq!(format_hash(xxh3_128(b"")).len(), 32);
+    assert_eq!(format_hash(0xABCDEF), format_hash(0xabcdef));
+}
+
+#[test]
+fn uint128_array_rejects_a_wrong_hash_count() {
+    let flat: Vec<u8> = (0u8..3).flat_map(|i| [i; 16]).collect();
+    let mut archive =
+        round_trip(|zip| write_binary_entry(zip, "hashes.3.uint128.zst", &flat, LEVEL));
+
+    let err = read_uint128_array(&mut archive, "hashes.3.uint128.zst", 4).unwrap_err();
+    assert!(
+        matches!(err, ArchiveIoError::ShapeMismatch(ref m) if m.contains("expected 64 bytes")),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn malformed_json_entry_is_a_json_error() {
+    // A well-formed zstd entry whose payload is not JSON.
+    let mut archive = round_trip(|zip| write_binary_entry(zip, "meta.json.zst", b"{ nope", LEVEL));
+    let err = read_json_entry::<_, serde_json::Value>(&mut archive, "meta.json.zst").unwrap_err();
+    assert!(matches!(err, ArchiveIoError::Json(_)), "unexpected: {err}");
+}
+
+#[test]
+fn zstd_compress_honours_the_level() {
+    // The payload has to be chosen with care: a trivially repetitive buffer
+    // bottoms out at the same size for every level (both 25 bytes), and
+    // incompressible noise produces byte-identical output. Pseudo-random data
+    // drawn from a 4-symbol alphabet sits in between, where the search effort
+    // actually pays: measured 20,030 bytes at level 1 vs 16,135 at level 19.
+    let mut state: u32 = 12_345;
+    let data: Vec<u8> = (0..64_000)
+        .map(|_| {
+            state = state.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            ((state >> 16) % 4) as u8
+        })
+        .collect();
+
+    let fast = zstd_compress(&data, 1).unwrap();
+    let slow = zstd_compress(&data, 19).unwrap();
+    assert!(
+        slow.len() < fast.len(),
+        "level 19 ({}) should beat level 1 ({})",
+        slow.len(),
+        fast.len()
+    );
+    // Both must still decode back to the original.
+    for c in [&fast, &slow] {
+        let mut out = Vec::new();
+        zstd::stream::copy_decode(&c[..], &mut out).unwrap();
+        assert_eq!(out, data);
+    }
+}
+
+#[test]
+fn cast_or_copy_falls_back_when_the_buffer_is_misaligned() {
+    // `read_binary_array`'s misaligned branch cannot be driven through the
+    // archive path — the alignment of a decompressed `Vec<u8>` is the
+    // allocator's choice — so exercise the extracted helper directly.
+    let values: Vec<u32> = vec![9, 8, 7, 6];
+    let aligned: &[u8] = bytemuck::cast_slice(&values);
+    assert_eq!(cast_or_copy::<u32>(aligned, 4), values);
+
+    let (backing, off) = misaligned(aligned, 4);
+    let unaligned = &backing[off..off + aligned.len()];
+    assert_ne!(unaligned.as_ptr() as usize % 4, 0);
+    assert_eq!(cast_or_copy::<u32>(unaligned, 4), values);
+
+    assert!(cast_or_copy::<u32>(&[], 0).is_empty());
 }
 
 #[test]
 fn raw_to_u32_handles_unaligned_buffer() {
-    // Build a u32 byte payload starting at an odd offset so the slice is
-    // not 4-aligned — exactly the layout a freshly decompressed buffer can
-    // land on, and the case where `bytemuck::cast_slice::<u8, u32>` panics.
-    // The aligned-copy path must read it correctly instead.
-    let mut backing = vec![0u8; 1];
-    backing.extend_from_slice(&7u32.to_ne_bytes());
-    backing.extend_from_slice(&4_000_000_000u32.to_ne_bytes());
-    let unaligned = &backing[1..];
-    assert_eq!(unaligned.as_ptr() as usize % 4, 1);
+    // A u32 payload at an address that is not 4-aligned — exactly the layout a
+    // freshly decompressed buffer can land on, and the case where
+    // `bytemuck::cast_slice::<u8, u32>` panics. The copy path must read it
+    // correctly instead.
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&7u32.to_ne_bytes());
+    payload.extend_from_slice(&4_000_000_000u32.to_ne_bytes());
+    let (backing, off) = misaligned(&payload, 4);
+    let unaligned = &backing[off..off + payload.len()];
+    assert_ne!(unaligned.as_ptr() as usize % 4, 0);
+
     // Unaligned input must fall back to the owned (copied) path, not panic.
     let got = raw_to_u32(unaligned);
     assert!(matches!(got, Cow::Owned(_)));
@@ -162,17 +255,18 @@ fn raw_to_u32_handles_unaligned_buffer() {
 
     // A trailing partial u32 (truncated entry) is dropped, not panicked on.
     assert_eq!(
-        raw_to_u32(&backing[1..backing.len() - 1]).as_ref(),
+        raw_to_u32(&unaligned[..unaligned.len() - 1]).as_ref(),
         &[7u32][..]
     );
 }
 
 #[test]
 fn raw_to_f64_handles_unaligned_buffer() {
-    let mut backing = vec![0u8; 1];
-    backing.extend_from_slice(&(-1.5f64).to_ne_bytes());
-    backing.extend_from_slice(&f64::MAX.to_ne_bytes());
-    let unaligned = &backing[1..];
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&(-1.5f64).to_ne_bytes());
+    payload.extend_from_slice(&f64::MAX.to_ne_bytes());
+    let (backing, off) = misaligned(&payload, 8);
+    let unaligned = &backing[off..off + payload.len()];
     assert_ne!(unaligned.as_ptr() as usize % 8, 0);
 
     let got = raw_to_f64(unaligned);
@@ -181,7 +275,7 @@ fn raw_to_f64_handles_unaligned_buffer() {
 
     // A trailing partial f64 (truncated entry) is dropped, not panicked on.
     assert_eq!(
-        raw_to_f64(&backing[1..backing.len() - 1]).as_ref(),
+        raw_to_f64(&unaligned[..unaligned.len() - 1]).as_ref(),
         &[-1.5f64][..]
     );
 }

@@ -308,18 +308,37 @@ drifting, and drift here is silent — no compile error, just two behaviours.
 
 > _Status (2026-07-31): Done — extracted to a new `sfmtool-archive-io` workspace
 > crate. The four copies are deleted; camrig's non-cloning `write_binary_entry`
-> signature is now the only one. All 51 clone sites in the two big writers are
-> gone: `sfmr-format`/`matches-format` moved to a new `write_binary_entry_hashed`
+> signature is now the only one, removing all 55 clone sites (26 sfmr, 25
+> matches, 4 sift — the finding's "51" is the sfmr+matches subtotal).
+> `sfmr-format`/`matches-format` moved to a new `write_binary_entry_hashed`
 > helper that writes the entry and folds the uncompressed bytes into the section
-> hasher in one call, so an entry can no longer be written without being hashed,
-> or hashed out of write order. `raw_to_u32`/`raw_to_f64` moved there too, taking
+> hasher in one call. `raw_to_u32`/`raw_to_f64` moved there too, taking
 > the unaligned-buffer regression test with them (it had only ever guarded the
 > sfmr copy). `read_uint128_array` was **kept**, correcting this finding: it is
 > dead only in `sift-format`, but live in `sfmr-format/src/read.rs:10` and
 > `matches-format/src/read.rs:12`, so the shared copy simply drops sift's
-> `#[allow(dead_code)]`. Verified beyond the suites by cross-verification —
-> archives written by the pre-change tree verify under the new verifier and vice
-> versa, in both formats — so stored content hashes are unchanged._
+> `#[allow(dead_code)]`._
+>
+> _Scope note: the write/hash pairing is enforced for **binary** entries only.
+> Fourteen JSON entries across the two writers still pair `write_json_entry`
+> with a manual `hasher.update(&bytes)`, and they feed the same section hashes —
+> so the invariant is structural for binary entries and conventional for JSON.
+> A `write_json_entry_hashed`, plus a `write_binary_entry_digested` for the
+> seven remaining one-shot-digest sites in sift/camrig, would finish the job and
+> let the unhashed `write_binary_entry` go private._
+>
+> _Evidence note: content-hash preservation was **not** established by the
+> cross-verification run first cited here. Both verifiers recompute digests from
+> the bytes present in the file, so any self-consistent archive passes both —
+> that experiment shows the two trees produce mutually intelligible archives,
+> not that a hash value is unchanged. The claim does hold, on stronger evidence
+> gathered afterwards: a static comparison showing all 51 migrated call sites
+> are byte-identical old-vs-new in (entry name, data expression, zstd level,
+> hasher identity, order), and a direct old-vs-new comparison of stored section
+> digests over a fixture exercising every optional section, which came out
+> bit-identical (with `.sift` archives byte-identical end to end). Only the JSON
+> sections carrying `HashMap` fields differed, for the unrelated reason recorded
+> below._
 
 - Location: `crates/{sfmr,sift,matches,camrig}-format/src/archive_io.rs` (163/164/164/142)
 - Problem: Verified by diff. `sfmr` vs `sift`: one line. `sift` vs `matches`: a doc
