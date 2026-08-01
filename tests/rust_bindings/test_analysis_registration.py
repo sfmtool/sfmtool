@@ -22,6 +22,8 @@ _EXPECTED_FUNCTIONS = (
     "cluster_census",
 )
 
+_EXPECTED_CLASSES = ("ObservationCoverage",)
+
 
 def test_all_analysis_bindings_registered():
     """Every expected function is present on `_sfmtool.analysis`."""
@@ -31,9 +33,17 @@ def test_all_analysis_bindings_registered():
         assert callable(getattr(analysis, name)), f"{name} is not callable"
 
 
+def test_all_analysis_classes_registered():
+    """Every expected class is present on `_sfmtool.analysis`."""
+    missing = [name for name in _EXPECTED_CLASSES if not hasattr(analysis, name)]
+    assert not missing, f"missing analysis classes: {missing}"
+    for name in _EXPECTED_CLASSES:
+        assert isinstance(getattr(analysis, name), type), f"{name} is not a class"
+
+
 def test_analysis_submodule_public_name():
     """The submodule reports its public `__name__` so binding objects'
     `__module__` reads `sfmtool.analysis`."""
     assert analysis.__name__ == "sfmtool.analysis"
-    for name in _EXPECTED_FUNCTIONS:
+    for name in _EXPECTED_FUNCTIONS + _EXPECTED_CLASSES:
         assert getattr(analysis, name).__module__ == "sfmtool.analysis"
