@@ -257,6 +257,46 @@ def test_recon_no_discontinuity(seoul_bull_workspace):
     assert len(results[0]["core_edges"]) == 0
 
 
+def _assert_break_detected_at_10_11(results, evidence_kind):
+    """Assert the 10->11 break is detected, tolerating the core-edge tie.
+
+    ``_make_discontinuous_recon`` breaks the sequence between frames 10 and
+    11, so edge (10, 11) must carry evidence of kind ``evidence_kind``
+    (``.r`` rotation / ``.t`` translation). Its neighbours get flagged too —
+    even the nearest extrapolation points straddle the break — and
+    ``_select_core_edges`` keeps only one edge per cluster, ranked by flag
+    count then by fewest shared 3D points.
+
+    Both of those rankings can move, because the fixture re-solves the
+    reconstruction every session and the solve is not reproducible: COLMAP's
+    geometric verification during matching is nondeterministic, so the
+    ``.matches`` differ run to run and so does the reconstruction (130 solves
+    measured, 130 distinct geometries). Frame 11's ``L.t`` flag sits right on
+    its threshold and dropped out in 7 of those 130, tying (10, 11) with
+    (9, 10) at two flags each and handing the core edge to (9, 10).
+
+    Asserting the core edge is exactly (10, 11) therefore fails ~5% of the
+    time on every platform. Edge (10, 11) was *flagged* in all 130 runs, so
+    assert that — it is the stronger claim anyway ("the true break is
+    detected") — and only require the core edge to land within one frame.
+    """
+    assert len(results) == 1
+    seq_frm = results[0]["seq_frame_numbers"]
+
+    def frames(edge):
+        return (seq_frm[edge[0]], seq_frm[edge[1]])
+
+    flagged = {frames(e): ev for e, ev in results[0]["flagged_edges"].items()}
+    assert (10, 11) in flagged, f"true break not flagged; flagged={sorted(flagged)}"
+    assert any(evidence_kind in e for e in flagged[(10, 11)]), flagged[(10, 11)]
+
+    core_edges = results[0]["core_edges"]
+    assert len(core_edges) == 1, (
+        f"expected one cluster, got {sorted(map(frames, core_edges))}"
+    )
+    assert frames(next(iter(core_edges))) in {(9, 10), (10, 11), (11, 12)}
+
+
 def test_recon_translation_discontinuity(seoul_bull_workspace):
     """A large translation applied to images 11-17 creates a discontinuity
     at the 10->11 edge."""
@@ -267,25 +307,7 @@ def test_recon_translation_discontinuity(seoul_bull_workspace):
         translate=[50.0, 0.0, 0.0],
     )
     results = analyze_reconstruction(recon)
-    assert len(results) == 1
-
-    core_edges = results[0]["core_edges"]
-    assert len(core_edges) > 0
-
-    # The core edge should be at seq frame 10->11
-    core_frame_pairs = set()
-    seq_frm = results[0]["seq_frame_numbers"]
-    for a, b in core_edges:
-        core_frame_pairs.add((seq_frm[a], seq_frm[b]))
-    assert (10, 11) in core_frame_pairs
-
-    # Should have translation evidence
-    edge_10_11 = None
-    for (a, b), evidence in core_edges.items():
-        if seq_frm[a] == 10 and seq_frm[b] == 11:
-            edge_10_11 = evidence
-    assert edge_10_11 is not None
-    assert any(".t" in e for e in edge_10_11)
+    _assert_break_detected_at_10_11(results, ".t")
 
 
 def test_recon_rotation_discontinuity(seoul_bull_workspace):
@@ -298,24 +320,7 @@ def test_recon_rotation_discontinuity(seoul_bull_workspace):
         rotate_deg=90.0,
     )
     results = analyze_reconstruction(recon)
-    assert len(results) == 1
-
-    core_edges = results[0]["core_edges"]
-    assert len(core_edges) > 0
-
-    seq_frm = results[0]["seq_frame_numbers"]
-    core_frame_pairs = set()
-    for a, b in core_edges:
-        core_frame_pairs.add((seq_frm[a], seq_frm[b]))
-    assert (10, 11) in core_frame_pairs
-
-    # Should have rotation evidence
-    edge_10_11 = None
-    for (a, b), evidence in core_edges.items():
-        if seq_frm[a] == 10 and seq_frm[b] == 11:
-            edge_10_11 = evidence
-    assert edge_10_11 is not None
-    assert any(".r" in e for e in edge_10_11)
+    _assert_break_detected_at_10_11(results, ".r")
 
 
 def test_recon_cli_with_sfmr(runner, seoul_bull_workspace):
