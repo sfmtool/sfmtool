@@ -154,7 +154,10 @@ impl DirectedEdge {
 
 /// Median of `values`, which must be non-empty; the mean of the two middle
 /// values when the count is even. Sorts `values` in place.
-fn median_in_place(values: &mut [f64]) -> f64 {
+///
+/// Shared with [`super::adjacency_surfel_normals`], which needs the same
+/// numpy-convention median per IRLS pass and reuses a scratch buffer to get it.
+pub(crate) fn median_in_place(values: &mut [f64]) -> f64 {
     debug_assert!(!values.is_empty());
     values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
     let mid = values.len() / 2;

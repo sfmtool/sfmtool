@@ -18,6 +18,7 @@ _EXPECTED_FUNCTIONS = (
     "build_covisibility_pairs_py",
     "build_frustum_intersection_pairs_py",
     "build_observation_adjacency",
+    "estimate_adjacency_surfel_normals",
     "cluster_census",
 )
 
