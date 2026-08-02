@@ -121,58 +121,69 @@ The viewer uses a dark theme:
 ### Information Overlays
 
 Contextual information is painted straight onto the viewport, anchored to its
-edges and corners (`viewer_3d/overlay.rs::draw_info_overlay`). All of it is
-always on — none of these is currently togglable:
+edges and corners (`viewer_3d/overlay.rs::draw_info_overlay`):
 
-- **Scene stats** (top-left): `N points | M images | F fps`
+- **Scene stats** (top-left): `N points (M at infinity) | K images | F fps`.
+  The parenthetical appears only when the reconstruction carries `w = 0`
+  points; the frame rate only while the HUD's Debug > Frame rate toggle is on
+  (it is, by default).
 - **Camera position** (top-centre): `Pos: [x, y, z]`
-- **Touchpad diagnostics** (top-right): DirectManipulation event counters
-  `H=…|C=…|U=…|G=…` plus an `[OK]`/`[FAIL]` handler-status tag
 - **Hover overlay** (bottom-left): Shows what's under the cursor
   - Over a point: `Point3D #N | depth: X.XXXX`
   - Over a frustum: `Camera: image_name`
   - Over background with depth: `depth: X.XXXX`
-- **Controls help** (bottom-right): One-line navigation reference
+- **Controls help** (bottom-right): One-line navigation reference, togglable
+  from the HUD's Debug section (on by default)
 
 The axis gizmo (`draw_axis_indicator`) also sits in the bottom-left corner,
-sharing that space with the hover overlay. Between them these six elements
-occupy all four corners plus the top centre, which constrains where any future
-in-viewport controls can go.
+sharing that space with the hover overlay. The **top-right** corner is left
+free for the [viewport HUD](gui-viewport-hud.md); the DirectManipulation
+touchpad counters that used to be burned in there are developer
+instrumentation and now live in the HUD's Debug section.
 
 ### UI Controls
 
-Every 3D-viewport display control lives in the **View** menu in the menu bar
-(`app.rs`), in this order:
+Every 3D-viewport display control lives in the **viewport HUD**
+(`viewer_3d/hud.rs`) — a panel drawn inside the viewport itself, collapsed by
+default to a gear at its top-right corner. A panel owns its own controls, as
+the Image Detail and Image Browser panels already do. See
+[gui-viewport-hud.md](gui-viewport-hud.md) for layout, section defaults and the
+input-arbitration rules that let a widget float over a rect the viewport
+otherwise claims entirely.
 
-| Control | Range / default | Purpose |
-|---------|-----------------|---------|
-| Show Points | on | Toggle point cloud visibility |
-| Show Camera Images | on | Toggle frustum and image quad visibility |
-| Show Grid | on | Toggle ground plane grid |
-| Point Size | −3…+3, default 0 | Multiplier on the auto point size (log₂ scale) |
-| Reset Size | — | Return Point Size to 0 |
-| Infinity Point Size | 1–16 px, default 3 | On-screen splat radius for `w = 0` points |
-| Show Patches | on | Toggle the patch surfel pass |
-| Patch Opacity | 0–1, default 1.0 | Global multiply on patch color alpha |
-| Patch Size | −3…+3, default 0 | Multiplier on stored patch half-extents (log₂) |
-| Patch Edge Cutoff | 0–1, default 0.0 | Coverage alpha below which patch texels are discarded |
-| Length Scale | 0.001–100, log scale | Scene length scale (affects target indicator, frustum size) |
-| Field of View | 10°–120° | Viewport FOV |
-| Reset FOV | — | Return Field of View to 45° |
+| Section | Control | Range / default | Purpose |
+|---------|---------|-----------------|---------|
+| Layers | Points | on | Toggle point cloud visibility |
+| Layers | Cameras | on | Toggle frustum and image quad visibility |
+| Layers | Grid | on | Toggle ground plane grid |
+| Layers | Patches | on | Toggle the patch surfel pass |
+| Layers | Points at ∞ | on | Toggle `w = 0` points |
+| Size | Points | −3…+3, default 0 | Multiplier on the auto point size (log₂ scale) |
+| Size | Reset point size | — | Return Points to 0 |
+| Size | ∞ (px) | 1–16 px, default 3 | On-screen splat radius for `w = 0` points |
+| Size | Scene | 0.001–100, log scale | Scene length scale (affects target indicator, frustum size) |
+| Patches | Opacity | 0–1, default 1.0 | Global multiply on patch color alpha |
+| Patches | Size | −3…+3, default 0 | Multiplier on stored patch half-extents (log₂) |
+| Patches | Edge cutoff | 0–1, default 0.0 | Coverage alpha below which patch texels are discarded |
+| Camera | FOV ° | 10°–120° | Viewport FOV |
+| Camera | Reset FOV | — | Return FOV to 45° |
+| Advanced | EDL width | 0.5–8 px, default 2.4 | EDL neighbour-sample reach |
+| Advanced | Frustum | 0.05–5, log, default 0.5 | Frustum stub depth as a fraction of length scale |
+| Advanced | Target | 0.05–5, log, default 0.3 | Target indicator radius multiplier |
+| Advanced | Target fog | 0.5–100, log, default 10 | Target indicator fog falloff multiplier |
+| Debug | Controls help | on | Paint the bottom-right navigation cheat sheet |
+| Debug | Frame rate | on | Include fps in the top-left scene stats |
+| Debug | Touchpad counters | — | DirectManipulation `H`/`C`/`U`/`G` counters and handler status |
 
-The four patch controls are greyed out (`add_enabled_ui`) unless the loaded
-reconstruction carries both patch frames and bitmaps. See
+The whole **Patches** section is omitted when the loaded reconstruction carries
+no patch frames and bitmaps; the Layers "Patches" toggle stays, greyed, so the
+capability remains discoverable. See
 [gui-patch-rendering.md](gui-patch-rendering.md#ui-controls).
 
-Some rendering parameters are plumbed through `AppState` to the GPU but have
-**no widget** — they can only be changed by editing the defaults in `state.rs`:
-`edl_line_thickness`, `frustum_size_multiplier`, `target_size_multiplier`, and
-`target_fog_multiplier`.
-
-**Planned:** all of the above moves out of the menu bar and into a heads-up
-display drawn inside the 3D viewport, on the principle that a panel should own
-its own controls — as the Image Detail and Image Browser panels already do. See
-[gui-viewport-hud.md](gui-viewport-hud.md).
+The **View** menu no longer holds display controls. It now governs dock-panel
+visibility — one checkbox per tab (3D Viewer, Image Browser, Image Detail,
+Point Track), which is a genuinely app-global concern. **File** (Open / Load
+Demo Data / Quit) is unchanged.
 
 ## Design Influences
 

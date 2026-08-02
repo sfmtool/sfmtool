@@ -201,8 +201,9 @@ fn file_menu_items() {
     }
 }
 
-/// Opening the View menu shows Show Points, Show Camera Images, and Show Grid
-/// checkboxes all checked by default.
+/// The View menu lists every dock panel, all four shown by default. (Display
+/// controls used to live here; they moved into the viewport HUD — see
+/// `specs/gui/gui-viewport-hud.md`.)
 #[test]
 fn view_checkboxes_checked_by_default() {
     let _guard = Guard::new();
@@ -212,7 +213,7 @@ fn view_checkboxes_checked_by_default() {
         .press()
         .expect("press View menu button");
 
-    for name in ["Show Points", "Show Camera Images", "Show Grid"] {
+    for name in ["3D Viewer", "Image Browser", "Image Detail", "Point Track"] {
         let el = app
             .locator(&format!(r#"check_box[name="{name}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
@@ -225,9 +226,9 @@ fn view_checkboxes_checked_by_default() {
     }
 }
 
-/// Toggling the Show Points checkbox via accessibility updates its checked state.
+/// Unchecking a panel in the View menu removes its dock tab.
 #[test]
-fn toggle_show_points() {
+fn toggle_panel_visibility() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
 
@@ -235,28 +236,26 @@ fn toggle_show_points() {
         .press()
         .expect("open View menu");
 
-    // Verify initial checked state
     let el = app
-        .locator(r#"check_box[name="Show Points"]"#)
+        .locator(r#"check_box[name="Point Track"]"#)
         .wait_attached(CONTENT_TIMEOUT)
-        .expect("Show Points checkbox not found");
+        .expect("Point Track checkbox not found");
     assert!(
         matches!(el.data().states.checked, Some(Toggled::On)),
-        "Show Points should start checked",
+        "Point Track should start shown",
     );
 
-    // Toggle it off
-    app.locator(r#"check_box[name="Show Points"]"#)
+    app.locator(r#"check_box[name="Point Track"]"#)
         .toggle()
-        .expect("toggle Show Points");
+        .expect("toggle Point Track");
 
     // Wait for egui to process the action and update the tree
-    app.locator(r#"check_box[name="Show Points"]"#)
+    app.locator(r#"check_box[name="Point Track"]"#)
         .wait_until(
             |data| data.is_some_and(|d| matches!(d.states.checked, Some(Toggled::Off))),
             CONTENT_TIMEOUT,
         )
-        .expect("Show Points should be unchecked after toggle");
+        .expect("Point Track should be unchecked after toggle");
 }
 
 /// Diagnostic: dump the tree after pressing View (run with -- --ignored --nocapture).

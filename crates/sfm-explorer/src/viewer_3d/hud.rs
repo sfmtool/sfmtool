@@ -89,7 +89,13 @@ impl Viewer3D {
     /// `show` allocates `ui.available_size()`, so the rect it ends up painting
     /// into is exactly the space still available here. The HUD itself consumes
     /// no layout space — it lives on its own `Area` layer.
-    pub fn show_hud(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
+    pub fn show_hud(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut AppState,
+        diagnostics: Option<(u32, u32, u32, u32)>,
+        handler_ok: bool,
+    ) {
         let viewport = ui.available_rect_before_wrap();
         if viewport.width() <= 0.0 || viewport.height() <= 0.0 {
             self.hud_rect = None;
@@ -141,7 +147,9 @@ impl Viewer3D {
                     egui::ScrollArea::vertical()
                         .max_height(max_body_height)
                         .auto_shrink([false, true])
-                        .show(ui, |ui| self.hud_sections(ui, state));
+                        .show(ui, |ui| {
+                            self.hud_sections(ui, state, diagnostics, handler_ok)
+                        });
                 });
             });
 
@@ -151,7 +159,13 @@ impl Viewer3D {
     }
 
     /// The section list of the expanded HUD.
-    fn hud_sections(&mut self, ui: &mut egui::Ui, state: &mut AppState) {
+    fn hud_sections(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &mut AppState,
+        diagnostics: Option<(u32, u32, u32, u32)>,
+        handler_ok: bool,
+    ) {
         let has_patches = has_patch_data(state);
 
         section(ui, "layers", "Layers", true, |ui| {
@@ -166,6 +180,8 @@ impl Viewer3D {
                 egui::Checkbox::new(&mut state.show_patches, "Patches"),
             )
             .on_disabled_hover_text("This reconstruction carries no patch bitmaps");
+            ui.checkbox(&mut state.show_points_at_infinity, "Points at ∞")
+                .on_hover_text("Draw w = 0 points — directions with no parallax");
         });
 
         section(ui, "size", "Size", true, |ui| {
@@ -224,6 +240,51 @@ impl Viewer3D {
             }
             if ui.button("Reset FOV").clicked() {
                 self.camera.fov = std::f64::consts::FRAC_PI_4;
+            }
+        });
+
+        // Four parameters that were plumbed to the GPU but had no widget at
+        // all — they could only be changed by editing the defaults in state.rs.
+        section(ui, "advanced", "Advanced", false, |ui| {
+            ui.add(
+                egui::Slider::new(&mut state.edl_line_thickness, 0.5..=8.0)
+                    .text("EDL width")
+                    .fixed_decimals(1),
+            );
+            ui.add(
+                egui::Slider::new(&mut state.frustum_size_multiplier, 0.05..=5.0)
+                    .logarithmic(true)
+                    .text("Frustum")
+                    .fixed_decimals(2),
+            );
+            ui.add(
+                egui::Slider::new(&mut state.target_size_multiplier, 0.05..=5.0)
+                    .logarithmic(true)
+                    .text("Target")
+                    .fixed_decimals(2),
+            );
+            ui.add(
+                egui::Slider::new(&mut state.target_fog_multiplier, 0.5..=100.0)
+                    .logarithmic(true)
+                    .text("Target fog")
+                    .fixed_decimals(1),
+            );
+        });
+
+        section(ui, "debug", "Debug", false, |ui| {
+            ui.checkbox(&mut state.show_controls_help, "Controls help");
+            ui.checkbox(&mut state.show_fps, "Frame rate");
+            // The touchpad counters used to be burned into the top-right corner
+            // of every frame. They are developer instrumentation, so they live
+            // here now and are off unless this section is open.
+            ui.separator();
+            ui.label(format!(
+                "Touchpad: {}",
+                if handler_ok { "OK" } else { "FAIL" }
+            ));
+            if let Some((hits, contacts, updates, global)) = diagnostics {
+                ui.label(format!("H={hits} C={contacts}"));
+                ui.label(format!("U={updates} G={global}"));
             }
         });
     }

@@ -20,7 +20,7 @@ use egui_winit::State as EguiWinitState;
 use sfmtool_core::SfmrReconstruction;
 use winit::window::Window;
 
-use crate::dock::{self, TabContext};
+use crate::dock::{self, Tab, TabContext};
 use crate::platform;
 use crate::scene_renderer;
 use crate::App;
@@ -370,6 +370,7 @@ impl App {
             &self.viewer_3d.camera,
             self.state.point_size_log2,
             self.state.infinity_point_px,
+            self.state.show_points_at_infinity,
             self.state.edl_line_thickness,
             self.viewer_3d.supernova_view_pos,
             self.viewer_3d.supernova_active,
@@ -514,74 +515,20 @@ impl App {
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     });
+                    // The display controls that used to live here now belong to
+                    // the 3D viewport's own HUD (`viewer_3d/hud.rs`), on the
+                    // principle that a panel owns its controls. What is left is
+                    // genuinely app-global: which dock tabs are on screen.
                     ui.menu_button("View", |ui| {
-                        ui.checkbox(&mut app_state.show_points, "Show Points");
-                        ui.checkbox(&mut app_state.show_camera_images, "Show Camera Images");
-                        ui.checkbox(&mut app_state.show_grid, "Show Grid");
-                        ui.separator();
-                        ui.label("Point Size");
-                        ui.add(
-                            egui::Slider::new(&mut app_state.point_size_log2, -3.0..=3.0)
-                                .text("log₂")
-                                .fixed_decimals(1),
-                        );
-                        if ui.button("Reset Size").clicked() {
-                            app_state.point_size_log2 = 0.0;
-                        }
-                        ui.separator();
-                        ui.label("Infinity Point Size");
-                        ui.add(
-                            egui::Slider::new(&mut app_state.infinity_point_px, 1.0..=16.0)
-                                .text("px")
-                                .fixed_decimals(1),
-                        );
-                        ui.separator();
-                        // Patch surfel controls — disabled unless the loaded
-                        // reconstruction carries patch frames with bitmaps.
-                        let has_patches = app_state.reconstruction.as_ref().is_some_and(|r| {
-                            r.patch_u_halfvec_xyz.is_some()
-                                && r.patch_v_halfvec_xyz.is_some()
-                                && r.patch_bitmaps_y_x_rgba.is_some()
-                        });
-                        ui.add_enabled_ui(has_patches, |ui| {
-                            ui.checkbox(&mut app_state.show_patches, "Show Patches");
-                            ui.label("Patch Opacity");
-                            ui.add(
-                                egui::Slider::new(&mut app_state.patch_opacity, 0.0..=1.0)
-                                    .fixed_decimals(2),
-                            );
-                            ui.label("Patch Size");
-                            ui.add(
-                                egui::Slider::new(&mut app_state.patch_size_log2, -3.0..=3.0)
-                                    .text("log₂")
-                                    .fixed_decimals(1),
-                            );
-                            ui.label("Patch Edge Cutoff");
-                            ui.add(
-                                egui::Slider::new(&mut app_state.patch_alpha_cutoff, 0.0..=1.0)
-                                    .fixed_decimals(2),
-                            );
-                        });
-                        ui.separator();
-                        ui.label("Length Scale");
-                        ui.add(
-                            egui::Slider::new(&mut app_state.length_scale, 0.001..=100.0)
-                                .logarithmic(true)
-                                .fixed_decimals(3),
-                        );
-                        ui.separator();
-                        ui.label("Field of View");
-                        let mut fov_degrees = viewer_3d.camera.fov.to_degrees();
-                        let response = ui.add(
-                            egui::Slider::new(&mut fov_degrees, 10.0..=120.0)
-                                .text("°")
-                                .fixed_decimals(0),
-                        );
-                        if response.changed() {
-                            viewer_3d.camera.fov = fov_degrees.to_radians();
-                        }
-                        if ui.button("Reset FOV").clicked() {
-                            viewer_3d.camera.fov = std::f64::consts::FRAC_PI_4;
+                        for tab in Tab::ALL {
+                            let mut shown = dock_state.find_tab(&tab).is_some();
+                            if ui.checkbox(&mut shown, tab.title()).changed() {
+                                if shown {
+                                    dock_state.push_to_focused_leaf(tab);
+                                } else if let Some(path) = dock_state.find_tab(&tab) {
+                                    dock_state.remove_tab(path);
+                                }
+                            }
                         }
                     });
                 });

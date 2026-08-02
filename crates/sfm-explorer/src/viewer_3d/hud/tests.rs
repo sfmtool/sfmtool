@@ -143,7 +143,7 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
         }
         let scroll_input = ScrollInput::from_ctx(ui.ctx(), false);
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            viewer.show_hud(ui, state);
+            viewer.show_hud(ui, state, Some((1, 2, 3, 4)), true);
             // Lift the reconstruction out so `show` can borrow it while the
             // rest of `AppState` stays reachable. It goes straight back.
             let recon = state.reconstruction.take().expect("a reconstruction");
@@ -155,8 +155,8 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
                 state.length_scale,
                 &[],
                 &scroll_input,
-                None,
-                false,
+                state.show_controls_help,
+                state.show_fps,
                 None,
                 None,
                 0,
@@ -460,7 +460,7 @@ fn the_patches_section_is_omitted_when_the_reconstruction_has_no_patch_bitmaps()
 
         // Every other section is drawn either way — otherwise this would pass
         // just as happily on a HUD that drew nothing at all.
-        for always in ["layers", "size", "camera"] {
+        for always in ["layers", "size", "camera", "advanced", "debug"] {
             assert!(
                 egui::collapsing_header::CollapsingState::load(&ctx, section_id(always)).is_some(),
                 "{name}: the {always} section was missing"
@@ -486,9 +486,26 @@ fn the_size_sliders_write_through_to_app_state() {
     // copies, so values set outside it survive a frame untouched.
     state.point_size_log2 = 1.5;
     state.patch_opacity = 0.25;
+    state.edl_line_thickness = 4.0;
+    state.target_fog_multiplier = 20.0;
     run_frame(&mut viewer, &ctx, &mut state, Frame::new());
     assert_eq!(state.point_size_log2, 1.5);
     assert_eq!(state.patch_opacity, 0.25);
+    // The Advanced sliders had no widget at all before the HUD; a stale copy
+    // in the HUD would quietly reset them every frame.
+    assert_eq!(state.edl_line_thickness, 4.0);
+    assert_eq!(state.target_fog_multiplier, 20.0);
+}
+
+#[test]
+fn the_defaults_the_debug_section_toggles_start_on() {
+    // The two overlays the Debug section governs were unconditionally painted
+    // before the HUD existed, so their toggles have to default to on or the
+    // move would silently remove them.
+    let state = AppState::new();
+    assert!(state.show_controls_help);
+    assert!(state.show_fps);
+    assert!(state.show_points_at_infinity);
 }
 
 // ── Input arbitration ───────────────────────────────────────────────────

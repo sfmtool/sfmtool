@@ -37,6 +37,11 @@ pub(super) struct PointUniforms {
     pub screen_height: f32,
     /// On-screen splat radius (pixels) for points at infinity.
     pub infinity_point_px: f32,
+    /// 1.0 to draw points at infinity, 0.0 to cull them in the vertex shader.
+    /// A uniform rather than a filtered upload because `instance_index` has to
+    /// stay equal to the global `recon.points` index for picking to work.
+    pub show_infinity: f32,
+    pub _pad: [f32; 3],
 }
 
 #[repr(C)]

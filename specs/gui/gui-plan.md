@@ -50,7 +50,7 @@ The core 3D viewer is working with these features implemented:
 - Ground plane grid, axis lines, orientation gizmo
 - `.sfmr` file loading via File > Open dialog
 - Hover overlay showing entity info under cursor
-- FOV menu slider (10°–120°) with min-dimension FOV convention
+- FOV slider (10°–120°) with min-dimension FOV convention
 - View through selected camera (Z key: pose + best-fit FOV from intrinsics)
 - Full-resolution background image in camera view mode (pinhole + distorted)
 - `,`/`.` keys to step through images: in camera view mode they switch the
@@ -69,6 +69,9 @@ The core 3D viewer is working with these features implemented:
 - Cross-panel hover highlighting (see [gui-cross-panel-hover.md](gui-cross-panel-hover.md))
 - FOV zoom in camera view mode (scroll / Ctrl+drag / pinch adjust FOV instead
   of dollying; see [gui-viewport-navigation.md](gui-viewport-navigation.md))
+- Viewport HUD: every 3D display control lives in a collapsible in-viewport
+  panel instead of the View menu, which now governs dock-panel visibility (see
+  [gui-viewport-hud.md](gui-viewport-hud.md))
 
 ### Core Data — Complete
 
@@ -92,12 +95,11 @@ In rough priority order:
 1. **Grid and coordinate systems in 3D** — Currently the grid and the 3D coordinate system are
    overlaid on top of everything. It would be nicer if they integrate inside the 3D scene with
    depth occlusion.
-2. **Viewport HUD** — Move the View-menu display controls into the 3D viewport
-   as a collapsible heads-up panel, so the panel owns its own controls and the
-   tune-adjust-look loop stops costing a menu round-trip. See
+2. ~~**Viewport HUD** — Move the View-menu display controls into the 3D
+   viewport as a collapsible heads-up panel.~~ Done. See
    [gui-viewport-hud.md](gui-viewport-hud.md).
 3. **FOV zoom gesture** — Dedicated input binding for FOV adjustment during
-   navigation (lower priority now that the menu slider exists; see
+   navigation (lower priority now that the HUD slider is viewport-local; see
    [gui-viewport-navigation.md](gui-viewport-navigation.md#fov-zoom))
 4. ~~**Adaptive grid** — Update grid to work at any scale.~~ Done.
 5. ~~**Adaptive clip planes** — Reversed-Z infinite far projection with adaptive near plane.~~ Done. See [gui-adaptive-clip-and-grid.md](gui-adaptive-clip-and-grid.md).

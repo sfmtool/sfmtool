@@ -15,7 +15,7 @@ an interactive GUI for exploring Structure-from-Motion reconstructions.
 | [gui-multi-panel-image-browser.md](gui-multi-panel-image-browser.md) | Multi-panel layout (egui_dock), image browser strip, image detail pane, cross-panel selection model, and feature overlay design. |
 | [gui-point-track-detail.md](gui-point-track-detail.md) | Point Track Detail panel: per-point track inspector showing observation thumbnails, per-observation reprojection error, and cross-panel navigation. |
 | [gui-cross-panel-hover.md](gui-cross-panel-hover.md) | Cross-panel hover tracking: transient hover highlighting across 3D Viewer, Image Browser, and Image Detail panels via GPU uniforms. |
-| [gui-viewport-hud.md](gui-viewport-hud.md) | **Proposed.** Moving the View-menu display controls onto an in-viewport HUD: layout, sections, keyboard shortcuts, and the input-arbitration rules a floating panel inside the 3D viewport requires. |
+| [gui-viewport-hud.md](gui-viewport-hud.md) | The in-viewport HUD that owns every 3D display control: layout, sections, and the input-arbitration rules a floating panel inside the 3D viewport requires. |
 | [gui-adaptive-clip-and-grid.md](gui-adaptive-clip-and-grid.md) | Reversed-Z infinite far projection, adaptive near plane, and adaptive ground grid scaling. |
 | [gui-image-animation.md](gui-image-animation.md) | Image animation playback: play through image sequence with keyboard/UI controls, camera view fly-through. |
 | [gui-architecture.md](gui-architecture.md) | Technology stack (Rust, wgpu, egui, egui_dock, winit, PyO3), crate structure, multi-pass rendering pipeline, build system, and performance design. |

@@ -11,3 +11,6 @@ pub(super) mod patch;
 pub(super) mod points;
 pub(super) mod target;
 pub(super) mod track_ray;
+
+#[cfg(test)]
+mod tests;

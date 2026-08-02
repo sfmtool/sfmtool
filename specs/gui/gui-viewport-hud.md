@@ -1,10 +1,8 @@
 # Viewport HUD
 
-**Status: partially implemented (phase 1).** The HUD shell, the Layers / Size /
-Patches / Camera sections and the whole input-arbitration rule set are built
-(`viewer_3d/hud.rs`). Advanced and Debug are not, and the View menu still
-carries a duplicate of the display controls — see
-[Staging](#staging) and [Implementation Status](#implementation-status).
+**Status: implemented** in `viewer_3d/hud.rs`, tests in
+`viewer_3d/hud/tests.rs`. The display controls have left the menu bar; **View**
+now governs dock-panel visibility.
 
 This document specifies moving the 3D-viewport display controls out of the
 menu bar and onto a heads-up display drawn inside the viewport itself.
@@ -13,9 +11,9 @@ menu bar and onto a heads-up display drawn inside the viewport itself.
 
 ## Motivation
 
-Every control in the View menu (`app.rs`) is 3D-viewport state. None of it
-affects the Image Browser, Image Detail, or Point Track panels. Two problems
-follow from housing it in an app-global menu:
+Every control that used to sit in the View menu (`app.rs`) is 3D-viewport
+state. None of it affects the Image Browser, Image Detail, or Point Track
+panels. Two problems followed from housing it in an app-global menu:
 
 1. **It contradicts the panel model.** The dock already establishes that a
    panel owns its own controls: Image Detail has an overlay/filter toolbar
@@ -31,15 +29,15 @@ follow from housing it in an app-global menu:
 
 ## Scope
 
-**Moves to the HUD** — all twelve current View-menu controls, plus the four
-parameters that are plumbed to the GPU but have no widget at all
+**Moved to the HUD** — all twelve former View-menu controls, plus the four
+parameters that were plumbed to the GPU but had no widget at all
 (`edl_line_thickness`, `frustum_size_multiplier`, `target_size_multiplier`,
-`target_fog_multiplier`), plus the two unbuilt point-cloud controls
+`target_fog_multiplier`), plus the two previously unbuilt point-cloud controls
 (["Show points at infinity" toggle and count
-readout](gui-point-cloud-rendering.md#remaining-ui-work)).
+readout](gui-point-cloud-rendering.md#ui--shipped)).
 
-**Stays in the menu bar** — File (Open / Load Demo Data / Quit). Once the
-display controls leave, "View" is repurposed to dock-panel visibility — which
+**Stays in the menu bar** — File (Open / Load Demo Data / Quit). With the
+display controls gone, "View" is repurposed to dock-panel visibility — which
 tabs are shown — which is a genuinely app-global concern and leaves the menu
 meaningful rather than deleted.
 
@@ -131,19 +129,31 @@ Debug closed.
 | **Size** | Point Size (log₂, −3…+3) + reset, Infinity Point Size (1–16 px), Length Scale (0.001–100, log) |
 | **Patches** | Patch Opacity, Patch Size, Patch Edge Cutoff |
 | **Camera** | Field of View (10°–120°) + reset |
-| **Advanced** | EDL Line Thickness, Frustum Size, Target Size, Target Fog |
-| **Debug** | Touchpad diagnostic counters, controls-help toggle, fps toggle |
+| **Advanced** | EDL Line Thickness (0.5–8 px), Frustum Size (0.05–5, log), Target Size (0.05–5, log), Target Fog (0.5–100, log) |
+| **Debug** | Controls-help toggle, fps toggle, touchpad diagnostic counters |
 
-Two changes in behaviour from the menu:
+The **count readout** for points at infinity is not a HUD widget: it belongs
+with the point/image counts already painted top-left, so the scene stats line
+reads `N points (M at infinity) | K images | F fps`, dropping the parenthetical
+when the reconstruction has no `w = 0` points and the fps when the Debug toggle
+is off.
 
-- **Patch controls are hidden, not greyed.** Today the four patch controls are
-  wrapped in `add_enabled_ui(has_patches, …)` and show as dead widgets for the
-  common `sift_files` reconstruction. In the HUD the whole Patches section is
-  omitted when the reconstruction carries no patch frames + bitmaps. Show
-  Patches stays in Layers, greyed, so the capability remains discoverable.
+Three changes in behaviour from the menu:
+
+- **Patch controls are hidden, not greyed.** In the menu the four patch
+  controls were wrapped in `add_enabled_ui(has_patches, …)` and showed as dead
+  widgets for the common `sift_files` reconstruction. In the HUD the whole
+  Patches section is omitted when the reconstruction carries no patch frames +
+  bitmaps. Show Patches stays in Layers, greyed, so the capability remains
+  discoverable.
 - **The always-on overlays become togglable.** Controls help and the fps
   readout get toggles in Debug, satisfying the intent the UX spec previously
-  claimed for the controls help.
+  claimed for the controls help. Both default to on, so the move changes
+  nothing until the user asks it to.
+- **Points at infinity get a visibility toggle.** Hiding them is a
+  `show_infinity` flag in `PointUniforms` that makes the vertex shader emit a
+  clipped vertex, not a filtered upload: `instance_index` has to stay equal to
+  the global `recon.points` index or picking, hover and selection break.
 
 ---
 
@@ -196,9 +206,11 @@ sections, plus the full input-arbitration rule set. The View menu is
 **retained as a duplicate** through this phase, so a HUD regression cannot make
 the controls unreachable.
 
-**Phase 2** — fold in Advanced and Debug (including the diagnostics move and
-the overlay toggles), delete the display controls from the View menu, and
-repurpose View to dock-panel visibility.
+**Phase 2** — *done.* Fold in Advanced and Debug (including the diagnostics
+move and the overlay toggles), delete the display controls from the View menu,
+and repurpose View to dock-panel visibility: one checkbox per dock tab, which
+removes the tab from the layout when unchecked and pushes it back onto the
+focused leaf when re-checked.
 
 ---
 
@@ -237,7 +249,7 @@ arbitration proves harder than expected — it is the natural fallback.
 
 ## Implementation Status
 
-Phase 1 is built (`viewer_3d/hud.rs`, tests in `viewer_3d/hud/tests.rs`).
+All of it is built (`viewer_3d/hud.rs`, tests in `viewer_3d/hud/tests.rs`).
 
 - [x] HUD shell: `Area`, viewport-relative anchoring, collapsed/expanded gear
 - [x] `hud_rect` capture and the scroll/gesture exclusion
@@ -245,9 +257,14 @@ Phase 1 is built (`viewer_3d/hud.rs`, tests in `viewer_3d/hud/tests.rs`).
       no geometric fallback needed)
 - [x] `egui_wants_keyboard_input` gate on fly keys and viewport shortcuts
 - [x] Layers / Size / Patches / Camera sections
-- [ ] Advanced section (exposes `edl_line_thickness`, `frustum_size_multiplier`,
+- [x] Advanced section (exposes `edl_line_thickness`, `frustum_size_multiplier`,
       `target_size_multiplier`, `target_fog_multiplier` for the first time)
-- [ ] Debug section: diagnostics move, controls-help and fps toggles
-- [ ] "Show points at infinity" toggle + count readout
-      ([gui-point-cloud-rendering.md](gui-point-cloud-rendering.md#remaining-ui-work))
-- [ ] Remove display controls from the View menu; repurpose it to panel visibility
+- [x] Debug section: diagnostics move, controls-help and fps toggles
+- [x] "Show points at infinity" toggle + count readout
+      ([gui-point-cloud-rendering.md](gui-point-cloud-rendering.md#ui--shipped))
+- [x] Remove display controls from the View menu; repurpose it to panel visibility
+
+Still open, and deliberately so: everything under
+[Open questions](#open-questions) — auto-hide during navigation, where Length
+Scale belongs, a docked variant, and keyboard shortcuts for the visibility
+toggles.

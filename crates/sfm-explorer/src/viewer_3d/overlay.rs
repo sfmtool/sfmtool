@@ -131,14 +131,18 @@ impl Viewer3D {
     }
 
     /// Draws an info overlay with controls and stats.
+    ///
+    /// The top-right corner is deliberately left empty: it belongs to the
+    /// viewport HUD (`hud.rs`), and the touchpad diagnostics that used to be
+    /// burned in here now live in its Debug section.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_info_overlay(
         &self,
         painter: &egui::Painter,
         rect: Rect,
         reconstruction: &SfmrReconstruction,
-        diagnostics: Option<(u32, u32, u32, u32)>,
-        handler_ok: bool,
+        show_controls_help: bool,
+        show_fps: bool,
         hover_depth: Option<f32>,
         hover_pick_id: u32,
         fps: f64,
@@ -146,39 +150,28 @@ impl Viewer3D {
         let font = egui::FontId::proportional(12.0);
         let text_color = Color32::from_rgba_unmultiplied(200, 200, 200, 180);
 
-        // Top-left: stats + FPS
-        let stats = format!(
-            "{} points | {} images | {:.0} fps",
-            reconstruction.points.len(),
-            reconstruction.images.len(),
-            fps,
-        );
+        // Top-left: stats, and the frame rate if it is wanted. Points at
+        // infinity are called out separately — they are directions rather than
+        // locations, so a lone total hides how much of the cloud has no
+        // position at all.
+        let at_infinity = reconstruction.metadata.infinity_point_count;
+        let points = if at_infinity > 0 {
+            format!(
+                "{} points ({} at infinity)",
+                reconstruction.points.len(),
+                at_infinity
+            )
+        } else {
+            format!("{} points", reconstruction.points.len())
+        };
+        let mut stats = format!("{} | {} images", points, reconstruction.images.len());
+        if show_fps {
+            stats.push_str(&format!(" | {fps:.0} fps"));
+        }
         painter.text(
             Pos2::new(rect.left() + 10.0, rect.top() + 10.0),
             egui::Align2::LEFT_TOP,
             stats,
-            font.clone(),
-            text_color,
-        );
-
-        // Top-right: diagnostics
-        let diag_text = if let Some((hits, contacts, updates, global)) = diagnostics {
-            format!(
-                "H={}|C={}|U={}|G={} [{}]",
-                hits,
-                contacts,
-                updates,
-                global,
-                if handler_ok { "OK" } else { "FAIL" }
-            )
-        } else {
-            format!("[{}]", if handler_ok { "OK" } else { "FAIL" })
-        };
-
-        painter.text(
-            Pos2::new(rect.right() - 10.0, rect.top() + 10.0),
-            egui::Align2::RIGHT_TOP,
-            diag_text,
             font.clone(),
             text_color,
         );
@@ -239,14 +232,15 @@ impl Viewer3D {
         }
 
         // Bottom-right: controls help
-        let controls =
-            "Drag: orbit | Shift: pan | Scroll: zoom | Alt+drag: free-look | WASD: fly | Alt: target";
-        painter.text(
-            Pos2::new(rect.right() - 10.0, rect.bottom() - 10.0),
-            egui::Align2::RIGHT_BOTTOM,
-            controls,
-            font,
-            text_color,
-        );
+        if show_controls_help {
+            let controls = "Drag: orbit | Shift: pan | Scroll: zoom | Alt+drag: free-look | WASD: fly | Alt: target";
+            painter.text(
+                Pos2::new(rect.right() - 10.0, rect.bottom() - 10.0),
+                egui::Align2::RIGHT_BOTTOM,
+                controls,
+                font,
+                text_color,
+            );
+        }
     }
 }

@@ -158,10 +158,21 @@ pub struct AppState {
     /// Actual multiplier = 2^point_size_log2.
     pub point_size_log2: f32,
 
+    /// Whether to draw points at infinity (`w = 0`). Independent of
+    /// `show_points`, because a skyline of directions is often exactly the part
+    /// of a reconstruction you want to look at without — or only without.
+    pub show_points_at_infinity: bool,
+
     /// On-screen splat radius (pixels) for points at infinity. A direction has
     /// no distance, so infinity points are sized in pixels rather than world
     /// units like finite points.
     pub infinity_point_px: f32,
+
+    /// Whether the bottom-right navigation cheat sheet is painted.
+    pub show_controls_help: bool,
+
+    /// Whether the top-left scene stats include the frame rate.
+    pub show_fps: bool,
 
     /// EDL line thickness in pixels. Controls how far the neighbor samples
     /// reach, which determines the width of depth-discontinuity edges.
@@ -230,7 +241,10 @@ impl AppState {
             status_message: None,
             points_need_upload: false,
             point_size_log2: 0.0,
+            show_points_at_infinity: true,
             infinity_point_px: 3.0,
+            show_controls_help: true,
+            show_fps: true,
             edl_line_thickness: 2.4,
             target_size_multiplier: DEFAULT_TARGET_SIZE_MULTIPLIER,
             target_fog_multiplier: DEFAULT_TARGET_FOG_MULTIPLIER,

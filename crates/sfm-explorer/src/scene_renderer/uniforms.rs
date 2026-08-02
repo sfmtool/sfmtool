@@ -15,6 +15,7 @@ impl SceneRenderer {
         camera: &ViewportCamera,
         size_log2: f32,
         infinity_point_px: f32,
+        show_infinity: bool,
         edl_line_thickness: f32,
         target_view_pos: [f32; 3],
         target_active: f32,
@@ -52,6 +53,8 @@ impl SceneRenderer {
                 screen_width: w as f32,
                 screen_height: h as f32,
                 infinity_point_px,
+                show_infinity: if show_infinity { 1.0 } else { 0.0 },
+                _pad: [0.0; 3],
             };
 
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));

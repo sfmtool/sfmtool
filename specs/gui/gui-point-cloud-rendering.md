@@ -146,12 +146,11 @@ For each pixel:
 | Parameter | Default | UI Control | Effect |
 |-----------|---------|------------|--------|
 | `edl_strength` | 0.7 | — | Controls how dark the edges get |
-| `edl_radius` | 2.4 | — (`edl_line_thickness` in `AppState`, no widget) | Sampling distance in pixels |
+| `edl_radius` | 2.4 | "EDL width" slider, 0.5–8 px (viewport HUD, Advanced) | Sampling distance in pixels |
 | `point_size` | auto | — | Normalizes depth differences |
 
-`edl_radius` is wired end-to-end — `AppState::edl_line_thickness` flows into the
-EDL uniforms every frame — but nothing exposes it, so changing it means editing
-the default in `state.rs`. An "EDL Line Thickness" slider is still unbuilt.
+`edl_radius` is wired end-to-end: `AppState::edl_line_thickness` flows into the
+EDL uniforms every frame and the HUD's Advanced section drives it.
 
 ### Background and Frustum Handling
 
@@ -356,11 +355,10 @@ does not write to it, allowing it to render with depth-aware transparency.
 
 ## Points at Infinity
 
-*(Folded in from the `gui-points-at-infinity.md` draft. **Status:** rendering
-and the data-pipeline fixes below are implemented (commit c3c2805). The
-`infinity_point_px` slider has since shipped in the View menu; the "Show points
-at infinity" toggle and the `N points (M at infinity)` count readout are still
-unbuilt — see [Remaining UI work](#remaining-ui-work).)*
+*(Folded in from the `gui-points-at-infinity.md` draft. **Status:**
+implemented, UI included — the size slider, the visibility toggle and the count
+readout all ship in the [viewport HUD](gui-viewport-hud.md) and the scene-stats
+overlay. See [UI — shipped](#ui--shipped).)*
 
 Render `w = 0` points — directions, not locations — so a distant
 skyline/ridge/cloud track contributes to the visual reconstruction instead of
@@ -422,15 +420,20 @@ splat lands on the same pixel as its observed feature regardless of the viewed
 camera's translation, since the background image mesh uses the same `w = 0`
 transform.
 
-### Remaining UI work
+### UI — shipped
 
-- **Visibility toggle** "Show points at infinity" (default on) and the
-  **count readout** `N points (M at infinity)` (`infinity_point_count` is
-  already in the metadata) — in `state.rs` + dock/overlay.
-- **Infinity point size slider** — *shipped*: `infinity_point_px` in the View
-  menu (`app.rs`), range 1–16 px, default 3 (`AppState::infinity_point_px`).
-  Separate from the world-unit `point_size_log2` slider. The 1–16 px range
-  proved fine in practice; the carried-over open question is resolved.
+- **Visibility toggle** — "Points at ∞" in the HUD's Layers section, default
+  on (`AppState::show_points_at_infinity`). It is a `show_infinity` flag in
+  `PointUniforms` that makes the vertex shader emit a clipped vertex, *not* a
+  filtered upload: `instance_index` has to stay equal to the global
+  `recon.points` index or picking, hover and selection break.
+- **Count readout** — the top-left scene stats read
+  `N points (M at infinity) | K images | F fps`, dropping the parenthetical
+  when `metadata.infinity_point_count` is zero.
+- **Infinity point size slider** — `infinity_point_px` in the HUD's Size
+  section ("∞ (px)"), range 1–16 px, default 3. Separate from the world-unit
+  `point_size_log2` slider. The 1–16 px range proved fine in practice; the
+  carried-over open question is resolved.
 
 ---
 
@@ -443,8 +446,8 @@ transform.
 - [x] Auto point sizing from median nearest-neighbor distance
 - [x] User-adjustable point size (log2 slider)
 - [x] EDL post-processing (8-neighbor, two-radius sampling)
-- [x] EDL line thickness plumbed through `AppState` to the shader uniforms
-      (no UI widget yet — see [Parameters](#parameters))
+- [x] EDL line thickness plumbed through `AppState` to the shader uniforms,
+      with a slider in the viewport HUD's Advanced section
 - [x] Three render targets (color + linear depth + pick ID)
 - [x] Target indicator (originally a rotating wireframe octahedron; later
       redesigned into the 3D compass — see the redesign entry below and
@@ -455,14 +458,13 @@ transform.
 - [x] Points-at-infinity rendering (`w = 0` direction transform, screen-space
       splats, depth bias, EDL passthrough, data-pipeline exclusions — see
       [Points at Infinity](#points-at-infinity))
+- [x] "Show points at infinity" toggle and `N points (M at infinity)` count
+      readout (see [UI — shipped](#ui--shipped))
+- [x] "EDL Line Thickness" slider exposing the already-plumbed
+      `edl_line_thickness` (viewport HUD, Advanced section)
 
 ### Future Enhancements
 
-- [ ] "Show points at infinity" toggle and `N points (M at infinity)` count
-      readout (see [Remaining UI work](#remaining-ui-work)). The
-      `infinity_point_px` slider in that section is already shipped.
-- [ ] "EDL Line Thickness" slider exposing the already-plumbed
-      `edl_line_thickness` (see [Parameters](#parameters))
 - [ ] Adaptive `length_scale` that updates as you navigate to different parts of the scene
 - [x] Target indicator redesign: 3D compass shape with filled star rose showing `world_up` (see [3D Shape](#3d-shape-rotating-compass))
 - [ ] Target indicator visibility over bright backgrounds (see [open question](#glow-effect))

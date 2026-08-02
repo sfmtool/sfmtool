@@ -218,13 +218,11 @@ with a `log::warn` — only reachable at extreme counts.
 
 ## UI controls
 
-New controls in the **View menu**, alongside the point-size / EDL controls
-(`state.rs` + `app.rs`), all disabled unless the reconstruction carries a patch
-frame **and** bitmaps.
-
-> These four are slated to move to a "Patches" section on the in-viewport HUD,
-> where the section is *hidden* rather than greyed when the reconstruction
-> carries no patches. See [gui-viewport-hud.md](gui-viewport-hud.md#sections).
+A **Patches** section on the [viewport HUD](gui-viewport-hud.md#sections)
+(`state.rs` + `viewer_3d/hud.rs`). The whole section is *hidden* unless the
+reconstruction carries a patch frame **and** bitmaps; the Show-patches toggle
+stays in the HUD's Layers section, greyed, so the capability is still
+discoverable.
 
 | Control | Default | Effect |
 |---------|---------|--------|
@@ -364,8 +362,9 @@ pick tag.
 - [x] Real HW depth / `0.0` linear depth / `PICK_TAG_POINT` targets
 - [x] Points-at-infinity `w = 0` corner path (direction transform +
       `INF_DEPTH` bias, matching the infinity point splats)
-- [x] Show-patches / opacity / size / edge-cutoff UI (View menu, alongside
-      the point-size controls; disabled unless frames **and** bitmaps exist)
+- [x] Show-patches / opacity / size / edge-cutoff UI (viewport HUD: the
+      Patches section, hidden unless frames **and** bitmaps exist, with the
+      Show-patches toggle greyed in Layers)
 
 ### Planned (v1)
 
@@ -375,8 +374,6 @@ pick tag.
 
 ### Future
 
-- [ ] Relocate the four patch controls from the View menu to the HUD's
-      "Patches" section (see [gui-viewport-hud.md](gui-viewport-hud.md))
 - [ ] EDL-on-patches toggle
 - [ ] Point auto-hide where patches exist
 - [ ] Back-face dim/tint (culling is done — this is the softer alternative)

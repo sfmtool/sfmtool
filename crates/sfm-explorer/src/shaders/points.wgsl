@@ -16,6 +16,7 @@ struct Uniforms {
     screen_width: f32,
     screen_height: f32,
     infinity_point_px: f32,
+    show_infinity: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -63,8 +64,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
         // `world_pos` is a unit direction. Transform with w = 0 so the camera
         // translation drops out — a point at infinity has no parallax.
         let clip_c = uniforms.view_proj * vec4<f32>(in.world_pos, 0.0);
-        if clip_c.w <= 0.0 {
-            // Direction points behind the camera: emit a clipped vertex.
+        if uniforms.show_infinity == 0.0 || clip_c.w <= 0.0 {
+            // Hidden by the "points at infinity" toggle, or pointing behind the
+            // camera: emit a clipped vertex either way.
             out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
             out.view_depth = 0.0;
             return out;
