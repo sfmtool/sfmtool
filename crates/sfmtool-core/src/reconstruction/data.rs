@@ -231,6 +231,14 @@ pub struct SfmrReconstruction {
     /// is neither built nor written. `true` for everything loaded from versions 1
     /// and 2.
     pub has_normals: bool,
+    /// Optional per-point confidence in each point's `normal` (parallel to
+    /// `points`), persisted as `points3d/normal_confidence` (version 5+): `0`
+    /// means the normal carries no data-derived support (a placeholder), `255`
+    /// means fully data-derived, and intermediate values are a reserved graded
+    /// scale. `None` means the reconstruction carries no confidence information
+    /// at all — which is *not* the same as "all confident". It rides along
+    /// untouched: nothing here synthesises or updates it when normals change.
+    pub normal_confidence: Option<Vec<u8>>,
     /// The observation-source-specific columns (per-observation feature index or
     /// keypoint, per-image hashes), selected by variant. The feature→point maps
     /// below are meaningful only for [`ObservationSource::SiftFiles`].

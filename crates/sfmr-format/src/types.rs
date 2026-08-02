@@ -381,6 +381,18 @@ pub struct SfmrData {
     /// files always store it under the legacy name `estimated_normals_xyz`,
     /// which the reader accepts and maps onto this field.
     pub normals_xyz: Option<Array2<f32>>,
+    /// Optional `(P,)` per-point confidence in the stored normal: `0` means the
+    /// matching `normals_xyz` row carries no data-derived support (a
+    /// placeholder), `255` means fully data-derived, and intermediate values are
+    /// reserved as a graded scale for future writers. Consumers must treat it
+    /// monotonically rather than switching on exact codes. `None` when the
+    /// reconstruction carries no confidence information at all — which is *not*
+    /// the same as "all confident".
+    ///
+    /// On disk this is `points3d/normal_confidence` (version 5+, present only
+    /// when `points3d/metadata.json`'s `has_normal_confidence` is `true`). The
+    /// writer passes it through untouched.
+    pub normal_confidence: Option<Array1<u8>>,
 
     // Per-point oriented-patch ("surfel") frame (optional, version 3+), stored
     // alongside the other `points3d/` arrays. A patch is centred on its 3D point

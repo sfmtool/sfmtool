@@ -269,6 +269,9 @@ impl SfmrReconstruction {
             patch_v_halfvec_xyz: data.patch_v_halfvec_xyz,
             patch_bitmaps_y_x_rgba: data.patch_bitmaps_y_x_rgba,
             has_normals,
+            // Rides along as stored; the convention upgrade above leaves it
+            // alone because a confidence is frame-independent.
+            normal_confidence: data.normal_confidence.map(|c| c.to_vec()),
             observations,
             image_feature_to_point,
             max_track_feature_index,
@@ -425,6 +428,10 @@ impl SfmrReconstruction {
             colors_rgb,
             reprojection_errors,
             normals_xyz,
+            normal_confidence: self
+                .normal_confidence
+                .as_ref()
+                .map(|c| Array1::from_vec(c.clone())),
             image_indexes,
             feature_indexes,
             keypoints_xy,

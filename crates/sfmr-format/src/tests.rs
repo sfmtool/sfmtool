@@ -134,6 +134,7 @@ fn make_test_data() -> SfmrData {
             )
             .unwrap(),
         ),
+        normal_confidence: None,
         patch_u_halfvec_xyz: None,
         patch_v_halfvec_xyz: None,
         patch_bitmaps_y_x_rgba: None,
@@ -788,6 +789,7 @@ fn test_empty_reconstruction() {
         colors_rgb: Array2::zeros((0, 3)),
         reprojection_errors: Array1::from_vec(vec![]),
         normals_xyz: Some(Array2::zeros((0, 3))),
+        normal_confidence: None,
         patch_u_halfvec_xyz: None,
         patch_v_halfvec_xyz: None,
         patch_bitmaps_y_x_rgba: None,
@@ -979,6 +981,164 @@ fn test_round_trip_without_normals() {
 
     let (valid, errors) = verify_sfmr(&path).unwrap();
     assert!(valid, "no-normals verification failed: {errors:?}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Copy a `.sfmr` archive, dropping `key` from `points3d/metadata.json` — the
+/// shape of a file written before that flag existed. Section hashes are not
+/// recomputed (the reader does not check them; `verify_sfmr` does).
+fn rewrite_without_points3d_meta_key(src: &std::path::Path, dst: &std::path::Path, key: &str) {
+    use std::io::{Read, Write};
+
+    let file = std::fs::File::open(src).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+
+    let out = std::fs::File::create(dst).unwrap();
+    let mut zip = zip::ZipWriter::new(out);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+    for name in &names {
+        let mut compressed = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        zip.start_file(name, stored).unwrap();
+        if name == "points3d/metadata.json.zst" {
+            let mut json: serde_json::Value =
+                serde_json::from_slice(&zstd::stream::decode_all(&compressed[..]).unwrap())
+                    .unwrap();
+            json.as_object_mut().unwrap().remove(key);
+            let bytes = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
+            zip.write_all(&bytes).unwrap();
+        } else {
+            zip.write_all(&compressed).unwrap();
+        }
+    }
+    zip.finish().unwrap();
+}
+
+#[test]
+fn test_normal_confidence_round_trip() {
+    // The optional per-point confidence is written verbatim and read back
+    // identically, and the file still verifies.
+    let mut data = make_test_data();
+    let confidence = Array1::from_vec(vec![255u8, 0, 255, 0, 128]);
+    data.normal_confidence = Some(confidence.clone());
+
+    let dir = std::env::temp_dir().join("sfmr_test_normal_confidence");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sfmr");
+    write_sfmr(&path, &mut data).unwrap();
+
+    let loaded = read_sfmr(&path).unwrap();
+    assert_eq!(loaded.normal_confidence, Some(confidence));
+
+    // The entry exists under the spec's name and the flag is set.
+    let file = std::fs::File::open(&path).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    assert!(archive
+        .by_name("points3d/normal_confidence.5.uint8.zst")
+        .is_ok());
+
+    let (valid, errors) = verify_sfmr(&path).unwrap();
+    assert!(valid, "confidence verification failed: {errors:?}");
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_round_trip_without_normal_confidence() {
+    // Absent by default: no entry, no flag, and the reader reports `None`
+    // (meaning "no confidence information", not "all confident").
+    let mut data = make_test_data();
+    assert!(data.normal_confidence.is_none());
+
+    let dir = std::env::temp_dir().join("sfmr_test_no_normal_confidence");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sfmr");
+    write_sfmr(&path, &mut data).unwrap();
+
+    let loaded = read_sfmr(&path).unwrap();
+    assert!(loaded.normal_confidence.is_none());
+
+    let file = std::fs::File::open(&path).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    assert!(archive
+        .by_name("points3d/normal_confidence.5.uint8.zst")
+        .is_err());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_missing_normal_confidence_flag_reads_as_absent() {
+    // A file written before the flag existed carries neither the key nor the
+    // array; a missing flag must default to `false` rather than erroring.
+    let mut data = make_test_data();
+    let dir = std::env::temp_dir().join("sfmr_test_legacy_normal_confidence");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sfmr");
+    let legacy_path = dir.join("legacy.sfmr");
+    write_sfmr(&path, &mut data).unwrap();
+    rewrite_without_points3d_meta_key(&path, &legacy_path, "has_normal_confidence");
+
+    let loaded = read_sfmr(&legacy_path).unwrap();
+    assert!(loaded.normal_confidence.is_none());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_normal_confidence_length_mismatch_rejected() {
+    // The column must be exactly one value per point.
+    let mut data = make_test_data();
+    data.normal_confidence = Some(Array1::from_vec(vec![255u8, 0, 255]));
+
+    let dir = std::env::temp_dir().join("sfmr_test_normal_confidence_len");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sfmr");
+    let err = write_sfmr(&path, &mut data).unwrap_err();
+    assert!(
+        format!("{err}").contains("normal_confidence len 3 != point_count 5"),
+        "unexpected error: {err}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_normal_confidence_covered_by_points3d_hash() {
+    // The confidence array joins the points3d section hash, so two files that
+    // differ only in it have different `points3d_xxh128`.
+    let dir = std::env::temp_dir().join("sfmr_test_normal_confidence_hash");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let mut a = make_test_data();
+    a.normal_confidence = Some(Array1::from_vec(vec![255u8, 255, 255, 255, 255]));
+    let path_a = dir.join("a.sfmr");
+    write_sfmr(&path_a, &mut a).unwrap();
+
+    let mut b = make_test_data();
+    b.normal_confidence = Some(Array1::from_vec(vec![255u8, 255, 0, 255, 255]));
+    let path_b = dir.join("b.sfmr");
+    write_sfmr(&path_b, &mut b).unwrap();
+
+    let hash_a = read_sfmr(&path_a).unwrap().content_hash.points3d_xxh128;
+    let hash_b = read_sfmr(&path_b).unwrap().content_hash.points3d_xxh128;
+    assert_ne!(hash_a, hash_b);
+
+    // And a file with no confidence at all differs from both.
+    let mut c = make_test_data();
+    c.normal_confidence = None;
+    let path_c = dir.join("c.sfmr");
+    write_sfmr(&path_c, &mut c).unwrap();
+    let hash_c = read_sfmr(&path_c).unwrap().content_hash.points3d_xxh128;
+    assert_ne!(hash_a, hash_c);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }

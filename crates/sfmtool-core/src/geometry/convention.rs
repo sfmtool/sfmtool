@@ -235,6 +235,8 @@ pub fn sfmr_data_colmap_to_canonical(data: &mut SfmrData) {
     if let Some(v) = data.patch_v_halfvec_xyz.as_mut() {
         rotate_w_f32_rows(v);
     }
+    // `normal_confidence` is deliberately untouched: it is a scalar per point,
+    // frame-independent, so no convention change affects it.
 }
 
 #[cfg(test)]

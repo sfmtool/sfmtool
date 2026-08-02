@@ -488,6 +488,14 @@ impl SfmrReconstruction {
             }
         }
 
+        // A demoted point's normal was just zeroed, so its confidence drops to
+        // zero too — the format keeps the two coherent for `w = 0` rows.
+        if let Some(confidence) = recon.normal_confidence.as_mut() {
+            for (pidx, _) in &patch_fixes {
+                confidence[*pidx] = 0;
+            }
+        }
+
         for (pidx, fix) in patch_fixes {
             apply_patch_fix(
                 &mut recon.patch_u_halfvec_xyz,

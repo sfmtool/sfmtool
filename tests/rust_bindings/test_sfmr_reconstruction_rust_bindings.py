@@ -216,6 +216,80 @@ class TestOptionalNormals:
         np.testing.assert_allclose(np.asarray(restored.normals), normals)
 
 
+class TestNormalConfidence:
+    """The optional per-point `points3d/normal_confidence` column."""
+
+    def test_absent_on_a_legacy_artifact(self, seoul_bull_sfmr_only):
+        # A file written before the section existed carries no confidence
+        # information at all — which is not the same as "all confident".
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        assert recon.normal_confidence is None
+
+    def test_clone_save_load_round_trip(self, seoul_bull_sfmr_only, tmp_path):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        n = recon.point_count
+
+        # Current writers emit only the two ends of the scale.
+        confidence = np.full(n, 255, dtype=np.uint8)
+        confidence[::3] = 0
+        with_confidence = recon.clone_with_changes(normal_confidence=confidence)
+
+        got = with_confidence.normal_confidence
+        assert got is not None
+        assert got.dtype == np.uint8
+        assert got.shape == (n,)
+        np.testing.assert_array_equal(got, confidence)
+        # The original is untouched.
+        assert recon.normal_confidence is None
+
+        out_path = tmp_path / "confidence.sfmr"
+        with_confidence.save(out_path)
+        reloaded = SfmrReconstruction.load(out_path)
+        np.testing.assert_array_equal(reloaded.normal_confidence, confidence)
+        assert set(np.unique(np.asarray(reloaded.normal_confidence))) == {0, 255}
+
+        import zipfile
+
+        with zipfile.ZipFile(out_path) as zf:
+            names = zf.namelist()
+        assert any(n.startswith("points3d/normal_confidence.") for n in names)
+
+    def test_none_clears_the_column(self, seoul_bull_sfmr_only, tmp_path):
+        # `None` drops the column outright, matching the `normals=None` idiom;
+        # omitting the kwarg preserves whatever the source carried.
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        confidence = np.full(recon.point_count, 255, dtype=np.uint8)
+        with_confidence = recon.clone_with_changes(normal_confidence=confidence)
+
+        preserved = with_confidence.clone_with_changes(world_space_unit="mm")
+        np.testing.assert_array_equal(preserved.normal_confidence, confidence)
+
+        cleared = with_confidence.clone_with_changes(normal_confidence=None)
+        assert cleared.normal_confidence is None
+
+        out_path = tmp_path / "cleared.sfmr"
+        cleared.save(out_path)
+        reloaded = SfmrReconstruction.load(out_path)
+        assert reloaded.normal_confidence is None
+        import zipfile
+
+        with zipfile.ZipFile(out_path) as zf:
+            names = zf.namelist()
+        assert not any("normal_confidence" in n for n in names)
+
+    def test_wrong_dtype_rejected(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        bad = np.zeros(recon.point_count, dtype=np.float32)
+        with pytest.raises(TypeError, match="normal_confidence"):
+            recon.clone_with_changes(normal_confidence=bad)
+
+    def test_wrong_length_rejected(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        bad = np.zeros(recon.point_count - 1, dtype=np.uint8)
+        with pytest.raises(ValueError, match="must match point count"):
+            recon.clone_with_changes(normal_confidence=bad)
+
+
 class TestEmbeddedPatches:
     """Format v4 embedded_patches: read accessors and the clone path."""
 

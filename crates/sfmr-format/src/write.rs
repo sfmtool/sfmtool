@@ -455,6 +455,7 @@ pub fn write_sfmr_with_options(
     let points3d_meta = serde_json::json!({
         "point_count": point_count,
         "has_normals": normals_xyz.is_some(),
+        "has_normal_confidence": data.normal_confidence.is_some(),
         "has_uv_frames": data.patch_u_halfvec_xyz.is_some(),
         "has_patch_bitmaps": data.patch_bitmaps_y_x_rgba.is_some(),
         "patch_bitmap_resolution": patch_bitmap_resolution,
@@ -466,6 +467,21 @@ pub fn write_sfmr_with_options(
         options.zstd_level,
     )?;
     points3d_hasher.update(&bytes);
+
+    // points3d/normal_confidence (optional, version 5+). Unlike the normals just
+    // above — which are merged with the geometry recompute so missing rows get
+    // filled — this array passes through *untouched*: the writer never invents
+    // or adjusts a confidence value, not even for the normals it fills in. A
+    // caller that supplies both is responsible for keeping them coherent.
+    if let Some(normal_confidence) = &data.normal_confidence {
+        write_binary_entry_hashed(
+            &mut zip,
+            &format!("points3d/normal_confidence.{point_count}.uint8.zst"),
+            normal_confidence.as_slice().unwrap(),
+            options.zstd_level,
+            &mut points3d_hasher,
+        )?;
+    }
 
     // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
     if let Some(normals_xyz) = &normals_xyz {
@@ -880,6 +896,15 @@ fn validate_dimensions_with(
             format!(
                 "normals_xyz shape {:?} != [{point_count}, 3]",
                 normals_xyz.shape()
+            )
+        );
+    }
+    if let Some(normal_confidence) = &data.normal_confidence {
+        check!(
+            normal_confidence.len() == point_count,
+            format!(
+                "normal_confidence len {} != point_count {point_count}",
+                normal_confidence.len()
             )
         );
     }

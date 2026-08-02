@@ -282,6 +282,24 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         None
     };
 
+    // Optional per-point normal confidence (version 5+). Absent means "no
+    // confidence information", so an older file — which never carries the flag
+    // nor the array — simply reads as `None`.
+    let normal_confidence = if points3d_meta
+        .get("has_normal_confidence")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let confidence_vec: Vec<u8> = read_binary_array(
+            &mut archive,
+            &format!("points3d/normal_confidence.{point_count}.uint8.zst"),
+            point_count,
+        )?;
+        Some(Array1::from_vec(confidence_vec))
+    } else {
+        None
+    };
+
     // Optional per-point patch frame (version 3+), stored beside the normals.
     let read_vec3 = |archive: &mut zip::ZipArchive<std::fs::File>,
                      field: &str|
@@ -501,6 +519,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         colors_rgb,
         reprojection_errors,
         normals_xyz,
+        normal_confidence,
         patch_u_halfvec_xyz,
         patch_v_halfvec_xyz,
         patch_bitmaps_y_x_rgba,

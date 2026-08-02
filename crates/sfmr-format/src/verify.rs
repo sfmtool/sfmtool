@@ -249,6 +249,11 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
             .get("has_normals")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+    // Normal confidence is optional from version 5 (default `false`).
+    let has_normal_confidence = points3d_meta
+        .get("has_normal_confidence")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let has_uv_frames = points3d_meta
         .get("has_uv_frames")
         .and_then(|v| v.as_bool())
@@ -271,6 +276,13 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     )?);
     // points3d/metadata.json
     points3d_hasher.update(&points3d_meta_raw);
+    // points3d/normal_confidence (optional, version 5+; sorts before normals_xyz)
+    if has_normal_confidence {
+        points3d_hasher.update(&read_zst_entry(
+            &mut archive,
+            &format!("points3d/normal_confidence.{point_count}.uint8.zst"),
+        )?);
+    }
     // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
     if has_normals {
         let normals_name = if is_pre_v3 {

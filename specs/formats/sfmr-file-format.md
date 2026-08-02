@@ -199,6 +199,7 @@ reconstruction.sfmr (ZIP archive)
 │   ├── reprojection_errors.{N}.float32.zst    # Reprojection errors
 │   ├── metadata.json.zst                      # Points metadata
 │   ├── normals_xyz.{N}.3.float32.zst          # (Optional) per-point surface normals
+│   ├── normal_confidence.{N}.uint8.zst        # (Optional) per-point normal confidence
 │   ├── patch_u_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector u (version 3+)
 │   ├── patch_v_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector v (version 3+)
 │   └── patch_bitmaps_y_x_rgba.{N}.{R}.{R}.4.uint8.zst # (Optional) R×R RGBA patch textures, alpha = confidence (version 3+)
@@ -381,7 +382,7 @@ XXH128 hashes for integrity verification:
 - `rigs_xxh128`: (Optional) Hash of all rigs data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Present only when `rigs/` section exists.
 - `frames_xxh128`: (Optional) Hash of all frames data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Present only when `frames/` section exists.
 - `images_xxh128`: Hash of all image data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order (includes depth statistics and histogram files). The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file.
-- `points3d_xxh128`: Hash of all points3d data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Includes the optional per-point arrays — `normals_xyz`, and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
+- `points3d_xxh128`: Hash of all points3d data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
 - `tracks_xxh128`: Hash of all tracks data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. The present per-observation column is mode-dependent: `feature_indexes` for a `sift_files` file, or `keypoints_xy` for an `embedded_patches` file (the other is absent).
 - `content_xxh128`: Hash of all present section hashes concatenated as raw 16-byte big-endian digests in order: metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks.
 
@@ -823,6 +824,7 @@ already normalised.
 {
   "point_count": 2107,
   "has_normals": true,
+  "has_normal_confidence": false,
   "has_uv_frames": true,
   "has_patch_bitmaps": true,
   "patch_bitmap_resolution": 24
@@ -833,6 +835,9 @@ already normalised.
 - `point_count`: Number of 3D points.
 - `has_normals`: (version 3+) Whether the optional `normals_xyz` array is
   present. See [Normals](#points3dnormals_xyzn3float32zst-optional).
+- `has_normal_confidence`: (version 5+) Whether the optional
+  `normal_confidence` array is present. See
+  [Normal confidence](#points3dnormal_confidencenuint8zst-optional).
 - `has_uv_frames`: (version 3+) Whether the optional per-point patch
   frame (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) is present. See
   [Per-point patch frame](#per-point-patch-frame-optional-version-3).
@@ -840,8 +845,9 @@ already normalised.
 - `patch_bitmap_resolution`: (version 3+) The `R` dimension of the square patch
   bitmaps, or `null` when `has_patch_bitmaps` is `false`.
 
-A version-3 file includes all four flags (`false` / `null` when the data is
-absent). A missing flag defaults to `false` (a missing `has_normals` means no
+A version-3 file includes all four original flags (`false` / `null` when the
+data is absent), and a version-5 file may additionally include
+`has_normal_confidence`. A missing flag defaults to `false` (a missing `has_normals` means no
 normals) — but since versions 1 and 2 carry none of these keys yet always
 include normals, an upgraded version 1 or 2 file is read with `has_normals` as
 `true`.
@@ -896,6 +902,34 @@ Per-point surface normals.
 - Visibility testing (front-facing check)
 - Frustum-based covisibility estimation
 - Surface orientation analysis
+
+#### `points3d/normal_confidence.{N}.uint8.zst` (Optional)
+
+Per-point confidence in the stored normal.
+
+- **Shape**: `(N,)` where N = point_count
+- **Data type**: `uint8` (little-endian)
+- **Format**: `0` means the stored `normals_xyz` row carries **no data-derived
+  support** — the writer's estimator could not fit a normal for this point and
+  either substituted a placeholder (for example a view-direction fallback) or
+  copied a value of unknown provenance. `255` means fully data-derived.
+  Intermediate values are reserved as a graded scale for future writers;
+  current writers emit only `{0, 255}`. Consumers must treat the value
+  monotonically (higher = more trustworthy), never switch on exact codes.
+- Rows for `w = 0` points are `0` (their `normals_xyz` rows are zero).
+- **Optional** (version 5+): present only when `points3d/metadata.json`'s
+  `has_normal_confidence` is `true`. An absent array means **no confidence
+  information** — not "all confident". Files written before this amendment
+  never carry it.
+- **Writer responsibility**: the array passes through the writer untouched;
+  a writer that synthesizes or replaces normals (e.g. the mean-viewing
+  fill-in for rows the input left zero) and also supplies this array is
+  responsible for keeping the two coherent. The built-in writer does not
+  invent confidence values for normals it fills in.
+
+**Why it exists**: a placeholder normal is bit-indistinguishable from a fitted
+one in `normals_xyz`. Downstream passes that re-fit, filter, or render normals
+need to know which rows are claims and which are placeholders.
 
 #### Per-point patch frame (Optional, version 3+)
 

@@ -222,6 +222,30 @@ pub(crate) fn clone_with_changes(
                     }
                 }
             }
+            "normal_confidence" => {
+                // Matches the `normals` convention above: `None` clears the
+                // column outright (nothing is written), an array replaces it,
+                // and omitting the kwarg preserves whatever the source carried.
+                if value.is_none() {
+                    recon.normal_confidence = None;
+                } else {
+                    let arr = extract_array1!(value, "normal_confidence", u8)?;
+                    let s = arr.as_slice().map_err(|e| {
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'normal_confidence' must be C-contiguous: {e}"
+                        ))
+                    })?;
+                    if s.len() != recon.points.len() {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'normal_confidence' length ({}) must match \
+                             point count ({})",
+                            s.len(),
+                            recon.points.len()
+                        )));
+                    }
+                    recon.normal_confidence = Some(s.to_vec());
+                }
+            }
             "patches" => {
                 if value.is_none() {
                     recon.patch_u_halfvec_xyz = None;

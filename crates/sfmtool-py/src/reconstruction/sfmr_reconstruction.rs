@@ -411,6 +411,22 @@ impl PySfmrReconstruction {
         self.inner.has_normals
     }
 
+    /// Per-point confidence in :attr:`normals`, shape ``(M,)`` ``uint8``, or
+    /// ``None`` when this reconstruction carries no confidence information —
+    /// which is *not* the same as "every normal is trustworthy".
+    ///
+    /// ``0`` means the corresponding normal has no data-derived support (a
+    /// placeholder, e.g. a view-direction fallback); ``255`` means fully
+    /// data-derived. Intermediate values are a reserved graded scale, so treat
+    /// the value monotonically rather than switching on exact codes. Set it with
+    /// ``clone_with_changes(normal_confidence=...)``; it is stored and written
+    /// untouched.
+    #[getter]
+    fn normal_confidence<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u8>>> {
+        let confidence = self.inner.normal_confidence.as_ref()?;
+        Some(PyArray1::from_slice(py, confidence))
+    }
+
     /// The attached oriented-patch cloud, or ``None`` when this reconstruction
     /// carries no patch data. The returned cloud is a copy (geometry only;
     /// bitmaps, if stored, are not loaded into the cloud).
@@ -979,7 +995,8 @@ impl PySfmrReconstruction {
     /// Supported fields: ``positions``, ``colors``, ``errors``,
     /// ``quaternions_wxyz``, ``translations``, ``track_image_indexes``,
     /// ``track_feature_indexes``, ``track_point_indexes``, ``observation_counts``,
-    /// ``normals``, ``patches`` (a ``PatchCloud`` or ``None``),
+    /// ``normals``, ``normal_confidence`` (an ``(N,)`` uint8 array or ``None``
+    /// to drop it), ``patches`` (a ``PatchCloud`` or ``None``),
     /// ``patch_bitmaps`` (an ``(N, R, R, 4)`` uint8 array or ``None``; requires
     /// the patch frame, so pass ``patches`` too unless one is already attached),
     /// ``image_names``, ``camera_indexes``, ``cameras``,

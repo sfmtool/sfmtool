@@ -36,6 +36,15 @@ fn select_patch_rows_u8(
     arr.as_ref().map(|a| a.select(ndarray::Axis(0), idx))
 }
 
+/// Select entries `idx` of the optional per-point normal-confidence column,
+/// preserving `None`. Point-reindexing edits carry it along verbatim: a
+/// confidence describes its own point's normal, so a subset or reorder neither
+/// invalidates nor updates it.
+fn select_normal_confidence(arr: &Option<Vec<u8>>, idx: &[usize]) -> Option<Vec<u8>> {
+    arr.as_ref()
+        .map(|c| idx.iter().map(|&i| c[i]).collect::<Vec<u8>>())
+}
+
 impl SfmrReconstruction {
     /// Apply an SE(3) similarity transform to this reconstruction.
     ///
@@ -154,6 +163,8 @@ impl SfmrReconstruction {
             // the whole scene leaves their appearance unchanged.
             patch_bitmaps_y_x_rgba: self.patch_bitmaps_y_x_rgba.clone(),
             has_normals: self.has_normals,
+            // Rotating a normal does not change how well-supported it is.
+            normal_confidence: self.normal_confidence.clone(),
             // A 3D similarity leaves the 2D image keypoints, feature indices, and
             // image identity untouched, so the observation source passes through
             // for both modes.
@@ -266,7 +277,8 @@ impl SfmrReconstruction {
 
         // Points + observation counts. A patch frame is per-point, so it rides
         // along: subset keeps the rows for surviving points (geometry is
-        // unchanged, so the frame vectors stay valid).
+        // unchanged, so the frame vectors stay valid). The per-point normal
+        // confidence rides along the same way.
         let (
             new_points,
             new_observation_counts,
@@ -274,6 +286,7 @@ impl SfmrReconstruction {
             new_patch_u,
             new_patch_v,
             new_patch_bitmaps,
+            new_normal_confidence,
         ) = if drop_orphaned_points {
             // Count surviving observations per point and build a keep mask.
             let mut per_point_count = vec![0u32; self.points.len()];
@@ -326,6 +339,7 @@ impl SfmrReconstruction {
                 select_patch_rows_f32(&self.patch_u_halfvec_xyz, &keep_idx),
                 select_patch_rows_f32(&self.patch_v_halfvec_xyz, &keep_idx),
                 select_patch_rows_u8(&self.patch_bitmaps_y_x_rgba, &keep_idx),
+                select_normal_confidence(&self.normal_confidence, &keep_idx),
             )
         } else {
             // Keep all points; recompute per-point counts from the filtered tracks.
@@ -340,6 +354,7 @@ impl SfmrReconstruction {
                 self.patch_u_halfvec_xyz.clone(),
                 self.patch_v_halfvec_xyz.clone(),
                 self.patch_bitmaps_y_x_rgba.clone(),
+                self.normal_confidence.clone(),
             )
         };
 
@@ -424,6 +439,7 @@ impl SfmrReconstruction {
             patch_v_halfvec_xyz: new_patch_v,
             patch_bitmaps_y_x_rgba: new_patch_bitmaps,
             has_normals: self.has_normals,
+            normal_confidence: new_normal_confidence,
             observations: new_observations,
             image_feature_to_point: new_image_feature_to_point,
             max_track_feature_index: new_max_track_feature_index,
@@ -467,6 +483,7 @@ impl SfmrReconstruction {
         let new_patch_u = select_patch_rows_f32(&self.patch_u_halfvec_xyz, &keep_idx);
         let new_patch_v = select_patch_rows_f32(&self.patch_v_halfvec_xyz, &keep_idx);
         let new_patch_bitmaps = select_patch_rows_u8(&self.patch_bitmaps_y_x_rgba, &keep_idx);
+        let new_normal_confidence = select_normal_confidence(&self.normal_confidence, &keep_idx);
 
         let new_observation_counts: Vec<u32> = self
             .observation_counts
@@ -556,6 +573,7 @@ impl SfmrReconstruction {
             patch_v_halfvec_xyz: new_patch_v,
             patch_bitmaps_y_x_rgba: new_patch_bitmaps,
             has_normals: self.has_normals,
+            normal_confidence: new_normal_confidence,
             observations: new_observations,
             image_feature_to_point: new_image_feature_to_point,
             max_track_feature_index: new_max_track_feature_index,

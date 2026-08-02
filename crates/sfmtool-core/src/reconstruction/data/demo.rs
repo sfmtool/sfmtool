@@ -202,6 +202,7 @@ impl SfmrReconstruction {
             patch_v_halfvec_xyz: None,
             patch_bitmaps_y_x_rgba: None,
             has_normals: true,
+            normal_confidence: None,
             observations: ObservationSource::SiftFiles {
                 feature_indexes,
                 feature_tool_hashes: vec![[0u8; 16]; num_images],
