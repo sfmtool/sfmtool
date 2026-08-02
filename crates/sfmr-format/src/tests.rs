@@ -1112,6 +1112,26 @@ fn test_normal_confidence_length_mismatch_rejected() {
 }
 
 #[test]
+fn test_normal_confidence_without_normals_rejected() {
+    // A confidence rates the stored normals; without `normals_xyz` there is
+    // nothing for it to rate, mirroring the bitmaps-require-frame rule.
+    let mut data = make_test_data();
+    data.normals_xyz = None;
+    data.normal_confidence = Some(Array1::from_vec(vec![255u8, 0, 255, 0, 128]));
+
+    let dir = std::env::temp_dir().join("sfmr_test_normal_confidence_no_normals");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sfmr");
+    let err = write_sfmr(&path, &mut data).unwrap_err();
+    assert!(
+        format!("{err}").contains("normal_confidence requires normals_xyz"),
+        "unexpected error: {err}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_normal_confidence_covered_by_points3d_hash() {
     // The confidence array joins the points3d section hash, so two files that
     // differ only in it have different `points3d_xxh128`.

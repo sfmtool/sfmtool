@@ -989,19 +989,22 @@ constrains only array shapes — not handedness, that `normalize(u × v)` matche
 `normals_xyz`, or that unpatched rows are exactly zero. A consumer relying on these
 must not assume an arbitrary v3 file honours them.
 
-Per-point surface data has three independently optional pieces, each flagged in
-`points3d/metadata.json` (version 3+):
+Per-point surface data has four independently optional pieces, each flagged in
+`points3d/metadata.json`:
 
-- **Normals** (`has_normals`) — the `normals_xyz` array.
-- **Patch frame** (`has_uv_frames`) — `patch_u_halfvec_xyz` and
+- **Normals** (`has_normals`, version 3+) — the `normals_xyz` array.
+- **Normal confidence** (`has_normal_confidence`, version 5+) — the
+  `normal_confidence` array.
+- **Patch frame** (`has_uv_frames`, version 3+) — `patch_u_halfvec_xyz` and
   `patch_v_halfvec_xyz` (the two always appear together; one without the other
   is not a frame).
-- **Patch bitmaps** (`has_patch_bitmaps`) — `patch_bitmaps_y_x_rgba`.
+- **Patch bitmaps** (`has_patch_bitmaps`, version 3+) — `patch_bitmaps_y_x_rgba`.
 
-The **only** presence rule between them is: **patch bitmaps require the patch
-frame** (a texture is meaningless without the `u`/`v` it is parameterised over).
-Every other combination is valid — normals without a frame, a frame without
-normals, both, or neither.
+The **only** presence rules between them are: **patch bitmaps require the patch
+frame** (a texture is meaningless without the `u`/`v` it is parameterised over),
+and **normal confidence requires normals** (a confidence rates a stored claim;
+without `normals_xyz` there is nothing for it to rate). Every other combination
+is valid — normals without a frame, a frame without normals, both, or neither.
 
 ##### `points3d/patch_u_halfvec_xyz.{N}.3.float32.zst` and `points3d/patch_v_halfvec_xyz.{N}.3.float32.zst`
 

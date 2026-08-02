@@ -901,6 +901,10 @@ fn validate_dimensions_with(
     }
     if let Some(normal_confidence) = &data.normal_confidence {
         check!(
+            normals_xyz.is_some(),
+            "normal_confidence requires normals_xyz (a confidence rates the stored normals)"
+        );
+        check!(
             normal_confidence.len() == point_count,
             format!(
                 "normal_confidence len {} != point_count {point_count}",
