@@ -31,7 +31,19 @@ Per request `(parent p, du, dv)`:
   and stays in its plane.
 - Frame: the parent's `(hu, hv)` translated to `X_c` (same orientation and
   extents — the candidate hypothesizes locally planar surface).
-- View set: caller-supplied per candidate (typically the parent's views).
+- View set: per candidate, the images in which the pipeline will *attempt*
+  to find it — its whole search scope. Localization can only drop views
+  from this set, never add any, so it is the ceiling on the spawned
+  track's observations and the baseline `too_few_views` is judged
+  against. It is caller-supplied because deciding which images plausibly
+  see a hypothetical 3D spot is visibility knowledge the kernel does not
+  have: expansion passes the parent's views (a candidate one patch
+  diameter away is imaged by essentially the same cameras), while a
+  densification caller can propose views from frustum or coverage
+  queries. The set should stay tight — every view in it congeals against
+  every other (the uncapped consensus basis below), so an inflated set
+  costs quadratically and dilutes the photometric consensus with views
+  that never see the spot.
 
 Candidates are finite: the offsets displace the frame in world units and the
 output is a triangulated position, neither of which a point at infinity has, so
