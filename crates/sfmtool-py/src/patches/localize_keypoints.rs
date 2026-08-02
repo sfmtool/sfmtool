@@ -62,6 +62,20 @@ impl PyPatchCloud {
     ///         the per-view refined positions is below this many patch-grid px.
     ///     point_indexes: If given, localize only for the patches with these source
     ///         point ids; ``None`` (default) localizes for every patch.
+    ///     starting_keypoints: Optional explicit per-view seeds:
+    ///         ``point_index -> [[x, y], ...]`` in **source-image** pixels,
+    ///         parallel to that point's (final) view set — one ``[x, y]`` per
+    ///         view, in order. Same shape as
+    ///         :meth:`refine_keypoints`'s parameter of the same name. A point
+    ///         absent from the map (and every point when this is ``None``, the
+    ///         default) seeds each of its views at the point's own projection
+    ///         ``project_i(X_p)``, which is exactly today's behaviour.
+    ///
+    ///         Seeding localization around the caller's own keypoints rather
+    ///         than around the projection anchors both the search start and the
+    ///         ``max_shift_px`` gate on evidence the caller trusts — the way to
+    ///         localize a point whose stored position is off but whose
+    ///         observations are good.
     ///     search_resolution_multiplier: ``m`` for the discrete cross-view search;
     ///         the search runs at resolution ``R_s = round(m·R)``. ``m = 1.0``
     ///         (default) is the no-op; ``m > 1`` (the supersampled grid) resolves
@@ -107,7 +121,7 @@ impl PyPatchCloud {
         recon, images, *, view_sets=None, max_iters=5, search=6.0, max_shift_px=3.0,
         min_relative_zncc=0.7, min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear_mip", robust_iters=3, convergence_px=0.05,
-        point_indexes=None, search_resolution_multiplier=1.0,
+        point_indexes=None, starting_keypoints=None, search_resolution_multiplier=1.0,
         search_strategy="plus_descent", basis_max_views=8, basis_force_track_views=true,
         basis_pick="top_score", view_scores=None, track_view_counts=None, progress=None
     ))]
@@ -130,6 +144,7 @@ impl PyPatchCloud {
         robust_iters: u32,
         convergence_px: f64,
         point_indexes: Option<Vec<u32>>,
+        starting_keypoints: Option<std::collections::HashMap<u32, Vec<[f64; 2]>>>,
         search_resolution_multiplier: f32,
         search_strategy: &str,
         basis_max_views: u32,
@@ -312,6 +327,50 @@ impl PyPatchCloud {
                 }
             }
         }
+        // Per-patch explicit seeds, parallel to `sets`. A point absent from the map
+        // gets an EMPTY list, which the kernel reads as "unseeded" — that patch's
+        // views seed at the projection, i.e. exactly the historical behaviour that
+        // `starting_keypoints=None` keeps for the whole cloud. A length mismatch
+        // against the point's view set would silently mis-pair seeds with views, so
+        // reject it up front (mirroring `refine_keypoints`).
+        let seeds_per_patch: Option<Vec<Vec<[f64; 2]>>> = match &starting_keypoints {
+            None => None,
+            Some(map) => {
+                let pid_to_idx: std::collections::HashMap<u32, usize> = self
+                    .inner
+                    .point_indexes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &p)| (p, i))
+                    .collect();
+                let mut out = vec![Vec::new(); self.inner.len()];
+                for (pid, seeds) in map {
+                    let Some(&idx) = pid_to_idx.get(pid) else {
+                        return Err(PyValueError::new_err(format!(
+                            "starting_keypoints[{pid}] is not a point in this patch cloud",
+                        )));
+                    };
+                    if let Some(keep) = &selected_mask {
+                        if !keep.contains(pid) {
+                            return Err(PyValueError::new_err(format!(
+                                "starting_keypoints[{pid}] is excluded by point_indexes; \
+                                 drop the entry or include {pid} in point_indexes",
+                            )));
+                        }
+                    }
+                    if seeds.len() != sets[idx].len() {
+                        return Err(PyValueError::new_err(format!(
+                            "starting_keypoints[{pid}] has {} seeds but the view set has {} views",
+                            seeds.len(),
+                            sets[idx].len(),
+                        )));
+                    }
+                    out[idx] = seeds.clone();
+                }
+                Some(out)
+            }
+        };
+
         let counts_per_patch: Option<Vec<u32>> = track_view_counts.as_ref().map(|map| {
             self.inner
                 .point_indexes
@@ -330,7 +389,7 @@ impl PyPatchCloud {
                 &self.inner,
                 &views,
                 &sets,
-                None,
+                seeds_per_patch.as_deref(),
                 Some(&basis_inputs),
                 &params,
                 progress_handle.as_deref(),

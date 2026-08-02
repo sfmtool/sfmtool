@@ -3,7 +3,8 @@
 
 //! Bindings for the patch (surfel) pipeline: the `OrientedPatch` and
 //! `PatchCloud` types, the `CameraViews`/`ImagePyramidSet` scene inputs, the
-//! photometric RANSAC refiner, and the consensus-atlas compositor.
+//! photometric RANSAC refiner, the consensus-atlas compositor, and candidate
+//! track spawning.
 //!
 //! `PatchCloud`'s heavy per-point kernels each live in their own module as an
 //! additional `#[pymethods]` block (enabled by pyo3's `multiple-pymethods`
@@ -22,6 +23,7 @@ pub mod photometric_ransac;
 pub mod refine_keypoints;
 pub mod refine_normals;
 pub mod select_views;
+pub mod spawn;
 pub mod views;
 
 pub use cloud::PyPatchCloud;
@@ -43,5 +45,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         consensus_atlas::render_consensus_atlas_py,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(spawn::spawn_candidate_tracks, m)?)?;
     Ok(())
 }

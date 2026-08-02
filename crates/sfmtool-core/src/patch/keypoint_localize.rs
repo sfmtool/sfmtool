@@ -137,17 +137,34 @@ fn cache_istride(res: usize) -> usize {
     need.div_ceil(8) * 8
 }
 
-/// Project a homogeneous world point `(p, w)` into a view; `None` when it falls
-/// behind the camera or outside the frame. `w = 1` is a finite point; `w = 0` is
+/// Project a homogeneous world point `(p, w)` into a view **without** the
+/// frame-bounds test: `None` only when the point falls behind the camera or
+/// outside the camera model's valid domain. `w = 1` is a finite point; `w = 0` is
 /// a direction (a point at infinity), rotated into the camera frame without
 /// translation and projected as a ray.
-pub(super) fn project(view: &ProjectedImage<'_>, p: &Point3<f64>, w: f64) -> Option<(f64, f64)> {
+///
+/// This is the form a *residual* wants: a reprojection a pixel outside the frame
+/// is a small error, not a missing measurement, so [candidate
+/// spawning](super::spawn) measures against this while the visibility-gated
+/// [`project`] decides which views a patch can be rendered in at all.
+pub(super) fn project_unclipped(
+    view: &ProjectedImage<'_>,
+    p: &Point3<f64>,
+    w: f64,
+) -> Option<(f64, f64)> {
     let pc = view.cam_from_world.transform_point_homogeneous(p.coords, w);
     // Cheirality: a point in front of a canonical camera has z < 0.
     if pc.z >= 0.0 {
         return None;
     }
-    let (px, py) = view.camera.ray_to_pixel([pc.x, pc.y, pc.z])?;
+    view.camera.ray_to_pixel([pc.x, pc.y, pc.z])
+}
+
+/// Project a homogeneous world point `(p, w)` into a view; `None` when it falls
+/// behind the camera or outside the frame. See [`project_unclipped`] for the
+/// variant that skips the frame test.
+pub(super) fn project(view: &ProjectedImage<'_>, p: &Point3<f64>, w: f64) -> Option<(f64, f64)> {
+    let (px, py) = project_unclipped(view, p, w)?;
     let (iw, ih) = (view.camera.width as f64, view.camera.height as f64);
     (px >= 0.0 && py >= 0.0 && px < iw && py < ih).then_some((px, py))
 }
@@ -1278,7 +1295,10 @@ pub struct BasisInputs<'a> {
 /// patches (rayon). `view_sets[i]` lists, for patch `i`, the views to refine
 /// (typically the output of view selection). `starting_keypoints`, when given, is
 /// parallel to `view_sets` (one seed per view); `None` seeds every view at the
-/// point's projection. `basis`, when given, carries the per-patch ranking
+/// point's projection, and so does an **empty** per-patch entry — the batch form
+/// has no per-patch `Option`, so it says "this patch is unseeded" with an empty
+/// list, exactly as [`BasisInputs::view_scores`] says "unscored". `basis`, when
+/// given, carries the per-patch ranking
 /// evidence the [consensus-basis cap](KeypointLocalizeParams::basis_max_views)
 /// consumes (unread when the cap is off). Results are returned in cloud order.
 ///
@@ -1332,7 +1352,9 @@ pub fn localize_patch_cloud_keypoints(
         .par_iter()
         .enumerate()
         .map(|(i, patch)| {
-            let seeds = starting_keypoints.map(|s| s[i].as_slice());
+            let seeds = starting_keypoints
+                .map(|s| s[i].as_slice())
+                .filter(|s| !s.is_empty());
             let evidence = BasisEvidence {
                 view_scores: basis.and_then(|b| b.view_scores).map(|s| s[i].as_slice()),
                 track_view_count: basis

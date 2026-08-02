@@ -17,7 +17,11 @@ _PATCHES_CLASSES = (
     "ImagePyramidSet",
     "RansacPhotometricOutput",
 )
-_PATCHES_FUNCTIONS = ("refine_photometric_ransac", "render_consensus_atlas")
+_PATCHES_FUNCTIONS = (
+    "refine_photometric_ransac",
+    "render_consensus_atlas",
+    "spawn_candidate_tracks",
+)
 
 
 def test_reconstruction_bindings_registered():

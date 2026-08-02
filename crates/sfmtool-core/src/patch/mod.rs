@@ -9,6 +9,7 @@ pub mod keypoint_localize;
 pub mod keypoint_subpixel;
 pub mod localizability;
 pub mod normal_refine;
+pub mod spawn;
 pub mod view_selection;
 
 pub use cloud::{PatchCloud, PatchCloudError};
