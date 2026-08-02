@@ -120,27 +120,54 @@ The viewer uses a dark theme:
 
 ### Information Overlays
 
-Contextual information shows up without cluttering the scene:
+Contextual information is painted straight onto the viewport, anchored to its
+edges and corners (`viewer_3d/overlay.rs::draw_info_overlay`). All of it is
+always on — none of these is currently togglable:
 
+- **Scene stats** (top-left): `N points | M images | F fps`
+- **Camera position** (top-centre): `Pos: [x, y, z]`
+- **Touchpad diagnostics** (top-right): DirectManipulation event counters
+  `H=…|C=…|U=…|G=…` plus an `[OK]`/`[FAIL]` handler-status tag
 - **Hover overlay** (bottom-left): Shows what's under the cursor
-  - Over a point: "Point3D #N | depth: X.XXXX"
-  - Over a frustum: "Camera: image_name"
-  - Over background with depth: "depth: X.XXXX"
-- **Controls help** (top-right, togglable): Quick reference for navigation
-- **Point count and camera info**: Basic reconstruction statistics
+  - Over a point: `Point3D #N | depth: X.XXXX`
+  - Over a frustum: `Camera: image_name`
+  - Over background with depth: `depth: X.XXXX`
+- **Controls help** (bottom-right): One-line navigation reference
+
+The axis gizmo (`draw_axis_indicator`) also sits in the bottom-left corner,
+sharing that space with the hover overlay. Between them these six elements
+occupy all four corners plus the top centre, which constrains where any future
+in-viewport controls can go.
 
 ### UI Controls
 
-A minimal set of controls in the View menu:
+Every 3D-viewport display control lives in the **View** menu in the menu bar
+(`app.rs`), in this order:
 
-| Control | Purpose |
-|---------|---------|
-| Show Points | Toggle point cloud visibility |
-| Show Camera Images | Toggle frustum and image quad visibility |
-| Show Grid | Toggle ground plane grid |
-| Point Size | Adjust point rendering size (log₂ scale, -3 to +3) |
-| Length Scale | Adjust scene length scale (affects target indicator, frustum size) |
-| Field of View | Adjust viewport FOV (10°–120°) |
+| Control | Range / default | Purpose |
+|---------|-----------------|---------|
+| Show Points | on | Toggle point cloud visibility |
+| Show Camera Images | on | Toggle frustum and image quad visibility |
+| Show Grid | on | Toggle ground plane grid |
+| Point Size | −3…+3, default 0 | Multiplier on the auto point size (log₂ scale) |
+| Reset Size | — | Return Point Size to 0 |
+| Infinity Point Size | 1–16 px, default 3 | On-screen splat radius for `w = 0` points |
+| Show Patches | on | Toggle the patch surfel pass |
+| Patch Opacity | 0–1, default 1.0 | Global multiply on patch color alpha |
+| Patch Size | −3…+3, default 0 | Multiplier on stored patch half-extents (log₂) |
+| Patch Edge Cutoff | 0–1, default 0.0 | Coverage alpha below which patch texels are discarded |
+| Length Scale | 0.001–100, log scale | Scene length scale (affects target indicator, frustum size) |
+| Field of View | 10°–120° | Viewport FOV |
+| Reset FOV | — | Return Field of View to 45° |
+
+The four patch controls are greyed out (`add_enabled_ui`) unless the loaded
+reconstruction carries both patch frames and bitmaps. See
+[gui-patch-rendering.md](gui-patch-rendering.md#ui-controls).
+
+Some rendering parameters are plumbed through `AppState` to the GPU but have
+**no widget** — they can only be changed by editing the defaults in `state.rs`:
+`edl_line_thickness`, `frustum_size_multiplier`, `target_size_multiplier`, and
+`target_fog_multiplier`.
 
 ## Design Influences
 
