@@ -1,9 +1,10 @@
 # Viewport HUD
 
-**Status: proposed.** Nothing in this document is implemented. The controls it
-describes currently live in the **View** menu — see
-[gui-user-experience.md](gui-user-experience.md#ui-controls) for the accurate
-description of what ships today.
+**Status: partially implemented (phase 1).** The HUD shell, the Layers / Size /
+Patches / Camera sections and the whole input-arbitration rule set are built
+(`viewer_3d/hud.rs`). Advanced and Debug are not, and the View menu still
+carries a duplicate of the display controls — see
+[Staging](#staging) and [Implementation Status](#implementation-status).
 
 This document specifies moving the 3D-viewport display controls out of the
 menu bar and onto a heads-up display drawn inside the viewport itself.
@@ -76,7 +77,7 @@ Cinematic Aesthetic*).
 │                                        │ ▸ Patches       │ │
 │                                        │ ▾ Camera        │ │
 │                                        │   FOV 45°  ─●── │ │
-│                                        │   [Reset view]  │ │
+│                                        │   [Reset FOV]   │ │
 │                                        │ ▸ Advanced      │ │
 │                                        │ ▸ Debug         │ │
 │                                        └─────────────────┘ │
@@ -94,19 +95,33 @@ should not be permanently burned into the viewport anyway).
 **Position is relative to the viewport rect, recomputed every frame.** The HUD
 lives in a dock tab that the user can resize, re-dock, or tab away from. An
 `Area` at a fixed screen position would detach from the panel; the fixed
-position must be derived from the `rect` returned by `allocate_painter` on
-each frame.
+position must be derived from the viewport rect on each frame. In practice the
+HUD is built by `Viewer3D::show_hud`, called from `dock.rs` immediately before
+`Viewer3D::show` and from the same `Ui`, and takes its viewport rect from
+`ui.available_rect_before_wrap()` — which is exactly the rect `show` then hands
+to `allocate_painter`. The split exists for borrows: the HUD needs `&mut
+AppState` whole, while `show` borrows `reconstruction` and `selected_image` as
+separate fields. The `Area` is anchored with an `Align2::RIGHT_TOP` pivot, so
+the collapsed gear and the wider expanded panel share a right edge without
+either needing to know its own width.
 
-**Expanded width** is fixed (~220 pt) so slider tracks do not jitter as
+**Expanded width** is fixed (220 pt) so slider tracks do not jitter as
 labels change. If the viewport is too small to show the expanded HUD without
 covering more than about a third of it, the HUD stays collapsed and the gear
-is the only affordance.
+is the only affordance. Concretely: the expanded panel needs a viewport of at
+least 472 × 300 pt (twice the panel's width-plus-insets, and enough height for
+a few sections). At the minimum width the panel spans half the viewport
+horizontally but only part of it vertically, so the area it covers stays under
+a third. A refused open is remembered, not discarded — widen the panel and the
+HUD expands without a second click. Past 60% of the viewport height the
+section list scrolls rather than growing.
 
 ---
 
 ## Sections
 
-Collapsible (`egui::CollapsingHeader`), with open/closed state remembered for
+Collapsible (`egui::collapsing_header::CollapsingState` under explicit,
+`Ui`-independent ids — `hud::section_id`), with open/closed state remembered for
 the session. Defaults: Layers, Size, and Camera open; Patches, Advanced, and
 Debug closed.
 
@@ -150,9 +165,9 @@ constructed before input handling but drawn after it.
 |------|------|
 | **Scroll / zoom** | `handle_scroll` is gated on `platform::pointer_in_rect(ctx, rect)`. That helper is a raw geometric containment test — on Windows it reads the OS cursor position directly and knows nothing about egui layers. It must become `pointer_in_rect(rect) && !pointer_in_rect(hud_rect)`, computed in the same logical coordinate space. |
 | **Gestures** | Same gate, same fix — `handle_gestures` and `handle_pinch` take `pointer_over` from the same helper. |
-| **Drag / orbit** | An `Area` on a higher layer should claim hover, leaving `response.dragged()` false. This is the one rule that depends on egui internals rather than our own geometry, so it must be **verified against egui 0.34 rather than assumed**; if it does not hold, fall back to the same `hud_rect` exclusion. |
-| **Click / pick** | Excluded by the same mechanism as drag. A click that starts on the HUD must never deselect the current entity. |
-| **Fly keys** | `handle_fly_keys` reads `key_down(W/A/S/D/…)` unconditionally. Any text-entry widget in the HUD (a `DragValue`) would fly the camera while being typed into. Gate all keyboard handling on `!ctx.wants_keyboard_input()`. |
+| **Drag / orbit** | An `Area` on a higher layer claims the pointer, leaving `response.dragged()` false. **Verified against egui 0.34**: `hit_test` keeps only the top-most layer covering the search area, so the painter's `WidgetRect` never reaches `hits.click` / `hits.drag`, and `dragged()`, `clicked()` and `hovered()` are all false. No `hud_rect` fallback is needed; `hud/tests.rs` pins the behaviour so a future egui change surfaces as a test failure rather than a viewport that orbits while a slider is dragged. |
+| **Click / pick** | Excluded by the same mechanism as drag. A click that starts on the HUD must never deselect the current entity. `hover_pixel` follows for free: `Response::hover_pos` returns `None` when the response is not hovered, so the HUD never feeds the depth/pick readback either. |
+| **Fly keys** | `handle_fly_keys` reads `key_down(W/A/S/D/…)` unconditionally. Any text-entry widget in the HUD (a `DragValue`) would fly the camera while being typed into. Gate all keyboard handling — `handle_fly_keys` *and* `handle_keyboard`'s Z / `,` / `.` / Home shortcuts — on `!ctx.egui_wants_keyboard_input()` (`wants_keyboard_input` is the deprecated spelling in egui 0.34). That reports focus only for widgets that actually consume text, so clicking a HUD checkbox does not disarm the fly keys. |
 
 There is no such guard anywhere in `sfm-explorer` today — the viewport has
 never had to share its rect with a widget. These are new rules, not
@@ -165,7 +180,8 @@ adjustments to existing ones.
 | State | Home | Rationale |
 |-------|------|-----------|
 | The setting values themselves | `AppState` (unchanged) | The renderer already reads them there; moving them would be churn for no gain |
-| `hud_open`, per-section collapsed flags, `hud_rect` | `Viewer3D` | Per-viewport UI state, same place as `camera_view` and `hover_pixel` |
+| `hud_open`, `hud_rect` | `Viewer3D` | Per-viewport UI state, same place as `camera_view` and `hover_pixel` |
+| Per-section collapsed flags | egui's own `CollapsingState` memory, under the stable ids from `hud::section_id` | Already exactly session-scoped, with per-section defaults via `load_with_default_open`; duplicating it into `Viewer3D` fields would only add a sync step. The explicit ids keep it addressable from outside the HUD |
 
 Nothing is persisted across runs; the HUD opens collapsed each launch.
 
@@ -175,10 +191,10 @@ Nothing is persisted across runs; the HUD opens collapsed each launch.
 
 Two commits, so the risky part lands on its own.
 
-**Phase 1** — HUD shell with Layers, Size, Patches, and Camera sections, plus
-the full input-arbitration rule set. The View menu is **retained as a
-duplicate** through this phase, so a HUD regression cannot make the controls
-unreachable.
+**Phase 1** — *done.* HUD shell with Layers, Size, Patches, and Camera
+sections, plus the full input-arbitration rule set. The View menu is
+**retained as a duplicate** through this phase, so a HUD regression cannot make
+the controls unreachable.
 
 **Phase 2** — fold in Advanced and Debug (including the diagnostics move and
 the overlay toggles), delete the display controls from the View menu, and
@@ -221,13 +237,14 @@ arbitration proves harder than expected — it is the natural fallback.
 
 ## Implementation Status
 
-None of this is built.
+Phase 1 is built (`viewer_3d/hud.rs`, tests in `viewer_3d/hud/tests.rs`).
 
-- [ ] HUD shell: `Area`, viewport-relative anchoring, collapsed/expanded gear
-- [ ] `hud_rect` capture and the scroll/gesture exclusion
-- [ ] Drag/click layer arbitration (verify egui 0.34 behaviour first)
-- [ ] `wants_keyboard_input` gate on fly keys
-- [ ] Layers / Size / Patches / Camera sections
+- [x] HUD shell: `Area`, viewport-relative anchoring, collapsed/expanded gear
+- [x] `hud_rect` capture and the scroll/gesture exclusion
+- [x] Drag/click layer arbitration (verified against egui 0.34 — layering holds,
+      no geometric fallback needed)
+- [x] `egui_wants_keyboard_input` gate on fly keys and viewport shortcuts
+- [x] Layers / Size / Patches / Camera sections
 - [ ] Advanced section (exposes `edl_line_thickness`, `frustum_size_multiplier`,
       `target_size_multiplier`, `target_fog_multiplier` for the first time)
 - [ ] Debug section: diagnostics move, controls-help and fps toggles

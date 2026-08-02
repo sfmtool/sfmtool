@@ -58,6 +58,13 @@ impl TabViewer for TabContext<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
             Tab::Viewer3D => {
+                if self.state.reconstruction.is_some() {
+                    // The HUD goes up before the viewport claims the rect: it
+                    // lives on its own `Area` layer (so it still paints on top),
+                    // and `show` below consults the rect it occupies to arbitrate
+                    // every pointer input path.
+                    self.viewer_3d.show_hud(ui, self.state);
+                }
                 if let Some(ref recon) = self.state.reconstruction {
                     self.viewer_3d.show(
                         ui,

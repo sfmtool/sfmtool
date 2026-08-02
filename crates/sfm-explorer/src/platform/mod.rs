@@ -116,6 +116,10 @@ impl ScrollInput {
 /// double-click with no subsequent mouse movement). Falls back to egui's
 /// `latest_pos` on non-Windows platforms.
 pub fn pointer_in_rect(ctx: &egui::Context, rect: egui::Rect) -> bool {
+    #[cfg(test)]
+    if let Some(pos) = TEST_POINTER_POS.with(|p| p.get()) {
+        return rect.contains(pos);
+    }
     #[cfg(target_os = "windows")]
     {
         let (px, py) = windows::pointer_client_pos();
@@ -128,6 +132,24 @@ pub fn pointer_in_rect(ctx: &egui::Context, rect: egui::Rect) -> bool {
         ctx.input(|i| i.pointer.latest_pos())
             .is_some_and(|p| rect.contains(p))
     }
+}
+
+// Test-only override of the platform pointer position, in logical points.
+// On Windows the real source is a pair of statics fed by the window's pointer
+// messages, which no amount of synthesized egui input will move; making the
+// override thread-local instead keeps parallel tests from clobbering each
+// other's pointer, which shared statics would not.
+#[cfg(test)]
+thread_local! {
+    static TEST_POINTER_POS: std::cell::Cell<Option<egui::Pos2>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Test-only: place the platform's tracked pointer at `pos` (logical points),
+/// or clear the override with `None`, for the current thread.
+#[cfg(test)]
+pub fn set_test_pointer_pos(pos: Option<egui::Pos2>) {
+    TEST_POINTER_POS.with(|p| p.set(pos));
 }
 
 /// Trait for platform-specific gesture handlers.

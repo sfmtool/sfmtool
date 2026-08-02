@@ -7,6 +7,7 @@
 //! navigation, keyboard fly mode, and animated transitions.
 
 mod camera;
+mod hud;
 mod input;
 mod overlay;
 
@@ -144,6 +145,14 @@ pub struct Viewer3D {
     fly_drag_locked: bool,
     /// Active animated camera transition (orbit target, zoom-to-fit, camera view).
     target_transition: Option<CameraTransition>,
+    /// Whether the viewport HUD is expanded. Collapsed (just the gear) at
+    /// launch and never persisted across runs.
+    pub hud_open: bool,
+    /// Screen rect the HUD occupied on the last frame it was built — the gear
+    /// when collapsed, gear plus panel when expanded. Every viewport input path
+    /// that cannot rely on egui's layer arbitration (scroll, gestures, pinch)
+    /// excludes it geometrically. `None` until the HUD has been built once.
+    pub hud_rect: Option<Rect>,
 }
 
 impl Default for Viewer3D {
@@ -181,6 +190,8 @@ impl Viewer3D {
             fly_keys_held: false,
             fly_drag_locked: false,
             target_transition: None,
+            hud_open: false,
+            hud_rect: None,
         }
     }
 
@@ -219,17 +230,25 @@ impl Viewer3D {
         }
         self.alt_was_held = self.alt_held;
 
+        // Keyboard arbitration: a HUD `DragValue` in text-entry mode owns the
+        // keyboard, and WASD typed into it must not also fly the camera. egui
+        // only reports focus for widgets that actually consume text (text edits
+        // and `DragValue`s being typed into), so clicking a HUD checkbox does
+        // not disarm the fly keys.
+        let keyboard_free = !ui.ctx().egui_wants_keyboard_input();
+
         // Check fly key state early — used by drag handling and supernova suppression
-        self.fly_keys_held = ui.input(|i| {
-            i.key_down(egui::Key::W)
-                || i.key_down(egui::Key::A)
-                || i.key_down(egui::Key::S)
-                || i.key_down(egui::Key::D)
-                || i.key_down(egui::Key::R)
-                || i.key_down(egui::Key::F)
-                || i.key_down(egui::Key::Q)
-                || i.key_down(egui::Key::E)
-        });
+        self.fly_keys_held = keyboard_free
+            && ui.input(|i| {
+                i.key_down(egui::Key::W)
+                    || i.key_down(egui::Key::A)
+                    || i.key_down(egui::Key::S)
+                    || i.key_down(egui::Key::D)
+                    || i.key_down(egui::Key::R)
+                    || i.key_down(egui::Key::F)
+                    || i.key_down(egui::Key::Q)
+                    || i.key_down(egui::Key::E)
+            });
         let fly_keys_held = self.fly_keys_held;
 
         // Animate supernova activation (200ms fade)
@@ -257,10 +276,23 @@ impl Viewer3D {
             self.view_initialized = true;
         }
 
-        // Handle all input
+        // Handle all input.
+        //
+        // Drag and click need no explicit HUD guard: the HUD is an `egui::Area`
+        // on a layer above this panel, and egui's hit test keeps only the
+        // top-most layer under the pointer, so `response.dragged()`,
+        // `clicked()` and `hovered()` are all false while the pointer is over
+        // it. Verified against egui 0.34 in `hud/tests.rs`.
         self.handle_drag(ui, &response, rect, fly_keys_held);
 
-        let pointer_over = crate::platform::pointer_in_rect(ui.ctx(), rect);
+        // Scroll, pinch and platform gestures cannot rely on that. They gate on
+        // `platform::pointer_in_rect`, a raw geometric containment test that on
+        // Windows reads the OS cursor position and knows nothing about egui
+        // layers, so the HUD has to be excluded by geometry.
+        let over_hud = self
+            .hud_rect
+            .is_some_and(|hud| crate::platform::pointer_in_rect(ui.ctx(), hud));
+        let pointer_over = !over_hud && crate::platform::pointer_in_rect(ui.ctx(), rect);
         if pointer_over {
             self.handle_scroll(rect, scroll_input, fly_keys_held);
         }
@@ -269,7 +301,9 @@ impl Viewer3D {
         let gesture_events = if pointer_over { gesture_events } else { &[] };
         self.handle_gestures(ui, gesture_events, rect, fly_keys_held);
         self.handle_fly_keys(ui, fly_keys_held);
-        self.handle_keyboard(ui, rect, reconstruction, selected_image);
+        if keyboard_free {
+            self.handle_keyboard(ui, rect, reconstruction, selected_image);
+        }
         self.handle_click(ui, &response, rect);
 
         // Record mouse position in texture pixels for GPU depth readback
