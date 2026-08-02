@@ -130,10 +130,10 @@ Below the header, the panel shows a vertically scrollable table of observations
 +-----+-------+-----------------+--------+-----------+--------+-------+----------------+
 |     | Image | Name            | Feat # | Size      | Error  | Angle | Feature (x, y) |
 +-----+-------+-----------------+--------+-----------+--------+-------+----------------+
-| [t] |     3 | image_003.jpg   |    847 |       8.4 | 0.21px | 0.03° | (1024.3, 512.7)|
-| [t] |    12 | image_012.jpg   |   1247 |       7.6 | 0.38px | 0.05° | ( 983.1, 498.2)|
+| [t] |     3 | image_003.jpg   |    847 |   8.4x8.2 | 0.21px | 0.03° | (1024.3, 512.7)|
+| [t] |    12 | image_012.jpg   |   1247 |   7.6x7.4 | 0.38px | 0.05° | ( 983.1, 498.2)|
 | [t] |    15 | image_015.jpg   |    602 | 20.3x7.7  | 0.55px | 0.08° | (1051.8, 520.1)|
-| [t] |    23 | image_023.jpg   |   2031 |       9.0 | 0.19px | 0.02° | ( 997.6, 505.9)|
+| [t] |    23 | image_023.jpg   |   2031 |   9.0x8.9 | 0.19px | 0.02° | ( 997.6, 505.9)|
 +-----+-------+-----------------+--------+-----------+--------+-------+----------------+
 ```
 
@@ -157,14 +157,12 @@ column doubles them and reports the two **full** extents — the span the patch
 quad drawn in the viewport actually covers (`±u ±v`), and the same diameter
 convention `embed-patches --patch-size` uses.
 
-The two extents are ordered larger first and compared: when their ratio is below
-`OVAL_ASPECT_RATIO` (1.1) the feature is near enough to circular that one number
-describes it, so their mean is printed alone (`14.0`). At or above that ratio
-the feature is visibly oval and both extents are printed as `<larger>x<smaller>`
-(`20.3x7.7`), so an obliquely-viewed patch reads as foreshortened rather than as
-a merely smaller feature. One decimal place in both forms. A fully collapsed
-(edge-on) shape takes the two-extent branch and shows the collapse explicitly
-(`9.0x0.0`); a degenerate zero shape prints `N/A`.
+Both extents are always printed as `<larger>x<smaller>` (`20.3x7.7`; a
+circular feature reads `14.0x14.0`), so an obliquely-viewed patch reads as
+foreshortened rather than as a merely smaller feature and the reader never has
+to infer which display form they are looking at. One decimal place each. A
+fully collapsed (edge-on) shape shows the collapse explicitly (`9.0x0.0`); a
+degenerate zero shape prints `N/A`.
 
 **Patch column** (embedded-patches reconstructions): when the reconstruction
 stores patch frames (`patch_u_halfvec_xyz` / `patch_v_halfvec_xyz`) and the

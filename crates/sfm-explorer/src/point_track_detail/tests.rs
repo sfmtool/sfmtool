@@ -695,27 +695,18 @@ fn clear_resets_every_cache() {
 // ── Size column formatting ──────────────────────────────────────────────
 
 #[test]
-fn a_circular_shape_prints_one_number() {
-    // Exactly circular, and 5% off it — both comfortably inside the 1.1
-    // threshold, so the mean of the two full extents stands alone.
-    assert_eq!(format_feature_size([14.0, 14.0]), "14.0");
-    assert_eq!(format_feature_size([20.5, 19.5]), "20.0");
+fn a_circular_shape_prints_both_equal_extents() {
+    // Both extents always show, so a circular feature reads `AxA` and the
+    // reader never has to guess which display form they are looking at.
+    assert_eq!(format_feature_size([14.0, 14.0]), "14.0x14.0");
+    assert_eq!(format_feature_size([20.5, 19.5]), "20.5x19.5");
 }
 
 #[test]
 fn an_oval_shape_prints_both_extents_larger_first() {
-    // Ratio 2.6, far past the threshold.
     assert_eq!(format_feature_size([20.3, 7.7]), "20.3x7.7");
-    // Ratio 1.2 — still oval enough to warrant both numbers.
+    // Mildly oval too — no threshold decides between display forms.
     assert_eq!(format_feature_size([12.0, 10.0]), "12.0x10.0");
-}
-
-#[test]
-fn the_oval_threshold_separates_the_two_forms() {
-    // 1.05 stays single, 1.2 splits: the switch happens between them, and
-    // neither sits on the boundary where a rounding wobble could flip it.
-    assert_eq!(format_feature_size([10.4, 10.0]), "10.2");
-    assert!(format_feature_size([12.0, 10.0]).contains('x'));
 }
 
 #[test]

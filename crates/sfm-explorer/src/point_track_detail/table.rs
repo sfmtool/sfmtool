@@ -23,13 +23,6 @@ const ROW_HEIGHT: f32 = THUMB_SIZE + 8.0;
 /// Size of the feature dot overlay on thumbnails.
 const DOT_RADIUS: f32 = 3.0;
 
-/// Aspect ratio at which the Size column stops reporting one number and starts
-/// reporting both extents. Below it the two extents are within 10% of each
-/// other, close enough that a single averaged figure describes the feature and
-/// a second number would be noise; at or above it the feature is visibly oval
-/// and the average hides the anisotropy.
-const OVAL_ASPECT_RATIO: f32 = 1.1;
-
 /// Fixed column x-offsets, relative to the left edge of the table.
 ///
 /// When the selected point has a patch frame, a rendered-patch tile is drawn
@@ -389,24 +382,18 @@ impl PointTrackDetail {
 /// first — the span the drawn patch quad covers, not the half-axis radius the
 /// affine shape's column norms give directly.
 ///
-/// A feature whose two extents are within [`OVAL_ASPECT_RATIO`] of each other is
-/// near enough to circular that one number says everything, so the mean is
-/// printed alone (`14.0`). Past that ratio the shape is visibly oval and both
-/// extents are printed, larger first (`20.3x7.7`), so an obliquely-viewed patch
-/// reads as foreshortened rather than as a merely smaller feature. One decimal
-/// throughout; a degenerate (zero) shape prints `N/A`.
+/// Both extents are always printed, larger first (`20.3x7.7`, or `14.0x14.0`
+/// for a circular feature), so an obliquely-viewed patch reads as
+/// foreshortened rather than as a merely smaller feature and the reader never
+/// has to guess which form they are looking at. One decimal throughout; a
+/// degenerate (zero) shape prints `N/A`; a fully collapsed (edge-on) shape
+/// shows the collapse explicitly (`9.0x0.0`).
 pub(super) fn format_feature_size(extents: [f32; 2]) -> String {
     let [major, minor] = extents;
     if !major.is_finite() || major <= 0.0 {
         return "N/A".to_string();
     }
-    // `minor <= 0` is a fully collapsed (edge-on) shape: infinitely oval, so it
-    // takes the two-extent branch and shows the collapse explicitly.
-    if minor <= 0.0 || major / minor >= OVAL_ASPECT_RATIO {
-        format!("{major:.1}x{minor:.1}")
-    } else {
-        format!("{:.1}", 0.5 * (major + minor))
-    }
+    format!("{major:.1}x{minor:.1}")
 }
 
 /// Vertical scroll delta (in points) contributed by DirectManipulation pan
