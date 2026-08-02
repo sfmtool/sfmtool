@@ -23,6 +23,13 @@ const ROW_HEIGHT: f32 = THUMB_SIZE + 8.0;
 /// Size of the feature dot overlay on thumbnails.
 const DOT_RADIUS: f32 = 3.0;
 
+/// Aspect ratio at which the Size column stops reporting one number and starts
+/// reporting both extents. Below it the two extents are within 10% of each
+/// other, close enough that a single averaged figure describes the feature and
+/// a second number would be noise; at or above it the feature is visibly oval
+/// and the average hides the anisotropy.
+const OVAL_ASPECT_RATIO: f32 = 1.1;
+
 /// Fixed column x-offsets, relative to the left edge of the table.
 ///
 /// When the selected point has a patch frame, a rendered-patch tile is drawn
@@ -48,7 +55,8 @@ impl ColumnLayout {
         let name = image + 50.0;
         let feat = name + 170.0;
         let size = feat + 55.0;
-        let error = size + 50.0;
+        // Wide enough for the two-extent "123.4x56.7" form, not just one number.
+        let error = size + 95.0;
         let angle = error + 60.0;
         Self {
             has_patch,
@@ -134,7 +142,7 @@ impl PointTrackDetail {
         let obs_feature_xy = obs.feature_xy;
         let obs_reproj_error = obs.reproj_error;
         let obs_ray_angle_deg = obs.ray_angle_deg;
-        let obs_feature_size = obs.feature_size;
+        let obs_feature_extents = obs.feature_extents;
         let obs_image_name = obs.image_name.clone();
         let obs_image_full_name = obs.image_full_name.clone();
         let is_hovered_image = hovered_image == Some(obs_image_index);
@@ -255,11 +263,7 @@ impl PointTrackDetail {
         );
 
         // Feature size
-        let size_text = if obs_feature_size > 0.0 {
-            format!("{:.1}", obs_feature_size)
-        } else {
-            "N/A".to_string()
-        };
+        let size_text = format_feature_size(obs_feature_extents);
         painter.text(
             egui::pos2(x0 + cols.size, cy),
             egui::Align2::LEFT_CENTER,
@@ -376,6 +380,32 @@ impl PointTrackDetail {
             egui::TextureOptions::LINEAR,
         );
         self.thumbnail_textures.insert(idx, texture);
+    }
+}
+
+/// Render the Size column's text for one observation.
+///
+/// `extents` are the observation's two *full* feature widths in pixels, larger
+/// first — the span the drawn patch quad covers, not the half-axis radius the
+/// affine shape's column norms give directly.
+///
+/// A feature whose two extents are within [`OVAL_ASPECT_RATIO`] of each other is
+/// near enough to circular that one number says everything, so the mean is
+/// printed alone (`14.0`). Past that ratio the shape is visibly oval and both
+/// extents are printed, larger first (`20.3x7.7`), so an obliquely-viewed patch
+/// reads as foreshortened rather than as a merely smaller feature. One decimal
+/// throughout; a degenerate (zero) shape prints `N/A`.
+pub(super) fn format_feature_size(extents: [f32; 2]) -> String {
+    let [major, minor] = extents;
+    if !major.is_finite() || major <= 0.0 {
+        return "N/A".to_string();
+    }
+    // `minor <= 0` is a fully collapsed (edge-on) shape: infinitely oval, so it
+    // takes the two-extent branch and shows the collapse explicitly.
+    if minor <= 0.0 || major / minor >= OVAL_ASPECT_RATIO {
+        format!("{major:.1}x{minor:.1}")
+    } else {
+        format!("{:.1}", 0.5 * (major + minor))
     }
 }
 

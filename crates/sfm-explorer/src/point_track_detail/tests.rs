@@ -23,6 +23,7 @@ use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::reconstruction::ObservationSource;
 use sfmtool_core::SfmrReconstruction;
 
+use super::table::format_feature_size;
 use super::{PointTrackDetail, PointTrackDetailResponse};
 use crate::platform::ScrollInput;
 use crate::state::CachedSiftFeatures;
@@ -30,17 +31,27 @@ use crate::state::CachedSiftFeatures;
 // ── Fixtures ────────────────────────────────────────────────────────────
 
 /// A SIFT cache covering `images` images with `features` entries each. The
-/// affine shape has column norms 2 and 4, so the panel's reported feature size
-/// (the mean of the two) must be exactly 3.0 — a value no other code path
+/// affine shape has column norms (half-axes) 2 and 4, so the panel's reported
+/// full extents must be exactly `[8.0, 4.0]` — values no other code path
 /// produces by accident.
 fn sift_cache(images: usize, features: usize) -> HashMap<usize, CachedSiftFeatures> {
+    sift_cache_with_shape(images, features, [[2.0, 0.0], [0.0, 4.0]])
+}
+
+/// A SIFT cache whose every feature carries `affine_shape`, for tests that care
+/// about how a particular shape is measured and printed.
+fn sift_cache_with_shape(
+    images: usize,
+    features: usize,
+    affine_shape: [[f32; 2]; 2],
+) -> HashMap<usize, CachedSiftFeatures> {
     (0..images)
         .map(|i| {
             (
                 i,
                 CachedSiftFeatures {
                     positions_xy: vec![[500.0, 300.0]; features],
-                    affine_shapes: vec![[[2.0, 0.0], [0.0, 4.0]]; features],
+                    affine_shapes: vec![affine_shape; features],
                     read_count: features,
                 },
             )
@@ -300,17 +311,35 @@ fn changing_the_selection_reprepares_the_table() {
 // ── Per-observation data ────────────────────────────────────────────────
 
 #[test]
-fn feature_size_is_the_mean_of_the_affine_column_norms() {
+fn feature_extents_are_the_doubled_affine_column_norms_larger_first() {
     let recon = SfmrReconstruction::demo(12);
     let mut panel = PointTrackDetail::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(2), &sift_cache(8, 16));
 
-    // The fixture's affine shape has column norms 2 and 4.
+    // The fixture's affine shape has column norms 2 and 4 — half-axes, so the
+    // full extents the drawn quad spans are 4 and 8, reported larger first.
     for obs in &panel.observations {
-        assert_eq!(obs.feature_size, 3.0);
+        assert_eq!(obs.feature_extents, [8.0, 4.0]);
         assert_eq!(obs.feature_xy, [500.0, 300.0]);
+    }
+}
+
+#[test]
+fn the_larger_extent_comes_first_whichever_affine_column_is_longer() {
+    let recon = SfmrReconstruction::demo(12);
+    let ctx = egui::Context::default();
+
+    // Same shape with its columns swapped: the ordering must come from the
+    // norms, not from the column order.
+    for shape in [[[2.0, 0.0], [0.0, 4.0]], [[4.0, 0.0], [0.0, 2.0]]] {
+        let mut panel = PointTrackDetail::new();
+        let cache = sift_cache_with_shape(8, 16, shape);
+        show_once(&mut panel, &ctx, &recon, Some(2), &cache);
+        for obs in &panel.observations {
+            assert_eq!(obs.feature_extents, [8.0, 4.0], "shape {shape:?}");
+        }
     }
 }
 
@@ -326,7 +355,7 @@ fn a_missing_sift_cache_leaves_the_feature_columns_empty() {
 
     assert_eq!(panel.observations.len(), 2);
     for obs in &panel.observations {
-        assert_eq!(obs.feature_size, 0.0);
+        assert_eq!(obs.feature_extents, [0.0, 0.0]);
         assert_eq!(obs.feature_xy, [0.0, 0.0]);
     }
 }
@@ -531,9 +560,13 @@ fn embedded_patches_enable_the_patch_column_and_header_tile() {
             obs.feature_xy,
             [keypoints[[start + k, 0]], keypoints[[start + k, 1]]]
         );
-        // Non-zero proves the size came from projecting the patch frame into
-        // the view, not from the `unwrap_or(0.0)` fallback.
-        assert!(obs.feature_size > 0.0, "size was {}", obs.feature_size);
+        // Non-zero proves the extents came from projecting the patch frame into
+        // the view, not from the `unwrap_or([0.0, 0.0])` fallback.
+        assert!(
+            obs.feature_extents[0] > 0.0,
+            "extents were {:?}",
+            obs.feature_extents
+        );
     }
 }
 
@@ -657,6 +690,56 @@ fn clear_resets_every_cache() {
     assert!(panel.rendered_patch_textures.is_empty());
     assert!(panel.hash_prefix.is_empty());
     assert_eq!(panel.scroll_offset_y, None);
+}
+
+// ── Size column formatting ──────────────────────────────────────────────
+
+#[test]
+fn a_circular_shape_prints_one_number() {
+    // Exactly circular, and 5% off it — both comfortably inside the 1.1
+    // threshold, so the mean of the two full extents stands alone.
+    assert_eq!(format_feature_size([14.0, 14.0]), "14.0");
+    assert_eq!(format_feature_size([20.5, 19.5]), "20.0");
+}
+
+#[test]
+fn an_oval_shape_prints_both_extents_larger_first() {
+    // Ratio 2.6, far past the threshold.
+    assert_eq!(format_feature_size([20.3, 7.7]), "20.3x7.7");
+    // Ratio 1.2 — still oval enough to warrant both numbers.
+    assert_eq!(format_feature_size([12.0, 10.0]), "12.0x10.0");
+}
+
+#[test]
+fn the_oval_threshold_separates_the_two_forms() {
+    // 1.05 stays single, 1.2 splits: the switch happens between them, and
+    // neither sits on the boundary where a rounding wobble could flip it.
+    assert_eq!(format_feature_size([10.4, 10.0]), "10.2");
+    assert!(format_feature_size([12.0, 10.0]).contains('x'));
+}
+
+#[test]
+fn a_degenerate_shape_prints_na_and_an_edge_on_one_shows_the_collapse() {
+    assert_eq!(format_feature_size([0.0, 0.0]), "N/A");
+    // A collapsed minor axis is infinitely oval, not circular — it must not
+    // fall through to the averaging branch and report half its width.
+    assert_eq!(format_feature_size([9.0, 0.0]), "9.0x0.0");
+}
+
+#[test]
+fn the_printed_size_is_twice_the_affine_semi_axis() {
+    // End to end: the fixture's affine columns are half-vectors of norm 2 and
+    // 4, so the row must read 8x4 — the span of the quad drawn in the
+    // viewport, not the 3.0 mean-radius the old column printed.
+    let recon = SfmrReconstruction::demo(12);
+    let mut panel = PointTrackDetail::new();
+    let ctx = egui::Context::default();
+
+    show_once(&mut panel, &ctx, &recon, Some(2), &sift_cache(8, 16));
+
+    for obs in &panel.observations {
+        assert_eq!(format_feature_size(obs.feature_extents), "8.0x4.0");
+    }
 }
 
 // ── Shared metrics helpers ──────────────────────────────────────────────

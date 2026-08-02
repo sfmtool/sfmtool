@@ -127,14 +127,14 @@ Below the header, the panel shows a vertically scrollable table of observations
 — one row per image that observes this point.
 
 ```
-+-----+-------+-----------------+--------+------+--------+-------+----------------+
-|     | Image | Name            | Feat # | Size | Error  | Angle | Feature (x, y) |
-+-----+-------+-----------------+--------+------+--------+-------+----------------+
-| [t] |     3 | image_003.jpg   |    847 |  4.2 | 0.21px | 0.03° | (1024.3, 512.7)|
-| [t] |    12 | image_012.jpg   |   1247 |  3.8 | 0.38px | 0.05° | ( 983.1, 498.2)|
-| [t] |    15 | image_015.jpg   |    602 |  5.1 | 0.55px | 0.08° | (1051.8, 520.1)|
-| [t] |    23 | image_023.jpg   |   2031 |  4.5 | 0.19px | 0.02° | ( 997.6, 505.9)|
-+-----+-------+-----------------+--------+------+--------+-------+----------------+
++-----+-------+-----------------+--------+-----------+--------+-------+----------------+
+|     | Image | Name            | Feat # | Size      | Error  | Angle | Feature (x, y) |
++-----+-------+-----------------+--------+-----------+--------+-------+----------------+
+| [t] |     3 | image_003.jpg   |    847 |       8.4 | 0.21px | 0.03° | (1024.3, 512.7)|
+| [t] |    12 | image_012.jpg   |   1247 |       7.6 | 0.38px | 0.05° | ( 983.1, 498.2)|
+| [t] |    15 | image_015.jpg   |    602 | 20.3x7.7  | 0.55px | 0.08° | (1051.8, 520.1)|
+| [t] |    23 | image_023.jpg   |   2031 |       9.0 | 0.19px | 0.02° | ( 997.6, 505.9)|
++-----+-------+-----------------+--------+-----------+--------+-------+----------------+
 ```
 
 **Columns**:
@@ -146,10 +146,25 @@ Below the header, the panel shows a vertically scrollable table of observations
 | Image | Image index in the reconstruction. |
 | Name | Image filename (truncated with leading `…/` for long paths). |
 | Feat # | Feature index within the image's SIFT file (or the observation index for embedded-keypoint reconstructions with no SIFT file). |
-| Size | Feature scale in pixels — the mean of the two column norms of the observation's affine-shape matrix. For SIFT observations this comes from the cached `affine_shapes`; for embedded keypoints it is derived by projecting the point's patch frame into the image. Shows `N/A` when unavailable (zero). |
+| Size | The feature's full extent in pixels — see "Size column" below. For SIFT observations the affine shape comes from the cached `affine_shapes`; for embedded keypoints it is derived by projecting the point's patch frame into the image. Shows `N/A` when unavailable (zero). |
 | Error | Per-observation reprojection error in pixels (`N/A` when undefined). |
 | Angle | Angular discrepancy between observation ray and point direction, in degrees. |
 | Feature (x, y) | Feature position in image pixel coordinates. |
+
+**Size column**: the columns of an observation's affine-shape matrix are the
+projected patch **half**-vectors, so each column norm is a semi-axis. The Size
+column doubles them and reports the two **full** extents — the span the patch
+quad drawn in the viewport actually covers (`±u ±v`), and the same diameter
+convention `embed-patches --patch-size` uses.
+
+The two extents are ordered larger first and compared: when their ratio is below
+`OVAL_ASPECT_RATIO` (1.1) the feature is near enough to circular that one number
+describes it, so their mean is printed alone (`14.0`). At or above that ratio
+the feature is visibly oval and both extents are printed as `<larger>x<smaller>`
+(`20.3x7.7`), so an obliquely-viewed patch reads as foreshortened rather than as
+a merely smaller feature. One decimal place in both forms. A fully collapsed
+(edge-on) shape takes the two-extent branch and shows the collapse explicitly
+(`9.0x0.0`); a degenerate zero shape prints `N/A`.
 
 **Patch column** (embedded-patches reconstructions): when the reconstruction
 stores patch frames (`patch_u_halfvec_xyz` / `patch_v_halfvec_xyz`) and the
@@ -210,7 +225,7 @@ cached on the panel, alongside `max_angle_deg`.
 
 | Column | Computation |
 |--------|-------------|
-| Size | Feature scale in pixels: the mean of the two column norms of the observation's affine-shape matrix. Sourced from the cached SIFT `affine_shapes` for SIFT observations, or derived by projecting the point's patch frame into the image for embedded keypoints. |
+| Size | The feature's full extents in pixels: twice each column norm of the observation's affine-shape matrix (the columns are half-vectors), ordered larger first, printed as one averaged number when near-circular and as `<larger>x<smaller>` when oval — see "Size column" above. Sourced from the cached SIFT `affine_shapes` for SIFT observations, or derived by projecting the point's patch frame into the image for embedded keypoints. |
 | Error | Per-observation reprojection error: `\|\| project(R_i * P + t_i) - feature_xy_i \|\|`, where `P` is the 3D point, `(R_i, t_i)` is the world-to-camera transform, `project()` applies intrinsics, and `feature_xy_i` is the observed feature position. |
 | Angle | Angle from this observation ray to the 3D point, measured at the camera center. For a perfectly triangulated point this equals zero; nonzero values indicate the observation ray misses the 3D point (related to reprojection error but in angular units). |
 

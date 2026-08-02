@@ -63,31 +63,31 @@ impl PointTrackDetail {
             let image = &recon.images[img_idx];
             let camera = &recon.cameras[image.camera_index as usize];
 
-            // Feature index (SIFT), position, and size for this observation.
-            let (feature_index, feature_xy, feature_size) = if let Some(fis) = feature_indexes {
+            // Feature index (SIFT), position, and extents for this observation.
+            let (feature_index, feature_xy, feature_extents) = if let Some(fis) = feature_indexes {
                 let feat_idx = fis[obs_global] as usize;
                 let cached_sift = sift_cache.get(&img_idx);
                 let xy = cached_sift
                     .and_then(|sift| sift.positions_xy.get(feat_idx))
                     .copied()
                     .unwrap_or([0.0, 0.0]);
-                let size = cached_sift
+                let extents = cached_sift
                     .and_then(|sift| sift.affine_shapes.get(feat_idx))
-                    .map(mean_affine_radius)
-                    .unwrap_or(0.0);
-                (feat_idx, xy, size)
+                    .map(affine_full_extents)
+                    .unwrap_or([0.0, 0.0]);
+                (feat_idx, xy, extents)
             } else if let Some(kxy) = keypoints_xy {
                 // Embedded keypoint: no SIFT feature index, so report the
-                // observation index. The affine shape (and hence size) is derived
-                // by projecting the point's patch frame into this image.
+                // observation index. The affine shape (and hence the extents) is
+                // derived by projecting the point's patch frame into this image.
                 let xy = [kxy[[obs_global, 0]], kxy[[obs_global, 1]]];
-                let size = recon
+                let extents = recon
                     .observation_affine_shape(point_idx, img_idx, xy)
-                    .map(|a| mean_affine_radius(&a))
-                    .unwrap_or(0.0);
-                (obs_global, xy, size)
+                    .map(|a| affine_full_extents(&a))
+                    .unwrap_or([0.0, 0.0]);
+                (obs_global, xy, extents)
             } else {
-                (0, [0.0, 0.0], 0.0)
+                (0, [0.0, 0.0], [0.0, 0.0])
             };
 
             // --- Compute per-observation reprojection error and ray angle ---
@@ -111,7 +111,7 @@ impl PointTrackDetail {
                 feature_xy,
                 reproj_error,
                 ray_angle_deg,
-                feature_size,
+                feature_extents,
                 image_name,
                 image_full_name,
             });
@@ -130,13 +130,18 @@ impl PointTrackDetail {
     }
 }
 
-/// Average radius in pixels of an affine shape matrix, taken as the mean of its
-/// two column norms. Both keypoint sources report "size" this way, so the two
-/// branches above stay comparable.
-fn mean_affine_radius(a: &[[f32; 2]; 2]) -> f32 {
+/// The two full extents in pixels of an affine shape matrix, ordered larger
+/// first.
+///
+/// The matrix columns are the projected patch *half*-vectors, so each column
+/// norm is a semi-axis; doubling turns them into the full widths the rendered
+/// quad actually spans (`±u ±v`), which is the diameter convention the rest of
+/// the toolkit uses for patch sizes. Both keypoint sources are measured this
+/// way, so the two branches above stay comparable.
+fn affine_full_extents(a: &[[f32; 2]; 2]) -> [f32; 2] {
     let col0 = (a[0][0] * a[0][0] + a[1][0] * a[1][0]).sqrt();
     let col1 = (a[0][1] * a[0][1] + a[1][1] * a[1][1]).sqrt();
-    0.5 * (col0 + col1)
+    [2.0 * col0.max(col1), 2.0 * col0.min(col1)]
 }
 
 /// Return a short display name from an image path, keeping the filename plus

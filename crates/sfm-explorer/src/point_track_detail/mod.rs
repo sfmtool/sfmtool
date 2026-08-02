@@ -52,8 +52,12 @@ struct TrackObservationData {
     reproj_error: f32,
     /// Angular discrepancy between observation ray and point direction, in degrees.
     ray_angle_deg: f32,
-    /// SIFT feature size (average radius in pixels from affine shape).
-    feature_size: f32,
+    /// The observation's two feature extents in pixels — the *full* widths of
+    /// the affine shape along its two axes (twice the half-vector column
+    /// norms), ordered larger first. This is the same diameter convention the
+    /// rendered patch quad spans and that `embed-patches --patch-size` uses.
+    /// `[0.0, 0.0]` when no shape is available.
+    feature_extents: [f32; 2],
     /// Truncated display name (e.g. "…/fisheye_left/image_0345.jpg").
     image_name: String,
     /// Full image path from the reconstruction.
