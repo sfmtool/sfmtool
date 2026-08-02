@@ -42,6 +42,15 @@ const HUD_MIN_VIEWPORT: egui::Vec2 = egui::vec2(2.0 * (HUD_WIDTH + 2.0 * HUD_INS
 /// viewport height. Beyond it the section list scrolls.
 const HUD_MAX_BODY_FRACTION: f32 = 0.6;
 
+/// Glyph on the collapsed gear, and the one that closes the expanded panel.
+///
+/// Both have to exist in egui's bundled fonts or they render as a replacement
+/// box — U+2715 MULTIPLICATION X, the obvious choice for the close button, is
+/// *not* covered, hence U+2716 HEAVY MULTIPLICATION X. `glyphs_are_available`
+/// in `hud/tests.rs` guards this.
+const HUD_EXPAND_GLYPH: &str = "⚙";
+const HUD_COLLAPSE_GLYPH: &str = "✖";
+
 /// Stable id of one collapsible section, independent of the `Ui` that hosts it.
 ///
 /// Explicit ids (rather than `CollapsingHeader`'s id-salt-plus-parent scheme)
@@ -121,7 +130,11 @@ impl Viewer3D {
             .constrain_to(viewport)
             .show(&ctx, |ui| {
                 if !expanded {
-                    if ui.button("⚙").on_hover_text("Display controls").clicked() {
+                    if ui
+                        .button(HUD_EXPAND_GLYPH)
+                        .on_hover_text("Display controls")
+                        .clicked()
+                    {
                         self.hud_open = true;
                     }
                     return;
@@ -135,7 +148,7 @@ impl Viewer3D {
                         ui.label(egui::RichText::new("Display").strong());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
-                                .button("✕")
+                                .button(HUD_COLLAPSE_GLYPH)
                                 .on_hover_text("Collapse display controls")
                                 .clicked()
                             {

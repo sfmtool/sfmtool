@@ -19,7 +19,7 @@ use eframe::egui;
 use ndarray::{Array2, Array4};
 use sfmtool_core::SfmrReconstruction;
 
-use super::section_id;
+use super::{section_id, HUD_COLLAPSE_GLYPH, HUD_EXPAND_GLYPH};
 use crate::platform::ScrollInput;
 use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
@@ -495,6 +495,25 @@ fn the_size_sliders_write_through_to_app_state() {
     // in the HUD would quietly reset them every frame.
     assert_eq!(state.edl_line_thickness, 4.0);
     assert_eq!(state.target_fog_multiplier, 20.0);
+}
+
+#[test]
+fn the_hud_glyphs_are_available_in_the_bundled_fonts() {
+    // A glyph egui does not bundle renders as a replacement box rather than
+    // failing, so nothing else here would notice. U+2715 MULTIPLICATION X — the
+    // obvious close-button character — is one of those; this is the check that
+    // says so.
+    let ctx = egui::Context::default();
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.label("warm the font atlas");
+    });
+    let font = egui::FontId::proportional(14.0);
+    for glyph in [HUD_EXPAND_GLYPH, HUD_COLLAPSE_GLYPH, "∞", "°"] {
+        assert!(
+            ctx.fonts_mut(|f| f.has_glyphs(&font, glyph)),
+            "{glyph:?} is not in egui's bundled fonts and would render as a box"
+        );
+    }
 }
 
 #[test]
