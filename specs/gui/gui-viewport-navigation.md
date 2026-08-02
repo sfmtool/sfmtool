@@ -204,7 +204,9 @@ intrinsics and the gesture adjusts it from there.
 
 **Planned for free navigation:** FOV is already adjustable via the View menu
 slider (10°–120°); a dedicated gesture binding would make it faster to adjust
-during normal (non-camera-view) navigation.
+during normal (non-camera-view) navigation. The slider is slated to move to the
+in-viewport HUD ([gui-viewport-hud.md](gui-viewport-hud.md)), which weakens the
+case for a gesture further — a viewport-local slider is already close to hand.
 
 **Open question**: What input binding should free-navigation FOV zoom use? It
 needs to be distinct from the existing dolly zoom (scroll wheel /
@@ -352,7 +354,9 @@ the horizontal axis, and the vertical FOV is derived as
 consistent sense of "how much you can see" regardless of window shape.
 
 The FOV is adjustable at runtime via the View menu slider (10°–120°, default
-45°). It can also be adjusted via FOV zoom (see
+45°; planned to move to the HUD's Camera section, see
+[gui-viewport-hud.md](gui-viewport-hud.md)). It can also be adjusted via FOV
+zoom (see
 [FOV Zoom](#fov-zoom)) — this is needed both for viewing through a
 camera at its native FOV and for general-purpose field of view adjustment.
 

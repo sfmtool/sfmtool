@@ -220,7 +220,11 @@ with a `log::warn` — only reachable at extreme counts.
 
 New controls in the **View menu**, alongside the point-size / EDL controls
 (`state.rs` + `app.rs`), all disabled unless the reconstruction carries a patch
-frame **and** bitmaps:
+frame **and** bitmaps.
+
+> These four are slated to move to a "Patches" section on the in-viewport HUD,
+> where the section is *hidden* rather than greyed when the reconstruction
+> carries no patches. See [gui-viewport-hud.md](gui-viewport-hud.md#sections).
 
 | Control | Default | Effect |
 |---------|---------|--------|
@@ -371,6 +375,8 @@ pick tag.
 
 ### Future
 
+- [ ] Relocate the four patch controls from the View menu to the HUD's
+      "Patches" section (see [gui-viewport-hud.md](gui-viewport-hud.md))
 - [ ] EDL-on-patches toggle
 - [ ] Point auto-hide where patches exist
 - [ ] Back-face dim/tint (culling is done — this is the softer alternative)

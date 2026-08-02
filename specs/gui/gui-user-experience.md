@@ -169,6 +169,11 @@ Some rendering parameters are plumbed through `AppState` to the GPU but have
 `edl_line_thickness`, `frustum_size_multiplier`, `target_size_multiplier`, and
 `target_fog_multiplier`.
 
+**Planned:** all of the above moves out of the menu bar and into a heads-up
+display drawn inside the 3D viewport, on the principle that a panel should own
+its own controls — as the Image Detail and Image Browser panels already do. See
+[gui-viewport-hud.md](gui-viewport-hud.md).
+
 ## Design Influences
 
 The interaction design draws from several sources:

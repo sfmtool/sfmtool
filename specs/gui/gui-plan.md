@@ -9,6 +9,7 @@ other documents in this directory:
 - [gui-point-cloud-rendering.md](gui-point-cloud-rendering.md) — Point rendering and EDL
 - [gui-camera-views.md](gui-camera-views.md) — Frustum wireframes and image projection
 - [gui-viewport-navigation.md](gui-viewport-navigation.md) — Navigation controls
+- [gui-viewport-hud.md](gui-viewport-hud.md) — In-viewport display controls (proposed)
 
 ---
 
@@ -91,11 +92,15 @@ In rough priority order:
 1. **Grid and coordinate systems in 3D** — Currently the grid and the 3D coordinate system are
    overlaid on top of everything. It would be nicer if they integrate inside the 3D scene with
    depth occlusion.
-2. **FOV zoom gesture** — Dedicated input binding for FOV adjustment during
+2. **Viewport HUD** — Move the View-menu display controls into the 3D viewport
+   as a collapsible heads-up panel, so the panel owns its own controls and the
+   tune-adjust-look loop stops costing a menu round-trip. See
+   [gui-viewport-hud.md](gui-viewport-hud.md).
+3. **FOV zoom gesture** — Dedicated input binding for FOV adjustment during
    navigation (lower priority now that the menu slider exists; see
    [gui-viewport-navigation.md](gui-viewport-navigation.md#fov-zoom))
-3. ~~**Adaptive grid** — Update grid to work at any scale.~~ Done.
-4. ~~**Adaptive clip planes** — Reversed-Z infinite far projection with adaptive near plane.~~ Done. See [gui-adaptive-clip-and-grid.md](gui-adaptive-clip-and-grid.md).
+4. ~~**Adaptive grid** — Update grid to work at any scale.~~ Done.
+5. ~~**Adaptive clip planes** — Reversed-Z infinite far projection with adaptive near plane.~~ Done. See [gui-adaptive-clip-and-grid.md](gui-adaptive-clip-and-grid.md).
 
 ---
 
