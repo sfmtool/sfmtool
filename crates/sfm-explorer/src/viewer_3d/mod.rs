@@ -145,8 +145,9 @@ pub struct Viewer3D {
     fly_drag_locked: bool,
     /// Active animated camera transition (orbit target, zoom-to-fit, camera view).
     target_transition: Option<CameraTransition>,
-    /// Whether the viewport HUD is expanded. Collapsed (just the gear) at
-    /// launch and never persisted across runs.
+    /// Whether the viewport HUD is expanded. Open at launch — the controls are
+    /// the point of the panel, and a viewport that starts by hiding them just
+    /// trades a menu round-trip for a click. Never persisted across runs.
     pub hud_open: bool,
     /// Screen rect the HUD occupied on the last frame it was built — the gear
     /// when collapsed, gear plus panel when expanded. Every viewport input path
@@ -190,7 +191,7 @@ impl Viewer3D {
             fly_keys_held: false,
             fly_drag_locked: false,
             target_transition: None,
-            hud_open: false,
+            hud_open: true,
             hud_rect: None,
         }
     }

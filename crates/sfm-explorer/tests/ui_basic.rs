@@ -162,16 +162,23 @@ fn window_min_size() {
 
 // --- Menu bar tests (AccessKit) ---
 
-/// Both top-level menu buttons are exposed in the accessibility tree.
+/// File is the only top-level menu. The display controls that made a View menu
+/// worth having moved into the viewport HUD, and the dock panels are permanent,
+/// so nothing app-global is left for a second menu — see
+/// `specs/gui/gui-viewport-hud.md`.
 #[test]
-fn menu_bar_buttons_present() {
+fn file_is_the_only_menu() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
-    for name in ["File", "View"] {
-        app.locator(&format!(r#"button[name="{name}"]"#))
-            .wait_attached(CONTENT_TIMEOUT)
-            .unwrap_or_else(|_| panic!("'{name}' menu button not found"));
-    }
+    app.locator(r#"button[name="File"]"#)
+        .wait_attached(CONTENT_TIMEOUT)
+        .expect("'File' menu button not found");
+    assert!(
+        app.locator(r#"button[name="View"]"#)
+            .wait_attached(Duration::from_millis(500))
+            .is_err(),
+        "the View menu is still in the menu bar"
+    );
 }
 
 /// The empty-state placeholder text is shown before any file is loaded.
@@ -201,23 +208,40 @@ fn file_menu_items() {
     }
 }
 
-/// The View menu lists every dock panel, all four shown by default. (Display
-/// controls used to live here; they moved into the viewport HUD — see
-/// `specs/gui/gui-viewport-hud.md`.)
+/// Load demo data, so there is a reconstruction for the 3D viewer — and so the
+/// HUD, which the dock only builds once one is loaded, exists to be found.
+fn load_demo_data(app: &App) {
+    app.locator(r#"button[name="File"]"#)
+        .press()
+        .expect("press File menu button");
+    app.locator(r#"button[name="Load Demo Data..."]"#)
+        .wait_attached(CONTENT_TIMEOUT)
+        .expect("Load Demo Data item did not appear")
+        .press()
+        .expect("press Load Demo Data");
+    app.locator(r#"button[name="Load"]"#)
+        .wait_attached(CONTENT_TIMEOUT)
+        .expect("demo dialog's Load button did not appear")
+        .press()
+        .expect("press Load");
+}
+
+/// With a reconstruction loaded the viewport HUD is open, so its layer toggles
+/// are reachable in the accessibility tree without opening anything — the point
+/// of moving them out of a menu. Also the end-to-end check that the HUD reaches
+/// a real window; everything else about it is exercised headlessly in
+/// `viewer_3d/hud/tests.rs`.
 #[test]
-fn view_checkboxes_checked_by_default() {
+fn hud_layer_toggles_are_present_and_checked_once_a_scene_is_loaded() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
+    load_demo_data(&app);
 
-    app.locator(r#"button[name="View"]"#)
-        .press()
-        .expect("press View menu button");
-
-    for name in ["3D Viewer", "Image Browser", "Image Detail", "Point Track"] {
+    for name in ["Points", "Cameras", "Grid"] {
         let el = app
             .locator(&format!(r#"check_box[name="{name}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
-            .unwrap_or_else(|_| panic!("View checkbox '{name}' did not appear"));
+            .unwrap_or_else(|_| panic!("HUD checkbox '{name}' did not appear"));
         assert!(
             matches!(el.data().states.checked, Some(Toggled::On)),
             "'{name}' should be checked by default (got {:?})",
@@ -226,55 +250,33 @@ fn view_checkboxes_checked_by_default() {
     }
 }
 
-/// Unchecking a panel in the View menu removes its dock tab.
+/// Toggling a HUD checkbox via accessibility updates its checked state.
 #[test]
-fn toggle_panel_visibility() {
+fn toggle_hud_layer_checkbox() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
-
-    app.locator(r#"button[name="View"]"#)
-        .press()
-        .expect("open View menu");
+    load_demo_data(&app);
 
     let el = app
-        .locator(r#"check_box[name="Point Track"]"#)
+        .locator(r#"check_box[name="Grid"]"#)
         .wait_attached(CONTENT_TIMEOUT)
-        .expect("Point Track checkbox not found");
+        .expect("Grid checkbox not found");
     assert!(
         matches!(el.data().states.checked, Some(Toggled::On)),
-        "Point Track should start shown",
+        "Grid should start checked",
     );
 
-    app.locator(r#"check_box[name="Point Track"]"#)
+    app.locator(r#"check_box[name="Grid"]"#)
         .toggle()
-        .expect("toggle Point Track");
+        .expect("toggle Grid");
 
     // Wait for egui to process the action and update the tree
-    app.locator(r#"check_box[name="Point Track"]"#)
+    app.locator(r#"check_box[name="Grid"]"#)
         .wait_until(
             |data| data.is_some_and(|d| matches!(d.states.checked, Some(Toggled::Off))),
             CONTENT_TIMEOUT,
         )
-        .expect("Point Track should be unchecked after toggle");
-}
-
-/// Diagnostic: dump the tree after pressing View (run with -- --ignored --nocapture).
-#[test]
-#[ignore]
-fn dump_tree_after_view() {
-    init();
-    let _guard = Guard::new();
-    let pid = _guard.child().id();
-    let app = App::by_pid(pid, Duration::from_secs(15)).expect("app not found");
-    app.locator(r#"button[name="View"]"#)
-        .press()
-        .expect("press View");
-    std::thread::sleep(Duration::from_secs(1));
-    println!(
-        "{}",
-        app.dump(Some(6))
-            .unwrap_or_else(|e| format!("dump error: {e}"))
-    );
+        .expect("Grid should be unchecked after toggle");
 }
 
 /// Diagnostic: dump the accessibility tree (run with -- --ignored --nocapture).

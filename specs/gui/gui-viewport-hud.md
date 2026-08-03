@@ -1,8 +1,8 @@
 # Viewport HUD
 
 **Status: implemented** in `viewer_3d/hud.rs`, tests in
-`viewer_3d/hud/tests.rs`. The display controls have left the menu bar; **View**
-now governs dock-panel visibility.
+`viewer_3d/hud/tests.rs`. The display controls have left the menu bar, and the
+**View** menu is gone with them — **File** is now the only menu.
 
 This document specifies moving the 3D-viewport display controls out of the
 menu bar and onto a heads-up display drawn inside the viewport itself.
@@ -36,10 +36,11 @@ parameters that were plumbed to the GPU but had no widget at all
 (["Show points at infinity" toggle and count
 readout](gui-point-cloud-rendering.md#ui--shipped)).
 
-**Stays in the menu bar** — File (Open / Load Demo Data / Quit). With the
-display controls gone, "View" is repurposed to dock-panel visibility — which
-tabs are shown — which is a genuinely app-global concern and leaves the menu
-meaningful rather than deleted.
+**Stays in the menu bar** — File (Open / Load Demo Data / Quit), and nothing
+else. With the display controls gone there is no app-global viewport state left
+for a **View** menu to hold, and the dock panels are permanent
+(`TabViewer::closeable` is false), so it is deleted rather than repurposed. A
+menu kept alive for one synthetic entry is worse than no menu.
 
 **Out of scope** — the Image Detail and Image Browser toolbars. They already
 follow the panel-owns-its-controls rule and are not touched.
@@ -48,9 +49,11 @@ follow the panel-owns-its-controls rule and are not touched.
 
 ## Layout
 
-The HUD is collapsed by default to a single gear glyph, so the default
-experience remains a full-bleed viewport (design principle #4, *Dark,
-Cinematic Aesthetic*).
+The HUD is **open by default**. The controls are the point of the panel, and a
+viewport that starts by hiding them just trades a menu round-trip for a click.
+It collapses to a single gear glyph for when the full-bleed viewport matters
+more (design principle #4, *Dark, Cinematic Aesthetic*) — the translucent fill
+keeps it from fighting the scene while open.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -111,8 +114,17 @@ least 472 × 300 pt (twice the panel's width-plus-insets, and enough height for
 a few sections). At the minimum width the panel spans half the viewport
 horizontally but only part of it vertically, so the area it covers stays under
 a third. A refused open is remembered, not discarded — widen the panel and the
-HUD expands without a second click. Past 60% of the viewport height the
-section list scrolls rather than growing.
+HUD expands without a second click.
+
+**Every section is visible at once — the panel never scrolls.** Its height is
+whatever its content needs, and `constrain_to(viewport)` keeps it on screen. A
+scroll container inside a floating panel this small costs more than it saves:
+it hides controls behind a gesture that the viewport underneath also consumes.
+
+**The panel is slightly translucent** (88% fill opacity), so a little of the
+scene shows through and it reads as floating over the viewport rather than
+bolted to it. Not lower: slider tracks and checkmarks have to stay legible
+against a bright point cloud.
 
 ---
 
@@ -207,10 +219,12 @@ sections, plus the full input-arbitration rule set. The View menu is
 the controls unreachable.
 
 **Phase 2** — *done.* Fold in Advanced and Debug (including the diagnostics
-move and the overlay toggles), delete the display controls from the View menu,
-and repurpose View to dock-panel visibility: one checkbox per dock tab, which
-removes the tab from the layout when unchecked and pushes it back onto the
-focused leaf when re-checked.
+move and the overlay toggles) and delete the View menu outright, leaving File
+as the only menu.
+
+Phase 2 first repurposed View to dock-panel visibility rather than deleting it.
+That was dropped after live use: the panels are permanent, so the menu existed
+only to justify itself.
 
 ---
 
@@ -262,7 +276,7 @@ All of it is built (`viewer_3d/hud.rs`, tests in `viewer_3d/hud/tests.rs`).
 - [x] Debug section: diagnostics move, controls-help and fps toggles
 - [x] "Show points at infinity" toggle + count readout
       ([gui-point-cloud-rendering.md](gui-point-cloud-rendering.md#ui--shipped))
-- [x] Remove display controls from the View menu; repurpose it to panel visibility
+- [x] Remove the View menu outright, leaving File as the only menu
 
 Still open, and deliberately so: everything under
 [Open questions](#open-questions) — auto-hide during navigation, where Length

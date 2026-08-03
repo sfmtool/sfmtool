@@ -27,14 +27,6 @@ pub(crate) enum Tab {
 }
 
 impl Tab {
-    /// Every tab, in the order the View menu lists them.
-    pub(crate) const ALL: [Tab; 4] = [
-        Tab::Viewer3D,
-        Tab::ImageBrowser,
-        Tab::ImageDetail,
-        Tab::PointTrackDetail,
-    ];
-
     pub(crate) fn title(self) -> &'static str {
         match self {
             Tab::Viewer3D => "3D Viewer",

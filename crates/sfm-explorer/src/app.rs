@@ -20,7 +20,7 @@ use egui_winit::State as EguiWinitState;
 use sfmtool_core::SfmrReconstruction;
 use winit::window::Window;
 
-use crate::dock::{self, Tab, TabContext};
+use crate::dock::{self, TabContext};
 use crate::platform;
 use crate::scene_renderer;
 use crate::App;
@@ -93,6 +93,15 @@ impl App {
         // `self.window`) frees `self` for the `&mut self` phase methods below and
         // lets `run_egui_pass` take a non-`Option` `&Window`.
         let window = self.window.clone().unwrap();
+
+        // Keep the window title in step with the loaded file. Compared against
+        // the last applied title rather than set unconditionally: `set_title`
+        // is a window-manager round-trip, and this runs every frame.
+        let title = self.state.window_title();
+        if title != self.applied_title {
+            window.set_title(&title);
+            self.applied_title = title;
+        }
 
         // Ensure scene texture and pipeline match the 3D panel size
         let [pw, ph] = self.viewer_3d.panel_size;
@@ -515,22 +524,11 @@ impl App {
                             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     });
-                    // The display controls that used to live here now belong to
-                    // the 3D viewport's own HUD (`viewer_3d/hud.rs`), on the
-                    // principle that a panel owns its controls. What is left is
-                    // genuinely app-global: which dock tabs are on screen.
-                    ui.menu_button("View", |ui| {
-                        for tab in Tab::ALL {
-                            let mut shown = dock_state.find_tab(&tab).is_some();
-                            if ui.checkbox(&mut shown, tab.title()).changed() {
-                                if shown {
-                                    dock_state.push_to_focused_leaf(tab);
-                                } else if let Some(path) = dock_state.find_tab(&tab) {
-                                    dock_state.remove_tab(path);
-                                }
-                            }
-                        }
-                    });
+                    // No View menu: the display controls it used to hold belong
+                    // to the 3D viewport's own HUD (`viewer_3d/hud.rs`), on the
+                    // principle that a panel owns its controls, and the dock
+                    // panels are all permanent (`TabViewer::closeable` is
+                    // false), so there is nothing app-global left for it.
                 });
             });
 
@@ -567,6 +565,7 @@ impl App {
                 if load_clicked {
                     app_state.reconstruction =
                         Some(SfmrReconstruction::demo(app_state.demo_num_points));
+                    app_state.loaded_file_name = None;
                     app_state.status_message = None;
                     app_state.points_need_upload = true;
                     app_state.show_demo_dialog = false;

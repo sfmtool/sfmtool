@@ -175,6 +175,14 @@ fn warm_up(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState) {
     }
 }
 
+/// Hover, press, release at `pos` — the three frames egui needs to register a
+/// click on a widget.
+fn click_at(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, pos: egui::Pos2) {
+    run_frame(viewer, ctx, state, Frame::new().at(pos));
+    run_frame(viewer, ctx, state, Frame::new().button(pos, true));
+    run_frame(viewer, ctx, state, Frame::new().button(pos, false));
+}
+
 /// A viewer + context + state that have already settled.
 fn settled(state: &mut AppState) -> (Viewer3D, egui::Context) {
     let mut viewer = Viewer3D::new();
@@ -320,71 +328,70 @@ fn an_area_on_a_higher_layer_swallows_drag_and_click_from_the_painter_beneath() 
 // ── Collapsed / expanded ────────────────────────────────────────────────
 
 #[test]
-fn the_hud_starts_collapsed_and_claims_only_the_gear() {
+fn the_hud_starts_open_with_its_sections_drawn() {
     let mut state = demo_state();
-    let (viewer, _ctx) = settled(&mut state);
+    let (viewer, ctx) = settled(&mut state);
 
-    assert!(!viewer.hud_open, "the HUD should open collapsed");
-    let rect = viewer.hud_rect.expect("the gear still claims a rect");
+    assert!(viewer.hud_open, "the HUD should open expanded");
+    let rect = viewer.hud_rect.expect("the panel claims a rect");
     assert!(
-        rect.width() < 60.0 && rect.height() < 60.0,
-        "collapsed HUD claimed {rect:?}, which is more than a gear"
+        rect.width() > 200.0,
+        "HUD opened at {} wide, which is a gear rather than the panel",
+        rect.width()
     );
-    // Sections are not merely closed but never drawn while collapsed.
     assert!(
-        egui::collapsing_header::CollapsingState::load(&_ctx, section_id("layers")).is_none(),
+        egui::collapsing_header::CollapsingState::load(&ctx, section_id("layers")).is_some(),
+        "an expanded HUD did not draw its sections"
+    );
+}
+
+/// Collapsed, the sections are not merely closed but never drawn — so nothing
+/// inside them can be hit, and their widgets cost nothing to skip. Starts from
+/// a HUD that was never expanded, since egui remembers a section's open state
+/// once drawn and collapsing the panel does not erase that memory.
+#[test]
+fn a_collapsed_hud_never_draws_its_sections() {
+    let mut state = demo_state();
+    let mut viewer = Viewer3D::new();
+    viewer.hud_open = false;
+    let ctx = egui::Context::default();
+    warm_up(&mut viewer, &ctx, &mut state);
+
+    assert!(
+        egui::collapsing_header::CollapsingState::load(&ctx, section_id("layers")).is_none(),
         "a collapsed HUD drew its sections"
     );
 }
 
+/// Clicks the close button, then the gear it collapses to. Both directions in
+/// one test because each needs the other's end state to start from.
 #[test]
-fn clicking_the_gear_expands_the_hud_and_the_close_button_collapses_it() {
+fn the_close_button_collapses_the_hud_and_the_gear_expands_it_again() {
     let mut state = demo_state();
     let (mut viewer, ctx) = settled(&mut state);
 
-    let gear = inside_hud(&viewer);
-    run_frame(&mut viewer, &ctx, &mut state, Frame::new().at(gear));
-    run_frame(
-        &mut viewer,
-        &ctx,
-        &mut state,
-        Frame::new().button(gear, true),
-    );
-    run_frame(
-        &mut viewer,
-        &ctx,
-        &mut state,
-        Frame::new().button(gear, false),
-    );
-    assert!(viewer.hud_open, "clicking the gear did not expand the HUD");
-
-    // Let the expanded panel settle, then confirm it is genuinely wider.
-    warm_up(&mut viewer, &ctx, &mut state);
-    let expanded = viewer.hud_rect.expect("the panel claims a rect");
-    assert!(
-        expanded.width() > 200.0,
-        "expanded HUD is only {} wide",
-        expanded.width()
-    );
-
     // The close button sits at the panel's top-right, inside the frame margin.
+    let expanded = viewer.hud_rect.expect("the panel claims a rect");
     let close = egui::pos2(expanded.right() - 14.0, expanded.top() + 16.0);
-    run_frame(&mut viewer, &ctx, &mut state, Frame::new().at(close));
-    run_frame(
-        &mut viewer,
-        &ctx,
-        &mut state,
-        Frame::new().button(close, true),
-    );
-    run_frame(
-        &mut viewer,
-        &ctx,
-        &mut state,
-        Frame::new().button(close, false),
-    );
+    click_at(&mut viewer, &ctx, &mut state, close);
     assert!(
         !viewer.hud_open,
         "the close button did not collapse the HUD"
+    );
+
+    // Let the gear settle, then confirm it claims no more than a gear's worth.
+    warm_up(&mut viewer, &ctx, &mut state);
+    let collapsed = viewer.hud_rect.expect("the gear still claims a rect");
+    assert!(
+        collapsed.width() < 60.0 && collapsed.height() < 60.0,
+        "collapsed HUD claimed {collapsed:?}, which is more than a gear"
+    );
+    click_at(&mut viewer, &ctx, &mut state, collapsed.center());
+    assert!(viewer.hud_open, "clicking the gear did not expand the HUD");
+    warm_up(&mut viewer, &ctx, &mut state);
+    assert!(
+        viewer.hud_rect.expect("the panel is back").width() > 200.0,
+        "the HUD did not return to the full panel"
     );
 }
 

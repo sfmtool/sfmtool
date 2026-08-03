@@ -63,7 +63,8 @@ When finishing a task, run the checks for what you changed:
     schema, validation and error type
   - `sfmr-colmap` — COLMAP binary + SQLite interop
   - `sfmtool-core` — algorithms: camera, alignment, distortion, epipolar, matching, frustum, optical flow, transforms, spatial indexing
-  - `sfm-explorer` — native GUI viewer (winit + wgpu + egui); window title "SfM Explorer"
+  - `sfm-explorer` — native GUI viewer (winit + wgpu + egui); window title
+    "SfM Explorer", or "SfM Explorer - <file>.sfmr" once a file is loaded
   - `sfmtool-py` — PyO3 bindings, compiled as `sfmtool._sfmtool`
 - `tests/` — pytest, ~114 modules (top-level + `tests/patch/`, `tests/xform/`
   and `tests/rust_bindings/`). Fixtures in

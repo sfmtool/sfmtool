@@ -70,8 +70,9 @@ The core 3D viewer is working with these features implemented:
 - FOV zoom in camera view mode (scroll / Ctrl+drag / pinch adjust FOV instead
   of dollying; see [gui-viewport-navigation.md](gui-viewport-navigation.md))
 - Viewport HUD: every 3D display control lives in a collapsible in-viewport
-  panel instead of the View menu, which now governs dock-panel visibility (see
-  [gui-viewport-hud.md](gui-viewport-hud.md))
+  panel, open by default, and the View menu is gone — File is the only menu
+  (see [gui-viewport-hud.md](gui-viewport-hud.md))
+- Window title carries the loaded file: `SfM Explorer - <name>.sfmr`
 
 ### Core Data — Complete
 

@@ -11,6 +11,10 @@ use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::SfmrReconstruction;
 use std::collections::HashMap;
 
+/// The window title with no file loaded. `ui_basic`'s Windows attach path
+/// finds our window by this exact name, so it is also what the tests match on.
+pub const WINDOW_TITLE_BASE: &str = "SfM Explorer";
+
 /// Which overlay to draw on the image detail panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OverlayMode {
@@ -101,6 +105,10 @@ impl Default for FeatureDisplaySettings {
 pub struct AppState {
     /// The currently loaded reconstruction.
     pub reconstruction: Option<SfmrReconstruction>,
+
+    /// File name of the loaded `.sfmr`, shown in the window title. `None`
+    /// before any load, and for demo data, which came from no file.
+    pub loaded_file_name: Option<String>,
 
     /// Currently selected image index.
     pub selected_image: Option<usize>,
@@ -226,6 +234,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             reconstruction: None,
+            loaded_file_name: None,
             selected_image: None,
             selected_point: None,
             hovered_image: None,
@@ -269,6 +278,10 @@ impl AppState {
                 );
                 self.status_message = None;
                 self.reconstruction = Some(recon);
+                self.loaded_file_name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .or_else(|| Some(path.display().to_string()));
                 self.selected_image = None;
                 self.selected_point = None;
                 self.hovered_image = None;
@@ -282,6 +295,18 @@ impl AppState {
                 log::error!("{}", msg);
                 self.status_message = Some(msg);
             }
+        }
+    }
+
+    /// The window title for the current state: the base name alone until a file
+    /// is loaded, then `"SfM Explorer - <file>"`.
+    ///
+    /// Demo data leaves this at the base title — it came from no file, so
+    /// naming one would be a lie.
+    pub fn window_title(&self) -> String {
+        match self.loaded_file_name {
+            Some(ref name) => format!("{WINDOW_TITLE_BASE} - {name}"),
+            None => WINDOW_TITLE_BASE.to_string(),
         }
     }
 }

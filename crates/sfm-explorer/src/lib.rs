@@ -142,6 +142,7 @@ pub fn run() {
         prev_selected_image: None,
         prev_selected_point: None,
         prev_hidden_image: None,
+        applied_title: String::new(),
         #[cfg(target_os = "windows")]
         early_dm,
         #[cfg(target_os = "windows")]
@@ -177,6 +178,10 @@ pub(crate) struct App {
     pub(crate) prev_selected_image: Option<usize>,
     pub(crate) prev_selected_point: Option<usize>,
     pub(crate) prev_hidden_image: Option<usize>,
+    /// Window title as last handed to the window manager, so the per-frame
+    /// sync in `run_ui_and_paint` only calls `set_title` when it changes.
+    /// Starts empty so the first frame always applies the real title.
+    pub(crate) applied_title: String,
     #[cfg(target_os = "windows")]
     pub(crate) early_dm: Option<EarlyDmState>,
     #[cfg(target_os = "windows")]
@@ -196,7 +201,7 @@ impl ApplicationHandler<UserEvent> for App {
             event_loop
                 .create_window(
                     WindowAttributes::default()
-                        .with_title("SfM Explorer")
+                        .with_title(crate::state::WINDOW_TITLE_BASE)
                         .with_inner_size(winit::dpi::LogicalSize::new(1280, 720))
                         .with_min_inner_size(winit::dpi::LogicalSize::new(800, 600))
                         .with_visible(false), // shown after AccessKit registers its UIAutomation provider

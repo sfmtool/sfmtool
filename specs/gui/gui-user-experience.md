@@ -180,10 +180,13 @@ no patch frames and bitmaps; the Layers "Patches" toggle stays, greyed, so the
 capability remains discoverable. See
 [gui-patch-rendering.md](gui-patch-rendering.md#ui-controls).
 
-The **View** menu no longer holds display controls. It now governs dock-panel
-visibility — one checkbox per tab (3D Viewer, Image Browser, Image Detail,
-Point Track), which is a genuinely app-global concern. **File** (Open / Load
-Demo Data / Quit) is unchanged.
+There is no longer a **View** menu — with the display controls in the HUD and
+the dock panels permanent, nothing app-global was left for it to hold. **File**
+(Open / Load Demo Data / Quit) is the only menu, and is unchanged.
+
+The window title names the loaded file — `SfM Explorer - kerry_park.sfmr` —
+falling back to plain `SfM Explorer` before any load, and for demo data, which
+came from no file.
 
 ## Design Influences
 

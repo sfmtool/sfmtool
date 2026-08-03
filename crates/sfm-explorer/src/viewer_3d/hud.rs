@@ -38,9 +38,11 @@ const HUD_SLIDER_WIDTH: f32 = 78.0;
 /// covers stays under a third.
 const HUD_MIN_VIEWPORT: egui::Vec2 = egui::vec2(2.0 * (HUD_WIDTH + 2.0 * HUD_INSET), 300.0);
 
-/// Vertical space the HUD leaves for the sections, as a fraction of the
-/// viewport height. Beyond it the section list scrolls.
-const HUD_MAX_BODY_FRACTION: f32 = 0.6;
+/// Opacity of the expanded panel's fill, so a little of the scene shows
+/// through it. Low enough to read as floating over the viewport rather than
+/// bolted to it, high enough that slider tracks and checkmarks stay legible
+/// against a bright point cloud.
+const HUD_FILL_OPACITY: f32 = 0.88;
 
 /// Glyph on the collapsed gear, and the one that closes the expanded panel.
 ///
@@ -114,7 +116,6 @@ impl Viewer3D {
         let expanded = self.hud_open
             && viewport.width() >= HUD_MIN_VIEWPORT.x
             && viewport.height() >= HUD_MIN_VIEWPORT.y;
-        let max_body_height = viewport.height() * HUD_MAX_BODY_FRACTION;
 
         // Anchored to the viewport rect and recomputed every frame: the 3D
         // viewer lives in a dock tab the user can resize or re-dock, and a
@@ -141,7 +142,10 @@ impl Viewer3D {
                 }
 
                 ui.set_width(HUD_WIDTH);
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                let style = ui.style();
+                let frame = egui::Frame::popup(style)
+                    .fill(style.visuals.window_fill.gamma_multiply(HUD_FILL_OPACITY));
+                frame.show(ui, |ui| {
                     ui.set_width(HUD_WIDTH);
                     ui.spacing_mut().slider_width = HUD_SLIDER_WIDTH;
                     ui.horizontal(|ui| {
@@ -157,12 +161,10 @@ impl Viewer3D {
                         });
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical()
-                        .max_height(max_body_height)
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            self.hud_sections(ui, state, diagnostics, handler_ok)
-                        });
+                    // No scroll container: every section is visible at once.
+                    // The panel takes whatever height its content needs, and
+                    // `constrain_to(viewport)` keeps it on screen.
+                    self.hud_sections(ui, state, diagnostics, handler_ok);
                 });
             });
 
