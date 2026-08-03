@@ -142,6 +142,7 @@ pub fn run() {
         prev_selected_image: None,
         prev_selected_point: None,
         prev_hidden_image: None,
+        quit_requested: false,
         applied_title: String::new(),
         #[cfg(target_os = "windows")]
         early_dm,
@@ -178,6 +179,9 @@ pub(crate) struct App {
     pub(crate) prev_selected_image: Option<usize>,
     pub(crate) prev_selected_point: Option<usize>,
     pub(crate) prev_hidden_image: Option<usize>,
+    /// Set by File > Quit and read by the event loop right after the frame it
+    /// was clicked in, which then exits.
+    pub(crate) quit_requested: bool,
     /// Window title as last handed to the window manager, so the per-frame
     /// sync in `run_ui_and_paint` only calls `set_title` when it changes.
     /// Starts empty so the first frame always applies the real title.
@@ -364,6 +368,9 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::RedrawRequested => {
                 self.run_ui_and_paint();
+                if self.quit_requested {
+                    event_loop.exit();
+                }
             }
             _ => {}
         }

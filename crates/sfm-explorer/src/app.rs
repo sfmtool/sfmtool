@@ -495,6 +495,8 @@ impl App {
         let point_track_detail = &mut self.point_track_detail;
         let dock_state = &mut self.dock_state;
 
+        let mut quit_requested = false;
+
         let full_output = self.egui_ctx.run_ui(raw_input, |root_ui| {
             // Accumulate scroll events once per frame, with DM-aware suppression.
             let scroll_input = platform::ScrollInput::from_ctx(
@@ -521,7 +523,14 @@ impl App {
                         }
                         ui.separator();
                         if ui.button("Quit").clicked() {
-                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                            // Not `send_viewport_cmd(ViewportCommand::Close)`:
+                            // this app drives its own winit loop and never
+                            // reads `full_output.viewport_output`, so the
+                            // command was silently dropped and Quit did
+                            // nothing. The flag is read straight after the
+                            // egui pass, where the event loop can act on it.
+                            quit_requested = true;
+                            ui.close();
                         }
                     });
                     // No View menu: the display controls it used to hold belong
@@ -590,6 +599,8 @@ impl App {
                 DockArea::new(dock_state).show_inside(ui, &mut tab_context);
             });
         });
+
+        self.quit_requested |= quit_requested;
 
         egui_winit_state.handle_platform_output(window, full_output.platform_output);
 

@@ -5,7 +5,7 @@
 
 use std::process::{Child, Command};
 use std::sync::{Mutex, MutexGuard, Once};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use xa11y::{App, AppExt, Toggled};
 
@@ -80,6 +80,22 @@ impl Guard {
 
     fn child(&self) -> &Child {
         &self.child
+    }
+
+    /// Wait up to `budget` for the app to exit on its own. Returns whether it
+    /// did — `false` means it was still running when the budget ran out.
+    fn wait_for_exit(&mut self, budget: Duration) -> bool {
+        let deadline = Instant::now() + budget;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return true,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(100))
+                }
+                Ok(None) => return false,
+                Err(e) => panic!("failed to poll the app process: {e}"),
+            }
+        }
     }
 }
 
@@ -206,6 +222,31 @@ fn file_menu_items() {
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("File menu item '{item}' did not appear"));
     }
+}
+
+/// File > Quit exits the process.
+///
+/// It used to send `ViewportCommand::Close`, which this app's own winit loop
+/// never reads, so the menu item did nothing at all. Asserting on the child
+/// process rather than on the window is the point: only a real exit proves it.
+#[test]
+fn quit_menu_item_exits_the_process() {
+    let mut guard = Guard::new();
+    let app = attach(guard.child());
+
+    app.locator(r#"button[name="File"]"#)
+        .press()
+        .expect("press File menu button");
+    app.locator(r#"button[name="Quit"]"#)
+        .wait_attached(CONTENT_TIMEOUT)
+        .expect("Quit item did not appear")
+        .press()
+        .expect("press Quit");
+
+    assert!(
+        guard.wait_for_exit(Duration::from_secs(10)),
+        "File > Quit did not exit the process"
+    );
 }
 
 /// Load demo data, so there is a reconstruction for the 3D viewer — and so the
