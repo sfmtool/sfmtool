@@ -36,41 +36,101 @@ reference appearance a candidate view is admitted against:
 - The patch is placed at the point's own normal on an `R×R` grid.
 - Each member is gated on its window-weighted valid-pixel fraction
   (`min_valid_fraction`); survivors' validity masks are **intersected** into one
-  frozen common support, and every pair is correlated over that same support.
+  frozen common support, and every pair is correlated over that same support. Its
+  size is reported as `n_support` — one number per point, because the support is
+  frozen per *point*, not per pair.
+- A member with no texture on that support at all is dropped from the stack
+  (below).
 - Each member's render is z-normalized per colour channel over the windowed
   support, with `√w` folded in, so a plain dot product is the windowed ZNCC. A
-  channel that is flat in *any* member is dropped for *every* member, keeping all
-  the inner products in one space.
+  channel that is flat in *any* remaining member is dropped for *every* member,
+  keeping all the inner products in one space.
 - A pair's score is the mean of its per-channel correlations.
 
-Sharing that path is the point: a member's pairwise agreement is then expressed in
-the same photometric metric as the member-vs-consensus score the rest of the patch
-pipeline gates on, so the two numbers are directly comparable and cannot drift
-apart as the render conventions evolve.
+Sharing that path keeps a member's pairwise agreement in the same photometric
+*space* as the member-vs-consensus score the rest of the patch pipeline gates on:
+same window, same sampler, same channel treatment, same frozen-support discipline,
+and they cannot drift apart as the render conventions evolve. It is **not the same
+estimator** — selection scores one view against the fused consensus, and does it
+through the [affine fast path](patch-view-selection.md#affine-candidate-scoring-2026-07)
+wherever that path's residual and border gates allow. The two are the same metric
+family and agree to that path's documented tolerance; they are not the identical
+number, and a rule calibrated on one should not be assumed transferable to the
+other without a check.
 
 The diagonal is `1.0`. A member the validity gate drops is left **unscored** — its
-row and column are `NaN`, reported separately as a per-member `scored` flag. A
-track whose members cannot form a common support at all yields a matrix with only
-its diagonal, which decides as `KeepAll` (no evidence is not contrary evidence).
+row and column are `NaN`, reported as a per-member `scored` flag (which is exactly
+"has at least one finite off-diagonal entry", the same definition the decision rule
+uses). A track whose members cannot form a common support at all yields a matrix
+with only its diagonal, which decides as `KeepAll` (no evidence is not contrary
+evidence).
+
+### A textureless member does not sink the track
+
+The shared z-normalization drops a colour channel that is flat in *any* member, for
+*every* member — right for a consensus over one surface, wrong here: a single blown
+highlight or patch of sky flattens every channel and silently leaves the whole
+track unscored. Such a member is therefore excluded from the stack **before** the
+shared gate runs, by the same `FLAT_NORM_SQ_EPS` criterion, and comes out
+`scored = false` — the same outcome as failing the coverage gate, for the same
+reason (nothing about it can be correlated). The rest of the members score
+normally, and the channels the flat member would have killed survive for them.
+
+This is done locally in this module rather than in the shared helpers, which keep
+their behaviour for view selection and normal refinement.
+
+### The support floor, and what the matrix is not
+
+`min_support_pixels` is a floor on `n_support`: below it the track is left entirely
+unscored (fail-open — `KeepAll`), with the count still reported. It defaults to `8`,
+the floor the shared support builder already enforces, so it changes nothing on its
+own. **Consumers vetting wide-baseline tracks want it higher**: the intersection of
+`k` validity masks can shrink to a sliver of the `R×R` grid, and a ZNCC over a
+handful of pixels is noise being thresholded at three decimal places.
+
+That intersection is also why **matrices built over different member subsets are
+not comparable**. Entry `(i, j)` is not a property of members `i` and `j`: it is
+computed over the support they share with *every other member of the list*. Add a
+member with a narrow view and every entry changes; drop one and they change back.
+Two consequences worth stating plainly: a verdict cannot be checked by re-running
+the rule on a subset of the members, and the bar's effective strictness is
+track-size dependent — a larger track correlates over a smaller, more central
+support, where members agree more.
 
 ## The decision rule
 
-Every member is a hypothesis. Its **support** is the set of members whose pairwise
-ZNCC to it reaches `bar`, itself always included; a member with no partner
-supports a block of one. The **max-support block** wins. Note this is an inlier
-set, not a clique: two members of the winning block need not agree with each
+**The rule runs over the scored members only.** An unscored member carries no
+pairwise evidence at all, so it is not a hypothesis, not a tie-break candidate, not
+a term in either margin side, and not a unit in the majority denominator; it is
+also never in the reported `block`. It simply passes through `kept`. Anything else
+double-counts an absence: letting it dilute the denominator retires tracks whose
+scored members cleanly split, and letting a `Split` evict it removes an observation
+on zero evidence. Fewer than two scored members means no evidence at all —
+`KeepAll`, empty block, `support = 0`, undefined margin. With every member scored
+this is the plain rule below, unchanged.
+
+Every scored member is a hypothesis. Its **support** is the set of scored members
+whose pairwise ZNCC to it reaches `bar`, itself always included; a member with no
+partner supports a block of one. The **max-support block** wins. Note this is an
+inlier set, not a clique: two members of the winning block need not agree with each
 other, only with the hypothesis.
 
-Given the winning block `B` of size `s` out of `k` members:
+Given the winning block `B` of size `s` out of the `m` **scored** members (of `k`
+total):
 
-1. **`s == k`** — every member is in the block. Verdict `KeepAll`.
+1. **`s == m`** — every scored member is in the block. Verdict `KeepAll`.
 2. **Separation margin.** Let `min_intra` be the weakest finite link inside `B`
-   and `max_cross` the strongest finite link from `B` to a member outside it; the
-   margin is `min_intra − max_cross`. When the margin is undefined (`s < 2`, or a
-   side with no finite link) or does not exceed `margin_gate`, verdict `KeepAll`.
-3. **`2s > k`** — the block is a strict majority. Verdict `Split`: the block is
-   kept, the members outside it are rejected.
-4. **Otherwise** — verdict `Retire`. The point ships nothing.
+   and `max_cross` the strongest finite link from `B` to a scored member outside
+   it; the margin is `min_intra − max_cross`. When the margin is undefined
+   (`s < 2`, `s == m`, or a side with no finite link) or does not exceed
+   `margin_gate`, verdict `KeepAll`. `NaN` therefore means *no cut was on the
+   table* — a different thing from a cut the gate refused, which reports a finite
+   margin at or below `margin_gate`.
+3. **`2s > m`** — the block is a strict majority of the scored members. Verdict
+   `Split`: the block is kept (plus the unscored members), the scored members
+   outside it are rejected.
+4. **Otherwise** — verdict `Retire`. The point ships nothing — including its
+   unscored members, since it is the point that is refused, not its observations.
 
 ### The margin gate refuses to cut a continuum
 
@@ -91,8 +151,8 @@ Step 2 runs before the majority test, so it protects `Split` and `Retire` alike.
 
 - `KeepAll` — every member ships. The track is one surface, one continuum, or has
   too little evidence to cut.
-- `Split` — the block's members ship; the rest are rejected observations of some
-  other surface. The point survives on the block.
+- `Split` — the block's members ship, as do any unscored ones; the rest are
+  rejected observations of some other surface. The point survives on the block.
 - `Retire` — the point should not ship at all. A block with no majority means the
   track's members split into two comparably-supported and mutually incompatible
   groups, and nothing in the matrix says which one is the point. The winning block
@@ -123,6 +183,7 @@ how rayon schedules them.
 | `window` | `gaussian_disk` (σ 0.6) | per-pixel scoring weight |
 | `sampler` | `bilinear_mip` | source-pyramid sampling |
 | `min_valid_fraction` | `0.6` | per-member floor on the window-weighted valid-pixel fraction |
+| `min_support_pixels` | `8` | floor on the common support `n_support`; below it the track is unscored |
 
 `bar` and `margin_gate` are **calibration defaults, not constants** — callers
 override them. `bar` in particular is calibrated *for the render conventions in
@@ -161,18 +222,24 @@ pub struct MemberCoherenceParams {
     pub window: PatchWindow,      // GaussianDisk { sigma: 0.6 }
     pub sampler: Sampler,         // BilinearMip
     pub min_valid_fraction: f64,  // 0.6
+    pub min_support_pixels: u32,  // 8
 }
 
 pub enum MemberVerdict { KeepAll, Split, Retire }
 
 pub struct MemberMatrix {         // members, k*k row-major zncc, per-member scored
     pub members: Vec<u32>, pub zncc: Vec<f64>, pub scored: Vec<bool>,
+    pub n_support: u32,           // common-support pixels (0 for `from_zncc`)
 }
 pub struct MemberDecision {       // verdict + what it was decided on
     pub verdict: MemberVerdict, pub kept: Vec<bool>, pub block: Vec<bool>,
     pub support: u32, pub margin: f64, pub min_intra: f64, pub max_cross: f64,
 }
 pub struct MemberCoherence { pub matrix: MemberMatrix, pub decision: MemberDecision }
+
+// "Scored" — at least one finite off-diagonal entry — in one place, shared by the
+// matrix and the decision rule.
+pub fn scored_mask(zncc: &[f64], k: usize) -> Vec<bool>;
 
 // Matrix and decision are separate so a caller can inspect or supply either.
 pub fn member_zncc_matrix(patch, views, members: &[u32], params) -> MemberMatrix;
@@ -197,29 +264,46 @@ The Python binding mirrors `PatchCloud.select_views`:
 PatchCloud.validate_member_coherence(
     recon, images, *, bar=0.65, margin_gate=0.05, resolution=24,
     window="gaussian_disk", window_sigma=0.6, sampler="bilinear_mip",
-    min_valid_fraction=0.6, point_indexes=None, member_views=None,
-    return_matrix=False, progress=None,
+    min_valid_fraction=0.6, min_support_pixels=8, point_indexes=None,
+    member_views=None, return_matrix=False, progress=None,
 ) -> list[dict]
 ```
 
 `recon` is a reconstruction (member lists come from the tracks) or a
 `CameraViews` (then `member_views` — a `point_index -> [image_index, ...]` map —
 is required); `images` is a per-image list or a prebuilt `ImagePyramidSet`.
-Each returned dict carries `point_index`, `members` (int32, the deduplicated
+Each returned dict carries `point_index`, `members` (**uint32**, the deduplicated
 member order every other per-member array follows), `verdict`
 (`"keep_all"` / `"split"` / `"retire"`), `kept` / `block` / `scored` (bool),
-`support`, `margin`, `min_intra`, `max_cross`, and — under `return_matrix=True` —
-the `k×k` float64 `zncc`.
+`support`, `n_support`, `margin`, `min_intra`, `max_cross`, and — under
+`return_matrix=True` — the `k×k` float64 `zncc`.
 
 ## Testing
 
 Sibling `tests.rs` under `patch/member_coherence/` covers the decision rule on
 synthetic matrices with known block structure — all-agree; a clean 3+2 split; a
-balanced 2+2 retirement; the block tie-break on mean coherence and then on member
-index; a monotone drift chain kept whole by the margin gate; the same matrix
-flipping between `KeepAll` and `Split` on `margin_gate` alone; the `k = 3` cases
-(majority block splits, all-isolated keeps); unscored (`NaN`) members; `k ≤ 2` and
-empty tracks; and `bar` reshaping the block — plus end-to-end builds over the
-rendered synthetic plane scene: matrix symmetry and unit diagonal, one odd member
-out splitting, a single surface kept whole, a balanced two-surface track retiring,
-and member deduplication.
+balanced 2+2 retirement; a 2+1+1 at the `2s == m` majority boundary; the block
+tie-break on mean coherence and then on member index; a monotone drift chain kept
+whole by the margin gate; the same matrix flipping between `KeepAll` and `Split` on
+`margin_gate` alone; the `k = 3` cases (majority block splits, all-isolated keeps);
+`bar` and `margin_gate` locked at their inclusive boundaries on exactly
+representable values; `k ≤ 2` and empty tracks; and `bar` reshaping the block.
+
+Unscored members have their own set: an all-`NaN` member left outside the rule and
+passed through; a split that evicts the scored outlier and keeps the unscored
+member; two unscored members that do *not* dilute a clean 2-of-3 majority into a
+retirement; a track with no pairwise evidence at all; and a single unscoreable
+*pair* whose two members are both still in play (a missing entry is skipped by the
+margin, not read as disagreement).
+
+End-to-end builds over the rendered synthetic plane scene cover matrix symmetry and
+unit diagonal, one odd member out splitting, a single surface kept whole, a
+balanced two-surface track retiring, member deduplication, a textureless member
+left unscored while the rest score against each other, and `n_support` being
+reported and gated on by `min_support_pixels`.
+
+`tests/patch/test_member_coherence.py` covers the binding surface against a real
+reconstruction: the dict keys and dtypes, the `k×k` `zncc` under `return_matrix`
+(symmetry and unit diagonal), `point_indexes` subsetting, `member_views` override
+and its first-seen-wins dedup, the `CameraViews`-without-`member_views` error, and
+the unscored-member-kept contract end to end.

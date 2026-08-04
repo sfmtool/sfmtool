@@ -19,15 +19,24 @@
 //! [view selection](super::view_selection) builds its reference appearance with —
 //! [`build_level_context`] for the frozen common support, [`normalized_stack`] for
 //! the renders and [`znormalize_into_kept`] for the per-channel z-normalization —
-//! so a member's pairwise agreement lives in the same photometric space as the
-//! member-vs-consensus score selection admits views on.
+//! so a member's pairwise agreement lives in the same photometric *space* as the
+//! member-vs-consensus score selection admits views on. It is not the same
+//! *estimator*: selection scores one view against the fused consensus, and does it
+//! through the affine fast path where that path's gates allow. Same metric family,
+//! same render conventions, agreeing to the affine tolerance documented in
+//! `specs/core/patch-view-selection.md` — not the identical number.
+//!
+//! Members that carry no pairwise evidence (nothing rendered them, or nothing
+//! could be correlated with them) are **unscored**: they sit outside the whole
+//! decision rule and pass through kept. See `decide_member_coherence`.
 
 use rayon::prelude::*;
 
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
-    build_level_context, normalized_stack, window_weights, znormalize_into_kept,
-    NormalRefineParams, PatchWindow, ProjectedImage, Sampler,
+    build_level_context, normalized_stack, weighted_moments_pub, window_weights,
+    znormalize_into_kept, NormalRefineParams, PatchWindow, ProjectedImage, Sampler,
+    FLAT_NORM_SQ_EPS, MIN_MASK_PIXELS,
 };
 use crate::reconstruction::SfmrReconstruction;
 
@@ -59,6 +68,18 @@ pub struct MemberCoherenceParams {
     /// below it does not cover enough of the patch to be correlated and is left
     /// unscored (its row and column stay `NaN`).
     pub min_valid_fraction: f64,
+    /// Floor on the **common** support: the number of pixels valid in *every*
+    /// scoreable member, which is what all the pairwise ZNCCs are computed over.
+    /// A track whose intersected support falls below it is left entirely unscored
+    /// (fail-open: no evidence decides `KeepAll`), with the count still reported
+    /// as [`MemberMatrix::n_support`].
+    ///
+    /// The default `8` is the floor [`build_level_context`] already enforces
+    /// (`MIN_MASK_PIXELS`), so it changes nothing on its own; values below it are
+    /// inert for the same reason. A caller vetting wide-baseline tracks — where
+    /// the intersection can shrink to a sliver of an `R×R` grid and a correlation
+    /// over a handful of pixels is noise — wants it higher.
+    pub min_support_pixels: u32,
 }
 
 impl Default for MemberCoherenceParams {
@@ -70,8 +91,21 @@ impl Default for MemberCoherenceParams {
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
             sampler: Sampler::BilinearMip,
             min_valid_fraction: 0.6,
+            min_support_pixels: MIN_MASK_PIXELS as u32,
         }
     }
+}
+
+/// Which members of a row-major `k×k` pairwise table carry evidence: a member is
+/// **scored** iff it has at least one finite off-diagonal entry.
+///
+/// The one definition of "scored" in this module — [`MemberMatrix`] reports it and
+/// [`decide_member_coherence`] runs its whole rule over exactly these members, so
+/// the two layers cannot disagree about who is in play.
+pub fn scored_mask(zncc: &[f64], k: usize) -> Vec<bool> {
+    (0..k)
+        .map(|i| (0..k).any(|j| j != i && zncc[i * k + j].is_finite()))
+        .collect()
 }
 
 /// One point's pairwise member agreement.
@@ -83,16 +117,24 @@ pub struct MemberMatrix {
     /// Row-major `k×k` windowed ZNCC between members. The diagonal is `1.0`;
     /// `NaN` marks a pair that could not be correlated (either member unscored).
     pub zncc: Vec<f64>,
-    /// Per member: whether it was rendered and correlated at all. An unscored
-    /// member has a `NaN` row and column but still holds its `1.0` diagonal.
+    /// Per member: whether it carries pairwise evidence — see [`scored_mask`],
+    /// the single definition this and the decision rule share. An unscored member
+    /// has a `NaN` row and column but still holds its `1.0` diagonal.
     pub scored: Vec<bool>,
+    /// Size of the **common** support every pairwise ZNCC was computed over: the
+    /// number of patch-grid pixels valid in every scoreable member, after the
+    /// per-member validity gate. One number per point, because the support is
+    /// frozen once per point (intersected over its members) rather than per pair.
+    /// `0` when no support could be built at all, and for a matrix handed in
+    /// through [`from_zncc`](Self::from_zncc) (no render happened).
+    pub n_support: u32,
 }
 
 impl MemberMatrix {
     /// Build a matrix from an already-computed row-major `k×k` ZNCC table (the
     /// entry point for callers holding their own pairwise scores, and for tests).
-    /// The diagonal is forced to `1.0` and `scored` is derived as "this member
-    /// has at least one finite off-diagonal entry".
+    /// The diagonal is forced to `1.0`, `scored` is derived by [`scored_mask`],
+    /// and `n_support` is `0` (nothing was rendered).
     ///
     /// # Panics
     ///
@@ -103,13 +145,12 @@ impl MemberMatrix {
         for i in 0..k {
             zncc[i * k + i] = 1.0;
         }
-        let scored = (0..k)
-            .map(|i| (0..k).any(|j| j != i && zncc[i * k + j].is_finite()))
-            .collect();
+        let scored = scored_mask(&zncc, k);
         Self {
             members,
             zncc,
             scored,
+            n_support: 0,
         }
     }
 
@@ -146,31 +187,56 @@ pub enum MemberVerdict {
 
 /// The verdict [`decide_member_coherence`] reads off a [`MemberMatrix`], with the
 /// quantities it was decided on.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct MemberDecision {
     /// The verdict. `Default` is [`MemberVerdict::KeepAll`] over an empty track.
     pub verdict: MemberVerdict,
     /// Per member: whether the point keeps it. All `true` for
-    /// [`MemberVerdict::KeepAll`], the winning block for
-    /// [`MemberVerdict::Split`], all `false` for [`MemberVerdict::Retire`].
+    /// [`MemberVerdict::KeepAll`], all `false` for [`MemberVerdict::Retire`]
+    /// (the point ships nothing at all); for [`MemberVerdict::Split`] the winning
+    /// block **plus every unscored member** — an unscored member is missing
+    /// evidence, not contrary evidence, so nothing here can evict it.
     pub kept: Vec<bool>,
-    /// The winning max-support block. Equals [`kept`](Self::kept) except on
-    /// [`MemberVerdict::Retire`], where the point ships nothing and the block is
-    /// **informational** — on a balanced split the two sides are interchangeable
-    /// and only the deterministic tie-break decides which one is reported.
+    /// The winning max-support block, over the *scored* members only: an unscored
+    /// member is never in the block (it took no part in the sweep) even when
+    /// [`kept`](Self::kept). Equals `kept` on a [`MemberVerdict::Split`] of a
+    /// fully-scored track; on a [`MemberVerdict::Retire`] the point ships nothing
+    /// and the block is **informational** — on a balanced split the two sides are
+    /// interchangeable and only the deterministic tie-break decides which one is
+    /// reported.
     pub block: Vec<bool>,
-    /// Size of the winning block (its support count, itself included).
+    /// Size of the winning block (its support count, itself included). `0` when
+    /// fewer than two members were scored, i.e. there was no sweep.
     pub support: u32,
     /// Separation margin: [`min_intra`](Self::min_intra) −
     /// [`max_cross`](Self::max_cross). `NaN` when the block holds fewer than two
-    /// members, spans the whole track, or has no finite link on one of the two
-    /// sides.
+    /// members, spans every scored member, or has no finite link on one of the two
+    /// sides — i.e. `NaN` means *no cut was on the table*, which is a different
+    /// thing from a cut the gate refused (a finite margin at or below
+    /// `margin_gate`).
     pub margin: f64,
     /// Weakest finite link inside the winning block (`NaN` when it has none).
     pub min_intra: f64,
-    /// Strongest finite link from the winning block to a member outside it
-    /// (`NaN` when there is none).
+    /// Strongest finite link from the winning block to a *scored* member outside
+    /// it (`NaN` when there is none).
     pub max_cross: f64,
+}
+
+impl Default for MemberDecision {
+    /// [`MemberVerdict::KeepAll`] over an empty track: nothing kept, nothing in
+    /// the block, and every quantity undefined (`NaN`) rather than zero — an empty
+    /// track has no margin, and `0.0` would read as a measured one.
+    fn default() -> Self {
+        Self {
+            verdict: MemberVerdict::KeepAll,
+            kept: Vec::new(),
+            block: Vec::new(),
+            support: 0,
+            margin: f64::NAN,
+            min_intra: f64::NAN,
+            max_cross: f64::NAN,
+        }
+    }
 }
 
 /// One point's matrix and the verdict read off it.
@@ -210,9 +276,15 @@ fn normal_refine_shim(params: &MemberCoherenceParams) -> NormalRefineParams {
 /// on `min_valid_fraction` — and z-normalized per colour channel, exactly as view
 /// selection builds its reference. A pair's score is the mean over surviving
 /// channels of the dot product of the two members' z-normalized columns, i.e. the
-/// windowed per-channel ZNCC. Members the validity gate drops are left unscored
-/// (`NaN` row and column); when no support survives at all the matrix carries only
+/// windowed per-channel ZNCC. Members the validity gate drops, and members with no
+/// texture at all, are left unscored (`NaN` row and column); when no support
+/// survives, or it is smaller than `min_support_pixels`, the matrix carries only
 /// its `1.0` diagonal.
+///
+/// Because the support is the intersection **over the members supplied**, entry
+/// `(i, j)` depends on the whole member list: the same two members correlated
+/// inside a different track (or after a member is dropped) can score differently.
+/// Matrices built from different member subsets are not comparable.
 pub fn member_zncc_matrix(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
@@ -233,28 +305,26 @@ pub fn member_zncc_matrix(
     for i in 0..k {
         zncc[i * k + i] = 1.0;
     }
-    let mut scored = vec![false; k];
-    if k >= 2 {
-        fill_member_zncc(
-            patch,
-            views,
-            &members,
-            params,
-            resolution,
-            &mut zncc,
-            &mut scored,
-        );
-    }
+    let n_support = if k >= 2 {
+        fill_member_zncc(patch, views, &members, params, resolution, &mut zncc)
+    } else {
+        0
+    };
+    // Derived from the filled table, so "scored" means the same thing here as it
+    // does in the decision rule.
+    let scored = scored_mask(&zncc, k);
     MemberMatrix {
         members,
         zncc,
         scored,
+        n_support,
     }
 }
 
 /// Render the members over one frozen common support and fill the off-diagonal
-/// pairwise ZNCC. Leaves `zncc` / `scored` untouched for members (or whole
-/// tracks) the support / validity gates drop.
+/// pairwise ZNCC. Returns the size of that common support (`0` when none could be
+/// built). Leaves `zncc` untouched for members (or whole tracks) the support /
+/// validity / texture gates drop.
 fn fill_member_zncc(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
@@ -262,8 +332,7 @@ fn fill_member_zncc(
     params: &MemberCoherenceParams,
     resolution: u32,
     zncc: &mut [f64],
-    scored: &mut [bool],
-) {
+) -> u32 {
     let k = members.len();
     let w_full = window_weights(params.window, resolution);
     let member_proj: Vec<ProjectedImage<'_>> = members.iter().map(|&i| views[i as usize]).collect();
@@ -280,23 +349,53 @@ fn fill_member_zncc(
         &shim,
         None,
     ) else {
-        return;
+        return 0;
     };
+    let n = ctx.pixels.len();
+    let n_support = n as u32;
+    // Too little common support to correlate anything over: report the count and
+    // leave the whole track unscored.
+    if n_support < params.min_support_pixels {
+        return n_support;
+    }
     let Some((raw, channels)) =
         normalized_stack(patch, &ctx, &member_proj, resolution, params.sampler, None)
     else {
-        return;
+        return n_support;
     };
-    let n = ctx.pixels.len();
     let total_weight: f64 = ctx.weights.iter().sum();
     if total_weight <= 0.0 {
-        return;
+        return n_support;
     }
+
+    // Drop members with no texture at all before z-normalizing. The shared
+    // `znormalize_into_kept` gate is per *channel* across *all* members — a
+    // channel flat in any member is dropped for every member — which is right for
+    // a consensus over one surface, but here one blown-out or sky member would
+    // flatten every channel and silently leave the whole track unscored. Treat it
+    // as this module's own coverage failure instead: exclude it from the stack
+    // (so it ends up unscored, like a member the validity gate drops) and let the
+    // rest score. The shared helper keeps its behaviour for its other callers.
+    let alive: Vec<usize> = (0..ctx.kept.len())
+        .filter(|&v| member_has_texture(&raw, v, channels, n, &ctx.weights, total_weight))
+        .collect();
+    if alive.len() < 2 {
+        return n_support;
+    }
+    let compacted: Option<Vec<f32>> = (alive.len() < ctx.kept.len()).then(|| {
+        let mut out = Vec::with_capacity(alive.len() * channels * n);
+        for &v in &alive {
+            out.extend_from_slice(&raw[v * channels * n..(v + 1) * channels * n]);
+        }
+        out
+    });
+    let stack: &[f32] = compacted.as_deref().unwrap_or(&raw);
+
     let sqrt_weights: Vec<f32> = ctx.weights.iter().map(|&w| w.sqrt() as f32).collect();
     let mut xs = Vec::new();
     let Some((kept_channels, _)) = znormalize_into_kept(
-        &raw,
-        ctx.kept.len(),
+        stack,
+        alive.len(),
         channels,
         n,
         &ctx.weights,
@@ -304,15 +403,16 @@ fn fill_member_zncc(
         &sqrt_weights,
         &mut xs,
     ) else {
-        return;
+        return n_support;
     };
 
     // Each kept member's z-normalized column is unit-norm per channel, so a plain
     // dot is the windowed ZNCC; average over the channels that survived the shared
     // flat-channel gate, matching the reference's own channel convention.
-    for (a, &ia) in ctx.kept.iter().enumerate() {
-        scored[ia] = true;
-        for (b, &ib) in ctx.kept.iter().enumerate().skip(a + 1) {
+    for (a, &va) in alive.iter().enumerate() {
+        let ia = ctx.kept[va];
+        for (b, &vb) in alive.iter().enumerate().skip(a + 1) {
+            let ib = ctx.kept[vb];
             let mut s = 0.0;
             for c in 0..kept_channels {
                 let ca = &xs[(a * kept_channels + c) * n..][..n];
@@ -328,9 +428,32 @@ fn fill_member_zncc(
             zncc[ib * k + ia] = z;
         }
     }
+    n_support
+}
+
+/// Whether member `v` of a raw `[(view*channels + channel)*n + pixel]` stack has
+/// any channel with windowed texture, by the same `FLAT_NORM_SQ_EPS` criterion
+/// [`znormalize_into_kept`] drops flat channels on.
+fn member_has_texture(
+    raw: &[f32],
+    v: usize,
+    channels: usize,
+    n: usize,
+    weights: &[f64],
+    total_weight: f64,
+) -> bool {
+    (0..channels).any(|c| {
+        let col = &raw[(v * channels + c) * n..][..n];
+        let (s1, s2) = weighted_moments_pub(col, weights);
+        s2 - s1 * (s1 / total_weight) >= FLAT_NORM_SQ_EPS
+    })
 }
 
 /// The winning max-support block of the agreement graph, as a member mask.
+///
+/// `zncc` is the `k×k` table of the members in play — [`decide_member_coherence`]
+/// passes the *scored* sub-matrix, so an unscored member is never a hypothesis and
+/// never a tie-break candidate.
 ///
 /// Every member is a hypothesis; its support is the set of members whose pairwise
 /// ZNCC to it reaches `bar` (itself always included, so a member with no partner
@@ -402,6 +525,16 @@ fn max_support_block(zncc: &[f64], k: usize, bar: f64) -> Vec<bool> {
 /// of the members splits the track; a block that does not is a track whose
 /// evidence supports two incompatible surfaces with neither prevailing, and the
 /// point is retired.
+///
+/// **The whole rule runs over the [scored](scored_mask) members only** — the block
+/// sweep, both margin sides, and the majority denominator. An unscored member
+/// carries no pairwise evidence at all, so it can neither be evicted by a cut it
+/// took no part in nor dilute a majority among members that did: it passes through
+/// `kept` (a `Retire` still ships nothing, the point itself is refused) and stays
+/// out of `block`. With every member scored this is the plain rule, unchanged.
+///
+/// Fewer than two scored members means no evidence: `KeepAll`, empty block,
+/// `support = 0`, undefined margin.
 pub fn decide_member_coherence(
     matrix: &MemberMatrix,
     params: &MemberCoherenceParams,
@@ -411,26 +544,50 @@ pub fn decide_member_coherence(
         return MemberDecision::default();
     }
     let zncc = &matrix.zncc;
-    let block = max_support_block(zncc, k, params.bar);
-    let support = block.iter().filter(|&&b| b).count();
+    let scored = scored_mask(zncc, k);
+    let idx: Vec<usize> = (0..k).filter(|&i| scored[i]).collect();
+    let s = idx.len();
+    if s < 2 {
+        return MemberDecision {
+            verdict: MemberVerdict::KeepAll,
+            kept: vec![true; k],
+            block: vec![false; k],
+            support: 0,
+            margin: f64::NAN,
+            min_intra: f64::NAN,
+            max_cross: f64::NAN,
+        };
+    }
 
-    // Margin components. Undefined (NaN) for a block of one, a block spanning the
-    // whole track, or a side with no finite link.
+    // The scored sub-matrix, in member order. Every quantity below is computed on
+    // it, so unscored members are structurally outside the rule rather than
+    // half-counted by it.
+    let mut sub = vec![f64::NAN; s * s];
+    for (a, &ia) in idx.iter().enumerate() {
+        for (b, &ib) in idx.iter().enumerate() {
+            sub[a * s + b] = zncc[ia * k + ib];
+        }
+    }
+    let sub_block = max_support_block(&sub, s, params.bar);
+    let support = sub_block.iter().filter(|&&b| b).count();
+
+    // Margin components. Undefined (NaN) for a block of one, a block spanning
+    // every scored member, or a side with no finite link.
     let mut min_intra = f64::INFINITY;
     let mut max_cross = f64::NEG_INFINITY;
-    for i in 0..k {
-        if !block[i] {
+    for a in 0..s {
+        if !sub_block[a] {
             continue;
         }
-        for j in 0..k {
-            if i == j {
+        for b in 0..s {
+            if a == b {
                 continue;
             }
-            let z = zncc[i * k + j];
+            let z = sub[a * s + b];
             if !z.is_finite() {
                 continue;
             }
-            if block[j] {
+            if sub_block[b] {
                 min_intra = min_intra.min(z);
             } else {
                 max_cross = max_cross.max(z);
@@ -447,12 +604,19 @@ pub fn decide_member_coherence(
     } else {
         f64::NAN
     };
-    let whole = support == k;
+    let whole = support == s;
     let margin = if whole || support < 2 {
         f64::NAN
     } else {
         min_intra - max_cross
     };
+
+    // Scatter the block back over the full member list; unscored members are not
+    // in it.
+    let mut block = vec![false; k];
+    for (a, &ia) in idx.iter().enumerate() {
+        block[ia] = sub_block[a];
+    }
 
     let keep_all = || MemberDecision {
         verdict: MemberVerdict::KeepAll,
@@ -471,9 +635,9 @@ pub fn decide_member_coherence(
     if margin.is_nan() || margin <= params.margin_gate {
         return keep_all();
     }
-    // No strict majority: the two sides are equally supported, so neither can be
-    // called the point's surface.
-    if 2 * support <= k {
+    // No strict majority among the members that carry evidence: the two sides are
+    // equally supported, so neither can be called the point's surface.
+    if 2 * support <= s {
         return MemberDecision {
             verdict: MemberVerdict::Retire,
             kept: vec![false; k],
@@ -484,9 +648,11 @@ pub fn decide_member_coherence(
             max_cross,
         };
     }
+    // The cut evicts the scored members outside the block, and only those.
+    let kept = (0..k).map(|i| block[i] || !scored[i]).collect();
     MemberDecision {
         verdict: MemberVerdict::Split,
-        kept: block.clone(),
+        kept,
         block,
         support: support as u32,
         margin,

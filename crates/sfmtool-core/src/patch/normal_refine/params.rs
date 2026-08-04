@@ -259,7 +259,7 @@ pub struct NormalRefineResult {
 pub(in crate::patch) const FLAT_NORM_SQ_EPS: f64 = 1e-6;
 
 /// Minimum number of commonly-valid pixels for a support to be scoreable.
-pub(super) const MIN_MASK_PIXELS: usize = 8;
+pub(in crate::patch) const MIN_MASK_PIXELS: usize = 8;
 
 /// Minimum robust *effective* view count `1/Σwᵢ²` for the weighted consensus to
 /// be meaningful (a pair) and avoid the `0/0` at `Σwᵢ² → 1`. This is a degeneracy

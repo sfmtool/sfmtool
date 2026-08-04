@@ -60,6 +60,12 @@ impl PyPatchCloud {
     ///         ``"anisotropic"``.
     ///     min_valid_fraction: Per-member floor on the window-weighted valid-pixel
     ///         fraction; a member below it is left unscored.
+    ///     min_support_pixels: Floor on the **common** support — the pixels valid
+    ///         in every scoreable member, which every pairwise ZNCC is computed
+    ///         over. A track below it is left entirely unscored (and so kept). The
+    ///         default 8 is the floor the shared support builder already enforces,
+    ///         so it changes nothing; raise it when vetting wide-baseline tracks,
+    ///         where the intersection can shrink to a sliver of the R×R grid.
     ///     point_indexes: If given, validate only the patches with these source
     ///         point ids; ``None`` (default) validates every patch.
     ///     member_views: Optional mapping ``point_index -> [image_index, ...]``
@@ -71,21 +77,31 @@ impl PyPatchCloud {
     ///         ``False`` — it is ``k×k`` per point).
     ///
     /// Returns a list of per-patch dicts (in cloud order, patches excluded by
-    /// ``point_indexes`` omitted): ``point_index`` (int), ``members`` (1-D int32
+    /// ``point_indexes`` omitted): ``point_index`` (int), ``members`` (1-D uint32
     /// numpy array of image indices, deduplicated first-seen-wins — every other
     /// per-member array is parallel to it), ``verdict`` (``"keep_all"`` /
     /// ``"split"`` / ``"retire"``), ``kept`` (1-D bool numpy array — the members
     /// the point keeps; all-``False`` on a retirement), ``block`` (1-D bool numpy
-    /// array — the winning max-support block; informational on a retirement),
-    /// ``scored`` (1-D bool numpy array — which members could be rendered),
-    /// ``support`` (int), ``margin``, ``min_intra``, ``max_cross`` (floats, NaN
-    /// where undefined), and — with ``return_matrix=True`` — ``zncc`` (``k×k``
-    /// float64 numpy array, unit diagonal, NaN for uncorrelatable pairs).
+    /// array — the winning max-support block over the *scored* members;
+    /// informational on a retirement), ``scored`` (1-D bool numpy array — which
+    /// members carry pairwise evidence), ``support`` (int — the block size, ``0``
+    /// when fewer than two members scored), ``n_support`` (int — the common-support
+    /// pixel count every pairwise ZNCC was taken over; one number per point,
+    /// because the support is frozen per point rather than per pair),
+    /// ``margin``, ``min_intra``, ``max_cross`` (floats, NaN where undefined), and
+    /// — with ``return_matrix=True`` — ``zncc`` (``k×k`` float64 numpy array, unit
+    /// diagonal, NaN for uncorrelatable pairs).
+    ///
+    /// **Unscored members** — nothing rendered them, or nothing could be
+    /// correlated with them — sit outside the decision rule entirely: the block
+    /// sweep, the margin and the majority denominator all run over the scored
+    /// members only, and an unscored member is passed through in ``kept`` (a
+    /// ``"retire"`` still ships nothing: the point itself is refused).
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         recon, images, *, bar=0.65, margin_gate=0.05, resolution=24, window="gaussian_disk",
-        window_sigma=0.6, sampler="bilinear_mip", min_valid_fraction=0.6, point_indexes=None,
-        member_views=None, return_matrix=false, progress=None
+        window_sigma=0.6, sampler="bilinear_mip", min_valid_fraction=0.6, min_support_pixels=8,
+        point_indexes=None, member_views=None, return_matrix=false, progress=None
     ))]
     fn validate_member_coherence<'py>(
         &self,
@@ -99,6 +115,7 @@ impl PyPatchCloud {
         window_sigma: f64,
         sampler: &str,
         min_valid_fraction: f64,
+        min_support_pixels: u32,
         point_indexes: Option<Vec<u32>>,
         member_views: Option<std::collections::HashMap<u32, Vec<u32>>>,
         return_matrix: bool,
@@ -163,6 +180,7 @@ impl PyPatchCloud {
             window,
             sampler,
             min_valid_fraction,
+            min_support_pixels,
         };
 
         let pyramid_set = resolve_pyramids(&posed, images)?;
@@ -235,6 +253,7 @@ impl PyPatchCloud {
             d.set_item("block", res.decision.block.clone().into_pyarray(py))?;
             d.set_item("scored", res.matrix.scored.clone().into_pyarray(py))?;
             d.set_item("support", res.decision.support)?;
+            d.set_item("n_support", res.matrix.n_support)?;
             d.set_item("margin", res.decision.margin)?;
             d.set_item("min_intra", res.decision.min_intra)?;
             d.set_item("max_cross", res.decision.max_cross)?;

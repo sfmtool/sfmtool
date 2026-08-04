@@ -189,9 +189,11 @@ fn three_member_minority_block_retires_and_majority_block_splits() {
 }
 
 #[test]
-fn unscoreable_pairs_do_not_join_a_block() {
-    // Member 3 could not be rendered: NaN row/column. It supports only itself,
-    // so it falls outside the winning block and is evicted by the split.
+fn an_unscored_member_sits_outside_the_rule_entirely() {
+    // Member 3 could not be rendered: NaN row/column, so it carries no pairwise
+    // evidence. The three that did render agree, so they are the whole block —
+    // the rule runs over them alone, the track is kept whole, and member 3 is
+    // neither in the block nor counted against it.
     let m = matrix(&[
         &[1.0, 0.95, 0.93, f64::NAN],
         &[0.95, 1.0, 0.94, f64::NAN],
@@ -200,10 +202,153 @@ fn unscoreable_pairs_do_not_join_a_block() {
     ]);
     assert_eq!(m.scored, vec![true, true, true, false]);
     let d = decide_member_coherence(&m, &defaults());
-    // No finite cross link, so the margin is undefined and the track is kept
-    // whole: an unrenderable member is missing evidence, not contrary evidence.
     assert_eq!(d.verdict, MemberVerdict::KeepAll);
+    assert_eq!(kept_indexes(&d), vec![0, 1, 2, 3]);
+    // Support and block are over the scored members: 3 of them, all in.
+    assert_eq!(d.support, 3);
+    assert_eq!(block_indexes(&d), vec![0, 1, 2]);
+    assert!(d.margin.is_nan());
     assert!(d.max_cross.is_nan());
+}
+
+#[test]
+fn a_split_evicts_the_outlier_and_keeps_the_unscored_member() {
+    // {0,1,2} agree, member 3 is a scored outlier, member 4 never rendered. The
+    // cut takes 3 (there is evidence against it) and passes 4 through: an
+    // unscored member is missing evidence, not contrary evidence, so a rule it
+    // took no part in cannot evict it.
+    let m = matrix(&[
+        &[1.0, 0.95, 0.93, 0.20, f64::NAN],
+        &[0.95, 1.0, 0.94, 0.19, f64::NAN],
+        &[0.93, 0.94, 1.0, 0.22, f64::NAN],
+        &[0.20, 0.19, 0.22, 1.0, f64::NAN],
+        &[f64::NAN, f64::NAN, f64::NAN, f64::NAN, 1.0],
+    ]);
+    assert_eq!(m.scored, vec![true, true, true, true, false]);
+    let d = decide_member_coherence(&m, &defaults());
+    assert_eq!(d.verdict, MemberVerdict::Split);
+    assert_eq!(kept_indexes(&d), vec![0, 1, 2, 4]);
+    assert_eq!(block_indexes(&d), vec![0, 1, 2]);
+    assert_eq!(d.support, 3);
+}
+
+#[test]
+fn unscored_members_do_not_dilute_the_majority() {
+    // A clean 2-of-3 split among the members that scored, plus two that did not.
+    // The majority is taken over the scored members (2 of 3 -> Split); counting
+    // the unscored pair in the denominator would sink it to 2 of 5 and retire a
+    // point on evidence that does not exist.
+    let m = matrix(&[
+        &[1.0, 0.95, 0.20, f64::NAN, f64::NAN],
+        &[0.95, 1.0, 0.18, f64::NAN, f64::NAN],
+        &[0.20, 0.18, 1.0, f64::NAN, f64::NAN],
+        &[f64::NAN, f64::NAN, f64::NAN, 1.0, f64::NAN],
+        &[f64::NAN, f64::NAN, f64::NAN, f64::NAN, 1.0],
+    ]);
+    assert_eq!(m.scored, vec![true, true, true, false, false]);
+    let d = decide_member_coherence(&m, &defaults());
+    assert_eq!(d.verdict, MemberVerdict::Split);
+    assert_eq!(kept_indexes(&d), vec![0, 1, 3, 4]);
+    assert_eq!(block_indexes(&d), vec![0, 1]);
+    assert_eq!(d.support, 2);
+}
+
+#[test]
+fn a_track_with_no_pairwise_evidence_is_kept_whole() {
+    // Nothing rendered: no hypothesis, no block, no margin — and no cut.
+    let nan = f64::NAN;
+    let m = matrix(&[&[1.0, nan, nan], &[nan, 1.0, nan], &[nan, nan, 1.0]]);
+    assert_eq!(m.scored, vec![false, false, false]);
+    let d = decide_member_coherence(&m, &defaults());
+    assert_eq!(d.verdict, MemberVerdict::KeepAll);
+    assert_eq!(kept_indexes(&d), vec![0, 1, 2]);
+    assert_eq!(d.support, 0);
+    assert!(block_indexes(&d).is_empty());
+    assert!(d.margin.is_nan() && d.min_intra.is_nan() && d.max_cross.is_nan());
+}
+
+#[test]
+fn one_unscoreable_pair_does_not_unscore_its_members() {
+    // Members 1 and 2 could not be correlated with *each other* (their supports
+    // met nowhere) but both correlate with 0, so both carry evidence and both are
+    // in play. The missing entry is skipped by the margin, not treated as a
+    // disagreement. Values are exact binary fractions so the margin is exact.
+    let nan = f64::NAN;
+    let m = matrix(&[
+        &[1.0, 0.75, 0.75, 0.25],
+        &[0.75, 1.0, nan, 0.25],
+        &[0.75, nan, 1.0, 0.25],
+        &[0.25, 0.25, 0.25, 1.0],
+    ]);
+    assert_eq!(m.scored, vec![true, true, true, true]);
+    let d = decide_member_coherence(&m, &defaults());
+    assert_eq!(d.verdict, MemberVerdict::Split);
+    assert_eq!(kept_indexes(&d), vec![0, 1, 2]);
+    assert_eq!(d.min_intra, 0.75);
+    assert_eq!(d.max_cross, 0.25);
+    assert_eq!(d.margin, 0.5);
+}
+
+#[test]
+fn a_two_of_four_block_retires_at_the_majority_boundary() {
+    // 2 + 1 + 1: {0,1} agree, members 2 and 3 agree with nobody — including each
+    // other. The block is still exactly half the track (2s == k), so it is not a
+    // majority and the point ships nothing, however isolated the other two are.
+    let m = matrix(&[
+        &[1.0, 0.75, 0.25, 0.25],
+        &[0.75, 1.0, 0.25, 0.25],
+        &[0.25, 0.25, 1.0, 0.25],
+        &[0.25, 0.25, 0.25, 1.0],
+    ]);
+    let d = decide_member_coherence(&m, &defaults());
+    assert_eq!(d.verdict, MemberVerdict::Retire);
+    assert_eq!(d.support, 2);
+    assert_eq!(block_indexes(&d), vec![0, 1]);
+    assert!(kept_indexes(&d).is_empty());
+    assert_eq!(d.margin, 0.5);
+}
+
+#[test]
+fn the_bar_and_the_margin_gate_are_inclusive_at_their_boundaries() {
+    // Exact binary fractions: no float residue anywhere near the comparisons.
+    // 0-1 sits *exactly* on the bar, everything else exactly at 0.25.
+    let m = matrix(&[&[1.0, 0.5, 0.25], &[0.5, 1.0, 0.25], &[0.25, 0.25, 1.0]]);
+    // `>= bar` puts the 0.5 link in the graph, so {0,1} is a block of two and the
+    // margin is exactly 0.5 - 0.25.
+    let at_gate = MemberCoherenceParams {
+        bar: 0.5,
+        margin_gate: 0.25,
+        ..defaults()
+    };
+    let d = decide_member_coherence(&m, &at_gate);
+    assert_eq!(d.margin, 0.25);
+    // `margin <= margin_gate` refuses: a margin exactly at the gate is not past it.
+    assert_eq!(d.verdict, MemberVerdict::KeepAll);
+
+    let below_gate = MemberCoherenceParams {
+        margin_gate: 0.125,
+        ..at_gate
+    };
+    let d = decide_member_coherence(&m, &below_gate);
+    assert_eq!(d.verdict, MemberVerdict::Split);
+    assert_eq!(kept_indexes(&d), vec![0, 1]);
+    assert_eq!(d.margin, 0.25);
+
+    // And a hair above the bar's own boundary there is no block at all: the 0.5
+    // link is the only candidate edge in the matrix.
+    let above_bar = MemberCoherenceParams {
+        bar: 0.5000000000000001,
+        ..below_gate
+    };
+    let d = decide_member_coherence(&m, &above_bar);
+    assert_eq!(d.verdict, MemberVerdict::KeepAll);
+    assert_eq!(d.support, 1);
+}
+
+#[test]
+fn a_hand_built_matrix_reports_no_rendered_support() {
+    let m = matrix(&[&[1.0, 0.90], &[0.90, 1.0]]);
+    assert_eq!(m.n_support, 0);
 }
 
 #[test]
@@ -276,6 +421,12 @@ fn surface_a(x: f64, y: f64) -> f64 {
 /// A different surface — a member showing this disagrees photometrically.
 fn surface_b(x: f64, y: f64) -> f64 {
     127.5 + 60.0 * (y * 13.0 + 1.7).sin() + 40.0 * (x * 29.0 - 0.4).cos()
+}
+
+/// No texture at all — a blown highlight, a patch of sky, a saturated sensor.
+/// Nothing can be correlated with it.
+fn surface_flat(_x: f64, _y: f64) -> f64 {
+    200.0
 }
 
 /// Synthesize the image a pinhole camera at `center` (looking down world +z)
@@ -423,6 +574,74 @@ fn balanced_two_surface_track_retires_end_to_end() {
     assert_eq!(out.decision.verdict, MemberVerdict::Retire);
     assert_eq!(out.decision.support, 2);
     assert!(out.decision.kept.iter().all(|&k| !k));
+}
+
+#[test]
+fn a_textureless_member_is_unscored_and_the_rest_still_score() {
+    // Member 3 sees a blown-out, textureless surface. The shared z-normalization
+    // drops a channel that is flat in ANY member, for EVERY member, which here
+    // would flatten the only channel and leave the whole track unscored. Member 3
+    // is dropped from the stack first instead, so the three members that do carry
+    // texture still score against each other.
+    let scene = Scene::new(
+        &[
+            [0.0, 0.0, 0.0],
+            [0.6, 0.0, 0.4],
+            [-0.6, 0.2, 0.3],
+            [0.3, -0.5, 0.2],
+        ],
+        &[surface_a, surface_a, surface_a, surface_flat],
+    );
+    let views = scene.views();
+    let out = validate_member_coherence(&plane_patch(), &views, &[0, 1, 2, 3], &render_params());
+
+    assert_eq!(out.matrix.scored, vec![true, true, true, false]);
+    for (i, j) in [(0, 1), (0, 2), (1, 2)] {
+        assert!(
+            out.matrix.get(i, j) > 0.9,
+            "textured pair {i},{j}: {}",
+            out.matrix.get(i, j)
+        );
+    }
+    for i in 0..3 {
+        assert!(out.matrix.get(i, 3).is_nan(), "pair {i},3 must be unscored");
+    }
+    // The verdict is the three scored members', and the flat one rides along.
+    assert_eq!(out.decision.verdict, MemberVerdict::KeepAll);
+    assert_eq!(out.decision.support, 3);
+    assert!(out.decision.kept.iter().all(|&k| k));
+}
+
+#[test]
+fn the_common_support_is_reported_and_min_support_pixels_gates_on_it() {
+    let scene = Scene::new(
+        &[[0.0, 0.0, 0.0], [0.6, 0.0, 0.4], [-0.6, 0.2, 0.3]],
+        &[surface_a, surface_a, surface_a],
+    );
+    let views = scene.views();
+    let params = render_params();
+    let m = member_zncc_matrix(&plane_patch(), &views, &[0, 1, 2], &params);
+    let n = m.n_support;
+    // A real support: past the shared floor, and short of the full grid (the
+    // gaussian-disk window clips the corners).
+    assert!(n >= MIN_MASK_PIXELS as u32, "n_support {n}");
+    assert!(n < params.resolution * params.resolution, "n_support {n}");
+    assert!(m.scored.iter().all(|&s| s));
+
+    // One pixel more than the track can offer: nothing is correlated, the count
+    // is still reported, and the fail-open verdict keeps every member.
+    let strict = MemberCoherenceParams {
+        min_support_pixels: n + 1,
+        ..params
+    };
+    let gated = member_zncc_matrix(&plane_patch(), &views, &[0, 1, 2], &strict);
+    assert_eq!(gated.n_support, n);
+    assert!(gated.scored.iter().all(|&s| !s));
+    assert!(gated.get(0, 1).is_nan());
+    let d = decide_member_coherence(&gated, &strict);
+    assert_eq!(d.verdict, MemberVerdict::KeepAll);
+    assert_eq!(d.support, 0);
+    assert!(d.kept.iter().all(|&k| k));
 }
 
 #[test]
