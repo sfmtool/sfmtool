@@ -5,6 +5,7 @@
 name = "sfmtool-archive-io"
 version = "0.2.0"
 edition = "2021"
+rust-version.workspace = true
 license = "Apache-2.0"
 description = "Shared ZIP + zstd container I/O for sfmtool's archive-based file formats"
 

@@ -35,7 +35,7 @@ impl PointTrackDetail {
             ui.painter().rect_stroke(
                 rect,
                 2.0,
-                egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
+                egui::Stroke::new(1.0_f32, ui.visuals().weak_text_color()),
                 egui::StrokeKind::Outside,
             );
             swatch_response.on_hover_text(format!("rgb({r}, {g}, {b})"));
@@ -118,7 +118,7 @@ fn copy_button(ui: &mut egui::Ui, tooltip: &str) -> bool {
         } else {
             ui.visuals().weak_text_color()
         };
-        let stroke = egui::Stroke::new(1.0, color);
+        let stroke = egui::Stroke::new(1.0_f32, color);
 
         // Two overlapping rounded rectangles (the standard "copy" icon).
         let inset = padding + 1.0;

@@ -136,7 +136,7 @@ impl ImageDetail {
                         painter.circle_stroke(
                             center,
                             radius + 2.0,
-                            egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                            egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
                         );
                     }
                 }
@@ -175,7 +175,7 @@ impl ImageDetail {
                         painter.circle_stroke(
                             center,
                             radius + 2.0,
-                            egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                            egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
                         );
                     }
                 }
@@ -208,7 +208,7 @@ impl ImageDetail {
                         painter.circle_stroke(
                             center,
                             radius + 2.0,
-                            egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                            egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
                         );
                     }
                 }
@@ -240,7 +240,7 @@ impl ImageDetail {
                         painter.circle_stroke(
                             center,
                             radius + 2.0,
-                            egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                            egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
                         );
                     }
                 }
@@ -274,7 +274,7 @@ impl ImageDetail {
                         painter.circle_stroke(
                             center,
                             radius + 2.0,
-                            egui::Stroke::new(2.0, egui::Color32::YELLOW),
+                            egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
                         );
                     }
                 }

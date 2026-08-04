@@ -5,6 +5,7 @@
 name = "sfmtool-core"
 version = "0.2.0"
 edition = "2021"
+rust-version.workspace = true
 license = "Apache-2.0"
 description = "Core data structures and algorithms for sfmtool"
 

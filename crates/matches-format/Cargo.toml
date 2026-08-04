@@ -5,6 +5,7 @@
 name = "matches-format"
 version = "0.2.0"
 edition = "2021"
+rust-version.workspace = true
 license = "Apache-2.0"
 description = "Read/write .matches file format for feature match correspondences"
 

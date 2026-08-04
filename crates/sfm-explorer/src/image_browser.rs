@@ -460,7 +460,10 @@ impl ImageBrowser {
                 painter.rect_stroke(
                     thumb_rect.expand(5.0),
                     2.0,
-                    egui::Stroke::new(3.0, egui::Color32::from_rgba_unmultiplied(255, 165, 0, 120)),
+                    egui::Stroke::new(
+                        3.0_f32,
+                        egui::Color32::from_rgba_unmultiplied(255, 165, 0, 120),
+                    ),
                     egui::StrokeKind::Outside,
                 );
             }
@@ -472,7 +475,7 @@ impl ImageBrowser {
                 painter.rect_stroke(
                     thumb_rect.expand(1.0),
                     0.0,
-                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                    egui::Stroke::new(2.0_f32, egui::Color32::WHITE),
                     egui::StrokeKind::Outside,
                 );
             }
@@ -488,7 +491,7 @@ impl ImageBrowser {
                 painter.rect_stroke(
                     thumb_rect.expand(6.0),
                     0.0,
-                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                    egui::Stroke::new(2.0_f32, egui::Color32::WHITE),
                     egui::StrokeKind::Outside,
                 );
             }
@@ -496,7 +499,7 @@ impl ImageBrowser {
                 painter.rect_stroke(
                     thumb_rect.expand(4.0),
                     0.0,
-                    egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 165, 0)),
+                    egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 165, 0)),
                     egui::StrokeKind::Outside,
                 );
             }
@@ -504,7 +507,7 @@ impl ImageBrowser {
                 painter.rect_stroke(
                     thumb_rect.expand(2.0),
                     0.0,
-                    egui::Stroke::new(2.0, egui::Color32::CYAN),
+                    egui::Stroke::new(2.0_f32, egui::Color32::CYAN),
                     egui::StrokeKind::Outside,
                 );
             }
@@ -639,7 +642,7 @@ impl ImageBrowser {
             painter.rect_stroke(
                 ind_rect,
                 0.0,
-                egui::Stroke::new(1.0, egui::Color32::WHITE),
+                egui::Stroke::new(1.0_f32, egui::Color32::WHITE),
                 egui::StrokeKind::Outside,
             );
         }

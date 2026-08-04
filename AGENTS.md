@@ -159,7 +159,15 @@ backlog and keep them honest as findings get addressed:
 - Not every `specs/cli/*-command.md` maps to a top-level command
   (e.g. `scale-by-measurements-command.md` documents an `xform` sub-command);
   likewise not every CLI command has a spec yet.
-- Python 3.14 and Rust 1.94 are pinned in `pixi.toml`.
+- Python 3.14 and Rust 1.97 are pinned in `pixi.toml`. That is the *development*
+  toolchain, and it is deliberately not the same thing as the MSRV: the workspace
+  declares `rust-version = "1.95"` in `[workspace.package]` (inherited by all nine
+  crates), because the PyPI sdist compiles this workspace on the user's own rustc
+  and we publish wheels for Linux and Windows only. The `msrv` job in `ci.yml`
+  builds against that floor; it reads the version out of `Cargo.toml`, so raise
+  the MSRV there and nowhere else. Bumping a dependency can raise the floor
+  silently — `libsqlite3-sys` forced 1.95 while declaring no `rust-version` — so
+  trust that job over dependency metadata.
 - A workspace can supply per-directory camera intrinsics via
   `camera_config.json` files; resolution is closest-ancestor-wins, capped at
   the workspace root. See `src/sfmtool/camera/config.py` and

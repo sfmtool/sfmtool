@@ -378,12 +378,8 @@ fn localize(
             dxs, dys, dss,
         );
 
-        // x̂ = -H⁻¹ g
-        let solved = hessian.lu().solve(&grad);
-        let xhat = match solved {
-            Some(v) => -v,
-            None => return None, // singular Hessian
-        };
+        // x̂ = -H⁻¹ g; `?` bails out on a singular Hessian.
+        let xhat = -hessian.lu().solve(&grad)?;
 
         // If within half a pixel in every dimension, we are done.
         if xhat[0].abs() < 0.5 && xhat[1].abs() < 0.5 && xhat[2].abs() < 0.5 {

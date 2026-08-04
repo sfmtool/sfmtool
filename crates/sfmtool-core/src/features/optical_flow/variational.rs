@@ -482,7 +482,7 @@ unsafe fn jacobi_row_interior_sse2(
     let mut col = 1usize;
 
     // Process 4 columns at a time
-    while col + 4 <= w - 1 {
+    while col + 4 < w {
         let idx = base + col;
 
         // Load flow_u neighbors for Laplacian
@@ -715,7 +715,7 @@ unsafe fn gradient_row_interior_sse2(
     let base = row * w;
     let mut col = 1usize;
 
-    while col + 4 <= w - 1 {
+    while col + 4 < w {
         let idx = base + col;
 
         // gx = (right - left) * 0.5

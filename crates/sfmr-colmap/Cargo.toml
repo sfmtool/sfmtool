@@ -5,6 +5,7 @@
 name = "sfmr-colmap"
 version = "0.2.0"
 edition = "2021"
+rust-version.workspace = true
 license = "Apache-2.0"
 description = "COLMAP format interoperability for sfmr reconstructions"
 
@@ -12,7 +13,7 @@ description = "COLMAP format interoperability for sfmr reconstructions"
 sfmr-format = { path = "../sfmr-format" }
 matches-format = { path = "../matches-format" }
 ndarray = "0.17"
-rusqlite = { version = "0.39", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 serde_json = "1"
 thiserror = "2"
 

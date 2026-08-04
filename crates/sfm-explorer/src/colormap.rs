@@ -169,7 +169,7 @@ pub fn draw_colorbar(
             egui::pos2(bar_right, bar_bottom),
         ),
         0.0,
-        egui::Stroke::new(1.0, egui::Color32::WHITE),
+        egui::Stroke::new(1.0_f32, egui::Color32::WHITE),
         egui::StrokeKind::Outside,
     );
 

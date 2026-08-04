@@ -112,6 +112,59 @@ jobs:
             !target/**/incremental/**
           key: ${{ runner.os }}-cargo-lint-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
 
+  # Builds the workspace with the *minimum* supported Rust, which is deliberately
+  # older than the toolchain pixi.toml pins for development. The consumer is the
+  # PyPI sdist: we publish wheels for Linux and Windows only, so anyone else --
+  # macOS users in particular -- compiles this whole workspace with whatever rustc
+  # they already have. Without this job an MSRV regression is invisible until it
+  # reaches them as a confusing mid-compile error.
+  #
+  # Dependencies routinely raise the floor without declaring it (libsqlite3-sys
+  # 0.38.1 forced 1.95 via `cfg_select!` while declaring no rust-version at all),
+  # so metadata inspection is not a substitute for an actual build.
+  msrv:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # Only the pixi binary is needed; `pixi exec` builds the throwaway MSRV
+      # environment. Installing a project environment would just pull the 1.97
+      # toolchain this job exists to avoid.
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          run-install: false
+      - name: Cache cargo home
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-home-
+
+      # Single source of truth: the floor lives in [workspace.package] and is read
+      # from there, so bumping the MSRV never means editing this workflow too.
+      - name: Read MSRV from Cargo.toml
+        id: msrv
+        run: |
+          version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          test -n "$version" || { echo "no rust-version in Cargo.toml"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "MSRV is $version"
+
+      # Scoped to the default targets rather than --all-targets: the sdist builds
+      # library code only, so holding benches and test-only dev-dependencies to the
+      # same floor would fail this job for something no consumer ever compiles.
+      # Python is pinned because the sfmtool-py build script needs an interpreter.
+      - name: Cargo check at MSRV
+        run: >
+          pixi exec
+          -s "rust==${{ steps.msrv.outputs.version }}.*"
+          -s "python=3.14.*"
+          -- cargo check --workspace --locked
+
   # Full instrumented build + combined Rust/Python coverage, uploaded to
   # codecov. Coverage line numbers are platform-independent, so we only pay
   # the slower instrumented build once, on Linux. Windows and macOS still run
@@ -454,7 +507,7 @@ jobs:
   # Single stable check to mark as required in branch protection. Always runs
   # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.
   ci-ok:
-    needs: [changes, lint, test-linux, test-os, ui-test-windows, ui-test-macos]
+    needs: [changes, lint, msrv, test-linux, test-os, ui-test-windows, ui-test-macos]
     if: always()
     runs-on: ubuntu-latest
     steps:

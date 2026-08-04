@@ -23,7 +23,7 @@ version = "0.2"
 # Universal build dependency: the Rust toolchain is needed to build any crate in
 # the workspace (clippy, the sfm-explorer GUI tests, the PyO3 extension).
 [dependencies]
-rust = ">=1.94.0,<1.95"
+rust = ">=1.97.1,<1.98"
 
 # The SfM runtime: the Python interpreter and the pycolmap solver. Only
 # environments that actually run the Python tool pull this in — keeping it out

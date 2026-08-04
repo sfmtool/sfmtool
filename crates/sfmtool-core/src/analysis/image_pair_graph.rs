@@ -8,6 +8,7 @@
 //! 1. Covisibility - images that share 3D points in the reconstruction
 //! 2. Frustum intersection - images whose view frustums overlap in 3D space
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use nalgebra::{Quaternion, UnitQuaternion};
@@ -137,7 +138,7 @@ pub fn build_covisibility_pairs(
         .collect();
 
     // Step 5: Sort by count descending
-    pairs.sort_by(|a, b| b.2.cmp(&a.2));
+    pairs.sort_by_key(|p| Reverse(p.2));
 
     pairs
 }

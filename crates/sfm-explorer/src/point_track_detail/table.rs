@@ -346,7 +346,7 @@ impl PointTrackDetail {
             ui.painter().circle_stroke(
                 dot_center,
                 DOT_RADIUS,
-                egui::Stroke::new(1.0, egui::Color32::BLACK),
+                egui::Stroke::new(1.0_f32, egui::Color32::BLACK),
             );
         }
     }

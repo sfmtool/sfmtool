@@ -151,7 +151,7 @@ pub fn read_colmap_db_matches(
     }
 
     // Sort pairs by (idx_i, idx_j)
-    all_pairs.sort_by(|a, b| (a.idx_i, a.idx_j).cmp(&(b.idx_i, b.idx_j)));
+    all_pairs.sort_by_key(|a| (a.idx_i, a.idx_j));
 
     // Build flat arrays
     let pair_count = all_pairs.len();

@@ -14,3 +14,14 @@ members = [
     "crates/sfmtool-py",
 ]
 resolver = "2"
+
+# Minimum supported Rust version, inherited by every crate via
+# `rust-version.workspace = true`. This is not the toolchain we develop against
+# (pixi.toml pins that, currently 1.97) — it is the floor for people who build
+# from the PyPI *sdist*, which compiles this whole workspace with whatever rustc
+# they happen to have. 1.95 is measured, not guessed: libsqlite3-sys 0.38.1
+# (via rusqlite 0.40) uses `cfg_select!` in its build script, stabilized in 1.95.
+# That crate declares no rust-version of its own, so only an actual build catches
+# it — `.github/workflows/ci.yml` has an `msrv` job that does exactly that.
+[workspace.package]
+rust-version = "1.95"

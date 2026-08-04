@@ -39,7 +39,7 @@ impl Viewer3D {
             let p1 = Point3::new(-grid_extent, y, 0.0);
             let p2 = Point3::new(grid_extent, y, 0.0);
             if let Some((s1, s2)) = self.camera.project_line_clipped(&p1, &p2, rect) {
-                painter.line_segment([s1, s2], Stroke::new(1.0, grid_color));
+                painter.line_segment([s1, s2], Stroke::new(1.0_f32, grid_color));
             }
             y += grid_step;
         }
@@ -50,7 +50,7 @@ impl Viewer3D {
             let p1 = Point3::new(x, -grid_extent, 0.0);
             let p2 = Point3::new(x, grid_extent, 0.0);
             if let Some((s1, s2)) = self.camera.project_line_clipped(&p1, &p2, rect) {
-                painter.line_segment([s1, s2], Stroke::new(1.0, grid_color));
+                painter.line_segment([s1, s2], Stroke::new(1.0_f32, grid_color));
             }
             x += grid_step;
         }
@@ -62,13 +62,16 @@ impl Viewer3D {
         let z_end = Point3::new(0.0, 0.0, axis_length);
 
         if let Some((s1, s2)) = self.camera.project_line_clipped(&origin, &x_end, rect) {
-            painter.line_segment([s1, s2], Stroke::new(2.0, Color32::RED));
+            painter.line_segment([s1, s2], Stroke::new(2.0_f32, Color32::RED));
         }
         if let Some((s1, s2)) = self.camera.project_line_clipped(&origin, &y_end, rect) {
-            painter.line_segment([s1, s2], Stroke::new(2.0, Color32::GREEN));
+            painter.line_segment([s1, s2], Stroke::new(2.0_f32, Color32::GREEN));
         }
         if let Some((s1, s2)) = self.camera.project_line_clipped(&origin, &z_end, rect) {
-            painter.line_segment([s1, s2], Stroke::new(2.0, Color32::from_rgb(80, 80, 255)));
+            painter.line_segment(
+                [s1, s2],
+                Stroke::new(2.0_f32, Color32::from_rgb(80, 80, 255)),
+            );
         }
     }
 
@@ -98,11 +101,11 @@ impl Viewer3D {
         let z_end = transform_axis(Vector3::z());
 
         // Draw axes
-        painter.line_segment([center, x_end], Stroke::new(2.0, Color32::RED));
-        painter.line_segment([center, y_end], Stroke::new(2.0, Color32::GREEN));
+        painter.line_segment([center, x_end], Stroke::new(2.0_f32, Color32::RED));
+        painter.line_segment([center, y_end], Stroke::new(2.0_f32, Color32::GREEN));
         painter.line_segment(
             [center, z_end],
-            Stroke::new(2.0, Color32::from_rgb(80, 80, 255)),
+            Stroke::new(2.0_f32, Color32::from_rgb(80, 80, 255)),
         );
 
         // Draw labels

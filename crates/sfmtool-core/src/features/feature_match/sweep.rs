@@ -52,11 +52,7 @@ pub fn match_one_way_sweep(
     window_size: usize,
     threshold: Option<f64>,
 ) -> SweepMatches {
-    let desc_len = if n1 > 0 {
-        sorted_descs1.len() / n1
-    } else {
-        128
-    };
+    let desc_len = sorted_descs1.len().checked_div(n1).unwrap_or(128);
 
     let mut matches = SweepMatches::new();
 
@@ -228,11 +224,7 @@ pub fn match_one_way_sweep_geometric(
     geom: &StereoPairGeometry,
     config: &GeometricFilterConfig,
 ) -> SweepMatches {
-    let desc_len = if n1 > 0 {
-        sorted_descs1.len() / n1
-    } else {
-        128
-    };
+    let desc_len = sorted_descs1.len().checked_div(n1).unwrap_or(128);
 
     let mut matches = SweepMatches::new();
 
