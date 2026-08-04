@@ -8,6 +8,7 @@ pub mod cluster_refine;
 pub mod keypoint_localize;
 pub mod keypoint_subpixel;
 pub mod localizability;
+pub mod member_coherence;
 pub mod normal_refine;
 pub mod spawn;
 pub mod view_selection;
