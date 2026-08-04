@@ -33,6 +33,14 @@ manifest-path = "crates/sfmtool-py/Cargo.toml"
 python-source = "src"
 module-name = "sfmtool._sfmtool"
 
+[tool.ruff.lint]
+# The project had no ruff config and so inherited ruff's default rule set. Ruff
+# 0.16 broadened that default considerably (isort, flake8-bugbear,
+# flake8-simplify, RUF, …), which would have changed lint policy purely as a
+# side effect of a version bump. Pin the selection to the rules the codebase has
+# always been linted against; widening it is a deliberate, separate change.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # tee-sys avoids fd-level dup that breaks Click CliRunner on Windows + Python 3.14

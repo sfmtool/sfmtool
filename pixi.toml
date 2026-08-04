@@ -52,7 +52,7 @@ ui-test = "cargo test -p sfm-explorer --test ui_basic -- --test-threads=1"
 python = ">=3.14.4,<3.15"
 
 [feature.lint.pypi-dependencies]
-ruff = ">=0.15.10, <0.16"
+ruff = ">=0.16.1, <0.17"
 
 [feature.lint.tasks]
 fmt = "ruff format src tests"
@@ -93,7 +93,7 @@ bench-sift = "python scripts/benchmark_sift.py"
 ipython = "ipython"
 
 [feature.docs.pypi-dependencies]
-zensical = ">=0.0.43, <0.0.44"
+zensical = ">=0.0.52, <0.0.53"
 
 [feature.docs.tasks]
 docs-serve = "zensical serve"
