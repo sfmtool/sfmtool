@@ -27,7 +27,8 @@ are separate entry points.
 
 For a point with `k` members (image indices, deduplicated first-seen-wins), entry
 `(i, j)` is the windowed ZNCC between member `i`'s and member `j`'s patch, each
-sampled from its own source image through the point's own patch frame.
+sampled from its own source image through the point's own patch frame, **anchored
+at that member's stored keypoint** (below).
 
 Sampling is **identical to [view selection](patch-view-selection.md)'s** — the
 same `build_level_context` / `normalized_stack` / z-normalize path that builds the
@@ -64,6 +65,39 @@ row and column are `NaN`, reported as a per-member `scored` flag (which is exact
 uses). A track whose members cannot form a common support at all yields a matrix
 with only its diagonal, which decides as `KeepAll` (no evidence is not contrary
 evidence).
+
+### Members are sampled at their keypoints, not at the reprojection
+
+Each member's render is **recentred in-plane so it is anchored at that member's
+stored keypoint** — the sub-pixel location the feature actually occupies in that
+image — rather than at the pixel the point's current geometry reprojects to. The
+same anchors build the per-member validity mask, so the frozen common support is
+the intersection of where the members are *sampled*.
+
+The two anchors differ by the member's reprojection residual, and that is a
+**geometric** quantity: it says the position, the pose or the intrinsics do not yet
+explain this observation. Sampling at the reprojection carries that error into the
+render — the member's window slides off its own content by the residual — and every
+pairwise ZNCC the member takes part in is deflated by the misalignment rather than
+by disagreement about what is being imaged. The matrix exists to answer "do these
+members image the same surface", and it must not answer "does the current solve
+already fit them", which the reprojection cull and the bundle adjustment already
+own. A residual that is an appreciable fraction of the patch half-width costs
+several tenths of ZNCC: a member with a 0.92 px residual against a 7.9 px
+half-width (≈ 12%) scored 0.28–0.73 against its siblings at its projection while
+imaging exactly the content they did.
+
+The anchor is per member and optional. A member with no stored keypoint — a
+`sift_files` reconstruction (feature indexes, no inline keypoints), a
+`CameraViews` scene (no tracks at all), a hand-supplied member list naming an image
+the point does not observe — falls back to projection anchoring individually, and a
+caller can turn the whole thing off.
+
+**`bar` is calibrated per anchoring.** Keypoint anchoring raises scores for exactly
+the members whose residual was deflating them, so the score distribution shifts up
+and a threshold picked against projection-anchored numbers is effectively looser
+against these. The two are not the same measurement, and a bar carried across
+without a re-check is a bar whose operating point has moved.
 
 ### A textureless member does not sink the track
 
@@ -188,8 +222,9 @@ how rayon schedules them.
 `bar` and `margin_gate` are **calibration defaults, not constants** — callers
 override them. `bar` in particular is calibrated *for the render conventions in
 the same table*: it is a threshold on a ZNCC whose value depends on the window,
-the sampler, the channel treatment and the support, so a caller that changes
-`resolution`, `window` or `sampler` must re-pick it.
+the sampler, the channel treatment, the support and the **anchoring**, so a caller
+that changes `resolution`, `window`, `sampler` or `keypoint_anchor` must re-pick
+it.
 
 The rule was calibrated on a grayscale, hard-disk, per-pair-joint-support
 prototype at `bar = 0.60`. This implementation instead scores per-channel RGB over
@@ -242,17 +277,29 @@ pub struct MemberCoherence { pub matrix: MemberMatrix, pub decision: MemberDecis
 pub fn scored_mask(zncc: &[f64], k: usize) -> Vec<bool>;
 
 // Matrix and decision are separate so a caller can inspect or supply either.
-pub fn member_zncc_matrix(patch, views, members: &[u32], params) -> MemberMatrix;
+// `member_keypoints` is parallel to the INPUT `members` slice (deduplicated
+// alongside it); `None` — for the slice or for one member — anchors at the
+// projection.
+pub fn member_zncc_matrix(
+    patch, views, members: &[u32],
+    member_keypoints: Option<&[Option<[f64; 2]>]>, params,
+) -> MemberMatrix;
 pub fn decide_member_coherence(matrix: &MemberMatrix, params) -> MemberDecision;
-pub fn validate_member_coherence(patch, views, members, params) -> MemberCoherence;
+pub fn validate_member_coherence(
+    patch, views, members, member_keypoints, params,
+) -> MemberCoherence;
 
 // Batch over a cloud, rayon-parallel across points, results in cloud order.
 pub fn validate_patch_cloud_member_coherence(
     cloud: &PatchCloud, views: &[ProjectedImage<'_>], member_views: &[Vec<u32>],
+    member_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     params: &MemberCoherenceParams, progress: Option<&AtomicUsize>,
 ) -> Vec<MemberCoherence>;
 
 pub fn member_views_from_reconstruction(recon, cloud) -> Vec<Vec<u32>>;
+// The stored keypoint of each of those members, in the same order; all `None`
+// for a `sift_files` reconstruction.
+pub fn member_keypoints_from_reconstruction(recon, cloud) -> Vec<Vec<Option<[f64; 2]>>>;
 ```
 
 `MemberMatrix::from_zncc` builds a matrix from an already-computed table, so a
@@ -265,13 +312,18 @@ PatchCloud.validate_member_coherence(
     recon, images, *, bar=0.65, margin_gate=0.05, resolution=24,
     window="gaussian_disk", window_sigma=0.6, sampler="bilinear_mip",
     min_valid_fraction=0.6, min_support_pixels=8, point_indexes=None,
-    member_views=None, return_matrix=False, progress=None,
+    member_views=None, keypoint_anchor=True, return_matrix=False, progress=None,
 ) -> list[dict]
 ```
 
 `recon` is a reconstruction (member lists come from the tracks) or a
 `CameraViews` (then `member_views` — a `point_index -> [image_index, ...]` map —
 is required); `images` is a per-image list or a prebuilt `ImagePyramidSet`.
+`keypoint_anchor` (default `True`) sources each member's stored keypoint from the
+reconstruction; an overridden `member_views` entry is re-keyed against the point's
+own track, so an image it does not observe is anchored at its projection.
+`keypoint_anchor=False` — and a `CameraViews` scene, which has no keypoints to
+source — anchors every member at its projection.
 Each returned dict carries `point_index`, `members` (**uint32**, the deduplicated
 member order every other per-member array follows), `verdict`
 (`"keep_all"` / `"split"` / `"retire"`), `kept` / `block` / `scored` (bool),
@@ -301,6 +353,15 @@ unit diagonal, one odd member out splitting, a single surface kept whole, a
 balanced two-surface track retiring, member deduplication, a textureless member
 left unscored while the rest score against each other, and `n_support` being
 reported and gated on by `min_support_pixels`.
+
+Anchoring has three of its own: keypoints handed in *at* the reprojections
+reproduce the unanchored matrix entry for entry (anchoring is a strict
+generalization, not a second render path); a member whose pose carries a ~3 px
+lateral error against an image that does not — the reprojection-residual case —
+is depressed at its projection and recovers by more than 0.1 ZNCC against every
+sibling when anchored at its keypoint, with the track's weakest link (what `bar`
+reads) moving up with it; and a duplicated member keeping the keypoint of its
+first occurrence through the dedup.
 
 `tests/patch/test_member_coherence.py` covers the binding surface against a real
 reconstruction: the dict keys and dtypes, the `k×k` `zncc` under `return_matrix`

@@ -26,6 +26,12 @@
 //! same render conventions, agreeing to the affine tolerance documented in
 //! `specs/core/patch-view-selection.md` — not the identical number.
 //!
+//! **Members are sampled at their stored keypoints** when the caller supplies
+//! them ([`member_keypoints_from_reconstruction`]): each member's render is
+//! recentered in-plane so it is anchored where that image's feature actually
+//! *is*, not where the current geometry reprojects the point. See
+//! [`member_zncc_matrix`].
+//!
 //! Members that carry no pairwise evidence (nothing rendered them, or nothing
 //! could be correlated with them) are **unscored**: they sit outside the whole
 //! decision rule and pass through kept. See `decide_member_coherence`.
@@ -285,20 +291,63 @@ fn normal_refine_shim(params: &MemberCoherenceParams) -> NormalRefineParams {
 /// `(i, j)` depends on the whole member list: the same two members correlated
 /// inside a different track (or after a member is dropped) can score differently.
 /// Matrices built from different member subsets are not comparable.
+///
+/// # Anchoring
+///
+/// `member_keypoints`, when given, is parallel to the **input** `members` slice
+/// (one entry per listed member, deduplicated alongside it) and carries that
+/// member's stored source-pixel keypoint. Each member's patch is then recentered
+/// in-plane so it renders **anchored at that keypoint** — the appearance the
+/// matcher actually matched — instead of at the point's reprojection. The
+/// per-member validity mask is built through the same recentered render
+/// ([`build_level_context`] takes the same anchors), so the frozen common support
+/// is the intersection of where the members are *sampled*, not of where the
+/// geometry predicts them.
+///
+/// This matters because the reprojection residual is a **geometric** quantity: a
+/// member carrying a sub-pixel-to-pixel residual is sampled that far off its own
+/// content, and the resulting misalignment deflates every pairwise ZNCC it takes
+/// part in — punishing it inside a measure that is supposed to read content
+/// agreement alone. A residual that is a large fraction of the patch half-width
+/// can cost several tenths of ZNCC on a member whose content is perfectly
+/// correct.
+///
+/// Passing `None` (for the slice, or for an individual member inside it) falls
+/// back to projection anchoring for that member — the behaviour a caller with no
+/// keypoints (a hand-built member list, a `CameraViews` scene) necessarily gets.
+/// Because anchoring changes what is sampled, `bar` is calibrated **per
+/// anchoring**: keypoint-anchored scores run higher for exactly the members whose
+/// residual was deflating them, so a caller switching anchoring should re-check
+/// its threshold rather than assume it transfers.
+///
+/// # Panics
+///
+/// Panics if `member_keypoints` is given and is not parallel to `members`.
 pub fn member_zncc_matrix(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     members: &[u32],
+    member_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &MemberCoherenceParams,
 ) -> MemberMatrix {
     let resolution = params.resolution.max(2);
 
+    if let Some(kps) = member_keypoints {
+        assert_eq!(
+            kps.len(),
+            members.len(),
+            "member_keypoints must be parallel to members"
+        );
+    }
+
+    // Dedup first-seen-wins, carrying each survivor's keypoint with it.
     let mut seen = std::collections::HashSet::new();
-    let members: Vec<u32> = members
-        .iter()
-        .copied()
-        .filter(|i| seen.insert(*i))
+    let keep: Vec<usize> = (0..members.len())
+        .filter(|&i| seen.insert(members[i]))
         .collect();
+    let members: Vec<u32> = keep.iter().map(|&i| members[i]).collect();
+    let member_kps: Option<Vec<Option<[f64; 2]>>> =
+        member_keypoints.map(|kps| keep.iter().map(|&i| kps[i]).collect());
     let k = members.len();
 
     let mut zncc = vec![f64::NAN; k * k];
@@ -306,7 +355,15 @@ pub fn member_zncc_matrix(
         zncc[i * k + i] = 1.0;
     }
     let n_support = if k >= 2 {
-        fill_member_zncc(patch, views, &members, params, resolution, &mut zncc)
+        fill_member_zncc(
+            patch,
+            views,
+            &members,
+            member_kps.as_deref(),
+            params,
+            resolution,
+            &mut zncc,
+        )
     } else {
         0
     };
@@ -329,6 +386,7 @@ fn fill_member_zncc(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     members: &[u32],
+    member_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &MemberCoherenceParams,
     resolution: u32,
     zncc: &mut [f64],
@@ -339,7 +397,9 @@ fn fill_member_zncc(
     let shim = normal_refine_shim(params);
 
     // Frozen common support at the patch's own normal — `build_reference`'s first
-    // step, unchanged.
+    // step, unchanged except for the anchoring: with keypoints the mask is built
+    // through the same recentered render the stack below samples, so the frozen
+    // support intersects where the members are actually read.
     let Some(ctx) = build_level_context(
         patch,
         &patch.normal(),
@@ -347,7 +407,7 @@ fn fill_member_zncc(
         resolution,
         &w_full,
         &shim,
-        None,
+        member_keypoints,
     ) else {
         return 0;
     };
@@ -358,9 +418,14 @@ fn fill_member_zncc(
     if n_support < params.min_support_pixels {
         return n_support;
     }
-    let Some((raw, channels)) =
-        normalized_stack(patch, &ctx, &member_proj, resolution, params.sampler, None)
-    else {
+    let Some((raw, channels)) = normalized_stack(
+        patch,
+        &ctx,
+        &member_proj,
+        resolution,
+        params.sampler,
+        member_keypoints,
+    ) else {
         return n_support;
     };
     let total_weight: f64 = ctx.weights.iter().sum();
@@ -662,31 +727,37 @@ pub fn decide_member_coherence(
 }
 
 /// Validate one point's track: build its pairwise member matrix and read the
-/// verdict off it.
+/// verdict off it. `member_keypoints` anchors the members' renders — see
+/// [`member_zncc_matrix`].
 pub fn validate_member_coherence(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     members: &[u32],
+    member_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &MemberCoherenceParams,
 ) -> MemberCoherence {
-    let matrix = member_zncc_matrix(patch, views, members, params);
+    let matrix = member_zncc_matrix(patch, views, members, member_keypoints, params);
     let decision = decide_member_coherence(&matrix, params);
     MemberCoherence { matrix, decision }
 }
 
 /// Batch [`validate_member_coherence`] over a [`PatchCloud`], parallel across
 /// patches (rayon). `member_views[i]` lists, for patch `i`, the track image
-/// indices of its source point (see [`member_views_from_reconstruction`]).
-/// Results are returned in cloud order — the kernel is per point, so nothing
-/// depends on thread scheduling.
+/// indices of its source point (see [`member_views_from_reconstruction`]);
+/// `member_keypoints`, when given, is parallel to it in both dimensions and
+/// carries each member's stored keypoint (see
+/// [`member_keypoints_from_reconstruction`]). Results are returned in cloud
+/// order — the kernel is per point, so nothing depends on thread scheduling.
 ///
 /// # Panics
 ///
-/// Panics if `member_views.len() != cloud.len()` or an index is out of range.
+/// Panics if `member_views.len() != cloud.len()`, if `member_keypoints` is given
+/// and not parallel to `member_views`, or if an index is out of range.
 pub fn validate_patch_cloud_member_coherence(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
     member_views: &[Vec<u32>],
+    member_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     params: &MemberCoherenceParams,
     progress: Option<&std::sync::atomic::AtomicUsize>,
 ) -> Vec<MemberCoherence> {
@@ -695,12 +766,21 @@ pub fn validate_patch_cloud_member_coherence(
         cloud.len(),
         "member_views must be parallel to the cloud"
     );
+    if let Some(kps) = member_keypoints {
+        assert_eq!(
+            kps.len(),
+            member_views.len(),
+            "member_keypoints must be parallel to member_views"
+        );
+    }
     cloud
         .patches
         .par_iter()
+        .enumerate()
         .zip(member_views.par_iter())
-        .map(|(patch, mv)| {
-            let out = validate_member_coherence(patch, views, mv, params);
+        .map(|((i, patch), mv)| {
+            let kps = member_keypoints.map(|k| k[i].as_slice());
+            let out = validate_member_coherence(patch, views, mv, kps, params);
             if let Some(c) = progress {
                 c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
@@ -721,6 +801,43 @@ pub fn member_views_from_reconstruction(
     cloud: &PatchCloud,
 ) -> Vec<Vec<u32>> {
     super::normal_refine::view_indices_from_reconstruction(recon, cloud)
+}
+
+/// The stored keypoint of each member returned by
+/// [`member_views_from_reconstruction`], in the same order — the
+/// `member_keypoints` of [`validate_patch_cloud_member_coherence`].
+///
+/// `None` for every member of a `sift_files` reconstruction (it carries feature
+/// indexes rather than inline keypoints), which anchors those members at their
+/// projections.
+///
+/// # Panics
+///
+/// Panics if `cloud.point_indexes` is not parallel to its patches.
+pub fn member_keypoints_from_reconstruction(
+    recon: &SfmrReconstruction,
+    cloud: &PatchCloud,
+) -> Vec<Vec<Option<[f64; 2]>>> {
+    assert_eq!(
+        cloud.point_indexes.len(),
+        cloud.len(),
+        "cloud must carry a point_index per patch"
+    );
+    let kxy = recon.keypoints_xy();
+    cloud
+        .point_indexes
+        .iter()
+        .map(|&p| {
+            let p = p as usize;
+            let range = recon.observation_offsets[p]..recon.observation_offsets[p + 1];
+            match kxy {
+                Some(k) => range
+                    .map(|r| Some([k[[r, 0]] as f64, k[[r, 1]] as f64]))
+                    .collect(),
+                None => range.map(|_| None).collect(),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

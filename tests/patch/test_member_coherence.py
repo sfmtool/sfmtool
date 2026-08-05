@@ -212,3 +212,52 @@ def test_min_support_pixels_fails_open_on_the_whole_track(scene):
         assert r["kept"].all()
         assert r["support"] == 0
         assert r["n_support"] == base["n_support"]
+
+
+def test_keypoint_anchoring_is_on_by_default_and_can_be_turned_off(scene):
+    """The default anchors members at their stored keypoints; ``False`` anchors
+    them at the reprojection.
+
+    On a converged reconstruction the two are close — the residuals are sub-pixel
+    — so this pins the *plumbing* (the flag reaches the render and moves the
+    numbers), not a magnitude. The score direction is covered by the Rust test
+    that injects a known residual."""
+    _, cloud, _ = scene
+    sample = sample_point_ids(cloud, n=60)
+    anchored = _validate(scene, point_indexes=sample, return_matrix=True)
+    projected = _validate(
+        scene, point_indexes=sample, keypoint_anchor=False, return_matrix=True
+    )
+    default = _validate(scene, point_indexes=sample, return_matrix=True)
+
+    # The default is the anchored arm.
+    for a, d in zip(anchored, default):
+        np.testing.assert_array_equal(np.asarray(a["zncc"]), np.asarray(d["zncc"]))
+
+    moved = 0
+    for a, p in zip(anchored, projected):
+        assert a["point_index"] == p["point_index"]
+        za, zp = np.asarray(a["zncc"]), np.asarray(p["zncc"])
+        assert za.shape == zp.shape
+        both = np.isfinite(za) & np.isfinite(zp)
+        if both.any() and not np.allclose(za[both], zp[both], atol=1e-9):
+            moved += 1
+    assert moved > 0, "anchoring changed no point's matrix — the flag is inert"
+
+
+def test_keypoint_anchoring_survives_a_member_views_override(scene):
+    """An overridden member list is re-keyed against the point's own track, so a
+    member the point really observes still carries its keypoint and one it does
+    not falls back to its projection — either way the call goes through."""
+    recon, cloud, _ = scene
+    sample = sample_point_ids(cloud, n=20)
+    everything = list(range(recon.image_count))
+    out = _validate(
+        scene,
+        point_indexes=sample,
+        member_views={int(p): everything for p in sample},
+    )
+    assert len(out) == len(sample)
+    for r in out:
+        assert len(r["members"]) == recon.image_count
+        assert r["verdict"] in VERDICTS

@@ -11,8 +11,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::patch::member_coherence::{
-    member_views_from_reconstruction, validate_patch_cloud_member_coherence, MemberCoherenceParams,
-    MemberVerdict,
+    member_keypoints_from_reconstruction, member_views_from_reconstruction,
+    validate_patch_cloud_member_coherence, MemberCoherenceParams, MemberVerdict,
 };
 use sfmtool_core::patch::normal_refine::{PatchWindow, ProjectedImage, Sampler};
 
@@ -73,6 +73,16 @@ impl PyPatchCloud {
     ///         play in reconstruction mode. **Required** when the first argument is
     ///         a :class:`CameraViews`; with a reconstruction it *overrides* the
     ///         track-derived list for the points present in the map.
+    ///     keypoint_anchor: Render each member **anchored at its stored keypoint**
+    ///         (default ``True``) rather than at the point's reprojection — the
+    ///         appearance that was actually matched in that image, so a member's
+    ///         reprojection residual does not deflate the pairwise scores it takes
+    ///         part in. Members with no stored keypoint (a ``sift_files``
+    ///         reconstruction, a :class:`CameraViews` scene, or a ``member_views``
+    ///         entry naming an image the point does not observe) fall back to
+    ///         projection anchoring individually. ``False`` anchors every member at
+    ///         its projection. ``bar`` is calibrated per anchoring — the two are not
+    ///         the same score.
     ///     return_matrix: Also return the per-point ``zncc`` matrix (default
     ///         ``False`` — it is ``k×k`` per point).
     ///
@@ -101,7 +111,8 @@ impl PyPatchCloud {
     #[pyo3(signature = (
         recon, images, *, bar=0.65, margin_gate=0.05, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear_mip", min_valid_fraction=0.6, min_support_pixels=8,
-        point_indexes=None, member_views=None, return_matrix=false, progress=None
+        point_indexes=None, member_views=None, keypoint_anchor=true, return_matrix=false,
+        progress=None
     ))]
     fn validate_member_coherence<'py>(
         &self,
@@ -118,6 +129,7 @@ impl PyPatchCloud {
         min_support_pixels: u32,
         point_indexes: Option<Vec<u32>>,
         member_views: Option<std::collections::HashMap<u32, Vec<u32>>>,
+        keypoint_anchor: bool,
         return_matrix: bool,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
@@ -201,6 +213,12 @@ impl PyPatchCloud {
             Some(recon) => member_views_from_reconstruction(recon, &self.inner),
             None => vec![Vec::new(); self.inner.len()],
         };
+        // Per-member stored keypoints, parallel to `members`. Only a
+        // reconstruction has them; a `CameraViews` scene renders at projections.
+        let mut keypoints: Option<Vec<Vec<Option<[f64; 2]>>>> = match (keypoint_anchor, recon_opt) {
+            (true, Some(recon)) => Some(member_keypoints_from_reconstruction(recon, &self.inner)),
+            _ => None,
+        };
         if let Some(map) = &member_views {
             for vs in map.values() {
                 if let Some(&bad) = vs.iter().find(|&&i| i >= n_images) {
@@ -210,18 +228,36 @@ impl PyPatchCloud {
                     )));
                 }
             }
-            for (mv, &pid) in members.iter_mut().zip(&self.inner.point_indexes) {
-                if let Some(vs) = map.get(&pid) {
-                    *mv = vs.clone();
+            for (i, &pid) in self.inner.point_indexes.iter().enumerate() {
+                let Some(vs) = map.get(&pid) else { continue };
+                // An overridden member list is re-keyed against the point's own
+                // track: an image it observes contributes that observation's stored
+                // keypoint, an image it does not is anchored at its projection.
+                if let Some(kps) = keypoints.as_mut() {
+                    let track = &members[i];
+                    let own = &kps[i];
+                    kps[i] = vs
+                        .iter()
+                        .map(|img| {
+                            track
+                                .iter()
+                                .position(|t| t == img)
+                                .and_then(|at| own.get(at).copied().flatten())
+                        })
+                        .collect();
                 }
+                members[i] = vs.clone();
             }
         }
         let selected_mask: Option<std::collections::HashSet<u32>> =
             point_indexes.map(|ids| ids.into_iter().collect());
         if let Some(keep) = &selected_mask {
-            for (mv, &pid) in members.iter_mut().zip(&self.inner.point_indexes) {
+            for (i, &pid) in self.inner.point_indexes.iter().enumerate() {
                 if !keep.contains(&pid) {
-                    mv.clear();
+                    members[i].clear();
+                    if let Some(kps) = keypoints.as_mut() {
+                        kps[i].clear();
+                    }
                 }
             }
         }
@@ -232,6 +268,7 @@ impl PyPatchCloud {
                 &self.inner,
                 &views,
                 &members,
+                keypoints.as_deref(),
                 &params,
                 progress_handle.as_deref(),
             )

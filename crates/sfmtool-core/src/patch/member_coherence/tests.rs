@@ -515,7 +515,13 @@ fn rendered_matrix_is_symmetric_and_separates_the_odd_member_out() {
         &[surface_a, surface_a, surface_a, surface_b],
     );
     let views = scene.views();
-    let m = member_zncc_matrix(&plane_patch(), &views, &[0, 1, 2, 3], &render_params());
+    let m = member_zncc_matrix(
+        &plane_patch(),
+        &views,
+        &[0, 1, 2, 3],
+        None,
+        &render_params(),
+    );
 
     assert_eq!(m.len(), 4);
     assert!(m.scored.iter().all(|&s| s), "every member should render");
@@ -553,7 +559,7 @@ fn one_surface_seen_by_every_member_is_kept_whole() {
         &[surface_a, surface_a, surface_a],
     );
     let views = scene.views();
-    let out = validate_member_coherence(&plane_patch(), &views, &[0, 1, 2], &render_params());
+    let out = validate_member_coherence(&plane_patch(), &views, &[0, 1, 2], None, &render_params());
     assert_eq!(out.decision.verdict, MemberVerdict::KeepAll);
     assert_eq!(out.decision.support, 3);
 }
@@ -570,7 +576,13 @@ fn balanced_two_surface_track_retires_end_to_end() {
         &[surface_a, surface_a, surface_b, surface_b],
     );
     let views = scene.views();
-    let out = validate_member_coherence(&plane_patch(), &views, &[0, 1, 2, 3], &render_params());
+    let out = validate_member_coherence(
+        &plane_patch(),
+        &views,
+        &[0, 1, 2, 3],
+        None,
+        &render_params(),
+    );
     assert_eq!(out.decision.verdict, MemberVerdict::Retire);
     assert_eq!(out.decision.support, 2);
     assert!(out.decision.kept.iter().all(|&k| !k));
@@ -593,7 +605,13 @@ fn a_textureless_member_is_unscored_and_the_rest_still_score() {
         &[surface_a, surface_a, surface_a, surface_flat],
     );
     let views = scene.views();
-    let out = validate_member_coherence(&plane_patch(), &views, &[0, 1, 2, 3], &render_params());
+    let out = validate_member_coherence(
+        &plane_patch(),
+        &views,
+        &[0, 1, 2, 3],
+        None,
+        &render_params(),
+    );
 
     assert_eq!(out.matrix.scored, vec![true, true, true, false]);
     for (i, j) in [(0, 1), (0, 2), (1, 2)] {
@@ -620,7 +638,7 @@ fn the_common_support_is_reported_and_min_support_pixels_gates_on_it() {
     );
     let views = scene.views();
     let params = render_params();
-    let m = member_zncc_matrix(&plane_patch(), &views, &[0, 1, 2], &params);
+    let m = member_zncc_matrix(&plane_patch(), &views, &[0, 1, 2], None, &params);
     let n = m.n_support;
     // A real support: past the shared floor, and short of the full grid (the
     // gaussian-disk window clips the corners).
@@ -634,7 +652,7 @@ fn the_common_support_is_reported_and_min_support_pixels_gates_on_it() {
         min_support_pixels: n + 1,
         ..params
     };
-    let gated = member_zncc_matrix(&plane_patch(), &views, &[0, 1, 2], &strict);
+    let gated = member_zncc_matrix(&plane_patch(), &views, &[0, 1, 2], None, &strict);
     assert_eq!(gated.n_support, n);
     assert!(gated.scored.iter().all(|&s| !s));
     assert!(gated.get(0, 1).is_nan());
@@ -648,7 +666,158 @@ fn the_common_support_is_reported_and_min_support_pixels_gates_on_it() {
 fn duplicate_members_are_deduplicated_before_the_matrix() {
     let scene = Scene::new(&[[0.0, 0.0, 0.0], [0.6, 0.0, 0.4]], &[surface_a, surface_a]);
     let views = scene.views();
-    let m = member_zncc_matrix(&plane_patch(), &views, &[1, 0, 1, 0], &render_params());
+    let m = member_zncc_matrix(
+        &plane_patch(),
+        &views,
+        &[1, 0, 1, 0],
+        None,
+        &render_params(),
+    );
     assert_eq!(m.members, vec![1, 0]);
     assert_eq!(m.len(), 2);
+}
+
+/// The pixel `patch`'s centre reprojects to in `view` — where projection
+/// anchoring samples the member.
+fn project_center(patch: &OrientedPatch, view: &ProjectedImage<'_>) -> [f64; 2] {
+    let p = view
+        .cam_from_world
+        .transform_point_homogeneous(patch.center.coords, patch.w);
+    let (x, y) = view
+        .camera
+        .ray_to_pixel([p.x, p.y, p.z])
+        .expect("patch centre projects");
+    [x, y]
+}
+
+#[test]
+fn keypoints_at_the_projections_reproduce_the_unanchored_matrix() {
+    // Anchoring is a recentring: hand it the reprojections themselves and the
+    // recentred patch IS the patch, so the whole matrix must come back unchanged.
+    // This is what makes the parameter a strict generalization rather than a
+    // second render path.
+    let scene = Scene::new(
+        &[[0.0, 0.0, 0.0], [0.6, 0.0, 0.4], [-0.6, 0.2, 0.3]],
+        &[surface_a, surface_a, surface_a],
+    );
+    let views = scene.views();
+    let patch = plane_patch();
+    let members = [0u32, 1, 2];
+    let kps: Vec<Option<[f64; 2]>> = members
+        .iter()
+        .map(|&i| Some(project_center(&patch, &views[i as usize])))
+        .collect();
+
+    let plain = member_zncc_matrix(&patch, &views, &members, None, &render_params());
+    let anchored = member_zncc_matrix(&patch, &views, &members, Some(&kps), &render_params());
+    assert_eq!(anchored.n_support, plain.n_support);
+    assert_eq!(anchored.scored, plain.scored);
+    for i in 0..3 {
+        for j in 0..3 {
+            assert!(
+                (anchored.get(i, j) - plain.get(i, j)).abs() < 1e-9,
+                "pair {i},{j}: anchored {} vs plain {}",
+                anchored.get(i, j),
+                plain.get(i, j)
+            );
+        }
+    }
+}
+
+#[test]
+fn a_member_with_a_reprojection_residual_recovers_when_anchored_at_its_keypoint() {
+    // Member 2's POSE carries a lateral error while its image does not: the point
+    // reprojects a few pixels off the content the matcher actually matched. That
+    // is a geometric defect, but projection anchoring samples the member at the
+    // wrong place and charges it to the photometry. Anchoring at the stored
+    // keypoint samples the content instead, and the score comes back.
+    let scene = Scene::new(
+        &[[0.0, 0.0, 0.0], [0.6, 0.0, 0.4], [-0.6, 0.2, 0.3]],
+        &[surface_a, surface_a, surface_a],
+    );
+    let truth = scene.views();
+    let patch = plane_patch();
+    // Where member 2's feature really is (its stored keypoint).
+    let kp2 = project_center(&patch, &truth[2]);
+
+    // Same camera, same image, centre displaced by 0.046 world units ~ 3 px at
+    // this depth — ~11% of the patch's 26 px half-width.
+    let bad_pose =
+        RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.6 - 0.046, 0.2, 0.3]);
+    let mut views = scene.views();
+    views[2].cam_from_world = &bad_pose;
+    let moved = project_center(&patch, &views[2]);
+    let residual = (moved[0] - kp2[0]).hypot(moved[1] - kp2[1]);
+    assert!(
+        (2.0..5.0).contains(&residual),
+        "test setup: residual {residual} px"
+    );
+
+    let members = [0u32, 1, 2];
+    let plain = member_zncc_matrix(&patch, &views, &members, None, &render_params());
+    let kps = [None, None, Some(kp2)];
+    let anchored = member_zncc_matrix(&patch, &views, &members, Some(&kps), &render_params());
+
+    // Members 0 and 1 are untouched by the anchoring (no keypoint given).
+    assert!(plain.get(0, 1) > 0.9, "control pair: {}", plain.get(0, 1));
+    // The misaligned member is deflated at its projection...
+    assert!(
+        plain.get(0, 2) < 0.8,
+        "projection-anchored 0,2 should be depressed: {}",
+        plain.get(0, 2)
+    );
+    // ...and recovers once it is sampled where its feature is.
+    assert!(
+        anchored.get(0, 2) > plain.get(0, 2) + 0.1,
+        "keypoint anchoring should raise 0,2: {} -> {}",
+        plain.get(0, 2),
+        anchored.get(0, 2)
+    );
+    assert!(
+        anchored.get(1, 2) > plain.get(1, 2) + 0.1,
+        "keypoint anchoring should raise 1,2: {} -> {}",
+        plain.get(1, 2),
+        anchored.get(1, 2)
+    );
+
+    // Which is the calibration statement: the track's weakest link — the quantity
+    // `bar` is compared against — moves UP under anchoring, so a bar picked on
+    // projection-anchored scores sits lower against these than it did against
+    // those.
+    let weakest = |m: &MemberMatrix| {
+        (0..m.len())
+            .flat_map(|i| (0..m.len()).map(move |j| (i, j)))
+            .filter(|&(i, j)| i != j)
+            .map(|(i, j)| m.get(i, j))
+            .fold(f64::INFINITY, f64::min)
+    };
+    assert!(
+        weakest(&anchored) > weakest(&plain) + 0.1,
+        "weakest link {} -> {}",
+        weakest(&plain),
+        weakest(&anchored)
+    );
+}
+
+#[test]
+fn member_keypoints_are_deduplicated_alongside_their_members() {
+    // The keypoint slice is parallel to the INPUT member list, so the dedup has to
+    // carry it: a duplicated member must keep the keypoint of its first
+    // occurrence, not slide onto its neighbour's.
+    let scene = Scene::new(&[[0.0, 0.0, 0.0], [0.6, 0.0, 0.4]], &[surface_a, surface_a]);
+    let views = scene.views();
+    let patch = plane_patch();
+    let k0 = Some(project_center(&patch, &views[0]));
+    let k1 = Some(project_center(&patch, &views[1]));
+
+    let dup = member_zncc_matrix(
+        &patch,
+        &views,
+        &[1, 0, 1, 0],
+        Some(&[k1, k0, k1, k0]),
+        &render_params(),
+    );
+    let plain = member_zncc_matrix(&patch, &views, &[1, 0], Some(&[k1, k0]), &render_params());
+    assert_eq!(dup.members, vec![1, 0]);
+    assert!((dup.get(0, 1) - plain.get(0, 1)).abs() < 1e-12);
 }
