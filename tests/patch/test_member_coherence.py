@@ -36,6 +36,10 @@ KEYS = {
     "margin",
     "min_intra",
     "max_cross",
+    "effective_bar",
+    "effective_margin_gate",
+    "core_center",
+    "core_scatter",
 }
 
 
@@ -81,8 +85,27 @@ def test_result_dicts_have_the_documented_keys_and_dtypes(scene):
         assert isinstance(r["n_support"], int)
         assert 0 <= r["support"] <= k
         assert r["n_support"] >= 0
-        for name in ("margin", "min_intra", "max_cross"):
+        for name in (
+            "margin",
+            "min_intra",
+            "max_cross",
+            "effective_bar",
+            "effective_margin_gate",
+            "core_center",
+            "core_scatter",
+        ):
             assert isinstance(r[name], float)
+        # The thresholds the rule really ran at bracket the absolute pair: the
+        # bar is a floor that the relative term raises, the margin gate a
+        # ceiling it lowers. NaN means no sweep ran at all.
+        if not np.isnan(r["effective_bar"]):
+            assert r["effective_bar"] >= 0.65
+            assert r["effective_bar"] <= 0.99
+            assert 0.0 < r["effective_margin_gate"] <= 0.05
+        # The statistics are reported exactly when the relative term was active.
+        assert np.isnan(r["core_center"]) == np.isnan(r["core_scatter"])
+        if not np.isnan(r["core_scatter"]):
+            assert r["core_scatter"] >= 0.005
 
         # The verdict's own invariants, at the binding boundary.
         kept, block, scored = r["kept"], r["block"], r["scored"]
@@ -261,3 +284,55 @@ def test_keypoint_anchoring_survives_a_member_views_override(scene):
     for r in out:
         assert len(r["members"]) == recon.image_count
         assert r["verdict"] in VERDICTS
+
+
+def test_self_bar_k_zero_disables_the_relative_term(scene):
+    """``self_bar_k=0`` reports the absolute thresholds, no statistics, and the
+    verdicts the rule reached before the self-normalized bar existed; raising it
+    can only ever tighten, never loosen."""
+    _, cloud, _ = scene
+    sample = sample_point_ids(cloud, n=60)
+    off = _validate(scene, point_indexes=sample, self_bar_k=0.0)
+    on = _validate(scene, point_indexes=sample, self_bar_k=1.5)
+
+    for r in off:
+        assert r["effective_bar"] == 0.65
+        assert r["effective_margin_gate"] == 0.05
+        assert np.isnan(r["core_center"]) and np.isnan(r["core_scatter"])
+
+    engaged = 0
+    for a, b in zip(off, on):
+        assert a["point_index"] == b["point_index"]
+        # The relative term is a tightening: a higher bar and a lower gate, and
+        # never the other way round.
+        assert b["effective_bar"] >= a["effective_bar"]
+        assert b["effective_margin_gate"] <= a["effective_margin_gate"]
+        engaged += b["effective_bar"] > a["effective_bar"]
+        if b["effective_bar"] == a["effective_bar"]:
+            # An inactive or collapsed relative term decides exactly as the
+            # absolute rule does.
+            assert b["verdict"] == a["verdict"]
+            assert np.array_equal(b["kept"], a["kept"])
+    assert engaged > 0, "the relative term never engaged â€” the test proves nothing"
+
+
+def test_the_effective_bar_is_the_core_centre_less_k_scatters(scene):
+    """Wherever the relative term is active, the reported bar is exactly
+    ``centre - self_bar_k * scatter`` clamped into ``[bar, 0.99]`` â€” the bar the
+    block sweep ran at, not a summary of it."""
+    _, cloud, _ = scene
+    sample = sample_point_ids(cloud, n=80)
+    k_self = 2.0
+    active = 0
+    for r in _validate(scene, point_indexes=sample, self_bar_k=k_self):
+        if np.isnan(r["core_center"]):
+            # Inactive: too few intra-block pairs, or no sweep at all.
+            assert np.isnan(r["effective_bar"]) or r["effective_bar"] == 0.65
+            continue
+        active += 1
+        want = min(r["core_center"] - k_self * r["core_scatter"], 0.99)
+        assert r["effective_bar"] == pytest.approx(max(0.65, want), abs=1e-12)
+        assert r["effective_margin_gate"] == pytest.approx(
+            min(0.05, r["core_scatter"]), abs=1e-12
+        )
+    assert active > 0, "the relative term was never active"

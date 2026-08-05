@@ -86,7 +86,37 @@ pub struct MemberCoherenceParams {
     /// the intersection can shrink to a sliver of an `R×R` grid and a correlation
     /// over a handful of pixels is noise — wants it higher.
     pub min_support_pixels: u32,
+    /// How many units of the track's **own** core scatter the self-normalized
+    /// admission bar sits below its core centre — see [`core_coherence`] and
+    /// [`decide_member_coherence`]. The effective admission bar becomes
+    /// `max(bar, min(centre − self_bar_k · scatter, `[`SELF_BAR_CEILING`]`))` and
+    /// the effective separation-margin floor `min(margin_gate, scatter)`, so a
+    /// track whose members agree tightly demands tight agreement of a newcomer
+    /// while a noisy or drifting track — large scatter — collapses back to the
+    /// absolute `bar` / `margin_gate` pair.
+    ///
+    /// `0` (or negative) **disables** the relative term entirely: every quantity
+    /// is decided at the absolute thresholds, bit for bit.
+    pub self_bar_k: f64,
 }
+
+/// Upper bound on the self-normalized admission bar: a perfect core cannot
+/// demand perfection of a newcomer, whatever [`MemberCoherenceParams::self_bar_k`]
+/// and the scatter floor would otherwise ask for.
+pub const SELF_BAR_CEILING: f64 = 0.99;
+
+/// Floor on the core scatter [`core_coherence`] reports. A block whose intra-pair
+/// agreement is *exactly* uniform has zero measured spread, which would put the
+/// admission bar on the centre itself and the margin floor at zero; the floor is
+/// the smallest dispersion the rule will believe.
+pub const SELF_BAR_MIN_SCATTER: f64 = 0.005;
+
+/// Fewest intra-block pairs [`core_coherence`] will estimate a centre and a
+/// scatter from. Six is the pair count of a four-member block; below it the
+/// median and its upper-half dispersion are being read off two or three numbers,
+/// which is not a measurement of anything, so the relative term stays inactive
+/// and the absolute thresholds decide.
+pub const SELF_BAR_MIN_PAIRS: usize = 6;
 
 impl Default for MemberCoherenceParams {
     fn default() -> Self {
@@ -98,6 +128,7 @@ impl Default for MemberCoherenceParams {
             sampler: Sampler::BilinearMip,
             min_valid_fraction: 0.6,
             min_support_pixels: MIN_MASK_PIXELS as u32,
+            self_bar_k: 1.5,
         }
     }
 }
@@ -226,6 +257,24 @@ pub struct MemberDecision {
     /// Strongest finite link from the winning block to a *scored* member outside
     /// it (`NaN` when there is none).
     pub max_cross: f64,
+    /// The admission bar the winning block was actually swept at:
+    /// [`MemberCoherenceParams::bar`] when the relative term is off or inactive,
+    /// higher when the track's own core coherence tightened it. `NaN` when no
+    /// sweep ran (fewer than two scored members, or an empty track), which is
+    /// what distinguishes "no bar was applied" from "the absolute bar was".
+    /// `effective_bar > bar` is exactly "the relative term engaged".
+    pub effective_bar: f64,
+    /// The separation-margin floor the cut was actually gated on:
+    /// [`MemberCoherenceParams::margin_gate`], or the core scatter when that is
+    /// smaller. `NaN` when no sweep ran.
+    pub effective_margin_gate: f64,
+    /// Centre of the pass-1 block's intra-pair agreement — the `c` of
+    /// [`core_coherence`]. `NaN` when the relative term was inactive (disabled,
+    /// or too few intra-block pairs to estimate from).
+    pub core_center: f64,
+    /// Scatter of that agreement — the `σ` of [`core_coherence`], floored at
+    /// [`SELF_BAR_MIN_SCATTER`]. `NaN` when the relative term was inactive.
+    pub core_scatter: f64,
 }
 
 impl Default for MemberDecision {
@@ -241,6 +290,10 @@ impl Default for MemberDecision {
             margin: f64::NAN,
             min_intra: f64::NAN,
             max_cross: f64::NAN,
+            effective_bar: f64::NAN,
+            effective_margin_gate: f64::NAN,
+            core_center: f64::NAN,
+            core_scatter: f64::NAN,
         }
     }
 }
@@ -580,6 +633,105 @@ fn max_support_block(zncc: &[f64], k: usize, bar: f64) -> Vec<bool> {
     (0..k).map(|j| adj[best * k + j]).collect()
 }
 
+/// The `q`-quantile of an already-sorted non-empty slice, by linear
+/// interpolation between the bracketing order statistics — a pure function of
+/// the multiset, with no dependence on how it arrived.
+fn quantile_sorted(sorted: &[f64], q: f64) -> f64 {
+    let n = sorted.len();
+    let pos = q * (n - 1) as f64;
+    let lo = pos.floor() as usize;
+    let frac = pos - lo as f64;
+    if lo + 1 >= n {
+        sorted[n - 1]
+    } else {
+        sorted[lo] + frac * (sorted[lo + 1] - sorted[lo])
+    }
+}
+
+/// The **centre and scatter of one block's own agreement**: the statistics the
+/// self-normalized admission bar is measured in.
+///
+/// `zncc` is a `k×k` table and `block` a mask over it (in practice the *scored*
+/// sub-matrix and its pass-1 max-support block). The sample is every finite
+/// pairwise link **inside** the block, each counted once. Returns `None` — the
+/// relative term stays inactive — when that sample holds fewer than
+/// [`SELF_BAR_MIN_PAIRS`] links.
+///
+/// - **Centre** `c` is the median of those links.
+/// - **Scatter** `σ` is the **upper** semi-interquartile distance, made
+///   normal-consistent the same way a MAD is: `1.4826 · (Q₇₅ − median)`, floored
+///   at [`SELF_BAR_MIN_SCATTER`].
+///
+/// The one-sidedness is the point. The block admitted at the absolute bar is the
+/// very thing under suspicion: on a track with an occluding member the block
+/// still contains it, and its links sit in the **lower** tail. A two-sided MAD
+/// reads that tail as spread and inflates σ — letting the contamination loosen
+/// the bar that is supposed to exclude it. The half above the median is the part
+/// of the sample the contamination cannot reach (it is a minority, or the block
+/// would not be the core), so it measures the core's own tightness. For a
+/// symmetric sample the two coincide, which is what the `1.4826` is for.
+///
+/// It is read as an order statistic (`Q₇₅ − Q₅₀`) rather than as the median of
+/// the members above the centre, because those two differ exactly when the
+/// sample has a **mass at the median** — a two-population matrix whose median
+/// lands on the lower mode. Counting the ties would report that matrix as
+/// tightly coherent; the quartile distance reports the spread that is really
+/// there and the relative term collapses, which is the intended behaviour for a
+/// track with no single core.
+pub fn core_coherence(zncc: &[f64], k: usize, block: &[bool]) -> Option<(f64, f64)> {
+    let mut v = Vec::new();
+    for a in 0..k {
+        if !block[a] {
+            continue;
+        }
+        for b in (a + 1)..k {
+            if !block[b] {
+                continue;
+            }
+            let z = zncc[a * k + b];
+            if z.is_finite() {
+                v.push(z);
+            }
+        }
+    }
+    if v.len() < SELF_BAR_MIN_PAIRS {
+        return None;
+    }
+    v.sort_by(|a, b| a.total_cmp(b));
+    let center = quantile_sorted(&v, 0.5);
+    let scatter = (1.4826 * (quantile_sorted(&v, 0.75) - center)).max(SELF_BAR_MIN_SCATTER);
+    Some((center, scatter))
+}
+
+/// The absolute thresholds tightened by one block's own coherence: the pair
+/// `(effective_bar, effective_margin_gate)` plus the `(centre, scatter)` they
+/// were derived from.
+///
+/// One tighten pass, never iterated to a fixed point — see
+/// [`decide_member_coherence`].
+fn self_normalized_thresholds(
+    sub: &[f64],
+    s: usize,
+    block: &[bool],
+    params: &MemberCoherenceParams,
+) -> (f64, f64, Option<(f64, f64)>) {
+    let k_self = params.self_bar_k;
+    if k_self.is_nan() || k_self <= 0.0 {
+        return (params.bar, params.margin_gate, None);
+    }
+    match core_coherence(sub, s, block) {
+        None => (params.bar, params.margin_gate, None),
+        Some((c, sigma)) => {
+            let relative = (c - k_self * sigma).min(SELF_BAR_CEILING);
+            (
+                params.bar.max(relative),
+                params.margin_gate.min(sigma),
+                Some((c, sigma)),
+            )
+        }
+    }
+}
+
 /// Read a verdict off a pairwise member matrix.
 ///
 /// Takes the [max-support block](max_support_block), then gates the cut on its
@@ -590,6 +742,53 @@ fn max_support_block(zncc: &[f64], k: usize, bar: f64) -> Vec<bool> {
 /// of the members splits the track; a block that does not is a track whose
 /// evidence supports two incompatible surfaces with neither prevailing, and the
 /// point is retired.
+///
+/// # The self-normalized admission bar
+///
+/// `bar` and `margin_gate` are absolute, and an absolute threshold can only be
+/// calibrated against one kind of disagreement. A member imaging a *different*
+/// surface scores 0.2–0.5 against the core and 0.65 catches it. A member imaging
+/// an *occluder in front of the same repeating texture* shares the core's
+/// dominant structure and scores 0.85–0.95 — against a core that agrees with
+/// itself at 0.99. The block structure is real and entirely above the bar.
+///
+/// So the thresholds are re-derived **per track, from the track's own
+/// coherence**, in two passes over the same matrix:
+///
+/// 1. Sweep the [max-support block](max_support_block) at the absolute `bar`.
+/// 2. Measure that block's own [`core_coherence`] — centre `c`, scatter `σ`.
+/// 3. `effective_bar = max(bar, min(c − self_bar_k · σ, `[`SELF_BAR_CEILING`]`))`
+///    and `effective_margin_gate = min(margin_gate, σ)`.
+/// 4. Re-sweep the block at `effective_bar` (only when it actually rose), and run
+///    the margin and majority tests below on *that* block, against
+///    `effective_margin_gate`.
+///
+/// The margin floor moves with the bar because it is the same problem one level
+/// down: a margin is a difference of two ZNCCs, and the noise on that difference
+/// is the core's own pair-to-pair scatter. A tight core separates from an
+/// occluder by 0.02–0.04 — a real gap in its own units, refused outright by an
+/// absolute 0.05. Both terms therefore relax back to the absolute pair exactly
+/// when σ is large, which is what a drift chain and a noisy track have in common.
+///
+/// The circularity is real and is **cut, not solved**: admission defines the
+/// block whose statistics set the admission bar. Pass 1 is deliberately run at
+/// the loose absolute bar so the block is the widest defensible one, the scatter
+/// estimator is one-sided so the members under suspicion cannot inflate the
+/// scale that is meant to exclude them, and the tightening runs **once**. It is
+/// not iterated to a fixed point: each pass would shrink the block, tighten the
+/// bar off the survivors, and shrink it again, converging on the tightest
+/// sub-clique of every track regardless of whether anything is wrong with it.
+///
+/// `self_bar_k = 0` disables all of it, reproducing the absolute rule exactly.
+/// Below [`SELF_BAR_MIN_PAIRS`] intra-block pairs — a block of three or fewer —
+/// there is nothing to estimate a scatter from and the relative term stays
+/// inactive for the same reason.
+///
+/// `self_bar_k` **trades occlusion recall against collateral**: every member that
+/// trails a tight core for an innocent reason — motion blur, an exposure step, a
+/// grazing view — is a member the tightened bar is also more willing to evict,
+/// and nothing in the matrix distinguishes the two. Lower `self_bar_k` catches
+/// more occluders and more of those.
 ///
 /// **The whole rule runs over the [scored](scored_mask) members only** — the block
 /// sweep, both margin sides, and the majority denominator. An unscored member
@@ -621,6 +820,10 @@ pub fn decide_member_coherence(
             margin: f64::NAN,
             min_intra: f64::NAN,
             max_cross: f64::NAN,
+            effective_bar: f64::NAN,
+            effective_margin_gate: f64::NAN,
+            core_center: f64::NAN,
+            core_scatter: f64::NAN,
         };
     }
 
@@ -633,7 +836,18 @@ pub fn decide_member_coherence(
             sub[a * s + b] = zncc[ia * k + ib];
         }
     }
-    let sub_block = max_support_block(&sub, s, params.bar);
+    // Pass 1 at the absolute bar, then the one tighten pass off that block's own
+    // coherence. `effective_bar == params.bar` short-circuits the re-sweep, which
+    // is what makes `self_bar_k = 0` bit-for-bit the absolute rule.
+    let pass1 = max_support_block(&sub, s, params.bar);
+    let (effective_bar, effective_margin_gate, core) =
+        self_normalized_thresholds(&sub, s, &pass1, params);
+    let sub_block = if effective_bar > params.bar {
+        max_support_block(&sub, s, effective_bar)
+    } else {
+        pass1
+    };
+    let (core_center, core_scatter) = core.unwrap_or((f64::NAN, f64::NAN));
     let support = sub_block.iter().filter(|&&b| b).count();
 
     // Margin components. Undefined (NaN) for a block of one, a block spanning
@@ -691,13 +905,18 @@ pub fn decide_member_coherence(
         margin,
         min_intra,
         max_cross,
+        effective_bar,
+        effective_margin_gate,
+        core_center,
+        core_scatter,
     };
 
     if whole {
         return keep_all();
     }
-    // Refuse to cut a continuum: no gap between the block and its outside.
-    if margin.is_nan() || margin <= params.margin_gate {
+    // Refuse to cut a continuum: no gap between the block and its outside, in the
+    // track's own units.
+    if margin.is_nan() || margin <= effective_margin_gate {
         return keep_all();
     }
     // No strict majority among the members that carry evidence: the two sides are
@@ -711,6 +930,10 @@ pub fn decide_member_coherence(
             margin,
             min_intra,
             max_cross,
+            effective_bar,
+            effective_margin_gate,
+            core_center,
+            core_scatter,
         };
     }
     // The cut evicts the scored members outside the block, and only those.
@@ -723,6 +946,10 @@ pub fn decide_member_coherence(
         margin,
         min_intra,
         max_cross,
+        effective_bar,
+        effective_margin_gate,
+        core_center,
+        core_scatter,
     }
 }
 

@@ -821,3 +821,292 @@ fn member_keypoints_are_deduplicated_alongside_their_members() {
     assert_eq!(dup.members, vec![1, 0]);
     assert!((dup.get(0, 1) - plain.get(0, 1)).abs() < 1e-12);
 }
+
+// ---------------------------------------------------------------------------
+// The self-normalized admission bar.
+// ---------------------------------------------------------------------------
+
+/// `defaults()` with the relative term disabled â€” the absolute rule.
+fn absolute() -> MemberCoherenceParams {
+    MemberCoherenceParams {
+        self_bar_k: 0.0,
+        ..MemberCoherenceParams::default()
+    }
+}
+
+/// A tight core of `n` members agreeing at ~0.99, plus one outsider (member 0)
+/// that correlates `outside` against every one of them â€” the occluding-member
+/// shape, where the whole block structure sits above the absolute bar.
+fn tight_core_plus_outsider(n: usize, outside: f64) -> MemberMatrix {
+    let k = n + 1;
+    let mut z = vec![0.0; k * k];
+    for a in 0..k {
+        for b in 0..k {
+            z[a * k + b] = if a == b {
+                1.0
+            } else if a == 0 || b == 0 {
+                outside
+            } else {
+                // A little structure, so the core is not exactly uniform.
+                0.99 - 0.002 * ((a + b) % 3) as f64
+            };
+        }
+    }
+    MemberMatrix::from_zncc((0..k as u32).collect(), z)
+}
+
+#[test]
+fn self_bar_k_zero_reproduces_the_absolute_rule_exactly() {
+    // Parity across every branch of the rule: the occluding shape the relative
+    // term exists for, a clean split, a balanced retirement, and a drift chain.
+    let cases = [
+        (tight_core_plus_outsider(8, 0.90), MemberVerdict::KeepAll),
+        (tight_core_plus_outsider(3, 0.90), MemberVerdict::KeepAll),
+        (
+            matrix(&[
+                &[1.0, 0.95, 0.93, 0.20, 0.18],
+                &[0.95, 1.0, 0.94, 0.19, 0.21],
+                &[0.93, 0.94, 1.0, 0.22, 0.17],
+                &[0.20, 0.19, 0.22, 1.0, 0.91],
+                &[0.18, 0.21, 0.17, 0.91, 1.0],
+            ]),
+            MemberVerdict::Split,
+        ),
+        (
+            matrix(&[
+                &[1.0, 0.94, 0.15, 0.17],
+                &[0.94, 1.0, 0.16, 0.14],
+                &[0.15, 0.16, 1.0, 0.96],
+                &[0.17, 0.14, 0.96, 1.0],
+            ]),
+            MemberVerdict::Retire,
+        ),
+    ];
+    for (m, want) in &cases {
+        let d = decide_member_coherence(m, &absolute());
+        assert_eq!(d.verdict, *want);
+        // A disabled relative term reports the absolute thresholds it really
+        // swept at, and no statistics at all.
+        assert_eq!(d.effective_bar, absolute().bar);
+        assert_eq!(d.effective_margin_gate, absolute().margin_gate);
+        assert!(d.core_center.is_nan() && d.core_scatter.is_nan());
+    }
+}
+
+#[test]
+fn a_monotone_drift_chain_is_untouched_by_the_relative_bar() {
+    // The banded shape the margin gate exists for, long enough (7 members, 21
+    // pairs) that the relative term does estimate: its margin is negative, so
+    // no threshold on the admission side can turn it into a cut.
+    let k = 7;
+    let mut z = vec![0.0; k * k];
+    for a in 0..k {
+        for b in 0..k {
+            z[a * k + b] = 1.0 - 0.14 * (a as f64 - b as f64).abs();
+        }
+    }
+    let m = MemberMatrix::from_zncc((0..k as u32).collect(), z);
+    for p in [absolute(), defaults()] {
+        let d = decide_member_coherence(&m, &p);
+        assert_eq!(d.verdict, MemberVerdict::KeepAll);
+        assert!(kept_indexes(&d).len() == k);
+    }
+}
+
+#[test]
+fn the_relative_bar_engages_on_a_tight_core_and_evicts_the_outsider() {
+    // 8 core members at ~0.99 and one outsider at 0.90 against all of them:
+    // every link is far above the absolute 0.65, so the absolute rule keeps the
+    // track whole and only the self-normalized one cuts it.
+    let m = tight_core_plus_outsider(8, 0.90);
+    assert_eq!(
+        decide_member_coherence(&m, &absolute()).verdict,
+        MemberVerdict::KeepAll
+    );
+
+    let d = decide_member_coherence(&m, &defaults());
+    assert_eq!(d.verdict, MemberVerdict::Split);
+    assert_eq!(kept_indexes(&d), (1..9).collect::<Vec<_>>());
+    assert!(
+        d.effective_bar > defaults().bar && d.effective_bar <= SELF_BAR_CEILING,
+        "effective bar {}",
+        d.effective_bar
+    );
+    // The bar really is centre minus k units of scatter.
+    let expect = d.core_center - defaults().self_bar_k * d.core_scatter;
+    assert!((d.effective_bar - expect).abs() < 1e-12);
+    assert!(d.core_center > 0.98 && d.core_scatter >= SELF_BAR_MIN_SCATTER);
+    // The margin floor moved with the bar: 0.99 against 0.90 is a real gap in
+    // the core's own units and nowhere near the absolute 0.05.
+    assert!(d.effective_margin_gate < defaults().margin_gate);
+    assert!(d.margin > d.effective_margin_gate);
+}
+
+#[test]
+fn a_wide_scatter_track_collapses_back_to_the_absolute_thresholds() {
+    // Two populations 0.23 apart inside one block: the intra-pair scatter is
+    // large, centre minus k units of it falls under the absolute bar, and the
+    // rule is the absolute one â€” verdict, membership and thresholds alike.
+    let k = 8;
+    let mut z = vec![0.0; k * k];
+    for a in 0..k {
+        for b in 0..k {
+            z[a * k + b] = if a == b {
+                1.0
+            } else if (a < 4) == (b < 4) {
+                0.95
+            } else {
+                0.72
+            };
+        }
+    }
+    let m = MemberMatrix::from_zncc((0..k as u32).collect(), z);
+    let d = decide_member_coherence(&m, &defaults());
+    let base = decide_member_coherence(&m, &absolute());
+    assert_eq!(d.verdict, base.verdict);
+    assert_eq!(d.kept, base.kept);
+    assert_eq!(d.effective_bar, defaults().bar);
+    assert_eq!(d.effective_margin_gate, defaults().margin_gate);
+    // The statistics are still reported: the term ran and collapsed, which is a
+    // different thing from never having run.
+    assert!(
+        d.core_scatter > defaults().margin_gate,
+        "{}",
+        d.core_scatter
+    );
+}
+
+#[test]
+fn small_blocks_leave_the_relative_term_inactive() {
+    // Below SELF_BAR_MIN_PAIRS the centre and its quartile distance are read off
+    // two or three numbers, so nothing is estimated. A 3-member block is 3 pairs
+    // and stays inactive; a 4-member block is exactly 6 and estimates.
+    {
+        let m = tight_core_plus_outsider(2, 0.90);
+        let d = decide_member_coherence(&m, &defaults());
+        assert!(
+            d.core_center.is_nan() && d.core_scatter.is_nan(),
+            "k = {} must leave the relative term inactive",
+            m.len()
+        );
+        assert_eq!(d.effective_bar, defaults().bar);
+        assert_eq!(d.effective_margin_gate, defaults().margin_gate);
+        assert_eq!(d.verdict, decide_member_coherence(&m, &absolute()).verdict);
+    }
+    let m = tight_core_plus_outsider(3, 0.90);
+    assert_eq!(m.len(), 4);
+    let d = decide_member_coherence(&m, &defaults());
+    assert!(d.core_center.is_finite() && d.core_scatter.is_finite());
+    assert!(d.effective_bar > defaults().bar);
+}
+
+#[test]
+fn the_ceiling_stops_a_perfect_core_demanding_perfection() {
+    // Every core pair exactly 1.0: the measured spread is zero, the scatter
+    // floor is the smallest dispersion the rule will believe, and the ceiling
+    // caps whatever the two would otherwise ask of a newcomer.
+    let k = 7;
+    let mut z = vec![1.0; k * k];
+    for a in 1..k {
+        z[a] = 0.80;
+        z[a * k] = 0.80;
+    }
+    let m = MemberMatrix::from_zncc((0..k as u32).collect(), z);
+    let d = decide_member_coherence(&m, &defaults());
+    assert_eq!(d.core_center, 1.0);
+    assert_eq!(d.core_scatter, SELF_BAR_MIN_SCATTER);
+    assert!(d.effective_bar <= SELF_BAR_CEILING);
+    assert_eq!(d.verdict, MemberVerdict::Split);
+    assert_eq!(kept_indexes(&d), (1..k).collect::<Vec<_>>());
+
+    // With a vanishing k the floor alone would put the bar on the centre; the
+    // ceiling is what stops it.
+    let greedy = MemberCoherenceParams {
+        self_bar_k: 1e-9,
+        ..MemberCoherenceParams::default()
+    };
+    assert_eq!(
+        decide_member_coherence(&m, &greedy).effective_bar,
+        SELF_BAR_CEILING
+    );
+}
+
+#[test]
+fn the_scatter_is_one_sided_so_contamination_cannot_set_its_own_bar() {
+    // One core, two outsiders below it. A two-sided dispersion widens with the
+    // second outsider â€” letting the members under suspicion loosen the bar that
+    // is meant to exclude them. The upper-half one does not move, because the
+    // contamination lives entirely below the centre.
+    // One nine-member core, three contaminated members in the same block, all
+    // three at `depth` — the only thing that varies.
+    let contaminated = |depth: f64| {
+        let k = 12;
+        let mut z = vec![0.0; k * k];
+        for a in 0..k {
+            for b in 0..k {
+                z[a * k + b] = if a == b {
+                    1.0
+                } else if a < 3 || b < 3 {
+                    depth
+                } else {
+                    0.99 - 0.004 * ((a + b) % 4) as f64
+                };
+            }
+        }
+        MemberMatrix::from_zncc((0..k as u32).collect(), z)
+    };
+    let all = vec![true; 12];
+    let want = core_coherence(&contaminated(0.88).zncc, 12, &all).unwrap();
+    assert!(
+        want.0 > 0.97,
+        "the centre sits in the core, not between: {}",
+        want.0
+    );
+    for depth in [0.80, 0.50, 0.20, -0.30] {
+        let m = contaminated(depth);
+        let (c, s) = core_coherence(&m.zncc, 12, &all).unwrap();
+        // However far below the centre the contamination falls, neither the
+        // centre nor the scatter moves: the estimator never reads that tail.
+        assert!((c - want.0).abs() < 1e-12, "centre {c} at depth {depth}");
+        assert!((s - want.1).abs() < 1e-12, "scatter {s} at depth {depth}");
+    }
+    // A plain standard deviation over the same sample is the thing this avoids:
+    // it widens with the contamination and would hand the members under
+    // suspicion the power to loosen the bar meant to exclude them.
+    let sd = |m: &MemberMatrix| {
+        let v: Vec<f64> = (0..12)
+            .flat_map(|a| ((a + 1)..12).map(move |b| (a, b)))
+            .map(|(a, b)| m.get(a, b))
+            .collect();
+        let mean = v.iter().sum::<f64>() / v.len() as f64;
+        (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / v.len() as f64).sqrt()
+    };
+    assert!(sd(&contaminated(0.20)) > 4.0 * sd(&contaminated(0.88)));
+    // A block of one member has no pairs at all, so there is nothing to read.
+    let mut lone = vec![false; 12];
+    lone[0] = true;
+    assert!(core_coherence(&contaminated(0.88).zncc, 12, &lone).is_none());
+}
+
+#[test]
+fn the_tighten_pass_runs_once_and_is_deterministic() {
+    // Repeated evaluation is bit-identical, and the block landed on is the one a
+    // SINGLE re-sweep at the tightened bar gives â€” not the fixed point of
+    // tightening off successive survivors.
+    let m = tight_core_plus_outsider(8, 0.90);
+    let first = decide_member_coherence(&m, &defaults());
+    for _ in 0..8 {
+        let again = decide_member_coherence(&m, &defaults());
+        assert_eq!(again.effective_bar, first.effective_bar);
+        assert_eq!(again.core_center, first.core_center);
+        assert_eq!(again.core_scatter, first.core_scatter);
+        assert_eq!(again.kept, first.kept);
+    }
+    let k = m.len();
+    let pass1 = max_support_block(&m.zncc, k, defaults().bar);
+    assert!(pass1.iter().all(|&b| b), "pass 1 admits the whole track");
+    let (c, sigma) = core_coherence(&m.zncc, k, &pass1).unwrap();
+    let bar = defaults().bar.max(c - defaults().self_bar_k * sigma);
+    assert_eq!(bar, first.effective_bar);
+    assert_eq!(max_support_block(&m.zncc, k, bar), first.block);
+}

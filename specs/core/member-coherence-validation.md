@@ -144,10 +144,17 @@ on zero evidence. Fewer than two scored members means no evidence at all —
 this is the plain rule below, unchanged.
 
 Every scored member is a hypothesis. Its **support** is the set of scored members
-whose pairwise ZNCC to it reaches `bar`, itself always included; a member with no
-partner supports a block of one. The **max-support block** wins. Note this is an
-inlier set, not a clique: two members of the winning block need not agree with each
-other, only with the hypothesis.
+whose pairwise ZNCC to it reaches the admission bar, itself always included; a
+member with no partner supports a block of one. The **max-support block** wins.
+Note this is an inlier set, not a clique: two members of the winning block need not
+agree with each other, only with the hypothesis.
+
+The admission bar the sweep runs at is `effective_bar`, and the margin floor is
+`effective_margin_gate` — the absolute `bar` / `margin_gate` pair, tightened by
+the track's own coherence (see [below](#the-self-normalized-admission-bar)) and
+reported per point alongside the `core_center` / `core_scatter` they came from.
+With `self_bar_k = 0` they *are* the absolute pair, and the rule below is the
+absolute rule.
 
 Given the winning block `B` of size `s` out of the `m` **scored** members (of `k`
 total):
@@ -157,14 +164,102 @@ total):
    and `max_cross` the strongest finite link from `B` to a scored member outside
    it; the margin is `min_intra − max_cross`. When the margin is undefined
    (`s < 2`, `s == m`, or a side with no finite link) or does not exceed
-   `margin_gate`, verdict `KeepAll`. `NaN` therefore means *no cut was on the
-   table* — a different thing from a cut the gate refused, which reports a finite
-   margin at or below `margin_gate`.
+   `effective_margin_gate`, verdict `KeepAll`. `NaN` therefore means *no cut was
+   on the table* — a different thing from a cut the gate refused, which reports a
+   finite margin at or below the gate.
 3. **`2s > m`** — the block is a strict majority of the scored members. Verdict
    `Split`: the block is kept (plus the unscored members), the scored members
    outside it are rejected.
 4. **Otherwise** — verdict `Retire`. The point ships nothing — including its
    unscored members, since it is the point that is refused, not its observations.
+
+### The self-normalized admission bar
+
+`bar` and `margin_gate` are absolute, and an absolute threshold can only be
+calibrated against one kind of disagreement. A member imaging a **different**
+surface scores 0.2–0.5 against the rest of the track, and `0.65` separates it. A
+member imaging an **occluder in front of the same repeating texture** does not:
+it shares the core's dominant structure and scores 0.85–0.95 — against a core
+whose members agree with each other at 0.98–1.00. The block structure is real,
+and it sits entirely above the bar.
+
+So both thresholds are re-derived per track, from **that track's own coherence**,
+in two passes over the same matrix:
+
+1. Sweep the max-support block at the absolute `bar`.
+2. Measure that block's **core coherence**: the centre `c` and scatter `σ` of its
+   intra-block links (below).
+3. `effective_bar = max(bar, min(c − self_bar_k · σ, 0.99))` and
+   `effective_margin_gate = min(margin_gate, σ)`.
+4. Re-sweep the block at `effective_bar` — only when it actually rose — and run
+   the margin and majority tests on **that** block, against
+   `effective_margin_gate`.
+
+A tightly-coherent track therefore demands tight agreement of a newcomer; a noisy
+or drifting one has a large `σ`, the relative term falls below the absolute floor,
+and the rule is the absolute rule.
+
+The margin floor moves with the bar because it is the same problem one level
+down. A margin is a *difference* of two ZNCCs, and the noise on that difference is
+the core's own pair-to-pair scatter. A tight core separates from an occluder by
+0.02–0.04 — a real gap in its own units, and one an absolute `0.05` refuses
+outright, which is why tightening the bar alone changes almost nothing on this
+family. Both terms relax back to the absolute pair together, exactly when `σ` is
+large, which is what a drift chain and a genuinely noisy track have in common.
+
+#### Centre and scatter
+
+The sample is every finite pairwise link **inside** the pass-1 block, each
+counted once.
+
+- **Centre** `c` is its median.
+- **Scatter** `σ` is the **upper** semi-interquartile distance, made
+  normal-consistent the way a MAD is: `1.4826 · (Q₇₅ − median)`, floored at
+  `0.005`.
+
+The one-sidedness is the point. The pass-1 block is the very thing under
+suspicion — on a track with an occluding member it still contains it, and that
+member's links sit in the **lower** tail. A two-sided MAD reads that tail as
+spread and inflates `σ`, handing the members the bar is meant to exclude the
+power to loosen it. The half above the median is the part of the sample the
+contamination cannot reach (it is a minority, or the block would not be the
+core). For a symmetric sample the two coincide.
+
+It is read as an order statistic rather than as the median of the links above the
+centre, because those differ exactly when the sample has a **mass at the
+median** — a two-population matrix whose median lands on the lower mode. Counting
+the ties would report such a matrix as tightly coherent; the quartile distance
+reports the spread that is really there, and the relative term collapses, which is
+the right answer for a track with no single core.
+
+The floor on `σ` is what a perfectly uniform block needs: its measured spread is
+zero, which would put the bar on the centre itself and the margin floor at zero.
+The `0.99` ceiling is the other end of the same guard — a perfect core cannot
+demand perfection of a newcomer.
+
+#### One pass, and the circularity
+
+The circularity is real: admission defines the block whose statistics set the
+admission bar. It is **cut, not solved**. Pass 1 runs at the loose absolute bar so
+the block is the widest defensible one; the scatter estimator is one-sided so the
+suspects cannot inflate the scale; and the tightening runs **once**. It is
+deliberately not iterated to a fixed point — each further pass would shrink the
+block, re-measure a tighter core off the survivors and shrink it again,
+converging on the tightest sub-clique of every track whether or not anything is
+wrong with it.
+
+#### Small blocks, and what `self_bar_k` costs
+
+Below **six** intra-block links — a block of three or fewer members — the centre
+and its quartile distance are being read off two or three numbers, which measures
+nothing; the relative term stays inactive and the absolute thresholds decide.
+`self_bar_k = 0` disables it everywhere, reproducing the absolute rule exactly.
+
+`self_bar_k` **trades occlusion recall against collateral**, and the trade is not
+avoidable inside this measurement. Every member that trails a tight core for an
+innocent reason — motion blur, an exposure step, a grazing view — is a member the
+tightened bar is also more willing to evict, and nothing in the pairwise matrix
+distinguishes it from an occluder. Lower `self_bar_k` catches more of both.
 
 ### The margin gate refuses to cut a continuum
 
@@ -211,8 +306,9 @@ how rayon schedules them.
 
 | parameter | default | meaning |
 |---|---|---|
-| `bar` | `0.65` | pairwise ZNCC at or above which two members agree |
-| `margin_gate` | `0.05` | separation margin a cut must exceed; below it the track is kept whole |
+| `bar` | `0.65` | pairwise ZNCC at or above which two members agree — a **floor**, raised per track by `self_bar_k` |
+| `margin_gate` | `0.05` | separation margin a cut must exceed; below it the track is kept whole. A **ceiling**, lowered per track by `self_bar_k` |
+| `self_bar_k` | `1.5` | units of the track's own core scatter the effective bar sits below its core centre; `0` disables the relative term |
 | `resolution` (R) | `24` | patch grid members are rendered and correlated on |
 | `window` | `gaussian_disk` (σ 0.6) | per-pixel scoring weight |
 | `sampler` | `bilinear_mip` | source-pyramid sampling |
@@ -247,6 +343,28 @@ flat-tabletop set that must not be cut. `margin_gate` carries over unchanged: a
 margin is a *difference* of ZNCCs, which the ~0.9 slope rescales by less than the
 gate's own precision.
 
+`self_bar_k` is calibrated against the occluding-member family the absolute pair
+structurally cannot reach — members on a repeating-texture surface that correlate
+0.85–0.95 with a core agreeing at 0.98–1.00. Measured against nine hand-verified
+exemplar tracks, `1.5` is the **largest** value that still cuts all of the ones
+this rule can reach; past ≈1.9 the bar loosens enough to re-admit an intermediate
+member on the tightest of them, which collapses the margin and the cut is lost.
+Below `1.5` nothing further is caught and the collateral stops falling (the split
+count is flat across `1.0–1.5`), so the operating point is an elbow rather than a
+slope. Two exemplars are **outside** the rule's reach at any `self_bar_k` and are
+the documented limit:
+
+- a track whose *core* is itself bimodal (two sub-groups agreeing at 0.96, so
+  σ ≈ 0.048) with the occluder 0.04 below it — under one scatter unit, which is
+  exactly the "no single core, keep the absolute bar" case; and
+- a track with an occluder at 0.93–0.98 against a core at ~1.00, where an
+  intermediate member bridges the two and the margin is **negative** at every
+  admission bar. Reaching it needs a discriminator this matrix does not
+  contain — a geometric one — not a lower `self_bar_k`. Trying anyway is
+  expensive: across two reconstructions, `1.5` already evicts 405 members whose
+  strongest surviving link is in `0.94–0.97`, and any bar high enough to reach
+  this track adds the 261 above `0.97` on top.
+
 ## API
 
 ```rust
@@ -258,7 +376,12 @@ pub struct MemberCoherenceParams {
     pub sampler: Sampler,         // BilinearMip
     pub min_valid_fraction: f64,  // 0.6
     pub min_support_pixels: u32,  // 8
+    pub self_bar_k: f64,          // 1.5; 0 disables the relative term
 }
+
+pub const SELF_BAR_CEILING: f64 = 0.99;      // cap on the effective bar
+pub const SELF_BAR_MIN_SCATTER: f64 = 0.005; // floor on the core scatter
+pub const SELF_BAR_MIN_PAIRS: usize = 6;     // fewest intra-block links to estimate from
 
 pub enum MemberVerdict { KeepAll, Split, Retire }
 
@@ -269,12 +392,21 @@ pub struct MemberMatrix {         // members, k*k row-major zncc, per-member sco
 pub struct MemberDecision {       // verdict + what it was decided on
     pub verdict: MemberVerdict, pub kept: Vec<bool>, pub block: Vec<bool>,
     pub support: u32, pub margin: f64, pub min_intra: f64, pub max_cross: f64,
+    // The thresholds the sweep and the margin test really ran at, and the
+    // statistics they came from. NaN core_* means the relative term was inactive;
+    // NaN thresholds mean no sweep ran at all.
+    pub effective_bar: f64, pub effective_margin_gate: f64,
+    pub core_center: f64, pub core_scatter: f64,
 }
 pub struct MemberCoherence { pub matrix: MemberMatrix, pub decision: MemberDecision }
 
 // "Scored" — at least one finite off-diagonal entry — in one place, shared by the
 // matrix and the decision rule.
 pub fn scored_mask(zncc: &[f64], k: usize) -> Vec<bool>;
+
+// One block's own (centre, scatter): the statistics the self-normalized bar is
+// measured in. `None` below SELF_BAR_MIN_PAIRS intra-block links.
+pub fn core_coherence(zncc: &[f64], k: usize, block: &[bool]) -> Option<(f64, f64)>;
 
 // Matrix and decision are separate so a caller can inspect or supply either.
 // `member_keypoints` is parallel to the INPUT `members` slice (deduplicated
@@ -309,7 +441,7 @@ The Python binding mirrors `PatchCloud.select_views`:
 
 ```python
 PatchCloud.validate_member_coherence(
-    recon, images, *, bar=0.65, margin_gate=0.05, resolution=24,
+    recon, images, *, bar=0.65, margin_gate=0.05, self_bar_k=1.5, resolution=24,
     window="gaussian_disk", window_sigma=0.6, sampler="bilinear_mip",
     min_valid_fraction=0.6, min_support_pixels=8, point_indexes=None,
     member_views=None, keypoint_anchor=True, return_matrix=False, progress=None,
@@ -327,8 +459,12 @@ source — anchors every member at its projection.
 Each returned dict carries `point_index`, `members` (**uint32**, the deduplicated
 member order every other per-member array follows), `verdict`
 (`"keep_all"` / `"split"` / `"retire"`), `kept` / `block` / `scored` (bool),
-`support`, `n_support`, `margin`, `min_intra`, `max_cross`, and — under
-`return_matrix=True` — the `k×k` float64 `zncc`.
+`support`, `n_support`, `margin`, `min_intra`, `max_cross`, `effective_bar` /
+`effective_margin_gate` (the thresholds the block sweep and the margin test really
+ran at — `effective_bar > bar` is exactly "the relative term engaged"),
+`core_center` / `core_scatter` (the statistics they were derived from, `NaN` when
+the term was inactive), and — under `return_matrix=True` — the `k×k` float64
+`zncc`.
 
 ## Testing
 
@@ -347,6 +483,21 @@ member; two unscored members that do *not* dilute a clean 2-of-3 majority into a
 retirement; a track with no pairwise evidence at all; and a single unscoreable
 *pair* whose two members are both still in play (a missing entry is skipped by the
 margin, not read as disagreement).
+
+The self-normalized bar has its own set: parity at `self_bar_k = 0` across every
+branch of the rule (the absolute verdicts and the absolute thresholds, with no
+statistics reported); the relative term engaging on a tight core plus a 0.90
+outsider that the absolute rule keeps whole, with the bar checked to be exactly
+`centre − k·scatter` and the margin floor checked to have moved with it; a
+two-population matrix whose scatter is wide, where verdict, membership *and* both
+thresholds fall back to the absolute rule; a monotone drift chain untouched under
+both settings; the `SELF_BAR_MIN_PAIRS` boundary either side (a 3-member block
+inactive, a 4-member one estimating); the ceiling and the scatter floor on a
+perfectly uniform core; the one-sidedness (the statistics do not move as the
+contaminated members are pushed arbitrarily far below the centre, where a plain
+standard deviation quadruples) and `core_coherence` returning `None` for a block
+of one; and determinism plus the one-pass property — the block landed on is the
+one a *single* re-sweep at the tightened bar gives.
 
 End-to-end builds over the rendered synthetic plane scene cover matrix symmetry and
 unit diagonal, one odd member out splitting, a single surface kept whole, a

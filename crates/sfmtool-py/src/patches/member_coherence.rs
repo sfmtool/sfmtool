@@ -51,7 +51,26 @@ impl PyPatchCloud {
     ///     bar: Pairwise ZNCC at or above which two members agree (default 0.65;
     ///         calibrated for the default window / sampler / resolution).
     ///     margin_gate: Separation-margin floor a cut must clear (default 0.05);
-    ///         below it the track is a drift chain and is kept whole.
+    ///         below it the track is a drift chain and is kept whole. An upper
+    ///         bound — ``self_bar_k`` lowers it per track, see below.
+    ///     self_bar_k: Strength of the **self-normalized admission bar** (default
+    ///         1.5): how many units of a track's own core scatter the effective
+    ///         bar sits below its core centre. ``bar`` and ``margin_gate`` are
+    ///         absolute and catch a member imaging a *different* surface (0.2-0.5
+    ///         against the core); they do not catch a member imaging an
+    ///         *occluder in front of the same repeating texture*, which shares the
+    ///         core's structure at 0.85-0.95 while the core agrees with itself at
+    ///         0.99. So each track re-derives its own thresholds from the
+    ///         intra-block agreement of the block admitted at ``bar``:
+    ///         ``effective_bar = max(bar, min(centre - self_bar_k * scatter,
+    ///         0.99))`` and ``effective_margin_gate = min(margin_gate, scatter)``,
+    ///         one tighten pass, never iterated. A noisy or drifting track has a
+    ///         large scatter and collapses back to the absolute pair. ``0``
+    ///         disables the relative term entirely (the absolute rule, bit for
+    ///         bit); a block of three or fewer members has too few pairs to
+    ///         estimate from and leaves it inactive. It trades occlusion recall
+    ///         against collateral on legitimately-marginal members (blur,
+    ///         exposure, obliquity) trailing a tight core.
     ///     resolution: The R×R patch grid members are rendered and correlated on.
     ///     window: Per-pixel scoring weight — ``"gaussian_disk"`` (default),
     ///         ``"gaussian"``, or ``"uniform"``.
@@ -98,9 +117,15 @@ impl PyPatchCloud {
     /// when fewer than two members scored), ``n_support`` (int — the common-support
     /// pixel count every pairwise ZNCC was taken over; one number per point,
     /// because the support is frozen per point rather than per pair),
-    /// ``margin``, ``min_intra``, ``max_cross`` (floats, NaN where undefined), and
-    /// — with ``return_matrix=True`` — ``zncc`` (``k×k`` float64 numpy array, unit
-    /// diagonal, NaN for uncorrelatable pairs).
+    /// ``margin``, ``min_intra``, ``max_cross`` (floats, NaN where undefined),
+    /// ``effective_bar`` / ``effective_margin_gate`` (the thresholds the block
+    /// sweep and the margin test actually ran at — equal to ``bar`` /
+    /// ``margin_gate`` when the relative term is off or inactive, NaN when no
+    /// sweep ran; ``effective_bar > bar`` is exactly "the relative term
+    /// engaged"), ``core_center`` / ``core_scatter`` (the statistics they were
+    /// derived from, NaN when inactive), and — with ``return_matrix=True`` —
+    /// ``zncc`` (``k×k`` float64 numpy array, unit diagonal, NaN for
+    /// uncorrelatable pairs).
     ///
     /// **Unscored members** — nothing rendered them, or nothing could be
     /// correlated with them — sit outside the decision rule entirely: the block
@@ -109,8 +134,9 @@ impl PyPatchCloud {
     /// ``"retire"`` still ships nothing: the point itself is refused).
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
-        recon, images, *, bar=0.65, margin_gate=0.05, resolution=24, window="gaussian_disk",
-        window_sigma=0.6, sampler="bilinear_mip", min_valid_fraction=0.6, min_support_pixels=8,
+        recon, images, *, bar=0.65, margin_gate=0.05, self_bar_k=1.5, resolution=24,
+        window="gaussian_disk", window_sigma=0.6, sampler="bilinear_mip",
+        min_valid_fraction=0.6, min_support_pixels=8,
         point_indexes=None, member_views=None, keypoint_anchor=true, return_matrix=false,
         progress=None
     ))]
@@ -121,6 +147,7 @@ impl PyPatchCloud {
         images: &Bound<'py, PyAny>,
         bar: f64,
         margin_gate: f64,
+        self_bar_k: f64,
         resolution: u32,
         window: &str,
         window_sigma: f64,
@@ -193,6 +220,7 @@ impl PyPatchCloud {
             sampler,
             min_valid_fraction,
             min_support_pixels,
+            self_bar_k,
         };
 
         let pyramid_set = resolve_pyramids(&posed, images)?;
@@ -294,6 +322,10 @@ impl PyPatchCloud {
             d.set_item("margin", res.decision.margin)?;
             d.set_item("min_intra", res.decision.min_intra)?;
             d.set_item("max_cross", res.decision.max_cross)?;
+            d.set_item("effective_bar", res.decision.effective_bar)?;
+            d.set_item("effective_margin_gate", res.decision.effective_margin_gate)?;
+            d.set_item("core_center", res.decision.core_center)?;
+            d.set_item("core_scatter", res.decision.core_scatter)?;
             if return_matrix {
                 let arr = Array2::from_shape_vec((k, k), res.matrix.zncc.clone())
                     .map_err(|e| PyValueError::new_err(e.to_string()))?;
