@@ -1110,3 +1110,344 @@ fn the_tighten_pass_runs_once_and_is_deterministic() {
     assert_eq!(bar, first.effective_bar);
     assert_eq!(max_support_block(&m.zncc, k, bar), first.block);
 }
+
+// ---------------------------------------------------------------------------
+// Multi-scale exoneration.
+// ---------------------------------------------------------------------------
+
+/// `tight_core_plus_outsider` again, with a second table standing in for the
+/// half-scale measurement: the outsider correlates `outside_coarse` there
+/// instead, so the retained-deficit ratio can be dialled directly. The core is
+/// identical at both scales, which is what a real core does — coarsening two
+/// renders of the same surface does not change how well they agree.
+fn two_scale_outsider(n: usize, outside: f64, outside_coarse: f64) -> MemberMatrix {
+    let fine = tight_core_plus_outsider(n, outside);
+    let coarse = tight_core_plus_outsider(n, outside_coarse);
+    MemberMatrix::from_zncc_scales(fine.members.clone(), fine.zncc, vec![coarse.zncc], vec![2])
+}
+
+/// The retained-deficit ratio `two_scale_outsider` produces, straight off the
+/// definition, so the tests can name the quantity they are dialling.
+fn ratio_of(m: &MemberMatrix) -> f64 {
+    let k = m.len();
+    let block: Vec<bool> = (0..k).map(|i| i != 0).collect();
+    core_deficit(&m.zncc_coarse[0], k, &block, 0) / core_deficit(&m.zncc, k, &block, 0)
+}
+
+#[test]
+fn a_structural_outsider_keeps_its_deficit_across_the_halving_and_is_evicted() {
+    // The disagreement survives coarsening — the member's low frequencies are
+    // already the wrong content — so exoneration must not reach it.
+    let m = two_scale_outsider(8, 0.90, 0.90);
+    let r = ratio_of(&m);
+    assert!(r > 0.99, "an unchanged deficit is fully retained: {r}");
+    let d = decide_member_coherence(&m, &defaults());
+    assert_eq!(d.verdict, MemberVerdict::Split);
+    assert_eq!(kept_indexes(&d), (1..9).collect::<Vec<_>>());
+    assert!(
+        d.relative_flagged[0],
+        "the relative term is what flagged it"
+    );
+    assert!(!d.exonerated[0]);
+    assert!((d.retained_deficit[0] - r).abs() < 1e-12);
+}
+
+#[test]
+fn a_spectral_outsider_loses_its_deficit_across_the_halving_and_is_spared() {
+    // Same full-scale score, but the disagreement is made of the fine detail:
+    // at half scale the member is back inside its core. It ships.
+    let m = two_scale_outsider(8, 0.90, 0.988);
+    let r = ratio_of(&m);
+    assert!(r < 0.5, "most of the deficit evaporated: {r}");
+    let d = decide_member_coherence(&m, &defaults());
+    assert_eq!(
+        d.verdict,
+        MemberVerdict::KeepAll,
+        "the whole rejected side was spared, so there is no cut left"
+    );
+    assert_eq!(kept_indexes(&d), (0..9).collect::<Vec<_>>());
+    assert!(d.relative_flagged[0]);
+    assert!(d.exonerated[0]);
+    // The block still reports the cut the sweep proposed: exoneration spares a
+    // member, it does not re-run the sweep.
+    assert_eq!(block_indexes(&d), (1..9).collect::<Vec<_>>());
+}
+
+#[test]
+fn the_exoneration_ratio_is_the_only_thing_between_evicting_and_sparing() {
+    // One matrix, one knob: the verdict flips exactly at the member's own ratio,
+    // and the comparison is inclusive at the threshold.
+    let m = two_scale_outsider(8, 0.90, 0.95);
+    let r = ratio_of(&m);
+    assert!(
+        (0.1..0.9).contains(&r),
+        "a ratio the sweep can straddle: {r}"
+    );
+    let at = |tau: f64| {
+        decide_member_coherence(
+            &m,
+            &MemberCoherenceParams {
+                exoneration_ratio: tau,
+                ..MemberCoherenceParams::default()
+            },
+        )
+    };
+    assert_eq!(at(r - 1e-9).verdict, MemberVerdict::Split);
+    assert_eq!(at(r).verdict, MemberVerdict::KeepAll, "inclusive at tau");
+    assert_eq!(at(r + 1e-9).verdict, MemberVerdict::KeepAll);
+}
+
+#[test]
+fn exoneration_off_and_no_coarse_scale_both_leave_the_self_bar_alone() {
+    // Three ways for the machinery to be inert, all agreeing with each other:
+    // the knob at zero, a matrix carrying no coarse scale, and the relative term
+    // itself disabled (nothing is ever flagged, so nothing can be spared).
+    let m = two_scale_outsider(8, 0.90, 0.988);
+    let raw = decide_member_coherence(
+        &m,
+        &MemberCoherenceParams {
+            exoneration_ratio: 0.0,
+            ..MemberCoherenceParams::default()
+        },
+    );
+    assert_eq!(raw.verdict, MemberVerdict::Split);
+    assert!(raw.relative_flagged[0], "still flagged, just not spared");
+    assert!(!raw.exonerated[0]);
+    // The ratio is still reported: the measurement is made either way, and only
+    // acting on it is switched off.
+    assert!(raw.retained_deficit[0].is_finite());
+
+    let no_scale = MemberMatrix::from_zncc(m.members.clone(), m.zncc.clone());
+    let d = decide_member_coherence(&no_scale, &defaults());
+    assert_eq!(d.verdict, MemberVerdict::Split);
+    assert!(d.relative_flagged[0]);
+    assert!(!d.exonerated[0]);
+    assert!(d.retained_deficit[0].is_nan(), "nothing to measure against");
+
+    let abs = decide_member_coherence(&m, &absolute());
+    assert!(
+        abs.relative_flagged.iter().all(|&f| !f),
+        "with no relative term there is nothing exoneration may reach"
+    );
+    assert!(abs.exonerated.iter().all(|&e| !e));
+}
+
+#[test]
+fn only_the_relative_terms_evictions_are_exonerable() {
+    // A cross-surface member the ABSOLUTE bar rejects, whose deficit evaporates
+    // at half scale exactly as a soft frame's would. It is still evicted: how a
+    // disagreement is spread across scales says nothing about whether a member
+    // images the track's surface at all.
+    let k = 5;
+    let mut fine = vec![0.0; k * k];
+    let mut coarse = vec![0.0; k * k];
+    for a in 0..k {
+        for b in 0..k {
+            let (f, c) = if a == b {
+                (1.0, 1.0)
+            } else if a == 0 || b == 0 {
+                (0.30, 0.985) // below the absolute bar; agrees coarsely
+            } else {
+                (0.99 - 0.002 * ((a + b) % 3) as f64, 0.99)
+            };
+            fine[a * k + b] = f;
+            coarse[a * k + b] = c;
+        }
+    }
+    let m = MemberMatrix::from_zncc_scales((0..k as u32).collect(), fine, vec![coarse], vec![2]);
+    let d = decide_member_coherence(&m, &defaults());
+    assert_eq!(d.verdict, MemberVerdict::Split);
+    assert_eq!(kept_indexes(&d), vec![1, 2, 3, 4]);
+    assert!(
+        !d.relative_flagged[0],
+        "the absolute bar already rejected it, so it was never a candidate"
+    );
+    assert!(!d.exonerated[0]);
+    assert!(d.retained_deficit[0].is_nan(), "no ratio is even computed");
+}
+
+#[test]
+fn sparing_enough_members_turns_a_retirement_into_a_split() {
+    // Ten members: a tight core of five, one soft member (5) the tightened bar
+    // rejects and whose deficit evaporates coarsely, and a second surface (6..10)
+    // the ABSOLUTE bar rejects. The tightened block is five of ten scored, so the
+    // raw rule retires the point; sparing the soft member restores the majority
+    // and the cut lands on the second surface alone.
+    let k = 10;
+    let mut fine = vec![0.0; k * k];
+    let mut coarse = vec![0.0; k * k];
+    {
+        let mut put = |a: usize, b: usize, f: f64, c: f64| {
+            fine[a * k + b] = f;
+            fine[b * k + a] = f;
+            coarse[a * k + b] = c;
+            coarse[b * k + a] = c;
+        };
+        for a in 0..5 {
+            for b in (a + 1)..5 {
+                // A tight core with a little structure, so its scatter is real
+                // but small — which is what lets the bar tighten onto it.
+                let z = 0.99 - 0.002 * ((a + b) % 3) as f64;
+                put(a, b, z, z);
+            }
+            // The soft member: below the tightened bar, back inside the core
+            // once one octave of detail is gone.
+            put(a, 5, 0.96, 0.986);
+        }
+        // A second surface: the absolute bar's business, and wrong at every scale.
+        for a in 0..6 {
+            for b in 6..k {
+                put(a, b, 0.20, 0.20);
+            }
+        }
+        for a in 6..k {
+            for b in (a + 1)..k {
+                put(a, b, 0.97, 0.97);
+            }
+        }
+    }
+    let m = MemberMatrix::from_zncc_scales((0..k as u32).collect(), fine, vec![coarse], vec![2]);
+
+    let raw = decide_member_coherence(
+        &m,
+        &MemberCoherenceParams {
+            exoneration_ratio: 0.0,
+            ..MemberCoherenceParams::default()
+        },
+    );
+    assert_eq!(raw.verdict, MemberVerdict::Retire);
+    assert_eq!(raw.support, 5, "five of ten scored is no majority");
+    assert!(
+        raw.relative_flagged[5],
+        "the soft member is the relative term's"
+    );
+    assert!(
+        (6..k).all(|i| !raw.relative_flagged[i]),
+        "the second surface is the absolute bar's, and not exonerable"
+    );
+
+    let d = decide_member_coherence(&m, &defaults());
+    assert_eq!(d.verdict, MemberVerdict::Split);
+    assert_eq!(kept_indexes(&d), vec![0, 1, 2, 3, 4, 5]);
+    assert!(d.exonerated[5]);
+    assert!((6..k).all(|i| !d.exonerated[i]));
+    // `support` and `block` keep describing the sweep's own block, so the
+    // majority the verdict turned on is not the one they report.
+    assert_eq!(d.support, 5);
+    assert_eq!(block_indexes(&d), vec![0, 1, 2, 3, 4]);
+}
+
+#[test]
+fn a_member_with_no_measurable_deficit_is_not_spared() {
+    // Exoneration wants positive evidence that a real deficit decayed. A member
+    // whose full-scale deficit is below the floor has no ratio worth taking, and
+    // the rule's own verdict stands.
+    let m = two_scale_outsider(8, 0.987, 0.9875);
+    let k = m.len();
+    let block: Vec<bool> = (0..k).map(|i| i != 0).collect();
+    let df = core_deficit(&m.zncc, k, &block, 0);
+    assert!(
+        df > 0.0 && df <= EXONERATION_MIN_DEFICIT,
+        "a deficit under the floor: {df}"
+    );
+    let d = decide_member_coherence(&m, &defaults());
+    if d.verdict != MemberVerdict::KeepAll {
+        assert!(d.relative_flagged[0]);
+        assert!(!d.exonerated[0]);
+        assert!(d.retained_deficit[0].is_nan());
+    }
+}
+
+#[test]
+fn sharpness_is_reported_for_every_scored_member_whatever_the_verdict() {
+    // Unlike the ratio, it describes the observations the point SHIPS, so it is
+    // measured on members no one is thinking about evicting — and it separates
+    // the soft member from the core by construction.
+    let m = two_scale_outsider(8, 0.90, 0.988);
+    let d = decide_member_coherence(&m, &defaults());
+    assert_eq!(d.verdict, MemberVerdict::KeepAll);
+    for i in 0..m.len() {
+        assert!(
+            d.sharpness_deficit[i].is_finite(),
+            "member {i} carries no sharpness"
+        );
+    }
+    let soft = d.sharpness_deficit[0];
+    let core_max = (1..m.len())
+        .map(|i| d.sharpness_deficit[i])
+        .fold(f64::NEG_INFINITY, f64::max);
+    assert!(
+        soft > 10.0 * core_max.abs().max(1e-6),
+        "the soft member stands out: {soft} against a core max of {core_max}"
+    );
+    // A matrix with no coarse scale reports nothing rather than zero.
+    let plain = MemberMatrix::from_zncc(m.members.clone(), m.zncc.clone());
+    let dp = decide_member_coherence(&plain, &defaults());
+    assert!(dp.sharpness_deficit.iter().all(|s| s.is_nan()));
+}
+
+#[test]
+fn the_coarse_scales_are_rendered_from_the_same_stack_and_agree_with_the_full_one() {
+    // End to end: the coarse tables come out of the same render, symmetric, with
+    // a unit diagonal, over the factors the resolution admits — and a member
+    // unscored at full scale is unscored at every scale.
+    let scene = Scene::new(
+        &[
+            [0.0, 0.0, 0.0],
+            [0.6, 0.0, 0.4],
+            [-0.6, 0.2, 0.3],
+            [0.3, -0.5, 0.2],
+        ],
+        &[surface_a, surface_a, surface_a, surface_b],
+    );
+    let params = MemberCoherenceParams {
+        resolution: 24,
+        min_valid_fraction: 0.5,
+        ..MemberCoherenceParams::default()
+    };
+    let m = member_zncc_matrix(&plane_patch(), &scene.views(), &[0, 1, 2, 3], None, &params);
+    assert_eq!(m.coarse_factors, coarse_factors_for(params.resolution));
+    assert_eq!(m.zncc_coarse.len(), m.coarse_factors.len());
+    assert_eq!(m.coarse_factors, vec![2, 4], "24 admits both halvings");
+    let k = m.len();
+    for table in &m.zncc_coarse {
+        assert_eq!(table.len(), k * k);
+        for a in 0..k {
+            assert_eq!(table[a * k + a], 1.0);
+            for b in 0..k {
+                let (x, y) = (table[a * k + b], table[b * k + a]);
+                assert!(
+                    (x - y).abs() < 1e-12 || (x.is_nan() && y.is_nan()),
+                    "asymmetric at ({a},{b})"
+                );
+                assert_eq!(
+                    x.is_finite(),
+                    m.get(a, b).is_finite(),
+                    "scoredness differs by scale at ({a},{b})"
+                );
+            }
+        }
+    }
+    // The odd member out is odd at every scale: this is a real surface
+    // difference, not a spectral one.
+    for i in 0..3 {
+        assert!(
+            m.zncc_coarse[0][i * k + 3] < 0.8,
+            "cross-surface pair {i},3 stays weak at half scale: {}",
+            m.zncc_coarse[0][i * k + 3]
+        );
+    }
+}
+
+#[test]
+fn coarse_factors_follow_the_resolution() {
+    assert_eq!(coarse_factors_for(24), vec![2, 4]);
+    assert_eq!(coarse_factors_for(16), vec![2, 4]);
+    // 12/2 = 6 clears the floor, 12/4 = 3 does not.
+    assert_eq!(coarse_factors_for(12), vec![2]);
+    // 10 does not divide by 4 at all, and 10/2 = 5 clears the floor.
+    assert_eq!(coarse_factors_for(10), vec![2]);
+    // Nothing usable: every candidate grid is too small or does not divide.
+    assert!(coarse_factors_for(6).is_empty());
+    assert!(coarse_factors_for(2).is_empty());
+}

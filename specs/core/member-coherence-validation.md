@@ -66,6 +66,29 @@ uses). A track whose members cannot form a common support at all yields a matrix
 with only its diagonal, which decides as `KeepAll` (no evidence is not contrary
 evidence).
 
+### The same agreement, measured again on coarser grids
+
+Alongside the `R×R` table, the same `k×k` agreement is measured on **box-downsampled
+copies of the very same renders**, one table per factor in `{2, 4}` that divides `R`
+and leaves a grid of at least `4×4` — at the default `R = 24`, the `12×12` and `6×6`
+grids. They are reported as `zncc_coarse`, coarsest last, with their factors.
+
+Nothing is re-sampled. Each coarse cell is the plain mean of the frozen common
+support's pixels inside it, so every scale reads the same pixels through a wider
+aperture; the window is recomputed on the coarse grid and the pair scores are then
+formed by the identical estimator (per-channel z-normalization, unit-norm dot
+product). A cell exists when at least one support pixel lands in it and its
+recomputed window weight is positive. Because the support is common to every
+member, the surviving cells are the same for all of them, so a member unscored at
+full scale is unscored at every scale and the tables are index-compatible with
+`zncc`.
+
+These tables exist because a **single** scale cannot say *why* two members
+disagree. Two members of the same surface, one of them soft, and two members of
+different surfaces produce the same number at full resolution. They stop looking
+alike the moment the fine detail is removed, and that is what the decision rule and
+the per-member sharpness below both read.
+
 ### Members are sampled at their keypoints, not at the reprojection
 
 Each member's render is **recentred in-plane so it is anchored at that member's
@@ -256,10 +279,97 @@ nothing; the relative term stays inactive and the absolute thresholds decide.
 `self_bar_k = 0` disables it everywhere, reproducing the absolute rule exactly.
 
 `self_bar_k` **trades occlusion recall against collateral**, and the trade is not
-avoidable inside this measurement. Every member that trails a tight core for an
-innocent reason — motion blur, an exposure step, a grazing view — is a member the
-tightened bar is also more willing to evict, and nothing in the pairwise matrix
-distinguishes it from an occluder. Lower `self_bar_k` catches more of both.
+avoidable inside a single-scale measurement. Every member that trails a tight core
+for an innocent reason — motion blur, an exposure step, a grazing view — is a member
+the tightened bar is also more willing to evict, and nothing in the pairwise matrix
+*at one scale* distinguishes it from an occluder. Lower `self_bar_k` catches more of
+both. [Multi-scale exoneration](#multi-scale-exoneration) is what refunds the
+innocents, by measuring the same agreement again with the detail taken away.
+
+### Multi-scale exoneration
+
+The self-normalized bar cannot avoid taking innocents with the occluders, because
+at one scale it cannot see the difference. Removing the fine detail is what makes
+the difference visible:
+
+- **Structural** disagreement — an occluder, a different surface — is present at
+  every scale. The member's low frequencies are *already* the wrong content, so
+  coarsening both sides changes nothing about how badly they agree.
+- **Spectral** disagreement — a defocused or motion-blurred frame of the *same*
+  surface — lives entirely in the detail. Coarsen both sides and it evaporates: the
+  member's low frequencies are the core's low frequencies.
+
+So for each member the relative term alone would evict, the **agreement deficit** is
+measured twice, over the tables the matrix already carries:
+
+```
+deficit(scale) = mean(core↔core at scale) − mean(member↔core at scale)
+```
+
+where the core is the winning block **minus the member itself** (so the quantity
+means the same thing for a member inside the block and one outside it), and both
+means run over finite links only. Their quotient is the member's **retained
+deficit**. A member whose retained deficit is at or below `exoneration_ratio` is
+**exonerated**: it is kept, it stays out of `block`, and it is reported in
+`exonerated` alongside its ratio.
+
+The comparison scale is the **first** coarse table — one halving — not the coarsest.
+The test is whether the disagreement *survives* removing detail, and a grid coarse
+enough washes out structure along with blur. Measured against the two labelled
+populations, one halving separates them; two halvings collapses the occluders into
+the same range as the soft frames and the separation is gone. That is also why the
+threshold sits high: at `0.90` it is asking "did *anything* decay", not "did most of
+it".
+
+#### Only the relative term's evictions are exonerable
+
+A member the **absolute** `bar` rejects is not a soft frame of the track's surface.
+It correlates 0.2–0.5 — the cross-surface chimera the absolute rule was calibrated
+on — and how its disagreement is distributed across scales says nothing about
+whether it belongs. Blur is not a defence against imaging a different thing.
+Exoneration therefore never loosens the absolute rule; it only refunds what
+tightening the bar per track took. A member outside the pass-1 block is not flagged,
+gets no ratio computed, and cannot be spared.
+
+#### Where it sits in the rule
+
+Exoneration runs **after** the margin gate and **before** the majority test, and it
+re-admits individual members rather than re-running the sweep:
+
+- `block`, `support`, `margin`, `min_intra` and `max_cross` all keep describing the
+  cut the sweep proposed. An exonerated member is a *spared* member, not a different
+  block, and the reported quantities say so.
+- When every rejected member is spared there is no cut left and the verdict falls
+  back to `KeepAll`.
+- The majority test counts the spared members on the kept side — they ship, so they
+  are part of the side that would prevail. A `Retire` whose block regains a majority
+  this way becomes a `Split`.
+
+`exoneration_ratio = 0` disables it. It is also inert whenever the relative term is
+(nothing is ever flagged), and whenever the matrix carries no coarse scale.
+
+### Per-member sharpness
+
+The same two deficits give a quantity that is **not** about any verdict:
+
+```
+sharpness_deficit = deficit(full) − deficit(coarsest)
+```
+
+the part of a member's disagreement that exists only at fine scale. It is `0` for a
+member whose disagreement (if any) is scale-free — including an occluder, which is
+sharp, just wrong — and grows for a member that agrees with its core coarsely and
+not finely, which is what defocus and motion blur do.
+
+It is computed for **every** scored member, flagged or not, because it describes the
+observations the point *ships* rather than the ones it was thinking about evicting.
+It reads the **coarsest** table, not the first: this is a magnitude rather than a
+survival test, and the widest span available is the most sensitive one. Measured
+across one capture's frames, the separation is an order of magnitude — a visibly
+soft frame's members sit above the crisp frames' 99th percentile.
+
+`NaN` where the two deficits are not both defined: no coarse scale, or a block with
+fewer than two other members.
 
 ### The margin gate refuses to cut a continuum
 
@@ -309,6 +419,7 @@ how rayon schedules them.
 | `bar` | `0.65` | pairwise ZNCC at or above which two members agree — a **floor**, raised per track by `self_bar_k` |
 | `margin_gate` | `0.05` | separation margin a cut must exceed; below it the track is kept whole. A **ceiling**, lowered per track by `self_bar_k` |
 | `self_bar_k` | `1.5` | units of the track's own core scatter the effective bar sits below its core centre; `0` disables the relative term |
+| `exoneration_ratio` | `0.90` | retained deficit at or below which a relative-flagged member is spared; `0` disables exoneration |
 | `resolution` (R) | `24` | patch grid members are rendered and correlated on |
 | `window` | `gaussian_disk` (σ 0.6) | per-pixel scoring weight |
 | `sampler` | `bilinear_mip` | source-pyramid sampling |
@@ -377,17 +488,24 @@ pub struct MemberCoherenceParams {
     pub min_valid_fraction: f64,  // 0.6
     pub min_support_pixels: u32,  // 8
     pub self_bar_k: f64,          // 1.5; 0 disables the relative term
+    pub exoneration_ratio: f64,   // 0.90; 0 disables exoneration
 }
 
 pub const SELF_BAR_CEILING: f64 = 0.99;      // cap on the effective bar
 pub const SELF_BAR_MIN_SCATTER: f64 = 0.005; // floor on the core scatter
 pub const SELF_BAR_MIN_PAIRS: usize = 6;     // fewest intra-block links to estimate from
+pub const COARSE_FACTORS: [u32; 2] = [2, 4]; // box-downsampling factors, coarsest last
+pub const MIN_COARSE_RESOLUTION: u32 = 4;    // smallest coarse grid built
+pub const EXONERATION_MIN_DEFICIT: f64 = 0.01; // smallest deficit a ratio is taken from
 
 pub enum MemberVerdict { KeepAll, Split, Retire }
 
 pub struct MemberMatrix {         // members, k*k row-major zncc, per-member scored
     pub members: Vec<u32>, pub zncc: Vec<f64>, pub scored: Vec<bool>,
     pub n_support: u32,           // common-support pixels (0 for `from_zncc`)
+    // The same agreement on box-downsampled copies of the same renders, one
+    // k*k table per factor, coarsest last. Empty when none could be built.
+    pub zncc_coarse: Vec<Vec<f64>>, pub coarse_factors: Vec<u32>,
 }
 pub struct MemberDecision {       // verdict + what it was decided on
     pub verdict: MemberVerdict, pub kept: Vec<bool>, pub block: Vec<bool>,
@@ -397,6 +515,13 @@ pub struct MemberDecision {       // verdict + what it was decided on
     // NaN thresholds mean no sweep ran at all.
     pub effective_bar: f64, pub effective_margin_gate: f64,
     pub core_center: f64, pub core_scatter: f64,
+    // Multi-scale exoneration: who the relative term alone rejected, who was
+    // spared, and the ratio that decided. NaN ratio = not flagged, or undefined.
+    pub relative_flagged: Vec<bool>, pub exonerated: Vec<bool>,
+    pub retained_deficit: Vec<f64>,
+    // Photometric sharpness relative to the track consensus, for EVERY scored
+    // member: the part of its deficit that exists only at fine scale.
+    pub sharpness_deficit: Vec<f64>,
 }
 pub struct MemberCoherence { pub matrix: MemberMatrix, pub decision: MemberDecision }
 
@@ -407,6 +532,13 @@ pub fn scored_mask(zncc: &[f64], k: usize) -> Vec<bool>;
 // One block's own (centre, scatter): the statistics the self-normalized bar is
 // measured in. `None` below SELF_BAR_MIN_PAIRS intra-block links.
 pub fn core_coherence(zncc: &[f64], k: usize, block: &[bool]) -> Option<(f64, f64)>;
+
+// One member's agreement deficit against a block on one scale's table, with the
+// member excluded from the core on both sides. NaN when either side is undefined.
+pub fn core_deficit(zncc: &[f64], s: usize, block: &[bool], member: usize) -> f64;
+
+// The COARSE_FACTORS a given grid admits.
+pub fn coarse_factors_for(resolution: u32) -> Vec<u32>;
 
 // Matrix and decision are separate so a caller can inspect or supply either.
 // `member_keypoints` is parallel to the INPUT `members` slice (deduplicated
@@ -435,13 +567,16 @@ pub fn member_keypoints_from_reconstruction(recon, cloud) -> Vec<Vec<Option<[f64
 ```
 
 `MemberMatrix::from_zncc` builds a matrix from an already-computed table, so a
-caller holding its own pairwise scores can use the decision rule on its own.
+caller holding its own pairwise scores can use the decision rule on its own; it
+carries no coarse scale, which leaves exoneration and sharpness inactive.
+`from_zncc_scales` takes the coarse tables too.
 
 The Python binding mirrors `PatchCloud.select_views`:
 
 ```python
 PatchCloud.validate_member_coherence(
-    recon, images, *, bar=0.65, margin_gate=0.05, self_bar_k=1.5, resolution=24,
+    recon, images, *, bar=0.65, margin_gate=0.05, self_bar_k=1.5,
+    exoneration_ratio=0.90, resolution=24,
     window="gaussian_disk", window_sigma=0.6, sampler="bilinear_mip",
     min_valid_fraction=0.6, min_support_pixels=8, point_indexes=None,
     member_views=None, keypoint_anchor=True, return_matrix=False, progress=None,
@@ -463,8 +598,12 @@ member order every other per-member array follows), `verdict`
 `effective_margin_gate` (the thresholds the block sweep and the margin test really
 ran at — `effective_bar > bar` is exactly "the relative term engaged"),
 `core_center` / `core_scatter` (the statistics they were derived from, `NaN` when
-the term was inactive), and — under `return_matrix=True` — the `k×k` float64
-`zncc`.
+the term was inactive), `relative_flagged` / `exonerated` (bool — the members the
+relative term alone put outside the block, and the subset exoneration spared),
+`retained_deficit` (float64, `NaN` off the flagged members and where undefined),
+`sharpness_deficit` (float64, for every scored member), and — under
+`return_matrix=True` — the `k×k` float64 `zncc`, the list of coarse tables
+`zncc_coarse` and their `coarse_factors`.
 
 ## Testing
 
@@ -513,6 +652,27 @@ is depressed at its projection and recovers by more than 0.1 ZNCC against every
 sibling when anchored at its keypoint, with the track's weakest link (what `bar`
 reads) moving up with it; and a duplicated member keeping the keypoint of its
 first occurrence through the dedup.
+
+Multi-scale exoneration has its own set, driven by a second hand-built table
+standing in for the half-scale measurement so the retained deficit can be dialled
+directly: a structural outsider (deficit unchanged across the halving) still
+evicted; a spectral one (deficit evaporated) spared, with the verdict falling back
+to `KeepAll` and `block` still reporting the sweep's own cut; the verdict flipping
+on `exoneration_ratio` alone, inclusive at the threshold; the three inert
+configurations agreeing (the knob at zero — which still *reports* the ratio, only
+declining to act on it — a matrix with no coarse scale, and the relative term
+disabled); a member the **absolute** bar rejects never flagged and never spared
+however far its deficit decays; a `Retire` becoming a `Split` when sparing restores
+the majority, with `support` and `block` still describing the sweep's block; and a
+deficit under `EXONERATION_MIN_DEFICIT` yielding no ratio and no sparing. Sharpness
+is covered separately, because it is reported on every scored member whatever the
+verdict, and reports `NaN` rather than zero with no coarse scale.
+
+The coarse scales themselves are covered end-to-end on the rendered scene — built
+from the same stack, symmetric, unit diagonal, over exactly the factors the
+resolution admits, with scoredness identical at every scale and a genuine
+cross-surface pair staying weak through the halving — plus `coarse_factors_for`
+against divisibility and the minimum-grid floor.
 
 `tests/patch/test_member_coherence.py` covers the binding surface against a real
 reconstruction: the dict keys and dtypes, the `k×k` `zncc` under `return_matrix`

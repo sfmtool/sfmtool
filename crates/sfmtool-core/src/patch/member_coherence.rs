@@ -98,6 +98,20 @@ pub struct MemberCoherenceParams {
     /// `0` (or negative) **disables** the relative term entirely: every quantity
     /// is decided at the absolute thresholds, bit for bit.
     pub self_bar_k: f64,
+    /// Retained-deficit ratio at or below which a member the **relative** term
+    /// alone would evict is spared — see
+    /// [multi-scale exoneration](decide_member_coherence#multi-scale-exoneration).
+    /// A member's agreement deficit is measured again on the **half-scale** grid
+    /// [`MemberMatrix::zncc_coarse`] carries; the ratio of that to the deficit at
+    /// full scale says whether the disagreement survives the loss of one octave
+    /// of detail (structure — an occluder) or is made of it (spectrum — a soft
+    /// frame). It runs high — an occluder retains 0.85–1.00 of its deficit across
+    /// one halving — because the test is *survival*, not decay.
+    ///
+    /// `0` (or negative) **disables** exoneration: the self-normalized rule
+    /// decides alone. It is inert whenever the relative term is, since a member
+    /// the absolute bar rejects is never a candidate.
+    pub exoneration_ratio: f64,
 }
 
 /// Upper bound on the self-normalized admission bar: a perfect core cannot
@@ -118,6 +132,24 @@ pub const SELF_BAR_MIN_SCATTER: f64 = 0.005;
 /// and the absolute thresholds decide.
 pub const SELF_BAR_MIN_PAIRS: usize = 6;
 
+/// The box-downsampling factors [`member_zncc_matrix`] measures the coarse
+/// agreement at, in order of increasing coarseness. A factor is skipped when the
+/// grid does not divide by it, or when the resulting grid would be smaller than
+/// [`MIN_COARSE_RESOLUTION`], so at the default `resolution = 24` these are the
+/// `12×12` and `6×6` grids.
+pub const COARSE_FACTORS: [u32; 2] = [2, 4];
+
+/// Smallest coarse grid [`COARSE_FACTORS`] will build. Below `4×4` the windowed
+/// correlation is taken over a handful of cells and reports noise.
+pub const MIN_COARSE_RESOLUTION: u32 = 4;
+
+/// Smallest full-scale agreement deficit a retained-deficit ratio is computed
+/// from. The ratio is a quotient by that deficit, and below this floor the
+/// member is not measurably out of step with its core at all, so the quotient is
+/// reading rounding. Such a member is **not** exonerated: exoneration requires
+/// positive evidence that a real deficit decays, not the absence of a deficit.
+pub const EXONERATION_MIN_DEFICIT: f64 = 0.01;
+
 impl Default for MemberCoherenceParams {
     fn default() -> Self {
         Self {
@@ -129,6 +161,7 @@ impl Default for MemberCoherenceParams {
             min_valid_fraction: 0.6,
             min_support_pixels: MIN_MASK_PIXELS as u32,
             self_bar_k: 1.5,
+            exoneration_ratio: 0.90,
         }
     }
 }
@@ -154,6 +187,26 @@ pub struct MemberMatrix {
     /// Row-major `k×k` windowed ZNCC between members. The diagonal is `1.0`;
     /// `NaN` marks a pair that could not be correlated (either member unscored).
     pub zncc: Vec<f64>,
+    /// The same `k×k` agreement measured again on **box-downsampled** copies of
+    /// the very same renders, one table per surviving [`COARSE_FACTORS`] entry
+    /// and in that order (coarsest last). Empty when no coarse scale could be
+    /// built (the grid does not divide, or nothing was rendered).
+    ///
+    /// The renders are not re-sampled: each coarse cell is the mean of the fine
+    /// pixels of the frozen common support inside it, so every scale reads the
+    /// same pixels through a wider aperture. The pair scores are otherwise
+    /// computed exactly as [`zncc`](Self::zncc) is — window weights recomputed at
+    /// the coarse grid, per-channel z-normalization, unit-norm dot product — so
+    /// the tables are directly comparable to it and to each other.
+    ///
+    /// This is what separates a **structural** disagreement from a **spectral**
+    /// one: an occluding member differs from its core at every scale, a soft
+    /// frame only at the finest. See
+    /// [multi-scale exoneration](decide_member_coherence#multi-scale-exoneration).
+    pub zncc_coarse: Vec<Vec<f64>>,
+    /// The downsampling factor of each [`zncc_coarse`](Self::zncc_coarse) table,
+    /// parallel to it — a subset of [`COARSE_FACTORS`], in the same order.
+    pub coarse_factors: Vec<u32>,
     /// Per member: whether it carries pairwise evidence — see [`scored_mask`],
     /// the single definition this and the decision rule share. An unscored member
     /// has a `NaN` row and column but still holds its `1.0` diagonal.
@@ -171,21 +224,59 @@ impl MemberMatrix {
     /// Build a matrix from an already-computed row-major `k×k` ZNCC table (the
     /// entry point for callers holding their own pairwise scores, and for tests).
     /// The diagonal is forced to `1.0`, `scored` is derived by [`scored_mask`],
-    /// and `n_support` is `0` (nothing was rendered).
+    /// `n_support` is `0` (nothing was rendered) and no coarse scale is carried,
+    /// which leaves [multi-scale
+    /// exoneration](decide_member_coherence#multi-scale-exoneration) inactive.
     ///
     /// # Panics
     ///
     /// Panics if `zncc.len() != members.len() * members.len()`.
-    pub fn from_zncc(members: Vec<u32>, mut zncc: Vec<f64>) -> Self {
+    pub fn from_zncc(members: Vec<u32>, zncc: Vec<f64>) -> Self {
+        Self::from_zncc_scales(members, zncc, Vec::new(), Vec::new())
+    }
+
+    /// [`from_zncc`](Self::from_zncc) with the coarse-scale tables supplied — the
+    /// entry point for tests and callers that measure their own multi-scale
+    /// agreement. Every table's diagonal is forced to `1.0`; `scored` is derived
+    /// from the **full-scale** table alone, which is the one the decision rule
+    /// admits members on.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any table is not `k×k`, or if `coarse_factors` is not parallel
+    /// to `zncc_coarse`.
+    pub fn from_zncc_scales(
+        members: Vec<u32>,
+        mut zncc: Vec<f64>,
+        mut zncc_coarse: Vec<Vec<f64>>,
+        coarse_factors: Vec<u32>,
+    ) -> Self {
         let k = members.len();
         assert_eq!(zncc.len(), k * k, "zncc must be a k*k row-major matrix");
+        assert_eq!(
+            zncc_coarse.len(),
+            coarse_factors.len(),
+            "coarse_factors must be parallel to zncc_coarse"
+        );
         for i in 0..k {
             zncc[i * k + i] = 1.0;
+        }
+        for table in &mut zncc_coarse {
+            assert_eq!(
+                table.len(),
+                k * k,
+                "every coarse table must be a k*k row-major matrix"
+            );
+            for i in 0..k {
+                table[i * k + i] = 1.0;
+            }
         }
         let scored = scored_mask(&zncc, k);
         Self {
             members,
             zncc,
+            zncc_coarse,
+            coarse_factors,
             scored,
             n_support: 0,
         }
@@ -275,6 +366,42 @@ pub struct MemberDecision {
     /// Scatter of that agreement — the `σ` of [`core_coherence`], floored at
     /// [`SELF_BAR_MIN_SCATTER`]. `NaN` when the relative term was inactive.
     pub core_scatter: f64,
+    /// Per member: whether the **relative** term alone put it outside the block —
+    /// it clears the absolute `bar` against the pass-1 block but not the
+    /// tightened `effective_bar`. All `false` when the relative term did not
+    /// engage, and all `false` when no cut was on the table (the margin gate
+    /// refused, or the block spans every scored member): nothing was flagged
+    /// because nothing was being evicted.
+    ///
+    /// These are the only members [multi-scale
+    /// exoneration](decide_member_coherence#multi-scale-exoneration) can spare.
+    pub relative_flagged: Vec<bool>,
+    /// Per member: whether exoneration spared it — a subset of
+    /// [`relative_flagged`](Self::relative_flagged). An exonerated member is
+    /// [`kept`](Self::kept) but stays out of [`block`](Self::block), which is the
+    /// block the sweep actually produced.
+    pub exonerated: Vec<bool>,
+    /// Per member: the **retained-deficit ratio** — the member's agreement
+    /// deficit against the block on the coarsest available grid scale, over the
+    /// same deficit at full scale. Near `1` the disagreement survives the loss of
+    /// the fine detail (structure); near `0` it is made of it (spectrum).
+    ///
+    /// `NaN` where it was not computed or is undefined: an unflagged member, a
+    /// matrix carrying no coarse scale, a block with fewer than two other
+    /// members, or a full-scale deficit at or below [`EXONERATION_MIN_DEFICIT`].
+    pub retained_deficit: Vec<f64>,
+    /// Per member: **photometric sharpness relative to the track consensus** —
+    /// the part of the member's agreement deficit that exists only at fine scale,
+    /// `deficit_full − deficit_coarsest`, against the block excluding the member
+    /// itself. `0` for a member whose disagreement (if any) is scale-free;
+    /// positive and growing for a member that agrees with the block coarsely and
+    /// not finely, which is what defocus and motion blur do.
+    ///
+    /// Unlike [`retained_deficit`](Self::retained_deficit) this is computed for
+    /// **every** scored member, flagged or not, so it describes the observations
+    /// the point ships rather than the ones it was thinking about evicting.
+    /// `NaN` where the two deficits are not both defined.
+    pub sharpness_deficit: Vec<f64>,
 }
 
 impl Default for MemberDecision {
@@ -294,6 +421,10 @@ impl Default for MemberDecision {
             effective_margin_gate: f64::NAN,
             core_center: f64::NAN,
             core_scatter: f64::NAN,
+            relative_flagged: Vec::new(),
+            exonerated: Vec::new(),
+            retained_deficit: Vec::new(),
+            sharpness_deficit: Vec::new(),
         }
     }
 }
@@ -407,6 +538,17 @@ pub fn member_zncc_matrix(
     for i in 0..k {
         zncc[i * k + i] = 1.0;
     }
+    let coarse_factors = coarse_factors_for(resolution);
+    let mut zncc_coarse: Vec<Vec<f64>> = coarse_factors
+        .iter()
+        .map(|_| {
+            let mut t = vec![f64::NAN; k * k];
+            for i in 0..k {
+                t[i * k + i] = 1.0;
+            }
+            t
+        })
+        .collect();
     let n_support = if k >= 2 {
         fill_member_zncc(
             patch,
@@ -416,6 +558,8 @@ pub fn member_zncc_matrix(
             params,
             resolution,
             &mut zncc,
+            &coarse_factors,
+            &mut zncc_coarse,
         )
     } else {
         0
@@ -426,15 +570,33 @@ pub fn member_zncc_matrix(
     MemberMatrix {
         members,
         zncc,
+        zncc_coarse,
+        coarse_factors,
         scored,
         n_support,
     }
 }
 
+/// The [`COARSE_FACTORS`] that divide `resolution` and leave a grid of at least
+/// [`MIN_COARSE_RESOLUTION`], in order of increasing coarseness.
+pub fn coarse_factors_for(resolution: u32) -> Vec<u32> {
+    COARSE_FACTORS
+        .iter()
+        .copied()
+        .filter(|&f| resolution.is_multiple_of(f) && resolution / f >= MIN_COARSE_RESOLUTION)
+        .collect()
+}
+
 /// Render the members over one frozen common support and fill the off-diagonal
-/// pairwise ZNCC. Returns the size of that common support (`0` when none could be
-/// built). Leaves `zncc` untouched for members (or whole tracks) the support /
-/// validity / texture gates drop.
+/// pairwise ZNCC, at full scale and at each coarse scale in `coarse_factors`.
+/// Returns the size of that common support (`0` when none could be built). Leaves
+/// every table untouched for members (or whole tracks) the support / validity /
+/// texture gates drop.
+///
+/// The coarse tables are built from the **same** rendered stack, box-averaged: no
+/// second render happens, and a member unscored at full scale is unscored at every
+/// scale.
+#[allow(clippy::too_many_arguments)]
 fn fill_member_zncc(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
@@ -443,6 +605,8 @@ fn fill_member_zncc(
     params: &MemberCoherenceParams,
     resolution: u32,
     zncc: &mut [f64],
+    coarse_factors: &[u32],
+    zncc_coarse: &mut [Vec<f64>],
 ) -> u32 {
     let k = members.len();
     let w_full = window_weights(params.window, resolution);
@@ -509,28 +673,91 @@ fn fill_member_zncc(
     });
     let stack: &[f32] = compacted.as_deref().unwrap_or(&raw);
 
-    let sqrt_weights: Vec<f32> = ctx.weights.iter().map(|&w| w.sqrt() as f32).collect();
-    let mut xs = Vec::new();
-    let Some((kept_channels, _)) = znormalize_into_kept(
+    // Full scale, over the frozen support exactly as it stands.
+    let rows: Vec<usize> = alive.iter().map(|&v| ctx.kept[v]).collect();
+    if !fill_scale(
         stack,
         alive.len(),
         channels,
         n,
         &ctx.weights,
+        &rows,
+        k,
+        zncc,
+    ) {
+        return n_support;
+    }
+
+    // Coarse scales, from the same stack: box-average the support's pixels into
+    // the coarse cells, recompute the window on the coarse grid, and correlate by
+    // the identical estimator. A scale whose stack has no surviving channel simply
+    // leaves its table unfilled; the full-scale verdict does not depend on it.
+    for (level, &factor) in coarse_factors.iter().enumerate() {
+        let Some((coarse_stack, coarse_weights, cn)) = box_downsample(
+            stack,
+            alive.len(),
+            channels,
+            &ctx.pixels,
+            resolution,
+            factor,
+            params.window,
+        ) else {
+            continue;
+        };
+        fill_scale(
+            &coarse_stack,
+            alive.len(),
+            channels,
+            cn,
+            &coarse_weights,
+            &rows,
+            k,
+            &mut zncc_coarse[level],
+        );
+    }
+    n_support
+}
+
+/// Z-normalize one scale's stack and write its pairwise ZNCC into `table`.
+/// `rows[a]` is the member index of stack row `a`. Returns `false` when the
+/// shared flat-channel gate leaves nothing to correlate, which leaves `table`
+/// untouched.
+#[allow(clippy::too_many_arguments)]
+fn fill_scale(
+    stack: &[f32],
+    n_members: usize,
+    channels: usize,
+    n: usize,
+    weights: &[f64],
+    rows: &[usize],
+    k: usize,
+    table: &mut [f64],
+) -> bool {
+    let total_weight: f64 = weights.iter().sum();
+    if total_weight <= 0.0 {
+        return false;
+    }
+    let sqrt_weights: Vec<f32> = weights.iter().map(|&w| w.sqrt() as f32).collect();
+    let mut xs = Vec::new();
+    let Some((kept_channels, _)) = znormalize_into_kept(
+        stack,
+        n_members,
+        channels,
+        n,
+        weights,
         total_weight,
         &sqrt_weights,
         &mut xs,
     ) else {
-        return n_support;
+        return false;
     };
-
     // Each kept member's z-normalized column is unit-norm per channel, so a plain
     // dot is the windowed ZNCC; average over the channels that survived the shared
     // flat-channel gate, matching the reference's own channel convention.
-    for (a, &va) in alive.iter().enumerate() {
-        let ia = ctx.kept[va];
-        for (b, &vb) in alive.iter().enumerate().skip(a + 1) {
-            let ib = ctx.kept[vb];
+    for a in 0..n_members {
+        let ia = rows[a];
+        for b in (a + 1)..n_members {
+            let ib = rows[b];
             let mut s = 0.0;
             for c in 0..kept_channels {
                 let ca = &xs[(a * kept_channels + c) * n..][..n];
@@ -542,11 +769,81 @@ fn fill_member_zncc(
                     .sum::<f64>();
             }
             let z = s / kept_channels as f64;
-            zncc[ia * k + ib] = z;
-            zncc[ib * k + ia] = z;
+            table[ia * k + ib] = z;
+            table[ib * k + ia] = z;
         }
     }
-    n_support
+    true
+}
+
+/// Box-average a `[(member*channels + channel)*n + pixel]` stack over the frozen
+/// support onto the `factor`-times coarser grid.
+///
+/// `pixels` are the support's linear `row * resolution + col` indices, parallel to
+/// the stack's pixel axis. A coarse cell exists when at least one support pixel
+/// falls in it **and** the window weight recomputed on the coarse grid is
+/// positive; its value is the plain mean of the support pixels it contains, per
+/// member and per channel. Because the support is common to every member, the
+/// surviving cells are the same for all of them — the coarse stack is as
+/// rectangular as the fine one.
+///
+/// Returns the coarse stack, its per-cell window weights and the cell count;
+/// `None` when no cell survives.
+fn box_downsample(
+    stack: &[f32],
+    n_members: usize,
+    channels: usize,
+    pixels: &[usize],
+    resolution: u32,
+    factor: u32,
+    window: PatchWindow,
+) -> Option<(Vec<f32>, Vec<f64>, usize)> {
+    let r = resolution as usize;
+    let f = factor as usize;
+    let cr = r / f;
+    let n = pixels.len();
+    let w_coarse = window_weights(window, (r / f) as u32);
+
+    // Which coarse cell each support pixel lands in, and how many land in each.
+    let mut counts = vec![0u32; cr * cr];
+    let cell_of: Vec<usize> = pixels
+        .iter()
+        .map(|&p| {
+            let cell = (p / r / f) * cr + (p % r) / f;
+            counts[cell] += 1;
+            cell
+        })
+        .collect();
+    let cells: Vec<usize> = (0..cr * cr)
+        .filter(|&c| counts[c] > 0 && w_coarse[c] > 0.0)
+        .collect();
+    if cells.is_empty() {
+        return None;
+    }
+    let mut slot = vec![usize::MAX; cr * cr];
+    for (s, &c) in cells.iter().enumerate() {
+        slot[c] = s;
+    }
+    let cn = cells.len();
+
+    let mut out = vec![0.0f32; n_members * channels * cn];
+    for m in 0..n_members {
+        for c in 0..channels {
+            let src = &stack[(m * channels + c) * n..][..n];
+            let dst = &mut out[(m * channels + c) * cn..][..cn];
+            for (p, &v) in src.iter().enumerate() {
+                let s = slot[cell_of[p]];
+                if s != usize::MAX {
+                    dst[s] += v;
+                }
+            }
+            for (s, &cell) in cells.iter().enumerate() {
+                dst[s] /= counts[cell] as f32;
+            }
+        }
+    }
+    let weights: Vec<f64> = cells.iter().map(|&c| w_coarse[c]).collect();
+    Some((out, weights, cn))
 }
 
 /// Whether member `v` of a raw `[(view*channels + channel)*n + pixel]` stack has
@@ -787,8 +1084,64 @@ fn self_normalized_thresholds(
 /// `self_bar_k` **trades occlusion recall against collateral**: every member that
 /// trails a tight core for an innocent reason — motion blur, an exposure step, a
 /// grazing view — is a member the tightened bar is also more willing to evict,
-/// and nothing in the matrix distinguishes the two. Lower `self_bar_k` catches
-/// more occluders and more of those.
+/// and nothing in the *full-scale* matrix distinguishes the two. Multi-scale
+/// exoneration, below, is what does.
+///
+/// # Multi-scale exoneration
+///
+/// A member that trails a tight core does so for one of two reasons, and the
+/// pairwise agreement at a single scale cannot tell them apart because the two
+/// produce the same number. They stop looking alike as soon as the fine detail is
+/// taken away:
+///
+/// - **Structural** disagreement — an occluder, a different surface — is present
+///   at every scale. The member's low-frequency content is already the wrong
+///   content, so blurring both sides changes nothing about how badly they agree.
+/// - **Spectral** disagreement — a defocused or motion-blurred frame of the *same*
+///   surface — lives entirely in the detail. Coarsen both sides and it evaporates:
+///   the member's low frequencies are the core's low frequencies.
+///
+/// So for each member the **relative** term alone would evict, the agreement
+/// deficit is measured twice:
+///
+/// `deficit(scale) = mean(core↔core at scale) − mean(member↔core at scale)`
+///
+/// where the core is the winning block minus the member itself, over the tables
+/// [`MemberMatrix::zncc_coarse`] already carries. Their quotient — the **retained
+/// deficit** — is compared to [`MemberCoherenceParams::exoneration_ratio`], and a
+/// member at or below it is **exonerated**: it stays in `kept`, out of `block`,
+/// and marked in [`MemberDecision::exonerated`].
+///
+/// The comparison scale is the **first** coarse table — one halving — and not the
+/// coarsest, because the test is whether the disagreement *survives* removing
+/// detail, and a grid coarse enough washes out structure too. Measured against
+/// the two labelled populations, one halving separates them (occluders retain
+/// 0.85–1.00 of their deficit, soft frames a median 0.85 with a long lower tail);
+/// two halvings collapses the occluders into the same range as the soft frames
+/// and the separation is gone. That is why the threshold sits high: it is
+/// asking "did *anything* decay", not "did most of it".
+///
+/// **Only the relative term's evictions are exonerable, and this asymmetry is
+/// deliberate.** A member the *absolute* bar rejects is not a soft frame of the
+/// track's surface at all — it correlates 0.2–0.5, the cross-surface chimera the
+/// absolute rule was calibrated on — and how its disagreement is distributed
+/// across scales says nothing about whether it belongs. Blur is not a defence
+/// against imaging a different thing. Exoneration therefore never loosens the
+/// validated absolute rule; it only refunds what tightening the bar per track
+/// took.
+///
+/// Exoneration runs **after** the margin gate and before the majority test, on
+/// the block the sweep produced. It re-admits individual members from the rejected
+/// side rather than re-running the sweep: `margin`, `min_intra`, `max_cross`,
+/// `support` and `block` all keep describing the cut that was proposed, and
+/// exoneration is recorded as what it is — a spared member, not a different
+/// block. When every rejected member is spared the verdict falls back to
+/// `KeepAll`; when enough are spared to restore a majority, a `Retire` becomes a
+/// `Split`.
+///
+/// `exoneration_ratio = 0` disables it. It is also inert whenever the relative
+/// term is (there is nothing it may spare), and whenever the matrix carries no
+/// coarse scale.
 ///
 /// **The whole rule runs over the [scored](scored_mask) members only** — the block
 /// sweep, both margin sides, and the majority denominator. An unscored member
@@ -824,28 +1177,49 @@ pub fn decide_member_coherence(
             effective_margin_gate: f64::NAN,
             core_center: f64::NAN,
             core_scatter: f64::NAN,
+            relative_flagged: vec![false; k],
+            exonerated: vec![false; k],
+            retained_deficit: vec![f64::NAN; k],
+            sharpness_deficit: vec![f64::NAN; k],
         };
     }
 
     // The scored sub-matrix, in member order. Every quantity below is computed on
     // it, so unscored members are structurally outside the rule rather than
-    // half-counted by it.
+    // half-counted by it. The coarse tables are sliced to the same members, so a
+    // scale index means the same thing at every scale.
     let mut sub = vec![f64::NAN; s * s];
     for (a, &ia) in idx.iter().enumerate() {
         for (b, &ib) in idx.iter().enumerate() {
             sub[a * s + b] = zncc[ia * k + ib];
         }
     }
+    let slice_scale = |table: &Vec<f64>| {
+        let mut out = vec![f64::NAN; s * s];
+        for (a, &ia) in idx.iter().enumerate() {
+            for (b, &ib) in idx.iter().enumerate() {
+                out[a * s + b] = table[ia * k + ib];
+            }
+        }
+        out
+    };
+    // Two coarse scales, two different questions — see the module docs on
+    // `zncc_coarse`. Exoneration asks whether the disagreement SURVIVES the loss
+    // of one octave, so it reads the finest coarse table; sharpness measures how
+    // much of the deficit is detail, so it reads the coarsest for the widest span.
+    let exon_scale: Option<Vec<f64>> = matrix.zncc_coarse.first().map(&slice_scale);
+    let sharp_scale: Option<Vec<f64>> = matrix.zncc_coarse.last().map(&slice_scale);
     // Pass 1 at the absolute bar, then the one tighten pass off that block's own
     // coherence. `effective_bar == params.bar` short-circuits the re-sweep, which
     // is what makes `self_bar_k = 0` bit-for-bit the absolute rule.
     let pass1 = max_support_block(&sub, s, params.bar);
     let (effective_bar, effective_margin_gate, core) =
         self_normalized_thresholds(&sub, s, &pass1, params);
-    let sub_block = if effective_bar > params.bar {
+    let relative_engaged = effective_bar > params.bar;
+    let sub_block = if relative_engaged {
         max_support_block(&sub, s, effective_bar)
     } else {
-        pass1
+        pass1.clone()
     };
     let (core_center, core_scatter) = core.unwrap_or((f64::NAN, f64::NAN));
     let support = sub_block.iter().filter(|&&b| b).count();
@@ -897,18 +1271,50 @@ pub fn decide_member_coherence(
         block[ia] = sub_block[a];
     }
 
-    let keep_all = || MemberDecision {
-        verdict: MemberVerdict::KeepAll,
-        kept: vec![true; k],
-        block: block.clone(),
-        support: support as u32,
-        margin,
-        min_intra,
-        max_cross,
-        effective_bar,
-        effective_margin_gate,
-        core_center,
-        core_scatter,
+    // Per-member sharpness, for every scored member and independently of any
+    // verdict: the part of the member's deficit that only exists at fine scale.
+    // Reported so a consumer can read the observations the point ships, which is
+    // why it is not confined to the members under suspicion.
+    let mut sharpness_deficit = vec![f64::NAN; k];
+    if let Some(coarse) = sharp_scale.as_ref() {
+        for (a, &ia) in idx.iter().enumerate() {
+            let df = core_deficit(&sub, s, &sub_block, a);
+            let dc = core_deficit(coarse, s, &sub_block, a);
+            if df.is_finite() && dc.is_finite() {
+                sharpness_deficit[ia] = df - dc;
+            }
+        }
+    }
+
+    let base = |verdict, kept: Vec<bool>, block: Vec<bool>, relative_flagged, exonerated, rd| {
+        MemberDecision {
+            verdict,
+            kept,
+            block,
+            support: support as u32,
+            margin,
+            min_intra,
+            max_cross,
+            effective_bar,
+            effective_margin_gate,
+            core_center,
+            core_scatter,
+            relative_flagged,
+            exonerated,
+            retained_deficit: rd,
+            sharpness_deficit: sharpness_deficit.clone(),
+        }
+    };
+    // Nothing was being evicted, so nothing was flagged and nothing was spared.
+    let keep_all = || {
+        base(
+            MemberVerdict::KeepAll,
+            vec![true; k],
+            block.clone(),
+            vec![false; k],
+            vec![false; k],
+            vec![f64::NAN; k],
+        )
     };
 
     if whole {
@@ -919,38 +1325,114 @@ pub fn decide_member_coherence(
     if margin.is_nan() || margin <= effective_margin_gate {
         return keep_all();
     }
-    // No strict majority among the members that carry evidence: the two sides are
-    // equally supported, so neither can be called the point's surface.
-    if 2 * support <= s {
-        return MemberDecision {
-            verdict: MemberVerdict::Retire,
-            kept: vec![false; k],
-            block,
-            support: support as u32,
-            margin,
-            min_intra,
-            max_cross,
-            effective_bar,
-            effective_margin_gate,
-            core_center,
-            core_scatter,
-        };
+
+    // A cut is on the table. Which of its evictions does the RELATIVE term own?
+    // Only those: a member the absolute bar already rejected is not exonerable,
+    // whatever its deficit does across scales.
+    let mut relative_flagged = vec![false; k];
+    let mut exonerated = vec![false; k];
+    let mut retained_deficit = vec![f64::NAN; k];
+    let mut spared = 0usize;
+    if relative_engaged {
+        for (a, &ia) in idx.iter().enumerate() {
+            if sub_block[a] || !pass1[a] {
+                continue;
+            }
+            relative_flagged[ia] = true;
+            let Some(coarse) = exon_scale.as_ref() else {
+                continue;
+            };
+            let df = core_deficit(&sub, s, &sub_block, a);
+            if !(df.is_finite() && df > EXONERATION_MIN_DEFICIT) {
+                continue;
+            }
+            let dc = core_deficit(coarse, s, &sub_block, a);
+            if !dc.is_finite() {
+                continue;
+            }
+            let ratio = dc / df;
+            retained_deficit[ia] = ratio;
+            if params.exoneration_ratio > 0.0 && ratio <= params.exoneration_ratio {
+                exonerated[ia] = true;
+                spared += 1;
+            }
+        }
     }
-    // The cut evicts the scored members outside the block, and only those.
-    let kept = (0..k).map(|i| block[i] || !scored[i]).collect();
-    MemberDecision {
-        verdict: MemberVerdict::Split,
+
+    // Everything the cut would have taken was spared: there is no cut left.
+    let kept_scored = support + spared;
+    if kept_scored == s {
+        return base(
+            MemberVerdict::KeepAll,
+            vec![true; k],
+            block,
+            relative_flagged,
+            exonerated,
+            retained_deficit,
+        );
+    }
+    // No strict majority among the members that carry evidence: the two sides are
+    // equally supported, so neither can be called the point's surface. The spared
+    // members count here — they ship, so they are part of the side that would.
+    if 2 * kept_scored <= s {
+        return base(
+            MemberVerdict::Retire,
+            vec![false; k],
+            block,
+            relative_flagged,
+            exonerated,
+            retained_deficit,
+        );
+    }
+    // The cut evicts the scored members outside the block that were not spared.
+    let kept = (0..k)
+        .map(|i| block[i] || exonerated[i] || !scored[i])
+        .collect();
+    base(
+        MemberVerdict::Split,
         kept,
         block,
-        support: support as u32,
-        margin,
-        min_intra,
-        max_cross,
-        effective_bar,
-        effective_margin_gate,
-        core_center,
-        core_scatter,
+        relative_flagged,
+        exonerated,
+        retained_deficit,
+    )
+}
+
+/// One member's **agreement deficit** against a block, on one scale's `s×s`
+/// table: how much worse the member agrees with the block than the block agrees
+/// with itself.
+///
+/// `member` is excluded from the core on both sides, so the quantity means the
+/// same thing for a member inside the block and one outside it. Both means are
+/// over finite links only. `NaN` when the core holds fewer than two members, or
+/// when either side has no finite link to average.
+pub fn core_deficit(zncc: &[f64], s: usize, block: &[bool], member: usize) -> f64 {
+    let core: Vec<usize> = (0..s).filter(|&i| block[i] && i != member).collect();
+    if core.len() < 2 {
+        return f64::NAN;
     }
+    let (mut intra_sum, mut intra_n) = (0.0, 0usize);
+    for (a, &ia) in core.iter().enumerate() {
+        for &ib in core.iter().skip(a + 1) {
+            let z = zncc[ia * s + ib];
+            if z.is_finite() {
+                intra_sum += z;
+                intra_n += 1;
+            }
+        }
+    }
+    let (mut cross_sum, mut cross_n) = (0.0, 0usize);
+    for &ic in &core {
+        let z = zncc[member * s + ic];
+        if z.is_finite() {
+            cross_sum += z;
+            cross_n += 1;
+        }
+    }
+    if intra_n == 0 || cross_n == 0 {
+        return f64::NAN;
+    }
+    intra_sum / intra_n as f64 - cross_sum / cross_n as f64
 }
 
 /// Validate one point's track: build its pairwise member matrix and read the

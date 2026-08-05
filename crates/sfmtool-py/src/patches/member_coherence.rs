@@ -71,6 +71,20 @@ impl PyPatchCloud {
     ///         estimate from and leaves it inactive. It trades occlusion recall
     ///         against collateral on legitimately-marginal members (blur,
     ///         exposure, obliquity) trailing a tight core.
+    ///     exoneration_ratio: Strength of **multi-scale exoneration** (default
+    ///         0.90), which is what pays that trade back. A member the relative
+    ///         term alone would evict has its agreement deficit re-measured on a
+    ///         half-scale box-downsampled copy of the same renders; the quotient of
+    ///         that to the full-scale deficit — the ``retained_deficit`` —
+    ///         separates a *structural* disagreement, which survives the loss of
+    ///         the detail (an occluder), from a *spectral* one, which is made of
+    ///         it (a soft frame). The ratio runs high — the test is whether the
+    ///         disagreement *survives* one halving, not whether it decays — so the
+    ///         threshold does too. A member at or below this ratio is spared. Only
+    ///         the relative term's evictions are exonerable: a member the absolute
+    ///         ``bar`` rejects images a different thing, and blur is not a defence
+    ///         against that. ``0`` disables it; it is inert whenever the relative
+    ///         term is.
     ///     resolution: The R×R patch grid members are rendered and correlated on.
     ///     window: Per-pixel scoring weight — ``"gaussian_disk"`` (default),
     ///         ``"gaussian"``, or ``"uniform"``.
@@ -123,9 +137,19 @@ impl PyPatchCloud {
     /// ``margin_gate`` when the relative term is off or inactive, NaN when no
     /// sweep ran; ``effective_bar > bar`` is exactly "the relative term
     /// engaged"), ``core_center`` / ``core_scatter`` (the statistics they were
-    /// derived from, NaN when inactive), and — with ``return_matrix=True`` —
-    /// ``zncc`` (``k×k`` float64 numpy array, unit diagonal, NaN for
-    /// uncorrelatable pairs).
+    /// derived from, NaN when inactive), ``relative_flagged`` / ``exonerated``
+    /// (1-D bool numpy arrays — the members the relative term alone put outside
+    /// the block, and the subset multi-scale exoneration spared; an exonerated
+    /// member is in ``kept`` and not in ``block``), ``retained_deficit`` (1-D
+    /// float64 — the flagged members' coarse-over-full deficit ratio, NaN
+    /// elsewhere and where undefined), ``sharpness_deficit`` (1-D float64 —
+    /// photometric sharpness relative to the track consensus, for **every**
+    /// scored member: the part of its agreement deficit that exists only at fine
+    /// scale, so ``0`` is scale-free and larger is softer), and — with
+    /// ``return_matrix=True`` — ``zncc`` (``k×k`` float64 numpy array, unit
+    /// diagonal, NaN for uncorrelatable pairs), ``zncc_coarse`` (a list of the
+    /// same-shaped tables at the coarse scales, coarsest last) and
+    /// ``coarse_factors`` (their downsampling factors).
     ///
     /// **Unscored members** — nothing rendered them, or nothing could be
     /// correlated with them — sit outside the decision rule entirely: the block
@@ -134,7 +158,8 @@ impl PyPatchCloud {
     /// ``"retire"`` still ships nothing: the point itself is refused).
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
-        recon, images, *, bar=0.65, margin_gate=0.05, self_bar_k=1.5, resolution=24,
+        recon, images, *, bar=0.65, margin_gate=0.05, self_bar_k=1.5, exoneration_ratio=0.90,
+        resolution=24,
         window="gaussian_disk", window_sigma=0.6, sampler="bilinear_mip",
         min_valid_fraction=0.6, min_support_pixels=8,
         point_indexes=None, member_views=None, keypoint_anchor=true, return_matrix=false,
@@ -148,6 +173,7 @@ impl PyPatchCloud {
         bar: f64,
         margin_gate: f64,
         self_bar_k: f64,
+        exoneration_ratio: f64,
         resolution: u32,
         window: &str,
         window_sigma: f64,
@@ -221,6 +247,7 @@ impl PyPatchCloud {
             min_valid_fraction,
             min_support_pixels,
             self_bar_k,
+            exoneration_ratio,
         };
 
         let pyramid_set = resolve_pyramids(&posed, images)?;
@@ -326,10 +353,38 @@ impl PyPatchCloud {
             d.set_item("effective_margin_gate", res.decision.effective_margin_gate)?;
             d.set_item("core_center", res.decision.core_center)?;
             d.set_item("core_scatter", res.decision.core_scatter)?;
+            d.set_item(
+                "relative_flagged",
+                res.decision.relative_flagged.clone().into_pyarray(py),
+            )?;
+            d.set_item(
+                "exonerated",
+                res.decision.exonerated.clone().into_pyarray(py),
+            )?;
+            d.set_item(
+                "retained_deficit",
+                res.decision.retained_deficit.clone().into_pyarray(py),
+            )?;
+            d.set_item(
+                "sharpness_deficit",
+                res.decision.sharpness_deficit.clone().into_pyarray(py),
+            )?;
             if return_matrix {
                 let arr = Array2::from_shape_vec((k, k), res.matrix.zncc.clone())
                     .map_err(|e| PyValueError::new_err(e.to_string()))?;
                 d.set_item("zncc", arr.into_pyarray(py))?;
+                let coarse: Vec<Bound<'py, _>> = res
+                    .matrix
+                    .zncc_coarse
+                    .iter()
+                    .map(|t| {
+                        Array2::from_shape_vec((k, k), t.clone())
+                            .map(|a| a.into_pyarray(py))
+                            .map_err(|e| PyValueError::new_err(e.to_string()))
+                    })
+                    .collect::<PyResult<_>>()?;
+                d.set_item("zncc_coarse", coarse)?;
+                d.set_item("coarse_factors", res.matrix.coarse_factors.clone())?;
             }
             out.push(d);
         }
