@@ -1061,3 +1061,129 @@ fn test_unit_quaternion_preserving_normalizes_non_unit() {
     assert_eq!(got.k.to_bits(), expect.k.to_bits());
     assert!((got.norm() - 1.0).abs() < 1e-15);
 }
+
+// ---------------------------------------------------------------------------
+// The optional per-observation confidence column.
+// ---------------------------------------------------------------------------
+
+/// `demo_embedded` with the per-observation confidence set to each row's index
+/// plus one, so a row-selection bug shows up as the wrong value rather than the
+/// wrong length. (Plus one because `0` is the reserved "no support" code.)
+fn demo_with_observation_confidence(num_points: usize) -> SfmrReconstruction {
+    let mut recon = demo_embedded(num_points);
+    let m = recon.tracks.len();
+    recon.observation_confidence = Some((0..m).map(|i| (i + 1) as u8).collect());
+    recon.validate_observation_columns().unwrap();
+    recon
+}
+
+#[test]
+fn test_observation_confidence_round_trips_through_sfmr_data() {
+    let recon = demo_with_observation_confidence(4);
+    let expected = recon.observation_confidence.clone().unwrap();
+    let data = recon.to_sfmr_data();
+    let arr = data
+        .observation_confidence
+        .as_ref()
+        .expect("to_sfmr_data must carry the column");
+    assert_eq!(arr.len(), data.metadata.observation_count as usize);
+    assert_eq!(arr.to_vec(), expected);
+    let back = SfmrReconstruction::from_sfmr_data(data).unwrap();
+    assert_eq!(back.observation_confidence.unwrap(), expected);
+}
+
+#[test]
+fn test_filter_points_selects_observation_confidence_by_observation_row() {
+    // demo observes each point by 2 cameras, so point i owns observation rows
+    // 2i and 2i+1 — and the confidence follows THOSE rows, not the point rows.
+    let recon = demo_with_observation_confidence(4);
+    let out = recon.filter_points_by_mask(&[true, false, true, false]);
+    let confidence = out
+        .observation_confidence
+        .clone()
+        .expect("column must survive");
+    assert_eq!(confidence.len(), out.tracks.len());
+    // Source observation rows [0, 1, 4, 5] -> values [1, 2, 5, 6].
+    assert_eq!(confidence, vec![1, 2, 5, 6]);
+    out.validate_observation_columns().unwrap();
+}
+
+#[test]
+fn test_subset_by_image_indices_selects_observation_confidence_in_lockstep() {
+    // Dropping an image drops the observations made in it, and the confidence
+    // must lose exactly those rows — the same selection `keypoints_xy` takes.
+    let recon = demo_with_observation_confidence(4);
+    let keep_image = recon.tracks[0].image_index;
+    let kept_rows: Vec<u8> = recon
+        .tracks
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| o.image_index == keep_image)
+        .map(|(i, _)| (i + 1) as u8)
+        .collect();
+    let out = recon
+        .subset_by_image_indices(&[keep_image], true)
+        .expect("subset should succeed");
+    let confidence = out
+        .observation_confidence
+        .clone()
+        .expect("column must survive");
+    assert_eq!(confidence.len(), out.tracks.len());
+    assert_eq!(confidence, kept_rows);
+    let kp = out.keypoints_xy().unwrap();
+    assert_eq!(
+        kp.nrows(),
+        confidence.len(),
+        "still parallel to the keypoints"
+    );
+    out.validate_observation_columns().unwrap();
+}
+
+#[test]
+fn test_se3_transform_carries_observation_confidence_verbatim() {
+    // A rigid transform moves geometry and touches no observation, so the column
+    // passes through untouched rather than being recomputed or dropped.
+    use crate::geometry::RotQuaternion;
+    use crate::Se3Transform;
+    use nalgebra::{UnitQuaternion, Vector3};
+
+    let recon = demo_with_observation_confidence(4);
+    let expected = recon.observation_confidence.clone().unwrap();
+    let t = Se3Transform::new(
+        RotQuaternion::from_nalgebra(UnitQuaternion::from_axis_angle(
+            &Vector3::z_axis(),
+            std::f64::consts::FRAC_PI_3,
+        )),
+        Vector3::new(1.0, -2.0, 0.5),
+        1.5,
+    );
+    let out = recon.apply_se3_transform(&t);
+    assert_eq!(out.observation_confidence.unwrap(), expected);
+}
+
+#[test]
+fn test_validate_observation_columns_detects_a_confidence_desync() {
+    let mut recon = demo_with_observation_confidence(4);
+    recon.observation_confidence = Some(vec![255; recon.tracks.len() - 1]);
+    let err = recon.validate_observation_columns().unwrap_err();
+    assert!(
+        err.contains("observation_confidence"),
+        "the message must name the column: {err}"
+    );
+
+    // Absent is always valid: it means "no information", not a desync.
+    recon.observation_confidence = None;
+    recon.validate_observation_columns().unwrap();
+}
+
+#[test]
+fn test_observation_confidence_is_valid_in_sift_files_mode_too() {
+    // It rates an observation, so it does not care which column backs one.
+    let mut recon = SfmrReconstruction::demo(3);
+    assert_eq!(recon.feature_source(), FEATURE_SOURCE_SIFT_FILES);
+    let m = recon.tracks.len();
+    recon.observation_confidence = Some((0..m).map(|i| (i + 1) as u8).collect());
+    recon.validate_observation_columns().unwrap();
+    let back = SfmrReconstruction::from_sfmr_data(recon.to_sfmr_data()).unwrap();
+    assert_eq!(back.observation_confidence.unwrap().len(), m);
+}

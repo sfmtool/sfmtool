@@ -207,6 +207,7 @@ reconstruction.sfmr (ZIP archive)
     ├── image_indexes.{M}.uint32.zst           # Image index per observation
     ├── feature_indexes.{M}.uint32.zst         # (sift_files only) feature index per observation
     ├── keypoints_xy.{M}.2.float32.zst         # (embedded_patches only) inline 2D keypoint (version 4+)
+    ├── observation_confidence.{M}.uint8.zst   # (Optional) per-observation sharpness confidence (version 6+)
     ├── point_indexes.{M}.uint32.zst           # Point index per observation
     ├── observation_counts.{N}.uint32.zst      # Observations per point
     └── metadata.json.zst                      # Tracks metadata
@@ -236,7 +237,7 @@ JSON structure describing the reconstruction:
 
 ```json
 {
-  "version": 5,
+  "version": 6,
   "feature_source": "sift_files",
   "operation": "sfm_solve",
   "tool": "colmap",
@@ -383,7 +384,7 @@ XXH128 hashes for integrity verification:
 - `frames_xxh128`: (Optional) Hash of all frames data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Present only when `frames/` section exists.
 - `images_xxh128`: Hash of all image data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order (includes depth statistics and histogram files). The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file.
 - `points3d_xxh128`: Hash of all points3d data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
-- `tracks_xxh128`: Hash of all tracks data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. The present per-observation column is mode-dependent: `feature_indexes` for a `sift_files` file, or `keypoints_xy` for an `embedded_patches` file (the other is absent).
+- `tracks_xxh128`: Hash of all tracks data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. The present per-observation column is mode-dependent: `feature_indexes` for a `sift_files` file, or `keypoints_xy` for an `embedded_patches` file (the other is absent). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`).
 - `content_xxh128`: Hash of all present section hashes concatenated as raw 16-byte big-endian digests in order: metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks.
 
 **Note**: Per-section metadata files (`images/metadata.json.zst`, `points3d/metadata.json.zst`, `tracks/metadata.json.zst`) are included in their respective section hashes.
@@ -1037,7 +1038,8 @@ Tracks link 2D feature observations to 3D points. Each observation has three com
 {
   "observation_count": 9427,
   "has_feature_indexes": true,
-  "has_keypoints_xy": false
+  "has_keypoints_xy": false,
+  "has_observation_confidence": false
 }
 ```
 
@@ -1050,6 +1052,10 @@ Tracks link 2D feature observations to 3D points. Each observation has three com
   alone knows which column to expect (mirroring the `points3d/metadata.json`
   `has_*` flags). A missing flag is `false`; a version 1–3 file (no flags) is read
   as `has_feature_indexes = true`, `has_keypoints_xy = false`.
+- `has_observation_confidence`: (version 6+) whether the optional
+  `observation_confidence` column below is present. Independent of the two flags
+  above — it rates observations, which exist in either mode. A missing flag is
+  `false`, so every file written before this amendment reads as absent.
 
 #### `tracks/image_indexes.{M}.uint32.zst`
 
@@ -1096,6 +1102,37 @@ Mode exclusivity is enforced on write: the writer rejects data carrying both
 `feature_indexes` and `keypoints_xy` (or neither). The reader is lenient — it
 reads only the column selected by `feature_source` and ignores a stray
 opposite-mode entry, which is also excluded from `tracks_xxh128` verification.
+
+#### `tracks/observation_confidence.{M}.uint8.zst` (Optional, version 6+)
+
+Per-observation confidence in that observation's **photometric sharpness relative
+to its track's consensus**: how well this image resolves the detail the rest of the
+track agrees on.
+
+- **Shape**: `(M,)` where M = observation_count
+- **Data type**: `uint8` (little-endian)
+- **Format**: `0` means the observation carries **no data-derived support** — no
+  writer measured it. It is *not* a claim that the observation is poor, and a
+  reader must not treat it as the bottom of the scale. Measured values occupy
+  `1..=255`, running from maximally soft against the track's consensus to fully
+  sharp. Consumers must treat the value monotonically (higher = sharper), never
+  switch on exact codes.
+- **Constraint**: parallel to the other `tracks/*` arrays, so it follows the same
+  lexicographic `(point_indexes[j], image_indexes[j])` order and is permuted in
+  lockstep when the writer sorts.
+- **Presence**: independent of `feature_source` — an observation has a sharpness
+  whether a `.sift` feature index or an inline keypoint backs it. Present only when
+  `has_observation_confidence` is `true`. An absent array means **no information**,
+  which is not "every observation is sharp".
+- **Writer responsibility**: the array passes through the writer untouched. A
+  writer that appends observations and also supplies this column is responsible for
+  extending it — a newly created observation nothing has measured takes `0`.
+
+**Why it exists**: a soft frame and a sharp one are indistinguishable in
+`keypoints_xy`, which records where the observation is and nothing about how well
+it is resolved. A reader that wants to **select the sharp observations of a track**
+— to render from, to measure against, or to compare a track's images by — has
+otherwise to re-derive that from the source images.
 
 #### `tracks/point_indexes.{M}.uint32.zst`
 
@@ -1666,6 +1703,18 @@ is byte-equivalent to a v3 file apart from the `version` / `feature_source`
 metadata keys and the new `tracks/metadata.json` `has_*` keys.
 `embedded_patches` is a new mode with no v3 equivalent.
 
+### Version 5 → Version 6
+
+| Change | Detail |
+|---|---|
+| `tracks/observation_confidence` | New **optional** per-observation `uint8` column, flagged by `has_observation_confidence` in `tracks/metadata.json` and folded into `tracks_xxh128`. |
+
+Migration is mechanical and lossless in both directions. A version 5 file carries
+neither the flag nor the array, and reads as "no confidence information"; a version
+6 file that does not write the array is byte-identical in the tracks section to the
+version 5 file it came from apart from the added `false` flag. Nothing else moves,
+and no existing array changes meaning.
+
 ### Version 4 → Version 5
 
 Version 5 makes the
@@ -1695,6 +1744,9 @@ its camera.
 
 ## Version History
 
+- **Version 6**: Optional per-observation `tracks/observation_confidence` —
+  photometric sharpness of an observation relative to its track's consensus,
+  flagged by `has_observation_confidence`.
 - **Version 5**: Canonical coordinate convention — right-handed
   Z-up world, −Z-forward / +Y-up cameras — becomes normative; version ≤ 4
   files (COLMAP convention) upgrade on load via the fixed `S`/`W` conversion.

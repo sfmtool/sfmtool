@@ -239,6 +239,18 @@ pub struct SfmrReconstruction {
     /// at all — which is *not* the same as "all confident". It rides along
     /// untouched: nothing here synthesises or updates it when normals change.
     pub normal_confidence: Option<Vec<u8>>,
+    /// Optional per-observation confidence in that observation's **photometric
+    /// sharpness relative to its track's consensus** (parallel to `tracks`),
+    /// persisted as `tracks/observation_confidence` (version 6+): `0` means no
+    /// data-derived support — nothing measured this observation — and `1..=255`
+    /// is a measured scale running from maximally soft to fully sharp. `None`
+    /// means the reconstruction carries no such information at all, which is
+    /// *not* the same as "every observation is sharp".
+    ///
+    /// It is **metadata**: nothing in this crate reads it to decide anything. It
+    /// rides along untouched, and every pass that drops or reorders observations
+    /// selects its rows in lockstep with `tracks`.
+    pub observation_confidence: Option<Vec<u8>>,
     /// The observation-source-specific columns (per-observation feature index or
     /// keypoint, per-image hashes), selected by variant. The feature→point maps
     /// below are meaningful only for [`ObservationSource::SiftFiles`].
@@ -455,6 +467,16 @@ impl SfmrReconstruction {
     pub fn validate_observation_columns(&self) -> Result<(), String> {
         let n_obs = self.tracks.len();
         let n_img = self.images.len();
+        // Mode-independent: an observation's confidence rates the observation,
+        // not whichever column happens to back it.
+        if let Some(confidence) = &self.observation_confidence {
+            if confidence.len() != n_obs {
+                return Err(format!(
+                    "observation_confidence length ({}) must match observation count ({n_obs})",
+                    confidence.len()
+                ));
+            }
+        }
         match &self.observations {
             ObservationSource::SiftFiles {
                 feature_indexes,

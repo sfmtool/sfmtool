@@ -380,6 +380,36 @@ pub(crate) fn clone_with_changes(
             "feature_source" => {
                 new_feature_source = Some(value.extract()?);
             }
+            "observation_confidence" => {
+                // Matches the `normal_confidence` convention: `None` clears the
+                // column outright, an array replaces it, and omitting the kwarg
+                // preserves whatever the source carried. The row count is checked
+                // eagerly only when the tracks are not also being replaced in
+                // this call -- when they are, the observation count is not known
+                // until they are rebuilt, so the final
+                // `validate_observation_columns` is what catches a desync.
+                if value.is_none() {
+                    recon.observation_confidence = None;
+                } else {
+                    let arr = extract_array1!(value, "observation_confidence", u8)?;
+                    let s = arr.as_slice().map_err(|e| {
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'observation_confidence' must be                              C-contiguous: {e}"
+                        ))
+                    })?;
+                    let replacing_tracks = kw.contains("track_image_indexes")?
+                        || kw.contains("track_feature_indexes")?
+                        || kw.contains("track_point_indexes")?;
+                    if !replacing_tracks && s.len() != recon.tracks.len() {
+                        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                            "clone_with_changes(): 'observation_confidence' length ({})                              must match observation count ({})",
+                            s.len(),
+                            recon.tracks.len()
+                        )));
+                    }
+                    recon.observation_confidence = Some(s.to_vec());
+                }
+            }
             "keypoints_xy" => {
                 let arr = extract_array2!(value, "keypoints_xy", f32)?;
                 if arr.shape()[1] != 2 {

@@ -301,9 +301,10 @@ pub(crate) fn parse_sfmr_data_from_dict(
             .as_standard_layout()
             .into_owned(),
         normals_xyz,
-        // The dict-based columnar API carries neither normal confidence nor
+        // The dict-based columnar API carries neither confidence column nor
         // patch data; the full-fidelity path is `SfmrReconstruction`.
         normal_confidence: None,
+        observation_confidence: None,
         patch_u_halfvec_xyz: None,
         patch_v_halfvec_xyz: None,
         patch_bitmaps_y_x_rgba: None,

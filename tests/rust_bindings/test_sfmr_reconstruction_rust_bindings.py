@@ -290,6 +290,105 @@ class TestNormalConfidence:
             recon.clone_with_changes(normal_confidence=bad)
 
 
+class TestObservationConfidence:
+    """The optional per-observation `tracks/observation_confidence` column."""
+
+    def test_absent_on_a_legacy_artifact(self, seoul_bull_sfmr_only):
+        # A file written before the section existed carries no confidence
+        # information at all — which is not the same as "every observation is
+        # sharp".
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        assert recon.observation_confidence is None
+
+    def test_clone_save_load_round_trip(self, seoul_bull_sfmr_only, tmp_path):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        m = len(np.asarray(recon.track_point_indexes))
+
+        # `0` is the reserved "no data-derived support" code; measured values
+        # live in 1..255, so a realistic column mixes the two.
+        confidence = np.linspace(1, 255, m).astype(np.uint8)
+        confidence[::7] = 0
+        with_confidence = recon.clone_with_changes(observation_confidence=confidence)
+
+        got = with_confidence.observation_confidence
+        assert got is not None
+        assert got.dtype == np.uint8
+        assert got.shape == (m,)
+        np.testing.assert_array_equal(got, confidence)
+        # The original is untouched.
+        assert recon.observation_confidence is None
+
+        out_path = tmp_path / "obs_confidence.sfmr"
+        with_confidence.save(out_path)
+        reloaded = SfmrReconstruction.load(out_path)
+        np.testing.assert_array_equal(reloaded.observation_confidence, confidence)
+
+        import zipfile
+
+        with zipfile.ZipFile(out_path) as zf:
+            names = zf.namelist()
+        assert any(n.startswith("tracks/observation_confidence.") for n in names)
+
+    def test_none_clears_the_column(self, seoul_bull_sfmr_only, tmp_path):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        m = len(np.asarray(recon.track_point_indexes))
+        confidence = np.full(m, 200, dtype=np.uint8)
+        with_confidence = recon.clone_with_changes(observation_confidence=confidence)
+
+        preserved = with_confidence.clone_with_changes(world_space_unit="mm")
+        np.testing.assert_array_equal(preserved.observation_confidence, confidence)
+
+        cleared = with_confidence.clone_with_changes(observation_confidence=None)
+        assert cleared.observation_confidence is None
+
+        out_path = tmp_path / "cleared_obs.sfmr"
+        cleared.save(out_path)
+        reloaded = SfmrReconstruction.load(out_path)
+        assert reloaded.observation_confidence is None
+        import zipfile
+
+        with zipfile.ZipFile(out_path) as zf:
+            names = zf.namelist()
+        assert not any("observation_confidence" in n for n in names)
+
+    def test_wrong_dtype_rejected(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        m = len(np.asarray(recon.track_point_indexes))
+        with pytest.raises(TypeError, match="observation_confidence"):
+            recon.clone_with_changes(
+                observation_confidence=np.zeros(m, dtype=np.float32)
+            )
+
+    def test_wrong_length_rejected(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        m = len(np.asarray(recon.track_point_indexes))
+        with pytest.raises(ValueError, match="must match observation count"):
+            recon.clone_with_changes(
+                observation_confidence=np.zeros(m - 1, dtype=np.uint8)
+            )
+
+    def test_point_filter_selects_observation_rows_not_point_rows(
+        self, seoul_bull_sfmr_only
+    ):
+        # The column is per OBSERVATION, so a point cull must take the rows of
+        # the culled points' observations — not the point-indexed selection the
+        # per-point columns take.
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        ti = np.asarray(recon.track_point_indexes).astype(np.int64)
+        m = len(ti)
+        confidence = (np.arange(m) % 254 + 1).astype(np.uint8)
+        with_confidence = recon.clone_with_changes(observation_confidence=confidence)
+
+        keep = np.zeros(recon.point_count, dtype=bool)
+        keep[::2] = True
+        filtered = with_confidence.filter_points_by_mask(np.ascontiguousarray(keep))
+
+        expected = confidence[keep[ti]]
+        got = np.asarray(filtered.observation_confidence)
+        assert len(got) == len(np.asarray(filtered.track_point_indexes))
+        np.testing.assert_array_equal(got, expected)
+
+
 class TestEmbeddedPatches:
     """Format v4 embedded_patches: read accessors and the clone path."""
 

@@ -197,6 +197,11 @@ pub fn validate_keypoints(
 /// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
 /// version; [`crate::read_sfmr`] accepts any version up to it.
 ///
+/// Version 6 added the optional per-observation array
+/// `tracks/observation_confidence`, flagged by `tracks/metadata.json`'s
+/// `has_observation_confidence` (see [`SfmrData::observation_confidence`]).
+/// Older files carry neither the flag nor the array and read as `None`.
+///
 /// Version 5 made the canonical coordinate convention normative (right-handed
 /// Z-up world, cameras looking down −Z with +Y up — see
 /// `specs/formats/sfmr-file-format.md` § "Coordinate System Conventions").
@@ -207,7 +212,7 @@ pub fn validate_keypoints(
 /// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
 /// convention math (`geometry::convention`) that this lower-level crate
 /// cannot depend on.
-pub const SFMR_FORMAT_VERSION: u32 = 5;
+pub const SFMR_FORMAT_VERSION: u32 = 6;
 
 /// The first `.sfmr` version whose stored poses and world data are in the
 /// canonical convention (right-handed Z-up world, cameras looking down −Z).
@@ -439,6 +444,28 @@ pub struct SfmrData {
     /// coordinates. `Some` in an `embedded_patches` file; `None` in a
     /// `sift_files` file.
     pub keypoints_xy: Option<Array2<f32>>,
+    /// Optional `(M,)` per-observation confidence in that observation's
+    /// photometric sharpness *relative to its track's consensus*: how well this
+    /// observation's image content resolves the detail the rest of the track
+    /// agrees on.
+    ///
+    /// `0` means **no data-derived support** — nothing measured this
+    /// observation (the writer had no estimator, or the track was too short or
+    /// unscored to measure against). It is not a claim that the observation is
+    /// bad. Measured values occupy `1..=255`: `1` is maximally soft relative to
+    /// the track consensus, `255` fully sharp. Consumers must treat the value
+    /// monotonically (higher = sharper) rather than switching on exact codes.
+    /// `None` means no information at all, which is *not* the same as "every
+    /// observation is sharp".
+    ///
+    /// On disk this is `tracks/observation_confidence` (version 6+, present
+    /// only when `tracks/metadata.json`'s `has_observation_confidence` is
+    /// `true`). It is defined for both `sift_files` and `embedded_patches`
+    /// files and requires no other array to be present — it rates observations,
+    /// which always exist. The writer passes it through untouched, so a writer
+    /// that supplies it is responsible for keeping it parallel to the
+    /// observations.
+    pub observation_confidence: Option<Array1<u8>>,
     /// `(M,)` point index per observation.
     pub point_indexes: Array1<u32>,
     /// `(P,)` number of observations per 3D point.

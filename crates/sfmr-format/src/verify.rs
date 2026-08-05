@@ -407,6 +407,21 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     // tracks/metadata.json
     let tracks_meta_raw = read_zst_entry(&mut archive, "tracks/metadata.json.zst")?;
     tracks_hasher.update(&tracks_meta_raw);
+    let tracks_meta: serde_json::Value =
+        serde_json::from_slice(&tracks_meta_raw).unwrap_or(serde_json::Value::Null);
+    // Per-observation confidence is optional from version 6 (default `false`).
+    let has_observation_confidence = tracks_meta
+        .get("has_observation_confidence")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    // tracks/observation_confidence (optional, version 6+; sorts after
+    // metadata.json, before observation_counts)
+    if has_observation_confidence {
+        tracks_hasher.update(&read_zst_entry(
+            &mut archive,
+            &format!("tracks/observation_confidence.{observation_count}.uint8.zst"),
+        )?);
+    }
     // tracks/observation_counts
     let track_obs_counts_raw = read_zst_entry(
         &mut archive,
@@ -466,8 +481,6 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     // Exactly one of has_feature_indexes / has_keypoints_xy is true, matching
     // feature_source. Only enforced when the flags are present (v4 writers always
     // emit them; an upgraded pre-v4 file has none).
-    let tracks_meta: serde_json::Value =
-        serde_json::from_slice(&tracks_meta_raw).unwrap_or(serde_json::Value::Null);
     if let Some(hfi) = tracks_meta
         .get("has_feature_indexes")
         .and_then(|v| v.as_bool())

@@ -282,6 +282,7 @@ impl SfmrReconstruction {
             // Rides along as stored; the convention upgrade above leaves it
             // alone because a confidence is frame-independent.
             normal_confidence: data.normal_confidence.map(|c| c.to_vec()),
+            observation_confidence: data.observation_confidence.map(|c| c.to_vec()),
             observations,
             image_feature_to_point,
             max_track_feature_index,
@@ -438,6 +439,10 @@ impl SfmrReconstruction {
             colors_rgb,
             reprojection_errors,
             normals_xyz,
+            observation_confidence: self
+                .observation_confidence
+                .as_ref()
+                .map(|c| Array1::from_vec(c.clone())),
             normal_confidence: self
                 .normal_confidence
                 .as_ref()

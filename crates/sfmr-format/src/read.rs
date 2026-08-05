@@ -387,6 +387,24 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         (Some(Array1::from_vec(feature_indexes_vec)), None)
     };
 
+    // Optional per-observation confidence (version 6+). Absent means "no
+    // information at all", so an older file — which never carries the flag nor
+    // the array — simply reads as `None`. Independent of `feature_source`.
+    let observation_confidence = if tracks_meta
+        .get("has_observation_confidence")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let confidence_vec: Vec<u8> = read_binary_array(
+            &mut archive,
+            &format!("tracks/observation_confidence.{observation_count}.uint8.zst"),
+            observation_count,
+        )?;
+        Some(Array1::from_vec(confidence_vec))
+    } else {
+        None
+    };
+
     // Version 1 named this array `points3d_indexes`; version 2 renames it to
     // `point_indexes`.
     let point_indexes_name = if is_v1 {
@@ -526,6 +544,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         image_indexes,
         feature_indexes,
         keypoints_xy,
+        observation_confidence,
         point_indexes,
         observation_counts,
         depth_statistics,

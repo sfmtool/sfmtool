@@ -291,6 +291,24 @@ impl PySfmrReconstruction {
             .map(|kp| kp.clone().into_pyarray(py))
     }
 
+    /// Per-observation confidence in that observation's **photometric sharpness
+    /// relative to its track's consensus**, as a 1-D uint8 array parallel to the
+    /// track arrays, or ``None`` when the reconstruction carries no such
+    /// information — which is *not* the same as "every observation is sharp".
+    ///
+    /// ``0`` means the observation has no data-derived support: nothing measured
+    /// it. Measured values run ``1`` (maximally soft against the track's
+    /// consensus) to ``255`` (fully sharp). Treat the value monotonically rather
+    /// than switching on exact codes. Set it with
+    /// ``clone_with_changes(observation_confidence=...)``; it is stored and
+    /// written untouched, and every pass that drops or reorders observations
+    /// selects its rows in lockstep.
+    #[getter]
+    fn observation_confidence<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u8>>> {
+        let confidence = self.inner.observation_confidence.as_ref()?;
+        Some(PyArray1::from_slice(py, confidence))
+    }
+
     /// Per-image source-image hashes as ``list[bytes]`` (16-byte XXH128 each), or
     /// ``None`` unless :attr:`feature_source` is ``"embedded_patches"``. The same
     /// value the image's ``.sift`` records as ``image_file_xxh128``.

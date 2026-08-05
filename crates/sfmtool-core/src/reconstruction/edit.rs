@@ -36,6 +36,14 @@ fn select_patch_rows_u8(
     arr.as_ref().map(|a| a.select(ndarray::Axis(0), idx))
 }
 
+/// Select rows `idx` of the optional per-OBSERVATION confidence column,
+/// preserving `None`. The rows are observation rows, so this takes the same
+/// selection `tracks` and `keypoints_xy` take — never the point selection.
+fn select_observation_confidence(arr: &Option<Vec<u8>>, idx: &[usize]) -> Option<Vec<u8>> {
+    arr.as_ref()
+        .map(|c| idx.iter().map(|&i| c[i]).collect::<Vec<u8>>())
+}
+
 /// Select entries `idx` of the optional per-point normal-confidence column,
 /// preserving `None`. Point-reindexing edits carry it along verbatim: a
 /// confidence describes its own point's normal, so a subset or reorder neither
@@ -165,6 +173,7 @@ impl SfmrReconstruction {
             has_normals: self.has_normals,
             // Rotating a normal does not change how well-supported it is.
             normal_confidence: self.normal_confidence.clone(),
+            observation_confidence: self.observation_confidence.clone(),
             // A 3D similarity leaves the 2D image keypoints, feature indices, and
             // image identity untouched, so the observation source passes through
             // for both modes.
@@ -274,6 +283,12 @@ impl SfmrReconstruction {
                 kept_obs.push(i);
             }
         }
+
+        // The per-OBSERVATION confidence follows `kept_obs`, exactly as the
+        // observation-source column below does — it is an observation row, not a
+        // point row, and the two selections are different.
+        let new_observation_confidence =
+            select_observation_confidence(&self.observation_confidence, &kept_obs);
 
         // Points + observation counts. A patch frame is per-point, so it rides
         // along: subset keeps the rows for surviving points (geometry is
@@ -440,6 +455,7 @@ impl SfmrReconstruction {
             patch_bitmaps_y_x_rgba: new_patch_bitmaps,
             has_normals: self.has_normals,
             normal_confidence: new_normal_confidence,
+            observation_confidence: new_observation_confidence,
             observations: new_observations,
             image_feature_to_point: new_image_feature_to_point,
             max_track_feature_index: new_max_track_feature_index,
@@ -507,6 +523,10 @@ impl SfmrReconstruction {
         let kept: Vec<usize> = (0..self.tracks.len())
             .filter(|&i| mask[self.tracks[i].point_index as usize])
             .collect();
+        // The per-OBSERVATION confidence follows the observation rows `kept`,
+        // never the point rows `keep_idx`.
+        let new_observation_confidence =
+            select_observation_confidence(&self.observation_confidence, &kept);
         let new_tracks: Vec<TrackObservation> = kept
             .iter()
             .map(|&i| TrackObservation {
@@ -574,6 +594,7 @@ impl SfmrReconstruction {
             patch_bitmaps_y_x_rgba: new_patch_bitmaps,
             has_normals: self.has_normals,
             normal_confidence: new_normal_confidence,
+            observation_confidence: new_observation_confidence,
             observations: new_observations,
             image_feature_to_point: new_image_feature_to_point,
             max_track_feature_index: new_max_track_feature_index,

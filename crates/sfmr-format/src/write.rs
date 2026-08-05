@@ -585,6 +585,7 @@ pub fn write_sfmr_with_options(
         "observation_count": observation_count,
         "has_feature_indexes": !is_embedded,
         "has_keypoints_xy": is_embedded,
+        "has_observation_confidence": data.observation_confidence.is_some(),
     });
     let bytes = write_json_entry(
         &mut zip,
@@ -593,6 +594,22 @@ pub fn write_sfmr_with_options(
         options.zstd_level,
     )?;
     tracks_hasher.update(&bytes);
+
+    // tracks/observation_confidence (optional, version 6+; lexicographically
+    // after metadata.json, before observation_counts). Defined in both feature
+    // sources, since it rates observations rather than any mode-specific
+    // column. The array passes through *untouched*: the writer never invents or
+    // adjusts a confidence value, it only permutes it alongside the other
+    // per-observation arrays when the tracks need sorting.
+    if let Some(observation_confidence) = &data.observation_confidence {
+        write_binary_entry_hashed(
+            &mut zip,
+            &format!("tracks/observation_confidence.{observation_count}.uint8.zst"),
+            observation_confidence.as_slice().unwrap(),
+            options.zstd_level,
+            &mut tracks_hasher,
+        )?;
+    }
 
     // tracks/observation_counts
     write_binary_entry_hashed(
@@ -723,6 +740,12 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
         for (i, &pi) in perm.iter().enumerate() {
             kp[[i, 0]] = old[[pi, 0]];
             kp[[i, 1]] = old[[pi, 1]];
+        }
+    }
+    if let Some(oc) = data.observation_confidence.as_mut() {
+        let old: Vec<u8> = oc.as_slice().unwrap().to_vec();
+        for (i, &pi) in perm.iter().enumerate() {
+            oc[i] = old[pi];
         }
     }
 }
@@ -934,6 +957,15 @@ fn validate_dimensions_with(
             format!(
                 "keypoints_xy shape {:?} != [{observation_count}, 2]",
                 kp.shape()
+            )
+        );
+    }
+    if let Some(observation_confidence) = &data.observation_confidence {
+        check!(
+            observation_confidence.len() == observation_count,
+            format!(
+                "observation_confidence len {} != observation_count {observation_count}",
+                observation_confidence.len()
             )
         );
     }

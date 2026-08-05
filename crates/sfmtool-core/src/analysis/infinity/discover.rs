@@ -559,6 +559,11 @@ impl SfmrReconstruction {
                     feature_indexes.push(*feat);
                 }
             }
+            // A newly discovered observation was never measured, so it gets the
+            // "no data-derived support" code rather than inheriting anything.
+            if let Some(confidence) = recon.observation_confidence.as_mut() {
+                confidence.extend(std::iter::repeat_n(0u8, track.members.len()));
+            }
             recon.observation_counts.push(track.members.len() as u32);
         }
         eprintln!(
