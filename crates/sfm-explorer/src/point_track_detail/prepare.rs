@@ -20,6 +20,7 @@ use super::metrics::{
 };
 use super::patch::{build_patch_frame, build_stored_patch_texture};
 use super::{PointTrackDetail, TrackObservationData};
+use crate::scene::{ImageRef, PointRef};
 use crate::state::CachedSiftFeatures;
 
 impl PointTrackDetail {
@@ -28,9 +29,10 @@ impl PointTrackDetail {
         &mut self,
         ctx: &egui::Context,
         recon: &SfmrReconstruction,
-        point_idx: usize,
-        sift_cache: &HashMap<usize, CachedSiftFeatures>,
+        point: PointRef,
+        sift_cache: &HashMap<ImageRef, CachedSiftFeatures>,
     ) {
+        let point_idx = point.index();
         self.observations.clear();
         self.thumbnail_textures.clear();
 
@@ -66,7 +68,7 @@ impl PointTrackDetail {
             // Feature index (SIFT), position, and extents for this observation.
             let (feature_index, feature_xy, feature_extents) = if let Some(fis) = feature_indexes {
                 let feat_idx = fis[obs_global] as usize;
-                let cached_sift = sift_cache.get(&img_idx);
+                let cached_sift = sift_cache.get(&ImageRef::new(point.recon, img_idx));
                 let xy = cached_sift
                     .and_then(|sift| sift.positions_xy.get(feat_idx))
                     .copied()

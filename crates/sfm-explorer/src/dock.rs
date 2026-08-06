@@ -13,9 +13,9 @@ use crate::image_browser::ImageBrowser;
 use crate::image_detail::ImageDetail;
 use crate::platform;
 use crate::point_track_detail::PointTrackDetail;
+use crate::scene::{selected_node, ImageRef, PointRef, SceneNode};
 use crate::state::{AppState, FeatureDisplaySettings, OverlayMode};
 use crate::viewer_3d::Viewer3D;
-use sfmtool_core::SfmrReconstruction;
 
 /// Tabs that can appear in the dock area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +64,7 @@ impl TabViewer for TabContext<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
             Tab::Viewer3D => {
-                if self.state.reconstruction.is_some() {
+                if self.state.selected_recon.is_some() {
                     // The HUD goes up before the viewport claims the rect: it
                     // lives on its own `Area` layer (so it still paints on top),
                     // and `show` below consults the rect it occupies to arbitrate
@@ -72,10 +72,15 @@ impl TabViewer for TabContext<'_> {
                     self.viewer_3d
                         .show_hud(ui, self.state, self.diagnostics, self.handler_ok);
                 }
-                if let Some(ref recon) = self.state.reconstruction {
+                // Fetched only after `show_hud` has handed back its `&mut
+                // AppState`: the node borrows `state.scene`, and the two cannot
+                // overlap.
+                let node = selected_node(&self.state.scene, self.state.selected_recon);
+                if let Some(node) = node {
                     self.viewer_3d.show(
                         ui,
-                        recon,
+                        &node.recon,
+                        node.id,
                         &mut self.state.selected_image,
                         self.state.show_grid,
                         self.state.length_scale,
@@ -106,49 +111,55 @@ impl TabViewer for TabContext<'_> {
                 }
             }
             Tab::ImageBrowser => {
-                if let Some(ref recon) = self.state.reconstruction {
-                    let track_images = compute_track_images(self.state, recon);
-                    let hover_track_images = compute_hover_track_images(self.state, recon);
-                    let camera_view_image =
-                        self.viewer_3d.camera_view.as_ref().map(|cv| cv.image_index);
+                let node = selected_node(&self.state.scene, self.state.selected_recon);
+                if let Some(node) = node {
+                    let recon = &node.recon;
+                    let id = node.id;
+                    let track_images = compute_track_images(self.state, node);
+                    let hover_track_images = compute_hover_track_images(self.state, node);
+                    let camera_view_image = self
+                        .viewer_3d
+                        .camera_view
+                        .as_ref()
+                        .and_then(|cv| cv.image.index_in(id));
                     let response = self.image_browser.show(
                         ui,
                         recon,
-                        self.state.selected_image,
+                        id,
+                        self.state.selected_image_in(id),
                         &track_images,
                         &hover_track_images,
-                        self.state.hovered_image,
+                        self.state.hovered_image_in(id),
                         camera_view_image,
                         self.gesture_events,
                         self.scroll_input,
                     );
                     if let Some(new_sel) = response.selection_changed {
-                        self.state.selected_image = new_sel;
+                        self.state.selected_image = new_sel.map(|i| ImageRef::new(id, i));
                     }
                     if response.has_pointer {
                         // Browser owns hover state when it has the pointer.
-                        self.state.hovered_image = response.hovered_image;
+                        self.state.hovered_image =
+                            response.hovered_image.map(|i| ImageRef::new(id, i));
                         // Clear point hover from other panels since browser
                         // doesn't produce hovered_point.
                         self.state.hovered_point = None;
                     }
                     if let Some(img_idx) = response.request_camera_view {
                         let current_time = ui.input(|i| i.time);
+                        let image = ImageRef::new(id, img_idx);
                         if self.viewer_3d.camera_view.is_some() {
-                            self.viewer_3d.animated_switch_camera_view(
-                                img_idx,
-                                recon,
-                                current_time,
-                            );
-                        } else {
                             self.viewer_3d
-                                .enter_camera_view(img_idx, recon, current_time);
+                                .animated_switch_camera_view(image, recon, current_time);
+                        } else {
+                            self.viewer_3d.enter_camera_view(image, recon, current_time);
                         }
                     }
                     // Instant camera switch during animation playback.
                     if let Some(img_idx) = response.request_camera_switch {
                         if self.viewer_3d.camera_view.is_some() {
-                            self.viewer_3d.switch_camera_view(img_idx, recon);
+                            self.viewer_3d
+                                .switch_camera_view(ImageRef::new(id, img_idx), recon);
                         }
                     }
                 } else {
@@ -158,7 +169,16 @@ impl TabViewer for TabContext<'_> {
                 }
             }
             Tab::ImageDetail => {
-                if let Some(ref recon) = self.state.reconstruction {
+                let node = selected_node(&self.state.scene, self.state.selected_recon);
+                if let Some(node) = node {
+                    let recon = &node.recon;
+                    let id = node.id;
+                    // Read out before the cache borrows below: they hold `&mut`
+                    // into `state`, which rules out an `&self.state` method call
+                    // for as long as their results are alive.
+                    let selected_image = self.state.selected_image_in(id);
+                    let selected_point = self.state.selected_point_in(id);
+                    let hovered_point = self.state.hovered_point_in(id);
                     // Overlay toolbar at the top of the detail panel
                     show_overlay_toolbar(ui, &mut self.state.feature_display);
 
@@ -184,32 +204,33 @@ impl TabViewer for TabContext<'_> {
                     // Only `sift_files` reconstructions have `.sift` companions;
                     // an embedded_patches recon reads its keypoints inline, so
                     // skip the (always-failing, per-frame) cache probe.
-                    let sift = self.state.selected_image.and_then(|idx| {
+                    let sift = selected_image.and_then(|idx| {
                         recon.feature_indexes()?;
                         let read_count = read_count_for_image(idx);
                         crate::state::ensure_sift_cached(
                             &mut self.state.sift_cache,
                             recon,
-                            idx,
+                            ImageRef::new(id, idx),
                             read_count,
                         )
                     });
                     // Full-res CPU pixels come from the shared cache (also
                     // used by the Point Track Detail patch tiles), so each
                     // image is decoded from disk at most once.
-                    let full_res = self.state.selected_image.and_then(|idx| {
+                    let full_res = selected_image.and_then(|idx| {
                         crate::state::ensure_full_res_cached(
                             &mut self.state.full_res_cache,
                             recon,
-                            idx,
+                            ImageRef::new(id, idx),
                         )
                     });
                     let detail_response = self.image_detail.show(
                         ui,
                         recon,
-                        self.state.selected_image,
-                        self.state.selected_point,
-                        self.state.hovered_point,
+                        id,
+                        selected_image,
+                        selected_point,
+                        hovered_point,
                         self.image_browser.is_playing(),
                         self.gesture_events,
                         self.scroll_input,
@@ -218,11 +239,12 @@ impl TabViewer for TabContext<'_> {
                         &self.state.feature_display,
                     );
                     if let Some(point_idx) = detail_response.select_point {
-                        self.state.selected_point = Some(point_idx);
+                        self.state.selected_point = Some(PointRef::new(id, point_idx));
                     }
                     if detail_response.has_pointer {
                         // Detail owns hover state when it has the pointer.
-                        self.state.hovered_point = detail_response.hovered_point;
+                        self.state.hovered_point =
+                            detail_response.hovered_point.map(|p| PointRef::new(id, p));
                         // Clear image hover from other panels since detail
                         // doesn't produce hovered_image.
                         self.state.hovered_image = None;
@@ -234,19 +256,23 @@ impl TabViewer for TabContext<'_> {
                 }
             }
             Tab::PointTrackDetail => {
-                if let Some(ref recon) = self.state.reconstruction {
+                let node = selected_node(&self.state.scene, self.state.selected_recon);
+                if let Some(node) = node {
+                    let recon = &node.recon;
+                    let id = node.id;
+                    let selected_point = self.state.selected_point_in(id);
                     // Ensure SIFT positions are cached for all images in the
                     // track (sift_files only; embedded_patches reads keypoints
                     // inline, so the `.sift` probe would fail every time).
                     if recon.feature_indexes().is_some() {
-                        if let Some(pt_idx) = self.state.selected_point {
+                        if let Some(pt_idx) = selected_point {
                             if pt_idx < recon.points.len() {
                                 for img_idx in recon.track_image_indices(pt_idx) {
                                     let need = recon.max_track_feature_index[img_idx] as usize + 1;
                                     crate::state::ensure_sift_cached(
                                         &mut self.state.sift_cache,
                                         recon,
-                                        img_idx,
+                                        ImageRef::new(id, img_idx),
                                         need,
                                     );
                                 }
@@ -259,13 +285,13 @@ impl TabViewer for TabContext<'_> {
                     // needed when the recon carries patch frames (the tiles
                     // are gated on them).
                     if recon.patch_u_halfvec_xyz.is_some() {
-                        if let Some(pt_idx) = self.state.selected_point {
+                        if let Some(pt_idx) = selected_point {
                             if pt_idx < recon.points.len() {
                                 for img_idx in recon.track_image_indices(pt_idx) {
                                     crate::state::ensure_full_res_cached(
                                         &mut self.state.full_res_cache,
                                         recon,
-                                        img_idx,
+                                        ImageRef::new(id, img_idx),
                                     );
                                 }
                             }
@@ -274,32 +300,31 @@ impl TabViewer for TabContext<'_> {
                     let track_response = self.point_track_detail.show(
                         ui,
                         recon,
-                        self.state.selected_point,
-                        self.state.hovered_image,
+                        id,
+                        selected_point,
+                        self.state.hovered_image_in(id),
                         &self.state.sift_cache,
                         &self.state.full_res_cache,
                         self.gesture_events,
                         self.scroll_input,
                     );
                     if let Some(img_idx) = track_response.select_image {
-                        self.state.selected_image = Some(img_idx);
+                        self.state.selected_image = Some(ImageRef::new(id, img_idx));
                     }
                     if let Some(img_idx) = track_response.request_camera_view {
                         let current_time = ui.input(|i| i.time);
+                        let image = ImageRef::new(id, img_idx);
                         if self.viewer_3d.camera_view.is_some() {
-                            self.viewer_3d.animated_switch_camera_view(
-                                img_idx,
-                                recon,
-                                current_time,
-                            );
-                        } else {
                             self.viewer_3d
-                                .enter_camera_view(img_idx, recon, current_time);
+                                .animated_switch_camera_view(image, recon, current_time);
+                        } else {
+                            self.viewer_3d.enter_camera_view(image, recon, current_time);
                         }
                     }
                     if track_response.has_pointer {
                         // Track detail owns hover state when it has the pointer.
-                        self.state.hovered_image = track_response.hovered_image;
+                        self.state.hovered_image =
+                            track_response.hovered_image.map(|i| ImageRef::new(id, i));
                         // Clear point hover from other panels since track detail
                         // doesn't produce hovered_point.
                         self.state.hovered_point = None;
@@ -385,30 +410,35 @@ fn show_overlay_toolbar(ui: &mut egui::Ui, settings: &mut FeatureDisplaySettings
 }
 
 /// Return the image indices in the selected point's track, or empty if none.
-pub(crate) fn compute_track_images(state: &AppState, recon: &SfmrReconstruction) -> Vec<usize> {
-    let Some(point_idx) = state.selected_point else {
+///
+/// Both this and [`compute_hover_track_images`] return indices **local to
+/// `node`**: a track never spans reconstructions, so the ids the caller already
+/// holds are enough context and every consumer (frustum colors, browser
+/// borders) works in one recon's index space anyway.
+pub(crate) fn compute_track_images(state: &AppState, node: &SceneNode) -> Vec<usize> {
+    let Some(point_idx) = state.selected_point_in(node.id) else {
         return Vec::new();
     };
-    if point_idx >= recon.points.len() {
+    if point_idx >= node.recon.points.len() {
         return Vec::new();
     }
-    recon.track_image_indices(point_idx)
+    node.recon.track_image_indices(point_idx)
 }
 
 /// Return the image indices in the hovered point's track, or empty if none.
-pub(crate) fn compute_hover_track_images(
-    state: &AppState,
-    recon: &SfmrReconstruction,
-) -> Vec<usize> {
-    let Some(point_idx) = state.hovered_point else {
+pub(crate) fn compute_hover_track_images(state: &AppState, node: &SceneNode) -> Vec<usize> {
+    let Some(point) = state.hovered_point else {
         return Vec::new();
     };
     // Suppress if same as selected point (selected track is already shown).
-    if state.selected_point == Some(point_idx) {
+    if state.selected_point == Some(point) {
         return Vec::new();
     }
-    if point_idx >= recon.points.len() {
+    let Some(point_idx) = point.index_in(node.id) else {
+        return Vec::new();
+    };
+    if point_idx >= node.recon.points.len() {
         return Vec::new();
     }
-    recon.track_image_indices(point_idx)
+    node.recon.track_image_indices(point_idx)
 }

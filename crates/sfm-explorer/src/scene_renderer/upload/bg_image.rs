@@ -8,6 +8,7 @@ use super::super::gpu_types::{
     BG_DISTORTION_SUBDIVISIONS, BG_FISHEYE_SUBDIVISIONS, BG_PINHOLE_SUBDIVISIONS,
 };
 use super::super::SceneRenderer;
+use crate::scene::ImageRef;
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
 
@@ -15,19 +16,20 @@ impl SceneRenderer {
     /// Load a full-resolution camera image for the background in camera view mode.
     ///
     /// Creates a single 2D texture at the image's native resolution and rebuilds
-    /// the background image bind group. Skips reloading if the same image index
-    /// is already loaded.
+    /// the background image bind group. Skips reloading if the same image is
+    /// already loaded.
     pub fn upload_bg_image(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         recon: &SfmrReconstruction,
-        image_index: usize,
+        image: ImageRef,
     ) {
-        if self.bg_image_loaded_index == Some(image_index) {
+        if self.bg_image_loaded == Some(image) {
             return; // already loaded
         }
 
+        let image_index = image.index();
         let Some(img) = recon.images.get(image_index) else {
             return;
         };
@@ -108,7 +110,7 @@ impl SceneRenderer {
         }
 
         self.bg_image_texture = Some(texture);
-        self.bg_image_loaded_index = Some(image_index);
+        self.bg_image_loaded = Some(image);
         log::info!("Loaded bg image {} ({}×{})", image_path.display(), w, h);
 
         // Generate tessellated mesh with world-space ray directions.
@@ -143,7 +145,7 @@ impl SceneRenderer {
     pub fn clear_bg_image(&mut self) {
         self.bg_image_bind_group = None;
         self.bg_image_texture = None;
-        self.bg_image_loaded_index = None;
+        self.bg_image_loaded = None;
         self.bg_image_distorted_vertex_buffer = None;
         self.bg_image_distorted_index_buffer = None;
         self.bg_image_distorted_index_count = 0;

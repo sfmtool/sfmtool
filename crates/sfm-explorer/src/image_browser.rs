@@ -13,8 +13,14 @@ use ndarray::Axis;
 use sfmtool_core::SfmrReconstruction;
 
 use crate::platform::GestureEvent;
+use crate::scene::ReconId;
 
 /// Response from the image browser (selection changes and hover state).
+///
+/// Every index here is local to the reconstruction the panel was shown with
+/// (`recon_id`); `dock.rs` pairs them back into [`crate::scene::ImageRef`]s.
+/// The strip is bound to exactly one reconstruction — the selected one — so
+/// there is nothing for a ref to disambiguate inside the panel.
 pub struct ImageBrowserResponse {
     /// If Some, the user clicked a thumbnail to select it.
     pub selection_changed: Option<Option<usize>>,
@@ -96,8 +102,16 @@ impl NavigationMinibar {
 
 /// Image browser panel state.
 pub struct ImageBrowser {
-    /// Cached egui textures for thumbnails, keyed by image index.
+    /// Cached egui textures for thumbnails, keyed by image index within
+    /// `cached_recon`.
     thumbnail_cache: HashMap<usize, egui::TextureHandle>,
+    /// The reconstruction the cache was built from. Index keys alone were the
+    /// bug the scene graph spec calls out: the cache was invalidated by image
+    /// *count*, so two reconstructions with the same number of images shared
+    /// each other's thumbnails. Keyed refs would be the other fix, but the
+    /// strip only ever shows one reconstruction, so keeping the id here drops
+    /// the stale textures instead of accumulating them.
+    cached_recon: Option<ReconId>,
     /// Number of images when the cache was last built (for invalidation).
     cached_image_count: usize,
     /// The selected image index from the previous frame (for auto-scroll).
@@ -119,6 +133,7 @@ impl ImageBrowser {
     pub fn new() -> Self {
         Self {
             thumbnail_cache: HashMap::new(),
+            cached_recon: None,
             cached_image_count: 0,
             prev_selected: None,
             next_lazy_load: 0,
@@ -142,6 +157,7 @@ impl ImageBrowser {
         &mut self,
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
+        recon_id: ReconId,
         selected_image: Option<usize>,
         track_images: &[usize],
         hover_track_images: &[usize],
@@ -161,8 +177,9 @@ impl ImageBrowser {
         let num_images = recon.images.len();
 
         // Cache invalidation: if the reconstruction changed, clear everything.
-        if num_images != self.cached_image_count {
+        if self.cached_recon != Some(recon_id) || num_images != self.cached_image_count {
             self.thumbnail_cache.clear();
+            self.cached_recon = Some(recon_id);
             self.cached_image_count = num_images;
             self.next_lazy_load = 0;
             self.offset_x = 0.0;

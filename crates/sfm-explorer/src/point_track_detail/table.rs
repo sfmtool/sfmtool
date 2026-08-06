@@ -17,6 +17,7 @@ use sfmtool_core::SfmrReconstruction;
 use super::metrics::error_color;
 use super::{PointTrackDetail, PointTrackDetailResponse, PATCH_TILE, THUMB_SIZE};
 use crate::platform::{self, GestureEvent};
+use crate::scene::{ImageRef, ReconId};
 
 /// Height of one observation row: the thumbnail plus vertical padding.
 const ROW_HEIGHT: f32 = THUMB_SIZE + 8.0;
@@ -72,8 +73,9 @@ impl PointTrackDetail {
         &mut self,
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
+        recon_id: ReconId,
         hovered_image: Option<usize>,
-        full_res_cache: &HashMap<usize, Option<ImageU8>>,
+        full_res_cache: &HashMap<ImageRef, Option<ImageU8>>,
         gesture_events: &[GestureEvent],
         scroll_input: &platform::ScrollInput,
         response: &mut PointTrackDetailResponse,
@@ -99,6 +101,7 @@ impl PointTrackDetail {
                 self.draw_observation_row(
                     ui,
                     recon,
+                    recon_id,
                     obs_i,
                     hovered_image,
                     full_res_cache,
@@ -120,9 +123,10 @@ impl PointTrackDetail {
         &mut self,
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
+        recon_id: ReconId,
         obs_i: usize,
         hovered_image: Option<usize>,
-        full_res_cache: &HashMap<usize, Option<ImageU8>>,
+        full_res_cache: &HashMap<ImageRef, Option<ImageU8>>,
         cols: &ColumnLayout,
         response: &mut PointTrackDetailResponse,
     ) {
@@ -131,6 +135,7 @@ impl PointTrackDetail {
         // into `self.observations`.
         let obs = &self.observations[obs_i];
         let obs_image_index = obs.image_index;
+        let obs_image = ImageRef::new(recon_id, obs_image_index);
         let obs_feature_index = obs.feature_index;
         let obs_feature_xy = obs.feature_xy;
         let obs_reproj_error = obs.reproj_error;
@@ -186,7 +191,7 @@ impl PointTrackDetail {
         self.draw_thumbnail(
             &mut thumb_ui,
             recon,
-            obs_image_index,
+            obs_image,
             obs_feature_xy,
             obs_reproj_error,
         );
@@ -195,8 +200,8 @@ impl PointTrackDetail {
         // reconstructions only; rendered lazily from the shared
         // full-res image cache and cached per image index).
         if cols.has_patch {
-            self.ensure_rendered_patch(ui.ctx(), recon, obs_image_index, full_res_cache);
-            if let Some(texture) = self.rendered_patch_textures.get(&obs_image_index) {
+            self.ensure_rendered_patch(ui.ctx(), recon, obs_image, full_res_cache);
+            if let Some(texture) = self.rendered_patch_textures.get(&obs_image) {
                 let patch_rect = egui::Rect::from_min_size(
                     egui::pos2(x0 + cols.patch, cy - PATCH_TILE / 2.0),
                     egui::vec2(PATCH_TILE, PATCH_TILE),
@@ -308,19 +313,21 @@ impl PointTrackDetail {
         &mut self,
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
-        img_idx: usize,
+        image: ImageRef,
         feature_xy: [f32; 2],
         reproj_error: f32,
     ) {
+        let img_idx = image.index();
+
         // Load thumbnail texture if not cached
-        if !self.thumbnail_textures.contains_key(&img_idx) {
-            self.load_thumbnail(ui.ctx(), recon, img_idx);
+        if !self.thumbnail_textures.contains_key(&image) {
+            self.load_thumbnail(ui.ctx(), recon, image);
         }
 
         let (thumb_rect, _) =
             ui.allocate_exact_size(egui::vec2(THUMB_SIZE, THUMB_SIZE), egui::Sense::hover());
 
-        if let Some(texture) = self.thumbnail_textures.get(&img_idx) {
+        if let Some(texture) = self.thumbnail_textures.get(&image) {
             // Draw thumbnail
             ui.painter().image(
                 texture.id(),
@@ -352,7 +359,8 @@ impl PointTrackDetail {
     }
 
     /// Load a single thumbnail texture into the cache.
-    fn load_thumbnail(&mut self, ctx: &egui::Context, recon: &SfmrReconstruction, idx: usize) {
+    fn load_thumbnail(&mut self, ctx: &egui::Context, recon: &SfmrReconstruction, image: ImageRef) {
+        let idx = image.index();
         let rgb_slice = recon.thumbnails_y_x_rgb.index_axis(Axis(0), idx);
         let rgb_data: Vec<u8> = if let Some(slice) = rgb_slice.as_slice() {
             slice.to_vec()
@@ -366,13 +374,13 @@ impl PointTrackDetail {
         for pixel in rgb_data.chunks_exact(3) {
             rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
         }
-        let image = egui::ColorImage::from_rgba_unmultiplied([thumb_w, thumb_h], &rgba);
+        let color_image = egui::ColorImage::from_rgba_unmultiplied([thumb_w, thumb_h], &rgba);
         let texture = ctx.load_texture(
             format!("track_thumb_{idx}"),
-            image,
+            color_image,
             egui::TextureOptions::LINEAR,
         );
-        self.thumbnail_textures.insert(idx, texture);
+        self.thumbnail_textures.insert(image, texture);
     }
 }
 

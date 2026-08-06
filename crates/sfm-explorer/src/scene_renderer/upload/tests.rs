@@ -26,9 +26,25 @@ use super::super::gpu_types::{
 };
 use super::super::SceneRenderer;
 use super::track_rays::track_ray_edges;
+use crate::scene::{ImageRef, PointRef, ReconId};
 use crate::state::CachedSiftFeatures;
 
 // ── Fixtures ────────────────────────────────────────────────────────────
+
+/// The reconstruction identity every fixture here shares. Cache keys and the
+/// refs handed to the renderer have to agree on one, and a chosen id makes that
+/// visible at the call site.
+const RECON: ReconId = ReconId::from_raw(0);
+
+/// The reconstruction's `n`-th point.
+fn point(n: usize) -> PointRef {
+    PointRef::new(RECON, n)
+}
+
+/// The reconstruction's `n`-th image.
+fn image(n: usize) -> ImageRef {
+    ImageRef::new(RECON, n)
+}
 
 /// A `wgpu::Device` on the noop backend, with `limits` as the *device* limits.
 /// The noop adapter reports maximally permissive limits, so any request is
@@ -138,11 +154,11 @@ fn with_embedded_keypoints(mut recon: SfmrReconstruction) -> SfmrReconstruction 
 }
 
 /// A SIFT cache covering `images` images, each holding `features` entries.
-fn sift_cache(images: usize, features: usize) -> HashMap<usize, CachedSiftFeatures> {
+fn sift_cache(images: usize, features: usize) -> HashMap<ImageRef, CachedSiftFeatures> {
     (0..images)
         .map(|i| {
             (
-                i,
+                image(i),
                 CachedSiftFeatures {
                     positions_xy: vec![[500.0, 300.0]; features],
                     affine_shapes: vec![[[1.0, 0.0], [0.0, 1.0]]; features],
@@ -565,7 +581,7 @@ fn upload_track_rays_emits_one_ray_per_cached_observation() {
     let cache = sift_cache(recon.images.len(), 8);
     let mut r = SceneRenderer::new();
 
-    r.upload_track_rays(&device, &recon, 3, &cache);
+    r.upload_track_rays(&device, &recon, point(3), &cache);
 
     // Demo gives every point two observations.
     assert_eq!(r.track_ray_count, 2);
@@ -577,7 +593,7 @@ fn track_rays_for_a_finite_point_stop_near_the_scene() {
     let recon = demo(4);
     let cache = sift_cache(recon.images.len(), 8);
 
-    let edges = track_ray_edges(&recon, 0, &cache);
+    let edges = track_ray_edges(&recon, point(0), &cache);
 
     // A finite point terminates each ray at the closest approach to it, which
     // lies inside the camera cloud — decisively shorter than the fixed
@@ -601,7 +617,7 @@ fn upload_track_rays_skips_observations_with_no_cached_features() {
 
     // Empty cache — a missing `.sift` companion must draw no ray at all
     // rather than a misleading one.
-    r.upload_track_rays(&device, &recon, 0, &HashMap::new());
+    r.upload_track_rays(&device, &recon, point(0), &HashMap::new());
 
     assert_eq!(r.track_ray_count, 0);
     assert!(r.track_ray_edge_buffer.is_none());
@@ -615,7 +631,7 @@ fn upload_track_rays_skips_feature_indexes_past_a_truncated_cache() {
     let cache = sift_cache(recon.images.len(), 0);
     let mut r = SceneRenderer::new();
 
-    r.upload_track_rays(&device, &recon, 0, &cache);
+    r.upload_track_rays(&device, &recon, point(0), &cache);
 
     assert_eq!(r.track_ray_count, 0);
 }
@@ -626,7 +642,7 @@ fn upload_track_rays_reads_inline_keypoints_without_a_sift_cache() {
     let recon = with_embedded_keypoints(demo(4));
     let mut r = SceneRenderer::new();
 
-    r.upload_track_rays(&device, &recon, 0, &HashMap::new());
+    r.upload_track_rays(&device, &recon, point(0), &HashMap::new());
 
     // Embedded-patch reconstructions carry keypoints inline, so no cache is
     // consulted and the rays still build.
@@ -640,7 +656,7 @@ fn track_rays_for_a_point_at_infinity_run_to_twice_the_scene_extent() {
     assert!(recon.points[0].is_at_infinity());
     let cache = sift_cache(recon.images.len(), 8);
 
-    let edges = track_ray_edges(&recon, 0, &cache);
+    let edges = track_ray_edges(&recon, point(0), &cache);
 
     // An infinity point's stored position is a unit direction at the origin,
     // which would project behind every camera and collapse each ray to zero
@@ -664,7 +680,7 @@ fn clear_track_rays_drops_the_buffer() {
     let recon = demo(4);
     let cache = sift_cache(recon.images.len(), 8);
     let mut r = SceneRenderer::new();
-    r.upload_track_rays(&device, &recon, 0, &cache);
+    r.upload_track_rays(&device, &recon, point(0), &cache);
     assert_eq!(r.track_ray_count, 2);
 
     r.clear_track_rays();
@@ -699,11 +715,11 @@ fn upload_bg_image_loads_a_real_image_and_builds_its_mesh() {
     let (recon, dir) = recon_with_real_bg_image("load");
     let mut r = SceneRenderer::new();
 
-    r.upload_bg_image(&device, &queue, &recon, 0);
+    r.upload_bg_image(&device, &queue, &recon, image(0));
 
     let texture = r.bg_image_texture.as_ref().expect("bg texture");
     assert_eq!((texture.width(), texture.height()), (8, 4));
-    assert_eq!(r.bg_image_loaded_index, Some(0));
+    assert_eq!(r.bg_image_loaded, Some(image(0)));
     // Pinhole cameras get the coarsest background mesh: two triangles.
     let n = BG_PINHOLE_SUBDIVISIONS + 1;
     assert_eq!(
@@ -721,7 +737,7 @@ fn upload_bg_image_skips_reloading_the_same_image() {
     let (recon, dir) = recon_with_real_bg_image("reload");
     let mut r = SceneRenderer::new();
 
-    r.upload_bg_image(&device, &queue, &recon, 0);
+    r.upload_bg_image(&device, &queue, &recon, image(0));
     assert_eq!(r.bg_image_texture.as_ref().map(|t| t.width()), Some(8));
 
     // Replace the file with a differently-sized image and ask for the same
@@ -732,7 +748,7 @@ fn upload_bg_image_skips_reloading_the_same_image() {
     image::RgbImage::new(16, 8)
         .save(dir.path().join(BG_NAME))
         .expect("overwrite test png");
-    r.upload_bg_image(&device, &queue, &recon, 0);
+    r.upload_bg_image(&device, &queue, &recon, image(0));
 
     let texture = r.bg_image_texture.as_ref().expect("bg texture");
     assert_eq!(
@@ -740,7 +756,7 @@ fn upload_bg_image_skips_reloading_the_same_image() {
         (8, 4),
         "the second call must have been skipped, not reloaded at the new size",
     );
-    assert_eq!(r.bg_image_loaded_index, Some(0));
+    assert_eq!(r.bg_image_loaded, Some(image(0)));
 
     drop(dir);
 }
@@ -752,10 +768,10 @@ fn upload_bg_image_ignores_an_unreadable_image() {
     let recon = demo(4);
     let mut r = SceneRenderer::new();
 
-    r.upload_bg_image(&device, &queue, &recon, 0);
+    r.upload_bg_image(&device, &queue, &recon, image(0));
 
     assert!(r.bg_image_texture.is_none());
-    assert_eq!(r.bg_image_loaded_index, None);
+    assert_eq!(r.bg_image_loaded, None);
 }
 
 #[test]
@@ -764,10 +780,10 @@ fn upload_bg_image_ignores_an_out_of_range_index() {
     let recon = demo(4);
     let mut r = SceneRenderer::new();
 
-    r.upload_bg_image(&device, &queue, &recon, 999);
+    r.upload_bg_image(&device, &queue, &recon, image(999));
 
     assert!(r.bg_image_texture.is_none());
-    assert_eq!(r.bg_image_loaded_index, None);
+    assert_eq!(r.bg_image_loaded, None);
 }
 
 #[test]
@@ -775,14 +791,14 @@ fn clear_bg_image_resets_every_background_field() {
     let (device, queue) = device();
     let (recon, dir) = recon_with_real_bg_image("clear");
     let mut r = SceneRenderer::new();
-    r.upload_bg_image(&device, &queue, &recon, 0);
+    r.upload_bg_image(&device, &queue, &recon, image(0));
     assert!(r.bg_image_texture.is_some());
 
     r.clear_bg_image();
 
     assert!(r.bg_image_texture.is_none());
     assert!(r.bg_image_bind_group.is_none());
-    assert_eq!(r.bg_image_loaded_index, None);
+    assert_eq!(r.bg_image_loaded, None);
     assert!(r.bg_image_distorted_vertex_buffer.is_none());
     assert!(r.bg_image_distorted_index_buffer.is_none());
     assert_eq!(r.bg_image_distorted_index_count, 0);

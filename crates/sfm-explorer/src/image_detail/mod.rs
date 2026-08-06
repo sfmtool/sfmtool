@@ -13,6 +13,7 @@ mod input;
 mod overlay;
 
 use crate::platform::{GestureEvent, ScrollInput};
+use crate::scene::{ImageRef, ReconId};
 use crate::state::{CachedSiftFeatures, FeatureDisplaySettings, OverlayMode};
 use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::SfmrReconstruction;
@@ -24,7 +25,9 @@ const PAN_MARGIN: f32 = 50.0;
 
 /// Prepared feature overlay state for the current image in the detail panel.
 struct FeatureOverlayState {
-    image_idx: usize,
+    /// The image this overlay was built for. A ref, so a file replacement that
+    /// leaves the same index selected still invalidates it.
+    image: ImageRef,
     overlay_mode: OverlayMode,
     tracked_only: bool,
     max_features: Option<usize>,
@@ -36,16 +39,16 @@ struct FeatureOverlayState {
 
 /// Image detail panel state.
 pub struct ImageDetail {
-    /// Currently loaded full-res image: (image_index, texture_handle).
-    loaded_image: Option<(usize, egui::TextureHandle)>,
+    /// Currently loaded full-res image and the texture built from it.
+    loaded_image: Option<(ImageRef, egui::TextureHandle)>,
     /// Prepared feature overlay for the current image.
     feature_overlay: Option<FeatureOverlayState>,
     /// Offset of image center from panel center, in panel pixels.
     pan: egui::Vec2,
     /// Zoom level. 1.0 = fit image to panel. >1.0 = zoomed in.
     zoom: f32,
-    /// Previously displayed image index, for detecting changes and resetting view.
-    prev_selected_image: Option<usize>,
+    /// Previously displayed image, for detecting changes and resetting view.
+    prev_selected_image: Option<ImageRef>,
 }
 
 /// A feature to draw on the image detail panel.
@@ -78,6 +81,9 @@ impl DisplayFeature {
 const UNTRACKED: u32 = u32::MAX;
 
 /// Response from the image detail panel.
+///
+/// Point indices are local to the reconstruction the panel was shown with;
+/// `dock.rs` pairs them back into [`crate::scene::PointRef`]s.
 pub struct ImageDetailResponse {
     /// If Some, the user clicked a feature — select this 3D point.
     pub select_point: Option<usize>,
@@ -127,6 +133,7 @@ impl ImageDetail {
         &mut self,
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
+        recon_id: ReconId,
         selected_image: Option<usize>,
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
@@ -156,20 +163,22 @@ impl ImageDetail {
             return response;
         };
 
+        let image_ref = ImageRef::new(recon_id, img_idx);
+
         // Reset view when selected image changes, unless the caller requests
         // preserving pan/zoom (e.g. during animation playback).
-        if self.prev_selected_image != Some(img_idx) {
+        if self.prev_selected_image != Some(image_ref) {
             if !preserve_view {
                 self.reset_view();
             }
-            self.prev_selected_image = Some(img_idx);
+            self.prev_selected_image = Some(image_ref);
         }
 
         // Load the full-resolution image if it changed. The CPU pixels come
         // from the shared `full_res_cache` (decoded once, in dock.rs); this
         // panel only uploads them to a GPU texture.
-        if self.loaded_image.as_ref().map(|(i, _)| *i) != Some(img_idx) {
-            self.load_image(ui.ctx(), full_res, img_idx);
+        if self.loaded_image.as_ref().map(|(i, _)| *i) != Some(image_ref) {
+            self.load_image(ui.ctx(), full_res, image_ref);
             self.feature_overlay = None; // reset overlay on image change
         }
 
@@ -178,7 +187,7 @@ impl ImageDetail {
 
         // Rebuild overlay if settings changed (mode, filters, etc.)
         let cache_valid = self.feature_overlay.as_ref().is_some_and(|c| {
-            c.image_idx == img_idx
+            c.image == image_ref
                 && c.overlay_mode == feature_display.overlay_mode
                 && c.tracked_only == feature_display.tracked_only
                 && c.max_features == feature_display.max_features
@@ -186,15 +195,15 @@ impl ImageDetail {
                 && c.max_feature_size == feature_display.max_feature_size
         });
         if show_features && !cache_valid {
-            self.load_display_features(recon, img_idx, sift_features, feature_display);
+            self.load_display_features(recon, image_ref, sift_features, feature_display);
         } else if !show_features {
             // In None mode, still load tracked features for selected point display
             let tracked_overlay_valid = self
                 .feature_overlay
                 .as_ref()
-                .is_some_and(|c| c.image_idx == img_idx && c.tracked_only);
+                .is_some_and(|c| c.image == image_ref && c.tracked_only);
             if !tracked_overlay_valid {
-                self.load_tracked_features(recon, img_idx, sift_features);
+                self.load_tracked_features(recon, image_ref, sift_features);
             }
         }
 
@@ -278,11 +287,12 @@ impl ImageDetail {
     /// Build the display texture from the shared full-res CPU image (decoded
     /// once into `AppState::full_res_cache`). `None` means the decode failed,
     /// in which case the "Failed to load image" placeholder path applies.
-    fn load_image(&mut self, ctx: &egui::Context, full_res: Option<&ImageU8>, img_idx: usize) {
+    fn load_image(&mut self, ctx: &egui::Context, full_res: Option<&ImageU8>, image: ImageRef) {
         let Some(img) = full_res else {
             self.loaded_image = None;
             return;
         };
+        let img_idx = image.index();
         // Expand 3-channel RGB to RGBA for the GPU upload.
         let (w, h) = (img.width() as usize, img.height() as usize);
         let mut rgba = Vec::with_capacity(w * h * 4);
@@ -295,16 +305,17 @@ impl ImageDetail {
             color_image,
             egui::TextureOptions::LINEAR,
         );
-        self.loaded_image = Some((img_idx, texture));
+        self.loaded_image = Some((image, texture));
     }
 
     /// Build tracked-only feature list from the shared SIFT cache (for None overlay mode).
     fn load_tracked_features(
         &mut self,
         recon: &SfmrReconstruction,
-        img_idx: usize,
+        image: ImageRef,
         cached_sift: Option<&CachedSiftFeatures>,
     ) {
+        let img_idx = image.index();
         // Embedded-patches reconstructions keep keypoints inline (no `.sift`
         // cache, empty `image_feature_to_point`); build the tracked-feature list
         // from the per-observation keypoints. Every embedded observation belongs
@@ -318,7 +329,7 @@ impl ImageDetail {
                 img_idx,
             );
             self.feature_overlay = Some(FeatureOverlayState {
-                image_idx: img_idx,
+                image,
                 overlay_mode: OverlayMode::None,
                 tracked_only: true,
                 max_features: None,
@@ -333,7 +344,7 @@ impl ImageDetail {
         let feature_to_point = &recon.image_feature_to_point[img_idx];
         if feature_to_point.is_empty() || cached_sift.is_none() {
             self.feature_overlay = Some(FeatureOverlayState {
-                image_idx: img_idx,
+                image,
                 overlay_mode: OverlayMode::None,
                 tracked_only: true,
                 max_features: None,
@@ -370,7 +381,7 @@ impl ImageDetail {
             img_idx,
         );
         self.feature_overlay = Some(FeatureOverlayState {
-            image_idx: img_idx,
+            image,
             overlay_mode: OverlayMode::None,
             tracked_only: true,
             max_features: None,
@@ -385,10 +396,11 @@ impl ImageDetail {
     fn load_display_features(
         &mut self,
         recon: &SfmrReconstruction,
-        img_idx: usize,
+        image: ImageRef,
         cached_sift: Option<&CachedSiftFeatures>,
         settings: &FeatureDisplaySettings,
     ) {
+        let img_idx = image.index();
         // Embedded-patches: build features from the inline per-observation
         // keypoints, with affine shapes derived by projecting each point's patch
         // frame. Every embedded observation is tracked (no untracked keypoints),
@@ -420,7 +432,7 @@ impl ImageDetail {
                 settings.overlay_mode,
             );
             self.feature_overlay = Some(FeatureOverlayState {
-                image_idx: img_idx,
+                image,
                 overlay_mode: settings.overlay_mode,
                 tracked_only: settings.tracked_only,
                 max_features: settings.max_features,
@@ -434,7 +446,7 @@ impl ImageDetail {
 
         let Some(cached) = cached_sift else {
             self.feature_overlay = Some(FeatureOverlayState {
-                image_idx: img_idx,
+                image,
                 overlay_mode: settings.overlay_mode,
                 tracked_only: settings.tracked_only,
                 max_features: settings.max_features,
@@ -516,7 +528,7 @@ impl ImageDetail {
             settings.overlay_mode,
         );
         self.feature_overlay = Some(FeatureOverlayState {
-            image_idx: img_idx,
+            image,
             overlay_mode: settings.overlay_mode,
             tracked_only: settings.tracked_only,
             max_features: settings.max_features,

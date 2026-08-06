@@ -25,6 +25,7 @@ use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::SfmrReconstruction;
 
 use crate::platform::{self, GestureEvent};
+use crate::scene::{ImageRef, PointRef, ReconId};
 use crate::state::CachedSiftFeatures;
 
 mod header;
@@ -66,8 +67,10 @@ struct TrackObservationData {
 
 /// Point Track Detail panel state.
 pub struct PointTrackDetail {
-    /// The point index we've prepared data for, or None.
-    prepared_point: Option<usize>,
+    /// The point we've prepared data for, or None. A ref, so re-preparing is
+    /// forced when a new reconstruction reuses the same point index — which is
+    /// also what makes the texture caches below safe to rebuild wholesale.
+    prepared_point: Option<PointRef>,
     /// Precomputed observation data for the current point.
     observations: Vec<TrackObservationData>,
     /// Maximum angle (degrees) between any pair of observation rays in the track.
@@ -77,8 +80,8 @@ pub struct PointTrackDetail {
     inverse_depth_z: f32,
     /// Condition number of the triangulation's normal matrix; NaN when undefined.
     condition_number: f32,
-    /// Cached thumbnail textures keyed by image index.
-    thumbnail_textures: HashMap<usize, egui::TextureHandle>,
+    /// Cached thumbnail textures keyed by image.
+    thumbnail_textures: HashMap<ImageRef, egui::TextureHandle>,
     /// The selected point's oriented patch frame (from the stored patch
     /// half-vectors), or None when the reconstruction carries no frame or the
     /// point has no patch. Gates the per-observation "Patch" column.
@@ -86,10 +89,10 @@ pub struct PointTrackDetail {
     /// Stored patch bitmap texture for the selected point (header tile), if any.
     stored_patch_texture: Option<egui::TextureHandle>,
     /// Per-observation patch tiles rendered from full-res images, keyed by
-    /// image index. Rebuilt on point-selection change. Tiles where the patch is
+    /// image. Rebuilt on point-selection change. Tiles where the patch is
     /// not visible in the view warp to all-black and are drawn as such (a future
     /// N/A flag may distinguish "not visible" from a genuinely dark surface).
-    rendered_patch_textures: HashMap<usize, egui::TextureHandle>,
+    rendered_patch_textures: HashMap<ImageRef, egui::TextureHandle>,
     /// The content_xxh128 hash prefix (first 8 hex chars) for Point IDs.
     hash_prefix: String,
     /// Tracked vertical scroll offset for DM gesture scrolling.
@@ -97,6 +100,10 @@ pub struct PointTrackDetail {
 }
 
 /// Response from the Point Track Detail panel.
+///
+/// Image indices are local to the reconstruction the panel was shown with;
+/// `dock.rs` pairs them back into [`ImageRef`]s. A track never spans
+/// reconstructions, so every row belongs to the selected point's own recon.
 pub struct PointTrackDetailResponse {
     /// If Some, the user clicked a row — select this image.
     pub select_image: Option<usize>,
@@ -139,10 +146,11 @@ impl PointTrackDetail {
         &mut self,
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
+        recon_id: ReconId,
         selected_point: Option<usize>,
         hovered_image: Option<usize>,
-        sift_cache: &HashMap<usize, CachedSiftFeatures>,
-        full_res_cache: &HashMap<usize, Option<ImageU8>>,
+        sift_cache: &HashMap<ImageRef, CachedSiftFeatures>,
+        full_res_cache: &HashMap<ImageRef, Option<ImageU8>>,
         gesture_events: &[GestureEvent],
         scroll_input: &platform::ScrollInput,
     ) -> PointTrackDetailResponse {
@@ -181,9 +189,12 @@ impl PointTrackDetail {
         }
 
         // Prepare observation data if selected point changed
-        if self.prepared_point != Some(point_idx) {
-            self.prepare_observations(ui.ctx(), recon, point_idx, sift_cache);
-            self.prepared_point = Some(point_idx);
+        let point_ref = PointRef::new(recon_id, point_idx);
+        if self.prepared_point != Some(point_ref) {
+            // Set first: everything below derives the reconstruction its
+            // caches belong to from `prepared_point`.
+            self.prepared_point = Some(point_ref);
+            self.prepare_observations(ui.ctx(), recon, point_ref, sift_cache);
             self.scroll_offset_y = None;
             // Update hash prefix from reconstruction
             let hash = &recon.content_hash.content_xxh128;
@@ -208,6 +219,7 @@ impl PointTrackDetail {
         self.show_observation_table(
             ui,
             recon,
+            recon_id,
             hovered_image,
             full_res_cache,
             gesture_events,

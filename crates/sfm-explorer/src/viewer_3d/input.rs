@@ -14,6 +14,7 @@ use super::{
     Viewer3D, ViewportCamera, DRAG_ZOOM_SPEED, MOUSE_WHEEL_ZOOM_SPEED, TRACKPAD_ZOOM_SPEED,
 };
 use crate::platform::GestureEvent;
+use crate::scene::{ImageRef, ReconId};
 
 impl Viewer3D {
     /// Handles mouse drag interactions (orbit, pan, zoom, nodal pan).
@@ -387,14 +388,15 @@ impl Viewer3D {
         ui: &egui::Ui,
         rect: Rect,
         reconstruction: &SfmrReconstruction,
-        selected_image: &mut Option<usize>,
+        recon_id: ReconId,
+        selected_image: &mut Option<ImageRef>,
     ) {
         ui.input(|i| {
             let current_time = i.time;
             if i.key_pressed(egui::Key::Z) {
-                if let Some(img_idx) = *selected_image {
+                if let Some(image) = selected_image.filter(|s| s.recon == recon_id) {
                     // Z with frustum selected = view through camera
-                    self.enter_camera_view(img_idx, reconstruction, current_time);
+                    self.enter_camera_view(image, reconstruction, current_time);
                 } else {
                     // Z with no selection = zoom to fit
                     if !reconstruction.points.is_empty() {
@@ -421,20 +423,26 @@ impl Viewer3D {
             // ,/. navigate to previous/next image. In camera view mode this
             // also switches which camera we're viewing through; otherwise the
             // viewport stays put and only the selection changes.
+            //
+            // Stepping stays inside `recon_id`: an image or camera view
+            // belonging to another node is not a position in this sequence, so
+            // it reads as "nothing selected" and stepping starts from the top.
             if !reconstruction.images.is_empty() {
                 let n = reconstruction.images.len();
                 let in_camera_view = self.camera_view.is_some();
                 let cur = self
                     .camera_view
                     .as_ref()
-                    .map(|cv| cv.image_index)
-                    .or(*selected_image);
+                    .map(|cv| cv.image)
+                    .or(*selected_image)
+                    .and_then(|image| image.index_in(recon_id));
                 if i.key_pressed(egui::Key::Comma) {
                     let prev = match cur {
                         None => 0,
                         Some(0) => n - 1,
                         Some(c) => c - 1,
                     };
+                    let prev = ImageRef::new(recon_id, prev);
                     if in_camera_view {
                         self.switch_camera_view(prev, reconstruction);
                     }
@@ -446,6 +454,7 @@ impl Viewer3D {
                         Some(c) if c + 1 >= n => 0,
                         Some(c) => c + 1,
                     };
+                    let next = ImageRef::new(recon_id, next);
                     if in_camera_view {
                         self.switch_camera_view(next, reconstruction);
                     }

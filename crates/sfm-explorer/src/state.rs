@@ -3,6 +3,7 @@
 
 //! Shared application state.
 
+use crate::scene::{node_by_id, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
@@ -103,26 +104,31 @@ impl Default for FeatureDisplaySettings {
 
 /// Global application state shared across all views.
 pub struct AppState {
-    /// The currently loaded reconstruction.
-    pub reconstruction: Option<SfmrReconstruction>,
+    /// The loaded reconstructions, in load order.
+    ///
+    /// Phase-1 invariant: **at most one** node. `File > Open` and the demo
+    /// dialog both replace the whole vector ([`AppState::set_single_node`]);
+    /// appending arrives with the Scene Graph panel in phase 3.
+    pub scene: Vec<SceneNode>,
 
-    /// File name of the loaded `.sfmr`, shown in the window title. `None`
-    /// before any load, and for demo data, which came from no file.
-    pub loaded_file_name: Option<String>,
+    /// The reconstruction that file- and sequence-shaped UI follows (Image
+    /// Browser strip, animation, `,`/`.` stepping). `Some` whenever `scene` is
+    /// non-empty.
+    pub selected_recon: Option<ReconId>,
 
-    /// Currently selected image index.
-    pub selected_image: Option<usize>,
+    /// Currently selected image.
+    pub selected_image: Option<ImageRef>,
 
-    /// Currently selected 3D point index.
-    pub selected_point: Option<usize>,
+    /// Currently selected 3D point.
+    pub selected_point: Option<PointRef>,
 
-    /// Transient hover state: image index under cursor (from GPU pick or browser).
+    /// Transient hover state: image under cursor (from GPU pick or browser).
     /// Updated every frame; cleared when pointer leaves the source panel.
-    pub hovered_image: Option<usize>,
+    pub hovered_image: Option<ImageRef>,
 
-    /// Transient hover state: 3D point index under cursor (from GPU pick or detail).
+    /// Transient hover state: 3D point under cursor (from GPU pick or detail).
     /// Updated every frame; cleared when pointer leaves the source panel.
-    pub hovered_point: Option<usize>,
+    pub hovered_point: Option<PointRef>,
 
     /// Feature overlay display settings (shared across images).
     pub feature_display: FeatureDisplaySettings,
@@ -156,10 +162,6 @@ pub struct AppState {
 
     /// Status message shown in the UI (e.g. loading errors).
     pub status_message: Option<String>,
-
-    /// Whether point cloud data needs to be uploaded to the GPU.
-    /// Set to true when a reconstruction is loaded; cleared after upload.
-    pub points_need_upload: bool,
 
     /// Log2 multiplier on the auto-computed point size.
     /// 0.0 = use auto size, positive = larger, negative = smaller.
@@ -200,18 +202,17 @@ pub struct AppState {
     /// Frustum stub depth as a fraction of `length_scale`.
     pub frustum_size_multiplier: f32,
 
-    /// Cached SIFT feature positions and affine shapes per image index.
+    /// Cached SIFT feature positions and affine shapes per image.
     /// Shared by ImageDetail (for drawing features) and track ray upload
     /// (for computing true observation ray directions).
-    /// Cleared when the reconstruction changes.
-    pub sift_cache: HashMap<usize, CachedSiftFeatures>,
+    /// Cleared when the scene changes.
+    pub sift_cache: HashMap<ImageRef, CachedSiftFeatures>,
 
-    /// Full-resolution source images decoded to CPU pixels (RGB `ImageU8`),
-    /// keyed by image index. `None` = decode failed (don't retry). Shared by
-    /// ImageDetail (builds its GPU texture from this) and PointTrackDetail
-    /// (CPU-samples it to render per-observation patch tiles). Cleared when the
-    /// reconstruction changes.
-    pub full_res_cache: HashMap<usize, Option<ImageU8>>,
+    /// Full-resolution source images decoded to CPU pixels (RGB `ImageU8`).
+    /// `None` = decode failed (don't retry). Shared by ImageDetail (builds its
+    /// GPU texture from this) and PointTrackDetail (CPU-samples it to render
+    /// per-observation patch tiles). Cleared when the scene changes.
+    pub full_res_cache: HashMap<ImageRef, Option<ImageU8>>,
 
     /// Whether the "Load Demo Data" dialog is currently open.
     pub show_demo_dialog: bool,
@@ -233,8 +234,8 @@ pub struct CachedSiftFeatures {
 impl AppState {
     pub fn new() -> Self {
         Self {
-            reconstruction: None,
-            loaded_file_name: None,
+            scene: Vec::new(),
+            selected_recon: None,
             selected_image: None,
             selected_point: None,
             hovered_image: None,
@@ -248,7 +249,6 @@ impl AppState {
             patch_size_log2: 0.0,
             patch_alpha_cutoff: 0.0,
             status_message: None,
-            points_need_upload: false,
             point_size_log2: 0.0,
             show_points_at_infinity: true,
             infinity_point_px: 3.0,
@@ -266,6 +266,26 @@ impl AppState {
         }
     }
 
+    /// Install `node` as the whole scene, replacing whatever was loaded.
+    ///
+    /// The single node-creation path: file loads and demo data both come
+    /// through here, so neither can forget the cache and selection resets that
+    /// a new reconstruction requires. (The demo path used to skip them, which
+    /// left the SIFT and full-res caches keyed to the *previous* file.)
+    ///
+    /// Phase 3 replaces this with append-on-open plus per-node close.
+    pub fn set_single_node(&mut self, node: SceneNode) {
+        self.status_message = None;
+        self.selected_recon = Some(node.id);
+        self.scene = vec![node];
+        self.selected_image = None;
+        self.selected_point = None;
+        self.hovered_image = None;
+        self.hovered_point = None;
+        self.sift_cache.clear();
+        self.full_res_cache.clear();
+    }
+
     /// Load a reconstruction from an .sfmr file.
     pub fn load_file(&mut self, path: &std::path::Path) {
         match SfmrReconstruction::load(path) {
@@ -276,19 +296,7 @@ impl AppState {
                     recon.image_count(),
                     path.display()
                 );
-                self.status_message = None;
-                self.reconstruction = Some(recon);
-                self.loaded_file_name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .or_else(|| Some(path.display().to_string()));
-                self.selected_image = None;
-                self.selected_point = None;
-                self.hovered_image = None;
-                self.hovered_point = None;
-                self.points_need_upload = true;
-                self.sift_cache.clear();
-                self.full_res_cache.clear();
+                self.set_single_node(SceneNode::from_path(path, recon));
             }
             Err(e) => {
                 let msg = format!("Failed to load {}: {}", path.display(), e);
@@ -298,14 +306,53 @@ impl AppState {
         }
     }
 
+    /// Replace the scene with generated demo data.
+    pub fn load_demo(&mut self, num_points: usize) {
+        self.set_single_node(SceneNode::demo(SfmrReconstruction::demo(num_points)));
+    }
+
+    /// The node the panels follow, if any.
+    ///
+    /// Borrows all of `self`; where a caller also needs `&mut` access to a
+    /// cache, go through [`crate::scene::node_by_id`] with `self.selected_recon`
+    /// so only the `scene` field is borrowed.
+    pub fn selected_node(&self) -> Option<&SceneNode> {
+        node_by_id(&self.scene, self.selected_recon?)
+    }
+
+    /// Look up a loaded node by id.
+    pub fn node(&self, id: ReconId) -> Option<&SceneNode> {
+        node_by_id(&self.scene, id)
+    }
+
+    /// The selected image's local index, when it belongs to `recon`.
+    pub fn selected_image_in(&self, recon: ReconId) -> Option<usize> {
+        self.selected_image?.index_in(recon)
+    }
+
+    /// The selected point's local index, when it belongs to `recon`.
+    pub fn selected_point_in(&self, recon: ReconId) -> Option<usize> {
+        self.selected_point?.index_in(recon)
+    }
+
+    /// The hovered image's local index, when it belongs to `recon`.
+    pub fn hovered_image_in(&self, recon: ReconId) -> Option<usize> {
+        self.hovered_image?.index_in(recon)
+    }
+
+    /// The hovered point's local index, when it belongs to `recon`.
+    pub fn hovered_point_in(&self, recon: ReconId) -> Option<usize> {
+        self.hovered_point?.index_in(recon)
+    }
+
     /// The window title for the current state: the base name alone until a file
     /// is loaded, then `"SfM Explorer - <file>"`.
     ///
     /// Demo data leaves this at the base title — it came from no file, so
     /// naming one would be a lie.
     pub fn window_title(&self) -> String {
-        match self.loaded_file_name {
-            Some(ref name) => format!("{WINDOW_TITLE_BASE} - {name}"),
+        match self.scene.first().and_then(|node| node.file_name()) {
+            Some(name) => format!("{WINDOW_TITLE_BASE} - {name}"),
             None => WINDOW_TITLE_BASE.to_string(),
         }
     }
@@ -326,17 +373,19 @@ impl Default for AppState {
 /// Reads up to `read_count` features from the `.sift` file. If a cached entry
 /// exists with at least `read_count` features, returns it directly.
 pub fn ensure_sift_cached<'a>(
-    cache: &'a mut HashMap<usize, CachedSiftFeatures>,
+    cache: &'a mut HashMap<ImageRef, CachedSiftFeatures>,
     recon: &SfmrReconstruction,
-    image_idx: usize,
+    image: ImageRef,
     read_count: usize,
 ) -> Option<&'a CachedSiftFeatures> {
+    let image_idx = image.index();
+
     // Check if we already have enough features cached
     if cache
-        .get(&image_idx)
+        .get(&image)
         .is_some_and(|c| c.read_count >= read_count)
     {
-        return cache.get(&image_idx);
+        return cache.get(&image);
     }
 
     // Load from disk
@@ -373,14 +422,14 @@ pub fn ensure_sift_cached<'a>(
         ]);
     }
     cache.insert(
-        image_idx,
+        image,
         CachedSiftFeatures {
             positions_xy,
             affine_shapes,
             read_count: n,
         },
     );
-    cache.get(&image_idx)
+    cache.get(&image)
 }
 
 /// Get the cached full-resolution image for an image index, decoding from disk
@@ -393,14 +442,14 @@ pub fn ensure_sift_cached<'a>(
 /// Images are decoded to 3-channel RGB [`ImageU8`]. A failed decode is memoized
 /// as `None` so missing files aren't re-opened every frame.
 pub fn ensure_full_res_cached<'a>(
-    cache: &'a mut HashMap<usize, Option<ImageU8>>,
+    cache: &'a mut HashMap<ImageRef, Option<ImageU8>>,
     recon: &SfmrReconstruction,
-    image_idx: usize,
+    image: ImageRef,
 ) -> Option<&'a ImageU8> {
     cache
-        .entry(image_idx)
+        .entry(image)
         .or_insert_with(|| {
-            recon.images.get(image_idx).and_then(|im| {
+            recon.images.get(image.index()).and_then(|im| {
                 let path = recon.workspace_dir.join(&im.name);
                 match image::open(&path) {
                     Ok(dyn_image) => {

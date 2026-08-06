@@ -26,15 +26,25 @@ use sfmtool_core::SfmrReconstruction;
 use super::table::format_feature_size;
 use super::{PointTrackDetail, PointTrackDetailResponse};
 use crate::platform::ScrollInput;
+use crate::scene::{ImageRef, PointRef, ReconId};
 use crate::state::CachedSiftFeatures;
 
 // ── Fixtures ────────────────────────────────────────────────────────────
+
+/// The reconstruction identity every fixture here shares. The panel keys its
+/// caches by it, so the fixtures and the assertions have to agree on one.
+const RECON: ReconId = ReconId::from_raw(1);
+
+/// The reconstruction's `n`-th image.
+fn image(n: usize) -> ImageRef {
+    ImageRef::new(RECON, n)
+}
 
 /// A SIFT cache covering `images` images with `features` entries each. The
 /// affine shape has column norms (half-axes) 2 and 4, so the panel's reported
 /// full extents must be exactly `[8.0, 4.0]` — values no other code path
 /// produces by accident.
-fn sift_cache(images: usize, features: usize) -> HashMap<usize, CachedSiftFeatures> {
+fn sift_cache(images: usize, features: usize) -> HashMap<ImageRef, CachedSiftFeatures> {
     sift_cache_with_shape(images, features, [[2.0, 0.0], [0.0, 4.0]])
 }
 
@@ -44,11 +54,11 @@ fn sift_cache_with_shape(
     images: usize,
     features: usize,
     affine_shape: [[f32; 2]; 2],
-) -> HashMap<usize, CachedSiftFeatures> {
+) -> HashMap<ImageRef, CachedSiftFeatures> {
     (0..images)
         .map(|i| {
             (
-                i,
+                image(i),
                 CachedSiftFeatures {
                     positions_xy: vec![[500.0, 300.0]; features],
                     affine_shapes: vec![affine_shape; features],
@@ -130,14 +140,14 @@ fn with_embedded_patches(mut recon: SfmrReconstruction) -> SfmrReconstruction {
 fn full_res_images(
     recon: &SfmrReconstruction,
     indices: &[usize],
-) -> HashMap<usize, Option<ImageU8>> {
+) -> HashMap<ImageRef, Option<ImageU8>> {
     let camera = &recon.cameras[0];
     let (w, h) = (camera.width, camera.height);
     indices
         .iter()
         .map(|&i| {
             (
-                i,
+                image(i),
                 Some(ImageU8::new(w, h, 3, vec![180u8; (w * h * 3) as usize])),
             )
         })
@@ -154,8 +164,8 @@ fn run_frame(
     ctx: &egui::Context,
     recon: &SfmrReconstruction,
     selected_point: Option<usize>,
-    sift_cache: &HashMap<usize, CachedSiftFeatures>,
-    full_res_cache: &HashMap<usize, Option<ImageU8>>,
+    sift_cache: &HashMap<ImageRef, CachedSiftFeatures>,
+    full_res_cache: &HashMap<ImageRef, Option<ImageU8>>,
     events: Vec<egui::Event>,
 ) -> PointTrackDetailResponse {
     let input = egui::RawInput {
@@ -168,6 +178,7 @@ fn run_frame(
         response = Some(panel.show(
             ui,
             recon,
+            RECON,
             selected_point,
             None,
             sift_cache,
@@ -185,7 +196,7 @@ fn show_once(
     ctx: &egui::Context,
     recon: &SfmrReconstruction,
     selected_point: Option<usize>,
-    sift_cache: &HashMap<usize, CachedSiftFeatures>,
+    sift_cache: &HashMap<ImageRef, CachedSiftFeatures>,
 ) -> PointTrackDetailResponse {
     run_frame(
         panel,
@@ -258,7 +269,7 @@ fn selecting_a_point_prepares_one_row_per_observation() {
     assert_eq!(expected.len(), 2);
     let prepared: Vec<usize> = panel.observations.iter().map(|o| o.image_index).collect();
     assert_eq!(prepared, expected);
-    assert_eq!(panel.prepared_point, Some(3));
+    assert_eq!(panel.prepared_point, Some(PointRef::new(RECON, 3)));
 }
 
 #[test]
@@ -305,7 +316,7 @@ fn changing_the_selection_reprepares_the_table() {
     // Point 0 is seen by cameras 0/1, point 4 by cameras 4/5.
     assert_eq!(first, vec![0, 1]);
     assert_eq!(second, vec![4, 5]);
-    assert_eq!(panel.prepared_point, Some(4));
+    assert_eq!(panel.prepared_point, Some(PointRef::new(RECON, 4)));
 }
 
 // ── Per-observation data ────────────────────────────────────────────────
@@ -521,8 +532,8 @@ fn each_observed_image_gets_a_cached_thumbnail() {
     // One texture per distinct observed image proves every row drew its
     // thumbnail, not just the first.
     assert_eq!(panel.thumbnail_textures.len(), 2);
-    assert!(panel.thumbnail_textures.contains_key(&6));
-    assert!(panel.thumbnail_textures.contains_key(&7));
+    assert!(panel.thumbnail_textures.contains_key(&image(6)));
+    assert!(panel.thumbnail_textures.contains_key(&image(7)));
 }
 
 #[test]
@@ -590,8 +601,8 @@ fn patch_tiles_render_once_per_observed_image() {
     // Point 0 is observed by cameras 0 and 1; both have a source image, so
     // both rows warp one.
     assert_eq!(panel.rendered_patch_textures.len(), 2);
-    assert!(panel.rendered_patch_textures.contains_key(&0));
-    assert!(panel.rendered_patch_textures.contains_key(&1));
+    assert!(panel.rendered_patch_textures.contains_key(&image(0)));
+    assert!(panel.rendered_patch_textures.contains_key(&image(1)));
 }
 
 #[test]
@@ -615,7 +626,7 @@ fn a_missing_full_res_image_leaves_its_patch_tile_uncached() {
     // Nothing is cached for the missing source, so the tile can render later
     // once the dock finishes pre-caching rather than being memoized as absent.
     assert_eq!(panel.rendered_patch_textures.len(), 1);
-    assert!(panel.rendered_patch_textures.contains_key(&0));
+    assert!(panel.rendered_patch_textures.contains_key(&image(0)));
 }
 
 #[test]

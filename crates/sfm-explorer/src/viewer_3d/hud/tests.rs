@@ -21,6 +21,7 @@ use sfmtool_core::SfmrReconstruction;
 
 use super::{section_id, HUD_COLLAPSE_GLYPH, HUD_EXPAND_GLYPH};
 use crate::platform::ScrollInput;
+use crate::scene::{ImageRef, ReconId, SceneNode};
 use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
 
@@ -32,8 +33,13 @@ const VIEWPORT: egui::Vec2 = egui::vec2(1200.0, 800.0);
 /// Patches section must stay away.
 fn demo_state() -> AppState {
     let mut state = AppState::new();
-    state.reconstruction = Some(SfmrReconstruction::demo(64));
+    state.set_single_node(SceneNode::demo(SfmrReconstruction::demo(64)));
     state
+}
+
+/// The id of the one node `demo_state` loads.
+fn recon_id(state: &AppState) -> ReconId {
+    state.selected_recon.expect("a selected reconstruction")
 }
 
 /// The same, plus the patch half-vectors and bitmaps the surfel pass needs, so
@@ -41,7 +47,7 @@ fn demo_state() -> AppState {
 /// renders them, only `has_patch_data` looks.
 fn patch_state() -> AppState {
     let mut state = demo_state();
-    let recon = state.reconstruction.as_mut().unwrap();
+    let recon = &mut state.scene[0].recon;
     let n = recon.points.len();
     recon.patch_u_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
     recon.patch_v_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
@@ -144,12 +150,13 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
         let scroll_input = ScrollInput::from_ctx(ui.ctx(), false);
         egui::CentralPanel::default().show_inside(ui, |ui| {
             viewer.show_hud(ui, state, Some((1, 2, 3, 4)), true);
-            // Lift the reconstruction out so `show` can borrow it while the
-            // rest of `AppState` stays reachable. It goes straight back.
-            let recon = state.reconstruction.take().expect("a reconstruction");
+            // The node borrows only `state.scene`, so the rest of `AppState`
+            // stays reachable alongside it — the same split `dock.rs` relies on.
+            let node = &state.scene[0];
             viewer.show(
                 ui,
-                &recon,
+                &node.recon,
+                node.id,
                 &mut state.selected_image,
                 state.show_grid,
                 state.length_scale,
@@ -161,7 +168,6 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
                 None,
                 0,
             );
-            state.reconstruction = Some(recon);
         });
     });
 }
@@ -712,7 +718,8 @@ fn fly_keys_are_disarmed_while_a_widget_holds_the_keyboard() {
 fn viewport_shortcuts_are_suppressed_while_a_widget_holds_the_keyboard() {
     let mut state = demo_state();
     let (mut viewer, ctx) = settled(&mut state);
-    state.selected_image = Some(0);
+    let id = recon_id(&state);
+    state.selected_image = Some(ImageRef::new(id, 0));
 
     // Baseline: `.` steps the selected image.
     run_frame(
@@ -723,7 +730,7 @@ fn viewport_shortcuts_are_suppressed_while_a_widget_holds_the_keyboard() {
     );
     assert_eq!(
         state.selected_image,
-        Some(1),
+        Some(ImageRef::new(id, 1)),
         "'.' should step the image selection"
     );
 
@@ -736,7 +743,7 @@ fn viewport_shortcuts_are_suppressed_while_a_widget_holds_the_keyboard() {
     );
     assert_eq!(
         state.selected_image,
-        Some(1),
+        Some(ImageRef::new(id, 1)),
         "a typed '.' stepped the image selection"
     );
 }

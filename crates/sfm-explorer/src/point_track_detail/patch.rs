@@ -21,6 +21,7 @@ use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::SfmrReconstruction;
 
 use super::PointTrackDetail;
+use crate::scene::ImageRef;
 
 /// Render resolution of per-observation patch tiles (rendered crisp at this
 /// resolution, displayed scaled to [`super::PATCH_TILE`]).
@@ -37,18 +38,19 @@ impl PointTrackDetail {
         &mut self,
         ctx: &egui::Context,
         recon: &SfmrReconstruction,
-        img_idx: usize,
-        full_res_cache: &HashMap<usize, Option<ImageU8>>,
+        image_ref: ImageRef,
+        full_res_cache: &HashMap<ImageRef, Option<ImageU8>>,
     ) {
-        if self.rendered_patch_textures.contains_key(&img_idx) {
+        if self.rendered_patch_textures.contains_key(&image_ref) {
             return;
         }
         let Some(frame) = self.patch_frame.as_ref() else {
             return;
         };
-        let Some(src) = full_res_cache.get(&img_idx).and_then(|o| o.as_ref()) else {
+        let Some(src) = full_res_cache.get(&image_ref).and_then(|o| o.as_ref()) else {
             return;
         };
+        let img_idx = image_ref.index();
         let image = &recon.images[img_idx];
         let camera = &recon.cameras[image.camera_index as usize];
         let q = image.quaternion_wxyz.quaternion();
@@ -69,13 +71,13 @@ impl PointTrackDetail {
             rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
         }
         let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
-        let point_idx = self.prepared_point.unwrap_or(0);
+        let point_idx = self.prepared_point.map(|p| p.index()).unwrap_or(0);
         let texture = ctx.load_texture(
             format!("track_patch_{point_idx}_{img_idx}"),
             color_image,
             egui::TextureOptions::NEAREST,
         );
-        self.rendered_patch_textures.insert(img_idx, texture);
+        self.rendered_patch_textures.insert(image_ref, texture);
     }
 }
 

@@ -17,11 +17,11 @@ use std::time::Instant;
 
 use egui_dock::DockArea;
 use egui_winit::State as EguiWinitState;
-use sfmtool_core::SfmrReconstruction;
 use winit::window::Window;
 
 use crate::dock::{self, TabContext};
 use crate::platform;
+use crate::scene::{ImageRef, PointRef};
 use crate::scene_renderer;
 use crate::App;
 
@@ -101,6 +101,19 @@ impl App {
         if title != self.applied_title {
             window.set_title(&title);
             self.applied_title = title;
+        }
+
+        // Camera view is keyed by `ImageRef`, so replacing the loaded file
+        // leaves it pointing at a reconstruction that is no longer in the
+        // scene. Drop it rather than let it address nothing (the spec's
+        // "clears any camera-view state pointing into it" on node removal).
+        if self
+            .viewer_3d
+            .camera_view
+            .as_ref()
+            .is_some_and(|cv| self.state.node(cv.image.recon).is_none())
+        {
+            self.viewer_3d.camera_view = None;
         }
 
         // Ensure scene texture and pipeline match the 3D panel size
@@ -231,10 +244,20 @@ impl App {
     /// point cloud, frustum geometry + colors, track rays, camera-view
     /// background image, adaptive clip planes, and per-frame camera uniforms.
     fn prepare_uploads(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        // The node everything below renders and uploads. Located by index, not
+        // held as a borrow, so its `needs_upload` flag can be cleared at the end
+        // of the upload block. Phase 2 turns this into a loop over the scene.
+        let node_idx = self
+            .state
+            .selected_recon
+            .and_then(|id| self.state.scene.iter().position(|n| n.id == id));
+
         // Upload point cloud data to GPU if the reconstruction changed
-        let hidden_image = self.viewer_3d.camera_view.as_ref().map(|cv| cv.image_index);
-        if self.state.points_need_upload {
-            if let Some(ref recon) = self.state.reconstruction {
+        let hidden_image = self.viewer_3d.camera_view.as_ref().map(|cv| cv.image);
+        if let Some(ni) = node_idx {
+            if self.state.scene[ni].needs_upload {
+                let node = &self.state.scene[ni];
+                let (id, recon) = (node.id, &node.recon);
                 self.scene_renderer.upload_points(device, recon);
                 let point_scale = scene_renderer::DEFAULT_LENGTH_SCALE_MULTIPLIER
                     * self.scene_renderer.auto_point_size();
@@ -250,12 +273,12 @@ impl App {
                     self.state.length_scale,
                     self.state.frustum_size_multiplier,
                 );
-                let track_images = dock::compute_track_images(&self.state, recon);
+                let track_images = dock::compute_track_images(&self.state, node);
                 self.scene_renderer.update_frustum_colors(
                     queue,
                     recon.images.len(),
-                    self.state.selected_image,
-                    hidden_image,
+                    self.state.selected_image_in(id),
+                    hidden_image.and_then(|h| h.index_in(id)),
                     &track_images,
                 );
                 self.prev_frustum_length_scale = self.state.length_scale;
@@ -263,8 +286,8 @@ impl App {
                 self.prev_selected_image = self.state.selected_image;
                 self.prev_selected_point = self.state.selected_point;
                 self.prev_hidden_image = hidden_image;
+                self.state.scene[ni].needs_upload = false;
             }
-            self.state.points_need_upload = false;
         }
 
         // Re-upload frustum geometry only if length_scale or frustum_size_multiplier changed
@@ -275,19 +298,21 @@ impl App {
             || point_selection_changed
             || hidden_image != self.prev_hidden_image;
         if geometry_changed {
-            if let Some(ref recon) = self.state.reconstruction {
+            if let Some(ni) = node_idx {
+                let node = &self.state.scene[ni];
+                let (id, recon) = (node.id, &node.recon);
                 self.scene_renderer.upload_frustums(
                     device,
                     recon,
                     self.state.length_scale,
                     self.state.frustum_size_multiplier,
                 );
-                let track_images = dock::compute_track_images(&self.state, recon);
+                let track_images = dock::compute_track_images(&self.state, node);
                 self.scene_renderer.update_frustum_colors(
                     queue,
                     recon.images.len(),
-                    self.state.selected_image,
-                    hidden_image,
+                    self.state.selected_image_in(id),
+                    hidden_image.and_then(|h| h.index_in(id)),
                     &track_images,
                 );
                 self.prev_frustum_length_scale = self.state.length_scale;
@@ -298,13 +323,15 @@ impl App {
             }
         } else if colors_changed {
             // Only update colors — no geometry recomputation needed
-            if let Some(ref recon) = self.state.reconstruction {
-                let track_images = dock::compute_track_images(&self.state, recon);
+            if let Some(ni) = node_idx {
+                let node = &self.state.scene[ni];
+                let (id, recon) = (node.id, &node.recon);
+                let track_images = dock::compute_track_images(&self.state, node);
                 self.scene_renderer.update_frustum_colors(
                     queue,
                     recon.images.len(),
-                    self.state.selected_image,
-                    hidden_image,
+                    self.state.selected_image_in(id),
+                    hidden_image.and_then(|h| h.index_in(id)),
                     &track_images,
                 );
                 self.prev_selected_image = self.state.selected_image;
@@ -315,8 +342,10 @@ impl App {
 
         // Upload/clear track ray geometry when selected point changes
         if point_selection_changed {
-            if let Some(ref recon) = self.state.reconstruction {
-                if let Some(point_idx) = self.state.selected_point {
+            if let Some(ni) = node_idx {
+                let node = &self.state.scene[ni];
+                let (id, recon) = (node.id, &node.recon);
+                if let Some(point_idx) = self.state.selected_point_in(id) {
                     if point_idx < recon.points.len() {
                         // Pre-populate SIFT cache for all images in the track
                         // (sift_files only; embedded_patches has no `.sift`
@@ -329,7 +358,7 @@ impl App {
                                 crate::state::ensure_sift_cached(
                                     &mut self.state.sift_cache,
                                     recon,
-                                    img_idx,
+                                    ImageRef::new(id, img_idx),
                                     read_count,
                                 );
                             }
@@ -337,7 +366,7 @@ impl App {
                         self.scene_renderer.upload_track_rays(
                             device,
                             recon,
-                            point_idx,
+                            PointRef::new(id, point_idx),
                             &self.state.sift_cache,
                         );
                     } else {
@@ -349,19 +378,24 @@ impl App {
             }
         }
 
-        // Upload/clear background image for camera view mode
-        if let (Some(ref cv), Some(ref recon)) =
-            (&self.viewer_3d.camera_view, &self.state.reconstruction)
-        {
-            self.scene_renderer
-                .upload_bg_image(device, queue, recon, cv.image_index);
-        } else {
-            self.scene_renderer.clear_bg_image();
+        // Upload/clear background image for camera view mode. The camera view
+        // has to belong to the node being drawn — a view into some other
+        // reconstruction has no background here.
+        match (hidden_image, node_idx) {
+            (Some(image), Some(ni)) if self.state.scene[ni].id == image.recon => {
+                self.scene_renderer.upload_bg_image(
+                    device,
+                    queue,
+                    &self.state.scene[ni].recon,
+                    image,
+                );
+            }
+            _ => self.scene_renderer.clear_bg_image(),
         }
 
         // Update adaptive clip planes based on scene bounds and camera distance.
         // Uses time-based smoothing so transitions are frame-rate independent.
-        if self.state.reconstruction.is_some() {
+        if node_idx.is_some() {
             let dt = self.egui_ctx.input(|i| i.stable_dt as f64);
             self.viewer_3d.camera.update_clip_planes(
                 self.scene_renderer.scene_center(),
@@ -370,10 +404,18 @@ impl App {
             );
         }
 
-        // Update camera uniforms for the current frame
+        // Update camera uniforms for the current frame.
+        //
+        // The shader compares bare u32 indices, so the refs are unwrapped to
+        // indices local to the rendered node here — the GPU boundary is the one
+        // place that still has no reconstruction identity. (Phase 2 replaces
+        // these with global pick indices.)
         let target_radius = self.state.target_size_multiplier
             * self.viewer_3d.target_indicator_radius_scale
             * self.state.length_scale;
+        let rendered = self.state.selected_recon;
+        let local_point = |p: Option<PointRef>| p.and_then(|p| p.index_in(rendered?));
+        let local_image = |i: Option<ImageRef>| i.and_then(|i| i.index_in(rendered?));
         self.scene_renderer.update_uniforms(
             queue,
             &self.viewer_3d.camera,
@@ -385,14 +427,18 @@ impl App {
             self.viewer_3d.supernova_active,
             target_radius,
             self.viewer_3d.supernova_time,
-            self.state.selected_point,
+            local_point(self.state.selected_point),
             // Suppress hover highlight when equal to selection (spec requirement).
-            self.state
-                .hovered_point
-                .filter(|h| self.state.selected_point != Some(*h)),
-            self.state
-                .hovered_image
-                .filter(|h| self.state.selected_image != Some(*h)),
+            local_point(
+                self.state
+                    .hovered_point
+                    .filter(|h| self.state.selected_point != Some(*h)),
+            ),
+            local_image(
+                self.state
+                    .hovered_image
+                    .filter(|h| self.state.selected_image != Some(*h)),
+            ),
             self.state.patch_size_log2,
             self.state.patch_opacity,
             self.state.patch_alpha_cutoff,
@@ -572,11 +618,9 @@ impl App {
                     app_state.show_demo_dialog = false;
                 }
                 if load_clicked {
-                    app_state.reconstruction =
-                        Some(SfmrReconstruction::demo(app_state.demo_num_points));
-                    app_state.loaded_file_name = None;
-                    app_state.status_message = None;
-                    app_state.points_need_upload = true;
+                    // Same node-creation path as File > Open, so the demo load
+                    // resets the caches and selection too.
+                    app_state.load_demo(app_state.demo_num_points);
                     app_state.show_demo_dialog = false;
                 }
             }
@@ -623,25 +667,30 @@ impl App {
             return;
         };
 
+        // The pick buffer encodes `8-bit tag | 24-bit index` with no
+        // reconstruction field, so a pick index is local to whatever was
+        // rendered — in phase 1, the one loaded node. Phase 2 replaces this with
+        // a base-offset decode that recovers the `ReconId` from the id itself.
+        let rendered = self.state.selected_recon;
+
         // Update transient hover state from GPU pick buffer.
         // Only when the 3D viewer has pointer focus (hover_pixel is set for
         // the current frame). This avoids stale one-frame-delayed readback
         // results from overwriting hover state after the pointer left.
         if self.viewer_3d.hover_pixel.is_some() {
-            if let Some((tag, index)) = readback.pick {
-                if tag == scene_renderer::PICK_TAG_FRUSTUM {
-                    self.state.hovered_image = Some(index as usize);
+            match (readback.pick, rendered) {
+                (Some((tag, index)), Some(id)) if tag == scene_renderer::PICK_TAG_FRUSTUM => {
+                    self.state.hovered_image = Some(ImageRef::new(id, index as usize));
                     self.state.hovered_point = None;
-                } else if tag == scene_renderer::PICK_TAG_POINT {
-                    self.state.hovered_point = Some(index as usize);
+                }
+                (Some((tag, index)), Some(id)) if tag == scene_renderer::PICK_TAG_POINT => {
+                    self.state.hovered_point = Some(PointRef::new(id, index as usize));
                     self.state.hovered_image = None;
-                } else {
+                }
+                _ => {
                     self.state.hovered_image = None;
                     self.state.hovered_point = None;
                 }
-            } else {
-                self.state.hovered_image = None;
-                self.state.hovered_point = None;
             }
         }
 
@@ -657,32 +706,30 @@ impl App {
             }
 
             // Entity pick: select frustum or point
-            if let Some((tag, index)) = readback.pick {
+            if let (Some((tag, index)), Some(id)) = (readback.pick, rendered) {
                 if tag == scene_renderer::PICK_TAG_FRUSTUM {
-                    let idx = index as usize;
+                    let image = ImageRef::new(id, index as usize);
+                    self.state.selected_image = Some(image);
                     if self.viewer_3d.pending_click_is_double {
                         // Double-click on frustum → enter/switch camera view mode
-                        self.state.selected_image = Some(idx);
-                        if let Some(ref recon) = self.state.reconstruction {
+                        if let Some(node) = crate::scene::node_by_id(&self.state.scene, id) {
                             let current_time = self.egui_ctx.input(|i| i.time);
                             if self.viewer_3d.camera_view.is_some() {
                                 self.viewer_3d.animated_switch_camera_view(
-                                    idx,
-                                    recon,
+                                    image,
+                                    &node.recon,
                                     current_time,
                                 );
                             } else {
-                                self.viewer_3d.enter_camera_view(idx, recon, current_time);
+                                self.viewer_3d
+                                    .enter_camera_view(image, &node.recon, current_time);
                             }
                         }
-                    } else {
-                        self.state.selected_image = Some(idx);
                     }
                 } else if tag == scene_renderer::PICK_TAG_POINT {
-                    let idx = index as usize;
-                    self.state.selected_point = Some(idx);
+                    self.state.selected_point = Some(PointRef::new(id, index as usize));
                 }
-            } else if !self.viewer_3d.pending_click_is_alt {
+            } else if readback.pick.is_none() && !self.viewer_3d.pending_click_is_alt {
                 // Clicked on background (non-Alt) — deselect
                 self.state.selected_image = None;
                 self.state.selected_point = None;

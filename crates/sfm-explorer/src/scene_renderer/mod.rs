@@ -20,6 +20,7 @@ mod sizing;
 mod uniforms;
 mod upload;
 
+use crate::scene::ImageRef;
 use gpu_types::*;
 
 // Re-export public constants so external modules can use `crate::scene_renderer::*`.
@@ -134,8 +135,10 @@ pub struct SceneRenderer {
     bg_image_sampler: Option<wgpu::Sampler>,
     /// Full-resolution background image texture (single image, not array).
     bg_image_texture: Option<wgpu::Texture>,
-    /// Which camera index is currently loaded into `bg_image_texture`.
-    bg_image_loaded_index: Option<usize>,
+    /// Which image is currently loaded into `bg_image_texture`. A ref rather
+    /// than an index: keyed by index alone, a file replacement kept showing the
+    /// old background for the same position in the new reconstruction.
+    bg_image_loaded: Option<ImageRef>,
 
     // ── Point cloud data ──
     instance_buffer: Option<wgpu::Buffer>,
@@ -248,7 +251,7 @@ impl SceneRenderer {
             bg_image_bind_group: None,
             bg_image_sampler: None,
             bg_image_texture: None,
-            bg_image_loaded_index: None,
+            bg_image_loaded: None,
             instance_buffer: None,
             point_count: 0,
             linear_depth_texture: None,

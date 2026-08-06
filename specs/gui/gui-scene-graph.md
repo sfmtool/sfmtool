@@ -562,7 +562,7 @@ the file count when more than one is loaded:
 |-------|--------|
 | **3D Viewer** | Renders all visible nodes (per-recon draws). Camera view mode stores an `ImageRef`; `,` / `.` step within that recon's images, `[` / `]` step across reconstructions with same-named-image carry-over. Hover text gains the recon label. |
 | **Scene Graph** | New (this spec). |
-| **Image Browser** | Bound to the **selected** reconstruction; a small header names it. Thumbnail cache re-keyed by `ImageRef` (fixing the count-only invalidation bug). Animation and the color barcode are per-selected-recon. |
+| **Image Browser** | Bound to the **selected** reconstruction; a small header names it. Thumbnail cache guarded by the owning `ReconId` (fixing the count-only invalidation bug; index keys stay local since the strip only ever shows one reconstruction, so a recon switch drops the old textures instead of accumulating them). Animation and the color barcode are per-selected-recon. |
 | **Image Detail** | Selection-driven — works via `ImageRef` naturally. `loaded_image` and overlay state re-keyed by `ImageRef`. |
 | **Point Track Detail** | Selection-driven via `PointRef`. Its `pt3d_<hash>_<index>` IDs already embed the per-recon content hash, so displayed IDs are already unambiguous across files. Texture maps re-keyed by `ImageRef`. |
 
@@ -583,8 +583,11 @@ Every image/point-keyed cache re-keys by ref:
 Closing a node purges its entries from every cache (a `retain` on
 `ref.recon != id`), releases its `ReconResources`, clears any
 selection/hover/camera-view state pointing into it, reassigns pick bases, and
-recomputes union bounds. Because `ReconId` is never reused, a missed purge can
-go stale but can never alias.
+recomputes union bounds. The camera-view rule holds for *any* way a node
+leaves the scene, not just explicit close — replacing the scene by opening a
+file drops a camera view whose node is gone, rather than letting it point at
+the same raw index in an unrelated reconstruction. Because `ReconId` is never
+reused, a missed purge can go stale but can never alias.
 
 ---
 

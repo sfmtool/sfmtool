@@ -5,6 +5,7 @@
 
 use super::super::gpu_types::EdgeInstance;
 use super::super::SceneRenderer;
+use crate::scene::{ImageRef, PointRef};
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
 
@@ -43,9 +44,10 @@ fn camera_cloud_extent(recon: &SfmrReconstruction) -> f64 {
 /// write-only from the CPU side.
 pub(super) fn track_ray_edges(
     recon: &SfmrReconstruction,
-    point_idx: usize,
-    sift_cache: &std::collections::HashMap<usize, crate::state::CachedSiftFeatures>,
+    point_ref: PointRef,
+    sift_cache: &std::collections::HashMap<ImageRef, crate::state::CachedSiftFeatures>,
 ) -> Vec<EdgeInstance> {
+    let point_idx = point_ref.index();
     let point = &recon.points[point_idx];
     let point_pos = point.position;
     let at_infinity = point.is_at_infinity();
@@ -87,7 +89,8 @@ pub(super) fn track_ray_edges(
             // truncated `.sift` file) rather than drawing a misleading ray.
             let obs_pixel: [f64; 2] = if let Some(fis) = feature_indexes {
                 let fi = fis[obs_start + k] as usize;
-                let cached = sift_cache.get(&(obs.image_index as usize))?;
+                let cached =
+                    sift_cache.get(&ImageRef::new(point_ref.recon, obs.image_index as usize))?;
                 let xy = cached.positions_xy.get(fi)?;
                 [xy[0] as f64, xy[1] as f64]
             } else {
@@ -148,10 +151,10 @@ impl SceneRenderer {
         &mut self,
         device: &wgpu::Device,
         recon: &SfmrReconstruction,
-        point_idx: usize,
-        sift_cache: &std::collections::HashMap<usize, crate::state::CachedSiftFeatures>,
+        point: PointRef,
+        sift_cache: &std::collections::HashMap<ImageRef, crate::state::CachedSiftFeatures>,
     ) {
-        let edges = track_ray_edges(recon, point_idx, sift_cache);
+        let edges = track_ray_edges(recon, point, sift_cache);
 
         if edges.is_empty() {
             self.track_ray_edge_buffer = None;

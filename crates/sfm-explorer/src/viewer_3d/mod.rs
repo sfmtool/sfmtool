@@ -18,6 +18,7 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use sfmtool_core::{Camera, SfmrReconstruction};
 
 use crate::platform::GestureEvent;
+use crate::scene::{ImageRef, ReconId};
 
 /// Drag/gesture zoom speed: maps pixel deltas to zoom amount.
 const DRAG_ZOOM_SPEED: f64 = 0.13125;
@@ -84,8 +85,11 @@ struct SwitchCameraViewState {
 /// Stores the SfM camera's world-from-camera rotation so the background mesh
 /// can be rendered with the correct relative rotation during free-look navigation.
 pub struct CameraViewMode {
-    /// Index of the image being viewed through (stable across selection changes).
-    pub image_index: usize,
+    /// The image being viewed through (stable across selection changes). A ref
+    /// rather than an index: the background image and the hidden-frustum test
+    /// both key off it, and a bare index would follow a file replacement onto
+    /// whatever now sits at that position.
+    pub image: ImageRef,
     /// World-from-camera rotation of the SfM camera being viewed.
     /// Used to compute the relative view rotation for the BG mesh.
     pub r_world_from_cam: UnitQuaternion<f64>,
@@ -202,7 +206,8 @@ impl Viewer3D {
         &mut self,
         ui: &mut egui::Ui,
         reconstruction: &SfmrReconstruction,
-        selected_image: &mut Option<usize>,
+        recon_id: ReconId,
+        selected_image: &mut Option<ImageRef>,
         show_grid: bool,
         length_scale: f32,
         gesture_events: &[GestureEvent],
@@ -303,7 +308,7 @@ impl Viewer3D {
         self.handle_gestures(ui, gesture_events, rect, fly_keys_held);
         self.handle_fly_keys(ui, fly_keys_held);
         if keyboard_free {
-            self.handle_keyboard(ui, rect, reconstruction, selected_image);
+            self.handle_keyboard(ui, rect, reconstruction, recon_id, selected_image);
         }
         self.handle_click(ui, &response, rect);
 
@@ -491,10 +496,11 @@ impl Viewer3D {
     /// Camera view mode is activated when the transition completes.
     pub fn enter_camera_view(
         &mut self,
-        img_idx: usize,
+        image_ref: ImageRef,
         reconstruction: &SfmrReconstruction,
         current_time: f64,
     ) {
+        let img_idx = image_ref.index();
         let image = &reconstruction.images[img_idx];
         let camera = &reconstruction.cameras[image.camera_index as usize];
 
@@ -532,7 +538,7 @@ impl Viewer3D {
         };
 
         let pending = CameraViewMode {
-            image_index: img_idx,
+            image: image_ref,
             r_world_from_cam,
         };
 
@@ -556,11 +562,12 @@ impl Viewer3D {
     /// Returns `None` if not currently in camera view.
     fn compute_switch_camera_view(
         &self,
-        new_img_idx: usize,
+        new_image_ref: ImageRef,
         reconstruction: &SfmrReconstruction,
     ) -> Option<SwitchCameraViewState> {
         let old_r_world_from_cam = self.camera_view.as_ref()?.r_world_from_cam;
 
+        let new_img_idx = new_image_ref.index();
         let new_image = &reconstruction.images[new_img_idx];
         let new_qwxyz = new_image.quaternion_wxyz;
 
@@ -587,7 +594,7 @@ impl Viewer3D {
             distance,
             world_up,
             camera_view: CameraViewMode {
-                image_index: new_img_idx,
+                image: new_image_ref,
                 r_world_from_cam: r_world_from_new_cam,
             },
         })
@@ -596,8 +603,8 @@ impl Viewer3D {
     /// Switch from one camera view to another instantly, preserving relative orientation.
     ///
     /// Used by `,`/`.` keys for rapid camera switching.
-    pub fn switch_camera_view(&mut self, new_img_idx: usize, reconstruction: &SfmrReconstruction) {
-        let Some(state) = self.compute_switch_camera_view(new_img_idx, reconstruction) else {
+    pub fn switch_camera_view(&mut self, new_image: ImageRef, reconstruction: &SfmrReconstruction) {
+        let Some(state) = self.compute_switch_camera_view(new_image, reconstruction) else {
             return;
         };
         self.camera.camera.position = state.position;
@@ -612,12 +619,12 @@ impl Viewer3D {
     /// Used by double-click on frustum/image strip when already in camera view.
     pub fn animated_switch_camera_view(
         &mut self,
-        new_img_idx: usize,
+        new_image: ImageRef,
         reconstruction: &SfmrReconstruction,
         current_time: f64,
     ) {
-        let Some(state) = self.compute_switch_camera_view(new_img_idx, reconstruction) else {
-            self.enter_camera_view(new_img_idx, reconstruction, current_time);
+        let Some(state) = self.compute_switch_camera_view(new_image, reconstruction) else {
+            self.enter_camera_view(new_image, reconstruction, current_time);
             return;
         };
         self.camera_view = None;

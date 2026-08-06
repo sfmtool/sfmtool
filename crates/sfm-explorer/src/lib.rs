@@ -19,6 +19,7 @@ mod image_browser;
 mod image_detail;
 mod platform;
 mod point_track_detail;
+mod scene;
 mod scene_renderer;
 mod state;
 mod viewer_3d;
@@ -32,6 +33,7 @@ use egui_dock::{DockState, NodeIndex};
 use image_browser::ImageBrowser;
 use image_detail::ImageDetail;
 use point_track_detail::PointTrackDetail;
+use scene::{ImageRef, PointRef};
 use scene_renderer::SceneRenderer;
 use state::AppState;
 use viewer_3d::Viewer3D;
@@ -176,9 +178,9 @@ pub(crate) struct App {
     pub(crate) dock_state: DockState<Tab>,
     pub(crate) prev_frustum_length_scale: f32,
     pub(crate) prev_frustum_size_multiplier: f32,
-    pub(crate) prev_selected_image: Option<usize>,
-    pub(crate) prev_selected_point: Option<usize>,
-    pub(crate) prev_hidden_image: Option<usize>,
+    pub(crate) prev_selected_image: Option<ImageRef>,
+    pub(crate) prev_selected_point: Option<PointRef>,
+    pub(crate) prev_hidden_image: Option<ImageRef>,
     /// Set by File > Quit and read by the event loop right after the frame it
     /// was clicked in, which then exits.
     pub(crate) quit_requested: bool,

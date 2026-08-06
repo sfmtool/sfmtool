@@ -62,10 +62,11 @@ pub(crate) fn section_id(key: &str) -> egui::Id {
     egui::Id::new(("viewport_hud_section", key))
 }
 
-/// Whether `state`'s reconstruction carries everything the patch surfel pass
+/// Whether the selected reconstruction carries everything the patch surfel pass
 /// needs: patch frames *and* the bitmaps to texture them with.
 pub(crate) fn has_patch_data(state: &AppState) -> bool {
-    state.reconstruction.as_ref().is_some_and(|r| {
+    state.selected_node().is_some_and(|node| {
+        let r = &node.recon;
         r.patch_u_halfvec_xyz.is_some()
             && r.patch_v_halfvec_xyz.is_some()
             && r.patch_bitmaps_y_x_rgba.is_some()
