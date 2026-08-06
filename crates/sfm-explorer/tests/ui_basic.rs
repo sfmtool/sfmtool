@@ -115,10 +115,17 @@ const ATTACH_TIMEOUT: Duration = Duration::from_secs(60);
 /// much larger window: a freshly launched app's deep widget subtree isn't
 /// queryable over the AX API for several seconds after launch. Polling lookups
 /// return as soon as the element appears, so healthy cases stay fast.
+///
+/// Windows needs more than a nominal budget too: the HUD tests' first lookup
+/// comes right after loading the demo scene, which pays the scene renderer's
+/// wgpu pipeline init on a cold CI runner before the next AccessKit push can
+/// publish the HUD. At 5s that lookup timed out flakily with the checkbox
+/// present in the post-timeout diagnosis snapshot — it had appeared just past
+/// the budget. Only a genuine failure ever waits the full budget.
 #[cfg(target_os = "macos")]
 const CONTENT_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(target_os = "macos"))]
-const CONTENT_TIMEOUT: Duration = Duration::from_secs(5);
+const CONTENT_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn attach(child: &Child) -> App {
     init();
