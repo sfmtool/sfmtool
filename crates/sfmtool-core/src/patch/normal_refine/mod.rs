@@ -53,7 +53,7 @@ pub(in crate::patch) use consensus::{
 };
 pub(in crate::patch) use level::{build_level_context, LevelContext};
 pub(in crate::patch) use params::{FLAT_NORM_SQ_EPS, MIN_MASK_PIXELS};
-pub(in crate::patch) use support::{build_support, window_weights, Support};
+pub(in crate::patch) use support::{build_support, view_render_patch, window_weights, Support};
 pub(in crate::patch) use view_stack::{PatchViewStack, AGREEMENT_SIGMA};
 pub(in crate::patch) use znorm::{
     normalized_stack, weighted_moments_pub, znorm_write, znormalize_into_kept,

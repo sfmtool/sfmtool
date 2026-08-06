@@ -298,3 +298,49 @@ def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path)
             )
             checked += 1
     assert checked > 0, "no admitted infinity views were checked"
+
+
+def test_select_views_keypoint_anchor_is_opt_in(seoul_bull_workspace: Path):
+    """``keypoint_anchor`` defaults to OFF and changes the numbers when turned on.
+
+    Anchoring changes the reference every score is taken against, so callers that
+    were selecting views must keep their behaviour unless they ask. This pins the
+    default and that the flag is not inert; the score *direction* is covered by
+    the Rust test that injects a known residual. It needs an
+    ``embedded_patches`` reconstruction: only that mode carries the inline
+    per-observation keypoints there is anything to anchor at.
+    """
+    from sfmtool import _embed_patches as ep
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    images = load_images(recon)
+    emb = ep.embed_patches(recon, images, resolution=12)
+    # The embedded recon carries its own cloud; rebuilding one would need the
+    # .sift scales the embed just replaced.
+    cloud = emb.patches
+    sample = sample_point_ids(cloud, n=200)
+    kw = dict(point_indexes=sample, resolution=12)
+
+    default = cloud.select_views(emb, images, **kw)
+    projected = cloud.select_views(emb, images, keypoint_anchor=False, **kw)
+    anchored = cloud.select_views(emb, images, keypoint_anchor=True, **kw)
+
+    # The default is the projection-anchored arm.
+    for d, p in zip(default, projected):
+        assert d["point_index"] == p["point_index"]
+        np.testing.assert_array_equal(
+            np.asarray(d["admitted"]), np.asarray(p["admitted"])
+        )
+        np.testing.assert_array_equal(np.asarray(d["scores"]), np.asarray(p["scores"]))
+
+    moved = 0
+    for a, p in zip(anchored, projected):
+        assert a["point_index"] == p["point_index"]
+        sa, sp = np.asarray(a["scores"]), np.asarray(p["scores"])
+        if sa.shape != sp.shape:
+            moved += 1
+            continue
+        both = np.isfinite(sa) & np.isfinite(sp)
+        if both.any() and not np.allclose(sa[both], sp[both], atol=1e-9):
+            moved += 1
+    assert moved > 0, "anchoring changed no point's scores - the flag is inert"

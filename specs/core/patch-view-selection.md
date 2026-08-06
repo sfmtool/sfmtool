@@ -40,6 +40,33 @@ self-occluded or disagreeing views are left out.
 This rejects self-occluded / disagreeing views that pure geometric visibility
 would wrongly include.
 
+### Track-view anchoring (opt-in)
+
+Steps 2 and 3's *track-view* half can be **anchored at the track views' stored
+keypoints**: each track view's render is recentred in-plane so it samples where
+that image's feature actually is, rather than where the point currently
+reprojects. The reference is then fused from what was matched, and each track
+view's own returned score is taken through the same anchored render, so a track
+view's reprojection residual neither smears the reference nor deflates the score a
+caller might evict it on. See
+[member-coherence validation](member-coherence-validation.md#members-are-sampled-at-their-keypoints-not-at-the-reprojection)
+for why charging a geometric residual to a photometric measure is the wrong
+reading.
+
+**Candidates are always scored at their projections.** A candidate is by
+definition a view with no observation, so it has no keypoint; its score is
+therefore "candidate at its projection against a reference fused at keypoints".
+Track views with no stored keypoint (a `sift_files` reconstruction, an overridden
+base list naming an image the point does not observe) fall back to projection
+anchoring individually.
+
+Anchoring is **off by default** at both the kernel and the binding
+(`keypoint_anchor=False`), because it changes the reference every score is taken
+against: callers that were selecting views keep their behaviour, and a caller that
+wants the anchored reading asks for it. Keypoints handed in *at* the reprojections
+reproduce the unanchored selection exactly, so the parameter is a strict
+generalization rather than a second render path.
+
 ## Output
 
 The selected **view set** `G` — the admitted views for the point (track views

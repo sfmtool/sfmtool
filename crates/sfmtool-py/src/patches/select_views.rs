@@ -11,7 +11,9 @@ use pyo3::types::PyDict;
 use sfmtool_core::patch::normal_refine::{
     view_indices_from_reconstruction, PatchWindow, ProjectedImage, Sampler,
 };
-use sfmtool_core::patch::view_selection::{select_patch_cloud_views, ViewSelectParams};
+use sfmtool_core::patch::view_selection::{
+    select_patch_cloud_views, track_keypoints_from_reconstruction, ViewSelectParams,
+};
 
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_pyramids, resolve_scene};
@@ -62,6 +64,14 @@ impl PyPatchCloud {
     ///         first argument is a :class:`CameraViews` (there are no tracks);
     ///         with a reconstruction it *overrides* the track-derived list for the
     ///         points present in the map (points absent keep their track views).
+    ///     keypoint_anchor: Render the **track views** anchored at their stored
+    ///         keypoints — the appearance that was actually matched — rather than at
+    ///         the point's reprojection, both when fusing the reference and when
+    ///         scoring each track view. Default ``False``: this changes the
+    ///         reference every score is taken against, so it is opt-in and callers
+    ///         that were selecting views keep their behaviour. Candidates are always
+    ///         scored at their projections (a candidate has no observation, so it has
+    ///         no keypoint), as are track views with no stored keypoint.
     ///
     /// Returns a list of per-patch dicts (parallel to the cloud's patches, in
     /// cloud order): ``point_index`` (int), ``admitted`` (1-D int32 numpy array of
@@ -77,7 +87,7 @@ impl PyPatchCloud {
         recon, images, *, min_relative_zncc=0.7, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear_mip", min_valid_fraction=0.6, min_track_views=2,
         robust_iters=3, min_self_agreement=0.3, point_indexes=None, candidate_views=None,
-        progress=None
+        keypoint_anchor=false, progress=None
     ))]
     fn select_views<'py>(
         &self,
@@ -95,6 +105,7 @@ impl PyPatchCloud {
         min_self_agreement: f64,
         point_indexes: Option<Vec<u32>>,
         candidate_views: Option<std::collections::HashMap<u32, Vec<u32>>>,
+        keypoint_anchor: bool,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
         let (posed, recon_guard) = resolve_scene(recon)?;
@@ -181,6 +192,12 @@ impl PyPatchCloud {
             Some(recon) => view_indices_from_reconstruction(recon, &self.inner),
             None => vec![Vec::new(); self.inner.len()],
         };
+        // Stored keypoints for those base views, parallel to `track_views`. Only a
+        // reconstruction has them; a `CameraViews` scene renders at projections.
+        let mut keypoints: Option<Vec<Vec<Option<[f64; 2]>>>> = match (keypoint_anchor, recon_opt) {
+            (true, Some(recon)) => Some(track_keypoints_from_reconstruction(recon, &self.inner)),
+            _ => None,
+        };
         if let Some(map) = &candidate_views {
             for vs in map.values() {
                 if let Some(&bad) = vs.iter().find(|&&i| i >= n_images) {
@@ -190,18 +207,36 @@ impl PyPatchCloud {
                     )));
                 }
             }
-            for (tv, &pid) in track_views.iter_mut().zip(&self.inner.point_indexes) {
-                if let Some(vs) = map.get(&pid) {
-                    *tv = vs.clone();
+            for (i, &pid) in self.inner.point_indexes.iter().enumerate() {
+                let Some(vs) = map.get(&pid) else { continue };
+                // An overridden base list is re-keyed against the point's own track:
+                // an image it observes contributes that observation's keypoint, an
+                // image it does not is anchored at its projection.
+                if let Some(kps) = keypoints.as_mut() {
+                    let track = &track_views[i];
+                    let own = &kps[i];
+                    kps[i] = vs
+                        .iter()
+                        .map(|img| {
+                            track
+                                .iter()
+                                .position(|t| t == img)
+                                .and_then(|at| own.get(at).copied().flatten())
+                        })
+                        .collect();
                 }
+                track_views[i] = vs.clone();
             }
         }
         let selected_mask: Option<std::collections::HashSet<u32>> =
             point_indexes.map(|ids| ids.into_iter().collect());
         if let Some(keep) = &selected_mask {
-            for (tv, &pid) in track_views.iter_mut().zip(&self.inner.point_indexes) {
+            for (i, &pid) in self.inner.point_indexes.iter().enumerate() {
                 if !keep.contains(&pid) {
-                    tv.clear();
+                    track_views[i].clear();
+                    if let Some(kps) = keypoints.as_mut() {
+                        kps[i].clear();
+                    }
                 }
             }
         }
@@ -212,6 +247,7 @@ impl PyPatchCloud {
                 &self.inner,
                 &views,
                 &track_views,
+                keypoints.as_deref(),
                 &params,
                 progress_handle.as_deref(),
             )

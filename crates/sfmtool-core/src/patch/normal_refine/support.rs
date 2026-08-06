@@ -96,7 +96,7 @@ pub(super) fn repose_patch(base: &OrientedPatch, n: &Vector3<f64>) -> OrientedPa
 // candidate normals (only the ray∩plane intersection depends on the plane), but
 // it is recomputed every candidate/level here. If keypoint-anchored refine ever
 // becomes hot, precompute the per-view world ray once per refine call.
-pub(super) fn view_render_patch<'a>(
+pub(in crate::patch) fn view_render_patch<'a>(
     patch: &'a OrientedPatch,
     view: &ProjectedImage<'_>,
     keypoint: Option<[f64; 2]>,

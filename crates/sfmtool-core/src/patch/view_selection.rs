@@ -36,9 +36,9 @@
 use crate::camera::remap::{mip_level_for_sigma, ImageU8};
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
-    build_level_context, irls_view_weights, normalized_stack, weighted_moments_pub, window_weights,
-    znormalize_into_kept, ConsensusScratch, LevelContext, PatchWindow, ProjectedImage, Sampler,
-    FLAT_NORM_SQ_EPS,
+    build_level_context, irls_view_weights, normalized_stack, view_render_patch,
+    weighted_moments_pub, window_weights, znormalize_into_kept, ConsensusScratch, LevelContext,
+    PatchWindow, ProjectedImage, Sampler, FLAT_NORM_SQ_EPS,
 };
 use crate::reconstruction::SfmrReconstruction;
 use rayon::prelude::*;
@@ -156,6 +156,7 @@ fn build_reference(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     track_views: &[u32],
+    track_keypoints: Option<&[Option<[f64; 2]>]>,
     w_full: &[f64],
     params: &ViewSelectParams,
 ) -> Option<(Reference, f64)> {
@@ -173,7 +174,7 @@ fn build_reference(
             params.resolution,
             w_full,
             &normal_refine_shim(params),
-            None,
+            track_keypoints,
         )
     })?;
     if ctx.kept.len() < params.min_track_views.max(2) as usize {
@@ -188,7 +189,7 @@ fn build_reference(
             &track_proj,
             params.resolution,
             params.sampler,
-            None,
+            track_keypoints,
         )
     })?;
     let n = ctx.pixels.len();
@@ -710,13 +711,37 @@ fn normal_refine_shim(params: &ViewSelectParams) -> super::normal_refine::Normal
 /// degenerate) **or** the track's self-agreement is below `min_self_agreement`
 /// (no trustworthy reference to vet against), the track views are admitted
 /// verbatim and no extra candidates are added.
+///
+/// # Track-view anchoring
+///
+/// `track_keypoints`, when given, is parallel to the **input** `track_views`
+/// slice (deduplicated alongside it) and carries each track view's stored
+/// keypoint. The reference is then fused from the track views **anchored at those
+/// keypoints** — the appearance the matcher actually matched — and each track
+/// view's own diagnostic score is taken through the same anchored render, so a
+/// track view's reprojection residual neither smears the reference nor deflates
+/// the score a caller might evict it on.
+///
+/// **Candidates are always scored at their projections**, because a candidate is
+/// by definition a view with no observation and therefore no keypoint. The
+/// candidate score is then "candidate at its projection, against a reference
+/// fused at keypoints" — the same asymmetry the localizer's seed carries, and the
+/// only reading available. Passing `None` (for the slice, or for one entry inside
+/// it) restores projection anchoring, which is what every caller with no
+/// keypoints gets; the admission rule, the gates and the returned fields are
+/// otherwise unchanged.
+///
+/// # Panics
+///
+/// Panics if `track_keypoints` is given and is not parallel to `track_views`.
 pub fn select_patch_views(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     track_views: &[u32],
+    track_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &ViewSelectParams,
 ) -> ViewSelection {
-    prof::TOTAL.time(|| select_patch_views_impl(patch, views, track_views, params))
+    prof::TOTAL.time(|| select_patch_views_impl(patch, views, track_views, track_keypoints, params))
 }
 
 /// Untimed body of [`select_patch_views`] (split so the enclosing
@@ -725,6 +750,7 @@ fn select_patch_views_impl(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     track_views: &[u32],
+    track_keypoints: Option<&[Option<[f64; 2]>]>,
     params: &ViewSelectParams,
 ) -> ViewSelection {
     let resolution = params.resolution.max(2);
@@ -734,20 +760,38 @@ fn select_patch_views_impl(
     };
     let w_full = window_weights(params.window, resolution);
 
+    if let Some(kps) = track_keypoints {
+        assert_eq!(
+            kps.len(),
+            track_views.len(),
+            "track_keypoints must be parallel to track_views"
+        );
+    }
+
     // Dedup the track order-preserving (first-seen wins): a point can carry two
     // observations in the same image (rigs / retriangulation), which would admit
-    // that view twice and double-weight it in the reference.
+    // that view twice and double-weight it in the reference. The keypoints ride
+    // along so a survivor keeps its own.
     let mut seen = std::collections::HashSet::new();
-    let track_views: Vec<u32> = track_views
-        .iter()
-        .copied()
-        .filter(|&i| seen.insert(i))
+    let keep: Vec<usize> = (0..track_views.len())
+        .filter(|&i| seen.insert(track_views[i]))
         .collect();
+    let track_views: Vec<u32> = keep.iter().map(|&i| track_views[i]).collect();
+    let track_kps: Option<Vec<Option<[f64; 2]>>> =
+        track_keypoints.map(|kps| keep.iter().map(|&i| kps[i]).collect());
     let is_track = seen; // the dedup set doubles as the membership test
 
     // Build the robust reference from the track views.
-    let reference =
-        prof::REFERENCE.time(|| build_reference(patch, views, &track_views, &w_full, &params));
+    let reference = prof::REFERENCE.time(|| {
+        build_reference(
+            patch,
+            views,
+            &track_views,
+            track_kps.as_deref(),
+            &w_full,
+            &params,
+        )
+    });
 
     let admit_verbatim = || ViewSelection {
         admitted: track_views.clone(),
@@ -784,14 +828,21 @@ fn select_patch_views_impl(
     // per-view validity gate).
     let mut admitted: Vec<u32> = Vec::with_capacity(track_views.len());
     let mut scores: Vec<f64> = Vec::with_capacity(track_views.len());
-    for &ti in &track_views {
+    for (t, &ti) in track_views.iter().enumerate() {
         admitted.push(ti);
+        // Anchored at this track view's own keypoint where one was supplied: the
+        // recentred patch is what `normalized_stack` would render under
+        // `view_keypoints`, and feeding it to `candidate_zncc` anchors the affine
+        // fast path (which projects the patch's own corners) identically.
+        let view = &views[ti as usize];
+        let kp = track_kps.as_ref().and_then(|k| k[t]);
+        let rpatch = view_render_patch(patch, view, kp);
         scores.push(
             prof::TRACK_SCORE
                 .time(|| {
                     candidate_zncc(
-                        patch,
-                        &views[ti as usize],
+                        &rpatch,
+                        view,
                         &reference,
                         &single_ctx,
                         &sqrt_weights,
@@ -879,11 +930,18 @@ fn select_patch_views_impl(
 ///
 /// # Panics
 ///
-/// Panics if `track_views.len() != cloud.len()` or an index is out of range.
+/// `track_keypoints`, when given, is parallel to `track_views` in both
+/// dimensions and anchors the track views' renders — see [`select_patch_views`].
+///
+/// # Panics
+///
+/// Panics if `track_views.len() != cloud.len()`, if `track_keypoints` is given
+/// and not parallel to `track_views`, or if an index is out of range.
 pub fn select_patch_cloud_views(
     cloud: &PatchCloud,
     views: &[ProjectedImage<'_>],
     track_views: &[Vec<u32>],
+    track_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
     params: &ViewSelectParams,
     progress: Option<&std::sync::atomic::AtomicUsize>,
 ) -> Vec<ViewSelection> {
@@ -892,6 +950,13 @@ pub fn select_patch_cloud_views(
         cloud.len(),
         "track_views must be parallel to the cloud"
     );
+    if let Some(kps) = track_keypoints {
+        assert_eq!(
+            kps.len(),
+            track_views.len(),
+            "track_keypoints must be parallel to track_views"
+        );
+    }
     if prof::enabled() {
         prof::reset();
     }
@@ -899,9 +964,11 @@ pub fn select_patch_cloud_views(
     let out: Vec<ViewSelection> = cloud
         .patches
         .par_iter()
+        .enumerate()
         .zip(track_views.par_iter())
-        .map(|(patch, tv)| {
-            let out = select_patch_views(patch, views, tv, params);
+        .map(|((i, patch), tv)| {
+            let kps = track_keypoints.map(|k| k[i].as_slice());
+            let out = select_patch_views(patch, views, tv, kps, params);
             // Bump the shared work counter per patch for a Python progress poller.
             if let Some(c) = progress {
                 c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -929,6 +996,22 @@ pub fn track_views_from_reconstruction(
     cloud: &PatchCloud,
 ) -> Vec<Vec<u32>> {
     super::normal_refine::view_indices_from_reconstruction(recon, cloud)
+}
+
+/// The stored keypoint of each track view returned by
+/// [`track_views_from_reconstruction`], in the same order — the
+/// `track_keypoints` of [`select_patch_cloud_views`]. All `None` for a
+/// `sift_files` reconstruction (no inline keypoints), which anchors those views
+/// at their projections.
+///
+/// # Panics
+///
+/// Panics if `cloud.point_indexes` is not parallel to its patches.
+pub fn track_keypoints_from_reconstruction(
+    recon: &SfmrReconstruction,
+    cloud: &PatchCloud,
+) -> Vec<Vec<Option<[f64; 2]>>> {
+    super::member_coherence::member_keypoints_from_reconstruction(recon, cloud)
 }
 
 #[cfg(test)]
