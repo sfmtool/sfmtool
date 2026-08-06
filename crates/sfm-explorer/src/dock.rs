@@ -47,7 +47,9 @@ pub(crate) struct TabContext<'a> {
     // Per-frame values needed by viewer_3d.show():
     pub scene_texture_id: Option<egui::TextureId>,
     pub hover_depth: Option<f32>,
-    pub hover_pick_id: u32,
+    /// The entity under the cursor in the 3D viewport, decoded from the pick
+    /// buffer — a ref, so the overlay knows which reconstruction it names.
+    pub hover_pick: Option<crate::scene_renderer::PickTarget>,
     pub gesture_events: &'a [platform::GestureEvent],
     pub scroll_input: &'a platform::ScrollInput,
     pub diagnostics: Option<(u32, u32, u32, u32)>,
@@ -90,7 +92,7 @@ impl TabViewer for TabContext<'_> {
                         self.state.show_fps,
                         self.scene_texture_id,
                         self.hover_depth,
-                        self.hover_pick_id,
+                        self.hover_pick,
                     );
                 } else {
                     ui.centered_and_justified(|ui| {

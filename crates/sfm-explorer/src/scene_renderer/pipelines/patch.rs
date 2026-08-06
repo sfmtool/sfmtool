@@ -6,10 +6,12 @@ use super::super::gpu_types::*;
 const SHADER: &str = include_str!("../../shaders/patch.wgsl");
 
 /// Resources created by the patch surfel pipeline.
+///
+/// No uniform buffer: `PatchUniforms` carries the atlas grid, which is
+/// per-recon, so each bundle allocates its own alongside its atlas.
 pub(in crate::scene_renderer) struct PatchPipelineResources {
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
-    pub uniform_buffer: wgpu::Buffer,
 }
 
 pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PatchPipelineResources {
@@ -45,6 +47,17 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PatchPipelineR
                 binding: 2,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            // 3: this reconstruction's ReconUniforms
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
                 count: None,
             },
         ],
@@ -157,17 +170,8 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PatchPipelineR
         cache: None,
     });
 
-    // Patch uniform buffer (written each frame by update_uniforms)
-    let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("patch uniforms"),
-        size: std::mem::size_of::<PatchUniforms>() as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
     PatchPipelineResources {
         pipeline,
         bind_group_layout,
-        uniform_buffer,
     }
 }

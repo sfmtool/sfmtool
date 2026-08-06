@@ -4,8 +4,19 @@
 //! Uniform buffer update logic for the scene renderer.
 
 use super::gpu_types::*;
+use super::picking::PICK_INDEX_NONE;
 use super::SceneRenderer;
+use crate::scene::{ImageRef, PointRef};
 use crate::viewer_3d::ViewportCamera;
+
+/// The identity model matrix every node currently draws with. Node transforms
+/// arrive in phase 4; the plumbing that carries them is already here.
+const IDENTITY_MODEL: [[f32; 4]; 4] = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
 
 impl SceneRenderer {
     #[allow(clippy::too_many_arguments)]
@@ -21,9 +32,9 @@ impl SceneRenderer {
         target_active: f32,
         target_radius: f32,
         time: f32,
-        selected_point: Option<usize>,
-        hovered_point: Option<usize>,
-        hovered_image: Option<usize>,
+        selected_point: Option<PointRef>,
+        hovered_point: Option<PointRef>,
+        hovered_image: Option<ImageRef>,
         patch_size_log2: f32,
         patch_opacity: f32,
         patch_alpha_cutoff: f32,
@@ -34,22 +45,32 @@ impl SceneRenderer {
         }
 
         let aspect = w as f64 / h as f64;
+        let view = camera.view_matrix();
+        let view_proj = camera.projection_matrix(aspect) * view;
+        let size_multiplier = 2.0f32.powf(size_log2);
+
+        // Selection and hover cross the GPU boundary as *global* pick indices,
+        // so the shader compare stays one u32 test however many nodes are
+        // loaded. A ref into an unloaded node resolves to the none sentinel.
+        let global_point = |p: Option<PointRef>| {
+            p.and_then(|p| self.global_point_index(p))
+                .unwrap_or(PICK_INDEX_NONE)
+        };
+        let global_image = |i: Option<ImageRef>| {
+            i.and_then(|i| self.global_image_index(i))
+                .unwrap_or(PICK_INDEX_NONE)
+        };
 
         // ── Point uniforms ──
         if let Some(buf) = &self.point_uniform_buffer {
-            let view = camera.view_matrix();
-            let view_proj = camera.projection_matrix(aspect) * view;
-
-            let point_size = self.auto_point_size * 2.0f32.powf(size_log2);
-
             let uniforms = PointUniforms {
                 view_proj: mat4_to_cols(&view_proj),
                 view: mat4_to_cols(&view),
                 camera_right: vec3_to_f32(&camera.camera.right()),
-                point_size,
+                _pad0: 0.0,
                 camera_up: vec3_to_f32(&camera.camera.up()),
-                selected_point_index: selected_point.map(|i| i as u32).unwrap_or(0xFFFFFFFF),
-                hovered_point_index: hovered_point.map(|i| i as u32).unwrap_or(0xFFFFFFFF),
+                selected_point_index: global_point(selected_point),
+                hovered_point_index: global_point(hovered_point),
                 screen_width: w as f32,
                 screen_height: h as f32,
                 infinity_point_px,
@@ -62,15 +83,12 @@ impl SceneRenderer {
 
         // ── Frustum uniforms ──
         if let Some(buf) = &self.frustum_uniform_buffer {
-            let view = camera.view_matrix();
-            let view_proj = camera.projection_matrix(aspect) * view;
-
             let uniforms = FrustumUniforms {
                 view_proj: mat4_to_cols(&view_proj),
                 view: mat4_to_cols(&view),
                 screen_size: [w as f32, h as f32],
                 line_half_width: FRUSTUM_LINE_HALF_WIDTH,
-                hovered_image_index: hovered_image.map(|i| i as u32).unwrap_or(0xFFFFFFFF),
+                hovered_image_index: global_image(hovered_image),
                 near: camera.near as f32,
                 _pad: [0.0; 3],
             };
@@ -78,49 +96,71 @@ impl SceneRenderer {
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
         }
 
-        // ── Image quad uniforms (thumbnail atlas) ──
-        if let Some(buf) = &self.image_quad_uniform_buffer {
-            let view = camera.view_matrix();
-            let view_proj = camera.projection_matrix(aspect) * view;
+        // ── Per-reconstruction uniforms ──
+        //
+        // Model matrix, splat size, pick bases, pickability and tint, plus the
+        // per-node atlas blocks. Rewritten every frame, which is also what
+        // makes a pick-base reassignment free: the new bases simply travel with
+        // the next frame's write, and no instance buffer is touched.
+        let cam_pos = camera.position();
+        for bundle in self.recons.values() {
+            queue.write_buffer(
+                &bundle.uniform_buffer,
+                0,
+                bytemuck::bytes_of(&ReconUniforms {
+                    model: IDENTITY_MODEL,
+                    point_size: bundle.auto_point_size * size_multiplier,
+                    point_pick_base: bundle.point_pick_base,
+                    image_pick_base: bundle.image_pick_base,
+                    // Every node is pickable until the Scene panel's
+                    // interaction toggle arrives (phase 3).
+                    pickable: 1,
+                    // Alpha 0 = draw the node's original colors (phase 5).
+                    tint_color: [0.0; 4],
+                }),
+            );
 
-            let uniforms = ImageQuadUniforms {
-                view_proj: mat4_to_cols(&view_proj),
-                atlas_cols: self.atlas_cols,
-                atlas_rows: self.atlas_rows,
-                images_per_page: self.images_per_page,
-                _pad: 0,
-            };
+            // Image quad uniforms (this node's thumbnail atlas)
+            if let Some(buf) = &bundle.image_quad_uniform_buffer {
+                queue.write_buffer(
+                    buf,
+                    0,
+                    bytemuck::bytes_of(&ImageQuadUniforms {
+                        view_proj: mat4_to_cols(&view_proj),
+                        atlas_cols: bundle.atlas_cols,
+                        atlas_rows: bundle.atlas_rows,
+                        images_per_page: bundle.images_per_page,
+                        _pad: 0,
+                    }),
+                );
+            }
 
-            queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
-        }
-
-        // ── Patch uniforms (surfel atlas + controls) ──
-        if let Some(buf) = &self.patch_uniform_buffer {
-            if self.patch_count > 0 {
-                let view = camera.view_matrix();
-                let view_proj = camera.projection_matrix(aspect) * view;
-
-                let cam_pos = camera.position();
-                let uniforms = PatchUniforms {
-                    view_proj: mat4_to_cols(&view_proj),
-                    atlas_cols: self.patch_atlas_cols,
-                    atlas_rows: self.patch_atlas_rows,
-                    patches_per_page: self.patches_per_page,
-                    patch_scale: 2.0f32.powf(patch_size_log2),
-                    patch_opacity,
-                    alpha_cutoff: patch_alpha_cutoff,
-                    _pad0: [0.0; 2],
-                    camera_pos: [cam_pos.x as f32, cam_pos.y as f32, cam_pos.z as f32],
-                    _pad1: 0.0,
-                };
-
-                queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
+            // Patch uniforms (this node's surfel atlas + the global controls)
+            if let Some(patch) = &bundle.patch {
+                queue.write_buffer(
+                    &patch.uniform_buffer,
+                    0,
+                    bytemuck::bytes_of(&PatchUniforms {
+                        view_proj: mat4_to_cols(&view_proj),
+                        atlas_cols: patch.atlas_cols,
+                        atlas_rows: patch.atlas_rows,
+                        patches_per_page: patch.patches_per_page,
+                        patch_scale: 2.0f32.powf(patch_size_log2),
+                        patch_opacity,
+                        alpha_cutoff: patch_alpha_cutoff,
+                        _pad0: [0.0; 2],
+                        camera_pos: [cam_pos.x as f32, cam_pos.y as f32, cam_pos.z as f32],
+                        _pad1: 0.0,
+                    }),
+                );
             }
         }
 
         // ── EDL uniforms ──
         if let Some(buf) = &self.edl_uniform_buffer {
-            let point_size = self.auto_point_size * 2.0f32.powf(size_log2);
+            // One fullscreen pass shades every node, so this is the one splat
+            // size that cannot be per-recon.
+            let point_size = self.max_auto_point_size() * size_multiplier;
             let tan_half_fov = (camera.fov / 2.0).tan() as f32;
             let uniforms = EdlUniforms {
                 screen_size: [w as f32, h as f32],
@@ -164,7 +204,7 @@ impl SceneRenderer {
             view: mat4_to_cols(&view),
             screen_size: [w as f32, h as f32],
             line_half_width: 1.5,
-            hovered_image_index: 0xFFFFFFFF, // no hover for track rays
+            hovered_image_index: PICK_INDEX_NONE, // no hover for track rays
             near: camera.near as f32,
             _pad: [0.0; 3],
         };

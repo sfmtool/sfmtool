@@ -5,25 +5,29 @@
 
 use super::super::gpu_types::{ImageQuadUniforms, MAX_ATLAS_COLS, THUMBNAIL_SIZE};
 use super::super::SceneRenderer;
+use crate::scene::ReconId;
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
 
 impl SceneRenderer {
-    /// Upload embedded camera thumbnails into a GPU 2D texture atlas.
+    /// Upload one reconstruction's embedded camera thumbnails into a GPU 2D
+    /// texture atlas of its own.
     ///
     /// Packs all 128×128 RGB thumbnails into a single large 2D texture arranged
     /// as a grid, avoiding the 256-layer limit of texture arrays. Also creates
-    /// the image quad uniform buffer and bind group.
+    /// the node's image quad uniform buffer.
     pub fn upload_thumbnails(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        id: ReconId,
         recon: &SfmrReconstruction,
     ) {
         let image_count = recon.images.len() as u32;
         if image_count == 0 {
             return;
         }
+        self.ensure_recon(device, id);
 
         // Compute atlas grid dimensions, respecting GPU texture size limits.
         // Images are packed into a 2D texture array: each layer ("page") holds a
@@ -50,10 +54,6 @@ impl SceneRenderer {
         let actual_rows_per_page = total_rows.min(rows_per_page);
         let atlas_width = cols * THUMBNAIL_SIZE;
         let atlas_height = actual_rows_per_page * THUMBNAIL_SIZE;
-
-        self.atlas_cols = cols;
-        self.atlas_rows = actual_rows_per_page;
-        self.images_per_page = images_per_page;
 
         // Create 2D texture array atlas
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -114,14 +114,8 @@ impl SceneRenderer {
             ..Default::default()
         });
 
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("thumbnail sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        // Create dedicated uniform buffer for image quad atlas parameters
+        // Per-recon uniform buffer for this atlas's grid parameters. (The
+        // sampler is shared: every atlas is sampled the same way.)
         let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("image quad uniforms"),
             contents: bytemuck::bytes_of(&ImageQuadUniforms {
@@ -134,13 +128,15 @@ impl SceneRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Store texture and sampler; bind group is created by
-        // rebuild_frustum_bind_group after the color buffer exists.
-        self.image_quad_thumbnail_view = Some(texture_view);
-        self.image_quad_sampler = Some(sampler);
-
-        self.image_quad_uniform_buffer = Some(uniform_buf);
-        self.thumbnail_texture = Some(texture);
+        // Store texture and view; the bind group is created by
+        // rebuild_frustum_bind_group once the color buffer exists.
+        let bundle = self.recons.get_mut(&id).expect("just ensured");
+        bundle.atlas_cols = cols;
+        bundle.atlas_rows = actual_rows_per_page;
+        bundle.images_per_page = images_per_page;
+        bundle.thumbnail_view = Some(texture_view);
+        bundle.image_quad_uniform_buffer = Some(uniform_buf);
+        bundle.thumbnail_texture = Some(texture);
         log::info!(
             "Uploaded {} thumbnails as {}×{} × {} page(s) atlas ({}×{} grid per page)",
             image_count_clamped,

@@ -166,7 +166,7 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
                 state.show_fps,
                 None,
                 None,
-                0,
+                None,
             );
         });
     });

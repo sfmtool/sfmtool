@@ -18,13 +18,26 @@ struct Uniforms {
     camera_pos: vec3<f32>, // world-space camera position (front-face culling)
 }
 
+// Per-reconstruction block: which node this draw belongs to.
+struct ReconUniforms {
+    model: mat4x4<f32>,
+    point_size: f32,
+    point_pick_base: u32,
+    image_pick_base: u32,
+    pickable: u32,
+    tint_color: vec4<f32>,
+}
+
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var patch_texture: texture_2d_array<f32>;
 @group(0) @binding(2) var patch_sampler: sampler;
+@group(0) @binding(3) var<uniform> recon: ReconUniforms;
 
-// Pick ID tag for 3D point entities (bits 31..24). A patch and its point are
+// Pick ID tag for 3D point entities (bits 31..30). A patch and its point are
 // the same entity, so patches ride the existing point pick path.
-const PICK_TAG_POINT: u32 = 0x02000000u;
+const PICK_TAG_POINT: u32 = 0x80000000u;
+// Pick ID for "nothing" — what a non-pickable node emits.
+const PICK_TAG_NONE: u32 = 0u;
 
 // Tiny positive NDC depth so an infinity patch sits just in front of the
 // reversed-Z far plane (cleared to 0.0, compared with Greater): it passes the
@@ -57,7 +70,15 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // t=-1 -> v=1. Hence the y flip (1 - t)/2.
     out.uv = vec2<f32>((in.quad_pos.x + 1.0) * 0.5, (1.0 - in.quad_pos.y) * 0.5);
     out.atlas_layer = in.atlas_layer;
-    out.point_index = in.point_index;
+    // Global pick index: this node's base plus the instance's local point index.
+    out.point_index = recon.point_pick_base + in.point_index;
+
+    // Move the surfel into the shared world space. The centre transforms with
+    // the instance's own w (a point at infinity is a direction, so translation
+    // drops out); the half-vecs are directions and always take w = 0.
+    let centre = (recon.model * vec4<f32>(in.center, in.w)).xyz;
+    let u_halfvec = (recon.model * vec4<f32>(in.u_halfvec, 0.0)).xyz;
+    let v_halfvec = (recon.model * vec4<f32>(in.v_halfvec, 0.0)).xyz;
 
     // Front-face only: cull a patch whose outward normal (u × v) points away
     // from the camera. cross(u_halfvec, v_halfvec) is a positive multiple of
@@ -67,16 +88,16 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // that faces every observer, so it is never culled. Collapse all 4 corners
     // to a clipped vertex so the quad drops out.
     if in.w != 0.0 {
-        let outward = cross(in.u_halfvec, in.v_halfvec);
-        if dot(outward, uniforms.camera_pos - in.center) <= 0.0 {
+        let outward = cross(u_halfvec, v_halfvec);
+        if dot(outward, uniforms.camera_pos - centre) <= 0.0 {
             out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
             return out;
         }
     }
 
     // Corner in the patch plane: center ± u_halfvec ± v_halfvec (scaled).
-    let corner = in.center
-        + uniforms.patch_scale * (in.quad_pos.x * in.u_halfvec + in.quad_pos.y * in.v_halfvec);
+    let corner = centre
+        + uniforms.patch_scale * (in.quad_pos.x * u_halfvec + in.quad_pos.y * v_halfvec);
 
     if in.w == 0.0 {
         // Point at infinity: the corner is a direction. Transform with w = 0
@@ -127,6 +148,8 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     // patch_opacity uniform is the only translucency source.
     out.color = vec4<f32>(texel.rgb * uniforms.patch_opacity, uniforms.patch_opacity);
     out.linear_depth = 0.0; // EDL passthrough — textured surface, no edge darkening
-    out.pick_id = PICK_TAG_POINT | in.point_index;
+    // A non-interactive node reads as background rather than passing the pick
+    // through to whatever it occludes.
+    out.pick_id = select(PICK_TAG_POINT | in.point_index, PICK_TAG_NONE, recon.pickable == 0u);
     return out;
 }

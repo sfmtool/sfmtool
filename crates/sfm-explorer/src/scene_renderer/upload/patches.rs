@@ -3,8 +3,10 @@
 
 //! Patch surfel instance buffer + bitmap atlas upload.
 
-use super::super::gpu_types::PatchInstance;
+use super::super::gpu_types::{PatchInstance, PatchUniforms};
+use super::super::recon::PatchResources;
 use super::super::SceneRenderer;
+use crate::scene::ReconId;
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
 
@@ -22,17 +24,15 @@ impl SceneRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        id: ReconId,
         recon: &SfmrReconstruction,
     ) {
-        // The bind group below needs the patch pipeline's layout + uniform
-        // buffer, which may not exist yet if no frame has been rendered.
-        self.ensure_pipelines(device);
+        // The bind group below needs the patch pipeline's layout and the
+        // node's bundle, neither of which may exist yet.
+        self.ensure_recon(device, id);
 
         // Reset so reloading a reconstruction without patches clears the old ones.
-        self.patch_instance_buffer = None;
-        self.patch_atlas_texture = None;
-        self.patch_bind_group = None;
-        self.patch_count = 0;
+        self.recons.get_mut(&id).expect("just ensured").patch = None;
 
         let (Some(u_halfvecs), Some(v_halfvecs)) =
             (&recon.patch_u_halfvec_xyz, &recon.patch_v_halfvec_xyz)
@@ -103,10 +103,6 @@ impl SceneRenderer {
         let actual_rows_per_page = total_rows.min(rows_per_page);
         let atlas_width = cols * resolution;
         let atlas_height = actual_rows_per_page * resolution;
-
-        self.patch_atlas_cols = cols;
-        self.patch_atlas_rows = actual_rows_per_page;
-        self.patches_per_page = patches_per_page;
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("patch atlas"),
@@ -187,39 +183,54 @@ impl SceneRenderer {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
         });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("patch sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
+
+        // Per-recon uniform buffer: `PatchUniforms` carries this atlas's grid.
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("patch uniforms"),
+            size: std::mem::size_of::<PatchUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
-        if let (Some(layout), Some(uniform_buf)) =
-            (&self.patch_bind_group_layout, &self.patch_uniform_buffer)
-        {
-            self.patch_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("patch bind group"),
-                layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniform_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&texture_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-            }));
-        }
+        let layout = self.patch_bind_group_layout.as_ref();
+        let sampler = self.patch_sampler.as_ref();
+        let bundle = self.recons.get_mut(&id).expect("just ensured");
+        let (Some(layout), Some(sampler)) = (layout, sampler) else {
+            return;
+        };
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("patch bind group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: bundle.uniform_buffer.as_entire_binding(),
+                },
+            ],
+        });
 
-        self.patch_instance_buffer = Some(instance_buffer);
-        self.patch_atlas_texture = Some(texture);
-        self.patch_count = patch_count_clamped;
+        bundle.patch = Some(PatchResources {
+            instance_buffer,
+            atlas_texture: texture,
+            uniform_buffer,
+            bind_group,
+            count: patch_count_clamped,
+            atlas_cols: cols,
+            atlas_rows: actual_rows_per_page,
+            patches_per_page,
+        });
 
         let atlas_bytes = atlas_width as u64 * atlas_height as u64 * 4 * num_pages as u64;
         log::info!(

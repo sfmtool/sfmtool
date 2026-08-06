@@ -9,8 +9,9 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     view: mat4x4<f32>,
     camera_right: vec3<f32>,
-    point_size: f32,
+    _pad0: f32,
     camera_up: vec3<f32>,
+    // Global pick indices (recon base + local index), 0xFFFFFFFF = none.
     selected_point_index: u32,
     hovered_point_index: u32,
     screen_width: f32,
@@ -19,10 +20,23 @@ struct Uniforms {
     show_infinity: f32,
 }
 
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+// Per-reconstruction block: which node this draw belongs to.
+struct ReconUniforms {
+    model: mat4x4<f32>,
+    point_size: f32,
+    point_pick_base: u32,
+    image_pick_base: u32,
+    pickable: u32,
+    tint_color: vec4<f32>,
+}
 
-// Pick ID tag for point entities (bits 31..24).
-const PICK_TAG_POINT: u32 = 0x02000000u;
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var<uniform> recon: ReconUniforms;
+
+// Pick ID tag for point entities (bits 31..30).
+const PICK_TAG_POINT: u32 = 0x80000000u;
+// Pick ID for "nothing" — what a non-pickable node emits.
+const PICK_TAG_NONE: u32 = 0u;
 
 struct VertexInput {
     @builtin(instance_index) instance_index: u32,
@@ -36,6 +50,7 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
     @location(1) color: vec3<f32>,
     @location(2) view_depth: f32,
+    // Global pick index of this point: recon.point_pick_base + instance index.
     @location(3) @interpolate(flat) point3d_index: u32,
 }
 
@@ -55,15 +70,19 @@ fn vs_main(in: VertexInput) -> VertexOutput {
         f32((in.color_packed >>  8u) & 0xFFu) / 255.0,
         f32((in.color_packed >> 16u) & 0xFFu) / 255.0,
     );
-    out.point3d_index = in.instance_index;
+    // Global pick index: this node's base plus the local instance index. The
+    // instance buffer stores nothing about it, so moving the base is a uniform
+    // rewrite and never a buffer rewrite.
+    out.point3d_index = recon.point_pick_base + in.instance_index;
 
     // The alpha byte is the finite/infinity flag: 0 = point at infinity.
     let is_infinity = ((in.color_packed >> 24u) & 0xFFu) == 0u;
 
     if is_infinity {
-        // `world_pos` is a unit direction. Transform with w = 0 so the camera
-        // translation drops out — a point at infinity has no parallax.
-        let clip_c = uniforms.view_proj * vec4<f32>(in.world_pos, 0.0);
+        // `world_pos` is a unit direction. Transform with w = 0 so both the
+        // node transform's and the camera's translation drop out — a point at
+        // infinity has no parallax, and a direction only rotates.
+        let clip_c = uniforms.view_proj * (recon.model * vec4<f32>(in.world_pos, 0.0));
         if uniforms.show_infinity == 0.0 || clip_c.w <= 0.0 {
             // Hidden by the "points at infinity" toggle, or pointing behind the
             // camera: emit a clipped vertex either way.
@@ -84,14 +103,15 @@ fn vs_main(in: VertexInput) -> VertexOutput {
         return out;
     }
 
-    // Finite point: billboard expanded in the camera-aligned plane in world space.
-    let offset = uniforms.camera_right * in.quad_pos.x * uniforms.point_size
-               + uniforms.camera_up    * in.quad_pos.y * uniforms.point_size;
-    let world = vec4<f32>(in.world_pos + offset, 1.0);
-    out.clip_pos = uniforms.view_proj * world;
+    // Finite point: place the point with the node transform, then billboard in
+    // the camera-aligned plane of the shared world space.
+    let centre = (recon.model * vec4<f32>(in.world_pos, 1.0)).xyz;
+    let offset = uniforms.camera_right * in.quad_pos.x * recon.point_size
+               + uniforms.camera_up    * in.quad_pos.y * recon.point_size;
+    out.clip_pos = uniforms.view_proj * vec4<f32>(centre + offset, 1.0);
 
     // Linear view-space depth for EDL (positive = in front of camera)
-    let view_pos = uniforms.view * vec4<f32>(in.world_pos, 1.0);
+    let view_pos = uniforms.view * vec4<f32>(centre, 1.0);
     out.view_depth = -view_pos.z;
 
     return out;
@@ -124,6 +144,8 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     }
     out.color = vec4<f32>(color, 1.0);
     out.depth = in.view_depth;
-    out.pick_id = PICK_TAG_POINT | in.point3d_index;
+    // A non-interactive node reads as background rather than passing the pick
+    // through to whatever it occludes.
+    out.pick_id = select(PICK_TAG_POINT | in.point3d_index, PICK_TAG_NONE, recon.pickable == 0u);
     return out;
 }

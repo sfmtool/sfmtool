@@ -10,7 +10,8 @@ use eframe::egui::{self, Color32, Pos2, Rect, Stroke};
 use nalgebra::{Point3, Vector3};
 use sfmtool_core::SfmrReconstruction;
 
-use crate::scene_renderer::{PICK_INDEX_MASK, PICK_TAG_FRUSTUM, PICK_TAG_MASK, PICK_TAG_POINT};
+use crate::scene::ReconId;
+use crate::scene_renderer::PickTarget;
 
 use super::Viewer3D;
 
@@ -144,10 +145,11 @@ impl Viewer3D {
         painter: &egui::Painter,
         rect: Rect,
         reconstruction: &SfmrReconstruction,
+        recon_id: ReconId,
         show_controls_help: bool,
         show_fps: bool,
         hover_depth: Option<f32>,
-        hover_pick_id: u32,
+        hover_pick: Option<PickTarget>,
         fps: f64,
     ) {
         let font = egui::FontId::proportional(12.0);
@@ -194,28 +196,31 @@ impl Viewer3D {
             text_color,
         );
 
-        // Bottom-left: entity + depth info under cursor
-        let tag = hover_pick_id & PICK_TAG_MASK;
-        let index = (hover_pick_id & PICK_INDEX_MASK) as usize;
+        // Bottom-left: entity + depth info under cursor. The pick is a ref, so
+        // the index shown is local to its own reconstruction; a pick into a
+        // node other than the one being drawn here has no name to look up.
+        // (The recon label the spec adds once several files can be loaded is
+        // phase 3, along with the panel that names them.)
         let depth_val = hover_depth.filter(|&d| d > 0.0);
 
-        let hover_text = match tag {
-            t if t == PICK_TAG_POINT => {
+        let hover_text = match hover_pick {
+            Some(PickTarget::Point(point)) => {
+                let index = point.index();
                 if let Some(depth) = depth_val {
                     format!("Point3D #{} | depth: {:.4}", index, depth)
                 } else {
                     format!("Point3D #{}", index)
                 }
             }
-            t if t == PICK_TAG_FRUSTUM => {
-                let name = reconstruction
-                    .images
-                    .get(index)
+            Some(PickTarget::Image(image)) => {
+                let name = image
+                    .index_in(recon_id)
+                    .and_then(|index| reconstruction.images.get(index))
                     .map(|img| img.name.as_str())
                     .unwrap_or("?");
                 format!("Camera: {}", name)
             }
-            _ => {
+            None => {
                 if let Some(depth) = depth_val {
                     format!("depth: {:.4}", depth)
                 } else {

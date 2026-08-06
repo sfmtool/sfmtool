@@ -20,11 +20,24 @@ struct FrustumUniforms {
     _pad2: f32,
 }
 
+// Per-reconstruction block: which node this draw belongs to.
+struct ReconUniforms {
+    model: mat4x4<f32>,
+    point_size: f32,
+    point_pick_base: u32,
+    image_pick_base: u32,
+    pickable: u32,
+    tint_color: vec4<f32>,
+}
+
 @group(0) @binding(0) var<uniform> uniforms: FrustumUniforms;
 @group(0) @binding(1) var<storage, read> frustum_colors: array<u32>;
+@group(0) @binding(2) var<uniform> recon: ReconUniforms;
 
-// Pick ID tag for frustum entities (bits 31..24).
-const PICK_TAG_FRUSTUM: u32 = 0x01000000u;
+// Pick ID tag for frustum entities (bits 31..30).
+const PICK_TAG_FRUSTUM: u32 = 0x40000000u;
+// Pick ID for "nothing" — what a non-pickable node emits.
+const PICK_TAG_NONE: u32 = 0u;
 
 struct VertexInput {
     // Per-vertex: x in {-1, 1} selects endpoint A/B, y in {-1, 1} selects side
@@ -47,14 +60,19 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // Select which endpoint this vertex belongs to
     let is_b = in.corner.x > 0.0;
 
+    // Place the edge in the shared world space with this node's transform,
+    // before anything view-dependent below.
+    let endpoint_a = (recon.model * vec4<f32>(in.endpoint_a, 1.0)).xyz;
+    let endpoint_b = (recon.model * vec4<f32>(in.endpoint_b, 1.0)).xyz;
+
     // Clip the edge against the near plane in view space before the manual
     // perspective divide below. Without this, an endpoint behind the view
     // camera has clip.w < 0; dividing by that flips the NDC sign and the
     // ribbon expansion goes off in a random direction, producing long lines
     // that appear to shoot across the screen.
     let near_z = -uniforms.near;
-    let view_a_z = (uniforms.view * vec4<f32>(in.endpoint_a, 1.0)).z;
-    let view_b_z = (uniforms.view * vec4<f32>(in.endpoint_b, 1.0)).z;
+    let view_a_z = (uniforms.view * vec4<f32>(endpoint_a, 1.0)).z;
+    let view_b_z = (uniforms.view * vec4<f32>(endpoint_b, 1.0)).z;
     let a_in_front = view_a_z < near_z;
     let b_in_front = view_b_z < near_z;
 
@@ -72,8 +90,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // Replace the behind-camera endpoint with the segment's intersection
     // with the near plane. The view transform is rigid, so view-space z is
     // linear along the segment and the same t applies in world space.
-    var world_a = in.endpoint_a;
-    var world_b = in.endpoint_b;
+    var world_a = endpoint_a;
+    var world_b = endpoint_b;
     if !a_in_front {
         let t = (near_z - view_a_z) / (view_b_z - view_a_z);
         world_a = mix(world_a, world_b, t);
@@ -139,14 +157,18 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     }
     // Highlight hovered frustum (cross-panel hover feedback):
     // override to full-opacity white so it stands out against the
-    // default semi-transparent white frustums.
-    if in.frustum_index == uniforms.hovered_image_index {
+    // default semi-transparent white frustums. The hover uniform is a global
+    // pick index, so the local index is rebased before the compare.
+    let pick_index = recon.image_pick_base + in.frustum_index;
+    if pick_index == uniforms.hovered_image_index {
         color = vec3<f32>(1.0, 1.0, 1.0);
         alpha = 1.0;
     }
     var out: FragmentOutput;
     out.color = vec4<f32>(color * alpha, alpha);
     out.linear_depth = 0.0; // do not contribute to EDL or depth readback
-    out.pick_id = PICK_TAG_FRUSTUM | in.frustum_index;
+    // A non-interactive node reads as background rather than passing the pick
+    // through to whatever it occludes.
+    out.pick_id = select(PICK_TAG_FRUSTUM | pick_index, PICK_TAG_NONE, recon.pickable == 0u);
     return out;
 }

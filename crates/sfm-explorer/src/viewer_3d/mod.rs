@@ -216,7 +216,7 @@ impl Viewer3D {
         show_fps: bool,
         scene_texture_id: Option<egui::TextureId>,
         hover_depth: Option<f32>,
-        hover_pick_id: u32,
+        hover_pick: Option<crate::scene_renderer::PickTarget>,
     ) {
         // Allocate the entire available space for the 3D view.
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
@@ -360,10 +360,11 @@ impl Viewer3D {
             &painter,
             rect,
             reconstruction,
+            recon_id,
             show_controls_help,
             show_fps,
             hover_depth,
-            hover_pick_id,
+            hover_pick,
             fps,
         );
     }

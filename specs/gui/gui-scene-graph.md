@@ -1,6 +1,9 @@
 # Scene Graph and Multi-Reconstruction Support
 
-*Status: Draft — design proposal, not yet implemented.*
+*Status: Phases 1–2 implemented (typed refs; per-reconstruction renderer
+resources and picking). Phases 3–5 — multi-load, the Scene Graph panel, node
+transforms and comparison affordances — are still design proposal. See
+"Implementation Phases" at the end.*
 
 This document specifies multi-reconstruction support for SfM Explorer: loading
 several `.sfmr` files at once, organizing them as nodes in a scene graph, and a
@@ -336,10 +339,16 @@ struct ReconResources {
 recons: HashMap<ReconId, ReconResources>,
 ```
 
+The bundle also owns the **bind groups** built from those resources, and the
+uniform buffers whose contents are per-recon (the block below, plus the
+thumbnail- and patch-atlas grid blocks) — a bind group naming a node's atlas
+and color buffer cannot outlive them, so it belongs to the same lifetime.
+
 Shared and unchanged: pipelines, render targets, samplers, the unit quad
 vertex buffer, EDL/target-indicator/track-ray/bg-image resources (all
 singletons by nature — track rays and bg image serve *the* selection, which is
-single).
+single). The atlas samplers are singletons too: every node's atlas is sampled
+identically, so only the textures are per-recon.
 
 Loading a node uploads one bundle; closing a node drops one bundle. No other
 node's GPU data is touched — this is the reason for per-recon buffers rather
@@ -359,9 +368,7 @@ one depth buffer, so mutual occlusion between reconstructions is automatic.
 
 ### Per-recon uniforms
 
-A new per-recon uniform block, one 256-byte-aligned slice per node in a single
-buffer bound with dynamic offsets (or per-recon bind groups — implementation's
-choice):
+A new per-recon uniform block:
 
 ```
 model: mat4x4<f32>        // node.transform as a matrix
@@ -372,10 +379,29 @@ pickable: u32             // 0 → emit PICK_TAG_NONE (node.interactive off)
 tint_color: vec4<f32>     // a = 0 → original colors
 ```
 
+**Binding mechanism (implemented): one small uniform buffer per node, bound in
+a per-recon bind group** — not one buffer sliced by dynamic offsets. Three of
+the four scene pipelines need a per-recon bind group regardless (frustum
+colors, thumbnail atlas, patch atlas), so the bundle owns bind groups either
+way; a dynamic-offset buffer would have added a second mechanism, plus
+256-byte alignment padding, for nothing. The block is appended as an extra
+binding on each pipeline's existing group 0.
+
+The atlas-grid uniform blocks move into the bundle for the same reason:
+`ImageQuadUniforms` and `PatchUniforms` carry per-recon grid dimensions, so
+each node allocates its own and the per-frame write loops over nodes. What
+stays global is what is genuinely one per frame: the camera/selection block,
+EDL, target indicator, track rays, background image.
+
 Vertex shaders apply `model` before `view_proj`. Homogeneous points at
 infinity need no special-casing: a direction transforms as
 `(model × vec4(dir, 0)).xyz` — the linear part rotates it, translation drops
 out, and uniform scale is irrelevant to a direction.
+
+Point splats are billboarded *after* the model transform, at the node's own
+`point_size`. Under a scaled node transform the splat should scale with it;
+folding the transform's scale into `point_size` is left to phase 4, where
+non-identity transforms first exist.
 
 The existing global uniforms keep working with one change of meaning:
 `selected_point_index` / `hovered_point_index` / `hovered_image_index` become
@@ -388,16 +414,24 @@ comparison. Sentinel remains `0xFFFFFFFF`.
 - `auto_point_size`, `camera_nn_scale`: computed **per recon** at upload, as
   today's functions already do — they just stop being singletons. Point splat
   world size is per-recon; the HUD size slider is a global multiplier on top.
+  The EDL pass is the one consumer that cannot be per-recon (it shades the
+  whole frame in a single fullscreen draw); it takes the **maximum**
+  `auto_point_size` across loaded nodes, the value that covers the largest
+  splats it has to smooth over.
 - **Scene bounds** (adaptive clip planes, `Z` zoom-to-fit, supernova/grid
   scaling): the union of visible nodes' bounding spheres, each transformed by
-  its node transform. Recomputed when the visible set, a node transform, or a
-  node's data changes.
+  its node transform — the smallest sphere enclosing them, not a bounding box.
+  Recomputed when the visible set, a node transform, or a node's data changes.
+  A node contributes bounds only once its points are uploaded, so an empty
+  bundle cannot drag the union toward the origin.
 - `length_scale` (drives frustum stub depth, target indicator): re-derived
   from the visible union whenever the node set changes, exactly as it is
-  re-derived on load today; still one global, still user-adjustable. This is a
-  known compromise — two reconstructions at wildly different scales will share
-  one frustum size until they're aligned (see "Node Transforms and
-  Alignment").
+  re-derived on load today; still one global, still user-adjustable. The union
+  rule is the **minimum** of each node's own seed
+  (`min(10 × auto_point_size, camera_nn_scale)`) — the finest scale present,
+  so the smallest reconstruction's frustums stay legible. This is a known
+  compromise — two reconstructions at wildly different scales will share one
+  frustum size until they're aligned (see "Node Transforms and Alignment").
 - Per-node `Zoom to Fit` frames that node's transformed bounds.
 
 ### Track rays and background image
@@ -424,11 +458,21 @@ bits 29..0   global index: recon pick base + local index    (2^30 ≈ 1.07B)
   independently). Shaders emit `tag << 30 | (base + instance_index)` — the
   base arrives via the per-recon uniform block, so **instance buffers store
   nothing new** and never need rewriting when bases move.
-- Bases are (re)assigned whenever a node is added or removed — a uniform
-  rewrite per node, nothing else.
+- Bases are (re)assigned whenever a node is added or removed, **or its entity
+  counts change** (an upload of new data re-cuts the space) — in `ReconId`
+  order, which is also load order. Nothing is rewritten but the tables; the
+  bases reach the GPU on the next frame's per-recon uniform write, which
+  happens unconditionally anyway. Reassignment therefore costs one walk over
+  the nodes and no buffer traffic at all.
 - CPU decode: binary search a sorted `(base, ReconId)` table per entity kind →
   `(ReconId, local index)` → `ImageRef` / `PointRef`. All decode sites
-  (`app.rs` pick dispatch, hover overlay text) go through one helper.
+  (`app.rs` pick dispatch, hover overlay text) go through one helper; the
+  readback returns an already-decoded ref rather than a raw id. An index
+  outside every assigned range decodes to "nothing", which is what makes a
+  readback from a node released one frame earlier harmless.
+- The two index spaces are allocated independently, so exceeding 2^30 in
+  either is possible in principle; it is logged rather than clamped, being
+  three orders of magnitude past the design point.
 - `pick_id == 0` remains "nothing"; tag 1 with base 0, local 0 encodes as
   `1 << 30`, so there is no collision with the none value.
 - **Non-interactive nodes** (`interactive` off): the per-recon `pickable`
@@ -643,14 +687,16 @@ reused, a missed purge can go stale but can never alias.
 
 ## Implementation Phases
 
-1. **Typed refs, single recon** (mechanical, no behavior change):
+1. **Typed refs, single recon** *(done)* (mechanical, no behavior change):
    introduce `ReconId`/`ImageRef`/`PointRef`, `Vec<SceneNode>` with the
    invariant len ≤ 1, re-key all caches, route panels through the selected
    reconstruction. Everything still loads/replaces as today.
-2. **Renderer bundles + picking**: `ReconResources`, per-recon uniform block
-   with model matrix and pick bases, new pick encoding, per-recon draws.
+2. **Renderer bundles + picking** *(done)*: `ReconResources`, per-recon uniform
+   block with model matrix and pick bases, new pick encoding, per-recon draws.
    Still one node loaded — but the machinery is multi-ready and covered by
-   noop-backend tests.
+   noop-backend tests. The model matrix is identity and `pickable` is always 1
+   until phases 3–4 supply the node transform and the interaction toggle;
+   `tint_color` is carried but not yet read by any shader (phase 5).
 3. **Multi-load + Scene Graph panel**: append-on-open, multi-select dialog,
    multi-path CLI, node close/reload, the Scene tab with tree, per-node
    eye and interaction-cursor toggles, selected-reconstruction handling,

@@ -8,7 +8,7 @@
 //! that the shaders parse and type-check — the one thing an edit to a `.wgsl`
 //! file cannot otherwise fail on until the GUI is launched on a real GPU.
 
-use super::super::gpu_types::PointUniforms;
+use super::super::gpu_types::{PointUniforms, ReconUniforms};
 
 fn device() -> (wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -58,7 +58,7 @@ fn the_point_uniforms_struct_fits_the_buffer_the_pipeline_allocates() {
             view_proj: [[0.0; 4]; 4],
             view: [[0.0; 4]; 4],
             camera_right: [1.0, 0.0, 0.0],
-            point_size: 1.0,
+            _pad0: 0.0,
             camera_up: [0.0, 1.0, 0.0],
             selected_point_index: u32::MAX,
             hovered_point_index: u32::MAX,
@@ -75,5 +75,35 @@ fn the_point_uniforms_struct_fits_the_buffer_the_pipeline_allocates() {
         "a WGSL uniform struct is rounded up to a 16-byte multiple; the Rust \
          side has to match or the tail of the buffer is garbage"
     );
+    device.poll(wgpu::PollType::Poll).expect("device poll");
+}
+
+#[test]
+fn the_recon_uniforms_struct_matches_its_wgsl_layout() {
+    // Five shaders declare this block; all five must agree with the Rust
+    // definition, and wgpu validates the write against the buffer size.
+    let (device, queue) = device();
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("recon uniforms"),
+        size: std::mem::size_of::<ReconUniforms>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(
+        &buffer,
+        0,
+        bytemuck::bytes_of(&ReconUniforms {
+            model: [[0.0; 4]; 4],
+            point_size: 1.0,
+            point_pick_base: 0,
+            image_pick_base: 0,
+            pickable: 1,
+            tint_color: [0.0; 4],
+        }),
+    );
+    assert_eq!(std::mem::size_of::<ReconUniforms>() % 16, 0);
+    // mat4 (64) + four scalars (16) + vec4 (16): the vec4's 16-byte alignment
+    // is what the four scalars in between are sized to satisfy.
+    assert_eq!(std::mem::size_of::<ReconUniforms>(), 96);
     device.poll(wgpu::PollType::Poll).expect("device poll");
 }

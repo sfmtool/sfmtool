@@ -24,6 +24,8 @@ use sfmtool_core::SfmrReconstruction;
 use super::super::gpu_types::{
     BG_PINHOLE_SUBDIVISIONS, DISTORTION_SUBDIVISIONS, FISHEYE_SUBDIVISIONS, THUMBNAIL_SIZE,
 };
+use super::super::picking::{PickTarget, PICK_TAG_FRUSTUM, PICK_TAG_POINT};
+use super::super::recon::ReconResources;
 use super::super::SceneRenderer;
 use super::track_rays::track_ray_edges;
 use crate::scene::{ImageRef, PointRef, ReconId};
@@ -35,6 +37,25 @@ use crate::state::CachedSiftFeatures;
 /// refs handed to the renderer have to agree on one, and a chosen id makes that
 /// visible at the call site.
 const RECON: ReconId = ReconId::from_raw(0);
+
+/// A second reconstruction, for the tests that load two at once. The UI never
+/// does that yet — the point of the renderer refactor is that the machinery no
+/// longer cares.
+const OTHER: ReconId = ReconId::from_raw(1);
+
+/// The resource bundle `RECON`'s uploads land in.
+fn bundle(r: &SceneRenderer) -> &ReconResources {
+    bundle_of(r, RECON)
+}
+
+fn bundle_of(r: &SceneRenderer, id: ReconId) -> &ReconResources {
+    r.recons.get(&id).expect("a bundle for this reconstruction")
+}
+
+/// How many patch surfels `RECON`'s bundle would draw.
+fn patch_count(r: &SceneRenderer) -> u32 {
+    bundle(r).patch.as_ref().map_or(0, |p| p.count)
+}
 
 /// The reconstruction's `n`-th point.
 fn point(n: usize) -> PointRef {
@@ -228,15 +249,17 @@ fn upload_points_counts_instances_and_derives_scene_scale() {
     let recon = demo(64);
     let mut r = SceneRenderer::new();
 
-    r.upload_points(&device, &recon);
+    r.upload_points(&device, RECON, &recon);
 
-    assert_eq!(r.point_count, 64);
-    assert!(r.instance_buffer.is_some());
+    let b = bundle(&r);
+    assert_eq!(b.point_count, 64);
+    assert!(b.point_instance_buffer.is_some());
     // Demo points sit on a unit sphere offset to z+1, so both the splat size
     // and the bounding sphere must come out positive and finite.
-    assert!(r.auto_point_size > 0.0 && r.auto_point_size.is_finite());
-    assert!(r.scene_radius > 0.0 && r.scene_radius.is_finite());
-    let nn = r
+    assert!(b.auto_point_size > 0.0 && b.auto_point_size.is_finite());
+    let (_, radius) = r.scene_bounds();
+    assert!(radius > 0.0 && radius.is_finite());
+    let nn = b
         .camera_nn_scale
         .expect("8 demo cameras give a nearest-neighbour scale");
     assert!(nn > 0.0 && nn.is_finite());
@@ -249,9 +272,9 @@ fn upload_points_handles_an_empty_cloud() {
     recon.points.clear();
     let mut r = SceneRenderer::new();
 
-    r.upload_points(&device, &recon);
+    r.upload_points(&device, RECON, &recon);
 
-    assert_eq!(r.point_count, 0);
+    assert_eq!(bundle(&r).point_count, 0);
 }
 
 // ── frustums ────────────────────────────────────────────────────────────
@@ -262,15 +285,16 @@ fn upload_frustums_emits_eight_edges_per_pinhole_camera() {
     let recon = demo(16);
     let mut r = SceneRenderer::new();
 
-    r.upload_frustums(&device, &recon, 1.0, 1.0);
+    r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
 
+    let b = bundle(&r);
     // 4 apex→corner side edges + 4 base edges around the far face.
-    assert_eq!(r.frustum_edge_count, DEMO_IMAGES * 8);
-    assert_eq!(r.frustum_image_count, DEMO_IMAGES);
-    assert!(r.frustum_color_buffer.is_some());
+    assert_eq!(b.frustum_edge_count, DEMO_IMAGES * 8);
+    assert_eq!(b.frustum_image_count, DEMO_IMAGES);
+    assert!(b.frustum_color_buffer.is_some());
     // No thumbnail atlas yet, so no image quads are built.
-    assert_eq!(r.image_quad_count, 0);
-    assert_eq!(r.distorted_quad_index_count, 0);
+    assert_eq!(b.image_quad_count, 0);
+    assert_eq!(b.distorted_quad_index_count, 0);
 }
 
 #[test]
@@ -279,14 +303,15 @@ fn upload_frustums_builds_pinhole_image_quads_once_thumbnails_exist() {
     let recon = demo(16);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, &recon);
-    r.upload_frustums(&device, &recon, 1.0, 1.0);
+    r.upload_thumbnails(&device, &queue, RECON, &recon);
+    r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
 
-    assert_eq!(r.image_quad_count, DEMO_IMAGES);
-    assert!(r.image_quad_instance_buffer.is_some());
+    let b = bundle(&r);
+    assert_eq!(b.image_quad_count, DEMO_IMAGES);
+    assert!(b.image_quad_instance_buffer.is_some());
     // Pinhole cameras take the flat-quad path, not the tessellated one.
-    assert_eq!(r.distorted_quad_index_count, 0);
-    assert!(r.distorted_quad_vertex_buffer.is_none());
+    assert_eq!(b.distorted_quad_index_count, 0);
+    assert!(b.distorted_quad_vertex_buffer.is_none());
 }
 
 #[test]
@@ -295,19 +320,20 @@ fn upload_frustums_tessellates_fisheye_cameras() {
     let recon = with_camera_model(demo(16), fisheye());
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, &recon);
-    r.upload_frustums(&device, &recon, 1.0, 1.0);
+    r.upload_thumbnails(&device, &queue, RECON, &recon);
+    r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
 
     // n×n grid: 4 side edges + 4 boundary walks of (n-1) segments each.
     let n = FISHEYE_SUBDIVISIONS + 1;
-    assert_eq!(r.frustum_edge_count, DEMO_IMAGES * (4 + 4 * (n - 1)) as u32);
+    let b = bundle(&r);
+    assert_eq!(b.frustum_edge_count, DEMO_IMAGES * (4 + 4 * (n - 1)) as u32);
     // Two triangles per grid cell, six indices per cell.
     assert_eq!(
-        r.distorted_quad_index_count,
+        b.distorted_quad_index_count,
         DEMO_IMAGES * ((n - 1) * (n - 1) * 6) as u32
     );
     // Fisheye takes the tessellated path exclusively.
-    assert_eq!(r.image_quad_count, 0);
+    assert_eq!(b.image_quad_count, 0);
 }
 
 #[test]
@@ -316,19 +342,20 @@ fn upload_frustums_tessellates_distorted_cameras() {
     let recon = with_camera_model(demo(16), radial_distorted());
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, &recon);
-    r.upload_frustums(&device, &recon, 1.0, 1.0);
+    r.upload_thumbnails(&device, &queue, RECON, &recon);
+    r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
 
     let n = DISTORTION_SUBDIVISIONS + 1;
-    assert_eq!(r.frustum_edge_count, DEMO_IMAGES * (4 + 4 * (n - 1)) as u32);
+    let b = bundle(&r);
+    assert_eq!(b.frustum_edge_count, DEMO_IMAGES * (4 + 4 * (n - 1)) as u32);
     assert_eq!(
-        r.distorted_quad_index_count,
+        b.distorted_quad_index_count,
         DEMO_IMAGES * ((n - 1) * (n - 1) * 6) as u32
     );
     // A distorted camera must take the tessellated path exclusively, exactly
     // like fisheye — `has_distortion()` and `is_fisheye()` are separate
     // predicates, so a regression could send it down the pinhole quad path.
-    assert_eq!(r.image_quad_count, 0);
+    assert_eq!(b.image_quad_count, 0);
 }
 
 #[test]
@@ -337,27 +364,41 @@ fn upload_frustums_replaces_quad_buffers_when_the_camera_model_changes() {
     let fisheye_recon = with_camera_model(demo(16), fisheye());
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, &fisheye_recon);
-    r.upload_frustums(&device, &fisheye_recon, 1.0, 1.0);
-    assert!(r.distorted_quad_index_count > 0);
+    r.upload_thumbnails(&device, &queue, RECON, &fisheye_recon);
+    r.upload_frustums(&device, RECON, &fisheye_recon, 1.0, 1.0);
+    assert!(bundle(&r).distorted_quad_index_count > 0);
 
     // Re-uploading a pinhole reconstruction must drop the stale distorted
     // buffers rather than leave them to be drawn against a new index count.
     let pinhole_recon = demo(16);
-    r.upload_frustums(&device, &pinhole_recon, 1.0, 1.0);
+    r.upload_frustums(&device, RECON, &pinhole_recon, 1.0, 1.0);
 
-    assert_eq!(r.distorted_quad_index_count, 0);
-    assert!(r.distorted_quad_vertex_buffer.is_none());
-    assert!(r.distorted_quad_index_buffer.is_none());
-    assert_eq!(r.image_quad_count, DEMO_IMAGES);
+    let b = bundle(&r);
+    assert_eq!(b.distorted_quad_index_count, 0);
+    assert!(b.distorted_quad_vertex_buffer.is_none());
+    assert!(b.distorted_quad_index_buffer.is_none());
+    assert_eq!(b.image_quad_count, DEMO_IMAGES);
 }
 
 #[test]
 fn update_frustum_colors_is_a_no_op_before_any_upload() {
     let (_device, queue) = device();
     let r = SceneRenderer::new();
-    // No color buffer yet — must return quietly rather than panic.
-    r.update_frustum_colors(&queue, 8, Some(0), Some(1), &[2, 3]);
+    // No bundle at all, let alone a color buffer — must return quietly rather
+    // than panic.
+    r.update_frustum_colors(&queue, RECON, 8, Some(0), Some(1), &[2, 3]);
+}
+
+#[test]
+fn update_frustum_colors_ignores_a_reconstruction_that_is_not_loaded() {
+    let (device, queue) = device();
+    let recon = demo(16);
+    let mut r = SceneRenderer::new();
+    r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
+
+    // Colors are written into the *owning* node's buffer; an id with no bundle
+    // must not fall through to whichever one happens to be loaded.
+    r.update_frustum_colors(&queue, OTHER, 8, Some(0), None, &[]);
 }
 
 #[test]
@@ -365,11 +406,11 @@ fn update_frustum_colors_tolerates_out_of_range_indices() {
     let (device, queue) = device();
     let recon = demo(16);
     let mut r = SceneRenderer::new();
-    r.upload_frustums(&device, &recon, 1.0, 1.0);
+    r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
 
     // Every index is past the end; each is individually bounds-checked, so
     // this must not panic or write out of range.
-    r.update_frustum_colors(&queue, 8, Some(99), Some(99), &[99, 100]);
+    r.update_frustum_colors(&queue, RECON, 8, Some(99), Some(99), &[99, 100]);
 }
 
 // ── thumbnails ──────────────────────────────────────────────────────────
@@ -380,17 +421,18 @@ fn upload_thumbnails_packs_a_square_ish_atlas_grid() {
     let recon = demo(16);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, &recon);
+    r.upload_thumbnails(&device, &queue, RECON, &recon);
 
     // cols = ceil(sqrt(8)) = 3, then rows = ceil(8/3) = 3.
-    assert_eq!(r.atlas_cols, 3);
-    assert_eq!(r.atlas_rows, 3);
-    assert!(r.thumbnail_texture.is_some());
-    assert!(r.image_quad_thumbnail_view.is_some());
-    assert!(r.image_quad_uniform_buffer.is_some());
+    let b = bundle(&r);
+    assert_eq!(b.atlas_cols, 3);
+    assert_eq!(b.atlas_rows, 3);
+    assert!(b.thumbnail_texture.is_some());
+    assert!(b.thumbnail_view.is_some());
+    assert!(b.image_quad_uniform_buffer.is_some());
     // A page holds cols × (max_texture_dim / THUMBNAIL_SIZE) cells.
     let cells_per_axis = wgpu::Limits::default().max_texture_dimension_2d / THUMBNAIL_SIZE;
-    assert_eq!(r.images_per_page, 3 * cells_per_axis);
+    assert_eq!(b.images_per_page, 3 * cells_per_axis);
 }
 
 #[test]
@@ -405,14 +447,15 @@ fn upload_thumbnails_clamps_to_the_gpu_texture_limits() {
     let recon = demo(16);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, &recon);
+    r.upload_thumbnails(&device, &queue, RECON, &recon);
 
-    assert_eq!(r.atlas_cols, 2);
-    assert_eq!(r.atlas_rows, 2);
-    assert_eq!(r.images_per_page, 4);
+    let b = bundle(&r);
+    assert_eq!(b.atlas_cols, 2);
+    assert_eq!(b.atlas_rows, 2);
+    assert_eq!(b.images_per_page, 4);
     // The texture itself must stay inside the limits: wgpu-core would reject
     // the descriptor otherwise, so reaching here at all is the assertion.
-    assert!(r.thumbnail_texture.is_some());
+    assert!(b.thumbnail_texture.is_some());
 }
 
 #[test]
@@ -429,18 +472,19 @@ fn upload_thumbnails_spills_onto_extra_atlas_pages() {
     recon.thumbnails_y_x_rgb = Array4::zeros((images, 128, 128, 3));
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, &recon);
+    r.upload_thumbnails(&device, &queue, RECON, &recon);
 
     // sqrt would ask for 5 columns, but a page is only 4 cells wide — the
     // texture-dimension budget is what caps the grid in practice. The
     // MAX_ATLAS_COLS cap (128) is looser than this on any real GPU: it binds
     // only above ~16k images *and* a >16384px texture limit, so it is left
     // untested rather than forced with an ~800MB thumbnail array.
-    assert_eq!(r.atlas_cols, 4);
-    assert_eq!(r.atlas_rows, 4);
-    assert_eq!(r.images_per_page, 16);
+    let b = bundle(&r);
+    assert_eq!(b.atlas_cols, 4);
+    assert_eq!(b.atlas_rows, 4);
+    assert_eq!(b.images_per_page, 16);
     // 25 images over 16 per page = 2 pages, and all 25 still fit.
-    assert!(r.thumbnail_texture.is_some());
+    assert!(b.thumbnail_texture.is_some());
 }
 
 #[test]
@@ -451,9 +495,13 @@ fn upload_thumbnails_skips_an_imageless_reconstruction() {
     recon.thumbnails_y_x_rgb = Array4::zeros((0, 128, 128, 3));
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, &recon);
+    r.upload_thumbnails(&device, &queue, RECON, &recon);
 
-    assert!(r.thumbnail_texture.is_none());
+    // Nothing to pack, so not even a bundle is created for it.
+    assert!(r
+        .recons
+        .get(&RECON)
+        .is_none_or(|b| b.thumbnail_texture.is_none()));
 }
 
 // ── patches ─────────────────────────────────────────────────────────────
@@ -465,14 +513,18 @@ fn upload_patches_counts_only_points_carrying_a_patch() {
     let recon = with_patches(demo(present.len()), 16, &present, None, None);
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon);
 
-    assert_eq!(r.patch_count, 5);
-    assert!(r.patch_instance_buffer.is_some());
-    assert!(r.patch_atlas_texture.is_some());
-    // cols = ceil(sqrt(5)) = 3, rows = ceil(5/3) = 2.
-    assert_eq!(r.patch_atlas_cols, 3);
-    assert_eq!(r.patch_atlas_rows, 2);
+    let b = bundle(&r);
+    assert_eq!(patch_count(&r), 5);
+    let patch = b.patch.as_ref().expect("patch resources");
+    // cols = ceil(sqrt(5)) = 3, rows = ceil(5/3) = 2, at 16px per tile.
+    assert_eq!(patch.atlas_cols, 3);
+    assert_eq!(patch.atlas_rows, 2);
+    assert_eq!(
+        (patch.atlas_texture.width(), patch.atlas_texture.height()),
+        (3 * 16, 2 * 16),
+    );
 }
 
 #[test]
@@ -481,11 +533,11 @@ fn upload_patches_uploads_nothing_without_patch_arrays() {
     let recon = demo(8); // demo carries no patch frames
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon);
 
-    assert_eq!(r.patch_count, 0);
-    assert!(r.patch_instance_buffer.is_none());
-    assert!(r.patch_atlas_texture.is_none());
+    let b = bundle(&r);
+    assert_eq!(patch_count(&r), 0);
+    assert!(b.patch.is_none());
 }
 
 #[test]
@@ -495,10 +547,10 @@ fn upload_patches_skips_frames_without_bitmaps() {
     recon.patch_bitmaps_y_x_rgba = None; // frames present, bitmaps absent
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon);
 
     // v1 renders textured patches only.
-    assert_eq!(r.patch_count, 0);
+    assert_eq!(patch_count(&r), 0);
 }
 
 #[test]
@@ -508,10 +560,11 @@ fn upload_patches_rejects_non_square_bitmaps() {
     let recon = with_patches(demo(4), 16, &[true; 4], None, Some(17));
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon);
 
-    assert_eq!(r.patch_count, 0);
-    assert!(r.patch_atlas_texture.is_none());
+    let b = bundle(&r);
+    assert_eq!(patch_count(&r), 0);
+    assert!(b.patch.is_none());
 }
 
 #[test]
@@ -520,9 +573,9 @@ fn upload_patches_rejects_zero_resolution_bitmaps() {
     let recon = with_patches(demo(4), 0, &[true; 4], None, Some(0));
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon);
 
-    assert_eq!(r.patch_count, 0);
+    assert_eq!(patch_count(&r), 0);
 }
 
 #[test]
@@ -534,10 +587,10 @@ fn upload_patches_rejects_bitmaps_larger_than_the_texture_limit() {
     let recon = with_patches(demo(2), 512, &[true; 2], None, None);
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon);
 
     // Skipped rather than passed to wgpu, which would be a validation error.
-    assert_eq!(r.patch_count, 0);
+    assert_eq!(patch_count(&r), 0);
 }
 
 #[test]
@@ -547,9 +600,9 @@ fn upload_patches_bounds_the_row_scan_by_the_shortest_array() {
     let recon = with_patches(demo(6), 16, &[true; 6], Some(2), None);
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon);
 
-    assert_eq!(r.patch_count, 2);
+    assert_eq!(patch_count(&r), 2);
 }
 
 #[test]
@@ -558,15 +611,195 @@ fn upload_patches_clears_stale_patches_when_reloading_without_them() {
     let with = with_patches(demo(4), 16, &[true; 4], None, None);
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, &with);
-    assert_eq!(r.patch_count, 4);
+    r.upload_patches(&device, &queue, RECON, &with);
+    assert_eq!(patch_count(&r), 4);
 
-    r.upload_patches(&device, &queue, &demo(4));
+    r.upload_patches(&device, &queue, RECON, &demo(4));
 
-    assert_eq!(r.patch_count, 0);
-    assert!(r.patch_instance_buffer.is_none());
-    assert!(r.patch_atlas_texture.is_none());
-    assert!(r.patch_bind_group.is_none());
+    let b = bundle(&r);
+    assert_eq!(patch_count(&r), 0);
+    // The whole patch half of the bundle goes, atlas and bind group with it.
+    assert!(b.patch.is_none());
+}
+
+// ── resource bundles + pick bases ───────────────────────────────────────
+//
+// Two reconstructions at once is something the UI cannot do until phase 3 —
+// which is exactly why the renderer has to be tested with two here.
+
+/// Upload one node's points and frustums, the two counts pick bases are cut
+/// from.
+fn upload_node(r: &mut SceneRenderer, device: &wgpu::Device, id: ReconId, points: usize) {
+    let recon = demo(points);
+    r.upload_points(device, id, &recon);
+    r.upload_frustums(device, id, &recon, 1.0, 1.0);
+}
+
+#[test]
+fn two_nodes_upload_into_two_independent_bundles() {
+    let (device, queue) = device();
+    let mut r = SceneRenderer::new();
+
+    let first = demo(12);
+    let second = with_camera_model(demo(30), fisheye());
+    r.upload_points(&device, RECON, &first);
+    r.upload_thumbnails(&device, &queue, RECON, &first);
+    r.upload_frustums(&device, RECON, &first, 1.0, 1.0);
+    r.upload_points(&device, OTHER, &second);
+    r.upload_thumbnails(&device, &queue, OTHER, &second);
+    r.upload_frustums(&device, OTHER, &second, 1.0, 1.0);
+
+    assert_eq!(r.recons.len(), 2);
+    assert_eq!(bundle_of(&r, RECON).point_count, 12);
+    assert_eq!(bundle_of(&r, OTHER).point_count, 30);
+    // Each node keeps its own geometry: the pinhole node took the flat-quad
+    // path while the fisheye node tessellated, and neither overwrote the other.
+    assert_eq!(bundle_of(&r, RECON).image_quad_count, DEMO_IMAGES);
+    assert_eq!(bundle_of(&r, RECON).distorted_quad_index_count, 0);
+    assert_eq!(bundle_of(&r, OTHER).image_quad_count, 0);
+    assert!(bundle_of(&r, OTHER).distorted_quad_index_count > 0);
+}
+
+#[test]
+fn releasing_a_node_drops_only_its_bundle() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 12);
+    upload_node(&mut r, &device, OTHER, 30);
+
+    r.retain_nodes(|id| id != RECON);
+
+    assert_eq!(r.recons.len(), 1);
+    assert!(!r.recons.contains_key(&RECON));
+    assert_eq!(bundle_of(&r, OTHER).point_count, 30);
+    // The survivor slides down to the bottom of both index spaces.
+    assert_eq!(bundle_of(&r, OTHER).point_pick_base, 0);
+    assert_eq!(bundle_of(&r, OTHER).image_pick_base, 0);
+}
+
+#[test]
+fn retain_nodes_releases_everything_that_left_the_scene() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 12);
+    upload_node(&mut r, &device, OTHER, 30);
+
+    r.retain_nodes(|id| id == OTHER);
+
+    assert_eq!(r.recons.len(), 1);
+    assert!(r.recons.contains_key(&OTHER));
+}
+
+#[test]
+fn pick_bases_are_contiguous_and_non_overlapping() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 12);
+    upload_node(&mut r, &device, OTHER, 30);
+
+    let first = bundle_of(&r, RECON);
+    let second = bundle_of(&r, OTHER);
+    // Bases are handed out in ReconId order, and each range starts exactly
+    // where the previous one ended — no gaps, no overlap.
+    assert_eq!(first.point_pick_base, 0);
+    assert_eq!(second.point_pick_base, first.point_count);
+    assert_eq!(first.image_pick_base, 0);
+    assert_eq!(second.image_pick_base, first.frustum_image_count);
+    // The two index spaces are cut independently: 12 points but only 8 images
+    // in the first node, so the second node's bases differ.
+    assert_eq!(second.point_pick_base, 12);
+    assert_eq!(second.image_pick_base, DEMO_IMAGES);
+}
+
+#[test]
+fn a_pick_id_decodes_back_to_the_node_that_drew_it() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 12);
+    upload_node(&mut r, &device, OTHER, 30);
+
+    // Walk both ends of every range, which is where an off-by-one in the base
+    // arithmetic would show up.
+    for (id, points) in [(RECON, 12u32), (OTHER, 30u32)] {
+        let b = bundle_of(&r, id);
+        for local in [0, points - 1] {
+            let pick_id = PICK_TAG_POINT | (b.point_pick_base + local);
+            assert_eq!(
+                r.decode_pick(pick_id),
+                Some(PickTarget::Point(PointRef::new(id, local as usize))),
+            );
+        }
+        for local in [0, DEMO_IMAGES - 1] {
+            let pick_id = PICK_TAG_FRUSTUM | (b.image_pick_base + local);
+            assert_eq!(
+                r.decode_pick(pick_id),
+                Some(PickTarget::Image(ImageRef::new(id, local as usize))),
+            );
+        }
+    }
+
+    // One past the last node's range belongs to nobody.
+    let past_the_end = bundle_of(&r, OTHER).point_pick_base + 30;
+    assert_eq!(r.decode_pick(PICK_TAG_POINT | past_the_end), None);
+}
+
+#[test]
+fn pick_bases_stay_consistent_under_add_and_remove_churn() {
+    let (device, _queue) = device();
+    let third = ReconId::from_raw(2);
+    let mut r = SceneRenderer::new();
+
+    upload_node(&mut r, &device, RECON, 12);
+    upload_node(&mut r, &device, OTHER, 30);
+    upload_node(&mut r, &device, third, 7);
+    // Drop the middle node, then bring another one back — the churn that would
+    // strand a stale base if reassignment were incremental.
+    r.retain_nodes(|id| id != OTHER);
+    upload_node(&mut r, &device, OTHER, 5);
+    r.retain_nodes(|id| id != third);
+
+    // Whatever the history, the invariant holds: bases in ReconId order,
+    // contiguous from zero, each range exactly as long as its node's count.
+    let mut ids: Vec<ReconId> = r.recons.keys().copied().collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![RECON, OTHER]);
+    let (mut point_base, mut image_base) = (0, 0);
+    for id in ids {
+        let b = bundle_of(&r, id);
+        assert_eq!(b.point_pick_base, point_base, "point base of {id:?}");
+        assert_eq!(b.image_pick_base, image_base, "image base of {id:?}");
+        point_base += b.point_count;
+        image_base += b.frustum_image_count;
+    }
+
+    // And decode still lands in the right node afterwards.
+    assert_eq!(
+        r.decode_pick(PICK_TAG_POINT | 12),
+        Some(PickTarget::Point(PointRef::new(OTHER, 0))),
+    );
+    assert_eq!(
+        r.decode_pick(PICK_TAG_FRUSTUM | DEMO_IMAGES),
+        Some(PickTarget::Image(ImageRef::new(OTHER, 0))),
+    );
+}
+
+#[test]
+fn the_length_scale_seed_is_the_smallest_across_loaded_nodes() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    assert_eq!(r.length_scale_seed(), None);
+
+    upload_node(&mut r, &device, RECON, 12);
+    let single = r.length_scale_seed().expect("one node seeds a scale");
+    upload_node(&mut r, &device, OTHER, 4000);
+
+    // A denser cloud has a smaller nearest-neighbour spacing, so adding it can
+    // only lower the seed — and the union must never exceed either node's own.
+    let both = r.length_scale_seed().expect("two nodes still seed a scale");
+    assert!(
+        both <= single,
+        "{both} should not exceed the single-node {single}"
+    );
 }
 
 // ── track rays ──────────────────────────────────────────────────────────

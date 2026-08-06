@@ -7,11 +7,15 @@ use wgpu::util::DeviceExt;
 const SHADER: &str = include_str!("../../shaders/points.wgsl");
 
 /// Resources created by the point splat pipeline.
+///
+/// No bind group: it pairs the global uniform buffer below with a per-recon
+/// `ReconUniforms` slice, so one is built per loaded reconstruction (see
+/// [`ReconResources::new`](crate::scene_renderer::recon::ReconResources::new)).
 pub(in crate::scene_renderer) struct PointPipelineResources {
     pub pipeline: wgpu::RenderPipeline,
     pub quad_vertex_buffer: wgpu::Buffer,
     pub uniform_buffer: wgpu::Buffer,
-    pub bind_group: wgpu::BindGroup,
+    pub bind_group_layout: wgpu::BindGroupLayout,
 }
 
 pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineResources {
@@ -22,16 +26,30 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
 
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("point bind group layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+        entries: &[
+            // 0: global camera/selection uniforms
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
             },
-            count: None,
-        }],
+            // 1: this reconstruction's ReconUniforms
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -150,20 +168,10 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
         mapped_at_creation: false,
     });
 
-    // Point bind group
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("point bind group"),
-        layout: &bind_group_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: uniform_buffer.as_entire_binding(),
-        }],
-    });
-
     PointPipelineResources {
         pipeline,
         quad_vertex_buffer,
         uniform_buffer,
-        bind_group,
+        bind_group_layout,
     }
 }

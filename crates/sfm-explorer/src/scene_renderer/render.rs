@@ -229,19 +229,27 @@ impl SceneRenderer {
                 ..Default::default()
             });
 
+            // Every scene pass below is a loop over the loaded reconstructions:
+            // bind that node's bind group (which carries its ReconUniforms
+            // slice, thumbnail atlas and frustum colors), then the existing
+            // instanced draw. Nodes share the one depth buffer, so mutual
+            // occlusion between reconstructions is automatic.
+            let bundles = || self.recon_order.iter().filter_map(|id| self.recons.get(id));
+
             if show_points {
-                if let (Some(pipeline), Some(bind_group), Some(quad_vb), Some(instance_buf)) = (
-                    &self.point_pipeline,
-                    &self.point_bind_group,
-                    &self.quad_vertex_buffer,
-                    &self.instance_buffer,
-                ) {
-                    if self.point_count > 0 {
-                        pass.set_pipeline(pipeline);
-                        pass.set_bind_group(0, bind_group, &[]);
-                        pass.set_vertex_buffer(0, quad_vb.slice(..));
-                        pass.set_vertex_buffer(1, instance_buf.slice(..));
-                        pass.draw(0..4, 0..self.point_count);
+                if let (Some(pipeline), Some(quad_vb)) =
+                    (&self.point_pipeline, &self.quad_vertex_buffer)
+                {
+                    pass.set_pipeline(pipeline);
+                    pass.set_vertex_buffer(0, quad_vb.slice(..));
+                    for bundle in bundles() {
+                        if let Some(instance_buf) = &bundle.point_instance_buffer {
+                            if bundle.point_count > 0 {
+                                pass.set_bind_group(0, &bundle.point_bind_group, &[]);
+                                pass.set_vertex_buffer(1, instance_buf.slice(..));
+                                pass.draw(0..4, 0..bundle.point_count);
+                            }
+                        }
                     }
                 }
             }
@@ -251,51 +259,61 @@ impl SceneRenderer {
             // The frustum pipeline has an empty write mask for linear depth,
             // so point cloud depth is preserved for EDL and depth readback.
             if show_camera_images {
-                if let (Some(pipeline), Some(bind_group), Some(quad_vb), Some(edge_buf)) = (
-                    &self.frustum_pipeline,
-                    &self.frustum_bind_group,
-                    &self.quad_vertex_buffer,
-                    &self.frustum_edge_buffer,
-                ) {
-                    if self.frustum_edge_count > 0 {
-                        pass.set_pipeline(pipeline);
-                        pass.set_bind_group(0, bind_group, &[]);
-                        pass.set_vertex_buffer(0, quad_vb.slice(..));
-                        pass.set_vertex_buffer(1, edge_buf.slice(..));
-                        pass.draw(0..4, 0..self.frustum_edge_count);
+                if let (Some(pipeline), Some(quad_vb)) =
+                    (&self.frustum_pipeline, &self.quad_vertex_buffer)
+                {
+                    pass.set_pipeline(pipeline);
+                    pass.set_vertex_buffer(0, quad_vb.slice(..));
+                    for bundle in bundles() {
+                        if let (Some(bind_group), Some(edge_buf)) =
+                            (&bundle.frustum_bind_group, &bundle.frustum_edge_buffer)
+                        {
+                            if bundle.frustum_edge_count > 0 {
+                                pass.set_bind_group(0, bind_group, &[]);
+                                pass.set_vertex_buffer(1, edge_buf.slice(..));
+                                pass.draw(0..4, 0..bundle.frustum_edge_count);
+                            }
+                        }
                     }
                 }
 
                 // ── Pass 1c: Image quads on frustum far planes ──
                 // Pinhole cameras: instanced flat quads
-                if let (Some(pipeline), Some(bind_group), Some(quad_vb), Some(instance_buf)) = (
-                    &self.image_quad_pipeline,
-                    &self.image_quad_bind_group,
-                    &self.quad_vertex_buffer,
-                    &self.image_quad_instance_buffer,
-                ) {
-                    if self.image_quad_count > 0 {
-                        pass.set_pipeline(pipeline);
-                        pass.set_bind_group(0, bind_group, &[]);
-                        pass.set_vertex_buffer(0, quad_vb.slice(..));
-                        pass.set_vertex_buffer(1, instance_buf.slice(..));
-                        pass.draw(0..4, 0..self.image_quad_count);
+                if let (Some(pipeline), Some(quad_vb)) =
+                    (&self.image_quad_pipeline, &self.quad_vertex_buffer)
+                {
+                    pass.set_pipeline(pipeline);
+                    pass.set_vertex_buffer(0, quad_vb.slice(..));
+                    for bundle in bundles() {
+                        if let (Some(bind_group), Some(instance_buf)) = (
+                            &bundle.image_quad_bind_group,
+                            &bundle.image_quad_instance_buffer,
+                        ) {
+                            if bundle.image_quad_count > 0 {
+                                pass.set_bind_group(0, bind_group, &[]);
+                                pass.set_vertex_buffer(1, instance_buf.slice(..));
+                                pass.draw(0..4, 0..bundle.image_quad_count);
+                            }
+                        }
                     }
                 }
 
                 // Distorted cameras: tessellated indexed quads
-                if let (Some(pipeline), Some(bind_group), Some(vbuf), Some(ibuf)) = (
-                    &self.distorted_quad_pipeline,
-                    &self.image_quad_bind_group,
-                    &self.distorted_quad_vertex_buffer,
-                    &self.distorted_quad_index_buffer,
-                ) {
-                    if self.distorted_quad_index_count > 0 {
-                        pass.set_pipeline(pipeline);
-                        pass.set_bind_group(0, bind_group, &[]);
-                        pass.set_vertex_buffer(0, vbuf.slice(..));
-                        pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
-                        pass.draw_indexed(0..self.distorted_quad_index_count, 0, 0..1);
+                if let Some(pipeline) = &self.distorted_quad_pipeline {
+                    pass.set_pipeline(pipeline);
+                    for bundle in bundles() {
+                        if let (Some(bind_group), Some(vbuf), Some(ibuf)) = (
+                            &bundle.image_quad_bind_group,
+                            &bundle.distorted_quad_vertex_buffer,
+                            &bundle.distorted_quad_index_buffer,
+                        ) {
+                            if bundle.distorted_quad_index_count > 0 {
+                                pass.set_bind_group(0, bind_group, &[]);
+                                pass.set_vertex_buffer(0, vbuf.slice(..));
+                                pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                                pass.draw_indexed(0..bundle.distorted_quad_index_count, 0, 0..1);
+                            }
+                        }
                     }
                 }
             }
@@ -303,20 +321,22 @@ impl SceneRenderer {
             // ── Pass 1d: Patch surfels (textured oriented quads) ──
             // Writes real hardware depth (occludes/occluded by points and
             // image quads) but 0.0 linear depth (EDL passthrough), and
-            // PICK_TAG_POINT | point_index so clicks select the patch's point.
+            // PICK_TAG_POINT | point pick index so clicks select the patch's
+            // point.
             if show_patches {
-                if let (Some(pipeline), Some(bind_group), Some(quad_vb), Some(instance_buf)) = (
-                    &self.patch_pipeline,
-                    &self.patch_bind_group,
-                    &self.quad_vertex_buffer,
-                    &self.patch_instance_buffer,
-                ) {
-                    if self.patch_count > 0 {
-                        pass.set_pipeline(pipeline);
-                        pass.set_bind_group(0, bind_group, &[]);
-                        pass.set_vertex_buffer(0, quad_vb.slice(..));
-                        pass.set_vertex_buffer(1, instance_buf.slice(..));
-                        pass.draw(0..4, 0..self.patch_count);
+                if let (Some(pipeline), Some(quad_vb)) =
+                    (&self.patch_pipeline, &self.quad_vertex_buffer)
+                {
+                    pass.set_pipeline(pipeline);
+                    pass.set_vertex_buffer(0, quad_vb.slice(..));
+                    for bundle in bundles() {
+                        if let Some(patch) = &bundle.patch {
+                            if patch.count > 0 {
+                                pass.set_bind_group(0, &patch.bind_group, &[]);
+                                pass.set_vertex_buffer(1, patch.instance_buffer.slice(..));
+                                pass.draw(0..4, 0..patch.count);
+                            }
+                        }
                     }
                 }
             }

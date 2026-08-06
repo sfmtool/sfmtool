@@ -8,27 +8,44 @@
 //!
 //! 1. Point splat pass — renders instanced billboard quads to color + linear depth
 //! 2. EDL post-process pass — applies Eye-Dome Lighting for depth-aware shading
+//!
+//! ## Per-reconstruction resources
+//!
+//! Everything belonging to one loaded reconstruction lives in a
+//! [`ReconResources`] bundle keyed by [`ReconId`]; the fields on
+//! [`SceneRenderer`] itself are the shared singletons. Each scene pass loops
+//! over the bundles, binding that node's bind group (which carries its
+//! [`ReconUniforms`] slice: model matrix, point size, pick bases) before the
+//! existing instanced draw. See `specs/gui/gui-scene-graph.md`.
 
 mod auto_point_size;
 mod compass;
 mod distorted_mesh;
 mod gpu_types;
+mod picking;
 mod pipelines;
 mod readback;
+mod recon;
 mod render;
 mod sizing;
 mod uniforms;
 mod upload;
 
-use crate::scene::ImageRef;
+use std::collections::HashMap;
+
+use nalgebra::Point3;
+
+use crate::scene::{ImageRef, PointRef, ReconId};
 use gpu_types::*;
+use picking::PickTables;
+use recon::ReconResources;
 
 // Re-export public constants so external modules can use `crate::scene_renderer::*`.
 pub use gpu_types::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
-    DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER, PICK_INDEX_MASK,
-    PICK_TAG_FRUSTUM, PICK_TAG_MASK, PICK_TAG_NONE, PICK_TAG_POINT,
+    DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
 };
+pub use picking::PickTarget;
 
 // ── SceneRenderer ───────────────────────────────────────────────────────
 
@@ -55,7 +72,7 @@ pub struct SceneRenderer {
     point_pipeline: Option<wgpu::RenderPipeline>,
     quad_vertex_buffer: Option<wgpu::Buffer>,
     point_uniform_buffer: Option<wgpu::Buffer>,
-    point_bind_group: Option<wgpu::BindGroup>,
+    point_bind_group_layout: Option<wgpu::BindGroupLayout>,
 
     // ── Pass 2 pipeline resources ──
     edl_pipeline: Option<wgpu::RenderPipeline>,
@@ -85,44 +102,19 @@ pub struct SceneRenderer {
 
     // ── Frustum rendering ──
     frustum_pipeline: Option<wgpu::RenderPipeline>,
-    frustum_edge_buffer: Option<wgpu::Buffer>,
     frustum_uniform_buffer: Option<wgpu::Buffer>,
     frustum_bind_group_layout: Option<wgpu::BindGroupLayout>,
-    frustum_bind_group: Option<wgpu::BindGroup>,
-    frustum_color_buffer: Option<wgpu::Buffer>,
-    frustum_edge_count: u32,
-    frustum_image_count: u32,
 
     // ── Image quad rendering (pinhole: instanced, distorted: indexed) ──
     image_quad_pipeline: Option<wgpu::RenderPipeline>,
     image_quad_bind_group_layout: Option<wgpu::BindGroupLayout>,
-    image_quad_instance_buffer: Option<wgpu::Buffer>,
-    image_quad_bind_group: Option<wgpu::BindGroup>,
-    image_quad_count: u32,
-    // Distorted image quad rendering (tessellated mesh)
     distorted_quad_pipeline: Option<wgpu::RenderPipeline>,
-    distorted_quad_vertex_buffer: Option<wgpu::Buffer>,
-    distorted_quad_index_buffer: Option<wgpu::Buffer>,
-    distorted_quad_index_count: u32,
-    thumbnail_texture: Option<wgpu::Texture>,
-    image_quad_uniform_buffer: Option<wgpu::Buffer>,
-    image_quad_thumbnail_view: Option<wgpu::TextureView>,
     image_quad_sampler: Option<wgpu::Sampler>,
-    atlas_cols: u32,
-    atlas_rows: u32,
-    images_per_page: u32,
 
     // ── Patch (surfel) rendering ──
     patch_pipeline: Option<wgpu::RenderPipeline>,
     patch_bind_group_layout: Option<wgpu::BindGroupLayout>,
-    patch_uniform_buffer: Option<wgpu::Buffer>,
-    patch_instance_buffer: Option<wgpu::Buffer>,
-    patch_atlas_texture: Option<wgpu::Texture>,
-    patch_bind_group: Option<wgpu::BindGroup>,
-    patch_count: u32,
-    patch_atlas_cols: u32,
-    patch_atlas_rows: u32,
-    patches_per_page: u32,
+    patch_sampler: Option<wgpu::Sampler>,
 
     // ── Background image (camera view mode) ──
     bg_image_distorted_pipeline: Option<wgpu::RenderPipeline>,
@@ -140,9 +132,15 @@ pub struct SceneRenderer {
     /// old background for the same position in the new reconstruction.
     bg_image_loaded: Option<ImageRef>,
 
-    // ── Point cloud data ──
-    instance_buffer: Option<wgpu::Buffer>,
-    point_count: u32,
+    // ── Per-reconstruction resources ──
+    /// One bundle per loaded node. Uploads write into a bundle; a node leaving
+    /// the scene drops one.
+    recons: HashMap<ReconId, ReconResources>,
+    /// The bundle keys in `ReconId` (= load) order, so draws and pick-base
+    /// assignment are deterministic.
+    recon_order: Vec<ReconId>,
+    /// Sorted `(base, ReconId)` tables that decode a pick id back to a ref.
+    pick_tables: PickTables,
 
     // ── GPU readback (5x5 region, shared by hover + click) ──
     /// The linear depth texture (kept for copy operations).
@@ -155,22 +153,8 @@ pub struct SceneRenderer {
     readback_pending: bool,
     /// Most recently read-back hover depth.
     hover_depth: Option<f32>,
-    /// Most recently read-back hover pick ID (tag | index).
-    hover_pick_id: u32,
-
-    // ── Settings ──
-    /// Auto-computed point size (median NN distance * 0.5). Updated on upload.
-    auto_point_size: f32,
-
-    /// Characteristic inter-camera distance (p90 of camera-center NN distances).
-    /// `None` when fewer than 2 cameras or not yet computed.
-    camera_nn_scale: Option<f32>,
-
-    // ── Scene bounds ──
-    /// Bounding sphere center of the reconstruction's 3D points.
-    scene_center: nalgebra::Point3<f64>,
-    /// Bounding sphere radius (80th percentile extent from center).
-    scene_radius: f64,
+    /// Most recently read-back hover pick, already decoded to a typed ref.
+    hover_pick: Option<PickTarget>,
 }
 
 impl SceneRenderer {
@@ -187,7 +171,7 @@ impl SceneRenderer {
             point_pipeline: None,
             quad_vertex_buffer: None,
             point_uniform_buffer: None,
-            point_bind_group: None,
+            point_bind_group_layout: None,
             edl_pipeline: None,
             edl_bind_group_layout: None,
             edl_uniform_buffer: None,
@@ -209,39 +193,15 @@ impl SceneRenderer {
             track_ray_bind_group: None,
             track_ray_count: 0,
             frustum_pipeline: None,
-            frustum_edge_buffer: None,
             frustum_uniform_buffer: None,
             frustum_bind_group_layout: None,
-            frustum_bind_group: None,
-            frustum_color_buffer: None,
-            frustum_edge_count: 0,
-            frustum_image_count: 0,
             image_quad_pipeline: None,
             image_quad_bind_group_layout: None,
-            image_quad_instance_buffer: None,
-            image_quad_bind_group: None,
-            image_quad_count: 0,
             distorted_quad_pipeline: None,
-            distorted_quad_vertex_buffer: None,
-            distorted_quad_index_buffer: None,
-            distorted_quad_index_count: 0,
-            thumbnail_texture: None,
-            image_quad_uniform_buffer: None,
-            image_quad_thumbnail_view: None,
             image_quad_sampler: None,
-            atlas_cols: 0,
-            atlas_rows: 0,
-            images_per_page: 0,
             patch_pipeline: None,
             patch_bind_group_layout: None,
-            patch_uniform_buffer: None,
-            patch_instance_buffer: None,
-            patch_atlas_texture: None,
-            patch_bind_group: None,
-            patch_count: 0,
-            patch_atlas_cols: 0,
-            patch_atlas_rows: 0,
-            patches_per_page: 0,
+            patch_sampler: None,
             bg_image_distorted_pipeline: None,
             bg_image_distorted_vertex_buffer: None,
             bg_image_distorted_index_buffer: None,
@@ -252,18 +212,15 @@ impl SceneRenderer {
             bg_image_sampler: None,
             bg_image_texture: None,
             bg_image_loaded: None,
-            instance_buffer: None,
-            point_count: 0,
+            recons: HashMap::new(),
+            recon_order: Vec::new(),
+            pick_tables: PickTables::default(),
             linear_depth_texture: None,
             depth_staging: None,
             pick_staging: None,
             readback_pending: false,
             hover_depth: None,
-            hover_pick_id: PICK_TAG_NONE,
-            auto_point_size: FALLBACK_POINT_SIZE,
-            camera_nn_scale: None,
-            scene_center: nalgebra::Point3::origin(),
-            scene_radius: 1.0,
+            hover_pick: None,
         }
     }
 
@@ -272,25 +229,132 @@ impl SceneRenderer {
         self.egui_texture_id
     }
 
-    /// Returns the auto-computed point size (world space, before user scaling).
-    pub fn auto_point_size(&self) -> f32 {
-        self.auto_point_size
+    /// The `length_scale` the loaded reconstructions suggest: the smallest
+    /// per-node seed (splat scale, capped by that node's inter-camera
+    /// distance). `None` when nothing has been uploaded yet.
+    ///
+    /// One global value for the whole scene is a known compromise of the
+    /// multi-reconstruction design — two nodes at wildly different scales share
+    /// one frustum size until they are aligned.
+    pub fn length_scale_seed(&self) -> Option<f32> {
+        self.recons
+            .values()
+            .map(|r| r.length_scale_seed())
+            .min_by(f32::total_cmp)
     }
 
-    /// Returns the characteristic inter-camera distance (p90 of camera NN distances),
-    /// or `None` if fewer than 2 cameras.
-    pub fn camera_nn_scale(&self) -> Option<f32> {
-        self.camera_nn_scale
+    /// The largest auto point size across loaded nodes, for the one global
+    /// consumer that cannot be per-recon: the EDL pass, which shades the whole
+    /// frame in one fullscreen draw.
+    fn max_auto_point_size(&self) -> f32 {
+        self.recons
+            .values()
+            .map(|r| r.auto_point_size)
+            .max_by(f32::total_cmp)
+            .unwrap_or(FALLBACK_POINT_SIZE)
     }
 
-    /// Returns the bounding sphere center of the scene.
-    pub fn scene_center(&self) -> nalgebra::Point3<f64> {
-        self.scene_center
+    /// Bounding sphere (centre, radius) of the whole scene: the union of the
+    /// loaded nodes' bounds. Drives the adaptive clip planes.
+    pub fn scene_bounds(&self) -> (Point3<f64>, f64) {
+        self.recons
+            .values()
+            .filter_map(|r| r.bounds)
+            .reduce(union_sphere)
+            .unwrap_or((Point3::origin(), 1.0))
     }
 
-    /// Returns the bounding sphere radius of the scene.
-    pub fn scene_radius(&self) -> f64 {
-        self.scene_radius
+    /// Decode a pick id read back from the GPU into the entity it addresses.
+    pub fn decode_pick(&self, pick_id: u32) -> Option<PickTarget> {
+        self.pick_tables.resolve(pick_id)
+    }
+
+    /// The global point index a ref maps to, for the shader's `u32` compare.
+    fn global_point_index(&self, point: PointRef) -> Option<u32> {
+        let bundle = self.recons.get(&point.recon)?;
+        let local = point.point;
+        (local < bundle.point_count).then(|| bundle.point_pick_base + local)
+    }
+
+    /// The global image index a ref maps to, for the shader's `u32` compare.
+    fn global_image_index(&self, image: ImageRef) -> Option<u32> {
+        let bundle = self.recons.get(&image.recon)?;
+        let local = image.image;
+        (local < bundle.frustum_image_count).then(|| bundle.image_pick_base + local)
+    }
+
+    /// Ensure a bundle exists for `id`, creating an empty one if not.
+    ///
+    /// Also creates the pipelines, since a bundle's point bind group needs the
+    /// point pipeline's layout and uniform buffer. Returns nothing on purpose:
+    /// callers reach for the bundle with a direct `self.recons` field borrow so
+    /// they can hold the shared layouts and samplers at the same time.
+    fn ensure_recon(&mut self, device: &wgpu::Device, id: ReconId) {
+        self.ensure_pipelines(device);
+        if !self.recons.contains_key(&id) {
+            let bundle = ReconResources::new(
+                device,
+                self.point_bind_group_layout.as_ref().unwrap(),
+                self.point_uniform_buffer.as_ref().unwrap(),
+            );
+            self.recons.insert(id, bundle);
+            self.assign_pick_bases();
+        }
+    }
+
+    /// Drop the bundles of every node that has left the scene.
+    ///
+    /// The single release path: closing one node and replacing the whole scene
+    /// are the same operation seen from the renderer, and both have to reassign
+    /// pick bases afterwards.
+    pub fn retain_nodes(&mut self, alive: impl Fn(ReconId) -> bool) {
+        let before = self.recons.len();
+        self.recons.retain(|id, _| alive(*id));
+        if self.recons.len() != before {
+            self.assign_pick_bases();
+        }
+    }
+
+    /// (Re)assign every node's contiguous slice of the two global pick index
+    /// spaces, and rebuild the decode tables.
+    ///
+    /// Called whenever a node is added or removed, or its entity counts change.
+    /// The bases live in each bundle and travel to the GPU in that node's
+    /// uniform block, which `update_uniforms` rewrites every frame — so a
+    /// reassignment costs nothing beyond this walk: **no instance buffer is
+    /// ever rewritten for a base change.**
+    fn assign_pick_bases(&mut self) {
+        self.recon_order = {
+            let mut ids: Vec<ReconId> = self.recons.keys().copied().collect();
+            ids.sort_unstable();
+            ids
+        };
+
+        self.pick_tables.clear();
+        let (mut point_base, mut image_base) = (0u32, 0u32);
+        for id in &self.recon_order {
+            let bundle = self.recons.get_mut(id).expect("id came from the map");
+            bundle.point_pick_base = point_base;
+            bundle.image_pick_base = image_base;
+            self.pick_tables.push(
+                *id,
+                point_base,
+                bundle.point_count,
+                image_base,
+                bundle.frustum_image_count,
+            );
+            point_base = point_base.saturating_add(bundle.point_count);
+            image_base = image_base.saturating_add(bundle.frustum_image_count);
+        }
+
+        if point_base > picking::PICK_INDEX_CAPACITY || image_base > picking::PICK_INDEX_CAPACITY {
+            log::warn!(
+                "loaded reconstructions exceed the {} entity pick capacity \
+                 ({point_base} points, {image_base} images); picking will be wrong \
+                 for the overflowing nodes",
+                picking::PICK_INDEX_CAPACITY,
+            );
+        }
     }
 
     /// Ensure all render pipelines exist. Called once on first use.
@@ -304,7 +368,7 @@ impl SceneRenderer {
         self.point_pipeline = Some(pt.pipeline);
         self.quad_vertex_buffer = Some(pt.quad_vertex_buffer);
         self.point_uniform_buffer = Some(pt.uniform_buffer);
-        self.point_bind_group = Some(pt.bind_group);
+        self.point_bind_group_layout = Some(pt.bind_group_layout);
 
         // ── Pass 2: EDL post-process pipeline ──
         let edl = pipelines::edl::create(device);
@@ -345,7 +409,21 @@ impl SceneRenderer {
         let pa = pipelines::patch::create(device);
         self.patch_pipeline = Some(pa.pipeline);
         self.patch_bind_group_layout = Some(pa.bind_group_layout);
-        self.patch_uniform_buffer = Some(pa.uniform_buffer);
+
+        // Atlas samplers are shared: every node's thumbnail / patch atlas is
+        // sampled the same way, so only the textures are per-recon.
+        self.image_quad_sampler = Some(device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("thumbnail sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        }));
+        self.patch_sampler = Some(device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("patch sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        }));
 
         // ── Distorted image quad pipeline ──
         self.distorted_quad_pipeline = Some(pipelines::distorted_quad::create(
@@ -363,6 +441,23 @@ impl SceneRenderer {
             self.bg_image_bind_group_layout.as_ref().unwrap(),
         ));
     }
+}
+
+/// The smallest sphere containing both inputs.
+fn union_sphere(a: (Point3<f64>, f64), b: (Point3<f64>, f64)) -> (Point3<f64>, f64) {
+    let offset = b.0 - a.0;
+    let distance = offset.norm();
+    if distance + b.1 <= a.1 {
+        return a; // b is inside a
+    }
+    if distance + a.1 <= b.1 {
+        return b; // a is inside b
+    }
+    // Neither contains the other, so `distance > 0` and the new centre sits on
+    // the segment joining them.
+    let radius = (distance + a.1 + b.1) / 2.0;
+    let t = (radius - a.1) / distance;
+    (a.0 + offset * t, radius)
 }
 
 impl Default for SceneRenderer {

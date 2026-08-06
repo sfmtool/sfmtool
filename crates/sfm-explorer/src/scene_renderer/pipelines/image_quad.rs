@@ -56,6 +56,17 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> ImageQuadPipel
                 },
                 count: None,
             },
+            // 4: this reconstruction's ReconUniforms
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
     });
 

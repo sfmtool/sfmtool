@@ -20,17 +20,43 @@ pub(super) struct PointInstance {
     pub color: u32, // packed R8G8B8A8
 }
 
+/// Per-reconstruction uniform block — one buffer per loaded node.
+///
+/// Everything a shader needs to know about *which* reconstruction it is
+/// drawing. See `specs/gui/gui-scene-graph.md` ("Per-recon uniforms").
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct ReconUniforms {
+    /// The node transform, applied before `view_proj` in every vertex shader.
+    /// Identity until node transforms arrive (phase 4).
+    pub model: [[f32; 4]; 4],
+    /// This node's auto point size × the global `2^point_size_log2`.
+    pub point_size: f32,
+    /// Start of this node's slice of the global point index space.
+    pub point_pick_base: u32,
+    /// Start of this node's slice of the global image index space.
+    pub image_pick_base: u32,
+    /// 0 → emit `PICK_TAG_NONE` instead of a pick id (a display-only node).
+    /// Always 1 until the Scene panel's interaction toggle arrives (phase 3).
+    pub pickable: u32,
+    /// `a == 0` → draw the node's original colors. Wired up with the per-node
+    /// tint palette (phase 5); inert until then.
+    pub tint_color: [f32; 4],
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct PointUniforms {
     pub view_proj: [[f32; 4]; 4], // column-major
     pub view: [[f32; 4]; 4],      // view matrix for linear depth
     pub camera_right: [f32; 3],
-    pub point_size: f32,
+    /// Padding where the point size used to live: splat size is per-recon now
+    /// and travels in [`ReconUniforms`].
+    pub _pad0: f32,
     pub camera_up: [f32; 3],
-    /// Index of the selected point (0xFFFFFFFF = no selection).
+    /// Global pick index of the selected point (0xFFFFFFFF = no selection).
     pub selected_point_index: u32,
-    /// Index of the hovered point (0xFFFFFFFF = no hover).
+    /// Global pick index of the hovered point (0xFFFFFFFF = no hover).
     pub hovered_point_index: u32,
     /// Viewport size in pixels — converts the infinity splat pixel radius to NDC.
     pub screen_width: f32,
@@ -159,7 +185,7 @@ pub(super) struct FrustumUniforms {
     pub view: [[f32; 4]; 4],
     pub screen_size: [f32; 2],
     pub line_half_width: f32,
-    /// Index of the hovered image (0xFFFFFFFF = no hover).
+    /// Global pick index of the hovered image (0xFFFFFFFF = no hover).
     pub hovered_image_index: u32,
     /// Near clip plane distance. Used by the shader to clip line segments
     /// in view space before the manual perspective divide, so endpoints
@@ -204,19 +230,6 @@ pub(super) struct BgImageUniforms {
     /// Projection matrix for the BG mesh (camera-space → clip-space).
     pub view_proj: [[f32; 4]; 4],
 }
-
-// ── Pick buffer constants ────────────────────────────────────────────────
-
-/// Pick ID for "nothing" (background / no entity).
-pub const PICK_TAG_NONE: u32 = 0x00_000000;
-/// Pick ID tag for frustum / camera image entities.
-pub const PICK_TAG_FRUSTUM: u32 = 0x01_000000;
-/// Pick ID tag for 3D point entities.
-pub const PICK_TAG_POINT: u32 = 0x02_000000;
-/// Mask to extract the entity type tag (top 8 bits).
-pub const PICK_TAG_MASK: u32 = 0xFF_000000;
-/// Mask to extract the entity index (bottom 24 bits).
-pub const PICK_INDEX_MASK: u32 = 0x00_FFFFFF;
 
 // ── Related constants ────────────────────────────────────────────────────
 

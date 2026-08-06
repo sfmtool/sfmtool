@@ -3,15 +3,16 @@
 
 //! GPU readback logic for 5×5 depth and pick buffer sampling.
 
-use super::gpu_types::*;
+use super::picking::{PickTarget, PICK_TAG_MASK, PICK_TAG_NONE};
 use super::SceneRenderer;
 
 /// Result of a 5×5 readback from both depth and pick buffers.
 pub struct ReadbackResult {
     /// Nearest valid depth in the 5×5 region, or `None` if background.
     pub depth: Option<f32>,
-    /// Picked entity as `(tag, index)`, or `None` if background.
-    pub pick: Option<(u32, u32)>,
+    /// The picked entity, already decoded to a typed ref, or `None` if
+    /// background (or a stale id from a node that has since been released).
+    pub pick: Option<PickTarget>,
 }
 
 /// Read a 5x5 grid of f32 values from a 256-byte-aligned staging buffer.
@@ -184,14 +185,13 @@ impl SceneRenderer {
         self.readback_pending = false;
 
         let depth = self.read_5x5_depth(device);
-        let pick = self.read_5x5_pick(device);
+        let pick = self
+            .read_5x5_pick(device)
+            .and_then(|pick_id| self.decode_pick(pick_id));
 
         // Cache for hover overlay
         self.hover_depth = depth;
-        self.hover_pick_id = match pick {
-            Some((tag, index)) => tag | index,
-            None => PICK_TAG_NONE,
-        };
+        self.hover_pick = pick;
 
         Some(ReadbackResult { depth, pick })
     }
@@ -201,9 +201,9 @@ impl SceneRenderer {
         self.hover_depth
     }
 
-    /// Returns the most recently read-back hover pick ID (tag | index).
-    pub fn hover_pick_id(&self) -> u32 {
-        self.hover_pick_id
+    /// Returns the entity under the cursor at the most recent readback.
+    pub fn hover_pick(&self) -> Option<PickTarget> {
+        self.hover_pick
     }
 
     /// Read a 5×5 depth region from the staging buffer.
@@ -225,8 +225,8 @@ impl SceneRenderer {
         result
     }
 
-    /// Read a 5×5 pick region from the staging buffer.
-    fn read_5x5_pick(&self, device: &wgpu::Device) -> Option<(u32, u32)> {
+    /// Read a 5×5 pick region from the staging buffer, returning the raw id.
+    fn read_5x5_pick(&self, device: &wgpu::Device) -> Option<u32> {
         let staging = self.pick_staging.as_ref()?;
         let slice = staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
@@ -238,9 +238,12 @@ impl SceneRenderer {
             return None;
         }
         let data = slice.get_mapped_range();
+        // A tagged id is a hit; the all-zero background value is not. The
+        // index half is *not* checked here — an index outside every assigned
+        // range is a stale pick, which the decode tables reject.
         let result = search_5x5_u32(&data, |id| id & PICK_TAG_MASK != PICK_TAG_NONE);
         drop(data);
         staging.unmap();
-        result.map(|id| (id & PICK_TAG_MASK, id & PICK_INDEX_MASK))
+        result
     }
 }

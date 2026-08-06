@@ -8,15 +8,21 @@ use super::super::auto_point_size::{
 };
 use super::super::gpu_types::PointInstance;
 use super::super::SceneRenderer;
+use crate::scene::ReconId;
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
 
 impl SceneRenderer {
-    /// Upload point cloud data to the GPU.
+    /// Upload one reconstruction's point cloud into its resource bundle.
     ///
     /// Converts positions from f64 to f32, packs colors into u32, and
-    /// computes the auto point size from nearest-neighbor distances.
-    pub fn upload_points(&mut self, device: &wgpu::Device, recon: &SfmrReconstruction) {
+    /// computes the node's auto point size from nearest-neighbor distances.
+    pub fn upload_points(
+        &mut self,
+        device: &wgpu::Device,
+        id: ReconId,
+        recon: &SfmrReconstruction,
+    ) {
         let instances: Vec<PointInstance> = recon
             .points
             .iter()
@@ -38,30 +44,29 @@ impl SceneRenderer {
             })
             .collect();
 
-        // Compute auto point size from nearest-neighbor distances
-        self.auto_point_size = compute_auto_point_size(&recon.points);
-
-        // Compute characteristic inter-camera distance
-        self.camera_nn_scale = compute_camera_nn_scale(&recon.images);
-
-        // Compute scene bounding sphere for adaptive clip planes
-        let (center, radius) = compute_scene_bounds(&recon.points);
-        self.scene_center = center;
-        self.scene_radius = radius;
-
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("point instances"),
             contents: bytemuck::cast_slice(&instances),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        self.instance_buffer = Some(buffer);
-        self.point_count = instances.len() as u32;
+        self.ensure_recon(device, id);
+        let bundle = self.recons.get_mut(&id).expect("just ensured");
 
-        log::info!(
-            "Uploaded {} points to GPU (auto point size: {:.4})",
-            self.point_count,
-            self.auto_point_size
-        );
+        // Auto point size, inter-camera distance and bounding sphere are all
+        // per-recon: they describe this node's data, not the scene.
+        bundle.auto_point_size = compute_auto_point_size(&recon.points);
+        bundle.camera_nn_scale = compute_camera_nn_scale(&recon.images);
+        bundle.bounds = Some(compute_scene_bounds(&recon.points));
+        bundle.point_instance_buffer = Some(buffer);
+        bundle.point_count = instances.len() as u32;
+
+        let (count, size) = (bundle.point_count, bundle.auto_point_size);
+        // The point count moved, so the global pick index space has to be
+        // re-cut. Only the per-recon uniform blocks change; no instance buffer
+        // carries a base.
+        self.assign_pick_bases();
+
+        log::info!("Uploaded {count} points to GPU (auto point size: {size:.4})");
     }
 }
