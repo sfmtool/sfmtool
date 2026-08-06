@@ -41,10 +41,12 @@ pub fn read_camrig_metadata(
 pub fn read_camrig(path: &Path) -> Result<CamRigData, CamRigError> {
     let mut data = read_camrig_unchecked(path)?;
     data.validate()?;
-    if data.metadata.version < CAMRIG_FORMAT_VERSION {
+    // Gate on the version the canonical convention became normative in, not on
+    // the current format version — see `CAMRIG_CANONICAL_CONVENTION_VERSION`.
+    if data.metadata.version < CAMRIG_CANONICAL_CONVENTION_VERSION {
         data.upgrade_sensor_poses_from_v1();
-        data.metadata.version = CAMRIG_FORMAT_VERSION;
     }
+    data.metadata.version = CAMRIG_FORMAT_VERSION;
     Ok(data)
 }
 

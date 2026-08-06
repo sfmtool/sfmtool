@@ -209,6 +209,20 @@ pub fn validate_keypoints(
 /// cannot depend on.
 pub const SFMR_FORMAT_VERSION: u32 = 5;
 
+/// The first `.sfmr` version whose stored poses and world data are in the
+/// canonical convention (right-handed Z-up world, cameras looking down −Z).
+///
+/// A file stored **below** this version holds COLMAP-convention content and
+/// must be converted on load; a file at or above it is already canonical and
+/// must be loaded untouched. This is a fixed fact about the format's history,
+/// so it is a constant of its own and never [`SFMR_FORMAT_VERSION`]: gating the
+/// conversion on the *current* version re-applies it to every already-canonical
+/// file the moment the format version is bumped for an unrelated reason (it
+/// was, in version 6, and every version-5 file then loaded with its cameras
+/// flipped by `S` — see `SfmrReconstruction::load` in `sfmtool-core`, the one
+/// consumer of this constant).
+pub const SFMR_CANONICAL_CONVENTION_VERSION: u32 = 5;
+
 /// `feature_source` value: observations reference external `.sift` files.
 pub const FEATURE_SOURCE_SIFT_FILES: &str = "sift_files";
 /// `feature_source` value: per-observation keypoints stored inline in the

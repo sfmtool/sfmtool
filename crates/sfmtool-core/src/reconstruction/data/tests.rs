@@ -521,8 +521,9 @@ fn sfmr_data_canonical_to_colmap(data: &mut SfmrData) {
 }
 
 /// Copy a written `.sfmr` archive, rewriting only `metadata.json.zst` so its
-/// `version` field reads `4` — producing genuine version-4 bytes on disk.
-fn rewrite_sfmr_version_4(src: &Path, dst: &Path) {
+/// `version` field reads `version` — producing genuine bytes of that version on
+/// disk (every version from 4 on shares this structural layout).
+fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
     use std::io::{Read, Write};
 
     let archive_file = std::fs::File::open(src).unwrap();
@@ -546,7 +547,7 @@ fn rewrite_sfmr_version_4(src: &Path, dst: &Path) {
                     .unwrap();
             json.as_object_mut()
                 .unwrap()
-                .insert("version".into(), serde_json::json!(4));
+                .insert("version".into(), serde_json::json!(version));
             let bytes = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
             zip_out.write_all(&bytes).unwrap();
         } else {
@@ -747,7 +748,7 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
     };
     sfmr_format::write_sfmr_with_options(&staged, &mut colmap_data, &options).unwrap();
     let v4_path = dir.join("legacy_v4.sfmr");
-    rewrite_sfmr_version_4(&staged, &v4_path);
+    rewrite_sfmr_version(&staged, &v4_path, 4);
     assert_eq!(
         sfmr_format::read_sfmr_metadata(&v4_path).unwrap().version,
         4
@@ -796,6 +797,223 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
         }
         assert_eq!(lp.w, rp.w);
     }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// An `embedded_patches` reconstruction whose inline keypoints are the *exact*
+/// projections of its own points, and whose stored errors describe that
+/// geometry.
+///
+/// The point is self-consistency: every observation lies in front of its camera
+/// and reprojects onto its keypoint, so any convention conversion applied to
+/// the loaded content — which flips the camera frame — pushes every point
+/// behind its camera and collapses the recomputed errors.
+fn demo_embedded_projected(num_points: usize) -> SfmrReconstruction {
+    let mut recon = demo_embedded(num_points);
+    let mut keypoints = recon.keypoints_xy().unwrap().clone();
+    for (obs_index, obs) in recon.tracks.iter().enumerate() {
+        let image = &recon.images[obs.image_index as usize];
+        let camera = &recon.cameras[image.camera_index as usize];
+        let point = &recon.points[obs.point_index as usize];
+        let p_cam = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
+        assert!(
+            p_cam.z < 0.0,
+            "demo geometry must be in front of its cameras"
+        );
+        let (u, v) = camera.project(p_cam.x / -p_cam.z, p_cam.y / -p_cam.z);
+        keypoints[[obs_index, 0]] = u as f32;
+        keypoints[[obs_index, 1]] = v as f32;
+    }
+    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.observations {
+        *keypoints_xy = keypoints;
+    }
+    // The writer requires the patch frame in this mode, and the frame is
+    // world-space, so it also witnesses a world rotation applied by mistake.
+    let p = recon.points.len();
+    recon.patch_u_halfvec_xyz = Some(Array2::from_shape_fn((p, 3), |(_, c)| {
+        [0.0625f32, 0.0, 0.0][c]
+    }));
+    recon.patch_v_halfvec_xyz = Some(Array2::from_shape_fn((p, 3), |(_, c)| {
+        [0.0, 0.03125f32, 0.0][c]
+    }));
+    recon.recompute_point_errors().unwrap();
+    recon
+}
+
+/// Every observation of `recon` reprojects onto its inline keypoint, within
+/// `tol` pixels and in front of its camera.
+fn assert_projects_onto_keypoints(recon: &SfmrReconstruction, tol: f64, ctx: &str) {
+    let keypoints = recon.keypoints_xy().expect("embedded_patches fixture");
+    for (obs_index, obs) in recon.tracks.iter().enumerate() {
+        let image = &recon.images[obs.image_index as usize];
+        let camera = &recon.cameras[image.camera_index as usize];
+        let point = &recon.points[obs.point_index as usize];
+        let p_cam = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
+        assert!(
+            p_cam.z < 0.0,
+            "{ctx}: observation {obs_index} is behind its camera (z = {})",
+            p_cam.z
+        );
+        let (u, v) = camera.project(p_cam.x / -p_cam.z, p_cam.y / -p_cam.z);
+        assert!(
+            u.is_finite() && v.is_finite(),
+            "{ctx}: observation {obs_index} projects to a non-finite pixel"
+        );
+        let du = u - keypoints[[obs_index, 0]] as f64;
+        let dv = v - keypoints[[obs_index, 1]] as f64;
+        assert!(
+            (du * du + dv * dv).sqrt() < tol,
+            "{ctx}: observation {obs_index} reprojects {du}, {dv} px off its keypoint"
+        );
+    }
+}
+
+/// A file stored at the canonical-convention version (5) — or at any later
+/// version — must load byte-for-byte as written, with **no** convention
+/// conversion.
+///
+/// Regression test for the version-6 bump: `load` gated the COLMAP→canonical
+/// upgrade on `version < SFMR_FORMAT_VERSION`, so raising the format version to
+/// 6 re-applied the conversion to every already-canonical version-5 file. The
+/// second application cancels the camera flip `S` and leaves the world rotated
+/// by `W` twice, which reads as a *pure gauge* rigid transform on the points
+/// and camera centres — invisible to any check that compares point clouds —
+/// while every camera ends up facing backwards. The stored geometry is fine;
+/// only the read is wrong, so the assertion is against the file's own content.
+#[test]
+fn test_canonical_version_file_loads_without_convention_upgrade() {
+    let dir = std::env::temp_dir().join("sfmr_core_v5_no_upgrade");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
+
+    let recon = demo_embedded_projected(24);
+    assert_projects_onto_keypoints(&recon, 1e-3, "fixture");
+
+    let mut data = recon.to_sfmr_data();
+    let options = sfmr_format::WriteOptions {
+        skip_recompute_depth_stats: true,
+        ..Default::default()
+    };
+    let current = dir.join("current.sfmr");
+    sfmr_format::write_sfmr_with_options(&current, &mut data, &options).unwrap();
+
+    // Every version from the canonical-convention version up is already
+    // canonical, so stamping the archive with any of them must not change what
+    // `load` produces.
+    for version in sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION..=sfmr_format::SFMR_FORMAT_VERSION
+    {
+        let path = dir.join(format!("stamped_v{version}.sfmr"));
+        rewrite_sfmr_version(&current, &path, version);
+        assert_eq!(
+            sfmr_format::read_sfmr_metadata(&path).unwrap().version,
+            version
+        );
+
+        let mut loaded = SfmrReconstruction::load(&path).unwrap();
+        let ctx = format!("v{version}");
+
+        // Poses and points come back exactly as stored — no conversion touched
+        // them.
+        for (li, ri) in loaded.images.iter().zip(&recon.images) {
+            let (lq, rq) = (
+                li.quaternion_wxyz.quaternion(),
+                ri.quaternion_wxyz.quaternion(),
+            );
+            assert_eq!(
+                [lq.w, lq.i, lq.j, lq.k],
+                [rq.w, rq.i, rq.j, rq.k],
+                "{ctx}: {} rotation changed on load",
+                li.name
+            );
+            assert_eq!(
+                li.translation_xyz, ri.translation_xyz,
+                "{ctx}: {} translation changed on load",
+                li.name
+            );
+        }
+        for (i, (lp, rp)) in loaded.points.iter().zip(&recon.points).enumerate() {
+            assert_eq!(lp.position, rp.position, "{ctx}: point {i} moved on load");
+            assert_eq!(lp.w, rp.w, "{ctx}: point {i} changed its w on load");
+            assert_eq!(lp.normal, rp.normal, "{ctx}: point {i} normal rotated");
+        }
+        assert_eq!(
+            loaded.patch_u_halfvec_xyz, recon.patch_u_halfvec_xyz,
+            "{ctx}: patch u half-vectors rotated on load"
+        );
+        assert_eq!(
+            loaded.patch_v_halfvec_xyz, recon.patch_v_halfvec_xyz,
+            "{ctx}: patch v half-vectors rotated on load"
+        );
+
+        // The loaded geometry is self-consistent: every observation is in front
+        // of its camera and lands on its keypoint...
+        assert_projects_onto_keypoints(&loaded, 1e-3, &ctx);
+
+        // ...so recomputing the errors reproduces the stored ones rather than
+        // collapsing to the "no observation in front of the camera" zero.
+        let stored: Vec<f32> = loaded.points.iter().map(|p| p.error).collect();
+        assert!(
+            stored.iter().all(|e| e.is_finite()),
+            "{ctx}: stored errors must be finite"
+        );
+        loaded.recompute_point_errors().unwrap();
+        let recomputed: Vec<f32> = loaded.points.iter().map(|p| p.error).collect();
+        assert_eq!(stored, recomputed, "{ctx}: recomputed errors differ");
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A canonical-version file that is loaded and saved again round-trips to the
+/// same geometry, and the saved file loads the same way — the conversion is
+/// applied neither on the way in nor on the way out.
+#[test]
+fn test_canonical_version_file_round_trips_through_load_and_save() {
+    let dir = std::env::temp_dir().join("sfmr_core_v5_round_trip");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
+
+    let recon = demo_embedded_projected(24);
+    let mut data = recon.to_sfmr_data();
+    let options = sfmr_format::WriteOptions {
+        skip_recompute_depth_stats: true,
+        ..Default::default()
+    };
+    let staged = dir.join("staged.sfmr");
+    sfmr_format::write_sfmr_with_options(&staged, &mut data, &options).unwrap();
+    let v5_path = dir.join("legacy_v5.sfmr");
+    rewrite_sfmr_version(
+        &staged,
+        &v5_path,
+        sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION,
+    );
+
+    let loaded = SfmrReconstruction::load(&v5_path).unwrap();
+    assert_eq!(loaded.metadata.version, sfmr_format::SFMR_FORMAT_VERSION);
+    let resaved = dir.join("resaved.sfmr");
+    loaded.save(&resaved).unwrap();
+    assert_eq!(
+        sfmr_format::read_sfmr_metadata(&resaved).unwrap().version,
+        sfmr_format::SFMR_FORMAT_VERSION
+    );
+
+    let mut reloaded = SfmrReconstruction::load(&resaved).unwrap();
+    for (li, ri) in reloaded.images.iter().zip(&recon.images) {
+        assert_rotations_close(&li.quaternion_wxyz, &ri.quaternion_wxyz, &li.name);
+        assert_eq!(li.translation_xyz, ri.translation_xyz);
+    }
+    for (lp, rp) in reloaded.points.iter().zip(&recon.points) {
+        assert_eq!(lp.position, rp.position);
+        assert_eq!(lp.w, rp.w);
+    }
+    assert_projects_onto_keypoints(&reloaded, 1e-3, "resaved");
+    let stored: Vec<f32> = reloaded.points.iter().map(|p| p.error).collect();
+    reloaded.recompute_point_errors().unwrap();
+    let recomputed: Vec<f32> = reloaded.points.iter().map(|p| p.error).collect();
+    assert_eq!(stored, recomputed, "resaved: recomputed errors differ");
 
     std::fs::remove_dir_all(&dir).ok();
 }

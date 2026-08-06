@@ -1680,7 +1680,18 @@ array is added, removed, or renamed; the change is purely semantic:
 by applying the fixed COLMAP→canonical conversion (`S` and `W` from
 [Conversions happen at the I/O boundary](#conversions-happen-at-the-io-boundary))
 to poses, point positions, infinity directions, normals, and patch `u`/`v`
-half-vectors; saving always writes version 5.
+half-vectors; saving always writes the current version.
+
+The upgrade is gated on the stored version being **below 5** — the version the
+canonical convention became normative in — and never on the *current* format
+version. Every version from 5 on stores canonical content and must be loaded
+untouched, so a later version bump for an unrelated reason must not re-apply the
+conversion to files that are already canonical. Applying it a second time is
+silently plausible-looking: the second `W` leaves the points and camera centres
+in a pure gauge rotation of the world (a rigid transform, scale 1, so any check
+that compares point clouds sees nothing wrong) while the second `S` cancels the
+camera flip and leaves every camera facing backwards, putting every point behind
+its camera.
 
 ## Version History
 

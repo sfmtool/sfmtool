@@ -65,6 +65,18 @@ impl From<ArchiveIoError> for CamRigError {
 /// ([`s_conjugate_sensor_pose`]).
 pub const CAMRIG_FORMAT_VERSION: u32 = 2;
 
+/// The first `.camrig` version whose stored `sensor_from_rig` poses are in the
+/// canonical camera convention.
+///
+/// A file stored **below** this version holds COLMAP-convention sensor poses
+/// and is S-conjugated on load; a file at or above it is already canonical and
+/// is loaded untouched. Like `.sfmr`'s `SFMR_CANONICAL_CONVENTION_VERSION` this
+/// is a fixed fact about the format's history and deliberately *not*
+/// [`CAMRIG_FORMAT_VERSION`] — gating the upgrade on the current version
+/// re-applies it to already-canonical files as soon as the version is bumped
+/// for an unrelated reason.
+pub const CAMRIG_CANONICAL_CONVENTION_VERSION: u32 = 2;
+
 /// Conjugate a `sensor_from_rig` pose with the camera-frame flip
 /// `S = diag(1, −1, −1)`: `R' = S·R·S`, `t' = S·t`.
 ///

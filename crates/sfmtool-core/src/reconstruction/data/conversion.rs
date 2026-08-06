@@ -64,7 +64,8 @@ impl SfmrReconstruction {
     /// 2. Fall back to `workspace.absolute_path`
     /// 3. Fall back to searching upward from the `.sfmr` file for `.sfm-workspace.json`
     ///
-    /// Version ≤ 4 files store COLMAP-convention data and are upgraded to the
+    /// Files stored below [`sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION`]
+    /// (version ≤ 4) hold COLMAP-convention data and are upgraded to the
     /// canonical convention here (`.sfmr` version 5, design decision D1):
     /// `S` on camera and rig sensor poses, `W` on world points (including
     /// `w = 0` infinity directions), normals, and patch half-vectors — see
@@ -74,7 +75,9 @@ impl SfmrReconstruction {
     /// lower-level format crate cannot depend on. Content hashes cover the
     /// stored bytes ([`sfmr_format::verify_sfmr`] re-reads the file), so
     /// integrity checks are unaffected; a subsequent [`save`](Self::save)
-    /// writes a new version-5 file with new hashes.
+    /// writes a new current-version file with new hashes. A file at or above
+    /// the canonical-convention version is already canonical and is loaded
+    /// untouched.
     pub fn load(path: &Path) -> Result<Self, SfmrError> {
         let mut data = sfmr_format::read_sfmr(path)?;
         // read_sfmr resolves workspace best-effort; here we require it
@@ -82,10 +85,17 @@ impl SfmrReconstruction {
             Some(ref dir) => dir.clone(),
             None => resolve_workspace_dir(path, &data.metadata)?,
         };
-        if data.metadata.version < sfmr_format::SFMR_FORMAT_VERSION {
+        // Gate on the version the canonical convention became normative in, NOT
+        // on the current format version: every later version is canonical too,
+        // so `< SFMR_FORMAT_VERSION` would re-apply the conversion to files that
+        // are already canonical each time the format version moves.
+        if data.metadata.version < sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION {
             crate::geometry::convention::sfmr_data_colmap_to_canonical(&mut data);
-            data.metadata.version = sfmr_format::SFMR_FORMAT_VERSION;
         }
+        // The in-memory arrays are the current structural layout in the current
+        // convention whatever the file said, so the reconstruction reports the
+        // current version (and a subsequent `save` writes it).
+        data.metadata.version = sfmr_format::SFMR_FORMAT_VERSION;
         let mut recon = Self::from_sfmr_data(data)?;
         recon.workspace_dir = workspace_dir;
         Ok(recon)
