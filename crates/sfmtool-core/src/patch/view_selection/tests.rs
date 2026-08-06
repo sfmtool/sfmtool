@@ -1119,3 +1119,57 @@ fn a_track_view_with_a_reprojection_residual_recovers_when_anchored() {
         anchored.scores[1]
     );
 }
+
+/// The batch entry's keypoint table threads per patch: an all-`None` table
+/// anchors every member at its projection, so the result must equal the
+/// no-keypoints call bit for bit — while exercising the parallel-table
+/// validation and the per-patch threading.
+#[test]
+fn batch_with_all_none_keypoints_matches_unanchored() {
+    let centers = [[0.6, 0.0, 0.0], [-0.6, 0.0, 0.0], [0.0, 0.6, 0.0]];
+    let texs: Vec<fn(f64, f64) -> f64> = vec![texture, texture, texture];
+    let scene = Scene::new(&centers, &texs);
+    let views = scene.views();
+    let cloud = PatchCloud {
+        patches: vec![plane_patch(), plane_patch()],
+        point_indexes: vec![0, 1],
+    };
+    let track_views = vec![vec![0u32, 1], vec![0u32, 1]];
+    let kps: Vec<Vec<Option<[f64; 2]>>> = vec![vec![None, None], vec![None, None]];
+
+    let anchored =
+        select_patch_cloud_views(&cloud, &views, &track_views, Some(&kps), &params(), None);
+    let plain = select_patch_cloud_views(&cloud, &views, &track_views, None, &params(), None);
+    assert_eq!(anchored.len(), plain.len());
+    for (a, b) in anchored.iter().zip(&plain) {
+        assert_eq!(a.admitted, b.admitted);
+        assert_eq!(a.scores, b.scores);
+    }
+}
+
+/// A `sift_files` reconstruction stores no inline keypoints, so the helper's
+/// documented behavior is an all-`None` table parallel to the track views —
+/// those members anchor at their projections.
+#[test]
+fn track_keypoints_from_reconstruction_is_all_none_without_inline_keypoints() {
+    use crate::patch::cloud::{PatchExtent, PatchNormal};
+
+    let recon = crate::reconstruction::SfmrReconstruction::demo(6);
+    let cloud = PatchCloud::from_reconstruction(
+        &recon,
+        PatchNormal::MeanViewing,
+        PatchExtent::Fixed(0.05),
+        true,
+    )
+    .unwrap();
+    let tv = track_views_from_reconstruction(&recon, &cloud);
+    let kps = track_keypoints_from_reconstruction(&recon, &cloud);
+    assert_eq!(kps.len(), tv.len());
+    for (k, v) in kps.iter().zip(&tv) {
+        assert_eq!(k.len(), v.len(), "keypoints parallel to track views");
+        assert!(
+            k.iter().all(|e| e.is_none()),
+            "sift_files reconstruction has no inline keypoints"
+        );
+    }
+}
