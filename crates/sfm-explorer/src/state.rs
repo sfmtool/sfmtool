@@ -3,7 +3,7 @@
 
 //! Shared application state.
 
-use crate::scene::{node_by_id, ImageRef, PointRef, ReconId, SceneNode};
+use crate::scene::{node_by_id, unique_label, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
@@ -104,11 +104,12 @@ impl Default for FeatureDisplaySettings {
 
 /// Global application state shared across all views.
 pub struct AppState {
-    /// The loaded reconstructions, in load order.
+    /// The loaded reconstructions, in load order — which is also tree order in
+    /// the Scene Graph panel, and the order `[` / `]` step through.
     ///
-    /// Phase-1 invariant: **at most one** node. `File > Open` and the demo
-    /// dialog both replace the whole vector ([`AppState::set_single_node`]);
-    /// appending arrives with the Scene Graph panel in phase 3.
+    /// `File > Open`, the demo dialog and the CLI all *append* through
+    /// [`AppState::append_node`]; nodes leave one at a time through
+    /// [`AppState::close_node`] or wholesale through [`AppState::close_all`].
     pub scene: Vec<SceneNode>,
 
     /// The reconstruction that file- and sequence-shaped UI follows (Image
@@ -266,28 +267,39 @@ impl AppState {
         }
     }
 
-    /// Install `node` as the whole scene, replacing whatever was loaded.
+    /// Append `node` to the scene and select it.
     ///
-    /// The single node-creation path: file loads and demo data both come
-    /// through here, so neither can forget the cache and selection resets that
-    /// a new reconstruction requires. (The demo path used to skip them, which
-    /// left the SIFT and full-res caches keyed to the *previous* file.)
-    ///
-    /// Phase 3 replaces this with append-on-open plus per-node close.
-    pub fn set_single_node(&mut self, node: SceneNode) {
+    /// The single node-arrival path: file loads, reloads, the CLI and demo data
+    /// all come through here, so none of them can forget that arriving is also
+    /// a selection change. Selecting the new node clears the image and point
+    /// selection per the finer-selection invariant — you opened this file to
+    /// look at it, and no panel should be left showing another file's row.
+    pub fn append_node(&mut self, mut node: SceneNode) -> ReconId {
+        node.label = unique_label(&self.scene, &node.label);
+        let id = node.id;
         self.status_message = None;
-        self.selected_recon = Some(node.id);
-        self.scene = vec![node];
-        self.selected_image = None;
-        self.selected_point = None;
+        self.scene.push(node);
+        self.select_recon(id);
         self.hovered_image = None;
         self.hovered_point = None;
-        self.sift_cache.clear();
-        self.full_res_cache.clear();
+        id
     }
 
-    /// Load a reconstruction from an .sfmr file.
+    /// Load a reconstruction from an .sfmr file, **appending** it as a node.
+    ///
+    /// Opening a path that is already loaded reloads that node in place instead
+    /// — the predictable interpretation of "open this again", and it doubles as
+    /// a refresh.
     pub fn load_file(&mut self, path: &std::path::Path) {
+        if let Some(id) = self
+            .scene
+            .iter()
+            .find(|n| n.path.as_deref() == Some(path))
+            .map(|n| n.id)
+        {
+            self.reload_node(id);
+            return;
+        }
         match SfmrReconstruction::load(path) {
             Ok(recon) => {
                 log::info!(
@@ -296,7 +308,7 @@ impl AppState {
                     recon.image_count(),
                     path.display()
                 );
-                self.set_single_node(SceneNode::from_path(path, recon));
+                self.append_node(SceneNode::from_path(path, recon));
             }
             Err(e) => {
                 let msg = format!("Failed to load {}: {}", path.display(), e);
@@ -306,18 +318,110 @@ impl AppState {
         }
     }
 
-    /// Replace the scene with generated demo data.
+    /// Append a node of generated demo data.
     pub fn load_demo(&mut self, num_points: usize) {
-        self.set_single_node(SceneNode::demo(SfmrReconstruction::demo(num_points)));
+        self.append_node(SceneNode::demo(SfmrReconstruction::demo(num_points)));
     }
 
-    /// The node the panels follow, if any.
+    /// Re-read a node's file from disk, keeping its place in tree order, its
+    /// label and its display settings.
     ///
-    /// Borrows all of `self`; where a caller also needs `&mut` access to a
-    /// cache, go through [`crate::scene::node_by_id`] with `self.selected_recon`
-    /// so only the `scene` field is borrowed.
-    pub fn selected_node(&self) -> Option<&SceneNode> {
-        node_by_id(&self.scene, self.selected_recon?)
+    /// The refreshed node gets a **new** [`ReconId`]. A reload can change every
+    /// entity count, so every index-keyed cache entry for the old id is wrong;
+    /// a new id makes all of them unreachable rather than merely stale, which
+    /// is the same guarantee that makes closing a node safe. Returns the new id,
+    /// or `None` for a demo node (no file to re-read) or a failed read.
+    pub fn reload_node(&mut self, id: ReconId) -> Option<ReconId> {
+        let index = self.scene.iter().position(|n| n.id == id)?;
+        let path = self.scene[index].path.clone()?;
+        let recon = match SfmrReconstruction::load(&path) {
+            Ok(recon) => recon,
+            Err(e) => {
+                let msg = format!("Failed to reload {}: {}", path.display(), e);
+                log::error!("{}", msg);
+                self.status_message = Some(msg);
+                return None;
+            }
+        };
+        let mut node = SceneNode::from_path(&path, recon);
+        node.label = self.scene[index].label.clone();
+        node.copy_display_from(&self.scene[index]);
+        let new_id = node.id;
+        let was_selected = self.selected_recon == Some(id);
+        self.scene[index] = node;
+        self.forget_recon(id);
+        if was_selected || self.selected_recon.is_none() {
+            self.selected_recon = Some(new_id);
+        }
+        self.status_message = None;
+        Some(new_id)
+    }
+
+    /// Remove a node from the scene and unwind everything that pointed into it.
+    ///
+    /// The renderer releases its bundle separately, from `retain_nodes` on the
+    /// next frame; the camera view is dropped by the same frame's check in
+    /// `app.rs`, which covers *every* way a node can leave the scene.
+    pub fn close_node(&mut self, id: ReconId) {
+        self.scene.retain(|n| n.id != id);
+        self.forget_recon(id);
+        if self.selected_recon == Some(id) {
+            // Fall back to the first remaining node; an empty scene means no
+            // selection, and panels show their empty-state text.
+            self.selected_recon = self.scene.first().map(|n| n.id);
+        }
+    }
+
+    /// Clear the whole scene.
+    pub fn close_all(&mut self) {
+        self.scene.clear();
+        self.selected_recon = None;
+        self.selected_image = None;
+        self.selected_point = None;
+        self.hovered_image = None;
+        self.hovered_point = None;
+        self.sift_cache.clear();
+        self.full_res_cache.clear();
+        self.status_message = None;
+    }
+
+    /// Drop every cache entry and every selection/hover ref belonging to `id`.
+    ///
+    /// Does *not* touch `scene` or `selected_recon` — the callers differ on
+    /// what should happen to those (close falls back, reload re-points).
+    fn forget_recon(&mut self, id: ReconId) {
+        self.sift_cache.retain(|image, _| image.recon != id);
+        self.full_res_cache.retain(|image, _| image.recon != id);
+        self.selected_image = self.selected_image.filter(|i| i.recon != id);
+        self.selected_point = self.selected_point.filter(|p| p.recon != id);
+        self.hovered_image = self.hovered_image.filter(|i| i.recon != id);
+        self.hovered_point = self.hovered_point.filter(|p| p.recon != id);
+    }
+
+    /// Select a reconstruction directly.
+    ///
+    /// Image and point selections belonging to *other* nodes are cleared: the
+    /// invariant is that all finer selection state lives inside the selected
+    /// reconstruction, so no two panels ever show different files' selections.
+    /// Hover is exempt — it is transient and may touch any visible node.
+    pub fn select_recon(&mut self, id: ReconId) {
+        self.selected_recon = Some(id);
+        self.selected_image = self.selected_image.filter(|i| i.recon == id);
+        self.selected_point = self.selected_point.filter(|p| p.recon == id);
+    }
+
+    /// Select an image, and with it the reconstruction that owns it.
+    pub fn select_image(&mut self, image: ImageRef) {
+        self.selected_image = Some(image);
+        self.selected_recon = Some(image.recon);
+        self.selected_point = self.selected_point.filter(|p| p.recon == image.recon);
+    }
+
+    /// Select a 3D point, and with it the reconstruction that owns it.
+    pub fn select_point(&mut self, point: PointRef) {
+        self.selected_point = Some(point);
+        self.selected_recon = Some(point.recon);
+        self.selected_image = self.selected_image.filter(|i| i.recon == point.recon);
     }
 
     /// Look up a loaded node by id.
@@ -346,12 +450,17 @@ impl AppState {
     }
 
     /// The window title for the current state: the base name alone until a file
-    /// is loaded, then `"SfM Explorer - <file>"`.
+    /// is loaded, then `"SfM Explorer - <file>"`, and with several loaded
+    /// `"SfM Explorer - <first> (+N-1)"`.
     ///
-    /// Demo data leaves this at the base title — it came from no file, so
-    /// naming one would be a lie.
+    /// A first node with no file name — demo data — leaves this at the base
+    /// title however many nodes follow it: it came from no file, so naming one
+    /// would be a lie, and the base title is load-bearing for `ui_basic`'s
+    /// Windows attach path.
     pub fn window_title(&self) -> String {
+        let extra = self.scene.len().saturating_sub(1);
         match self.scene.first().and_then(|node| node.file_name()) {
+            Some(name) if extra > 0 => format!("{WINDOW_TITLE_BASE} - {name} (+{extra})"),
             Some(name) => format!("{WINDOW_TITLE_BASE} - {name}"),
             None => WINDOW_TITLE_BASE.to_string(),
         }

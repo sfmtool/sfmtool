@@ -148,7 +148,16 @@ The **count readout** for points at infinity is not a HUD widget: it belongs
 with the point/image counts already painted top-left, so the scene stats line
 reads `N points (M at infinity) | K images | F fps`, dropping the parenthetical
 when the reconstruction has no `w = 0` points and the fps when the Debug toggle
-is off.
+is off. Since [gui-scene-graph.md](gui-scene-graph.md) the counts are summed
+over the *visible* nodes and the line leads with `R reconstructions | ` once
+more than one is contributing.
+
+The Layers toggles are **master switches** across every loaded node: effective
+visibility of a layer is the AND of the toggle here, the node's master eye, and
+the node's group eye, both of the latter living in the Scene panel. Show Patches
+is greyed only when *no* loaded node carries patch data, and the Patches section
+appears when *any* of them does. The Grid stays global-only — it belongs to the
+world, not to a reconstruction.
 
 Three changes in behaviour from the menu:
 

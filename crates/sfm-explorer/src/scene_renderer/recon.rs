@@ -39,8 +39,47 @@ pub(super) struct PatchResources {
     pub patches_per_page: u32,
 }
 
+/// One node's display state as the renderer needs it: which layers to draw,
+/// and whether the node captures picks.
+///
+/// Mirrored from [`SceneNode`](crate::scene::SceneNode) once per frame rather
+/// than looked up per draw, so the draw loop and the uniform write — which see
+/// only bundles — need no access to the scene.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeDisplay {
+    /// Master eye. Off = the node contributes nothing to any pass.
+    pub visible: bool,
+    pub show_points: bool,
+    pub show_cameras: bool,
+    pub show_patches: bool,
+    /// Sub-toggle of `show_points`, applied in the point shader so instance
+    /// indices (and therefore pick ids) stay unfiltered.
+    pub show_points_at_infinity: bool,
+    /// Off → the node's shaders emit `PICK_TAG_NONE`. It still renders, still
+    /// occludes, and still answers the depth readback.
+    pub interactive: bool,
+}
+
+impl Default for NodeDisplay {
+    /// Everything on: what a freshly loaded node shows before the Scene panel
+    /// has had a frame to say otherwise.
+    fn default() -> Self {
+        Self {
+            visible: true,
+            show_points: true,
+            show_cameras: true,
+            show_patches: true,
+            show_points_at_infinity: true,
+            interactive: true,
+        }
+    }
+}
+
 /// One loaded reconstruction's GPU resources and derived scalars.
 pub(super) struct ReconResources {
+    /// This node's display state, refreshed every frame from its scene node.
+    pub display: NodeDisplay,
+
     /// This node's `ReconUniforms` slice: model matrix, point size, pick bases,
     /// pickable flag, tint. Written every frame by `update_uniforms`.
     pub uniform_buffer: wgpu::Buffer,
@@ -125,6 +164,7 @@ impl ReconResources {
         });
 
         Self {
+            display: NodeDisplay::default(),
             uniform_buffer,
             point_instance_buffer: None,
             point_count: 0,

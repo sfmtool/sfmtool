@@ -62,15 +62,15 @@ pub(crate) fn section_id(key: &str) -> egui::Id {
     egui::Id::new(("viewport_hud_section", key))
 }
 
-/// Whether the selected reconstruction carries everything the patch surfel pass
+/// Whether *any* loaded reconstruction carries everything the patch surfel pass
 /// needs: patch frames *and* the bitmaps to texture them with.
+///
+/// Any rather than the selected one: this HUD toggle is a master switch across
+/// every node (the per-node eyes live in the Scene panel), so greying it out
+/// because the *selected* node happens to have no patches would disable a
+/// control that still governs something on screen.
 pub(crate) fn has_patch_data(state: &AppState) -> bool {
-    state.selected_node().is_some_and(|node| {
-        let r = &node.recon;
-        r.patch_u_halfvec_xyz.is_some()
-            && r.patch_v_halfvec_xyz.is_some()
-            && r.patch_bitmaps_y_x_rgba.is_some()
-    })
+    state.scene.iter().any(|node| node.has_patch_data())
 }
 
 /// Draw one collapsible section, remembering its open/closed state for the

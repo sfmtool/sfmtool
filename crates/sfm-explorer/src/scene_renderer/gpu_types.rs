@@ -36,12 +36,18 @@ pub(super) struct ReconUniforms {
     pub point_pick_base: u32,
     /// Start of this node's slice of the global image index space.
     pub image_pick_base: u32,
-    /// 0 → emit `PICK_TAG_NONE` instead of a pick id (a display-only node).
-    /// Always 1 until the Scene panel's interaction toggle arrives (phase 3).
+    /// 0 → emit `PICK_TAG_NONE` instead of a pick id (a display-only node,
+    /// i.e. the Scene panel's interaction cursor switched off).
     pub pickable: u32,
     /// `a == 0` → draw the node's original colors. Wired up with the per-node
     /// tint palette (phase 5); inert until then.
     pub tint_color: [f32; 4],
+    /// 1.0 to draw this node's points at infinity, 0.0 to cull them in the
+    /// vertex shader — the global HUD toggle AND the node's ∞ mini-toggle.
+    /// A uniform rather than a filtered upload because `instance_index` has to
+    /// stay equal to the local `recon.points` index for picking to work.
+    pub show_infinity: f32,
+    pub _pad: [f32; 3],
 }
 
 #[repr(C)]
@@ -63,11 +69,7 @@ pub(super) struct PointUniforms {
     pub screen_height: f32,
     /// On-screen splat radius (pixels) for points at infinity.
     pub infinity_point_px: f32,
-    /// 1.0 to draw points at infinity, 0.0 to cull them in the vertex shader.
-    /// A uniform rather than a filtered upload because `instance_index` has to
-    /// stay equal to the global `recon.points` index for picking to work.
-    pub show_infinity: f32,
-    pub _pad: [f32; 3],
+    pub _pad: [f32; 4],
 }
 
 #[repr(C)]

@@ -1,6 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use super::recon::ReconResources;
 use super::SceneRenderer;
 
 impl SceneRenderer {
@@ -234,7 +235,17 @@ impl SceneRenderer {
             // slice, thumbnail atlas and frustum colors), then the existing
             // instanced draw. Nodes share the one depth buffer, so mutual
             // occlusion between reconstructions is automatic.
-            let bundles = || self.recon_order.iter().filter_map(|id| self.recons.get(id));
+            //
+            // A layer's effective visibility is the AND of three switches: the
+            // global HUD toggle (the `show_*` arguments, now master switches
+            // across all nodes), the node's master eye, and the node's own
+            // group eye. `layer` picks the last of those out of the bundle.
+            let bundles = |layer: fn(&ReconResources) -> bool| {
+                self.recon_order
+                    .iter()
+                    .filter_map(|id| self.recons.get(id))
+                    .filter(move |b| b.display.visible && layer(b))
+            };
 
             if show_points {
                 if let (Some(pipeline), Some(quad_vb)) =
@@ -242,7 +253,7 @@ impl SceneRenderer {
                 {
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, quad_vb.slice(..));
-                    for bundle in bundles() {
+                    for bundle in bundles(|b| b.display.show_points) {
                         if let Some(instance_buf) = &bundle.point_instance_buffer {
                             if bundle.point_count > 0 {
                                 pass.set_bind_group(0, &bundle.point_bind_group, &[]);
@@ -264,7 +275,7 @@ impl SceneRenderer {
                 {
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, quad_vb.slice(..));
-                    for bundle in bundles() {
+                    for bundle in bundles(|b| b.display.show_cameras) {
                         if let (Some(bind_group), Some(edge_buf)) =
                             (&bundle.frustum_bind_group, &bundle.frustum_edge_buffer)
                         {
@@ -284,7 +295,7 @@ impl SceneRenderer {
                 {
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, quad_vb.slice(..));
-                    for bundle in bundles() {
+                    for bundle in bundles(|b| b.display.show_cameras) {
                         if let (Some(bind_group), Some(instance_buf)) = (
                             &bundle.image_quad_bind_group,
                             &bundle.image_quad_instance_buffer,
@@ -301,7 +312,7 @@ impl SceneRenderer {
                 // Distorted cameras: tessellated indexed quads
                 if let Some(pipeline) = &self.distorted_quad_pipeline {
                     pass.set_pipeline(pipeline);
-                    for bundle in bundles() {
+                    for bundle in bundles(|b| b.display.show_cameras) {
                         if let (Some(bind_group), Some(vbuf), Some(ibuf)) = (
                             &bundle.image_quad_bind_group,
                             &bundle.distorted_quad_vertex_buffer,
@@ -329,7 +340,7 @@ impl SceneRenderer {
                 {
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, quad_vb.slice(..));
-                    for bundle in bundles() {
+                    for bundle in bundles(|b| b.display.show_patches) {
                         if let Some(patch) = &bundle.patch {
                             if patch.count > 0 {
                                 pass.set_bind_group(0, &patch.bind_group, &[]);

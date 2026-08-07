@@ -1,9 +1,11 @@
 # Scene Graph and Multi-Reconstruction Support
 
-*Status: Phases 1–2 implemented (typed refs; per-reconstruction renderer
-resources and picking). Phases 3–5 — multi-load, the Scene Graph panel, node
-transforms and comparison affordances — are still design proposal. See
-"Implementation Phases" at the end.*
+*Status: Phases 1–3 implemented — typed refs, per-reconstruction renderer
+resources and picking, and the feature itself: multi-load, the Scene Graph
+panel, per-node visibility and interactivity, the selected reconstruction.
+Phases 4–5 — node transforms with `Align to…`, and the comparison affordances
+built on them (tint, solo) — are still design proposal. See "Implementation
+Phases" at the end.*
 
 This document specifies multi-reconstruction support for SfM Explorer: loading
 several `.sfmr` files at once, organizing them as nodes in a scene graph, and a
@@ -127,17 +129,23 @@ pub struct SceneNode {
     pub show_cameras: bool,
     pub show_patches: bool,
     pub show_points_at_infinity: bool,
-    pub tint: NodeTint,              // Original | Tint(color)
+    pub tint: NodeTint,              // Original | Tint(color)  — phase 5
     /// Similarity transform (uniform scale · rotation · translation) mapping
     /// this node's native coordinates into the shared world space. Identity on
     /// load. Set by the "Align to…" operation; see "Node Transforms and
-    /// Alignment" below.
+    /// Alignment" below. — phase 4
     pub transform: Se3Transform,
 
     /// This node's data needs (re-)upload to the GPU.
     pub needs_upload: bool,
 }
 ```
+
+Everything above is implemented except `tint` and `transform`, which stay
+renderer-side defaults (identity model matrix, alpha-0 tint) until phases 4–5.
+The renderer does not read `SceneNode` directly: each frame `app.rs` mirrors the
+five display flags plus `interactive` onto the node's GPU bundle as a
+`NodeDisplay`, and the draw loop and per-recon uniform write consult only that.
 
 `AppState` replaces its single slot with:
 
@@ -239,6 +247,17 @@ fixed-height for virtualization.
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Tint ▸` (Original / palette of distinguishable colors), `Reload from Disk`,
   `Close`. `Solo` (hide all others) is a nice-to-have.
+- Expanded by default: with one file loaded the node's groups are the whole
+  panel, and with a handful the tree is still what answers "what is in here".
+  Its Cameras and Points groups start *collapsed* — the image list is the Image
+  Browser's job, and an expanded 50K-row list would bury every node below it.
+- Both eyes and the cursor are drawn as dimmable glyph buttons (U+1F441 EYE,
+  U+1F5B1 TRACKBALL, U+221E INFINITY — all in egui's bundled proportional
+  fonts, which `scene_graph/tests.rs` pins). The selection accent bar is
+  *painted* rather than written: no bundled proportional glyph is a vertical
+  bar.
+- The compact counts are `1.2M` / `12.3K` / `999`; the exact figure, with
+  thousands separators, is one row down on the group rows.
 
 **Cameras group row** — `[▸] [👁] Cameras (243)`
 - Eye drives `show_cameras` for the node.
@@ -289,17 +308,31 @@ pub struct SceneGraphResponse {
     pub hovered_point: Option<PointRef>,
     pub has_pointer: bool,
     pub select_recon: Option<ReconId>,
-    pub align_node: Option<(ReconId, ReconId, AlignOptions)>, // source, target
-    pub reset_transform: Option<ReconId>,
+    pub align_node: Option<(ReconId, ReconId, AlignOptions)>, // source, target — phase 4
+    pub reset_transform: Option<ReconId>,                     // phase 4
     pub zoom_to_node: Option<ReconId>,
     pub close_node: Option<ReconId>,
     pub reload_node: Option<ReconId>,
 }
 ```
 
+The two phase-4 fields, and the three context-menu entries that would produce
+them, are absent from the implementation: a response field with no producer, or
+a menu entry that silently does nothing, is worse than neither.
+
 `has_pointer` ownership of hover state follows
 [gui-cross-panel-hover.md](gui-cross-panel-hover.md) unchanged: when the
 pointer is over the Scene panel, it owns both hover fields.
+
+`dock.rs` applies the response coarsest-first — `select_recon`, then
+`select_image` / `select_point` — so a finer selection reported in the same
+frame wins over the recon click that would otherwise have cleared it.
+
+The panel additionally records the screen rect of every row and toggle it drew,
+keyed by the same explicit ids as the expansion state. A collapsible,
+virtualized tree has no geometry an outside caller can predict, so this is how
+anything that needs to point *at* a row finds it: the panel tests today (which
+click through it rather than guessing pixel offsets), keyboard navigation later.
 
 ---
 
@@ -377,7 +410,15 @@ point_pick_base: u32
 image_pick_base: u32
 pickable: u32             // 0 → emit PICK_TAG_NONE (node.interactive off)
 tint_color: vec4<f32>     // a = 0 → original colors
+show_infinity: f32        // global HUD ∞ toggle AND node.show_points_at_infinity
 ```
+
+`show_infinity` is per-recon rather than global (where it started) because the
+∞ mini-toggle is per node, and points at infinity are not a separate draw — they
+ride in the same instance buffer, culled in the vertex shader so instance
+indices, and therefore pick ids, stay unfiltered. The four whole-layer toggles
+*are* separate draws, so effective visibility for them is resolved on the CPU by
+skipping that node in that pass.
 
 **Binding mechanism (implemented): one small uniform buffer per node, bound in
 a per-recon bind group** — not one buffer sliced by dynamic offsets. Three of
@@ -423,7 +464,9 @@ comparison. Sentinel remains `0xFFFFFFFF`.
   its node transform — the smallest sphere enclosing them, not a bounding box.
   Recomputed when the visible set, a node transform, or a node's data changes.
   A node contributes bounds only once its points are uploaded, so an empty
-  bundle cannot drag the union toward the origin.
+  bundle cannot drag the union toward the origin. With *every* node hidden the
+  union falls back to all loaded nodes rather than collapsing to a unit sphere
+  at the origin, so switching the last eye off does not fling the camera.
 - `length_scale` (drives frustum stub depth, target indicator): re-derived
   from the visible union whenever the node set changes, exactly as it is
   re-derived on load today; still one global, still user-adjustable. The union
@@ -578,21 +621,31 @@ once the nodes' scales agree.
 
 - **File > Open…** uses `rfd`'s `pick_files()` (multi-select) and **appends**
   one node per chosen file. Opening a path that is already loaded reloads that
-  node in place (fresh read from disk), keeping its node settings — the
-  predictable interpretation, and it doubles as a refresh.
+  node in place (fresh read from disk), keeping its position in tree order, its
+  label and its display settings — the predictable interpretation, and it
+  doubles as a refresh. A reload mints a **new** `ReconId`: re-reading a file
+  can change every entity count, so every index-keyed cache entry for the old id
+  is wrong, and a new id makes all of them unreachable rather than merely stale.
+  The cost is that the reloaded node's image/point selection clears.
+- Arriving is also a selection change: an appended node becomes the selected
+  reconstruction, which by the invariant below clears the image and point
+  selection. You opened the file to look at it, and no panel should be left
+  showing another file's row.
 - **File > Close All** clears the scene. Individual close lives in the Scene
   panel.
 - **Demo data** becomes a node labeled `demo` (`path: None`) and appends like
   any other load. This also fixes the current demo-load path that skips the
   cache/selection resets `load_file` performs — node lifecycle is now one code
-  path.
+  path. `Reload from Disk` is disabled for it: there is no file to re-read.
 - **CLI**: `sfm explorer` accepts multiple paths
   (`@click.argument("sfmr_files", nargs=-1)`), and `lib.rs` loads every
   trailing argument instead of only `args[1]`.
 - **Window title**: unchanged for zero or one file (`SfM Explorer`,
   `SfM Explorer - run_a.sfmr`); with N > 1 files:
   `SfM Explorer - run_a.sfmr (+2)`. The exact base title is load-bearing for
-  the `ui_basic` Windows attach path and keeps its current value.
+  the `ui_basic` Windows attach path and keeps its current value — which is also
+  why a *nameless* first node (demo data) leaves the title at the bare base
+  however many files follow it, rather than inventing a name for the count.
 
 The scene-stats overlay (top-left) sums across visible nodes and leads with
 the file count when more than one is loaded:
@@ -606,7 +659,7 @@ the file count when more than one is loaded:
 |-------|--------|
 | **3D Viewer** | Renders all visible nodes (per-recon draws). Camera view mode stores an `ImageRef`; `,` / `.` step within that recon's images, `[` / `]` step across reconstructions with same-named-image carry-over. Hover text gains the recon label. |
 | **Scene Graph** | New (this spec). |
-| **Image Browser** | Bound to the **selected** reconstruction; a small header names it. Thumbnail cache guarded by the owning `ReconId` (fixing the count-only invalidation bug; index keys stay local since the strip only ever shows one reconstruction, so a recon switch drops the old textures instead of accumulating them). Animation and the color barcode are per-selected-recon. |
+| **Image Browser** | Bound to the **selected** reconstruction; a small header names it, shown only once more than one file is loaded (with a single one it would be chrome in an already-short panel). Thumbnail cache guarded by the owning `ReconId` (fixing the count-only invalidation bug; index keys stay local since the strip only ever shows one reconstruction, so a recon switch drops the old textures instead of accumulating them). Animation and the color barcode are per-selected-recon. |
 | **Image Detail** | Selection-driven — works via `ImageRef` naturally. `loaded_image` and overlay state re-keyed by `ImageRef`. |
 | **Point Track Detail** | Selection-driven via `PointRef`. Its `pt3d_<hash>_<index>` IDs already embed the per-recon content hash, so displayed IDs are already unambiguous across files. Texture maps re-keyed by `ImageRef`. |
 
@@ -632,6 +685,12 @@ leaves the scene, not just explicit close — replacing the scene by opening a
 file drops a camera view whose node is gone, rather than letting it point at
 the same raw index in an unrelated reconstruction. Because `ReconId` is never
 reused, a missed purge can go stale but can never alias.
+
+The purge runs in three places, which is what the split of ownership costs:
+`AppState` drops its own caches and selection, `dock.rs` asks each panel to drop
+its private texture caches (`forget_recon`), and the renderer releases the GPU
+bundle from `retain_nodes` on the next frame. `Reload from Disk` runs the same
+three against the *old* id.
 
 ---
 
@@ -680,8 +739,11 @@ reused, a missed purge can go stale but can never alias.
   `Align to` recovers it (camera and point modes), and the composed
   `target.transform ∘ T_fit` chaining is verified with a pre-transformed
   target.
-- `ui_basic` keeps matching the base window title; a multi-file title case is
-  added.
+- `ui_basic` keeps matching the base window title, and gains a check that the
+  Scene panel's rows reach a real window. The multi-file title case stays a lib
+  test: driving it through `ui_basic` would need two real `.sfmr` fixtures on
+  disk and a way past the file dialog, for a string `window_title` already
+  decides on its own.
 
 ---
 
@@ -697,10 +759,10 @@ reused, a missed purge can go stale but can never alias.
    noop-backend tests. The model matrix is identity and `pickable` is always 1
    until phases 3–4 supply the node transform and the interaction toggle;
    `tint_color` is carried but not yet read by any shader (phase 5).
-3. **Multi-load + Scene Graph panel**: append-on-open, multi-select dialog,
-   multi-path CLI, node close/reload, the Scene tab with tree, per-node
+3. **Multi-load + Scene Graph panel** *(done)*: append-on-open, multi-select
+   dialog, multi-path CLI, node close/reload, the Scene tab with tree, per-node
    eye and interaction-cursor toggles, selected-reconstruction handling,
-   window title and stats overlay.
+   window title and stats overlay. The feature is on.
 4. **Transforms + alignment**: the per-recon model matrix exercised end to
    end, `Align to…` (by cameras, then by points), `Reset Transform`, status
    feedback.

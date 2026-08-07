@@ -1,0 +1,873 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! Headless tests for the Scene Graph panel and the multi-node state machine
+//! behind it.
+//!
+//! egui needs no GPU to lay out a frame, so the panel tests run the real thing
+//! through `Context::run_ui` (the `point_track_detail/tests.rs` pattern): the
+//! tree is really built, `CollapsingState` really stores its expansion under
+//! [`row_id`], and clicks are really delivered by pointer events. Clicks aim at
+//! the rects the panel recorded on the previous frame
+//! ([`SceneGraphPanel::hit_rect`]), because a collapsible virtualized tree has
+//! no geometry a test could predict from outside.
+//!
+//! The rest — cache purge, selection fallback, the finer-selection invariant,
+//! `[` / `]` stepping, label disambiguation — is `AppState` behaviour and needs
+//! no frame at all.
+
+use eframe::egui;
+use sfmtool_core::SfmrReconstruction;
+
+use super::{row_id, SceneGraphPanel};
+use crate::scene::{ImageRef, PointRef, SceneNode};
+use crate::state::{AppState, CachedSiftFeatures};
+use crate::viewer_3d::Viewer3D;
+
+const VIEWPORT: egui::Vec2 = egui::vec2(320.0, 900.0);
+
+// ── Fixtures ────────────────────────────────────────────────────────────
+
+/// A demo reconstruction padded to `images` images named `<prefix>_<i>.jpg`, so
+/// two nodes can be made to share image names or not, at will, and so a camera
+/// list can be made longer than the panel shows at once.
+///
+/// Only the image *list* grows: nothing exercised here reads the per-image side
+/// tables, and `SfmrReconstruction::demo` fixes the camera ring at 8.
+fn recon_named(points: usize, images: usize, prefix: &str) -> SfmrReconstruction {
+    let mut recon = SfmrReconstruction::demo(points);
+    let template = recon.images[0].clone();
+    while recon.images.len() < images {
+        recon.images.push(template.clone());
+    }
+    recon.images.truncate(images);
+    for (i, image) in recon.images.iter_mut().enumerate() {
+        image.name = format!("{prefix}_{i:03}.jpg");
+    }
+    recon
+}
+
+/// A node loaded from `path`, the way `File > Open` would build it.
+fn file_node(path: &str, images: usize, prefix: &str) -> SceneNode {
+    SceneNode::from_path(std::path::Path::new(path), recon_named(32, images, prefix))
+}
+
+/// State holding `n` file-backed nodes that all share image names — the
+/// comparison case: the same shoot solved several times.
+fn shared_shoot(n: usize) -> AppState {
+    let mut state = AppState::new();
+    for i in 0..n {
+        state.append_node(file_node(&format!("/runs/run_{i}.sfmr"), 8, "IMG"));
+    }
+    // Land on the first node, as if the user had clicked back to it.
+    let first = state.scene[0].id;
+    state.select_recon(first);
+    state
+}
+
+// ── Frame driving ───────────────────────────────────────────────────────
+
+/// Run one frame of the panel with `events` delivered, returning its response.
+fn run_frame(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    events: Vec<egui::Event>,
+) -> super::SceneGraphResponse {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+        events,
+        ..Default::default()
+    };
+    let mut response = None;
+    let _ = ctx.run_ui(input, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            response = Some(panel.show(ui, state));
+        });
+    });
+    response.expect("the panel ran")
+}
+
+/// A panel + context that have already settled: egui resolves hover and clicks
+/// against the widget rects registered on the *previous* pass, so nothing can
+/// be clicked until at least one frame has been laid out.
+fn settled(state: &mut AppState) -> (SceneGraphPanel, egui::Context) {
+    let mut panel = SceneGraphPanel::new();
+    let ctx = egui::Context::default();
+    for _ in 0..2 {
+        run_frame(&mut panel, &ctx, state, Vec::new());
+    }
+    (panel, ctx)
+}
+
+fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    }
+}
+
+/// Hover, press, release on the element recorded under `id` — the three frames
+/// egui needs to register a click. Returns the response of the frame the click
+/// landed in.
+fn click(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    id: egui::Id,
+) -> super::SceneGraphResponse {
+    let pos = panel
+        .hit_rect(id)
+        .unwrap_or_else(|| panic!("{id:?} was not drawn on the previous frame"))
+        .center();
+    run_frame(panel, ctx, state, vec![egui::Event::PointerMoved(pos)]);
+    run_frame(panel, ctx, state, vec![press(pos, true)]);
+    run_frame(panel, ctx, state, vec![press(pos, false)])
+}
+
+/// Whether a row was drawn at all: `CollapsingState` is only stored for a
+/// header that actually ran.
+fn drawn(ctx: &egui::Context, id: egui::Id) -> bool {
+    egui::collapsing_header::CollapsingState::load(ctx, id).is_some()
+}
+
+fn set_open(ctx: &egui::Context, id: egui::Id, open: bool) {
+    let mut state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ctx, id, false);
+    state.set_open(open);
+    state.store(ctx);
+}
+
+// ── Tree structure ──────────────────────────────────────────────────────
+
+#[test]
+fn every_loaded_node_gets_a_row_with_its_camera_and_point_groups() {
+    let mut state = shared_shoot(3);
+    let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
+    let (_panel, ctx) = settled(&mut state);
+
+    for id in ids {
+        assert!(drawn(&ctx, row_id(id, "node")), "node row missing");
+        assert!(drawn(&ctx, row_id(id, "cameras")), "Cameras row missing");
+        assert!(drawn(&ctx, row_id(id, "points")), "Points row missing");
+    }
+}
+
+#[test]
+fn the_camera_rows_appear_only_once_the_cameras_group_is_expanded() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    assert!(
+        panel.hit_rect(row_id(id, "camera_0")).is_none(),
+        "the collapsed Cameras group still laid out its rows"
+    );
+    set_open(&ctx, row_id(id, "cameras"), true);
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    assert!(
+        panel.hit_rect(row_id(id, "camera_0")).is_some(),
+        "expanding the Cameras group did not draw any camera rows"
+    );
+}
+
+#[test]
+fn the_camera_list_lays_out_only_the_visible_rows() {
+    // 400 images against a 220px-tall list: a non-virtualized list would lay
+    // out every one of them.
+    let mut state = AppState::new();
+    state.append_node(file_node("/runs/big.sfmr", 400, "IMG"));
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+    set_open(&ctx, row_id(id, "cameras"), true);
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+
+    let laid_out = (0..400)
+        .filter(|i| panel.hit_rect(row_id(id, &format!("camera_{i}"))).is_some())
+        .count();
+    assert!(
+        laid_out > 0 && laid_out < 60,
+        "{laid_out} of 400 camera rows were laid out; the list is not virtualized"
+    );
+}
+
+#[test]
+fn the_patches_row_appears_only_for_a_node_that_carries_patch_data() {
+    use ndarray::{Array2, Array4};
+
+    let mut state = shared_shoot(2);
+    let plain = state.scene[0].id;
+    let patched = state.scene[1].id;
+    {
+        let recon = &mut state.scene[1].recon;
+        let n = recon.points.len();
+        recon.patch_u_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
+        recon.patch_v_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
+        recon.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::from_elem((n, 8, 8, 4), 200));
+    }
+    let (panel, _ctx) = settled(&mut state);
+
+    assert!(
+        panel.hit_rect(row_id(patched, "patches_eye")).is_some(),
+        "a node with patch bitmaps got no Patches row"
+    );
+    assert!(
+        panel.hit_rect(row_id(plain, "patches_eye")).is_none(),
+        "a node without patch bitmaps got a Patches row anyway"
+    );
+}
+
+#[test]
+fn the_infinity_mini_toggle_appears_only_when_the_node_has_points_at_infinity() {
+    let mut state = shared_shoot(2);
+    let none = state.scene[0].id;
+    let some = state.scene[1].id;
+    state.scene[1].recon.metadata.infinity_point_count = 12;
+    let (panel, _ctx) = settled(&mut state);
+
+    assert!(panel.hit_rect(row_id(some, "points_infinity")).is_some());
+    assert!(panel.hit_rect(row_id(none, "points_infinity")).is_none());
+}
+
+#[test]
+fn the_panel_glyphs_are_available_in_the_bundled_fonts() {
+    // A glyph egui does not bundle renders as a replacement box rather than
+    // failing, so nothing else here would notice.
+    let ctx = egui::Context::default();
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.label("warm the font atlas");
+    });
+    let font = egui::FontId::proportional(14.0);
+    // The selection accent bar is deliberately absent: it is painted, not
+    // written, precisely because no bundled proportional glyph would do.
+    for glyph in [super::EYE_GLYPH, super::CURSOR_GLYPH, super::INFINITY_GLYPH] {
+        assert!(
+            ctx.fonts_mut(|f| f.has_glyphs(&font, glyph)),
+            "{glyph:?} is not in egui's bundled fonts and would render as a box"
+        );
+    }
+}
+
+// ── Clicks and toggles ──────────────────────────────────────────────────
+
+#[test]
+fn clicking_a_reconstruction_row_reports_it_as_the_selection() {
+    let mut state = shared_shoot(2);
+    let second = state.scene[1].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    let response = click(&mut panel, &ctx, &mut state, row_id(second, "node_label"));
+    assert_eq!(response.select_recon, Some(second));
+    // The panel reports; `dock.rs` applies. Nothing was selected behind its back.
+    assert_ne!(state.selected_recon, Some(second));
+}
+
+#[test]
+fn clicking_a_camera_row_reports_the_image_it_names() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+    set_open(&ctx, row_id(id, "cameras"), true);
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "camera_2"));
+    assert_eq!(response.select_image, Some(ImageRef::new(id, 2)));
+}
+
+#[test]
+fn the_eye_and_cursor_toggles_write_through_to_the_node() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+    assert!(state.scene[0].visible && state.scene[0].interactive);
+
+    click(&mut panel, &ctx, &mut state, row_id(id, "node_eye"));
+    assert!(!state.scene[0].visible, "the eye did not hide the node");
+    assert!(
+        state.scene[0].interactive,
+        "the eye also flipped the interaction cursor"
+    );
+
+    click(&mut panel, &ctx, &mut state, row_id(id, "node_cursor"));
+    assert!(
+        !state.scene[0].interactive,
+        "the cursor toggle did not turn interaction off"
+    );
+    assert!(
+        !state.scene[0].visible,
+        "the cursor toggle also moved the eye"
+    );
+
+    // And back again — a toggle that only worked once would still pass above.
+    click(&mut panel, &ctx, &mut state, row_id(id, "node_eye"));
+    assert!(state.scene[0].visible);
+}
+
+#[test]
+fn the_group_eyes_drive_their_own_layers_only() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    click(&mut panel, &ctx, &mut state, row_id(id, "cameras_eye"));
+    assert!(!state.scene[0].show_cameras);
+    assert!(state.scene[0].show_points, "the Cameras eye hid the points");
+
+    click(&mut panel, &ctx, &mut state, row_id(id, "points_eye"));
+    assert!(!state.scene[0].show_points);
+    assert!(
+        state.scene[0].visible,
+        "a group eye should not touch the master eye"
+    );
+}
+
+#[test]
+fn the_infinity_mini_toggle_drives_only_the_infinity_points() {
+    let mut state = shared_shoot(1);
+    state.scene[0].recon.metadata.infinity_point_count = 12;
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    click(&mut panel, &ctx, &mut state, row_id(id, "points_infinity"));
+    assert!(!state.scene[0].show_points_at_infinity);
+    assert!(
+        state.scene[0].show_points,
+        "the ∞ toggle also hid the finite points"
+    );
+}
+
+#[test]
+fn the_selected_reconstruction_is_marked_in_the_tree() {
+    let mut state = shared_shoot(2);
+    let first = state.scene[0].id;
+    let second = state.scene[1].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    // The marker is drawn *before* the label, so the selected node's label
+    // starts further right than the unselected one's.
+    let selected_left = panel.hit_rect(row_id(first, "node_label")).unwrap().left();
+    let plain_left = panel.hit_rect(row_id(second, "node_label")).unwrap().left();
+    assert!(
+        selected_left > plain_left,
+        "the selected node's label ({selected_left}) is not inset past the \
+         unselected one's ({plain_left}), so no marker was drawn"
+    );
+
+    state.select_recon(second);
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    let now_selected = panel.hit_rect(row_id(second, "node_label")).unwrap().left();
+    let now_plain = panel.hit_rect(row_id(first, "node_label")).unwrap().left();
+    assert!(
+        now_selected > now_plain,
+        "the marker did not follow the selection"
+    );
+}
+
+#[test]
+fn the_points_group_shows_the_selected_point_id_and_never_a_listing() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+    set_open(&ctx, row_id(id, "points"), true);
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    assert!(
+        panel.hit_rect(row_id(id, "point_selected")).is_none(),
+        "a selection row appeared with nothing selected"
+    );
+
+    state.select_point(PointRef::new(id, 7));
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    assert!(
+        panel.hit_rect(row_id(id, "point_selected")).is_some(),
+        "the selected point got no row"
+    );
+
+    // Clicking it re-selects the same point (useful after selecting elsewhere).
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "point_selected"));
+    assert_eq!(response.select_point, Some(PointRef::new(id, 7)));
+}
+
+#[test]
+fn hovering_a_camera_row_reports_it_for_cross_panel_hover() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+    set_open(&ctx, row_id(id, "cameras"), true);
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+
+    let pos = panel.hit_rect(row_id(id, "camera_3")).unwrap().center();
+    run_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    let response = run_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    assert!(response.has_pointer, "the panel did not claim the pointer");
+    assert_eq!(response.hovered_image, Some(ImageRef::new(id, 3)));
+}
+
+#[test]
+fn the_camera_list_scrolls_to_a_selection_made_elsewhere_but_not_to_its_own() {
+    let mut state = AppState::new();
+    state.append_node(file_node("/runs/long.sfmr", 200, "IMG"));
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+    set_open(&ctx, row_id(id, "cameras"), true);
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    assert!(
+        panel.hit_rect(row_id(id, "camera_150")).is_none(),
+        "row 150 is visible without scrolling, so this test proves nothing"
+    );
+
+    // A selection change from another panel scrolls the row into view.
+    state.select_image(ImageRef::new(id, 150));
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    assert!(
+        panel.hit_rect(row_id(id, "camera_150")).is_some(),
+        "the selected row was not scrolled into view"
+    );
+
+    // With the selection unchanged the list stays where the user left it: a
+    // second frame must not re-apply the scroll.
+    let before = panel.hit_rect(row_id(id, "camera_150")).unwrap();
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    assert_eq!(
+        panel.hit_rect(row_id(id, "camera_150")),
+        Some(before),
+        "the list kept scrolling itself with the selection unchanged"
+    );
+}
+
+/// The other half of the interaction-cursor contract: switching a node's picks
+/// off must not make it uninspectable. The tree is the control surface, so a
+/// display-only node can always be selected deliberately.
+///
+/// (The GPU half — `pickable == 0` produces no hover or selection from the
+/// readback — is asserted in `scene_renderer/upload/tests.rs`.)
+#[test]
+fn a_non_interactive_node_can_still_be_selected_from_the_tree() {
+    let mut state = shared_shoot(2);
+    let second = state.scene[1].id;
+    state.scene[1].interactive = false;
+    let (mut panel, ctx) = settled(&mut state);
+    set_open(&ctx, row_id(second, "cameras"), true);
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+
+    let response = click(&mut panel, &ctx, &mut state, row_id(second, "node_label"));
+    assert_eq!(response.select_recon, Some(second));
+
+    let response = click(&mut panel, &ctx, &mut state, row_id(second, "camera_1"));
+    assert_eq!(response.select_image, Some(ImageRef::new(second, 1)));
+    assert!(
+        !state.scene[1].interactive,
+        "selecting from the tree quietly re-armed the node's picks"
+    );
+}
+
+#[test]
+fn an_empty_scene_draws_no_rows() {
+    let mut state = AppState::new();
+    let (panel, _ctx) = settled(&mut state);
+    assert!(panel.hit_rect(egui::Id::new("anything")).is_none());
+}
+
+// ── Node lifecycle (no frame needed) ────────────────────────────────────
+
+#[test]
+fn labels_are_disambiguated_when_two_files_share_a_stem() {
+    let mut state = AppState::new();
+    state.append_node(file_node("/a/run.sfmr", 8, "IMG"));
+    state.append_node(file_node("/b/run.sfmr", 8, "IMG"));
+    state.append_node(file_node("/c/run.sfmr", 8, "IMG"));
+    state.append_node(file_node("/d/other.sfmr", 8, "IMG"));
+
+    let labels: Vec<_> = state.scene.iter().map(|n| n.label.as_str()).collect();
+    assert_eq!(labels, ["run", "run (2)", "run (3)", "other"]);
+}
+
+#[test]
+fn closing_a_node_purges_its_caches_and_selection() {
+    let mut state = shared_shoot(2);
+    let first = state.scene[0].id;
+    let second = state.scene[1].id;
+    for id in [first, second] {
+        state.sift_cache.insert(
+            ImageRef::new(id, 0),
+            CachedSiftFeatures {
+                positions_xy: vec![[0.0, 0.0]],
+                affine_shapes: vec![[[1.0, 0.0], [0.0, 1.0]]],
+                read_count: 1,
+            },
+        );
+        state.full_res_cache.insert(ImageRef::new(id, 0), None);
+    }
+    state.select_image(ImageRef::new(first, 3));
+    state.hovered_point = Some(PointRef::new(first, 1));
+
+    state.close_node(first);
+
+    assert_eq!(state.scene.len(), 1);
+    assert!(
+        state.sift_cache.keys().all(|k| k.recon == second),
+        "the SIFT cache kept entries for the closed node"
+    );
+    assert!(
+        state.full_res_cache.keys().all(|k| k.recon == second),
+        "the full-res cache kept entries for the closed node"
+    );
+    assert_eq!(state.selected_image, None, "selection outlived its node");
+    assert_eq!(state.hovered_point, None, "hover outlived its node");
+    // The other node's entries are untouched.
+    assert!(state.sift_cache.contains_key(&ImageRef::new(second, 0)));
+}
+
+#[test]
+fn closing_the_selected_node_falls_back_to_the_first_remaining() {
+    let mut state = shared_shoot(3);
+    let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
+    state.select_recon(ids[1]);
+
+    state.close_node(ids[1]);
+    assert_eq!(state.selected_recon, Some(ids[0]));
+
+    // Closing an unselected node leaves the selection alone.
+    state.close_node(ids[2]);
+    assert_eq!(state.selected_recon, Some(ids[0]));
+
+    // An empty scene means no selection at all.
+    state.close_node(ids[0]);
+    assert_eq!(state.selected_recon, None);
+    assert!(state.scene.is_empty());
+}
+
+#[test]
+fn close_all_empties_the_scene_and_every_shared_cache() {
+    let mut state = shared_shoot(2);
+    let id = state.scene[0].id;
+    state.full_res_cache.insert(ImageRef::new(id, 0), None);
+    state.select_image(ImageRef::new(id, 0));
+
+    state.close_all();
+    assert!(state.scene.is_empty());
+    assert_eq!(state.selected_recon, None);
+    assert_eq!(state.selected_image, None);
+    assert!(state.full_res_cache.is_empty());
+}
+
+#[test]
+fn selecting_a_reconstruction_clears_finer_selection_from_other_nodes() {
+    let mut state = shared_shoot(2);
+    let first = state.scene[0].id;
+    let second = state.scene[1].id;
+    state.select_image(ImageRef::new(first, 2));
+    state.selected_point = Some(PointRef::new(first, 5));
+    // Hover is exempt — it is transient and may touch any visible node.
+    state.hovered_image = Some(ImageRef::new(first, 9));
+
+    state.select_recon(second);
+    assert_eq!(state.selected_recon, Some(second));
+    assert_eq!(state.selected_image, None);
+    assert_eq!(state.selected_point, None);
+    assert_eq!(
+        state.hovered_image,
+        Some(ImageRef::new(first, 9)),
+        "hover was cleared, but it is exempt from the invariant"
+    );
+
+    // Re-selecting the node the selection already lives in changes nothing.
+    state.select_image(ImageRef::new(second, 1));
+    state.select_recon(second);
+    assert_eq!(state.selected_image, Some(ImageRef::new(second, 1)));
+}
+
+#[test]
+fn selecting_an_image_or_point_selects_its_reconstruction_too() {
+    let mut state = shared_shoot(2);
+    let first = state.scene[0].id;
+    let second = state.scene[1].id;
+    state.select_recon(first);
+
+    state.select_image(ImageRef::new(second, 4));
+    assert_eq!(state.selected_recon, Some(second));
+
+    state.select_point(PointRef::new(first, 4));
+    assert_eq!(state.selected_recon, Some(first));
+    assert_eq!(
+        state.selected_image, None,
+        "the image selection belonged to the node we just left"
+    );
+}
+
+#[test]
+fn opening_a_file_appends_a_node_rather_than_replacing_the_scene() {
+    let mut state = AppState::new();
+    state.append_node(file_node("/runs/a.sfmr", 8, "IMG"));
+    state.append_node(file_node("/runs/b.sfmr", 8, "IMG"));
+    assert_eq!(state.scene.len(), 2);
+    assert_eq!(state.selected_recon, Some(state.scene[1].id));
+}
+
+// ── `[` / `]` stepping ──────────────────────────────────────────────────
+
+/// Deliver one `[` or `]` press to `handle_recon_step`, the way `dock.rs` does.
+fn step(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, forward: bool) {
+    let key = if forward {
+        egui::Key::CloseBracket
+    } else {
+        egui::Key::OpenBracket
+    };
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+        events: vec![egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }],
+        ..Default::default()
+    };
+    let _ = ctx.run_ui(input, |ui| viewer.handle_recon_step(ui, state));
+}
+
+#[test]
+fn bracket_keys_step_the_selected_reconstruction_in_tree_order() {
+    let mut state = shared_shoot(3);
+    let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
+    let mut viewer = Viewer3D::new();
+    let ctx = egui::Context::default();
+
+    step(&mut viewer, &ctx, &mut state, true);
+    assert_eq!(state.selected_recon, Some(ids[1]));
+    step(&mut viewer, &ctx, &mut state, true);
+    assert_eq!(state.selected_recon, Some(ids[2]));
+    // Wraps.
+    step(&mut viewer, &ctx, &mut state, true);
+    assert_eq!(state.selected_recon, Some(ids[0]));
+    step(&mut viewer, &ctx, &mut state, false);
+    assert_eq!(state.selected_recon, Some(ids[2]));
+}
+
+#[test]
+fn stepping_carries_the_selection_to_the_same_named_image() {
+    let mut state = shared_shoot(2);
+    let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
+    // Shift the second node's images by one, so the same name sits at a
+    // different index — an index-based carry-over would land on the wrong photo.
+    state.scene[1].recon.images.rotate_left(1);
+    let name = state.scene[0].recon.images[3].name.clone();
+    let expected = state.scene[1]
+        .recon
+        .images
+        .iter()
+        .position(|i| i.name == name)
+        .expect("the name is present in the second node");
+    assert_ne!(
+        expected, 3,
+        "the fixture did not actually shift the indices"
+    );
+
+    state.select_image(ImageRef::new(ids[0], 3));
+    let mut viewer = Viewer3D::new();
+    let ctx = egui::Context::default();
+    step(&mut viewer, &ctx, &mut state, true);
+
+    assert_eq!(state.selected_recon, Some(ids[1]));
+    assert_eq!(state.selected_image, Some(ImageRef::new(ids[1], expected)));
+}
+
+#[test]
+fn stepping_clears_the_finer_selection_when_the_name_is_absent() {
+    let mut state = AppState::new();
+    state.append_node(file_node("/runs/a.sfmr", 16, "LEFT"));
+    state.append_node(file_node("/runs/b.sfmr", 16, "RIGHT"));
+    let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
+    state.select_recon(ids[0]);
+    state.select_image(ImageRef::new(ids[0], 2));
+    state.selected_point = Some(PointRef::new(ids[0], 5));
+
+    let mut viewer = Viewer3D::new();
+    let ctx = egui::Context::default();
+    step(&mut viewer, &ctx, &mut state, true);
+
+    assert_eq!(state.selected_recon, Some(ids[1]));
+    assert_eq!(state.selected_image, None);
+    assert_eq!(state.selected_point, None);
+}
+
+#[test]
+fn stepping_carries_the_camera_view_to_the_same_named_image() {
+    let mut state = shared_shoot(2);
+    let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
+    let mut viewer = Viewer3D::new();
+    let ctx = egui::Context::default();
+
+    // Enter camera view on the first node's image 3, without the animation:
+    // `switch_camera_view` needs an active view, so seed one directly.
+    let image = ImageRef::new(ids[0], 3);
+    viewer.camera_view = Some(crate::viewer_3d::CameraViewMode {
+        image,
+        r_world_from_cam: state.scene[0].recon.images[3].quaternion_wxyz.inverse(),
+    });
+    state.select_image(image);
+
+    step(&mut viewer, &ctx, &mut state, true);
+    let now = viewer.camera_view.as_ref().expect("still in camera view");
+    assert_eq!(now.image.recon, ids[1], "the camera view stayed behind");
+    assert_eq!(
+        state.scene[1].recon.images[now.image.index()].name,
+        state.scene[0].recon.images[3].name,
+    );
+}
+
+#[test]
+fn stepping_drops_a_camera_view_whose_image_has_no_counterpart() {
+    let mut state = AppState::new();
+    state.append_node(file_node("/runs/a.sfmr", 16, "LEFT"));
+    state.append_node(file_node("/runs/b.sfmr", 16, "RIGHT"));
+    let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
+    state.select_recon(ids[0]);
+    let image = ImageRef::new(ids[0], 1);
+    state.select_image(image);
+    let mut viewer = Viewer3D::new();
+    viewer.camera_view = Some(crate::viewer_3d::CameraViewMode {
+        image,
+        r_world_from_cam: state.scene[0].recon.images[1].quaternion_wxyz.inverse(),
+    });
+
+    let ctx = egui::Context::default();
+    step(&mut viewer, &ctx, &mut state, true);
+    assert!(
+        viewer.camera_view.is_none(),
+        "the camera view kept pointing into the node we stepped away from"
+    );
+}
+
+#[test]
+fn stepping_does_nothing_with_a_single_node_loaded() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    state.select_image(ImageRef::new(id, 2));
+    let mut viewer = Viewer3D::new();
+    let ctx = egui::Context::default();
+
+    step(&mut viewer, &ctx, &mut state, true);
+    assert_eq!(state.selected_recon, Some(id));
+    assert_eq!(
+        state.selected_image,
+        Some(ImageRef::new(id, 2)),
+        "stepping to the only node cleared the selection"
+    );
+}
+
+// ── Window title and stats ──────────────────────────────────────────────
+
+#[test]
+fn the_window_title_names_the_first_file_and_counts_the_rest() {
+    let mut state = AppState::new();
+    assert_eq!(state.window_title(), "SfM Explorer");
+
+    state.append_node(file_node("/runs/run_a.sfmr", 8, "IMG"));
+    assert_eq!(state.window_title(), "SfM Explorer - run_a.sfmr");
+
+    state.append_node(file_node("/runs/run_b.sfmr", 8, "IMG"));
+    state.append_node(file_node("/runs/run_c.sfmr", 8, "IMG"));
+    assert_eq!(state.window_title(), "SfM Explorer - run_a.sfmr (+2)");
+}
+
+#[test]
+fn demo_data_first_leaves_the_base_window_title_alone() {
+    // `ui_basic` attaches to the window by this exact name on Windows.
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(8)));
+    assert_eq!(state.window_title(), "SfM Explorer");
+    state.append_node(file_node("/runs/run_a.sfmr", 8, "IMG"));
+    assert_eq!(state.window_title(), "SfM Explorer");
+}
+
+#[test]
+fn the_stats_overlay_sums_visible_nodes_and_leads_with_the_count() {
+    use crate::viewer_3d::overlay::scene_stats_text;
+
+    let mut state = shared_shoot(2);
+    state.scene[0].recon.metadata.infinity_point_count = 3;
+    let one_node_points = state.scene[0].recon.points.len();
+    let one_node_images = state.scene[0].recon.images.len();
+
+    let text = scene_stats_text(&state.scene, false, 60.0);
+    assert_eq!(
+        text,
+        format!(
+            "2 reconstructions | {} points (3 at infinity) | {} images",
+            2 * one_node_points,
+            2 * one_node_images
+        )
+    );
+
+    // Hiding a node takes it out of the totals — and with one left, the
+    // reconstruction count leads no more.
+    state.scene[1].visible = false;
+    let text = scene_stats_text(&state.scene, false, 60.0);
+    assert_eq!(
+        text,
+        format!("{one_node_points} points (3 at infinity) | {one_node_images} images")
+    );
+}
+
+#[test]
+fn the_hover_overlay_names_the_reconstruction_only_when_several_are_loaded() {
+    use crate::scene_renderer::PickTarget;
+    use crate::viewer_3d::overlay::hover_overlay_text;
+
+    let mut state = shared_shoot(1);
+    let first = state.scene[0].id;
+    let name = state.scene[0].recon.images[1].name.clone();
+
+    let image_pick = Some(PickTarget::Image(ImageRef::new(first, 1)));
+    let point_pick = Some(PickTarget::Point(PointRef::new(first, 88)));
+    assert_eq!(
+        hover_overlay_text(&state.scene, image_pick, None),
+        format!("Camera: {name}")
+    );
+    assert_eq!(
+        hover_overlay_text(&state.scene, point_pick, None),
+        "Point3D #88"
+    );
+
+    state.append_node(file_node("/runs/run_b.sfmr", 8, "IMG"));
+    assert_eq!(
+        hover_overlay_text(&state.scene, image_pick, None),
+        format!("Camera: run_0 / {name}")
+    );
+    assert_eq!(
+        hover_overlay_text(&state.scene, point_pick, None),
+        "Point3D run_0 #88"
+    );
+}
+
+// ── Formatting helpers ──────────────────────────────────────────────────
+
+#[test]
+fn counts_are_formatted_compactly_on_the_node_row() {
+    assert_eq!(super::compact_count(0), "0");
+    assert_eq!(super::compact_count(999), "999");
+    assert_eq!(super::compact_count(1_000), "1.0K");
+    assert_eq!(super::compact_count(12_345), "12.3K");
+    assert_eq!(super::compact_count(1_204_551), "1.2M");
+}
+
+#[test]
+fn exact_counts_carry_thousands_separators_on_the_group_rows() {
+    assert_eq!(super::with_thousands(0), "0");
+    assert_eq!(super::with_thousands(999), "999");
+    assert_eq!(super::with_thousands(1_000), "1,000");
+    assert_eq!(super::with_thousands(1_204_551), "1,204,551");
+}

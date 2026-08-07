@@ -46,6 +46,7 @@ pub use gpu_types::{
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
 };
 pub use picking::PickTarget;
+pub use recon::NodeDisplay;
 
 // ── SceneRenderer ───────────────────────────────────────────────────────
 
@@ -255,13 +256,43 @@ impl SceneRenderer {
     }
 
     /// Bounding sphere (centre, radius) of the whole scene: the union of the
-    /// loaded nodes' bounds. Drives the adaptive clip planes.
+    /// *visible* nodes' bounds. Drives the adaptive clip planes.
+    ///
+    /// Hidden nodes drop out so switching a reference reconstruction off also
+    /// stops it dragging the clip planes and the grid scale around.
     pub fn scene_bounds(&self) -> (Point3<f64>, f64) {
+        self.visible_bounds()
+            .unwrap_or_else(|| self.any_bounds().unwrap_or((Point3::origin(), 1.0)))
+    }
+
+    /// The union of the visible nodes' bounds, or `None` when nothing visible
+    /// has uploaded its points yet.
+    fn visible_bounds(&self) -> Option<(Point3<f64>, f64)> {
+        self.recons
+            .values()
+            .filter(|r| r.display.visible)
+            .filter_map(|r| r.bounds)
+            .reduce(union_sphere)
+    }
+
+    /// The union over every loaded node, visible or not — the fallback that
+    /// keeps the camera somewhere sensible when every node is hidden.
+    fn any_bounds(&self) -> Option<(Point3<f64>, f64)> {
         self.recons
             .values()
             .filter_map(|r| r.bounds)
             .reduce(union_sphere)
-            .unwrap_or((Point3::origin(), 1.0))
+    }
+
+    /// Mirror a node's Scene-panel display state onto its GPU bundle.
+    ///
+    /// A no-op for a node with no bundle yet: the bundle is created by its
+    /// first upload and starts from [`NodeDisplay::default`], and the next
+    /// frame's sync lands before it is ever drawn.
+    pub fn set_node_display(&mut self, id: ReconId, display: NodeDisplay) {
+        if let Some(bundle) = self.recons.get_mut(&id) {
+            bundle.display = display;
+        }
     }
 
     /// Decode a pick id read back from the GPU into the entity it addresses.

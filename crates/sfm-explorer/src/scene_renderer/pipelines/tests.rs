@@ -65,8 +65,7 @@ fn the_point_uniforms_struct_fits_the_buffer_the_pipeline_allocates() {
             screen_width: 800.0,
             screen_height: 600.0,
             infinity_point_px: 3.0,
-            show_infinity: 1.0,
-            _pad: [0.0; 3],
+            _pad: [0.0; 4],
         }),
     );
     assert_eq!(
@@ -99,11 +98,14 @@ fn the_recon_uniforms_struct_matches_its_wgsl_layout() {
             image_pick_base: 0,
             pickable: 1,
             tint_color: [0.0; 4],
+            show_infinity: 1.0,
+            _pad: [0.0; 3],
         }),
     );
     assert_eq!(std::mem::size_of::<ReconUniforms>() % 16, 0);
-    // mat4 (64) + four scalars (16) + vec4 (16): the vec4's 16-byte alignment
-    // is what the four scalars in between are sized to satisfy.
-    assert_eq!(std::mem::size_of::<ReconUniforms>(), 96);
+    // mat4 (64) + four scalars (16) + vec4 (16) + a scalar rounded up to the
+    // struct's 16-byte alignment (16). The four scalars before the vec4 are
+    // sized to satisfy *its* alignment; the trailing pad satisfies the struct's.
+    assert_eq!(std::mem::size_of::<ReconUniforms>(), 112);
     device.poll(wgpu::PollType::Poll).expect("device poll");
 }

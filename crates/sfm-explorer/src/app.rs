@@ -22,7 +22,7 @@ use winit::window::Window;
 use crate::dock::{self, TabContext};
 use crate::platform;
 use crate::scene::ImageRef;
-use crate::scene_renderer::PickTarget;
+use crate::scene_renderer::{NodeDisplay, PickTarget};
 use crate::App;
 
 #[cfg(target_os = "windows")]
@@ -271,6 +271,29 @@ impl App {
             uploaded_any = true;
         }
 
+        // Mirror each node's Scene-panel display state onto its bundle. After
+        // the uploads above, so a node loaded this frame already has a bundle
+        // to carry it. This is how effective visibility and the interaction
+        // cursor reach the draw loop and the per-recon uniform write: the
+        // renderer ANDs these with the global HUD toggles and never looks at
+        // the scene itself.
+        {
+            let renderer = &mut self.scene_renderer;
+            for node in &self.state.scene {
+                renderer.set_node_display(
+                    node.id,
+                    NodeDisplay {
+                        visible: node.visible,
+                        show_points: node.show_points,
+                        show_cameras: node.show_cameras,
+                        show_patches: node.show_patches,
+                        show_points_at_infinity: node.show_points_at_infinity,
+                        interactive: node.interactive,
+                    },
+                );
+            }
+        }
+
         // `length_scale` is global and re-derived from the union of the loaded
         // nodes, exactly as it is re-derived on load today. Frustum geometry
         // below depends on it, so it has to settle before that upload.
@@ -500,6 +523,7 @@ impl App {
 
         let app_state = &mut self.state;
         let viewer_3d = &mut self.viewer_3d;
+        let scene_graph = &mut self.scene_graph;
         let image_browser = &mut self.image_browser;
         let image_detail = &mut self.image_detail;
         let point_track_detail = &mut self.point_track_detail;
@@ -518,12 +542,33 @@ impl App {
                 egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button("File", |ui| {
                         if ui.button("Open...").clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
+                            // Multi-select, and every chosen file *appends* a
+                            // node. Re-opening a loaded path reloads it in
+                            // place instead (see `AppState::load_file`).
+                            if let Some(paths) = rfd::FileDialog::new()
                                 .add_filter("SfM Reconstruction", &["sfmr"])
-                                .pick_file()
+                                .pick_files()
                             {
-                                app_state.load_file(&path);
+                                for path in paths {
+                                    app_state.load_file(&path);
+                                }
                             }
+                            ui.close();
+                        }
+                        if ui
+                            .add_enabled(
+                                !app_state.scene.is_empty(),
+                                egui::Button::new("Close All"),
+                            )
+                            .clicked()
+                        {
+                            for node in &app_state.scene {
+                                let id = node.id;
+                                image_browser.forget_recon(id);
+                                image_detail.forget_recon(id);
+                                point_track_detail.forget_recon(id);
+                            }
+                            app_state.close_all();
                             ui.close();
                         }
                         ui.separator();
@@ -593,6 +638,7 @@ impl App {
                 let mut tab_context = TabContext {
                     state: app_state,
                     viewer_3d,
+                    scene_graph,
                     image_browser,
                     image_detail,
                     point_track_detail,
@@ -670,7 +716,10 @@ impl App {
             // Entity pick: select frustum or point
             match readback.pick {
                 Some(PickTarget::Image(image)) => {
-                    self.state.selected_image = Some(image);
+                    // Selecting an entity selects its reconstruction too — the
+                    // viewport can pick into any visible node, so this is where
+                    // a click can move the selection between files.
+                    self.state.select_image(image);
                     if self.viewer_3d.pending_click_is_double {
                         // Double-click on frustum → enter/switch camera view mode
                         if let Some(node) = crate::scene::node_by_id(&self.state.scene, image.recon)
@@ -690,7 +739,7 @@ impl App {
                     }
                 }
                 Some(PickTarget::Point(point)) => {
-                    self.state.selected_point = Some(point);
+                    self.state.select_point(point);
                 }
                 None if !self.viewer_3d.pending_click_is_alt => {
                     // Clicked on background (non-Alt) — deselect

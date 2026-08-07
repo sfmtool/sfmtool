@@ -230,8 +230,17 @@ impl PointTrackDetail {
         response
     }
 
+    /// Drop everything cached for a reconstruction that has left the scene.
+    pub fn forget_recon(&mut self, id: ReconId) {
+        self.thumbnail_textures.retain(|image, _| image.recon != id);
+        self.rendered_patch_textures
+            .retain(|image, _| image.recon != id);
+        if self.prepared_point.is_some_and(|point| point.recon == id) {
+            self.clear();
+        }
+    }
+
     /// Clear all cached state (e.g. when reconstruction changes).
-    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.prepared_point = None;
         self.observations.clear();

@@ -9,9 +9,13 @@ import click
 
 
 @click.command()
-@click.argument("sfmr_file", required=False, type=click.Path(exists=True))
-def explorer(sfmr_file):
-    """Launch the SfM Explorer 3D viewer."""
+@click.argument("sfmr_files", nargs=-1, type=click.Path(exists=True))
+def explorer(sfmr_files):
+    """Launch the SfM Explorer 3D viewer.
+
+    Every path given is loaded as its own node in the viewer's scene graph, so
+    several reconstructions can be compared side by side in one 3D space.
+    """
     exe = shutil.which("launch-sfm-explorer")
     if exe is None:
         raise click.ClickException(
@@ -20,9 +24,5 @@ def explorer(sfmr_file):
             "pixi run cargo build --release -p sfmtool-py"
         )
 
-    cmd = [exe]
-    if sfmr_file:
-        cmd.append(sfmr_file)
-
-    result = subprocess.run(cmd)
+    result = subprocess.run([exe, *sfmr_files])
     sys.exit(result.returncode)

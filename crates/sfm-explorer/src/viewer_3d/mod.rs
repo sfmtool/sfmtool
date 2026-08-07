@@ -9,7 +9,9 @@
 mod camera;
 mod hud;
 mod input;
-mod overlay;
+/// Crate-visible so the overlay text builders can be asserted on directly —
+/// they are the user-facing wording of the scene stats and hover lines.
+pub(crate) mod overlay;
 
 pub use camera::{best_fit_fov, ViewportCamera};
 
@@ -18,7 +20,7 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use sfmtool_core::{Camera, SfmrReconstruction};
 
 use crate::platform::GestureEvent;
-use crate::scene::{ImageRef, ReconId};
+use crate::scene::{ImageRef, ReconId, SceneNode};
 
 /// Drag/gesture zoom speed: maps pixel deltas to zoom amount.
 const DRAG_ZOOM_SPEED: f64 = 0.13125;
@@ -207,6 +209,10 @@ impl Viewer3D {
         ui: &mut egui::Ui,
         reconstruction: &SfmrReconstruction,
         recon_id: ReconId,
+        // Every loaded node, for the overlays that describe the whole scene:
+        // the stats line and the hover text's reconstruction label. The
+        // viewport itself still works within the *selected* node above.
+        scene: &[SceneNode],
         selected_image: &mut Option<ImageRef>,
         show_grid: bool,
         length_scale: f32,
@@ -359,8 +365,7 @@ impl Viewer3D {
         self.draw_info_overlay(
             &painter,
             rect,
-            reconstruction,
-            recon_id,
+            scene,
             show_controls_help,
             show_fps,
             hover_depth,
@@ -488,6 +493,36 @@ impl Viewer3D {
     /// Cancels any in-progress camera transition, snapping to the current interpolated state.
     pub(crate) fn cancel_transition(&mut self) {
         self.target_transition = None;
+    }
+
+    /// Frame `points`, with the same animated transition the `Z` key uses.
+    ///
+    /// Shared by `Z` (which frames the selected reconstruction) and the Scene
+    /// panel's per-node `Zoom to Fit`, so the two cannot drift apart.
+    pub fn zoom_to_fit_points(&mut self, points: &[Point3<f64>], aspect: f64, current_time: f64) {
+        if points.is_empty() || aspect <= 0.0 || aspect.is_nan() {
+            return;
+        }
+        if let Some((end_position, end_distance)) = self.camera.compute_zoom_to_fit(points, aspect)
+        {
+            self.start_transition(
+                end_position,
+                self.camera.camera.orientation,
+                end_distance,
+                self.camera.fov,
+                self.camera.world_up,
+                None,
+                false,
+                current_time,
+            );
+        }
+    }
+
+    /// The aspect ratio of the viewport as last laid out, or `None` before the
+    /// 3D panel has been shown once.
+    pub fn panel_aspect(&self) -> Option<f64> {
+        let [w, h] = self.panel_size;
+        (w > 0 && h > 0).then(|| w as f64 / h as f64)
     }
 
     /// Enter camera view mode with a smooth animated transition.

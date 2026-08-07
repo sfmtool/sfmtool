@@ -104,6 +104,34 @@ impl ImageDetail {
         }
     }
 
+    /// Drop everything cached for a reconstruction that has left the scene.
+    ///
+    /// A [`ReconId`] is never reused, so these entries could only ever go stale
+    /// rather than alias — this is about the GPU texture they hold, not about
+    /// correctness.
+    pub fn forget_recon(&mut self, id: ReconId) {
+        if self
+            .loaded_image
+            .as_ref()
+            .is_some_and(|(image, _)| image.recon == id)
+        {
+            self.loaded_image = None;
+        }
+        if self
+            .feature_overlay
+            .as_ref()
+            .is_some_and(|overlay| overlay.image.recon == id)
+        {
+            self.feature_overlay = None;
+        }
+        if self
+            .prev_selected_image
+            .is_some_and(|image| image.recon == id)
+        {
+            self.prev_selected_image = None;
+        }
+    }
+
     /// Reset pan and zoom to fit the image in the panel.
     fn reset_view(&mut self) {
         self.pan = egui::Vec2::ZERO;

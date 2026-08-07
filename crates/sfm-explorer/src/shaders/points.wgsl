@@ -17,7 +17,6 @@ struct Uniforms {
     screen_width: f32,
     screen_height: f32,
     infinity_point_px: f32,
-    show_infinity: f32,
 }
 
 // Per-reconstruction block: which node this draw belongs to.
@@ -28,6 +27,10 @@ struct ReconUniforms {
     image_pick_base: u32,
     pickable: u32,
     tint_color: vec4<f32>,
+    // Effective "points at infinity" visibility for this node: the global HUD
+    // toggle AND the node's own ∞ mini-toggle. Only this shader reads it, but
+    // every shader declares the block identically — they share one buffer.
+    show_infinity: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -83,7 +86,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
         // node transform's and the camera's translation drop out — a point at
         // infinity has no parallax, and a direction only rotates.
         let clip_c = uniforms.view_proj * (recon.model * vec4<f32>(in.world_pos, 0.0));
-        if uniforms.show_infinity == 0.0 || clip_c.w <= 0.0 {
+        if recon.show_infinity == 0.0 || clip_c.w <= 0.0 {
             // Hidden by the "points at infinity" toggle, or pointing behind the
             // camera: emit a clipped vertex either way.
             out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);

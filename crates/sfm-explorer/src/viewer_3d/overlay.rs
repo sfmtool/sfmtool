@@ -8,9 +8,8 @@
 
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke};
 use nalgebra::{Point3, Vector3};
-use sfmtool_core::SfmrReconstruction;
 
-use crate::scene::ReconId;
+use crate::scene::{node_by_id, visible_stats, SceneNode};
 use crate::scene_renderer::PickTarget;
 
 use super::Viewer3D;
@@ -144,8 +143,7 @@ impl Viewer3D {
         &self,
         painter: &egui::Painter,
         rect: Rect,
-        reconstruction: &SfmrReconstruction,
-        recon_id: ReconId,
+        scene: &[SceneNode],
         show_controls_help: bool,
         show_fps: bool,
         hover_depth: Option<f32>,
@@ -155,24 +153,11 @@ impl Viewer3D {
         let font = egui::FontId::proportional(12.0);
         let text_color = Color32::from_rgba_unmultiplied(200, 200, 200, 180);
 
-        // Top-left: stats, and the frame rate if it is wanted. Points at
-        // infinity are called out separately — they are directions rather than
-        // locations, so a lone total hides how much of the cloud has no
-        // position at all.
-        let at_infinity = reconstruction.metadata.infinity_point_count;
-        let points = if at_infinity > 0 {
-            format!(
-                "{} points ({} at infinity)",
-                reconstruction.points.len(),
-                at_infinity
-            )
-        } else {
-            format!("{} points", reconstruction.points.len())
-        };
-        let mut stats = format!("{} | {} images", points, reconstruction.images.len());
-        if show_fps {
-            stats.push_str(&format!(" | {fps:.0} fps"));
-        }
+        // Top-left: stats summed over the *visible* nodes, and the frame rate
+        // if it is wanted. Points at infinity are called out separately — they
+        // are directions rather than locations, so a lone total hides how much
+        // of the cloud has no position at all.
+        let stats = scene_stats_text(scene, show_fps, fps);
         painter.text(
             Pos2::new(rect.left() + 10.0, rect.top() + 10.0),
             egui::Align2::LEFT_TOP,
@@ -197,37 +182,11 @@ impl Viewer3D {
         );
 
         // Bottom-left: entity + depth info under cursor. The pick is a ref, so
-        // the index shown is local to its own reconstruction; a pick into a
-        // node other than the one being drawn here has no name to look up.
-        // (The recon label the spec adds once several files can be loaded is
-        // phase 3, along with the panel that names them.)
+        // it names its own reconstruction; with more than one file loaded the
+        // text says which — `Camera: run_a / IMG_0001.jpg`, `Point3D run_a
+        // #88231` — and with one it stays exactly as it was.
         let depth_val = hover_depth.filter(|&d| d > 0.0);
-
-        let hover_text = match hover_pick {
-            Some(PickTarget::Point(point)) => {
-                let index = point.index();
-                if let Some(depth) = depth_val {
-                    format!("Point3D #{} | depth: {:.4}", index, depth)
-                } else {
-                    format!("Point3D #{}", index)
-                }
-            }
-            Some(PickTarget::Image(image)) => {
-                let name = image
-                    .index_in(recon_id)
-                    .and_then(|index| reconstruction.images.get(index))
-                    .map(|img| img.name.as_str())
-                    .unwrap_or("?");
-                format!("Camera: {}", name)
-            }
-            None => {
-                if let Some(depth) = depth_val {
-                    format!("depth: {:.4}", depth)
-                } else {
-                    String::new()
-                }
-            }
-        };
+        let hover_text = hover_overlay_text(scene, hover_pick, depth_val);
 
         if !hover_text.is_empty() {
             painter.text(
@@ -250,5 +209,69 @@ impl Viewer3D {
                 text_color,
             );
         }
+    }
+}
+
+/// The top-left stats line: entity totals over the visible nodes, led by the
+/// reconstruction count once more than one is contributing.
+pub(crate) fn scene_stats_text(scene: &[SceneNode], show_fps: bool, fps: f64) -> String {
+    let totals = visible_stats(scene);
+    let points = if totals.points_at_infinity > 0 {
+        format!(
+            "{} points ({} at infinity)",
+            totals.points, totals.points_at_infinity
+        )
+    } else {
+        format!("{} points", totals.points)
+    };
+    let mut text = String::new();
+    if totals.recons > 1 {
+        text.push_str(&format!("{} reconstructions | ", totals.recons));
+    }
+    text.push_str(&format!("{} | {} images", points, totals.images));
+    if show_fps {
+        text.push_str(&format!(" | {fps:.0} fps"));
+    }
+    text
+}
+
+/// The bottom-left hover line for what the pick buffer resolved to.
+///
+/// The reconstruction label is included only when more than one file is
+/// loaded — with a single one it would be noise, and it is exactly the text
+/// `ui_basic`-adjacent expectations were written against.
+pub(crate) fn hover_overlay_text(
+    scene: &[SceneNode],
+    hover_pick: Option<PickTarget>,
+    depth: Option<f32>,
+) -> String {
+    let qualify = scene.len() > 1;
+    match hover_pick {
+        Some(PickTarget::Point(point)) => {
+            let label = qualify
+                .then(|| node_by_id(scene, point.recon))
+                .flatten()
+                .map(|node| format!("{} ", node.label))
+                .unwrap_or_default();
+            match depth {
+                Some(depth) => format!("Point3D {}#{} | depth: {:.4}", label, point.index(), depth),
+                None => format!("Point3D {}#{}", label, point.index()),
+            }
+        }
+        Some(PickTarget::Image(image)) => {
+            let node = node_by_id(scene, image.recon);
+            let name = node
+                .and_then(|node| node.recon.images.get(image.index()))
+                .map(|img| img.name.as_str())
+                .unwrap_or("?");
+            match node.filter(|_| qualify) {
+                Some(node) => format!("Camera: {} / {}", node.label, name),
+                None => format!("Camera: {}", name),
+            }
+        }
+        None => match depth {
+            Some(depth) => format!("depth: {:.4}", depth),
+            None => String::new(),
+        },
     }
 }

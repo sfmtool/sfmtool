@@ -5,6 +5,7 @@
 
 use super::gpu_types::*;
 use super::picking::PICK_INDEX_NONE;
+use super::recon::ReconResources;
 use super::SceneRenderer;
 use crate::scene::{ImageRef, PointRef};
 use crate::viewer_3d::ViewportCamera;
@@ -17,6 +18,36 @@ const IDENTITY_MODEL: [[f32; 4]; 4] = [
     [0.0, 0.0, 1.0, 0.0],
     [0.0, 0.0, 0.0, 1.0],
 ];
+
+/// The per-recon uniform block for one node: its pick bases, its splat size,
+/// and the two switches the Scene panel drives — whether the node captures
+/// picks, and whether its points at infinity are drawn.
+///
+/// Pulled out of the write loop so the composition of global and per-node state
+/// is assertable without a render pass: this is the only place `interactive`
+/// turns into a number the GPU acts on.
+pub(super) fn recon_uniforms(
+    bundle: &ReconResources,
+    size_multiplier: f32,
+    show_infinity: bool,
+) -> ReconUniforms {
+    ReconUniforms {
+        model: IDENTITY_MODEL,
+        point_size: bundle.auto_point_size * size_multiplier,
+        point_pick_base: bundle.point_pick_base,
+        image_pick_base: bundle.image_pick_base,
+        // The Scene panel's interaction cursor. 0 makes every one of this
+        // node's shaders emit PICK_TAG_NONE, so it renders and occludes but
+        // captures no hover and no click.
+        pickable: u32::from(bundle.display.interactive),
+        // Alpha 0 = draw the node's original colors (phase 5).
+        tint_color: [0.0; 4],
+        // Effective ∞ visibility: the global HUD toggle AND this node's own ∞
+        // mini-toggle.
+        show_infinity: f32::from(show_infinity && bundle.display.show_points_at_infinity),
+        _pad: [0.0; 3],
+    }
+}
 
 impl SceneRenderer {
     #[allow(clippy::too_many_arguments)]
@@ -74,8 +105,9 @@ impl SceneRenderer {
                 screen_width: w as f32,
                 screen_height: h as f32,
                 infinity_point_px,
-                show_infinity: if show_infinity { 1.0 } else { 0.0 },
-                _pad: [0.0; 3],
+                // The ∞ toggle is per-node now (`ReconUniforms::show_infinity`,
+                // written below), so nothing global carries it any more.
+                _pad: [0.0; 4],
             };
 
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
@@ -107,17 +139,7 @@ impl SceneRenderer {
             queue.write_buffer(
                 &bundle.uniform_buffer,
                 0,
-                bytemuck::bytes_of(&ReconUniforms {
-                    model: IDENTITY_MODEL,
-                    point_size: bundle.auto_point_size * size_multiplier,
-                    point_pick_base: bundle.point_pick_base,
-                    image_pick_base: bundle.image_pick_base,
-                    // Every node is pickable until the Scene panel's
-                    // interaction toggle arrives (phase 3).
-                    pickable: 1,
-                    // Alpha 0 = draw the node's original colors (phase 5).
-                    tint_color: [0.0; 4],
-                }),
+                bytemuck::bytes_of(&recon_uniforms(bundle, size_multiplier, show_infinity)),
             );
 
             // Image quad uniforms (this node's thumbnail atlas)

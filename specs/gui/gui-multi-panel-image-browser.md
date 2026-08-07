@@ -17,24 +17,30 @@ An `egui_dock`-based multi-panel layout, replacing the original single
    (see `specs/gui/gui-point-track-detail.md`); shares the right-side tab
    region with Image Detail.
 
+A fifth panel, **Scene**, was added by
+[gui-scene-graph.md](gui-scene-graph.md); it takes a narrow left split of the
+root, and everything below describes the arrangement to its right.
+
 ## Default Layout
 
 ```
-┌──────────────────────────────────┬──────────────┐
-│  File  View                      │  (menu bar)  │
-├──────────────────────────────────┼──────────────┤
-│                                  │              │
-│                                  │    Image     │
-│           3D Viewer              │    Detail    │
-│                                  │              │
-│                                  │              │
-├──────────────────────────────────┴──────────────┤
-│ ◀ [img01] [img02] [img03] [img04] [img05] ... ▶│
-│              Image Browser (~160px)             │
-└─────────────────────────────────────────────────┘
+┌───────┬──────────────────────────┬──────────────┐
+│  File                            │  (menu bar)  │
+├───────┼──────────────────────────┼──────────────┤
+│       │                          │              │
+│       │                          │    Image     │
+│ Scene │        3D Viewer         │    Detail    │
+│       │                          │              │
+│       │                          │              │
+│       ├──────────────────────────┴──────────────┤
+│       │ ◀ [img01] [img02] [img03] [img04] ... ▶ │
+│       │            Image Browser (~160px)       │
+└───────┴─────────────────────────────────────────┘
 ```
 
-- **3D Viewer**: top-left, ~2/3 width. Point cloud, frustums, navigation.
+- **Scene**: left, ~18% width. The tree of loaded reconstructions.
+- **3D Viewer**: top-left of the rest, ~2/3 of its width. Point cloud,
+  frustums, navigation.
 - **Image Detail**: top-right, ~1/3 width. Full-resolution image of the selected camera.
 - **Image Browser**: bottom strip, full width, ~160px. Horizontally-scrollable strip
   of 128×128 thumbnails.

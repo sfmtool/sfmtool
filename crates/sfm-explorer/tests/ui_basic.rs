@@ -225,7 +225,7 @@ fn file_menu_items() {
         .press()
         .expect("press File menu button");
 
-    for item in ["Open...", "Load Demo Data...", "Quit"] {
+    for item in ["Open...", "Close All", "Load Demo Data...", "Quit"] {
         app.locator(&format!(r#"button[name="{item}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("File menu item '{item}' did not appear"));
@@ -296,6 +296,25 @@ fn hud_layer_toggles_are_present_and_checked_once_a_scene_is_loaded() {
             "'{name}' should be checked by default (got {:?})",
             el.data().states.checked,
         );
+    }
+}
+
+/// The Scene Graph panel reaches a real window: once the demo node is loaded,
+/// its reconstruction row and the Cameras group beneath it are in the
+/// accessibility tree. Everything else about the tree is exercised headlessly
+/// in `scene_graph/tests.rs`.
+#[test]
+fn the_scene_panel_lists_the_loaded_reconstruction() {
+    let _guard = Guard::new();
+    let app = attach(_guard.child());
+    load_demo_data(&app);
+
+    // The demo reconstruction is labeled "demo" and rings the scene with 8
+    // cameras, so both strings are fixed by the fixture.
+    for text in ["demo", "Cameras (8)"] {
+        app.locator(&format!(r#"static_text[name="{text}"]"#))
+            .wait_attached(CONTENT_TIMEOUT)
+            .unwrap_or_else(|_| panic!("Scene panel row '{text}' did not appear"));
     }
 }
 

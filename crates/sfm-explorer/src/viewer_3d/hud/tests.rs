@@ -33,7 +33,7 @@ const VIEWPORT: egui::Vec2 = egui::vec2(1200.0, 800.0);
 /// Patches section must stay away.
 fn demo_state() -> AppState {
     let mut state = AppState::new();
-    state.set_single_node(SceneNode::demo(SfmrReconstruction::demo(64)));
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(64)));
     state
 }
 
@@ -157,6 +157,7 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
                 ui,
                 &node.recon,
                 node.id,
+                &state.scene,
                 &mut state.selected_image,
                 state.show_grid,
                 state.length_scale,

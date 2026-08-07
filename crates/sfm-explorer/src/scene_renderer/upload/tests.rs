@@ -24,8 +24,9 @@ use sfmtool_core::SfmrReconstruction;
 use super::super::gpu_types::{
     BG_PINHOLE_SUBDIVISIONS, DISTORTION_SUBDIVISIONS, FISHEYE_SUBDIVISIONS, THUMBNAIL_SIZE,
 };
-use super::super::picking::{PickTarget, PICK_TAG_FRUSTUM, PICK_TAG_POINT};
-use super::super::recon::ReconResources;
+use super::super::picking::{PickTarget, PICK_TAG_FRUSTUM, PICK_TAG_NONE, PICK_TAG_POINT};
+use super::super::recon::{NodeDisplay, ReconResources};
+use super::super::uniforms::recon_uniforms;
 use super::super::SceneRenderer;
 use super::track_rays::track_ray_edges;
 use crate::scene::{ImageRef, PointRef, ReconId};
@@ -741,6 +742,76 @@ fn a_pick_id_decodes_back_to_the_node_that_drew_it() {
     // One past the last node's range belongs to nobody.
     let past_the_end = bundle_of(&r, OTHER).point_pick_base + 30;
     assert_eq!(r.decode_pick(PICK_TAG_POINT | past_the_end), None);
+}
+
+#[test]
+fn a_non_interactive_node_writes_a_zero_pickable_flag_and_nothing_else_changes() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 12);
+    upload_node(&mut r, &device, OTHER, 30);
+
+    // The reference node: display-only, but still visible and still uploaded.
+    r.set_node_display(
+        RECON,
+        NodeDisplay {
+            interactive: false,
+            ..NodeDisplay::default()
+        },
+    );
+
+    let quiet = recon_uniforms(bundle_of(&r, RECON), 1.0, true);
+    let live = recon_uniforms(bundle_of(&r, OTHER), 1.0, true);
+    assert_eq!(
+        quiet.pickable, 0,
+        "the interaction cursor did not reach the GPU"
+    );
+    assert_eq!(
+        live.pickable, 1,
+        "the other node stopped being pickable too"
+    );
+    // Everything else about the node is untouched: it still draws, at its own
+    // splat size, out of its own slice of the pick space.
+    assert_eq!(quiet.point_size, bundle_of(&r, RECON).auto_point_size);
+    assert_eq!(quiet.point_pick_base, bundle_of(&r, RECON).point_pick_base);
+    assert_eq!(quiet.image_pick_base, bundle_of(&r, RECON).image_pick_base);
+
+    // What its shaders write with `pickable == 0` is the background value, and
+    // that decodes to nothing — so a readback over the node produces neither
+    // hover nor selection, while the interactive node still resolves.
+    assert_eq!(r.decode_pick(PICK_TAG_NONE), None);
+    let live_id = PICK_TAG_POINT | bundle_of(&r, OTHER).point_pick_base;
+    assert_eq!(
+        r.decode_pick(live_id),
+        Some(PickTarget::Point(PointRef::new(OTHER, 0))),
+    );
+}
+
+#[test]
+fn the_infinity_toggle_is_the_and_of_the_global_switch_and_the_node_switch() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 12);
+
+    for (global, node, expected) in [
+        (true, true, 1.0),
+        (true, false, 0.0),
+        (false, true, 0.0),
+        (false, false, 0.0),
+    ] {
+        r.set_node_display(
+            RECON,
+            NodeDisplay {
+                show_points_at_infinity: node,
+                ..NodeDisplay::default()
+            },
+        );
+        let uniforms = recon_uniforms(bundle(&r), 1.0, global);
+        assert_eq!(
+            uniforms.show_infinity, expected,
+            "global={global}, node={node}"
+        );
+    }
 }
 
 #[test]

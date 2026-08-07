@@ -28,6 +28,9 @@ struct ReconUniforms {
     image_pick_base: u32,
     pickable: u32,
     tint_color: vec4<f32>,
+    // Read only by points.wgsl; declared here so every shader's view of the
+    // shared per-recon buffer stays identical.
+    show_infinity: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: FrustumUniforms;

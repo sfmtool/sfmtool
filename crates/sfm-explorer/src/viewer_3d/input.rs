@@ -15,8 +15,90 @@ use super::{
 };
 use crate::platform::GestureEvent;
 use crate::scene::{ImageRef, ReconId};
+use crate::state::AppState;
 
 impl Viewer3D {
+    /// Handles `[` / `]` — stepping the **selected reconstruction** back and
+    /// forward in tree order, the reconstruction analogue of `,` / `.` for
+    /// images (which is why it lives here beside them).
+    ///
+    /// When an image is selected, stepping carries the selection to the
+    /// **same-named image** in the new reconstruction if one exists — and, in
+    /// camera view, the view follows it. Flipping `[` / `]` while looking
+    /// through a camera is the core comparison move: same photo, two solves.
+    /// With no same-named image the finer selection clears, per the invariant
+    /// that all of it lives inside the selected reconstruction.
+    ///
+    /// Called from `dock.rs` rather than from [`Viewer3D::show`]: stepping is
+    /// the one viewport binding that needs the whole scene, not just the node
+    /// being drawn.
+    pub fn handle_recon_step(&mut self, ui: &egui::Ui, state: &mut AppState) {
+        if state.scene.len() < 2 {
+            return; // nothing to step to
+        }
+        let forward = ui.input(|i| {
+            let back = i.key_pressed(egui::Key::OpenBracket);
+            let fwd = i.key_pressed(egui::Key::CloseBracket);
+            // Both in one frame cancel out rather than picking a winner.
+            (fwd != back).then_some(fwd)
+        });
+        let Some(forward) = forward else {
+            return;
+        };
+
+        let Some(current) = state.selected_recon else {
+            return;
+        };
+        let Some(from) = state.scene.iter().position(|n| n.id == current) else {
+            return;
+        };
+        let n = state.scene.len();
+        let to = if forward {
+            (from + 1) % n
+        } else {
+            (from + n - 1) % n
+        };
+        let new_id = state.scene[to].id;
+
+        // Match by image *name*: the same photo solved twice is the same name
+        // in two reconstructions, whatever index each solve gave it.
+        let name = state
+            .selected_image
+            .filter(|i| i.recon == current)
+            .and_then(|i| state.scene[from].recon.images.get(i.index()))
+            .map(|image| image.name.clone());
+        let carried = name.and_then(|name| {
+            state.scene[to]
+                .recon
+                .images
+                .iter()
+                .position(|image| image.name == name)
+        });
+
+        state.selected_recon = Some(new_id);
+        // A 3D point has no cross-reconstruction identity, so it never carries.
+        state.selected_point = None;
+        let was_in_camera_view = self
+            .camera_view
+            .as_ref()
+            .is_some_and(|cv| cv.image.recon == current);
+        match carried {
+            Some(index) => {
+                let image = ImageRef::new(new_id, index);
+                state.selected_image = Some(image);
+                if was_in_camera_view {
+                    self.switch_camera_view(image, &state.scene[to].recon);
+                }
+            }
+            None => {
+                state.selected_image = None;
+                if was_in_camera_view {
+                    self.camera_view = None;
+                }
+            }
+        }
+    }
+
     /// Handles mouse drag interactions (orbit, pan, zoom, nodal pan).
     pub(super) fn handle_drag(
         &mut self,
@@ -399,25 +481,10 @@ impl Viewer3D {
                     self.enter_camera_view(image, reconstruction, current_time);
                 } else {
                     // Z with no selection = zoom to fit
-                    if !reconstruction.points.is_empty() {
-                        let aspect = rect.width() as f64 / rect.height() as f64;
-                        let points: Vec<Point3<f64>> =
-                            reconstruction.points.iter().map(|p| p.position).collect();
-                        if let Some((end_pos, end_dist)) =
-                            self.camera.compute_zoom_to_fit(&points, aspect)
-                        {
-                            self.start_transition(
-                                end_pos,
-                                self.camera.camera.orientation,
-                                end_dist,
-                                self.camera.fov,
-                                self.camera.world_up,
-                                None,
-                                false,
-                                current_time,
-                            );
-                        }
-                    }
+                    let aspect = rect.width() as f64 / rect.height() as f64;
+                    let points: Vec<Point3<f64>> =
+                        reconstruction.points.iter().map(|p| p.position).collect();
+                    self.zoom_to_fit_points(&points, aspect, current_time);
                 }
             }
             // ,/. navigate to previous/next image. In camera view mode this

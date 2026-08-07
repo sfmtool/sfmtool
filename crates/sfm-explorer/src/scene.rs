@@ -4,10 +4,11 @@
 //! The scene graph: the reconstructions the viewer has loaded, and the typed
 //! references that address entities inside them.
 //!
-//! See `specs/gui/gui-scene-graph.md`. This is phase 1 of that design: the
-//! identity types and the node exist, and every cache and selection is keyed by
-//! them, but the scene still holds **at most one** node — `File > Open`
-//! replaces rather than appends, and there is no Scene Graph panel yet.
+//! See `specs/gui/gui-scene-graph.md`. Phases 1–3 of that design are in place:
+//! the identity types, the node with its per-node display state, and a scene
+//! that holds **any number** of nodes — `File > Open` appends, and the Scene
+//! Graph panel ([`crate::scene_graph`]) is the control surface for them. Node
+//! transforms and tints (phases 4–5) are still renderer-side defaults.
 //!
 //! ## Where refs are used, and where local indices survive
 //!
@@ -109,19 +110,14 @@ impl PointRef {
 
 /// One loaded reconstruction and the view state that belongs to it.
 ///
-/// Phase 1 carries only what the single-reconstruction viewer already needed.
-/// The spec's remaining fields — `visible`, `interactive`, the per-group eyes,
-/// `tint` and `transform` — arrive with phases 3 and 4, when there is a Scene
-/// Graph panel to drive them and per-node GPU resources to apply them to; they
-/// would be dead code until then.
+/// The spec's `tint` and `transform` are still missing: they arrive with phases
+/// 4–5, when the renderer first has something other than the identity model
+/// matrix and the original colors to apply.
 pub struct SceneNode {
     pub id: ReconId,
-    /// Display label: the file stem, or `"demo"` for demo data. Collision
-    /// disambiguation (`" (2)"`, `" (3)"`…) arrives with multi-load in phase 3.
-    ///
-    /// Nothing displays it yet — the Scene Graph panel that does is phase 3 —
-    /// but the label belongs to node creation, which is what phase 1 unifies.
-    #[allow(dead_code)]
+    /// Display label: the file stem, or `"demo"` for demo data, disambiguated
+    /// with `" (2)"`, `" (3)"`… when a stem is already taken (see
+    /// [`unique_label`]).
     pub label: String,
     /// Source path; `None` for demo data.
     pub path: Option<PathBuf>,
@@ -129,33 +125,51 @@ pub struct SceneNode {
     /// This node's data needs (re-)upload to the GPU. Replaces the former
     /// global `AppState::points_need_upload`.
     pub needs_upload: bool,
+
+    // ── Per-node display state (Scene Graph panel) ──
+    /// Master eye for the whole node. Off = nothing of it is drawn.
+    pub visible: bool,
+    /// Whether pointer interaction (hover + click pick) in the 3D viewport
+    /// reaches this node. Off = display-only: it still renders and occludes,
+    /// Alt+click depth targeting still works on it, and it can still be
+    /// selected from the Scene panel — it just stops capturing picks.
+    pub interactive: bool,
+    /// Group eye: the node's 3D points.
+    pub show_points: bool,
+    /// Group eye: the node's camera frustums and image quads.
+    pub show_cameras: bool,
+    /// Group eye: the node's patch surfels (inert without patch data).
+    pub show_patches: bool,
+    /// Sub-toggle of [`SceneNode::show_points`]: the `w = 0` directions.
+    pub show_points_at_infinity: bool,
 }
 
 impl SceneNode {
-    /// A node for a reconstruction read from `path`, labeled with its file stem.
-    pub fn from_path(path: &Path, recon: SfmrReconstruction) -> Self {
-        let label = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string());
+    /// A node for `recon`, labeled `label` and sourced from `path`.
+    fn new(label: String, path: Option<PathBuf>, recon: SfmrReconstruction) -> Self {
         Self {
             id: ReconId::next(),
             label,
-            path: Some(path.to_path_buf()),
+            path,
             recon,
             needs_upload: true,
+            visible: true,
+            interactive: true,
+            show_points: true,
+            show_cameras: true,
+            show_patches: true,
+            show_points_at_infinity: true,
         }
+    }
+
+    /// A node for a reconstruction read from `path`, labeled with its file stem.
+    pub fn from_path(path: &Path, recon: SfmrReconstruction) -> Self {
+        Self::new(label_for_path(path), Some(path.to_path_buf()), recon)
     }
 
     /// A node for generated demo data, which came from no file.
     pub fn demo(recon: SfmrReconstruction) -> Self {
-        Self {
-            id: ReconId::next(),
-            label: "demo".to_string(),
-            path: None,
-            recon,
-            needs_upload: true,
-        }
+        Self::new("demo".to_string(), None, recon)
     }
 
     /// The file name shown in the window title, or `None` for demo data.
@@ -167,6 +181,51 @@ impl SceneNode {
                 .unwrap_or_else(|| path.display().to_string()),
         )
     }
+
+    /// Whether this node carries everything the patch surfel pass needs: patch
+    /// frames *and* the bitmaps to texture them with.
+    pub fn has_patch_data(&self) -> bool {
+        let r = &self.recon;
+        r.patch_u_halfvec_xyz.is_some()
+            && r.patch_v_halfvec_xyz.is_some()
+            && r.patch_bitmaps_y_x_rgba.is_some()
+    }
+
+    /// Copy the per-node display state (eyes, interaction cursor) from `other`.
+    ///
+    /// Used by `Reload from Disk`, which is a fresh read of the same file and
+    /// so should not also reset how the node is being displayed.
+    pub fn copy_display_from(&mut self, other: &SceneNode) {
+        self.visible = other.visible;
+        self.interactive = other.interactive;
+        self.show_points = other.show_points;
+        self.show_cameras = other.show_cameras;
+        self.show_patches = other.show_patches;
+        self.show_points_at_infinity = other.show_points_at_infinity;
+    }
+}
+
+/// The label a path alone suggests: its file stem, or the whole path when it
+/// has no stem to speak of.
+pub fn label_for_path(path: &Path) -> String {
+    path.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// `base`, or the first free `"base (n)"` when `base` is already in the scene.
+///
+/// Two files of the same name in different directories are a routine way to
+/// compare solver runs, so the tree has to be able to tell them apart even
+/// though their stems agree.
+pub fn unique_label(scene: &[SceneNode], base: &str) -> String {
+    if !scene.iter().any(|n| n.label == base) {
+        return base.to_string();
+    }
+    (2..)
+        .map(|n| format!("{base} ({n})"))
+        .find(|candidate| !scene.iter().any(|n| &n.label == candidate))
+        .expect("the candidate sequence is infinite")
 }
 
 /// Look up a node by id.
@@ -185,4 +244,52 @@ pub fn node_by_id(scene: &[SceneNode], id: ReconId) -> Option<&SceneNode> {
 /// rest of `AppState`.
 pub fn selected_node(scene: &[SceneNode], selected: Option<ReconId>) -> Option<&SceneNode> {
     node_by_id(scene, selected?)
+}
+
+/// What the viewport's top-left stats overlay reports.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SceneStats {
+    /// How many nodes contributed — the count the overlay leads with once it
+    /// is greater than one.
+    pub recons: usize,
+    pub points: usize,
+    pub points_at_infinity: usize,
+    pub images: usize,
+}
+
+/// Sum the scene's entity counts over the nodes whose master eye is on.
+///
+/// Hidden nodes drop out entirely: the overlay describes what is on screen, and
+/// a node switched off is not.
+pub fn visible_stats(scene: &[SceneNode]) -> SceneStats {
+    let mut stats = SceneStats::default();
+    for node in scene.iter().filter(|n| n.visible) {
+        stats.recons += 1;
+        stats.points += node.recon.points.len();
+        stats.points_at_infinity += node.recon.metadata.infinity_point_count as usize;
+        stats.images += node.recon.images.len();
+    }
+    stats
+}
+
+/// The first 8 hex characters of a reconstruction's content hash — the part
+/// that goes into a displayed `pt3d_<hash>_<index>` id.
+///
+/// Zero-filled when the reconstruction carries no hash, so an id is always the
+/// same shape and always parseable.
+pub fn hash_prefix(recon: &SfmrReconstruction) -> String {
+    let hash = &recon.content_hash.content_xxh128;
+    if hash.len() >= 8 {
+        hash[..8].to_string()
+    } else {
+        "00000000".to_string()
+    }
+}
+
+/// The copyable point id the Point Track panel shows, `pt3d_<hash>_<index>`.
+///
+/// Because the hash is per-reconstruction content, these ids are already
+/// unambiguous across simultaneously loaded files.
+pub fn point_id(recon: &SfmrReconstruction, point_idx: usize) -> String {
+    format!("pt3d_{}_{}", hash_prefix(recon), point_idx)
 }

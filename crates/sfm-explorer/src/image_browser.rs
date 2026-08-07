@@ -149,6 +149,25 @@ impl ImageBrowser {
         self.animation.playing
     }
 
+    /// Drop everything cached for a reconstruction that has left the scene.
+    ///
+    /// The strip only ever shows one reconstruction, so this is normally
+    /// handled by the `cached_recon` check in [`ImageBrowser::show`]; closing
+    /// the node it was showing returns the textures without waiting for the
+    /// next frame's switch.
+    pub fn forget_recon(&mut self, id: ReconId) {
+        if self.cached_recon == Some(id) {
+            self.thumbnail_cache.clear();
+            self.cached_recon = None;
+            self.cached_image_count = 0;
+            self.next_lazy_load = 0;
+            self.prev_selected = None;
+            self.offset_x = 0.0;
+            self.minibar.invalidate();
+            self.animation.reset();
+        }
+    }
+
     /// Show the image browser strip in the given UI region.
     ///
     /// Returns an [`ImageBrowserResponse`] indicating any selection changes.

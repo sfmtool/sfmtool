@@ -3,9 +3,9 @@
 
 //! Dock layout types and tab rendering.
 //!
-//! Defines the four-panel dock layout (3D Viewer, Image Browser, Image Detail,
-//! Point Track Detail) and the `TabViewer` implementation that renders each
-//! panel's content.
+//! Defines the five-panel dock layout (Scene, 3D Viewer, Image Browser, Image
+//! Detail, Point Track Detail) and the `TabViewer` implementation that renders
+//! each panel's content.
 
 use egui_dock::TabViewer;
 
@@ -13,13 +13,15 @@ use crate::image_browser::ImageBrowser;
 use crate::image_detail::ImageDetail;
 use crate::platform;
 use crate::point_track_detail::PointTrackDetail;
-use crate::scene::{selected_node, ImageRef, PointRef, SceneNode};
+use crate::scene::{selected_node, ImageRef, PointRef, ReconId, SceneNode};
+use crate::scene_graph::{SceneGraphPanel, SceneGraphResponse};
 use crate::state::{AppState, FeatureDisplaySettings, OverlayMode};
 use crate::viewer_3d::Viewer3D;
 
 /// Tabs that can appear in the dock area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
+    SceneGraph,
     Viewer3D,
     ImageBrowser,
     ImageDetail,
@@ -29,6 +31,7 @@ pub(crate) enum Tab {
 impl Tab {
     pub(crate) fn title(self) -> &'static str {
         match self {
+            Tab::SceneGraph => "Scene",
             Tab::Viewer3D => "3D Viewer",
             Tab::ImageBrowser => "Image Browser",
             Tab::ImageDetail => "Image Detail",
@@ -41,6 +44,7 @@ impl Tab {
 pub(crate) struct TabContext<'a> {
     pub state: &'a mut AppState,
     pub viewer_3d: &'a mut Viewer3D,
+    pub scene_graph: &'a mut SceneGraphPanel,
     pub image_browser: &'a mut ImageBrowser,
     pub image_detail: &'a mut ImageDetail,
     pub point_track_detail: &'a mut PointTrackDetail,
@@ -65,7 +69,19 @@ impl TabViewer for TabContext<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
+            Tab::SceneGraph => {
+                let response = self.scene_graph.show(ui, self.state);
+                self.apply_scene_graph_response(ui, response);
+            }
             Tab::Viewer3D => {
+                // `[` / `]` step the selected reconstruction. Handled here
+                // rather than inside `show` because it is the one viewport
+                // binding that needs the whole scene; gated on the same
+                // keyboard arbitration the viewport's own bindings use, so a
+                // HUD `DragValue` being typed into still owns the keys.
+                if !ui.ctx().egui_wants_keyboard_input() {
+                    self.viewer_3d.handle_recon_step(ui, self.state);
+                }
                 if self.state.selected_recon.is_some() {
                     // The HUD goes up before the viewport claims the rect: it
                     // lives on its own `Area` layer (so it still paints on top),
@@ -83,6 +99,7 @@ impl TabViewer for TabContext<'_> {
                         ui,
                         &node.recon,
                         node.id,
+                        &self.state.scene,
                         &mut self.state.selected_image,
                         self.state.show_grid,
                         self.state.length_scale,
@@ -117,6 +134,20 @@ impl TabViewer for TabContext<'_> {
                 if let Some(node) = node {
                     let recon = &node.recon;
                     let id = node.id;
+                    // The strip shows exactly one reconstruction's sequence.
+                    // Name it whenever there is more than one to confuse it
+                    // with; with a single file the header would be pure chrome
+                    // in an already-short panel.
+                    if self.state.scene.len() > 1 {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&node.label).strong());
+                            ui.label(
+                                egui::RichText::new(format!("({} images)", recon.images.len()))
+                                    .weak()
+                                    .small(),
+                            );
+                        });
+                    }
                     let track_images = compute_track_images(self.state, node);
                     let hover_track_images = compute_hover_track_images(self.state, node);
                     let camera_view_image = self
@@ -342,6 +373,75 @@ impl TabViewer for TabContext<'_> {
 
     fn closeable(&mut self, _tab: &mut Self::Tab) -> bool {
         false
+    }
+}
+
+impl TabContext<'_> {
+    /// Apply what the Scene panel reported: selection, hover, camera view,
+    /// per-node zoom-to-fit, and the node lifecycle operations.
+    fn apply_scene_graph_response(&mut self, ui: &egui::Ui, response: SceneGraphResponse) {
+        // Coarsest first: a recon row click is the one that enforces the
+        // finer-selection invariant, and a finer selection reported in the same
+        // frame should win over it rather than be cleared by it.
+        if let Some(id) = response.select_recon {
+            self.state.select_recon(id);
+        }
+        if let Some(image) = response.select_image {
+            self.state.select_image(image);
+        }
+        if let Some(point) = response.select_point {
+            self.state.select_point(point);
+        }
+        if let Some(image) = response.request_camera_view {
+            if let Some(node) = crate::scene::node_by_id(&self.state.scene, image.recon) {
+                let current_time = ui.input(|i| i.time);
+                if self.viewer_3d.camera_view.is_some() {
+                    self.viewer_3d
+                        .animated_switch_camera_view(image, &node.recon, current_time);
+                } else {
+                    self.viewer_3d
+                        .enter_camera_view(image, &node.recon, current_time);
+                }
+            }
+        }
+        if response.has_pointer {
+            // The Scene panel owns both hover fields while it has the pointer.
+            self.state.hovered_image = response.hovered_image;
+            self.state.hovered_point = response.hovered_point;
+        }
+        if let Some(id) = response.zoom_to_node {
+            if let Some(node) = crate::scene::node_by_id(&self.state.scene, id) {
+                let points: Vec<nalgebra::Point3<f64>> =
+                    node.recon.points.iter().map(|p| p.position).collect();
+                if let Some(aspect) = self.viewer_3d.panel_aspect() {
+                    let current_time = ui.input(|i| i.time);
+                    self.viewer_3d
+                        .zoom_to_fit_points(&points, aspect, current_time);
+                }
+            }
+        }
+        if let Some(id) = response.reload_node {
+            self.state.reload_node(id);
+            // The old id is gone for good, so its panel-local textures are
+            // unreachable rather than merely stale — drop them anyway.
+            self.forget_recon(id);
+        }
+        if let Some(id) = response.close_node {
+            self.state.close_node(id);
+            self.forget_recon(id);
+        }
+    }
+
+    /// Drop every panel-local cache entry belonging to `id`.
+    ///
+    /// `AppState::close_node` / `reload_node` handle the shared caches and the
+    /// selection; the renderer releases the GPU bundle from `retain_nodes` on
+    /// the next frame. This is the third piece: the texture caches the panels
+    /// own privately.
+    fn forget_recon(&mut self, id: ReconId) {
+        self.image_browser.forget_recon(id);
+        self.image_detail.forget_recon(id);
+        self.point_track_detail.forget_recon(id);
     }
 }
 

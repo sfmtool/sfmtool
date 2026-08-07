@@ -20,6 +20,7 @@ mod image_detail;
 mod platform;
 mod point_track_detail;
 mod scene;
+mod scene_graph;
 mod scene_renderer;
 mod state;
 mod viewer_3d;
@@ -34,6 +35,7 @@ use image_browser::ImageBrowser;
 use image_detail::ImageDetail;
 use point_track_detail::PointTrackDetail;
 use scene::{ImageRef, PointRef};
+use scene_graph::SceneGraphPanel;
 use scene_renderer::SceneRenderer;
 use state::AppState;
 use viewer_3d::Viewer3D;
@@ -88,12 +90,11 @@ pub fn run() {
 
     env_logger::init();
 
-    // Parse CLI args: sfm-explorer [path.sfmr]
+    // Parse CLI args: sfm-explorer [path.sfmr ...]. Every trailing argument is
+    // loaded as its own scene node, in the order given.
     let mut state = AppState::new();
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() > 1 {
-        let path = std::path::Path::new(&args[1]);
-        state.load_file(path);
+    for arg in std::env::args().skip(1) {
+        state.load_file(std::path::Path::new(&arg));
     }
 
     // Create DirectManipulation manager BEFORE the winit EventLoop so that
@@ -112,13 +113,7 @@ pub fn run() {
         .expect("Failed to create event loop");
     let proxy = event_loop.create_proxy();
 
-    // Set up the default dock layout:
-    //   top-left: Viewer3D, top-right: ImageDetail, bottom: ImageBrowser
-    let mut dock_state = DockState::new(vec![Tab::Viewer3D]);
-    let surface = dock_state.main_surface_mut();
-    let [top, _browser] = surface.split_below(NodeIndex::root(), 0.8, vec![Tab::ImageBrowser]);
-    let [_viewer, _detail] =
-        surface.split_right(top, 0.67, vec![Tab::ImageDetail, Tab::PointTrackDetail]);
+    let dock_state = default_dock_state();
 
     let mut app = App {
         proxy,
@@ -134,6 +129,7 @@ pub fn run() {
         // app state
         state,
         viewer_3d: Viewer3D::new(),
+        scene_graph: SceneGraphPanel::new(),
         image_browser: ImageBrowser::new(),
         image_detail: ImageDetail::new(),
         point_track_detail: PointTrackDetail::new(),
@@ -157,6 +153,34 @@ pub fn run() {
     event_loop.run_app(&mut app).expect("Event loop failed");
 }
 
+/// The dock layout the app opens with:
+///
+/// ```text
+/// ┌────────┬──────────────────┬───────────────┐
+/// │        │    3D Viewer     │ Image Detail  │
+/// │ Scene  ├──────────────────┴───────────────┤
+/// │        │          Image Browser           │
+/// └────────┴──────────────────────────────────┘
+/// ```
+///
+/// The Scene tab takes a narrow left split of the root — narrow because the
+/// tree is a list of short labels and everything else in the window wants the
+/// width. Like every other tab it is not closeable and can be re-docked freely.
+pub(crate) fn default_dock_state() -> DockState<Tab> {
+    let mut dock_state = DockState::new(vec![Tab::Viewer3D]);
+    let surface = dock_state.main_surface_mut();
+    // `fraction` is the share of the *first* child in layout order — the new
+    // left-hand node for `split_left`, but the old top node for `split_below`.
+    // (egui_dock 0.19's doc comment says "the old node" for both, which is only
+    // true of Right/Below; 0.82 here gave the Scene panel four fifths of the
+    // window.) So: Scene 18%, then the old 80/20 and 67/33 splits of the rest.
+    let [rest, _scene] = surface.split_left(NodeIndex::root(), 0.18, vec![Tab::SceneGraph]);
+    let [top, _browser] = surface.split_below(rest, 0.8, vec![Tab::ImageBrowser]);
+    let [_viewer, _detail] =
+        surface.split_right(top, 0.67, vec![Tab::ImageDetail, Tab::PointTrackDetail]);
+    dock_state
+}
+
 pub(crate) struct App {
     pub(crate) proxy: EventLoopProxy<UserEvent>,
     pub(crate) egui_ctx: egui::Context,
@@ -171,6 +195,7 @@ pub(crate) struct App {
     // App state
     pub(crate) state: AppState,
     pub(crate) viewer_3d: Viewer3D,
+    pub(crate) scene_graph: SceneGraphPanel,
     pub(crate) image_browser: ImageBrowser,
     pub(crate) image_detail: ImageDetail,
     pub(crate) point_track_detail: PointTrackDetail,
