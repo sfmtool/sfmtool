@@ -27,7 +27,7 @@ fn ui_test_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// xa11y 0.9 no longer hardcodes a 5s default; an unset default means
+/// xa11y (since 0.9) no longer hardcodes a 5s default; an unset default means
 /// single-attempt, no-polling. The polling locator ops here (`exists`,
 /// `press`, `toggle`) rely on a non-zero default, so set one process-wide
 /// before any of them run.
@@ -132,10 +132,11 @@ fn attach(child: &Child) -> App {
     attach_app(child)
 }
 
-/// On Windows, xa11y 0.9's `by_pid` roots at the first top-level window for the
-/// pid, which is one of winit's helper windows (a 16px-wide "group") rather than
-/// our UI, so locator queries and bounds resolve against the wrong element.
-/// Select our window by its title instead.
+/// On Windows, xa11y's `by_pid` roots at the first top-level window for the
+/// pid (still true in 0.12: on Windows an "app" *is* a top-level window, so one
+/// process can own several), which is one of winit's helper windows (a
+/// 16px-wide "group") rather than our UI, so locator queries and bounds resolve
+/// against the wrong element. Select our window by its title instead.
 #[cfg(windows)]
 fn attach_app(_child: &Child) -> App {
     App::find(ATTACH_TIMEOUT, |d| {

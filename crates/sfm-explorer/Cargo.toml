@@ -91,4 +91,4 @@ wgpu = { version = "29", features = ["noop"] }
 # Automation) and macOS (AXUIElement). Linux (AT-SPI) is intentionally left out:
 # the headless CI display lacks the AT-SPI bridge the tree needs.
 [target.'cfg(any(windows, target_os = "macos"))'.dev-dependencies]
-xa11y = "0.9"
+xa11y = "0.12"

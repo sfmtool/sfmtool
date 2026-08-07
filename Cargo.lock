@@ -320,7 +320,7 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "windows-sys 0.60.2",
- "x11rb",
+ "x11rb 0.13.2",
 ]
 
 [[package]]
@@ -4977,7 +4977,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -6188,7 +6188,7 @@ dependencies = [
  "web-time",
  "windows-sys 0.52.0",
  "x11-dl",
- "x11rb",
+ "x11rb 0.13.2",
  "xkbcommon-dl",
 ]
 
@@ -6254,7 +6254,18 @@ dependencies = [
  "libloading",
  "once_cell",
  "rustix 1.1.4",
- "x11rb-protocol",
+ "x11rb-protocol 0.13.2",
+]
+
+[[package]]
+name = "x11rb"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a8885a854a8bfdf87a301e53e41b17c5f8f33639903131338b997b1eb614f44"
+dependencies = [
+ "gethostname",
+ "rustix 1.1.4",
+ "x11rb-protocol 0.14.0",
 ]
 
 [[package]]
@@ -6264,10 +6275,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
-name = "xa11y"
-version = "0.9.1"
+name = "x11rb-protocol"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc6dcb43c4e46b10dda0930dba672492f4095a9d02c302767ebb14d0ac288a35"
+checksum = "acf4d1bc32aa46eec18caa634ec3cf4c05bfa151f12b93b510b15190f69a1ca8"
+
+[[package]]
+name = "xa11y"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fadc5fda5d9cb48a03ccd24b5fc9dfaa79742e97e877a5e1c18c73e30fc5528"
 dependencies = [
  "serde_json",
  "xa11y-core",
@@ -6278,9 +6295,9 @@ dependencies = [
 
 [[package]]
 name = "xa11y-core"
-version = "0.9.1"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "193894c2f66cab4a9a5bed4b91df84eebe6b6750c34f8c7ea3035889a5894437"
+checksum = "5fa588519e92e18382d4c9d4c4e1c24cb19914d008a622f57d2a09cd596acafb"
 dependencies = [
  "png",
  "serde",
@@ -6291,15 +6308,17 @@ dependencies = [
 
 [[package]]
 name = "xa11y-linux"
-version = "0.9.1"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e22780ac989120b64c4d6223b89d01f788e1c7b5ee40455b8958a9184e8b80de"
+checksum = "84aede1a5d71ee2460e18bd7a076001f556086da3a8f896ea71201d9c3a2954d"
 dependencies = [
  "evdev",
  "png",
  "rayon",
  "serde_json",
- "x11rb",
+ "wayland-client",
+ "wayland-protocols",
+ "x11rb 0.14.0",
  "xa11y-core",
  "xkbcommon",
  "zbus",
@@ -6307,9 +6326,9 @@ dependencies = [
 
 [[package]]
 name = "xa11y-macos"
-version = "0.9.1"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7548092cdb47782697ffd2658a68f25d68a136fc95dfb5342043e4f0065104ce"
+checksum = "a0a06e0f3a757c2240141a4a0549514f15a0de3eb9c5d1201aa95ed4ee102b61"
 dependencies = [
  "cc",
  "core-foundation 0.10.1",
@@ -6320,9 +6339,9 @@ dependencies = [
 
 [[package]]
 name = "xa11y-windows"
-version = "0.9.1"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4877d9252630af7108cdd8e08b47ad38560de816ed5b4c2678074331c23619e"
+checksum = "0a4dd2dae0c36b57f8990f42f31de3e10267088fba30a4a59983ba896493c953"
 dependencies = [
  "serde_json",
  "windows",
