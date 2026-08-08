@@ -158,6 +158,21 @@ drifting, and drift here is silent — no compile error, just two behaviours.
   conditional). Covered by `reconstruction_growth/tests.rs` (860 lines).
 
 **`covisibility.rs` serves three specs and hides 793 lines of inline tests**
+> _Status (2026-08-08): Done — split into `cluster_match/covisibility/` with
+> `displacement.rs` (the `DisplacementTables` / `DisplacementNeighborhood` /
+> `PairAccum` substrate, `specs/core/pose-verification.md`), `selection.rs` (a
+> second `impl ClusterCovisibility` carrying `sweep_order` / `thin*` / `reach`,
+> `specs/core/covisibility-selection.md`), and `tests.rs` with all 790 inline
+> lines. `covisibility.rs` 1744 -> 501, keeping the error enum, `SplitMix64`,
+> `SeedGroupParams`, the `ClusterCovisibility` core and `SeedGroups`._
+>
+> _The finding's effort note was right about where the friction is, and the
+> resolution is the cheap half of what it proposed: `selection.rs` is a child
+> module, so it reads `ClusterCovisibility`'s private fields directly — no
+> accessors needed. The move that did cost something is the opposite direction:
+> `DisplacementTables` is defined in the child but used by the parent's
+> `ClusterCovisibility`, and a parent cannot see a child's private items, so the
+> struct and its two fields are now `pub(super)`._
 - Location: `crates/sfmtool-core/src/features/cluster_match/covisibility.rs` (1744)
 - Problem: Two violations. (1) `#[cfg(test)] mod tests { … }` at 952–1744 — **793
   inline lines**, by far the largest in the workspace, against a convention 46
@@ -259,6 +274,17 @@ drifting, and drift here is silent — no compile error, just two behaviours.
 - Risk: low
 
 **`optical_flow/mod.rs` carries ~490 lines of container types before its driver**
+> _Status (2026-08-08): Done — `flow_field.rs` (`FlowField` / `FlowFieldRef`),
+> `image.rs` (`GrayImage`) and `params.rs` (`DisFlowParams` / `FlowTiming`),
+> all re-exported from `mod.rs` so no path outside the module moved.
+> `mod.rs` 958 -> 485, now just the submodule tree plus the driver functions._
+>
+> _Not quite "pure motion behind unchanged re-exports" as the finding predicted:
+> the types were siblings of the driver before and are children now, so four
+> items the driver and the sibling algorithm modules reach had to widen from
+> private to `pub(super)` — `FlowField::data_u` / `data_v`,
+> `DisFlowParams::patch_stride` and `::compute_coarsest_scale`. Visibility only;
+> the public API is unchanged._
 - Location: `crates/sfmtool-core/src/features/optical_flow/mod.rs` (958)
 - Problem: Declares the submodule tree (37–96) *and* defines the shared types every
   submodule consumes: `FlowFieldRef` (99–198), `FlowField` (199–342), `GrayImage`
@@ -278,6 +304,18 @@ drifting, and drift here is silent — no compile error, just two behaviours.
 ## Rust — `sfmtool-core` (camera, patch, reconstruction)
 
 **`camera/distortion.rs` holds three concerns, one with its own spec**
+> _Status (2026-08-08): Done — `distortion/ray_grid.rs` (the coarse ray-grid
+> accelerator: both consts, `lerp` / `GridProj` / `bilerp`, and the
+> `grid_proj` / `project_ray_node` / `ray_to_pixel_grid*` methods) and
+> `distortion/pinhole_fit.rs` (`best_fit_inside_pinhole` /
+> `best_fit_outside_pinhole` / `boundary_samples`). `distortion.rs` 1350 -> 890._
+>
+> _Both new files carry their own `impl CameraIntrinsics` block, which is legal
+> and needed no re-export changes, as the finding said. Four items the sibling
+> `distortion/tests.rs` names directly did have to widen to `pub(super)`
+> (`COARSE_GRID_STRIDE`, `COARSE_GRID_TOL_PX`, `boundary_samples`,
+> `ray_to_pixel_grid_coarse`), following the `#[cfg(test)] use` pattern
+> `keypoint_subpixel` already established for exactly this._
 - Location: `crates/sfmtool-core/src/camera/distortion.rs` (1350)
 - Problem: (1) 141–748 — the actual distortion/undistortion kernels, coherent and
   matching the filename. (2) 77–133 + 926–1157 — the **coarse ray-grid projection**
@@ -311,6 +349,15 @@ drifting, and drift here is silent — no compile error, just two behaviours.
   Round-trip every variant through `intrinsics/tests.rs` (690) before and after.
 
 **`camera/remap.rs` mixes image containers with resampling and inlines `prof`**
+> _Status (2026-08-08): Partially done — the `prof` half only. The 95-line
+> inline `pub mod prof` is now `camera/remap/prof.rs`, matching the five
+> sibling `prof.rs` modules; `remap.rs` 1279 -> 1167._
+>
+> _Part (b) — moving `ImageU8` / `ImageU8Pyramid` / `ImageF32WithGrad` to a
+> `camera/image.rs` behind a `pub use` shim — is **still open**. It is the
+> medium-effort half (30+ import sites across `spherical/`, `patch/`,
+> `sfmtool-py`, `sfm-explorer` and the benches) and was deliberately left out of
+> a batch whose value is that every change in it is compiler-checked motion._
 - Location: `crates/sfmtool-core/src/camera/remap.rs` (1265)
 - Problem: (a) 28–122 is a 95-line inline `pub mod prof { … }` — but the repo has
   **five** sibling `prof.rs` modules under `patch/*/`, and `camera/remap/` already
@@ -328,6 +375,22 @@ drifting, and drift here is silent — no compile error, just two behaviours.
 - Risk: low — path change only, shimmed.
 
 **Two files whose own doc comments announce a split that was never made**
+> _Status (2026-08-08): Done — both halves._
+>
+> _`kernels.rs` split at the exact boundary its module doc named:
+> `kernels/render.rs` (the render-once tile and the direct projective renders)
+> and `kernels/score.rs` (`znorm_core` / `ecc_score` / `view_jacobian` /
+> `solve_2x2`), with `kernels.rs` reduced to a 35-line declaration + re-export
+> file so every existing `kernels::…` path still resolves. One wrinkle the
+> finding's "every item is `pub(super)`, so the split is free" misses: the items
+> are now one level deeper, so `pub(super)` would mean "visible to `kernels`"
+> rather than "visible to `keypoint_subpixel`". They are written
+> `pub(in crate::patch::keypoint_subpixel)` to preserve the original visibility
+> exactly rather than widening to `pub(crate)`._
+>
+> _`data.rs`'s affine-shape leftover moved to `data/affine_shape.rs`
+> (`observation_affine_shape` + `max_embedded_feature_size_per_point`),
+> finishing what #234 started. 630 -> 509._
 - Location: `crates/sfmtool-core/src/patch/keypoint_subpixel/kernels.rs` (987);
   `crates/sfmtool-core/src/reconstruction/data.rs` (598)
 - Problem: `kernels.rs`'s module doc (7–16) literally says "Two halves:
@@ -345,6 +408,32 @@ drifting, and drift here is silent — no compile error, just two behaviours.
 - Risk: low — pure motion, items already `pub(super)`.
 
 **Four remaining inline `#[cfg(test)] mod tests { … }` blocks worth moving**
+> _Status (2026-08-08): Done, and the count was **five, not four**.
+> `consistency.rs` (581 -> 364), `fronto_cache.rs` (670 -> 513),
+> `view_subset.rs` (259 -> 119), `simd.rs` (175 -> 111) and — missing from this
+> finding entirely — `patch/keypoint_localize/basis.rs` (213 -> 109, whose
+> block was **103 lines of 213, 48% of the file**) now declare `mod tests;`
+> against sibling `<name>/tests.rs` files. As the finding predicted, `simd.rs`'s
+> `#[cfg(all(test, target_arch = "x86_64"))]` gate rides on the `mod`
+> declaration unchanged; verified the two tests still execute by name rather
+> than silently skipping._
+>
+> _`basis.rs` was not in this finding's list and not in its "Deliberately not
+> flagged" exemption (which names only two ~20-line blocks in other crates), so
+> the snapshot simply missed it. **`sfmtool-core` now has no inline
+> `mod tests` block at all.** One remains workspace-wide —
+> `sfm-explorer/src/platform/windows.rs:746` — left alone because the explorer
+> is mid-refactor (scene-graph phases 4 and 5 landed the same day) and that file
+> is Windows-only; carry it forward._
+>
+> _Process note, because it twice nearly went wrong here: a first pass searched
+> for `cfg(test)` and concluded `simd.rs` was already clean and the finding had
+> mis-counted. It had not — the gate is `cfg(all(test, …))`, which that pattern
+> does not match. A second pass then reported "all four done" while a fifth
+> block sat in the same subtree. Enumerating by token rather than by the thing
+> being looked for is the same failure mode the `to_cow_slice` note below
+> records four times over — including once for a sweep that claimed to be
+> fixing exactly this._
 - Location: `patch/cluster_refine/consistency.rs:371–589` (219 inline of 589);
   `patch/normal_refine/fronto_cache.rs:512–670` (159 of 670);
   `patch/normal_refine/view_subset.rs:118–259` (142 of 259);
