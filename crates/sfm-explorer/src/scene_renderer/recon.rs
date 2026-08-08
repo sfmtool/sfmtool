@@ -19,6 +19,7 @@ use nalgebra::Point3;
 use sfmtool_core::Se3Transform;
 
 use super::gpu_types::FALLBACK_POINT_SIZE;
+use crate::scene::NodeTint;
 
 /// The patch (surfel) half of a bundle: present only when the reconstruction
 /// carries patch frames *and* bitmaps, so its fields need no individual
@@ -48,7 +49,13 @@ pub(super) struct PatchResources {
 /// only bundles — need no access to the scene.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeDisplay {
-    /// Master eye. Off = the node contributes nothing to any pass.
+    /// **Effective** whole-node visibility: the node's master eye composed with
+    /// the scene's solo override (`crate::scene::is_visible`). Off = the node
+    /// contributes nothing to any pass, and nothing to the scene bounds.
+    ///
+    /// Composed once, by `app.rs`'s per-frame mirror, so the draw loop, the
+    /// bounds union and the per-recon uniform write cannot disagree about what
+    /// "visible" means.
     pub visible: bool,
     pub show_points: bool,
     pub show_cameras: bool,
@@ -59,6 +66,8 @@ pub struct NodeDisplay {
     /// Off → the node's shaders emit `PICK_TAG_NONE`. It still renders, still
     /// occludes, and still answers the depth readback.
     pub interactive: bool,
+    /// The node's comparison tint, mixed into its colors by every scene shader.
+    pub tint: NodeTint,
 }
 
 impl Default for NodeDisplay {
@@ -72,6 +81,7 @@ impl Default for NodeDisplay {
             show_patches: true,
             show_points_at_infinity: true,
             interactive: true,
+            tint: NodeTint::Original,
         }
     }
 }

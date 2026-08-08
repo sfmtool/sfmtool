@@ -23,7 +23,7 @@ use sfmtool_core::{RotQuaternion, Se3Transform, SfmrReconstruction};
 
 use super::{row_id, SceneGraphPanel};
 use crate::align::{AlignOptions, AlignSource};
-use crate::scene::{ImageRef, PointRef, SceneNode};
+use crate::scene::{ImageRef, NodeTint, PointRef, SceneNode, TINT_PALETTE};
 use crate::state::{AppState, CachedSiftFeatures};
 use crate::viewer_3d::Viewer3D;
 
@@ -390,7 +390,15 @@ fn the_panel_glyphs_are_available_in_the_bundled_fonts() {
     let font = egui::FontId::proportional(14.0);
     // The selection accent bar is deliberately absent: it is painted, not
     // written, precisely because no bundled proportional glyph would do.
-    for glyph in [super::EYE_GLYPH, super::CURSOR_GLYPH, super::INFINITY_GLYPH] {
+    for glyph in [
+        super::EYE_GLYPH,
+        super::CURSOR_GLYPH,
+        super::INFINITY_GLYPH,
+        // A plain letter, so this one cannot fail — kept in the list because
+        // the reason it is a letter is precisely that no bundled pictograph
+        // says "only this one" (see `SOLO_GLYPH`).
+        super::SOLO_GLYPH,
+    ] {
         assert!(
             ctx.fonts_mut(|f| f.has_glyphs(&font, glyph)),
             "{glyph:?} is not in egui's bundled fonts and would render as a box"
@@ -951,6 +959,361 @@ fn reset_transform_is_offered_only_once_a_node_has_one() {
     assert_eq!(response.reset_transform, Some(b));
 }
 
+// ── Tint ────────────────────────────────────────────────────────────────
+
+/// Open a reconstruction row's `Tint ▸` submenu, leaving its entries laid out
+/// and clickable.
+fn open_tint_menu(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    node: crate::scene::ReconId,
+) {
+    open_context_menu(panel, ctx, state, row_id(node, "node_label"));
+    click(panel, ctx, state, row_id(node, "tint_menu"));
+    run_frame(panel, ctx, state, Vec::new());
+}
+
+#[test]
+fn the_tint_menu_offers_original_and_the_whole_palette() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_tint_menu(&mut panel, &ctx, &mut state, id);
+
+    assert!(
+        panel.hit_rect(row_id(id, "tint_original")).is_some(),
+        "the Tint menu offers no way back to the original colors"
+    );
+    for color in TINT_PALETTE.iter() {
+        assert!(
+            panel
+                .hit_rect(row_id(id, &format!("tint_{}", color.name)))
+                .is_some(),
+            "the palette entry {:?} was not drawn",
+            color.name,
+        );
+    }
+}
+
+#[test]
+fn picking_a_tint_writes_it_to_the_node_and_picking_original_takes_it_off() {
+    let mut state = shared_shoot(2);
+    let id = state.scene[0].id;
+    let chosen = &TINT_PALETTE[5]; // Vermillion
+    let (mut panel, ctx) = settled(&mut state);
+    assert_eq!(state.scene[0].tint, NodeTint::Original);
+
+    open_tint_menu(&mut panel, &ctx, &mut state, id);
+    click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, &format!("tint_{}", chosen.name)),
+    );
+
+    // A tint is per-node display state, so unlike `Solo` it is written straight
+    // into the node rather than reported for `dock.rs` to apply.
+    assert_eq!(state.scene[0].tint, NodeTint::Tint(chosen));
+    assert_eq!(
+        state.scene[1].tint,
+        NodeTint::Original,
+        "tinting one node tinted its neighbour"
+    );
+
+    // The menu is still standing, which is the point of it: a color is chosen
+    // by looking at the viewport, so the next entry has to be one click away.
+    click(&mut panel, &ctx, &mut state, row_id(id, "tint_original"));
+    assert_eq!(state.scene[0].tint, NodeTint::Original);
+}
+
+/// The swatch is how a tinted node is identifiable in the tree rather than only
+/// in the viewport. Painted, not written, so what is recorded is the rect.
+#[test]
+fn only_a_tinted_row_gets_a_swatch() {
+    let mut state = shared_shoot(2);
+    let (first, second) = (state.scene[0].id, state.scene[1].id);
+    state.scene[0].tint = NodeTint::Tint(&TINT_PALETTE[1]);
+    let (panel, _ctx) = settled(&mut state);
+
+    assert!(
+        panel.hit_rect(row_id(first, "node_tint_swatch")).is_some(),
+        "the tinted node got no swatch"
+    );
+    assert!(
+        panel.hit_rect(row_id(second, "node_tint_swatch")).is_none(),
+        "an untinted node was given a swatch anyway"
+    );
+    // Reserved on every row, marked or not, so a tint does not shove the name
+    // sideways (the accent bar's rule).
+    assert_eq!(
+        panel.hit_rect(row_id(first, "node_label")).unwrap().left(),
+        panel.hit_rect(row_id(second, "node_label")).unwrap().left(),
+    );
+}
+
+/// Tinting is a display change and nothing else: walking through the menu must
+/// not move the selection, least of all onto the row the menu belongs to.
+#[test]
+fn working_the_tint_menu_leaves_the_selection_where_it_was() {
+    let mut state = shared_shoot(2);
+    let (first, second) = (state.scene[0].id, state.scene[1].id);
+    state.select_image(ImageRef::new(first, 2));
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_tint_menu(&mut panel, &ctx, &mut state, second);
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(second, &format!("tint_{}", TINT_PALETTE[0].name)),
+    );
+
+    assert_eq!(response.select_recon, None, "the tint menu selected a node");
+    assert_eq!(state.selected_recon, Some(first));
+    assert_eq!(state.selected_image, Some(ImageRef::new(first, 2)));
+    assert_eq!(state.scene[1].tint, NodeTint::Tint(&TINT_PALETTE[0]));
+}
+
+#[test]
+fn a_reload_carries_the_tint_like_the_rest_of_the_display_state() {
+    let mut state = shared_shoot(1);
+    state.scene[0].tint = NodeTint::Tint(&TINT_PALETTE[2]);
+
+    let mut reloaded = file_node("/runs/run_0.sfmr", 8, "IMG");
+    reloaded.copy_display_from(&state.scene[0]);
+
+    // The tint is how the user was telling this file apart from the one beside
+    // it; a refresh that dropped it would undo that silently.
+    assert_eq!(reloaded.tint, NodeTint::Tint(&TINT_PALETTE[2]));
+}
+
+#[test]
+fn an_untinted_node_writes_the_original_colors_convention() {
+    // `a == 0` is what every scene shader reads as "leave my colors alone".
+    assert_eq!(NodeTint::Original.to_uniform(), [0.0; 4]);
+    assert_eq!(NodeTint::Original.rgb(), None);
+
+    let tint = NodeTint::Tint(&TINT_PALETTE[0]);
+    let uniform = tint.to_uniform();
+    assert_eq!(uniform[3], crate::scene::TINT_STRENGTH);
+    assert!(
+        uniform[3] > 0.0 && uniform[3] < 1.0,
+        "a tint is a mix, not a repaint"
+    );
+    assert_eq!(tint.rgb(), Some(TINT_PALETTE[0].rgb));
+}
+
+/// The palette is meant to be told apart at a glance, so no two entries may be
+/// near-identical — and none of them may be the background this viewer paints
+/// on, which is what an eighth, black Okabe–Ito entry would have amounted to.
+///
+/// The floor is the palette's own closest pair, Orange and Vermillion, 82 apart
+/// in summed channel distance; a crude metric, but enough to catch a duplicate
+/// or a near-black entry added later.
+#[test]
+fn the_palette_entries_are_mutually_distinguishable() {
+    for (i, a) in TINT_PALETTE.iter().enumerate() {
+        let sum: u32 = a.rgb.iter().map(|&c| c as u32).sum();
+        assert!(sum > 120, "{:?} is too dark to read as a tint", a.name);
+        for b in TINT_PALETTE.iter().skip(i + 1) {
+            let distance: u32 = (0..3)
+                .map(|k| (a.rgb[k] as i32 - b.rgb[k] as i32).unsigned_abs())
+                .sum();
+            assert!(
+                distance >= 82,
+                "{:?} and {:?} are only {distance} apart",
+                a.name,
+                b.name,
+            );
+        }
+    }
+}
+
+// ── Solo ────────────────────────────────────────────────────────────────
+
+#[test]
+fn the_solo_toggle_reports_the_row_it_sits_on() {
+    let mut state = shared_shoot(3);
+    let second = state.scene[1].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    let response = click(&mut panel, &ctx, &mut state, row_id(second, "node_solo"));
+    assert_eq!(response.toggle_solo, Some(second));
+    // The panel reports; `dock.rs` applies. Solo is app state, not node state,
+    // so nothing was soloed behind its back — and no eye moved either.
+    assert_eq!(state.solo, None);
+    assert!(state.scene.iter().all(|n| n.visible));
+}
+
+/// Solo lives on the row, so the row-wide click target must not swallow it and
+/// it must not be a place the node's menu comes from — the eye's contract.
+#[test]
+fn the_solo_toggle_is_not_part_of_the_rows_target() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "node_solo"));
+    assert_eq!(response.toggle_solo, Some(id));
+    assert_eq!(
+        response.select_recon, None,
+        "the row underneath the solo toggle took the click too"
+    );
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_solo"));
+    assert!(
+        !context_menu_open(&panel, id),
+        "right-clicking the solo toggle opened the node's menu"
+    );
+}
+
+/// Clicking `S` on the soloed node ends the solo rather than re-soloing it.
+#[test]
+fn the_solo_toggle_reports_the_soloed_node_again_to_switch_it_off() {
+    let mut state = shared_shoot(2);
+    let first = state.scene[0].id;
+    state.toggle_solo(first);
+    let (mut panel, ctx) = settled(&mut state);
+
+    let response = click(&mut panel, &ctx, &mut state, row_id(first, "node_solo"));
+    assert_eq!(response.toggle_solo, Some(first));
+    state.toggle_solo(first); // what `dock.rs` does with it
+    assert_eq!(state.solo, None);
+}
+
+// ── Solo state (no frame needed) ────────────────────────────────────────
+
+/// Effective visibility is one rule — eye AND solo — and every consumer reads
+/// it. Here it is directly.
+#[test]
+fn soloing_hides_every_other_node_without_touching_their_eyes() {
+    use crate::scene::is_visible;
+
+    let mut state = shared_shoot(3);
+    let second = state.scene[1].id;
+    // One node the user had already hidden by hand, which is what makes
+    // "restore what was there" a real requirement rather than "show everything".
+    state.scene[2].visible = false;
+
+    state.toggle_solo(second);
+    assert!(!is_visible(&state.scene[0], state.solo));
+    assert!(is_visible(&state.scene[1], state.solo));
+    assert!(!is_visible(&state.scene[2], state.solo));
+    // The eyes are untouched: solo overlays them rather than editing them.
+    assert!(state.scene[0].visible && state.scene[1].visible && !state.scene[2].visible);
+
+    state.toggle_solo(second);
+    assert_eq!(state.solo, None);
+    assert!(is_visible(&state.scene[0], state.solo));
+    assert!(is_visible(&state.scene[1], state.solo));
+    assert!(
+        !is_visible(&state.scene[2], state.solo),
+        "un-soloing revealed a node the user had hidden before the solo"
+    );
+}
+
+#[test]
+fn soloing_a_second_node_moves_the_solo_rather_than_adding_to_it() {
+    use crate::scene::is_visible;
+
+    let mut state = shared_shoot(3);
+    let (a, b) = (state.scene[0].id, state.scene[1].id);
+
+    state.toggle_solo(a);
+    state.toggle_solo(b);
+
+    assert_eq!(state.solo, Some(b));
+    assert!(!is_visible(&state.scene[0], state.solo));
+    assert!(is_visible(&state.scene[1], state.solo));
+}
+
+#[test]
+fn an_eye_toggled_while_soloed_takes_effect_when_the_solo_ends() {
+    use crate::scene::is_visible;
+
+    let mut state = shared_shoot(2);
+    let (a, b) = (state.scene[0].id, state.scene[1].id);
+    state.toggle_solo(a);
+
+    // Switching the hidden node's eye off while it is soloed away: it changes
+    // nothing on screen now, and everything the moment the solo ends.
+    state.scene[1].visible = false;
+    assert!(!is_visible(&state.scene[1], state.solo));
+
+    state.toggle_solo(a);
+    assert!(is_visible(&state.scene[0], state.solo));
+    assert!(!is_visible(&state.scene[1], state.solo));
+
+    // And the soloed node's own eye still applies while it is soloed: solo says
+    // "hide the others", not "force this one on".
+    state.toggle_solo(b);
+    assert!(!is_visible(&state.scene[1], state.solo));
+}
+
+#[test]
+fn closing_the_soloed_node_ends_the_solo() {
+    use crate::scene::is_visible;
+
+    let mut state = shared_shoot(3);
+    let second = state.scene[1].id;
+    state.toggle_solo(second);
+
+    state.close_node(second);
+
+    // A solo naming a node that is gone would hide the whole scene, with
+    // nothing left on screen to explain why.
+    assert_eq!(state.solo, None);
+    assert!(state.scene.iter().all(|n| is_visible(n, state.solo)));
+}
+
+#[test]
+fn closing_another_node_leaves_the_solo_alone() {
+    let mut state = shared_shoot(3);
+    let (first, second) = (state.scene[0].id, state.scene[1].id);
+    state.toggle_solo(second);
+
+    state.close_node(first);
+    assert_eq!(state.solo, Some(second));
+
+    state.close_all();
+    assert_eq!(state.solo, None);
+}
+
+#[test]
+fn opening_a_file_ends_a_solo_so_the_new_node_is_not_born_hidden() {
+    let mut state = shared_shoot(2);
+    let first = state.scene[0].id;
+    state.toggle_solo(first);
+
+    state.append_node(file_node("/runs/new.sfmr", 8, "IMG"));
+
+    assert_eq!(state.solo, None);
+}
+
+#[test]
+fn stepping_carries_an_active_solo_to_the_node_it_lands_on() {
+    let mut state = shared_shoot(3);
+    let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
+    let mut viewer = Viewer3D::new();
+    let ctx = egui::Context::default();
+
+    // No solo, no solo: stepping never starts one.
+    step(&mut viewer, &ctx, &mut state, true);
+    assert_eq!(state.solo, None);
+
+    state.toggle_solo(ids[1]);
+    step(&mut viewer, &ctx, &mut state, true);
+    assert_eq!(state.selected_recon, Some(ids[2]));
+    assert_eq!(
+        state.solo,
+        Some(ids[2]),
+        "the solo stayed behind on the node we stepped away from, so `]` \
+         appeared to do nothing at all"
+    );
+}
+
 // ── Transforms (no frame needed) ────────────────────────────────────────
 
 #[test]
@@ -1437,7 +1800,7 @@ fn the_stats_overlay_sums_visible_nodes_and_leads_with_the_count() {
     let one_node_points = state.scene[0].recon.points.len();
     let one_node_images = state.scene[0].recon.images.len();
 
-    let text = scene_stats_text(&state.scene, false, 60.0);
+    let text = scene_stats_text(&state.scene, None, false, 60.0);
     assert_eq!(
         text,
         format!(
@@ -1450,10 +1813,36 @@ fn the_stats_overlay_sums_visible_nodes_and_leads_with_the_count() {
     // Hiding a node takes it out of the totals — and with one left, the
     // reconstruction count leads no more.
     state.scene[1].visible = false;
-    let text = scene_stats_text(&state.scene, false, 60.0);
+    let text = scene_stats_text(&state.scene, None, false, 60.0);
     assert_eq!(
         text,
         format!("{one_node_points} points (3 at infinity) | {one_node_images} images")
+    );
+}
+
+/// Solo reaches the totals the same way an eye does — the overlay describes
+/// what is on screen, and the two switches are composed by one rule.
+#[test]
+fn the_stats_overlay_counts_only_the_soloed_node() {
+    use crate::viewer_3d::overlay::scene_stats_text;
+
+    let mut state = shared_shoot(3);
+    let second = state.scene[1].id;
+    let points = state.scene[1].recon.points.len();
+    let images = state.scene[1].recon.images.len();
+
+    state.toggle_solo(second);
+    assert_eq!(
+        scene_stats_text(&state.scene, state.solo, false, 60.0),
+        format!("{points} points | {images} images"),
+        "the stats line still counted the nodes the solo is hiding"
+    );
+
+    // A soloed node whose own eye is off is drawn by nobody.
+    state.scene[1].visible = false;
+    assert_eq!(
+        scene_stats_text(&state.scene, state.solo, false, 60.0),
+        "0 points | 0 images"
     );
 }
 

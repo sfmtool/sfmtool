@@ -12,7 +12,7 @@
 //! ## Shape of the tree
 //!
 //! ```text
-//! ▾ 👁 🖱 run_a                    1.2M pts · 243 cams
+//! ▾ 👁 S 🖱 ▪ run_a                1.2M pts · 243 cams   ← S = solo, ▪ = tint
 //!   ▾ 👁 Cameras (243)
 //!       IMG_0001.jpg              ← virtualized, `ScrollArea::show_rows`
 //!   ▾ 👁 Points (1,204,551 · 12 at ∞) ∞
@@ -36,7 +36,7 @@
 use eframe::egui;
 
 use crate::align::{AlignOptions, AlignSource};
-use crate::scene::{point_id, ImageRef, PointRef, ReconId, SceneNode};
+use crate::scene::{point_id, ImageRef, NodeTint, PointRef, ReconId, SceneNode, TINT_PALETTE};
 use crate::state::AppState;
 
 /// Height of one tree row. Fixed so the camera list can be virtualized, and so
@@ -63,6 +63,17 @@ const CURSOR_GLYPH: &str = "🖱";
 
 /// The ∞ mini-toggle on the Points group row.
 const INFINITY_GLYPH: &str = "∞";
+
+/// Solo toggle — "show only this reconstruction".
+///
+/// A letter rather than a pictograph, and deliberately: `S` is what a mixer's
+/// solo button has said for fifty years, it needs no bundled emoji to exist,
+/// and no glyph in egui's fonts says "only this one" any more clearly. It dims
+/// when off exactly like the eye and the cursor beside it.
+const SOLO_GLYPH: &str = "S";
+
+/// Side of the square tint swatch painted on a tinted node's row.
+const SWATCH_SIZE: f32 = 8.0;
 
 /// Width of the accent bar marking the selected reconstruction.
 ///
@@ -101,6 +112,11 @@ pub struct SceneGraphResponse {
     pub select_recon: Option<ReconId>,
     /// A reconstruction row was double-clicked, or `Zoom to Fit` chosen.
     pub zoom_to_node: Option<ReconId>,
+    /// The row's `S` was clicked: solo this node, or end the solo if it is
+    /// already the soloed one. A view mode rather than node state, so unlike
+    /// the eyes it travels through the response to `AppState::toggle_solo`
+    /// instead of being written into the node.
+    pub toggle_solo: Option<ReconId>,
     /// `Align to ▸ <node>` chosen: `(source, target, options)`. The source is
     /// the row the menu was opened on; the target is the node picked from the
     /// submenu, and is never itself modified.
@@ -186,6 +202,7 @@ impl SceneGraphPanel {
         // Read the selection out before the mutable walk over `scene` below:
         // every field of `AppState` is one borrow, and the node eyes need `&mut`.
         let selected_recon = state.selected_recon;
+        let solo = state.solo;
         let selected_image = state.selected_image;
         let selected_point = state.selected_point;
         let hovered_image = state.hovered_image;
@@ -204,6 +221,8 @@ impl SceneGraphPanel {
                 for node in state.scene.iter_mut() {
                     let ctx = NodeContext {
                         selected: selected_recon == Some(node.id),
+                        soloed: solo == Some(node.id),
+                        visible: crate::scene::is_visible(node, solo),
                         selected_image,
                         selected_point,
                         hovered_image,
@@ -255,6 +274,13 @@ impl TreeOutput<'_> {
 /// The selection/hover context one node's subtree is drawn against.
 struct NodeContext {
     selected: bool,
+    /// This node is the soloed one.
+    soloed: bool,
+    /// Whether the node is actually drawn — its own eye AND the solo override.
+    /// The master eye is lit from *this* rather than from `node.visible`, so a
+    /// node another node's solo is hiding reads as dark without its own flag
+    /// having been touched.
+    visible: bool,
     selected_image: Option<ImageRef>,
     selected_point: Option<PointRef>,
     hovered_image: Option<ImageRef>,
@@ -280,7 +306,13 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
         if node.has_patch_data() {
             ui.horizontal(|ui| {
                 ui.set_height(ROW_HEIGHT);
-                let eye = eye_toggle(ui, &mut node.show_patches, "Show this node's patches");
+                let eye = eye_toggle(
+                    ui,
+                    row_id(node.id, "patches_eye"),
+                    &mut node.show_patches,
+                    None,
+                    "Show this node's patches",
+                );
                 out.hit(row_id(node.id, "patches_eye"), eye);
                 ui.label("Patches");
             });
@@ -288,10 +320,10 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
     });
 }
 
-/// `[👁] [🖱] label    1.2M pts · 243 cams` — the reconstruction row's content,
-/// drawn to the right of the collapsing triangle.
+/// `[👁] [S] [🖱] ▪ label    1.2M pts · 243 cams` — the reconstruction row's
+/// content, drawn to the right of the collapsing triangle.
 ///
-/// Everything past the two toggles is a single click target spanning the row:
+/// Everything past the three toggles is a single click target spanning the row:
 /// select, zoom-to-fit and the context menu all hang off it, so none of them
 /// depends on the user finding the name's own few pixels.
 fn show_node_header(
@@ -301,15 +333,49 @@ fn show_node_header(
     out: &mut TreeOutput,
 ) {
     ui.set_height(ROW_HEIGHT);
-    let eye = eye_toggle(ui, &mut node.visible, "Show this reconstruction");
-    out.hit(row_id(node.id, "node_eye"), eye);
+    let id = node.id;
+    let eye = eye_toggle(
+        ui,
+        row_id(id, "node_eye"),
+        &mut node.visible,
+        Some(ctx.visible),
+        "Show this reconstruction",
+    );
+    out.hit(row_id(id, "node_eye"), eye);
+
+    // Solo lives on the row rather than in the context menu (the spec left that
+    // open): it is a *transient* view mode used over and over while comparing —
+    // solo A, look, solo B, look, off — and a menu would cost two clicks and a
+    // popup over the viewport every time. Tint, set once per node, stays in the
+    // menu. Painted lit only on the soloed node, so the row is also where you
+    // read *which* node is soloed.
+    //
+    // The flip lands in a throwaway local: solo is app state, not node state,
+    // so what counts is the request in the response — `dock.rs` applies it, and
+    // `ctx.soloed` is what the glyph is drawn from next frame.
+    let mut soloed = ctx.soloed;
+    let solo = glyph_toggle(
+        ui,
+        row_id(id, "node_solo"),
+        &mut soloed,
+        None,
+        SOLO_GLYPH,
+        "Solo: draw only this reconstruction. Click again to show them all — \
+         the other nodes' eyes are left exactly as you set them.",
+    );
+    if out.hit(row_id(id, "node_solo"), solo).clicked() {
+        out.response.toggle_solo = Some(id);
+    }
+
     let cursor = glyph_toggle(
         ui,
+        row_id(id, "node_cursor"),
         &mut node.interactive,
+        None,
         CURSOR_GLYPH,
         "Let hover and clicks in the 3D viewport reach this reconstruction",
     );
-    out.hit(row_id(node.id, "node_cursor"), cursor);
+    out.hit(row_id(id, "node_cursor"), cursor);
 
     // Everything from here to the right edge is one target, claimed *before*
     // its contents are drawn: a tree row should answer a click anywhere along
@@ -359,6 +425,22 @@ fn show_node_header(
         out.mark(row_id(node.id, "node_selected_bar"), bar);
     }
 
+    // The tint swatch: a tinted node has to be identifiable in the tree as well
+    // as in the viewport, or the only way to find out which node is the orange
+    // one is to hide the others. Painted rather than a widget, like the accent
+    // bar — it answers nothing, and a widget here would compete with the
+    // row-wide target for the click. Its space is reserved on every row for the
+    // same reason the bar's is.
+    let (swatch, _) =
+        ui.allocate_exact_size(egui::vec2(SWATCH_SIZE, ROW_HEIGHT), egui::Sense::hover());
+    if let Some([r, g, b]) = node.tint.rgb() {
+        let square =
+            egui::Rect::from_center_size(swatch.center(), egui::vec2(SWATCH_SIZE, SWATCH_SIZE));
+        ui.painter()
+            .rect_filled(square, 2.0, egui::Color32::from_rgb(r, g, b));
+        out.mark(row_id(node.id, "node_tint_swatch"), square);
+    }
+
     let mut label = egui::RichText::new(&node.label);
     if ctx.selected {
         label = label.strong();
@@ -389,9 +471,9 @@ fn show_node_header(
 
 /// The reconstruction row's context menu.
 ///
-/// `Tint ▸` is deliberately absent: it operates on the node tint, which arrives
-/// in phase 5. A menu entry that silently does nothing is worse than no entry.
-fn node_context_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+/// `Solo` is deliberately absent: it lives on the row itself, where a view mode
+/// toggled this often belongs (see [`show_node_header`]).
+fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &mut TreeOutput) {
     if ui.button("Select").clicked() {
         out.response.select_recon = Some(node.id);
         ui.close();
@@ -410,6 +492,8 @@ fn node_context_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) 
         ui.close();
     }
     ui.separator();
+    show_tint_menu(ui, node, out);
+    ui.separator();
     // Demo data came from no file, so there is nothing to re-read.
     if ui
         .add_enabled(node.path.is_some(), egui::Button::new("Reload from Disk"))
@@ -423,6 +507,32 @@ fn node_context_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) 
         out.response.close_node = Some(node.id);
         ui.close();
     }
+}
+
+/// `Tint ▸`: `Original`, then the palette.
+///
+/// Written straight into the node, like the eyes it sits beside and unlike
+/// `Solo`: a tint *is* per-node display state, so there is nothing for
+/// `dock.rs` to arbitrate. It reaches the GPU on the next frame's display
+/// mirror, so the menu can stay open while the user tries colors and watches
+/// the viewport — which is why the entries close nothing.
+fn show_tint_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &mut TreeOutput) {
+    let id = node.id;
+    let menu = ui.menu_button("Tint", |ui| {
+        let original = ui.radio_value(&mut node.tint, NodeTint::Original, "Original");
+        out.hit(row_id(id, "tint_original"), original);
+        ui.separator();
+        for color in TINT_PALETTE.iter() {
+            let [r, g, b] = color.rgb;
+            // The entry is written in its own color: a palette is only useful
+            // if you can see what you are choosing, and a colored name needs no
+            // glyph that egui's bundled fonts might not have.
+            let label = egui::RichText::new(color.name).color(egui::Color32::from_rgb(r, g, b));
+            let entry = ui.radio_value(&mut node.tint, NodeTint::Tint(color), label);
+            out.hit(row_id(id, &format!("tint_{}", color.name)), entry);
+        }
+    });
+    out.hit(row_id(id, "tint_menu"), menu.response);
 }
 
 /// Why the point mode is unavailable, shown on hover over the greyed option.
@@ -512,7 +622,13 @@ fn show_cameras_group(
     let id = node.id;
     let header = state.show_header(ui, |ui| {
         ui.set_height(ROW_HEIGHT);
-        let eye = eye_toggle(ui, &mut node.show_cameras, "Show this node's cameras");
+        let eye = eye_toggle(
+            ui,
+            row_id(id, "cameras_eye"),
+            &mut node.show_cameras,
+            None,
+            "Show this node's cameras",
+        );
         out.hit(row_id(id, "cameras_eye"), eye);
         ui.label(format!("Cameras ({})", node.recon.images.len()));
     });
@@ -601,7 +717,13 @@ fn show_points_group(
     let id = node.id;
     let header = state.show_header(ui, |ui| {
         ui.set_height(ROW_HEIGHT);
-        let eye = eye_toggle(ui, &mut node.show_points, "Show this node's 3D points");
+        let eye = eye_toggle(
+            ui,
+            row_id(id, "points_eye"),
+            &mut node.show_points,
+            None,
+            "Show this node's 3D points",
+        );
         out.hit(row_id(id, "points_eye"), eye);
         let count = with_thousands(node.recon.points.len());
         let label = if at_infinity > 0 {
@@ -613,7 +735,9 @@ fn show_points_group(
         if at_infinity > 0 {
             let infinity = glyph_toggle(
                 ui,
+                row_id(id, "points_infinity"),
                 &mut node.show_points_at_infinity,
+                None,
                 INFINITY_GLYPH,
                 "Draw this node's w = 0 points — directions with no parallax",
             );
@@ -668,13 +792,36 @@ fn show_points_group(
 }
 
 /// The master/group eye. Dimmed when off; the tooltip says what it governs.
-fn eye_toggle(ui: &mut egui::Ui, on: &mut bool, tooltip: &str) -> egui::Response {
-    glyph_toggle(ui, on, EYE_GLYPH, tooltip)
+fn eye_toggle(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    on: &mut bool,
+    lit: Option<bool>,
+    tooltip: &str,
+) -> egui::Response {
+    glyph_toggle(ui, id, on, lit, EYE_GLYPH, tooltip)
 }
 
-/// A one-glyph toggle button: full-strength when on, weak when off.
-fn glyph_toggle(ui: &mut egui::Ui, on: &mut bool, glyph: &str, tooltip: &str) -> egui::Response {
-    let color = if *on {
+/// A one-glyph toggle button: full-strength when lit, weak otherwise.
+///
+/// `lit` is normally `None` — paint the glyph from the flag it toggles. The
+/// master eye passes `Some(effective visibility)` instead, so a node hidden by
+/// another node's solo reads as dark without its own flag being touched: the
+/// eye still says what it will do the moment the solo ends.
+///
+/// Under an explicit id rather than the auto id a bare `ui.add` would take. An
+/// auto id is a count of what was allocated before the widget in this `Ui`, so
+/// adding or removing anything earlier in the row moves every later widget's
+/// identity — and with it the hover, click and tooltip state egui keys on it.
+fn glyph_toggle(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    on: &mut bool,
+    lit: Option<bool>,
+    glyph: &str,
+    tooltip: &str,
+) -> egui::Response {
+    let color = if lit.unwrap_or(*on) {
         ui.visuals().strong_text_color()
     } else {
         ui.visuals().weak_text_color()
@@ -682,7 +829,10 @@ fn glyph_toggle(ui: &mut egui::Ui, on: &mut bool, glyph: &str, tooltip: &str) ->
     let button = egui::Button::new(egui::RichText::new(glyph).color(color))
         .frame(false)
         .min_size(egui::vec2(TOGGLE_WIDTH, ROW_HEIGHT));
-    let response = ui.add(button).on_hover_text(tooltip);
+    let response = ui
+        .push_id(id, |ui| ui.add(button))
+        .inner
+        .on_hover_text(tooltip);
     if response.clicked() {
         *on = !*on;
     }

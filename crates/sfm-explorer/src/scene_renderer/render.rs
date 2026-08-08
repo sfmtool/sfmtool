@@ -237,15 +237,11 @@ impl SceneRenderer {
             // occlusion between reconstructions is automatic.
             //
             // A layer's effective visibility is the AND of three switches: the
-            // global HUD toggle (the `show_*` arguments, now master switches
-            // across all nodes), the node's master eye, and the node's own
-            // group eye. `layer` picks the last of those out of the bundle.
-            let bundles = |layer: fn(&ReconResources) -> bool| {
-                self.recon_order
-                    .iter()
-                    .filter_map(|id| self.recons.get(id))
-                    .filter(move |b| b.display.visible && layer(b))
-            };
+            // global HUD toggle (the `show_*` arguments, master switches across
+            // all nodes), the node's effective whole-node visibility (eye AND
+            // solo), and the node's own group eye — the last two both resolved
+            // by `SceneRenderer::drawn`.
+            let bundles = |layer: fn(&ReconResources) -> bool| self.drawn(layer);
 
             if show_points {
                 if let (Some(pipeline), Some(quad_vb)) =

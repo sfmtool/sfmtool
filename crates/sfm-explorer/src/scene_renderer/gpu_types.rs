@@ -40,8 +40,10 @@ pub(super) struct ReconUniforms {
     /// 0 → emit `PICK_TAG_NONE` instead of a pick id (a display-only node,
     /// i.e. the Scene panel's interaction cursor switched off).
     pub pickable: u32,
-    /// `a == 0` → draw the node's original colors. Wired up with the per-node
-    /// tint palette (phase 5); inert until then.
+    /// The node's comparison tint: the palette color in `rgb`, the strength it
+    /// is mixed in at in `a`. Every scene shader composites the same way —
+    /// `mix(color, tint_color.rgb, tint_color.a)` — so `a == 0` draws the
+    /// node's original colors. Highlight colors are exempt; see the shaders.
     pub tint_color: [f32; 4],
     /// 1.0 to draw this node's points at infinity, 0.0 to cull them in the
     /// vertex shader — the global HUD toggle AND the node's ∞ mini-toggle.

@@ -157,6 +157,7 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
                 ui,
                 node,
                 &state.scene,
+                state.solo,
                 &mut state.selected_image,
                 state.show_grid,
                 state.length_scale,

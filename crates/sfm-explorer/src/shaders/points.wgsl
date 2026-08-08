@@ -26,6 +26,7 @@ struct ReconUniforms {
     point_pick_base: u32,
     image_pick_base: u32,
     pickable: u32,
+    // Node tint: rgb is the palette color, a its strength. a == 0 = original.
     tint_color: vec4<f32>,
     // Effective "points at infinity" visibility for this node: the global HUD
     // toggle AND the node's own ∞ mini-toggle. Only this shader reads it, but
@@ -35,6 +36,14 @@ struct ReconUniforms {
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var<uniform> recon: ReconUniforms;
+
+// Mix this node's tint into a color: a lerp toward the tint by its strength,
+// so a == 0 leaves the original untouched and a == 1 flattens it to the tint.
+// Every scene shader composites the same way, so points, frustums, image quads
+// and patches of one node all read as the same color.
+fn tinted(color: vec3<f32>) -> vec3<f32> {
+    return mix(color, recon.tint_color.rgb, recon.tint_color.a);
+}
 
 // Pick ID tag for point entities (bits 31..30).
 const PICK_TAG_POINT: u32 = 0x80000000u;
@@ -67,12 +76,14 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.uv = in.quad_pos;
 
-    // Unpack color from u32 (R in low byte, then G, B)
-    out.color = vec3<f32>(
+    // Unpack color from u32 (R in low byte, then G, B), then tint. The
+    // selection and hover overrides in the fragment shader are applied *after*
+    // this and so are never tinted: they exist to be told apart.
+    out.color = tinted(vec3<f32>(
         f32((in.color_packed >>  0u) & 0xFFu) / 255.0,
         f32((in.color_packed >>  8u) & 0xFFu) / 255.0,
         f32((in.color_packed >> 16u) & 0xFFu) / 255.0,
-    );
+    ));
     // Global pick index: this node's base plus the local instance index. The
     // instance buffer stores nothing about it, so moving the base is a uniform
     // rewrite and never a buffer rewrite.
@@ -138,7 +149,10 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     }
 
     var out: FragOutput;
-    // Highlight selected point in yellow, hovered point in bright cyan.
+    // Highlight selected point in yellow, hovered point in bright cyan. Both
+    // replace the (already tinted) color outright rather than mixing with it:
+    // a tint that could drag the highlight toward itself would cost exactly the
+    // legibility the highlight exists for.
     var color = in.color;
     if in.point3d_index == uniforms.selected_point_index {
         color = vec3<f32>(1.0, 1.0, 0.0);

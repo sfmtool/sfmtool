@@ -29,7 +29,7 @@ use super::super::recon::{NodeDisplay, ReconResources};
 use super::super::uniforms::recon_uniforms;
 use super::super::SceneRenderer;
 use super::track_rays::track_ray_edges;
-use crate::scene::{ImageRef, PointRef, ReconId};
+use crate::scene::{ImageRef, NodeTint, PointRef, ReconId, TINT_PALETTE};
 use crate::state::CachedSiftFeatures;
 
 // ── Fixtures ────────────────────────────────────────────────────────────
@@ -875,6 +875,152 @@ fn the_length_scale_seed_is_the_smallest_across_loaded_nodes() {
         both <= single,
         "{both} should not exceed the single-node {single}"
     );
+}
+
+// ── tint ────────────────────────────────────────────────────────────────
+
+#[test]
+fn a_nodes_tint_reaches_its_uniform_block_and_no_one_elses() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 12);
+    upload_node(&mut r, &device, OTHER, 12);
+
+    // An untinted node writes the "original colors" convention: a == 0, which
+    // makes the shaders' `mix(color, tint.rgb, tint.a)` the identity.
+    assert_eq!(recon_uniforms(bundle(&r), 1.0, true).tint_color, [0.0; 4]);
+
+    let color = &TINT_PALETTE[4]; // Blue
+    r.set_node_display(
+        RECON,
+        NodeDisplay {
+            tint: NodeTint::Tint(color),
+            ..NodeDisplay::default()
+        },
+    );
+
+    let tinted = recon_uniforms(bundle_of(&r, RECON), 1.0, true).tint_color;
+    assert_eq!(
+        tinted,
+        [
+            color.rgb[0] as f32 / 255.0,
+            color.rgb[1] as f32 / 255.0,
+            color.rgb[2] as f32 / 255.0,
+            crate::scene::TINT_STRENGTH,
+        ],
+    );
+    assert_eq!(
+        recon_uniforms(bundle_of(&r, OTHER), 1.0, true).tint_color,
+        [0.0; 4],
+        "tinting one node tinted the other's uniform block",
+    );
+}
+
+/// `frustum.wgsl` decides what to tint from the alpha in the per-image color
+/// buffer: below full alpha is the node's own frustum color and takes the tint,
+/// full alpha is a highlight and keeps the color it was chosen for. That is a
+/// contract with this CPU-side writer, so assert it here.
+#[test]
+fn every_frustum_highlight_color_is_written_at_the_full_alpha_the_tint_exempts() {
+    use super::frustums::{frustum_colors, FRUSTUM_ALPHA_DEFAULT, FRUSTUM_ALPHA_HIGHLIGHT};
+
+    let alpha = |packed: u32| packed >> 24;
+    let colors = frustum_colors(6, Some(1), Some(5), &[2, 3]);
+
+    // Plain frustums: tintable.
+    for &index in &[0usize, 4] {
+        assert_eq!(alpha(colors[index]), FRUSTUM_ALPHA_DEFAULT);
+        assert!(alpha(colors[index]) < FRUSTUM_ALPHA_HIGHLIGHT);
+    }
+    // The selected camera and the selected point's track cameras: highlights,
+    // and so exempt from the tint.
+    for &index in &[1usize, 2, 3] {
+        assert_eq!(
+            alpha(colors[index]),
+            FRUSTUM_ALPHA_HIGHLIGHT,
+            "image {index} is a highlight but would be tinted",
+        );
+    }
+    // The camera being viewed through is discarded outright.
+    assert_eq!(colors[5], 0);
+}
+
+// ── effective visibility (eye AND solo) ─────────────────────────────────
+
+/// The draw filter and the bounds union read one flag, which `app.rs` composes
+/// from the node's eye and the scene's solo. Hiding a node here is what soloing
+/// its neighbour does.
+#[test]
+fn a_hidden_node_drops_out_of_every_pass_and_out_of_the_bounds() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 256);
+    upload_node(&mut r, &device, OTHER, 256);
+    // Move the second node well away, so a bounds union that still included it
+    // could not possibly match the first node's alone.
+    r.set_node_transform(OTHER, similarity(1.0));
+
+    assert_eq!(r.drawn(|b| b.display.show_points).count(), 2);
+    assert_eq!(r.drawn(|b| b.display.show_cameras).count(), 2);
+    let both = r.scene_bounds();
+
+    r.set_node_display(
+        OTHER,
+        NodeDisplay {
+            visible: false,
+            ..NodeDisplay::default()
+        },
+    );
+
+    assert_eq!(
+        r.drawn(|b| b.display.show_points).count(),
+        1,
+        "a node that is not visible was still drawn"
+    );
+    assert_eq!(r.drawn(|b| b.display.show_cameras).count(), 1);
+    let solo_bounds = r.scene_bounds();
+    let expected = bundle_of(&r, RECON)
+        .world_bounds()
+        .expect("uploaded bounds");
+    assert!(
+        (solo_bounds.0 - expected.0).norm() < 1e-9 && (solo_bounds.1 - expected.1).abs() < 1e-9,
+        "the bounds still enclose the hidden node: {solo_bounds:?} vs {expected:?}",
+    );
+    assert!(solo_bounds.1 < both.1);
+
+    // A node's own group eye still narrows what is drawn on top of that.
+    r.set_node_display(
+        RECON,
+        NodeDisplay {
+            show_points: false,
+            ..NodeDisplay::default()
+        },
+    );
+    assert_eq!(r.drawn(|b| b.display.show_points).count(), 0);
+    assert_eq!(r.drawn(|b| b.display.show_cameras).count(), 1);
+}
+
+/// With everything hidden the union falls back to all loaded nodes rather than
+/// collapsing to a unit sphere at the origin — switching the last eye off, or
+/// soloing a node and then hiding it, must not fling the camera.
+#[test]
+fn the_all_hidden_fallback_still_frames_the_loaded_nodes() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 256);
+    let visible = r.scene_bounds();
+
+    r.set_node_display(
+        RECON,
+        NodeDisplay {
+            visible: false,
+            ..NodeDisplay::default()
+        },
+    );
+
+    assert_eq!(r.drawn(|b| b.display.show_points).count(), 0);
+    let hidden = r.scene_bounds();
+    assert!((hidden.0 - visible.0).norm() < 1e-9 && (hidden.1 - visible.1).abs() < 1e-9);
 }
 
 // ── node transforms ─────────────────────────────────────────────────────

@@ -316,6 +316,13 @@ fn the_scene_panel_lists_the_loaded_reconstruction() {
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("Scene panel row '{text}' did not appear"));
     }
+
+    // The row's solo toggle. Its own behaviour is headless (`scene_graph`
+    // tests); what only a real window can show is that a *third* glyph button
+    // squeezed onto the row is still laid out and still reachable.
+    app.locator(r#"button[name="S"]"#)
+        .wait_attached(CONTENT_TIMEOUT)
+        .expect("the reconstruction row's solo toggle did not appear");
 }
 
 /// Toggling a HUD checkbox via accessibility updates its checked state.
@@ -419,6 +426,9 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
 
     // "Close" is deliberately not checked: the window's own title-bar close
     // button carries that name too, so it would pass with no menu at all.
+    // Neither are the two submenus, `Align to ▸` and `Tint ▸`: a menu button
+    // does not surface under the `button` role here, and their contents only
+    // exist once the submenu is opened — both are covered headlessly instead.
     for item in ["Select", "Zoom to Fit", "Reload from Disk"] {
         app.locator(&format!(r#"button[name="{item}"]"#))
             .wait_attached(CONTENT_TIMEOUT)

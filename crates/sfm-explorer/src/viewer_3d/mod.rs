@@ -20,7 +20,7 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use sfmtool_core::{Camera, Se3Transform};
 
 use crate::platform::GestureEvent;
-use crate::scene::{ImageRef, SceneNode};
+use crate::scene::{ImageRef, ReconId, SceneNode};
 
 /// Drag/gesture zoom speed: maps pixel deltas to zoom amount.
 const DRAG_ZOOM_SPEED: f64 = 0.13125;
@@ -230,6 +230,9 @@ impl Viewer3D {
         // Every loaded node, for the overlays that describe the whole scene:
         // the stats line and the hover text's reconstruction label.
         scene: &[SceneNode],
+        // The soloed node, if any — the stats line counts what is drawn, and
+        // a solo is half of what decides that.
+        solo: Option<ReconId>,
         selected_image: &mut Option<ImageRef>,
         show_grid: bool,
         length_scale: f32,
@@ -384,6 +387,7 @@ impl Viewer3D {
             &painter,
             rect,
             scene,
+            solo,
             show_controls_help,
             show_fps,
             status_message,

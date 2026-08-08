@@ -118,6 +118,21 @@ pub struct AppState {
     /// non-empty.
     pub selected_recon: Option<ReconId>,
 
+    /// The soloed reconstruction: while `Some`, only that node is drawn.
+    ///
+    /// A **view mode layered over** the per-node eyes, not a bulk edit of them:
+    /// `SceneNode::visible` is never written by soloing, so un-soloing restores
+    /// exactly the visibility the user had — including nodes they had already
+    /// hidden by hand — and an eye toggled while soloed takes effect the moment
+    /// the solo ends. Mutating the eyes and restoring them later would be
+    /// lossy (a hidden node soloed and un-soloed would come back visible) and
+    /// would need a saved copy that any other path touching `visible` could
+    /// desync. One `Option` cannot desync with anything.
+    ///
+    /// At most one node at a time, so soloing B while A is soloed simply moves
+    /// the solo to B. Composed with the eyes by [`crate::scene::is_visible`].
+    pub solo: Option<ReconId>,
+
     /// Currently selected image.
     pub selected_image: Option<ImageRef>,
 
@@ -247,6 +262,7 @@ impl AppState {
         Self {
             scene: Vec::new(),
             selected_recon: None,
+            solo: None,
             selected_image: None,
             selected_point: None,
             hovered_image: None,
@@ -293,6 +309,9 @@ impl AppState {
         self.select_recon(id);
         self.hovered_image = None;
         self.hovered_point = None;
+        // Arriving also ends any solo: you opened this file to look at it, and
+        // a solo left over from before would hide it the moment it loaded.
+        self.solo = None;
         id
     }
 
@@ -359,10 +378,17 @@ impl AppState {
         node.copy_display_from(&self.scene[index]);
         let new_id = node.id;
         let was_selected = self.selected_recon == Some(id);
+        // A reload mints a fresh id, so the solo — which names an id rather
+        // than a position — has to be re-pointed or refreshing the soloed node
+        // would silently hide it along with everything else.
+        let was_solo = self.solo == Some(id);
         self.scene[index] = node;
         self.forget_recon(id);
         if was_selected || self.selected_recon.is_none() {
             self.selected_recon = Some(new_id);
+        }
+        if was_solo {
+            self.solo = Some(new_id);
         }
         self.status_message = None;
         Some(new_id)
@@ -381,12 +407,19 @@ impl AppState {
             // selection, and panels show their empty-state text.
             self.selected_recon = self.scene.first().map(|n| n.id);
         }
+        if self.solo == Some(id) {
+            // Closing the soloed node ends the solo rather than promoting the
+            // next one: a solo naming a node that is gone would hide the whole
+            // scene, with nothing left on screen to explain why.
+            self.solo = None;
+        }
     }
 
     /// Clear the whole scene.
     pub fn close_all(&mut self) {
         self.scene.clear();
         self.selected_recon = None;
+        self.solo = None;
         self.selected_image = None;
         self.selected_point = None;
         self.hovered_image = None;
@@ -419,6 +452,16 @@ impl AppState {
         self.selected_recon = Some(id);
         self.selected_image = self.selected_image.filter(|i| i.recon == id);
         self.selected_point = self.selected_point.filter(|p| p.recon == id);
+    }
+
+    /// Solo `id`, or end the solo if it is already the soloed node.
+    ///
+    /// Solo is not selection: it changes what is *drawn* and nothing else, so
+    /// this leaves `selected_recon` and every finer selection exactly as they
+    /// were. Soloing a second node moves the solo rather than adding to it —
+    /// "show only this one" has one answer.
+    pub fn toggle_solo(&mut self, id: ReconId) {
+        self.solo = (self.solo != Some(id)).then_some(id);
     }
 
     /// Select an image, and with it the reconstruction that owns it.

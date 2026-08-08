@@ -14,6 +14,65 @@ use sfmtool_core::camera::frustum::{compute_distorted_frustum_grid, compute_frus
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
 
+/// Alpha of an ordinary frustum's color: semi-transparent white.
+///
+/// **Load-bearing for the node tint.** `frustum.wgsl` tints a frustum only when
+/// its alpha is below full, which is how it tints a node's own frustums without
+/// touching the highlight colors below — so this must stay strictly less than
+/// [`FRUSTUM_ALPHA_HIGHLIGHT`], and any future *non*-highlight color has to use
+/// it too. [`frustum_colors`] is asserted against that in the upload tests.
+pub(super) const FRUSTUM_ALPHA_DEFAULT: u32 = 180;
+
+/// Alpha every highlight color is written at. Full opacity is both how a
+/// highlight stands out against the default frustums and how the shader tells
+/// it apart from them.
+pub(super) const FRUSTUM_ALPHA_HIGHLIGHT: u32 = 255;
+
+/// The default (un-highlighted) frustum color: semi-transparent white.
+pub(super) const FRUSTUM_COLOR_DEFAULT: u32 =
+    255 | (255 << 8) | (255 << 16) | (FRUSTUM_ALPHA_DEFAULT << 24);
+
+/// The selected camera: opaque cyan.
+const FRUSTUM_COLOR_SELECTED: u32 = (255 << 8) | (255 << 16) | (FRUSTUM_ALPHA_HIGHLIGHT << 24);
+
+/// A camera observing the selected point: opaque orange.
+const FRUSTUM_COLOR_TRACK: u32 = 255 | (165 << 8) | (FRUSTUM_ALPHA_HIGHLIGHT << 24);
+
+/// Alpha 0 → the shader discards the fragment entirely.
+const FRUSTUM_COLOR_HIDDEN: u32 = 0;
+
+/// The per-image color array for one node: default white, with the selected
+/// camera, the selected point's track cameras, and the camera being viewed
+/// through overriding it in that order of precedence.
+///
+/// Pulled out of [`SceneRenderer::update_frustum_colors`] so the alpha
+/// invariant the tint depends on is assertable without a GPU.
+pub(super) fn frustum_colors(
+    image_count: usize,
+    selected_image: Option<usize>,
+    hidden_image: Option<usize>,
+    track_images: &[usize],
+) -> Vec<u32> {
+    let mut colors: Vec<u32> = vec![FRUSTUM_COLOR_DEFAULT; image_count];
+    if let Some(idx) = selected_image {
+        if idx < image_count {
+            colors[idx] = FRUSTUM_COLOR_SELECTED;
+        }
+    }
+    for &idx in track_images {
+        if idx < image_count && selected_image != Some(idx) {
+            colors[idx] = FRUSTUM_COLOR_TRACK;
+        }
+    }
+    // Hidden must be applied last so it wins over selected/track
+    if let Some(idx) = hidden_image {
+        if idx < image_count {
+            colors[idx] = FRUSTUM_COLOR_HIDDEN;
+        }
+    }
+    colors
+}
+
 impl SceneRenderer {
     /// Upload one reconstruction's camera frustum edge geometry to the GPU.
     ///
@@ -223,8 +282,7 @@ impl SceneRenderer {
         });
 
         // Create per-image color storage buffer (initialized to default white/alpha)
-        let color_default: u32 = 255 | (255 << 8) | (255 << 16) | (180 << 24);
-        let colors: Vec<u32> = vec![color_default; recon.images.len()];
+        let colors: Vec<u32> = vec![FRUSTUM_COLOR_DEFAULT; recon.images.len()];
         let color_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("frustum colors"),
             contents: bytemuck::cast_slice(&colors),
@@ -304,28 +362,7 @@ impl SceneRenderer {
             return;
         };
 
-        let color_default: u32 = 255 | (255 << 8) | (255 << 16) | (180 << 24);
-        let color_selected: u32 = (255 << 8) | (255 << 16) | (255 << 24);
-        let color_track: u32 = 255 | (165 << 8) | (255 << 24); // orange
-        let color_hidden: u32 = 0; // alpha=0 → shader discards
-
-        let mut colors: Vec<u32> = vec![color_default; image_count];
-        if let Some(idx) = selected_image {
-            if idx < image_count {
-                colors[idx] = color_selected;
-            }
-        }
-        for &idx in track_images {
-            if idx < image_count && selected_image != Some(idx) {
-                colors[idx] = color_track;
-            }
-        }
-        // Hidden must be applied last so it wins over selected/track
-        if let Some(idx) = hidden_image {
-            if idx < image_count {
-                colors[idx] = color_hidden;
-            }
-        }
+        let colors = frustum_colors(image_count, selected_image, hidden_image, track_images);
         queue.write_buffer(color_buffer, 0, bytemuck::cast_slice(&colors));
     }
 

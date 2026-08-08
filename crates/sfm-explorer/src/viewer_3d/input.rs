@@ -28,6 +28,14 @@ impl Viewer3D {
     /// With no same-named image the finer selection clears, per the invariant
     /// that all of it lives inside the selected reconstruction.
     ///
+    /// **A solo travels with the step.** Solo and selection are otherwise
+    /// independent — soloing does not select, selecting does not solo — but a
+    /// solo left behind on the node you just stepped away from would leave the
+    /// viewport showing a reconstruction no panel is talking about any more,
+    /// and pressing `]` again would appear to do nothing at all. Soloed
+    /// stepping is A/B comparison in its sharpest form: one reconstruction on
+    /// screen at a time, the same photo, one keystroke apart.
+    ///
     /// Called from `dock.rs` rather than from [`Viewer3D::show`]: stepping is
     /// the one viewport binding that needs the whole scene, not just the node
     /// being drawn.
@@ -75,6 +83,11 @@ impl Viewer3D {
         });
 
         state.selected_recon = Some(new_id);
+        // An active solo follows the step (see the doc comment); no solo stays
+        // no solo — stepping never starts one.
+        if state.solo.is_some() {
+            state.solo = Some(new_id);
+        }
         // A 3D point has no cross-reconstruction identity, so it never carries.
         state.selected_point = None;
         let was_in_camera_view = self

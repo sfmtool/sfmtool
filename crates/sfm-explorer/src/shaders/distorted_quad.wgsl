@@ -18,6 +18,7 @@ struct ReconUniforms {
     point_pick_base: u32,
     image_pick_base: u32,
     pickable: u32,
+    // Node tint: rgb is the palette color, a its strength. a == 0 = original.
     tint_color: vec4<f32>,
     // Read only by points.wgsl; declared here so every shader's view of the
     // shared per-recon buffer stays identical.
@@ -79,7 +80,8 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     let tex_color = textureSample(thumbnail_texture, thumbnail_sampler, atlas_uv, page);
 
     var out: FragOutput;
-    out.color = vec4<f32>(tex_color.rgb, 1.0);
+    // Tinted exactly as in image_quad.wgsl — same surface, tessellated.
+    out.color = vec4<f32>(mix(tex_color.rgb, recon.tint_color.rgb, recon.tint_color.a), 1.0);
     out.linear_depth = 0.0;
     let pick_index = recon.image_pick_base + in.frustum_index;
     out.pick_id = select(PICK_TAG_FRUSTUM | pick_index, PICK_TAG_NONE, recon.pickable == 0u);

@@ -48,8 +48,8 @@ pub(super) fn model_matrix(transform: &Se3Transform) -> [[f32; 4]; 4] {
 }
 
 /// The per-recon uniform block for one node: its model matrix, pick bases, its
-/// splat size, and the two switches the Scene panel drives — whether the node
-/// captures picks, and whether its points at infinity are drawn.
+/// splat size, its tint, and the two switches the Scene panel drives — whether
+/// the node captures picks, and whether its points at infinity are drawn.
 ///
 /// Pulled out of the write loop so the composition of global and per-node state
 /// is assertable without a render pass: this is the only place `interactive`
@@ -72,8 +72,10 @@ pub(super) fn recon_uniforms(
         // node's shaders emit PICK_TAG_NONE, so it renders and occludes but
         // captures no hover and no click.
         pickable: u32::from(bundle.display.interactive),
-        // Alpha 0 = draw the node's original colors (phase 5).
-        tint_color: [0.0; 4],
+        // The Scene panel's `Tint ▸`. `rgb` is the palette color and `a` the
+        // strength the shaders mix it in at — so an untinted node writes
+        // all-zero, and `a == 0` is the "original colors" convention.
+        tint_color: bundle.display.tint.to_uniform(),
         // Effective ∞ visibility: the global HUD toggle AND this node's own ∞
         // mini-toggle.
         show_infinity: f32::from(show_infinity && bundle.display.show_points_at_infinity),

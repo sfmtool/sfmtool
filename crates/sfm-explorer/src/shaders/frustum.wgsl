@@ -27,6 +27,7 @@ struct ReconUniforms {
     point_pick_base: u32,
     image_pick_base: u32,
     pickable: u32,
+    // Node tint: rgb is the palette color, a its strength. a == 0 = original.
     tint_color: vec4<f32>,
     // Read only by points.wgsl; declared here so every shader's view of the
     // shared per-recon buffer stays identical.
@@ -134,9 +135,18 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let b = f32((color_packed >> 16u) & 0xFFu) / 255.0;
     let a = f32((color_packed >> 24u) & 0xFFu) / 255.0;
 
+    // Tint the node's ordinary frustums, never its highlights. The CPU writes
+    // this buffer under one invariant (`upload::frustums`): the plain frustum
+    // white is semi-transparent, and every highlight — the selected camera, the
+    // orange track cameras — is written at *full* alpha. So `a < 1` is exactly
+    // "this is the node's own color, not a signal", and the signals stay the
+    // colors they were chosen to be.
+    let base = vec3<f32>(r, g, b);
+    let color = select(base, mix(base, recon.tint_color.rgb, recon.tint_color.a), a < 1.0);
+
     var out: VertexOutput;
     out.clip_pos = vec4<f32>(clip_pos.xy + offset_ndc * clip_pos.w, clip_pos.zw);
-    out.color = vec3<f32>(r, g, b);
+    out.color = color;
     out.alpha = a;
     out.frustum_index = in.frustum_index;
 
@@ -161,7 +171,8 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     // Highlight hovered frustum (cross-panel hover feedback):
     // override to full-opacity white so it stands out against the
     // default semi-transparent white frustums. The hover uniform is a global
-    // pick index, so the local index is rebased before the compare.
+    // pick index, so the local index is rebased before the compare. Untinted
+    // like the other highlights — this replaces the vertex color outright.
     let pick_index = recon.image_pick_base + in.frustum_index;
     if pick_index == uniforms.hovered_image_index {
         color = vec3<f32>(1.0, 1.0, 1.0);

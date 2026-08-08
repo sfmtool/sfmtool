@@ -144,6 +144,7 @@ impl Viewer3D {
         painter: &egui::Painter,
         rect: Rect,
         scene: &[SceneNode],
+        solo: Option<crate::scene::ReconId>,
         show_controls_help: bool,
         show_fps: bool,
         status_message: Option<&str>,
@@ -158,7 +159,7 @@ impl Viewer3D {
         // if it is wanted. Points at infinity are called out separately — they
         // are directions rather than locations, so a lone total hides how much
         // of the cloud has no position at all.
-        let stats = scene_stats_text(scene, show_fps, fps);
+        let stats = scene_stats_text(scene, solo, show_fps, fps);
         painter.text(
             Pos2::new(rect.left() + 10.0, rect.top() + 10.0),
             egui::Align2::LEFT_TOP,
@@ -227,10 +228,20 @@ impl Viewer3D {
     }
 }
 
-/// The top-left stats line: entity totals over the visible nodes, led by the
-/// reconstruction count once more than one is contributing.
-pub(crate) fn scene_stats_text(scene: &[SceneNode], show_fps: bool, fps: f64) -> String {
-    let totals = visible_stats(scene);
+/// The top-left stats line: entity totals over the nodes actually drawn, led by
+/// the reconstruction count once more than one is contributing.
+///
+/// "Drawn" is the same rule the draw loop and the scene bounds use
+/// (`scene::is_visible`): the node's eye AND the solo override. Soloing one of
+/// two loaded files therefore drops the line back to that file's own totals,
+/// with no leading count — which is exactly what is on screen.
+pub(crate) fn scene_stats_text(
+    scene: &[SceneNode],
+    solo: Option<crate::scene::ReconId>,
+    show_fps: bool,
+    fps: f64,
+) -> String {
+    let totals = visible_stats(scene, solo);
     let points = if totals.points_at_infinity > 0 {
         format!(
             "{} points ({} at infinity)",

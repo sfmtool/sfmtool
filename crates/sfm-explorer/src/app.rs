@@ -273,26 +273,33 @@ impl App {
 
         // Mirror each node's Scene-panel display state onto its bundle. After
         // the uploads above, so a node loaded this frame already has a bundle
-        // to carry it. This is how effective visibility and the interaction
-        // cursor reach the draw loop and the per-recon uniform write: the
+        // to carry it. This is how effective visibility, the interaction cursor
+        // and the tint reach the draw loop and the per-recon uniform write: the
         // renderer ANDs these with the global HUD toggles and never looks at
         // the scene itself.
+        //
+        // `visible` is the one composed value: the node's own eye AND the
+        // scene's solo override, resolved here by `scene::is_visible` so the
+        // draw filter, the bounds union and the stats overlay are all reading
+        // the same rule rather than three copies of it.
         //
         // The node transform rides along in the same sync: from the bundle it
         // becomes the per-recon `model` matrix, scales the node's splat size,
         // and moves its bounding sphere into the union.
         {
             let renderer = &mut self.scene_renderer;
+            let solo = self.state.solo;
             for node in &self.state.scene {
                 renderer.set_node_display(
                     node.id,
                     NodeDisplay {
-                        visible: node.visible,
+                        visible: crate::scene::is_visible(node, solo),
                         show_points: node.show_points,
                         show_cameras: node.show_cameras,
                         show_patches: node.show_patches,
                         show_points_at_infinity: node.show_points_at_infinity,
                         interactive: node.interactive,
+                        tint: node.tint,
                     },
                 );
                 renderer.set_node_transform(node.id, node.transform.clone());

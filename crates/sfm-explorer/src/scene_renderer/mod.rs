@@ -286,6 +286,22 @@ impl SceneRenderer {
             .reduce(union_sphere)
     }
 
+    /// The bundles one scene pass draws, in load order: the nodes that are
+    /// visible at all, whose own group eye for that layer is on.
+    ///
+    /// A layer's effective visibility is the AND of three switches — the global
+    /// HUD toggle (checked by the caller, since it gates the whole pass), the
+    /// node's effective whole-node visibility (its master eye composed with the
+    /// scene's solo, mirrored into `display.visible`), and the node's own group
+    /// eye, which is what `layer` picks out. Shared by every pass in
+    /// `render.rs`, and the same `display.visible` the bounds union reads.
+    fn drawn(&self, layer: fn(&ReconResources) -> bool) -> impl Iterator<Item = &ReconResources> {
+        self.recon_order
+            .iter()
+            .filter_map(|id| self.recons.get(id))
+            .filter(move |b| b.display.visible && layer(b))
+    }
+
     /// Mirror a node's Scene-panel display state onto its GPU bundle.
     ///
     /// A no-op for a node with no bundle yet: the bundle is created by its

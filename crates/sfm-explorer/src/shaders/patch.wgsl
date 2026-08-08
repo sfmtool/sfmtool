@@ -25,6 +25,7 @@ struct ReconUniforms {
     point_pick_base: u32,
     image_pick_base: u32,
     pickable: u32,
+    // Node tint: rgb is the palette color, a its strength. a == 0 = original.
     tint_color: vec4<f32>,
     // Read only by points.wgsl; declared here so every shader's view of the
     // shared per-recon buffer stays identical.
@@ -147,9 +148,13 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     }
 
     var out: FragOutput;
+    // Tint the surfel's texel before the opacity multiply — the tint is a
+    // color, `patch_opacity` a translucency, and mixing in the wrong order
+    // would make a tinted patch's strength depend on how transparent it is.
+    let rgb = mix(texel.rgb, recon.tint_color.rgb, recon.tint_color.a);
     // Premultiplied alpha: hard coverage from the discard above; the global
     // patch_opacity uniform is the only translucency source.
-    out.color = vec4<f32>(texel.rgb * uniforms.patch_opacity, uniforms.patch_opacity);
+    out.color = vec4<f32>(rgb * uniforms.patch_opacity, uniforms.patch_opacity);
     out.linear_depth = 0.0; // EDL passthrough — textured surface, no edge darkening
     // A non-interactive node reads as background rather than passing the pick
     // through to whatever it occludes.

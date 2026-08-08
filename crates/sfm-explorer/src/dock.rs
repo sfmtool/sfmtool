@@ -99,6 +99,7 @@ impl TabViewer for TabContext<'_> {
                         ui,
                         node,
                         &self.state.scene,
+                        self.state.solo,
                         &mut self.state.selected_image,
                         self.state.show_grid,
                         self.state.length_scale,
@@ -407,6 +408,11 @@ impl TabContext<'_> {
             // The Scene panel owns both hover fields while it has the pointer.
             self.state.hovered_image = response.hovered_image;
             self.state.hovered_point = response.hovered_point;
+        }
+        // Solo is display-only and independent of selection, so it neither
+        // waits on the selection application above nor disturbs it.
+        if let Some(id) = response.toggle_solo {
+            self.state.toggle_solo(id);
         }
         if let Some(id) = response.zoom_to_node {
             if let Some(node) = crate::scene::node_by_id(&self.state.scene, id) {

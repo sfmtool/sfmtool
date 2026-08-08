@@ -1,11 +1,10 @@
 # Scene Graph and Multi-Reconstruction Support
 
-*Status: Phases 1–4 implemented — typed refs, per-reconstruction renderer
-resources and picking, the feature itself (multi-load, the Scene Graph panel,
-per-node visibility and interactivity, the selected reconstruction), and node
-transforms with `Align to…` / `Reset Transform`. Phase 5 — the comparison
-affordances built on transforms (tint, solo) — is still design proposal. See
-"Implementation Phases" at the end.*
+*Status: implemented — typed refs, per-reconstruction renderer resources and
+picking, the feature itself (multi-load, the Scene Graph panel, per-node
+visibility and interactivity, the selected reconstruction), node transforms with
+`Align to…` / `Reset Transform`, and the comparison affordances (per-node tint,
+solo). See "Implementation Phases" at the end.*
 
 This document specifies multi-reconstruction support for SfM Explorer: loading
 several `.sfmr` files at once, organizing them as nodes in a scene graph, and a
@@ -129,7 +128,7 @@ pub struct SceneNode {
     pub show_cameras: bool,
     pub show_patches: bool,
     pub show_points_at_infinity: bool,
-    pub tint: NodeTint,              // Original | Tint(color)  — phase 5
+    pub tint: NodeTint,              // Original | Tint(&'static TintColor)
     /// Similarity transform (uniform scale · rotation · translation) mapping
     /// this node's native coordinates into the shared world space. Identity on
     /// load. Set by the "Align to…" operation; see "Node Transforms and
@@ -141,29 +140,37 @@ pub struct SceneNode {
 }
 ```
 
-Everything above is implemented except `tint`, which stays a renderer-side
-default (alpha-0) until phase 5. The renderer does not read `SceneNode`
-directly: each frame `app.rs` mirrors the five display flags plus `interactive`
-onto the node's GPU bundle as a `NodeDisplay`, and the `transform` alongside
-them; the draw loop and per-recon uniform write consult only the bundle.
-`transform` is also carried across a `Reload from Disk`, alongside the display
-flags — a refreshed file should come back where the user put it.
+The renderer does not read `SceneNode` directly: each frame `app.rs` mirrors the
+five display flags plus `interactive` and `tint` onto the node's GPU bundle as a
+`NodeDisplay`, and the `transform` alongside them; the draw loop and per-recon
+uniform write consult only the bundle. `transform` and `tint` are also carried
+across a `Reload from Disk`, alongside the display flags — a refreshed file
+should come back where the user put it, in the color they were telling it apart
+by.
 
 `AppState` replaces its single slot with:
 
 ```rust
 pub scene: Vec<SceneNode>,           // tree order = load order (reorderable later)
 pub selected_recon: Option<ReconId>, // see "The selected reconstruction" below
+pub solo: Option<ReconId>,           // see "Comparison Affordances" below
 ```
 
 The per-node `needs_upload` flag replaces the global `points_need_upload`
 bool; closing a node additionally enqueues a resource-release for its
 `ReconId` (see Rendering).
 
-**Effective visibility** of a layer in node *n* is the AND of three switches:
+**Effective visibility** of a layer in node *n* is the AND of four switches:
 the global HUD Layers toggle (unchanged, now acting as a master switch across
-all nodes), the node's `visible` eye, and the node's per-group eye. The Grid
-stays global-only.
+all nodes), the node's `visible` eye, the scene's solo override (nothing soloed,
+or *n* is what is soloed — see "Comparison Affordances"), and the node's
+per-group eye. The Grid stays global-only.
+
+The middle two are one question — *is this node drawn at all?* — and are
+composed in exactly one place, `scene::is_visible(node, solo)`. `app.rs` folds
+it into the `NodeDisplay::visible` it mirrors onto the bundle each frame, so the
+draw loop and the bounds union read a single flag; the stats overlay calls the
+same function. Nothing else is allowed to spell the rule out again.
 
 **Interactivity** is a separate per-node switch (`interactive`, default on),
 following the Blender-outliner eye/cursor pairing. With it off, the node's
@@ -215,7 +222,9 @@ Rules:
   reconstruction when one exists (selection, and camera view, follow it);
   otherwise the finer selection clears per the invariant above. Flipping
   `[` / `]` while looking through a camera is the core comparison move: same
-  photo, two solves.
+  photo, two solves. An active **solo** travels with the step (see "Comparison
+  Affordances"), which sharpens the same move to one reconstruction on screen at
+  a time.
 - Closing the selected node falls back to selecting the first remaining node;
   an empty scene means no selection (panels show their existing empty-state
   text).
@@ -240,9 +249,12 @@ explicit IDs (the viewport HUD's pattern, `viewer_3d/hud.rs`) — *not*
 `CollapsingHeader` — so expansion state is addressable and testable. Rows are
 fixed-height for virtualization.
 
-**Reconstruction row** — `[▸] [👁] [🖱] run_a   1.2M pts · 243 cams`
-- Expand triangle, visibility eye (node master), interaction cursor toggle
-  (`interactive` — greyed when off), label, compact counts.
+**Reconstruction row** — `[▸] [👁] [S] [🖱] ▪ run_a   1.2M pts · 243 cams`
+- Expand triangle, visibility eye (node master), solo toggle, interaction cursor
+  toggle (`interactive` — greyed when off), tint swatch, label, compact counts.
+- All three glyph toggles carry **explicit ids** rather than egui's auto ids: an
+  auto id is a count of what was allocated before the widget, so anything added
+  to the row ahead of it would move the hover/click state of everything after.
 - Bold + accent bar when selected. Click: select this reconstruction.
   Double-click: zoom-to-fit this node.
 - Everything past the two toggles is **one click target spanning the row** —
@@ -259,16 +271,23 @@ fixed-height for virtualization.
 - Context menu: `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Tint ▸` (Original / palette of distinguishable colors), `Reload from Disk`,
-  `Close`. `Solo` (hide all others) is a nice-to-have.
+  `Close`. **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
+  Affordances").
 - Expanded by default: with one file loaded the node's groups are the whole
   panel, and with a handful the tree is still what answers "what is in here".
   Its Cameras and Points groups start *collapsed* — the image list is the Image
   Browser's job, and an expanded 50K-row list would bury every node below it.
 - Both eyes and the cursor are drawn as dimmable glyph buttons (U+1F441 EYE,
   U+1F5B1 TRACKBALL, U+221E INFINITY — all in egui's bundled proportional
-  fonts, which `scene_graph/tests.rs` pins). The selection accent bar is
-  *painted* rather than written: no bundled proportional glyph is a vertical
-  bar.
+  fonts, which `scene_graph/tests.rs` pins); solo is the letter `S`, dimmed the
+  same way, because no bundled pictograph says "only this one" and a mixer's
+  solo button has said `S` for fifty years. The selection accent bar and the
+  tint swatch are *painted* rather than written: no bundled proportional glyph
+  is a vertical bar, and a painted rect answers no pointer hit — which is what
+  keeps it from competing with the row-wide click target.
+- The master eye is lit from **effective** visibility, so a node another node's
+  solo is hiding reads as dark without its own flag having moved; clicking it
+  still writes `visible`, which takes effect the moment the solo ends.
 - The compact counts are `1.2M` / `12.3K` / `999`; the exact figure, with
   thousands separators, is one row down on the group rows.
 
@@ -324,13 +343,17 @@ pub struct SceneGraphResponse {
     pub align_node: Option<(ReconId, ReconId, AlignOptions)>, // source, target
     pub reset_transform: Option<ReconId>,
     pub zoom_to_node: Option<ReconId>,
+    pub toggle_solo: Option<ReconId>,
     pub close_node: Option<ReconId>,
     pub reload_node: Option<ReconId>,
 }
 ```
 
-`Tint ▸` is the one context-menu entry still absent (phase 5): a menu entry that
-silently does nothing is worse than no entry.
+Note what is *not* in the response: the tint. A tint is per-node display state,
+like the eyes beside it in the same tree, so `Tint ▸` writes it straight into
+the `SceneNode` and the next frame's display mirror carries it to the GPU —
+there is nothing for `dock.rs` to arbitrate. Solo is app-level view state, so it
+travels through the response like every other request the panel makes.
 
 The reconstruction row's menu is built from `egui::Popup::context_menu` with
 `PopupCloseBehavior::CloseOnClickOutside` rather than from
@@ -448,7 +471,7 @@ point_size: f32           // per-recon auto size × global 2^point_size_log2
 point_pick_base: u32
 image_pick_base: u32
 pickable: u32             // 0 → emit PICK_TAG_NONE (node.interactive off)
-tint_color: vec4<f32>     // a = 0 → original colors
+tint_color: vec4<f32>     // rgb = tint, a = strength; a = 0 → original colors
 show_infinity: f32        // global HUD ∞ toggle AND node.show_points_at_infinity
 ```
 
@@ -506,7 +529,8 @@ comparison. Sentinel remains `0xFFFFFFFF`.
   `auto_point_size` across loaded nodes, the value that covers the largest
   splats it has to smooth over.
 - **Scene bounds** (adaptive clip planes, `Z` zoom-to-fit, supernova/grid
-  scaling): the union of visible nodes' bounding spheres, each transformed by
+  scaling): the union of the *effectively* visible nodes' bounding spheres
+  (eye AND solo, the one flag on the bundle), each transformed by
   its node transform — the smallest sphere enclosing them, not a bounding box.
   Recomputed when the visible set, a node transform, or a node's data changes.
   A node contributes bounds only once its points are uploaded, so an empty
@@ -711,6 +735,105 @@ notices, without diffing a `Vec<Se3Transform>`.
 
 ---
 
+## Comparison Affordances
+
+Aligning two reconstructions puts them in one space; these two make that space
+readable. Both are **display-only**: neither touches picking, selection,
+alignment, the `SfmrReconstruction` in memory, or anything on disk.
+
+### Per-node tint
+
+`SceneNode::tint` is `Original | Tint(&'static TintColor)`, set from the
+reconstruction row's `Tint ▸` submenu: `Original`, then a fixed palette, each
+entry written in its own color so the choice is visible while making it.
+
+**The palette is the Okabe–Ito colorblind-safe qualitative set** (Okabe & Ito,
+*Color Universal Design*, 2002), minus its eighth entry, black: a black tint is
+not an identity color but a way to make a node vanish into this viewer's dark
+background, which the eye toggle already does honestly. A *fixed* set rather
+than a free color picker (resolving the draft's open question): the job of a
+tint is telling two nodes apart, which a pre-vetted mutually-distinguishable set
+does by construction and a picker leaves to a user who can, and eventually will,
+pick two blues.
+
+**Composition rule.** `tint_color` is the palette color in `rgb` and a strength
+in `a`, and every scene shader composites the same way:
+
+```wgsl
+color = mix(color, tint_color.rgb, tint_color.a)
+```
+
+so `a = 0` is the identity — the block's stated "original colors" convention —
+and `a = 1` would flatten the node to one flat color. The strength is a constant
+0.7: far enough that a node reads as "the orange one" at a glance, short enough
+that photo-derived point colors keep the shading that says what you are looking
+at. Points, frustum wireframes, image quads, distorted image quads and patch
+surfels all apply it, so a tinted node is tinted everywhere.
+
+**What the tint must not swallow.** The highlight colors exist to be
+distinguishable; a tint that could drag them toward itself would cost exactly
+the legibility they are for. So they are exempt, by two different mechanisms:
+
+- **Point selection (yellow) and hover (cyan), and frustum hover (white)** are
+  applied in the *fragment* stage, after the vertex stage has tinted the base
+  color, and they replace it outright rather than mixing with it. Nothing extra
+  is needed — the ordering is the exemption.
+- **Frustum selection (cyan) and the track orange** arrive through the per-image
+  color storage buffer, which the vertex shader cannot otherwise tell apart from
+  the ordinary frustum white. The convention that separates them: **the default
+  frustum color is semi-transparent (alpha 180) and every highlight is written
+  at full alpha**, so `a < 1` means "this is the node's own color" and is the
+  tint's gate. That is a contract with the CPU-side writer
+  (`scene_renderer::upload::frustums`), stated in named constants on that side
+  and asserted by a test.
+- Track rays are not tinted either: like the background image they are a
+  singleton serving *the* selection, not a node's own geometry.
+
+**In the tree**, a tinted node's row carries a small painted swatch in its tint
+color — otherwise the only way to find out which node is the orange one would be
+to hide the others. Its space is reserved on every row, painted or not, for the
+same reason the selection accent bar's is.
+
+### Solo
+
+`AppState::solo: Option<ReconId>` — while `Some`, only that node is drawn.
+
+**Placement (resolving the draft's open question): the row, not the context
+menu.** Solo is a transient view mode used over and over while comparing — solo
+A, look, solo B, look, off — and a context menu would cost two clicks and a
+popup over the viewport every single time. Tint, set once per node, stays in the
+menu. Clicking `S` on the soloed node ends the solo.
+
+**State model: an overlay on the eyes, never an edit of them.** Soloing writes
+one `Option<ReconId>` and never touches any `SceneNode::visible`, so:
+
+- Un-soloing restores *exactly* the visibility the user had, including nodes
+  they had already hidden by hand. The alternative — hide the others and
+  remember what to restore — is lossy in that case and needs a saved copy that
+  any other path touching `visible` can desync from. One `Option` cannot desync
+  with anything.
+- Soloing B while A is soloed *moves* the solo: "show only this one" has one
+  answer, so the field is a single id rather than a set.
+- An eye toggled while soloed changes nothing on screen and everything the
+  moment the solo ends, which is the honest reading of "solo hides the others".
+  The soloed node's own eye still applies: solo says *hide the others*, not
+  *force this one on*, and switching it off leaves an empty viewport (with the
+  all-hidden bounds fallback keeping the camera where it was).
+- Closing the soloed node ends the solo rather than promoting the next one: a
+  solo naming a node that is gone would hide the whole scene with nothing left
+  on screen to explain why. A **reload** re-points it at the node's new
+  `ReconId`, like the selection. **Opening a file** ends it — you opened that
+  file to look at it.
+
+Solo is not selection: it neither selects the node nor is cleared by selecting
+another. The one place they meet is `[` / `]`, which **carries an active solo
+to the node it lands on** (a solo left behind would leave the viewport showing a
+reconstruction no panel is talking about, and the next `]` would appear to do
+nothing). Soloed stepping is A/B comparison in its sharpest form: one
+reconstruction on screen at a time, the same photo, one keystroke apart.
+
+---
+
 ## Loading, CLI, Window Title
 
 - **File > Open…** uses `rfd`'s `pick_files()` (multi-select) and **appends**
@@ -741,8 +864,9 @@ notices, without diffing a `Vec<Se3Transform>`.
   why a *nameless* first node (demo data) leaves the title at the bare base
   however many files follow it, rather than inventing a name for the count.
 
-The scene-stats overlay (top-left) sums across visible nodes and leads with
-the file count when more than one is loaded:
+The scene-stats overlay (top-left) sums across the effectively visible nodes
+(the same eye-AND-solo rule the draw loop uses) and leads with the file count
+when more than one is contributing:
 `2 reconstructions | 1.4M points (12 at ∞) | 421 images | 60 fps`.
 
 ---
@@ -842,10 +966,35 @@ three against the *old* id.
   would (noop backend), splat size scaling with a scaled node, union bounds and
   the `length_scale` seed following a transform and returning on reset, track
   rays built through it, and the transform carried across a reload.
+- **Tint**: the `Tint ▸` submenu offers `Original` plus every palette entry;
+  picking one writes it to that node and no other, and the menu survives the
+  pick so a second color is one click away; the swatch appears on the tinted row
+  only and takes no room from the others; working the menu moves no selection;
+  the tint survives a reload; an untinted node writes the all-zero `a = 0`
+  uniform and a tinted one writes its color at the strength constant; the
+  palette entries are mutually distinguishable and none is near-black. On the
+  renderer side the tint reaches that node's `ReconUniforms` and nobody else's,
+  and `frustum_colors` is asserted to write every highlight at full alpha and
+  the default below it — the invariant `frustum.wgsl` gates the tint on.
+- **Solo**: the row's toggle reports the node (and reports it again to switch
+  off) without writing any eye, and is not swallowed by the row-wide target nor
+  a source of its context menu; soloing hides every other node while leaving
+  their eyes alone, and un-soloing restores them *including* one hidden before
+  the solo; soloing a second node moves the solo; an eye toggled while soloed
+  applies when the solo ends; closing the soloed node ends the solo, closing
+  another leaves it; opening a file ends it; `[` / `]` carry it. On the renderer
+  side, a node that is not effectively visible drops out of every pass and out
+  of the bounds union, the all-hidden fallback still frames the loaded nodes,
+  and the stats overlay counts the soloed node alone.
 - `ui_basic` keeps matching the base window title, and gains a check that the
-  Scene panel's rows reach a real window. The multi-file title case stays a lib
-  test: driving it through `ui_basic` would need two real `.sfmr` fixtures on
-  disk and a way past the file dialog, for a string `window_title` already
+  Scene panel's rows reach a real window — including the row's solo toggle,
+  since a third glyph button squeezed onto a row is exactly the kind of thing
+  that lays out correctly under `Context::run_ui` and not in a window. The
+  context-menu check covers the flat entries only: a submenu button
+  (`Align to ▸`, `Tint ▸`) does not surface under the accessibility `button`
+  role, and its contents exist only once opened. The multi-file title case stays
+  a lib test: driving it through `ui_basic` would need two real `.sfmr` fixtures
+  on disk and a way past the file dialog, for a string `window_title` already
   decides on its own.
 
 ---
@@ -869,8 +1018,15 @@ three against the *old* id.
 4. **Transforms + alignment** *(done)*: the per-recon model matrix exercised
    end to end, `Align to…` (by cameras and by points), `Reset Transform`,
    status feedback.
-5. **Comparison affordances**: per-node tint palette, solo mode, a numeric
-   transform editor, "Save Aligned Copy…", multi-way align.
+5. **Comparison affordances** *(done)*: per-node tint palette and solo mode —
+   the last display-side pieces of the original design, and what makes two
+   aligned reconstructions readable once they occupy the same space.
+
+The transform editor, "Save Aligned Copy…" and multi-way align were briefly
+folded into phase 5 and have been returned to Future Directions: each is new
+capability rather than a finishing touch, and the export in particular would
+break the invariant every phase has held — that a node transform is view state
+that never touches the reconstruction or the disk.
 
 Phases 1–2 are refactors shippable behind unchanged UX; the feature turns on
 in phase 3.
@@ -907,7 +1063,7 @@ in phase 3.
   benefit at N ≤ 8.)
 - Per-node opacity (ghosting a reference reconstruction) — cheap to add to the
   per-recon uniform block; UI slider placement is the only question.
-- Whether `Solo` (hide all others) earns a spot on the reconstruction row
-  itself rather than the context menu.
-- Tint palette: fixed distinguishable set (Okabe-Ito-like) vs. free color
-  picker. Draft says fixed set first.
+- Should soloing more than one node at a time be possible (a set rather than an
+  `Option`)? Deferred: "show only this one" has one answer, and per-node eyes
+  already express "show these three". Worth revisiting only if comparing three
+  or more aligned nodes turns out to be common.

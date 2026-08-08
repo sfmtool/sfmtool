@@ -4,12 +4,11 @@
 //! The scene graph: the reconstructions the viewer has loaded, and the typed
 //! references that address entities inside them.
 //!
-//! See `specs/gui/gui-scene-graph.md`. Phases 1–4 of that design are in place:
-//! the identity types, the node with its per-node display state and its
-//! similarity transform, and a scene that holds **any number** of nodes —
-//! `File > Open` appends, and the Scene Graph panel ([`crate::scene_graph`]) is
-//! the control surface for them. Node tints (phase 5) are still renderer-side
-//! defaults.
+//! See `specs/gui/gui-scene-graph.md`. All five phases of that design are in
+//! place: the identity types, the node with its per-node display state, its
+//! similarity transform and its tint, and a scene that holds **any number** of
+//! nodes — `File > Open` appends, and the Scene Graph panel
+//! ([`crate::scene_graph`]) is the control surface for them.
 //!
 //! ## Where refs are used, and where local indices survive
 //!
@@ -109,10 +108,109 @@ impl PointRef {
     }
 }
 
-/// One loaded reconstruction and the view state that belongs to it.
+/// One entry of the per-node tint palette: a display name and its color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TintColor {
+    /// What the `Tint ▸` menu calls it.
+    pub name: &'static str,
+    pub rgb: [u8; 3],
+}
+
+/// The colors a node can be tinted with.
 ///
-/// The spec's `tint` is still missing: it arrives with phase 5, when the
-/// renderer first has something other than the original colors to apply.
+/// The Okabe–Ito qualitative palette (Okabe & Ito, *Color Universal Design*,
+/// 2002 — <https://jfly.uni-koeln.de/color/>), which is designed to stay
+/// mutually distinguishable under the common forms of color blindness. Its
+/// eighth entry, black, is left out: a black tint is not an identity color but
+/// a way to make a node vanish into this viewer's dark background, and the eye
+/// toggle already does that honestly.
+///
+/// A fixed set rather than a free color picker (the spec's open question,
+/// settled here): the job of a tint is *telling two nodes apart*, which a
+/// pre-vetted mutually-distinguishable set does by construction and a picker
+/// leaves to the user — who can, and eventually will, pick two blues.
+///
+/// A `static` rather than a `const` so `&TINT_PALETTE[i]` is a real `'static`
+/// reference for a runtime index; [`NodeTint`] stores one.
+pub static TINT_PALETTE: [TintColor; 7] = [
+    TintColor {
+        name: "Orange",
+        rgb: [230, 159, 0],
+    },
+    TintColor {
+        name: "Sky Blue",
+        rgb: [86, 180, 233],
+    },
+    TintColor {
+        name: "Bluish Green",
+        rgb: [0, 158, 115],
+    },
+    TintColor {
+        name: "Yellow",
+        rgb: [240, 228, 66],
+    },
+    TintColor {
+        name: "Blue",
+        rgb: [0, 114, 178],
+    },
+    TintColor {
+        name: "Vermillion",
+        rgb: [213, 94, 0],
+    },
+    TintColor {
+        name: "Reddish Purple",
+        rgb: [204, 121, 167],
+    },
+];
+
+/// How far a tinted node's colors are pulled toward the tint.
+///
+/// The shaders composite as `mix(original, tint.rgb, tint.a)`, so this is that
+/// `a`: 0 keeps the original colors (the per-recon uniform block's stated
+/// convention for "no tint"), 1 flattens the node to one flat color. 0.7 is far
+/// enough that a node reads as "the orange one" at a glance, and short enough
+/// that photo-derived point colors keep the shading that tells you what you are
+/// looking at.
+pub const TINT_STRENGTH: f32 = 0.7;
+
+/// A node's comparison tint: its own colors, or one palette entry mixed into
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NodeTint {
+    /// Draw the reconstruction's own point, thumbnail and patch colors.
+    #[default]
+    Original,
+    /// Mix [`TINT_STRENGTH`] of this color into all of them.
+    Tint(&'static TintColor),
+}
+
+impl NodeTint {
+    /// The `tint_color` vec4 the shaders read: `rgb` in 0..1 with the strength
+    /// in `a`, and all-zero — hence `a == 0`, hence "original colors" — for
+    /// [`NodeTint::Original`].
+    pub fn to_uniform(self) -> [f32; 4] {
+        match self {
+            NodeTint::Original => [0.0; 4],
+            NodeTint::Tint(color) => [
+                color.rgb[0] as f32 / 255.0,
+                color.rgb[1] as f32 / 255.0,
+                color.rgb[2] as f32 / 255.0,
+                TINT_STRENGTH,
+            ],
+        }
+    }
+
+    /// The tint's own color, for the Scene panel's swatch and menu. `None` when
+    /// the node is drawn in its original colors.
+    pub fn rgb(self) -> Option<[u8; 3]> {
+        match self {
+            NodeTint::Original => None,
+            NodeTint::Tint(color) => Some(color.rgb),
+        }
+    }
+}
+
+/// One loaded reconstruction and the view state that belongs to it.
 pub struct SceneNode {
     pub id: ReconId,
     /// Display label: the file stem, or `"demo"` for demo data, disambiguated
@@ -142,6 +240,14 @@ pub struct SceneNode {
     pub show_patches: bool,
     /// Sub-toggle of [`SceneNode::show_points`]: the `w = 0` directions.
     pub show_points_at_infinity: bool,
+    /// Comparison tint: a color mixed into everything this node draws, so two
+    /// reconstructions sharing one space can be told apart at a glance. Set
+    /// from the Scene panel's `Tint ▸` menu.
+    ///
+    /// Display state like the eyes: it never touches the reconstruction, and it
+    /// is deliberately powerless over the highlight colors — selection, hover
+    /// and the track orange stay themselves (see the shaders).
+    pub tint: NodeTint,
 
     /// Similarity transform (uniform scale · rotation · translation) mapping
     /// this node's native coordinates into the shared world space. Identity on
@@ -170,6 +276,7 @@ impl SceneNode {
             show_cameras: true,
             show_patches: true,
             show_points_at_infinity: true,
+            tint: NodeTint::Original,
             transform: Se3Transform::identity(),
         }
     }
@@ -217,12 +324,13 @@ impl SceneNode {
             || t.rotation != sfmtool_core::RotQuaternion::identity()
     }
 
-    /// Copy the per-node display state (eyes, interaction cursor, transform)
-    /// from `other`.
+    /// Copy the per-node display state (eyes, interaction cursor, tint,
+    /// transform) from `other`.
     ///
     /// Used by `Reload from Disk`, which is a fresh read of the same file and
     /// so should not also reset how the node is being displayed — an alignment
-    /// the user fitted before refreshing the file included.
+    /// the user fitted before refreshing the file included, and the tint that
+    /// is how they were telling it apart from the file beside it.
     pub fn copy_display_from(&mut self, other: &SceneNode) {
         self.visible = other.visible;
         self.interactive = other.interactive;
@@ -230,6 +338,7 @@ impl SceneNode {
         self.show_cameras = other.show_cameras;
         self.show_patches = other.show_patches;
         self.show_points_at_infinity = other.show_points_at_infinity;
+        self.tint = other.tint;
         self.transform = other.transform.clone();
     }
 }
@@ -300,13 +409,30 @@ pub struct SceneStats {
     pub images: usize,
 }
 
-/// Sum the scene's entity counts over the nodes whose master eye is on.
+/// Whether a node is drawn at all: its own master eye, **and** the scene's solo
+/// override if one is active.
+///
+/// The single definition of effective node visibility, and deliberately the
+/// only one. Solo is a *view mode* layered over the eyes rather than a bulk edit
+/// of them (`solo` names at most one node, and un-soloing restores whatever the
+/// user had set), so every consumer has to compose the two the same way — the
+/// draw loop and the scene bounds through the `NodeDisplay` mirror `app.rs`
+/// builds from this, the stats overlay through [`visible_stats`].
+///
+/// Note what it is *not* the AND of: the global HUD layer toggles and the
+/// per-group eyes are per-layer, applied where each layer is drawn. This is the
+/// whole-node question.
+pub fn is_visible(node: &SceneNode, solo: Option<ReconId>) -> bool {
+    node.visible && solo.is_none_or(|id| id == node.id)
+}
+
+/// Sum the scene's entity counts over the nodes that are actually drawn.
 ///
 /// Hidden nodes drop out entirely: the overlay describes what is on screen, and
-/// a node switched off is not.
-pub fn visible_stats(scene: &[SceneNode]) -> SceneStats {
+/// a node switched off — by its own eye or by another node's solo — is not.
+pub fn visible_stats(scene: &[SceneNode], solo: Option<ReconId>) -> SceneStats {
     let mut stats = SceneStats::default();
-    for node in scene.iter().filter(|n| n.visible) {
+    for node in scene.iter().filter(|n| is_visible(n, solo)) {
         stats.recons += 1;
         stats.points += node.recon.points.len();
         stats.points_at_infinity += node.recon.metadata.infinity_point_count as usize;
