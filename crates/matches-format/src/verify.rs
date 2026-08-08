@@ -37,7 +37,7 @@ fn structure_errors(metadata: &MatchesMetadata, entry_names: &[String]) -> Vec<S
 
     // Per-image dimensions are mandatory since version 4 and never stored
     // before it.
-    let has_dims = has_prefix("images/image_dims.");
+    let has_dims = has_prefix(entries::images_image_dims_prefix());
     if metadata.version >= 4 && !has_dims {
         errors.push(
             "version 4+ file is missing images/image_dims (mandatory since version 4)".into(),
@@ -133,11 +133,11 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
     let mut errors = Vec::new();
 
     // Read stored hashes
-    let content_hash_bytes = read_zst_entry(&mut archive, "content_hash.json.zst")?;
+    let content_hash_bytes = read_zst_entry(&mut archive, entries::content_hash())?;
     let stored: MatchesContentHash = serde_json::from_slice(&content_hash_bytes)?;
 
     // Read metadata for counts
-    let metadata_raw = read_zst_entry(&mut archive, "metadata.json.zst")?;
+    let metadata_raw = read_zst_entry(&mut archive, entries::metadata())?;
     let metadata: MatchesMetadata = serde_json::from_slice(&metadata_raw)?;
     let image_count = metadata.image_count as usize;
 

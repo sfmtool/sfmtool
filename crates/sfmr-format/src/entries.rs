@@ -16,9 +16,11 @@
 //! Dimension parameters are `impl Display` rather than `usize` because the same
 //! conceptual count reaches these functions in different integer types — a
 //! `usize` local in [`read`](crate::read) and [`write`](crate::write), a `u32`
-//! or `u64` deserialized from section metadata in [`verify`](crate::verify).
-//! The token is only ever interpolated, so widening the parameter is preferable
-//! to `as usize` casts at the call sites.
+//! deserialized from section metadata in [`verify`](crate::verify). The token is
+//! only ever interpolated, so widening the parameter is preferable to `as usize`
+//! casts at the call sites. The trade-off is that `Display` is wider than the
+//! intent — it would also accept a float or a signed value — so it documents
+//! less than a concrete type would.
 //!
 //! ## Version-dependent names
 //!
@@ -34,12 +36,32 @@
 //!
 //! The writer only ever emits the current spelling, so it passes `false`.
 //!
-//! ## Not used by the tests
+//! ## How the tests use this module
 //!
-//! `tests.rs` spells archive names out literally (`"tracks/point_indexes.8.uint32.zst"`).
-//! That is deliberate: routing the tests through this module would make them
-//! agree with whatever these functions produce, which is exactly the property
-//! under test. Leave them literal.
+//! `tests::entry_names_are_pinned` calls these functions and compares each
+//! result against a literal spelled out in `tests.rs`. Everywhere else, tests
+//! that name an archive entry spell it literally rather than calling in here —
+//! routing them through this module would make them agree with whatever these
+//! functions produce, which is the property under test.
+//!
+//! That pin covers spelling and shape only. Which count a given entry is sized
+//! by is decided at the call sites, not here, so a caller passing
+//! `observation_count` where `point_count` belongs is invisible to it;
+//! `tests::archive_entry_names_pin_call_sites` pins the written archive's
+//! listing to cover that.
+
+/// `metadata.json.zst` — the top-level `.sfmr` metadata.
+///
+/// Top-level entries carry no section prefix and are not part of any section
+/// hash; they sit at the archive root alongside the section directories.
+pub(crate) fn metadata() -> &'static str {
+    "metadata.json.zst"
+}
+
+/// `content_hash.json.zst` — the top-level per-section digest record.
+pub(crate) fn content_hash() -> &'static str {
+    "content_hash.json.zst"
+}
 
 /// `cameras/metadata.json.zst` — the camera-intrinsics array.
 pub(crate) fn cameras_metadata() -> &'static str {

@@ -54,7 +54,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
     // === Top-level metadata (always emitted at the current format version) ===
     let mut metadata = data.metadata.clone();
     metadata.version = MATCHES_FORMAT_VERSION;
-    let metadata_bytes = write_json_entry(&mut zip, "metadata.json.zst", &metadata, zstd_level)?;
+    let metadata_bytes = write_json_entry(&mut zip, entries::metadata(), &metadata, zstd_level)?;
     let metadata_hash = xxhash_rust::xxh3::xxh3_128(&metadata_bytes);
     section_digests.push(metadata_hash);
 
@@ -446,7 +446,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         two_view_geometries_xxh128: tvg_hash.map(format_hash),
         content_xxh128: format_hash(content_hash_value),
     };
-    write_json_entry(&mut zip, "content_hash.json.zst", &content_hash, zstd_level)?;
+    write_json_entry(&mut zip, entries::content_hash(), &content_hash, zstd_level)?;
 
     zip.finish()?;
     Ok(())

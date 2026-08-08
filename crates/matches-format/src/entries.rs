@@ -17,19 +17,45 @@
 //! Dimension parameters are `impl Display` rather than `usize` because the same
 //! conceptual count reaches these functions in different integer types — a
 //! `usize` local in [`read`](crate::read) and [`write`](crate::write), a `u32`
-//! or `u64` deserialized from section metadata in [`verify`](crate::verify).
-//! The token is only ever interpolated, so widening the parameter is preferable
-//! to `as usize` casts at the call sites.
+//! deserialized from section metadata in [`verify`](crate::verify). The token is
+//! only ever interpolated, so widening the parameter is preferable to `as usize`
+//! casts at the call sites. The trade-off is that `Display` is wider than the
+//! intent — it would also accept a float or a signed value — so it documents
+//! less than a concrete type would.
+//!
+//! The one exception is [`clusters_cluster_starts`], which takes a concrete
+//! `usize` because it does arithmetic on the count rather than only
+//! interpolating it.
 //!
 //! Unlike `.sfmr`, no `.matches` entry has been renamed across format versions,
 //! so every function here has a single spelling.
 //!
-//! ## Not used by the tests
+//! ## How the tests use this module
 //!
-//! `tests.rs` spells archive names out literally, and
-//! `tests::entry_names_are_pinned` compares this module's output against those
-//! literals. Routing the tests through this module would make them agree with
-//! whatever these functions produce, which is the property under test.
+//! `tests::entry_names_are_pinned` calls these functions and compares each
+//! result against a literal spelled out in `tests.rs`. Everywhere else, tests
+//! that name an archive entry spell it literally rather than calling in here —
+//! routing them through this module would make them agree with whatever these
+//! functions produce, which is the property under test.
+//!
+//! That pin covers spelling and shape only. Which count a given entry is sized
+//! by is decided at the call sites, not here, so a caller passing
+//! `member_count` where `cluster_count` belongs is invisible to it. The
+//! `.sfmr` crate pins its written archive's listing to cover that; this crate
+//! has no equivalent yet.
+
+/// `metadata.json.zst` — the top-level `.matches` metadata.
+///
+/// Top-level entries carry no section prefix and are not part of any section
+/// hash; they sit at the archive root alongside the section directories.
+pub(crate) fn metadata() -> &'static str {
+    "metadata.json.zst"
+}
+
+/// `content_hash.json.zst` — the top-level per-section digest record.
+pub(crate) fn content_hash() -> &'static str {
+    "content_hash.json.zst"
+}
 
 /// `images/metadata.json.zst` — image-section metadata.
 pub(crate) fn images_metadata() -> &'static str {
@@ -48,7 +74,18 @@ pub(crate) fn images_feature_counts(image_count: impl std::fmt::Display) -> Stri
 
 /// `images/image_dims` — `(width, height)` per image.
 pub(crate) fn images_image_dims(image_count: impl std::fmt::Display) -> String {
-    format!("images/image_dims.{image_count}.2.uint32.zst")
+    format!("{}{image_count}.2.uint32.zst", images_image_dims_prefix())
+}
+
+/// The `images/image_dims` name up to and including the dot before its count.
+///
+/// `verify` tests for this entry's *presence* — it is mandatory from version 4
+/// and forbidden before it — without knowing `image_count`, so it matches on
+/// this prefix. Deriving it here rather than spelling it out there means a
+/// rename cannot silently turn that check into a no-op, which would report
+/// every valid version 4+ file as missing the entry.
+pub(crate) fn images_image_dims_prefix() -> &'static str {
+    "images/image_dims."
 }
 
 /// `images/feature_tool_hashes` — XXH128 identifying the feature tool per image.

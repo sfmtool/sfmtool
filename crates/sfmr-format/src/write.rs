@@ -190,7 +190,7 @@ pub fn write_sfmr_with_options(
     // === Top-level metadata ===
     let metadata_bytes = write_json_entry(
         &mut zip,
-        "metadata.json.zst",
+        entries::metadata(),
         &data.metadata,
         options.zstd_level,
     )?;
@@ -652,7 +652,7 @@ pub fn write_sfmr_with_options(
     };
     write_json_entry(
         &mut zip,
-        "content_hash.json.zst",
+        entries::content_hash(),
         &content_hash,
         options.zstd_level,
     )?;

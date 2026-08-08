@@ -21,7 +21,7 @@ pub fn read_matches_metadata(path: &Path) -> Result<MatchesMetadata, MatchesErro
         source: e,
     })?;
     let mut archive = zip::ZipArchive::new(file)?;
-    Ok(read_json_entry(&mut archive, "metadata.json.zst")?)
+    Ok(read_json_entry(&mut archive, entries::metadata())?)
 }
 
 /// Read a complete `.matches` file into columnar data.
@@ -56,8 +56,8 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     let mut archive = zip::ZipArchive::new(file)?;
 
     // Top-level metadata
-    let mut metadata: MatchesMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
-    let content_hash: MatchesContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
+    let mut metadata: MatchesMetadata = read_json_entry(&mut archive, entries::metadata())?;
+    let content_hash: MatchesContentHash = read_json_entry(&mut archive, entries::content_hash())?;
 
     // Reject versions newer than this build understands; their semantics are
     // unknown so reading with current-version assumptions would mislead.

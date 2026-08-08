@@ -25,11 +25,11 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     let mut errors = Vec::new();
 
     // Read stored hashes
-    let content_hash_bytes = read_zst_entry(&mut archive, "content_hash.json.zst")?;
+    let content_hash_bytes = read_zst_entry(&mut archive, entries::content_hash())?;
     let stored: ContentHash = serde_json::from_slice(&content_hash_bytes)?;
 
     // Read metadata for counts
-    let metadata_raw = read_zst_entry(&mut archive, "metadata.json.zst")?;
+    let metadata_raw = read_zst_entry(&mut archive, entries::metadata())?;
     let metadata: SfmrMetadata = serde_json::from_slice(&metadata_raw)?;
     let image_count = metadata.image_count as usize;
     let point_count = metadata.point_count as usize;

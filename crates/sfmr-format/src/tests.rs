@@ -1767,9 +1767,17 @@ fn json_maps_serialize_in_sorted_key_order() {
 /// loudly, because the writer's copy and the reader's copy disagreed; that
 /// safety net is gone, and this list replaces it.
 ///
-/// Each dimension gets a distinct value so a template that interpolates the
-/// wrong count — `point_count` where `image_count` belongs — fails here too,
-/// not just a misspelt path.
+/// **What this pins and what it does not.** This test fixes the *spelling and
+/// shape* of each template. It does **not** fix which count a given call site
+/// passes — that decision lives in `read`/`write`/`verify`, and swapping
+/// `point_count` for `observation_count` at all three call sites of one entry
+/// leaves this test green. `archive_entry_names_pin_call_sites` covers that.
+///
+/// Dimension values are distinct from each other **and** from every structural
+/// constant that appears in a template (`2`, `3`, `4`, `128`). That second part
+/// matters: with `sensor_count = 3`, a template that hard-coded the count as
+/// `rigs/sensor_translations_xyz.3.3.…` would render identically to the correct
+/// one and this test would not notice.
 ///
 /// Renaming an on-disk entry is a format change. It should require deliberately
 /// editing this list, and bumping `SFMR_FORMAT_VERSION` with a compatibility
@@ -1778,8 +1786,9 @@ fn json_maps_serialize_in_sorted_key_order() {
 fn entry_names_are_pinned() {
     use crate::entries as e;
 
-    // Distinct per-dimension values; see doc comment.
-    let (images, points, obs, sensors, frames, buckets, r) = (2, 5, 8, 3, 4, 7, 9);
+    // Top level (no section prefix, not part of any section hash).
+    assert_eq!(e::metadata(), "metadata.json.zst");
+    assert_eq!(e::content_hash(), "content_hash.json.zst");
 
     // Fixed-name JSON sections.
     assert_eq!(e::cameras_metadata(), "cameras/metadata.json.zst");
@@ -1794,138 +1803,207 @@ fn entry_names_are_pinned() {
     assert_eq!(e::points3d_metadata(), "points3d/metadata.json.zst");
     assert_eq!(e::tracks_metadata(), "tracks/metadata.json.zst");
 
-    // Rigs / frames.
+    // Rigs / frames.  sensor_count = 19, frame_count = 23, image_count = 11.
     assert_eq!(
-        e::rigs_sensor_camera_indexes(sensors),
-        "rigs/sensor_camera_indexes.3.uint32.zst"
+        e::rigs_sensor_camera_indexes(19),
+        "rigs/sensor_camera_indexes.19.uint32.zst"
     );
     assert_eq!(
-        e::rigs_sensor_quaternions_wxyz(sensors),
-        "rigs/sensor_quaternions_wxyz.3.4.float64.zst"
+        e::rigs_sensor_quaternions_wxyz(19),
+        "rigs/sensor_quaternions_wxyz.19.4.float64.zst"
     );
     assert_eq!(
-        e::rigs_sensor_translations_xyz(sensors),
-        "rigs/sensor_translations_xyz.3.3.float64.zst"
+        e::rigs_sensor_translations_xyz(19),
+        "rigs/sensor_translations_xyz.19.3.float64.zst"
     );
     assert_eq!(
-        e::frames_image_frame_indexes(images),
-        "frames/image_frame_indexes.2.uint32.zst"
+        e::frames_image_frame_indexes(11),
+        "frames/image_frame_indexes.11.uint32.zst"
     );
     assert_eq!(
-        e::frames_image_sensor_indexes(images),
-        "frames/image_sensor_indexes.2.uint32.zst"
+        e::frames_image_sensor_indexes(11),
+        "frames/image_sensor_indexes.11.uint32.zst"
     );
     assert_eq!(
-        e::frames_rig_indexes(frames),
-        "frames/rig_indexes.4.uint32.zst"
-    );
-
-    // Images.
-    assert_eq!(
-        e::images_camera_indexes(images),
-        "images/camera_indexes.2.uint32.zst"
-    );
-    assert_eq!(
-        e::images_quaternions_wxyz(images),
-        "images/quaternions_wxyz.2.4.float64.zst"
-    );
-    assert_eq!(
-        e::images_translations_xyz(images),
-        "images/translations_xyz.2.3.float64.zst"
-    );
-    assert_eq!(
-        e::images_image_file_hashes(images),
-        "images/image_file_hashes.2.uint128.zst"
-    );
-    assert_eq!(
-        e::images_feature_tool_hashes(images),
-        "images/feature_tool_hashes.2.uint128.zst"
-    );
-    assert_eq!(
-        e::images_sift_content_hashes(images),
-        "images/sift_content_hashes.2.uint128.zst"
-    );
-    assert_eq!(
-        e::images_thumbnails_y_x_rgb(images),
-        "images/thumbnails_y_x_rgb.2.128.128.3.uint8.zst"
-    );
-    assert_eq!(
-        e::images_observed_depth_histogram_counts(images, buckets),
-        "images/observed_depth_histogram_counts.2.7.uint32.zst"
+        e::frames_rig_indexes(23),
+        "frames/rig_indexes.23.uint32.zst"
     );
 
-    // Points3D.
+    // Images.  image_count = 11, num_buckets = 29.
     assert_eq!(
-        e::points3d_colors_rgb(points),
-        "points3d/colors_rgb.5.3.uint8.zst"
+        e::images_camera_indexes(11),
+        "images/camera_indexes.11.uint32.zst"
     );
     assert_eq!(
-        e::points3d_reprojection_errors(points),
-        "points3d/reprojection_errors.5.float32.zst"
+        e::images_quaternions_wxyz(11),
+        "images/quaternions_wxyz.11.4.float64.zst"
     );
     assert_eq!(
-        e::points3d_normal_confidence(points),
-        "points3d/normal_confidence.5.uint8.zst"
+        e::images_translations_xyz(11),
+        "images/translations_xyz.11.3.float64.zst"
     );
     assert_eq!(
-        e::points3d_patch_u_halfvec_xyz(points),
-        "points3d/patch_u_halfvec_xyz.5.3.float32.zst"
+        e::images_image_file_hashes(11),
+        "images/image_file_hashes.11.uint128.zst"
     );
     assert_eq!(
-        e::points3d_patch_v_halfvec_xyz(points),
-        "points3d/patch_v_halfvec_xyz.5.3.float32.zst"
+        e::images_feature_tool_hashes(11),
+        "images/feature_tool_hashes.11.uint128.zst"
     );
     assert_eq!(
-        e::points3d_patch_bitmaps_y_x_rgba(points, r),
-        "points3d/patch_bitmaps_y_x_rgba.5.9.9.4.uint8.zst"
+        e::images_sift_content_hashes(11),
+        "images/sift_content_hashes.11.uint128.zst"
+    );
+    // The 128s here are the fixed thumbnail edge, not a dimension.
+    assert_eq!(
+        e::images_thumbnails_y_x_rgb(11),
+        "images/thumbnails_y_x_rgb.11.128.128.3.uint8.zst"
+    );
+    assert_eq!(
+        e::images_observed_depth_histogram_counts(11, 29),
+        "images/observed_depth_histogram_counts.11.29.uint32.zst"
     );
 
-    // Tracks.
+    // Points3D.  point_count = 13, patch edge r = 31.
     assert_eq!(
-        e::tracks_image_indexes(obs),
-        "tracks/image_indexes.8.uint32.zst"
+        e::points3d_colors_rgb(13),
+        "points3d/colors_rgb.13.3.uint8.zst"
     );
     assert_eq!(
-        e::tracks_feature_indexes(obs),
-        "tracks/feature_indexes.8.uint32.zst"
+        e::points3d_reprojection_errors(13),
+        "points3d/reprojection_errors.13.float32.zst"
     );
     assert_eq!(
-        e::tracks_keypoints_xy(obs),
-        "tracks/keypoints_xy.8.2.float32.zst"
+        e::points3d_normal_confidence(13),
+        "points3d/normal_confidence.13.uint8.zst"
     );
     assert_eq!(
-        e::tracks_observation_confidence(obs),
-        "tracks/observation_confidence.8.uint8.zst"
+        e::points3d_patch_u_halfvec_xyz(13),
+        "points3d/patch_u_halfvec_xyz.13.3.float32.zst"
     );
     assert_eq!(
-        e::tracks_observation_counts(points),
-        "tracks/observation_counts.5.uint32.zst"
+        e::points3d_patch_v_halfvec_xyz(13),
+        "points3d/patch_v_halfvec_xyz.13.3.float32.zst"
+    );
+    // r appears twice (square bitmap) and must not be confused with point_count.
+    assert_eq!(
+        e::points3d_patch_bitmaps_y_x_rgba(13, 31),
+        "points3d/patch_bitmaps_y_x_rgba.13.31.31.4.uint8.zst"
+    );
+
+    // Tracks.  observation_count = 17; observation_counts is sized by points.
+    assert_eq!(
+        e::tracks_image_indexes(17),
+        "tracks/image_indexes.17.uint32.zst"
+    );
+    assert_eq!(
+        e::tracks_feature_indexes(17),
+        "tracks/feature_indexes.17.uint32.zst"
+    );
+    assert_eq!(
+        e::tracks_keypoints_xy(17),
+        "tracks/keypoints_xy.17.2.float32.zst"
+    );
+    assert_eq!(
+        e::tracks_observation_confidence(17),
+        "tracks/observation_confidence.17.uint8.zst"
+    );
+    assert_eq!(
+        e::tracks_observation_counts(13),
+        "tracks/observation_counts.13.uint32.zst"
     );
 
     // Version-dependent names: both spellings, since `read` and `verify` still
     // have to open legacy archives.
     assert_eq!(
-        e::points3d_positions(true, points),
-        "points3d/positions_xyz.5.3.float64.zst"
+        e::points3d_positions(true, 13),
+        "points3d/positions_xyz.13.3.float64.zst"
     );
     assert_eq!(
-        e::points3d_positions(false, points),
-        "points3d/positions_xyzw.5.4.float64.zst"
+        e::points3d_positions(false, 13),
+        "points3d/positions_xyzw.13.4.float64.zst"
     );
     assert_eq!(
-        e::points3d_normals(true, points),
-        "points3d/estimated_normals_xyz.5.3.float32.zst"
+        e::points3d_normals(true, 13),
+        "points3d/estimated_normals_xyz.13.3.float32.zst"
     );
     assert_eq!(
-        e::points3d_normals(false, points),
-        "points3d/normals_xyz.5.3.float32.zst"
+        e::points3d_normals(false, 13),
+        "points3d/normals_xyz.13.3.float32.zst"
     );
     assert_eq!(
-        e::tracks_point_indexes(true, obs),
-        "tracks/points3d_indexes.8.uint32.zst"
+        e::tracks_point_indexes(true, 17),
+        "tracks/points3d_indexes.17.uint32.zst"
     );
     assert_eq!(
-        e::tracks_point_indexes(false, obs),
-        "tracks/point_indexes.8.uint32.zst"
+        e::tracks_point_indexes(false, 17),
+        "tracks/point_indexes.17.uint32.zst"
     );
+}
+
+/// The archive a real write produces, pinned entry by entry.
+///
+/// `entry_names_are_pinned` fixes each template in `entries.rs`, but the choice
+/// of *which* count sizes a given entry lives at the call sites in `read`,
+/// `write` and `verify` — and that choice is invisible to it. Passing
+/// `observation_count` where `tracks/observation_counts` wants `point_count`,
+/// at all three call sites, produces an archive no other build can read while
+/// leaving every other test in this file green.
+///
+/// So this test writes an actual archive and pins the resulting ZIP listing.
+/// `make_test_data` uses `image_count = 3`, `point_count = 5`,
+/// `observation_count = 8` — all distinct, which is what makes a swapped count
+/// show up here as a changed number.
+#[test]
+fn archive_entry_names_pin_call_sites() {
+    let dir = std::env::temp_dir().join("sfmr_test_entry_name_pin");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pin.sfmr");
+
+    // Turn on the optional columns that have their own entries.
+    let mut data = make_test_data();
+    data.observation_confidence = Some(Array1::from_vec(vec![255u8; 8]));
+    write_sfmr(&path, &mut data).unwrap();
+
+    let f = std::fs::File::open(&path).unwrap();
+    let mut zip = zip::ZipArchive::new(f).unwrap();
+    let mut got: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .collect();
+    got.sort();
+
+    let expected = [
+        "cameras/metadata.json.zst",
+        "content_hash.json.zst",
+        "images/camera_indexes.3.uint32.zst",
+        "images/depth_statistics.json.zst",
+        "images/feature_tool_hashes.3.uint128.zst",
+        "images/metadata.json.zst",
+        "images/names.json.zst",
+        "images/observed_depth_histogram_counts.3.128.uint32.zst",
+        "images/quaternions_wxyz.3.4.float64.zst",
+        "images/sift_content_hashes.3.uint128.zst",
+        "images/thumbnails_y_x_rgb.3.128.128.3.uint8.zst",
+        "images/translations_xyz.3.3.float64.zst",
+        "metadata.json.zst",
+        "points3d/colors_rgb.5.3.uint8.zst",
+        "points3d/metadata.json.zst",
+        "points3d/normals_xyz.5.3.float32.zst",
+        "points3d/positions_xyzw.5.4.float64.zst",
+        "points3d/reprojection_errors.5.float32.zst",
+        "tracks/feature_indexes.8.uint32.zst",
+        "tracks/image_indexes.8.uint32.zst",
+        "tracks/metadata.json.zst",
+        "tracks/observation_confidence.8.uint8.zst",
+        "tracks/observation_counts.5.uint32.zst",
+        "tracks/point_indexes.8.uint32.zst",
+    ];
+    assert_eq!(
+        got, expected,
+        "archive entry listing changed — a call site is passing a different \
+         count, or an entry was added, removed or renamed"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

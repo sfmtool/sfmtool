@@ -306,10 +306,16 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
 > literals at all. Layer (2), the invariant merge, is untouched and stands._
 >
 > _Two corrections to the measurement below, both found while doing the work._
-> _First, the `sfmr-format` count of **27 is an undercount; it is 33**. The
-> extraction regex used for this report required `[a-z_]` before the `/`, which
-> silently skipped the entire `points3d/` section — that prefix contains a digit.
-> `matches-format`'s 32 is correct. Total extracted: **65 templates**, not 59._
+> _First, the `sfmr-format` count of **27 is an undercount; it is 33**, on this
+> report's own metric (templates whose literal text is identical in all three of
+> read/write/verify). The extraction regex used here required `[a-z_]` before
+> the `/`, which silently skipped the entire `points3d/` section — that prefix
+> contains a digit. `matches-format`'s 32 is correct, giving **65 triplicated
+> templates**, not 59. Two adjacent numbers, since this metric is easy to
+> conflate: normalizing interpolation-variable names (so `{r}` and
+> `{patch_bitmap_r}` count as one template) makes it 34 + 32; and the **union**
+> of distinct templates across the three files — which is what `entries.rs` has
+> to cover, and so what its function count tracks — is 40 + 32._
 >
 > _Second, and more important: the claim in Top 3 that "a mistake cannot be
 > subtle — a wrong name fails every round-trip test immediately" **was true

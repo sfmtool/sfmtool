@@ -22,7 +22,7 @@ pub fn read_sfmr_metadata(path: &Path) -> Result<SfmrMetadata, SfmrError> {
         source: e,
     })?;
     let mut archive = zip::ZipArchive::new(file)?;
-    Ok(read_json_entry(&mut archive, "metadata.json.zst")?)
+    Ok(read_json_entry(&mut archive, entries::metadata())?)
 }
 
 /// Read only the content-integrity hashes from a `.sfmr` file.
@@ -37,7 +37,7 @@ pub fn read_sfmr_content_hash(path: &Path) -> Result<ContentHash, SfmrError> {
         source: e,
     })?;
     let mut archive = zip::ZipArchive::new(file)?;
-    Ok(read_json_entry(&mut archive, "content_hash.json.zst")?)
+    Ok(read_json_entry(&mut archive, entries::content_hash())?)
 }
 
 /// Read a complete `.sfmr` file into columnar data.
@@ -50,8 +50,8 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     let mut archive = zip::ZipArchive::new(file)?;
 
     // Top-level metadata
-    let mut metadata: SfmrMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
-    let content_hash: ContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
+    let mut metadata: SfmrMetadata = read_json_entry(&mut archive, entries::metadata())?;
+    let content_hash: ContentHash = read_json_entry(&mut archive, entries::content_hash())?;
 
     // Reject versions newer than this build understands; their layout is unknown
     // so reading with current-version assumptions would misparse silently.
@@ -298,11 +298,19 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     };
 
     // Optional per-point patch frame (version 3+), stored beside the normals.
+    // Takes the entry name rather than a field stem, so the name comes from
+    // `entries` like every other read. The stem for the error message is
+    // recovered from the name instead of being passed a second time.
     let read_vec3 = |archive: &mut zip::ZipArchive<std::fs::File>,
-                     entry: &str,
-                     field: &str|
+                     entry: &str|
      -> Result<Array2<f32>, SfmrError> {
         let v: Vec<f32> = read_binary_array(archive, entry, point_count * 3)?;
+        let field = entry
+            .rsplit_once('/')
+            .map_or(entry, |(_, leaf)| leaf)
+            .split('.')
+            .next()
+            .unwrap_or(entry);
         Array2::from_shape_vec((point_count, 3), v)
             .map_err(|e| SfmrError::ShapeMismatch(format!("{field} reshape: {e}")))
     };
@@ -315,12 +323,10 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
             Some(read_vec3(
                 &mut archive,
                 &entries::points3d_patch_u_halfvec_xyz(point_count),
-                "patch_u_halfvec_xyz",
             )?),
             Some(read_vec3(
                 &mut archive,
                 &entries::points3d_patch_v_halfvec_xyz(point_count),
-                "patch_v_halfvec_xyz",
             )?),
         )
     } else {
