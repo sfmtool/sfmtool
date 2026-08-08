@@ -15,6 +15,7 @@ compile_error!(
 );
 
 mod depth_stats;
+mod entries;
 mod read;
 mod types;
 mod verify;

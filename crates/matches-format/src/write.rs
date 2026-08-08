@@ -9,6 +9,7 @@ use std::path::Path;
 use xxhash_rust::xxh3::Xxh3;
 use zip::ZipWriter;
 
+use crate::entries;
 use crate::types::*;
 use sfmtool_archive_io::{format_hash, write_binary_entry_hashed, write_json_entry};
 
@@ -63,7 +64,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
     // images/feature_counts
     write_binary_entry_hashed(
         &mut zip,
-        &format!("images/feature_counts.{image_count}.uint32.zst"),
+        &entries::images_feature_counts(image_count),
         bytemuck::cast_slice(data.feature_counts.as_slice().unwrap()),
         zstd_level,
         &mut images_hasher,
@@ -77,7 +78,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         .collect();
     write_binary_entry_hashed(
         &mut zip,
-        &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
+        &entries::images_feature_tool_hashes(image_count),
         &hash_bytes,
         zstd_level,
         &mut images_hasher,
@@ -88,7 +89,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
     let image_dims = data.image_dims.as_ref().expect("validated Some");
     write_binary_entry_hashed(
         &mut zip,
-        &format!("images/image_dims.{image_count}.2.uint32.zst"),
+        &entries::images_image_dims(image_count),
         bytemuck::cast_slice(image_dims.as_slice().unwrap()),
         zstd_level,
         &mut images_hasher,
@@ -98,7 +99,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
     let images_meta = serde_json::json!({"image_count": image_count});
     let bytes = write_json_entry(
         &mut zip,
-        "images/metadata.json.zst",
+        entries::images_metadata(),
         &images_meta,
         zstd_level,
     )?;
@@ -107,7 +108,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
     // images/names.json
     let bytes = write_json_entry(
         &mut zip,
-        "images/names.json.zst",
+        entries::images_names(),
         &data.image_names,
         zstd_level,
     )?;
@@ -121,7 +122,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         .collect();
     write_binary_entry_hashed(
         &mut zip,
-        &format!("images/sift_content_hashes.{image_count}.uint128.zst"),
+        &entries::images_sift_content_hashes(image_count),
         &hash_bytes,
         zstd_level,
         &mut images_hasher,
@@ -139,7 +140,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // image_pairs/image_index_pairs
         write_binary_entry_hashed(
             &mut zip,
-            &format!("image_pairs/image_index_pairs.{pair_count}.2.uint32.zst"),
+            &entries::image_pairs_image_index_pairs(pair_count),
             bytemuck::cast_slice(pairs.image_index_pairs.as_slice().unwrap()),
             zstd_level,
             &mut pairs_hasher,
@@ -148,7 +149,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // image_pairs/match_counts
         write_binary_entry_hashed(
             &mut zip,
-            &format!("image_pairs/match_counts.{pair_count}.uint32.zst"),
+            &entries::image_pairs_match_counts(pair_count),
             bytemuck::cast_slice(pairs.match_counts.as_slice().unwrap()),
             zstd_level,
             &mut pairs_hasher,
@@ -157,7 +158,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // image_pairs/match_descriptor_distances
         write_binary_entry_hashed(
             &mut zip,
-            &format!("image_pairs/match_descriptor_distances.{match_count}.float32.zst"),
+            &entries::image_pairs_match_descriptor_distances(match_count),
             bytemuck::cast_slice(pairs.match_descriptor_distances.as_slice().unwrap()),
             zstd_level,
             &mut pairs_hasher,
@@ -166,7 +167,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // image_pairs/match_feature_indexes
         write_binary_entry_hashed(
             &mut zip,
-            &format!("image_pairs/match_feature_indexes.{match_count}.2.uint32.zst"),
+            &entries::image_pairs_match_feature_indexes(match_count),
             bytemuck::cast_slice(pairs.match_feature_indexes.as_slice().unwrap()),
             zstd_level,
             &mut pairs_hasher,
@@ -177,7 +178,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
             serde_json::json!({"image_pair_count": pair_count, "match_count": match_count});
         let bytes = write_json_entry(
             &mut zip,
-            "image_pairs/metadata.json.zst",
+            entries::image_pairs_metadata(),
             &pairs_meta,
             zstd_level,
         )?;
@@ -199,7 +200,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // clusters/cluster_starts
         write_binary_entry_hashed(
             &mut zip,
-            &format!("clusters/cluster_starts.{}.uint32.zst", cluster_count + 1),
+            &entries::clusters_cluster_starts(cluster_count),
             bytemuck::cast_slice(clusters.cluster_starts.as_slice().unwrap()),
             zstd_level,
             &mut clusters_hasher,
@@ -208,7 +209,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // clusters/member_features
         write_binary_entry_hashed(
             &mut zip,
-            &format!("clusters/member_features.{member_count}.uint32.zst"),
+            &entries::clusters_member_features(member_count),
             bytemuck::cast_slice(clusters.member_features.as_slice().unwrap()),
             zstd_level,
             &mut clusters_hasher,
@@ -217,7 +218,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // clusters/member_images
         write_binary_entry_hashed(
             &mut zip,
-            &format!("clusters/member_images.{member_count}.uint32.zst"),
+            &entries::clusters_member_images(member_count),
             bytemuck::cast_slice(clusters.member_images.as_slice().unwrap()),
             zstd_level,
             &mut clusters_hasher,
@@ -231,7 +232,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         });
         let bytes = write_json_entry(
             &mut zip,
-            "clusters/metadata.json.zst",
+            entries::clusters_metadata(),
             &clusters_meta,
             zstd_level,
         )?;
@@ -253,7 +254,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // cluster_patches/member_affines
         write_binary_entry_hashed(
             &mut zip,
-            &format!("cluster_patches/member_affines.{member_count}.2.3.float64.zst"),
+            &entries::cluster_patches_member_affines(member_count),
             bytemuck::cast_slice(cp.member_affines.as_slice().unwrap()),
             zstd_level,
             &mut cp_hasher,
@@ -262,7 +263,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // cluster_patches/member_consistency_residual
         write_binary_entry_hashed(
             &mut zip,
-            &format!("cluster_patches/member_consistency_residual.{member_count}.float32.zst"),
+            &entries::cluster_patches_member_consistency_residual(member_count),
             bytemuck::cast_slice(cp.member_consistency_residual.as_slice().unwrap()),
             zstd_level,
             &mut cp_hasher,
@@ -271,7 +272,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // cluster_patches/member_shift_px
         write_binary_entry_hashed(
             &mut zip,
-            &format!("cluster_patches/member_shift_px.{member_count}.float32.zst"),
+            &entries::cluster_patches_member_shift_px(member_count),
             bytemuck::cast_slice(cp.member_shift_px.as_slice().unwrap()),
             zstd_level,
             &mut cp_hasher,
@@ -280,7 +281,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // cluster_patches/member_status
         write_binary_entry_hashed(
             &mut zip,
-            &format!("cluster_patches/member_status.{member_count}.uint8.zst"),
+            &entries::cluster_patches_member_status(member_count),
             cp.member_status.as_slice().unwrap(),
             zstd_level,
             &mut cp_hasher,
@@ -289,7 +290,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // cluster_patches/member_zncc
         write_binary_entry_hashed(
             &mut zip,
-            &format!("cluster_patches/member_zncc.{member_count}.float32.zst"),
+            &entries::cluster_patches_member_zncc(member_count),
             bytemuck::cast_slice(cp.member_zncc.as_slice().unwrap()),
             zstd_level,
             &mut cp_hasher,
@@ -303,7 +304,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         });
         let bytes = write_json_entry(
             &mut zip,
-            "cluster_patches/metadata.json.zst",
+            entries::cluster_patches_metadata(),
             &cp_meta,
             zstd_level,
         )?;
@@ -312,7 +313,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // cluster_patches/reference_members
         write_binary_entry_hashed(
             &mut zip,
-            &format!("cluster_patches/reference_members.{cluster_count}.uint32.zst"),
+            &entries::cluster_patches_reference_members(cluster_count),
             bytemuck::cast_slice(cp.reference_members.as_slice().unwrap()),
             zstd_level,
             &mut cp_hasher,
@@ -334,7 +335,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // two_view_geometries/config_indexes
         write_binary_entry_hashed(
             &mut zip,
-            &format!("two_view_geometries/config_indexes.{pair_count}.uint8.zst"),
+            &entries::two_view_geometries_config_indexes(pair_count),
             tvg.config_indexes.as_slice().unwrap(),
             zstd_level,
             &mut tvg_hasher,
@@ -344,7 +345,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         let config_type_strings: Vec<&str> = tvg.config_types.iter().map(|c| c.as_str()).collect();
         let bytes = write_json_entry(
             &mut zip,
-            "two_view_geometries/config_types.json.zst",
+            entries::two_view_geometries_config_types(),
             &config_type_strings,
             zstd_level,
         )?;
@@ -353,7 +354,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // two_view_geometries/e_matrices
         write_binary_entry_hashed(
             &mut zip,
-            &format!("two_view_geometries/e_matrices.{pair_count}.3.3.float64.zst"),
+            &entries::two_view_geometries_e_matrices(pair_count),
             bytemuck::cast_slice(tvg.e_matrices.as_slice().unwrap()),
             zstd_level,
             &mut tvg_hasher,
@@ -362,7 +363,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // two_view_geometries/f_matrices
         write_binary_entry_hashed(
             &mut zip,
-            &format!("two_view_geometries/f_matrices.{pair_count}.3.3.float64.zst"),
+            &entries::two_view_geometries_f_matrices(pair_count),
             bytemuck::cast_slice(tvg.f_matrices.as_slice().unwrap()),
             zstd_level,
             &mut tvg_hasher,
@@ -371,7 +372,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // two_view_geometries/h_matrices
         write_binary_entry_hashed(
             &mut zip,
-            &format!("two_view_geometries/h_matrices.{pair_count}.3.3.float64.zst"),
+            &entries::two_view_geometries_h_matrices(pair_count),
             bytemuck::cast_slice(tvg.h_matrices.as_slice().unwrap()),
             zstd_level,
             &mut tvg_hasher,
@@ -380,7 +381,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // two_view_geometries/inlier_counts
         write_binary_entry_hashed(
             &mut zip,
-            &format!("two_view_geometries/inlier_counts.{pair_count}.uint32.zst"),
+            &entries::two_view_geometries_inlier_counts(pair_count),
             bytemuck::cast_slice(tvg.inlier_counts.as_slice().unwrap()),
             zstd_level,
             &mut tvg_hasher,
@@ -389,7 +390,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // two_view_geometries/inlier_feature_indexes
         write_binary_entry_hashed(
             &mut zip,
-            &format!("two_view_geometries/inlier_feature_indexes.{inlier_count}.2.uint32.zst"),
+            &entries::two_view_geometries_inlier_feature_indexes(inlier_count),
             bytemuck::cast_slice(tvg.inlier_feature_indexes.as_slice().unwrap()),
             zstd_level,
             &mut tvg_hasher,
@@ -398,7 +399,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // two_view_geometries/metadata.json
         let bytes = write_json_entry(
             &mut zip,
-            "two_view_geometries/metadata.json.zst",
+            entries::two_view_geometries_metadata(),
             &tvg.metadata,
             zstd_level,
         )?;
@@ -407,7 +408,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // two_view_geometries/quaternions_wxyz
         write_binary_entry_hashed(
             &mut zip,
-            &format!("two_view_geometries/quaternions_wxyz.{pair_count}.4.float64.zst"),
+            &entries::two_view_geometries_quaternions_wxyz(pair_count),
             bytemuck::cast_slice(tvg.quaternions_wxyz.as_slice().unwrap()),
             zstd_level,
             &mut tvg_hasher,
@@ -416,7 +417,7 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         // two_view_geometries/translations_xyz
         write_binary_entry_hashed(
             &mut zip,
-            &format!("two_view_geometries/translations_xyz.{pair_count}.3.float64.zst"),
+            &entries::two_view_geometries_translations_xyz(pair_count),
             bytemuck::cast_slice(tvg.translations_xyz.as_slice().unwrap()),
             zstd_level,
             &mut tvg_hasher,

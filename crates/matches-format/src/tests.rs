@@ -1466,3 +1466,157 @@ fn test_cluster_archive_uses_stored_compression() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// Every archive entry name, pinned against a literal.
+///
+/// `entries.rs` is the single source of truth for the three production paths,
+/// and that is exactly why this test is needed. A name that is wrong *there* is
+/// wrong **consistently**: `write`, `read` and `verify` all agree with each
+/// other, every round-trip test in this file still passes, and the only symptom
+/// is that the archive can no longer be exchanged with any other build of
+/// sfmtool. Before the names were centralized a typo broke the round trip
+/// loudly, because the writer's copy and the reader's copy disagreed; that
+/// safety net is gone, and this list replaces it.
+///
+/// Each dimension gets a distinct value so a template that interpolates the
+/// wrong count — `member_count` where `cluster_count` belongs — fails here too,
+/// not just a misspelt path.
+///
+/// Renaming an on-disk entry is a format change and should require deliberately
+/// editing this list.
+#[test]
+fn entry_names_are_pinned() {
+    use crate::entries as e;
+
+    // Distinct per-dimension values; see doc comment.
+    let (images, pairs, matches, inliers, clusters, members) = (2, 3, 5, 7, 11, 13);
+
+    // Fixed-name JSON sections.
+    assert_eq!(e::images_metadata(), "images/metadata.json.zst");
+    assert_eq!(e::images_names(), "images/names.json.zst");
+    assert_eq!(e::image_pairs_metadata(), "image_pairs/metadata.json.zst");
+    assert_eq!(
+        e::two_view_geometries_metadata(),
+        "two_view_geometries/metadata.json.zst"
+    );
+    assert_eq!(
+        e::two_view_geometries_config_types(),
+        "two_view_geometries/config_types.json.zst"
+    );
+    assert_eq!(e::clusters_metadata(), "clusters/metadata.json.zst");
+    assert_eq!(
+        e::cluster_patches_metadata(),
+        "cluster_patches/metadata.json.zst"
+    );
+
+    // Images.
+    assert_eq!(
+        e::images_feature_counts(images),
+        "images/feature_counts.2.uint32.zst"
+    );
+    assert_eq!(
+        e::images_image_dims(images),
+        "images/image_dims.2.2.uint32.zst"
+    );
+    assert_eq!(
+        e::images_feature_tool_hashes(images),
+        "images/feature_tool_hashes.2.uint128.zst"
+    );
+    assert_eq!(
+        e::images_sift_content_hashes(images),
+        "images/sift_content_hashes.2.uint128.zst"
+    );
+
+    // Pairwise backbone. Note the two `match_count`-sized entries.
+    assert_eq!(
+        e::image_pairs_image_index_pairs(pairs),
+        "image_pairs/image_index_pairs.3.2.uint32.zst"
+    );
+    assert_eq!(
+        e::image_pairs_match_counts(pairs),
+        "image_pairs/match_counts.3.uint32.zst"
+    );
+    assert_eq!(
+        e::image_pairs_match_feature_indexes(matches),
+        "image_pairs/match_feature_indexes.5.2.uint32.zst"
+    );
+    assert_eq!(
+        e::image_pairs_match_descriptor_distances(matches),
+        "image_pairs/match_descriptor_distances.5.float32.zst"
+    );
+
+    // Two-view geometries. `inlier_feature_indexes` is the one sized by inliers.
+    assert_eq!(
+        e::two_view_geometries_config_indexes(pairs),
+        "two_view_geometries/config_indexes.3.uint8.zst"
+    );
+    assert_eq!(
+        e::two_view_geometries_e_matrices(pairs),
+        "two_view_geometries/e_matrices.3.3.3.float64.zst"
+    );
+    assert_eq!(
+        e::two_view_geometries_f_matrices(pairs),
+        "two_view_geometries/f_matrices.3.3.3.float64.zst"
+    );
+    assert_eq!(
+        e::two_view_geometries_h_matrices(pairs),
+        "two_view_geometries/h_matrices.3.3.3.float64.zst"
+    );
+    assert_eq!(
+        e::two_view_geometries_quaternions_wxyz(pairs),
+        "two_view_geometries/quaternions_wxyz.3.4.float64.zst"
+    );
+    assert_eq!(
+        e::two_view_geometries_translations_xyz(pairs),
+        "two_view_geometries/translations_xyz.3.3.float64.zst"
+    );
+    assert_eq!(
+        e::two_view_geometries_inlier_counts(pairs),
+        "two_view_geometries/inlier_counts.3.uint32.zst"
+    );
+    assert_eq!(
+        e::two_view_geometries_inlier_feature_indexes(inliers),
+        "two_view_geometries/inlier_feature_indexes.7.2.uint32.zst"
+    );
+
+    // Cluster backbone. `cluster_starts` is sized `cluster_count + 1`: passing
+    // 11 clusters must yield 12 CSR offsets.
+    assert_eq!(
+        e::clusters_cluster_starts(clusters),
+        "clusters/cluster_starts.12.uint32.zst"
+    );
+    assert_eq!(
+        e::clusters_member_images(members),
+        "clusters/member_images.13.uint32.zst"
+    );
+    assert_eq!(
+        e::clusters_member_features(members),
+        "clusters/member_features.13.uint32.zst"
+    );
+
+    // Cluster patches. `reference_members` is per-cluster; the rest per-member.
+    assert_eq!(
+        e::cluster_patches_reference_members(clusters),
+        "cluster_patches/reference_members.11.uint32.zst"
+    );
+    assert_eq!(
+        e::cluster_patches_member_status(members),
+        "cluster_patches/member_status.13.uint8.zst"
+    );
+    assert_eq!(
+        e::cluster_patches_member_affines(members),
+        "cluster_patches/member_affines.13.2.3.float64.zst"
+    );
+    assert_eq!(
+        e::cluster_patches_member_zncc(members),
+        "cluster_patches/member_zncc.13.float32.zst"
+    );
+    assert_eq!(
+        e::cluster_patches_member_shift_px(members),
+        "cluster_patches/member_shift_px.13.float32.zst"
+    );
+    assert_eq!(
+        e::cluster_patches_member_consistency_residual(members),
+        "cluster_patches/member_consistency_residual.13.float32.zst"
+    );
+}

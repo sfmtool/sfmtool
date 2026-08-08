@@ -7,6 +7,7 @@ use std::path::Path;
 
 use xxhash_rust::xxh3::Xxh3;
 
+use crate::entries;
 use crate::types::*;
 use sfmtool_archive_io::{format_hash, raw_to_u32, read_zst_entry};
 
@@ -76,7 +77,7 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     section_digests.push(metadata_hash);
 
     // === Cameras hash ===
-    let cameras_raw = read_zst_entry(&mut archive, "cameras/metadata.json.zst")?;
+    let cameras_raw = read_zst_entry(&mut archive, entries::cameras_metadata())?;
     // Parsed lazily for the embedded-patches keypoint bounds check below.
     let cameras: Vec<SfmrCamera> = serde_json::from_slice(&cameras_raw).unwrap_or_default();
     let cameras_hash = xxhash_rust::xxh3::xxh3_128(&cameras_raw);
@@ -90,12 +91,12 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     section_digests.push(cameras_hash);
 
     // === Rigs hash (optional, lexicographic path order) ===
-    let has_rigs = archive.index_for_name("rigs/metadata.json.zst").is_some();
+    let has_rigs = archive.index_for_name(entries::rigs_metadata()).is_some();
     if has_rigs {
         let mut rigs_hasher = Xxh3::new();
 
         // Read rigs metadata first to get sensor_count
-        let rigs_meta_raw = read_zst_entry(&mut archive, "rigs/metadata.json.zst")?;
+        let rigs_meta_raw = read_zst_entry(&mut archive, entries::rigs_metadata())?;
         let rigs_meta: RigsMetadata = serde_json::from_slice(&rigs_meta_raw)?;
         let sensor_count = rigs_meta.sensor_count;
 
@@ -104,17 +105,17 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         // rigs/sensor_camera_indexes
         rigs_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("rigs/sensor_camera_indexes.{sensor_count}.uint32.zst"),
+            &entries::rigs_sensor_camera_indexes(sensor_count),
         )?);
         // rigs/sensor_quaternions_wxyz
         rigs_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("rigs/sensor_quaternions_wxyz.{sensor_count}.4.float64.zst"),
+            &entries::rigs_sensor_quaternions_wxyz(sensor_count),
         )?);
         // rigs/sensor_translations_xyz
         rigs_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("rigs/sensor_translations_xyz.{sensor_count}.3.float64.zst"),
+            &entries::rigs_sensor_translations_xyz(sensor_count),
         )?);
 
         let rigs_hash = rigs_hasher.digest128();
@@ -132,26 +133,26 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         // === Frames hash (lexicographic path order) ===
         let mut frames_hasher = Xxh3::new();
 
-        let frames_meta_raw = read_zst_entry(&mut archive, "frames/metadata.json.zst")?;
+        let frames_meta_raw = read_zst_entry(&mut archive, entries::frames_metadata())?;
         let frames_meta: FramesMetadata = serde_json::from_slice(&frames_meta_raw)?;
         let frame_count = frames_meta.frame_count;
 
         // frames/image_frame_indexes
         frames_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("frames/image_frame_indexes.{image_count}.uint32.zst"),
+            &entries::frames_image_frame_indexes(image_count),
         )?);
         // frames/image_sensor_indexes
         frames_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("frames/image_sensor_indexes.{image_count}.uint32.zst"),
+            &entries::frames_image_sensor_indexes(image_count),
         )?);
         // frames/metadata.json
         frames_hasher.update(&frames_meta_raw);
         // frames/rig_indexes
         frames_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("frames/rig_indexes.{frame_count}.uint32.zst"),
+            &entries::frames_rig_indexes(frame_count),
         )?);
 
         let frames_hash = frames_hasher.digest128();
@@ -171,15 +172,13 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     let mut images_hasher = Xxh3::new();
 
     // Read depth_statistics first to get num_buckets
-    let depth_stats_raw = read_zst_entry(&mut archive, "images/depth_statistics.json.zst")?;
+    let depth_stats_raw = read_zst_entry(&mut archive, entries::images_depth_statistics())?;
     let depth_stats: DepthStatistics = serde_json::from_slice(&depth_stats_raw)?;
     let num_buckets = depth_stats.num_histogram_buckets;
 
     // images/camera_indexes (captured for the keypoint bounds check below)
-    let camera_indexes_raw = read_zst_entry(
-        &mut archive,
-        &format!("images/camera_indexes.{image_count}.uint32.zst"),
-    )?;
+    let camera_indexes_raw =
+        read_zst_entry(&mut archive, &entries::images_camera_indexes(image_count))?;
     images_hasher.update(&camera_indexes_raw);
     // images/depth_statistics.json
     images_hasher.update(&depth_stats_raw);
@@ -188,44 +187,44 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     if is_embedded {
         images_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("images/image_file_hashes.{image_count}.uint128.zst"),
+            &entries::images_image_file_hashes(image_count),
         )?);
     } else {
         images_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
+            &entries::images_feature_tool_hashes(image_count),
         )?);
     }
     // images/metadata.json
-    images_hasher.update(&read_zst_entry(&mut archive, "images/metadata.json.zst")?);
+    images_hasher.update(&read_zst_entry(&mut archive, entries::images_metadata())?);
     // images/names.json
-    images_hasher.update(&read_zst_entry(&mut archive, "images/names.json.zst")?);
+    images_hasher.update(&read_zst_entry(&mut archive, entries::images_names())?);
     // images/observed_depth_histogram_counts
     images_hasher.update(&read_zst_entry(
         &mut archive,
-        &format!("images/observed_depth_histogram_counts.{image_count}.{num_buckets}.uint32.zst"),
+        &entries::images_observed_depth_histogram_counts(image_count, num_buckets),
     )?);
     // images/quaternions_wxyz
     images_hasher.update(&read_zst_entry(
         &mut archive,
-        &format!("images/quaternions_wxyz.{image_count}.4.float64.zst"),
+        &entries::images_quaternions_wxyz(image_count),
     )?);
     // images/sift_content_hashes (sift_files only)
     if !is_embedded {
         images_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("images/sift_content_hashes.{image_count}.uint128.zst"),
+            &entries::images_sift_content_hashes(image_count),
         )?);
     }
     // images/thumbnails_y_x_rgb
     images_hasher.update(&read_zst_entry(
         &mut archive,
-        &format!("images/thumbnails_y_x_rgb.{image_count}.128.128.3.uint8.zst"),
+        &entries::images_thumbnails_y_x_rgb(image_count),
     )?);
     // images/translations_xyz
     images_hasher.update(&read_zst_entry(
         &mut archive,
-        &format!("images/translations_xyz.{image_count}.3.float64.zst"),
+        &entries::images_translations_xyz(image_count),
     )?);
 
     let images_hash = images_hasher.digest128();
@@ -240,7 +239,7 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
 
     // === Points3D hash (lexicographic path order) ===
     // The optional per-point patch frame (`patch_*`) lives in this section.
-    let points3d_meta_raw = read_zst_entry(&mut archive, "points3d/metadata.json.zst")?;
+    let points3d_meta_raw = read_zst_entry(&mut archive, entries::points3d_metadata())?;
     let points3d_meta: serde_json::Value = serde_json::from_slice(&points3d_meta_raw)?;
     // Normals are optional in version 3 (default `false`); versions 1 and 2
     // always carry them.
@@ -272,7 +271,7 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     // points3d/colors_rgb
     points3d_hasher.update(&read_zst_entry(
         &mut archive,
-        &format!("points3d/colors_rgb.{point_count}.3.uint8.zst"),
+        &entries::points3d_colors_rgb(point_count),
     )?);
     // points3d/metadata.json
     points3d_hasher.update(&points3d_meta_raw);
@@ -280,16 +279,12 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     if has_normal_confidence {
         points3d_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("points3d/normal_confidence.{point_count}.uint8.zst"),
+            &entries::points3d_normal_confidence(point_count),
         )?);
     }
     // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
     if has_normals {
-        let normals_name = if is_pre_v3 {
-            format!("points3d/estimated_normals_xyz.{point_count}.3.float32.zst")
-        } else {
-            format!("points3d/normals_xyz.{point_count}.3.float32.zst")
-        };
+        let normals_name = entries::points3d_normals(is_pre_v3, point_count);
         points3d_hasher.update(&read_zst_entry(&mut archive, &normals_name)?);
     }
     // Optional patch frame, in lexicographic order: bitmaps, u, v.
@@ -297,32 +292,26 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         if has_patch_bitmaps {
             points3d_hasher.update(&read_zst_entry(
                 &mut archive,
-                &format!(
-                    "points3d/patch_bitmaps_y_x_rgba.{point_count}.{patch_bitmap_r}.{patch_bitmap_r}.4.uint8.zst"
-                ),
+                &entries::points3d_patch_bitmaps_y_x_rgba(point_count, patch_bitmap_r),
             )?);
         }
         points3d_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("points3d/patch_u_halfvec_xyz.{point_count}.3.float32.zst"),
+            &entries::points3d_patch_u_halfvec_xyz(point_count),
         )?);
         points3d_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("points3d/patch_v_halfvec_xyz.{point_count}.3.float32.zst"),
+            &entries::points3d_patch_v_halfvec_xyz(point_count),
         )?);
     }
     // points3d/positions_xyz (version 1) or positions_xyzw (version 2)
-    let positions_name = if is_v1 {
-        format!("points3d/positions_xyz.{point_count}.3.float64.zst")
-    } else {
-        format!("points3d/positions_xyzw.{point_count}.4.float64.zst")
-    };
+    let positions_name = entries::points3d_positions(is_v1, point_count);
     let positions_raw = read_zst_entry(&mut archive, &positions_name)?;
     points3d_hasher.update(&positions_raw);
     // points3d/reprojection_errors
     points3d_hasher.update(&read_zst_entry(
         &mut archive,
-        &format!("points3d/reprojection_errors.{point_count}.float32.zst"),
+        &entries::points3d_reprojection_errors(point_count),
     )?);
 
     let points3d_hash = points3d_hasher.digest128();
@@ -384,20 +373,20 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     if !is_embedded {
         tracks_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("tracks/feature_indexes.{observation_count}.uint32.zst"),
+            &entries::tracks_feature_indexes(observation_count),
         )?);
     }
     // tracks/image_indexes
     let track_image_indexes_raw = read_zst_entry(
         &mut archive,
-        &format!("tracks/image_indexes.{observation_count}.uint32.zst"),
+        &entries::tracks_image_indexes(observation_count),
     )?;
     tracks_hasher.update(&track_image_indexes_raw);
     // tracks/keypoints_xy (embedded_patches only; sorts after image_indexes)
     let keypoints_raw = if is_embedded {
         let raw = read_zst_entry(
             &mut archive,
-            &format!("tracks/keypoints_xy.{observation_count}.2.float32.zst"),
+            &entries::tracks_keypoints_xy(observation_count),
         )?;
         tracks_hasher.update(&raw);
         Some(raw)
@@ -405,7 +394,7 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         None
     };
     // tracks/metadata.json
-    let tracks_meta_raw = read_zst_entry(&mut archive, "tracks/metadata.json.zst")?;
+    let tracks_meta_raw = read_zst_entry(&mut archive, entries::tracks_metadata())?;
     tracks_hasher.update(&tracks_meta_raw);
     let tracks_meta: serde_json::Value =
         serde_json::from_slice(&tracks_meta_raw).unwrap_or(serde_json::Value::Null);
@@ -419,21 +408,17 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     if has_observation_confidence {
         tracks_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("tracks/observation_confidence.{observation_count}.uint8.zst"),
+            &entries::tracks_observation_confidence(observation_count),
         )?);
     }
     // tracks/observation_counts
     let track_obs_counts_raw = read_zst_entry(
         &mut archive,
-        &format!("tracks/observation_counts.{point_count}.uint32.zst"),
+        &entries::tracks_observation_counts(point_count),
     )?;
     tracks_hasher.update(&track_obs_counts_raw);
     // tracks/points3d_indexes (version 1) or point_indexes (version 2)
-    let point_indexes_name = if is_v1 {
-        format!("tracks/points3d_indexes.{observation_count}.uint32.zst")
-    } else {
-        format!("tracks/point_indexes.{observation_count}.uint32.zst")
-    };
+    let point_indexes_name = entries::tracks_point_indexes(is_v1, observation_count);
     let track_point_indexes_raw = read_zst_entry(&mut archive, &point_indexes_name)?;
     tracks_hasher.update(&track_point_indexes_raw);
 

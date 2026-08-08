@@ -7,6 +7,7 @@ use std::path::Path;
 
 use xxhash_rust::xxh3::Xxh3;
 
+use crate::entries;
 use crate::types::*;
 use sfmtool_archive_io::{format_hash, raw_to_f64, raw_to_u32, read_zst_entry};
 
@@ -69,13 +70,13 @@ fn structure_errors(metadata: &MatchesMetadata, entry_names: &[String]) -> Vec<S
                     .into(),
             );
         }
-        if !has_entry("clusters/metadata.json.zst") {
+        if !has_entry(entries::clusters_metadata()) {
             errors.push(
                 "file claims has_clusters but has no clusters/ section (no backbone present)"
                     .into(),
             );
         }
-        if metadata.has_cluster_patches && !has_entry("cluster_patches/metadata.json.zst") {
+        if metadata.has_cluster_patches && !has_entry(entries::cluster_patches_metadata()) {
             errors
                 .push("file claims has_cluster_patches but has no cluster_patches/ section".into());
         }
@@ -105,7 +106,7 @@ fn structure_errors(metadata: &MatchesMetadata, entry_names: &[String]) -> Vec<S
         if has_prefix("cluster_patches/") {
             errors.push("file contains cluster_patches/ entries but stores no clusters".into());
         }
-        if !has_entry("image_pairs/metadata.json.zst") {
+        if !has_entry(entries::image_pairs_metadata()) {
             errors.push(
                 "file has no image_pairs/ section and does not claim clusters (no backbone \
                  present)"
@@ -180,24 +181,19 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
     let mut images_hasher = Xxh3::new();
 
     // images/feature_counts
-    let feature_counts_raw = read_zst_entry(
-        &mut archive,
-        &format!("images/feature_counts.{image_count}.uint32.zst"),
-    )?;
+    let feature_counts_raw =
+        read_zst_entry(&mut archive, &entries::images_feature_counts(image_count))?;
     images_hasher.update(&feature_counts_raw);
 
     // images/feature_tool_hashes
     images_hasher.update(&read_zst_entry(
         &mut archive,
-        &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
+        &entries::images_feature_tool_hashes(image_count),
     )?);
 
     // images/image_dims (version 4+ only; structure_errors gated presence)
     if metadata.version >= 4 {
-        let dims_raw = read_zst_entry(
-            &mut archive,
-            &format!("images/image_dims.{image_count}.2.uint32.zst"),
-        )?;
+        let dims_raw = read_zst_entry(&mut archive, &entries::images_image_dims(image_count))?;
         images_hasher.update(&dims_raw);
         if dims_raw.len() != image_count * 8 {
             errors.push(format!(
@@ -219,15 +215,15 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
     }
 
     // images/metadata.json
-    images_hasher.update(&read_zst_entry(&mut archive, "images/metadata.json.zst")?);
+    images_hasher.update(&read_zst_entry(&mut archive, entries::images_metadata())?);
 
     // images/names.json
-    images_hasher.update(&read_zst_entry(&mut archive, "images/names.json.zst")?);
+    images_hasher.update(&read_zst_entry(&mut archive, entries::images_names())?);
 
     // images/sift_content_hashes
     images_hasher.update(&read_zst_entry(
         &mut archive,
-        &format!("images/sift_content_hashes.{image_count}.uint128.zst"),
+        &entries::images_sift_content_hashes(image_count),
     )?);
 
     let images_hash = images_hasher.digest128();
@@ -249,34 +245,32 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
         // image_pairs/image_index_pairs
         let pairs_raw = read_zst_entry(
             &mut archive,
-            &format!("image_pairs/image_index_pairs.{pair_count}.2.uint32.zst"),
+            &entries::image_pairs_image_index_pairs(pair_count),
         )?;
         pairs_hasher.update(&pairs_raw);
 
         // image_pairs/match_counts
-        let match_counts_raw = read_zst_entry(
-            &mut archive,
-            &format!("image_pairs/match_counts.{pair_count}.uint32.zst"),
-        )?;
+        let match_counts_raw =
+            read_zst_entry(&mut archive, &entries::image_pairs_match_counts(pair_count))?;
         pairs_hasher.update(&match_counts_raw);
 
         // image_pairs/match_descriptor_distances
         pairs_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("image_pairs/match_descriptor_distances.{match_count}.float32.zst"),
+            &entries::image_pairs_match_descriptor_distances(match_count),
         )?);
 
         // image_pairs/match_feature_indexes
         let match_fi_raw = read_zst_entry(
             &mut archive,
-            &format!("image_pairs/match_feature_indexes.{match_count}.2.uint32.zst"),
+            &entries::image_pairs_match_feature_indexes(match_count),
         )?;
         pairs_hasher.update(&match_fi_raw);
 
         // image_pairs/metadata.json
         pairs_hasher.update(&read_zst_entry(
             &mut archive,
-            "image_pairs/metadata.json.zst",
+            entries::image_pairs_metadata(),
         )?);
 
         let pairs_hash = pairs_hasher.digest128();
@@ -389,26 +383,24 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
         // clusters/cluster_starts
         let starts_raw = read_zst_entry(
             &mut archive,
-            &format!("clusters/cluster_starts.{}.uint32.zst", cluster_count + 1),
+            &entries::clusters_cluster_starts(cluster_count),
         )?;
         clusters_hasher.update(&starts_raw);
 
         // clusters/member_features
         let member_features_raw = read_zst_entry(
             &mut archive,
-            &format!("clusters/member_features.{member_count}.uint32.zst"),
+            &entries::clusters_member_features(member_count),
         )?;
         clusters_hasher.update(&member_features_raw);
 
         // clusters/member_images
-        let member_images_raw = read_zst_entry(
-            &mut archive,
-            &format!("clusters/member_images.{member_count}.uint32.zst"),
-        )?;
+        let member_images_raw =
+            read_zst_entry(&mut archive, &entries::clusters_member_images(member_count))?;
         clusters_hasher.update(&member_images_raw);
 
         // clusters/metadata.json
-        let clusters_meta_raw = read_zst_entry(&mut archive, "clusters/metadata.json.zst")?;
+        let clusters_meta_raw = read_zst_entry(&mut archive, entries::clusters_metadata())?;
         clusters_hasher.update(&clusters_meta_raw);
 
         let clusters_hash = clusters_hasher.digest128();
@@ -535,46 +527,46 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
             // cluster_patches/member_affines
             let affines_raw = read_zst_entry(
                 &mut archive,
-                &format!("cluster_patches/member_affines.{member_count}.2.3.float64.zst"),
+                &entries::cluster_patches_member_affines(member_count),
             )?;
             cp_hasher.update(&affines_raw);
 
             // cluster_patches/member_consistency_residual
             let consistency_raw = read_zst_entry(
                 &mut archive,
-                &format!("cluster_patches/member_consistency_residual.{member_count}.float32.zst"),
+                &entries::cluster_patches_member_consistency_residual(member_count),
             )?;
             cp_hasher.update(&consistency_raw);
 
             // cluster_patches/member_shift_px
             let shift_raw = read_zst_entry(
                 &mut archive,
-                &format!("cluster_patches/member_shift_px.{member_count}.float32.zst"),
+                &entries::cluster_patches_member_shift_px(member_count),
             )?;
             cp_hasher.update(&shift_raw);
 
             // cluster_patches/member_status
             let status_raw = read_zst_entry(
                 &mut archive,
-                &format!("cluster_patches/member_status.{member_count}.uint8.zst"),
+                &entries::cluster_patches_member_status(member_count),
             )?;
             cp_hasher.update(&status_raw);
 
             // cluster_patches/member_zncc
             let zncc_raw = read_zst_entry(
                 &mut archive,
-                &format!("cluster_patches/member_zncc.{member_count}.float32.zst"),
+                &entries::cluster_patches_member_zncc(member_count),
             )?;
             cp_hasher.update(&zncc_raw);
 
             // cluster_patches/metadata.json
-            let cp_meta_raw = read_zst_entry(&mut archive, "cluster_patches/metadata.json.zst")?;
+            let cp_meta_raw = read_zst_entry(&mut archive, entries::cluster_patches_metadata())?;
             cp_hasher.update(&cp_meta_raw);
 
             // cluster_patches/reference_members
             let refs_raw = read_zst_entry(
                 &mut archive,
-                &format!("cluster_patches/reference_members.{cluster_count}.uint32.zst"),
+                &entries::cluster_patches_reference_members(cluster_count),
             )?;
             cp_hasher.update(&refs_raw);
 
@@ -725,7 +717,7 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
         let mut tvg_hasher = Xxh3::new();
 
         // Read TVG metadata for inlier_count
-        let tvg_meta_raw = read_zst_entry(&mut archive, "two_view_geometries/metadata.json.zst")?;
+        let tvg_meta_raw = read_zst_entry(&mut archive, entries::two_view_geometries_metadata())?;
         let tvg_meta: TvgMetadata = serde_json::from_slice(&tvg_meta_raw)?;
         let inlier_count = tvg_meta.inlier_count as usize;
 
@@ -741,44 +733,44 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
         // two_view_geometries/config_indexes
         tvg_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("two_view_geometries/config_indexes.{pair_count}.uint8.zst"),
+            &entries::two_view_geometries_config_indexes(pair_count),
         )?);
 
         // two_view_geometries/config_types.json
         tvg_hasher.update(&read_zst_entry(
             &mut archive,
-            "two_view_geometries/config_types.json.zst",
+            entries::two_view_geometries_config_types(),
         )?);
 
         // two_view_geometries/e_matrices
         tvg_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("two_view_geometries/e_matrices.{pair_count}.3.3.float64.zst"),
+            &entries::two_view_geometries_e_matrices(pair_count),
         )?);
 
         // two_view_geometries/f_matrices
         tvg_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("two_view_geometries/f_matrices.{pair_count}.3.3.float64.zst"),
+            &entries::two_view_geometries_f_matrices(pair_count),
         )?);
 
         // two_view_geometries/h_matrices
         tvg_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("two_view_geometries/h_matrices.{pair_count}.3.3.float64.zst"),
+            &entries::two_view_geometries_h_matrices(pair_count),
         )?);
 
         // two_view_geometries/inlier_counts
         let inlier_counts_raw = read_zst_entry(
             &mut archive,
-            &format!("two_view_geometries/inlier_counts.{pair_count}.uint32.zst"),
+            &entries::two_view_geometries_inlier_counts(pair_count),
         )?;
         tvg_hasher.update(&inlier_counts_raw);
 
         // two_view_geometries/inlier_feature_indexes
         tvg_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("two_view_geometries/inlier_feature_indexes.{inlier_count}.2.uint32.zst"),
+            &entries::two_view_geometries_inlier_feature_indexes(inlier_count),
         )?);
 
         // two_view_geometries/metadata.json
@@ -787,13 +779,13 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
         // two_view_geometries/quaternions_wxyz
         tvg_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("two_view_geometries/quaternions_wxyz.{pair_count}.4.float64.zst"),
+            &entries::two_view_geometries_quaternions_wxyz(pair_count),
         )?);
 
         // two_view_geometries/translations_xyz
         tvg_hasher.update(&read_zst_entry(
             &mut archive,
-            &format!("two_view_geometries/translations_xyz.{pair_count}.3.float64.zst"),
+            &entries::two_view_geometries_translations_xyz(pair_count),
         )?);
 
         let tvg_hash = tvg_hasher.digest128();

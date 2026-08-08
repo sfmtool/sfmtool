@@ -300,6 +300,31 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
   `matches-format/src/tests.rs` (1468) green.
 
 **Every archive entry name is written three times, and every format invariant twice**
+
+> _Status (2026-08-08): Layer (1) done — `entries.rs` added to both format crates,
+> one function per archive entry; `read`/`write`/`verify` now carry no name
+> literals at all. Layer (2), the invariant merge, is untouched and stands._
+>
+> _Two corrections to the measurement below, both found while doing the work._
+> _First, the `sfmr-format` count of **27 is an undercount; it is 33**. The
+> extraction regex used for this report required `[a-z_]` before the `/`, which
+> silently skipped the entire `points3d/` section — that prefix contains a digit.
+> `matches-format`'s 32 is correct. Total extracted: **65 templates**, not 59._
+>
+> _Second, and more important: the claim in Top 3 that "a mistake cannot be
+> subtle — a wrong name fails every round-trip test immediately" **was true
+> before this change and is false after it**, which inverts the risk rating. Once
+> all three paths read the name from one function, a wrong name is wrong
+> *consistently*: writer and reader agree, every round-trip passes, and the only
+> symptom is an archive no other build can open. This was confirmed empirically —
+> corrupting `tracks/keypoints_xy` in `entries.rs` left all 48 `sfmr-format`
+> tests green. At the time, only 3 of 33 `sfmr` names and **0 of 32** `matches`
+> names were pinned by a literal assertion. Both crates therefore gained a
+> `tests::entry_names_are_pinned` golden test covering every name (and both
+> spellings of the three version-renamed ones); re-running the same corruption
+> against it fails loudly. Do not do the remaining format extractions without an
+> equivalent guard._
+
 - Location: `crates/{sfmr,matches}-format/src/{write,read,verify}.rs`
 - Problem: Two layers, both re-measured and both worse than last recorded.
 
@@ -1129,6 +1154,14 @@ them. Sizes are current, since several have moved:
    report is about code that at least a compiler is watching. Zero runtime risk.
 
 2. **Entry-name templates → `entries.rs`, per format crate.**
+   > _Status (2026-08-08): Done. See the corrections on the finding itself — the
+   > sfmr count was 33 rather than 27, and the "a mistake cannot be subtle"
+   > justification below is **wrong**: centralizing the names removes the
+   > round-trip's ability to catch a typo, because both sides then share it. A
+   > golden `entry_names_are_pinned` test in each crate supplies the guard that
+   > claim assumed. The knock-on argument still holds — the two larger format
+   > findings are now cheaper and safer, since the section splits can no longer
+   > misspell or reorder an entry name._
    27 identical string templates in `sfmr-format` and 32 in `matches-format`, each
    written three times across `read.rs`/`write.rs`/`verify.rs`. This is the cheapest
    real duplication fix left: one function per entry name, no logic moves, and a

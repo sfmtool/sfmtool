@@ -9,6 +9,7 @@ use ndarray::{Array1, Array2, Array4};
 
 use sfmtool_archive_io::{read_binary_array, read_json_entry, read_uint128_array};
 
+use crate::entries;
 use crate::types::*;
 
 const WORKSPACE_MARKER: &str = ".sfm-workspace.json";
@@ -76,7 +77,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     let is_pre_v3 = metadata.version < 3;
 
     // Cameras
-    let cameras: Vec<SfmrCamera> = read_json_entry(&mut archive, "cameras/metadata.json.zst")?;
+    let cameras: Vec<SfmrCamera> = read_json_entry(&mut archive, entries::cameras_metadata())?;
     if cameras.len() != metadata.camera_count as usize {
         return Err(SfmrError::InvalidFormat(format!(
             "Camera count mismatch: metadata says {}, got {}",
@@ -86,7 +87,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     }
 
     // Cross-check section metadata
-    let images_meta: serde_json::Value = read_json_entry(&mut archive, "images/metadata.json.zst")?;
+    let images_meta: serde_json::Value = read_json_entry(&mut archive, entries::images_metadata())?;
     if images_meta.get("image_count").and_then(|v| v.as_u64()) != Some(image_count as u64) {
         return Err(SfmrError::InvalidFormat(
             "images/metadata.json.zst image_count doesn't match top-level metadata".into(),
@@ -94,7 +95,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     }
 
     let points3d_meta: serde_json::Value =
-        read_json_entry(&mut archive, "points3d/metadata.json.zst")?;
+        read_json_entry(&mut archive, entries::points3d_metadata())?;
     // Accept either the version 2 key (`point_count`) or the version 1 key
     // (`points3d_count`).
     let section_point_count = points3d_meta
@@ -107,7 +108,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         ));
     }
 
-    let tracks_meta: serde_json::Value = read_json_entry(&mut archive, "tracks/metadata.json.zst")?;
+    let tracks_meta: serde_json::Value = read_json_entry(&mut archive, entries::tracks_metadata())?;
     if tracks_meta
         .get("observation_count")
         .and_then(|v| v.as_u64())
@@ -119,7 +120,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     }
 
     // Images
-    let image_names: Vec<String> = read_json_entry(&mut archive, "images/names.json.zst")?;
+    let image_names: Vec<String> = read_json_entry(&mut archive, entries::images_names())?;
     if image_names.len() != image_count {
         return Err(SfmrError::ShapeMismatch(format!(
             "image names count {} != image_count {image_count}",
@@ -129,14 +130,14 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
 
     let camera_indexes_vec: Vec<u32> = read_binary_array(
         &mut archive,
-        &format!("images/camera_indexes.{image_count}.uint32.zst"),
+        &entries::images_camera_indexes(image_count),
         image_count,
     )?;
     let camera_indexes = Array1::from_vec(camera_indexes_vec);
 
     let quaternions_vec: Vec<f64> = read_binary_array(
         &mut archive,
-        &format!("images/quaternions_wxyz.{image_count}.4.float64.zst"),
+        &entries::images_quaternions_wxyz(image_count),
         image_count * 4,
     )?;
     let quaternions_wxyz = Array2::from_shape_vec((image_count, 4), quaternions_vec)
@@ -144,7 +145,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
 
     let translations_vec: Vec<f64> = read_binary_array(
         &mut archive,
-        &format!("images/translations_xyz.{image_count}.3.float64.zst"),
+        &entries::images_translations_xyz(image_count),
         image_count * 3,
     )?;
     let translations_xyz = Array2::from_shape_vec((image_count, 3), translations_vec)
@@ -175,19 +176,19 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     let (feature_tool_hashes, sift_content_hashes, image_file_hashes) = if is_embedded {
         let image_file_hashes = read_uint128_array(
             &mut archive,
-            &format!("images/image_file_hashes.{image_count}.uint128.zst"),
+            &entries::images_image_file_hashes(image_count),
             image_count,
         )?;
         (None, None, Some(image_file_hashes))
     } else {
         let feature_tool_hashes = read_uint128_array(
             &mut archive,
-            &format!("images/feature_tool_hashes.{image_count}.uint128.zst"),
+            &entries::images_feature_tool_hashes(image_count),
             image_count,
         )?;
         let sift_content_hashes = read_uint128_array(
             &mut archive,
-            &format!("images/sift_content_hashes.{image_count}.uint128.zst"),
+            &entries::images_sift_content_hashes(image_count),
             image_count,
         )?;
         (Some(feature_tool_hashes), Some(sift_content_hashes), None)
@@ -196,7 +197,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     // Thumbnails
     let thumbnails_vec: Vec<u8> = read_binary_array(
         &mut archive,
-        &format!("images/thumbnails_y_x_rgb.{image_count}.128.128.3.uint8.zst"),
+        &entries::images_thumbnails_y_x_rgb(image_count),
         image_count * 128 * 128 * 3,
     )?;
     let thumbnails_y_x_rgb = Array4::from_shape_vec((image_count, 128, 128, 3), thumbnails_vec)
@@ -204,12 +205,12 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
 
     // Depth statistics
     let depth_statistics: DepthStatistics =
-        read_json_entry(&mut archive, "images/depth_statistics.json.zst")?;
+        read_json_entry(&mut archive, entries::images_depth_statistics())?;
     let num_buckets = depth_statistics.num_histogram_buckets as usize;
 
     let histogram_vec: Vec<u32> = read_binary_array(
         &mut archive,
-        &format!("images/observed_depth_histogram_counts.{image_count}.{num_buckets}.uint32.zst"),
+        &entries::images_observed_depth_histogram_counts(image_count, num_buckets),
         image_count * num_buckets,
     )?;
     let observed_depth_histogram_counts =
@@ -222,7 +223,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     let positions_xyzw = if is_v1 {
         let positions_vec: Vec<f64> = read_binary_array(
             &mut archive,
-            &format!("points3d/positions_xyz.{point_count}.3.float64.zst"),
+            &entries::points3d_positions(true, point_count),
             point_count * 3,
         )?;
         let mut xyzw = Array2::<f64>::zeros((point_count, 4));
@@ -236,7 +237,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     } else {
         let positions_vec: Vec<f64> = read_binary_array(
             &mut archive,
-            &format!("points3d/positions_xyzw.{point_count}.4.float64.zst"),
+            &entries::points3d_positions(false, point_count),
             point_count * 4,
         )?;
         Array2::from_shape_vec((point_count, 4), positions_vec)
@@ -245,7 +246,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
 
     let colors_vec: Vec<u8> = read_binary_array(
         &mut archive,
-        &format!("points3d/colors_rgb.{point_count}.3.uint8.zst"),
+        &entries::points3d_colors_rgb(point_count),
         point_count * 3,
     )?;
     let colors_rgb = Array2::from_shape_vec((point_count, 3), colors_vec)
@@ -253,7 +254,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
 
     let reprojection_vec: Vec<f32> = read_binary_array(
         &mut archive,
-        &format!("points3d/reprojection_errors.{point_count}.float32.zst"),
+        &entries::points3d_reprojection_errors(point_count),
         point_count,
     )?;
     let reprojection_errors = Array1::from_vec(reprojection_vec);
@@ -267,11 +268,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
     let normals_xyz = if has_normals {
-        let normals_name = if is_pre_v3 {
-            format!("points3d/estimated_normals_xyz.{point_count}.3.float32.zst")
-        } else {
-            format!("points3d/normals_xyz.{point_count}.3.float32.zst")
-        };
+        let normals_name = entries::points3d_normals(is_pre_v3, point_count);
         let normals_vec: Vec<f32> =
             read_binary_array(&mut archive, &normals_name, point_count * 3)?;
         Some(
@@ -292,7 +289,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     {
         let confidence_vec: Vec<u8> = read_binary_array(
             &mut archive,
-            &format!("points3d/normal_confidence.{point_count}.uint8.zst"),
+            &entries::points3d_normal_confidence(point_count),
             point_count,
         )?;
         Some(Array1::from_vec(confidence_vec))
@@ -302,13 +299,10 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
 
     // Optional per-point patch frame (version 3+), stored beside the normals.
     let read_vec3 = |archive: &mut zip::ZipArchive<std::fs::File>,
+                     entry: &str,
                      field: &str|
      -> Result<Array2<f32>, SfmrError> {
-        let v: Vec<f32> = read_binary_array(
-            archive,
-            &format!("points3d/{field}.{point_count}.3.float32.zst"),
-            point_count * 3,
-        )?;
+        let v: Vec<f32> = read_binary_array(archive, entry, point_count * 3)?;
         Array2::from_shape_vec((point_count, 3), v)
             .map_err(|e| SfmrError::ShapeMismatch(format!("{field} reshape: {e}")))
     };
@@ -318,8 +312,16 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         .unwrap_or(false);
     let (patch_u_halfvec_xyz, patch_v_halfvec_xyz) = if has_uv_frames {
         (
-            Some(read_vec3(&mut archive, "patch_u_halfvec_xyz")?),
-            Some(read_vec3(&mut archive, "patch_v_halfvec_xyz")?),
+            Some(read_vec3(
+                &mut archive,
+                &entries::points3d_patch_u_halfvec_xyz(point_count),
+                "patch_u_halfvec_xyz",
+            )?),
+            Some(read_vec3(
+                &mut archive,
+                &entries::points3d_patch_v_halfvec_xyz(point_count),
+                "patch_v_halfvec_xyz",
+            )?),
         )
     } else {
         (None, None)
@@ -341,7 +343,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
             })? as usize;
         let bitmaps_vec: Vec<u8> = read_binary_array(
             &mut archive,
-            &format!("points3d/patch_bitmaps_y_x_rgba.{point_count}.{r}.{r}.4.uint8.zst"),
+            &entries::points3d_patch_bitmaps_y_x_rgba(point_count, r),
             point_count * r * r * 4,
         )?;
         Some(
@@ -355,7 +357,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     // Tracks
     let image_indexes_vec: Vec<u32> = read_binary_array(
         &mut archive,
-        &format!("tracks/image_indexes.{observation_count}.uint32.zst"),
+        &entries::tracks_image_indexes(observation_count),
         observation_count,
     )?;
     let image_indexes = Array1::from_vec(image_indexes_vec);
@@ -365,7 +367,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     let (feature_indexes, keypoints_xy) = if is_embedded {
         let kp_vec: Vec<f32> = read_binary_array(
             &mut archive,
-            &format!("tracks/keypoints_xy.{observation_count}.2.float32.zst"),
+            &entries::tracks_keypoints_xy(observation_count),
             observation_count * 2,
         )?;
         let keypoints_xy = Array2::from_shape_vec((observation_count, 2), kp_vec)
@@ -381,7 +383,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     } else {
         let feature_indexes_vec: Vec<u32> = read_binary_array(
             &mut archive,
-            &format!("tracks/feature_indexes.{observation_count}.uint32.zst"),
+            &entries::tracks_feature_indexes(observation_count),
             observation_count,
         )?;
         (Some(Array1::from_vec(feature_indexes_vec)), None)
@@ -397,7 +399,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     {
         let confidence_vec: Vec<u8> = read_binary_array(
             &mut archive,
-            &format!("tracks/observation_confidence.{observation_count}.uint8.zst"),
+            &entries::tracks_observation_confidence(observation_count),
             observation_count,
         )?;
         Some(Array1::from_vec(confidence_vec))
@@ -407,25 +409,21 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
 
     // Version 1 named this array `points3d_indexes`; version 2 renames it to
     // `point_indexes`.
-    let point_indexes_name = if is_v1 {
-        format!("tracks/points3d_indexes.{observation_count}.uint32.zst")
-    } else {
-        format!("tracks/point_indexes.{observation_count}.uint32.zst")
-    };
+    let point_indexes_name = entries::tracks_point_indexes(is_v1, observation_count);
     let point_indexes_vec: Vec<u32> =
         read_binary_array(&mut archive, &point_indexes_name, observation_count)?;
     let point_indexes = Array1::from_vec(point_indexes_vec);
 
     let observation_counts_vec: Vec<u32> = read_binary_array(
         &mut archive,
-        &format!("tracks/observation_counts.{point_count}.uint32.zst"),
+        &entries::tracks_observation_counts(point_count),
         point_count,
     )?;
     let observation_counts = Array1::from_vec(observation_counts_vec);
 
     // Rigs and frames (optional — only present in rig-aware reconstructions)
-    let rig_frame_data = if archive.index_for_name("rigs/metadata.json.zst").is_some() {
-        let rigs_metadata: RigsMetadata = read_json_entry(&mut archive, "rigs/metadata.json.zst")?;
+    let rig_frame_data = if archive.index_for_name(entries::rigs_metadata()).is_some() {
+        let rigs_metadata: RigsMetadata = read_json_entry(&mut archive, entries::rigs_metadata())?;
         let sensor_count = rigs_metadata.sensor_count as usize;
 
         // Validate rig_count matches rigs array length
@@ -439,14 +437,14 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
 
         let sensor_camera_indexes_vec: Vec<u32> = read_binary_array(
             &mut archive,
-            &format!("rigs/sensor_camera_indexes.{sensor_count}.uint32.zst"),
+            &entries::rigs_sensor_camera_indexes(sensor_count),
             sensor_count,
         )?;
         let sensor_camera_indexes = Array1::from_vec(sensor_camera_indexes_vec);
 
         let sensor_quaternions_vec: Vec<f64> = read_binary_array(
             &mut archive,
-            &format!("rigs/sensor_quaternions_wxyz.{sensor_count}.4.float64.zst"),
+            &entries::rigs_sensor_quaternions_wxyz(sensor_count),
             sensor_count * 4,
         )?;
         let sensor_quaternions_wxyz =
@@ -456,7 +454,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
 
         let sensor_translations_vec: Vec<f64> = read_binary_array(
             &mut archive,
-            &format!("rigs/sensor_translations_xyz.{sensor_count}.3.float64.zst"),
+            &entries::rigs_sensor_translations_xyz(sensor_count),
             sensor_count * 3,
         )?;
         let sensor_translations_xyz =
@@ -466,26 +464,26 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
 
         // Frames
         let frames_metadata: FramesMetadata =
-            read_json_entry(&mut archive, "frames/metadata.json.zst")?;
+            read_json_entry(&mut archive, entries::frames_metadata())?;
         let frame_count = frames_metadata.frame_count as usize;
 
         let rig_indexes_vec: Vec<u32> = read_binary_array(
             &mut archive,
-            &format!("frames/rig_indexes.{frame_count}.uint32.zst"),
+            &entries::frames_rig_indexes(frame_count),
             frame_count,
         )?;
         let rig_indexes = Array1::from_vec(rig_indexes_vec);
 
         let image_sensor_indexes_vec: Vec<u32> = read_binary_array(
             &mut archive,
-            &format!("frames/image_sensor_indexes.{image_count}.uint32.zst"),
+            &entries::frames_image_sensor_indexes(image_count),
             image_count,
         )?;
         let image_sensor_indexes = Array1::from_vec(image_sensor_indexes_vec);
 
         let image_frame_indexes_vec: Vec<u32> = read_binary_array(
             &mut archive,
-            &format!("frames/image_frame_indexes.{image_count}.uint32.zst"),
+            &entries::frames_image_frame_indexes(image_count),
             image_count,
         )?;
         let image_frame_indexes = Array1::from_vec(image_frame_indexes_vec);

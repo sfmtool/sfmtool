@@ -1755,3 +1755,177 @@ fn json_maps_serialize_in_sorted_key_order() {
         "tool_options must iterate in sorted order"
     );
 }
+
+/// Every archive entry name, pinned against a literal.
+///
+/// `entries.rs` is the single source of truth for the three production paths,
+/// and that is exactly why this test is needed. A name that is wrong *there* is
+/// wrong **consistently**: `write`, `read` and `verify` all agree with each
+/// other, every round-trip test in this file still passes, and the only symptom
+/// is that the archive can no longer be exchanged with any other build of
+/// sfmtool. Before the names were centralized a typo broke the round trip
+/// loudly, because the writer's copy and the reader's copy disagreed; that
+/// safety net is gone, and this list replaces it.
+///
+/// Each dimension gets a distinct value so a template that interpolates the
+/// wrong count — `point_count` where `image_count` belongs — fails here too,
+/// not just a misspelt path.
+///
+/// Renaming an on-disk entry is a format change. It should require deliberately
+/// editing this list, and bumping `SFMR_FORMAT_VERSION` with a compatibility
+/// path in `read`/`verify` the way `positions_xyz` and `points3d_indexes` did.
+#[test]
+fn entry_names_are_pinned() {
+    use crate::entries as e;
+
+    // Distinct per-dimension values; see doc comment.
+    let (images, points, obs, sensors, frames, buckets, r) = (2, 5, 8, 3, 4, 7, 9);
+
+    // Fixed-name JSON sections.
+    assert_eq!(e::cameras_metadata(), "cameras/metadata.json.zst");
+    assert_eq!(e::rigs_metadata(), "rigs/metadata.json.zst");
+    assert_eq!(e::frames_metadata(), "frames/metadata.json.zst");
+    assert_eq!(e::images_metadata(), "images/metadata.json.zst");
+    assert_eq!(e::images_names(), "images/names.json.zst");
+    assert_eq!(
+        e::images_depth_statistics(),
+        "images/depth_statistics.json.zst"
+    );
+    assert_eq!(e::points3d_metadata(), "points3d/metadata.json.zst");
+    assert_eq!(e::tracks_metadata(), "tracks/metadata.json.zst");
+
+    // Rigs / frames.
+    assert_eq!(
+        e::rigs_sensor_camera_indexes(sensors),
+        "rigs/sensor_camera_indexes.3.uint32.zst"
+    );
+    assert_eq!(
+        e::rigs_sensor_quaternions_wxyz(sensors),
+        "rigs/sensor_quaternions_wxyz.3.4.float64.zst"
+    );
+    assert_eq!(
+        e::rigs_sensor_translations_xyz(sensors),
+        "rigs/sensor_translations_xyz.3.3.float64.zst"
+    );
+    assert_eq!(
+        e::frames_image_frame_indexes(images),
+        "frames/image_frame_indexes.2.uint32.zst"
+    );
+    assert_eq!(
+        e::frames_image_sensor_indexes(images),
+        "frames/image_sensor_indexes.2.uint32.zst"
+    );
+    assert_eq!(
+        e::frames_rig_indexes(frames),
+        "frames/rig_indexes.4.uint32.zst"
+    );
+
+    // Images.
+    assert_eq!(
+        e::images_camera_indexes(images),
+        "images/camera_indexes.2.uint32.zst"
+    );
+    assert_eq!(
+        e::images_quaternions_wxyz(images),
+        "images/quaternions_wxyz.2.4.float64.zst"
+    );
+    assert_eq!(
+        e::images_translations_xyz(images),
+        "images/translations_xyz.2.3.float64.zst"
+    );
+    assert_eq!(
+        e::images_image_file_hashes(images),
+        "images/image_file_hashes.2.uint128.zst"
+    );
+    assert_eq!(
+        e::images_feature_tool_hashes(images),
+        "images/feature_tool_hashes.2.uint128.zst"
+    );
+    assert_eq!(
+        e::images_sift_content_hashes(images),
+        "images/sift_content_hashes.2.uint128.zst"
+    );
+    assert_eq!(
+        e::images_thumbnails_y_x_rgb(images),
+        "images/thumbnails_y_x_rgb.2.128.128.3.uint8.zst"
+    );
+    assert_eq!(
+        e::images_observed_depth_histogram_counts(images, buckets),
+        "images/observed_depth_histogram_counts.2.7.uint32.zst"
+    );
+
+    // Points3D.
+    assert_eq!(
+        e::points3d_colors_rgb(points),
+        "points3d/colors_rgb.5.3.uint8.zst"
+    );
+    assert_eq!(
+        e::points3d_reprojection_errors(points),
+        "points3d/reprojection_errors.5.float32.zst"
+    );
+    assert_eq!(
+        e::points3d_normal_confidence(points),
+        "points3d/normal_confidence.5.uint8.zst"
+    );
+    assert_eq!(
+        e::points3d_patch_u_halfvec_xyz(points),
+        "points3d/patch_u_halfvec_xyz.5.3.float32.zst"
+    );
+    assert_eq!(
+        e::points3d_patch_v_halfvec_xyz(points),
+        "points3d/patch_v_halfvec_xyz.5.3.float32.zst"
+    );
+    assert_eq!(
+        e::points3d_patch_bitmaps_y_x_rgba(points, r),
+        "points3d/patch_bitmaps_y_x_rgba.5.9.9.4.uint8.zst"
+    );
+
+    // Tracks.
+    assert_eq!(
+        e::tracks_image_indexes(obs),
+        "tracks/image_indexes.8.uint32.zst"
+    );
+    assert_eq!(
+        e::tracks_feature_indexes(obs),
+        "tracks/feature_indexes.8.uint32.zst"
+    );
+    assert_eq!(
+        e::tracks_keypoints_xy(obs),
+        "tracks/keypoints_xy.8.2.float32.zst"
+    );
+    assert_eq!(
+        e::tracks_observation_confidence(obs),
+        "tracks/observation_confidence.8.uint8.zst"
+    );
+    assert_eq!(
+        e::tracks_observation_counts(points),
+        "tracks/observation_counts.5.uint32.zst"
+    );
+
+    // Version-dependent names: both spellings, since `read` and `verify` still
+    // have to open legacy archives.
+    assert_eq!(
+        e::points3d_positions(true, points),
+        "points3d/positions_xyz.5.3.float64.zst"
+    );
+    assert_eq!(
+        e::points3d_positions(false, points),
+        "points3d/positions_xyzw.5.4.float64.zst"
+    );
+    assert_eq!(
+        e::points3d_normals(true, points),
+        "points3d/estimated_normals_xyz.5.3.float32.zst"
+    );
+    assert_eq!(
+        e::points3d_normals(false, points),
+        "points3d/normals_xyz.5.3.float32.zst"
+    );
+    assert_eq!(
+        e::tracks_point_indexes(true, obs),
+        "tracks/points3d_indexes.8.uint32.zst"
+    );
+    assert_eq!(
+        e::tracks_point_indexes(false, obs),
+        "tracks/point_indexes.8.uint32.zst"
+    );
+}
