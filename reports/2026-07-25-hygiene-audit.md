@@ -28,6 +28,94 @@ drifting, and drift here is silent — no compile error, just two behaviours.
 ## Rust — `sfmtool-core` (geometry & features)
 
 **Mirrored finite/mixed bundle-adjust families — the finite half is a strict subset**
+
+> _Status (2026-08-08): Done — the finite family is deleted and `bundle_adjust`
+> now normalizes an absent mask to all-`false` and calls the single staged loop
+> (renamed from `bundle_adjust_mixed`; the `_mixed` suffixes went with it, since
+> they contrasted with a path that no longer exists). `bundle_adjust.rs` goes
+> 1519 → 963 lines, −556 in the kernel against +52 of test. Commit 0293dd5._
+>
+> _The finding's measurements reproduce exactly at HEAD: `solve_lm` (259–586,
+> 328 lines) vs `solve_lm_mixed` (988–1392, 405) still differ by **19 removed /
+> 96 added**. Nothing had drifted since the snapshot — the only commit to touch
+> the file was the numeric.rs batch (3608999)._
+>
+> _**The guard this finding demanded could not be written as specified, and the
+> test that looks like it already existed was vacuous.** Two separate problems._
+>
+> _(1) A **golden** test — hardcoded bit patterns — is not portable here.
+> `robust_scales` calls `powf` twice per residual component, and `powf` is libm,
+> not IEEE-754-exact, so committed goldens would be a cross-platform tripwire on
+> the Windows and macOS CI jobs. The equivalence was established with a
+> same-process differential comparison instead: build the scene twice, run
+> `bundle_adjust_finite` on one copy and `bundle_adjust_mixed` with an
+> all-`false` mask on the other, assert bit-identical focal, quaternions,
+> translations, points and residual norms. Six configurations — multi-round (so
+> the re-estimation runs twice), focal release, protected observations, fisheye
+> (the central-difference Jacobian), NaN re-admission, degenerate exit. All six
+> passed **before** anything was deleted; that run is what licensed the deletion._
+>
+> _(2) `all_false_and_absent_masks_match_bit_for_bit` (tests.rs:549) reads like
+> exactly the required guard and is **not** — it called `bundle_adjust` for both
+> arms, and the old dispatcher short-circuited an all-`false` mask to the finite
+> kernel (`if mask.iter().any(|&b| b)`), so both arms ran the finite path and the
+> mixed kernel was never executed. The spec's own testing requirement ("an
+> all-`false` mask and an absent mask both reproduce the finite-only kernel's
+> output bit for bit") was satisfied vacuously for the same reason. Anyone
+> trusting either the test name or the spec line would have deleted ~529 lines of
+> the numerical core having never once compared the two kernels._
+>
+> _The six differential tests were deleted along with the finite family — with
+> one implementation left there is nothing for "equivalence" to mean, and a
+> frozen reference copy in the test module would have re-created the duplication
+> being removed. They are replaced by
+> `unobserved_direction_row_does_not_perturb_finite_results`, which is a
+> permanent invariant rather than a migration gate: appending a marked direction
+> row that no observation references must leave every finite result
+> bit-identical. That exercises each direction branch's guard — `normalized_dir`,
+> the `cp_dir` lookups, the tangent bases, the frozen-translation scan, the
+> finite-survivors `min_obs` count — and is precisely the failure the merge makes
+> possible (a branch that stops checking its flag)._
+>
+> _Also worth recording: deleting the finite family destroyed a load-bearing
+> comment. The mixed copy's convergence test carried only "see the finite path",
+> while the four-line explanation of why two consecutive tiny steps are required
+> ("a single small step is how a traverse of a nearly-flat valley STARTS — the
+> focal release walks −20% through one") lived in `solve_lm`. Restored into the
+> surviving copy. Two doc links to now-deleted items (`[retriangulate]`,
+> `[robust_cost]`) were rewritten rather than left dangling._
+>
+> _Validation on real data, since the synthetic scenes are the same ones the old
+> kernel was tuned against: a 17-image seoul_bull reconstruction (1123 points,
+> 3416 observations, 0.29 px median) driven through
+> `sfmtool._sfmtool.geometry.bundle_adjust` across nine configurations — no mask,
+> explicit all-`false`, protected, single tight round, NaN re-admission,
+> degenerate exit, a genuine infinity mask (the control — the mixed path proper,
+> which must also be unchanged), a fisheye swap for the numeric-Jacobian branch,
+> and a SIMPLE_PINHOLE rebuild with `opt_f` that moves the focal 336.0 → 330.1.
+> Every output float dumped as raw bits: **62,136 doubles, byte-identical
+> pre- and post-change** (sha256
+> `7bbd9e60…f8f0` both sides)._
+>
+> _One caveat on that evidence, since it is easy to overclaim: **`sfm solve`
+> does not reach this kernel at all.** The CLI's incremental and global solves go
+> through pycolmap; `src/sfmtool/` imports only `RotQuaternion`,
+> `Se3Transform` and `CameraIntrinsics` from `_sfmtool.geometry`, never
+> `bundle_adjust`, `grow_reconstruction` or `rotation_init` — those bindings are
+> exercised only by `tests/rust_bindings/`. So an end-to-end reconstruction is
+> not a regression signal for this change in either direction, and it is not a
+> stable one regardless: three `sfm solve --incremental --seed 42` runs on the
+> same images gave 1123 / 1023 / 1018 points, and **the last two were the same
+> binary**. The direct-binding probe above is the strongest real-data check
+> available for this kernel._
+>
+> _Cost side, stated plainly rather than measured: the merged path does a little
+> more work than the old finite path — an `n_pt` bool vec when the caller passes
+> no mask, a `cp_dir` vec, an `img_has_finite` scan, and an `n_pt` tangent-basis
+> vec of zero tuples per linearization. All are small against the `d × d` reduced
+> camera system that is cloned 12 times per damping ladder (`d = 1 + 6·n_img`),
+> but no before/after benchmark was run, so this is reasoning, not a measurement._
+
 - Location: `crates/sfmtool-core/src/geometry/bundle_adjust.rs` (1529)
 - Problem: Five function pairs are mirrored. Measured by diff, not eyeball:
   `solve_lm` (269–596, 328 lines) vs `solve_lm_mixed` (998–1402, 405) differ by
@@ -1098,7 +1186,10 @@ convention and is applied consistently.
 
 ## Top 3
 
-1. **`bundle_adjust.rs` finite/mixed duplication** — ~529 lines of the numerical
+1. **`bundle_adjust.rs` finite/mixed duplication** — _done 2026-08-08; see the
+   status note on the finding above, including why the "golden test" gate had to
+   be built differently and why the test that appeared to already provide it was
+   vacuous._ ~529 lines of the numerical
    core exist twice, with 309 of `solve_lm`'s 328 lines verbatim in
    `solve_lm_mixed`. Highest value because every future fix to the damping ladder,
    the Schur accumulation or the convergence test currently has to be made twice,
