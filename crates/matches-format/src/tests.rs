@@ -1476,12 +1476,13 @@ fn test_cluster_archive_uses_stored_compression() {
 /// is that the archive can no longer be exchanged with any other build of
 /// sfmtool. Before the names were centralized a typo broke the round trip
 /// loudly, because the writer's copy and the reader's copy disagreed; that
-/// safety net is gone, and this list replaces it.
+/// safety net is gone. This list and `archive_entry_names_pin_call_sites`
+/// replace it between them — see the split of responsibilities below.
 ///
 /// **What this pins and what it does not.** This test fixes the *spelling and
 /// shape* of each template. It does **not** fix which count a given call site
 /// passes — that decision lives in `read`/`write`/`verify` and is invisible
-/// here.
+/// here. `archive_entry_names_pin_call_sites` covers that.
 ///
 /// Dimension values are distinct from each other **and** from every structural
 /// constant that appears in a template (`2`, `3`, `4`). That second part
@@ -1632,4 +1633,104 @@ fn entry_names_are_pinned() {
         e::cluster_patches_member_consistency_residual(29),
         "cluster_patches/member_consistency_residual.29.float32.zst"
     );
+}
+
+/// The archives a real write produces, pinned entry by entry.
+///
+/// `entry_names_are_pinned` fixes each template in `entries.rs`, but the choice
+/// of *which* count sizes a given entry lives at the call sites in `read`,
+/// `write` and `verify` — and that choice is invisible to it. Passing
+/// `member_count` where `cluster_patches/reference_members` wants
+/// `cluster_count`, at all three call sites, produces an archive no other build
+/// can read while leaving every other test in this file green.
+///
+/// Two archives, because no single `.matches` file carries every section: a
+/// file has either the pairwise backbone or the cluster backbone, never both.
+///
+/// The builders give `image_count = 3`, `pair_count = 2`, `match_count = 5`,
+/// `inlier_count = 3`, `cluster_count = 2`, `member_count = 5`. Those are
+/// distinct enough to catch the swaps that matter (pair/match, cluster/member),
+/// but note `inlier_count` and `cluster_starts`'s `cluster_count + 1` both
+/// happen to equal `image_count` here, so a swap involving those two would slip
+/// through — `entry_names_are_pinned` is what covers their spelling.
+#[test]
+fn archive_entry_names_pin_call_sites() {
+    let cases: [(&str, MatchesData, &[&str]); 2] = [
+        (
+            "tvg",
+            make_test_data_with_tvg(),
+            &[
+                "content_hash.json.zst",
+                "image_pairs/image_index_pairs.2.2.uint32.zst",
+                "image_pairs/match_counts.2.uint32.zst",
+                "image_pairs/match_descriptor_distances.5.float32.zst",
+                "image_pairs/match_feature_indexes.5.2.uint32.zst",
+                "image_pairs/metadata.json.zst",
+                "images/feature_counts.3.uint32.zst",
+                "images/feature_tool_hashes.3.uint128.zst",
+                "images/image_dims.3.2.uint32.zst",
+                "images/metadata.json.zst",
+                "images/names.json.zst",
+                "images/sift_content_hashes.3.uint128.zst",
+                "metadata.json.zst",
+                "two_view_geometries/config_indexes.2.uint8.zst",
+                "two_view_geometries/config_types.json.zst",
+                "two_view_geometries/e_matrices.2.3.3.float64.zst",
+                "two_view_geometries/f_matrices.2.3.3.float64.zst",
+                "two_view_geometries/h_matrices.2.3.3.float64.zst",
+                "two_view_geometries/inlier_counts.2.uint32.zst",
+                "two_view_geometries/inlier_feature_indexes.3.2.uint32.zst",
+                "two_view_geometries/metadata.json.zst",
+                "two_view_geometries/quaternions_wxyz.2.4.float64.zst",
+                "two_view_geometries/translations_xyz.2.3.float64.zst",
+            ],
+        ),
+        (
+            "cluster_patches",
+            make_cluster_patch_test_data(),
+            &[
+                "cluster_patches/member_affines.5.2.3.float64.zst",
+                "cluster_patches/member_consistency_residual.5.float32.zst",
+                "cluster_patches/member_shift_px.5.float32.zst",
+                "cluster_patches/member_status.5.uint8.zst",
+                "cluster_patches/member_zncc.5.float32.zst",
+                "cluster_patches/metadata.json.zst",
+                "cluster_patches/reference_members.2.uint32.zst",
+                "clusters/cluster_starts.3.uint32.zst",
+                "clusters/member_features.5.uint32.zst",
+                "clusters/member_images.5.uint32.zst",
+                "clusters/metadata.json.zst",
+                "content_hash.json.zst",
+                "images/feature_counts.3.uint32.zst",
+                "images/feature_tool_hashes.3.uint128.zst",
+                "images/image_dims.3.2.uint32.zst",
+                "images/metadata.json.zst",
+                "images/names.json.zst",
+                "images/sift_content_hashes.3.uint128.zst",
+                "metadata.json.zst",
+            ],
+        ),
+    ];
+
+    for (label, data, expected) in cases {
+        let dir = std::env::temp_dir().join(format!("matches_test_entry_name_pin_{label}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pin.matches");
+        write_matches(&path, &data, 3).unwrap();
+
+        let f = std::fs::File::open(&path).unwrap();
+        let mut zip = zip::ZipArchive::new(f).unwrap();
+        let mut got: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .collect();
+        got.sort();
+
+        assert_eq!(
+            got, expected,
+            "{label}: archive entry listing changed — a call site is passing a \
+             different count, or an entry was added, removed or renamed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

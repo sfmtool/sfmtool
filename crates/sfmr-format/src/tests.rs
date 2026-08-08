@@ -1765,7 +1765,8 @@ fn json_maps_serialize_in_sorted_key_order() {
 /// is that the archive can no longer be exchanged with any other build of
 /// sfmtool. Before the names were centralized a typo broke the round trip
 /// loudly, because the writer's copy and the reader's copy disagreed; that
-/// safety net is gone, and this list replaces it.
+/// safety net is gone. This list and `archive_entry_names_pin_call_sites`
+/// replace it between them — see the split of responsibilities below.
 ///
 /// **What this pins and what it does not.** This test fixes the *spelling and
 /// shape* of each template. It does **not** fix which count a given call site

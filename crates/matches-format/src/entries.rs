@@ -40,9 +40,9 @@
 //!
 //! That pin covers spelling and shape only. Which count a given entry is sized
 //! by is decided at the call sites, not here, so a caller passing
-//! `member_count` where `cluster_count` belongs is invisible to it. The
-//! `.sfmr` crate pins its written archive's listing to cover that; this crate
-//! has no equivalent yet.
+//! `member_count` where `cluster_count` belongs is invisible to it;
+//! `tests::archive_entry_names_pin_call_sites` pins the written archives'
+//! listings to cover that.
 
 /// `metadata.json.zst` — the top-level `.matches` metadata.
 ///
