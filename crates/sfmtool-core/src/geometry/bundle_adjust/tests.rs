@@ -545,6 +545,9 @@ fn make_lowpar_scene(n_img: usize, n_pt: usize, noise: f64) -> Scene {
     }
 }
 
+/// Guards the entry point's `None` → all-`false` normalization: an absent
+/// mask must build a mask the staged loop treats identically to one the
+/// caller supplied.
 #[test]
 fn all_false_and_absent_masks_match_bit_for_bit() {
     let build = || {
@@ -594,6 +597,54 @@ fn all_false_and_absent_masks_match_bit_for_bit() {
         .residual_norms
         .iter()
         .zip(&out_masked.residual_norms)
+    {
+        assert_eq!(a.to_bits(), b.to_bits());
+    }
+}
+
+#[test]
+fn unobserved_direction_row_does_not_perturb_finite_results() {
+    // The direction machinery must not leak into a finite solve. Appending a
+    // marked direction row that no observation references exercises every
+    // direction branch's guard — `normalized_dir` on input, the `cp_dir`
+    // lookups, the tangent bases, the frozen-translation scan, the
+    // finite-survivors `min_obs` count — while changing nothing the solve is
+    // allowed to see. Every finite result must come back bit-identical.
+    //
+    // Since the finite-only kernel was folded into the staged loop this is
+    // the load-bearing guard on that reduction: a direction branch that
+    // stopped checking its flag would show up here.
+    let mut plain = make_perturbed_scene();
+    let out_plain = run(&mut plain, false, &DEFAULT_SCHEDULE);
+
+    let mut extra = make_perturbed_scene();
+    extra.points.push([0.0, 0.0, -1.0]);
+    let mut mask = vec![false; extra.points.len()];
+    *mask.last_mut().unwrap() = true;
+    let out_extra = run_masked(&mut extra, &mask, false, &DEFAULT_SCHEDULE, 12);
+
+    // Compare only the rows the plain scene has; the appended direction is
+    // unobserved, so re-estimation legitimately leaves it NaN.
+    assert_eq!(out_plain.focal.to_bits(), out_extra.focal.to_bits());
+    for (a, b) in plain.quats.iter().zip(&extra.quats) {
+        for c in 0..4 {
+            assert_eq!(a.coords[c].to_bits(), b.coords[c].to_bits());
+        }
+    }
+    for (a, b) in plain.trans.iter().zip(&extra.trans) {
+        for c in 0..3 {
+            assert_eq!(a[c].to_bits(), b[c].to_bits());
+        }
+    }
+    for (p, (a, b)) in plain.points.iter().zip(&extra.points).enumerate() {
+        for c in 0..3 {
+            assert_eq!(a[c].to_bits(), b[c].to_bits(), "point {p} component {c}");
+        }
+    }
+    for (a, b) in out_plain
+        .residual_norms
+        .iter()
+        .zip(&out_extra.residual_norms)
     {
         assert_eq!(a.to_bits(), b.to_bits());
     }
@@ -1397,6 +1448,7 @@ fn protected_long_range_observations_correct_a_drifted_gauge() {
         &init.s.quats,
         &init.s.trans,
         &init.s.points,
+        &vec![false; init.s.points.len()],
         &init.s.uv,
         &init.s.obs_img,
         &init.s.obs_pt,

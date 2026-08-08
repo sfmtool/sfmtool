@@ -198,9 +198,12 @@ Python's point of view).
 
 ## Points at infinity
 
-**Status:** Implemented — same locations as the finite kernel above; the
-entry point branches to the untouched finite-only path whenever no direction
-is marked.
+**Status:** Implemented — same locations as the kernel above. There is one
+staged loop, not two: direction handling is a per-point branch inside it, so
+with nothing marked the loop *is* the finite-only solve. (It was originally a
+second mirrored copy of the whole kernel, entered only when a direction was
+marked; the copies were merged once the reduction was shown to hold bit for
+bit.)
 
 A point at infinity is a pure direction: its observations depend on the
 observing image's rotation and the shared camera model, never on any
@@ -217,7 +220,9 @@ focal.
   the kernel normalizes it on input and returns it normalized. `NaN`
   directions are allowed and behave like `NaN` finite points (invalid
   until re-estimated). An absent mask (binding: `point_at_infinity=None`)
-  or an all-`false` mask reproduces the finite-only kernel bit for bit.
+  is normalized to an all-`false` mask at the entry point, and an all-`false`
+  mask skips every direction branch — so both are exactly the finite-only
+  solve.
 - Directions live in the same `points` array; the mask is the only
   distinction, and it is not modified — classification belongs to the
   caller.
@@ -264,9 +269,11 @@ All other shapes, validation, and outputs are unchanged.
 
 ### Testing requirements (additional)
 
-- **Regression**: an all-`false` mask and an absent mask both reproduce
-  the finite-only kernel's output bit for bit on the existing synthetic
-  scenes.
+- **Regression**: an absent mask and an all-`false` mask agree bit for bit
+  on the existing synthetic scenes (the entry point's normalization), and
+  appending a marked direction row that no observation references leaves
+  every finite result bit-identical (the direction branches stay inert when
+  their flag is unset — the guard on the single-loop reduction).
 - **Direction fixpoint and recovery**: noiseless direction observations
   stay put; perturbed rotations recover ground truth against a far-field
   direction set to sub-pixel reprojection.
@@ -278,7 +285,7 @@ All other shapes, validation, and outputs are unchanged.
   translation bit-identical while its rotation refines.
 - **Re-estimation**: a `NaN` direction with ≥ 2 observations is reborn in
   round 2 as the mean back-rotated ray.
-- **Memory order and binding parity** as for the finite kernel.
+- **Memory order and binding parity** as for the kernel above.
 
 ## Protected observations
 
@@ -343,8 +350,8 @@ validation, and outputs are unchanged.
 ### Testing requirements (additional)
 
 - **Regression**: an all-`false` mask and an absent mask both reproduce the
-  unprotected kernel's output bit for bit — on the finite path and on the
-  mixed (points-at-infinity) path.
+  unprotected output bit for bit — with no direction marked and with a
+  points-at-infinity mask in play.
 - **Trim survival**: a track corrupted with large mutually inconsistent
   offsets is fully trimmed when unprotected (its point passes through
   bit-identical under a single-round schedule) and stays in the solve when

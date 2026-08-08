@@ -93,86 +93,6 @@ fn robust_scales(z: f64) -> (f64, f64) {
     (js, rs)
 }
 
-/// Per-observation residual norm and canonical in-front depth (`−z_cam`) at
-/// the given state. Invalid observations (non-finite point, behind camera,
-/// outside domain) report `INVALID_RESIDUAL` and their (possibly negative)
-/// depth.
-fn residual_norms_depths(
-    cam: &CameraIntrinsics,
-    quats: &[UnitQuaternion<f64>],
-    trans: &[Vector3<f64>],
-    points: &[[f64; 3]],
-    uv: &[[f64; 2]],
-    obs_img: &[u32],
-    obs_pt: &[u32],
-) -> (Vec<f64>, Vec<f64>) {
-    let n_obs = obs_img.len();
-    let mut norms = vec![INVALID_RESIDUAL; n_obs];
-    let mut depths = vec![f64::NEG_INFINITY; n_obs];
-    for k in 0..n_obs {
-        let p = points[obs_pt[k] as usize];
-        if !p[0].is_finite() || !p[1].is_finite() || !p[2].is_finite() {
-            continue;
-        }
-        let i = obs_img[k] as usize;
-        let c = quats[i] * Vector3::new(p[0], p[1], p[2]) + trans[i];
-        depths[k] = -c.z;
-        if let Some((u, v)) = cam.ray_to_pixel([c.x, c.y, c.z]) {
-            norms[k] = (u - uv[k][0]).hypot(v - uv[k][1]);
-        }
-    }
-    (norms, depths)
-}
-
-/// Rebuild every point from all supplied observations at the current poses
-/// (ray-midpoint batch triangulation). Tracks with fewer than two
-/// observations — and points with none — become `NaN`; callers refill from
-/// their full observation set (the bootstrap's post-BA refill rule).
-fn retriangulate(
-    cam: &CameraIntrinsics,
-    quats: &[UnitQuaternion<f64>],
-    trans: &[Vector3<f64>],
-    points: &mut [[f64; 3]],
-    uv: &[[f64; 2]],
-    obs_img: &[u32],
-    obs_pt: &[u32],
-) {
-    let n_obs = obs_img.len();
-    let mut order: Vec<u32> = (0..n_obs as u32).collect();
-    order.sort_unstable_by_key(|&k| obs_pt[k as usize]);
-
-    let mut dirs = Vec::with_capacity(n_obs);
-    let mut centers = Vec::with_capacity(n_obs);
-    let mut offsets = Vec::new();
-    let mut track_pt = Vec::new();
-    let mut prev: Option<u32> = None;
-    for &k in &order {
-        let k = k as usize;
-        let p = obs_pt[k];
-        if prev != Some(p) {
-            offsets.push(dirs.len());
-            track_pt.push(p as usize);
-            prev = Some(p);
-        }
-        let i = obs_img[k] as usize;
-        let r_inv = quats[i].inverse();
-        let d = cam.pixel_to_ray(uv[k][0], uv[k][1]);
-        dirs.push(r_inv * Vector3::new(d[0], d[1], d[2]));
-        centers.push(Point3::from(-(r_inv * trans[i])));
-    }
-    offsets.push(dirs.len());
-
-    for p in points.iter_mut() {
-        *p = [f64::NAN; 3];
-    }
-    let tris = triangulate_batch(&dirs, &centers, &offsets);
-    for (t, tri) in tris.iter().enumerate() {
-        if offsets[t + 1] - offsets[t] >= 2 {
-            points[track_pt[t]] = [tri.point.x, tri.point.y, tri.point.z];
-        }
-    }
-}
-
 /// Projected pixel and the 2×3 projection Jacobian `∂(u, v)/∂p_cam` at a
 /// camera-frame point. Analytic for the perspective family; a central
 /// difference of `ray_to_pixel` for fisheye / equirectangular models, which
@@ -214,377 +134,6 @@ struct ObsBlocks {
     pt_j: SMatrix<f64, 2, 3>,
 }
 
-/// Robust cost over the kept observations at a candidate state. `s2s` is the
-/// per-kept-observation squared loss scale (uniform except where a protected
-/// observation widens it).
-#[allow(clippy::too_many_arguments)]
-fn robust_cost(
-    cam: &CameraIntrinsics,
-    quats: &[UnitQuaternion<f64>],
-    trans: &[Vector3<f64>],
-    points: &[Vector3<f64>],
-    uv: &[[f64; 2]],
-    kept: &[usize],
-    obs_ci: &[usize],
-    obs_cp: &[usize],
-    s2s: &[f64],
-) -> f64 {
-    kept.iter()
-        .enumerate()
-        .map(|(kk, &k)| {
-            let s2 = s2s[kk];
-            let p = points[obs_cp[kk]];
-            // A non-finite point (possible only for protected observations,
-            // which the trim never excludes) is penalized like an
-            // out-of-domain projection.
-            if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite()) {
-                return s2 * rho(INVALID_RESIDUAL * INVALID_RESIDUAL / s2);
-            }
-            let c = quats[obs_ci[kk]] * p + trans[obs_ci[kk]];
-            match cam.ray_to_pixel([c.x, c.y, c.z]) {
-                Some((u, v)) => {
-                    let dx = u - uv[k][0];
-                    let dy = v - uv[k][1];
-                    s2 * (rho(dx * dx / s2) + rho(dy * dy / s2))
-                }
-                None => s2 * rho(INVALID_RESIDUAL * INVALID_RESIDUAL / s2),
-            }
-        })
-        .sum()
-}
-
-/// One robust sparse LM solve over the kept observations (compact-indexed).
-/// Updates `quats` / `trans` / `points` in place and returns the focal.
-#[allow(clippy::too_many_arguments)]
-fn solve_lm(
-    cam0: &CameraIntrinsics,
-    f0: f64,
-    quats: &mut [UnitQuaternion<f64>],
-    trans: &mut [Vector3<f64>],
-    points: &mut [[f64; 3]],
-    uv: &[[f64; 2]],
-    obs_img: &[u32],
-    obs_pt: &[u32],
-    kept: &[usize],
-    opt_f: bool,
-    loss_scale: f64,
-    max_iters: usize,
-    protected: Option<&[bool]>,
-    protected_loss_scale: f64,
-) -> f64 {
-    // Compact the images and points the kept observations touch.
-    let mut img_ids: Vec<usize> = kept.iter().map(|&k| obs_img[k] as usize).collect();
-    img_ids.sort_unstable();
-    img_ids.dedup();
-    let mut pt_ids: Vec<usize> = kept.iter().map(|&k| obs_pt[k] as usize).collect();
-    pt_ids.sort_unstable();
-    pt_ids.dedup();
-    let n_im = img_ids.len();
-    let n_pt = pt_ids.len();
-    let ci_of: std::collections::HashMap<usize, usize> =
-        img_ids.iter().enumerate().map(|(c, &i)| (i, c)).collect();
-    let cp_of: std::collections::HashMap<usize, usize> =
-        pt_ids.iter().enumerate().map(|(c, &p)| (p, c)).collect();
-    let obs_ci: Vec<usize> = kept
-        .iter()
-        .map(|&k| ci_of[&(obs_img[k] as usize)])
-        .collect();
-    let obs_cp: Vec<usize> = kept.iter().map(|&k| cp_of[&(obs_pt[k] as usize)]).collect();
-
-    // Per-point observation lists (compact indices into `kept`).
-    let mut pt_obs: Vec<Vec<usize>> = vec![Vec::new(); n_pt];
-    for (kk, &cp) in obs_cp.iter().enumerate() {
-        pt_obs[cp].push(kk);
-    }
-
-    // Working state (compact copies).
-    let mut f = f0;
-    let mut q: Vec<UnitQuaternion<f64>> = img_ids.iter().map(|&i| quats[i]).collect();
-    let mut t: Vec<Vector3<f64>> = img_ids.iter().map(|&i| trans[i]).collect();
-    let mut x: Vec<Vector3<f64>> = pt_ids
-        .iter()
-        .map(|&p| Vector3::new(points[p][0], points[p][1], points[p][2]))
-        .collect();
-
-    // Reduced camera system: [f | 6 per image], the focal slot always present
-    // (pinned when !opt_f) to keep the indexing uniform.
-    let d = 1 + 6 * n_im;
-    // Per-kept-observation squared loss scale: the round's scale everywhere,
-    // widened by `protected_loss_scale` for protected observations.
-    let s2 = loss_scale * loss_scale;
-    let s2s: Vec<f64> = kept
-        .iter()
-        .map(|&k| match protected {
-            Some(m) if m[k] => {
-                let s = loss_scale * protected_loss_scale;
-                s * s
-            }
-            _ => s2,
-        })
-        .collect();
-    let mut lambda = 1e-3;
-    let mut tiny_steps = 0usize;
-    let mut cam = cam_at(cam0, f);
-    let mut prev_cost = robust_cost(&cam, &q, &t, &x, uv, kept, &obs_ci, &obs_cp, &s2s);
-
-    let analytic = cam.model.supports_pixel_jacobian();
-    for _ in 0..max_iters {
-        // ── Linearize at the current state ───────────────────────────────
-        let (cx, cy) = cam.principal_point();
-        let blocks: Vec<ObsBlocks> = kept
-            .iter()
-            .enumerate()
-            .map(|(kk, &k)| {
-                let ci = obs_ci[kk];
-                let cp = obs_cp[kk];
-                let s2 = s2s[kk];
-                let rot_pt = q[ci] * x[cp];
-                let p_cam = rot_pt + t[ci];
-                let mut res = Vector2::new(INVALID_RESIDUAL, 0.0);
-                let mut cam_j = SMatrix::<f64, 2, 7>::zeros();
-                let mut pt_j = SMatrix::<f64, 2, 3>::zeros();
-                // A non-finite point (protected observations only — the trim
-                // never excludes them) keeps the penalized residual and zero
-                // Jacobian rows: penalized, never steering.
-                let proj = if x[cp].x.is_finite() && x[cp].y.is_finite() && x[cp].z.is_finite() {
-                    project_with_jac(&cam, p_cam, analytic)
-                } else {
-                    None
-                };
-                if let Some(((u, v), jp)) = proj {
-                    res = Vector2::new(u - uv[k][0], v - uv[k][1]);
-                    let jp = SMatrix::<f64, 2, 3>::from_rows(&[
-                        SMatrix::<f64, 1, 3>::from_row_slice(&jp[0]),
-                        SMatrix::<f64, 1, 3>::from_row_slice(&jp[1]),
-                    ]);
-                    if opt_f {
-                        cam_j[(0, 0)] = (u - cx) / f;
-                        cam_j[(1, 0)] = (v - cy) / f;
-                    }
-                    // Rotation block: ∂p_cam/∂δθ = −[R·X]ₓ.
-                    let nskew = Matrix3::new(
-                        0.0, rot_pt.z, -rot_pt.y, //
-                        -rot_pt.z, 0.0, rot_pt.x, //
-                        rot_pt.y, -rot_pt.x, 0.0,
-                    );
-                    cam_j.fixed_view_mut::<2, 3>(0, 1).copy_from(&(jp * nskew));
-                    // Translation block: identity.
-                    cam_j.fixed_view_mut::<2, 3>(0, 4).copy_from(&jp);
-                    // Point block: ∂p_cam/∂X = R.
-                    let r_mat: Matrix3<f64> = q[ci].to_rotation_matrix().into_inner();
-                    pt_j.copy_from(&(jp * r_mat));
-                }
-                for row in 0..2 {
-                    let z = res[row] * res[row] / s2;
-                    let (js, rs) = robust_scales(z);
-                    res[row] *= rs;
-                    for col in 0..7 {
-                        cam_j[(row, col)] *= js;
-                    }
-                    for col in 0..3 {
-                        pt_j[(row, col)] *= js;
-                    }
-                }
-                ObsBlocks {
-                    ci,
-                    cp,
-                    res,
-                    cam_j,
-                    pt_j,
-                }
-            })
-            .collect();
-
-        // ── Accumulate the normal-equation blocks ────────────────────────
-        let mut h_cc = DMatrix::<f64>::zeros(d, d);
-        let mut g_c = DVector::<f64>::zeros(d);
-        let mut v_pp: Vec<Matrix3<f64>> = vec![Matrix3::zeros(); n_pt];
-        let mut g_p: Vec<Vector3<f64>> = vec![Vector3::zeros(); n_pt];
-        let mut w_cp: Vec<SMatrix<f64, 7, 3>> = Vec::with_capacity(blocks.len());
-        for b in &blocks {
-            let idx = [
-                0,
-                1 + 6 * b.ci,
-                2 + 6 * b.ci,
-                3 + 6 * b.ci,
-                4 + 6 * b.ci,
-                5 + 6 * b.ci,
-                6 + 6 * b.ci,
-            ];
-            let h_local = b.cam_j.transpose() * b.cam_j;
-            let g_local = b.cam_j.transpose() * b.res;
-            for (a, &ia) in idx.iter().enumerate() {
-                g_c[ia] += g_local[a];
-                for (c, &ic) in idx.iter().enumerate() {
-                    h_cc[(ia, ic)] += h_local[(a, c)];
-                }
-            }
-            v_pp[b.cp] += b.pt_j.transpose() * b.pt_j;
-            g_p[b.cp] += b.pt_j.transpose() * b.res;
-            w_cp.push(b.cam_j.transpose() * b.pt_j);
-        }
-
-        // ── Damping ladder: re-damp and re-solve from this linearization ──
-        let mut improved = false;
-        for _ in 0..12 {
-            let mut s = h_cc.clone();
-            for dd in 0..d {
-                s[(dd, dd)] += lambda * h_cc[(dd, dd)].max(1e-12);
-            }
-            let mut g_red = g_c.clone();
-            // Schur-eliminate the points.
-            let mut v_inv: Vec<Matrix3<f64>> = Vec::with_capacity(n_pt);
-            let mut singular = false;
-            for v in &v_pp {
-                let mut vd = *v;
-                for dd in 0..3 {
-                    vd[(dd, dd)] += lambda * v[(dd, dd)].max(1e-12);
-                }
-                match vd.try_inverse() {
-                    Some(inv) => v_inv.push(inv),
-                    None => {
-                        singular = true;
-                        break;
-                    }
-                }
-            }
-            if singular {
-                lambda *= 4.0;
-                continue;
-            }
-            for (p, obs) in pt_obs.iter().enumerate() {
-                let y = v_inv[p] * g_p[p];
-                for &a in obs {
-                    let wa = &w_cp[a];
-                    let ba = blocks[a].ci;
-                    let ia = [
-                        0,
-                        1 + 6 * ba,
-                        2 + 6 * ba,
-                        3 + 6 * ba,
-                        4 + 6 * ba,
-                        5 + 6 * ba,
-                        6 + 6 * ba,
-                    ];
-                    let contrib = wa * y;
-                    for (r, &ir) in ia.iter().enumerate() {
-                        g_red[ir] -= contrib[r];
-                    }
-                    for &b in obs {
-                        let m = wa * v_inv[p] * w_cp[b].transpose();
-                        let bb = blocks[b].ci;
-                        let ib = [
-                            0,
-                            1 + 6 * bb,
-                            2 + 6 * bb,
-                            3 + 6 * bb,
-                            4 + 6 * bb,
-                            5 + 6 * bb,
-                            6 + 6 * bb,
-                        ];
-                        for (r, &ir) in ia.iter().enumerate() {
-                            for (c, &ic) in ib.iter().enumerate() {
-                                s[(ir, ic)] -= m[(r, c)];
-                            }
-                        }
-                    }
-                }
-            }
-            if !opt_f {
-                // Pin the focal slot.
-                for dd in 0..d {
-                    s[(0, dd)] = 0.0;
-                    s[(dd, 0)] = 0.0;
-                }
-                s[(0, 0)] = 1.0;
-                g_red[0] = 0.0;
-            }
-
-            let Some(delta) = s.lu().solve(&(-g_red)) else {
-                lambda *= 4.0;
-                continue;
-            };
-
-            // Candidate state.
-            let f_cand = if opt_f { f + delta[0] } else { f };
-            if opt_f && !(f_cand.is_finite() && f_cand > 1e-6) {
-                lambda *= 4.0;
-                continue;
-            }
-            let mut q_cand = q.clone();
-            let mut t_cand = t.clone();
-            for c in 0..n_im {
-                let o = 1 + 6 * c;
-                let dtheta = Vector3::new(delta[o], delta[o + 1], delta[o + 2]);
-                q_cand[c] = UnitQuaternion::from_scaled_axis(dtheta) * q[c];
-                t_cand[c] = t[c] + Vector3::new(delta[o + 3], delta[o + 4], delta[o + 5]);
-            }
-            let mut x_cand = x.clone();
-            for (p, obs) in pt_obs.iter().enumerate() {
-                // δp = −V⁻¹(g_p + Wᵀ δc), the Wᵀδc gathered over the point's
-                // observations' camera blocks.
-                let mut wt_dc = Vector3::zeros();
-                for &a in obs {
-                    let ba = blocks[a].ci;
-                    let mut dc = SMatrix::<f64, 7, 1>::zeros();
-                    dc[0] = delta[0];
-                    for r in 0..6 {
-                        dc[1 + r] = delta[1 + 6 * ba + r];
-                    }
-                    wt_dc += w_cp[a].transpose() * dc;
-                }
-                x_cand[p] = x[p] - v_inv[p] * (g_p[p] + wt_dc);
-            }
-
-            let cam_cand = cam_at(cam0, f_cand);
-            let new_cost = robust_cost(
-                &cam_cand, &q_cand, &t_cand, &x_cand, uv, kept, &obs_ci, &obs_cp, &s2s,
-            );
-            if new_cost < prev_cost {
-                let rel = (prev_cost - new_cost) / prev_cost.max(1e-300);
-                f = f_cand;
-                q = q_cand;
-                t = t_cand;
-                x = x_cand;
-                cam = cam_cand;
-                prev_cost = new_cost;
-                lambda = (lambda * 0.5).max(1e-12);
-                improved = true;
-                // Converged only after tiny improvements twice in a row: a
-                // single small step is how a traverse of a nearly-flat
-                // valley STARTS (the focal release walks −20% through one),
-                // so one is not proof of convergence.
-                if rel < 1e-8 {
-                    tiny_steps += 1;
-                    if tiny_steps >= 2 {
-                        lambda = f64::INFINITY;
-                    }
-                } else {
-                    tiny_steps = 0;
-                }
-                break;
-            }
-            lambda *= 4.0;
-            if lambda > 1e12 {
-                break;
-            }
-        }
-        if !improved || lambda.is_infinite() {
-            break;
-        }
-    }
-
-    // Scatter the compact state back.
-    for (c, &i) in img_ids.iter().enumerate() {
-        quats[i] = q[c];
-        trans[i] = t[c];
-    }
-    for (c, &p) in pt_ids.iter().enumerate() {
-        points[p] = [x[c].x, x[c].y, x[c].z];
-    }
-    f
-}
-
 /// Staged bundle adjustment over images sharing one camera model.
 ///
 /// Per schedule round: retriangulate every point from all supplied
@@ -600,8 +149,8 @@ fn solve_lm(
 /// `point_at_infinity` optionally marks per-point directions: a marked row of
 /// `points` is a world-frame direction (normalized on input and output) whose
 /// observations depend on rotation and camera model only — see "Points at
-/// infinity" in `specs/core/bundle-adjustment.md`. An absent or all-`false`
-/// mask takes the finite-only code path untouched.
+/// infinity" in `specs/core/bundle-adjustment.md`. An absent mask is an
+/// all-`false` mask, which reduces the solve to the finite-only one.
 ///
 /// `protected` optionally marks per-observation protection (parallel to the
 /// observation arrays): a protected observation is never removed by the
@@ -643,33 +192,26 @@ pub fn bundle_adjust(
     }
     // An all-`false` protection mask is exactly no mask.
     let protected = protected.filter(|m| m.iter().any(|&b| b));
-    if let Some(mask) = point_at_infinity {
-        assert_eq!(
-            mask.len(),
-            points.len(),
-            "point_at_infinity and points length mismatch"
-        );
-        if mask.iter().any(|&b| b) {
-            return bundle_adjust_mixed(
-                cam,
-                quats,
-                trans,
-                points,
-                uv,
-                obs_img,
-                obs_pt,
-                mask,
-                protected,
-                protected_loss_scale,
-                opt_f,
-                schedule,
-                max_iters,
-                min_track,
-                min_obs,
+    // No mask is an all-`false` mask. The staged loop reduces exactly to a
+    // finite-only solve when nothing is marked: every direction-specific
+    // branch in it is guarded by the per-point flag.
+    let n_pt = points.len();
+    let no_directions: Vec<bool>;
+    let is_dir: &[bool] = match point_at_infinity {
+        Some(mask) => {
+            assert_eq!(
+                mask.len(),
+                n_pt,
+                "point_at_infinity and points length mismatch"
             );
+            mask
         }
-    }
-    bundle_adjust_finite(
+        None => {
+            no_directions = vec![false; n_pt];
+            &no_directions
+        }
+    };
+    bundle_adjust_staged(
         cam,
         quats,
         trans,
@@ -677,6 +219,7 @@ pub fn bundle_adjust(
         uv,
         obs_img,
         obs_pt,
+        is_dir,
         protected,
         protected_loss_scale,
         opt_f,
@@ -687,117 +230,15 @@ pub fn bundle_adjust(
     )
 }
 
-/// The finite-only staged loop — the original kernel, untouched by the
-/// points-at-infinity extension (the dispatcher branches here whenever no
-/// direction is marked, preserving it bit for bit).
-#[allow(clippy::too_many_arguments)]
-fn bundle_adjust_finite(
-    cam: &CameraIntrinsics,
-    quats: &mut [UnitQuaternion<f64>],
-    trans: &mut [Vector3<f64>],
-    points: &mut [[f64; 3]],
-    uv: &[[f64; 2]],
-    obs_img: &[u32],
-    obs_pt: &[u32],
-    protected: Option<&[bool]>,
-    protected_loss_scale: f64,
-    opt_f: bool,
-    schedule: &[BaSchedule],
-    max_iters: usize,
-    min_track: usize,
-    min_obs: usize,
-) -> BundleAdjustment {
-    let n_obs = obs_img.len();
-    assert_eq!(obs_pt.len(), n_obs, "obs_img and obs_pt length mismatch");
-    assert_eq!(uv.len(), n_obs, "uv and obs_img length mismatch");
-    let is_prot = |k: usize| protected.is_some_and(|m| m[k]);
-
-    // Focal release is SIMPLE_PINHOLE-only: `cam_at` applies `f` to no other
-    // model, so an opt_f linearization elsewhere would model a focal DOF the
-    // cost does not have (garbage `δf` perturbing every coupled step). The
-    // binding rejects this loudly; at the core boundary it degrades to a
-    // fixed-focal solve.
-    let opt_f = opt_f && matches!(cam.model, CameraModel::SimplePinhole { .. });
-
-    let mut f = cam.focal_lengths().0;
-
-    for (rnd, stage) in schedule.iter().enumerate() {
-        let cam_now = cam_at(cam, f);
-        if rnd > 0 {
-            retriangulate(&cam_now, quats, trans, points, uv, obs_img, obs_pt);
-        }
-        let (norms, depths) =
-            residual_norms_depths(&cam_now, quats, trans, points, uv, obs_img, obs_pt);
-        // Protected observations bypass the trim gates entirely: they stay in
-        // the solve set every round regardless of residual or depth.
-        let mut keep: Vec<bool> = (0..n_obs)
-            .map(|k| is_prot(k) || (norms[k] < stage.trim_px && depths[k] > 1e-3 * f))
-            .collect();
-        // Track survival: drop observations of points with < min_track kept
-        // (protected observations count as survivors and are never dropped).
-        let mut surv = vec![0usize; points.len()];
-        for k in 0..n_obs {
-            if keep[k] {
-                surv[obs_pt[k] as usize] += 1;
-            }
-        }
-        for k in 0..n_obs {
-            keep[k] = keep[k] && (is_prot(k) || surv[obs_pt[k] as usize] >= min_track);
-        }
-        let kept: Vec<usize> = (0..n_obs).filter(|&k| keep[k]).collect();
-        if kept.len() < min_obs {
-            // Degenerate (e.g. a wildly wrong focal): state passes through.
-            return BundleAdjustment {
-                focal: f,
-                residual_norms: vec![f64::INFINITY; n_obs],
-            };
-        }
-        f = solve_lm(
-            cam,
-            f,
-            quats,
-            trans,
-            points,
-            uv,
-            obs_img,
-            obs_pt,
-            &kept,
-            opt_f,
-            stage.loss_scale,
-            max_iters,
-            protected,
-            protected_loss_scale,
-        );
-    }
-
-    let cam_final = cam_at(cam, f);
-    let (norms, _depths) =
-        residual_norms_depths(&cam_final, quats, trans, points, uv, obs_img, obs_pt);
-    let residual_norms = norms
-        .iter()
-        .map(|&r| {
-            if r >= INVALID_RESIDUAL {
-                f64::INFINITY
-            } else {
-                r
-            }
-        })
-        .collect();
-    BundleAdjustment {
-        focal: f,
-        residual_norms,
-    }
-}
-
 // ── Points at infinity ──────────────────────────────────────────────────────
 //
-// The mixed path below handles per-point direction masks
+// The staged loop below handles per-point direction masks
 // (`specs/core/bundle-adjustment.md`, "Points at infinity"). A marked row of
 // `points` is a world-frame direction `d` projecting as
 // `uv_pred = ray_to_pixel(R·d)` — no translation dependence — parameterized
-// by a 2-DOF tangent-plane perturbation `d ← normalize(d + B(d)·δ)`. It is
-// only entered when at least one direction is marked; the finite-only kernel
-// above stays bit-for-bit intact otherwise.
+// by a 2-DOF tangent-plane perturbation `d ← normalize(d + B(d)·δ)`. With no
+// row marked, every direction branch is skipped and what remains is the
+// finite-only solve.
 
 /// Normalize a direction row. Zero-norm and non-finite rows come back `NaN`
 /// (a `NaN` direction behaves like a `NaN` finite point: invalid until
@@ -830,7 +271,7 @@ fn tangent_basis(d: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
 /// positive value is in front). Invalid observations report
 /// `INVALID_RESIDUAL` and a non-positive in-front measure.
 #[allow(clippy::too_many_arguments)]
-fn residual_norms_depths_mixed(
+fn residual_norms_depths(
     cam: &CameraIntrinsics,
     quats: &[UnitQuaternion<f64>],
     trans: &[Vector3<f64>],
@@ -860,11 +301,13 @@ fn residual_norms_depths_mixed(
     (norms, depths)
 }
 
-/// Mixed-path re-estimation (rounds after the first): finite points rebuild
-/// by ray-midpoint batch triangulation exactly as [`retriangulate`];
-/// direction points re-estimate in closed form as the normalized mean of
-/// their observations' back-rotated rays `R_iᵀ · pixel_to_ray(uv)`. Tracks
-/// with fewer than two observations — and points with none — become `NaN`.
+/// Re-estimation (rounds after the first): finite points rebuild from all
+/// supplied observations at the current poses by ray-midpoint batch
+/// triangulation; direction points re-estimate in closed form as the
+/// normalized mean of their observations' back-rotated rays
+/// `R_iᵀ · pixel_to_ray(uv)`. Tracks with fewer than two observations — and
+/// points with none — become `NaN`; callers refill from their full
+/// observation set (the bootstrap's post-BA refill rule).
 #[allow(clippy::too_many_arguments)]
 fn reestimate_points(
     cam: &CameraIntrinsics,
@@ -881,7 +324,7 @@ fn reestimate_points(
     order.sort_unstable_by_key(|&k| obs_pt[k as usize]);
 
     // Direction means accumulate directly; finite tracks feed the batch
-    // triangulation exactly as in the finite path.
+    // triangulation.
     let mut dir_sum: Vec<(usize, Vector3<f64>, usize)> = Vec::new();
     let mut dirs = Vec::new();
     let mut centers = Vec::new();
@@ -933,11 +376,12 @@ fn reestimate_points(
     }
 }
 
-/// Mixed-path robust cost over the kept observations at a candidate state
-/// (`cp_dir` flags direction points by compact index; `s2s` is the
-/// per-kept-observation squared loss scale as in [`robust_cost`]).
+/// Robust cost over the kept observations at a candidate state. `cp_dir`
+/// flags direction points by compact index; `s2s` is the per-kept-observation
+/// squared loss scale (uniform except where a protected observation widens
+/// it).
 #[allow(clippy::too_many_arguments)]
-fn robust_cost_mixed(
+fn robust_cost(
     cam: &CameraIntrinsics,
     quats: &[UnitQuaternion<f64>],
     trans: &[Vector3<f64>],
@@ -985,7 +429,7 @@ fn robust_cost_mixed(
 /// whose kept observations are all directions have their translation slots
 /// pinned in the reduced system (frozen for the round).
 #[allow(clippy::too_many_arguments)]
-fn solve_lm_mixed(
+fn solve_lm(
     cam0: &CameraIntrinsics,
     f0: f64,
     quats: &mut [UnitQuaternion<f64>],
@@ -1070,8 +514,7 @@ fn solve_lm_mixed(
     let mut lambda = 1e-3;
     let mut tiny_steps = 0usize;
     let mut cam = cam_at(cam0, f);
-    let mut prev_cost =
-        robust_cost_mixed(&cam, &q, &t, &x, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s);
+    let mut prev_cost = robust_cost(&cam, &q, &t, &x, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s);
 
     let analytic = cam.model.supports_pixel_jacobian();
     for _ in 0..max_iters {
@@ -1345,7 +788,7 @@ fn solve_lm_mixed(
             }
 
             let cam_cand = cam_at(cam0, f_cand);
-            let new_cost = robust_cost_mixed(
+            let new_cost = robust_cost(
                 &cam_cand, &q_cand, &t_cand, &x_cand, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s,
             );
             if new_cost < prev_cost {
@@ -1358,8 +801,10 @@ fn solve_lm_mixed(
                 prev_cost = new_cost;
                 lambda = (lambda * 0.5).max(1e-12);
                 improved = true;
-                // Converged only after tiny improvements twice in a row (see
-                // the finite path).
+                // Converged only after tiny improvements twice in a row: a
+                // single small step is how a traverse of a nearly-flat
+                // valley STARTS (the focal release walks −20% through one),
+                // so one is not proof of convergence.
                 if rel < 1e-8 {
                     tiny_steps += 1;
                     if tiny_steps >= 2 {
@@ -1391,11 +836,11 @@ fn solve_lm_mixed(
     f
 }
 
-/// The mixed staged loop (at least one direction marked): the finite loop's
-/// semantics with direction-aware residuals, trims, re-estimation, and the
-/// finite-survivors-only `min_obs` floor.
+/// The staged loop: direction-aware residuals, trims, re-estimation, and the
+/// finite-survivors-only `min_obs` floor. With an all-`false` `is_dir` every
+/// direction branch is skipped and this is the finite-only solve.
 #[allow(clippy::too_many_arguments)]
-fn bundle_adjust_mixed(
+fn bundle_adjust_staged(
     cam: &CameraIntrinsics,
     quats: &mut [UnitQuaternion<f64>],
     trans: &mut [Vector3<f64>],
@@ -1434,9 +879,8 @@ fn bundle_adjust_mixed(
         if rnd > 0 {
             reestimate_points(&cam_now, quats, trans, points, is_dir, uv, obs_img, obs_pt);
         }
-        let (norms, depths) = residual_norms_depths_mixed(
-            &cam_now, quats, trans, points, is_dir, uv, obs_img, obs_pt,
-        );
+        let (norms, depths) =
+            residual_norms_depths(&cam_now, quats, trans, points, is_dir, uv, obs_img, obs_pt);
         // In-front: canonical depth over the 1e-3·f floor for finite
         // observations; cheirality (R·d)_z < 0 for directions. Protected
         // observations bypass the trim gates entirely.
@@ -1476,7 +920,7 @@ fn bundle_adjust_mixed(
                 residual_norms: vec![f64::INFINITY; n_obs],
             };
         }
-        f = solve_lm_mixed(
+        f = solve_lm(
             cam,
             f,
             quats,
@@ -1496,7 +940,7 @@ fn bundle_adjust_mixed(
     }
 
     let cam_final = cam_at(cam, f);
-    let (norms, _depths) = residual_norms_depths_mixed(
+    let (norms, _depths) = residual_norms_depths(
         &cam_final, quats, trans, points, is_dir, uv, obs_img, obs_pt,
     );
     let residual_norms = norms
