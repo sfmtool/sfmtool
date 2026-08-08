@@ -461,7 +461,7 @@ fn blob_to_matrix_3x3(blob: &Option<Vec<u8>>) -> [f64; 9] {
     }
 }
 
-/// Parse an optional f64 blob into a quaternion. NULL → identity [1,0,0,0].
+/// Parse an optional f64 blob into a quaternion. NULL → identity `[1,0,0,0]`.
 fn blob_to_quat(blob: &Option<Vec<u8>>) -> [f64; 4] {
     match blob {
         Some(b) if b.len() == 32 => {
@@ -475,7 +475,7 @@ fn blob_to_quat(blob: &Option<Vec<u8>>) -> [f64; 4] {
     }
 }
 
-/// Parse an optional f64 blob into a translation. NULL → [0,0,0].
+/// Parse an optional f64 blob into a translation. NULL → `[0,0,0]`.
 fn blob_to_tvec(blob: &Option<Vec<u8>>) -> [f64; 3] {
     match blob {
         Some(b) if b.len() == 24 => {

@@ -99,6 +99,13 @@ jobs:
       - name: Cargo clippy
         run: pixi run -e lint cargo clippy --workspace --all-targets -- -D warnings
 
+      # Rustdoc warnings are denied by `[workspace.lints.rustdoc]` in Cargo.toml,
+      # so this fails on a broken doc link with no extra flags here. The `lint`
+      # environment carries a Python interpreter for the same reason clippy needs
+      # one: sfmtool-py's PyO3 build script.
+      - name: Cargo doc
+        run: pixi run -e lint doc
+
       - name: Save Rust target
         # Save only on main: branch scoping means PR-written caches help nobody
         # else, so PR runs skip the save entirely (and dodge the slow Windows

@@ -23,8 +23,8 @@
 //! - **Points**: [`find_point_correspondences`] matches 3D points through
 //!   shared feature observations in shared images, yielding orders of magnitude
 //!   more correspondences — enough for RANSAC. Needs feature-indexed
-//!   observations ([`ObservationSource::SiftFiles`]) in *both* reconstructions,
-//!   because the match identity is `(image, feature index)`.
+//!   observations ([`sfmtool_core::ObservationSource::SiftFiles`]) in *both*
+//!   reconstructions, because the match identity is `(image, feature index)`.
 //!
 //! Points at infinity are excluded from both: a `w = 0` point stores a unit
 //! bearing, not a location, and would drag a positional fit toward the origin.

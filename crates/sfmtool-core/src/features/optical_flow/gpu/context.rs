@@ -208,7 +208,7 @@ pub(super) fn buf_entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupE
     }
 }
 
-/// Read a GPU buffer back to CPU as a Vec<f32>.
+/// Read a GPU buffer back to CPU as a `Vec<f32>`.
 pub(super) fn read_buffer(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

@@ -11,11 +11,11 @@
 //! # Architecture
 //!
 //! The pipeline is split across sibling modules:
-//! - [`context`] — wgpu plumbing: the [`GpuContext`], POD uniform-parameter
+//! - `context` — wgpu plumbing: the [`GpuContext`], POD uniform-parameter
 //!   structs, and bind-group / pipeline / buffer helpers.
-//! - [`variational`] — the four-shader variational refinement pipeline
+//! - `variational` — the four-shader variational refinement pipeline
 //!   ([`GpuVariationalRefiner`]) and its buffer pool.
-//! - [`dis_pipeline`] / [`pyramid_pipeline`] — DIS inverse search + densification
+//! - `dis_pipeline` / `pyramid_pipeline` — DIS inverse search + densification
 //!   and image-pyramid construction.
 //!
 //! [`GpuFlowContext`] (below) bundles them and drives the per-level DIS +
@@ -195,7 +195,7 @@ impl GpuFlowContext {
     /// Build GPU pyramids and optionally read back a level for CPU seeding.
     ///
     /// Returns `(pyramid_pool, seed_images)`. The pyramid pool must be passed
-    /// to [`run_gpu_levels_prebuilt`]. Seed images are returned if
+    /// to [`Self::run_gpu_levels_prebuilt`]. Seed images are returned if
     /// `cpu_seed_level` is provided.
     #[allow(clippy::type_complexity)]
     pub(crate) fn build_gpu_pyramid(
@@ -243,7 +243,8 @@ impl GpuFlowContext {
     /// Process GPU levels using a pre-built GPU pyramid, with optional final
     /// upsample to full resolution.
     ///
-    /// The GPU pyramid must have been built by a prior call to [`build_gpu_pyramid`].
+    /// The GPU pyramid must have been built by a prior call to
+    /// [`Self::build_gpu_pyramid`].
     /// `gpu_scales` contains `(scale_index, width, height)` in coarse-to-fine order.
     ///
     /// If `final_upsample_steps > 0`, the flow is upsampled on the GPU by 2x that

@@ -333,7 +333,8 @@ impl GpuVariationalRefiner {
     /// Upload uniform params and encode variational refinement commands into the
     /// given encoder. Data buffers (ref, tgt, flow) must already be populated.
     ///
-    /// Used by both standalone [`refine`] and the combined DIS+variational path.
+    /// Used by the combined DIS+variational path
+    /// ([`super::GpuFlowContext::run_dis_and_variational`]).
     pub(super) fn encode_variational(
         &self,
         pool: &VariationalBufferPool,
@@ -434,9 +435,9 @@ impl GpuVariationalRefiner {
     }
     /// Encode variational refinement using externally-provided params bind groups.
     ///
-    /// Unlike [`encode_variational`], this method does NOT write uniform params
-    /// via `queue.write_buffer`. The caller must write params to per-level uniform
-    /// buffers before the single `queue.submit()`.
+    /// Unlike [`Self::encode_variational`], this method does NOT write uniform
+    /// params via `queue.write_buffer`. The caller must write params to per-level
+    /// uniform buffers before the single `queue.submit()`.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn encode_variational_with_bind_groups(
         &self,

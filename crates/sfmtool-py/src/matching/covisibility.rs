@@ -107,7 +107,7 @@ impl PyClusterCovisibility {
     ///
     /// Args:
     ///     cluster_starts: (C+1,) uint32 CSR offsets; cluster c owns members
-    ///         cluster_starts[c]:cluster_starts[c+1].
+    ///         ``cluster_starts[c]:cluster_starts[c+1]``.
     ///     member_images: (M,) uint32 member image index.
     ///     num_images: Number of images the indexes refer to.
     ///     member_accepted: Optional (M,) bool mask; only accepted members
@@ -413,7 +413,7 @@ impl PyClusterCovisibility {
         Ok(PyArray1::from_vec(py, ranked).into_any().unbind())
     }
 
-    /// Lazy iterator of greedy mutually-covisible seed groups (list[int],
+    /// Lazy iterator of greedy mutually-covisible seed groups (``list[int]``,
     /// sorted ascending), per the spec's Seed-group algorithm: each step
     /// takes the strongest remaining edge and greedily extends it maximizing
     /// the minimum shared count vs the group, then excludes the yielded

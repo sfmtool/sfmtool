@@ -48,7 +48,7 @@ pub(super) fn check_image_matches_camera(
 /// Extract each numpy image and build its full pyramid, running `check` on
 /// every decoded image (index, decoded source). The extraction runs under the
 /// GIL; the pyramid build (the expensive part) runs GIL-free and
-/// rayon-parallel. Shared by the recon-coupled [`build_pyramids_from_arrays`]
+/// rayon-parallel. Shared by the recon-coupled [`build_pyramids_from_cameras`]
 /// (camera-dimension check) and the recon-free cluster-refinement binding
 /// (`matching::cluster`, no check).
 pub(crate) fn build_pyramids_from_image_list(
@@ -111,8 +111,9 @@ impl PyramidSet {
 /// The camera + pose inputs a patch kernel reads, materialized once per call from
 /// either a [`PySfmrReconstruction`] or a [`PyCameraViews`]: one owned camera and
 /// one `cam_from_world` pose per image (index = image index). Both scene sources
-/// reduce to this, so [`resolve_pyramids`] and the kernels' [`ProjectedImage`]
-/// assembly are identical for a reconstruction and a bare set of views.
+/// reduce to this, so [`resolve_pyramids`] and the kernels'
+/// [`sfmtool_core::patch::normal_refine::ProjectedImage`] assembly are identical
+/// for a reconstruction and a bare set of views.
 pub(crate) struct PosedViews {
     /// Per-image camera intrinsics (resolved via each view's camera index).
     pub(super) cameras: Vec<CameraIntrinsics>,

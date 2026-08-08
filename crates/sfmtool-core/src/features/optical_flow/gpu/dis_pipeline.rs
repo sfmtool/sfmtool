@@ -335,9 +335,9 @@ impl GpuDisPipeline {
 
     /// Upload input data and encode DIS compute commands into the given encoder.
     ///
-    /// The pool must already be created via [`create_pool`]. This encodes gradient
-    /// computation, inverse search, and densification dispatches but does NOT submit
-    /// or read back results.
+    /// The pool must already be created via [`Self::create_pool`]. This encodes
+    /// gradient computation, inverse search, and densification dispatches but
+    /// does NOT submit or read back results.
     ///
     /// When `flow` is `Some`, the flow field is uploaded from CPU. When `None`, the
     /// flow is assumed to already be in the pool's flow buffers (e.g., from a GPU

@@ -158,8 +158,8 @@ impl ViewportCamera {
     /// Nodal pan: camera stays in place, view direction changes.
     ///
     /// The target slides to the new look-at point at the current distance.
-    /// This is the dual of [`orbit`]: orbit moves the camera around a fixed target,
-    /// while nodal pan moves the target around a fixed camera.
+    /// This is the dual of [`Self::orbit`]: orbit moves the camera around a
+    /// fixed target, while nodal pan moves the target around a fixed camera.
     pub fn nodal_pan(&mut self, delta_x: f64, delta_y: f64) {
         let forward = self.camera.forward();
         let up = self.world_up;

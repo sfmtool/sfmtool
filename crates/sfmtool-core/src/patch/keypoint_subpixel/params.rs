@@ -129,8 +129,7 @@ pub struct KeypointSubpixelParams {
     /// per-view keypoints (see [`KeypointRefinement::representative`]): after the
     /// last sweep the views are re-rendered at their final offsets, the final IRLS
     /// view weights are rebuilt from those cores, and the kept views are rendered
-    /// full-grid
-    /// ([`PatchViewStack`](crate::patch::normal_refine::PatchViewStack)) at the
+    /// full-grid (`PatchViewStack`) at the
     /// final keypoints and fused (weighted-mean RGB + agreement·coverage alpha,
     /// exactly the normal-refine representative). Points at infinity go through the
     /// same path (`w = 0` rendering is first-class here). Costs one extra full-grid

@@ -598,7 +598,7 @@ fn build_feature_tree(features: &[DisplayFeature]) -> kiddo::KdTree<f32, 2> {
 /// landing in `img_idx`, as a tracked feature at its inline keypoint. The affine
 /// shape is derived by projecting the point's patch frame into this image
 /// (`observation_affine_shape`); it falls back to a degenerate (zero) shape when
-/// the point has no usable patch frame, in which case [`draw_feature_ellipse`]
+/// the point has no usable patch frame, in which case `draw_feature_ellipse`
 /// skips the ellipse and only the centre dot draws. O(total observations):
 /// embedded recons have no per-image keypoint index (`image_feature_to_point`
 /// is empty).

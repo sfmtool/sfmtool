@@ -51,3 +51,7 @@ harness = false
 [[bench]]
 name = "patch_render"
 harness = false
+
+# Rustdoc lints are denied workspace-wide (see the root Cargo.toml).
+[lints]
+workspace = true

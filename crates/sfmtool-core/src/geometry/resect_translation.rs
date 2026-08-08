@@ -44,7 +44,7 @@ pub struct TranslationResection {
     /// Per-input-observation survivor mask (in front and within the gate).
     pub inliers: Vec<bool>,
     /// Per-input-observation pixel residual norm at the final translation.
-    /// Behind-camera / out-of-domain observations report [`INVALID_RESIDUAL`].
+    /// Behind-camera / out-of-domain observations report `INVALID_RESIDUAL`.
     pub residual_norms: Vec<f64>,
 }
 

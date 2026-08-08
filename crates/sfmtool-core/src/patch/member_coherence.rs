@@ -17,8 +17,8 @@
 //!
 //! The matrix is rendered through exactly the machinery
 //! [view selection](super::view_selection) builds its reference appearance with —
-//! [`build_level_context`] for the frozen common support, [`normalized_stack`] for
-//! the renders and [`znormalize_into_kept`] for the per-channel z-normalization —
+//! `build_level_context` for the frozen common support, `normalized_stack` for
+//! the renders and `znormalize_into_kept` for the per-channel z-normalization —
 //! so a member's pairwise agreement lives in the same photometric *space* as the
 //! member-vs-consensus score selection admits views on. It is not the same
 //! *estimator*: selection scores one view against the fused consensus, and does it
@@ -80,7 +80,7 @@ pub struct MemberCoherenceParams {
     /// (fail-open: no evidence decides `KeepAll`), with the count still reported
     /// as [`MemberMatrix::n_support`].
     ///
-    /// The default `8` is the floor [`build_level_context`] already enforces
+    /// The default `8` is the floor `build_level_context` already enforces
     /// (`MIN_MASK_PIXELS`), so it changes nothing on its own; values below it are
     /// inert for the same reason. A caller vetting wide-baseline tracks — where
     /// the intersection can shrink to a sliver of an `R×R` grid and a correlation
@@ -484,7 +484,7 @@ fn normal_refine_shim(params: &MemberCoherenceParams) -> NormalRefineParams {
 /// in-plane so it renders **anchored at that keypoint** — the appearance the
 /// matcher actually matched — instead of at the point's reprojection. The
 /// per-member validity mask is built through the same recentered render
-/// ([`build_level_context`] takes the same anchors), so the frozen common support
+/// (`build_level_context` takes the same anchors), so the frozen common support
 /// is the intersection of where the members are *sampled*, not of where the
 /// geometry predicts them.
 ///
@@ -1031,7 +1031,7 @@ fn self_normalized_thresholds(
 
 /// Read a verdict off a pairwise member matrix.
 ///
-/// Takes the [max-support block](max_support_block), then gates the cut on its
+/// Takes the max-support block (`max_support_block`), then gates the cut on its
 /// **separation margin** — the weakest link inside the block minus the strongest
 /// link leaving it. A margin at or below `margin_gate` (or an undefined one) means
 /// the block boundary runs through a continuum rather than between two surfaces,
@@ -1052,7 +1052,7 @@ fn self_normalized_thresholds(
 /// So the thresholds are re-derived **per track, from the track's own
 /// coherence**, in two passes over the same matrix:
 ///
-/// 1. Sweep the [max-support block](max_support_block) at the absolute `bar`.
+/// 1. Sweep the max-support block (`max_support_block`) at the absolute `bar`.
 /// 2. Measure that block's own [`core_coherence`] — centre `c`, scatter `σ`.
 /// 3. `effective_bar = max(bar, min(c − self_bar_k · σ, `[`SELF_BAR_CEILING`]`))`
 ///    and `effective_margin_gate = min(margin_gate, σ)`.

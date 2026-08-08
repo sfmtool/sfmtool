@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Binding for the staged bundle adjustment
-//! ([`sfmtool_core::geometry::bundle_adjust`]).
+//! ([`sfmtool_core::geometry::bundle_adjust()`]).
 
 use nalgebra::{Quaternion, UnitQuaternion, Vector3};
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};

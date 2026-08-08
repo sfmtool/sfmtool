@@ -32,9 +32,9 @@ use crate::patch::normal_refine::Support;
 /// pre-zero them.
 ///
 /// Runtime-dispatched to a hand-rolled AVX2 kernel where available (mirrors
-/// [`crate::patch::normal_refine::fronto_cache::resample_support_avx2`]); the
-/// scalar form is the reference, the non-x86 / non-AVX2 fallback, and the path for
-/// spans larger than the AVX2 kernel's 16-lane row.
+/// `normal_refine::fronto_cache::resample_support_avx2`); the scalar form is the
+/// reference, the non-x86 / non-AVX2 fallback, and the path for spans larger
+/// than the AVX2 kernel's 16-lane row.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compute_channel_grids(
     plane: &[f32],

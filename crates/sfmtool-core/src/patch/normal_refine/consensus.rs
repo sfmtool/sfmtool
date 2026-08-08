@@ -75,7 +75,8 @@ fn median(values: &mut [f64]) -> f64 {
 /// 8-wide. With `xbar` also f32 there is no per-element narrowing. The residual
 /// only feeds the Tukey reweight (median/MAD/cutoff), so f32 precision is ample
 /// and the found weights — hence normals — are unaffected in practice. Mirrors
-/// the runtime-dispatch pattern of [`fronto_cache`] and [`crate::features::sift::simd`].
+/// the runtime-dispatch pattern of [`super::fronto_cache`] and
+/// `features::sift::simd`.
 #[inline]
 pub(super) fn sum_sq_diff(row: &[f32], xbar: &[f32]) -> f32 {
     debug_assert_eq!(row.len(), xbar.len());

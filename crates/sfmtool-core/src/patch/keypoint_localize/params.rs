@@ -15,8 +15,7 @@ pub enum SearchStrategy {
     /// "+"-descent on the integer shift grid: starts at `(dy, dx) = (0, 0)`,
     /// evaluates the 4 axis neighbors per step, moves to the best improver,
     /// and stops when no neighbor beats the current cell. Each cell is scored
-    /// at most once via a per-cell ZNCC kernel
-    /// ([`score_cell_one_channel`](super::kernels::score_cell_one_channel) —
+    /// at most once via a per-cell ZNCC kernel (`score_cell_one_channel` —
     /// AVX2-gather when available, scalar otherwise); the visited cache stores
     /// `(n, s1, s2, ginv)` per cell. The final-cell separable parabolic
     /// sub-pixel fit reuses the 4 cardinal-neighbor cells already in the cache
@@ -35,13 +34,11 @@ pub enum SearchStrategy {
     #[default]
     PlusDescent,
     /// Score every cell of the `(2·margin+1) × (2·margin+1)` shift grid via
-    /// the hand-rolled SIMD SAXPY accumulator
-    /// ([`compute_channel_grids`](super::kernels::compute_channel_grids)), then
+    /// the hand-rolled SIMD SAXPY accumulator (`compute_channel_grids`), then
     /// argmax + separable parabolic. The original whole-grid path; retained
     /// as the global-argmax fallback (no local-optima risk) and as the
     /// per-cell reference both equivalence tests and the per-cell ZNCC kernel
-    /// ([`score_cell_one_channel`](super::kernels::score_cell_one_channel))
-    /// check against.
+    /// (`score_cell_one_channel`) check against.
     Exhaustive,
 }
 

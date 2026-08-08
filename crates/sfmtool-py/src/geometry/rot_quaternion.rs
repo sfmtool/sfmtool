@@ -7,7 +7,8 @@ use nalgebra::{Matrix3, Vector3};
 use numpy::{IntoPyArray, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
-/// Extract a Vec<f64> from a Python object that is either a list or a 1D numpy array.
+/// Extract a `Vec<f64>` from a Python object that is either a list or a 1D numpy
+/// array.
 pub(crate) fn extract_f64_vec(obj: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     // Try numpy array first
     if let Ok(arr) = obj.extract::<numpy::PyReadonlyArray1<f64>>() {

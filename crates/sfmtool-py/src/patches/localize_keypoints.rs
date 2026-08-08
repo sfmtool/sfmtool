@@ -123,6 +123,10 @@ impl PyPatchCloud {
     ///     floor before any consensus was built), so guard before reducing it.
     ///     ``is_basis`` marks the consensus-basis members (all ``True`` unless
     ///     ``basis_max_views`` capped that point's view set).
+    // This is a Python docstring (rendered by `help()`), not Rust prose: its
+    // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
+    // indented code blocks, which rustdoc then tries to parse as Rust.
+    #[allow(rustdoc::invalid_rust_codeblocks)]
     #[pyo3(signature = (
         recon, images, *, view_sets=None, max_iters=5, search=6.0, max_shift_px=3.0,
         min_relative_zncc=0.7, min_grazing_cos=0.1, resolution=24, window="gaussian_disk",

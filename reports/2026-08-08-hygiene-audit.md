@@ -835,6 +835,69 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
 ## Top-level layout, scripts, docs, tooling
 
 **`cargo doc` is in no check, and the workspace has 145 rustdoc warnings**
+
+> _Status (2026-08-08): Done — the gate is wired and the backlog is at zero._
+> _Re-measured at HEAD: 140 real warnings + 5 per-crate summary lines = the 145
+> counted here (71 unresolved intra-doc links, 54 private-item links, 6 redundant
+> explicit targets, 4 unparseable code blocks, 3 unclosed HTML tags, 2
+> function/module ambiguities). Both `cargo doc --workspace --no-deps` and
+> `… --document-private-items` are now **0 warnings**._
+>
+> _Three decisions. **(1) The gate runs `--document-private-items`**: the plain
+> build's warning set was verified to be a strict subset of the private build's
+> (72 of 140 sites, no site unique to the plain build), the private build is the
+> one anyone working on the crates actually reads, and it checks the links written
+> inside private modules — which is most of this workspace's cross-referencing.
+> **(2) Warnings become errors via `[workspace.lints.rustdoc]` in the root
+> `Cargo.toml`**, with `[lints] workspace = true` added to all nine crates, rather
+> than `RUSTDOCFLAGS="-D warnings"` in the CI step. The tradeoff: the manifest form
+> also fails a bare `cargo doc` typed by hand or run by an IDE, not just the pixi
+> task and CI, and it needs no env plumbing; the cost is that it must name lints
+> explicitly, so a newly-added warn-by-default rustdoc lint will not be denied
+> until someone adds it. The seven warn-by-default lints are listed;
+> `rustdoc::all` was rejected because it also switches on allow-by-default lints
+> (`missing_crate_level_docs`, `private_doc_tests`, `unescaped_backticks`) — a
+> separate and much larger decision. `rustdoc::unportable_markdown` is omitted:
+> rustc has removed it, and naming a removed lint is itself a warning.
+> **(3) All 54 private-item links became plain code spans**; no item's visibility
+> was changed. Every target is a deliberate implementation detail — a private
+> sibling module (`normal_refine::{params, znorm, search, …}`, `optical_flow::gpu::
+> {context, variational, …}`), a private constant (`COINCIDENT_CAMERA_FRACTION`,
+> `DISTORTION_EPS`, `ANCHOR_CAP`), or a `pub(crate)` / `pub(in crate::patch)`
+> helper (`build_level_context`, `Support`, `RefineTile`, `view_jacobian`).
+> Re-exporting any of them would enlarge the public API to satisfy a doc link,
+> which is a real semantic change; a code span renders identically in published
+> docs and only costs the hyperlink in the internal build._
+>
+> _Of the 71 unresolved links, none were deleted: 16 in `camera/distortion.rs` plus
+> ~20 elsewhere took a `Self::` prefix, sibling-module refs took `super::`,
+> cross-crate refs took the full path (`sfmtool_core::…`, `crate::camera::…`), and
+> the two `is both a function and a module` ambiguities took `()`. Six links named
+> items that no longer exist and were repointed at the real successor:
+> `KdTree2d::nearest_k_within_radius` → `PointCloud::…`, `ImagePyramid::level_in_full`
+> → `Self::level`, `build_pyramids_from_arrays` → `build_pyramids_from_cameras`,
+> `WarpMap::from_cameras` fully-qualified, and `gpu::variational`'s "standalone
+> `refine`" → `GpuFlowContext::run_dis_and_variational`. Unescaped generics
+> (`Vec<f32>`, `Vec<f64>`, `Py<PyAny>`) and Python-docstring brackets
+> (`list[int]`, `list[bytes]`, `image_starts[i]:image_starts[i+1]`) are now code
+> spans._
+>
+> _One thing was deliberately not "fixed": the 4 unparseable code blocks are all
+> PyO3 docstrings whose indented `Args:` / `Returns:` continuation paragraphs are
+> Markdown indented code blocks by accident of Python docstring convention, which
+> rustdoc then tries to compile as Rust. De-indenting them would damage the
+> `help()` output these docstrings exist for, so each of the four items carries a
+> commented `#[allow(rustdoc::invalid_rust_codeblocks)]` instead — visible and
+> per-item, not a crate-wide blanket, so the next one is a conscious choice._
+>
+> _Wiring: `doc` task in `pixi.toml`'s `[tasks]`, a "Cargo doc" step in `ci.yml`'s
+> `lint` job (verified `pixi run -e lint doc` builds — the `lint` env has the
+> Python interpreter `sfmtool-py`'s PyO3 build script needs), and `AGENTS.md`'s
+> "Task completion checks" under "Rust changes" plus a "Things that can surprise
+> you" entry. The gate was confirmed to fail: a deliberate `Self::compute_svd_typo`
+> in `warp_map.rs` made `pixi run doc` exit 101 with
+> `error: unresolved link`, then was reverted._
+
 - _New. Surfaced as a question by the previous round; measured here for the first
   time._
 - Location: `AGENTS.md:31–39` ("Task completion checks"), `.github/workflows/ci.yml`

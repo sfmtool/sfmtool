@@ -150,7 +150,7 @@ impl WarpMap {
     ///   stored as `(NaN, NaN)`.
     ///
     /// Rows go to rayon only when the destination is large enough AND the
-    /// caller is not itself a rayon worker (see [`parallelize_rows`]); either way
+    /// caller is not itself a rayon worker (see `parallelize_rows`); either way
     /// the result is the same buffer.
     pub fn from_cameras(src_camera: &CameraIntrinsics, dst_camera: &CameraIntrinsics) -> Self {
         let dst_w = dst_camera.width;
@@ -208,11 +208,11 @@ impl WarpMap {
     /// - `(sx, sy) = src_camera.ray_to_pixel(d_src)`
     /// - Source coordinates outside `[0, src_w) x [0, src_h)` are stored as `(NaN, NaN)`.
     ///
-    /// Passing the identity rotation recovers [`from_cameras`] (both code
+    /// Passing the identity rotation recovers [`Self::from_cameras`] (both code
     /// paths project the same ray through the src camera).
     ///
     /// Rows go to rayon only when the destination is large enough AND the
-    /// caller is not itself a rayon worker (see [`parallelize_rows`]); either way
+    /// caller is not itself a rayon worker (see `parallelize_rows`); either way
     /// the result is the same buffer.
     pub fn from_cameras_with_rotation(
         src_camera: &CameraIntrinsics,
@@ -236,7 +236,7 @@ impl WarpMap {
     ///   perspective src camera, are stored as `(NaN, NaN)`.
     ///
     /// Passing `depth = f64::INFINITY` short-circuits to the
-    /// [`from_cameras_with_rotation`] path using only the relative rotation
+    /// [`Self::from_cameras_with_rotation`] path using only the relative rotation
     /// `R_src * R_dst^T`.
     ///
     /// The formulation is collapsed to
@@ -246,7 +246,7 @@ impl WarpMap {
     /// add per dst pixel — no inverse, no small-angle approximation.
     ///
     /// Rows go to rayon only when the destination is large enough AND the
-    /// caller is not itself a rayon worker (see [`parallelize_rows`]); either way
+    /// caller is not itself a rayon worker (see `parallelize_rows`); either way
     /// the result is the same buffer.
     pub fn from_cameras_with_pose(
         src_camera: &CameraIntrinsics,
@@ -474,7 +474,7 @@ impl WarpMap {
     /// difference (so a non-identity warp still gets its actual scale at the
     /// frame edge, not a wrong identity); where any required neighbour is NaN,
     /// the identity Jacobian is used (`sigma_major = sigma_minor = 1`,
-    /// `major_dir = (1, 0)`) — see [`jacobian_at`](Self::jacobian_at). Idempotent:
+    /// `major_dir = (1, 0)`) — see `jacobian_at`. Idempotent:
     /// a second call is a no-op (mirrors
     /// [`compute_jacobians`](Self::compute_jacobians)). The guard checks `svd`
     /// only because `compute_svd` always populates both `svd` and `jacobians`
@@ -556,7 +556,7 @@ impl WarpMap {
     }
 
     /// Compute and store the raw per-pixel 2×2 Jacobian without the SVD.
-    /// Cheaper than [`compute_svd`] when the caller only needs `J`
+    /// Cheaper than [`Self::compute_svd`] when the caller only needs `J`
     /// (e.g. the bilinear photometric subpixel refiner path).
     ///
     /// Same central-difference scheme as `compute_svd`: at image boundaries or

@@ -102,7 +102,7 @@ pub(in crate::patch) fn normalized_stack(
 /// is f32 and the stack is stored f32 to halve the memory traffic the consensus
 /// re-reads. Returns the kept-channel count, or `None` when none survive. Shared
 /// by the source-render path ([`normalized_stack`]) and the fronto cache
-/// ([`fronto_cache::eval_phi`]) so the two cannot drift.
+/// ([`super::fronto_cache::eval_phi`]) so the two cannot drift.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn znormalize_into(
     raw: &[f32],
@@ -213,7 +213,8 @@ unsafe fn hsum256_pd(v: std::arch::x86_64::__m256d) -> f64 {
 /// `s2 − s1·mean` from these and feeds it (via `1/√norm_sq`) straight into Φ, so
 /// f32 accumulation here moves normals (measured). The baseline target limits the
 /// autovectorized fallback to SSE, so an AVX2+FMA kernel (4-wide f64, widening the
-/// f32 `col`) is dispatched at runtime; same pattern as [`sum_sq_diff`].
+/// f32 `col`) is dispatched at runtime; same pattern as
+/// [`super::consensus::sum_sq_diff`].
 /// `pub(super)` re-export of [`weighted_moments`] for view selection, which
 /// computes a candidate channel's windowed mean / norm directly (to score it on
 /// the *reference's* surviving channels) rather than going through the
@@ -294,8 +295,8 @@ unsafe fn weighted_moments_avx2(col: &[f32], w: &[f64], n: usize) -> (f64, f64) 
 
 /// `out[k] = sqrt_weights[k] · (src[k] − mean) · inv_norm`, all f32 — the per-pixel
 /// z-normalize write. AVX2+FMA (8-wide) dispatched at runtime; same pattern as
-/// [`sum_sq_diff`]. `pub(in crate::patch)` so cluster refinement's template
-/// build z-normalizes with the exact same kernel.
+/// [`super::consensus::sum_sq_diff`]. `pub(in crate::patch)` so cluster
+/// refinement's template build z-normalizes with the exact same kernel.
 #[inline]
 pub(in crate::patch) fn znorm_write(
     src: &[f32],

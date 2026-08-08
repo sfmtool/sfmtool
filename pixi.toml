@@ -45,6 +45,14 @@ sfmtool = { path = ".", editable = true }
 [tasks]
 gui = "cargo run --release -p sfm-explorer --bin sfm-explorer"
 ui-test = "cargo test -p sfm-explorer --test ui_basic -- --test-threads=1"
+# Rustdoc gate. `--document-private-items` is deliberate: it is a strict superset
+# of the plain build's diagnostics (it adds the links written inside private
+# items, which is most of this workspace's cross-referencing) and it is the doc
+# build anyone working on the crates actually reads. Warnings are errors via
+# `[workspace.lints.rustdoc]` in Cargo.toml, so a plain `cargo doc` fails the
+# same way this task does. The PyO3 build script needs a Python interpreter, so
+# this must run in an environment that has one — `lint` and `test` both do.
+doc = "cargo doc --workspace --no-deps --document-private-items"
 
 # Linting: ruff plus a Python interpreter. clippy doesn't link libpython, but the
 # PyO3 build script for sfmtool-py needs an interpreter at compile time.

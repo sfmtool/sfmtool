@@ -10,11 +10,11 @@
 //! mean ZNCC. [`refine_patch_cloud_normals`] batches the routine over a [`PatchCloud`]
 //! in parallel.
 //!
-//! The implementation is split across sibling modules: [`params`] (config /
-//! result types), [`parameterization`] (sphere exp-map), [`support`] (window /
-//! patch placement), [`level`] (per-level frozen support), [`znorm`] (render +
-//! z-normalize), [`consensus`] (the `Φ` objective), [`search`] (coarse-to-fine),
-//! and [`view_stack`] (the multi-view render substrate). This module wires them
+//! The implementation is split across sibling modules: `params` (config /
+//! result types), `parameterization` (sphere exp-map), `support` (window /
+//! patch placement), `level` (per-level frozen support), `znorm` (render +
+//! z-normalize), `consensus` (the `Φ` objective), `search` (coarse-to-fine),
+//! and `view_stack` (the multi-view render substrate). This module wires them
 //! together into the public [`refine_patch_normal`] / [`refine_patch_cloud_normals`]
 //! entry points.
 

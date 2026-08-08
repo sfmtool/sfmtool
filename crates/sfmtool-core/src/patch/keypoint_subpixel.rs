@@ -37,7 +37,7 @@
 //! two-frequency design). The per-move path uses the **shared** consensus
 //! (not leave-one-out): measurement on real data (dino, mean view count 3–5)
 //! found LOO regressed mean ECC (0.82 vs 0.87 shared at 5 sweeps); see
-//! [`RunningConsensus::write_shared_template`] for the reasoning and the
+//! `RunningConsensus::write_shared_template` for the reasoning and the
 //! commit message that landed this for the per-sweep / per-move comparison
 //! numbers.
 //!
@@ -58,12 +58,12 @@
 //! patch→image map at a slightly different sub-pixel shift — and the solver
 //! evaluates ~10 of them per pair (GN steps + line-search probes). Instead of
 //! a full projective render per evaluation, the pair's map is prerendered
-//! **once** into a [`RefineTile`] (patch-grid-aligned, centred at the view's
+//! **once** into a `RefineTile` (patch-grid-aligned, centred at the view's
 //! seed, sized to cover the `max_offset_px` drift, storing the sampler's
 //! unquantized values plus the pre-composed patch-grid gradient planes
 //! `∇_src I · J`); every evaluation is then a continuous prefiltered
 //! cubic-B-spline read of that tile (exact at integer shifts). See the
-//! [`RefineTile`] doc for the exactness/coverage contract and
+//! `RefineTile` doc for the exactness/coverage contract and
 //! the accepted double-interpolation loss, and
 //! `specs/core/keypoint-subpixel-refinement.md` for the design discussion.
 //!
@@ -78,7 +78,7 @@
 //! `H = Σ_c Σ_k (∂ẑ_c[k]/∂δ)(∂ẑ_c[k]/∂δ)ᵀ` and `b = Σ_c Σ_k (∂ẑ_c[k]/∂δ) T_c[k]`
 //! — and `b = C·∇S` because `Σ_k (∂ẑ_c[k]/∂δ)·ẑ_c[k] = ½∂‖ẑ_c‖²/∂δ = 0`. So the
 //! step rises along the score gradient with the natural GN Hessian. The
-//! z-normalization derivative `∂ẑ` is taken analytically (see [`view_jacobian`]);
+//! z-normalization derivative `∂ẑ` is taken analytically (see `view_jacobian`);
 //! the raw image Jacobian `∂g/∂δ` is now also analytic, via the sampler's
 //! value+gradient interface (`remap_bilinear_with_grad` / `remap_aniso_with_grad`,
 //! returning `(I, ∂I/∂x, ∂I/∂y)` in source-pixel coords per support pixel and
@@ -600,7 +600,7 @@ impl RunningConsensus {
 /// allocates nothing: every evaluation is a cardinal-spline read of the tile
 /// into these buffers. The remaining per-patch allocations are the tiles themselves
 /// (one value + two gradient planes + validity per view) and the per-tile
-/// `WarpMap` inside [`render_refine_tile`].
+/// `WarpMap` inside `kernels::render_refine_tile`.
 struct GnScratch {
     g: Vec<f32>,
     jg_u: Vec<f32>,

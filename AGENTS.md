@@ -22,6 +22,7 @@ pixi run test-rust                  # Rust tests w/ coverage (excludes sfmtool-p
 pixi run coverage-all               # Combined Python + Rust coverage (scripts/coverage.sh)
 pixi run fmt && pixi run check      # Python format + lint (ruff)
 pixi run cargo {fmt,clippy,test,check} --workspace
+pixi run doc                        # Rustdoc gate (warnings are errors)
 pixi run maturin develop --release  # Rebuild PyO3 bindings after Rust edits
 pixi run gui [-- path.sfmr]         # Build and run the SfM Explorer (release)
 pixi run docs-{build,serve}         # Zensical docs
@@ -33,7 +34,8 @@ pixi run sfm …                      # Run the CLI
 When finishing a task, run the checks for what you changed:
 
 - Python changes → `pixi run fmt && pixi run check`
-- Rust changes → `pixi run cargo fmt && pixi run cargo clippy --workspace`
+- Rust changes → `pixi run cargo fmt && pixi run cargo clippy --workspace &&
+  pixi run doc`
 - Rust edits that touch anything re-exported through `sfmtool-py` → rerun
   `pixi run maturin develop --release` before Python tests (the `.so` does
   **not** rebuild automatically despite the editable Python install).
@@ -151,6 +153,14 @@ backlog and keep them honest as findings get addressed:
   they execute in the `test-os` (Windows/macOS) jobs only; Linux compiles but
   does not run them, to keep uninstrumented artifacts out of the coverage
   job's target dir.
+- Rustdoc warnings are **errors**, via `[workspace.lints.rustdoc]` in the root
+  `Cargo.toml` (each crate opts in with `[lints] workspace = true`). That means
+  a plain `cargo doc` fails on a broken intra-doc link, not just `pixi run doc`.
+  The gate documents private items, so links written inside private modules are
+  checked too. A link to a genuinely private item from a **public** item's doc
+  is an error (`private_intra_doc_links`) — write those as a plain code span
+  (`` `foo` ``) rather than widening visibility. Method refs inside an inherent
+  impl need `Self::`; sibling private modules need `super::`.
 - The Python package is editable-installed, but the native extension
   `sfmtool._sfmtool` is not auto-rebuilt — remember `maturin develop` after
   Rust changes.

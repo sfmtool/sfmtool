@@ -109,7 +109,7 @@ pub struct GrowOptions {
     pub ba_window: usize,
     /// Every `anchor_every`-th growth adjustment refines a
     /// covisibility-spread subset of all posed cameras (capped
-    /// [`ANCHOR_CAP`]) instead of the frontier. 0 never anchors.
+    /// `ANCHOR_CAP`) instead of the frontier. 0 never anchors.
     pub anchor_every: usize,
     /// Restrict the adjustments to the best-`cap` clusters by span
     /// (resection, triangulation, and the next-best-view count always see
