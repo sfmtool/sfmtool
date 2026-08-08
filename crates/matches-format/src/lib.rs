@@ -20,11 +20,13 @@ compile_error!(
 
 mod entries;
 mod read;
+mod select;
 mod types;
 mod verify;
 mod write;
 
 pub use read::{read_matches, read_matches_metadata};
+pub use select::ClusterSelect;
 pub use types::*;
 pub use verify::verify_matches;
 pub use write::write_matches;

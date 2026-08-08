@@ -271,6 +271,7 @@ pub struct TvgMetadata {
 }
 
 /// Optional two-view geometry data.
+#[derive(Debug)]
 pub struct TwoViewGeometryData {
     pub metadata: TvgMetadata,
     /// Unique config type strings that appear in this file.
@@ -325,6 +326,7 @@ impl TwoViewGeometryData {
 }
 
 /// The pairwise correspondence backbone (`image_pairs/` section).
+#[derive(Debug)]
 pub struct PairsData {
     /// `(P, 2)` image index pairs, `idx_i < idx_j`, sorted lexicographically.
     pub image_index_pairs: Array2<u32>,
@@ -340,6 +342,7 @@ pub struct PairsData {
 /// features across images that are likely co-observations of one surface
 /// point, in CSR layout. Cluster `c` owns members
 /// `cluster_starts[c]..cluster_starts[c+1]`.
+#[derive(Debug)]
 pub struct ClustersData {
     /// `(C+1,)` CSR offsets into the member arrays. `cluster_starts[0] == 0`,
     /// non-decreasing, final value equals the member count `M`.
@@ -383,6 +386,20 @@ pub enum ClusterMemberStatus {
 }
 
 impl ClusterMemberStatus {
+    /// The canonical lowercase name used in metadata JSON (e.g. the
+    /// cluster-selection provenance) and the spec's status listing.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Reference => "reference",
+            Self::Kept => "kept",
+            Self::RejectedLowZncc => "rejected_low_zncc",
+            Self::RejectedShift => "rejected_shift",
+            Self::DuplicateImage => "duplicate_image",
+            Self::NotEvaluated => "not_evaluated",
+            Self::RejectedUnlocalizable => "rejected_unlocalizable",
+        }
+    }
+
     /// Decode a stored discriminant; `None` when out of range.
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
@@ -398,8 +415,34 @@ impl ClusterMemberStatus {
     }
 }
 
+impl FromStr for ClusterMemberStatus {
+    type Err = MatchesError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "reference" => Ok(Self::Reference),
+            "kept" => Ok(Self::Kept),
+            "rejected_low_zncc" => Ok(Self::RejectedLowZncc),
+            "rejected_shift" => Ok(Self::RejectedShift),
+            "duplicate_image" => Ok(Self::DuplicateImage),
+            "not_evaluated" => Ok(Self::NotEvaluated),
+            "rejected_unlocalizable" => Ok(Self::RejectedUnlocalizable),
+            _ => Err(MatchesError::InvalidFormat(format!(
+                "Unknown ClusterMemberStatus: {s:?}"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for ClusterMemberStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Optional cluster-patch enrichment (`cluster_patches/` section; requires
 /// the cluster backbone). Arrays parallel the clusters' member arrays.
+#[derive(Debug)]
 pub struct ClusterPatchData {
     /// `(C,)` global member index of each cluster's reference member;
     /// [`CLUSTER_REFERENCE_UNREFINABLE`] when the cluster could not be
@@ -439,6 +482,7 @@ pub struct ClusterPatchData {
 /// type for I/O. Exactly one of `image_pairs` / `clusters` is present (the
 /// correspondence backbone); `cluster_patches` requires `clusters`, and
 /// `two_view_geometries` requires `image_pairs`.
+#[derive(Debug)]
 pub struct MatchesData {
     pub metadata: MatchesMetadata,
     pub content_hash: MatchesContentHash,

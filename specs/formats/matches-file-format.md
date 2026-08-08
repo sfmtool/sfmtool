@@ -497,14 +497,22 @@ vetting statuses and signals.
 **Field descriptions:**
 - `cluster_count` / `member_count`: Must equal the top-level `cluster_count` /
   `cluster_member_count` (and therefore the clusters section counts)
-- `refine_options`: The refinement parameters used
+- `refine_options`: The refinement parameters used. The patch extent appears
+  under one of two keys across writer generations: `patch_size` (the full
+  patch edge in pixels, current) or the legacy `radius` (a half-width).
+  Consumers needing the half-width normalize via the reader's
+  `refine_radius` accessor (`patch_size / 2`, or `radius` as-is)
 
 #### `cluster_patches/reference_members.{C}.uint32.zst`
 
 - **Shape**: `(C,)` where C = cluster_count
 - **Data type**: `uint32` (little-endian)
 - Global member index of each cluster's reference member; `0xFFFFFFFF` (`u32::MAX`)
-  when the cluster could not be refined (no usable reference)
+  when no reference member is present. In a file written by the cluster-patches
+  operation that means the cluster could not be refined (no usable reference);
+  in a derived file produced by cluster selection it can also mean the
+  reference member fell outside the selection (see
+  [Cluster Selection](#cluster-selection-derived-files))
 - **Constraint**: When not `0xFFFFFFFF`, `reference_members[c]` lies in cluster `c`'s
   member range and that member's status is `0` (reference)
 
@@ -793,6 +801,90 @@ required ordering. They are an unordered set of correspondences.
 - `match_feature_indexes[m][0]` → feature index in `.sift` file for image `idx_i`
 - `match_feature_indexes[m][1]` → feature index in `.sift` file for image `idx_j`
 - `sift_content_hashes[i]` → verifies the `.sift` file hasn't changed
+
+## Cluster Selection (Derived Files)
+
+A cluster-backbone file supports a file-level derivation, **cluster
+selection**: a predicate over members and clusters that produces a new,
+self-contained cluster-backbone file holding only the surviving subset
+(`MatchesData::select_clusters` in the `matches-format` crate, surfaced in
+Python as `MatchesFile.select_clusters`). It is a predicate, not a strategy —
+nothing is reordered or ranked; consumers that need an admission order compute
+it from the selected file's arrays.
+
+The selection options are:
+
+- `min_span` — the minimum number of distinct selected images a cluster's
+  kept members must span (≥ 2, since every written cluster needs ≥ 2 members)
+- `restrict_images` — an optional set of image **names**; every requested
+  name must exist in the source file
+- `accepted_statuses` — the member statuses that survive (default
+  `reference` + `kept`); ignored when the source has no `cluster_patches/`
+  section (every member is then a candidate)
+
+Semantics, applied in order:
+
+1. Clusters whose `reference_members` entry is `0xFFFFFFFF` in the source are
+   dropped (only when the source carries `cluster_patches/`).
+2. Per cluster, a member is kept iff its status is accepted **and**, when
+   restricted, its image is in the restriction. Restriction happens before
+   the span test, so span counts distinct **selected** images.
+3. A cluster survives iff its kept members span ≥ `min_span` distinct
+   selected images.
+4. Surviving clusters and members are densely renumbered in source order
+   (cluster order and within-cluster member order are preserved), and
+   `reference_members` global indexes are remapped accordingly.
+5. When restricted, the image table becomes **exactly** the requested set, in
+   source file order: requested images keep their row even if no member
+   references them, all other images are dropped, and every parallel image
+   array (`names`, `feature_tool_hashes`, `sift_content_hashes`,
+   `feature_counts`, `image_dims`) plus `clusters/member_images` is
+   renumbered consistently.
+
+**Absent references.** A restriction can drop a cluster's reference member
+(its image is not selected) while the cluster itself survives on `min_span`
+other members. The derived file does not keep out-of-restriction rows for
+such references; it records `reference_members[c] = 0xFFFFFFFF` instead. In a
+derived file that sentinel therefore means "no reference member present in
+this selection" — the kept members still carry their absolute positions and
+their warps, which remain expressed relative to the (absent) reference patch.
+All structural constraints are unchanged: the sentinel is always permitted,
+and when the entry is not the sentinel it must point at an in-range member
+with status `0`.
+
+**Provenance.** The derived file records its derivation in the top-level
+metadata under `matching_options["cluster_selection"]`:
+
+```json
+{
+  "cluster_selection": {
+    "source_content_xxh128": "9a51...",
+    "min_span": 2,
+    "restrict_images": ["frames/frame_0010.jpg", "..."],
+    "accepted_statuses": ["reference", "kept"]
+  }
+}
+```
+
+`source_content_xxh128` is the source file's whole-file `content_xxh128`;
+`restrict_images` is `null` for an unrestricted selection. All other metadata
+— including the timestamp — is inherited from the source; the derived file's
+own content hashes are computed when it is written. Selection composes with
+the write-once workflow: the source is never modified, and a selected file is
+a complete, verifiable `.matches` file that reads back through the ordinary
+reader.
+
+**Decode accessors.** Alongside the selection, the reader exposes the derived
+quantities consumers otherwise re-implement:
+
+- member absolute positions — the `member_affines` last column
+- member warps — the `member_affines` leading 2×2 block
+- per-cluster worst consistency — the maximum finite
+  `member_consistency_residual` over each cluster's members (`inf` when no
+  member has a finite residual)
+- `refine_radius` — the refinement patch half-width, normalizing the
+  `refine_options` key generations (`patch_size` full edge / 2, legacy
+  `radius` as-is)
 
 ## Design Rationale
 

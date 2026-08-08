@@ -223,6 +223,10 @@ scripts stay as the behavioral reference until the Rust kernel lands.
   everything from detections.
 - **Solver track seeds**: feed clusters (not pairs) to a track-native solver.
 
+Consumers that admit a subset of clusters (status/image/span predicates) use
+the file-level selection derivation specified in
+[matches-file-format.md](../formats/matches-file-format.md#cluster-selection-derived-files).
+
 ## Open questions
 
 - Reference-selection policy (largest scale vs self-agreement/centrality) —

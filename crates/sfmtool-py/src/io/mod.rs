@@ -14,6 +14,7 @@ pub mod colmap_binary;
 pub mod colmap_db;
 pub mod image;
 pub mod matches;
+pub mod matches_file;
 pub mod sfmr;
 pub mod sift;
 
@@ -22,6 +23,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     image::register(m)?;
     sift::register(m)?;
     matches::register(m)?;
+    matches_file::register(m)?;
     camrig::register(m)?;
     colmap_binary::register(m)?;
     colmap_db::register(m)?;

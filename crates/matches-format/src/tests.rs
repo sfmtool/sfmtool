@@ -1467,6 +1467,450 @@ fn test_cluster_archive_uses_stored_compression() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+// ── Cluster selection (select_clusters) ──────────────────────────────────────
+
+/// Selection fixture: 5 images (img4 unreferenced), 4 clusters, 12 members.
+///
+/// Cluster 0 = members 0..4 on images (0, 1, 2, 3), statuses
+/// (reference, kept, kept, rejected_low_zncc), reference member 0.
+/// Cluster 1 = members 4..6 on images (1, 2), unrefinable (sentinel).
+/// Cluster 2 = members 6..9 on images (0, 1, 1), statuses
+/// (kept, reference, duplicate_image), reference member 7.
+/// Cluster 3 = members 9..12 on images (2, 3, 0), statuses
+/// (reference, kept, kept), reference member 9.
+fn make_select_test_data() -> MatchesData {
+    let mut data = make_test_data();
+    data.metadata.image_pair_count = None;
+    data.metadata.match_count = None;
+    data.metadata.cluster_count = Some(4);
+    data.metadata.cluster_member_count = Some(12);
+    data.metadata.image_count = 5;
+    data.metadata.has_clusters = true;
+    data.metadata.has_cluster_patches = true;
+    data.image_pairs = None;
+    data.image_names = vec![
+        "frames/img0.jpg".into(),
+        "frames/img1.jpg".into(),
+        "frames/img2.jpg".into(),
+        "frames/img3.jpg".into(),
+        "frames/img4.jpg".into(),
+    ];
+    data.feature_tool_hashes = (0u8..5).map(|i| [i; 16]).collect();
+    data.sift_content_hashes = (10u8..15).map(|i| [i; 16]).collect();
+    data.feature_counts = Array1::from_vec(vec![100, 150, 200, 120, 50]);
+    data.image_dims = Some(
+        Array2::from_shape_vec(
+            (5, 2),
+            vec![640, 480, 640, 480, 1024, 768, 800, 600, 320, 240],
+        )
+        .unwrap(),
+    );
+    data.clusters = Some(ClustersData {
+        cluster_starts: Array1::from_vec(vec![0, 4, 6, 9, 12]),
+        member_images: Array1::from_vec(vec![0, 1, 2, 3, 1, 2, 0, 1, 1, 2, 3, 0]),
+        member_features: Array1::from_vec(vec![7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]),
+        matcher_options: serde_json::json!({"d": 8, "min_size": 2}),
+    });
+    let mut affines = Array3::zeros((12, 2, 3));
+    for k in 0..12 {
+        // Distinctive rows so gather mistakes are observable.
+        for r in 0..2 {
+            for c in 0..3 {
+                affines[[k, r, c]] = (100 * k + 10 * r + c) as f64 + 0.5;
+            }
+        }
+    }
+    // Reference rows (members 0, 7, 9): identity | x_ref.
+    for &k in &[0usize, 7, 9] {
+        affines[[k, 0, 0]] = 1.0;
+        affines[[k, 0, 1]] = 0.0;
+        affines[[k, 1, 0]] = 0.0;
+        affines[[k, 1, 1]] = 1.0;
+    }
+    data.cluster_patches = Some(ClusterPatchData {
+        reference_members: Array1::from_vec(vec![0, CLUSTER_REFERENCE_UNREFINABLE, 7, 9]),
+        member_status: Array1::from_vec(vec![0, 1, 1, 2, 5, 5, 1, 0, 4, 0, 1, 1]),
+        member_affines: affines,
+        member_zncc: Array1::from_vec(vec![
+            1.0,
+            0.9,
+            0.8,
+            0.4,
+            f32::NAN,
+            f32::NAN,
+            0.85,
+            1.0,
+            0.7,
+            1.0,
+            0.95,
+            0.88,
+        ]),
+        member_shift_px: Array1::from_vec(vec![
+            0.0,
+            1.0,
+            2.0,
+            3.0,
+            f32::NAN,
+            f32::NAN,
+            1.5,
+            0.0,
+            2.5,
+            0.0,
+            0.5,
+            0.6,
+        ]),
+        member_consistency_residual: Array1::from_vec(vec![
+            0.10,
+            0.20,
+            0.30,
+            f32::NAN,
+            f32::NAN,
+            f32::NAN,
+            0.40,
+            0.05,
+            f32::NAN,
+            0.15,
+            0.25,
+            0.35,
+        ]),
+        refine_options: serde_json::json!({"patch_size": 12.0, "resolution": 15}),
+    });
+    data
+}
+
+/// Assert that the gathered member-parallel arrays of `sel` equal the source
+/// rows listed in `src_members`.
+fn assert_members_gathered(sel: &MatchesData, src: &MatchesData, src_members: &[usize]) {
+    let s_cl = src.clusters.as_ref().unwrap();
+    let o_cl = sel.clusters.as_ref().unwrap();
+    let s_cp = src.cluster_patches.as_ref().unwrap();
+    let o_cp = sel.cluster_patches.as_ref().unwrap();
+    assert_eq!(o_cl.member_features.len(), src_members.len());
+    for (k, &m) in src_members.iter().enumerate() {
+        assert_eq!(o_cl.member_features[k], s_cl.member_features[m]);
+        assert_eq!(o_cp.member_status[k], s_cp.member_status[m]);
+        for r in 0..2 {
+            for c in 0..3 {
+                assert_eq!(
+                    o_cp.member_affines[[k, r, c]],
+                    s_cp.member_affines[[m, r, c]]
+                );
+            }
+        }
+        assert_eq!(o_cp.member_zncc[k].to_bits(), s_cp.member_zncc[m].to_bits());
+        assert_eq!(
+            o_cp.member_shift_px[k].to_bits(),
+            s_cp.member_shift_px[m].to_bits()
+        );
+        assert_eq!(
+            o_cp.member_consistency_residual[k].to_bits(),
+            s_cp.member_consistency_residual[m].to_bits()
+        );
+    }
+}
+
+#[test]
+fn test_select_clusters_default_round_trip() {
+    let data = make_select_test_data();
+    let sel = data.select_clusters(&ClusterSelect::default()).unwrap();
+
+    // Cluster 1 dropped (source-unrefinable); rejected/not-evaluated/
+    // duplicate members dropped everywhere.
+    let clusters = sel.clusters.as_ref().unwrap();
+    assert_eq!(clusters.cluster_starts, Array1::from_vec(vec![0, 3, 5, 8]));
+    assert_members_gathered(&sel, &data, &[0, 1, 2, 6, 7, 9, 10, 11]);
+    assert_eq!(
+        clusters.member_images,
+        Array1::from_vec(vec![0, 1, 2, 0, 1, 2, 3, 0])
+    );
+    // Reference remap: cluster 0 ref 0 -> 0; cluster 2 ref 7 -> 4 (after the
+    // dense member renumbering); cluster 3 ref 9 -> 5.
+    let cp = sel.cluster_patches.as_ref().unwrap();
+    assert_eq!(cp.reference_members, Array1::from_vec(vec![0, 4, 5]));
+
+    // Image table unchanged (no restriction).
+    assert_eq!(sel.image_names, data.image_names);
+    assert_eq!(sel.feature_counts, data.feature_counts);
+    assert_eq!(sel.image_dims, data.image_dims);
+
+    // Metadata counts + provenance.
+    assert_eq!(sel.metadata.image_count, 5);
+    assert_eq!(sel.metadata.cluster_count, Some(3));
+    assert_eq!(sel.metadata.cluster_member_count, Some(8));
+    assert!(sel.metadata.has_clusters);
+    assert!(sel.metadata.has_cluster_patches);
+    let prov = &sel.metadata.matching_options["cluster_selection"];
+    assert_eq!(
+        prov["source_content_xxh128"],
+        serde_json::json!(data.content_hash.content_xxh128)
+    );
+    assert_eq!(prov["min_span"], serde_json::json!(2));
+    assert_eq!(prov["restrict_images"], serde_json::Value::Null);
+    assert_eq!(
+        prov["accepted_statuses"],
+        serde_json::json!(["reference", "kept"])
+    );
+
+    // Round trip: write -> read -> verify -> arrays equal.
+    let dir = std::env::temp_dir().join("matches_test_select_round_trip");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("selected.matches");
+    write_matches(&path, &sel, 3).unwrap();
+    let (valid, errors) = verify_matches(&path).unwrap();
+    assert!(valid, "verification failed: {errors:?}");
+    let loaded = read_matches(&path).unwrap();
+    let l_cl = loaded.clusters.as_ref().unwrap();
+    assert_eq!(l_cl.cluster_starts, clusters.cluster_starts);
+    assert_eq!(l_cl.member_images, clusters.member_images);
+    assert_eq!(l_cl.member_features, clusters.member_features);
+    let l_cp = loaded.cluster_patches.as_ref().unwrap();
+    assert_eq!(l_cp.reference_members, cp.reference_members);
+    assert_eq!(l_cp.member_status, cp.member_status);
+    assert_eq!(l_cp.member_affines, cp.member_affines);
+    assert_f32_bits_eq(&l_cp.member_zncc, &cp.member_zncc);
+    assert_f32_bits_eq(&l_cp.member_shift_px, &cp.member_shift_px);
+    assert_f32_bits_eq(
+        &l_cp.member_consistency_residual,
+        &cp.member_consistency_residual,
+    );
+    assert_eq!(loaded.image_names, sel.image_names);
+    assert_eq!(loaded.image_dims, sel.image_dims);
+    assert_eq!(
+        loaded.metadata.matching_options["cluster_selection"],
+        sel.metadata.matching_options["cluster_selection"]
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_select_clusters_min_span() {
+    let data = make_select_test_data();
+    let sel = data
+        .select_clusters(&ClusterSelect {
+            min_span: 3,
+            ..ClusterSelect::default()
+        })
+        .unwrap();
+    // Only clusters 0 and 3 span three distinct images among accepted
+    // members.
+    let clusters = sel.clusters.as_ref().unwrap();
+    assert_eq!(clusters.cluster_starts, Array1::from_vec(vec![0, 3, 6]));
+    assert_members_gathered(&sel, &data, &[0, 1, 2, 9, 10, 11]);
+    let cp = sel.cluster_patches.as_ref().unwrap();
+    assert_eq!(cp.reference_members, Array1::from_vec(vec![0, 3]));
+}
+
+#[test]
+fn test_select_clusters_restriction_absent_reference() {
+    let data = make_select_test_data();
+    let sel = data
+        .select_clusters(&ClusterSelect {
+            restrict_images: Some(vec![
+                "frames/img1.jpg".into(),
+                "frames/img2.jpg".into(),
+                "frames/img3.jpg".into(),
+            ]),
+            ..ClusterSelect::default()
+        })
+        .unwrap();
+
+    // Cluster 0 survives on members 1 (img1), 2 (img2) but its reference
+    // (member 0, img0) is outside the restriction: the derived entry is the
+    // sentinel ("reference not present in this selection"). Cluster 2 drops
+    // to span 1; cluster 3 survives on members 9 (img2), 10 (img3) with its
+    // reference kept.
+    let clusters = sel.clusters.as_ref().unwrap();
+    assert_eq!(clusters.cluster_starts, Array1::from_vec(vec![0, 2, 4]));
+    assert_members_gathered(&sel, &data, &[1, 2, 9, 10]);
+    let cp = sel.cluster_patches.as_ref().unwrap();
+    assert_eq!(
+        cp.reference_members,
+        Array1::from_vec(vec![CLUSTER_REFERENCE_UNREFINABLE, 2])
+    );
+
+    // Image table = exactly the restriction, in file order, renumbered.
+    assert_eq!(
+        sel.image_names,
+        vec![
+            "frames/img1.jpg".to_string(),
+            "frames/img2.jpg".to_string(),
+            "frames/img3.jpg".to_string(),
+        ]
+    );
+    assert_eq!(sel.feature_counts, Array1::from_vec(vec![150, 200, 120]));
+    assert_eq!(
+        sel.image_dims,
+        Some(Array2::from_shape_vec((3, 2), vec![640, 480, 1024, 768, 800, 600]).unwrap())
+    );
+    assert_eq!(
+        sel.feature_tool_hashes,
+        vec![[1u8; 16], [2u8; 16], [3u8; 16]]
+    );
+    assert_eq!(clusters.member_images, Array1::from_vec(vec![0, 1, 1, 2]));
+
+    // The absent-reference derived file writes, verifies, and re-reads: the
+    // sentinel is always allowed.
+    let dir = std::env::temp_dir().join("matches_test_select_absent_ref");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("selected.matches");
+    write_matches(&path, &sel, 3).unwrap();
+    let (valid, errors) = verify_matches(&path).unwrap();
+    assert!(valid, "verification failed: {errors:?}");
+    let loaded = read_matches(&path).unwrap();
+    assert_eq!(
+        loaded.cluster_patches.as_ref().unwrap().reference_members,
+        cp.reference_members
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_select_clusters_zero_member_requested_image_kept() {
+    let data = make_select_test_data();
+    // img4 is referenced by no member at all; a restriction that requests it
+    // keeps its image row (with zero members) rather than dropping it.
+    let sel = data
+        .select_clusters(&ClusterSelect {
+            restrict_images: Some(vec![
+                "frames/img2.jpg".into(),
+                "frames/img3.jpg".into(),
+                "frames/img4.jpg".into(),
+            ]),
+            ..ClusterSelect::default()
+        })
+        .unwrap();
+    assert_eq!(
+        sel.image_names,
+        vec![
+            "frames/img2.jpg".to_string(),
+            "frames/img3.jpg".to_string(),
+            "frames/img4.jpg".to_string(),
+        ]
+    );
+    // Only cluster 3 survives (members 9 on img2, 10 on img3).
+    let clusters = sel.clusters.as_ref().unwrap();
+    assert_eq!(clusters.cluster_starts, Array1::from_vec(vec![0, 2]));
+    assert_eq!(clusters.member_images, Array1::from_vec(vec![0, 1]));
+    // No member references img4 (index 2), and the file still writes and
+    // verifies.
+    let dir = std::env::temp_dir().join("matches_test_select_zero_member_img");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("selected.matches");
+    write_matches(&path, &sel, 3).unwrap();
+    let (valid, errors) = verify_matches(&path).unwrap();
+    assert!(valid, "verification failed: {errors:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_select_clusters_bare_backbone_ignores_statuses() {
+    // Without cluster_patches every member is a candidate and no cluster is
+    // reference-dropped; only span and restriction apply.
+    let data = make_cluster_test_data();
+    let sel = data
+        .select_clusters(&ClusterSelect {
+            min_span: 3,
+            ..ClusterSelect::default()
+        })
+        .unwrap();
+    assert!(sel.cluster_patches.is_none());
+    assert!(!sel.metadata.has_cluster_patches);
+    let clusters = sel.clusters.as_ref().unwrap();
+    // Cluster 0 spans images (0, 1, 2); cluster 1 spans (0, 2) and drops.
+    assert_eq!(clusters.cluster_starts, Array1::from_vec(vec![0, 3]));
+    assert_eq!(clusters.member_images, Array1::from_vec(vec![0, 1, 2]));
+    assert_eq!(clusters.member_features, Array1::from_vec(vec![0, 1, 2]));
+}
+
+#[test]
+fn test_select_clusters_errors() {
+    // Pairs backbone is an error.
+    let pairs = make_test_data();
+    let err = pairs
+        .select_clusters(&ClusterSelect::default())
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("cluster backbone"),
+        "unexpected error: {err}"
+    );
+
+    let data = make_select_test_data();
+    // min_span below 2 is an error (a written cluster needs >= 2 members).
+    let err = data
+        .select_clusters(&ClusterSelect {
+            min_span: 1,
+            ..ClusterSelect::default()
+        })
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("min_span"),
+        "unexpected error: {err}"
+    );
+
+    // Restriction names must exist in the source image table.
+    let err = data
+        .select_clusters(&ClusterSelect {
+            restrict_images: Some(vec!["frames/nope.jpg".into()]),
+            ..ClusterSelect::default()
+        })
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("nope.jpg"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_cluster_patch_accessors() {
+    let data = make_select_test_data();
+    let cp = data.cluster_patches.as_ref().unwrap();
+
+    // member_positions = affine last column; member_warps = leading 2x2.
+    let pos = cp.member_positions();
+    let warps = cp.member_warps();
+    assert_eq!(pos.shape(), [12, 2]);
+    assert_eq!(warps.shape(), [12, 2, 2]);
+    for k in 0..12 {
+        assert_eq!(pos[[k, 0]], cp.member_affines[[k, 0, 2]]);
+        assert_eq!(pos[[k, 1]], cp.member_affines[[k, 1, 2]]);
+        for r in 0..2 {
+            for c in 0..2 {
+                assert_eq!(warps[[k, r, c]], cp.member_affines[[k, r, c]]);
+            }
+        }
+    }
+
+    // refine_radius: patch_size (full edge) halves; legacy radius passes
+    // through; neither -> None.
+    assert_eq!(cp.refine_radius(), Some(6.0));
+    let mut legacy = make_select_test_data();
+    legacy.cluster_patches.as_mut().unwrap().refine_options = serde_json::json!({"radius": 5.0});
+    assert_eq!(
+        legacy.cluster_patches.as_ref().unwrap().refine_radius(),
+        Some(5.0)
+    );
+    legacy.cluster_patches.as_mut().unwrap().refine_options = serde_json::json!({});
+    assert_eq!(
+        legacy.cluster_patches.as_ref().unwrap().refine_radius(),
+        None
+    );
+
+    // Per-cluster worst finite consistency residual; infinity when no
+    // member has a finite value.
+    let worst = data.cluster_worst_consistency().unwrap();
+    assert_eq!(worst.len(), 4);
+    assert_eq!(worst[0], 0.30f32 as f64);
+    assert_eq!(worst[1], f64::INFINITY);
+    assert_eq!(worst[2], 0.40f32 as f64);
+    assert_eq!(worst[3], 0.35f32 as f64);
+
+    // Absent sections -> None.
+    assert!(make_test_data().cluster_worst_consistency().is_none());
+    assert!(make_cluster_test_data()
+        .cluster_worst_consistency()
+        .is_none());
+}
+
 /// Every archive entry name, pinned against a literal.
 ///
 /// `entries.rs` is the single source of truth for the three production paths,
