@@ -146,6 +146,7 @@ impl Viewer3D {
         scene: &[SceneNode],
         show_controls_help: bool,
         show_fps: bool,
+        status_message: Option<&str>,
         hover_depth: Option<f32>,
         hover_pick: Option<PickTarget>,
         fps: f64,
@@ -165,6 +166,20 @@ impl Viewer3D {
             font.clone(),
             text_color,
         );
+
+        // Directly under the stats: the status message. This is where an
+        // `Align to…` outcome lands — the empty-state text in `dock.rs` only
+        // shows it when *nothing* is loaded, and an alignment by definition
+        // happens with two files open.
+        if let Some(status) = status_message {
+            painter.text(
+                Pos2::new(rect.left() + 10.0, rect.top() + 28.0),
+                egui::Align2::LEFT_TOP,
+                status,
+                font.clone(),
+                Color32::from_rgb(235, 215, 150),
+            );
+        }
 
         // Top-middle: camera info
         let cam_info = format!(

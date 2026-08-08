@@ -4,11 +4,12 @@
 //! The scene graph: the reconstructions the viewer has loaded, and the typed
 //! references that address entities inside them.
 //!
-//! See `specs/gui/gui-scene-graph.md`. Phases 1–3 of that design are in place:
-//! the identity types, the node with its per-node display state, and a scene
-//! that holds **any number** of nodes — `File > Open` appends, and the Scene
-//! Graph panel ([`crate::scene_graph`]) is the control surface for them. Node
-//! transforms and tints (phases 4–5) are still renderer-side defaults.
+//! See `specs/gui/gui-scene-graph.md`. Phases 1–4 of that design are in place:
+//! the identity types, the node with its per-node display state and its
+//! similarity transform, and a scene that holds **any number** of nodes —
+//! `File > Open` appends, and the Scene Graph panel ([`crate::scene_graph`]) is
+//! the control surface for them. Node tints (phase 5) are still renderer-side
+//! defaults.
 //!
 //! ## Where refs are used, and where local indices survive
 //!
@@ -29,7 +30,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::{Se3Transform, SfmrReconstruction};
 
 /// Source of [`ReconId`] values. Monotonic and never reset, so ids are unique
 /// for the life of the process rather than merely within one `AppState`.
@@ -110,9 +111,8 @@ impl PointRef {
 
 /// One loaded reconstruction and the view state that belongs to it.
 ///
-/// The spec's `tint` and `transform` are still missing: they arrive with phases
-/// 4–5, when the renderer first has something other than the identity model
-/// matrix and the original colors to apply.
+/// The spec's `tint` is still missing: it arrives with phase 5, when the
+/// renderer first has something other than the original colors to apply.
 pub struct SceneNode {
     pub id: ReconId,
     /// Display label: the file stem, or `"demo"` for demo data, disambiguated
@@ -142,6 +142,17 @@ pub struct SceneNode {
     pub show_patches: bool,
     /// Sub-toggle of [`SceneNode::show_points`]: the `w = 0` directions.
     pub show_points_at_infinity: bool,
+
+    /// Similarity transform (uniform scale · rotation · translation) mapping
+    /// this node's native coordinates into the shared world space. Identity on
+    /// load, set by the Scene panel's `Align to…`.
+    ///
+    /// **View state only**: it reaches the GPU as the per-recon `model` matrix
+    /// and the CPU world-space paths that mirror it (track rays, bounds,
+    /// camera-view entry), and never touches the [`SfmrReconstruction`] in
+    /// memory nor the `.sfmr` on disk. Baking a transform into a file stays
+    /// `sfm xform`'s job.
+    pub transform: Se3Transform,
 }
 
 impl SceneNode {
@@ -159,6 +170,7 @@ impl SceneNode {
             show_cameras: true,
             show_patches: true,
             show_points_at_infinity: true,
+            transform: Se3Transform::identity(),
         }
     }
 
@@ -191,10 +203,26 @@ impl SceneNode {
             && r.patch_bitmaps_y_x_rgba.is_some()
     }
 
-    /// Copy the per-node display state (eyes, interaction cursor) from `other`.
+    /// Whether this node has been moved out of its own frame — i.e. its
+    /// transform is not the identity.
+    ///
+    /// Compared exactly rather than with a tolerance: the only two ways a
+    /// transform is set are `Align to…` (which never returns an exact identity
+    /// by accident) and `Reset Transform` (which assigns
+    /// [`Se3Transform::identity`] itself).
+    pub fn has_transform(&self) -> bool {
+        let t = &self.transform;
+        t.scale != 1.0
+            || t.translation != nalgebra::Vector3::zeros()
+            || t.rotation != sfmtool_core::RotQuaternion::identity()
+    }
+
+    /// Copy the per-node display state (eyes, interaction cursor, transform)
+    /// from `other`.
     ///
     /// Used by `Reload from Disk`, which is a fresh read of the same file and
-    /// so should not also reset how the node is being displayed.
+    /// so should not also reset how the node is being displayed — an alignment
+    /// the user fitted before refreshing the file included.
     pub fn copy_display_from(&mut self, other: &SceneNode) {
         self.visible = other.visible;
         self.interactive = other.interactive;
@@ -202,6 +230,7 @@ impl SceneNode {
         self.show_cameras = other.show_cameras;
         self.show_patches = other.show_patches;
         self.show_points_at_infinity = other.show_points_at_infinity;
+        self.transform = other.transform.clone();
     }
 }
 
@@ -244,6 +273,20 @@ pub fn node_by_id(scene: &[SceneNode], id: ReconId) -> Option<&SceneNode> {
 /// rest of `AppState`.
 pub fn selected_node(scene: &[SceneNode], selected: Option<ReconId>) -> Option<&SceneNode> {
     node_by_id(scene, selected?)
+}
+
+/// A node's 3D points in the **shared world space** — its own positions put
+/// through its transform.
+///
+/// The CPU counterpart of the per-recon `model` matrix, for the framing paths
+/// that work on point positions rather than on the GPU: `Z` zoom-to-fit, the
+/// Scene panel's per-node `Zoom to Fit`, and the viewport's first-show framing.
+pub fn world_points(node: &SceneNode) -> Vec<nalgebra::Point3<f64>> {
+    node.recon
+        .points
+        .iter()
+        .map(|p| node.transform.apply_to_point(&p.position))
+        .collect()
 }
 
 /// What the viewport's top-left stats overlay reports.

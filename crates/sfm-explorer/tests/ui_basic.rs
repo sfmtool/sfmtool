@@ -347,6 +347,87 @@ fn toggle_hud_layer_checkbox() {
         .expect("Grid should be unchecked after toggle");
 }
 
+/// A real right-click on the Scene panel's reconstruction row opens its context
+/// menu.
+///
+/// Windows only, and driven by synthetic mouse input rather than the
+/// accessibility API, because the defect this guards lives *below* egui and
+/// nothing above the window can see it: `platform::windows::create_manager`
+/// turns on `EnableMouseInPointer` for DirectManipulation, which routes every
+/// mouse button through `WM_POINTER` — and winit 0.30 renders those as `Touch`
+/// events that egui's touch emulation reads as the *primary* button. With that
+/// unhandled, no `secondary_clicked` ever fires anywhere in the app: no context
+/// menu can open, and a right-click on a tree row selects it like a left-click.
+/// The whole panel behaves correctly under `Context::run_ui`, so only a real
+/// window can catch it.
+#[cfg(windows)]
+#[test]
+fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEINPUT, MOUSE_EVENT_FLAGS,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+
+    fn mouse_event(flags: MOUSE_EVENT_FLAGS) {
+        let input = INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: 0,
+                    dy: 0,
+                    mouseData: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
+    }
+
+    let _guard = Guard::new();
+    let app = attach(_guard.child());
+    load_demo_data(&app);
+
+    // The demo node's row is labelled "demo"; its bounds are screen pixels.
+    let row = app
+        .locator(r#"static_text[name="demo"]"#)
+        .wait_attached(CONTENT_TIMEOUT)
+        .expect("the demo reconstruction row did not appear");
+    let bounds = row.data().bounds.expect("the row has no bounds");
+    let x = bounds.x + (bounds.width / 2) as i32;
+    let y = bounds.y + (bounds.height / 2) as i32;
+
+    // Two moves with a pause: the app repaints on demand, and egui resolves a
+    // click against the widget rects of the frame before it.
+    for _ in 0..2 {
+        unsafe { SetCursorPos(x, y).ok() };
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    // A left click first, which both activates the window (a right-press on an
+    // inactive one is swallowed by the activation) and puts the row through the
+    // selection change that used to take its menu's identity with it.
+    mouse_event(MOUSEEVENTF_LEFTDOWN);
+    std::thread::sleep(Duration::from_millis(120));
+    mouse_event(MOUSEEVENTF_LEFTUP);
+    std::thread::sleep(Duration::from_millis(400));
+
+    mouse_event(MOUSEEVENTF_RIGHTDOWN);
+    std::thread::sleep(Duration::from_millis(120));
+    mouse_event(MOUSEEVENTF_RIGHTUP);
+
+    // "Close" is deliberately not checked: the window's own title-bar close
+    // button carries that name too, so it would pass with no menu at all.
+    for item in ["Select", "Zoom to Fit", "Reload from Disk"] {
+        app.locator(&format!(r#"button[name="{item}"]"#))
+            .wait_attached(CONTENT_TIMEOUT)
+            .unwrap_or_else(|_| {
+                panic!("context menu item '{item}' did not appear after a right-click")
+            });
+    }
+}
+
 /// Diagnostic: dump the accessibility tree (run with -- --ignored --nocapture).
 #[test]
 #[ignore]

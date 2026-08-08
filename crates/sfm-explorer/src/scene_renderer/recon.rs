@@ -16,6 +16,7 @@
 //! Resources").
 
 use nalgebra::Point3;
+use sfmtool_core::Se3Transform;
 
 use super::gpu_types::FALLBACK_POINT_SIZE;
 
@@ -79,6 +80,15 @@ impl Default for NodeDisplay {
 pub(super) struct ReconResources {
     /// This node's display state, refreshed every frame from its scene node.
     pub display: NodeDisplay,
+
+    /// This node's similarity transform into the shared world space, mirrored
+    /// from its scene node alongside `display`.
+    ///
+    /// Kept as the `Se3Transform` rather than only as the `model` matrix
+    /// because two CPU-side consumers need the pieces: the bounding sphere
+    /// (centre through the transform, radius times the scale) and the splat
+    /// size (scaled with the node).
+    pub transform: Se3Transform,
 
     /// This node's `ReconUniforms` slice: model matrix, point size, pick bases,
     /// pickable flag, tint. Written every frame by `update_uniforms`.
@@ -165,6 +175,7 @@ impl ReconResources {
 
         Self {
             display: NodeDisplay::default(),
+            transform: Se3Transform::identity(),
             uniform_buffer,
             point_instance_buffer: None,
             point_count: 0,
@@ -197,11 +208,28 @@ impl ReconResources {
 
     /// The seed this node contributes to the global `length_scale`: the point
     /// splat scale, capped by the inter-camera distance when there is one.
+    ///
+    /// Both inputs are measured in the node's own coordinates, so the node
+    /// transform's scale converts them to the world-space quantity
+    /// `length_scale` actually is. That is what lets a scaled node stop
+    /// dominating the global frustum size once it has been aligned.
     pub(super) fn length_scale_seed(&self) -> f32 {
         let point_scale = super::DEFAULT_LENGTH_SCALE_MULTIPLIER * self.auto_point_size;
-        match self.camera_nn_scale {
+        let seed = match self.camera_nn_scale {
             Some(camera_scale) => point_scale.min(camera_scale),
             None => point_scale,
-        }
+        };
+        seed * self.transform.scale as f32
+    }
+
+    /// This node's bounding sphere in the **shared world space**: its own
+    /// bounds put through the node transform. `None` until its points are
+    /// uploaded.
+    pub(super) fn world_bounds(&self) -> Option<(Point3<f64>, f64)> {
+        let (centre, radius) = self.bounds?;
+        Some((
+            self.transform.apply_to_point(&centre),
+            radius * self.transform.scale,
+        ))
     }
 }

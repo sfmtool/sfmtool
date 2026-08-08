@@ -27,8 +27,9 @@ pub(super) struct PointInstance {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct ReconUniforms {
-    /// The node transform, applied before `view_proj` in every vertex shader.
-    /// Identity until node transforms arrive (phase 4).
+    /// The node's similarity transform (`SceneNode::transform`), applied before
+    /// `view_proj` in every scene vertex shader. Identity until the Scene
+    /// panel's `Align to…` fits one.
     pub model: [[f32; 4]; 4],
     /// This node's auto point size × the global `2^point_size_log2`.
     pub point_size: f32,

@@ -7,14 +7,13 @@
 //! and click handling — all extracted from [`Viewer3D::show`].
 
 use eframe::egui::{self, Rect};
-use nalgebra::{Point3, Vector3};
-use sfmtool_core::SfmrReconstruction;
+use nalgebra::Vector3;
 
 use super::{
     Viewer3D, ViewportCamera, DRAG_ZOOM_SPEED, MOUSE_WHEEL_ZOOM_SPEED, TRACKPAD_ZOOM_SPEED,
 };
 use crate::platform::GestureEvent;
-use crate::scene::{ImageRef, ReconId};
+use crate::scene::{ImageRef, SceneNode};
 use crate::state::AppState;
 
 impl Viewer3D {
@@ -87,7 +86,7 @@ impl Viewer3D {
                 let image = ImageRef::new(new_id, index);
                 state.selected_image = Some(image);
                 if was_in_camera_view {
-                    self.switch_camera_view(image, &state.scene[to].recon);
+                    self.switch_camera_view(image, &state.scene[to]);
                 }
             }
             None => {
@@ -469,22 +468,26 @@ impl Viewer3D {
         &mut self,
         ui: &egui::Ui,
         rect: Rect,
-        reconstruction: &SfmrReconstruction,
-        recon_id: ReconId,
+        node: &SceneNode,
         selected_image: &mut Option<ImageRef>,
     ) {
+        let reconstruction = &node.recon;
+        let recon_id = node.id;
         ui.input(|i| {
             let current_time = i.time;
             if i.key_pressed(egui::Key::Z) {
                 if let Some(image) = selected_image.filter(|s| s.recon == recon_id) {
                     // Z with frustum selected = view through camera
-                    self.enter_camera_view(image, reconstruction, current_time);
+                    self.enter_camera_view(image, node, current_time);
                 } else {
-                    // Z with no selection = zoom to fit
+                    // Z with no selection = zoom to fit, on where the node is
+                    // drawn rather than on its native coordinates.
                     let aspect = rect.width() as f64 / rect.height() as f64;
-                    let points: Vec<Point3<f64>> =
-                        reconstruction.points.iter().map(|p| p.position).collect();
-                    self.zoom_to_fit_points(&points, aspect, current_time);
+                    self.zoom_to_fit_points(
+                        &crate::scene::world_points(node),
+                        aspect,
+                        current_time,
+                    );
                 }
             }
             // ,/. navigate to previous/next image. In camera view mode this
@@ -511,7 +514,7 @@ impl Viewer3D {
                     };
                     let prev = ImageRef::new(recon_id, prev);
                     if in_camera_view {
-                        self.switch_camera_view(prev, reconstruction);
+                        self.switch_camera_view(prev, node);
                     }
                     *selected_image = Some(prev);
                 }
@@ -523,7 +526,7 @@ impl Viewer3D {
                     };
                     let next = ImageRef::new(recon_id, next);
                     if in_camera_view {
-                        self.switch_camera_view(next, reconstruction);
+                        self.switch_camera_view(next, node);
                     }
                     *selected_image = Some(next);
                 }

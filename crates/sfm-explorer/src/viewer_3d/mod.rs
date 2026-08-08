@@ -17,10 +17,10 @@ pub use camera::{best_fit_fov, ViewportCamera};
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense};
 use nalgebra::{Point3, UnitQuaternion, Vector3};
-use sfmtool_core::{Camera, SfmrReconstruction};
+use sfmtool_core::{Camera, Se3Transform};
 
 use crate::platform::GestureEvent;
-use crate::scene::{ImageRef, ReconId, SceneNode};
+use crate::scene::{ImageRef, SceneNode};
 
 /// Drag/gesture zoom speed: maps pixel deltas to zoom amount.
 const DRAG_ZOOM_SPEED: f64 = 0.13125;
@@ -71,6 +71,22 @@ impl CameraTransition {
         // Smoothstep: 3t² - 2t³ (ease-in/ease-out)
         Some(t * t * (3.0 - 2.0 * t))
     }
+}
+
+/// One reconstruction camera's pose in the **shared world space**, given the
+/// owning node's transform: `(world-to-camera rotation, camera centre)`.
+///
+/// The centre is the transform applied to the stored centre; the rotation loses
+/// the transform's rotation on the world side, exactly as
+/// [`Se3Transform::apply_to_camera_pose`] derives it (`q' = q · conj(q_world)`).
+/// The uniform scale does not touch the rotation.
+pub(crate) fn transformed_pose(
+    image: &sfmtool_core::SfmrImage,
+    transform: &Se3Transform,
+) -> (UnitQuaternion<f64>, Point3<f64>) {
+    let centre = transform.apply_to_point(&image.camera_center());
+    let rotation = image.quaternion_wxyz * transform.rotation.as_nalgebra().inverse();
+    (rotation, centre)
 }
 
 /// Computed end state for a camera view switch.
@@ -207,15 +223,17 @@ impl Viewer3D {
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
-        reconstruction: &SfmrReconstruction,
-        recon_id: ReconId,
+        // The selected node: its reconstruction is what the viewport's own
+        // bindings work within, and its transform is what puts that
+        // reconstruction where it is drawn.
+        node: &SceneNode,
         // Every loaded node, for the overlays that describe the whole scene:
-        // the stats line and the hover text's reconstruction label. The
-        // viewport itself still works within the *selected* node above.
+        // the stats line and the hover text's reconstruction label.
         scene: &[SceneNode],
         selected_image: &mut Option<ImageRef>,
         show_grid: bool,
         length_scale: f32,
+        status_message: Option<&str>,
         gesture_events: &[GestureEvent],
         scroll_input: &crate::platform::ScrollInput,
         show_controls_help: bool,
@@ -224,6 +242,7 @@ impl Viewer3D {
         hover_depth: Option<f32>,
         hover_pick: Option<crate::scene_renderer::PickTarget>,
     ) {
+        let reconstruction = &node.recon;
         // Allocate the entire available space for the 3D view.
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let rect = response.rect;
@@ -282,9 +301,8 @@ impl Viewer3D {
         // Initialize view to frame all points on first show
         if !self.view_initialized && !reconstruction.points.is_empty() {
             let aspect = rect.width() as f64 / rect.height() as f64;
-            let points: Vec<Point3<f64>> =
-                reconstruction.points.iter().map(|p| p.position).collect();
-            self.camera.zoom_to_fit(&points, aspect);
+            self.camera
+                .zoom_to_fit(&crate::scene::world_points(node), aspect);
             self.view_initialized = true;
         }
 
@@ -314,7 +332,7 @@ impl Viewer3D {
         self.handle_gestures(ui, gesture_events, rect, fly_keys_held);
         self.handle_fly_keys(ui, fly_keys_held);
         if keyboard_free {
-            self.handle_keyboard(ui, rect, reconstruction, recon_id, selected_image);
+            self.handle_keyboard(ui, rect, node, selected_image);
         }
         self.handle_click(ui, &response, rect);
 
@@ -368,6 +386,7 @@ impl Viewer3D {
             scene,
             show_controls_help,
             show_fps,
+            status_message,
             hover_depth,
             hover_pick,
             fps,
@@ -527,33 +546,36 @@ impl Viewer3D {
 
     /// Enter camera view mode with a smooth animated transition.
     ///
-    /// Computes the target camera pose from the image's extrinsics, deactivates
-    /// the current camera view (if any), and starts an animated transition.
-    /// Camera view mode is activated when the transition completes.
-    pub fn enter_camera_view(
-        &mut self,
-        image_ref: ImageRef,
-        reconstruction: &SfmrReconstruction,
-        current_time: f64,
-    ) {
+    /// Computes the target camera pose from the image's extrinsics **through the
+    /// node's transform**, deactivates the current camera view (if any), and
+    /// starts an animated transition. Camera view mode is activated when the
+    /// transition completes.
+    ///
+    /// Composing the transform is what makes "look through this camera" show the
+    /// transformed scene from the transformed camera: an aligned node's cameras
+    /// are drawn where its points are, so the viewpoint has to move with them.
+    pub fn enter_camera_view(&mut self, image_ref: ImageRef, node: &SceneNode, current_time: f64) {
+        let reconstruction = &node.recon;
         let img_idx = image_ref.index();
         let image = &reconstruction.images[img_idx];
         let camera = &reconstruction.cameras[image.camera_index as usize];
 
-        let r_world_from_cam = image.quaternion_wxyz.inverse();
+        let (world_pose, end_position) = transformed_pose(image, &node.transform);
+        let r_world_from_cam = world_pose.inverse();
 
-        // Compute end state
-        let end_position = image.camera_center();
         // The image quaternion is a canonical +Y-up / −Z-forward camera
         // orientation (OpenGL-style), which is exactly the viewport camera
         // convention, so it is used directly with no convention bridge.
-        let end_orientation = image.quaternion_wxyz;
+        let end_orientation = world_pose;
 
         let end_distance = reconstruction
             .depth_statistics
             .images
             .get(img_idx)
             .and_then(|stats| stats.observed.median_z)
+            // A depth is a length in the node's own coordinates, so a scaled
+            // node's median depth has to scale with it.
+            .map(|z| z * node.transform.scale)
             .unwrap_or(self.camera.camera.target_distance);
 
         // world_up = up direction of the end orientation
@@ -599,23 +621,24 @@ impl Viewer3D {
     fn compute_switch_camera_view(
         &self,
         new_image_ref: ImageRef,
-        reconstruction: &SfmrReconstruction,
+        node: &SceneNode,
     ) -> Option<SwitchCameraViewState> {
         let old_r_world_from_cam = self.camera_view.as_ref()?.r_world_from_cam;
 
+        let reconstruction = &node.recon;
         let new_img_idx = new_image_ref.index();
         let new_image = &reconstruction.images[new_img_idx];
-        let new_qwxyz = new_image.quaternion_wxyz;
+        let (new_qwxyz, position) = transformed_pose(new_image, &node.transform);
 
         // Compute new orientation preserving relative viewing direction.
         //   new_orientation = orientation * old_r_world_from_cam * new_qwxyz
         let orientation = self.camera.camera.orientation * old_r_world_from_cam * new_qwxyz;
-        let position = new_image.camera_center();
         let distance = reconstruction
             .depth_statistics
             .images
             .get(new_img_idx)
             .and_then(|stats| stats.observed.median_z)
+            .map(|z| z * node.transform.scale)
             .unwrap_or(self.camera.camera.target_distance);
 
         // Transform world_up through the relative rotation between cameras
@@ -639,8 +662,8 @@ impl Viewer3D {
     /// Switch from one camera view to another instantly, preserving relative orientation.
     ///
     /// Used by `,`/`.` keys for rapid camera switching.
-    pub fn switch_camera_view(&mut self, new_image: ImageRef, reconstruction: &SfmrReconstruction) {
-        let Some(state) = self.compute_switch_camera_view(new_image, reconstruction) else {
+    pub fn switch_camera_view(&mut self, new_image: ImageRef, node: &SceneNode) {
+        let Some(state) = self.compute_switch_camera_view(new_image, node) else {
             return;
         };
         self.camera.camera.position = state.position;
@@ -656,11 +679,11 @@ impl Viewer3D {
     pub fn animated_switch_camera_view(
         &mut self,
         new_image: ImageRef,
-        reconstruction: &SfmrReconstruction,
+        node: &SceneNode,
         current_time: f64,
     ) {
-        let Some(state) = self.compute_switch_camera_view(new_image, reconstruction) else {
-            self.enter_camera_view(new_image, reconstruction, current_time);
+        let Some(state) = self.compute_switch_camera_view(new_image, node) else {
+            self.enter_camera_view(new_image, node, current_time);
             return;
         };
         self.camera_view = None;

@@ -34,6 +34,7 @@ mod upload;
 use std::collections::HashMap;
 
 use nalgebra::Point3;
+use sfmtool_core::Se3Transform;
 
 use crate::scene::{ImageRef, PointRef, ReconId};
 use gpu_types::*;
@@ -266,12 +267,13 @@ impl SceneRenderer {
     }
 
     /// The union of the visible nodes' bounds, or `None` when nothing visible
-    /// has uploaded its points yet.
+    /// has uploaded its points yet. Each node contributes its bounds *through
+    /// its transform*, so an aligned node frames where it is drawn.
     fn visible_bounds(&self) -> Option<(Point3<f64>, f64)> {
         self.recons
             .values()
             .filter(|r| r.display.visible)
-            .filter_map(|r| r.bounds)
+            .filter_map(|r| r.world_bounds())
             .reduce(union_sphere)
     }
 
@@ -280,7 +282,7 @@ impl SceneRenderer {
     fn any_bounds(&self) -> Option<(Point3<f64>, f64)> {
         self.recons
             .values()
-            .filter_map(|r| r.bounds)
+            .filter_map(|r| r.world_bounds())
             .reduce(union_sphere)
     }
 
@@ -292,6 +294,18 @@ impl SceneRenderer {
     pub fn set_node_display(&mut self, id: ReconId, display: NodeDisplay) {
         if let Some(bundle) = self.recons.get_mut(&id) {
             bundle.display = display;
+        }
+    }
+
+    /// Mirror a node's similarity transform onto its GPU bundle.
+    ///
+    /// From here it reaches the shaders as the per-recon `model` matrix (and
+    /// scales the node's splat size), the union scene bounds, and the
+    /// `length_scale` seed. Same no-op-before-upload rule as
+    /// [`SceneRenderer::set_node_display`].
+    pub fn set_node_transform(&mut self, id: ReconId, transform: Se3Transform) {
+        if let Some(bundle) = self.recons.get_mut(&id) {
+            bundle.transform = transform;
         }
     }
 

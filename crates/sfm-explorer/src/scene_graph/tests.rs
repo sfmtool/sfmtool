@@ -17,9 +17,12 @@
 //! no frame at all.
 
 use eframe::egui;
-use sfmtool_core::SfmrReconstruction;
+use nalgebra::Vector3;
+use sfmtool_core::reconstruction::ObservationSource;
+use sfmtool_core::{RotQuaternion, Se3Transform, SfmrReconstruction};
 
 use super::{row_id, SceneGraphPanel};
+use crate::align::{AlignOptions, AlignSource};
 use crate::scene::{ImageRef, PointRef, SceneNode};
 use crate::state::{AppState, CachedSiftFeatures};
 use crate::viewer_3d::Viewer3D;
@@ -65,6 +68,66 @@ fn shared_shoot(n: usize) -> AppState {
     state
 }
 
+/// A node whose reconstruction has *distinct* camera poses — unlike
+/// [`recon_named`], which clones one image's pose for every row. Alignment fits
+/// on camera centres, so it needs a real camera ring.
+fn posed_node(path: &str) -> SceneNode {
+    SceneNode::from_path(std::path::Path::new(path), SfmrReconstruction::demo(64))
+}
+
+/// A similarity with a rotation, a translation and a scale change, so a fit
+/// that only handles some of the three cannot pass.
+fn known_similarity() -> Se3Transform {
+    Se3Transform::new(
+        RotQuaternion::from_axis_angle(Vector3::new(0.3, -0.7, 0.6), 0.9).unwrap(),
+        Vector3::new(4.0, -2.5, 1.25),
+        2.0,
+    )
+}
+
+/// `recon` with every point and camera pose put through `t`.
+fn transformed(recon: &SfmrReconstruction, t: &Se3Transform) -> SfmrReconstruction {
+    let mut out = recon.clone();
+    for p in &mut out.points {
+        p.position = t.apply_to_point(&p.position);
+    }
+    for image in &mut out.images {
+        let (rotation, translation) = t.apply_to_camera_pose(
+            &RotQuaternion::from_nalgebra(image.quaternion_wxyz),
+            &image.translation_xyz,
+        );
+        image.quaternion_wxyz = *rotation.as_nalgebra();
+        image.translation_xyz = translation;
+    }
+    out
+}
+
+/// Two nodes: `run_a` as loaded, `run_b` the same scene under
+/// [`known_similarity`]. The comparison case the whole feature exists for.
+fn misaligned_pair() -> AppState {
+    let mut state = AppState::new();
+    let a = posed_node("/runs/run_a.sfmr");
+    let b_recon = transformed(&a.recon, &known_similarity());
+    state.append_node(a);
+    let mut b = SceneNode::from_path(std::path::Path::new("/runs/run_b.sfmr"), b_recon);
+    b.label = "run_b".to_string();
+    state.append_node(b);
+    state
+}
+
+/// Worst distance between the node's points *as displayed* and `target`'s.
+fn worst_display_error(node: &SceneNode, target: &SceneNode, target_frame: &Se3Transform) -> f64 {
+    node.recon
+        .points
+        .iter()
+        .zip(target.recon.points.iter())
+        .map(|(s, t)| {
+            (node.transform.apply_to_point(&s.position) - target_frame.apply_to_point(&t.position))
+                .norm()
+        })
+        .fold(0.0, f64::max)
+}
+
 // ── Frame driving ───────────────────────────────────────────────────────
 
 /// Run one frame of the panel with `events` delivered, returning its response.
@@ -101,12 +164,88 @@ fn settled(state: &mut AppState) -> (SceneGraphPanel, egui::Context) {
 }
 
 fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    button(pos, egui::PointerButton::Primary, pressed)
+}
+
+fn button(pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
     egui::Event::PointerButton {
         pos,
-        button: egui::PointerButton::Primary,
+        button,
         pressed,
         modifiers: egui::Modifiers::default(),
     }
+}
+
+/// Right-click the element recorded under `id`, opening its context menu. The
+/// menu's own rows are laid out (and recorded) on the frames that follow.
+fn open_context_menu(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    id: egui::Id,
+) {
+    let pos = panel
+        .hit_rect(id)
+        .unwrap_or_else(|| panic!("{id:?} was not drawn on the previous frame"))
+        .center();
+    run_frame(panel, ctx, state, vec![egui::Event::PointerMoved(pos)]);
+    run_frame(
+        panel,
+        ctx,
+        state,
+        vec![button(pos, egui::PointerButton::Secondary, true)],
+    );
+    run_frame(
+        panel,
+        ctx,
+        state,
+        vec![button(pos, egui::PointerButton::Secondary, false)],
+    );
+    // One more settling frame so the menu's contents register their rects.
+    run_frame(panel, ctx, state, Vec::new());
+}
+
+/// Right-click a reconstruction row and open its `Align to ▸` submenu, leaving
+/// the target buttons and the option radios laid out and clickable.
+fn open_align_menu(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    node: crate::scene::ReconId,
+) {
+    open_context_menu(panel, ctx, state, row_id(node, "node_label"));
+    click(panel, ctx, state, row_id(node, "align_menu"));
+    run_frame(panel, ctx, state, Vec::new());
+}
+
+/// Right-click at an explicit position rather than at a recorded element, for
+/// the parts of a row that are not a widget of their own.
+fn right_click_at(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    pos: egui::Pos2,
+) {
+    run_frame(panel, ctx, state, vec![egui::Event::PointerMoved(pos)]);
+    run_frame(
+        panel,
+        ctx,
+        state,
+        vec![button(pos, egui::PointerButton::Secondary, true)],
+    );
+    run_frame(
+        panel,
+        ctx,
+        state,
+        vec![button(pos, egui::PointerButton::Secondary, false)],
+    );
+    run_frame(panel, ctx, state, Vec::new());
+}
+
+/// Whether a reconstruction row's context menu is on screen: its entries lay
+/// their own rects out only on the frames the menu is actually shown.
+fn context_menu_open(panel: &SceneGraphPanel, node: crate::scene::ReconId) -> bool {
+    panel.hit_rect(row_id(node, "reset_transform")).is_some()
 }
 
 /// Hover, press, release on the element recorded under `id` — the three frames
@@ -122,6 +261,15 @@ fn click(
         .hit_rect(id)
         .unwrap_or_else(|| panic!("{id:?} was not drawn on the previous frame"))
         .center();
+    click_at(panel, ctx, state, pos)
+}
+
+fn click_at(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    pos: egui::Pos2,
+) -> super::SceneGraphResponse {
     run_frame(panel, ctx, state, vec![egui::Event::PointerMoved(pos)]);
     run_frame(panel, ctx, state, vec![press(pos, true)]);
     run_frame(panel, ctx, state, vec![press(pos, false)])
@@ -276,6 +424,27 @@ fn clicking_a_camera_row_reports_the_image_it_names() {
     assert_eq!(response.select_image, Some(ImageRef::new(id, 2)));
 }
 
+/// A camera row keeps working once the virtualized list has scrolled off its
+/// first slice — its identity is the image index, not its place in whatever
+/// slice is currently rendered.
+#[test]
+fn a_camera_row_still_selects_after_the_list_has_scrolled() {
+    let mut state = AppState::new();
+    state.append_node(file_node("/runs/long.sfmr", 200, "IMG"));
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+    set_open(&ctx, row_id(id, "cameras"), true);
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+
+    // Scroll row 150 into view the only way the panel offers: a selection made
+    // elsewhere.
+    state.select_image(ImageRef::new(id, 150));
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "camera_150"));
+    assert_eq!(response.select_image, Some(ImageRef::new(id, 150)));
+}
+
 #[test]
 fn the_eye_and_cursor_toggles_write_through_to_the_node() {
     let mut state = shared_shoot(1);
@@ -345,23 +514,43 @@ fn the_selected_reconstruction_is_marked_in_the_tree() {
     let second = state.scene[1].id;
     let (mut panel, ctx) = settled(&mut state);
 
-    // The marker is drawn *before* the label, so the selected node's label
-    // starts further right than the unselected one's.
-    let selected_left = panel.hit_rect(row_id(first, "node_label")).unwrap().left();
-    let plain_left = panel.hit_rect(row_id(second, "node_label")).unwrap().left();
+    // The accent bar is painted, not written, so what is recorded for it is the
+    // rect it was painted into — present only on the row that carries it.
     assert!(
-        selected_left > plain_left,
-        "the selected node's label ({selected_left}) is not inset past the \
-         unselected one's ({plain_left}), so no marker was drawn"
+        panel.hit_rect(row_id(first, "node_selected_bar")).is_some(),
+        "the selected node got no marker"
+    );
+    assert!(
+        panel
+            .hit_rect(row_id(second, "node_selected_bar"))
+            .is_none(),
+        "an unselected node was marked too"
     );
 
     state.select_recon(second);
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
-    let now_selected = panel.hit_rect(row_id(second, "node_label")).unwrap().left();
-    let now_plain = panel.hit_rect(row_id(first, "node_label")).unwrap().left();
     assert!(
-        now_selected > now_plain,
+        panel
+            .hit_rect(row_id(second, "node_selected_bar"))
+            .is_some()
+            && panel.hit_rect(row_id(first, "node_selected_bar")).is_none(),
         "the marker did not follow the selection"
+    );
+}
+
+/// The space the bar occupies is reserved on every row, marked or not, so the
+/// names line up down the tree and the selection does not shove one sideways.
+#[test]
+fn the_selection_marker_takes_no_room_from_the_row_it_is_not_on() {
+    let mut state = shared_shoot(2);
+    let first = state.scene[0].id;
+    let second = state.scene[1].id;
+    let (panel, _ctx) = settled(&mut state);
+
+    assert_eq!(
+        panel.hit_rect(row_id(first, "node_label")).unwrap().left(),
+        panel.hit_rect(row_id(second, "node_label")).unwrap().left(),
+        "the selected row starts at a different x from the unselected one",
     );
 }
 
@@ -477,6 +666,452 @@ fn an_empty_scene_draws_no_rows() {
     let mut state = AppState::new();
     let (panel, _ctx) = settled(&mut state);
     assert!(panel.hit_rect(egui::Id::new("anything")).is_none());
+}
+
+// ── The reconstruction row's context menu ───────────────────────────────
+
+/// The row is one target all the way across, not just the name's own glyphs.
+/// A right-click in the gap between the name and the counts is the natural one,
+/// and it used to land on nothing at all.
+#[test]
+fn the_context_menu_opens_from_anywhere_along_the_reconstruction_row() {
+    let mut state = misaligned_pair();
+    let b = state.scene[1].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    let row = panel.hit_rect(row_id(b, "node_label")).expect("the row");
+    // Far enough right to be past the name and short of the counts — bare row.
+    let gap = egui::pos2(row.right() - row.width() / 3.0, row.center().y);
+    right_click_at(&mut panel, &ctx, &mut state, gap);
+
+    assert!(
+        context_menu_open(&panel, b),
+        "right-clicking the row away from its name opened no menu"
+    );
+}
+
+/// And on the name itself, which is the part of the row a user actually aims
+/// at. Worth its own test because a click there does *not* reach the row by
+/// default: egui gives a bare label `Sense::click_and_drag()` so its text can be
+/// selected, and a label drawn after the row wins every hit that lands on a
+/// glyph. Aiming at the row's centre — as the tests around this one do — sails
+/// straight past that, because the name is at its left end.
+#[test]
+fn the_context_menu_opens_on_the_reconstructions_name() {
+    let mut state = misaligned_pair();
+    let b = state.scene[1].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    let row = panel.hit_rect(row_id(b, "node_label")).expect("the row");
+    // The name is drawn from the row's left edge, past the selection marker.
+    let on_the_name = egui::pos2(row.left() + 12.0, row.center().y);
+
+    // The same spot selects on a left click — checked first, because the menu
+    // the right click opens lands under the pointer and would eat this one.
+    let response = click_at(&mut panel, &ctx, &mut state, on_the_name);
+    assert_eq!(
+        response.select_recon,
+        Some(b),
+        "left-clicking the name did not select the reconstruction"
+    );
+
+    right_click_at(&mut panel, &ctx, &mut state, on_the_name);
+    assert!(
+        context_menu_open(&panel, b),
+        "right-clicking the reconstruction's name opened no menu"
+    );
+}
+
+/// The row spans the panel rather than wrapping the name, so there is no dead
+/// strip along it for a click to fall into.
+#[test]
+fn the_reconstruction_row_is_as_wide_as_the_panel() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let (panel, _ctx) = settled(&mut state);
+
+    let row = panel.hit_rect(row_id(id, "node_label")).expect("the row");
+    assert!(
+        row.right() >= VIEWPORT.x - 20.0,
+        "the row stops at {} in a {}-wide panel",
+        row.right(),
+        VIEWPORT.x,
+    );
+}
+
+/// egui keys a popup on the id of the widget it hangs off. The row used to
+/// carry an auto-generated one — a count of what had been laid out before it —
+/// which the accent bar shifted the moment the row became the selection, so an
+/// open menu lost its identity and silently stopped being drawn.
+#[test]
+fn the_context_menu_survives_the_rows_selection_changing_under_it() {
+    let mut state = misaligned_pair();
+    let a = state.scene[0].id;
+    let b = state.scene[1].id;
+    state.select_recon(a);
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(b, "node_label"));
+    assert!(context_menu_open(&panel, b), "the menu never opened");
+
+    // `Select` from this very menu does exactly this, so the menu has to be able
+    // to outlive it.
+    state.select_recon(b);
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    assert!(
+        context_menu_open(&panel, b),
+        "the menu vanished when the row it belongs to became the selection"
+    );
+}
+
+/// The other order: the row's selected state changed, and only *then* is the
+/// menu asked for.
+#[test]
+fn the_context_menu_opens_on_a_row_whose_selection_just_changed() {
+    let mut state = misaligned_pair();
+    let a = state.scene[0].id;
+    let b = state.scene[1].id;
+    state.select_recon(a);
+    let (mut panel, ctx) = settled(&mut state);
+
+    // Click the row and apply the selection the way `dock.rs` does.
+    let response = click(&mut panel, &ctx, &mut state, row_id(b, "node_label"));
+    assert_eq!(response.select_recon, Some(b), "the row did not select");
+    state.select_recon(b);
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(b, "node_label"));
+    assert!(
+        context_menu_open(&panel, b),
+        "no menu on a row that had just been selected"
+    );
+}
+
+/// Double-click still frames the node, and a right-click is not a selection.
+#[test]
+fn the_row_keeps_select_on_click_and_zoom_on_double_click() {
+    let mut state = shared_shoot(2);
+    let second = state.scene[1].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    let pos = panel
+        .hit_rect(row_id(second, "node_label"))
+        .expect("the row")
+        .center();
+    click_at(&mut panel, &ctx, &mut state, pos);
+    let response = click_at(&mut panel, &ctx, &mut state, pos);
+    assert_eq!(
+        response.zoom_to_node,
+        Some(second),
+        "double-clicking the row did not ask for a zoom-to-fit"
+    );
+
+    let response = run_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        vec![
+            button(pos, egui::PointerButton::Secondary, true),
+            button(pos, egui::PointerButton::Secondary, false),
+        ],
+    );
+    assert_eq!(
+        response.select_recon, None,
+        "a right-click on the row selected it as well as opening its menu"
+    );
+}
+
+/// The toggles keep their own clicks: the row-wide target must not swallow
+/// them, and they are not a place the node's menu comes from either.
+#[test]
+fn the_eye_and_cursor_toggles_are_not_part_of_the_rows_target() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "node_eye"));
+    assert!(!state.scene[0].visible, "the eye stopped hiding the node");
+    assert_eq!(
+        response.select_recon, None,
+        "the row underneath the eye took the click too"
+    );
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_cursor"));
+    assert!(
+        !context_menu_open(&panel, id),
+        "right-clicking a toggle opened the node's menu"
+    );
+}
+
+// ── Align to… ───────────────────────────────────────────────────────────
+
+#[test]
+fn the_align_menu_lists_every_other_loaded_node() {
+    let mut state = misaligned_pair();
+    let a = state.scene[0].id;
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_align_menu(&mut panel, &ctx, &mut state, a);
+
+    assert!(
+        panel.hit_rect(row_id(a, "align_to_run_b")).is_some(),
+        "the other node is not offered as a target"
+    );
+    assert!(
+        panel.hit_rect(row_id(a, "align_to_run_a")).is_none(),
+        "a node was offered as a target for itself"
+    );
+}
+
+#[test]
+fn picking_a_target_reports_the_align_with_the_chosen_options() {
+    let mut state = misaligned_pair();
+    let (a, b) = (state.scene[0].id, state.scene[1].id);
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_align_menu(&mut panel, &ctx, &mut state, b);
+    let response = click(&mut panel, &ctx, &mut state, row_id(b, "align_to_run_a"));
+
+    assert_eq!(
+        response.align_node,
+        Some((b, a, AlignOptions::default())),
+        "the source, target or options did not reach the response"
+    );
+    // The panel reports; `dock.rs` applies. Nothing was fitted behind its back.
+    assert!(!state.scene[1].has_transform());
+}
+
+#[test]
+fn the_align_options_are_remembered_and_travel_with_the_request() {
+    let mut state = misaligned_pair();
+    let (a, b) = (state.scene[0].id, state.scene[1].id);
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_align_menu(&mut panel, &ctx, &mut state, b);
+    click(&mut panel, &ctx, &mut state, row_id(b, "align_points"));
+    click(&mut panel, &ctx, &mut state, row_id(b, "align_rigid"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(b, "align_to_run_a"));
+
+    assert_eq!(
+        response.align_node,
+        Some((
+            b,
+            a,
+            AlignOptions {
+                source: AlignSource::Points,
+                estimate_scale: false,
+            }
+        )),
+    );
+}
+
+#[test]
+fn the_point_mode_is_disabled_without_feature_indexes_in_both_nodes() {
+    let mut state = misaligned_pair();
+    let b = state.scene[1].id;
+    // Node A carries embedded keypoints, so there is no feature index for a
+    // point correspondence to be keyed on.
+    let tracks = state.scene[0].recon.tracks.len();
+    let images = state.scene[0].recon.images.len();
+    state.scene[0].recon.observations = ObservationSource::EmbeddedPatches {
+        keypoints_xy: ndarray::Array2::<f32>::from_elem((tracks, 2), 100.0),
+        image_file_hashes: vec![[0u8; 16]; images],
+    };
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_align_menu(&mut panel, &ctx, &mut state, b);
+    click(&mut panel, &ctx, &mut state, row_id(b, "align_points"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(b, "align_to_run_a"));
+
+    let (.., options) = response.align_node.expect("the target is still clickable");
+    assert_eq!(
+        options.source,
+        AlignSource::Cameras,
+        "the disabled Points radio still switched the mode"
+    );
+}
+
+#[test]
+fn reset_transform_is_offered_only_once_a_node_has_one() {
+    let mut state = misaligned_pair();
+    let (a, b) = (state.scene[0].id, state.scene[1].id);
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(b, "node_label"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(b, "reset_transform"));
+    assert_eq!(
+        response.reset_transform, None,
+        "an untransformed node offered a reset that would do nothing"
+    );
+
+    state.align_node(b, a, AlignOptions::default());
+    let (mut panel, ctx) = settled(&mut state);
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(b, "node_label"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(b, "reset_transform"));
+    assert_eq!(response.reset_transform, Some(b));
+}
+
+// ── Transforms (no frame needed) ────────────────────────────────────────
+
+#[test]
+fn every_node_loads_in_its_own_frame() {
+    let state = misaligned_pair();
+    assert!(state.scene.iter().all(|n| !n.has_transform()));
+}
+
+#[test]
+fn aligning_puts_the_source_node_where_the_target_is_drawn() {
+    for source in [AlignSource::Cameras, AlignSource::Points] {
+        let mut state = misaligned_pair();
+        let (a, b) = (state.scene[0].id, state.scene[1].id);
+
+        state.align_node(
+            b,
+            a,
+            AlignOptions {
+                source,
+                estimate_scale: true,
+            },
+        );
+
+        let error =
+            worst_display_error(&state.scene[1], &state.scene[0], &Se3Transform::identity());
+        assert!(
+            error < 1e-9,
+            "{source:?}: worst displayed error {error} after aligning run_b onto run_a"
+        );
+        assert!(state.scene[1].has_transform());
+        // The target is never modified.
+        assert!(!state.scene[0].has_transform());
+    }
+}
+
+#[test]
+fn an_align_lands_in_the_targets_currently_displayed_frame() {
+    let mut state = misaligned_pair();
+    let (a, b) = (state.scene[0].id, state.scene[1].id);
+    // Pretend run_a was itself aligned onto something earlier, so it is already
+    // displayed somewhere other than its own coordinates.
+    let target_frame = Se3Transform::new(
+        RotQuaternion::from_axis_angle(Vector3::new(1.0, 0.0, 0.0), 1.1).unwrap(),
+        Vector3::new(-7.0, 3.0, 0.5),
+        0.25,
+    );
+    state.scene[0].transform = target_frame.clone();
+
+    state.align_node(b, a, AlignOptions::default());
+
+    // `source.transform = target.transform ∘ T_fit`: run_b lands on top of run_a
+    // *as drawn*, so aligning C→B after B→A chains as expected.
+    let error = worst_display_error(&state.scene[1], &state.scene[0], &target_frame);
+    assert!(error < 1e-9, "worst displayed error {error} after chaining");
+}
+
+#[test]
+fn an_aligned_nodes_cameras_are_looked_through_where_they_are_drawn() {
+    let mut state = misaligned_pair();
+    let (a, b) = (state.scene[0].id, state.scene[1].id);
+    state.align_node(b, a, AlignOptions::default());
+
+    // The pose `enter_camera_view` builds its end state from. run_b's camera 3,
+    // through run_b's transform, has to land on run_a's camera 3 — same photo,
+    // two solves, one viewpoint — or "look through this camera" would show the
+    // transformed scene from an untransformed viewpoint.
+    let (rotation, centre) = crate::viewer_3d::transformed_pose(
+        &state.scene[1].recon.images[3],
+        &state.scene[1].transform,
+    );
+    let expected = &state.scene[0].recon.images[3];
+    assert!(
+        (centre - expected.camera_center()).norm() < 1e-9,
+        "camera centre {centre:?} is not the target's {:?}",
+        expected.camera_center(),
+    );
+    assert!(
+        rotation.angle_to(&expected.quaternion_wxyz) < 1e-9,
+        "the composed orientation is off by {} rad",
+        rotation.angle_to(&expected.quaternion_wxyz),
+    );
+}
+
+#[test]
+fn the_status_message_reports_the_fit() {
+    let mut state = misaligned_pair();
+    let (a, b) = (state.scene[0].id, state.scene[1].id);
+
+    state.align_node(b, a, AlignOptions::default());
+
+    let status = state.status_message.as_deref().expect("a status message");
+    assert!(
+        status.starts_with("Aligned run_b → run_a: ") && status.contains(" cameras, RMS "),
+        "unexpected status line: {status}"
+    );
+}
+
+#[test]
+fn a_failed_align_leaves_the_transform_alone_and_says_why() {
+    let mut state = misaligned_pair();
+    let (a, b) = (state.scene[0].id, state.scene[1].id);
+    for (i, image) in state.scene[1].recon.images.iter_mut().enumerate() {
+        image.name = format!("unrelated_{i:03}.jpg");
+    }
+
+    state.align_node(b, a, AlignOptions::default());
+
+    assert!(
+        !state.scene[1].has_transform(),
+        "a failed fit still moved the node"
+    );
+    let status = state.status_message.as_deref().expect("a status message");
+    assert!(
+        status.starts_with("Align run_b → run_a failed: "),
+        "unexpected status line: {status}"
+    );
+}
+
+#[test]
+fn aligning_a_node_to_itself_does_nothing() {
+    let mut state = misaligned_pair();
+    let b = state.scene[1].id;
+    state.align_node(b, b, AlignOptions::default());
+    assert!(!state.scene[1].has_transform());
+    assert_eq!(state.transform_epoch, 0);
+}
+
+#[test]
+fn resetting_a_transform_returns_the_node_to_its_own_frame() {
+    let mut state = misaligned_pair();
+    let (a, b) = (state.scene[0].id, state.scene[1].id);
+    state.align_node(b, a, AlignOptions::default());
+    assert_eq!(state.transform_epoch, 1);
+
+    state.reset_node_transform(b);
+
+    assert!(!state.scene[1].has_transform());
+    assert_eq!(state.scene[1].transform.scale, 1.0);
+    // Both directions bump the epoch: the bounds and `length_scale` have to be
+    // re-derived on the way back too.
+    assert_eq!(state.transform_epoch, 2);
+}
+
+#[test]
+fn a_reload_carries_the_nodes_transform_like_the_rest_of_its_display_state() {
+    let mut state = misaligned_pair();
+    let (a, b) = (state.scene[0].id, state.scene[1].id);
+    state.align_node(b, a, AlignOptions::default());
+    state.scene[1].show_points = false;
+
+    // What `AppState::reload_node` does with the freshly-read node, minus the
+    // disk read a test has no file for.
+    let mut reloaded = posed_node("/runs/run_b.sfmr");
+    reloaded.copy_display_from(&state.scene[1]);
+
+    assert!(reloaded.has_transform(), "the reload reset the alignment");
+    assert_eq!(
+        reloaded.transform.scale, state.scene[1].transform.scale,
+        "the reload changed the alignment"
+    );
+    assert!(!reloaded.show_points);
 }
 
 // ── Node lifecycle (no frame needed) ────────────────────────────────────

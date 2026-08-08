@@ -155,12 +155,12 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
             let node = &state.scene[0];
             viewer.show(
                 ui,
-                &node.recon,
-                node.id,
+                node,
                 &state.scene,
                 &mut state.selected_image,
                 state.show_grid,
                 state.length_scale,
+                None,
                 &[],
                 &scroll_input,
                 state.show_controls_help,

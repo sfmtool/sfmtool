@@ -3,6 +3,7 @@
 
 //! Shared application state.
 
+use crate::align::{self, AlignOptions};
 use crate::scene::{node_by_id, unique_label, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
@@ -215,6 +216,15 @@ pub struct AppState {
     /// per-observation patch tiles). Cleared when the scene changes.
     pub full_res_cache: HashMap<ImageRef, Option<ImageU8>>,
 
+    /// Bumped whenever any node's transform is set or reset.
+    ///
+    /// A node transform is a world-space change, so it invalidates the same
+    /// derived state a fresh upload does: the union scene bounds, the global
+    /// `length_scale`, and the frustum geometry sized from it. Comparing one
+    /// counter against the previous frame's is how `app.rs` notices, without
+    /// having to diff a `Vec<Se3Transform>`.
+    pub transform_epoch: u64,
+
     /// Whether the "Load Demo Data" dialog is currently open.
     pub show_demo_dialog: bool,
 
@@ -262,6 +272,7 @@ impl AppState {
             frustum_size_multiplier: DEFAULT_FRUSTUM_SIZE_MULTIPLIER,
             sift_cache: HashMap::new(),
             full_res_cache: HashMap::new(),
+            transform_epoch: 0,
             show_demo_dialog: false,
             demo_num_points: 1000,
         }
@@ -422,6 +433,54 @@ impl AppState {
         self.selected_point = Some(point);
         self.selected_recon = Some(point.recon);
         self.selected_image = self.selected_image.filter(|i| i.recon == point.recon);
+    }
+
+    /// Fit `source`'s transform so it lands on top of `target`, and report the
+    /// outcome in the status message.
+    ///
+    /// The fit maps the source's *native* coordinates onto the target's native
+    /// coordinates; what the node stores is that composed into the target's
+    /// **currently displayed** frame — `source.transform = target.transform ∘
+    /// T_fit`, so aligning C→B after B→A chains as expected. The target node is
+    /// never touched, and on any failure neither is the source: the transform is
+    /// left exactly as it was and only the status line changes.
+    ///
+    /// The fit runs synchronously. By-cameras is trivially small; by-points is a
+    /// bounded RANSAC over the correspondences (see [`crate::align`]).
+    pub fn align_node(&mut self, source: ReconId, target: ReconId, options: AlignOptions) {
+        if source == target {
+            return;
+        }
+        let (Some(si), Some(ti)) = (
+            self.scene.iter().position(|n| n.id == source),
+            self.scene.iter().position(|n| n.id == target),
+        ) else {
+            return;
+        };
+        let (source_label, target_label) =
+            (self.scene[si].label.clone(), self.scene[ti].label.clone());
+        let fit = align::fit_alignment(&self.scene[si].recon, &self.scene[ti].recon, options);
+        self.status_message = Some(match fit {
+            Ok(fit) => {
+                // `compose` applies the receiver first: the fit takes the source
+                // into the target's own coordinates, then the target's transform
+                // takes those into world space.
+                self.scene[si].transform = fit.transform.compose(&self.scene[ti].transform);
+                self.transform_epoch += 1;
+                align::success_message(&source_label, &target_label, &fit)
+            }
+            Err(reason) => align::failure_message(&source_label, &target_label, &reason),
+        });
+    }
+
+    /// Return a node to its own frame.
+    pub fn reset_node_transform(&mut self, id: ReconId) {
+        let Some(node) = self.scene.iter_mut().find(|n| n.id == id) else {
+            return;
+        };
+        node.transform = sfmtool_core::Se3Transform::identity();
+        self.transform_epoch += 1;
+        self.status_message = None;
     }
 
     /// Look up a loaded node by id.

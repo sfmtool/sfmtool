@@ -30,6 +30,7 @@ use windows::Win32::System::Registry::{
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{SC_KEYMENU, WM_SYSCOMMAND};
+use winit::event::{ElementState, MouseButton, TouchPhase, WindowEvent};
 
 use super::GestureEvent;
 
@@ -40,6 +41,9 @@ const DM_POINTERHITTEST: u32 = 0x0250;
 const WM_POINTERDOWN: u32 = 0x0246;
 const WM_POINTERUP: u32 = 0x0247;
 const WM_POINTERUPDATE: u32 = 0x0245;
+
+/// `PT_MOUSE` — the pointer input type of a contact that is really a mouse.
+const PT_MOUSE: i32 = 4;
 
 /// Pointer flags for button identification (from POINTER_INFO.pointerFlags).
 const POINTER_FLAG_FIRSTBUTTON: u32 = 0x00000010; // left
@@ -55,6 +59,13 @@ pub const BUTTON_MIDDLE: u8 = 0x04;
 /// Stores a bitmask of BUTTON_LEFT | BUTTON_RIGHT | BUTTON_MIDDLE.
 static MOUSE_BUTTON_STATE: AtomicU8 = AtomicU8::new(0);
 
+/// The `BUTTON_*` bit of the most recent `WM_POINTERDOWN` that came from a
+/// mouse — 0 when the last press was a touch or pen contact instead.
+///
+/// Feeds [`restore_mouse_button`]; see there for why the button has to be
+/// recovered from the pointer messages at all.
+static LAST_MOUSE_DOWN_BUTTON: AtomicU8 = AtomicU8::new(0);
+
 /// Latest pointer position in physical client coordinates, updated from WM_POINTER messages.
 /// These are always up-to-date even when egui's hover state goes stale after clicks.
 static POINTER_CLIENT_X: AtomicI32 = AtomicI32::new(0);
@@ -63,6 +74,63 @@ static POINTER_CLIENT_Y: AtomicI32 = AtomicI32::new(0);
 /// Returns the current mouse button state as a bitmask.
 pub fn mouse_button_state() -> u8 {
     MOUSE_BUTTON_STATE.load(Ordering::Relaxed)
+}
+
+/// Recover the real mouse button behind the `Touch` event winit hands us for a
+/// non-primary click, as the `MouseInput` (preceded by the move that positions
+/// it) that should be fed to egui instead. `None` means "pass the event through
+/// untouched".
+///
+/// [`create_manager`] turns on `EnableMouseInPointer`, which DirectManipulation
+/// needs in order to see precision-touchpad contacts at all. The side effect is
+/// that *every* mouse button arrives as a `WM_POINTER*` message, and winit 0.30
+/// renders those as [`WindowEvent::Touch`] — which egui's touch emulation reads
+/// as the **primary** button whatever was really pressed. Left alone, no context
+/// menu anywhere in the app can open (nothing is ever `secondary_clicked`) and a
+/// right-click behaves like a left-click.
+///
+/// Only the secondary and middle buttons are rewritten. A left click already
+/// reaches egui as the primary button through that same touch emulation, and the
+/// 3D viewport's drag handling is built against the events it produces, so
+/// there is nothing to gain from moving it onto a second path.
+fn restore_mouse_button_from(event: &WindowEvent, down_button: u8) -> Option<[WindowEvent; 2]> {
+    let WindowEvent::Touch(touch) = event else {
+        return None;
+    };
+    let state = match touch.phase {
+        TouchPhase::Started => ElementState::Pressed,
+        TouchPhase::Ended => ElementState::Released,
+        // A move needs no button, and a cancelled contact has no click to
+        // deliver; both keep egui's pointer position up to date as they are.
+        TouchPhase::Moved | TouchPhase::Cancelled => return None,
+    };
+    let button = match down_button {
+        BUTTON_RIGHT => MouseButton::Right,
+        BUTTON_MIDDLE => MouseButton::Middle,
+        _ => return None,
+    };
+    Some([
+        // egui reads `MouseInput` against the pointer position it already
+        // holds. That is normally current — `CursorMoved` still arrives for
+        // mouse movement — but a click with no move before it (the pointer
+        // sitting where the window opened under it) would otherwise land at a
+        // stale position, so carry the contact's own location with it.
+        WindowEvent::CursorMoved {
+            device_id: touch.device_id,
+            position: touch.location,
+        },
+        WindowEvent::MouseInput {
+            device_id: touch.device_id,
+            state,
+            button,
+        },
+    ])
+}
+
+/// [`restore_mouse_button_from`] against the button the window procedure
+/// recorded for the press this event belongs to.
+pub fn restore_mouse_button(event: &WindowEvent) -> Option<[WindowEvent; 2]> {
+    restore_mouse_button_from(event, LAST_MOUSE_DOWN_BUTTON.load(Ordering::Relaxed))
 }
 
 /// Returns the latest pointer position in physical client coordinates.
@@ -619,6 +687,17 @@ unsafe extern "system" fn subclass_wndproc(
             }
             MOUSE_BUTTON_STATE.store(state, Ordering::Relaxed);
 
+            // Remember which button a *mouse* press carried, so the `Touch`
+            // event winit is about to synthesize from this message can be
+            // turned back into the right `MouseInput` — see
+            // [`restore_mouse_button`]. Only the down message names the button
+            // (`WM_POINTERUP` arrives with the button flags already cleared),
+            // so the press is what the release that follows it is read against.
+            if msg == WM_POINTERDOWN {
+                let is_mouse = pointer_info.pointerType.0 == PT_MOUSE;
+                LAST_MOUSE_DOWN_BUTTON.store(if is_mouse { state } else { 0 }, Ordering::Relaxed);
+            }
+
             // Store client-area pointer position.
             let mut pt = pointer_info.ptPixelLocation;
             let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
@@ -642,7 +721,7 @@ unsafe extern "system" fn subclass_wndproc(
         let is_mouse = unsafe {
             windows::Win32::UI::Input::Pointer::GetPointerType(pointer_id, &mut pointer_type)
                 .is_ok()
-        } && pointer_type.0 == 4; // PT_MOUSE
+        } && pointer_type.0 == PT_MOUSE;
 
         if !is_mouse {
             let data = get_subclass_data()
@@ -662,4 +741,92 @@ unsafe extern "system" fn subclass_wndproc(
     }
 
     DefSubclassProc(hwnd, msg, wparam, lparam)
+}
+
+#[cfg(test)]
+mod tests {
+    use winit::dpi::PhysicalPosition;
+    use winit::event::{DeviceId, Touch};
+
+    use super::*;
+
+    fn touch(phase: TouchPhase) -> WindowEvent {
+        WindowEvent::Touch(Touch {
+            device_id: DeviceId::dummy(),
+            phase,
+            location: PhysicalPosition::new(120.0, 48.0),
+            force: None,
+            id: 1,
+        })
+    }
+
+    /// The bug this exists for: with `EnableMouseInPointer` on, a right-click
+    /// reaches winit as a touch contact, and egui would read it as the primary
+    /// button — so nothing in the app could ever be `secondary_clicked` and no
+    /// context menu could open.
+    #[test]
+    fn a_secondary_click_is_restored_as_a_real_right_button_press_and_release() {
+        for (phase, expected) in [
+            (TouchPhase::Started, ElementState::Pressed),
+            (TouchPhase::Ended, ElementState::Released),
+        ] {
+            let [moved, click] = restore_mouse_button_from(&touch(phase), BUTTON_RIGHT)
+                .expect("a mouse right-button contact is rewritten");
+            assert!(
+                matches!(
+                    moved,
+                    WindowEvent::CursorMoved { position, .. }
+                        if position == PhysicalPosition::new(120.0, 48.0)
+                ),
+                "the click was not positioned at the contact: {moved:?}"
+            );
+            assert!(
+                matches!(
+                    click,
+                    WindowEvent::MouseInput { state, button, .. }
+                        if state == expected && button == MouseButton::Right
+                ),
+                "{phase:?} did not become a {expected:?} right button: {click:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_middle_click_is_restored_too() {
+        let [_, click] = restore_mouse_button_from(&touch(TouchPhase::Started), BUTTON_MIDDLE)
+            .expect("a mouse middle-button contact is rewritten");
+        assert!(matches!(
+            click,
+            WindowEvent::MouseInput {
+                button: MouseButton::Middle,
+                ..
+            }
+        ));
+    }
+
+    /// Left clicks and real touch contacts (which record no mouse button) keep
+    /// the path they already travel: egui's touch emulation reports them as the
+    /// primary button, which is what they are.
+    #[test]
+    fn a_left_click_and_a_real_touch_contact_are_left_alone() {
+        for down in [BUTTON_LEFT, 0] {
+            assert!(restore_mouse_button_from(&touch(TouchPhase::Started), down).is_none());
+            assert!(restore_mouse_button_from(&touch(TouchPhase::Ended), down).is_none());
+        }
+    }
+
+    /// A move carries no button, and a cancelled contact has no click to
+    /// deliver; both still have to reach egui as they are so the pointer
+    /// position keeps up.
+    #[test]
+    fn only_the_press_and_release_of_a_contact_are_rewritten() {
+        for phase in [TouchPhase::Moved, TouchPhase::Cancelled] {
+            assert!(restore_mouse_button_from(&touch(phase), BUTTON_RIGHT).is_none());
+        }
+    }
+
+    #[test]
+    fn events_that_are_not_touches_pass_through() {
+        assert!(restore_mouse_button_from(&WindowEvent::CloseRequested, BUTTON_RIGHT).is_none());
+    }
 }

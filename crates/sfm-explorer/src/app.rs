@@ -277,6 +277,10 @@ impl App {
         // cursor reach the draw loop and the per-recon uniform write: the
         // renderer ANDs these with the global HUD toggles and never looks at
         // the scene itself.
+        //
+        // The node transform rides along in the same sync: from the bundle it
+        // becomes the per-recon `model` matrix, scales the node's splat size,
+        // and moves its bounding sphere into the union.
         {
             let renderer = &mut self.scene_renderer;
             for node in &self.state.scene {
@@ -291,13 +295,20 @@ impl App {
                         interactive: node.interactive,
                     },
                 );
+                renderer.set_node_transform(node.id, node.transform.clone());
             }
         }
+
+        // Setting or resetting a transform is a world-space change, so it
+        // re-derives `length_scale` and re-sizes frustum geometry exactly as a
+        // fresh upload does.
+        let transform_changed = self.state.transform_epoch != self.prev_transform_epoch;
+        self.prev_transform_epoch = self.state.transform_epoch;
 
         // `length_scale` is global and re-derived from the union of the loaded
         // nodes, exactly as it is re-derived on load today. Frustum geometry
         // below depends on it, so it has to settle before that upload.
-        if uploaded_any {
+        if uploaded_any || transform_changed {
             if let Some(seed) = self.scene_renderer.length_scale_seed() {
                 self.state.length_scale = seed;
             }
@@ -306,6 +317,7 @@ impl App {
         // Re-upload frustum geometry if length_scale or frustum_size_multiplier
         // changed — including the change a fresh upload just made.
         let geometry_changed = uploaded_any
+            || transform_changed
             || self.state.length_scale != self.prev_frustum_length_scale
             || self.state.frustum_size_multiplier != self.prev_frustum_size_multiplier;
         let point_selection_changed = self.state.selected_point != self.prev_selected_point;
@@ -316,11 +328,22 @@ impl App {
             for node in &self.state.scene {
                 let id = node.id;
                 if geometry_changed {
+                    // Frustum stubs are built in the node's own coordinates and
+                    // then scaled by its `model` matrix, so the length passed in
+                    // is divided by the node's scale — what reaches the screen
+                    // is `length_scale` in *world* units, whatever frame the
+                    // node was solved in.
+                    let scale = node.transform.scale as f32;
+                    let node_length_scale = if scale > 0.0 && scale.is_finite() {
+                        self.state.length_scale / scale
+                    } else {
+                        self.state.length_scale
+                    };
                     self.scene_renderer.upload_frustums(
                         device,
                         id,
                         &node.recon,
-                        self.state.length_scale,
+                        node_length_scale,
                         self.state.frustum_size_multiplier,
                     );
                 }
@@ -343,17 +366,19 @@ impl App {
             self.prev_hidden_image = hidden_image;
         }
 
-        // Upload/clear track ray geometry when the selected point changes.
-        // Track rays are a singleton serving the single selection, built from
-        // the node that owns the selected point.
-        if point_selection_changed {
+        // Upload/clear track ray geometry when the selected point changes, or
+        // when a transform moved the node the selection lives in. Track rays are
+        // a singleton serving the single selection, built from the node that
+        // owns the selected point — and, having no per-recon `model` matrix of
+        // their own, they are built through that node's transform on the CPU.
+        if point_selection_changed || transform_changed {
             let selected = self
                 .state
                 .selected_point
                 .and_then(|p| Some((p, crate::scene::node_by_id(&self.state.scene, p.recon)?)));
             match selected {
                 Some((point, node)) if point.index() < node.recon.points.len() => {
-                    let (id, recon) = (node.id, &node.recon);
+                    let (id, recon, transform) = (node.id, &node.recon, node.transform.clone());
                     let point_idx = point.index();
                     // Pre-populate SIFT cache for all images in the track
                     // (sift_files only; embedded_patches has no `.sift`
@@ -375,6 +400,7 @@ impl App {
                         recon,
                         point,
                         &self.state.sift_cache,
+                        &transform,
                     );
                 }
                 _ => self.scene_renderer.clear_track_rays(),
@@ -728,12 +754,11 @@ impl App {
                             if self.viewer_3d.camera_view.is_some() {
                                 self.viewer_3d.animated_switch_camera_view(
                                     image,
-                                    &node.recon,
+                                    node,
                                     current_time,
                                 );
                             } else {
-                                self.viewer_3d
-                                    .enter_camera_view(image, &node.recon, current_time);
+                                self.viewer_3d.enter_camera_view(image, node, current_time);
                             }
                         }
                     }

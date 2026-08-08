@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use ndarray::{Array2, Array4};
 use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
 use sfmtool_core::reconstruction::ObservationSource;
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::{RotQuaternion, Se3Transform, SfmrReconstruction};
 
 use super::super::gpu_types::{
     BG_PINHOLE_SUBDIVISIONS, DISTORTION_SUBDIVISIONS, FISHEYE_SUBDIVISIONS, THUMBNAIL_SIZE,
@@ -39,10 +39,14 @@ use crate::state::CachedSiftFeatures;
 /// visible at the call site.
 const RECON: ReconId = ReconId::from_raw(0);
 
-/// A second reconstruction, for the tests that load two at once. The UI never
-/// does that yet — the point of the renderer refactor is that the machinery no
-/// longer cares.
+/// A second reconstruction, for the tests that load two at once.
 const OTHER: ReconId = ReconId::from_raw(1);
+
+/// The node transform an unaligned node carries: what most of these tests want,
+/// since they are about upload arithmetic rather than about where a node sits.
+fn identity() -> Se3Transform {
+    Se3Transform::identity()
+}
 
 /// The resource bundle `RECON`'s uploads land in.
 fn bundle(r: &SceneRenderer) -> &ReconResources {
@@ -873,7 +877,179 @@ fn the_length_scale_seed_is_the_smallest_across_loaded_nodes() {
     );
 }
 
+// ── node transforms ─────────────────────────────────────────────────────
+
+/// A similarity with all three parts non-trivial, mirroring `align/tests.rs`.
+fn similarity(scale: f64) -> Se3Transform {
+    Se3Transform::new(
+        RotQuaternion::from_axis_angle(nalgebra::Vector3::new(0.0, 0.0, 1.0), 0.5).unwrap(),
+        nalgebra::Vector3::new(4.0, -2.5, 1.25),
+        scale,
+    )
+}
+
+#[test]
+fn the_node_transform_reaches_the_gpu_as_the_model_matrix() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 12);
+    upload_node(&mut r, &device, OTHER, 12);
+
+    // The identity is what an unaligned node draws with, and is also the
+    // baseline the aligned node below has to differ from.
+    let before = recon_uniforms(bundle_of(&r, RECON), 1.0, true).model;
+    assert_eq!(
+        before,
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    );
+
+    let t = similarity(2.0);
+    r.set_node_transform(RECON, t.clone());
+    let model = recon_uniforms(bundle_of(&r, RECON), 1.0, true).model;
+
+    // Read the matrix back the way a vertex shader would — columns times the
+    // point's components, plus the translation column — and check it against
+    // the transform it was built from.
+    let probe = nalgebra::Point3::new(0.7, -1.3, 2.1);
+    let expected = t.apply_to_point(&probe);
+    let mapped: Vec<f32> = (0..3)
+        .map(|row| {
+            model[0][row] * probe.x as f32
+                + model[1][row] * probe.y as f32
+                + model[2][row] * probe.z as f32
+                + model[3][row]
+        })
+        .collect();
+    for (got, want) in mapped.iter().zip([expected.x, expected.y, expected.z]) {
+        assert!(
+            (*got as f64 - want).abs() < 1e-5,
+            "model matrix maps {probe:?} to {mapped:?}, not {expected:?}",
+        );
+    }
+    // The last row stays affine, so `w` survives untouched and a direction fed
+    // in with `w = 0` comes out rotated with the translation dropped.
+    assert_eq!(
+        [model[0][3], model[1][3], model[2][3], model[3][3]],
+        [0.0, 0.0, 0.0, 1.0]
+    );
+
+    // And only the node it was set on moved.
+    assert_eq!(
+        recon_uniforms(bundle_of(&r, OTHER), 1.0, true).model,
+        before
+    );
+}
+
+#[test]
+fn a_scaled_node_scales_its_splat_size_with_it() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 64);
+    let native = recon_uniforms(bundle(&r), 1.0, true).point_size;
+
+    r.set_node_transform(RECON, similarity(3.0));
+
+    // The splat is billboarded in world space *after* the model matrix, so it
+    // has to be scaled here or a magnified node would draw pinprick points.
+    let scaled = recon_uniforms(bundle(&r), 1.0, true).point_size;
+    assert!(
+        (scaled - native * 3.0).abs() < 1e-6 * native.max(1.0),
+        "{scaled} should be 3x the node-native {native}",
+    );
+    // The global HUD multiplier still multiplies on top of it.
+    assert!(
+        (recon_uniforms(bundle(&r), 2.0, true).point_size - scaled * 2.0).abs()
+            < 1e-6 * native.max(1.0),
+    );
+}
+
+#[test]
+fn the_scene_bounds_follow_a_transformed_node() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 256);
+    let (centre, radius) = r.scene_bounds();
+
+    let t = similarity(2.0);
+    r.set_node_transform(RECON, t.clone());
+
+    let (moved_centre, moved_radius) = r.scene_bounds();
+    let expected_centre = t.apply_to_point(&centre);
+    assert!(
+        (moved_centre - expected_centre).norm() < 1e-9,
+        "bounds centre {moved_centre:?} should be the transformed {expected_centre:?}",
+    );
+    assert!((moved_radius - radius * 2.0).abs() < 1e-9);
+}
+
+#[test]
+fn the_length_scale_seed_scales_with_the_node_transform() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 256);
+    let native = r.length_scale_seed().expect("one node seeds a scale");
+
+    r.set_node_transform(RECON, similarity(4.0));
+
+    // `length_scale` is a world-space length; the node's own nearest-neighbour
+    // spacings are not, so a scaled node has to re-seed it. This is what
+    // dissolves the shared-frustum-size compromise once two nodes are aligned.
+    let scaled = r.length_scale_seed().expect("still seeds a scale");
+    assert!(
+        (scaled - native * 4.0).abs() < 1e-4 * native,
+        "{scaled} should be 4x the node-native {native}",
+    );
+}
+
+#[test]
+fn resetting_a_node_transform_puts_its_bounds_back() {
+    let (device, _queue) = device();
+    let mut r = SceneRenderer::new();
+    upload_node(&mut r, &device, RECON, 256);
+    let before = r.scene_bounds();
+
+    r.set_node_transform(RECON, similarity(2.0));
+    r.set_node_transform(RECON, Se3Transform::identity());
+
+    let after = r.scene_bounds();
+    assert!((after.0 - before.0).norm() < 1e-9);
+    assert!((after.1 - before.1).abs() < 1e-9);
+}
+
 // ── track rays ──────────────────────────────────────────────────────────
+
+#[test]
+fn track_rays_are_built_through_the_owning_nodes_transform() {
+    let recon = demo(4);
+    let cache = sift_cache(recon.images.len(), 8);
+    let t = similarity(2.0);
+
+    let native = track_ray_edges(&recon, point(0), &cache, &identity());
+    let moved = track_ray_edges(&recon, point(0), &cache, &t);
+
+    // Track rays are drawn from a shared singleton buffer with no per-recon
+    // `model` matrix, so the transform has to be applied on the CPU or the rays
+    // would stay behind when the node they belong to moves.
+    assert_eq!(native.len(), moved.len());
+    for (a, b) in native.iter().zip(moved.iter()) {
+        for (raw, mapped) in [(a.endpoint_a, b.endpoint_a), (a.endpoint_b, b.endpoint_b)] {
+            let expected = t.apply_to_point(&nalgebra::Point3::new(
+                raw[0] as f64,
+                raw[1] as f64,
+                raw[2] as f64,
+            ));
+            let d = (nalgebra::Point3::new(mapped[0] as f64, mapped[1] as f64, mapped[2] as f64)
+                - expected)
+                .norm();
+            assert!(d < 1e-4, "endpoint {mapped:?} should be {expected:?}");
+        }
+    }
+}
 
 #[test]
 fn upload_track_rays_emits_one_ray_per_cached_observation() {
@@ -885,7 +1061,7 @@ fn upload_track_rays_emits_one_ray_per_cached_observation() {
     let cache = sift_cache(recon.images.len(), 8);
     let mut r = SceneRenderer::new();
 
-    r.upload_track_rays(&device, &recon, point(3), &cache);
+    r.upload_track_rays(&device, &recon, point(3), &cache, &identity());
 
     // Demo gives every point two observations.
     assert_eq!(r.track_ray_count, 2);
@@ -897,7 +1073,7 @@ fn track_rays_for_a_finite_point_stop_near_the_scene() {
     let recon = demo(4);
     let cache = sift_cache(recon.images.len(), 8);
 
-    let edges = track_ray_edges(&recon, point(0), &cache);
+    let edges = track_ray_edges(&recon, point(0), &cache, &identity());
 
     // A finite point terminates each ray at the closest approach to it, which
     // lies inside the camera cloud — decisively shorter than the fixed
@@ -921,7 +1097,7 @@ fn upload_track_rays_skips_observations_with_no_cached_features() {
 
     // Empty cache — a missing `.sift` companion must draw no ray at all
     // rather than a misleading one.
-    r.upload_track_rays(&device, &recon, point(0), &HashMap::new());
+    r.upload_track_rays(&device, &recon, point(0), &HashMap::new(), &identity());
 
     assert_eq!(r.track_ray_count, 0);
     assert!(r.track_ray_edge_buffer.is_none());
@@ -935,7 +1111,7 @@ fn upload_track_rays_skips_feature_indexes_past_a_truncated_cache() {
     let cache = sift_cache(recon.images.len(), 0);
     let mut r = SceneRenderer::new();
 
-    r.upload_track_rays(&device, &recon, point(0), &cache);
+    r.upload_track_rays(&device, &recon, point(0), &cache, &identity());
 
     assert_eq!(r.track_ray_count, 0);
 }
@@ -946,7 +1122,7 @@ fn upload_track_rays_reads_inline_keypoints_without_a_sift_cache() {
     let recon = with_embedded_keypoints(demo(4));
     let mut r = SceneRenderer::new();
 
-    r.upload_track_rays(&device, &recon, point(0), &HashMap::new());
+    r.upload_track_rays(&device, &recon, point(0), &HashMap::new(), &identity());
 
     // Embedded-patch reconstructions carry keypoints inline, so no cache is
     // consulted and the rays still build.
@@ -960,7 +1136,7 @@ fn track_rays_for_a_point_at_infinity_run_to_twice_the_scene_extent() {
     assert!(recon.points[0].is_at_infinity());
     let cache = sift_cache(recon.images.len(), 8);
 
-    let edges = track_ray_edges(&recon, point(0), &cache);
+    let edges = track_ray_edges(&recon, point(0), &cache, &identity());
 
     // An infinity point's stored position is a unit direction at the origin,
     // which would project behind every camera and collapse each ray to zero
@@ -984,7 +1160,7 @@ fn clear_track_rays_drops_the_buffer() {
     let recon = demo(4);
     let cache = sift_cache(recon.images.len(), 8);
     let mut r = SceneRenderer::new();
-    r.upload_track_rays(&device, &recon, point(0), &cache);
+    r.upload_track_rays(&device, &recon, point(0), &cache, &identity());
     assert_eq!(r.track_ray_count, 2);
 
     r.clear_track_rays();

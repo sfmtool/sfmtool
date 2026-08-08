@@ -9,19 +9,47 @@ use super::recon::ReconResources;
 use super::SceneRenderer;
 use crate::scene::{ImageRef, PointRef};
 use crate::viewer_3d::ViewportCamera;
+use sfmtool_core::Se3Transform;
 
-/// The identity model matrix every node currently draws with. Node transforms
-/// arrive in phase 4; the plumbing that carries them is already here.
-const IDENTITY_MODEL: [[f32; 4]; 4] = [
-    [1.0, 0.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0, 0.0],
-    [0.0, 0.0, 1.0, 0.0],
-    [0.0, 0.0, 0.0, 1.0],
-];
+/// A node transform as the column-major `mat4x4<f32>` the shaders take.
+///
+/// `p' = scale · (R · p) + t`, so the upper-left 3×3 is `scale · R` and the last
+/// column is `t`. Every scene vertex shader applies this before `view_proj`;
+/// directions (points at infinity, patch half-vectors) go through the same
+/// matrix with `w = 0`, which drops the translation and leaves the rotation —
+/// exactly right for a bearing, with the uniform scale irrelevant.
+pub(super) fn model_matrix(transform: &Se3Transform) -> [[f32; 4]; 4] {
+    let r = transform.rotation.to_rotation_matrix();
+    let s = transform.scale;
+    let t = &transform.translation;
+    // WGSL's mat4x4 constructor takes columns, and `bytemuck` writes this array
+    // of rows straight into the buffer — so each inner array is one *column*.
+    [
+        [
+            (s * r[(0, 0)]) as f32,
+            (s * r[(1, 0)]) as f32,
+            (s * r[(2, 0)]) as f32,
+            0.0,
+        ],
+        [
+            (s * r[(0, 1)]) as f32,
+            (s * r[(1, 1)]) as f32,
+            (s * r[(2, 1)]) as f32,
+            0.0,
+        ],
+        [
+            (s * r[(0, 2)]) as f32,
+            (s * r[(1, 2)]) as f32,
+            (s * r[(2, 2)]) as f32,
+            0.0,
+        ],
+        [t.x as f32, t.y as f32, t.z as f32, 1.0],
+    ]
+}
 
-/// The per-recon uniform block for one node: its pick bases, its splat size,
-/// and the two switches the Scene panel drives — whether the node captures
-/// picks, and whether its points at infinity are drawn.
+/// The per-recon uniform block for one node: its model matrix, pick bases, its
+/// splat size, and the two switches the Scene panel drives — whether the node
+/// captures picks, and whether its points at infinity are drawn.
 ///
 /// Pulled out of the write loop so the composition of global and per-node state
 /// is assertable without a render pass: this is the only place `interactive`
@@ -32,8 +60,12 @@ pub(super) fn recon_uniforms(
     show_infinity: bool,
 ) -> ReconUniforms {
     ReconUniforms {
-        model: IDENTITY_MODEL,
-        point_size: bundle.auto_point_size * size_multiplier,
+        model: model_matrix(&bundle.transform),
+        // The splat is billboarded *after* the model transform, in world space,
+        // so a scaled node's points have to be scaled here to grow with it —
+        // `auto_point_size` is a nearest-neighbour distance in the node's own
+        // coordinates.
+        point_size: bundle.auto_point_size * size_multiplier * bundle.transform.scale as f32,
         point_pick_base: bundle.point_pick_base,
         image_pick_base: bundle.image_pick_base,
         // The Scene panel's interaction cursor. 0 makes every one of this

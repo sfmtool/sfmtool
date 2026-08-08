@@ -1,11 +1,11 @@
 # Scene Graph and Multi-Reconstruction Support
 
-*Status: Phases 1–3 implemented — typed refs, per-reconstruction renderer
-resources and picking, and the feature itself: multi-load, the Scene Graph
-panel, per-node visibility and interactivity, the selected reconstruction.
-Phases 4–5 — node transforms with `Align to…`, and the comparison affordances
-built on them (tint, solo) — are still design proposal. See "Implementation
-Phases" at the end.*
+*Status: Phases 1–4 implemented — typed refs, per-reconstruction renderer
+resources and picking, the feature itself (multi-load, the Scene Graph panel,
+per-node visibility and interactivity, the selected reconstruction), and node
+transforms with `Align to…` / `Reset Transform`. Phase 5 — the comparison
+affordances built on transforms (tint, solo) — is still design proposal. See
+"Implementation Phases" at the end.*
 
 This document specifies multi-reconstruction support for SfM Explorer: loading
 several `.sfmr` files at once, organizing them as nodes in a scene graph, and a
@@ -133,7 +133,7 @@ pub struct SceneNode {
     /// Similarity transform (uniform scale · rotation · translation) mapping
     /// this node's native coordinates into the shared world space. Identity on
     /// load. Set by the "Align to…" operation; see "Node Transforms and
-    /// Alignment" below. — phase 4
+    /// Alignment" below.
     pub transform: Se3Transform,
 
     /// This node's data needs (re-)upload to the GPU.
@@ -141,11 +141,13 @@ pub struct SceneNode {
 }
 ```
 
-Everything above is implemented except `tint` and `transform`, which stay
-renderer-side defaults (identity model matrix, alpha-0 tint) until phases 4–5.
-The renderer does not read `SceneNode` directly: each frame `app.rs` mirrors the
-five display flags plus `interactive` onto the node's GPU bundle as a
-`NodeDisplay`, and the draw loop and per-recon uniform write consult only that.
+Everything above is implemented except `tint`, which stays a renderer-side
+default (alpha-0) until phase 5. The renderer does not read `SceneNode`
+directly: each frame `app.rs` mirrors the five display flags plus `interactive`
+onto the node's GPU bundle as a `NodeDisplay`, and the `transform` alongside
+them; the draw loop and per-recon uniform write consult only the bundle.
+`transform` is also carried across a `Reload from Disk`, alongside the display
+flags — a refreshed file should come back where the user put it.
 
 `AppState` replaces its single slot with:
 
@@ -243,6 +245,17 @@ fixed-height for virtualization.
   (`interactive` — greyed when off), label, compact counts.
 - Bold + accent bar when selected. Click: select this reconstruction.
   Double-click: zoom-to-fit this node.
+- Everything past the two toggles is **one click target spanning the row** —
+  the name, the gap, the counts — carrying select, zoom-to-fit and the context
+  menu alike, under an explicit id rather than an auto-generated one (egui keys
+  a popup's open state on the widget id, and an auto id shifts with whatever
+  was laid out before it). Its contents are drawn non-interactive on top:
+  `Label::selectable(false)` on both texts, because egui's default
+  `selectable_labels` gives a bare label `Sense::click_and_drag()` for text
+  selection, and a label drawn after the row would win every pointer hit that
+  landed on a glyph — leaving the name the one part of the row that answered
+  nothing. The accent bar's width is reserved on every row whether it is
+  painted or not, so the name does not shift as the selection moves.
 - Context menu: `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Tint ▸` (Original / palette of distinguishable colors), `Reload from Disk`,
@@ -308,17 +321,43 @@ pub struct SceneGraphResponse {
     pub hovered_point: Option<PointRef>,
     pub has_pointer: bool,
     pub select_recon: Option<ReconId>,
-    pub align_node: Option<(ReconId, ReconId, AlignOptions)>, // source, target — phase 4
-    pub reset_transform: Option<ReconId>,                     // phase 4
+    pub align_node: Option<(ReconId, ReconId, AlignOptions)>, // source, target
+    pub reset_transform: Option<ReconId>,
     pub zoom_to_node: Option<ReconId>,
     pub close_node: Option<ReconId>,
     pub reload_node: Option<ReconId>,
 }
 ```
 
-The two phase-4 fields, and the three context-menu entries that would produce
-them, are absent from the implementation: a response field with no producer, or
-a menu entry that silently does nothing, is worse than neither.
+`Tint ▸` is the one context-menu entry still absent (phase 5): a menu entry that
+silently does nothing is worse than no entry.
+
+The reconstruction row's menu is built from `egui::Popup::context_menu` with
+`PopupCloseBehavior::CloseOnClickOutside` rather than from
+`Response::context_menu`, whose default closes the menu on **any** click inside
+it — which would tear the whole thing down the moment the user set one of the
+`Align to` radio buttons. Closing is therefore explicit: each item that acts
+calls `ui.close()`, and picking an alignment target calls `Popup::close_all`,
+since `ui.close()` inside the submenu would leave the row's own menu standing.
+
+For the menu to open at all on Windows, the secondary button has to survive the
+trip from the OS. `platform::windows::create_manager` enables
+`EnableMouseInPointer` so DirectManipulation can see precision-touchpad
+contacts; the side effect is that every mouse button arrives as a `WM_POINTER*`
+message, which winit 0.30 renders as a `Touch` event and egui's touch emulation
+reads as the **primary** button. Unhandled, nothing in the app is ever
+`secondary_clicked`: no context menu can open anywhere, and a right-click on a
+tree row selects it exactly as a left-click does.
+`platform::windows::restore_mouse_button` therefore rewrites the secondary and
+middle contacts back into real `MouseInput` events (preceded by the move that
+positions them), reading the button off the pointer flags the window procedure
+already decodes. Left clicks keep the touch-emulation path they have always
+taken, which the 3D viewport's drag handling is built against.
+
+Nothing above the window can observe any of this — the panel behaves correctly
+under `Context::run_ui` — so it is guarded by a windowed test that drives real
+synthetic mouse input (`ui_basic.rs`,
+`a_real_right_click_opens_the_reconstruction_rows_context_menu`).
 
 `has_pointer` ownership of hover state follows
 [gui-cross-panel-hover.md](gui-cross-panel-hover.md) unchanged: when the
@@ -439,10 +478,17 @@ infinity need no special-casing: a direction transforms as
 `(model × vec4(dir, 0)).xyz` — the linear part rotates it, translation drops
 out, and uniform scale is irrelevant to a direction.
 
-Point splats are billboarded *after* the model transform, at the node's own
-`point_size`. Under a scaled node transform the splat should scale with it;
-folding the transform's scale into `point_size` is left to phase 4, where
-non-identity transforms first exist.
+Point splats are billboarded *after* the model transform, in world space, at the
+node's own `point_size` — so the transform's scale is folded into `point_size`
+on the CPU (`uniforms.rs`), and a magnified node's points grow with it instead
+of shrinking to pinpricks.
+
+**Frustum geometry works the other way.** Frustum stubs and image quads are
+built in the node's own coordinates and *then* scaled by `model`, so `app.rs`
+divides the global `length_scale` by the node's scale before uploading them.
+What reaches the screen is `length_scale` in world units whatever frame the node
+was solved in — which is the other half of what makes the shared-frustum-size
+compromise below dissolve on alignment.
 
 The existing global uniforms keep working with one change of meaning:
 `selected_point_index` / `hovered_point_index` / `hovered_image_index` become
@@ -468,10 +514,12 @@ comparison. Sentinel remains `0xFFFFFFFF`.
   union falls back to all loaded nodes rather than collapsing to a unit sphere
   at the origin, so switching the last eye off does not fling the camera.
 - `length_scale` (drives frustum stub depth, target indicator): re-derived
-  from the visible union whenever the node set changes, exactly as it is
-  re-derived on load today; still one global, still user-adjustable. The union
-  rule is the **minimum** of each node's own seed
-  (`min(10 × auto_point_size, camera_nn_scale)`) — the finest scale present,
+  from the visible union whenever the node set **or any node transform**
+  changes, exactly as it is re-derived on load today; still one global, still
+  user-adjustable. The union rule is the **minimum** of each node's own seed
+  (`min(10 × auto_point_size, camera_nn_scale)`, times that node's transform
+  scale, since both inputs are measured in the node's own units) — the finest
+  scale present,
   so the smallest reconstruction's frustums stay legible. This is a known
   compromise — two reconstructions at wildly different scales will share one
   frustum size until they're aligned (see "Node Transforms and Alignment").
@@ -480,7 +528,9 @@ comparison. Sentinel remains `0xFFFFFFFF`.
 ### Track rays and background image
 
 Track rays are CPU-built per selection from the owning recon; the builder
-additionally applies `node.transform` to camera centers and ray points.
+additionally applies `node.transform` to camera centers and ray points (a
+similarity is affine, so mapping the two endpoints maps the whole segment). They
+are rebuilt when the selection changes *or* when a transform does.
 The background image (camera view mode) is keyed by `ImageRef` instead of
 bare index, fixing the latent "same index, wrong reconstruction" aliasing.
 
@@ -557,7 +607,16 @@ Where it applies:
   bounds (union framing and per-node zoom-to-fit), and camera-view entry —
   `enter_camera_view` composes the node transform into the viewport pose so
   "look through this camera" shows the transformed scene from the transformed
-  camera.
+  camera. Camera-view entry composes three things: the camera centre through
+  the transform, the world-to-camera rotation losing the transform's rotation
+  (`q' = q · conj(q_world)`, as `Se3Transform::apply_to_camera_pose` derives
+  it), and the median-depth start distance scaled by the transform's scale. The
+  same composition serves `,` / `.` camera switching, so flipping between
+  cameras of an aligned node stays in its displayed frame.
+  Two further CPU consumers the list above does not name explicitly but which
+  need it for the same reason: the viewport's **first-show framing** and the
+  `Z` **zoom-to-fit** key, both of which frame point positions rather than GPU
+  geometry (`scene::world_points`).
 - **Points at infinity**: directions rotate; translation drops out and uniform
   scale is irrelevant to a direction. The `model × vec4(dir, 0)` path already
   handles this with no special-casing.
@@ -586,20 +645,43 @@ correspondence gathering and UI:
   reconstructions were solved from overlapping image sets — the typical
   comparison case (two solver runs over the same shoot) — and mirrors
   `sfm align`'s by-cameras mode. Only the shared subset matters; disjoint
-  extra images on either side are simply not correspondences.
+  extra images on either side are simply not correspondences. A repeated name
+  on either side pairs once, first occurrence winning, as `sfm align` does.
+  Fewer than 3 shared images is refused rather than fitted: two points leave
+  the rotation about the line joining them free.
+  Note the deviation from `sfm align`'s by-cameras mode, which averages
+  per-image *orientations* (`estimate_similarity_with_orientations`) as well as
+  positions. Here the fit is over camera **centres** only, per this spec — the
+  same `estimate_alignment` the point mode uses, so the two modes differ in
+  what they correspond and in nothing else.
 - **Correspondences by points**: `find_point_correspondences` matches 3D
   points through shared feature observations in shared images, yielding a much
-  larger set; points at infinity are excluded from the fit. Requires
-  feature-indexed observations (`sift_files` source) in both nodes — the menu
-  option is disabled otherwise.
+  larger set; points at infinity are excluded from the fit (their stored
+  position is a bearing, not a location — the same `_finite_pair_mask` rule
+  `sfm align` applies). Requires feature-indexed observations (`sift_files`
+  source) in both nodes — the menu option is disabled, with a hover
+  explanation, otherwise. Fewer than 10 correspondences, before or after
+  RANSAC, is refused (`sfm align`'s `min_points`).
 - **Estimation**: `ransac_alignment` for inlier selection on point
   correspondences, then `estimate_alignment` with trimmed refit
-  (`AlignmentParams { rounds, keep_fraction, estimate_scale }`); camera-mode
-  fits, with far fewer correspondences, use trimming alone. A Rigid /
-  Similarity choice maps to `estimate_scale`.
+  (`AlignmentParams { rounds: 3, keep_fraction: 0.8, estimate_scale }`);
+  camera-mode fits, with far fewer correspondences, use trimming alone. A
+  Rigid / Similarity choice maps to `estimate_scale`. The RANSAC threshold is
+  the 95th percentile of a preliminary all-correspondence fit's residuals, as
+  in `sfm align` — floored at 1e-9 × the target cloud's extent so an exactly
+  corresponding pair (a synthetic fixture, or a file aligned to a copy of
+  itself) is not rejected as all-outlier by `f64` rounding noise. 200 RANSAC
+  rounds rather than `sfm align`'s 1000: the loop is scalar Rust on the UI
+  thread rather than numpy, and the preliminary fit has already done most of
+  the work.
 
 Options are deliberately few (a small popup): correspondence source
-(Cameras / Points) and Similarity vs Rigid. Defaults: cameras, similarity.
+(Cameras / Points) and Similarity vs Rigid. Defaults: cameras, similarity. They
+live on the panel and persist between opens, and they sit *above* the target
+list in the one `Align to ▸` submenu rather than in a popup per target — two
+radio pairs do not earn a third level of nesting. A target whose node lacks
+feature indexes is greyed individually when Points is selected, so a scene
+mixing `sift_files` and `embedded_patches` nodes stays usable.
 The fit runs synchronously — by-cameras is trivially small, and by-points
 RANSAC over ~10⁵ correspondences is tens of milliseconds; if datasets outgrow
 that it moves to a background thread without UI change.
@@ -607,13 +689,25 @@ that it moves to a background thread without UI change.
 Outcome feedback lands in the status message with correspondence count,
 inliers, and post-fit RMS residual:
 `Aligned run_b → run_a: 214/243 cameras, RMS 0.031`. On failure (no shared
-images, degenerate geometry, SVD failure) the transform is left untouched and
-the reason reported.
+images, too few correspondences, degenerate geometry, SVD failure) the
+transform is left untouched and the reason reported:
+`Align run_b → run_a failed: <reason>`. The status message is painted in the
+viewport overlay under the scene stats — `dock.rs`'s empty-state text only
+shows it when *nothing* is loaded, and an alignment by definition happens with
+two files open.
 
-`Reset Transform` returns a node to identity. Setting or resetting a
-transform recomputes the union scene bounds and re-derives `length_scale` —
-which also dissolves the shared-frustum-size compromise noted under Rendering
-once the nodes' scales agree.
+"Inliers" means the RANSAC inlier count in point mode and the trimmed-refit's
+kept count in camera mode (which runs no RANSAC); the RMS is over that same
+subset, recovered under the final transform, and is in the **target's** units.
+
+`Reset Transform` returns a node to identity, and is greyed out for a node that
+is already in its own frame. Setting or resetting a transform recomputes the
+union scene bounds, re-derives `length_scale`, re-uploads frustum geometry at
+the new per-node scale, and rebuilds the track rays — which also dissolves the
+shared-frustum-size compromise noted under Rendering once the nodes' scales
+agree. `AppState` carries a `transform_epoch` counter that every transform
+change bumps; comparing it against the previous frame's is how the upload phase
+notices, without diffing a `Vec<Se3Transform>`.
 
 ---
 
@@ -735,10 +829,19 @@ three against the *old* id.
   finer-selection-clears-on-recon-switch invariant, `[` / `]` stepping with
   same-named-image carry-over (and clearing when the name is absent), label
   disambiguation.
-- **Alignment round-trip**: node B built as node A under a known similarity;
-  `Align to` recovers it (camera and point modes), and the composed
+- **Alignment round-trip**: node B built as node A under a known similarity
+  (points *and* camera poses); `Align to` recovers it (camera and point modes),
+  asserted on where B's points land rather than on the transform's components,
+  which sidesteps the quaternion sign ambiguity. The composed
   `target.transform ∘ T_fit` chaining is verified with a pre-transformed
-  target.
+  target, and the same fixture checks that Rigid refuses to absorb a scale,
+  that points at infinity are left out, that every failure path leaves the
+  transform untouched, and that an aligned node's camera pose (what
+  `enter_camera_view` builds from) lands on the target's.
+- **Transform plumbing**: the `model` matrix read back the way a vertex shader
+  would (noop backend), splat size scaling with a scaled node, union bounds and
+  the `length_scale` seed following a transform and returning on reset, track
+  rays built through it, and the transform carried across a reload.
 - `ui_basic` keeps matching the base window title, and gains a check that the
   Scene panel's rows reach a real window. The multi-file title case stays a lib
   test: driving it through `ui_basic` would need two real `.sfmr` fixtures on
@@ -763,11 +866,11 @@ three against the *old* id.
    dialog, multi-path CLI, node close/reload, the Scene tab with tree, per-node
    eye and interaction-cursor toggles, selected-reconstruction handling,
    window title and stats overlay. The feature is on.
-4. **Transforms + alignment**: the per-recon model matrix exercised end to
-   end, `Align to…` (by cameras, then by points), `Reset Transform`, status
-   feedback.
-5. **Comparison affordances**: per-node tint palette, per-node zoom-to-fit,
-   solo mode.
+4. **Transforms + alignment** *(done)*: the per-recon model matrix exercised
+   end to end, `Align to…` (by cameras and by points), `Reset Transform`,
+   status feedback.
+5. **Comparison affordances**: per-node tint palette, solo mode, a numeric
+   transform editor, "Save Aligned Copy…", multi-way align.
 
 Phases 1–2 are refactors shippable behind unchanged UX; the feature turns on
 in phase 3.

@@ -12,6 +12,7 @@
 //! and window management layers, but works when we own the event loop
 //! and window creation directly.
 
+mod align;
 mod app;
 mod colormap;
 mod dock;
@@ -140,6 +141,7 @@ pub fn run() {
         prev_selected_image: None,
         prev_selected_point: None,
         prev_hidden_image: None,
+        prev_transform_epoch: 0,
         quit_requested: false,
         applied_title: String::new(),
         #[cfg(target_os = "windows")]
@@ -206,6 +208,9 @@ pub(crate) struct App {
     pub(crate) prev_selected_image: Option<ImageRef>,
     pub(crate) prev_selected_point: Option<PointRef>,
     pub(crate) prev_hidden_image: Option<ImageRef>,
+    /// `AppState::transform_epoch` as of the previous frame — how the upload
+    /// phase notices that a node transform was set or reset.
+    pub(crate) prev_transform_epoch: u64,
     /// Set by File > Quit and read by the event loop right after the frame it
     /// was clicked in, which then exits.
     pub(crate) quit_requested: bool,
@@ -369,8 +374,27 @@ impl ApplicationHandler<UserEvent> for App {
     ) {
         if let Some(egui_winit_state) = self.egui_winit_state.as_mut() {
             if let Some(window) = self.window.as_ref() {
-                let response = egui_winit_state.on_window_event(window, &event);
-                if response.repaint {
+                // On Windows a secondary or middle click reaches us as a
+                // `Touch`, which egui would read as the primary button; the
+                // platform layer hands back the `MouseInput` it should have
+                // been. See `platform::windows::restore_mouse_button`.
+                #[cfg(target_os = "windows")]
+                let restored = platform::windows::restore_mouse_button(&event);
+                #[cfg(not(target_os = "windows"))]
+                let restored: Option<[WindowEvent; 2]> = None;
+
+                let mut repaint = false;
+                match restored.as_ref() {
+                    Some(events) => {
+                        for event in events {
+                            repaint |= egui_winit_state.on_window_event(window, event).repaint;
+                        }
+                    }
+                    None => {
+                        repaint = egui_winit_state.on_window_event(window, &event).repaint;
+                    }
+                }
+                if repaint {
                     window.request_redraw();
                 }
             }

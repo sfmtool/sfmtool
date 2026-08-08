@@ -6,7 +6,7 @@
 use super::super::gpu_types::EdgeInstance;
 use super::super::SceneRenderer;
 use crate::scene::{ImageRef, PointRef};
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::{Se3Transform, SfmrReconstruction};
 use wgpu::util::DeviceExt;
 
 /// Length of a point-at-infinity track ray, as a multiple of the camera-cloud
@@ -42,10 +42,17 @@ fn camera_cloud_extent(recon: &SfmrReconstruction) -> f64 {
 /// Split out from the upload so the geometry is assertable without a GPU
 /// buffer readback — the edges land in a VERTEX-usage buffer, which is
 /// write-only from the CPU side.
+///
+/// The rays are built in the reconstruction's own coordinates and then put
+/// through `transform`, the owning node's similarity: the track-ray pass is one
+/// of the CPU world-space paths, drawn from a shared singleton buffer with no
+/// per-recon `model` matrix of its own. Because a similarity is affine, mapping
+/// the two endpoints is the same as mapping the whole segment.
 pub(super) fn track_ray_edges(
     recon: &SfmrReconstruction,
     point_ref: PointRef,
     sift_cache: &std::collections::HashMap<ImageRef, crate::state::CachedSiftFeatures>,
+    transform: &Se3Transform,
 ) -> Vec<EdgeInstance> {
     let point_idx = point_ref.index();
     let point = &recon.points[point_idx];
@@ -135,12 +142,22 @@ pub(super) fn track_ray_edges(
             };
 
             Some(EdgeInstance {
-                endpoint_a,
-                endpoint_b,
+                endpoint_a: to_world(transform, endpoint_a),
+                endpoint_b: to_world(transform, endpoint_b),
             })
         })
         .collect();
     edges
+}
+
+/// One ray endpoint through the node transform.
+fn to_world(transform: &Se3Transform, p: [f32; 3]) -> [f32; 3] {
+    let world = transform.apply_to_point(&nalgebra::Point3::new(
+        p[0] as f64,
+        p[1] as f64,
+        p[2] as f64,
+    ));
+    [world.x as f32, world.y as f32, world.z as f32]
 }
 
 impl SceneRenderer {
@@ -153,8 +170,9 @@ impl SceneRenderer {
         recon: &SfmrReconstruction,
         point: PointRef,
         sift_cache: &std::collections::HashMap<ImageRef, crate::state::CachedSiftFeatures>,
+        transform: &Se3Transform,
     ) {
-        let edges = track_ray_edges(recon, point, sift_cache);
+        let edges = track_ray_edges(recon, point, sift_cache, transform);
 
         if edges.is_empty() {
             self.track_ray_edge_buffer = None;

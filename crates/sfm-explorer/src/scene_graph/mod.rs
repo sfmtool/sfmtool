@@ -35,6 +35,7 @@
 
 use eframe::egui;
 
+use crate::align::{AlignOptions, AlignSource};
 use crate::scene::{point_id, ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::AppState;
 
@@ -81,10 +82,6 @@ pub(crate) fn row_id(recon: ReconId, key: &str) -> egui::Id {
 }
 
 /// What the Scene panel reports back to `dock.rs`.
-///
-/// The spec's `align_node` / `reset_transform` fields are absent: they belong to
-/// node transforms (phase 4), and a response field with no producer is a
-/// promise the panel cannot keep.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SceneGraphResponse {
     /// A camera row was clicked.
@@ -104,6 +101,12 @@ pub struct SceneGraphResponse {
     pub select_recon: Option<ReconId>,
     /// A reconstruction row was double-clicked, or `Zoom to Fit` chosen.
     pub zoom_to_node: Option<ReconId>,
+    /// `Align to ▸ <node>` chosen: `(source, target, options)`. The source is
+    /// the row the menu was opened on; the target is the node picked from the
+    /// submenu, and is never itself modified.
+    pub align_node: Option<(ReconId, ReconId, AlignOptions)>,
+    /// `Reset Transform` chosen — return this node to its own frame.
+    pub reset_transform: Option<ReconId>,
     /// `Close` chosen from a reconstruction's context menu.
     pub close_node: Option<ReconId>,
     /// `Reload from Disk` chosen from a reconstruction's context menu.
@@ -125,6 +128,10 @@ pub struct SceneGraphPanel {
     /// caller can predict, so this is how anything that needs to point *at* a
     /// row finds it — the panel tests today, keyboard navigation later.
     hits: std::collections::HashMap<egui::Id, egui::Rect>,
+    /// The `Align to ▸` popup's two settings. Panel state rather than app
+    /// state: they configure the *next* fit and nothing outside the menu reads
+    /// them, but they have to survive the frame the popup is open.
+    align_options: AlignOptions,
 }
 
 impl SceneGraphPanel {
@@ -145,9 +152,23 @@ impl SceneGraphPanel {
     /// Draw the tree and report what the user did with it.
     pub fn show(&mut self, ui: &mut egui::Ui, state: &mut AppState) -> SceneGraphResponse {
         let panel_rect = ui.available_rect_before_wrap();
+        // What every *other* node offers as an alignment target, taken before
+        // the mutable walk below: the tree holds one node at a time, and the
+        // `Align to ▸` submenu on that node has to name all the rest.
+        let targets: Vec<AlignTarget> = state
+            .scene
+            .iter()
+            .map(|n| AlignTarget {
+                id: n.id,
+                label: n.label.clone(),
+                feature_indexed: n.recon.feature_indexes().is_some(),
+            })
+            .collect();
         let mut out = TreeOutput {
             response: SceneGraphResponse::default(),
             hits: &mut self.hits,
+            align_options: &mut self.align_options,
+            targets: &targets,
         };
         out.hits.clear();
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
@@ -197,17 +218,37 @@ impl SceneGraphPanel {
     }
 }
 
+/// One loaded node as an `Align to ▸` menu entry.
+struct AlignTarget {
+    id: ReconId,
+    label: String,
+    /// Whether it carries `sift_files` observations — the feature indexes the
+    /// point mode matches on.
+    feature_indexed: bool,
+}
+
 /// What one frame of the tree produced.
 struct TreeOutput<'a> {
     response: SceneGraphResponse,
     hits: &'a mut std::collections::HashMap<egui::Id, egui::Rect>,
+    align_options: &'a mut AlignOptions,
+    /// Every loaded node, including the one being drawn (filtered out where the
+    /// menu is built).
+    targets: &'a [AlignTarget],
 }
 
 impl TreeOutput<'_> {
     /// Record where a row or toggle landed, and hand the response back through.
     fn hit(&mut self, id: egui::Id, response: egui::Response) -> egui::Response {
-        self.hits.insert(id, response.rect);
+        self.mark(id, response.rect);
         response
+    }
+
+    /// Record where something the panel *painted* landed. The selection accent
+    /// bar is no widget, so it has no response to record — but whether it was
+    /// drawn is exactly what a test asking "is this row marked selected?" wants.
+    fn mark(&mut self, id: egui::Id, rect: egui::Rect) {
+        self.hits.insert(id, rect);
     }
 }
 
@@ -249,6 +290,10 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
 
 /// `[👁] [🖱] label    1.2M pts · 243 cams` — the reconstruction row's content,
 /// drawn to the right of the collapsing triangle.
+///
+/// Everything past the two toggles is a single click target spanning the row:
+/// select, zoom-to-fit and the context menu all hang off it, so none of them
+/// depends on the user finding the name's own few pixels.
 fn show_node_header(
     ui: &mut egui::Ui,
     node: &mut SceneNode,
@@ -266,20 +311,26 @@ fn show_node_header(
     );
     out.hit(row_id(node.id, "node_cursor"), cursor);
 
-    if ctx.selected {
-        let (rect, _) = ui.allocate_exact_size(
-            egui::vec2(SELECTED_BAR_WIDTH, ROW_HEIGHT),
-            egui::Sense::hover(),
-        );
-        ui.painter()
-            .rect_filled(rect, 1.0, ui.visuals().selection.bg_fill);
-    }
-
-    let mut label = egui::RichText::new(&node.label);
-    if ctx.selected {
-        label = label.strong();
-    }
-    let row = ui.add(egui::Label::new(label).sense(egui::Sense::click()));
+    // Everything from here to the right edge is one target, claimed *before*
+    // its contents are drawn: a tree row should answer a click anywhere along
+    // it — on the name, in the gap, on the counts — the way any outliner does,
+    // and hunting for the few pixels the name happens to occupy is how the
+    // context menu came to look like it did not exist.
+    //
+    // Under an explicit id, not the auto-generated one a bare widget would
+    // carry. egui keys a popup's open state on `response.id`, and an auto id is
+    // a count of what was allocated before it in this `Ui` — so anything that
+    // changed the row's contents would move the menu's identity out from under
+    // it. The contents below are all hover-only, so none of them competes with
+    // this rect for the click; the toggles above sit outside it.
+    let available = ui.available_rect_before_wrap();
+    let row_rect =
+        egui::Rect::from_min_size(available.min, egui::vec2(available.width(), ROW_HEIGHT));
+    let row = ui.interact(
+        row_rect,
+        row_id(node.id, "node_label"),
+        egui::Sense::click(),
+    );
     let row = out.hit(row_id(node.id, "node_label"), row);
     if row.clicked() {
         out.response.select_recon = Some(node.id);
@@ -287,33 +338,75 @@ fn show_node_header(
     if row.double_clicked() {
         out.response.zoom_to_node = Some(node.id);
     }
-    row.context_menu(|ui| node_context_menu(ui, node, &mut out.response));
+    // Built from `Popup` rather than `Response::context_menu` for the sake of
+    // one setting: egui's default menu closes on *any* click inside it, which
+    // would tear the whole menu down the moment the user set one of the two
+    // `Align to` radio buttons. `CloseOnClickOutside` leaves closing to the
+    // explicit `ui.close()` on each item that actually does something.
+    egui::Popup::context_menu(&row)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| node_context_menu(ui, node, out));
+
+    // Reserved whether or not it is painted, so the name does not jump sideways
+    // as the selection moves and so every id downstream of it holds still.
+    let (bar, _) = ui.allocate_exact_size(
+        egui::vec2(SELECTED_BAR_WIDTH, ROW_HEIGHT),
+        egui::Sense::hover(),
+    );
+    if ctx.selected {
+        ui.painter()
+            .rect_filled(bar, 1.0, ui.visuals().selection.bg_fill);
+        out.mark(row_id(node.id, "node_selected_bar"), bar);
+    }
+
+    let mut label = egui::RichText::new(&node.label);
+    if ctx.selected {
+        label = label.strong();
+    }
+    // `selectable(false)` on both texts, and it is load-bearing rather than
+    // cosmetic: egui's default `selectable_labels` gives a bare label
+    // `Sense::click_and_drag()` so its text can be dragged out, and being drawn
+    // *after* the row it would win every pointer hit that landed on a glyph.
+    // That is how the name — the one part of the row a user actually aims at —
+    // came to be the one part that answered nothing.
+    ui.add(egui::Label::new(label).selectable(false));
 
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.label(
-            egui::RichText::new(format!(
-                "{} pts · {} cams",
-                compact_count(node.recon.points.len()),
-                compact_count(node.recon.images.len()),
-            ))
-            .weak()
-            .small(),
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(format!(
+                    "{} pts · {} cams",
+                    compact_count(node.recon.points.len()),
+                    compact_count(node.recon.images.len()),
+                ))
+                .weak()
+                .small(),
+            )
+            .selectable(false),
         );
     });
 }
 
 /// The reconstruction row's context menu.
 ///
-/// `Align to ▸`, `Reset Transform` and `Tint ▸` are deliberately absent: they
-/// operate on the node transform and tint, which arrive in phases 4–5. A menu
-/// entry that silently does nothing is worse than no entry.
-fn node_context_menu(ui: &mut egui::Ui, node: &SceneNode, response: &mut SceneGraphResponse) {
+/// `Tint ▸` is deliberately absent: it operates on the node tint, which arrives
+/// in phase 5. A menu entry that silently does nothing is worse than no entry.
+fn node_context_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
     if ui.button("Select").clicked() {
-        response.select_recon = Some(node.id);
+        out.response.select_recon = Some(node.id);
         ui.close();
     }
     if ui.button("Zoom to Fit").clicked() {
-        response.zoom_to_node = Some(node.id);
+        out.response.zoom_to_node = Some(node.id);
+        ui.close();
+    }
+    ui.separator();
+    show_align_menu(ui, node, out);
+    let reset = ui
+        .add_enabled(node.has_transform(), egui::Button::new("Reset Transform"))
+        .on_disabled_hover_text("This reconstruction is already in its own frame");
+    if out.hit(row_id(node.id, "reset_transform"), reset).clicked() {
+        out.response.reset_transform = Some(node.id);
         ui.close();
     }
     ui.separator();
@@ -323,13 +416,83 @@ fn node_context_menu(ui: &mut egui::Ui, node: &SceneNode, response: &mut SceneGr
         .on_disabled_hover_text("This reconstruction was generated, not loaded from a file")
         .clicked()
     {
-        response.reload_node = Some(node.id);
+        out.response.reload_node = Some(node.id);
         ui.close();
     }
     if ui.button("Close").clicked() {
-        response.close_node = Some(node.id);
+        out.response.close_node = Some(node.id);
         ui.close();
     }
+}
+
+/// Why the point mode is unavailable, shown on hover over the greyed option.
+const POINTS_DISABLED_HINT: &str =
+    "Point correspondences are matched by feature index, so both reconstructions \
+     need `sift_files` observations. One of these carries embedded patches instead.";
+
+/// `Align to ▸`: the fit's two options, then one entry per other loaded node.
+///
+/// Options above targets rather than a popup per target: there are two of them,
+/// they persist between opens, and a submenu three levels deep to set a radio
+/// button would cost more than it explains.
+fn show_align_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+    let others: Vec<&AlignTarget> = out.targets.iter().filter(|t| t.id != node.id).collect();
+    if others.is_empty() {
+        // Kept visible but dead: the operation exists, it just has nothing to
+        // align to yet, and hiding it would make it look unimplemented.
+        ui.add_enabled(false, egui::Button::new("Align to"))
+            .on_disabled_hover_text("Load a second reconstruction to align this one to it");
+        return;
+    }
+
+    let source_indexed = node.recon.feature_indexes().is_some();
+    let any_target_indexed = others.iter().any(|t| t.feature_indexed);
+    let points_available = source_indexed && any_target_indexed;
+    let id = node.id;
+
+    let menu = ui.menu_button("Align to", |ui| {
+        ui.label(egui::RichText::new("Correspondences").weak().small());
+        let cameras = ui.radio_value(
+            &mut out.align_options.source,
+            AlignSource::Cameras,
+            "Cameras",
+        );
+        out.hit(row_id(id, "align_cameras"), cameras);
+        let points = ui
+            .add_enabled_ui(points_available, |ui| {
+                ui.radio_value(&mut out.align_options.source, AlignSource::Points, "Points")
+            })
+            .inner
+            .on_disabled_hover_text(POINTS_DISABLED_HINT);
+        out.hit(row_id(id, "align_points"), points);
+
+        ui.separator();
+        ui.label(egui::RichText::new("Fit").weak().small());
+        let similarity = ui.radio_value(&mut out.align_options.estimate_scale, true, "Similarity");
+        out.hit(row_id(id, "align_similarity"), similarity);
+        let rigid = ui.radio_value(&mut out.align_options.estimate_scale, false, "Rigid");
+        out.hit(row_id(id, "align_rigid"), rigid);
+
+        ui.separator();
+        let by_points = out.align_options.source == AlignSource::Points;
+        for target in &others {
+            // A target can be individually unusable even when the mode is
+            // selectable: one other node may carry feature indexes and another
+            // not.
+            let usable = !by_points || (source_indexed && target.feature_indexed);
+            let button = ui
+                .add_enabled(usable, egui::Button::new(&target.label))
+                .on_disabled_hover_text(POINTS_DISABLED_HINT);
+            let button = out.hit(row_id(id, &format!("align_to_{}", target.label)), button);
+            if button.clicked() {
+                out.response.align_node = Some((id, target.id, *out.align_options));
+                // Both levels: `ui.close()` here would dismiss this submenu and
+                // leave the reconstruction row's menu standing open behind it.
+                egui::Popup::close_all(ui.ctx());
+            }
+        }
+    });
+    out.hit(row_id(id, "align_menu"), menu.response);
 }
 
 /// `[▸] [👁] Cameras (243)`, expanding to a virtualized per-image list.
@@ -400,7 +563,13 @@ fn show_camera_rows(ui: &mut egui::Ui, node: &SceneNode, ctx: &NodeContext, out:
             if hovered && !selected {
                 text = text.color(ui.visuals().strong_text_color());
             }
-            let row = ui.add(egui::Button::selectable(selected, text));
+            // Salted by image index, so a row keeps one id however far the
+            // virtualized list has scrolled. Left to egui's auto ids a row's
+            // identity would be its position in the *rendered slice*, which
+            // moves under it on every scroll.
+            let row = ui
+                .push_id(index, |ui| ui.add(egui::Button::selectable(selected, text)))
+                .inner;
             let row = out.hit(row_id(node.id, &format!("camera_{index}")), row);
             if row.clicked() {
                 out.response.select_image = Some(image);
@@ -453,12 +622,19 @@ fn show_points_group(
     });
     header.body(|ui| {
         let mut any = false;
+        // Both rows are conditional, so both are salted: without that the hover
+        // row's identity would depend on whether a selection row happened to be
+        // drawn above it.
         if let Some(point) = ctx.selected_point.filter(|p| p.recon == id) {
             any = true;
-            let row = ui.add(egui::Button::selectable(
-                true,
-                format!("selected: {}", point_id(&node.recon, point.index())),
-            ));
+            let row = ui
+                .push_id("point_selected", |ui| {
+                    ui.add(egui::Button::selectable(
+                        true,
+                        format!("selected: {}", point_id(&node.recon, point.index())),
+                    ))
+                })
+                .inner;
             if out.hit(row_id(id, "point_selected"), row).clicked() {
                 out.response.select_point = Some(point);
             }
@@ -468,11 +644,18 @@ fn show_points_group(
             .filter(|p| p.recon == id && Some(*p) != ctx.selected_point)
         {
             any = true;
-            let row = ui.add(egui::Button::selectable(
-                false,
-                egui::RichText::new(format!("hovered: {}", point_id(&node.recon, point.index())))
-                    .weak(),
-            ));
+            let row = ui
+                .push_id("point_hovered", |ui| {
+                    ui.add(egui::Button::selectable(
+                        false,
+                        egui::RichText::new(format!(
+                            "hovered: {}",
+                            point_id(&node.recon, point.index())
+                        ))
+                        .weak(),
+                    ))
+                })
+                .inner;
             if out.hit(row_id(id, "point_hovered"), row).clicked() {
                 out.response.select_point = Some(point);
             }

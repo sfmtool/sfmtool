@@ -97,12 +97,12 @@ impl TabViewer for TabContext<'_> {
                 if let Some(node) = node {
                     self.viewer_3d.show(
                         ui,
-                        &node.recon,
-                        node.id,
+                        node,
                         &self.state.scene,
                         &mut self.state.selected_image,
                         self.state.show_grid,
                         self.state.length_scale,
+                        self.state.status_message.as_deref(),
                         self.gesture_events,
                         self.scroll_input,
                         self.state.show_controls_help,
@@ -183,16 +183,16 @@ impl TabViewer for TabContext<'_> {
                         let image = ImageRef::new(id, img_idx);
                         if self.viewer_3d.camera_view.is_some() {
                             self.viewer_3d
-                                .animated_switch_camera_view(image, recon, current_time);
+                                .animated_switch_camera_view(image, node, current_time);
                         } else {
-                            self.viewer_3d.enter_camera_view(image, recon, current_time);
+                            self.viewer_3d.enter_camera_view(image, node, current_time);
                         }
                     }
                     // Instant camera switch during animation playback.
                     if let Some(img_idx) = response.request_camera_switch {
                         if self.viewer_3d.camera_view.is_some() {
                             self.viewer_3d
-                                .switch_camera_view(ImageRef::new(id, img_idx), recon);
+                                .switch_camera_view(ImageRef::new(id, img_idx), node);
                         }
                     }
                 } else {
@@ -349,9 +349,9 @@ impl TabViewer for TabContext<'_> {
                         let image = ImageRef::new(id, img_idx);
                         if self.viewer_3d.camera_view.is_some() {
                             self.viewer_3d
-                                .animated_switch_camera_view(image, recon, current_time);
+                                .animated_switch_camera_view(image, node, current_time);
                         } else {
-                            self.viewer_3d.enter_camera_view(image, recon, current_time);
+                            self.viewer_3d.enter_camera_view(image, node, current_time);
                         }
                     }
                     if track_response.has_pointer {
@@ -397,10 +397,9 @@ impl TabContext<'_> {
                 let current_time = ui.input(|i| i.time);
                 if self.viewer_3d.camera_view.is_some() {
                     self.viewer_3d
-                        .animated_switch_camera_view(image, &node.recon, current_time);
+                        .animated_switch_camera_view(image, node, current_time);
                 } else {
-                    self.viewer_3d
-                        .enter_camera_view(image, &node.recon, current_time);
+                    self.viewer_3d.enter_camera_view(image, node, current_time);
                 }
             }
         }
@@ -411,14 +410,23 @@ impl TabContext<'_> {
         }
         if let Some(id) = response.zoom_to_node {
             if let Some(node) = crate::scene::node_by_id(&self.state.scene, id) {
-                let points: Vec<nalgebra::Point3<f64>> =
-                    node.recon.points.iter().map(|p| p.position).collect();
+                // Framed where the node is *drawn*, so zoom-to-fit on an aligned
+                // node lands on it rather than on its native coordinates.
+                let points = crate::scene::world_points(node);
                 if let Some(aspect) = self.viewer_3d.panel_aspect() {
                     let current_time = ui.input(|i| i.time);
                     self.viewer_3d
                         .zoom_to_fit_points(&points, aspect, current_time);
                 }
             }
+        }
+        // Alignment before the node lifecycle below: both take a `ReconId`, and
+        // a frame that somehow reported both should still fit before it closes.
+        if let Some((source, target, options)) = response.align_node {
+            self.state.align_node(source, target, options);
+        }
+        if let Some(id) = response.reset_transform {
+            self.state.reset_node_transform(id);
         }
         if let Some(id) = response.reload_node {
             self.state.reload_node(id);
