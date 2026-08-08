@@ -75,6 +75,10 @@ use sfmtool_core::geometry::focal_vote::focal_vote_with_min_disp;
 ///     ``mean_disp_px``, ``n_inliers``, ``focal_px``, one entry per unordered
 ///     image pair — two images that are each other's widest partner are
 ///     reached twice by the scan and vote only on the first.
+// This is a Python docstring (rendered by `help()`), not Rust prose: its
+// indented `Args:` / `Returns:` continuation paragraphs read as Markdown
+// indented code blocks, which rustdoc then tries to parse as Rust.
+#[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, width, height, *, seed=0, epipolar_min_disp_frac=0.02))]

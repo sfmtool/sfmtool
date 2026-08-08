@@ -43,7 +43,7 @@
 //! group-level pose error? It is analysis only, never touches the candidate,
 //! and costs a small robust solve, so it is opt-in via
 //! [`CensusParams::compute_group_consistency`]; off, the report's
-//! `group_consistency` is `None`. See [`group_consistency`].
+//! `group_consistency` is `None`. See `group_consistency`.
 //!
 //! See `specs/core/cluster-census.md` for the design.
 

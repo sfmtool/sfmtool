@@ -124,6 +124,10 @@ impl PyPatchCloud {
     ///     at the final keypoints, or ``None`` when the point produced **no valid
     ///     cross-view consensus** (fewer than two views rendered at their final
     ///     offsets) — the uniform culled-point signal, finite and infinity alike.
+    // This is a Python docstring (rendered by `help()`), not Rust prose: its
+    // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
+    // indented code blocks, which rustdoc then tries to parse as Rust.
+    #[allow(rustdoc::invalid_rust_codeblocks)]
     #[pyo3(signature = (
         recon, images, *, view_sets=None, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear_mip", robust_iters=3, max_outer_sweeps=1,

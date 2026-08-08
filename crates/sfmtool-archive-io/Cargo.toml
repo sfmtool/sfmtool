@@ -17,3 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 thiserror = "2"
+
+# Rustdoc lints are denied workspace-wide (see the root Cargo.toml).
+[lints]
+workspace = true

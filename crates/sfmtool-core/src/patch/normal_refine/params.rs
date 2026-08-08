@@ -96,7 +96,7 @@ pub enum CacheMode {
     FrontoParallel,
 }
 
-/// Tunables for [`refine_patch_normal`].
+/// Tunables for [`super::refine_patch_normal`].
 #[derive(Debug, Clone)]
 pub struct NormalRefineParams {
     /// Half-extent of the level-0 search cone, degrees.
@@ -143,17 +143,16 @@ pub struct NormalRefineParams {
     /// the final pass).
     pub search_robust_iters: Option<u32>,
     /// Exponent `p` of the multiplicative **obliquity view-weight** `|v̂·n|^p`
-    /// folded into the robust IRLS consensus weights (see
-    /// [`obliquity`](super::obliquity), use A). `0` (default) disables it — the
-    /// consensus runs exactly as before. `2` is the `cos²θ` foreshortening weight:
+    /// folded into the robust IRLS consensus weights (see `obliquity`, use A).
+    /// `0` (default) disables it — the consensus runs exactly as before. `2` is the `cos²θ` foreshortening weight:
     /// it softly down-weights a view the more oblique it sees the surfel, a
     /// continuous replacement for a hard grazing-view cut. Only affects
     /// [`Objective::RobustWeighted`] (the [`Objective::MeanPairwise`] search
     /// ranking ignores it); the default `objective` is robust.
     pub obliquity_weight_power: f64,
     /// Weight `λ` of the additive **fronto-parallel prior** `λ·mean_v (v̂·n)²`
-    /// added to a candidate normal's `Φ` when ranking (see
-    /// [`obliquity`](super::obliquity), use B). `0` (default) disables it. It
+    /// added to a candidate normal's `Φ` when ranking (see `obliquity`, use B).
+    /// `0` (default) disables it. It
     /// rewards normals that face the observing cameras, supplying the missing
     /// constraint on a low-parallax point (flat `Φ`) so the normal settles
     /// fronto-parallel instead of drifting to a photometrically-equivalent tilt;
@@ -170,9 +169,8 @@ pub struct NormalRefineParams {
     pub render_bitmap: bool,
     /// Cap on the per-patch **refinement basis**: when `> 0` and a patch has
     /// more views than this, refine over only the `K` most normal-informative
-    /// views, picked by the D-optimal subset selection of
-    /// [`view_subset`](super::view_subset) (a low-foreshortening anchor plus a
-    /// greedy `det(M + wᵢwᵢᵀ)` fill; see
+    /// views, picked by the D-optimal subset selection of `view_subset` (a
+    /// low-foreshortening anchor plus a greedy `det(M + wᵢwᵢᵀ)` fill; see
     /// `specs/core/patch-normal-refine-view-subset.md`). The normal is 2-DOF, so
     /// a few azimuthally-spread oblique views already determine it — the cap cuts
     /// the per-candidate render cost roughly linearly in the views dropped. `0`
@@ -221,7 +219,7 @@ impl Default for NormalRefineParams {
     }
 }
 
-/// Result of [`refine_patch_normal`].
+/// Result of [`super::refine_patch_normal`].
 #[derive(Debug, Clone)]
 pub struct NormalRefineResult {
     /// The input patch with its normal replaced by the optimum; `center`,
@@ -238,7 +236,7 @@ pub struct NormalRefineResult {
     pub valid_view_count: u32,
     /// Peakedness of `Φ` at the optimum: the smaller eigenvalue of the
     /// finite-difference curvature of `Φ(δ)`, normalized against the larger
-    /// one (see [`grid_confidence`] internals). `0` when the patch was not
+    /// one (see `grid_confidence` internals). `0` when the patch was not
     /// refined or `Φ` is flat (e.g. the narrow-baseline degeneracy). `NaN` when
     /// not requested ([`NormalRefineParams::compute_confidence`] is `false`).
     pub confidence: f64,

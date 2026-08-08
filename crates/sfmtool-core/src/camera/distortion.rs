@@ -189,13 +189,13 @@ impl CameraModel {
         }
     }
 
-    /// Analytic Jacobian `∂(x_d, y_d)/∂(x, y)` of [`distort`] at the normalized
+    /// Analytic Jacobian `∂(x_d, y_d)/∂(x, y)` of [`Self::distort`] at the normalized
     /// image-plane point `(x, y)`, row-major `[[∂x_d/∂x, ∂x_d/∂y], [∂y_d/∂x,
     /// ∂y_d/∂y]]`.
     ///
     /// Perspective-model family only; returns `None` for fisheye and
     /// equirectangular models, whose forward map does not go through
-    /// [`distort`] (see [`distort_ray`]) and has no analytic pixel Jacobian yet.
+    /// [`Self::distort`] (see [`Self::distort_ray`]) and has no analytic pixel Jacobian yet.
     ///
     /// Every perspective model is `x_d = x·g(r²) + T_x`, `y_d = y·g(r²) + T_y`
     /// with radial factor `g`, `r² = x² + y²`, and tangential
@@ -259,8 +259,8 @@ impl CameraModel {
     /// Beyond the first inflection of the polynomial, the forward map
     /// stops being injective: the same distorted pixel can be reached from
     /// multiple ray directions, producing ghost / mirror projections
-    /// outside the camera's true FOV. [`distort_ray`] uses this to gate
-    /// rays before calling [`distort`].
+    /// outside the camera's true FOV. [`Self::distort_ray`] uses this to gate
+    /// rays before calling [`Self::distort`].
     ///
     /// For radially-symmetric distortion (`xd = x · g(r²)`,
     /// `yd = y · g(r²)`) the principal branch is the region where the
@@ -274,8 +274,8 @@ impl CameraModel {
     /// at `(x, y)`.
     ///
     /// Only meaningful for the perspective-model family that goes through
-    /// [`distort`]; for fisheye and equirectangular models — which take
-    /// different code paths in [`distort_ray`] — this returns `true`.
+    /// [`Self::distort`]; for fisheye and equirectangular models — which take
+    /// different code paths in [`Self::distort_ray`] — this returns `true`.
     fn forward_projection_invertible(&self, x: f64, y: f64) -> bool {
         match self {
             CameraModel::Pinhole { .. } | CameraModel::SimplePinhole { .. } => true,
@@ -449,7 +449,7 @@ impl CameraModel {
     /// distortion. For fisheye models, the distorted coordinates come
     /// directly from the incidence angle off the −Z optical axis, avoiding
     /// the `tan(theta)` singularity. For equirectangular, maps via
-    /// longitude/latitude. This is the true inverse of [`undistort_to_ray`].
+    /// longitude/latitude. This is the true inverse of [`Self::undistort_to_ray`].
     ///
     /// Returns `None` if the ray falls outside the model's valid domain:
     /// for perspective models, when the ray is not in front of the camera
@@ -577,7 +577,7 @@ impl CameraModel {
     /// `(undistort(x_d, y_d), 1)` mapped through `S` — i.e.
     /// `(x, −y, −1)`-style rays. For fisheye models, computes the ray
     /// directly from the incidence angle theta, avoiding the `tan(theta)`
-    /// singularity that causes [`undistort`] to break down at and beyond 90°
+    /// singularity that causes [`Self::undistort`] to break down at and beyond 90°
     /// from the optical axis.
     ///
     /// The returned vector is unit-length and points in the direction the
@@ -603,9 +603,9 @@ impl CameraModel {
         [x, -y, -z]
     }
 
-    /// Optical-frame (+Z forward, y down) body of [`undistort_to_ray`]: the
+    /// Optical-frame (+Z forward, y down) body of [`Self::undistort_to_ray`]: the
     /// unchanged COLMAP/OpenCV kernel math. Callers outside the D7 boundary
-    /// must use [`undistort_to_ray`].
+    /// must use [`Self::undistort_to_ray`].
     fn undistort_to_ray_optical(&self, x_d: f64, y_d: f64) -> [f64; 3] {
         match self {
             CameraModel::Equirectangular { .. } => {
@@ -748,7 +748,7 @@ impl CameraIntrinsics {
     }
 
     /// Unproject a batch of pixel coordinates to undistorted canonical
-    /// image-plane coordinates. See [`unproject`](Self::unproject).
+    /// image-plane coordinates. See [`Self::unproject`].
     pub fn unproject_batch(&self, pixels: &[[f64; 2]]) -> Vec<[f64; 2]> {
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
@@ -768,7 +768,7 @@ impl CameraIntrinsics {
     ///
     /// For perspective models, equivalent to normalizing `(unproject(u, v), −1)`.
     /// For fisheye models, computes the ray directly from the incidence angle,
-    /// avoiding the `tan(theta)` singularity that causes [`unproject`] to break
+    /// avoiding the `tan(theta)` singularity that causes [`Self::unproject`] to break
     /// down at and beyond 90° from the optical axis. This makes it suitable for
     /// wide-angle fisheye lenses with field of view approaching or exceeding 180°.
     pub fn pixel_to_ray(&self, u: f64, v: f64) -> [f64; 3] {
@@ -786,7 +786,7 @@ impl CameraIntrinsics {
     /// but for fisheye models computes the distorted coordinates directly from
     /// the incidence angle, avoiding the `tan(theta)` singularity. For
     /// equirectangular, maps via longitude/latitude. This is the true inverse
-    /// of [`pixel_to_ray`].
+    /// of [`Self::pixel_to_ray`].
     ///
     /// Returns `None` if the ray falls outside the model's valid domain.
     pub fn ray_to_pixel(&self, ray: [f64; 3]) -> Option<(f64, f64)> {
@@ -796,13 +796,13 @@ impl CameraIntrinsics {
         Some((fx * x_d + cx, fy * y_d + cy))
     }
 
-    /// [`ray_to_pixel`] plus the analytic Jacobian `∂(u, v)/∂ray` of the pixel
+    /// [`Self::ray_to_pixel`] plus the analytic Jacobian `∂(u, v)/∂ray` of the pixel
     /// with respect to the camera-frame ray direction, row-major
     /// `[[∂u/∂x, ∂u/∂y, ∂u/∂z], [∂v/∂x, ∂v/∂y, ∂v/∂z]]`.
     ///
     /// Perspective models only (`supports_pixel_jacobian`). Returns `None` when
     /// the ray is outside the model's valid domain — exactly where
-    /// [`ray_to_pixel`] returns `None` — or when the model has no analytic
+    /// [`Self::ray_to_pixel`] returns `None` — or when the model has no analytic
     /// Jacobian (fisheye / equirectangular), so a caller can fall back to a
     /// finite difference for those.
     ///
@@ -859,7 +859,7 @@ impl CameraIntrinsics {
         Some(((fx * x_d + cx, fy * y_d + cy), jac))
     }
 
-    /// Batch version of [`ray_to_pixel`].
+    /// Batch version of [`Self::ray_to_pixel`].
     pub fn ray_to_pixel_batch(&self, rays: &[[f64; 3]]) -> Vec<Option<[f64; 2]>> {
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();

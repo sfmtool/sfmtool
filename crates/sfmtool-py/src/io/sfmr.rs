@@ -34,7 +34,7 @@ use crate::PyCameraIntrinsics;
 /// Returns a dict with keys:
 ///   metadata, content_hash, cameras, depth_statistics (dicts/lists),
 ///   image_names (list[str]),
-///   feature_tool_hashes, sift_content_hashes (list[bytes], 16 bytes each),
+///   feature_tool_hashes, sift_content_hashes (`list[bytes]`, 16 bytes each),
 ///   camera_indexes, quaternions_wxyz, translations_xyz, positions_xyzw,
 ///   colors_rgb, reprojection_errors, normals_xyz,
 ///   image_indexes, feature_indexes, point_indexes, observation_counts,
@@ -326,8 +326,9 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// The dict should have the same keys as returned by `read_sfmr`.
 /// The `content_hash` key is ignored (recomputed on write).
 ///
-/// KNOWN LIMITATION: this always writes the current [`SFMR_FORMAT_VERSION`]
-/// regardless of the `metadata["version"]` in the dict, and assumes the arrays
+/// KNOWN LIMITATION: this always writes the current
+/// [`sfmr_format::SFMR_FORMAT_VERSION`] regardless of the `metadata["version"]`
+/// in the dict, and assumes the arrays
 /// are already in the canonical convention — it applies no conversion. Writing a
 /// dict read from a pre-v5 file via `read_sfmr` (which does not upgrade) therefore
 /// stamps COLMAP-convention data as canonical v5. See `read_sfmr` above.

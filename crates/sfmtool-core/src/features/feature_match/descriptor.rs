@@ -154,7 +154,8 @@ pub fn find_best_match_contiguous(
 ///
 /// * `candidates` – Flat row-major `n_queries × k` array of candidate target
 ///   indices into `desc2`. Empty slots are marked with `u32::MAX`. A typical
-///   source is [`KdTree2d::nearest_k_within_radius`](crate::spatial::KdTree2d::nearest_k_within_radius).
+///   source is
+///   [`PointCloud::nearest_k_within_radius`](crate::spatial::PointCloud::nearest_k_within_radius).
 /// * `in_bounds_idx` – Maps query index to source feature index (`n_queries` entries).
 /// * `desc1` – Flat row-major source descriptors (`n_feat1 * desc_len` bytes).
 /// * `desc2` – Flat row-major target descriptors (`n_feat2 * desc_len` bytes).

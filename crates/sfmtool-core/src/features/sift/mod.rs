@@ -23,7 +23,7 @@
 //! pyramids) and image-to-gray conversion, keypoint detection and sub-pixel
 //! localization, orientation assignment, and the 128-D descriptor, with the
 //! orientation/descriptor sampling and the Gaussian blur SIMD-accelerated (see
-//! [`simd`] and the parallelism/SIMD section of `specs/core/sift.md`).
+//! `simd` and the parallelism/SIMD section of `specs/core/sift.md`).
 
 mod descriptor;
 mod detect;

@@ -21,7 +21,7 @@
 //! nothing downstream reuses the candidate render — so scoring a view does not
 //! need the full per-pixel projective warp. Under either bilinear sampler a
 //! candidate is scored through an **affine** patch→image map fit on its four
-//! exactly-projected patch corners ([`affine_core_map`]), sampling only the
+//! exactly-projected patch corners (`affine_core_map`), sampling only the
 //! reference-support pixels; under [`Sampler::BilinearMip`] that map is first
 //! composed with the pyramid level the map's own compression selects, so the
 //! samples come from the same level the per-pixel path would read. The exact
@@ -469,8 +469,9 @@ fn affine_core_map(
 /// pixel, so the same value convention carries over to the mip path unchanged.
 ///
 /// The inner loop is hand-rolled rather than calling the generic
-/// [`sample_bilinear_u8_all`]: the [`AFFINE_BORDER_MARGIN_PX`] gate on the map
-/// guarantees every sample sits ≥ 1 px inside the frame, so the per-pixel
+/// [`crate::camera::remap::sample_bilinear_u8_all`]: the
+/// [`AFFINE_BORDER_MARGIN_PX`] gate on the map guarantees every sample sits
+/// ≥ 1 px inside the frame, so the per-pixel
 /// floor/clamp/saturate edge handling drops out entirely (the generic sampler
 /// is kept as the reference the `affine_sampler_matches_reference` test pins
 /// this against).

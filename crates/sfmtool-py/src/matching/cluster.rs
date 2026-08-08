@@ -64,7 +64,7 @@ fn extract_corpus<'py>(
 ///     descriptors: (N, 128) uint8 corpus, every image's SIFT descriptors
 ///         concatenated image by image.
 ///     image_starts: (n_images + 1,) uint32 CSR offsets; image i owns rows
-///         image_starts[i]:image_starts[i+1].
+///         ``image_starts[i]:image_starts[i+1]``.
 ///     d: Background rank; the d-th-nearest distance is the floor (default 10).
 ///         The k-NN query width is derived as d + 1.
 ///     alpha: Keep cross-image neighbours within alpha * floor (default 0.8).
@@ -270,7 +270,7 @@ pub fn clusters_to_pair_matches(
 ///     affine_shapes: Per image, the (N, 2, 2) float32 SIFT affine shapes,
 ///         parallel to ``images``.
 ///     cluster_starts: (C+1,) uint32 CSR offsets; cluster c owns members
-///         cluster_starts[c]:cluster_starts[c+1].
+///         ``cluster_starts[c]:cluster_starts[c+1]``.
 ///     member_images: (M,) uint32 member image index.
 ///     member_features: (M,) uint32 member feature index. An out-of-range
 ///         feature index (or a degenerate affine shape) marks the member

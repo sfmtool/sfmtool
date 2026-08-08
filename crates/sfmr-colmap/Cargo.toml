@@ -19,3 +19,7 @@ thiserror = "2"
 
 [dev-dependencies]
 approx = "0.5"
+
+# Rustdoc lints are denied workspace-wide (see the root Cargo.toml).
+[lints]
+workspace = true

@@ -25,3 +25,27 @@ resolver = "2"
 # it — `.github/workflows/ci.yml` has an `msrv` job that does exactly that.
 [workspace.package]
 rust-version = "1.95"
+
+# `cargo doc` is a gate, not a suggestion: every rustdoc lint that is warn-by-
+# default is denied here, and every crate opts in with `[lints] workspace = true`.
+# Putting it in the manifest rather than a `RUSTDOCFLAGS="-D warnings"` wrapper
+# means a plain `cargo doc` fails the same way the `doc` pixi task and the CI
+# lint job do — there is no invocation of rustdoc that quietly tolerates a broken
+# doc link. The doc comments here are load-bearing (modules routinely spend
+# 30–120 lines explaining an invariant and cross-linking the spec), so a link
+# that silently stopped resolving is a real regression.
+#
+# The lints are listed individually rather than as `rustdoc::all = "deny"`,
+# because that group also pulls in allow-by-default lints (`missing_crate_level_docs`,
+# `private_doc_tests`, `unescaped_backticks`) which are a separate, much larger
+# decision. Adding one of those later is a deliberate act, not a side effect.
+# `rustdoc::unportable_markdown` is deliberately absent: rustc removed it along
+# with the old Markdown parser, and naming a removed lint is itself a warning.
+[workspace.lints.rustdoc]
+bare_urls = "deny"
+broken_intra_doc_links = "deny"
+invalid_codeblock_attributes = "deny"
+invalid_html_tags = "deny"
+invalid_rust_codeblocks = "deny"
+private_intra_doc_links = "deny"
+redundant_explicit_links = "deny"

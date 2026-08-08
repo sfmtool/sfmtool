@@ -166,7 +166,7 @@ impl CameraModel {
     ///
     /// Returns `false` for Pinhole/SimplePinhole (no distortion parameters),
     /// and also `false` for distortion-capable models where all distortion
-    /// coefficients are zero (below [`DISTORTION_EPS`]).
+    /// coefficients are zero (below `DISTORTION_EPS`).
     pub fn has_distortion(&self) -> bool {
         match self {
             CameraModel::Pinhole { .. }

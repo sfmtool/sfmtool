@@ -26,3 +26,7 @@ approx = "0.5"
 # Only the round-trip tests reach for the compressor directly; the library
 # goes through `sfmtool-archive-io`.
 zstd = "0.13"
+
+# Rustdoc lints are denied workspace-wide (see the root Cargo.toml).
+[lints]
+workspace = true

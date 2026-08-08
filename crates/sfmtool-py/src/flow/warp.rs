@@ -385,7 +385,7 @@ pub(crate) fn extract_image_u8(obj: &Bound<'_, pyo3::types::PyAny>) -> PyResult<
     ))
 }
 
-/// Convert an ImageU8 to a numpy Py<PyAny> (HxWxC or HxW for single channel).
+/// Convert an `ImageU8` to a numpy `Py<PyAny>` (HxWxC or HxW for single channel).
 fn image_u8_to_pyobject(py: Python<'_>, img: &ImageU8) -> PyResult<Py<PyAny>> {
     let data = img.data().to_vec();
     if img.channels() == 1 {

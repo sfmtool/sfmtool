@@ -157,8 +157,8 @@ pub struct DbFrame {
 
 /// Mapping between 0-based image indexes and 1-based COLMAP database image IDs.
 ///
-/// Returned by [`write_colmap_db_features`] to ensure consistent ID mapping
-/// across separate feature and match writing steps.
+/// Returned by [`crate::colmap_db::write_colmap_db_features`] to ensure
+/// consistent ID mapping across separate feature and match writing steps.
 pub struct ImageIdMap {
     /// DB image_id for each 0-based image index (index → db_id).
     pub index_to_db_id: Vec<i64>,

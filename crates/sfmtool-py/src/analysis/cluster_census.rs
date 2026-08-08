@@ -92,6 +92,10 @@ use crate::geometry::PyCameraIntrinsics;
 ///     ``net_after`` count the satisfied bridges over the whole eligible
 ///     bridge population, so a correction that fixes one seam by breaking
 ///     another shows no net gain.
+// This is a Python docstring (rendered by `help()`), not Rust prose: its
+// indented `Args:` / `Returns:` continuation paragraphs read as Markdown
+// indented code blocks, which rustdoc then tries to parse as Rust.
+#[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (

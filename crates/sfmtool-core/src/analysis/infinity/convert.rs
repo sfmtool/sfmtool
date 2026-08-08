@@ -178,7 +178,7 @@ pub enum Classification {
     /// Point at infinity — a unit bearing direction.
     Infinity(Point3<f64>),
     /// The baseline could not place a point even at `finite_horizon`, so neither
-    /// finite nor infinity is earned (see [`classify_rays_at_infinity`]).
+    /// finite nor infinity is earned (see `classify_rays_at_infinity`).
     Indeterminate,
 }
 
@@ -366,11 +366,11 @@ impl SfmrReconstruction {
     ///
     /// - **Single viewpoint.** Its cameras all sit at essentially the same
     ///   optical centre — their centres span less than
-    ///   [`COINCIDENT_CAMERA_FRACTION`] of the camera cloud (a camera that
+    ///   `COINCIDENT_CAMERA_FRACTION` of the camera cloud (a camera that
     ///   panned in place, or a solver that collapsed a run of frames). With no
     ///   camera motion there is no depth cue, so a finite point is
     ///   indistinguishable from an infinite one. It is demoted with a direction
-    ///   recovered from its keypoints ([`Self::keypoint_mean_bearing`]), since
+    ///   recovered from its keypoints (`Self::keypoint_mean_bearing`), since
     ///   its triangulated position is meaningless (often right on the cameras)
     ///   and its point-to-camera rays are numerical noise.
     /// - **Confident infinity call.** The cameras do move, but the triangulation

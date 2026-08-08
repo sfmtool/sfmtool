@@ -222,7 +222,7 @@ impl ImageU8Pyramid {
 /// are clamped to the nearest edge pixel.
 ///
 /// `#[inline]` because the anisotropic multi-tap footprint walk
-/// ([`sample_aniso_with_grad`] / `remap_aniso_with_pyramid`) calls this up to
+/// (`sample_aniso_with_grad` / `remap_aniso_with_pyramid`) calls this up to
 /// `channels · n · 2` times per output pixel; inlining lets the corner geometry
 /// fold across taps and removes the call overhead on that hot path.
 #[inline]
@@ -495,7 +495,7 @@ pub(crate) fn mip_level_for_sigma(sigma_major: f32, num_levels: usize) -> usize 
 /// there — aliasing bounded, cost ≈ bilinear.
 ///
 /// For each output pixel, reads the precomputed SVD of the local Jacobian and
-/// selects the pyramid level from `sigma_major` (see [`mip_level_for_sigma`],
+/// selects the pyramid level from `sigma_major` (see `mip_level_for_sigma`,
 /// including how this differs from `cluster_refine::level_for_map`). The
 /// full-resolution source coordinate `(x, y)` maps to `(x / 2^l, y / 2^l)` at
 /// level `l` under the pixel-center-at-0.5 convention (matching
@@ -929,7 +929,7 @@ fn remap_rows_f32x3_into(
 /// Like [`remap_aniso_with_pyramid`], but additionally returns the analytic
 /// image gradient `(∂I/∂x, ∂I/∂y)` in source-pixel coords per output pixel and
 /// channel. Value and gradient are computed at the same LOD(s) / footprint
-/// (see [`sample_aniso_with_grad`]).
+/// (see `sample_aniso_with_grad`).
 ///
 /// Owning version that allocates a fresh [`ImageF32WithGrad`] each call. For
 /// repeated rendering (e.g. the photometric refiner's per-GN-step gradient
@@ -1088,7 +1088,7 @@ pub fn remap_bilinear_mip_with_grad(pyramid: &ImageU8Pyramid, map: &WarpMap) -> 
 
 /// [`remap_bilinear_mip_with_grad`] writing into an `out` scratch, resized in
 /// place. Level selection is per pixel from the precomputed SVD (see
-/// [`mip_level_for_sigma`], including how it differs from
+/// `mip_level_for_sigma`, including how it differs from
 /// `cluster_refine::level_for_map`); NaN map entries write zero value and
 /// gradient, exactly like [`remap_bilinear_with_grad_into`].
 ///

@@ -47,8 +47,8 @@ pub(super) fn parse_reduce(s: &str) -> PyResult<ViewReduce> {
 }
 
 /// Map the binding's `normal` policy string (+ neighbor count) to [`PatchNormal`].
-/// Shared by [`PyPatchCloud::from_reconstruction`] and
-/// [`PyPatchCloud::from_tracks`].
+/// Shared by [`crate::PyPatchCloud`]'s `from_reconstruction` and `from_tracks`
+/// constructors.
 pub(super) fn parse_normal(normal: &str, k_neighbors: usize) -> PyResult<PatchNormal> {
     match normal {
         "stored" => Ok(PatchNormal::Stored),
@@ -61,8 +61,8 @@ pub(super) fn parse_normal(normal: &str, k_neighbors: usize) -> PyResult<PatchNo
 }
 
 /// Map the binding's `extent` policy string (+ value and per-axis reduces) to
-/// [`PatchExtent`]. Shared by [`PyPatchCloud::from_reconstruction`] and
-/// [`PyPatchCloud::from_tracks`].
+/// [`PatchExtent`]. Shared by [`crate::PyPatchCloud`]'s `from_reconstruction`
+/// and `from_tracks` constructors.
 pub(super) fn parse_extent(
     extent: &str,
     extent_value: f64,

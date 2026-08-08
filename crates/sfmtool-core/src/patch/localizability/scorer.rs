@@ -186,7 +186,7 @@ pub(in crate::patch) fn patch_localizability(
 
 /// Batch-score a `(P, R, R, C)` consensus stack (flat row-major, `P` patches of
 /// `R·R·C` values each), rayon-parallel across patches. Builds the frozen scoring
-/// [`Support`] once for `window` at resolution `R` and reuses it for every patch.
+/// `Support` once for `window` at resolution `R` and reuses it for every patch.
 ///
 /// Returns one [`Localizability`] per patch, in input order (all-`NaN` for an
 /// empty patch). The grid→source-px mapping and `σ_pos` in source px are the

@@ -29,9 +29,9 @@ pub(crate) enum Inner {
 }
 
 /// Per-spherical-tile source patch stack: for each tile of a
-/// [`SphericalTileRig`], holds the ordered list of contributing source images
-/// and their per-source pyramids of warped patches in the tile's local
-/// pinhole frame. See ``specs/core/per-spherical-tile-source-stack.md``.
+/// [`sfmtool_core::spherical::tile_rig::SphericalTileRig`], holds the ordered
+/// list of contributing source images and their per-source pyramids of warped
+/// patches in the tile's local pinhole frame. See ``specs/core/per-spherical-tile-source-stack.md``.
 ///
 /// Pixel storage is selected at build time via ``dtype``:
 ///

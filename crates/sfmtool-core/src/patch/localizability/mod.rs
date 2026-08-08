@@ -11,7 +11,7 @@
 //! which catches the aperture blind spot the cross-view agreement gate misses
 //! (a patch straddling a straight edge agrees perfectly yet slides along it).
 //!
-//! [`patch_localizability`](scorer::patch_localizability) is the pure per-patch
+//! `patch_localizability` is the pure per-patch
 //! scorer (structure tensor + 2×2 eig); [`score_localizability_stack`] batches it
 //! over a `(P, R, R, C)` consensus stack in parallel. The grid→source-px mapping
 //! that turns `sigma_pos_grid` into a source-pixel `σ_pos` lives at the binding /

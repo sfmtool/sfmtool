@@ -131,7 +131,7 @@ impl PatchViewStack {
     /// `[(view*channels + channel)*n + pixel]` (`n = pixels.len()`). `None` when a
     /// masked pixel is invalid in any kept view (the frame-edge rejection that
     /// keeps `Φ` comparable over the frozen mask) or no channel is present —
-    /// matching [`normalized_stack`].
+    /// matching [`super::znorm::normalized_stack`].
     fn gather(&self, pixels: &[usize]) -> Option<Vec<f32>> {
         let n_views = self.images.len();
         let channels = self.channels;
@@ -163,8 +163,9 @@ impl PatchViewStack {
     }
 
     /// Consensus `Φ` over the frozen support `ctx` and the per-view weights that
-    /// produced it. Mirrors [`eval_phi`] (the same render → z-normalize →
-    /// consensus), but reads the already-rendered images and also returns the
+    /// produced it. Mirrors [`super::search::eval_phi`] (the same render →
+    /// z-normalize → consensus), but reads the already-rendered images and also
+    /// returns the
     /// weights, so the representative fusion reuses them. `None` when the support
     /// can't be scored.
     /// `view_priors` (if given, in the stack's view order — the `ctx.kept` order

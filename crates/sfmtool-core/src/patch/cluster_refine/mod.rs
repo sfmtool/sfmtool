@@ -20,7 +20,7 @@
 //! `cluster_patches/` section.
 //!
 //! Sampling reuses the house conventions: the `bilinear_geometry` pixel-center
-//! convention (`x − 0.5`), the shared window [`Support`], and the
+//! convention (`x − 0.5`), the shared window `Support`, and the
 //! `weighted_moments_pub` / `znorm_write` z-normalization kernels. Pyramid
 //! levels follow the standard mip rule — per sampled image, level
 //! `ℓ = clamp(⌊log₂ s_min⌋, 0, L−1)` where `s_min` is the smaller singular

@@ -4,8 +4,9 @@
 //! A shared work counter for reporting progress out of a long-running,
 //! GIL-releasing Rust pass.
 //!
-//! The heavy patch-cloud kernels (e.g. [`PyPatchCloud::refine_normals`]) run a
-//! single `par_iter().collect()` over hundreds of thousands of patches inside
+//! The heavy patch-cloud kernels (e.g. [`crate::PyPatchCloud`]'s
+//! `refine_normals`) run a single `par_iter().collect()` over hundreds of
+//! thousands of patches inside
 //! `py.detach()`, so from Python the call is one opaque blocking step. A caller
 //! that wants intra-pass feedback constructs a [`ProgressCounter`], passes it to
 //! the kernel (which bumps it once per patch as work completes), and polls

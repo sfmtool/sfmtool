@@ -214,9 +214,9 @@ impl PyKdTree2d {
     ///
     /// Returns:
     ///     Tuple (offsets, indices):
-    ///     - offsets: (M+1,) uint32 array with offsets[0] == 0, offsets[-1] == R.
+    ///     - offsets: (M+1,) uint32 array with `offsets[0] == 0`, `offsets[-1] == R`.
     ///     - indices: (R,) uint32 array of point indices.
-    ///     Results for query i are indices[offsets[i]:offsets[i+1]].
+    ///     Results for query i are `indices[offsets[i]:offsets[i+1]]`.
     fn within_radius<'py>(
         &self,
         py: Python<'py>,

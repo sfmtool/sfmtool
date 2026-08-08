@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Binding for rotation-locked resection
-//! ([`sfmtool_core::geometry::resect_translation`]).
+//! ([`sfmtool_core::geometry::resect_translation()`]).
 
 use nalgebra::{Quaternion, UnitQuaternion};
 use numpy::{PyArray1, PyReadonlyArray2, PyUntypedArrayMethods};

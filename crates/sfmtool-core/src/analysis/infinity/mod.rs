@@ -1,15 +1,15 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Points at infinity for [`SfmrReconstruction`].
+//! Points at infinity for [`crate::SfmrReconstruction`].
 //!
 //! A point at infinity (`w = 0`) is a feature track whose observation rays are
 //! parallel to within measurement noise — distant content whose depth the SfM
 //! solve cannot pin down. This module has two complementary halves:
 //!
-//! - [`convert`] *reclassifies* points the solve already triangulated, moving
+//! - `convert` *reclassifies* points the solve already triangulated, moving
 //!   them across the finite ↔ infinity boundary.
-//! - [`discover`] *finds* new infinite tracks the solve's parallax filters threw
+//! - `discover` *finds* new infinite tracks the solve's parallax filters threw
 //!   away, by clustering world-space keypoint directions on the unit sphere.
 
 mod convert;

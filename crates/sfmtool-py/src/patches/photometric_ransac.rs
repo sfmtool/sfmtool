@@ -5,8 +5,9 @@
 //!
 //! See ``specs/core/photometric-subsets-ransac.md`` for the algorithm.
 //! This binding accepts a float32-backed
-//! [`crate::PyPerSphericalTileSourceStack`] and returns a
-//! :class:`RansacPhotometricOutput` whose fields are owned NumPy arrays.
+//! [`crate::spherical::tile_source_stack::PyPerSphericalTileSourceStack`] and
+//! returns a :class:`RansacPhotometricOutput` whose fields are owned NumPy
+//! arrays.
 
 use numpy::PyArray1;
 use pyo3::prelude::*;

@@ -10,7 +10,7 @@ pub struct ImagePyramid {
     levels: Vec<GrayImage>,
     /// The full-pyramid index of `levels[0]`. Usually 0 for pyramids built from
     /// full resolution, but nonzero for pyramids built from a mid-level image
-    /// via [`build_from_level`].
+    /// via [`ImagePyramid::build_from_level`].
     start_level: u32,
 }
 
@@ -49,7 +49,7 @@ impl ImagePyramid {
     /// is the provided image (at `start_level` resolution), and subsequent
     /// entries are further downsampled.
     ///
-    /// Use [`level_in_full`] to access by full-pyramid index.
+    /// Use [`Self::level`] to access by full-pyramid index.
     pub fn build_from_level(
         start_image: &GrayImage,
         start_level: u32,

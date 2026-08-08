@@ -120,7 +120,8 @@ impl CameraIntrinsics {
     /// Sequential: this renders one patch-sized tile and every caller runs it
     /// inside a per-patch/`par_iter` loop, so the caller owns parallelism (an
     /// inner `par_chunks` would just nest rayon over ~`rows` rows). Full-image
-    /// warps that want row parallelism use [`WarpMap::from_cameras`] instead.
+    /// warps that want row parallelism use [`crate::camera::WarpMap::from_cameras`]
+    /// instead.
     pub(crate) fn ray_to_pixel_grid_exact(
         &self,
         origin: [f64; 3],
@@ -160,8 +161,8 @@ impl CameraIntrinsics {
     /// written as interleaved `(sx, sy)` f32 pairs, row-major, into `out` (which
     /// must have length `2·cols·rows`); a node that is behind the camera, outside
     /// the distortion model's invertible domain, or outside the image rectangle
-    /// is written as `(NaN, NaN)` — identical to [`ray_to_pixel`] followed by the
-    /// in-frame test.
+    /// is written as `(NaN, NaN)` — identical to [`Self::ray_to_pixel`] followed
+    /// by the in-frame test.
     ///
     /// Affineness of the input grid is the contract that licenses the
     /// model-specific fast paths:
@@ -170,7 +171,7 @@ impl CameraIntrinsics {
     ///   multiply has already been folded into the affine basis).
     /// * **Fisheye / equirectangular** models, whose per-node projection is
     ///   expensive (`atan2`/`asin`) but spatially smooth, evaluate the exact
-    ///   projection only on a coarse sub-grid (stride [`COARSE_GRID_STRIDE`])
+    ///   projection only on a coarse sub-grid (stride `COARSE_GRID_STRIDE`)
     ///   and bilinearly interpolate the interior, falling back to exact
     ///   projection wherever a bracketing sub-grid node is invalid. The
     ///   interpolation error is bounded; see
@@ -197,8 +198,9 @@ impl CameraIntrinsics {
         let _ = self.ray_to_pixel_grid_coarse(origin, col_step, row_step, cols, rows, out);
     }
 
-    /// Coarse-grid interpolation path for [`ray_to_pixel_grid`] (non-perspective
-    /// models). See that method's docs and `specs/core/ray-grid-projection.md`.
+    /// Coarse-grid interpolation path for [`Self::ray_to_pixel_grid`]
+    /// (non-perspective models). See that method's docs and
+    /// `specs/core/ray-grid-projection.md`.
     /// Returns `(interpolated_cells, total_cells)` for diagnostics/tests — the
     /// hit rate of the fast (interpolated) path on this tile.
     ///

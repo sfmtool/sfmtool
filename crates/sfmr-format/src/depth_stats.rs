@@ -192,7 +192,7 @@ pub struct DepthStatsResult {
 /// From camera poses, 3D points, and track observations, computes:
 /// - Estimated surface normals for each 3D point
 /// - Per-image depth statistics (min/max/median/mean z-depth)
-/// - Per-image depth histograms with [`NUM_HISTOGRAM_BUCKETS`] bins
+/// - Per-image depth histograms with `NUM_HISTOGRAM_BUCKETS` bins
 ///
 /// - `quaternions_wxyz`: `(N, 4)` world-to-camera rotation quaternions (WXYZ order).
 /// - `translations_xyz`: `(N, 3)` world-to-camera translation vectors.

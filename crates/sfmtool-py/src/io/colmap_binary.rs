@@ -19,7 +19,7 @@ use crate::PyCameraIntrinsics;
 /// The directory must contain `cameras.bin`, `images.bin`, and `points3D.bin`.
 ///
 /// Returns a dict with keys:
-///   cameras (list[CameraIntrinsics]),
+///   cameras (`list[CameraIntrinsics]`),
 ///   image_names (list[str]),
 ///   camera_indexes (N,) uint32,
 ///   quaternions_wxyz (N,4) float64,

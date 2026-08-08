@@ -175,7 +175,7 @@ pub(super) struct DistortedQuadVertex {
 /// Vertex for the tessellated (distorted) background image mesh.
 ///
 /// Positions are unit ray directions in the SfM camera's local space,
-/// placed on the unit sphere via [`CameraIntrinsics::pixel_to_ray`].
+/// placed on the unit sphere via [`sfmtool_core::CameraIntrinsics::pixel_to_ray`].
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct BgDistortedVertex {

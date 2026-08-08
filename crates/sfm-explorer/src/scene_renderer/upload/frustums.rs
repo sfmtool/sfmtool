@@ -81,7 +81,8 @@ impl SceneRenderer {
     /// frustum_size_multiplier`.
     ///
     /// Colors are stored in a separate per-image storage buffer that can be
-    /// updated cheaply via [`update_frustum_colors`] without recomputing geometry.
+    /// updated cheaply via [`Self::update_frustum_colors`] without recomputing
+    /// geometry.
     /// Hidden cameras are handled by setting alpha=0 in the color buffer (the
     /// shader discards those fragments), so geometry includes all cameras.
     pub fn upload_frustums(

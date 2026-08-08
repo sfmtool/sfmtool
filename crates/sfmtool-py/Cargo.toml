@@ -45,3 +45,7 @@ openjd-expr = "0.1.2"
 
 [[bin]]
 name = "launch-sfm-explorer"
+
+# Rustdoc lints are denied workspace-wide (see the root Cargo.toml).
+[lints]
+workspace = true

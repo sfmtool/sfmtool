@@ -36,7 +36,7 @@ use crate::io::matches::matches_data_to_py;
 ///       qvec_wxyz: optional (4,) float64, tvec: optional (3,) float64
 ///
 /// Returns:
-///   list[int]: Database image IDs (1-based), indexed by 0-based image index.
+///   `list[int]`: Database image IDs (1-based), indexed by 0-based image index.
 #[pyfunction]
 pub fn write_colmap_db(
     py: Python<'_>,
