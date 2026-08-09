@@ -10,9 +10,9 @@ use std::path::Path;
 use sfmr_format::SfmrCamera;
 
 use super::types::{
-    camera_params_from_array, colmap_model_name, colmap_num_params, ColmapDataId, ColmapFrame,
-    ColmapIoError, ColmapReconstruction, ColmapRig, ColmapRigSensor, ColmapSensor,
-    ColmapSensorType, Keypoint2D,
+    camera_params_from_array, claim_native_camera_model, colmap_model_name, colmap_num_params,
+    ColmapDataId, ColmapFrame, ColmapIoError, ColmapReconstruction, ColmapRig, ColmapRigSensor,
+    ColmapSensor, ColmapSensorType, Keypoint2D,
 };
 
 /// Sentinel value for unobserved 3D point references in COLMAP binary format.
@@ -285,12 +285,15 @@ fn read_cameras_bin(path: &Path) -> Result<(Vec<SfmrCamera>, HashMap<u32, u32>),
         }
 
         let parameters = camera_params_from_array(model_name, &params)?;
-        cameras.push(SfmrCamera {
+        // A COLMAP model whose parameters make it exactly one of sfmtool's
+        // native models is claimed back as that model (see
+        // `EQUIDISTANT_FISHEYE_CARRIER`); everything else passes through.
+        cameras.push(claim_native_camera_model(SfmrCamera {
             model: model_name.to_string(),
             width: width as u32,
             height: height as u32,
             parameters,
-        });
+        }));
         id_map.insert(camera_id, idx as u32);
     }
 

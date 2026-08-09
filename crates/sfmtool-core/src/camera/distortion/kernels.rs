@@ -750,6 +750,126 @@ pub(super) fn distort_ray_equidistant(
     Some((theta_d * dx, theta_d * dy))
 }
 
+// ---------------------------------------------------------------------------
+// Distortion-free equidistant fisheye (`θ = r/f`)
+// ---------------------------------------------------------------------------
+
+/// Angular width, relative to the ray norm, of the on-axis band where the
+/// 2D direction `(rx, ry)/r_xy` is numerically meaningless and the Jacobian
+/// is evaluated from its axis limit instead.
+const EQUIDISTANT_AXIS_EPS: f64 = 1e-12;
+
+/// Distorted normalized coordinate `(x_d, y_d)` paired with the 2×3
+/// `∂(x_d, y_d)/∂(rx, ry, rz)`, row-major — the pre-intrinsics half of a
+/// [`super::PixelJacobian`], in the optical frame.
+pub(super) type NormalizedRayJacobian = ((f64, f64), [[f64; 3]; 2]);
+
+/// Forward equidistant map in tangent-plane coordinates: `(x, y)` with
+/// `r = tan θ` in, `(θ·x/r, θ·y/r)` out.
+///
+/// Only meaningful for `θ < 90°`, where the tangent plane exists; the
+/// ray-space entry points ([`distort_ray_equidistant_exact`] and
+/// [`equidistant_to_ray`]) carry the model past that and are what the
+/// projection pipeline actually calls.
+pub(super) fn distort_equidistant(x: f64, y: f64) -> (f64, f64) {
+    let r = (x * x + y * y).sqrt();
+    if r < 1e-15 {
+        return (x, y);
+    }
+    let scale = r.atan() / r;
+    (x * scale, y * scale)
+}
+
+/// Inverse of [`distort_equidistant`]: `(x_d, y_d)` with `r_d = θ` in,
+/// tangent-plane `(x, y)` with `r = tan θ` out.
+pub(super) fn undistort_equidistant(x_d: f64, y_d: f64) -> (f64, f64) {
+    let r_d = (x_d * x_d + y_d * y_d).sqrt();
+    if r_d < 1e-15 {
+        return (x_d, y_d);
+    }
+    let scale = r_d.tan() / r_d;
+    (x_d * scale, y_d * scale)
+}
+
+/// Project an optical-frame ray through the exact `θ = r/f` map.
+///
+/// `θ = atan2(r_xy, rz) ∈ [0, π]` and the distorted coordinate is `θ` times
+/// the unit 2D direction — no polynomial, so the domain is the whole sphere
+/// and the result is always `Some`. A ray on the optical axis maps to the
+/// principal point; that includes the **antipode** (`θ = π`, `r_xy = 0`),
+/// where the map is not injective — every antipodal direction aliases onto
+/// `θ = 0`. See [`equidistant_ray_jacobian`], whose derivative is unbounded
+/// exactly there.
+pub(super) fn distort_ray_equidistant_exact(rx: f64, ry: f64, rz: f64) -> (f64, f64) {
+    let r_xy = (rx * rx + ry * ry).sqrt();
+    if r_xy < 1e-15 {
+        return (0.0, 0.0);
+    }
+    let theta = r_xy.atan2(rz);
+    (theta * rx / r_xy, theta * ry / r_xy)
+}
+
+/// Distorted coordinate and the analytic `∂(x_d, y_d)/∂(rx, ry, rz)` of
+/// [`distort_ray_equidistant_exact`], row-major, all in the optical frame.
+///
+/// With `ρ = r_xy`, `n² = ρ² + rz²`, unit direction `(ux, uy) = (rx, ry)/ρ`
+/// and `θ = atan2(ρ, rz)`:
+///
+/// ```text
+/// ∂θ/∂rx = ux·rz/n²   ∂θ/∂ry = uy·rz/n²   ∂θ/∂rz = −ρ/n²
+/// ∂ux/∂rx = uy²/ρ     ∂ux/∂ry = −ux·uy/ρ  (and the mirror for uy)
+/// ```
+///
+/// so, writing `c = rz/n² − θ/ρ` for the shared off-diagonal factor,
+///
+/// ```text
+/// ∂x_d/∂rx = θ·uy²/ρ + ux²·rz/n²      ∂x_d/∂ry = ux·uy·c    ∂x_d/∂rz = −rx/n²
+/// ∂y_d/∂rx = ux·uy·c                  ∂y_d/∂ry = θ·ux²/ρ + uy²·rz/n²
+///                                                            ∂y_d/∂rz = −ry/n²
+/// ```
+///
+/// Nothing here is guarded on `rz`: the expressions are finite and correct
+/// past 90°, which is the whole point of a fisheye-native derivative.
+///
+/// Two limits:
+///
+/// - **On axis, in front** (`ρ → 0`, `rz > 0`): `θ/ρ → 1/rz`, the
+///   off-diagonal factor `c → 0` and the third column vanishes, leaving
+///   `diag(1/rz, 1/rz)` — the pinhole small-angle Jacobian, independent of
+///   the direction `(ux, uy)` that is undefined there.
+/// - **At the antipode** (`ρ → 0`, `rz < 0`): `θ → π` while `ρ → 0`, so
+///   `θ/ρ` diverges and no finite Jacobian exists. Returns `None`; this is
+///   the one measure-zero direction where the derivative is narrower than
+///   [`distort_ray_equidistant_exact`]'s domain.
+pub(super) fn equidistant_ray_jacobian(rx: f64, ry: f64, rz: f64) -> Option<NormalizedRayJacobian> {
+    let rho2 = rx * rx + ry * ry;
+    let rho = rho2.sqrt();
+    let n2 = rho2 + rz * rz;
+    if n2 == 0.0 {
+        return None;
+    }
+    if rho <= EQUIDISTANT_AXIS_EPS * n2.sqrt() {
+        // On the optical axis: only the forward limit is finite.
+        if rz <= 0.0 {
+            return None;
+        }
+        let inv = 1.0 / rz;
+        return Some(((0.0, 0.0), [[inv, 0.0, 0.0], [0.0, inv, 0.0]]));
+    }
+    let theta = rho.atan2(rz);
+    let (ux, uy) = (rx / rho, ry / rho);
+    let rz_n2 = rz / n2;
+    let theta_rho = theta / rho;
+    let cross = ux * uy * (rz_n2 - theta_rho);
+    Some((
+        (theta * ux, theta * uy),
+        [
+            [theta_rho * uy * uy + ux * ux * rz_n2, cross, -rx / n2],
+            [cross, theta_rho * ux * ux + uy * uy * rz_n2, -ry / n2],
+        ],
+    ))
+}
+
 /// Convert undistorted equidistant coordinates `(uu, vv)` to a unit ray direction.
 ///
 /// `theta = sqrt(uu² + vv²)` is the incidence angle.

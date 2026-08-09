@@ -122,11 +122,29 @@ fn equidistant_seed() -> CameraIntrinsics {
     }
 }
 
+/// The same map as a native `EquidistantFisheye` — closed form, and the one
+/// ray-path model with an analytic pixel Jacobian.
+fn equidistant_native() -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: 130.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
 /// Wide-FOV scene: points spread over θ ∈ [5°, 130°] around the true pose,
 /// so a large share of the observations are behind the image plane. Returns
 /// the scene plus the count of `z_cam > 0` observations.
 fn make_fisheye_scene() -> (Scene, usize) {
-    let cam = equidistant_seed();
+    make_fisheye_scene_for(equidistant_seed())
+}
+
+/// [`make_fisheye_scene`] under an arbitrary equidistant camera.
+fn make_fisheye_scene_for(cam: CameraIntrinsics) -> (Scene, usize) {
     let r_true = UnitQuaternion::from_scaled_axis(Vector3::new(0.15, -0.1, 0.05));
     let t_true = Vector3::new(0.3, -0.2, 0.4);
     let r_inv = r_true.inverse();
@@ -189,4 +207,53 @@ fn fisheye_residuals_are_finite_past_ninety_degrees() {
     for (i, r) in rn.iter().enumerate() {
         assert!(*r < 1e-9, "observation {i} residual {r} at the true pose");
     }
+}
+
+// ── Analytic vs central-difference Jacobian: same answer, fewer projections ──
+
+/// The two representations of `θ = r/f` — `SimpleRadialFisheye { k1 = 0 }`
+/// (no analytic Jacobian, so `lm_fit` central-differences `ray_to_pixel`)
+/// and `EquidistantFisheye` (analytic) — must converge to the same pose from
+/// the same perturbed start.
+///
+/// The projections themselves are identical, so the only difference between
+/// the two runs is how each LM step is linearized. The converged poses agree
+/// far below the residual floor of the scene: `1e-10` rad of rotation and
+/// `1e-10` of translation are two orders tighter than the `1e-6` accuracy
+/// each arm is separately asserted to reach against the planted truth.
+#[test]
+fn analytic_and_central_difference_jacobians_converge_together() {
+    let (legacy, n_behind) = make_fisheye_scene_for(equidistant_seed());
+    let (native, _) = make_fisheye_scene_for(equidistant_native());
+    assert!(
+        n_behind >= 18,
+        "scene not wide enough ({n_behind} past 90°)"
+    );
+    // The arms really do take different paths through `project_with_jac`.
+    assert!(!legacy.0.model.supports_pixel_jacobian());
+    assert!(native.0.model.supports_pixel_jacobian());
+    // Same observations to begin with.
+    for (a, b) in legacy.4.iter().zip(native.4.iter()) {
+        assert!((a[0] - b[0]).abs() < 1e-12 && (a[1] - b[1]).abs() < 1e-12);
+    }
+
+    let r0 = UnitQuaternion::from_scaled_axis(Vector3::new(0.15 + 0.05, -0.1 - 0.04, 0.05 + 0.03));
+    let t0 = legacy.2 + Vector3::new(0.08, -0.06, 0.09);
+    let a = refine_absolute_pose(&legacy.0, &legacy.4, &legacy.3, &r0, &t0, 5, 0.6, 3.0);
+    let b = refine_absolute_pose(&native.0, &native.4, &native.3, &r0, &t0, 5, 0.6, 3.0);
+
+    assert!(
+        a.rotation.angle_to(&b.rotation) < 1e-10,
+        "rotation disagreement {} rad between the two Jacobian paths",
+        a.rotation.angle_to(&b.rotation)
+    );
+    assert!(
+        (a.translation - b.translation).norm() < 1e-10,
+        "translation disagreement {}",
+        (a.translation - b.translation).norm()
+    );
+    assert!((a.inlier_fraction - b.inlier_fraction).abs() < 1e-12);
+    // Both are also correct against the planted truth.
+    assert!(b.rotation.angle_to(&legacy.1) < 1e-6);
+    assert!((b.translation - legacy.2).norm() < 1e-6);
 }

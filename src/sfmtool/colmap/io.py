@@ -453,10 +453,13 @@ def pycolmap_to_rust_sfmr(
     if len(points3d) == 0:
         raise RuntimeError("No 3D points found in reconstruction.")
 
-    # Prepare cameras
+    # Prepare cameras. This is an import of a SOLVED reconstruction, so a
+    # COLMAP model that is exactly one of sfmtool's native models is claimed
+    # back as that model (SIMPLE_RADIAL_FISHEYE at k == 0 -> EQUIDISTANT_FISHEYE).
     sorted_camera_ids = sorted(cameras.keys())
     cameras_list = [
-        pycolmap_camera_to_intrinsics(cameras[cam_id]) for cam_id in sorted_camera_ids
+        pycolmap_camera_to_intrinsics(cameras[cam_id], claim_native=True)
+        for cam_id in sorted_camera_ids
     ]
     camera_id_to_index = {cam_id: idx for idx, cam_id in enumerate(sorted_camera_ids)}
 

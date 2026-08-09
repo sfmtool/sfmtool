@@ -81,7 +81,11 @@ class BundleAdjustTransform:
 
         sorted_camera_ids = sorted(reconstruction.cameras.keys())
         cameras = [
-            pycolmap_camera_to_intrinsics(reconstruction.cameras[cam_id])
+            # Solved reconstruction: claim the native models back (see
+            # `pycolmap_camera_to_intrinsics`).
+            pycolmap_camera_to_intrinsics(
+                reconstruction.cameras[cam_id], claim_native=True
+            )
             for cam_id in sorted_camera_ids
         ]
         camera_id_to_index = {

@@ -198,6 +198,18 @@ fn equirectangular() -> CameraIntrinsics {
     }
 }
 
+fn equidistant_fisheye() -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+        },
+        width: 640,
+        height: 480,
+    }
+}
+
 fn all_cameras() -> Vec<CameraIntrinsics> {
     vec![
         pinhole(),
@@ -212,6 +224,7 @@ fn all_cameras() -> Vec<CameraIntrinsics> {
         rad_tan_thin_prism_fisheye(),
         full_opencv(),
         equirectangular(),
+        equidistant_fisheye(),
     ]
 }
 
@@ -1991,7 +2004,9 @@ fn equidistant_seed_has_no_analytic_pixel_jacobian_and_says_so() {
     // The finite-difference fallback in `pose_refine` / `bundle_adjust` is
     // selected by this flag; if the flag ever flips without an analytic
     // fisheye Jacobian landing, those kernels silently lose their derivative
-    // past 90° (the analytic path returns None on rz ≤ 0).
+    // past 90° (the perspective path returns None on rz ≤ 0). The POLYNOMIAL
+    // fisheye family still has no analytic form — `EquidistantFisheye` does,
+    // and is pinned separately below.
     let cam = equidistant_seed(130.0, 480, 480);
     assert!(!cam.model.supports_pixel_jacobian());
     assert!(cam
@@ -2089,5 +2104,242 @@ fn equidistant_seed_batch_maps_match_the_scalar_ones_past_90_degrees() {
         let p = fwd[i].expect("ray_to_pixel_batch None on an in-domain ray");
         assert_relative_eq!(p[0], pixels[i][0], epsilon = 0.0);
         assert_relative_eq!(p[1], pixels[i][1], epsilon = 0.0);
+    }
+}
+
+// -----------------------------------------------------------------------
+// EQUIDISTANT_FISHEYE — the native `θ = r/f` model
+//
+// The tests above pin the same map carried as `SimpleRadialFisheye { k1 = 0 }`
+// (the pre-Phase-3a convention); these pin the native model, its exactness at
+// and past 90°, and its analytic pixel Jacobian.
+// -----------------------------------------------------------------------
+
+/// The native model at focal `f`, principal point centred — the exact
+/// counterpart of `equidistant_seed`'s `SimpleRadialFisheye { k1 = 0 }`.
+fn equidistant_native(f: f64, w: u32, h: u32) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: f,
+            principal_point_x: w as f64 / 2.0,
+            principal_point_y: h as f64 / 2.0,
+        },
+        width: w,
+        height: h,
+    }
+}
+
+#[test]
+fn equidistant_native_is_exactly_theta_over_f_both_ways() {
+    let f = 130.0;
+    let cam = equidistant_native(f, 480, 480);
+    let (cx, cy) = cam.principal_point();
+    for deg in [
+        0.0f64, 1.0, 30.0, 60.0, 89.0, 90.0, 91.0, 105.0, 130.0, 179.0,
+    ] {
+        let theta = deg.to_radians();
+        for phi_deg in [0.0f64, 37.0, 90.0, 180.0, 263.0] {
+            let phi = phi_deg.to_radians();
+            let ray = ray_at(theta, phi);
+            let (u, v) = cam
+                .ray_to_pixel(ray)
+                .unwrap_or_else(|| panic!("ray_to_pixel None at θ={deg}°, φ={phi_deg}°"));
+            // Forward: r = f·θ, pixel azimuth = ray azimuth (v grows DOWN).
+            let r = ((u - cx).powi(2) + (v - cy).powi(2)).sqrt();
+            assert_relative_eq!(r, f * theta, epsilon = 1e-9);
+            if theta > 1e-9 {
+                assert_relative_eq!(u - cx, f * theta * phi.cos(), epsilon = 1e-9);
+                assert_relative_eq!(v - cy, -f * theta * phi.sin(), epsilon = 1e-9);
+            }
+            // Inverse: exactly back to the same unit ray — no Newton, no blend.
+            let back = cam.pixel_to_ray(u, v);
+            for c in 0..3 {
+                assert_relative_eq!(back[c], ray[c], epsilon = 1e-12);
+            }
+        }
+    }
+}
+
+#[test]
+fn equidistant_native_agrees_with_the_k1_zero_convention() {
+    // The cross-check the seed scripts also run: `SimpleRadialFisheye` with
+    // k1 = 0 parameterizes the identical map, so both representations must
+    // project and unproject to the same numbers. They are bit-identical
+    // everywhere except in the polynomial family's 90°–100° wide-angle blend
+    // band, where `SimpleRadialFisheye` lerps two identical rays and
+    // renormalizes — a round-off of order 1e-16, so 1e-12 is the tolerance.
+    let f = 130.0;
+    let native = equidistant_native(f, 480, 480);
+    let legacy = equidistant_seed(f, 480, 480);
+    for deg in [0.0f64, 15.0, 60.0, 89.0, 90.0, 91.0, 95.0, 105.0, 130.0] {
+        for phi_deg in [0.0f64, 71.0, 200.0] {
+            let ray = ray_at(deg.to_radians(), phi_deg.to_radians());
+            let (un, vn) = native.ray_to_pixel(ray).unwrap();
+            let (ul, vl) = legacy.ray_to_pixel(ray).unwrap();
+            assert_relative_eq!(un, ul, epsilon = 1e-12);
+            assert_relative_eq!(vn, vl, epsilon = 1e-12);
+            let rn = native.pixel_to_ray(un, vn);
+            let rl = legacy.pixel_to_ray(ul, vl);
+            for c in 0..3 {
+                assert_relative_eq!(rn[c], rl[c], epsilon = 1e-12);
+            }
+        }
+    }
+}
+
+#[test]
+fn equidistant_native_ray_at_the_exact_antipode_aliases_the_principal_point() {
+    // Same documented domain edge as the k1 = 0 convention: θ = π with
+    // r_xy = 0 hits the on-axis early return and projects to the principal
+    // point, aliasing θ = 0. Measure-zero, 75° outside any real capture.
+    let cam = equidistant_native(130.0, 480, 480);
+    let (cx, cy) = cam.principal_point();
+    let (u, v) = cam.ray_to_pixel([0.0, 0.0, 1.0]).unwrap();
+    assert_relative_eq!(u, cx, epsilon = 1e-12);
+    assert_relative_eq!(v, cy, epsilon = 1e-12);
+    // One micro-radian off the antipode the map is already correct.
+    let near = ray_at(std::f64::consts::PI - 1e-6, 0.0);
+    let (u2, _) = cam.ray_to_pixel(near).unwrap();
+    assert_relative_eq!(
+        u2 - cx,
+        130.0 * (std::f64::consts::PI - 1e-6),
+        epsilon = 1e-6
+    );
+    // The projection is defined there; the DERIVATIVE is not — θ/ρ diverges.
+    assert!(cam.ray_to_pixel_with_jacobian([0.0, 0.0, 1.0]).is_none());
+}
+
+/// The analytic Jacobian against a central difference over a whole synthetic
+/// sensor: a 480² fisheye frame whose image circle reaches θ = 130°, plus
+/// explicit θ bands straddling 90°. Nothing here is allowed to be rejected —
+/// `rz ≤ 0` (θ ≥ 90°) is the periphery this model exists to carry.
+#[test]
+fn equidistant_native_jacobian_matches_central_difference_over_the_sensor() {
+    let f = 480.0 / 2.0 / 130.0_f64.to_radians();
+    let cam = equidistant_native(f, 480, 480);
+    let (cx, cy) = cam.principal_point();
+    let h = 1e-6;
+    let mut samples = 0usize;
+    let mut past_90 = 0usize;
+    let mut worst = 0.0f64;
+
+    let check = |ray: [f64; 3], past: &mut usize, worst: &mut f64| -> usize {
+        let (uv, jac) = cam
+            .ray_to_pixel_with_jacobian(ray)
+            .expect("analytic Jacobian None on an in-domain equidistant ray");
+        let direct = cam.ray_to_pixel(ray).unwrap();
+        assert_relative_eq!(uv.0, direct.0, epsilon = 1e-12);
+        assert_relative_eq!(uv.1, direct.1, epsilon = 1e-12);
+        if ray[2] > 0.0 {
+            *past += 1;
+        }
+        let mut n = 0;
+        for c in 0..3 {
+            let mut rp = ray;
+            let mut rm = ray;
+            rp[c] += h;
+            rm[c] -= h;
+            let (up, vp) = cam.ray_to_pixel(rp).unwrap();
+            let (um, vm) = cam.ray_to_pixel(rm).unwrap();
+            let fd_u = (up - um) / (2.0 * h);
+            let fd_v = (vp - vm) / (2.0 * h);
+            for (a, fd) in [(jac[0][c], fd_u), (jac[1][c], fd_v)] {
+                let rel = (a - fd).abs() / (1.0 + a.abs());
+                *worst = worst.max(rel);
+                assert!(
+                    rel <= 1e-6,
+                    "equidistant ∂/∂r[{c}]: analytic {a} vs central-diff {fd} (rel {rel})",
+                );
+            }
+            n += 1;
+        }
+        n
+    };
+
+    // (a) The whole sensor: every pixel of a 24×24 grid, at three ray scales
+    // (the map is degree-0 homogeneous, so the Jacobian scales as 1/‖r‖).
+    for iy in 0..24 {
+        for ix in 0..24 {
+            let u = (ix as f64 + 0.5) * 480.0 / 24.0;
+            let v = (iy as f64 + 0.5) * 480.0 / 24.0;
+            if (u - cx).hypot(v - cy) > 239.0 {
+                continue; // outside the image circle
+            }
+            let base = cam.pixel_to_ray(u, v);
+            for scale in [0.5f64, 1.0, 3.0] {
+                let ray = [base[0] * scale, base[1] * scale, base[2] * scale];
+                samples += check(ray, &mut past_90, &mut worst);
+            }
+        }
+    }
+
+    // (b) Explicit θ bands straddling 90°, at several azimuths.
+    for deg in [60.0f64, 89.0, 91.0, 105.0, 130.0] {
+        for phi_deg in [0.0f64, 45.0, 137.0, 250.0, 330.0] {
+            let ray = ray_at(deg.to_radians(), phi_deg.to_radians());
+            samples += check(ray, &mut past_90, &mut worst);
+        }
+    }
+
+    assert!(samples > 1000, "thin coverage: only {samples} samples");
+    assert!(past_90 > 20, "grid did not exercise θ > 90° ({past_90})");
+    eprintln!("[equidistant-jac] {samples} samples, worst rel error {worst:.3e}");
+}
+
+#[test]
+fn equidistant_native_jacobian_on_axis_is_the_pinhole_limit() {
+    // φ is undefined on the optical axis, but the limit is not: θ/ρ → 1/rz,
+    // the off-diagonal factor vanishes and the third column goes to zero,
+    // leaving diag(f/rz, −f/rz) — the small-angle pinhole Jacobian. Assert
+    // both the exact-axis branch and its continuity from nearby rays.
+    let f = 130.0;
+    let cam = equidistant_native(f, 480, 480);
+    let (cx, cy) = cam.principal_point();
+    let ((u, v), jac) = cam.ray_to_pixel_with_jacobian([0.0, 0.0, -2.0]).unwrap();
+    assert_relative_eq!(u, cx, epsilon = 1e-15);
+    assert_relative_eq!(v, cy, epsilon = 1e-15);
+    // rz (optical) = 2, so ∂u/∂x = f/2 and ∂v/∂y = −f/2.
+    assert_relative_eq!(jac[0][0], f / 2.0, epsilon = 1e-12);
+    assert_relative_eq!(jac[1][1], -f / 2.0, epsilon = 1e-12);
+    for c in [1usize, 2] {
+        assert_relative_eq!(jac[0][c], 0.0, epsilon = 1e-15);
+    }
+    assert_relative_eq!(jac[1][0], 0.0, epsilon = 1e-15);
+    assert_relative_eq!(jac[1][2], 0.0, epsilon = 1e-15);
+
+    // Continuity: approaching the axis from an arbitrary azimuth converges to
+    // the same matrix, direction-independently.
+    for eps in [1e-4f64, 1e-6, 1e-9] {
+        for phi_deg in [0.0f64, 61.0, 233.0] {
+            let phi = phi_deg.to_radians();
+            let ray = [2.0 * eps * phi.cos(), 2.0 * eps * phi.sin(), -2.0];
+            let (_, j) = cam.ray_to_pixel_with_jacobian(ray).unwrap();
+            assert_relative_eq!(j[0][0], f / 2.0, epsilon = 1e-6);
+            assert_relative_eq!(j[1][1], -f / 2.0, epsilon = 1e-6);
+            assert_relative_eq!(j[0][1], 0.0, epsilon = 1e-6);
+            assert_relative_eq!(j[1][0], 0.0, epsilon = 1e-6);
+        }
+    }
+}
+
+#[test]
+fn equidistant_native_jacobian_is_scale_invariant_in_the_ray() {
+    // The map is degree-0 homogeneous, so J·r = 0 (Euler) and J(s·r) = J(r)/s.
+    let cam = equidistant_native(130.0, 480, 480);
+    for deg in [20.0f64, 90.0, 120.0] {
+        let ray = ray_at(deg.to_radians(), 0.9);
+        let (_, j1) = cam.ray_to_pixel_with_jacobian(ray).unwrap();
+        for row in &j1 {
+            let dot = (0..3).map(|c| row[c] * ray[c]).sum::<f64>();
+            assert_relative_eq!(dot, 0.0, epsilon = 1e-10);
+        }
+        let s = 4.0;
+        let scaled = [ray[0] * s, ray[1] * s, ray[2] * s];
+        let (_, j2) = cam.ray_to_pixel_with_jacobian(scaled).unwrap();
+        for row in 0..2 {
+            for c in 0..3 {
+                assert_relative_eq!(j2[row][c], j1[row][c] / s, epsilon = 1e-10);
+            }
+        }
     }
 }

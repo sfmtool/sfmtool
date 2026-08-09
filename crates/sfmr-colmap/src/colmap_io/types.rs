@@ -301,8 +301,67 @@ const CAMERA_MODELS: &[(i32, &str, usize, &[&str])] = &[
     ),
 ];
 
+// ---------------------------------------------------------------------------
+// Native (non-COLMAP) model interop
+// ---------------------------------------------------------------------------
+
+/// The distortion-free equidistant model (`sfmtool-core`'s
+/// `CameraModel::EquidistantFisheye`). Not a COLMAP model.
+pub const EQUIDISTANT_FISHEYE: &str = "EQUIDISTANT_FISHEYE";
+
+/// The COLMAP model that carries [`EQUIDISTANT_FISHEYE`] across the boundary.
+///
+/// COLMAP has no distortion-free equidistant model, but
+/// `SIMPLE_RADIAL_FISHEYE` at `k = 0` parameterizes the identical `θ = r/f`
+/// map with the same focal and principal point, so the `k` parameter is the
+/// carrier in both directions:
+///
+/// - **Export** ([`colmap_model_id`], [`camera_params_to_array`]):
+///   `EQUIDISTANT_FISHEYE` writes as `SIMPLE_RADIAL_FISHEYE` with
+///   `radial_distortion_k1 = 0`.
+/// - **Import** ([`claim_native_camera_model`]): a `SIMPLE_RADIAL_FISHEYE`
+///   whose `k` is **exactly** `0.0` is claimed back as
+///   `EQUIDISTANT_FISHEYE`; any other `k`, however small, stays
+///   `SIMPLE_RADIAL_FISHEYE`.
+pub const EQUIDISTANT_FISHEYE_CARRIER: &str = "SIMPLE_RADIAL_FISHEYE";
+
+/// The COLMAP model name a camera is written as: itself for the COLMAP
+/// models, the carrier for a native sfmtool model.
+fn colmap_export_name(model_name: &str) -> &str {
+    if model_name == EQUIDISTANT_FISHEYE {
+        EQUIDISTANT_FISHEYE_CARRIER
+    } else {
+        model_name
+    }
+}
+
+/// Re-label a camera just read from COLMAP as its native sfmtool model when
+/// the parameters say it is exactly that model.
+///
+/// Only `SIMPLE_RADIAL_FISHEYE` with `radial_distortion_k1 == 0.0` is
+/// claimed, becoming [`EQUIDISTANT_FISHEYE`] with the `k` parameter dropped
+/// (see [`EQUIDISTANT_FISHEYE_CARRIER`]). The comparison is exact: a camera
+/// COLMAP actually refined to a nonzero `k` keeps its polynomial model, and
+/// the round trip `EQUIDISTANT_FISHEYE → COLMAP → EQUIDISTANT_FISHEYE` is
+/// lossless because export writes a literal `0.0`.
+pub fn claim_native_camera_model(mut camera: SfmrCamera) -> SfmrCamera {
+    if camera.model != EQUIDISTANT_FISHEYE_CARRIER {
+        return camera;
+    }
+    if camera.parameters.get("radial_distortion_k1") != Some(&0.0) {
+        return camera;
+    }
+    camera.parameters.remove("radial_distortion_k1");
+    camera.model = EQUIDISTANT_FISHEYE.to_string();
+    camera
+}
+
 /// Look up the COLMAP integer model ID from a model name string.
+///
+/// Native sfmtool models resolve to their COLMAP carrier's ID — see
+/// [`EQUIDISTANT_FISHEYE_CARRIER`].
 pub fn colmap_model_id(model_name: &str) -> Result<i32, ColmapIoError> {
+    let model_name = colmap_export_name(model_name);
     CAMERA_MODELS
         .iter()
         .find(|(_, name, _, _)| *name == model_name)
@@ -330,21 +389,32 @@ pub(crate) fn colmap_num_params(model_name: &str) -> Result<usize, ColmapIoError
 
 /// Convert an `SfmrCamera`'s named parameters to a positional array
 /// matching the COLMAP binary format ordering.
+///
+/// Native sfmtool models are written through their COLMAP carrier: a
+/// parameter the carrier declares but the native model does not have is
+/// emitted as `0.0` (for [`EQUIDISTANT_FISHEYE`] that is exactly the `k` of
+/// [`EQUIDISTANT_FISHEYE_CARRIER`]).
 pub fn camera_params_to_array(camera: &SfmrCamera) -> Result<Vec<f64>, ColmapIoError> {
+    let export_name = colmap_export_name(&camera.model);
+    let native = export_name != camera.model;
     let entry = CAMERA_MODELS
         .iter()
-        .find(|(_, name, _, _)| *name == camera.model)
+        .find(|(_, name, _, _)| *name == export_name)
         .ok_or_else(|| ColmapIoError::UnknownModelName(camera.model.clone()))?;
     let param_names = entry.3;
     let mut out = Vec::with_capacity(param_names.len());
     for &pname in param_names {
-        let val = camera.parameters.get(pname).ok_or_else(|| {
-            ColmapIoError::InvalidData(format!(
-                "Camera model {} missing parameter '{}'",
-                camera.model, pname
-            ))
-        })?;
-        out.push(*val);
+        let val = match camera.parameters.get(pname) {
+            Some(v) => *v,
+            None if native => 0.0,
+            None => {
+                return Err(ColmapIoError::InvalidData(format!(
+                    "Camera model {} missing parameter '{}'",
+                    camera.model, pname
+                )))
+            }
+        };
+        out.push(val);
     }
     Ok(out)
 }

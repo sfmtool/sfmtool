@@ -199,6 +199,18 @@ fn equirectangular() -> CameraIntrinsics {
     }
 }
 
+fn equidistant_fisheye() -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+        },
+        width: 640,
+        height: 480,
+    }
+}
+
 fn all_cameras() -> Vec<CameraIntrinsics> {
     vec![
         pinhole(),
@@ -213,6 +225,7 @@ fn all_cameras() -> Vec<CameraIntrinsics> {
         rad_tan_thin_prism_fisheye(),
         full_opencv(),
         equirectangular(),
+        equidistant_fisheye(),
     ]
 }
 
@@ -302,6 +315,7 @@ fn model_name_all_variants() {
         "RAD_TAN_THIN_PRISM_FISHEYE",
         "FULL_OPENCV",
         "EQUIRECTANGULAR",
+        "EQUIDISTANT_FISHEYE",
     ];
     for (cam, name) in all_cameras().iter().zip(expected.iter()) {
         assert_eq!(cam.model_name(), *name);
@@ -627,6 +641,7 @@ fn focal_lengths_dual_focal_distortion_models() {
 
 #[test]
 fn is_fisheye_true_for_fisheye_models() {
+    assert!(equidistant_fisheye().model.is_fisheye());
     assert!(simple_radial_fisheye().model.is_fisheye());
     assert!(radial_fisheye().model.is_fisheye());
     assert!(opencv_fisheye().model.is_fisheye());
@@ -687,4 +702,41 @@ fn has_distortion_true_for_distortion_fisheye_models() {
     assert!(radial_fisheye().has_distortion());
     assert!(thin_prism_fisheye().has_distortion());
     assert!(rad_tan_thin_prism_fisheye().has_distortion());
+}
+
+// -----------------------------------------------------------------------
+// EquidistantFisheye classification: a fisheye with no distortion, and the
+// one ray-path model carrying an analytic pixel Jacobian.
+// -----------------------------------------------------------------------
+
+#[test]
+fn equidistant_fisheye_classification() {
+    let m = equidistant_fisheye().model;
+    assert_eq!(m.model_name(), "EQUIDISTANT_FISHEYE");
+    assert!(m.is_fisheye());
+    assert!(!m.is_equirectangular());
+    assert!(m.needs_ray_path());
+    // The `θ = r/f` map carries no distortion coefficients at all.
+    assert!(!m.has_distortion());
+    // …yet differentiates in closed form, unlike every other ray-path model.
+    assert!(m.supports_pixel_jacobian());
+    assert!(!simple_radial_fisheye().model.supports_pixel_jacobian());
+    assert!(!equirectangular().model.supports_pixel_jacobian());
+    assert!(simple_pinhole().model.supports_pixel_jacobian());
+}
+
+#[test]
+fn equidistant_fisheye_has_simple_pinhole_parameter_list() {
+    let cam = equidistant_fisheye();
+    let stored = SfmrCamera::from(&cam);
+    assert_eq!(stored.model, "EQUIDISTANT_FISHEYE");
+    let names: Vec<&str> = stored.parameters.keys().map(String::as_str).collect();
+    assert_eq!(
+        names,
+        ["focal_length", "principal_point_x", "principal_point_y"]
+    );
+    assert_eq!(cam.focal_lengths(), (500.0, 500.0));
+    assert_eq!(cam.principal_point(), (320.0, 240.0));
+    // Round trip through the on-disk representation.
+    assert_eq!(CameraIntrinsics::try_from(&stored).unwrap(), cam);
 }

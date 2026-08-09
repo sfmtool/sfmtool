@@ -1573,7 +1573,26 @@ fn equidistant_seed(f: f64) -> CameraIntrinsics {
 /// 90° off-axis. Returns the scene and the number of `z_cam > 0`
 /// observations.
 fn make_fisheye_scene(n_img: usize, n_pt: usize) -> (Scene, usize) {
-    let cam = equidistant_seed(130.0);
+    make_fisheye_scene_for(equidistant_seed(130.0), n_img, n_pt)
+}
+
+/// The same map as a native `EquidistantFisheye`: identical projections, but
+/// `supports_pixel_jacobian()` is true, so the kernel linearizes analytically
+/// instead of central-differencing `ray_to_pixel`.
+fn equidistant_native(f: f64) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: f,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+/// [`make_fisheye_scene`] under an arbitrary equidistant camera.
+fn make_fisheye_scene_for(cam: CameraIntrinsics, n_img: usize, n_pt: usize) -> (Scene, usize) {
     let mut quats = Vec::new();
     let mut trans = Vec::new();
     for i in 0..n_img {
@@ -1733,4 +1752,80 @@ fn fixed_fisheye_intrinsics_converge_from_a_perturbed_state() {
     for (i, q) in s.quats.iter().enumerate() {
         assert!(q.angle_to(&truth_q[i]) < 5e-3, "image {i} rotation");
     }
+}
+
+// ── Analytic vs central-difference Jacobian on the same fisheye scene ──────
+//
+// `EquidistantFisheye` and `SimpleRadialFisheye { k1 = 0 }` parameterize the
+// same `θ = r/f` map, so the two arms differ ONLY in how each Gauss–Newton
+// step is linearized: the first from the closed-form pixel Jacobian, the
+// second from a central difference of `ray_to_pixel` (four extra projections
+// per observation per linearization).
+
+/// The two arms must converge to the same reconstruction from the same
+/// perturbed start.
+///
+/// Poses agree to `1e-9` rad / `1e-9` in translation and points to `1e-8`
+/// world units — three or more orders inside the `5e-3` rad / `0.05` accuracy
+/// each arm is separately asserted to reach against the planted truth, and
+/// far below the scene's own sub-pixel residual floor. The residual is a
+/// difference of linearizations, not of models: the projections agree to
+/// `1e-12` px before either solve starts, asserted below.
+#[test]
+fn fisheye_analytic_and_central_difference_bundles_agree() {
+    let (mut legacy, n_behind) = make_fisheye_scene_for(equidistant_seed(130.0), 6, 90);
+    let (mut native, _) = make_fisheye_scene_for(equidistant_native(130.0), 6, 90);
+    assert!(n_behind >= 50, "scene is not wide enough: {n_behind}");
+    // The arms take different paths through `project_with_jac`.
+    assert!(!legacy.cam.model.supports_pixel_jacobian());
+    assert!(native.cam.model.supports_pixel_jacobian());
+    // …but describe the same camera: identical observations to start from.
+    assert_eq!(legacy.uv.len(), native.uv.len());
+    for (a, b) in legacy.uv.iter().zip(native.uv.iter()) {
+        assert!(
+            (a[0] - b[0]).abs() < 1e-12 && (a[1] - b[1]).abs() < 1e-12,
+            "the two representations disagree on a projection: {a:?} vs {b:?}"
+        );
+    }
+
+    let perturb = |s: &mut Scene| {
+        for (i, q) in s.quats.iter_mut().enumerate() {
+            *q = UnitQuaternion::from_scaled_axis(Vector3::new(
+                0.01 * jitter(i, 21),
+                0.01 * jitter(i, 22),
+                0.01 * jitter(i, 23),
+            )) * *q;
+        }
+        for (p, x) in s.points.iter_mut().enumerate() {
+            for (c, v) in x.iter_mut().enumerate() {
+                *v += 0.05 * jitter(p * 3 + c, 31);
+            }
+        }
+    };
+    perturb(&mut legacy);
+    perturb(&mut native);
+
+    let out_l = run(&mut legacy, false, &DEFAULT_SCHEDULE);
+    let out_n = run(&mut native, false, &DEFAULT_SCHEDULE);
+
+    assert_eq!(out_l.focal, 130.0);
+    assert_eq!(out_n.focal, 130.0);
+    for (i, (a, b)) in legacy.quats.iter().zip(native.quats.iter()).enumerate() {
+        assert!(
+            a.angle_to(b) < 1e-9,
+            "image {i} rotation split {}",
+            a.angle_to(b)
+        );
+        let dt = (legacy.trans[i] - native.trans[i]).norm();
+        assert!(dt < 1e-9, "image {i} translation split {dt}");
+    }
+    for (p, (a, b)) in legacy.points.iter().zip(native.points.iter()).enumerate() {
+        let d = (0..3).map(|c| (a[c] - b[c]).powi(2)).sum::<f64>().sqrt();
+        assert!(d < 1e-8, "point {p} split {d}");
+    }
+    let worst = out_n.residual_norms.iter().cloned().fold(0.0f64, f64::max);
+    assert!(
+        worst < 0.5,
+        "worst reprojection {worst} px under the analytic path"
+    );
 }

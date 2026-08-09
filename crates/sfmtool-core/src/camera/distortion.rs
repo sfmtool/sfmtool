@@ -134,6 +134,8 @@ impl CameraModel {
                 ..
             } => distort_fisheye(x, y, *k1, *k2, *k3, *k4),
 
+            CameraModel::EquidistantFisheye { .. } => distort_equidistant(x, y),
+
             CameraModel::SimpleRadialFisheye {
                 radial_distortion_k1: k,
                 ..
@@ -351,6 +353,8 @@ impl CameraModel {
                 ..
             } => undistort_fisheye(x_d, y_d, *k1, *k2, *k3, *k4),
 
+            CameraModel::EquidistantFisheye { .. } => undistort_equidistant(x_d, y_d),
+
             CameraModel::SimpleRadialFisheye {
                 radial_distortion_k1: k,
                 ..
@@ -453,8 +457,11 @@ impl CameraModel {
     ///
     /// Returns `None` if the ray falls outside the model's valid domain:
     /// for perspective models, when the ray is not in front of the camera
-    /// (`rz >= 0`); for fisheye, only when the distortion polynomial's
-    /// representable range is exceeded.
+    /// (`rz >= 0`); for the polynomial fisheye family, only when the
+    /// distortion polynomial's representable range is exceeded.
+    /// [`CameraModel::EquidistantFisheye`] and
+    /// [`CameraModel::Equirectangular`] have no invalid domain and always
+    /// return `Some`.
     pub fn distort_ray(&self, ray: [f64; 3]) -> Option<(f64, f64)> {
         // Canonical → optical frame: (rx, ry, rz) ← S · ray. Every branch
         // below operates in the legacy optical frame (+Z forward, y down).
@@ -493,6 +500,12 @@ impl CameraModel {
                 }
                 let (x_d, y_d) = self.distort(x, y);
                 Some((x_d, y_d))
+            }
+
+            // Distortion-free equidistant: exact closed form at every θ, so
+            // there is no polynomial range to fall out of — always `Some`.
+            CameraModel::EquidistantFisheye { .. } => {
+                Some(distort_ray_equidistant_exact(rx, ry, rz))
             }
 
             // Fisheye models: work in theta-space
@@ -623,6 +636,11 @@ impl CameraModel {
                 let len = (x * x + y * y + 1.0).sqrt();
                 [x / len, y / len, 1.0 / len]
             }
+
+            // Distortion-free equidistant: `θ = r_d` outright — no Newton
+            // recovery and no wide-angle blend, both of which exist only to
+            // cope with the distortion polynomial.
+            CameraModel::EquidistantFisheye { .. } => equidistant_to_ray(x_d, y_d),
 
             // Equidistant fisheye family: recover theta, build ray directly
             CameraModel::OpenCVFisheye {
@@ -800,11 +818,16 @@ impl CameraIntrinsics {
     /// with respect to the camera-frame ray direction, row-major
     /// `[[∂u/∂x, ∂u/∂y, ∂u/∂z], [∂v/∂x, ∂v/∂y, ∂v/∂z]]`.
     ///
-    /// Perspective models only (`supports_pixel_jacobian`). Returns `None` when
-    /// the ray is outside the model's valid domain — exactly where
-    /// [`Self::ray_to_pixel`] returns `None` — or when the model has no analytic
-    /// Jacobian (fisheye / equirectangular), so a caller can fall back to a
-    /// finite difference for those.
+    /// The perspective family and [`CameraModel::EquidistantFisheye`]
+    /// (`supports_pixel_jacobian`). Returns `None` when the ray is outside the
+    /// model's valid domain — exactly where [`Self::ray_to_pixel`] returns
+    /// `None`, with one documented exception below — or when the model has no
+    /// analytic Jacobian (polynomial fisheye / equirectangular), so a caller
+    /// can fall back to a finite difference for those.
+    ///
+    /// The exception is the equidistant model at the **antipode**
+    /// (`θ = π`, `r_xy = 0`): [`Self::ray_to_pixel`] maps it to the principal
+    /// point, but the derivative there is unbounded, so this returns `None`.
     ///
     /// The projection is scale-invariant in the ray, so this is the derivative
     /// with respect to the supplied (possibly non-unit) ray components — i.e.
@@ -814,6 +837,24 @@ impl CameraIntrinsics {
         let (cx, cy) = self.principal_point();
         // Canonical → optical frame: (rx, ry, rz) = S·ray, S = diag(1, −1, −1).
         let [rx, ry, rz] = [ray[0], -ray[1], -ray[2]];
+
+        // Equidistant fisheye: closed-form derivative of the `θ = r/f` map,
+        // valid at every θ. Dispatched BEFORE the perspective in-front guard —
+        // rays past 90° (optical `rz ≤ 0`) are the periphery this model exists
+        // to carry, not a domain error.
+        if matches!(self.model, CameraModel::EquidistantFisheye { .. }) {
+            let ((x_d, y_d), jd) = equidistant_ray_jacobian(rx, ry, rz)?;
+            // J = diag(fx, fy) · Jd · S, and S negates the ry, rz columns.
+            return Some((
+                (fx * x_d + cx, fy * y_d + cy),
+                [
+                    [fx * jd[0][0], -fx * jd[0][1], -fx * jd[0][2]],
+                    [fy * jd[1][0], -fy * jd[1][1], -fy * jd[1][2]],
+                ],
+            ));
+        }
+
+        // Perspective family: the ray must be in front of the camera.
         if rz <= 0.0 {
             return None;
         }

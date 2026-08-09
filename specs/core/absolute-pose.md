@@ -196,8 +196,10 @@ on that subset by Levenberg–Marquardt. Each LM step is taken over a local
 the Jacobian is analytic: the projection block from
 [`ray_to_pixel_with_jacobian`](projection-jacobian.md) composed with the exact
 `−[R·X]ₓ` rotation and identity translation blocks. Models without an analytic
-projection Jacobian (fisheye / equirectangular) fall back to a central
-difference of the projection only, keeping the pose block exact. Damping `λ` is
+projection Jacobian (the polynomial fisheye family, equirectangular) fall back
+to a central difference of the projection only, keeping the pose block exact;
+`EQUIDISTANT_FISHEYE` has an analytic one and takes the same path as the
+perspective family. Damping `λ` is
 adapted down on a cost improvement, up on a rejected step. The trimmed-L2
 choice is deliberate: a plain L2 fit over all correspondences is dragged by the
 leverage of gross outliers, while a robust loss seeded from all-large residuals

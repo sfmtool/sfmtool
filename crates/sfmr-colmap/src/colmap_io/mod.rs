@@ -12,9 +12,10 @@ mod write;
 
 pub use read::read_colmap_binary;
 pub use types::{
-    camera_params_to_array, colmap_model_id, ColmapDataId, ColmapFrame, ColmapIoError,
-    ColmapReconstruction, ColmapRig, ColmapRigSensor, ColmapSensor, ColmapSensorType,
-    ColmapWriteData, Keypoint2D,
+    camera_params_to_array, claim_native_camera_model, colmap_model_id, ColmapDataId, ColmapFrame,
+    ColmapIoError, ColmapReconstruction, ColmapRig, ColmapRigSensor, ColmapSensor,
+    ColmapSensorType, ColmapWriteData, Keypoint2D, EQUIDISTANT_FISHEYE,
+    EQUIDISTANT_FISHEYE_CARRIER,
 };
 pub use write::{write_colmap_binary, write_frames_bin, write_rigs_bin};
 

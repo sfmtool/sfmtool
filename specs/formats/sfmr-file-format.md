@@ -444,6 +444,7 @@ Array of camera intrinsic parameters:
 | `THIN_PRISM_FISHEYE` | `focal_length_x`, `focal_length_y`, `principal_point_x`, `principal_point_y`, `radial_distortion_k1`, `radial_distortion_k2`, `tangential_distortion_p1`, `tangential_distortion_p2`, `radial_distortion_k3`, `radial_distortion_k4`, `thin_prism_sx1`, `thin_prism_sy1` | fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, sx1, sy1 |
 | `RAD_TAN_THIN_PRISM_FISHEYE` | `focal_length_x`, `focal_length_y`, `principal_point_x`, `principal_point_y`, `radial_distortion_k0`, `radial_distortion_k1`, `radial_distortion_k2`, `radial_distortion_k3`, `radial_distortion_k4`, `radial_distortion_k5`, `tangential_distortion_p0`, `tangential_distortion_p1`, `thin_prism_s0`, `thin_prism_s1`, `thin_prism_s2`, `thin_prism_s3` | fx, fy, cx, cy, k0, k1, k2, k3, k4, k5, p0, p1, s0, s1, s2, s3 |
 | `EQUIRECTANGULAR` | `focal_length_x`, `focal_length_y`, `principal_point_x`, `principal_point_y` | — (sfmtool extension) |
+| `EQUIDISTANT_FISHEYE` | `focal_length`, `principal_point_x`, `principal_point_y` | — (sfmtool extension) |
 
 The "pycolmap" column shows the corresponding short parameter names from COLMAP/pycolmap for reference. The parameter order in the JSON `parameters` object matches the pycolmap parameter array order. Models with a single `focal_length` use the same value for both fx and fy. All fisheye models use equidistant projection.
 
@@ -451,6 +452,19 @@ The "pycolmap" column shows the corresponding short parameter names from COLMAP/
 imagery, used by the spherical-tile rig pipeline: longitude and latitude map
 linearly to pixels, focal lengths are in pixels per radian, and there are no
 distortion parameters.
+
+`EQUIDISTANT_FISHEYE` is an sfmtool extension (not a COLMAP model): the
+distortion-free equidistant map `θ = r / f`, carrying `SIMPLE_PINHOLE`'s
+parameter list — one focal length in pixels per radian and a principal point,
+no distortion coefficients. Both directions of the projection are closed form
+and exact at every `θ` up to π.
+
+COLMAP has no distortion-free equidistant model, so `SIMPLE_RADIAL_FISHEYE`
+with `k = 0` — which parameterizes the identical map — is the carrier across
+the COLMAP boundary. Export writes `SIMPLE_RADIAL_FISHEYE` with a literal
+`radial_distortion_k1` of `0`; import claims a `SIMPLE_RADIAL_FISHEYE` back as
+`EQUIDISTANT_FISHEYE` (dropping `radial_distortion_k1`) if and only if its `k`
+is exactly `0.0`, and leaves any other `k` as `SIMPLE_RADIAL_FISHEYE`.
 
 ### 4. Rigs (Optional)
 

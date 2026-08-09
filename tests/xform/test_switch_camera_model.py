@@ -115,3 +115,61 @@ def test_switch_preserves_points_and_poses(seoul_bull_sfmr_only, tmp_path):
     assert np.allclose(
         switched["quaternions_wxyz"], original["quaternions_wxyz"], rtol=0, atol=1e-12
     )
+
+
+def test_switch_from_equidistant_fisheye_source(seoul_bull_sfmr_only, tmp_path):
+    """An sfmtool-native model works as a SOURCE without being a target.
+
+    The transform reads the source's parameters generically (`to_dict`), so
+    `EQUIDISTANT_FISHEYE`'s focal and principal point carry into any COLMAP
+    target and the target's extra distortion terms initialize to zero.
+    """
+    from sfmtool._sfmtool.geometry import CameraIntrinsics
+
+    source = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    equidistant = [
+        CameraIntrinsics.from_dict(
+            {
+                "model": "EQUIDISTANT_FISHEYE",
+                "width": c.width,
+                "height": c.height,
+                "parameters": {
+                    "focal_length": 130.0,
+                    "principal_point_x": c.width / 2.0,
+                    "principal_point_y": c.height / 2.0,
+                },
+            }
+        )
+        for c in source.cameras
+    ]
+    staged = tmp_path / "equidistant.sfmr"
+    source.clone_with_changes(cameras=equidistant).save(staged)
+
+    output_path = tmp_path / "carrier.sfmr"
+    apply_transforms_to_file(
+        staged,
+        output_path,
+        [SwitchCameraModelTransform("SIMPLE_RADIAL_FISHEYE")],
+    )
+
+    result = SfmrReconstruction.load(output_path)
+    for dst in result.cameras:
+        p = dst.to_dict()["parameters"]
+        assert dst.model == "SIMPLE_RADIAL_FISHEYE"
+        assert p["focal_length"] == pytest.approx(130.0)
+        assert p["principal_point_x"] == pytest.approx(dst.width / 2.0)
+        # The carrier's k initializes to the zero the native model implies.
+        assert p["radial_distortion_k1"] == 0.0
+
+
+def test_native_models_are_not_switch_targets():
+    """`--camera-model` and the switch target vocabulary are COLMAP-only.
+
+    Both read `_CAMERA_PARAM_NAMES`, which feeds `pycolmap.CameraModelId`;
+    sfmtool's own models (`EQUIRECTANGULAR`, `EQUIDISTANT_FISHEYE`) are
+    deliberately absent, and a native model is produced by the pipeline that
+    solves it, not by asking for a model switch.
+    """
+    for native in ("EQUIRECTANGULAR", "EQUIDISTANT_FISHEYE"):
+        with pytest.raises(ValueError, match="Unknown camera model"):
+            SwitchCameraModelTransform(native)

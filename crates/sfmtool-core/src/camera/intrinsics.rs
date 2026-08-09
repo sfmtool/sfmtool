@@ -138,6 +138,24 @@ pub enum CameraModel {
         principal_point_x: f64,
         principal_point_y: f64,
     },
+    /// Distortion-free equidistant (equiangular) fisheye: `θ = r / f`.
+    ///
+    /// Carries [`CameraModel::SimplePinhole`]'s exact parameter list — one
+    /// focal length in pixels per radian and a principal point — under the
+    /// equidistant map, so a point at incidence angle `θ` off the optical axis
+    /// lands `f·θ` pixels from the principal point. There are no distortion
+    /// coefficients: both directions of the projection are closed form and
+    /// exact at every `θ` up to π, with no iteration and no wide-angle blend.
+    ///
+    /// Not a COLMAP model — an sfmtool extension, like
+    /// [`CameraModel::Equirectangular`]. The COLMAP carrier is
+    /// `SIMPLE_RADIAL_FISHEYE` with `k = 0`, which parameterizes the identical
+    /// map; `sfmr-colmap` converts in both directions.
+    EquidistantFisheye {
+        focal_length: f64,
+        principal_point_x: f64,
+        principal_point_y: f64,
+    },
 }
 
 /// Threshold below which a distortion coefficient is considered zero.
@@ -159,6 +177,7 @@ impl CameraModel {
             CameraModel::RadTanThinPrismFisheye { .. } => "RAD_TAN_THIN_PRISM_FISHEYE",
             CameraModel::FullOpenCV { .. } => "FULL_OPENCV",
             CameraModel::Equirectangular { .. } => "EQUIRECTANGULAR",
+            CameraModel::EquidistantFisheye { .. } => "EQUIDISTANT_FISHEYE",
         }
     }
 
@@ -171,7 +190,8 @@ impl CameraModel {
         match self {
             CameraModel::Pinhole { .. }
             | CameraModel::SimplePinhole { .. }
-            | CameraModel::Equirectangular { .. } => false,
+            | CameraModel::Equirectangular { .. }
+            | CameraModel::EquidistantFisheye { .. } => false,
             CameraModel::SimpleRadial {
                 radial_distortion_k1: k1,
                 ..
@@ -289,7 +309,8 @@ impl CameraModel {
     pub fn is_fisheye(&self) -> bool {
         matches!(
             self,
-            CameraModel::SimpleRadialFisheye { .. }
+            CameraModel::EquidistantFisheye { .. }
+                | CameraModel::SimpleRadialFisheye { .. }
                 | CameraModel::RadialFisheye { .. }
                 | CameraModel::OpenCVFisheye { .. }
                 | CameraModel::ThinPrismFisheye { .. }
@@ -311,10 +332,16 @@ impl CameraModel {
 
     /// Whether [`CameraIntrinsics::ray_to_pixel_with_jacobian`] can return an
     /// analytic pixel Jacobian for this model. True for the perspective family
-    /// (pinhole and polynomial-distortion models), false for fisheye and
-    /// equirectangular, whose forward map takes the ray path.
+    /// (pinhole and polynomial-distortion models) and for
+    /// [`CameraModel::EquidistantFisheye`], whose closed-form `θ = r/f` map
+    /// differentiates in closed form at every `θ`; false for the polynomial
+    /// fisheye family and equirectangular, whose forward map takes the ray path
+    /// with no analytic derivative here.
     pub fn supports_pixel_jacobian(&self) -> bool {
-        !self.needs_ray_path()
+        match self {
+            CameraModel::EquidistantFisheye { .. } => true,
+            _ => !self.needs_ray_path(),
+        }
     }
 }
 
@@ -401,6 +428,7 @@ impl CameraIntrinsics {
             CameraModel::SimplePinhole { focal_length, .. }
             | CameraModel::SimpleRadial { focal_length, .. }
             | CameraModel::Radial { focal_length, .. }
+            | CameraModel::EquidistantFisheye { focal_length, .. }
             | CameraModel::SimpleRadialFisheye { focal_length, .. }
             | CameraModel::RadialFisheye { focal_length, .. } => (*focal_length, *focal_length),
             CameraModel::OpenCV {
@@ -465,6 +493,11 @@ impl CameraIntrinsics {
                 ..
             }
             | CameraModel::OpenCVFisheye {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::EquidistantFisheye {
                 principal_point_x,
                 principal_point_y,
                 ..
@@ -645,6 +678,11 @@ impl TryFrom<&SfmrCamera> for CameraIntrinsics {
             "EQUIRECTANGULAR" => CameraModel::Equirectangular {
                 focal_length_x: get_param(p, m, "focal_length_x")?,
                 focal_length_y: get_param(p, m, "focal_length_y")?,
+                principal_point_x: get_param(p, m, "principal_point_x")?,
+                principal_point_y: get_param(p, m, "principal_point_y")?,
+            },
+            "EQUIDISTANT_FISHEYE" => CameraModel::EquidistantFisheye {
+                focal_length: get_param(p, m, "focal_length")?,
                 principal_point_x: get_param(p, m, "principal_point_x")?,
                 principal_point_y: get_param(p, m, "principal_point_y")?,
             },
@@ -895,6 +933,15 @@ impl From<&CameraIntrinsics> for SfmrCamera {
             } => {
                 parameters.insert("focal_length_x".to_string(), *focal_length_x);
                 parameters.insert("focal_length_y".to_string(), *focal_length_y);
+                parameters.insert("principal_point_x".to_string(), *principal_point_x);
+                parameters.insert("principal_point_y".to_string(), *principal_point_y);
+            }
+            CameraModel::EquidistantFisheye {
+                focal_length,
+                principal_point_x,
+                principal_point_y,
+            } => {
+                parameters.insert("focal_length".to_string(), *focal_length);
                 parameters.insert("principal_point_x".to_string(), *principal_point_x);
                 parameters.insert("principal_point_y".to_string(), *principal_point_y);
             }

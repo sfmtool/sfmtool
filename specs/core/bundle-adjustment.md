@@ -113,8 +113,9 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   fixed-focal solve (never a half-modeled focal DOF).
 - **Jacobian.** The projection block `∂(u, v)/∂p_cam` — analytic from
   `CameraIntrinsics::ray_to_pixel_with_jacobian` for the perspective
-  family, a central difference of `ray_to_pixel` for fisheye /
-  equirectangular models that have no analytic form — composed with
+  family and `EQUIDISTANT_FISHEYE`, a central difference of
+  `ray_to_pixel` for the polynomial fisheye models and equirectangular,
+  which have no analytic form — composed with
   `−[R·X]ₓ` (rotation), `I₃` (translation), and `R` (point) blocks,
   exactly as in `pose_refine.rs` (including the fallback). An observation
   whose point is behind the camera / outside the model domain contributes

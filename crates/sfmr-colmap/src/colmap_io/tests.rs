@@ -656,3 +656,143 @@ fn test_implicit_rigs_frames_round_trip() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// EQUIDISTANT_FISHEYE ⇄ SIMPLE_RADIAL_FISHEYE interop
+//
+// COLMAP has no distortion-free equidistant model, so `k` is the carrier:
+// export writes `SIMPLE_RADIAL_FISHEYE` with `k = 0`; import claims a
+// `SIMPLE_RADIAL_FISHEYE` back iff its `k` is EXACTLY `0.0`.
+// ---------------------------------------------------------------------------
+
+fn equidistant_camera() -> SfmrCamera {
+    SfmrCamera {
+        model: "EQUIDISTANT_FISHEYE".into(),
+        width: 480,
+        height: 480,
+        parameters: [
+            ("focal_length".into(), 130.0),
+            ("principal_point_x".into(), 240.0),
+            ("principal_point_y".into(), 240.0),
+        ]
+        .into_iter()
+        .collect(),
+    }
+}
+
+fn simple_radial_fisheye_camera(k: f64) -> SfmrCamera {
+    SfmrCamera {
+        model: "SIMPLE_RADIAL_FISHEYE".into(),
+        width: 480,
+        height: 480,
+        parameters: [
+            ("focal_length".into(), 130.0),
+            ("principal_point_x".into(), 240.0),
+            ("principal_point_y".into(), 240.0),
+            ("radial_distortion_k1".into(), k),
+        ]
+        .into_iter()
+        .collect(),
+    }
+}
+
+/// Write cameras to a scratch COLMAP directory and read them back.
+fn colmap_camera_round_trip(cameras: &[SfmrCamera], tag: &str) -> Vec<SfmrCamera> {
+    let n = cameras.len();
+    let image_names: Vec<String> = (0..n).map(|i| format!("img_{i:03}.jpg")).collect();
+    let camera_indexes: Vec<u32> = (0..n as u32).collect();
+    let quaternions_wxyz: Vec<[f64; 4]> = vec![[1.0, 0.0, 0.0, 0.0]; n];
+    let translations_xyz: Vec<[f64; 3]> = vec![[0.0, 0.0, 0.0]; n];
+    let keypoints_per_image: Vec<Vec<[f64; 2]>> = vec![vec![]; n];
+    let write_data = ColmapWriteData {
+        cameras,
+        image_names: &image_names,
+        camera_indexes: &camera_indexes,
+        quaternions_wxyz: &quaternions_wxyz,
+        translations_xyz: &translations_xyz,
+        positions_xyz: &[],
+        colors_rgb: &[],
+        reprojection_errors: &[],
+        track_image_indexes: &[],
+        track_feature_indexes: &[],
+        track_point3d_indexes: &[],
+        keypoints_per_image: &keypoints_per_image,
+        rigs: None,
+        frames: None,
+    };
+    let dir = std::env::temp_dir().join(format!("colmap_io_{tag}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write_colmap_binary(&dir, &write_data).unwrap();
+    let recon = read_colmap_binary(&dir).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    recon.cameras
+}
+
+#[test]
+fn equidistant_fisheye_round_trips_through_colmap_as_itself() {
+    let orig = equidistant_camera();
+    let loaded = colmap_camera_round_trip(std::slice::from_ref(&orig), "equidistant_rt");
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].model, "EQUIDISTANT_FISHEYE");
+    assert_eq!(loaded[0].width, 480);
+    assert_eq!(loaded[0].height, 480);
+    // The `k` carrier is not part of the native parameter list.
+    assert!(!loaded[0].parameters.contains_key("radial_distortion_k1"));
+    assert_eq!(loaded[0].parameters, orig.parameters);
+}
+
+#[test]
+fn equidistant_fisheye_exports_as_simple_radial_fisheye_with_zero_k() {
+    // What actually lands on disk: the carrier's model id and its four
+    // parameters, the last of which is a literal 0.0.
+    let cam = equidistant_camera();
+    assert_eq!(
+        colmap_model_id(&cam.model).unwrap(),
+        colmap_model_id("SIMPLE_RADIAL_FISHEYE").unwrap()
+    );
+    assert_eq!(
+        camera_params_to_array(&cam).unwrap(),
+        vec![130.0, 240.0, 240.0, 0.0]
+    );
+}
+
+#[test]
+fn simple_radial_fisheye_is_claimed_only_at_exactly_zero_k() {
+    // k = 0 → claimed as the native model, `k` dropped.
+    let claimed = claim_native_camera_model(simple_radial_fisheye_camera(0.0));
+    assert_eq!(claimed.model, "EQUIDISTANT_FISHEYE");
+    assert!(!claimed.parameters.contains_key("radial_distortion_k1"));
+
+    // Any nonzero k — however small — stays SIMPLE_RADIAL_FISHEYE, unchanged.
+    for k in [1e-300, -1e-300, 1e-12, 0.01, -0.4] {
+        let cam = simple_radial_fisheye_camera(k);
+        let out = claim_native_camera_model(cam.clone());
+        assert_eq!(
+            out.model, "SIMPLE_RADIAL_FISHEYE",
+            "k = {k} must not be claimed"
+        );
+        assert_eq!(out.parameters, cam.parameters);
+    }
+
+    // Every other model passes through untouched.
+    for model in ["SIMPLE_PINHOLE", "OPENCV_FISHEYE", "RADIAL_FISHEYE"] {
+        let mut cam = simple_radial_fisheye_camera(0.0);
+        cam.model = model.into();
+        assert_eq!(claim_native_camera_model(cam).model, model);
+    }
+}
+
+#[test]
+fn simple_radial_fisheye_import_claims_zero_k_and_keeps_the_rest() {
+    // The same rule through a real write/read cycle.
+    let cameras = vec![
+        simple_radial_fisheye_camera(0.0),
+        simple_radial_fisheye_camera(-0.017),
+    ];
+    let loaded = colmap_camera_round_trip(&cameras, "equidistant_claim");
+    assert_eq!(loaded[0].model, "EQUIDISTANT_FISHEYE");
+    assert_eq!(loaded[0].parameters.len(), 3);
+    assert_eq!(loaded[1].model, "SIMPLE_RADIAL_FISHEYE");
+    assert_eq!(loaded[1].parameters["radial_distortion_k1"], -0.017);
+}
