@@ -26,6 +26,38 @@ resolver = "2"
 [workspace.package]
 rust-version = "1.95"
 
+# Test binaries are optimized. This crate's tests are not I/O harnesses — they
+# run the real numerics (RANSAC, bundle adjustment, rotation averaging, SIFT
+# scale space, patch kernels), and unoptimized those are pathologically slow:
+# `cargo test -p sfmtool-core --lib` measured 101.9s at opt-level 0 versus 2.2s
+# optimized, a 46x difference on identical passing tests. On the CI runners the
+# same suite took 414s, in three separate jobs (Linux coverage, Windows, macOS).
+# The 14s of extra compile per sfmtool-core rebuild is not close to a fair fight.
+#
+# This is the same reasoning that already puts `--release` on `maturin develop`
+# for the PyO3 extension (see .github/workflows/ci.yml) — the Python suite calls
+# into optimized Rust and always has. It was only ever the `cargo test` path that
+# ran the identical kernels unoptimized.
+#
+# Deliberately *not* `cargo test --release`, which would be the same speed but
+# would also silence `debug-assertions` and `overflow-checks`. There are ~60
+# `debug_assert!`s in this workspace, concentrated in exactly these hot paths
+# (features::sift::scale_space, patch::keypoint_localize::kernels, camera::remap,
+# geometry::se3_transform, ...), and the test suite is the only thing that ever
+# runs them. Optimizing the profile instead keeps both on: `test` inherits `dev`,
+# where both default to true. It also means every entry point gets this for free
+# — `cargo test`, `cargo llvm-cov`, `pixi run ui-test`, a bare local `cargo test`
+# — with no flag to remember and no way to accidentally opt out.
+#
+# `[profile.dev]` itself is left alone so plain `cargo build` / `cargo check`
+# iteration stays fast; only dependencies are lifted, and those are compiled once
+# and then cached (in CI, by the `cargo home` + target caches keyed on Cargo.lock).
+[profile.test]
+opt-level = 3
+
+[profile.dev.package."*"]
+opt-level = 3
+
 # `cargo doc` is a gate, not a suggestion: every rustdoc lint that is warn-by-
 # default is denied here, and every crate opts in with `[lints] workspace = true`.
 # Putting it in the manifest rather than a `RUSTDOCFLAGS="-D warnings"` wrapper
