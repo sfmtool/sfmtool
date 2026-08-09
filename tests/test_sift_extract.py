@@ -214,6 +214,40 @@ def test_extract_workers_env_override(monkeypatch):
         assert _extract_workers() == default  # falls back, doesn't crash
 
 
+def test_extract_workers_scales_with_cores_bounded_by_memory(monkeypatch):
+    """Without an override the default scales with cores but stays within RAM.
+
+    A small image on a many-core host should fill the cores (that is the whole
+    point of cross-image concurrency); a large image against a tight memory
+    budget should be held below the core count so the in-flight pyramids fit.
+    An unknown image size keeps the historical conservative ``min(cores, 4)``.
+    """
+    from sfmtool.sift import extract_sfmtool
+    from sfmtool.sift.extract_sfmtool import _extract_workers
+
+    monkeypatch.delenv("SFMTOOL_SIFT_EXTRACT_WORKERS", raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: 64)
+
+    # Ample memory + a tiny image -> concurrency fills all cores.
+    monkeypatch.setattr(
+        extract_sfmtool, "_extract_mem_budget_bytes", lambda: 64 * 1024**3
+    )
+    assert _extract_workers(270 * 480) == 64
+
+    # A large image against a tight budget -> memory, not cores, is the cap.
+    monkeypatch.setattr(
+        extract_sfmtool, "_extract_mem_budget_bytes", lambda: 8 * 1024**3
+    )
+    large = 4032 * 3024
+    footprint = large * extract_sfmtool._EXTRACT_BYTES_PER_SOURCE_PIXEL
+    expected = max(1, (8 * 1024**3) // footprint)
+    assert 1 <= expected < 64
+    assert _extract_workers(large) == expected
+
+    # Unknown source size -> conservative default, never blind core-scaling.
+    assert _extract_workers(None) == 4
+
+
 def test_stream_preserves_input_order_under_out_of_order_completion(monkeypatch):
     """The FIFO yields in input order even when later images finish first.
 

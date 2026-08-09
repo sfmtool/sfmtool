@@ -431,15 +431,26 @@ low-risk overlaps:
   cores the per-image rayon leaves idle on small images get filled. Because both
   `cv2.imread` and the Rust extract release the GIL and rayon's *single global
   pool* caps total CPU threads at the core count, more in-flight images never
-  oversubscribe — they just keep that pool fed. *K* defaults to
-  `min(os.cpu_count(), 4)` (override with `SFMTOOL_SIFT_EXTRACT_WORKERS`; `1`
-  restores one-at-a-time). Measured win (point-in-time, 4-core box, release
-  build, seoul_bull 270×480): **~20–25% batch throughput** (17 imgs 38→30 ms/img,
-  100 imgs 35→29 ms/img), no single-image regression; the win grows on
-  higher-core hosts where small-image per-image rayon is least efficient. (These
-  are illustrative snapshots, not invariants — rerun `bench-sift` to refresh.)
-  See `_stream_sift_with_sfmtool` and `_extract_workers` in
-  `sift/extract_sfmtool.py`.
+  oversubscribe — they just keep that pool fed. *K* must therefore scale *with*
+  the core count to fill a many-core host, so it defaults to `os.cpu_count()`,
+  bounded only by memory: each in-flight image holds a decoded frame plus its
+  f32 gaussian pyramid (`_EXTRACT_BYTES_PER_SOURCE_PIXEL` ≈ 192 B per source
+  pixel), so *K* is capped to keep the in-flight set within
+  `_extract_mem_budget_bytes()` (~half of physical RAM). The per-image footprint
+  is estimated from the first image's dimensions — decoded once on the calling
+  thread to size the pool, then reused as image 0's input — assuming a batch of
+  like-sized images (one workspace). When the size is unknown (e.g. a test fake)
+  *K* falls back to the historical conservative `min(os.cpu_count(), 4)`.
+  `SFMTOOL_SIFT_EXTRACT_WORKERS` overrides everything (`1` restores
+  one-at-a-time). Measured win (point-in-time, 4-core box, release build,
+  seoul_bull 270×480): **~1.27× batch throughput** (100 imgs 37.6→29.6 ms/img at
+  1→4+ workers), no single-image regression; because a 270×480 image already
+  reaches ~4.5 effective cores, that box is near-saturated at *K*=4 and the win
+  there is modest — the memory-bounded core-scaled default matters on many-core
+  hosts, where the old constant `4` left most cores idle. (Illustrative
+  snapshots, not invariants — rerun `bench-sift` to refresh.) See
+  `_stream_sift_with_sfmtool`, `_extract_workers` and `_extract_mem_budget_bytes`
+  in `sift/extract_sfmtool.py`.
 - **Stream `.sift` writes per image** instead of buffering a whole chunk
   (`chunk_size = 500` images) in memory — `extract_sift_with_sfmtool` is a
   generator that yields one result at a time, and `image_files_to_sift_files`

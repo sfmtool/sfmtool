@@ -185,7 +185,30 @@ def extract_sift_with_sfmtool(
     )
 
 
-def _extract_workers() -> int:
+# Rough peak heap one in-flight image adds while it is decoded + extracted: the
+# decoded RGB frame plus the f32 gaussian scale-space pyramid the Rust extract
+# holds through description. With image doubling the octave-0 base is 4x the
+# source pixels and the pyramid keeps s+3 gaussian levels per octave; summed over
+# the octave chain that is ~130 bytes per *source* pixel, and the decoded RGB
+# adds a few more. Rounded up for safety -- overestimating only forgoes a few
+# workers, while underestimating risks OOM on a many-core host with large images.
+_EXTRACT_BYTES_PER_SOURCE_PIXEL = 192
+
+
+def _extract_mem_budget_bytes() -> int:
+    """Heap budget shared across concurrently in-flight images (~half of RAM).
+
+    Falls back to a conservative fixed budget when the platform cannot report
+    physical memory (e.g. ``os.sysconf`` is absent on Windows).
+    """
+    try:
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, ValueError, OSError):
+        total = 4 * 1024**3  # assume ~4 GiB when the platform won't report it
+    return max(1, total // 2)
+
+
+def _extract_workers(image_pixels: int | None = None) -> int:
     """Number of images to decode+extract concurrently.
 
     The Rust extract releases the GIL and its internal rayon work funnels
@@ -193,11 +216,18 @@ def _extract_workers() -> int:
     images at once never oversubscribes the CPU -- it just keeps that pool fed,
     overlapping each image's serial floor (octave-0 build, setup) with another
     image's parallel work. On a tiny image the per-image rayon cannot saturate a
-    high core count on its own, so this overlap is where the batch speedup comes
-    from. Each in-flight image costs one decoded frame + scale-space pyramid of
-    memory, so the default is capped to bound that on large images; override
-    with ``SFMTOOL_SIFT_EXTRACT_WORKERS`` (e.g. raise it for small-image batches on a
-    many-core host, or set 1 to disable).
+    high core count on its own, so this cross-image overlap is where the batch
+    speedup comes from -- and to fill a many-core host it must scale *with* the
+    core count, not sit at a small constant.
+
+    So the default is ``os.cpu_count()`` images in flight, bounded only by
+    memory: each carries a decoded frame + scale-space pyramid
+    (``_EXTRACT_BYTES_PER_SOURCE_PIXEL`` per source pixel), so the count is capped
+    to keep the in-flight set within ``_extract_mem_budget_bytes()``.
+    ``image_pixels`` (source width x height) drives that estimate; when it is
+    unknown the default stays at the historical conservative ``min(cores, 4)``
+    rather than guess memory blind. ``SFMTOOL_SIFT_EXTRACT_WORKERS`` overrides
+    everything (set 1 to disable concurrency).
     """
     override = os.environ.get("SFMTOOL_SIFT_EXTRACT_WORKERS")
     if override:
@@ -209,7 +239,12 @@ def _extract_workers() -> int:
                 "using the default concurrency.",
                 stacklevel=2,
             )
-    return max(1, min(os.cpu_count() or 1, 4))
+    cores = os.cpu_count() or 1
+    if not image_pixels:
+        return max(1, min(cores, 4))
+    footprint = image_pixels * _EXTRACT_BYTES_PER_SOURCE_PIXEL
+    by_memory = max(1, _extract_mem_budget_bytes() // footprint)
+    return max(1, min(cores, by_memory))
 
 
 def _stream_sift_with_sfmtool(
@@ -223,23 +258,42 @@ def _stream_sift_with_sfmtool(
     caps memory to the worker count, and the ``ThreadPoolExecutor`` context
     manager joins the workers on exit -- including when the consumer stops early
     or a decode/extract raises (re-raised in input order by the FIFO).
+
+    Image 0 is decoded on the calling thread so its dimensions can size the pool
+    (peak memory scales with in-flight image count x pyramid size); that decode
+    is reused as image 0's input, not repeated.
     """
-    workers = _extract_workers()
+    paths = iter(image_filename_list)
+    first_path = next(paths, None)
+    if first_path is None:
+        return
+
+    # Decode image 0 up front to learn the source dimensions, then size the pool
+    # from them (a batch is like-sized -- one workspace's images). A decode error
+    # on image 0 surfaces here, still at the first ``next()``, i.e. in input order.
+    first_decoded = _decode_image(first_path)
+    try:
+        height, width = first_decoded[1].shape[:2]
+        image_pixels = height * width
+    except (AttributeError, TypeError, ValueError):
+        image_pixels = None  # non-array frame (e.g. a test fake): size blind
+    workers = _extract_workers(image_pixels)
+
+    def extract_decoded(decoded):
+        return _extract_one(*decoded, params, feature_options, rust_extract_sift)
 
     def decode_and_extract(image_path):
-        image_path, rgb, thumbnail = _decode_image(image_path)
-        return _extract_one(
-            image_path, rgb, thumbnail, params, feature_options, rust_extract_sift
-        )
+        return extract_decoded(_decode_image(image_path))
 
     with ThreadPoolExecutor(
         max_workers=workers, thread_name_prefix="sift-extract"
     ) as executor:
         pending = collections.deque()
-        paths = iter(image_filename_list)
 
-        # Prime the pipeline with up to `workers` images in flight.
-        for _ in range(workers):
+        # Prime the pipeline with up to `workers` images in flight: image 0 reuses
+        # the decode above (extract only), the rest decode+extract in workers.
+        pending.append(executor.submit(extract_decoded, first_decoded))
+        for _ in range(workers - 1):
             image_path = next(paths, None)
             if image_path is None:
                 break
