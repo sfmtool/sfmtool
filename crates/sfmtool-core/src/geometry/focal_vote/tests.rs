@@ -64,6 +64,29 @@ impl Cam {
     }
 }
 
+impl Cam {
+    /// Project a world point through the equidistant fisheye map `θ = r/f`;
+    /// `None` outside the imaged circle or the image rectangle.
+    fn project_fisheye(&self, x: Vector3<f64>, f: f64) -> Option<[f64; 2]> {
+        let xc = self.r * x + self.t;
+        let rho = xc.x.hypot(xc.y);
+        if rho < 1e-12 {
+            return None;
+        }
+        let th = rho.atan2(xc.z);
+        if !(0.0..0.98 * std::f64::consts::PI).contains(&th) {
+            return None;
+        }
+        let r = f * th;
+        let u = CX + r * xc.x / rho;
+        let v = CY + r * xc.y / rho;
+        if !(0.0..W as f64).contains(&u) || !(0.0..H as f64).contains(&v) {
+            return None;
+        }
+        Some([u, v])
+    }
+}
+
 /// Accumulating builder for flat observation arrays (one span-2 cluster per
 /// emitted correspondence).
 #[derive(Default)]
@@ -87,6 +110,20 @@ impl Obs {
     }
     fn run(&self, seed: u64) -> FocalVoteResult {
         focal_vote(&self.cluster, &self.image, &self.pos, W, H, seed)
+    }
+    fn run_columns(&self, seed: u64, columns: &[CameraModel]) -> FocalVoteResult {
+        focal_vote_with_options(
+            &self.cluster,
+            &self.image,
+            &self.pos,
+            W,
+            H,
+            &FocalVoteOptions {
+                seed,
+                columns: columns.to_vec(),
+                ..Default::default()
+            },
+        )
     }
 }
 
@@ -629,6 +666,325 @@ fn determinism_same_seed() {
         a.family_disagreement.map(f64::to_bits),
         b.family_disagreement.map(f64::to_bits)
     );
+}
+
+// ── Camera-model columns ─────────────────────────────────────────────────────
+
+/// Planted equidistant focal on the 1000 px test sensor: `θ = r/f` puts the
+/// image corner at 89°, a ~179° field of view.
+const F_FISH: f64 = 320.0;
+
+/// Emit `m` span-2 clusters between cameras `ia`,`ib` of a pure-rotation rig,
+/// imaged through the equidistant fisheye map. Directions are drawn over a wide
+/// cone so the correspondences reach the periphery, where the two camera models
+/// disagree.
+fn emit_fisheye_rotation_pair(
+    obs: &mut Obs,
+    cams: &[Cam],
+    ia: usize,
+    ib: usize,
+    m: usize,
+    rng: &mut Lcg,
+) {
+    let mut done = 0;
+    let mut guard = 0;
+    while done < m && guard < m * 2000 {
+        guard += 1;
+        let th = rng.uniform(0.25, 1.45);
+        let ph = rng.uniform(0.0, 2.0 * std::f64::consts::PI);
+        let dir = Vector3::new(th.sin() * ph.cos(), th.sin() * ph.sin(), th.cos()) * 30.0;
+        if let (Some(mut pa), Some(mut pb)) = (
+            cams[ia].project_fisheye(dir, F_FISH),
+            cams[ib].project_fisheye(dir, F_FISH),
+        ) {
+            pa[0] += 0.2 * rng.gaussian();
+            pa[1] += 0.2 * rng.gaussian();
+            pb[0] += 0.2 * rng.gaussian();
+            pb[1] += 0.2 * rng.gaussian();
+            obs.push_pair(ia as u32, pa, ib as u32, pb);
+            done += 1;
+        }
+    }
+}
+
+/// [`emit_fisheye_rotation_pair`] over finite structure instead: a baseline
+/// pair with genuine parallax, the epipolar cell's own ground.
+fn emit_fisheye_parallax_pair(
+    obs: &mut Obs,
+    cams: &[Cam],
+    ia: usize,
+    ib: usize,
+    m: usize,
+    rng: &mut Lcg,
+) {
+    let mut done = 0;
+    let mut guard = 0;
+    while done < m && guard < m * 2000 {
+        guard += 1;
+        let th = rng.uniform(0.25, 1.45);
+        let ph = rng.uniform(0.0, 2.0 * std::f64::consts::PI);
+        let d = rng.uniform(5.0, 12.0);
+        let x = Vector3::new(th.sin() * ph.cos(), th.sin() * ph.sin(), th.cos()) * d;
+        if let (Some(mut pa), Some(mut pb)) = (
+            cams[ia].project_fisheye(x, F_FISH),
+            cams[ib].project_fisheye(x, F_FISH),
+        ) {
+            pa[0] += 0.2 * rng.gaussian();
+            pa[1] += 0.2 * rng.gaussian();
+            pb[0] += 0.2 * rng.gaussian();
+            pb[1] += 0.2 * rng.gaussian();
+            obs.push_pair(ia as u32, pa, ib as u32, pb);
+            done += 1;
+        }
+    }
+}
+
+/// A fisheye capture imaged at [`F_FISH`], in two sub-captures so that each
+/// cell has its own ground, exactly as [`two_subcapture_scene`] does for the
+/// pinhole kernel: images `0..8` are a pure-rotation rig panning across
+/// ±1.4 rad (far field), images `8..16` a baseline track over finite structure.
+fn fisheye_scene(seed: u64) -> Obs {
+    let mut rng = Lcg(seed);
+    let (rot_n, bl_n) = (8usize, 8usize);
+    let mut cams = rotation_cameras(rot_n, 1.4, &mut rng);
+    cams.extend(baseline_cameras(bl_n, 1.0, &mut rng));
+    let mut obs = Obs::default();
+    for i in 0..rot_n - 1 {
+        emit_fisheye_rotation_pair(&mut obs, &cams, i, i + 1, 60, &mut rng);
+    }
+    for i in 0..rot_n - 2 {
+        emit_fisheye_rotation_pair(&mut obs, &cams, i, i + 2, 60, &mut rng);
+    }
+    for i in 0..bl_n - 1 {
+        emit_fisheye_parallax_pair(&mut obs, &cams, rot_n + i, rot_n + i + 1, 60, &mut rng);
+    }
+    for i in 0..bl_n - 2 {
+        emit_fisheye_parallax_pair(&mut obs, &cams, rot_n + i, rot_n + i + 2, 60, &mut rng);
+    }
+    obs
+}
+
+#[test]
+fn default_column_set_is_pinhole_only_and_bit_identical() {
+    // The multi-column code path is present, but the default column set is
+    // pinhole-only and reproduces the closed-form kernel bit for bit — no scan
+    // runs and no column diagnostics are produced.
+    let obs = two_subcapture_scene(5, 6, F_TRUE, 1300.0, 1234);
+    let legacy = obs.run(7);
+    let explicit = obs.run_columns(7, &[CameraModel::Pinhole]);
+    assert_eq!(
+        legacy.focal_px.map(f64::to_bits),
+        explicit.focal_px.map(f64::to_bits)
+    );
+    assert_eq!(legacy.family, explicit.family);
+    assert_eq!(
+        legacy.epipolar_focal_px.map(f64::to_bits),
+        explicit.epipolar_focal_px.map(f64::to_bits)
+    );
+    assert_eq!(
+        legacy.rotation_focal_px.map(f64::to_bits),
+        explicit.rotation_focal_px.map(f64::to_bits)
+    );
+    assert_eq!(
+        (legacy.n_epipolar, legacy.n_rotation, legacy.n_pool),
+        (explicit.n_epipolar, explicit.n_rotation, explicit.n_pool)
+    );
+    assert_eq!(legacy.pool_spread.to_bits(), explicit.pool_spread.to_bits());
+    assert_eq!(
+        legacy.parallax_poverty.to_bits(),
+        explicit.parallax_poverty.to_bits()
+    );
+    assert_eq!(
+        legacy.family_disagreement.map(f64::to_bits),
+        explicit.family_disagreement.map(f64::to_bits)
+    );
+    assert_eq!(legacy.epipolar_votes.len(), explicit.epipolar_votes.len());
+    assert_eq!(legacy.rotation_votes.len(), explicit.rotation_votes.len());
+    // A single requested column has nothing to arbitrate: the verdict is that
+    // column, and there is no scan to report.
+    assert_eq!(legacy.camera_model, Some(CameraModel::Pinhole));
+    assert!(legacy.columns.is_empty());
+
+    // ...and when BOTH columns run and pinhole wins, the top-level focal is
+    // still exactly the closed-form answer — column focals are never blended.
+    let both = obs.run_columns(7, &[CameraModel::Pinhole, CameraModel::EquidistantFisheye]);
+    assert_eq!(both.camera_model, Some(CameraModel::Pinhole));
+    assert_eq!(
+        both.focal_px.map(f64::to_bits),
+        legacy.focal_px.map(f64::to_bits)
+    );
+    assert_eq!(both.family, legacy.family);
+    assert_eq!(both.n_pool, legacy.n_pool);
+    assert_eq!(both.columns.len(), 2);
+}
+
+#[test]
+fn pinhole_capture_is_arbitrated_pinhole() {
+    let res = two_subcapture_scene(6, 8, F_TRUE, F_TRUE, 99)
+        .run_columns(0, &[CameraModel::Pinhole, CameraModel::EquidistantFisheye]);
+    assert_eq!(
+        res.camera_model,
+        Some(CameraModel::Pinhole),
+        "{:?}",
+        res.columns
+    );
+    let pin = &res.columns[0];
+    let fish = &res.columns[1];
+    assert_eq!(pin.model, CameraModel::Pinhole);
+    assert_eq!(fish.model, CameraModel::EquidistantFisheye);
+    assert!(
+        pin.n_informative > fish.n_informative,
+        "pinhole {} vs equidistant {}",
+        pin.n_informative,
+        fish.n_informative
+    );
+    // The reported focal is the winning column's closed-form consensus.
+    let f = res.focal_px.expect("consensus focal");
+    assert!((f - F_TRUE).abs() / F_TRUE < 0.02, "focal {f}");
+    // The losing column's own median survives as a diagnostic, and it is NOT
+    // the reported focal — the two parameterize different maps.
+    assert_ne!(
+        fish.focal_px.map(f64::to_bits),
+        res.focal_px.map(f64::to_bits)
+    );
+}
+
+#[test]
+fn fisheye_capture_is_arbitrated_equidistant() {
+    let res = fisheye_scene(2718)
+        .run_columns(0, &[CameraModel::Pinhole, CameraModel::EquidistantFisheye]);
+    assert_eq!(
+        res.camera_model,
+        Some(CameraModel::EquidistantFisheye),
+        "{:?}",
+        res.columns
+    );
+    let pin = &res.columns[0];
+    let fish = &res.columns[1];
+    // The pinhole column's epipolar cell still fits *something* to every pair,
+    // so the margin is structurally thin on a synthetic rig; the rotation cell
+    // separates cleanly, which is where the model evidence lives.
+    assert!(
+        fish.n_informative > pin.n_informative,
+        "equidistant {} (epi {}, rot {}) vs pinhole {} (epi {}, rot {})",
+        fish.n_informative,
+        fish.n_informative_epipolar,
+        fish.n_informative_rotation,
+        pin.n_informative,
+        pin.n_informative_epipolar,
+        pin.n_informative_rotation
+    );
+    assert!(
+        fish.n_informative_rotation > pin.n_informative_rotation,
+        "the rotation cell is where the models separate: equidistant {} vs \
+         pinhole {}",
+        fish.n_informative_rotation,
+        pin.n_informative_rotation
+    );
+    // The top level now reports the EQUIDISTANT column's consensus, which is
+    // the planted equidistant focal — not the pinhole column's answer.
+    let f = res.focal_px.expect("consensus focal");
+    assert!(
+        (f - F_FISH).abs() / F_FISH < 0.05,
+        "recovered {f} vs planted {F_FISH}"
+    );
+    assert_eq!(
+        res.focal_px.map(f64::to_bits),
+        fish.focal_px.map(f64::to_bits)
+    );
+    assert_eq!(
+        (res.n_epipolar, res.n_rotation),
+        (fish.n_epipolar, fish.n_rotation)
+    );
+    // The losing column's diagnostics survive: it was offered the same
+    // candidate pairs, and its certificate counts are still there to read —
+    // including the fact that its rotation cell certifies nothing at all on
+    // fisheye input, which is where its mass goes missing.
+    assert_eq!(pin.n_scanned_epipolar, fish.n_scanned_epipolar);
+    assert_eq!(pin.n_certified_rotation, 0, "{:?}", pin.scan_votes);
+    assert!(pin.n_certified > 0);
+}
+
+/// A fisheye capture with NO parallax anywhere: 8 views of a pure-rotation rig
+/// panning across ±1.3 rad, imaged at [`F_FISH`]. Every epipolar candidate pair
+/// is parallax-free, so the epipolar cell has nothing to observe and must
+/// abstain — the scene the rotation-domination gate exists for. The pan is wide
+/// enough that neighbours clear the rotation family's displacement floor, so
+/// the rotation cell has real candidates to carry the verdict with.
+fn pure_rotation_fisheye_scene(seed: u64) -> Obs {
+    let mut rng = Lcg(seed);
+    let n = 8;
+    let cams = rotation_cameras(n, 1.3, &mut rng);
+    let mut obs = Obs::default();
+    for i in 0..n - 1 {
+        emit_fisheye_rotation_pair(&mut obs, &cams, i, i + 1, 60, &mut rng);
+    }
+    for i in 0..n - 2 {
+        emit_fisheye_rotation_pair(&mut obs, &cams, i, i + 2, 60, &mut rng);
+    }
+    obs
+}
+
+#[test]
+fn parallax_free_fisheye_capture_abstains_in_the_epipolar_cell() {
+    // Without the rotation-domination gate the fisheye epipolar cell fits
+    // *something* to every parallax-free pair — the essentialness minima of a
+    // degenerate `E = [t]×R` are broad — and those junk votes dragged this
+    // capture's pooled median to 624 px against a planted 320. The gate is the
+    // pinhole family's homography domination in its fisheye form: the rotation
+    // cell carries the verdict alone.
+    let res = pure_rotation_fisheye_scene(2718)
+        .run_columns(0, &[CameraModel::Pinhole, CameraModel::EquidistantFisheye]);
+    assert_eq!(
+        res.camera_model,
+        Some(CameraModel::EquidistantFisheye),
+        "{:?}",
+        res.columns
+    );
+    let fish = &res.columns[1];
+    // Every epipolar candidate is gated out, so the pool is rotation votes.
+    assert_eq!(fish.n_certified_epipolar, 0, "{:?}", fish.scan_votes);
+    assert_eq!(fish.n_rotation_dominated, fish.n_scanned_epipolar);
+    assert!(fish.n_rotation_dominated > 0);
+    assert_eq!(res.n_epipolar, 0);
+    assert!(res.n_rotation >= 2);
+    assert_eq!(res.family, Some(VoteFamily::Rotation));
+    // ...and the consensus is the planted focal, not the 624 px blend.
+    let f = res.focal_px.expect("consensus focal");
+    assert!(
+        (f - F_FISH).abs() / F_FISH < 0.05,
+        "recovered {f} vs planted {F_FISH}"
+    );
+    // The capture reads as parallax-poor in the column's own diagnostic.
+    assert!(
+        fish.parallax_poverty >= 0.8,
+        "parallax poverty {}",
+        fish.parallax_poverty
+    );
+}
+
+#[test]
+fn column_scans_are_deterministic() {
+    let obs = fisheye_scene(2718);
+    let cols = [CameraModel::Pinhole, CameraModel::EquidistantFisheye];
+    let a = obs.run_columns(42, &cols);
+    let b = obs.run_columns(42, &cols);
+    assert_eq!(a.camera_model, b.camera_model);
+    assert_eq!(a.focal_px.map(f64::to_bits), b.focal_px.map(f64::to_bits));
+    assert_eq!(a.columns.len(), b.columns.len());
+    for (x, y) in a.columns.iter().zip(b.columns.iter()) {
+        assert_eq!(x.model, y.model);
+        assert_eq!(x.n_certified, y.n_certified);
+        assert_eq!(x.n_informative, y.n_informative);
+        assert_eq!(x.focal_px.map(f64::to_bits), y.focal_px.map(f64::to_bits));
+        assert_eq!(x.scan_votes.len(), y.scan_votes.len());
+        for (u, v) in x.scan_votes.iter().zip(y.scan_votes.iter()) {
+            assert_eq!(u.focal_px.to_bits(), v.focal_px.to_bits());
+            assert_eq!(u.cost.to_bits(), v.cost.to_bits());
+            assert_eq!(u.certified, v.certified);
+            assert_eq!(u.model_informative, v.model_informative);
+        }
+    }
 }
 
 #[test]

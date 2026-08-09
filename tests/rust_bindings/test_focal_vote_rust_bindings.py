@@ -250,6 +250,8 @@ def test_focal_vote_dict_layout():
         "n_band_rejected",
         "n_degenerate",
         "n_inconsistent_pairs",
+        "camera_model",
+        "columns",
     }
     assert isinstance(res["n_epipolar"], int)
     assert isinstance(res["n_rotation"], int)
@@ -286,6 +288,9 @@ def test_focal_vote_dict_layout():
             "n_inliers",
             "focal_px",
         }
+    # The default column set is pinhole-only: nothing to arbitrate, no scans.
+    assert res["camera_model"] == "Pinhole"
+    assert res["columns"] == []
 
 
 def test_focal_vote_shape_validation():
@@ -382,6 +387,197 @@ def test_focal_vote_noncontiguous_input():
     b = focal_vote(cl, im, np.ascontiguousarray(pos), W, H, seed=0)
     assert a["focal_px"] == b["focal_px"]
     assert a["family"] == b["family"]
+
+
+# ── Camera-model columns ────────────────────────────────────────────────────
+
+F_FISH = 320.0
+
+
+def _project_fisheye(r, t, x, f=F_FISH):
+    """Equidistant fisheye projection ``theta = r / f``, image centre at CX/CY."""
+    xc = r @ x + t
+    rho = np.hypot(xc[0], xc[1])
+    if rho < 1e-12:
+        return None
+    th = np.arctan2(rho, xc[2])
+    if not 0.0 <= th < 0.98 * np.pi:
+        return None
+    rr = f * th
+    u, v = CX + rr * xc[0] / rho, CY + rr * xc[1] / rho
+    if not (0 <= u < W and 0 <= v < H):
+        return None
+    return np.array([u, v])
+
+
+def _emit_fisheye_pair(obs, cams, ia, ib, m, rng, depth=None):
+    done, guard = 0, 0
+    while done < m and guard < m * 2000:
+        guard += 1
+        th, ph = rng.uniform(0.25, 1.45), rng.uniform(0, 2 * np.pi)
+        d = 30.0 if depth is None else rng.uniform(*depth)
+        x = np.array([np.sin(th) * np.cos(ph), np.sin(th) * np.sin(ph), np.cos(th)]) * d
+        pa = _project_fisheye(*cams[ia], x)
+        pb = _project_fisheye(*cams[ib], x)
+        if pa is not None and pb is not None:
+            obs.push(
+                ia,
+                pa + 0.2 * rng.standard_normal(2),
+                ib,
+                pb + 0.2 * rng.standard_normal(2),
+            )
+            done += 1
+
+
+def _fisheye_scene(seed):
+    """A ~179 deg fisheye capture: a rotation rig plus a baseline sub-capture, so
+    each cell of the equidistant column has its own ground."""
+    rng = np.random.default_rng(seed)
+    rot_n, bl_n = 8, 8
+    cams = _rotation_cams(rot_n, 1.4, rng) + _baseline_cams(bl_n, 1.0, rng)
+    obs = _Obs()
+    for i in range(rot_n - 1):
+        _emit_fisheye_pair(obs, cams, i, i + 1, 60, rng)
+    for i in range(rot_n - 2):
+        _emit_fisheye_pair(obs, cams, i, i + 2, 60, rng)
+    for i in range(bl_n - 1):
+        _emit_fisheye_pair(obs, cams, rot_n + i, rot_n + i + 1, 60, rng, (5.0, 12.0))
+    for i in range(bl_n - 2):
+        _emit_fisheye_pair(obs, cams, rot_n + i, rot_n + i + 2, 60, rng, (5.0, 12.0))
+    return obs.arrays()
+
+
+def test_focal_vote_default_columns_match_explicit_pinhole_only():
+    # The new parameter defaults to pinhole-only, and asking for pinhole-only
+    # explicitly reproduces the default call exactly — every pre-existing key
+    # included.
+    cl, im, pos = _rotation_scene(2024)
+    default = focal_vote(cl, im, pos, W, H, seed=0)
+    explicit = focal_vote(cl, im, pos, W, H, seed=0, columns=("pinhole",))
+    assert default == explicit
+    assert default["camera_model"] == "Pinhole"
+    assert default["columns"] == []
+
+
+def test_focal_vote_rejects_unknown_column():
+    cl, im, pos = _rotation_scene(2024)
+    with pytest.raises(ValueError):
+        focal_vote(cl, im, pos, W, H, columns=("brown-conrady",))
+
+
+def test_focal_vote_fisheye_capture_is_arbitrated_equidistant():
+    cl, im, pos = _fisheye_scene(2718)
+    res = focal_vote(cl, im, pos, W, H, seed=0, columns=("pinhole", "equidistant"))
+    assert res["camera_model"] == "EquidistantFisheye", res["columns"]
+    assert [c["camera_model"] for c in res["columns"]] == [
+        "Pinhole",
+        "EquidistantFisheye",
+    ]
+    pin, fish = res["columns"]
+    assert fish["n_informative"] > pin["n_informative"]
+    # The top level reports the winning column's consensus, never a blend of
+    # the two columns' focals.
+    assert res["focal_px"] == fish["focal_px"]
+    assert abs(res["focal_px"] - F_FISH) / F_FISH < 0.05
+    assert (res["n_epipolar"], res["n_rotation"]) == (
+        fish["n_epipolar"],
+        fish["n_rotation"],
+    )
+    # Per-column diagnostics mirror the per-family ones and add the certificate
+    # counts the arbitration reads.
+    assert set(pin) == {
+        "camera_model",
+        "focal_px",
+        "family",
+        "epipolar_focal_px",
+        "rotation_focal_px",
+        "n_epipolar",
+        "n_rotation",
+        "n_pool",
+        "pool_spread",
+        "family_disagreement",
+        "epipolar_spread",
+        "rotation_spread",
+        "parallax_poverty",
+        "n_rotation_dominated",
+        "n_scanned_epipolar",
+        "n_scanned_rotation",
+        "n_certified_epipolar",
+        "n_certified_rotation",
+        "n_informative_epipolar",
+        "n_informative_rotation",
+        "n_certified",
+        "n_informative",
+        "scan_votes",
+    }
+    for c in res["columns"]:
+        assert c["n_certified"] == c["n_certified_epipolar"] + c["n_certified_rotation"]
+        assert (
+            c["n_informative"]
+            == c["n_informative_epipolar"] + c["n_informative_rotation"]
+        )
+        assert len(c["scan_votes"]) == c["n_scanned_epipolar"] + c["n_scanned_rotation"]
+        for v in c["scan_votes"]:
+            assert set(v) == {
+                "cell",
+                "image_a",
+                "image_b",
+                "focal_px",
+                "cost",
+                "sharpness",
+                "dir_disagreement",
+                "rotation_dominated",
+                "rotation_ratio",
+                "coverage_p90",
+                "n_inliers",
+                "in_fov_band",
+                "at_grid_edge",
+                "angular_focal_px",
+                "certified",
+                "model_informative",
+            }
+            assert v["cell"] in ("Epipolar", "Rotation")
+            # Only certified votes can be model-informative, and an edge-pinned
+            # or rotation-dominated scan is never certified.
+            assert not (v["model_informative"] and not v["certified"])
+            assert not (v["certified"] and v["at_grid_edge"])
+            assert not (v["certified"] and v["rotation_dominated"])
+            # Rotation domination is an epipolar-cell verdict only.
+            if v["cell"] == "Rotation":
+                assert not v["rotation_dominated"]
+                assert v["rotation_ratio"] is None
+        assert c["n_rotation_dominated"] == sum(
+            v["rotation_dominated"] for v in c["scan_votes"]
+        )
+
+
+def test_focal_vote_pinhole_capture_is_arbitrated_pinhole():
+    # The converse, and the compatibility guarantee: when pinhole wins, the
+    # top-level fields are exactly the pinhole-only answer.
+    cl, im, pos = _parallax_scene(4048)
+    both = focal_vote(cl, im, pos, W, H, seed=0, columns=("pinhole", "equidistant"))
+    only = focal_vote(cl, im, pos, W, H, seed=0)
+    assert both["camera_model"] == "Pinhole", both["columns"]
+    for key in (
+        "focal_px",
+        "family",
+        "epipolar_focal_px",
+        "rotation_focal_px",
+        "n_epipolar",
+        "n_rotation",
+        "n_pool",
+        "pool_spread",
+        "family_disagreement",
+    ):
+        assert both[key] == only[key], key
+
+
+def test_focal_vote_columns_seed_reproducibility():
+    cl, im, pos = _fisheye_scene(2718)
+    cols = ("pinhole", "equidistant")
+    a = focal_vote(cl, im, pos, W, H, seed=11, columns=cols)
+    b = focal_vote(cl, im, pos, W, H, seed=11, columns=cols)
+    assert a == b
 
 
 def test_focal_vote_empty_input():

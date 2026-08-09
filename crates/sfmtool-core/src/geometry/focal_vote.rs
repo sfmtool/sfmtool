@@ -33,6 +33,11 @@
 //! be a value no pair voted for; the consensus is then the majority family's
 //! median instead.
 //!
+//! Both families generalize over the camera model through the pixel→ray map, so
+//! the caller may ask for more than one **column** (camera-model hypothesis):
+//! see [`column_scan`]. The default is pinhole-only, which reproduces the
+//! behavior above exactly — no scan runs at all.
+//!
 //! The pair-table pass is deterministic and the RANSAC estimators derive their
 //! sampling from the input seed, so identical inputs and seed reproduce
 //! identical output.
@@ -45,6 +50,10 @@ use crate::geometry::epipolar_estimation::{
     estimate_fundamental, focal_from_fundamental, FundamentalOptions,
 };
 use crate::geometry::homography_estimation::{estimate_homography, HomographyOptions};
+
+pub mod column_scan;
+
+pub use column_scan::{CameraModel, ColumnScan, ScanCell, ScanVote};
 
 /// Which family contributed the majority of the pooled votes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,6 +172,81 @@ pub struct FocalVoteResult {
     /// Epipolar candidate pairs whose two directional focals disagree (or
     /// where only one direction is in-band), and so cast no vote (pair count).
     pub n_inconsistent_pairs: usize,
+    /// The model verdict: the requested column with the greater certified mass
+    /// of model-informative votes (ties go to `Pinhole`). With a single
+    /// requested column there is nothing to arbitrate and the verdict is that
+    /// column; with several it is `None` when no column has any
+    /// model-informative vote, and the reported focal then falls back to the
+    /// pinhole column (or, absent it, the first requested column).
+    pub camera_model: Option<CameraModel>,
+    /// Per-column diagnostics, mirroring the per-family ones, in canonical
+    /// order (`Pinhole`, then `EquidistantFisheye`). The winning column's
+    /// consensus is what the top-level fields report; the losing column's
+    /// median, counts and spread survive here.
+    pub columns: Vec<ColumnDiagnostics>,
+}
+
+/// One camera-model column's own consensus and certificate counts.
+///
+/// The focal fields mirror the top-level per-family ones over that column's
+/// votes alone: for the pinhole column they are the closed-form Bougnoux and
+/// `K⁻¹HK` votes (identical to the top-level fields when pinhole wins), for the
+/// equidistant column the two cells' scan votes. The certificate counts come
+/// from the self-consistency scans in **both** columns, because certified
+/// masses are only comparable when they come from the same machinery.
+#[derive(Clone, Debug)]
+pub struct ColumnDiagnostics {
+    /// The column's camera model.
+    pub model: CameraModel,
+    /// The column's own consensus focal (its two families pooled through the
+    /// same rule as the top-level consensus).
+    pub focal_px: Option<f64>,
+    /// Majority contributor to this column's pool.
+    pub family: Option<VoteFamily>,
+    /// Log-space median of this column's epipolar votes.
+    pub epipolar_focal_px: Option<f64>,
+    /// Log-space median of this column's rotation votes.
+    pub rotation_focal_px: Option<f64>,
+    /// Epipolar votes in this column's pool.
+    pub n_epipolar: usize,
+    /// Rotation votes in this column's pool.
+    pub n_rotation: usize,
+    /// `n_epipolar + n_rotation`.
+    pub n_pool: usize,
+    /// Log-focal interquartile range of the votes behind `focal_px`.
+    pub pool_spread: f64,
+    /// Log-focal gap between this column's two family medians.
+    pub family_disagreement: Option<f64>,
+    /// Log-focal interquartile range of this column's epipolar votes.
+    pub epipolar_spread: f64,
+    /// Log-focal interquartile range of this column's rotation votes.
+    pub rotation_spread: f64,
+    /// Median rotation/essential consensus ratio over this column's epipolar
+    /// candidate pairs with at least 16 essential inliers — the scan-side
+    /// counterpart of the top-level `parallax_poverty`.
+    pub parallax_poverty: f64,
+    /// Epipolar candidate pairs this column gated out as rotation-dominated —
+    /// the analog of the top-level `n_h_dominated`.
+    pub n_rotation_dominated: usize,
+    /// Candidate pairs whose epipolar-cell scan produced a curve.
+    pub n_scanned_epipolar: usize,
+    /// Candidate pairs whose rotation-cell scan produced a curve.
+    pub n_scanned_rotation: usize,
+    /// Epipolar-cell scans certified by their own geometry.
+    pub n_certified_epipolar: usize,
+    /// Rotation-cell scans certified by their own geometry.
+    pub n_certified_rotation: usize,
+    /// Certified epipolar-cell scans that also clear the radial-coverage floor.
+    pub n_informative_epipolar: usize,
+    /// Certified rotation-cell scans that also clear the radial-coverage floor.
+    pub n_informative_rotation: usize,
+    /// Certified scans over both cells.
+    pub n_certified: usize,
+    /// Model-informative certified scans over both cells — the mass the model
+    /// verdict compares.
+    pub n_informative: usize,
+    /// Every scan of this column, epipolar cell first (diagnostic detail).
+    pub scan_votes: Vec<ScanVote>,
 }
 
 // ── Vote thresholds (see the spec) ───────────────────────────────────────────
@@ -199,6 +283,107 @@ const FAMILY_DISAGREEMENT_BAND: f64 = 0.25;
 
 /// Pooled votes needed for a consensus.
 const MIN_POOL: usize = 2;
+
+/// Tuning for [`focal_vote_with_options`].
+#[derive(Clone, Debug)]
+pub struct FocalVoteOptions {
+    /// SplitMix64 seed for the RANSAC estimators and the column scans.
+    pub seed: u64,
+    /// Wide-baseline gate for epipolar candidate pairs, as a fraction of the
+    /// image diagonal their mean feature displacement must reach. Too low
+    /// admits near-static pairs whose ill-conditioned fundamental matrices vote
+    /// junk focals into the pool.
+    pub epipolar_min_disp_frac: f64,
+    /// Camera-model columns to evaluate. The default is pinhole-only, which
+    /// runs no scan at all and reproduces the closed-form kernel exactly;
+    /// asking for more than one column adds the self-consistency scans that
+    /// arbitrate between them. Duplicates are ignored and an empty list means
+    /// pinhole-only.
+    pub columns: Vec<CameraModel>,
+}
+
+impl Default for FocalVoteOptions {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            epipolar_min_disp_frac: EPIPOLAR_MIN_DISP_FRAC,
+            columns: vec![CameraModel::Pinhole],
+        }
+    }
+}
+
+/// The requested columns in canonical order, deduplicated; an empty request
+/// means pinhole-only.
+fn canonical_columns(requested: &[CameraModel]) -> Vec<CameraModel> {
+    let mut out: Vec<CameraModel> = [CameraModel::Pinhole, CameraModel::EquidistantFisheye]
+        .into_iter()
+        .filter(|m| requested.contains(m))
+        .collect();
+    if out.is_empty() {
+        out.push(CameraModel::Pinhole);
+    }
+    out
+}
+
+/// The two families' consensus over one column's votes: the pooled log-space
+/// median, or the majority family's median when the two medians are further
+/// apart than the family-disagreement band.
+struct FamilyConsensus {
+    focal_px: Option<f64>,
+    family: Option<VoteFamily>,
+    pool_spread: f64,
+    epipolar_focal_px: Option<f64>,
+    rotation_focal_px: Option<f64>,
+    epipolar_spread: f64,
+    rotation_spread: f64,
+    family_disagreement: Option<f64>,
+}
+
+fn family_consensus(bou: &[f64], rot: &[f64]) -> FamilyConsensus {
+    let epipolar_focal_px = log_median(bou);
+    let rotation_focal_px = log_median(rot);
+    let n_epipolar = bou.len();
+    let n_rotation = rot.len();
+    let epipolar_spread = log_iqr(bou);
+    let rotation_spread = log_iqr(rot);
+    let pool: Vec<f64> = bou.iter().chain(rot.iter()).copied().collect();
+    // Computable whenever both families voted, consensus or not.
+    let family_disagreement = match (epipolar_focal_px, rotation_focal_px) {
+        (Some(e), Some(r)) => Some((e.ln() - r.ln()).abs()),
+        _ => None,
+    };
+    let (focal_px, family, pool_spread) = if n_epipolar + n_rotation >= MIN_POOL {
+        let fam = if n_epipolar > n_rotation {
+            VoteFamily::Epipolar
+        } else {
+            VoteFamily::Rotation
+        };
+        let bimodal = family_disagreement.is_some_and(|d| d > FAMILY_DISAGREEMENT_BAND);
+        let backing: &[f64] = if bimodal {
+            // Majority family only — `family` reports it, so `focal_px` is
+            // exactly that family's median.
+            match fam {
+                VoteFamily::Epipolar => bou,
+                VoteFamily::Rotation => rot,
+            }
+        } else {
+            &pool
+        };
+        (log_median(backing), Some(fam), log_iqr(backing))
+    } else {
+        (None, None, 0.0)
+    };
+    FamilyConsensus {
+        focal_px,
+        family,
+        pool_spread,
+        epipolar_focal_px,
+        rotation_focal_px,
+        epipolar_spread,
+        rotation_spread,
+        family_disagreement,
+    }
+}
 
 /// Interquartile range in log space (linear-interpolated quartiles), `0`
 /// for fewer than 2 votes.
@@ -398,6 +583,39 @@ pub fn focal_vote_with_min_disp(
     seed: u64,
     epipolar_min_disp_frac: f64,
 ) -> FocalVoteResult {
+    focal_vote_with_options(
+        cluster_indexes,
+        image_indexes,
+        positions_xy,
+        width,
+        height,
+        &FocalVoteOptions {
+            seed,
+            epipolar_min_disp_frac,
+            ..Default::default()
+        },
+    )
+}
+
+/// `focal_vote` over an explicit camera-model column set (see
+/// `specs/core/focal-vote.md`, "Camera-Model Columns").
+///
+/// With the default pinhole-only column set this is exactly the closed-form
+/// kernel; adding the equidistant-fisheye column runs the two self-consistency
+/// scans in **both** columns (so their certified masses are comparable), picks
+/// the model by certified model-informative mass, and reports the winning
+/// column's consensus.
+pub fn focal_vote_with_options(
+    cluster_indexes: &[u32],
+    image_indexes: &[u32],
+    positions_xy: &[[f64; 2]],
+    width: u32,
+    height: u32,
+    options: &FocalVoteOptions,
+) -> FocalVoteResult {
+    let seed = options.seed;
+    let epipolar_min_disp_frac = options.epipolar_min_disp_frac;
+    let columns = canonical_columns(&options.columns);
     let empty = FocalVoteResult {
         focal_px: None,
         family: None,
@@ -418,6 +636,8 @@ pub fn focal_vote_with_min_disp(
         n_band_rejected: 0,
         n_degenerate: 0,
         n_inconsistent_pairs: 0,
+        camera_model: None,
+        columns: Vec::new(),
     };
     let n_obs = cluster_indexes.len();
     if n_obs == 0 || image_indexes.len() != n_obs || positions_xy.len() != n_obs {
@@ -538,7 +758,7 @@ pub fn focal_vote_with_min_disp(
     let mut n_band_rejected = 0usize;
     let mut n_degenerate = 0usize;
     let mut n_inconsistent_pairs = 0usize;
-    for (a, b) in epipolar_pairs {
+    for &(a, b) in &epipolar_pairs {
         let (x1, x2) = pair_correspondences(&image_clusters, a as usize, b as usize);
         if x1.len() < 8 {
             n_estimator_failed += 1;
@@ -615,6 +835,11 @@ pub fn focal_vote_with_min_disp(
     let mut rot: Vec<f64> = Vec::new();
     let mut rot_detail: Vec<RotationVote> = Vec::new();
     let mut voted_pairs: HashSet<(u32, u32)> = HashSet::new();
+    // The pairs the scan REACHES, deduplicated — the rotation cell's candidate
+    // list for the column scans, independent of whether the closed-form
+    // self-calibration accepted them.
+    let mut rotation_pairs: Vec<(u32, u32)> = Vec::new();
+    let mut rotation_seen: HashSet<(u32, u32)> = HashSet::new();
     let mut i = 0usize;
     while i < n_img {
         let mut best: Option<(f64, u32)> = None;
@@ -640,6 +865,9 @@ pub fn focal_vote_with_min_disp(
         }
         if let Some((dmean, j)) = best {
             let key = ((i as u32).min(j), (i as u32).max(j));
+            if dmean >= ROTATION_MIN_DISP_FRAC * diag && rotation_seen.insert(key) {
+                rotation_pairs.push(key);
+            }
             if dmean >= ROTATION_MIN_DISP_FRAC * diag && !voted_pairs.contains(&key) {
                 let (x1, x2) = pair_correspondences(&image_clusters, i, j as usize);
                 // Centre on the principal point: H = K R K⁻¹ has K at the origin.
@@ -673,55 +901,89 @@ pub fn focal_vote_with_min_disp(
     // `parallax_poverty` medians H/F inlier ratios, not focals, so it stays a
     // linear median.
     let poverty = median(&ratios).unwrap_or(0.0);
-    let epipolar_focal_px = log_median(&bou);
-    let rotation_focal_px = log_median(&rot);
-    let n_epipolar = bou.len();
-    let n_rotation = rot.len();
-    let n_pool = n_epipolar + n_rotation;
-    let epipolar_spread = log_iqr(&bou);
-    let rotation_spread = log_iqr(&rot);
-    let pool: Vec<f64> = bou.iter().chain(rot.iter()).copied().collect();
-    // Computable whenever both families voted, consensus or not.
-    let family_disagreement = match (epipolar_focal_px, rotation_focal_px) {
-        (Some(e), Some(r)) => Some((e.ln() - r.ln()).abs()),
-        _ => None,
+    let pinhole = family_consensus(&bou, &rot);
+
+    // ── Camera-model columns ─────────────────────────────────────────────────
+    // Model precedes motion family: every requested column runs the same two
+    // self-consistency scans over the same candidate pairs (so the certified
+    // masses are commensurable), the column with the greater model-informative
+    // mass wins, and the winner's own two-family consensus is what the top
+    // level reports. Pinhole-only — the default — skips all of this and keeps
+    // the closed forms, bit for bit.
+    let (camera_model, column_diags) = if columns == [CameraModel::Pinhole] {
+        (Some(CameraModel::Pinhole), Vec::new())
+    } else {
+        let epi_cands = scan_candidates(&image_clusters, &epipolar_pairs, pp, seed, 0);
+        let rot_cands = scan_candidates(&image_clusters, &rotation_pairs, pp, seed, 1);
+        let half_diag = 0.5 * diag;
+        let diags: Vec<ColumnDiagnostics> = columns
+            .iter()
+            .map(|&model| {
+                let scan =
+                    column_scan::scan_column(model, &epi_cands, &rot_cands, max_wh, half_diag);
+                let (col_bou, col_rot) = match model {
+                    // The pinhole column keeps its closed-form focal answer;
+                    // its scans only supply arbitration certificates.
+                    CameraModel::Pinhole => (bou.clone(), rot.clone()),
+                    CameraModel::EquidistantFisheye => (
+                        scan.certified_focals(ScanCell::Epipolar),
+                        scan.certified_focals(ScanCell::Rotation),
+                    ),
+                };
+                column_diagnostics(model, &scan, &col_bou, &col_rot)
+            })
+            .collect();
+        (model_verdict(&diags), diags)
     };
 
-    let (focal_px, family, pool_spread) = if n_pool >= MIN_POOL {
-        let fam = if n_epipolar > n_rotation {
-            VoteFamily::Epipolar
-        } else {
-            VoteFamily::Rotation
-        };
-        let bimodal = family_disagreement.is_some_and(|d| d > FAMILY_DISAGREEMENT_BAND);
-        let backing: &[f64] = if bimodal {
-            // Majority family only — `family` reports it, so `focal_px` is
-            // exactly that family's median.
-            match fam {
-                VoteFamily::Epipolar => &bou,
-                VoteFamily::Rotation => &rot,
-            }
-        } else {
-            &pool
-        };
-        (log_median(backing), Some(fam), log_iqr(backing))
-    } else {
-        (None, None, 0.0)
+    // Column focals are not blended — a pinhole focal and an equidistant focal
+    // parameterize different maps — so the top level simply reports the winning
+    // column's consensus.
+    let winner = camera_model
+        .filter(|_| !column_diags.is_empty())
+        .or_else(|| {
+            column_diags
+                .iter()
+                .map(|c| c.model)
+                .find(|&m| m == CameraModel::Pinhole)
+                .or_else(|| column_diags.first().map(|c| c.model))
+        });
+    let consensus = match winner.and_then(|m| column_diags.iter().find(|c| c.model == m)) {
+        Some(c) if c.model != CameraModel::Pinhole => FamilyConsensus {
+            focal_px: c.focal_px,
+            family: c.family,
+            pool_spread: c.pool_spread,
+            epipolar_focal_px: c.epipolar_focal_px,
+            rotation_focal_px: c.rotation_focal_px,
+            epipolar_spread: c.epipolar_spread,
+            rotation_spread: c.rotation_spread,
+            family_disagreement: c.family_disagreement,
+        },
+        _ => pinhole,
+    };
+    let (n_epipolar, n_rotation) = match winner {
+        Some(CameraModel::EquidistantFisheye) => {
+            let c = column_diags
+                .iter()
+                .find(|c| c.model == CameraModel::EquidistantFisheye);
+            c.map_or((0, 0), |c| (c.n_epipolar, c.n_rotation))
+        }
+        _ => (bou.len(), rot.len()),
     };
 
     FocalVoteResult {
-        focal_px,
-        family,
-        epipolar_focal_px,
-        rotation_focal_px,
+        focal_px: consensus.focal_px,
+        family: consensus.family,
+        epipolar_focal_px: consensus.epipolar_focal_px,
+        rotation_focal_px: consensus.rotation_focal_px,
         n_epipolar,
         n_rotation,
-        n_pool,
-        pool_spread,
-        family_disagreement,
+        n_pool: n_epipolar + n_rotation,
+        pool_spread: consensus.pool_spread,
+        family_disagreement: consensus.family_disagreement,
         parallax_poverty: poverty,
-        epipolar_spread,
-        rotation_spread,
+        epipolar_spread: consensus.epipolar_spread,
+        rotation_spread: consensus.rotation_spread,
         epipolar_votes: bou_detail,
         rotation_votes: rot_detail,
         n_h_dominated,
@@ -729,7 +991,90 @@ pub fn focal_vote_with_min_disp(
         n_band_rejected,
         n_degenerate,
         n_inconsistent_pairs,
+        camera_model,
+        columns: column_diags,
     }
+}
+
+/// Build the scan candidates of one cell: each pair's full correspondence
+/// merge-join, centred on the principal point and capped. `cell_tag` separates
+/// the two cells' sampler streams so a pair reached by both draws different
+/// minimal samples in each.
+fn scan_candidates(
+    image_clusters: &ImageClusters,
+    pairs: &[(u32, u32)],
+    pp: [f64; 2],
+    seed: u64,
+    cell_tag: u64,
+) -> Vec<column_scan::ScanCandidate> {
+    pairs
+        .iter()
+        .enumerate()
+        .map(|(k, &(a, b))| {
+            let (x1, x2) = pair_correspondences(image_clusters, a as usize, b as usize);
+            // Deterministic per-pair stream: position in the candidate list and
+            // cell tag, mixed with the kernel seed.
+            let pair_seed = seed
+                ^ (k as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                ^ cell_tag.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            column_scan::ScanCandidate::new(a, b, &x1, &x2, pp, pair_seed)
+        })
+        .collect()
+}
+
+/// Roll one column's scans and its own family votes into the diagnostics block.
+fn column_diagnostics(
+    model: CameraModel,
+    scan: &ColumnScan,
+    bou: &[f64],
+    rot: &[f64],
+) -> ColumnDiagnostics {
+    let c = family_consensus(bou, rot);
+    let count = |v: &[ScanVote], f: fn(&ScanVote) -> bool| v.iter().filter(|s| f(s)).count();
+    let mut scan_votes = scan.epipolar.clone();
+    scan_votes.extend(scan.rotation.iter().copied());
+    ColumnDiagnostics {
+        model,
+        focal_px: c.focal_px,
+        family: c.family,
+        epipolar_focal_px: c.epipolar_focal_px,
+        rotation_focal_px: c.rotation_focal_px,
+        n_epipolar: bou.len(),
+        n_rotation: rot.len(),
+        n_pool: bou.len() + rot.len(),
+        pool_spread: c.pool_spread,
+        family_disagreement: c.family_disagreement,
+        epipolar_spread: c.epipolar_spread,
+        rotation_spread: c.rotation_spread,
+        parallax_poverty: scan.parallax_poverty(),
+        n_rotation_dominated: scan.n_rotation_dominated(),
+        n_scanned_epipolar: scan.epipolar.len(),
+        n_scanned_rotation: scan.rotation.len(),
+        n_certified_epipolar: count(&scan.epipolar, |s| s.certified),
+        n_certified_rotation: count(&scan.rotation, |s| s.certified),
+        n_informative_epipolar: count(&scan.epipolar, |s| s.model_informative),
+        n_informative_rotation: count(&scan.rotation, |s| s.model_informative),
+        n_certified: scan.n_certified(),
+        n_informative: scan.n_informative(),
+        scan_votes,
+    }
+}
+
+/// The model verdict: the column with the greater certified model-informative
+/// mass. A single column has nothing to arbitrate and wins by construction;
+/// with several, ties go to the earlier column in canonical order (pinhole),
+/// and a capture where no column has any model-informative vote gets no
+/// verdict at all.
+fn model_verdict(diags: &[ColumnDiagnostics]) -> Option<CameraModel> {
+    let best = diags.iter().max_by_key(|c| c.n_informative)?;
+    if diags.len() > 1 && best.n_informative == 0 {
+        return None;
+    }
+    // `max_by_key` returns the LAST maximum; ties must go to the first.
+    diags
+        .iter()
+        .find(|c| c.n_informative == best.n_informative)
+        .map(|c| c.model)
 }
 
 #[cfg(test)]

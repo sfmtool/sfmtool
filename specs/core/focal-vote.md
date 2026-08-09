@@ -200,12 +200,22 @@ callers should expect the pool to be rotation-dominated).
 
 ## Camera-Model Columns (Equidistant Fisheye)
 
-**Status:** Prototype-validated (2026-08-09), not implemented in the
-kernel. Validation coverage: two calibrated fisheye captures (one
-Insta360 lens family at two scales, 211° FOV) and two pinhole controls;
-model verdict correct on all four, pooled focal within 1.2% of the
-best-fit equidistant focal. Gate constants below are the prototype's
-data-derived values.
+**Status:** Implemented (2026-08-08) —
+`crates/sfmtool-core/src/geometry/focal_vote/column_scan.rs` (the two
+scan cells, gates and certificates) and the column selection, arbitration
+and per-column diagnostics in `focal_vote.rs`; tests in
+`focal_vote/column_scan/tests.rs` and `focal_vote/tests.rs`; PyO3
+binding parameter `columns` in
+`crates/sfmtool-py/src/geometry/focal_vote.rs`, Python tests in
+`tests/rust_bindings/test_focal_vote_rust_bindings.py`. Validation
+coverage: two calibrated fisheye captures (one Insta360 lens family at
+two scales, 211° FOV) and two pinhole controls — model verdict correct
+on all four, pooled focal within 1.2% of the best-fit equidistant focal
+(kerry 138.3 px against 136.9; kp360 276.6 px against 273.5) — plus
+three uncalibrated OmniPhotos rotating-rig captures on a second Insta360
+One X body at 1920², all three arbitrated fisheye, voting 548–584 px
+(6.6% spread). Gate constants below are the prototype's data-derived
+values.
 
 Both estimator families generalize over the camera model through the
 pixel→ray map. A **column** is a camera model hypothesis supplying an
@@ -228,13 +238,50 @@ The two fisheye cells:
   correspondences to rays and robustly estimate the ray-space epipolar
   matrix. With the correct `f` that matrix is essential — its two
   non-zero singular values are equal — so the cost is the essentialness
-  residual `(σ₁ − σ₂)/(σ₁ + σ₂)` on the consensus set. The pair votes
-  the minimizing `f`. The floor gate rejects pairs whose best residual
-  stays high (no essential explanation at any focal); the shape gate
-  rejects flat scans (geometry with no focal opinion). The pinhole
-  column's direction-agreement certificate has its analog here: the
-  scans of the two correspondence directions must locate minima within
-  the epipolar agreement band, else the pair casts no vote. The
+  residual `(σ₁ − σ₂)/(σ₁ + σ₂)` on the consensus set. The floor gate
+  rejects pairs whose best residual stays high (no essential explanation
+  at any focal); the shape gate rejects flat scans (geometry with no
+  focal opinion).
+
+  The pinhole column's homography-domination gate has its analog here,
+  and it carries the same meaning — fit the rotation family's model and
+  abstain when it explains the pair. The pinhole form (a pixel-space
+  homography) does not transfer: under a fisheye map a rotating camera
+  induces no pixel homography at any focal. The fisheye form is the
+  ray-rotation fit the rotation cell already computes over its coarse
+  support sub-grid: when the pair's best rotation consensus over that
+  sub-grid reaches `max(16, 0.8 × best essential consensus)`, the pair
+  is rotation-dominated and casts no epipolar vote — a near-zero
+  baseline makes `E = [t]×R` degenerate and its essentialness minima
+  broad, exactly as the pinhole `F` collapses toward `H`. The same
+  ratio feeds the column's parallax-poverty diagnostic, mirroring
+  `n_H / n_F`.
+
+  The sub-grid pass locates the winning bracket and then sweeps the
+  grid points inside it at full resolution. That refinement is
+  load-bearing for the gate rather than for the freeze: a parallax-free
+  pair's rotation consensus peaks sharply at its own focal, the
+  sub-grid's stride can straddle that peak by more than a tenth, and
+  the essential consensus it is compared against carries no such bias,
+  being read off the full grid. Uncorrected, a pair whose
+  correspondences are *entirely* explained by a rotation reports a
+  ratio near `0.74` and misses the `0.8` gate.
+
+  The gate is a property of the cell, not of one column: every column
+  applies it to its own scans, because certified masses are comparable
+  only when the certificates come from the same machinery. It reads
+  "does a rotation *under this column's map* explain the pair", so a
+  parallax-free capture read through the wrong column is legitimately
+  not gated — its rays are not a rotation of each other. On such a
+  capture the right column's epipolar mass goes to zero and the model
+  verdict rests on its rotation cell alone.
+
+  The pinhole column's direction-agreement certificate has its analog
+  here too: the scans of the two correspondence directions
+  must locate minima within the epipolar agreement band, else the pair
+  casts no vote; when they agree the pair casts **one** vote, the
+  geometric mean of the two minimizing focals, exactly as the pinhole
+  epipolar family does with its two directional Bougnoux focals. The
   per-direction residual must be **one-sided** — measured against
   `E·x₁` in the second image for one direction and against `Eᵀ·x₂` in
   the first for the other. A symmetric residual makes the certificate
@@ -272,12 +319,25 @@ The two fisheye cells:
   no interior minimum (it pins at the top of the grid). Floor and
   shape gates as above.
 
-  The fisheye column's scan band is FOV-derived rather than inherited
-  from the pinhole band: under the equidistant map the focal and the
-  field of view are tied by `f = r_edge / θ_edge`, so the candidate
-  grid spans the focals corresponding to a credible half-FOV range at
-  the image's own radius (a 480 px-wide sensor at 200° FOV implies
-  `f ≈ 137 px` — legal here, implausible in the pinhole band's terms).
+  The scan **locates** its minimum on the same residual carried through
+  the map's local `dr/dθ` (a trimmed RMS in pixels), which removes the
+  `1/f` drift both maps share, and the floor **gates** the angular value
+  at that minimum, because the equivalent pixel floor doubles with
+  resolution while the angular one holds. Frozen supports make the two
+  agree to a fraction of a percent; the angular minimum is what an
+  unfrozen support destroys.
+
+  The scan band is FOV-derived rather than inherited from the pinhole
+  band: under the equidistant map the focal and the field of view are
+  tied by `f = r_edge / θ_edge`, so the grid must reach the focals a
+  beyond-180° field of view implies at the image's own radius (a 480
+  px-wide sensor at 200° FOV implies `f ≈ 137 px`) — the band is
+  `[0.075, 3] × max(width, height)` on 64 log-spaced points, whose low
+  end sits well under the pinhole plausibility band's `0.2` floor. Both
+  columns scan that same band, because certified masses are comparable
+  only when the certificates come from the same machinery; the credible
+  half-FOV window at a pair's own edge radius (half-FOV in `[50°, 110°]`)
+  is not a restriction on the grid but the covariate below.
 
 **Radial coverage.** Pinhole and equidistant maps agree to first order
 near the principal point, so a pair whose inliers hug the centre cannot
@@ -329,11 +389,19 @@ far-field rotation pairs, so on such captures the model verdict rests
 on the epipolar cell alone — the verdict's margin is structurally
 thinner on pinhole input than on fisheye input.
 
+Ties in the certified model-informative mass go to the pinhole column,
+the narrower hypothesis.
+
 **Compatibility.** The caller selects the column set; the default is
 pinhole-only, which reproduces the implemented kernel's behavior
-identically. Output gains `camera_model` (the model verdict, `None`
-when no model-informative votes exist) and per-column diagnostics
-mirroring the per-family ones. The equidistant column's focal
+identically — no scan runs at all. Output gains `camera_model` (the
+model verdict) and per-column diagnostics mirroring the per-family ones
+plus the certificate counts the verdict reads. A single requested column
+has nothing to arbitrate and is the verdict by construction; with
+several, `camera_model` is `None` when no column has a
+model-informative vote, and the top-level focal then falls back to the
+pinhole column (or, absent it, the first requested column). The
+equidistant column's focal
 parameterizes the equidistant map **only**: against a polynomial
 fisheye calibration it is the best-fit equidistant focal over the
 observed radii, not the calibrated focal (measured ≈6% above a
@@ -344,16 +412,26 @@ focal.
 ## Binding
 
 `sfmtool._sfmtool.geometry.focal_vote(cluster_indexes, image_indexes,
-positions_xy, width, height, seed=0)` returns a dict mirroring the output
-table (`family` as a string, `None` for absent optionals).
-`estimate_homography(points1, points2, max_error_px=3.0, seed=0)` is
+positions_xy, width, height, seed=0, epipolar_min_disp_frac=0.02,
+columns=None)` returns a dict mirroring the output table (`family` and
+`camera_model` as strings, `None` for absent optionals). `columns` is a
+sequence of column names (`"pinhole"`, `"equidistant"` / `"fisheye"`);
+`None` means the pinhole-only default, which reproduces the closed-form
+kernel's dict exactly (`camera_model` is `"Pinhole"` and `columns` is
+empty). `estimate_homography(points1, points2, max_error_px=3.0, seed=0)` is
 exposed alongside `estimate_fundamental` and returns
 `{"h_matrix", "inliers", "iterations"}` or `None`.
 
 ## Determinism
 
 All sampling (pair tables, RANSAC) derives from the input seed; identical
-inputs and seed produce identical output on every platform.
+inputs and seed produce identical output on every platform. The column
+scans draw their minimal-sample index sets once per candidate pair from
+the seed and the pair's position in the candidate list, then reuse them
+at every candidate focal, in every cell direction and in every column —
+so the cost curves carry no RANSAC jitter, the columns are directly
+comparable, and the per-pair scans may run in parallel without affecting
+the result.
 
 ## Tests
 
@@ -371,6 +449,36 @@ inputs and seed produce identical output on every platform.
   and returns the majority family's median, never a between-modes blend;
   the tie→`Rotation` rule; homography RANSAC recovers a planted H under
   outlier contamination; seeded determinism.
+- Rust, camera-model columns: synthetic equidistant scenes (pure
+  rotation and parallax) recover a planted fisheye focal through each
+  cell; the same fisheye pair read through the pinhole column survives
+  only on a centre-hugging subset and so contributes no
+  model-informative mass, while a narrow-FOV pinhole scene is the
+  pinhole column's own ground; a synthetic pinhole capture is arbitrated
+  `Pinhole` and a synthetic fisheye capture `EquidistantFisheye`, with
+  the top-level focal equal to the winning column's consensus and never
+  a blend; the one-sided direction residual is pinned twice — the two
+  directions score a fifth of the points more than 10% apart and certify
+  different consensus sets, while the swap onto the transpose reproduces
+  the other direction bit for bit (so any symmetric residual, and the
+  singular values themselves, are invariant under the swap and the
+  certificate would be vacuous); the rotation scan with a deliberately
+  unfrozen support pins its angular minimum at the top of the grid where
+  the frozen one is interior and on the planted focal; the default
+  pinhole-only column set reproduces the closed-form kernel bit for bit
+  with the multi-column path present; seeded determinism of the scans.
+- Rust, rotation domination: a parallax-free fisheye pair is gated out
+  of the epipolar cell with a consensus ratio at the gate or above,
+  while the same lens's parallax pair is not gated and still votes; and
+  end to end, a capture with no parallax anywhere (the one whose
+  ungated epipolar votes dragged the pooled median to 624 px against a
+  planted 320) gates every epipolar candidate, leaves the rotation cell
+  to carry the verdict, and lands on the planted focal.
+- Python bindings: the default-argument dict is exactly the explicit
+  pinhole-only dict; an unknown column name raises; a fisheye fixture is
+  arbitrated `EquidistantFisheye` with the per-column diagnostic dict
+  shape checked; a pinhole fixture's two-column result matches its
+  pinhole-only result field by field; seed reproducibility with columns.
 - Python bindings: array round-trip, dict shape, seed reproducibility,
   and an end-to-end vote on a small fixture agreeing with the Rust
   result.

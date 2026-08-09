@@ -8,7 +8,70 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::geometry::focal_vote::focal_vote_with_min_disp;
+use sfmtool_core::geometry::focal_vote::{
+    focal_vote_with_options, CameraModel, ColumnDiagnostics, FocalVoteOptions, ScanCell, ScanVote,
+};
+
+/// One column's `scan_votes` entry as a Python dict.
+fn scan_vote_dict<'py>(py: Python<'py>, v: &ScanVote) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item(
+        "cell",
+        match v.cell {
+            ScanCell::Epipolar => "Epipolar",
+            ScanCell::Rotation => "Rotation",
+        },
+    )?;
+    d.set_item("image_a", v.image_a)?;
+    d.set_item("image_b", v.image_b)?;
+    d.set_item("focal_px", v.focal_px)?;
+    d.set_item("cost", v.cost)?;
+    d.set_item("sharpness", v.sharpness)?;
+    d.set_item("dir_disagreement", v.dir_disagreement)?;
+    d.set_item("rotation_dominated", v.rotation_dominated)?;
+    d.set_item("rotation_ratio", v.rotation_ratio)?;
+    d.set_item("coverage_p90", v.coverage_p90)?;
+    d.set_item("n_inliers", v.n_inliers)?;
+    d.set_item("in_fov_band", v.in_fov_band)?;
+    d.set_item("at_grid_edge", v.at_grid_edge)?;
+    d.set_item("angular_focal_px", v.angular_focal_px)?;
+    d.set_item("certified", v.certified)?;
+    d.set_item("model_informative", v.model_informative)?;
+    Ok(d)
+}
+
+/// One [`ColumnDiagnostics`] as a Python dict.
+fn column_dict<'py>(py: Python<'py>, c: &ColumnDiagnostics) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("camera_model", c.model.as_str())?;
+    d.set_item("focal_px", c.focal_px)?;
+    d.set_item("family", c.family.map(|f| f.as_str()))?;
+    d.set_item("epipolar_focal_px", c.epipolar_focal_px)?;
+    d.set_item("rotation_focal_px", c.rotation_focal_px)?;
+    d.set_item("n_epipolar", c.n_epipolar)?;
+    d.set_item("n_rotation", c.n_rotation)?;
+    d.set_item("n_pool", c.n_pool)?;
+    d.set_item("pool_spread", c.pool_spread)?;
+    d.set_item("family_disagreement", c.family_disagreement)?;
+    d.set_item("epipolar_spread", c.epipolar_spread)?;
+    d.set_item("rotation_spread", c.rotation_spread)?;
+    d.set_item("parallax_poverty", c.parallax_poverty)?;
+    d.set_item("n_rotation_dominated", c.n_rotation_dominated)?;
+    d.set_item("n_scanned_epipolar", c.n_scanned_epipolar)?;
+    d.set_item("n_scanned_rotation", c.n_scanned_rotation)?;
+    d.set_item("n_certified_epipolar", c.n_certified_epipolar)?;
+    d.set_item("n_certified_rotation", c.n_certified_rotation)?;
+    d.set_item("n_informative_epipolar", c.n_informative_epipolar)?;
+    d.set_item("n_informative_rotation", c.n_informative_rotation)?;
+    d.set_item("n_certified", c.n_certified)?;
+    d.set_item("n_informative", c.n_informative)?;
+    let votes = pyo3::types::PyList::empty(py);
+    for v in &c.scan_votes {
+        votes.append(scan_vote_dict(py, v)?)?;
+    }
+    d.set_item("scan_votes", votes)?;
+    Ok(d)
+}
 
 /// Estimate a shared focal length from cluster-track observations without any
 /// reconstruction (see ``specs/core/focal-vote.md``).
@@ -36,6 +99,11 @@ use sfmtool_core::geometry::focal_vote::focal_vote_with_min_disp;
 ///         pairs, as a fraction of the image diagonal their mean feature
 ///         displacement must reach (default 0.02). Too low admits
 ///         near-static pairs whose fundamental matrices vote junk focals.
+///     columns: Camera-model columns to evaluate, as a sequence of names
+///         (``"pinhole"``, ``"equidistant"`` / ``"fisheye"``). The default
+///         ``("pinhole",)`` runs no scan and reproduces the closed-form
+///         kernel exactly; asking for both columns adds the self-consistency
+///         scans that arbitrate between them.
 ///
 /// Returns:
 ///     A dict mirroring the output table: ``{"focal_px": float | None,
@@ -46,7 +114,8 @@ use sfmtool_core::geometry::focal_vote::focal_vote_with_min_disp;
 ///     "epipolar_spread": float, "rotation_spread": float,
 ///     "epipolar_votes": list[dict], "rotation_votes": list[dict],
 ///     "n_h_dominated": int, "n_estimator_failed": int, "n_band_rejected":
-///     int, "n_degenerate": int, "n_inconsistent_pairs": int}``.
+///     int, "n_degenerate": int, "n_inconsistent_pairs": int, "camera_model":
+///     str | None, "columns": list[dict]}``.
 ///
 ///     ``focal_px`` is the log-space median of the pooled votes — one per
 ///     direction-consistent epipolar pair plus one per unordered rotation pair
@@ -75,13 +144,23 @@ use sfmtool_core::geometry::focal_vote::focal_vote_with_min_disp;
 ///     ``mean_disp_px``, ``n_inliers``, ``focal_px``, one entry per unordered
 ///     image pair — two images that are each other's widest partner are
 ///     reached twice by the scan and vote only on the first.
+///
+///     ``camera_model`` is the model verdict (the requested column with the
+///     greater certified mass of model-informative scan votes, ties going to
+///     ``"Pinhole"``); the top-level focal fields are the winning column's
+///     consensus, and ``columns`` carries every requested column's own
+///     consensus, spreads and certificate counts (plus its per-pair
+///     ``scan_votes``). Column focals are never blended: a pinhole focal and
+///     an equidistant focal parameterize different maps. With the default
+///     pinhole-only column set no scan runs, ``columns`` is empty and
+///     ``camera_model`` is ``"Pinhole"``.
 // This is a Python docstring (rendered by `help()`), not Rust prose: its
 // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
 // indented code blocks, which rustdoc then tries to parse as Rust.
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, width, height, *, seed=0, epipolar_min_disp_frac=0.02))]
+#[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, width, height, *, seed=0, epipolar_min_disp_frac=0.02, columns=None))]
 pub fn focal_vote<'py>(
     py: Python<'py>,
     cluster_indexes: PyReadonlyArray1<'py, u32>,
@@ -91,6 +170,7 @@ pub fn focal_vote<'py>(
     height: u32,
     seed: u64,
     epipolar_min_disp_frac: f64,
+    columns: Option<Vec<String>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     if positions_xy.shape()[1] != 2 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -116,16 +196,28 @@ pub fn focal_vote<'py>(
         ));
     }
 
+    let models = match columns {
+        None => vec![CameraModel::Pinhole],
+        Some(names) => names
+            .iter()
+            .map(|n| {
+                CameraModel::from_str_name(n).ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "unknown camera-model column {n:?} (expected \"pinhole\" or \
+                         \"equidistant\")"
+                    ))
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?,
+    };
+    let options = FocalVoteOptions {
+        seed,
+        epipolar_min_disp_frac,
+        columns: models,
+    };
+
     let result = py.detach(move || {
-        focal_vote_with_min_disp(
-            &clusters,
-            &images,
-            &positions,
-            width,
-            height,
-            seed,
-            epipolar_min_disp_frac,
-        )
+        focal_vote_with_options(&clusters, &images, &positions, width, height, &options)
     });
 
     let d = PyDict::new(py);
@@ -171,6 +263,12 @@ pub fn focal_vote<'py>(
     d.set_item("n_band_rejected", result.n_band_rejected)?;
     d.set_item("n_degenerate", result.n_degenerate)?;
     d.set_item("n_inconsistent_pairs", result.n_inconsistent_pairs)?;
+    d.set_item("camera_model", result.camera_model.map(|m| m.as_str()))?;
+    let cols = pyo3::types::PyList::empty(py);
+    for c in &result.columns {
+        cols.append(column_dict(py, c)?)?;
+    }
+    d.set_item("columns", cols)?;
     Ok(d)
 }
 
