@@ -188,23 +188,130 @@ def test_degenerate_exit_passes_state_through():
     npt.assert_allclose(out["translations"], s["trans"], atol=1e-12)
 
 
-def test_opt_f_rejected_for_non_simple_pinhole():
-    s = _scene()
-    s["cam"] = CameraIntrinsics.from_dict(
-        {
-            "model": "PINHOLE",
-            "width": 640,
-            "height": 480,
-            "parameters": {
+@pytest.mark.parametrize(
+    ("model", "parameters"),
+    [
+        (
+            "PINHOLE",
+            {
                 "focal_length_x": 500.0,
                 "focal_length_y": 500.0,
                 "principal_point_x": 320.0,
                 "principal_point_y": 240.0,
             },
+        ),
+        (
+            # The polynomial fisheye family: `f` enters through a `theta`
+            # recovered from `r/f`, so the kernel's `(u - cx)/f` column is
+            # not its focal derivative even at k1 = 0.
+            "SIMPLE_RADIAL_FISHEYE",
+            {
+                "focal_length": 500.0,
+                "principal_point_x": 320.0,
+                "principal_point_y": 240.0,
+                "radial_distortion_k1": 0.0,
+            },
+        ),
+    ],
+)
+def test_opt_f_rejected_for_models_without_an_exact_focal_column(model, parameters):
+    s = _scene()
+    s["cam"] = CameraIntrinsics.from_dict(
+        {"model": model, "width": 640, "height": 480, "parameters": parameters}
+    )
+    with pytest.raises(ValueError, match="SIMPLE_PINHOLE or EQUIDISTANT_FISHEYE"):
+        _run(s, opt_f=True)
+
+
+def _equidistant_cam(f, w=480, h=480):
+    return CameraIntrinsics.from_dict(
+        {
+            "model": "EQUIDISTANT_FISHEYE",
+            "width": w,
+            "height": h,
+            "parameters": {
+                "focal_length": f,
+                "principal_point_x": w / 2.0,
+                "principal_point_y": h / 2.0,
+            },
         }
     )
-    with pytest.raises(ValueError, match="SIMPLE_PINHOLE"):
-        _run(s, opt_f=True)
+
+
+def _wide_scene(f=130.0, n_img=8, n_pt=140, seed=5):
+    """A >180° capture: cameras inside a point shell, so a large share of
+    every image's observations sit past 90° off-axis."""
+    rng = np.random.default_rng(seed)
+    cam = _equidistant_cam(f)
+    rots, trans = [], []
+    for i in range(n_img):
+        ang = 0.25 * (i - (n_img - 1) / 2)
+        c = np.array([1.2 * np.sin(ang), 0.3 * rng.uniform(-1, 1), 1.2 * np.cos(ang)])
+        r = _look_at_origin(c)
+        rots.append(r)
+        trans.append(-r @ c)
+    theta = np.pi * (0.15 + 0.7 * rng.random(n_pt))
+    phi = 2.0 * np.pi * rng.random(n_pt)
+    rad = 6.0 + 1.5 * rng.uniform(-1, 1, n_pt)
+    pts = np.stack(
+        [
+            rad * np.sin(theta) * np.cos(phi),
+            rad * np.cos(theta),
+            rad * np.sin(theta) * np.sin(phi),
+        ],
+        axis=1,
+    )
+    per_pt = [[] for _ in range(n_pt)]
+    n_behind = 0
+    for p in range(n_pt):
+        for i in range(n_img):
+            c = rots[i] @ pts[p] + trans[i]
+            u, v = cam.ray_to_pixel(np.ascontiguousarray(c, dtype=np.float64))
+            if np.hypot(u - 240.0, v - 240.0) > f * np.radians(105.0):
+                continue  # outside a 210° image circle
+            per_pt[p].append((i, [u, v], c[2] > 0.0))
+    keep, uv, oi, op = [], [], [], []
+    for p in range(n_pt):
+        if len(per_pt[p]) < 2:
+            continue
+        cp = len(keep)
+        keep.append(pts[p])
+        for i, px, behind in per_pt[p]:
+            n_behind += int(behind)
+            uv.append(px)
+            oi.append(i)
+            op.append(cp)
+    assert n_behind >= 50, f"scene is not wide enough: {n_behind}"
+    return {
+        "cam": cam,
+        "quats": np.array([_matrix_to_quat_wxyz(r) for r in rots]),
+        "trans": np.array(trans),
+        "points": np.array(keep),
+        "uv": np.asarray(uv, dtype=np.float64),
+        "obs_image": np.array(oi, dtype=np.uint32),
+        "obs_point": np.array(op, dtype=np.uint32),
+    }
+
+
+def test_opt_f_recovers_equidistant_focal_past_ninety_degrees():
+    # Binding parity of the kernel's equidistant release: observations
+    # generated at f = 130, the solve started 9% low (with the scene scaled to
+    # match, since focal and depth trade), recovers the planted focal.
+    s = _wide_scene(f=130.0)
+    f_start = 118.3
+    s["cam"] = _equidistant_cam(f_start)
+    s["points"] = s["points"] * (f_start / 130.0)
+    s["trans"] = s["trans"] * (f_start / 130.0)
+    out = _run(s, opt_f=True)
+    assert abs(out["focal"] - 130.0) / 130.0 < 0.01, out["focal"]
+    assert np.max(out["residual_norms"]) < 0.5
+
+
+def test_equidistant_fixed_focal_is_bit_identical():
+    s = _wide_scene(f=130.0)
+    s["cam"] = _equidistant_cam(122.0)
+    out = _run(s, opt_f=False)
+    assert out["focal"] == 122.0
 
 
 def test_fortran_order_inputs_match_c_order():

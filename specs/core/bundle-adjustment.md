@@ -106,11 +106,20 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
 
 - **Parameters.** Per touched image a local `SO(3) × ℝ³` perturbation
   (`R ← exp(δθ)·R`, `t ← t + δt`); per touched point `X ← X + δX`; when
-  `opt_f`, the shared focal `f ← f + δf`. Focal optimization requires
-  `SIMPLE_PINHOLE` (single focal, no distortion), where
-  `∂(u, v)/∂f = ((u − cx)/f, (v − cy)/f)` exactly; the binding rejects
-  `opt_f` for other models loudly, and the core silently degrades it to a
-  fixed-focal solve (never a half-modeled focal DOF).
+  `opt_f`, the shared focal `f ← f + δf`. Focal optimization requires a
+  single-focal, distortion-free model — `SIMPLE_PINHOLE` or
+  `EQUIDISTANT_FISHEYE` — where `∂(u, v)/∂f = ((u − cx)/f, (v − cy)/f)`
+  exactly. The condition is that `f` multiplies a distorted coordinate
+  that does not itself depend on `f`: `x_d = rx/(−rz)` for the pinhole and
+  `x_d = θ·ûx` with `θ = atan2(ρ, rz)` for the equidistant map, so in both
+  cases `∂u/∂f = x_d = (u − cx)/f` at every incidence angle, the
+  periphery past `θ = 90°` included. Every other model fails the
+  condition — a second focal `fy` (no slot in the 7-wide camera block), or
+  distortion coefficients acting on a normalized coordinate whose relation
+  to the pixel is `f`-dependent (the polynomial fisheye family recovers
+  `θ` from `r/f` before applying `g(θ²)`). The binding rejects `opt_f` for
+  those loudly, and the core silently degrades it to a fixed-focal solve
+  (never a half-modeled focal DOF).
 - **Jacobian.** The projection block `∂(u, v)/∂p_cam` — analytic from
   `CameraIntrinsics::ray_to_pixel_with_jacobian` for the perspective
   family and `EQUIDISTANT_FISHEYE`, a central difference of
@@ -154,7 +163,7 @@ bundle_adjust(
     uv,                        # (n_obs, 2)
     obs_image,                 # (n_obs,) uint32
     obs_point,                 # (n_obs,) uint32
-    opt_f=False,               # requires SIMPLE_PINHOLE
+    opt_f=False,               # SIMPLE_PINHOLE or EQUIDISTANT_FISHEYE
     schedule=[(50.0, 5.0), (12.0, 2.0), (4.0, 1.0)],
     max_iters=60,
     min_track=2,
@@ -191,6 +200,17 @@ Python's point of view).
   converges through the central-difference Jacobian fallback under a
   single-round (no-retriangulation) schedule — guarding against a
   zero-Jacobian no-op solve masked by live retriangulation.
+- **Focal column exactness off the perspective family**: the analytic
+  `(u − cx)/f` column agrees with a central difference of the projection
+  in the focal over an `EQUIDISTANT_FISHEYE` field sampled out to
+  `θ = 170°` at several azimuths and ray scales, to rounding (no
+  truncation allowance) — the derivative of an exactly-linear dependence.
+- **Focal release and the fixed-focal gauge, equidistant**: a released
+  focal recovers a planted one from a several-percent start on a scene
+  whose periphery is past `θ = 90°`; the same solve with `opt_f = false`
+  returns the input focal bit-identically; and a `SIMPLE_RADIAL_FISHEYE`
+  scene with `opt_f = true` also returns its focal bit-identically (the
+  core's degrade, since that model's `∂u/∂f` is not `(u − cx)/f`).
 - **Memory order**: Fortran-ordered inputs to the binding produce the same
   result as C-ordered ones (guards the `to_contiguous!` zero-copy path
   against silent transposition).

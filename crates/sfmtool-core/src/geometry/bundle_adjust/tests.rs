@@ -1829,3 +1829,169 @@ fn fisheye_analytic_and_central_difference_bundles_agree() {
         "worst reprojection {worst} px under the analytic path"
     );
 }
+
+// ── Focal release under the equidistant model ─────────────────────────────
+//
+// `opt_f` admits exactly the two single-focal, distortion-free models (the
+// gate in `bundle_adjust_staged`). The tests below pin the three things that claim
+// rests on: the analytic focal column is exact for `EquidistantFisheye`
+// INCLUDING past θ = 90°, a released focal actually recovers a planted one
+// there, and every other model still holds its focal fixed rather than taking
+// a half-modeled step.
+
+/// `∂(u, v)/∂f` as this kernel computes it, against a central difference of
+/// the projection, over the whole equidistant field including the periphery.
+///
+/// The column is `(u − cx)/f` because `f` multiplies a distorted coordinate
+/// that never reads it (`x_d = θ·û`, `θ = atan2(ρ, rz)`). That claim is what
+/// is measured here, at the same rays a >180° capture actually produces.
+#[test]
+fn equidistant_focal_column_matches_a_central_difference() {
+    let f0 = 130.0;
+    let cam = equidistant_native(f0);
+    let (cx, cy) = cam.principal_point();
+    let h = 1e-4 * f0;
+    let cam_p = equidistant_native(f0 + h);
+    let cam_m = equidistant_native(f0 - h);
+    let mut worst: f64 = 0.0;
+    let mut n_past_90 = 0usize;
+    // θ from near-axis out to 170°, five azimuths, three ray scales (the
+    // projection is scale-invariant, the derivative must be too).
+    for ti in 0..18 {
+        let theta = (5.0 + 10.0 * ti as f64).to_radians();
+        for ai in 0..5 {
+            let az = 2.0 * std::f64::consts::PI * ai as f64 / 5.0;
+            for &scale in &[0.35_f64, 1.0, 7.5] {
+                // Optical-frame direction at (θ, az) → canonical via
+                // S = diag(1, −1, −1).
+                let opt = Vector3::new(theta.sin() * az.cos(), theta.sin() * az.sin(), theta.cos());
+                let r = [scale * opt.x, -scale * opt.y, -scale * opt.z];
+                if theta > std::f64::consts::FRAC_PI_2 {
+                    n_past_90 += 1;
+                }
+                let (u, v) = cam.ray_to_pixel(r).expect("equidistant is total");
+                let (up, vp) = cam_p.ray_to_pixel(r).unwrap();
+                let (um, vm) = cam_m.ray_to_pixel(r).unwrap();
+                let (fd_u, fd_v) = ((up - um) / (2.0 * h), (vp - vm) / (2.0 * h));
+                // The kernel's column, verbatim.
+                let (col_u, col_v) = ((u - cx) / f0, (v - cy) / f0);
+                // Relative to the column's own magnitude (it grows with θ);
+                // the absolute floor keeps the near-axis rays meaningful.
+                let denom = col_u.abs().max(col_v.abs()).max(1e-3);
+                worst = worst
+                    .max((col_u - fd_u).abs() / denom)
+                    .max((col_v - fd_v).abs() / denom);
+            }
+        }
+    }
+    assert!(n_past_90 >= 100, "not enough periphery: {n_past_90}");
+    // A central difference of an exactly-linear function is exact to rounding;
+    // the bar is the difference quotient's own cancellation noise, not a
+    // truncation allowance.
+    assert!(
+        worst < 1e-9,
+        "analytic focal column vs central difference: worst relative error {worst}"
+    );
+}
+
+/// Free-focal BA under `EquidistantFisheye` recovers a planted focal from a
+/// start several percent off, on a scene whose periphery is past 90°.
+#[test]
+fn equidistant_opt_f_recovers_a_perturbed_focal() {
+    let f_true = 130.0;
+    let (mut s, n_behind) = make_fisheye_scene_for(equidistant_native(f_true), 8, 140);
+    assert!(
+        n_behind >= 50,
+        "scene is not wide enough: {n_behind}/{} past 90°",
+        s.uv.len()
+    );
+    // The observations were generated at 130; hand the solver 118.3 (−9%).
+    let f_start = 118.3;
+    s.cam = equidistant_native(f_start);
+    // The focal trades against the scene scale, so the solve needs the
+    // structure to move with it: perturb depths, not just the focal.
+    for x in s.points.iter_mut() {
+        for v in x.iter_mut() {
+            *v *= f_start / f_true;
+        }
+    }
+    for t in s.trans.iter_mut() {
+        *t *= f_start / f_true;
+    }
+    let out = run(&mut s, true, &DEFAULT_SCHEDULE);
+    let err = (out.focal - f_true).abs() / f_true;
+    assert!(
+        err < 0.01,
+        "released focal {} from a {:.1}% start (want {f_true})",
+        out.focal,
+        100.0 * (f_start / f_true - 1.0)
+    );
+    // …and it converged, not just drifted: the fit is sub-pixel.
+    let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
+    assert!(
+        worst < 0.5,
+        "worst reprojection {worst} px after the release"
+    );
+}
+
+/// The gauge tests, re-derived against `EquidistantFisheye`: `opt_f = false`
+/// holds the focal EXACTLY, and the release is what moves it.
+#[test]
+fn equidistant_fixed_focal_holds_exactly() {
+    let f0 = 130.0;
+    let (mut fixed, _) = make_fisheye_scene_for(equidistant_native(f0), 6, 90);
+    let (mut freed, _) = make_fisheye_scene_for(equidistant_native(f0), 6, 90);
+    // Same wrong start in both arms.
+    let off = 0.94 * f0;
+    for s in [&mut fixed, &mut freed] {
+        s.cam = equidistant_native(off);
+        for x in s.points.iter_mut() {
+            for v in x.iter_mut() {
+                *v *= off / f0;
+            }
+        }
+        for t in s.trans.iter_mut() {
+            *t *= off / f0;
+        }
+    }
+    let out_fixed = run(&mut fixed, false, &DEFAULT_SCHEDULE);
+    assert_eq!(
+        out_fixed.focal.to_bits(),
+        off.to_bits(),
+        "a fixed-focal equidistant solve moved the focal to {}",
+        out_fixed.focal
+    );
+    let out_freed = run(&mut freed, true, &DEFAULT_SCHEDULE);
+    assert!(
+        (out_freed.focal - f0).abs() < (off - f0).abs() / 2.0,
+        "the release did not close on the planted focal: {} (start {off}, true {f0})",
+        out_freed.focal
+    );
+}
+
+/// The polynomial fisheye family is NOT released: its `∂u/∂f` is not
+/// `(u − cx)/f` (the coefficients act on a `θ` recovered from `r/f`), so the
+/// core degrades `opt_f` to a fixed-focal solve rather than stepping a
+/// half-modeled focal. Phase 3b is the equidistant model only.
+#[test]
+fn polynomial_fisheye_still_holds_its_focal_under_opt_f() {
+    let f0 = 130.0;
+    let (mut s, _) = make_fisheye_scene_for(equidistant_seed(f0), 6, 90);
+    let off = 0.94 * f0;
+    s.cam = equidistant_seed(off);
+    for x in s.points.iter_mut() {
+        for v in x.iter_mut() {
+            *v *= off / f0;
+        }
+    }
+    for t in s.trans.iter_mut() {
+        *t *= off / f0;
+    }
+    let out = run(&mut s, true, &DEFAULT_SCHEDULE);
+    assert_eq!(
+        out.focal.to_bits(),
+        off.to_bits(),
+        "SimpleRadialFisheye took a focal step under opt_f: {}",
+        out.focal
+    );
+}

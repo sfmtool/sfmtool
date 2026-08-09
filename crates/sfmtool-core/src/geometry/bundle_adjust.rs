@@ -162,9 +162,10 @@ struct ObsBlocks {
 /// `specs/core/bundle-adjustment.md`. An absent or all-`false` mask
 /// reproduces the unprotected behavior bit for bit.
 ///
-/// `opt_f` releases the shared focal (SIMPLE_PINHOLE only — the binding
-/// rejects other models loudly; the core silently degrades them to a
-/// fixed-focal solve).
+/// `opt_f` releases the shared focal (SIMPLE_PINHOLE and EQUIDISTANT_FISHEYE —
+/// the two models this kernel's analytic focal column `(u − cx)/f` is exact
+/// for; the binding rejects other models loudly, the core silently degrades
+/// them to a fixed-focal solve).
 #[allow(clippy::too_many_arguments)]
 pub fn bundle_adjust(
     cam: &CameraIntrinsics,
@@ -572,6 +573,10 @@ fn solve_lm(
                         SMatrix::<f64, 1, 3>::from_row_slice(&jp[1]),
                     ]);
                     if opt_f {
+                        // ∂(u, v)/∂f. Exact for every model the `opt_f` gate
+                        // admits: the focal is a pure multiplier of an
+                        // `f`-independent distorted coordinate, so the
+                        // derivative is that coordinate.
                         cam_j[(0, 0)] = (u - cx) / f;
                         cam_j[(1, 0)] = (v - cy) / f;
                     }
@@ -881,7 +886,22 @@ fn bundle_adjust_staged(
         }
     }
 
-    let opt_f = opt_f && matches!(cam.model, CameraModel::SimplePinhole { .. });
+    // Which models release the focal is a property of this implementation's
+    // focal column, not of the camera: the analytic `∂(u, v)/∂f = (u − cx)/f`
+    // is exact exactly when the focal is a pure multiplier of a distorted
+    // coordinate that does not itself read `f` — `u = f·x_d + cx` with
+    // `x_d = rx/(−rz)` (SIMPLE_PINHOLE) or `x_d = θ·ûx`, `θ = atan2(ρ, rz)`
+    // (EQUIDISTANT_FISHEYE). Every other model fails that test, via a second
+    // focal `fy` this kernel has no slot for or via coefficients applied to a
+    // normalized coordinate whose relation to the pixel is `f`-dependent
+    // (polynomial fisheye: `x_d = θ·g(θ²)·û` with `θ` recovered from `r/f`),
+    // and degrades to a fixed-focal solve (the binding rejects it loudly
+    // first). `numeric::cam_at` mirrors this gate.
+    let opt_f = opt_f
+        && matches!(
+            cam.model,
+            CameraModel::SimplePinhole { .. } | CameraModel::EquidistantFisheye { .. }
+        );
 
     let mut f = cam.focal_lengths().0;
 

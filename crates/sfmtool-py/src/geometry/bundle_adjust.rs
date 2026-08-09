@@ -49,7 +49,10 @@ use crate::geometry::PyCameraIntrinsics;
 ///     protected_loss_scale: Multiplier on each stage's loss scale for
 ///         protected observations (default 3.0; must be positive and
 ///         finite).
-///     opt_f: Release the shared focal (SIMPLE_PINHOLE only).
+///     opt_f: Release the shared focal (SIMPLE_PINHOLE or
+///         EQUIDISTANT_FISHEYE — the two single-focal, distortion-free
+///         models, where the kernel's analytic focal column is exact; any
+///         other model raises).
 ///     schedule: [(trim_px, loss_scale), ...] staged rounds
 ///         (default [(50, 5), (12, 2), (4, 1)]).
 ///     max_iters: LM iteration budget per round (default 60).
@@ -130,9 +133,17 @@ pub fn bundle_adjust<'py>(
             "schedule must have at least one (trim_px, loss_scale) round",
         ));
     }
-    if opt_f && !matches!(camera.inner.model, CameraModel::SimplePinhole { .. }) {
+    // The focal column `∂(u, v)/∂f = (u − cx)/f` is exact only where the focal
+    // multiplies an `f`-independent distorted coordinate: the two single-focal
+    // distortion-free models. Everything else is rejected loudly rather than
+    // degraded to a fixed-focal solve behind the caller's back.
+    let releasable = matches!(
+        camera.inner.model,
+        CameraModel::SimplePinhole { .. } | CameraModel::EquidistantFisheye { .. }
+    );
+    if opt_f && !releasable {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "opt_f requires a SIMPLE_PINHOLE camera",
+            "opt_f requires a SIMPLE_PINHOLE or EQUIDISTANT_FISHEYE camera",
         ));
     }
 

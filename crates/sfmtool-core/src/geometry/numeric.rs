@@ -61,14 +61,19 @@ pub(crate) fn rotation_angle(r: &Matrix3<f64>) -> f64 {
     (((r.trace() - 1.0) / 2.0).clamp(-1.0, 1.0)).acos()
 }
 
-/// The camera at focal `f` — identity for every model but SIMPLE_PINHOLE.
+/// The camera at focal `f` — identity for every model but the two
+/// single-focal, distortion-free ones: `SIMPLE_PINHOLE` and
+/// `EQUIDISTANT_FISHEYE`.
 ///
-/// Focal optimization is gated on that model, so no other camera ever sees a
-/// moved focal; this matches the bundle adjustment's focal handling.
+/// Focal optimization is gated on exactly those two models, so no other camera
+/// ever sees a moved focal; this matches the bundle adjustment's focal
+/// handling.
 pub(crate) fn cam_at(cam: &CameraIntrinsics, f: f64) -> CameraIntrinsics {
     let mut out = cam.clone();
-    if let CameraModel::SimplePinhole { focal_length, .. } = &mut out.model {
-        *focal_length = f;
+    match &mut out.model {
+        CameraModel::SimplePinhole { focal_length, .. }
+        | CameraModel::EquidistantFisheye { focal_length, .. } => *focal_length = f,
+        _ => {}
     }
     out
 }
