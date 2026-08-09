@@ -399,7 +399,7 @@ fn quantile(vals: &[f64], p: f64) -> f64 {
 
 /// Smallest eigenvector of `AᵀA` over the selected rows, reshaped row-major
 /// into a `3×3` matrix. `None` for a design that carries no constraint.
-fn null_from_rows(
+pub(crate) fn null_from_rows(
     rows: &[SVector<f64, 9>],
     idx: impl Iterator<Item = usize>,
 ) -> Option<Matrix3<f64>> {
@@ -443,7 +443,7 @@ pub(crate) fn kabsch(
 }
 
 /// Descending singular values of a `3×3` matrix.
-fn singular_values_desc(m: &Matrix3<f64>) -> [f64; 3] {
+pub(crate) fn singular_values_desc(m: &Matrix3<f64>) -> [f64; 3] {
     let sv = m.svd(false, false).singular_values;
     let mut s = [sv[0], sv[1], sv[2]];
     s.sort_by(|a, b| b.total_cmp(a));
@@ -521,7 +521,7 @@ struct EpipolarFit {
 /// are genuinely different measurements — a symmetric residual would score the
 /// swapped correspondences identically, because the epipolar matrix of the swap
 /// is exactly the transpose.
-fn epipolar_residuals(
+pub(crate) fn epipolar_residuals(
     e: &Matrix3<f64>,
     r1: &[Vector3<f64>],
     r2: &[Vector3<f64>],
@@ -540,18 +540,10 @@ fn epipolar_residuals(
     }
 }
 
-/// Robust ray-space epipolar matrix at one candidate focal: score the frozen
-/// minimal samples by the one-sided angular residual, then locally optimize on
-/// the consensus set. `sin_tol[i]` is the per-point consensus bound.
-fn fit_epipolar(
-    r1: &[Vector3<f64>],
-    r2: &[Vector3<f64>],
-    sin_tol: &[f64],
-    samples: &[usize],
-    side_two: bool,
-) -> Option<EpipolarFit> {
-    let n = r1.len();
-    let rows: Vec<SVector<f64, 9>> = (0..n)
+/// Design rows of the linear epipolar constraint `x₂ᵀ E x₁ = 0`, one row per
+/// correspondence, `E` flattened row-major.
+pub(crate) fn epipolar_rows(r1: &[Vector3<f64>], r2: &[Vector3<f64>]) -> Vec<SVector<f64, 9>> {
+    (0..r1.len().min(r2.len()))
         .map(|i| {
             let (a, b) = (&r2[i], &r1[i]);
             SVector::<f64, 9>::from_column_slice(&[
@@ -566,7 +558,21 @@ fn fit_epipolar(
                 a[2] * b[2],
             ])
         })
-        .collect();
+        .collect()
+}
+
+/// Robust ray-space epipolar matrix at one candidate focal: score the frozen
+/// minimal samples by the one-sided angular residual, then locally optimize on
+/// the consensus set. `sin_tol[i]` is the per-point consensus bound.
+fn fit_epipolar(
+    r1: &[Vector3<f64>],
+    r2: &[Vector3<f64>],
+    sin_tol: &[f64],
+    samples: &[usize],
+    side_two: bool,
+) -> Option<EpipolarFit> {
+    let n = r1.len();
+    let rows = epipolar_rows(r1, r2);
 
     let mut resid = vec![0.0f64; n];
     let mut best_count = 0usize;
@@ -675,7 +681,7 @@ fn scan_epipolar(
 // ── Rotation cell ────────────────────────────────────────────────────────────
 
 /// Angle between each rotated ray and its measured partner.
-fn rotation_residuals(
+pub(crate) fn rotation_residuals(
     rot: &Matrix3<f64>,
     r1: &[Vector3<f64>],
     r2: &[Vector3<f64>],
@@ -949,7 +955,7 @@ fn scan_grid(max_wh: f64) -> Vec<f64> {
 }
 
 /// Draw `count` minimal samples of `k` distinct indices in `0..n`.
-fn draw_samples(state: &mut u64, n: usize, k: usize, count: usize) -> Vec<usize> {
+pub(crate) fn draw_samples(state: &mut u64, n: usize, k: usize, count: usize) -> Vec<usize> {
     let mut out = Vec::with_capacity(count * k);
     for _ in 0..count {
         let start = out.len();

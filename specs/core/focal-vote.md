@@ -219,7 +219,10 @@ values.
 
 Both estimator families generalize over the camera model through the
 pixel→ray map. A **column** is a camera model hypothesis supplying an
-invertible map from pixels to unit rays, parameterized by its own focal:
+invertible map from pixels to unit rays, parameterized by its own focal.
+(The two ray-space estimators the fisheye cells scan are also exposed as
+standalone single-camera primitives — see
+[relative-pose.md](relative-pose.md).)
 
 - **Pinhole** — `ray ∝ ((x − cx)/f, (y − cy)/f, 1)`. The implemented
   kernel above is this column; its two cells (epipolar, rotation) have

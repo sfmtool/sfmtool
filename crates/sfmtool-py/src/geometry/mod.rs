@@ -18,6 +18,7 @@ pub mod homography_estimation;
 pub mod pose_refine;
 pub mod pose_verification;
 pub mod reconstruction_growth;
+pub mod relative_pose;
 pub mod reprojection;
 pub mod resect_translation;
 pub mod rigid_transform;
@@ -48,5 +49,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     bundle_adjust::register(m)?;
     reconstruction_growth::register(m)?;
     pose_verification::register(m)?;
+    relative_pose::register(m)?;
     Ok(())
 }

@@ -34,6 +34,8 @@ _EXPECTED_FUNCTIONS = (
     "resect_images_batch",
     "verify_poses",
     "repair_poses",
+    "estimate_essential_rays",
+    "fit_ray_rotation",
 )
 
 

@@ -16,6 +16,7 @@ pub(crate) mod polynomial;
 pub mod pose_refine;
 pub mod pose_verification;
 pub mod reconstruction_growth;
+pub mod relative_pose;
 pub mod reprojection;
 pub mod resect_translation;
 pub mod rigid_transform;
@@ -35,6 +36,10 @@ pub use pose_verification::{
     repair_poses, verify_poses, PoseRepair, PoseVerification, RepairOptions, VerifyOptions,
 };
 pub use reconstruction_growth::{grow_reconstruction, GrowOptions, ReconstructionGrowth};
+pub use relative_pose::{
+    estimate_essential_rays, fit_ray_rotation, EpipolarSide, RayEssential, RayEssentialOptions,
+    RayRotation, RayRotationOptions,
+};
 pub use reprojection::{inlier_fraction, reprojection_residuals};
 pub use resect_translation::{resect_translation, TranslationResection};
 pub use rigid_transform::RigidTransform;
