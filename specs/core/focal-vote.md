@@ -198,6 +198,149 @@ epipolar candidate pairs with at least 16 F inliers — high poverty means
 most correspondences are explained without parallax, the regime where
 callers should expect the pool to be rotation-dominated).
 
+## Camera-Model Columns (Equidistant Fisheye)
+
+**Status:** Prototype-validated (2026-08-09), not implemented in the
+kernel. Validation coverage: two calibrated fisheye captures (one
+Insta360 lens family at two scales, 211° FOV) and two pinhole controls;
+model verdict correct on all four, pooled focal within 1.2% of the
+best-fit equidistant focal. Gate constants below are the prototype's
+data-derived values.
+
+Both estimator families generalize over the camera model through the
+pixel→ray map. A **column** is a camera model hypothesis supplying an
+invertible map from pixels to unit rays, parameterized by its own focal:
+
+- **Pinhole** — `ray ∝ ((x − cx)/f, (y − cy)/f, 1)`. The implemented
+  kernel above is this column; its two cells (epipolar, rotation) have
+  closed-form focal extraction (Bougnoux, `K⁻¹HK` orthogonality).
+- **Equidistant fisheye** — `θ = r/f` for radial pixel distance `r` from
+  the principal point; `ray = (sin θ · cos φ, sin θ · sin φ, cos θ)`.
+  The map depends on the focal being estimated, so this column has no
+  closed form: each cell scans candidate focals for self-consistency,
+  in the same shape as the pinhole rotation cell's orthogonality scan
+  (log grid over the plausibility band, floor and shape gates,
+  parabolic refinement of the winning bracket).
+
+The two fisheye cells:
+
+- **Epipolar × fisheye.** Per candidate `f`: map the pair's
+  correspondences to rays and robustly estimate the ray-space epipolar
+  matrix. With the correct `f` that matrix is essential — its two
+  non-zero singular values are equal — so the cost is the essentialness
+  residual `(σ₁ − σ₂)/(σ₁ + σ₂)` on the consensus set. The pair votes
+  the minimizing `f`. The floor gate rejects pairs whose best residual
+  stays high (no essential explanation at any focal); the shape gate
+  rejects flat scans (geometry with no focal opinion). The pinhole
+  column's direction-agreement certificate has its analog here: the
+  scans of the two correspondence directions must locate minima within
+  the epipolar agreement band, else the pair casts no vote. The
+  per-direction residual must be **one-sided** — measured against
+  `E·x₁` in the second image for one direction and against `Eᵀ·x₂` in
+  the first for the other. A symmetric residual makes the certificate
+  vacuous: the epipolar matrix of the swapped correspondences is
+  exactly the transpose, with identical singular values, so a symmetric
+  consensus scores the two directions as one measurement.
+
+  Consensus selection and refinement live on the ray sphere with
+  angular residuals (the ray-to-epipolar-plane angle
+  `asin(|x₂ᵀ E x₁|)` for unit rays): a fisheye field of view can
+  exceed 180°, and rays with `θ ≥ 90°` (backward of the image plane)
+  have no planar projection. Hypothesis generation may equivalently run
+  on the `z = 1` plane over the sub-hemisphere population — provided
+  the population is frozen at the smallest candidate focal
+  (`r < f_min · π/2`, so every candidate scores the same point set) and
+  the consensus gate and refit remain angular on the sphere. Both
+  conditions are load-bearing; with them the two estimators measure as
+  equivalent at 211° FOV (with ~20% of correspondences beyond the
+  hemisphere), without them the plane path becomes a population or
+  periphery artifact. The angular gate's **value** derives per
+  candidate focal from a pixel tolerance through the map's local scale
+  `dr/dθ` — a fixed angular threshold does not transfer across lenses
+  and resolutions (measured angular noise spans 0.03°–0.54° p90 across
+  captures) and misclassifies narrow-FOV pinhole captures.
+- **Rotation × fisheye.** Per candidate `f`: map both sides to rays and
+  fit a rotation directly (robust orthogonal fit on unit rays); the
+  cost is the fit's trimmed RMS angular residual. A parallax-free pair
+  under the correct `f` is explained by a pure rotation of rays with no
+  conjugacy construction needed, and the fit is valid over the full
+  sphere — `θ ≥ 90°` rays participate like any others. The inlier
+  support is frozen **once per pair** (the largest rotation consensus
+  over a coarse sub-grid) and reused at every candidate: both columns'
+  maps shrink every ray angle as `1/f`, so with a per-candidate support
+  a bad focal buys a low cost by keeping fewer points and the scan has
+  no interior minimum (it pins at the top of the grid). Floor and
+  shape gates as above.
+
+  The fisheye column's scan band is FOV-derived rather than inherited
+  from the pinhole band: under the equidistant map the focal and the
+  field of view are tied by `f = r_edge / θ_edge`, so the candidate
+  grid spans the focals corresponding to a credible half-FOV range at
+  the image's own radius (a 480 px-wide sensor at 200° FOV implies
+  `f ≈ 137 px` — legal here, implausible in the pinhole band's terms).
+
+**Radial coverage.** Pinhole and equidistant maps agree to first order
+near the principal point, so a pair whose inliers hug the centre cannot
+distinguish the columns regardless of how well it votes within one.
+Each vote therefore carries a radial-coverage covariate (a high quantile
+of its inliers' radial distance, as a fraction of the half-diagonal),
+and only votes above a coverage floor (`0.50` of the half-diagonal at
+the inliers' radial p90) are **model-informative**. Votes below the
+floor still enter their column's focal pool; they are simply excluded
+from the model verdict. Coverage is deliberately **radial, not
+angular**: angular reach is what actually predicts discrimination, but
+an angular floor disqualifies a narrow-FOV pinhole capture's own
+legitimate votes by attrition and flips its model verdict — the radial
+covariate penalizes centre-hugging votes without penalizing narrow
+lenses.
+
+The certification floors, following the same pattern as the pinhole
+gates (each vote certified by its own geometry, no quorums): the
+essentialness floor is `0.03` (a validity floor — correct-column costs
+sit at p90 ≤ 0.023, and the floor is not the model discriminator, whose
+distributions overlap); the rotation-fit floor is `0.02` rad trimmed
+RMS (≈1.8× the observed correct-column p90, ~30× under the wrong
+column's residuals, and stated in angle because the equivalent pixel
+floor doubles with resolution while the angular one holds); the shape
+gate (`2·cost(f*) ≤ median over the grid`) and the `0.05`
+direction-agreement band carry over from the pinhole cells unchanged.
+A certified vote also records whether its unconstrained wide-band
+minimum falls inside the credible half-FOV window — on fisheye
+captures it does for the large majority of pairs, on pinhole captures
+it rarely does, so band containment is a model-evidence covariate
+available to the verdict.
+
+**Arbitration hierarchy.** Model precedes motion family: the model
+verdict is the column with the greater certified mass of
+model-informative votes, and the winning column then applies the
+existing two-family consensus (pooled log-space median, the `0.25`
+family-disagreement rule) unchanged over its own votes. Certified
+masses are comparable **only when both columns' certificates come from
+the same scan machinery**: for arbitration purposes the pinhole column
+runs the same two self-consistency scans (essentialness, rotation fit)
+under the identity ray map and the same gates, while its focal answer
+keeps the closed forms above. Counting closed-form certificates against
+scan certificates compares incommensurable quantities and is not
+defined. Column focals are likewise not blended: a pinhole focal and an
+equidistant focal parameterize different maps and only coincide near
+the axis. The losing column's median, count, and spread remain as
+diagnostics. The rotation cell abstains entirely on captures with no
+far-field rotation pairs, so on such captures the model verdict rests
+on the epipolar cell alone — the verdict's margin is structurally
+thinner on pinhole input than on fisheye input.
+
+**Compatibility.** The caller selects the column set; the default is
+pinhole-only, which reproduces the implemented kernel's behavior
+identically. Output gains `camera_model` (the model verdict, `None`
+when no model-informative votes exist) and per-column diagnostics
+mirroring the per-family ones. The equidistant column's focal
+parameterizes the equidistant map **only**: against a polynomial
+fisheye calibration it is the best-fit equidistant focal over the
+observed radii, not the calibrated focal (measured ≈6% above a
+Kannala-Brandt calibration's `f` on the validation lens). Callers must
+not hand it to a consumer expecting another fisheye parameterization's
+focal.
+
 ## Binding
 
 `sfmtool._sfmtool.geometry.focal_vote(cluster_indexes, image_indexes,
