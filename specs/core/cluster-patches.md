@@ -225,7 +225,8 @@ scripts stay as the behavioral reference until the Rust kernel lands.
 
 Consumers that admit a subset of clusters (status/image/span predicates) use
 the file-level selection derivation specified in
-[matches-file-format.md](../formats/matches-file-format.md#cluster-selection-derived-files).
+[cluster-selection.md](cluster-selection.md) (file contract in
+[matches-file-format.md](../formats/matches-file-format.md#cluster-selection-derived-files)).
 
 ## Open questions
 

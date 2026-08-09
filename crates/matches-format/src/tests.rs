@@ -1728,6 +1728,19 @@ fn test_select_clusters_restriction_absent_reference() {
         Array1::from_vec(vec![CLUSTER_REFERENCE_UNREFINABLE, 2])
     );
 
+    // The sentinel's "reference not present in this selection" reading is
+    // scoped to files carrying the provenance record — an orphaned-reference
+    // output MUST announce itself as derived, naming its source.
+    let prov = sel
+        .metadata
+        .matching_options
+        .get("cluster_selection")
+        .expect("derived file must carry the cluster_selection provenance record");
+    assert_eq!(
+        prov["source_content_xxh128"],
+        serde_json::Value::String(data.content_hash.content_xxh128.clone())
+    );
+
     // Image table = exactly the restriction, in file order, renumbered.
     assert_eq!(
         sel.image_names,
