@@ -66,8 +66,24 @@ typically the camera-facing plane, not the true surface plane. We want the norma
 `X` whose rendered patches agree the most.
 
 This is the planar-patch case of multi-view stereo: for a pinhole camera the
-patch→image map is a homography. We use the general per-pixel projection
-(`WarpMap::from_patch`), so distortion / fisheye work unchanged.
+patch→image map is a homography. The **source-rendering** path uses the general
+per-pixel projection (`WarpMap::from_patch`), so distortion / fisheye work
+unchanged there — every grid pixel goes through the model's own `ray_to_pixel`.
+
+Two things around it are model-*conditional*, and this claim does not extend to
+them:
+
+- The **fronto-parallel cache** (`cache=fronto`, the `quality=coarse` preset)
+  replaces the per-pixel projection with a composition of two three-corner
+  affine fits, which is exact only for an affine image map and leaves the
+  projection's curvature over the patch as fit error — growing with image radius
+  under a wide-angle or equidistant map. See
+  [fronto-parallel-patch-cache.md](fronto-parallel-patch-cache.md)
+  ("Limitations / when it does not apply").
+- The **patch sizing** the refinement inherits from `PatchCloud` reads the
+  camera model: a finite point's distance is `|z|` for the perspective family
+  and the ray range for a `needs_ray_path` camera, because `|z|` collapses to
+  zero at 90° off axis. See [patch-cloud.md](patch-cloud.md) (`PatchExtent`).
 
 ## Degrees of freedom
 

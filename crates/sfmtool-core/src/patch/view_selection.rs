@@ -295,7 +295,24 @@ fn build_reference(
 /// point displaces all four corners symmetrically, cancelling in the residual
 /// while edge-midpoint error persists — so interior position error is bounded
 /// only for the asymmetric class; the symmetric remainder folds into the
-/// accepted admission-flip loss. 0.5 px keeps the value
+/// accepted admission-flip loss.
+///
+/// **How much of the curvature is symmetric is a property of the camera
+/// model**, so this is an approximation whose quality is model-conditional.
+/// Under the perspective family the residual's blind spot is a lens-distortion
+/// effect that is largest near the principal point and small in absolute terms.
+/// Under the equidistant map (`θ = r/f`) the projection's own radial
+/// compression `θ/sin θ` is symmetric about the patch centre at EVERY image
+/// radius and is the dominant curvature term — so on a fisheye view the
+/// residual is measuring the smaller half of the deviation. What keeps the
+/// approximation honest there is the asymmetric part scaling with the same
+/// radius: a peripheral patch large enough for the symmetric term to matter
+/// also fails the 0.5 px asymmetric bound and falls back to the exact warp.
+/// This is a quality knob, not a correctness one — the fast path never decides
+/// rejection on its own (see [`affine_core_map`]'s contract), so its cost is
+/// admission flips among near-tied candidates.
+///
+/// 0.5 px keeps the value
 /// error inside the sampler's own bilinear blur (measured on dino: mean
 /// per-point admitted-set Jaccard vs the exact warp stays ≥ 0.994) while
 /// letting the large-patch candidates — whose projective curvature over a

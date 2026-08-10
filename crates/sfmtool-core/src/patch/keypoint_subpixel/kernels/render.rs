@@ -538,6 +538,31 @@ pub(in crate::patch::keypoint_subpixel) const TILE_MAX_GRID_TO_SOURCE: f64 = 1.2
 /// (so `w = 0` folds in identically); `None` when a corner fails to project
 /// (grazing / behind camera — the view then keeps the direct path, which
 /// handles partial visibility exactly).
+///
+/// **An approximation, and a model-conditional one.** This is a SECANT over the
+/// whole core — two edge chords from one corner — not the local scale anywhere
+/// in particular. It therefore reports the patch's average stretch and is blind
+/// to how that stretch varies across the grid. Under the perspective family the
+/// variation is small over a patch; under the equidistant map the radial and
+/// azimuthal scales differ by `θ/sin θ` (1.57 at 90°, 2.42 at 120°) and the
+/// azimuthal one grows across a peripheral patch, so the secant can sit either
+/// side of the true local maximum. The consequence is bounded: the value only
+/// chooses tile-vs-direct render, the direct path is exact, and a
+/// mis-classified view renders correctly either way — at worst it aliases
+/// slightly (tile taken when it should not have been) or costs the tile's
+/// speed-up (direct taken when the tile would have done).
+///
+/// The model-correct measure is the warp map's per-pixel `σ_major`
+/// (`WarpMap::compute_svd`), which is **not** a drop-in here: no `WarpMap`
+/// exists at this call site. The first one on this path is built inside
+/// `render_refine_tile`, i.e. after the gate has already decided, and building
+/// one to decide would cost a full `(resolution + 2·pad)²` per-pixel projection
+/// where this costs three `ray_to_pixel` calls — inverting the point of a gate
+/// whose job is to SKIP the tile. `view_selection` faces the same trade and
+/// resolves it the same way, with its own closed-form `affine_sigma_major`.
+/// Deferred deliberately; if a cheap per-view curvature bound is ever wanted
+/// here, the precedent is `view_selection`'s fourth-corner residual (one more
+/// projection), not the SVD.
 pub(in crate::patch::keypoint_subpixel) fn grid_to_source_scale(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,

@@ -47,27 +47,40 @@ The fronto-parallel variant makes two specific choices:
 A patch carries a centre `X`, in-plane axes `(u, v)`, and half-extents; its
 `R×R` grid samples `(s, t) ∈ [-1, 1]²` → world via `OrientedPatch::to_world`.
 
-For each view we fit a **grid → undistorted-normalized image** map from the four
-projected grid corners. "Undistorted-normalized" means the pinhole part of the
-corner's projection — its normalized image coordinates before distortion (for a
-canonical camera-space corner, `(x/−z, −y/−z)`; see the coordinate conventions
-in [`sfmr-file-format.md`](../formats/sfmr-file-format.md)) — the lens
-distortion is *omitted*.
-This is the key to projection-independence: distortion is the same fixed image
-warp applied to base and candidate, so it **cancels** in the base↔candidate
-correspondence; the map is exact for *any* camera model (pinhole, distorted,
-fisheye) as long as both maps use the same undistorted corners.
+For each view we fit a **grid → image** map from the projected grid corners, in
+whatever image parameterization that view's camera model supports.
 
-- Base (fronto): `A₀` = affine fit of the fronto grid corners → undistorted-norm.
-- Candidate `n'`: `A'` = affine fit of the candidate grid corners → undistorted-norm.
+- **Perspective family** — the **undistorted-normalized** coordinates: the
+  pinhole part of the corner's projection, before distortion (for a canonical
+  camera-space corner, `(x/−z, −y/−z)`; see the coordinate conventions in
+  [`sfmr-file-format.md`](../formats/sfmr-file-format.md)). The lens distortion
+  is *omitted* deliberately: it is the same fixed image warp applied to base and
+  candidate, so it **cancels** in the base↔candidate correspondence.
+- **`needs_ray_path` models** (fisheye, equirectangular) — the model's own
+  `ray_to_pixel` pixels. There is no distortion-free variant to strip: `θ = r/f`
+  *is* the map, and `x/z` is its gnomonic tangent plane, which blows up at
+  θ → 90° and is meaningless past it — precisely the periphery such a camera
+  exists to image. A cheirality gate on `z` would reject the same annulus.
+
+Both halves of the composed map go through the same function for the same view,
+so any consistent parameterization cancels; using the model's own keeps the
+affine fit local instead of fitting it in a space the model has left.
+
+- Base (fronto): `A₀` = affine fit of the fronto grid corners.
+- Candidate `n'`: `A'` = affine fit of the candidate grid corners.
 - Candidate-grid → base-grid map: `φ = A₀⁻¹ · A'`.
 
 `A₀` and `A'` are affine (homogeneous 3×3 with last row `[0,0,1]`), so `φ` is
 affine: the projective denominator is a constant `1`. The kernel resamples the
 cached base at `φ·(col, row, 1)` with bilinear taps — no per-pixel divide.
 
-The affine fit is the exact 3-corner affine (`(0,0)`, `(R-1,0)`, `(0,R-1)`); no
-8×8 DLT solve, unlike the full-homography variant.
+Each fit is the exact 3-corner affine (`(0,0)`, `(R-1,0)`, `(0,R-1)`); no 8×8
+DLT solve, unlike the full-homography variant. **Each half is therefore exact
+only for an affine image map**, and degrades with the projection's curvature
+over the patch — see the corresponding limitation below. The composed `φ` is
+parameterization-independent, which is a different and weaker claim than
+projection-independence: choosing the parameterization cannot buy back
+curvature that the three-corner fit does not see.
 
 ## Design choices (and why)
 
@@ -93,9 +106,13 @@ The affine fit is the exact 3-corner affine (`(0,0)`, `(R-1,0)`, `(0,R-1)`); no
   high-confidence accuracy are unchanged (both 2.07°), so for the common case the
   approximation is free.
 
-- **Undistorted-normalized corners.** Makes the cache exact for distorted and
-  fisheye rigs with no special-casing (measured ~0 effect to add/remove, i.e. it
-  is *already* correct, which is the point — distortion cancels).
+- **Undistorted-normalized corners (perspective family).** Removes the lens
+  distortion from the base↔candidate correspondence with no special-casing
+  (measured ~0 effect to add/remove — distortion cancels). It does *not* make
+  the cache exact: the three-corner affine fit is what limits accuracy, and the
+  distortion's contribution to the fit's residual is what the omission removes.
+  A `needs_ray_path` model has no distortion-free variant to omit and uses its
+  own pixels instead.
 
 - **Supersample the base.** Rendering the base denser than the candidate grid
   (`set_patch_cache_supersample`) sharpens the resample and is the **only** lever
@@ -144,6 +161,19 @@ runtime-R kernel.
   degrees in the tail. Prefer no cache when the tail matters more than wall time.
 - **Extreme tilt**: the differential/affine approximation degrades; the guard +
   int clamp keep it safe but the resample is approximate there.
+- **Projection curvature over the patch**, which is a *camera-model* limit, not
+  a tilt limit. Each half of `φ` is fitted to three corners, so it absorbs the
+  affine part of the grid→image map and nothing else; whatever the projection
+  bends over the patch is left as fit error. Under a wide-angle or equidistant
+  map that term grows with image radius, and the dominant component near the
+  centre of a peripheral patch is *symmetric* about the patch centre — the
+  component a fourth-corner residual cannot see either (compare
+  `view_selection::affine_core_map`, which does test its fourth corner and falls
+  back to the exact warp; the cache has no such fallback and consumes only three
+  corners). The effect is a soft, radius-dependent version of the flat-Φ tail
+  above rather than a wrong correspondence, and it is bounded by the patch's
+  angular size — but it is the reason this cache must not be described as exact
+  for any camera model.
 - **Non-3-channel images**: the packed kernel assumes RGB; the base render bails
   (falls back to source rendering) otherwise.
 - **Out-of-frame candidates are not rejected.** The source path drops a candidate
@@ -174,7 +204,8 @@ deterministic-first, tested, and exposed. Land it as two reviewable changes —
 > `--refine-normals cache=/cache_supersample=/quality=` CLI keys and the
 > coarse/fine preset; unit tests for the affine fit and padding plus
 > `tests/patch/test_patch_normal_refine.py` (Φ-equivalence + population on seoul_bull,
-> distortion-independence on the kerry_park fisheye rig) and
+> distortion-independence on the kerry_park fisheye rig — a bounded-divergence
+> check, not an exactness proof; see "Limitations") and
 > `tests/xform/test_refine_normals.py` (preset + validation). Measured ~2.3× at
 > Φ-equivalent median on dino R=32. Phase 2 (AVX2) pending._
 
@@ -201,7 +232,9 @@ deterministic-first, tested, and exposed. Land it as two reviewable changes —
      drop points);
    - the affine composition round-trips a known plane;
    - distortion independence: a distorted/fisheye view (kerry) refines without the
-     cache diverging from source rendering beyond tolerance.
+     cache diverging from source rendering beyond tolerance. Bounded divergence
+     is the claim — the three-corner fit leaves the projection's curvature over
+     the patch as fit error under any model (see "Limitations").
 6. **Update specs/docs**: promote this file's Status to "v1 implemented", update
    the refinement spec and the CLI command spec.
 
