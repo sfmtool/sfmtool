@@ -14,10 +14,20 @@
 //!
 //! The solve is trimmed iteratively reweighted least squares: a least-squares
 //! solve over the current observation set, then a re-gate keeping observations
-//! in front of the canonical camera (`(R·X_k + t)_z < 0`; the camera looks
-//! along `−Z`) with pixel residual (through `ray_to_pixel`) below
+//! in front of the camera with pixel residual (through `ray_to_pixel`) below
 //! `max_error_px`, repeated for three rounds or until the kept set is stable.
 //! Fewer than `min_inliers` survivors at any round fails the resection.
+//!
+//! **"In front" is model-dependent, because the rows are sign-blind.**
+//! `[r_k]ₓ·(R·X_k + t)` vanishes for `−r_k` as well, so the equations alone
+//! cannot tell a point from its reflection through the camera centre and the
+//! trim gate is what carries the chirality. For the perspective family that is
+//! the half-space `(R·X_k + t)_z < 0` (the canonical camera looks along `−Z`),
+//! which is also exactly that family's projection domain. A `needs_ray_path`
+//! camera images past 90° off axis, where the half-space would reject the whole
+//! periphery — the population this module's model-agnosticism claim is about —
+//! so its chirality is positive RANGE along the observed ray,
+//! `r_k·(R·X_k + t) > 0`. See `residual_norm`.
 
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
@@ -83,16 +93,41 @@ fn solve_ls(
 }
 
 /// Pixel residual norm of one observation at translation `t`, or
-/// [`INVALID_RESIDUAL`] when the point is behind the canonical camera
-/// (`z ≥ 0`) or outside the model domain.
+/// [`INVALID_RESIDUAL`] when the camera cannot image the point or the point
+/// sits on the wrong side of the observation's own ray.
+///
+/// The rows this gate trims are model-agnostic but SIGN-BLIND —
+/// `[r]ₓ·(R·X + t)` vanishes for `−r` too — so the in-front test is what
+/// carries the chirality, and it is model-dependent:
+///
+/// - **Perspective family:** the half-space `z < 0` (the canonical camera looks
+///   along `−Z`), which is also exactly that family's projection domain. The
+///   expression is unchanged from before this branch existed, so a perspective
+///   camera's result is bit-identical.
+/// - **[`CameraModel::needs_ray_path`] models** (fisheye, equirectangular):
+///   positive RANGE along the observed ray, `r·(R·X + t) > 0`. Such a camera
+///   images past 90° off axis, so the half-space would score every peripheral
+///   observation [`INVALID_RESIDUAL`] and leave the solve on the on-axis subset
+///   — while the range test still rejects the antipodal reflection, which is
+///   the one thing the sign-blind rows need the gate for.
+///
+/// The model's own `ray_to_pixel` domain is layered on top in both cases.
+///
+/// [`CameraModel::needs_ray_path`]: crate::camera::CameraModel::needs_ray_path
 fn residual_norm(
     cam: &CameraIntrinsics,
     uv: &[f64; 2],
+    ray: &Vector3<f64>,
     rot_pt: &Vector3<f64>,
     t: &Vector3<f64>,
 ) -> f64 {
     let c = rot_pt + t;
-    if c.z >= 0.0 {
+    let in_front = if cam.model.needs_ray_path() {
+        ray.dot(&c) > 0.0
+    } else {
+        c.z < 0.0
+    };
+    if !in_front {
         return INVALID_RESIDUAL;
     }
     match cam.ray_to_pixel([c.x, c.y, c.z]) {
@@ -164,7 +199,8 @@ pub fn resect_translation(
             if !valid[i] {
                 continue;
             }
-            let keep = residual_norm(cam, &uv[i], &rot_pts[i], &translation) < max_error_px;
+            let keep =
+                residual_norm(cam, &uv[i], &rays[i], &rot_pts[i], &translation) < max_error_px;
             new_kept[i] = keep;
             survivors += keep as usize;
         }
@@ -181,7 +217,7 @@ pub fn resect_translation(
     let residual_norms: Vec<f64> = (0..n)
         .map(|i| {
             if valid[i] {
-                residual_norm(cam, &uv[i], &rot_pts[i], &translation)
+                residual_norm(cam, &uv[i], &rays[i], &rot_pts[i], &translation)
             } else {
                 INVALID_RESIDUAL
             }

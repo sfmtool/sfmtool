@@ -36,15 +36,31 @@ Three linear rows per observation (rank 2). The solve is trimmed
 iteratively reweighted least squares:
 
 1. Least-squares solve over the current observation set (all, initially).
-2. Reproject: keep observations with canonical depth in front
-   (`(R·X_k + t)_z < 0`) and pixel residual below `max_error_px`.
+2. Reproject: keep observations in front of the camera with pixel
+   residual below `max_error_px`.
 3. Repeat 3 rounds or until the kept set is stable. Fewer than
    `min_inliers` survivors at any round fails the resection.
 
-Working in ray space makes the mechanism camera-model-agnostic: fisheye
-and equirectangular observations resect through the same equations,
+Working in ray space makes the equations camera-model-agnostic: fisheye
+and equirectangular observations resect through the same rows,
 `pixel_to_ray` absorbing the model. The residual gate is evaluated in
 pixels through `ray_to_pixel`.
+
+The rows are sign-blind — `[r_k]ₓ·(R·X_k + t)` vanishes for `−r_k` too,
+so the equations cannot tell a point from its reflection through the
+camera centre — which makes step 2's in-front test the carrier of the
+chirality, and it is therefore model-dependent:
+
+- **Perspective family:** the half-space `(R·X_k + t)_z < 0` (canonical
+  camera, `−Z` forward), which is also exactly that family's projection
+  domain.
+- **`needs_ray_path` models** (fisheye, equirectangular): positive range
+  along the observed ray, `r_k·(R·X_k + t) > 0`. Such a camera images
+  past 90° off axis, and the half-space would reject that whole
+  periphery — precisely the population this kernel's model-agnosticism
+  is about — while the range test still rejects the antipodal
+  reflection, which is the one thing the sign-blind rows need the gate
+  for.
 
 Output: `t`, the surviving-observation mask, and the survivors' pixel
 residual norms.
@@ -63,7 +79,11 @@ resect_translation(camera, rotation_wxyz, points, uv,
 - Exact recovery on noiseless synthetic data, pinhole and fisheye.
 - Contamination: planted outliers beyond the gate are trimmed and do not
   bias `t`; the returned mask identifies them.
-- Behind-camera points are excluded by the cheirality check.
+- Behind-camera points are excluded by the cheirality check, under both
+  readings: a fisheye camera keeps its past-90° observations (a
+  half-space gate would drop them) and still rejects the antipodal
+  reflection along each ray. A perspective camera evaluates the same
+  half-space expression it always did.
 - Failure path: fewer than `min_inliers` consistent observations returns
   `None` (binding) / failure (core).
 - Degenerate ray bundles (all rays near-parallel) still return the
