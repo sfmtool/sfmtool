@@ -10,14 +10,15 @@ use sfmtool_core::SfmrReconstruction;
 use super::{PointTrackDetail, STORED_PATCH_SIZE};
 
 impl PointTrackDetail {
-    /// Draw the point summary header bar.
+    /// Draw the point summary header bar, returning whether its Go to Point
+    /// button was clicked.
     pub(super) fn show_header(
         &self,
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
         point_idx: usize,
         point: &sfmtool_core::Point3D,
-    ) {
+    ) -> bool {
         let point_id = format!("pt3d_{}_{}", self.hash_prefix, point_idx);
         let coords = format!(
             "{:.3}, {:.3}, {:.3}",
@@ -25,6 +26,7 @@ impl PointTrackDetail {
         );
         let obs_count = recon.observation_counts[point_idx];
 
+        let mut goto_clicked = false;
         ui.horizontal_wrapped(|ui| {
             // Color swatch
             let [r, g, b] = point.color;
@@ -45,6 +47,10 @@ impl PointTrackDetail {
             if copy_button(ui, "Copy Point ID") {
                 ui.ctx().copy_text(point_id.clone());
             }
+            // Beside Copy, because these are the two halves of one round trip:
+            // copy an ID out of this header, paste it back into the dialog this
+            // button opens — here, or in another session entirely.
+            goto_clicked = goto_button(ui);
 
             ui.label("|");
 
@@ -81,6 +87,7 @@ impl PointTrackDetail {
                 ui.label(format!("cond: {:.0}", self.condition_number));
             }
         });
+        goto_clicked
     }
 
     /// Draw the stored-patch preview tile, when the reconstruction carries one
@@ -102,6 +109,57 @@ impl PointTrackDetail {
             });
         }
     }
+}
+
+/// A small "go to point" button drawn as a right-pointing arrow into a bar.
+/// Returns true if clicked.
+///
+/// An icon rather than a labelled button because it sits inside a header that
+/// is already a dense run of `|`-separated numbers, and the copy button beside
+/// it set the size a control here is allowed to be.
+fn goto_button(ui: &mut egui::Ui) -> bool {
+    let icon_size = ui.text_style_height(&egui::TextStyle::Body);
+    let padding = 2.0;
+    let total = icon_size + padding * 2.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(total, total), egui::Sense::click());
+
+    if ui.is_rect_visible(rect) {
+        let color = if response.hovered() {
+            ui.visuals().strong_text_color()
+        } else {
+            ui.visuals().weak_text_color()
+        };
+        let stroke = egui::Stroke::new(1.0_f32, color);
+        let c = rect.center();
+        let arm = icon_size * 0.3;
+        let head = icon_size * 0.22;
+        // Shaft, then the two barbs of the arrowhead, then the bar it points
+        // into — the standard "jump to" glyph.
+        ui.painter().line_segment(
+            [c + egui::vec2(-arm, 0.0), c + egui::vec2(arm * 0.5, 0.0)],
+            stroke,
+        );
+        for dy in [-head, head] {
+            ui.painter().line_segment(
+                [
+                    c + egui::vec2(arm * 0.5 - head, dy),
+                    c + egui::vec2(arm * 0.5, 0.0),
+                ],
+                stroke,
+            );
+        }
+        ui.painter().line_segment(
+            [
+                c + egui::vec2(arm, -icon_size * 0.32),
+                c + egui::vec2(arm, icon_size * 0.32),
+            ],
+            stroke,
+        );
+    }
+
+    let clicked = response.clicked();
+    response.on_hover_text("Go to a point by index or ID");
+    clicked
 }
 
 /// A small "copy to clipboard" button drawn as two overlapping rectangles.

@@ -1534,6 +1534,11 @@ error if the `.sfmr` file has changed since the constraints were written. The
 double-click-selectable format makes it easy to pick out individual IDs when
 editing these files in a text editor or terminal.
 
+The round trip closes in the viewer: `Go ▸ Go to Point…` (Ctrl/Cmd+G) accepts a
+pasted ID and selects that point, switching to the reconstruction the hash names
+when several are loaded. See
+[gui-goto-point.md](../gui/gui-goto-point.md).
+
 ### Format
 
 ```

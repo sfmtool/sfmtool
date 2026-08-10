@@ -19,7 +19,8 @@ use egui_dock::DockArea;
 use egui_winit::State as EguiWinitState;
 use winit::window::Window;
 
-use crate::dock::{self, TabContext};
+use crate::dock::{self, Tab, TabContext};
+use crate::goto_point;
 use crate::platform;
 use crate::scene::ImageRef;
 use crate::scene_renderer::{NodeDisplay, PickTarget};
@@ -621,6 +622,18 @@ impl App {
                             ui.close();
                         }
                     });
+                    ui.menu_button("Go", |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new("Go to Point...")
+                                    .shortcut_text(ui.ctx().format_shortcut(&goto_point::SHORTCUT)),
+                            )
+                            .clicked()
+                        {
+                            app_state.goto_point.open();
+                            ui.close();
+                        }
+                    });
                     // No View menu: the display controls it used to hold belong
                     // to the 3D viewport's own HUD (`viewer_3d/hud.rs`), on the
                     // principle that a panel owns its controls, and the dock
@@ -628,6 +641,16 @@ impl App {
                     // false), so there is nothing app-global left for it.
                 });
             });
+
+            // Ctrl/Cmd+G opens the same dialog from anywhere, gated on egui's
+            // own keyboard arbitration so a HUD `DragValue` — or the dialog's
+            // own text field — keeps the key while it is being typed into.
+            // `open` is idempotent, so racing the menu item is harmless.
+            if !root_ui.ctx().egui_wants_keyboard_input()
+                && root_ui.input_mut(|i| i.consume_shortcut(&goto_point::SHORTCUT))
+            {
+                app_state.goto_point.open();
+            }
 
             if app_state.show_demo_dialog {
                 let mut open = true;
@@ -664,6 +687,24 @@ impl App {
                     // resets the caches and selection too.
                     app_state.load_demo(app_state.demo_num_points);
                     app_state.show_demo_dialog = false;
+                }
+            }
+
+            // Go to Point. `select_point` also selects the owning
+            // reconstruction, so a pasted ID naming a *different* loaded file
+            // moves the whole session there — which is what makes an ID copied
+            // out of one session usable in the next.
+            if let Some(point) =
+                app_state
+                    .goto_point
+                    .show(root_ui.ctx(), &app_state.scene, app_state.selected_recon)
+            {
+                app_state.select_point(point);
+                // Raise the panel that answers "what is this point?", so the
+                // jump has something to show for itself even when Point Track
+                // is tabbed behind Image Detail (which is the default layout).
+                if let Some(path) = dock_state.find_tab(&Tab::PointTrackDetail) {
+                    let _ = dock_state.set_active_tab(path);
                 }
             }
 

@@ -182,7 +182,15 @@ capability remains discoverable. See
 
 There is no longer a **View** menu — with the display controls in the HUD and
 the dock panels permanent, nothing app-global was left for it to hold. **File**
-(Open / Load Demo Data / Quit) is the only menu, and is unchanged.
+(Open / Load Demo Data / Quit) is unchanged.
+
+**Go** (Go to Point…, Ctrl/Cmd+G) is the one other menu, and the one thing that
+did turn out to be app-global: it takes a typed or pasted point index — or a
+whole `pt3d_<hash>_<index>` ID — and selects that point, switching the selected
+reconstruction when the ID names a different loaded file. It is the way *back
+in* from an ID copied out into a constraints file or a CLI run, and it is
+reachable from the Point Track Detail panel too. See
+[gui-goto-point.md](gui-goto-point.md).
 
 The window title names the loaded file — `SfM Explorer - kerry_park.sfmr` —
 falling back to plain `SfM Explorer` before any load, and for demo data, which
@@ -223,7 +231,8 @@ panels. Panels can be re-docked, reordered, and resized:
   track length, max track angle, depth reliability, condition number, none).
 - **Point Track Detail** — Tabbed beside Image Detail. Per-observation
   diagnostics for the selected 3D point: per-image reprojection error, ray
-  angle, thumbnails, copy-`pt3d_<hash>_<index>`.
+  angle, thumbnails, copy-`pt3d_<hash>_<index>` and the Go to Point button that
+  takes one back.
 - **Image Browser** — Bottom strip (~20% height). Horizontally-scrollable
   thumbnails with click-to-select, gesture-driven panning, and a navigation
   minibar with animation playback.

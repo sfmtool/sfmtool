@@ -363,6 +363,9 @@ impl TabViewer for TabContext<'_> {
                         // doesn't produce hovered_point.
                         self.state.hovered_point = None;
                     }
+                    if track_response.request_goto_point {
+                        self.state.goto_point.open();
+                    }
                 } else {
                     ui.centered_and_justified(|ui| {
                         ui.label("No reconstruction loaded");

@@ -185,6 +185,7 @@ sfmtool/
 | `image_browser.rs` | Horizontally-scrollable thumbnail strip with click-to-select, double-click to enter camera view, gesture-driven panning, lazy thumbnail loading, navigation minibar + animation playback. |
 | `image_detail/` | Full-resolution image display for the selected camera, with lazy loading, aspect-ratio-preserving fit, pan/zoom, and 7 overlay modes. |
 | `point_track_detail/` | Per-observation diagnostics for the selected 3D point: per-image reprojection error, ray angle, thumbnails, `pt3d_<hash>_<index>` ID copy. `mod.rs` holds the panel state and orchestrates a frame; `prepare.rs` builds the per-observation data on selection change, `header.rs`/`table.rs` draw, `patch.rs` builds oriented-patch textures, `metrics.rs` owns the numerics. |
+| `goto_point.rs` | Go to Point: parses a typed point index or `pt3d_<hash>_<index>` ID, resolves it against the loaded scene (bare index → selected node, hash → the node carrying it), and owns the modal that collects it. Parse and lookup are plain functions over the scene slice; the dialog returns a `PointRef` rather than applying it. See [gui-goto-point.md](gui-goto-point.md). |
 | `colormap.rs` | Shared color ramps used by the overlay modes and point-cloud colorings. |
 
 ---

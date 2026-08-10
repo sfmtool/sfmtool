@@ -113,6 +113,9 @@ pub struct PointTrackDetailResponse {
     pub hovered_image: Option<usize>,
     /// Whether the pointer is currently inside the panel.
     pub has_pointer: bool,
+    /// The user asked for the Go to Point dialog — from the header button, or
+    /// from the empty state's button when no point is selected at all.
+    pub request_goto_point: bool,
 }
 
 /// Height of each thumbnail in the observation table.
@@ -159,6 +162,7 @@ impl PointTrackDetail {
             request_camera_view: None,
             hovered_image: None,
             has_pointer: false,
+            request_goto_point: false,
         };
 
         // Check if pointer is in this panel
@@ -169,24 +173,16 @@ impl PointTrackDetail {
             }
         }
 
-        // No point selected — show placeholder
+        // No point selected — or a stale index left over from a reconstruction
+        // that has since shrunk. Either way there is nothing to inspect, so
+        // offer the one way in that needs no click on a splat.
+        let selected_point = selected_point.filter(|&idx| idx < recon.points.len());
         let Some(point_idx) = selected_point else {
-            ui.centered_and_justified(|ui| {
-                ui.label("No point selected");
-            });
+            response.request_goto_point = show_empty_state(ui);
             self.prepared_point = None;
             self.observations.clear();
             return response;
         };
-
-        if point_idx >= recon.points.len() {
-            ui.centered_and_justified(|ui| {
-                ui.label("No point selected");
-            });
-            self.prepared_point = None;
-            self.observations.clear();
-            return response;
-        }
 
         // Prepare observation data if selected point changed
         let point_ref = PointRef::new(recon_id, point_idx);
@@ -208,7 +204,7 @@ impl PointTrackDetail {
         let point = &recon.points[point_idx];
 
         // --- Header: Point Summary ---
-        self.show_header(ui, recon, point_idx, point);
+        response.request_goto_point = self.show_header(ui, recon, point_idx, point);
 
         // --- Stored-patch header tile (embedded-patches reconstructions) ---
         self.show_stored_patch_tile(ui);
@@ -254,4 +250,25 @@ impl PointTrackDetail {
         self.hash_prefix.clear();
         self.scroll_offset_y = None;
     }
+}
+
+/// Draw the "nothing selected" state, returning whether its Go to Point button
+/// was clicked.
+///
+/// The button is here and not only in the menu because this is the panel a user
+/// stares at when they have an ID in hand and no idea how to feed it in — the
+/// empty state is the most likely place to look for the way to fill it.
+fn show_empty_state(ui: &mut egui::Ui) -> bool {
+    let mut clicked = false;
+    ui.centered_and_justified(|ui| {
+        ui.vertical_centered(|ui| {
+            ui.label("No point selected");
+            ui.add_space(8.0);
+            clicked = ui
+                .button("Go to Point...")
+                .on_hover_text("Type or paste a point index or pt3d_<hash>_<index> ID")
+                .clicked();
+        });
+    });
+    clicked
 }

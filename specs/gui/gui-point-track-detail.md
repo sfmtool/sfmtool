@@ -60,7 +60,10 @@ full image or the point track, not both simultaneously.
 
 The panel has two states:
 
-**No point selected**: Centered placeholder text: "No point selected".
+**No point selected**: Centered placeholder text "No point selected", above a
+**Go to Point…** button. This is the state a user stares at when they have an ID
+in hand and no idea how to feed it in, so it is where the way in belongs. See
+[gui-goto-point.md](gui-goto-point.md).
 
 **Point selected**: A header with point summary statistics, followed by a
 scrollable observation table.
@@ -120,6 +123,13 @@ spec](../formats/sfmr-file-format.md#point-id-portable-3d-point-references).
 The ID is rendered in a monospace font to visually distinguish it from the other
 header fields. Clicking it copies to the clipboard with visual feedback (brief
 flash or "Copied!" tooltip).
+
+Immediately right of the copy button sits a **Go to Point** button (an arrow
+glyph, sized to match copy's), which opens the dialog that accepts an ID or a
+bare index. The two sit together because they are the two halves of one round
+trip: copy an ID out of this header, paste it back — here, or in a later
+session, or after `sfm xform` produced a new file. See
+[gui-goto-point.md](gui-goto-point.md).
 
 #### Observation Table
 
@@ -275,6 +285,7 @@ model:
 |-------|-------------------------------|
 | Point selected (3D viewer click) | Panel populates with track data |
 | Point selected (Image Detail feature click) | Panel populates with track data |
+| Point selected (Go to Point dialog) | Panel populates, and the tab is raised so the jump is visible |
 | Point deselected (background click) | Panel shows "No point selected" |
 | `hovered_image` changes | Highlight the corresponding row |
 | Reconstruction loaded | Clear panel state |
@@ -285,6 +296,7 @@ model:
 | Row double-clicked | Sets `selected_image` + enters camera view |
 | Row hovered | Sets `hovered_image` |
 | Pointer leaves panel | Clears `hovered_image` |
+| Go to Point button clicked | Opens the Go to Point dialog (`state.goto_point`) |
 
 The panel does not produce `hovered_point` (unlike Image Detail) since all
 content relates to the single selected point.
@@ -358,6 +370,9 @@ pub struct PointTrackDetailResponse {
     pub hovered_image: Option<usize>,
     /// Whether the pointer is currently inside the panel.
     pub has_pointer: bool,
+    /// The user asked for the Go to Point dialog — from the header button, or
+    /// from the empty state's button when no point is selected at all.
+    pub request_goto_point: bool,
 }
 ```
 

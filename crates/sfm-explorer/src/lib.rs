@@ -16,6 +16,7 @@ mod align;
 mod app;
 mod colormap;
 mod dock;
+mod goto_point;
 mod image_browser;
 mod image_detail;
 mod platform;

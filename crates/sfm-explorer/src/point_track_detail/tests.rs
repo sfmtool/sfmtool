@@ -491,6 +491,83 @@ fn clicking_a_row_selects_its_image_and_double_clicking_enters_camera_view() {
     assert_eq!(double.request_camera_view, Some(1));
 }
 
+// ── Go to Point entry points ────────────────────────────────────────────
+
+#[test]
+fn the_empty_state_offers_a_way_in_by_index_or_id() {
+    let recon = SfmrReconstruction::demo(12);
+
+    // With nothing selected the panel has no track to draw, so its only
+    // control is the button that opens the Go to Point dialog. The centre line
+    // is swept rather than a layout position hard-coded, so the test survives
+    // the placeholder being restyled.
+    let opened = (0..100).any(|step| {
+        let mut panel = PointTrackDetail::new();
+        let ctx = egui::Context::default();
+        show_at_pointer(
+            &mut panel,
+            &ctx,
+            &recon,
+            None,
+            egui::pos2(600.0, step as f32 * 8.0),
+            1,
+        )
+        .request_goto_point
+    });
+
+    assert!(
+        opened,
+        "no point on the centre line hit a Go to Point button"
+    );
+}
+
+#[test]
+fn the_header_offers_the_same_way_in_while_a_point_is_selected() {
+    let recon = SfmrReconstruction::demo(12);
+
+    // The button sits in the header's identity cluster, beside Copy Point ID —
+    // so it is somewhere along the first row, whose exact x depends on the ID
+    // width and the font.
+    let opened = (0..200).any(|step| {
+        let mut panel = PointTrackDetail::new();
+        let ctx = egui::Context::default();
+        show_at_pointer(
+            &mut panel,
+            &ctx,
+            &recon,
+            Some(3),
+            egui::pos2(step as f32 * 4.0, 10.0),
+            1,
+        )
+        .request_goto_point
+    });
+
+    assert!(
+        opened,
+        "no x along the header row hit the Go to Point button"
+    );
+}
+
+#[test]
+fn merely_looking_at_the_panel_does_not_ask_for_the_dialog() {
+    // The flag is a click report, not a state read: a frame nobody clicked in
+    // must leave it false, or the dialog would reopen every frame.
+    let recon = SfmrReconstruction::demo(12);
+    let mut panel = PointTrackDetail::new();
+    let ctx = egui::Context::default();
+
+    let idle = show_at_pointer(
+        &mut panel,
+        &ctx,
+        &recon,
+        Some(3),
+        egui::pos2(300.0, 200.0),
+        0,
+    );
+
+    assert!(!idle.request_goto_point);
+}
+
 #[test]
 fn the_panel_reports_whether_it_holds_the_pointer() {
     let recon = SfmrReconstruction::demo(12);

@@ -4,6 +4,7 @@
 //! Shared application state.
 
 use crate::align::{self, AlignOptions};
+use crate::goto_point::GotoPointDialog;
 use crate::scene::{node_by_id, unique_label, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
@@ -245,6 +246,10 @@ pub struct AppState {
 
     /// Number of points configured in the demo-data dialog (preserved across opens).
     pub demo_num_points: usize,
+
+    /// The "Go to Point" dialog: the typed query, its last error, and whether
+    /// it is showing. See [`crate::goto_point`].
+    pub goto_point: GotoPointDialog,
 }
 
 /// Cached SIFT positions and affine shapes for one image (no descriptors).
@@ -291,6 +296,7 @@ impl AppState {
             transform_epoch: 0,
             show_demo_dialog: false,
             demo_num_points: 1000,
+            goto_point: GotoPointDialog::default(),
         }
     }
 
