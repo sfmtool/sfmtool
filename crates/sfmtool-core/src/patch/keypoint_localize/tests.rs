@@ -2274,3 +2274,106 @@ fn tail_without_a_basis_template_still_faces_the_shift_gate() {
         );
     }
 }
+
+/// `project_unclipped` is the only world→pixel entry in this module and the
+/// sub-pixel refiner, so its cheirality test decides which views either can
+/// reach. Under a ray-path model that test must be the camera's own domain: a
+/// `z >= 0` short-circuit ahead of `ray_to_pixel` makes the whole θ > 90°
+/// annulus of a >180° capture invisible to congealing.
+#[test]
+fn project_unclipped_reaches_past_ninety_degrees_on_a_ray_path_model() {
+    let equi = CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: FOCAL,
+            principal_point_x: IMG_W as f64 / 2.0,
+            principal_point_y: IMG_H as f64 / 2.0,
+        },
+        width: IMG_W,
+        height: IMG_H,
+    };
+    let pin = pinhole();
+    // Identity rotation → the canonical camera looks down world −z from z = 1;
+    // a point off to the side and just past that plane sits ~100° off axis.
+    let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
+    let p = Point3::new(3.0, 0.0, 1.53);
+    let pc = pose.transform_point(&p);
+    let theta = (-pc.z / pc.coords.norm()).acos().to_degrees();
+    assert!(
+        pc.z > 0.0 && (95.0..=110.0).contains(&theta),
+        "test setup: theta = {theta}"
+    );
+
+    let pyr = ImageU8Pyramid::build(&render_plane_view([0.0, 0.0, 0.0], [0.0, 0.0], texture), 3);
+    let equi_view = ProjectedImage {
+        camera: &equi,
+        cam_from_world: &pose,
+        pyramid: &pyr,
+    };
+    let pin_view = ProjectedImage {
+        camera: &pin,
+        cam_from_world: &pose,
+        pyramid: &pyr,
+    };
+
+    let got = project_unclipped(&equi_view, &p, 1.0).expect("equidistant sees past 90 deg");
+    let want = equi
+        .ray_to_pixel([pc.x, pc.y, pc.z])
+        .expect("the model's own projection");
+    assert!(
+        (got.0 - want.0).abs() < 1e-12 && (got.1 - want.1).abs() < 1e-12,
+        "projection must be the model's: got {got:?} want {want:?}"
+    );
+    assert!(
+        project_unclipped(&pin_view, &p, 1.0).is_none(),
+        "the perspective family keeps its half-space cheirality"
+    );
+}
+
+/// `seed_offset` intersects the observed bearing with the patch plane. Past 90°
+/// a bearing can meet the plane *behind* the camera centre — a mirrored hit
+/// that is not an observation of the patch — so the ray-path arm rejects a
+/// backward intersection instead of returning a plausible-looking offset.
+#[test]
+fn seed_offset_rejects_a_backward_plane_hit_on_a_ray_path_model() {
+    let equi = CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: FOCAL,
+            principal_point_x: IMG_W as f64 / 2.0,
+            principal_point_y: IMG_H as f64 / 2.0,
+        },
+        width: IMG_W,
+        height: IMG_H,
+    };
+    // Camera at the origin looking down world −z; the patch plane is at
+    // z = +PLANE_Z, i.e. *behind* the camera, with its normal along −z.
+    let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+    let patch = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, PLANE_Z),
+        Vector3::new(0.0, 0.0, -1.0),
+        Vector3::y(),
+        [HALF_EXTENT, HALF_EXTENT],
+    );
+    let pyr = ImageU8Pyramid::build(&render_plane_view([0.0, 0.0, 0.0], [0.0, 0.0], texture), 3);
+    let view = ProjectedImage {
+        camera: &equi,
+        cam_from_world: &pose,
+        pyramid: &pyr,
+    };
+    // A pixel near the principal point is a bearing along world −z, which meets
+    // the plane at s < 0.
+    let forward_px = [IMG_W as f64 / 2.0 + 1.0, IMG_H as f64 / 2.0 + 1.0];
+    assert!(
+        seed_offset(&patch, &view, forward_px, wpp(), wpp()).is_none(),
+        "a bearing that meets the plane behind the camera is not an observation"
+    );
+    // A bearing on the other side of the horizon does hit the plane forward and
+    // must still be accepted.
+    let back_px = [
+        IMG_W as f64 / 2.0 + FOCAL * std::f64::consts::PI * 0.9,
+        IMG_H as f64 / 2.0,
+    ];
+    assert!(
+        seed_offset(&patch, &view, back_px, wpp(), wpp()).is_some(),
+        "a bearing toward the plane must still register"
+    );
+}

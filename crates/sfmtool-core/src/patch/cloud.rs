@@ -309,6 +309,15 @@ impl PatchCloud {
             .iter()
             .map(|im| recon.cameras[im.camera_index as usize].focal_lengths().0)
             .collect();
+        let cam_ray_path: Vec<bool> = recon
+            .images
+            .iter()
+            .map(|im| {
+                recon.cameras[im.camera_index as usize]
+                    .model
+                    .needs_ray_path()
+            })
+            .collect();
 
         // FeatureSize is the one policy that reads the workspace `.sift` files:
         // resolve every observation's keypoint scale (σ = column-0 norm of the
@@ -355,6 +364,7 @@ impl PatchCloud {
             cam_quats: &cam_quats,
             cam_translations: &cam_translations,
             cam_focals: &cam_focals,
+            cam_ray_path: &cam_ray_path,
         };
         build_patch_cloud(&scene, normal, extent, exclude_points_at_infinity)
     }
@@ -415,6 +425,9 @@ impl PatchCloud {
             cam_quats,
             cam_translations,
             cam_focals,
+            // No camera models here — this entry point takes focals only, so the
+            // perspective reading stands (see `PatchScene::cam_ray_path`).
+            cam_ray_path: &[],
         };
         build_patch_cloud(&scene, normal, extent, exclude_points_at_infinity)
     }
@@ -525,9 +538,23 @@ struct PatchScene<'a> {
     cam_translations: &'a [Vector3<f64>],
     /// Per-image focal length (fx). `N` entries.
     cam_focals: &'a [f64],
+    /// Per-image [`CameraModel::needs_ray_path`], i.e. "this camera can image
+    /// past 90° off axis, so optical-axis depth is not a distance". `N` entries,
+    /// or **empty** — an empty slice reads as all-perspective, which is what
+    /// [`PatchCloud::from_tracks`] supplies (its caller hands over focals, not
+    /// cameras).
+    ///
+    /// [`CameraModel::needs_ray_path`]: crate::camera::CameraModel::needs_ray_path
+    cam_ray_path: &'a [bool],
 }
 
 impl PatchScene<'_> {
+    /// Whether image `i`'s camera needs the ray path; `false` when the caller
+    /// supplied no models (see [`Self::cam_ray_path`]).
+    fn ray_path(&self, i: usize) -> bool {
+        self.cam_ray_path.get(i).copied().unwrap_or(false)
+    }
+
     /// In-plane "up" hint: the first observing camera's up axis (canonical camera
     /// `+y` — image up) rotated into world, or world `+y` when the point has no
     /// observation. Pins the in-plane rotation identically for finite and infinity
@@ -710,7 +737,19 @@ fn build_patch_cloud(
                             let img = scene.obs_images[o] as usize;
                             let p_cam =
                                 scene.cam_quats[img] * center.coords + scene.cam_translations[img];
-                            let depth = p_cam.z.abs().max(1e-6);
+                            // Ray RANGE for a ray-path model, optical-axis depth
+                            // for the perspective family — the same split
+                            // `FeatureSize` already makes above. A fisheye sees
+                            // points past 90° off axis at `z ≈ 0`, where `|z|`
+                            // collapses the patch to nothing and mirrors it back
+                            // beyond; `‖p_cam‖` is the distance the angular size
+                            // `radius_px / f` actually spans.
+                            let depth = if scene.ray_path(img) {
+                                p_cam.norm()
+                            } else {
+                                p_cam.z.abs()
+                            }
+                            .max(1e-6);
                             radius_px * depth / scene.cam_focals[img]
                         })
                         .collect();

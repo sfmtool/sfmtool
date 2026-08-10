@@ -137,14 +137,29 @@ impl PyPatchCloud {
                 0.5 * (fx + fy)
             })
             .collect();
+        let ray_path: Vec<bool> = recon
+            .images
+            .iter()
+            .map(|im| {
+                recon.cameras[im.camera_index as usize]
+                    .model
+                    .needs_ray_path()
+            })
+            .collect();
 
         // The structure-tensor scoring is the expensive, rayon-parallel part; run
         // it with the GIL released. The grid→source-px map below is a cheap
         // per-observation pass, so it stays on the GIL-holding thread.
         let scores = py.detach(|| score_localizability_stack(&flat, n, r, c, window, sigma_noise));
 
-        // Median-over-views grid→source-px scale per point (canonical −Z depth:
-        // `depth = -(R·X + t)_z`).
+        // Median-over-views grid→source-px scale per point. The distance a world
+        // half-extent is divided by is the optical-axis depth `-(R·X + t)_z` for
+        // the perspective family and the ray RANGE `‖R·X + t‖` for a ray-path
+        // camera: a fisheye images points past 90° off axis at `z ≤ 0`, where the
+        // depth reading collapses to zero and then goes negative, dropping the
+        // whole periphery out of the median (and blowing the scale up just inside
+        // it). On axis the two agree, so this is the perspective formula's own
+        // generalization.
         let half_r = r as f64 / 2.0;
         let mut scale = vec![f64::NAN; n];
         for (p_idx, s) in scale.iter_mut().enumerate() {
@@ -161,9 +176,8 @@ impl PyPatchCloud {
                 // Homogeneous transform so a point at infinity (`w == 0`, whose
                 // `position` is a direction) is rotated without translation —
                 // `R·d` rather than `R·d + t` — giving a meaningful bearing depth.
-                let depth = -poses[im]
-                    .transform_point_homogeneous(point.position.coords, point.w)
-                    .z;
+                let pc = poses[im].transform_point_homogeneous(point.position.coords, point.w);
+                let depth = if ray_path[im] { pc.norm() } else { -pc.z };
                 if depth > 1e-6 {
                     vals.push((h / half_r) * focal[im] / depth);
                 }

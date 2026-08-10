@@ -34,6 +34,7 @@
 //! and the measured numbers.
 
 use crate::camera::remap::{mip_level_for_sigma, ImageU8};
+use crate::camera::CameraIntrinsics;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
     build_level_context, irls_view_weights, normalized_stack, view_render_patch,
@@ -523,20 +524,34 @@ fn sample_support_affine(
     crate::camera::remap::prof::add(&crate::camera::remap::prof::TAPS, (n * ch) as u64);
 }
 
-/// Whether `patch`'s centre is in front of the `cam_from_world` camera —
-/// camera-frame depth `−z > 0` (the canonical camera looks down −Z).
-/// [`OrientedPatch::is_front_facing`] only tests the normal vs. the camera
-/// centre and does **not** guarantee positive depth; equirect / wide-fisheye
-/// projection can map behind-camera points in-frame, so scoring needs this
-/// explicit cheirality gate (camera-model agnostic).
+/// Whether `camera` can see `patch`'s centre from `cam_from_world`.
 ///
-/// For a point at infinity (`w = 0`) the test is on the ray direction `R·d`: the
-/// camera sees the point iff it looks toward `+d` (camera-frame `z < 0`).
-fn is_in_front(patch: &OrientedPatch, cam_from_world: &crate::geometry::RigidTransform) -> bool {
-    cam_from_world
-        .transform_point_homogeneous(patch.center.coords, patch.w)
-        .z
-        < 0.0
+/// **Perspective family** — camera-frame depth `−z > 0` (the canonical camera
+/// looks down −Z). [`OrientedPatch::is_front_facing`] only tests the normal vs.
+/// the camera centre and does **not** guarantee positive depth; a distorted
+/// perspective projection can fold behind-camera points back in-frame, so
+/// scoring needs this explicit cheirality gate.
+///
+/// **Ray-path models** (fisheye / equirectangular) — `z < 0` is not cheirality
+/// there, it is a 90°-half-FOV gate: a >180° capture images θ > 90° at `z ≥ 0`,
+/// and that peripheral annulus is exactly the content such a camera exists to
+/// carry. The model's own domain — whatever [`CameraIntrinsics::ray_to_pixel`]
+/// accepts — is the only oracle, and the caller's frame test does the rest.
+///
+/// For a point at infinity (`w = 0`) the test is on the ray direction `R·d`.
+///
+/// [`CameraIntrinsics::ray_to_pixel`]: crate::camera::CameraIntrinsics::ray_to_pixel
+fn is_in_front(
+    patch: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    cam_from_world: &crate::geometry::RigidTransform,
+) -> bool {
+    let p = cam_from_world.transform_point_homogeneous(patch.center.coords, patch.w);
+    if camera.model.needs_ray_path() {
+        camera.ray_to_pixel([p.x, p.y, p.z]).is_some()
+    } else {
+        p.z < 0.0
+    }
 }
 
 /// Windowed ZNCC of `patch` rendered in `view` against the reference template,
@@ -884,7 +899,7 @@ fn select_patch_views_impl(
             // must be in front of it (cheirality — `is_front_facing` alone does not
             // guarantee positive depth on wide-fisheye / equirect projection).
             if !patch.is_front_facing(view.cam_from_world)
-                || !is_in_front(patch, view.cam_from_world)
+                || !is_in_front(patch, view.camera, view.cam_from_world)
             {
                 return None;
             }

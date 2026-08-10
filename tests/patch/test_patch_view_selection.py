@@ -236,14 +236,18 @@ def test_select_views_rejects_some_geometrically_visible_candidate(
 def test_select_views_admitted_points_are_in_front_of_camera(
     kerry_park_workspace: Path,
 ):
-    """B1 cheirality: no admitted view may have the point behind its camera, even
-    on the wide-fisheye kerry_park rig where a behind-camera point can project
-    in-frame.
+    """B1 visibility: every admitted view must be one the CAMERA MODEL can see
+    the point in — the point projects, and it projects inside the frame.
 
-    This is the *finite*-point cheirality invariant (`R·X + t`.z < 0 — canonical
-    cameras look down -Z), so build a finite-only cloud; a point at infinity has a
-    different in-front test (`R·d`.z, no translation) and is covered by the core
-    tests.
+    kerry_park is a back-to-back fisheye rig, i.e. a ray-path model, and there
+    `z < 0` is not cheirality: it is a 90°-half-FOV gate, and the θ > 90°
+    annulus it would exclude is exactly the content such a rig exists to image.
+    So the invariant is stated through the model — `ray_to_pixel` returns a
+    pixel and that pixel is in frame — which for a perspective camera reduces to
+    the historical depth test.
+
+    This is the *finite*-point form, so build a finite-only cloud; a point at
+    infinity is rotated without translation and is covered by the test below.
     """
     recon = SfmrReconstruction.load(kerry_park_workspace)
     images = load_images(recon)
@@ -251,27 +255,46 @@ def test_select_views_admitted_points_are_in_front_of_camera(
         recon, normal="mean_viewing", extent_value=5.0, exclude_points_at_infinity=True
     )
     positions = np.asarray(recon.positions, dtype=np.float64)
+    cams = recon.cameras
+    cam_idx = np.asarray(recon.camera_indexes)
+    assert cams[0].model.upper().find("FISHEYE") >= 0, (
+        f"kerry_park must be the wide-fisheye stress case; got {cams[0].model}"
+    )
 
     sample = sample_point_ids(cloud, n=150)
     results = cloud.select_views(recon, images, point_indexes=sample, resolution=12)
 
+    past_90 = 0
     for r in results:
         pid = int(r["point_index"])
         admitted = np.asarray(r["admitted"], dtype=np.int64)
         for image_idx in admitted.tolist():
             x_cam = _camera_frame_point(recon, positions[pid], image_idx)
-            assert x_cam[2] < 0, (
-                f"point {pid} admitted into image {image_idx} but is behind that "
-                f"camera (canonical depth -z = {-x_cam[2]})"
+            cam = cams[int(cam_idx[image_idx])]
+            px = cam.ray_to_pixel(x_cam.tolist())
+            assert px is not None, (
+                f"point {pid} admitted into image {image_idx} but the camera "
+                f"model cannot project it (x_cam = {x_cam})"
             )
+            assert 0.0 <= px[0] < cam.width and 0.0 <= px[1] < cam.height, (
+                f"point {pid} admitted into image {image_idx} but projects "
+                f"outside the frame at {px}"
+            )
+            past_90 += int(x_cam[2] >= 0.0)
+    assert past_90 > 0, (
+        "no admitted view sits past 90 deg off axis — the >180 deg rig's "
+        "periphery is unreachable, which is the defect this test now guards"
+    )
 
 
 def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path):
-    """w == 0 cheirality: an admitted view of a point at infinity must look toward
-    its direction — `(R·d).z < 0` (canonical cameras look down -Z), with no
-    translation (every ray to the point is parallel to `d`). Complements the
-    finite-point B1 test above, on the same wide-fisheye rig (kerry_park carries
-    points at infinity)."""
+    """w == 0 visibility: an admitted view of a point at infinity must be one
+    the camera model images the DIRECTION in — `R·d` (no translation: every ray
+    to the point is parallel to `d`) projects, and projects in frame.
+
+    Same model-stated invariant as the finite B1 test above, on the same
+    wide-fisheye rig: `(R·d).z < 0` would restrict a >180° rig to its forward
+    hemisphere, which is not what its camera model says it sees."""
     recon = SfmrReconstruction.load(kerry_park_workspace)
     images = load_images(recon)
     # Default includes points at infinity.
@@ -281,6 +304,8 @@ def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path)
     is_inf = np.asarray(recon.point_is_at_infinity)
     positions = np.asarray(recon.positions, dtype=np.float64)
     rot = rotation_matrices(recon)
+    cams = recon.cameras
+    cam_idx = np.asarray(recon.camera_indexes)
 
     inf_ids = [int(p) for p in np.asarray(cloud.point_indexes) if is_inf[int(p)]]
     assert inf_ids, "kerry_park should carry points at infinity"
@@ -291,10 +316,16 @@ def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path)
         pid = int(r["point_index"])
         d = positions[pid]  # unit direction for a w == 0 point
         for image_idx in np.asarray(r["admitted"], dtype=np.int64).tolist():
-            z = float((rot[image_idx] @ d)[2])
-            assert z < 0, (
+            d_cam = rot[image_idx] @ d
+            cam = cams[int(cam_idx[image_idx])]
+            px = cam.ray_to_pixel(d_cam.tolist())
+            assert px is not None, (
+                f"infinity point {pid} admitted into image {image_idx} but the "
+                f"camera model cannot project its direction (R·d = {d_cam})"
+            )
+            assert 0.0 <= px[0] < cam.width and 0.0 <= px[1] < cam.height, (
                 f"infinity point {pid} admitted into image {image_idx} but its "
-                f"direction points away from the camera (R·d).z = {z}"
+                f"direction projects outside the frame at {px}"
             )
             checked += 1
     assert checked > 0, "no admitted infinity views were checked"

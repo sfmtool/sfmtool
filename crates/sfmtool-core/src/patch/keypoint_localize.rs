@@ -153,8 +153,12 @@ pub(super) fn project_unclipped(
     w: f64,
 ) -> Option<(f64, f64)> {
     let pc = view.cam_from_world.transform_point_homogeneous(p.coords, w);
-    // Cheirality: a point in front of a canonical camera has z < 0.
-    if pc.z >= 0.0 {
+    // Cheirality: a point in front of a *perspective* camera has z < 0. A
+    // ray-path model (fisheye / equirectangular) images past 90° off axis,
+    // where a legitimate observation has `z >= 0`; there the model's own
+    // domain — whatever `ray_to_pixel` accepts — is the only oracle, and this
+    // test would discard the whole periphery a >180° capture exists to carry.
+    if !view.camera.model.needs_ray_path() && pc.z >= 0.0 {
         return None;
     }
     view.camera.ray_to_pixel([pc.x, pc.y, pc.z])
@@ -1244,6 +1248,14 @@ pub(super) fn seed_offset(
             return None;
         }
         let s = (patch.center - cam_c).dot(&n) / denom;
+        // The plane must be hit FORWARD along the bearing. Under a perspective
+        // camera the upstream cheirality gates already guarantee `s > 0`, so
+        // this only ever bites on a ray-path model, where a periphery bearing
+        // can meet the plane behind the camera centre — a mirrored "hit" that
+        // is not an observation of this patch at all.
+        if view.camera.model.needs_ray_path() && s <= 0.0 {
+            return None;
+        }
         let hit = cam_c + dir * s;
         hit - patch.center
     };

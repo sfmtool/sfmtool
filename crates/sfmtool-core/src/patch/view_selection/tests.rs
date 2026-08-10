@@ -647,6 +647,52 @@ fn behind_camera_candidate_rejected_by_cheirality() {
     );
 }
 
+/// The same geometry a `z < 0` cheirality gate calls "behind the camera" is an
+/// ordinary peripheral observation for a ray-path model, and `is_in_front` must
+/// split the two by model rather than by the sign of `z`.
+#[test]
+fn ray_path_camera_sees_past_ninety_degrees() {
+    let equi = CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: FOCAL,
+            principal_point_x: IMG_W as f64 / 2.0,
+            principal_point_y: IMG_H as f64 / 2.0,
+        },
+        width: IMG_W,
+        height: IMG_H,
+    };
+    let pin = pinhole();
+    // Identity rotation: the canonical camera looks down world −z, from world
+    // z = 1. A patch just past the camera's own plane (world z = 1.53) and well
+    // off to the side sits ~10° behind the 90° horizon, i.e. camera-frame
+    // z > 0 — which an equidistant map images and a pinhole cannot.
+    let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
+    let patch = OrientedPatch::from_center_normal(
+        Point3::new(3.0, 0.0, 1.53),
+        Vector3::new(0.0, 0.0, -1.0),
+        Vector3::y(),
+        [0.05, 0.05],
+    );
+    let pc = pose.transform_point(&patch.center);
+    let theta = (-pc.z / pc.coords.norm()).acos().to_degrees();
+    assert!(
+        pc.z > 0.0 && (95.0..=110.0).contains(&theta),
+        "test setup: patch must sit past 90 deg off axis, theta = {theta}"
+    );
+    assert!(
+        is_in_front(&patch, &equi, &pose),
+        "an equidistant fisheye images theta = {theta} deg; z < 0 is not its cheirality"
+    );
+    assert!(
+        !is_in_front(&patch, &pin, &pose),
+        "the perspective family keeps the half-space test"
+    );
+    // And the ray-path arm is the model's own domain, not "always true": the
+    // antipode of a real capture is outside the image, which the caller's frame
+    // test rejects, but the projection itself must still be defined here.
+    assert!(equi.ray_to_pixel([pc.x, pc.y, pc.z]).is_some());
+}
+
 // ── Affine candidate-scoring fast path ───────────────────────────────────────
 
 /// A `SimpleRadial` camera with radial distortion `k1` (same frame/focal as

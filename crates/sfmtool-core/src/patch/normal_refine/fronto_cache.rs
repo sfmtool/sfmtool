@@ -12,9 +12,14 @@
 //! resamples each candidate from it by an **affine** map. The source image is
 //! touched exactly once per view for the whole refinement.
 //!
-//! The affine map is built from the cameras' **undistorted-normalized** corner
-//! projections, so the lens distortion cancels in the base↔candidate
-//! correspondence and the cache is exact for any camera model. The base is
+//! The affine map is built from the cameras' corner projections — the
+//! **undistorted-normalized** `(x/z, y/z)` for the perspective family, so the
+//! lens distortion cancels in the base↔candidate correspondence, and the
+//! model's own `ray_to_pixel` pixels for a ray-path camera, which has no
+//! distortion-free variant to strip (see [`corner_norm_pts`]). The composed
+//! grid→grid map is parameterization-independent either way; each **half** is
+//! an affine fit to three corners, so it is exact only for an affine image map
+//! and degrades with the projection's curvature over the patch. The base is
 //! packed `u32`/pixel (RGB in the low 24 bits) and replicate-padded by a small
 //! guard so the resample can clamp with a single branch-free integer bound; the
 //! candidate support is resampled straight into the scorer's planar layout.
@@ -90,10 +95,21 @@ pub(super) struct Scratch {
     cons: ConsensusScratch,
 }
 
-/// Undistorted-normalized projection `(x/z, y/z)` of the four patch grid corners
-/// in `view` (`(0,0)`, `(r-1,0)`, `(0,r-1)`, `(r-1,r-1)`). Omitting the lens
-/// distortion makes the base↔candidate map distortion-independent. `None` if any
-/// corner is behind the camera.
+/// Projection of the four patch grid corners in `view` (`(0,0)`, `(r-1,0)`,
+/// `(0,r-1)`, `(r-1,r-1)`), in whatever image parameterization that view's
+/// camera model supports. `None` if any corner is unprojectable.
+///
+/// **Perspective family** — the undistorted-normalized `(x/z, y/z)`. Omitting
+/// the lens distortion makes the base↔candidate map distortion-independent.
+///
+/// **Ray-path models** (fisheye / equirectangular) — the actual
+/// `ray_to_pixel` coordinates. There is no distortion-free variant to strip:
+/// `θ = r/f` *is* the map, `x/z` is its gnomonic tangent plane, which blows up
+/// at θ → 90° and is meaningless past it — precisely the periphery such a
+/// camera exists to image. Both halves of the composed grid→grid map
+/// `a0⁻¹·ap` go through this same function for the same view, so any
+/// consistent image parameterization cancels; using the model's own keeps the
+/// affine fit local instead of fitting it in a space the model has left.
 fn corner_norm_pts(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
@@ -111,6 +127,10 @@ fn corner_norm_pts(
         // affine built from these corners must use the identical mapping.
         let world = patch.to_world(s, -t);
         let p = view.cam_from_world.transform_point(&world);
+        if view.camera.model.needs_ray_path() {
+            out[k] = view.camera.ray_to_pixel([p.x, p.y, p.z])?;
+            continue;
+        }
         // Cheirality: a corner in front of a canonical camera has z < 0.
         if p.z >= -1e-9 {
             return None;

@@ -157,3 +157,86 @@ fn resample_bench() {
         scalar / dispatch
     );
 }
+
+/// The cache's corner space must follow the camera model. `(x/z, y/z)` is the
+/// gnomonic tangent plane: it diverges at θ → 90° and is meaningless past it,
+/// and the `z >= -1e-9` guard in front of it disabled the cache outright for any
+/// fisheye patch that reached the horizon. Under a ray-path model the corners
+/// are the model's own pixels, which exist at every θ.
+#[test]
+fn ray_path_corners_are_model_pixels_and_survive_past_ninety_degrees() {
+    use crate::camera::{CameraIntrinsics, CameraModel};
+    use crate::geometry::RigidTransform;
+    use nalgebra::Point3;
+
+    let (w, h, focal) = (320u32, 240u32, 120.0);
+    let equi = CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: focal,
+            principal_point_x: w as f64 / 2.0,
+            principal_point_y: h as f64 / 2.0,
+        },
+        width: w,
+        height: h,
+    };
+    let pin = CameraIntrinsics {
+        model: CameraModel::Pinhole {
+            focal_length_x: focal,
+            focal_length_y: focal,
+            principal_point_x: w as f64 / 2.0,
+            principal_point_y: h as f64 / 2.0,
+        },
+        width: w,
+        height: h,
+    };
+    // Identity rotation: the canonical camera looks down world −z from z = 1.
+    let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
+    let patch = OrientedPatch::from_center_normal(
+        Point3::new(3.0, 0.0, 1.53),
+        Vector3::new(-1.0, 0.0, 0.0),
+        Vector3::y(),
+        [0.08, 0.08],
+    );
+    let img = crate::camera::remap::ImageU8::new(w, h, 1, vec![0u8; (w * h) as usize]);
+    let pyr = crate::camera::remap::ImageU8Pyramid::build(&img, 2);
+    let equi_view = ProjectedImage {
+        camera: &equi,
+        cam_from_world: &pose,
+        pyramid: &pyr,
+    };
+    let pin_view = ProjectedImage {
+        camera: &pin,
+        cam_from_world: &pose,
+        pyramid: &pyr,
+    };
+    let r = 16u32;
+
+    let pts =
+        corner_norm_pts(&patch, &equi_view, r).expect("equidistant corners exist past 90 deg");
+    // They are the model's own pixels, not a gnomonic surrogate.
+    let step = 2.0 / r as f64;
+    let s = 0.5 * step - 1.0;
+    let world = patch.to_world(s, -s);
+    let pc = pose.transform_point(&world);
+    let want = equi.ray_to_pixel([pc.x, pc.y, pc.z]).unwrap();
+    assert!(
+        (pts[0].0 - want.0).abs() < 1e-9 && (pts[0].1 - want.1).abs() < 1e-9,
+        "corner 0 = {:?}, model says {want:?}",
+        pts[0]
+    );
+    // The composed base→candidate map is still the identity when the candidate
+    // *is* the base — the property the whole cache rests on.
+    let a = affine_grid_to_img(&pts, r);
+    let m = a.try_inverse().expect("invertible") * a;
+    for i in 0..3 {
+        for j in 0..3 {
+            let want = if i == j { 1.0 } else { 0.0 };
+            assert!((m[(i, j)] - want).abs() < 1e-6, "({i},{j}) = {}", m[(i, j)]);
+        }
+    }
+    // The perspective arm is untouched and still refuses the same geometry.
+    assert!(
+        corner_norm_pts(&patch, &pin_view, r).is_none(),
+        "the perspective family keeps its z < 0 corner gate"
+    );
+}
