@@ -1187,3 +1187,190 @@ fn test_observation_confidence_is_valid_in_sift_files_mode_too() {
     let back = SfmrReconstruction::from_sfmr_data(recon.to_sfmr_data()).unwrap();
     assert_eq!(back.observation_confidence.unwrap().len(), m);
 }
+
+#[test]
+fn test_recompute_point_errors_fisheye_keeps_past_ninety_observations() {
+    // Regression: `observation_reprojection_error` applied the perspective
+    // cheirality test (`z >= 0` is behind) and the gnomonic `(x/-z, y/-z)`
+    // projection to EVERY model, so on an equidistant capture every
+    // observation past 90 deg off axis returned `None` and dropped out of the
+    // point's mean — 18-37% of the observations of a >180 deg capture, and the
+    // stored error is what the points-at-infinity classifier calibrates its
+    // angular noise from. A point observed ONLY past 90 deg used to come back
+    // with the "no valid observation" error of 0.0.
+    use crate::camera::{CameraIntrinsics, CameraModel};
+    use nalgebra::{Point3, UnitQuaternion, Vector3};
+
+    let mut recon = demo_embedded(6);
+    let cam = CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: 138.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    };
+    recon.cameras = vec![cam.clone()];
+    for im in recon.images.iter_mut() {
+        im.camera_index = 0;
+        im.quaternion_wxyz = UnitQuaternion::identity();
+        im.translation_xyz = Vector3::zeros();
+    }
+    // Point 0 sits at theta = 100 deg off the optical axis: past the 90 deg
+    // horizon, inside the sensor's own 99.6 deg inscribed image circle only at
+    // the diagonal, and squarely inside the model's domain.
+    let theta: f64 = 100f64.to_radians();
+    let dir = Vector3::new(theta.sin(), 0.0, -theta.cos());
+    for (p_idx, pt) in recon.points.iter_mut().enumerate() {
+        pt.position = Point3::from(dir * (3.0 + p_idx as f64));
+        pt.w = 1.0;
+    }
+    assert!(
+        (recon.images[0].quaternion_wxyz * recon.points[0].position.coords).z > 0.0,
+        "fixture must be past 90 deg (canonical z > 0)"
+    );
+
+    // Plant each observation's keypoint 2 px along +u from the exact
+    // projection, so the recomputed mean error must be exactly 2 px.
+    let projected: Vec<[f32; 2]> = (0..recon.tracks.len())
+        .map(|k| {
+            let obs = &recon.tracks[k];
+            let p_idx = recon
+                .observation_offsets
+                .windows(2)
+                .position(|w| (w[0]..w[1]).contains(&k))
+                .expect("observation belongs to a point");
+            let image = &recon.images[obs.image_index as usize];
+            let p_cam =
+                image.quaternion_wxyz * recon.points[p_idx].position.coords + image.translation_xyz;
+            let (u, v) = cam.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z]).unwrap();
+            [(u + 2.0) as f32, v as f32]
+        })
+        .collect();
+    match &mut recon.observations {
+        ObservationSource::EmbeddedPatches { keypoints_xy, .. } => {
+            for (k, uv) in projected.iter().enumerate() {
+                keypoints_xy[[k, 0]] = uv[0];
+                keypoints_xy[[k, 1]] = uv[1];
+            }
+        }
+        _ => panic!("demo_embedded must be an embedded_patches recon"),
+    }
+
+    recon.recompute_point_errors().unwrap();
+    for (i, p) in recon.points.iter().enumerate() {
+        assert!(
+            (p.error - 2.0).abs() < 1e-2,
+            "point {i} error {} — a past-90-degree observation was dropped",
+            p.error
+        );
+    }
+}
+
+#[test]
+fn test_observation_reprojection_error_is_bit_identical_to_the_gnomonic_expression() {
+    // `observation_reprojection_error` routes every model through
+    // `ray_to_pixel`. On the perspective family's valid domain that call is
+    // documented equivalent to the explicit cheirality + gnomonic + `project`
+    // expression it replaced; this pins the equivalence bitwise — the
+    // pinhole-fleet byte-inertness argument in miniature.
+    use super::recompute::observation_reprojection_error;
+    use crate::camera::{CameraIntrinsics, CameraModel};
+    use nalgebra::{Point3, UnitQuaternion, Vector3};
+
+    let cameras = [
+        CameraIntrinsics {
+            model: CameraModel::SimplePinhole {
+                focal_length: 1409.9,
+                principal_point_x: 1020.0,
+                principal_point_y: 768.0,
+            },
+            width: 2040,
+            height: 1536,
+        },
+        CameraIntrinsics {
+            model: CameraModel::SimpleRadial {
+                focal_length: 1409.9,
+                principal_point_x: 1020.0,
+                principal_point_y: 768.0,
+                radial_distortion_k1: -0.05,
+            },
+            width: 2040,
+            height: 1536,
+        },
+    ];
+    let rotation = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.3);
+    let translation = Vector3::new(0.2, -0.1, 0.4);
+    let observed = [900.0, 700.0];
+    for cam in &cameras {
+        for i in 0..40 {
+            for j in 0..40 {
+                // z = −3 keeps every ray well inside the −0.05 polynomial's
+                // principal branch (normalized radius ≲ 0.5 vs the 2.58 bound),
+                // where the two expressions must agree exactly; the rotation
+                // pushes a few grid corners behind the camera to cover the
+                // `None` side too.
+                let point = Point3::new((i as f64 - 19.5) * 0.05, (j as f64 - 19.5) * 0.05, -3.0);
+                let p_cam = rotation * point.coords + translation;
+                let expected = if p_cam.z >= 0.0 {
+                    None
+                } else {
+                    let (u, v) = cam.project(p_cam.x / -p_cam.z, p_cam.y / -p_cam.z);
+                    let (du, dv) = (u - observed[0], v - observed[1]);
+                    Some((du * du + dv * dv).sqrt())
+                };
+                let got = observation_reprojection_error(
+                    &rotation,
+                    &translation,
+                    cam,
+                    &point,
+                    false,
+                    observed,
+                );
+                assert_eq!(got, expected, "camera {:?} point {:?}", cam.model, point);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_observation_reprojection_error_rejects_ghost_projections() {
+    // A strongly-distorted SimpleRadial ray beyond the distortion
+    // polynomial's principal monotonic branch has no true projection — the
+    // forward map has folded, and the polynomial puts its ghost INSIDE the
+    // image rectangle. The explicit gnomonic expression scored a residual
+    // against that ghost pixel; `ray_to_pixel`'s domain rejects the ray.
+    use super::recompute::observation_reprojection_error;
+    use crate::camera::{CameraIntrinsics, CameraModel};
+    use nalgebra::{Point3, UnitQuaternion, Vector3};
+
+    let cam = CameraIntrinsics {
+        model: CameraModel::SimpleRadial {
+            focal_length: 100.0,
+            principal_point_x: 120.0,
+            principal_point_y: 120.0,
+            radial_distortion_k1: -0.3,
+        },
+        width: 240,
+        height: 240,
+    };
+    // In front (z < 0) at normalized radius 2 — far beyond the branch bound
+    // r² = 1/(3·0.3): the radial scalar g = 1 − 0.3·4 = −0.2 has folded sign,
+    // so the ghost lands at u = 120 + 100·2·(−0.2) = 80, squarely in-frame.
+    let point = Point3::new(2.0, 0.0, -1.0);
+    let (u_ghost, v_ghost) = cam.project(2.0, 0.0);
+    assert!(
+        (0.0..cam.width as f64).contains(&u_ghost) && (0.0..cam.height as f64).contains(&v_ghost),
+        "fixture must ghost inside the frame: ({u_ghost}, {v_ghost})"
+    );
+    let got = observation_reprojection_error(
+        &UnitQuaternion::identity(),
+        &Vector3::zeros(),
+        &cam,
+        &point,
+        false,
+        [u_ghost, v_ghost],
+    );
+    assert_eq!(got, None, "a folded-branch ray must have no reprojection");
+}

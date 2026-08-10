@@ -329,8 +329,8 @@ impl SfmrReconstruction {
     }
 }
 
-/// Reprojection error (pixels) of one observation, or `None` if the point is
-/// behind the camera.
+/// Reprojection error (pixels) of one observation, or `None` when the camera
+/// cannot image the point at all.
 ///
 /// `rotation`/`translation` are the world→camera pose; `point` is the 3D point's
 /// stored coordinate. A point at infinity (`at_infinity`) projects its bearing
@@ -338,6 +338,19 @@ impl SfmrReconstruction {
 /// negligible at infinity — while a finite point projects `R·p + t`. Shared by
 /// per-image error computation and points-at-infinity discovery so the two stay
 /// in sync.
+///
+/// **"Cannot image" is the camera model's decision, not a hard-coded
+/// half-space.** The camera-frame point goes through
+/// [`CameraIntrinsics::ray_to_pixel`] and that function's `None` is the
+/// domain: the cheirality half-space plus the distortion polynomial's
+/// invertible branch for the perspective family, the imaged sphere for an
+/// equidistant map. This function used to re-implement the perspective
+/// decision as a hard-coded `z ≥ 0` rejection and gnomonic projection for
+/// every model, so every observation past 90° off axis returned `None` and
+/// dropped out of the point's mean — silently biasing the stored error that
+/// the points-at-infinity classifier calibrates its angular noise from — and
+/// a distorted perspective ray beyond the polynomial's principal branch
+/// scored a residual against its ghost projection instead of being rejected.
 pub(crate) fn observation_reprojection_error(
     rotation: &UnitQuaternion<f64>,
     translation: &Vector3<f64>,
@@ -351,11 +364,7 @@ pub(crate) fn observation_reprojection_error(
     } else {
         rotation * point.coords + translation
     };
-    // Cheirality: a point in front of a canonical camera has z < 0.
-    if p_cam.z >= 0.0 {
-        return None;
-    }
-    let (u_proj, v_proj) = camera.project(p_cam.x / -p_cam.z, p_cam.y / -p_cam.z);
+    let (u_proj, v_proj) = camera.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z])?;
     let du = u_proj - observed_xy[0];
     let dv = v_proj - observed_xy[1];
     Some((du * du + dv * dv).sqrt())
