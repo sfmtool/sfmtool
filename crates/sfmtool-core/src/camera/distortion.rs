@@ -900,6 +900,125 @@ impl CameraIntrinsics {
         Some(((fx * x_d + cx, fy * y_d + cy), jac))
     }
 
+    /// The 2×3 pixel Jacobian `∂(u, v)/∂p_cam` at the camera-frame point
+    /// `p_cam`, analytic where the model has one and a central difference of
+    /// [`Self::ray_to_pixel`] otherwise.
+    ///
+    /// `None` when `p_cam` (or a difference probe around it) falls outside the
+    /// model's domain, or when `p_cam` is the origin.
+    fn pixel_jacobian(&self, p_cam: [f64; 3]) -> Option<[[f64; 3]; 2]> {
+        if self.model.supports_pixel_jacobian() {
+            return self.ray_to_pixel_with_jacobian(p_cam).map(|(_, j)| j);
+        }
+        // Polynomial fisheye / equirectangular: no analytic derivative, so
+        // difference the projection itself. The step is relative to ‖p‖ because
+        // the projection is scale-invariant in the ray — `1e-6·‖p‖` sits near
+        // the central-difference optimum for f64 (truncation ~1e-12 relative,
+        // round-off ~1e-10 relative).
+        let n = (p_cam[0] * p_cam[0] + p_cam[1] * p_cam[1] + p_cam[2] * p_cam[2]).sqrt();
+        if n <= 0.0 || n.is_nan() {
+            return None;
+        }
+        let h = 1e-6 * n;
+        let mut jac = [[0.0f64; 3]; 2];
+        for col in 0..3 {
+            let mut plus = p_cam;
+            let mut minus = p_cam;
+            plus[col] += h;
+            minus[col] -= h;
+            let (up, vp) = self.ray_to_pixel(plus)?;
+            let (um, vm) = self.ray_to_pixel(minus)?;
+            jac[0][col] = (up - um) / (2.0 * h);
+            jac[1][col] = (vp - vm) / (2.0 * h);
+        }
+        Some(jac)
+    }
+
+    /// The local **pixel scale** at the camera-frame point `p_cam`: the smaller
+    /// singular value `σ_min` of the pixel Jacobian `J = ∂(u, v)/∂p_cam`, in
+    /// pixels per world unit.
+    ///
+    /// Every model here projects by *direction* only, so `J·p_cam = 0` — `J`'s
+    /// null space is the viewing ray itself, and its two singular values are the
+    /// pixels-per-world-unit along the two tangent directions at `p_cam` (both
+    /// `∝ 1/‖p_cam‖`). `σ_min` is the conservative one: a tangent-plane offset
+    /// `δ` moves the projection by **at least** `σ_min·‖δ‖` pixels, in every
+    /// direction, so `pixels / σ_min` is the world size that fits a pixel
+    /// budget however the surface is oriented. See
+    /// [`Self::pixel_radius_to_world`], the sizing rule built on it.
+    ///
+    /// `None` when the Jacobian is undefined at `p_cam` — the ray is outside the
+    /// model's domain (behind a perspective camera, past a distortion
+    /// polynomial's principal branch, at the equidistant antipode) or `p_cam` is
+    /// the camera centre.
+    pub fn min_pixel_scale(&self, p_cam: [f64; 3]) -> Option<f64> {
+        let j = self.pixel_jacobian(p_cam)?;
+        // Singular values of the 2×3 `J` are the square roots of the eigenvalues
+        // of the symmetric 2×2 `J·Jᵀ` — a closed form, no SVD needed.
+        let a = j[0][0] * j[0][0] + j[0][1] * j[0][1] + j[0][2] * j[0][2];
+        let b = j[0][0] * j[1][0] + j[0][1] * j[1][1] + j[0][2] * j[1][2];
+        let c = j[1][0] * j[1][0] + j[1][1] * j[1][1] + j[1][2] * j[1][2];
+        let disc = ((a - c) * (a - c) + 4.0 * b * b).sqrt();
+        let lambda_max = 0.5 * (a + c + disc);
+        if lambda_max <= 0.0 || lambda_max.is_nan() {
+            return None;
+        }
+        // `det / λ_max` rather than `(tr − disc)/2`: the difference form
+        // cancels catastrophically once the two singular values separate (they
+        // differ by `sec θ` off axis).
+        let lambda_min = ((a * c - b * b) / lambda_max).max(0.0);
+        Some(lambda_min.sqrt())
+    }
+
+    /// The world-space radius at the camera-frame point `p_cam` that projects to
+    /// `radius_px` pixels: `radius_px / σ_min(J)`, with `σ_min` the local pixel
+    /// scale ([`Self::min_pixel_scale`]).
+    ///
+    /// One rule for every camera model — the pixel Jacobian already knows how
+    /// each one magnifies, so nothing here branches on projection family. Two
+    /// models have an exact closed form for `σ_min`, used directly (both are
+    /// algebraic identities of the general rule, not approximations of it):
+    ///
+    /// - **Pinhole** (`fx == fy == f`), at `θ` off axis and range `R`: the
+    ///   tangent scales are `f·sec²θ/R` (radial) and `f·secθ/R` (azimuthal), so
+    ///   `σ_min = f·secθ/R = f/|z|` and the radius is `radius_px·|z|/f`.
+    /// - **[`CameraModel::EquidistantFisheye`]**: the tangent scales are
+    ///   `f·(θ/sin θ)/R` (azimuthal) and `f/R` (radial), so `σ_min = f/R` and the
+    ///   radius is `radius_px·‖p_cam‖/f` — finite past 90°, where the pinhole
+    ///   `|z|` collapses to zero and inverts beyond.
+    ///
+    /// Every other model goes through `σ_min` itself, which is strictly more
+    /// correct than either closed form: a distorted perspective model picks up
+    /// the local distortion magnification that `|z|/f` ignores, and the
+    /// polynomial fisheye family picks up `dr_d/dθ ≠ f`, which `‖p‖/f` assumes.
+    ///
+    /// When `σ_min` is undefined (the ray is outside the model's domain, so no
+    /// view of that point exists there) this falls back to the angular reading
+    /// `radius_px·‖p_cam‖/f`, which stays finite at every angle. The distance is
+    /// floored at `1e-6` so a point sitting on the camera centre still gets a
+    /// size rather than zero.
+    pub fn pixel_radius_to_world(&self, p_cam: [f64; 3], radius_px: f64) -> f64 {
+        match &self.model {
+            CameraModel::SimplePinhole { focal_length, .. } => {
+                radius_px * p_cam[2].abs().max(1e-6) / focal_length
+            }
+            CameraModel::Pinhole {
+                focal_length_x,
+                focal_length_y,
+                ..
+            } if focal_length_x == focal_length_y => {
+                radius_px * p_cam[2].abs().max(1e-6) / focal_length_x
+            }
+            CameraModel::EquidistantFisheye { focal_length, .. } => {
+                radius_px * ray_range(p_cam).max(1e-6) / focal_length
+            }
+            _ => match self.min_pixel_scale(p_cam) {
+                Some(scale) if scale > 0.0 => radius_px / scale,
+                _ => radius_px * ray_range(p_cam).max(1e-6) / self.focal_lengths().0,
+            },
+        }
+    }
+
     /// Batch version of [`Self::ray_to_pixel`].
     pub fn ray_to_pixel_batch(&self, rays: &[[f64; 3]]) -> Vec<Option<[f64; 2]>> {
         let (fx, fy) = self.focal_lengths();
@@ -925,6 +1044,12 @@ impl CameraIntrinsics {
             })
             .collect()
     }
+}
+
+/// Euclidean length of a camera-frame point, associated left-to-right so it
+/// agrees bit-for-bit with `nalgebra`'s `Vector3::norm` on the same components.
+fn ray_range(p: [f64; 3]) -> f64 {
+    (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt()
 }
 
 #[cfg(test)]

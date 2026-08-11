@@ -10,6 +10,7 @@
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 use ndarray::Array2;
 
+use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RigidTransform;
 use crate::reconstruction::SfmrReconstruction;
 use crate::spatial::PointCloud;
@@ -299,24 +300,16 @@ impl PatchCloud {
         // sorted by point then image, so `observation_offsets` groups it).
         let obs_images: Vec<u32> = recon.tracks.iter().map(|o| o.image_index).collect();
 
-        // Per-image pose + focal length (fx of the image's camera).
+        // Per-image pose + camera model (the image's camera, cloned per image so
+        // the shared routine indexes everything by image).
         let cam_quats: Vec<UnitQuaternion<f64>> =
             recon.images.iter().map(|im| im.quaternion_wxyz).collect();
         let cam_translations: Vec<Vector3<f64>> =
             recon.images.iter().map(|im| im.translation_xyz).collect();
-        let cam_focals: Vec<f64> = recon
+        let cam_intrinsics: Vec<CameraIntrinsics> = recon
             .images
             .iter()
-            .map(|im| recon.cameras[im.camera_index as usize].focal_lengths().0)
-            .collect();
-        let cam_ray_path: Vec<bool> = recon
-            .images
-            .iter()
-            .map(|im| {
-                recon.cameras[im.camera_index as usize]
-                    .model
-                    .needs_ray_path()
-            })
+            .map(|im| recon.cameras[im.camera_index as usize].clone())
             .collect();
 
         // FeatureSize is the one policy that reads the workspace `.sift` files:
@@ -363,8 +356,7 @@ impl PatchCloud {
             obs_scales: &obs_scales,
             cam_quats: &cam_quats,
             cam_translations: &cam_translations,
-            cam_focals: &cam_focals,
-            cam_ray_path: &cam_ray_path,
+            cam_intrinsics: &cam_intrinsics,
         };
         build_patch_cloud(&scene, normal, extent, exclude_points_at_infinity)
     }
@@ -382,7 +374,11 @@ impl PatchCloud {
     ///   `obs_images` (`M`) by point; point `p`'s observations are
     ///   `obs_images[obs_offsets[p]..obs_offsets[p + 1]]`.
     /// - `cam_quats` / `cam_translations` / `cam_focals` (`N`) give each image's
-    ///   `cam_from_world` rotation, translation, and focal length (fx).
+    ///   `cam_from_world` rotation, translation, and focal length (fx). A focal
+    ///   with no model attached is read as a simple pinhole, so
+    ///   [`PatchExtent::PixelRadius`] sizes through the pinhole pixel scale
+    ///   `f/|z|`; a fisheye caller wanting its model's scale should go through
+    ///   [`Self::from_reconstruction`].
     /// - `stored_normals` (`P`) is read only by [`PatchNormal::Stored`]; a
     ///   zero/missing row falls back to the mean viewing direction.
     /// - `obs_scales` (`M`, `NaN` = unreadable) supplies the keypoint scale that
@@ -415,6 +411,24 @@ impl PatchCloud {
                     .collect()
             })
             .unwrap_or_default();
+        // A focal length with no model attached *is* a simple pinhole, so this
+        // entry point hands the shared routine one per view. That is exactly the
+        // perspective reading it has always had, expressed as a camera model
+        // rather than as a branch: the sizing rule reads whole cameras (see
+        // `PatchScene::cam_intrinsics`). Only the focal is ever consulted — the
+        // principal point and the dimensions do not enter any extent policy.
+        let cam_intrinsics: Vec<CameraIntrinsics> = cam_focals
+            .iter()
+            .map(|&f| CameraIntrinsics {
+                model: CameraModel::SimplePinhole {
+                    focal_length: f,
+                    principal_point_x: 0.0,
+                    principal_point_y: 0.0,
+                },
+                width: 1,
+                height: 1,
+            })
+            .collect();
         let scene = PatchScene {
             positions,
             weights,
@@ -424,10 +438,7 @@ impl PatchCloud {
             obs_scales: &obs_scales_opt,
             cam_quats,
             cam_translations,
-            cam_focals,
-            // No camera models here — this entry point takes focals only, so the
-            // perspective reading stands (see `PatchScene::cam_ray_path`).
-            cam_ray_path: &[],
+            cam_intrinsics: &cam_intrinsics,
         };
         build_patch_cloud(&scene, normal, extent, exclude_points_at_infinity)
     }
@@ -536,23 +547,17 @@ struct PatchScene<'a> {
     cam_quats: &'a [UnitQuaternion<f64>],
     /// Per-image `cam_from_world` translation. `N` entries.
     cam_translations: &'a [Vector3<f64>],
-    /// Per-image focal length (fx). `N` entries.
-    cam_focals: &'a [f64],
-    /// Per-image [`CameraModel::needs_ray_path`], i.e. "this camera can image
-    /// past 90° off axis, so optical-axis depth is not a distance". `N` entries,
-    /// or **empty** — an empty slice reads as all-perspective, which is what
-    /// [`PatchCloud::from_tracks`] supplies (its caller hands over focals, not
-    /// cameras).
-    ///
-    /// [`CameraModel::needs_ray_path`]: crate::camera::CameraModel::needs_ray_path
-    cam_ray_path: &'a [bool],
+    /// Per-image camera model. `N` entries — one per *image*, so a camera shared
+    /// by several images is repeated. [`PatchExtent::PixelRadius`] differentiates
+    /// it ([`CameraIntrinsics::pixel_radius_to_world`]); the other policies read
+    /// only its focal ([`Self::focal`]).
+    cam_intrinsics: &'a [CameraIntrinsics],
 }
 
 impl PatchScene<'_> {
-    /// Whether image `i`'s camera needs the ray path; `false` when the caller
-    /// supplied no models (see [`Self::cam_ray_path`]).
-    fn ray_path(&self, i: usize) -> bool {
-        self.cam_ray_path.get(i).copied().unwrap_or(false)
+    /// Image `i`'s focal length (fx).
+    fn focal(&self, i: usize) -> f64 {
+        self.cam_intrinsics[i].focal_lengths().0
     }
 
     /// In-plane "up" hint: the first observing camera's up axis (canonical camera
@@ -659,7 +664,7 @@ fn build_patch_cloud(
                 };
                 let d = (scene.cam_quats[img] * center.coords + scene.cam_translations[img]).norm();
                 if d > 1e-6 {
-                    sizes.push(sigma * d / scene.cam_focals[img]);
+                    sizes.push(sigma * d / scene.focal(img));
                 } else {
                     coincident_with_camera += 1;
                 }
@@ -737,20 +742,13 @@ fn build_patch_cloud(
                             let img = scene.obs_images[o] as usize;
                             let p_cam =
                                 scene.cam_quats[img] * center.coords + scene.cam_translations[img];
-                            // Ray RANGE for a ray-path model, optical-axis depth
-                            // for the perspective family — the same split
-                            // `FeatureSize` already makes above. A fisheye sees
-                            // points past 90° off axis at `z ≈ 0`, where `|z|`
-                            // collapses the patch to nothing and mirrors it back
-                            // beyond; `‖p_cam‖` is the distance the angular size
-                            // `radius_px / f` actually spans.
-                            let depth = if scene.ray_path(img) {
-                                p_cam.norm()
-                            } else {
-                                p_cam.z.abs()
-                            }
-                            .max(1e-6);
-                            radius_px * depth / scene.cam_focals[img]
+                            // One rule for every model: the world size that
+                            // subtends `radius_px` in the view's least-magnified
+                            // direction, `radius_px / σ_min(∂(u,v)/∂p_cam)`. The
+                            // camera's own Jacobian carries the projection family
+                            // and the distortion, so nothing branches here.
+                            scene.cam_intrinsics[img]
+                                .pixel_radius_to_world([p_cam.x, p_cam.y, p_cam.z], radius_px)
                         })
                         .collect();
                     reduce(&mut hs, across)
@@ -791,7 +789,8 @@ fn build_patch_cloud(
 /// The angular half-size (the tangent vectors' magnitude) follows `extent`:
 /// [`PatchExtent::FeatureSize`] and [`PatchExtent::PixelRadius`] have a natural
 /// distance-free angular form (`σ_i / f_i` and `radius_px / f_i` per view, reduced
-/// across views — the finite formulas with the ray distance dropped), while
+/// across views — pixels over pixels-per-radian, the finite formulas with the
+/// range divided out), while
 /// [`PatchExtent::Fixed`] and [`PatchExtent::RelativeToSpacing`] reuse their world
 /// half-size as the tangent magnitude. Errors with
 /// [`PatchCloudError::MissingFeatureScale`] under [`PatchExtent::FeatureSize`] if
@@ -824,7 +823,7 @@ fn push_infinity_patches(
                     radius_px
                 } else {
                     let mut angles: Vec<f64> = (start..end)
-                        .map(|o| radius_px / scene.cam_focals[scene.obs_images[o] as usize])
+                        .map(|o| radius_px / scene.focal(scene.obs_images[o] as usize))
                         .collect();
                     reduce(&mut angles, across)
                 }
@@ -834,7 +833,7 @@ fn push_infinity_patches(
                 for obs in start..end {
                     let img = scene.obs_images[obs] as usize;
                     if let Some(sigma) = scene.obs_scales.get(obs).copied().flatten() {
-                        angles.push(sigma / scene.cam_focals[img]);
+                        angles.push(sigma / scene.focal(img));
                     }
                 }
                 if angles.is_empty() {
@@ -894,6 +893,14 @@ pub enum PatchExtent {
     /// `radius_px` in the view where the point appears largest and smaller in the
     /// rest; `Max` is sized to the smallest-appearing view, so the patch can be
     /// much larger in close views.
+    ///
+    /// The per-view size is `radius_px / σ_min`, where `σ_min` is the smaller
+    /// singular value of that camera's pixel Jacobian `∂(u, v)/∂p_cam` at the
+    /// point — the pixels-per-world-unit in the view's least-magnified tangent
+    /// direction. One rule for every camera model; see
+    /// [`CameraIntrinsics::pixel_radius_to_world`], which also gives the exact
+    /// closed forms it reduces to for a pinhole (`radius_px·|z|/f`) and an
+    /// equidistant fisheye (`radius_px·‖p_cam‖/f`).
     PixelRadius { radius_px: f64, across: ViewReduce },
     /// `factor` × the projected world feature size: each observation's keypoint
     /// scale `sigma_i` back-projected to world (`sigma_i · z_i / f_i`), reduced
