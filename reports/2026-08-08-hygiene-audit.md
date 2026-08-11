@@ -748,6 +748,26 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
 ## Tests
 
 **`tests/` subdirectories: four clusters still flat**
+> _Status (2026-08-11): Done — all four clusters landed as `tests/rig/` (6),
+> `tests/matching/` (6), `tests/sift/` (3) and `tests/camrig/` (3), leaving 25 flat
+> modules. `tests/_camrig_helpers.py` became `tests/camrig/conftest.py`. Four path
+> citations outside `tests/` were updated in the same commit
+> (`spherical/tile_rig/tests.rs` ×2, `specs/core/cluster-patch-refinement.md`,
+> `specs/core/track-cluster-matching.md`), which is the hazard the risk note below
+> called out._
+>
+> _One hazard the risk note **did not** call out, and which "pure `git mv`" is
+> precisely wrong about: two modules computed the test-data directory by walking
+> up from `__file__`, so the extra directory level silently repointed them at
+> `tests/test-data/`. `_camrig_helpers.py`'s copy was noticed while moving it;
+> `test_camrig_cp.py:18` held a **third** copy of the same constant and was not,
+> and it failed 6 tests on the first run after the move. Both now read
+> `TEST_DATA_DIR` (the root `conftest.py`'s own `__file__` walk), and
+> `test_camrig_cp.py` imports `_IMAGE_DATA` from the package conftest rather than
+> redefining it. A future cluster move should grep the moved set for `__file__`
+> and `parent.parent`, not just for inbound path citations — a depth-dependent
+> path inside a moved file is invisible to the citation grep._
+>
 > _Partially done. `tests/patch/` landed on 2026-08-01 and has since grown to 16
 > modules / 5,850 lines (including its `conftest.py`). The four remaining clusters
 > are unchanged._
@@ -1180,6 +1200,16 @@ them. Sizes are current, since several have moved:
    others get cheaper.
 
 3. **`tests/rig/`, `tests/matching/`, `tests/sift/`, `tests/camrig/`.**
+   > _Status (2026-08-11): Done. All four directories created; 18 modules plus
+   > `_camrig_helpers.py` moved. The `testpaths = ["tests"]` / no-path-pinning
+   > assumption held — `pyproject.toml`, `ci.yml` and `scripts/coverage.sh` needed
+   > no edits. The predicted citation problem was real but smaller than the
+   > `tests/patch/` move: two spec files and one Rust doc comment, no
+   > `scripts/viz_*.py` hits. "Pure `git mv`" was the one wrong call — two moved
+   > modules derived the test-data path from `__file__`, which the extra level
+   > breaks; see the finding above. The `test_densify.py` split this unblocks is
+   > **not** done and remains open as its own finding._
+
    6,502 lines and 18 modules out of the 43 still flat, pure `git mv`, no CI or
    tooling depends on the paths, and the pattern is already established three times
    over (`xform/`, `patch/`, `rust_bindings/`). `tests/camrig/` is nearly free and

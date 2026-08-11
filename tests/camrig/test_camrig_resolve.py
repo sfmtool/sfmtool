@@ -19,7 +19,7 @@ from sfmtool._sfmtool.io import (
     write_camrig,
 )
 
-from ._camrig_helpers import _IMAGE_DATA, _camera, _copy_images, _pinhole_camera
+from .conftest import _IMAGE_DATA, _camera, _copy_images, _pinhole_camera
 
 
 # ── resolve_camrig_for_solve ────────────────────────────────────────────────

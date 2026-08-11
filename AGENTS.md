@@ -68,12 +68,14 @@ When finishing a task, run the checks for what you changed:
   - `sfm-explorer` — native GUI viewer (winit + wgpu + egui); window title
     "SfM Explorer", or "SfM Explorer - <file>.sfmr" once a file is loaded
   - `sfmtool-py` — PyO3 bindings, compiled as `sfmtool._sfmtool`
-- `tests/` — pytest, ~114 modules (top-level + `tests/patch/`, `tests/xform/`
-  and `tests/rust_bindings/`). Fixtures in
+- `tests/` — pytest, ~114 modules (top-level + `tests/camrig/`, `tests/matching/`,
+  `tests/patch/`, `tests/rig/`, `tests/rust_bindings/`, `tests/sift/` and
+  `tests/xform/`). Fixtures in
   `conftest.py` — notably `isolated_seoul_bull_image` and
-  `isolated_seoul_bull_17_images`. `tests/patch/` and `tests/xform/` each add a
+  `isolated_seoul_bull_17_images`. `tests/camrig/`, `tests/patch/` and
+  `tests/xform/` each add a
   `conftest.py` of shared helpers, imported as `from .conftest import …`
-  (`tests/rust_bindings/` has none). Look for `test_*_rust_bindings.py` modules
+  (the other subpackages have none). Look for `test_*_rust_bindings.py` modules
   that exercise the PyO3 surface.
 - `specs/` — design specs. Read the relevant file before making non-trivial
   changes and update it when behavior diverges. Subdirs: `cli/` (per-command),

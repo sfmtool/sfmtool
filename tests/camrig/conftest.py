@@ -7,7 +7,9 @@
 import shutil
 from pathlib import Path
 
-_IMAGE_DATA = Path(__file__).parent.parent / "test-data" / "images"
+from tests.conftest import TEST_DATA_DIR
+
+_IMAGE_DATA = TEST_DATA_DIR / "images"
 
 
 def _copy_images(dest: Path, dataset: str, count: int) -> None:

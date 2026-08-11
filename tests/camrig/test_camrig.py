@@ -22,7 +22,7 @@ from sfmtool._sfmtool.io import (
 from sfmtool._sfmtool.spherical import SphericalTileRig
 from sfmtool.cli import main
 
-from ._camrig_helpers import _IMAGE_DATA, _copy_images, _pinhole_camera
+from .conftest import _IMAGE_DATA, _copy_images, _pinhole_camera
 
 
 def test_spherical_tile_rig_camrig_round_trip(tmp_path: Path):

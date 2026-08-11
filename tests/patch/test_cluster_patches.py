@@ -6,7 +6,8 @@
 The cluster-bearing input file is produced the way users produce it: by
 `sfm match --cluster`, which persists the matcher's clusters as its primary
 artifact (programmatic construction of cluster-bearing dicts is covered by
-`test_matches_clusters.py` and `test_pairs_from_matches.py`).
+`../matching/test_matches_clusters.py` and
+`../matching/test_pairs_from_matches.py`).
 """
 
 from pathlib import Path

@@ -584,7 +584,7 @@ sfm cluster-patches -i clusters.matches [-o out.matches]
   clusters-only, clusters+cluster_patches, and pairwise+TVG (regression)
   files; verify-rejection coverage for both/neither backbones, bad CSR,
   out-of-range references, invalid statuses, and two kept members per
-  image; plus the Python round-trip module `tests/test_matches_clusters.py`.
+  image; plus the Python round-trip module `tests/matching/test_matches_clusters.py`.
 - **Python** `tests/rust_bindings/test_cluster_patches_rust_bindings.py`:
   tiny synthetic images end-to-end through the binding; dict schema and
   dtypes. `tests/patch/test_cluster_patches.py`: CLI run over the

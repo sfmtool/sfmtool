@@ -95,7 +95,7 @@ fn remap_bilinear(src_w: u32, src_h: u32, src: &[f32], map: &WarpMap, wrap_x: bo
 /// direction (not of `(lon, lat)`), so pattern values agree across the
 /// longitude wrap and across all equirect pixels that share the same
 /// direction near the poles. Mirrors the Python helper of the same name in
-/// `tests/test_spherical_tile_rig.py`.
+/// `tests/rig/test_spherical_tile_rig.py`.
 fn smooth_pattern(dx: f64, dy: f64, dz: f64) -> f64 {
     0.5 + 0.2 * dx + 0.15 * dy * dz
 }
@@ -768,7 +768,7 @@ fn closest_tile_warp_lands_inside_patch() {
 
 /// Fill an atlas by evaluating `smooth_pattern` at each tile pixel's
 /// in-tile world ray. Mirrors the Python helper used in
-/// `tests/test_spherical_tile_rig.py`.
+/// `tests/rig/test_spherical_tile_rig.py`.
 fn fill_atlas_with_pattern(rig: &SphericalTileRig) -> Vec<f32> {
     let (aw, ah) = rig.atlas_size();
     let mut atlas = vec![0.0_f32; (aw * ah) as usize];

@@ -931,7 +931,7 @@ the deliverable.
 
 #### Tests
 
-- **Unit**: `tests/test_cluster_matching.py` — small synthetic descriptor sets
+- **Unit**: `tests/matching/test_cluster_matching.py` — small synthetic descriptor sets
   through `cluster_match`, asserting cluster invariants (disjoint, one feature
   per image, spans ≥ `min_size` images) and one-to-one-per-pair on the converted
   matches.

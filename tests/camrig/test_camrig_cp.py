@@ -15,7 +15,8 @@ from sfmtool._sfmtool.io import (
 )
 from sfmtool.cli import main
 
-_IMAGE_DATA = Path(__file__).parent.parent / "test-data" / "images"
+from .conftest import _IMAGE_DATA
+
 _KERRY_PARK_CAMRIG = _IMAGE_DATA / "kerry_park" / "kerry_park.camrig"
 
 
