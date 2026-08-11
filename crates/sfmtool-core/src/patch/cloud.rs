@@ -268,7 +268,7 @@ impl PatchCloud {
     /// When `exclude_points_at_infinity` is `false`, each point at infinity
     /// (`w = 0`) additionally gets a tangent-sphere frame (`w = 0` patch) around
     /// its direction `d` — outward normal `normalize(-d)`, `u, v ⊥ d`, with an
-    /// angular half-size from `extent` (the distance-free form of each policy);
+    /// angular half-size from `extent` (the range-free form of each policy);
     /// see the format's infinity-patch convention. Every patch operation handles
     /// these, so `false` is the default at the binding layer. Pass `true` to emit
     /// finite points only — needed by an operation that scatters per-point results
@@ -771,15 +771,17 @@ fn build_patch_cloud(
 /// first observing camera's up, matching the finite path. The patch's `w` is `0`.
 ///
 /// The angular half-size (the tangent vectors' magnitude) follows `extent`:
-/// [`PatchExtent::FeatureSize`] and [`PatchExtent::PixelRadius`] have a natural
-/// distance-free angular form (`σ_i / f_i` and `radius_px / f_i` per view, reduced
-/// across views — pixels over pixels-per-radian, the finite formulas with the
-/// range divided out), while
+/// [`PatchExtent::FeatureSize`] and [`PatchExtent::PixelRadius`] are the finite
+/// rule with the range factored out — `pixels / (‖p_cam‖·σ_min)`, the local
+/// **pixels per radian** in the least-magnified tangent direction, per view and
+/// reduced across views ([`CameraIntrinsics::pixel_radius_to_angle`]) — while
 /// [`PatchExtent::Fixed`] and [`PatchExtent::RelativeToSpacing`] reuse their world
-/// half-size as the tangent magnitude. Errors with
-/// [`PatchCloudError::MissingFeatureScale`] under [`PatchExtent::FeatureSize`] if
-/// an infinity point has no readable keypoint scale in any view (its angular size
-/// is distance-free, so the coincident-camera cause never applies here).
+/// half-size as the tangent magnitude. The bearing is the point's direction
+/// rotated into each observing camera's frame (a `w = 0` anchor does not
+/// translate). Errors with [`PatchCloudError::MissingFeatureScale`] under
+/// [`PatchExtent::FeatureSize`] if an infinity point has no readable keypoint
+/// scale in any view (the angular size needs no viewing distance, so the
+/// coincident-camera cause never applies here).
 fn push_infinity_patches(
     cloud: &mut PatchCloud,
     scene: &PatchScene<'_>,
@@ -799,6 +801,13 @@ fn push_infinity_patches(
         let start = scene.obs_offsets[p];
         let end = scene.obs_offsets[p + 1];
 
+        // The anchor is a direction, so it rotates into each camera's frame
+        // without translating; the angular pixel scale reads off that bearing.
+        let bearing = |img: usize| {
+            let d = scene.cam_quats[img] * dir.coords;
+            [d.x, d.y, d.z]
+        };
+
         let half = match extent {
             PatchExtent::Fixed(w) => w,
             PatchExtent::RelativeToSpacing(_) => spacing_half,
@@ -807,7 +816,10 @@ fn push_infinity_patches(
                     radius_px
                 } else {
                     let mut angles: Vec<f64> = (start..end)
-                        .map(|o| radius_px / scene.focal(scene.obs_images[o] as usize))
+                        .map(|o| {
+                            let img = scene.obs_images[o] as usize;
+                            scene.cam_intrinsics[img].pixel_radius_to_angle(bearing(img), radius_px)
+                        })
                         .collect();
                     reduce(&mut angles, across)
                 }
@@ -817,12 +829,14 @@ fn push_infinity_patches(
                 for obs in start..end {
                     let img = scene.obs_images[obs] as usize;
                     if let Some(sigma) = scene.obs_scales.get(obs).copied().flatten() {
-                        angles.push(sigma / scene.focal(img));
+                        angles.push(
+                            scene.cam_intrinsics[img].pixel_radius_to_angle(bearing(img), sigma),
+                        );
                     }
                 }
                 if angles.is_empty() {
-                    // An infinity patch's angular size is `σ/f` (no viewing
-                    // distance), so the only failure cause is an unreadable scale —
+                    // An infinity patch's angular size needs no viewing distance,
+                    // so the only failure cause is an unreadable scale —
                     // `coincident_with_camera` never applies here.
                     return Err(PatchCloudError::MissingFeatureScale {
                         point_index: p as u32,

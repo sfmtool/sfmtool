@@ -1019,6 +1019,51 @@ impl CameraIntrinsics {
         }
     }
 
+    /// The **angular** radius (radians) around the direction `ray` that projects
+    /// to `radius_px` pixels: `radius_px / (‖ray‖·σ_min)`, the angular sibling of
+    /// [`Self::pixel_radius_to_world`].
+    ///
+    /// `σ_min` goes as `1/‖p_cam‖`, so `‖ray‖·σ_min` is range-free — it is the
+    /// local **pixels per radian** in the least-magnified tangent direction, i.e.
+    /// `σ_min` of the projection restricted to the unit sphere's tangent plane at
+    /// `ray`. That makes this the right sizing rule for a patch anchored to a
+    /// direction rather than a position (a point at infinity), whose extent is an
+    /// angle. Only the direction of `ray` matters.
+    ///
+    /// The same two models have exact closed forms, used directly:
+    ///
+    /// - **Pinhole** (`fx == fy == f`): `‖ray‖·σ_min = f·secθ`, so the angle is
+    ///   `radius_px·cosθ/f`. A pixel budget buys **less angle off axis**, because
+    ///   the image plane magnifies there — `radius_px/f` is only the on-axis
+    ///   value.
+    /// - **[`CameraModel::EquidistantFisheye`]**: `‖ray‖·σ_min = f` at every `θ`,
+    ///   so the angle is `radius_px/f` outright — the one model for which the
+    ///   naive reading is exact, since it is angle-linear by construction.
+    ///
+    /// Every other model evaluates `σ_min`. When it is undefined (the ray is
+    /// outside the model's domain) this falls back to `radius_px/f`.
+    pub fn pixel_radius_to_angle(&self, ray: [f64; 3], radius_px: f64) -> f64 {
+        // `cos θ = |z|/‖ray‖`; the closed forms below need nothing else.
+        let range = ray_range(ray);
+        match &self.model {
+            CameraModel::SimplePinhole { focal_length, .. } if range > 0.0 => {
+                radius_px * (ray[2].abs() / range) / focal_length
+            }
+            CameraModel::Pinhole {
+                focal_length_x,
+                focal_length_y,
+                ..
+            } if focal_length_x == focal_length_y && range > 0.0 => {
+                radius_px * (ray[2].abs() / range) / focal_length_x
+            }
+            CameraModel::EquidistantFisheye { focal_length, .. } => radius_px / focal_length,
+            _ => match self.min_pixel_scale(ray) {
+                Some(scale) if scale > 0.0 && range > 0.0 => radius_px / (range * scale),
+                _ => radius_px / self.focal_lengths().0,
+            },
+        }
+    }
+
     /// Batch version of [`Self::ray_to_pixel`].
     pub fn ray_to_pixel_batch(&self, rays: &[[f64; 3]]) -> Vec<Option<[f64; 2]>> {
         let (fx, fy) = self.focal_lengths();

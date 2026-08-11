@@ -2570,3 +2570,141 @@ fn min_pixel_scale_is_defined_for_every_model_on_a_visible_ray() {
         assert_relative_eq!(scale, numeric_min_pixel_scale(&cam, p), max_relative = 1e-6);
     }
 }
+
+#[test]
+fn equidistant_angular_radius_is_bit_identical_to_radius_over_f() {
+    // The one model for which the naive angular reading is exact: the map is
+    // angle-linear, so `‖ray‖·σ_min = f` at every θ and the angle is
+    // `radius_px/f` outright. Pinned bit-for-bit — this is what every infinity
+    // patch used to get, regardless of model.
+    let cam = equidistant_fisheye();
+    let f = cam.focal_lengths().0;
+    for &deg in &[0.0f64, 17.0, 30.0, 60.0, 75.0, 89.0, 95.0, 130.0, 179.0] {
+        for &range in &[0.02f64, 1.0, 9.5, 3100.0] {
+            for &radius_px in &[1.0f64, 4.0, 12.5] {
+                assert_eq!(
+                    cam.pixel_radius_to_angle(point_at(deg, range), radius_px)
+                        .to_bits(),
+                    (radius_px / f).to_bits(),
+                    "equidistant angular radius moved at θ={deg}°"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn pinhole_angular_radius_falls_off_as_cos_theta() {
+    // `‖ray‖·σ_min = f·secθ` for a pinhole, so a pixel budget buys `cosθ` LESS
+    // angle off axis. `radius_px/f` is the on-axis value only — using it at
+    // every θ oversizes a peripheral infinity patch by `1/cosθ` (2× at 60°).
+    let cams = [
+        simple_pinhole(),
+        CameraIntrinsics {
+            model: CameraModel::Pinhole {
+                focal_length_x: 500.0,
+                focal_length_y: 500.0,
+                principal_point_x: 320.0,
+                principal_point_y: 240.0,
+            },
+            width: 640,
+            height: 480,
+        },
+    ];
+    for cam in &cams {
+        let f = cam.focal_lengths().0;
+        for &deg in &[0.0f64, 15.0, 30.0, 45.0, 60.0, 75.0, 89.0] {
+            let theta = deg.to_radians();
+            for &range in &[0.02f64, 1.0, 9.5, 3100.0] {
+                let p = point_at(deg, range);
+                let got = cam.pixel_radius_to_angle(p, 6.0);
+                // Closed form, built independently of the implementation.
+                assert_relative_eq!(got, 6.0 * theta.cos() / f, max_relative = 1e-12);
+                // And the general rule it is a closed form OF: `radius_px`
+                // over the range-free pixels-per-radian `R·σ_min`.
+                let numeric = range * numeric_min_pixel_scale(cam, p);
+                assert_relative_eq!(got, 6.0 / numeric, max_relative = 1e-9);
+            }
+        }
+        // On axis the old `radius_px/f` reading is recovered exactly.
+        assert_relative_eq!(
+            cam.pixel_radius_to_angle(point_at(0.0, 5.0), 6.0),
+            6.0 / f,
+            max_relative = 1e-15
+        );
+    }
+}
+
+#[test]
+fn angular_radius_is_range_free_and_defined_for_every_model() {
+    // `σ_min ∝ 1/R`, so `R·σ_min` — and therefore the angle — depends only on
+    // the DIRECTION. Every model must produce it on a ray it can image.
+    for cam in all_cameras() {
+        let mut prev: Option<f64> = None;
+        for &range in &[0.05f64, 1.0, 250.0] {
+            let a = cam.pixel_radius_to_angle(point_at(25.0, range), 6.0);
+            assert!(
+                a.is_finite() && a > 0.0,
+                "{}: angular radius {a}",
+                cam.model_name()
+            );
+            if let Some(p) = prev {
+                assert_relative_eq!(a, p, max_relative = 1e-6);
+            }
+            prev = Some(a);
+        }
+    }
+}
+
+#[test]
+fn an_off_axis_pinhole_infinity_patch_subtends_the_requested_pixel_radius() {
+    // The end-to-end statement: size a tangent-plane patch at an off-axis
+    // bearing by the angular rule, project its corners, and the pixel footprint
+    // around the keypoint is `radius_px` in the least-magnified direction. The
+    // old `radius_px/f` angle overshoots by `1/cosθ`.
+    let cam = simple_pinhole();
+    let radius_px = 6.0;
+    for &deg in &[30.0f64, 60.0] {
+        let d = ray_at(deg.to_radians(), 0.37);
+        let angle = cam.pixel_radius_to_angle(d, radius_px);
+        // Orthonormal tangent basis at the bearing.
+        let a = if d[0].abs() < 0.9 {
+            [1.0, 0.0, 0.0]
+        } else {
+            [0.0, 1.0, 0.0]
+        };
+        let dot = a[0] * d[0] + a[1] * d[1] + a[2] * d[2];
+        let mut u = [a[0] - dot * d[0], a[1] - dot * d[1], a[2] - dot * d[2]];
+        let un = (u[0] * u[0] + u[1] * u[1] + u[2] * u[2]).sqrt();
+        u = [u[0] / un, u[1] / un, u[2] / un];
+        let v = [
+            d[1] * u[2] - d[2] * u[1],
+            d[2] * u[0] - d[0] * u[2],
+            d[0] * u[1] - d[1] * u[0],
+        ];
+        let (cu, cv) = cam.ray_to_pixel(d).unwrap();
+        // Walk the tangent circle; the CLOSEST corner is the least-magnified
+        // direction, and that is what the rule pins to `radius_px`.
+        let mut min_r = f64::INFINITY;
+        for k in 0..64 {
+            let phi = (k as f64) * std::f64::consts::TAU / 64.0;
+            let (cs, sn) = (phi.cos() * angle, phi.sin() * angle);
+            let corner = [
+                d[0] + cs * u[0] + sn * v[0],
+                d[1] + cs * u[1] + sn * v[1],
+                d[2] + cs * u[2] + sn * v[2],
+            ];
+            let (x, y) = cam.ray_to_pixel(corner).unwrap();
+            min_r = min_r.min(((x - cu).powi(2) + (y - cv).powi(2)).sqrt());
+        }
+        // Second-order in the tangent step, so a loose relative bar.
+        assert_relative_eq!(min_r, radius_px, max_relative = 2e-3);
+        // The pre-change angle would have overshot by 1/cos θ.
+        let old_angle = radius_px / cam.focal_lengths().0;
+        assert_relative_eq!(
+            old_angle / angle,
+            1.0 / deg.to_radians().cos(),
+            max_relative = 1e-12
+        );
+    }
+}

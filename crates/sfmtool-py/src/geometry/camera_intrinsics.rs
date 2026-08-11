@@ -294,6 +294,56 @@ impl PyCameraIntrinsics {
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
+    /// Angular radius (radians) around each bearing that projects to
+    /// ``radius_px`` pixels.
+    ///
+    /// ``radius_px / (‖ray‖·σ_min)``, where ``σ_min`` is the smaller singular
+    /// value of the pixel Jacobian ``∂(u, v)/∂p_cam`` — the local pixels per
+    /// radian in the least-magnified tangent direction. Only the DIRECTION of
+    /// each ray matters (``σ_min`` goes as ``1/‖p_cam‖``, so the range cancels).
+    /// This is the sizing rule for a patch anchored to a direction rather than a
+    /// position, i.e. a point at infinity. For a pinhole it is
+    /// ``radius_px·cos θ/f``; for ``EQUIDISTANT_FISHEYE`` it is ``radius_px/f``
+    /// at every θ.
+    ///
+    /// Args:
+    ///     rays: Nx3 numpy array of bearings in camera space (need not be unit).
+    ///     radius_px: Pixel radius, either a scalar or an N-vector.
+    ///
+    /// Returns:
+    ///     Length-N numpy array of angular radii in radians.
+    fn pixel_radius_to_angle_batch<'py>(
+        &self,
+        py: Python<'py>,
+        rays: numpy::PyReadonlyArray2<'py, f64>,
+        radius_px: numpy::PyReadonlyArray1<'py, f64>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        let arr = rays.as_array();
+        if arr.ncols() != 3 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "rays must have shape (N, 3)",
+            ));
+        }
+        let radii = radius_px.as_array();
+        if radii.len() != 1 && radii.len() != arr.nrows() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "radius_px must be a scalar or have length {} (parallel to rays), got {}",
+                arr.nrows(),
+                radii.len()
+            )));
+        }
+        let out: Vec<f64> = arr
+            .rows()
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let px = if radii.len() == 1 { radii[0] } else { radii[i] };
+                self.inner.pixel_radius_to_angle([r[0], r[1], r[2]], px)
+            })
+            .collect();
+        Ok(numpy::PyArray1::from_vec(py, out))
+    }
+
     /// Convert pixel coordinates to a unit ray direction in camera space.
     ///
     /// For perspective models, equivalent to normalizing (unproject(u, v), 1).

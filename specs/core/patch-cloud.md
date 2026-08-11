@@ -161,9 +161,9 @@ impl PatchCloud {
     /// patch operation handles infinity patches), each point at infinity also gets
     /// a tangent-sphere frame (`w = 0`) around its direction `d` — outward normal
     /// `normalize(-d)`, `u, v ⊥ d`, with an angular half-size from the
-    /// distance-free form of `extent` (`FeatureSize`/`PixelRadius`: `σ_i/f_i` /
-    /// `radius_px/f_i` reduced across views; `Fixed`/`RelativeToSpacing`: their
-    /// scalar as the tangent magnitude). Pass `true` to emit finite points only —
+    /// range-free form of `extent` (`FeatureSize`/`PixelRadius`: `pixels /
+    /// (R·σ_min)` per view, reduced across views; `Fixed`/`RelativeToSpacing`:
+    /// their scalar as the tangent magnitude). Pass `true` to emit finite points only —
     /// needed by an operation that scatters per-point results back and must leave
     /// infinity points untouched (normal refinement's normal write-back), or that
     /// wants the historical finite-only behavior (e.g. the strips viz).
@@ -271,14 +271,39 @@ view does not image the point — the half-size falls back to `radius_px·R/f`,
 finite at every angle. The distance is floored at `1e-6`, so a point sitting on a
 camera centre still gets a size rather than zero.
 
-The infinity tangent frames are angular rather than metric and take the
-distance-free reading `radius_px / f` per view (pixels over pixels per radian),
-reduced across views the same way.
+#### The angular form, for a patch anchored to a direction
+
+A point at infinity has no range, and its patch extent is an **angle** (the
+tangent-vector magnitude of a frame tangent to the unit sphere). The rule is the
+same `σ_min`, with the range factored out. `σ_min ∝ 1/‖p_cam‖`, so `‖p_cam‖·σ_min`
+depends only on the bearing: it is the local **pixels per radian** in the
+least-magnified tangent direction — equivalently `σ_min` of the projection
+restricted to the unit sphere's tangent plane. The per-view angular half-size is
+
+```text
+half_angle = radius_px / (‖p_cam‖ · σ_min)
+```
+
+`CameraIntrinsics::pixel_radius_to_angle(ray, radius_px)` applies it, taking only
+the direction of `ray`. The bearing is the point's direction rotated into each
+observing camera's frame — a `w = 0` anchor does not translate — and the results
+reduce across views exactly as the finite sizes do. The same two closed forms:
+
+- **Pinhole with `fx == fy == f`.** `‖p_cam‖·σ_min = f·secθ`, so the angle is
+  `radius_px·cosθ/f`. A pixel budget buys **less angle off axis**, because the
+  image plane magnifies there.
+- **`EquidistantFisheye`.** `‖p_cam‖·σ_min = f` at every `θ`, so the angle is
+  `radius_px/f` outright — the one model for which that reading is exact, since
+  the map is angle-linear by construction.
+
+`FeatureSize` sizes an infinity patch the same way, with the observation's
+keypoint scale `σ_i` in place of `radius_px`.
 
 > _Status (2026-08-10): Implemented — `CameraIntrinsics::min_pixel_scale` /
-> `pixel_radius_to_world` in `camera/distortion.rs`, consumed by
-> `build_patch_cloud`. `PatchScene` carries whole per-image cameras rather than
-> focals plus a projection-family flag._
+> `pixel_radius_to_world` / `pixel_radius_to_angle` in `camera/distortion.rs`,
+> consumed by `build_patch_cloud` and `push_infinity_patches`. `PatchScene`
+> carries whole per-image cameras rather than focals plus a projection-family
+> flag._
 
 **Points at infinity across patch operations.** `from_reconstruction` builds the
 tangent-sphere frame for points at infinity when asked
