@@ -10,7 +10,9 @@
 
 use sfmtool_core::SfmrReconstruction;
 
-use super::{parse_point_query, resolve_point_query, GotoPointDialog, PointQuery};
+use super::{
+    parse_point_query, resolve_point_query, selected_point_id, GotoPointDialog, PointQuery,
+};
 use crate::scene::{PointRef, ReconId, SceneNode};
 use crate::state::AppState;
 
@@ -239,6 +241,58 @@ fn a_hash_that_matches_no_node_is_not_answered_by_the_selected_one() {
     assert!(go_to(&state, "pt3d_ffff9999_1").is_err());
 }
 
+// ── Prefill from the selection ──────────────────────────────────────────
+
+#[test]
+fn the_selected_points_id_is_what_the_dialog_prefills_with() {
+    let (mut state, _a, b) = two_nodes();
+    state.select_point(PointRef::new(b, 17));
+
+    assert_eq!(
+        selected_point_id(&state.scene, state.selected_point),
+        Some("pt3d_cccc3333_17".to_string())
+    );
+}
+
+#[test]
+fn there_is_nothing_to_prefill_without_a_selection() {
+    let (state, ..) = two_nodes();
+
+    assert_eq!(selected_point_id(&state.scene, state.selected_point), None);
+}
+
+#[test]
+fn a_selection_pointing_past_its_reconstruction_prefills_nothing() {
+    // Prefilling an ID that no longer resolves would hand the user a query
+    // that fails the instant they press Enter.
+    let (mut state, a, _b) = two_nodes();
+    state.selected_point = Some(PointRef::new(a, 999));
+
+    assert_eq!(selected_point_id(&state.scene, state.selected_point), None);
+}
+
+#[test]
+fn opening_from_app_state_carries_the_selection_into_the_field() {
+    // The three entry points all go through `AppState::open_goto_point`, so
+    // this is what any of them puts in the field.
+    let (mut state, a, _b) = two_nodes();
+    state.select_point(PointRef::new(a, 3));
+
+    state.open_goto_point();
+
+    assert_eq!(state.goto_point.input, "pt3d_aaaa1111_3");
+}
+
+#[test]
+fn opening_with_no_selection_keeps_the_previous_query_to_edit() {
+    let (mut state, ..) = two_nodes();
+    state.goto_point.input = "pt3d_deadbeef_9".to_string();
+
+    state.open_goto_point();
+
+    assert_eq!(state.goto_point.input, "pt3d_deadbeef_9");
+}
+
 // ── The dialog ──────────────────────────────────────────────────────────
 
 /// Drive one frame of the dialog with `events` delivered to egui, returning
@@ -289,6 +343,97 @@ fn type_and_submit(
 }
 
 #[test]
+fn typing_over_a_prefilled_id_replaces_it_rather_than_appending() {
+    // The bug this exists for: the field opened prefilled but *unselected*, so
+    // a paste landed beside the existing ID and produced a query that could
+    // only fail. Selecting the contents on open is what makes the first
+    // keystroke overwrite.
+    let (state, a, _b) = two_nodes();
+    let mut dialog = GotoPointDialog::default();
+    let ctx = egui::Context::default();
+    dialog.open(Some("pt3d_aaaa1111_5".to_string()));
+
+    let resolved = type_and_submit(&mut dialog, &ctx, &state, "7");
+
+    assert_eq!(dialog.input, "7", "the prefill should have been replaced");
+    assert_eq!(resolved, Some(PointRef::new(a, 7)));
+}
+
+#[test]
+fn pasting_over_a_prefilled_id_replaces_it_too() {
+    // Paste arrives as its own event rather than as typed text, and it is the
+    // way a copied ID actually gets in.
+    let (state, _a, b) = two_nodes();
+    let mut dialog = GotoPointDialog::default();
+    let ctx = egui::Context::default();
+    dialog.open(Some("pt3d_aaaa1111_5".to_string()));
+
+    run_frame(&mut dialog, &ctx, &state, Vec::new());
+    let resolved = run_frame(
+        &mut dialog,
+        &ctx,
+        &state,
+        vec![
+            egui::Event::Paste("pt3d_cccc3333_42".to_string()),
+            egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+            },
+        ],
+    );
+
+    assert_eq!(dialog.input, "pt3d_cccc3333_42");
+    assert_eq!(resolved, Some(PointRef::new(b, 42)));
+}
+
+#[test]
+fn reopening_an_open_dialog_does_not_clobber_half_typed_text() {
+    // The menu item and the shortcut can both fire; neither may throw away
+    // what is already being typed.
+    let (state, ..) = two_nodes();
+    let mut dialog = GotoPointDialog::default();
+    let ctx = egui::Context::default();
+    dialog.open(Some("pt3d_aaaa1111_5".to_string()));
+    run_frame(&mut dialog, &ctx, &state, Vec::new());
+    run_frame(
+        &mut dialog,
+        &ctx,
+        &state,
+        vec![egui::Event::Text("123".to_string())],
+    );
+    assert_eq!(dialog.input, "123");
+
+    dialog.open(Some("pt3d_aaaa1111_5".to_string()));
+
+    assert_eq!(dialog.input, "123");
+}
+
+#[test]
+fn a_failed_submission_leaves_the_bad_text_unselected_to_correct() {
+    // Re-focusing after an error must not re-select: the user is correcting a
+    // typo, and a selected field would delete the whole thing on the next key.
+    let (state, ..) = two_nodes();
+    let mut dialog = GotoPointDialog::default();
+    let ctx = egui::Context::default();
+    dialog.open(None);
+
+    type_and_submit(&mut dialog, &ctx, &state, "pt3d_deadbeef_1");
+
+    assert!(
+        dialog.error.is_some(),
+        "the fixture query should not resolve"
+    );
+    assert!(dialog.focus_pending, "focus returns to the field");
+    assert!(
+        !dialog.select_all_pending,
+        "but the text is not re-selected"
+    );
+}
+
+#[test]
 fn a_closed_dialog_draws_nothing_and_resolves_nothing() {
     let (state, ..) = two_nodes();
     let mut dialog = GotoPointDialog::default();
@@ -303,7 +448,7 @@ fn submitting_a_valid_index_resolves_it_and_closes_the_dialog() {
     let (state, a, _b) = two_nodes();
     let mut dialog = GotoPointDialog::default();
     let ctx = egui::Context::default();
-    dialog.open();
+    dialog.open(None);
 
     let resolved = type_and_submit(&mut dialog, &ctx, &state, "12");
 
@@ -316,7 +461,7 @@ fn submitting_a_pasted_id_resolves_across_reconstructions() {
     let (state, _a, b) = two_nodes();
     let mut dialog = GotoPointDialog::default();
     let ctx = egui::Context::default();
-    dialog.open();
+    dialog.open(None);
 
     let resolved = type_and_submit(&mut dialog, &ctx, &state, "pt3d_cccc3333_31");
 
@@ -328,7 +473,7 @@ fn a_bad_query_keeps_the_dialog_open_with_the_reason() {
     let (state, ..) = two_nodes();
     let mut dialog = GotoPointDialog::default();
     let ctx = egui::Context::default();
-    dialog.open();
+    dialog.open(None);
 
     let resolved = type_and_submit(&mut dialog, &ctx, &state, "banana");
 
@@ -343,11 +488,11 @@ fn reopening_clears_a_stale_error_but_keeps_the_text() {
     let (state, ..) = two_nodes();
     let mut dialog = GotoPointDialog::default();
     let ctx = egui::Context::default();
-    dialog.open();
+    dialog.open(None);
     type_and_submit(&mut dialog, &ctx, &state, "banana");
     assert!(dialog.error.is_some());
 
-    dialog.open();
+    dialog.open(None);
 
     assert!(
         dialog.error.is_none(),
@@ -364,7 +509,7 @@ fn an_empty_field_submits_nothing() {
     let (state, ..) = two_nodes();
     let mut dialog = GotoPointDialog::default();
     let ctx = egui::Context::default();
-    dialog.open();
+    dialog.open(None);
 
     // Enter on an empty field: no jump, no error — there is nothing to complain
     // about yet, and the "Go" button is disabled for the same reason.
@@ -380,7 +525,7 @@ fn escape_closes_the_dialog_without_resolving() {
     let (state, ..) = two_nodes();
     let mut dialog = GotoPointDialog::default();
     let ctx = egui::Context::default();
-    dialog.open();
+    dialog.open(None);
     run_frame(&mut dialog, &ctx, &state, Vec::new());
 
     let resolved = run_frame(

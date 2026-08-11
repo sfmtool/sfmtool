@@ -16,7 +16,9 @@
 //! testable without a frame; [`GotoPointDialog`] is the thin egui shell that
 //! collects the text and reports the [`PointRef`] it resolved to.
 
-use crate::scene::{hash_prefix, node_by_id, selected_node, PointRef, ReconId, SceneNode};
+use crate::scene::{
+    hash_prefix, node_by_id, point_id, selected_node, PointRef, ReconId, SceneNode,
+};
 
 /// The keyboard shortcut that opens the dialog: Ctrl+G, or Cmd+G on macOS.
 ///
@@ -162,6 +164,18 @@ fn hash_matches(node: &SceneNode, hash: &str) -> bool {
         || hash_prefix(&node.recon).eq_ignore_ascii_case(hash)
 }
 
+/// The Point ID of the current selection, in the `pt3d_<hash>_<index>` form the
+/// Point Track header displays — what the dialog opens prefilled with.
+///
+/// `None` when nothing is selected, or when the selection has gone stale
+/// against a reloaded reconstruction; prefilling an ID that no longer resolves
+/// would hand the user a query that fails the moment they press Enter.
+pub fn selected_point_id(scene: &[SceneNode], selected_point: Option<PointRef>) -> Option<String> {
+    let point = selected_point?;
+    let node = node_by_id(scene, point.recon)?;
+    (point.index() < node.recon.points.len()).then(|| point_id(&node.recon, point.index()))
+}
+
 /// The modal that collects the text.
 ///
 /// Opened from `Go ▸ Go to Point…`, from the shortcut, or from the Point Track
@@ -171,7 +185,8 @@ fn hash_matches(node: &SceneNode, hash: &str) -> bool {
 pub struct GotoPointDialog {
     /// Whether the window is showing.
     open: bool,
-    /// The text field's contents, kept across opens so a mistyped index can be
+    /// The text field's contents. Replaced on open by the selected point's ID
+    /// when there is one, and otherwise carried over so a mistyped index can be
     /// corrected rather than retyped.
     input: String,
     /// What went wrong with the last submission, cleared on the next one.
@@ -179,14 +194,30 @@ pub struct GotoPointDialog {
     /// Set when the dialog opens, consumed by the first frame that draws the
     /// text field — which is the frame that can actually focus it.
     focus_pending: bool,
+    /// Set alongside `focus_pending` on a fresh open: the field's whole contents
+    /// should be selected once it exists. Separate from `focus_pending` because
+    /// re-focusing after a failed submission must *not* re-select — that would
+    /// destroy the correction the user is about to type into.
+    select_all_pending: bool,
 }
 
 impl GotoPointDialog {
-    /// Show the dialog, ready for typing.
+    /// Show the dialog, ready for typing, prefilled with `prefill` when there is
+    /// one — the selected point's ID, in practice.
     ///
-    /// Idempotent: opening an already-open dialog just re-focuses the field,
-    /// so the menu item and the shortcut cannot fight over it.
-    pub fn open(&mut self) {
+    /// Opening replaces the field's contents and selects them, so the first
+    /// keystroke or paste *overwrites* rather than appending to a leftover
+    /// query, and Ctrl+C copies the current point's ID without a trip to the
+    /// panel header. Re-opening an already-open dialog only re-focuses: the
+    /// text there may be half-typed, and the menu item racing the shortcut must
+    /// not throw it away.
+    pub fn open(&mut self, prefill: Option<String>) {
+        if !self.open {
+            if let Some(text) = prefill {
+                self.input = text;
+            }
+            self.select_all_pending = true;
+        }
         self.open = true;
         self.error = None;
         self.focus_pending = true;
@@ -196,6 +227,7 @@ impl GotoPointDialog {
         self.open = false;
         self.error = None;
         self.focus_pending = false;
+        self.select_all_pending = false;
     }
 
     /// Draw one frame of the dialog, returning the point to select when the
@@ -225,13 +257,21 @@ impl GotoPointDialog {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.label("Point index, or full ID with hash:");
+                // An explicit id rather than the auto-generated one, so
+                // `select_all` can address the widget's stored cursor state
+                // without depending on the response id matching it.
+                let field_id = egui::Id::new("goto_point_input");
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut self.input)
+                        .id(field_id)
                         .hint_text("12345   or   pt3d_a1b2c3d4_12345")
                         .desired_width(280.0),
                 );
                 if std::mem::take(&mut self.focus_pending) {
                     edit.request_focus();
+                }
+                if std::mem::take(&mut self.select_all_pending) {
+                    select_all(ui.ctx(), field_id, self.input.chars().count());
                 }
                 // `lost_focus` rather than `has_focus`: egui reports Enter on
                 // the frame the field gives focus up, and pairing the two is
@@ -294,6 +334,30 @@ impl GotoPointDialog {
             }
         }
     }
+}
+
+/// Select the whole contents of the text field `id` owns.
+///
+/// Written straight into the widget's stored [`egui::text_edit::TextEditState`]
+/// because a `TextEdit` offers no "select all on focus" of its own. The store
+/// lands after the widget has already run this frame, so the selection shows up
+/// on the next one — which is also the first frame the field is actually
+/// focused, so there is nothing to see in between.
+///
+/// `char_count` is in **characters**, not bytes: [`egui::text::CCursor`] indexes
+/// by character, and an ID is ASCII so the two agree here — but the field will
+/// happily hold a pasted line of anything.
+fn select_all(ctx: &egui::Context, id: egui::Id, char_count: usize) {
+    use egui::text::{CCursor, CCursorRange};
+
+    let Some(mut state) = egui::text_edit::TextEditState::load(ctx, id) else {
+        return;
+    };
+    state.cursor.set_char_range(Some(CCursorRange::two(
+        CCursor::new(0),
+        CCursor::new(char_count),
+    )));
+    state.store(ctx, id);
 }
 
 #[cfg(test)]

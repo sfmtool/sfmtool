@@ -60,7 +60,7 @@ non-resizable, matching the existing *Load Demo Data* dialog:
 |  Go to Point                                 [x] |
 +--------------------------------------------------+
 |  Point index, or full ID with hash:              |
-|  [ 12345   or   pt3d_a1b2c3d4_12345           ]  |
+|  [ ▓pt3d_a1b2c3d4_4821▓                       ]  |
 |  A bare index refers to the selected             |
 |  reconstruction; a full ID selects the one it    |
 |  names.                                          |
@@ -69,16 +69,52 @@ non-resizable, matching the existing *Load Demo Data* dialog:
 +--------------------------------------------------+
 ```
 
+(Shaded = selected. With no point selected the field shows the previous query,
+or the hint `12345   or   pt3d_a1b2c3d4_12345` when there is none.)
+
 | Interaction | Effect |
 |-------------|--------|
-| Text field | Focused on open. Contents persist across opens so a mistyped index is corrected, not retyped. |
+| Text field | Prefilled with the selected point's ID and **fully selected**, focused on open — see below. |
 | Enter, or **Go** | Submit. **Go** is disabled while the field is blank. |
 | Esc, **Cancel**, or the window's ✕ | Close without selecting. |
-| A query that does not resolve | The dialog **stays open** with the reason in the error colour under the field, and focus returns to the field. |
+| A query that does not resolve | The dialog **stays open** with the reason in the error colour under the field, and focus returns to the field — but the text is *not* re-selected. |
 
 Staying open on failure is the whole point of the error handling: a mistyped
 hash is one character away from a correct one, and a dialog that closed would
-throw the other 18 characters away with it.
+throw the other 18 characters away with it. For the same reason the failure
+path re-focuses without re-selecting: the user is about to fix one character,
+and a selected field would delete the whole query on the next keystroke.
+
+#### Prefill and Selection on Open
+
+Opening the dialog puts the **currently selected point's ID** in the field, in
+the same `pt3d_<hash>_<index>` form the Point Track header displays, and selects
+the whole thing.
+
+Both halves matter, and the selection is the load-bearing one. A field that
+opens prefilled but unselected is actively worse than one that opens empty:
+typing or pasting lands beside the existing text and produces
+`pt3d_aaaa1111_57` or `pt3d_aaaa1111_5pt3d_cccc3333_42` — a query that can only
+fail, and one the user has to notice and clear before they can do what they came
+for. Selecting the contents makes the first keystroke or paste *overwrite*,
+which is the behaviour every address bar and Go-to-line box already trains for.
+
+Selecting also makes the dialog a place to **read and copy** the current point's
+ID: Ctrl+C on open copies it without a trip to the panel header, and the field
+shows which point you are on before you replace it. That is a second, smaller
+reason to prefill — but it only works because the text is selected.
+
+Two cases deliberately do not prefill:
+
+- **Nothing selected** — the previous query stays in the field (still selected),
+  so a failed or repeated lookup is edited rather than retyped.
+- **A selection pointing past the end of its own reconstruction**, which a
+  reload can produce. Prefilling an ID that no longer resolves would hand the
+  user a query that fails the instant they press Enter.
+
+Re-opening an **already-open** dialog only re-focuses: it neither re-prefills
+nor re-selects, because the text there may be half-typed and the menu item
+racing the shortcut must not throw it away.
 
 ### Accepted Input
 
@@ -180,15 +216,35 @@ pub fn resolve_point_query(
     selected: Option<ReconId>,
     query: &PointQuery,
 ) -> Result<PointRef, String>;
+
+/// The selected point's ID, for prefilling — `None` when there is no
+/// selection or it has gone stale against its reconstruction.
+pub fn selected_point_id(
+    scene: &[SceneNode],
+    selected_point: Option<PointRef>,
+) -> Option<String>;
 ```
 
 `GotoPointDialog` is the thin egui shell around them. It holds the open flag,
-the text buffer, the last error and a pending-focus flag, lives on `AppState`
-beside the demo dialog's state, and its `show` **returns** the resolved
-`PointRef` rather than applying it — the caller (`app.rs`) owns what "go there"
-means, which keeps the module free of `AppState`.
+the text buffer, the last error and two pending flags — focus and select-all,
+kept apart precisely because the failure path wants one without the other. It
+lives on `AppState` beside the demo dialog's state, and its `show` **returns**
+the resolved `PointRef` rather than applying it — the caller (`app.rs`) owns
+what "go there" means, which keeps the module free of `AppState`.
+
+All three entry points go through `AppState::open_goto_point`, which computes
+the prefill and calls `GotoPointDialog::open`. One entry point rather than three
+call sites, so none of them can forget the prefill.
+
+Selecting the field's contents is done by writing directly into the widget's
+stored `egui::text_edit::TextEditState` — a `TextEdit` offers no "select all on
+focus" of its own. That needs a stable widget id, so the field is given an
+explicit one rather than egui's auto-generated id. The store lands after the
+widget has already run for the frame, so the selection takes effect on the next
+frame — which is also the first frame the field is focused, leaving no window in
+which the user could type into an unselected field.
 
 The Point Track Detail panel reports its button through
 `PointTrackDetailResponse::request_goto_point`, which `dock.rs` turns into
-`state.goto_point.open()` — the same shape every other cross-panel action in
+`state.open_goto_point()` — the same shape every other cross-panel action in
 that response uses.

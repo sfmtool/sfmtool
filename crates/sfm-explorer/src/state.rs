@@ -4,7 +4,7 @@
 //! Shared application state.
 
 use crate::align::{self, AlignOptions};
-use crate::goto_point::GotoPointDialog;
+use crate::goto_point::{self, GotoPointDialog};
 use crate::scene::{node_by_id, unique_label, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
@@ -475,6 +475,17 @@ impl AppState {
         self.selected_image = Some(image);
         self.selected_recon = Some(image.recon);
         self.selected_point = self.selected_point.filter(|p| p.recon == image.recon);
+    }
+
+    /// Open the Go to Point dialog, prefilled with the selected point's ID.
+    ///
+    /// The one entry point for all three ways in (the Go menu, Ctrl/Cmd+G, the
+    /// Point Track panel's button), so none of them can forget the prefill —
+    /// which is what makes the dialog double as a place to read or copy the
+    /// current point's ID rather than only to type a new one.
+    pub fn open_goto_point(&mut self) {
+        let prefill = goto_point::selected_point_id(&self.scene, self.selected_point);
+        self.goto_point.open(prefill);
     }
 
     /// Select a 3D point, and with it the reconstruction that owns it.

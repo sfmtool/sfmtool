@@ -630,7 +630,7 @@ impl App {
                             )
                             .clicked()
                         {
-                            app_state.goto_point.open();
+                            app_state.open_goto_point();
                             ui.close();
                         }
                     });
@@ -649,7 +649,7 @@ impl App {
             if !root_ui.ctx().egui_wants_keyboard_input()
                 && root_ui.input_mut(|i| i.consume_shortcut(&goto_point::SHORTCUT))
             {
-                app_state.goto_point.open();
+                app_state.open_goto_point();
             }
 
             if app_state.show_demo_dialog {

@@ -364,7 +364,7 @@ impl TabViewer for TabContext<'_> {
                         self.state.hovered_point = None;
                     }
                     if track_response.request_goto_point {
-                        self.state.goto_point.open();
+                        self.state.open_goto_point();
                     }
                 } else {
                     ui.centered_and_justified(|ui| {
