@@ -10,7 +10,7 @@
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 use ndarray::Array2;
 
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::CameraIntrinsics;
 use crate::geometry::RigidTransform;
 use crate::reconstruction::SfmrReconstruction;
 use crate::spatial::PointCloud;
@@ -373,12 +373,14 @@ impl PatchCloud {
     /// - `obs_offsets` (`P + 1`, prefix sum) groups the flat per-observation
     ///   `obs_images` (`M`) by point; point `p`'s observations are
     ///   `obs_images[obs_offsets[p]..obs_offsets[p + 1]]`.
-    /// - `cam_quats` / `cam_translations` / `cam_focals` (`N`) give each image's
-    ///   `cam_from_world` rotation, translation, and focal length (fx). A focal
-    ///   with no model attached is read as a simple pinhole, so
-    ///   [`PatchExtent::PixelRadius`] sizes through the pinhole pixel scale
-    ///   `f/|z|`; a fisheye caller wanting its model's scale should go through
-    ///   [`Self::from_reconstruction`].
+    /// - `cam_quats` / `cam_translations` / `cam_intrinsics` (`N`) give each
+    ///   image's `cam_from_world` rotation, translation, and **camera model** —
+    ///   one entry per image, so a camera shared by several images is repeated.
+    ///   [`PatchExtent::PixelRadius`] differentiates the model
+    ///   ([`CameraIntrinsics::pixel_radius_to_world`]); every other policy reads
+    ///   only its focal. Taking the whole camera rather than a bare focal is what
+    ///   makes this entry point agree with [`Self::from_reconstruction`] on the
+    ///   same geometry — a focal alone cannot say how the lens magnifies.
     /// - `stored_normals` (`P`) is read only by [`PatchNormal::Stored`]; a
     ///   zero/missing row falls back to the mean viewing direction.
     /// - `obs_scales` (`M`, `NaN` = unreadable) supplies the keypoint scale that
@@ -397,7 +399,7 @@ impl PatchCloud {
         obs_scales: Option<&[f64]>,
         cam_quats: &[UnitQuaternion<f64>],
         cam_translations: &[Vector3<f64>],
-        cam_focals: &[f64],
+        cam_intrinsics: &[CameraIntrinsics],
         normal: PatchNormal,
         extent: PatchExtent,
         exclude_points_at_infinity: bool,
@@ -411,24 +413,6 @@ impl PatchCloud {
                     .collect()
             })
             .unwrap_or_default();
-        // A focal length with no model attached *is* a simple pinhole, so this
-        // entry point hands the shared routine one per view. That is exactly the
-        // perspective reading it has always had, expressed as a camera model
-        // rather than as a branch: the sizing rule reads whole cameras (see
-        // `PatchScene::cam_intrinsics`). Only the focal is ever consulted — the
-        // principal point and the dimensions do not enter any extent policy.
-        let cam_intrinsics: Vec<CameraIntrinsics> = cam_focals
-            .iter()
-            .map(|&f| CameraIntrinsics {
-                model: CameraModel::SimplePinhole {
-                    focal_length: f,
-                    principal_point_x: 0.0,
-                    principal_point_y: 0.0,
-                },
-                width: 1,
-                height: 1,
-            })
-            .collect();
         let scene = PatchScene {
             positions,
             weights,
@@ -438,7 +422,7 @@ impl PatchCloud {
             obs_scales: &obs_scales_opt,
             cam_quats,
             cam_translations,
-            cam_intrinsics: &cam_intrinsics,
+            cam_intrinsics,
         };
         build_patch_cloud(&scene, normal, extent, exclude_points_at_infinity)
     }

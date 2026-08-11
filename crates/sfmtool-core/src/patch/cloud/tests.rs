@@ -345,19 +345,23 @@ fn from_patch_infinity_ignores_camera_translation() {
 // `PatchCloud::from_tracks` (the array-fed counterpart of `from_reconstruction`)
 // ---------------------------------------------------------------------------
 
-/// The per-image `cam_from_world` quaternions / translations / focal lengths of a
+/// The per-image `cam_from_world` quaternions / translations / cameras of a
 /// reconstruction, in the layout `from_tracks` consumes.
 fn scene_arrays(
     recon: &SfmrReconstruction,
-) -> (Vec<UnitQuaternion<f64>>, Vec<Vector3<f64>>, Vec<f64>) {
+) -> (
+    Vec<UnitQuaternion<f64>>,
+    Vec<Vector3<f64>>,
+    Vec<CameraIntrinsics>,
+) {
     let quats = recon.images.iter().map(|im| im.quaternion_wxyz).collect();
     let trans = recon.images.iter().map(|im| im.translation_xyz).collect();
-    let focals = recon
+    let cams = recon
         .images
         .iter()
-        .map(|im| recon.cameras[im.camera_index as usize].focal_lengths().0)
+        .map(|im| recon.cameras[im.camera_index as usize].clone())
         .collect();
-    (quats, trans, focals)
+    (quats, trans, cams)
 }
 
 /// Assert two clouds are patch-for-patch identical (point ids + frames + weight).
@@ -461,7 +465,7 @@ fn from_tracks_reproduces_from_reconstruction_feature_size() {
     let positions: Vec<Point3<f64>> = recon.points.iter().map(|p| p.position).collect();
     let weights: Vec<f64> = recon.points.iter().map(|p| p.w).collect();
     let obs_images: Vec<u32> = recon.tracks.iter().map(|o| o.image_index).collect();
-    let (quats, trans, focals) = scene_arrays(&recon);
+    let (quats, trans, cams) = scene_arrays(&recon);
     let from_arrays = PatchCloud::from_tracks(
         &positions,
         &weights,
@@ -471,7 +475,7 @@ fn from_tracks_reproduces_from_reconstruction_feature_size() {
         Some(&obs_scales),
         &quats,
         &trans,
-        &focals,
+        &cams,
         PatchNormal::MeanViewing,
         extent,
         false,
@@ -505,7 +509,7 @@ fn from_tracks_matches_reconstruction_pixel_radius_and_stored_normal() {
         .map(|p| Vector3::new(p.normal.x as f64, p.normal.y as f64, p.normal.z as f64))
         .collect();
     let obs_images: Vec<u32> = recon.tracks.iter().map(|o| o.image_index).collect();
-    let (quats, trans, focals) = scene_arrays(&recon);
+    let (quats, trans, cams) = scene_arrays(&recon);
     let from_arrays = PatchCloud::from_tracks(
         &positions,
         &weights,
@@ -515,7 +519,7 @@ fn from_tracks_matches_reconstruction_pixel_radius_and_stored_normal() {
         None,
         &quats,
         &trans,
-        &focals,
+        &cams,
         PatchNormal::Stored,
         extent,
         false,
@@ -537,7 +541,7 @@ fn from_tracks_nan_scale_counts_as_unreadable() {
     let quats = vec![UnitQuaternion::identity()];
     // Camera at origin looking down −Z; points at +z=3 are a distance 3 away.
     let trans = vec![Vector3::zeros()];
-    let focals = vec![500.0];
+    let cams = vec![pinhole(500.0, 320.0, 240.0, 640, 480)];
 
     let err = PatchCloud::from_tracks(
         &positions,
@@ -548,7 +552,7 @@ fn from_tracks_nan_scale_counts_as_unreadable() {
         Some(&obs_scales),
         &quats,
         &trans,
-        &focals,
+        &cams,
         PatchNormal::MeanViewing,
         PatchExtent::FeatureSize {
             factor: 5.0,
@@ -578,7 +582,7 @@ fn from_tracks_nan_scale_counts_as_unreadable() {
         Some(&[3.0, 3.0]),
         &quats,
         &trans,
-        &focals,
+        &cams,
         PatchNormal::MeanViewing,
         PatchExtent::FeatureSize {
             factor: 5.0,
@@ -607,7 +611,7 @@ fn from_tracks_builds_infinity_tangent_frames() {
     let obs_images = vec![0u32, 0];
     let quats = vec![UnitQuaternion::identity()];
     let trans = vec![Vector3::zeros()];
-    let focals = vec![500.0];
+    let cams = vec![pinhole(500.0, 320.0, 240.0, 640, 480)];
 
     let cloud = PatchCloud::from_tracks(
         &positions,
@@ -618,7 +622,7 @@ fn from_tracks_builds_infinity_tangent_frames() {
         None,
         &quats,
         &trans,
-        &focals,
+        &cams,
         PatchNormal::MeanViewing,
         PatchExtent::Fixed(0.1),
         false,
@@ -642,7 +646,7 @@ fn from_tracks_builds_infinity_tangent_frames() {
         None,
         &quats,
         &trans,
-        &focals,
+        &cams,
         PatchNormal::MeanViewing,
         PatchExtent::Fixed(0.1),
         true,
@@ -650,4 +654,75 @@ fn from_tracks_builds_infinity_tangent_frames() {
     .unwrap();
     assert_eq!(finite_only.len(), 1);
     assert_eq!(finite_only.point_indexes, vec![0]);
+}
+
+#[test]
+fn from_tracks_pixel_radius_reads_the_view_camera_model() {
+    // `PixelRadius` sizes a finite patch so it subtends `radius_px` at the
+    // viewing camera, through that camera's own pixel scale `σ_min`. For a
+    // pinhole that is `f/|z|`; for an equidistant fisheye it is `f/R`, which is
+    // what carries a point past 90° off axis — `|z|` collapses to zero at 90°
+    // and inverts beyond. `from_tracks` takes whole cameras, so the model comes
+    // with them.
+    let theta: f64 = 100f64.to_radians();
+    let range = 4.0;
+    let positions = vec![Point3::new(
+        range * theta.sin(),
+        0.0,
+        -range * theta.cos(), // canonical z > 0: past the 90 deg horizon
+    )];
+    let weights = vec![1.0];
+    let obs_offsets = vec![0usize, 1];
+    let obs_images = vec![0u32];
+    let quats = vec![UnitQuaternion::identity()];
+    let trans = vec![Vector3::zeros()];
+    let extent = PatchExtent::PixelRadius {
+        radius_px: 6.0,
+        across: ViewReduce::Min,
+    };
+    let build = |cam: CameraIntrinsics| {
+        PatchCloud::from_tracks(
+            &positions,
+            &weights,
+            None,
+            &obs_offsets,
+            &obs_images,
+            None,
+            &quats,
+            &trans,
+            &[cam],
+            PatchNormal::MeanViewing,
+            extent,
+            false,
+        )
+        .unwrap()
+    };
+
+    // Equidistant fisheye: half-extent = radius_px * range / f, exactly.
+    let fisheye = CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: 138.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    };
+    let ray = build(fisheye);
+    assert!(
+        (ray.patch(0).half_extent[0] - 6.0 * range / 138.0).abs() < 1e-12,
+        "ray-path extent {}",
+        ray.patch(0).half_extent[0]
+    );
+
+    // The same geometry read as a pinhole: `|z|` instead of the range, i.e. the
+    // range times |cos theta| — 17% of the fisheye size here, zero at 90 deg.
+    let persp = build(pinhole(138.0, 240.0, 240.0, 480, 480));
+    let expect_persp = 6.0 * range * theta.cos().abs() / 138.0;
+    assert!(
+        (persp.patch(0).half_extent[0] - expect_persp).abs() < 1e-12,
+        "perspective extent {}",
+        persp.patch(0).half_extent[0]
+    );
+    assert!(ray.patch(0).half_extent[0] > 5.0 * persp.patch(0).half_extent[0]);
 }

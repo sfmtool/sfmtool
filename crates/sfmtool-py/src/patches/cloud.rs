@@ -259,9 +259,10 @@ impl PyPatchCloud {
             }
         };
 
-        // Per-view poses + focal lengths from the CameraViews.
-        let cam_focals: Vec<f64> = views.cameras.iter().map(|c| c.focal_lengths().0).collect();
-
+        // The whole camera goes through, not just its focal: `extent="pixel_radius"`
+        // sizes a finite point through the view camera's own pixel Jacobian, so
+        // the projection family and the distortion both come with it -- and so that
+        // this entry point agrees with `from_reconstruction` on the same geometry.
         let inner = PatchCloud::from_tracks(
             &positions,
             &weights,
@@ -271,7 +272,7 @@ impl PyPatchCloud {
             scales_vec.as_deref(),
             &views.quaternions,
             &views.translations,
-            &cam_focals,
+            &views.cameras,
             normal_policy,
             extent_policy,
             exclude_points_at_infinity,

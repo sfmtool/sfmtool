@@ -441,6 +441,13 @@ Semantics match `from_reconstruction` exactly, sourced from the arrays:
   fall back to the mean viewing direction, as in `from_reconstruction`); omitting
   `normals` with `normal="stored"` is a `ValueError`. The default is
   `"mean_viewing"` since there is usually no stored normal to prefer.
+- **`PixelRadius`.** The world half-size is `radius_px / σ_min` reduced across
+  views, with `σ_min` the view camera's local pixel scale (see "Back-projecting
+  a pixel radius"). The `CameraViews` the binding takes carries whole cameras,
+  and the core entry point takes the per-image cameras in place of bare focals,
+  so the model comes through on both. A focal alone cannot say how a lens
+  magnifies, so anything less would make this entry point disagree with
+  `from_reconstruction` on the same geometry.
 - **Points at infinity** (`w = 0` rows) get the tangent-sphere frame under
   `exclude_points_at_infinity=False`, exactly as from a reconstruction.
 - `point_indexes` of the resulting cloud are row indexes into `positions_xyzw`,
