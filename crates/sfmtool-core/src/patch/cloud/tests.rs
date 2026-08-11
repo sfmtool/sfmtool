@@ -726,3 +726,75 @@ fn from_tracks_pixel_radius_reads_the_view_camera_model() {
     );
     assert!(ray.patch(0).half_extent[0] > 5.0 * persp.patch(0).half_extent[0]);
 }
+
+#[test]
+fn from_tracks_feature_size_reads_the_view_camera_model() {
+    // `FeatureSize` is `PixelRadius`'s rule with the observation's own keypoint
+    // scale as the pixel budget, so it differentiates the camera model the same
+    // way: `σ·|z|/f` for a pinhole (the image plane magnifies off axis by
+    // `sec θ`, so a pixel budget buys LESS world there) and `σ·R/f` under the
+    // equidistant map. Two views of one point at 55° off axis, where both models
+    // are in domain, so the reading is a genuine model difference and not a
+    // domain artifact.
+    let theta: f64 = 55f64.to_radians();
+    let range = 4.0;
+    let positions = vec![Point3::new(
+        range * theta.sin(),
+        0.0,
+        -range * theta.cos(), // canonical: -Z is in front
+    )];
+    let weights = vec![1.0];
+    let obs_offsets = vec![0usize, 1];
+    let obs_images = vec![0u32];
+    let obs_scales = vec![3.0];
+    let quats = vec![UnitQuaternion::identity()];
+    let trans = vec![Vector3::zeros()];
+    let extent = PatchExtent::FeatureSize {
+        factor: 2.5,
+        across: ViewReduce::Median,
+    };
+    let build = |cam: CameraIntrinsics| {
+        PatchCloud::from_tracks(
+            &positions,
+            &weights,
+            None,
+            &obs_offsets,
+            &obs_images,
+            Some(&obs_scales),
+            &quats,
+            &trans,
+            &[cam],
+            PatchNormal::MeanViewing,
+            extent,
+            false,
+        )
+        .unwrap()
+    };
+
+    let fisheye = CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: 138.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    };
+    let ray = build(fisheye);
+    assert!(
+        (ray.patch(0).half_extent[0] - 2.5 * 3.0 * range / 138.0).abs() < 1e-12,
+        "ray-path feature extent {}",
+        ray.patch(0).half_extent[0]
+    );
+
+    let persp = build(pinhole(138.0, 240.0, 240.0, 480, 480));
+    let expect_persp = 2.5 * 3.0 * range * theta.cos() / 138.0;
+    assert!(
+        (persp.patch(0).half_extent[0] - expect_persp).abs() < 1e-12,
+        "perspective feature extent {}",
+        persp.patch(0).half_extent[0]
+    );
+    // cos 55° = 0.574: the perspective reading is materially smaller, and the
+    // pre-uniform-Jacobian rule (`σ·R/f` for every model) is the fisheye value.
+    assert!(persp.patch(0).half_extent[0] < 0.6 * ray.patch(0).half_extent[0]);
+}

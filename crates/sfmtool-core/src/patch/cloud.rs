@@ -321,12 +321,13 @@ impl PatchCloud {
         // reconstructions; an embedded_patches recon has no scales, so every
         // observation resolves to `None` and the "no readable scale" error fires.
         //
-        // A σ-pixel keypoint subtends an angle ≈ σ/f, which at ray-distance
-        // d = ‖X − C‖ from the camera spans ≈ σ·d/f world units. Using the ray
-        // distance d (always positive) rather than the optical-axis depth z makes
-        // this camera-agnostic: a fisheye (FoV > 180°) sees points past 90° off
-        // axis at z ≤ 0, where the old pinhole `σ·z/f` (gated on z > 0) could not
-        // size them. On-axis d = z, so this reduces to the pinhole formula.
+        // A σ-pixel keypoint is back-projected to world through the observing
+        // view's own pixel Jacobian (`pixel_radius_to_world` at `radius_px = σ`),
+        // the same rule `PixelRadius` uses — see `PatchExtent::FeatureSize`. That
+        // is camera-agnostic by construction: a fisheye (FoV > 180°) sees points
+        // past 90° off axis at z ≤ 0, where a pinhole `σ·z/f` gated on z > 0 could
+        // not size them at all, while a perspective view's own `σ·|z|/f` keeps the
+        // `sec θ` magnification of its image plane that a bare range reading drops.
         let obs_scales: Vec<Option<f64>> = if matches!(extent, PatchExtent::FeatureSize { .. }) {
             let feature_indexes = recon.feature_indexes();
             let img_scales: Vec<Option<Vec<f64>>> = (0..recon.images.len())
@@ -376,9 +377,10 @@ impl PatchCloud {
     /// - `cam_quats` / `cam_translations` / `cam_intrinsics` (`N`) give each
     ///   image's `cam_from_world` rotation, translation, and **camera model** —
     ///   one entry per image, so a camera shared by several images is repeated.
-    ///   [`PatchExtent::PixelRadius`] differentiates the model
-    ///   ([`CameraIntrinsics::pixel_radius_to_world`]); every other policy reads
-    ///   only its focal. Taking the whole camera rather than a bare focal is what
+    ///   Both view-dependent extent policies ([`PatchExtent::PixelRadius`] and
+    ///   [`PatchExtent::FeatureSize`]) differentiate the model
+    ///   ([`CameraIntrinsics::pixel_radius_to_world`]); the scalar policies read
+    ///   it not at all. Taking the whole camera rather than a bare focal is what
     ///   makes this entry point agree with [`Self::from_reconstruction`] on the
     ///   same geometry — a focal alone cannot say how the lens magnifies.
     /// - `stored_normals` (`P`) is read only by [`PatchNormal::Stored`]; a
@@ -532,18 +534,16 @@ struct PatchScene<'a> {
     /// Per-image `cam_from_world` translation. `N` entries.
     cam_translations: &'a [Vector3<f64>],
     /// Per-image camera model. `N` entries — one per *image*, so a camera shared
-    /// by several images is repeated. [`PatchExtent::PixelRadius`] differentiates
-    /// it ([`CameraIntrinsics::pixel_radius_to_world`]); the other policies read
-    /// only its focal ([`Self::focal`]).
+    /// by several images is repeated. Both view-dependent extent policies
+    /// ([`PatchExtent::PixelRadius`] and [`PatchExtent::FeatureSize`])
+    /// differentiate it through [`CameraIntrinsics::pixel_radius_to_world`] /
+    /// [`CameraIntrinsics::pixel_radius_to_angle`]; the scalar policies
+    /// ([`PatchExtent::Fixed`], [`PatchExtent::RelativeToSpacing`]) do not read it
+    /// at all.
     cam_intrinsics: &'a [CameraIntrinsics],
 }
 
 impl PatchScene<'_> {
-    /// Image `i`'s focal length (fx).
-    fn focal(&self, i: usize) -> f64 {
-        self.cam_intrinsics[i].focal_lengths().0
-    }
-
     /// In-plane "up" hint: the first observing camera's up axis (canonical camera
     /// `+y` — image up) rotated into world, or world `+y` when the point has no
     /// observation. Pins the in-plane rotation identically for finite and infinity
@@ -627,8 +627,9 @@ fn build_patch_cloud(
     };
 
     // FeatureSize: per-finite-point world half-size from the observing keypoints'
-    // scales. A point with no readable scale in any view — or coincident with
-    // every camera centre (`d ≈ 0`) — is an error.
+    // scales, back-projected through each view's own pixel Jacobian. A point with
+    // no readable scale in any view — or coincident with every camera centre
+    // (`‖p_cam‖ ≈ 0`) — is an error.
     let feature_half: Vec<f64> = if let PatchExtent::FeatureSize { factor, across } = extent {
         let mut halves = vec![f64::NAN; finite.len()];
         for (fi, &p) in finite.iter().enumerate() {
@@ -646,9 +647,18 @@ fn build_patch_cloud(
                     unreadable_scale += 1;
                     continue;
                 };
-                let d = (scene.cam_quats[img] * center.coords + scene.cam_translations[img]).norm();
-                if d > 1e-6 {
-                    sizes.push(sigma * d / scene.focal(img));
+                let p_cam = scene.cam_quats[img] * center.coords + scene.cam_translations[img];
+                if p_cam.norm() > 1e-6 {
+                    // The same rule `PixelRadius` uses, with the observation's own
+                    // keypoint scale as the pixel budget: the world size that
+                    // subtends `sigma` px in this view's least-magnified direction.
+                    // The camera's Jacobian carries the projection family, so this
+                    // is `sigma·|z|/f` for a pinhole and `sigma·‖p_cam‖/f` under the
+                    // equidistant map — one statement, no branch here.
+                    sizes.push(
+                        scene.cam_intrinsics[img]
+                            .pixel_radius_to_world([p_cam.x, p_cam.y, p_cam.z], sigma),
+                    );
                 } else {
                     coincident_with_camera += 1;
                 }
@@ -901,11 +911,21 @@ pub enum PatchExtent {
     /// equidistant fisheye (`radius_px·‖p_cam‖/f`).
     PixelRadius { radius_px: f64, across: ViewReduce },
     /// `factor` × the projected world feature size: each observation's keypoint
-    /// scale `sigma_i` back-projected to world (`sigma_i · z_i / f_i`), reduced
-    /// across views by `across` (`Median` recommended — the scales are
-    /// consistent across views). Reads the workspace `.sift` files; a point whose
-    /// scale can't be read in any view yields a
-    /// [`PatchCloudError::MissingFeatureScale`].
+    /// scale `sigma_i` back-projected to world through that view's own camera
+    /// ([`CameraIntrinsics::pixel_radius_to_world`] at `radius_px = sigma_i`),
+    /// reduced across views by `across` (`Median` recommended — the scales are
+    /// consistent across views).
+    ///
+    /// This is [`PatchExtent::PixelRadius`]'s rule with a per-observation pixel
+    /// budget rather than one global radius, so both policies state the same
+    /// thing: `pixels / σ_min` at the point, in the view's least-magnified
+    /// direction. It reduces to `sigma_i·|z_i|/f_i` for a pinhole and
+    /// `sigma_i·‖p_cam‖/f_i` under the equidistant map — the two closed forms
+    /// documented on `pixel_radius_to_world` — and picks up local distortion
+    /// magnification for every other model.
+    ///
+    /// Reads the workspace `.sift` files; a point whose scale can't be read in
+    /// any view yields a [`PatchCloudError::MissingFeatureScale`].
     FeatureSize { factor: f64, across: ViewReduce },
 }
 

@@ -152,7 +152,7 @@ impl PatchCloud {
     /// `PatchExtent::FeatureSize` when no observation of a point yields a usable
     /// size — either its keypoint scale is unreadable in every view (missing/stale
     /// `.sift`), or (finite points only) it coincides with every observing camera
-    /// centre so the distance-scaled world size `σ·d/f` vanishes at `d ≈ 0` (a
+    /// centre so the distance-scaled world size vanishes at `‖p_cam‖ ≈ 0` (a
     /// degenerate reconstruction where the frames' poses collapsed onto the
     /// point). The error carries a per-cause observation breakdown. No silent size
     /// fallback.
@@ -203,17 +203,19 @@ pub enum PatchExtent {
     /// is `radius_px / σ_min` — see "Back-projecting a pixel radius" below.
     PixelRadius { radius_px: f64, across: ViewReduce },
     /// `factor` × the projected world feature size — each observation's keypoint
-    /// scale back-projected to world (`sigma_i · d_i / f_i`, where `d_i` is the
-    /// ray distance `‖X − C_i‖`), reduced across views by `across` (`Median`
-    /// recommended; the scales are consistent across a track's views). Using the
-    /// ray distance rather than the optical-axis depth makes this
-    /// camera-agnostic: a fisheye (FoV > 180°) sees points past 90° off axis at
-    /// zero or negative depth, which a pinhole `σ·depth/f` could not size.
-    /// On-axis `d = depth`, so it reduces to the pinhole form. Reads the
-    /// workspace `.sift` files. A point with no readable scale in any view — or a
-    /// finite point coincident with every observing camera centre, where `d ≈ 0`
-    /// makes `σ·d/f` vanish — is an error
-    /// (`PatchCloudError::MissingFeatureScale`) — there is no silent size fallback.
+    /// scale `sigma_i` back-projected to world through that view's own camera
+    /// (`sigma_i / σ_min`; see "Back-projecting a pixel radius"), reduced across
+    /// views by `across` (`Median` recommended; the scales are consistent across
+    /// a track's views). This is `PixelRadius`'s rule with a per-observation
+    /// pixel budget instead of one global radius, so both view-dependent
+    /// policies state the same thing and neither branches on projection family:
+    /// it reduces to `sigma_i·|z_i|/f_i` for a pinhole and `sigma_i·R_i/f_i`
+    /// under the equidistant map, and picks up local distortion magnification
+    /// for every other model. Reads the workspace `.sift` files. A point with no
+    /// readable scale in any view — or a finite point coincident with every
+    /// observing camera centre, where the distance-scaled size vanishes — is an
+    /// error (`PatchCloudError::MissingFeatureScale`) — there is no silent size
+    /// fallback.
     FeatureSize { factor: f64, across: ViewReduce },
 }
 
@@ -228,6 +230,12 @@ pub enum ViewReduce { Min, Max, Median, Mean }
 `from_reconstruction` is the bridge from a solved model to a patch cloud.
 
 ### Back-projecting a pixel radius
+
+The two view-dependent extent policies — `PatchExtent::PixelRadius` and
+`PatchExtent::FeatureSize` — are **one rule at two pixel budgets**: `PixelRadius`
+applies the caller's single `radius_px` in every view, `FeatureSize` applies each
+observation's own keypoint scale `σ_i`. Everything below therefore describes both;
+nothing in either branches on projection family.
 
 `PatchExtent::PixelRadius` sizes a patch in a view through that view's camera
 Jacobian. Let `J = ∂(u, v)/∂p_cam` be the 2×3 pixel Jacobian at the point in
@@ -303,7 +311,13 @@ keypoint scale `σ_i` in place of `radius_px`.
 > `pixel_radius_to_world` / `pixel_radius_to_angle` in `camera/distortion.rs`,
 > consumed by `build_patch_cloud` and `push_infinity_patches`. `PatchScene`
 > carries whole per-image cameras rather than focals plus a projection-family
-> flag._
+> flag. `FeatureSize` routes through the same pair (finite sizes through
+> `pixel_radius_to_world`, infinity angles through `pixel_radius_to_angle`), so
+> `PatchScene` no longer exposes a bare focal at all. Both are exposed to Python
+> as `CameraIntrinsics.pixel_radius_to_world_batch` /
+> `.pixel_radius_to_angle_batch`, so a caller outside the patch cloud that needs
+> this sizing rule uses the camera's own implementation rather than re-deriving a
+> closed form._
 
 **Points at infinity across patch operations.** `from_reconstruction` builds the
 tangent-sphere frame for points at infinity when asked
@@ -458,10 +472,11 @@ Semantics match `from_reconstruction` exactly, sourced from the arrays:
   point needs at least one observation: the in-plane up hint comes from the
   first observing camera, and `MeanViewing` / view-dependent extents reduce over
   the observing views.
-- **`FeatureSize`.** The world half-size is `factor · σ_i · d_i / f_i` reduced
-  across views, with `σ_i` read from `keypoint_scales` instead of the `.sift`
-  affine shapes. A NaN scale entry counts as an unreadable scale, so the
-  `MissingFeatureScale` error and its per-cause breakdown are unchanged.
+- **`FeatureSize`.** The world half-size is `factor · σ_i / σ_min` reduced
+  across views — the `PixelRadius` rule at a per-observation pixel budget — with
+  `σ_i` read from `keypoint_scales` instead of the `.sift` affine shapes. A NaN
+  scale entry counts as an unreadable scale, so the `MissingFeatureScale` error
+  and its per-cause breakdown are unchanged.
 - **`normal="stored"`** reads the supplied `normals` rows (zero/degenerate rows
   fall back to the mean viewing direction, as in `from_reconstruction`); omitting
   `normals` with `normal="stored"` is a `ValueError`. The default is

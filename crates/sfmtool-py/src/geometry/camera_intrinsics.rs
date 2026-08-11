@@ -294,6 +294,61 @@ impl PyCameraIntrinsics {
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
+    /// World-space radius at each camera-frame point that projects to
+    /// ``radius_px`` pixels.
+    ///
+    /// ``radius_px / σ_min``, where ``σ_min`` is the smaller singular value of
+    /// the pixel Jacobian ``∂(u, v)/∂p_cam`` at that point — the local
+    /// pixels-per-world-unit in the least-magnified tangent direction, so the
+    /// result meets the pixel budget however the surface is oriented. One rule
+    /// for every camera model; it reduces to ``radius_px·|z|/f`` for a pinhole
+    /// and ``radius_px·‖p_cam‖/f`` for ``EQUIDISTANT_FISHEYE`` (finite past
+    /// 90°, where ``|z|`` collapses), and picks up the local distortion
+    /// magnification for every other model. This is the sizing rule for a patch
+    /// anchored to a POSITION; :meth:`pixel_radius_to_angle_batch` is its
+    /// range-free sibling for a patch anchored to a direction.
+    ///
+    /// Points are in CANONICAL camera space (``-Z`` forward), the same frame
+    /// :meth:`ray_to_pixel_batch` takes.
+    ///
+    /// Args:
+    ///     points: Nx3 numpy array of camera-space points.
+    ///     radius_px: Pixel radius, either a scalar or an N-vector.
+    ///
+    /// Returns:
+    ///     Length-N numpy array of world-space radii.
+    fn pixel_radius_to_world_batch<'py>(
+        &self,
+        py: Python<'py>,
+        points: numpy::PyReadonlyArray2<'py, f64>,
+        radius_px: numpy::PyReadonlyArray1<'py, f64>,
+    ) -> PyResult<Bound<'py, numpy::PyArray1<f64>>> {
+        let arr = points.as_array();
+        if arr.ncols() != 3 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "points must have shape (N, 3)",
+            ));
+        }
+        let radii = radius_px.as_array();
+        if radii.len() != 1 && radii.len() != arr.nrows() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "radius_px must be a scalar or have length {} (parallel to points), got {}",
+                arr.nrows(),
+                radii.len()
+            )));
+        }
+        let out: Vec<f64> = arr
+            .rows()
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let px = if radii.len() == 1 { radii[0] } else { radii[i] };
+                self.inner.pixel_radius_to_world([p[0], p[1], p[2]], px)
+            })
+            .collect();
+        Ok(numpy::PyArray1::from_vec(py, out))
+    }
+
     /// Angular radius (radians) around each bearing that projects to
     /// ``radius_px`` pixels.
     ///

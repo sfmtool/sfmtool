@@ -199,3 +199,97 @@ def test_pycolmap_round_trip_is_lossless():
         colmap_camera_from_intrinsics(original), claim_native=True
     )
     assert back.to_dict() == original.to_dict()
+
+
+class TestPixelRadiusToWorldBatch:
+    """`pixel_radius_to_world_batch` — the position-anchored sizing rule.
+
+    One rule for every model (`radius_px / sigma_min`), with two exact closed
+    forms: `radius_px * |z| / f` for a pinhole and `radius_px * ||p_cam|| / f`
+    for the equidistant map. The pair is the whole point — the two readings
+    differ by `cos(theta)`, so a sizing rule that used the range for a pinhole
+    would oversize every off-axis patch by `sec(theta)`.
+    """
+
+    PINHOLE = {
+        "model": "SIMPLE_PINHOLE",
+        "width": W,
+        "height": H,
+        "parameters": {
+            "focal_length": F,
+            "principal_point_x": W / 2.0,
+            "principal_point_y": H / 2.0,
+        },
+    }
+
+    @staticmethod
+    def _points(theta_deg, rng=4.0):
+        th = np.radians(np.atleast_1d(np.asarray(theta_deg, dtype=np.float64)))
+        # Canonical frame: -Z is forward.
+        return np.ascontiguousarray(
+            np.stack([rng * np.sin(th), np.zeros_like(th), -rng * np.cos(th)], axis=1)
+        )
+
+    def test_equidistant_sizes_by_the_ray_range(self):
+        cam = CameraIntrinsics.from_dict(EQUIDISTANT)
+        rng, radius = 4.0, 6.0
+        pts = self._points([0.0, 45.0, 100.0, 130.0], rng)
+        got = np.asarray(
+            cam.pixel_radius_to_world_batch(pts, np.array([radius], np.float64))
+        )
+        assert got == pytest.approx(radius * rng / F, rel=1e-12)
+
+    def test_pinhole_sizes_by_the_optical_axis_depth(self):
+        cam = CameraIntrinsics.from_dict(self.PINHOLE)
+        rng, radius = 4.0, 6.0
+        thetas = np.array([0.0, 30.0, 55.0])
+        pts = self._points(thetas, rng)
+        got = np.asarray(
+            cam.pixel_radius_to_world_batch(pts, np.array([radius], np.float64))
+        )
+        want = radius * rng * np.cos(np.radians(thetas)) / F
+        assert got == pytest.approx(want, rel=1e-12)
+        # The equidistant (range) reading would be sec(theta) larger off axis.
+        assert got[-1] < 0.6 * radius * rng / F
+
+    def test_per_point_radii_and_scalar_broadcast_agree(self):
+        cam = CameraIntrinsics.from_dict(EQUIDISTANT)
+        pts = self._points([10.0, 60.0, 110.0])
+        scalar = np.asarray(
+            cam.pixel_radius_to_world_batch(pts, np.array([3.0], np.float64))
+        )
+        vector = np.asarray(
+            cam.pixel_radius_to_world_batch(pts, np.full(3, 3.0, np.float64))
+        )
+        assert scalar == pytest.approx(vector, rel=0, abs=0)
+        # Linear in the pixel budget.
+        doubled = np.asarray(
+            cam.pixel_radius_to_world_batch(pts, np.full(3, 6.0, np.float64))
+        )
+        assert doubled == pytest.approx(2.0 * scalar, rel=1e-12)
+
+    def test_shape_and_length_errors(self):
+        cam = CameraIntrinsics.from_dict(EQUIDISTANT)
+        with pytest.raises(ValueError, match=r"shape \(N, 3\)"):
+            cam.pixel_radius_to_world_batch(
+                np.zeros((2, 2)), np.array([1.0], np.float64)
+            )
+        with pytest.raises(ValueError, match="scalar or have length 3"):
+            cam.pixel_radius_to_world_batch(
+                self._points([0.0, 10.0, 20.0]), np.array([1.0, 2.0], np.float64)
+            )
+
+    def test_agrees_with_the_angular_sibling_through_the_range(self):
+        # `pixel_radius_to_angle` is the same rule with the range factored out,
+        # so `world = angle * range` at every theta for both families.
+        rng, radius = 5.0, 4.0
+        pts = self._points([5.0, 40.0, 85.0], rng)
+        for spec in (EQUIDISTANT, self.PINHOLE):
+            cam = CameraIntrinsics.from_dict(spec)
+            world = np.asarray(
+                cam.pixel_radius_to_world_batch(pts, np.array([radius], np.float64))
+            )
+            angle = np.asarray(
+                cam.pixel_radius_to_angle_batch(pts, np.array([radius], np.float64))
+            )
+            assert world == pytest.approx(angle * rng, rel=1e-12)
