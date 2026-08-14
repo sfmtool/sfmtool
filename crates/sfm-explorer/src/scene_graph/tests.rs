@@ -143,8 +143,8 @@ fn run_frame(
         ..Default::default()
     };
     let mut response = None;
-    let _ = ctx.run_ui(input, |ui| {
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+    crate::test_support::run_frame_headless(ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             response = Some(panel.show(ui, state));
         });
     });
@@ -384,7 +384,7 @@ fn the_panel_glyphs_are_available_in_the_bundled_fonts() {
     // A glyph egui does not bundle renders as a replacement box rather than
     // failing, so nothing else here would notice.
     let ctx = egui::Context::default();
-    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+    crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
         ui.label("warm the font atlas");
     });
     let font = egui::FontId::proportional(14.0);
@@ -1633,7 +1633,7 @@ fn step(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, forwar
         }],
         ..Default::default()
     };
-    let _ = ctx.run_ui(input, |ui| viewer.handle_recon_step(ui, state));
+    crate::test_support::run_frame_headless(ctx, input, |ui| viewer.handle_recon_step(ui, state));
 }
 
 #[test]

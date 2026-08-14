@@ -218,7 +218,7 @@ impl SceneRenderer {
         if !rx.recv().map(|r| r.is_ok()).unwrap_or(false) {
             return None;
         }
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range().ok()?;
         let result = search_5x5_f32(&data, |d| d > 0.0);
         drop(data);
         staging.unmap();
@@ -237,7 +237,7 @@ impl SceneRenderer {
         if !rx.recv().map(|r| r.is_ok()).unwrap_or(false) {
             return None;
         }
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range().ok()?;
         // A tagged id is a hit; the all-zero background value is not. The
         // index half is *not* checked here — an index outside every assigned
         // range is a stale pick, which the decode tables reject.

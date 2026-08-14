@@ -47,11 +47,15 @@ const HUD_FILL_OPACITY: f32 = 0.88;
 /// Glyph on the collapsed gear, and the one that closes the expanded panel.
 ///
 /// Both have to exist in egui's bundled fonts or they render as a replacement
-/// box — U+2715 MULTIPLICATION X, the obvious choice for the close button, is
-/// *not* covered, hence U+2716 HEAVY MULTIPLICATION X. `glyphs_are_available`
-/// in `hud/tests.rs` guards this.
+/// box, and which characters those are is not stable across egui releases: the
+/// close button was U+2716 HEAVY MULTIPLICATION X until egui 0.36 stopped
+/// covering the whole U+2715..U+2718 run, so it is now U+1F5D9 CANCELLATION X.
+/// That one is also the better fit — it lays out to the same 12.6px advance as
+/// the gear, so collapsed and expanded buttons are the same width.
+/// `the_hud_glyphs_are_available_in_the_bundled_fonts` in `hud/tests.rs`
+/// guards this.
 const HUD_EXPAND_GLYPH: &str = "⚙";
-const HUD_COLLAPSE_GLYPH: &str = "✖";
+const HUD_COLLAPSE_GLYPH: &str = "🗙";
 
 /// Stable id of one collapsible section, independent of the `Ui` that hosts it.
 ///

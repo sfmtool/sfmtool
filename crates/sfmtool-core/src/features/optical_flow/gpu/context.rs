@@ -80,6 +80,7 @@ impl GpuContext {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                ..Default::default()
             })
             .await
             .ok()?;
@@ -239,7 +240,7 @@ pub(super) fn read_buffer(
     });
     receiver.recv().unwrap().unwrap();
 
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().unwrap();
     let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     staging.unmap();

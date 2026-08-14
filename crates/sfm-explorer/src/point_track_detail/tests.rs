@@ -174,7 +174,7 @@ fn run_frame(
         ..Default::default()
     };
     let mut response = None;
-    let _ = ctx.run_ui(input, |ui| {
+    crate::test_support::run_frame_headless(ctx, input, |ui| {
         response = Some(panel.show(
             ui,
             recon,

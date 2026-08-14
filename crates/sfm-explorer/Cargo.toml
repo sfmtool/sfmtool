@@ -39,18 +39,18 @@ directmanipulation = []
 [dependencies]
 sfmtool-core = { path = "../sfmtool-core" }
 sift-format = { path = "../sift-format" }
-egui = "0.34"
-eframe = { version = "0.34", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
-egui_dock = "0.19"
-wgpu = { version = "29", features = ["dx12", "vulkan", "metal"] }
+egui = "0.36"
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+egui_dock = "0.21"
+wgpu = { version = "30", features = ["dx12", "vulkan", "metal"] }
 nalgebra = "0.35"
 bytemuck = { version = "1.25", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
-egui-winit = { version = "0.34", features = ["accesskit"] }
+egui-winit = { version = "0.36", features = ["accesskit"] }
 raw-window-handle = "0.6"
 winit = "0.30.13"
-pollster = "0.4"
+pollster = "1"
 rfd = "0.17"
 kiddo = "5"
 rand = "0.10"
@@ -85,7 +85,7 @@ winres = "0.1"
 # dev-dependency the feature is unified only into test builds, so the shipped
 # binary is unaffected.
 [dev-dependencies]
-wgpu = { version = "29", features = ["noop"] }
+wgpu = { version = "30", features = ["noop"] }
 
 # UI tests drive the accessibility tree, which xa11y exposes on Windows (UI
 # Automation) and macOS (AXUIElement). Linux (AT-SPI) is intentionally left out:

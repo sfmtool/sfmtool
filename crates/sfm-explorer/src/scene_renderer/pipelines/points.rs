@@ -66,7 +66,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
             entry_point: Some("vs_main"),
             buffers: &[
                 // Slot 0: quad vertices (per-vertex)
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<QuadVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[wgpu::VertexAttribute {
@@ -74,9 +74,9 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
                         offset: 0,
                         shader_location: 0,
                     }],
-                },
+                }),
                 // Slot 1: point instances (per-instance)
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<PointInstance>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &[
@@ -91,7 +91,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
                             shader_location: 2,
                         },
                     ],
-                },
+                }),
             ],
             compilation_options: Default::default(),
         },

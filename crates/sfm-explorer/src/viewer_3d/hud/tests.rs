@@ -142,13 +142,13 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
     // pointer parked at the origin.
     crate::platform::set_test_pointer_pos(Some(frame.pointer));
     let grab_keyboard = frame.grab_keyboard;
-    let _ = ctx.run_ui(input, |ui| {
+    crate::test_support::run_frame_headless(ctx, input, |ui| {
         if grab_keyboard {
             ui.ctx()
                 .memory_mut(|m| m.request_focus(egui::Id::new("a_widget_being_typed_into")));
         }
         let scroll_input = ScrollInput::from_ctx(ui.ctx(), false);
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             viewer.show_hud(ui, state, Some((1, 2, 3, 4)), true);
             // The node borrows only `state.scene`, so the rest of `AppState`
             // stays reachable alongside it — the same split `dock.rs` relies on.
@@ -257,8 +257,8 @@ fn an_area_on_a_higher_layer_swallows_drag_and_click_from_the_painter_beneath() 
             hovered: false,
             area: egui::Rect::NOTHING,
         };
-        let _ = ctx.run_ui(input, |ui| {
-            egui::CentralPanel::default().show_inside(ui, |ui| {
+        crate::test_support::run_frame_headless(ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 if with_area {
                     let area = egui::Area::new(egui::Id::new("probe"))
                         .order(egui::Order::Middle)
@@ -515,11 +515,12 @@ fn the_size_sliders_write_through_to_app_state() {
 #[test]
 fn the_hud_glyphs_are_available_in_the_bundled_fonts() {
     // A glyph egui does not bundle renders as a replacement box rather than
-    // failing, so nothing else here would notice. U+2715 MULTIPLICATION X — the
-    // obvious close-button character — is one of those; this is the check that
-    // says so.
+    // failing, so nothing else here would notice. The whole U+2715..U+2718
+    // X-mark run — the obvious close-button characters — is uncovered as of
+    // egui 0.36; this is the check that says so, and it is what caught the
+    // previous U+2716 going away in that upgrade.
     let ctx = egui::Context::default();
-    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+    crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
         ui.label("warm the font atlas");
     });
     let font = egui::FontId::proportional(14.0);

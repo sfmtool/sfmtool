@@ -92,7 +92,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> TargetPipeline
             entry_point: Some("vs_main"),
             buffers: &[
                 // Slot 0: quad corners (per-vertex), reuses point quad buffer
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<QuadVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[wgpu::VertexAttribute {
@@ -100,9 +100,9 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> TargetPipeline
                         offset: 0,
                         shader_location: 0,
                     }],
-                },
+                }),
                 // Slot 1: compass edge instances (per-instance, with width factors)
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<CompassEdgeInstance>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &[
@@ -117,7 +117,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> TargetPipeline
                             shader_location: 2, // endpoint_b (xyz + width)
                         },
                     ],
-                },
+                }),
             ],
             compilation_options: Default::default(),
         },
@@ -148,7 +148,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> TargetPipeline
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_star"),
-            buffers: &[wgpu::VertexBufferLayout {
+            buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<[f32; 3]>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[wgpu::VertexAttribute {
@@ -156,7 +156,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> TargetPipeline
                     offset: 0,
                     shader_location: 0,
                 }],
-            }],
+            })],
             compilation_options: Default::default(),
         },
         primitive: wgpu::PrimitiveState {

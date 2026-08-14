@@ -141,7 +141,10 @@ impl App {
         // hands the phase method a non-`Option` `&mut State` rather than relying
         // on it to re-unwrap a field the top-of-function guard already checked.
         let mut egui_winit_state = self.egui_winit_state.take().unwrap();
-        let (clipped_primitives, textures_delta, pixels_per_point) =
+        // `mut` only so the delta can be `clear`ed once handled: since epaint
+        // 0.36 a `TexturesDelta` debug-asserts on drop that nothing was left
+        // unapplied, and every path out of this function below has to say so.
+        let (clipped_primitives, mut textures_delta, pixels_per_point) =
             self.run_egui_pass(&window, &mut egui_winit_state);
         self.egui_winit_state = Some(egui_winit_state);
 
@@ -153,8 +156,13 @@ impl App {
         // egui context even on frames we cannot present (see below); otherwise a
         // skipped `set` makes a later partial update panic with "texture has not
         // been allocated yet".
-        for (id, image_delta) in &textures_delta.set {
-            renderer.update_texture(&device, &queue, *id, image_delta);
+        for (id, image_deltas) in &textures_delta.set {
+            // egui 0.36 batches a frame's deltas per texture; they are ordered
+            // and must be applied in sequence (a full `set` followed by partial
+            // patches on top of it).
+            for image_delta in image_deltas {
+                renderer.update_texture(&device, &queue, *id, image_delta);
+            }
         }
 
         let surface = self.wgpu_surface.as_ref().unwrap();
@@ -174,6 +182,7 @@ impl App {
                 for id in &textures_delta.free {
                     renderer.free_texture(id);
                 }
+                textures_delta.clear();
                 return;
             }
             other => {
@@ -181,6 +190,7 @@ impl App {
                 for id in &textures_delta.free {
                     renderer.free_texture(id);
                 }
+                textures_delta.clear();
                 return;
             }
         };
@@ -229,7 +239,7 @@ impl App {
         let mut cmd_bufs: Vec<wgpu::CommandBuffer> = user_cmd_bufs;
         cmd_bufs.push(encoder.finish());
         queue.submit(cmd_bufs);
-        output.present();
+        queue.present(output);
 
         // Phase 4: apply hover/selection from the 5x5 depth + pick readback.
         self.process_pick_readback(&device);
@@ -239,6 +249,7 @@ impl App {
         for id in &textures_delta.free {
             renderer.free_texture(id);
         }
+        textures_delta.clear();
     }
 
     /// Phase 1: upload/refresh all GPU buffers and uniforms from app state —
@@ -572,7 +583,7 @@ impl App {
                 handler_ok && !gesture_events.is_empty(),
             );
 
-            egui::Panel::top("menu_bar").show_inside(root_ui, |ui| {
+            egui::Panel::top("menu_bar").show(root_ui, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button("File", |ui| {
                         if ui.button("Open...").clicked() {
@@ -708,7 +719,7 @@ impl App {
                 }
             }
 
-            egui::CentralPanel::default().show_inside(root_ui, |ui| {
+            egui::CentralPanel::default().show(root_ui, |ui| {
                 let mut tab_context = TabContext {
                     state: app_state,
                     viewer_3d,

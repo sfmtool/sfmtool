@@ -69,7 +69,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> FrustumPipelin
             entry_point: Some("vs_main"),
             buffers: &[
                 // Slot 0: quad corners (per-vertex), reuses point quad buffer
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<QuadVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[wgpu::VertexAttribute {
@@ -77,9 +77,9 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> FrustumPipelin
                         offset: 0,
                         shader_location: 0,
                     }],
-                },
+                }),
                 // Slot 1: frustum edge instances (per-instance)
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<FrustumEdge>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &[
@@ -99,7 +99,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> FrustumPipelin
                             shader_location: 3, // frustum_index
                         },
                     ],
-                },
+                }),
             ],
             compilation_options: Default::default(),
         },

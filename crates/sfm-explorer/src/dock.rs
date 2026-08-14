@@ -19,7 +19,7 @@ use crate::state::{AppState, FeatureDisplaySettings, OverlayMode};
 use crate::viewer_3d::Viewer3D;
 
 /// Tabs that can appear in the dock area.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Tab {
     SceneGraph,
     Viewer3D,
@@ -62,6 +62,10 @@ pub(crate) struct TabContext<'a> {
 
 impl TabViewer for TabContext<'_> {
     type Tab = Tab;
+
+    fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
+        egui::Id::new(*tab)
+    }
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         tab.title().into()

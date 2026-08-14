@@ -312,7 +312,7 @@ fn run_frame(
         ..Default::default()
     };
     let mut resolved = None;
-    let _ = ctx.run_ui(input, |ui| {
+    crate::test_support::run_frame_headless(ctx, input, |ui| {
         resolved = dialog.show(ui.ctx(), &state.scene, state.selected_recon);
     });
     resolved

@@ -77,7 +77,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PatchPipelineR
             entry_point: Some("vs_main"),
             buffers: &[
                 // Slot 0: quad corners (per-vertex), reuses point quad buffer
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<QuadVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[wgpu::VertexAttribute {
@@ -85,9 +85,9 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PatchPipelineR
                         offset: 0,
                         shader_location: 0,
                     }],
-                },
+                }),
                 // Slot 1: patch instances (per-instance)
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<PatchInstance>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &[
@@ -122,7 +122,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PatchPipelineR
                             shader_location: 6, // point_index
                         },
                     ],
-                },
+                }),
             ],
             compilation_options: Default::default(),
         },

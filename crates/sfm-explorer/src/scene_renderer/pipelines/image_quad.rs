@@ -84,7 +84,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> ImageQuadPipel
             entry_point: Some("vs_main"),
             buffers: &[
                 // Slot 0: quad corners (per-vertex), reuses point quad buffer
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<QuadVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[wgpu::VertexAttribute {
@@ -92,9 +92,9 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> ImageQuadPipel
                         offset: 0,
                         shader_location: 0,
                     }],
-                },
+                }),
                 // Slot 1: image quad instances (per-instance)
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<ImageQuadInstance>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &[
@@ -124,7 +124,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> ImageQuadPipel
                             shader_location: 4, // corner_br
                         },
                     ],
-                },
+                }),
             ],
             compilation_options: Default::default(),
         },

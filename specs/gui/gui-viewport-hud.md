@@ -196,9 +196,9 @@ constructed before input handling but drawn after it.
 |------|------|
 | **Scroll / zoom** | `handle_scroll` is gated on `platform::pointer_in_rect(ctx, rect)`. That helper is a raw geometric containment test — on Windows it reads the OS cursor position directly and knows nothing about egui layers. It must become `pointer_in_rect(rect) && !pointer_in_rect(hud_rect)`, computed in the same logical coordinate space. |
 | **Gestures** | Same gate, same fix — `handle_gestures` and `handle_pinch` take `pointer_over` from the same helper. |
-| **Drag / orbit** | An `Area` on a higher layer claims the pointer, leaving `response.dragged()` false. **Verified against egui 0.34**: `hit_test` keeps only the top-most layer covering the search area, so the painter's `WidgetRect` never reaches `hits.click` / `hits.drag`, and `dragged()`, `clicked()` and `hovered()` are all false. No `hud_rect` fallback is needed; `hud/tests.rs` pins the behaviour so a future egui change surfaces as a test failure rather than a viewport that orbits while a slider is dragged. |
+| **Drag / orbit** | An `Area` on a higher layer claims the pointer, leaving `response.dragged()` false. **Verified against egui 0.34, re-verified on 0.36**: `hit_test` keeps only the top-most layer covering the search area, so the painter's `WidgetRect` never reaches `hits.click` / `hits.drag`, and `dragged()`, `clicked()` and `hovered()` are all false. No `hud_rect` fallback is needed; `hud/tests.rs` pins the behaviour so a future egui change surfaces as a test failure rather than a viewport that orbits while a slider is dragged. |
 | **Click / pick** | Excluded by the same mechanism as drag. A click that starts on the HUD must never deselect the current entity. `hover_pixel` follows for free: `Response::hover_pos` returns `None` when the response is not hovered, so the HUD never feeds the depth/pick readback either. |
-| **Fly keys** | `handle_fly_keys` reads `key_down(W/A/S/D/…)` unconditionally. Any text-entry widget in the HUD (a `DragValue`) would fly the camera while being typed into. Gate all keyboard handling — `handle_fly_keys` *and* `handle_keyboard`'s Z / `,` / `.` / Home shortcuts — on `!ctx.egui_wants_keyboard_input()` (`wants_keyboard_input` is the deprecated spelling in egui 0.34). That reports focus only for widgets that actually consume text, so clicking a HUD checkbox does not disarm the fly keys. |
+| **Fly keys** | `handle_fly_keys` reads `key_down(W/A/S/D/…)` unconditionally. Any text-entry widget in the HUD (a `DragValue`) would fly the camera while being typed into. Gate all keyboard handling — `handle_fly_keys` *and* `handle_keyboard`'s Z / `,` / `.` / Home shortcuts — on `!ctx.egui_wants_keyboard_input()` (`wants_keyboard_input` is the deprecated spelling, from egui 0.34 on). That reports focus only for widgets that actually consume text, so clicking a HUD checkbox does not disarm the fly keys. |
 
 There is no such guard anywhere in `sfm-explorer` today — the viewport has
 never had to share its rect with a widget. These are new rules, not
@@ -276,8 +276,8 @@ All of it is built (`viewer_3d/hud.rs`, tests in `viewer_3d/hud/tests.rs`).
 
 - [x] HUD shell: `Area`, viewport-relative anchoring, collapsed/expanded gear
 - [x] `hud_rect` capture and the scroll/gesture exclusion
-- [x] Drag/click layer arbitration (verified against egui 0.34 — layering holds,
-      no geometric fallback needed)
+- [x] Drag/click layer arbitration (verified against egui 0.34 and again on
+      0.36 — layering holds, no geometric fallback needed)
 - [x] `egui_wants_keyboard_input` gate on fly keys and viewport shortcuts
 - [x] Layers / Size / Patches / Camera sections
 - [x] Advanced section (exposes `edl_line_thickness`, `frustum_size_multiplier`,

@@ -26,7 +26,7 @@ pub(in crate::scene_renderer) fn create(
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
-            buffers: &[wgpu::VertexBufferLayout {
+            buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<BgDistortedVertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[
@@ -41,7 +41,7 @@ pub(in crate::scene_renderer) fn create(
                         shader_location: 1, // uv
                     },
                 ],
-            }],
+            })],
             compilation_options: Default::default(),
         },
         primitive: wgpu::PrimitiveState {
