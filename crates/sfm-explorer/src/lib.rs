@@ -25,6 +25,7 @@ mod scene;
 mod scene_graph;
 mod scene_renderer;
 mod state;
+mod texture;
 mod viewer_3d;
 
 use std::sync::Arc;

@@ -465,6 +465,23 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
   `point_track_detail/tests.rs:781` pins the current ramp.
 
 **A latent thumbnail panic, a third RGB→RGBA expansion, one dead `clear()`, and six repeated struct literals**
+> _Status (2026-08-14): Parts (a) and the RGB→RGBA half done; (b) and (c) remain
+> open. All three expansions now go through one `src/texture.rs`
+> (`rgb_to_color_image` + `thumbnail_color_image`), which reads the extent off the
+> data — so `image_browser` holds no `128` at all and the abort is gone. The
+> **`THUMBNAIL_SIZE` widening in the proposed fix turned out to be the wrong
+> move** and was not done: that const is the GPU atlas cell size, and coupling the
+> browser's CPU decode to a `scene_renderer` internal would have re-declared a fact
+> the reconstruction already carries. Reading the shape needs no constant, so
+> nothing outside `scene_renderer` names it and it stays `pub(super)`.
+> Two things the finding did not mention, both fixed here: `build_barcode`'s own
+> `const THUMB_H = 128` (721) also **bounded the row scan with the height**, so a
+> non-square thumbnail would have read out of bounds; its band edges are now
+> proportional to the real height. The deeper duplication this exposes is **not**
+> fixed and is worth its own finding: `.sfmr` pins 128×128 independently in
+> `sfmr-format`'s `entries.rs:158`, `read.rs:200–203` and `write.rs:890`, and
+> `scene_renderer/gpu_types.rs:286` declares it a fourth time — four
+> declarations of one fact, with no compiler tie between them._
 - Location: `crates/sfm-explorer/src/image_browser.rs:757–773`,
   `point_track_detail/table.rs:362–384`, `image_detail/mod.rs` (691)
 - Problem: Re-verified at HEAD; the previous snapshot's `app.rs` half of this finding
@@ -1226,6 +1243,12 @@ hard-coded `128` in `image_browser.rs::load_thumbnail` (766, 770) will panic on 
 changes, while the sibling copy in `point_track_detail/table.rs` reads the array
 shape and would survive. Two-line fix, plus widening `THUMBNAIL_SIZE` from
 `pub(super)` to `pub(crate)` so the browser can actually name it.
+
+> _Status (2026-08-14): Done, without the widening — see the finding itself. The
+> viewer now derives the extent from the loaded reconstruction, so no second
+> declaration of 128 was needed; `THUMBNAIL_SIZE` stays `pub(super)`. Scope grew by
+> one real bug the runner-up had not spotted: `build_barcode` used the same
+> constant as **both** the band divisor and the row-scan width bound._
 
 ---
 

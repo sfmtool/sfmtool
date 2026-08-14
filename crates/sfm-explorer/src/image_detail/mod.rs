@@ -15,6 +15,7 @@ mod overlay;
 use crate::platform::{GestureEvent, ScrollInput};
 use crate::scene::{ImageRef, ReconId};
 use crate::state::{CachedSiftFeatures, FeatureDisplaySettings, OverlayMode};
+use crate::texture::rgb_to_color_image;
 use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::SfmrReconstruction;
 
@@ -323,11 +324,7 @@ impl ImageDetail {
         let img_idx = image.index();
         // Expand 3-channel RGB to RGBA for the GPU upload.
         let (w, h) = (img.width() as usize, img.height() as usize);
-        let mut rgba = Vec::with_capacity(w * h * 4);
-        for px in img.data().chunks_exact(3) {
-            rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
-        }
-        let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+        let color_image = rgb_to_color_image(img.data(), [w, h]);
         let texture = ctx.load_texture(
             format!("detail_{img_idx}"),
             color_image,

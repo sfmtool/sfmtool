@@ -18,6 +18,7 @@ use super::metrics::error_color;
 use super::{PointTrackDetail, PointTrackDetailResponse, PATCH_TILE, THUMB_SIZE};
 use crate::platform::{self, GestureEvent};
 use crate::scene::{ImageRef, ReconId};
+use crate::texture::thumbnail_color_image;
 
 /// Height of one observation row: the thumbnail plus vertical padding.
 const ROW_HEIGHT: f32 = THUMB_SIZE + 8.0;
@@ -361,20 +362,7 @@ impl PointTrackDetail {
     /// Load a single thumbnail texture into the cache.
     fn load_thumbnail(&mut self, ctx: &egui::Context, recon: &SfmrReconstruction, image: ImageRef) {
         let idx = image.index();
-        let rgb_slice = recon.thumbnails_y_x_rgb.index_axis(Axis(0), idx);
-        let rgb_data: Vec<u8> = if let Some(slice) = rgb_slice.as_slice() {
-            slice.to_vec()
-        } else {
-            rgb_slice.iter().copied().collect()
-        };
-
-        let thumb_h = rgb_slice.shape()[0];
-        let thumb_w = rgb_slice.shape()[1];
-        let mut rgba = Vec::with_capacity(thumb_h * thumb_w * 4);
-        for pixel in rgb_data.chunks_exact(3) {
-            rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
-        }
-        let color_image = egui::ColorImage::from_rgba_unmultiplied([thumb_w, thumb_h], &rgba);
+        let color_image = thumbnail_color_image(recon.thumbnails_y_x_rgb.index_axis(Axis(0), idx));
         let texture = ctx.load_texture(
             format!("track_thumb_{idx}"),
             color_image,
