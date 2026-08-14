@@ -302,9 +302,10 @@ pub fn clusters_to_pair_matches(
 ///     A dict mapping 1:1 onto the ``cluster_patches/`` section:
 ///     ``reference_members`` (C,) uint32 (0xFFFFFFFF = unrefinable),
 ///     ``member_status`` (M,) uint8, ``member_affines`` (M, 2, 3) float64
-///     (leading 2x2 ``A`` plus the member's refined absolute keypoint
-///     position ``p = A·x_ref + t`` in the last column; reference rows are
-///     identity | x_ref), ``member_zncc`` (M,) float32,
+///     (leading 2x2 the member's absolute affine shape ``S = W·S_ref``, last
+///     column its refined absolute keypoint position ``p``; reference rows
+///     are ``S_ref | x_ref``, and ``W = S·S_ref**-1`` recovers the
+///     reference->member warp), ``member_zncc`` (M,) float32,
 ///     ``member_shift_px`` (M,) float32, ``member_consistency_residual``
 ///     (M,) float32 — the member's relative misfit against a joint
 ///     weak-perspective factorization of all cluster warps (lower = more

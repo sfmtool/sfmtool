@@ -82,20 +82,23 @@ fn matvec(a: &Mat2, x: [f64; 2]) -> [f64; 2] {
     ]
 }
 
-/// Apply a stored member row (`A` | absolute position `p`) to `x`, given the
-/// cluster's reference keypoint: `W(x) = A·(x − x_ref) + p`.
-fn apply_member_row(m: &ndarray::ArrayView2<'_, f64>, x_ref: [f64; 2], x: [f64; 2]) -> [f64; 2] {
+/// Apply a member's reference-relative warp row (`W` | absolute position
+/// `p`) to `x`, given the cluster's reference keypoint:
+/// `x_member = W·(x − x_ref) + p`. `W` is recovered from the stored absolute
+/// shape as `S·S_ref⁻¹` (format version 5).
+fn apply_member_row(m: &[[f64; 3]; 2], x_ref: [f64; 2], x: [f64; 2]) -> [f64; 2] {
     let dx = [x[0] - x_ref[0], x[1] - x_ref[1]];
     [
-        m[[0, 0]] * dx[0] + m[[0, 1]] * dx[1] + m[[0, 2]],
-        m[[1, 0]] * dx[0] + m[[1, 1]] * dx[1] + m[[1, 2]],
+        m[0][0] * dx[0] + m[0][1] * dx[1] + m[0][2],
+        m[1][0] * dx[0] + m[1][1] * dx[1] + m[1][2],
     ]
 }
 
 /// Run one synthetic recovery case: image 1 shows [`texture`]; image 2 shows
 /// it warped by the known affine `x₂ = A_true·x₁ + t_true`; the member's SIFT
 /// seed is perturbed by `(dlog_s, drot_deg, shift_px)`. Asserts the
-/// non-reference member is `Kept` and the recovered absolute affine maps the
+/// non-reference member is `Kept`, the reference row carries `S_ref | x_ref`,
+/// and the warp recovered from the stored absolute shapes maps the
 /// reference's support grid within `max_rmse` px of the truth.
 fn run_recovery_case(
     scale: f64,
@@ -180,9 +183,14 @@ fn run_recovery_case(
         (pos_mem, a_mem)
     };
 
-    // Reference row: identity | x_ref (its own keypoint position, which the
-    // kernel reads from the f32 `.sift` arrays — compare f32-rounded).
+    // Reference row: `S_ref | x_ref` — the reference feature's own detector
+    // affine shape and keypoint position, both read by the kernel from the
+    // f32 `.sift` arrays, so compare f32-rounded.
     let pos_r_stored = [pos_r[0] as f32 as f64, pos_r[1] as f32 as f64];
+    let a_r_stored = [
+        [a_r[0][0] as f32 as f64, a_r[0][1] as f32 as f64],
+        [a_r[1][0] as f32 as f64, a_r[1][1] as f32 as f64],
+    ];
     let ref_row = result
         .member_affines
         .index_axis(ndarray::Axis(0), ref_k as usize);
@@ -193,8 +201,13 @@ fn run_recovery_case(
             ref_row[[1, 0]],
             ref_row[[1, 1]]
         ],
-        [1.0, 0.0, 0.0, 1.0],
-        "reference row must carry the identity 2x2"
+        [
+            a_r_stored[0][0],
+            a_r_stored[0][1],
+            a_r_stored[1][0],
+            a_r_stored[1][1]
+        ],
+        "reference row must carry the reference feature's own detector shape"
     );
     assert_eq!(
         [ref_row[[0, 2]], ref_row[[1, 2]]],
@@ -202,7 +215,17 @@ fn run_recovery_case(
         "reference row's last column must be its own keypoint position"
     );
 
+    // The stored leading 2×2 is the member's ABSOLUTE affine shape
+    // `S = W·S_ref`; recover the reference→member warp `W = S·S_ref⁻¹`
+    // through the reference row, exactly as a consumer does, and evaluate
+    // that against the ground-truth warp.
     let rec = result.member_affines.index_axis(ndarray::Axis(0), other);
+    let s_mem = [[rec[[0, 0]], rec[[0, 1]]], [rec[[1, 0]], rec[[1, 1]]]];
+    let w_rec = mul2(&s_mem, &inv2(&a_r_stored));
+    let rec_row = [
+        [w_rec[0][0], w_rec[0][1], rec[[0, 2]]],
+        [w_rec[1][0], w_rec[1][1], rec[[1, 2]]],
+    ];
     let res = params.resolution as usize;
     let step = 2.0 * params.radius / res as f64;
     let off = 0.5 * step - params.radius;
@@ -214,7 +237,7 @@ fn run_recovery_case(
                 pos_r[0] + a_r[0][0] * u[0] + a_r[0][1] * u[1],
                 pos_r[1] + a_r[1][0] * u[0] + a_r[1][1] * u[1],
             ];
-            let p = apply_member_row(&rec, pos_r_stored, x);
+            let p = apply_member_row(&rec_row, pos_r_stored, x);
             let q = [
                 w_true[0][0] * x[0] + w_true[0][1] * x[1] + t_w[0],
                 w_true[1][0] * x[0] + w_true[1][1] * x[1] + t_w[1],

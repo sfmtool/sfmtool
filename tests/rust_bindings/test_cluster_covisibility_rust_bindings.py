@@ -144,7 +144,7 @@ def _write_cluster_matches(path, with_patches):
                 if FILE_STATUS[k] in (0, 1, 2, 3):
                     affines[k] = [[1.0, 0.0, 5.0], [0.0, 1.0, 5.0]]
                 if FILE_STATUS[k] != 0:
-                    affines[k, 0, 0] = 1.01  # non-reference rows need not be identity
+                    affines[k, 0, 0] = 1.01  # a shape distinct from the reference's
         data.update(
             {
                 "reference_members": np.array(reference_members, dtype=np.uint32),

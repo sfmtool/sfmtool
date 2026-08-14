@@ -195,7 +195,7 @@ pub struct FeatureGeometry<'a> {
 pub struct ClusterRefineResult {
     pub reference_members: Vec<u32>,  // (C,) global member index or u32::MAX
     pub member_status: Vec<MemberStatus>, // (M,)
-    pub member_affines: Array3<f64>,  // (M, 2, 3): (2x2 A | absolute position p)
+    pub member_affines: Array3<f64>,  // (M, 2, 3): (2x2 absolute shape S | position p)
     pub member_zncc: Vec<f32>,        // (M,) NaN if not evaluated
     pub member_shift_px: Vec<f32>,    // (M,)
 }
@@ -316,18 +316,21 @@ closure, thread-local by construction (the `SearchScratch` convention,
      deterministic. No perspective stage and no multi-view congealing pass
      (experimentally dead ends — see the design spec).
    - Record `member_zncc = −f(θ*)`, `member_shift_px = |t*|`, and the
-     absolute affine `A = (I + D)M₀` with the member's refined absolute
-     keypoint position `p = pos_mem + t` in the last column into
-     `member_affines` (so `x_mem = A·(x − x_ref) + p` composes without the
-     seed, and the translation stays recoverable as `t_abs = p − A·x_ref`
-     with `x_ref` read from the reference row). Vet: `zncc < min_zncc` →
+     member's **absolute affine shape** `S = (I + D)M₀·A_ref` — the refined
+     warp composed onto the reference feature's detector shape, which is
+     exactly the `B` the winning evaluation sampled with — with the member's
+     refined absolute keypoint position `p = pos_mem + t` in the last column
+     into `member_affines`. The member's image-space extent is then `S`'s
+     column norms, and the relative warp is recoverable as `W = S·S_ref⁻¹`
+     with `S_ref | x_ref` read from the reference row (so
+     `x_mem = W·(x − x_ref) + p`). Vet: `zncc < min_zncc` →
      `RejectedLowZncc`; else `shift > max_shift_px` → `RejectedShift`; else
      provisionally kept.
 6. **One member per image.** Among provisionally-kept members sharing an
    image, keep the highest ZNCC (ties → lowest member index); the rest
-   become `DuplicateImage`. Reference row gets `Reference` status, the
-   identity affine with its own keypoint position in the last column
-   (`A = I`, `p = x_ref` — identity | x_ref), `zncc = 1.0`, `shift = 0`.
+   become `DuplicateImage`. Reference row gets `Reference` status, its own
+   detector affine shape and keypoint position (`S = A_ref`, `p = x_ref` —
+   `S_ref | x_ref`), `zncc = 1.0`, `shift = 0`.
 
 ### Reuse map
 

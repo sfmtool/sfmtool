@@ -73,6 +73,7 @@ entire integration point for prioritization and filtering:
   | geometric consistency | `member_consistency_residual` | drop members that misfit their cluster's joint weak-perspective geometry |
   | feature size (ordinal) | `member_features` row index — `.sift` rows are scale-sorted descending | restrict to larger features |
   | image radius | `member_affines[:, :, 2]` + `images/image_dims` (both v4) | restrict by distance from the image center |
+  | feature extent | `member_affines[:, :, :2]` column norms (v5) | restrict by detected feature size |
 
 ## Complexity and bounds
 

@@ -98,9 +98,12 @@ def cluster_patches(
     Gaussian-windowed-ZNCC affine warp from the reference's patch to every
     other member (seeded from the SIFT affine shapes), vet members by
     achieved ZNCC and translation drift, and keep at most one member per
-    image. Writes a NEW .matches file that copies the input's images and
-    clusters sections and adds the cluster_patches enrichment (write-once
-    workflow, like adding two-view geometries).
+    image. Each member is stored fully absolute — its affine SHAPE (the
+    refined warp composed onto the reference feature's detector shape) plus
+    its refined keypoint position — so a consumer reads a member's extent and
+    position with no .sift lookup. Writes a NEW .matches file that copies the
+    input's images and clusters sections and adds the cluster_patches
+    enrichment (write-once workflow, like adding two-view geometries).
 
     \b
     Example:

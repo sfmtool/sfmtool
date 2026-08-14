@@ -41,11 +41,12 @@ pub fn read_matches_metadata(path: &Path) -> Result<MatchesMetadata, MatchesErro
 /// upgrade; a re-written file is a new current-version file with new hashes.
 ///
 /// Version ≤ 3 files never store `images/image_dims`, so they load with
-/// [`MatchesData::image_dims`] as `None`. A version ≤ 3 file that carries a
-/// `cluster_patches/` section is rejected: its `member_affines` last column
-/// holds the affine translation `t`, which cannot be upgraded to the
-/// version-4 absolute-position semantics (`p = A·x_ref + t`) without the
-/// referenced `.sift` keypoint positions — regenerate the file with
+/// [`MatchesData::image_dims`] as `None`. A version ≤ 4 file that carries a
+/// `cluster_patches/` section is rejected: neither its `member_affines` last
+/// column (the affine translation `t` before version 4) nor its leading 2×2
+/// block (the reference-relative warp `W` before version 5) can be upgraded
+/// to the current absolute semantics without the referenced `.sift`
+/// positions and affine shapes — regenerate the file with
 /// `sfm cluster-patches` from its cluster backbone source.
 pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     let file = std::fs::File::open(path).map_err(|e| MatchesError::IoPath {
@@ -98,6 +99,19 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
         return Err(MatchesError::InvalidFormat(format!(
             "version {} cluster-patch file: member_affines stores the affine translation, not \
              the absolute keypoint position introduced in version 4, and cannot be upgraded on \
+             load — regenerate with `sfm cluster-patches` from the cluster backbone file",
+            metadata.version
+        )));
+    }
+    // Version 4 cluster-patch files store the reference→member warp `W` in
+    // the member_affines leading 2×2; version 5 stores the member's absolute
+    // affine shape `S = W·S_ref`. The upgrade needs the reference feature's
+    // `.sift` affine shape, which the reader does not have — refuse the file
+    // (its cluster-backbone source still loads; regenerate the enrichment).
+    if metadata.version < 5 && metadata.has_cluster_patches {
+        return Err(MatchesError::InvalidFormat(format!(
+            "version {} cluster-patch file: member_affines stores the reference-relative warp, \
+             not the absolute affine shape introduced in version 5, and cannot be upgraded on \
              load — regenerate with `sfm cluster-patches` from the cluster backbone file",
             metadata.version
         )));

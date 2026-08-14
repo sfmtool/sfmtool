@@ -89,8 +89,9 @@ impl MatchesData {
     ///    outside the restriction), the derived entry is
     ///    [`CLUSTER_REFERENCE_UNREFINABLE`] — in a derived file that
     ///    sentinel means "reference not present in this selection"; the
-    ///    kept members still carry absolute positions and warps expressed
-    ///    relative to the (absent) reference patch.
+    ///    kept members still carry their absolute positions and absolute
+    ///    shapes, which stay valid without the reference — only the
+    ///    reference-relative warp (`S·S_ref⁻¹`) becomes unrecoverable.
     /// 5. When restricted, the image table shrinks to exactly the requested
     ///    images (file order preserved, images with zero members included)
     ///    and all parallel image arrays plus `member_images` are renumbered.
@@ -382,8 +383,8 @@ impl MatchesData {
 
 impl ClusterPatchData {
     /// `(M, 2)` member absolute keypoint positions — the last column of
-    /// `member_affines` (`p = A·x_ref + t`; the reference row's own
-    /// position for reference members; zeros where not evaluated).
+    /// `member_affines` (`p`; the reference row's own position for reference
+    /// members; zeros where not evaluated).
     pub fn member_positions(&self) -> Array2<f64> {
         let m = self.member_affines.shape()[0];
         let mut out = Array2::zeros((m, 2));
@@ -394,10 +395,13 @@ impl ClusterPatchData {
         out
     }
 
-    /// `(M, 2, 2)` member ← reference patch warps — the leading 2×2 block
-    /// of `member_affines` (identity for reference rows; zeros where not
-    /// evaluated).
-    pub fn member_warps(&self) -> Array3<f64> {
+    /// `(M, 2, 2)` member absolute affine shapes — the leading 2×2 block of
+    /// `member_affines` (`S = W·S_ref`, mapping the detector's canonical unit
+    /// frame onto the member's image pixels; the reference feature's own
+    /// `S_ref` for reference rows; zeros where not evaluated). A consumer
+    /// wanting the reference→member warp recovers `W = S·S_ref⁻¹` through the
+    /// cluster's reference row.
+    pub fn member_shapes(&self) -> Array3<f64> {
         let m = self.member_affines.shape()[0];
         let mut out = Array3::zeros((m, 2, 2));
         for k in 0..m {

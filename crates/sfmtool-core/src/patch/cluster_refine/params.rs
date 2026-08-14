@@ -138,12 +138,14 @@ pub struct ClusterRefineResult {
     pub reference_members: Vec<u32>,
     /// `(M,)` per-member statuses.
     pub member_status: Vec<MemberStatus>,
-    /// `(M, 2, 3)` absolute affine warps in pixel coordinates: `A` is the
-    /// leading 2×2 and the last column stores `p = A·x_ref + t` — the
-    /// member's refined absolute keypoint position (so
-    /// `x_member = A·(x − x_ref) + p`, and `t = p − A·x_ref` with `x_ref`
-    /// the reference row's own last column). Reference rows are
-    /// identity | x_ref; all-zeros where not evaluated.
+    /// `(M, 2, 3)` fully absolute affines in pixel coordinates: the leading
+    /// 2×2 is the member's absolute affine SHAPE `S = W·S_ref` (the map from
+    /// the detector's canonical unit frame onto that member's image pixels,
+    /// so its column norms are the member's image-space extent) and the last
+    /// column is `p`, the member's refined absolute keypoint position. The
+    /// reference→member warp is `W = S·S_ref⁻¹` and then reads
+    /// `x_member = W·(x − x_ref) + p`, with `S_ref | x_ref` the reference
+    /// row. All-zeros where not evaluated.
     pub member_affines: Array3<f64>,
     /// `(M,)` achieved windowed ZNCC vs the reference (`NaN` if not
     /// evaluated).

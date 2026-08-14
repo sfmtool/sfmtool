@@ -665,23 +665,23 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
                             ));
                             break;
                         }
-                        // Version 4+: reference rows are identity | x_ref —
-                        // check the leading 2×2 exactly (the last column,
-                        // the reference keypoint's absolute position, is not
-                        // checkable without the `.sift` data). Version ≤ 3
-                        // files stored identity | 0 and are already rejected
-                        // by the reader; verification leaves them untouched.
-                        if metadata.version >= 4 {
+                        // Version 5+: reference rows are `S_ref | x_ref`, the
+                        // reference feature's own detector affine shape and
+                        // position. Neither value is checkable without the
+                        // `.sift` data, but `S_ref` must be invertible — the
+                        // relative warp `W = S·S_ref⁻¹` is recovered through
+                        // it. Version ≤ 4 cluster-patch files (identity
+                        // reference rows) are already rejected by the reader;
+                        // verification leaves them untouched.
+                        if metadata.version >= 5 {
                             let affines = raw_to_f64(&affines_raw);
                             let base = reference as usize * 6;
-                            let identity = affines[base] == 1.0
-                                && affines[base + 1] == 0.0
-                                && affines[base + 3] == 0.0
-                                && affines[base + 4] == 1.0;
-                            if !identity {
+                            let det = affines[base] * affines[base + 4]
+                                - affines[base + 1] * affines[base + 3];
+                            if !det.is_finite() || det == 0.0 {
                                 errors.push(format!(
                                     "member_affines[{reference}] (cluster {c}'s reference row) \
-                                     must have an identity leading 2x2 block"
+                                     has a singular leading 2x2 block (det {det})"
                                 ));
                                 break;
                             }

@@ -143,10 +143,12 @@ cluster_patches/
 ├── metadata.json.zst                    # refinement options (below) + summary counts
 ├── reference_members.{C}.uint32.zst     # global member index of each cluster's reference
 ├── member_status.{M}.uint8.zst          # enum, see below
-├── member_affines.{M}.2.3.float64.zst   # (2x2 A | refined absolute position p), pixel coords
-│                                        # (COLMAP convention); p = A·x_ref + t, so
-│                                        # x_member = A·(x − x_ref) + p; identity|x_ref for the
-│                                        # reference row; zeros where not evaluated
+├── member_affines.{M}.2.3.float64.zst   # (2x2 absolute shape S | refined absolute
+│                                        # position p), pixel coords (COLMAP convention);
+│                                        # S = W·S_ref, so the member's extent is S's column
+│                                        # norms and x_member = W·(x − x_ref) + p with
+│                                        # W = S·S_ref⁻¹; S_ref|x_ref for the reference row;
+│                                        # zeros where not evaluated
 ├── member_zncc.{M}.float32.zst          # achieved windowed ZNCC vs reference (NaN if n/a)
 └── member_shift_px.{M}.float32.zst      # translation drift from the SIFT seed (NaN if n/a)
 ```
@@ -159,15 +161,20 @@ members; statuses preserve the rejected members so consumers can re-gate
 without re-running (the ZNCC/shift arrays are the signals, mirroring how
 `match_descriptor_distances` enables descriptor re-filtering).
 
-The affine is stored absolute (full 2×3 in pixel coordinates) rather than
-anchored/relative: it composes directly (`member ← ref`, and member↔member
-via the reference) and does not require the consumer to re-derive the SIFT
-seed. Since format version 4 the last column is the member's **refined
-absolute keypoint position** `p = A·x_ref + t` rather than the translation
-`t` — geometric consumers read every member's refined position straight from
-the array (the reference row is identity | x_ref, its own `.sift` position),
-and `t` stays recoverable as `p − A·x_ref` with `x_ref` taken from the
-reference row. Top-level metadata gains `"has_cluster_patches": true`.
+The affine is stored fully absolute (a 2×3 in pixel coordinates) rather than
+anchored/relative, so a consumer re-derives neither the SIFT seed nor the
+reference row to use it. The last column is the member's **refined absolute
+keypoint position** `p` (format version 4); the leading 2×2 is the member's
+**absolute affine shape** `S = W·S_ref` — the map from the detector's
+canonical unit frame onto that member's image pixels, for the refined
+reference→member warp `W` and the reference feature's detector shape `S_ref`
+(format version 5). A geometric consumer therefore reads every member's
+position AND image-space extent (`S`'s column norms) straight from the array,
+with no `.sift` file open. The reference row is `S_ref | x_ref`, its own
+`.sift` shape and position, and it is what a consumer inverts to recover the
+relative warp `W = S·S_ref⁻¹` (unavailable in a derived file whose reference
+member is absent, where the absolute shapes and positions stay valid
+regardless). Top-level metadata gains `"has_cluster_patches": true`.
 
 ## The operation
 

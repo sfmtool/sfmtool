@@ -179,6 +179,38 @@ fn make_cluster_test_data() -> MatchesData {
     data
 }
 
+/// The reference feature's detector affine shape in the cluster-patch
+/// fixture — the reference row's leading 2×2 under format version 5.
+/// Non-singular (det 2.875) and deliberately far from the identity.
+const CP_S_REF: [[f64; 2]; 2] = [[2.0, 0.5], [0.25, 1.5]];
+
+/// The kept member's reference→member relative warp in the same fixture.
+/// The file stores `S = W·S_ref`; `W = S·S_ref⁻¹` recovers this.
+const CP_W_KEPT: [[f64; 2]; 2] = [[1.1, -0.05], [0.03, 0.95]];
+
+/// 2×2 matrix product (fixtures and the shape/warp recovery assertions).
+fn mat2_mul(a: &[[f64; 2]; 2], b: &[[f64; 2]; 2]) -> [[f64; 2]; 2] {
+    [
+        [
+            a[0][0] * b[0][0] + a[0][1] * b[1][0],
+            a[0][0] * b[0][1] + a[0][1] * b[1][1],
+        ],
+        [
+            a[1][0] * b[0][0] + a[1][1] * b[1][0],
+            a[1][0] * b[0][1] + a[1][1] * b[1][1],
+        ],
+    ]
+}
+
+/// Inverse of a non-singular 2×2 (the `S_ref⁻¹` of the warp recovery).
+fn mat2_inv(a: &[[f64; 2]; 2]) -> [[f64; 2]; 2] {
+    let inv_det = 1.0 / (a[0][0] * a[1][1] - a[0][1] * a[1][0]);
+    [
+        [a[1][1] * inv_det, -a[0][1] * inv_det],
+        [-a[1][0] * inv_det, a[0][0] * inv_det],
+    ]
+}
+
 /// Create cluster test data with the cluster_patches enrichment.
 ///
 /// Cluster 0: member 0 is the reference, member 1 kept, member 2 rejected
@@ -187,21 +219,28 @@ fn make_cluster_patch_test_data() -> MatchesData {
     let mut data = make_cluster_test_data();
     data.metadata.has_cluster_patches = true;
     let mut member_affines = Array3::zeros((5, 2, 3));
-    // Reference row: identity | x_ref (the reference keypoint's own absolute
-    // position).
-    member_affines[[0, 0, 0]] = 1.0;
+    // Reference row: `S_ref | x_ref` — the reference feature's own detector
+    // affine shape (deliberately NOT the identity, so anything that still
+    // assumes version-4 reference rows shows up) and absolute position.
+    for r in 0..2 {
+        for c in 0..2 {
+            member_affines[[0, r, c]] = CP_S_REF[r][c];
+        }
+    }
     member_affines[[0, 0, 2]] = 12.5;
-    member_affines[[0, 1, 1]] = 1.0;
     member_affines[[0, 1, 2]] = 20.25;
-    // Kept member: a non-trivial affine; the last column is the member's
-    // refined absolute keypoint position p = A·x_ref + t.
-    member_affines[[1, 0, 0]] = 1.1;
-    member_affines[[1, 0, 1]] = -0.05;
+    // Kept member: absolute shape S = W·S_ref for the relative warp
+    // `CP_W_KEPT`; the last column is the member's refined absolute keypoint
+    // position.
+    let s_kept = mat2_mul(&CP_W_KEPT, &CP_S_REF);
+    for r in 0..2 {
+        for c in 0..2 {
+            member_affines[[1, r, c]] = s_kept[r][c];
+        }
+    }
     member_affines[[1, 0, 2]] = 42.5;
-    member_affines[[1, 1, 0]] = 0.03;
-    member_affines[[1, 1, 1]] = 0.95;
     member_affines[[1, 1, 2]] = 17.25;
-    // Rejected member: still carries its refined affine + position.
+    // Rejected member: still carries its refined shape + position.
     member_affines[[2, 0, 0]] = 1.0;
     member_affines[[2, 0, 2]] = 13.0;
     member_affines[[2, 1, 1]] = 1.0;
@@ -665,15 +704,35 @@ fn test_write_validation_zero_image_dims() {
 }
 
 #[test]
-fn test_write_validation_reference_row_not_identity() {
+fn test_write_validation_reference_row_singular() {
     let mut data = make_cluster_patch_test_data();
-    // Member 0 is cluster 0's reference; corrupt its leading 2×2.
-    data.cluster_patches.as_mut().unwrap().member_affines[[0, 0, 0]] = 1.1;
+    // Member 0 is cluster 0's reference; make its S_ref rank-1 (row 1 a
+    // multiple of row 0), which would make the warp recovery impossible.
+    let cp = data.cluster_patches.as_mut().unwrap();
+    cp.member_affines[[0, 1, 0]] = 2.0 * cp.member_affines[[0, 0, 0]];
+    cp.member_affines[[0, 1, 1]] = 2.0 * cp.member_affines[[0, 0, 1]];
     expect_write_error(
-        "matches_test_cp_ref_not_identity",
+        "matches_test_cp_ref_singular",
         &data,
-        "identity leading 2x2",
+        "singular leading 2x2",
     );
+}
+
+#[test]
+fn test_write_validation_reference_row_non_identity_ok() {
+    // The version-5 reference row is the reference feature's own detector
+    // shape, so a non-identity leading 2×2 must WRITE (the version-4 rule
+    // rejected exactly this).
+    let data = make_cluster_patch_test_data();
+    let s_ref = &data.cluster_patches.as_ref().unwrap().member_affines;
+    assert_ne!(s_ref[[0, 0, 0]], 1.0, "fixture reference row is identity");
+    let dir = std::env::temp_dir().join("matches_test_cp_ref_non_identity_ok");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("out.matches");
+    write_matches(&path, &data, 3).unwrap();
+    let (valid, errors) = verify_matches(&path).unwrap();
+    assert!(valid, "non-identity reference row rejected: {errors:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1184,18 +1243,24 @@ fn test_verify_rejects_zero_image_dims() {
 }
 
 #[test]
-fn test_verify_rejects_reference_row_not_identity() {
+fn test_verify_rejects_reference_row_singular() {
     expect_verify_error(
-        "matches_test_verify_ref_not_identity",
+        "matches_test_verify_ref_singular",
         &make_cluster_patch_test_data(),
         |entries| {
             mutate_entry(
                 entries,
                 "cluster_patches/member_affines.5.2.3.float64.zst",
-                |bytes| set_f64(bytes, 1, 0.25), // reference row's A01
+                |bytes| {
+                    // Reference row S_ref = [[a, b], [c, d]] laid out as
+                    // f64 slots 0..2 (row 0) and 3..5 (row 1); make row 1 a
+                    // multiple of row 0 so det == 0.
+                    set_f64(bytes, 3, 2.0 * CP_S_REF[0][0]);
+                    set_f64(bytes, 4, 2.0 * CP_S_REF[0][1]);
+                },
             )
         },
-        "identity leading 2x2",
+        "singular leading 2x2",
     );
 }
 
@@ -1362,6 +1427,93 @@ fn test_version_3_cluster_patches_rejected_on_read() {
 }
 
 #[test]
+fn test_version_4_cluster_patches_rejected_on_read() {
+    // A version-4 cluster-patch file stores the reference-relative warp in
+    // the member_affines leading 2×2 — not upgradable to the version-5
+    // absolute shape without the reference feature's .sift affine shape, so
+    // read_matches refuses it (with regeneration guidance) while
+    // verify_matches still validates its stored bytes.
+    let data = make_cluster_patch_test_data();
+    let dir = std::env::temp_dir().join("matches_test_v4_patches_rejected");
+    std::fs::create_dir_all(&dir).unwrap();
+    let current_path = dir.join("current.matches");
+    let v4_path = dir.join("v4.matches");
+
+    write_matches(&current_path, &data, 3).unwrap();
+    rewrite_matches_version(&current_path, &v4_path, 4);
+
+    let (valid, errors) = verify_matches(&v4_path).unwrap();
+    assert!(valid, "v4 patch fixture failed verification: {errors:?}");
+
+    let err = read_matches(&v4_path).err().unwrap();
+    let msg = format!("{err}");
+    assert!(msg.contains("absolute affine shape"), "{msg}");
+    assert!(
+        msg.contains("regenerate with `sfm cluster-patches`"),
+        "{msg}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_relative_warp_recovered_from_reference_row() {
+    // The version-5 payoff and its cost: a member's absolute shape is read
+    // straight off its own row, and the reference→member warp survives a
+    // write/read round trip as `W = S·S_ref⁻¹` through the reference row.
+    let data = make_cluster_patch_test_data();
+    let dir = std::env::temp_dir().join("matches_test_warp_recovery");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("out.matches");
+    write_matches(&path, &data, 3).unwrap();
+    let loaded = read_matches(&path).unwrap();
+    let cp = loaded.cluster_patches.as_ref().unwrap();
+
+    // Cluster 0's reference is member 0; member 1 is the kept member.
+    let r = cp.reference_members[0] as usize;
+    assert_eq!(r, 0);
+    let shapes = cp.member_shapes();
+    let s_ref = [
+        [shapes[[r, 0, 0]], shapes[[r, 0, 1]]],
+        [shapes[[r, 1, 0]], shapes[[r, 1, 1]]],
+    ];
+    assert_eq!(s_ref, CP_S_REF, "reference row is S_ref | x_ref");
+
+    let s_kept = [
+        [shapes[[1, 0, 0]], shapes[[1, 0, 1]]],
+        [shapes[[1, 1, 0]], shapes[[1, 1, 1]]],
+    ];
+    // Absolute extent, no reference lookup: the shape's column norms.
+    let extent_u = (s_kept[0][0].powi(2) + s_kept[1][0].powi(2)).sqrt();
+    assert!(extent_u > 0.0);
+
+    let w = mat2_mul(&s_kept, &mat2_inv(&s_ref));
+    for r in 0..2 {
+        for c in 0..2 {
+            assert!(
+                (w[r][c] - CP_W_KEPT[r][c]).abs() < 1e-12,
+                "recovered warp[{r}][{c}] = {} != {}",
+                w[r][c],
+                CP_W_KEPT[r][c]
+            );
+        }
+    }
+
+    // The warp composes with the positions exactly as the format states:
+    // x_member = W·(x − x_ref) + p. At x = x_ref that is p.
+    let positions = cp.member_positions();
+    let x_ref = [positions[[r, 0]], positions[[r, 1]]];
+    let p = [positions[[1, 0]], positions[[1, 1]]];
+    let mapped = [
+        w[0][0] * (x_ref[0] - x_ref[0]) + w[0][1] * (x_ref[1] - x_ref[1]) + p[0],
+        w[1][0] * (x_ref[0] - x_ref[0]) + w[1][1] * (x_ref[1] - x_ref[1]) + p[1],
+    ];
+    assert_eq!(mapped, p);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_version_2_with_clusters_rejected() {
     // A version <= 2 file can never carry the cluster backbone.
     let data = make_cluster_test_data();
@@ -1520,12 +1672,15 @@ fn make_select_test_data() -> MatchesData {
             }
         }
     }
-    // Reference rows (members 0, 7, 9): identity | x_ref.
+    // Reference rows (members 0, 7, 9): `S_ref | x_ref`. Non-identity and
+    // non-singular, so the selection is exercised against real version-5
+    // reference shapes rather than a value that happens to be the identity.
     for &k in &[0usize, 7, 9] {
-        affines[[k, 0, 0]] = 1.0;
-        affines[[k, 0, 1]] = 0.0;
-        affines[[k, 1, 0]] = 0.0;
-        affines[[k, 1, 1]] = 1.0;
+        for r in 0..2 {
+            for c in 0..2 {
+                affines[[k, r, c]] = CP_S_REF[r][c];
+            }
+        }
     }
     data.cluster_patches = Some(ClusterPatchData {
         reference_members: Array1::from_vec(vec![0, CLUSTER_REFERENCE_UNREFINABLE, 7, 9]),
@@ -1878,17 +2033,18 @@ fn test_cluster_patch_accessors() {
     let data = make_select_test_data();
     let cp = data.cluster_patches.as_ref().unwrap();
 
-    // member_positions = affine last column; member_warps = leading 2x2.
+    // member_positions = affine last column; member_shapes = leading 2x2
+    // (the member's ABSOLUTE affine shape, copied verbatim).
     let pos = cp.member_positions();
-    let warps = cp.member_warps();
+    let shapes = cp.member_shapes();
     assert_eq!(pos.shape(), [12, 2]);
-    assert_eq!(warps.shape(), [12, 2, 2]);
+    assert_eq!(shapes.shape(), [12, 2, 2]);
     for k in 0..12 {
         assert_eq!(pos[[k, 0]], cp.member_affines[[k, 0, 2]]);
         assert_eq!(pos[[k, 1]], cp.member_affines[[k, 1, 2]]);
         for r in 0..2 {
             for c in 0..2 {
-                assert_eq!(warps[[k, r, c]], cp.member_affines[[k, r, c]]);
+                assert_eq!(shapes[[k, r, c]], cp.member_affines[[k, r, c]]);
             }
         }
     }

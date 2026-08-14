@@ -23,8 +23,11 @@ def _cluster_patch_dict() -> dict:
     affines = np.zeros((8, 2, 3), dtype=np.float64)
     for k in range(8):
         affines[k] = [[1.1, 0.05, 10.0 + k], [0.02, 0.9, 20.0 + k]]
-    for ref in (0, 5):  # reference rows: identity | x_ref
-        affines[ref][:, :2] = np.eye(2)
+    # Reference rows: `S_ref | x_ref` -- the reference feature's own detector
+    # affine shape (non-singular, and deliberately not the identity, so a
+    # consumer still assuming version-4 reference rows shows up).
+    for ref in (0, 5):
+        affines[ref][:, :2] = [[2.0, 0.5], [0.25, 1.5]]
     return {
         "metadata": {
             "version": 4,
@@ -110,11 +113,17 @@ def test_accessors_match_source_arrays(matches_path):
     assert mf.metadata["cluster_count"] == 3
     assert len(mf.content_xxh128) == 32
 
-    # Decode accessors: positions/warps slice the affines; refine_radius
+    # Decode accessors: positions/shapes slice the affines; refine_radius
     # halves the full patch edge; worst consistency is the per-cluster max
     # finite residual (inf when none).
     npt.assert_array_equal(mf.member_positions(), src["member_affines"][:, :, 2])
-    npt.assert_array_equal(mf.member_warps(), src["member_affines"][:, :, :2])
+    npt.assert_array_equal(mf.member_shapes(), src["member_affines"][:, :, :2])
+
+    # The shapes are ABSOLUTE (version 5); the reference->member warp comes
+    # back by inverting the cluster's own reference row.
+    s_ref = mf.member_shapes()[int(mf.reference_members[0])]
+    w = mf.member_shapes()[1] @ np.linalg.inv(s_ref)
+    npt.assert_allclose(w @ s_ref, mf.member_shapes()[1], atol=1e-12)
     assert mf.refine_radius == 6.0
     npt.assert_array_equal(
         mf.cluster_worst_consistency(),

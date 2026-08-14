@@ -187,8 +187,11 @@ impl PyMatchesFile {
             .unbind())
     }
 
-    /// `(M, 2, 3)` float64 absolute affine warps (2x2 warp | absolute
-    /// refined position).
+    /// `(M, 2, 3)` float64 absolute affines: the leading 2x2 is the member's
+    /// absolute affine shape ``S = W·S_ref`` (detector canonical unit frame
+    /// -> member pixels) and the last column its refined absolute keypoint
+    /// position. Reference rows are ``S_ref | x_ref``; the reference->member
+    /// warp is ``W = S·S_ref**-1`` through that row.
     #[getter]
     fn member_affines<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
         Ok(self
@@ -260,12 +263,15 @@ impl PyMatchesFile {
             .unbind())
     }
 
-    /// `(M, 2, 2)` float64 member <- reference patch warps (the affine
-    /// leading 2x2 block).
-    fn member_warps<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
+    /// `(M, 2, 2)` float64 member absolute affine shapes (the affine leading
+    /// 2x2 block, ``S = W·S_ref``): the map from the detector's canonical unit
+    /// frame onto the member's image pixels, so a member's image-space extent
+    /// is its column norms. Recover the reference->member warp as
+    /// ``S·S_ref**-1`` using the cluster's reference row.
+    fn member_shapes<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
         Ok(self
             .cluster_patches()?
-            .member_warps()
+            .member_shapes()
             .to_pyarray(py)
             .into_any()
             .unbind())

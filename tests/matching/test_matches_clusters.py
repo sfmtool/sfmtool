@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Round-trip tests for cluster-bearing `.matches` files through the
-`sfmtool._sfmtool.io` bindings (format version 4: `clusters/` +
-`cluster_patches/` sections, pairs-or-clusters backbone, per-image dims,
-absolute keypoint positions in the member_affines last column)."""
+`sfmtool._sfmtool.io` bindings (format version 5: `clusters/` +
+`cluster_patches/` sections, pairs-or-clusters backbone, per-image dims, and
+fully absolute member_affines — absolute affine shape in the leading 2x2,
+absolute keypoint position in the last column)."""
 
 import numpy as np
 import numpy.testing as npt
@@ -78,11 +79,19 @@ def _cluster_patch_data() -> dict:
     data["metadata"]["has_cluster_patches"] = True
     data["has_cluster_patches"] = True
     affines = np.zeros((5, 2, 3), dtype=np.float64)
-    # Reference: identity | x_ref (its own absolute keypoint position).
-    affines[0] = [[1.0, 0.0, 12.5], [0.0, 1.0, 20.25]]
-    # Kept: last column is the refined absolute position p = A x_ref + t.
-    affines[1] = [[1.1, -0.05, 42.5], [0.03, 0.95, 17.25]]
-    # Rejected, affine + position retained.
+    # Reference: S_ref | x_ref -- the reference feature's own detector affine
+    # shape (non-singular, deliberately not the identity) and position.
+    s_ref = np.array([[2.0, 0.5], [0.25, 1.5]])
+    affines[0] = [[s_ref[0, 0], s_ref[0, 1], 12.5], [s_ref[1, 0], s_ref[1, 1], 20.25]]
+    # Kept: leading 2x2 is the absolute shape S = W @ S_ref for the relative
+    # warp W; last column is the refined absolute keypoint position.
+    w_kept = np.array([[1.1, -0.05], [0.03, 0.95]])
+    s_kept = w_kept @ s_ref
+    affines[1] = [
+        [s_kept[0, 0], s_kept[0, 1], 42.5],
+        [s_kept[1, 0], s_kept[1, 1], 17.25],
+    ]
+    # Rejected, shape + position retained.
     affines[2] = [[1.0, 0.0, 13.0], [0.0, 1.0, 21.0]]
     data.update(
         {
@@ -141,7 +150,7 @@ def test_clusters_round_trip(tmp_path):
     assert valid, f"verification failed: {errors}"
 
     loaded = read_matches(path)
-    assert loaded["metadata"]["version"] == 4
+    assert loaded["metadata"]["version"] == 5
     assert loaded["metadata"]["has_clusters"] is True
     assert loaded["metadata"]["has_cluster_patches"] is False
     assert loaded["metadata"]["cluster_count"] == 2
@@ -269,10 +278,33 @@ def test_write_requires_image_dims(tmp_path):
         write_matches(tmp_path / "bad.matches", data)
 
 
-def test_write_rejects_non_identity_reference_row(tmp_path):
+def test_write_rejects_singular_reference_row(tmp_path):
     import pytest
 
     data = _cluster_patch_data()
-    data["member_affines"][0, 0, 1] = 0.25  # reference row's A01
-    with pytest.raises(OSError, match="identity leading 2x2"):
+    # Make S_ref rank-1: the reference->member warp S @ S_ref^-1 could not be
+    # recovered from it.
+    data["member_affines"][0, 1, :2] = 2.0 * data["member_affines"][0, 0, :2]
+    with pytest.raises(OSError, match="singular leading 2x2"):
         write_matches(tmp_path / "bad.matches", data)
+
+
+def test_relative_warp_recovers_from_reference_row(tmp_path):
+    """The version-5 contract: absolute shapes on disk, relative warp on
+    demand as W = S @ S_ref^-1 through the cluster's reference row."""
+    data = _cluster_patch_data()
+    path = tmp_path / "shapes.matches"
+    write_matches(path, data)
+    loaded = read_matches(path)
+
+    aff = loaded["member_affines"]
+    ref = int(loaded["reference_members"][0])
+    s_ref = aff[ref, :, :2]
+    w = aff[1, :, :2] @ np.linalg.inv(s_ref)
+    npt.assert_allclose(w, [[1.1, -0.05], [0.03, 0.95]], atol=1e-12)
+
+    # Absolute extent needs no reference lookup at all.
+    extent = 0.5 * (
+        np.hypot(aff[1, 0, 0], aff[1, 1, 0]) + np.hypot(aff[1, 0, 1], aff[1, 1, 1])
+    )
+    assert extent > 0.0

@@ -87,20 +87,27 @@ class TestRefineClusterPatches:
         assert result["reference_members"][0] == 0
         assert result["member_status"][0] == STATUS_REFERENCE
         assert result["member_zncc"][0] == pytest.approx(1.0)
-        # Reference row: identity | x_ref (its own keypoint position).
+        # Reference row: S_ref | x_ref -- the reference feature's own detector
+        # affine shape (3*I here) and its keypoint position.
+        s_ref = np.array([[3.0, 0.0], [0.0, 3.0]])
         np.testing.assert_allclose(
-            result["member_affines"][0], [[1, 0, 48], [0, 1, 48]]
+            result["member_affines"][0], [[3, 0, 48], [0, 3, 48]]
         )
 
-        # The member is a pure translation of the reference: kept, identity
-        # 2x2, and the last column is the member's refined absolute keypoint
-        # position (the reference's position moved by the true shift).
+        # The member is a pure translation of the reference: kept, so its
+        # ABSOLUTE shape is S = W @ S_ref with W ~ I, and the last column is
+        # the member's refined absolute keypoint position (the reference's
+        # position moved by the true shift).
         assert result["member_status"][1] == STATUS_KEPT
         assert result["member_zncc"][1] > 0.95
         a = result["member_affines"][1]
-        np.testing.assert_allclose(a[:, :2], np.eye(2), atol=0.02)
+        np.testing.assert_allclose(a[:, :2], s_ref, atol=0.06)
         ref = np.array([48.0, 48.0])
         np.testing.assert_allclose(a[:, 2], ref + np.array([2.0, 1.0]), atol=0.15)
+
+        # ... and the relative warp recovers as S @ S_ref^-1.
+        w = a[:, :2] @ np.linalg.inv(result["member_affines"][0][:, :2])
+        np.testing.assert_allclose(w, np.eye(2), atol=0.02)
 
     def test_out_of_range_feature_is_not_evaluated(self):
         images, pos, aff, starts, m_img, m_feat = _inputs()

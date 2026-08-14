@@ -29,7 +29,7 @@ use rayon::prelude::*;
 use crate::geometry::numeric::splitmix64;
 
 use super::params::MemberStatus;
-use super::REFERENCE_UNREFINABLE;
+use super::{inv2, mul2, REFERENCE_UNREFINABLE};
 
 /// A member's warp 2×2 must clear this determinant floor to enter the fit.
 const MIN_ABS_DET: f64 = 1e-6;
@@ -158,9 +158,13 @@ fn sub(a: &Mat2, b: &Mat2) -> Mat2 {
 /// Compute the per-member warp-consistency residuals for a refined cluster
 /// set (see the module docs). `member_affines` / `member_status` /
 /// `reference_members` are the [`refine_cluster_patches`] outputs
-/// (member-parallel; `(M, 2, 3)` — only the leading 2×2 warp blocks enter
-/// the fit; the last column, the member's absolute refined keypoint
-/// position, is never read). Members that participate
+/// (member-parallel; `(M, 2, 3)` — only the leading 2×2 blocks enter the fit;
+/// the last column, the member's absolute refined keypoint position, is never
+/// read). The stored block is the member's ABSOLUTE affine shape
+/// `S = W·S_ref`, so each cluster's reference row is inverted once to recover
+/// the reference-relative warps `W = S·S_ref⁻¹` the factorization is
+/// parameterized on; a cluster whose `S_ref` is singular is skipped whole.
+/// Members that participate
 /// in the fit — the reference (`J = I`) plus every kept member with a
 /// non-degenerate warp, in clusters with at least 2 such members — get a
 /// residual; everything else is NaN. Deterministic: fixed seed, fixed
@@ -188,15 +192,32 @@ pub fn warp_consistency_residuals(
         if ref_k == REFERENCE_UNREFINABLE {
             continue;
         }
+        // The fit is parameterized on the REFERENCE-RELATIVE warp `W` (the
+        // reference's own is the identity by construction), while the stored
+        // block is the absolute shape `S = W·S_ref`. Recover `W = S·S_ref⁻¹`
+        // through this cluster's reference row; a singular `S_ref` (rejected
+        // by the writer, but this entry point takes raw arrays) leaves the
+        // whole cluster out of the fit.
+        let rk = ref_k as usize;
+        let s_ref: Mat2 = [
+            [member_affines[[rk, 0, 0]], member_affines[[rk, 0, 1]]],
+            [member_affines[[rk, 1, 0]], member_affines[[rk, 1, 1]]],
+        ];
+        let s_ref_det = s_ref[0][0] * s_ref[1][1] - s_ref[0][1] * s_ref[1][0];
+        if s_ref_det.abs() < MIN_ABS_DET || !s_ref_det.is_finite() {
+            continue;
+        }
+        let s_ref_inv = inv2(&s_ref);
         let begin = fit.len();
         for k in cluster_starts[c] as usize..cluster_starts[c + 1] as usize {
             let j: Mat2 = if k as u32 == ref_k {
                 [[1.0, 0.0], [0.0, 1.0]]
             } else if member_status[k] == MemberStatus::Kept {
-                [
+                let s: Mat2 = [
                     [member_affines[[k, 0, 0]], member_affines[[k, 0, 1]]],
                     [member_affines[[k, 1, 0]], member_affines[[k, 1, 1]]],
-                ]
+                ];
+                mul2(&s, &s_ref_inv)
             } else {
                 continue;
             };

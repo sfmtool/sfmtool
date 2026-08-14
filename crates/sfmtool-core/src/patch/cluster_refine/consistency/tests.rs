@@ -10,8 +10,11 @@ use ndarray::Array3;
 type SyntheticScene = (Vec<u32>, Vec<u32>, Vec<MemberStatus>, Vec<u32>, Array3<f64>);
 
 /// Build a synthetic scene: `n_images` scaled-orthographic cameras and
-/// `n_clusters` planar frames, emitted as clusters whose reference warp
-/// is re-gauged to the identity (exactly the stored representation).
+/// `n_clusters` planar frames, emitted as clusters whose reference warp is
+/// re-gauged to the identity. That is the fit's own parameterization; on
+/// disk it corresponds to the degenerate case `S_ref = I`, where the stored
+/// absolute shape equals the relative warp. [`rescale_shapes`] turns such a
+/// scene into the general version-5 representation.
 fn synthetic(n_images: usize, n_clusters: usize, members_per_cluster: usize) -> SyntheticScene {
     let mut state = 12345u64;
     let mut rnd = move || {
@@ -151,6 +154,67 @@ fn oracle_cameras_fit_exactly() {
     }
     // The ridge (1e-9) biases the exact solve by a comparable amount.
     assert!(worst < 1e-6, "oracle-camera misfit {worst} should be ~0");
+}
+
+/// Re-express a scene's `S_ref = I` blocks as general version-5 absolute
+/// shapes: right-multiply every member of cluster `c` (its reference row
+/// included, which therefore becomes `S_ref` itself) by a per-cluster
+/// non-singular `S_ref`. The relative warps `S·S_ref⁻¹` are unchanged, so
+/// the residuals must be too.
+fn rescale_shapes(
+    cluster_starts: &[u32],
+    affines: &Array3<f64>,
+    s_ref_of: impl Fn(usize) -> Mat2,
+) -> Array3<f64> {
+    let mut out = affines.clone();
+    for c in 0..cluster_starts.len() - 1 {
+        let s_ref = s_ref_of(c);
+        for k in cluster_starts[c] as usize..cluster_starts[c + 1] as usize {
+            let w: Mat2 = [
+                [affines[[k, 0, 0]], affines[[k, 0, 1]]],
+                [affines[[k, 1, 0]], affines[[k, 1, 1]]],
+            ];
+            let s = mul2(&w, &s_ref);
+            for r in 0..2 {
+                for cc in 0..2 {
+                    out[[k, r, cc]] = s[r][cc];
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn absolute_shapes_reproduce_the_relative_warp_residuals() {
+    // The version-5 correctness property: a file stores `S = W·S_ref`, and
+    // the fit recovers `W = S·S_ref⁻¹` from the reference row. Scaling every
+    // cluster by its own `S_ref` must therefore leave the residuals where
+    // they were (up to the recovery's floating-point round trip).
+    let (starts, images, status, refs, affines) = synthetic(12, 200, 4);
+    let baseline = warp_consistency_residuals(&starts, &images, &status, &refs, affines.view(), 12);
+
+    // Per-cluster shapes spanning a wide range of scale, rotation and shear.
+    let shaped = rescale_shapes(&starts, &affines, |c| {
+        let s = 1.0 + 0.4 * ((c % 7) as f64);
+        let th = 0.3 * (c % 11) as f64;
+        let sh = 0.1 * ((c % 5) as f64 - 2.0);
+        mul2(
+            &[[s * th.cos(), -s * th.sin()], [s * th.sin(), s * th.cos()]],
+            &[[1.0, sh], [0.0, 1.0]],
+        )
+    });
+    let res = warp_consistency_residuals(&starts, &images, &status, &refs, shaped.view(), 12);
+
+    assert_eq!(res.len(), baseline.len());
+    let mut worst = 0.0f32;
+    for (a, b) in res.iter().zip(&baseline) {
+        assert_eq!(a.is_nan(), b.is_nan(), "participation must not change");
+        if a.is_finite() {
+            worst = worst.max((a - b).abs());
+        }
+    }
+    assert!(worst < 1e-5, "residuals drifted by {worst} under S_ref");
 }
 
 #[test]

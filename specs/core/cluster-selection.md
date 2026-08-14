@@ -51,8 +51,8 @@ selected) while the cluster itself survives on `min_span` other members. The
 derived file does not keep out-of-restriction rows for such references; it
 records `reference_members[c] = 0xFFFFFFFF` instead, under the derived-file
 sentinel reading scoped by the format specification. The kept members still
-carry their absolute positions and their warps, which remain expressed
-relative to the (absent) reference patch.
+carry their absolute positions and absolute shapes, which stay valid without
+the reference; only the reference-relative warp becomes unrecoverable.
 
 ## Provenance
 
@@ -87,7 +87,9 @@ Alongside the selection, the reader exposes the derived quantities consumers
 otherwise re-implement:
 
 - member absolute positions — the `member_affines` last column
-- member warps — the `member_affines` leading 2×2 block
+- member absolute shapes — the `member_affines` leading 2×2 block; the
+  reference→member warp, where needed, is `S·S_ref⁻¹` via the cluster's
+  reference row
 - per-cluster worst consistency — the maximum finite
   `member_consistency_residual` over each cluster's members (`inf` when no
   member has a finite residual)

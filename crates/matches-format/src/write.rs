@@ -1004,18 +1004,18 @@ fn validate_cluster_patches_constraints(
                     ClusterMemberStatus::Reference as u8
                 )));
             }
-            // Reference rows are identity | x_ref: the leading 2×2 is exactly
-            // the identity (the last column — the reference keypoint's own
-            // absolute position — is not checkable without the `.sift` data).
+            // Reference rows are `S_ref | x_ref`: the reference feature's own
+            // detector affine shape and absolute position. Neither value is
+            // checkable without the `.sift` data, but `S_ref` must be
+            // invertible — every consumer that wants the reference-relative
+            // warp recovers it as `W = S·S_ref⁻¹` through this row.
             let k = reference as usize;
-            let identity = cp.member_affines[[k, 0, 0]] == 1.0
-                && cp.member_affines[[k, 0, 1]] == 0.0
-                && cp.member_affines[[k, 1, 0]] == 0.0
-                && cp.member_affines[[k, 1, 1]] == 1.0;
-            if !identity {
+            let det = cp.member_affines[[k, 0, 0]] * cp.member_affines[[k, 1, 1]]
+                - cp.member_affines[[k, 0, 1]] * cp.member_affines[[k, 1, 0]];
+            if !det.is_finite() || det == 0.0 {
                 return Err(MatchesError::InvalidFormat(format!(
-                    "member_affines[{k}] (cluster {c}'s reference row) must have an identity \
-                     leading 2x2 block"
+                    "member_affines[{k}] (cluster {c}'s reference row) has a singular leading \
+                     2x2 block (det {det})"
                 )));
             }
         }

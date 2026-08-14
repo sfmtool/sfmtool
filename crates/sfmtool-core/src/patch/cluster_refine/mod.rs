@@ -19,6 +19,14 @@
 //! and emits member-parallel arrays that map 1:1 onto the `.matches`
 //! `cluster_patches/` section.
 //!
+//! The refinement's working unknown is the relative warp `W`, but what the
+//! member arrays STORE is the absolute affine shape `S = W · A_ref` — the map
+//! from the detector's canonical unit frame onto that member's image pixels,
+//! `.matches` format version 5. Every member is then self-contained for
+//! extent (`S`'s column norms) as well as position, and `W = S · S_ref⁻¹`
+//! recovers the relative warp through the cluster's `S_ref | x_ref` reference
+//! row.
+//!
 //! Sampling reuses the house conventions: the `bilinear_geometry` pixel-center
 //! convention (`x − 0.5`), the shared window `Support`, and the
 //! `weighted_moments_pub` / `znorm_write` z-normalization kernels. Pyramid
@@ -433,8 +441,10 @@ fn build_template(
 
 /// Refine one non-reference member: the shift → similarity → affine
 /// Nelder-Mead cascade on the negated windowed ZNCC. Returns
-/// `(zncc, shift_px, absolute 2×3 affine)`; `None` when the seed support is
-/// out of frame (→ `NotEvaluated`).
+/// `(zncc, shift_px, absolute 2×3 affine)` — leading 2×2 the member's
+/// absolute affine shape `S = W·S_ref`, last column its refined absolute
+/// keypoint position; `None` when the seed support is out of frame (→
+/// `NotEvaluated`).
 #[allow(clippy::too_many_arguments)]
 fn refine_member(
     pyramid: &ImageU8Pyramid,
@@ -521,21 +531,25 @@ fn refine_member(
     let (t, d) = unpack(&theta, Stage::Affine);
     let zncc = -best_val;
     let shift = (t[0] * t[0] + t[1] * t[1]).sqrt();
-    // Absolute affine: `A = (I + D)·M₀`; the stored last column is the
-    // member's refined absolute keypoint position `p = pos_mem + t`
-    // (= `A·x_ref + t_abs`), so the warp composes without the seed
-    // (`x_mem = A·(x − x_ref) + p`) and the translation stays recoverable as
-    // `t_abs = p − A·x_ref`, with `x_ref` read from the cluster's reference
-    // row (identity | x_ref).
+    // Absolute affine shape: the refined warp `W = (I + D)·M₀` composed onto
+    // the reference feature's detector shape, `S = W·S_ref` — literally the
+    // `b` matrix the winning evaluation sampled with, so the stored shape IS
+    // the shape that was measured. `S` maps the detector's canonical unit
+    // frame onto this member's image pixels, so its column norms are the
+    // member's own image-space extent with no `.sift` read. The stored last
+    // column is the member's refined absolute keypoint position
+    // `p = pos_mem + t`. The reference-relative warp stays recoverable as
+    // `W = S·S_ref⁻¹` and then reads `x_mem = W·(x − x_ref) + p`, with
+    // `S_ref | x_ref` the cluster's reference row.
     let id = [[1.0 + d[0][0], d[0][1]], [d[1][0], 1.0 + d[1][1]]];
-    let a_abs = mul2(&id, &m0);
+    let s_abs = mul2(&mul2(&id, &m0), &ref_geo.a);
     let p = [mem_geo.pos[0] + t[0], mem_geo.pos[1] + t[1]];
     Some((
         zncc,
         shift,
         [
-            [a_abs[0][0], a_abs[0][1], p[0]],
-            [a_abs[1][0], a_abs[1][1], p[1]],
+            [s_abs[0][0], s_abs[0][1], p[0]],
+            [s_abs[1][0], s_abs[1][1], p[1]],
         ],
     ))
 }
@@ -677,12 +691,17 @@ fn refine_cluster(
         return unrefinable(members);
     };
     let ref_geo = geo[ref_j].clone().unwrap();
-    // Reference row: identity | x_ref (its own `.sift` keypoint position),
-    // so consumers can read every member's absolute position — including
-    // the reference's — straight from the affine's last column.
+    // Reference row: `S_ref | x_ref` — the reference feature's own detector
+    // affine shape and `.sift` keypoint position. Every member (the
+    // reference included) then reads its absolute shape and position straight
+    // from its own row, and the row is also what a consumer inverts to
+    // recover a member's reference-relative warp.
     members[ref_j] = MemberOutcome {
         status: MemberStatus::Reference,
-        affine: [[1.0, 0.0, ref_geo.pos[0]], [0.0, 1.0, ref_geo.pos[1]]],
+        affine: [
+            [ref_geo.a[0][0], ref_geo.a[0][1], ref_geo.pos[0]],
+            [ref_geo.a[1][0], ref_geo.a[1][1], ref_geo.pos[1]],
+        ],
         zncc: 1.0,
         shift: 0.0,
     };
@@ -762,9 +781,13 @@ fn refine_cluster(
 }
 
 /// Refine every cluster into a patch cluster: per cluster, a reference member
-/// plus a vetted absolute affine warp to every other member (leading 2×2 `A`
-/// plus the member's refined absolute keypoint position `p = A·x_ref + t` in
-/// the last column). Parallel over clusters (rayon); results are deterministic
+/// plus a vetted absolute affine for every other member — leading 2×2 the
+/// member's absolute affine shape `S = W·S_ref` (the refined reference→member
+/// warp composed onto the reference feature's detector shape), last column the
+/// member's refined absolute keypoint position `p`. Reference rows are
+/// `S_ref | x_ref`, so `W = S·S_ref⁻¹` recovers the relative warp (see
+/// [`warp_consistency_residuals`], which does exactly that).
+/// Parallel over clusters (rayon); results are deterministic
 /// under any thread schedule (each cluster's work is self-contained and the
 /// scatter preserves cluster order). `progress` is bumped once per finished
 /// cluster.

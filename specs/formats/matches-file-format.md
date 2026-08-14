@@ -476,8 +476,8 @@ Written by the cluster-patches operation into a **new** file that copies the sou
 file's images and clusters sections (write-once workflow, same as adding TVGs).
 Requires the cluster backbone. Arrays parallel the clusters' member arrays: for each
 cluster, a reference member plus, for every other member, a photometrically refined
-affine warp mapping the reference's local patch onto that member's image, with
-vetting statuses and signals.
+absolute affine (shape and keypoint position; the reference→member warp is
+recoverable via the reference row), with vetting statuses and signals.
 
 #### `cluster_patches/metadata.json.zst`
 
@@ -544,23 +544,29 @@ vetting statuses and signals.
 
 - **Shape**: `(K, 2, 3)` where K = cluster_member_count
 - **Data type**: `float64` (little-endian)
-- Absolute affine warp in pixel coordinates (COLMAP pixel convention): `A` is the
-  leading 2×2 block and the last column stores `p = A·x_ref + t` — the member's
-  **refined absolute keypoint position** — so the warp reads
-  `x_member = A·(x − x_ref) + p`. Stored absolute (not anchored/relative to the SIFT
-  seed) so it composes directly (`member ← ref`, and member↔member via the reference)
-  without re-deriving the seed, and geometric consumers get every member's refined
-  position straight from the last column without touching the `.sift` files
-- The affine translation stays recoverable: `t = p − A·x_ref`, with `x_ref` read from
-  the cluster's reference row (whose last column is the reference keypoint's own
-  `.sift` position)
-- Reference rows are identity | x_ref; not-evaluated rows stay all-zeros (the status
-  array, not the affine, is the discriminator — some evaluated-but-rejected rows carry
+- Fully absolute affine in pixel coordinates (COLMAP pixel convention): the leading
+  2×2 block `S` is the member's **absolute affine shape** — the map from the
+  detector's canonical unit frame onto the member's image pixels, `S = W·S_ref`,
+  where `W` is the photometrically refined reference→member warp and `S_ref` is the
+  reference feature's detector affine shape — and the last column stores `p`, the
+  member's **refined absolute keypoint position**. Every member is self-contained:
+  its image-space extent is `S`'s column norms and its position is `p`, with no
+  `.sift` read and no reference lookup
+- The reference→member warp stays recoverable: `W = S·S_ref⁻¹`, with `S_ref` read
+  from the cluster's reference row; the warp then reads
+  `x_member = W·(x − x_ref) + p`, with `x_ref` from the reference row's last column.
+  In a derived file whose reference member is absent (`0xFFFFFFFF`), the relative
+  warp is unrecoverable, but every kept member's absolute shape and position remain
+  valid
+- Reference rows are `S_ref | x_ref` — the reference feature's own detector affine
+  shape and absolute position; not-evaluated rows stay all-zeros (the status array,
+  not the affine, is the discriminator — some evaluated-but-rejected rows carry
   refined values while `duplicate_image` rows that shared the reference's image stay
   zero)
 - **Constraint**: When `reference_members[c]` is not `0xFFFFFFFF`, that member's
-  leading 2×2 block MUST be exactly the identity (the last column, the reference's
-  own absolute position, is not verifiable without the `.sift` data)
+  leading 2×2 block MUST be non-singular (like the last column, its value — the
+  reference feature's own detector shape — is not verifiable without the `.sift`
+  data)
 
 #### `cluster_patches/member_zncc.{K}.float32.zst`
 
@@ -786,9 +792,10 @@ the backbone — a file never carries both sets.
 5. **Statuses valid**: Every `member_status` value is a valid discriminant (`0..=6`);
    `reference_members[c]` is `0xFFFFFFFF` or lies in cluster `c`'s member range with
    status `0`; at most one status-`0`-or-`1` member per (cluster, image)
-6. **Reference rows identity**: For every refinable cluster, the reference member's
-   `member_affines` leading 2×2 block is exactly the identity (its last column is the
-   reference keypoint's own absolute position, identity | x_ref)
+6. **Reference rows non-singular**: For every refinable cluster, the reference
+   member's `member_affines` leading 2×2 block is non-singular (its value is the
+   reference feature's detector affine shape; its last column the reference
+   keypoint's own absolute position, `S_ref | x_ref`)
 
 ### No required ordering within a pair
 
@@ -1156,6 +1163,13 @@ for the invariant and the `S`/`W` conversion math.
 
 ## Version History
 
+- **Version 5**: Absolute affine shapes — the `member_affines` leading 2×2 block
+  stores the member's absolute affine shape `S = W·S_ref` (reference rows
+  `S_ref | x_ref`, previously identity | x_ref); the reference→member warp is
+  recoverable as `S·S_ref⁻¹` via the reference row. Members are self-contained for
+  extent as well as position, so size consumers stop reading `.sift` files. Version
+  ≤ 4 cluster-patch files are rejected (regenerate with `sfm cluster-patches`);
+  pairwise files load unchanged.
 - **Version 4**: Self-contained geometry — mandatory per-image dimensions
   (`images/image_dims`), and `cluster_patches/member_affines` stores the member's
   refined absolute keypoint position `p = A·x_ref + t` in its last column (reference

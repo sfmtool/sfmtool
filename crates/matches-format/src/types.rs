@@ -78,6 +78,19 @@ pub struct WorkspaceMetadata {
 /// Current `.matches` format version. [`crate::write_matches`] always writes
 /// this version; [`crate::read_matches`] accepts any version up to it.
 ///
+/// Version 5 makes the file self-contained for SIZE as well as position: the
+/// leading 2×2 block of `cluster_patches/member_affines` changes meaning from
+/// the reference→member warp `W` to the member's **absolute affine shape**
+/// `S = W·S_ref`, the map from the detector's canonical unit frame onto the
+/// member's image pixels (reference rows become `S_ref | x_ref`, the reference
+/// feature's own detector shape). A consumer that wants the member's
+/// image-space extent reads `S`'s column norms with no `.sift` read; a
+/// consumer that wants the relative warp recovers `W = S·S_ref⁻¹` through the
+/// cluster's reference row. Version ≤ 4 files that carry a `cluster_patches/`
+/// section are rejected — recovering `S` needs the reference feature's `.sift`
+/// shape, which the reader does not have, so those files must be regenerated
+/// with `sfm cluster-patches`.
+///
 /// Version 4 makes the file self-contained for geometric consumers: the
 /// images section gains a mandatory per-image dimensions array
 /// (`images/image_dims.{N}.2.uint32`), and the last column of
@@ -104,7 +117,7 @@ pub struct WorkspaceMetadata {
 /// or renamed. Version 1 files hold COLMAP-convention relative poses and are
 /// upgraded on load by S-conjugation ([`s_conjugate_relative_pose`]); the
 /// pixel-space F/E/H matrices are identical in both versions.
-pub const MATCHES_FORMAT_VERSION: u32 = 4;
+pub const MATCHES_FORMAT_VERSION: u32 = 5;
 
 /// Conjugate a relative camera pose (`cam2_from_cam1`) with the camera-frame
 /// flip `S = diag(1, −1, −1)`: `R' = S·R·S`, `t' = S·t`.
@@ -450,13 +463,17 @@ pub struct ClusterPatchData {
     pub reference_members: Array1<u32>,
     /// `(M,)` [`ClusterMemberStatus`] discriminants.
     pub member_status: Array1<u8>,
-    /// `(M, 2, 3)` absolute affine warps in pixel coordinates: `A` is the
-    /// leading 2×2 and the last column stores `p = A·x_ref + t` — the
-    /// member's refined absolute keypoint position — so
-    /// `x_member = A·(x − x_ref) + p` and the translation stays recoverable
-    /// as `t = p − A·x_ref` (with `x_ref` the reference row's own last
-    /// column). Reference rows are identity | x_ref; all-zeros where not
-    /// evaluated (the status array is the discriminator).
+    /// `(M, 2, 3)` fully absolute affines in pixel coordinates: the leading
+    /// 2×2 block `S` is the member's **absolute affine shape** — the map from
+    /// the detector's canonical unit frame onto the member's image pixels,
+    /// `S = W·S_ref` for the refined reference→member warp `W` and the
+    /// reference feature's detector shape `S_ref` — and the last column
+    /// stores `p`, the member's refined absolute keypoint position. Extent
+    /// consumers read `S`'s column norms directly; the relative warp is
+    /// recoverable as `W = S·S_ref⁻¹` and then reads
+    /// `x_member = W·(x − x_ref) + p`, with `S_ref | x_ref` the cluster's
+    /// reference row. All-zeros where not evaluated (the status array is the
+    /// discriminator).
     pub member_affines: Array3<f64>,
     /// `(M,)` achieved windowed ZNCC vs the reference (NaN where not
     /// evaluated).

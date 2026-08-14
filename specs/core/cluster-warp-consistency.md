@@ -30,8 +30,12 @@ the local image-to-image map** (the classical affine-correspondence
 result — see [References](#references)). Model every image `k` as a
 **scaled-orthographic (weak-perspective) camera** `M_k` (2×3) and every
 refined cluster `c` as a planar patch with tangent frame `T_c` (3×2),
-parameterized so the reference member's warp is the identity. Each stored
-member warp (the 2×2 linear part of `member_affines`) must then factor as
+parameterized so the reference member's warp is the identity. The 2×2
+linear part of `member_affines` stores the member's ABSOLUTE affine shape
+`S = W·S_ref`, so the fit first recovers each member's reference-relative
+warp `W = S·S_ref⁻¹` through its cluster's reference row (a cluster whose
+`S_ref` is singular leaves the fit whole). Each recovered member warp must
+then factor as
 
 ```
 J_ck = M_k · T_c            (reference member: J = I by construction)
