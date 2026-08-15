@@ -651,10 +651,12 @@ impl CameraModel {
                 ..
             } => equidistant_fisheye_to_ray(x_d, y_d, *k1, *k2, *k3, *k4),
 
+            // One coefficient: the exact Newton inverse, no wide-angle blend
+            // (which would drop `k1` past 90°, where it is largest).
             CameraModel::SimpleRadialFisheye {
                 radial_distortion_k1: k,
                 ..
-            } => equidistant_fisheye_to_ray(x_d, y_d, *k, 0.0, 0.0, 0.0),
+            } => simple_radial_fisheye_to_ray(x_d, y_d, *k),
 
             CameraModel::RadialFisheye {
                 radial_distortion_k1: k1,
@@ -818,14 +820,17 @@ impl CameraIntrinsics {
     /// with respect to the camera-frame ray direction, row-major
     /// `[[∂u/∂x, ∂u/∂y, ∂u/∂z], [∂v/∂x, ∂v/∂y, ∂v/∂z]]`.
     ///
-    /// The perspective family and [`CameraModel::EquidistantFisheye`]
-    /// (`supports_pixel_jacobian`). Returns `None` when the ray is outside the
-    /// model's valid domain — exactly where [`Self::ray_to_pixel`] returns
-    /// `None`, with one documented exception below — or when the model has no
-    /// analytic Jacobian (polynomial fisheye / equirectangular), so a caller
-    /// can fall back to a finite difference for those.
+    /// The perspective family, [`CameraModel::EquidistantFisheye`] and
+    /// [`CameraModel::SimpleRadialFisheye`] (`supports_pixel_jacobian`) — the
+    /// last two share the closed-form `θ_d = θ·(1 + k1·θ²)` derivative, with
+    /// `k1 = 0` for the distortion-free map. Returns `None` when the ray is
+    /// outside the model's valid domain — exactly where
+    /// [`Self::ray_to_pixel`] returns `None`, with one documented exception
+    /// below — or when the model has no analytic Jacobian (multi-coefficient
+    /// fisheye / equirectangular), so a caller can fall back to a finite
+    /// difference for those.
     ///
-    /// The exception is the equidistant model at the **antipode**
+    /// The exception is the equidistant family at the **antipode**
     /// (`θ = π`, `r_xy = 0`): [`Self::ray_to_pixel`] maps it to the principal
     /// point, but the derivative there is unbounded, so this returns `None`.
     ///
@@ -838,12 +843,22 @@ impl CameraIntrinsics {
         // Canonical → optical frame: (rx, ry, rz) = S·ray, S = diag(1, −1, −1).
         let [rx, ry, rz] = [ray[0], -ray[1], -ray[2]];
 
-        // Equidistant fisheye: closed-form derivative of the `θ = r/f` map,
-        // valid at every θ. Dispatched BEFORE the perspective in-front guard —
-        // rays past 90° (optical `rz ≤ 0`) are the periphery this model exists
-        // to carry, not a domain error.
-        if matches!(self.model, CameraModel::EquidistantFisheye { .. }) {
-            let ((x_d, y_d), jd) = equidistant_ray_jacobian(rx, ry, rz)?;
+        // Equidistant fisheye family with a closed-form `θ_d(θ)`: the
+        // distortion-free `θ = r/f` map and the single-coefficient
+        // `θ_d = θ·(1 + k1·θ²)`, both differentiable in closed form at every
+        // θ. Dispatched BEFORE the perspective in-front guard — rays past 90°
+        // (optical `rz ≤ 0`) are the periphery these models exist to carry,
+        // not a domain error.
+        let radial_k1 = match self.model {
+            CameraModel::EquidistantFisheye { .. } => Some(0.0),
+            CameraModel::SimpleRadialFisheye {
+                radial_distortion_k1: k1,
+                ..
+            } => Some(k1),
+            _ => None,
+        };
+        if let Some(k1) = radial_k1 {
+            let ((x_d, y_d), jd) = radial_fisheye_ray_jacobian(rx, ry, rz, k1)?;
             // J = diag(fx, fy) · Jd · S, and S negates the ry, rz columns.
             return Some((
                 (fx * x_d + cx, fy * y_d + cy),

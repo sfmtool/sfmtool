@@ -705,8 +705,8 @@ fn has_distortion_true_for_distortion_fisheye_models() {
 }
 
 // -----------------------------------------------------------------------
-// EquidistantFisheye classification: a fisheye with no distortion, and the
-// one ray-path model carrying an analytic pixel Jacobian.
+// EquidistantFisheye classification: a fisheye with no distortion, and one
+// of the two ray-path models carrying an analytic pixel Jacobian.
 // -----------------------------------------------------------------------
 
 #[test]
@@ -718,9 +718,12 @@ fn equidistant_fisheye_classification() {
     assert!(m.needs_ray_path());
     // The `θ = r/f` map carries no distortion coefficients at all.
     assert!(!m.has_distortion());
-    // …yet differentiates in closed form, unlike every other ray-path model.
+    // …yet differentiates in closed form, as does the one-coefficient
+    // `θ_d = θ·(1 + k1·θ²)` that extends it. The multi-coefficient fisheye
+    // models and equirectangular do not.
     assert!(m.supports_pixel_jacobian());
-    assert!(!simple_radial_fisheye().model.supports_pixel_jacobian());
+    assert!(simple_radial_fisheye().model.supports_pixel_jacobian());
+    assert!(!radial_fisheye().model.supports_pixel_jacobian());
     assert!(!equirectangular().model.supports_pixel_jacobian());
     assert!(simple_pinhole().model.supports_pixel_jacobian());
 }

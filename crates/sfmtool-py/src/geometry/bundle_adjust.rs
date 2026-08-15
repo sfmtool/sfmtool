@@ -49,10 +49,15 @@ use crate::geometry::PyCameraIntrinsics;
 ///     protected_loss_scale: Multiplier on each stage's loss scale for
 ///         protected observations (default 3.0; must be positive and
 ///         finite).
-///     opt_f: Release the shared focal (SIMPLE_PINHOLE or
-///         EQUIDISTANT_FISHEYE — the two single-focal, distortion-free
-///         models, where the kernel's analytic focal column is exact; any
-///         other model raises).
+///     opt_f: Release the shared focal (SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE
+///         or SIMPLE_RADIAL_FISHEYE — the models whose projection multiplies
+///         the focal onto a distorted coordinate that does not itself read
+///         it, where the kernel's analytic focal column is exact; any other
+///         model raises).
+///     opt_k1: Release the shared radial coefficient (SIMPLE_RADIAL_FISHEYE
+///         only — the one model carrying it; any other model raises). The
+///         staged use is fixed -> opt_f -> opt_f + opt_k1, so the curvature
+///         rung opens on a focal that has already settled.
 ///     schedule: [(trim_px, loss_scale), ...] staged rounds
 ///         (default [(50, 5), (12, 2), (4, 1)]).
 ///     max_iters: LM iteration budget per round (default 60).
@@ -61,8 +66,10 @@ use crate::geometry::PyCameraIntrinsics;
 ///         state passes through, all residual norms +inf (default 12).
 ///
 /// Returns:
-///     A dict ``{"focal", "quaternions_wxyz" (n_img, 4), "translations"
+///     A dict ``{"focal", "k1", "quaternions_wxyz" (n_img, 4), "translations"
 ///     (n_img, 3), "points" (n_pt, 3), "residual_norms" (n_obs,)}``.
+///     ``k1`` is the shared radial coefficient after the solve — the input
+///     one unless ``opt_k1``, and 0.0 for models that have none.
 ///     ``residual_norms`` are unweighted reprojection norms at the final
 ///     state, ``+inf`` where the point is non-finite / behind the camera /
 ///     outside the model domain.
@@ -79,6 +86,7 @@ use crate::geometry::PyCameraIntrinsics;
     protected=None,
     protected_loss_scale=3.0,
     opt_f=false,
+    opt_k1=false,
     schedule=vec![(50.0, 5.0), (12.0, 2.0), (4.0, 1.0)],
     max_iters=60,
     min_track=2,
@@ -98,6 +106,7 @@ pub fn bundle_adjust<'py>(
     protected: Option<PyReadonlyArray1<'py, bool>>,
     protected_loss_scale: f64,
     opt_f: bool,
+    opt_k1: bool,
     schedule: Vec<(f64, f64)>,
     max_iters: usize,
     min_track: usize,
@@ -135,15 +144,26 @@ pub fn bundle_adjust<'py>(
     }
     // The focal column `∂(u, v)/∂f = (u − cx)/f` is exact only where the focal
     // multiplies an `f`-independent distorted coordinate: the two single-focal
-    // distortion-free models. Everything else is rejected loudly rather than
-    // degraded to a fixed-focal solve behind the caller's back.
+    // distortion-free models and the one-coefficient fisheye, whose `k1` rides
+    // on the ray's own `θ`. Everything else is rejected loudly rather than
+    // degraded to a fixed-parameter solve behind the caller's back.
     let releasable = matches!(
         camera.inner.model,
-        CameraModel::SimplePinhole { .. } | CameraModel::EquidistantFisheye { .. }
+        CameraModel::SimplePinhole { .. }
+            | CameraModel::EquidistantFisheye { .. }
+            | CameraModel::SimpleRadialFisheye { .. }
     );
     if opt_f && !releasable {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "opt_f requires a SIMPLE_PINHOLE or EQUIDISTANT_FISHEYE camera",
+            "opt_f requires a SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE or SIMPLE_RADIAL_FISHEYE camera",
+        ));
+    }
+    // The curvature rung exists on exactly one model — no other camera has a
+    // single radial coefficient acting on `θ` for `f·θ³·û` to be its exact
+    // derivative.
+    if opt_k1 && !matches!(camera.inner.model, CameraModel::SimpleRadialFisheye { .. }) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "opt_k1 requires a SIMPLE_RADIAL_FISHEYE camera",
         ));
     }
 
@@ -228,6 +248,7 @@ pub fn bundle_adjust<'py>(
             prot_mask.as_deref(),
             protected_loss_scale,
             opt_f,
+            opt_k1,
             &stages,
             max_iters,
             min_track,
@@ -248,6 +269,7 @@ pub fn bundle_adjust<'py>(
 
     let d = PyDict::new(py);
     d.set_item("focal", out.focal)?;
+    d.set_item("k1", out.k1)?;
     d.set_item(
         "quaternions_wxyz",
         PyArray2::from_vec2(py, &q_rows)

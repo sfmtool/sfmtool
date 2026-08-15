@@ -46,19 +46,37 @@ pub(crate) fn rotation_angle(r: &Matrix3<f64>) -> f64 {
     (((r.trace() - 1.0) / 2.0).clamp(-1.0, 1.0)).acos()
 }
 
-/// The camera at focal `f` — identity for every model but the two
-/// single-focal, distortion-free ones: `SIMPLE_PINHOLE` and
-/// `EQUIDISTANT_FISHEYE`.
+/// The camera at focal `f` — identity for every model but the three the focal
+/// release admits: `SIMPLE_PINHOLE`, `EQUIDISTANT_FISHEYE` and
+/// `SIMPLE_RADIAL_FISHEYE`, whose projections all multiply `f` onto a
+/// distorted coordinate that does not itself read `f`.
 ///
-/// Focal optimization is gated on exactly those two models, so no other camera
-/// ever sees a moved focal; this matches the bundle adjustment's focal
+/// Focal optimization is gated on exactly those three models, so no other
+/// camera ever sees a moved focal; this matches the bundle adjustment's focal
 /// handling.
 pub(crate) fn cam_at(cam: &CameraIntrinsics, f: f64) -> CameraIntrinsics {
     let mut out = cam.clone();
     match &mut out.model {
         CameraModel::SimplePinhole { focal_length, .. }
-        | CameraModel::EquidistantFisheye { focal_length, .. } => *focal_length = f,
+        | CameraModel::EquidistantFisheye { focal_length, .. }
+        | CameraModel::SimpleRadialFisheye { focal_length, .. } => *focal_length = f,
         _ => {}
+    }
+    out
+}
+
+/// The camera at focal `f` and radial coefficient `k1` — [`cam_at`] plus the
+/// one distortion parameter the bundle adjustment can release, which exists
+/// only on `SIMPLE_RADIAL_FISHEYE`. `k1` is ignored for every other model
+/// (`opt_k1` is gated on that one).
+pub(crate) fn cam_with(cam: &CameraIntrinsics, f: f64, k1: f64) -> CameraIntrinsics {
+    let mut out = cam_at(cam, f);
+    if let CameraModel::SimpleRadialFisheye {
+        radial_distortion_k1,
+        ..
+    } = &mut out.model
+    {
+        *radial_distortion_k1 = k1;
     }
     out
 }

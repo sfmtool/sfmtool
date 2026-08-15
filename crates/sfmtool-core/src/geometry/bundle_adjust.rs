@@ -4,22 +4,22 @@
 //! Staged bundle adjustment for images sharing one camera model.
 //!
 //! Jointly refines world-to-camera poses, world points, and optionally the
-//! shared focal length by minimizing soft-L1 pixel reprojection error over a
-//! trim schedule with inter-round retriangulation — the multi-view
-//! generalization of [`crate::geometry::pose_refine`], and the native
-//! replacement for the cluster-bootstrap experiments' scipy BA
+//! shared focal length and radial coefficient by minimizing soft-L1 pixel
+//! reprojection error over a trim schedule with inter-round retriangulation —
+//! the multi-view generalization of [`crate::geometry::pose_refine`], and the
+//! native replacement for the cluster-bootstrap experiments' scipy BA
 //! (`specs/core/bundle-adjustment.md`).
 //!
 //! Canonical camera frame throughout (the camera looks along `−Z`; a point in
 //! front has `z < 0`). Each Levenberg–Marquardt step is taken over a local
-//! `SO(3) × ℝ³` perturbation per image, `ℝ³` per point, and an optional focal
-//! scalar, with analytic Jacobians; points are eliminated by a Schur
-//! complement and the dense reduced camera system is solved by LU.
+//! `SO(3) × ℝ³` perturbation per image, `ℝ³` per point, and the two optional
+//! shared camera scalars, with analytic Jacobians; points are eliminated by a
+//! Schur complement and the dense reduced camera system is solved by LU.
 
 use nalgebra::{DMatrix, DVector, Matrix3, Point3, SMatrix, UnitQuaternion, Vector2, Vector3};
 
 use crate::camera::{CameraModel, PixelJacobian};
-use crate::geometry::numeric::cam_at;
+use crate::geometry::numeric::cam_with;
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::CameraIntrinsics;
 
@@ -64,6 +64,9 @@ pub struct BundleAdjustment {
     /// The shared focal length after the solve (the input focal unless
     /// `opt_f`).
     pub focal: f64,
+    /// The shared radial coefficient after the solve — the input `k1` unless
+    /// `opt_k1`, and `0.0` for models that have no such parameter.
+    pub k1: f64,
     /// Unweighted reprojection residual norm of every supplied observation at
     /// the final state; `+∞` where the point is non-finite, behind the
     /// camera, or outside the model domain. All-`∞` signals the degenerate
@@ -123,15 +126,99 @@ fn project_with_jac(
 }
 
 /// Linearization of one observation: weighted residual and the weighted
-/// camera-side (`[f | δθ | δt]`, 2×7) and point-side (2×3) Jacobian blocks.
+/// camera-side (`[f | k1 | δθ | δt]`, 2×8) and point-side (2×3) Jacobian
+/// blocks.
 struct ObsBlocks {
     /// Compact image index.
     ci: usize,
     /// Compact point index.
     cp: usize,
     res: Vector2<f64>,
-    cam_j: SMatrix<f64, 2, 7>,
+    cam_j: SMatrix<f64, 2, CAM_COLS>,
     pt_j: SMatrix<f64, 2, 3>,
+}
+
+/// Width of one observation's camera-side Jacobian block: the two shared
+/// camera scalars (`f`, `k1`) plus the image's six pose DOFs. Both scalar
+/// slots are always present — pinned in the reduced system when unreleased —
+/// so the indexing is uniform.
+const CAM_COLS: usize = 2 + 6;
+
+/// The reduced camera system's slot of the shared focal.
+const F_SLOT: usize = 0;
+/// The reduced camera system's slot of the shared radial coefficient.
+const K1_SLOT: usize = 1;
+/// First pose slot of compact image `ci` in the reduced camera system.
+#[inline]
+fn img_slot(ci: usize) -> usize {
+    2 + 6 * ci
+}
+
+/// The reduced-camera-system indices of one observation's camera block:
+/// `[f, k1, δθ×3, δt×3]` for its image.
+#[inline]
+fn cam_idx(ci: usize) -> [usize; CAM_COLS] {
+    let o = img_slot(ci);
+    [F_SLOT, K1_SLOT, o, o + 1, o + 2, o + 3, o + 4, o + 5]
+}
+
+/// `∂(u, v)/∂k1` at a camera-frame point, for the one model `opt_k1` admits.
+///
+/// `SIMPLE_RADIAL_FISHEYE` projects a ray through `x_d = θ_d·ûx` with
+/// `θ_d = θ·(1 + k1·θ²)`, so `∂x_d/∂k1 = θ³·ûx` and the pixel column is
+/// `f·θ³·(ûx, ûy)` — exact at every incidence angle, the periphery past 90°
+/// included, since `θ` comes from the ray rather than from a pixel radius.
+/// `(ûx, ûy)` is the unit image direction in the OPTICAL frame
+/// (`S = diag(1, −1, −1)` off canonical), which is where the `v` axis picks
+/// up its sign.
+///
+/// On the optical axis the column is exactly zero: `θ³·û → 0` as `θ → 0`
+/// whatever the (undefined) direction is.
+///
+/// A direction (point at infinity) takes this column unchanged — it projects
+/// through the very same map, at `R·d` instead of `R·X + t`.
+#[inline]
+fn k1_column(f: f64, p_cam: Vector3<f64>) -> (f64, f64) {
+    // Canonical → optical frame: (rx, ry, rz) = S·p_cam.
+    let (rx, ry, rz) = (p_cam.x, -p_cam.y, -p_cam.z);
+    let rho = rx.hypot(ry);
+    if rho == 0.0 {
+        return (0.0, 0.0);
+    }
+    let theta = rho.atan2(rz);
+    // f·θ³·û with û = (rx, ry)/ρ.
+    let s = f * theta * theta * theta / rho;
+    (s * rx, s * ry)
+}
+
+/// Whether `θ_d = θ·(1 + k1·θ²)` is strictly increasing over the field the
+/// solve actually images — the plausibility guard on a `k1` step, the
+/// counterpart of the focal's `f > 0`.
+///
+/// `dθ_d/dθ = 1 + 3·k1·θ²` is positive everywhere for `k1 ≥ 0`. For `k1 < 0`
+/// it vanishes at `θ_fold = 1/√(−3·k1)`, past which the map folds back: two
+/// incidence angles share a pixel radius, `pixel_to_ray` picks the wrong
+/// branch, and the projection stops being invertible. Since
+/// `k1·θ_fold² = −1/3`, the outermost pixel radius still on the rising branch
+/// is `f·θ_d(θ_fold) = (2/3)·f·θ_fold`, so the step is admissible exactly
+/// when the field's outer edge sits inside that — or when the fold is past
+/// `θ = π` and therefore past every physical ray.
+///
+/// `field_r` is the largest observed pixel radius from the principal point,
+/// measured over the kept observations: the model's imaged field as the data
+/// reports it, not a fixed constant.
+fn k1_step_admissible(f: f64, k1: f64, field_r: f64) -> bool {
+    if !k1.is_finite() {
+        return false;
+    }
+    if k1 >= 0.0 {
+        return true;
+    }
+    let theta_fold = 1.0 / (-3.0 * k1).sqrt();
+    if theta_fold >= std::f64::consts::PI {
+        return true;
+    }
+    (2.0 / 3.0) * f * theta_fold > field_r
 }
 
 /// Staged bundle adjustment over images sharing one camera model.
@@ -162,10 +249,14 @@ struct ObsBlocks {
 /// `specs/core/bundle-adjustment.md`. An absent or all-`false` mask
 /// reproduces the unprotected behavior bit for bit.
 ///
-/// `opt_f` releases the shared focal (SIMPLE_PINHOLE and EQUIDISTANT_FISHEYE —
-/// the two models this kernel's analytic focal column `(u − cx)/f` is exact
-/// for; the binding rejects other models loudly, the core silently degrades
-/// them to a fixed-focal solve).
+/// `opt_f` releases the shared focal (SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE and
+/// SIMPLE_RADIAL_FISHEYE — the models this kernel's analytic focal column
+/// `(u − cx)/f` is exact for) and `opt_k1` the shared radial coefficient
+/// (SIMPLE_RADIAL_FISHEYE only, the one model carrying it). The binding
+/// rejects other models loudly; the core silently degrades them to a
+/// fixed-parameter solve, never a half-modeled DOF. Callers stage the
+/// releases — fixed → `opt_f` → `opt_f + opt_k1` — so the curvature rung
+/// opens on a focal that has already settled.
 #[allow(clippy::too_many_arguments)]
 pub fn bundle_adjust(
     cam: &CameraIntrinsics,
@@ -179,6 +270,7 @@ pub fn bundle_adjust(
     protected: Option<&[bool]>,
     protected_loss_scale: f64,
     opt_f: bool,
+    opt_k1: bool,
     schedule: &[BaSchedule],
     max_iters: usize,
     min_track: usize,
@@ -224,6 +316,7 @@ pub fn bundle_adjust(
         protected,
         protected_loss_scale,
         opt_f,
+        opt_k1,
         schedule,
         max_iters,
         min_track,
@@ -444,6 +537,7 @@ fn robust_cost(
 fn solve_lm(
     cam0: &CameraIntrinsics,
     f0: f64,
+    k1_0: f64,
     quats: &mut [UnitQuaternion<f64>],
     trans: &mut [Vector3<f64>],
     points: &mut [[f64; 3]],
@@ -453,11 +547,12 @@ fn solve_lm(
     obs_pt: &[u32],
     kept: &[usize],
     opt_f: bool,
+    opt_k1: bool,
     loss_scale: f64,
     max_iters: usize,
     protected: Option<&[bool]>,
     protected_loss_scale: f64,
-) -> f64 {
+) -> (f64, f64) {
     // Compact the images and points the kept observations touch.
     let mut img_ids: Vec<usize> = kept.iter().map(|&k| obs_img[k] as usize).collect();
     img_ids.sort_unstable();
@@ -500,6 +595,7 @@ fn solve_lm(
     // (input normalization / re-estimation) and every accepted step
     // re-normalizes them.
     let mut f = f0;
+    let mut k1 = k1_0;
     let mut q: Vec<UnitQuaternion<f64>> = img_ids.iter().map(|&i| quats[i]).collect();
     let mut t: Vec<Vector3<f64>> = img_ids.iter().map(|&i| trans[i]).collect();
     let mut x: Vec<Vector3<f64>> = pt_ids
@@ -507,9 +603,18 @@ fn solve_lm(
         .map(|&p| Vector3::new(points[p][0], points[p][1], points[p][2]))
         .collect();
 
-    // Reduced camera system: [f | 6 per image], the focal slot always present
-    // (pinned when !opt_f) to keep the indexing uniform.
-    let d = 1 + 6 * n_im;
+    // Reduced camera system: [f | k1 | 6 per image], both shared-camera slots
+    // always present (pinned when unreleased) to keep the indexing uniform.
+    let d = 2 + 6 * n_im;
+    // The imaged field, as the kept observations report it: the largest pixel
+    // radius from the principal point. The `k1` step guard asks whether the
+    // distorted map stays monotone out to here.
+    let field_r = {
+        let (cx, cy) = cam0.principal_point();
+        kept.iter()
+            .map(|&k| (uv[k][0] - cx).hypot(uv[k][1] - cy))
+            .fold(0.0f64, f64::max)
+    };
     // Per-kept-observation squared loss scale: the round's scale everywhere,
     // widened by `protected_loss_scale` for protected observations.
     let s2 = loss_scale * loss_scale;
@@ -525,7 +630,7 @@ fn solve_lm(
         .collect();
     let mut lambda = 1e-3;
     let mut tiny_steps = 0usize;
-    let mut cam = cam_at(cam0, f);
+    let mut cam = cam_with(cam0, f, k1);
     let mut prev_cost = robust_cost(&cam, &q, &t, &x, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s);
 
     let analytic = cam.model.supports_pixel_jacobian();
@@ -556,7 +661,7 @@ fn solve_lm(
                 let rot_pt = q[ci] * x[cp];
                 let p_cam = if dir { rot_pt } else { rot_pt + t[ci] };
                 let mut res = Vector2::new(INVALID_RESIDUAL, 0.0);
-                let mut cam_j = SMatrix::<f64, 2, 7>::zeros();
+                let mut cam_j = SMatrix::<f64, 2, CAM_COLS>::zeros();
                 let mut pt_j = SMatrix::<f64, 2, 3>::zeros();
                 // A non-finite point (protected observations only — the trim
                 // never excludes them) keeps the penalized residual and zero
@@ -577,8 +682,15 @@ fn solve_lm(
                         // admits: the focal is a pure multiplier of an
                         // `f`-independent distorted coordinate, so the
                         // derivative is that coordinate.
-                        cam_j[(0, 0)] = (u - cx) / f;
-                        cam_j[(1, 0)] = (v - cy) / f;
+                        cam_j[(0, F_SLOT)] = (u - cx) / f;
+                        cam_j[(1, F_SLOT)] = (v - cy) / f;
+                    }
+                    if opt_k1 {
+                        // ∂(u, v)/∂k1 = f·θ³·û — direction rows included,
+                        // they project through the same map.
+                        let (du, dv) = k1_column(f, p_cam);
+                        cam_j[(0, K1_SLOT)] = du;
+                        cam_j[(1, K1_SLOT)] = dv;
                     }
                     // Rotation block: ∂p_cam/∂δθ = −[R·X]ₓ (finite) or
                     // −[R·d]ₓ (direction) — same composition either way.
@@ -587,7 +699,7 @@ fn solve_lm(
                         -rot_pt.z, 0.0, rot_pt.x, //
                         rot_pt.y, -rot_pt.x, 0.0,
                     );
-                    cam_j.fixed_view_mut::<2, 3>(0, 1).copy_from(&(jp * nskew));
+                    cam_j.fixed_view_mut::<2, 3>(0, 2).copy_from(&(jp * nskew));
                     let r_mat: Matrix3<f64> = q[ci].to_rotation_matrix().into_inner();
                     if dir {
                         // Translation block: zero (a direction observes no
@@ -601,7 +713,7 @@ fn solve_lm(
                         pt_j.set_column(1, &col1);
                     } else {
                         // Translation block: identity.
-                        cam_j.fixed_view_mut::<2, 3>(0, 4).copy_from(&jp);
+                        cam_j.fixed_view_mut::<2, 3>(0, 5).copy_from(&jp);
                         // Point block: ∂p_cam/∂X = R.
                         pt_j.copy_from(&(jp * r_mat));
                     }
@@ -610,7 +722,7 @@ fn solve_lm(
                     let z = res[row] * res[row] / s2;
                     let (js, rs) = robust_scales(z);
                     res[row] *= rs;
-                    for col in 0..7 {
+                    for col in 0..CAM_COLS {
                         cam_j[(row, col)] *= js;
                     }
                     for col in 0..3 {
@@ -632,17 +744,9 @@ fn solve_lm(
         let mut g_c = DVector::<f64>::zeros(d);
         let mut v_pp: Vec<Matrix3<f64>> = vec![Matrix3::zeros(); n_pt];
         let mut g_p: Vec<Vector3<f64>> = vec![Vector3::zeros(); n_pt];
-        let mut w_cp: Vec<SMatrix<f64, 7, 3>> = Vec::with_capacity(blocks.len());
+        let mut w_cp: Vec<SMatrix<f64, CAM_COLS, 3>> = Vec::with_capacity(blocks.len());
         for b in &blocks {
-            let idx = [
-                0,
-                1 + 6 * b.ci,
-                2 + 6 * b.ci,
-                3 + 6 * b.ci,
-                4 + 6 * b.ci,
-                5 + 6 * b.ci,
-                6 + 6 * b.ci,
-            ];
+            let idx = cam_idx(b.ci);
             let h_local = b.cam_j.transpose() * b.cam_j;
             let g_local = b.cam_j.transpose() * b.res;
             for (a, &ia) in idx.iter().enumerate() {
@@ -694,32 +798,14 @@ fn solve_lm(
                 let y = v_inv[p] * g_p[p];
                 for &a in obs {
                     let wa = &w_cp[a];
-                    let ba = blocks[a].ci;
-                    let ia = [
-                        0,
-                        1 + 6 * ba,
-                        2 + 6 * ba,
-                        3 + 6 * ba,
-                        4 + 6 * ba,
-                        5 + 6 * ba,
-                        6 + 6 * ba,
-                    ];
+                    let ia = cam_idx(blocks[a].ci);
                     let contrib = wa * y;
                     for (r, &ir) in ia.iter().enumerate() {
                         g_red[ir] -= contrib[r];
                     }
                     for &b in obs {
                         let m = wa * v_inv[p] * w_cp[b].transpose();
-                        let bb = blocks[b].ci;
-                        let ib = [
-                            0,
-                            1 + 6 * bb,
-                            2 + 6 * bb,
-                            3 + 6 * bb,
-                            4 + 6 * bb,
-                            5 + 6 * bb,
-                            6 + 6 * bb,
-                        ];
+                        let ib = cam_idx(blocks[b].ci);
                         for (r, &ir) in ia.iter().enumerate() {
                             for (c, &ic) in ib.iter().enumerate() {
                                 s[(ir, ic)] -= m[(r, c)];
@@ -728,14 +814,18 @@ fn solve_lm(
                     }
                 }
             }
-            if !opt_f {
-                // Pin the focal slot.
-                for dd in 0..d {
-                    s[(0, dd)] = 0.0;
-                    s[(dd, 0)] = 0.0;
+            // Pin the unreleased shared-camera slots (their columns are
+            // already exactly zero; this keeps the reduced system regular).
+            for slot in [F_SLOT, K1_SLOT] {
+                if (slot == F_SLOT && opt_f) || (slot == K1_SLOT && opt_k1) {
+                    continue;
                 }
-                s[(0, 0)] = 1.0;
-                g_red[0] = 0.0;
+                for dd in 0..d {
+                    s[(slot, dd)] = 0.0;
+                    s[(dd, slot)] = 0.0;
+                }
+                s[(slot, slot)] = 1.0;
+                g_red[slot] = 0.0;
             }
             if any_frozen {
                 // Pin the translation slots of all-direction images (frozen
@@ -745,7 +835,7 @@ fn solve_lm(
                         continue;
                     }
                     for r in 0..3 {
-                        let slot = 4 + 6 * c + r;
+                        let slot = img_slot(c) + 3 + r;
                         for dd in 0..d {
                             s[(slot, dd)] = 0.0;
                             s[(dd, slot)] = 0.0;
@@ -762,15 +852,23 @@ fn solve_lm(
             };
 
             // Candidate state.
-            let f_cand = if opt_f { f + delta[0] } else { f };
+            let f_cand = if opt_f { f + delta[F_SLOT] } else { f };
             if opt_f && !(f_cand.is_finite() && f_cand > 1e-6) {
+                lambda *= 4.0;
+                continue;
+            }
+            let k1_cand = if opt_k1 { k1 + delta[K1_SLOT] } else { k1 };
+            // The curvature rung's plausibility guard: a step that folds the
+            // distorted map inside the imaged field is rejected the way a
+            // non-positive focal is.
+            if opt_k1 && !k1_step_admissible(f_cand, k1_cand, field_r) {
                 lambda *= 4.0;
                 continue;
             }
             let mut q_cand = q.clone();
             let mut t_cand = t.clone();
             for c in 0..n_im {
-                let o = 1 + 6 * c;
+                let o = img_slot(c);
                 let dtheta = Vector3::new(delta[o], delta[o + 1], delta[o + 2]);
                 q_cand[c] = UnitQuaternion::from_scaled_axis(dtheta) * q[c];
                 if img_has_finite[c] {
@@ -785,11 +883,10 @@ fn solve_lm(
                 // observations' camera blocks.
                 let mut wt_dc = Vector3::zeros();
                 for &a in obs {
-                    let ba = blocks[a].ci;
-                    let mut dc = SMatrix::<f64, 7, 1>::zeros();
-                    dc[0] = delta[0];
-                    for r in 0..6 {
-                        dc[1 + r] = delta[1 + 6 * ba + r];
+                    let ia = cam_idx(blocks[a].ci);
+                    let mut dc = SMatrix::<f64, CAM_COLS, 1>::zeros();
+                    for (r, &ir) in ia.iter().enumerate() {
+                        dc[r] = delta[ir];
                     }
                     wt_dc += w_cp[a].transpose() * dc;
                 }
@@ -803,13 +900,14 @@ fn solve_lm(
                 }
             }
 
-            let cam_cand = cam_at(cam0, f_cand);
+            let cam_cand = cam_with(cam0, f_cand, k1_cand);
             let new_cost = robust_cost(
                 &cam_cand, &q_cand, &t_cand, &x_cand, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s,
             );
             if new_cost < prev_cost {
                 let rel = (prev_cost - new_cost) / prev_cost.max(1e-300);
                 f = f_cand;
+                k1 = k1_cand;
                 q = q_cand;
                 t = t_cand;
                 x = x_cand;
@@ -849,7 +947,7 @@ fn solve_lm(
     for (c, &p) in pt_ids.iter().enumerate() {
         points[p] = [x[c].x, x[c].y, x[c].z];
     }
-    f
+    (f, k1)
 }
 
 /// The staged loop: direction-aware residuals, trims, re-estimation, and the
@@ -868,6 +966,7 @@ fn bundle_adjust_staged(
     protected: Option<&[bool]>,
     protected_loss_scale: f64,
     opt_f: bool,
+    opt_k1: bool,
     schedule: &[BaSchedule],
     max_iters: usize,
     min_track: usize,
@@ -890,23 +989,38 @@ fn bundle_adjust_staged(
     // focal column, not of the camera: the analytic `∂(u, v)/∂f = (u − cx)/f`
     // is exact exactly when the focal is a pure multiplier of a distorted
     // coordinate that does not itself read `f` — `u = f·x_d + cx` with
-    // `x_d = rx/(−rz)` (SIMPLE_PINHOLE) or `x_d = θ·ûx`, `θ = atan2(ρ, rz)`
-    // (EQUIDISTANT_FISHEYE). Every other model fails that test, via a second
-    // focal `fy` this kernel has no slot for or via coefficients applied to a
+    // `x_d = rx/(−rz)` (SIMPLE_PINHOLE), `x_d = θ·ûx`, `θ = atan2(ρ, rz)`
+    // (EQUIDISTANT_FISHEYE), or `x_d = θ·(1 + k1·θ²)·ûx` with the same
+    // ray-derived `θ` (SIMPLE_RADIAL_FISHEYE — the distortion rides on `θ`,
+    // not on `r/f`). Every other model fails that test, via a second focal
+    // `fy` this kernel has no slot for or via coefficients applied to a
     // normalized coordinate whose relation to the pixel is `f`-dependent
-    // (polynomial fisheye: `x_d = θ·g(θ²)·û` with `θ` recovered from `r/f`),
-    // and degrades to a fixed-focal solve (the binding rejects it loudly
-    // first). `numeric::cam_at` mirrors this gate.
+    // (the multi-coefficient fisheye family: `x_d = θ·g(θ²)·û` with `θ`
+    // recovered from `r/f`), and degrades to a fixed-focal solve (the binding
+    // rejects it loudly first). `numeric::cam_at` mirrors this gate.
     let opt_f = opt_f
         && matches!(
             cam.model,
-            CameraModel::SimplePinhole { .. } | CameraModel::EquidistantFisheye { .. }
+            CameraModel::SimplePinhole { .. }
+                | CameraModel::EquidistantFisheye { .. }
+                | CameraModel::SimpleRadialFisheye { .. }
         );
+    // The curvature rung exists on exactly one model: `SIMPLE_RADIAL_FISHEYE`
+    // is the only one whose single radial coefficient acts on the ray's own
+    // `θ`, which is what makes `∂(u, v)/∂k1 = f·θ³·û` exact. Same degrade.
+    let opt_k1 = opt_k1 && matches!(cam.model, CameraModel::SimpleRadialFisheye { .. });
 
     let mut f = cam.focal_lengths().0;
+    let mut k1 = match cam.model {
+        CameraModel::SimpleRadialFisheye {
+            radial_distortion_k1,
+            ..
+        } => radial_distortion_k1,
+        _ => 0.0,
+    };
 
     for (rnd, stage) in schedule.iter().enumerate() {
-        let cam_now = cam_at(cam, f);
+        let cam_now = cam_with(cam, f, k1);
         if rnd > 0 {
             reestimate_points(&cam_now, quats, trans, points, is_dir, uv, obs_img, obs_pt);
         }
@@ -950,12 +1064,14 @@ fn bundle_adjust_staged(
             // Degenerate (e.g. a wildly wrong focal): state passes through.
             return BundleAdjustment {
                 focal: f,
+                k1,
                 residual_norms: vec![f64::INFINITY; n_obs],
             };
         }
-        f = solve_lm(
+        (f, k1) = solve_lm(
             cam,
             f,
+            k1,
             quats,
             trans,
             points,
@@ -965,6 +1081,7 @@ fn bundle_adjust_staged(
             obs_pt,
             &kept,
             opt_f,
+            opt_k1,
             stage.loss_scale,
             max_iters,
             protected,
@@ -972,7 +1089,7 @@ fn bundle_adjust_staged(
         );
     }
 
-    let cam_final = cam_at(cam, f);
+    let cam_final = cam_with(cam, f, k1);
     let (norms, _depths) = residual_norms_depths(
         &cam_final, quats, trans, points, is_dir, uv, obs_img, obs_pt,
     );
@@ -988,6 +1105,7 @@ fn bundle_adjust_staged(
         .collect();
     BundleAdjustment {
         focal: f,
+        k1,
         residual_norms,
     }
 }

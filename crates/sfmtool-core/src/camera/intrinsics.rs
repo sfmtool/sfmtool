@@ -332,14 +332,17 @@ impl CameraModel {
 
     /// Whether [`CameraIntrinsics::ray_to_pixel_with_jacobian`] can return an
     /// analytic pixel Jacobian for this model. True for the perspective family
-    /// (pinhole and polynomial-distortion models) and for
-    /// [`CameraModel::EquidistantFisheye`], whose closed-form `θ = r/f` map
-    /// differentiates in closed form at every `θ`; false for the polynomial
-    /// fisheye family and equirectangular, whose forward map takes the ray path
-    /// with no analytic derivative here.
+    /// (pinhole and polynomial-distortion models) and for the one-coefficient
+    /// equidistant pair [`CameraModel::EquidistantFisheye`] and
+    /// [`CameraModel::SimpleRadialFisheye`], whose `θ_d = θ·(1 + k1·θ²)` map
+    /// (`k1 = 0` for the first) differentiates in closed form at every `θ`;
+    /// false for the multi-coefficient fisheye models and equirectangular,
+    /// whose forward map takes the ray path with no analytic derivative here.
     pub fn supports_pixel_jacobian(&self) -> bool {
         match self {
-            CameraModel::EquidistantFisheye { .. } => true,
+            CameraModel::EquidistantFisheye { .. } | CameraModel::SimpleRadialFisheye { .. } => {
+                true
+            }
             _ => !self.needs_ray_path(),
         }
     }

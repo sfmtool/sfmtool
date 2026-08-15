@@ -201,15 +201,16 @@ def test_degenerate_exit_passes_state_through():
             },
         ),
         (
-            # The polynomial fisheye family: `f` enters through a `theta`
-            # recovered from `r/f`, so the kernel's `(u - cx)/f` column is
-            # not its focal derivative even at k1 = 0.
-            "SIMPLE_RADIAL_FISHEYE",
+            # The multi-coefficient fisheye family: `f` enters through a
+            # `theta` recovered from `r/f`, so the kernel's `(u - cx)/f`
+            # column is not its focal derivative even at k1 = k2 = 0.
+            "RADIAL_FISHEYE",
             {
                 "focal_length": 500.0,
                 "principal_point_x": 320.0,
                 "principal_point_y": 240.0,
                 "radial_distortion_k1": 0.0,
+                "radial_distortion_k2": 0.0,
             },
         ),
     ],
@@ -219,7 +220,7 @@ def test_opt_f_rejected_for_models_without_an_exact_focal_column(model, paramete
     s["cam"] = CameraIntrinsics.from_dict(
         {"model": model, "width": 640, "height": 480, "parameters": parameters}
     )
-    with pytest.raises(ValueError, match="SIMPLE_PINHOLE or EQUIDISTANT_FISHEYE"):
+    with pytest.raises(ValueError, match="opt_f requires"):
         _run(s, opt_f=True)
 
 
@@ -238,11 +239,15 @@ def _equidistant_cam(f, w=480, h=480):
     )
 
 
-def _wide_scene(f=130.0, n_img=8, n_pt=140, seed=5):
+def _wide_scene(f=130.0, n_img=8, n_pt=140, seed=5, cam=None):
     """A >180° capture: cameras inside a point shell, so a large share of
-    every image's observations sit past 90° off-axis."""
+    every image's observations sit past 90° off-axis.
+
+    ``cam`` overrides the equidistant camera the observations are generated
+    through (the curvature-rung tests plant a `k1` in it).
+    """
     rng = np.random.default_rng(seed)
-    cam = _equidistant_cam(f)
+    cam = _equidistant_cam(f) if cam is None else cam
     rots, trans = [], []
     for i in range(n_img):
         ang = 0.25 * (i - (n_img - 1) / 2)
@@ -673,3 +678,89 @@ def test_shape_validation():
             s["obs_image"],
             np.full_like(s["obs_point"], 10_000),
         )
+
+
+# ── The curvature rung: opt_k1 under SIMPLE_RADIAL_FISHEYE ────────────────
+
+
+def _radial_fisheye_cam(f, k1, w=480, h=480):
+    return CameraIntrinsics.from_dict(
+        {
+            "model": "SIMPLE_RADIAL_FISHEYE",
+            "width": w,
+            "height": h,
+            "parameters": {
+                "focal_length": f,
+                "principal_point_x": w / 2.0,
+                "principal_point_y": h / 2.0,
+                "radial_distortion_k1": k1,
+            },
+        }
+    )
+
+
+def test_opt_k1_recovers_a_planted_curvature():
+    # Binding parity of the kernel's recovery claim: observations generated
+    # through a lens with k1 = 0.02, handed to the solver as an equidistant
+    # one (k1 = 0). The rung puts the curvature back and the fit is
+    # sub-pixel.
+    f, k1_true = 130.0, 0.02
+    s = _wide_scene(f=f, cam=_radial_fisheye_cam(f, k1_true))
+    s["cam"] = _radial_fisheye_cam(f, 0.0)
+    out = _run(s, opt_k1=True)
+    assert out["focal"] == f, "the focal moved with opt_f off"
+    assert abs(out["k1"] - k1_true) / k1_true < 0.1, out["k1"]
+    assert np.max(out["residual_norms"]) < 0.5
+
+
+def test_opt_f_and_opt_k1_release_together():
+    f_true, k1_true = 130.0, 0.025
+    s = _wide_scene(f=f_true, cam=_radial_fisheye_cam(f_true, k1_true))
+    f_start = 124.0
+    s["cam"] = _radial_fisheye_cam(f_start, 0.0)
+    s["points"] = s["points"] * (f_start / f_true)
+    s["trans"] = s["trans"] * (f_start / f_true)
+    out = _run(s, opt_f=True, opt_k1=True)
+    assert abs(out["focal"] - f_true) / f_true < 0.01, out["focal"]
+    assert abs(out["k1"] - k1_true) / k1_true < 0.15, out["k1"]
+
+
+def test_opt_k1_holds_at_zero_on_an_equidistant_scene():
+    # The promotion EQUIDISTANT_FISHEYE -> SIMPLE_RADIAL_FISHEYE(k1 = 0) is
+    # only safe if releasing k1 on a genuinely equidistant capture leaves it
+    # alone.
+    f = 130.0
+    s = _wide_scene(f=f, cam=_radial_fisheye_cam(f, 0.0))
+    out = _run(s, opt_k1=True)
+    assert abs(out["k1"]) < 1e-4, out["k1"]
+
+
+def test_opt_f_accepts_the_radial_fisheye_model():
+    f_true = 130.0
+    s = _wide_scene(f=f_true, cam=_radial_fisheye_cam(f_true, 0.02))
+    f_start = 118.3
+    s["cam"] = _radial_fisheye_cam(f_start, 0.02)
+    s["points"] = s["points"] * (f_start / f_true)
+    s["trans"] = s["trans"] * (f_start / f_true)
+    out = _run(s, opt_f=True)
+    assert abs(out["focal"] - f_true) / f_true < 0.01, out["focal"]
+    assert out["k1"] == 0.02, "an unreleased k1 moved"
+
+
+@pytest.mark.parametrize("model", ["SIMPLE_PINHOLE", "EQUIDISTANT_FISHEYE"])
+def test_opt_k1_rejected_for_models_without_the_coefficient(model):
+    s = _scene()
+    if model == "SIMPLE_PINHOLE":
+        cam = _cam()
+    else:
+        cam = _equidistant_cam(500.0, w=640, h=480)
+    s["cam"] = cam
+    with pytest.raises(ValueError, match="opt_k1 requires a SIMPLE_RADIAL_FISHEYE"):
+        _run(s, opt_k1=True)
+
+
+def test_k1_returned_for_every_model():
+    # The key is always present; it is 0.0 where the model has no such
+    # parameter.
+    s = _scene()
+    assert _run(s)["k1"] == 0.0

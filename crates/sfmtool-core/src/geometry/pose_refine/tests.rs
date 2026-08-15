@@ -104,9 +104,10 @@ fn identity_stays_put_when_already_optimal() {
 //
 // The kernel takes the camera object and never touches `z` itself: its domain
 // test is whatever `ray_to_pixel` says, and its Jacobian falls back to a
-// central difference for models with no analytic one. These pin both under
-// the Phase-1 seed model `SimpleRadialFisheye { k1 = 0 }` with observations
-// deliberately past 90° off-axis (canonical `z_cam > 0`).
+// central difference for models with no analytic one (`RadialFisheye` below
+// stands in for those). These pin both under the Phase-1 seed model
+// `SimpleRadialFisheye { k1 = 0 }` with observations deliberately past 90°
+// off-axis (canonical `z_cam > 0`).
 
 /// The fisheye-seed camera: equidistant `θ = r/f`, centred principal point.
 fn equidistant_seed() -> CameraIntrinsics {
@@ -122,8 +123,27 @@ fn equidistant_seed() -> CameraIntrinsics {
     }
 }
 
-/// The same map as a native `EquidistantFisheye` — closed form, and the one
-/// ray-path model with an analytic pixel Jacobian.
+/// The same `θ = r/f` map as a `RadialFisheye` with both coefficients zero —
+/// identical projections, but no analytic pixel Jacobian, so `lm_fit`
+/// central-differences `ray_to_pixel`. This is the fallback path the
+/// multi-coefficient fisheye family takes.
+fn equidistant_legacy() -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::RadialFisheye {
+            focal_length: 130.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: 0.0,
+            radial_distortion_k2: 0.0,
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+/// The same map as a native `EquidistantFisheye` — closed form, and (with
+/// `SimpleRadialFisheye`) one of the two ray-path models with an analytic
+/// pixel Jacobian.
 fn equidistant_native() -> CameraIntrinsics {
     CameraIntrinsics {
         model: CameraModel::EquidistantFisheye {
@@ -211,7 +231,7 @@ fn fisheye_residuals_are_finite_past_ninety_degrees() {
 
 // ── Analytic vs central-difference Jacobian: same answer, fewer projections ──
 
-/// The two representations of `θ = r/f` — `SimpleRadialFisheye { k1 = 0 }`
+/// The two representations of `θ = r/f` — `RadialFisheye { k1 = k2 = 0 }`
 /// (no analytic Jacobian, so `lm_fit` central-differences `ray_to_pixel`)
 /// and `EquidistantFisheye` (analytic) — must converge to the same pose from
 /// the same perturbed start.
@@ -223,7 +243,7 @@ fn fisheye_residuals_are_finite_past_ninety_degrees() {
 /// each arm is separately asserted to reach against the planted truth.
 #[test]
 fn analytic_and_central_difference_jacobians_converge_together() {
-    let (legacy, n_behind) = make_fisheye_scene_for(equidistant_seed());
+    let (legacy, n_behind) = make_fisheye_scene_for(equidistant_legacy());
     let (native, _) = make_fisheye_scene_for(equidistant_native());
     assert!(
         n_behind >= 18,

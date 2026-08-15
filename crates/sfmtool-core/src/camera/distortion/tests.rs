@@ -1187,8 +1187,10 @@ fn ray_to_pixel_jacobian_matches_central_difference() {
     let h = 1e-6;
     for cam in all_cameras() {
         if !cam.model.supports_pixel_jacobian() {
-            // Ray-path models (fisheye / equirectangular): a forward ray still
-            // projects, but there is no analytic Jacobian yet.
+            // Multi-coefficient fisheye / equirectangular: a forward ray still
+            // projects, but there is no analytic Jacobian yet. (The
+            // one-coefficient equidistant pair — EQUIDISTANT_FISHEYE and
+            // SIMPLE_RADIAL_FISHEYE — takes the analytic path below.)
             assert!(
                 cam.ray_to_pixel_with_jacobian([0.0, 0.0, -1.0]).is_none(),
                 "{} should report no analytic Jacobian",
@@ -2000,25 +2002,40 @@ fn equidistant_seed_round_trips_over_the_whole_sensor() {
 }
 
 #[test]
-fn equidistant_seed_has_no_analytic_pixel_jacobian_and_says_so() {
+fn equidistant_seed_pixel_jacobian_is_the_analytic_one() {
     // The finite-difference fallback in `pose_refine` / `bundle_adjust` is
-    // selected by this flag; if the flag ever flips without an analytic
-    // fisheye Jacobian landing, those kernels silently lose their derivative
-    // past 90° (the perspective path returns None on rz ≤ 0). The POLYNOMIAL
-    // fisheye family still has no analytic form — `EquidistantFisheye` does,
-    // and is pinned separately below.
+    // selected by this flag. `SimpleRadialFisheye` carries the same
+    // closed-form `θ_d = θ·(1 + k1·θ²)` derivative as the native model (k1 = 0
+    // here), so it takes the analytic path — including past 90°, where the
+    // perspective path would return None on rz ≤ 0. The MULTI-COEFFICIENT
+    // fisheye family still has no analytic form.
     let cam = equidistant_seed(130.0, 480, 480);
-    assert!(!cam.model.supports_pixel_jacobian());
-    assert!(cam
-        .ray_to_pixel_with_jacobian(ray_at(30.0_f64.to_radians(), 0.4))
-        .is_none());
+    assert!(cam.model.supports_pixel_jacobian());
+    let native = equidistant_native(130.0, 480, 480);
+    for deg in [30.0f64, 89.0, 91.0, 130.0] {
+        let ray = ray_at(deg.to_radians(), 0.4);
+        let (_, seed_j) = cam.ray_to_pixel_with_jacobian(ray).unwrap();
+        let (_, native_j) = native.ray_to_pixel_with_jacobian(ray).unwrap();
+        // `k1 = 0` is not merely close to the distortion-free map — the
+        // shared kernel collapses to its exact arithmetic.
+        for row in 0..2 {
+            for c in 0..3 {
+                assert_eq!(
+                    seed_j[row][c].to_bits(),
+                    native_j[row][c].to_bits(),
+                    "k1 = 0 Jacobian [{row}][{c}] at θ={deg}° is not the equidistant one",
+                );
+            }
+        }
+    }
 }
 
 #[test]
 fn equidistant_seed_central_difference_jacobian_survives_past_90_degrees() {
-    // What `project_with_jac`'s fallback actually does at a backward ray: the
-    // ±h probes must all stay in-domain, and the numeric derivative must
-    // match the analytic equidistant one.
+    // What the `project_with_jac` fallback does at a backward ray — the path
+    // the multi-coefficient fisheye models still take, exercised here on the
+    // map whose analytic derivative is known: the ±h probes must all stay
+    // in-domain, and the numeric derivative must be stable.
     let f = 130.0;
     let cam = equidistant_seed(f, 480, 480);
     let h = 1e-6;
@@ -2339,6 +2356,231 @@ fn equidistant_native_jacobian_is_scale_invariant_in_the_ray() {
         for row in 0..2 {
             for c in 0..3 {
                 assert_relative_eq!(j2[row][c], j1[row][c] / s, epsilon = 1e-10);
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// SIMPLE_RADIAL_FISHEYE — the one-coefficient equidistant map
+//
+// `θ_d = θ·(1 + k1·θ²)` shares the native model's closed-form derivative
+// (`k1 = 0` recovers it exactly). The BA's `opt_k1` rung linearizes through
+// this Jacobian, so it is pinned here the same way the native one is:
+// against a central difference over a field that runs past 90°, with the
+// domain and the on-axis limit checked alongside.
+// -----------------------------------------------------------------------
+
+/// A `SIMPLE_RADIAL_FISHEYE` at focal `f` and coefficient `k1`, principal
+/// point centred in a 480² frame.
+fn simple_radial_fisheye_at(f: f64, k1: f64) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SimpleRadialFisheye {
+            focal_length: f,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: k1,
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+#[test]
+fn simple_radial_fisheye_jacobian_matches_central_difference_past_90_degrees() {
+    let f = 130.0;
+    let h = 1e-6;
+    let mut samples = 0usize;
+    let mut past_90 = 0usize;
+    let mut worst = 0.0f64;
+    // Both signs of curvature, plus the k1 = 0 degeneracy through the same
+    // code path. |k1| here keeps `1 + 3·k1·θ²` positive out to θ = 170°.
+    for &k1 in &[0.0f64, 0.1, 0.05, -0.02] {
+        let cam = simple_radial_fisheye_at(f, k1);
+        for ti in 0..18 {
+            let theta = (5.0 + 10.0 * ti as f64).to_radians();
+            for phi_deg in [0.0f64, 43.0, 137.0, 250.0, 331.0] {
+                let base = ray_at(theta, phi_deg.to_radians());
+                // Degree-0 homogeneous: the Jacobian must scale as 1/‖r‖.
+                for scale in [0.4f64, 1.0, 6.0] {
+                    let ray = [base[0] * scale, base[1] * scale, base[2] * scale];
+                    let (uv, jac) = cam
+                        .ray_to_pixel_with_jacobian(ray)
+                        .expect("analytic Jacobian None on an in-domain radial-fisheye ray");
+                    // The projection the Jacobian belongs to is the projection
+                    // the rest of the pipeline uses.
+                    let direct = cam.ray_to_pixel(ray).unwrap();
+                    assert_relative_eq!(uv.0, direct.0, epsilon = 1e-12);
+                    assert_relative_eq!(uv.1, direct.1, epsilon = 1e-12);
+                    if ray[2] > 0.0 {
+                        past_90 += 1;
+                    }
+                    for c in 0..3 {
+                        let mut rp = ray;
+                        let mut rm = ray;
+                        rp[c] += h;
+                        rm[c] -= h;
+                        let (up, vp) = cam.ray_to_pixel(rp).unwrap();
+                        let (um, vm) = cam.ray_to_pixel(rm).unwrap();
+                        let fd_u = (up - um) / (2.0 * h);
+                        let fd_v = (vp - vm) / (2.0 * h);
+                        for (a, fd) in [(jac[0][c], fd_u), (jac[1][c], fd_v)] {
+                            let rel = (a - fd).abs() / (1.0 + a.abs());
+                            worst = worst.max(rel);
+                            assert!(
+                                rel <= 1e-6,
+                                "k1={k1} ∂/∂r[{c}] at θ={:.0}°: analytic {a} vs \
+                                 central-diff {fd} (rel {rel})",
+                                theta.to_degrees(),
+                            );
+                        }
+                        samples += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(samples > 1000, "thin coverage: only {samples} samples");
+    assert!(past_90 > 100, "grid did not exercise θ > 90° ({past_90})");
+    eprintln!("[radial-fisheye-jac] {samples} samples, worst rel error {worst:.3e}");
+}
+
+#[test]
+fn simple_radial_fisheye_k1_zero_jacobian_is_bitwise_the_equidistant_one() {
+    // The shared kernel is the equidistant one with `θ_d = θ·(1 + 0·θ²)` and
+    // `dθ_d/dθ = 1 + 3·0·θ²`: every multiplication by the unit collapses, so
+    // this is bit-identical rather than merely close. That is what lets the
+    // BA promote EQUIDISTANT_FISHEYE → SIMPLE_RADIAL_FISHEYE(k1 = 0) without
+    // moving the geometry.
+    let f = 137.5;
+    let seed = simple_radial_fisheye_at(f, 0.0);
+    let native = equidistant_native(f, 480, 480);
+    let mut samples = 0usize;
+    for ti in 0..24 {
+        let theta = (2.0 + 7.0 * ti as f64).to_radians();
+        for phi_deg in [0.0f64, 29.0, 91.0, 188.0, 300.0] {
+            let ray = ray_at(theta, phi_deg.to_radians());
+            let ((us, vs), js) = seed.ray_to_pixel_with_jacobian(ray).unwrap();
+            let ((un, vn), jn) = native.ray_to_pixel_with_jacobian(ray).unwrap();
+            assert_eq!(us.to_bits(), un.to_bits());
+            assert_eq!(vs.to_bits(), vn.to_bits());
+            for row in 0..2 {
+                for c in 0..3 {
+                    assert_eq!(
+                        js[row][c].to_bits(),
+                        jn[row][c].to_bits(),
+                        "[{row}][{c}] at θ={:.0}°",
+                        theta.to_degrees(),
+                    );
+                }
+            }
+            samples += 1;
+        }
+    }
+    assert!(samples >= 100);
+    // The two shared domain edges agree too: the on-axis forward limit is
+    // finite, the antipode is not.
+    for cam in [&seed, &native] {
+        let (_, j) = cam.ray_to_pixel_with_jacobian([0.0, 0.0, -2.0]).unwrap();
+        assert_relative_eq!(j[0][0], f / 2.0, epsilon = 1e-12);
+        assert!(cam.ray_to_pixel_with_jacobian([0.0, 0.0, 1.0]).is_none());
+    }
+}
+
+#[test]
+fn simple_radial_fisheye_jacobian_shares_the_projection_domain() {
+    // A `k1` strong enough to fold `θ_d` non-positive takes the projection out
+    // of domain; the derivative must go with it (there is nothing to
+    // differentiate past the fold). Inside the fold both are `Some`.
+    let cam = simple_radial_fisheye_at(130.0, -0.35);
+    let mut folded = 0usize;
+    let mut fine = 0usize;
+    for deg in [10.0f64, 45.0, 90.0, 100.0, 120.0, 150.0, 175.0] {
+        let ray = ray_at(deg.to_radians(), 0.6);
+        match cam.ray_to_pixel(ray) {
+            Some(_) => {
+                assert!(
+                    cam.ray_to_pixel_with_jacobian(ray).is_some(),
+                    "no Jacobian at an in-domain θ={deg}°"
+                );
+                fine += 1;
+            }
+            None => {
+                assert!(
+                    cam.ray_to_pixel_with_jacobian(ray).is_none(),
+                    "Jacobian past the θ_d fold at θ={deg}°"
+                );
+                folded += 1;
+            }
+        }
+    }
+    // `1 + k1·θ²` crosses zero at θ = 1/√0.35 ≈ 1.69 rad ≈ 97°.
+    assert!(
+        fine >= 3 && folded >= 3,
+        "{fine} in-domain, {folded} folded"
+    );
+}
+
+#[test]
+fn simple_radial_fisheye_pixel_to_ray_inverts_the_projection_past_90_degrees() {
+    // `pixel_to_ray` is the map the bundle adjustment's retriangulation and
+    // direction re-estimation read, so it has to be the true inverse where
+    // the observations are — including the rim of a >180° capture. The
+    // wide-angle blend used to hand back the identity (`θ = r_d`) ray past
+    // 90°, dropping `k1` exactly where `k1·θ³` is largest: at θ = 105° and
+    // k1 = 0.02 that is 0.11 rad ≈ 6° of ray error.
+    let f = 130.0;
+    let mut worst_rad = 0.0f64;
+    let mut worst_px = 0.0f64;
+    let mut past_90 = 0usize;
+    for &k1 in &[0.02f64, 0.05, -0.02] {
+        let cam = simple_radial_fisheye_at(f, k1);
+        for ti in 0..27 {
+            let theta = (2.0 + 5.0 * ti as f64).to_radians();
+            for phi_deg in [0.0f64, 47.0, 133.0, 271.0] {
+                let ray = ray_at(theta, phi_deg.to_radians());
+                let (u, v) = cam.ray_to_pixel(ray).unwrap();
+                let back = cam.pixel_to_ray(u, v);
+                let dot = (0..3).map(|c| back[c] * ray[c]).sum::<f64>();
+                worst_rad = worst_rad.max(dot.clamp(-1.0, 1.0).acos());
+                let (u2, v2) = cam.ray_to_pixel(back).unwrap();
+                worst_px = worst_px.max((u2 - u).hypot(v2 - v));
+                if theta > std::f64::consts::FRAC_PI_2 {
+                    past_90 += 1;
+                }
+            }
+        }
+    }
+    assert!(past_90 >= 100, "not enough periphery: {past_90}");
+    // The floor is the Newton recovery's own step tolerance (`UNDISTORT_EPS`,
+    // 1e-10 on the step, a few 1e-8 rad on θ near the wide end) — 3e-6 px at
+    // this focal. The pixel round trip closes to rounding.
+    assert!(
+        worst_rad < 1e-7 && worst_px < 1e-6,
+        "round-trip error {worst_rad} rad / {worst_px} px"
+    );
+}
+
+#[test]
+fn simple_radial_fisheye_jacobian_on_axis_is_the_pinhole_limit_for_any_k1() {
+    // On the optical axis `θ_d/ρ → 1/rz` and `dθ_d/dθ → 1` whatever `k1` is:
+    // the curvature term is O(θ²) and vanishes. Both the exact-axis branch and
+    // the approach from a generic azimuth.
+    let f = 130.0;
+    for &k1 in &[0.0f64, 0.2, -0.1] {
+        let cam = simple_radial_fisheye_at(f, k1);
+        let (_, jac) = cam.ray_to_pixel_with_jacobian([0.0, 0.0, -2.0]).unwrap();
+        assert_relative_eq!(jac[0][0], f / 2.0, epsilon = 1e-12);
+        assert_relative_eq!(jac[1][1], -f / 2.0, epsilon = 1e-12);
+        for eps in [1e-4f64, 1e-6, 1e-9] {
+            for phi_deg in [0.0f64, 61.0, 233.0] {
+                let phi = phi_deg.to_radians();
+                let ray = [2.0 * eps * phi.cos(), 2.0 * eps * phi.sin(), -2.0];
+                let (_, j) = cam.ray_to_pixel_with_jacobian(ray).unwrap();
+                assert_relative_eq!(j[0][0], f / 2.0, epsilon = 1e-6);
+                assert_relative_eq!(j[1][1], -f / 2.0, epsilon = 1e-6);
+                assert_relative_eq!(j[0][1], 0.0, epsilon = 1e-6);
+                assert_relative_eq!(j[1][0], 0.0, epsilon = 1e-6);
             }
         }
     }

@@ -1,10 +1,11 @@
 # Projection Jacobian (ray-to-pixel derivatives)
 
-**Status:** Implemented (perspective family and `EquidistantFisheye`) —
+**Status:** Implemented (perspective family, `EquidistantFisheye` and
+`SimpleRadialFisheye`) —
 `crates/sfmtool-core/src/camera/distortion.rs`
 (`CameraIntrinsics::ray_to_pixel_with_jacobian`, `CameraModel::distort_jacobian`),
 `crates/sfmtool-core/src/camera/distortion/kernels.rs`
-(`equidistant_ray_jacobian`) and
+(`radial_fisheye_ray_jacobian`) and
 `crates/sfmtool-core/src/camera/intrinsics.rs`
 (`CameraModel::supports_pixel_jacobian`); tests in
 `camera/distortion/tests.rs`. Core Rust only — no Python binding yet, as the
@@ -37,13 +38,14 @@ Two families, both reported by `CameraModel::supports_pixel_jacobian`:
 
 - the perspective models — pinhole, `SimpleRadial`, `Radial`, `OpenCV`,
   `FullOpenCV` — which project through the image plane;
-- `EquidistantFisheye`, whose ray-path map `θ = r/f` carries no distortion
-  polynomial and so differentiates in closed form at every `θ`, `θ ≥ 90°`
-  included.
+- the one-coefficient equidistant pair `EquidistantFisheye` and
+  `SimpleRadialFisheye`, whose ray-path map `θ_d = θ·(1 + k1·θ²)` (`k1 = 0`
+  for the first) is a closed form in `θ` alone and so differentiates in
+  closed form at every `θ`, `θ ≥ 90°` included.
 
-The polynomial fisheye models and equirectangular take the ray path with no
-analytic derivative here; a caller that needs one for those falls back to a
-finite difference. A caller checks `supports_pixel_jacobian` once per camera to
+The multi-coefficient fisheye models and equirectangular take the ray path
+with no analytic derivative here; a caller that needs one for those falls back
+to a finite difference. A caller checks `supports_pixel_jacobian` once per camera to
 choose the analytic or fallback path.
 
 ## API
@@ -65,8 +67,9 @@ impl CameraModel {
 `ray_to_pixel` does — the ray behind the camera or outside the distortion
 polynomial's invertible branch — and also for an unsupported model. The pixel
 it returns equals `ray_to_pixel`'s. One documented exception: `θ = π` exactly
-(`r_xy = 0` behind the camera) under `EquidistantFisheye`, where the projection
-is defined but its derivative is unbounded — see "Equidistant map" below.
+(`r_xy = 0` behind the camera) under the equidistant pair, where the
+projection is defined but its derivative is unbounded — see "Equidistant map"
+below.
 
 ## Mechanism — perspective family
 
@@ -100,22 +103,26 @@ differentiate on top of this 2×3 in the caller (e.g. resection composes it with
 
 ## Mechanism — equidistant map
 
-`EquidistantFisheye` never forms `(rx/rz, ry/rz)`, so the perspective divide —
-and with it the `rz > 0` domain restriction — does not appear. In the optical
-frame, with `ρ = √(rx² + ry²)`, `n² = ρ² + rz²`, unit 2D direction
-`(ux, uy) = (rx, ry)/ρ` and `θ = atan2(ρ, rz)`, the map is
-`(x_d, y_d) = θ·(ux, uy)` and its derivative follows from
+Neither `EquidistantFisheye` nor `SimpleRadialFisheye` ever forms
+`(rx/rz, ry/rz)`, so the perspective divide — and with it the `rz > 0` domain
+restriction — does not appear. In the optical frame, with `ρ = √(rx² + ry²)`,
+`n² = ρ² + rz²`, unit 2D direction `(ux, uy) = (rx, ry)/ρ` and
+`θ = atan2(ρ, rz)`, the map is `(x_d, y_d) = θ_d·(ux, uy)` with
+`θ_d = θ·(1 + k1·θ²)` (`k1 = 0` is the distortion-free model, and the shared
+kernel reproduces it bit for bit). Writing `θ_d' = dθ_d/dθ = 1 + 3·k1·θ²`,
+its derivative follows from
 
 ```
 ∂θ/∂rx = ux·rz/n²    ∂θ/∂ry = uy·rz/n²    ∂θ/∂rz = −ρ/n²
 ∂ux/∂rx = uy²/ρ      ∂ux/∂ry = −ux·uy/ρ   (mirrored for uy)
 ```
 
-giving, with the shared off-diagonal factor `c = rz/n² − θ/ρ`,
+giving, with the shared off-diagonal factor `c = θ_d'·rz/n² − θ_d/ρ`,
 
 ```
-∂(x_d, y_d)/∂(rx, ry, rz) = [[θ·uy²/ρ + ux²·rz/n²,  ux·uy·c,               −rx/n²],
-                             [ux·uy·c,               θ·ux²/ρ + uy²·rz/n²,  −ry/n²]]
+∂(x_d, y_d)/∂(rx, ry, rz) =
+    [[θ_d·uy²/ρ + θ_d'·ux²·rz/n²,  ux·uy·c,                     −θ_d'·rx/n²],
+     [ux·uy·c,                     θ_d·ux²/ρ + θ_d'·uy²·rz/n²,  −θ_d'·ry/n²]]
 ```
 
 `K` and the frame flip `S` compose on top exactly as above. Every expression is
@@ -124,11 +131,12 @@ fisheye carries its model information, so no in-front guard applies.
 
 Two limits on the optical axis, where `(ux, uy)` is undefined:
 
-- **In front** (`ρ → 0`, `rz > 0`): `θ/ρ → 1/rz` and `c → 0`, so the matrix
+- **In front** (`ρ → 0`, `rz > 0`): `θ_d/ρ → 1/rz`, `θ_d' → 1` and `c → 0`,
+  so the matrix
   tends to `diag(1/rz, 1/rz)` with a zero third column — the pinhole
   small-angle Jacobian, independent of the direction the limit is taken from.
   This is the value returned on the axis.
-- **At the antipode** (`ρ → 0`, `rz < 0`): `θ → π` while `ρ → 0`, so `θ/ρ`
+- **At the antipode** (`ρ → 0`, `rz < 0`): `θ → π` while `ρ → 0`, so `θ_d/ρ`
   diverges and no finite Jacobian exists — `None`. The projection itself is
   still defined there (it aliases the principal point), so this is the single
   measure-zero direction where the Jacobian's domain is narrower than
@@ -142,7 +150,10 @@ Two limits on the optical axis, where `(ux, uy)` is undefined:
   `ray_to_pixel` within tolerance. This is the primary correctness pin and the
   regression guard for both the projection math and the Jacobian. For the
   equidistant map the sweep covers a whole synthetic sensor plus explicit `θ`
-  bands straddling 90°.
+  bands straddling 90°, at both signs of `k1` as well as `k1 = 0`.
+- **`k1 = 0` degeneracy**: `SimpleRadialFisheye { k1 = 0 }` returns the
+  `EquidistantFisheye` pixel and Jacobian **bit for bit** over a θ sweep —
+  the promotion between the two representations moves nothing.
 - **Domain**: a ray behind the camera returns `None` for the perspective
   family, matching `ray_to_pixel`; under the equidistant map the same ray
   returns a Jacobian, and only the exact antipode returns `None`.
@@ -150,14 +161,18 @@ Two limits on the optical axis, where `(ux, uy)` is undefined:
   pinhole small-angle form and is approached continuously from every azimuth.
 - **Scale invariance**: the map is degree-0 homogeneous in the ray, so
   `J·r = 0` and `J(s·r) = J(r)/s`.
-- **Scope**: the polynomial fisheye models and equirectangular report
+- **Scope**: the multi-coefficient fisheye models and equirectangular report
   `supports_pixel_jacobian() == false` and return `None`.
+- **Shared domain**: a `k1` strong enough to fold `θ_d` non-positive inside
+  the sampled field takes projection and derivative out of domain together.
 
 ## Non-goals
 
-- Analytic Jacobians for the polynomial fisheye models and equirectangular —
-  deferred; callers finite-difference for those.
+- Analytic Jacobians for the multi-coefficient fisheye models and
+  equirectangular — deferred; callers finite-difference for those.
 - Derivatives with respect to intrinsics or distortion coefficients — this is
-  the derivative with respect to the ray only.
+  the derivative with respect to the ray only. (The bundle adjustment's
+  `∂(u, v)/∂f` and `∂(u, v)/∂k1` columns are its own; see
+  [bundle-adjustment.md](bundle-adjustment.md).)
 - Any optimizer or normal-equation assembly; this is the measurement
   derivative a solver consumes.

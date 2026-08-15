@@ -14,8 +14,8 @@ The staged robust bundle adjustment used by the cluster pinhole bootstrap
 `scripts/exp_fast_pinhole.py` / `scripts/exp_pinhole_bootstrap.py`): given
 images sharing one camera model, camera poses, world points, and pixel
 observations tying them together, jointly refine the poses and points (and
-optionally the shared focal length) by minimizing robust pixel reprojection
-error over a trim schedule with inter-round retriangulation.
+optionally the shared focal length and radial coefficient) by minimizing
+robust pixel reprojection error over a trim schedule with inter-round retriangulation.
 
 This is the optimizer that the trimmed pose-only refinement
 (`crates/sfmtool-core/src/geometry/pose_refine.rs`) is the single-pose
@@ -61,11 +61,12 @@ pub fn bundle_adjust(
     obs_img: &[u32],                     // n_obs
     obs_pt: &[u32],                      // n_obs
     opt_f: bool,
+    opt_k1: bool,
     schedule: &[BaSchedule],             // default 50/5 → 12/2 → 4/1
     max_iters: usize,                    // LM iterations per round
     min_track: usize,                    // trim survivors per point (2)
     min_obs: usize,                      // degenerate-exit floor (12)
-) -> BundleAdjustment;                   // { focal, residual_norms }
+) -> BundleAdjustment;                   // { focal, k1, residual_norms }
 ```
 
 Per schedule round, mirroring the experiment scripts exactly:
@@ -106,25 +107,40 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
 
 - **Parameters.** Per touched image a local `SO(3) × ℝ³` perturbation
   (`R ← exp(δθ)·R`, `t ← t + δt`); per touched point `X ← X + δX`; when
-  `opt_f`, the shared focal `f ← f + δf`. Focal optimization requires a
-  single-focal, distortion-free model — `SIMPLE_PINHOLE` or
-  `EQUIDISTANT_FISHEYE` — where `∂(u, v)/∂f = ((u − cx)/f, (v − cy)/f)`
-  exactly. The condition is that `f` multiplies a distorted coordinate
-  that does not itself depend on `f`: `x_d = rx/(−rz)` for the pinhole and
-  `x_d = θ·ûx` with `θ = atan2(ρ, rz)` for the equidistant map, so in both
-  cases `∂u/∂f = x_d = (u − cx)/f` at every incidence angle, the
-  periphery past `θ = 90°` included. Every other model fails the
-  condition — a second focal `fy` (no slot in the 7-wide camera block), or
-  distortion coefficients acting on a normalized coordinate whose relation
-  to the pixel is `f`-dependent (the polynomial fisheye family recovers
-  `θ` from `r/f` before applying `g(θ²)`). The binding rejects `opt_f` for
-  those loudly, and the core silently degrades it to a fixed-focal solve
-  (never a half-modeled focal DOF).
+  `opt_f`, the shared focal `f ← f + δf`; when `opt_k1`, the shared
+  radial coefficient `k1 ← k1 + δk1`. Focal optimization requires a
+  single-focal model whose projection multiplies `f` onto a distorted
+  coordinate that does not itself depend on `f` — `SIMPLE_PINHOLE`
+  (`x_d = rx/(−rz)`), `EQUIDISTANT_FISHEYE` (`x_d = θ·ûx` with
+  `θ = atan2(ρ, rz)`), and `SIMPLE_RADIAL_FISHEYE`
+  (`x_d = θ·(1 + k1·θ²)·ûx` — `θ` comes from the ray, not from `r/f`,
+  so the condition holds with distortion present). In all three
+  `∂u/∂f = x_d = (u − cx)/f` at every incidence angle, the periphery
+  past `θ = 90°` included. `opt_k1` is the fisheye family's radial rung
+  and requires `SIMPLE_RADIAL_FISHEYE`:
+  `∂(u, v)/∂k1 = f·θ³·(ûx, ûy)` exactly — the θ³ curvature the
+  equidistant map cannot express, which is what lets the adjustment
+  flatten a lens's residual field instead of buying it back with
+  geometry (the finite dome that pulls sky and horizon off infinity).
+  Every other model fails the conditions — a second focal `fy` (no slot
+  in the camera block), or higher polynomial coefficients recovered
+  through `f`-dependent normalization. The binding rejects `opt_f` /
+  `opt_k1` for those loudly, and the core silently degrades to the
+  fixed-parameter solve (never a half-modeled DOF). Callers stage the
+  releases: fixed → `opt_f` → `opt_f + opt_k1`, so the curvature rung
+  opens only on a focal that has already settled. The rung also needs the
+  model's INVERSE to carry `k1`: retriangulation and direction
+  re-estimation read `pixel_to_ray`, which for `SIMPLE_RADIAL_FISHEYE` is
+  the Newton recovery of `θ` without the family's wide-angle blend — that
+  blend hands back the identity `θ = r_d` ray past 90°, dropping `k1`
+  exactly where `k1·θ³` is largest (a 105° rim at `k1 = 0.02` comes back
+  6° off, which is a ray, not a rounding error).
 - **Jacobian.** The projection block `∂(u, v)/∂p_cam` — analytic from
   `CameraIntrinsics::ray_to_pixel_with_jacobian` for the perspective
-  family and `EQUIDISTANT_FISHEYE`, a central difference of
-  `ray_to_pixel` for the polynomial fisheye models and equirectangular,
-  which have no analytic form — composed with
+  family, `EQUIDISTANT_FISHEYE` and `SIMPLE_RADIAL_FISHEYE` (the chain
+  through `θ_d = θ·(1 + k1·θ²)` is closed-form), a central difference of
+  `ray_to_pixel` for the remaining polynomial fisheye models and
+  equirectangular, which have no analytic form — composed with
   `−[R·X]ₓ` (rotation), `I₃` (translation), and `R` (point) blocks,
   exactly as in `pose_refine.rs` (including the fallback). An observation
   whose point is behind the camera / outside the model domain contributes
@@ -141,7 +157,7 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   scan winner where scipy walked −20% to the reference focal).
 - **Schur complement.** Points are eliminated: per-point 3×3 blocks are
   inverted directly and the reduced camera system
-  (`[f? | 6·n_im]`, dense) is solved by LU; point updates back-substitute.
+  (`[f?, k1? | 6·n_im]`, dense) is solved by LU; point updates back-substitute.
   Rejected steps re-damp and re-solve from the same linearization (no
   re-evaluation), with Marquardt scaling `λ·diag(JᵀJ)` for the
   `x_scale="jac"` parameter-scale invariance of the scipy original.
@@ -163,12 +179,14 @@ bundle_adjust(
     uv,                        # (n_obs, 2)
     obs_image,                 # (n_obs,) uint32
     obs_point,                 # (n_obs,) uint32
-    opt_f=False,               # SIMPLE_PINHOLE or EQUIDISTANT_FISHEYE
+    opt_f=False,               # SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE
+                               # or SIMPLE_RADIAL_FISHEYE
+    opt_k1=False,              # SIMPLE_RADIAL_FISHEYE only
     schedule=[(50.0, 5.0), (12.0, 2.0), (4.0, 1.0)],
     max_iters=60,
     min_track=2,
     min_obs=12,
-) -> dict                      # focal, quaternions_wxyz (n_img, 4),
+) -> dict                      # focal, k1, quaternions_wxyz (n_img, 4),
                                # translations (n_img, 3), points (n_pt, 3),
                                # residual_norms (n_obs,)
 ```
@@ -208,9 +226,29 @@ Python's point of view).
 - **Focal release and the fixed-focal gauge, equidistant**: a released
   focal recovers a planted one from a several-percent start on a scene
   whose periphery is past `θ = 90°`; the same solve with `opt_f = false`
-  returns the input focal bit-identically; and a `SIMPLE_RADIAL_FISHEYE`
-  scene with `opt_f = true` also returns its focal bit-identically (the
-  core's degrade, since that model's `∂u/∂f` is not `(u − cx)/f`).
+  returns the input focal bit-identically; and a multi-coefficient fisheye
+  scene (`RADIAL_FISHEYE`) with `opt_f = true` also returns its focal
+  bit-identically (the core's degrade, since that model's `∂u/∂f` is not
+  `(u − cx)/f`).
+- **The curvature rung**: `∂(u, v)/∂k1` matches a central difference of the
+  projection in `k1` over a field sampled past `θ = 90°`, to rounding (the
+  derivative of an exactly-linear dependence, like the focal column); a
+  planted `k1` is recovered from a `k1 = 0` start with the focal fixed and
+  again with the focal co-released from a several-percent error; on a scene
+  that really is equidistant the released `k1` stays at zero and the
+  reconstruction is the fixed-`k1` one (the fixed point the
+  EQUIDISTANT_FISHEYE → SIMPLE_RADIAL_FISHEYE(`k1 = 0`) promotion rests on);
+  and every other model returns `k1` and the focal unmoved under
+  `opt_k1 = true` (the core's degrade).
+- **The `k1` step guard**: the admissibility predicate accepts every
+  `k1 ≥ 0` and every fold past `θ = π`, rejects a fold inside the imaged
+  field, accepts the same `k1` for a camera whose field stops short of it,
+  and rejects non-finite steps; end to end, a released solve never returns a
+  folded map.
+- **Directions carry the rung**: on a scene whose finite cloud sits near the
+  optical axis (no `θ³` signal) and whose far field is marked at infinity,
+  `opt_k1` recovers the planted curvature — and the same solve with the
+  direction observations removed does not.
 - **Memory order**: Fortran-ordered inputs to the binding produce the same
   result as C-ordered ones (guards the `to_contiguous!` zero-copy path
   against silent transposition).
@@ -398,8 +436,9 @@ validation, and outputs are unchanged.
 
 - Per-image or per-observation camera models — one shared
   `CameraIntrinsics`.
-- Optimizing distortion or principal point; `opt_f` covers the single
-  shared focal only.
+- Optimizing distortion beyond the single shared `k1` of
+  `SIMPLE_RADIAL_FISHEYE`, or the principal point; `opt_f`/`opt_k1`
+  cover the shared focal and the one radial rung only.
 - Gauge fixing, covariance estimation, or constraint handling — callers
   own the gauge (the bootstrap's evaluation aligns by similarity anyway).
 - Replacing the production solvers (`sfm solve` wraps COLMAP/GLOMAP); this

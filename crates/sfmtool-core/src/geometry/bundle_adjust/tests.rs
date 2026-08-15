@@ -27,6 +27,7 @@ fn jitter(i: usize, salt: u64) -> f64 {
 /// A synthetic multi-view scene: ground-truth poses (cameras on an arc
 /// looking at the origin), world points, and observations of every point in
 /// every camera that sees it.
+#[derive(Clone)]
 struct Scene {
     cam: CameraIntrinsics,
     quats: Vec<UnitQuaternion<f64>>,
@@ -107,6 +108,7 @@ fn run(s: &mut Scene, opt_f: bool, schedule: &[BaSchedule]) -> BundleAdjustment 
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
+        false,
         schedule,
         60,
         2,
@@ -134,6 +136,7 @@ fn run_masked(
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
+        false,
         schedule,
         60,
         2,
@@ -160,6 +163,7 @@ fn run_protected(
         Some(protected),
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
+        false,
         schedule,
         60,
         2,
@@ -862,6 +866,7 @@ fn directions_lock_rotations_for_focal_release() {
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         true,
+        false,
         &schedule,
         150,
         2,
@@ -890,6 +895,7 @@ fn directions_lock_rotations_for_focal_release() {
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         true,
+        false,
         &schedule,
         150,
         2,
@@ -986,6 +992,7 @@ fn protected_all_false_with_infinity_mask_matches_bit_for_bit() {
         Some(&mask_b),
         Some(&vec![false; prot.uv.len()]),
         DEFAULT_PROTECTED_LOSS_SCALE,
+        false,
         false,
         &DEFAULT_SCHEDULE,
         60,
@@ -1235,6 +1242,7 @@ fn protected_direction_observation_composes_with_infinity_mask() {
         Some(&prot),
         DEFAULT_PROTECTED_LOSS_SCALE,
         false,
+        false,
         &schedule,
         60,
         2,
@@ -1429,6 +1437,7 @@ fn protected_long_range_observations_correct_a_drifted_gauge() {
             prot,
             DEFAULT_PROTECTED_LOSS_SCALE,
             false,
+            false,
             &DEFAULT_SCHEDULE,
             150,
             2,
@@ -1546,8 +1555,9 @@ fn untouched_images_pass_through() {
 // distinct pinhole assumptions could bite there, and the tests below pin
 // both:
 //
-//   * the projection/Jacobian path — covered by the central-difference
-//     fallback (`supports_pixel_jacobian` is false for the ray-path models);
+//   * the projection/Jacobian path — analytic for this model (it shares the
+//     equidistant closed form), with `RadialFisheye` standing in below for
+//     the central-difference fallback the rest of the family still takes;
 //   * the inter-round in-front gate. Until the model-aware measure landed it
 //     compared the canonical depth `−z_cam` against the `1e-3·f` floor, which
 //     DISCARDS every observation at `θ ≥ 90°` — the whole periphery of a
@@ -1576,9 +1586,27 @@ fn make_fisheye_scene(n_img: usize, n_pt: usize) -> (Scene, usize) {
     make_fisheye_scene_for(equidistant_seed(130.0), n_img, n_pt)
 }
 
-/// The same map as a native `EquidistantFisheye`: identical projections, but
-/// `supports_pixel_jacobian()` is true, so the kernel linearizes analytically
-/// instead of central-differencing `ray_to_pixel`.
+/// The same `θ = r/f` map as a `RadialFisheye` with both coefficients zero:
+/// identical projections, but `supports_pixel_jacobian()` is false, so the
+/// kernel central-differences `ray_to_pixel` instead of linearizing
+/// analytically. This is the fallback path the multi-coefficient fisheye
+/// family takes, carried by a camera whose exact answer is known.
+fn equidistant_legacy(f: f64) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::RadialFisheye {
+            focal_length: f,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: 0.0,
+            radial_distortion_k2: 0.0,
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+/// The same map as a native `EquidistantFisheye`: identical projections, and
+/// like `SimpleRadialFisheye` it carries an analytic pixel Jacobian.
 fn equidistant_native(f: f64) -> CameraIntrinsics {
     CameraIntrinsics {
         model: CameraModel::EquidistantFisheye {
@@ -1756,7 +1784,7 @@ fn fixed_fisheye_intrinsics_converge_from_a_perturbed_state() {
 
 // ── Analytic vs central-difference Jacobian on the same fisheye scene ──────
 //
-// `EquidistantFisheye` and `SimpleRadialFisheye { k1 = 0 }` parameterize the
+// `EquidistantFisheye` and `RadialFisheye { k1 = k2 = 0 }` parameterize the
 // same `θ = r/f` map, so the two arms differ ONLY in how each Gauss–Newton
 // step is linearized: the first from the closed-form pixel Jacobian, the
 // second from a central difference of `ray_to_pixel` (four extra projections
@@ -1773,7 +1801,7 @@ fn fixed_fisheye_intrinsics_converge_from_a_perturbed_state() {
 /// `1e-12` px before either solve starts, asserted below.
 #[test]
 fn fisheye_analytic_and_central_difference_bundles_agree() {
-    let (mut legacy, n_behind) = make_fisheye_scene_for(equidistant_seed(130.0), 6, 90);
+    let (mut legacy, n_behind) = make_fisheye_scene_for(equidistant_legacy(130.0), 6, 90);
     let (mut native, _) = make_fisheye_scene_for(equidistant_native(130.0), 6, 90);
     assert!(n_behind >= 50, "scene is not wide enough: {n_behind}");
     // The arms take different paths through `project_with_jac`.
@@ -1969,16 +1997,17 @@ fn equidistant_fixed_focal_holds_exactly() {
     );
 }
 
-/// The polynomial fisheye family is NOT released: its `∂u/∂f` is not
+/// The multi-coefficient fisheye family is NOT released: its `∂u/∂f` is not
 /// `(u − cx)/f` (the coefficients act on a `θ` recovered from `r/f`), so the
 /// core degrades `opt_f` to a fixed-focal solve rather than stepping a
-/// half-modeled focal. Phase 3b is the equidistant model only.
+/// half-modeled focal. The release admits the two one-coefficient models
+/// only.
 #[test]
 fn polynomial_fisheye_still_holds_its_focal_under_opt_f() {
     let f0 = 130.0;
-    let (mut s, _) = make_fisheye_scene_for(equidistant_seed(f0), 6, 90);
+    let (mut s, _) = make_fisheye_scene_for(equidistant_legacy(f0), 6, 90);
     let off = 0.94 * f0;
-    s.cam = equidistant_seed(off);
+    s.cam = equidistant_legacy(off);
     for x in s.points.iter_mut() {
         for v in x.iter_mut() {
             *v *= off / f0;
@@ -1991,7 +2020,429 @@ fn polynomial_fisheye_still_holds_its_focal_under_opt_f() {
     assert_eq!(
         out.focal.to_bits(),
         off.to_bits(),
-        "SimpleRadialFisheye took a focal step under opt_f: {}",
+        "RadialFisheye took a focal step under opt_f: {}",
         out.focal
+    );
+}
+
+// ── The curvature rung: `opt_k1` under SIMPLE_RADIAL_FISHEYE ───────────────
+//
+// A real fisheye's `r(θ)` is not exactly `f·θ`. Held to the equidistant map,
+// the adjustment buys the leftover θ³ curvature back with GEOMETRY — a finite
+// dome that pulls sky and horizon off infinity. Releasing the one radial
+// coefficient gives that residual field a parameter to land on. These tests
+// pin the rung's claims: the `∂/∂k1` column is exact, a planted curvature
+// comes back (focal fixed and co-released), a truly equidistant scene stays
+// at `k1 = 0`, direction rows carry the column too, and every other model
+// degrades instead of taking a half-modeled step.
+
+/// A `SIMPLE_RADIAL_FISHEYE` on the same 480² frame as the equidistant
+/// scenes above.
+fn radial_fisheye(f: f64, k1: f64) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SimpleRadialFisheye {
+            focal_length: f,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: k1,
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+/// [`run`] with both shared-camera releases.
+fn run_k1(s: &mut Scene, opt_f: bool, opt_k1: bool, schedule: &[BaSchedule]) -> BundleAdjustment {
+    bundle_adjust(
+        &s.cam,
+        &mut s.quats,
+        &mut s.trans,
+        &mut s.points,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        None,
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        opt_f,
+        opt_k1,
+        schedule,
+        60,
+        2,
+        12,
+    )
+}
+
+/// [`run_k1`] with a `point_at_infinity` mask.
+fn run_k1_masked(
+    s: &mut Scene,
+    mask: &[bool],
+    opt_f: bool,
+    opt_k1: bool,
+    schedule: &[BaSchedule],
+) -> BundleAdjustment {
+    bundle_adjust(
+        &s.cam,
+        &mut s.quats,
+        &mut s.trans,
+        &mut s.points,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        Some(mask),
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        opt_f,
+        opt_k1,
+        schedule,
+        60,
+        2,
+        12,
+    )
+}
+
+/// `∂(u, v)/∂k1` as the kernel computes it, against a central difference of
+/// the projection in `k1`, over the whole field including past 90°.
+///
+/// The column is `f·θ³·û` because `k1` enters as `θ_d = θ·(1 + k1·θ²)` with
+/// `θ` read off the ray, never off a pixel radius — so, like the focal
+/// column, it is the derivative of an exactly-linear dependence and a central
+/// difference must reproduce it to rounding.
+#[test]
+fn k1_column_matches_a_central_difference() {
+    let f = 130.0;
+    let h = 1e-3;
+    let mut worst: f64 = 0.0;
+    let mut n_past_90 = 0usize;
+    for &k1_0 in &[0.0f64, 0.03, -0.02] {
+        let cam_p = radial_fisheye(f, k1_0 + h);
+        let cam_m = radial_fisheye(f, k1_0 - h);
+        for ti in 0..18 {
+            let theta = (5.0 + 10.0 * ti as f64).to_radians();
+            for ai in 0..5 {
+                let az = 2.0 * std::f64::consts::PI * ai as f64 / 5.0;
+                for &scale in &[0.35_f64, 1.0, 7.5] {
+                    // Optical-frame direction at (θ, az) → canonical via
+                    // S = diag(1, −1, −1).
+                    let opt =
+                        Vector3::new(theta.sin() * az.cos(), theta.sin() * az.sin(), theta.cos());
+                    let r = [scale * opt.x, -scale * opt.y, -scale * opt.z];
+                    if theta > std::f64::consts::FRAC_PI_2 {
+                        n_past_90 += 1;
+                    }
+                    let (up, vp) = cam_p.ray_to_pixel(r).unwrap();
+                    let (um, vm) = cam_m.ray_to_pixel(r).unwrap();
+                    let (fd_u, fd_v) = ((up - um) / (2.0 * h), (vp - vm) / (2.0 * h));
+                    // The kernel's column, verbatim.
+                    let (col_u, col_v) = k1_column(f, Vector3::new(r[0], r[1], r[2]));
+                    let denom = col_u.abs().max(col_v.abs()).max(1e-3);
+                    worst = worst
+                        .max((col_u - fd_u).abs() / denom)
+                        .max((col_v - fd_v).abs() / denom);
+                }
+            }
+        }
+    }
+    assert!(n_past_90 >= 100, "not enough periphery: {n_past_90}");
+    assert!(
+        worst < 1e-9,
+        "analytic k1 column vs central difference: worst relative error {worst}"
+    );
+}
+
+/// The column is scale-invariant in the ray (the projection is), and exactly
+/// zero on the optical axis where `θ³·û → 0`.
+#[test]
+fn k1_column_is_scale_invariant_and_vanishes_on_axis() {
+    let f = 130.0;
+    let p = Vector3::new(0.4, -0.3, -0.6);
+    let (a_u, a_v) = k1_column(f, p);
+    for s in [0.2f64, 3.0, 100.0] {
+        let (b_u, b_v) = k1_column(f, p * s);
+        assert!((a_u - b_u).abs() < 1e-12 && (a_v - b_v).abs() < 1e-12);
+    }
+    assert_eq!(k1_column(f, Vector3::new(0.0, 0.0, -2.0)), (0.0, 0.0));
+}
+
+/// A scene shot through a curved lens, handed to the solver as an equidistant
+/// one (`k1 = 0`): the release recovers the planted curvature and the fit
+/// comes back sub-pixel.
+#[test]
+fn opt_k1_recovers_a_planted_curvature() {
+    let f = 130.0;
+    for &k1_true in &[0.02f64, -0.02] {
+        let (mut s, n_behind) = make_fisheye_scene_for(radial_fisheye(f, k1_true), 8, 140);
+        assert!(n_behind >= 50, "scene is not wide enough: {n_behind}");
+        // Hand the solver the same focal but no curvature at all.
+        s.cam = radial_fisheye(f, 0.0);
+        let out = run_k1(&mut s, false, true, &DEFAULT_SCHEDULE);
+        assert_eq!(out.focal.to_bits(), f.to_bits(), "the focal was not fixed");
+        let err = (out.k1 - k1_true).abs() / k1_true.abs();
+        assert!(
+            err < 0.1,
+            "released k1 {} from a 0.0 start (want {k1_true})",
+            out.k1
+        );
+        let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
+        assert!(worst < 0.5, "worst reprojection {worst} px after the rung");
+    }
+}
+
+/// The staged release the callers actually run: focal and curvature together,
+/// from a focal several percent off and no curvature.
+#[test]
+fn opt_f_and_opt_k1_recover_together() {
+    let f_true = 130.0;
+    let k1_true = 0.025;
+    let (mut s, _) = make_fisheye_scene_for(radial_fisheye(f_true, k1_true), 8, 140);
+    let f_start = 124.0;
+    s.cam = radial_fisheye(f_start, 0.0);
+    // The focal trades against the scene scale: move the structure with it.
+    for x in s.points.iter_mut() {
+        for v in x.iter_mut() {
+            *v *= f_start / f_true;
+        }
+    }
+    for t in s.trans.iter_mut() {
+        *t *= f_start / f_true;
+    }
+    let out = run_k1(&mut s, true, true, &DEFAULT_SCHEDULE);
+    let f_err = (out.focal - f_true).abs() / f_true;
+    let k_err = (out.k1 - k1_true).abs() / k1_true;
+    assert!(
+        f_err < 0.01 && k_err < 0.15,
+        "co-released (f, k1) = ({}, {}) from ({f_start}, 0.0), want ({f_true}, {k1_true})",
+        out.focal,
+        out.k1
+    );
+    let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
+    assert!(worst < 0.5, "worst reprojection {worst} px");
+}
+
+/// The fixed point that matters for the promotion
+/// EQUIDISTANT_FISHEYE → SIMPLE_RADIAL_FISHEYE(k1 = 0): on a scene that
+/// really is equidistant, releasing `k1` leaves it at zero and leaves the
+/// geometry where it was.
+#[test]
+fn opt_k1_holds_at_zero_on_an_equidistant_scene() {
+    let f = 130.0;
+    let (mut released, _) = make_fisheye_scene_for(radial_fisheye(f, 0.0), 8, 140);
+    let mut fixed = released.clone();
+    // A perturbed start, so both arms have real work to do.
+    let perturb = |s: &mut Scene| {
+        for (i, q) in s.quats.iter_mut().enumerate() {
+            *q = UnitQuaternion::from_scaled_axis(Vector3::new(
+                0.01 * jitter(i, 21),
+                0.01 * jitter(i, 22),
+                0.01 * jitter(i, 23),
+            )) * *q;
+        }
+        for (p, x) in s.points.iter_mut().enumerate() {
+            for (c, v) in x.iter_mut().enumerate() {
+                *v += 0.05 * jitter(p * 3 + c, 31);
+            }
+        }
+    };
+    perturb(&mut released);
+    perturb(&mut fixed);
+    let out_r = run_k1(&mut released, false, true, &DEFAULT_SCHEDULE);
+    let out_f = run_k1(&mut fixed, false, false, &DEFAULT_SCHEDULE);
+    assert_eq!(out_f.k1.to_bits(), 0.0f64.to_bits(), "unreleased k1 moved");
+    assert!(
+        out_r.k1.abs() < 1e-4,
+        "the released k1 walked off zero on an equidistant scene: {}",
+        out_r.k1
+    );
+    // …and the reconstruction is the same one, not a curvature-for-geometry
+    // trade that happens to end near zero.
+    for (i, (a, b)) in released.quats.iter().zip(fixed.quats.iter()).enumerate() {
+        assert!(a.angle_to(b) < 1e-4, "image {i} rotation split");
+    }
+    for (p, (a, b)) in released.points.iter().zip(fixed.points.iter()).enumerate() {
+        let d = (0..3).map(|c| (a[c] - b[c]).powi(2)).sum::<f64>().sqrt();
+        assert!(d < 1e-3, "point {p} split {d}");
+    }
+}
+
+/// Every other model degrades: `opt_k1` is the radial model's rung alone, and
+/// the core never takes a half-modeled step (the binding rejects these loudly
+/// before they get here).
+#[test]
+fn opt_k1_is_gated_on_the_radial_fisheye_model() {
+    let f = 130.0;
+    // EQUIDISTANT_FISHEYE has no k1 at all: the release is dropped, and the
+    // solve is bit for bit the one without it.
+    let (mut released, _) = make_fisheye_scene_for(equidistant_native(f), 6, 90);
+    let mut plain = released.clone();
+    let out_r = run_k1(&mut released, true, true, &DEFAULT_SCHEDULE);
+    let out_p = run_k1(&mut plain, true, false, &DEFAULT_SCHEDULE);
+    assert_eq!(out_r.k1.to_bits(), 0.0f64.to_bits());
+    assert_bitwise_equal(&released, &out_r, &plain, &out_p);
+    // The multi-coefficient family holds BOTH parameters: its k1 is not
+    // reachable through this column, and its focal is not `(u − cx)/f`.
+    let (mut s, _) = make_fisheye_scene_for(equidistant_legacy(f), 6, 90);
+    let off = 0.94 * f;
+    s.cam = equidistant_legacy(off);
+    let out = run_k1(&mut s, true, true, &DEFAULT_SCHEDULE);
+    assert_eq!(out.focal.to_bits(), off.to_bits());
+    assert_eq!(out.k1.to_bits(), 0.0f64.to_bits());
+    // A pinhole scene the same way (the rung is a fisheye one).
+    let mut ph = make_scene(6, 60);
+    let out_ph = run_k1(&mut ph, true, true, &DEFAULT_SCHEDULE);
+    assert_eq!(out_ph.k1.to_bits(), 0.0f64.to_bits());
+}
+
+/// The step guard: `θ_d = θ·(1 + k1·θ²)` must stay strictly increasing over
+/// the field the observations occupy, or the projection folds — two incidence
+/// angles onto one pixel radius, and `pixel_to_ray` picking the wrong branch.
+#[test]
+fn k1_step_guard_rejects_a_folded_map() {
+    let f = 130.0;
+    // A 480² frame at f = 130 images out to r ≈ 240 px ⇔ θ ≈ 1.85 rad.
+    let field_r = 240.0;
+    // Positive curvature never folds, at any magnitude.
+    assert!(k1_step_admissible(f, 0.0, field_r));
+    assert!(k1_step_admissible(f, 5.0, field_r));
+    // A fold beyond θ = π is beyond every physical ray.
+    assert!(k1_step_admissible(f, -0.03, field_r));
+    // A fold inside the imaged field is not admissible…
+    assert!(!k1_step_admissible(f, -0.2, field_r));
+    // …but the very same k1 is, for a camera whose field stops short of it
+    // (the guard reads the data, not a constant).
+    assert!(k1_step_admissible(f, -0.2, 90.0));
+    // Non-finite steps never pass.
+    assert!(!k1_step_admissible(f, f64::NAN, field_r));
+    assert!(!k1_step_admissible(f, f64::NEG_INFINITY, field_r));
+    // And the boundary is where the derivation says: the peak imaged radius
+    // is (2/3)·f·θ_fold.
+    let k1 = -0.1f64;
+    let theta_fold = 1.0 / (-3.0 * k1).sqrt();
+    let peak = (2.0 / 3.0) * f * theta_fold;
+    assert!(k1_step_admissible(f, k1, peak * 0.999));
+    assert!(!k1_step_admissible(f, k1, peak * 1.001));
+}
+
+/// End to end, a released solve never lands on a folded map.
+#[test]
+fn released_k1_stays_admissible() {
+    let f = 130.0;
+    let (mut s, _) = make_fisheye_scene_for(radial_fisheye(f, -0.02), 8, 140);
+    s.cam = radial_fisheye(f, 0.0);
+    let out = run_k1(&mut s, true, true, &DEFAULT_SCHEDULE);
+    let (cx, cy) = s.cam.principal_point();
+    let field_r =
+        s.uv.iter()
+            .map(|p| (p[0] - cx).hypot(p[1] - cy))
+            .fold(0.0f64, f64::max);
+    assert!(
+        k1_step_admissible(out.focal, out.k1, field_r),
+        "the solve returned a folded map: k1 = {} at f = {}",
+        out.k1,
+        out.focal
+    );
+}
+
+/// Direction rows carry the rung. A point at infinity projects through the
+/// very same map, so `∂/∂k1` applies to it unchanged — and where the finite
+/// cloud sits near the axis (no θ³ signal), the far field is the only thing
+/// that can recover the curvature.
+#[test]
+fn directions_participate_in_the_curvature_rung() {
+    let f = 130.0;
+    let k1_true = 0.03;
+    let cam_true = radial_fisheye(f, k1_true);
+
+    // A near-axis finite cloud in front of an arc of cameras: enough to
+    // satisfy the finite-survivor floor, far too little curvature signal to
+    // fit k1 from.
+    let n_img = 8;
+    let mut quats = Vec::new();
+    let mut trans = Vec::new();
+    for i in 0..n_img {
+        let ang = 0.12 * (i as f64 - (n_img as f64 - 1.0) / 2.0);
+        let center = Vector3::new(ang.sin(), 0.2 * jitter(i, 11), ang.cos() + 6.0);
+        let r = UnitQuaternion::face_towards(&center, &Vector3::y()).inverse();
+        quats.push(r);
+        trans.push(-(r * center));
+    }
+    let mut points: Vec<[f64; 3]> = Vec::new();
+    for p in 0..40 {
+        points.push([0.6 * jitter(p, 5), 0.6 * jitter(p, 6), 0.4 * jitter(p, 7)]);
+    }
+    let n_finite = points.len();
+    // Far-field directions spread over the whole 210° field, out to θ = 105°.
+    let mut dir_ids = Vec::new();
+    for j in 0..60 {
+        let theta = (25.0 + 80.0 * (j as f64) / 59.0f64).to_radians();
+        let phi = 2.399_963 * j as f64;
+        let d = Vector3::new(
+            theta.sin() * phi.cos(),
+            theta.sin() * phi.sin(),
+            -theta.cos(),
+        );
+        dir_ids.push(points.len());
+        points.push([d.x, d.y, d.z]);
+    }
+    let mut uv = Vec::new();
+    let mut obs_img = Vec::new();
+    let mut obs_pt = Vec::new();
+    for (p, x) in points.iter().enumerate() {
+        let is_dir = p >= n_finite;
+        for i in 0..n_img {
+            let xv = Vector3::new(x[0], x[1], x[2]);
+            let c = if is_dir {
+                quats[i] * xv
+            } else {
+                quats[i] * xv + trans[i]
+            };
+            let Some((u, v)) = cam_true.ray_to_pixel([c.x, c.y, c.z]) else {
+                continue;
+            };
+            if (u - 240.0).hypot(v - 240.0) > f * 105.0_f64.to_radians() {
+                continue;
+            }
+            uv.push([u, v]);
+            obs_img.push(i as u32);
+            obs_pt.push(p as u32);
+        }
+    }
+    let scene = Scene {
+        cam: radial_fisheye(f, 0.0),
+        quats,
+        trans,
+        points,
+        uv,
+        obs_img,
+        obs_pt,
+    };
+    let mask = dir_mask(&scene, &dir_ids);
+
+    // With the directions in the solve, the rung recovers the curvature.
+    let mut with_dirs = scene.clone();
+    let out = run_k1_masked(&mut with_dirs, &mask, false, true, &DEFAULT_SCHEDULE);
+    let err = (out.k1 - k1_true).abs() / k1_true;
+    assert!(
+        err < 0.15,
+        "k1 {} from the direction rows (want {k1_true})",
+        out.k1
+    );
+
+    // The control: drop every direction observation and the near-axis finite
+    // cloud alone cannot see the curvature.
+    let mut finite_only = scene.clone();
+    let keep: Vec<usize> = (0..finite_only.obs_pt.len())
+        .filter(|&k| (finite_only.obs_pt[k] as usize) < n_finite)
+        .collect();
+    finite_only.uv = keep.iter().map(|&k| finite_only.uv[k]).collect();
+    finite_only.obs_img = keep.iter().map(|&k| finite_only.obs_img[k]).collect();
+    finite_only.obs_pt = keep.iter().map(|&k| finite_only.obs_pt[k]).collect();
+    let out_finite = run_k1(&mut finite_only, false, true, &DEFAULT_SCHEDULE);
+    let err_finite = (out_finite.k1 - k1_true).abs() / k1_true;
+    assert!(
+        err_finite > 3.0 * err,
+        "the near-axis control recovered k1 too well ({} vs {}) - the test no \
+         longer isolates the direction rows",
+        out_finite.k1,
+        out.k1
     );
 }
