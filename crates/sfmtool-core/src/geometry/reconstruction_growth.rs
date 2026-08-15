@@ -47,8 +47,9 @@ use crate::geometry::absolute_pose::{estimate_absolute_pose, AbsolutePoseOptions
 use crate::geometry::bundle_adjust::{
     bundle_adjust, BaSchedule, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
 };
-use crate::geometry::numeric::{cam_at, median, splitmix64};
+use crate::geometry::numeric::{cam_at, splitmix64};
 use crate::geometry::pose_refine::refine_absolute_pose;
+use crate::numeric::median;
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::CameraIntrinsics;
 

@@ -28,7 +28,7 @@
 use nalgebra::{Matrix3, SymmetricEigen, Vector3};
 use rayon::prelude::*;
 
-use super::observation_adjacency::median_in_place;
+use crate::numeric::median_in_place;
 
 /// A displacement this short carries no direction worth fitting.
 const EPS_DISPLACEMENT: f64 = 1e-12;

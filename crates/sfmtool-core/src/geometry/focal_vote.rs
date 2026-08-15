@@ -50,6 +50,7 @@ use crate::geometry::epipolar_estimation::{
     estimate_fundamental, focal_from_fundamental, FundamentalOptions,
 };
 use crate::geometry::homography_estimation::{estimate_homography, HomographyOptions};
+use crate::numeric::median;
 
 pub mod column_scan;
 
@@ -421,23 +422,6 @@ fn log_median(vals: &[f64]) -> Option<f64> {
     Some(l.exp())
 }
 
-/// numpy-style linear median (even length averages the two central elements),
-/// for the non-focal populations: the orthogonality-scan costs and the H/F
-/// inlier ratios behind `parallax_poverty`.
-fn median(vals: &[f64]) -> Option<f64> {
-    if vals.is_empty() {
-        return None;
-    }
-    let mut v = vals.to_vec();
-    v.sort_by(f64::total_cmp);
-    let n = v.len();
-    Some(if n % 2 == 1 {
-        v[n / 2]
-    } else {
-        0.5 * (v[n / 2 - 1] + v[n / 2])
-    })
-}
-
 /// Per-image-pair accumulator from the sampled pass: how many clusters sampled
 /// this pair, and the sum of their feature displacements.
 #[derive(Clone, Copy, Default)]
@@ -522,7 +506,9 @@ fn rotation_self_calib_focal(h: &Matrix3<f64>, max_wh: f64) -> Option<f64> {
             kmin = k;
         }
     }
-    let med = median(&costs)?;
+    // `costs` is the fixed-width scan grid, so it is never empty and the median
+    // is always a real number.
+    let med = median(&costs);
     // Residual floor validates the H as a conjugate rotation; the flatness test
     // (min far below the median) validates observability.
     if costs[kmin] > ORTHO_COST_FLOOR || costs[kmin] * 2.0 > med {
@@ -900,7 +886,13 @@ pub fn focal_vote_with_options(
     // and a blend would report a focal no pair voted for.
     // `parallax_poverty` medians H/F inlier ratios, not focals, so it stays a
     // linear median.
-    let poverty = median(&ratios).unwrap_or(0.0);
+    // No certified pairs means no poverty evidence, which reads as zero rather
+    // than as the empty median's NaN.
+    let poverty = if ratios.is_empty() {
+        0.0
+    } else {
+        median(&ratios)
+    };
     let pinhole = family_consensus(&bou, &rot);
 
     // ── Camera-model columns ─────────────────────────────────────────────────

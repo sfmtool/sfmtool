@@ -28,6 +28,7 @@ use std::cmp::Ordering;
 
 use rayon::prelude::*;
 
+use crate::numeric::median_in_place;
 use crate::spatial::PointCloud2;
 
 /// Guard against a division by zero when a pair radius or a mean range
@@ -150,22 +151,6 @@ impl DirectedEdge {
         annulus_hits: 0,
         range_mismatch: 0.0,
     };
-}
-
-/// Median of `values`, which must be non-empty; the mean of the two middle
-/// values when the count is even. Sorts `values` in place.
-///
-/// Shared with [`super::adjacency_surfel_normals`], which needs the same
-/// numpy-convention median per IRLS pass and reuses a scratch buffer to get it.
-pub(crate) fn median_in_place(values: &mut [f64]) -> f64 {
-    debug_assert!(!values.is_empty());
-    values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-    let mid = values.len() / 2;
-    if values.len().is_multiple_of(2) {
-        0.5 * (values[mid - 1] + values[mid])
-    } else {
-        values[mid]
-    }
 }
 
 /// Build the observation adjacency graph.

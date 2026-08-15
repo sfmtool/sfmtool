@@ -57,6 +57,7 @@ use crate::features::cluster_match::covisibility::{
     ClusterCovisibility, CovisibilityError, MAX_DENSE_IMAGES,
 };
 use crate::geometry::reprojection::reprojection_residuals;
+use crate::numeric::median_in_place;
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::CameraIntrinsics;
 
@@ -389,17 +390,6 @@ fn modularity_groups(w: &[f64], n: usize) -> (Vec<usize>, usize) {
         }
     }
     (labels, best.len())
-}
-
-/// Median of a scratch buffer, matching the prototype's two-index form
-/// (average of the middle pair for an even count).
-fn median_in_place(buf: &mut [f64]) -> f64 {
-    if buf.is_empty() {
-        return f64::NAN;
-    }
-    buf.sort_by(f64::total_cmp);
-    let n = buf.len();
-    0.5 * (buf[(n - 1) / 2] + buf[n / 2])
 }
 
 /// Length check helper.

@@ -12,6 +12,7 @@ use ndarray::Array2;
 
 use crate::camera::CameraIntrinsics;
 use crate::geometry::RigidTransform;
+use crate::numeric::median_in_place;
 use crate::reconstruction::SfmrReconstruction;
 use crate::spatial::PointCloud;
 
@@ -975,17 +976,7 @@ fn reduce(values: &mut [f64], how: ViewReduce) -> f64 {
         ViewReduce::Min => values.iter().copied().fold(f64::INFINITY, f64::min),
         ViewReduce::Max => values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
         ViewReduce::Mean => values.iter().sum::<f64>() / values.len().max(1) as f64,
-        ViewReduce::Median => {
-            values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let n = values.len();
-            if n == 0 {
-                f64::NAN
-            } else if n % 2 == 1 {
-                values[n / 2]
-            } else {
-                0.5 * (values[n / 2 - 1] + values[n / 2])
-            }
-        }
+        ViewReduce::Median => median_in_place(values),
     }
 }
 

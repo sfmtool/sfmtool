@@ -7,6 +7,7 @@
 
 use super::params::{Objective, MIN_EFFECTIVE_VIEWS};
 use super::prof;
+use crate::numeric::median_in_place;
 
 /// Reused buffers for the consensus / IRLS reductions, so scoring a candidate
 /// allocates nothing after warm-up. The cache path holds one in its `Scratch`;
@@ -54,18 +55,6 @@ pub(super) fn mean_pairwise_channel(
         norm_sq += m * m;
     }
     (views as f64 * norm_sq - 1.0) / (views as f64 - 1.0)
-}
-
-fn median(values: &mut [f64]) -> f64 {
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let n = values.len();
-    if n == 0 {
-        f64::NAN
-    } else if n % 2 == 1 {
-        values[n / 2]
-    } else {
-        0.5 * (values[n / 2 - 1] + values[n / 2])
-    }
 }
 
 /// `Σ_k (row[k] − xbar[k])²`, all f32 — the IRLS per-view residual sum. An f64
@@ -291,11 +280,11 @@ pub(in crate::patch) fn tukey_reweight_from_residuals(
     let views = resid.len();
     sorted.clear();
     sorted.extend_from_slice(resid);
-    let med = median(sorted);
+    let med = median_in_place(sorted);
     for (s, &r) in sorted.iter_mut().zip(resid) {
         *s = (r - med).abs();
     }
-    let mad = median(sorted);
+    let mad = median_in_place(sorted);
     let scale = (1.4826 * mad).max(0.5 * med).max(1e-12);
     let cutoff = 4.685 * scale;
 

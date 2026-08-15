@@ -37,6 +37,7 @@ mod search;
 
 use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, remap_bilinear_mip};
 use crate::camera::WarpMap;
+use crate::numeric::median_in_place;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::normal_refine::{
     build_support, irls_view_weights, weighted_unit_template_into, znormalize_into_kept,
@@ -375,20 +376,6 @@ fn parabolic(mid: f64, left: f64, right: f64) -> f64 {
         return 0.0;
     }
     (0.5 * (left - right) / denom).clamp(-1.0, 1.0)
-}
-
-/// Median of `values` (sorted in place). `NaN` for an empty slice.
-fn median(values: &mut [f64]) -> f64 {
-    if values.is_empty() {
-        return f64::NAN;
-    }
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let m = values.len() / 2;
-    if values.len() % 2 == 1 {
-        values[m]
-    } else {
-        0.5 * (values[m - 1] + values[m])
-    }
 }
 
 /// One view's mutable congealing state.
@@ -861,7 +848,7 @@ pub fn localize_patch_keypoints_with_basis(
             .map(|&si| states[si].loo)
             .filter(|z| z.is_finite())
             .collect();
-        let med = median(&mut live_loo);
+        let med = median_in_place(&mut live_loo);
         let bar = if med.is_finite() {
             params.min_relative_zncc * med
         } else {
@@ -1116,7 +1103,7 @@ fn register_tail(
         .map(|st| st.loo)
         .filter(|z| z.is_finite())
         .collect();
-    let med = median(&mut basis_loo);
+    let med = median_in_place(&mut basis_loo);
     let bar = if med.is_finite() {
         params.min_relative_zncc * med
     } else {

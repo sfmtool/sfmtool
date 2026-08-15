@@ -52,9 +52,10 @@ use rayon::prelude::*;
 use crate::features::cluster_match::covisibility::DisplacementNeighborhood;
 use crate::geometry::batch_resection::{resect_images_batch, ResectOptions};
 use crate::geometry::homography_estimation::{estimate_homography, HomographyOptions};
-use crate::geometry::numeric::{median, polar_rotation, rotation_angle};
+use crate::geometry::numeric::{polar_rotation, rotation_angle};
 use crate::geometry::pose_refine::refine_absolute_pose;
 use crate::geometry::reconstruction_growth::per_image_seed;
+use crate::numeric::median;
 use crate::CameraIntrinsics;
 
 // ── Tuning (see the spec) ────────────────────────────────────────────────────

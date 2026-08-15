@@ -46,7 +46,8 @@
 
 use nalgebra::{DMatrix, DVector, Point3, UnitQuaternion, Vector3};
 
-use super::{median_in_place, GroupConsistency, GroupCorrection, INVALID_RESIDUAL_PX};
+use super::{GroupConsistency, GroupCorrection, INVALID_RESIDUAL_PX};
+use crate::numeric::median_in_place;
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::CameraIntrinsics;
 

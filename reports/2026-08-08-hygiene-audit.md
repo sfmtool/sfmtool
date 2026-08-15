@@ -124,6 +124,32 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
   changed lines). `polar/tests.rs` and `sweep/tests.rs` cover both.
 
 **Numeric-helper duplication that `numeric.rs` did not reach — including six `median`s with three different NaN policies**
+> _Status (2026-08-14): Part (c) done; (a) and (b) remain open. All the `median`s
+> now live in a crate-level `src/numeric.rs` as `median_in_place` +
+> a copying `median`, under one documented rule: `total_cmp` ordering (a real
+> total order, so no comparison can panic and NaN-contaminated input is
+> deterministic rather than unspecified), NaN for an empty population, numpy
+> even-count averaging. **There were seven, not six** — the audit's grep looked
+> for `fn median`, which missed `patch/cloud.rs:979`, an eighth-line
+> `ViewReduce::Median` match arm carrying the same `partial_cmp().unwrap()`
+> panic as `normal_refine/consensus.rs`. It is merged too.
+> The empty-input rule needed no call-site concessions bar one: every caller
+> already tested the result with `is_finite()` / `is_nan()` and had a defined
+> "no answer" path, so NaN routes an empty population where it was already
+> going. `geometry/numeric.rs`'s `0.0`-on-empty was the only outlier, and both
+> its callers (`reconstruction_growth.rs:885`, `:957`) already guard
+> `accepted_inl.is_empty()` before calling. `focal_vote`'s `Option` return is
+> gone: its `costs` grid is fixed-width and never empty, so the `?` was dead,
+> and the `ratios` site now states the `0.0` fallback explicitly.
+> On clean data this is bit-identical — `0.5 * (a + b)` and `(a + b) / 2.0` are
+> both exact, and `total_cmp` equality implies bit equality, so stable vs
+> unstable sort cannot change the selected value.
+> **Not merged, deliberately:** `patch/cloud.rs:612` is a *lower* median
+> (`d[d.len() / 2]`, no even-count averaging) over pre-filtered finite data with
+> a `1.0`-on-empty scale fallback. Folding it in would change a scale
+> heuristic's convention, which is a modelling decision and not a hygiene
+> merge — it needs its own call. `sfmr-format/src/depth_stats.rs:171`
+> `median_sorted` stays put as the finding says (different crate)._
 - Location: `crates/sfmtool-core/src/geometry/{focal_vote,rotation_init,pose_verification,reconstruction_growth}.rs`,
   `analysis/{observation_adjacency,cluster_census}.rs`, `patch/{keypoint_localize.rs,normal_refine/consensus.rs}`
 - Problem: The 2026-08-01 `geometry/numeric.rs` extraction (74 lines: `splitmix64`,

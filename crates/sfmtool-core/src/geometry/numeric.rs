@@ -25,21 +25,6 @@ pub(crate) fn splitmix64(state: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// numpy-style median (mean of the middle two for even counts).
-pub(crate) fn median(values: &[f64]) -> f64 {
-    let mut s = values.to_vec();
-    s.sort_by(f64::total_cmp);
-    let n = s.len();
-    if n == 0 {
-        return 0.0;
-    }
-    if n % 2 == 1 {
-        s[n / 2]
-    } else {
-        (s[n / 2 - 1] + s[n / 2]) / 2.0
-    }
-}
-
 /// Nearest rotation to `m` by polar decomposition (`U Vᵀ` from the SVD).
 ///
 /// The conjugate-homography and pose-verification callers recover `R` only up
