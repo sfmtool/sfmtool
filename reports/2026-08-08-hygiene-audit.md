@@ -88,6 +88,100 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
   `noop` backend and covers this.
 
 **Parallel plain/`_geometric` matcher families across `polar.rs` and `sweep.rs`**
+> _Status (2026-08-15): Partially done — all three `polar.rs` pairs are merged;
+> the two `sweep.rs` pairs remain open. `polar.rs` 844 → 722 lines. The three
+> `_geometric` functions are gone: `extend_for_wraparound_geometric`,
+> `polar_match_one_way_geometric` and the duplicated body of
+> `polar_mutual_best_match_geometric`. Both public entry points survive
+> unchanged (`sfmtool-py/src/matching/sweep.rs` binds all of them) as thin
+> wrappers over one `polar_mutual_best_match_inner`, whose `geometric:
+> Option<…>` parameter carries the entire difference._
+>
+> _The wraparound layout is now a `Wraparound` value — plan once per candidate
+> array, then extend the angles and every parallel payload array through it.
+> That removes the finding's headline hazard: the extended→original index
+> expression, previously byte-identical at `polar.rs:280` and `:669`, is now
+> `Wraparound::to_original` and written once. The three `gather_descs` /
+> `gather_positions` / `gather_affines` helpers (identical but for stride and
+> element type) collapse into one generic `gather_rows`._
+>
+> _The report rated the one-way pair the least attractive of the three (68
+> changed lines of 112) and it was tempting to skip, but that is exactly the
+> pair holding the duplicated index arithmetic — merging only the other two
+> would have left the hazard in place. Read closely, the divergence is almost
+> entirely the extra parameters and the filter block; the window slide and the
+> index mapping are identical, so the seam is clean: the geometric path narrows
+> the candidate set before descriptor comparison and remaps `rel_idx` through
+> the passing offsets, and nothing else differs._
+>
+> _Verified equivalent, not merely green: a scratch A/B harness ran both public
+> entry points over six seeded pseudo-random configurations (varying feature
+> counts, window sizes, thresholds, `min_radius`, and one case clustering every
+> angle at the ±π seam), against the pre- and post-refactor code. Output was
+> **byte-identical** on all six, both paths. Plus the module's own tests 15 →
+> 17 (the new pair covers the payload-layout agreement and the index round trip,
+> both previously reachable only indirectly), workspace 1750 passing, Python
+> 2105 passing / 1 skipped._
+>
+> _One unrelated defect fixed in passing, since it sat in a function this work
+> touched: `compute_angle_offset` selected its median with
+> `partial_cmp().unwrap_or(Equal)` — the same invalid-comparator bug the
+> `numeric.rs` merge removed elsewhere, and an **eighth** median copy the
+> earlier grep missed because it is an inline `select_nth_unstable_by`. Now
+> `f64::total_cmp`: **value**-identical on NaN-free data, defined rather than
+> unspecified if a degenerate `F` yields a NaN sample. Value-identical and not
+> *bit*-identical, which is a real distinction here and not pedantry: `total_cmp`
+> orders `−0.0 < +0.0` where `partial_cmp` reports them equal, and ~24% of
+> fundamental matrices produce a sample array containing both zero signs —
+> including the plain skew-symmetric form this module's own tests use. Measured
+> over 200,000 NaN-free inputs: 224 differing bit patterns, **0 differing
+> values**. It cannot propagate, because `offset` is only ever used as
+> `t - offset`, and the sign of a resulting zero is invisible to the
+> `partial_cmp` sort, the ±2π shifts, the threshold counts and the `.abs()`
+> window comparisons. It is deliberately **not** routed
+> through `crate::numeric` — with 36 samples it takes the upper median rather
+> than averaging the two middles, so folding it in would change the offset. That
+> its doc comment says "median" while the code takes the upper median is a real
+> discrepancy, left alone here as a numerical decision rather than a hygiene
+> one._
+>
+> _**Independently reviewed.** A second pass swept 4000 randomized end-to-end
+> configurations against the pre-refactor code — 0 mismatches, with the
+> geometric filter changing the answer in 1458 of them and wraparound ghosts
+> present in 2479 — plus 5000 randomized wraparound layouts, corroborating the
+> equivalence above on a far wider input space than the six-case harness. It also
+> supplied the ±0 measurement recorded above, and two structural points now folded
+> into the code:_
+>
+> _The candidate set and the index that maps a match back through it are decided
+> **once**, by the arm that knows the answer. Deciding them separately — a
+> `match` on `(geometric, &ext_geometric2)` for the descriptors and an
+> `if geometric.is_some()` for the remap — would have been safe today, since one
+> is a `map` over the other, but a later edit making the extension conditional
+> would have sent full-window indices into `passing_offsets`: out of bounds, or
+> worse, a stale offset from an earlier iteration giving a silently wrong
+> correspondence. The impossible combination is `unreachable!()` rather than
+> absorbed by a `_` arm._
+>
+> _A `Wraparound` plan is a value separate from the arrays it describes, so both
+> extenders `debug_assert!` the length they were planned for. Without that they
+> disagreed about which side was authoritative — `extend_theta` would trust the
+> caller's slice, `extend_rows` `self.n` — so one mismatch silently produced a
+> wrong layout in one and panicked in the other. It is the invariant the
+> `extended_payload_arrays_share_one_layout` test exercises and nothing else
+> enforced._
+>
+> _Two items the review raised that are **not** addressed here, carried forward:_
+> _`gather_rows` is now a near-duplicate of `sweep.rs`'s pre-existing
+> `gather_2d` (same body, different argument order, one extra index level) —
+> fold the two together when the `sweep.rs` half of this finding is done, rather
+> than trading three same-file duplicates for one cross-module one. And
+> `angular_order` still sorts with `partial_cmp().unwrap_or(Equal)`, three lines
+> from the copy that was fixed — a **ninth** instance of the pattern. It is
+> untouched because changing it is not a refactor: `total_cmp` would order
+> `−0.0` before `+0.0`, which can reorder two features whose angles are opposite
+> zeros and therefore change which matches come out. That needs its own measured
+> decision._
 - Location: `crates/sfmtool-core/src/features/feature_match/polar.rs` (844),
   `sweep.rs` (451)
 - Problem: Five pairs implement the same algorithm twice, differing only by whether a

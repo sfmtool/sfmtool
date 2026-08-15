@@ -34,18 +34,73 @@ fn test_extend_for_wraparound() {
     // angular_threshold = min(π/4, 2/5 * 2π) = min(0.785, 2.513) = 0.785
     // near +π: theta > π - 0.785 ≈ 2.356 → only theta=3.0
     // near -π: theta < -π + 0.785 ≈ -2.356 → only theta=-3.0
-    let (ext_theta, ext_descs, orig_len, n_prep) =
-        extend_for_wraparound(&theta, &descs, desc_len, 2);
+    let plan = Wraparound::plan(&theta, 2);
+    let ext_theta = plan.extend_theta(&theta);
+    let ext_descs = plan.extend_rows(&descs, desc_len);
 
-    assert_eq!(orig_len, 5);
+    assert_eq!(plan.n, 5);
     // Only theta=3.0 is near +π → prepended with θ-2π
-    assert_eq!(n_prep, 1);
+    assert_eq!(plan.n_prepended, 1);
     // Only theta=-3.0 is near -π → appended with θ+2π
+    assert_eq!(plan.n_appended, 1);
     assert_eq!(ext_theta.len(), 5 + 1 + 1);
     assert!((ext_theta[0] - (3.0 - 2.0 * PI)).abs() < 1e-10);
     assert!((ext_theta[6] - (-3.0 + 2.0 * PI)).abs() < 1e-10);
     // Extended descriptors should have correct length
     assert_eq!(ext_descs.len(), ext_theta.len() * desc_len);
+}
+
+/// Every parallel array a matcher carries must be extended into the *same*
+/// layout, or a window's descriptors would describe different features than its
+/// positions. Previously the plain and geometric extenders computed that layout
+/// independently, so nothing checked they agreed.
+#[test]
+fn extended_payload_arrays_share_one_layout() {
+    let theta = vec![-3.0, -2.0, 0.0, 2.0, 3.0];
+    let plan = Wraparound::plan(&theta, 2);
+
+    // One row per feature, valued by feature index, at three different strides.
+    let descs: Vec<u8> = (0..5u8).flat_map(|i| [i; 4]).collect();
+    let positions: Vec<f64> = (0..5).flat_map(|i| [i as f64; 2]).collect();
+    let affines: Vec<f64> = (0..5).flat_map(|i| [i as f64; 4]).collect();
+
+    let ext_descs = plan.extend_rows(&descs, 4);
+    let ext_positions = plan.extend_rows(&positions, 2);
+    let ext_affines = plan.extend_rows(&affines, 4);
+
+    let expected = [4.0, 0.0, 1.0, 2.0, 3.0, 4.0, 0.0];
+    assert_eq!(ext_descs.len(), expected.len() * 4);
+    for (slot, &feature) in expected.iter().enumerate() {
+        assert_eq!(ext_descs[slot * 4] as f64, feature, "descs slot {slot}");
+        assert_eq!(ext_positions[slot * 2], feature, "positions slot {slot}");
+        assert_eq!(ext_affines[slot * 4], feature, "affines slot {slot}");
+    }
+}
+
+/// The extended→original index map folds both ghost regions back onto the
+/// entries they duplicate. This arithmetic used to be written out byte-for-byte
+/// in both one-way matchers and was only ever exercised indirectly.
+#[test]
+fn extended_indices_map_back_onto_the_originals() {
+    let theta = vec![-3.0, -2.0, 0.0, 2.0, 3.0];
+    let plan = Wraparound::plan(&theta, 2);
+
+    // Layout is [ghost 4 | 0 1 2 3 4 | ghost 0].
+    let expected = [4, 0, 1, 2, 3, 4, 0];
+    let got: Vec<usize> = (0..plan.extended_len())
+        .map(|i| plan.to_original(i))
+        .collect();
+    assert_eq!(got, expected);
+
+    // A plan with no ghosts at either end is the identity.
+    let no_wrap = vec![-0.5, 0.0, 0.5];
+    let plan = Wraparound::plan(&no_wrap, 0);
+    assert_eq!(plan.n_prepended, 0);
+    assert_eq!(plan.n_appended, 0);
+    let got: Vec<usize> = (0..plan.extended_len())
+        .map(|i| plan.to_original(i))
+        .collect();
+    assert_eq!(got, [0, 1, 2]);
 }
 
 #[test]
@@ -63,7 +118,7 @@ fn test_polar_match_self() {
         descs[i * desc_len + 1] = (i * 5) as u8;
     }
 
-    let matches = polar_match_one_way(&theta, &descs, &theta, &descs, desc_len, 5, None);
+    let matches = polar_match_one_way(&theta, &descs, &theta, &descs, desc_len, 5, None, None);
 
     // Each feature should match itself
     for (&idx1, &(idx2, dist)) in &matches {
@@ -198,11 +253,12 @@ fn test_polar_match_with_threshold() {
     }
 
     // With no threshold, self-match should get all matches
-    let matches_none = polar_match_one_way(&theta, &descs, &theta, &descs, desc_len, 5, None);
+    let matches_none = polar_match_one_way(&theta, &descs, &theta, &descs, desc_len, 5, None, None);
     assert_eq!(matches_none.len(), n);
 
     // With threshold = 0.0, only exact matches pass (self-match gives dist=0)
-    let matches_zero = polar_match_one_way(&theta, &descs, &theta, &descs, desc_len, 5, Some(0.0));
+    let matches_zero =
+        polar_match_one_way(&theta, &descs, &theta, &descs, desc_len, 5, Some(0.0), None);
     assert_eq!(matches_zero.len(), n);
 
     // With a very tight threshold < min inter-descriptor distance, and different descriptors
@@ -210,8 +266,16 @@ fn test_polar_match_with_threshold() {
     for i in 0..n {
         descs2[i * desc_len] = (i * 10 + 100) as u8; // shifted away
     }
-    let matches_tight =
-        polar_match_one_way(&theta, &descs, &theta, &descs2, desc_len, 5, Some(5.0));
+    let matches_tight = polar_match_one_way(
+        &theta,
+        &descs,
+        &theta,
+        &descs2,
+        desc_len,
+        5,
+        Some(5.0),
+        None,
+    );
     // Most or all matches should be rejected since descriptors differ by >= 100
     assert!(
         matches_tight.len() < n,
@@ -235,7 +299,8 @@ fn test_polar_match_multiple_window_sizes() {
 
     // Self-match with various window sizes should all find perfect matches
     for window in [3, 5, 10, 20] {
-        let matches = polar_match_one_way(&theta, &descs, &theta, &descs, desc_len, window, None);
+        let matches =
+            polar_match_one_way(&theta, &descs, &theta, &descs, desc_len, window, None, None);
         assert_eq!(
             matches.len(),
             n,
@@ -266,7 +331,7 @@ fn test_polar_match_larger_feature_set() {
         descs[i * desc_len + 2] = ((i * 13) % 256) as u8;
     }
 
-    let matches = polar_match_one_way(&theta, &descs, &theta, &descs, desc_len, 10, None);
+    let matches = polar_match_one_way(&theta, &descs, &theta, &descs, desc_len, 10, None, None);
     assert_eq!(matches.len(), n);
     for (&idx1, &(idx2, dist)) in &matches {
         assert_eq!(idx1, idx2);
@@ -420,9 +485,23 @@ fn test_polar_match_one_way_geometric_rejects_bad_orientation() {
     let geom = StereoPairGeometry::new(&k, &k, &r, &r, &t1, &t2);
     let config = GeometricFilterConfig::default();
 
-    let matches = polar_match_one_way_geometric(
-        &theta, &descs, &positions, &affines1, &theta, &descs, &positions, &affines2, desc_len, 5,
-        None, &geom, &config,
+    let geometric = GeometricInputs {
+        positions1: &positions,
+        affines1: &affines1,
+        positions2: &positions,
+        affines2: &affines2,
+        geom: &geom,
+        config: &config,
+    };
+    let matches = polar_match_one_way(
+        &theta,
+        &descs,
+        &theta,
+        &descs,
+        desc_len,
+        5,
+        None,
+        Some(&geometric),
     );
 
     assert!(
