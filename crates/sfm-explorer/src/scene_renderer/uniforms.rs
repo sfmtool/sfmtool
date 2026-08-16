@@ -47,6 +47,34 @@ pub(super) fn model_matrix(transform: &Se3Transform) -> [[f32; 4]; 4] {
     ]
 }
 
+/// The background image's uniform block for one frame of camera view mode.
+///
+/// The BG mesh's vertices are ray directions in the **owning node's own
+/// coordinates** — [`generate_bg_distorted_mesh`](super::distorted_mesh::generate_bg_distorted_mesh)
+/// rotates camera-local rays by that image's camera-to-world rotation and
+/// stops there, exactly as the frustum builder does. Frustums then reach world
+/// space through the per-recon `model` matrix, and the background image has to
+/// travel the same road: `enter_camera_view` puts the viewport camera at the
+/// node's *transformed* pose, so without the model matrix an aligned node's
+/// background image stays in the node's original orientation and swings away
+/// from the view — behind the camera, for a half-turn alignment.
+///
+/// The mesh is drawn with `w = 0`, so only the rotation survives: the
+/// translation drops out and the uniform scale cancels in the perspective
+/// divide, which is why the mesh never has to be rebuilt when a transform
+/// changes.
+pub(super) fn bg_image_uniforms(
+    camera: &ViewportCamera,
+    aspect: f64,
+    transform: &Se3Transform,
+) -> BgImageUniforms {
+    let view_proj = camera.projection_matrix(aspect) * camera.view_matrix();
+    BgImageUniforms {
+        view_proj: mat4_to_cols(&view_proj),
+        model: model_matrix(transform),
+    }
+}
+
 /// The per-recon uniform block for one node: its model matrix, pick bases, its
 /// splat size, its tint, and the two switches the Scene panel drives — whether
 /// the node captures picks, and whether its points at infinity are drawn.
@@ -269,15 +297,14 @@ impl SceneRenderer {
 
     /// Update background image uniforms for camera view mode.
     ///
-    /// The BG mesh vertices are world-space ray directions (transformed from
-    /// camera-local rays by the camera-to-world rotation during mesh generation).
-    /// This is the same coordinate convention as frustum wireframes and image
-    /// quads, so we use the same `projection * view` transform pipeline.
-    ///
-    /// The shader uses `w=0` to treat vertices as directions (ignoring the
-    /// translation component of the view matrix), so only the rotation part
-    /// of the view matrix has any effect.
-    pub fn update_bg_image_uniforms(&self, queue: &wgpu::Queue, camera: &ViewportCamera) {
+    /// `transform` is the transform of the node the viewed camera belongs to —
+    /// see [`bg_image_uniforms`] for why the BG mesh needs it.
+    pub fn update_bg_image_uniforms(
+        &self,
+        queue: &wgpu::Queue,
+        camera: &ViewportCamera,
+        transform: &Se3Transform,
+    ) {
         let (w, h) = self.current_size;
         if w == 0 || h == 0 {
             return;
@@ -286,13 +313,7 @@ impl SceneRenderer {
             return;
         };
 
-        let aspect = w as f64 / h as f64;
-        let view = camera.view_matrix();
-        let view_proj = camera.projection_matrix(aspect) * view;
-
-        let uniforms = BgImageUniforms {
-            view_proj: mat4_to_cols(&view_proj),
-        };
+        let uniforms = bg_image_uniforms(camera, w as f64 / h as f64, transform);
         queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
     }
 

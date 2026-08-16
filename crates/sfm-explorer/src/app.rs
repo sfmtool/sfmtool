@@ -427,14 +427,22 @@ impl App {
         }
 
         // Upload/clear background image for camera view mode. The background is
-        // a singleton too, serving the camera view's own node.
-        match hidden_image.and_then(|image| Some((image, self.state.node(image.recon)?))) {
-            Some((image, node)) => {
-                self.scene_renderer
-                    .upload_bg_image(device, queue, &node.recon, image);
-            }
-            None => self.scene_renderer.clear_bg_image(),
-        }
+        // a singleton too, serving the camera view's own node — whose transform
+        // the uniform update below needs, the mesh being built in that node's
+        // own coordinates.
+        let bg_transform =
+            match hidden_image.and_then(|image| Some((image, self.state.node(image.recon)?))) {
+                Some((image, node)) => {
+                    let transform = node.transform.clone();
+                    self.scene_renderer
+                        .upload_bg_image(device, queue, &node.recon, image);
+                    Some(transform)
+                }
+                None => {
+                    self.scene_renderer.clear_bg_image();
+                    None
+                }
+            };
 
         // Update adaptive clip planes from the union of the loaded nodes'
         // bounds. Uses time-based smoothing so transitions are frame-rate
@@ -477,10 +485,12 @@ impl App {
         );
 
         // Update background image uniforms every frame in camera view (viewport
-        // resize or free-look rotation changes the view_proj).
-        if self.viewer_3d.camera_view.is_some() {
+        // resize or free-look rotation changes the view_proj). Writing the node
+        // transform here rather than baking it into the mesh is what keeps an
+        // `Align to…` while camera view is open from leaving a stale background.
+        if let Some(transform) = bg_transform.filter(|_| self.viewer_3d.camera_view.is_some()) {
             self.scene_renderer
-                .update_bg_image_uniforms(queue, &self.viewer_3d.camera);
+                .update_bg_image_uniforms(queue, &self.viewer_3d.camera, &transform);
         }
     }
 

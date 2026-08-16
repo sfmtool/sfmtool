@@ -234,6 +234,11 @@ pub(super) struct EdlUniforms {
 pub(super) struct BgImageUniforms {
     /// Projection matrix for the BG mesh (camera-space → clip-space).
     pub view_proj: [[f32; 4]; 4],
+    /// The owning node's transform, as the same `model` matrix every other
+    /// pass gets. The mesh's ray directions are in the node's own coordinates,
+    /// so an aligned node's background image only faces the way its cameras do
+    /// once this has been applied.
+    pub model: [[f32; 4]; 4],
 }
 
 // ── Related constants ────────────────────────────────────────────────────

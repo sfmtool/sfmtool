@@ -641,6 +641,12 @@ Where it applies:
   need it for the same reason: the viewport's **first-show framing** and the
   `Z` **zoom-to-fit** key, both of which frame point positions rather than GPU
   geometry (`scene::world_points`).
+- **The camera-view background image**: its mesh is ray directions in the
+  node's own coordinates, so it reaches world space through the same `model`
+  matrix, written into the BG uniform block from the viewed camera's node (see
+  [gui-camera-views.md](gui-camera-views.md), "Background mesh shader"). It is
+  the one geometry that would otherwise be left behind by an alignment while
+  the viewpoint moved with it.
 - **Points at infinity**: directions rotate; translation drops out and uniform
   scale is irrelevant to a direction. The `model × vec4(dir, 0)` path already
   handles this with no special-casing.

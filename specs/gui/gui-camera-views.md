@@ -652,6 +652,7 @@ The background uses a tessellated mesh with vertices on the unit sphere
 ```wgsl
 struct BgUniforms {
     view_proj: mat4x4<f32>,
+    model: mat4x4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> bg: BgUniforms;
@@ -661,7 +662,7 @@ struct BgUniforms {
 @vertex
 fn vs_main(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>) -> VertexOutput {
     var out: VertexOutput;
-    let clip = bg.view_proj * vec4<f32>(position, 0.0);
+    let clip = bg.view_proj * (bg.model * vec4<f32>(position, 0.0));
     out.clip_pos = vec4<f32>(clip.xy, clip.w, clip.w);  // depth = far plane
     out.uv = uv;
     return out;
@@ -675,10 +676,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 Single render target (`edl_output_view`), no depth, no blending (opaque).
 Using `w=0` transforms the position as a direction (no translation), so the
-mesh appears infinitely far away. Vertices are pre-rotated to world space
-during mesh generation, so `view_proj` is the standard `projection * view`
-used by all other pipelines. Free-look navigation works automatically
-because the viewport camera's orientation is captured in the view matrix.
+mesh appears infinitely far away. Vertices are pre-rotated during mesh
+generation by the image's camera-to-world rotation — into the **owning node's
+own coordinates**, exactly as frustum wireframes and image quads are built —
+so `view_proj` is the standard `projection * view` used by all other
+pipelines. Free-look navigation works automatically because the viewport
+camera's orientation is captured in the view matrix.
+
+`model` is that node's transform (see
+[gui-scene-graph.md](gui-scene-graph.md), "Node Transforms and Alignment"),
+the same per-recon matrix every other pass applies, written into the BG
+uniform block each frame from the node the viewed camera belongs to. Camera
+view enters at the node's *transformed* pose, so without it an aligned node's
+background image would stay in the node's original orientation and swing out
+of the view — behind the camera, for a half-turn alignment. Applying it in the
+shader rather than baking it into the mesh is what keeps an `Align to…` while
+camera view is open from leaving a stale background; with `w = 0` only the
+rotation survives (the translation drops out and the uniform scale cancels in
+the perspective divide).
 
 ### Navigating between cameras
 

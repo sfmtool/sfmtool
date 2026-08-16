@@ -1092,6 +1092,72 @@ fn the_node_transform_reaches_the_gpu_as_the_model_matrix() {
 }
 
 #[test]
+fn an_aligned_nodes_background_image_stays_in_front_of_the_camera() {
+    use super::super::distorted_mesh::generate_bg_distorted_mesh;
+    use super::super::uniforms::bg_image_uniforms;
+
+    let recon = SfmrReconstruction::demo(64);
+    let image = &recon.images[3];
+    let camera = &recon.cameras[image.camera_index as usize];
+
+    // A half-turn: the alignment between two solves that disagree about which
+    // way the scene faces, and the one that makes a background image left in
+    // the node's own frame end up directly behind the viewer.
+    let t = Se3Transform::new(
+        RotQuaternion::from_axis_angle(nalgebra::Vector3::new(0.0, 0.0, 1.0), std::f64::consts::PI)
+            .unwrap(),
+        nalgebra::Vector3::new(4.0, -2.5, 1.25),
+        2.0,
+    );
+
+    // The viewport pose `enter_camera_view` builds for this image on this node.
+    let (rotation, centre) = crate::viewer_3d::transformed_pose(image, &t);
+    let mut viewport = crate::viewer_3d::ViewportCamera::default();
+    viewport.camera.position = centre;
+    viewport.camera.orientation = rotation;
+
+    let uniforms = bg_image_uniforms(&viewport, 16.0 / 9.0, &t);
+    let r = image.camera_to_world_rotation_flat();
+    let (vertices, _) = generate_bg_distorted_mesh(camera, &r, BG_PINHOLE_SUBDIVISIONS);
+
+    // `clip.w` is `-z_view` under the reversed-Z projection, so it is positive
+    // exactly when a vertex is in front of the camera.
+    let clip_w = |uniforms: &super::super::gpu_types::BgImageUniforms, d: [f32; 3]| {
+        let world: Vec<f32> = (0..4)
+            .map(|row| {
+                uniforms.model[0][row] * d[0]
+                    + uniforms.model[1][row] * d[1]
+                    + uniforms.model[2][row] * d[2]
+            })
+            .collect();
+        (0..4)
+            .map(|i| uniforms.view_proj[i][3] * world[i])
+            .sum::<f32>()
+    };
+
+    for v in &vertices {
+        assert!(
+            clip_w(&uniforms, v.position) > 0.0,
+            "background vertex {:?} is behind the camera it is viewed through",
+            v.position,
+        );
+    }
+
+    // And it is the node transform that puts it there: the same rays without it
+    // — the mesh drawn in the node's own frame — face the other way entirely.
+    let unmodelled = super::super::gpu_types::BgImageUniforms {
+        model: bg_image_uniforms(&viewport, 16.0 / 9.0, &Se3Transform::identity()).model,
+        ..uniforms
+    };
+    for v in &vertices {
+        assert!(
+            clip_w(&unmodelled, v.position) < 0.0,
+            "the fixture is meant to be a half-turn away from the camera",
+        );
+    }
+}
+
+#[test]
 fn a_scaled_node_scales_its_splat_size_with_it() {
     let (device, _queue) = device();
     let mut r = SceneRenderer::new();
