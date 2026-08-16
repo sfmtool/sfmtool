@@ -519,7 +519,8 @@ impl AppState {
         };
         let (source_label, target_label) =
             (self.scene[si].label.clone(), self.scene[ti].label.clone());
-        let fit = align::fit_alignment(&self.scene[si].recon, &self.scene[ti].recon, options);
+        let fit =
+            align::align_reconstructions(&self.scene[si].recon, &self.scene[ti].recon, options);
         self.status_message = Some(match fit {
             Ok(fit) => {
                 // `compose` applies the receiver first: the fit takes the source

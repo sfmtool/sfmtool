@@ -1,12 +1,15 @@
 # Reconstruction alignment: least-squares similarity fit + RANSAC outlier rejection
 
 **Status:** Implemented in
-`crates/sfmtool-core/src/analysis/alignment/{least_squares.rs,ransac.rs}`,
-exposed to Python as `sfmtool._sfmtool.analysis.estimate_alignment_rs` /
-`ransac_alignment_rs` (`crates/sfmtool-py/src/analysis/core.rs`). Driven by
-`sfm align --method points` (`src/sfmtool/align/by_points.py`) and by the
+`crates/sfmtool-core/src/analysis/alignment/{least_squares.rs,ransac.rs,reconstructions.rs}`,
+with the two point-set estimators exposed to Python as
+`sfmtool._sfmtool.analysis.estimate_alignment_rs` / `ransac_alignment_rs`
+(`crates/sfmtool-py/src/analysis/core.rs`). Driven by
+`sfm align --method points` (`src/sfmtool/align/by_points.py`), by the
 `sfm xform` alignment operations `--align-to` / `--align-to-input`
-(`src/sfmtool/xform/_align_to.py`, `_align_to_input.py`).
+(`src/sfmtool/xform/_align_to.py`, `_align_to_input.py`), and — through the
+reconstruction-level entry point below — by the SfM Explorer's
+`Align to ▸ <node>`.
 
 ## Overview
 
@@ -28,7 +31,54 @@ counterparts. The point-based alignment pipeline is:
 Camera-based alignment (`sfm align --method cameras`) does **not** use this
 module — it estimates the similarity from matched camera poses in pure
 Python (`align/core.py::estimate_similarity_with_orientations`, weighted
-quaternion averaging per Markley et al.).
+quaternion averaging per Markley et al.). That is a *second* implementation
+of reconstruction-level alignment, parallel to `reconstructions.rs` below and
+answering the same question differently; retargeting `sfm align` at the
+shared Rust one is open work.
+
+## Aligning two reconstructions (`reconstructions.rs`)
+
+The two estimators above fit *point sets*. `align_reconstructions(source,
+target, options) -> Result<AlignFit, String>` fits *reconstructions*: it
+decides which of the source's geometry corresponds to which of the target's,
+drives the estimators over the result, and reports how well it went. This is
+the shared implementation behind the SfM Explorer's `Align to ▸` (see
+[gui-scene-graph.md](../gui/gui-scene-graph.md), "Node Transforms and
+Alignment") and the entry point any other Rust caller aligning two loaded
+`SfmrReconstruction`s should use.
+
+`AlignOptions` is the whole choice: `source` (`AlignSource::Cameras` — the
+default — or `AlignSource::Points`) and `estimate_scale` (similarity vs
+rigid). The numeric policy is fixed in the module rather than exposed:
+`AlignmentParams { rounds: 3, keep_fraction: 0.8 }` for the trimmed refit,
+and for the point mode a 200-round RANSAC pass with sample size 3, seed 42,
+and a threshold taken as the 95th percentile of a preliminary
+all-correspondence fit's residuals (floored at `1e-9 ×` the target cloud's
+extent, so an exactly-corresponding pair is not rejected as all-outlier by
+`f64` rounding noise).
+
+**Correspondences by cameras** — images matched by `name`, corresponded camera
+*centres* feeding the fit. A repeated name on either side pairs once, first
+occurrence winning (`shared_images`, also public: the same pairing other
+per-image comparisons want). Fewer than 3 shared images is refused rather than
+fitted — two points leave the rotation about the line joining them free. No
+RANSAC: a few hundred centres are too few for a consensus sample to beat
+fitting them all and trimming the worst away.
+
+**Correspondences by points** — `find_point_correspondences` over the shared
+images (see [point-correspondence.md](point-correspondence.md)), which needs
+feature-indexed observations (`sift_files`) on *both* sides; pairs touching a
+point at infinity are dropped, as in `sfm align`. Fewer than 10
+correspondences, before or after RANSAC, is refused (`sfm align`'s
+`min_points`).
+
+`AlignFit` carries the fitted `transform` (source's native coordinates →
+target's native coordinates; composing it into a frame either reconstruction
+is *displayed* in is the caller's job), the correspondence count, the inlier
+count, the RMS residual over the inliers, and which mode produced them. Every
+failure the modes name — no shared images, too few correspondences, a
+degenerate configuration, an SVD that would not converge — comes back as an
+`Err` string a caller can show verbatim, leaving the source where it was.
 
 ## Least-squares fit (`least_squares.rs`)
 
@@ -135,3 +185,11 @@ Sibling `tests.rs` files under `analysis/alignment/least_squares/` and
 rank-deficient inputs (identical points, collinear points), reflection
 avoidance, scale recovery, and RANSAC inlier/outlier separation with
 deterministic seeds.
+
+`analysis/alignment/reconstructions/tests.rs` works one level up, on a fixture
+pair built the way the GUI spec asks for: reconstruction B is reconstruction A
+put through a *known* similarity, so the assertions are about where B's points
+and cameras land rather than about the transform's components (which sidesteps
+the quaternion sign ambiguity). It covers both modes' round trips, that the
+landed cameras face the way the target's do, rigid vs similarity, the
+exclusion of points at infinity, and each refusal path.

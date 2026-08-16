@@ -665,10 +665,13 @@ Computes the similarity mapping this node (source) onto the chosen node
 lands in the target's *currently displayed* frame, so aligning C→B after B→A
 chains as expected. The target node is never modified.
 
-The estimation machinery already exists in
-`sfmtool-core::analysis::alignment` and
-`sfmtool-core::reconstruction::point_correspondence`; the GUI adds only
-correspondence gathering and UI:
+The whole fit lives in
+`sfmtool-core::analysis::alignment::reconstructions::align_reconstructions` —
+correspondence gathering included — so the GUI adds only the popup and the
+status line, and any other caller aligning two loaded reconstructions gets the
+same answer. See
+[reconstruction-alignment.md](../core/reconstruction-alignment.md). What that
+fit does:
 
 - **Correspondences by cameras** (default): images matched by `name` across
   the two nodes; corresponded camera centers feed the fit. Works whenever the
@@ -703,7 +706,8 @@ correspondence gathering and UI:
   itself) is not rejected as all-outlier by `f64` rounding noise. 200 RANSAC
   rounds rather than `sfm align`'s 1000: the loop is scalar Rust on the UI
   thread rather than numpy, and the preliminary fit has already done most of
-  the work.
+  the work. Full detail in
+  [reconstruction-alignment.md](../core/reconstruction-alignment.md).
 
 Options are deliberately few (a small popup): correspondence source
 (Cameras / Points) and Similarity vs Rigid. Defaults: cameras, similarity. They
