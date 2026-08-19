@@ -6,7 +6,7 @@
 use rusqlite::Connection;
 use sfmr_format::SfmrCamera;
 
-use super::types::{PosePrior, TwoViewGeometry, TwoViewGeometryConfig};
+use super::types::{ColmapDbError, PosePrior, TwoViewGeometry, TwoViewGeometryConfig};
 use super::write::write_colmap_db;
 use super::ColmapDbWriteData;
 
@@ -397,6 +397,62 @@ fn test_pair_id_encoding() {
 
     drop(conn);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn sfmtool_fisheye_fails_the_db_export_path() {
+    // SFMTOOL_FISHEYE has no COLMAP carrier (unlike EQUIDISTANT_FISHEYE), so
+    // the DB writer must surface `UnknownModelName` — remapped from the
+    // shared `colmap_io` lookup — rather than writing an approximation.
+    let dir = std::env::temp_dir().join("colmap_db_sfmtool_fisheye_reject");
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = dir.join("reject.db");
+    let _ = std::fs::remove_file(&db_path);
+
+    let cameras = vec![SfmrCamera {
+        model: "SFMTOOL_FISHEYE".into(),
+        width: 480,
+        height: 480,
+        parameters: [
+            ("focal_length".into(), 130.0),
+            ("principal_point_x".into(), 240.0),
+            ("principal_point_y".into(), 240.0),
+            ("bspline_theta_max".into(), 2.0),
+            ("bspline_coeff_count".into(), 2.0),
+            ("bspline_c0".into(), -0.001),
+            ("bspline_c1".into(), -0.09),
+        ]
+        .into_iter()
+        .collect(),
+    }];
+    let image_names = vec!["frame_001.jpg".to_string()];
+    let camera_indexes = vec![0u32];
+    let quaternions_wxyz = vec![[1.0, 0.0, 0.0, 0.0]];
+    let translations_xyz = vec![[0.0, 0.0, 0.0]];
+    let keypoints_per_image: Vec<Vec<[f64; 2]>> = vec![vec![]];
+    let descriptors_per_image = vec![vec![]];
+
+    let data = ColmapDbWriteData {
+        cameras: &cameras,
+        image_names: &image_names,
+        camera_indexes: &camera_indexes,
+        quaternions_wxyz: &quaternions_wxyz,
+        translations_xyz: &translations_xyz,
+        keypoints_per_image: &keypoints_per_image,
+        descriptors_per_image: &descriptors_per_image,
+        descriptor_dim: 128,
+        pose_priors: None,
+        two_view_geometries: None,
+        rigs: None,
+        frames: None,
+    };
+
+    let err = write_colmap_db(&db_path, &data).unwrap_err();
+    assert!(
+        matches!(err, ColmapDbError::UnknownModelName(ref name) if name == "SFMTOOL_FISHEYE"),
+        "unexpected error: {err:?}"
+    );
+    let _ = std::fs::remove_file(&db_path);
 }
 
 #[test]

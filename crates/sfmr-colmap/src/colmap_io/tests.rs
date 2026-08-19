@@ -783,6 +783,96 @@ fn simple_radial_fisheye_is_claimed_only_at_exactly_zero_k() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SFMTOOL_FISHEYE: no COLMAP carrier
+//
+// The spline fisheye has no COLMAP model that parameterizes it, so
+// unlike EQUIDISTANT_FISHEYE there is no export mapping at all: every write
+// path must reject it with `UnknownModelName` rather than silently
+// approximating.
+// ---------------------------------------------------------------------------
+
+fn sfmtool_fisheye_camera() -> SfmrCamera {
+    SfmrCamera {
+        model: "SFMTOOL_FISHEYE".into(),
+        width: 480,
+        height: 480,
+        parameters: [
+            ("focal_length".into(), 130.0),
+            ("principal_point_x".into(), 240.0),
+            ("principal_point_y".into(), 240.0),
+            ("bspline_theta_max".into(), 2.0),
+            ("bspline_coeff_count".into(), 4.0),
+            ("bspline_c0".into(), -0.001),
+            ("bspline_c1".into(), -0.01),
+            ("bspline_c2".into(), -0.03),
+            ("bspline_c3".into(), -0.09),
+        ]
+        .into_iter()
+        .collect(),
+    }
+}
+
+#[test]
+fn sfmtool_fisheye_has_no_colmap_export() {
+    let cam = sfmtool_fisheye_camera();
+    assert!(matches!(
+        colmap_model_id(&cam.model),
+        Err(ColmapIoError::UnknownModelName(ref name)) if name == "SFMTOOL_FISHEYE"
+    ));
+    assert!(matches!(
+        camera_params_to_array(&cam),
+        Err(ColmapIoError::UnknownModelName(ref name)) if name == "SFMTOOL_FISHEYE"
+    ));
+    // Import claiming is untouched: only the SIMPLE_RADIAL_FISHEYE k = 0
+    // carrier is ever relabelled, so this name passes through verbatim.
+    assert_eq!(
+        claim_native_camera_model(cam.clone()).model,
+        "SFMTOOL_FISHEYE"
+    );
+    assert_eq!(
+        claim_native_camera_model(cam.clone()).parameters,
+        cam.parameters
+    );
+}
+
+#[test]
+fn sfmtool_fisheye_fails_the_binary_write_path() {
+    // The whole-reconstruction writer surfaces the same error, so an export
+    // cannot partially succeed and leave a broken cameras.bin behind.
+    let cam = sfmtool_fisheye_camera();
+    let image_names = vec!["img_000.jpg".to_string()];
+    let camera_indexes = vec![0u32];
+    let quaternions_wxyz = vec![[1.0, 0.0, 0.0, 0.0]];
+    let translations_xyz = vec![[0.0, 0.0, 0.0]];
+    let keypoints_per_image: Vec<Vec<[f64; 2]>> = vec![vec![]];
+    let write_data = ColmapWriteData {
+        cameras: std::slice::from_ref(&cam),
+        image_names: &image_names,
+        camera_indexes: &camera_indexes,
+        quaternions_wxyz: &quaternions_wxyz,
+        translations_xyz: &translations_xyz,
+        positions_xyz: &[],
+        colors_rgb: &[],
+        reprojection_errors: &[],
+        track_image_indexes: &[],
+        track_feature_indexes: &[],
+        track_point3d_indexes: &[],
+        keypoints_per_image: &keypoints_per_image,
+        rigs: None,
+        frames: None,
+    };
+    let dir = std::env::temp_dir().join("colmap_io_sfmtool_fisheye_reject");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let err = write_colmap_binary(&dir, &write_data).unwrap_err();
+    assert!(
+        matches!(err, ColmapIoError::UnknownModelName(ref name) if name == "SFMTOOL_FISHEYE"),
+        "unexpected error: {err:?}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn simple_radial_fisheye_import_claims_zero_k_and_keeps_the_rest() {
     // The same rule through a real write/read cycle.

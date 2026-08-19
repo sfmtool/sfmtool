@@ -211,6 +211,20 @@ fn equidistant_fisheye() -> CameraIntrinsics {
     }
 }
 
+fn sfmtool_fisheye() -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SfmtoolFisheye {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_theta_max: 2.0,
+            bspline: vec![-0.001, -0.004, -0.01, -0.02, -0.03, -0.05, -0.07, -0.09],
+        },
+        width: 640,
+        height: 480,
+    }
+}
+
 fn all_cameras() -> Vec<CameraIntrinsics> {
     vec![
         pinhole(),
@@ -226,6 +240,7 @@ fn all_cameras() -> Vec<CameraIntrinsics> {
         full_opencv(),
         equirectangular(),
         equidistant_fisheye(),
+        sfmtool_fisheye(),
     ]
 }
 
@@ -316,7 +331,9 @@ fn model_name_all_variants() {
         "FULL_OPENCV",
         "EQUIRECTANGULAR",
         "EQUIDISTANT_FISHEYE",
+        "SFMTOOL_FISHEYE",
     ];
+    assert_eq!(all_cameras().len(), expected.len());
     for (cam, name) in all_cameras().iter().zip(expected.iter()) {
         assert_eq!(cam.model_name(), *name);
     }
@@ -622,6 +639,19 @@ fn error_display_missing_parameter() {
     );
 }
 
+#[test]
+fn error_display_invalid_parameter() {
+    let err = CameraIntrinsicsError::InvalidParameter {
+        model: "SFMTOOL_FISHEYE".to_string(),
+        parameter: "bspline_coeff_count".to_string(),
+    };
+    let msg = format!("{err}");
+    assert_eq!(
+        msg,
+        "invalid parameter 'bspline_coeff_count' for camera model 'SFMTOOL_FISHEYE'"
+    );
+}
+
 // -----------------------------------------------------------------------
 // Dual-focal distortion models preserve separate fx, fy
 // -----------------------------------------------------------------------
@@ -642,6 +672,7 @@ fn focal_lengths_dual_focal_distortion_models() {
 #[test]
 fn is_fisheye_true_for_fisheye_models() {
     assert!(equidistant_fisheye().model.is_fisheye());
+    assert!(sfmtool_fisheye().model.is_fisheye());
     assert!(simple_radial_fisheye().model.is_fisheye());
     assert!(radial_fisheye().model.is_fisheye());
     assert!(opencv_fisheye().model.is_fisheye());
@@ -726,6 +757,272 @@ fn equidistant_fisheye_classification() {
     assert!(!radial_fisheye().model.supports_pixel_jacobian());
     assert!(!equirectangular().model.supports_pixel_jacobian());
     assert!(simple_pinhole().model.supports_pixel_jacobian());
+}
+
+// -----------------------------------------------------------------------
+// SfmtoolFisheye: equidistant base + radial spline. Classification,
+// variable-length serialization, and the gapped-spline error.
+// -----------------------------------------------------------------------
+
+#[test]
+fn sfmtool_fisheye_classification() {
+    let m = sfmtool_fisheye().model;
+    assert_eq!(m.model_name(), "SFMTOOL_FISHEYE");
+    assert!(m.is_fisheye());
+    assert!(!m.is_equirectangular());
+    assert!(m.needs_ray_path());
+    // The radial spline counts as distortion when any coefficient is live…
+    assert!(m.has_distortion());
+    // …and the θ-map differentiates in closed form like the rest of the trio.
+    assert!(m.supports_pixel_jacobian());
+}
+
+#[test]
+fn sfmtool_fisheye_zero_or_empty_bspline_has_no_distortion() {
+    for bspline in [vec![], vec![0.0; 8]] {
+        let m = CameraModel::SfmtoolFisheye {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_theta_max: 2.0,
+            bspline,
+        };
+        assert!(!m.has_distortion());
+        // Still classified by shape, not by coefficient values.
+        assert!(m.is_fisheye());
+        assert!(m.supports_pixel_jacobian());
+    }
+}
+
+#[test]
+fn sfmtool_fisheye_inactive_spline_has_no_distortion_however_live_the_coefficients() {
+    // `has_distortion` must agree with what the kernels actually run. They
+    // short-circuit an INACTIVE spline — one below the cubic minimum, or one
+    // whose domain end is not positive and finite — to the exact equidistant
+    // arithmetic, so neither shape distorts anything.
+    let live = vec![-0.001, -0.004, -0.01, -0.02, -0.03, -0.05, -0.07, -0.09];
+    let cases: Vec<(f64, Vec<f64>)> = vec![
+        // One coefficient is below the cubic minimum: no spline to evaluate.
+        (2.0, vec![0.4]),
+        // Live coefficients, degenerate domain end.
+        (0.0, live.clone()),
+        (-1.0, live.clone()),
+        (f64::INFINITY, live.clone()),
+        (f64::NEG_INFINITY, live.clone()),
+        (f64::NAN, live.clone()),
+    ];
+    for (bspline_theta_max, bspline) in cases {
+        let m = CameraModel::SfmtoolFisheye {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_theta_max,
+            bspline,
+        };
+        assert!(
+            !m.has_distortion(),
+            "θ_max = {bspline_theta_max} reported distortion"
+        );
+        // Still classified by shape, not by coefficient values.
+        assert!(m.is_fisheye());
+        assert!(m.supports_pixel_jacobian());
+    }
+    // A real spline on a real domain still reports distortion.
+    assert!(CameraModel::SfmtoolFisheye {
+        focal_length: 500.0,
+        principal_point_x: 320.0,
+        principal_point_y: 240.0,
+        bspline_theta_max: 2.0,
+        bspline: live,
+    }
+    .has_distortion());
+}
+
+#[test]
+fn sfmtool_fisheye_serializes_the_bspline_as_indexed_parameters() {
+    let cam = sfmtool_fisheye();
+    let stored = SfmrCamera::from(&cam);
+    assert_eq!(stored.model, "SFMTOOL_FISHEYE");
+    // The five-parameter head plus one key per coefficient.
+    assert_eq!(stored.parameters.len(), 5 + 8);
+    assert_eq!(stored.parameters["bspline_theta_max"], 2.0);
+    assert_eq!(stored.parameters["bspline_coeff_count"], 8.0);
+    assert_eq!(stored.parameters["bspline_c0"], -0.001);
+    assert_eq!(stored.parameters["bspline_c7"], -0.09);
+    // Round trip through the on-disk representation, all 8 coefficients.
+    assert_eq!(CameraIntrinsics::try_from(&stored).unwrap(), cam);
+}
+
+#[test]
+fn sfmtool_fisheye_empty_bspline_round_trips() {
+    let cam = CameraIntrinsics {
+        model: CameraModel::SfmtoolFisheye {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_theta_max: 2.0,
+            bspline: vec![],
+        },
+        width: 640,
+        height: 480,
+    };
+    let stored = SfmrCamera::from(&cam);
+    // The declared length carries the empty spline; no coefficient keys.
+    assert_eq!(stored.parameters["bspline_coeff_count"], 0.0);
+    assert!(!stored.parameters.keys().any(|k| k
+        .strip_prefix("bspline_c")
+        .is_some_and(|i| i.parse::<usize>().is_ok())));
+    assert_eq!(CameraIntrinsics::try_from(&stored).unwrap(), cam);
+}
+
+#[test]
+fn sfmtool_fisheye_gapped_bspline_is_a_missing_parameter() {
+    // bspline_c1 is absent while bspline_c2 exists under a declared length of
+    // four: the read must report the hole rather than silently truncating or
+    // skipping it.
+    let mut stored = SfmrCamera::from(&sfmtool_fisheye());
+    stored.parameters.clear();
+    stored.parameters.insert("focal_length".to_string(), 500.0);
+    stored
+        .parameters
+        .insert("principal_point_x".to_string(), 320.0);
+    stored
+        .parameters
+        .insert("principal_point_y".to_string(), 240.0);
+    stored
+        .parameters
+        .insert("bspline_theta_max".to_string(), 2.0);
+    stored
+        .parameters
+        .insert("bspline_coeff_count".to_string(), 4.0);
+    stored.parameters.insert("bspline_c0".to_string(), -0.001);
+    stored.parameters.insert("bspline_c2".to_string(), -0.01);
+    stored.parameters.insert("bspline_c3".to_string(), -0.02);
+    let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+    assert!(matches!(
+        err,
+        CameraIntrinsicsError::MissingParameter {
+            ref model,
+            ref parameter,
+        } if model == "SFMTOOL_FISHEYE" && parameter == "bspline_c1"
+    ));
+}
+
+#[test]
+fn sfmtool_fisheye_missing_theta_max_is_a_missing_parameter() {
+    let mut stored = SfmrCamera::from(&sfmtool_fisheye());
+    stored.parameters.remove("bspline_theta_max");
+    let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+    assert!(matches!(
+        err,
+        CameraIntrinsicsError::MissingParameter { ref parameter, .. }
+            if parameter == "bspline_theta_max"
+    ));
+}
+
+#[test]
+fn sfmtool_fisheye_missing_coeff_count_is_a_missing_parameter() {
+    // Without the declared length there is no spline to read: the key count
+    // is deliberately NOT a fallback.
+    let mut stored = SfmrCamera::from(&sfmtool_fisheye());
+    stored.parameters.remove("bspline_coeff_count");
+    let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+    assert!(matches!(
+        err,
+        CameraIntrinsicsError::MissingParameter {
+            ref model,
+            ref parameter,
+        } if model == "SFMTOOL_FISHEYE" && parameter == "bspline_coeff_count"
+    ));
+}
+
+#[test]
+fn sfmtool_fisheye_non_integer_coeff_count_is_an_invalid_parameter() {
+    // A count must be a finite non-negative integer; each of these is stored
+    // as an f64 that is not one.
+    for bad in [2.5, -1.0, f64::NAN, f64::INFINITY] {
+        let mut stored = SfmrCamera::from(&sfmtool_fisheye());
+        stored
+            .parameters
+            .insert("bspline_coeff_count".to_string(), bad);
+        let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                CameraIntrinsicsError::InvalidParameter {
+                    ref model,
+                    ref parameter,
+                } if model == "SFMTOOL_FISHEYE" && parameter == "bspline_coeff_count"
+            ),
+            "bspline_coeff_count = {bad} was accepted: {err}"
+        );
+    }
+}
+
+#[test]
+fn sfmtool_fisheye_single_coefficient_count_is_an_invalid_parameter() {
+    // A clamped cubic basis needs at least two coefficients. Zero is the
+    // empty spline and stays valid; exactly one is a length the model does not
+    // define, and reading it as the identity would hide a corrupt file.
+    let mut stored = SfmrCamera::from(&sfmtool_fisheye());
+    stored.parameters.retain(|k, _| {
+        !k.strip_prefix("bspline_c")
+            .is_some_and(|i| i.parse::<usize>().is_ok())
+    });
+    stored
+        .parameters
+        .insert("bspline_coeff_count".to_string(), 1.0);
+    stored.parameters.insert("bspline_c0".to_string(), -0.001);
+    let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CameraIntrinsicsError::InvalidParameter {
+                ref model,
+                ref parameter,
+            } if model == "SFMTOOL_FISHEYE" && parameter == "bspline_coeff_count"
+        ),
+        "a one-coefficient spline was accepted: {err}"
+    );
+}
+
+#[test]
+fn sfmtool_fisheye_degenerate_theta_max_is_an_invalid_parameter() {
+    // The domain end must be a real interval. Zero and negative leave the
+    // basis nothing to live on; `±∞` and NaN are not a domain at all.
+    for bad in [0.0, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        let mut stored = SfmrCamera::from(&sfmtool_fisheye());
+        stored
+            .parameters
+            .insert("bspline_theta_max".to_string(), bad);
+        let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                CameraIntrinsicsError::InvalidParameter {
+                    ref model,
+                    ref parameter,
+                } if model == "SFMTOOL_FISHEYE" && parameter == "bspline_theta_max"
+            ),
+            "bspline_theta_max = {bad} was accepted: {err}"
+        );
+    }
+}
+
+#[test]
+fn sfmtool_fisheye_coefficient_beyond_the_declared_length_is_an_invalid_parameter() {
+    // Eight coefficients declared, nine present: the extra key is named,
+    // rather than read as a ninth coefficient.
+    let mut stored = SfmrCamera::from(&sfmtool_fisheye());
+    stored.parameters.insert("bspline_c8".to_string(), -0.11);
+    let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+    assert!(matches!(
+        err,
+        CameraIntrinsicsError::InvalidParameter {
+            ref model,
+            ref parameter,
+        } if model == "SFMTOOL_FISHEYE" && parameter == "bspline_c8"
+    ));
 }
 
 #[test]

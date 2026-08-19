@@ -76,6 +76,9 @@ const FISHEYE_BLEND_END_RAD: f64 = 100.0 * (std::f64::consts::PI / 180.0); // 10
 
 mod kernels;
 mod pinhole_fit;
+// The SFMTOOL_FISHEYE radial spline: crate-visible because the bundle
+// adjustment linearizes through the same basis evaluation the kernels use.
+pub(crate) mod bspline;
 mod ray_grid;
 use kernels::*;
 
@@ -135,6 +138,12 @@ impl CameraModel {
             } => distort_fisheye(x, y, *k1, *k2, *k3, *k4),
 
             CameraModel::EquidistantFisheye { .. } => distort_equidistant(x, y),
+
+            CameraModel::SfmtoolFisheye {
+                bspline,
+                bspline_theta_max,
+                ..
+            } => distort_sfmtool_fisheye(x, y, bspline, *bspline_theta_max),
 
             CameraModel::SimpleRadialFisheye {
                 radial_distortion_k1: k,
@@ -355,6 +364,15 @@ impl CameraModel {
 
             CameraModel::EquidistantFisheye { .. } => undistort_equidistant(x_d, y_d),
 
+            // Explicit arm: the spline's θ-space Newton inverse. The generic
+            // fixed-point fallback below is a perspective-model iteration and
+            // would silently mishandle a θ-map model.
+            CameraModel::SfmtoolFisheye {
+                bspline,
+                bspline_theta_max,
+                ..
+            } => undistort_sfmtool_fisheye(x_d, y_d, bspline, *bspline_theta_max),
+
             CameraModel::SimpleRadialFisheye {
                 radial_distortion_k1: k,
                 ..
@@ -508,6 +526,15 @@ impl CameraModel {
                 Some(distort_ray_equidistant_exact(rx, ry, rz))
             }
 
+            // Spline equidistant: `θ_d = θ + δ(θ)`, with the same
+            // fold gate as the polynomial family (`None` where a
+            // non-monotone spline drives `θ_d` non-positive).
+            CameraModel::SfmtoolFisheye {
+                bspline,
+                bspline_theta_max,
+                ..
+            } => distort_ray_sfmtool_fisheye(rx, ry, rz, bspline, *bspline_theta_max),
+
             // Fisheye models: work in theta-space
             CameraModel::OpenCVFisheye {
                 radial_distortion_k1: k1,
@@ -641,6 +668,16 @@ impl CameraModel {
             // recovery and no wide-angle blend, both of which exist only to
             // cope with the distortion polynomial.
             CameraModel::EquidistantFisheye { .. } => equidistant_to_ray(x_d, y_d),
+
+            // Radial spline: the exact Newton inverse of the monotone
+            // `θ_d(θ)`, no wide-angle blend (same policy as
+            // SIMPLE_RADIAL_FISHEYE below — the spline is largest at the
+            // periphery, exactly where a blend would drop it).
+            CameraModel::SfmtoolFisheye {
+                bspline,
+                bspline_theta_max,
+                ..
+            } => sfmtool_fisheye_to_ray(x_d, y_d, bspline, *bspline_theta_max),
 
             // Equidistant fisheye family: recover theta, build ray directly
             CameraModel::OpenCVFisheye {
@@ -820,10 +857,14 @@ impl CameraIntrinsics {
     /// with respect to the camera-frame ray direction, row-major
     /// `[[∂u/∂x, ∂u/∂y, ∂u/∂z], [∂v/∂x, ∂v/∂y, ∂v/∂z]]`.
     ///
-    /// The perspective family, [`CameraModel::EquidistantFisheye`] and
-    /// [`CameraModel::SimpleRadialFisheye`] (`supports_pixel_jacobian`) — the
-    /// last two share the closed-form `θ_d = θ·(1 + k1·θ²)` derivative, with
-    /// `k1 = 0` for the distortion-free map. Returns `None` when the ray is
+    /// The perspective family plus the θ-map fisheye trio
+    /// [`CameraModel::EquidistantFisheye`],
+    /// [`CameraModel::SimpleRadialFisheye`] and
+    /// [`CameraModel::SfmtoolFisheye`] (`supports_pixel_jacobian`) — the
+    /// first two share the closed-form `θ_d = θ·(1 + k1·θ²)` derivative (with
+    /// `k1 = 0` for the distortion-free map), and the third substitutes the
+    /// spline pair `θ_d = θ + δ(θ)`, `θ_d' = 1 + δ'(θ)` into the same radial
+    /// template. Returns `None` when the ray is
     /// outside the model's valid domain — exactly where
     /// [`Self::ray_to_pixel`] returns `None`, with one documented exception
     /// below — or when the model has no analytic Jacobian (multi-coefficient
@@ -843,22 +884,36 @@ impl CameraIntrinsics {
         // Canonical → optical frame: (rx, ry, rz) = S·ray, S = diag(1, −1, −1).
         let [rx, ry, rz] = [ray[0], -ray[1], -ray[2]];
 
-        // Equidistant fisheye family with a closed-form `θ_d(θ)`: the
-        // distortion-free `θ = r/f` map and the single-coefficient
-        // `θ_d = θ·(1 + k1·θ²)`, both differentiable in closed form at every
-        // θ. Dispatched BEFORE the perspective in-front guard — rays past 90°
-        // (optical `rz ≤ 0`) are the periphery these models exist to carry,
-        // not a domain error.
-        let radial_k1 = match self.model {
-            CameraModel::EquidistantFisheye { .. } => Some(0.0),
+        // Equidistant fisheye family with a closed-form `θ_d(θ)` and
+        // `θ_d'(θ)`: the distortion-free `θ = r/f` map, the
+        // single-coefficient `θ_d = θ·(1 + k1·θ²)`, and the spline
+        // `θ_d = θ + δ(θ)` — each arm hands its own `(θ_d, θ_d')` pair to the
+        // shared radial Jacobian template. Dispatched BEFORE the perspective
+        // in-front guard — rays past 90° (optical `rz ≤ 0`) are the periphery
+        // these models exist to carry, not a domain error.
+        let theta_map_jac = match &self.model {
+            CameraModel::EquidistantFisheye { .. } => {
+                Some(radial_fisheye_ray_jacobian(rx, ry, rz, 0.0))
+            }
             CameraModel::SimpleRadialFisheye {
                 radial_distortion_k1: k1,
                 ..
-            } => Some(k1),
+            } => Some(radial_fisheye_ray_jacobian(rx, ry, rz, *k1)),
+            CameraModel::SfmtoolFisheye {
+                bspline,
+                bspline_theta_max,
+                ..
+            } => Some(sfmtool_fisheye_ray_jacobian(
+                rx,
+                ry,
+                rz,
+                bspline,
+                *bspline_theta_max,
+            )),
             _ => None,
         };
-        if let Some(k1) = radial_k1 {
-            let ((x_d, y_d), jd) = radial_fisheye_ray_jacobian(rx, ry, rz, k1)?;
+        if let Some(jac) = theta_map_jac {
+            let ((x_d, y_d), jd) = jac?;
             // J = diag(fx, fy) · Jd · S, and S negates the ry, rz columns.
             return Some((
                 (fx * x_d + cx, fy * y_d + cy),

@@ -15,6 +15,8 @@ use std::fmt;
 use nalgebra::Matrix3;
 use sfmr_format::SfmrCamera;
 
+use super::distortion::bspline::{bspline_is_inactive, MIN_BSPLINE_COEFFS};
+
 /// Camera model with typed parameters.
 ///
 /// Each variant carries exactly the parameters defined by its COLMAP model.
@@ -156,6 +158,50 @@ pub enum CameraModel {
         principal_point_x: f64,
         principal_point_y: f64,
     },
+    /// Equidistant fisheye with a monotone radial spline:
+    /// `r(θ) = f·(θ + δ(θ))` with `δ(θ) = Σ cᵢ·Bᵢ(θ)` over a cubic
+    /// open-uniform B-spline basis on `[0, bspline_theta_max]`.
+    ///
+    /// The coefficients are **dimensionless** (θ-units), so the focal length
+    /// stays a pure multiplier of an `f`-independent distorted coordinate —
+    /// the same property [`CameraModel::EquidistantFisheye`] and
+    /// [`CameraModel::SimpleRadialFisheye`] have. The basis omits the first
+    /// two functions of the full clamped basis, pinning `δ(0) = 0` and
+    /// `δ'(0) = 0`: the spline cannot express a central-scale correction
+    /// (that is `f`'s job), only how the lens departs from equidistant away
+    /// from the axis. Beyond `bspline_theta_max` the correction is held
+    /// constant, so the radial map continues linearly with slope `f`.
+    ///
+    /// An empty or all-zero `bspline` short-circuits to the exact
+    /// [`CameraModel::EquidistantFisheye`] arithmetic, bit for bit, and so
+    /// does a `bspline_theta_max` that is not positive and finite (there is no
+    /// domain for the basis then, whatever the coefficients say). A valid
+    /// non-empty coefficient vector has at least two entries (a cubic basis
+    /// needs them); the monotonicity of `θ + δ(θ)` (`1 + δ'(θ) > 0`) is a
+    /// construction invariant enforced where splines are fitted, which is
+    /// what gives the Newton inverse a guaranteed bracket. Deserialization
+    /// rejects both a one-entry coefficient vector and a degenerate
+    /// `bspline_theta_max`; only direct construction can produce them.
+    ///
+    /// Not a COLMAP model — an sfmtool extension. Unlike
+    /// [`CameraModel::EquidistantFisheye`] it has **no COLMAP carrier**: no
+    /// COLMAP model parameterizes the spline, so `sfmr-colmap` rejects it
+    /// with `UnknownModelName` on every export path.
+    ///
+    /// **Beta:** the parameterization — the basis, the knot layout, the
+    /// parameter names — may change, so a `.sfmr` file carrying this model may
+    /// need to be regenerated across releases.
+    SfmtoolFisheye {
+        focal_length: f64,
+        principal_point_x: f64,
+        principal_point_y: f64,
+        /// Domain end of the spline basis in radians of incidence angle;
+        /// `δ` is held constant beyond it.
+        bspline_theta_max: f64,
+        /// Dimensionless spline coefficients `c₀..c_{N−1}`. Serialized as
+        /// `bspline_c0..bspline_c{N−1}` in [`SfmrCamera`] parameters.
+        bspline: Vec<f64>,
+    },
 }
 
 /// Threshold below which a distortion coefficient is considered zero.
@@ -178,6 +224,7 @@ impl CameraModel {
             CameraModel::FullOpenCV { .. } => "FULL_OPENCV",
             CameraModel::Equirectangular { .. } => "EQUIRECTANGULAR",
             CameraModel::EquidistantFisheye { .. } => "EQUIDISTANT_FISHEYE",
+            CameraModel::SfmtoolFisheye { .. } => "SFMTOOL_FISHEYE",
         }
     }
 
@@ -185,7 +232,9 @@ impl CameraModel {
     ///
     /// Returns `false` for Pinhole/SimplePinhole (no distortion parameters),
     /// and also `false` for distortion-capable models where all distortion
-    /// coefficients are zero (below `DISTORTION_EPS`).
+    /// coefficients are zero (below `DISTORTION_EPS`) — and, for
+    /// [`CameraModel::SfmtoolFisheye`], whenever the spline is inactive
+    /// however live its coefficients are.
     pub fn has_distortion(&self) -> bool {
         match self {
             CameraModel::Pinhole { .. }
@@ -229,6 +278,19 @@ impl CameraModel {
                 radial_distortion_k1: k,
                 ..
             } => k.abs() > DISTORTION_EPS,
+            CameraModel::SfmtoolFisheye {
+                bspline_theta_max,
+                bspline,
+                ..
+            } => {
+                // Magnitude alone is not enough: the kernels short-circuit an
+                // INACTIVE spline (identity coefficients, or a domain end that
+                // is not positive and finite) to the exact equidistant
+                // arithmetic, so live coefficients on a degenerate `θ_max`
+                // project with no distortion at all and must report none.
+                !bspline_is_inactive(bspline, *bspline_theta_max)
+                    && bspline.iter().any(|c| c.abs() > DISTORTION_EPS)
+            }
             CameraModel::RadialFisheye {
                 radial_distortion_k1: k1,
                 radial_distortion_k2: k2,
@@ -310,6 +372,7 @@ impl CameraModel {
         matches!(
             self,
             CameraModel::EquidistantFisheye { .. }
+                | CameraModel::SfmtoolFisheye { .. }
                 | CameraModel::SimpleRadialFisheye { .. }
                 | CameraModel::RadialFisheye { .. }
                 | CameraModel::OpenCVFisheye { .. }
@@ -332,17 +395,19 @@ impl CameraModel {
 
     /// Whether [`CameraIntrinsics::ray_to_pixel_with_jacobian`] can return an
     /// analytic pixel Jacobian for this model. True for the perspective family
-    /// (pinhole and polynomial-distortion models) and for the one-coefficient
-    /// equidistant pair [`CameraModel::EquidistantFisheye`] and
-    /// [`CameraModel::SimpleRadialFisheye`], whose `θ_d = θ·(1 + k1·θ²)` map
-    /// (`k1 = 0` for the first) differentiates in closed form at every `θ`;
-    /// false for the multi-coefficient fisheye models and equirectangular,
-    /// whose forward map takes the ray path with no analytic derivative here.
+    /// (pinhole and polynomial-distortion models) and for the θ-map fisheye
+    /// trio [`CameraModel::EquidistantFisheye`],
+    /// [`CameraModel::SimpleRadialFisheye`] (`θ_d = θ·(1 + k1·θ²)`, `k1 = 0`
+    /// for the first) and [`CameraModel::SfmtoolFisheye`]
+    /// (`θ_d = θ + δ(θ)`, with the spline's `δ'` in closed form), all of
+    /// which differentiate at every `θ`; false for the multi-coefficient
+    /// polynomial fisheye models and equirectangular, whose forward map takes
+    /// the ray path with no analytic derivative here.
     pub fn supports_pixel_jacobian(&self) -> bool {
         match self {
-            CameraModel::EquidistantFisheye { .. } | CameraModel::SimpleRadialFisheye { .. } => {
-                true
-            }
+            CameraModel::EquidistantFisheye { .. }
+            | CameraModel::SimpleRadialFisheye { .. }
+            | CameraModel::SfmtoolFisheye { .. } => true,
             _ => !self.needs_ray_path(),
         }
     }
@@ -366,6 +431,9 @@ pub enum CameraIntrinsicsError {
     UnknownModel(String),
     /// A required parameter is missing from the parameter map.
     MissingParameter { model: String, parameter: String },
+    /// A parameter is present but carries a value the model cannot accept,
+    /// or is a key the model does not define.
+    InvalidParameter { model: String, parameter: String },
     /// The camera model is not a perspective projection (fisheye or
     /// equirectangular) and cannot be converted to a pinhole.
     UnsupportedModel(String),
@@ -381,6 +449,12 @@ impl fmt::Display for CameraIntrinsicsError {
                 write!(
                     f,
                     "missing parameter '{parameter}' for camera model '{model}'"
+                )
+            }
+            CameraIntrinsicsError::InvalidParameter { model, parameter } => {
+                write!(
+                    f,
+                    "invalid parameter '{parameter}' for camera model '{model}'"
                 )
             }
             CameraIntrinsicsError::UnsupportedModel(name) => {
@@ -432,6 +506,7 @@ impl CameraIntrinsics {
             | CameraModel::SimpleRadial { focal_length, .. }
             | CameraModel::Radial { focal_length, .. }
             | CameraModel::EquidistantFisheye { focal_length, .. }
+            | CameraModel::SfmtoolFisheye { focal_length, .. }
             | CameraModel::SimpleRadialFisheye { focal_length, .. }
             | CameraModel::RadialFisheye { focal_length, .. } => (*focal_length, *focal_length),
             CameraModel::OpenCV {
@@ -501,6 +576,11 @@ impl CameraIntrinsics {
                 ..
             }
             | CameraModel::EquidistantFisheye {
+                principal_point_x,
+                principal_point_y,
+                ..
+            }
+            | CameraModel::SfmtoolFisheye {
                 principal_point_x,
                 principal_point_y,
                 ..
@@ -689,6 +769,71 @@ impl TryFrom<&SfmrCamera> for CameraIntrinsics {
                 principal_point_x: get_param(p, m, "principal_point_x")?,
                 principal_point_y: get_param(p, m, "principal_point_y")?,
             },
+            "SFMTOOL_FISHEYE" => {
+                // Variable-length spline: `bspline_coeff_count` DECLARES the
+                // number of coefficients, and the map must carry exactly
+                // `bspline_c0..bspline_c{N−1}`. An index below the declared
+                // count that is absent is a hole; a `bspline_c*` key at or
+                // beyond it is a stray. Either way the parameter map is
+                // corrupt — counting the keys instead would silently accept
+                // both as a shorter or longer spline.
+                //
+                // The count must also be a length the model defines: zero (the
+                // empty spline, the identity) or at least `MIN_BSPLINE_COEFFS`,
+                // since a clamped cubic basis needs them. Exactly one
+                // coefficient is no spline the model can evaluate, so it is
+                // rejected rather than silently read as the identity.
+                let declared = get_param(p, m, "bspline_coeff_count")?;
+                if !declared.is_finite()
+                    || declared < 0.0
+                    || declared.fract() != 0.0
+                    || (declared > 0.0 && declared < MIN_BSPLINE_COEFFS as f64)
+                {
+                    return Err(CameraIntrinsicsError::InvalidParameter {
+                        model: m.to_string(),
+                        parameter: "bspline_coeff_count".to_string(),
+                    });
+                }
+                let n = declared as usize;
+                // Cap the reservation by the map size: the declared count is
+                // untrusted, and any index it claims beyond what the map holds
+                // errors out as a missing coefficient below.
+                let mut bspline = Vec::with_capacity(n.min(p.len()));
+                for i in 0..n {
+                    bspline.push(get_param(p, m, &format!("bspline_c{i}"))?);
+                }
+                let stray = p.keys().find(|k| {
+                    // `bspline_coeff_count` shares the coefficient prefix but
+                    // is the declaration itself, never a coefficient.
+                    k.as_str() != "bspline_coeff_count"
+                        && k.strip_prefix("bspline_c")
+                            .is_some_and(|i| !matches!(i.parse::<usize>(), Ok(i) if i < n))
+                });
+                if let Some(stray) = stray {
+                    return Err(CameraIntrinsicsError::InvalidParameter {
+                        model: m.to_string(),
+                        parameter: stray.clone(),
+                    });
+                }
+                // The domain end must be a real interval: zero, negative or
+                // non-finite leaves the basis nothing to live on (`+∞` would
+                // put every knot at infinity), so it is corrupt rather than a
+                // camera with a degenerate spline.
+                let bspline_theta_max = get_param(p, m, "bspline_theta_max")?;
+                if !(bspline_theta_max > 0.0 && bspline_theta_max.is_finite()) {
+                    return Err(CameraIntrinsicsError::InvalidParameter {
+                        model: m.to_string(),
+                        parameter: "bspline_theta_max".to_string(),
+                    });
+                }
+                CameraModel::SfmtoolFisheye {
+                    focal_length: get_param(p, m, "focal_length")?,
+                    principal_point_x: get_param(p, m, "principal_point_x")?,
+                    principal_point_y: get_param(p, m, "principal_point_y")?,
+                    bspline_theta_max,
+                    bspline,
+                }
+            }
             other => return Err(CameraIntrinsicsError::UnknownModel(other.to_string())),
         };
 
@@ -947,6 +1092,22 @@ impl From<&CameraIntrinsics> for SfmrCamera {
                 parameters.insert("focal_length".to_string(), *focal_length);
                 parameters.insert("principal_point_x".to_string(), *principal_point_x);
                 parameters.insert("principal_point_y".to_string(), *principal_point_y);
+            }
+            CameraModel::SfmtoolFisheye {
+                focal_length,
+                principal_point_x,
+                principal_point_y,
+                bspline_theta_max,
+                bspline,
+            } => {
+                parameters.insert("focal_length".to_string(), *focal_length);
+                parameters.insert("principal_point_x".to_string(), *principal_point_x);
+                parameters.insert("principal_point_y".to_string(), *principal_point_y);
+                parameters.insert("bspline_theta_max".to_string(), *bspline_theta_max);
+                parameters.insert("bspline_coeff_count".to_string(), bspline.len() as f64);
+                for (i, c) in bspline.iter().enumerate() {
+                    parameters.insert(format!("bspline_c{i}"), *c);
+                }
             }
         }
 

@@ -2587,6 +2587,459 @@ fn simple_radial_fisheye_jacobian_on_axis_is_the_pinhole_limit_for_any_k1() {
 }
 
 // -----------------------------------------------------------------------
+// SFMTOOL_FISHEYE — equidistant base + monotone radial spline
+//
+// `θ_d(θ) = θ + δ(θ)` with `δ` a cubic open-uniform B-spline on
+// `[0, θ_max]` whose first two basis functions are omitted (`δ(0) = 0`,
+// `δ'(0) = 0` — the center-anchored gauge) and which is held constant past
+// `θ_max`. Zero coefficients ≡ EQUIDISTANT_FISHEYE bit for bit.
+// -----------------------------------------------------------------------
+
+/// A gently flattening 8-coefficient spline out to `θ_max = 2.0` rad
+/// (≈114.6°) — the shape of a wide lens that departs from equidistant toward
+/// the rim, comfortably inside the monotonicity invariant.
+const FLATTENING_BSPLINE: [f64; 8] = [-0.001, -0.004, -0.01, -0.02, -0.03, -0.05, -0.07, -0.09];
+
+/// The [`FLATTENING_BSPLINE`]'s spline domain end.
+const BSPLINE_THETA_MAX: f64 = 2.0;
+
+/// An `SFMTOOL_FISHEYE` at focal `f` with the given coefficients, principal
+/// point centred in a 480² frame — the spline sibling of
+/// `simple_radial_fisheye_at`.
+fn sfmtool_fisheye_at(f: f64, coeffs: Vec<f64>) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SfmtoolFisheye {
+            focal_length: f,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            bspline_theta_max: BSPLINE_THETA_MAX,
+            bspline: coeffs,
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+/// Assert `cam` reproduces `native` **bit for bit** on every public map —
+/// `ray_to_pixel`, its Jacobian, `pixel_to_ray` and the tangent-plane
+/// `project`/`unproject` pair — over a field running out to 163°.
+///
+/// This is the short-circuit contract shared by every inactive spline: it is
+/// the exact `EQUIDISTANT_FISHEYE` arithmetic that runs, not an equivalent
+/// evaluation of a spline that happens to sum to zero.
+fn assert_bitwise_equidistant(cam: &CameraIntrinsics, native: &CameraIntrinsics) {
+    let mut samples = 0usize;
+    for ti in 0..24 {
+        let theta = (2.0 + 7.0 * ti as f64).to_radians(); // out to 163°
+        for phi_deg in [0.0f64, 29.0, 91.0, 188.0, 300.0] {
+            let ray = ray_at(theta, phi_deg.to_radians());
+            // ray_to_pixel and its Jacobian.
+            let ((us, vs), js) = cam.ray_to_pixel_with_jacobian(ray).unwrap();
+            let ((un, vn), jn) = native.ray_to_pixel_with_jacobian(ray).unwrap();
+            assert_eq!(us.to_bits(), un.to_bits());
+            assert_eq!(vs.to_bits(), vn.to_bits());
+            // The plain projection path, compared like for like (it rounds
+            // `θ·rx/ρ` in a different association than the Jacobian kernel's
+            // `θ·(rx/ρ)`, so plain vs plain).
+            let (du, dv) = cam.ray_to_pixel(ray).unwrap();
+            let (dnu, dnv) = native.ray_to_pixel(ray).unwrap();
+            assert_eq!(du.to_bits(), dnu.to_bits());
+            assert_eq!(dv.to_bits(), dnv.to_bits());
+            for row in 0..2 {
+                for c in 0..3 {
+                    assert_eq!(
+                        js[row][c].to_bits(),
+                        jn[row][c].to_bits(),
+                        "[{row}][{c}] at θ={:.0}°",
+                        theta.to_degrees(),
+                    );
+                }
+            }
+            // pixel_to_ray from the shared pixel.
+            let rs = cam.pixel_to_ray(us, vs);
+            let rn = native.pixel_to_ray(un, vn);
+            for c in 0..3 {
+                assert_eq!(rs[c].to_bits(), rn[c].to_bits());
+            }
+            samples += 1;
+        }
+    }
+    assert!(samples >= 100);
+    // The tangent-plane pair (project / unproject) short-circuits too;
+    // meaningful below 90°, where the tangent plane exists.
+    for &[x, y] in &test_points() {
+        let (us, vs) = cam.project(x, y);
+        let (un, vn) = native.project(x, y);
+        assert_eq!(us.to_bits(), un.to_bits());
+        assert_eq!(vs.to_bits(), vn.to_bits());
+        let (xs, ys) = cam.unproject(us, vs);
+        let (xn, yn) = native.unproject(un, vn);
+        assert_eq!(xs.to_bits(), xn.to_bits());
+        assert_eq!(ys.to_bits(), yn.to_bits());
+    }
+}
+
+#[test]
+fn sfmtool_fisheye_zero_bspline_is_bitwise_the_equidistant_model() {
+    // The promotion contract: an empty OR all-zero spline short-circuits to
+    // the exact EQUIDISTANT_FISHEYE arithmetic on every public map, so
+    // promoting a solved equidistant camera into this model moves nothing.
+    // Bitwise, not merely close — the same standard as the
+    // `SimpleRadialFisheye { k1 = 0 }` convention.
+    let f = 137.5;
+    let native = equidistant_native(f, 480, 480);
+    for coeffs in [vec![], vec![0.0; 8]] {
+        assert_bitwise_equidistant(&sfmtool_fisheye_at(f, coeffs), &native);
+    }
+}
+
+#[test]
+fn sfmtool_fisheye_degenerate_theta_max_is_bitwise_the_equidistant_model() {
+    // A domain end that is not positive and finite leaves the basis no
+    // interval to live on, so the map is the identity however live the
+    // coefficients are — and it takes the SAME short-circuit as a zero
+    // spline. Not a nicety: `+∞` puts every knot at infinity, and the Cox–de
+    // Boor recurrence then computes `inf · 0` and hands back NaN through
+    // every projection, so this is also the no-NaN gate.
+    let f = 137.5;
+    let native = equidistant_native(f, 480, 480);
+    for theta_max in [0.0f64, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        let cam = CameraIntrinsics {
+            model: CameraModel::SfmtoolFisheye {
+                focal_length: f,
+                principal_point_x: 240.0,
+                principal_point_y: 240.0,
+                bspline_theta_max: theta_max,
+                bspline: FLATTENING_BSPLINE.to_vec(),
+            },
+            width: 480,
+            height: 480,
+        };
+        // Live coefficients that cannot reach the map are not distortion.
+        assert!(
+            !cam.has_distortion(),
+            "θ_max = {theta_max} reported distortion"
+        );
+        assert_bitwise_equidistant(&cam, &native);
+    }
+}
+
+#[test]
+fn sfmtool_fisheye_round_trips_with_a_live_bspline_past_90_degrees() {
+    // Forward/inverse consistency with a non-trivial flattening spline,
+    // from the axis out past 90° and beyond θ_max (where the map continues
+    // linearly with slope f and the inverse is closed-form).
+    let f = 130.0;
+    let cam = sfmtool_fisheye_at(f, FLATTENING_BSPLINE.to_vec());
+    let mut worst_px = 0.0f64;
+    let mut worst_rad = 0.0f64;
+    let mut past_90 = 0usize;
+    let mut past_theta_max = 0usize;
+    for ti in 0..27 {
+        let theta = (2.0 + 5.0 * ti as f64).to_radians(); // out to 132°
+        for phi_deg in [0.0f64, 47.0, 133.0, 271.0] {
+            let ray = ray_at(theta, phi_deg.to_radians());
+            let (u, v) = cam.ray_to_pixel(ray).unwrap();
+            let back = cam.pixel_to_ray(u, v);
+            let dot = (0..3).map(|c| back[c] * ray[c]).sum::<f64>();
+            worst_rad = worst_rad.max(dot.clamp(-1.0, 1.0).acos());
+            let (u2, v2) = cam.ray_to_pixel(back).unwrap();
+            worst_px = worst_px.max((u2 - u).hypot(v2 - v));
+            if theta > std::f64::consts::FRAC_PI_2 {
+                past_90 += 1;
+            }
+            if theta > BSPLINE_THETA_MAX {
+                past_theta_max += 1;
+            }
+        }
+    }
+    assert!(past_90 >= 30, "not enough periphery: {past_90}");
+    assert!(
+        past_theta_max >= 10,
+        "held-constant region unexercised: {past_theta_max}"
+    );
+    eprintln!("[sfmtool-fisheye-rt] worst {worst_rad:.3e} rad / {worst_px:.3e} px");
+    assert!(
+        worst_px < 1e-9,
+        "pixel round-trip {worst_px} exceeds 1e-9 px"
+    );
+    // The angle floor is acos() conditioning at dot ≈ 1 (√ε ≈ 1.5e-8), not
+    // inverse error — the pixel round trip above is the sharp gate.
+    assert!(worst_rad < 1e-7, "ray round-trip {worst_rad} rad");
+}
+
+#[test]
+fn sfmtool_fisheye_jacobian_matches_central_difference_past_90_degrees() {
+    // The analytic Jacobian substitutes (θ_d, θ_d') = (θ + δ, 1 + δ') into
+    // the radial template; pin it against a central difference over a field
+    // running past 90° and across the θ_max seam, at several ray scales
+    // (degree-0 homogeneity). Same bar as the k1-family test above.
+    let f = 130.0;
+    let cam = sfmtool_fisheye_at(f, FLATTENING_BSPLINE.to_vec());
+    let h = 1e-6;
+    let mut samples = 0usize;
+    let mut past_90 = 0usize;
+    let mut worst = 0.0f64;
+    for ti in 0..18 {
+        let theta = (5.0 + 7.0 * ti as f64).to_radians(); // out to 124°
+        for phi_deg in [0.0f64, 43.0, 137.0, 250.0, 331.0] {
+            let base = ray_at(theta, phi_deg.to_radians());
+            for scale in [0.4f64, 1.0, 6.0] {
+                let ray = [base[0] * scale, base[1] * scale, base[2] * scale];
+                let (uv, jac) = cam
+                    .ray_to_pixel_with_jacobian(ray)
+                    .expect("analytic Jacobian None on an in-domain spline ray");
+                let direct = cam.ray_to_pixel(ray).unwrap();
+                assert_relative_eq!(uv.0, direct.0, epsilon = 1e-12);
+                assert_relative_eq!(uv.1, direct.1, epsilon = 1e-12);
+                if ray[2] > 0.0 {
+                    past_90 += 1;
+                }
+                for c in 0..3 {
+                    let mut rp = ray;
+                    let mut rm = ray;
+                    rp[c] += h;
+                    rm[c] -= h;
+                    let (up, vp) = cam.ray_to_pixel(rp).unwrap();
+                    let (um, vm) = cam.ray_to_pixel(rm).unwrap();
+                    let fd_u = (up - um) / (2.0 * h);
+                    let fd_v = (vp - vm) / (2.0 * h);
+                    for (a, fd) in [(jac[0][c], fd_u), (jac[1][c], fd_v)] {
+                        let rel = (a - fd).abs() / (1.0 + a.abs());
+                        worst = worst.max(rel);
+                        assert!(
+                            rel <= 1e-6,
+                            "∂/∂r[{c}] at θ={:.0}°: analytic {a} vs central-diff {fd} (rel {rel})",
+                            theta.to_degrees(),
+                        );
+                    }
+                    samples += 1;
+                }
+            }
+        }
+    }
+    assert!(samples > 500, "thin coverage: only {samples} samples");
+    assert!(past_90 > 50, "grid did not exercise θ > 90° ({past_90})");
+    eprintln!("[sfmtool-fisheye-jac] {samples} samples, worst rel error {worst:.3e}");
+}
+
+#[test]
+fn sfmtool_fisheye_jacobian_on_axis_is_the_pinhole_limit() {
+    // The gauge pins δ(0) = 0 and δ'(0) = 0, so on the axis θ_d/ρ → 1/rz and
+    // θ_d' → 1 whatever the coefficients — the same pinhole limit as the
+    // k-family. The approach is only LINEAR in θ, though (the gauge does not
+    // pin δ''(0), so δ' ~ δ''(0)·θ, versus the k-family's O(k1·θ²)), hence
+    // the θ-proportional tolerance on the continuity sweep.
+    let f = 130.0;
+    let cam = sfmtool_fisheye_at(f, FLATTENING_BSPLINE.to_vec());
+    let (_, jac) = cam.ray_to_pixel_with_jacobian([0.0, 0.0, -2.0]).unwrap();
+    assert_relative_eq!(jac[0][0], f / 2.0, epsilon = 1e-12);
+    assert_relative_eq!(jac[1][1], -f / 2.0, epsilon = 1e-12);
+    for eps in [1e-4f64, 1e-6, 1e-9] {
+        let tol = (f * eps).max(1e-10);
+        for phi_deg in [0.0f64, 61.0, 233.0] {
+            let phi = phi_deg.to_radians();
+            let ray = [2.0 * eps * phi.cos(), 2.0 * eps * phi.sin(), -2.0];
+            let (_, j) = cam.ray_to_pixel_with_jacobian(ray).unwrap();
+            assert_relative_eq!(j[0][0], f / 2.0, epsilon = tol);
+            assert_relative_eq!(j[1][1], -f / 2.0, epsilon = tol);
+        }
+    }
+    // The antipode stays the one direction with no derivative.
+    assert!(cam.ray_to_pixel_with_jacobian([0.0, 0.0, 1.0]).is_none());
+}
+
+#[test]
+fn sfmtool_fisheye_folded_bspline_projects_none_past_the_fold() {
+    // A spline violating the monotonicity invariant hard enough to drive
+    // θ_d non-positive: the forward map is gated (None past the fold, like
+    // the polynomial family's θ_d ≤ 0 gate), the Jacobian shares that
+    // domain, and the monotonicity check reports the violation.
+    let coeffs = vec![-0.05, -0.2, -0.8, -2.0, -3.5, -4.5, -5.0, -5.0];
+    assert!(!bspline::bspline_is_monotone(
+        &coeffs,
+        BSPLINE_THETA_MAX,
+        BSPLINE_THETA_MAX
+    ));
+    let cam = sfmtool_fisheye_at(130.0, coeffs);
+    let mut folded = 0usize;
+    let mut fine = 0usize;
+    for deg in [5.0f64, 15.0, 30.0, 60.0, 90.0, 105.0, 114.0] {
+        let ray = ray_at(deg.to_radians(), 0.6);
+        match cam.ray_to_pixel(ray) {
+            Some(_) => {
+                assert!(
+                    cam.ray_to_pixel_with_jacobian(ray).is_some(),
+                    "no Jacobian at an in-domain θ={deg}°"
+                );
+                fine += 1;
+            }
+            None => {
+                assert!(
+                    cam.ray_to_pixel_with_jacobian(ray).is_none(),
+                    "Jacobian past the θ_d fold at θ={deg}°"
+                );
+                folded += 1;
+            }
+        }
+    }
+    assert!(
+        fine >= 2 && folded >= 2,
+        "{fine} in-domain, {folded} folded"
+    );
+    // The gently flattening spline stays inside the invariant.
+    assert!(bspline::bspline_is_monotone(
+        &FLATTENING_BSPLINE,
+        BSPLINE_THETA_MAX,
+        BSPLINE_THETA_MAX
+    ));
+}
+
+// -----------------------------------------------------------------------
+// The radial spline itself (`distortion::bspline`): gauge anchoring,
+// derivative correctness, the held-constant tail, and partition of unity.
+// -----------------------------------------------------------------------
+
+#[test]
+fn bspline_delta_is_center_anchored() {
+    // δ(0) = 0 and δ'(0) = 0 for ANY coefficients: the two omitted basis
+    // functions are the only ones live at the origin.
+    for coeffs in [
+        FLATTENING_BSPLINE.to_vec(),
+        vec![0.7, -0.3],
+        vec![1.0, 1.0, 1.0, 1.0, 1.0],
+    ] {
+        let (d, dp) = bspline::delta_and_deriv(&coeffs, BSPLINE_THETA_MAX, 0.0);
+        assert_eq!(d, 0.0);
+        assert_eq!(dp, 0.0);
+    }
+}
+
+#[test]
+fn bspline_equal_coefficients_plateau_once_the_anchored_pair_dies() {
+    // With every coefficient equal to c, partition of unity gives δ = c
+    // exactly wherever the two anchored (zero) basis functions have no
+    // support: θ ≥ 2·h with h the knot spacing.
+    let c = 0.37;
+    let coeffs = vec![c; 8];
+    let m = coeffs.len() + 2;
+    let h = BSPLINE_THETA_MAX / (m - 3) as f64;
+    for frac in [0.0f64, 0.25, 0.5, 0.75, 1.0] {
+        let theta = 2.0 * h + frac * (BSPLINE_THETA_MAX - 2.0 * h);
+        let (d, dp) = bspline::delta_and_deriv(&coeffs, BSPLINE_THETA_MAX, theta);
+        assert_relative_eq!(d, c, epsilon = 1e-14);
+        assert_relative_eq!(dp, 0.0, epsilon = 1e-13);
+    }
+    // Below 2h the anchored pair still bites and δ < c.
+    assert!(bspline::delta(&coeffs, BSPLINE_THETA_MAX, h) < c);
+}
+
+#[test]
+fn bspline_derivative_matches_central_difference() {
+    let coeffs = FLATTENING_BSPLINE.to_vec();
+    let h = 1e-7;
+    for i in 0..=100 {
+        let theta = BSPLINE_THETA_MAX * i as f64 / 100.0;
+        if theta < h || theta > BSPLINE_THETA_MAX - h {
+            continue; // clamping would bias the difference at the ends
+        }
+        let (_, dp) = bspline::delta_and_deriv(&coeffs, BSPLINE_THETA_MAX, theta);
+        let fd = (bspline::delta(&coeffs, BSPLINE_THETA_MAX, theta + h)
+            - bspline::delta(&coeffs, BSPLINE_THETA_MAX, theta - h))
+            / (2.0 * h);
+        assert_relative_eq!(dp, fd, epsilon = 1e-6);
+    }
+}
+
+#[test]
+fn bspline_is_held_constant_beyond_theta_max() {
+    let coeffs = FLATTENING_BSPLINE.to_vec();
+    let (end, _) = bspline::delta_and_deriv(&coeffs, BSPLINE_THETA_MAX, BSPLINE_THETA_MAX);
+    for theta in [
+        BSPLINE_THETA_MAX + 1e-9,
+        BSPLINE_THETA_MAX + 0.5,
+        std::f64::consts::PI,
+    ] {
+        let (d, dp) = bspline::delta_and_deriv(&coeffs, BSPLINE_THETA_MAX, theta);
+        assert_eq!(d.to_bits(), end.to_bits());
+        assert_eq!(dp, 0.0);
+    }
+}
+
+#[test]
+fn bspline_basis_is_a_partition_of_unity() {
+    // The FULL basis (anchored pair included) sums to 1 with derivative sum 0
+    // at every θ — the property that makes the equal-coefficient plateau and
+    // the clamped endpoint values exact.
+    let n_coeffs = 8;
+    for i in 0..=64 {
+        let theta = BSPLINE_THETA_MAX * i as f64 / 64.0;
+        let (_, values, derivs) = bspline::basis_at(n_coeffs, BSPLINE_THETA_MAX, theta);
+        assert_relative_eq!(values.iter().sum::<f64>(), 1.0, epsilon = 1e-13);
+        assert_relative_eq!(derivs.iter().sum::<f64>(), 0.0, epsilon = 1e-12);
+        assert!(values.iter().all(|&v| v >= 0.0));
+    }
+}
+
+#[test]
+fn bspline_below_minimum_length_is_the_identity() {
+    for coeffs in [vec![], vec![0.4]] {
+        assert!(bspline::bspline_is_identity(&coeffs));
+        assert_eq!(
+            bspline::delta_and_deriv(&coeffs, BSPLINE_THETA_MAX, 1.0),
+            (0.0, 0.0)
+        );
+        assert!(bspline::bspline_is_monotone(
+            &coeffs,
+            BSPLINE_THETA_MAX,
+            BSPLINE_THETA_MAX
+        ));
+    }
+    // A live coefficient is not the identity.
+    assert!(!bspline::bspline_is_identity(&[0.0, 1e-30]));
+}
+
+#[test]
+fn bspline_degenerate_theta_max_is_inactive_and_reports_the_identity_map() {
+    // `bspline_is_identity` stays a coefficient-only test; `bspline_is_inactive`
+    // is the one the kernels ask, and it also fails a domain end that is not
+    // positive and finite. `+∞` is the case that used to slip through: it
+    // passed a `<= 0 || is_nan` guard, put every knot at infinity, and made
+    // the basis recurrence produce NaN.
+    let folded = [-0.05, -0.2, -0.8, -2.0, -3.5, -4.5, -5.0, -5.0];
+    for theta_max in [0.0f64, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        for coeffs in [&FLATTENING_BSPLINE, &folded] {
+            assert!(bspline::bspline_is_inactive(coeffs, theta_max));
+            assert!(!bspline::bspline_is_identity(coeffs));
+            for theta in [0.0f64, 0.5, 1.0, 2.0, 3.0] {
+                assert_eq!(
+                    bspline::delta_and_deriv(coeffs, theta_max, theta),
+                    (0.0, 0.0),
+                    "θ_max = {theta_max} at θ = {theta}"
+                );
+            }
+            // The monotonicity report is now GROUNDED in that identity: the
+            // map really is `θ_d = θ`. It used to be vacuous for `+∞` — a
+            // `true` about a map that was NaN at every angle.
+            assert!(bspline::bspline_is_monotone(coeffs, theta_max, 2.0));
+        }
+    }
+    // On a real domain the coefficients are back in charge, and the folded
+    // spline is reported for what it is.
+    assert!(!bspline::bspline_is_inactive(
+        &FLATTENING_BSPLINE,
+        BSPLINE_THETA_MAX
+    ));
+    assert!(bspline::bspline_is_inactive(&[0.0, 0.0], BSPLINE_THETA_MAX));
+    assert!(bspline::bspline_is_inactive(&[0.4], BSPLINE_THETA_MAX));
+    assert!(!bspline::bspline_is_monotone(
+        &folded,
+        BSPLINE_THETA_MAX,
+        BSPLINE_THETA_MAX
+    ));
+}
+
+// -----------------------------------------------------------------------
 // Local pixel scale and patch sizing (`min_pixel_scale`,
 // `pixel_radius_to_world`)
 // -----------------------------------------------------------------------

@@ -151,6 +151,14 @@ _NATIVE_CAMERA_PARAM_NAMES = {
     ],
 }
 
+# sfmtool's spline fisheye (equidistant base + monotone radial spline).
+# Unlike EQUIDISTANT_FISHEYE it has NO COLMAP carrier — no COLMAP
+# model parameterizes the spline — and it is deliberately not in
+# CAMERA_MODEL_NAMES: it is produced by refinement, never user-specified.
+# Beta: the parameterization may change, so .sfmr files carrying this model may
+# need to be regenerated across releases.
+SFMTOOL_FISHEYE = "SFMTOOL_FISHEYE"
+
 
 def get_intrinsic_matrix(camera) -> np.ndarray:
     """Extract intrinsic matrix K from a camera object.
@@ -202,6 +210,7 @@ def colmap_camera_from_intrinsics(camera_meta, *, width=None, height=None):
     An sfmtool-native model is exported through its COLMAP carrier:
     `EQUIDISTANT_FISHEYE` becomes `SIMPLE_RADIAL_FISHEYE` with `k = 0`, which
     parameterizes the identical map (see `EQUIDISTANT_FISHEYE_CARRIER`).
+    `SFMTOOL_FISHEYE` has no carrier and raises ValueError.
 
     Args:
         camera_meta: CameraIntrinsics object
@@ -221,6 +230,16 @@ def colmap_camera_from_intrinsics(camera_meta, *, width=None, height=None):
         width = camera_meta.width
     if height is None:
         height = camera_meta.height
+
+    if model == SFMTOOL_FISHEYE:
+        # No carrier exists: the radial spline is not expressible in any
+        # COLMAP model, and exporting a lossy approximation silently would
+        # corrupt downstream geometry.
+        raise ValueError(
+            f"camera model '{model}' has no COLMAP representation; "
+            "convert the reconstruction to a COLMAP camera model or "
+            "undistort it first"
+        )
 
     if model == EQUIDISTANT_FISHEYE:
         model = EQUIDISTANT_FISHEYE_CARRIER
