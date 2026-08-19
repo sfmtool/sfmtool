@@ -443,17 +443,18 @@ Array of camera intrinsic parameters:
 | `RADIAL_FISHEYE` | `focal_length`, `principal_point_x`, `principal_point_y`, `radial_distortion_k1`, `radial_distortion_k2` | f, cx, cy, k1, k2 |
 | `THIN_PRISM_FISHEYE` | `focal_length_x`, `focal_length_y`, `principal_point_x`, `principal_point_y`, `radial_distortion_k1`, `radial_distortion_k2`, `tangential_distortion_p1`, `tangential_distortion_p2`, `radial_distortion_k3`, `radial_distortion_k4`, `thin_prism_sx1`, `thin_prism_sy1` | fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, sx1, sy1 |
 | `RAD_TAN_THIN_PRISM_FISHEYE` | `focal_length_x`, `focal_length_y`, `principal_point_x`, `principal_point_y`, `radial_distortion_k0`, `radial_distortion_k1`, `radial_distortion_k2`, `radial_distortion_k3`, `radial_distortion_k4`, `radial_distortion_k5`, `tangential_distortion_p0`, `tangential_distortion_p1`, `thin_prism_s0`, `thin_prism_s1`, `thin_prism_s2`, `thin_prism_s3` | fx, fy, cx, cy, k0, k1, k2, k3, k4, k5, p0, p1, s0, s1, s2, s3 |
-| `EQUIRECTANGULAR` | `focal_length_x`, `focal_length_y`, `principal_point_x`, `principal_point_y` | — (sfmtool extension) |
-| `EQUIDISTANT_FISHEYE` | `focal_length`, `principal_point_x`, `principal_point_y` | — (sfmtool extension) |
+| `EQUIRECTANGULAR` | `focal_length_x`, `focal_length_y`, `principal_point_x`, `principal_point_y` | — (sfmtool model) |
+| `EQUIDISTANT_FISHEYE` | `focal_length`, `principal_point_x`, `principal_point_y` | — (sfmtool model) |
+| `SFMTOOL_FISHEYE` | `focal_length`, `principal_point_x`, `principal_point_y`, `bspline_theta_max`, `bspline_coeff_count`, `bspline_c0` … `bspline_c{N−1}` | — (sfmtool model) |
 
 The "pycolmap" column shows the corresponding short parameter names from COLMAP/pycolmap for reference. The parameter order in the JSON `parameters` object matches the pycolmap parameter array order. Models with a single `focal_length` use the same value for both fx and fy. All fisheye models use equidistant projection.
 
-`EQUIRECTANGULAR` is an sfmtool extension (not a COLMAP model) for panoramic
+`EQUIRECTANGULAR` is an sfmtool model for panoramic
 imagery, used by the spherical-tile rig pipeline: longitude and latitude map
 linearly to pixels, focal lengths are in pixels per radian, and there are no
 distortion parameters.
 
-`EQUIDISTANT_FISHEYE` is an sfmtool extension (not a COLMAP model): the
+`EQUIDISTANT_FISHEYE` is an sfmtool model: the
 distortion-free equidistant map `θ = r / f`, carrying `SIMPLE_PINHOLE`'s
 parameter list — one focal length in pixels per radian and a principal point,
 no distortion coefficients. Both directions of the projection are closed form
@@ -465,6 +466,19 @@ the COLMAP boundary. Export writes `SIMPLE_RADIAL_FISHEYE` with a literal
 `radial_distortion_k1` of `0`; import claims a `SIMPLE_RADIAL_FISHEYE` back as
 `EQUIDISTANT_FISHEYE` (dropping `radial_distortion_k1`) if and only if its `k`
 is exactly `0.0`, and leaves any other `k` as `SIMPLE_RADIAL_FISHEYE`.
+
+`SFMTOOL_FISHEYE` is an sfmtool model: the equidistant
+map with a monotone radial spline, `r(θ) = f·(θ + δ(θ))` with
+`δ(θ) = Σ cᵢ·Bᵢ(θ)` over a cubic B-spline basis on `[0, bspline_theta_max]`
+(see [sfmtool-camera-models.md](sfmtool-camera-models.md)). Its parameter list
+is `EQUIDISTANT_FISHEYE`'s plus the spline domain end `bspline_theta_max` in
+radians, the coefficient count `bspline_coeff_count`, and a **variable-length**
+dimensionless coefficient list `bspline_c0 … bspline_c{N−1}`: the only model
+here whose parameter count is not fixed. `bspline_coeff_count` declares `N`, so the
+fixed-length head determines the full parameter count; every coefficient index
+below the declared count must be present and none at or beyond it, and a
+violation is a corrupt parameter map, not a shorter spline. An all-zero (or
+absent) spline is exactly the `EQUIDISTANT_FISHEYE` map, bit for bit.
 
 ### 4. Rigs (Optional)
 

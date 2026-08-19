@@ -1327,8 +1327,8 @@ impl CameraModel {
     pub fn is_fisheye(&self) -> bool {
         matches!(
             self,
-            CameraModel::SimpleFisheye { .. }
-            | CameraModel::Fisheye { .. }
+            CameraModel::EquidistantFisheye { .. }
+            | CameraModel::SfmtoolFisheye { .. }
             | CameraModel::SimpleRadialFisheye { .. }
             | CameraModel::RadialFisheye { .. }
             | CameraModel::OpenCVFisheye { .. }
@@ -1340,7 +1340,8 @@ impl CameraModel {
 ```
 
 This is distinct from `has_distortion()` — a fisheye camera with all-zero k
-values (or no distortion parameters, like `SimpleFisheye` and `Fisheye`)
+values (or no distortion parameters at all, like `EquidistantFisheye`, and
+`SfmtoolFisheye` with a zero spline)
 still needs spherical placement because its projection model is fundamentally
 different (equidistant vs perspective). The detection is by model type, not
 distortion magnitude.

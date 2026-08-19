@@ -1,11 +1,11 @@
 # Projection Jacobian (ray-to-pixel derivatives)
 
-**Status:** Implemented (perspective family, `EquidistantFisheye` and
-`SimpleRadialFisheye`) —
+**Status:** Implemented (perspective family, `EquidistantFisheye`,
+`SimpleRadialFisheye` and `SfmtoolFisheye`) —
 `crates/sfmtool-core/src/camera/distortion.rs`
 (`CameraIntrinsics::ray_to_pixel_with_jacobian`, `CameraModel::distort_jacobian`),
 `crates/sfmtool-core/src/camera/distortion/kernels.rs`
-(`radial_fisheye_ray_jacobian`) and
+(`radial_fisheye_ray_jacobian`, `sfmtool_fisheye_ray_jacobian`) and
 `crates/sfmtool-core/src/camera/intrinsics.rs`
 (`CameraModel::supports_pixel_jacobian`); tests in
 `camera/distortion/tests.rs`. Core Rust only — no Python binding yet, as the
@@ -38,10 +38,12 @@ Two families, both reported by `CameraModel::supports_pixel_jacobian`:
 
 - the perspective models — pinhole, `SimpleRadial`, `Radial`, `OpenCV`,
   `FullOpenCV` — which project through the image plane;
-- the one-coefficient equidistant pair `EquidistantFisheye` and
-  `SimpleRadialFisheye`, whose ray-path map `θ_d = θ·(1 + k1·θ²)` (`k1 = 0`
-  for the first) is a closed form in `θ` alone and so differentiates in
-  closed form at every `θ`, `θ ≥ 90°` included.
+- the θ-map fisheyes `EquidistantFisheye`, `SimpleRadialFisheye` and
+  `SfmtoolFisheye`, whose ray-path map is a closed form in `θ` alone —
+  `θ_d = θ·(1 + k1·θ²)` for the first two (`k1 = 0` for the first),
+  `θ_d = θ + δ(θ)` with `δ` a spline for the third
+  ([../formats/sfmtool-camera-models.md](../formats/sfmtool-camera-models.md)) — and so
+  differentiates in closed form at every `θ`, `θ ≥ 90°` included.
 
 The multi-coefficient fisheye models and equirectangular take the ray path
 with no analytic derivative here; a caller that needs one for those falls back
@@ -109,8 +111,10 @@ restriction — does not appear. In the optical frame, with `ρ = √(rx² + ry�
 `n² = ρ² + rz²`, unit 2D direction `(ux, uy) = (rx, ry)/ρ` and
 `θ = atan2(ρ, rz)`, the map is `(x_d, y_d) = θ_d·(ux, uy)` with
 `θ_d = θ·(1 + k1·θ²)` (`k1 = 0` is the distortion-free model, and the shared
-kernel reproduces it bit for bit). Writing `θ_d' = dθ_d/dθ = 1 + 3·k1·θ²`,
-its derivative follows from
+kernel reproduces it bit for bit). `SfmtoolFisheye` substitutes
+`θ_d = θ + δ(θ)` and `θ_d' = 1 + δ'(θ)` into the same template, both read from
+one spline evaluation; everything below holds unchanged for it. Writing
+`θ_d' = dθ_d/dθ = 1 + 3·k1·θ²`, its derivative follows from
 
 ```
 ∂θ/∂rx = ux·rz/n²    ∂θ/∂ry = uy·rz/n²    ∂θ/∂rz = −ρ/n²
@@ -172,7 +176,7 @@ Two limits on the optical axis, where `(ux, uy)` is undefined:
   equirectangular — deferred; callers finite-difference for those.
 - Derivatives with respect to intrinsics or distortion coefficients — this is
   the derivative with respect to the ray only. (The bundle adjustment's
-  `∂(u, v)/∂f` and `∂(u, v)/∂k1` columns are its own; see
+  `∂(u, v)/∂f`, `∂(u, v)/∂k1` and `∂(u, v)/∂cᵢ` columns are its own; see
   [bundle-adjustment.md](bundle-adjustment.md).)
 - Any optimizer or normal-equation assembly; this is the measurement
   derivative a solver consumes.

@@ -14,7 +14,8 @@ The staged robust bundle adjustment used by the cluster pinhole bootstrap
 `scripts/exp_fast_pinhole.py` / `scripts/exp_pinhole_bootstrap.py`): given
 images sharing one camera model, camera poses, world points, and pixel
 observations tying them together, jointly refine the poses and points (and
-optionally the shared focal length and radial coefficient) by minimizing
+optionally the shared focal length and the shared distortion release — a
+radial coefficient or a spline) by minimizing
 robust pixel reprojection error over a trim schedule with inter-round retriangulation.
 
 This is the optimizer that the trimmed pose-only refinement
@@ -62,11 +63,12 @@ pub fn bundle_adjust(
     obs_pt: &[u32],                      // n_obs
     opt_f: bool,
     opt_k1: bool,
+    opt_bspline: bool,
     schedule: &[BaSchedule],             // default 50/5 → 12/2 → 4/1
     max_iters: usize,                    // LM iterations per round
     min_track: usize,                    // trim survivors per point (2)
     min_obs: usize,                      // degenerate-exit floor (12)
-) -> BundleAdjustment;                   // { focal, k1, residual_norms }
+) -> BundleAdjustment;                   // { focal, k1, bspline, residual_norms }
 ```
 
 Per schedule round, mirroring the experiment scripts exactly:
@@ -108,13 +110,16 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
 - **Parameters.** Per touched image a local `SO(3) × ℝ³` perturbation
   (`R ← exp(δθ)·R`, `t ← t + δt`); per touched point `X ← X + δX`; when
   `opt_f`, the shared focal `f ← f + δf`; when `opt_k1`, the shared
-  radial coefficient `k1 ← k1 + δk1`. Focal optimization requires a
+  radial coefficient `k1 ← k1 + δk1`; when `opt_bspline`, the shared
+  spline `cᵢ ← cᵢ + δcᵢ`. Focal optimization requires a
   single-focal model whose projection multiplies `f` onto a distorted
   coordinate that does not itself depend on `f` — `SIMPLE_PINHOLE`
   (`x_d = rx/(−rz)`), `EQUIDISTANT_FISHEYE` (`x_d = θ·ûx` with
-  `θ = atan2(ρ, rz)`), and `SIMPLE_RADIAL_FISHEYE`
+  `θ = atan2(ρ, rz)`), `SIMPLE_RADIAL_FISHEYE`
   (`x_d = θ·(1 + k1·θ²)·ûx` — `θ` comes from the ray, not from `r/f`,
-  so the condition holds with distortion present). In all three
+  so the condition holds with distortion present), and `SFMTOOL_FISHEYE`
+  (`x_d = (θ + δ(θ))·ûx`, whose spline coefficients are dimensionless and
+  likewise ride on the ray's own `θ`). In all four
   `∂u/∂f = x_d = (u − cx)/f` at every incidence angle, the periphery
   past `θ = 90°` included. `opt_k1` is the fisheye family's radial rung
   and requires `SIMPLE_RADIAL_FISHEYE`:
@@ -126,26 +131,80 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   in the camera block), or higher polynomial coefficients recovered
   through `f`-dependent normalization. The binding rejects `opt_f` /
   `opt_k1` for those loudly, and the core silently degrades to the
-  fixed-parameter solve (never a half-modeled DOF). Callers stage the
-  releases: fixed → `opt_f` → `opt_f + opt_k1`, so the curvature rung
-  opens only on a focal that has already settled. The rung also needs the
+  fixed-parameter solve (never a half-modeled DOF). The rung also needs the
   model's INVERSE to carry `k1`: retriangulation and direction
   re-estimation read `pixel_to_ray`, which for `SIMPLE_RADIAL_FISHEYE` is
   the Newton recovery of `θ` without the family's wide-angle blend — that
   blend hands back the identity `θ = r_d` ray past 90°, dropping `k1`
   exactly where `k1·θ³` is largest (a 105° rim at `k1 = 0.02` comes back
   6° off, which is a ray, not a rounding error).
+- **The spline release.** `opt_bspline` is the radial rung of
+  `SFMTOOL_FISHEYE`
+  ([../formats/sfmtool-camera-models.md](../formats/sfmtool-camera-models.md)),
+  the one model carrying a spline, and only when that spline is
+  defined: at least two coefficients on a positive finite `bspline_theta_max`
+  (anything shorter evaluates as the identity and has nothing to release).
+  The released block is the whole coefficient vector `c₀..c_{N−1}`, shared by
+  every image like `f` and `k1`, so the reduced camera system is
+  `[f, k1, c₀..c_{N−1} | 6·n_im]` — width `2 + N + 6·n_im`. `opt_k1` and
+  `opt_bspline` are mutually exclusive: no model carries both parameters, so
+  the binding rejects the combination (checked before the model gates, so the
+  caller sees the real reason) and the core degrades each on its own model
+  test. Retriangulation and direction re-estimation read the model's Newton
+  inverse, which carries the spline at every angle and applies no wide-angle
+  blend, for the same reason the `k1` rung needs its own.
+  **Unsupported coefficients are pinned.** A coefficient whose basis span no
+  surviving observation touches has an exactly-zero column, hence an exactly
+  zero `h_cc` diagonal (a sum of squares) and a singular reduced system; the
+  same pinning that holds an unreleased `f` or `k1` — and a frozen
+  translation — holds it, so it comes back bit for bit as it went in and the
+  spline never moves past the data. **Step guard.** Inside the damping
+  ladder, exactly where a non-positive focal or a folded `k1` is rejected, a
+  candidate spline that is non-finite or violates the model's monotonicity
+  invariant `1 + δ'(θ) > 0` anywhere on `[0, θ_max]` is rejected and the step
+  re-damped. The whole domain rather than the imaged field: monotonicity is
+  the model's construction invariant (the bracket behind its inverse) and the
+  accepted spline is persisted into the camera, while unsupported
+  coefficients are pinned anyway, so the wider check costs no legitimate
+  steps.
+- **Staged releases.** Callers open the shared parameters in stages:
+  fixed → `opt_f` → `opt_f` plus a distortion release, so a distortion
+  parameter opens only on a focal that has already settled — `opt_f + opt_k1`
+  for the `k1` rung, `opt_f + opt_bspline` for the spline. The spline
+  **must** be co-released with the focal, even where an earlier stage froze
+  `f`: under the center-anchored gauge the spline pins `δ(0) = δ'(0) = 0` and
+  so cannot express a central-scale correction at all — that is what `f` is
+  for — so a spline released against a frozen focal could only bend the
+  periphery around a scale it has no way to fix. A caller honoring an earlier
+  focal decision therefore guards the released *map* rather than the raw `f`
+  (the equivalent equidistant focal of the composite map), refitting with `f`
+  frozen only when that guard trips.
 - **Jacobian.** The projection block `∂(u, v)/∂p_cam` — analytic from
   `CameraIntrinsics::ray_to_pixel_with_jacobian` for the perspective
-  family, `EQUIDISTANT_FISHEYE` and `SIMPLE_RADIAL_FISHEYE` (the chain
-  through `θ_d = θ·(1 + k1·θ²)` is closed-form), a central difference of
+  family, `EQUIDISTANT_FISHEYE`, `SIMPLE_RADIAL_FISHEYE` (the chain
+  through `θ_d = θ·(1 + k1·θ²)` is closed-form) and `SFMTOOL_FISHEYE`
+  (the same chain at `θ_d = θ + δ(θ)`), a central difference of
   `ray_to_pixel` for the remaining polynomial fisheye models and
   equirectangular, which have no analytic form — composed with
   `−[R·X]ₓ` (rotation), `I₃` (translation), and `R` (point) blocks,
   exactly as in `pose_refine.rs` (including the fallback). An observation
   whose point is behind the camera / outside the model domain contributes
   residual `(1e6, 0)` with a zero Jacobian row — penalized, never
-  steering.
+  steering. The shared-parameter columns are analytic too: `(u − cx)/f`
+  for the focal, `f·θ³·(ûx, ûy)` for `k1`, and
+  `∂(u, v)/∂cᵢ = f·Bᵢ(θ)·(ûx, ûy)` for spline coefficient `i`, all with
+  `θ` and `û` read from the ray in the optical frame, so all are exact past
+  90°; on the spline's held-constant tail past `θ_max` the basis is
+  evaluated at `θ_max`, which is exactly the derivative of the held
+  constant. A direction (point at infinity) takes every one of these
+  columns unchanged — it projects through the very same map, at `R·d`
+  instead of `R·X + t`. Cubic local support means at most four spline
+  columns are non-zero at one observation, so the per-observation camera
+  block stays fixed-width (`[f, k1, 4 active coefficients, 6 pose]`)
+  however long the spline is; the observation's own knot span decides
+  which coefficient slots those four columns scatter into, and an active
+  basis function from the gauge-anchored pair has no coefficient and no
+  column.
 - **Robust weighting.** Second-order (Triggs-style) scaling, exactly
   scipy's `scale_for_robust_loss_function`: per residual component with
   `z = (r/s)²`, the Jacobian row scales by `√(ρ' + 2ρ''z)` — for soft-L1
@@ -157,7 +216,10 @@ cost = Σ_i s² · ρ(r_i² / s²),   ρ(z) = 2·(√(1 + z) − 1),   s = loss_
   scan winner where scipy walked −20% to the reference focal).
 - **Schur complement.** Points are eliminated: per-point 3×3 blocks are
   inverted directly and the reduced camera system
-  (`[f?, k1? | 6·n_im]`, dense) is solved by LU; point updates back-substitute.
+  (`[f?, k1?, c₀..c_{N−1}? | 6·n_im]`, dense) is solved by LU; point updates
+  back-substitute. Unreleased shared slots (and released coefficient slots
+  with no observation support) are pinned to an identity row/column with a
+  zero gradient entry, which is what keeps that system regular.
   Rejected steps re-damp and re-solve from the same linearization (no
   re-evaluation), with Marquardt scaling `λ·diag(JᵀJ)` for the
   `x_scale="jac"` parameter-scale invariance of the scipy original.
@@ -179,17 +241,27 @@ bundle_adjust(
     uv,                        # (n_obs, 2)
     obs_image,                 # (n_obs,) uint32
     obs_point,                 # (n_obs,) uint32
-    opt_f=False,               # SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE
-                               # or SIMPLE_RADIAL_FISHEYE
+    opt_f=False,               # SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE,
+                               # SIMPLE_RADIAL_FISHEYE or SFMTOOL_FISHEYE
     opt_k1=False,              # SIMPLE_RADIAL_FISHEYE only
+    opt_bspline=False,         # SFMTOOL_FISHEYE only, defined spline;
+                               # mutually exclusive with opt_k1
     schedule=[(50.0, 5.0), (12.0, 2.0), (4.0, 1.0)],
     max_iters=60,
     min_track=2,
     min_obs=12,
-) -> dict                      # focal, k1, quaternions_wxyz (n_img, 4),
+) -> dict                      # focal, k1, bspline_coefficients (n_coeffs,),
+                               # quaternions_wxyz (n_img, 4),
                                # translations (n_img, 3), points (n_pt, 3),
                                # residual_norms (n_obs,)
 ```
+
+`bspline_coefficients` is always present: the coefficients after the solve —
+the camera's input ones unless `opt_bspline` — and an empty array for models
+that carry no spline, mirroring how `k1` reports `0.0` for models without
+one. `opt_bspline` raises for a non-`SFMTOOL_FISHEYE` camera and for an
+undefined spline; `opt_k1` together with `opt_bspline` raises first, so the
+caller sees the exclusion rather than whichever model gate happens to fire.
 
 Shapes are validated like `reprojection_residuals`; observation indices out
 of range raise. The returned arrays are new (inputs are not mutated from
@@ -245,6 +317,24 @@ Python's point of view).
   field, accepts the same `k1` for a camera whose field stops short of it,
   and rejects non-finite steps; end to end, a released solve never returns a
   folded map.
+- **The spline release**: the spline columns match a central difference of
+  the projection past `θ = 90°` (normalized by the sample's largest column —
+  an out-of-support column is exactly zero and would otherwise measure the
+  finite-difference noise floor); a planted spline is recovered from a zero
+  start, coefficient-wise and as a composite map, with the focal fixed and
+  again with the focal co-released from a several-percent error; on a scene
+  that really is equidistant the released spline stays at zero and the
+  reconstruction is the fixed-spline one (the fixed point the
+  `EQUIDISTANT_FISHEYE` → `SFMTOOL_FISHEYE`(zero spline) promotion rests
+  on); every other model — and an `SFMTOOL_FISHEYE` with an undefined spline
+  — returns its parameters unmoved under `opt_bspline = true`, as does
+  `SFMTOOL_FISHEYE` under `opt_k1 = true` (the core's degrades); coefficient
+  slots with no observation support hold nonzero input sentinels exactly
+  through a `θ`-limited scene; and directions carry the rung where a
+  near-axis finite cloud cannot.
+- **The spline step guard**: the admissibility predicate rejects a folded
+  spline and non-finite coefficients; end to end, a released solve never
+  returns a spline violating `1 + δ'(θ) > 0` on `[0, θ_max]`.
 - **Directions carry the rung**: on a scene whose finite cloud sits near the
   optical axis (no `θ³` signal) and whose far field is marked at infinity,
   `opt_k1` recovers the planted curvature — and the same solve with the
@@ -437,8 +527,9 @@ validation, and outputs are unchanged.
 - Per-image or per-observation camera models — one shared
   `CameraIntrinsics`.
 - Optimizing distortion beyond the single shared `k1` of
-  `SIMPLE_RADIAL_FISHEYE`, or the principal point; `opt_f`/`opt_k1`
-  cover the shared focal and the one radial rung only.
+  `SIMPLE_RADIAL_FISHEYE` and the shared spline of
+  `SFMTOOL_FISHEYE`, or the principal point; `opt_f`/`opt_k1`/`opt_bspline`
+  cover the shared focal and those two radial releases only.
 - Gauge fixing, covariance estimation, or constraint handling — callers
   own the gauge (the bootstrap's evaluation aligns by similarity anyway).
 - Replacing the production solvers (`sfm solve` wraps COLMAP/GLOMAP); this
