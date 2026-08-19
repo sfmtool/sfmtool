@@ -807,6 +807,7 @@ pub fn rotation_init(
         DEFAULT_PROTECTED_LOSS_SCALE,
         false,
         false,
+        false,
         &DEFAULT_SCHEDULE,
         BA_MAX_ITERS,
         BA_MIN_TRACK,

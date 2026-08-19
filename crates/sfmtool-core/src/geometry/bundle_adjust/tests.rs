@@ -109,6 +109,7 @@ fn run(s: &mut Scene, opt_f: bool, schedule: &[BaSchedule]) -> BundleAdjustment 
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
         false,
+        false,
         schedule,
         60,
         2,
@@ -137,6 +138,7 @@ fn run_masked(
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
         false,
+        false,
         schedule,
         60,
         2,
@@ -163,6 +165,7 @@ fn run_protected(
         Some(protected),
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
+        false,
         false,
         schedule,
         60,
@@ -867,6 +870,7 @@ fn directions_lock_rotations_for_focal_release() {
         DEFAULT_PROTECTED_LOSS_SCALE,
         true,
         false,
+        false,
         &schedule,
         150,
         2,
@@ -895,6 +899,7 @@ fn directions_lock_rotations_for_focal_release() {
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         true,
+        false,
         false,
         &schedule,
         150,
@@ -992,6 +997,7 @@ fn protected_all_false_with_infinity_mask_matches_bit_for_bit() {
         Some(&mask_b),
         Some(&vec![false; prot.uv.len()]),
         DEFAULT_PROTECTED_LOSS_SCALE,
+        false,
         false,
         false,
         &DEFAULT_SCHEDULE,
@@ -1243,6 +1249,7 @@ fn protected_direction_observation_composes_with_infinity_mask() {
         DEFAULT_PROTECTED_LOSS_SCALE,
         false,
         false,
+        false,
         &schedule,
         60,
         2,
@@ -1436,6 +1443,7 @@ fn protected_long_range_observations_correct_a_drifted_gauge() {
             None,
             prot,
             DEFAULT_PROTECTED_LOSS_SCALE,
+            false,
             false,
             false,
             &DEFAULT_SCHEDULE,
@@ -2066,6 +2074,7 @@ fn run_k1(s: &mut Scene, opt_f: bool, opt_k1: bool, schedule: &[BaSchedule]) -> 
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
         opt_k1,
+        false,
         schedule,
         60,
         2,
@@ -2094,6 +2103,7 @@ fn run_k1_masked(
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
         opt_k1,
+        false,
         schedule,
         60,
         2,
@@ -2444,5 +2454,520 @@ fn directions_participate_in_the_curvature_rung() {
          longer isolates the direction rows",
         out_finite.k1,
         out.k1
+    );
+}
+
+// ── The spline rung: opt_bspline under SFMTOOL_FISHEYE ──────────────────────
+
+use crate::camera::distortion::bspline::delta as bspline_delta;
+
+/// Spline-domain end used by the spline-rung scenes: slightly beyond the
+/// 105° image circle, so the outermost observations sit inside the basis.
+const THETA_MAX: f64 = 2.0;
+
+/// A flattening 8-coefficient spline (the Phase A fixture): monotone on
+/// `[0, THETA_MAX]`, ~9 px of rim correction at `f = 130`.
+const PLANTED_BSPLINE: [f64; 8] = [-0.001, -0.004, -0.01, -0.02, -0.03, -0.05, -0.07, -0.09];
+
+fn sfmtool_fisheye(f: f64, bspline: &[f64]) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SfmtoolFisheye {
+            focal_length: f,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            bspline_theta_max: THETA_MAX,
+            bspline: bspline.to_vec(),
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+/// [`run`] with the focal and spline releases.
+fn run_bspline(
+    s: &mut Scene,
+    opt_f: bool,
+    opt_bspline: bool,
+    schedule: &[BaSchedule],
+) -> BundleAdjustment {
+    bundle_adjust(
+        &s.cam,
+        &mut s.quats,
+        &mut s.trans,
+        &mut s.points,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        None,
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        opt_f,
+        false,
+        opt_bspline,
+        schedule,
+        60,
+        2,
+        12,
+    )
+}
+
+/// [`run_bspline`] with a `point_at_infinity` mask.
+fn run_bspline_masked(
+    s: &mut Scene,
+    mask: &[bool],
+    opt_f: bool,
+    opt_bspline: bool,
+    schedule: &[BaSchedule],
+) -> BundleAdjustment {
+    bundle_adjust(
+        &s.cam,
+        &mut s.quats,
+        &mut s.trans,
+        &mut s.points,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        Some(mask),
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        opt_f,
+        false,
+        opt_bspline,
+        schedule,
+        60,
+        2,
+        12,
+    )
+}
+
+/// Largest composite-map discrepancy `f·|δ_a(θ) − δ_b(θ)|` in pixels over
+/// `[lo, hi]` — the "compare the map, not the coefficients" metric.
+fn worst_map_err_px(f: f64, a: &[f64], b: &[f64], lo: f64, hi: f64) -> f64 {
+    (0..=200)
+        .map(|s| {
+            let theta = lo + (hi - lo) * s as f64 / 200.0;
+            f * (bspline_delta(a, THETA_MAX, theta) - bspline_delta(b, THETA_MAX, theta)).abs()
+        })
+        .fold(0.0f64, f64::max)
+}
+
+/// `∂(u, v)/∂cᵢ` as the kernel computes it, against a central difference of
+/// the projection in each coefficient, over the whole field including past
+/// 90°.
+///
+/// The columns are `f·Bᵢ(θ)·û` because every coefficient enters as
+/// `θ_d = θ + Σ cᵢ·Bᵢ(θ)` with `θ` read off the ray, never off a pixel
+/// radius — the projection is exactly LINEAR in each coefficient, so a
+/// central difference must reproduce the column to rounding (the same bar as
+/// the k1 column's).
+#[test]
+fn bspline_columns_match_a_central_difference() {
+    let f = 130.0;
+    let h = 1e-3;
+    let n = PLANTED_BSPLINE.len();
+    let mut worst: f64 = 0.0;
+    let mut n_past_90 = 0usize;
+    for ti in 0..17 {
+        let theta = (5.0 + 10.0 * ti as f64).to_radians();
+        for ai in 0..5 {
+            let az = 2.0 * std::f64::consts::PI * ai as f64 / 5.0;
+            for &scale in &[0.35_f64, 1.0, 7.5] {
+                // Optical-frame direction at (θ, az) → canonical via
+                // S = diag(1, −1, −1).
+                let opt = Vector3::new(theta.sin() * az.cos(), theta.sin() * az.sin(), theta.cos());
+                let r = [scale * opt.x, -scale * opt.y, -scale * opt.z];
+                if theta > std::f64::consts::FRAC_PI_2 {
+                    n_past_90 += 1;
+                }
+                // The kernel's columns, assembled per coefficient.
+                let (first, cols) =
+                    bspline_columns(f, n, THETA_MAX, Vector3::new(r[0], r[1], r[2]));
+                let mut full = vec![[0.0f64; 2]; n];
+                for (j, col) in cols.iter().enumerate() {
+                    let fi = first + j;
+                    if fi >= 2 {
+                        full[fi - 2] = *col;
+                    }
+                }
+                // Relative to the sample's largest column: an out-of-support
+                // coefficient's column is exactly zero, and dividing the
+                // central difference's pixel-rounding noise by a per-column
+                // magnitude would measure the noise floor, not the column.
+                let denom = full
+                    .iter()
+                    .flatten()
+                    .fold(0.0f64, |m, c| m.max(c.abs()))
+                    .max(1e-3);
+                for (i, col) in full.iter().enumerate() {
+                    let mut cp = PLANTED_BSPLINE;
+                    cp[i] += h;
+                    let mut cm = PLANTED_BSPLINE;
+                    cm[i] -= h;
+                    let (up, vp) = sfmtool_fisheye(f, &cp).ray_to_pixel(r).unwrap();
+                    let (um, vm) = sfmtool_fisheye(f, &cm).ray_to_pixel(r).unwrap();
+                    let (fd_u, fd_v) = ((up - um) / (2.0 * h), (vp - vm) / (2.0 * h));
+                    worst = worst
+                        .max((col[0] - fd_u).abs() / denom)
+                        .max((col[1] - fd_v).abs() / denom);
+                }
+            }
+        }
+    }
+    assert!(n_past_90 >= 100, "not enough periphery: {n_past_90}");
+    assert!(
+        worst < 1e-9,
+        "analytic spline columns vs central difference: worst relative error {worst}"
+    );
+}
+
+/// A scene shot through a flattening lens, handed to the solver with a zero
+/// spline: the release recovers the planted coefficients — coefficient-wise
+/// and, what actually matters, composite-map-wise — and the fit comes back
+/// sub-pixel.
+#[test]
+fn opt_bspline_recovers_a_planted_spline() {
+    let f = 130.0;
+    let (mut s, n_behind) = make_fisheye_scene_for(sfmtool_fisheye(f, &PLANTED_BSPLINE), 8, 140);
+    assert!(n_behind >= 50, "scene is not wide enough: {n_behind}");
+    s.cam = sfmtool_fisheye(f, &[0.0; 8]);
+    let out = run_bspline(&mut s, false, true, &DEFAULT_SCHEDULE);
+    assert_eq!(out.focal.to_bits(), f.to_bits(), "the focal was not fixed");
+    let map_err = worst_map_err_px(f, &out.bspline, &PLANTED_BSPLINE, 0.05, 1.85);
+    assert!(
+        map_err < 0.3,
+        "recovered composite map off by {map_err} px (spline {:?})",
+        out.bspline
+    );
+    for (i, (c, t)) in out.bspline.iter().zip(&PLANTED_BSPLINE).enumerate() {
+        assert!(
+            (c - t).abs() < 0.01,
+            "coefficient {i}: {c} (want {t}; full spline {:?})",
+            out.bspline
+        );
+    }
+    let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
+    assert!(worst < 0.5, "worst reprojection {worst} px after the rung");
+}
+
+/// The staged release the callers actually run: focal and spline together,
+/// from a focal several percent off and no spline.
+#[test]
+fn opt_f_and_opt_bspline_recover_together() {
+    let f_true = 130.0;
+    let (mut s, _) = make_fisheye_scene_for(sfmtool_fisheye(f_true, &PLANTED_BSPLINE), 8, 140);
+    let f_start = 124.0;
+    s.cam = sfmtool_fisheye(f_start, &[0.0; 8]);
+    // The focal trades against the scene scale: move the structure with it.
+    for x in s.points.iter_mut() {
+        for v in x.iter_mut() {
+            *v *= f_start / f_true;
+        }
+    }
+    for t in s.trans.iter_mut() {
+        *t *= f_start / f_true;
+    }
+    let out = run_bspline(&mut s, true, true, &DEFAULT_SCHEDULE);
+    let f_err = (out.focal - f_true).abs() / f_true;
+    let map_err = worst_map_err_px(f_true, &out.bspline, &PLANTED_BSPLINE, 0.05, 1.85);
+    assert!(
+        f_err < 0.01 && map_err < 0.5,
+        "co-released f = {} (want {f_true}), composite map off by {map_err} px ({:?})",
+        out.focal,
+        out.bspline
+    );
+    let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
+    assert!(worst < 0.5, "worst reprojection {worst} px");
+}
+
+/// The fixed point that matters for the promotion
+/// EQUIDISTANT_FISHEYE → SFMTOOL_FISHEYE(zero spline): on a scene that
+/// really is equidistant, releasing the spline leaves it at zero and leaves
+/// the geometry where it was.
+#[test]
+fn opt_bspline_holds_at_zero_on_an_equidistant_scene() {
+    let f = 130.0;
+    let (mut released, _) = make_fisheye_scene_for(sfmtool_fisheye(f, &[0.0; 8]), 8, 140);
+    let mut fixed = released.clone();
+    // A perturbed start, so both arms have real work to do.
+    let perturb = |s: &mut Scene| {
+        for (i, q) in s.quats.iter_mut().enumerate() {
+            *q = UnitQuaternion::from_scaled_axis(Vector3::new(
+                0.01 * jitter(i, 21),
+                0.01 * jitter(i, 22),
+                0.01 * jitter(i, 23),
+            )) * *q;
+        }
+        for (p, x) in s.points.iter_mut().enumerate() {
+            for (c, v) in x.iter_mut().enumerate() {
+                *v += 0.05 * jitter(p * 3 + c, 31);
+            }
+        }
+    };
+    perturb(&mut released);
+    perturb(&mut fixed);
+    let out_r = run_bspline(&mut released, false, true, &DEFAULT_SCHEDULE);
+    let out_f = run_bspline(&mut fixed, false, false, &DEFAULT_SCHEDULE);
+    for (i, c) in out_f.bspline.iter().enumerate() {
+        assert_eq!(c.to_bits(), 0.0f64.to_bits(), "unreleased c{i} moved");
+    }
+    let held = worst_map_err_px(f, &out_r.bspline, &[0.0; 8], 0.05, 1.85);
+    assert!(
+        held < 0.1,
+        "the released spline walked off zero on an equidistant scene by \
+         {held} px ({:?})",
+        out_r.bspline
+    );
+    // …and the reconstruction is the same one, not a spline-for-geometry
+    // trade that happens to end near zero.
+    for (i, (a, b)) in released.quats.iter().zip(fixed.quats.iter()).enumerate() {
+        assert!(a.angle_to(b) < 1e-4, "image {i} rotation split");
+    }
+    for (p, (a, b)) in released.points.iter().zip(fixed.points.iter()).enumerate() {
+        let d = (0..3).map(|c| (a[c] - b[c]).powi(2)).sum::<f64>().sqrt();
+        assert!(d < 1e-3, "point {p} split {d}");
+    }
+}
+
+/// Every other model degrades: `opt_bspline` is the spline model's rung
+/// alone, and the core never takes a half-modeled step (the binding rejects
+/// these loudly before they get here) — nor does it release a spline too
+/// short to define the spline.
+#[test]
+fn opt_bspline_is_gated_on_the_sfmtool_fisheye_model() {
+    let f = 130.0;
+    // EQUIDISTANT_FISHEYE has no spline at all: the release is dropped, and
+    // the solve is bit for bit the one without it.
+    let (mut released, _) = make_fisheye_scene_for(equidistant_native(f), 6, 90);
+    let mut plain = released.clone();
+    let out_r = run_bspline(&mut released, true, true, &DEFAULT_SCHEDULE);
+    let out_p = run_bspline(&mut plain, true, false, &DEFAULT_SCHEDULE);
+    assert!(out_r.bspline.is_empty());
+    assert_bitwise_equal(&released, &out_r, &plain, &out_p);
+    // SIMPLE_RADIAL_FISHEYE carries a k1, not a spline: same degrade.
+    let (mut srf_r, _) = make_fisheye_scene_for(radial_fisheye(f, 0.02), 6, 90);
+    let mut srf_p = srf_r.clone();
+    let out_r = run_bspline(&mut srf_r, true, true, &DEFAULT_SCHEDULE);
+    let out_p = run_bspline(&mut srf_p, true, false, &DEFAULT_SCHEDULE);
+    assert!(out_r.bspline.is_empty());
+    assert_bitwise_equal(&srf_r, &out_r, &srf_p, &out_p);
+    // The converse: SFMTOOL_FISHEYE carries no k1, so `opt_k1` degrades on
+    // it the same way (the two releases are naturally exclusive).
+    let (mut k1_r, _) = make_fisheye_scene_for(sfmtool_fisheye(f, &PLANTED_BSPLINE), 6, 90);
+    let mut k1_p = k1_r.clone();
+    let out_r = run_k1(&mut k1_r, true, true, &DEFAULT_SCHEDULE);
+    let out_p = run_k1(&mut k1_p, true, false, &DEFAULT_SCHEDULE);
+    assert_eq!(out_r.k1.to_bits(), 0.0f64.to_bits());
+    assert_bitwise_equal(&k1_r, &out_r, &k1_p, &out_p);
+    // A coefficient vector too short to define the spline (the identity map)
+    // carries nothing to release: same silent degrade, and the input comes back.
+    let (mut empty_r, _) = make_fisheye_scene_for(sfmtool_fisheye(f, &[]), 6, 90);
+    let mut empty_p = empty_r.clone();
+    let out_r = run_bspline(&mut empty_r, true, true, &DEFAULT_SCHEDULE);
+    let out_p = run_bspline(&mut empty_p, true, false, &DEFAULT_SCHEDULE);
+    assert!(out_r.bspline.is_empty());
+    assert_bitwise_equal(&empty_r, &out_r, &empty_p, &out_p);
+}
+
+/// The step guard: `θ_d = θ + δ(θ)` must stay strictly increasing over the
+/// spline's whole domain, or the projection folds — two incidence angles
+/// onto one pixel radius, and `pixel_to_ray`'s Newton solve losing its
+/// bracket.
+#[test]
+fn bspline_step_guard_rejects_a_folded_spline() {
+    // The identity and the (gently flattening) planted spline pass.
+    assert!(bspline_step_admissible(&[0.0; 8], THETA_MAX));
+    assert!(bspline_step_admissible(&PLANTED_BSPLINE, THETA_MAX));
+    // A steep drop mid-domain folds the map: with interior knot spans of
+    // 2/7, a −0.4 step between adjacent coefficients puts δ' ≈ −1.4 < −1.
+    let folded = [0.0, 0.0, 0.0, -0.4, -0.8, -0.8, -0.8, -0.8];
+    assert!(!bspline_step_admissible(&folded, THETA_MAX));
+    // A fold in the outermost span is rejected too: the guard covers the
+    // whole domain, not just where this round's data happens to sit, because
+    // the accepted spline is persisted into the camera and its Newton
+    // inverse needs the global bracket.
+    let rim_folded = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.5];
+    assert!(!bspline_step_admissible(&rim_folded, THETA_MAX));
+    // Non-finite steps never pass.
+    let mut bad = PLANTED_BSPLINE;
+    bad[3] = f64::NAN;
+    assert!(!bspline_step_admissible(&bad, THETA_MAX));
+    bad[3] = f64::NEG_INFINITY;
+    assert!(!bspline_step_admissible(&bad, THETA_MAX));
+}
+
+/// End to end, a released solve never lands on a folded spline.
+#[test]
+fn released_bspline_stays_admissible() {
+    let f = 130.0;
+    let (mut s, _) = make_fisheye_scene_for(sfmtool_fisheye(f, &PLANTED_BSPLINE), 8, 140);
+    s.cam = sfmtool_fisheye(f, &[0.0; 8]);
+    let out = run_bspline(&mut s, true, true, &DEFAULT_SCHEDULE);
+    assert!(
+        bspline_is_monotone(&out.bspline, THETA_MAX, THETA_MAX),
+        "the solve returned a folded spline: {:?} at f = {}",
+        out.bspline,
+        out.focal
+    );
+}
+
+/// A coefficient whose basis span no surviving observation reaches has
+/// exactly-zero curvature: its shared slot is pinned per linearization, the
+/// reduced system stays regular, and the coefficient comes back bit for bit
+/// at its input value.
+#[test]
+fn unsupported_bspline_slots_hold_their_input_exactly() {
+    let f = 130.0;
+    // Sentinels in the outermost two coefficients, whose basis support
+    // starts at θ = 10/7 ≈ 1.43 and 12/7 ≈ 1.71: invisible below θ ≈ 1.43.
+    let sentinels = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.017, -0.008];
+    // An equidistant capture imaged only out to θ = 1 rad (≈ 57°): well
+    // inside the sentinels' support, three knot spans short of the rim.
+    let (full, _) = make_fisheye_scene_for(sfmtool_fisheye(f, &[0.0; 8]), 8, 140);
+    let mut s = Scene {
+        cam: sfmtool_fisheye(f, &sentinels),
+        quats: full.quats.clone(),
+        trans: full.trans.clone(),
+        points: full.points.clone(),
+        uv: Vec::new(),
+        obs_img: Vec::new(),
+        obs_pt: Vec::new(),
+    };
+    for k in 0..full.uv.len() {
+        let r = (full.uv[k][0] - 240.0).hypot(full.uv[k][1] - 240.0);
+        if r <= f * 1.0 {
+            s.uv.push(full.uv[k]);
+            s.obs_img.push(full.obs_img[k]);
+            s.obs_pt.push(full.obs_pt[k]);
+        }
+    }
+    assert!(s.uv.len() >= 100, "narrow scene too small: {}", s.uv.len());
+    let out = run_bspline(&mut s, false, true, &DEFAULT_SCHEDULE);
+    // The solve is not degenerate…
+    let finite = out.residual_norms.iter().filter(|r| r.is_finite()).count();
+    assert!(
+        finite >= 100,
+        "solve degenerated: {finite} finite residuals"
+    );
+    // …the unsupported outer coefficients held their inputs exactly…
+    assert_eq!(out.bspline[6].to_bits(), sentinels[6].to_bits());
+    assert_eq!(out.bspline[7].to_bits(), sentinels[7].to_bits());
+    // …and the supported inner ones stayed near the (true) zero.
+    let inner_err = worst_map_err_px(
+        f,
+        &out.bspline[..6]
+            .iter()
+            .chain(&[0.0, 0.0])
+            .copied()
+            .collect::<Vec<_>>(),
+        &[0.0; 8],
+        0.05,
+        1.0,
+    );
+    assert!(
+        inner_err < 0.2,
+        "supported coefficients drifted by {inner_err} px: {:?}",
+        out.bspline
+    );
+}
+
+/// Direction rows carry the rung. A point at infinity projects through the
+/// very same map, so `∂/∂cᵢ` applies to it unchanged — and where the finite
+/// cloud sits near the axis (no basis signal), the far field is the only
+/// thing that can recover the spline.
+#[test]
+fn directions_participate_in_the_bspline_rung() {
+    let f = 130.0;
+    let cam_true = sfmtool_fisheye(f, &PLANTED_BSPLINE);
+
+    // A near-axis finite cloud in front of an arc of cameras: enough to
+    // satisfy the finite-survivor floor, far too little periphery to fit the
+    // spline from.
+    let n_img = 8;
+    let mut quats = Vec::new();
+    let mut trans = Vec::new();
+    for i in 0..n_img {
+        let ang = 0.12 * (i as f64 - (n_img as f64 - 1.0) / 2.0);
+        let center = Vector3::new(ang.sin(), 0.2 * jitter(i, 11), ang.cos() + 6.0);
+        let r = UnitQuaternion::face_towards(&center, &Vector3::y()).inverse();
+        quats.push(r);
+        trans.push(-(r * center));
+    }
+    let mut points: Vec<[f64; 3]> = Vec::new();
+    for p in 0..40 {
+        points.push([0.6 * jitter(p, 5), 0.6 * jitter(p, 6), 0.4 * jitter(p, 7)]);
+    }
+    let n_finite = points.len();
+    // Far-field directions spread over the whole 210° field, out to θ = 105°.
+    let mut dir_ids = Vec::new();
+    for j in 0..60 {
+        let theta = (25.0 + 80.0 * (j as f64) / 59.0f64).to_radians();
+        let phi = 2.399_963 * j as f64;
+        let d = Vector3::new(
+            theta.sin() * phi.cos(),
+            theta.sin() * phi.sin(),
+            -theta.cos(),
+        );
+        dir_ids.push(points.len());
+        points.push([d.x, d.y, d.z]);
+    }
+    let mut uv = Vec::new();
+    let mut obs_img = Vec::new();
+    let mut obs_pt = Vec::new();
+    for (p, x) in points.iter().enumerate() {
+        let is_dir = p >= n_finite;
+        for i in 0..n_img {
+            let xv = Vector3::new(x[0], x[1], x[2]);
+            let c = if is_dir {
+                quats[i] * xv
+            } else {
+                quats[i] * xv + trans[i]
+            };
+            let Some((u, v)) = cam_true.ray_to_pixel([c.x, c.y, c.z]) else {
+                continue;
+            };
+            if (u - 240.0).hypot(v - 240.0) > f * 105.0_f64.to_radians() {
+                continue;
+            }
+            uv.push([u, v]);
+            obs_img.push(i as u32);
+            obs_pt.push(p as u32);
+        }
+    }
+    let scene = Scene {
+        cam: sfmtool_fisheye(f, &[0.0; 8]),
+        quats,
+        trans,
+        points,
+        uv,
+        obs_img,
+        obs_pt,
+    };
+    let mask = dir_mask(&scene, &dir_ids);
+
+    // With the directions in the solve, the rung recovers the composite map.
+    let mut with_dirs = scene.clone();
+    let out = run_bspline_masked(&mut with_dirs, &mask, false, true, &DEFAULT_SCHEDULE);
+    let err = worst_map_err_px(f, &out.bspline, &PLANTED_BSPLINE, 0.5, 1.7);
+    assert!(
+        err < 1.0,
+        "composite map off by {err} px from the direction rows ({:?})",
+        out.bspline
+    );
+
+    // The control: drop every direction observation and the near-axis finite
+    // cloud alone cannot see the spline.
+    let mut finite_only = scene.clone();
+    let keep: Vec<usize> = (0..finite_only.obs_pt.len())
+        .filter(|&k| (finite_only.obs_pt[k] as usize) < n_finite)
+        .collect();
+    finite_only.uv = keep.iter().map(|&k| finite_only.uv[k]).collect();
+    finite_only.obs_img = keep.iter().map(|&k| finite_only.obs_img[k]).collect();
+    finite_only.obs_pt = keep.iter().map(|&k| finite_only.obs_pt[k]).collect();
+    let out_finite = run_bspline(&mut finite_only, false, true, &DEFAULT_SCHEDULE);
+    let err_finite = worst_map_err_px(f, &out_finite.bspline, &PLANTED_BSPLINE, 0.5, 1.7);
+    assert!(
+        err_finite > 3.0 * err,
+        "the near-axis control recovered the spline too well ({err_finite} \
+         vs {err} px) - the test no longer isolates the direction rows"
     );
 }

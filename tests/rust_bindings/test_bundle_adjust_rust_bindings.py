@@ -764,3 +764,112 @@ def test_k1_returned_for_every_model():
     # parameter.
     s = _scene()
     assert _run(s)["k1"] == 0.0
+
+
+# ── The spline rung: opt_bspline under SFMTOOL_FISHEYE ────────────────────
+
+
+# A flattening 8-coefficient spline (monotone on [0, 2.0]): ~9 px of rim
+# correction at f = 130.
+_PLANTED_BSPLINE = [-0.001, -0.004, -0.01, -0.02, -0.03, -0.05, -0.07, -0.09]
+
+
+def _sfmtool_fisheye_cam(f, bspline, theta_max=2.0, w=480, h=480):
+    return CameraIntrinsics.from_dict(
+        {
+            "model": "SFMTOOL_FISHEYE",
+            "width": w,
+            "height": h,
+            "parameters": {
+                "focal_length": f,
+                "principal_point_x": w / 2.0,
+                "principal_point_y": h / 2.0,
+                "bspline_theta_max": theta_max,
+                "bspline_coeff_count": float(len(bspline)),
+                **{f"bspline_c{i}": c for i, c in enumerate(bspline)},
+            },
+        }
+    )
+
+
+def test_opt_bspline_recovers_a_planted_spline():
+    # Binding parity of the kernel's recovery claim: observations generated
+    # through a flattening spline lens, handed to the solver with a zero
+    # spline. The rung puts the spline back and the fit is sub-pixel.
+    f = 130.0
+    s = _wide_scene(f=f, cam=_sfmtool_fisheye_cam(f, _PLANTED_BSPLINE))
+    s["cam"] = _sfmtool_fisheye_cam(f, [0.0] * 8)
+    out = _run(s, opt_bspline=True)
+    assert out["focal"] == f, "the focal moved with opt_f off"
+    npt.assert_allclose(out["bspline_coefficients"], _PLANTED_BSPLINE, atol=0.02)
+    assert np.max(out["residual_norms"]) < 0.5
+
+
+def test_opt_f_and_opt_bspline_release_together():
+    f_true = 130.0
+    s = _wide_scene(f=f_true, cam=_sfmtool_fisheye_cam(f_true, _PLANTED_BSPLINE))
+    f_start = 124.0
+    s["cam"] = _sfmtool_fisheye_cam(f_start, [0.0] * 8)
+    s["points"] = s["points"] * (f_start / f_true)
+    s["trans"] = s["trans"] * (f_start / f_true)
+    out = _run(s, opt_f=True, opt_bspline=True)
+    assert abs(out["focal"] - f_true) / f_true < 0.01, out["focal"]
+    npt.assert_allclose(out["bspline_coefficients"], _PLANTED_BSPLINE, atol=0.02)
+
+
+def test_opt_f_accepts_the_sfmtool_fisheye_model():
+    f_true = 130.0
+    s = _wide_scene(f=f_true, cam=_sfmtool_fisheye_cam(f_true, _PLANTED_BSPLINE))
+    f_start = 118.3
+    s["cam"] = _sfmtool_fisheye_cam(f_start, _PLANTED_BSPLINE)
+    s["points"] = s["points"] * (f_start / f_true)
+    s["trans"] = s["trans"] * (f_start / f_true)
+    out = _run(s, opt_f=True)
+    assert abs(out["focal"] - f_true) / f_true < 0.01, out["focal"]
+    npt.assert_array_equal(
+        out["bspline_coefficients"],
+        _PLANTED_BSPLINE,
+        err_msg="an unreleased spline moved",
+    )
+
+
+@pytest.mark.parametrize("model", ["SIMPLE_PINHOLE", "SIMPLE_RADIAL_FISHEYE"])
+def test_opt_bspline_rejected_for_models_without_a_spline(model):
+    s = _scene()
+    if model == "SIMPLE_PINHOLE":
+        s["cam"] = _cam()
+    else:
+        s["cam"] = _radial_fisheye_cam(500.0, 0.0, w=640, h=480)
+    with pytest.raises(ValueError, match="opt_bspline requires a SFMTOOL_FISHEYE"):
+        _run(s, opt_bspline=True)
+
+
+def test_opt_bspline_rejected_for_an_undefined_spline():
+    # A coefficient vector too short to define the spline (the identity map)
+    # carries nothing to release: rejected loudly rather than silently held
+    # fixed.
+    s = _scene()
+    s["cam"] = _sfmtool_fisheye_cam(500.0, [], w=640, h=480)
+    with pytest.raises(ValueError, match="defined spline"):
+        _run(s, opt_bspline=True)
+
+
+def test_opt_k1_and_opt_bspline_are_mutually_exclusive():
+    # No model carries both parameters, so the combination is rejected with
+    # the real reason — whatever the camera.
+    s = _scene()
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _run(s, opt_k1=True, opt_bspline=True)
+
+
+def test_bspline_coefficients_returned_for_every_model():
+    # The key is always present: empty where the model has no spline, and
+    # the input coefficients (exactly) where it has one that is not
+    # released.
+    s = _scene()
+    out = _run(s)
+    assert out["bspline_coefficients"].shape == (0,)
+    f = 130.0
+    s = _wide_scene(f=f, cam=_sfmtool_fisheye_cam(f, _PLANTED_BSPLINE))
+    out = _run(s)
+    npt.assert_array_equal(out["bspline_coefficients"], _PLANTED_BSPLINE)
