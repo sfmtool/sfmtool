@@ -225,6 +225,22 @@ fn sfmtool_fisheye() -> CameraIntrinsics {
     }
 }
 
+fn sfmtool_pinhole() -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SfmtoolPinhole {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_rho_max: 0.9,
+            bspline: vec![
+                0.0008, 0.0031, 0.0075, 0.0142, 0.0236, 0.0361, 0.052, 0.0718,
+            ],
+        },
+        width: 640,
+        height: 480,
+    }
+}
+
 fn all_cameras() -> Vec<CameraIntrinsics> {
     vec![
         pinhole(),
@@ -241,6 +257,7 @@ fn all_cameras() -> Vec<CameraIntrinsics> {
         equirectangular(),
         equidistant_fisheye(),
         sfmtool_fisheye(),
+        sfmtool_pinhole(),
     ]
 }
 
@@ -332,6 +349,7 @@ fn model_name_all_variants() {
         "EQUIRECTANGULAR",
         "EQUIDISTANT_FISHEYE",
         "SFMTOOL_FISHEYE",
+        "SFMTOOL_PINHOLE",
     ];
     assert_eq!(all_cameras().len(), expected.len());
     for (cam, name) in all_cameras().iter().zip(expected.iter()) {
@@ -689,6 +707,9 @@ fn is_fisheye_false_for_perspective_models() {
     assert!(!opencv().model.is_fisheye());
     assert!(!full_opencv().model.is_fisheye());
     assert!(!equirectangular().model.is_fisheye());
+    // The spline PINHOLE is a perspective model: same spline machinery as its
+    // fisheye sibling, on the pinhole's radial coordinate.
+    assert!(!sfmtool_pinhole().model.is_fisheye());
 }
 
 #[test]
@@ -1023,6 +1044,283 @@ fn sfmtool_fisheye_coefficient_beyond_the_declared_length_is_an_invalid_paramete
             ref parameter,
         } if model == "SFMTOOL_FISHEYE" && parameter == "bspline_c8"
     ));
+}
+
+// -----------------------------------------------------------------------
+// SfmtoolPinhole: pinhole base + radial spline. The same variable-length
+// serialization as its fisheye sibling under `bspline_rho_max`, and the
+// classification of a perspective model.
+// -----------------------------------------------------------------------
+
+#[test]
+fn sfmtool_pinhole_classification() {
+    let m = sfmtool_pinhole().model;
+    assert_eq!(m.model_name(), "SFMTOOL_PINHOLE");
+    // Perspective, not fisheye: the map has a perspective divide and its
+    // domain is the half space in front of the camera.
+    assert!(!m.is_fisheye());
+    assert!(!m.is_equirectangular());
+    assert!(!m.needs_ray_path());
+    assert!(m.has_distortion());
+    // The spline enters the perspective family's radial factor, so the
+    // analytic pixel Jacobian is the family's.
+    assert!(m.supports_pixel_jacobian());
+}
+
+#[test]
+fn sfmtool_pinhole_zero_or_empty_bspline_has_no_distortion() {
+    for bspline in [vec![], vec![0.0; 8]] {
+        let m = CameraModel::SfmtoolPinhole {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_rho_max: 0.9,
+            bspline,
+        };
+        assert!(!m.has_distortion());
+        // Still classified by shape, not by coefficient values.
+        assert!(!m.is_fisheye());
+        assert!(m.supports_pixel_jacobian());
+    }
+}
+
+#[test]
+fn sfmtool_pinhole_inactive_spline_has_no_distortion_however_live_the_coefficients() {
+    // `has_distortion` must agree with what the kernels actually run: an
+    // INACTIVE spline — one below the cubic minimum, or one whose domain end
+    // is not positive and finite — short-circuits to the exact pinhole
+    // arithmetic, so neither shape distorts anything.
+    let live = vec![
+        0.0008, 0.0031, 0.0075, 0.0142, 0.0236, 0.0361, 0.052, 0.0718,
+    ];
+    let cases: Vec<(f64, Vec<f64>)> = vec![
+        (0.9, vec![0.4]),
+        (0.0, live.clone()),
+        (-1.0, live.clone()),
+        (f64::INFINITY, live.clone()),
+        (f64::NEG_INFINITY, live.clone()),
+        (f64::NAN, live.clone()),
+    ];
+    for (bspline_rho_max, bspline) in cases {
+        let m = CameraModel::SfmtoolPinhole {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_rho_max,
+            bspline,
+        };
+        assert!(
+            !m.has_distortion(),
+            "ρ_max = {bspline_rho_max} reported distortion"
+        );
+        assert!(!m.is_fisheye());
+        assert!(m.supports_pixel_jacobian());
+    }
+    assert!(CameraModel::SfmtoolPinhole {
+        focal_length: 500.0,
+        principal_point_x: 320.0,
+        principal_point_y: 240.0,
+        bspline_rho_max: 0.9,
+        bspline: live,
+    }
+    .has_distortion());
+}
+
+#[test]
+fn sfmtool_pinhole_serializes_the_bspline_as_indexed_parameters() {
+    let cam = sfmtool_pinhole();
+    let stored = SfmrCamera::from(&cam);
+    assert_eq!(stored.model, "SFMTOOL_PINHOLE");
+    // The five-parameter head plus one key per coefficient.
+    assert_eq!(stored.parameters.len(), 5 + 8);
+    assert_eq!(stored.parameters["bspline_rho_max"], 0.9);
+    assert_eq!(stored.parameters["bspline_coeff_count"], 8.0);
+    assert_eq!(stored.parameters["bspline_c0"], 0.0008);
+    assert_eq!(stored.parameters["bspline_c7"], 0.0718);
+    // The domain end is named per model: the fisheye's key is absent.
+    assert!(!stored.parameters.contains_key("bspline_theta_max"));
+    assert_eq!(CameraIntrinsics::try_from(&stored).unwrap(), cam);
+}
+
+#[test]
+fn sfmtool_pinhole_empty_bspline_round_trips() {
+    let cam = CameraIntrinsics {
+        model: CameraModel::SfmtoolPinhole {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_rho_max: 0.9,
+            bspline: vec![],
+        },
+        width: 640,
+        height: 480,
+    };
+    let stored = SfmrCamera::from(&cam);
+    assert_eq!(stored.parameters["bspline_coeff_count"], 0.0);
+    assert!(!stored.parameters.keys().any(|k| k
+        .strip_prefix("bspline_c")
+        .is_some_and(|i| i.parse::<usize>().is_ok())));
+    assert_eq!(CameraIntrinsics::try_from(&stored).unwrap(), cam);
+}
+
+#[test]
+fn sfmtool_pinhole_gapped_bspline_is_a_missing_parameter() {
+    let mut stored = SfmrCamera::from(&sfmtool_pinhole());
+    stored.parameters.clear();
+    stored.parameters.insert("focal_length".to_string(), 500.0);
+    stored
+        .parameters
+        .insert("principal_point_x".to_string(), 320.0);
+    stored
+        .parameters
+        .insert("principal_point_y".to_string(), 240.0);
+    stored.parameters.insert("bspline_rho_max".to_string(), 0.9);
+    stored
+        .parameters
+        .insert("bspline_coeff_count".to_string(), 4.0);
+    stored.parameters.insert("bspline_c0".to_string(), 0.0008);
+    stored.parameters.insert("bspline_c2".to_string(), 0.0075);
+    stored.parameters.insert("bspline_c3".to_string(), 0.0142);
+    let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+    assert!(matches!(
+        err,
+        CameraIntrinsicsError::MissingParameter {
+            ref model,
+            ref parameter,
+        } if model == "SFMTOOL_PINHOLE" && parameter == "bspline_c1"
+    ));
+}
+
+#[test]
+fn sfmtool_pinhole_missing_rho_max_is_a_missing_parameter() {
+    let mut stored = SfmrCamera::from(&sfmtool_pinhole());
+    stored.parameters.remove("bspline_rho_max");
+    let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+    assert!(matches!(
+        err,
+        CameraIntrinsicsError::MissingParameter { ref parameter, .. }
+            if parameter == "bspline_rho_max"
+    ));
+}
+
+#[test]
+fn sfmtool_pinhole_missing_coeff_count_is_a_missing_parameter() {
+    let mut stored = SfmrCamera::from(&sfmtool_pinhole());
+    stored.parameters.remove("bspline_coeff_count");
+    let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+    assert!(matches!(
+        err,
+        CameraIntrinsicsError::MissingParameter {
+            ref model,
+            ref parameter,
+        } if model == "SFMTOOL_PINHOLE" && parameter == "bspline_coeff_count"
+    ));
+}
+
+#[test]
+fn sfmtool_pinhole_non_integer_coeff_count_is_an_invalid_parameter() {
+    for bad in [2.5, -1.0, f64::NAN, f64::INFINITY] {
+        let mut stored = SfmrCamera::from(&sfmtool_pinhole());
+        stored
+            .parameters
+            .insert("bspline_coeff_count".to_string(), bad);
+        let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                CameraIntrinsicsError::InvalidParameter {
+                    ref model,
+                    ref parameter,
+                } if model == "SFMTOOL_PINHOLE" && parameter == "bspline_coeff_count"
+            ),
+            "bspline_coeff_count = {bad} was accepted: {err}"
+        );
+    }
+}
+
+#[test]
+fn sfmtool_pinhole_single_coefficient_count_is_an_invalid_parameter() {
+    let mut stored = SfmrCamera::from(&sfmtool_pinhole());
+    stored.parameters.retain(|k, _| {
+        !k.strip_prefix("bspline_c")
+            .is_some_and(|i| i.parse::<usize>().is_ok())
+    });
+    stored
+        .parameters
+        .insert("bspline_coeff_count".to_string(), 1.0);
+    stored.parameters.insert("bspline_c0".to_string(), 0.0008);
+    let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CameraIntrinsicsError::InvalidParameter {
+                ref model,
+                ref parameter,
+            } if model == "SFMTOOL_PINHOLE" && parameter == "bspline_coeff_count"
+        ),
+        "a one-coefficient spline was accepted: {err}"
+    );
+}
+
+#[test]
+fn sfmtool_pinhole_degenerate_rho_max_is_an_invalid_parameter() {
+    for bad in [0.0, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        let mut stored = SfmrCamera::from(&sfmtool_pinhole());
+        stored.parameters.insert("bspline_rho_max".to_string(), bad);
+        let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                CameraIntrinsicsError::InvalidParameter {
+                    ref model,
+                    ref parameter,
+                } if model == "SFMTOOL_PINHOLE" && parameter == "bspline_rho_max"
+            ),
+            "bspline_rho_max = {bad} was accepted: {err}"
+        );
+    }
+}
+
+#[test]
+fn sfmtool_pinhole_coefficient_beyond_the_declared_length_is_an_invalid_parameter() {
+    let mut stored = SfmrCamera::from(&sfmtool_pinhole());
+    stored.parameters.insert("bspline_c8".to_string(), 0.09);
+    let err = CameraIntrinsics::try_from(&stored).unwrap_err();
+    assert!(matches!(
+        err,
+        CameraIntrinsicsError::InvalidParameter {
+            ref model,
+            ref parameter,
+        } if model == "SFMTOOL_PINHOLE" && parameter == "bspline_c8"
+    ));
+}
+
+#[test]
+fn radial_spline_reports_the_models_radial_coordinate() {
+    use crate::camera::intrinsics::SplineRadial;
+    let fisheye = sfmtool_fisheye();
+    let (coeffs, d_max, radial) = fisheye.model.radial_spline().unwrap();
+    assert_eq!(coeffs.len(), 8);
+    assert_eq!(d_max, 2.0);
+    assert_eq!(radial, SplineRadial::IncidenceAngle);
+    let pinhole = sfmtool_pinhole();
+    let (coeffs, d_max, radial) = pinhole.model.radial_spline().unwrap();
+    assert_eq!(coeffs.len(), 8);
+    assert_eq!(d_max, 0.9);
+    assert_eq!(radial, SplineRadial::ImagePlaneRadius);
+    // Every other model carries no spline.
+    for cam in all_cameras() {
+        let spline = cam.model.radial_spline();
+        assert_eq!(
+            spline.is_some(),
+            matches!(
+                cam.model,
+                CameraModel::SfmtoolFisheye { .. } | CameraModel::SfmtoolPinhole { .. }
+            ),
+            "{} reported the wrong spline presence",
+            cam.model_name()
+        );
+    }
 }
 
 #[test]

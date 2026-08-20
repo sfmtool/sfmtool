@@ -46,14 +46,14 @@ pub(crate) fn rotation_angle(r: &Matrix3<f64>) -> f64 {
     (((r.trace() - 1.0) / 2.0).clamp(-1.0, 1.0)).acos()
 }
 
-/// The camera at focal `f` — identity for every model but the four the focal
+/// The camera at focal `f` — identity for every model but the five the focal
 /// release admits: `SIMPLE_PINHOLE`, `EQUIDISTANT_FISHEYE`,
-/// `SIMPLE_RADIAL_FISHEYE` and `SFMTOOL_FISHEYE`, whose projections all
-/// multiply `f` onto a distorted coordinate that does not itself read `f`
-/// (for the last, the dimensionless radial spline rides on the ray's own
-/// `θ`).
+/// `SIMPLE_RADIAL_FISHEYE`, `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`, whose
+/// projections all multiply `f` onto a distorted coordinate that does not
+/// itself read `f` (for the last two, the dimensionless radial spline rides on
+/// the ray's own radial coordinate).
 ///
-/// Focal optimization is gated on exactly those four models, so no other
+/// Focal optimization is gated on exactly those five models, so no other
 /// camera ever sees a moved focal; this matches the bundle adjustment's focal
 /// handling.
 pub(crate) fn cam_at(cam: &CameraIntrinsics, f: f64) -> CameraIntrinsics {
@@ -62,7 +62,8 @@ pub(crate) fn cam_at(cam: &CameraIntrinsics, f: f64) -> CameraIntrinsics {
         CameraModel::SimplePinhole { focal_length, .. }
         | CameraModel::EquidistantFisheye { focal_length, .. }
         | CameraModel::SimpleRadialFisheye { focal_length, .. }
-        | CameraModel::SfmtoolFisheye { focal_length, .. } => *focal_length = f,
+        | CameraModel::SfmtoolFisheye { focal_length, .. }
+        | CameraModel::SfmtoolPinhole { focal_length, .. } => *focal_length = f,
         _ => {}
     }
     out
@@ -86,22 +87,26 @@ pub(crate) fn cam_with(cam: &CameraIntrinsics, f: f64, k1: f64) -> CameraIntrins
 
 /// The camera at focal `f` and spline coefficients `bspline` — [`cam_at`]
 /// plus the coefficient vector the bundle adjustment's spline release moves,
-/// which exists only on `SFMTOOL_FISHEYE`. `bspline` is ignored for every
-/// other model (`opt_bspline` is gated on that one). The sibling of
-/// [`cam_with`]: the two never apply together, because no model carries both
-/// a `k1` and a spline.
+/// which exists on the two sfmtool spline models, `SFMTOOL_FISHEYE` and
+/// `SFMTOOL_PINHOLE`. `bspline` is ignored for every other model
+/// (`opt_bspline` is gated on those two). The sibling of [`cam_with`]: the two
+/// never apply together, because no model carries both a `k1` and a spline.
 pub(crate) fn cam_with_bspline(
     cam: &CameraIntrinsics,
     f: f64,
     bspline: &[f64],
 ) -> CameraIntrinsics {
     let mut out = cam_at(cam, f);
-    if let CameraModel::SfmtoolFisheye {
-        bspline: coeffs, ..
-    } = &mut out.model
-    {
-        coeffs.clear();
-        coeffs.extend_from_slice(bspline);
-    }
+    let coeffs = match &mut out.model {
+        CameraModel::SfmtoolFisheye {
+            bspline: coeffs, ..
+        }
+        | CameraModel::SfmtoolPinhole {
+            bspline: coeffs, ..
+        } => coeffs,
+        _ => return out,
+    };
+    coeffs.clear();
+    coeffs.extend_from_slice(bspline);
     out
 }

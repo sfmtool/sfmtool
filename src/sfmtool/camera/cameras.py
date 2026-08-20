@@ -151,13 +151,17 @@ _NATIVE_CAMERA_PARAM_NAMES = {
     ],
 }
 
-# sfmtool's spline fisheye (equidistant base + monotone radial spline).
-# Unlike EQUIDISTANT_FISHEYE it has NO COLMAP carrier — no COLMAP
-# model parameterizes the spline — and it is deliberately not in
-# CAMERA_MODEL_NAMES: it is produced by refinement, never user-specified.
-# Beta: the parameterization may change, so .sfmr files carrying this model may
-# need to be regenerated across releases.
+# sfmtool's spline models: a distortion-free base (equidistant / pinhole) plus
+# a monotone radial spline. Unlike EQUIDISTANT_FISHEYE neither has a COLMAP
+# carrier — no COLMAP model parameterizes the spline — and both are
+# deliberately absent from CAMERA_MODEL_NAMES: they are produced by
+# refinement, never user-specified. Beta: the parameterization may change, so
+# .sfmr files carrying them may need to be regenerated across releases.
 SFMTOOL_FISHEYE = "SFMTOOL_FISHEYE"
+SFMTOOL_PINHOLE = "SFMTOOL_PINHOLE"
+
+# The spline models, as the pycolmap export shim tests them.
+SFMTOOL_SPLINE_MODELS = (SFMTOOL_FISHEYE, SFMTOOL_PINHOLE)
 
 
 def get_intrinsic_matrix(camera) -> np.ndarray:
@@ -210,7 +214,8 @@ def colmap_camera_from_intrinsics(camera_meta, *, width=None, height=None):
     An sfmtool-native model is exported through its COLMAP carrier:
     `EQUIDISTANT_FISHEYE` becomes `SIMPLE_RADIAL_FISHEYE` with `k = 0`, which
     parameterizes the identical map (see `EQUIDISTANT_FISHEYE_CARRIER`).
-    `SFMTOOL_FISHEYE` has no carrier and raises ValueError.
+    `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE` have no carrier and raise
+    ValueError.
 
     Args:
         camera_meta: CameraIntrinsics object
@@ -231,7 +236,7 @@ def colmap_camera_from_intrinsics(camera_meta, *, width=None, height=None):
     if height is None:
         height = camera_meta.height
 
-    if model == SFMTOOL_FISHEYE:
+    if model in SFMTOOL_SPLINE_MODELS:
         # No carrier exists: the radial spline is not expressible in any
         # COLMAP model, and exporting a lossy approximation silently would
         # corrupt downstream geometry.

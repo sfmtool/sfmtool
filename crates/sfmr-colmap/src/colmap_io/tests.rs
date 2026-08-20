@@ -873,6 +873,90 @@ fn sfmtool_fisheye_fails_the_binary_write_path() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+// ---------------------------------------------------------------------------
+// SFMTOOL_PINHOLE: no COLMAP carrier either
+//
+// The spline pinhole shares the fisheye's position: no COLMAP model
+// parameterizes a B-spline radial correction, so both export paths reject it
+// by name rather than approximating it with a polynomial.
+// ---------------------------------------------------------------------------
+
+fn sfmtool_pinhole_camera() -> SfmrCamera {
+    SfmrCamera {
+        model: "SFMTOOL_PINHOLE".into(),
+        width: 1920,
+        height: 1080,
+        parameters: [
+            ("focal_length".into(), 1210.4),
+            ("principal_point_x".into(), 960.0),
+            ("principal_point_y".into(), 540.0),
+            ("bspline_rho_max".into(), 0.9),
+            ("bspline_coeff_count".into(), 2.0),
+            ("bspline_c0".into(), 0.0031),
+            ("bspline_c1".into(), 0.0118),
+        ]
+        .into_iter()
+        .collect(),
+    }
+}
+
+#[test]
+fn sfmtool_pinhole_has_no_colmap_export() {
+    let cam = sfmtool_pinhole_camera();
+    assert!(matches!(
+        colmap_model_id(&cam.model),
+        Err(ColmapIoError::UnknownModelName(ref name)) if name == "SFMTOOL_PINHOLE"
+    ));
+    assert!(matches!(
+        camera_params_to_array(&cam),
+        Err(ColmapIoError::UnknownModelName(ref name)) if name == "SFMTOOL_PINHOLE"
+    ));
+    // Import claiming is untouched: the name passes through verbatim.
+    assert_eq!(
+        claim_native_camera_model(cam.clone()).model,
+        "SFMTOOL_PINHOLE"
+    );
+    assert_eq!(
+        claim_native_camera_model(cam.clone()).parameters,
+        cam.parameters
+    );
+}
+
+#[test]
+fn sfmtool_pinhole_fails_the_binary_write_path() {
+    let cam = sfmtool_pinhole_camera();
+    let image_names = vec!["img_000.jpg".to_string()];
+    let camera_indexes = vec![0u32];
+    let quaternions_wxyz = vec![[1.0, 0.0, 0.0, 0.0]];
+    let translations_xyz = vec![[0.0, 0.0, 0.0]];
+    let keypoints_per_image: Vec<Vec<[f64; 2]>> = vec![vec![]];
+    let write_data = ColmapWriteData {
+        cameras: std::slice::from_ref(&cam),
+        image_names: &image_names,
+        camera_indexes: &camera_indexes,
+        quaternions_wxyz: &quaternions_wxyz,
+        translations_xyz: &translations_xyz,
+        positions_xyz: &[],
+        colors_rgb: &[],
+        reprojection_errors: &[],
+        track_image_indexes: &[],
+        track_feature_indexes: &[],
+        track_point3d_indexes: &[],
+        keypoints_per_image: &keypoints_per_image,
+        rigs: None,
+        frames: None,
+    };
+    let dir = std::env::temp_dir().join("colmap_io_sfmtool_pinhole_reject");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let err = write_colmap_binary(&dir, &write_data).unwrap_err();
+    assert!(
+        matches!(err, ColmapIoError::UnknownModelName(ref name) if name == "SFMTOOL_PINHOLE"),
+        "unexpected error: {err:?}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn simple_radial_fisheye_import_claims_zero_k_and_keeps_the_rest() {
     // The same rule through a real write/read cycle.

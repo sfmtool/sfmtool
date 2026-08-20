@@ -2896,6 +2896,447 @@ fn sfmtool_fisheye_folded_bspline_projects_none_past_the_fold() {
 }
 
 // -----------------------------------------------------------------------
+// SFMTOOL_PINHOLE: pinhole base + the same monotone radial spline, on the
+// normalized image-plane radius `ρ = tan θ` instead of `θ`, with the domain
+// end `ρ_max`. Zero coefficients ≡ SIMPLE_PINHOLE bit for bit.
+// -----------------------------------------------------------------------
+
+/// A gently expanding 8-coefficient spline out to `ρ_max = 0.9` (θ ≈ 42°) —
+/// the shape of a lens that stretches toward the rim, comfortably inside the
+/// monotonicity invariant.
+const PINCUSHION_BSPLINE: [f64; 8] = [
+    0.0008, 0.0031, 0.0075, 0.0142, 0.0236, 0.0361, 0.052, 0.0718,
+];
+
+/// The [`PINCUSHION_BSPLINE`]'s spline domain end.
+const BSPLINE_RHO_MAX: f64 = 0.9;
+
+/// An `SFMTOOL_PINHOLE` at focal `f` with the given coefficients, principal
+/// point centred in a 480² frame — the perspective sibling of
+/// `sfmtool_fisheye_at`. At `f = 250` the frame corner sits at `ρ ≈ 1.36`,
+/// well past `ρ_max`, so the held-constant tail is ordinary in-frame domain.
+fn sfmtool_pinhole_at(f: f64, coeffs: Vec<f64>) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SfmtoolPinhole {
+            focal_length: f,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            bspline_rho_max: BSPLINE_RHO_MAX,
+            bspline: coeffs,
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+/// The zero-spline base at the same focal and frame: the one-focal pinhole.
+fn simple_pinhole_at(f: f64) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SimplePinhole {
+            focal_length: f,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+/// Assert `cam` reproduces `native` **bit for bit** on every public map —
+/// `ray_to_pixel`, its Jacobian, `pixel_to_ray` and the image-plane
+/// `project`/`unproject` pair — over the pinhole's whole domain, out to 78°
+/// off axis (past the 480² frame's 68° corner at `f = 137.5`).
+///
+/// This is the promotion contract of the format spec: it is the exact
+/// `SIMPLE_PINHOLE` arithmetic that runs, not an equivalent evaluation of a
+/// spline that happens to sum to zero.
+fn assert_bitwise_simple_pinhole(cam: &CameraIntrinsics, native: &CameraIntrinsics) {
+    let mut samples = 0usize;
+    for ti in 0..20 {
+        let theta = (2.0 + 4.0 * ti as f64).to_radians(); // out to 78°
+        for phi_deg in [0.0f64, 29.0, 91.0, 188.0, 300.0] {
+            let ray = ray_at(theta, phi_deg.to_radians());
+            let ((us, vs), js) = cam.ray_to_pixel_with_jacobian(ray).unwrap();
+            let ((un, vn), jn) = native.ray_to_pixel_with_jacobian(ray).unwrap();
+            assert_eq!(us.to_bits(), un.to_bits());
+            assert_eq!(vs.to_bits(), vn.to_bits());
+            let (du, dv) = cam.ray_to_pixel(ray).unwrap();
+            let (dnu, dnv) = native.ray_to_pixel(ray).unwrap();
+            assert_eq!(du.to_bits(), dnu.to_bits());
+            assert_eq!(dv.to_bits(), dnv.to_bits());
+            for row in 0..2 {
+                for c in 0..3 {
+                    assert_eq!(
+                        js[row][c].to_bits(),
+                        jn[row][c].to_bits(),
+                        "[{row}][{c}] at θ={:.0}°",
+                        theta.to_degrees(),
+                    );
+                }
+            }
+            let rs = cam.pixel_to_ray(us, vs);
+            let rn = native.pixel_to_ray(un, vn);
+            for c in 0..3 {
+                assert_eq!(rs[c].to_bits(), rn[c].to_bits());
+            }
+            samples += 1;
+        }
+    }
+    assert!(samples >= 100);
+    // The frame's own boundary, where a spline would depart most: corners and
+    // edge midpoints of the 480² image.
+    for &(u, v) in &CameraIntrinsics::boundary_samples(cam.width, cam.height) {
+        let rs = cam.pixel_to_ray(u, v);
+        let rn = native.pixel_to_ray(u, v);
+        for c in 0..3 {
+            assert_eq!(rs[c].to_bits(), rn[c].to_bits(), "pixel ({u}, {v})");
+        }
+    }
+    // A ray behind the camera is out of domain for both.
+    for behind in [[0.0, 0.0, 1.0], [0.3, -0.2, 0.5], [0.0, 0.0, 0.0]] {
+        assert!(cam.ray_to_pixel(behind).is_none());
+        assert!(native.ray_to_pixel(behind).is_none());
+        assert!(cam.ray_to_pixel_with_jacobian(behind).is_none());
+        assert!(native.ray_to_pixel_with_jacobian(behind).is_none());
+    }
+    // The image-plane pair (project / unproject).
+    for &[x, y] in &test_points() {
+        let (us, vs) = cam.project(x, y);
+        let (un, vn) = native.project(x, y);
+        assert_eq!(us.to_bits(), un.to_bits());
+        assert_eq!(vs.to_bits(), vn.to_bits());
+        let (xs, ys) = cam.unproject(us, vs);
+        let (xn, yn) = native.unproject(un, vn);
+        assert_eq!(xs.to_bits(), xn.to_bits());
+        assert_eq!(ys.to_bits(), yn.to_bits());
+    }
+}
+
+#[test]
+fn sfmtool_pinhole_zero_bspline_is_bitwise_the_simple_pinhole_model() {
+    // The promotion contract: an empty OR all-zero spline short-circuits to
+    // the exact SIMPLE_PINHOLE arithmetic on every public map, so promoting a
+    // solved pinhole camera into this model moves nothing. Bitwise, not
+    // merely close.
+    let f = 137.5;
+    let native = simple_pinhole_at(f);
+    for coeffs in [vec![], vec![0.0; 8]] {
+        assert_bitwise_simple_pinhole(&sfmtool_pinhole_at(f, coeffs), &native);
+    }
+}
+
+#[test]
+fn sfmtool_pinhole_degenerate_rho_max_is_bitwise_the_simple_pinhole_model() {
+    // A domain end that is not positive and finite leaves the basis no
+    // interval to live on, so the map is the identity however live the
+    // coefficients are — and it takes the SAME short-circuit as a zero
+    // spline. Also the no-NaN gate: `+∞` would otherwise put every knot at
+    // infinity and take `inf · 0` through the basis recurrence.
+    let f = 137.5;
+    let native = simple_pinhole_at(f);
+    for rho_max in [0.0f64, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        let cam = CameraIntrinsics {
+            model: CameraModel::SfmtoolPinhole {
+                focal_length: f,
+                principal_point_x: 240.0,
+                principal_point_y: 240.0,
+                bspline_rho_max: rho_max,
+                bspline: PINCUSHION_BSPLINE.to_vec(),
+            },
+            width: 480,
+            height: 480,
+        };
+        assert!(
+            !cam.has_distortion(),
+            "ρ_max = {rho_max} reported distortion"
+        );
+        assert_bitwise_simple_pinhole(&cam, &native);
+    }
+}
+
+#[test]
+fn sfmtool_pinhole_round_trips_with_a_live_bspline_across_the_rho_max_seam() {
+    // Forward/inverse consistency with a non-trivial expanding spline, from
+    // the axis out past ρ_max (where the map continues linearly with slope f
+    // and the inverse is closed-form).
+    let f = 250.0;
+    let cam = sfmtool_pinhole_at(f, PINCUSHION_BSPLINE.to_vec());
+    let mut worst_px = 0.0f64;
+    let mut worst_rad = 0.0f64;
+    let mut past_rho_max = 0usize;
+    let mut inside = 0usize;
+    for ti in 0..24 {
+        let rho = 0.02 + 0.07 * ti as f64; // out to ρ = 1.63 (θ ≈ 58°)
+        let theta = rho.atan();
+        for phi_deg in [0.0f64, 47.0, 133.0, 271.0] {
+            let ray = ray_at(theta, phi_deg.to_radians());
+            let (u, v) = cam.ray_to_pixel(ray).unwrap();
+            let back = cam.pixel_to_ray(u, v);
+            let dot = (0..3).map(|c| back[c] * ray[c]).sum::<f64>();
+            worst_rad = worst_rad.max(dot.clamp(-1.0, 1.0).acos());
+            let (u2, v2) = cam.ray_to_pixel(back).unwrap();
+            worst_px = worst_px.max((u2 - u).hypot(v2 - v));
+            if rho > BSPLINE_RHO_MAX {
+                past_rho_max += 1;
+            } else {
+                inside += 1;
+            }
+        }
+    }
+    assert!(inside >= 40, "Newton branch unexercised: {inside}");
+    assert!(
+        past_rho_max >= 20,
+        "held-constant tail unexercised: {past_rho_max}"
+    );
+    eprintln!("[sfmtool-pinhole-rt] worst {worst_rad:.3e} rad / {worst_px:.3e} px");
+    assert!(
+        worst_px < 1e-9,
+        "pixel round-trip {worst_px} exceeds 1e-9 px"
+    );
+    // The angle floor is acos() conditioning at dot ≈ 1 (√ε ≈ 1.5e-8), not
+    // inverse error — the pixel round trip above is the sharp gate.
+    assert!(worst_rad < 1e-7, "ray round-trip {worst_rad} rad");
+    // The spline pushes the periphery OUT versus the pinhole map, and does so
+    // by a held-constant offset past ρ_max.
+    let plain = simple_pinhole_at(f);
+    for rho in [0.5f64, 0.9, 1.4] {
+        let ray = ray_at(rho.atan(), 0.4);
+        let (u, _) = cam.ray_to_pixel(ray).unwrap();
+        let (up, _) = plain.ray_to_pixel(ray).unwrap();
+        assert!(u > up, "ρ = {rho} did not expand");
+    }
+}
+
+#[test]
+fn sfmtool_pinhole_jacobian_matches_central_difference_over_the_field() {
+    // The analytic Jacobian routes the spline through the perspective
+    // family's radial factor g(ρ) = 1 + δ(ρ)/ρ; pin it against a central
+    // difference over the field and across the ρ_max seam, at several ray
+    // scales (degree-0 homogeneity).
+    let f = 250.0;
+    let cam = sfmtool_pinhole_at(f, PINCUSHION_BSPLINE.to_vec());
+    let h = 1e-6;
+    let mut samples = 0usize;
+    let mut past_rho_max = 0usize;
+    let mut worst = 0.0f64;
+    for ti in 0..18 {
+        let rho = 0.05 + 0.09 * ti as f64; // out to ρ = 1.58
+        for phi_deg in [0.0f64, 43.0, 137.0, 250.0, 331.0] {
+            let base = ray_at(rho.atan(), phi_deg.to_radians());
+            for scale in [0.4f64, 1.0, 6.0] {
+                let ray = [base[0] * scale, base[1] * scale, base[2] * scale];
+                let (uv, jac) = cam
+                    .ray_to_pixel_with_jacobian(ray)
+                    .expect("analytic Jacobian None on an in-domain spline ray");
+                let direct = cam.ray_to_pixel(ray).unwrap();
+                assert_relative_eq!(uv.0, direct.0, epsilon = 1e-12);
+                assert_relative_eq!(uv.1, direct.1, epsilon = 1e-12);
+                if rho > BSPLINE_RHO_MAX {
+                    past_rho_max += 1;
+                }
+                for c in 0..3 {
+                    let mut rp = ray;
+                    let mut rm = ray;
+                    rp[c] += h;
+                    rm[c] -= h;
+                    let (up, vp) = cam.ray_to_pixel(rp).unwrap();
+                    let (um, vm) = cam.ray_to_pixel(rm).unwrap();
+                    let fd_u = (up - um) / (2.0 * h);
+                    let fd_v = (vp - vm) / (2.0 * h);
+                    for (a, fd) in [(jac[0][c], fd_u), (jac[1][c], fd_v)] {
+                        let rel = (a - fd).abs() / (1.0 + a.abs());
+                        worst = worst.max(rel);
+                        assert!(
+                            rel <= 1e-6,
+                            "∂/∂r[{c}] at ρ={rho:.2}: analytic {a} vs central-diff {fd} (rel {rel})",
+                        );
+                    }
+                    samples += 1;
+                }
+            }
+        }
+    }
+    assert!(samples > 500, "thin coverage: only {samples} samples");
+    assert!(
+        past_rho_max > 50,
+        "grid did not cross the ρ_max seam ({past_rho_max})"
+    );
+    eprintln!("[sfmtool-pinhole-jac] {samples} samples, worst rel error {worst:.3e}");
+}
+
+#[test]
+fn sfmtool_pinhole_jacobian_on_axis_is_the_pinhole_limit() {
+    // The gauge pins δ(0) = 0 and δ'(0) = 0, so δ(ρ)/ρ → 0 on the axis and
+    // the radial factor is exactly the pinhole's whatever the coefficients —
+    // no 0/0 in `(ρ·δ' − δ)/(2ρ³)`. The approach is only LINEAR in ρ (the
+    // gauge does not pin δ''(0)), hence the ρ-proportional tolerance on the
+    // continuity sweep.
+    let f = 250.0;
+    let cam = sfmtool_pinhole_at(f, PINCUSHION_BSPLINE.to_vec());
+    let (uv, jac) = cam.ray_to_pixel_with_jacobian([0.0, 0.0, -2.0]).unwrap();
+    assert_eq!(uv.0.to_bits(), 240.0f64.to_bits());
+    assert_eq!(uv.1.to_bits(), 240.0f64.to_bits());
+    assert_relative_eq!(jac[0][0], f / 2.0, epsilon = 1e-12);
+    assert_relative_eq!(jac[1][1], -f / 2.0, epsilon = 1e-12);
+    assert_eq!(jac[0][1], 0.0);
+    assert_eq!(jac[1][0], 0.0);
+    for eps in [1e-4f64, 1e-6, 1e-9] {
+        let tol = (f * eps).max(1e-10);
+        for phi_deg in [0.0f64, 61.0, 233.0] {
+            let phi = phi_deg.to_radians();
+            let ray = [2.0 * eps * phi.cos(), 2.0 * eps * phi.sin(), -2.0];
+            let (_, j) = cam.ray_to_pixel_with_jacobian(ray).unwrap();
+            assert!(
+                j.iter().flatten().all(|v| v.is_finite()),
+                "NaN near the axis"
+            );
+            assert_relative_eq!(j[0][0], f / 2.0, epsilon = tol);
+            assert_relative_eq!(j[1][1], -f / 2.0, epsilon = tol);
+        }
+    }
+}
+
+#[test]
+fn sfmtool_pinhole_folded_bspline_projects_none_past_the_fold() {
+    // A spline violating the monotonicity invariant hard enough to drive
+    // ρ_d = ρ + δ(ρ) non-positive: the forward map is gated (None past the
+    // fold, like the fisheye sibling's θ_d ≤ 0 gate), the Jacobian shares
+    // that domain, and the monotonicity check reports the violation.
+    let coeffs = vec![-0.02, -0.1, -0.35, -0.8, -1.2, -1.5, -1.7, -1.8];
+    assert!(!bspline::bspline_is_monotone(
+        &coeffs,
+        BSPLINE_RHO_MAX,
+        BSPLINE_RHO_MAX
+    ));
+    let cam = sfmtool_pinhole_at(250.0, coeffs);
+    let mut folded = 0usize;
+    let mut fine = 0usize;
+    for rho in [0.02f64, 0.1, 0.25, 0.4, 0.55, 0.7, 0.85] {
+        let ray = ray_at(rho.atan(), 0.6);
+        match cam.ray_to_pixel(ray) {
+            Some(_) => {
+                assert!(
+                    cam.ray_to_pixel_with_jacobian(ray).is_some(),
+                    "no Jacobian at an in-domain ρ={rho}"
+                );
+                fine += 1;
+            }
+            None => {
+                assert!(
+                    cam.ray_to_pixel_with_jacobian(ray).is_none(),
+                    "Jacobian past the ρ_d fold at ρ={rho}"
+                );
+                folded += 1;
+            }
+        }
+    }
+    assert!(
+        fine >= 2 && folded >= 2,
+        "{fine} in-domain, {folded} folded"
+    );
+    // The gently expanding spline stays inside the invariant.
+    assert!(bspline::bspline_is_monotone(
+        &PINCUSHION_BSPLINE,
+        BSPLINE_RHO_MAX,
+        BSPLINE_RHO_MAX
+    ));
+}
+
+#[test]
+fn sfmtool_pinhole_inverse_falls_back_to_the_identity_with_no_invertible_radius() {
+    // A spline folded so far that ρ_max + δ(ρ_max) ≤ 0: the distorted radius
+    // is non-positive at the domain end, so no positive r_d is reachable and
+    // `recover_radial_bspline` reports non-convergence. The last coefficient
+    // IS δ(ρ_max) (the clamped basis ends at 1 there), so −1.2 against
+    // ρ_max = 0.9 puts the end at −0.3.
+    let coeffs = vec![-0.05, -0.2, -0.5, -0.8, -1.0, -1.1, -1.15, -1.2];
+    let delta_end = bspline::delta(&coeffs, BSPLINE_RHO_MAX, BSPLINE_RHO_MAX);
+    assert!(
+        BSPLINE_RHO_MAX + delta_end <= 0.0,
+        "fixture is not folded far enough: ρ_d(ρ_max) = {}",
+        BSPLINE_RHO_MAX + delta_end
+    );
+    for r_d in [1e-3f64, 0.2, 0.9, 1.5, 4.0] {
+        let (rho, converged) = recover_radial_bspline(r_d, &coeffs, BSPLINE_RHO_MAX);
+        assert!(!converged, "r_d = {r_d} claimed an inverse");
+        assert_eq!(rho, 0.0, "the report carries the axis radius");
+    }
+
+    // The kernel answers that report with the identity, not with the reported
+    // radius — which would scale every pixel onto the optical axis.
+    for &(x_d, y_d) in &[(0.3f64, 0.0f64), (-0.4, 0.7), (1.2, -0.9), (0.02, 0.03)] {
+        let (x, y) = undistort_sfmtool_pinhole(x_d, y_d, &coeffs, BSPLINE_RHO_MAX);
+        assert_eq!(x.to_bits(), x_d.to_bits(), "({x_d}, {y_d}) moved in x");
+        assert_eq!(y.to_bits(), y_d.to_bits(), "({x_d}, {y_d}) moved in y");
+    }
+
+    // End to end: distinct pixels unproject to distinct rays, each one the
+    // base pinhole's, and none of them collapsed onto the axis.
+    let f = 250.0;
+    let cam = sfmtool_pinhole_at(f, coeffs);
+    let plain = simple_pinhole_at(f);
+    for &(u, v) in &[
+        (0.0f64, 0.0f64),
+        (240.0, 60.0),
+        (410.0, 300.0),
+        (479.0, 479.0),
+    ] {
+        let back = cam.pixel_to_ray(u, v);
+        let want = plain.pixel_to_ray(u, v);
+        for c in 0..3 {
+            assert_relative_eq!(back[c], want[c], epsilon = 1e-12);
+        }
+        let off_axis = back[0].hypot(back[1]);
+        assert!(off_axis > 1e-3, "({u}, {v}) collapsed onto the axis");
+    }
+}
+
+#[test]
+fn sfmtool_pinhole_behind_the_camera_is_out_of_domain() {
+    // The pinhole's domain, spline or not: rays at or behind the plane
+    // through the camera centre have no projection and no derivative.
+    let cam = sfmtool_pinhole_at(250.0, PINCUSHION_BSPLINE.to_vec());
+    for ray in [
+        [0.0, 0.0, 1.0],
+        [0.4, 0.3, 0.0],
+        [-0.2, 0.1, 2.0],
+        [0.0, 0.0, 0.0],
+    ] {
+        assert!(cam.ray_to_pixel(ray).is_none(), "{ray:?} projected");
+        assert!(
+            cam.ray_to_pixel_with_jacobian(ray).is_none(),
+            "{ray:?} differentiated"
+        );
+    }
+}
+
+#[test]
+fn sfmtool_pinhole_fits_an_undistorted_pinhole() {
+    // A perspective model, so the pinhole fits are defined for it (its
+    // fisheye sibling raises `UnsupportedModel`), and they go through the
+    // spline's forward and inverse maps.
+    let cam = sfmtool_pinhole_at(250.0, PINCUSHION_BSPLINE.to_vec());
+    let inside = cam.best_fit_inside_pinhole(480, 480).unwrap();
+    let outside = cam.best_fit_outside_pinhole(480, 480).unwrap();
+    // The expanding spline pushes source content outward, so the inscribed
+    // pinhole is the narrower (longer-focal) of the two.
+    assert!(inside.focal_lengths().0 > outside.focal_lengths().0);
+    for cam in [&inside, &outside] {
+        assert_eq!(cam.principal_point(), (240.0, 240.0));
+        assert!(cam.focal_lengths().0.is_finite() && cam.focal_lengths().0 > 0.0);
+    }
+    // Every destination pixel of the inscribed fit is backed by source data.
+    let (fx, _) = inside.focal_lengths();
+    for &(u, v) in &CameraIntrinsics::boundary_samples(480, 480) {
+        let (sx, sy) = cam.project((u - 240.0) / fx, (v - 240.0) / fx);
+        assert!(
+            (0.0..480.0).contains(&sx) && (0.0..480.0).contains(&sy),
+            "({u}, {v}) mapped outside the source at ({sx}, {sy})"
+        );
+    }
+}
+
+// -----------------------------------------------------------------------
 // The radial spline itself (`distortion::bspline`): gauge anchoring,
 // derivative correctness, the held-constant tail, and partition of unity.
 // -----------------------------------------------------------------------

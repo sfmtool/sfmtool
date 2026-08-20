@@ -57,6 +57,8 @@ use rayon::prelude::*;
 
 use crate::camera::{CameraIntrinsics, CameraModel};
 
+use self::bspline::bspline_is_inactive;
+
 /// A projected pixel `(u, v)` paired with the 2×3 Jacobian `∂(u, v)/∂ray`
 /// (row-major `[[∂u/∂x, ∂u/∂y, ∂u/∂z], [∂v/∂x, ∂v/∂y, ∂v/∂z]]`), returned by
 /// [`CameraIntrinsics::ray_to_pixel_with_jacobian`].
@@ -145,6 +147,12 @@ impl CameraModel {
                 ..
             } => distort_sfmtool_fisheye(x, y, bspline, *bspline_theta_max),
 
+            CameraModel::SfmtoolPinhole {
+                bspline,
+                bspline_rho_max,
+                ..
+            } => distort_sfmtool_pinhole(x, y, bspline, *bspline_rho_max),
+
             CameraModel::SimpleRadialFisheye {
                 radial_distortion_k1: k,
                 ..
@@ -212,6 +220,12 @@ impl CameraModel {
     /// with radial factor `g`, `r² = x² + y²`, and tangential
     /// `T_x = 2 p1 x y + p2 (r² + 2x²)`, `T_y = p1 (r² + 2y²) + 2 p2 x y`. The
     /// 2×2 follows from `g`, `g' = dg/d(r²)`, and `(p1, p2)`.
+    ///
+    /// [`CameraModel::SfmtoolPinhole`] joins the family through that same
+    /// form: its radial spline is `g(ρ) = 1 + δ(ρ)/ρ` with
+    /// `dg/d(r²) = (ρ·δ'(ρ) − δ(ρ))/(2ρ³)` (`ρ = √(r²)`), computed in
+    /// `sfmtool_pinhole_radial_factor`, so the composition, the tangential
+    /// slots and the on-axis limit are all shared rather than re-derived.
     pub(crate) fn distort_jacobian(&self, x: f64, y: f64) -> Option<[[f64; 2]; 2]> {
         let s = x * x + y * y;
         let (g, gp, p1, p2) = match self {
@@ -251,6 +265,14 @@ impl CameraModel {
                 let g = num / den;
                 let gp = (nump * den - num * denp) / (den * den);
                 (g, gp, *p1, *p2)
+            }
+            CameraModel::SfmtoolPinhole {
+                bspline,
+                bspline_rho_max,
+                ..
+            } => {
+                let (g, gp) = sfmtool_pinhole_radial_factor(s, bspline, *bspline_rho_max);
+                (g, gp, 0.0, 0.0)
             }
             // Fisheye / equirectangular: no analytic pixel Jacobian yet.
             _ => return None,
@@ -338,6 +360,15 @@ impl CameraModel {
                 let dyd_dy = (ypy - ymy) / (2.0 * h);
                 (dxd_dx * dyd_dy - dxd_dy * dyd_dx) > 0.0
             }
+            // Radial spline: the fold gate of `sfmtool_pinhole_unfolded`,
+            // `ρ + δ(ρ) > 0`. Both the projection and the analytic Jacobian
+            // reach the model through this predicate, so they leave the domain
+            // together by construction.
+            CameraModel::SfmtoolPinhole {
+                bspline,
+                bspline_rho_max,
+                ..
+            } => sfmtool_pinhole_unfolded(x * x + y * y, bspline, *bspline_rho_max),
             // Non-perspective models reach this only via accidental call.
             _ => true,
         }
@@ -372,6 +403,16 @@ impl CameraModel {
                 bspline_theta_max,
                 ..
             } => undistort_sfmtool_fisheye(x_d, y_d, bspline, *bspline_theta_max),
+
+            // Explicit arm for the same reason: the generic fixed-point
+            // fallback below contracts only for weak distortion, while the
+            // spline's monotonicity invariant gives this model an exact
+            // bracketed Newton inverse at any coefficient magnitude.
+            CameraModel::SfmtoolPinhole {
+                bspline,
+                bspline_rho_max,
+                ..
+            } => undistort_sfmtool_pinhole(x_d, y_d, bspline, *bspline_rho_max),
 
             CameraModel::SimpleRadialFisheye {
                 radial_distortion_k1: k,
@@ -497,13 +538,18 @@ impl CameraModel {
 
             // Perspective models: divide by the optical-frame rz, then
             // distort. `rz <= 0` here is a canonical-space z >= 0 — the ray
-            // is not in front of the camera.
+            // is not in front of the camera. `SFMTOOL_PINHOLE` belongs here
+            // outright: its radial coordinate `ρ = √(rx² + ry²)/rz` IS the
+            // quotient this arm forms, so the spline needs no ray-space entry
+            // point of its own and an inactive spline reproduces the
+            // `SIMPLE_PINHOLE` arithmetic bit for bit.
             CameraModel::Pinhole { .. }
             | CameraModel::SimplePinhole { .. }
             | CameraModel::SimpleRadial { .. }
             | CameraModel::Radial { .. }
             | CameraModel::OpenCV { .. }
-            | CameraModel::FullOpenCV { .. } => {
+            | CameraModel::FullOpenCV { .. }
+            | CameraModel::SfmtoolPinhole { .. } => {
                 if rz <= 0.0 {
                     return None;
                 }
@@ -652,13 +698,16 @@ impl CameraModel {
                 unreachable!("equirectangular is handled canonically in undistort_to_ray")
             }
 
-            // Perspective models: undistort then normalize (x, y, 1)
+            // Perspective models: undistort then normalize (x, y, 1). The
+            // spline pinhole's `undistort` arm is its exact Newton inverse, so
+            // this is the exact inverse of `distort_ray` for it too.
             CameraModel::Pinhole { .. }
             | CameraModel::SimplePinhole { .. }
             | CameraModel::SimpleRadial { .. }
             | CameraModel::Radial { .. }
             | CameraModel::OpenCV { .. }
-            | CameraModel::FullOpenCV { .. } => {
+            | CameraModel::FullOpenCV { .. }
+            | CameraModel::SfmtoolPinhole { .. } => {
                 let (x, y) = self.undistort(x_d, y_d);
                 let len = (x * x + y * y + 1.0).sqrt();
                 [x / len, y / len, 1.0 / len]
@@ -857,8 +906,9 @@ impl CameraIntrinsics {
     /// with respect to the camera-frame ray direction, row-major
     /// `[[∂u/∂x, ∂u/∂y, ∂u/∂z], [∂v/∂x, ∂v/∂y, ∂v/∂z]]`.
     ///
-    /// The perspective family plus the θ-map fisheye trio
-    /// [`CameraModel::EquidistantFisheye`],
+    /// The perspective family — [`CameraModel::SfmtoolPinhole`] included, its
+    /// radial spline entering as the family's `g(ρ) = 1 + δ(ρ)/ρ` — plus the
+    /// θ-map fisheye trio [`CameraModel::EquidistantFisheye`],
     /// [`CameraModel::SimpleRadialFisheye`] and
     /// [`CameraModel::SfmtoolFisheye`] (`supports_pixel_jacobian`) — the
     /// first two share the closed-form `θ_d = θ·(1 + k1·θ²)` derivative (with
@@ -934,10 +984,22 @@ impl CameraIntrinsics {
         // Pinhole fast path: no distortion, so the domain is unconditionally
         // valid and D is the identity. Skip the distortion Jacobian and the
         // 2×2 composition and write J = diag(fx, fy)·(P·S) directly.
-        if matches!(
-            self.model,
-            CameraModel::Pinhole { .. } | CameraModel::SimplePinhole { .. }
-        ) {
+        //
+        // A `SFMTOOL_PINHOLE` whose spline is inactive projects as
+        // `SIMPLE_PINHOLE`, and takes this path so it does so with the SAME
+        // arithmetic: the general composition below rounds `fx·(rx/rz²)` in a
+        // different association, which would cost the zero-spline promotion
+        // its bit-identity.
+        let undistorted_pinhole = match &self.model {
+            CameraModel::Pinhole { .. } | CameraModel::SimplePinhole { .. } => true,
+            CameraModel::SfmtoolPinhole {
+                bspline,
+                bspline_rho_max,
+                ..
+            } => bspline_is_inactive(bspline, *bspline_rho_max),
+            _ => false,
+        };
+        if undistorted_pinhole {
             let inv = 1.0 / rz;
             return Some((
                 (fx * x + cx, fy * y + cy),

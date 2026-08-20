@@ -992,31 +992,36 @@ pub(super) fn undistort_sfmtool_fisheye(
     if r_d < 1e-15 {
         return (x_d, y_d);
     }
-    let (theta, _) = recover_theta_bspline(r_d, coeffs, theta_max);
+    let (theta, _) = recover_radial_bspline(r_d, coeffs, theta_max);
     let r = theta.tan();
     let scale = r / r_d;
     (x_d * scale, y_d * scale)
 }
 
-/// Recover the incidence angle `θ` from the distorted radial distance
-/// `r_d = θ + δ(θ)` for the spline map. Returns `(theta, converged)`.
+/// Recover the undistorted radial coordinate `d` from the distorted radial
+/// distance `r_d = d + δ(d)` for the spline map. Returns `(d, converged)`.
+///
+/// The equation is coordinate-agnostic, so both spline models invert through
+/// it: `d` is the incidence angle `θ` for `SFMTOOL_FISHEYE` and the
+/// normalized image-plane radius `ρ` for `SFMTOOL_PINHOLE`, with `d_max` the
+/// matching domain end.
 ///
 /// Beyond the spline's domain the map is exactly linear
-/// (`r_d = θ + δ(θ_max)`), so `r_d ≥ θ_max + δ(θ_max)` inverts in closed
-/// form. Inside `[0, θ_max]` a safeguarded Newton iteration solves the
-/// monotone `θ_d(θ)` — monotonicity is the model's construction invariant, so
-/// the bracket `[0, θ_max]` always contains exactly one root; the bisection
+/// (`r_d = d + δ(d_max)`), so `r_d ≥ d_max + δ(d_max)` inverts in closed
+/// form. Inside `[0, d_max]` a safeguarded Newton iteration solves the
+/// monotone `d_d(d)` — monotonicity is the model's construction invariant, so
+/// the bracket `[0, d_max]` always contains exactly one root; the bisection
 /// safeguard keeps the iteration well-defined even for a spline that
 /// violates the invariant (it converges to *a* root of the folded map).
-/// `converged` is `false` only when `θ_d(θ_max) ≤ 0` — a spline folded so
+/// `converged` is `false` only when `d_d(d_max) ≤ 0` — a spline folded so
 /// far that no radius is representable — mirroring
 /// [`recover_theta_equidistant`]'s unreachable-`r_d` report.
-pub(super) fn recover_theta_bspline(r_d: f64, coeffs: &[f64], theta_max: f64) -> (f64, bool) {
+pub(super) fn recover_radial_bspline(r_d: f64, coeffs: &[f64], d_max: f64) -> (f64, bool) {
     if r_d <= 0.0 {
         return (0.0, true);
     }
-    let delta_end = bspline::delta(coeffs, theta_max, theta_max);
-    let rd_end = theta_max + delta_end;
+    let delta_end = bspline::delta(coeffs, d_max, d_max);
+    let rd_end = d_max + delta_end;
     if rd_end <= 0.0 {
         return (0.0, false);
     }
@@ -1024,36 +1029,36 @@ pub(super) fn recover_theta_bspline(r_d: f64, coeffs: &[f64], theta_max: f64) ->
         // Linear region: exact inverse, no iteration.
         return (r_d - delta_end, true);
     }
-    // Bracketed Newton on g(θ) = θ + δ(θ) − r_d over [0, θ_max]:
-    // g(0) = −r_d < 0 and g(θ_max) = rd_end − r_d > 0.
-    let (mut lo, mut hi) = (0.0f64, theta_max);
-    let mut theta = r_d.min(theta_max); // identity start, like the k-family
+    // Bracketed Newton on g(d) = d + δ(d) − r_d over [0, d_max]:
+    // g(0) = −r_d < 0 and g(d_max) = rd_end − r_d > 0.
+    let (mut lo, mut hi) = (0.0f64, d_max);
+    let mut d = r_d.min(d_max); // identity start, like the k-family
     for _ in 0..UNDISTORT_MAX_ITER {
-        let (d, dp) = bspline::delta_and_deriv(coeffs, theta_max, theta);
-        let g = theta + d - r_d;
+        let (delta, deriv) = bspline::delta_and_deriv(coeffs, d_max, d);
+        let g = d + delta - r_d;
         if g == 0.0 {
-            return (theta, true); // Newton landed on the exact root
+            return (d, true); // Newton landed on the exact root
         }
         if g > 0.0 {
-            hi = theta;
+            hi = d;
         } else {
-            lo = theta;
+            lo = d;
         }
-        let gp = 1.0 + dp;
-        let mut next = if gp > 0.0 { theta - g / gp } else { f64::NAN };
+        let gp = 1.0 + deriv;
+        let mut next = if gp > 0.0 { d - g / gp } else { f64::NAN };
         // Bracket safeguard (also catches NaN). Inclusive bounds: an
-        // underflowed Newton step may reproduce `theta` — that is
-        // convergence, not a reason to bisect away from the root.
+        // underflowed Newton step may reproduce `d` — that is convergence,
+        // not a reason to bisect away from the root.
         if !(next >= lo && next <= hi) {
             next = 0.5 * (lo + hi);
         }
-        let step = next - theta;
-        theta = next;
+        let step = next - d;
+        d = next;
         if step.abs() < UNDISTORT_EPS {
             break;
         }
     }
-    (theta, true)
+    (d, true)
 }
 
 /// Project an optical-frame ray through the spline map:
@@ -1110,7 +1115,7 @@ pub(super) fn sfmtool_fisheye_to_ray(
     if r_d < 1e-15 {
         return [0.0, 0.0, 1.0];
     }
-    let (theta, converged) = recover_theta_bspline(r_d, coeffs, theta_max);
+    let (theta, converged) = recover_radial_bspline(r_d, coeffs, theta_max);
     if !converged {
         return equidistant_to_ray(x_d, y_d);
     }
@@ -1183,6 +1188,141 @@ pub(super) fn sfmtool_fisheye_ray_jacobian(
             ],
         ],
     ))
+}
+
+// ---------------------------------------------------------------------------
+// SFMTOOL_PINHOLE: pinhole base + monotone radial spline
+// ---------------------------------------------------------------------------
+
+/// Below this normalized image-plane radius the correction is unresolvable
+/// against the gauge: `δ(0) = δ'(0) = 0` forces `δ(ρ)/ρ → 0` as `ρ → 0`, so
+/// the radial factor `g = 1 + δ(ρ)/ρ` tends to `1` and the map is the base
+/// pinhole's on the axis. The same `1e-15` the rest of the kernels use for an
+/// on-axis point.
+const PINHOLE_AXIS_EPS: f64 = 1e-15;
+
+/// Forward `SFMTOOL_PINHOLE` map in normalized image-plane coordinates:
+/// `(x, y)` with `ρ = √(x² + y²) = tan θ` in, `((ρ + δ(ρ))·x/ρ,
+/// (ρ + δ(ρ))·y/ρ)` out, `δ` the radial spline ([`bspline::delta`]).
+///
+/// Unlike the fisheye's tangent-plane pair, this **is** the model's forward
+/// map: the pinhole base's radial coordinate is exactly the image-plane radius
+/// the caller passes, so no reparameterization happens here and the ray entry
+/// point is the ordinary perspective divide followed by this.
+///
+/// An inactive spline ([`bspline::bspline_is_inactive`] — identity
+/// coefficients, or a degenerate domain end) short-circuits to the identity,
+/// keeping the zero-spline model bit-identical to `SIMPLE_PINHOLE`.
+pub(super) fn distort_sfmtool_pinhole(x: f64, y: f64, coeffs: &[f64], rho_max: f64) -> (f64, f64) {
+    if bspline::bspline_is_inactive(coeffs, rho_max) {
+        return (x, y);
+    }
+    let rho = (x * x + y * y).sqrt();
+    if rho < PINHOLE_AXIS_EPS {
+        return (x, y);
+    }
+    let rho_d = rho + bspline::delta(coeffs, rho_max, rho);
+    let scale = rho_d / rho;
+    (x * scale, y * scale)
+}
+
+/// Inverse of [`distort_sfmtool_pinhole`]: `(x_d, y_d)` with `r_d = ρ_d` in,
+/// image-plane `(x, y)` with `ρ = tan θ` out.
+///
+/// The exact bracketed Newton of [`recover_radial_bspline`], not the generic
+/// fixed-point iteration [`super::CameraModel::undistort`] falls back on: that
+/// iteration contracts only for weak distortion, while the spline's
+/// monotonicity invariant hands this solve a guaranteed bracket at any
+/// coefficient magnitude.
+///
+/// Inactive splines short-circuit to the identity (bit-identity with
+/// `SIMPLE_PINHOLE`). A spline folded so far that `ρ_max + δ(ρ_max) ≤ 0` has
+/// no invertible radius at all, and [`recover_radial_bspline`] reports that
+/// as `converged = false`; this returns the identity `ρ = r_d` there, the
+/// base pinhole's inverse, rather than scaling every distorted point onto the
+/// optical axis. That is the policy [`sfmtool_fisheye_to_ray`] applies to the
+/// same report.
+pub(super) fn undistort_sfmtool_pinhole(
+    x_d: f64,
+    y_d: f64,
+    coeffs: &[f64],
+    rho_max: f64,
+) -> (f64, f64) {
+    if bspline::bspline_is_inactive(coeffs, rho_max) {
+        return (x_d, y_d);
+    }
+    let r_d = (x_d * x_d + y_d * y_d).sqrt();
+    if r_d < PINHOLE_AXIS_EPS {
+        return (x_d, y_d);
+    }
+    let (rho, converged) = recover_radial_bspline(r_d, coeffs, rho_max);
+    if !converged {
+        return (x_d, y_d);
+    }
+    let scale = rho / r_d;
+    (x_d * scale, y_d * scale)
+}
+
+/// The radial factor `g` of the `SFMTOOL_PINHOLE` map and its derivative
+/// `dg/d(r²)`, at squared image-plane radius `r2` — the pair the perspective
+/// family's `distort_jacobian` is parameterized by.
+///
+/// The map is radially symmetric in the image plane, `x_d = x·g(ρ)` with
+///
+/// ```text
+/// g(ρ) = 1 + δ(ρ)/ρ        dg/d(r²) = (ρ·δ'(ρ) − δ(ρ))/(2·ρ³)
+/// ```
+///
+/// (chain rule through `ρ = √(r²)`, `dρ/d(r²) = 1/(2ρ)`). An inactive spline
+/// or an on-axis point is `(1, 0)`. The first half of that is a limit: the
+/// gauge pins `δ(0) = 0` and `δ'(0) = 0`, so `δ(ρ)/ρ → 0` and `g → 1`,
+/// leaving the exact `SIMPLE_PINHOLE` factor at the axis.
+///
+/// The second half is **not**. The gauge says nothing about `δ''(0)`, so
+/// `δ = aρ² + O(ρ³)` and `dg/d(r²) = (ρ·δ' − δ)/(2ρ³)` diverges like
+/// `a/(2ρ)`. It stays bounded only in company: the caller reaches it through
+/// `[[g + 2x²g', 2xy g'], [2xy g', g + 2y²g']]`, where every appearance
+/// carries a `2x²`, `2y²` or `2xy` factor of order `ρ²`, so each entry's
+/// `g'` term is `O(ρ)` and the composed 2×2 tends to the identity. At
+/// `PINHOLE_AXIS_EPS = 1e-15` the term this short-circuit discards is
+/// therefore sub-ulp against `g = 1`, which is what makes returning `(1, 0)`
+/// continuous rather than merely close.
+///
+/// So the second return is not a bounded radial derivative on its own. Do not
+/// reuse it apart from the `O(ρ²)` companion factors that make the product
+/// finite.
+pub(super) fn sfmtool_pinhole_radial_factor(r2: f64, coeffs: &[f64], rho_max: f64) -> (f64, f64) {
+    if bspline::bspline_is_inactive(coeffs, rho_max) {
+        return (1.0, 0.0);
+    }
+    let rho = r2.sqrt();
+    if rho < PINHOLE_AXIS_EPS {
+        return (1.0, 0.0);
+    }
+    let (delta, deriv) = bspline::delta_and_deriv(coeffs, rho_max, rho);
+    (1.0 + delta / rho, (rho * deriv - delta) / (2.0 * rho * r2))
+}
+
+/// Whether the `SFMTOOL_PINHOLE` map is on its principal monotonic branch at
+/// squared image-plane radius `r2` — the fold gate, the same one
+/// [`distort_ray_sfmtool_fisheye`] applies in `θ`: a spline that drives
+/// `ρ_d = ρ + δ(ρ)` non-positive at a positive `ρ` has left the branch
+/// connected to the origin, and the projection is out of domain there.
+///
+/// The slope half of the polynomial family's branch test (`1 + δ'(ρ) > 0`) is
+/// this model's monotonicity **construction** invariant, enforced where
+/// splines are produced rather than probed per ray, so it is not repeated
+/// here. An inactive spline is `SIMPLE_PINHOLE`, whose domain is every ray in
+/// front of the camera.
+pub(super) fn sfmtool_pinhole_unfolded(r2: f64, coeffs: &[f64], rho_max: f64) -> bool {
+    if bspline::bspline_is_inactive(coeffs, rho_max) {
+        return true;
+    }
+    let rho = r2.sqrt();
+    if rho < PINHOLE_AXIS_EPS {
+        return true;
+    }
+    rho + bspline::delta(coeffs, rho_max, rho) > 0.0
 }
 
 /// Convert undistorted equidistant coordinates `(uu, vv)` to a unit ray direction.

@@ -456,6 +456,62 @@ fn sfmtool_fisheye_fails_the_db_export_path() {
 }
 
 #[test]
+fn sfmtool_pinhole_fails_the_db_export_path() {
+    // The spline pinhole has no COLMAP carrier either: no COLMAP model
+    // parameterizes a B-spline radial correction, so the DB writer rejects it
+    // by name rather than writing a polynomial approximation.
+    let dir = std::env::temp_dir().join("colmap_db_sfmtool_pinhole_reject");
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = dir.join("reject.db");
+    let _ = std::fs::remove_file(&db_path);
+
+    let cameras = vec![SfmrCamera {
+        model: "SFMTOOL_PINHOLE".into(),
+        width: 1920,
+        height: 1080,
+        parameters: [
+            ("focal_length".into(), 1210.4),
+            ("principal_point_x".into(), 960.0),
+            ("principal_point_y".into(), 540.0),
+            ("bspline_rho_max".into(), 0.9),
+            ("bspline_coeff_count".into(), 2.0),
+            ("bspline_c0".into(), 0.0031),
+            ("bspline_c1".into(), 0.0118),
+        ]
+        .into_iter()
+        .collect(),
+    }];
+    let image_names = vec!["frame_001.jpg".to_string()];
+    let camera_indexes = vec![0u32];
+    let quaternions_wxyz = vec![[1.0, 0.0, 0.0, 0.0]];
+    let translations_xyz = vec![[0.0, 0.0, 0.0]];
+    let keypoints_per_image: Vec<Vec<[f64; 2]>> = vec![vec![]];
+    let descriptors_per_image = vec![vec![]];
+
+    let data = ColmapDbWriteData {
+        cameras: &cameras,
+        image_names: &image_names,
+        camera_indexes: &camera_indexes,
+        quaternions_wxyz: &quaternions_wxyz,
+        translations_xyz: &translations_xyz,
+        keypoints_per_image: &keypoints_per_image,
+        descriptors_per_image: &descriptors_per_image,
+        descriptor_dim: 128,
+        pose_priors: None,
+        two_view_geometries: None,
+        rigs: None,
+        frames: None,
+    };
+
+    let err = write_colmap_db(&db_path, &data).unwrap_err();
+    assert!(
+        matches!(err, ColmapDbError::UnknownModelName(ref name) if name == "SFMTOOL_PINHOLE"),
+        "unexpected error: {err:?}"
+    );
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
 fn test_multiple_cameras() {
     let dir = std::env::temp_dir().join("colmap_db_multi_cam");
     std::fs::create_dir_all(&dir).unwrap();
