@@ -446,6 +446,7 @@ Array of camera intrinsic parameters:
 | `EQUIRECTANGULAR` | `focal_length_x`, `focal_length_y`, `principal_point_x`, `principal_point_y` | — (sfmtool model) |
 | `EQUIDISTANT_FISHEYE` | `focal_length`, `principal_point_x`, `principal_point_y` | — (sfmtool model) |
 | `SFMTOOL_FISHEYE` | `focal_length`, `principal_point_x`, `principal_point_y`, `bspline_theta_max`, `bspline_coeff_count`, `bspline_c0` … `bspline_c{N−1}` | — (sfmtool model) |
+| `SFMTOOL_PINHOLE` | `focal_length`, `principal_point_x`, `principal_point_y`, `bspline_rho_max`, `bspline_coeff_count`, `bspline_c0` … `bspline_c{N−1}` | — (sfmtool model) |
 
 The "pycolmap" column shows the corresponding short parameter names from COLMAP/pycolmap for reference. The parameter order in the JSON `parameters` object matches the pycolmap parameter array order. Models with a single `focal_length` use the same value for both fx and fy. All fisheye models use equidistant projection.
 
@@ -479,6 +480,12 @@ fixed-length head determines the full parameter count; every coefficient index
 below the declared count must be present and none at or beyond it, and a
 violation is a corrupt parameter map, not a shorter spline. An all-zero (or
 absent) spline is exactly the `EQUIDISTANT_FISHEYE` map, bit for bit.
+
+`SFMTOOL_PINHOLE` is that model's perspective sibling: the same
+variable-length spline head and the same rules, on a `SIMPLE_PINHOLE` base and
+the normalized image-plane radius `ρ = tan θ`, so its domain end is named
+`bspline_rho_max` and an all-zero (or absent) spline is exactly the
+`SIMPLE_PINHOLE` map, bit for bit.
 
 ### 4. Rigs (Optional)
 

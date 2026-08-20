@@ -1,11 +1,12 @@
 # Projection Jacobian (ray-to-pixel derivatives)
 
-**Status:** Implemented (perspective family, `EquidistantFisheye`,
-`SimpleRadialFisheye` and `SfmtoolFisheye`) —
+**Status:** Implemented (perspective family — `SfmtoolPinhole` included —
+plus `EquidistantFisheye`, `SimpleRadialFisheye` and `SfmtoolFisheye`) —
 `crates/sfmtool-core/src/camera/distortion.rs`
 (`CameraIntrinsics::ray_to_pixel_with_jacobian`, `CameraModel::distort_jacobian`),
 `crates/sfmtool-core/src/camera/distortion/kernels.rs`
-(`radial_fisheye_ray_jacobian`, `sfmtool_fisheye_ray_jacobian`) and
+(`radial_fisheye_ray_jacobian`, `sfmtool_fisheye_ray_jacobian`,
+`sfmtool_pinhole_radial_factor`) and
 `crates/sfmtool-core/src/camera/intrinsics.rs`
 (`CameraModel::supports_pixel_jacobian`); tests in
 `camera/distortion/tests.rs`. Core Rust only — no Python binding yet, as the
@@ -37,7 +38,7 @@ run time.
 Two families, both reported by `CameraModel::supports_pixel_jacobian`:
 
 - the perspective models — pinhole, `SimpleRadial`, `Radial`, `OpenCV`,
-  `FullOpenCV` — which project through the image plane;
+  `FullOpenCV`, `SfmtoolPinhole` — which project through the image plane;
 - the θ-map fisheyes `EquidistantFisheye`, `SimpleRadialFisheye` and
   `SfmtoolFisheye`, whose ray-path map is a closed form in `θ` alone —
   `θ_d = θ·(1 + k1·θ²)` for the first two (`k1 = 0` for the first),
@@ -95,8 +96,11 @@ product of those stages' derivatives by the chain rule:
   `g' = dg/d(r²)` the 2×2 is
   `[[g + 2x²g' + 2p1 y + 6p2 x, c], [c, g + 2y²g' + 6p1 y + 2p2 x]]`, shared
   off-diagonal `c = 2xy g' + 2p1 x + 2p2 y`. `g` is `1` (pinhole), a radial
-  polynomial (`SimpleRadial`/`Radial`/`OpenCV`), or a rational
-  `(1 + k1 r² + k2 r⁴ + k3 r⁶)/(1 + k4 r² + k5 r⁴ + k6 r⁶)` (`FullOpenCV`).
+  polynomial (`SimpleRadial`/`Radial`/`OpenCV`), a rational
+  `(1 + k1 r² + k2 r⁴ + k3 r⁶)/(1 + k4 r² + k5 r⁴ + k6 r⁶)` (`FullOpenCV`), or
+  the radial spline `1 + δ(ρ)/ρ` at `ρ = √(r²)` with
+  `g' = (ρ·δ'(ρ) − δ(ρ))/(2ρ³)` (`SfmtoolPinhole` —
+  [sfmtool-pinhole-kernels.md](sfmtool-pinhole-kernels.md)).
 - **Intrinsics** `K` scales the rows by `(fx, fy)`.
 
 The derivative is with respect to the **ray** only; poses and 3D points

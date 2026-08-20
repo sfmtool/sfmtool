@@ -1,14 +1,16 @@
 # The sfmtool camera models
 
-**Status:** `SFMTOOL_FISHEYE` is implemented: the model variant and its
-serialization live in `crates/sfmtool-core/src/camera/intrinsics.rs`
-(`CameraModel::SfmtoolFisheye`) with the spline basis in
+**Status:** Both models are implemented. The variants and their serialization
+live in `crates/sfmtool-core/src/camera/intrinsics.rs`
+(`CameraModel::SfmtoolFisheye`, `CameraModel::SfmtoolPinhole`, sharing the
+`get_bspline` parameter reader) with the spline basis in
 `crates/sfmtool-core/src/camera/distortion/bspline.rs`; serialization tests in
-`camera/intrinsics/tests.rs` and
-`tests/rust_bindings/test_sfmtool_fisheye_rust_bindings.py`; the projection,
-inverse and Jacobian kernels are specified in
-[../core/sfmtool-fisheye-kernels.md](../core/sfmtool-fisheye-kernels.md).
-`SFMTOOL_PINHOLE` is specified here and not yet implemented.
+`camera/intrinsics/tests.rs`,
+`tests/rust_bindings/test_sfmtool_fisheye_rust_bindings.py` and
+`tests/rust_bindings/test_sfmtool_pinhole_rust_bindings.py`. The projection,
+inverse and Jacobian kernels are specified per model in
+[../core/sfmtool-fisheye-kernels.md](../core/sfmtool-fisheye-kernels.md) and
+[../core/sfmtool-pinhole-kernels.md](../core/sfmtool-pinhole-kernels.md).
 
 **Beta:** the parameterization may still change: the basis, the knot
 layout, and the parameter names. A `.sfmr` file carrying these models may
@@ -101,6 +103,17 @@ Consequences of the basis that the rest of the models rest on:
   with `δ'(d) = 0`, so the radial distortion map continues linearly,
   `r(d) = f·(d + δ(d_max))`, with slope `f`.
 
+`d_max` places the spline's resolution: the `N` coefficients are spent
+uniformly on `[0, d_max]`, and beyond it the map carries only the held
+constant. Its intended placement is the radial extent of the imaged field,
+the largest `d` any sensor pixel reaches: the incidence angle at the far
+corner for the fisheye, the normalized image-plane radius at the far corner
+for the pinhole. A smaller `d_max` leaves the outer field without shape
+correction; a larger one widens every knot span over the field and leaves the
+outer coefficients without observation support. The placement is not
+validated: the field's extent in `d` moves with the other parameters during
+fitting, so `d_max` is chosen once and held.
+
 ### The monotonicity invariant
 
 `d + δ(d)` is required to be strictly increasing:
@@ -113,8 +126,17 @@ Beyond `d_max` the slope is exactly `1`, so the spline's own domain is the
 entire risk region. The invariant is what makes the radial distortion map
 injective and therefore exactly invertible. It is a **construction**
 invariant: enforced where a spline is produced, and relied on where one is
-read. The decision procedure and the enforcement sites are specified in
-[../core/sfmtool-fisheye-kernels.md](../core/sfmtool-fisheye-kernels.md).
+read. A spline that violates it has left the map's increasing branch wherever
+`d + δ(d) ≤ 0` at a positive `d`; projection and derivative are both undefined
+there and return nothing. Deserialization is not one of the enforcement sites:
+it validates the parameter list and admits whatever coefficients the file
+carries. A file holding a violating spline therefore loads, projects on the
+fold-gated domain, and inverts to a root of the folded map rather than to the
+radius that produced the pixel. The decision procedure and the enforcement
+sites are
+specified in
+[../core/sfmtool-fisheye-kernels.md](../core/sfmtool-fisheye-kernels.md) and
+[../core/sfmtool-pinhole-kernels.md](../core/sfmtool-pinhole-kernels.md).
 
 ### The zero-spline identity
 
@@ -132,7 +154,8 @@ derivative **bit for bit**. That is the promotion contract: a base-model
 camera rewritten into its sfmtool model with a zero spline of any admissible
 length and any positive `d_max` projects, unprojects and differentiates to the
 same bits, so a reconstruction promoted before a spline is fitted moves
-nothing.
+nothing. The contract covers exactly those three maps; pixel-radius sizing
+helpers agree to rounding, not bitwise.
 
 ## Parameters
 
@@ -278,7 +301,7 @@ as `bspline_coeff_count = 0` with no coefficient keys.
 
 ## Testing requirements
 
-Per model, once implemented:
+Per model:
 
 - **Serialization**: an `N`-coefficient camera round-trips through
   `SfmrCamera`; an empty spline round-trips as `bspline_coeff_count = 0`; a missing

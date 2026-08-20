@@ -4,7 +4,7 @@
 `crates/sfmtool-core/src/camera/distortion/bspline.rs` (basis evaluation and
 the monotonicity check), `crates/sfmtool-core/src/camera/distortion/kernels.rs`
 (`distort_ray_sfmtool_fisheye`, `sfmtool_fisheye_to_ray`,
-`recover_theta_bspline`, `sfmtool_fisheye_ray_jacobian`), the dispatch in
+`recover_radial_bspline`, `sfmtool_fisheye_ray_jacobian`), the dispatch in
 `crates/sfmtool-core/src/camera/distortion.rs` and the classification arms in
 `crates/sfmtool-core/src/camera/intrinsics.rs`; tests in
 `camera/distortion/tests.rs`, `camera/intrinsics/tests.rs` and
@@ -21,6 +21,12 @@ adjustment's `opt_bspline` release, which produces the coefficients, is
 specified in [bundle-adjustment.md](bundle-adjustment.md).
 
 ## Basis evaluation
+
+The basis is arithmetic on a scalar radial coordinate `d` over `[0, d_max]`,
+so one implementation serves both sfmtool spline models; the fisheye hands it
+`θ` on `[0, θ_max]`, and `SFMTOOL_PINHOLE`
+([sfmtool-pinhole-kernels.md](sfmtool-pinhole-kernels.md)) hands it `ρ` on
+`[0, ρ_max]`. Read below with `d = θ`.
 
 `basis_at(n_coeffs, theta_max, theta)` returns the full-basis index of the
 first active function together with the four values and four derivatives at
@@ -52,7 +58,7 @@ projection pipeline calls.
 ## Inverse
 
 `sfmtool_fisheye_to_ray` recovers the unit ray from the distorted coordinate by
-inverting `r_d = θ + δ(θ)` in `recover_theta_bspline`, then returning
+inverting `r_d = θ + δ(θ)` in `recover_radial_bspline`, then returning
 `(x_d·sin θ/r_d, y_d·sin θ/r_d, cos θ)`.
 
 - `r_d ≤ 0` is `θ = 0`.
