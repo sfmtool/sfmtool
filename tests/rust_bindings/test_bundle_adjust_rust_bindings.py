@@ -873,3 +873,186 @@ def test_bspline_coefficients_returned_for_every_model():
     s = _wide_scene(f=f, cam=_sfmtool_fisheye_cam(f, _PLANTED_BSPLINE))
     out = _run(s)
     npt.assert_array_equal(out["bspline_coefficients"], _PLANTED_BSPLINE)
+    # Both spline models, hence the name: the pinhole reports its own
+    # coefficients through the same key. (Its scene helpers are defined
+    # below, with the rest of the pinhole rung.)
+    f = 250.0
+    s = _wide_pinhole_scene(_sfmtool_pinhole_cam(f, _PLANTED_PINHOLE_BSPLINE), f=f)
+    out = _run(s)
+    npt.assert_array_equal(out["bspline_coefficients"], _PLANTED_PINHOLE_BSPLINE)
+
+
+# ── The spline rung: opt_bspline under SFMTOOL_PINHOLE ────────────────────
+
+
+# A gently expanding 6-coefficient spline (monotone on [0, 0.85]): ~12 px of
+# rim correction at f = 250.
+_PLANTED_PINHOLE_BSPLINE = [0.002, 0.007, 0.014, 0.024, 0.036, 0.05]
+_RHO_MAX = 0.85
+
+
+def _sfmtool_pinhole_cam(f, bspline, rho_max=_RHO_MAX, w=480, h=480):
+    return CameraIntrinsics.from_dict(
+        {
+            "model": "SFMTOOL_PINHOLE",
+            "width": w,
+            "height": h,
+            "parameters": {
+                "focal_length": f,
+                "principal_point_x": w / 2.0,
+                "principal_point_y": h / 2.0,
+                "bspline_rho_max": rho_max,
+                "bspline_coeff_count": float(len(bspline)),
+                **{f"bspline_c{i}": c for i, c in enumerate(bspline)},
+            },
+        }
+    )
+
+
+def _wide_pinhole_scene(cam, f=250.0, n_img=10, n_pt=500, seed=5, rho_limit=0.82):
+    """A perspective capture filling a circular field out to ``rho_limit``.
+
+    Cameras sit on a shallow arc inside a shell of points; observations are
+    kept only where the pixel radius stays inside ``f * rho_limit``, so every
+    azimuth reaches the same rho and no spline coefficient's support is
+    corner-only.
+    """
+    rng = np.random.default_rng(seed)
+    rots, trans = [], []
+    for i in range(n_img):
+        ang = 0.25 * (i - (n_img - 1) / 2)
+        c = np.array([1.2 * np.sin(ang), 0.3 * rng.uniform(-1, 1), 1.2 * np.cos(ang)])
+        r = _look_at_origin(c)
+        rots.append(r)
+        trans.append(-r @ c)
+    theta = np.pi * (0.15 + 0.7 * rng.random(n_pt))
+    phi = 2.0 * np.pi * rng.random(n_pt)
+    rad = 6.0 + 1.5 * rng.uniform(-1, 1, n_pt)
+    pts = np.stack(
+        [
+            rad * np.sin(theta) * np.cos(phi),
+            rad * np.cos(theta),
+            rad * np.sin(theta) * np.sin(phi),
+        ],
+        axis=1,
+    )
+    per_pt = [[] for _ in range(n_pt)]
+    n_wide = 0
+    for p in range(n_pt):
+        for i in range(n_img):
+            c = rots[i] @ pts[p] + trans[i]
+            px = cam.ray_to_pixel(np.ascontiguousarray(c, dtype=np.float64))
+            if px is None:
+                continue  # behind the camera: outside the pinhole domain
+            u, v = px
+            r = np.hypot(u - 240.0, v - 240.0)
+            if r > f * rho_limit:
+                continue
+            per_pt[p].append((i, [u, v], r > f * 0.4))
+    keep, uv, oi, op = [], [], [], []
+    for p in range(n_pt):
+        if len(per_pt[p]) < 2:
+            continue
+        cp = len(keep)
+        keep.append(pts[p])
+        for i, px, wide in per_pt[p]:
+            n_wide += int(wide)
+            uv.append(px)
+            oi.append(i)
+            op.append(cp)
+    assert n_wide >= 100, f"scene is not wide enough: {n_wide}"
+    return {
+        "cam": cam,
+        "quats": np.array([_matrix_to_quat_wxyz(r) for r in rots]),
+        "trans": np.array(trans),
+        "points": np.array(keep),
+        "uv": np.asarray(uv, dtype=np.float64),
+        "obs_image": np.array(oi, dtype=np.uint32),
+        "obs_point": np.array(op, dtype=np.uint32),
+    }
+
+
+def test_opt_bspline_recovers_a_planted_pinhole_spline():
+    # Binding parity of the kernel's recovery claim on the perspective spline
+    # model: observations generated through an expanding lens, handed to the
+    # solver with a zero spline.
+    f = 250.0
+    cam_true = _sfmtool_pinhole_cam(f, _PLANTED_PINHOLE_BSPLINE)
+    s = _wide_pinhole_scene(cam_true, f=f)
+    s["cam"] = _sfmtool_pinhole_cam(f, [0.0] * 6)
+    out = _run(s, opt_bspline=True)
+    assert out["focal"] == f, "the focal moved with opt_f off"
+    npt.assert_allclose(
+        out["bspline_coefficients"], _PLANTED_PINHOLE_BSPLINE, atol=0.01
+    )
+    assert np.max(out["residual_norms"]) < 0.5
+
+
+def test_opt_f_and_opt_bspline_release_together_on_a_pinhole():
+    f_true = 250.0
+    s = _wide_pinhole_scene(
+        _sfmtool_pinhole_cam(f_true, _PLANTED_PINHOLE_BSPLINE), f=f_true
+    )
+    f_start = 238.0
+    s["cam"] = _sfmtool_pinhole_cam(f_start, [0.0] * 6)
+    s["points"] = s["points"] * (f_start / f_true)
+    s["trans"] = s["trans"] * (f_start / f_true)
+    out = _run(s, opt_f=True, opt_bspline=True)
+    assert abs(out["focal"] - f_true) / f_true < 0.01, out["focal"]
+    npt.assert_allclose(
+        out["bspline_coefficients"], _PLANTED_PINHOLE_BSPLINE, atol=0.01
+    )
+
+
+def test_opt_f_accepts_the_sfmtool_pinhole_model():
+    f_true = 250.0
+    s = _wide_pinhole_scene(
+        _sfmtool_pinhole_cam(f_true, _PLANTED_PINHOLE_BSPLINE), f=f_true
+    )
+    f_start = 232.0
+    s["cam"] = _sfmtool_pinhole_cam(f_start, _PLANTED_PINHOLE_BSPLINE)
+    s["points"] = s["points"] * (f_start / f_true)
+    s["trans"] = s["trans"] * (f_start / f_true)
+    out = _run(s, opt_f=True)
+    assert abs(out["focal"] - f_true) / f_true < 0.01, out["focal"]
+    npt.assert_array_equal(
+        out["bspline_coefficients"],
+        _PLANTED_PINHOLE_BSPLINE,
+        err_msg="an unreleased spline moved",
+    )
+
+
+def test_opt_bspline_rejected_for_an_undefined_pinhole_spline():
+    # The same rule as the fisheye's: a coefficient vector too short to define
+    # the spline carries nothing to release.
+    s = _scene()
+    s["cam"] = _sfmtool_pinhole_cam(500.0, [], w=640, h=480)
+    with pytest.raises(ValueError, match="defined spline"):
+        _run(s, opt_bspline=True)
+
+
+def test_opt_bspline_rejection_names_both_spline_models():
+    # The error a caller sees on a model without a spline lists both models
+    # that have one.
+    s = _scene()
+    with pytest.raises(ValueError, match="SFMTOOL_FISHEYE or SFMTOOL_PINHOLE"):
+        _run(s, opt_bspline=True)
+
+
+def test_opt_f_rejection_names_the_spline_pinhole():
+    s = _scene()
+    s["cam"] = CameraIntrinsics.from_dict(
+        {
+            "model": "PINHOLE",
+            "width": 640,
+            "height": 480,
+            "parameters": {
+                "focal_length_x": 500.0,
+                "focal_length_y": 502.0,
+                "principal_point_x": 320.0,
+                "principal_point_y": 240.0,
+            },
+        }
+    )
+    with pytest.raises(ValueError, match="SFMTOOL_PINHOLE camera"):
+        _run(s, opt_f=True)

@@ -50,18 +50,19 @@ use crate::geometry::PyCameraIntrinsics;
 ///         protected observations (default 3.0; must be positive and
 ///         finite).
 ///     opt_f: Release the shared focal (SIMPLE_PINHOLE,
-///         EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE or SFMTOOL_FISHEYE —
-///         the models whose projection multiplies the focal onto a distorted
-///         coordinate that does not itself read it, where the kernel's
-///         analytic focal column is exact; any other model raises).
+///         EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE or
+///         SFMTOOL_PINHOLE — the models whose projection multiplies the focal
+///         onto a distorted coordinate that does not itself read it, where the
+///         kernel's analytic focal column is exact; any other model raises).
 ///     opt_k1: Release the shared radial coefficient (SIMPLE_RADIAL_FISHEYE
 ///         only — the one model carrying it; any other model raises). The
 ///         staged use is fixed -> opt_f -> opt_f + opt_k1, so the curvature
 ///         rung opens on a focal that has already settled.
 ///     opt_bspline: Release the shared radial spline coefficients
-///         (SFMTOOL_FISHEYE only — the one model carrying them, and its
-///         spline must be defined: at least two coefficients on a positive
-///         ``bspline_theta_max``; anything else raises). Mutually exclusive
+///         (SFMTOOL_FISHEYE or SFMTOOL_PINHOLE — the two models carrying
+///         them, and the spline must be defined: at least two coefficients on
+///         a positive ``bspline_theta_max`` / ``bspline_rho_max``; anything
+///         else raises). Mutually exclusive
 ///         with ``opt_k1`` (no model carries both parameters). The staged
 ///         use mirrors the curvature rung's: fixed -> opt_f -> opt_f +
 ///         opt_bspline.
@@ -158,20 +159,22 @@ pub fn bundle_adjust<'py>(
     // The focal column `∂(u, v)/∂f = (u − cx)/f` is exact only where the focal
     // multiplies an `f`-independent distorted coordinate: the two single-focal
     // distortion-free models, the one-coefficient fisheye whose `k1` rides on
-    // the ray's own `θ`, and the spline fisheye whose dimensionless radial
-    // spline rides on `θ` the same way. Everything else is rejected loudly
-    // rather than degraded to a fixed-parameter solve behind the caller's back.
+    // the ray's own `θ`, and the two spline models whose dimensionless radial
+    // spline rides on the ray's own radial coordinate the same way. Everything
+    // else is rejected loudly rather than degraded to a fixed-parameter solve
+    // behind the caller's back.
     let releasable = matches!(
         camera.inner.model,
         CameraModel::SimplePinhole { .. }
             | CameraModel::EquidistantFisheye { .. }
             | CameraModel::SimpleRadialFisheye { .. }
             | CameraModel::SfmtoolFisheye { .. }
+            | CameraModel::SfmtoolPinhole { .. }
     );
     if opt_f && !releasable {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "opt_f requires a SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE, \
-             SIMPLE_RADIAL_FISHEYE or SFMTOOL_FISHEYE camera",
+             SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera",
         ));
     }
     // The two distortion rungs live on different models, so no camera could
@@ -191,27 +194,23 @@ pub fn bundle_adjust<'py>(
             "opt_k1 requires a SIMPLE_RADIAL_FISHEYE camera",
         ));
     }
-    // The spline rung likewise exists on exactly one model, whose
-    // dimensionless spline coefficients act on the ray's own `θ` — and the
-    // spline must be defined for there to be anything to release.
+    // The spline rung exists on the two models that carry a spline, whose
+    // dimensionless coefficients act on the ray's own radial coordinate — and
+    // the spline must be defined for there to be anything to release.
     if opt_bspline {
-        match camera.inner.model {
-            CameraModel::SfmtoolFisheye {
-                bspline_theta_max,
-                ref bspline,
-                ..
-            } => {
-                if bspline.len() < 2 || !(bspline_theta_max.is_finite() && bspline_theta_max > 0.0)
-                {
+        match camera.inner.model.radial_spline() {
+            Some((bspline, d_max, _)) => {
+                if bspline.len() < 2 || !(d_max.is_finite() && d_max > 0.0) {
                     return Err(pyo3::exceptions::PyValueError::new_err(
                         "opt_bspline requires a defined spline (at least two \
-                         coefficients on a positive bspline_theta_max)",
+                         coefficients on a positive bspline_theta_max / \
+                         bspline_rho_max)",
                     ));
                 }
             }
-            _ => {
+            None => {
                 return Err(pyo3::exceptions::PyValueError::new_err(
-                    "opt_bspline requires a SFMTOOL_FISHEYE camera",
+                    "opt_bspline requires a SFMTOOL_FISHEYE or SFMTOOL_PINHOLE camera",
                 ));
             }
         }

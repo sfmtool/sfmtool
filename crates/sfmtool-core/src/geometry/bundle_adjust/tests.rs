@@ -2580,8 +2580,13 @@ fn bspline_columns_match_a_central_difference() {
                     n_past_90 += 1;
                 }
                 // The kernel's columns, assembled per coefficient.
-                let (first, cols) =
-                    bspline_columns(f, n, THETA_MAX, Vector3::new(r[0], r[1], r[2]));
+                let (first, cols) = bspline_columns(
+                    f,
+                    n,
+                    THETA_MAX,
+                    SplineRadial::IncidenceAngle,
+                    Vector3::new(r[0], r[1], r[2]),
+                );
                 let mut full = vec![[0.0f64; 2]; n];
                 for (j, col) in cols.iter().enumerate() {
                     let fi = first + j;
@@ -2965,6 +2970,569 @@ fn directions_participate_in_the_bspline_rung() {
     finite_only.obs_pt = keep.iter().map(|&k| finite_only.obs_pt[k]).collect();
     let out_finite = run_bspline(&mut finite_only, false, true, &DEFAULT_SCHEDULE);
     let err_finite = worst_map_err_px(f, &out_finite.bspline, &PLANTED_BSPLINE, 0.5, 1.7);
+    assert!(
+        err_finite > 3.0 * err,
+        "the near-axis control recovered the spline too well ({err_finite} \
+         vs {err} px) - the test no longer isolates the direction rows"
+    );
+}
+
+// ── The spline rung on SFMTOOL_PINHOLE ──────────────────────────────────────
+
+/// Spline-domain end used by the pinhole spline-rung scenes: just beyond the
+/// image circle the scene generator keeps, so the outermost observations sit
+/// inside the basis.
+const RHO_MAX: f64 = 0.85;
+
+/// Largest normalized image-plane radius the pinhole scenes admit — a
+/// circular acceptance, so every azimuth reaches the same `ρ` and no
+/// coefficient's support is corner-only.
+const RHO_LIMIT: f64 = 0.82;
+
+/// A gently expanding 6-coefficient spline: monotone on `[0, RHO_MAX]`, ~12 px
+/// of rim correction at `f = 250`.
+const PLANTED_PINHOLE_BSPLINE: [f64; 6] = [0.002, 0.007, 0.014, 0.024, 0.036, 0.05];
+
+fn sfmtool_pinhole(f: f64, bspline: &[f64]) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SfmtoolPinhole {
+            focal_length: f,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            bspline_rho_max: RHO_MAX,
+            bspline: bspline.to_vec(),
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+fn simple_pinhole_at(f: f64) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SimplePinhole {
+            focal_length: f,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+/// A perspective scene wide enough that every spline coefficient has
+/// observation support: cameras on a shallow arc inside a shell of points,
+/// keeping observations inside the circular field `ρ ≤ RHO_LIMIT`. Returns the
+/// scene and the number of observations past `ρ = 0.4`, where the spline is
+/// the only thing that can explain the residual.
+fn make_pinhole_scene_for(cam: CameraIntrinsics, n_img: usize, n_pt: usize) -> (Scene, usize) {
+    let f = cam.focal_lengths().0;
+    let mut quats = Vec::new();
+    let mut trans = Vec::new();
+    for i in 0..n_img {
+        let ang = 0.25 * (i as f64 - (n_img as f64 - 1.0) / 2.0);
+        let center = Vector3::new(1.2 * ang.sin(), 0.3 * jitter(i, 11), 1.2 * ang.cos());
+        let r = UnitQuaternion::face_towards(&center, &Vector3::y()).inverse();
+        quats.push(r);
+        trans.push(-(r * center));
+    }
+    let mut points = Vec::new();
+    for p in 0..n_pt {
+        let theta = std::f64::consts::PI * (0.15 + 0.7 * (p as f64) / (n_pt as f64 - 1.0));
+        let phi = 2.399_963 * p as f64;
+        let rad = 6.0 + 1.5 * jitter(p, 3);
+        points.push([
+            rad * theta.sin() * phi.cos(),
+            rad * theta.cos(),
+            rad * theta.sin() * phi.sin(),
+        ]);
+    }
+    let mut per_pt: Vec<Vec<(u32, [f64; 2], bool)>> = vec![Vec::new(); points.len()];
+    for (p, x) in points.iter().enumerate() {
+        for i in 0..n_img {
+            let c = quats[i] * Vector3::new(x[0], x[1], x[2]) + trans[i];
+            let Some((u, v)) = cam.ray_to_pixel([c.x, c.y, c.z]) else {
+                continue;
+            };
+            let r = (u - 240.0).hypot(v - 240.0);
+            if r > f * RHO_LIMIT {
+                continue;
+            }
+            per_pt[p].push((i as u32, [u, v], r > f * 0.4));
+        }
+    }
+    let mut kept_points = Vec::new();
+    let mut uv = Vec::new();
+    let mut obs_img = Vec::new();
+    let mut obs_pt = Vec::new();
+    let mut n_wide = 0usize;
+    for (p, obs) in per_pt.iter().enumerate() {
+        if obs.len() < 2 {
+            continue;
+        }
+        let cp = kept_points.len() as u32;
+        kept_points.push(points[p]);
+        for &(i, px, wide) in obs {
+            n_wide += wide as usize;
+            uv.push(px);
+            obs_img.push(i);
+            obs_pt.push(cp);
+        }
+    }
+    (
+        Scene {
+            cam,
+            quats,
+            trans,
+            points: kept_points,
+            uv,
+            obs_img,
+            obs_pt,
+        },
+        n_wide,
+    )
+}
+
+/// The composite-map metric on the pinhole's radial coordinate: the largest
+/// `f·|δ_a(ρ) − δ_b(ρ)|` in pixels over `[lo, hi]`.
+fn pinhole_map_err_px(f: f64, a: &[f64], b: &[f64], lo: f64, hi: f64) -> f64 {
+    (0..=200)
+        .map(|s| {
+            let rho = lo + (hi - lo) * s as f64 / 200.0;
+            f * (bspline_delta(a, RHO_MAX, rho) - bspline_delta(b, RHO_MAX, rho)).abs()
+        })
+        .fold(0.0f64, f64::max)
+}
+
+/// `∂(u, v)/∂cᵢ` for the pinhole model as the kernel computes it, against a
+/// central difference of the projection in each coefficient.
+///
+/// The columns are `f·Bᵢ(ρ)·û` because every coefficient enters as
+/// `ρ_d = ρ + Σ cᵢ·Bᵢ(ρ)` with `ρ = ρ_xy/rz` read off the ray, never off a
+/// pixel radius — the projection is exactly LINEAR in each coefficient, so a
+/// central difference must reproduce the column to rounding.
+#[test]
+fn pinhole_bspline_columns_match_a_central_difference() {
+    let f = 250.0;
+    let h = 1e-3;
+    let n = PLANTED_PINHOLE_BSPLINE.len();
+    let mut worst: f64 = 0.0;
+    let mut n_past_seam = 0usize;
+    for ti in 0..17 {
+        let rho = 0.02 + 0.07 * ti as f64; // out to ρ = 1.14, past ρ_max
+        for ai in 0..5 {
+            let az = 2.0 * std::f64::consts::PI * ai as f64 / 5.0;
+            for &scale in &[0.35_f64, 1.0, 7.5] {
+                // Optical-frame direction at (ρ, az) → canonical via
+                // S = diag(1, −1, −1).
+                let theta = rho.atan();
+                let opt = Vector3::new(theta.sin() * az.cos(), theta.sin() * az.sin(), theta.cos());
+                let r = [scale * opt.x, -scale * opt.y, -scale * opt.z];
+                if rho > RHO_MAX {
+                    n_past_seam += 1;
+                }
+                let (first, cols) = bspline_columns(
+                    f,
+                    n,
+                    RHO_MAX,
+                    SplineRadial::ImagePlaneRadius,
+                    Vector3::new(r[0], r[1], r[2]),
+                );
+                let mut full = vec![[0.0f64; 2]; n];
+                for (j, col) in cols.iter().enumerate() {
+                    let fi = first + j;
+                    if fi >= 2 {
+                        full[fi - 2] = *col;
+                    }
+                }
+                let denom = full
+                    .iter()
+                    .flatten()
+                    .fold(0.0f64, |m, c| m.max(c.abs()))
+                    .max(1e-3);
+                for (i, col) in full.iter().enumerate() {
+                    let mut cp = PLANTED_PINHOLE_BSPLINE;
+                    cp[i] += h;
+                    let mut cm = PLANTED_PINHOLE_BSPLINE;
+                    cm[i] -= h;
+                    let (up, vp) = sfmtool_pinhole(f, &cp).ray_to_pixel(r).unwrap();
+                    let (um, vm) = sfmtool_pinhole(f, &cm).ray_to_pixel(r).unwrap();
+                    let (fd_u, fd_v) = ((up - um) / (2.0 * h), (vp - vm) / (2.0 * h));
+                    worst = worst
+                        .max((col[0] - fd_u).abs() / denom)
+                        .max((col[1] - fd_v).abs() / denom);
+                }
+            }
+        }
+    }
+    assert!(n_past_seam >= 45, "held-constant tail thin: {n_past_seam}");
+    assert!(
+        worst < 1e-9,
+        "analytic spline columns vs central difference: worst relative error {worst}"
+    );
+}
+
+/// A scene shot through an expanding lens, handed to the solver with a zero
+/// spline: the release recovers the planted coefficients — composite-map-wise
+/// above all — and the fit comes back sub-pixel.
+#[test]
+fn opt_bspline_recovers_a_planted_pinhole_spline() {
+    let f = 250.0;
+    let (mut s, n_wide) =
+        make_pinhole_scene_for(sfmtool_pinhole(f, &PLANTED_PINHOLE_BSPLINE), 10, 500);
+    assert!(n_wide >= 100, "scene is not wide enough: {n_wide}");
+    s.cam = sfmtool_pinhole(f, &[0.0; 6]);
+    let out = run_bspline(&mut s, false, true, &DEFAULT_SCHEDULE);
+    assert_eq!(out.focal.to_bits(), f.to_bits(), "the focal was not fixed");
+    let map_err = pinhole_map_err_px(f, &out.bspline, &PLANTED_PINHOLE_BSPLINE, 0.05, 0.8);
+    assert!(
+        map_err < 0.3,
+        "recovered composite map off by {map_err} px (spline {:?})",
+        out.bspline
+    );
+    for (i, (c, t)) in out.bspline.iter().zip(&PLANTED_PINHOLE_BSPLINE).enumerate() {
+        assert!(
+            (c - t).abs() < 0.01,
+            "coefficient {i}: {c} (want {t}; full spline {:?})",
+            out.bspline
+        );
+    }
+    let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
+    assert!(worst < 0.5, "worst reprojection {worst} px after the rung");
+}
+
+/// The staged release the callers actually run: focal and spline together,
+/// from a focal several percent off and no spline.
+#[test]
+fn opt_f_and_opt_bspline_recover_together_on_a_pinhole() {
+    let f_true = 250.0;
+    let (mut s, _) =
+        make_pinhole_scene_for(sfmtool_pinhole(f_true, &PLANTED_PINHOLE_BSPLINE), 10, 500);
+    let f_start = 238.0;
+    s.cam = sfmtool_pinhole(f_start, &[0.0; 6]);
+    // The focal trades against the scene scale: move the structure with it.
+    for x in s.points.iter_mut() {
+        for v in x.iter_mut() {
+            *v *= f_start / f_true;
+        }
+    }
+    for t in s.trans.iter_mut() {
+        *t *= f_start / f_true;
+    }
+    let out = run_bspline(&mut s, true, true, &DEFAULT_SCHEDULE);
+    let f_err = (out.focal - f_true).abs() / f_true;
+    let map_err = pinhole_map_err_px(f_true, &out.bspline, &PLANTED_PINHOLE_BSPLINE, 0.05, 0.8);
+    assert!(
+        f_err < 0.01 && map_err < 0.5,
+        "co-released f = {} (want {f_true}), composite map off by {map_err} px ({:?})",
+        out.focal,
+        out.bspline
+    );
+    let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
+    assert!(worst < 0.5, "worst reprojection {worst} px");
+}
+
+/// The fixed point that matters for the promotion
+/// SIMPLE_PINHOLE → SFMTOOL_PINHOLE(zero spline): on a scene that really is a
+/// pinhole, releasing the spline leaves it at zero and leaves the geometry
+/// where it was.
+#[test]
+fn opt_bspline_holds_at_zero_on_a_pinhole_scene() {
+    let f = 250.0;
+    let (mut released, _) = make_pinhole_scene_for(sfmtool_pinhole(f, &[0.0; 6]), 10, 500);
+    let mut fixed = released.clone();
+    // A perturbed start, so both arms have real work to do.
+    let perturb = |s: &mut Scene| {
+        for (i, q) in s.quats.iter_mut().enumerate() {
+            *q = UnitQuaternion::from_scaled_axis(Vector3::new(
+                0.01 * jitter(i, 21),
+                0.01 * jitter(i, 22),
+                0.01 * jitter(i, 23),
+            )) * *q;
+        }
+        for (p, x) in s.points.iter_mut().enumerate() {
+            for (c, v) in x.iter_mut().enumerate() {
+                *v += 0.05 * jitter(p * 3 + c, 31);
+            }
+        }
+    };
+    perturb(&mut released);
+    perturb(&mut fixed);
+    let out_r = run_bspline(&mut released, false, true, &DEFAULT_SCHEDULE);
+    let out_f = run_bspline(&mut fixed, false, false, &DEFAULT_SCHEDULE);
+    for (i, c) in out_f.bspline.iter().enumerate() {
+        assert_eq!(c.to_bits(), 0.0f64.to_bits(), "unreleased c{i} moved");
+    }
+    let held = pinhole_map_err_px(f, &out_r.bspline, &[0.0; 6], 0.05, 0.8);
+    assert!(
+        held < 0.1,
+        "the released spline walked off zero on a pinhole scene by {held} px ({:?})",
+        out_r.bspline
+    );
+    // …and the reconstruction is the same one, not a spline-for-geometry
+    // trade that happens to end near zero.
+    for (i, (a, b)) in released.quats.iter().zip(fixed.quats.iter()).enumerate() {
+        assert!(a.angle_to(b) < 1e-4, "image {i} rotation split");
+    }
+    for (p, (a, b)) in released.points.iter().zip(fixed.points.iter()).enumerate() {
+        let d = (0..3).map(|c| (a[c] - b[c]).powi(2)).sum::<f64>().sqrt();
+        assert!(d < 1e-3, "point {p} split {d}");
+    }
+}
+
+/// The focal release admits the model: its dimensionless spline rides on the
+/// ray's own `ρ`, so `∂(u, v)/∂f = (u − cx)/f` stays exact and a wrong focal
+/// is recovered with the spline fixed.
+#[test]
+fn opt_f_is_admitted_on_the_spline_pinhole() {
+    let f_true = 250.0;
+    let (mut s, _) =
+        make_pinhole_scene_for(sfmtool_pinhole(f_true, &PLANTED_PINHOLE_BSPLINE), 10, 500);
+    let f_start = 232.0;
+    s.cam = sfmtool_pinhole(f_start, &PLANTED_PINHOLE_BSPLINE);
+    for x in s.points.iter_mut() {
+        for v in x.iter_mut() {
+            *v *= f_start / f_true;
+        }
+    }
+    for t in s.trans.iter_mut() {
+        *t *= f_start / f_true;
+    }
+    let out = run_bspline(&mut s, true, false, &DEFAULT_SCHEDULE);
+    let err = (out.focal - f_true).abs() / f_true;
+    assert!(err < 0.005, "released focal {} (want {f_true})", out.focal);
+    // The spline came back untouched: `opt_bspline` was not requested.
+    for (i, (c, t)) in out.bspline.iter().zip(&PLANTED_PINHOLE_BSPLINE).enumerate() {
+        assert_eq!(c.to_bits(), t.to_bits(), "unreleased c{i} moved");
+    }
+}
+
+/// The gates on the pinhole model: `opt_k1` has nothing to move on it, a
+/// spline too short to define carries nothing to release, and SIMPLE_PINHOLE
+/// has no spline at all. All three degrade to the solve without the rung, bit
+/// for bit.
+#[test]
+fn the_rungs_are_gated_on_the_spline_pinhole_too() {
+    let f = 250.0;
+    let (mut k1_r, _) =
+        make_pinhole_scene_for(sfmtool_pinhole(f, &PLANTED_PINHOLE_BSPLINE), 6, 250);
+    let mut k1_p = k1_r.clone();
+    let out_r = run_k1(&mut k1_r, true, true, &DEFAULT_SCHEDULE);
+    let out_p = run_k1(&mut k1_p, true, false, &DEFAULT_SCHEDULE);
+    assert_eq!(out_r.k1.to_bits(), 0.0f64.to_bits());
+    assert_bitwise_equal(&k1_r, &out_r, &k1_p, &out_p);
+
+    let (mut empty_r, _) = make_pinhole_scene_for(sfmtool_pinhole(f, &[]), 6, 250);
+    let mut empty_p = empty_r.clone();
+    let out_r = run_bspline(&mut empty_r, true, true, &DEFAULT_SCHEDULE);
+    let out_p = run_bspline(&mut empty_p, true, false, &DEFAULT_SCHEDULE);
+    assert!(out_r.bspline.is_empty());
+    assert_bitwise_equal(&empty_r, &out_r, &empty_p, &out_p);
+
+    let (mut plain_r, _) = make_pinhole_scene_for(simple_pinhole_at(f), 6, 250);
+    let mut plain_p = plain_r.clone();
+    let out_r = run_bspline(&mut plain_r, true, true, &DEFAULT_SCHEDULE);
+    let out_p = run_bspline(&mut plain_p, true, false, &DEFAULT_SCHEDULE);
+    assert!(out_r.bspline.is_empty());
+    assert_bitwise_equal(&plain_r, &out_r, &plain_p, &out_p);
+}
+
+/// The step guard on the pinhole's domain: `ρ_d = ρ + δ(ρ)` must stay strictly
+/// increasing over `[0, ρ_max]`, and a released solve never lands on a spline
+/// that is not.
+#[test]
+fn pinhole_bspline_step_guard_rejects_a_folded_spline() {
+    assert!(bspline_step_admissible(&[0.0; 6], RHO_MAX));
+    assert!(bspline_step_admissible(&PLANTED_PINHOLE_BSPLINE, RHO_MAX));
+    // With interior knot spans of 0.17, a −0.2 step between adjacent
+    // coefficients puts δ' well below −1.
+    let folded = [0.0, 0.0, -0.2, -0.4, -0.6, -0.8];
+    assert!(!bspline_step_admissible(&folded, RHO_MAX));
+    // A fold in the outermost span is rejected too.
+    let rim_folded = [0.0, 0.0, 0.0, 0.0, 0.0, -0.3];
+    assert!(!bspline_step_admissible(&rim_folded, RHO_MAX));
+    let mut bad = PLANTED_PINHOLE_BSPLINE;
+    bad[3] = f64::NAN;
+    assert!(!bspline_step_admissible(&bad, RHO_MAX));
+
+    let f = 250.0;
+    let (mut s, _) = make_pinhole_scene_for(sfmtool_pinhole(f, &PLANTED_PINHOLE_BSPLINE), 10, 500);
+    s.cam = sfmtool_pinhole(f, &[0.0; 6]);
+    let out = run_bspline(&mut s, true, true, &DEFAULT_SCHEDULE);
+    assert!(
+        bspline_is_monotone(&out.bspline, RHO_MAX, RHO_MAX),
+        "the solve returned a folded spline: {:?} at f = {}",
+        out.bspline,
+        out.focal
+    );
+}
+
+/// The pinhole's half of the unsupported-slot contract: a coefficient whose
+/// basis span no surviving observation reaches has exactly-zero curvature, its
+/// shared slot is pinned per linearization, and the coefficient comes back bit
+/// for bit at its input value.
+#[test]
+fn unsupported_pinhole_bspline_slots_hold_their_input_exactly() {
+    let f = 250.0;
+    // Sentinels in the outermost two coefficients. With 6 coefficients on
+    // `[0, 0.85]` the interior knots sit every 0.17, and those two slots'
+    // basis support starts at ρ = 0.51 and ρ = 0.68: invisible below 0.51.
+    let sentinels = [0.0, 0.0, 0.0, 0.0, 0.017, -0.008];
+    // A perspective capture cropped to ρ ≤ 0.45, a knot span short of the
+    // nearer sentinel's support.
+    const FIELD: f64 = 0.45;
+    let (full, _) = make_pinhole_scene_for(sfmtool_pinhole(f, &[0.0; 6]), 10, 500);
+    let mut s = Scene {
+        cam: sfmtool_pinhole(f, &sentinels),
+        quats: full.quats.clone(),
+        trans: full.trans.clone(),
+        points: full.points.clone(),
+        uv: Vec::new(),
+        obs_img: Vec::new(),
+        obs_pt: Vec::new(),
+    };
+    for k in 0..full.uv.len() {
+        let r = (full.uv[k][0] - 240.0).hypot(full.uv[k][1] - 240.0);
+        if r <= f * FIELD {
+            s.uv.push(full.uv[k]);
+            s.obs_img.push(full.obs_img[k]);
+            s.obs_pt.push(full.obs_pt[k]);
+        }
+    }
+    assert!(s.uv.len() >= 100, "narrow scene too small: {}", s.uv.len());
+    let out = run_bspline(&mut s, false, true, &DEFAULT_SCHEDULE);
+    // The solve is not degenerate…
+    let finite = out.residual_norms.iter().filter(|r| r.is_finite()).count();
+    assert!(
+        finite >= 100,
+        "solve degenerated: {finite} finite residuals"
+    );
+    // …the unsupported outer coefficients held their inputs exactly…
+    assert_eq!(out.bspline[4].to_bits(), sentinels[4].to_bits());
+    assert_eq!(out.bspline[5].to_bits(), sentinels[5].to_bits());
+    // …and the supported inner ones stayed near the (true) zero.
+    let inner_err = pinhole_map_err_px(
+        f,
+        &out.bspline[..4]
+            .iter()
+            .chain(&[0.0, 0.0])
+            .copied()
+            .collect::<Vec<_>>(),
+        &[0.0; 6],
+        0.02,
+        FIELD,
+    );
+    assert!(
+        inner_err < 0.2,
+        "supported coefficients drifted by {inner_err} px: {:?}",
+        out.bspline
+    );
+}
+
+/// Direction rows carry the pinhole's spline rung. A point at infinity
+/// projects through the very same map, so `∂/∂cᵢ` applies to it unchanged, and
+/// where the finite cloud sits near the axis (no basis signal) the far field
+/// is the only thing that can recover the spline.
+#[test]
+fn directions_participate_in_the_pinhole_bspline_rung() {
+    let f = 250.0;
+    let cam_true = sfmtool_pinhole(f, &PLANTED_PINHOLE_BSPLINE);
+
+    // A near-axis finite cloud in front of an arc of cameras: enough to
+    // satisfy the finite-survivor floor, far too little field to fit the
+    // spline from.
+    let n_img = 8;
+    let mut quats = Vec::new();
+    let mut trans = Vec::new();
+    for i in 0..n_img {
+        let ang = 0.12 * (i as f64 - (n_img as f64 - 1.0) / 2.0);
+        let center = Vector3::new(ang.sin(), 0.2 * jitter(i, 11), ang.cos() + 6.0);
+        let r = UnitQuaternion::face_towards(&center, &Vector3::y()).inverse();
+        quats.push(r);
+        trans.push(-(r * center));
+    }
+    let mut points: Vec<[f64; 3]> = Vec::new();
+    for p in 0..40 {
+        points.push([0.4 * jitter(p, 5), 0.4 * jitter(p, 6), 0.4 * jitter(p, 7)]);
+    }
+    let n_finite = points.len();
+    // Far-field directions spread over the field the spline actually shapes,
+    // ρ = 0.15 out to the RHO_LIMIT rim.
+    let mut dir_ids = Vec::new();
+    for j in 0..60 {
+        let rho = 0.15 + (RHO_LIMIT - 0.15) * (j as f64) / 59.0;
+        let theta = rho.atan();
+        let phi = 2.399_963 * j as f64;
+        let d = Vector3::new(
+            theta.sin() * phi.cos(),
+            theta.sin() * phi.sin(),
+            -theta.cos(),
+        );
+        dir_ids.push(points.len());
+        points.push([d.x, d.y, d.z]);
+    }
+    let mut uv = Vec::new();
+    let mut obs_img = Vec::new();
+    let mut obs_pt = Vec::new();
+    for (p, x) in points.iter().enumerate() {
+        let is_dir = p >= n_finite;
+        for i in 0..n_img {
+            let xv = Vector3::new(x[0], x[1], x[2]);
+            let c = if is_dir {
+                quats[i] * xv
+            } else {
+                quats[i] * xv + trans[i]
+            };
+            let Some((u, v)) = cam_true.ray_to_pixel([c.x, c.y, c.z]) else {
+                continue;
+            };
+            if (u - 240.0).hypot(v - 240.0) > f * RHO_LIMIT {
+                continue;
+            }
+            uv.push([u, v]);
+            obs_img.push(i as u32);
+            obs_pt.push(p as u32);
+        }
+    }
+    let scene = Scene {
+        cam: sfmtool_pinhole(f, &[0.0; 6]),
+        quats,
+        trans,
+        points,
+        uv,
+        obs_img,
+        obs_pt,
+    };
+    let mask = dir_mask(&scene, &dir_ids);
+
+    // With the directions in the solve, the rung recovers the composite map.
+    let mut with_dirs = scene.clone();
+    let out = run_bspline_masked(&mut with_dirs, &mask, false, true, &DEFAULT_SCHEDULE);
+    let err = pinhole_map_err_px(f, &out.bspline, &PLANTED_PINHOLE_BSPLINE, 0.15, RHO_LIMIT);
+    eprintln!("[pinhole-dir-rung] direction rows recovered to {err:.3e} px");
+    assert!(
+        err < 1.0,
+        "composite map off by {err} px from the direction rows ({:?})",
+        out.bspline
+    );
+
+    // The control: drop every direction observation and the near-axis finite
+    // cloud alone cannot see the spline.
+    let mut finite_only = scene.clone();
+    let keep: Vec<usize> = (0..finite_only.obs_pt.len())
+        .filter(|&k| (finite_only.obs_pt[k] as usize) < n_finite)
+        .collect();
+    finite_only.uv = keep.iter().map(|&k| finite_only.uv[k]).collect();
+    finite_only.obs_img = keep.iter().map(|&k| finite_only.obs_img[k]).collect();
+    finite_only.obs_pt = keep.iter().map(|&k| finite_only.obs_pt[k]).collect();
+    let out_finite = run_bspline(&mut finite_only, false, true, &DEFAULT_SCHEDULE);
+    let err_finite = pinhole_map_err_px(
+        f,
+        &out_finite.bspline,
+        &PLANTED_PINHOLE_BSPLINE,
+        0.15,
+        RHO_LIMIT,
+    );
+    eprintln!("[pinhole-dir-rung] the finite-only control landed at {err_finite:.3e} px");
     assert!(
         err_finite > 3.0 * err,
         "the near-axis control recovered the spline too well ({err_finite} \

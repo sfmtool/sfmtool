@@ -22,6 +22,7 @@ use nalgebra::{DMatrix, DVector, Matrix3, Point3, SMatrix, UnitQuaternion, Vecto
 use crate::camera::distortion::bspline::{
     basis_at, bspline_is_monotone, BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
 };
+use crate::camera::intrinsics::SplineRadial;
 use crate::camera::{CameraModel, PixelJacobian};
 use crate::geometry::numeric::{cam_with, cam_with_bspline};
 use crate::reconstruction::triangulation::triangulate_batch;
@@ -230,16 +231,18 @@ fn k1_step_admissible(f: f64, k1: f64, field_r: f64) -> bool {
     (2.0 / 3.0) * f * theta_fold > field_r
 }
 
-/// The active `∂(u, v)/∂cᵢ` columns at a camera-frame point, for the one
-/// model `opt_bspline` admits.
+/// The active `∂(u, v)/∂cᵢ` columns at a camera-frame point, for the two
+/// models `opt_bspline` admits.
 ///
-/// `SFMTOOL_FISHEYE` projects a ray through `x_d = θ_d·ûx` with
-/// `θ_d = θ + Σ cᵢ·Bᵢ(θ)`, so `∂x_d/∂cᵢ = Bᵢ(θ)·ûx` and the pixel column is
-/// `f·Bᵢ(θ)·(ûx, ûy)` — exact at every incidence angle, the periphery past
-/// 90° included, since `θ` comes from the ray rather than from a pixel
-/// radius (the same property as [`k1_column`], with `Bᵢ(θ)` in place of
-/// `θ³`). Past `θ_max` the correction is held constant at `δ(θ_max)`, whose
-/// coefficient derivative is `Bᵢ(θ_max)` — exactly what the clamp inside
+/// Both project a ray through `x_d = d_d·ûx` with `d_d = d + Σ cᵢ·Bᵢ(d)` over
+/// the model's radial coordinate `d` (`radial`): the incidence angle `θ` for
+/// `SFMTOOL_FISHEYE`, the normalized image-plane radius `ρ = ρ_xy/rz` for
+/// `SFMTOOL_PINHOLE`. So `∂x_d/∂cᵢ = Bᵢ(d)·ûx` and the pixel column is
+/// `f·Bᵢ(d)·(ûx, ûy)` — exact everywhere in the field, since `d` comes from
+/// the ray rather than from a pixel radius (the same property as
+/// [`k1_column`], with `Bᵢ(d)` in place of `θ³`), the fisheye's periphery past
+/// 90° included. Past `d_max` the correction is held constant at `δ(d_max)`,
+/// whose coefficient derivative is `Bᵢ(d_max)` — exactly what the clamp inside
 /// `basis_at` evaluates, so the column is exact on the linear tail too.
 /// `(ûx, ûy)` is the unit image direction in the OPTICAL frame
 /// (`S = diag(1, −1, −1)` off canonical), like the `k1` column.
@@ -248,7 +251,7 @@ fn k1_step_admissible(f: f64, k1: f64, field_r: f64) -> bool {
 /// [`BSPLINE_SUPPORT`] columns in basis order; entries whose full index is
 /// below 2 are the gauge-anchored pair — no coefficient, and the caller must
 /// not scatter them. On the optical axis every column is exactly zero (the
-/// coefficient-bearing basis functions all vanish at `θ = 0` by the
+/// coefficient-bearing basis functions all vanish at `d = 0` by the
 /// center-anchored gauge, whatever the undefined `û` is).
 ///
 /// A direction (point at infinity) takes these columns unchanged — it
@@ -256,7 +259,8 @@ fn k1_step_admissible(f: f64, k1: f64, field_r: f64) -> bool {
 fn bspline_columns(
     f: f64,
     n_coeffs: usize,
-    theta_max: f64,
+    d_max: f64,
+    radial: SplineRadial,
     p_cam: Vector3<f64>,
 ) -> (usize, [[f64; 2]; BSPLINE_SUPPORT]) {
     // Canonical → optical frame: (rx, ry, rz) = S·p_cam.
@@ -265,32 +269,39 @@ fn bspline_columns(
     if rho == 0.0 {
         return (0, [[0.0; 2]; BSPLINE_SUPPORT]);
     }
-    let theta = rho.atan2(rz);
-    let (first, values, _derivs) = basis_at(n_coeffs, theta_max, theta);
+    // The caller only reaches this for an observation the model projected, so
+    // the pinhole quotient is taken on a strictly positive `rz`.
+    let d = match radial {
+        SplineRadial::IncidenceAngle => rho.atan2(rz),
+        SplineRadial::ImagePlaneRadius => rho / rz,
+    };
+    let (first, values, _derivs) = basis_at(n_coeffs, d_max, d);
     let (ux, uy) = (rx / rho, ry / rho);
     let mut cols = [[0.0; 2]; BSPLINE_SUPPORT];
     for (col, &b) in cols.iter_mut().zip(&values) {
-        // f·Bᵢ(θ)·û.
+        // f·Bᵢ(d)·û.
         let s = f * b;
         *col = [s * ux, s * uy];
     }
     (first, cols)
 }
 
-/// Whether candidate coefficients keep `θ_d = θ + δ(θ)` strictly increasing
-/// over the spline's whole domain `[0, θ_max]` — the plausibility guard on a
-/// spline step, the counterpart of [`k1_step_admissible`].
+/// Whether candidate coefficients keep `d_d = d + δ(d)` strictly increasing
+/// over the spline's whole domain `[0, d_max]` — the plausibility guard on a
+/// spline step, the counterpart of [`k1_step_admissible`]. The check is
+/// arithmetic on the coefficients and the domain end, so it reads the same for
+/// either radial coordinate.
 ///
 /// The whole domain rather than just the imaged field, because monotonicity
 /// is the model's construction invariant: it is what gives the Newton solve
 /// behind `pixel_to_ray` a guaranteed bracket, and the accepted spline is
 /// persisted into a camera whose inverse must stay well-defined everywhere.
-/// Beyond `θ_max` the slope is exactly `1`, so `[0, θ_max]` is the entire
+/// Beyond `d_max` the slope is exactly `1`, so `[0, d_max]` is the entire
 /// risk region — and coefficient slots with no observation support are
 /// pinned at their input values, so past the data the spline never moves
 /// and the wider check costs no legitimate steps.
-fn bspline_step_admissible(bspline: &[f64], theta_max: f64) -> bool {
-    bspline.iter().all(|c| c.is_finite()) && bspline_is_monotone(bspline, theta_max, theta_max)
+fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
+    bspline.iter().all(|c| c.is_finite()) && bspline_is_monotone(bspline, d_max, d_max)
 }
 
 /// Staged bundle adjustment over images sharing one camera model.
@@ -322,13 +333,13 @@ fn bspline_step_admissible(bspline: &[f64], theta_max: f64) -> bool {
 /// reproduces the unprotected behavior bit for bit.
 ///
 /// `opt_f` releases the shared focal (SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE,
-/// SIMPLE_RADIAL_FISHEYE and SFMTOOL_FISHEYE — the models this kernel's
-/// analytic focal column `(u − cx)/f` is exact for), `opt_k1` the shared
-/// radial coefficient (SIMPLE_RADIAL_FISHEYE only, the one model carrying
-/// it), and `opt_bspline` the shared radial spline coefficients
-/// (SFMTOOL_FISHEYE only, likewise). The binding rejects other models
-/// loudly; the core silently degrades them to a fixed-parameter solve, never
-/// a half-modeled DOF. `opt_k1` and `opt_bspline` are naturally exclusive
+/// SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE and SFMTOOL_PINHOLE — the models
+/// this kernel's analytic focal column `(u − cx)/f` is exact for), `opt_k1`
+/// the shared radial coefficient (SIMPLE_RADIAL_FISHEYE only, the one model
+/// carrying it), and `opt_bspline` the shared radial spline coefficients
+/// (SFMTOOL_FISHEYE and SFMTOOL_PINHOLE, the two carrying a spline). The
+/// binding rejects other models loudly; the core silently degrades them to a
+/// fixed-parameter solve, never a half-modeled DOF. `opt_k1` and `opt_bspline` are naturally exclusive
 /// (no model carries both parameters). Callers stage the releases — fixed →
 /// `opt_f` → `opt_f` plus the model's distortion release — so the distortion
 /// rung opens on a focal that has already settled.
@@ -614,8 +625,8 @@ fn robust_cost(
 /// `CAM_COLS` selects the per-observation camera-block width:
 /// [`BASE_CAM_COLS`] for every solve without the spline release (the
 /// original layout, byte for byte), [`BSPLINE_CAM_COLS`] when the staged
-/// loop releases an `SFMTOOL_FISHEYE` spline — the reduced system then
-/// carries one shared slot per coefficient (`n_shared = 2 + n_coeffs`, still
+/// loop releases a radial spline — the reduced system then carries one
+/// shared slot per coefficient (`n_shared = 2 + n_coeffs`, still
 /// dynamic) while each observation's block stays compile-time sized at the
 /// spline's local support. `bspline0` is the current coefficient vector
 /// (read-only outside the spline instantiation, where the camera's own
@@ -642,17 +653,15 @@ fn solve_lm<const CAM_COLS: usize>(
     protected_loss_scale: f64,
 ) -> (f64, f64, Vec<f64>) {
     // The spline instantiation is selected by width; the staged loop only
-    // requests it for a released, well-formed SFMTOOL_FISHEYE spline.
+    // requests it for a released, well-formed spline.
     let opt_bspline = CAM_COLS == BSPLINE_CAM_COLS;
     debug_assert!(
         !(opt_bspline && opt_k1),
         "opt_k1 and opt_bspline live on different models"
     );
-    let (n_coeffs, theta_max) = match cam0.model {
-        CameraModel::SfmtoolFisheye {
-            bspline_theta_max, ..
-        } if opt_bspline => (bspline0.len(), bspline_theta_max),
-        _ => (0, 0.0),
+    let (n_coeffs, d_max, radial) = match cam0.model.radial_spline() {
+        Some((_, d_max, radial)) if opt_bspline => (bspline0.len(), d_max, radial),
+        _ => (0, 0.0, SplineRadial::IncidenceAngle),
     };
     // Compact the images and points the kept observations touch.
     let mut img_ids: Vec<usize> = kept.iter().map(|&k| obs_img[k] as usize).collect();
@@ -716,7 +725,7 @@ fn solve_lm<const CAM_COLS: usize>(
     // First pose column within an observation's camera block.
     let pose_c = CAM_COLS - 6;
     // The camera at a candidate shared state. Off the spline instantiation
-    // this is exactly the scalar builder (a fixed SFMTOOL_FISHEYE spline
+    // this is exactly the scalar builder (a fixed spline
     // rides along inside `cam0` untouched).
     let build_cam = |fv: f64, k1v: f64, bsv: &[f64]| {
         if opt_bspline {
@@ -828,7 +837,7 @@ fn solve_lm<const CAM_COLS: usize>(
                         // (full index < 2) carry no coefficient: their slot
                         // keeps the pinned K1_SLOT dummy and their column
                         // stays exactly zero.
-                        let (first, cols) = bspline_columns(f, n_coeffs, theta_max, p_cam);
+                        let (first, cols) = bspline_columns(f, n_coeffs, d_max, radial, p_cam);
                         for (j, col) in cols.iter().enumerate() {
                             let full = first + j;
                             if full < 2 {
@@ -1039,7 +1048,7 @@ fn solve_lm<const CAM_COLS: usize>(
                         *c += dv;
                     }
                 }
-                if !bspline_step_admissible(&pc, theta_max) {
+                if !bspline_step_admissible(&pc, d_max) {
                     lambda *= 4.0;
                     continue;
                 }
@@ -1186,11 +1195,13 @@ fn bundle_adjust_staged(
     // normalized coordinate whose relation to the pixel is `f`-dependent
     // (the multi-coefficient fisheye family: `x_d = θ·g(θ²)·û` with `θ`
     // recovered from `r/f`), and degrades to a fixed-focal solve (the binding
-    // rejects it loudly first). SFMTOOL_FISHEYE passes the test the same way
-    // SIMPLE_RADIAL_FISHEYE does: its radial spline is dimensionless and
-    // rides on the ray-derived `θ` (`x_d = (θ + δ(θ))·ûx`), so `f` never
-    // appears inside the distorted coordinate and `(u − cx)/f` stays exact.
-    // `numeric::cam_at` mirrors this gate.
+    // rejects it loudly first). The two sfmtool spline models pass the test
+    // the same way SIMPLE_RADIAL_FISHEYE does: their radial spline is
+    // dimensionless and rides on the ray-derived radial coordinate
+    // (`x_d = (θ + δ(θ))·ûx` for SFMTOOL_FISHEYE, `x_d = (ρ + δ(ρ))·ûx` with
+    // `ρ = ρ_xy/rz` for SFMTOOL_PINHOLE), so `f` never appears inside the
+    // distorted coordinate and `(u − cx)/f` stays exact. `numeric::cam_at`
+    // mirrors this gate.
     let opt_f = opt_f
         && matches!(
             cam.model,
@@ -1198,32 +1209,28 @@ fn bundle_adjust_staged(
                 | CameraModel::EquidistantFisheye { .. }
                 | CameraModel::SimpleRadialFisheye { .. }
                 | CameraModel::SfmtoolFisheye { .. }
+                | CameraModel::SfmtoolPinhole { .. }
         );
     // The curvature rung exists on exactly one model: `SIMPLE_RADIAL_FISHEYE`
     // is the only one whose single radial coefficient acts on the ray's own
     // `θ`, which is what makes `∂(u, v)/∂k1 = f·θ³·û` exact. Same degrade.
     let opt_k1 = opt_k1 && matches!(cam.model, CameraModel::SimpleRadialFisheye { .. });
-    // The spline rung likewise exists on exactly one model:
-    // `SFMTOOL_FISHEYE`, whose dimensionless spline coefficients act on the
-    // ray's own `θ`, making `∂(u, v)/∂cᵢ = f·Bᵢ(θ)·û` exact — and only when
-    // its spline is actually defined (at least `MIN_BSPLINE_COEFFS`
-    // coefficients on a positive finite `θ_max`; anything shorter evaluates
-    // as the identity and carries nothing to release). Same degrade; `opt_k1`
-    // and `opt_bspline` are therefore naturally exclusive, which the spline
-    // instantiation's pinned-K1 dummy slot relies on.
+    // The spline rung exists on the two models that carry a spline,
+    // `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`, whose dimensionless
+    // coefficients act on the ray's own radial coordinate `d`, making
+    // `∂(u, v)/∂cᵢ = f·Bᵢ(d)·û` exact — and only when the spline is actually
+    // defined (at least `MIN_BSPLINE_COEFFS` coefficients on a positive finite
+    // domain end; anything shorter evaluates as the identity and carries
+    // nothing to release). Same degrade; `opt_k1` and `opt_bspline` are
+    // therefore naturally exclusive, which the spline instantiation's
+    // pinned-K1 dummy slot relies on.
     let opt_bspline = opt_bspline
-        && match cam.model {
-            CameraModel::SfmtoolFisheye {
-                bspline_theta_max,
-                ref bspline,
-                ..
-            } => {
-                bspline.len() >= MIN_BSPLINE_COEFFS
-                    && bspline_theta_max.is_finite()
-                    && bspline_theta_max > 0.0
-            }
-            _ => false,
-        };
+        && cam
+            .model
+            .radial_spline()
+            .is_some_and(|(bspline, d_max, _)| {
+                bspline.len() >= MIN_BSPLINE_COEFFS && d_max.is_finite() && d_max > 0.0
+            });
 
     let mut f = cam.focal_lengths().0;
     let mut k1 = match cam.model {
@@ -1233,10 +1240,11 @@ fn bundle_adjust_staged(
         } => radial_distortion_k1,
         _ => 0.0,
     };
-    let mut bspline: Vec<f64> = match &cam.model {
-        CameraModel::SfmtoolFisheye { bspline, .. } => bspline.clone(),
-        _ => Vec::new(),
-    };
+    let mut bspline: Vec<f64> = cam
+        .model
+        .radial_spline()
+        .map(|(bspline, _, _)| bspline.to_vec())
+        .unwrap_or_default();
 
     for (rnd, stage) in schedule.iter().enumerate() {
         let cam_now = if opt_bspline {
