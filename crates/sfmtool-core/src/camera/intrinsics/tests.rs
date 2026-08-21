@@ -1,5 +1,9 @@
+use std::collections::BTreeMap;
+
+use super::registry::MODEL_COUNT;
 use super::*;
 use approx::assert_relative_eq;
+use sfmr_format::SfmrCamera;
 
 // -----------------------------------------------------------------------
 // Helper: build test instances for each model
@@ -531,6 +535,265 @@ fn sfmr_camera_round_trip_all_models() {
             restored,
             "round-trip mismatch for {}",
             cam.model_name()
+        );
+    }
+}
+
+// -----------------------------------------------------------------------
+// The registry: every variant registered, and every name pinned
+// -----------------------------------------------------------------------
+
+/// Every registered model's name, with the exact parameter-name set it
+/// writes, in `BTreeMap` (lexicographic) order.
+///
+/// Deliberately hand-written, and deliberately not derived from the registry.
+/// Both serialization directions now take their keys from one field
+/// identifier, so renaming a field renames the on-disk key on *both* sides at
+/// once and every round-trip assertion still passes. This table is the only
+/// thing that would notice — the same hazard, and the same remedy, as
+/// `entry_names_are_pinned` in the format crates.
+///
+/// The two sfmtool spline models have variable-length parameter lists; their
+/// entries below pin the eight-coefficient cameras `sfmtool_fisheye()` and
+/// `sfmtool_pinhole()` build.
+const GOLDEN_MODEL_PARAMETERS: &[(&str, &[&str])] = &[
+    (
+        "PINHOLE",
+        &[
+            "focal_length_x",
+            "focal_length_y",
+            "principal_point_x",
+            "principal_point_y",
+        ],
+    ),
+    (
+        "SIMPLE_PINHOLE",
+        &["focal_length", "principal_point_x", "principal_point_y"],
+    ),
+    (
+        "SIMPLE_RADIAL",
+        &[
+            "focal_length",
+            "principal_point_x",
+            "principal_point_y",
+            "radial_distortion_k1",
+        ],
+    ),
+    (
+        "RADIAL",
+        &[
+            "focal_length",
+            "principal_point_x",
+            "principal_point_y",
+            "radial_distortion_k1",
+            "radial_distortion_k2",
+        ],
+    ),
+    (
+        "OPENCV",
+        &[
+            "focal_length_x",
+            "focal_length_y",
+            "principal_point_x",
+            "principal_point_y",
+            "radial_distortion_k1",
+            "radial_distortion_k2",
+            "tangential_distortion_p1",
+            "tangential_distortion_p2",
+        ],
+    ),
+    (
+        "OPENCV_FISHEYE",
+        &[
+            "focal_length_x",
+            "focal_length_y",
+            "principal_point_x",
+            "principal_point_y",
+            "radial_distortion_k1",
+            "radial_distortion_k2",
+            "radial_distortion_k3",
+            "radial_distortion_k4",
+        ],
+    ),
+    (
+        "SIMPLE_RADIAL_FISHEYE",
+        &[
+            "focal_length",
+            "principal_point_x",
+            "principal_point_y",
+            "radial_distortion_k1",
+        ],
+    ),
+    (
+        "RADIAL_FISHEYE",
+        &[
+            "focal_length",
+            "principal_point_x",
+            "principal_point_y",
+            "radial_distortion_k1",
+            "radial_distortion_k2",
+        ],
+    ),
+    (
+        "THIN_PRISM_FISHEYE",
+        &[
+            "focal_length_x",
+            "focal_length_y",
+            "principal_point_x",
+            "principal_point_y",
+            "radial_distortion_k1",
+            "radial_distortion_k2",
+            "radial_distortion_k3",
+            "radial_distortion_k4",
+            "tangential_distortion_p1",
+            "tangential_distortion_p2",
+            "thin_prism_sx1",
+            "thin_prism_sy1",
+        ],
+    ),
+    (
+        "RAD_TAN_THIN_PRISM_FISHEYE",
+        &[
+            "focal_length_x",
+            "focal_length_y",
+            "principal_point_x",
+            "principal_point_y",
+            "radial_distortion_k0",
+            "radial_distortion_k1",
+            "radial_distortion_k2",
+            "radial_distortion_k3",
+            "radial_distortion_k4",
+            "radial_distortion_k5",
+            "tangential_distortion_p0",
+            "tangential_distortion_p1",
+            "thin_prism_s0",
+            "thin_prism_s1",
+            "thin_prism_s2",
+            "thin_prism_s3",
+        ],
+    ),
+    (
+        "FULL_OPENCV",
+        &[
+            "focal_length_x",
+            "focal_length_y",
+            "principal_point_x",
+            "principal_point_y",
+            "radial_distortion_k1",
+            "radial_distortion_k2",
+            "radial_distortion_k3",
+            "radial_distortion_k4",
+            "radial_distortion_k5",
+            "radial_distortion_k6",
+            "tangential_distortion_p1",
+            "tangential_distortion_p2",
+        ],
+    ),
+    (
+        "EQUIRECTANGULAR",
+        &[
+            "focal_length_x",
+            "focal_length_y",
+            "principal_point_x",
+            "principal_point_y",
+        ],
+    ),
+    (
+        "EQUIDISTANT_FISHEYE",
+        &["focal_length", "principal_point_x", "principal_point_y"],
+    ),
+    (
+        "SFMTOOL_FISHEYE",
+        &[
+            "bspline_c0",
+            "bspline_c1",
+            "bspline_c2",
+            "bspline_c3",
+            "bspline_c4",
+            "bspline_c5",
+            "bspline_c6",
+            "bspline_c7",
+            "bspline_coeff_count",
+            "bspline_theta_max",
+            "focal_length",
+            "principal_point_x",
+            "principal_point_y",
+        ],
+    ),
+    (
+        "SFMTOOL_PINHOLE",
+        &[
+            "bspline_c0",
+            "bspline_c1",
+            "bspline_c2",
+            "bspline_c3",
+            "bspline_c4",
+            "bspline_c5",
+            "bspline_c6",
+            "bspline_c7",
+            "bspline_coeff_count",
+            "bspline_rho_max",
+            "focal_length",
+            "principal_point_x",
+            "principal_point_y",
+        ],
+    ),
+];
+
+/// The fixture corpus covers every registered model, exactly once.
+///
+/// The compiler already forces a new `CameraModel` variant into the registry
+/// (`model_name` and `fixed_arity_params` go non-exhaustive otherwise). This
+/// closes the remaining half: a registered model that nothing here exercises.
+#[test]
+fn all_cameras_covers_every_registered_model() {
+    let cameras = all_cameras();
+    assert_eq!(
+        cameras.len(),
+        MODEL_COUNT,
+        "all_cameras() has {} entries but the registry holds {MODEL_COUNT} models — \
+         a new camera model needs a fixture here and an entry in \
+         GOLDEN_MODEL_PARAMETERS",
+        cameras.len()
+    );
+
+    let mut names: Vec<&str> = cameras.iter().map(|c| c.model_name()).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(
+        names.len(),
+        MODEL_COUNT,
+        "all_cameras() exercises the same model twice and misses another"
+    );
+}
+
+/// Model names and parameter names are what they were, for every model.
+#[test]
+fn model_and_parameter_names_are_pinned() {
+    assert_eq!(
+        GOLDEN_MODEL_PARAMETERS.len(),
+        MODEL_COUNT,
+        "GOLDEN_MODEL_PARAMETERS is missing a registered model"
+    );
+
+    for cam in all_cameras() {
+        let name = cam.model_name();
+        let (_, expected) = GOLDEN_MODEL_PARAMETERS
+            .iter()
+            .find(|(golden, _)| *golden == name)
+            .unwrap_or_else(|| panic!("model '{name}' is not pinned in GOLDEN_MODEL_PARAMETERS"));
+
+        let sfmr: SfmrCamera = SfmrCamera::from(&cam);
+        assert_eq!(
+            sfmr.model, name,
+            "SfmrCamera.model disagrees with CameraModel::model_name()"
+        );
+
+        let written: Vec<&str> = sfmr.parameters.keys().map(String::as_str).collect();
+        assert_eq!(
+            written, *expected,
+            "parameter names for '{name}' changed — if this is deliberate it is an \
+             on-disk format change, not a rename"
         );
     }
 }

@@ -220,8 +220,15 @@ The zero-spline base is `SIMPLE_PINHOLE`, the one-focal pinhole.
 ## Serialization
 
 `SfmrCamera` stores the parameters under the names listed in
-[Parameters](#parameters). The `.sfmr` container is pass-through for camera
-parameters (the format stores whatever `parameters` map the model writes), so
+[Parameters](#parameters). Because the parameter list is variable-length, these
+models are registered as `custom` in the camera model registry — their
+serialization is hand-written and intercepts the conversion before the
+fixed-arity table is reached, which is what keeps the validation below out of a
+generated lookup. See
+[../core/camera-model-registry.md](../core/camera-model-registry.md).
+
+The `.sfmr` container is pass-through for camera parameters
+(the format stores whatever `parameters` map the model writes), so
 the variable-length spline needs no format-side registration. See
 [sfmr-file-format.md](sfmr-file-format.md).
 

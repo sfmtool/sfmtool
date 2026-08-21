@@ -360,6 +360,80 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
 ## Rust — `sfmtool-core` (camera)
 
 **372 lines of hand-mirrored `CameraModel` ↔ `SfmrCamera` mapping in `intrinsics.rs`**
+> _Status (2026-08-19): Done, via a registry rather than the proposed
+> `params()`/`from_params()` pair. Both impls and `model_name` now derive from
+> one `camera_models!` invocation in a new
+> `camera/intrinsics/registry.rs`; `intrinsics.rs` 1271 → 719, and the two
+> files together are 1122. Specced in
+> `specs/core/camera-model-registry.md`, cross-linked from the two format
+> specs._
+>
+> _**The finding had gone stale in the direction it predicted.** It measured
+> 913 lines and 372 in the two impls; by the time this landed the file was
+> **1271** with ~537 in the conversion section, and `"principal_point_x"` had
+> gone 24 → 28. EQUIDISTANT_FISHEYE (#286), SFMTOOL_FISHEYE (#301) and
+> SFMTOOL_PINHOLE (#302) each paid the two-match-arms tax in between — the last
+> of them while this work was in flight. The enum is **15** variants, not 13._
+>
+> _The mechanism turns on an invariant the report did not name and which was
+> verified mechanically over both directions before relying on it: **the struct
+> field name is byte-identical to the serialized parameter name**, with no
+> exception in any variant. So the keys need not be spelled as strings at all —
+> `stringify!` on the field identifier recovers them. The five names counted in
+> the finding drop from 28/28/18/14/14 string literals to 2/2/0/1/0, and the
+> survivors are all in the one hand-written arm below._
+>
+> _**Correction to the proposed fix.** "One `params()` per variant" would have
+> flattened the two sfmtool spline models, which are not boilerplate: their
+> parameter lists are variable-length and their read path carries ~40 lines of
+> real validation (declared count vs. stray keys, the `MIN_BSPLINE_COEFFS`
+> floor, the domain end). Both are registered as `custom` — name and
+> `MODEL_COUNT` only — and intercept both conversions ahead of the generated
+> table. The generated code carries an `unreachable!` naming that interception
+> rather than a `_` arm, per the `polar.rs` precedent._
+>
+> _Four guards, each **verified by deliberately breaking it**, not assumed:
+> an unregistered new variant is `E0004` non-exhaustive (in `model_name`,
+> `fixed_arity_params` and four other accessors); a registry entry omitting a
+> field is `E0063`; one naming a field the variant lacks is `E0026`/`E0559`;
+> and a **coordinated** rename of field + registry entry — which compiles, and
+> which every round-trip test still passes, because both sides now share the
+> one identifier — fails the new hand-written `GOLDEN_MODEL_PARAMETERS` pin.
+> That last one is the same hazard `entries.rs` hit in the format crates
+> (centralizing a name removes the round-trip's ability to catch a typo), and
+> it is the same remedy; the earlier finding's lesson transferred directly._
+>
+> _One more hand-maintained list the finding did not mention, now closed:
+> `intrinsics/tests.rs`'s `all_cameras()` was a literal `vec![…]` feeding the
+> round-trip test, so a registered model could be left untested with everything
+> green. It now asserts its own length against `MODEL_COUNT`._
+>
+> _**The guards were then exercised for real, not just in probes.** Rebasing
+> this onto SFMTOOL_PINHOLE (#302) landed a fifteenth variant written against
+> the old two-match arrangement. It would not compile until it was registered,
+> and would not pass until it was pinned in `GOLDEN_MODEL_PARAMETERS` — the
+> arrangement holding on a change it did not anticipate, one day after it was
+> written. #302 had meanwhile factored the fisheye's spline reader into a
+> `get_bspline(…, domain_end_key)` shared by both models; that generalization
+> is kept and now lives in the registry beside the `custom` block it serves._
+>
+> _Verification: `cargo fmt` no-op, `cargo clippy --workspace --all-targets`
+> clean, `pixi run doc` clean (it caught a broken intra-doc link both in the new
+> module doc and, after the rebase, in #302's `SfmrCamera` references, which
+> resolved only through the import this change moved — the gate earning its
+> keep twice), workspace `cargo test` green (sfmtool-core lib 1376), and 2170
+> passed / 1 skipped in the Python suite after rebuilding the extension._
+>
+> _Unrelated tooling drift found while doing this, worth its own fix:
+> **every task the `test` feature defines is ambiguous when invoked as
+> `AGENTS.md` documents it.** `[feature.test.tasks]` is pulled in by both the
+> `test` and `test-ci` environments (`pixi.toml:134,138`), so `pixi run test`,
+> `pixi run test-rust` and `pixi run maturin develop --release` all fail with
+> "the task 'X' is ambiguous" and need `pixi run --environment test …`.
+> `AGENTS.md` knows `test-ci` exists — it describes it in the Environments
+> paragraph — but its task table was never updated for the ambiguity that
+> adding it introduced. Note the failure is quiet under a pipeline: `pixi run
+> test 2>&1 | tail` exits 0._
 - Location: `crates/sfmtool-core/src/camera/intrinsics.rs` (913)
 - Problem: Unchanged since the last snapshot. The first half (23–513) is a coherent
   13-variant enum plus accessors. The second half is string-keyed serialization:

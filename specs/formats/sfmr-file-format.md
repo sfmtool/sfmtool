@@ -450,6 +450,11 @@ Array of camera intrinsic parameters:
 
 The "pycolmap" column shows the corresponding short parameter names from COLMAP/pycolmap for reference. The parameter order in the JSON `parameters` object matches the pycolmap parameter array order. Models with a single `focal_length` use the same value for both fx and fy. All fisheye models use equidistant projection.
 
+This table is the authoritative human-readable list. On the code side each row
+is declared once, in the camera model registry, from which both directions of
+the `SfmrCamera` conversion are generated — see
+[../core/camera-model-registry.md](../core/camera-model-registry.md).
+
 `EQUIRECTANGULAR` is an sfmtool model for panoramic
 imagery, used by the spherical-tile rig pipeline: longitude and latitude map
 linearly to pixels, focal lengths are in pixels per radian, and there are no
