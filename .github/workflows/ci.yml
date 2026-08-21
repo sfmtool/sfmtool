@@ -238,7 +238,11 @@ jobs:
           sampler=$!
           trap 'kill "$sampler" 2>/dev/null || true' EXIT
           set +e
-          pixi run -e test-ci coverage-all
+          # The script, not the `coverage-all` task: that task is bound to the
+          # `test` environment alone so the bare `pixi run coverage-all` stays
+          # unambiguous locally (see the task-feature note in pixi.toml).
+          # `test-ci` carries every dependency it needs, just not the name.
+          pixi run -e test-ci bash scripts/coverage.sh
           rc=$?
           set -e
           kill "$sampler" 2>/dev/null || true
@@ -333,7 +337,12 @@ jobs:
         # kernels ~10-15x slower, which both inflates test time and makes any
         # timing comparison (e.g. sfmtool vs COLMAP) meaningless. Tests exercise
         # the same optimized build that ships.
-        run: pixi run -e test-ci maturin develop --release
+        # -x runs the executable without resolving Pixi tasks: `maturin` is also
+        # a task name, bound to the `test` environment so the bare
+        # `pixi run maturin …` stays unambiguous locally (see pixi.toml). Without
+        # -x, Pixi finds the name defined in another environment and refuses
+        # rather than falling back to the binary that is right there on PATH.
+        run: pixi run -x -e test-ci maturin develop --release
 
       - name: Rust tests
         run: pixi run -e test-ci cargo test --workspace --exclude sfm-explorer

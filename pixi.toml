@@ -62,7 +62,16 @@ python = ">=3.14.4,<3.15"
 [feature.lint.pypi-dependencies]
 ruff = ">=0.16.1, <0.17"
 
-[feature.lint.tasks]
+# Task tables live in their own features, separate from the dependencies they
+# use, and each such feature belongs to EXACTLY ONE environment. `pixi run
+# <task>` resolves a task by finding the environments that provide it: if that
+# is one environment, or if `default` is among them, it runs; if two or more
+# provide it and `default` does not, it refuses as ambiguous. The `lint` deps
+# below are shared by `lint`, `test` and `test-ci` — so binding these two task
+# names to the same feature would make `pixi run fmt` ambiguous three ways.
+# Keep tasks and the deps they need in separate features whenever more than one
+# environment wants the deps.
+[feature.lint-tasks.tasks]
 fmt = "ruff format src tests"
 check = "ruff check src tests"
 
@@ -88,7 +97,12 @@ pytest-xdist = ">=3.8, <4"
 # shell script, etc.
 PYTHONIOENCODING = "utf-8"
 
-[feature.test.tasks]
+# Bound to the `test` environment only, so the bare `pixi run test` works — see
+# the note on `[feature.lint-tasks.tasks]`. `test-ci` shares every dependency
+# these need but not the task names, and calls the underlying commands directly
+# (`pixi run -e test-ci pytest …`, `… maturin develop --release`); a task name
+# it also carried would put `test` and `test-ci` back in conflict.
+[feature.test-tasks.tasks]
 test = "pytest -n auto"
 test-rust = "cargo llvm-cov --workspace --exclude sfmtool-py --exclude sfm-explorer"
 coverage = "cargo llvm-cov --workspace --lcov --output-path lcov.info"
@@ -129,9 +143,9 @@ pycolmap = { version = ">=4.0.3,<5", build = "cuda*" }
 
 [environments]
 default = { features = ["runtime", "editable", "cpu"], solve-group = "default" }
-lint = { features = ["lint", "cpu"], solve-group = "default" }
+lint = { features = ["lint", "lint-tasks", "cpu"], solve-group = "default" }
 ui = { features = ["cpu"], solve-group = "default" }
-test = { features = ["runtime", "editable", "lint", "test", "cpu"], solve-group = "default" }
+test = { features = ["runtime", "editable", "lint", "test", "test-tasks", "cpu"], solve-group = "default" }
 # Same packages as `test` but without the editable self-install, so `pixi
 # install` does no Rust build. CI installs this and compiles the extension
 # explicitly with `maturin develop --release` (test-os) / coverage.sh (test-linux).
