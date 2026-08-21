@@ -182,6 +182,81 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
 > `−0.0` before `+0.0`, which can reorder two features whose angles are opposite
 > zeros and therefore change which matches come out. That needs its own measured
 > decision._
+>
+> _Status (2026-08-20): **Done** — the `sweep.rs` half closes the finding. Both
+> remaining pairs are merged into one `sweep_match_one_way` and one
+> `mutual_best_match_sweep_inner`, following the shape `polar.rs` established:
+> the filter is an `Option` parameter, the candidate set and the index that maps
+> a match back through it are decided by the same `match` arm, and the four
+> public entry points survive as thin wrappers (`sfmtool-py/src/matching/sweep.rs`
+> binds all four). `sweep.rs` 451 → 519 lines — the one place this half differs
+> from the polar one, which shrank 844 → 711 (722 after #299; this change takes
+> the last 11 with `gather_rows`). Polar had two public entry points; sweep has
+> four, and each keeps its full parameter doc, so the file grows even though the
+> duplication is what left. Measured brace-to-brace rather than estimated: the
+> four old function bodies were 54 + 62 + 100 + 77 = **293 lines**, of which
+> `diff` puts **107 per copy** in common between the twins; the two merged
+> private bodies are **189**. The finding was duplication, not size, and one
+> window slide, one filter block and one index remap now exist once each. (The
+> private inner functions do **not** re-document the parameters — a third copy
+> of the parameter list would be the same finding in a different medium; they
+> point at the public wrappers.)_
+>
+> _The carried-forward `gather_rows`/`gather_2d` item is done in the same change,
+> and deliberately not by making either file's version win: both were replaced by
+> one `feature_match/gather.rs` taking the row indices as an iterator, so the
+> polar sweep composes its two index levels (`sort_idx.iter().map(|&si|
+> valid[si])`) at the call site instead of the helper re-deriving a composition
+> only one of its two callers needs. Five tests cover it, including that two
+> strides gathered through one order agree — the invariant that lets a window
+> index name a descriptor, a position and an affine shape interchangeably._
+>
+> _Verified equivalent, not merely green, by the same method as the polar half: a
+> scratch differential harness dumped every match from all four public entry
+> points, run against the pre-refactor code via `git stash` and then against the
+> merged code. **Byte-identical** over 4,000 randomized configurations — feature
+> counts drawn from 0–200, `desc_len` 4 and 128, window sizes from {1, 2, 5, 30},
+> seven thresholds, sorted and unsorted input, Y-clustered layouts, and a
+> continuous affine spread from near-identical shapes to wildly different ones.
+> 68,938 plain one-way matches, 15,242 geometric, 8,779 plain mutual, 1,791
+> geometric; the filter changed the one-way answer in 1,745 of the 4,000 cases
+> and the mutual answer in 1,686._
+>
+> _Two honest limits on that number, both found by review rather than by the
+> author. **2,207 of the 4,000 cases (55%) produced no matches at all** from any
+> entry point, so the comparison there is vacuous — the effective corpus is
+> ~1,793 cases. Two of the seven thresholds (`0.0` and `1.0`) are dead in every
+> single case, 29% of the corpus, and the "filter admits the whole window"
+> extreme the spread was meant to reach occurred in only 47 of 4,000 (that end is
+> covered by a unit test instead). A second, independent harness — different RNG,
+> old and new vendored into **one process** rather than compared across a stash,
+> and panics normalized so a panic-vs-return counts as a divergence — then ran
+> 15,000 cases over wider axes (`desc_len` 0–128, `window` 0–200, NaN/±inf/1e307
+> coordinates, thresholds including NaN and negatives, descriptor arrays given
+> extra rows so the derived `desc_len` diverges from the caller's, aliased
+> image-1/image-2 buffers) plus 11 hand-built edge cases: **0 divergences**, with
+> 6,122 cases exercising the geometric comparison and 583 panicking identically
+> in both._
+>
+> _`sweep/tests.rs` 13 → 16. Two of the three cover plain/geometric agreement
+> under a permissive filter, and that a filtered window reports the survivor's
+> index in the sorted array rather than its offset among the survivors. The third
+> exists because **mutation testing found a hole the first two did not close**:
+> `SortedGeometry::backward` must reverse both the geometry and the affine
+> arrays, and neither dropping `geom.swapped()` nor un-swapping the affines
+> failed a single one of `sfmtool-core`'s 1,383 lib tests. The one pre-existing
+> bidirectional geometric test is symmetric in every input (equal affines, equal
+> cameras, `n1 == n2`), so both swaps are no-ops in it. The swaps predate this
+> refactor — they were written inline at the two call sites — but lifting them
+> into a named helper made them look verified when they were not. The new test
+> uses `n1 ≠ n2`, per-side shapes, and a relative roll **about the optical axis**:
+> a rotation about X or Y gives a near-symmetric `r_2d`, whose transpose is
+> nearly itself, so the geometry swap would be undetectable no matter what else
+> the fixture did. Both mutations now fail it._
+>
+> _Still carried forward, untouched: `angular_order`'s
+> `partial_cmp().unwrap_or(Equal)`, for the reason given above — it is a
+> numerical decision, not a hygiene one._
 - Location: `crates/sfmtool-core/src/features/feature_match/polar.rs` (844),
   `sweep.rs` (451)
 - Problem: Five pairs implement the same algorithm twice, differing only by whether a
@@ -1205,6 +1280,15 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
   and re-exported.
 
 **`scripts/`: 9 of 20 files (2,309 lines, 52%) have zero inbound references**
+> _Status (2026-08-20): **Not done — declined, and not to be re-reported.**
+> Author's decision, on this finding's fourth appearance: the nine unreferenced
+> scripts stay as they are, and no `scripts/README.md` index is added. They are
+> dev tools kept deliberately; "nothing else in the repo names this file" is the
+> wrong test for that directory, which is why the measurement keeps coming back
+> and keeps not being actionable. Future `audit-hygiene` runs should not raise
+> inbound-reference counts under `scripts/` as a finding — the decision is
+> recorded here, so a fresh snapshot re-raising it is re-litigating a settled
+> call, not reporting drift._
 - Location: `scripts/`
 - Problem: Re-grepped every filename across the repo excluding `.git`, `target`,
   `.pixi`, `pixi.lock`, `reports/` and `scripts/` itself (the last two matter — the

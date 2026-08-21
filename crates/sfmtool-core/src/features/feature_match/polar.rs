@@ -27,6 +27,7 @@ use nalgebra::Matrix3;
 use crate::camera::epipolar;
 
 use super::descriptor::find_best_match_contiguous;
+use super::gather::gather_rows;
 use super::geometric_filter::{
     two_stage_geometric_filter, GeometricFilterConfig, StereoPairGeometry,
 };
@@ -251,26 +252,6 @@ impl Wraparound {
     }
 }
 
-/// Gather a payload array of `stride` elements per feature into angular order.
-///
-/// Composes two levels of indirection: `sort_idx` gives the angular ordering,
-/// `valid_indices` maps those back to original feature indices (some features
-/// may have been filtered by `min_radius`). The result is flat and contiguous,
-/// ready for the sweep matcher.
-fn gather_rows<T: Copy>(
-    rows: &[T],
-    stride: usize,
-    valid_indices: &[usize],
-    sort_idx: &[usize],
-) -> Vec<T> {
-    let mut out = Vec::with_capacity(sort_idx.len() * stride);
-    for &si in sort_idx {
-        let start = valid_indices[si] * stride;
-        out.extend_from_slice(&rows[start..start + stride]);
-    }
-    out
-}
-
 /// The extra per-feature data the geometric path needs, already in angular
 /// order: query-side positions and affines, candidate-side positions and
 /// affines, and the filter to apply.
@@ -368,8 +349,9 @@ fn polar_match_one_way(
         let query_desc = &sorted_descs1[idx1 * desc_len..(idx1 + 1) * desc_len];
 
         // The candidate set is either the whole window or the part of it the
-        // geometric filter admits. `window_offsets` is `Some` exactly when the
-        // set was narrowed, and maps a candidate back to its offset within the
+        // geometric filter admits. `window_offsets` is `Some` exactly on the
+        // geometric path — whether or not the filter actually dropped anything
+        // — and maps a candidate back to its offset within the
         // window; deciding it here, in the arm that knows, keeps it from
         // drifting out of step with the descriptors it indexes.
         let (candidate_descs, window_offsets): (&[u8], Option<&[usize]>) =
@@ -536,14 +518,22 @@ fn polar_mutual_best_match_inner(
     let sorted_theta1: Vec<f64> = sort_idx1.iter().map(|&i| theta1[i]).collect();
     let sorted_theta2: Vec<f64> = sort_idx2.iter().map(|&i| theta2_aligned[i]).collect();
 
-    let sorted_descs1 = gather_rows(descriptors1, desc_len, &valid1, &sort_idx1);
-    let sorted_descs2 = gather_rows(descriptors2, desc_len, &valid2, &sort_idx2);
+    let sorted_descs1 = gather_rows(
+        descriptors1,
+        desc_len,
+        sort_idx1.iter().map(|&si| valid1[si]),
+    );
+    let sorted_descs2 = gather_rows(
+        descriptors2,
+        desc_len,
+        sort_idx2.iter().map(|&si| valid2[si]),
+    );
 
     let sorted_geometry = geometric.map(|(affines1, affines2, geom, config)| SortedGeometry {
-        positions1: gather_rows(positions1, 2, &valid1, &sort_idx1),
-        positions2: gather_rows(positions2, 2, &valid2, &sort_idx2),
-        affines1: gather_rows(affines1, 4, &valid1, &sort_idx1),
-        affines2: gather_rows(affines2, 4, &valid2, &sort_idx2),
+        positions1: gather_rows(positions1, 2, sort_idx1.iter().map(|&si| valid1[si])),
+        positions2: gather_rows(positions2, 2, sort_idx2.iter().map(|&si| valid2[si])),
+        affines1: gather_rows(affines1, 4, sort_idx1.iter().map(|&si| valid1[si])),
+        affines2: gather_rows(affines2, 4, sort_idx2.iter().map(|&si| valid2[si])),
         geom,
         geom_swapped: geom.swapped(),
         config,

@@ -7,6 +7,7 @@
 //! search, and sort-and-sweep matching for SIFT features.
 
 pub mod descriptor;
+mod gather;
 pub mod geometric_filter;
 pub mod polar;
 pub mod sweep;
