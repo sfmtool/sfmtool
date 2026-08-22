@@ -12,6 +12,23 @@ use thiserror::Error;
 
 use sfmtool_archive_io::ArchiveIoError;
 
+/// Edge length, in pixels, of the square RGB thumbnails a `.sfmr` carries, one
+/// per image.
+///
+/// The format pins this: it is written into the archive entry's *name*
+/// (`images/thumbnails_y_x_rgb.<image_count>.<size>.<size>.3.uint8.zst`) and into the
+/// `images` section metadata as `thumbnail_size`, so a reader locates the entry
+/// by a string that embeds the size. Changing it changes the on-disk format and
+/// makes existing files unreadable — this constant exists so that the several
+/// places which must agree cannot drift apart, not because the value is
+/// adjustable.
+///
+/// These thumbnails are copied verbatim out of the per-image `.sift` files, so
+/// this must equal `sift_format::THUMBNAIL_SIZE`. The two crates are
+/// independent — neither depends on the other — so the agreement is enforced by
+/// a compile-time assertion in `sfmtool-core`, the first crate that sees both.
+pub const THUMBNAIL_SIZE: usize = 128;
+
 /// Errors that can occur when reading or writing `.sfmr` files.
 #[derive(Error, Debug)]
 pub enum SfmrError {
@@ -377,7 +394,8 @@ pub struct SfmrData {
     /// `embedded_patches` file (the direct image-identity link that substitutes
     /// for the `.sift`-mediated one); `None` in a `sift_files` file.
     pub image_file_hashes: Option<Vec<[u8; 16]>>,
-    /// `(N, 128, 128, 3)` RGB thumbnails of the source images.
+    /// `(N, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)` RGB thumbnails of the source
+    /// images (see [`THUMBNAIL_SIZE`]).
     pub thumbnails_y_x_rgb: Array4<u8>,
 
     // Points3D

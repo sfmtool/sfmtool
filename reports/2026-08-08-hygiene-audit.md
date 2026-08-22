@@ -678,6 +678,61 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
 - Effort: low
 - Risk: low — mechanical, and any mistake fails the round-trip tests at once.
 
+**The 128×128 thumbnail edge was declared in fifteen places across two languages**
+> _Promoted to a finding on 2026-08-21. It was raised on 2026-08-14 inside the
+> status block of the `sfm-explorer` thumbnail/RGBA finding — the wrong home: a
+> fact buried in another finding's status disappears when that finding closes,
+> and this one was already understated there as "four declarations" of a `.sfmr`
+> concern. Re-measured before fixing, it was fifteen sites spanning both format
+> crates, the viewer, the bindings and the Python producers._
+>
+> _Status (2026-08-21): **Done.**_
+- Location: `crates/sfmr-format/src/{types,entries,read,write}.rs`;
+  `crates/sift-format/src/{types,read,write,verify}.rs`;
+  `crates/sfm-explorer/src/scene_renderer/gpu_types.rs`;
+  `crates/sfmtool-py/src/{lib,reconstruction/clone,reconstruction/sfmr_reconstruction,io/sift}.rs`;
+  `src/sfmtool/sift/{extract_colmap,extract_opencv,extract_sfmtool,file}.py`,
+  `src/sfmtool/_undistort_images.py`
+- Problem: One fact — thumbnails are 128×128 RGB — written independently
+  fifteen times, with **no tie of any kind** between them. `.sfmr` pinned it in
+  the entry-name template, twice in `read.rs`, and twice in `write.rs` (the
+  `images` section metadata's `thumbnail_size` and the shape assert). `.sift`
+  pinned it separately in three copies of its entry-name literal
+  (`read`/`write`/`verify` — this crate never received the `entries.rs`
+  treatment the other two format crates got) plus its own shape check. The
+  viewer declared its atlas cell size a fourth time, and that one is
+  load-bearing rather than cosmetic: `upload/thumbnails.rs` uses it for the cell
+  origin, the row stride and the copy extent of data read straight out of
+  `recon.thumbnails_y_x_rgb`, so a disagreement uploads skewed rows.
+  And Python — which is where the pixels are actually *born* — resized to a
+  literal `(128, 128)` in three extractors and `_undistort_images`, then
+  validated against a literal in `sift/file.py`.
+  The two formats are not independently 128 by coincidence: `colmap/io.py`
+  reads thumbnails out of `.sift` files and writes them into `.sfmr`, so they
+  must agree, and nothing said so.
+- Fix applied: one `pub const THUMBNAIL_SIZE` per format crate, each documenting
+  that the value is pinned by the on-disk format rather than adjustable, with
+  every site in that crate deriving from it — including the entry-name templates,
+  so the name and the shape can no longer disagree. `sift-format` gains a
+  `thumbnail_entry_name()` for its three copies. The cross-format agreement is a
+  **compile-time assertion** in `sfmtool-core` (`const _: () = assert!(…)`), the
+  first crate that sees both; the viewer's atlas cell derives from the re-export
+  rather than declaring 128 again; and the constant is exported to Python as
+  `sfmtool.THUMBNAIL_SIZE`, so the producers resize to the same value the format
+  stores. Two Python tests pin the exported constant against a real `.sift`
+  round trip rather than against a literal — the one drift no Rust-side check
+  could catch, since a wrong-sized thumbnail from Python is well-formed data of
+  the wrong extent.
+- Deliberately left alone: `image_browser.rs`'s barcode and `texture.rs` read the
+  extent from the loaded array instead of the constant. That is correct for them
+  — they decode whatever a file actually carries — and #296 established it after
+  the hard-coded copy became a latent abort. The SIFT **descriptor** dimension is
+  also 128 (`descriptors.{n}.128.uint8.zst`, `(feature_count, 128)`) and is a
+  *different* fact that happens to share the value; it was not touched.
+- Effort: low
+- Risk: low — the value is unchanged, so no file's bytes move; the golden
+  entry-name tests still assert the literal strings.
+
 ---
 
 ## Rust — `sfm-explorer`
@@ -751,6 +806,12 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
 > `sfmr-format`'s `entries.rs:158`, `read.rs:200–203` and `write.rs:890`, and
 > `scene_renderer/gpu_types.rs:286` declares it a fourth time — four
 > declarations of one fact, with no compiler tie between them._
+>
+> _Status (2026-08-21): that "worth its own finding" note **is** now its own
+> finding, under "Rust — format crates" above, and is done. Recording it here
+> was the wrong home — it would have vanished when this finding closed. It was
+> also an undercount: fifteen sites, not four, once `sift-format`, the bindings
+> and the Python producers were measured._
 - Location: `crates/sfm-explorer/src/image_browser.rs:757–773`,
   `point_track_detail/table.rs:362–384`, `image_detail/mod.rs` (691)
 - Problem: Re-verified at HEAD; the previous snapshot's `app.rs` half of this finding

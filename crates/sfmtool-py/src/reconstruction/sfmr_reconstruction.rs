@@ -509,7 +509,8 @@ impl PySfmrReconstruction {
         PyArray1::from_vec(py, self.inner.observation_counts.clone())
     }
 
-    /// RGB thumbnails for each image, shape `(N, 128, 128, 3)`.
+    /// RGB thumbnails for each image, shape
+    /// `(N, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)`.
     ///
     /// Returns a read-only numpy view into the Rust-owned data (zero-copy).
     #[getter]

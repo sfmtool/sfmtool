@@ -168,13 +168,13 @@ fn read_sift_from_archive<R: Read + Seek>(
         )?
     };
 
-    // Thumbnail: (128, 128, 3) u8 — always read in full regardless of max_count
+    // Thumbnail: always read in full regardless of max_count
     let thumb_vec: Vec<u8> = read_binary_array(
         archive,
-        "thumbnail_y_x_rgb.128.128.3.uint8.zst",
-        128 * 128 * 3,
+        &thumbnail_entry_name(),
+        THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3,
     )?;
-    let thumbnail_y_x_rgb = Array3::from_shape_vec((128, 128, 3), thumb_vec)
+    let thumbnail_y_x_rgb = Array3::from_shape_vec((THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3), thumb_vec)
         .map_err(|e| SiftError::ShapeMismatch(format!("thumbnail_y_x_rgb reshape: {e}")))?;
 
     Ok(SiftData {

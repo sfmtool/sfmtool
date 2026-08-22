@@ -8,6 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from sfmtool._sfmtool import THUMBNAIL_SIZE
 from sfmtool.sift.file import SiftExtractionError, feature_size, xxh128_of_file
 
 __all__ = [
@@ -150,7 +151,9 @@ def extract_sift_with_opencv(
             "feature_count": len(keypoints),
         }
 
-        thumbnail = cv2.resize(image, (128, 128), interpolation=cv2.INTER_AREA)
+        thumbnail = cv2.resize(
+            image, (THUMBNAIL_SIZE, THUMBNAIL_SIZE), interpolation=cv2.INTER_AREA
+        )
         thumbnail = cv2.cvtColor(thumbnail, cv2.COLOR_BGR2RGB)
 
         return (

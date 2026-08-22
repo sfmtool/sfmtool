@@ -262,7 +262,14 @@ consumers (`.sfmr` files, viewers) can display previews without re-reading the s
   bilinear when downscaling. All three extraction backends (colmap, opencv, sfmtool) use it.
 
 When writing a `.sfmr` file, the thumbnail is copied directly from the `.sift` file rather than
-re-reading and re-downscaling the source image.
+re-reading and re-downscaling the source image. Because it is copied rather than regenerated, the
+`.sfmr` thumbnail edge must equal this one; see the `images/thumbnails_y_x_rgb` section of
+[`sfmr-file-format.md`](sfmr-file-format.md).
+
+In this repository the edge has a single declaration, `sift_format::THUMBNAIL_SIZE`, from which the
+entry name above, the read path, the write path and the shape check are all derived. Its equality
+with `sfmr_format::THUMBNAIL_SIZE` is enforced by a compile-time assertion in `sfmtool-core`, and the
+value is exported to Python as `sfmtool.THUMBNAIL_SIZE` for the extractors that produce the pixels.
 
 ## Incremental descriptor extraction (version 2)
 

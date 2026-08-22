@@ -288,7 +288,12 @@ pub(super) struct ImageQuadUniforms {
 /// native aspect ratio. The distortion is compensated on the GPU: each
 /// frustum quad has the correct aspect ratio from camera intrinsics, and the
 /// UV 0→1 mapping stretches the square texture back to the original proportions.
-pub(super) const THUMBNAIL_SIZE: u32 = 128;
+/// The value is the `.sfmr` format's own [`sfmtool_core::THUMBNAIL_SIZE`]: the
+/// atlas cell holds a thumbnail read straight out of the reconstruction, and
+/// [`super::upload`] uses this same constant for the cell origin, the row
+/// stride and the copy extent. A cell that disagreed with the stored extent
+/// would upload skewed rows, so it is derived rather than declared again.
+pub(super) const THUMBNAIL_SIZE: u32 = sfmtool_core::THUMBNAIL_SIZE as u32;
 
 /// Maximum number of thumbnail columns per atlas page.
 ///

@@ -16,6 +16,7 @@ import numpy as np
 import xxhash
 from deadline.job_attachments.api import summarize_path_list
 
+from sfmtool._sfmtool import THUMBNAIL_SIZE
 from sfmtool._sfmtool.io import (
     SiftWriteQueue as _SiftWriteQueue,
     read_sift as _core_read_sift,
@@ -293,7 +294,10 @@ class SiftReader:
         return data["positions_xy"], data["affine_shapes"]
 
     def read_thumbnail(self):
-        """Read the 128x128 RGB thumbnail from the .sift file."""
+        """Read the square RGB thumbnail from the .sift file.
+
+        Its edge is `THUMBNAIL_SIZE`, pinned by the format.
+        """
         return self._ensure_data()["thumbnail_y_x_rgb"]
 
 
@@ -368,9 +372,10 @@ def _validate_sift_write(
         )
 
     thumbnail = np.asarray(thumbnail)
-    if thumbnail.shape != (128, 128, 3):
+    if thumbnail.shape != (THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3):
         raise ValueError(
-            f"Thumbnail shape {thumbnail.shape} does not match required shape (128, 128, 3)"
+            f"Thumbnail shape {thumbnail.shape} does not match required shape "
+            f"({THUMBNAIL_SIZE}, {THUMBNAIL_SIZE}, 3)"
         )
     if thumbnail.dtype != np.uint8:
         raise ValueError(

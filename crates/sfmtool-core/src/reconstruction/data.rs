@@ -209,7 +209,8 @@ pub struct SfmrReconstruction {
     pub tracks: Vec<TrackObservation>,
     /// Number of observations per 3D point.
     pub observation_counts: Vec<u32>,
-    /// `(N, 128, 128, 3)` RGB thumbnails of the source images.
+    /// `(N, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)` RGB thumbnails of the source
+    /// images (see [`crate::THUMBNAIL_SIZE`]).
     pub thumbnails_y_x_rgb: Array4<u8>,
     /// Per-image depth statistics.
     pub depth_statistics: DepthStatistics,

@@ -709,3 +709,58 @@ def test_draw_sift_features_missing_sift(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="SIFT file not found"):
         draw_sift_features(str(image_path), str(tmp_path / "out.png"))
+
+
+# ---------------------------------------------------------------------------
+# thumbnail size constant
+# ---------------------------------------------------------------------------
+
+
+def test_thumbnail_size_is_what_the_format_stores(sample_sift_data, tmp_path):
+    """`THUMBNAIL_SIZE` is the edge a written .sift actually carries.
+
+    The constant crosses a language boundary: Rust pins it in the format, and
+    Python's extractors resize to it. A stale value on either side would produce
+    correctly-shaped-looking data of the wrong size, which no Rust-side check
+    could catch, so this asserts the exported value against a real round trip
+    rather than against a literal.
+    """
+    from sfmtool import THUMBNAIL_SIZE
+
+    feature_tool_metadata, metadata, position, affine_shape, descriptor, thumbnail = (
+        sample_sift_data
+    )
+    sift_filename = tmp_path / "thumb.sift"
+    write_sift(
+        sift_filename,
+        feature_tool_metadata,
+        metadata,
+        position,
+        affine_shape,
+        descriptor,
+        thumbnail,
+    )
+
+    with SiftReader(sift_filename) as reader:
+        assert reader.read_thumbnail().shape == (THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)
+
+
+def test_thumbnail_rejects_a_size_other_than_the_constant(sample_sift_data, tmp_path):
+    """A thumbnail of any other edge is refused rather than silently stored."""
+    from sfmtool import THUMBNAIL_SIZE
+
+    feature_tool_metadata, metadata, position, affine_shape, descriptor, _ = (
+        sample_sift_data
+    )
+    wrong = np.zeros((THUMBNAIL_SIZE // 2, THUMBNAIL_SIZE, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="Thumbnail shape"):
+        write_sift(
+            tmp_path / "wrong.sift",
+            feature_tool_metadata,
+            metadata,
+            position,
+            affine_shape,
+            descriptor,
+            wrong,
+        )

@@ -87,7 +87,7 @@ pub fn verify_sift(path: &Path) -> Result<(bool, Vec<String>), SiftError> {
     content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&desc_raw).to_be_bytes());
 
     // 6. thumbnail_y_x_rgb
-    let thumb_raw = read_zst_entry(&mut archive, "thumbnail_y_x_rgb.128.128.3.uint8.zst")?;
+    let thumb_raw = read_zst_entry(&mut archive, &thumbnail_entry_name())?;
     content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&thumb_raw).to_be_bytes());
 
     let content_hash = xxhash_rust::xxh3::xxh3_128(&content_hash_digests);

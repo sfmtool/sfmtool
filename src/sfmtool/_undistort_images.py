@@ -20,6 +20,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from ._sfmtool import THUMBNAIL_SIZE
 from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.flow import WarpMap
 
@@ -346,8 +347,10 @@ def undistort_reconstruction_images(
         if not success:
             raise RuntimeError(f"Failed to save undistorted image: {output_image_path}")
 
-        # Step 3: Generate thumbnail from undistorted image (BGR -> RGB, 128x128)
-        thumb_bgr = cv2.resize(undistorted, (128, 128), interpolation=cv2.INTER_AREA)
+        # Step 3: Generate the thumbnail from the undistorted image (BGR -> RGB)
+        thumb_bgr = cv2.resize(
+            undistorted, (THUMBNAIL_SIZE, THUMBNAIL_SIZE), interpolation=cv2.INTER_AREA
+        )
         thumbnail_rgb = cv2.cvtColor(thumb_bgr, cv2.COLOR_BGR2RGB)
         thumbnails.append(thumbnail_rgb)
 

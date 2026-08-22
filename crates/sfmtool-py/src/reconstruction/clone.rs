@@ -450,7 +450,10 @@ pub(crate) fn clone_with_changes(
                     "thumbnails_y_x_rgb",
                     numpy::PyReadonlyArray4<u8>,
                     "a 4D contiguous ndarray",
-                    "uint8 and shape (N, 128, 128, 3)"
+                    format!(
+                        "uint8 and shape (N, {s}, {s}, 3)",
+                        s = sfmtool_core::THUMBNAIL_SIZE
+                    )
                 )?;
                 recon.thumbnails_y_x_rgb = arr.as_array().as_standard_layout().into_owned();
             }

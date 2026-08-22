@@ -360,7 +360,8 @@ pub fn write_sfmr_with_options(
     }
 
     // images/metadata.json
-    let images_meta = serde_json::json!({"image_count": image_count, "thumbnail_size": 128});
+    let images_meta =
+        serde_json::json!({"image_count": image_count, "thumbnail_size": THUMBNAIL_SIZE});
     let bytes = write_json_entry(
         &mut zip,
         entries::images_metadata(),
@@ -887,9 +888,9 @@ fn validate_dimensions_with(
         );
     }
     check!(
-        data.thumbnails_y_x_rgb.shape() == [image_count, 128, 128, 3],
+        data.thumbnails_y_x_rgb.shape() == [image_count, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3],
         format!(
-            "thumbnails_y_x_rgb shape {:?} != [{image_count}, 128, 128, 3]",
+            "thumbnails_y_x_rgb shape {:?} != [{image_count}, {THUMBNAIL_SIZE}, {THUMBNAIL_SIZE}, 3]",
             data.thumbnails_y_x_rgb.shape()
         )
     );

@@ -25,6 +25,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from sfmtool._sfmtool import THUMBNAIL_SIZE
 from sfmtool.sift.file import SiftExtractionError, xxh128_of_file
 
 __all__ = [
@@ -90,7 +91,9 @@ def _decode_image(image_path: Path):
     if image is None:
         raise SiftExtractionError(f"Failed to load image: {image_path}")
     rgb = np.ascontiguousarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-    thumbnail = cv2.resize(image, (128, 128), interpolation=cv2.INTER_AREA)
+    thumbnail = cv2.resize(
+        image, (THUMBNAIL_SIZE, THUMBNAIL_SIZE), interpolation=cv2.INTER_AREA
+    )
     thumbnail = cv2.cvtColor(thumbnail, cv2.COLOR_BGR2RGB)
     return image_path, rgb, thumbnail
 

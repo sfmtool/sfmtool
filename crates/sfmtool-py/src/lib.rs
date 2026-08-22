@@ -13,9 +13,11 @@
 //! submodule's `__name__` reads as the public `sfmtool.<name>` so binding
 //! objects report the public location in tracebacks, IPython, and Sphinx.
 //! The only root-level registrations are `build_profile` (build
-//! introspection of this extension) and `ProgressCounter` (cross-cutting
-//! progress instrumentation shared by patch and matching kernels); both are
-//! re-exported explicitly by `sfmtool/__init__.py`. That file additionally
+//! introspection of this extension), `ProgressCounter` (cross-cutting
+//! progress instrumentation shared by patch and matching kernels) and
+//! `THUMBNAIL_SIZE` (the edge both on-disk formats pin, which the Python
+//! extractors resize to); all are re-exported explicitly by
+//! `sfmtool/__init__.py`. That file additionally
 //! re-exports each submodule wholesale (`from sfmtool._sfmtool.<sub> import
 //! *`), so the flat `sfmtool.*` surface still exists — it is now assembled on
 //! the Python side from named submodules rather than registered flat here.
@@ -203,6 +205,15 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // submodule is its honest home. `sfmtool/__init__.py` re-exports both
     // root names explicitly (no wildcard).
     m.add_class::<ProgressCounter>()?;
+
+    // Also deliberately root-level: the thumbnail edge is one fact shared by
+    // both on-disk formats and by the Python side that *produces* the pixels
+    // (the SIFT extractors and `_undistort_images` resize to it; `sift/file.py`
+    // validates against it). Exposing the Rust constant is what stops the
+    // producer from drifting away from the format that stores its output — a
+    // drift no Rust-side check could catch, because it would arrive as
+    // correctly-shaped data of the wrong size.
+    m.add("THUMBNAIL_SIZE", sfmtool_core::THUMBNAIL_SIZE)?;
 
     Ok(())
 }

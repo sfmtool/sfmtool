@@ -40,6 +40,17 @@ pub use reconstruction::{
     ObservationSource, Point3D, ReconstructionError, SfmrImage, SfmrReconstruction,
     TrackObservation,
 };
+/// Re-exported so consumers of [`SfmrReconstruction::thumbnails_y_x_rgb`] can
+/// size buffers from the same constant the format pins, without depending on
+/// `sfmr-format` directly.
+pub use sfmr_format::THUMBNAIL_SIZE;
+
+// `.sfmr` thumbnails are copied verbatim out of the per-image `.sift` files, so
+// the two formats' thumbnail extents must agree. Neither format crate depends
+// on the other — this crate is the first place both are visible, which makes it
+// the only place the agreement can be enforced at compile time rather than
+// discovered as a shape mismatch at runtime.
+const _: () = assert!(sfmr_format::THUMBNAIL_SIZE == sift_format::THUMBNAIL_SIZE);
 pub use spherical::{
     render_consensus_atlas, ConsensusAtlasBatchError, ConsensusAtlasBatchParams,
     ConsensusAtlasReport,

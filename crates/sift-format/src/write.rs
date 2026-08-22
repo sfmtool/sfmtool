@@ -80,12 +80,7 @@ pub fn write_sift(path: &Path, data: &SiftData, zstd_level: i32) -> Result<(), S
 
     // Thumbnail data
     let thumb_bytes: &[u8] = data.thumbnail_y_x_rgb.as_slice().unwrap();
-    write_binary_entry(
-        &mut zip,
-        "thumbnail_y_x_rgb.128.128.3.uint8.zst",
-        thumb_bytes,
-        zstd_level,
-    )?;
+    write_binary_entry(&mut zip, &thumbnail_entry_name(), thumb_bytes, zstd_level)?;
     content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(thumb_bytes).to_be_bytes());
 
     // Compute and write content hash
@@ -120,9 +115,9 @@ fn validate_dimensions(data: &SiftData, feature_count: usize) -> Result<(), Sift
             data.descriptors.shape()
         )));
     }
-    if data.thumbnail_y_x_rgb.shape() != [128, 128, 3] {
+    if data.thumbnail_y_x_rgb.shape() != [THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3] {
         return Err(SiftError::ShapeMismatch(format!(
-            "thumbnail_y_x_rgb shape {:?} != [128, 128, 3]",
+            "thumbnail_y_x_rgb shape {:?} != [{THUMBNAIL_SIZE}, {THUMBNAIL_SIZE}, 3]",
             data.thumbnail_y_x_rgb.shape()
         )));
     }

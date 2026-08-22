@@ -198,10 +198,13 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     let thumbnails_vec: Vec<u8> = read_binary_array(
         &mut archive,
         &entries::images_thumbnails_y_x_rgb(image_count),
-        image_count * 128 * 128 * 3,
+        image_count * THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3,
     )?;
-    let thumbnails_y_x_rgb = Array4::from_shape_vec((image_count, 128, 128, 3), thumbnails_vec)
-        .map_err(|e| SfmrError::ShapeMismatch(format!("thumbnails reshape: {e}")))?;
+    let thumbnails_y_x_rgb = Array4::from_shape_vec(
+        (image_count, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3),
+        thumbnails_vec,
+    )
+    .map_err(|e| SfmrError::ShapeMismatch(format!("thumbnails reshape: {e}")))?;
 
     // Depth statistics
     let depth_statistics: DepthStatistics =

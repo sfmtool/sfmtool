@@ -153,9 +153,11 @@ pub(crate) fn images_sift_content_hashes(image_count: impl std::fmt::Display) ->
     format!("images/sift_content_hashes.{image_count}.uint128.zst")
 }
 
-/// `images/thumbnails_y_x_rgb` — fixed 128×128 RGB thumbnail per image.
+/// `images/thumbnails_y_x_rgb` — fixed square RGB thumbnail per image, with
+/// [`THUMBNAIL_SIZE`](crate::THUMBNAIL_SIZE) as its edge.
 pub(crate) fn images_thumbnails_y_x_rgb(image_count: impl std::fmt::Display) -> String {
-    format!("images/thumbnails_y_x_rgb.{image_count}.128.128.3.uint8.zst")
+    let edge = crate::THUMBNAIL_SIZE;
+    format!("images/thumbnails_y_x_rgb.{image_count}.{edge}.{edge}.3.uint8.zst")
 }
 
 /// `images/observed_depth_histogram_counts` — per-image depth histogram.

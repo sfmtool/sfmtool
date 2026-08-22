@@ -9,6 +9,32 @@ use thiserror::Error;
 
 use sfmtool_archive_io::ArchiveIoError;
 
+/// Edge length, in pixels, of the square RGB thumbnail every `.sift` carries.
+///
+/// The format pins this: it is written into the archive entry's *name*
+/// (`thumbnail_y_x_rgb.<size>.<size>.3.uint8.zst`), so a reader locates the entry by
+/// a string that embeds the size. Changing it changes the on-disk format and
+/// makes existing files unreadable — this constant exists so that the several
+/// places which must agree cannot drift apart, not because the value is
+/// adjustable.
+///
+/// `.sfmr` carries the same thumbnails, copied out of the `.sift` files, and so
+/// declares the same edge as `sfmr_format::THUMBNAIL_SIZE`. The two crates are
+/// independent — neither depends on the other — so the agreement is enforced by
+/// a compile-time assertion in `sfmtool-core`, the first crate that sees both.
+pub const THUMBNAIL_SIZE: usize = 128;
+
+/// Archive entry name for the thumbnail.
+///
+/// The extent is part of the name, so [`read`](crate::read),
+/// [`write`](crate::write) and [`verify`](crate::verify) must all spell it the
+/// same way or a lookup fails and a content hash goes wrong. (This crate has no
+/// `entries` module of the kind `sfmr-format` and `matches-format` carry; this
+/// is the one name whose text depends on a value declared elsewhere.)
+pub(crate) fn thumbnail_entry_name() -> String {
+    format!("thumbnail_y_x_rgb.{THUMBNAIL_SIZE}.{THUMBNAIL_SIZE}.3.uint8.zst")
+}
+
 /// Errors that can occur when reading or writing `.sift` files.
 #[derive(Error, Debug)]
 pub enum SiftError {
@@ -117,7 +143,7 @@ pub struct SiftData {
     /// Shape: `(feature_count, 128)`, dtype: `u8`.
     pub descriptors: Array2<u8>,
 
-    /// 128×128 RGB thumbnail of the source image.
-    /// Shape: `(128, 128, 3)`, dtype: `u8`.
+    /// Square RGB thumbnail of the source image, [`THUMBNAIL_SIZE`] on a side.
+    /// Shape: `(THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)`, dtype: `u8`.
     pub thumbnail_y_x_rgb: Array3<u8>,
 }

@@ -745,11 +745,40 @@ Downscaled preview thumbnails for each image, embedded directly in the file:
 - **Format**: Row-major RGB data. For each image, 128 rows of 128 pixels, each pixel 3 bytes [R, G, B] in range [0, 255]
 - **Dimension order**: `(image_index, y, x, channel)` — y is the row (top-to-bottom), x is the column (left-to-right)
 - **Size**: Fixed 128×128 square, regardless of the source image aspect ratio. Source images are resized to fill the square (stretching if non-square). Consumers restore the correct aspect ratio at display time using the camera intrinsics width/height
-- **Resize method**: Bilinear interpolation (triangle filter)
+- **Resize method**: Area-averaging (OpenCV `INTER_AREA`), inherited from the
+  `.sift` these are copied from — all four producers (the colmap, opencv and
+  sfmtool extractors, and `sfm undistort`) use it. (This line previously read
+  "Bilinear interpolation (triangle filter)", which no producer has ever used;
+  `specs/formats/sift-file-format.md` had it right.)
 - **Purpose**: Enables instant thumbnail display in viewers without requiring access to the workspace source images
 - **Source**: Copied from the `thumbnail_y_x_rgb.128.128.3.uint8.zst` in each image's `.sift` file during `.sfmr` creation, avoiding re-reading and re-downscaling the source images
 
-The `thumbnail_size` field in `images/metadata.json.zst` records the dimension (currently always 128). Readers should use this value rather than hardcoding the size.
+The thumbnail edge is **fixed by the format at 128**, not a per-file parameter.
+It is part of the entry's own name
+(`images/thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst`), so a reader locates the
+entry by a string that already embeds the size; there is no way to store a
+different edge and still be found. Changing it would be an on-disk format
+change that makes existing files unreadable, and would have to be versioned as
+one.
+
+The `thumbnail_size` field in `images/metadata.json.zst` therefore restates the
+fixed value rather than parameterising it. A reader may cross-check it, but must
+not treat a different value as a description of the data it is about to read —
+the entry name is authoritative.
+
+In this repository the value has a single declaration,
+`sfmr_format::THUMBNAIL_SIZE`, which the entry name, the read path, the write
+path and the section metadata are all derived from. `.sift` thumbnails are
+copied verbatim into `.sfmr`, so `sift_format::THUMBNAIL_SIZE` must equal it;
+that is enforced by a compile-time assertion in `sfmtool-core`, the first crate
+that sees both. The value is also exported to Python as `sfmtool.THUMBNAIL_SIZE`,
+because the SIFT extractors are what produce the pixels.
+
+> An earlier revision of this section told readers to use the stored
+> `thumbnail_size` "rather than hardcoding the size". No implementation ever did,
+> including this one, and the entry-name encoding means a stored value that
+> disagreed with 128 could not have been honoured anyway. The guidance is
+> replaced above rather than left as an aspiration nothing implements.
 
 #### Depth Statistics
 

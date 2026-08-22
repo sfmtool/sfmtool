@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import pycolmap
 
+from sfmtool._sfmtool import THUMBNAIL_SIZE
 from sfmtool.sift.file import SiftExtractionError, feature_size, xxh128_of_file
 
 __all__ = [
@@ -237,9 +238,11 @@ def read_colmap_db_sift(
         "feature_count": len(keypoints),
     }
 
-    # Generate 128x128 RGB thumbnail
+    # Generate the square RGB thumbnail the .sift format pins
     img = cv2.imread(str(image_file), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
-    thumbnail = cv2.resize(img, (128, 128), interpolation=cv2.INTER_AREA)
+    thumbnail = cv2.resize(
+        img, (THUMBNAIL_SIZE, THUMBNAIL_SIZE), interpolation=cv2.INTER_AREA
+    )
     thumbnail = cv2.cvtColor(thumbnail, cv2.COLOR_BGR2RGB)
 
     return (

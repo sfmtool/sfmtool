@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # The only root-level `_sfmtool` names — everything else lives on a submodule.
-from sfmtool._sfmtool import ProgressCounter, build_profile  # noqa: F401
+from sfmtool._sfmtool import THUMBNAIL_SIZE, ProgressCounter, build_profile  # noqa: F401
 from sfmtool._sfmtool.reconstruction import *  # noqa: F401, F403
 from sfmtool._sfmtool.patches import *  # noqa: F401, F403
 from sfmtool._sfmtool.geometry import *  # noqa: F401, F403

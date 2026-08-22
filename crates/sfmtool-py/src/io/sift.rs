@@ -35,7 +35,8 @@ fn sift_data_to_py(py: Python<'_>, data: SiftData) -> PyResult<Py<PyAny>> {
 /// Returns a dict with keys:
 ///   feature_tool_metadata, metadata, content_hash (dicts),
 ///   positions_xy (N,2 float32), affine_shapes (N,2,2 float32),
-///   descriptors (N,128 uint8), thumbnail_y_x_rgb (128,128,3 uint8).
+///   descriptors (N,128 uint8), thumbnail_y_x_rgb
+///   (THUMBNAIL_SIZE,THUMBNAIL_SIZE,3 uint8).
 #[pyfunction]
 pub fn read_sift(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     let data = sift_format::read_sift(&path)
