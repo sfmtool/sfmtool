@@ -4,6 +4,7 @@
 //! Decision-rule tests over synthetic pairwise matrices with known block
 //! structure, plus an end-to-end matrix build over rendered synthetic imagery.
 
+use super::decide::max_support_block;
 use super::*;
 use crate::camera::remap::{ImageU8, ImageU8Pyramid};
 use crate::camera::{CameraIntrinsics, CameraModel};

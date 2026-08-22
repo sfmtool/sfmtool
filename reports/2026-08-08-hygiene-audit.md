@@ -404,6 +404,23 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
   side.
 
 **`member_coherence.rs` is the largest non-test file in `sfmtool-core` and its module doc names the split**
+> _Status (2026-08-21): Done — `member_coherence/{matrix.rs, decide.rs}` split
+> along the boundary the module doc names. 1553 → 558 (params, types,
+> `scored_mask`, the four `validate_*` / `*_from_reconstruction` entry points)
+> + 446 (`matrix.rs`: `normal_refine_shim`, `member_zncc_matrix`,
+> `coarse_factors_for`, `fill_member_zncc`, `fill_scale`, `box_downsample`,
+> `member_has_texture`) + 586 (`decide.rs`: `max_support_block`,
+> `quantile_sorted`, `core_coherence`, `self_normalized_thresholds`,
+> `decide_member_coherence`, `core_deficit`). Pure motion as predicted — the
+> public paths are preserved by `pub use`, so `sfmtool-py` and
+> `patch/view_selection.rs` needed no edit. Two things the finding did not
+> anticipate, both trivial: `max_support_block` is exercised by `tests.rs`,
+> which is a sibling of `decide` rather than a descendant, so it became
+> `pub(super)` plus an explicit import in the test module; and the parent's
+> `normal_refine` import list shrank to four names. No intra-doc link broke
+> (`pixi run doc` clean); 45/45 `member_coherence` tests and 1384/1384
+> `sfmtool-core` lib tests green. `specs/core/member-coherence-validation.md`
+> cited the single file and now names the directory and which half is where._
 - _New — this file did not exist at the 2026-07-25 snapshot (added by `6d12156`)._
 - Location: `crates/sfmtool-core/src/patch/member_coherence.rs` (**1553**), with a
   sibling `member_coherence/tests.rs` (1453)
@@ -1036,6 +1053,13 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
   `.matches` names in the multi-sequence case, which is the point.
 
 **`feature_match/_run.py` holds matching orchestration and `.matches` merging**
+> _Status (2026-08-21): Done — `_run_merge` moved to
+> `src/sfmtool/feature_match/_merge.py` (371 lines) unchanged; `_run.py` is 605.
+> The zero-coupling claim held exactly: one import edit at
+> `_commands/match.py:220` was the entire call-site cost, and `_run.py` lost no
+> top-level import (every one it had is still used by the matching half). The
+> function's deferred imports were left as they are — hoisting them is a
+> convention question about `feature_match/`, not part of the move._
 - Location: `src/sfmtool/feature_match/_run.py` (960)
 - Problem: Unchanged. 28–604 is the "run a matching job" concern, sharing the
   `_db_populate` imports at 20–25. **607–960 is `_run_merge` (354 lines)**, a
@@ -1051,6 +1075,17 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
 - Risk: low — one import edit; no shared state.
 
 **`_commands/cluster_patches.py` is the only command module carrying its algorithm**
+> _Status (2026-08-21): Done — `_resolve_workspace` + `_run_cluster_patches`
+> moved verbatim to a top-level `src/sfmtool/_cluster_patches.py` (238 lines),
+> beside the `_embed_patches.py` / `_patch_compaction.py` siblings the finding
+> names. The command module is 127 lines and now a pure Click wrapper: it
+> defers `from .._cluster_patches import _run_cluster_patches` at the top of
+> the callback, matching `_commands/embed_patches.py:283`. The moved code's
+> `..`-relative in-function imports became `.`-relative; nothing else changed.
+> Two citations followed it — `_progress.py`'s module docstring and
+> `specs/core/cluster-patch-refinement.md:531`. The finding's "better still,
+> group the three as one patch-processing topic" is **not** done and is a
+> separate call._
 - Location: `src/sfmtool/_commands/cluster_patches.py` (347)
 - Problem: The convention is stated in `feature_match/_run.py:7–9` ("Extracted from
   `_commands/match.py` so the command module stays a thin Click wrapper") and holds

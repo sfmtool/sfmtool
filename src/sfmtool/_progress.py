@@ -4,7 +4,7 @@
 """Progress/timing helpers for long, GIL-releasing Rust passes.
 
 Small, dependency-light utilities shared by the pipeline drivers (e.g.
-:mod:`sfmtool._embed_patches`, :mod:`sfmtool._commands.cluster_patches`): a
+:mod:`sfmtool._embed_patches`, :mod:`sfmtool._cluster_patches`): a
 timed-step context manager for start/elapsed logging, and a background poller
 that echoes a :class:`ProgressCounter`'s ``value``/``total`` while a counted
 pass runs.

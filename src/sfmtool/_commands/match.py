@@ -217,7 +217,7 @@ def match(
         # no-op; reject it rather than silently ignoring it (B4).
         _reject_stray_mode_options(selected="merge")
 
-        from ..feature_match._run import _run_merge
+        from ..feature_match._merge import _run_merge
 
         try:
             _run_merge(paths, output_path)

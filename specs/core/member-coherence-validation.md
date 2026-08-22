@@ -1,7 +1,9 @@
 # Member-coherence validation: pairwise track agreement and the max-support block
 
 **Status:** Implemented (2026-08-04) — kernel in
-`crates/sfmtool-core/src/patch/member_coherence.rs`, exposed to Python as
+`crates/sfmtool-core/src/patch/member_coherence/`: the matrix construction in
+`matrix.rs`, the decision rule in `decide.rs`, and the params, types and
+`validate_*` entry points in `member_coherence.rs` itself. Exposed to Python as
 `PatchCloud.validate_member_coherence`.
 
 ## Overview

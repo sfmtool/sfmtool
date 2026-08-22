@@ -528,7 +528,8 @@ The `io/matches.rs` section threading is **shipped** with the format layer
 > progress reporting reuses the `_poll_progress` ProgressCounter poller from
 > `_embed_patches`._
 
-`src/sfmtool/_commands/cluster_patches.py` — flat command, Image Feature
+`src/sfmtool/_commands/cluster_patches.py` (Click wrapper) + `src/sfmtool/_cluster_patches.py`
+(implementation) — flat command, Image Feature
 category, spec to live at `specs/cli/cluster-patches-command.md`:
 
 ```
