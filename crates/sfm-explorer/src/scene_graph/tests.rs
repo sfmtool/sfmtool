@@ -23,7 +23,7 @@ use sfmtool_core::{RotQuaternion, Se3Transform, SfmrReconstruction};
 
 use super::{row_id, SceneGraphPanel};
 use crate::align::{AlignOptions, AlignSource};
-use crate::scene::{ImageRef, NodeTint, PointRef, SceneNode, TINT_PALETTE};
+use crate::scene::{CameraRef, ImageRef, NodeTint, PointRef, SceneNode, TINT_PALETTE};
 use crate::state::{AppState, CachedSiftFeatures};
 use crate::viewer_3d::Viewer3D;
 
@@ -66,6 +66,23 @@ fn shared_shoot(n: usize) -> AppState {
     let first = state.scene[0].id;
     state.select_recon(first);
     state
+}
+
+/// A node whose eight images resolve to **two** cameras: the first four
+/// through camera 0, the rest through camera 1.
+///
+/// `kerry_park` in miniature — a rig is what makes the difference between an
+/// image and the intrinsics it was taken through visible at all, and a
+/// one-camera node cannot tell the two selection fields apart.
+fn two_camera_node(path: &str) -> SceneNode {
+    let mut recon = recon_named(32, 8, "IMG");
+    let second = recon.cameras[0].clone();
+    recon.cameras.push(second);
+    for image in recon.images.iter_mut().skip(4) {
+        image.camera_index = 1;
+    }
+    recon.metadata.camera_count = recon.cameras.len() as u32;
+    SceneNode::from_path(std::path::Path::new(path), recon)
 }
 
 /// A node whose reconstruction has *distinct* camera poses — unlike
@@ -149,6 +166,51 @@ fn run_frame(
         });
     });
     response.expect("the panel ran")
+}
+
+/// The strings one frame of the panel painted, at a panel `width` of the
+/// caller's choosing.
+///
+/// The counts row elides on the width left over after the label, so a test of
+/// that has to vary the width and read back what was actually drawn rather
+/// than what was asked for.
+fn painted_at_width(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    width: f32,
+) -> Vec<String> {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(width, VIEWPORT.y),
+        )),
+        ..Default::default()
+    };
+    crate::test_support::painted_texts(ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            panel.show(ui, state);
+        });
+    })
+}
+
+/// The counts drawn on the one reconstruction row, at panel width `width`.
+///
+/// `None` once the panel is narrow enough that egui clips the row past the
+/// three toggles and paints neither label nor counts — the end of what elision
+/// has any say over.
+fn counts_at_width(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+    width: f32,
+) -> Option<String> {
+    // Two frames: egui settles a layout against the previous pass, so the
+    // first frame at a new width is still measuring the old one.
+    painted_at_width(panel, ctx, state, width);
+    painted_at_width(panel, ctx, state, width)
+        .into_iter()
+        .find(|text| text.contains(" pts"))
 }
 
 /// A panel + context that have already settled: egui resolves hover and clicks
@@ -298,7 +360,10 @@ fn every_loaded_node_gets_a_row_with_its_camera_and_point_groups() {
 
     for id in ids {
         assert!(drawn(&ctx, row_id(id, "node")), "node row missing");
-        assert!(drawn(&ctx, row_id(id, "cameras")), "Cameras row missing");
+        assert!(
+            drawn(&ctx, row_id(id, "camera_images")),
+            "Camera Images row missing"
+        );
         assert!(drawn(&ctx, row_id(id, "points")), "Points row missing");
     }
 }
@@ -311,13 +376,13 @@ fn the_camera_rows_appear_only_once_the_cameras_group_is_expanded() {
 
     assert!(
         panel.hit_rect(row_id(id, "camera_0")).is_none(),
-        "the collapsed Cameras group still laid out its rows"
+        "the collapsed Camera Images group still laid out its rows"
     );
-    set_open(&ctx, row_id(id, "cameras"), true);
+    set_open(&ctx, row_id(id, "camera_images"), true);
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
     assert!(
         panel.hit_rect(row_id(id, "camera_0")).is_some(),
-        "expanding the Cameras group did not draw any camera rows"
+        "expanding the Camera Images group did not draw any image rows"
     );
 }
 
@@ -329,7 +394,7 @@ fn the_camera_list_lays_out_only_the_visible_rows() {
     state.append_node(file_node("/runs/big.sfmr", 400, "IMG"));
     let id = state.scene[0].id;
     let (mut panel, ctx) = settled(&mut state);
-    set_open(&ctx, row_id(id, "cameras"), true);
+    set_open(&ctx, row_id(id, "camera_images"), true);
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
 
     let laid_out = (0..400)
@@ -425,7 +490,7 @@ fn clicking_a_camera_row_reports_the_image_it_names() {
     let mut state = shared_shoot(1);
     let id = state.scene[0].id;
     let (mut panel, ctx) = settled(&mut state);
-    set_open(&ctx, row_id(id, "cameras"), true);
+    set_open(&ctx, row_id(id, "camera_images"), true);
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
 
     let response = click(&mut panel, &ctx, &mut state, row_id(id, "camera_2"));
@@ -441,12 +506,12 @@ fn a_camera_row_still_selects_after_the_list_has_scrolled() {
     state.append_node(file_node("/runs/long.sfmr", 200, "IMG"));
     let id = state.scene[0].id;
     let (mut panel, ctx) = settled(&mut state);
-    set_open(&ctx, row_id(id, "cameras"), true);
+    set_open(&ctx, row_id(id, "camera_images"), true);
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
 
     // Scroll row 150 into view the only way the panel offers: a selection made
     // elsewhere.
-    state.select_image(ImageRef::new(id, 150));
+    state.select_image(Some(ImageRef::new(id, 150)));
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
 
     let response = click(&mut panel, &ctx, &mut state, row_id(id, "camera_150"));
@@ -488,9 +553,17 @@ fn the_group_eyes_drive_their_own_layers_only() {
     let id = state.scene[0].id;
     let (mut panel, ctx) = settled(&mut state);
 
-    click(&mut panel, &ctx, &mut state, row_id(id, "cameras_eye"));
-    assert!(!state.scene[0].show_cameras);
-    assert!(state.scene[0].show_points, "the Cameras eye hid the points");
+    click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "camera_images_eye"),
+    );
+    assert!(!state.scene[0].show_camera_images);
+    assert!(
+        state.scene[0].show_points,
+        "the Camera Images eye hid the points"
+    );
 
     click(&mut panel, &ctx, &mut state, row_id(id, "points_eye"));
     assert!(!state.scene[0].show_points);
@@ -591,7 +664,7 @@ fn hovering_a_camera_row_reports_it_for_cross_panel_hover() {
     let mut state = shared_shoot(1);
     let id = state.scene[0].id;
     let (mut panel, ctx) = settled(&mut state);
-    set_open(&ctx, row_id(id, "cameras"), true);
+    set_open(&ctx, row_id(id, "camera_images"), true);
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
 
     let pos = panel.hit_rect(row_id(id, "camera_3")).unwrap().center();
@@ -617,7 +690,7 @@ fn the_camera_list_scrolls_to_a_selection_made_elsewhere_but_not_to_its_own() {
     state.append_node(file_node("/runs/long.sfmr", 200, "IMG"));
     let id = state.scene[0].id;
     let (mut panel, ctx) = settled(&mut state);
-    set_open(&ctx, row_id(id, "cameras"), true);
+    set_open(&ctx, row_id(id, "camera_images"), true);
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
     assert!(
         panel.hit_rect(row_id(id, "camera_150")).is_none(),
@@ -625,7 +698,7 @@ fn the_camera_list_scrolls_to_a_selection_made_elsewhere_but_not_to_its_own() {
     );
 
     // A selection change from another panel scrolls the row into view.
-    state.select_image(ImageRef::new(id, 150));
+    state.select_image(Some(ImageRef::new(id, 150)));
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
     assert!(
         panel.hit_rect(row_id(id, "camera_150")).is_some(),
@@ -655,7 +728,7 @@ fn a_non_interactive_node_can_still_be_selected_from_the_tree() {
     let second = state.scene[1].id;
     state.scene[1].interactive = false;
     let (mut panel, ctx) = settled(&mut state);
-    set_open(&ctx, row_id(second, "cameras"), true);
+    set_open(&ctx, row_id(second, "camera_images"), true);
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
 
     let response = click(&mut panel, &ctx, &mut state, row_id(second, "node_label"));
@@ -1059,7 +1132,7 @@ fn only_a_tinted_row_gets_a_swatch() {
 fn working_the_tint_menu_leaves_the_selection_where_it_was() {
     let mut state = shared_shoot(2);
     let (first, second) = (state.scene[0].id, state.scene[1].id);
-    state.select_image(ImageRef::new(first, 2));
+    state.select_image(Some(ImageRef::new(first, 2)));
     let (mut panel, ctx) = settled(&mut state);
 
     open_tint_menu(&mut panel, &ctx, &mut state, second);
@@ -1507,7 +1580,7 @@ fn closing_a_node_purges_its_caches_and_selection() {
         );
         state.full_res_cache.insert(ImageRef::new(id, 0), None);
     }
-    state.select_image(ImageRef::new(first, 3));
+    state.select_image(Some(ImageRef::new(first, 3)));
     state.hovered_point = Some(PointRef::new(first, 1));
 
     state.close_node(first);
@@ -1551,7 +1624,7 @@ fn close_all_empties_the_scene_and_every_shared_cache() {
     let mut state = shared_shoot(2);
     let id = state.scene[0].id;
     state.full_res_cache.insert(ImageRef::new(id, 0), None);
-    state.select_image(ImageRef::new(id, 0));
+    state.select_image(Some(ImageRef::new(id, 0)));
 
     state.close_all();
     assert!(state.scene.is_empty());
@@ -1565,7 +1638,7 @@ fn selecting_a_reconstruction_clears_finer_selection_from_other_nodes() {
     let mut state = shared_shoot(2);
     let first = state.scene[0].id;
     let second = state.scene[1].id;
-    state.select_image(ImageRef::new(first, 2));
+    state.select_image(Some(ImageRef::new(first, 2)));
     state.selected_point = Some(PointRef::new(first, 5));
     // Hover is exempt — it is transient and may touch any visible node.
     state.hovered_image = Some(ImageRef::new(first, 9));
@@ -1581,7 +1654,7 @@ fn selecting_a_reconstruction_clears_finer_selection_from_other_nodes() {
     );
 
     // Re-selecting the node the selection already lives in changes nothing.
-    state.select_image(ImageRef::new(second, 1));
+    state.select_image(Some(ImageRef::new(second, 1)));
     state.select_recon(second);
     assert_eq!(state.selected_image, Some(ImageRef::new(second, 1)));
 }
@@ -1593,7 +1666,7 @@ fn selecting_an_image_or_point_selects_its_reconstruction_too() {
     let second = state.scene[1].id;
     state.select_recon(first);
 
-    state.select_image(ImageRef::new(second, 4));
+    state.select_image(Some(ImageRef::new(second, 4)));
     assert_eq!(state.selected_recon, Some(second));
 
     state.select_point(PointRef::new(first, 4));
@@ -1673,7 +1746,7 @@ fn stepping_carries_the_selection_to_the_same_named_image() {
         "the fixture did not actually shift the indices"
     );
 
-    state.select_image(ImageRef::new(ids[0], 3));
+    state.select_image(Some(ImageRef::new(ids[0], 3)));
     let mut viewer = Viewer3D::new();
     let ctx = egui::Context::default();
     step(&mut viewer, &ctx, &mut state, true);
@@ -1689,7 +1762,7 @@ fn stepping_clears_the_finer_selection_when_the_name_is_absent() {
     state.append_node(file_node("/runs/b.sfmr", 16, "RIGHT"));
     let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
     state.select_recon(ids[0]);
-    state.select_image(ImageRef::new(ids[0], 2));
+    state.select_image(Some(ImageRef::new(ids[0], 2)));
     state.selected_point = Some(PointRef::new(ids[0], 5));
 
     let mut viewer = Viewer3D::new();
@@ -1715,7 +1788,7 @@ fn stepping_carries_the_camera_view_to_the_same_named_image() {
         image,
         r_world_from_cam: state.scene[0].recon.images[3].quaternion_wxyz.inverse(),
     });
-    state.select_image(image);
+    state.select_image(Some(image));
 
     step(&mut viewer, &ctx, &mut state, true);
     let now = viewer.camera_view.as_ref().expect("still in camera view");
@@ -1734,7 +1807,7 @@ fn stepping_drops_a_camera_view_whose_image_has_no_counterpart() {
     let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
     state.select_recon(ids[0]);
     let image = ImageRef::new(ids[0], 1);
-    state.select_image(image);
+    state.select_image(Some(image));
     let mut viewer = Viewer3D::new();
     viewer.camera_view = Some(crate::viewer_3d::CameraViewMode {
         image,
@@ -1753,7 +1826,7 @@ fn stepping_drops_a_camera_view_whose_image_has_no_counterpart() {
 fn stepping_does_nothing_with_a_single_node_loaded() {
     let mut state = shared_shoot(1);
     let id = state.scene[0].id;
-    state.select_image(ImageRef::new(id, 2));
+    state.select_image(Some(ImageRef::new(id, 2)));
     let mut viewer = Viewer3D::new();
     let ctx = egui::Context::default();
 
@@ -1875,6 +1948,195 @@ fn the_hover_overlay_names_the_reconstruction_only_when_several_are_loaded() {
         hover_overlay_text(&state.scene, point_pick, None),
         "Point3D run_0 #88"
     );
+}
+
+// ── The Camera Images group and the reconstruction row counts ──────────
+
+#[test]
+fn the_image_group_is_labelled_camera_images_and_counts_the_images() {
+    // The rename is a bug fix: the row counts `recon.images.len()`, which is
+    // images and not the intrinsics they share — eight against two here.
+    let mut state = AppState::new();
+    state.append_node(two_camera_node("/runs/rig.sfmr"));
+    let (mut panel, ctx) = settled(&mut state);
+
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
+    assert!(
+        texts.iter().any(|t| t == "Camera Images (8)"),
+        "no Camera Images group row was painted; got {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t.starts_with("Cameras (")),
+        "the old Cameras label is still being painted: {texts:?}"
+    );
+}
+
+#[test]
+fn the_reconstruction_row_counts_points_images_and_cameras() {
+    let mut state = AppState::new();
+    state.append_node(two_camera_node("/runs/rig.sfmr"));
+    let (mut panel, ctx) = settled(&mut state);
+
+    assert_eq!(
+        counts_at_width(&mut panel, &ctx, &mut state, 400.0).as_deref(),
+        Some("32 pts · 8 imgs · 2 cams")
+    );
+}
+
+#[test]
+fn the_counts_drop_cameras_then_images_as_the_panel_narrows() {
+    let mut state = AppState::new();
+    state.append_node(two_camera_node("/runs/rig.sfmr"));
+    let (mut panel, ctx) = settled(&mut state);
+
+    let full = "32 pts · 8 imgs · 2 cams".to_string();
+    let two = "32 pts · 8 imgs".to_string();
+    let one = "32 pts".to_string();
+
+    // Swept rather than asserted at three chosen widths: where each count drops
+    // out depends on the font, but the order they drop in does not.
+    let mut seen: Vec<String> = Vec::new();
+    let mut width = 400.0;
+    while let Some(counts) = counts_at_width(&mut panel, &ctx, &mut state, width) {
+        if seen.last() != Some(&counts) {
+            seen.push(counts);
+        }
+        width -= 8.0;
+    }
+    assert_eq!(
+        seen,
+        vec![full.clone(), two, one],
+        "the counts did not elide cameras, then images, exactly once each"
+    );
+
+    // And back: the elision is on available width, not a state the row keeps.
+    assert_eq!(
+        counts_at_width(&mut panel, &ctx, &mut state, 400.0),
+        Some(full)
+    );
+}
+
+// ── The image / camera selection coupling (no frame needed) ────────────
+//
+// The truth table in `specs/gui/gui-camera-intrinsics.md` § "The selection
+// coupling", one test per row. All of it is `AppState`: the invariant is
+// enforced in the two setters precisely so that no panel has to remember it.
+
+#[test]
+fn selecting_an_image_selects_the_camera_it_was_taken_through() {
+    let mut state = AppState::new();
+    let id = state.append_node(two_camera_node("/runs/rig.sfmr"));
+
+    state.select_image(Some(ImageRef::new(id, 5)));
+    assert_eq!(state.selected_image, Some(ImageRef::new(id, 5)));
+    assert_eq!(state.selected_camera, Some(CameraRef::new(id, 1)));
+
+    state.select_image(Some(ImageRef::new(id, 2)));
+    assert_eq!(state.selected_camera, Some(CameraRef::new(id, 0)));
+}
+
+#[test]
+fn reselecting_the_image_already_selected_changes_nothing() {
+    let mut state = AppState::new();
+    let id = state.append_node(two_camera_node("/runs/rig.sfmr"));
+
+    state.select_image(Some(ImageRef::new(id, 5)));
+    state.select_image(Some(ImageRef::new(id, 5)));
+    assert_eq!(state.selected_image, Some(ImageRef::new(id, 5)));
+    assert_eq!(state.selected_camera, Some(CameraRef::new(id, 1)));
+}
+
+#[test]
+fn a_camera_can_be_selected_with_no_image_selected() {
+    let mut state = AppState::new();
+    let id = state.append_node(two_camera_node("/runs/rig.sfmr"));
+
+    state.select_camera(Some(CameraRef::new(id, 1)));
+    assert_eq!(state.selected_camera, Some(CameraRef::new(id, 1)));
+    assert_eq!(state.selected_image, None);
+}
+
+#[test]
+fn selecting_the_camera_the_selected_image_uses_keeps_the_image() {
+    let mut state = AppState::new();
+    let id = state.append_node(two_camera_node("/runs/rig.sfmr"));
+
+    state.select_image(Some(ImageRef::new(id, 5)));
+    state.select_camera(Some(CameraRef::new(id, 1)));
+    assert_eq!(
+        state.selected_image,
+        Some(ImageRef::new(id, 5)),
+        "clicking the intrinsics of the image on screen threw the image away"
+    );
+    assert_eq!(state.selected_camera, Some(CameraRef::new(id, 1)));
+}
+
+#[test]
+fn selecting_a_different_camera_clears_the_image() {
+    let mut state = AppState::new();
+    let id = state.append_node(two_camera_node("/runs/rig.sfmr"));
+
+    state.select_image(Some(ImageRef::new(id, 5)));
+    state.select_camera(Some(CameraRef::new(id, 0)));
+    assert_eq!(state.selected_image, None);
+    assert_eq!(state.selected_camera, Some(CameraRef::new(id, 0)));
+}
+
+#[test]
+fn clearing_the_image_keeps_the_camera_and_a_second_clear_takes_it() {
+    let mut state = AppState::new();
+    let id = state.append_node(two_camera_node("/runs/rig.sfmr"));
+
+    state.select_image(Some(ImageRef::new(id, 5)));
+    state.select_image(None);
+    assert_eq!(state.selected_image, None);
+    assert_eq!(
+        state.selected_camera,
+        Some(CameraRef::new(id, 1)),
+        "dismissing the photograph also dismissed the lens"
+    );
+
+    // Esc a second time, finding no image, clears the camera.
+    state.select_camera(None);
+    assert_eq!(state.selected_camera, None);
+}
+
+#[test]
+fn selecting_another_reconstruction_filters_both_selections() {
+    let mut state = AppState::new();
+    let first = state.append_node(two_camera_node("/runs/rig_a.sfmr"));
+    let second = state.append_node(two_camera_node("/runs/rig_b.sfmr"));
+
+    state.select_image(Some(ImageRef::new(first, 5)));
+    state.select_recon(second);
+    assert_eq!(state.selected_image, None);
+    assert_eq!(state.selected_camera, None);
+
+    // A selection inside the node being selected survives it.
+    state.select_image(Some(ImageRef::new(second, 5)));
+    state.select_recon(second);
+    assert_eq!(state.selected_image, Some(ImageRef::new(second, 5)));
+    assert_eq!(state.selected_camera, Some(CameraRef::new(second, 1)));
+}
+
+/// Closing and reloading unwind a node selections through the same
+/// `forget_recon`, so the camera goes the way the image already did.
+#[test]
+fn closing_the_owning_node_clears_both_selections() {
+    let mut state = AppState::new();
+    let first = state.append_node(two_camera_node("/runs/rig_a.sfmr"));
+    state.append_node(two_camera_node("/runs/rig_b.sfmr"));
+
+    state.select_image(Some(ImageRef::new(first, 5)));
+    state.close_node(first);
+    assert_eq!(state.selected_image, None);
+    assert_eq!(state.selected_camera, None);
+
+    // And the whole-scene path.
+    let second = state.scene[0].id;
+    state.select_camera(Some(CameraRef::new(second, 1)));
+    state.close_all();
+    assert_eq!(state.selected_camera, None);
 }
 
 // ── Formatting helpers ──────────────────────────────────────────────────

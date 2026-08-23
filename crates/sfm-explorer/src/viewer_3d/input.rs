@@ -82,7 +82,9 @@ impl Viewer3D {
                 .position(|image| image.name == name)
         });
 
-        state.selected_recon = Some(new_id);
+        // Through the setter: it is what scopes every finer selection —
+        // image, camera and point — to the node being stepped onto.
+        state.select_recon(new_id);
         // An active solo follows the step (see the doc comment); no solo stays
         // no solo — stepping never starts one.
         if state.solo.is_some() {
@@ -97,13 +99,13 @@ impl Viewer3D {
         match carried {
             Some(index) => {
                 let image = ImageRef::new(new_id, index);
-                state.selected_image = Some(image);
+                state.select_image(Some(image));
                 if was_in_camera_view {
                     self.switch_camera_view(image, &state.scene[to]);
                 }
             }
             None => {
-                state.selected_image = None;
+                state.select_image(None);
                 if was_in_camera_view {
                     self.camera_view = None;
                 }

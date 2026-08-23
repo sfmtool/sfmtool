@@ -271,7 +271,7 @@ impl SceneRenderer {
                 {
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, quad_vb.slice(..));
-                    for bundle in bundles(|b| b.display.show_cameras) {
+                    for bundle in bundles(|b| b.display.show_camera_images) {
                         if let (Some(bind_group), Some(edge_buf)) =
                             (&bundle.frustum_bind_group, &bundle.frustum_edge_buffer)
                         {
@@ -291,7 +291,7 @@ impl SceneRenderer {
                 {
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, quad_vb.slice(..));
-                    for bundle in bundles(|b| b.display.show_cameras) {
+                    for bundle in bundles(|b| b.display.show_camera_images) {
                         if let (Some(bind_group), Some(instance_buf)) = (
                             &bundle.image_quad_bind_group,
                             &bundle.image_quad_instance_buffer,
@@ -308,7 +308,7 @@ impl SceneRenderer {
                 // Distorted cameras: tessellated indexed quads
                 if let Some(pipeline) = &self.distorted_quad_pipeline {
                     pass.set_pipeline(pipeline);
-                    for bundle in bundles(|b| b.display.show_cameras) {
+                    for bundle in bundles(|b| b.display.show_camera_images) {
                         if let (Some(bind_group), Some(vbuf), Some(ibuf)) = (
                             &bundle.image_quad_bind_group,
                             &bundle.distorted_quad_vertex_buffer,

@@ -961,7 +961,7 @@ fn a_hidden_node_drops_out_of_every_pass_and_out_of_the_bounds() {
     r.set_node_transform(OTHER, similarity(1.0));
 
     assert_eq!(r.drawn(|b| b.display.show_points).count(), 2);
-    assert_eq!(r.drawn(|b| b.display.show_cameras).count(), 2);
+    assert_eq!(r.drawn(|b| b.display.show_camera_images).count(), 2);
     let both = r.scene_bounds();
 
     r.set_node_display(
@@ -977,7 +977,7 @@ fn a_hidden_node_drops_out_of_every_pass_and_out_of_the_bounds() {
         1,
         "a node that is not visible was still drawn"
     );
-    assert_eq!(r.drawn(|b| b.display.show_cameras).count(), 1);
+    assert_eq!(r.drawn(|b| b.display.show_camera_images).count(), 1);
     let solo_bounds = r.scene_bounds();
     let expected = bundle_of(&r, RECON)
         .world_bounds()
@@ -997,7 +997,7 @@ fn a_hidden_node_drops_out_of_every_pass_and_out_of_the_bounds() {
         },
     );
     assert_eq!(r.drawn(|b| b.display.show_points).count(), 0);
-    assert_eq!(r.drawn(|b| b.display.show_cameras).count(), 1);
+    assert_eq!(r.drawn(|b| b.display.show_camera_images).count(), 1);
 }
 
 /// With everything hidden the union falls back to all loaded nodes rather than

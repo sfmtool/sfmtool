@@ -18,7 +18,8 @@
 //!
 //! - Anything **stored across frames** — [`crate::state::AppState`] selection
 //!   and hover, the SIFT/full-res caches, every panel-local texture cache, the
-//!   camera-view target — is keyed by [`ImageRef`] / [`PointRef`].
+//!   camera-view target — is keyed by [`ImageRef`] / [`PointRef`] /
+//!   [`CameraRef`].
 //! - Anything **scoped to one call** is a plain index local to the
 //!   reconstruction it was read from: panel `show` arguments, panel responses,
 //!   track image lists, and the GPU uniforms. Panels take the owning
@@ -100,6 +101,37 @@ impl PointRef {
     /// The point index within its own reconstruction.
     pub fn index(self) -> usize {
         self.point as usize
+    }
+
+    /// This ref's local index, but only if it points into `recon`.
+    pub fn index_in(self, recon: ReconId) -> Option<usize> {
+        (self.recon == recon).then(|| self.index())
+    }
+}
+
+/// A camera intrinsics record within a specific reconstruction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CameraRef {
+    pub recon: ReconId,
+    pub camera: u32,
+}
+
+// `index` and `index_in` are shaped after [`ImageRef`] and [`PointRef`] and
+// unwrap a ref the same way, but nothing unwraps a camera ref yet: the Scene
+// Graph's Camera Intrinsics rows are the first reader, and they are a later
+// phase of `specs/gui/gui-camera-intrinsics.md`.
+#[allow(dead_code)]
+impl CameraRef {
+    pub fn new(recon: ReconId, camera: usize) -> Self {
+        Self {
+            recon,
+            camera: camera as u32,
+        }
+    }
+
+    /// The camera index within its own reconstruction.
+    pub fn index(self) -> usize {
+        self.camera as usize
     }
 
     /// This ref's local index, but only if it points into `recon`.
@@ -235,7 +267,11 @@ pub struct SceneNode {
     /// Group eye: the node's 3D points.
     pub show_points: bool,
     /// Group eye: the node's camera frustums and image quads.
-    pub show_cameras: bool,
+    ///
+    /// Named for what it draws: a `.sfmr` *image* is the posed view a frustum
+    /// and its quad stand for, while a *camera* is the intrinsics record any
+    /// number of images can share.
+    pub show_camera_images: bool,
     /// Group eye: the node's patch surfels (inert without patch data).
     pub show_patches: bool,
     /// Sub-toggle of [`SceneNode::show_points`]: the `w = 0` directions.
@@ -273,7 +309,7 @@ impl SceneNode {
             visible: true,
             interactive: true,
             show_points: true,
-            show_cameras: true,
+            show_camera_images: true,
             show_patches: true,
             show_points_at_infinity: true,
             tint: NodeTint::Original,
@@ -335,7 +371,7 @@ impl SceneNode {
         self.visible = other.visible;
         self.interactive = other.interactive;
         self.show_points = other.show_points;
-        self.show_cameras = other.show_cameras;
+        self.show_camera_images = other.show_camera_images;
         self.show_patches = other.show_patches;
         self.show_points_at_infinity = other.show_points_at_infinity;
         self.tint = other.tint;

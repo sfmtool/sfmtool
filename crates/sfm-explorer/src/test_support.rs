@@ -20,3 +20,35 @@ pub(crate) fn run_frame_headless(
     let mut output = ctx.run_ui(input, run_ui);
     output.textures_delta.clear();
 }
+
+/// Every string painted in one headless frame, in paint order.
+///
+/// A panel that elides its own text has to be asked what it actually drew, and
+/// egui's frame output carries the galleys: laying out needs no GPU, so the
+/// strings are real even with no painter behind them. Nested `Shape::Vec`s are
+/// walked, since a widget's shapes arrive grouped.
+pub(crate) fn painted_texts(
+    ctx: &egui::Context,
+    input: egui::RawInput,
+    run_ui: impl FnMut(&mut egui::Ui),
+) -> Vec<String> {
+    let mut output = ctx.run_ui(input, run_ui);
+    output.textures_delta.clear();
+    let mut texts = Vec::new();
+    for clipped in &output.shapes {
+        collect_texts(&clipped.shape, &mut texts);
+    }
+    texts
+}
+
+fn collect_texts(shape: &egui::Shape, out: &mut Vec<String>) {
+    match shape {
+        egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_texts(shape, out);
+            }
+        }
+        _ => {}
+    }
+}

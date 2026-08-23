@@ -12,8 +12,8 @@
 //! ## Shape of the tree
 //!
 //! ```text
-//! ▾ 👁 S 🖱 ▪ run_a                1.2M pts · 243 cams   ← S = solo, ▪ = tint
-//!   ▾ 👁 Cameras (243)
+//! ▾ 👁 S 🖱 ▪ run_a       1.2M pts · 243 imgs · 2 cams   ← S = solo, ▪ = tint
+//!   ▾ 👁 Camera Images (243)
 //!       IMG_0001.jpg              ← virtualized, `ScrollArea::show_rows`
 //!   ▾ 👁 Points (1,204,551 · 12 at ∞) ∞
 //!       selected: pt3d_a1b2c3_88231   ← selection / hover rows only
@@ -43,9 +43,9 @@ use crate::state::AppState;
 /// the eye/cursor toggles line up down the tree regardless of label height.
 const ROW_HEIGHT: f32 = 18.0;
 
-/// Height of the virtualized camera list inside an expanded Cameras group.
-/// Bounded rather than unbounded so a 50K-camera node cannot push every node
-/// below it off the panel.
+/// Height of the virtualized image list inside an expanded Camera Images
+/// group. Bounded rather than unbounded so a 50K-image node cannot push every
+/// node below it off the panel.
 const CAMERA_LIST_HEIGHT: f32 = 220.0;
 
 /// Width reserved for each toggle glyph, so labels align across rows whether or
@@ -301,7 +301,7 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
         show_node_header(ui, node, ctx, out);
     });
     header.body(|ui| {
-        show_cameras_group(ui, node, ctx, out);
+        show_camera_images_group(ui, node, ctx, out);
         show_points_group(ui, node, ctx, out);
         if node.has_patch_data() {
             ui.horizontal(|ui| {
@@ -320,8 +320,8 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
     });
 }
 
-/// `[👁] [S] [🖱] ▪ label    1.2M pts · 243 cams` — the reconstruction row's
-/// content, drawn to the right of the collapsing triangle.
+/// `[👁] [S] [🖱] ▪ label   1.2M pts · 243 imgs · 2 cams` — the reconstruction
+/// row's content, drawn to the right of the collapsing triangle.
 ///
 /// Everything past the three toggles is a single click target spanning the row:
 /// select, zoom-to-fit and the context menu all hang off it, so none of them
@@ -454,18 +454,8 @@ fn show_node_header(
     ui.add(egui::Label::new(label).selectable(false));
 
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(format!(
-                    "{} pts · {} cams",
-                    compact_count(node.recon.points.len()),
-                    compact_count(node.recon.images.len()),
-                ))
-                .weak()
-                .small(),
-            )
-            .selectable(false),
-        );
+        let counts = counts_text(ui, node);
+        ui.add(egui::Label::new(egui::RichText::new(counts).weak().small()).selectable(false));
     });
 }
 
@@ -562,10 +552,13 @@ fn show_align_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
 
     let menu = ui.menu_button("Align to", |ui| {
         ui.label(egui::RichText::new("Correspondences").weak().small());
+        // "Camera Poses", not "Cameras": this fits the two clouds' *poses*
+        // onto one another, and under the tree's vocabulary a bare "Cameras"
+        // now reads as the intrinsics the Camera Images group is drawn from.
         let cameras = ui.radio_value(
             &mut out.align_options.source,
             AlignSource::Cameras,
-            "Cameras",
+            "Camera Poses",
         );
         out.hit(row_id(id, "align_cameras"), cameras);
         let points = ui
@@ -605,8 +598,12 @@ fn show_align_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
     out.hit(row_id(id, "align_menu"), menu.response);
 }
 
-/// `[▸] [👁] Cameras (243)`, expanding to a virtualized per-image list.
-fn show_cameras_group(
+/// `[▸] [👁] Camera Images (243)`, expanding to a virtualized per-image list.
+///
+/// Counts `recon.images.len()`: a `.sfmr` *image* is one posed view, and the
+/// intrinsics several of them share is a *camera* — a distinction the row used
+/// to lose by calling itself `Cameras`.
+fn show_camera_images_group(
     ui: &mut egui::Ui,
     node: &mut SceneNode,
     ctx: &NodeContext,
@@ -614,7 +611,7 @@ fn show_cameras_group(
 ) {
     let state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
-        row_id(node.id, "cameras"),
+        row_id(node.id, "camera_images"),
         // Collapsed: the image list is the Image Browser's job, and an
         // expanded-by-default list would bury every node below this one.
         false,
@@ -624,19 +621,24 @@ fn show_cameras_group(
         ui.set_height(ROW_HEIGHT);
         let eye = eye_toggle(
             ui,
-            row_id(id, "cameras_eye"),
-            &mut node.show_cameras,
+            row_id(id, "camera_images_eye"),
+            &mut node.show_camera_images,
             None,
-            "Show this node's cameras",
+            "Show this node's camera frustums and image quads",
         );
-        out.hit(row_id(id, "cameras_eye"), eye);
-        ui.label(format!("Cameras ({})", node.recon.images.len()));
+        out.hit(row_id(id, "camera_images_eye"), eye);
+        ui.label(format!("Camera Images ({})", node.recon.images.len()));
     });
-    header.body(|ui| show_camera_rows(ui, node, ctx, out));
+    header.body(|ui| show_camera_image_rows(ui, node, ctx, out));
 }
 
 /// The per-image rows, laid out only for the visible slice of the list.
-fn show_camera_rows(ui: &mut egui::Ui, node: &SceneNode, ctx: &NodeContext, out: &mut TreeOutput) {
+fn show_camera_image_rows(
+    ui: &mut egui::Ui,
+    node: &SceneNode,
+    ctx: &NodeContext,
+    out: &mut TreeOutput,
+) {
     let count = node.recon.images.len();
     if count == 0 {
         ui.weak("No images");
@@ -837,6 +839,39 @@ fn glyph_toggle(
         *on = !*on;
     }
     response
+}
+
+/// `1.2M pts · 243 imgs · 2 cams`, elided to what is left of the row.
+///
+/// Three counts make this the longest row in a panel that defaults to 18% of
+/// the window, so rather than truncate or wrap it drops a count at a time: the
+/// camera count first (it is also on its own group row, one line down), then
+/// the image count, leaving the point count — which has no other home in the
+/// tree — last to go.
+///
+/// Measured against the width actually left after the label rather than
+/// against a character budget, so widening the panel brings the counts back.
+fn counts_text(ui: &egui::Ui, node: &SceneNode) -> String {
+    let points = format!("{} pts", compact_count(node.recon.points.len()));
+    let images = format!("{} imgs", compact_count(node.recon.images.len()));
+    let cameras = format!("{} cams", compact_count(node.recon.cameras.len()));
+    let available = ui.available_width();
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let fits = |text: &str| {
+        let galley =
+            ui.painter()
+                .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER);
+        galley.size().x <= available
+    };
+    let all_three = format!("{points} · {images} · {cameras}");
+    if fits(&all_three) {
+        return all_three;
+    }
+    let without_cameras = format!("{points} · {images}");
+    if fits(&without_cameras) {
+        return without_cameras;
+    }
+    points
 }
 
 /// `1234567` → `"1.2M"`, `12345` → `"12.3K"`, `999` → `"999"`.

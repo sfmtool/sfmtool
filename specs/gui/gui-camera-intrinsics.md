@@ -1,6 +1,7 @@
 # Camera Intrinsics: Scene-Graph Node, Image Overlay, Detail Panel
 
-**Status:** design — not implemented.
+**Status:** design — phase 1 (vocabulary and data model) implemented;
+phases 2–6 not yet.
 
 The viewer can show you where a camera *is* and what it *saw*, but nothing in it
 tells you what the camera *is*: which intrinsic model, what focal length, how far
@@ -874,12 +875,23 @@ way the context menu does.
 
 Each phase leaves the viewer in a shippable state.
 
-1. **Vocabulary and data model.** `CameraRef`, `selected_camera`, the two
-   `AppState` setters and the coupling truth table with its tests; the
+1. **Vocabulary and data model** — *done.* `CameraRef`, `selected_camera`,
+   the two `AppState` setters and the coupling truth table with its tests; the
    `Cameras` → `Camera Images` rename with `show_cameras` →
-   `show_camera_images` and the three spec docs that name it;
-   `AlignSource::Cameras` → `Camera Poses`; the reconstruction row's counts.
-   No new UI surface — this phase is only visible as better labels.
+   `show_camera_images`; `AlignSource::Cameras` → `Camera Poses`; the
+   reconstruction row's counts. No new UI surface — this phase is only visible
+   as better labels.
+
+   Of the "three spec docs that name it", only
+   [gui-scene-graph.md](gui-scene-graph.md) actually did.
+   [gui-camera-views.md](gui-camera-views.md) and
+   [gui-viewport-hud.md](gui-viewport-hud.md) name `AppState`'s *global*
+   `show_camera_images` layer switch, which already carried the new name.
+   What those two leave behind is one label: the HUD's Layers checkbox still
+   reads `Cameras` (`viewer_3d/hud.rs`, asserted by name in the windowed
+   `ui_basic` tests) where the HUD spec's own section table already calls it
+   `Show Camera Images`. Renaming it is the same bug fix and is left as
+   follow-up, since it moves a windowed test.
 2. **`camera::report` and `parameter_names()`.** Pure core work, fully
    unit-tested, with no consumer yet.
 3. **Scene Graph group.** The Camera Intrinsics rows, click and double-click,

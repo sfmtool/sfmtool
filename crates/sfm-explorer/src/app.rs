@@ -307,7 +307,7 @@ impl App {
                     NodeDisplay {
                         visible: crate::scene::is_visible(node, solo),
                         show_points: node.show_points,
-                        show_cameras: node.show_cameras,
+                        show_camera_images: node.show_camera_images,
                         show_patches: node.show_patches,
                         show_points_at_infinity: node.show_points_at_infinity,
                         interactive: node.interactive,
@@ -814,7 +814,7 @@ impl App {
                     // Selecting an entity selects its reconstruction too — the
                     // viewport can pick into any visible node, so this is where
                     // a click can move the selection between files.
-                    self.state.select_image(image);
+                    self.state.select_image(Some(image));
                     if self.viewer_3d.pending_click_is_double {
                         // Double-click on frustum → enter/switch camera view mode
                         if let Some(node) = crate::scene::node_by_id(&self.state.scene, image.recon)
@@ -836,8 +836,10 @@ impl App {
                     self.state.select_point(point);
                 }
                 None if !self.viewer_3d.pending_click_is_alt => {
-                    // Clicked on background (non-Alt) — deselect
-                    self.state.selected_image = None;
+                    // Clicked on background (non-Alt) — deselect. The image
+                    // goes; the camera it named stays, per the coupling rule
+                    // in `AppState::select_image`.
+                    self.state.select_image(None);
                     self.state.selected_point = None;
                 }
                 None => {}

@@ -5,7 +5,7 @@
 
 use crate::align::{self, AlignOptions};
 use crate::goto_point::{self, GotoPointDialog};
-use crate::scene::{node_by_id, unique_label, ImageRef, PointRef, ReconId, SceneNode};
+use crate::scene::{node_by_id, unique_label, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
@@ -135,7 +135,23 @@ pub struct AppState {
     pub solo: Option<ReconId>,
 
     /// Currently selected image.
+    ///
+    /// Set only through [`AppState::select_image`], which is what keeps
+    /// `selected_camera` in step with it.
     pub selected_image: Option<ImageRef>,
+
+    /// The selected camera intrinsics, or `None`.
+    ///
+    /// Coupled to `selected_image`: whenever `selected_image` is `Some`, this
+    /// is `Some` and names that image's camera. See
+    /// [`AppState::select_camera`].
+    ///
+    /// **Stored, not derived.** A camera can be selected with no image
+    /// selected at all — that is the whole point of picking one out of the
+    /// tree — so deriving it from `selected_image` would blank it the moment
+    /// the user clicked anything else. What is derived is the *constraint*
+    /// between the two, and that lives in the two setters.
+    pub selected_camera: Option<CameraRef>,
 
     /// Currently selected 3D point.
     pub selected_point: Option<PointRef>,
@@ -269,6 +285,7 @@ impl AppState {
             selected_recon: None,
             solo: None,
             selected_image: None,
+            selected_camera: None,
             selected_point: None,
             hovered_image: None,
             hovered_point: None,
@@ -427,6 +444,7 @@ impl AppState {
         self.selected_recon = None;
         self.solo = None;
         self.selected_image = None;
+        self.selected_camera = None;
         self.selected_point = None;
         self.hovered_image = None;
         self.hovered_point = None;
@@ -443,6 +461,7 @@ impl AppState {
         self.sift_cache.retain(|image, _| image.recon != id);
         self.full_res_cache.retain(|image, _| image.recon != id);
         self.selected_image = self.selected_image.filter(|i| i.recon != id);
+        self.selected_camera = self.selected_camera.filter(|c| c.recon != id);
         self.selected_point = self.selected_point.filter(|p| p.recon != id);
         self.hovered_image = self.hovered_image.filter(|i| i.recon != id);
         self.hovered_point = self.hovered_point.filter(|p| p.recon != id);
@@ -457,6 +476,7 @@ impl AppState {
     pub fn select_recon(&mut self, id: ReconId) {
         self.selected_recon = Some(id);
         self.selected_image = self.selected_image.filter(|i| i.recon == id);
+        self.selected_camera = self.selected_camera.filter(|c| c.recon == id);
         self.selected_point = self.selected_point.filter(|p| p.recon == id);
     }
 
@@ -470,11 +490,59 @@ impl AppState {
         self.solo = (self.solo != Some(id)).then_some(id);
     }
 
-    /// Select an image, and with it the reconstruction that owns it.
-    pub fn select_image(&mut self, image: ImageRef) {
-        self.selected_image = Some(image);
+    /// The camera an image uses, when the image ref still resolves.
+    pub fn camera_of(&self, image: ImageRef) -> Option<CameraRef> {
+        let node = self.node(image.recon)?;
+        let camera = node.recon.images.get(image.index())?.camera_index as usize;
+        Some(CameraRef::new(image.recon, camera))
+    }
+
+    /// Select an image — and with it the reconstruction that owns it and the
+    /// camera it was taken through.
+    ///
+    /// The one place an image selection is *set* — the recon-scoped paths
+    /// (`select_recon`, `forget_recon`, `close_all`) only ever clear it — so
+    /// no caller can leave `selected_camera` naming another image's lens.
+    /// Passing `None`
+    /// deselects the image and **keeps** the camera: dismissing a photograph
+    /// says nothing about the lens, and collapsing the intrinsics with it
+    /// would be a surprise. A second `Esc`, finding no image, clears the
+    /// camera through [`AppState::select_camera`].
+    pub fn select_image(&mut self, image: Option<ImageRef>) {
+        self.selected_image = image;
+        let Some(image) = image else {
+            return;
+        };
         self.selected_recon = Some(image.recon);
+        self.selected_camera = self.camera_of(image);
         self.selected_point = self.selected_point.filter(|p| p.recon == image.recon);
+    }
+
+    /// Select a camera, and with it the reconstruction that owns it.
+    ///
+    /// Clears `selected_image` unless the selected image already uses this
+    /// camera — asking for a *different* lens is a statement that the image on
+    /// screen is no longer what is being looked at, while asking for the one
+    /// it already uses is not, and clearing there would throw an image away
+    /// for clicking the row that is already highlighted for it.
+    ///
+    /// No UI writes it yet — the group of camera rows that will is a later
+    /// phase of `specs/gui/gui-camera-intrinsics.md`. The rule lands with the
+    /// field so that whatever calls it inherits the invariant already tested.
+    #[allow(dead_code)]
+    pub fn select_camera(&mut self, camera: Option<CameraRef>) {
+        self.selected_camera = camera;
+        let Some(camera) = camera else {
+            return;
+        };
+        self.selected_recon = Some(camera.recon);
+        let image_uses_it = self
+            .selected_image
+            .is_some_and(|image| self.camera_of(image) == Some(camera));
+        if !image_uses_it {
+            self.selected_image = None;
+        }
+        self.selected_point = self.selected_point.filter(|p| p.recon == camera.recon);
     }
 
     /// Open the Go to Point dialog, prefilled with the selected point's ID.
@@ -493,6 +561,7 @@ impl AppState {
         self.selected_point = Some(point);
         self.selected_recon = Some(point.recon);
         self.selected_image = self.selected_image.filter(|i| i.recon == point.recon);
+        self.selected_camera = self.selected_camera.filter(|c| c.recon == point.recon);
     }
 
     /// Fit `source`'s transform so it lands on top of `target`, and report the

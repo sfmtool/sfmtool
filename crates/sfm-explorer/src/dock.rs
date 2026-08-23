@@ -99,12 +99,18 @@ impl TabViewer for TabContext<'_> {
                 // overlap.
                 let node = selected_node(&self.state.scene, self.state.selected_recon);
                 if let Some(node) = node {
+                    // The viewport's own bindings (`,` / `.`) move the image
+                    // selection, and they move it in a scratch copy: applying
+                    // it afterwards through `select_image` is what keeps the
+                    // selected camera in step, which a `&mut` straight into the
+                    // field could not.
+                    let mut selection = self.state.selected_image;
                     self.viewer_3d.show(
                         ui,
                         node,
                         &self.state.scene,
                         self.state.solo,
-                        &mut self.state.selected_image,
+                        &mut selection,
                         self.state.show_grid,
                         self.state.length_scale,
                         self.state.status_message.as_deref(),
@@ -116,6 +122,9 @@ impl TabViewer for TabContext<'_> {
                         self.hover_depth,
                         self.hover_pick,
                     );
+                    if selection != self.state.selected_image {
+                        self.state.select_image(selection);
+                    }
                 } else {
                     ui.centered_and_justified(|ui| {
                         ui.vertical_centered(|ui| {
@@ -172,9 +181,12 @@ impl TabViewer for TabContext<'_> {
                         self.gesture_events,
                         self.scroll_input,
                     );
-                    if let Some(new_sel) = response.selection_changed {
-                        self.state.selected_image = new_sel.map(|i| ImageRef::new(id, i));
-                    }
+                    // Held back rather than applied here: `select_image`
+                    // wants `&mut AppState`, and `node` is borrowed out of the
+                    // scene for the camera-view calls below.
+                    let new_selection = response
+                        .selection_changed
+                        .map(|sel| sel.map(|i| ImageRef::new(id, i)));
                     if response.has_pointer {
                         // Browser owns hover state when it has the pointer.
                         self.state.hovered_image =
@@ -199,6 +211,9 @@ impl TabViewer for TabContext<'_> {
                             self.viewer_3d
                                 .switch_camera_view(ImageRef::new(id, img_idx), node);
                         }
+                    }
+                    if let Some(selection) = new_selection {
+                        self.state.select_image(selection);
                     }
                 } else {
                     ui.centered_and_justified(|ui| {
@@ -346,9 +361,11 @@ impl TabViewer for TabContext<'_> {
                         self.gesture_events,
                         self.scroll_input,
                     );
-                    if let Some(img_idx) = track_response.select_image {
-                        self.state.selected_image = Some(ImageRef::new(id, img_idx));
-                    }
+                    // As in the browser arm: applied once `node`'s borrow is
+                    // done with, since the setter needs the state mutably.
+                    let new_selection = track_response
+                        .select_image
+                        .map(|img_idx| ImageRef::new(id, img_idx));
                     if let Some(img_idx) = track_response.request_camera_view {
                         let current_time = ui.input(|i| i.time);
                         let image = ImageRef::new(id, img_idx);
@@ -369,6 +386,9 @@ impl TabViewer for TabContext<'_> {
                     }
                     if track_response.request_goto_point {
                         self.state.open_goto_point();
+                    }
+                    if let Some(image) = new_selection {
+                        self.state.select_image(Some(image));
                     }
                 } else {
                     ui.centered_and_justified(|ui| {
@@ -395,7 +415,7 @@ impl TabContext<'_> {
             self.state.select_recon(id);
         }
         if let Some(image) = response.select_image {
-            self.state.select_image(image);
+            self.state.select_image(Some(image));
         }
         if let Some(point) = response.select_point {
             self.state.select_point(point);

@@ -722,7 +722,7 @@ fn viewport_shortcuts_are_suppressed_while_a_widget_holds_the_keyboard() {
     let mut state = demo_state();
     let (mut viewer, ctx) = settled(&mut state);
     let id = recon_id(&state);
-    state.selected_image = Some(ImageRef::new(id, 0));
+    state.select_image(Some(ImageRef::new(id, 0)));
 
     // Baseline: `.` steps the selected image.
     run_frame(

@@ -233,6 +233,9 @@ impl Viewer3D {
         // The soloed node, if any — the stats line counts what is drawn, and
         // a solo is half of what decides that.
         solo: Option<ReconId>,
+        // The image selection, as a scratch copy `dock.rs` puts back through
+        // `AppState::select_image` — the setter is what keeps the selected
+        // camera in step, so the field itself is never handed out `&mut`.
         selected_image: &mut Option<ImageRef>,
         show_grid: bool,
         length_scale: f32,

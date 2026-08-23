@@ -60,7 +60,7 @@ reconstruction):
 ```
 Scene (root, implicit)
 ├── Reconstruction "run_a"        ← one node per loaded .sfmr
-│   ├── Cameras (243)             ← fixed group node
+│   ├── Camera Images (243)       ← fixed group node
 │   │   ├── IMG_0001.jpg          ← per-image rows (virtualized)
 │   │   └── …
 │   ├── Points (1,204,551 · 12 at ∞)  ← fixed group node
@@ -89,16 +89,29 @@ pub struct ImageRef { pub recon: ReconId, pub image: u32 }
 
 /// A 3D point within a specific reconstruction.
 pub struct PointRef { pub recon: ReconId, pub point: u32 }
+
+/// A camera intrinsics record within a specific reconstruction.
+pub struct CameraRef { pub recon: ReconId, pub camera: u32 }
 ```
 
 All selection and hover state moves from `Option<usize>` to these typed refs:
 
 ```rust
-pub selected_image: Option<ImageRef>,
-pub selected_point: Option<PointRef>,
-pub hovered_image:  Option<ImageRef>,
-pub hovered_point:  Option<PointRef>,
+pub selected_image:  Option<ImageRef>,
+pub selected_camera: Option<CameraRef>,
+pub selected_point:  Option<PointRef>,
+pub hovered_image:   Option<ImageRef>,
+pub hovered_point:   Option<PointRef>,
 ```
+
+`selected_camera` is coupled to `selected_image` rather than independent of it:
+selecting an image selects the camera it was taken through, and both fields are
+written only through `AppState::select_image` and `AppState::select_camera`, so
+no panel can leave one of them naming another image's lens. The rule is stated
+exhaustively in [gui-camera-intrinsics.md](gui-camera-intrinsics.md) § "The
+selection coupling", which owns it. Everything the recon-scoping rules below say
+about the image and point selections holds for the camera selection too — it is
+filtered by `ReconId` in exactly the same places.
 
 There is still exactly **one** selected image and **one** selected point
 globally — the cross-panel selection model of
@@ -125,7 +138,7 @@ pub struct SceneNode {
     /// working with. Explicit selection from the Scene panel still works.
     pub interactive: bool,
     pub show_points: bool,           // group eyes
-    pub show_cameras: bool,
+    pub show_camera_images: bool,
     pub show_patches: bool,
     pub show_points_at_infinity: bool,
     pub tint: NodeTint,              // Original | Tint(&'static TintColor)
@@ -249,7 +262,7 @@ explicit IDs (the viewport HUD's pattern, `viewer_3d/hud.rs`) — *not*
 `CollapsingHeader` — so expansion state is addressable and testable. Rows are
 fixed-height for virtualization.
 
-**Reconstruction row** — `[▸] [👁] [S] [🖱] ▪ run_a   1.2M pts · 243 cams`
+**Reconstruction row** — `[▸] [👁] [S] [🖱] ▪ run_a 1.2M pts · 243 imgs · 2 cams`
 - Expand triangle, visibility eye (node master), solo toggle, interaction cursor
   toggle (`interactive` — greyed when off), tint swatch, label, compact counts.
 - All three glyph toggles carry **explicit ids** rather than egui's auto ids: an
@@ -275,8 +288,9 @@ fixed-height for virtualization.
   Affordances").
 - Expanded by default: with one file loaded the node's groups are the whole
   panel, and with a handful the tree is still what answers "what is in here".
-  Its Cameras and Points groups start *collapsed* — the image list is the Image
-  Browser's job, and an expanded 50K-row list would bury every node below it.
+  Its Camera Images and Points groups start *collapsed* — the image list is the
+  Image Browser's job, and an expanded 50K-row list would bury every node below
+  it.
 - Both eyes and the cursor are drawn as dimmable glyph buttons (U+1F441 EYE,
   U+1F5B1 TRACKBALL, U+221E INFINITY — all in egui's bundled proportional
   fonts, which `scene_graph/tests.rs` pins); solo is the letter `S`, dimmed the
@@ -289,27 +303,32 @@ fixed-height for virtualization.
   solo is hiding reads as dark without its own flag having moved; clicking it
   still writes `visible`, which takes effect the moment the solo ends.
 - The compact counts are `1.2M` / `12.3K` / `999`; the exact figure, with
-  thousands separators, is one row down on the group rows.
+  thousands separators, is one row down on the group rows. Three counts —
+  points, images, cameras — make this the longest row in a panel that defaults
+  to 18% of the window, so it **elides** rather than truncating or wrapping:
+  when the row cannot fit all three the camera count goes first (it is also on
+  the Camera Images group row, one line down), then the image count, leaving
+  the point count, which has no other home in the tree, last to go. The
+  measurement is against the width actually left after the label, so widening
+  the panel brings the counts back.
 
-**Cameras group row** — `[▸] [👁] Cameras (243)`
-- Eye drives `show_cameras` for the node.
-
-> _Planned (2026-08-23): this row is renamed **Camera Images**, gains a
-> **Camera Intrinsics** group above it, and `show_cameras` becomes
-> `show_camera_images` — the label has counted `recon.images.len()` under the
-> `.sfmr` name for an intrinsics record since it was written. The
-> reconstruction row's `243 cams` becomes `243 imgs · 2 cams`, and
-> `AlignSource::Cameras`'s menu entry becomes `Camera Poses`. See
-> [gui-camera-intrinsics.md](gui-camera-intrinsics.md) § "Terminology" and
-> § "Scene Graph: the Camera Intrinsics group", which own the definition._
-
+**Camera Images group row** — `[▸] [👁] Camera Images (243)`
+- Eye drives `show_camera_images` for the node.
+- Named for what it counts: `recon.images.len()`, one row per *posed view*. In
+  `.sfmr` — COLMAP's vocabulary — a camera is an intrinsics record that any
+  number of images can share, so a group labelled `Cameras` and counting images
+  was mislabelled rather than merely terse. The intrinsics themselves get their
+  own group above this one; see
+  [gui-camera-intrinsics.md](gui-camera-intrinsics.md) § "Terminology" and
+  § "Scene Graph: the Camera Intrinsics group", which own that definition.
 - Expands to one row per image, **in image order, virtualized** via
-  `ScrollArea::show_rows` — only visible rows are laid out, so 50K cameras
+  `ScrollArea::show_rows` — only visible rows are laid out, so 50K images
   cost tens of rows per frame.
 
-**Camera row** — `IMG_0001.jpg`
-- Click: `selected_image = Some(ImageRef)`. Double-click: enter/switch camera
-  view (same semantics as a browser thumbnail double-click).
+**Camera image row** — `IMG_0001.jpg`
+- Click: `select_image(Some(ImageRef))`, which also selects the camera that
+  image was taken through (the coupling above). Double-click: enter/switch
+  camera view (same semantics as a browser thumbnail double-click).
 - Hover: sets `hovered_image` (participates in cross-panel hover exactly like
   a browser thumbnail; the row highlights when the same image is hovered
   elsewhere, e.g. from the 3D viewport pick).
@@ -720,7 +739,10 @@ fit does:
   [reconstruction-alignment.md](../core/reconstruction-alignment.md).
 
 Options are deliberately few (a small popup): correspondence source
-(Cameras / Points) and Similarity vs Rigid. Defaults: cameras, similarity. They
+(Camera Poses / Points) and Similarity vs Rigid. Defaults: camera poses,
+similarity. The first is spelled `Camera Poses` rather than `Cameras` because
+it fits the two clouds' *poses* onto one another, which under the tree's
+vocabulary a bare "Cameras" — an intrinsics record — no longer says. They
 live on the panel and persist between opens, and they sit *above* the target
 list in the one `Align to ▸` submenu rather than in a popup per target — two
 radio pairs do not earn a third level of nesting. A target whose node lacks
@@ -1066,7 +1088,7 @@ in phase 3.
   distance overlays.
 - **Difference visualization**: per-point nearest-neighbor distance coloring
   between two aligned nodes; per-camera pose-error glyphs.
-- **Deeper hierarchy**: rig groups under Cameras, user grouping/reordering,
+- **Deeper hierarchy**: rig groups under Camera Images, user grouping/reordering,
   per-node point-size overrides.
 - **Session persistence**: save/restore the scene (paths, transforms, tints,
   visibility) as a small project file.

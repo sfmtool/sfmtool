@@ -58,7 +58,8 @@ pub struct NodeDisplay {
     /// "visible" means.
     pub visible: bool,
     pub show_points: bool,
-    pub show_cameras: bool,
+    /// Group eye: the node's camera frustums and image quads.
+    pub show_camera_images: bool,
     pub show_patches: bool,
     /// Sub-toggle of `show_points`, applied in the point shader so instance
     /// indices (and therefore pick ids) stay unfiltered.
@@ -77,7 +78,7 @@ impl Default for NodeDisplay {
         Self {
             visible: true,
             show_points: true,
-            show_cameras: true,
+            show_camera_images: true,
             show_patches: true,
             show_points_at_infinity: true,
             interactive: true,
