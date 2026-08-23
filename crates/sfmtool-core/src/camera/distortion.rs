@@ -601,6 +601,11 @@ impl CameraModel {
                 ..
             } => distort_ray_equidistant(rx, ry, rz, *k1, *k2, 0.0, 0.0),
 
+            // Thin prism family: the incidence angle straight into the
+            // theta-space kernel, which is where these two models are
+            // defined. The `distort_*_fisheye` kernels the `distort` arms
+            // call are the *perspective* front door to that same core, so
+            // calling them from here would apply `atan` to an angle.
             CameraModel::ThinPrismFisheye {
                 radial_distortion_k1: k1,
                 radial_distortion_k2: k2,
@@ -611,19 +616,9 @@ impl CameraModel {
                 thin_prism_sx1: sx1,
                 thin_prism_sy1: sy1,
                 ..
-            } => {
-                let r_xy = (rx * rx + ry * ry).sqrt();
-                let theta = r_xy.atan2(rz);
-                if r_xy < 1e-15 {
-                    return Some((0.0, 0.0));
-                }
-                let (dx, dy) = (rx / r_xy, ry / r_xy);
-                let uu = theta * dx;
-                let vv = theta * dy;
-                let (x_d, y_d) =
-                    distort_thin_prism_fisheye(uu, vv, *k1, *k2, *p1, *p2, *k3, *k4, *sx1, *sy1);
-                Some((x_d, y_d))
-            }
+            } => Some(distort_ray_thin_prism_fisheye(
+                rx, ry, rz, *k1, *k2, *p1, *p2, *k3, *k4, *sx1, *sy1,
+            )),
 
             CameraModel::RadTanThinPrismFisheye {
                 radial_distortion_k0: k0,
@@ -639,20 +634,9 @@ impl CameraModel {
                 thin_prism_s2: s2,
                 thin_prism_s3: s3,
                 ..
-            } => {
-                let r_xy = (rx * rx + ry * ry).sqrt();
-                let theta = r_xy.atan2(rz);
-                if r_xy < 1e-15 {
-                    return Some((0.0, 0.0));
-                }
-                let (dx, dy) = (rx / r_xy, ry / r_xy);
-                let uu = theta * dx;
-                let vv = theta * dy;
-                let (x_d, y_d) = distort_rad_tan_thin_prism_fisheye(
-                    uu, vv, *k0, *k1, *k2, *k3, *k4, *k5, *p0, *p1, *s0, *s1, *s2, *s3,
-                );
-                Some((x_d, y_d))
-            }
+            } => Some(distort_ray_rad_tan_thin_prism_fisheye(
+                rx, ry, rz, *k0, *k1, *k2, *k3, *k4, *k5, *p0, *p1, *s0, *s1, *s2, *s3,
+            )),
         }
     }
 

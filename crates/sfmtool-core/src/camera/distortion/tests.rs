@@ -3844,3 +3844,150 @@ fn an_off_axis_pinhole_infinity_patch_subtends_the_requested_pixel_radius() {
         );
     }
 }
+
+// -----------------------------------------------------------------------
+// THIN_PRISM_FISHEYE and RAD_TAN_THIN_PRISM_FISHEYE — the ray path
+//
+// Both models are defined by an additive distortion in equidistant (theta)
+// space, so `distort_ray` has the incidence angle it needs already and must
+// hand it to the kernel unconverted. It used to build `(θ·dx, θ·dy)` and then
+// pass that to the *perspective* entry point, which converts a second time —
+// the forward map came out as if the angle were `atan θ`, and the giveaway is
+// that it was wrong with every coefficient zero, where the model is exactly
+// the equidistant map. Both properties below are asserted at zero
+// coefficients first for that reason.
+// -----------------------------------------------------------------------
+
+/// The two thin-prism models over one ray, at zero and at live coefficients.
+///
+/// `live` scales a realistic coefficient set; `0.0` gives the distortion-free
+/// member of each family, which must be the exact equidistant map.
+fn thin_prism_family(live: f64) -> Vec<CameraModel> {
+    vec![
+        CameraModel::ThinPrismFisheye {
+            focal_length_x: 500.0,
+            focal_length_y: 502.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: 0.05 * live,
+            radial_distortion_k2: -0.02 * live,
+            tangential_distortion_p1: 0.001 * live,
+            tangential_distortion_p2: -0.002 * live,
+            radial_distortion_k3: 0.01 * live,
+            radial_distortion_k4: -0.005 * live,
+            thin_prism_sx1: 0.002 * live,
+            thin_prism_sy1: -0.001 * live,
+        },
+        CameraModel::RadTanThinPrismFisheye {
+            focal_length_x: 500.0,
+            focal_length_y: 502.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            radial_distortion_k0: 0.05 * live,
+            radial_distortion_k1: -0.02 * live,
+            radial_distortion_k2: 0.01 * live,
+            radial_distortion_k3: -0.005 * live,
+            radial_distortion_k4: 0.002 * live,
+            radial_distortion_k5: -0.001 * live,
+            tangential_distortion_p0: 0.001 * live,
+            tangential_distortion_p1: -0.002 * live,
+            thin_prism_s0: 0.002 * live,
+            thin_prism_s1: -0.001 * live,
+            thin_prism_s2: 0.0015 * live,
+            thin_prism_s3: -0.0005 * live,
+        },
+    ]
+}
+
+/// Canonical-frame rays on a `(θ, φ)` lattice out to 80° off the −Z axis.
+///
+/// 80° keeps every sample clear of the 90°–100° band where `undistort_to_ray`
+/// blends the polynomial fisheye models toward the identity on purpose, which
+/// is the one place it is deliberately not the inverse of `distort_ray`. The
+/// azimuths are off-axis so the tangential and thin-prism terms, which are not
+/// radially symmetric, actually contribute.
+fn thin_prism_sample_rays() -> Vec<[f64; 3]> {
+    let mut rays = vec![[0.0, 0.0, -1.0]];
+    for theta_deg in [1.0_f64, 5.0, 15.0, 30.0, 45.0, 60.0, 70.0, 80.0] {
+        let theta = theta_deg.to_radians();
+        for phi_deg in [0.0_f64, 37.0, 90.0, 143.0, 180.0, 271.0, 313.0] {
+            let phi = phi_deg.to_radians();
+            // Optical frame (+Z forward), then S = diag(1, −1, −1) to canonical.
+            let (sx, sy, cz) = (
+                theta.sin() * phi.cos(),
+                theta.sin() * phi.sin(),
+                theta.cos(),
+            );
+            rays.push([sx, -sy, -cz]);
+        }
+    }
+    rays
+}
+
+#[test]
+fn thin_prism_family_ray_projection_is_equidistant_without_coefficients() {
+    // With no distortion, both models ARE the equidistant map `(θ·dx, θ·dy)`.
+    // This is the assertion the old double conversion failed outright: it
+    // returned `atan(θ)`-scaled coordinates, ~135 px off at the corner of a
+    // 640×480 fixture with every coefficient set to zero.
+    let ideal = CameraModel::EquidistantFisheye {
+        focal_length: 500.0,
+        principal_point_x: 320.0,
+        principal_point_y: 240.0,
+    };
+    for model in thin_prism_family(0.0) {
+        for ray in thin_prism_sample_rays() {
+            let (x_d, y_d) = model
+                .distort_ray(ray)
+                .unwrap_or_else(|| panic!("{model:?}: no projection for {ray:?}"));
+            let (rx, ry) = ideal.distort_ray(ray).expect("equidistant always projects");
+            assert_relative_eq!(x_d, rx, epsilon = 1e-14);
+            assert_relative_eq!(y_d, ry, epsilon = 1e-14);
+        }
+    }
+}
+
+#[test]
+fn thin_prism_family_ray_round_trips_at_zero_and_live_coefficients() {
+    // `undistort_to_ray` does the theta-space recovery correctly and always
+    // did; this is what the forward map has to agree with.
+    for (label, tol) in [("zero", 1e-13), ("live", 1e-10)] {
+        let live = if label == "zero" { 0.0 } else { 1.0 };
+        for model in thin_prism_family(live) {
+            for ray in thin_prism_sample_rays() {
+                let (x_d, y_d) = model
+                    .distort_ray(ray)
+                    .unwrap_or_else(|| panic!("{label}: no projection for {ray:?}"));
+                let back = model.undistort_to_ray(x_d, y_d);
+                let err = (back[0] - ray[0])
+                    .hypot(back[1] - ray[1])
+                    .hypot(back[2] - ray[2]);
+                assert!(
+                    err <= tol,
+                    "{label} coefficients: {ray:?} came back as {back:?}, {err:.3e} away"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn thin_prism_family_perspective_and_ray_paths_agree_in_front_of_the_camera() {
+    // The two entry points into the same kernel: `distort` takes the
+    // perspective quotient, `distort_ray` takes the ray. For a ray in front of
+    // the camera they describe the same point and must produce the same
+    // distorted coordinate — the property the double conversion broke, since
+    // only one of the two paths was doing the `atan`.
+    for live in [0.0, 1.0] {
+        for model in thin_prism_family(live) {
+            for ray in thin_prism_sample_rays() {
+                // Canonical → the perspective quotient `distort` expects.
+                let (x, y) = (ray[0] / -ray[2], -ray[1] / -ray[2]);
+                let (px, py) = model.distort(x, y);
+                let (rx, ry) = model.distort_ray(ray).expect("in front of the camera");
+                assert_relative_eq!(px, rx, epsilon = 1e-12);
+                assert_relative_eq!(py, ry, epsilon = 1e-12);
+            }
+        }
+    }
+}

@@ -868,16 +868,17 @@ implemented in `camera/report/tests.rs`:
   for every variant — the property that keeps the table from silently dropping a
   parameter when a model gains one.
 
-Two exclusions, both named in the tests rather than left implicit:
+No model is exempt from either property. `THIN_PRISM_FISHEYE` and
+`RAD_TAN_THIN_PRISM_FISHEYE` were, for a while: `CameraModel::distort_ray`
+handed the equidistant `(θ·dx, θ·dy)` to a kernel whose input is the
+*perspective* `(tan θ·dx, …)` and which converted again, so the forward map
+came out off by an `atan` and zero coefficients displaced a grid node by 135 px
+on a 640×480 fixture. Fixed by giving each kernel a theta-space core that both
+entry points call with what they actually hold; the exclusions and the
+regression test that pinned them are gone.
 
-- `THIN_PRISM_FISHEYE` and `RAD_TAN_THIN_PRISM_FISHEYE` are excluded from the
-  zero-residual and round-trip properties, because `CameraModel::distort_ray`
-  is not the inverse of `undistort_to_ray` for them — it hands the equidistant
-  `(θ·dx, θ·dy)` to a kernel whose input is the *perspective* `(tan θ·dx, …)`
-  and which converts again, so the forward map is off by an `atan`. Zero
-  coefficients displace a grid node by 135 px on a 640×480 fixture. Pre-existing
-  and out of scope for phase 2; pinned by a regression test that fails when it
-  is fixed. **Open.**
+Two caveats remain, both named in the tests rather than left implicit:
+
 - The round trip holds only inside 80° off-axis for the polynomial fisheye
   models, because `undistort_to_ray` blends them toward the identity ray from
   there (`blend_fisheye_ray`) rather than inverting an unreliable polynomial.

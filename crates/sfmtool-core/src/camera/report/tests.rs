@@ -37,19 +37,6 @@ const F_FISH_WIDE: f64 = 200.0;
 /// The furthest distortion-field node lands at 49.2° off-axis.
 const F_FISH_NARROW: f64 = 400.0;
 
-/// Models whose `ray_to_pixel` is not the inverse of their own
-/// `pixel_to_ray`, and which therefore cannot satisfy the round-trip or the
-/// zero-residual property here.
-///
-/// Pre-existing and unrelated to this module: `CameraModel::distort_ray`
-/// converts a ray to equidistant coordinates `(θ·dx, θ·dy)` and hands them to
-/// a kernel whose input is *perspective* `(tan θ·dx, tan θ·dy)` and which
-/// converts again, so the forward map is off by an `atan`. The inverse,
-/// `undistort_to_ray`, does the theta-space recovery correctly. Pinned by
-/// `thin_prism_ray_projection_disagrees_with_its_own_inverse` below, which is
-/// what should fail first when it is fixed.
-const RAY_PATH_INCONSISTENT: [&str; 2] = ["THIN_PRISM_FISHEYE", "RAD_TAN_THIN_PRISM_FISHEYE"];
-
 fn cam(model: CameraModel) -> CameraIntrinsics {
     CameraIntrinsics {
         model,
@@ -270,6 +257,38 @@ fn distorted_cameras(f_fish: f64) -> Vec<CameraIntrinsics> {
             radial_distortion_k1: 0.05,
             radial_distortion_k2: -0.02,
         }),
+        cam(CameraModel::ThinPrismFisheye {
+            focal_length_x: f_fish,
+            focal_length_y: f_fish + 2.0,
+            principal_point_x: CX,
+            principal_point_y: CY,
+            radial_distortion_k1: 0.05,
+            radial_distortion_k2: -0.02,
+            tangential_distortion_p1: 0.001,
+            tangential_distortion_p2: -0.002,
+            radial_distortion_k3: 0.01,
+            radial_distortion_k4: -0.005,
+            thin_prism_sx1: 0.002,
+            thin_prism_sy1: -0.001,
+        }),
+        cam(CameraModel::RadTanThinPrismFisheye {
+            focal_length_x: f_fish,
+            focal_length_y: f_fish + 2.0,
+            principal_point_x: CX,
+            principal_point_y: CY,
+            radial_distortion_k0: 0.05,
+            radial_distortion_k1: -0.02,
+            radial_distortion_k2: 0.01,
+            radial_distortion_k3: -0.005,
+            radial_distortion_k4: 0.002,
+            radial_distortion_k5: -0.001,
+            tangential_distortion_p0: 0.001,
+            tangential_distortion_p1: -0.002,
+            thin_prism_s0: 0.002,
+            thin_prism_s1: -0.001,
+            thin_prism_s2: 0.0015,
+            thin_prism_s3: -0.0005,
+        }),
         cam(CameraModel::SfmtoolFisheye {
             focal_length: f_fish,
             principal_point_x: CX,
@@ -329,13 +348,6 @@ fn undistorted_cameras_covers_every_registered_model() {
             !cam.has_distortion(),
             "{} carries live distortion in the undistorted corpus",
             cam.model_name()
-        );
-    }
-
-    for excluded in RAY_PATH_INCONSISTENT {
-        assert!(
-            names.contains(&excluded),
-            "RAY_PATH_INCONSISTENT names '{excluded}', which is not a registered model"
         );
     }
 }
@@ -484,9 +496,6 @@ fn an_upward_ray_projects_above_the_principal_point() {
 fn radial_profile_reference_equals_the_model_without_distortion() {
     for cam in undistorted_cameras(F_FISH_WIDE) {
         let name = cam.model_name();
-        if RAY_PATH_INCONSISTENT.contains(&name) {
-            continue;
-        }
         for azimuth in [0.0, 37.0, 90.0, 180.0, 271.0] {
             let profile = radial_profile(&cam, azimuth, 32);
             assert!(!profile.is_empty(), "{name}: empty profile at {azimuth}°");
@@ -507,9 +516,6 @@ fn radial_profile_reference_equals_the_model_without_distortion() {
 fn distortion_field_is_identically_zero_without_distortion() {
     for cam in undistorted_cameras(F_FISH_WIDE) {
         let name = cam.model_name();
-        if RAY_PATH_INCONSISTENT.contains(&name) {
-            continue;
-        }
         let field = distortion_field(&cam, 8, 6);
         assert_eq!(field.len(), 48, "{name}: dropped a grid node");
         for sample in field {
@@ -525,33 +531,6 @@ fn distortion_field_is_identically_zero_without_distortion() {
                 sample.reference
             );
         }
-    }
-}
-
-/// The two models whose forward and inverse ray maps disagree — see
-/// [`RAY_PATH_INCONSISTENT`].
-///
-/// A pin, not an endorsement: it records the size of a pre-existing
-/// discrepancy so the exclusions above are not silent. Fixing
-/// `CameraModel::distort_ray` should fail this test first, at which point the
-/// two names come out of `RAY_PATH_INCONSISTENT` and the general tests cover
-/// them.
-#[test]
-fn thin_prism_ray_projection_disagrees_with_its_own_inverse() {
-    for cam in undistorted_cameras(F_FISH_WIDE) {
-        let name = cam.model_name();
-        if !RAY_PATH_INCONSISTENT.contains(&name) {
-            continue;
-        }
-        let worst = distortion_field(&cam, 8, 6)
-            .iter()
-            .map(|s| (s.pixel[0] - s.reference[0]).hypot(s.pixel[1] - s.reference[1]))
-            .fold(0.0_f64, f64::max);
-        assert!(
-            worst > 1.0,
-            "{name} now agrees with its ideal map to {worst} px — if `distort_ray` has been \
-             fixed, drop it from RAY_PATH_INCONSISTENT and delete this test"
-        );
     }
 }
 
@@ -621,8 +600,8 @@ fn distortion_field_is_nonzero_and_radially_symmetric_for_simple_radial() {
 /// On the narrow fisheye corpus: past 80° off-axis `undistort_to_ray` blends
 /// the polynomial fisheye models toward the identity ray on purpose
 /// (`blend_fisheye_ray`), so out there it is not their inverse and no round
-/// trip can hold. The models excluded outright are
-/// [`RAY_PATH_INCONSISTENT`]'s, which fail at every angle.
+/// trip can hold. Inside it, every registered model round trips — no model is
+/// exempt.
 #[test]
 fn distortion_field_nodes_round_trip() {
     let nodes = grid_nodes(8, 6);
@@ -632,9 +611,6 @@ fn distortion_field_nodes_round_trip() {
 
     for cam in corpus {
         let name = cam.model_name();
-        if RAY_PATH_INCONSISTENT.contains(&name) {
-            continue;
-        }
         let field = distortion_field(&cam, 8, 6);
         assert_eq!(field.len(), nodes.len(), "{name}: dropped a grid node");
         for (sample, &(u, v)) in field.iter().zip(&nodes) {

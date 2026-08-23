@@ -243,18 +243,58 @@ pub(super) fn undistort_radial_fisheye(x_d: f64, y_d: f64, k1: f64, k2: f64) -> 
     (x_d * scale, y_d * scale)
 }
 
-/// Thin prism fisheye distortion.
+/// The thin prism fisheye model's additive distortion, in the equidistant
+/// (theta) space the model is actually defined in.
 ///
-/// Applies the equidistant base projection, then additive distortion in
-/// equidistant (theta) space: radial + tangential + thin prism.
+/// `(uu, vv)` is already `θ·(dx, dy)` for the incidence angle `θ` and the unit
+/// 2D direction `(dx, dy)`. Every entry point below reaches the model through
+/// here: the perspective wrapper [`distort_thin_prism_fisheye`] converts
+/// `(x, y)` into this space first, and the ray entry point
+/// [`distort_ray_thin_prism_fisheye`] forms `(uu, vv)` straight from a ray
+/// direction, never passing through perspective coordinates at all.
 ///
-/// The distortion in theta-space (where `(uu, vv)` are equidistant coords):
 /// ```text
 /// θ² = uu² + vv²
 /// radial = k1·θ² + k2·θ⁴ + k3·θ⁶ + k4·θ⁸
 /// duu = uu·radial + 2·p1·uu·vv + p2·(θ² + 2·uu²) + sx1·θ²
 /// dvv = vv·radial + 2·p2·uu·vv + p1·(θ² + 2·vv²) + sy1·θ²
 /// ```
+///
+/// Regular at the origin — every term above carries a factor of `θ²` or of
+/// `(uu, vv)` — so there is no on-axis guard here. The guards live in the
+/// callers, which are the ones that divide by a radius.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn distort_thin_prism_equidistant(
+    uu: f64,
+    vv: f64,
+    k1: f64,
+    k2: f64,
+    p1: f64,
+    p2: f64,
+    k3: f64,
+    k4: f64,
+    sx1: f64,
+    sy1: f64,
+) -> (f64, f64) {
+    let theta2 = uu * uu + vv * vv;
+    let theta4 = theta2 * theta2;
+    let theta6 = theta4 * theta2;
+    let theta8 = theta4 * theta4;
+
+    let radial = k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8;
+    let duu = uu * radial + 2.0 * p1 * uu * vv + p2 * (theta2 + 2.0 * uu * uu) + sx1 * theta2;
+    let dvv = vv * radial + 2.0 * p2 * uu * vv + p1 * (theta2 + 2.0 * vv * vv) + sy1 * theta2;
+
+    (uu + duu, vv + dvv)
+}
+
+/// Thin prism fisheye distortion of **perspective** normalized coordinates.
+///
+/// `(x, y)` is the quotient `(rx/rz, ry/rz)`; this converts it to the
+/// equidistant `(uu, vv)` that [`distort_thin_prism_equidistant`] is defined on
+/// (`θ = atan r`) and applies the model there. A caller holding a ray rather
+/// than that quotient wants [`distort_ray_thin_prism_fisheye`], which skips the
+/// conversion rather than undoing it.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn distort_thin_prism_fisheye(
     x: f64,
@@ -274,22 +314,37 @@ pub(super) fn distort_thin_prism_fisheye(
     }
 
     // Convert perspective (x, y) to equidistant (uu, vv)
-    let theta = r.atan();
-    let scale_eq = theta / r;
-    let uu = x * scale_eq;
-    let vv = y * scale_eq;
+    let scale_eq = r.atan() / r;
+    distort_thin_prism_equidistant(x * scale_eq, y * scale_eq, k1, k2, p1, p2, k3, k4, sx1, sy1)
+}
 
-    // Additive distortion in equidistant space
-    let theta2 = uu * uu + vv * vv;
-    let theta4 = theta2 * theta2;
-    let theta6 = theta4 * theta2;
-    let theta8 = theta4 * theta4;
-
-    let radial = k1 * theta2 + k2 * theta4 + k3 * theta6 + k4 * theta8;
-    let duu = uu * radial + 2.0 * p1 * uu * vv + p2 * (theta2 + 2.0 * uu * uu) + sx1 * theta2;
-    let dvv = vv * radial + 2.0 * p2 * uu * vv + p1 * (theta2 + 2.0 * vv * vv) + sy1 * theta2;
-
-    (uu + duu, vv + dvv)
+/// Thin prism fisheye distortion of an optical-frame ray (+Z forward, y down).
+///
+/// `θ = atan2(√(rx² + ry²), rz)` is the incidence angle off the optical axis,
+/// which gives the equidistant `(uu, vv) = θ·(dx, dy)` the model is defined on
+/// directly: no `tan θ`, so no singularity at 90°, and no detour through
+/// perspective coordinates. The exact forward partner of the theta-space
+/// Newton recovery in [`recover_equidistant_thin_prism`].
+#[allow(clippy::too_many_arguments)]
+pub(super) fn distort_ray_thin_prism_fisheye(
+    rx: f64,
+    ry: f64,
+    rz: f64,
+    k1: f64,
+    k2: f64,
+    p1: f64,
+    p2: f64,
+    k3: f64,
+    k4: f64,
+    sx1: f64,
+    sy1: f64,
+) -> (f64, f64) {
+    let r_xy = (rx * rx + ry * ry).sqrt();
+    if r_xy < 1e-15 {
+        return (0.0, 0.0);
+    }
+    let scale = r_xy.atan2(rz) / r_xy;
+    distort_thin_prism_equidistant(rx * scale, ry * scale, k1, k2, p1, p2, k3, k4, sx1, sy1)
 }
 
 /// Recover undistorted equidistant coordinates from distorted equidistant
@@ -437,11 +492,60 @@ pub(super) fn undistort_thin_prism_fisheye(
     (uu * scale, vv * scale)
 }
 
-/// Rad-tan thin prism fisheye distortion (Meta/Aria model).
+/// The rad-tan thin prism fisheye model (Meta/Aria), in the equidistant
+/// (theta) space it is actually defined in.
 ///
-/// Applies the equidistant base projection, then in equidistant (theta) space:
+/// `(uu, vv)` is already `θ·(dx, dy)`. In that space:
 /// 1. Radial scaling: `th_radial = 1 + k0·θ² + k1·θ⁴ + k2·θ⁶ + k3·θ⁸ + k4·θ¹⁰ + k5·θ¹²`
 /// 2. Tangential + thin prism on the radially-scaled coordinates
+///
+/// The rad-tan counterpart of [`distort_thin_prism_equidistant`], and reached
+/// the same two ways: [`distort_rad_tan_thin_prism_fisheye`] for a perspective
+/// input, [`distort_ray_rad_tan_thin_prism_fisheye`] for a ray. Regular at the
+/// origin, so the on-axis guards belong to those callers.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn distort_rad_tan_thin_prism_equidistant(
+    uu: f64,
+    vv: f64,
+    k0: f64,
+    k1: f64,
+    k2: f64,
+    k3: f64,
+    k4: f64,
+    k5: f64,
+    p0: f64,
+    p1: f64,
+    s0: f64,
+    s1: f64,
+    s2: f64,
+    s3: f64,
+) -> (f64, f64) {
+    // Radial scaling in equidistant space
+    let th2 = uu * uu + vv * vv;
+    let th4 = th2 * th2;
+    let th6 = th4 * th2;
+    let th8 = th4 * th4;
+    let th10 = th8 * th2;
+    let th12 = th8 * th4;
+    let th_radial = 1.0 + k0 * th2 + k1 * th4 + k2 * th6 + k3 * th8 + k4 * th10 + k5 * th12;
+    let uu_r = uu * th_radial;
+    let vv_r = vv * th_radial;
+
+    // Tangential + thin prism on radially-scaled coordinates
+    let uu_r2 = uu_r * uu_r;
+    let vv_r2 = vv_r * vv_r;
+    let r2 = uu_r2 + vv_r2;
+    let r4 = r2 * r2;
+    let duu = 2.0 * p1 * uu_r * vv_r + p0 * (r2 + 2.0 * uu_r2) + s0 * r2 + s1 * r4;
+    let dvv = p1 * (r2 + 2.0 * vv_r2) + 2.0 * p0 * uu_r * vv_r + s2 * r2 + s3 * r4;
+
+    (uu_r + duu, vv_r + dvv)
+}
+
+/// Rad-tan thin prism fisheye distortion of **perspective** normalized
+/// coordinates — [`distort_rad_tan_thin_prism_equidistant`] behind the
+/// `θ = atan r` conversion. See [`distort_thin_prism_fisheye`] for the same
+/// division of labour.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn distort_rad_tan_thin_prism_fisheye(
     x: f64,
@@ -465,31 +569,68 @@ pub(super) fn distort_rad_tan_thin_prism_fisheye(
     }
 
     // Convert perspective (x, y) to equidistant (uu, vv)
-    let theta = r.atan();
-    let scale_eq = theta / r;
-    let uu = x * scale_eq;
-    let vv = y * scale_eq;
+    let scale_eq = r.atan() / r;
+    distort_rad_tan_thin_prism_equidistant(
+        x * scale_eq,
+        y * scale_eq,
+        k0,
+        k1,
+        k2,
+        k3,
+        k4,
+        k5,
+        p0,
+        p1,
+        s0,
+        s1,
+        s2,
+        s3,
+    )
+}
 
-    // Radial scaling in equidistant space
-    let th2 = uu * uu + vv * vv;
-    let th4 = th2 * th2;
-    let th6 = th4 * th2;
-    let th8 = th4 * th4;
-    let th10 = th8 * th2;
-    let th12 = th8 * th4;
-    let th_radial = 1.0 + k0 * th2 + k1 * th4 + k2 * th6 + k3 * th8 + k4 * th10 + k5 * th12;
-    let uu_r = uu * th_radial;
-    let vv_r = vv * th_radial;
-
-    // Tangential + thin prism on radially-scaled coordinates
-    let uu_r2 = uu_r * uu_r;
-    let vv_r2 = vv_r * vv_r;
-    let r2 = uu_r2 + vv_r2;
-    let r4 = r2 * r2;
-    let duu = 2.0 * p1 * uu_r * vv_r + p0 * (r2 + 2.0 * uu_r2) + s0 * r2 + s1 * r4;
-    let dvv = p1 * (r2 + 2.0 * vv_r2) + 2.0 * p0 * uu_r * vv_r + s2 * r2 + s3 * r4;
-
-    (uu_r + duu, vv_r + dvv)
+/// Rad-tan thin prism fisheye distortion of an optical-frame ray (+Z forward,
+/// y down) — the incidence angle straight into
+/// [`distort_rad_tan_thin_prism_equidistant`], with no `tan θ` in the way. The
+/// exact forward partner of [`recover_equidistant_rad_tan_thin_prism`].
+#[allow(clippy::too_many_arguments)]
+pub(super) fn distort_ray_rad_tan_thin_prism_fisheye(
+    rx: f64,
+    ry: f64,
+    rz: f64,
+    k0: f64,
+    k1: f64,
+    k2: f64,
+    k3: f64,
+    k4: f64,
+    k5: f64,
+    p0: f64,
+    p1: f64,
+    s0: f64,
+    s1: f64,
+    s2: f64,
+    s3: f64,
+) -> (f64, f64) {
+    let r_xy = (rx * rx + ry * ry).sqrt();
+    if r_xy < 1e-15 {
+        return (0.0, 0.0);
+    }
+    let scale = r_xy.atan2(rz) / r_xy;
+    distort_rad_tan_thin_prism_equidistant(
+        rx * scale,
+        ry * scale,
+        k0,
+        k1,
+        k2,
+        k3,
+        k4,
+        k5,
+        p0,
+        p1,
+        s0,
+        s1,
+        s2,
+        s3,
+    )
 }
 
 /// Recover undistorted equidistant coordinates from distorted equidistant
