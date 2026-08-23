@@ -40,6 +40,17 @@ When finishing a task, run the checks for what you changed:
   `pixi run maturin develop --release` before Python tests (the `.so` does
   **not** rebuild automatically despite the editable Python install).
 
+### Opening a pull request
+
+**Every PR body follows `.github/PULL_REQUEST_TEMPLATE.md`** — read it before
+writing the description, not after. Its sections (Summary / Changes / Testing /
+Checklist / License) are what reviewers look for, and `gh pr create --body`
+bypasses the template silently: GitHub only prefills it in the web editor, so a
+PR opened from the CLI gets whatever body you hand it and no warning that a
+template existed. Keep the checklist items and the License block verbatim,
+ticking what applies and marking the rest `n/a` with the reason, rather than
+deleting the lines.
+
 ## Structure at a glance
 
 - `src/sfmtool/` — Python package (~93 modules). Entry point is `cli.py`
