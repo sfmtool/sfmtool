@@ -533,6 +533,11 @@ impl AppState {
     pub fn select_camera(&mut self, camera: Option<CameraRef>) {
         self.selected_camera = camera;
         let Some(camera) = camera else {
+            // Clearing the camera clears the image with it. An image implies
+            // its camera, so leaving one selected without the other is exactly
+            // the state the invariant forbids — and the guarantee is that no
+            // caller *can* reach it, not that no caller currently tries.
+            self.selected_image = None;
             return;
         };
         self.selected_recon = Some(camera.recon);

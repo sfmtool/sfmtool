@@ -148,10 +148,18 @@ The resulting behaviour, stated exhaustively so the tests can be read off it:
 | Select camera `c`, selected image uses `c` | **kept** | `c` |
 | Select camera `c`, selected image uses `c' ≠ c` | **cleared** | `c` |
 | Clear image selection (click empty space, `Esc`) | `None` | **kept** |
+| Clear camera selection (`Esc` again) | **cleared** | `None` |
 | Select a different reconstruction | filtered to that recon | filtered to that recon |
 | Close / reload the owning node | cleared | cleared |
 
-Two of these rows are choices rather than consequences, and both go the way the
+The "clear camera" row is the invariant closing itself: an image implies its
+camera, so clearing the camera has to take the image with it, whatever order a
+caller happens to use. The `Esc` sequence never reaches it — the first press
+clears the image, the second finds none and clears the camera — but the
+guarantee is that no caller *can* reach the forbidden state, not that none
+currently tries.
+
+Two other rows are choices rather than consequences, and both go the way the
 user's request implies:
 
 - **Selecting the camera an image already uses keeps the image.** The user's

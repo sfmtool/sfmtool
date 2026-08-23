@@ -2102,6 +2102,25 @@ fn clearing_the_image_keeps_the_camera_and_a_second_clear_takes_it() {
 }
 
 #[test]
+fn clearing_the_camera_out_from_under_a_selected_image_clears_the_image_too() {
+    let mut state = AppState::new();
+    let id = state.append_node(two_camera_node("/runs/rig.sfmr"));
+
+    state.select_image(Some(ImageRef::new(id, 5)));
+    state.select_camera(None);
+
+    // Not a path any UI takes today — the Esc sequence clears the image first.
+    // The invariant is that no caller *can* reach the forbidden state, though,
+    // not that none currently tries, so the setter has to close it here rather
+    // than trust the order it is called in.
+    assert_eq!(state.selected_camera, None);
+    assert_eq!(
+        state.selected_image, None,
+        "an image outlived the camera it was taken through"
+    );
+}
+
+#[test]
 fn selecting_another_reconstruction_filters_both_selections() {
     let mut state = AppState::new();
     let first = state.append_node(two_camera_node("/runs/rig_a.sfmr"));
