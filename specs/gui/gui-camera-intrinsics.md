@@ -1,7 +1,7 @@
 # Camera Intrinsics: Scene-Graph Node, Image Overlay, Detail Panel
 
-**Status:** design — phase 1 (vocabulary and data model) implemented;
-phases 2–6 not yet.
+**Status:** design — phase 1 (vocabulary and data model) and phase 2
+(`camera::report` and `parameter_names()`) implemented; phases 3–6 not yet.
 
 The viewer can show you where a camera *is* and what it *saw*, but nothing in it
 tells you what the camera *is*: which intrinsic model, what focal length, how far
@@ -214,8 +214,8 @@ without an egui context. A new module `camera::report`:
 ```rust
 /// Angles, in degrees, subtended by an image's edges and corners.
 pub struct FieldOfView {
-    pub horizontal: f64,          // mid-left pixel to mid-right pixel
-    pub vertical: f64,            // mid-top to mid-bottom
+    pub horizontal: f64,          // left edge to right edge, through the centre
+    pub vertical: f64,            // top edge to bottom edge
     pub diagonal: f64,            // corner to opposite corner
     pub max_off_axis: f64,        // largest θ over the four corners
 }
@@ -249,7 +249,7 @@ is per-family, not per-model:
 | Family | Ideal map | Members |
 |--------|-----------|---------|
 | Perspective | `r = f·tan θ` (pinhole with the same `fx, fy, cx, cy`) | Pinhole, SimplePinhole, SimpleRadial, Radial, OpenCV, FullOpenCV, SfmtoolPinhole |
-| Fisheye | `r = f·θ` (equidistant with the same `f, cx, cy`) | OpenCVFisheye, SimpleRadialFisheye, RadialFisheye, ThinPrismFisheye, RadTanThinPrismFisheye, EquidistantFisheye, SfmtoolFisheye |
+| Fisheye | `r = f·θ` (equidistant with the same `fx, fy, cx, cy`) | OpenCVFisheye, SimpleRadialFisheye, RadialFisheye, ThinPrismFisheye, RadTanThinPrismFisheye, EquidistantFisheye, SfmtoolFisheye |
 | Equirectangular | itself | Equirectangular |
 
 Because the reference carries the *same* `fx, fy, cx, cy`, the displacement it
@@ -257,6 +257,30 @@ measures is pure lens distortion: neither the focal length, nor a non-square
 pixel aspect, nor the principal-point offset leaks into it. A model whose
 `has_distortion()` is `false` produces an identically-zero field, and the code
 paths that draw it are skipped rather than drawing zero-length arrows.
+
+The fisheye ideal therefore keeps `fx` and `fy` **separate**, even though
+`CameraModel::EquidistantFisheye` carries only one focal length: three of the
+seven fisheye models carry two, and collapsing them would fold the pixel aspect
+ratio into a measurement that is supposed to be about the lens alone. It is
+implemented as arithmetic rather than as a substitute `CameraIntrinsics` for
+exactly that reason.
+
+**Field of view is swept, not subtracted.** Each of `horizontal`, `vertical`
+and `diagonal` is the sum of two hops — boundary to image centre, image centre
+to opposite boundary — rather than the single angle between the two boundary
+rays. The two agree below 180° and only there: the angle between two directions
+saturates at 180° and folds back, so a 183° fisheye measured end to end reports
+177°, and the two vertical edges of a full equirectangular panorama, being *the
+same ray*, report 0°. Both are wrong for exactly the lenses this panel exists to
+explain. The sum is exact whenever the three rays are coplanar, which they are
+for a perspective or equidistant model with a centred principal point; an
+off-centre principal point puts them on a shallow cone and the sum runs slightly
+over, which is a far smaller error than the fold it replaces.
+
+`max_off_axis` stays a maximum over the four corners, and for an
+equirectangular panorama that means it reads 90° whatever the panorama covers —
+the corners of an equirectangular image are the two poles. The `horizontal` /
+`vertical` pair is the honest reading there.
 
 ### Camera-frame conventions, stated once
 
@@ -825,10 +849,12 @@ are keyed by `CameraRef` and hold at most a handful of entries — a plain
 Following the crate's existing split — pure maths in `sfmtool-core`, headless
 egui frames for panels, real windows only for what genuinely needs one:
 
-**`sfmtool-core`, `camera::report` unit tests** (no GUI, runs everywhere):
+**`sfmtool-core`, `camera::report` unit tests** (no GUI, runs everywhere) —
+implemented in `camera/report/tests.rs`:
 - `field_of_view` on a known pinhole matches the closed form
   `2·atan(w / 2fx)`; on `EquidistantFisheye` with `f = w/π` gives 180°
-  edge-to-edge.
+  edge-to-edge; at `f = w/2π` gives 183.35° rather than the folded 176.65°,
+  and on a full panorama 360° × 180°.
 - `radial_profile`'s reference curve equals the actual curve, to `1e-12`, for
   every model whose `has_distortion()` is false — one case per registry variant,
   asserted complete against `MODEL_COUNT` the way the registry's own corpus is.
@@ -841,6 +867,26 @@ egui frames for panels, real windows only for what genuinely needs one:
 - `parameter_names()` is a permutation of the keys `SfmrCamera::from` writes,
   for every variant — the property that keeps the table from silently dropping a
   parameter when a model gains one.
+
+Two exclusions, both named in the tests rather than left implicit:
+
+- `THIN_PRISM_FISHEYE` and `RAD_TAN_THIN_PRISM_FISHEYE` are excluded from the
+  zero-residual and round-trip properties, because `CameraModel::distort_ray`
+  is not the inverse of `undistort_to_ray` for them — it hands the equidistant
+  `(θ·dx, θ·dy)` to a kernel whose input is the *perspective* `(tan θ·dx, …)`
+  and which converts again, so the forward map is off by an `atan`. Zero
+  coefficients displace a grid node by 135 px on a 640×480 fixture. Pre-existing
+  and out of scope for phase 2; pinned by a regression test that fails when it
+  is fixed. **Open.**
+- The round trip holds only inside 80° off-axis for the polynomial fisheye
+  models, because `undistort_to_ray` blends them toward the identity ray from
+  there (`blend_fisheye_ray`) rather than inverting an unreliable polynomial.
+  That is a deliberate, documented approximation, so the round-trip test uses a
+  narrower fisheye fixture instead of asserting something the code does not
+  claim.
+- The zero residual is to `1e-12` px, not bit for bit: the fisheye kernels do
+  not all group the `θ · direction · f` product the same way, so no single
+  spelling of the ideal map can match every one of them exactly.
 
 **`sfm-explorer` lib tests** (headless, `Context::run_ui`, the
 `point_track_detail/tests.rs` pattern):
@@ -900,8 +946,26 @@ Each phase leaves the viewer in a shippable state.
    `ui_basic` tests) where the HUD spec's own section table already calls it
    `Show Camera Images`. Renaming it is the same bug fix and is left as
    follow-up, since it moves a windowed test.
-2. **`camera::report` and `parameter_names()`.** Pure core work, fully
-   unit-tested, with no consumer yet.
+2. **`camera::report` and `parameter_names()`** — *done.* Pure core work, fully
+   unit-tested, with no consumer yet. `CameraModel::parameter_names()` is
+   generated by the registry macro for the thirteen fixed-arity models and
+   intercepted for the two spline models, as every other registry-derived
+   accessor is; `camera::report` is `crates/sfmtool-core/src/camera/report.rs`.
+
+   Three things this phase settled against the real code, all recorded above:
+   the fisheye ideal map keeps two focal lengths, the field-of-view spans are
+   swept through the image centre rather than measured end to end, and the two
+   thin-prism fisheye models have a pre-existing forward/inverse disagreement
+   that keeps them out of two of the properties.
+
+   Wiring the Python `_CAMERA_PARAM_NAMES` table to this accessor stays out of
+   scope (§ "Deliberately out of scope"), and the two are **not** in sync
+   today: the Python table has no entry for `EQUIRECTANGULAR`,
+   `EQUIDISTANT_FISHEYE`, `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE`, so
+   `sfm inspect` falls back to the map's lexicographic order for those four —
+   including the `bspline_c10`-before-`bspline_c2` ordering this accessor
+   exists to avoid. "The GUI and `sfm inspect` agree glyph for glyph" is
+   therefore a goal of that follow-up, not a fact today.
 3. **Scene Graph group.** The Camera Intrinsics rows, click and double-click,
    the cross-panel sibling highlight.
 4. **Intrinsics panel.** Header, parameters, derived table, `K`, extrinsics,

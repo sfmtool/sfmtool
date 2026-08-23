@@ -93,6 +93,10 @@ From that one table the macro generates:
 - `CameraModel::model_name()` — over **all** variants, fixed and custom.
 - `fixed_arity_params(&CameraModel) -> BTreeMap<String, f64>` — the write
   half, with `stringify!` supplying each key.
+- `fixed_arity_param_names(&CameraModel) -> &'static [&'static str]` — the same
+  keys in **declaration** order, which is what `CameraModel::parameter_names()`
+  hands a parameter table. A `BTreeMap` can only offer lexicographic order,
+  which separates related terms and sorts `bspline_c10` before `bspline_c2`.
 - `fixed_arity_from_sfmr(&str, &BTreeMap<…>) -> Result<CameraModel, …>` — the
   read half, with the same `stringify!` supplying each lookup, and an
   `UnknownModel` error for any name not in the table.
@@ -127,11 +131,11 @@ camera that wrote but would not read back, with nothing watching.
 
 A model whose parameter list is **not** a fixed set of `f64` fields cannot be
 derived from field identifiers and is registered as `custom`. It contributes
-its name to `model_name()` and to `MODEL_COUNT`, but its serialization is
-hand-written and intercepted at the top of each conversion, before the
-fixed-arity path is reached. The generated code carries an `unreachable!` arm
-for custom variants naming the interception, rather than absorbing them into a
-`_` arm.
+its name to `model_name()` and to `MODEL_COUNT`, but its serialization — and
+its parameter-name list — is hand-written and intercepted at the top of each
+conversion, before the fixed-arity path is reached. The generated code carries
+an `unreachable!` arm for custom variants naming the interception, rather than
+absorbing them into a `_` arm.
 
 The two sfmtool spline models, `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`, are the
 custom models today. Each carries a variable-length parameter list
@@ -157,6 +161,10 @@ must not be flattened into the table.
   directions from one identifier means a renamed field renames the on-disk key
   too, and every round-trip test would still pass — the same hazard, and the
   same remedy, as `entry_names_are_pinned` in the format crates.
+- **`parameter_names()` is a permutation of the written keys**, for every
+  registered model. The two are one list for a fixed-arity model, but the
+  custom models' names are hand-written twice — once to serialize, once to
+  order — and this is what holds those two copies together.
 - **Custom-model validation** is unchanged and specified with the model, in
   [../formats/sfmtool-camera-models.md](../formats/sfmtool-camera-models.md).
 

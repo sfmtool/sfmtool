@@ -1601,3 +1601,151 @@ fn equidistant_fisheye_has_simple_pinhole_parameter_list() {
     // Round trip through the on-disk representation.
     assert_eq!(CameraIntrinsics::try_from(&stored).unwrap(), cam);
 }
+
+// -----------------------------------------------------------------------
+// CameraModel::parameter_names — declaration order, which a BTreeMap loses
+// -----------------------------------------------------------------------
+
+/// Every name the wire format writes is named, and nothing else is.
+///
+/// The property that keeps a parameter table from silently dropping a row when
+/// a model gains a parameter — and, for the two spline models, the only thing
+/// tying `spline_parameter_names`' string literals to the ones their arms of
+/// `From<&CameraIntrinsics> for SfmrCamera` write.
+#[test]
+fn parameter_names_are_a_permutation_of_the_written_keys() {
+    for cam in all_cameras() {
+        let name = cam.model_name();
+        let mut named: Vec<String> = cam
+            .model
+            .parameter_names()
+            .into_iter()
+            .map(|n| n.into_owned())
+            .collect();
+        let written: Vec<String> = SfmrCamera::from(&cam).parameters.into_keys().collect();
+
+        assert_eq!(
+            named.len(),
+            written.len(),
+            "'{name}' names {} parameters but writes {}",
+            named.len(),
+            written.len()
+        );
+        named.sort();
+        assert_eq!(
+            named, written,
+            "'{name}' names a different set of parameters than it writes"
+        );
+    }
+}
+
+/// Declaration order, not the lexicographic order the map hands back.
+#[test]
+fn parameter_names_are_in_declaration_order() {
+    let names = opencv().model.parameter_names();
+    assert_eq!(
+        names,
+        [
+            "focal_length_x",
+            "focal_length_y",
+            "principal_point_x",
+            "principal_point_y",
+            "radial_distortion_k1",
+            "radial_distortion_k2",
+            "tangential_distortion_p1",
+            "tangential_distortion_p2",
+        ]
+    );
+    // OPENCV's declaration order happens to coincide with its map order.
+    // FULL_OPENCV's does not: the two tangential terms are declared between
+    // `k2` and `k3`, and sorting moves them past `k6`. That interleaving is
+    // the whole reason this accessor exists.
+    let names = full_opencv().model.parameter_names();
+    assert_eq!(names[6], "tangential_distortion_p1");
+    assert_eq!(names[8], "radial_distortion_k3");
+    let written: Vec<String> = SfmrCamera::from(&full_opencv())
+        .parameters
+        .into_keys()
+        .collect();
+    assert_ne!(names, written[..]);
+}
+
+/// A spline model names its coefficients in **index** order, after the named
+/// parameters and its domain end.
+#[test]
+fn spline_parameter_names_are_ordered_by_coefficient_index() {
+    let cam = CameraIntrinsics {
+        model: CameraModel::SfmtoolFisheye {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_theta_max: 2.0,
+            // Eleven coefficients, so that `bspline_c10` exists and sorts
+            // before `bspline_c2` lexicographically.
+            bspline: vec![-0.001; 11],
+        },
+        width: 640,
+        height: 480,
+    };
+    let names = cam.model.parameter_names();
+    assert_eq!(
+        names[..5],
+        [
+            "focal_length",
+            "principal_point_x",
+            "principal_point_y",
+            "bspline_theta_max",
+            "bspline_coeff_count",
+        ]
+    );
+    assert_eq!(names[5], "bspline_c0");
+    assert_eq!(names[14], "bspline_c9");
+    assert_eq!(names[15], "bspline_c10");
+
+    // What the map would have given instead.
+    let written: Vec<String> = SfmrCamera::from(&cam).parameters.into_keys().collect();
+    let c10 = written.iter().position(|k| k == "bspline_c10").unwrap();
+    let c2 = written.iter().position(|k| k == "bspline_c2").unwrap();
+    assert!(c10 < c2, "the map is not in lexicographic order after all");
+
+    // The pinhole spline differs only in the name of its domain end.
+    let pinhole = CameraIntrinsics {
+        model: CameraModel::SfmtoolPinhole {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_rho_max: 0.9,
+            bspline: vec![0.001; 11],
+        },
+        width: 640,
+        height: 480,
+    };
+    assert_eq!(pinhole.model.parameter_names()[3], "bspline_rho_max");
+}
+
+/// An empty spline names no coefficients — and still names the count, which is
+/// written as zero.
+#[test]
+fn parameter_names_of_an_inactive_spline_stop_at_the_count() {
+    let cam = CameraIntrinsics {
+        model: CameraModel::SfmtoolPinhole {
+            focal_length: 500.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_rho_max: 0.9,
+            bspline: Vec::new(),
+        },
+        width: 640,
+        height: 480,
+    };
+    assert_eq!(
+        cam.model.parameter_names(),
+        [
+            "focal_length",
+            "principal_point_x",
+            "principal_point_y",
+            "bspline_rho_max",
+            "bspline_coeff_count",
+        ]
+    );
+}

@@ -20,6 +20,12 @@ use super::distortion::bspline::bspline_is_inactive;
 
 mod registry;
 
+/// Re-exported so a test corpus outside this module — `camera::report`'s, in
+/// particular — can assert its own completeness against the registry without
+/// the private `registry` module being widened for it.
+#[cfg(test)]
+pub(crate) use registry::MODEL_COUNT;
+
 /// Camera model with typed parameters.
 ///
 /// Each variant carries exactly the parameters defined by its COLMAP model.

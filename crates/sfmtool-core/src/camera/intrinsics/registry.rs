@@ -47,6 +47,7 @@
 //! human-readable model/parameter table is `specs/formats/sfmr-file-format.md`
 //! §3.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use sfmr_format::SfmrCamera;
@@ -131,6 +132,28 @@ macro_rules! camera_models {
                 )+
             }
             parameters
+        }
+
+        /// A fixed-arity model's parameter names in declaration order — the
+        /// same field identifiers `fixed_arity_params` keys its map with, in
+        /// the order the registry lists them rather than the order a
+        /// `BTreeMap` hands them back.
+        ///
+        /// Custom models are intercepted by [`CameraModel::parameter_names`]
+        /// and reaching this with one is a bug, not bad input.
+        fn fixed_arity_param_names(model: &CameraModel) -> &'static [&'static str] {
+            match model {
+                $(
+                    CameraModel::$fx_variant { .. } => &[$( stringify!($field) ),+],
+                )+
+                $(
+                    CameraModel::$cu_variant { .. } => unreachable!(
+                        "`{}` has a variable-length parameter list and names its \
+                         parameters in its own arm of `CameraModel::parameter_names`",
+                        $cu_name
+                    ),
+                )+
+            }
         }
 
         /// Deserialize a fixed-arity model, reading each field by its own name.
@@ -218,6 +241,67 @@ camera_models! {
         SfmtoolFisheye => "SFMTOOL_FISHEYE" as SFMTOOL_FISHEYE,
         SfmtoolPinhole => "SFMTOOL_PINHOLE" as SFMTOOL_PINHOLE,
     }
+}
+
+impl CameraModel {
+    /// This model's parameter names in **declaration order** — the order the
+    /// registry declares them in, which is the order a parameter table should
+    /// print them in.
+    ///
+    /// [`SfmrCamera`]'s `parameters` is a `BTreeMap`, so reading the names off
+    /// a serialized camera gives lexicographic order instead. That is wrong
+    /// twice over: it separates related terms (a principal point lands between
+    /// two focal lengths), and it orders the spline models' `bspline_c10`
+    /// before `bspline_c2`.
+    ///
+    /// The result is always a permutation of the keys
+    /// `SfmrCamera::from(&CameraIntrinsics)` writes for the same camera, which
+    /// is what keeps a table built from it from silently dropping a parameter
+    /// when a model gains one.
+    ///
+    /// Owned `Cow`s rather than a `&'static [&'static str]` because the two
+    /// spline models' trailing `bspline_c{i}` names depend on the coefficient
+    /// count and so cannot be static. Every fixed-arity model borrows
+    /// throughout and allocates only the `Vec`.
+    pub fn parameter_names(&self) -> Vec<Cow<'static, str>> {
+        // Custom models first, exactly as `From<&CameraIntrinsics>` does: a
+        // variable-length parameter list is not recoverable from field
+        // identifiers, so it never reaches the generated table.
+        match self {
+            CameraModel::SfmtoolFisheye { bspline, .. } => {
+                spline_parameter_names("bspline_theta_max", bspline.len())
+            }
+            CameraModel::SfmtoolPinhole { bspline, .. } => {
+                spline_parameter_names("bspline_rho_max", bspline.len())
+            }
+            fixed => fixed_arity_param_names(fixed)
+                .iter()
+                .copied()
+                .map(Cow::Borrowed)
+                .collect(),
+        }
+    }
+}
+
+/// The parameter names of a spline model in declaration order: the three named
+/// parameters both carry, the domain end under `domain_end_key`, then the
+/// declared coefficient count and `bspline_c0..bspline_c{n−1}` in **index**
+/// order.
+///
+/// The mirror of what the two spline arms of `From<&CameraIntrinsics> for
+/// SfmrCamera` and [`insert_bspline`] write, in the order a `BTreeMap` cannot
+/// keep. The permutation test over the registry corpus is what holds the two
+/// lists together, since these names are string literals on both sides.
+fn spline_parameter_names(domain_end_key: &'static str, n: usize) -> Vec<Cow<'static, str>> {
+    let mut names: Vec<Cow<'static, str>> = vec![
+        Cow::Borrowed("focal_length"),
+        Cow::Borrowed("principal_point_x"),
+        Cow::Borrowed("principal_point_y"),
+        Cow::Borrowed(domain_end_key),
+        Cow::Borrowed("bspline_coeff_count"),
+    ];
+    names.extend((0..n).map(|i| Cow::Owned(format!("bspline_c{i}"))));
+    names
 }
 
 /// Read one parameter out of an [`SfmrCamera`] parameter map.
