@@ -63,6 +63,13 @@ So the rename is not cosmetic:
 | — | `Camera Intrinsics (2)` group | `recon.cameras.len()` |
 | `1.2M pts · 243 cams` | `1.2M pts · 243 imgs · 2 cams` | points / images / cameras |
 
+Three counts make this the longest row in a panel that defaults to 18% of the
+window, so it elides rather than truncating or wrapping: when the row cannot fit
+all three, the camera count goes first (it is also on the group row one line
+down), then the image count, leaving the point count — which has no other home
+in the tree — last to go. The elision is on available width, not on a character
+budget, so a widened panel restores the counts.
+
 Two other sites keep the old word and should **not** be swept up in the rename,
 because in both of them "camera" already means something else and is correct:
 
@@ -311,9 +318,12 @@ The node body gains a group above the images group, so its two rows read:
   hover tooltip.
 - **Click**: `select_camera(Some(CameraRef))` — with the deselect-the-image
   consequence from the coupling table.
-- **Double-click**: zoom the 3D viewport to fit every image using this camera.
-  For a rig this frames one sensor's whole trajectory in a single gesture, which
-  nothing else in the viewer does.
+- **Double-click**: zoom the 3D viewport to fit every image using this camera —
+  the same framing `zoom_to_node` does, over that subset of the node's cameras
+  rather than all of them. For a rig this frames one sensor's whole trajectory
+  in a single gesture, which nothing else in the viewer does. It is the tree's
+  third double-click target, and consistent with the other two: a double-click
+  frames what the row denotes, and a camera row denotes a set of images.
 - **Selected row**: highlighted like a camera-image row. The row is *also*
   highlighted, more weakly, whenever `selected_image`'s camera is this one and
   the row is not itself the click target — but by the invariant those are the
@@ -521,6 +531,13 @@ the largest displacement in the grid to at least 8 panel pixels, capped so that
 no arrow exceeds one grid cell. The legend states both, always:
 `max 12.4 px · shown ×3` — an exaggerated field that does not admit it is a
 lie, and this is a diagnostic tool.
+
+The scale is computed **per camera**, not per frame and not per reconstruction.
+Per frame would flicker; per reconstruction would scale every camera to the most
+distorted one and leave a mild lens with a field too small to read. Per camera
+means switching cameras can change the scale under the user, which is accepted:
+each camera is exaggerated exactly enough to show *its own* distortion, and the
+legend says so every frame. See § "Decisions".
 
 **Spline domain marker.** For `SfmtoolFisheye` / `SfmtoolPinhole`, an extra
 dashed iso-contour at `bspline_theta_max` / `atan(bspline_rho_max)`, labelled
@@ -821,8 +838,12 @@ egui frames for panels, real windows only for what genuinely needs one:
 - The selection coupling, one test per row of the truth table, driven through
   `AppState::select_image` / `select_camera` with no UI at all.
 - `scene_graph/tests.rs`: the group renders with the right label and count; a
-  click on a camera row emits `select_camera`; the group is expanded by default
-  at 2 cameras and collapsed at 5; a camera used by no image renders `0 images`.
+  click on a camera row emits `select_camera` and a double-click emits
+  `zoom_to_camera`; the group is expanded by default at 2 cameras and collapsed
+  at 5; a camera used by no image renders `0 images`.
+- The reconstruction row shows all three counts at a comfortable panel width and
+  elides them in the specified order — cameras, then images — as the width
+  shrinks, restoring them when it grows back.
 - The Intrinsics panel renders its empty state with no selection, its populated
   state with one, and the extrinsics block only when an image is selected;
   the `P` row is absent for a fisheye fixture.
@@ -914,23 +935,33 @@ survives an arbitrary colormap underneath, one composed tooltip), which
 § "Compositing with the feature layers" and § "Hover: one tooltip, composed"
 carry. `OverlayMode` is left untouched.
 
+**Three counts on the reconstruction row** (2026-08-23).
+`1.2M pts · 243 imgs · 2 cams` rather than today's two. The objection was width
+— it is the longest row in a panel that defaults to 18% of the window — and the
+answer is that the camera count is the first thing dropped when the row cannot
+fit it, not that it goes unsaid. See § "Terminology" for the elision order.
+
+**The distortion auto-scale stays per camera** (2026-08-23). The exaggeration is
+computed per camera rather than fixed across the reconstruction, so switching
+between two cameras with different distortion magnitudes does change the arrow
+scale under the user. That is the intended behaviour: each camera is scaled to
+show *its own* distortion legibly, which is what the arrows are for, and the
+legend states the scale on every frame so the change is never silent. Fixing one
+scale across a reconstruction would make the milder camera's field invisible in
+order to keep a comparison nobody asked for. It is computed per camera and not
+per frame, so it never flickers.
+
+**Double-click on a camera row zooms the viewport** (2026-08-23). It fits every
+image using that camera — for a rig, one sensor's whole trajectory in a single
+gesture, which nothing else in the viewer does. The objection was that it makes
+a third double-click target in one tree (node → zoom to node, image → camera
+view); accepted anyway, because the three targets are consistent rather than
+arbitrary: double-clicking a row frames what that row denotes, and a camera row
+denotes a set of images.
+
 ---
 
 ## Open questions
 
-1. **Should the reconstruction row show three counts?**
-   `1.2M pts · 243 imgs · 2 cams` is more honest than today's two but is also
-   the widest row in a panel that defaults to 18% of the window. The
-   alternative is to keep two and let the camera count live only on the group
-   row, where it already appears. *Recommendation:* three, with the camera count
-   dropped first when the row is narrow.
-2. **Auto-scale hysteresis.** The auto exaggeration is computed per camera, not
-   per frame, so it will not flicker — but switching between two cameras with
-   different distortion magnitudes changes the arrow scale under the user. An
-   alternative is to fix the scale across the whole reconstruction. Unresolved;
-   the legend states the scale either way, so this is an ergonomics question
-   rather than a correctness one.
-3. **Does double-click on a camera row belong to the viewport?** "Zoom to fit
-   every image using this camera" is a genuinely useful gesture, but every other
-   double-click in the tree either enters camera view or zooms to a *node*.
-   Introducing a third target may be one gesture too many.
+None outstanding. Resolved questions move to § "Decisions" above with the
+reasoning that settled them.
