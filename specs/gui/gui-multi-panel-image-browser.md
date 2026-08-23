@@ -237,7 +237,13 @@ enum Tab {
 ```
 
 The fourth tab, `PointTrackDetail`, is the per-point inspection panel
-documented in `specs/gui/gui-point-track-detail.md`.
+documented in `specs/gui/gui-point-track-detail.md`. A fifth, `SceneGraph`,
+was added by `specs/gui/gui-scene-graph.md`.
+
+> _Planned (2026-08-23): a sixth tab, `IntrinsicsDetail` (title "Intrinsics"),
+> joins the Image Detail / Point Track tab group — see
+> [gui-camera-intrinsics.md](gui-camera-intrinsics.md) § "The Intrinsics
+> panel"._
 
 ### TabContext and TabViewer
 
@@ -362,6 +368,16 @@ rendered interactively via egui rather than baked into an output image.
 | **Max Track Angle** | Colored circles by max pairwise ray angle (triangulation angle) | `sfm heatmap --metric angle` |
 | **Depth Reliability** | Colored circles by inverse-depth z-score (low ⇒ near-infinity) | `sfm analyze --depth-reliability` |
 | **Condition Number** | Colored circles by `log10` of the normal-matrix condition number | the same diagnostic |
+
+> _Planned (2026-08-23): an **intrinsics layer** — principal point, angular
+> axes, distortion field — is drawn on this panel **independently of the mode
+> above**, composing with any of them (including `None`). It is not an
+> `OverlayMode` variant: the enum, the filters below, and the exclusivity among
+> the seven modes are all unchanged. Its own state lives in a sibling
+> `IntrinsicsDisplaySettings`, and it draws beneath the feature layers in a
+> haloed near-white so it survives an arbitrary colormap underneath. See
+> [gui-camera-intrinsics.md](gui-camera-intrinsics.md) § "Image Detail: the
+> Intrinsics overlay layer"._
 
 #### Feature Filtering
 

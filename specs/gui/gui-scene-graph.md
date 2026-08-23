@@ -293,6 +293,16 @@ fixed-height for virtualization.
 
 **Cameras group row** — `[▸] [👁] Cameras (243)`
 - Eye drives `show_cameras` for the node.
+
+> _Planned (2026-08-23): this row is renamed **Camera Images**, gains a
+> **Camera Intrinsics** group above it, and `show_cameras` becomes
+> `show_camera_images` — the label has counted `recon.images.len()` under the
+> `.sfmr` name for an intrinsics record since it was written. The
+> reconstruction row's `243 cams` becomes `243 imgs · 2 cams`, and
+> `AlignSource::Cameras`'s menu entry becomes `Camera Poses`. See
+> [gui-camera-intrinsics.md](gui-camera-intrinsics.md) § "Terminology" and
+> § "Scene Graph: the Camera Intrinsics group", which own the definition._
+
 - Expands to one row per image, **in image order, virtualized** via
   `ScrollArea::show_rows` — only visible rows are laid out, so 50K cameras
   cost tens of rows per frame.
