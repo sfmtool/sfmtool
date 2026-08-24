@@ -1,9 +1,9 @@
 # Camera Intrinsics: Scene-Graph Node, Image Overlay, Detail Panel
 
-**Status:** design — phase 1 (vocabulary and data model), phase 2
+**Status:** implemented — phase 1 (vocabulary and data model), phase 2
 (`camera::report` and `parameter_names()`), phase 3 (the Scene Graph group),
-phase 4 (the Intrinsics panel) and phase 5 (the projection plot, with the
-trustworthy domain it needed) implemented; phase 6 not yet.
+phase 4 (the Intrinsics panel), phase 5 (the projection plot, with the
+trustworthy domain it needed) and phase 6 (the Image Detail overlay layer).
 
 The viewer can show you where a camera *is* and what it *saw*, but nothing in it
 tells you what the camera *is*: which intrinsic model, what focal length, how far
@@ -247,6 +247,11 @@ pub fn radial_profile(cam: &CameraIntrinsics, azimuth_deg: f64, samples: usize)
     -> Vec<RadialSample>;
 pub fn distortion_field(cam: &CameraIntrinsics, cols: usize, rows: usize)
     -> Vec<DistortionSample>;
+/// The same displacement at **one** pixel rather than at a grid node —
+/// what the overlay's hover readout wants. `distortion_field` is defined in
+/// terms of it, so the two cannot disagree about the ideal map.
+pub fn displacement_at(cam: &CameraIntrinsics, u: f64, v: f64)
+    -> Option<DistortionSample>;
 /// 35 mm-equivalent focal length: `f_px · 43.267 / diagonal_px`. `None` for
 /// models whose focal length is pixels-per-radian rather than pixels.
 pub fn equiv_focal_length_35mm(cam: &CameraIntrinsics) -> Option<f64>;
@@ -591,16 +596,27 @@ Everything below is computed in image pixel coordinates and mapped through the
 panel's existing image-to-panel transform, so it pans and zooms with the
 photograph.
 
-**Principal point.** A small cross (4 px arms) plus a 3 px open circle at
-`(cx, cy)`, drawn last and fully opaque per the compositing rules above — this
-is the one mark that must never be lost under a dense feature overlay.
+**Principal point.** A reticle at `(cx, cy)` — a 3.5 px open ring with four
+arms reaching outward from just outside it — drawn last and fully opaque per the
+compositing rules above. This is the one mark that must never be lost under a
+dense feature overlay.
+
+> _Correction (2026-08-23, phase 6). This said "a small cross (4 px arms) plus a
+> 3 px open circle". Drawn that way in the real viewer, with the halo every
+> stroke of this layer carries, the cross and the ring merge into a filled dark
+> disc a few pixels across with no readable shape in it. Leaving the middle open
+> is what makes it a mark you can put on a pixel. The halo also narrowed from
+> two pixels wider than its stroke to one and a half, for the same reason._
 
 **Image centre and the offset.** A faint `+` at `(w/2, h/2)` and a thin
 connector to the principal point, labelled with the offset in pixels and as a
-percentage of the half-diagonal: `Δ (−12.4, +3.1) px · 0.4%`. Suppressed when
-the offset is under half a pixel, where a connector would be a smudge. This
-answers "is the principal point where it should be?" at a glance, which the
-number alone does not.
+percentage of the half-diagonal: `Δ (−12.4, +3.1) px · 0.4%`. The whole clause —
+the `+`, the connector and the label together — is suppressed when the offset is
+under half a pixel: there the two marks land on each other and a second reticle
+inside the first one's halo reads as one blob rather than as two coincident
+facts. Both checked-in fixtures are in exactly that case. This answers "is the
+principal point where it should be?" at a glance, which the number alone does
+not.
 
 **Angular axes.** Two polylines through the principal point, sampled by
 projecting rays rather than by drawing straight lines:
@@ -610,26 +626,56 @@ projecting rays rather than by drawing straight lines:
 
 Each is drawn as a polyline through densely sampled `ray_to_pixel` results (one
 sample per ~4 panel pixels), with tick marks and labels at the ladder values.
-**They are not straight.** Under distortion they bend, and the bend *is* the
-distortion, visible without the arrow field being on at all. Under a distortion-
-free model they come out straight, which is itself informative.
+
+> _Correction (2026-08-23, phase 6). This section said "**they are not
+> straight** — under distortion they bend, and the bend *is* the distortion".
+> That holds only for a model with decentring terms. A purely **radial** model —
+> most of the registry, and both checked-in fixtures — moves every point along
+> its own radius from the principal point, so a line *through* the principal
+> point stays exactly straight however violent the lens: on `kerry_park`'s
+> `OPENCV_FISHEYE` the sampled vertical axis is straight to under a hundredth of
+> a pixel. What a radial lens does to these axes is bunch the **ticks** along
+> them — evenly spaced angles landing at unevenly spaced pixels — and that is
+> the reading the ticks are for. Sampling rather than drawing two straight lines
+> is still the right implementation, because it is what makes the thin-prism and
+> tangential models' real curvature appear with no special case._
 
 Sampling stops at the first `ray_to_pixel` that returns `None` (outside the
-model's domain) or that leaves the image by more than 5% of its diagonal.
+model's domain), that leaves the image by more than 5% of its diagonal, or —
+phase 6 — at which the **radius from the principal point stops increasing**. An
+axis is a scale only where it is monotone: `kerry_park`'s polynomial turns over
+near 130° and the radius crashes from 191 px back to 6 px, which without the
+check draws the axis back through everything it has already drawn and lands a
+confident `−120°` tick between the `−60°` and `−30°` ones.
 
-*Tick ladder*: the coarsest of `1°, 2°, 5°, 10°, 15°, 30°, 45°` that keeps
-adjacent ticks at least 48 panel pixels apart at the current zoom, recomputed
-per frame — the panel zooms to 32×, and a ladder fixed at load time would be
-useless at both ends. Labels are signed (`−20°`, `−10°`, `0°`, `+10°`) with `+`
-to the right and `+` upward, per the frame convention above. A one-line legend
-in the panel corner says `angles: off-axis, + right / + up` so nobody has to
-infer it.
+*Tick ladder*: the **finest** of `1°, 2°, 5°, 10°, 15°, 30°, 45°` that keeps
+adjacent ticks at least 48 panel pixels apart at the current zoom — the panel
+zooms to 32×, and a ladder fixed at load time would be useless at both ends.
+(This section originally said "coarsest", which is the wrong end of the ladder:
+the coarsest step always clears the spacing and would put three ticks on a
+zoomed-in long lens.) The whole grid is resampled when the scale crosses a
+half-octave bucket rather than every frame, per § "Performance and caching".
+Labels are signed (`−20°`, `−10°`, `0°`, `+10°`) with `+` to the right and `+`
+upward, per the frame convention above; `0°` is labelled once, on the horizontal
+axis, since both axes cross there and the principal-point marker is already
+sitting on it. A one-line legend in the panel corner says
+`angles: off-axis, + right / + up` so nobody has to infer it.
 
 **Iso-angle rings** (off by default). Closed polylines at each ladder value,
-sampled over azimuth, labelled once at the top. On a fisheye these are the
-honest picture of the projection and make an off-centre principal point
-unmissable; on a long lens they are four barely-distinguishable circles, which
-is why they are opt-in.
+sampled over azimuth, labelled once — on the up-and-left diagonal rather than at
+the top, because the top of a `30°` ring is exactly where the vertical axis's
+own `+30°` tick lands and the two labels come out stacked saying the same thing
+twice. On a fisheye these are the honest picture of the projection and make an
+off-centre principal point unmissable; on a long lens they are four
+barely-distinguishable circles, which is why they are opt-in.
+
+**Ticks and rings stop at the trustworthy bound; the axes do not.** A tick
+claims "this pixel is 60° off axis" and a ring carries the same claim, so
+neither is drawn past `trustworthy_max_theta_deg`. The axes themselves continue
+past it **dashed** — the same treatment the projection plot gives its curve — so
+a reader still sees how much frame lies outside the modelled domain. On
+`kerry_park` the frame's mid-edge is past 100° against an 84° bound, so that is
+most of the outer third of the picture.
 
 **Distortion field.** A `grid_cols × rows` grid over the image (rows chosen to
 keep cells square). For each grid pixel `u`:
@@ -641,13 +687,44 @@ keep cells square). For each grid pixel `u`:
 
 Arrow direction therefore reads as "the lens moved this ray *here* from
 *there*", which is the direction a rectification would undo. Arrowheads scale
-with magnitude and are omitted below 1 panel pixel.
+with magnitude and are omitted below **3** panel pixels — this section said 1,
+but at two or three pixels two barbs on a short shaft render as a blob, which is
+what the first draft put across the middle of `kerry_park` where the lens
+displaces almost nothing. Below three quarters of a pixel no arrow is drawn at
+all: that is the absence of a measurement, not a small one.
+
+**Only the trustworthy half of the grid is drawn as arrows.** This section's
+auto scale fits "the largest displacement in the grid", and on a circular
+fisheye that is not a lens at all: `kerry_park`'s frame has corners 150°
+off-axis, outside the lens's image circle, where the `k1..k4` polynomial folds
+and reports 273 px against the 13 px the lens actually applies. Fitting to that
+picks ×1 in a narrow panel and leaves every real arrow invisible, and the
+legend's `max N px` would be quoting the artefact. So the field is split by
+`DistortionSample::theta_deg` against `trustworthy_max_theta_deg`, and the two
+halves differ in kind rather than in degree:
+
+- **inside the bound** — an arrow: scaled to, counted, and the maximum the
+  legend quotes;
+- **outside it** — a small open dot at the grid node and nothing else. The node
+  was sampled and there is no measurement there, which is a different statement
+  from "the lens displaces this ray by 240 pixels". Drawn as arrows at the
+  trustworthy scale they would also throw a dozen frame-crossing strokes across
+  the picture.
+
+The plot solved the same problem for a curve by shading, dotting and excluding
+from the range; a field is not a curve — there is no continuous path to dot, and
+the region is a ring outside the frame rather than a tail — so what carries over
+is the principle: the extrapolated part stays visible, is distinguished in kind,
+and is out of every number. Its boundary is the labelled dashed contour the axes
+draw.
 
 *Auto scale* picks the smallest `s` from `{1, 2, 3, 5, 10, 20, 50}` that brings
-the largest displacement in the grid to at least 8 panel pixels, capped so that
-no arrow exceeds one grid cell. The legend states both, always:
-`max 12.4 px · shown ×3` — an exaggerated field that does not admit it is a
-lie, and this is a diagnostic tool.
+the largest **trustworthy** displacement to at least 8 panel pixels, capped so
+that no arrow exceeds one grid cell. The legend states both, always:
+`distortion max 12.4 px · shown ×3` — an exaggerated field that does not admit
+it is a lie, and this is a diagnostic tool — with a second line
+`96 of 244 nodes past 84.5° · marked, not measured` whenever the bound excluded
+anything.
 
 The scale is computed **per camera**, not per frame and not per reconstruction.
 Per frame would flicker; per reconstruction would scale every camera to the most
@@ -655,6 +732,15 @@ distorted one and leave a mild lens with a field too small to read. Per camera
 means switching cameras can change the scale under the user, which is accepted:
 each camera is exaggerated exactly enough to show *its own* distortion, and the
 legend says so every frame. See § "Decisions".
+
+The 8-panel-pixel floor is evaluated at the panel's **fit** scale, not at the
+live one. "At least 8 panel pixels" and "computed per camera, not per frame" are
+in tension, since panel pixels depend on the zoom: a scale honestly recomputed
+against the live view steps down the ladder as the user zooms in, which is the
+flicker this section is ruling out. Fixing it at the fit scale resolves it the
+way the section asks — the multiplier moves only when the camera or the panel
+size does, and zooming in enlarges the arrows along with the photograph. The
+one-cell cap is in image pixels on both sides and is view-independent already.
 
 **Spline domain marker.** For `SfmtoolFisheye` / `SfmtoolPinhole`, an extra
 dashed iso-contour at `bspline_theta_max` / `atan(bspline_rho_max)`, labelled
@@ -676,13 +762,28 @@ extends to ±180° horizontally and ±90° vertically.
 pixel  (1204.5, 733.0)
 ray    (0.281, −0.104, −0.954)
 off-axis 17.3°   azimuth 159.7°
-distortion  +4.21 px
+distortion  4.21 px
 ```
 
 `distortion` is the same `|u − u_ref|` the arrows draw, at the exact pixel under
-the cursor rather than at a grid node, and is omitted for a model with no
-distortion. This is the cheapest high-value part of the whole overlay: it turns
-the image into a calibrated protractor.
+the cursor rather than at a grid node — `camera::report::displacement_at`, which
+phase 6 made public for exactly this and which `distortion_field` is now defined
+in terms of, so the two cannot disagree about the ideal map. It carries no sign:
+it is a magnitude, and the `+` this section originally showed would be reporting
+a direction the figure does not have.
+
+The line is omitted entirely for a model with no distortion, and past
+`trustworthy_max_theta_deg` it reads `distortion  not modelled past 84.5°` with
+**no figure** — beside "off-axis 137.2°" a number there would be read as a
+measurement, and it is a fold in a polynomial. Same call as the arrows and the
+legend, from the same flag.
+
+Azimuth is measured in the frame `radial_profile` sweeps: `0°` is `+X` (right),
+`90°` is `+Y` (up). It is omitted within 0.05° of the optical axis, where "which
+way round the axis" has no answer.
+
+This is the cheapest high-value part of the whole overlay: it turns the image
+into a calibrated protractor.
 
 ### Interaction with the selected point
 
@@ -1053,6 +1154,9 @@ implemented in `camera/report/tests.rs`:
   asserted complete against `MODEL_COUNT` the way the registry's own corpus is.
 - `distortion_field` is identically zero for those same models, and non-zero
   and radially symmetric for `SimpleRadial` with `k1 < 0`.
+- `displacement_at` reproduces `distortion_field` exactly at every node of a
+  grid — the two are one arithmetic, since the field is defined in terms of it —
+  and is zero for every model that is its own ideal map.
 - Round trip: `ray_to_pixel(pixel_to_ray(u)) ≈ u` at every grid node used by the
   field, which is what makes the arrows meaningful at all.
 - `equiv_focal_length_35mm` returns `None` for every fisheye and equirectangular
@@ -1137,15 +1241,40 @@ Two caveats remain, both named in the tests rather than left implicit:
   that the radial scale bounded to the trustworthy samples is materially
   smaller than the unbounded one, that the residual's range always contains
   zero and is never zero-width, and that a tick at zero never renders as `-0`.
-- The intrinsics layer composes: with `overlay_mode: Features` and
-  `intrinsics.enabled`, one frame contains both the feature ellipses and the
-  principal-point marker, and turning the layer off leaves the feature draw
-  calls unchanged.
-- The layer's settings popup opens only when the checkbox is ticked, and shows
-  the `No distortion` line instead of the distortion row for a pinhole fixture.
-- With the layer off, the hover tooltip over a feature is identical to the
-  tooltip the panel produces today — the regression that a composed tooltip
-  most plausibly breaks.
+- The intrinsics layer composes, over **every** `OverlayMode` rather than over
+  `Features` alone: a whole `ImageDetail::show` frame is run twice per mode, and
+  every shape the mode painted on its own is still there, unmoved, with the
+  layer on underneath it — while the frame as a whole has gained shapes.
+  Two things that test found out the hard way, both worth knowing before writing
+  another like it: `SfmrReconstruction::demo` relaxes its points from a random
+  start, so both frames must come from **one** reconstruction or the heatmap
+  modes' value ranges differ for reasons having nothing to do with the layer;
+  and a `Shape::Text`'s debug form carries its glyphs' atlas UVs, which the
+  layer moves by rasterizing `°`, `·` and `×` before the colorbar's labels reach
+  the atlas — so text is compared by position and string, not by debug form.
+- `I` over the panel toggles the layer, is a toggle rather than a latch, and
+  does nothing with the pointer outside the panel. Driven through the same whole
+  frame, which needs a warm-up pass first: egui resolves hover against the
+  previous pass's widget rects, so on a fresh context's first frame nothing is
+  hovered and neither `I` nor the panel's existing `Z` would fire.
+- The layer's settings popup shows the `No distortion` line instead of the
+  distortion row for a pinhole fixture, and its footer names the domain its
+  maximum was taken over for a bounded model and not for an unbounded one.
+- The composed tooltip, all four ways: the feature line alone with the layer
+  off — which must be byte for byte the tooltip the panel produces today, the
+  regression a composed tooltip most plausibly breaks — the readout below it
+  with the layer on, the readout alone off a feature, and nothing at all with
+  neither.
+- What the layer *decides*, without a frame, since no painted string shows any
+  of it: the tick ladder coarsens with the camera and refines with the zoom; a
+  radial model's axes stay straight while its ticks bunch; the axis sweep stays
+  monotone in radius across a fold; ticks and rings stay inside the trustworthy
+  bound while the axes carry a flagged tail past it; the auto scale fitted to
+  the lens exceeds the one fitted to the fold, holds still under zoom, and never
+  lets an arrow outgrow its cell; and the offset label appears only off centre.
+- Every glyph the layer writes — `Δ`, `−`, `·`, `°`, `×`, `⚙` — is in egui's
+  bundled fonts, each spelled once as a named constant. `scene_graph`'s own
+  glyph test, for the same reason.
 - The node-transform toggle appears only when the node transform is
   non-identity.
 
@@ -1280,11 +1409,40 @@ Each phase leaves the viewer in a shippable state.
    - The band's condition — "azimuth-dependent" — is measured off the sampled
      envelope rather than read from a per-model table, so it cannot drift from
      what the projection actually does.
-6. **Image Detail overlay layer.** The checkbox, the settings popup and the
-   compositing rules first, with only the principal point and centre offset
+6. **Image Detail overlay layer** — *done.* The checkbox, the settings popup and
+   the compositing rules first, with only the principal point and centre offset
    drawn — that is the smallest thing that proves the layer composes correctly
    over every existing mode. Then axes and ticks, then the distortion field,
-   then the composed hover readout.
+   then the composed hover readout; four commits in that order, in
+   `crates/sfm-explorer/src/image_detail/intrinsics/` with `controls`, `axes`,
+   `field` and `hover` under it.
+
+   Everything it settled against the real code and the real viewer is corrected
+   in place above rather than listed here; the short version is eight findings:
+
+   - The axes **do not bend** under a purely radial model, which is most of the
+     registry and both fixtures. The ticks bunch instead.
+   - The axis sweep has to stop at a **fold**, or a circular fisheye's axis
+     doubles back and scrambles its own tick order.
+   - Ticks and rings are numeric claims, so they **stop at the trustworthy
+     bound**; the axes carry on past it dashed.
+   - The arrow field's auto scale and legend must be **fitted to the
+     trustworthy half of the grid**, and the extrapolated half becomes marked
+     nodes rather than arrows.
+   - The 8-panel-pixel floor is evaluated at the panel's **fit** scale, which is
+     how "at least 8 panel pixels" and "per camera, not per frame" are both
+     satisfied.
+   - The tick ladder is the **finest** step that clears the spacing, not the
+     coarsest.
+   - The principal point is a **reticle** with an open middle, not a cross
+     through a ring, which haloed comes out as a blob.
+   - `camera::report` had **no way to ask for the displacement at a pixel**;
+     `displacement_at` is now public and `distortion_field` is defined in terms
+     of it.
+
+   Plus two smaller ones: a ring's label goes on the diagonal rather than at the
+   top, where the vertical axis's own tick for the same angle already is; and an
+   arrowhead needs three panel pixels, not one, before it reads as an arrow.
 
 Phases 3–6 are independent of one another once 1 and 2 land, so they can be
 reordered or dropped without stranding anything.

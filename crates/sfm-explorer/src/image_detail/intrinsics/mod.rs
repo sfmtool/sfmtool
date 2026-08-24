@@ -35,10 +35,10 @@
 //! # Caching
 //!
 //! Nothing here is per-frame work. [`CameraLayer`] is computed once per
-//! [`CameraRef`] and held by [`super::ImageDetail`], because the displacement
-//! field is a few hundred ray round trips and `undistort` is iterative for the
-//! OpenCV family. It is rebuilt only when the camera, the grid density or the
-//! node changes.
+//! [`crate::scene::CameraRef`] and held by [`super::ImageDetail`], because the
+//! displacement field is a few hundred ray round trips and `undistort` is
+//! iterative for the OpenCV family. It is rebuilt only when the camera, the
+//! grid density or the node changes.
 
 mod axes;
 mod controls;

@@ -461,6 +461,276 @@ fn the_field_is_split_into_measurements_and_marked_nodes() {
     assert_eq!(drawn + marked, layer.extrapolated.1);
 }
 
+// ── Composition with the feature layer ──────────────────────────────────
+//
+// The property the whole design rests on: this is a layer, not an eighth
+// `OverlayMode`. So a whole panel frame is run with each mode in turn, twice,
+// and what the feature layer painted must not move when the intrinsics layer is
+// switched on underneath it.
+
+/// One whole `ImageDetail::show` frame, returning every shape it painted.
+///
+/// The panel needs real CPU pixels to build its texture from and a real SIFT
+/// cache to draw features from, so both are synthesized: egui allocates
+/// textures on the CPU, and `run_frame_headless` discards the delta.
+fn panel_frame(
+    node: &crate::scene::SceneNode,
+    sift: &crate::state::CachedSiftFeatures,
+    image: &sfmtool_core::camera::remap::ImageU8,
+    feature_display: &crate::state::FeatureDisplaySettings,
+    intrinsics: &mut IntrinsicsDisplaySettings,
+) -> Vec<egui::Shape> {
+    panel_frame_with_input(
+        node,
+        sift,
+        image,
+        feature_display,
+        intrinsics,
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 700.0),
+            )),
+            ..Default::default()
+        },
+    )
+}
+
+/// The same frame, with the caller's own input events — a pointer position and
+/// a keystroke, for the bindings the panel owns.
+fn panel_frame_with_input(
+    node: &crate::scene::SceneNode,
+    sift: &crate::state::CachedSiftFeatures,
+    image: &sfmtool_core::camera::remap::ImageU8,
+    feature_display: &crate::state::FeatureDisplaySettings,
+    intrinsics: &mut IntrinsicsDisplaySettings,
+    input: egui::RawInput,
+) -> Vec<egui::Shape> {
+    let mut detail = super::super::ImageDetail::new();
+    let ctx = egui::Context::default();
+
+    // A warm-up pass carrying the pointer but no keystrokes. egui resolves
+    // hover against the *previous* pass's widget rects, so on a fresh context's
+    // first frame nothing is hovered and the panel's own key bindings — `Z`,
+    // and now `I` — would never fire.
+    let warm_up = egui::RawInput {
+        screen_rect: input.screen_rect,
+        events: input
+            .events
+            .iter()
+            .filter(|event| !matches!(event, egui::Event::Key { .. }))
+            .cloned()
+            .collect(),
+        ..Default::default()
+    };
+    let mut warm = ctx.run_ui(warm_up, |ui| {
+        detail.show(
+            ui,
+            &node.recon,
+            node.id,
+            Some(0),
+            None,
+            None,
+            false,
+            &[],
+            &crate::platform::ScrollInput::default(),
+            Some(sift),
+            Some(image),
+            feature_display,
+            intrinsics,
+        );
+    });
+    warm.textures_delta.clear();
+
+    let mut output = ctx.run_ui(input, |ui| {
+        detail.show(
+            ui,
+            &node.recon,
+            node.id,
+            Some(0),
+            None,
+            None,
+            false,
+            &[],
+            &crate::platform::ScrollInput::default(),
+            Some(sift),
+            Some(image),
+            feature_display,
+            intrinsics,
+        );
+    });
+    output.textures_delta.clear();
+    output
+        .shapes
+        .into_iter()
+        .map(|clipped| clipped.shape)
+        .collect()
+}
+
+/// Every shape in a frame, flattened out of the nested `Shape::Vec`s and
+/// reduced to a comparable key.
+///
+/// Text is keyed by its position and its string rather than by its whole debug
+/// form: a galley carries the atlas UVs of its glyphs, and the intrinsics layer
+/// rasterizes `°`, `·` and `×` into that atlas before the colorbar's own labels
+/// reach it, which moves every later glyph's UVs without moving a pixel of the
+/// colorbar on screen.
+fn flatten(shapes: &[egui::Shape], out: &mut Vec<String>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => flatten(inner, out),
+            egui::Shape::Text(text) => {
+                out.push(format!("Text({:?}, {:?})", text.pos, text.galley.text()))
+            }
+            other => out.push(format!("{other:?}")),
+        }
+    }
+}
+
+/// A node, a SIFT cache and a stand-in photograph the panel can really run on.
+///
+/// One reconstruction per test rather than one per frame: `demo` relaxes its
+/// points onto a sphere from a random start, so two calls do not agree and the
+/// heatmap modes' value ranges would differ for reasons having nothing to do
+/// with the layer.
+fn demo_panel_fixture() -> (
+    crate::scene::SceneNode,
+    crate::state::CachedSiftFeatures,
+    sfmtool_core::camera::remap::ImageU8,
+) {
+    use sfmtool_core::camera::remap::ImageU8;
+
+    let node = crate::scene::SceneNode::from_path(
+        std::path::Path::new("/runs/demo.sfmr"),
+        sfmtool_core::SfmrReconstruction::demo(64),
+    );
+    let camera = &node.recon.cameras[0];
+    let (w, h) = (
+        f32::from(camera.width as u16),
+        f32::from(camera.height as u16),
+    );
+    // A tiny stand-in for the photograph: the panel only uploads it.
+    let image = ImageU8::new(8, 8, 3, vec![90u8; 8 * 8 * 3]);
+    // Features spread over the frame, one per tracked keypoint index.
+    let count = node.recon.image_feature_to_point[0].len().max(1);
+    let sift = crate::state::CachedSiftFeatures {
+        positions_xy: (0..count)
+            .map(|i| {
+                [
+                    (i % 8) as f32 * w / 8.0 + 40.0,
+                    (i / 8) as f32 * h / 8.0 + 30.0,
+                ]
+            })
+            .collect(),
+        affine_shapes: vec![[[6.0, 0.0], [0.0, 6.0]]; count],
+        read_count: count,
+    };
+    (node, sift, image)
+}
+
+#[test]
+fn the_layer_composes_with_every_feature_mode_without_disturbing_it() {
+    use crate::state::{FeatureDisplaySettings, OverlayMode};
+
+    let (node, sift, image) = demo_panel_fixture();
+    for mode in OverlayMode::ALL {
+        let feature_display = FeatureDisplaySettings {
+            overlay_mode: mode,
+            tracked_only: false,
+            ..Default::default()
+        };
+
+        let mut off = IntrinsicsDisplaySettings::default();
+        let mut on = IntrinsicsDisplaySettings {
+            enabled: true,
+            ..Default::default()
+        };
+
+        let (mut without, mut with) = (Vec::new(), Vec::new());
+        flatten(
+            &panel_frame(&node, &sift, &image, &feature_display, &mut off),
+            &mut without,
+        );
+        flatten(
+            &panel_frame(&node, &sift, &image, &feature_display, &mut on),
+            &mut with,
+        );
+
+        assert!(
+            with.len() > without.len(),
+            "{mode:?}: the layer should put ink on the image"
+        );
+        // Every shape the mode drew on its own is still there, unmoved: the
+        // layer draws beneath the features and takes nothing away.
+        for shape in &without {
+            assert!(
+                with.contains(shape),
+                "{mode:?}: enabling the layer changed what the feature layer \
+                 drew — missing {shape}"
+            );
+        }
+    }
+}
+
+#[test]
+fn i_toggles_the_layer_while_the_pointer_is_over_the_panel() {
+    let (node, sift, image) = demo_panel_fixture();
+    let feature_display = crate::state::FeatureDisplaySettings::default();
+
+    let press_i = |at: egui::Pos2| egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(900.0, 700.0),
+        )),
+        events: vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::Key {
+                key: egui::Key::I,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+        ..Default::default()
+    };
+
+    let mut settings = IntrinsicsDisplaySettings::default();
+    assert!(!settings.enabled, "off by default: it is a diagnostic");
+    panel_frame_with_input(
+        &node,
+        &sift,
+        &image,
+        &feature_display,
+        &mut settings,
+        press_i(egui::pos2(450.0, 350.0)),
+    );
+    assert!(settings.enabled, "`I` over the panel turns the layer on");
+
+    // And it is a toggle, not a latch.
+    panel_frame_with_input(
+        &node,
+        &sift,
+        &image,
+        &feature_display,
+        &mut settings,
+        press_i(egui::pos2(450.0, 350.0)),
+    );
+    assert!(!settings.enabled);
+
+    // With the pointer outside the panel the key belongs to whatever is under
+    // it instead, exactly as the panel's existing `Z` behaves.
+    panel_frame_with_input(
+        &node,
+        &sift,
+        &image,
+        &feature_display,
+        &mut settings,
+        press_i(egui::pos2(-40.0, -40.0)),
+    );
+    assert!(!settings.enabled);
+}
+
 // ── The hover readout ───────────────────────────────────────────────────
 
 #[test]

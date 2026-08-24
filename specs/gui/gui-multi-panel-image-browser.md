@@ -369,15 +369,20 @@ rendered interactively via egui rather than baked into an output image.
 | **Depth Reliability** | Colored circles by inverse-depth z-score (low ⇒ near-infinity) | `sfm analyze --depth-reliability` |
 | **Condition Number** | Colored circles by `log10` of the normal-matrix condition number | the same diagnostic |
 
-> _Planned (2026-08-23): an **intrinsics layer** — principal point, angular
-> axes, distortion field — is drawn on this panel **independently of the mode
-> above**, composing with any of them (including `None`). It is not an
-> `OverlayMode` variant: the enum, the filters below, and the exclusivity among
-> the seven modes are all unchanged. Its own state lives in a sibling
+> _An **intrinsics layer** — principal point, angular axes, iso-angle rings,
+> distortion field — is drawn on this panel **independently of the mode above**,
+> composing with any of them (including `None`). It is not an `OverlayMode`
+> variant: the enum, the filters below, and the exclusivity among the seven
+> modes are all unchanged. Its own state lives in a sibling
 > `IntrinsicsDisplaySettings`, and it draws beneath the feature layers in a
-> haloed near-white so it survives an arbitrary colormap underneath. See
-> [gui-camera-intrinsics.md](gui-camera-intrinsics.md) § "Image Detail: the
-> Intrinsics overlay layer"._
+> haloed near-white so it survives an arbitrary colormap underneath — except its
+> principal-point marker, which draws last, over everything. It contributes one
+> checkbox and one gear to the toolbar row, and `I` toggles it while the pointer
+> is over the panel (beside the panel's existing `Z`). It also contributes text
+> to **this panel's one hover tooltip**, appended below a painted rule to
+> whatever the feature layer produced; with the layer off that tooltip is
+> unchanged. See [gui-camera-intrinsics.md](gui-camera-intrinsics.md) § "Image
+> Detail: the Intrinsics overlay layer"._
 
 #### Feature Filtering
 
