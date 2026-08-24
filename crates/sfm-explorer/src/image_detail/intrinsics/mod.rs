@@ -212,12 +212,15 @@ impl CameraLayer {
     }
 }
 
-/// One node of the displacement field: where the family's ideal map put a ray,
-/// and where the model actually puts it.
+/// One node of the displacement field: where the model actually puts a ray, and
+/// where the family's ideal map would have put it.
 pub(crate) struct Arrow {
-    /// The ideal map's pixel — the arrow's tail.
+    /// The ideal map's pixel — the arrow's head at `×1`, i.e. where the content
+    /// under [`Self::pixel`] belongs.
     pub reference: [f64; 2],
-    /// The model's pixel — the arrow's head at `×1`.
+    /// The model's pixel, and the grid node itself — the arrow's tail. The tail
+    /// is the real pixel because the field is drawn on the real image; see
+    /// [`mod@field`].
     pub pixel: [f64; 2],
     /// Whether the sampled ray is inside [`CameraLayer::limit_deg`], and so
     /// whether this node is a measurement at all. See [`mod@field`].

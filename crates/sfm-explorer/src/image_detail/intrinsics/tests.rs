@@ -452,6 +452,57 @@ fn the_auto_scale_does_not_move_when_the_panel_zooms() {
 }
 
 #[test]
+fn the_correction_points_the_way_the_sign_of_k1_says_it_should() {
+    // The property, not the numbers: an expected-value assertion is satisfied
+    // by a sign-flipped constant and would have passed on the field pointing
+    // backwards, which is what shipped until someone looked at it.
+    //
+    // `SIMPLE_RADIAL` is `r_d = f·ρ·(1 + k1·ρ²)`, so `k1 > 0` puts the model's
+    // pixel *outside* the ideal one and the correction — from the real pixel
+    // toward where its content belongs — points **inward**; `k1 < 0` puts it
+    // inside and the correction points **outward**. Both signs are checked, so
+    // the test pins the convention against the optics rather than against one
+    // fixture that happens to have a sign.
+    for (k1, inward) in [(0.035, true), (-0.035, false)] {
+        let camera = CameraIntrinsics {
+            model: CameraModel::SimpleRadial {
+                focal_length: 344.0,
+                principal_point_x: 135.0,
+                principal_point_y: 240.0,
+                radial_distortion_k1: k1,
+            },
+            width: 270,
+            height: 480,
+        };
+        let (cx, cy) = camera.principal_point();
+        let layer = CameraLayer::compute(&camera, 16);
+
+        let mut checked = 0;
+        for arrow in layer.arrows.iter().filter(|a| a.trusted) {
+            // The tail is the grid node itself — a real pixel of the image the
+            // field is drawn on.
+            let step = (
+                arrow.reference[0] - arrow.pixel[0],
+                arrow.reference[1] - arrow.pixel[1],
+            );
+            if step.0.hypot(step.1) < 1e-9 {
+                continue; // the node at the principal point has nowhere to point
+            }
+            let out = (arrow.pixel[0] - cx, arrow.pixel[1] - cy);
+            let radial = out.0 * step.0 + out.1 * step.1;
+            assert_eq!(
+                radial < 0.0,
+                inward,
+                "k1 = {k1}: the arrow at {:?} points the wrong way",
+                arrow.pixel
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "k1 = {k1}: no arrow had a direction to check");
+    }
+}
+
+#[test]
 fn the_field_is_split_into_measurements_and_marked_nodes() {
     let layer = CameraLayer::compute(&kerry_park_camera(), 16);
     let drawn = layer.arrows.iter().filter(|a| a.trusted).count();

@@ -1,9 +1,28 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The distortion displacement field: what the lens did to each ray, drawn as
-//! an arrow from where the family's ideal map would have put it to where the
-//! model actually puts it — the direction a rectification would undo.
+//! The distortion displacement field: where the content under each pixel
+//! belongs, drawn as an arrow from the pixel the model actually projects a ray
+//! to — a real pixel of the photograph on screen — toward where the family's
+//! ideal map would have put that ray. Each arrow is what rectifying this image
+//! would do to the pixel at its tail.
+//!
+//! # Why the tail is the real pixel
+//!
+//! The other direction is just as true arithmetically, and was drawn first: an
+//! arrow from the ideal position to the actual one is a faithful picture of how
+//! a pixel moves from undistorted to distorted, and its sign is right (a
+//! positive `k1` puts the actual pixel further out, so those arrows pointed
+//! outward). It is still the wrong direction to draw *here*, because the field
+//! is painted **on the distorted photograph**. Every pixel on screen is an
+//! actual pixel, so an arrow tailed at an ideal position starts at a point that
+//! does not exist in the image being looked at — and a reader seeing an arrow
+//! on a photograph reads it as "*this* content moves *that* way", which is only
+//! true when the tail is on the real pixel.
+//!
+//! Tailing every arrow at its own grid node has a second benefit: the tails sit
+//! on an exact regular lattice instead of the slightly warped one the ideal
+//! positions form, so the field reads as a field.
 //!
 //! # The exaggeration, and why it is honest
 //!
@@ -133,7 +152,9 @@ pub(super) fn draw(
     legend(layer, scale)
 }
 
-/// One displacement arrow, from the ideal map's pixel to the model's.
+/// One displacement arrow, from the model's pixel toward the ideal map's — the
+/// correction, drawn on the pixel it corrects. See this module's own docs for
+/// why the tail is the real pixel.
 fn draw_arrow(
     painter: &egui::Painter,
     arrow: &Arrow,
@@ -142,10 +163,10 @@ fn draw_arrow(
     scale: f32,
     color: Color32,
 ) {
-    let tail = view.at(arrow.reference);
+    let tail = view.at(arrow.pixel);
     let head = Pos2::new(
-        tail.x + (arrow.pixel[0] - arrow.reference[0]) as f32 * scale * view.scale,
-        tail.y + (arrow.pixel[1] - arrow.reference[1]) as f32 * scale * view.scale,
+        tail.x + (arrow.reference[0] - arrow.pixel[0]) as f32 * scale * view.scale,
+        tail.y + (arrow.reference[1] - arrow.pixel[1]) as f32 * scale * view.scale,
     );
     let grown = panel.expand(20.0);
     if !grown.contains(tail) && !grown.contains(head) {

@@ -683,10 +683,28 @@ keep cells square). For each grid pixel `u`:
 1. `ray = pixel_to_ray(u)` — where this pixel actually looks;
 2. `u_ref = reference_project(ray)` — where the family's ideal map would have
    put that same ray;
-3. draw an arrow from `u_ref` to `u_ref + s·(u − u_ref)`, `s` the exaggeration.
+3. draw an arrow from `u` to `u + s·(u_ref − u)`, `s` the exaggeration.
 
-Arrow direction therefore reads as "the lens moved this ray *here* from
-*there*", which is the direction a rectification would undo. Arrowheads scale
+Arrow direction therefore reads as "the content under *this* pixel belongs
+*there*" — the correction itself, drawn on the pixel it corrects.
+
+> _Correction (2026-08-24, phase 6). Step 3 said to draw from `u_ref` to
+> `u_ref + s·(u − u_ref)`, and the sentence after it justified that as "the
+> direction a rectification would undo" — an instruction and a rationale
+> naming opposite conventions. The rationale was the right one. Both directions
+> are arithmetically true and the old one had the correct sign (a positive `k1`
+> puts `u` outside `u_ref`, so those arrows pointed outward, which is faithfully
+> how a pixel moves from undistorted to distorted); it is nonetheless the wrong
+> thing to draw **on a photograph**. The field is painted on the distorted
+> image, where every pixel on screen is an actual pixel, so an arrow tailed at
+> `u_ref` starts at a point that does not exist in the picture being looked at
+> — and an arrow on a photograph is read as "this content moves that way",
+> which is only true when the tail is the real pixel. Tailing at `u` also puts
+> every tail on the exact grid lattice rather than the warped one `u_ref` forms.
+> Found by looking at `seoul_bull_sculpture` in the viewer: every automated check
+> passed on a field pointing the wrong way, because nothing asserted direction._
+
+Arrowheads scale
 with magnitude and are omitted below **3** panel pixels — this section said 1,
 but at two or three pixels two barbs on a short shaft render as a blob, which is
 what the first draft put across the middle of `kerry_park` where the lens
