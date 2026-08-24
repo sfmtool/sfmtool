@@ -78,6 +78,7 @@ fn the_layers_glyphs_are_available_in_the_bundled_fonts() {
         super::DELTA,
         super::MINUS,
         super::MIDDOT,
+        super::DEGREE,
         controls::TIMES,
         controls::GEAR,
     ] {
@@ -181,6 +182,204 @@ fn an_offset_principal_point_is_labelled_in_pixels_and_in_percent() {
         label.ends_with("4.6%"),
         "percent of half-diagonal: {label:?}"
     );
+}
+
+// ── The angular grid ────────────────────────────────────────────────────
+
+/// The grid as the panel would sample it at `scale` panel pixels per image
+/// pixel, with the rings on so the contour paths are exercised too.
+fn grid(camera: &CameraIntrinsics, scale: f32) -> super::axes::AxisGeometry {
+    super::axes::AxisGeometry::compute(
+        camera,
+        scale,
+        true,
+        sfmtool_core::camera::report::trustworthy_max_theta_deg(camera),
+    )
+}
+
+/// The ladder step the grid would draw at `scale`.
+fn ladder(camera: &CameraIntrinsics, scale: f32) -> f64 {
+    super::axes::tick_ladder(camera, scale, super::axes::axis_reaches(camera, scale))
+}
+
+#[test]
+fn the_tick_ladder_gets_finer_as_the_panel_zooms_in() {
+    let camera = simple_radial_camera();
+    // Fitted to a panel (about 1.4 panel px per image px) against 8× into it.
+    let fitted = ladder(&camera, 1.4);
+    let zoomed = ladder(&camera, 1.4 * 8.0);
+    assert!(
+        zoomed < fitted,
+        "8× in should not still be on the {fitted}° ladder"
+    );
+    // And every step is one the ladder actually offers.
+    for step in [fitted, zoomed] {
+        assert!(
+            [1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 45.0].contains(&step),
+            "{step} is not on the ladder"
+        );
+    }
+    // A 129 px/rad fisheye fitted to a panel cannot carry a fine ladder, and a
+    // 344 px/rad lens at the same scale can: the ladder is per camera as much
+    // as per zoom.
+    assert!(ladder(&kerry_park_camera(), 1.4) > fitted);
+}
+
+#[test]
+fn a_radial_model_keeps_its_axes_straight_and_bunches_their_ticks() {
+    // Sagitta of the vertical axis: how far it departs from the straight line
+    // between its ends. Radial distortion moves every point along its own
+    // radius from the principal point, so an axis *through* the principal point
+    // is straight however violent the lens — this is the spec's "they are not
+    // straight" corrected against the real projection, and the fixtures are
+    // both radial.
+    let bend = |camera: &CameraIntrinsics| {
+        let axis: Vec<[f64; 2]> = grid(camera, 1.4).vertical.iter().map(|(p, _)| *p).collect();
+        assert!(axis.len() > 8, "the axis should be densely sampled");
+        let (first, last) = (axis[0], axis[axis.len() - 1]);
+        axis.iter()
+            .map(|p| {
+                let (dx, dy) = (last[0] - first[0], last[1] - first[1]);
+                let length = dx.hypot(dy).max(1e-9);
+                ((p[0] - first[0]) * dy - (p[1] - first[1]) * dx).abs() / length
+            })
+            .fold(0.0_f64, f64::max)
+    };
+    assert!(bend(&pinhole_camera()) < 1e-9);
+    assert!(bend(&kerry_park_camera()) < 0.01, "a fisheye's too");
+
+    // What the fisheye's distortion does show is in the tick spacing: equal
+    // angular steps landing at unequal pixel steps.
+    let camera = kerry_park_camera();
+    let ticks: Vec<f64> = grid(&camera, 1.4)
+        .ticks
+        .iter()
+        .filter(|t| t.axis == super::axes::Axis::Vertical)
+        .map(|t| t.at[1])
+        .collect();
+    let gaps: Vec<f64> = ticks.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+    let (min, max) = gaps
+        .iter()
+        .fold((f64::MAX, 0.0_f64), |(lo, hi), g| (lo.min(*g), hi.max(*g)));
+    assert!(
+        max > 1.02 * min,
+        "equal angles should not land at equal pixels on a fisheye: {gaps:?}"
+    );
+}
+
+#[test]
+fn the_grid_stops_where_the_frame_does() {
+    // Every sample of every part of the grid is on the frame, give or take the
+    // 5% of the diagonal the sweep is allowed to overshoot by.
+    let camera = kerry_park_camera();
+    let grid = grid(&camera, 1.4);
+    let margin = 0.05 * f64::from(camera.width).hypot(f64::from(camera.height));
+    let inside = |p: &[f64; 2]| {
+        p[0] >= -margin
+            && p[1] >= -margin
+            && p[0] <= f64::from(camera.width) + margin
+            && p[1] <= f64::from(camera.height) + margin
+    };
+    assert!(grid.horizontal.iter().all(|(p, _)| inside(p)));
+    assert!(grid.vertical.iter().all(|(p, _)| inside(p)));
+    assert!(grid
+        .rings
+        .iter()
+        .flat_map(|r| &r.runs)
+        .flatten()
+        .all(inside));
+}
+
+#[test]
+fn the_axes_stop_where_the_projection_folds_and_go_dashed_before_that() {
+    // `kerry_park`'s polynomial turns over near 130°: past the turn the radius
+    // crashes from 191 px back to 6 px, and an unguarded sweep draws the axis
+    // back through everything it has already drawn, putting a confident `−120°`
+    // tick between the `−60°` and `−30°` ones. So the axis must be monotone in
+    // radius from the principal point, all the way out.
+    let camera = kerry_park_camera();
+    let axis = grid(&camera, 1.4).horizontal;
+    let (cx, cy) = camera.principal_point();
+    let radius = |p: &[f64; 2]| (p[0] - cx).hypot(p[1] - cy);
+    let turn = axis.len() / 2;
+    for half in [&axis[..=turn], &axis[turn..]] {
+        let radii: Vec<f64> = half.iter().map(|(p, _)| radius(p)).collect();
+        let monotone = radii.windows(2).all(|w| w[0] >= w[1] - 1e-9)
+            || radii.windows(2).all(|w| w[0] <= w[1] + 1e-9);
+        assert!(monotone, "an axis is a scale only where it is monotone");
+    }
+
+    // And the part outside the trustworthy bound is flagged for dashing rather
+    // than dropped, so the reader can still see how much frame is out there.
+    assert!(axis.iter().any(|(_, trusted)| *trusted));
+    assert!(axis.iter().any(|(_, trusted)| !*trusted));
+    // An unbounded model has no dashed part at all.
+    assert!(grid(&simple_radial_camera(), 1.4)
+        .horizontal
+        .iter()
+        .all(|(_, trusted)| *trusted));
+}
+
+#[test]
+fn the_ticks_and_rings_stop_at_the_trustworthy_bound() {
+    // A tick is a claim that this pixel is N degrees off axis, and the rings
+    // carry the same claim; neither is made where the model has stopped
+    // describing a lens. `kerry_park` is bounded at 84.1°, and its frame's
+    // mid-edge is past 100°.
+    let camera = kerry_park_camera();
+    let grid = grid(&camera, 1.4);
+    let limit = camera_limit(&camera);
+    for tick in &grid.ticks {
+        let angle =
+            sfmtool_core::camera::report::off_axis_angle_deg(&camera, tick.at[0], tick.at[1]);
+        assert!(
+            angle <= limit + 0.5,
+            "a {} tick sits at {angle}°, past the {limit}° bound",
+            tick.label
+        );
+    }
+    for ring in &grid.rings {
+        let angle: f64 = ring.label.trim_end_matches(super::DEGREE).parse().unwrap();
+        assert!(angle <= limit, "a {angle}° ring is past the bound");
+    }
+}
+
+/// The angle past which `camera` is extrapolating.
+fn camera_limit(camera: &CameraIntrinsics) -> f64 {
+    sfmtool_core::camera::report::trustworthy_max_theta_deg(camera).expect("a bounded fixture")
+}
+
+#[test]
+fn a_bounded_model_gets_a_contour_where_it_stops_describing_a_lens() {
+    let edge = grid(&kerry_park_camera(), 1.4)
+        .trustworthy_edge
+        .expect("kerry_park's OPENCV_FISHEYE is bounded, and the contour is on frame");
+    assert!(edge.label.starts_with("extrapolated past 84."));
+    assert!(!edge.runs.is_empty());
+
+    // And an unbounded model has nothing to mark.
+    assert!(grid(&simple_radial_camera(), 1.4)
+        .trustworthy_edge
+        .is_none());
+    assert!(grid(&simple_radial_camera(), 1.4).spline_domain.is_none());
+}
+
+#[test]
+fn the_tick_labels_are_signed_and_carry_their_degree_sign() {
+    let ticks = grid(&simple_radial_camera(), 1.4).ticks;
+    let labels: Vec<&str> = ticks.iter().map(|t| t.label.as_str()).collect();
+    assert!(labels.contains(&"0°"), "{labels:?}");
+    assert!(
+        labels.iter().any(|l| l.starts_with('+')),
+        "positive angles are marked as such: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|l| l.starts_with(super::MINUS)),
+        "negative angles use the typographic minus: {labels:?}"
+    );
+    // Zero is labelled once, not once per axis, because both axes cross there
+    // and the principal-point reticle is already sitting on it.
+    assert_eq!(labels.iter().filter(|l| **l == "0°").count(), 1);
 }
 
 #[test]

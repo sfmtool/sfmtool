@@ -40,6 +40,7 @@
 //! OpenCV family. It is rebuilt only when the camera, the grid density or the
 //! node changes.
 
+mod axes;
 mod controls;
 
 #[cfg(test)]
@@ -47,9 +48,12 @@ mod tests;
 
 pub(crate) use controls::show_intrinsics_controls;
 
+use axes::AxisGeometry;
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke};
 use sfmtool_core::camera::report;
 use sfmtool_core::camera::CameraIntrinsics;
+
+use crate::state::IntrinsicsDisplaySettings;
 
 /// Near-white, the one colour that survives an arbitrary colormap underneath.
 const INK_RGB: [u8; 3] = [246, 247, 250];
@@ -128,6 +132,9 @@ pub(crate) struct CameraLayer {
     /// alternative is laying the panel out twice to tell the user a number that
     /// the on-image legend restates every frame anyway.
     pub auto_scale: f32,
+    /// The angular reference grid, resampled when the zoom crosses a
+    /// half-octave bucket or the rings are switched on.
+    geometry: Option<AxisGeometry>,
 }
 
 impl CameraLayer {
@@ -163,6 +170,7 @@ impl CameraLayer {
             max_px,
             extrapolated: (outside, field.len()),
             auto_scale: 1.0,
+            geometry: None,
         }
     }
 }
@@ -184,6 +192,22 @@ fn grid_rows(camera: &CameraIntrinsics, cols: usize) -> usize {
 /// strokes a few pixels apart — the principal-point reticle — has its halos
 /// merge into a dark blob with the mark lost inside it.
 const HALO_WIDTH: f32 = 1.5;
+
+/// Draw a polyline in near-white over a dark halo.
+///
+/// The halo is the same polyline drawn wider underneath, which is cheaper and
+/// steadier than an outline pass and is what keeps a 1 px stroke legible over a
+/// bright sky as well as over a dark one.
+fn haloed_line(painter: &egui::Painter, points: Vec<Pos2>, width: f32, color: Color32) {
+    if points.len() < 2 {
+        return;
+    }
+    painter.add(egui::Shape::line(
+        points.clone(),
+        Stroke::new(width + HALO_WIDTH, HALO),
+    ));
+    painter.add(egui::Shape::line(points, Stroke::new(width, color)));
+}
 
 /// Draw a single segment in near-white over a dark halo.
 fn haloed_segment(painter: &egui::Painter, from: Pos2, to: Pos2, width: f32, color: Color32) {
@@ -225,14 +249,80 @@ impl super::ImageDetail {
     pub(super) fn draw_intrinsics(
         &mut self,
         painter: &egui::Painter,
-        _camera_ref: crate::scene::CameraRef,
+        camera_ref: crate::scene::CameraRef,
         camera: &CameraIntrinsics,
         view: &View,
         panel: Rect,
+        settings: &IntrinsicsDisplaySettings,
     ) -> Option<String> {
+        let layer = self.intrinsics_layer(camera_ref, camera, settings.grid_cols);
+
+        // Resample the grid only when the zoom has crossed a bucket or the
+        // rings have been switched on: the ladder is a function of the scale,
+        // and a pinch gesture would otherwise rebuild two polylines and a
+        // handful of contours sixty times a second.
+        let bucket = axes::scale_bucket(view.scale);
+        let stale = layer
+            .geometry
+            .as_ref()
+            .is_none_or(|grid| grid.bucket != bucket || grid.has_rings != settings.rings);
+        if stale {
+            let limit_deg = layer.limit_deg;
+            layer.geometry = Some(AxisGeometry::compute(
+                camera,
+                view.scale,
+                settings.rings,
+                limit_deg,
+            ));
+        }
+        if let Some(grid) = &layer.geometry {
+            grid.draw(painter, view, panel, settings.axes);
+        }
+
         draw_centre_offset(painter, camera, view, panel);
+        draw_legend(painter, panel, &legend_lines(settings));
         None
     }
+}
+
+/// What the layer says about itself, in the panel's top-left corner.
+///
+/// Top-left because the heatmap modes' colorbar occupies the bottom-right, and
+/// two things explaining themselves in one corner is worse than either.
+fn draw_legend(painter: &egui::Painter, panel: Rect, lines: &[String]) {
+    if lines.is_empty() {
+        return;
+    }
+    let font = FontId::proportional(LABEL_SIZE + 1.0);
+    let galleys: Vec<_> = lines
+        .iter()
+        .map(|line| painter.layout_no_wrap(line.clone(), font.clone(), ink(255)))
+        .collect();
+    let width = galleys.iter().map(|g| g.size().x).fold(0.0_f32, f32::max);
+    let height: f32 = galleys.iter().map(|g| g.size().y).sum();
+    let origin = panel.min + egui::vec2(8.0, 8.0);
+    painter.rect_filled(
+        Rect::from_min_size(origin, egui::vec2(width, height)).expand(4.0),
+        3.0,
+        Color32::from_black_alpha(150),
+    );
+    let mut y = origin.y;
+    for galley in galleys {
+        let step = galley.size().y;
+        painter.galley(Pos2::new(origin.x, y), galley, ink(255));
+        y += step;
+    }
+}
+
+/// The legend's lines for the current settings.
+fn legend_lines(settings: &IntrinsicsDisplaySettings) -> Vec<String> {
+    let mut lines = Vec::new();
+    if settings.axes || settings.rings {
+        // Which way the signed tick labels run, so nobody has to infer it from
+        // the picture. See `axes::Axis::ray` for where the convention is fixed.
+        lines.push("angles: off-axis, + right / + up".to_owned());
+    }
+    lines
 }
 
 /// Draw the principal point, the image centre and the offset between them.
@@ -355,6 +445,10 @@ pub(super) const MINUS: &str = "−";
 /// U+00B7 MIDDLE DOT, the separator between clauses of a label. Spelled once so
 /// the glyph test can pin it.
 pub(super) const MIDDOT: &str = "·";
+
+/// U+00B0 DEGREE SIGN, on every angle the layer writes. Spelled once so the
+/// glyph test can pin it.
+pub(super) const DEGREE: &str = "°";
 
 /// Draw the principal-point marker: a reticle — an open ring with four arms
 /// reaching out of it.

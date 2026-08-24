@@ -360,9 +360,14 @@ impl ImageDetail {
             scale: base_scale * self.zoom,
         };
         let intrinsics_readout = match (intrinsics_display.enabled, camera_ref, &camera) {
-            (true, Some(camera_ref), Some(camera)) => {
-                self.draw_intrinsics(&painter, camera_ref, camera, &view, panel_rect)
-            }
+            (true, Some(camera_ref), Some(camera)) => self.draw_intrinsics(
+                &painter,
+                camera_ref,
+                camera,
+                &view,
+                panel_rect,
+                intrinsics_display,
+            ),
             _ => None,
         };
 
