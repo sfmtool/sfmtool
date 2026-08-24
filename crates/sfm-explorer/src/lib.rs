@@ -19,6 +19,7 @@ mod dock;
 mod goto_point;
 mod image_browser;
 mod image_detail;
+mod intrinsics_detail;
 mod platform;
 mod point_track_detail;
 mod scene;
@@ -38,6 +39,7 @@ use egui::ViewportId;
 use egui_dock::{DockState, NodeIndex};
 use image_browser::ImageBrowser;
 use image_detail::ImageDetail;
+use intrinsics_detail::IntrinsicsDetail;
 use point_track_detail::PointTrackDetail;
 use scene::{CameraRef, ImageRef, PointRef};
 use scene_graph::SceneGraphPanel;
@@ -138,6 +140,7 @@ pub fn run() {
         image_browser: ImageBrowser::new(),
         image_detail: ImageDetail::new(),
         point_track_detail: PointTrackDetail::new(),
+        intrinsics_detail: IntrinsicsDetail::new(),
         scene_renderer: SceneRenderer::new(),
         dock_state,
         prev_frustum_length_scale: 0.0,
@@ -183,8 +186,15 @@ pub(crate) fn default_dock_state() -> DockState<Tab> {
     // window.) So: Scene 18%, then the old 80/20 and 67/33 splits of the rest.
     let [rest, _scene] = surface.split_left(NodeIndex::root(), 0.18, vec![Tab::SceneGraph]);
     let [top, _browser] = surface.split_below(rest, 0.8, vec![Tab::ImageBrowser]);
-    let [_viewer, _detail] =
-        surface.split_right(top, 0.67, vec![Tab::ImageDetail, Tab::PointTrackDetail]);
+    let [_viewer, _detail] = surface.split_right(
+        top,
+        0.67,
+        vec![
+            Tab::ImageDetail,
+            Tab::PointTrackDetail,
+            Tab::IntrinsicsDetail,
+        ],
+    );
     dock_state
 }
 
@@ -206,6 +216,7 @@ pub(crate) struct App {
     pub(crate) image_browser: ImageBrowser,
     pub(crate) image_detail: ImageDetail,
     pub(crate) point_track_detail: PointTrackDetail,
+    pub(crate) intrinsics_detail: IntrinsicsDetail,
     pub(crate) scene_renderer: SceneRenderer,
     pub(crate) dock_state: DockState<Tab>,
     pub(crate) prev_frustum_length_scale: f32,

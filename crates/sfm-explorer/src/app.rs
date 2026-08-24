@@ -587,6 +587,7 @@ impl App {
         let image_browser = &mut self.image_browser;
         let image_detail = &mut self.image_detail;
         let point_track_detail = &mut self.point_track_detail;
+        let intrinsics_detail = &mut self.intrinsics_detail;
         let dock_state = &mut self.dock_state;
 
         let mut quit_requested = false;
@@ -627,6 +628,7 @@ impl App {
                                 image_browser.forget_recon(id);
                                 image_detail.forget_recon(id);
                                 point_track_detail.forget_recon(id);
+                                intrinsics_detail.forget_recon(id);
                             }
                             app_state.close_all();
                             ui.close();
@@ -742,6 +744,7 @@ impl App {
                     image_browser,
                     image_detail,
                     point_track_detail,
+                    intrinsics_detail,
                     scene_texture_id,
                     hover_depth,
                     hover_pick,

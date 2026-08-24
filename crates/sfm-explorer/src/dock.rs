@@ -3,14 +3,15 @@
 
 //! Dock layout types and tab rendering.
 //!
-//! Defines the five-panel dock layout (Scene, 3D Viewer, Image Browser, Image
-//! Detail, Point Track Detail) and the `TabViewer` implementation that renders
-//! each panel's content.
+//! Defines the six-panel dock layout (Scene, 3D Viewer, Image Browser, Image
+//! Detail, Point Track Detail, Intrinsics) and the `TabViewer` implementation
+//! that renders each panel's content.
 
 use egui_dock::TabViewer;
 
 use crate::image_browser::ImageBrowser;
 use crate::image_detail::ImageDetail;
+use crate::intrinsics_detail::IntrinsicsDetail;
 use crate::platform;
 use crate::point_track_detail::PointTrackDetail;
 use crate::scene::{selected_node, ImageRef, PointRef, ReconId, SceneNode};
@@ -26,6 +27,7 @@ pub(crate) enum Tab {
     ImageBrowser,
     ImageDetail,
     PointTrackDetail,
+    IntrinsicsDetail,
 }
 
 impl Tab {
@@ -36,6 +38,7 @@ impl Tab {
             Tab::ImageBrowser => "Image Browser",
             Tab::ImageDetail => "Image Detail",
             Tab::PointTrackDetail => "Point Track",
+            Tab::IntrinsicsDetail => "Intrinsics",
         }
     }
 }
@@ -48,6 +51,7 @@ pub(crate) struct TabContext<'a> {
     pub image_browser: &'a mut ImageBrowser,
     pub image_detail: &'a mut ImageDetail,
     pub point_track_detail: &'a mut PointTrackDetail,
+    pub intrinsics_detail: &'a mut IntrinsicsDetail,
     // Per-frame values needed by viewer_3d.show():
     pub scene_texture_id: Option<egui::TextureId>,
     pub hover_depth: Option<f32>,
@@ -399,6 +403,37 @@ impl TabViewer for TabContext<'_> {
                     });
                 }
             }
+            Tab::IntrinsicsDetail => {
+                let node = selected_node(&self.state.scene, self.state.selected_recon);
+                if let Some(node) = node {
+                    // Both indices are read out of the *selected* node: the
+                    // selection coupling puts `selected_camera` inside the
+                    // selected reconstruction (`select_camera` selects the
+                    // recon that owns it, and `select_recon` filters it), so
+                    // there is no third recon for this panel to follow.
+                    let selected_camera =
+                        self.state.selected_camera.and_then(|c| c.index_in(node.id));
+                    let selected_image = self.state.selected_image_in(node.id);
+                    let response =
+                        self.intrinsics_detail
+                            .show(ui, node, selected_camera, selected_image);
+                    if response.has_pointer {
+                        // The panel raises neither hover channel, so owning the
+                        // pointer means clearing both: a highlight left over
+                        // from the panel the pointer came from would otherwise
+                        // sit there for as long as the user reads a table.
+                        self.state.hovered_image = None;
+                        self.state.hovered_point = None;
+                    }
+                    if let Some(image) = response.select_image {
+                        self.state.select_image(Some(image));
+                    }
+                } else {
+                    ui.centered_and_justified(|ui| {
+                        ui.label("No reconstruction loaded");
+                    });
+                }
+            }
         }
     }
 
@@ -512,6 +547,7 @@ impl TabContext<'_> {
         self.image_browser.forget_recon(id);
         self.image_detail.forget_recon(id);
         self.point_track_detail.forget_recon(id);
+        self.intrinsics_detail.forget_recon(id);
     }
 }
 

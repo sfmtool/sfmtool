@@ -240,10 +240,10 @@ The fourth tab, `PointTrackDetail`, is the per-point inspection panel
 documented in `specs/gui/gui-point-track-detail.md`. A fifth, `SceneGraph`,
 was added by `specs/gui/gui-scene-graph.md`.
 
-> _Planned (2026-08-23): a sixth tab, `IntrinsicsDetail` (title "Intrinsics"),
-> joins the Image Detail / Point Track tab group — see
-> [gui-camera-intrinsics.md](gui-camera-intrinsics.md) § "The Intrinsics
-> panel"._
+> _Added (2026-08-23): a sixth tab, `IntrinsicsDetail` (title "Intrinsics"),
+> joins the Image Detail / Point Track tab group as the third and non-active
+> member — see [gui-camera-intrinsics.md](gui-camera-intrinsics.md) § "The
+> Intrinsics panel"._
 
 ### TabContext and TabViewer
 

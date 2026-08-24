@@ -44,6 +44,11 @@ pub use reconstruction::{
 /// size buffers from the same constant the format pins, without depending on
 /// `sfmr-format` directly.
 pub use sfmr_format::THUMBNAIL_SIZE;
+/// Re-exported for the same reason, one level up: [`SfmrReconstruction::rig_frame_data`]
+/// is a public field whose type nothing downstream could otherwise name, so a
+/// consumer wanting to read — or build — a rig had to depend on `sfmr-format`
+/// itself to say what it was holding.
+pub use sfmr_format::{FramesMetadata, RigDefinition, RigFrameData, RigsMetadata};
 
 // `.sfmr` thumbnails are copied verbatim out of the per-image `.sift` files, so
 // the two formats' thumbnail extents must agree. Neither format crate depends

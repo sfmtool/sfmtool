@@ -1,8 +1,8 @@
 # Camera Intrinsics: Scene-Graph Node, Image Overlay, Detail Panel
 
 **Status:** design — phase 1 (vocabulary and data model), phase 2
-(`camera::report` and `parameter_names()`) and phase 3 (the Scene Graph group)
-implemented; phases 4–6 not yet.
+(`camera::report` and `parameter_names()`), phase 3 (the Scene Graph group) and
+phase 4 (the Intrinsics panel) implemented; phases 5–6 not yet.
 
 The viewer can show you where a camera *is* and what it *saw*, but nothing in it
 tells you what the camera *is*: which intrinsic model, what focal length, how far
@@ -636,7 +636,10 @@ and like both it is fully re-dockable.
 **Empty state.** `No camera selected` centred, with a line beneath:
 `Select a camera under Camera Intrinsics in the Scene panel, or select an
 image.` — the second half being the discoverable route, since most users will
-reach intrinsics through an image rather than the other way round.
+reach intrinsics through an image rather than the other way round. With no file
+loaded at all the panel says `No reconstruction loaded`, which is what its three
+dock neighbours say and is a truer answer than pointing at a tree with nothing
+in it.
 
 **Populated state**, top to bottom:
 
@@ -649,7 +652,11 @@ kerry_park · Camera #0 · OPENCV_FISHEYE · 480×480 · 26 images        [Copy 
 The reconstruction name is included because several nodes can be loaded at once
 and `CameraRef` carries a `ReconId`; without it the panel would be ambiguous
 exactly when it matters. A beta model appends `(beta)` with the registry's note
-as tooltip.
+as tooltip — and here that really is a tooltip on the `(beta)` itself, unlike
+the tree's `β`. The constraint phase 3 hit is that egui hangs a tooltip off a
+whole *widget*, so a sub-span of one label has nowhere to put one; a tree row is
+a single button, but this header is a run of separate labels, so `(beta)` is a
+widget in its own right.
 
 `Copy ▾` offers `Parameters (text)`, `Parameters (JSON)`, `K matrix`, and —
 when the extrinsics section is showing — `Pose matrix`. A viewer whose numbers
@@ -685,10 +692,25 @@ A second table, visually separated, holding what the parameters *mean*:
 | diagonal FOV | `197.2°` | corner to opposite corner |
 | max off-axis angle | `98.6°` | largest θ over the four corners; the number that answers "is this really 180°?" |
 | 35 mm equivalent | `19.1 mm` | perspective models only; `f_px · 43.267 / diagonal_px`, sensor-independent by construction |
-| distortion | `yes — max 12.4 px at the corner` / `none` | from `has_distortion()` plus the field's maximum |
+| distortion | `yes — max 12.4 px over the image` / `none` | from `has_distortion()` plus the field's maximum |
 
 Then `K`, rendered as a 3×3 grid, with the note that it is the optical-frame
 matrix and that `P = K · S · [R|t]`.
+
+> _Status (2026-08-23): the distortion row says **"over the image"**, not "at the
+> corner", and carries a tooltip saying what that means. Two reasons, both found
+> against the real fixtures. The grid `distortion_field` samples is cell
+> *centres*, so the corner is never one of the nodes; and the maximum is not
+> guaranteed to be at a corner anyway — a mustache polynomial or a thin-prism
+> term can put it elsewhere. More importantly, on `kerry_park`'s real
+> `OPENCV_FISHEYE` the maximum over a 16 × 16 grid is **272.7 px**, because a
+> circular fisheye's image rectangle has corners outside the lens's image
+> circle, where the `k1..k4` polynomial is being evaluated at θ ≈ 132° — far
+> past anything it was fitted to, and where it has folded (its forward map sends
+> θ = 132° to r = 25 px rather than 297 px). The number is honest about what the
+> two forward maps do; it is not a statement about the lens, and the tooltip says
+> so rather than the panel quietly printing a plausible-looking lie. See
+> § "Behaviour by camera model" for the related caveat on the same corners._
 
 ### 4. Projection plot
 
@@ -740,9 +762,10 @@ means the selected image uses the camera above. Header:
 | `P = K · S · [R \| t]` | 3×4, **perspective models only** — for fisheye and equirectangular models the row is replaced by `Not a linear projection — this model has no 3×4 P` rather than being silently omitted or, worse, printed anyway |
 
 A caption states the convention once — *world-to-camera, canonical `.sfmr` frame:
-Z-up world, camera looks down −Z with +Y up* — linking to
+Z-up world, camera looks down −Z with +Y up* — naming
 `specs/formats/sfmr-file-format.md`. This is the block most likely to be pasted
-into someone else's code, so it says which frame it is in.
+into someone else's code, so it says which frame it is in. (Named, not linked:
+egui's `hyperlink_to` opens a URL, and a repo-relative spec path is not one.)
 
 **The node transform.** A reconstruction node can carry a similarity transform
 from an in-GUI `Align to…` ([gui-scene-graph.md](gui-scene-graph.md) § "Node
@@ -758,13 +781,27 @@ the time, in a way nobody would notice.
 
 | Row | Source |
 |-----|--------|
-| Rig | `rigs[rig_index].name`, and `(reference sensor)` when this image's sensor is it |
-| Sensor | `sensor_names[s]`, index `s` |
+| Rig | `rigs[rig_index].name` |
+| Sensor | `sensor_names[s − sensor_offset]`, index `s`, and `(reference sensor)` when this image's sensor is it |
 | Frame | `image_frame_indexes[i]`, and the number of images in that frame |
 | `sensor_from_rig` | rotation + translation, or `identity (reference sensor)` |
 
 This is the part of "extrinsics" that a rig dataset actually needs and that
 nothing in the viewer surfaces today.
+
+> _Status (2026-08-23): two corrections against the real arrays, both in the
+> table above. `image_sensor_indexes` is a **global** sensor index while
+> `sensor_names` is per rig, so the name is at `s − sensor_offset` of the rig
+> whose sensor span contains `s` — the same arithmetic `sfm inspect`'s rig
+> section does (`analyze/summary.py`). And the `(reference sensor)` marker rides
+> the **Sensor** row, not the Rig row: it is a statement about which sensor this
+> image came from, and `kerry_park · (reference sensor)` on a row that names the
+> rig reads as a claim about the rig. The `sensor_from_rig` row says
+> `identity (reference sensor)` only when the stored quaternion and translation
+> really are the identity — a file storing something else for its reference
+> sensor gets the numbers, since claiming an identity that is not there would
+> hide exactly the corruption worth seeing. The section heading is "Rig and
+> frame" so that it and the row beneath it are not the same word twice._
 
 ### Response type
 
@@ -825,6 +862,21 @@ Every model with zero-valued distortion coefficients falls into its family's
 "suppressed" row via `has_distortion()`, including a spline model whose spline is
 inactive — the kernels short-circuit those to the exact base arithmetic, so
 reporting distortion for them would be a lie the projection does not tell.
+
+> _Note (2026-08-23), from phase 4 reading real fixtures: past **80° off-axis**
+> the polynomial fisheye models' `undistort_to_ray` blends toward the identity
+> ray rather than inverting an unreliable polynomial (`blend_fisheye_ray`, and
+> the caveat § "Testing" already names). Inside 80° `kerry_park`'s round trip is
+> exact to the last bit; outside it the round trip drifts by 100 px at 122° and
+> 273 px at 132°. Every reading taken at the **corners** of a circular fisheye's
+> image rectangle is therefore in that regime — `max_off_axis` (150.5° on
+> `kerry_park`), `diagonal` (301°), and the distortion field's maximum. They are
+> the honest output of the definitions this spec sets out, and they describe the
+> black corners outside the lens circle rather than the lens. The `horizontal` /
+> `vertical` pair, swept through the mid-edges, is the reading that answers "is
+> this fisheye really 180°?" for such a camera: 213° on `kerry_park`, against
+> `f = 129.15` px/rad over a 480-pixel frame. Phase 5's plot, whose x axis runs
+> to `max_off_axis`, will want to mark where the trustworthy domain ends._
 
 ---
 
@@ -928,7 +980,13 @@ Two caveats remain, both named in the tests rather than left implicit:
   written at the full alpha the tint exempts.
 - The Intrinsics panel renders its empty state with no selection, its populated
   state with one, and the extrinsics block only when an image is selected;
-  the `P` row is absent for a fisheye fixture.
+  the `P` row is absent for a fisheye fixture, replaced by the statement.
+  Two of its assertions are numeric rather than textual, because the two places
+  a sign error produces a plausible-looking matrix are exactly there: `P` is
+  checked by projecting a real point through it and comparing against the
+  camera's own `ray_to_pixel` (and against `K · [R|t]`, which must *not* match),
+  and the transformed pose against `Se3Transform::apply_to_camera_pose` and the
+  transform's own action on the camera centre.
 - The intrinsics layer composes: with `overlay_mode: Features` and
   `intrinsics.enabled`, one frame contains both the feature ellipses and the
   principal-point marker, and turning the layer off leaves the feature draw
@@ -1022,9 +1080,27 @@ Each phase leaves the viewer in a shippable state.
    draw it, and the ranking is enforced in `frustum_colors` (weakest written
    first, each stronger one overwriting) and mirrored by the browser's
    `!selected && !in_track` guard.
-4. **Intrinsics panel.** Header, parameters, derived table, `K`, extrinsics,
-   rig block, copy menu. No plot yet — the tables alone already replace the
-   `sfm inspect` round trip.
+4. **Intrinsics panel** — *done.* Header, parameters, derived table, `K`,
+   extrinsics, rig block, copy menu. No plot yet — the tables alone already
+   replace the `sfm inspect` round trip. `crates/sfm-explorer/src/intrinsics_detail/`,
+   split the way `point_track_detail/` is: `mod.rs` owns the state and the one
+   frame, with `derived`, `header`, `parameters`, `extrinsics` and `format`
+   under it.
+
+   Four things this phase settled against the real code, all recorded above:
+
+   - The `(beta)` tooltip *is* reachable here, unlike the tree's `β` — see
+     § "1. Header".
+   - The derived table's distortion row reads "over the image", because the
+     field's maximum on a real circular fisheye is a statement about the black
+     corners outside the lens circle — see § "3. Derived".
+   - The rig block indexes `sensor_names` by `s − sensor_offset` and puts the
+     reference marker on the sensor row — see § "5. Extrinsics".
+   - `sfmr_format::{RigFrameData, RigsMetadata, RigDefinition, FramesMetadata}`
+     are now re-exported from `sfmtool-core`, beside `THUMBNAIL_SIZE` and for
+     the same reason: `SfmrReconstruction::rig_frame_data` is a public field
+     whose type nothing downstream could name, so reading — or building — a rig
+     meant depending on `sfmr-format` directly.
 5. **Projection plot.** Both stacked plots, reference curve, azimuth band,
    markers, the no-distortion banner.
 6. **Image Detail overlay layer.** The checkbox, the settings popup and the
