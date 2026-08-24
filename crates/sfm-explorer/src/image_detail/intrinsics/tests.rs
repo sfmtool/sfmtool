@@ -18,6 +18,7 @@
 use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
 
 use super::{controls, CameraLayer};
+use crate::state::IntrinsicsDisplaySettings;
 
 /// `kerry_park`'s real intrinsics: an `OPENCV_FISHEYE` on a 480 × 480 frame,
 /// whose image rectangle's corners are outside the lens's image circle.
@@ -380,6 +381,164 @@ fn the_tick_labels_are_signed_and_carry_their_degree_sign() {
     // Zero is labelled once, not once per axis, because both axes cross there
     // and the principal-point reticle is already sitting on it.
     assert_eq!(labels.iter().filter(|l| **l == "0°").count(), 1);
+}
+
+// ── The displacement field ──────────────────────────────────────────────
+
+#[test]
+fn the_auto_scale_is_fitted_to_the_lens_and_not_to_the_fold() {
+    // The spec's rule is "the smallest exaggeration that brings the largest
+    // displacement in the grid to at least 8 panel pixels". On `kerry_park` the
+    // largest displacement in the grid is a 273 px fold in the black corners,
+    // which would pick ×1 and leave every real arrow invisible.
+    let camera = kerry_park_camera();
+    let layer = CameraLayer::compute(&camera, 16);
+    let cell = f64::from(camera.width) / 16.0;
+    // A 480 px frame in a narrow Image Detail panel, where the lens's own 13 px
+    // of displacement does not yet reach 8 panel pixels and the fold's 273 px
+    // does.
+    let fit = 0.3_f32;
+
+    let fitted_to_the_lens = super::field::auto_scale(layer.max_px, cell, fit);
+    let unfiltered = sfmtool_core::camera::report::distortion_field(&camera, 16, 16)
+        .iter()
+        .map(|s| (s.pixel[0] - s.reference[0]).hypot(s.pixel[1] - s.reference[1]))
+        .fold(0.0_f64, f64::max);
+    let fitted_to_the_fold = super::field::auto_scale(unfiltered, cell, fit);
+
+    assert_eq!(
+        fitted_to_the_fold, 1.0,
+        "the fold's {unfiltered:.0} px clears the floor on its own, so the \
+         spec's unfiltered rule exaggerates nothing"
+    );
+    assert!(
+        fitted_to_the_lens > fitted_to_the_fold,
+        "the lens's {:.1} px needs exaggerating, and got {fitted_to_the_lens}",
+        layer.max_px
+    );
+}
+
+#[test]
+fn no_arrow_outgrows_its_own_grid_cell() {
+    // A mild lens would otherwise be exaggerated until the field is a tangle.
+    for cols in [8, 16, 32] {
+        let camera = simple_radial_camera();
+        let layer = CameraLayer::compute(&camera, cols);
+        let cell = f64::from(camera.width) / cols as f64;
+        let scale = super::field::auto_scale(layer.max_px, cell, 1.4);
+        assert!(
+            f64::from(scale) * layer.max_px <= cell || scale == 1.0,
+            "at {cols} across, {scale} times {:.2} px exceeds the {cell:.1} px cell",
+            layer.max_px
+        );
+    }
+}
+
+#[test]
+fn the_auto_scale_does_not_move_when_the_panel_zooms() {
+    // It is fitted at the panel's *fit* scale, which is why the legend's
+    // exaggeration holds still while the user pans and zooms.
+    let camera = simple_radial_camera();
+    let layer = CameraLayer::compute(&camera, 16);
+    let cell = f64::from(camera.width) / 16.0;
+    let at_fit = super::field::auto_scale(layer.max_px, cell, 1.4);
+    for zoom in [2.0, 8.0, 32.0] {
+        assert_eq!(
+            super::field::auto_scale(layer.max_px, cell, 1.4),
+            at_fit,
+            "the scale is a function of the fit, not of the {zoom}× zoom"
+        );
+    }
+}
+
+#[test]
+fn the_field_is_split_into_measurements_and_marked_nodes() {
+    let layer = CameraLayer::compute(&kerry_park_camera(), 16);
+    let drawn = layer.arrows.iter().filter(|a| a.trusted).count();
+    let marked = layer.arrows.iter().filter(|a| !a.trusted).count();
+    assert!(drawn > 0 && marked > 0);
+    assert_eq!(marked, layer.extrapolated.0);
+    assert_eq!(drawn + marked, layer.extrapolated.1);
+}
+
+// ── The toolbar and its popup ───────────────────────────────────────────
+
+/// Every string one headless frame of `run_ui` painted.
+fn painted(run_ui: impl FnMut(&mut egui::Ui)) -> Vec<String> {
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(900.0, 600.0),
+        )),
+        ..Default::default()
+    };
+    crate::test_support::painted_texts(&ctx, input, run_ui)
+}
+
+#[test]
+fn the_toolbar_offers_the_checkbox_and_the_gear_whatever_the_feature_mode() {
+    let mut settings = IntrinsicsDisplaySettings::default();
+    let texts = painted(|ui| {
+        ui.horizontal(|ui| {
+            super::show_intrinsics_controls(ui, &mut settings, None, None);
+        });
+    });
+    assert!(texts.iter().any(|t| t == "Intrinsics"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == controls::GEAR), "{texts:?}");
+}
+
+#[test]
+fn the_popup_offers_a_distortion_row_only_when_there_is_distortion() {
+    let camera = simple_radial_camera();
+    let layer = CameraLayer::compute(&camera, 16);
+    let mut settings = IntrinsicsDisplaySettings::default();
+    let texts = painted(|ui| {
+        controls::settings_popup(ui, &mut settings, Some(&camera), Some(&layer));
+    });
+    assert!(texts.iter().any(|t| t == "Axes"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Iso-angle rings"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Distortion field"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Grid density"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "No distortion"), "{texts:?}");
+    assert!(
+        texts.iter().any(|t| t.starts_with("max displacement")),
+        "{texts:?}"
+    );
+
+    // A pinhole is its own ideal map, so the control that would do nothing is
+    // replaced by the statement of why.
+    let pinhole = pinhole_camera();
+    let layer = CameraLayer::compute(&pinhole, 16);
+    let texts = painted(|ui| {
+        controls::settings_popup(ui, &mut settings, Some(&pinhole), Some(&layer));
+    });
+    assert!(texts.iter().any(|t| t == "No distortion"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "Distortion field"), "{texts:?}");
+}
+
+#[test]
+fn the_popups_footer_says_which_domain_its_number_is_about() {
+    let camera = kerry_park_camera();
+    let layer = CameraLayer::compute(&camera, 16);
+    let mut settings = IntrinsicsDisplaySettings::default();
+    let texts = painted(|ui| {
+        controls::settings_popup(ui, &mut settings, Some(&camera), Some(&layer));
+    });
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with("inside 84.") && t.ends_with("nodes extrapolated")),
+        "a bounded model should qualify its maximum: {texts:?}"
+    );
+
+    // An unbounded one has nothing to qualify.
+    let camera = simple_radial_camera();
+    let layer = CameraLayer::compute(&camera, 16);
+    let texts = painted(|ui| {
+        controls::settings_popup(ui, &mut settings, Some(&camera), Some(&layer));
+    });
+    assert!(!texts.iter().any(|t| t.starts_with("inside ")), "{texts:?}");
 }
 
 #[test]

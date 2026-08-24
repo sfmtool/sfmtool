@@ -40,7 +40,7 @@ pub(crate) fn show_intrinsics_controls(
 
 /// The popup's body: the three sub-toggles, the two ladders, and a footer
 /// stating what the arrows are measuring.
-fn settings_popup(
+pub(super) fn settings_popup(
     ui: &mut egui::Ui,
     settings: &mut IntrinsicsDisplaySettings,
     camera: Option<&CameraIntrinsics>,

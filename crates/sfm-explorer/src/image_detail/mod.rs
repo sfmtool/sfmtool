@@ -358,6 +358,7 @@ impl ImageDetail {
         let view = View {
             origin: image_rect.min,
             scale: base_scale * self.zoom,
+            fit: base_scale,
         };
         let intrinsics_readout = match (intrinsics_display.enabled, camera_ref, &camera) {
             (true, Some(camera_ref), Some(camera)) => self.draw_intrinsics(

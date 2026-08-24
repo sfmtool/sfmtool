@@ -42,6 +42,7 @@
 
 mod axes;
 mod controls;
+mod field;
 
 #[cfg(test)]
 mod tests;
@@ -90,6 +91,11 @@ pub(super) struct View {
     pub origin: Pos2,
     /// Panel pixels per image pixel.
     pub scale: f32,
+    /// Panel pixels per image pixel with the image *fitted* to the panel — the
+    /// scale at zoom 1. The arrow exaggeration is fitted to this rather than to
+    /// `scale`, so that zooming does not step it up and down the ladder; see
+    /// [`field::auto_scale`].
+    pub fit: f32,
 }
 
 impl View {
@@ -125,6 +131,9 @@ pub(crate) struct CameraLayer {
     pub max_px: f64,
     /// Grid nodes outside [`Self::limit_deg`], and the total the grid produced.
     pub extrapolated: (usize, usize),
+    /// The displacement field itself, one entry per surviving grid node. Empty
+    /// for a model that is its own ideal map.
+    pub arrows: Vec<Arrow>,
     /// The exaggeration the auto scale last resolved to.
     ///
     /// Written by the draw pass and read by the settings popup, which is laid
@@ -152,27 +161,57 @@ impl CameraLayer {
         } else {
             Vec::new()
         };
+        let total = field.len();
         let mut max_px = 0.0_f64;
         let mut outside = 0;
-        for sample in &field {
-            if inside(sample.theta_deg) {
-                let length = (sample.pixel[0] - sample.reference[0])
-                    .hypot(sample.pixel[1] - sample.reference[1]);
-                max_px = max_px.max(length);
-            } else {
-                outside += 1;
-            }
-        }
+        let arrows: Vec<Arrow> = field
+            .into_iter()
+            .map(|sample| {
+                let trusted = inside(sample.theta_deg);
+                if trusted {
+                    max_px = max_px.max(
+                        (sample.pixel[0] - sample.reference[0])
+                            .hypot(sample.pixel[1] - sample.reference[1]),
+                    );
+                } else {
+                    outside += 1;
+                }
+                Arrow {
+                    reference: sample.reference,
+                    pixel: sample.pixel,
+                    trusted,
+                }
+            })
+            .collect();
 
         Self {
             grid: (cols, rows),
             limit_deg,
             max_px,
-            extrapolated: (outside, field.len()),
+            extrapolated: (outside, total),
+            arrows,
             auto_scale: 1.0,
             geometry: None,
         }
     }
+
+    /// The width of one grid cell in image pixels — what caps the arrow scale,
+    /// so the field stays a field rather than becoming a tangle.
+    fn cell_px(&self, camera: &CameraIntrinsics) -> f64 {
+        f64::from(camera.width) / self.grid.0 as f64
+    }
+}
+
+/// One node of the displacement field: where the family's ideal map put a ray,
+/// and where the model actually puts it.
+pub(crate) struct Arrow {
+    /// The ideal map's pixel — the arrow's tail.
+    pub reference: [f64; 2],
+    /// The model's pixel — the arrow's head at `×1`.
+    pub pixel: [f64; 2],
+    /// Whether the sampled ray is inside [`CameraLayer::limit_deg`], and so
+    /// whether this node is a measurement at all. See [`mod@field`].
+    pub trusted: bool,
 }
 
 /// Grid rows that keep the sampled cells square at `cols` across — the same
@@ -279,8 +318,17 @@ impl super::ImageDetail {
             grid.draw(painter, view, panel, settings.axes);
         }
 
+        // The field on top of the grid: the grid is the frame, the field is the
+        // measurement sitting in it. Both are still beneath the features.
+        let mut lines = legend_lines(settings);
+        if settings.distortion && !layer.arrows.is_empty() {
+            layer.auto_scale = field::auto_scale(layer.max_px, layer.cell_px(camera), view.fit);
+            let scale = settings.distortion_scale.unwrap_or(layer.auto_scale);
+            lines.extend(field::draw(painter, layer, view, panel, scale));
+        }
+
         draw_centre_offset(painter, camera, view, panel);
-        draw_legend(painter, panel, &legend_lines(settings));
+        draw_legend(painter, panel, &lines);
         None
     }
 }
