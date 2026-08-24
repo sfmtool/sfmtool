@@ -8,16 +8,27 @@
 //! live in sibling modules:
 //! - [`input`] — drag/scroll/pinch/keyboard/gesture view manipulation.
 //! - [`overlay`] — the feature-overlay draw modes, hit-testing, and tooltip.
+//! - [`mod@intrinsics`] — the intrinsics overlay layer, drawn independently of
+//!   the feature mode and composing with whichever one is active.
 
 mod input;
+mod intrinsics;
 mod overlay;
 
+pub(crate) use intrinsics::{show_intrinsics_controls, CameraLayer};
+
 use crate::platform::{GestureEvent, ScrollInput};
-use crate::scene::{ImageRef, ReconId};
-use crate::state::{CachedSiftFeatures, FeatureDisplaySettings, OverlayMode};
+use crate::scene::{CameraRef, ImageRef, ReconId};
+use crate::state::{
+    CachedSiftFeatures, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode,
+};
 use crate::texture::rgb_to_color_image;
 use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::SfmrReconstruction;
+use std::collections::HashMap;
+
+use intrinsics::View;
 
 /// Maximum zoom level (32× = pixel-level inspection).
 const MAX_ZOOM: f32 = 32.0;
@@ -44,6 +55,12 @@ pub struct ImageDetail {
     loaded_image: Option<(ImageRef, egui::TextureHandle)>,
     /// Prepared feature overlay for the current image.
     feature_overlay: Option<FeatureOverlayState>,
+    /// The intrinsics layer's per-camera products, keyed by [`CameraRef`].
+    ///
+    /// Bounded by the number of *distinct* intrinsics across the loaded nodes,
+    /// which is small even for a per-image-intrinsics solve, so there is no
+    /// eviction beyond [`ImageDetail::forget_recon`].
+    intrinsics: HashMap<CameraRef, CameraLayer>,
     /// Offset of image center from panel center, in panel pixels.
     pan: egui::Vec2,
     /// Zoom level. 1.0 = fit image to panel. >1.0 = zoomed in.
@@ -99,6 +116,7 @@ impl ImageDetail {
         Self {
             loaded_image: None,
             feature_overlay: None,
+            intrinsics: HashMap::new(),
             pan: egui::Vec2::ZERO,
             zoom: 1.0,
             prev_selected_image: None,
@@ -131,6 +149,32 @@ impl ImageDetail {
         {
             self.prev_selected_image = None;
         }
+        self.intrinsics.retain(|camera, _| camera.recon != id);
+    }
+
+    /// The cached intrinsics-layer report for `camera`, rebuilt when the camera
+    /// or the grid density changes.
+    ///
+    /// Called from the toolbar as well as from the draw pass, so the popup's
+    /// footer and the on-image legend are reading one computation rather than
+    /// two that could disagree.
+    pub(crate) fn intrinsics_layer(
+        &mut self,
+        camera_ref: CameraRef,
+        camera: &CameraIntrinsics,
+        grid_cols: usize,
+    ) -> &mut CameraLayer {
+        let stale = self
+            .intrinsics
+            .get(&camera_ref)
+            .is_none_or(|layer| layer.grid.0 != grid_cols.max(1));
+        if stale {
+            self.intrinsics
+                .insert(camera_ref, CameraLayer::compute(camera, grid_cols));
+        }
+        self.intrinsics
+            .get_mut(&camera_ref)
+            .expect("just inserted when stale")
     }
 
     /// Reset pan and zoom to fit the image in the panel.
@@ -172,6 +216,7 @@ impl ImageDetail {
         sift_features: Option<&CachedSiftFeatures>,
         full_res: Option<&ImageU8>,
         feature_display: &FeatureDisplaySettings,
+        intrinsics_display: &mut IntrinsicsDisplaySettings,
     ) -> ImageDetailResponse {
         let mut response = ImageDetailResponse {
             select_point: None,
@@ -295,6 +340,32 @@ impl ImageDetail {
         let image_center = panel_center + self.pan;
         let image_rect = egui::Rect::from_center_size(image_center, display_size);
 
+        // --- Intrinsics layer, beneath the features ---
+        //
+        // `I` toggles it while the pointer is over the panel, alongside the
+        // panel's existing `Z`: it is a control users flip constantly once it
+        // composes, which is the whole reason it is a layer.
+        if response.has_pointer && ui.input(|i| i.key_pressed(egui::Key::I)) {
+            intrinsics_display.enabled = !intrinsics_display.enabled;
+        }
+        let camera_ref = recon
+            .images
+            .get(img_idx)
+            .map(|image| CameraRef::new(recon_id, image.camera_index as usize));
+        let camera = camera_ref
+            .and_then(|camera_ref| recon.cameras.get(camera_ref.index()))
+            .cloned();
+        let view = View {
+            origin: image_rect.min,
+            scale: base_scale * self.zoom,
+        };
+        let intrinsics_readout = match (intrinsics_display.enabled, camera_ref, &camera) {
+            (true, Some(camera_ref), Some(camera)) => {
+                self.draw_intrinsics(&painter, camera_ref, camera, &view, panel_rect)
+            }
+            _ => None,
+        };
+
         // --- Feature overlays ---
         self.draw_overlays(
             ui,
@@ -307,8 +378,16 @@ impl ImageDetail {
             image_rect,
             panel_rect,
             effective_scale,
+            intrinsics_readout.as_deref(),
             &mut response,
         );
+
+        // The one mark that draws over the features rather than under them.
+        if let Some(camera) = &camera {
+            if intrinsics_display.enabled {
+                intrinsics::draw_principal_point(&painter, camera, &view, panel_rect);
+            }
+        }
 
         response
     }
@@ -569,6 +648,7 @@ impl ImageDetail {
     pub fn clear(&mut self) {
         self.loaded_image = None;
         self.feature_overlay = None;
+        self.intrinsics.clear();
         self.reset_view();
         self.prev_selected_image = None;
     }

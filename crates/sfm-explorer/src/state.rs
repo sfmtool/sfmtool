@@ -71,6 +71,57 @@ impl OverlayMode {
     }
 }
 
+/// Scene-level state of the intrinsics overlay layer, drawn on the Image
+/// Detail panel independently of [`FeatureDisplaySettings::overlay_mode`].
+///
+/// A **layer**, not an eighth [`OverlayMode`]: the questions worth asking about
+/// a lens are the joint ones — do the keypoints crowd the distorted rim, is the
+/// reprojection-error heatmap hot precisely where the displacement field is
+/// largest — and an exclusive mode turns each of those into flipping back and
+/// forth from memory. So the layer composes with whichever feature mode is
+/// active, including [`OverlayMode::None`], and its state lives here rather
+/// than in [`FeatureDisplaySettings`], whose name and contents are about
+/// *feature* display. See `specs/gui/gui-camera-intrinsics.md` § "Image Detail:
+/// the Intrinsics overlay layer".
+pub struct IntrinsicsDisplaySettings {
+    /// Draw the layer at all. Off by default: it is a diagnostic, and the
+    /// panel's default view is the photograph.
+    pub enabled: bool,
+    /// Draw the angular axes through the principal point.
+    pub axes: bool,
+    /// Draw iso-angle rings at the same angular ladder as the axis ticks.
+    pub rings: bool,
+    /// Draw the distortion displacement field. Ignored when the model has no
+    /// distortion.
+    pub distortion: bool,
+    /// Displacement arrow exaggeration. `None` = auto.
+    pub distortion_scale: Option<f32>,
+    /// Grid density of the arrow field, arrows across the image width.
+    pub grid_cols: usize,
+}
+
+impl Default for IntrinsicsDisplaySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            axes: true,
+            rings: false,
+            distortion: true,
+            distortion_scale: None,
+            grid_cols: 16,
+        }
+    }
+}
+
+impl IntrinsicsDisplaySettings {
+    /// The exaggerations the auto scale chooses among, and the settings popup
+    /// offers by hand.
+    pub const SCALE_LADDER: [f32; 7] = [1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0];
+
+    /// The grid densities the settings popup offers.
+    pub const GRID_LADDER: [usize; 5] = [8, 12, 16, 24, 32];
+}
+
 /// Scene-level settings controlling which features are displayed and how.
 pub struct FeatureDisplaySettings {
     /// Which overlay mode is active.
@@ -166,6 +217,11 @@ pub struct AppState {
 
     /// Feature overlay display settings (shared across images).
     pub feature_display: FeatureDisplaySettings,
+
+    /// Intrinsics overlay layer settings (shared across images). A sibling of
+    /// `feature_display`, not part of it: the two layers compose rather than
+    /// excluding one another.
+    pub intrinsics_display: IntrinsicsDisplaySettings,
 
     /// Whether to show 3D points.
     pub show_points: bool,
@@ -290,6 +346,7 @@ impl AppState {
             hovered_image: None,
             hovered_point: None,
             feature_display: FeatureDisplaySettings::default(),
+            intrinsics_display: IntrinsicsDisplaySettings::default(),
             show_points: true,
             show_camera_images: true,
             show_grid: true,

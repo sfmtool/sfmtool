@@ -14,9 +14,9 @@ use crate::image_detail::ImageDetail;
 use crate::intrinsics_detail::IntrinsicsDetail;
 use crate::platform;
 use crate::point_track_detail::PointTrackDetail;
-use crate::scene::{selected_node, ImageRef, PointRef, ReconId, SceneNode};
+use crate::scene::{selected_node, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_graph::{SceneGraphPanel, SceneGraphResponse};
-use crate::state::{AppState, FeatureDisplaySettings, OverlayMode};
+use crate::state::{AppState, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode};
 use crate::viewer_3d::Viewer3D;
 
 /// Tabs that can appear in the dock area.
@@ -239,8 +239,23 @@ impl TabViewer for TabContext<'_> {
                     let selected_image = self.state.selected_image_in(id);
                     let selected_point = self.state.selected_point_in(id);
                     let hovered_point = self.state.hovered_point_in(id);
+                    // The camera the selected image resolves to — the subject of
+                    // the intrinsics layer, and `None` with no image selected.
+                    let camera = selected_image.and_then(|idx| {
+                        let camera_index = recon.images.get(idx)?.camera_index as usize;
+                        Some((
+                            CameraRef::new(id, camera_index),
+                            recon.cameras.get(camera_index)?,
+                        ))
+                    });
                     // Overlay toolbar at the top of the detail panel
-                    show_overlay_toolbar(ui, &mut self.state.feature_display);
+                    show_overlay_toolbar(
+                        ui,
+                        &mut self.state.feature_display,
+                        &mut self.state.intrinsics_display,
+                        self.image_detail,
+                        camera,
+                    );
 
                     // Determine how many SIFT features to load based on overlay mode
                     let read_count_for_image = |idx: usize| -> usize {
@@ -297,6 +312,7 @@ impl TabViewer for TabContext<'_> {
                         sift,
                         full_res,
                         &self.state.feature_display,
+                        &mut self.state.intrinsics_display,
                     );
                     if let Some(point_idx) = detail_response.select_point {
                         self.state.selected_point = Some(PointRef::new(id, point_idx));
@@ -552,7 +568,18 @@ impl TabContext<'_> {
 }
 
 /// Draw the overlay mode toolbar at the top of the image detail panel.
-fn show_overlay_toolbar(ui: &mut egui::Ui, settings: &mut FeatureDisplaySettings) {
+///
+/// Two layers' controls on one row: the feature filters, which keep their
+/// show-when-a-mode-is-active rule, and the intrinsics layer's checkbox and
+/// gear, which are always shown because that layer composes with every mode
+/// including `None`.
+fn show_overlay_toolbar(
+    ui: &mut egui::Ui,
+    settings: &mut FeatureDisplaySettings,
+    intrinsics: &mut IntrinsicsDisplaySettings,
+    detail: &mut ImageDetail,
+    camera: Option<(CameraRef, &sfmtool_core::camera::CameraIntrinsics)>,
+) {
     ui.horizontal(|ui| {
         ui.label("Overlay:");
         egui::ComboBox::from_id_salt("overlay_mode")
@@ -613,6 +640,18 @@ fn show_overlay_toolbar(ui: &mut egui::Ui, settings: &mut FeatureDisplaySettings
                 ui.checkbox(&mut settings.tracked_only, "Tracked only");
             }
         }
+
+        // The layer's own report, built here so that the popup's footer and the
+        // on-image legend read one computation rather than two.
+        let grid_cols = intrinsics.grid_cols;
+        let layer = camera
+            .map(|(camera_ref, camera)| &*detail.intrinsics_layer(camera_ref, camera, grid_cols));
+        crate::image_detail::show_intrinsics_controls(
+            ui,
+            intrinsics,
+            camera.map(|(_, camera)| camera),
+            layer,
+        );
     });
     ui.separator();
 }

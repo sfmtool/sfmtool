@@ -28,6 +28,7 @@ impl ImageDetail {
         image_rect: egui::Rect,
         panel_rect: egui::Rect,
         effective_scale: f32,
+        intrinsics_readout: Option<&str>,
         response: &mut ImageDetailResponse,
     ) {
         let Some(ref overlay) = self.feature_overlay else {
@@ -325,20 +326,24 @@ impl ImageDetail {
             }
         }
 
-        // Tooltip on hover
+        // Tooltip on hover. One tooltip, composed: the feature layer's text if
+        // the pointer is on a feature, the intrinsics layer's readout below a
+        // separator if the layer is on, and either alone otherwise. Two
+        // tooltips fighting for the cursor would be worse than either.
         if let Some(pointer_pos) = ui.input(|i| i.pointer.hover_pos()) {
             if panel_rect.contains(pointer_pos) {
                 let hit_radius_px = 8.0 / effective_scale;
-                if let Some(point_idx) = find_nearest_tracked_feature(
+                let hit = find_nearest_tracked_feature(
                     features,
                     feature_tree,
                     &panel_to_image(pointer_pos),
                     hit_radius_px,
-                ) {
+                );
+                let feature_text = hit.map(|point_idx| {
                     // Report hover for cross-panel feedback.
                     response.hovered_point = Some(point_idx);
 
-                    let tooltip_text = if let Some(pt) = recon.points.get(point_idx) {
+                    if let Some(pt) = recon.points.get(point_idx) {
                         let obs_count = recon
                             .observation_counts
                             .get(point_idx)
@@ -367,23 +372,85 @@ impl ImageDetail {
                         text
                     } else {
                         format!("Point3D #{point_idx}")
-                    };
-                    let font = egui::FontId::proportional(12.0);
-                    let galley = painter.layout_no_wrap(tooltip_text, font, egui::Color32::WHITE);
-                    let padding = 3.0;
-                    let tooltip_size = galley.size() + egui::vec2(padding * 2.0, padding * 2.0);
-                    let mut tooltip_pos = pointer_pos + egui::vec2(12.0, -20.0);
-                    // Clamp to keep tooltip within the panel
-                    if tooltip_pos.x + tooltip_size.x > panel_rect.right() {
-                        tooltip_pos.x = panel_rect.right() - tooltip_size.x;
                     }
-                    let text_rect =
-                        egui::Rect::from_min_size(tooltip_pos, galley.size()).expand(padding);
-                    painter.rect_filled(text_rect, 2.0, egui::Color32::from_black_alpha(200));
-                    painter.galley(tooltip_pos, galley, egui::Color32::WHITE);
-                }
+                });
+                draw_tooltip(
+                    painter,
+                    pointer_pos,
+                    panel_rect,
+                    feature_text.as_deref(),
+                    intrinsics_readout,
+                );
             }
         }
+    }
+}
+
+/// Paint the composed hover tooltip: the feature layer's line, the intrinsics
+/// layer's readout, or both with a rule between them.
+///
+/// With `readout` `None` this is byte for byte the tooltip the panel has always
+/// drawn — same padding, same offset, same clamping — which is the regression a
+/// composed tooltip most plausibly breaks.
+fn draw_tooltip(
+    painter: &egui::Painter,
+    pointer_pos: egui::Pos2,
+    panel_rect: egui::Rect,
+    feature_text: Option<&str>,
+    readout: Option<&str>,
+) {
+    /// Vertical space the separating rule takes between the two blocks.
+    const RULE_HEIGHT: f32 = 7.0;
+
+    let font = egui::FontId::proportional(12.0);
+    let layout =
+        |text: &str| painter.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE);
+    let (top, bottom) = match (feature_text, readout) {
+        (Some(feature), readout) => (Some(layout(feature)), readout.map(layout)),
+        (None, Some(readout)) => (Some(layout(readout)), None),
+        (None, None) => return,
+    };
+    let Some(top) = top else {
+        return;
+    };
+
+    let gap = bottom.as_ref().map_or(0.0, |_| RULE_HEIGHT);
+    let size = egui::vec2(
+        top.size()
+            .x
+            .max(bottom.as_ref().map_or(0.0, |g| g.size().x)),
+        top.size().y + gap + bottom.as_ref().map_or(0.0, |g| g.size().y),
+    );
+
+    let padding = 3.0;
+    let tooltip_size = size + egui::vec2(padding * 2.0, padding * 2.0);
+    let mut tooltip_pos = pointer_pos + egui::vec2(12.0, -20.0);
+    // Clamp to keep tooltip within the panel
+    if tooltip_pos.x + tooltip_size.x > panel_rect.right() {
+        tooltip_pos.x = panel_rect.right() - tooltip_size.x;
+    }
+    let text_rect = egui::Rect::from_min_size(tooltip_pos, size).expand(padding);
+    painter.rect_filled(text_rect, 2.0, egui::Color32::from_black_alpha(200));
+
+    let top_height = top.size().y;
+    painter.galley(tooltip_pos, top, egui::Color32::WHITE);
+    if let Some(bottom) = bottom {
+        // A painted rule rather than a row of box-drawing characters: egui's
+        // bundled proportional font has none, and a separator that renders as
+        // replacement boxes would be worse than no separator at all.
+        let y = tooltip_pos.y + top_height + RULE_HEIGHT / 2.0;
+        painter.line_segment(
+            [
+                egui::pos2(text_rect.left() + 2.0, y),
+                egui::pos2(text_rect.right() - 2.0, y),
+            ],
+            egui::Stroke::new(1.0, egui::Color32::from_white_alpha(90)),
+        );
+        painter.galley(
+            egui::pos2(tooltip_pos.x, tooltip_pos.y + top_height + RULE_HEIGHT),
+            bottom,
+            egui::Color32::WHITE,
+        );
     }
 }
 
