@@ -92,6 +92,37 @@ Within a frame, image pairs are excluded from feature matching: their
 relative pose is fixed by the rig and the match would not contribute new
 geometric information. Cross-frame pairs are matched normally.
 
+## Validation
+
+`_load_rig_config` in `src/sfmtool/rig/config.py` validates the whole
+document before any command consumes it and raises `RigConfigError` on the
+first violation. Every consumer — `sfm solve`, `sfm match`, `sfm to-colmap-db`
+— surfaces that as a plain CLI error and stops.
+
+Because the schema is COLMAP's verbatim, **any key outside it is an error**
+rather than something to ignore: a key sfmtool skips is a key COLMAP would
+skip too, and skipped intrinsics leave a reconstruction built on EXIF guesses
+with nothing in the output to mark it. The message names the offending key,
+its location (rig index, camera index), and the schema key that replaces it
+when the intent is recognizable — a rig-level `camera_intrinsics` block is
+answered with per-sensor `camera_model_name` + `camera_params`.
+
+The rules enforced at load:
+
+| Scope | Rule |
+|---|---|
+| file | The top level is a JSON array of rig objects, holding at least one rig. |
+| rig | `cameras` is the only permitted key, is required, and holds at least one sensor entry. |
+| rig | Exactly one sensor sets `ref_sensor: true`. |
+| sensor | Keys are limited to the six in [*The Camera (Sensor) Entry*](#the-camera-sensor-entry). |
+| sensor | `image_prefix` is required, is a non-empty string, contains no backslash, and is distinct across the whole file. |
+| sensor | `ref_sensor`, when present, is a boolean; absent, it is `false`. |
+| sensor | The reference sensor carries neither `cam_from_rig_rotation` nor `cam_from_rig_translation`: its `cam_from_rig` is the identity, so a pose written there would have no effect. |
+| sensor | Every non-reference sensor carries `cam_from_rig_rotation` — four numbers, not all zero. |
+| sensor | `cam_from_rig_translation`, when present, is three numbers. |
+| sensor | `camera_model_name`, when present, is one of the COLMAP camera models in `CAMERA_MODEL_NAMES`. |
+| sensor | `camera_params`, when present, is an array of numbers, requires `camera_model_name`, and has exactly the positional length that model declares. |
+
 ## Relationship to the COLMAP Rig Format
 
 `rig_config.json` is the COLMAP
@@ -108,7 +139,8 @@ Two consequences of matching COLMAP exactly:
   camera model name) and `camera_params` (a flat positional float array in
   COLMAP's parameter order). There is no rig-level intrinsics block, and the
   config carries no image `width`/`height` — COLMAP and sfmtool both take
-  image dimensions from the images themselves.
+  image dimensions from the images themselves. A file that carries either is
+  refused; see [*Validation*](#validation).
 - **The WXYZ quaternion convention is COLMAP's.** COLMAP's documented
   example `[0.7071, 0, 0.7071, 0]` is a 90° rotation about Y in
   `[w, x, y, z]` order.
