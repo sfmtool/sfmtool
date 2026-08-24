@@ -26,16 +26,31 @@ pub(super) struct Derived {
     /// 35 mm-equivalent focal length in millimetres; `None` for the fisheye and
     /// equirectangular models, whose focal length is pixels per radian.
     pub equiv_35mm: Option<f64>,
-    /// The largest `|model − ideal|` displacement over the sampled grid, and
-    /// `None` when the model carries no distortion at all.
-    ///
-    /// Read the number with the grid in mind: it is a maximum over the whole
-    /// image *rectangle*, and for a circular fisheye that rectangle's corners
-    /// lie outside the lens's image circle, where the distortion polynomial is
-    /// being extrapolated far past anything it was fitted to. The panel says so
-    /// in the row's tooltip rather than quietly reporting a plausible-looking
-    /// number for a part of the frame that is black.
-    pub max_distortion: Option<f64>,
+    /// How far the lens displaces a pixel, and over what part of the frame
+    /// that was measured. `None` when the model carries no distortion at all.
+    pub max_distortion: Option<DistortionExtent>,
+}
+
+/// The largest `|model − ideal|` displacement the panel found, and the domain
+/// it was allowed to look over.
+///
+/// Phase 4 reported the maximum over the whole image *rectangle* and explained
+/// itself in a tooltip, because it had no way to say anything narrower. It is
+/// worth being precise about why that was not good enough: on `kerry_park`'s
+/// real `OPENCV_FISHEYE` the rectangle's corners are 150° off-axis, outside
+/// the lens's image circle, where the `k1..k4` polynomial has folded — and the
+/// maximum came out at 241 px, twenty times the 12 px the lens actually
+/// displaces anything. That number was honest about two forward maps and
+/// misleading about the camera.
+pub(super) struct DistortionExtent {
+    /// Largest displacement in pixels over the nodes that count.
+    pub max_px: f64,
+    /// The incidence-angle bound the nodes were filtered to, or `None` when
+    /// the whole grid counted.
+    pub limit_deg: Option<f64>,
+    /// Grid nodes dropped by that filter, and the total the grid produced —
+    /// how much of the frame the number is *not* about.
+    pub excluded: (usize, usize),
 }
 
 impl Derived {
@@ -43,23 +58,43 @@ impl Derived {
     pub(super) fn compute(camera: &CameraIntrinsics) -> Self {
         let fov = report::field_of_view(camera);
         let equiv_35mm = report::equiv_focal_length_35mm(camera);
-        let max_distortion = camera.has_distortion().then(|| {
-            // Rows chosen to keep the cells square, so the grid samples the
-            // frame evenly rather than more densely along its short side.
-            let rows = grid_rows(camera);
-            report::distortion_field(camera, FIELD_COLS, rows)
-                .iter()
-                .map(|sample| {
-                    (sample.pixel[0] - sample.reference[0])
-                        .hypot(sample.pixel[1] - sample.reference[1])
-                })
-                .fold(0.0_f64, f64::max)
-        });
+        let max_distortion = camera
+            .has_distortion()
+            .then(|| distortion_extent(camera, report::trustworthy_max_theta_deg(camera)));
         Self {
             fov,
             equiv_35mm,
             max_distortion,
         }
+    }
+}
+
+/// The displacement field's maximum, taken over the part of the frame the
+/// model can be held to.
+fn distortion_extent(camera: &CameraIntrinsics, limit_deg: Option<f64>) -> DistortionExtent {
+    // Rows chosen to keep the cells square, so the grid samples the frame
+    // evenly rather than more densely along its short side.
+    let rows = grid_rows(camera);
+    let field = report::distortion_field(camera, FIELD_COLS, rows);
+    let total = field.len();
+    let inside = |sample: &report::DistortionSample| match limit_deg {
+        Some(limit) => sample.theta_deg <= limit,
+        None => true,
+    };
+    let max_px = field
+        .iter()
+        .filter(|sample| inside(sample))
+        .map(|sample| {
+            (sample.pixel[0] - sample.reference[0]).hypot(sample.pixel[1] - sample.reference[1])
+        })
+        .fold(0.0_f64, f64::max);
+    let dropped = field.iter().filter(|sample| !inside(sample)).count();
+    DistortionExtent {
+        max_px,
+        // A bound that excluded nothing is not worth qualifying the row with:
+        // it is the same statement as "over the image", one clause longer.
+        limit_deg: limit_deg.filter(|_| dropped > 0),
+        excluded: (dropped, total),
     }
 }
 

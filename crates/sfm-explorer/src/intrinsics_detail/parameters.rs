@@ -107,17 +107,33 @@ pub(super) fn show_derived(ui: &mut egui::Ui, camera: &CameraIntrinsics, derived
             }
 
             ui.label("distortion");
-            match derived.max_distortion {
-                Some(max) => {
-                    ui.monospace(format!("yes — max {max:.1} px over the image"))
-                        .on_hover_text(
-                            "The largest |model − ideal| displacement over a grid of the image \
-                             rectangle. For a circular fisheye that rectangle's corners fall \
-                             outside the lens's image circle, where the distortion polynomial is \
-                             extrapolated far past anything it was fitted to — read a very large \
-                             number there as a statement about the corners, not about the lens.",
-                        );
-                }
+            match &derived.max_distortion {
+                Some(extent) => match extent.limit_deg {
+                    Some(limit) => {
+                        let (dropped, total) = extent.excluded;
+                        ui.monospace(format!(
+                            "yes — max {:.1} px inside {limit:.1}°",
+                            extent.max_px
+                        ))
+                        .on_hover_text(format!(
+                            "The largest |model − ideal| displacement over a grid of the image, \
+                             taken inside {limit:.1}° off-axis. Past that angle this model's own \
+                             inverse stops inverting its distortion polynomial and slews toward \
+                             the identity ray, so neither map describes the lens any more — \
+                             {dropped} of the grid's {total} nodes look further out than that \
+                             and are excluded. For a circular fisheye those nodes are the black \
+                             corners outside the lens's image circle.",
+                        ));
+                    }
+                    None => {
+                        ui.monospace(format!("yes — max {:.1} px over the image", extent.max_px))
+                            .on_hover_text(
+                                "The largest |model − ideal| displacement over a grid of the \
+                                 image. This model is trustworthy at every angle its frame \
+                                 reaches, so the whole rectangle counts.",
+                            );
+                    }
+                },
                 None => {
                     ui.monospace("none").on_hover_text(
                         "Every distortion coefficient is zero, so this model is exactly its own \

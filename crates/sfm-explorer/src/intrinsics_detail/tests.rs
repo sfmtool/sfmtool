@@ -267,6 +267,35 @@ fn a_distorted_model_reports_its_largest_displacement() {
     assert!(says(&painted, "yes — max"));
 }
 
+/// The distortion row is bounded by the model's trustworthy domain rather than
+/// by the image rectangle, and says which.
+///
+/// `kerry_park`'s fisheye is the case that forced this: over the whole
+/// rectangle the maximum is 241 px, because the corners are 150° off-axis
+/// where the `k1..k4` polynomial has folded. Inside the bound it is 12 px,
+/// which is a lens.
+#[test]
+fn a_bounded_model_reports_its_displacement_inside_the_bound() {
+    let camera = kerry_park_camera();
+    let limit = sfmtool_core::camera::report::trustworthy_max_theta_deg(&camera).unwrap();
+    let painted = show(&fisheye_node(), Some(0), None);
+
+    assert!(says(&painted, &format!("inside {limit:.1}°")));
+    // The unqualified phrasing is gone, and so is the number it used to carry.
+    assert!(!says(&painted, "over the image"));
+    assert!(!says(&painted, "241"));
+}
+
+/// A model that is trustworthy everywhere keeps the plain phrasing: the
+/// qualifier is only earned when it actually excludes something.
+#[test]
+fn an_unbounded_model_reports_its_displacement_over_the_whole_image() {
+    let painted = show(&two_camera_node(), Some(1), None);
+    assert!(says(&painted, "yes — max"));
+    assert!(says(&painted, "over the image"));
+    assert!(!says(&painted, "inside "));
+}
+
 #[test]
 fn the_aspect_row_is_hidden_for_a_single_focal_length_model() {
     // The demo pinhole carries `fx` and `fy` separately, so the row is there

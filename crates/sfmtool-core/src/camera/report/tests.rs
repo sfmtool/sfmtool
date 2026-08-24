@@ -21,9 +21,12 @@ use crate::camera::CameraModel;
 // things the fisheye fixtures are wanted for pull in opposite directions:
 // F_FISH_WIDE puts the image corner past 90° off-axis, which is where the
 // projection is interesting and where an end-to-end field-of-view measurement
-// folds; F_FISH_NARROW keeps every sample inside the 80° at which
-// `undistort_to_ray` starts blending the polynomial fisheye models toward the
-// identity, which is where their round trip stops being exact.
+// folds; F_FISH_NARROW keeps every sample inside `FISHEYE_BLEND_START_RAD`,
+// the distorted radius at which `undistort_to_ray` starts blending the
+// polynomial fisheye models toward the identity ray, which is where their
+// round trip stops being exact. That radius is 90° of *distorted* radius, so
+// the incidence angle it lands at is per-camera — see
+// `trustworthy_max_theta_deg`.
 // -----------------------------------------------------------------------
 
 const W: u32 = 640;
@@ -597,11 +600,12 @@ fn distortion_field_is_nonzero_and_radially_symmetric_for_simple_radial() {
 /// `ray_to_pixel(pixel_to_ray(u)) ≈ u` at every node the distortion field
 /// uses, which is what makes a sample's `pixel` the grid node it came from.
 ///
-/// On the narrow fisheye corpus: past 80° off-axis `undistort_to_ray` blends
-/// the polynomial fisheye models toward the identity ray on purpose
-/// (`blend_fisheye_ray`), so out there it is not their inverse and no round
-/// trip can hold. Inside it, every registered model round trips — no model is
-/// exempt.
+/// On the narrow fisheye corpus: past `FISHEYE_BLEND_START_RAD` of distorted
+/// radius `undistort_to_ray` blends the polynomial fisheye models toward the
+/// identity ray on purpose (`blend_fisheye_ray`), so out there it is not their
+/// inverse and no round trip can hold. That is the same boundary
+/// [`trustworthy_max_theta_deg`] reports, restated in incidence angle. Inside
+/// it, every registered model round trips — no model is exempt.
 #[test]
 fn distortion_field_nodes_round_trip() {
     let nodes = grid_nodes(8, 6);
@@ -762,4 +766,248 @@ fn distortion_field_is_empty_for_a_degenerate_grid() {
     no_image.width = 0;
     assert!(distortion_field(&no_image, 8, 6).is_empty());
     assert!(radial_profile(&no_image, 0.0, 8).is_empty());
+}
+
+// -----------------------------------------------------------------------
+// trustworthy_max_theta_deg
+// -----------------------------------------------------------------------
+
+/// The models whose forward map this module will not vouch for all the way out
+/// — the three call sites of the wide-angle blend, which is four models
+/// because `OPENCV_FISHEYE` and `RADIAL_FISHEYE` share one.
+///
+/// Spelled by name rather than by predicate so that the classification is a
+/// list somebody wrote down: `trustworthy_max_theta_deg`'s own match is
+/// exhaustive and will not build without a decision, and this is the other
+/// half — the decision made twice, independently, and compared.
+const BOUNDED_MODELS: [&str; 4] = [
+    "OPENCV_FISHEYE",
+    "RADIAL_FISHEYE",
+    "THIN_PRISM_FISHEYE",
+    "RAD_TAN_THIN_PRISM_FISHEYE",
+];
+
+/// A newly registered model cannot default to "trustworthy everywhere"
+/// unnoticed: every registry variant appears in the undistorted corpus, and
+/// every model that can carry distortion appears in the distorted one, so
+/// between them each of the `MODEL_COUNT` models is classified here.
+#[test]
+fn trustworthy_domain_is_decided_for_every_registered_model() {
+    let undistorted = undistorted_cameras(F_FISH_WIDE);
+    assert_eq!(undistorted.len(), MODEL_COUNT);
+
+    // Zero coefficients: the model *is* its family's ideal map, so there is no
+    // polynomial to fold and nothing for the blend to blend — including for
+    // the four models a live lens would bound.
+    for cam in &undistorted {
+        assert_eq!(
+            trustworthy_max_theta_deg(cam),
+            None,
+            "{} carries no distortion but reports a trustworthy limit",
+            cam.model_name()
+        );
+    }
+
+    // Live coefficients: exactly the four polynomial fisheye models are
+    // bounded, and the bound is a real angle rather than a placeholder.
+    let distorted = distorted_cameras(F_FISH_WIDE);
+    let mut seen_bounded: Vec<&str> = Vec::new();
+    for cam in &distorted {
+        let name = cam.model_name();
+        let limit = trustworthy_max_theta_deg(cam);
+        if BOUNDED_MODELS.contains(&name) {
+            let limit = limit.unwrap_or_else(|| panic!("{name} should report a limit"));
+            assert!(
+                limit > 0.0 && limit < TRUST_SCAN_MAX_DEG,
+                "{name} reported an unusable limit of {limit}°"
+            );
+            seen_bounded.push(name);
+        } else {
+            assert_eq!(limit, None, "{name} should be trustworthy at every angle");
+        }
+    }
+    seen_bounded.sort_unstable();
+    let mut expected = BOUNDED_MODELS.to_vec();
+    expected.sort_unstable();
+    assert_eq!(
+        seen_bounded, expected,
+        "the distorted corpus no longer exercises every bounded model"
+    );
+}
+
+/// The bound really is where the model's own inverse gives up: at the reported
+/// angle the distorted radius is `FISHEYE_BLEND_START_RAD`, so the round trip
+/// is exact just inside it and drifts well outside.
+#[test]
+fn the_bound_is_where_the_blend_starts() {
+    // A mild, monotone lens: `θ_d = θ·(1 + 0.02·θ² + 0.005·θ⁴)` climbs past
+    // 90° of distorted radius without ever turning over, so the blend is what
+    // bounds it. (The corpus's `OPENCV_FISHEYE` folds first, which is the
+    // other test below.)
+    let cam = cam(CameraModel::OpenCVFisheye {
+        focal_length_x: 200.0,
+        focal_length_y: 200.0,
+        principal_point_x: CX,
+        principal_point_y: CY,
+        radial_distortion_k1: 0.02,
+        radial_distortion_k2: 0.005,
+        radial_distortion_k3: 0.0,
+        radial_distortion_k4: 0.0,
+    });
+    let limit = trustworthy_max_theta_deg(&cam).unwrap();
+
+    // The distorted radius at the bound is the blend's start radius.
+    let radius = |theta_deg: f64| {
+        let (s, c) = theta_deg.to_radians().sin_cos();
+        let (u, v) = cam.ray_to_pixel([s, 0.0, -c]).unwrap();
+        (u - CX).hypot(v - CY) / 200.0
+    };
+    assert_relative_eq!(radius(limit), FISHEYE_BLEND_START_RAD, epsilon = 1e-9);
+
+    // And it is a real statement about the round trip: exact inside, not
+    // outside. (`pixel_to_ray` is the map that blends, so this is the
+    // pixel → ray → pixel direction.)
+    let round_trip = |theta_deg: f64| {
+        let (s, c) = theta_deg.to_radians().sin_cos();
+        let (u, v) = cam.ray_to_pixel([s, 0.0, -c]).unwrap();
+        let back = cam.ray_to_pixel(cam.pixel_to_ray(u, v)).unwrap();
+        (back.0 - u).hypot(back.1 - v)
+    };
+    assert!(round_trip(limit - 1.0) < 1e-6);
+    assert!(round_trip(limit + 12.0) > 1.0);
+}
+
+/// A polynomial that peaks before it reaches the blend radius is bounded at
+/// its peak instead: past a fold there is no inverse to have, so the blend
+/// threshold is not the only way out.
+#[test]
+fn a_fold_before_the_blend_radius_bounds_the_domain() {
+    // k1 < 0 shrinks the rim, so θ_d = θ·(1 + k1·θ²) turns over at
+    // θ = 1/√(3·|k1|) rad, well before θ_d could reach 90°.
+    let k1 = -0.2_f64;
+    let cam = cam(CameraModel::RadialFisheye {
+        focal_length: F_FISH_WIDE,
+        principal_point_x: CX,
+        principal_point_y: CY,
+        radial_distortion_k1: k1,
+        radial_distortion_k2: 0.0,
+    });
+    let peak_deg = (1.0 / (3.0 * k1.abs()).sqrt()).to_degrees();
+    let limit = trustworthy_max_theta_deg(&cam).unwrap();
+    assert_relative_eq!(limit, peak_deg, epsilon = 1e-6);
+    assert!(limit < 90.0);
+}
+
+/// `kerry_park`'s real `OPENCV_FISHEYE`: a circular fisheye in a square frame,
+/// which is the camera this whole function exists for.
+///
+/// The image corners are 150° off-axis — outside the lens circle — and the
+/// displacement field's maximum over the full rectangle is a statement about a
+/// folded polynomial, not about a lens. Filtered to the trustworthy domain it
+/// becomes a plausible lens number, and the two differ by a factor of twenty.
+#[test]
+fn the_kerry_park_fisheye_is_bounded_well_inside_its_corners() {
+    let cam = CameraIntrinsics {
+        model: CameraModel::OpenCVFisheye {
+            focal_length_x: 129.1499937015594,
+            focal_length_y: 129.2573627423474,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: 0.038113353966529886,
+            radial_distortion_k2: -0.00800851799065643,
+            radial_distortion_k3: 0.008329720504707577,
+            radial_distortion_k4: -0.0026901578801066814,
+        },
+        width: 480,
+        height: 480,
+    };
+    let limit = trustworthy_max_theta_deg(&cam).unwrap();
+    let fov = field_of_view(&cam).unwrap();
+    assert!(
+        (80.0..90.0).contains(&limit),
+        "expected the bound in the low eighties, got {limit}°"
+    );
+    assert!(fov.max_off_axis > 145.0);
+
+    let field = distortion_field(&cam, 16, 16);
+    let displacement = |sample: &DistortionSample| {
+        (sample.pixel[0] - sample.reference[0]).hypot(sample.pixel[1] - sample.reference[1])
+    };
+    let over_the_rectangle = field.iter().map(displacement).fold(0.0_f64, f64::max);
+    let inside_the_bound = field
+        .iter()
+        .filter(|s| s.theta_deg <= limit)
+        .map(displacement)
+        .fold(0.0_f64, f64::max);
+
+    assert!(over_the_rectangle > 200.0, "{over_the_rectangle}");
+    assert!(inside_the_bound < 20.0, "{inside_the_bound}");
+    // And the filter really drops something: a third of the frame's grid nodes
+    // look at angles the polynomial was never fitted to.
+    assert!(field.iter().any(|s| s.theta_deg > limit));
+    assert!(field.iter().any(|s| s.theta_deg <= limit));
+}
+
+// -----------------------------------------------------------------------
+// off_axis_angle_deg
+// -----------------------------------------------------------------------
+
+/// The angle is measured from the optical axis, and the corner angles
+/// [`field_of_view`] reports are the same function at the four corners.
+#[test]
+fn off_axis_angle_agrees_with_the_corner_angles() {
+    let cam = cam(CameraModel::SimplePinhole {
+        focal_length: F_PERSP,
+        principal_point_x: CX + 12.0,
+        principal_point_y: CY - 7.0,
+    });
+    let fov = field_of_view(&cam).unwrap();
+    let w = f64::from(W);
+    let h = f64::from(H);
+    let corner = [[0.0, 0.0], [w, 0.0], [0.0, h], [w, h]]
+        .into_iter()
+        .map(|[u, v]| off_axis_angle_deg(&cam, u, v))
+        .fold(0.0_f64, f64::max);
+    assert_relative_eq!(corner, fov.max_off_axis, epsilon = 1e-12);
+
+    // Zero at the principal point, not at the image centre.
+    assert_relative_eq!(off_axis_angle_deg(&cam, CX + 12.0, CY - 7.0), 0.0);
+    assert!(off_axis_angle_deg(&cam, CX, CY) > 1.0);
+
+    // A pinhole's closed form: θ = atan(r / f).
+    let theta = off_axis_angle_deg(&cam, CX + 112.0, CY - 7.0);
+    assert_relative_eq!(
+        theta,
+        (100.0_f64 / F_PERSP).atan().to_degrees(),
+        epsilon = 1e-12
+    );
+}
+
+// -----------------------------------------------------------------------
+// DistortionSample::theta_deg
+// -----------------------------------------------------------------------
+
+/// Every sample carries the incidence angle of the ray its node looks along,
+/// which is the field the trustworthy filter is applied to.
+#[test]
+fn distortion_field_samples_carry_their_incidence_angle() {
+    let cam = cam(CameraModel::SimpleRadial {
+        focal_length: F_PERSP,
+        principal_point_x: CX,
+        principal_point_y: CY,
+        radial_distortion_k1: -0.15,
+    });
+    let field = distortion_field(&cam, 8, 6);
+    let nodes = grid_nodes(8, 6);
+    assert_eq!(field.len(), nodes.len());
+    for (sample, &(u, v)) in field.iter().zip(&nodes) {
+        assert_relative_eq!(
+            sample.theta_deg,
+            off_axis_angle_deg(&cam, u, v),
+            epsilon = 1e-12
+        );
+    }
+    // Monotone with radius on a radially symmetric model: a node near the
+    // middle of the grid looks straighter ahead than the outermost one does.
+    assert!(field[0].theta_deg > field[8 * 3 + 4].theta_deg);
 }

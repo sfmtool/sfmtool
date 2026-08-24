@@ -70,11 +70,27 @@ const UNDISTORT_MAX_ITER: usize = 100;
 /// Convergence threshold for iterative undistortion.
 const UNDISTORT_EPS: f64 = 1e-10;
 
-/// Fisheye distortion models are not coherent past ~90° from the optical axis,
-/// so we blend from the distorted ray to the undistorted (identity) ray over
-/// this angular range (in radians of the undistorted angle).
-const FISHEYE_BLEND_START_RAD: f64 = 90.0 * (std::f64::consts::PI / 180.0); // 90°
-const FISHEYE_BLEND_END_RAD: f64 = 100.0 * (std::f64::consts::PI / 180.0); // 100°
+/// Where the multi-coefficient fisheye polynomials stop being inverted, as a
+/// **distorted** radius `r_d` in normalized image-plane units.
+///
+/// A high-order distortion polynomial becomes unreliable as it approaches its
+/// peak, so past this radius `blend_fisheye_ray` blends the Newton-recovered
+/// ray toward the identity (`θ = r_d`) ray, and past
+/// [`FISHEYE_BLEND_END_RAD`] it hands back the identity ray outright. Above
+/// this radius the model's forward and inverse maps are therefore no longer
+/// each other's inverse, and neither describes the lens.
+///
+/// The quantity is `r_d`, **not** the incidence angle `θ`. For the equidistant
+/// family the two carry the same units — radians — and coincide only for a
+/// zero-coefficient model; a lens whose polynomial magnifies its rim crosses
+/// this radius some way inside 90° off-axis, and
+/// [`crate::camera::report::trustworthy_max_theta_deg`] is what converts one
+/// to the other for a given camera.
+pub const FISHEYE_BLEND_START_RAD: f64 = 90.0 * (std::f64::consts::PI / 180.0); // 90°
+/// Where the fisheye blend that starts at [`FISHEYE_BLEND_START_RAD`] finishes,
+/// in the same units: past this distorted radius the recovered ray is dropped
+/// entirely in favour of the identity ray.
+pub const FISHEYE_BLEND_END_RAD: f64 = 100.0 * (std::f64::consts::PI / 180.0); // 100°
 
 mod kernels;
 mod pinhole_fit;

@@ -860,8 +860,9 @@ pub(super) fn equidistant_fisheye_to_ray(
 /// family, WITHOUT the wide-angle blend.
 ///
 /// [`blend_fisheye_ray`] exists because a high-order distortion polynomial
-/// stops being trustworthy as it approaches its peak; past `r_d = 90°` it
-/// hands back the identity (`θ = r_d`) ray outright. With a single
+/// stops being trustworthy as it approaches its peak; from `r_d = 90°` it
+/// blends toward the identity (`θ = r_d`) ray, and past `r_d = 100°` it hands
+/// that ray back outright. With a single
 /// coefficient there is nothing to distrust — `θ_d = θ·(1 + k1·θ²)` is
 /// monotone over any field this model is used on, and the recovery is the
 /// exact inverse at every angle — while the blend would DROP the `k1` term
@@ -1489,9 +1490,14 @@ pub(super) fn equidistant_to_ray(uu: f64, vv: f64) -> [f64; 3] {
 /// `undistorted` is the identity-model ray (`equidistant_to_ray(x_d, y_d)`).
 ///
 /// High-order distortion polynomials become unreliable approaching their
-/// peak. This blends from `recovered` to the identity ray over 80°–90° of
-/// `r_d` using a smoothstep curve. Since `r_d` is monotonic across the
-/// sensor, this produces a smooth spatial transition for all fisheye models.
+/// peak. This blends from `recovered` to the identity ray with a smoothstep
+/// curve over [`FISHEYE_BLEND_START_RAD`] to [`FISHEYE_BLEND_END_RAD`] of
+/// `r_d` — 90° to 100°. Since `r_d` is monotonic across the sensor, this
+/// produces a smooth spatial transition for all fisheye models.
+///
+/// The threshold is on the **distorted** radius, so where it lands in
+/// incidence angle depends on the lens: `crate::camera::report`'s
+/// `trustworthy_max_theta_deg` is what reports that angle for one camera.
 pub(super) fn blend_fisheye_ray(r_d: f64, recovered: [f64; 3], undistorted: [f64; 3]) -> [f64; 3] {
     if r_d <= FISHEYE_BLEND_START_RAD {
         return recovered;

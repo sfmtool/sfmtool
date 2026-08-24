@@ -43,8 +43,19 @@
 //! Pixel coordinates are continuous, with `(0, 0)` the top-left *corner* of the
 //! image and `(0.5, 0.5)` the centre of the top-left pixel. The image centre is
 //! `(w/2, h/2)`, which is generally **not** the principal point.
+//!
+//! # Where the numbers stop meaning anything
+//!
+//! Every quantity here is defined over the whole image rectangle, and for a
+//! circular fisheye that rectangle's corners are outside the lens's image
+//! circle — a region no calibration constrained and where a distortion
+//! polynomial is free to fold. [`trustworthy_max_theta_deg`] is how a consumer
+//! finds out where that starts, so a panel or a plot can bound its own domain
+//! rather than presenting an extrapolation as a measurement. See that
+//! function's docs for which model families are bounded and why.
 
-use crate::camera::CameraIntrinsics;
+use crate::camera::distortion::FISHEYE_BLEND_START_RAD;
+use crate::camera::{CameraIntrinsics, CameraModel};
 
 #[cfg(test)]
 mod tests;
@@ -114,16 +125,26 @@ pub struct RadialSample {
 
 /// The displacement of one pixel from where the ideal map would place it.
 ///
-/// Both fields are the projection of the **same** ray, so their difference is
-/// the lens's contribution and nothing else. An overlay draws the arrow from
-/// [`Self::reference`] to [`Self::pixel`] — "the lens moved this ray *here*
-/// from *there*", the direction a rectification would undo.
+/// [`Self::pixel`] and [`Self::reference`] are the projection of the **same**
+/// ray, so their difference is the lens's contribution and nothing else. An
+/// overlay draws the arrow from [`Self::reference`] to [`Self::pixel`] — "the
+/// lens moved this ray *here* from *there*", the direction a rectification
+/// would undo.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DistortionSample {
     /// Where the model actually projects the ray.
     pub pixel: [f64; 2],
     /// Where the family's ideal map projects it.
     pub reference: [f64; 2],
+    /// Incidence angle of the sampled ray, in degrees off the optical axis.
+    ///
+    /// The angle of `pixel_to_ray(node)` — the direction the grid node looks —
+    /// so a consumer can drop the samples that fall outside
+    /// [`trustworthy_max_theta_deg`] instead of reporting a fold in a
+    /// polynomial as if it were a lens. Without it the field's own maximum is
+    /// unfilterable: the source pixel is recoverable from the sample's index,
+    /// but the angle it looks at is not recoverable from anything.
+    pub theta_deg: f64,
 }
 
 /// The angles the image subtends, or `None` for a camera with no image to
@@ -250,6 +271,7 @@ pub fn distortion_field(cam: &CameraIntrinsics, cols: usize, rows: usize) -> Vec
             Some(DistortionSample {
                 pixel: [pu, pv],
                 reference: [ru, rv],
+                theta_deg: angle_between_deg(ray, FORWARD),
             })
         })
         .collect()
@@ -278,6 +300,200 @@ pub fn equiv_focal_length_35mm(cam: &CameraIntrinsics) -> Option<f64> {
     }
     let (fx, fy) = cam.focal_lengths();
     Some((fx * fy).sqrt() * FRAME_35MM_DIAGONAL_MM / diagonal_px)
+}
+
+/// The incidence angle in degrees of the ray through pixel `(u, v)` — how far
+/// off the optical axis that pixel looks.
+///
+/// The one place the frame convention is spelled, so an overlay's hover
+/// readout, a plot's edge marker and this module's own corner angles cannot
+/// disagree about which direction is forward. `(w/2, h/2)` is generally not
+/// 0°: the angle is measured from the **optical axis**, which is where the
+/// principal point is, not where the image centre is.
+pub fn off_axis_angle_deg(cam: &CameraIntrinsics, u: f64, v: f64) -> f64 {
+    angle_between_deg(cam.pixel_to_ray(u, v), FORWARD)
+}
+
+/// The largest incidence angle, in degrees, at which the model still describes
+/// a lens rather than extrapolating — or `None` when it does so at every angle
+/// the model can represent.
+///
+/// # Why this exists
+///
+/// [`field_of_view`], [`radial_profile`] and [`distortion_field`] are all
+/// defined over the whole image rectangle, and a consumer that plots or
+/// maximizes over that domain unfiltered will sooner or later report a number
+/// that is about a polynomial rather than about a camera. On the `kerry_park`
+/// rig's `OPENCV_FISHEYE` — a circular fisheye in a square 480 × 480 frame —
+/// the image corners sit 150° off-axis, outside the lens's image circle, and
+/// the `k1..k4` polynomial folds long before that: its forward map takes
+/// θ = 132° to a *smaller* radius than θ = 60°. The displacement field's
+/// maximum over the full rectangle is 273 px, which is a true statement about
+/// two forward maps and a false one about the lens.
+///
+/// # Which models are bounded
+///
+/// This is a property of the *parameterization*, not of fisheyes:
+///
+/// - **Bounded** — the multi-coefficient polynomial fisheye models
+///   [`CameraModel::OpenCVFisheye`], [`CameraModel::RadialFisheye`],
+///   [`CameraModel::ThinPrismFisheye`] and
+///   [`CameraModel::RadTanThinPrismFisheye`]. These are exactly the three call
+///   sites of the wide-angle blend in [`super::distortion`]: past
+///   [`FISHEYE_BLEND_START_RAD`] of distorted radius their own inverse stops
+///   inverting the polynomial and slews toward the identity ray, on the stated
+///   grounds that a high-order polynomial approaching its peak is not to be
+///   trusted. Where the forward map peaks *before* that radius, the peak is
+///   the bound instead: past a fold there is no inverse to have.
+/// - **Unbounded** — [`CameraModel::SimpleRadialFisheye`], deliberately: with
+///   one coefficient `θ_d = θ·(1 + k1·θ²)` there is nothing to distrust, and
+///   its ray conversion is excluded from the blend for that reason. The two
+///   spline models likewise, from the other direction: they hold `δ` constant
+///   past their domain end so the radial map continues linearly, and they
+///   enforce `1 + δ'> 0` as a construction invariant, so there is no peak to
+///   approach at any angle. And the exact maps — the plain pinholes,
+///   [`CameraModel::EquidistantFisheye`], [`CameraModel::Equirectangular`] —
+///   along with the perspective polynomials, whose domain is already hard
+///   bounded at the 90° their projective divide refuses.
+///
+/// A camera whose [`CameraIntrinsics::has_distortion`] is `false` is `None`
+/// whatever its model: with every coefficient zero it **is** its family's
+/// ideal map, the blend interpolates between two identical rays, and there is
+/// no polynomial to fold.
+///
+/// # How the bound is found
+///
+/// By walking the camera's own forward map, not by reading its coefficients:
+/// a coarse sweep in θ over eight azimuths brackets the first step at which
+/// the distorted radius either reaches [`FISHEYE_BLEND_START_RAD`] or stops
+/// increasing, and the bracket is then refined. Eight azimuths because the
+/// thin-prism models are not radially symmetric and the bound is the *first*
+/// azimuth to go, and the camera's own [`CameraIntrinsics::ray_to_pixel`]
+/// because a second spelling of four different polynomials is a second thing
+/// to keep in step. The sweep is a bracket, not a proof: a fold narrower than
+/// `TRUST_SCAN_STEP_DEG` would be stepped over.
+pub fn trustworthy_max_theta_deg(cam: &CameraIntrinsics) -> Option<f64> {
+    // No live coefficients, no polynomial: the model is its own ideal map at
+    // every angle, and that is true of a zeroed OPENCV_FISHEYE as much as of a
+    // pinhole.
+    if !cam.has_distortion() {
+        return None;
+    }
+    // Exhaustive on purpose, with no `_` arm: a newly registered model has to
+    // be classified here before it will build, rather than defaulting to
+    // "trustworthy everywhere" because nobody thought about it.
+    match &cam.model {
+        CameraModel::Pinhole { .. }
+        | CameraModel::SimplePinhole { .. }
+        | CameraModel::Equirectangular { .. }
+        | CameraModel::EquidistantFisheye { .. }
+        | CameraModel::SimpleRadial { .. }
+        | CameraModel::Radial { .. }
+        | CameraModel::OpenCV { .. }
+        | CameraModel::FullOpenCV { .. }
+        | CameraModel::SfmtoolPinhole { .. }
+        | CameraModel::SfmtoolFisheye { .. }
+        | CameraModel::SimpleRadialFisheye { .. } => None,
+
+        CameraModel::OpenCVFisheye { .. }
+        | CameraModel::RadialFisheye { .. }
+        | CameraModel::ThinPrismFisheye { .. }
+        | CameraModel::RadTanThinPrismFisheye { .. } => Some(polynomial_fisheye_limit(cam)),
+    }
+}
+
+/// Angular step of the sweep [`trustworthy_max_theta_deg`] brackets with.
+const TRUST_SCAN_STEP_DEG: f64 = 0.5;
+
+/// Upper end of that sweep. A fisheye rectangle's corner can exceed 180°, but
+/// a polynomial that has neither folded nor reached the blend radius by then
+/// is not going to be plotted usefully past it either.
+const TRUST_SCAN_MAX_DEG: f64 = 180.0;
+
+/// Azimuths the sweep samples at each θ. Enough to catch the thin-prism
+/// models' azimuthal asymmetry; the bound is the smallest θ at which *any*
+/// azimuth goes.
+const TRUST_SCAN_AZIMUTHS: usize = 8;
+
+/// Bisection / ternary refinement steps applied to the bracketing interval.
+/// `(1/2)^60` and `(2/3)^60` of half a degree are both far below what any
+/// consumer can render.
+const TRUST_REFINE_STEPS: usize = 60;
+
+/// The bound for one of the four polynomial fisheye models: the first θ at
+/// which the distorted radius reaches [`FISHEYE_BLEND_START_RAD`], or the
+/// radius's peak if it turns over first.
+fn polynomial_fisheye_limit(cam: &CameraIntrinsics) -> f64 {
+    let radius = |theta_deg: f64| max_distorted_radius(cam, theta_deg);
+    let steps = (TRUST_SCAN_MAX_DEG / TRUST_SCAN_STEP_DEG) as usize;
+    let mut previous = 0.0_f64;
+    let mut last_good = 0.0_f64;
+
+    for i in 1..=steps {
+        let theta = i as f64 * TRUST_SCAN_STEP_DEG;
+        let Some(r) = radius(theta) else {
+            // The model refused the ray outright; the last angle it accepted
+            // is as far as anything can be said about.
+            return last_good;
+        };
+        if r >= FISHEYE_BLEND_START_RAD {
+            // Bisect for the crossing. `radius` is increasing across the
+            // bracket, so the usual sign test applies.
+            let (mut lo, mut hi) = (last_good, theta);
+            for _ in 0..TRUST_REFINE_STEPS {
+                let mid = 0.5 * (lo + hi);
+                match radius(mid) {
+                    Some(r) if r < FISHEYE_BLEND_START_RAD => lo = mid,
+                    _ => hi = mid,
+                }
+            }
+            return lo;
+        }
+        if r <= previous {
+            // The map turned over inside this step. Ternary-search the bracket
+            // for the peak, which is unimodal across it by construction.
+            let (mut lo, mut hi) = ((last_good - TRUST_SCAN_STEP_DEG).max(0.0), theta);
+            for _ in 0..TRUST_REFINE_STEPS {
+                let third = (hi - lo) / 3.0;
+                let (a, b) = (lo + third, hi - third);
+                if radius(a).unwrap_or(0.0) < radius(b).unwrap_or(0.0) {
+                    lo = a;
+                } else {
+                    hi = b;
+                }
+            }
+            return 0.5 * (lo + hi);
+        }
+        previous = r;
+        last_good = theta;
+    }
+    last_good
+}
+
+/// The largest **distorted** radius, in normalized image-plane units, that the
+/// model puts an incidence angle of `theta_deg` at over
+/// [`TRUST_SCAN_AZIMUTHS`] azimuths.
+///
+/// Recovered from the model's own projection rather than from its
+/// coefficients: `ray_to_pixel` writes `u = fx·x_d + cx`, so `x_d` and `y_d`
+/// come back exactly by undoing that. `None` for a degenerate focal length, or
+/// for an angle the model will not project at all.
+fn max_distorted_radius(cam: &CameraIntrinsics, theta_deg: f64) -> Option<f64> {
+    let (fx, fy) = cam.focal_lengths();
+    let (cx, cy) = cam.principal_point();
+    if fx == 0.0 || fy == 0.0 {
+        return None;
+    }
+    let (sin_theta, cos_theta) = theta_deg.to_radians().sin_cos();
+    let mut max = 0.0_f64;
+    for i in 0..TRUST_SCAN_AZIMUTHS {
+        let phi = std::f64::consts::TAU * i as f64 / TRUST_SCAN_AZIMUTHS as f64;
+        let (sin_phi, cos_phi) = phi.sin_cos();
+        let ray = [sin_theta * cos_phi, sin_theta * sin_phi, -cos_theta];
+        let (u, v) = cam.ray_to_pixel(ray)?;
+        max = max.max(((u - cx) / fx).hypot((v - cy) / fy));
+    }
+    Some(max)
 }
 
 /// The optical axis in the canonical camera frame.

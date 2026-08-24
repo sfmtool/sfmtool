@@ -238,6 +238,7 @@ pub struct RadialSample {
 pub struct DistortionSample {
     pub pixel: [f64; 2],          // where the model actually projects the ray
     pub reference: [f64; 2],      // where the ideal map projects it
+    pub theta_deg: f64,           // incidence angle of the sampled ray
 }
 
 pub fn field_of_view(cam: &CameraIntrinsics) -> Option<FieldOfView>;
@@ -248,7 +249,75 @@ pub fn distortion_field(cam: &CameraIntrinsics, cols: usize, rows: usize)
 /// 35 mm-equivalent focal length: `f_px · 43.267 / diagonal_px`. `None` for
 /// models whose focal length is pixels-per-radian rather than pixels.
 pub fn equiv_focal_length_35mm(cam: &CameraIntrinsics) -> Option<f64>;
+/// The incidence angle of the ray through a pixel — the frame convention,
+/// spelled once, for the overlay's hover readout and the plot's edge markers.
+pub fn off_axis_angle_deg(cam: &CameraIntrinsics, u: f64, v: f64) -> f64;
+/// The largest incidence angle at which the model still describes a lens,
+/// or `None` when it does so at every angle. See "The trustworthy domain".
+pub fn trustworthy_max_theta_deg(cam: &CameraIntrinsics) -> Option<f64>;
 ```
+
+### The trustworthy domain
+
+Every function above is defined over the whole image **rectangle**, and phase 4
+found out the hard way what that costs: on `kerry_park`'s real `OPENCV_FISHEYE`
+— a circular fisheye in a square 480 × 480 frame — the displacement field's
+maximum over a 16 × 16 grid is **272.7 px**, twenty times the 13 px the lens
+actually displaces anything. The image rectangle's corners sit 150° off-axis,
+outside the lens's image circle, where the `k1..k4` polynomial is evaluated
+with nothing constraining it and has folded: its forward map takes θ = 132.7°
+to a radius of 8.8 px, where the equidistant ideal puts it at 299 px. The
+number was a true statement about two forward maps and a false one about a
+camera.
+
+`trustworthy_max_theta_deg` is how a consumer finds out where that starts, and
+`DistortionSample::theta_deg` is what lets it filter — a sample's source pixel
+is recoverable from its index, but the angle it looks at is not recoverable
+from anything.
+
+This is a property of the **parameterization**, not of fisheyes:
+
+| Models | Bound |
+|--------|-------|
+| `OPENCV_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`, `RAD_TAN_THIN_PRISM_FISHEYE` | the first θ at which the *distorted* radius reaches `FISHEYE_BLEND_START_RAD`, or the radius's own peak if it turns over first |
+| everything else | `None` — trustworthy at every angle |
+
+The four bounded models are exactly the three call sites of `blend_fisheye_ray`
+in `camera/distortion.rs` (`OPENCV_FISHEYE` and `RADIAL_FISHEYE` share one).
+That function exists precisely because "high-order distortion polynomials
+become unreliable approaching their peak": past `FISHEYE_BLEND_START_RAD` of
+distorted radius, the model's own inverse stops inverting the polynomial and
+slews toward the identity ray, so above that radius the forward and inverse
+maps are no longer each other's inverse and neither describes the lens.
+
+The unbounded classifications are each their own argument, not a default:
+
+- `SIMPLE_RADIAL_FISHEYE` is **already** excluded from the blend, deliberately
+  and with the reasoning written on `simple_radial_fisheye_to_ray`: with one
+  coefficient `θ_d = θ·(1 + k1·θ²)` there is nothing to distrust. This section
+  is that argument generalised.
+- The two spline models hold `δ` constant past `bspline_*_max`, so their radial
+  map continues linearly with slope `f`, and they enforce `1 + δ'(θ) > 0` as a
+  construction invariant. There is no peak to approach at any angle.
+- The exact maps — the plain pinholes, `EQUIDISTANT_FISHEYE`, `EQUIRECTANGULAR`
+  — have no polynomial, and the perspective polynomials are already hard
+  bounded at the 90° their projective divide refuses.
+- A camera whose `has_distortion()` is `false` is `None` whatever its model: it
+  **is** its family's ideal map, the blend interpolates between two identical
+  rays, and there is no polynomial to fold. This is the first gate the function
+  applies, so a zeroed `OPENCV_FISHEYE` is exact everywhere, as it should be.
+
+The bound is found by walking the camera's own `ray_to_pixel` — a coarse sweep
+in θ over eight azimuths brackets the first step at which the distorted radius
+either reaches the blend radius or stops increasing, then the bracket is
+refined — rather than by reading coefficients, because a second spelling of
+four different polynomials is a second thing to keep in step. Eight azimuths
+because the thin-prism models are not radially symmetric and the bound is the
+*first* azimuth to go.
+
+The function's own `match` is exhaustive with no `_` arm, so a newly registered
+model does not build until somebody classifies it; the test corpus asserts the
+same classification independently against `MODEL_COUNT`.
 
 **The ideal ("reference") map** is what "distortion" is measured against, and it
 is per-family, not per-model:
@@ -692,25 +761,28 @@ A second table, visually separated, holding what the parameters *mean*:
 | diagonal FOV | `197.2°` | corner to opposite corner |
 | max off-axis angle | `98.6°` | largest θ over the four corners; the number that answers "is this really 180°?" |
 | 35 mm equivalent | `19.1 mm` | perspective models only; `f_px · 43.267 / diagonal_px`, sensor-independent by construction |
-| distortion | `yes — max 12.4 px over the image` / `none` | from `has_distortion()` plus the field's maximum |
+| distortion | `yes — max 13.0 px inside 84.1°` / `yes — max 12.4 px over the image` / `none` | from `has_distortion()` plus the field's maximum, bounded by § "The trustworthy domain" |
 
 Then `K`, rendered as a 3×3 grid, with the note that it is the optical-frame
 matrix and that `P = K · S · [R|t]`.
 
-> _Status (2026-08-23): the distortion row says **"over the image"**, not "at the
-> corner", and carries a tooltip saying what that means. Two reasons, both found
-> against the real fixtures. The grid `distortion_field` samples is cell
-> *centres*, so the corner is never one of the nodes; and the maximum is not
-> guaranteed to be at a corner anyway — a mustache polynomial or a thin-prism
-> term can put it elsewhere. More importantly, on `kerry_park`'s real
-> `OPENCV_FISHEYE` the maximum over a 16 × 16 grid is **272.7 px**, because a
-> circular fisheye's image rectangle has corners outside the lens's image
-> circle, where the `k1..k4` polynomial is being evaluated at θ ≈ 132° — far
-> past anything it was fitted to, and where it has folded (its forward map sends
-> θ = 132° to r = 25 px rather than 297 px). The number is honest about what the
-> two forward maps do; it is not a statement about the lens, and the tooltip says
-> so rather than the panel quietly printing a plausible-looking lie. See
-> § "Behaviour by camera model" for the related caveat on the same corners._
+> _Status (2026-08-23): the distortion row does not say "at the corner". Two
+> reasons, both found against the real fixtures. The grid `distortion_field`
+> samples is cell *centres*, so the corner is never one of the nodes; and the
+> maximum is not guaranteed to be at a corner anyway — a mustache polynomial or
+> a thin-prism term can put it elsewhere._
+>
+> _Status (2026-08-23, phase 5): the row now bounds its own domain. Phase 4
+> printed the maximum **over the image** with a tooltip explaining that the
+> number might be about the frame's corners rather than about the lens, because
+> it had no way of saying anything narrower; on `kerry_park` that number was
+> **272.7 px**. With `trustworthy_max_theta_deg` it can be precise instead: the
+> maximum is taken over the grid nodes inside the model's trustworthy domain
+> and the row names the bound — `yes — max 13.0 px inside 84.1°` — with the
+> tooltip saying how many of the grid's nodes were excluded and why. A model
+> that is trustworthy everywhere keeps the plain `over the image` phrasing,
+> since a qualifier that excludes nothing is the same statement one clause
+> longer. See § "The trustworthy domain"._
 
 ### 4. Projection plot
 
@@ -863,20 +935,30 @@ Every model with zero-valued distortion coefficients falls into its family's
 inactive — the kernels short-circuit those to the exact base arithmetic, so
 reporting distortion for them would be a lie the projection does not tell.
 
-> _Note (2026-08-23), from phase 4 reading real fixtures: past **80° off-axis**
-> the polynomial fisheye models' `undistort_to_ray` blends toward the identity
-> ray rather than inverting an unreliable polynomial (`blend_fisheye_ray`, and
-> the caveat § "Testing" already names). Inside 80° `kerry_park`'s round trip is
-> exact to the last bit; outside it the round trip drifts by 100 px at 122° and
-> 273 px at 132°. Every reading taken at the **corners** of a circular fisheye's
-> image rectangle is therefore in that regime — `max_off_axis` (150.5° on
-> `kerry_park`), `diagonal` (301°), and the distortion field's maximum. They are
-> the honest output of the definitions this spec sets out, and they describe the
-> black corners outside the lens circle rather than the lens. The `horizontal` /
-> `vertical` pair, swept through the mid-edges, is the reading that answers "is
-> this fisheye really 180°?" for such a camera: 213° on `kerry_park`, against
-> `f = 129.15` px/rad over a 480-pixel frame. Phase 5's plot, whose x axis runs
-> to `max_off_axis`, will want to mark where the trustworthy domain ends._
+> _Note (2026-08-23), from phase 4 reading real fixtures and corrected by phase
+> 5: past `FISHEYE_BLEND_START_RAD` the polynomial fisheye models'
+> `undistort_to_ray` blends toward the identity ray rather than inverting an
+> unreliable polynomial (`blend_fisheye_ray`, and the caveat § "Testing"
+> already names). That threshold is **90° of distorted radius**, not 80° and
+> not an incidence angle — phase 4 wrote "past 80° off-axis" from a stale doc
+> comment on `blend_fisheye_ray` that contradicted the constant beside it, and
+> both have been corrected. Where it lands in incidence angle is per-camera and
+> is what `trustworthy_max_theta_deg` reports: **84.1°** on `kerry_park`'s
+> camera 0._
+>
+> _Inside that angle `kerry_park`'s round trip is exact; outside it the round
+> trip drifts, and the forward map itself turns over and folds — at θ = 132.7°
+> it puts the ray 8.8 px from the principal point where the equidistant ideal
+> puts it at 299 px, and past 132.7° it refuses the ray altogether. Every
+> reading taken at the **corners** of a circular fisheye's image rectangle is
+> therefore in that regime — `max_off_axis` (150.5° on `kerry_park`),
+> `diagonal` (301.0°), and the distortion field's unfiltered maximum (272.7 px
+> against 13.0 px inside the bound). They are the honest output of the
+> definitions this spec sets out, and they describe the black corners outside
+> the lens circle rather than the lens. The `horizontal` / `vertical` pair,
+> swept through the mid-edges, is the reading that answers "is this fisheye
+> really 180°?" for such a camera: 212.9° on `kerry_park`, against `f = 129.15`
+> px/rad over a 480-pixel frame._
 
 ---
 
@@ -936,6 +1018,19 @@ implemented in `camera/report/tests.rs`:
 - `parameter_names()` is a permutation of the keys `SfmrCamera::from` writes,
   for every variant — the property that keeps the table from silently dropping a
   parameter when a model gains one.
+- `trustworthy_max_theta_deg` is `None` for every model in the undistorted
+  corpus (the same `MODEL_COUNT`-complete corpus), and `Some` for exactly the
+  four polynomial fisheye models in the distorted one — the classification
+  written down twice, once as the function's exhaustive `match` and once as a
+  list of model names, and compared. The bound itself is checked two ways: on a
+  monotone lens the distorted radius at the reported angle is
+  `FISHEYE_BLEND_START_RAD` and the round trip is exact just inside it and
+  wrong outside; on a `k1 < 0` lens that folds first it is the closed-form peak
+  `θ = 1/√(3|k1|)`.
+- `off_axis_angle_deg` at the four corners is `FieldOfView::max_off_axis`, is
+  zero at the principal point rather than at the image centre, and matches
+  `atan(r/f)` on a pinhole; every `DistortionSample::theta_deg` equals it at
+  that sample's grid node.
 
 No model is exempt from either property. `THIN_PRISM_FISHEYE` and
 `RAD_TAN_THIN_PRISM_FISHEYE` were, for a while: `CameraModel::distort_ray`
@@ -948,12 +1043,12 @@ regression test that pinned them are gone.
 
 Two caveats remain, both named in the tests rather than left implicit:
 
-- The round trip holds only inside 80° off-axis for the polynomial fisheye
-  models, because `undistort_to_ray` blends them toward the identity ray from
-  there (`blend_fisheye_ray`) rather than inverting an unreliable polynomial.
-  That is a deliberate, documented approximation, so the round-trip test uses a
-  narrower fisheye fixture instead of asserting something the code does not
-  claim.
+- The round trip holds for the polynomial fisheye models only inside
+  `trustworthy_max_theta_deg`, because `undistort_to_ray` blends them toward
+  the identity ray past `FISHEYE_BLEND_START_RAD` (`blend_fisheye_ray`) rather
+  than inverting an unreliable polynomial. That is a deliberate, documented
+  approximation, so the round-trip test uses a narrower fisheye fixture instead
+  of asserting something the code does not claim.
 - The zero residual is to `1e-12` px, not bit for bit: the fisheye kernels do
   not all group the `θ · direction · f` product the same way, so no single
   spelling of the ideal map can match every one of them exactly.
