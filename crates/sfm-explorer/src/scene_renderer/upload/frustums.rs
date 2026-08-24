@@ -38,12 +38,29 @@ const FRUSTUM_COLOR_SELECTED: u32 = (255 << 8) | (255 << 16) | (FRUSTUM_ALPHA_HI
 /// A camera observing the selected point: opaque orange.
 const FRUSTUM_COLOR_TRACK: u32 = 255 | (165 << 8) | (FRUSTUM_ALPHA_HIGHLIGHT << 24);
 
+/// An image taken through the selected camera intrinsics: opaque violet.
+///
+/// The color itself is [`crate::scene::SIBLING_HIGHLIGHT_RGB`], declared there
+/// because the Image Browser strokes the same set of images in it — two panels
+/// saying one thing about one set of images.
+const FRUSTUM_COLOR_SIBLING: u32 = {
+    let [r, g, b] = crate::scene::SIBLING_HIGHLIGHT_RGB;
+    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16) | (FRUSTUM_ALPHA_HIGHLIGHT << 24)
+};
+
 /// Alpha 0 → the shader discards the fragment entirely.
 const FRUSTUM_COLOR_HIDDEN: u32 = 0;
 
-/// The per-image color array for one node: default white, with the selected
-/// camera, the selected point's track cameras, and the camera being viewed
-/// through overriding it in that order of precedence.
+/// The per-image color array for one node: default white, with the three
+/// highlights and the camera being viewed through overriding it in order of
+/// precedence.
+///
+/// The highlights are **ranked, not mixed** — selected image, then the selected
+/// point's track, then the selected camera's siblings — so they are written
+/// weakest first and each stronger one overwrites. An image can easily be all
+/// three at once (the photo you are looking at is in its own track and shares
+/// its own lens), and a blend of three highlight colors would name none of
+/// them.
 ///
 /// Pulled out of [`SceneRenderer::update_frustum_colors`] so the alpha
 /// invariant the tint depends on is assertable without a GPU.
@@ -52,19 +69,25 @@ pub(super) fn frustum_colors(
     selected_image: Option<usize>,
     hidden_image: Option<usize>,
     track_images: &[usize],
+    sibling_images: &[usize],
 ) -> Vec<u32> {
     let mut colors: Vec<u32> = vec![FRUSTUM_COLOR_DEFAULT; image_count];
+    for &idx in sibling_images {
+        if idx < image_count {
+            colors[idx] = FRUSTUM_COLOR_SIBLING;
+        }
+    }
+    for &idx in track_images {
+        if idx < image_count {
+            colors[idx] = FRUSTUM_COLOR_TRACK;
+        }
+    }
     if let Some(idx) = selected_image {
         if idx < image_count {
             colors[idx] = FRUSTUM_COLOR_SELECTED;
         }
     }
-    for &idx in track_images {
-        if idx < image_count && selected_image != Some(idx) {
-            colors[idx] = FRUSTUM_COLOR_TRACK;
-        }
-    }
-    // Hidden must be applied last so it wins over selected/track
+    // Hidden must be applied last so it wins over every highlight.
     if let Some(idx) = hidden_image {
         if idx < image_count {
             colors[idx] = FRUSTUM_COLOR_HIDDEN;
@@ -344,6 +367,7 @@ impl SceneRenderer {
     ///
     /// Hidden images (e.g. the camera being viewed through) get alpha=0, which
     /// the shader discards so they don't render or participate in picking.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_frustum_colors(
         &self,
         queue: &wgpu::Queue,
@@ -352,6 +376,7 @@ impl SceneRenderer {
         selected_image: Option<usize>,
         hidden_image: Option<usize>,
         track_images: &[usize],
+        sibling_images: &[usize],
     ) {
         // Indices stay local: they address the owning node's color buffer, not
         // the global pick space.
@@ -363,7 +388,13 @@ impl SceneRenderer {
             return;
         };
 
-        let colors = frustum_colors(image_count, selected_image, hidden_image, track_images);
+        let colors = frustum_colors(
+            image_count,
+            selected_image,
+            hidden_image,
+            track_images,
+            sibling_images,
+        );
         queue.write_buffer(color_buffer, 0, bytemuck::cast_slice(&colors));
     }
 

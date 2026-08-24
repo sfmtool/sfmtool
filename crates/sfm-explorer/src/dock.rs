@@ -164,6 +164,8 @@ impl TabViewer for TabContext<'_> {
                     }
                     let track_images = compute_track_images(self.state, node);
                     let hover_track_images = compute_hover_track_images(self.state, node);
+                    let sibling_images =
+                        crate::scene::camera_sibling_images(node, self.state.selected_camera);
                     let camera_view_image = self
                         .viewer_3d
                         .camera_view
@@ -176,6 +178,7 @@ impl TabViewer for TabContext<'_> {
                         self.state.selected_image_in(id),
                         &track_images,
                         &hover_track_images,
+                        &sibling_images,
                         self.state.hovered_image_in(id),
                         camera_view_image,
                         self.gesture_events,
@@ -414,6 +417,13 @@ impl TabContext<'_> {
         if let Some(id) = response.select_recon {
             self.state.select_recon(id);
         }
+        // Between the two: a camera is coarser than an image (it names the
+        // whole set of images that share it) and finer than a reconstruction,
+        // and `select_camera` clears an image taken through a *different* lens
+        // — so an image reported in the same frame has to be applied after it.
+        if let Some(camera) = response.select_camera {
+            self.state.select_camera(Some(camera));
+        }
         if let Some(image) = response.select_image {
             self.state.select_image(Some(image));
         }
@@ -446,11 +456,16 @@ impl TabContext<'_> {
                 // Framed where the node is *drawn*, so zoom-to-fit on an aligned
                 // node lands on it rather than on its native coordinates.
                 let points = crate::scene::world_points(node);
-                if let Some(aspect) = self.viewer_3d.panel_aspect() {
-                    let current_time = ui.input(|i| i.time);
-                    self.viewer_3d
-                        .zoom_to_fit_points(&points, aspect, current_time);
-                }
+                self.zoom_to_fit(ui, &points);
+            }
+        }
+        // The same framing, over the images that share one lens instead of the
+        // whole node: for a rig that is one sensor's entire trajectory in a
+        // single gesture, which nothing else in the viewer does.
+        if let Some(camera) = response.zoom_to_camera {
+            if let Some(node) = crate::scene::node_by_id(&self.state.scene, camera.recon) {
+                let centres = crate::scene::camera_world_centres(node, camera.index());
+                self.zoom_to_fit(ui, &centres);
             }
         }
         // Alignment before the node lifecycle below: both take a `ReconId`, and
@@ -470,6 +485,20 @@ impl TabContext<'_> {
         if let Some(id) = response.close_node {
             self.state.close_node(id);
             self.forget_recon(id);
+        }
+    }
+
+    /// Frame `points` in the 3D viewport, if it has been laid out at least
+    /// once (before that there is no aspect ratio to fit against).
+    ///
+    /// Shared by the two zoom-to-fit requests the Scene panel makes — a whole
+    /// node, and the images of one camera — so that "the same framing" is
+    /// literally the same call rather than two that have to be kept in step.
+    fn zoom_to_fit(&mut self, ui: &egui::Ui, points: &[nalgebra::Point3<f64>]) {
+        if let Some(aspect) = self.viewer_3d.panel_aspect() {
+            let current_time = ui.input(|i| i.time);
+            self.viewer_3d
+                .zoom_to_fit_points(points, aspect, current_time);
         }
     }
 

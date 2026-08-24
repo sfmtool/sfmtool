@@ -65,23 +65,23 @@ keeps it from fighting the scene while open.
 
 ┌────────────────────────────────────────────────────────────┐
 │ 12,043 pts | 17 imgs | 60 fps   Pos: [1.2, -3.4, 0.8]   ✕ │  expanded
-│                                        ┌─────────────────┐ │
-│                                        │ ▾ Layers        │ │
-│                                        │   ☑ Points      │ │
-│                                        │   ☑ Cameras     │ │
-│                                        │   ☑ Grid        │ │
-│                                        │   ☑ Patches     │ │
-│                                        │ ▾ Size          │ │
-│                                        │   Points  ──●── │ │
-│                                        │   ∞ (px)  ─●─── │ │
-│                                        │   Scene   ──●── │ │
-│                                        │ ▸ Patches       │ │
-│                                        │ ▾ Camera        │ │
-│                                        │   FOV 45°  ─●── │ │
-│                                        │   [Reset FOV]   │ │
-│                                        │ ▸ Advanced      │ │
-│                                        │ ▸ Debug         │ │
-│                                        └─────────────────┘ │
+│                                      ┌───────────────────┐ │
+│                                      │ ▾ Layers          │ │
+│                                      │   ☑ Points        │ │
+│                                      │   ☑ Camera Images │ │
+│                                      │   ☑ Grid          │ │
+│                                      │   ☑ Patches       │ │
+│                                      │ ▾ Size            │ │
+│                                      │   Points  ──●──   │ │
+│                                      │   ∞ (px)  ─●───   │ │
+│                                      │   Scene   ──●──   │ │
+│                                      │ ▸ Patches         │ │
+│                                      │ ▾ Camera          │ │
+│                                      │   FOV 45°  ─●──   │ │
+│                                      │   [Reset FOV]     │ │
+│                                      │ ▸ Advanced        │ │
+│                                      │ ▸ Debug           │ │
+│                                      └───────────────────┘ │
 │  ⟂                          Point3D #841 | depth: 2.13     │
 └────────────────────────────────────────────────────────────┘
 ```

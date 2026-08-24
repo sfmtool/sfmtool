@@ -190,7 +190,7 @@ impl Viewer3D {
 
         section(ui, "layers", "Layers", true, |ui| {
             ui.checkbox(&mut state.show_points, "Points");
-            ui.checkbox(&mut state.show_camera_images, "Cameras");
+            ui.checkbox(&mut state.show_camera_images, "Camera Images");
             ui.checkbox(&mut state.show_grid, "Grid");
             // Greyed rather than hidden: unlike the Patches *section*, the
             // toggle stays visible so the capability remains discoverable on a

@@ -116,11 +116,6 @@ pub struct CameraRef {
     pub camera: u32,
 }
 
-// `index` and `index_in` are shaped after [`ImageRef`] and [`PointRef`] and
-// unwrap a ref the same way, but nothing unwraps a camera ref yet: the Scene
-// Graph's Camera Intrinsics rows are the first reader, and they are a later
-// phase of `specs/gui/gui-camera-intrinsics.md`.
-#[allow(dead_code)]
 impl CameraRef {
     pub fn new(recon: ReconId, camera: usize) -> Self {
         Self {
@@ -194,6 +189,22 @@ pub static TINT_PALETTE: [TintColor; 7] = [
         rgb: [204, 121, 167],
     },
 ];
+
+/// The color a **selected camera's sibling images** are marked in: every
+/// frustum whose image uses the selected intrinsics, and the same images'
+/// thumbnails in the Image Browser.
+///
+/// Declared here, once, because two panels have to say the same thing in the
+/// same color for the highlight to read as one statement about one set of
+/// images — `scene_renderer::upload::frustums` packs it into the per-image
+/// color buffer and `image_browser` strokes a border with it.
+///
+/// A violet, chosen to sit clear of the three highlights already on a frustum:
+/// white (the node's own), cyan (the selected image) and orange (the selected
+/// point's track). The three of them are **ranked, not mixed** — selected image
+/// first, track member next, camera sibling last — so this is the color a
+/// frustum keeps only when neither of the other two claims it.
+pub const SIBLING_HIGHLIGHT_RGB: [u8; 3] = [170, 130, 255];
 
 /// How far a tinted node's colors are pulled toward the tint.
 ///
@@ -432,6 +443,50 @@ pub fn world_points(node: &SceneNode) -> Vec<nalgebra::Point3<f64>> {
         .iter()
         .map(|p| node.transform.apply_to_point(&p.position))
         .collect()
+}
+
+/// The centres of the node's images taken through camera `index`, in the
+/// **shared world space** — the camera-row counterpart of [`world_points`].
+///
+/// What the Scene panel's double-click on a camera row frames. Empty when no
+/// image uses that camera, which `zoom_to_fit_points` treats as nothing to
+/// frame rather than as a degenerate one.
+pub fn camera_world_centres(node: &SceneNode, index: usize) -> Vec<nalgebra::Point3<f64>> {
+    node.recon
+        .images
+        .iter()
+        .filter(|image| image.camera_index as usize == index)
+        .map(|image| node.transform.apply_to_point(&image.camera_center()))
+        .collect()
+}
+
+/// The images of `node` taken through the **selected** camera, as indices
+/// local to it.
+///
+/// The set every panel marks in [`SIBLING_HIGHLIGHT_RGB`]: selecting a camera
+/// is a statement about a set of images, and the rest of the viewer should say
+/// which ones.
+///
+/// Empty in the two cases where the highlight would say nothing: no camera of
+/// this node is selected, and — the interesting one — *every* image in the node
+/// uses it. Highlighting the whole of a single-camera reconstruction is correct
+/// and uninformative, so it is suppressed rather than drawn.
+pub fn camera_sibling_images(node: &SceneNode, selected: Option<CameraRef>) -> Vec<usize> {
+    let Some(index) = selected.and_then(|camera| camera.index_in(node.id)) else {
+        return Vec::new();
+    };
+    let siblings: Vec<usize> = node
+        .recon
+        .images
+        .iter()
+        .enumerate()
+        .filter(|(_, image)| image.camera_index as usize == index)
+        .map(|(i, _)| i)
+        .collect();
+    if siblings.len() == node.recon.images.len() {
+        return Vec::new();
+    }
+    siblings
 }
 
 /// What the viewport's top-left stats overlay reports.

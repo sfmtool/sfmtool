@@ -286,7 +286,7 @@ fn hud_layer_toggles_are_present_and_checked_once_a_scene_is_loaded() {
     let app = attach(_guard.child());
     load_demo_data(&app);
 
-    for name in ["Points", "Cameras", "Grid"] {
+    for name in ["Points", "Camera Images", "Grid"] {
         let el = app
             .locator(&format!(r#"check_box[name="{name}"]"#))
             .wait_attached(CONTENT_TIMEOUT)

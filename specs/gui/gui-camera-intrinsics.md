@@ -1,7 +1,8 @@
 # Camera Intrinsics: Scene-Graph Node, Image Overlay, Detail Panel
 
-**Status:** design — phase 1 (vocabulary and data model) and phase 2
-(`camera::report` and `parameter_names()`) implemented; phases 3–6 not yet.
+**Status:** design — phase 1 (vocabulary and data model), phase 2
+(`camera::report` and `parameter_names()`) and phase 3 (the Scene Graph group)
+implemented; phases 4–6 not yet.
 
 The viewer can show you where a camera *is* and what it *saw*, but nothing in it
 tells you what the camera *is*: which intrinsic model, what focal length, how far
@@ -200,6 +201,12 @@ impl CameraModel {
 }
 ```
 
+Values come with them: `CameraIntrinsics::parameters()` returns
+`(name, value)` in that same order, pairing `parameter_names()` with what
+`SfmrCamera::from` writes, so a table can never show a parameter the file does
+not carry or lose one it does. That is what the tree's hover tooltip and the
+panel's table are both built from.
+
 The GUI and `sfm inspect` should agree glyph for glyph, so that a user can diff
 the panel against the CLI. Pointing the Python table at this accessor through
 the PyO3 bindings is the obvious follow-up and is **out of scope here** — noted
@@ -347,13 +354,19 @@ The node body gains a group above the images group, so its two rows read:
   it. A camera no image references reads `0 images` and is drawn weak — that
   state is legal in a `.sfmr` and worth seeing rather than hiding.
 - Models flagged beta in the registry (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`)
-  carry a `β` suffix on the model name with the registry's beta note as the
-  hover tooltip.
+  carry a `β` suffix on the model name, and the registry's beta note
+  (`CameraModel::beta_note`) is appended to the row's hover tooltip under a
+  separator. Not a tooltip on the `β` itself: egui hangs a tooltip off a whole
+  widget, and the row is one button, so a sub-span of its label has nowhere to
+  put one.
 - **Click**: `select_camera(Some(CameraRef))` — with the deselect-the-image
   consequence from the coupling table.
 - **Double-click**: zoom the 3D viewport to fit every image using this camera —
-  the same framing `zoom_to_node` does, over that subset of the node's cameras
-  rather than all of them. For a rig this frames one sensor's whole trajectory
+  the same `zoom_to_fit_points` call `zoom_to_node` makes, over that subset of
+  the node's **camera centres** rather than over the node's points. (The two
+  frame different things, which the first draft of this line elided: a node's
+  zoom-to-fit frames its point cloud, and a camera has no points of its own.)
+  For a rig this frames one sensor's whole trajectory
   in a single gesture, which nothing else in the viewer does. It is the tree's
   third double-click target, and consistent with the other two: a double-click
   frames what the row denotes, and a camera row denotes a set of images.
@@ -364,8 +377,9 @@ The node body gains a group above the images group, so its two rows read:
   visible in the tree for free.
 - Rows are laid out plainly, not virtualized: the count is bounded by the number
   of distinct intrinsics, which is small even in the pathological case, and the
-  list is capped at `CAMERA_LIST_HEIGHT` with a scroll area like the images
-  list.
+  list is capped at `LIST_MAX_HEIGHT` — the same cap the images list uses,
+  renamed from `CAMERA_LIST_HEIGHT` in this phase because it is now the height
+  of two different lists and was never a list of cameras.
 - **No hover channel.** Cross-panel hover is a two-field protocol
   (`hovered_image` / `hovered_point`) with an ownership rule per panel
   ([gui-cross-panel-hover.md](gui-cross-panel-hover.md)); a third field would
@@ -772,9 +786,12 @@ Selecting a camera is a statement about a *set* of images, and the rest of the
 viewer should say so:
 
 - **3D viewport** — every frustum whose image uses the selected camera is drawn
-  in the "sibling" colour, reusing the per-frustum colour channel the selected-
-  track highlight already occupies (`gui-camera-views.md` § "Selection
-  highlighting"). The selected image itself keeps its own stronger highlight.
+  in the "sibling" colour — a violet, `scene::SIBLING_HIGHLIGHT_RGB`, declared
+  once and shared with the browser — reusing the per-frustum colour channel the
+  selected-track highlight already occupies (`gui-camera-views.md` § "Selection
+  highlighting"). Like every other highlight it is written at full alpha, which
+  is what keeps a node tint from dragging it toward the tint colour.
+  The selected image itself keeps its own stronger highlight.
   The two highlights can coexist because they are ranked, not mixed: selected
   image > selected-track member > selected-camera sibling.
 - **Image Browser** — the same set gets a thin border in the same colour.
@@ -900,6 +917,15 @@ Two caveats remain, both named in the tests rather than left implicit:
 - The reconstruction row shows all three counts at a comfortable panel width and
   elides them in the specified order — cameras, then images — as the width
   shrinks, restoring them when it grows back.
+- The camera rows raise no cross-panel hover — the two hover fields stay `None`
+  with the pointer resting on one — and the group row draws no eye (counted as
+  glyphs painted, so an eye added by accident is caught rather than merely
+  unasserted).
+- The sibling set is the images sharing the selected camera, empty for a camera
+  in another node, and empty when *every* image in the node uses it; and on the
+  renderer side `frustum_colors` resolves an image that is selected *and* in
+  the track *and* a sibling to the strongest of the three, with all three
+  written at the full alpha the tint exempts.
 - The Intrinsics panel renders its empty state with no selection, its populated
   state with one, and the extrinsics block only when an image is selected;
   the `P` row is absent for a fisheye fixture.
@@ -922,7 +948,9 @@ from datasets, since no checked-in dataset exercises thin-prism or
 equirectangular.
 
 No new windowed (`ui_basic`) tests: nothing here depends on real OS input the
-way the context menu does.
+way the context menu does. One existing windowed assertion moves — the HUD
+Layers checkbox is matched by name, and phase 3 renames it to
+`Camera Images`.
 
 ---
 
@@ -942,11 +970,11 @@ Each phase leaves the viewer in a shippable state.
    [gui-camera-views.md](gui-camera-views.md) and
    [gui-viewport-hud.md](gui-viewport-hud.md) name `AppState`'s *global*
    `show_camera_images` layer switch, which already carried the new name.
-   What those two leave behind is one label: the HUD's Layers checkbox still
-   reads `Cameras` (`viewer_3d/hud.rs`, asserted by name in the windowed
-   `ui_basic` tests) where the HUD spec's own section table already calls it
-   `Show Camera Images`. Renaming it is the same bug fix and is left as
-   follow-up, since it moves a windowed test.
+   What those two left behind was one label: the HUD's Layers checkbox read
+   `Cameras` (`viewer_3d/hud.rs`, asserted by name in the windowed `ui_basic`
+   tests) where the HUD spec's own section table already called it
+   `Show Camera Images`. Renaming it is the same bug fix; it moved a windowed
+   test, so it was deferred to phase 3, which did it.
 2. **`camera::report` and `parameter_names()`** — *done.* Pure core work, fully
    unit-tested, with no consumer yet. `CameraModel::parameter_names()` is
    generated by the registry macro for the thirteen fixed-arity models and
@@ -967,8 +995,33 @@ Each phase leaves the viewer in a shippable state.
    including the `bspline_c10`-before-`bspline_c2` ordering this accessor
    exists to avoid. "The GUI and `sfm inspect` agree glyph for glyph" is
    therefore a goal of that follow-up, not a fact today.
-3. **Scene Graph group.** The Camera Intrinsics rows, click and double-click,
-   the cross-panel sibling highlight.
+3. **Scene Graph group** — *done.* The Camera Intrinsics rows, click and
+   double-click, the cross-panel sibling highlight. It also cleared the two
+   residues phase 1 left: the HUD's Layers checkbox now reads
+   `Camera Images` (with its windowed `ui_basic` assertion), and the per-image
+   row ids and helpers are named for images (`image_list`, `image_{index}`,
+   `LIST_MAX_HEIGHT`) rather than for cameras — a vocabulary this phase
+   collides with head-on, since the tree now has real camera rows.
+
+   Three things this phase settled against the real code:
+
+   - The registry had **no beta flag** to read: "flagged beta in the registry"
+     described two doc comments and a paragraph in
+     [sfmtool-camera-models.md](../formats/sfmtool-camera-models.md), nothing a
+     panel could query. `CameraModel::beta_note()` is that flag, one note
+     shared by the two spline models, with the corpus test asserting no other
+     model acquires it.
+   - The tooltip and the phase-4 table need parameter **values** in declaration
+     order, and phase 2 built only the names. `CameraIntrinsics::parameters()`
+     pairs `parameter_names()` with what `SfmrCamera::from` writes, so the two
+     cannot disagree about which parameters a model has.
+   - Double-click frames camera *centres*; see the row's own bullet above.
+
+   The sibling highlight's colour is `scene::SIBLING_HIGHLIGHT_RGB`, declared
+   once because the frustum colour buffer and the Image Browser's border both
+   draw it, and the ranking is enforced in `frustum_colors` (weakest written
+   first, each stronger one overwriting) and mirrored by the browser's
+   `!selected && !in_track` guard.
 4. **Intrinsics panel.** Header, parameters, derived table, `K`, extrinsics,
    rig block, copy menu. No plot yet — the tables alone already replace the
    `sfm inspect` round trip.

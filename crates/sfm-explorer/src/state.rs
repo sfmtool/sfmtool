@@ -526,10 +526,10 @@ impl AppState {
     /// it already uses is not, and clearing there would throw an image away
     /// for clicking the row that is already highlighted for it.
     ///
-    /// No UI writes it yet — the group of camera rows that will is a later
-    /// phase of `specs/gui/gui-camera-intrinsics.md`. The rule lands with the
-    /// field so that whatever calls it inherits the invariant already tested.
-    #[allow(dead_code)]
+    /// Written from the Scene panel's Camera Intrinsics rows, and the only
+    /// place `selected_camera` is set to a camera: everything else — the
+    /// recon-scoped filters, [`AppState::select_image`] — either clears it or
+    /// derives it from an image, so the invariant has one door.
     pub fn select_camera(&mut self, camera: Option<CameraRef>) {
         self.selected_camera = camera;
         let Some(camera) = camera else {

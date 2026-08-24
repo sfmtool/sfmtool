@@ -182,6 +182,7 @@ impl ImageBrowser {
         selected_image: Option<usize>,
         track_images: &[usize],
         hover_track_images: &[usize],
+        sibling_images: &[usize],
         hovered_image: Option<usize>,
         camera_view_image: Option<usize>,
         gesture_events: &[GestureEvent],
@@ -521,10 +522,15 @@ impl ImageBrowser {
             // Concentric highlight borders (outermost to innermost):
             //   White  (6px) = camera view mode
             //   Orange (4px) = track membership
+            //   Violet (3px) = taken through the selected camera
             //   Cyan   (2px) = image selection
             let is_camera_view = camera_view_image == Some(i);
             let is_in_track = track_images.contains(&i);
             let is_selected = selected_image == Some(i);
+            // Ranked rather than mixed, matching the frustums: the selected
+            // image and the selected point's track both outrank sharing a
+            // lens, and an image is very often all three at once.
+            let is_sibling = !is_selected && !is_in_track && sibling_images.contains(&i);
             if is_camera_view {
                 painter.rect_stroke(
                     thumb_rect.expand(6.0),
@@ -538,6 +544,17 @@ impl ImageBrowser {
                     thumb_rect.expand(4.0),
                     0.0,
                     egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 165, 0)),
+                    egui::StrokeKind::Outside,
+                );
+            }
+            if is_sibling {
+                // Thin: it marks a *set*, often a large one, and it is the
+                // weakest of the three highlights.
+                let [r, g, b] = crate::scene::SIBLING_HIGHLIGHT_RGB;
+                painter.rect_stroke(
+                    thumb_rect.expand(3.0),
+                    0.0,
+                    egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(r, g, b)),
                     egui::StrokeKind::Outside,
                 );
             }

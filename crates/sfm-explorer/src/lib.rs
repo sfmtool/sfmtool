@@ -39,7 +39,7 @@ use egui_dock::{DockState, NodeIndex};
 use image_browser::ImageBrowser;
 use image_detail::ImageDetail;
 use point_track_detail::PointTrackDetail;
-use scene::{ImageRef, PointRef};
+use scene::{CameraRef, ImageRef, PointRef};
 use scene_graph::SceneGraphPanel;
 use scene_renderer::SceneRenderer;
 use state::AppState;
@@ -143,6 +143,7 @@ pub fn run() {
         prev_frustum_length_scale: 0.0,
         prev_frustum_size_multiplier: 0.0,
         prev_selected_image: None,
+        prev_selected_camera: None,
         prev_selected_point: None,
         prev_hidden_image: None,
         prev_transform_epoch: 0,
@@ -210,6 +211,10 @@ pub(crate) struct App {
     pub(crate) prev_frustum_length_scale: f32,
     pub(crate) prev_frustum_size_multiplier: f32,
     pub(crate) prev_selected_image: Option<ImageRef>,
+    /// `AppState::selected_camera` as of the previous frame: the sibling
+    /// highlight is a per-image frustum color, so a camera selection moves it
+    /// exactly as an image or point selection moves the other two.
+    pub(crate) prev_selected_camera: Option<CameraRef>,
     pub(crate) prev_selected_point: Option<PointRef>,
     pub(crate) prev_hidden_image: Option<ImageRef>,
     /// `AppState::transform_epoch` as of the previous frame — how the upload

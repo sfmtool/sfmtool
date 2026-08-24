@@ -391,7 +391,7 @@ fn update_frustum_colors_is_a_no_op_before_any_upload() {
     let r = SceneRenderer::new();
     // No bundle at all, let alone a color buffer — must return quietly rather
     // than panic.
-    r.update_frustum_colors(&queue, RECON, 8, Some(0), Some(1), &[2, 3]);
+    r.update_frustum_colors(&queue, RECON, 8, Some(0), Some(1), &[2, 3], &[4]);
 }
 
 #[test]
@@ -403,7 +403,7 @@ fn update_frustum_colors_ignores_a_reconstruction_that_is_not_loaded() {
 
     // Colors are written into the *owning* node's buffer; an id with no bundle
     // must not fall through to whichever one happens to be loaded.
-    r.update_frustum_colors(&queue, OTHER, 8, Some(0), None, &[]);
+    r.update_frustum_colors(&queue, OTHER, 8, Some(0), None, &[], &[]);
 }
 
 #[test]
@@ -415,7 +415,7 @@ fn update_frustum_colors_tolerates_out_of_range_indices() {
 
     // Every index is past the end; each is individually bounds-checked, so
     // this must not panic or write out of range.
-    r.update_frustum_colors(&queue, RECON, 8, Some(99), Some(99), &[99, 100]);
+    r.update_frustum_colors(&queue, RECON, 8, Some(99), Some(99), &[99, 100], &[101]);
 }
 
 // ── thumbnails ──────────────────────────────────────────────────────────
@@ -925,16 +925,16 @@ fn every_frustum_highlight_color_is_written_at_the_full_alpha_the_tint_exempts()
     use super::frustums::{frustum_colors, FRUSTUM_ALPHA_DEFAULT, FRUSTUM_ALPHA_HIGHLIGHT};
 
     let alpha = |packed: u32| packed >> 24;
-    let colors = frustum_colors(6, Some(1), Some(5), &[2, 3]);
+    let colors = frustum_colors(8, Some(1), Some(5), &[2, 3], &[4, 6]);
 
     // Plain frustums: tintable.
-    for &index in &[0usize, 4] {
+    for &index in &[0usize, 7] {
         assert_eq!(alpha(colors[index]), FRUSTUM_ALPHA_DEFAULT);
         assert!(alpha(colors[index]) < FRUSTUM_ALPHA_HIGHLIGHT);
     }
-    // The selected camera and the selected point's track cameras: highlights,
-    // and so exempt from the tint.
-    for &index in &[1usize, 2, 3] {
+    // The selected image, the selected point's track, and the selected
+    // camera's siblings: highlights, and so exempt from the tint.
+    for &index in &[1usize, 2, 3, 4, 6] {
         assert_eq!(
             alpha(colors[index]),
             FRUSTUM_ALPHA_HIGHLIGHT,
@@ -943,6 +943,34 @@ fn every_frustum_highlight_color_is_written_at_the_full_alpha_the_tint_exempts()
     }
     // The camera being viewed through is discarded outright.
     assert_eq!(colors[5], 0);
+}
+
+/// The three highlights are **ranked, not mixed**: selected image beats track
+/// membership beats sharing the selected camera's intrinsics. An image is very
+/// often all three at once — the photo you are looking at is in its own track
+/// and shares its own lens — so what it is drawn as has to be decided rather
+/// than blended.
+#[test]
+fn a_frustum_that_is_all_three_highlights_at_once_is_drawn_as_the_strongest() {
+    use super::frustums::frustum_colors;
+
+    // Image 0 is selected, in the track and a sibling; image 1 is both a track
+    // camera and a sibling; image 2 is only a sibling.
+    let all = frustum_colors(4, Some(0), None, &[0, 1], &[0, 1, 2]);
+    let selected_only = frustum_colors(4, Some(0), None, &[], &[]);
+    let track_only = frustum_colors(4, None, None, &[1], &[]);
+    let sibling_only = frustum_colors(4, None, None, &[], &[2]);
+
+    assert_eq!(all[0], selected_only[0], "selection lost to a weaker rank");
+    assert_eq!(all[1], track_only[1], "the track lost to a weaker rank");
+    assert_eq!(all[2], sibling_only[2], "the sibling color was not applied");
+    // And the three are actually distinguishable, which is the point of
+    // ranking them.
+    assert_ne!(all[0], all[1]);
+    assert_ne!(all[1], all[2]);
+    assert_ne!(all[0], all[2]);
+    // A frustum in none of them keeps the node's own color.
+    assert_eq!(all[3], selected_only[3]);
 }
 
 // ── effective visibility (eye AND solo) ─────────────────────────────────

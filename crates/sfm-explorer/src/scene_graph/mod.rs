@@ -13,6 +13,8 @@
 //!
 //! ```text
 //! ▾ 👁 S 🖱 ▪ run_a       1.2M pts · 243 imgs · 2 cams   ← S = solo, ▪ = tint
+//!   ▾   Camera Intrinsics (2)      ← no eye: intrinsics draw nothing
+//!         #0  OPENCV_FISHEYE  480×480  f 240.1  26 images
 //!   ▾ 👁 Camera Images (243)
 //!       IMG_0001.jpg              ← virtualized, `ScrollArea::show_rows`
 //!   ▾ 👁 Points (1,204,551 · 12 at ∞) ∞
@@ -34,19 +36,23 @@
 //! such a list would misbehave mechanically as well as ergonomically.
 
 use eframe::egui;
+use sfmtool_core::CameraIntrinsics;
 
 use crate::align::{AlignOptions, AlignSource};
-use crate::scene::{point_id, ImageRef, NodeTint, PointRef, ReconId, SceneNode, TINT_PALETTE};
+use crate::scene::{
+    point_id, CameraRef, ImageRef, NodeTint, PointRef, ReconId, SceneNode, TINT_PALETTE,
+};
 use crate::state::AppState;
 
-/// Height of one tree row. Fixed so the camera list can be virtualized, and so
+/// Height of one tree row. Fixed so the image list can be virtualized, and so
 /// the eye/cursor toggles line up down the tree regardless of label height.
 const ROW_HEIGHT: f32 = 18.0;
 
-/// Height of the virtualized image list inside an expanded Camera Images
-/// group. Bounded rather than unbounded so a 50K-image node cannot push every
-/// node below it off the panel.
-const CAMERA_LIST_HEIGHT: f32 = 220.0;
+/// Height cap on a list drawn inside an expanded group: the virtualized image
+/// list under Camera Images, and the camera list under Camera Intrinsics.
+/// Bounded rather than unbounded so a 50K-image node cannot push every node
+/// below it off the panel.
+const LIST_MAX_HEIGHT: f32 = 220.0;
 
 /// Width reserved for each toggle glyph, so labels align across rows whether or
 /// not a row has an interaction cursor.
@@ -95,11 +101,16 @@ pub(crate) fn row_id(recon: ReconId, key: &str) -> egui::Id {
 /// What the Scene panel reports back to `dock.rs`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SceneGraphResponse {
-    /// A camera row was clicked.
+    /// An image row was clicked.
     pub select_image: Option<ImageRef>,
+    /// A Camera Intrinsics row was clicked.
+    pub select_camera: Option<CameraRef>,
+    /// A Camera Intrinsics row was double-clicked — frame every image taken
+    /// through it in the 3D viewport.
+    pub zoom_to_camera: Option<CameraRef>,
     /// The Points group's `selected:` row was clicked.
     pub select_point: Option<PointRef>,
-    /// A camera row was double-clicked — enter/switch camera view.
+    /// An image row was double-clicked — enter/switch camera view.
     pub request_camera_view: Option<ImageRef>,
     /// Image under the pointer, for cross-panel hover.
     pub hovered_image: Option<ImageRef>,
@@ -135,7 +146,7 @@ pub struct SceneGraphResponse {
 /// own memory under [`row_id`], and everything else is read from `AppState`.
 #[derive(Default)]
 pub struct SceneGraphPanel {
-    /// The image selection as of the previous frame. A camera list scrolls its
+    /// The image selection as of the previous frame. An image list scrolls its
     /// selected row into view only when this *changes*, so the panel does not
     /// fight the user's own scrolling.
     prev_selected_image: Option<ImageRef>,
@@ -204,6 +215,7 @@ impl SceneGraphPanel {
         let selected_recon = state.selected_recon;
         let solo = state.solo;
         let selected_image = state.selected_image;
+        let selected_camera = state.selected_camera;
         let selected_point = state.selected_point;
         let hovered_image = state.hovered_image;
         let hovered_point = state.hovered_point;
@@ -224,6 +236,7 @@ impl SceneGraphPanel {
                         soloed: solo == Some(node.id),
                         visible: crate::scene::is_visible(node, solo),
                         selected_image,
+                        selected_camera,
                         selected_point,
                         hovered_image,
                         hovered_point,
@@ -282,6 +295,11 @@ struct NodeContext {
     /// having been touched.
     visible: bool,
     selected_image: Option<ImageRef>,
+    /// The selected intrinsics. By the coupling invariant this is `Some`
+    /// whenever `selected_image` is, and names that image's camera — so one
+    /// highlight rule on the camera rows covers both "the camera you picked"
+    /// and "the camera the image you picked was taken through".
+    selected_camera: Option<CameraRef>,
     selected_point: Option<PointRef>,
     hovered_image: Option<ImageRef>,
     hovered_point: Option<PointRef>,
@@ -301,6 +319,7 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
         show_node_header(ui, node, ctx, out);
     });
     header.body(|ui| {
+        show_camera_intrinsics_group(ui, node, ctx, out);
         show_camera_images_group(ui, node, ctx, out);
         show_points_group(ui, node, ctx, out);
         if node.has_patch_data() {
@@ -598,6 +617,178 @@ fn show_align_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
     out.hit(row_id(id, "align_menu"), menu.response);
 }
 
+/// Camera count up to which the Camera Intrinsics group opens by itself.
+///
+/// A typical reconstruction has one camera and a rig has two or three: for
+/// those the list *is* the answer, and hiding it behind a triangle costs a
+/// click for nothing. Beyond a handful — a per-image-intrinsics solve can
+/// produce hundreds — it behaves like the image list and stays out of the way.
+const INTRINSICS_AUTO_EXPAND_MAX: usize = 4;
+
+/// `[▸] Camera Intrinsics (2)`, expanding to one row per intrinsics record.
+///
+/// **No eye.** Every other group row's eye drives a visibility flag on the
+/// node, and intrinsics have no geometry of their own to hide; the column is
+/// left blank rather than filled with a disabled glyph that would answer
+/// nothing, and the label indents to match the groups above and below it.
+///
+/// Placed above Camera Images because it is the coarser of the two: an image
+/// row denotes one posed view, a camera row denotes the whole set of them that
+/// share a lens.
+fn show_camera_intrinsics_group(
+    ui: &mut egui::Ui,
+    node: &SceneNode,
+    ctx: &NodeContext,
+    out: &mut TreeOutput,
+) {
+    let count = node.recon.cameras.len();
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        row_id(node.id, "intrinsics"),
+        count <= INTRINSICS_AUTO_EXPAND_MAX,
+    );
+    let header = state.show_header(ui, |ui| {
+        ui.set_height(ROW_HEIGHT);
+        // The blank eye column, *allocated* rather than skipped: an eye is a
+        // widget, so only allocating the same box keeps this label on the same
+        // x as the ones that have one.
+        ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH, ROW_HEIGHT), egui::Sense::hover());
+        ui.label(format!("Camera Intrinsics ({count})"));
+    });
+    header.body(|ui| show_camera_rows(ui, node, ctx, out));
+}
+
+/// The per-camera rows: `#0  OPENCV_FISHEYE  480×480  f 240.1  26 images`.
+///
+/// Laid out plainly rather than virtualized — the count is bounded by the
+/// number of *distinct* intrinsics, which is small even in the pathological
+/// per-image case — but capped at [`LIST_MAX_HEIGHT`] behind a scroll area like
+/// the image list, so that pathological case cannot bury the node below it
+/// either.
+fn show_camera_rows(ui: &mut egui::Ui, node: &SceneNode, ctx: &NodeContext, out: &mut TreeOutput) {
+    let cameras = &node.recon.cameras;
+    if cameras.is_empty() {
+        ui.weak("No cameras");
+        return;
+    }
+    // One pass over the images rather than one per row: the rows want a count
+    // each, and the image list is the long one.
+    let mut uses = vec![0usize; cameras.len()];
+    for image in &node.recon.images {
+        if let Some(count) = uses.get_mut(image.camera_index as usize) {
+            *count += 1;
+        }
+    }
+
+    egui::ScrollArea::vertical()
+        .id_salt(row_id(node.id, "intrinsics_list"))
+        .max_height(LIST_MAX_HEIGHT)
+        // Shrink vertically: two cameras should take two rows, not the 220px
+        // box the image list always fills.
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for (index, camera) in cameras.iter().enumerate() {
+                let reference = CameraRef::new(node.id, index);
+                let selected = ctx.selected_camera == Some(reference);
+                let mut text = egui::RichText::new(camera_row_text(index, camera, uses[index]));
+                if uses[index] == 0 && !selected {
+                    // A camera no image references is legal in a `.sfmr` and
+                    // worth seeing rather than hiding — but it describes
+                    // nothing that is on screen, so it reads weak.
+                    text = text.weak();
+                }
+                // Salted like the image rows, so a row's identity is its camera
+                // index rather than its position in whatever slice is drawn.
+                let row = ui
+                    .push_id(index, |ui| ui.add(egui::Button::selectable(selected, text)))
+                    .inner
+                    .on_hover_ui(|ui| camera_tooltip(ui, camera));
+                let row = out.hit(row_id(node.id, &format!("intrinsics_{index}")), row);
+                if row.clicked() {
+                    out.response.select_camera = Some(reference);
+                }
+                if row.double_clicked() {
+                    out.response.zoom_to_camera = Some(reference);
+                }
+                // No hover channel, deliberately: cross-panel hover is a
+                // two-field protocol with an ownership rule per panel, and a
+                // third field threaded through every panel would buy a preview
+                // of a selection that is one click away.
+            }
+        });
+}
+
+/// `#0  OPENCV_FISHEYE  480×480  f 240.1  26 images` — one intrinsics record on
+/// one line, with a `β` on a model whose parameterization is not yet frozen.
+fn camera_row_text(index: usize, camera: &CameraIntrinsics, uses: usize) -> String {
+    let beta = if camera.model.beta_note().is_some() {
+        " β"
+    } else {
+        ""
+    };
+    let images = if uses == 1 {
+        "1 image".to_string()
+    } else {
+        format!("{uses} images")
+    };
+    format!(
+        "#{index}  {}{beta}  {}×{}  {}  {images}",
+        camera.model.model_name(),
+        camera.width,
+        camera.height,
+        focal_text(camera),
+    )
+}
+
+/// `f 240.1`, or `f 240.1/239.7` when the model carries two focal lengths and
+/// they differ.
+///
+/// One decimal, because the row is a summary — the exact values are in the
+/// hover tooltip one pointer-rest away.
+fn focal_text(camera: &CameraIntrinsics) -> String {
+    let (fx, fy) = camera.focal_lengths();
+    if fx == fy {
+        format!("f {fx:.1}")
+    } else {
+        format!("f {fx:.1}/{fy:.1}")
+    }
+}
+
+/// The hover tooltip: the model's whole parameter list, in the order
+/// [`sfmtool_core::CameraModel::parameter_names`] declares.
+///
+/// That order is the point — it is the one `sfm inspect` prints, so the tree
+/// and the CLI can be read side by side rather than diffed against a
+/// `BTreeMap`'s lexicographic order, which separates related terms and puts
+/// `bspline_c10` before `bspline_c2`.
+///
+/// A beta model's note lands here too, under a separator, rather than on the
+/// `β` itself: egui hangs a tooltip off a whole widget, and the row is one
+/// button — so a sub-span of its label has nowhere of its own to put one.
+fn camera_tooltip(ui: &mut egui::Ui, camera: &CameraIntrinsics) {
+    ui.label(format!(
+        "{} · {}×{}",
+        camera.model.model_name(),
+        camera.width,
+        camera.height
+    ));
+    let parameters = camera.parameters();
+    let width = parameters
+        .iter()
+        .map(|(name, _)| name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut table = String::new();
+    for (name, value) in &parameters {
+        table.push_str(&format!("{name:<width$}  {value:>14.6}\n"));
+    }
+    ui.label(egui::RichText::new(table.trim_end()).monospace());
+    if let Some(note) = camera.model.beta_note() {
+        ui.separator();
+        ui.label(egui::RichText::new(note).weak());
+    }
+}
+
 /// `[▸] [👁] Camera Images (243)`, expanding to a virtualized per-image list.
 ///
 /// Counts `recon.images.len()`: a `.sfmr` *image* is one posed view, and the
@@ -656,11 +847,11 @@ fn show_camera_image_rows(
 
     let row_height = ROW_HEIGHT + ui.spacing().item_spacing.y;
     let mut area = egui::ScrollArea::vertical()
-        .id_salt(row_id(node.id, "camera_list"))
-        .max_height(CAMERA_LIST_HEIGHT)
+        .id_salt(row_id(node.id, "image_list"))
+        .max_height(LIST_MAX_HEIGHT)
         .auto_shrink([false, false]);
     if let Some(row) = scroll_target {
-        let centered = row as f32 * row_height - CAMERA_LIST_HEIGHT / 2.0;
+        let centered = row as f32 * row_height - LIST_MAX_HEIGHT / 2.0;
         area = area.vertical_scroll_offset(centered.max(0.0));
     }
     area.show_rows(ui, ROW_HEIGHT, count, |ui, range| {
@@ -688,7 +879,7 @@ fn show_camera_image_rows(
             let row = ui
                 .push_id(index, |ui| ui.add(egui::Button::selectable(selected, text)))
                 .inner;
-            let row = out.hit(row_id(node.id, &format!("camera_{index}")), row);
+            let row = out.hit(row_id(node.id, &format!("image_{index}")), row);
             if row.clicked() {
                 out.response.select_image = Some(image);
             }

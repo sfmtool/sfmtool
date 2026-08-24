@@ -85,6 +85,28 @@ fn two_camera_node(path: &str) -> SceneNode {
     SceneNode::from_path(std::path::Path::new(path), recon)
 }
 
+/// [`two_camera_node`] with its second camera referenced by nothing — a state
+/// a `.sfmr` allows and the tree has to show honestly rather than hide.
+fn unused_camera_node(path: &str) -> SceneNode {
+    let mut node = two_camera_node(path);
+    for image in node.recon.images.iter_mut() {
+        image.camera_index = 0;
+    }
+    node
+}
+
+/// A node carrying `cameras` intrinsics records (at least two), for the
+/// expand-by-default threshold, where only the count matters.
+fn camera_count_node(path: &str, cameras: usize) -> SceneNode {
+    let mut node = two_camera_node(path);
+    let template = node.recon.cameras[0].clone();
+    while node.recon.cameras.len() < cameras {
+        node.recon.cameras.push(template.clone());
+    }
+    node.recon.metadata.camera_count = node.recon.cameras.len() as u32;
+    node
+}
+
 /// A node whose reconstruction has *distinct* camera poses — unlike
 /// [`recon_named`], which clones one image's pose for every row. Alignment fits
 /// on camera centres, so it needs a real camera ring.
@@ -353,7 +375,7 @@ fn set_open(ctx: &egui::Context, id: egui::Id, open: bool) {
 // ── Tree structure ──────────────────────────────────────────────────────
 
 #[test]
-fn every_loaded_node_gets_a_row_with_its_camera_and_point_groups() {
+fn every_loaded_node_gets_a_row_with_its_three_groups() {
     let mut state = shared_shoot(3);
     let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
     let (_panel, ctx) = settled(&mut state);
@@ -364,30 +386,34 @@ fn every_loaded_node_gets_a_row_with_its_camera_and_point_groups() {
             drawn(&ctx, row_id(id, "camera_images")),
             "Camera Images row missing"
         );
+        assert!(
+            drawn(&ctx, row_id(id, "intrinsics")),
+            "Camera Intrinsics row missing"
+        );
         assert!(drawn(&ctx, row_id(id, "points")), "Points row missing");
     }
 }
 
 #[test]
-fn the_camera_rows_appear_only_once_the_cameras_group_is_expanded() {
+fn the_image_rows_appear_only_once_the_camera_images_group_is_expanded() {
     let mut state = shared_shoot(1);
     let id = state.scene[0].id;
     let (mut panel, ctx) = settled(&mut state);
 
     assert!(
-        panel.hit_rect(row_id(id, "camera_0")).is_none(),
+        panel.hit_rect(row_id(id, "image_0")).is_none(),
         "the collapsed Camera Images group still laid out its rows"
     );
     set_open(&ctx, row_id(id, "camera_images"), true);
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
     assert!(
-        panel.hit_rect(row_id(id, "camera_0")).is_some(),
+        panel.hit_rect(row_id(id, "image_0")).is_some(),
         "expanding the Camera Images group did not draw any image rows"
     );
 }
 
 #[test]
-fn the_camera_list_lays_out_only_the_visible_rows() {
+fn the_image_list_lays_out_only_the_visible_rows() {
     // 400 images against a 220px-tall list: a non-virtualized list would lay
     // out every one of them.
     let mut state = AppState::new();
@@ -398,11 +424,11 @@ fn the_camera_list_lays_out_only_the_visible_rows() {
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
 
     let laid_out = (0..400)
-        .filter(|i| panel.hit_rect(row_id(id, &format!("camera_{i}"))).is_some())
+        .filter(|i| panel.hit_rect(row_id(id, &format!("image_{i}"))).is_some())
         .count();
     assert!(
         laid_out > 0 && laid_out < 60,
-        "{laid_out} of 400 camera rows were laid out; the list is not virtualized"
+        "{laid_out} of 400 image rows were laid out; the list is not virtualized"
     );
 }
 
@@ -486,22 +512,22 @@ fn clicking_a_reconstruction_row_reports_it_as_the_selection() {
 }
 
 #[test]
-fn clicking_a_camera_row_reports_the_image_it_names() {
+fn clicking_an_image_row_reports_the_image_it_names() {
     let mut state = shared_shoot(1);
     let id = state.scene[0].id;
     let (mut panel, ctx) = settled(&mut state);
     set_open(&ctx, row_id(id, "camera_images"), true);
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
 
-    let response = click(&mut panel, &ctx, &mut state, row_id(id, "camera_2"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "image_2"));
     assert_eq!(response.select_image, Some(ImageRef::new(id, 2)));
 }
 
-/// A camera row keeps working once the virtualized list has scrolled off its
+/// An image row keeps working once the virtualized list has scrolled off its
 /// first slice — its identity is the image index, not its place in whatever
 /// slice is currently rendered.
 #[test]
-fn a_camera_row_still_selects_after_the_list_has_scrolled() {
+fn an_image_row_still_selects_after_the_list_has_scrolled() {
     let mut state = AppState::new();
     state.append_node(file_node("/runs/long.sfmr", 200, "IMG"));
     let id = state.scene[0].id;
@@ -514,7 +540,7 @@ fn a_camera_row_still_selects_after_the_list_has_scrolled() {
     state.select_image(Some(ImageRef::new(id, 150)));
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
 
-    let response = click(&mut panel, &ctx, &mut state, row_id(id, "camera_150"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "image_150"));
     assert_eq!(response.select_image, Some(ImageRef::new(id, 150)));
 }
 
@@ -660,14 +686,14 @@ fn the_points_group_shows_the_selected_point_id_and_never_a_listing() {
 }
 
 #[test]
-fn hovering_a_camera_row_reports_it_for_cross_panel_hover() {
+fn hovering_an_image_row_reports_it_for_cross_panel_hover() {
     let mut state = shared_shoot(1);
     let id = state.scene[0].id;
     let (mut panel, ctx) = settled(&mut state);
     set_open(&ctx, row_id(id, "camera_images"), true);
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
 
-    let pos = panel.hit_rect(row_id(id, "camera_3")).unwrap().center();
+    let pos = panel.hit_rect(row_id(id, "image_3")).unwrap().center();
     run_frame(
         &mut panel,
         &ctx,
@@ -685,7 +711,7 @@ fn hovering_a_camera_row_reports_it_for_cross_panel_hover() {
 }
 
 #[test]
-fn the_camera_list_scrolls_to_a_selection_made_elsewhere_but_not_to_its_own() {
+fn the_image_list_scrolls_to_a_selection_made_elsewhere_but_not_to_its_own() {
     let mut state = AppState::new();
     state.append_node(file_node("/runs/long.sfmr", 200, "IMG"));
     let id = state.scene[0].id;
@@ -693,7 +719,7 @@ fn the_camera_list_scrolls_to_a_selection_made_elsewhere_but_not_to_its_own() {
     set_open(&ctx, row_id(id, "camera_images"), true);
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
     assert!(
-        panel.hit_rect(row_id(id, "camera_150")).is_none(),
+        panel.hit_rect(row_id(id, "image_150")).is_none(),
         "row 150 is visible without scrolling, so this test proves nothing"
     );
 
@@ -701,16 +727,16 @@ fn the_camera_list_scrolls_to_a_selection_made_elsewhere_but_not_to_its_own() {
     state.select_image(Some(ImageRef::new(id, 150)));
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
     assert!(
-        panel.hit_rect(row_id(id, "camera_150")).is_some(),
+        panel.hit_rect(row_id(id, "image_150")).is_some(),
         "the selected row was not scrolled into view"
     );
 
     // With the selection unchanged the list stays where the user left it: a
     // second frame must not re-apply the scroll.
-    let before = panel.hit_rect(row_id(id, "camera_150")).unwrap();
+    let before = panel.hit_rect(row_id(id, "image_150")).unwrap();
     run_frame(&mut panel, &ctx, &mut state, Vec::new());
     assert_eq!(
-        panel.hit_rect(row_id(id, "camera_150")),
+        panel.hit_rect(row_id(id, "image_150")),
         Some(before),
         "the list kept scrolling itself with the selection unchanged"
     );
@@ -734,7 +760,7 @@ fn a_non_interactive_node_can_still_be_selected_from_the_tree() {
     let response = click(&mut panel, &ctx, &mut state, row_id(second, "node_label"));
     assert_eq!(response.select_recon, Some(second));
 
-    let response = click(&mut panel, &ctx, &mut state, row_id(second, "camera_1"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(second, "image_1"));
     assert_eq!(response.select_image, Some(ImageRef::new(second, 1)));
     assert!(
         !state.scene[1].interactive,
@@ -2016,6 +2042,219 @@ fn the_counts_drop_cameras_then_images_as_the_panel_narrows() {
     );
 }
 
+// ── The Camera Intrinsics group ─────────────────────────────────────────
+
+#[test]
+fn the_intrinsics_group_labels_and_counts_the_cameras_and_lists_them() {
+    let mut state = AppState::new();
+    state.append_node(two_camera_node("/runs/rig.sfmr"));
+    let (mut panel, ctx) = settled(&mut state);
+
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
+    assert!(
+        texts.iter().any(|t| t == "Camera Intrinsics (2)"),
+        "no Camera Intrinsics group row was painted; got {texts:?}"
+    );
+    // Two cameras, so the group is open by itself and the rows are there to
+    // read: index, model, size, focal length, and how many images use it.
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "#0  PINHOLE  1920×1080  f 1000.0  4 images"),
+        "the first camera row is not what the spec draws; got {texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "#1  PINHOLE  1920×1080  f 1000.0  4 images"),
+        "the second camera row is missing; got {texts:?}"
+    );
+}
+
+/// No eye on the group row: intrinsics have no geometry of their own to hide,
+/// so the column is left blank rather than filled with a glyph that would
+/// answer nothing.
+#[test]
+fn the_intrinsics_group_row_carries_no_eye() {
+    let mut state = AppState::new();
+    state.append_node(two_camera_node("/runs/rig.sfmr"));
+    let (mut panel, ctx) = settled(&mut state);
+
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
+    let eyes = texts
+        .iter()
+        .filter(|t| t.as_str() == super::EYE_GLYPH)
+        .count();
+    assert_eq!(
+        eyes, 3,
+        "expected exactly the node, Camera Images and Points eyes; got {texts:?}"
+    );
+}
+
+#[test]
+fn clicking_a_camera_row_reports_the_camera_it_names() {
+    let mut state = AppState::new();
+    let id = state.append_node(two_camera_node("/runs/rig.sfmr"));
+    let (mut panel, ctx) = settled(&mut state);
+
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "intrinsics_1"));
+    assert_eq!(response.select_camera, Some(CameraRef::new(id, 1)));
+    // A camera click is not an image click: the row denotes a set of them.
+    assert_eq!(response.select_image, None);
+    assert_eq!(response.zoom_to_camera, None);
+}
+
+/// Double-click frames every image taken through that camera — the tree's
+/// third double-click target, and consistent with the other two: it frames
+/// what the row denotes.
+#[test]
+fn double_clicking_a_camera_row_asks_to_frame_its_images() {
+    let mut state = AppState::new();
+    let id = state.append_node(two_camera_node("/runs/rig.sfmr"));
+    let (mut panel, ctx) = settled(&mut state);
+
+    let pos = panel
+        .hit_rect(row_id(id, "intrinsics_1"))
+        .expect("the camera row")
+        .center();
+    click_at(&mut panel, &ctx, &mut state, pos);
+    let response = click_at(&mut panel, &ctx, &mut state, pos);
+    assert_eq!(response.zoom_to_camera, Some(CameraRef::new(id, 1)));
+}
+
+#[test]
+fn the_intrinsics_group_is_open_at_a_handful_of_cameras_and_collapsed_beyond() {
+    let mut few = AppState::new();
+    let few_id = few.append_node(camera_count_node("/runs/rig.sfmr", 2));
+    let (panel, _ctx) = settled(&mut few);
+    assert!(
+        panel.hit_rect(row_id(few_id, "intrinsics_0")).is_some(),
+        "two cameras should list themselves rather than hide behind a triangle"
+    );
+
+    let mut many = AppState::new();
+    let many_id = many.append_node(camera_count_node("/runs/solve.sfmr", 5));
+    let (panel, _ctx) = settled(&mut many);
+    assert!(
+        panel.hit_rect(row_id(many_id, "intrinsics_0")).is_none(),
+        "past a handful the group should stay out of the way like the image list"
+    );
+}
+
+#[test]
+fn a_camera_no_image_references_reads_zero_images() {
+    let mut state = AppState::new();
+    state.append_node(unused_camera_node("/runs/rig.sfmr"));
+    let (mut panel, ctx) = settled(&mut state);
+
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
+    assert!(
+        texts.iter().any(|t| t.ends_with("0 images")),
+        "an unreferenced camera should say so rather than be hidden; got {texts:?}"
+    );
+}
+
+/// Hovering a camera row shows a tooltip and nothing else: cross-panel hover is
+/// a two-field protocol, and a third field would have to be threaded through
+/// every panel to preview a selection that is one click away.
+#[test]
+fn hovering_a_camera_row_raises_no_cross_panel_hover() {
+    let mut state = AppState::new();
+    let id = state.append_node(two_camera_node("/runs/rig.sfmr"));
+    let (mut panel, ctx) = settled(&mut state);
+
+    let pos = panel
+        .hit_rect(row_id(id, "intrinsics_1"))
+        .expect("the camera row")
+        .center();
+    run_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    let response = run_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    assert!(response.has_pointer, "the panel did not claim the pointer");
+    assert_eq!(response.hovered_image, None);
+    assert_eq!(response.hovered_point, None);
+}
+
+// ── The cross-panel sibling highlight (no frame needed) ─────────────────
+
+#[test]
+fn the_sibling_set_is_the_images_that_share_the_selected_camera() {
+    let mut state = AppState::new();
+    let id = state.append_node(two_camera_node("/runs/rig.sfmr"));
+    state.select_camera(Some(CameraRef::new(id, 1)));
+
+    let node = &state.scene[0];
+    assert_eq!(
+        crate::scene::camera_sibling_images(node, state.selected_camera),
+        vec![4, 5, 6, 7],
+        "the sibling set is not the second camera's images"
+    );
+}
+
+/// Correct but uninformative: highlighting every image in a single-camera
+/// reconstruction says nothing, so it is suppressed.
+#[test]
+fn the_sibling_highlight_is_suppressed_when_every_image_shares_the_camera() {
+    let mut state = AppState::new();
+    let id = state.append_node(unused_camera_node("/runs/rig.sfmr"));
+    state.select_camera(Some(CameraRef::new(id, 0)));
+
+    let node = &state.scene[0];
+    assert!(
+        crate::scene::camera_sibling_images(node, state.selected_camera).is_empty(),
+        "a whole-node highlight should be suppressed"
+    );
+    // The unreferenced camera highlights nothing either — and specifically is
+    // not caught by the suppression rule, which is about *every* image.
+    assert!(crate::scene::camera_sibling_images(node, Some(CameraRef::new(id, 1))).is_empty());
+}
+
+#[test]
+fn a_camera_selected_in_another_node_highlights_nothing_here() {
+    let mut state = AppState::new();
+    let first = state.append_node(two_camera_node("/runs/rig_a.sfmr"));
+    state.append_node(two_camera_node("/runs/rig_b.sfmr"));
+
+    let other = &state.scene[1];
+    assert!(
+        crate::scene::camera_sibling_images(other, Some(CameraRef::new(first, 1))).is_empty(),
+        "a ref into another node must not index into this one"
+    );
+}
+
+/// What a double-click frames: that camera's images, where they are *drawn*.
+#[test]
+fn the_camera_zoom_frames_only_its_own_images_through_the_node_transform() {
+    let mut state = AppState::new();
+    state.append_node(two_camera_node("/runs/rig.sfmr"));
+    let transform = known_similarity();
+    state.scene[0].transform = transform.clone();
+
+    let node = &state.scene[0];
+    let centres = crate::scene::camera_world_centres(node, 1);
+    assert_eq!(
+        centres.len(),
+        4,
+        "framed the whole node rather than one lens"
+    );
+    let expected = transform.apply_to_point(&node.recon.images[4].camera_center());
+    assert!((centres[0] - expected).norm() < 1e-9);
+
+    // A camera nothing uses frames nothing, rather than a degenerate point.
+    let mut unused = AppState::new();
+    unused.append_node(unused_camera_node("/runs/rig.sfmr"));
+    assert!(crate::scene::camera_world_centres(&unused.scene[0], 1).is_empty());
+}
+
 // ── The image / camera selection coupling (no frame needed) ────────────
 //
 // The truth table in `specs/gui/gui-camera-intrinsics.md` § "The selection
@@ -2167,6 +2406,82 @@ fn counts_are_formatted_compactly_on_the_node_row() {
     assert_eq!(super::compact_count(1_000), "1.0K");
     assert_eq!(super::compact_count(12_345), "12.3K");
     assert_eq!(super::compact_count(1_204_551), "1.2M");
+}
+
+/// One focal length reads `f`; two that differ read `fx/fy`. Written from the
+/// model's own focal lengths, so a fisheye's `px/rad` and a pinhole's `px` are
+/// both just the number the file carries.
+#[test]
+fn a_camera_row_names_one_focal_length_or_two() {
+    use sfmtool_core::{CameraIntrinsics, CameraModel};
+
+    let square = CameraIntrinsics {
+        model: CameraModel::SimplePinhole {
+            focal_length: 240.14,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    };
+    assert_eq!(
+        super::camera_row_text(0, &square, 26),
+        "#0  SIMPLE_PINHOLE  480×480  f 240.1  26 images"
+    );
+
+    let anamorphic = CameraIntrinsics {
+        model: CameraModel::Pinhole {
+            focal_length_x: 240.14,
+            focal_length_y: 239.72,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    };
+    assert_eq!(
+        super::camera_row_text(1, &anamorphic, 1),
+        "#1  PINHOLE  480×480  f 240.1/239.7  1 image"
+    );
+}
+
+/// A model whose parameterization is not yet frozen says so on the row; the
+/// registry's note itself is in the hover tooltip, which egui hangs off the
+/// whole row rather than off the `β`.
+#[test]
+fn a_beta_model_row_carries_the_beta_marker() {
+    use sfmtool_core::{CameraIntrinsics, CameraModel};
+
+    let beta = CameraIntrinsics {
+        model: CameraModel::SfmtoolFisheye {
+            focal_length: 240.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            bspline_theta_max: 1.6,
+            bspline: vec![0.01, 0.02, 0.03, 0.04],
+        },
+        width: 480,
+        height: 480,
+    };
+    assert_eq!(
+        super::camera_row_text(0, &beta, 0),
+        "#0  SFMTOOL_FISHEYE β  480×480  f 240.0  0 images"
+    );
+    assert!(beta.model.beta_note().is_some());
+
+    let settled = CameraIntrinsics {
+        model: CameraModel::SimplePinhole {
+            focal_length: 240.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    };
+    assert!(
+        !super::camera_row_text(0, &settled, 3).contains('β'),
+        "a settled model must not be marked beta"
+    );
 }
 
 #[test]

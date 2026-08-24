@@ -1749,3 +1749,64 @@ fn parameter_names_of_an_inactive_spline_stop_at_the_count() {
         ]
     );
 }
+
+// -----------------------------------------------------------------------
+// CameraIntrinsics::parameters and CameraModel::beta_note
+// -----------------------------------------------------------------------
+
+/// The values a table shows come from the same conversion the file does, in
+/// the order the registry declares — so a table cannot show a stale value or
+/// lose a row the wire format writes.
+#[test]
+fn parameters_pair_every_declared_name_with_its_written_value() {
+    for cam in all_cameras() {
+        let name = cam.model_name();
+        let wire = SfmrCamera::from(&cam);
+        let pairs = cam.parameters();
+
+        assert_eq!(
+            pairs.len(),
+            wire.parameters.len(),
+            "'{name}' tabulates {} parameters but writes {}",
+            pairs.len(),
+            wire.parameters.len()
+        );
+        let names: Vec<&str> = pairs.iter().map(|(n, _)| n.as_ref()).collect();
+        let declared: Vec<String> = cam
+            .model
+            .parameter_names()
+            .into_iter()
+            .map(|n| n.into_owned())
+            .collect();
+        assert_eq!(names, declared, "'{name}' tabulates out of declared order");
+        for (key, value) in &pairs {
+            assert_eq!(
+                wire.parameters.get(key.as_ref()),
+                Some(value),
+                "'{name}' tabulates {key} as a value the file does not carry"
+            );
+        }
+    }
+}
+
+/// Exactly the two spline models are flagged beta, and they share one note.
+///
+/// Asserted over the whole corpus rather than on the two: what would go wrong
+/// silently is a *settled* model acquiring the flag, or a third beta model
+/// arriving with its own wording.
+#[test]
+fn only_the_spline_models_are_flagged_beta() {
+    let beta: Vec<&str> = all_cameras()
+        .iter()
+        .filter(|cam| cam.model.beta_note().is_some())
+        .map(|cam| cam.model_name())
+        .collect();
+    assert_eq!(beta, ["SFMTOOL_FISHEYE", "SFMTOOL_PINHOLE"]);
+
+    let notes: Vec<&str> = all_cameras()
+        .iter()
+        .filter_map(|cam| cam.model.beta_note())
+        .collect();
+    assert_eq!(notes[0], notes[1], "the two beta notes have drifted apart");
+    assert!(notes[0].starts_with("Beta:"));
+}

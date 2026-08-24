@@ -281,6 +281,57 @@ impl CameraModel {
                 .collect(),
         }
     }
+
+    /// The note a beta model carries, or `None` for a settled one.
+    ///
+    /// "Beta" here means the *parameterization* is not frozen — the basis, the
+    /// knot layout, the parameter names — so a `.sfmr` carrying the model may
+    /// need to be regenerated across releases. It says nothing about the
+    /// quality of the projection.
+    ///
+    /// One string for both of them rather than one apiece: the note is a
+    /// statement about the spline parameterization the two share, and two
+    /// copies of it would be two things to keep in step. Any model not named
+    /// here is settled, which is the right default for a model that is added
+    /// and forgotten about.
+    ///
+    /// See `specs/formats/sfmtool-camera-models.md`.
+    pub fn beta_note(&self) -> Option<&'static str> {
+        match self {
+            CameraModel::SfmtoolFisheye { .. } | CameraModel::SfmtoolPinhole { .. } => {
+                Some(BETA_NOTE)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// What [`CameraModel::beta_note`] returns for the two spline models.
+const BETA_NOTE: &str = "Beta: the parameterization — the basis, the knot layout, the parameter \
+                         names — may still change, so a .sfmr file carrying this model may need \
+                         to be regenerated across releases.";
+
+impl CameraIntrinsics {
+    /// This camera's parameters as `(name, value)` pairs in **declaration
+    /// order** — what a parameter table prints, top to bottom.
+    ///
+    /// [`CameraModel::parameter_names`] supplies the order and
+    /// `SfmrCamera::from` the values, so the two cannot disagree about which
+    /// parameters a model has: the names are a permutation of the keys that
+    /// conversion writes (asserted over the registry corpus), which is what
+    /// keeps a table built from this from silently dropping a parameter when a
+    /// model gains one.
+    pub fn parameters(&self) -> Vec<(Cow<'static, str>, f64)> {
+        let wire = SfmrCamera::from(self);
+        self.model
+            .parameter_names()
+            .into_iter()
+            .filter_map(|name| {
+                let value = *wire.parameters.get(name.as_ref())?;
+                Some((name, value))
+            })
+            .collect()
+    }
 }
 
 /// The parameter names of a spline model in declaration order: the three named

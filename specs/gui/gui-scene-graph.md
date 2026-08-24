@@ -60,6 +60,8 @@ reconstruction):
 ```
 Scene (root, implicit)
 ├── Reconstruction "run_a"        ← one node per loaded .sfmr
+│   ├── Camera Intrinsics (2)     ← fixed group node, no eye
+│   │   └── #0  OPENCV_FISHEYE  480×480  f 240.1  26 images
 │   ├── Camera Images (243)       ← fixed group node
 │   │   ├── IMG_0001.jpg          ← per-image rows (virtualized)
 │   │   └── …
@@ -363,6 +365,10 @@ Following the existing per-panel response pattern threaded through `dock.rs`:
 ```rust
 pub struct SceneGraphResponse {
     pub select_image: Option<ImageRef>,
+    // The two camera-row requests; see gui-camera-intrinsics.md, which owns
+    // them.
+    pub select_camera: Option<CameraRef>,
+    pub zoom_to_camera: Option<CameraRef>,
     pub select_point: Option<PointRef>,
     pub request_camera_view: Option<ImageRef>,
     pub hovered_image: Option<ImageRef>,
@@ -416,8 +422,9 @@ synthetic mouse input (`ui_basic.rs`,
 pointer is over the Scene panel, it owns both hover fields.
 
 `dock.rs` applies the response coarsest-first — `select_recon`, then
-`select_image` / `select_point` — so a finer selection reported in the same
-frame wins over the recon click that would otherwise have cleared it.
+`select_camera`, then `select_image` / `select_point` — so a finer selection
+reported in the same frame wins over the coarser click that would otherwise
+have cleared it.
 
 The panel additionally records the screen rect of every row and toggle it drew,
 keyed by the same explicit ids as the expansion state. A collapsible,

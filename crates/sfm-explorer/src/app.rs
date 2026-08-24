@@ -341,6 +341,7 @@ impl App {
             || self.state.frustum_size_multiplier != self.prev_frustum_size_multiplier;
         let point_selection_changed = self.state.selected_point != self.prev_selected_point;
         let colors_changed = self.state.selected_image != self.prev_selected_image
+            || self.state.selected_camera != self.prev_selected_camera
             || point_selection_changed
             || hidden_image != self.prev_hidden_image;
         if geometry_changed || colors_changed {
@@ -369,6 +370,8 @@ impl App {
                 // Colors index the owning node's own buffer, so these stay
                 // local indices.
                 let track_images = dock::compute_track_images(&self.state, node);
+                let sibling_images =
+                    crate::scene::camera_sibling_images(node, self.state.selected_camera);
                 self.scene_renderer.update_frustum_colors(
                     queue,
                     id,
@@ -376,11 +379,13 @@ impl App {
                     self.state.selected_image_in(id),
                     hidden_image.and_then(|h| h.index_in(id)),
                     &track_images,
+                    &sibling_images,
                 );
             }
             self.prev_frustum_length_scale = self.state.length_scale;
             self.prev_frustum_size_multiplier = self.state.frustum_size_multiplier;
             self.prev_selected_image = self.state.selected_image;
+            self.prev_selected_camera = self.state.selected_camera;
             self.prev_selected_point = self.state.selected_point;
             self.prev_hidden_image = hidden_image;
         }
