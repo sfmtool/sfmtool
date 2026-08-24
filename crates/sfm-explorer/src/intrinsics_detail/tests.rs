@@ -554,3 +554,155 @@ fn the_derived_report_is_cached_per_camera_and_dropped_with_the_node() {
     panel.forget_recon(node.id);
     assert!(panel.derived.is_empty());
 }
+
+// ── Projection plot ─────────────────────────────────────────────────────
+
+/// A node whose camera is an `EQUIDISTANT_FISHEYE` — a fisheye with no
+/// distortion parameters at all, so its residual is identically zero.
+fn equidistant_node() -> SceneNode {
+    let mut node = pinhole_node();
+    node.recon.cameras[0] = CameraIntrinsics {
+        model: CameraModel::EquidistantFisheye {
+            focal_length: 152.8,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+        },
+        width: 480,
+        height: 480,
+    };
+    node
+}
+
+/// A node whose camera is an `EQUIRECTANGULAR` panorama, which is its own
+/// reference map rather than a pinhole's or an equidistant fisheye's.
+fn equirectangular_node() -> SceneNode {
+    let mut node = pinhole_node();
+    node.recon.cameras[0] = CameraIntrinsics {
+        model: CameraModel::Equirectangular {
+            focal_length_x: 2048.0 / std::f64::consts::TAU,
+            focal_length_y: 1024.0 / std::f64::consts::PI,
+            principal_point_x: 1024.0,
+            principal_point_y: 512.0,
+        },
+        width: 2048,
+        height: 1024,
+    };
+    node
+}
+
+#[test]
+fn the_plot_draws_both_axes_and_names_the_ideal_map_by_family() {
+    let painted = show(&pinhole_node(), Some(0), None);
+    assert!(says(&painted, "Projection"));
+    assert!(says(&painted, "r (px)"));
+    assert!(says(&painted, "Δr (px)"));
+    assert!(says(&painted, "θ off-axis"));
+    // A perspective model is measured against `f·tan θ`...
+    assert!(says(&painted, "dashed: ideal r = f·tan θ"));
+
+    // ...a fisheye against `f·θ`...
+    let painted = show(&fisheye_node(), Some(0), None);
+    assert!(says(&painted, "dashed: ideal r = f·θ"));
+    assert!(!says(&painted, "f·tan θ"));
+
+    // ...and an equirectangular panorama against itself.
+    let painted = show(&equirectangular_node(), Some(0), None);
+    assert!(says(&painted, "dashed: ideal (itself)"));
+}
+
+/// The rules the plot draws are the frame's own geometry, so they carry the
+/// same angles the derived table above them does.
+#[test]
+fn the_plot_marks_the_frames_edges_and_corner() {
+    let painted = show(&fisheye_node(), Some(0), None);
+    let fov = sfmtool_core::camera::report::field_of_view(&kerry_park_camera()).unwrap();
+    // A square frame with a centred principal point: one edge rule, not two.
+    assert!(says(&painted, "edge "));
+    assert!(!says(&painted, "h edge"));
+    assert!(says(&painted, &format!("corner {:.1}°", fov.max_off_axis)));
+}
+
+/// The bounded case: the extrapolated region is named on the plot and
+/// explained under it, and the caption says how far the frame goes past it.
+#[test]
+fn the_plot_marks_and_explains_the_extrapolated_region() {
+    let camera = kerry_park_camera();
+    let limit = sfmtool_core::camera::report::trustworthy_max_theta_deg(&camera).unwrap();
+    let corner = sfmtool_core::camera::report::field_of_view(&camera)
+        .unwrap()
+        .max_off_axis;
+    let painted = show(&fisheye_node(), Some(0), None);
+
+    assert!(says(&painted, &format!("extrapolated past {limit:.1}°")));
+    assert!(says(&painted, &format!("Shaded past {limit:.1}°")));
+    assert!(says(&painted, &format!("The frame reaches {corner:.1}°")));
+    // The two numbers are the point: two thirds of this frame's angular
+    // extent is outside what the model was fitted to.
+    assert!(corner > 1.5 * limit);
+}
+
+/// The unbounded case says nothing about extrapolation, rather than saying it
+/// with a limit equal to the corner.
+#[test]
+fn an_unbounded_model_has_no_extrapolated_region() {
+    for painted in [
+        show(&pinhole_node(), Some(0), None),
+        show(&two_camera_node(), Some(1), None),
+    ] {
+        assert!(!says(&painted, "extrapolated past"));
+        assert!(!says(&painted, "Shaded past"));
+    }
+}
+
+/// The band is drawn when the model treats its azimuths differently, and the
+/// legend is what says so. `kerry_park` carries `fx ≠ fy`; `SIMPLE_RADIAL`
+/// cannot.
+#[test]
+fn the_azimuth_band_is_declared_only_when_there_is_one() {
+    assert!(says(
+        &show(&fisheye_node(), Some(0), None),
+        "band: spread over 32 azimuths"
+    ));
+    assert!(!says(
+        &show(&two_camera_node(), Some(1), None),
+        "band: spread over 32 azimuths"
+    ));
+}
+
+/// A model with no distortion still gets both plots — the projection curve is
+/// a fact about the camera either way — with a banner across the residual
+/// saying what the model exactly *is*, not only what it is not.
+#[test]
+fn a_distortion_free_model_gets_the_banner_naming_its_family() {
+    for (node, expected) in [
+        (pinhole_node(), "exactly a pinhole"),
+        (equidistant_node(), "exactly an equidistant fisheye"),
+        (equirectangular_node(), "exactly its own reference map"),
+    ] {
+        let painted = show(&node, Some(0), None);
+        assert!(
+            says(&painted, expected),
+            "expected the banner to say {expected:?}"
+        );
+        // Both plots are still there.
+        assert!(says(&painted, "r (px)"));
+        assert!(says(&painted, "Δr (px)"));
+    }
+    // And a lens that does distort gets no banner.
+    assert!(!says(
+        &show(&fisheye_node(), Some(0), None),
+        "No distortion — this model"
+    ));
+}
+
+/// A camera with no image has no angle to span, so the plot says so rather
+/// than allocating an empty frame with no axis.
+#[test]
+fn a_camera_with_no_image_gets_a_statement_instead_of_a_plot() {
+    let mut node = pinhole_node();
+    node.recon.cameras[0].width = 0;
+    node.recon.cameras[0].height = 0;
+    let painted = show(&node, Some(0), None);
+    assert!(says(&painted, "No projection to plot"));
+    assert!(!says(&painted, "θ off-axis"));
+}

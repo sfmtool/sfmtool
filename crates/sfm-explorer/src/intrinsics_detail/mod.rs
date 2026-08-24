@@ -12,15 +12,17 @@
 //! The panel is a detail view of a selection, like its two dock neighbours, and
 //! it is driven by [`crate::state::AppState::selected_camera`]. This module
 //! owns the panel state and the [`IntrinsicsDetail::show`] entry point that
-//! orchestrates one frame; the work lives in five children:
+//! orchestrates one frame; the work lives in six children:
 //!
 //! - [`derived`] — the per-camera derived report ([`sfmtool_core::camera::report`]),
 //!   computed once per camera and cached.
 //! - [`header`] — the identity line and its `Copy ▾` menu.
 //! - [`parameters`] — the parameter table, the derived table and `K`.
+//! - [`mod@projection_plot`] — the radial map, the residual and the domain
+//!   the model can be held to.
 //! - [`extrinsics`] — the selected image's pose, the node-transform toggle and
 //!   the rig block.
-//! - [`mod@format`] — the number, matrix and vector spellings the three share.
+//! - [`mod@format`] — the number, matrix and vector spellings the tables share.
 
 use std::collections::HashMap;
 
@@ -31,6 +33,7 @@ mod extrinsics;
 mod format;
 mod header;
 mod parameters;
+mod projection_plot;
 
 #[cfg(test)]
 mod tests;
@@ -146,6 +149,8 @@ impl IntrinsicsDetail {
                 parameters::show_derived(ui, camera, derived);
                 ui.separator();
                 parameters::show_k(ui, camera);
+                ui.separator();
+                projection_plot::show_projection_plot(ui, camera, derived);
                 if let (Some(image), Some(pose)) = (image, pose) {
                     ui.separator();
                     let picked =

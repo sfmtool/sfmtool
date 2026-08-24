@@ -1,8 +1,9 @@
 # Camera Intrinsics: Scene-Graph Node, Image Overlay, Detail Panel
 
 **Status:** design — phase 1 (vocabulary and data model), phase 2
-(`camera::report` and `parameter_names()`), phase 3 (the Scene Graph group) and
-phase 4 (the Intrinsics panel) implemented; phases 5–6 not yet.
+(`camera::report` and `parameter_names()`), phase 3 (the Scene Graph group),
+phase 4 (the Intrinsics panel) and phase 5 (the projection plot, with the
+trustworthy domain it needed) implemented; phase 6 not yet.
 
 The viewer can show you where a camera *is* and what it *saw*, but nothing in it
 tells you what the camera *is*: which intrinsic model, what focal length, how far
@@ -796,10 +797,13 @@ markers are all custom work that a general plotting widget would not shorten.
 
 - solid: the model's actual `|project(ray(θ)) − c|`;
 - dashed: the family's ideal map (`f·tan θ` or `f·θ`);
-- a shaded band between the min and max over 32 azimuths, drawn only when the
-  model is azimuth-dependent (`fx ≠ fy`, or tangential/thin-prism terms
-  present). The band is how decentring distortion becomes visible at all —
-  a single-azimuth curve hides it completely.
+- a band between the min and max over 32 azimuths, drawn on **both** plots and
+  only when the model is azimuth-dependent (`fx ≠ fy`, or tangential /
+  thin-prism terms present). The band is how decentring distortion becomes
+  visible at all — a single-azimuth curve hides it completely. The condition is
+  *measured*, not looked up: the band is drawn when it is wider than 0.05 px
+  somewhere, which is that condition evaluated rather than a second per-model
+  table to keep in step with the first.
 
 **Lower plot — the residual**, `Δr(θ) = r − r_ref` in pixels, zero line marked.
 This is the one that shows the shape of the distortion, since on the upper plot
@@ -807,15 +811,52 @@ a 12-pixel departure from a 700-pixel curve is invisible.
 
 **Markers on both**, as labelled vertical rules: θ at the mid-edges, θ at the
 corner, the spline domain end where there is one, and the 90° asymptote for
-perspective models.
+perspective models. A rule the axis does not reach is not drawn rather than
+clamped to the border, where it would read as a fact about the last angle
+plotted — which in practice means the 90° asymptote appears only for a lens
+wide enough to be getting near it.
+
+**The extrapolated region.** The x axis runs to the frame's own corner angle,
+and on a circular fisheye most of that is outside the lens's image circle,
+where § "The trustworthy domain" says the model has stopped describing
+anything. Drawing that stretch as the same kind of fact as the rest would be
+the plot's version of the number phase 4 had to hedge in a tooltip, so
+everything past `trustworthy_max_theta_deg` is drawn as extrapolation and says
+so three ways at once:
+
+- the region is washed over, bounded by a coloured rule, and labelled
+  `extrapolated past 84.1°`;
+- the model's curve continues into it **dotted** rather than solid, so a reader
+  following the curve is told again at the moment they cross;
+- both y axes are scaled to the **trustworthy samples alone**, so the fold does
+  not flatten the part of the plot that means something. The dotted curve then
+  dives out through the frame, clipped, which is a fair picture of what the
+  polynomial is doing.
+
+A caption under the plots states both numbers together — the bound and how far
+the frame reaches past it — because that gap is itself the diagnostic.
+
+The axis is deliberately **not** cut short at the bound. How much of a frame
+falls outside the lens's modelled domain is exactly what a reader wants to know
+about a circular fisheye, and it is only visible if the axis still reaches the
+corner. On `kerry_park` that means roughly half the plot's width is shaded,
+which is the honest proportion.
 
 **No distortion.** Both plots still draw — the projection curve is a fact about
 the camera whether or not it is distorted, and an empty panel would be a worse
-answer than a straight line. The residual plot collapses to its zero line, and a
-banner across it reads
-`No distortion — this model is exactly {a pinhole | equidistant}`, which is the
+answer than a straight line. The residual plot collapses to its zero line (with
+a symmetric range, so the zero line lands in the middle rather than on a
+border), and a banner across it reads `No distortion — this model is exactly
+{a pinhole | an equidistant fisheye | its own reference map}`, which is the
 "says undistorted" the request asks for, stated in terms that say *what* it is
-rather than only what it is not.
+rather than only what it is not. The third branch is `EQUIRECTANGULAR`, which
+the first draft of this line left out: it is its own reference and is neither
+of the other two.
+
+**The key is words, not glyphs.** `solid: model · dashed: ideal r = f·θ` rather
+than a `──`/`╌╌`/`▨` sample key: egui's default font has no box-drawing or
+geometric-shape coverage, and the first draft rendered `▸` as tofu in the real
+viewer.
 
 ### 5. Extrinsics
 
@@ -971,8 +1012,9 @@ family, and the arrow field is a few hundred round trips.
 | Product | Cost | Cached on | Invalidated by |
 |---------|------|-----------|----------------|
 | Distortion field | `cols × rows` ray round trips | `(CameraRef, cols, rows)` | camera change, grid density change, node reload |
-| Radial profile | `samples × (1 + 32 azimuths)` | `(CameraRef, samples)` | camera change, node reload |
+| Radial profile | `samples × 32 azimuths` | `CameraRef` — the sample count is a constant, so it is not part of the key | camera change, node reload |
 | FOV / derived rows | 4 corners + 4 edges | `CameraRef` | camera change, node reload |
+| Trustworthy bound | a ~360-step sweep × 8 azimuths, refined | `CameraRef` | camera change, node reload |
 | Axis polylines | ~1 sample per 4 panel px | `(CameraRef, zoom bucket)` | camera change, zoom crossing a bucket |
 | Hover readout | 1 round trip | not cached | — |
 
@@ -1082,6 +1124,19 @@ Two caveats remain, both named in the tests rather than left implicit:
   camera's own `ray_to_pixel` (and against `K · [R|t]`, which must *not* match),
   and the transformed pose against `Se3Transform::apply_to_camera_pose` and the
   transform's own action on the camera centre.
+- The projection plot, in two places. What it *says* comes off the frame's
+  galleys like everything else above: both axis titles, the ideal map named by
+  family (`f·tan θ` / `f·θ` / itself), the edge and corner rules carrying the
+  same angles the derived table does, the extrapolation label and caption on a
+  bounded model and neither on an unbounded one, the band's legend only when
+  there is a band, and the no-distortion banner naming each of its three
+  families. What it *decides* is tested without a frame, in
+  `projection_plot/tests.rs`: which rules it drew (one `edge` on a square
+  frame, `h edge` / `v edge` on a portrait one, the 90° asymptote only when
+  the axis reaches it, a spline model's domain end in the axis's own units),
+  that the radial scale bounded to the trustworthy samples is materially
+  smaller than the unbounded one, that the residual's range always contains
+  zero and is never zero-width, and that a tick at zero never renders as `-0`.
 - The intrinsics layer composes: with `overlay_mode: Features` and
   `intrinsics.enabled`, one frame contains both the feature ellipses and the
   principal-point marker, and turning the layer off leaves the feature draw
@@ -1196,8 +1251,35 @@ Each phase leaves the viewer in a shippable state.
      the same reason: `SfmrReconstruction::rig_frame_data` is a public field
      whose type nothing downstream could name, so reading — or building — a rig
      meant depending on `sfmr-format` directly.
-5. **Projection plot.** Both stacked plots, reference curve, azimuth band,
-   markers, the no-distortion banner.
+5. **Projection plot** — *done.* Both stacked plots, reference curve, azimuth
+   band, markers, the no-distortion banner, in
+   `crates/sfm-explorer/src/intrinsics_detail/projection_plot.rs` with its own
+   `projection_plot/tests.rs` for the parts a painted string cannot show.
+
+   It came with a core change it could not be honest without:
+   `camera::report::trustworthy_max_theta_deg` and
+   `DistortionSample::theta_deg`, § "The trustworthy domain". Phase 4 found the
+   symptom — 272.7 px of "distortion" on a lens that displaces 13 px — and
+   hedged it in a tooltip; the plot could not hedge, because its x axis runs to
+   `max_off_axis` and would otherwise have drawn `kerry_park`'s fold as though
+   it were the lens.
+
+   Five things this phase settled against the real code:
+
+   - `blend_fisheye_ray`'s doc comment said it blends "over 80°–90° of `r_d`"
+     while the constants beside it said 90° to 100°. Phase 4's note here
+     inherited the 80°. Both corrected.
+   - That threshold is on the **distorted** radius, not on the incidence angle.
+     The two coincide only for a zero-coefficient model, and converting one to
+     the other is per-camera — which is what the new function does.
+   - The no-distortion banner needed a third branch for `EQUIRECTANGULAR`; the
+     spec's two-way brace had no place to put it.
+   - egui's default font has no box-drawing or geometric-shape glyphs, so a
+     `──`/`╌╌`/`▨` key and an `extrapolated ▸` label render as tofu. Words
+     instead. (Found by running the viewer on `kerry_park` and looking at it.)
+   - The band's condition — "azimuth-dependent" — is measured off the sampled
+     envelope rather than read from a per-model table, so it cannot drift from
+     what the projection actually does.
 6. **Image Detail overlay layer.** The checkbox, the settings popup and the
    compositing rules first, with only the principal point and centre offset
    drawn — that is the smallest thing that proves the layer composes correctly
