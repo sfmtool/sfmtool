@@ -265,16 +265,30 @@ pub fn distortion_field(cam: &CameraIntrinsics, cols: usize, rows: usize) -> Vec
         .filter_map(|(i, j)| {
             let u = (i as f64 + 0.5) * w / cols as f64;
             let v = (j as f64 + 0.5) * h / rows as f64;
-            let ray = cam.pixel_to_ray(u, v);
-            let (pu, pv) = cam.ray_to_pixel(ray)?;
-            let (ru, rv) = reference_project(cam, ray)?;
-            Some(DistortionSample {
-                pixel: [pu, pv],
-                reference: [ru, rv],
-                theta_deg: angle_between_deg(ray, FORWARD),
-            })
+            displacement_at(cam, u, v)
         })
         .collect()
+}
+
+/// The lens's displacement at **one** pixel: the same quantity
+/// [`distortion_field`] reports at a grid node, at an arbitrary pixel.
+///
+/// [`distortion_field`] is defined in terms of this, so a consumer sampling a
+/// pixel of its own — an overlay's hover readout, say, which wants the value
+/// under the cursor rather than at the nearest node — is reading exactly the
+/// field it is drawing rather than a second spelling of the ideal map.
+///
+/// `None` on the same domain the model's own [`CameraIntrinsics::ray_to_pixel`]
+/// refuses, or where the family's ideal map does.
+pub fn displacement_at(cam: &CameraIntrinsics, u: f64, v: f64) -> Option<DistortionSample> {
+    let ray = cam.pixel_to_ray(u, v);
+    let (pu, pv) = cam.ray_to_pixel(ray)?;
+    let (ru, rv) = reference_project(cam, ray)?;
+    Some(DistortionSample {
+        pixel: [pu, pv],
+        reference: [ru, rv],
+        theta_deg: angle_between_deg(ray, FORWARD),
+    })
 }
 
 /// 35 mm-equivalent focal length in millimetres: `f_px · 43.267 / diagonal_px`.

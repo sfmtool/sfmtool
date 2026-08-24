@@ -461,6 +461,116 @@ fn the_field_is_split_into_measurements_and_marked_nodes() {
     assert_eq!(drawn + marked, layer.extrapolated.1);
 }
 
+// ── The hover readout ───────────────────────────────────────────────────
+
+#[test]
+fn the_readout_turns_the_image_into_a_protractor() {
+    let camera = simple_radial_camera();
+    let limit = sfmtool_core::camera::report::trustworthy_max_theta_deg(&camera);
+    let text = super::hover::readout(&camera, limit, [200.0, 120.0]).expect("on the image");
+    let lines: Vec<&str> = text.lines().collect();
+
+    assert_eq!(lines[0], "pixel  (200.0, 120.0)");
+    assert!(lines[1].starts_with("ray    ("), "{:?}", lines[1]);
+    assert!(
+        lines[2].contains("off-axis ") && lines[2].contains("azimuth "),
+        "{:?}",
+        lines[2]
+    );
+    assert!(lines[3].starts_with("distortion  "), "{:?}", lines[3]);
+    assert!(lines[3].ends_with(" px"), "{:?}", lines[3]);
+
+    // (200, 120) is right of the principal point (135, 240) and, since `v`
+    // grows downward, above it. The canonical frame has +X right and +Y up and
+    // azimuth is measured from +X, so that is the first quadrant — the sign
+    // convention the whole layer's labels rest on, checked once here.
+    let azimuth: f64 = lines[2]
+        .rsplit_once("azimuth ")
+        .and_then(|(_, tail)| tail.trim_end_matches(super::DEGREE).parse().ok())
+        .expect("an azimuth");
+    assert!(
+        (0.0..90.0).contains(&azimuth),
+        "right of and above the principal point is the first quadrant, got {azimuth}"
+    );
+}
+
+#[test]
+fn the_readout_is_only_for_pixels_that_exist() {
+    let camera = simple_radial_camera();
+    assert!(super::hover::readout(&camera, None, [-1.0, 100.0]).is_none());
+    assert!(super::hover::readout(&camera, None, [100.0, 999.0]).is_none());
+    assert!(super::hover::readout(&camera, None, [0.0, 0.0]).is_some());
+}
+
+#[test]
+fn the_readout_names_no_displacement_where_the_model_is_extrapolating() {
+    let camera = kerry_park_camera();
+    let limit = camera_limit(&camera);
+
+    // The frame's corner is past the bound; its centre is not.
+    let corner = super::hover::readout(&camera, Some(limit), [2.0, 2.0]).expect("on the image");
+    let corner_line = corner.lines().last().expect("a distortion line");
+    assert!(
+        corner_line.starts_with("distortion  not modelled past 84."),
+        "{corner_line:?}"
+    );
+    assert!(
+        !corner_line.contains(" px"),
+        "no number where there is no measurement: {corner_line:?}"
+    );
+
+    let middle = super::hover::readout(&camera, Some(limit), [250.0, 250.0]).expect("on the image");
+    assert!(
+        middle.lines().last().is_some_and(|l| l.ends_with(" px")),
+        "{middle:?}"
+    );
+}
+
+#[test]
+fn a_model_with_no_distortion_gets_no_distortion_line() {
+    let text =
+        super::hover::readout(&pinhole_camera(), None, [400.0, 300.0]).expect("on the image");
+    assert!(!text.contains("distortion"), "{text:?}");
+    assert_eq!(text.lines().count(), 3);
+}
+
+#[test]
+fn the_feature_tooltip_is_untouched_with_the_layer_off() {
+    // The regression a composed tooltip most plausibly breaks: with no
+    // intrinsics readout, the panel must draw exactly what it always has.
+    let feature = "Point3D #42 | err: 0.412px | tracklen: 7";
+    let tooltip = |top: Option<&str>, readout: Option<&str>| {
+        painted(|ui| {
+            let panel = ui.available_rect_before_wrap();
+            let painter = ui.painter().clone();
+            super::super::overlay::draw_tooltip(
+                &painter,
+                egui::pos2(120.0, 160.0),
+                panel,
+                top,
+                readout,
+            );
+        })
+    };
+
+    assert_eq!(
+        tooltip(Some(feature), None),
+        vec![feature.to_owned()],
+        "with the layer off the tooltip is the feature line and nothing else"
+    );
+    assert_eq!(
+        tooltip(Some(feature), Some("off-axis 17.3°")),
+        vec![feature.to_owned(), "off-axis 17.3°".to_owned()],
+        "with it on, the readout goes below the feature line"
+    );
+    assert_eq!(
+        tooltip(None, Some("off-axis 17.3°")),
+        vec!["off-axis 17.3°".to_owned()],
+        "and off a feature it is the readout alone"
+    );
+    assert!(tooltip(None, None).is_empty());
+}
+
 // ── The toolbar and its popup ───────────────────────────────────────────
 
 /// Every string one headless frame of `run_ui` painted.

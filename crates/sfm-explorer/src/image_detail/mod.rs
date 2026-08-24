@@ -368,6 +368,7 @@ impl ImageDetail {
                 &view,
                 panel_rect,
                 intrinsics_display,
+                ui.input(|i| i.pointer.hover_pos()),
             ),
             _ => None,
         };

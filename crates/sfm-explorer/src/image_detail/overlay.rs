@@ -392,7 +392,7 @@ impl ImageDetail {
 /// With `readout` `None` this is byte for byte the tooltip the panel has always
 /// drawn — same padding, same offset, same clamping — which is the regression a
 /// composed tooltip most plausibly breaks.
-fn draw_tooltip(
+pub(super) fn draw_tooltip(
     painter: &egui::Painter,
     pointer_pos: egui::Pos2,
     panel_rect: egui::Rect,

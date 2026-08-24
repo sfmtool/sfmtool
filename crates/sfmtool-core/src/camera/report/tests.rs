@@ -753,6 +753,41 @@ fn equiv_focal_length_35mm_is_none_without_an_image() {
 // -----------------------------------------------------------------------
 
 #[test]
+fn displacement_at_is_the_field_sampled_at_one_pixel() {
+    // The field is defined in terms of it, so a consumer sampling a pixel of
+    // its own — an overlay's hover readout, which wants the value under the
+    // cursor rather than at the nearest node — is reading the same arithmetic
+    // rather than a second spelling of the ideal map.
+    for cam in distorted_cameras(F_FISH_NARROW) {
+        let (cols, rows) = (8, 6);
+        let field = distortion_field(&cam, cols, rows);
+        let nodes = grid_nodes(cols, rows);
+        assert_eq!(field.len(), nodes.len(), "{}", cam.model_name());
+        for (sample, (u, v)) in field.iter().zip(nodes) {
+            let at = displacement_at(&cam, u, v).expect("the field kept this node");
+            assert_eq!(at.pixel, sample.pixel, "{}", cam.model_name());
+            assert_eq!(at.reference, sample.reference, "{}", cam.model_name());
+            assert_eq!(at.theta_deg, sample.theta_deg, "{}", cam.model_name());
+        }
+    }
+}
+
+#[test]
+fn displacement_at_is_zero_for_a_model_that_is_its_own_ideal_map() {
+    for cam in undistorted_cameras(F_FISH_NARROW) {
+        let sample = displacement_at(&cam, 0.4 * f64::from(W), 0.3 * f64::from(H))
+            .expect("a pixel well inside the frame");
+        let displacement =
+            (sample.pixel[0] - sample.reference[0]).hypot(sample.pixel[1] - sample.reference[1]);
+        assert!(
+            displacement < 1e-12,
+            "{} displaced by {displacement}",
+            cam.model_name()
+        );
+    }
+}
+
+#[test]
 fn distortion_field_is_empty_for_a_degenerate_grid() {
     let cam = cam(CameraModel::SimplePinhole {
         focal_length: F_PERSP,

@@ -43,6 +43,7 @@
 mod axes;
 mod controls;
 mod field;
+mod hover;
 
 #[cfg(test)]
 mod tests;
@@ -105,6 +106,15 @@ impl View {
             self.origin.x + p[0] as f32 * self.scale,
             self.origin.y + p[1] as f32 * self.scale,
         )
+    }
+
+    /// A panel position back in image pixels — what the hover readout works
+    /// from.
+    pub(super) fn image_pixel(&self, pos: Pos2) -> [f64; 2] {
+        [
+            f64::from((pos.x - self.origin.x) / self.scale),
+            f64::from((pos.y - self.origin.y) / self.scale),
+        ]
     }
 }
 
@@ -285,6 +295,7 @@ impl super::ImageDetail {
     ///
     /// The principal-point marker is deliberately not here: it draws last, over
     /// the features, from [`draw_principal_point`].
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_intrinsics(
         &mut self,
         painter: &egui::Painter,
@@ -293,6 +304,7 @@ impl super::ImageDetail {
         view: &View,
         panel: Rect,
         settings: &IntrinsicsDisplaySettings,
+        pointer: Option<Pos2>,
     ) -> Option<String> {
         let layer = self.intrinsics_layer(camera_ref, camera, settings.grid_cols);
 
@@ -329,7 +341,13 @@ impl super::ImageDetail {
 
         draw_centre_offset(painter, camera, view, panel);
         draw_legend(painter, panel, &lines);
-        None
+
+        // Not painted here: the panel has one tooltip, and this is the text the
+        // feature layer appends its own to. See [`mod@hover`].
+        let limit_deg = layer.limit_deg;
+        pointer
+            .filter(|pos| panel.contains(*pos))
+            .and_then(|pos| hover::readout(camera, limit_deg, view.image_pixel(pos)))
     }
 }
 
