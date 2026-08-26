@@ -296,6 +296,15 @@ pub struct SceneNode {
     /// and the track orange stay themselves (see the shaders).
     pub tint: NodeTint,
 
+    /// What this node is: a file (or demo data), or the result of resecting one
+    /// image of another node — `(source node, image index)`. See
+    /// [`crate::resect`] and `specs/gui/gui-resect-image.md`.
+    ///
+    /// It is how a repeat resection of the same image from the same source
+    /// finds the node it replaces, and it is what marks the resected image's
+    /// row in the tree.
+    pub resected_from: Option<(ReconId, u32)>,
+
     /// Similarity transform (uniform scale · rotation · translation) mapping
     /// this node's native coordinates into the shared world space. Identity on
     /// load, set by the Scene panel's `Align to…`.
@@ -324,8 +333,30 @@ impl SceneNode {
             show_patches: true,
             show_points_at_infinity: true,
             tint: NodeTint::Original,
+            resected_from: None,
             transform: Se3Transform::identity(),
         }
+    }
+
+    /// A node holding the result of resecting `image` of `source`.
+    ///
+    /// It came from no file — `Reload from Disk` is greyed on it, exactly as it
+    /// is on demo data — and it carries the provenance that lets a second
+    /// resection of the same image replace it rather than pile up beside it.
+    pub fn resected(
+        label: String,
+        recon: SfmrReconstruction,
+        source: ReconId,
+        image: usize,
+    ) -> Self {
+        let mut node = Self::new(label, None, recon);
+        node.resected_from = Some((source, image as u32));
+        node
+    }
+
+    /// The image this node resected, when it is a resection at all.
+    pub fn resected_image(&self) -> Option<usize> {
+        self.resected_from.map(|(_, image)| image as usize)
     }
 
     /// A node for a reconstruction read from `path`, labeled with its file stem.

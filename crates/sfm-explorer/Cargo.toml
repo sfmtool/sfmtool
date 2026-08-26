@@ -39,6 +39,7 @@ directmanipulation = []
 [dependencies]
 sfmtool-core = { path = "../sfmtool-core" }
 sift-format = { path = "../sift-format" }
+matches-format = { path = "../matches-format" }
 egui = "0.36"
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 egui_dock = "0.21"

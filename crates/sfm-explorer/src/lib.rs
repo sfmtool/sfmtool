@@ -22,6 +22,7 @@ mod image_detail;
 mod intrinsics_detail;
 mod platform;
 mod point_track_detail;
+mod resect;
 mod scene;
 mod scene_graph;
 mod scene_renderer;

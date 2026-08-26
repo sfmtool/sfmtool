@@ -44,7 +44,7 @@ pub use relative_pose::{
 pub use reprojection::{inlier_fraction, reprojection_residuals};
 pub use resect_image::{
     resect_image, ResectImageError, ResectImageOptions, ResectImageReport, ResectSource,
-    ResectedImage,
+    ResectedImage, MIN_BEARINGS, MIN_OTHER_POSED_IMAGES,
 };
 pub use resect_translation::{resect_translation, TranslationResection};
 pub use rigid_transform::RigidTransform;

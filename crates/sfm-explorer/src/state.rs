@@ -5,6 +5,7 @@
 
 use crate::align::{self, AlignOptions};
 use crate::goto_point::{self, GotoPointDialog};
+use crate::resect::{self, ResectFrom};
 use crate::scene::{node_by_id, unique_label, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
@@ -322,6 +323,16 @@ pub struct AppState {
     /// The "Go to Point" dialog: the typed query, its last error, and whether
     /// it is showing. See [`crate::goto_point`].
     pub goto_point: GotoPointDialog,
+
+    /// The `.matches` file each node's matches-backed resection reads, chosen
+    /// once per source node and remembered for the session. See
+    /// [`crate::resect`].
+    pub resect_matches: HashMap<ReconId, std::path::PathBuf>,
+
+    /// The last `.matches` file parsed, kept so repeated resections against the
+    /// same file pay for the read once. One entry, not a map: a reviewer works
+    /// through one capture at a time, and these files are large.
+    resect_matches_cache: Option<(std::path::PathBuf, matches_format::MatchesData)>,
 }
 
 /// Cached SIFT positions and affine shapes for one image (no descriptors).
@@ -371,6 +382,8 @@ impl AppState {
             show_demo_dialog: false,
             demo_num_points: 1000,
             goto_point: GotoPointDialog::default(),
+            resect_matches: HashMap::new(),
+            resect_matches_cache: None,
         }
     }
 
@@ -493,6 +506,7 @@ impl AppState {
             // scene, with nothing left on screen to explain why.
             self.solo = None;
         }
+        self.resect_matches.remove(&id);
     }
 
     /// Clear the whole scene.
@@ -507,6 +521,8 @@ impl AppState {
         self.hovered_point = None;
         self.sift_cache.clear();
         self.full_res_cache.clear();
+        self.resect_matches.clear();
+        self.resect_matches_cache = None;
         self.status_message = None;
     }
 
@@ -663,6 +679,158 @@ impl AppState {
             }
             Err(reason) => align::failure_message(&source_label, &target_label, &reason),
         });
+    }
+
+    /// Re-estimate one image's pose against the rest of its reconstruction, and
+    /// show the answer as a new node beside the source.
+    ///
+    /// The source node is never modified under any outcome. On success the
+    /// derived node is named `<source> (resected <image>)`, inherits the
+    /// source's current transform (so it lands exactly on top of it), becomes
+    /// the selected reconstruction with the resected image selected in it, and
+    /// carries the marker that says which image moved. A second resection of the
+    /// same image from the same source **replaces** the earlier derived node,
+    /// in place, rather than adding a third.
+    ///
+    /// A refused *estimate* still produces the node — with the stored pose
+    /// retained, so the reviewer can see the held-out re-triangulation on its
+    /// own — and reports the refusal. A resection that could not be attempted
+    /// at all produces no node and only a status line.
+    ///
+    /// Runs synchronously; see `specs/gui/gui-resect-image.md`, "Performance".
+    pub fn resect_image(&mut self, source: ReconId, image: usize, from: ResectFrom) {
+        let Some(index) = self.scene.iter().position(|n| n.id == source) else {
+            return;
+        };
+        let label = self.scene[index].label.clone();
+        let Some(name) = self.scene[index]
+            .recon
+            .images
+            .get(image)
+            .map(|i| i.name.clone())
+        else {
+            return;
+        };
+        let basename = resect::basename(&name).to_string();
+        if from == ResectFrom::Matches {
+            if let Err(reason) = self.load_resect_matches(source) {
+                self.status_message = Some(resect::failure_message(&basename, &label, &reason));
+                return;
+            }
+        }
+
+        // Both borrows are shared, and the outcome owns its reconstruction — so
+        // nothing here is still borrowed when the scene is written below.
+        let outcome = {
+            let matches = match from {
+                ResectFrom::Observations => None,
+                ResectFrom::Matches => self.resect_matches_cache.as_ref().map(|(_, data)| data),
+            };
+            let kind = match matches {
+                Some(data) => resect::ResectSource::Matches(data),
+                None => resect::ResectSource::StoredObservations,
+            };
+            resect::resect_image(
+                &self.scene[index].recon,
+                image,
+                kind,
+                &resect::ResectImageOptions::default(),
+            )
+        };
+        let resected = match outcome {
+            Ok(resected) => resected,
+            Err(error) => {
+                self.status_message = Some(resect::failure_message(
+                    &basename,
+                    &label,
+                    &error.to_string(),
+                ));
+                return;
+            }
+        };
+        let message = match &resected.report.refusal {
+            Some(reason) => resect::failure_message(&basename, &label, reason),
+            None => resect::success_message(&basename, &label, &resected.report),
+        };
+
+        let mut node = SceneNode::resected(
+            format!("{label} (resected {basename})"),
+            resected.reconstruction,
+            source,
+            image,
+        );
+        // The derived node lands in the source's *displayed* frame, so it sits
+        // exactly on top of it and the two can be compared with every existing
+        // affordance.
+        node.transform = self.scene[index].transform.clone();
+        let new_id = node.id;
+        match self
+            .scene
+            .iter()
+            .position(|n| n.resected_from == Some((source, image as u32)))
+        {
+            // Replaced in place, keeping its position in tree order and its
+            // label: this is the same question asked again, not a third answer.
+            Some(slot) => {
+                let old = self.scene[slot].id;
+                node.label = self.scene[slot].label.clone();
+                node.copy_display_from(&self.scene[slot]);
+                // After the display copy, which brought the *old* derived
+                // node's frame with it: the source may have been aligned since.
+                node.transform = self.scene[index].transform.clone();
+                self.scene[slot] = node;
+                self.forget_recon(old);
+                if self.solo == Some(old) {
+                    self.solo = Some(new_id);
+                }
+                self.selected_recon = Some(new_id);
+            }
+            // A first resection arrives like any other node — through the one
+            // arrival path, which owns label disambiguation and what a new node
+            // does to the selection and the solo.
+            None => {
+                self.append_node(node);
+            }
+        }
+        self.hovered_image = None;
+        self.hovered_point = None;
+        // The point of the action is to look at the image that moved, so the
+        // point track detail opens on it immediately.
+        self.select_image(Some(ImageRef::new(new_id, image)));
+        // Last: `append_node` clears the status line, and what happened here is
+        // exactly what the line should say.
+        self.status_message = Some(message);
+    }
+
+    /// Make sure [`AppState::resect_matches_cache`] holds the `.matches` file
+    /// chosen for `source`, reading it if it does not. `Err` carries the reason
+    /// for the status line.
+    fn load_resect_matches(&mut self, source: ReconId) -> Result<(), String> {
+        let path = self
+            .resect_matches
+            .get(&source)
+            .cloned()
+            .ok_or_else(|| "no .matches file chosen".to_string())?;
+        if self
+            .resect_matches_cache
+            .as_ref()
+            .is_some_and(|(cached, _)| *cached == path)
+        {
+            return Ok(());
+        }
+        match matches_format::read_matches(&path) {
+            Ok(data) => {
+                self.resect_matches_cache = Some((path, data));
+                Ok(())
+            }
+            Err(e) => {
+                // A path that cannot be read is not a path worth remembering:
+                // the next attempt should ask again rather than fail the same
+                // way silently.
+                self.resect_matches.remove(&source);
+                Err(format!("could not read {}: {e}", path.display()))
+            }
+        }
     }
 
     /// Return a node to its own frame.

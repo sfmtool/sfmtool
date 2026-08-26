@@ -23,6 +23,7 @@ use sfmtool_core::{RotQuaternion, Se3Transform, SfmrReconstruction};
 
 use super::{row_id, SceneGraphPanel};
 use crate::align::{AlignOptions, AlignSource};
+use crate::resect::ResectFrom;
 use crate::scene::{CameraRef, ImageRef, NodeTint, PointRef, SceneNode, TINT_PALETTE};
 use crate::state::{AppState, CachedSiftFeatures};
 use crate::viewer_3d::Viewer3D;
@@ -2490,4 +2491,305 @@ fn exact_counts_carry_thousands_separators_on_the_group_rows() {
     assert_eq!(super::with_thousands(999), "999");
     assert_eq!(super::with_thousands(1_000), "1,000");
     assert_eq!(super::with_thousands(1_204_551), "1,204,551");
+}
+
+// ── Resect Image ────────────────────────────────────────────────────────
+
+/// A node a resection can actually run on: the demo camera ring, with every
+/// observation recomputed as an inline keypoint from the node's own geometry.
+///
+/// [`recon_named`] clones one pose for every image and `demo` keeps its
+/// observations in `.sift` companions that no test has on disk — neither of
+/// which a resection can work from. Here every point is observed by every
+/// camera that can see it, at the pixel that camera actually projects it to.
+fn resectable_node(path: &str) -> SceneNode {
+    use sfmtool_core::reconstruction::{ObservationSource, TrackObservation};
+
+    let mut recon = SfmrReconstruction::demo(120);
+    let camera = recon.cameras[0].clone();
+    let mut tracks = Vec::new();
+    let mut counts = Vec::new();
+    let mut keypoints: Vec<[f32; 2]> = Vec::new();
+    for (p, point) in recon.points.iter().enumerate() {
+        let mut count = 0u32;
+        for (i, image) in recon.images.iter().enumerate() {
+            let local = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
+            let Some((u, v)) = camera.ray_to_pixel([local.x, local.y, local.z]) else {
+                continue;
+            };
+            if u < 0.0 || v < 0.0 || u >= camera.width as f64 || v >= camera.height as f64 {
+                continue;
+            }
+            tracks.push(TrackObservation {
+                image_index: i as u32,
+                point_index: p as u32,
+            });
+            keypoints.push([u as f32, v as f32]);
+            count += 1;
+        }
+        counts.push(count);
+    }
+    let images = recon.images.len();
+    let mut keypoints_xy = ndarray::Array2::<f32>::zeros((keypoints.len(), 2));
+    for (row, uv) in keypoints.iter().enumerate() {
+        keypoints_xy[[row, 0]] = uv[0];
+        keypoints_xy[[row, 1]] = uv[1];
+    }
+    recon.observations = ObservationSource::EmbeddedPatches {
+        keypoints_xy,
+        image_file_hashes: vec![[0u8; 16]; images],
+    };
+    recon.metadata.feature_source = "embedded_patches".to_string();
+    recon.tracks = tracks;
+    recon.observation_counts = counts;
+    recon.rebuild_derived_fields();
+    SceneNode::from_path(std::path::Path::new(path), recon)
+}
+
+/// A state holding one resectable node, with its image list expanded and the
+/// panel settled, ready to be right-clicked.
+fn resectable_scene() -> AppState {
+    let mut state = AppState::new();
+    state.append_node(resectable_node("/runs/run_a.sfmr"));
+    state
+}
+
+/// Expand a node's Camera Images group and settle the panel on it.
+fn with_image_list(
+    state: &mut AppState,
+) -> (SceneGraphPanel, egui::Context, crate::scene::ReconId) {
+    let id = state.scene[0].id;
+    let (mut panel, ctx) = settled(state);
+    set_open(&ctx, row_id(id, "camera_images"), true);
+    run_frame(&mut panel, &ctx, state, Vec::new());
+    run_frame(&mut panel, &ctx, state, Vec::new());
+    (panel, ctx, id)
+}
+
+#[test]
+fn the_resect_entries_are_on_image_rows_and_not_on_the_reconstruction_row() {
+    let mut state = shared_shoot(1);
+    let (mut panel, ctx, id) = with_image_list(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_0"));
+    assert!(
+        panel.hit_rect(row_id(id, "resect_0")).is_some(),
+        "the image row's menu offered no Resect Image"
+    );
+    assert!(
+        panel.hit_rect(row_id(id, "resect_matches_0")).is_some(),
+        "the image row's menu offered no matches variant"
+    );
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    assert!(
+        context_menu_open(&panel, id),
+        "the reconstruction row's menu did not open"
+    );
+    assert!(
+        panel.hit_rect(row_id(id, "resect_0")).is_none(),
+        "Resect Image leaked onto the reconstruction row's menu"
+    );
+}
+
+#[test]
+fn choosing_resect_image_reports_the_image_and_the_source() {
+    let mut state = shared_shoot(1);
+    let (mut panel, ctx, id) = with_image_list(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_2"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_2"));
+    assert_eq!(
+        response.resect_image,
+        Some((ImageRef::new(id, 2), ResectFrom::Observations))
+    );
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_2"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_matches_2"));
+    assert_eq!(
+        response.resect_image,
+        Some((ImageRef::new(id, 2), ResectFrom::Matches))
+    );
+}
+
+#[test]
+fn resect_is_greyed_on_a_reconstruction_with_too_few_posed_images() {
+    let mut state = AppState::new();
+    // Three images: the target plus two others, one short of the floor.
+    state.append_node(file_node("/runs/thin.sfmr", 3, "IMG"));
+    let (mut panel, ctx, id) = with_image_list(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_0"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_0"));
+    assert_eq!(
+        response.resect_image, None,
+        "the greyed Resect Image still emitted the action"
+    );
+}
+
+#[test]
+fn resect_is_greyed_on_an_image_that_is_not_posed() {
+    let mut state = shared_shoot(1);
+    state.scene[0].recon.images[1].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
+    let (mut panel, ctx, id) = with_image_list(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_1"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_1"));
+    assert_eq!(
+        response.resect_image, None,
+        "an unposed image was resectable"
+    );
+
+    // Its posed neighbours are unaffected.
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_0"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_0"));
+    assert!(response.resect_image.is_some());
+}
+
+#[test]
+fn the_matches_variant_is_greyed_without_feature_indexes() {
+    // A resectable node carries embedded patches, which is exactly the case a
+    // match row cannot be joined to.
+    let mut state = resectable_scene();
+    let (mut panel, ctx, id) = with_image_list(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_0"));
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_matches_0"));
+    assert_eq!(response.resect_image, None, "the matches variant was live");
+
+    // The stored-observations entry beside it is unaffected — and the menu is
+    // still standing, which is what `CloseOnClickOutside` is there for.
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_0"));
+    assert_eq!(
+        response.resect_image,
+        Some((ImageRef::new(id, 0), ResectFrom::Observations))
+    );
+}
+
+#[test]
+fn resecting_an_image_adds_a_derived_node_in_the_source_frame() {
+    let mut state = resectable_scene();
+    let source = state.scene[0].id;
+    state.scene[0].transform = known_similarity();
+    let image = state.scene[0].recon.images[3].name.clone();
+
+    state.resect_image(source, 3, ResectFrom::Observations);
+
+    assert_eq!(state.scene.len(), 2, "no derived node was added");
+    let derived = &state.scene[1];
+    assert_eq!(derived.label, format!("run_a (resected {image})"));
+    let inherited = known_similarity();
+    assert_eq!(derived.transform.scale, inherited.scale);
+    assert_eq!(derived.transform.translation, inherited.translation);
+    assert_eq!(derived.transform.rotation, inherited.rotation);
+    assert_eq!(derived.resected_from, Some((source, 3)));
+    assert!(derived.path.is_none(), "the derived node claims a file");
+    // Selection lands on the derived node with the resected image selected in
+    // it, so the point track detail opens on it.
+    assert_eq!(state.selected_recon, Some(derived.id));
+    assert_eq!(state.selected_image, Some(ImageRef::new(derived.id, 3)));
+    assert!(state
+        .status_message
+        .as_ref()
+        .is_some_and(|m| m.contains("Resected") && m.contains(&image)));
+
+    // The source is untouched.
+    assert_eq!(state.scene[0].id, source);
+    assert_eq!(
+        state.scene[0].recon.images[3].quaternion_wxyz,
+        resectable_node("/runs/run_a.sfmr").recon.images[3].quaternion_wxyz
+    );
+}
+
+#[test]
+fn the_resected_image_row_is_marked_in_the_derived_node() {
+    let mut state = resectable_scene();
+    let source = state.scene[0].id;
+    state.resect_image(source, 3, ResectFrom::Observations);
+    let derived = state.scene[1].id;
+    let name = state.scene[1].recon.images[3].name.clone();
+
+    let (mut panel, ctx) = settled(&mut state);
+    set_open(&ctx, row_id(source, "camera_images"), false);
+    set_open(&ctx, row_id(derived, "camera_images"), true);
+    // The image list is virtualized against the previous frame's layout, so the
+    // first pass after expanding it has not measured the viewport yet.
+    for _ in 0..2 {
+        run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    }
+    painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
+    let painted = painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
+
+    assert!(
+        painted
+            .iter()
+            .any(|text| text.contains(&name) && text.contains("(resected)")),
+        "no row carried the resected marker: {painted:?}"
+    );
+    // Only the one image is marked.
+    assert_eq!(
+        painted
+            .iter()
+            .filter(|text| text.contains("(resected)"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_repeat_resection_replaces_the_earlier_derived_node() {
+    let mut state = resectable_scene();
+    let source = state.scene[0].id;
+    state.resect_image(source, 3, ResectFrom::Observations);
+    let first = state.scene[1].id;
+    let label = state.scene[1].label.clone();
+
+    state.resect_image(source, 3, ResectFrom::Observations);
+    assert_eq!(state.scene.len(), 2, "a repeat added a third node");
+    let second = state.scene[1].id;
+    assert_ne!(second, first, "the replacement reused the old id");
+    assert_eq!(state.scene[1].label, label, "the replacement was renamed");
+    assert_eq!(state.selected_recon, Some(second));
+
+    // A *different* image of the same source is a different question, and gets
+    // its own node.
+    state.resect_image(source, 4, ResectFrom::Observations);
+    assert_eq!(state.scene.len(), 3);
+}
+
+#[test]
+fn a_resection_that_cannot_be_attempted_reports_itself_and_adds_nothing() {
+    let mut state = AppState::new();
+    state.append_node(file_node("/runs/thin.sfmr", 3, "IMG"));
+    let source = state.scene[0].id;
+
+    state.resect_image(source, 0, ResectFrom::Observations);
+    assert_eq!(state.scene.len(), 1, "a refused resection made a node");
+    assert!(state
+        .status_message
+        .as_ref()
+        .is_some_and(|m| m.starts_with("Resect ") && m.contains("refused")));
+}
+
+#[test]
+fn the_matches_variant_without_a_chosen_file_reports_itself() {
+    let mut state = resectable_scene();
+    let source = state.scene[0].id;
+    state.resect_image(source, 0, ResectFrom::Matches);
+    assert_eq!(state.scene.len(), 1);
+    assert!(state
+        .status_message
+        .as_ref()
+        .is_some_and(|m| m.contains(".matches")));
+}
+
+#[test]
+fn closing_a_node_forgets_the_matches_file_chosen_for_it() {
+    let mut state = resectable_scene();
+    let source = state.scene[0].id;
+    state
+        .resect_matches
+        .insert(source, std::path::PathBuf::from("/runs/run_a.matches"));
+    state.close_node(source);
+    assert!(state.resect_matches.is_empty());
 }

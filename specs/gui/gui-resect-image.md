@@ -1,6 +1,9 @@
 # Resect Image
 
-*Status: specified.*
+*Status: implemented* — `sfmtool_core::geometry::resect_image`
+(`crates/sfmtool-core/src/geometry/resect_image.rs`), surfaced by
+`crates/sfm-explorer/src/resect.rs`, the image rows' context menu in
+`scene_graph/mod.rs`, and `AppState::resect_image`.
 
 A per-image action in the Scene Graph panel that re-estimates one image's pose
 against the rest of its reconstruction and shows the result as a new node
@@ -173,8 +176,11 @@ displacement in its own units and no ratio. On refusal:
   target image is selected in it, so the point track detail opens on the
   resected image immediately.
 - **Saving**: the derived node saves through whatever file action the
-  application offers for a loaded node; this feature adds no I/O of its own
-  beyond the `.matches` read.
+  application offers for a loaded node — today none, so it is a session
+  artifact. This feature adds no writing of its own; what it reads is the
+  `.matches` file of the matches variant, and, on a `sift_files`
+  reconstruction, the `.sift` companions of the images that observe the
+  target's points (that is where those observations' 2D coordinates live).
 - The resected image's tree row carries a marker (a suffix in the row text)
   so the reviewer can tell which image moved after the node has been renamed
   or re-sorted.

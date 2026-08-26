@@ -524,6 +524,9 @@ impl TabContext<'_> {
         if let Some((source, target, options)) = response.align_node {
             self.state.align_node(source, target, options);
         }
+        if let Some((image, from)) = response.resect_image {
+            self.resect_image(image, from);
+        }
         if let Some(id) = response.reset_transform {
             self.state.reset_node_transform(id);
         }
@@ -537,6 +540,32 @@ impl TabContext<'_> {
             self.state.close_node(id);
             self.forget_recon(id);
         }
+    }
+
+    /// Resect one image, asking for a `.matches` file first when the matches
+    /// variant was chosen and this node has not been given one yet.
+    ///
+    /// The dialog lives here rather than in the panel so the panel stays a pure
+    /// egui function that a headless frame can run: it reports the *choice*, and
+    /// the file that choice needs is found out here. The path is remembered per
+    /// source node for the session, so working through several images of one
+    /// capture asks once.
+    fn resect_image(&mut self, image: ImageRef, from: crate::resect::ResectFrom) {
+        if from == crate::resect::ResectFrom::Matches
+            && !self.state.resect_matches.contains_key(&image.recon)
+        {
+            let Some(path) = rfd::FileDialog::new()
+                .add_filter("Feature Matches", &["matches"])
+                .pick_file()
+            else {
+                // Dismissing the chooser cancels the action rather than falling
+                // back to the other correspondence source: the user asked for
+                // the matches one.
+                return;
+            };
+            self.state.resect_matches.insert(image.recon, path);
+        }
+        self.state.resect_image(image.recon, image.index(), from);
     }
 
     /// Frame `points` in the 3D viewport, if it has been laid out at least

@@ -17,6 +17,7 @@
 //!         #0  OPENCV_FISHEYE  480×480  f 240.1  26 images
 //!   ▾ 👁 Camera Images (243)
 //!       IMG_0001.jpg              ← virtualized, `ScrollArea::show_rows`
+//!       IMG_0007.jpg  (resected)  ← on a node the Resect Image action made
 //!   ▾ 👁 Points (1,204,551 · 12 at ∞) ∞
 //!       selected: pt3d_a1b2c3_88231   ← selection / hover rows only
 //!     👁 Patches                   ← only when the node carries patch data
@@ -39,10 +40,12 @@ use eframe::egui;
 use sfmtool_core::CameraIntrinsics;
 
 use crate::align::{AlignOptions, AlignSource};
+use crate::resect::ResectFrom;
 use crate::scene::{
     point_id, CameraRef, ImageRef, NodeTint, PointRef, ReconId, SceneNode, TINT_PALETTE,
 };
 use crate::state::AppState;
+use sfmtool_core::geometry::MIN_OTHER_POSED_IMAGES;
 
 /// Height of one tree row. Fixed so the image list can be virtualized, and so
 /// the eye/cursor toggles line up down the tree regardless of label height.
@@ -138,6 +141,11 @@ pub struct SceneGraphResponse {
     pub close_node: Option<ReconId>,
     /// `Reload from Disk` chosen from a reconstruction's context menu.
     pub reload_node: Option<ReconId>,
+    /// `Resect Image` / `Resect Image from Matches…` chosen on an image row:
+    /// the image to resect and which correspondence source was asked for. The
+    /// `.matches` file itself is chosen a layer up, where the file dialog and
+    /// the per-node memory of the last path live — see [`crate::resect`].
+    pub resect_image: Option<(ImageRef, ResectFrom)>,
 }
 
 /// Scene Graph panel state.
@@ -823,6 +831,65 @@ fn show_camera_images_group(
     header.body(|ui| show_camera_image_rows(ui, node, ctx, out));
 }
 
+/// What an image row's `Resect Image` entries need to know about the node they
+/// belong to, computed once for the whole list rather than once per row.
+struct ResectAvailability {
+    /// Whether each image carries a pose at all. A `.sfmr` row always has the
+    /// fields; a non-finite one is a placeholder rather than a registration.
+    posed: Vec<bool>,
+    /// How many images of the node are posed.
+    posed_count: usize,
+    /// Whether the node's observations carry feature indexes — what the match
+    /// rows are joined through, and so what the matches variant needs.
+    feature_indexed: bool,
+}
+
+impl ResectAvailability {
+    fn of(node: &SceneNode) -> Self {
+        let posed: Vec<bool> = node
+            .recon
+            .images
+            .iter()
+            .map(|image| {
+                image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
+                    && image.translation_xyz.iter().all(|c| c.is_finite())
+            })
+            .collect();
+        Self {
+            posed_count: posed.iter().filter(|&&p| p).count(),
+            posed,
+            feature_indexed: node.recon.feature_indexes().is_some(),
+        }
+    }
+
+    /// Why `Resect Image` is unavailable for image `index`, or `None` when it
+    /// is available.
+    fn refusal(&self, index: usize) -> Option<&'static str> {
+        if !self.posed.get(index).copied().unwrap_or(false) {
+            return Some(NOT_POSED_HINT);
+        }
+        // The target itself is one of the posed images, so "three others" is
+        // four in total.
+        (self.posed_count < MIN_OTHER_POSED_IMAGES + 1).then_some(TOO_FEW_POSED_HINT)
+    }
+}
+
+/// Why `Resect Image` is greyed on an image with no pose.
+const NOT_POSED_HINT: &str =
+    "This image is not posed, so there is no pose to re-estimate against the rest.";
+
+/// Why `Resect Image` is greyed on a node with too little of a reconstruction
+/// to hold anything out from.
+const TOO_FEW_POSED_HINT: &str =
+    "Fewer than three other images of this reconstruction are posed. Two cameras fix \
+     structure only up to their own degenerate freedoms, so re-estimating a pose \
+     against them would measure the pair rather than the scene.";
+
+/// Why `Resect Image from Matches…` is greyed on an embedded-patches node.
+const MATCHES_DISABLED_HINT: &str =
+    "Match rows are joined to observations by feature index, and this reconstruction \
+     carries embedded patches instead — there is no feature index to join on.";
+
 /// The per-image rows, laid out only for the visible slice of the list.
 fn show_camera_image_rows(
     ui: &mut egui::Ui,
@@ -835,6 +902,8 @@ fn show_camera_image_rows(
         ui.weak("No images");
         return;
     }
+    let resect = ResectAvailability::of(node);
+    let resected = node.resected_image();
 
     // Scroll the selected row into view only when the selection moved and it
     // belongs to this node. Driven by an explicit offset rather than
@@ -868,7 +937,16 @@ fn show_camera_image_rows(
             // egui's own, so a hover raised in the 3D viewport or the browser
             // lights this row up too.
             let hovered = ctx.hovered_image == Some(image);
-            let mut text = egui::RichText::new(name);
+            // The marker on the image a resection moved. A suffix rather than a
+            // glyph or a colour: it has to survive the node being renamed and
+            // the list being scrolled, and it has to be readable in the one
+            // place the tree puts an image's identity.
+            let label = if resected == Some(index) {
+                format!("{name}  {RESECTED_MARKER}")
+            } else {
+                name.to_string()
+            };
+            let mut text = egui::RichText::new(label);
             if hovered && !selected {
                 text = text.color(ui.visuals().strong_text_color());
             }
@@ -889,8 +967,68 @@ fn show_camera_image_rows(
             if row.hovered() {
                 out.response.hovered_image = Some(image);
             }
+            // Built from `Popup` for the same reason the reconstruction row's
+            // menu is: `Response::context_menu` closes on any click inside it,
+            // and a greyed entry the user clicks to read its explanation would
+            // take the menu down with it.
+            egui::Popup::context_menu(&row)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| image_context_menu(ui, node.id, index, image, &resect, out));
         }
     });
+}
+
+/// What marks the image a resection moved, appended to its row text.
+const RESECTED_MARKER: &str = "(resected)";
+
+/// The image row's context menu: the two `Resect Image` entries.
+///
+/// Both are kept visible and greyed rather than hidden when unavailable — the
+/// action exists on every image row, and an entry that vanishes reads as an
+/// action that was never implemented. The hover text says which of the two
+/// reasons applies.
+fn image_context_menu(
+    ui: &mut egui::Ui,
+    node: ReconId,
+    index: usize,
+    image: ImageRef,
+    resect: &ResectAvailability,
+    out: &mut TreeOutput,
+) {
+    let refusal = resect.refusal(index);
+    let observations = ui
+        .add_enabled(refusal.is_none(), egui::Button::new("Resect Image"))
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "Re-estimate this image's pose against structure re-triangulated without it, \
+             and show the answer as a new node beside this one.",
+        );
+    if out
+        .hit(row_id(node, &format!("resect_{index}")), observations)
+        .clicked()
+    {
+        out.response.resect_image = Some((image, ResectFrom::Observations));
+        ui.close();
+    }
+
+    let matches_hint = refusal.or((!resect.feature_indexed).then_some(MATCHES_DISABLED_HINT));
+    let matches = ui
+        .add_enabled(
+            matches_hint.is_none(),
+            egui::Button::new("Resect Image from Matches…"),
+        )
+        .on_disabled_hover_text(matches_hint.unwrap_or_default())
+        .on_hover_text(
+            "The same, with the 2D-3D pairs taken from a .matches file — which admits \
+             points this reconstruction never assigned to the image.",
+        );
+    if out
+        .hit(row_id(node, &format!("resect_matches_{index}")), matches)
+        .clicked()
+    {
+        out.response.resect_image = Some((image, ResectFrom::Matches));
+        ui.close();
+    }
 }
 
 /// `[▸] [👁] Points (1,204,551 · 12 at ∞) [∞]`, expanding to the selection and
