@@ -4651,6 +4651,7 @@ dependencies = [
  "half",
  "image",
  "kiddo",
+ "matches-format",
  "nalgebra",
  "ndarray",
  "pollster 1.0.1",

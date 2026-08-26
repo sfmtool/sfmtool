@@ -25,6 +25,7 @@ serde_json = "1"
 sfmr-format = { path = "../sfmr-format" }
 sift-format = { path = "../sift-format" }
 camrig-format = { path = "../camrig-format" }
+matches-format = { path = "../matches-format" }
 
 # GPU compute (optional)
 wgpu = { version = "30", features = ["dx12", "vulkan"], optional = true }

@@ -50,9 +50,10 @@ The chosen path is remembered per source node for the session.
 
 ## Mechanism
 
-Everything below `## Invocation` lives in `sfmtool-core` as one function; the
-GUI adds the menu entries, the node bookkeeping, and the status line. The same
-function is what an offline caller uses to resect an image.
+Everything below `## Invocation` lives in `sfmtool-core` as one function —
+`geometry::resect_image` — and the GUI adds the menu entries, the node
+bookkeeping, and the status line. The same function is what an offline caller
+uses to resect an image.
 
 ### 1. Clone
 
@@ -87,8 +88,13 @@ about those points).
   rotation-only, the rotation is estimated by closed-form absolute
   orientation between the image's observed ray directions and the bearings of
   the points at infinity it observes (trimmed, iterated), and the translation
-  is left at its stored value. Requires at least three bearings spanning a
-  non-degenerate angle; below that the action refuses.
+  is left at its stored value. Requires at least three bearings, spanning an
+  angle the camera can resolve — the largest angle any bearing makes with the
+  set's mean direction has to exceed one pixel's worth of angle at the
+  camera's own focal, since a spread narrower than that is not a spread.
+  Below either, the action refuses. The inlier bound is the finite path's
+  3 px bound in the same currency: the angle a pixel subtends on this
+  camera.
 - The estimate is accepted or refused on the primitive's own gate
   (`accept_gate`). A refused estimate still produces the derived node — with
   the stored pose retained and the refusal reported — so the reviewer can see
@@ -102,9 +108,13 @@ the image does not observe are untouched. No bundle adjustment runs: the point
 of the action is to show what the resection alone says, not what a joint refit
 would smooth over.
 
-A point that fails re-triangulation (cheirality, angle below the triangulation
-floor) keeps its held-out position from step 2 when it has one, and is
-otherwise removed with its observations.
+A point fails re-triangulation when fewer than two observations survive, when
+the solve puts it behind one of the cameras that observe it, or when its depth
+is not observable at all (parallel rays, which leaves the triangulation's normal
+matrix rank-deficient — the parallax floor stated in the solve's own
+diagnostics rather than as a separate angle threshold). A point that fails keeps
+its held-out position from step 2 when it has one, and is otherwise removed with
+its observations.
 
 ### 5. Result
 
@@ -125,7 +135,14 @@ carries provenance.
   target (its observation set is a subset of what the matches offer) and is
   the same construction as the offline non-member resection. Match rows are
   joined through feature indexes, so this source requires a `sift_files`
-  reconstruction. Keypoints of the target that have no observation in the
+  reconstruction. Either backbone serves — clusters, where every pair of
+  members on distinct images is a match, or the pairwise sections. The
+  target's pixel is the refined member position when the file carries
+  `cluster_patches` (that is what the cluster claims the feature is at) and
+  the target's own `.sift` detection otherwise; a rejected or unevaluated
+  cluster member is not a claim and does not participate. A point the target
+  also observes is scored against its **held-out** position, never the stored
+  one it helped fit. Keypoints of the target that have no observation in the
   reconstruction contribute to the estimate but create no new track.
 
 ### Reported quantities
@@ -135,9 +152,12 @@ The status line (viewport overlay, as `Align to…` reports) shows:
 `Resected <image> in <node>: <n> pts, inliers <k>/<n> (<f>), rotation
 <deg>°, translation <d> (scene-scale), <m> re-triangulated`
 
-where the rotation and translation deltas are between the stored and resected
-poses, the translation in units of the source's median camera-to-structure
-distance (the same unit the evaluation channels use). On refusal:
+where the rotation delta is the angle between the stored and resected
+world-to-camera rotations and the translation delta is the distance the camera
+**centre** moved, in units of the source's median-over-images of that image's
+median camera-to-structure distance (the same unit the evaluation channels
+use). A rotation-only reconstruction has no such distance, so it reports the
+displacement in its own units and no ratio. On refusal:
 `Resect <image> in <node> refused: <reason>`.
 
 ---
