@@ -334,6 +334,10 @@ fixed-height for virtualization.
 - Hover: sets `hovered_image` (participates in cross-panel hover exactly like
   a browser thumbnail; the row highlights when the same image is hovered
   elsewhere, e.g. from the 3D viewport pick).
+- Context menu: `Resect Image` and `Resect Image from Matches…`, which
+  re-estimate this one image's pose against the rest of its reconstruction and
+  show the answer as a derived node beside the original — see
+  [gui-resect-image.md](gui-resect-image.md), which owns them.
 - Selected row: highlight + auto-scroll into view when the selection changes
   from another panel (scroll-to happens only on selection *change*, so the
   user's manual scrolling isn't fought).

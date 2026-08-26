@@ -19,6 +19,7 @@ an interactive GUI for exploring Structure-from-Motion reconstructions.
 | [gui-cross-panel-hover.md](gui-cross-panel-hover.md) | Cross-panel hover tracking: transient hover highlighting across 3D Viewer, Image Browser, and Image Detail panels via GPU uniforms. |
 | [gui-viewport-hud.md](gui-viewport-hud.md) | The in-viewport HUD that owns every 3D display control: layout, sections, and the input-arbitration rules a floating panel inside the 3D viewport requires. |
 | [gui-scene-graph.md](gui-scene-graph.md) | Multi-reconstruction support: several `.sfmr` files loaded at once as scene-graph nodes, per-node visibility/tint/solo and similarity transforms with an in-GUI "Align to…" operation, per-reconstruction GPU resource bundles, widened pick encoding, and the Scene Graph tree panel. |
+| [gui-resect-image.md](gui-resect-image.md) | Resect Image: a per-image Scene Graph action that re-estimates one image's pose against held-out structure and shows the result as a derived node beside the original. |
 | [gui-adaptive-clip-and-grid.md](gui-adaptive-clip-and-grid.md) | Reversed-Z infinite far projection, adaptive near plane, and adaptive ground grid scaling. |
 | [gui-image-animation.md](gui-image-animation.md) | Image animation playback: play through image sequence with keyboard/UI controls, camera view fly-through. |
 | [gui-architecture.md](gui-architecture.md) | Technology stack (Rust, wgpu, egui, egui_dock, winit, PyO3), crate structure, multi-pass rendering pipeline, build system, and performance design. |
