@@ -34,17 +34,18 @@ use super::{
     MIN_OTHER_POSED_IMAGES,
 };
 
-/// One target's outcome — what the single-image tests below read.
-struct One {
+/// The outcome for a single target: a one-element [`resect_images`] call
+/// unpacked, which is what the single-image tests below read.
+struct SingleResection {
     reconstruction: SfmrReconstruction,
     report: ResectImageReport,
 }
 
 /// The report alone: an [`SfmrReconstruction`] is not `Debug`, and a failing
 /// assertion wants to see what the estimate did.
-impl std::fmt::Debug for One {
+impl std::fmt::Debug for SingleResection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("One")
+        f.debug_struct("SingleResection")
             .field("report", &self.report)
             .finish_non_exhaustive()
     }
@@ -58,11 +59,11 @@ fn resect_image(
     image_index: usize,
     source: ResectSource<'_>,
     options: &ResectImageOptions,
-) -> Result<One, ResectImageError> {
+) -> Result<SingleResection, ResectImageError> {
     let out = resect_images(recon, &[image_index], source, options)?;
     assert_eq!(out.reports.len(), 1);
     assert_eq!(out.totals.targets, 1);
-    Ok(One {
+    Ok(SingleResection {
         reconstruction: out.reconstruction,
         report: out.reports.into_iter().next().expect("one report"),
     })
