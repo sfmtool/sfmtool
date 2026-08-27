@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The matches-backed correspondence source of [`super::resect_image`].
+//! The matches-backed correspondence source of [`super::resect_images`].
 //!
 //! A `.matches` file says which features of which images look like the same
 //! piece of the world. A reconstruction says which of *its* features are which

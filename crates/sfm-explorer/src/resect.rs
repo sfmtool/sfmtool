@@ -6,9 +6,10 @@
 //!
 //! The estimate itself — the hold-out, the pose fit, the re-triangulation at the
 //! new pose and the report that describes them — lives in
-//! [`mod@sfmtool_core::geometry::resect_image`], so the GUI and any offline
-//! caller resect an image exactly the same way. See
-//! `specs/gui/gui-resect-image.md`.
+//! [`mod@sfmtool_core::geometry::resect_images`], which holds a whole set of
+//! images out together; the panel's action is that primitive on a one-element
+//! set, so the GUI and any offline caller resect an image exactly the same way.
+//! See `specs/gui/gui-resect-image.md`.
 //!
 //! What stays here is the viewer's own share: which correspondence source the
 //! menu asked for, and the status-line text the outcome is reported in. Making
@@ -16,7 +17,7 @@
 //! resected row — is [`crate::state::AppState::resect_image`]'s job.
 
 pub use sfmtool_core::geometry::{
-    resect_image, ResectImageOptions, ResectImageReport, ResectSource,
+    resect_images, ResectImageOptions, ResectImageReport, ResectSource,
 };
 
 /// Which of the two menu entries was chosen.

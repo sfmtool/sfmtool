@@ -730,14 +730,16 @@ impl AppState {
                 Some(data) => resect::ResectSource::Matches(data),
                 None => resect::ResectSource::StoredObservations,
             };
-            resect::resect_image(
+            // The panel's action is one image, which is the set primitive on a
+            // one-element set.
+            resect::resect_images(
                 &self.scene[index].recon,
-                image,
+                &[image],
                 kind,
                 &resect::ResectImageOptions::default(),
             )
         };
-        let resected = match outcome {
+        let mut resected = match outcome {
             Ok(resected) => resected,
             Err(error) => {
                 self.status_message = Some(resect::failure_message(
@@ -748,9 +750,10 @@ impl AppState {
                 return;
             }
         };
-        let message = match &resected.report.refusal {
+        let report = resected.reports.pop().expect("one target, one report");
+        let message = match &report.refusal {
             Some(reason) => resect::failure_message(&basename, &label, reason),
-            None => resect::success_message(&basename, &label, &resected.report),
+            None => resect::success_message(&basename, &label, &report),
         };
 
         let derived_label = format!("{label} (resected {basename})");

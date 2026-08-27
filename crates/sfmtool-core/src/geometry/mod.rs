@@ -18,7 +18,7 @@ pub mod pose_verification;
 pub mod reconstruction_growth;
 pub mod relative_pose;
 pub mod reprojection;
-pub mod resect_image;
+pub mod resect_images;
 pub mod resect_translation;
 pub mod rigid_transform;
 pub mod rot_quaternion;
@@ -42,9 +42,9 @@ pub use relative_pose::{
     RayRotation, RayRotationOptions,
 };
 pub use reprojection::{inlier_fraction, reprojection_residuals};
-pub use resect_image::{
-    resect_image, ResectImageError, ResectImageOptions, ResectImageReport, ResectSource,
-    ResectedImage, MIN_BEARINGS, MIN_OTHER_POSED_IMAGES,
+pub use resect_images::{
+    resect_images, ResectImageError, ResectImageOptions, ResectImageReport, ResectSource,
+    ResectTotals, ResectedImages, MIN_BEARINGS, MIN_OTHER_POSED_IMAGES,
 };
 pub use resect_translation::{resect_translation, TranslationResection};
 pub use rigid_transform::RigidTransform;

@@ -20,6 +20,7 @@ pub mod pose_verification;
 pub mod reconstruction_growth;
 pub mod relative_pose;
 pub mod reprojection;
+pub mod resect_images;
 pub mod resect_translation;
 pub mod rigid_transform;
 pub mod rot_quaternion;
@@ -50,5 +51,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     reconstruction_growth::register(m)?;
     pose_verification::register(m)?;
     relative_pose::register(m)?;
+    resect_images::register(m)?;
     Ok(())
 }

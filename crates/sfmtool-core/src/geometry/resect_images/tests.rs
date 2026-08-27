@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Tests for [`super::resect_image`].
+//! Tests for [`super::resect_images`].
 //!
 //! The synthetic fixtures are `embedded_patches` reconstructions so the 2D
 //! observations are inline: the geometry under test is the hold-out and the
@@ -30,8 +30,43 @@ use crate::reconstruction::{
 };
 
 use super::{
-    resect_image, ResectImageError, ResectImageOptions, ResectSource, MIN_OTHER_POSED_IMAGES,
+    resect_images, ResectImageError, ResectImageOptions, ResectImageReport, ResectSource,
+    MIN_OTHER_POSED_IMAGES,
 };
+
+/// One target's outcome — what the single-image tests below read.
+struct One {
+    reconstruction: SfmrReconstruction,
+    report: ResectImageReport,
+}
+
+/// The report alone: an [`SfmrReconstruction`] is not `Debug`, and a failing
+/// assertion wants to see what the estimate did.
+impl std::fmt::Debug for One {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("One")
+            .field("report", &self.report)
+            .finish_non_exhaustive()
+    }
+}
+
+/// [`resect_images`] on a one-element set. Most of what there is to test about
+/// the mechanism is visible with one image held out; the tests that need a set
+/// call [`resect_images`] directly.
+fn resect_image(
+    recon: &SfmrReconstruction,
+    image_index: usize,
+    source: ResectSource<'_>,
+    options: &ResectImageOptions,
+) -> Result<One, ResectImageError> {
+    let out = resect_images(recon, &[image_index], source, options)?;
+    assert_eq!(out.reports.len(), 1);
+    assert_eq!(out.totals.targets, 1);
+    Ok(One {
+        reconstruction: out.reconstruction,
+        report: out.reports.into_iter().next().expect("one report"),
+    })
+}
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -398,6 +433,173 @@ fn the_same_input_gives_a_bit_identical_answer() {
     assert_eq!(one.report.inlier_fraction, two.report.inlier_fraction);
 }
 
+// ── The set ─────────────────────────────────────────────────────────────────
+
+/// Perturb one image of `recon` by a rotation about `axis` and a fixed shift.
+fn perturbed(mut recon: SfmrReconstruction, target: usize, angle: f64) -> SfmrReconstruction {
+    let spin = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), angle);
+    recon.images[target].quaternion_wxyz = spin * recon.images[target].quaternion_wxyz;
+    recon.images[target].translation_xyz += Vector3::new(0.6, -0.3, 0.2);
+    recon
+}
+
+#[test]
+fn two_targets_held_out_together_both_recover() {
+    let truth = orbit();
+    let targets = [0usize, 1usize];
+    let true_poses: Vec<SfmrImage> = targets.iter().map(|&t| truth.images[t].clone()).collect();
+
+    let mut source = truth.clone();
+    source = perturbed(source, targets[0], 0.35);
+    source = perturbed(source, targets[1], -0.28);
+
+    let out = resect_images(
+        &source,
+        &targets,
+        ResectSource::StoredObservations,
+        &ResectImageOptions::default(),
+    )
+    .expect("six non-target cameras still carry the scene");
+
+    assert_eq!(out.reports.len(), 2);
+    assert_eq!(out.totals.targets, 2);
+    assert_eq!(out.totals.accepted, 2, "{:?}", out.reports);
+    assert_eq!(out.totals.refused, 0);
+    assert_eq!(
+        out.totals.correspondences,
+        out.reports.iter().map(|r| r.correspondences).sum::<usize>()
+    );
+    for (report, truth_pose) in out.reports.iter().zip(&true_poses) {
+        assert_eq!(report.image_index, truth_pose_index(&truth, truth_pose));
+        let fitted = &out.reconstruction.images[report.image_index];
+        assert!(
+            angle_deg(&fitted.quaternion_wxyz, &truth_pose.quaternion_wxyz) < 0.1,
+            "{} rotation off by {}",
+            report.image_name,
+            angle_deg(&fitted.quaternion_wxyz, &truth_pose.quaternion_wxyz)
+        );
+        assert!(
+            (fitted.camera_center() - truth_pose.camera_center()).norm() < 0.01,
+            "{} centre off by {}",
+            report.image_name,
+            (fitted.camera_center() - truth_pose.camera_center()).norm()
+        );
+        assert!(
+            report.rotation_deg > 10.0,
+            "the report is off the stored pose"
+        );
+    }
+
+    // The source is untouched under every outcome.
+    for &t in &targets {
+        assert_ne!(
+            source.images[t].quaternion_wxyz,
+            truth.images[t].quaternion_wxyz
+        );
+    }
+}
+
+#[test]
+fn the_hold_out_ignores_every_target_not_just_one() {
+    // Both targets' observations are junk *and* both poses are junk. A hold-out
+    // that dropped only the image being estimated would read the other target's
+    // corrupted rows and place the shared points wrong; one that drops the whole
+    // set reads the six honest cameras and lands on the truth.
+    let truth = orbit();
+    let targets = [0usize, 1usize];
+    let mut source = truth.clone();
+    for &t in &targets {
+        corrupt_observations(&mut source, t);
+        source.images[t].translation_xyz += Vector3::new(3.0, 3.0, 3.0);
+    }
+
+    let out = resect_images(
+        &source,
+        &targets,
+        ResectSource::StoredObservations,
+        &ResectImageOptions::default(),
+    )
+    .expect("the other six cameras still supply support");
+
+    assert_eq!(
+        out.totals.accepted, 0,
+        "junk observations should not resect"
+    );
+    assert_eq!(out.totals.retriangulated, 0);
+    assert!(out.totals.held_out_points > 100);
+    for report in &out.reports {
+        assert!(!report.accepted);
+        assert!(report.refusal.is_some());
+    }
+    // The fixture's points are all seen by every camera, so the hold-out places
+    // every one of them and nothing is dropped.
+    assert_eq!(out.totals.removed_points, 0);
+
+    let worst = out
+        .reconstruction
+        .points
+        .iter()
+        .zip(&truth.points)
+        .map(|(a, b)| (a.position - b.position).norm())
+        .fold(0.0, f64::max);
+    // Not zero: the fixture stores its keypoints as `f32`, so a position
+    // re-triangulated from them lands within the quantization of a pixel of the
+    // truth. What matters is that corrupting the targets moved nothing.
+    assert!(worst < 1e-5, "held-out positions drifted by {worst}");
+}
+
+#[test]
+fn an_empty_target_set_is_refused() {
+    let source = orbit();
+    let err = resect_images(
+        &source,
+        &[],
+        ResectSource::StoredObservations,
+        &ResectImageOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, ResectImageError::NoTargets), "{err}");
+}
+
+#[test]
+fn a_target_named_twice_is_refused() {
+    let source = orbit();
+    let err = resect_images(
+        &source,
+        &[2, 2],
+        ResectSource::StoredObservations,
+        &ResectImageOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, ResectImageError::DuplicateTarget(2)), "{err}");
+}
+
+#[test]
+fn a_set_that_leaves_too_few_posed_images_is_refused() {
+    // Five images, three of them held out: two are left, below the floor.
+    let source = build(ring(5, 4.0), cloud(120), false, 800.0);
+    let err = resect_images(
+        &source,
+        &[0, 1, 2],
+        ResectSource::StoredObservations,
+        &ResectImageOptions::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, ResectImageError::TooFewPosedImages(2)),
+        "{err}"
+    );
+}
+
+/// The index of the image `pose` came from, by name.
+fn truth_pose_index(recon: &SfmrReconstruction, pose: &SfmrImage) -> usize {
+    recon
+        .images
+        .iter()
+        .position(|i| i.name == pose.name)
+        .expect("the pose is one of the reconstruction's images")
+}
+
 // ── The rotation-only path ──────────────────────────────────────────────────
 
 /// A rotation-only fixture: cameras that share a centre and differ only in
@@ -479,7 +681,7 @@ fn a_reconstruction_with_too_few_other_images_is_refused() {
         matches!(err, ResectImageError::TooFewPosedImages(n) if n == MIN_OTHER_POSED_IMAGES - 1),
         "{err}"
     );
-    assert!(err.to_string().contains("other posed image"));
+    assert!(err.to_string().contains("non-target posed image"));
 }
 
 #[test]
@@ -507,22 +709,20 @@ fn too_few_held_out_points_and_no_bearings_is_refused() {
         .collect();
     source = drop_all_but(source, &rows);
 
-    let err = resect_image(
+    let out = resect_image(
         &source,
         target,
         ResectSource::StoredObservations,
         &ResectImageOptions::default(),
     )
-    .unwrap_err();
+    .expect("the call itself is well formed");
+    // Neither path has support, which is this image's refusal rather than the
+    // call's failure: the derived reconstruction still stands.
+    assert!(!out.report.accepted);
+    let refusal = out.report.refusal.expect("a reason");
     assert!(
-        matches!(
-            err,
-            ResectImageError::NoSupport {
-                finite: 0,
-                bearings: 0
-            }
-        ),
-        "{err}"
+        refusal.contains("no support") && refusal.contains("0 bearings"),
+        "{refusal}"
     );
 }
 
@@ -546,14 +746,16 @@ fn bearings_that_span_no_angle_are_refused() {
     let source = build(images, positions, true, 250.0);
     assert!(source.points.len() >= super::MIN_BEARINGS);
 
-    let err = resect_image(
+    let out = resect_image(
         &source,
         0,
         ResectSource::StoredObservations,
         &ResectImageOptions::default(),
     )
-    .unwrap_err();
-    assert!(matches!(err, ResectImageError::DegenerateBearings), "{err}");
+    .expect("the call itself is well formed");
+    assert!(!out.report.accepted);
+    let refusal = out.report.refusal.expect("a reason");
+    assert!(refusal.contains("span no measurable angle"), "{refusal}");
 }
 
 #[test]
@@ -567,7 +769,7 @@ fn an_unposed_target_is_refused() {
         &ResectImageOptions::default(),
     )
     .unwrap_err();
-    assert!(matches!(err, ResectImageError::NotPosed), "{err}");
+    assert!(matches!(err, ResectImageError::NotPosed(1)), "{err}");
 }
 
 #[test]
