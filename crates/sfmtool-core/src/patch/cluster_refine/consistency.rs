@@ -4,7 +4,7 @@
 //! Warp-consistency residuals: a reconstruction-free per-member misfit
 //! signal from a joint weak-perspective factorization of all cluster warps.
 //!
-//! See `specs/core/cluster-warp-consistency.md`. Every image is modeled as a
+//! See `specs/core/patch/cluster-warp-consistency.md`. Every image is modeled as a
 //! scaled-orthographic camera `M_k` (2×3) and every refined cluster as a
 //! planar patch with tangent frame `T_c` (3×2), parameterized so the
 //! reference member's warp is the identity; each stored member warp must

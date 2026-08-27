@@ -12,7 +12,7 @@
 //! eighth [`crate::state::OverlayMode`], so every joint question ("do the
 //! keypoints crowd the distorted rim?", "is the error heatmap hot where the
 //! distortion is?") is one glance rather than two and a memory. See
-//! `specs/gui/gui-camera-intrinsics.md` § "Image Detail: the Intrinsics overlay
+//! `specs/gui/camera-intrinsics.md` § "Image Detail: the Intrinsics overlay
 //! layer".
 //!
 //! # Compositing

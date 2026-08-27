@@ -5,7 +5,7 @@
 ``embedded_patches`` reconstruction.
 
 This is the *write* tail of the
-[sift-based -> patch-based pipeline](../../specs/core/sift-to-patch-reconstruction.md):
+[sift-based -> patch-based pipeline](../../specs/core/patch/sift-to-patch-reconstruction.md):
 given a reconstruction, its refined :class:`PatchCloud`, and the per-point
 keypoint-localization results, :func:`compact_to_embedded_patches` culls
 under-supported points (and, given a validity mask, points with no valid

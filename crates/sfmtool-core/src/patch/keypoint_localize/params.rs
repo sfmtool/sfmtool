@@ -44,7 +44,7 @@ pub enum SearchStrategy {
 
 /// How the ranked candidate list fills the consensus basis's remaining seats.
 ///
-/// See `specs/core/keypoint-localization-consensus-basis.md`.
+/// See `specs/core/patch/keypoint-localization-consensus-basis.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BasisPick {
     /// The `K` best-scoring views. **The default.**
@@ -106,7 +106,7 @@ pub struct KeypointLocalizeParams {
     /// scaled by `1/m` back to patch-grid px before it moves the accumulator and
     /// is reported. `m < 1` smooths the correlation surface for a speed fallback;
     /// `m > 1` resolves sub-pixel offsets directly on a finer grid. See
-    /// `specs/core/keypoint-localization-search-cache.md`.
+    /// `specs/core/patch/keypoint-localization-search-cache.md`.
     pub search_resolution_multiplier: f32,
     /// Per-(view, round) shift-grid traversal — see [`SearchStrategy`].
     /// Defaults to [`SearchStrategy::PlusDescent`].
@@ -121,7 +121,7 @@ pub struct KeypointLocalizeParams {
     /// *membership* shrinks. Callers that supply no per-view ranking scores
     /// get the grazing-angle basis pick — pass scores (the `select_views`
     /// ZNCC) for the validated ranking.
-    /// See `specs/core/keypoint-localization-consensus-basis.md`.
+    /// See `specs/core/patch/keypoint-localization-consensus-basis.md`.
     pub basis_max_views: u32,
     /// Reserve basis seats for the point's track views ahead of the expansion
     /// candidates (they are the point's provenance and carry its detection

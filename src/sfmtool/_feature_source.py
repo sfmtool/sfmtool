@@ -7,7 +7,7 @@
 ``embedded_patches`` reconstruction — the only source that carries per-point
 patch frames and per-observation keypoints — and reject ``sift_files`` with a
 pointer to the conversion bridge. (``compare --strips`` is deliberately *not*
-gated: it stays a dual-source diagnostic; see ``specs/cli/compare-command.md``.)
+gated: it stays a dual-source diagnostic; see ``specs/cli/reconstruction/compare-command.md``.)
 Enforcement lives here (a command/transform-layer check); the low-level
 ``PatchCloud.from_reconstruction`` stays dual-mode.
 """

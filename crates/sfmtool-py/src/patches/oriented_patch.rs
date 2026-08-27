@@ -19,7 +19,7 @@ use crate::geometry::rigid_transform::PyRigidTransform;
 /// The patch covers the world points
 /// ``center + s·half_extent[0]·u_axis + t·half_extent[1]·v_axis`` for
 /// ``(s, t)`` in ``[-1, 1]²``. Pair with :meth:`WarpMap.from_patch` to render its
-/// appearance in a camera. See ``specs/core/patch-cloud.md``.
+/// appearance in a camera. See ``specs/core/patch/patch-cloud.md``.
 #[pyclass(name = "OrientedPatch", module = "sfmtool.patches")]
 pub struct PyOrientedPatch {
     pub(crate) inner: OrientedPatch,

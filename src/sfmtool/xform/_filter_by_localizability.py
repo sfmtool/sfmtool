@@ -15,7 +15,7 @@ class FilterByLocalizabilityTransform:
     The per-point ``σ_pos`` is measured in **patch-grid px** — the intrinsic,
     resolution-independent unit — as the noise-normalized weak-axis structure-tensor
     uncertainty of the point's cross-view consensus ``patch_bitmaps`` (see
-    ``specs/core/patch-localizability.md``). It grades the *conditioning* of a
+    ``specs/core/patch/patch-localizability.md``). It grades the *conditioning* of a
     keypoint's localization — corner vs. edge vs. flat — independently of whether
     the views agree, so it catches the aperture blind spot the reprojection /
     agreement gates miss. Grid px is chosen over source-image px because it

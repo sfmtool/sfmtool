@@ -21,7 +21,7 @@ use super::views::PyCameraViews;
 
 /// A collection of oriented patches built from a reconstruction's 3D points.
 ///
-/// See :meth:`from_reconstruction` and ``specs/core/patch-cloud.md``.
+/// See :meth:`from_reconstruction` and ``specs/core/patch/patch-cloud.md``.
 #[pyclass(name = "PatchCloud", module = "sfmtool.patches")]
 pub struct PyPatchCloud {
     pub(crate) inner: PatchCloud,
@@ -92,7 +92,7 @@ impl PyPatchCloud {
     /// Build a patch cloud from in-memory arrays instead of a reconstruction — the
     /// array counterpart of :meth:`from_reconstruction` (same normal / extent
     /// policies, up-hint, infinity frames, and errors). See
-    /// ``specs/core/patch-cloud.md``, "Patch operations without a reconstruction".
+    /// ``specs/core/patch/patch-cloud.md``, "Patch operations without a reconstruction".
     ///
     /// Args:
     ///     views: A :class:`CameraViews` — the posed views the patches are sized

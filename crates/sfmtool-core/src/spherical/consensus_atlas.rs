@@ -3,7 +3,7 @@
 
 //! Tile-batched consensus atlas: bounded-memory panorama compositing.
 //!
-//! See `specs/core/tile-batched-consensus-atlas.md` for the design.
+//! See `specs/core/spherical/tile-batched-consensus-atlas.md` for the design.
 //!
 //! The monolithic panorama path materialises one
 //! [`PerSphericalTileSourceStack`] over **every** source image at once, so its

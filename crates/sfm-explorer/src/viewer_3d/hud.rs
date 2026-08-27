@@ -5,7 +5,7 @@
 //!
 //! A floating panel of 3D-viewport display controls, anchored to the top-right
 //! of the viewport and collapsed by default to a single gear glyph. See
-//! `specs/gui/gui-viewport-hud.md`.
+//! `specs/gui/viewport-hud.md`.
 //!
 //! The HUD is built *before* [`Viewer3D::show`] allocates the viewport painter,
 //! because every input path in the viewport has to consult the rect it occupies

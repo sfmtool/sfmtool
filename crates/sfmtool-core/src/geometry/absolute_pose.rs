@@ -5,7 +5,7 @@
 //! ([`p3p_solve`]) and a deterministic RANSAC estimator
 //! ([`estimate_absolute_pose`]).
 //!
-//! See `specs/core/absolute-pose.md`. Given `N` correspondences between
+//! See `specs/core/geometry/absolute-pose.md`. Given `N` correspondences between
 //! observed image **bearings** (unit ray directions in the canonical camera
 //! frame — a camera looks along `−Z`, a point in front has `z < 0`) and known
 //! world points, estimate the camera's world-to-camera pose `x_cam = R·X + t`,
@@ -399,7 +399,7 @@ fn score(
 
 /// Robustly estimate the world-to-camera pose from bearing/point
 /// correspondences. Returns `None` when no consensus reaches `min_inliers`.
-/// See `specs/core/absolute-pose.md`.
+/// See `specs/core/geometry/absolute-pose.md`.
 pub fn estimate_absolute_pose(
     bearings: &[Vector3<f64>],
     points: &[Point3<f64>],

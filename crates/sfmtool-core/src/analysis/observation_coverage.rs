@@ -17,7 +17,7 @@
 //! projected patch extent). Counts are kept, not booleans, so sparse coverage and
 //! contested coverage read differently.
 //!
-//! See `specs/core/observation-coverage.md` for the design.
+//! See `specs/core/analysis/observation-coverage.md` for the design.
 
 use std::f64::consts::TAU;
 

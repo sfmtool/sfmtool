@@ -3,7 +3,7 @@
 
 """Tests for the far-field rotation initialization Rust binding
 (``sfmtool._sfmtool.geometry.rotation_init``; see
-``specs/core/rotation-init.md``).
+``specs/core/geometry/rotation-init.md``).
 
 Synthetic scenes are built in the OpenCV/optical pixel convention (a point in
 front has camera-frame ``z > 0``): cameras strung along +X panning across a

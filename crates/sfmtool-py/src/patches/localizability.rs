@@ -24,7 +24,7 @@ impl PyPatchCloud {
     /// Score each point's **keypoint positional uncertainty** ``σ_pos`` (source-
     /// image px) from its cross-view consensus ``patch_bitmaps`` and the recon
     /// geometry — the patch-localizability score (see
-    /// ``specs/core/patch-localizability.md``). No source images are read.
+    /// ``specs/core/patch/patch-localizability.md``). No source images are read.
     ///
     /// The noise-normalized structure tensor of each consensus patch gives the
     /// weak-axis uncertainty in patch-grid px (``σ_pos_grid = σ_noise /

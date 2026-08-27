@@ -17,7 +17,7 @@
 //! order statistics (numpy's default `quantile` method) — this is
 //! contractual; consumer parity depends on it.
 //!
-//! See `specs/core/affine-factorization.md` for the design.
+//! See `specs/core/geometry/affine-factorization.md` for the design.
 
 use nalgebra::{DMatrix, DVector, Matrix3, Vector3};
 
@@ -172,7 +172,7 @@ fn lstsq(a: DMatrix<f64>, b: &DMatrix<f64>) -> Option<DMatrix<f64>> {
 }
 
 /// Alternating-least-squares affine factorization with trimming; see the
-/// module docs and `specs/core/affine-factorization.md` § Algorithm.
+/// module docs and `specs/core/geometry/affine-factorization.md` § Algorithm.
 ///
 /// Inputs are parallel per-observation arrays (no ordering required):
 /// cluster index, image index, and centered 2D position. `params.rounds`
@@ -413,7 +413,7 @@ fn nearest_rotation(m: &Matrix3<f64>) -> Matrix3<f64> {
 /// then decompose `M_i·A` into rotation × scale. Returns both reflection
 /// hypotheses (`A` and `A·diag(1, 1, −1)`), or `None` when no image is used
 /// or the constraint system is degenerate. See
-/// `specs/core/affine-factorization.md` § Metric upgrade.
+/// `specs/core/geometry/affine-factorization.md` § Metric upgrade.
 pub fn metric_upgrade(factorization: &AffineFactorization) -> Option<[MetricHypothesis; 2]> {
     let num_images = factorization.cameras.len();
     let used: Vec<usize> = (0..num_images)

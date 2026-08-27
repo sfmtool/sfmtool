@@ -5,7 +5,7 @@
 
 Extracted from `_commands/cluster_patches.py` so the command module stays a
 thin Click wrapper, matching its `_embed_patches.py` and `_patch_compaction.py`
-siblings. See `specs/core/cluster-patch-refinement.md`.
+siblings. See `specs/core/patch/cluster-patch-refinement.md`.
 """
 
 from pathlib import Path

@@ -151,7 +151,7 @@ impl Default for EpipolarCurveOptions {
 ///
 /// The returned polyline is fully inside `[0, cam2.width) × [0, cam2.height)`;
 /// no further image-rectangle clipping is needed at draw time. `pose1`/`pose2`
-/// are `cam_from_world` transforms. See `specs/core/epipolar-curves.md` for
+/// are `cam_from_world` transforms. See `specs/core/camera/epipolar-curves.md` for
 /// the algorithm.
 ///
 /// `anchor_depth` is the seed for Phase-1 bracketing (typically the

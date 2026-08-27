@@ -295,7 +295,7 @@ high-quality observations, which is what we want to harvest.
 frame as the original so it remains comparable.
 
 Step 4 uses `sfm camrig cp` to copy the cleaned reconstruction's camera into
-a single-sensor `.camrig` (see `specs/cli/camrig-command.md`). A `.camrig`
+a single-sensor `.camrig` (see `specs/cli/workspace/camrig-command.md`). A `.camrig`
 takes precedence over `camera_config.json` when `sfm solve` discovers both,
 and `camrig cp` infers the sensor's image pattern from the reconstruction, so
 it is the recommended way to harvest solved intrinsics. `camera_config.json`

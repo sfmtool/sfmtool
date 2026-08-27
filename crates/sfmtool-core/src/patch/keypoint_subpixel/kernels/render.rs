@@ -176,7 +176,7 @@ pub(in crate::patch::keypoint_subpixel) fn render_core_with_jg(
 
 /// A **render-once context tile** for one (point, view) pair — the refiner's
 /// counterpart of the localizer's `ContextTile` (see
-/// `specs/core/keypoint-localization-search-cache.md`), adapted to the GN
+/// `specs/core/patch/keypoint-localization-search-cache.md`), adapted to the GN
 /// solve's **fractional** reads. The patch frame is fixed during refinement and
 /// only the 2-DOF in-plane offset `δ` moves, so every render of the pair is the
 /// same patch→image map at a slightly different sub-pixel shift. This tile is

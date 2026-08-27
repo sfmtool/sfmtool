@@ -7,7 +7,7 @@ Covers the ``key=value`` argument grammar (and its error cases) and an
 integration run over the real 17-image seoul_bull reconstruction: the point
 count is unchanged, finite-point normals change, infinity points pass through,
 and the mean photoconsistency does not decrease. See
-specs/cli/xform-refine-normals-command.md.
+specs/cli/reconstruction/xform/refine-normals-command.md.
 """
 
 from unittest.mock import patch

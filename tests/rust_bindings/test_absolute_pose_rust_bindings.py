@@ -3,7 +3,7 @@
 
 """Tests for the absolute-pose Rust bindings
 (``sfmtool._sfmtool.geometry.p3p_solve`` and ``estimate_absolute_pose``;
-see ``specs/core/absolute-pose.md``).
+see ``specs/core/geometry/absolute-pose.md``).
 
 Synthetic scenes are generated in the canonical camera convention: a camera
 looks along −Z, so a point in front has ``z < 0`` in camera frame and its

@@ -15,7 +15,7 @@ use crate::geometry::PyCameraIntrinsics;
 
 /// Resect a camera's translation against known world points with the
 /// world-to-camera rotation locked (canonical frame; the camera looks along
-/// −Z). See ``specs/core/rotation-locked-resection.md``.
+/// −Z). See ``specs/core/geometry/rotation-locked-resection.md``.
 ///
 /// Each observation's unit ray must be parallel to ``R·X + t``; with ``R``
 /// fixed the solve is linear in ``t`` and trimmed over three rounds against a

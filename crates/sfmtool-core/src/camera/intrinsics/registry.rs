@@ -43,7 +43,7 @@
 //! The string literals that remain belong to the one `custom` model, whose
 //! hand-written arms are exempt by design.
 //!
-//! See `specs/core/camera-model-registry.md`; the authoritative
+//! See `specs/core/camera/camera-model-registry.md`; the authoritative
 //! human-readable model/parameter table is `specs/formats/sfmr-file-format.md`
 //! §3.
 

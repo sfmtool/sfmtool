@@ -327,7 +327,7 @@ def test_fronto_cache_matches_source_rendering(
 ):
     """The fronto-parallel cache reproduces the source-render refinement.
 
-    See ``specs/core/fronto-parallel-patch-cache.md``: the cache should be
+    See ``specs/core/patch/fronto-parallel-patch-cache.md``: the cache should be
     Φ-equivalent (the angular tail is ambiguity, not error) and must not drop a
     meaningful fraction of the scored points.
     """
@@ -382,7 +382,7 @@ def test_fronto_cache_handles_fisheye_distortion(
 
     The base↔candidate affine is fit from *undistorted-normalized* corners, so the
     lens distortion cancels in the correspondence (see
-    ``specs/core/fronto-parallel-patch-cache.md``). If it used the distorted pixel
+    ``specs/core/patch/fronto-parallel-patch-cache.md``). If it used the distorted pixel
     corners instead, the cache would mis-resample the strongly-distorted fisheye
     views and Φ would collapse — this test guards that cancellation.
     """

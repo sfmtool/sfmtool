@@ -419,7 +419,7 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
 > `pub(super)` plus an explicit import in the test module; and the parent's
 > `normal_refine` import list shrank to four names. No intra-doc link broke
 > (`pixi run doc` clean); 45/45 `member_coherence` tests and 1384/1384
-> `sfmtool-core` lib tests green. `specs/core/member-coherence-validation.md`
+> `sfmtool-core` lib tests green. `specs/core/patch/member-coherence-validation.md`
 > cited the single file and now names the directory and which half is where._
 - _New — this file did not exist at the 2026-07-25 snapshot (added by `6d12156`)._
 - Location: `crates/sfmtool-core/src/patch/member_coherence.rs` (**1553**), with a
@@ -457,7 +457,7 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
 > one `camera_models!` invocation in a new
 > `camera/intrinsics/registry.rs`; `intrinsics.rs` 1271 → 719, and the two
 > files together are 1122. Specced in
-> `specs/core/camera-model-registry.md`, cross-linked from the two format
+> `specs/core/camera/camera-model-registry.md`, cross-linked from the two format
 > specs._
 >
 > _**The finding had gone stale in the direction it predicted.** It measured
@@ -1083,7 +1083,7 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
 > the callback, matching `_commands/embed_patches.py:283`. The moved code's
 > `..`-relative in-function imports became `.`-relative; nothing else changed.
 > Two citations followed it — `_progress.py`'s module docstring and
-> `specs/core/cluster-patch-refinement.md:531`. The finding's "better still,
+> `specs/core/patch/cluster-patch-refinement.md:531`. The finding's "better still,
 > group the three as one patch-processing topic" is **not** done and is a
 > separate call._
 - Location: `src/sfmtool/_commands/cluster_patches.py` (347)
@@ -1134,8 +1134,8 @@ grown past the point where that judgement holds — `patch/keypoint_localize.rs`
 > `tests/matching/` (6), `tests/sift/` (3) and `tests/camrig/` (3), leaving 25 flat
 > modules. `tests/_camrig_helpers.py` became `tests/camrig/conftest.py`. Four path
 > citations outside `tests/` were updated in the same commit
-> (`spherical/tile_rig/tests.rs` ×2, `specs/core/cluster-patch-refinement.md`,
-> `specs/core/track-cluster-matching.md`), which is the hazard the risk note below
+> (`spherical/tile_rig/tests.rs` ×2, `specs/core/patch/cluster-patch-refinement.md`,
+> `specs/core/features/track-cluster-matching.md`), which is the hazard the risk note below
 > called out._
 >
 > _One hazard the risk note **did not** call out, and which "pure `git mv`" is
@@ -1640,16 +1640,16 @@ regenerated snapshot rather than let them evaporate. They are reproduced
 unchanged from the retired report; each premise was re-verified against the
 tree on 2026-08-08:
 
-- **A** — `specs/gui/gui-viewport-navigation.md:666` still reads
+- **A** — `specs/gui/viewport-navigation.md:666` still reads
   `- [ ] Save/restore camera positions`, and no bookmark state exists in
   `sfm-explorer`. Still open. (Note the explorer has moved a long way since
   the topic was written — scene-graph phases 1–5 landed between 2026-07-25 and
   2026-08-08 — so the sketch's file references are worth re-checking before
   acting on it.)
 - **B** — no crop transform in `src/sfmtool/xform/`, no `--crop` in
-  `_commands/xform.py` or `specs/cli/xform-command.md`. Still open.
+  `_commands/xform.py` or `specs/cli/reconstruction/xform/xform-command.md`. Still open.
 - **C** — `PerSphericalTileSourceStack` still exposes only
-  `build_rotation_only`; `specs/core/per-spherical-tile-source-stack.md:6–7`
+  `build_rotation_only`; `specs/core/spherical/per-spherical-tile-source-stack.md:6–7`
   still says "The pose-aware variant described under 'Pose-aware variant' is
   still future work". Still open. Its sketch depends on
   `WarpMap::build_with_pose_impl`, which **does** exist
@@ -1658,7 +1658,7 @@ tree on 2026-08-08:
 
 ### A. Camera bookmarks (save/restore named viewpoints) in SfM Explorer — carried forward
 
-- **Motivation:** `specs/gui/gui-viewport-navigation.md` § "Future
+- **Motivation:** `specs/gui/viewport-navigation.md` § "Future
   Enhancements" still lists `- [ ] Save/restore camera positions` (re-verified
   unimplemented in this round's spec audit). For inspection and before/after
   comparison it's invaluable to jump back to a saved vantage point —
@@ -1688,14 +1688,14 @@ tree on 2026-08-08:
   synergy with topic A: the GUI could emit the crop numbers from an
   interactive selection.
 - **Where it would live:** New filter in `src/sfmtool/xform/`, `--crop` in
-  `_commands/xform.py`, new subsection in `specs/cli/xform-command.md`.
+  `_commands/xform.py`, new subsection in `specs/cli/reconstruction/xform/xform-command.md`.
 - **Open questions:** Coordinate frame (raw vs. physically-scaled units)?
   Auto-drop empty cameras? Box vs. sphere vs. oriented box, and how does a
   user author the numbers without a viewer?
 
 ### C. Pose-aware per-tile source stacks (parallax-correct panoramas)
 
-- **Motivation:** `specs/core/per-spherical-tile-source-stack.md` explicitly
+- **Motivation:** `specs/core/spherical/per-spherical-tile-source-stack.md` explicitly
   defers a pose-aware `build_with_pose` — today's `build_rotation_only`
   assumes scene-at-infinity, so `sfm panorama` is only correct for
   near-concentric captures. Real handheld rigs translate; nearby geometry
@@ -1711,9 +1711,9 @@ tree on 2026-08-08:
   infinity rotation-only warp. Tiles with too few points fall back to
   rotation-only. The RANSAC/consensus and batched-atlas stages are unchanged —
   they just receive better-registered stacks.
-- **Where it would live:** Extend `specs/core/per-spherical-tile-source-stack.md`
+- **Where it would live:** Extend `specs/core/spherical/per-spherical-tile-source-stack.md`
   (the "Pose-aware variant" stub) + a `--parallax` flag in
-  `specs/cli/panorama-command.md`; implementation in
+  `specs/cli/visualization/panorama-command.md`; implementation in
   `crates/sfmtool-core/src/spherical/` reusing `camera/warp_map.rs`.
 - **Open questions:** Per-tile plane vs. per-tile depth constant vs. coarse
   mesh? What point density is enough, and is the fallback per-tile or global?

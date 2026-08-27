@@ -22,7 +22,7 @@
 //! test is what separates "next to each other on the surface" from "one behind
 //! the other along the viewing ray".
 //!
-//! See `specs/core/observation-adjacency-graph.md` for the design.
+//! See `specs/core/analysis/observation-adjacency-graph.md` for the design.
 
 use std::cmp::Ordering;
 

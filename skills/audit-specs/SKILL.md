@@ -11,7 +11,7 @@ Walk every specification, design document, and user documentation under `specs/`
 
 The audit is bidirectional:
 
-- **Spec → code.** Every file under `specs/` (including `specs/cli/`, `specs/formats/`, `specs/gui/`, `specs/workspace/`) and under `docs/` — locate the implementing code and compare.
+- **Spec → code.** Every file under `specs/` (recursively — `specs/cli/<category>/`, `specs/core/<module>/`, `specs/formats/`, `specs/gui/`, `specs/workspace/`) and under `docs/` — locate the implementing code and compare.
 - **Code → spec.** Every significant code surface — CLI commands in `src/sfmtool/_commands/`, crates in `crates/`, modules in `src/sfmtool/`, user-facing file formats — check whether a spec or doc covers it. Unspecced code is a first-class finding, not a footnote.
 
 ## How to work

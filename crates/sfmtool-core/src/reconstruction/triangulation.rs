@@ -19,7 +19,7 @@
 //! the matching `centers`. The functions are pure and IO-free — building the
 //! rays (un-projection, distortion, pose) is the caller's concern.
 //!
-//! See `specs/core/batch-triangulation-api.md` for the design.
+//! See `specs/core/reconstruction/batch-triangulation-api.md` for the design.
 
 use nalgebra::{Matrix3, Point3, SymmetricEigen, Vector3};
 

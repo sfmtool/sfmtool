@@ -8,7 +8,7 @@
 //! reprojection error over a trim schedule with inter-round retriangulation —
 //! the multi-view generalization of [`crate::geometry::pose_refine`], and the
 //! native replacement for the cluster-bootstrap experiments' scipy BA
-//! (`specs/core/bundle-adjustment.md`).
+//! (`specs/core/geometry/bundle-adjustment.md`).
 //!
 //! Canonical camera frame throughout (the camera looks along `−Z`; a point in
 //! front has `z < 0`). Each Levenberg–Marquardt step is taken over a local
@@ -319,7 +319,7 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// `point_at_infinity` optionally marks per-point directions: a marked row of
 /// `points` is a world-frame direction (normalized on input and output) whose
 /// observations depend on rotation and camera model only — see "Points at
-/// infinity" in `specs/core/bundle-adjustment.md`. An absent mask is an
+/// infinity" in `specs/core/geometry/bundle-adjustment.md`. An absent mask is an
 /// all-`false` mask, which reduces the solve to the finite-only one.
 ///
 /// `protected` optionally marks per-observation protection (parallel to the
@@ -329,7 +329,7 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// through the robust loss at the wider scale
 /// `protected_loss_scale · loss_scale` (bounded pull, never trimmed nor
 /// dominating). See "Protected observations" in
-/// `specs/core/bundle-adjustment.md`. An absent or all-`false` mask
+/// `specs/core/geometry/bundle-adjustment.md`. An absent or all-`false` mask
 /// reproduces the unprotected behavior bit for bit.
 ///
 /// `opt_f` releases the shared focal (SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE,
@@ -415,7 +415,7 @@ pub fn bundle_adjust(
 // ── Points at infinity ──────────────────────────────────────────────────────
 //
 // The staged loop below handles per-point direction masks
-// (`specs/core/bundle-adjustment.md`, "Points at infinity"). A marked row of
+// (`specs/core/geometry/bundle-adjustment.md`, "Points at infinity"). A marked row of
 // `points` is a world-frame direction `d` projecting as
 // `uv_pred = ray_to_pixel(R·d)` — no translation dependence — parameterized
 // by a 2-DOF tangent-plane perturbation `d ← normalize(d + B(d)·δ)`. With no

@@ -34,7 +34,7 @@ impl PyPatchCloud {
     /// Validate each point's track against itself: render every member's patch
     /// through the point's own frame, correlate every **pair** of members, and
     /// read a verdict off that matrix. See
-    /// ``specs/core/member-coherence-validation.md``.
+    /// ``specs/core/patch/member-coherence-validation.md``.
     ///
     /// The pairwise matrix sees a member that images a different surface even
     /// when the fused cross-view consensus does not — on a balanced split the

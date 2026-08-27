@@ -3,7 +3,7 @@
 
 //! Bindings for displacement-neighborhood pose verification and repair
 //! (``sfmtool._sfmtool.geometry.verify_poses`` / ``repair_poses``; see
-//! ``specs/core/pose-verification.md``).
+//! ``specs/core/geometry/pose-verification.md``).
 //!
 //! The substrate travels as its compact serialization — the parallel per-pair
 //! arrays ``pair_i`` / ``pair_j`` / ``pair_count`` / ``pair_mean_disp``
@@ -120,7 +120,7 @@ fn verification_dict<'py>(py: Python<'py>, out: &PoseVerification) -> PyResult<B
 }
 
 /// Verify the registered cameras' poses against the displacement
-/// neighborhood (see ``specs/core/pose-verification.md``).
+/// neighborhood (see ``specs/core/geometry/pose-verification.md``).
 ///
 /// Screen A re-resects every registered camera's own observations against
 /// the shared structure (``resect_images_batch``); a camera whose pose
@@ -246,7 +246,7 @@ pub fn verify_poses<'py>(
 }
 
 /// Verify, then repair the flagged cameras (see
-/// ``specs/core/pose-verification.md``).
+/// ``specs/core/geometry/pose-verification.md``).
 ///
 /// Runs the two verification screens (see ``verify_poses``), then walks the
 /// flagged cameras in ascending image order: re-initialize from the top-2

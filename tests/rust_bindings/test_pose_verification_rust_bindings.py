@@ -3,7 +3,7 @@
 
 """Tests for the pose-verification Rust bindings
 (``sfmtool._sfmtool.geometry.verify_poses`` / ``repair_poses``; see
-``specs/core/pose-verification.md``).
+``specs/core/geometry/pose-verification.md``).
 
 Synthetic *station* scenes in the canonical camera frame (the camera looks
 along -Z): groups of cameras share each orbit position with small rotation

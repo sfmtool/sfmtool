@@ -10,7 +10,7 @@
 //! to mirror the optical-flow module's house conventions: it operates on
 //! [`GrayImage`] (reused from [`crate::features::optical_flow`]), uses separable Gaussian
 //! blur with an SSE2 inner loop plus scalar fallback, and parallelizes with
-//! rayon. See `specs/core/sift.md` for the authoritative design.
+//! rayon. See `specs/core/features/sift.md` for the authoritative design.
 //!
 //! The public interface follows COLMAP's conventions: keypoint coordinates use
 //! the pixel-center convention (the upper-left pixel's center is `(0.5, 0.5)`),
@@ -23,7 +23,7 @@
 //! pyramids) and image-to-gray conversion, keypoint detection and sub-pixel
 //! localization, orientation assignment, and the 128-D descriptor, with the
 //! orientation/descriptor sampling and the Gaussian blur SIMD-accelerated (see
-//! `simd` and the parallelism/SIMD section of `specs/core/sift.md`).
+//! `simd` and the parallelism/SIMD section of `specs/core/features/sift.md`).
 
 mod descriptor;
 mod detect;
@@ -290,7 +290,7 @@ pub fn detect_keypoints(image: &GrayImage, params: &SiftParams) -> Detection {
     // largest-scale candidates, under a *total* order — scale, then response,
     // then octave/layer/y/x — so the retained set is deterministic when
     // scales tie; see the reproducible-`.sift` contract in
-    // `specs/core/sift.md`). Each octave's surviving candidates are oriented
+    // `specs/core/features/sift.md`). Each octave's surviving candidates are oriented
     // as soon as they are admitted (orientation preserves scale, so the
     // final keypoint ranking follows the candidate ranking), which lets two
     // guards stop the walk with output identical to scanning everything:

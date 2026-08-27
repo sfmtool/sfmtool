@@ -6,7 +6,7 @@
 //! A fifth dock tab titled **"Scene"**, and the control surface for everything
 //! the scene graph adds: which reconstructions are loaded, which of their layers
 //! are drawn, which of them capture pointer picks, which one the sequence-shaped
-//! panels follow, and how a node leaves. See `specs/gui/gui-scene-graph.md`
+//! panels follow, and how a node leaves. See `specs/gui/scene-graph.md`
 //! ("Scene Graph Panel").
 //!
 //! ## Shape of the tree

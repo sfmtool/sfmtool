@@ -24,7 +24,7 @@ construction (each view is the other's reference), so treat 2-view rows with car
 
 This is a dev/inspection tool, not a test — the automated coverage lives in
 ``tests/patch/test_patch_keypoint_localization.py``. See
-``specs/core/patch-keypoint-localization.md``.
+``specs/core/patch/patch-keypoint-localization.md``.
 
 Example::
 

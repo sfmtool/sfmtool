@@ -3,7 +3,7 @@
 
 """Tests for the cluster match census Rust binding
 (``sfmtool._sfmtool.analysis.cluster_census``; see
-``specs/core/cluster-census.md``).
+``specs/core/analysis/cluster-census.md``).
 
 Synthetic two-group captures in the canonical camera frame (the camera looks
 along -Z): two well-separated groups of cameras looking at a cloud around the

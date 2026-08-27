@@ -4,7 +4,7 @@
 //! Python bindings for fundamental-matrix estimation from 2D-2D
 //! correspondences (7-point LO-RANSAC ``estimate_fundamental``) and the
 //! Bougnoux focal-length recovery ``focal_from_fundamental``
-//! (see ``specs/core/epipolar-estimation.md``).
+//! (see ``specs/core/geometry/epipolar-estimation.md``).
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
@@ -51,7 +51,7 @@ fn estimate_to_dict<'py>(
 }
 
 /// Robustly estimate the fundamental matrix from pixel correspondences
-/// (7-point LO-RANSAC; see ``specs/core/epipolar-estimation.md``).
+/// (7-point LO-RANSAC; see ``specs/core/geometry/epipolar-estimation.md``).
 ///
 /// Args:
 ///     points1: (N, 2) float64 pixels in image 1.
@@ -118,7 +118,7 @@ pub fn estimate_fundamental(
 }
 
 /// Focal length of camera 1 in pixels from the fundamental matrix and the two
-/// principal points (Bougnoux; see ``specs/core/epipolar-estimation.md``).
+/// principal points (Bougnoux; see ``specs/core/geometry/epipolar-estimation.md``).
 ///
 /// Assumes square pixels, zero skew, and known principal points. Returns
 /// ``None`` for the classical focal-recovery degeneracies (intersecting

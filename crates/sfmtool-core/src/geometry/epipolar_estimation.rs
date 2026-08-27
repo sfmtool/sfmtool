@@ -6,7 +6,7 @@
 //! deterministic LO-RANSAC estimator ([`estimate_fundamental`]), and the
 //! Bougnoux focal-length recovery ([`focal_from_fundamental`]).
 //!
-//! See `specs/core/epipolar-estimation.md`. Given `N` pixel correspondences
+//! See `specs/core/geometry/epipolar-estimation.md`. Given `N` pixel correspondences
 //! `(x₁, x₂)` between two views, estimate the rank-2 fundamental matrix `F`
 //! with `x̃₂ᵀ F x̃₁ = 0`, robust to a contaminated correspondence set, and
 //! extract a focal-length estimate from it.
@@ -366,7 +366,7 @@ fn local_optimize_f(
 
 /// Robustly estimate the fundamental matrix from pixel correspondences (7-point
 /// LO-RANSAC). Returns `None` when no consensus reaches `min_inliers`.
-/// See `specs/core/epipolar-estimation.md`.
+/// See `specs/core/geometry/epipolar-estimation.md`.
 pub fn estimate_fundamental(
     x1: &[[f64; 2]],
     x2: &[[f64; 2]],
@@ -444,7 +444,7 @@ pub fn estimate_fundamental(
 /// principal points (Bougnoux). `None` when the pair is degenerate for focal
 /// recovery — vanishing denominator or `f₁² ≤ 0` (intersecting optical axes,
 /// pure forward translation, rotation-dominant motion). Assumes square pixels,
-/// zero skew, and known principal points. See `specs/core/epipolar-estimation.md`.
+/// zero skew, and known principal points. See `specs/core/geometry/epipolar-estimation.md`.
 pub fn focal_from_fundamental(
     f_matrix: &Matrix3<f64>,
     pp1: [f64; 2],

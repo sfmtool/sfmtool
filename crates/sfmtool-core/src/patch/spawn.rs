@@ -23,7 +23,7 @@
 //! A candidate that fails a gate is reported with the stage that killed it
 //! rather than dropped, so a caller can budget and diagnose on the counts.
 //!
-//! See `specs/core/candidate-track-spawning.md`.
+//! See `specs/core/patch/candidate-track-spawning.md`.
 
 use nalgebra::{Point3, Vector3};
 

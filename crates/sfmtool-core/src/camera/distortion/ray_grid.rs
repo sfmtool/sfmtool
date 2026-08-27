@@ -10,7 +10,7 @@
 //! never depends on the stride, only the speedup does. This is a caching /
 //! interpolation strategy rather than a lens model; it lives here rather
 //! than in `distortion.rs` for that reason. See
-//! `specs/core/ray-grid-projection.md`.
+//! `specs/core/camera/ray-grid-projection.md`.
 
 use crate::camera::CameraIntrinsics;
 
@@ -22,7 +22,7 @@ use crate::camera::CameraIntrinsics;
 /// A larger stride speeds smooth (low-curvature) tiles but is bounded for free:
 /// every cell is probe-checked against the exact projection and demoted to exact
 /// when it would exceed [`COARSE_GRID_TOL_PX`], so accuracy never depends on this
-/// value — only the speedup does. See `specs/core/ray-grid-projection.md` and the
+/// value — only the speedup does. See `specs/core/camera/ray-grid-projection.md` and the
 /// `coarse_grid_error_*` tests.
 pub(super) const COARSE_GRID_STRIDE: u32 = 8;
 
@@ -175,7 +175,7 @@ impl CameraIntrinsics {
     ///   and bilinearly interpolate the interior, falling back to exact
     ///   projection wherever a bracketing sub-grid node is invalid. The
     ///   interpolation error is bounded; see
-    ///   `specs/core/ray-grid-projection.md`.
+    ///   `specs/core/camera/ray-grid-projection.md`.
     pub fn ray_to_pixel_grid(
         &self,
         origin: [f64; 3],
@@ -200,7 +200,7 @@ impl CameraIntrinsics {
 
     /// Coarse-grid interpolation path for [`Self::ray_to_pixel_grid`]
     /// (non-perspective models). See that method's docs and
-    /// `specs/core/ray-grid-projection.md`.
+    /// `specs/core/camera/ray-grid-projection.md`.
     /// Returns `(interpolated_cells, total_cells)` for diagnostics/tests — the
     /// hit rate of the fast (interpolated) path on this tile.
     ///

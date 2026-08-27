@@ -3,7 +3,7 @@
 
 //! Binding for the cluster match census
 //! (``sfmtool._sfmtool.analysis.cluster_census``; see
-//! ``specs/core/cluster-census.md``).
+//! ``specs/core/analysis/cluster-census.md``).
 
 use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
@@ -18,7 +18,7 @@ use crate::geometry::reconstruction_growth::{read_observations, read_rows};
 use crate::geometry::PyCameraIntrinsics;
 
 /// Score a candidate solve against the raw correspondence evidence it did not
-/// consume (see ``specs/core/cluster-census.md``).
+/// consume (see ``specs/core/analysis/cluster-census.md``).
 ///
 /// A reconstruction can be internally consistent and wrong — a viewpoint group glued
 /// at the wrong relative pose, or poses and structure bent to absorb a wrong

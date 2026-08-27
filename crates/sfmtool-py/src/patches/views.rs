@@ -225,7 +225,7 @@ pub(super) fn extract_camera_list(obj: &Bound<'_, PyAny>) -> PyResult<Vec<Camera
 
 /// The posed views of an in-memory scene — cameras and `cam_from_world` poses —
 /// accepted anywhere a patch kernel takes a reconstruction (see
-/// ``specs/core/patch-cloud.md``, "Patch operations without a reconstruction").
+/// ``specs/core/patch/patch-cloud.md``, "Patch operations without a reconstruction").
 ///
 /// A ``CameraViews`` carries no tracks, so the per-point view lists the kernels
 /// otherwise derive from the reconstruction's tracks must be supplied explicitly:

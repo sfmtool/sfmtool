@@ -3,7 +3,7 @@
 
 //! Python binding for the tile-batched consensus atlas orchestrator.
 //!
-//! See ``specs/core/tile-batched-consensus-atlas.md`` for the design. This
+//! See ``specs/core/spherical/tile-batched-consensus-atlas.md`` for the design. This
 //! binding parses the Python source list **once** and runs
 //! [`render_consensus_atlas`], whose peak memory is governed by the heaviest
 //! single tile batch rather than the whole-run total.

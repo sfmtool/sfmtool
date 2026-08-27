@@ -21,8 +21,8 @@ and persisted too. Frame *sizing* and *seeding* (``extent`` / ``extent_value`` /
 ``normal``) belong to ``--to-embedded-patches``, the step that builds the frame;
 refine-normals reuses that frame and takes none of those knobs.
 
-See ``specs/cli/xform-refine-normals-command.md`` and
-``specs/core/patch-normal-refinement.md``.
+See ``specs/cli/reconstruction/xform/refine-normals-command.md`` and
+``specs/core/patch/patch-normal-refinement.md``.
 """
 
 import numpy as np
@@ -46,7 +46,7 @@ _QUALITIES = ("none", "coarse", "fine")
 # ``coarse`` trades a little tail accuracy for ~2× speed via the fronto-parallel
 # cache; ``fine`` is the exact source-rendering path. ``none`` defers to the
 # explicit ``cache`` / ``cache_supersample`` knobs. See
-# ``specs/core/fronto-parallel-patch-cache.md``.
+# ``specs/core/patch/fronto-parallel-patch-cache.md``.
 _QUALITY_PRESETS = {
     "coarse": ("fronto", 2.0),
     "fine": ("off", 1.0),

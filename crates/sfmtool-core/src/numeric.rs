@@ -41,7 +41,7 @@
 //! - **Empty input yields NaN.** Every caller in the crate already tests the
 //!   result with `is_finite()` / `is_nan()` and has a defined path for "no
 //!   answer" — the surfel-normals IRLS substitutes its sigma floor
-//!   (`specs/core/adjacency-surfel-normals.md` documents this: "the floor also
+//!   (`specs/core/analysis/adjacency-surfel-normals.md` documents this: "the floor also
 //!   replaces a non-finite median"), the keypoint localizer drops its
 //!   relative-ZNCC bar to `−∞`, and the pair vetter rejects the pair. NaN
 //!   routes an empty population into those same paths instead of inventing a

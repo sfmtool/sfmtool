@@ -462,7 +462,7 @@ pub(super) fn search_shift(
 /// crossover with `search_shift`'s whole-grid SIMD is around 50–80 cells
 /// visited, so the descent loses on pathological long walks; `Exhaustive`
 /// remains the right pick for the global-argmax fallback. See
-/// `specs/core/keypoint-localization-search-cache.md` for the strategy
+/// `specs/core/patch/keypoint-localization-search-cache.md` for the strategy
 /// trade-off discussion.
 ///
 /// **Profile attribution** (`SFMTOOL_PROFILE=1`): the descent reports per-cell

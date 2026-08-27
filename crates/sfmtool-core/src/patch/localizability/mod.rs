@@ -3,7 +3,7 @@
 
 //! Patch localizability — the keypoint self-similarity score.
 //!
-//! See `specs/core/patch-localizability.md`. A per-point grade of how well a
+//! See `specs/core/patch/patch-localizability.md`. A per-point grade of how well a
 //! patch pins its own keypoint: the curvature of the ZNCC self-similarity
 //! surface, measured as the classical Harris/Shi–Tomasi structure tensor on the
 //! point's cross-view **consensus** patch. The noise-normalized weak-axis

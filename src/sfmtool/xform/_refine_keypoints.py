@@ -19,8 +19,8 @@ inline keypoint and refines over the stored per-point patch frame
 (``recon.patches``). Keypoint *localization* (basin search that can drop views)
 is a heavier, structural operation and is intentionally not this op.
 
-See ``specs/cli/xform-refine-keypoints-command.md`` and
-``specs/core/keypoint-subpixel-refinement.md``.
+See ``specs/cli/reconstruction/xform/refine-keypoints-command.md`` and
+``specs/core/patch/keypoint-subpixel-refinement.md``.
 """
 
 import numpy as np

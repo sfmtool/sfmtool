@@ -12,10 +12,10 @@
 //! shared-3D-track covisibility in `crate::analysis::image_pair_graph`,
 //! which requires poses and points.
 //!
-//! See `specs/core/cluster-covisibility.md` for the design and the seed-group
-//! algorithm's determinism contract, `specs/core/covisibility-selection.md`
+//! See `specs/core/features/cluster-covisibility.md` for the design and the seed-group
+//! algorithm's determinism contract, `specs/core/features/covisibility-selection.md`
 //! for the selection queries built on top (pair displacement, banded thinning,
-//! reach), and `specs/core/pose-verification.md` for the sparse
+//! reach), and `specs/core/geometry/pose-verification.md` for the sparse
 //! displacement-neighborhood substrate ([`DisplacementNeighborhood`]).
 
 /// Dense-backend image cap. Storage is a row-major `u32` matrix (`4·N²`
@@ -380,7 +380,7 @@ impl ClusterCovisibility {
     /// shared-cluster count + exhaustive mean keypoint displacement, with the
     /// `nearest` / `farthest` / `pair` queries and array serialization).
     /// `None` when constructed without positions. See
-    /// `specs/core/pose-verification.md`.
+    /// `specs/core/geometry/pose-verification.md`.
     pub fn displacement_neighborhood(&self) -> Option<&DisplacementNeighborhood> {
         self.neighborhood.as_ref()
     }

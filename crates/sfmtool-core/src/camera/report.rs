@@ -6,7 +6,7 @@
 //! undistorted lens would have put it, and the 35 mm-equivalent focal length.
 //!
 //! These are the derived quantities a viewer's intrinsics panel and image
-//! overlay draw (`specs/gui/gui-camera-intrinsics.md` § "`camera::report` — the
+//! overlay draw (`specs/gui/camera-intrinsics.md` § "`camera::report` — the
 //! derived quantities"). They are pure arithmetic on a [`CameraIntrinsics`],
 //! so they live here rather than in the GUI, where they can be unit-tested
 //! without a window.

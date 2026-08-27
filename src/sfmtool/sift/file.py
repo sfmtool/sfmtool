@@ -399,7 +399,7 @@ _SIFT_ZSTD_LEVEL = 5
 
 # How many compressed saves may be in flight at once. 2 lets the save of image i
 # overlap the extract of image i+1 (one ahead) while still bounding buffered
-# memory; a deeper queue buys no more overlap. See specs/core/sift.md.
+# memory; a deeper queue buys no more overlap. See specs/core/features/sift.md.
 _SIFT_WRITE_LOOKAHEAD = 2
 
 
@@ -722,7 +722,7 @@ def image_files_to_sift_files(
         # oversubscribes the cores: one worker runs the save while the extract's
         # par_iter proceeds on the rest, so the save of image i overlaps the
         # extract of image i+1 without the barrier busy-spin a contending
-        # external thread would cause. See specs/core/sift.md.
+        # external thread would cause. See specs/core/features/sift.md.
         with _SiftWriteStream() as writer:
             for index_start in range(0, len(image_filename_filtered_list), chunk_size):
                 # extraction_fn may return a list (COLMAP/OpenCV, which shell out

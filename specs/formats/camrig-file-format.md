@@ -8,7 +8,7 @@ range of rigs sfmtool produces:
 - a back-to-back fisheye pair such as the one `sfm insv2rig` extracts (2 sensors),
 - a six-face cubemap from `sfm pano2rig` (6 sensors),
 - a spherical tile rig — the "sphere discretised as a rig of pinhole patches"
-  of `specs/core/spherical-tiles-rig.md` — from a few dozen up to ~100 000
+  of `specs/core/spherical/spherical-tiles-rig.md` — from a few dozen up to ~100 000
   sensors.
 
 Having one format means every rig sfmtool builds can be saved and restored
@@ -259,7 +259,7 @@ camera tables. Defined values so far:
 | `stereo_pair` | Two side-by-side sensors with near-parallel optical axes, in a stereo-vision configuration. | `{ "baseline_m": <float> }` |
 | `fisheye_360` | Two fisheye sensors facing opposite directions for full 360° coverage (e.g. `sfm insv2rig`). | `{ "baseline_m": <float> }` |
 | `cubemap` | Six co-centric pinhole faces (e.g. `sfm pano2rig`). | `{}` |
-| `spherical_tiles` | Co-centric pinhole tiles discretising the sphere (see `specs/core/spherical-tiles-rig.md`). | `centre` (`[x,y,z]` world placement), `measured_max_nn_angle`, `measured_max_coverage_angle`, `atlas_cols`, plus informational `half_fov_rad` and `patch_size` |
+| `spherical_tiles` | Co-centric pinhole tiles discretising the sphere (see `specs/core/spherical/spherical-tiles-rig.md`). | `centre` (`[x,y,z]` world placement), `measured_max_nn_angle`, `measured_max_coverage_angle`, `atlas_cols`, plus informational `half_fov_rad` and `patch_size` |
 
 For a `spherical_tiles` rig, the generic tables already capture every tile's
 intrinsics (one shared pinhole camera) and rotation (per-tile quaternion,

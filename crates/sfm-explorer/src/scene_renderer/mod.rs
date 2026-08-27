@@ -16,7 +16,7 @@
 //! [`SceneRenderer`] itself are the shared singletons. Each scene pass loops
 //! over the bundles, binding that node's bind group (which carries its
 //! [`ReconUniforms`] slice: model matrix, point size, pick bases) before the
-//! existing instanced draw. See `specs/gui/gui-scene-graph.md`.
+//! existing instanced draw. See `specs/gui/scene-graph.md`.
 
 mod auto_point_size;
 mod compass;

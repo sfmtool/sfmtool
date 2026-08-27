@@ -4,7 +4,7 @@
 //! Rotation-locked resection: solve a camera's translation against known
 //! world points when its world-to-camera rotation is already fixed.
 //!
-//! See `specs/core/rotation-locked-resection.md`. With the rotation fixed the
+//! See `specs/core/geometry/rotation-locked-resection.md`. With the rotation fixed the
 //! problem is linear in the three translation components: each observation's
 //! unit ray `r_k = pixel_to_ray(uv_k)` must be parallel to `R·X_k + t`, giving
 //! the cross-product rows `[r_k]ₓ · t = −[r_k]ₓ · R·X_k`. Working in ray space
@@ -146,7 +146,7 @@ fn residual_norm(
 /// - `min_inliers`: fewer survivors than this at any round fails.
 ///
 /// Returns `None` when the observation counts disagree or the survivor set
-/// falls below `min_inliers`. See `specs/core/rotation-locked-resection.md`.
+/// falls below `min_inliers`. See `specs/core/geometry/rotation-locked-resection.md`.
 pub fn resect_translation(
     cam: &CameraIntrinsics,
     rotation: &UnitQuaternion<f64>,

@@ -9,8 +9,8 @@ live in `crates/sfmtool-core/src/camera/intrinsics.rs`
 `tests/rust_bindings/test_sfmtool_fisheye_rust_bindings.py` and
 `tests/rust_bindings/test_sfmtool_pinhole_rust_bindings.py`. The projection,
 inverse and Jacobian kernels are specified per model in
-[../core/sfmtool-fisheye-kernels.md](../core/sfmtool-fisheye-kernels.md) and
-[../core/sfmtool-pinhole-kernels.md](../core/sfmtool-pinhole-kernels.md).
+[../core/camera/sfmtool-fisheye-kernels.md](../core/camera/sfmtool-fisheye-kernels.md) and
+[../core/camera/sfmtool-pinhole-kernels.md](../core/camera/sfmtool-pinhole-kernels.md).
 
 **Beta:** the parameterization may still change: the basis, the knot
 layout, and the parameter names. A `.sfmr` file carrying these models may
@@ -135,8 +135,8 @@ fold-gated domain, and inverts to a root of the folded map rather than to the
 radius that produced the pixel. The decision procedure and the enforcement
 sites are
 specified in
-[../core/sfmtool-fisheye-kernels.md](../core/sfmtool-fisheye-kernels.md) and
-[../core/sfmtool-pinhole-kernels.md](../core/sfmtool-pinhole-kernels.md).
+[../core/camera/sfmtool-fisheye-kernels.md](../core/camera/sfmtool-fisheye-kernels.md) and
+[../core/camera/sfmtool-pinhole-kernels.md](../core/camera/sfmtool-pinhole-kernels.md).
 
 ### The zero-spline identity
 
@@ -225,7 +225,7 @@ models are registered as `custom` in the camera model registry — their
 serialization is hand-written and intercepts the conversion before the
 fixed-arity table is reached, which is what keeps the validation below out of a
 generated lookup. See
-[../core/camera-model-registry.md](../core/camera-model-registry.md).
+[../core/camera/camera-model-registry.md](../core/camera/camera-model-registry.md).
 
 The `.sfmr` container is pass-through for camera parameters
 (the format stores whatever `parameters` map the model writes), so

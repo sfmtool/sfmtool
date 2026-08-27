@@ -2258,7 +2258,7 @@ fn the_camera_zoom_frames_only_its_own_images_through_the_node_transform() {
 
 // ── The image / camera selection coupling (no frame needed) ────────────
 //
-// The truth table in `specs/gui/gui-camera-intrinsics.md` § "The selection
+// The truth table in `specs/gui/camera-intrinsics.md` § "The selection
 // coupling", one test per row. All of it is `AppState`: the invariant is
 // enforced in the two setters precisely so that no panel has to remember it.
 

@@ -7,7 +7,7 @@ Gauss-Newton subpixel refiner) against a real reconstruction.
 Builds a patch cloud from a solved reconstruction and refines the per-view
 keypoints over the real ``.sift``-derived patches and source images — the
 multi-view rendering + continuous solve the Rust unit tests exercise only
-synthetically. See ``specs/core/keypoint-subpixel-refinement.md``.
+synthetically. See ``specs/core/patch/keypoint-subpixel-refinement.md``.
 
 The refiner is a *local* refiner that changes no view membership and is never
 worse than the seed; the checks here are the binding's array contract, the

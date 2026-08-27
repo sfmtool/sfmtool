@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Fronto-parallel patch cache for normal refinement (see
-//! `specs/core/fronto-parallel-patch-cache.md`).
+//! `specs/core/patch/fronto-parallel-patch-cache.md`).
 //!
 //! Within one refinement the patch centre, size, and 3D point are fixed — only
 //! the normal moves — so the texture each view sees is fixed up to a planar

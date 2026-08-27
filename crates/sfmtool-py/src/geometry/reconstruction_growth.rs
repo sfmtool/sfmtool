@@ -3,7 +3,7 @@
 
 //! Bindings for reconstruction growth and batch registration
 //! (``sfmtool._sfmtool.geometry.grow_reconstruction`` /
-//! ``resect_images_batch``; see ``specs/core/reconstruction-growth.md``).
+//! ``resect_images_batch``; see ``specs/core/geometry/reconstruction-growth.md``).
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
@@ -66,7 +66,7 @@ pub(crate) fn read_observations(
 }
 
 /// Grow a seeded reconstruction to full registration
-/// (see ``specs/core/reconstruction-growth.md``).
+/// (see ``specs/core/geometry/reconstruction-growth.md``).
 ///
 /// Registers the un-posed images of a cluster-track set against the seed
 /// poses: next-best-view resection (RANSAC P3P polished by trimmed pose-only
@@ -182,7 +182,7 @@ pub fn grow_reconstruction<'py>(
 }
 
 /// Pose-only resection of many images against fixed structure
-/// (see ``specs/core/reconstruction-growth.md``).
+/// (see ``specs/core/geometry/reconstruction-growth.md``).
 ///
 /// Each requested image is registered independently — no adjustment, no
 /// cross-image coupling — and the images run in parallel. Per image: gather

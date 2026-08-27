@@ -2,7 +2,7 @@
 
 Quantitative study of the v1 photometric patch-normal refinement
 (`crates/sfmtool-core/src/patch_normal_refine.rs`, spec
-`specs/core/patch-normal-refinement.md`): where the time goes, what each
+`specs/core/patch/patch-normal-refinement.md`): where the time goes, what each
 tunable buys per millisecond, and which of the spec's proposed optimizations
 are worth building. Measured on a 4-core Linux container against the four
 checked-in datasets, reconstructed with the current `init_dataset_*.sh`

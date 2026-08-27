@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Reconstruction growth ([`grow_reconstruction`]). See
-//! `specs/core/reconstruction-growth.md`; the standalone batch registration
+//! `specs/core/geometry/reconstruction-growth.md`; the standalone batch registration
 //! primitive lives in [`super::batch_resection`].
 //!
 //! [`grow_reconstruction`] registers the un-posed images of a cluster-track
@@ -473,7 +473,7 @@ fn build_result(
 
 /// Grow a seeded reconstruction to full registration by next-best-view
 /// resection, incremental triangulation, and bounded staged adjustments. See
-/// `specs/core/reconstruction-growth.md` and the module docs for the
+/// `specs/core/geometry/reconstruction-growth.md` and the module docs for the
 /// mechanism.
 ///
 /// `cluster_indexes` must be nondecreasing (each distinct cluster is a

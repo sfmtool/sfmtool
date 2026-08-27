@@ -6,7 +6,7 @@
 Builds a patch cloud from a solved reconstruction and runs photometric
 patch-view selection over its real ``.sift``-derived patches and source images —
 the multi-view rendering path the Rust unit tests can't exercise without on-disk
-images. See ``specs/core/patch-view-selection.md``.
+images. See ``specs/core/patch/patch-view-selection.md``.
 
 ``seoul_bull`` is the convex case: the selected view set must be a superset of
 each point's track. ``kerry_park`` (a back-to-back fisheye rig) is the

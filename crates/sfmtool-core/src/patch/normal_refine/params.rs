@@ -79,7 +79,7 @@ pub enum Sampler {
 
 /// How candidate normals are scored: re-rendered from the source images, or
 /// resampled from a cached base patch (see
-/// `specs/core/fronto-parallel-patch-cache.md`).
+/// `specs/core/patch/fronto-parallel-patch-cache.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheMode {
     /// Re-render every candidate from the source pyramid — the exact path; opt
@@ -171,7 +171,7 @@ pub struct NormalRefineParams {
     /// more views than this, refine over only the `K` most normal-informative
     /// views, picked by the D-optimal subset selection of `view_subset` (a
     /// low-foreshortening anchor plus a greedy `det(M + wᵢwᵢᵀ)` fill; see
-    /// `specs/core/patch-normal-refine-view-subset.md`). The normal is 2-DOF, so
+    /// `specs/core/patch/patch-normal-refine-view-subset.md`). The normal is 2-DOF, so
     /// a few azimuthally-spread oblique views already determine it — the cap cuts
     /// the per-candidate render cost roughly linearly in the views dropped. `0`
     /// (default) disables the cap (use all views; byte-for-byte the uncapped

@@ -23,7 +23,7 @@
 //! an unfittable point comes back `NaN` rather than as something that looks
 //! estimated.
 //!
-//! See `specs/core/adjacency-surfel-normals.md` for the design.
+//! See `specs/core/analysis/adjacency-surfel-normals.md` for the design.
 
 use nalgebra::{Matrix3, SymmetricEigen, Vector3};
 use rayon::prelude::*;

@@ -3,7 +3,7 @@
 
 """JSON serialization for `sfm motion` analysis results.
 
-See `specs/cli/motion-command.md` section "JSON Output" for the schema.
+See `specs/cli/reconstruction/motion-command.md` section "JSON Output" for the schema.
 """
 
 from __future__ import annotations

@@ -5,7 +5,7 @@
 //! solver ([`homography_4pt`]), a normalized N-point refit ([`homography_dlt`]),
 //! and a deterministic LO-RANSAC estimator ([`estimate_homography`]).
 //!
-//! See `specs/core/focal-vote.md` (Homography estimation). Given `N` pixel
+//! See `specs/core/geometry/focal-vote.md` (Homography estimation). Given `N` pixel
 //! correspondences `(x₁, x₂)` between two views, estimate the `3×3` homography
 //! `H` with `x̃₂ ≃ H x̃₁` (equality up to scale), robust to a contaminated
 //! correspondence set. The estimator mirrors
@@ -253,7 +253,7 @@ fn local_optimize_h(
 
 /// Robustly estimate the homography from pixel correspondences (4-point
 /// LO-RANSAC). Returns `None` when no consensus reaches `min_inliers`.
-/// See `specs/core/focal-vote.md`.
+/// See `specs/core/geometry/focal-vote.md`.
 pub fn estimate_homography(
     x1: &[[f64; 2]],
     x2: &[[f64; 2]],

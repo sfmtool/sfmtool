@@ -3,7 +3,7 @@
 
 //! Photometric patch-normal refinement.
 //!
-//! See `specs/core/patch-normal-refinement.md`. Given an [`OrientedPatch`] and
+//! See `specs/core/patch/patch-normal-refinement.md`. Given an [`OrientedPatch`] and
 //! the views that observe it, [`refine_patch_normal`] searches the 2-DOF
 //! normal (the only thing that affects cross-view consistency) for the plane
 //! whose rendered patches agree the most, scored by the consensus all-pairs
@@ -65,7 +65,7 @@ use search::{build_final_context, coarse_to_fine, eval_phi, grid_confidence};
 use support::repose_patch;
 
 /// Refine one patch's normal photometrically. Takes the patch and returns an
-/// updated copy plus diagnostics; see `specs/core/patch-normal-refinement.md`.
+/// updated copy plus diagnostics; see `specs/core/patch/patch-normal-refinement.md`.
 ///
 /// In-plane rotation can't affect photoconsistency, so the routine searches
 /// only the 2-DOF normal; it reprojects the input `u_axis` onto each candidate
@@ -170,7 +170,7 @@ fn refine_patch_normal_impl(
         .collect();
 
     // Optional D-optimal restriction of the refinement basis to the K most
-    // normal-informative views (see `specs/core/patch-normal-refine-view-subset.md`).
+    // normal-informative views (see `specs/core/patch/patch-normal-refine-view-subset.md`).
     // Off by default (`max_refine_views == 0` — byte-for-byte the uncapped path);
     // the cap is floored at `min_views` so it can never strand a patch below the
     // refine floor, and a point at infinity already returned above. The selected

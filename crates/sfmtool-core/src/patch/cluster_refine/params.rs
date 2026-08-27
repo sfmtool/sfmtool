@@ -65,7 +65,7 @@ pub struct ClusterRefineParams {
     /// Localizability gate: exclude a member up front (before reference
     /// selection and refinement) when its own patch's noise-normalized
     /// weak-axis positional uncertainty `σ_pos` exceeds this, in
-    /// template-grid px (see `specs/core/patch-localizability.md`). `0`
+    /// template-grid px (see `specs/core/patch/patch-localizability.md`). `0`
     /// disables the gate. The default value matches `embed-patches`'
     /// `--max-keypoint-uncertainty`, though the score here is measured on
     /// the member's template-grid patch with [`Self::window`] rather than
@@ -112,7 +112,7 @@ impl Default for ClusterRefineParams {
             // for a +0.03% kept-set delta and a slightly better
             // warp-consistency profile, and they keep the synthetic
             // warp-recovery suite green. See
-            // specs/core/cluster-patch-refinement.md ("Performance").
+            // specs/core/patch/cluster-patch-refinement.md ("Performance").
             intermediate_convergence: 1e-4,
             stall_iters: 20,
             stall_tol: 1e-4,

@@ -3,7 +3,7 @@
 
 """Tests for the structure-free focal-vote Rust bindings
 (``sfmtool._sfmtool.geometry.focal_vote`` and ``estimate_homography``; see
-``specs/core/focal-vote.md``).
+``specs/core/geometry/focal-vote.md``).
 
 Synthetic scenes are built in the OpenCV/optical pixel convention (a point in
 front has camera-frame ``z > 0``). A pure-rotation rig (all camera centres at

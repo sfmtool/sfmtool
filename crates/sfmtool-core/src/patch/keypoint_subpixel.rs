@@ -3,7 +3,7 @@
 
 //! Photometric subpixel keypoint refinement (the high-accuracy reference).
 //!
-//! See `specs/core/keypoint-subpixel-refinement.md`. Given a keypoint that is
+//! See `specs/core/patch/keypoint-subpixel-refinement.md`. Given a keypoint that is
 //! **already close** to correct (the caller's precondition), this refines it to
 //! sub-pixel by a **local** continuous optimization of cross-view
 //! photoconsistency: per view, a 2-DOF in-plane translation offset `δ` solved by
@@ -65,7 +65,7 @@
 //! cubic-B-spline read of that tile (exact at integer shifts). See the
 //! `RefineTile` doc for the exactness/coverage contract and
 //! the accepted double-interpolation loss, and
-//! `specs/core/keypoint-subpixel-refinement.md` for the design discussion.
+//! `specs/core/patch/keypoint-subpixel-refinement.md` for the design discussion.
 //!
 //! ## ECC Gauss–Newton, derived
 //!
@@ -151,7 +151,7 @@ struct ViewState {
 /// projection gate (a view in which `project_i(X_p)` fails — behind the camera or
 /// out of frame — is dropped, as the offset has nothing to be measured from);
 /// otherwise the set is preserved, and a guard-failed view keeps its seed. See
-/// `specs/core/keypoint-subpixel-refinement.md`.
+/// `specs/core/patch/keypoint-subpixel-refinement.md`.
 pub fn refine_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],

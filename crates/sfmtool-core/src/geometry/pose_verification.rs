@@ -3,7 +3,7 @@
 
 //! Displacement-neighborhood pose verification and repair
 //! ([`verify_poses`] / [`repair_poses`]). See
-//! `specs/core/pose-verification.md`.
+//! `specs/core/geometry/pose-verification.md`.
 //!
 //! Detects and repairs misregistered cameras in a reconstruction without a
 //! reference solve, an image ordering, or a motion model. The ruler is the
@@ -374,7 +374,7 @@ fn measured_relative_rotation(
 // ── The kernels ──────────────────────────────────────────────────────────────
 
 /// Verify the registered cameras' poses against the displacement
-/// neighborhood. See the module docs and `specs/core/pose-verification.md`.
+/// neighborhood. See the module docs and `specs/core/geometry/pose-verification.md`.
 ///
 /// `cluster_indexes` must be nondecreasing (each distinct cluster is a
 /// contiguous run); `image_indexes` and `positions_xy` are the image id and
@@ -503,7 +503,7 @@ pub fn verify_poses(
 }
 
 /// Verify, then repair the flagged cameras against the displacement
-/// neighborhood. See the module docs and `specs/core/pose-verification.md`.
+/// neighborhood. See the module docs and `specs/core/geometry/pose-verification.md`.
 ///
 /// Runs [`verify_poses`], then walks the flagged cameras in ascending image
 /// order: re-initialize from the top-2 `nearest` registered neighbours

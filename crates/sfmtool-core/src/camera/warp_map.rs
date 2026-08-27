@@ -341,7 +341,7 @@ impl WarpMap {
     /// bounds — matching the other constructors.
     ///
     /// Generalizes [`Self::from_cameras_with_pose`] from a fronto-parallel depth
-    /// plane to an arbitrary oriented plane. See `specs/core/patch-cloud.md`.
+    /// plane to an arbitrary oriented plane. See `specs/core/patch/patch-cloud.md`.
     pub fn from_patch(
         patch: &OrientedPatch,
         camera: &CameraIntrinsics,

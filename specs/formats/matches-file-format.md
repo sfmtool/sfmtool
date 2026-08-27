@@ -421,7 +421,7 @@ step materializes the expansion by writing a new pairwise `.matches` file with
 `image_pairs/` + `two_view_geometries/` (the write-once workflow, unchanged). Pair
 descriptor distances, which the stored pairwise form carries, are recomputed from the
 referenced `.sift` files when a consumer needs them. See
-[`specs/core/cluster-patches.md`](../core/cluster-patches.md) for the design
+[`specs/core/patch/cluster-patches.md`](../core/patch/cluster-patches.md) for the design
 rationale.
 
 #### `clusters/metadata.json.zst`
@@ -532,7 +532,7 @@ recoverable via the reference row), with vetting statuses and signals.
   - `6 rejected_unlocalizable` — the member's own patch scored a keypoint position
     uncertainty above the localizability threshold, so it was excluded before
     reference selection and refinement (see
-    [`patch-localizability.md`](../core/patch-localizability.md))
+    [`patch-localizability.md`](../core/patch/patch-localizability.md))
 - A patch cluster = the reference plus its `kept` members; statuses preserve the
   rejected members so consumers can re-gate without re-running (the ZNCC/shift arrays
   are the signals, mirroring how `match_descriptor_distances` enables descriptor
@@ -589,7 +589,7 @@ recoverable via the reference row), with vetting statuses and signals.
   `‖M_k·T_c − J‖_F / ‖J‖_F` against a joint weak-perspective factorization
   of all cluster warps (one scaled-orthographic camera per image, one
   planar tangent frame per cluster; see
-  [`cluster-warp-consistency.md`](../core/cluster-warp-consistency.md)).
+  [`cluster-warp-consistency.md`](../core/patch/cluster-warp-consistency.md)).
   Lower = more consistent, 0 = perfect; `NaN` where the member did not
   enter the fit (non-reference/kept status, degenerate warp, or a cluster
   with fewer than 2 fitted members)
@@ -817,7 +817,7 @@ file is an ordinary `.matches` file — every constraint in this specification
 applies unchanged, and it reads back through the ordinary reader. How the
 subset is chosen is not this specification's concern; the selection
 operation is specified in
-[cluster-selection.md](../core/cluster-selection.md). What this
+[cluster-selection.md](cluster-selection.md). What this
 specification defines is the file-level contract a derived file carries.
 
 **Provenance record.** A derived file is identified by a record in the
@@ -895,7 +895,7 @@ roughly doubles the correspondence payload with derived values: per-pair data gr
 that need pairs obtain them by calling the expansion at read time; the cluster file
 remains the durable primary artifact, and the geometric-verification step writes the
 solver-facing pairwise derivative as a new file. See
-[`specs/core/cluster-patches.md`](../core/cluster-patches.md) for the full design
+[`specs/core/patch/cluster-patches.md`](../core/patch/cluster-patches.md) for the full design
 discussion.
 
 ### Why store descriptor distances?

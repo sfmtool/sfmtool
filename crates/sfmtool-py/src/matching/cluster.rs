@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Python bindings for the background-floor track-cluster matcher (see
-//! `specs/core/track-cluster-matching.md`) and cluster-patch refinement (see
-//! `specs/core/cluster-patch-refinement.md`).
+//! `specs/core/features/track-cluster-matching.md`) and cluster-patch refinement (see
+//! `specs/core/patch/cluster-patch-refinement.md`).
 
 use std::borrow::Cow;
 
@@ -252,10 +252,10 @@ pub fn clusters_to_pair_matches(
 }
 
 /// Refine SIFT clusters into patch clusters (see
-/// `specs/core/cluster-patch-refinement.md`).
+/// `specs/core/patch/cluster-patch-refinement.md`).
 ///
 /// Per cluster: exclude members whose own patch fails the localizability
-/// gate (see `specs/core/patch-localizability.md`), pick a reference member
+/// gate (see `specs/core/patch/patch-localizability.md`), pick a reference member
 /// (largest SIFT scale), build a Gaussian-windowed z-normalized template
 /// around its detection, refine an affine warp to every other member by a
 /// shift → similarity → affine Nelder-Mead cascade on the windowed ZNCC
@@ -310,7 +310,7 @@ pub fn clusters_to_pair_matches(
 ///     (M,) float32 — the member's relative misfit against a joint
 ///     weak-perspective factorization of all cluster warps (lower = more
 ///     consistent; NaN where not fitted; see
-///     specs/core/cluster-warp-consistency.md). A stored signal, not a
+///     specs/core/patch/cluster-warp-consistency.md). A stored signal, not a
 ///     gate.
 #[pyfunction]
 #[pyo3(signature = (images, positions, affine_shapes,

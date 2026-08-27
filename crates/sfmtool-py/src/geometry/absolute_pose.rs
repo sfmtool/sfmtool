@@ -3,7 +3,7 @@
 
 //! Python bindings for the absolute-pose solver: the Lambda Twist minimal
 //! solver ``p3p_solve`` and the robust RANSAC estimator
-//! ``estimate_absolute_pose`` (see ``specs/core/absolute-pose.md``).
+//! ``estimate_absolute_pose`` (see ``specs/core/geometry/absolute-pose.md``).
 
 use nalgebra::{Point3, Vector3};
 use numpy::{PyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
@@ -43,7 +43,7 @@ fn read_bearings(arr: &PyReadonlyArray2<'_, f64>) -> Vec<Vector3<f64>> {
 }
 
 /// Solve for up to four world-to-camera poses from three bearing/point
-/// correspondences (Lambda Twist P3P; see ``specs/core/absolute-pose.md``).
+/// correspondences (Lambda Twist P3P; see ``specs/core/geometry/absolute-pose.md``).
 ///
 /// Args:
 ///     bearings: (3, 3) float64 unit ray directions in the canonical camera
@@ -108,7 +108,7 @@ fn estimate_to_dict<'py>(
 }
 
 /// Robustly estimate a camera's world-to-camera pose from 2D-3D
-/// correspondences (P3P + RANSAC; see ``specs/core/absolute-pose.md``).
+/// correspondences (P3P + RANSAC; see ``specs/core/geometry/absolute-pose.md``).
 ///
 /// The first argument is either (N, 2) pixel observations — requiring
 /// ``camera`` — or (N, 3) unit bearing vectors in the canonical camera frame

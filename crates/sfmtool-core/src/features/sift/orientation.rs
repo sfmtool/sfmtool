@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Orientation assignment (stage 5 of SIFT, `specs/core/sift.md`).
+//! Orientation assignment (stage 5 of SIFT, `specs/core/features/sift.md`).
 //!
 //! For each localized keypoint, build a 36-bin gradient-orientation histogram
 //! over a Gaussian-weighted circular window at the keypoint's scale, smooth it,

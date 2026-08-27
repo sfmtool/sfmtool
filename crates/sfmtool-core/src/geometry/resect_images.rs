@@ -4,7 +4,7 @@
 //! Re-estimate a set of images' poses against structure that did not depend on
 //! any of them.
 //!
-//! [`resect_images`] is the whole mechanism of `specs/gui/gui-resect-image.md`:
+//! [`resect_images`] is the whole mechanism of `specs/gui/resect-image.md`:
 //! the target set's contribution to structure is removed (every finite point
 //! any target observes is re-triangulated from the *non-target* observations
 //! alone, and every direction a target observes is re-derived from the
@@ -291,7 +291,7 @@ impl From<ReconstructionError> for ResectImageError {
 /// Re-estimate the poses of `image_indexes` against structure held out from all
 /// of them, and return the result as a new reconstruction.
 ///
-/// The whole mechanism of `specs/gui/gui-resect-image.md`:
+/// The whole mechanism of `specs/gui/resect-image.md`:
 ///
 /// 1. **Held-out structure.** Every finite point any target observes that keeps
 ///    at least two *non-target* observations is re-triangulated from those

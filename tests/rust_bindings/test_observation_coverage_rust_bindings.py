@@ -6,7 +6,7 @@
 ``ObservationCoverage`` rasterizes every observation's image-space footprint
 into per-image occupancy grids and answers batch queries against them: what a
 region's claim count is, how much of a neighbourhood is claimed, and which
-directions around a point are still open. See specs/core/observation-coverage.md.
+directions around a point are still open. See specs/core/analysis/observation-coverage.md.
 """
 
 import numpy as np

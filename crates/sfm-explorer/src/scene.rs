@@ -4,7 +4,7 @@
 //! The scene graph: the reconstructions the viewer has loaded, and the typed
 //! references that address entities inside them.
 //!
-//! See `specs/gui/gui-scene-graph.md`. All five phases of that design are in
+//! See `specs/gui/scene-graph.md`. All five phases of that design are in
 //! place: the identity types, the node with its per-node display state, its
 //! similarity transform and its tint, and a scene that holds **any number** of
 //! nodes — `File > Open` appends, and the Scene Graph panel

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Camera-model columns of the structure-free focal vote
-//! (see `specs/core/focal-vote.md`, "Camera-Model Columns").
+//! (see `specs/core/geometry/focal-vote.md`, "Camera-Model Columns").
 //!
 //! A **column** is a camera-model hypothesis supplying an invertible pixel→ray
 //! map parameterized by its own focal ([`CameraModel`]). Both estimator

@@ -19,7 +19,7 @@ reconstruction was created. After this op the reconstruction is
 ``embedded_patches``; any later ``.sift``-dependent operation in the same chain
 will fail.
 
-See ``specs/cli/xform-command.md`` and ``specs/core/sift-to-patch-reconstruction.md``.
+See ``specs/cli/reconstruction/xform/xform-command.md`` and ``specs/core/patch/sift-to-patch-reconstruction.md``.
 """
 
 from .._sfmtool.reconstruction import SfmrReconstruction

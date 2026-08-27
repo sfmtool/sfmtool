@@ -4,7 +4,7 @@
 //! Batch pose-only registration against fixed structure.
 //!
 //! [`resect_images_batch`] is the standalone registration primitive of
-//! `specs/core/reconstruction-growth.md`: each requested image is resected
+//! `specs/core/geometry/reconstruction-growth.md`: each requested image is resected
 //! independently against the supplied points (no adjustment, no cross-image
 //! coupling), parallelized across images. The per-image estimate-then-refine
 //! ladder is shared with the growth kernel
@@ -60,7 +60,7 @@ pub struct BatchResection {
 
 /// Pose-only resection of many images against fixed structure, each image
 /// independent (no adjustment, no cross-image coupling), parallelized across
-/// images. See `specs/core/reconstruction-growth.md`.
+/// images. See `specs/core/geometry/reconstruction-growth.md`.
 ///
 /// For each image of `image_list`: gather its observations of clusters with a
 /// finite `points` row; below `min_obs` skip. Estimate by RANSAC P3P polished

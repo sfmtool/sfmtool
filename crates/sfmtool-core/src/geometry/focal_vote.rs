@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Structure-free focal-length estimation by pairwise voting
-//! ([`focal_vote`]). See `specs/core/focal-vote.md`.
+//! ([`focal_vote`]). See `specs/core/geometry/focal-vote.md`.
 //!
 //! Image pairs drawn from cluster-track observations each cast one focal vote
 //! through whichever of two estimators their geometry can observe, and the
@@ -531,7 +531,7 @@ fn rotation_self_calib_focal(h: &Matrix3<f64>, max_wh: f64) -> Option<f64> {
 }
 
 /// Estimate a shared focal length from cluster-track observations without any
-/// reconstruction. See `specs/core/focal-vote.md`.
+/// reconstruction. See `specs/core/geometry/focal-vote.md`.
 ///
 /// `cluster_indexes` must be nondecreasing (each distinct cluster is a
 /// contiguous run); `image_indexes` and `positions_xy` are the image id and
@@ -584,7 +584,7 @@ pub fn focal_vote_with_min_disp(
 }
 
 /// `focal_vote` over an explicit camera-model column set (see
-/// `specs/core/focal-vote.md`, "Camera-Model Columns").
+/// `specs/core/geometry/focal-vote.md`, "Camera-Model Columns").
 ///
 /// With the default pinhole-only column set this is exactly the closed-form
 /// kernel; adding the equidistant-fisheye column runs the two self-consistency

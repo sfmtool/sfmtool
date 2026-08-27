@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Descriptor computation (stage 6 of SIFT, `specs/core/sift.md`).
+//! Descriptor computation (stage 6 of SIFT, `specs/core/features/sift.md`).
 //!
 //! In a window rotated to the keypoint orientation, sample gradients over the
 //! pixels covered by a `d × d` (4×4) grid of subregions. Each sample is

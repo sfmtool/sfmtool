@@ -10,7 +10,7 @@
 //! to/from [`sfmr_format::SfmrCamera`] using the provided `TryFrom` / `From`
 //! implementations, which live in the private `registry` module along with the one
 //! declaration every camera model is derived from. See
-//! `specs/core/camera-model-registry.md`.
+//! `specs/core/camera/camera-model-registry.md`.
 
 use std::fmt;
 

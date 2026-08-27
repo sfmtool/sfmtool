@@ -4,7 +4,7 @@
 //! Per-spherical-tile source patch stack: a direction-space primitive built on
 //! top of [`SphericalTileRig`].
 //!
-//! See `specs/core/per-spherical-tile-source-stack.md` for design details.
+//! See `specs/core/spherical/per-spherical-tile-source-stack.md` for design details.
 //!
 //! For each tile in the rig and each contributing source image, this primitive
 //! holds an image pyramid of warped patches: the source's view of the tile's

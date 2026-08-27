@@ -18,7 +18,7 @@
 //! (`d = 10`, `alpha = 0.8`) were fit in L2 space, while the forest reports
 //! squared L2 internally.
 //!
-//! See `specs/core/track-cluster-matching.md` for the algorithm's design and
+//! See `specs/core/features/track-cluster-matching.md` for the algorithm's design and
 //! empirical justification.
 
 #[cfg(test)]

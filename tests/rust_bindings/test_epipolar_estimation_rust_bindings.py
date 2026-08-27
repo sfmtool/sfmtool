@@ -3,7 +3,7 @@
 
 """Tests for the epipolar-estimation Rust bindings
 (``sfmtool._sfmtool.geometry.estimate_fundamental`` and
-``focal_from_fundamental``; see ``specs/core/epipolar-estimation.md``).
+``focal_from_fundamental``; see ``specs/core/geometry/epipolar-estimation.md``).
 
 Synthetic camera pairs are generated in the OpenCV/optical pixel convention
 (a point in front has camera-frame ``z > 0``), so the ground-truth fundamental

@@ -4,7 +4,7 @@
 //! Go to Point: type or paste a point index — or a whole `pt3d_<hash>_<index>`
 //! id — and land on that point.
 //!
-//! See `specs/gui/gui-goto-point.md`. Every other way to reach a 3D point in
+//! See `specs/gui/goto-point.md`. Every other way to reach a 3D point in
 //! this viewer is a *click*: on a splat in the 3D viewport, on a feature in the
 //! Image Detail overlay, on a row of the Scene panel. That leaves no way back
 //! in from the outside — from a Point ID copied into a notes file, a constraints

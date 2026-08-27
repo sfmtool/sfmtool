@@ -189,7 +189,7 @@ fn window_min_size() {
 /// File is the only top-level menu. The display controls that made a View menu
 /// worth having moved into the viewport HUD, and the dock panels are permanent,
 /// so nothing app-global is left for a second menu — see
-/// `specs/gui/gui-viewport-hud.md`.
+/// `specs/gui/viewport-hud.md`.
 #[test]
 fn file_is_the_only_menu() {
     let _guard = Guard::new();

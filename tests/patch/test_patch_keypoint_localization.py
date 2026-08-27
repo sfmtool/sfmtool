@@ -8,7 +8,7 @@ Builds a patch cloud from a solved reconstruction, selects each point's view set
 photometrically, then congeals the per-view keypoints over the real
 ``.sift``-derived patches and source images — the multi-view rendering + shift
 search the Rust unit tests can't exercise without on-disk images. See
-``specs/core/patch-keypoint-localization.md``.
+``specs/core/patch/patch-keypoint-localization.md``.
 
 ``seoul_bull`` is the convex case; ``kerry_park`` (a back-to-back fisheye rig) is
 the non-convex / cluttered stress case, exercised for shape and sanity.

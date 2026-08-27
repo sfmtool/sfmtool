@@ -6,7 +6,7 @@
 //! Per *realized* covisible image pair, the shared-cluster count and the
 //! mean pixel displacement of the pair's shared-cluster keypoints, built in
 //! one pass over the clusters — linear in observations, no dense matrix
-//! anywhere. See `specs/core/pose-verification.md` (Substrate).
+//! anywhere. See `specs/core/geometry/pose-verification.md` (Substrate).
 
 use std::collections::HashMap;
 
@@ -29,7 +29,7 @@ pub(super) struct DisplacementTables {
 /// each cluster emits its accepted cross-image member pairs, so under the
 /// cluster matcher's span cap both time and storage are linear in
 /// observations, with no dense matrix anywhere. See
-/// `specs/core/pose-verification.md` (Substrate).
+/// `specs/core/geometry/pose-verification.md` (Substrate).
 ///
 /// The shared count matches [`ClusterCovisibility::count`](super::ClusterCovisibility::count) (each cluster
 /// votes at most once per pair); the mean displacement averages over *every*

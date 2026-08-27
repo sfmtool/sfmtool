@@ -7,7 +7,7 @@
 //! module fits *reconstructions*: it decides which of the source's geometry
 //! corresponds to which of the target's, drives those two estimators over the
 //! result, and reports how well it went. The SfM Explorer's Scene Graph panel
-//! drives it from `Align to ▸ <node>` (see `specs/gui/gui-scene-graph.md`), and
+//! drives it from `Align to ▸ <node>` (see `specs/gui/scene-graph.md`), and
 //! it is the shared implementation any other caller aligning two loaded
 //! `SfmrReconstruction`s should reach for.
 //!

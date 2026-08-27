@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Validate the D-optimal refinement-basis cap (``--refine-max-views``).
 
-The harness required by ``specs/core/patch-normal-refine-view-subset.md``: run
+The harness required by ``specs/core/patch/patch-normal-refine-view-subset.md``: run
 ``sfm embed-patches`` on a given ``.sfmr`` once per ``--refine-max-views`` value
 (``0`` = the all-views baseline), each under ``SFMTOOL_PROFILE=1``, and report
 per run:

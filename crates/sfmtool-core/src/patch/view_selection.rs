@@ -3,7 +3,7 @@
 
 //! Photometric patch-view selection.
 //!
-//! See `specs/core/patch-view-selection.md`. Given one 3D point with its
+//! See `specs/core/patch/patch-view-selection.md`. Given one 3D point with its
 //! oriented patch and the track views that already observe it,
 //! [`select_patch_views`] returns the **view set** `G` — the track views plus
 //! every other image that *photometrically* sees the patch.
@@ -30,7 +30,7 @@
 //! the patch comes close to the frame border (where the exact path owns the
 //! out-of-frame rejection semantics); [`Sampler::Anisotropic`] has no affine
 //! shortcut and always takes the exact warp. See
-//! `specs/core/patch-view-selection.md` for the accepted admission-flip loss
+//! `specs/core/patch/patch-view-selection.md` for the accepted admission-flip loss
 //! and the measured numbers.
 
 use crate::camera::remap::{mip_level_for_sigma, ImageU8};
@@ -121,7 +121,7 @@ pub struct ViewSelection {
     /// the photometrically-vetted expansion candidates. Lets a consumer split
     /// the view set by provenance without re-deriving the track — notably the
     /// keypoint localizer's consensus-basis pick, which reserves seats for them
-    /// (`specs/core/keypoint-localization-consensus-basis.md`).
+    /// (`specs/core/patch/keypoint-localization-consensus-basis.md`).
     pub track_view_count: usize,
 }
 
@@ -733,7 +733,7 @@ fn normal_refine_shim(params: &ViewSelectParams) -> super::normal_refine::Normal
 /// `views` is one [`ProjectedImage`] per reconstruction image (indexed by image
 /// index); `track_views` lists the image indices that already observe the point
 /// (its track). Returns the admitted view indices and their ZNCC scores; see
-/// [`ViewSelection`] and `specs/core/patch-view-selection.md`.
+/// [`ViewSelection`] and `specs/core/patch/patch-view-selection.md`.
 ///
 /// The candidate set is the track views plus every other image that
 /// geometrically sees the surfel (front-facing patch, point in front of the

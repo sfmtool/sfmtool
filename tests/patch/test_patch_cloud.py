@@ -95,7 +95,7 @@ def test_feature_size_handles_fisheye(kerry_park_workspace: Path):
     size is back-projected from the ray distance d = ‖X − C‖ (always positive),
     not the optical-axis depth z, so such peripheral points size fine. The old
     pinhole `σ·z/f` (gated on z > 0) raised ``MissingFeatureScale`` for a point
-    whose every observation was peripheral. See ``specs/core/patch-cloud.md``.
+    whose every observation was peripheral. See ``specs/core/patch/patch-cloud.md``.
     """
     recon = SfmrReconstruction.load(kerry_park_workspace)
     cloud = PatchCloud.from_reconstruction(

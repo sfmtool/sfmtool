@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Far-field rotation initialization ([`rotation_init`]). See
-//! `specs/core/rotation-init.md`.
+//! `specs/core/geometry/rotation-init.md`.
 //!
 //! Builds an initial multi-camera reconstruction from cluster tracks by using
 //! the two point populations for what each observes: parallax-free
@@ -623,7 +623,7 @@ fn retriangulate_posed(
 // ── The kernel ───────────────────────────────────────────────────────────────
 
 /// Build an initial multi-camera reconstruction from cluster tracks by
-/// far-field rotation initialization. See `specs/core/rotation-init.md` and
+/// far-field rotation initialization. See `specs/core/geometry/rotation-init.md` and
 /// the module docs for the mechanism.
 ///
 /// `cluster_indexes` must be nondecreasing (each distinct cluster is a

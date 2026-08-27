@@ -3,7 +3,7 @@
 
 """Tests for the affine-factorization Rust bindings
 (``sfmtool._sfmtool.geometry.factorize_affine``; see
-``specs/core/affine-factorization.md``).
+``specs/core/geometry/affine-factorization.md``).
 
 The parity tests compare the bindings against a numpy reference
 implementation of the same contractual algorithm (mean-filled dense SVD

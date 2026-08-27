@@ -453,7 +453,7 @@ The "pycolmap" column shows the corresponding short parameter names from COLMAP/
 This table is the authoritative human-readable list. On the code side each row
 is declared once, in the camera model registry, from which both directions of
 the `SfmrCamera` conversion are generated — see
-[../core/camera-model-registry.md](../core/camera-model-registry.md).
+[../core/camera/camera-model-registry.md](../core/camera/camera-model-registry.md).
 
 `EQUIRECTANGULAR` is an sfmtool model for panoramic
 imagery, used by the spherical-tile rig pipeline: longitude and latitude map
@@ -1592,7 +1592,7 @@ editing these files in a text editor or terminal.
 The round trip closes in the viewer: `Go ▸ Go to Point…` (Ctrl/Cmd+G) accepts a
 pasted ID and selects that point, switching to the reconstruction the hash names
 when several are loaded. See
-[gui-goto-point.md](../gui/gui-goto-point.md).
+[goto-point.md](../gui/goto-point.md).
 
 ### Format
 

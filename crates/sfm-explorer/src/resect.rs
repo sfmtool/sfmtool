@@ -9,7 +9,7 @@
 //! [`mod@sfmtool_core::geometry::resect_images`], which holds a whole set of
 //! images out together; the panel's action is that primitive on a one-element
 //! set, so the GUI and any offline caller resect an image exactly the same way.
-//! See `specs/gui/gui-resect-image.md`.
+//! See `specs/gui/resect-image.md`.
 //!
 //! What stays here is the viewer's own share: which correspondence source the
 //! menu asked for, and the status-line text the outcome is reported in. Making

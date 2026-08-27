@@ -4,7 +4,7 @@
 """End-to-end ``sift_files → embedded_patches`` orchestration.
 
 :func:`embed_patches` runs the whole photometric pipeline (see
-[the pipeline spec](../../specs/core/sift-to-patch-reconstruction.md)): it
+[the pipeline spec](../../specs/core/patch/sift-to-patch-reconstruction.md)): it
 converts to the baseline embedded form, photometrically refines each point's
 patch normal, selects + vets the view set per point, congeals the keypoints
 (with sub-pixel refinement), then hands the results to
@@ -320,7 +320,7 @@ def _cull_by_localizability(
 ) -> tuple[list[dict[str, Any]], int]:
     """Drop poorly-localized points from ``localizations`` — those whose predicted
     keypoint position uncertainty ``σ_pos`` (**patch-grid px**) exceeds
-    ``max_keypoint_uncertainty`` (``τ``). See ``specs/core/patch-localizability.md``.
+    ``max_keypoint_uncertainty`` (``τ``). See ``specs/core/patch/patch-localizability.md``.
 
     ``σ_pos`` is scored from each point's cross-view consensus ``bitmaps`` (scattered
     per source point) — the same scorer the ``xform`` filter uses. It is measured in
@@ -397,7 +397,7 @@ def embed_patches(
 ) -> SfmrReconstruction:
     """Convert a ``sift_files`` reconstruction to ``embedded_patches``, running the
     full photometric pipeline (see
-    ``specs/core/sift-to-patch-reconstruction.md``).
+    ``specs/core/patch/sift-to-patch-reconstruction.md``).
 
     0. **Convert to the baseline ``embedded_patches`` form** with a single call to
        the Rust ``SfmrReconstruction.to_embedded_patches`` — the only step that
@@ -443,7 +443,7 @@ def embed_patches(
             localizability culls), larger ones trade observation yield away to
             the grazing cull for marginal gains.
         min_relative_zncc, max_shift_px, min_views, max_iters, search: The pipeline
-            knobs documented in ``specs/cli/embed-patches-command.md``.
+            knobs documented in ``specs/cli/reconstruction/embed-patches-command.md``.
         resolution: The ``R × R`` patch grid the kernels render/score on.
         sampler: Pyramid sampler for every photometric kernel in the pipeline
             (normal refinement, view selection, the discrete localizer, and the
@@ -452,7 +452,7 @@ def embed_patches(
         search_resolution_multiplier: ``m`` for the discrete cross-view search in
             :meth:`PatchCloud.localize_keypoints` (step 3). ``1.0`` (default) is the
             no-op; ``> 1`` runs the supersampled grid (cost grows ~``m²``) — see
-            ``specs/core/keypoint-localization-search-cache.md``.
+            ``specs/core/patch/keypoint-localization-search-cache.md``.
         subpixel: LK/ECC Gauss–Newton ``max_outer_sweeps`` for the photometric
             sub-pixel keypoint refinement applied in each round (per-sweep
             consensus). ``0`` disables the keypoint movement (the localizer's
@@ -488,7 +488,7 @@ def embed_patches(
         max_refine_views: When ``> 0``, cap the **round-2+ normal-refinement
             basis** at this many views per point — the D-optimal geometric pick of
             the most normal-informative views (see
-            ``specs/core/patch-normal-refine-view-subset.md``). Applied only to the
+            ``specs/core/patch/patch-normal-refine-view-subset.md``). Applied only to the
             fine-tuning rounds, whose view set is the ``select_views``-expanded one;
             the round-1 (raw-track) refine is untouched. Lossless for the output:
             only the refinement basis shrinks — every observation stays, and the
@@ -500,7 +500,7 @@ def embed_patches(
         max_keypoint_uncertainty: Cull points whose predicted keypoint position
             uncertainty ``σ_pos`` (**patch-grid px**) exceeds this ``τ``, **early**
             — right after round 1's localize + sub-pixel refine, before the
-            multi-round refinement (see ``specs/core/patch-localizability.md``).
+            multi-round refinement (see ``specs/core/patch/patch-localizability.md``).
             ``σ_pos`` is the noise-normalized weak-axis structure-tensor uncertainty
             of each point's round-1 consensus (the aperture/flat blind spot the
             cross-view agreement gate misses), in grid px so a fixed ``τ`` transfers
@@ -514,7 +514,7 @@ def embed_patches(
             against each other (ranked by the ``select_views`` ZNCC, with the
             track views claiming seats first), and every remaining view registers
             **once** against the finished basis template. See
-            ``specs/core/keypoint-localization-consensus-basis.md``. Bounds the
+            ``specs/core/patch/keypoint-localization-consensus-basis.md``. Bounds the
             `O(V²)` consensus terms on the expanded (``select_views``) view sets,
             whose tail reaches hundreds of views on a long capture. Lossless for
             membership in the sense the normal-refinement cap is: every
@@ -605,7 +605,7 @@ def embed_patches(
     # Keep the selection's per-view ZNCC and track-view split alongside the view
     # sets: the localizer's consensus-basis pick ranks candidates by that score
     # and reserves seats for the track views (see
-    # specs/core/keypoint-localization-consensus-basis.md). select_views already
+    # specs/core/patch/keypoint-localization-consensus-basis.md). select_views already
     # computed both, so the only cost is marshalling them across — skipped
     # entirely when the cap is off, which is the path that would never read them.
     basis_ranked = localize_basis_views > 0

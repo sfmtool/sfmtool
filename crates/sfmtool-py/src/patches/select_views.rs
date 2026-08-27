@@ -26,7 +26,7 @@ impl PyPatchCloud {
     /// surfel and whose windowed ZNCC to a robust reference appearance (fused from
     /// the track views) clears ``min_relative_zncc`` × the track's own
     /// self-agreement. Track views are always admitted. See
-    /// ``specs/core/patch-view-selection.md``.
+    /// ``specs/core/patch/patch-view-selection.md``.
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from (provides cameras,

@@ -81,7 +81,7 @@ from .._cli_utils import timed_command
         "Multiplier m for the discrete cross-view search: it runs at resolution "
         "round(m·R). 1.0 is the no-op; >1 (the supersampled grid) resolves "
         "sub-pixel offsets at a cost that grows ~m². See "
-        "specs/core/keypoint-localization-search-cache.md."
+        "specs/core/patch/keypoint-localization-search-cache.md."
     ),
 )
 @click.option(
@@ -94,7 +94,7 @@ from .._cli_utils import timed_command
         "sub-pixel keypoint refinement (always the per-sweep consensus variant). "
         "`0` disables the sub-pixel pass (the localizer's keypoints are used as "
         "is); `N >= 1` runs the refiner with `max_outer_sweeps = N`. Applied once "
-        "per round (see --rounds). See specs/core/keypoint-subpixel-refinement.md."
+        "per round (see --rounds). See specs/core/patch/keypoint-subpixel-refinement.md."
     ),
 )
 @click.option(
@@ -164,7 +164,7 @@ from .._cli_utils import timed_command
         "— all observations stay in the output, and the consensus bitmaps are "
         "still fused over the full view set. The default (8) cuts roughly a "
         "third off end-to-end time on large view sets (the round-2+ refine pass "
-        "itself drops ~5x). See specs/core/patch-normal-refine-view-subset.md."
+        "itself drops ~5x). See specs/core/patch/patch-normal-refine-view-subset.md."
     ),
 )
 @click.option(
@@ -181,7 +181,7 @@ from .._cli_utils import timed_command
         "misses. The grid-px unit lets a fixed value transfer across "
         "resolutions. A conservative tail cut that self-limits — removing egregious "
         "points where a dataset has them and little where it doesn't. `0` disables "
-        "the cull. See specs/core/patch-localizability.md."
+        "the cull. See specs/core/patch/patch-localizability.md."
     ),
 )
 @click.option(
@@ -198,7 +198,7 @@ from .._cli_utils import timed_command
         "(median per-observation keypoint shift vs exhaustive ~0.05 px, 91 % "
         "within 1 px). 'exhaustive' scores the full (2·margin+1)² grid via the "
         "SIMD SAXPY accumulator — the global-argmax fallback, no local-optima "
-        "risk. See specs/core/keypoint-localization-search-cache.md."
+        "risk. See specs/core/patch/keypoint-localization-search-cache.md."
     ),
 )
 @click.option(
@@ -216,7 +216,7 @@ from .._cli_utils import timed_command
         "capture. Every observation is still localized and reported — only the "
         "consensus membership shrinks. 0 congeals all views (the cleanest error "
         "metrics; prefer it for ground-truth cleanup). See "
-        "specs/core/keypoint-localization-consensus-basis.md."
+        "specs/core/patch/keypoint-localization-consensus-basis.md."
     ),
 )
 @click.option(

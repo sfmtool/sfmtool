@@ -9,7 +9,7 @@
 //! that describe the outcome — lives in
 //! [`sfmtool_core::analysis::alignment::reconstructions`], so the GUI and any
 //! other caller align two reconstructions exactly the same way. See
-//! `specs/gui/gui-scene-graph.md`, "Node Transforms and Alignment", for the
+//! `specs/gui/scene-graph.md`, "Node Transforms and Alignment", for the
 //! behaviour this drives.
 //!
 //! What stays here is the viewer's own share: the popup's options (re-exported

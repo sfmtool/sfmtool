@@ -3,7 +3,7 @@
 
 //! Binding for the held-out resection of an image set
 //! (``sfmtool._sfmtool.geometry.resect_images``; see
-//! ``specs/gui/gui-resect-image.md``).
+//! ``specs/gui/resect-image.md``).
 //!
 //! The GUI reaches the same core primitive through
 //! `crates/sfm-explorer/src/resect.rs`, on a one-element set; this is the
@@ -85,7 +85,7 @@ fn totals_to_py<'py>(
 }
 
 /// Re-estimate a set of images' poses against structure held out from all of
-/// them (see ``specs/gui/gui-resect-image.md``).
+/// them (see ``specs/gui/resect-image.md``).
 ///
 /// A stored pose was fit jointly with the points it observes, so it always
 /// agrees with them. This removes the whole target set's contribution first —

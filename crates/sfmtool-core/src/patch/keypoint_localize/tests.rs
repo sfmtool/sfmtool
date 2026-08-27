@@ -1761,7 +1761,7 @@ fn incremental_loo_template_matches_reference() {
 }
 
 // ---------------------------------------------------------------------------
-// Consensus-basis cap (specs/core/keypoint-localization-consensus-basis.md)
+// Consensus-basis cap (specs/core/patch/keypoint-localization-consensus-basis.md)
 // ---------------------------------------------------------------------------
 
 /// A ring of `n` cameras around the patch, all seeing the same aligned texture

@@ -3,7 +3,7 @@
 
 //! Oriented 3D patches (surfels) and patch clouds.
 //!
-//! See `specs/core/patch-cloud.md`. An [`OrientedPatch`] is a small planar
+//! See `specs/core/patch/patch-cloud.md`. An [`OrientedPatch`] is a small planar
 //! surface element in world space; [`crate::camera::WarpMap::from_patch`]
 //! projects a camera's image onto one to render its canonical appearance.
 

@@ -4,7 +4,7 @@
 //! The pure structure-tensor scorer: luminance gradients over the `R×R` window,
 //! the window-weighted second-moment matrix, and its 2×2 symmetric eigensystem.
 //!
-//! See `specs/core/patch-localizability.md`. Given a point's cross-view consensus
+//! See `specs/core/patch/patch-localizability.md`. Given a point's cross-view consensus
 //! patch, [`patch_localizability`] measures the curvature of the ZNCC
 //! self-similarity surface (the Harris/Shi–Tomasi structure tensor) and reports
 //! the noise-normalized weak-axis positional uncertainty `σ_pos` in **grid** px.

@@ -89,8 +89,19 @@ deleting the lines.
   (the other subpackages have none). Look for `test_*_rust_bindings.py` modules
   that exercise the PyO3 surface.
 - `specs/` — design specs. Read the relevant file before making non-trivial
-  changes and update it when behavior diverges. Subdirs: `cli/` (per-command),
-  `core/` (algorithm design), `formats/`, `gui/`, `workspace/`.
+  changes and update it when behavior diverges. Subdirs mirror the code they
+  describe:
+  - `cli/` — one file per command, grouped by the `--help` category the command
+    is registered under in `cli.py` (`workspace/`, `image-feature/`,
+    `reconstruction/`, `visualization/`, `image-processing/`,
+    `colmap-interop/`); the `xform` sub-commands nest in
+    `cli/reconstruction/xform/`
+  - `core/` — algorithm design, one subdir per `sfmtool-core` module
+    (`analysis/`, `camera/`, `features/`, `geometry/`, `patch/`,
+    `reconstruction/`, `spherical/`)
+  - `formats/` — on-disk formats, one per format crate
+  - `gui/` — `sfm-explorer` design, flat, indexed by `gui/README.md`
+  - `workspace/` — workspace layout and its config files
 - `test-data/images/` — four checked-in datasets:
   `seoul_bull_sculpture` (17 @ 270×480), `dino_dog_toy` (85 @ 2040×1536),
   `seattle_backyard` (26 @ 360×640), `kerry_park` (24 rig frames × 2 fisheyes
@@ -107,7 +118,7 @@ deleting the lines.
 Run `pixi run sfm --help` to list all subcommands grouped by category
 (Workspace / Image Feature / Reconstruction / Visualization / Image Processing
 / COLMAP Interop). Source in `src/sfmtool/_commands/<name>.py`; specs in
-`specs/cli/<name>-command.md`. `sfm ws` and `sfm camrig` are command **groups**
+`specs/cli/<category>/<name>-command.md`. `sfm ws` and `sfm camrig` are command **groups**
 (`ws` has one subcommand, `ws init`; `camrig` has three: `camrig create`,
 `camrig cp`, `camrig spherical-tiles`); every other top-level command is flat.
 Typical reconstruction flow:
@@ -179,9 +190,8 @@ backlog and keep them honest as findings get addressed:
   Rust changes.
 - `sfm explorer` launches the same binary as `pixi run gui`, just via the
   Python CLI through the bindings.
-- Not every `specs/cli/*-command.md` maps to a top-level command
-  (e.g. `scale-by-measurements-command.md` documents an `xform` sub-command);
-  likewise not every CLI command has a spec yet.
+- Not every CLI command has a spec yet. The `xform` sub-commands are specced
+  under `specs/cli/reconstruction/xform/` rather than as top-level commands.
 - Python 3.14 and Rust 1.97 are pinned in `pixi.toml`. That is the *development*
   toolchain, and it is deliberately not the same thing as the MSRV: the workspace
   declares `rust-version = "1.95"` in `[workspace.package]` (inherited by all nine

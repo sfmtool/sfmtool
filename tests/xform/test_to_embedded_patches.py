@@ -8,7 +8,7 @@
 The conversion copies each observation's keypoint and each image's identity hash
 straight from the ``.sift`` files (no photometric adaptation), so it runs against
 the full ``seoul_bull_workspace`` fixture (which carries the ``.sift`` files). See
-``specs/core/sift-to-patch-reconstruction.md``.
+``specs/core/patch/sift-to-patch-reconstruction.md``.
 """
 
 from pathlib import Path

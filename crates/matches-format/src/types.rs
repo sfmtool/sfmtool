@@ -487,7 +487,7 @@ pub struct ClusterPatchData {
     /// = perfect; NaN where the member did not participate). A signal, not
     /// a gate — consumers pick their own threshold, mirroring how
     /// `member_zncc` enables re-vetting. See
-    /// `specs/core/cluster-warp-consistency.md`.
+    /// `specs/core/patch/cluster-warp-consistency.md`.
     pub member_consistency_residual: Array1<f32>,
     /// Refinement options recorded in `cluster_patches/metadata.json.zst`.
     pub refine_options: serde_json::Value,

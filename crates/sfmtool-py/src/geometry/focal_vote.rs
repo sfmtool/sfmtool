@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Python binding for the structure-free focal vote
-//! (``sfmtool._sfmtool.geometry.focal_vote``; see ``specs/core/focal-vote.md``).
+//! (``sfmtool._sfmtool.geometry.focal_vote``; see ``specs/core/geometry/focal-vote.md``).
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
@@ -74,7 +74,7 @@ fn column_dict<'py>(py: Python<'py>, c: &ColumnDiagnostics) -> PyResult<Bound<'p
 }
 
 /// Estimate a shared focal length from cluster-track observations without any
-/// reconstruction (see ``specs/core/focal-vote.md``).
+/// reconstruction (see ``specs/core/geometry/focal-vote.md``).
 ///
 /// Image pairs drawn from the cluster tracks each cast one focal vote through
 /// whichever estimator their geometry can observe — the Bougnoux focal of a

@@ -61,7 +61,7 @@ use super::views::{resolve_pyramids, resolve_scene};
 ///     ``(n_obs, 2)`` float64. Observations are reported for every candidate
 ///     that reached triangulation, ascending by view index.
 ///
-/// See ``specs/core/candidate-track-spawning.md``.
+/// See ``specs/core/patch/candidate-track-spawning.md``.
 #[pyfunction]
 #[pyo3(signature = (
     views,

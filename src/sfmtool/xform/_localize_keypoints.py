@@ -22,8 +22,8 @@ Because the search is photometric it reads the workspace's source images
 (``workspace_dir / image_name``), the same way ``--refine-keypoints`` does; a
 missing image is a hard error.
 
-See ``specs/cli/xform-localize-keypoints-command.md`` and
-``specs/core/patch-keypoint-localization.md``.
+See ``specs/cli/reconstruction/xform/localize-keypoints-command.md`` and
+``specs/core/patch/patch-keypoint-localization.md``.
 """
 
 from .._sfmtool.reconstruction import SfmrReconstruction
@@ -51,7 +51,7 @@ class LocalizeKeypointsTransform:
     ``--to-embedded-patches``.
 
     ``basis_max_views`` caps the consensus basis (see
-    ``specs/core/keypoint-localization-consensus-basis.md``); the default is
+    ``specs/core/patch/keypoint-localization-consensus-basis.md``); the default is
     ``8``, and ``0`` gives the uncapped path (cleanest error metrics). This
     surface runs over each point's own track and supplies no per-view
     appearance scores, so when the cap bites the basis pick ranks by grazing

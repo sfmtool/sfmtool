@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! D-optimal view-subset selection for the refinement basis (see
-//! `specs/core/patch-normal-refine-view-subset.md`).
+//! `specs/core/patch/patch-normal-refine-view-subset.md`).
 //!
 //! [`refine_patch_normal`](super::refine_patch_normal) estimates a **2-DOF**
 //! surface normal, which a handful of well-chosen views over-determine; on an
@@ -29,7 +29,7 @@ use super::parameterization::tangent_basis;
 const MIN_TANGENT_NORM: f64 = 1e-6;
 
 /// Select the (at most) `k` most normal-informative views of `patch` — the
-/// D-optimal refinement basis of `specs/core/patch-normal-refine-view-subset.md`.
+/// D-optimal refinement basis of `specs/core/patch/patch-normal-refine-view-subset.md`.
 ///
 /// `view_dirs` holds the unit surface→camera direction per view (the caller's
 /// full `views` order); the returned indices index into it, ascending. Returns

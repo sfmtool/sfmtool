@@ -3,7 +3,7 @@
 
 //! Gaussian scale-space and Difference-of-Gaussians (DoG) pyramids.
 //!
-//! Stages 1 and 2 of SIFT (`specs/core/sift.md`). The Gaussian pyramid is the
+//! Stages 1 and 2 of SIFT (`specs/core/features/sift.md`). The Gaussian pyramid is the
 //! shared, expensive artifact that detection, orientation, and description all
 //! read:
 //!
@@ -14,7 +14,7 @@
 //! - The **DoG** (`octave_layers + 2` adjacent-Gaussian differences per octave)
 //!   is **not stored**. It is needed only for detection, which fuses it per row
 //!   stripe in cache (`dog(l) = gaussian(l+1) − gaussian(l)`, computed on the
-//!   fly; see `detect.rs` and `specs/core/sift.md`). Only the Gaussian pyramid
+//!   fly; see `detect.rs` and `specs/core/features/sift.md`). Only the Gaussian pyramid
 //!   is retained.
 //!
 //! Gradient **magnitude** and **orientation** are likewise *not* stored; the
@@ -194,7 +194,7 @@ impl ScaleSpace {
 
             // The DoG pyramid is no longer materialized: detection fuses it per
             // row-stripe in cache, computing `dog(l) = gaussian(l+1) − gaussian(l)`
-            // on the fly (see `detect.rs` and `specs/core/sift.md`). Only the
+            // on the fly (see `detect.rs` and `specs/core/features/sift.md`). Only the
             // Gaussian stack is retained — it is also what orientation and
             // description sample.
 

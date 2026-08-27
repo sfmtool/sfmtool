@@ -3,7 +3,7 @@
 
 //! Python binding for homography estimation from 2D-2D correspondences
 //! (4-point LO-RANSAC ``estimate_homography``; see
-//! ``specs/core/focal-vote.md``).
+//! ``specs/core/geometry/focal-vote.md``).
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
@@ -48,7 +48,7 @@ fn estimate_to_dict<'py>(
 }
 
 /// Robustly estimate the homography from pixel correspondences (4-point
-/// LO-RANSAC; see ``specs/core/focal-vote.md``).
+/// LO-RANSAC; see ``specs/core/geometry/focal-vote.md``).
 ///
 /// Args:
 ///     points1: (N, 2) float64 pixels in image 1.

@@ -27,7 +27,7 @@ IRLS-weighted consensus. A row with ``k 2/..`` is the kernel's two-view floor
 This mirrors the prototype context-tile + reference montage; it is a
 dev/inspection tool, not a test (coverage lives in
 ``tests/patch/test_patch_keypoint_localization.py``). See
-``specs/core/patch-keypoint-localization.md``.
+``specs/core/patch/patch-keypoint-localization.md``.
 
 Example::
 

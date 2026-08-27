@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Python bindings for cluster covisibility (see
-//! `specs/core/cluster-covisibility.md`): per-image-pair shared-cluster
+//! `specs/core/features/cluster-covisibility.md`): per-image-pair shared-cluster
 //! counts plus the grouping queries built on them, and the selection queries
 //! (pair displacement, banded thinning, reach; see
-//! `specs/core/covisibility-selection.md`).
+//! `specs/core/features/covisibility-selection.md`).
 
 use std::borrow::Cow;
 use std::path::PathBuf;
@@ -253,7 +253,7 @@ impl PyClusterCovisibility {
     /// ``min_shared`` shared clusters (near-duplicate viewpoints; ties break
     /// by ascending partner index), as a uint32 numpy array. Backed by the
     /// sparse displacement neighborhood (exhaustive per-pair means; see
-    /// ``specs/core/pose-verification.md``), not the sampled tables.
+    /// ``specs/core/geometry/pose-verification.md``), not the sampled tables.
     ///
     /// Raises ValueError when constructed without ``positions_xy``.
     ///

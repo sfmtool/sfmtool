@@ -5,7 +5,7 @@
 
 ``build_observation_adjacency`` turns per-observation keypoints plus per-point
 radii into a symmetric CSR graph of points that are next to each other on the
-imaged surface. See specs/core/observation-adjacency-graph.md.
+imaged surface. See specs/core/analysis/observation-adjacency-graph.md.
 """
 
 import numpy as np

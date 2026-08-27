@@ -21,7 +21,7 @@ use crate::ProgressCounter;
 impl PyPatchCloud {
     /// Refine every patch's normal in place by photometric consistency across
     /// the reconstruction's observing views (see
-    /// ``specs/core/patch-normal-refinement.md``).
+    /// ``specs/core/patch/patch-normal-refinement.md``).
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from (provides cameras,
@@ -77,7 +77,7 @@ impl PyPatchCloud {
     ///         ``K`` most normal-informative views — a D-optimal geometric pick
     ///         (least-oblique appearance anchor plus a greedy information-matrix
     ///         determinant fill; see
-    ///         ``specs/core/patch-normal-refine-view-subset.md``). ``0`` (default)
+    ///         ``specs/core/patch/patch-normal-refine-view-subset.md``). ``0`` (default)
     ///         disables the cap — byte-for-byte the uncapped behavior. The cap is
     ///         floored at ``min_views`` internally, and ignored per-patch when the
     ///         subset would under-constrain one tilt DOF (the conditioning

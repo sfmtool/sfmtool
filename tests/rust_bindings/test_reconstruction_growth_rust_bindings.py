@@ -3,7 +3,7 @@
 
 """Tests for the reconstruction growth Rust bindings
 (``sfmtool._sfmtool.geometry.grow_reconstruction`` /
-``resect_images_batch``; see ``specs/core/reconstruction-growth.md``).
+``resect_images_batch``; see ``specs/core/geometry/reconstruction-growth.md``).
 
 Synthetic orbit scenes in the canonical camera frame (the camera looks along
 -Z): cameras on a circle looking at the origin, world points on a jittered

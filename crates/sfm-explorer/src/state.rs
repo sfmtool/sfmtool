@@ -82,7 +82,7 @@ impl OverlayMode {
 /// forth from memory. So the layer composes with whichever feature mode is
 /// active, including [`OverlayMode::None`], and its state lives here rather
 /// than in [`FeatureDisplaySettings`], whose name and contents are about
-/// *feature* display. See `specs/gui/gui-camera-intrinsics.md` § "Image Detail:
+/// *feature* display. See `specs/gui/camera-intrinsics.md` § "Image Detail:
 /// the Intrinsics overlay layer".
 pub struct IntrinsicsDisplaySettings {
     /// Draw the layer at all. Off by default: it is a diagnostic, and the
@@ -697,7 +697,7 @@ impl AppState {
     /// own — and reports the refusal. A resection that could not be attempted
     /// at all produces no node and only a status line.
     ///
-    /// Runs synchronously; see `specs/gui/gui-resect-image.md`, "Performance".
+    /// Runs synchronously; see `specs/gui/resect-image.md`, "Performance".
     pub fn resect_image(&mut self, source: ReconId, image: usize, from: ResectFrom) {
         let Some(index) = self.scene.iter().position(|n| n.id == source) else {
             return;

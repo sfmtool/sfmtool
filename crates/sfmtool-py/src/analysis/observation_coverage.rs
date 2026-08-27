@@ -29,7 +29,7 @@ use sfmtool_core::analysis::observation_coverage::{
 ///         Non-positive or non-finite radii contribute nothing.
 ///     cell_px: Grid cell size in pixels (default 4).
 ///
-/// See specs/core/observation-coverage.md.
+/// See specs/core/analysis/observation-coverage.md.
 #[pyclass(name = "ObservationCoverage", module = "sfmtool.analysis")]
 pub struct PyObservationCoverage {
     inner: ObservationCoverage,

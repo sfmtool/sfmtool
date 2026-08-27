@@ -5,7 +5,7 @@
 
 ``estimate_adjacency_surfel_normals`` fits a plane through each selected point
 over the directions to its image-space neighbours, and reports how well
-determined the result is. See specs/core/adjacency-surfel-normals.md.
+determined the result is. See specs/core/analysis/adjacency-surfel-normals.md.
 """
 
 import numpy as np

@@ -6,7 +6,7 @@
 //!
 //! Separated from construction because these answer a different question —
 //! *which* images to keep rather than *how covisible* they are. See
-//! `specs/core/covisibility-selection.md`.
+//! `specs/core/features/covisibility-selection.md`.
 
 use super::ClusterCovisibility;
 

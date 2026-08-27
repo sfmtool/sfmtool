@@ -29,7 +29,7 @@ impl PyPatchCloud {
     /// score and stays in frame). Points at infinity (``w == 0``) are refined like
     /// finite ones, not skipped. The seed must already be close (≲ 1 px) — putting
     /// it in the basin is the caller's job (e.g. :meth:`localize_keypoints`). See
-    /// ``specs/core/keypoint-subpixel-refinement.md``.
+    /// ``specs/core/patch/keypoint-subpixel-refinement.md``.
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from (cameras, poses, and

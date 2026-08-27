@@ -7,7 +7,7 @@
 (:meth:`PatchCloud.localize_keypoints`, ``refine_keypoints``, ``refine_normals``,
 ``select_views``) and :class:`ImagePyramidSet` from in-memory posed views instead
 of a full reconstruction, and ``PatchCloud.from_tracks`` builds a cloud from
-arrays. See ``specs/core/patch-cloud.md`` ("Patch operations without a
+arrays. See ``specs/core/patch/patch-cloud.md`` ("Patch operations without a
 reconstruction"). The equivalence tests prove a reconstruction and an equivalent
 ``CameraViews`` + explicit view sets produce identical patch-kernel output.
 """

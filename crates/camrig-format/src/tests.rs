@@ -225,7 +225,7 @@ fn cubemap_rig(face_size: u32) -> CamRigData {
 /// translations are all zero. Sensors are anonymous.
 fn spherical_tile_rig(n: usize, overlap_factor: f64) -> CamRigData {
     let directions = fibonacci_sphere(n);
-    // Synthetic-but-plausible sizing (see specs/core/spherical-tiles-rig.md).
+    // Synthetic-but-plausible sizing (see specs/core/spherical/spherical-tiles-rig.md).
     let nn_angle = (4.0 * std::f64::consts::PI / n as f64).sqrt();
     let half_fov_rad = 0.5 * nn_angle * overlap_factor;
     let arc_per_pixel = nn_angle / 16.0;

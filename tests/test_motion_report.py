@@ -4,7 +4,7 @@
 """Tests for the `sfm motion --json` machine-readable output.
 
 The schema is documented under "JSON Output" in
-specs/cli/motion-command.md.
+specs/cli/reconstruction/motion-command.md.
 """
 
 import json
@@ -180,7 +180,7 @@ def test_recon_json_flags_cov_on_infinite_overlap_drop():
     the inf/NaN-sanitized fields, where +inf maps to None, so it silently
     dropped "Cov" while the console table (raw values) flagged it. Both paths
     now share `_flag_frame` on raw values, and the spec requires an infinite
-    drop to always flag (specs/cli/motion-command.md, "Covisibility drop").
+    drop to always flag (specs/cli/reconstruction/motion-command.md, "Covisibility drop").
 
     Built from a synthetic sequence-result dict because a real reconstruction
     needs 3*OVERLAP_WINDOW (48) frames before overlap-drop is computed at all,

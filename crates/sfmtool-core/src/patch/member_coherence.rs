@@ -3,7 +3,7 @@
 
 //! Track member-coherence validation.
 //!
-//! See `specs/core/member-coherence-validation.md`. A track's members are the
+//! See `specs/core/patch/member-coherence-validation.md`. A track's members are the
 //! observations of one 3D point. When they image two different surfaces, every
 //! member still scores well against the fused cross-view consensus — a balanced
 //! split makes that consensus a compromise blend that flatters both sides — so
@@ -24,7 +24,7 @@
 //! *estimator*: selection scores one view against the fused consensus, and does it
 //! through the affine fast path where that path's gates allow. Same metric family,
 //! same render conventions, agreeing to the affine tolerance documented in
-//! `specs/core/patch-view-selection.md` — not the identical number.
+//! `specs/core/patch/patch-view-selection.md` — not the identical number.
 //!
 //! **Members are sampled at their stored keypoints** when the caller supplies
 //! them ([`member_keypoints_from_reconstruction`]): each member's render is

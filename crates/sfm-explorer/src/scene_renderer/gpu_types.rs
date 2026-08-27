@@ -23,7 +23,7 @@ pub(super) struct PointInstance {
 /// Per-reconstruction uniform block — one buffer per loaded node.
 ///
 /// Everything a shader needs to know about *which* reconstruction it is
-/// drawing. See `specs/gui/gui-scene-graph.md` ("Per-recon uniforms").
+/// drawing. See `specs/gui/scene-graph.md` ("Per-recon uniforms").
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct ReconUniforms {

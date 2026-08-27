@@ -28,7 +28,7 @@ impl PyPatchCloud {
     /// builds the robust consensus, and searches each view's residual shift
     /// against the **leave-one-out** consensus of the others, dropping views that
     /// drift too far, leave the frame, or stop agreeing. See
-    /// ``specs/core/patch-keypoint-localization.md``.
+    /// ``specs/core/patch/patch-keypoint-localization.md``.
     ///
     /// Args:
     ///     recon: The reconstruction the cloud was built from (cameras, poses, and
@@ -86,7 +86,7 @@ impl PyPatchCloud {
     ///         the search runs at resolution ``R_s = round(m·R)``. ``m = 1.0``
     ///         (default) is the no-op; ``m > 1`` (the supersampled grid) resolves
     ///         sub-pixel offsets directly at a cost that grows ~``m²``. See
-    ///         ``specs/core/keypoint-localization-search-cache.md``.
+    ///         ``specs/core/patch/keypoint-localization-search-cache.md``.
     ///     basis_max_views: Consensus-basis cap ``K`` — at most this many views
     ///         congeal against each other; every remaining view registers **once**
     ///         against the finished basis template. Default ``8``; ``0`` disables
@@ -95,7 +95,7 @@ impl PyPatchCloud {
     ///         the consensus membership shrinks. Pass ``view_scores`` for the
     ///         validated ZNCC ranking — without them the basis pick falls back to
     ///         grazing angle. See
-    ///         ``specs/core/keypoint-localization-consensus-basis.md``.
+    ///         ``specs/core/patch/keypoint-localization-consensus-basis.md``.
     ///     basis_force_track_views: Reserve basis seats for the point's track views
     ///         (the leading ``track_view_counts`` entries of its view set) ahead of
     ///         the expansion candidates. Default ``True``.

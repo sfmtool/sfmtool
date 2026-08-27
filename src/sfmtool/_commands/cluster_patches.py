@@ -79,7 +79,7 @@ from .._cli_utils import timed_command
         "aperture cases that cannot pin a 2D position. Same default value as "
         "embed-patches' cull (scored here on the template grid with the "
         "refinement window); `0` disables the gate. See "
-        "specs/core/patch-localizability.md."
+        "specs/core/patch/patch-localizability.md."
     ),
 )
 def cluster_patches(

@@ -21,7 +21,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 
 ## CLI command specs
 
-### specs/cli/align-command.md
+### specs/cli/reconstruction/align-command.md
 **Summary:** Aligns multiple `.sfmr` reconstructions into a reference coordinate frame via point-based (RANSAC) or camera-pose-based methods, with multi-reconstruction connectivity handling and basename-collision rejection on output.
 **Implementing code:** `src/sfmtool/_commands/align.py::align` (CLI); `src/sfmtool/align/multi.py::align_command`, `align_reconstructions`, `_align_with_points`, `_align_with_cameras`, `_build_connectivity_graph`.
 **Inconsistencies:**
@@ -32,7 +32,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 
 > _Status (2026-07-08): Partially done — removed the three dead options (`--max-error`, `--iterative`, `--visualize`) from `align.py`, `multi.py::align_command`, and the spec Options table. The "shortest path" prose (line 42-43) is untouched; carried forward to the spec-sync bundle (next-steps #1)._
 
-### specs/cli/analyze-command.md
+### specs/cli/reconstruction/analyze-command.md
 **Summary:** Deep-analysis report on a `.sfmr` file with six mutually-exclusive modes (`--coviz`, `--z-range`, `--frustum`, `--images`, `--metrics`, `--depth-reliability`), plus frustum percentile/sample options and per-image reprojection metrics.
 **Implementing code:** `src/sfmtool/_commands/analyze.py::analyze`; `src/sfmtool/analyze/metrics.py::print_metrics_analysis`, `_compute_per_image_metrics`; `analyze/graphs.py`, `analyze/depth.py`, `analyze/images.py`.
 **Inconsistencies:**
@@ -40,7 +40,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — spec and code agree on flags, defaults, gating, and metric semantics.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/camrig-command.md
+### specs/cli/workspace/camrig-command.md
 **Summary:** `camrig` command group with `create` (build a one-camera rig from an image directory), `cp` (copy a rig/camera/sensor-subset out of a `.sfmr` or `.camrig`), and `spherical-tiles` (build a discretised-sphere tile rig).
 **Implementing code:** `src/sfmtool/_commands/camrig.py::camrig`, `create`, `cp`, `spherical_tiles`; delegates to `camrig/create.py::build_camrig_from_images`, `camrig/cp.py::copy_from_sfmr`/`copy_from_camrig`, `_sfmtool/spherical.py::SphericalTileRig`.
 **Inconsistencies:**
@@ -48,7 +48,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — CLI, defaults, and validation match the spec.
 **Unclear / incorrect / suspicious:** Spec line 212 documents `--n` as `>= 2`, and the help text says the same, but `camrig.py:276-281` types it as a plain `int` with no `IntRange(min=2)` — the `>= 2` bound is presumably enforced inside `SphericalTileRig`. Not a divergence if the constructor validates it, but the bound is not enforced at the Click layer as it is for other integer options.
 
-### specs/cli/compare-command.md
+### specs/cli/reconstruction/compare-command.md
 **Summary:** Compares two `.sfmr` reconstructions across alignment, intrinsics, poses, feature usage, and 3D points (with scale-relative metrics), plus an extensive `--strips*` side-by-side patch-strip montage diagnostic.
 **Implementing code:** `src/sfmtool/_commands/compare.py::compare`, `_parse_labels`; `src/sfmtool/_compare.py::compare_reconstructions`, `_characteristic_scene_scale`, `_compare_3d_points`.
 **Inconsistencies:**
@@ -56,7 +56,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — the detailed prose behaviors and every CLI option match the implementation.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/densify-command.md
+### specs/cli/reconstruction/densify-command.md
 **Summary:** Experimental point-cloud densification via sweep matching over covisible (and optionally frustum-intersecting) image pairs, with bundle-adjustment, point-filtering, and geometric-filtering options.
 **Implementing code:** `src/sfmtool/_commands/densify.py::densify`; `src/sfmtool/_densify.py::densify_reconstruction`; `feature_match.GeometricFilterConfig`.
 **Inconsistencies:**
@@ -64,7 +64,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — including the spec's own "experimental / not well tuned" caveat, which the CLI docstring echoes.
 **Unclear / incorrect / suspicious:** Nothing (the spec's step 6 "Align back to original frame" and step 4 "Bundle adjust" are internal to `densify_reconstruction`; not separately audited here but the CLI-visible surface is fully consistent).
 
-### specs/cli/embed-patches-command.md
+### specs/cli/reconstruction/embed-patches-command.md
 **Summary:** Converts a `sift_files` reconstruction to an `embedded_patches` `.sfmr` via a Rust `to_embedded_patches` bridge plus normal-refinement / view-selection / keypoint-localization kernels, with a large set of photometric tuning options.
 **Implementing code:** `src/sfmtool/_commands/embed_patches.py::embed_patches_command`; `src/sfmtool/_embed_patches.py::embed_patches`; output naming via `xform/_arg_parser.py::auto_output_path`.
 **Inconsistencies:**
@@ -72,7 +72,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — this spec is unusually detailed and the code tracks it option-for-option.
 **Unclear / incorrect / suspicious:** Minor: spec's `--rounds` help (line 72) describes a richer per-round mean-normal-change/keypoint-shift progress print; the CLI help text (`embed_patches.py:98-110`) is a condensed paraphrase. Behavior is delegated to `_embed_patches.embed_patches` with `progress=click.echo`, so this is presentational only, not a divergence.
 
-### specs/cli/epipolar-command.md
+### specs/cli/visualization/epipolar-command.md
 **Summary:** Visualizes epipolar geometry (lines or, for wide-FOV cameras, curves) between an image pair, with single-pair and `--pairs-dir` batch modes, plus rectification/undistortion and optional sweep-matching overlay.
 **Implementing code:** `src/sfmtool/_commands/epipolar.py::epipolar`, `resolve_image_name`; `visualization/_epipolar_display.py::draw_epipolar_visualization`.
 **Inconsistencies:**
@@ -80,7 +80,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Spec option table (line 33) documents the separate-mode second file as suffixed `_other`, and the `--draw` help repeats it, but the exact suffixing lives inside `draw_epipolar_visualization` (not re-audited line-by-line). No conflict observed.
 
-### specs/cli/flow-command.md
+### specs/cli/image-processing/flow-command.md
 **Summary:** Computes dense DIS optical flow between two images, visualizes SIFT keypoint advection (Middlebury color wheel), and optionally compares flow correspondences against a reconstruction's matches (green/red/yellow coding).
 **Implementing code:** `src/sfmtool/_commands/flow.py::flow`; `visualization/_flow_display.py::draw_flow_visualization`.
 **Inconsistencies:**
@@ -88,7 +88,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** update spec (minor) — the code writes derived output files (`<stem>_flow`, `<stem>_A`, `<stem>_B` per `flow.py:24-28`) that the spec's `--draw` row (line 20) and Output prose do not mention; a reader would not learn that `--draw output.png` (without `--side-by-side`) produces multiple files. Otherwise in sync.
 **Unclear / incorrect / suspicious:** Nothing beyond the undocumented derived-file naming noted above.
 
-### specs/cli/from-colmap-bin-command.md
+### specs/cli/colmap-interop/from-colmap-bin-command.md
 **Summary:** Documents `sfm from-colmap-bin`, which imports a COLMAP binary reconstruction (cameras.bin/images.bin/points3D.bin) into a single `.sfmr` file, applying the COLMAP→canonical coordinate conversion, with a required `--image-dir`, required `-o`, `--tool-name`, and `--detect-infinity` toggle.
 **Implementing code:** `src/sfmtool/_commands/from_colmap_bin.py` (`from_colmap_bin`), `src/sfmtool/colmap/io.py` (`build_metadata`, `colmap_binary_to_rust_sfmr`).
 **Inconsistencies:**
@@ -96,7 +96,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — flags, defaults, and the import/convention behavior all agree.
 **Unclear / incorrect / suspicious:** The code enforces a `.sfmr` output extension (`from_colmap_bin.py:84-87`) and records `operation="import"` (`:117`); neither is mentioned in the spec, but both are benign details, not divergences.
 
-### specs/cli/heatmap-command.md
+### specs/cli/visualization/heatmap-command.md
 **Summary:** Documents `sfm heatmap`, which draws per-feature quality metrics (reproj/tracks/angle/all) as colored circle overlays on images, with per-metric default colormaps, and describes the metric-before-trailing-number output naming with path flattening.
 **Implementing code:** `src/sfmtool/_commands/heatmap.py` (`heatmap`, `_insert_metric_before_number`, `_output_stem`), `src/sfmtool/visualization/_heatmap_renderer.py` (`render_heatmap_overlay`, `compute_triangulation_angles`).
 **Inconsistencies:**
@@ -104,7 +104,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/inspect-command.md
+### specs/cli/reconstruction/inspect-command.md
 **Summary:** Documents `sfm inspect` for single files/images/3D-point-IDs plus the `--strips` patch-montage mode. Covers per-type summary/verbose printers, integrity checks, point-ID hash resolution and search order, and the strips point-spec grammar and options.
 **Implementing code:** `src/sfmtool/_commands/inspect.py` (`inspect`, `_inspect_strips_cmd`, `_inspect_point`, `_find_sfmr_by_content_hash`), `src/sfmtool/analyze/summary.py`, `src/sfmtool/_inspect_strips.py` (`parse_point_specs`, `render_inspect_strips`).
 **Inconsistencies:**
@@ -112,7 +112,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** The guard rejecting `-o`/`--strips-views`/`--context` without `--strips` compares against default *values* (`if output is not None or strips_views != 8 or context != 1.0`, `inspect.py:129`) rather than using `ctx.get_parameter_source(...)` (as `match.py` does). So explicitly passing the default (e.g. `--strips-views 8`) without `--strips` is silently accepted instead of rejected. Minor; the spec's "rejected unless --strips is given" is slightly stronger than the implementation.
 
-### specs/cli/insv2rig-command.md
+### specs/cli/workspace/insv2rig-command.md
 **Summary:** Documents `sfm insv2rig`, which extracts dual-fisheye frames from Insta360 `.insv` video (dual-stream or side-by-side) into `fisheye_left/` and `fisheye_right/`, and writes a two-sensor `fisheye_360` `.camrig` with the calibrated X5 geometry (identity left, 180° about Y right, 30.7 mm baseline at `+Z`).
 **Implementing code:** `src/sfmtool/_commands/insv2rig.py` (`insv2rig`, X5 constants), `src/sfmtool/rig/insv2rig.py` (`extract_insv_frames`, `write_insv_camrig`, `_INSV_FRAME_PATTERN`).
 **Inconsistencies:**
@@ -120,7 +120,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing. (Rig name is `insv2_x5`; the spec doesn't pin a name, so no conflict.)
 
-### specs/cli/match-command.md
+### specs/cli/image-feature/match-command.md
 **Summary:** Documents `sfm match` with four mutually-exclusive matching methods (exhaustive/sequential/flow/cluster) plus `--merge`, per-method tuning options, `--camera-model` override, camera-config precedence, cluster background-floor matching semantics, and the merge algorithm.
 **Implementing code:** `src/sfmtool/_commands/match.py` (`match`, `_reject_stray_mode_options`), `src/sfmtool/feature_match/_run.py` (`_run_matching`, `_run_merge`), `src/sfmtool/camera/cameras.py` (`CAMERA_MODEL_NAMES`).
 **Inconsistencies:**
@@ -128,7 +128,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/merge-command.md
+### specs/cli/reconstruction/merge-command.md
 **Summary:** Documents `sfm merge`, which merges ≥2 pre-aligned `.sfmr` files via camera dedup, image merge, union-find point correspondences, percentile filtering, point/track averaging, and parallel PnP+RANSAC pose refinement.
 **Implementing code:** `src/sfmtool/_commands/merge.py` (`merge`), `src/sfmtool/merge/reconstructions.py` (`merge_reconstructions`), `src/sfmtool/merge/correspondences.py` (union-find + percentile), `src/sfmtool/merge/pose_refinement.py` (`refine_camera_poses`).
 **Inconsistencies:**
@@ -136,7 +136,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/motion-command.md
+### specs/cli/reconstruction/motion-command.md
 **Summary:** A large spec covering `sfm motion` in two modes (image-sequence optical-flow discontinuity analysis with adaptive stride, and reconstruction analysis using pose-extrapolation + step-ratio + covisibility-drop + obs-outlier signals), plus a versioned `--json` schema.
 **Implementing code:** `src/sfmtool/_commands/motion.py` (`motion`), `src/sfmtool/motion/image_sequence.py` (`analyze_image_sequence`), `src/sfmtool/motion/recon_discontinuity.py` (`analyze_reconstruction`), `src/sfmtool/motion/constants.py`, `src/sfmtool/motion/report.py`, `src/sfmtool/motion/_recon_console.py`.
 **Inconsistencies:**
@@ -144,7 +144,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — the "Open Questions" are explicitly forward-looking, not divergences.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/pano2rig-command.md
+### specs/cli/workspace/pano2rig-command.md
 **Summary:** Documents `sfm pano2rig`, which renders equirectangular panoramas into a 6-face 90°-FOV cubemap (front/right/back/left/top/bottom) with per-face subdirectories sharing a frame index, and writes a six-sensor `cubemap` `.camrig` with a single shared PINHOLE camera (zero translations, front=identity).
 **Implementing code:** `src/sfmtool/_commands/pano2rig.py` (`pano2rig`), `src/sfmtool/rig/pano2rig.py` (`convert_panoramas`, `write_pano_camrig`, `_cubemap_rotations`, `extract_perspective_face`).
 **Inconsistencies:**
@@ -152,7 +152,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing. (Spec's own NOTE flags the command as under-validated across datasets — a caveat, not a code divergence.)
 
-### specs/cli/panorama-command.md
+### specs/cli/visualization/panorama-command.md
 **Summary:** Documents `sfm panorama`, which renders an equirectangular panorama from a posed reconstruction via spherical-tile consensus rendering, with many options (width, tile count, rig source, batch/dtype/k memory controls, photometric-RANSAC params) and range/near-image source subsetting.
 **Implementing code:** `src/sfmtool/_commands/panorama.py` (`panorama`), `src/sfmtool/rig/panorama.py` (`render_equirect_panorama`, `resolve_panorama_rig`, `select_source_indices`).
 **Inconsistencies:**
@@ -160,7 +160,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — the spec even cites the exact implementing symbols, and they match.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/render-patches-command.md
+### specs/cli/visualization/render-patches-command.md
 **Summary:** Documents `sfm render-patches`, which projects each 3D point's oriented patch quad onto the source images and composites them, with fill modes (texture/normal/flat/wire), border/alpha/scale/upscale/backface-cull controls, and an image-substring filter. Requires an `embedded_patches` reconstruction.
 **Implementing code:** `src/sfmtool/_commands/render_patches.py` (`render_patches_command`), `src/sfmtool/visualization/_patch_renderer.py` (`render_patches`, `_render_image`, `MODES`), `src/sfmtool/_feature_source.py` (`require_embedded_patches`).
 **Inconsistencies:**
@@ -168,7 +168,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — spec and code agree on all flags, defaults, and output naming.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/scale-by-measurements-command.md
+### specs/cli/reconstruction/xform/scale-by-measurements-command.md
 **Summary:** Documents the `--scale-by-measurements` option on `sfm xform`, scaling a reconstruction to physical units from a YAML file of known point-pair distances, including unit parsing, median scale computation, a histogram, and cross-reconstruction Point ID resolution.
 **Implementing code:** `src/sfmtool/xform/_scale_by_measurements.py` (`ScaleByMeasurementsTransform`, `_parse_distance`, `_resolve_point_cross_recon`, `_print_histogram`), wired via `src/sfmtool/xform/_arg_parser.py` and `_commands/xform.py:139-143`.
 **Inconsistencies:**
@@ -180,7 +180,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 
 > _Status (2026-07-08): Done — both fallbacks now match the spec. `_resolve_point_cross_recon` counts per-input-point occurrences and returns the most common (ties broken by lowest index); `_load_source` now scans the workspace via the shared `find_sfmr_by_content_hash` (lifted from `_commands/inspect.py` into `_workspace.py`) when `sfmr` is omitted. New tests in `tests/xform/test_scale_by_measurements.py`. The cosmetic histogram-alignment / hardcoded-bins nits (line 177) remain open._
 
-### specs/cli/sift-command.md
+### specs/cli/image-feature/sift-command.md
 **Summary:** Documents `sfm sift` with two mutually-exclusive action modes (`--extract`, `--draw <DIR>`) plus `--filter-sfm`, `--range`, `--num-threads`, `--tool`, and `--dsp` options; defaults come from the workspace unless overridden.
 **Implementing code:** `src/sfmtool/_commands/sift.py` (`sift`), `src/sfmtool/sift/file.py`, `sift/extract_{colmap,opencv,sfmtool}.py`.
 **Inconsistencies:**
@@ -188,7 +188,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/solve-command.md
+### specs/cli/reconstruction/solve-command.md
 **Summary:** Documents `sfm solve` (incremental/global SfM), its option surface, input modes (images / `.matches` / seq-overlap), multi-model output naming, rig/`.camrig`/`camera_config.json` handling, and the COLMAP→canonical convention boundary.
 **Implementing code:** `src/sfmtool/_commands/solve.py` (`solve`, `_run_sfm`, `_run_sequential_overlap_sfm`), `_incremental_sfm.py` (`run_incremental_sfm`, `_save_reconstructions`), `_global_sfm.py` (`run_global_sfm`).
 **Inconsistencies:**
@@ -196,7 +196,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/to-colmap-bin-command.md
+### specs/cli/colmap-interop/to-colmap-bin-command.md
 **Summary:** Documents `sfm to-colmap-bin <INPUT.sfmr> <OUTPUT_DIR>` exporting to COLMAP `.bin` files, with `--range` image subsetting and `--filter-points`, range semantics, and the canonical→COLMAP convention boundary.
 **Implementing code:** `src/sfmtool/_commands/to_colmap_bin.py` (`to_colmap_bin`, `_apply_range_filter`), `colmap/io.py` (`save_colmap_binary`), Rust `subset_by_image_indices`.
 **Inconsistencies:**
@@ -204,7 +204,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing (the spec's claim that `rigs.bin`/`frames.bin` are "always written" lives in `save_colmap_binary`, not the shim; not independently re-verified here but nothing contradicts it).
 
-### specs/cli/to-colmap-db-command.md
+### specs/cli/colmap-interop/to-colmap-db-command.md
 **Summary:** Documents `sfm to-colmap-db <INPUT_PATH> <DATABASE.db>` building a COLMAP database from a `.sfmr` or `.matches` file, with `--max-features`, `--no-guided-matching`, and `--camera-model` options, and a documented "known gap" that it has no `--range`.
 **Implementing code:** `src/sfmtool/_commands/to_colmap_db.py` (`to_colmap_db`, `_from_sfmr`, `_from_matches`), `colmap/db_export.py`, `colmap/db_setup.py` (`_setup_for_sfm_from_matches`).
 **Inconsistencies:**
@@ -212,7 +212,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/to-nerfstudio-command.md
+### specs/cli/colmap-interop/to-nerfstudio-command.md
 **Summary:** Documents `sfm to-nerfstudio <INPUT.sfmr> [<OUTPUT_DIR>]` repackaging a pinhole reconstruction into a Nerfstudio dataset (transforms.json, sparse_pc.ply, image pyramids), with identity `applied_transform`, OPENCV camera model, and `--num-downscales/--jpeg-quality/--include-colmap/--range/--filter-points`.
 **Implementing code:** `src/sfmtool/_commands/to_nerfstudio.py` (`to_nerfstudio`, `_apply_range_filter`), `src/sfmtool/_to_nerfstudio.py` (`export_to_nerfstudio`, `build_transforms_json`, `write_sparse_ply`).
 **Inconsistencies:**
@@ -220,7 +220,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/undistort-command.md
+### specs/cli/image-processing/undistort-command.md
 **Summary:** Documents `sfm undistort <RECONSTRUCTION.sfmr>` producing a new pinhole workspace: warps images, transforms `.sift` positions/affine shapes, remaps tracks, and writes a new `.sfmr`. Options `--fit`, `--filter`, `-o/--output`.
 **Implementing code:** `src/sfmtool/_commands/undistort.py` (`undistort`), `src/sfmtool/_undistort_images.py` (`undistort_reconstruction_images`, Jacobian via central differences).
 **Inconsistencies:**
@@ -228,7 +228,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/ws-init-command.md
+### specs/cli/workspace/ws-init-command.md
 **Summary:** Documents `sfm ws init [WORKSPACE_DIR]` creating `.sfm-workspace.json`, with `--feature-tool`, `--dsp`, `--max-features`, `--gpu`, `--affine-shape`, `--force`, plus validation rules (COLMAP-only knobs, gpu/affine mutual exclusion) and persisted-settings notes.
 **Implementing code:** `src/sfmtool/_commands/ws.py` (`init`), `src/sfmtool/_workspace.py` (`init_workspace`).
 **Inconsistencies:**
@@ -236,7 +236,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/xform-command.md
+### specs/cli/reconstruction/xform/xform-command.md
 **Summary:** The umbrella spec for the `sfm xform` command family — describes every operation (geometric transforms, filters, points-at-infinity, camera-model conversion, optimization ops including the three patch ops, `--to-embedded-patches`, scaling/alignment), the sequential ordering semantics, auto output naming, and the `Transform` protocol plus the Rust editing primitives.
 **Implementing code:** `src/sfmtool/_commands/xform.py` (Click options + help), `src/sfmtool/xform/_arg_parser.py` (`parse_transform_args`, ordered `sys.argv` walk), `src/sfmtool/xform/_apply.py` (`apply_transforms`, per-step `required_feature_source` gate), `src/sfmtool/xform/__init__.py` (transform registry).
 **Inconsistencies:**
@@ -244,7 +244,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — the overview accurately enumerates the implemented surface.
 **Unclear / incorrect / suspicious:** The long "TODO (implementation cleanup)" block (lines 281-291) about collapsing the `.sift`-vs-inline-keypoint special-casing onto a single accessor is a forward-looking note, not a divergence.
 
-### specs/cli/xform-find-points-at-infinity.md
+### specs/cli/reconstruction/xform/find-points-at-infinity.md
 **Summary:** Design + algorithm for `--find-points-at-infinity` (and companions `--classify-points-at-infinity`, `--max-features`): un-project untracked keypoints to world directions, KD-tree cluster within `eps_deg`, confirm clusters with mutual SIFT descriptor matching, triangulate/classify each track as `w=0` or finite-distant, and append. Status: Implemented.
 **Implementing code:** `src/sfmtool/xform/_find_points_at_infinity.py` (`FindPointsAtInfinityTransform`, `ClassifyPointsAtInfinityTransform`), PyO3 `SfmrReconstruction.find_points_at_infinity` (`crates/sfmtool-py/src/py_sfmr_reconstruction.rs:924`), core `crates/sfmtool-core/src/analysis/infinity/discover.rs:363`.
 **Inconsistencies:**
@@ -252,7 +252,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** update spec — add a one-line note that the Lowe `ratio` is fixed at 0.8 internally and not CLI-exposed, so the parameter table is complete.
 **Unclear / incorrect / suspicious:** The document still contains large "Prototype findings" / "Motivation" sections written as a proposal even though Status is "Implemented"; the `tmp/infinity_search_prototype.py` reference (line 201) is gitignored and unverifiable.
 
-### specs/cli/xform-localize-keypoints-command.md
+### specs/cli/reconstruction/xform/localize-keypoints-command.md
 **Summary:** `--localize-keypoints` — a structural op that congeals each observation's keypoint by discrete cross-view search, drops non-co-registering views, culls points below `min_views`, and rebuilds the track structure via `compact_to_embedded_patches`; drops stale bitmaps. Status: Implemented (2026-07-05).
 **Implementing code:** `src/sfmtool/xform/_localize_keypoints.py` (`LocalizeKeypointsTransform`), `parse_localize_keypoints_params` (`_arg_parser.py:264`), PyO3 `PatchCloud.localize_keypoints` (`py_patch_cloud.rs:964-992`), write-back `compact_to_embedded_patches` in `src/sfmtool/_embed_patches.py`.
 **Inconsistencies:**
@@ -260,7 +260,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/cli/xform-refine-keypoints-command.md
+### specs/cli/reconstruction/xform/refine-keypoints-command.md
 **Summary:** `--refine-keypoints` — pure in-place sub-pixel keypoint refiner (forward-additive ECC Gauss–Newton against robust consensus), changes no view membership or track structure, only rewrites `keypoints_xy`; optional `bitmaps=true` re-renders patch textures. Status: Implemented (2026-07-05, #174).
 **Implementing code:** `src/sfmtool/xform/_refine_keypoints.py` (`RefineKeypointsTransform`), `parse_refine_keypoints_params` (`_arg_parser.py:192`), PyO3 `PatchCloud.refine_keypoints` (`py_patch_cloud.rs:1240-1268`).
 **Inconsistencies:**
@@ -268,7 +268,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** The "Future" section (lines 146-153) proposing `--localize-keypoints` already carries a "Status (2026-07-05): Done" note pointing at the localize spec — correctly marked, not a divergence.
 
-### specs/cli/xform-refine-normals-command.md
+### specs/cli/reconstruction/xform/refine-normals-command.md
 **Summary:** `--refine-normals` — photometric per-point normal refinement that rewrites `normals` in place (finite points only), always re-persists the patch frame, optional `bitmaps=true`. Requires `embedded_patches`. Status: Implemented (2026-06-13), precondition shipped 2026-06-25.
 **Implementing code:** `src/sfmtool/xform/_refine_normals.py` (`RefineNormalsTransform`), `parse_refine_normals_params` + `_REFINE_NORMALS_KEYS` (`_arg_parser.py:102-168`), PyO3 `PatchCloud.refine_normals` (`py_patch_cloud.rs:469-477`).
 **Inconsistencies:**
@@ -276,7 +276,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** The #177 fix ("build oriented-patch frame upright, not rotated 90°") touches `OrientedPatch::from_center_normal`/`from_infinity_direction`, not this spec's surface. The spec's only frame claim — `normalize(u × v)` is the per-point normal (line 251) — remains consistent with the binding. No divergence introduced by #177 in this spec.
 
-### specs/cli/xform-select-by-distribution-command.md
+### specs/cli/reconstruction/xform/select-by-distribution-command.md
 **Summary:** `--include-by-distribution <COUNT>[,verbose]` — greedy farthest-point + angular-thinning selection of a well-distributed camera/rig-frame subset off the reconstructed cloud; `H=20°` hard-coded; deterministic; delegates the actual image bookkeeping to `_filter_images`.
 **Implementing code:** `src/sfmtool/xform/_select_by_distribution.py` (`SelectByDistributionFilter`, `_select_images`), parsed in `_arg_parser.py:678-705`, delegates to `_filter_images` (`_filter_by_image_range.py`); `_H_RAD = radians(20)` (`_select_by_distribution.py:38`).
 **Inconsistencies:**
@@ -287,7 +287,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 
 ## Core algorithm specs
 
-### specs/core/batch-triangulation-api.md
+### specs/core/reconstruction/batch-triangulation-api.md
 **Summary:** Consolidates triangulation into a batch API in `reconstruction/triangulation.rs` returning each track's midpoint point plus observability diagnostics (eigenvalues, condition number, optional depth-uncertainty z-score), and re-bases the points-at-infinity classifiers on `inverse_depth_z` with a `resolvable_distance ≥ finite_horizon` gate yielding a three-state (finite / infinity / indeterminate) decision.
 **Implementing code:** `crates/sfmtool-core/src/reconstruction/triangulation.rs` (`Triangulation`, `DepthUncertainty`, `triangulate_batch`, `depth_uncertainty_batch`); `analysis/infinity/convert.rs` (`classify_rays_at_infinity`, `classify_points_at_infinity`, constants `DEFAULT_INVERSE_DEPTH_Z_CUTOFF=4.0`, `CONDITION_NUMBER_PREFILTER=1e4`); `analysis/infinity/discover.rs` (`classify_track`, `find_points_at_infinity`); py bindings `crates/sfmtool-py/src/analysis/triangulation.rs::triangulate_batch`, `py_sfmr_reconstruction.rs::triangulation_diagnostics`; CLI parsing `src/sfmtool/xform/_arg_parser.py:730-751`.
 **Inconsistencies:**
@@ -296,7 +296,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** update spec — drop/adjust the "discovered points carry error=0" line to reflect the inline reprojection-error computation; otherwise in sync.
 **Unclear / incorrect / suspicious:** `depth_uncertainty_batch` computes `b_perp = 2.0 * RMS(perp offset)` (`triangulation.rs:251`) — the factor 2 (to match a 2-view baseline) is a real modeling choice absent from the spec's `B⊥ / σ` formula (spec lines 191, 259). The code docstring explains it, but the spec should note it since it shifts `resolvable_distance` by 2× and thus the `finite_horizon` gate calibration.
 
-### specs/core/epipolar-curves.md
+### specs/core/camera/epipolar-curves.md
 **Summary:** Model-agnostic epipolar curves for non-perspective cameras: back-project `p1`, bracket the in-image depth interval in log-depth, then adaptively subdivide in `t=1/λ` worst-first to a pixel curvature tolerance, reprojecting through the full destination camera model. Exposed via PyO3 `epipolar_curves` and consumed by `sfm epipolar`.
 **Implementing code:** `crates/sfmtool-core/src/camera/epipolar.rs` (`plot_epipolar_curve`, `plot_epipolar_curves_batch`, `EpipolarCurveOptions`, `find_inimage_seed`, `bisect_boundary`, `subdivide_worst_first`, constants `LOG_STEP=LN_2`, `BRACKET_MAX_STEPS=24`, `BRACKET_LOG_TOL=1e-3`); `crates/sfmtool-py/src/analysis/epipolar.rs::epipolar_curves_py`; `src/sfmtool/visualization/_epipolar_display.py`.
 **Inconsistencies:**
@@ -304,7 +304,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/flow-based-matching.md
+### specs/core/features/flow-based-matching.md
 **Summary:** Flow-based feature matching for video: sliding-window advection of SIFT keypoints through dense DIS flow, spatially matched to target keypoints and validated by descriptor L2 distance (production threshold 250), producing multi-baseline matches in an O(N) sweep.
 **Implementing code:** `src/sfmtool/feature_match/_flow_matching.py` (`flow_match_sequential`, `_flow_match_from_advected`, `_flow_match_pair`); Rust `crates/sfmtool-py/src/matching/descriptor.rs::match_candidates_by_descriptor` and `spatial::KdTree2d::nearest_k_within_radius`.
 **Inconsistencies:**
@@ -315,7 +315,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 
 > _Status (2026-07-08): Done — deleted the dead `spatial_tolerance` parameter from `flow_match_sequential`, `_flow_match_pair`, `_flow_match_from_advected` (and its test kwargs), and rewrote `flow-based-matching.md` steps 3–4 + the error-accumulation note to document the shipped 10px candidate radius + K=5 best-descriptor selection. The "hit rate within 3px" line stays — it defines a diagnostic measurement, not the pipeline radius._
 
-### specs/core/fronto-parallel-patch-cache.md
+### specs/core/patch/fronto-parallel-patch-cache.md
 **Summary:** A fronto-parallel patch cache that renders one supersampled base per view up front and affine-resamples every candidate normal from it (undistorted-normalized corners so distortion cancels), replacing per-candidate source re-rendering; scalar Phase 1 defines the numbers, Phase 2 adds a runtime-dispatched AVX2 kernel. Now the default.
 **Implementing code:** `crates/sfmtool-core/src/patch/normal_refine/fronto_cache.rs` (`resample_support_avx2`, `resample_support_scalar` at lines 273-387); `params.rs` (`CacheMode {Off, FrontoParallel}` lines 76-89, `Default` sets `cache: FrontoParallel, cache_supersample: 2.0` lines 204-205).
 **Inconsistencies:**
@@ -323,7 +323,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** update spec — add a one-line note in the Phase-1 block that the default was subsequently flipped to `FrontoParallel`, so the two sections don't read as contradictory.
 **Unclear / incorrect / suspicious:** Nothing material.
 
-### specs/core/gpu-optical-flow.md
+### specs/core/features/gpu-optical-flow.md
 **Summary:** wgpu compute-shader implementation of the 5-stage DIS optical-flow pipeline with hybrid per-level CPU/GPU routing (`gpu_min_pixels` threshold), minimized CPU↔GPU transfers, persistent buffer pools, and a WGSL Jacobi kernel transliterated from the CPU path.
 **Implementing code:** `crates/sfmtool-core/src/features/optical_flow/gpu/` (`context.rs`, `dis_pipeline.rs`, `pyramid_pipeline.rs`, `variational.rs`, `shaders/`); `optical_flow/mod.rs:503,522,541` (`gpu_min_pixels: 50_000`), `dis.rs:69` and `mod.rs:654` (per-level routing).
 **Inconsistencies:**
@@ -331,7 +331,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/image-pair-graph.md
+### specs/core/analysis/image-pair-graph.md
 **Summary:** Builds image-pair graphs from a posed reconstruction two ways — covisibility (shared tracks) and frustum intersection (Monte Carlo volume overlap) — both filtered by a camera viewing-angle threshold, exposed to Python and consumed by `sfm analyze`/`densify`/export.
 **Implementing code:** `crates/sfmtool-core/src/analysis/image_pair_graph.rs` (`compute_camera_directions`, `build_covisibility_pairs`, `estimate_z_from_histogram`, `build_frustum_intersection_pairs`); geometry in `camera/frustum.rs`.
 **Inconsistencies:**
@@ -339,7 +339,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/image-warping.md
+### specs/core/camera/image-warping.md
 **Summary:** Warp-map generation (`from_cameras` plus rotation- and pose-aware variants) and multi-channel `u8` resampling (bilinear + GPU-style anisotropic) for distortion/undistortion/model-conversion, adding `ray_to_pixel[_batch/_grid]` and an `Equirectangular` camera model; CPU/rayon, with GPU deferred.
 **Implementing code:** `crates/sfmtool-core/src/camera/warp_map.rs` (`WarpMap`, `WarpMapSvd`, `from_cameras`, `from_cameras_with_rotation`, `from_cameras_with_pose`, `compute_svd`, `from_patch`); `camera/remap.rs` (`ImageU8`, `ImageU8Pyramid`, `remap_bilinear`, `remap_aniso`); `camera/distortion.rs` + `intrinsics.rs` (`ray_to_pixel`, `needs_ray_path`, `Equirectangular`); py `crates/sfmtool-py/src/flow/warp.rs`.
 **Inconsistencies:**
@@ -347,7 +347,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** The spec (line 555) says to add `ray_to_pixel` / `distort_ray` to `CameraModel`; `ray_to_pixel` confirmed but no `distort_ray` symbol located — if never added (folded into `ray_to_pixel`), the spec line is slightly aspirational. Low priority.
 
-### specs/core/keypoint-localization-search-cache.md
+### specs/core/patch/keypoint-localization-search-cache.md
 **Summary:** Specifies a per-view render-once cache plus a hand-rolled AVX2 windowed-ZNCC kernel to accelerate the integer cross-view shift search inside keypoint localization (congealing). Covers the centered-f32 planar cache, register-blocked AVX2 accumulator, the `search_resolution_multiplier` knob, and the `SearchStrategy` (Exhaustive vs PlusDescent) axis.
 **Implementing code:** `crates/sfmtool-core/src/patch/keypoint_localize.rs` — `SearchStrategy` (line 51), `KeypointLocalizeParams.search_resolution_multiplier`/`search_strategy` (lines 132–135), `ContextTile` planar centered-f32 cache (line 208), `compute_channel_grids_avx2` (line 1137), `score_cell_one_channel_avx2` (line 1351), `search_shift_plus_descent` (~line 1700); sub-phase timers in `keypoint_localize/prof.rs`.
 **Inconsistencies:**
@@ -356,7 +356,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** update spec — bump the header status to implemented and drop the "later phases / still scalar" language.
 **Unclear / incorrect / suspicious:** The spec is internally inconsistent (header says scalar/proposed; body presents measured AVX2 tables as history). A reader can't tell current state from the header alone.
 
-### specs/core/keypoint-subpixel-refinement.md
+### specs/core/patch/keypoint-subpixel-refinement.md
 **Summary:** Standalone forward-additive ECC Gauss–Newton sub-pixel keypoint refiner with shared-T running consensus, three refresh granularities, analytic sampler Jacobian, and opt-in representative-bitmap fusion; exposed as `PatchCloud.refine_keypoints`.
 **Implementing code:** `crates/sfmtool-core/src/patch/keypoint_subpixel.rs` — `KeypointSubpixelParams` (line 140, `max_outer_sweeps` default 1, `consensus_refresh` default `PerSweep`), `ConsensusRefresh` (line 97), `RunningConsensus` (line 868). Bindings: `crates/sfmtool-py/src/py_patch_cloud.rs::refine_keypoints` (line 1248). Wiring: `src/sfmtool/_embed_patches.py::_refine_subpixel` (line 322).
 **Inconsistencies:**
@@ -366,7 +366,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** update spec — rewrite the `embed_patches` wiring paragraph to describe the integer `subpixel` sweep-count knob (default 1, `0` disables), and correct the claim that `lk_per_move` is exposed through the pipeline (it is core/binding-only).
 **Unclear / incorrect / suspicious:** The spec's "production default is `subpixel="none"`" implies LK is off in production; the code ships it **on** at 1 sweep. This is a behavior-level claim worth reconciling deliberately, not just a wording fix.
 
-### specs/core/optical-flow.md
+### specs/core/features/optical-flow.md
 **Summary:** Pure-Rust DIS (Dense Inverse Search) optical flow with CPU (SSE2/rayon) and GPU (wgpu) paths, Jacobi variational refinement, and three presets, plus Python bindings.
 **Implementing code:** `crates/sfmtool-core/src/features/optical_flow/mod.rs` — `DisFlowParams::{default_quality,fast,high_quality}` (lines 489/508/527).
 **Inconsistencies:**
@@ -374,7 +374,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/patch-cloud.md
+### specs/core/patch/patch-cloud.md
 **Summary:** Defines `OrientedPatch` (world-space surfel), `PatchCloud` (SoA), the `PatchNormal`/`PatchExtent`/`ViewReduce` policies, `WarpMap::from_patch` projection, infinity-patch handling, and `.sfmr` serialization.
 **Implementing code:** `crates/sfmtool-core/src/patch/cloud.rs` — `OrientedPatch::from_center_normal` (line 164), `from_infinity_direction` (line 194), `PatchCloud::from_reconstruction` (~line 470); `WarpMap::from_patch`.
 **Inconsistencies:**
@@ -382,7 +382,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — spec matches code including the #177 upright-frame fix.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/patch-keypoint-localization.md
+### specs/core/patch/patch-keypoint-localization.md
 **Summary:** The congealing keypoint-localization algorithm: per-round render, robust LOO consensus, per-view windowed-ZNCC shift search, in-loop view drops, exposed as `PatchCloud.localize_keypoints`.
 **Implementing code:** `crates/sfmtool-core/src/patch/keypoint_localize.rs` (`localize_patch_keypoints`, defaults line 138); binding `crates/sfmtool-py/src/py_patch_cloud.rs::localize_keypoints` (line 972).
 **Inconsistencies:**
@@ -392,7 +392,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** update spec — note in step 3 / the status block that the shipped default search strategy is PlusDescent (cross-linking the cache spec) and add the two new kwargs.
 **Unclear / incorrect / suspicious:** A reader following only this spec would assume every per-view search is an exhaustive full-res scan; in production it is a hill-climb with a documented accuracy tail (p99 ~3 px). Worth surfacing here since this is the algorithm's home spec.
 
-### specs/core/patch-normal-refine-view-subset.md
+### specs/core/patch/patch-normal-refine-view-subset.md
 **Summary:** D-optimal geometric view-subset selection capping the round-2+ normal-refinement basis at K views (`select_refine_subset`), on by default at K=8 in the pipeline.
 **Implementing code:** `crates/sfmtool-core/src/patch/normal_refine/view_subset.rs::select_refine_subset` (line 40); `NormalRefineParams::max_refine_views` (params.rs:176, default 0); `_embed_patches.py:602` `max_refine_views: int = 8`; CLI `--refine-max-views` default 8.
 **Inconsistencies:**
@@ -400,7 +400,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/patch-normal-refinement.md
+### specs/core/patch/patch-normal-refinement.md
 **Summary:** Photometric 2-DOF patch-normal refinement via exp-map coarse-to-fine grid over a robust IRLS consensus, with obliquity/fronto priors, Hessian confidence, bilinear default sampler, and opt-in representative-bitmap output.
 **Implementing code:** `crates/sfmtool-core/src/patch/normal_refine/` — `NormalRefineParams` (params.rs, defaults line 196), `refine_patch_normal`/`refine_patch_cloud_normals` (mod.rs), `view_stack.rs`.
 **Inconsistencies:**
@@ -408,7 +408,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing. (Items 1-7 under "Improvements" are explicitly forward-looking.)
 
-### specs/core/patch-view-selection.md
+### specs/core/patch/patch-view-selection.md
 **Summary:** Per-point view-selection: expand a track with geometrically-visible candidates that photometrically agree (windowed ZNCC vs the track's IRLS consensus), gated by a self-agreement trust floor; exposed as `PatchCloud.select_views`.
 **Implementing code:** `crates/sfmtool-core/src/patch/view_selection.rs::select_patch_views` (defaults line 66: min_relative_zncc 0.7, min_valid_fraction 0.6, min_track_views 2, min_self_agreement 0.3).
 **Inconsistencies:**
@@ -416,7 +416,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** `min_valid_fraction` 0.6 exists in code but isn't in the spec's parameter table — an unlisted shared validity knob, not a contradiction.
 
-### specs/core/per-spherical-tile-source-stack.md
+### specs/core/spherical/per-spherical-tile-source-stack.md
 **Summary:** Specifies `PerSphericalTileSourceStack<T>`, a CSR-flat, per-tile multi-source image-pyramid store built by projecting source images into each spherical tile's pinhole frame (rotation-only warp, scene-at-infinity). Covers the `PatchPixel` storage trait (u8/f16/f32), the two-pass parallel build, visibility cull, all-four valid-mask downsample rule, and accessors.
 **Implementing code:** `crates/sfmtool-core/src/spherical/per_tile_source_stack.rs` — `PatchPixel` (l.61-127), `PatchLevel<T>` (l.140), `BuildParams{max_in_flight_sources}` (l.178), `BuildError` (l.190-200), `build_rotation_only` (~l.268), `consensus_patches_per_tile`/`primary_consensus_atlas` (l.579-639). PyO3 in `crates/sfmtool-py/src/spherical/tile_source_stack.rs`.
 **Inconsistencies:**
@@ -424,7 +424,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — pose-aware `build_with_pose` is explicitly future work.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/photometric-subsets-ransac.md
+### specs/core/spherical/photometric-subsets-ransac.md
 **Summary:** Per-tile RANSAC that partitions each tile's source contributions into a primary and secondary agreeing cluster via validity-weighted patch-L1 scoring, plus per-tile counts and luminance MADs.
 **Implementing code:** `crates/sfmtool-core/src/spherical/photometric_ransac.rs` — `RansacPhotometricParams` defaults (l.63-74), `refine_flat` (l.283), seed derivation (l.477-478, 544-547), tie-break (l.652-659), `per_pixel_median`/`consensus_patch`/`patch_l1_score` (l.666-738).
 **Inconsistencies:**
@@ -432,7 +432,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — algorithm, knobs and numerics agree line-for-line.
 **Unclear / incorrect / suspicious:** Minor: `consensus_patch` uses a `1e-3` denominator floor (l.703) whereas the spec pseudocode writes `max(denom, 1.0)` only for `patch_l1_score`; immaterial to results.
 
-### specs/core/point-correspondence.md
+### specs/core/reconstruction/point-correspondence.md
 **Summary:** Finding same-3D-point correspondences across reconstructions via shared feature-index observations (first-occurrence semantics), a coordinate-based fallback for different feature backends, multi-way grouping and union-find merging for `sfm merge`.
 **Implementing code:** `crates/sfmtool-core/src/reconstruction/point_correspondence.rs`; `crates/sfmtool-py/src/analysis/core.rs`; `src/sfmtool/_point_correspondence.py` (`pixel_threshold=2.0`, `min_votes=2`, l.199-204); `src/sfmtool/merge/correspondences.py`.
 **Inconsistencies:**
@@ -440,7 +440,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/randomized-kdtree-forest.md
+### specs/core/features/randomized-kdtree-forest.md
 **Summary:** Pure-Rust randomized kd-tree forest ANN (Muja & Lowe 2009): randomized top-D-variance splits, shared best-bin-first priority search with an `L_max` budget, u8/f32 metrics, SIMD leaf scan, precision calibration.
 **Implementing code:** `crates/sfmtool-core/src/features/kdforest/` — `KdForestParams` presets (mod.rs l.85-114), `build.rs`, `search.rs`, `distance.rs`, `calibrate.rs`; `crates/sfmtool-py/src/py_kdforest.rs`.
 **Inconsistencies:**
@@ -448,7 +448,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — Phase 2 (f32 hardening, k-means tree) correctly marked future.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/ray-grid-projection.md
+### specs/core/camera/ray-grid-projection.md
 **Summary:** Splits `WarpMap::from_patch` into a model-free affine ray-grid geometry stage and a camera-owned `CameraIntrinsics::ray_to_pixel_grid` projection stage; perspective is exact per-node, fisheye/equirect uses a probe-bounded coarse grid.
 **Implementing code:** `crates/sfmtool-core/src/camera/distortion.rs` — `COARSE_GRID_STRIDE=8` (l.82), `COARSE_GRID_TOL_PX=0.02` (l.89), `GridProj` (l.101); `crates/sfmtool-core/src/camera/warp_map.rs`.
 **Inconsistencies:**
@@ -456,7 +456,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/reconstruction-alignment.md
+### specs/core/analysis/reconstruction-alignment.md
 **Summary:** Kabsch similarity fit (SVD, det correction, rank-deficient handling) + RANSAC outlier rejection, with Python wiring for data-derived thresholds in `sfm align --method points`.
 **Implementing code:** `crates/sfmtool-core/src/analysis/alignment/{kabsch.rs,ransac.rs}`; binding defaults `crates/sfmtool-py/src/analysis/core.rs:139`; `src/sfmtool/align/core.py::kabsch_algorithm`.
 **Inconsistencies:**
@@ -464,7 +464,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/sift-to-patch-reconstruction.md
+### specs/core/patch/sift-to-patch-reconstruction.md
 **Summary:** The `sfm embed-patches` pipeline converting a `sift_files` reconstruction to `embedded_patches`: build a patch frame, refine normals photometrically, select views, refine keypoints (congealing + subpixel, fusing consensus bitmaps), cull, compact.
 **Implementing code:** `src/sfmtool/_embed_patches.py::embed_patches` (l.585-605); `src/sfmtool/_commands/embed_patches.py`; Rust kernels via `sfmtool-core::patch` + `SfmrReconstruction.to_embedded_patches`.
 **Inconsistencies:**
@@ -473,7 +473,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** update spec — the code has grown a multi-round loop and obliquity/fronto priors beyond the single-pass, 4-knob pipeline the spec (still labelled "draft for review") documents.
 **Unclear / incorrect / suspicious:** The spec header says "draft for review" while the footer says "fully wired in `_embed_patches.py`" — the footer is accurate for the plumbing but the pipeline/params sections are behind the code.
 
-### specs/core/sift.md
+### specs/core/features/sift.md
 **Summary:** Pure-Rust SIFT detector+descriptor with COLMAP conventions; scale-space pyramid, DoG, extrema, subpixel localization, orientation, 128-D descriptor; tiled DoG/detect fusion; detect/describe split API; forward-looking on-disk incremental extraction.
 **Implementing code:** `crates/sfmtool-core/src/features/sift/` (`SiftParams::default` l.126-137); `crates/sfmtool-py/src/sift/extract.rs`.
 **Inconsistencies:**
@@ -481,7 +481,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — on-disk incremental extraction, Tier-2 blur fusion, and GPU are explicitly future work.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/spherical-tiles-rig.md
+### specs/core/spherical/spherical-tiles-rig.md
 **Summary:** `SphericalTileRig` — a rig of pinhole tiles over the sphere via Thomson-relaxed points; measured-coverage-driven FOV/patch sizing, atlas packing, atlas↔camera warps, `resample_atlas` k-nearest blend, `.camrig` persistence, `set_patch_size`, `tiles_subset`.
 **Implementing code:** `crates/sfmtool-core/src/spherical/tile_rig.rs` (`MIN_PATCH_SIZE=5` l.40, `COVERAGE_PROBE_N=50_000` l.51, methods l.298-917); `spherical/sphere_points.rs` (`RelaxConfig` defaults 50/0.05/5.0); `spherical/tile_rig/camrig.rs`.
 **Inconsistencies:**
@@ -489,7 +489,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync — the "Open questions" are marked Resolved and match the camrig implementation.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/tile-batched-consensus-atlas.md
+### specs/core/spherical/tile-batched-consensus-atlas.md
 **Summary:** Bounded-memory panorama compositing that processes rig tiles in batches, building/dropping one `PerSphericalTileSourceStack` per batch, running photometric RANSAC, and blitting consensus patches into a persistent atlas — byte-identical to the monolithic path via `tile_index_base` RNG re-seeding.
 **Implementing code:** `crates/sfmtool-core/src/spherical/consensus_atlas.rs` — `ConsensusAtlasBatchParams` default batch_size=32 (l.36-58), `ConsensusAtlasBatchError` (l.86+), `render_consensus_atlas` (l.146); `RansacPhotometricParams::tile_index_base` (photometric_ransac.rs l.59); `crates/sfmtool-py/src/py_consensus_atlas.rs`; `src/sfmtool/rig/panorama.py`.
 **Inconsistencies:**
@@ -497,7 +497,7 @@ CLI specs document behavior the code doesn't deliver (dead `align` options;
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/core/track-cluster-matching.md
+### specs/core/features/track-cluster-matching.md
 **Summary:** Descriptor-clustering matcher: build a kd-forest over all descriptors, query k-NN, set a per-descriptor background-floor radius (`α·B_i`, `B_i` = d-th-nearest distance), materialize density-ordered clusters (one feature/image, hard partition), convert to per-image-pair matches, verify and write `.matches`.
 **Implementing code:** `crates/sfmtool-core/src/features/cluster_match/mod.rs` (`BackgroundFloorParams` default `d=10, alpha=0.8, min_size=2, forest=accurate`, l.53-56; algorithm l.183-320); `crates/sfmtool-py/src/matching/cluster.rs`; `src/sfmtool/feature_match/_cluster_matching.py`; `src/sfmtool/_commands/match.py`.
 **Inconsistencies:**
@@ -619,13 +619,13 @@ contradiction, and the point-track all-black patch-tile behavior.
 
 ### specs/gui/blender-viewport-navigation-implementation-overview.md
 **Summary:** Reference analysis of how Blender implements precision-touchpad navigation on Windows via DirectManipulation; background material for `platform/windows.rs`.
-**Implementing code:** Informational only; the design it informed is specified in `gui-viewport-navigation.md`.
+**Implementing code:** Informational only; the design it informed is specified in `viewport-navigation.md`.
 **Inconsistencies:**
   - None found — external reference material, no direct code contract.
 **Recommendation:** in sync (reference document).
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/gui/gui-adaptive-clip-and-grid.md
+### specs/gui/adaptive-clip-and-grid.md
 **Summary:** Reversed-Z infinite-far projection, adaptive near plane from scene bounding sphere, and adaptive ground grid scaled to `length_scale`.
 **Implementing code:** `viewer_3d/camera.rs` (`projection_matrix`, `update_clip_planes`), `viewer_3d/overlay.rs` (`draw_grid`), `scene_renderer/auto_point_size.rs`.
 **Inconsistencies:**
@@ -633,14 +633,14 @@ contradiction, and the point-track all-black patch-tile behavior.
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing — the spec correctly notes the grid is still an egui overlay (no depth occlusion).
 
-### specs/gui/gui-architecture.md
+### specs/gui/architecture.md
 **Summary:** Technology stack, crate/module layout, multi-pass render pipeline, GPU readback, build system, performance budget, platform notes.
 **Implementing code:** `crates/sfm-explorer/src/lib.rs`, `app.rs`, `dock.rs`, `scene_renderer/mod.rs` + `render.rs`, `viewer_3d/`.
 **Inconsistencies:**
   - Module map lists `image_detail.rs` as a single file (lines 131, 167), but it is a directory: `image_detail/{mod,input,overlay}.rs`.
     > _Status (2026-07-25): Done — the module-table row now reads `image_detail/`
     > (the tree entry was already correct). The same sweep fixed the stale
-    > `image_detail.rs` references in `gui-multi-panel-image-browser.md`. The
+    > `image_detail.rs` references in `multi-panel-image-browser.md`. The
     > other three items in this finding are untouched._
   - The `shaders/` listing (lines 137-145) omits `patch.wgsl`, which exists and is central to the implemented patch pipeline.
   - `target_indicator.wgsl # Rotating octahedron at target` — stale; geometry is a compass rose (star + spikes + ring).
@@ -648,7 +648,7 @@ contradiction, and the point-track all-black patch-tile behavior.
 **Recommendation:** update spec — fix the `image_detail` directory, add `patch.wgsl`, correct the octahedron and pinhole-BG descriptions. Core prose (pass order, four-phase `run_ui_and_paint`, 5×5 readback, render targets) is accurate.
 **Unclear / incorrect / suspicious:** Nothing beyond the above.
 
-### specs/gui/gui-camera-views.md
+### specs/gui/camera-views.md
 **Summary:** Frustum wireframes, image-quad texturing, GPU pick buffer, selection/hover, camera-view mode with full-res background, distorted + fisheye frustum tessellation, and Step-9 persistent-camera-view free-look.
 **Implementing code:** `scene_renderer/upload/{frustums,bg_image}.rs` (`upload_frustums`, `update_frustum_colors`, `upload_bg_image`), `pipelines/{frustum,image_quad,distorted_quad,bg_distorted}.rs`, `scene_renderer/distorted_mesh.rs`, `viewer_3d/mod.rs` (`enter_camera_view`, `compute_switch_camera_view`), `viewer_3d/camera.rs` (`best_fit_fov`).
 **Inconsistencies:**
@@ -659,7 +659,7 @@ contradiction, and the point-track all-black patch-tile behavior.
 **Recommendation:** update spec — reconcile the per-frame-FOV prose with Step 9 (FOV set once on entry), fix the `sfmtool-gui` crate name, refresh `main.rs` references, and document the hidden-frustum color.
 **Unclear / incorrect / suspicious:** The self-contradiction on per-frame FOV is the main hazard.
 
-### specs/gui/gui-cross-panel-hover.md
+### specs/gui/cross-panel-hover.md
 **Summary:** Transient cross-panel hover of images/points via `AppState::hovered_image`/`hovered_point`, panel `has_pointer` ownership, GPU uniform highlighting with `0xFFFFFFFF` sentinel, one-frame readback gating.
 **Implementing code:** `state.rs`, `dock.rs` (per-panel `has_pointer` ownership at 114-120, 209-215, 286-292), `app.rs::process_pick_readback`, `app.rs:379-386` (suppress hover == selection).
 **Inconsistencies:**
@@ -667,7 +667,7 @@ contradiction, and the point-track all-black patch-tile behavior.
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/gui/gui-image-animation.md
+### specs/gui/image-animation.md
 **Summary:** Image-sequence playback: `AnimationState`/`PlayDirection`, keyboard Space/arrows/brackets, minibar play button + FPS label, camera-view flipbook via `request_camera_switch`.
 **Implementing code:** `image_browser.rs` (`AnimationState`, keyboard block :267-317, frame advance :319-360, play button :563-627), `dock.rs:135-139`.
 **Inconsistencies:**
@@ -675,7 +675,7 @@ contradiction, and the point-track all-black patch-tile behavior.
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/gui/gui-multi-panel-image-browser.md
+### specs/gui/multi-panel-image-browser.md
 **Summary:** egui_dock 4-panel layout, image/point selection model, cross-panel hover, image browser, image detail with 7 overlay modes + feature filtering, track ray viz, navigation minibar, image-detail 2D pan/zoom.
 **Implementing code:** `dock.rs`, `image_browser.rs`, `image_detail/`, `state.rs` (`OverlayMode`, `FeatureDisplaySettings`), `scene_renderer/upload/track_rays.rs`.
 **Inconsistencies:**
@@ -685,7 +685,7 @@ contradiction, and the point-track all-black patch-tile behavior.
 **Recommendation:** update spec — fix the line-70 deselect contradiction and refresh `main.rs`/`read_back_pick` references. Panel behaviors, 7 overlay modes, filtering, minibar, and 2D pan/zoom (`MAX_ZOOM=32`, `PAN_MARGIN=50`) are all in sync.
 **Unclear / incorrect / suspicious:** The two-places-disagree deselect behavior is the notable hazard.
 
-### specs/gui/gui-patch-rendering.md
+### specs/gui/patch-rendering.md
 **Summary:** Embedded-patch surfel rendering — per-instance oriented textured quads in Pass 1, front-face-culled in the vertex shader, page-grid texture-array atlas, `PICK_TAG_POINT` picking, View-menu controls.
 **Implementing code:** `pipelines/patch.rs`, `shaders/patch.wgsl`, `scene_renderer/upload/patches.rs`, `gpu_types.rs` (`PatchInstance`/`PatchUniforms`), `app.rs:539-564`, `state.rs:135-149`.
 **Inconsistencies:**
@@ -693,17 +693,17 @@ contradiction, and the point-track all-black patch-tile behavior.
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/gui/gui-plan.md
+### specs/gui/plan.md
 **Summary:** Roadmap and implementation-status tracker for the GUI. Lists completed 3D-viewer features, core-data status, PyO3 status, and next steps.
 **Implementing code:** Whole `sfm-explorer` crate; status cross-checked against `app.rs`, `viewer_3d/`, `scene_renderer/`.
 **Inconsistencies:**
-  - The roadmap has **no mention of patch/surfel rendering** or the Point Track Detail panel's patch tiles, both implemented (`scene_renderer/upload/patches.rs`, `pipelines/patch.rs`; gui-patch-rendering.md marked "Implemented v1"). The "Current Implementation Status" list should include patches.
+  - The roadmap has **no mention of patch/surfel rendering** or the Point Track Detail panel's patch tiles, both implemented (`scene_renderer/upload/patches.rs`, `pipelines/patch.rs`; patch-rendering.md marked "Implemented v1"). The "Current Implementation Status" list should include patches.
   - Stale wording: line 47 "Target indicator (rotating octahedron)" — the indicator is now a compass rose (`CompassEdgeInstance` in `scene_renderer/mod.rs:69-72`, `shaders/target_indicator.wgsl`).
   - Next Steps #1 (grid depth occlusion) and #2 (free-nav FOV gesture) correctly still pending; #3/#4 correctly marked Done.
 **Recommendation:** update spec — add patches to the status list and fix the octahedron wording; otherwise the roadmap assessment is accurate.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/gui/gui-point-cloud-rendering.md
+### specs/gui/point-cloud-rendering.md
 **Summary:** Point-splat billboards, `PointInstance` layout, auto/user point sizing, EDL post-process, compass target indicator, supernova effect, points-at-infinity.
 **Implementing code:** `pipelines/points.rs` + `shaders/points.wgsl`, `pipelines/edl.rs` + `shaders/edl.wgsl`, `pipelines/target.rs`, `scene_renderer/gpu_types.rs`, `state.rs`.
 **Inconsistencies:**
@@ -712,7 +712,7 @@ contradiction, and the point-track all-black patch-tile behavior.
 **Recommendation:** update spec — change the line-443 checklist item to the compass. Otherwise in sync.
 **Unclear / incorrect / suspicious:** Nothing beyond the recurring octahedron wording.
 
-### specs/gui/gui-point-track-detail.md
+### specs/gui/point-track-detail.md
 **Summary:** Per-point track inspector — summary header with copy-able Point ID + XYZ, stored-patch header tile, scrollable observation table with per-observation thumbnail/patch/error/angle, cross-panel select/hover.
 **Implementing code:** `point_track_detail.rs`, cached data in `state.rs` (`sift_cache`, `full_res_cache`), dock wiring `dock.rs:222-292`.
 > _Note (2026-07-25): both findings below are still open, but their code anchors
@@ -727,7 +727,7 @@ contradiction, and the point-track all-black patch-tile behavior.
 **Recommendation:** update spec — document the "Size" column and the depth-z/condition-number header diagnostics, and reconcile the all-black tile behavior (spec says "not drawn"; code draws it).
 **Unclear / incorrect / suspicious:** The all-black tile is a genuine behavior question — the code even flags "a future N/A flag may distinguish 'not visible' from a genuinely dark surface"; worth a deliberate decision rather than silent drift.
 
-### specs/gui/gui-user-experience.md
+### specs/gui/user-experience.md
 **Summary:** Vision, design principles, the interaction cheat-sheet (trackpad/mouse), overlays, View-menu controls, four-panel layout.
 **Implementing code:** `app.rs` (View menu :517-586), `viewer_3d/input.rs` + `overlay.rs`, `dock.rs`.
 **Inconsistencies:**
@@ -735,7 +735,7 @@ contradiction, and the point-track all-black patch-tile behavior.
 **Recommendation:** in sync.
 **Unclear / incorrect / suspicious:** Nothing.
 
-### specs/gui/gui-viewport-navigation.md
+### specs/gui/viewport-navigation.md
 **Summary:** Orbit-camera model, full mouse/trackpad/keyboard control mapping, Alt-mode target control (dual-orbit, nodal pan, push/pull, depth-pick), zoom-to-fit, fly nav, FOV convention, Windows DirectManipulation.
 **Implementing code:** `viewer_3d/camera.rs`, `viewer_3d/input.rs`, `viewer_3d/mod.rs`, `platform/windows.rs`.
 **Inconsistencies:**
@@ -764,7 +764,7 @@ dedicated `xform-*` specs. Confirmations from the sweep:
 ### CLI command: `sfm explorer` (src/sfmtool/_commands/explorer.py)
 **What it does:** A thin launcher that shells out to the `launch-sfm-explorer` binary (the Rust `sfm-explorer` crate) to open the 3D viewer on an optional `.sfmr` file. Registered under "Visualization" (cli.py:71). The only registered CLI command with no `specs/cli/*-command.md`.
 **Why it matters:** user-facing (the GUI entry point), but behaviorally trivial — all substance lives in the GUI, extensively documented across `specs/gui/`.
-**Recommendation:** acceptable as unspecced; add a one-line cross-reference in `specs/gui/README.md` or `gui-architecture.md` stating that `sfm explorer [FILE.sfmr]` is the launch entry point. A full CLI spec would not earn its place.
+**Recommendation:** acceptable as unspecced; add a one-line cross-reference in `specs/gui/README.md` or `architecture.md` stating that `sfm explorer [FILE.sfmr]` is the launch entry point. A full CLI spec would not earn its place.
 
 ### Crate: `sfmtool-py` (crates/sfmtool-py/src/)
 **What it does:** The PyO3 binding layer exposing `sfmtool-core` to Python (`py_sfmr_reconstruction.rs`, `py_patch_cloud.rs`, `py_consensus_atlas.rs`, etc.) — the load-bearing bridge every Python command reaches core algorithms through.
@@ -780,10 +780,10 @@ dedicated `xform-*` specs. Confirmations from the sweep:
 
 ## Top priorities
 
-1. **Reconcile `specs/core/keypoint-subpixel-refinement.md` with the shipped `subpixel` default** — the spec says sub-pixel LK ships opt-in behind `subpixel: str = "none"`; the code ships an integer sweep count defaulting to **1 (LK on by default)** (`_embed_patches.py:597`, `_commands/embed_patches.py:85-96`), and `lk_per_move` is not reachable from the pipeline. This is a behavior-level claim about what production runs, so decide deliberately (is on-by-default intended?) and rewrite the wiring paragraph.
+1. **Reconcile `specs/core/patch/keypoint-subpixel-refinement.md` with the shipped `subpixel` default** — the spec says sub-pixel LK ships opt-in behind `subpixel: str = "none"`; the code ships an integer sweep count defaulting to **1 (LK on by default)** (`_embed_patches.py:597`, `_commands/embed_patches.py:85-96`), and `lk_per_move` is not reachable from the pipeline. This is a behavior-level claim about what production runs, so decide deliberately (is on-by-default intended?) and rewrite the wiring paragraph.
    > _Status (2026-07-08): Done — maintainer confirmed on-by-default is intended; rewrote the wiring paragraph to the integer knob (default 1, 0 disables) and noted lk_per_move is core/binding-only._
 
-2. **Update `specs/core/sift-to-patch-reconstruction.md` for the multi-round pipeline** — the code runs `rounds=2` alternating normal/keypoint refinement with obliquity down-weighting and a fronto prior, plus ~8 knobs (`rounds`, `max_obliquity_deg`, `obliquity_weight_power`, `fronto_prior_weight`, `max_refine_views`, `localize_search_strategy`, `search_resolution_multiplier`, `subpixel`) absent from the spec's single-pass, 4-knob description. This is the home spec for `embed-patches`; it materially understates the shipped algorithm. Related smaller fixes in the same area: `patch-keypoint-localization.md` should note the PlusDescent default (not exhaustive search), and `keypoint-localization-search-cache.md` needs its stale "proposed / still scalar" header bumped to implemented.
+2. **Update `specs/core/patch/sift-to-patch-reconstruction.md` for the multi-round pipeline** — the code runs `rounds=2` alternating normal/keypoint refinement with obliquity down-weighting and a fronto prior, plus ~8 knobs (`rounds`, `max_obliquity_deg`, `obliquity_weight_power`, `fronto_prior_weight`, `max_refine_views`, `localize_search_strategy`, `search_resolution_multiplier`, `subpixel`) absent from the spec's single-pass, 4-knob description. This is the home spec for `embed-patches`; it materially understates the shipped algorithm. Related smaller fixes in the same area: `patch-keypoint-localization.md` should note the PlusDescent default (not exhaustive search), and `keypoint-localization-search-cache.md` needs its stale "proposed / still scalar" header bumped to implemented.
    > _Status (2026-07-08): Done — `sift-to-patch-reconstruction.md` rewritten for the rounds=2 loop + obliquity/fronto priors + all 8 knobs (defaults verified against code); `patch-keypoint-localization.md` documents the PlusDescent default; `keypoint-localization-search-cache.md` flipped to implemented (AVX2 kernels landed, i16 path dropped)._
 
 3. **Decide the fate of the three dead `sfm align` options** — `--max-error`, `--iterative`, and `--visualize` are accepted and documented as functional but never used (`align/multi.py:315-317`). Implement them or remove them (and update the spec either way); today users get silent no-ops.
@@ -792,7 +792,7 @@ dedicated `xform-*` specs. Confirmations from the sweep:
 4. **Close the `scale-by-measurements` spec/code gap** — two spec'd behaviors are unimplemented: the workspace hash-prefix search for the source `.sfmr` (`_scale_by_measurements.py:356-377` errors immediately without an explicit `sfmr` field) and "use the most common point index" on ambiguous matches (code takes an arbitrary first match at `:132` while printing "Using most common." — an actively misleading message). Implement or downgrade the spec sections to forward-looking; fix the message regardless.
    > _Status (2026-07-08): Done — both implemented (most-common tally + workspace search reusing `find_sfmr_by_content_hash`), with new tests. See the per-spec finding above._
 
-5. **Sweep the GUI specs for the recurring staleness + three real contradictions** — mechanical: "rotating octahedron" → compass rose (4 files), `main.rs`/`read_back_pick` → `app.rs`/`read_readback_result` (2 files), `sfmtool-gui` → `sfm-explorer`, missing `patch.wgsl`/patch-rendering mentions in gui-architecture/gui-plan. Decisions: per-frame FOV recompute contradiction in `gui-camera-views.md` (code sets FOV once on entry, per Step 9), thumbnail deselect contradiction in `gui-multi-panel-image-browser.md` (code: no toggle-off), and the all-black patch-tile behavior in `gui-point-track-detail.md` (spec: not drawn; code: drawn).
+5. **Sweep the GUI specs for the recurring staleness + three real contradictions** — mechanical: "rotating octahedron" → compass rose (4 files), `main.rs`/`read_back_pick` → `app.rs`/`read_readback_result` (2 files), `sfmtool-gui` → `sfm-explorer`, missing `patch.wgsl`/patch-rendering mentions in gui-architecture/gui-plan. Decisions: per-frame FOV recompute contradiction in `camera-views.md` (code sets FOV once on entry, per Step 9), thumbnail deselect contradiction in `multi-panel-image-browser.md` (code: no toggle-off), and the all-black patch-tile behavior in `point-track-detail.md` (spec: not drawn; code: drawn).
    > _Status (2026-07-08): Done — mechanical sweep applied (octahedron→compass, sfmtool-gui→sfm-explorer, read_back_pick→read_readback_result, patch.wgsl/patch pipeline added; main.rs refs pointed at the true post-refactor modules app.rs/dock.rs/lib.rs). All three decisions resolved as keep-code, update-spec; also documented the Point-Track Size column + Depth-z/Cond header diagnostics._
 
 Honorable mentions: ~~the dead `spatial_tolerance` parameter in flow matching~~ _(done 2026-07-08)_, ~~the `d=28`-era prose in `track-cluster-matching.md`~~ _(done: operative prose → d=10, prototype history kept)_, ~~the workspace spec's COLMAP-shaped examples vs the `sfmtool` default tool~~ _(done: named sfmtool as default)_, ~~AGENTS.md's stale `cam`-group/7-crates text~~ _(done: camrig group + 8 crates)_, ~~`sfm version` printing `0.1`~~ _(done: now reads package metadata → 0.2)_, and ~~relocating the implemented zup migration doc out of `specs/drafts/`~~ _(done 2026-07-08, commit e176f74: migration is merged to main #162/#164, so the doc was retired; its §1/§2 content promoted into `sfmr-file-format.md` and the 7 references repointed there)_.

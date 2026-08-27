@@ -3,12 +3,12 @@
 
 //! Cluster-patch refinement: turn SIFT feature clusters into patch clusters.
 //!
-//! See `specs/core/cluster-patch-refinement.md` (implementation) and
-//! `specs/core/cluster-patches.md` (design). Given per-image pyramids, SIFT
+//! See `specs/core/patch/cluster-patch-refinement.md` (implementation) and
+//! `specs/core/patch/cluster-patches.md` (design). Given per-image pyramids, SIFT
 //! feature geometry, and CSR clusters, [`refine_cluster_patches`] first
 //! gates each member on the localizability of its own patch (the
 //! noise-normalized structure-tensor uncertainty of
-//! `specs/core/patch-localizability.md`; members above
+//! `specs/core/patch/patch-localizability.md`; members above
 //! `max_keypoint_uncertainty` are excluded up front), then picks a
 //! reference member per cluster (largest SIFT scale, deterministic
 //! tie-breaks), builds a Gaussian-windowed z-normalized template around the
@@ -73,7 +73,7 @@ const SIGMA_CLAMP: f64 = 1.5;
 /// Global photometric-noise constant (intensity units) for the
 /// localizability gate — sets the absolute px scale of `σ_pos`, matching
 /// the `score_localizability` / `embed-patches` default (see
-/// `specs/core/patch-localizability.md`, "σ_noise (v1: global constant)").
+/// `specs/core/patch/patch-localizability.md`, "σ_noise (v1: global constant)").
 const LOCALIZABILITY_SIGMA_NOISE: f64 = 3.0;
 
 // ── Small 2×2 matrix helpers ────────────────────────────────────────────────

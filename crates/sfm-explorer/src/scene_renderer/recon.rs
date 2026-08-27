@@ -12,7 +12,7 @@
 //! Loading a node builds one bundle; closing a node drops one bundle. No other
 //! node's GPU data is touched, which is why these are per-recon buffers rather
 //! than one concatenated buffer that a membership change would have to rebuild.
-//! See `specs/gui/gui-scene-graph.md` ("Rendering: Per-Reconstruction GPU
+//! See `specs/gui/scene-graph.md` ("Rendering: Per-Reconstruction GPU
 //! Resources").
 
 use nalgebra::Point3;

@@ -8,7 +8,7 @@ and source images — the multi-view rendering path the Rust unit tests cannot
 exercise without on-disk imagery — and pins the *binding* surface: the dict keys
 and dtypes, the ``k×k`` matrix, the two member-list sources (tracks vs an explicit
 ``member_views`` map), and the unscored-member contract. The decision rule itself
-is covered by the Rust tests. See ``specs/core/member-coherence-validation.md``.
+is covered by the Rust tests. See ``specs/core/patch/member-coherence-validation.md``.
 """
 
 from __future__ import annotations

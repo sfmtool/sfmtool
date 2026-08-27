@@ -261,7 +261,7 @@ fn determinism() {
     assert_eq!(a, vec![vec![0, 1, 2], vec![3, 4]]);
 }
 
-// ── Selection queries (specs/core/covisibility-selection.md) ──────────
+// ── Selection queries (specs/core/features/covisibility-selection.md) ──────────
 
 /// Synthesize positioned two-member clusters: edge `(i, j, w, d)` becomes
 /// `w` clusters, each holding one member in image `i` at the origin and
@@ -531,7 +531,7 @@ fn reach_respects_min_shared_boundary() {
     assert_eq!(cov.reach(&[0], 9), 2.0 / 5.0); // drops image 1 (8 < 9)
 }
 
-// ── Displacement neighborhood (specs/core/pose-verification.md) ────────
+// ── Displacement neighborhood (specs/core/geometry/pose-verification.md) ────────
 
 /// A small positioned scene: 4 images, clusters mixing spans, one masked
 /// member, one duplicate-image member.

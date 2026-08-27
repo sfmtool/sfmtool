@@ -5,7 +5,7 @@
 
 Cross-checks the binding's per-point keypoint uncertainty ``σ_pos`` against an
 independent NumPy reimplementation of the documented math
-(``specs/core/patch-localizability.md``): the noise-normalized structure tensor
+(``specs/core/patch/patch-localizability.md``): the noise-normalized structure tensor
 on each consensus patch, mapped to source px by the recon geometry.
 """
 

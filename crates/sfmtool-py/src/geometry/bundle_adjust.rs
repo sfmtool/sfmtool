@@ -19,7 +19,7 @@ use crate::geometry::PyCameraIntrinsics;
 /// Jointly refines world-to-camera poses, world points, and optionally the
 /// shared focal length by minimizing soft-L1 pixel reprojection error over a
 /// trim schedule with inter-round retriangulation (canonical frame; the
-/// camera looks along −Z). See ``specs/core/bundle-adjustment.md``.
+/// camera looks along −Z). See ``specs/core/geometry/bundle-adjustment.md``.
 ///
 /// Args:
 ///     camera: ``CameraIntrinsics`` shared by all images (carries the

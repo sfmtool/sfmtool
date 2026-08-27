@@ -5,7 +5,7 @@
 //!
 //! The pick target is a single `R32Uint` texture, so one `u32` has to carry
 //! both *what kind* of entity was hit and *which* entity, across every loaded
-//! reconstruction. See `specs/gui/gui-scene-graph.md` ("Picking"):
+//! reconstruction. See `specs/gui/scene-graph.md` ("Picking"):
 //!
 //! ```text
 //! bits 31..30  tag: 0 = none, 1 = frustum/camera, 2 = point   (3 reserved)

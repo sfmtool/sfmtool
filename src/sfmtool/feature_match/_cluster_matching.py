@@ -11,7 +11,7 @@ clusters — the matcher's primary output. A derived view expands the clusters
 into the per-image-pair matches the existing ``.matches`` pipeline consumes.
 
 The heavy lifting (kd-tree forest build, k-NN query, clustering, pair
-expansion) happens in Rust; see ``specs/core/track-cluster-matching.md``.
+expansion) happens in Rust; see ``specs/core/features/track-cluster-matching.md``.
 """
 
 from concurrent.futures import ThreadPoolExecutor

@@ -65,7 +65,7 @@ def _curve_anchor_depths(
     Uses the reconstructed track depth when a triangulated 3D point is
     available (and is in front of the camera); otherwise the baseline length
     `‖C_other − C_from‖`. `track_point_indexes` is one entry per feature pair with
-    `-1` marking unmatched features. See specs/core/epipolar-curves.md
+    `-1` marking unmatched features. See specs/core/camera/epipolar-curves.md
     ("Caller-side seeding strategy") for the rationale.
     """
     c_from = -R_from.T @ t_from
@@ -519,7 +519,7 @@ def draw_epipolar_visualization(
         # Standard visualization on the original (distorted) images. The
         # epipolar geometry is drawn directly through the full camera model, so
         # the "lines" are curves for fisheye / wide-FOV cameras. See
-        # specs/core/epipolar-curves.md.
+        # specs/core/camera/epipolar-curves.md.
         img1 = cv2.imread(
             str(image1_path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
         )

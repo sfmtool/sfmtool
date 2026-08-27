@@ -6,7 +6,7 @@
 
 Both run on a fully synthetic scene — pinhole cameras looking down world ``+z``
 at a textured plane — so the geometric truth is known exactly and no dataset
-fixture is needed. See ``specs/core/candidate-track-spawning.md``.
+fixture is needed. See ``specs/core/patch/candidate-track-spawning.md``.
 """
 
 from __future__ import annotations

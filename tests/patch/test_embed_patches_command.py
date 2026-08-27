@@ -6,8 +6,8 @@ orchestration (steps 1-7 of the sift_files -> embedded_patches pipeline).
 
 Runs the real photometric kernels on the ``seoul_bull_workspace`` fixture (which
 carries the ``.sift`` files + source images) at a low patch resolution to keep the
-end-to-end cost reasonable. See ``specs/cli/embed-patches-command.md`` and
-``specs/core/sift-to-patch-reconstruction.md``.
+end-to-end cost reasonable. See ``specs/cli/reconstruction/embed-patches-command.md`` and
+``specs/core/patch/sift-to-patch-reconstruction.md``.
 """
 
 from __future__ import annotations
@@ -268,7 +268,7 @@ def test_embed_patches_cli_subpixel_and_search_resolution_multiplier(
 
 def test_embed_patches_refine_max_views_is_lossless(seoul_bull_workspace):
     """`--refine-max-views` caps only the round-2+ normal-refinement *basis*
-    (see specs/core/patch-normal-refine-view-subset.md): every observation stays
+    (see specs/core/patch/patch-normal-refine-view-subset.md): every observation stays
     in the output and the consensus bitmaps are still fused over the full view
     set, so a capped run must produce the same output shape (point and
     observation counts) as the all-views default — within a hair's tolerance:
@@ -418,7 +418,7 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
 
 def test_embed_patches_localize_basis_views_keeps_observations(seoul_bull_workspace):
     """`localize_basis_views` caps only the localizer's consensus *membership*
-    (see specs/core/keypoint-localization-consensus-basis.md): every admitted
+    (see specs/core/patch/keypoint-localization-consensus-basis.md): every admitted
     view is still localized and reported, so a capped run must produce the same
     output shape as the uncapped default. On this 17-image fixture most view
     sets are at or under the cap and take the bit-identical uncapped path."""

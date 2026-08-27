@@ -3,9 +3,9 @@
 
 """Tests for the cluster-covisibility Rust bindings
 (``sfmtool._sfmtool.matching.ClusterCovisibility``; see
-``specs/core/cluster-covisibility.md`` and, for the selection queries —
+``specs/core/features/cluster-covisibility.md`` and, for the selection queries —
 pair displacement, banded thinning, reach —
-``specs/core/covisibility-selection.md``)."""
+``specs/core/features/covisibility-selection.md``)."""
 
 import numpy as np
 import numpy.testing as npt
@@ -402,7 +402,7 @@ class TestSeedGroups:
         assert list(cov.seed_groups()) == [[0, 1]]
 
 
-# ── Selection queries (specs/core/covisibility-selection.md) ──────────────
+# ── Selection queries (specs/core/features/covisibility-selection.md) ──────────────
 
 
 def _positioned_edges_to_arrays(num_images, edges):
@@ -508,7 +508,7 @@ class TestPairDisplacement:
 
 class TestDisplacementNeighborhood:
     """Sparse displacement-neighborhood substrate queries and serialization
-    (see ``specs/core/pose-verification.md``)."""
+    (see ``specs/core/geometry/pose-verification.md``)."""
 
     # 4 images. Same-image pairs give exact means: (0, 1) twice at distances
     # 5 and 15 (mean 10); (0, 2) once at 5; (1, 2) once at 25.

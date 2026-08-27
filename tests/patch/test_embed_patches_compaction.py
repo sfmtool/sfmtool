@@ -6,7 +6,7 @@
 Runs the patch kernels (normal refine + view selection + keypoint localization)
 on a real solved reconstruction, compacts the result into an ``embedded_patches``
 reconstruction, and round-trips it through ``.sfmr`` to confirm validity. See
-``specs/core/sift-to-patch-reconstruction.md`` and
+``specs/core/patch/sift-to-patch-reconstruction.md`` and
 ``specs/formats/sfmr-file-format.md``.
 """
 

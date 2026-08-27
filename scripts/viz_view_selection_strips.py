@@ -18,7 +18,7 @@ One montage image is written per input reconstruction.
 
 This is a dev/inspection tool, not a test — the automated coverage lives in
 ``tests/patch/test_patch_view_selection.py``. See
-``specs/core/patch-view-selection.md``.
+``specs/core/patch/patch-view-selection.md``.
 
 Example::
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Python bindings for the alternating-least-squares affine factorization
-//! and its metric upgrade (see `specs/core/affine-factorization.md`).
+//! and its metric upgrade (see `specs/core/geometry/affine-factorization.md`).
 
 use std::borrow::Cow;
 
@@ -152,7 +152,7 @@ impl PyMetricHypothesis {
 
 /// Alternating-least-squares affine factorization with residual trimming
 /// (Tomasi-Kanade with missing data; see
-/// ``specs/core/affine-factorization.md``). Jointly estimates an affine
+/// ``specs/core/geometry/affine-factorization.md``). Jointly estimates an affine
 /// camera per image, a 3D point per cluster (shared affine frame, defined up
 /// to a 3×3 gauge), and a per-observation keep mask. Deterministic.
 ///

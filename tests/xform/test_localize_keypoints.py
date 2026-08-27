@@ -9,7 +9,7 @@ runs over the real 17-image seoul_bull reconstruction. Unlike
 the localizer drops views that won't co-register, the ``min_views`` cull can
 drop points, and the track arrays + ``keypoints_xy`` are rebuilt from the
 survivors — so the invariants tested here are shrinking counts and output
-validity, not byte-identity. See specs/cli/xform-localize-keypoints-command.md.
+validity, not byte-identity. See specs/cli/reconstruction/xform/localize-keypoints-command.md.
 """
 
 from unittest.mock import patch

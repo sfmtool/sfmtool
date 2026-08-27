@@ -4,7 +4,7 @@
 //! The consensus-basis pick: which `K` of a point's views congeal against each
 //! other, the rest registering once against their finished consensus.
 //!
-//! See `specs/core/keypoint-localization-consensus-basis.md`. Pure index
+//! See `specs/core/patch/keypoint-localization-consensus-basis.md`. Pure index
 //! bookkeeping — the caller supplies one rank score per candidate view (higher
 //! is a better match to the point's starting appearance; `NaN` = unscored) and
 //! a per-candidate track flag, and gets back the basis membership mask.

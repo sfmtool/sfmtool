@@ -7,7 +7,7 @@ Covers the ``key=value`` argument grammar (and its error cases) and integration
 runs over the real 17-image seoul_bull reconstruction. The key property is
 **structural invariance**: the op rewrites ``keypoints_xy`` values only — the
 track arrays, observation counts, and point count are byte-identical to the
-input. See specs/cli/xform-refine-keypoints-command.md.
+input. See specs/cli/reconstruction/xform/refine-keypoints-command.md.
 """
 
 from unittest.mock import patch

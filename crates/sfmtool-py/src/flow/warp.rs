@@ -137,7 +137,7 @@ impl PyWarpMap {
     /// each entry is the source-image ``(x, y)`` where that patch pixel projects
     /// (NaN if behind the camera, outside the model domain, or out of bounds).
     /// Then ``remap_bilinear`` / ``remap_aniso`` render the patch's appearance.
-    /// See ``specs/core/patch-cloud.md``.
+    /// See ``specs/core/patch/patch-cloud.md``.
     ///
     /// Args:
     ///     patch: The OrientedPatch in world coordinates.

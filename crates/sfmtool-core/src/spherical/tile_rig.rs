@@ -3,7 +3,7 @@
 
 //! Spherical tile rig: discretizing the sphere as a rig of pinhole tiles.
 //!
-//! See `specs/core/spherical-tiles-rig.md` for design details.
+//! See `specs/core/spherical/spherical-tiles-rig.md` for design details.
 //!
 //! A [`SphericalTileRig`] is a camera rig of `n` pinhole "tile" cameras that
 //! share a single world-space optical centre. Every tile has identical
@@ -494,7 +494,7 @@ impl SphericalTileRig {
     /// Build `R_world_from_tile` for tile `idx`, columns
     /// `[e_right | e_up | −direction]` — the tile's **canonical camera
     /// rotation** (the tile looks down its local −Z with +X right, +Y up;
-    /// see `specs/core/spherical-tiles-rig.md`). The stored basis satisfies
+    /// see `specs/core/spherical/spherical-tiles-rig.md`). The stored basis satisfies
     /// `e_right × e_up = −direction`, so this matrix is a proper rotation
     /// as-built; it is also what `.camrig` serialises (as its transpose,
     /// `sensor_from_rig`).

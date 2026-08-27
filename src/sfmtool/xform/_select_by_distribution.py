@@ -4,7 +4,7 @@
 """Select a small, well-distributed subset of a reconstruction's cameras.
 
 Implements ``sfm xform --include-by-distribution <COUNT>``. See
-``specs/cli/xform-select-by-distribution-command.md`` for the full design.
+``specs/cli/reconstruction/xform/select-by-distribution-command.md`` for the full design.
 
 One greedy loop driven off the reconstructed point cloud:
 

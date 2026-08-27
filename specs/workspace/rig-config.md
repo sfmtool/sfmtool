@@ -273,4 +273,4 @@ For ~180° FOV fisheye rigs (e.g. OPENCV_FISHEYE with k1–k4):
 `rig_config.json` is consumed as an *input* by the solving commands, but
 sfmtool no longer *produces* it. The rig builders (`sfm pano2rig`,
 `sfm insv2rig`, `sfm camrig …`) all emit a `.camrig` file instead — see
-`specs/formats/camrig-file-format.md` and `specs/cli/pano2rig-command.md`.
+`specs/formats/camrig-file-format.md` and `specs/cli/workspace/pano2rig-command.md`.

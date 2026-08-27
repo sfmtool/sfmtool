@@ -3,7 +3,7 @@
 
 //! Scale-space extrema detection and subpixel keypoint localization.
 //!
-//! Stages 3 and 4 of SIFT (`specs/core/sift.md`): the 26-neighbor DoG extrema
+//! Stages 3 and 4 of SIFT (`specs/core/features/sift.md`): the 26-neighbor DoG extrema
 //! test, then the 3D quadratic fit that pins each keypoint's subpixel `(x, y)`
 //! and continuous scale, followed by the contrast and edge-response rejections.
 //!

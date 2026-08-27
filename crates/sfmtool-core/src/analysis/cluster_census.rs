@@ -45,7 +45,7 @@
 //! [`CensusParams::compute_group_consistency`]; off, the report's
 //! `group_consistency` is `None`. See `group_consistency`.
 //!
-//! See `specs/core/cluster-census.md` for the design.
+//! See `specs/core/analysis/cluster-census.md` for the design.
 
 mod group_consistency;
 
@@ -406,7 +406,7 @@ fn require_len(name: &'static str, len: usize, expected: usize) -> Result<(), Ce
 }
 
 /// Score a candidate solve against the raw correspondence evidence it did not
-/// consume. See the module docs and `specs/core/cluster-census.md`.
+/// consume. See the module docs and `specs/core/analysis/cluster-census.md`.
 ///
 /// Observations are the raw `.matches` clusters backbone flattened CSR-style:
 /// `cluster_indexes` must be nondecreasing (each cluster a contiguous run),

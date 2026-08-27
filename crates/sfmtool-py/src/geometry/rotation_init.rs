@@ -3,7 +3,7 @@
 
 //! Binding for the far-field rotation initialization
 //! (``sfmtool._sfmtool.geometry.rotation_init``; see
-//! ``specs/core/rotation-init.md``).
+//! ``specs/core/geometry/rotation-init.md``).
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
@@ -12,7 +12,7 @@ use pyo3::types::PyDict;
 use sfmtool_core::geometry::rotation_init as core_rotation_init;
 
 /// Build an initial multi-camera reconstruction from cluster tracks by
-/// far-field rotation initialization (see ``specs/core/rotation-init.md``).
+/// far-field rotation initialization (see ``specs/core/geometry/rotation-init.md``).
 ///
 /// Parallax-free (far-field) correspondences fix rotations between image
 /// pairs through conjugate homographies ``H = K R K^-1`` (spanning-tree

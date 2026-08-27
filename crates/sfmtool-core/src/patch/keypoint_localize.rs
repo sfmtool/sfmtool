@@ -4,8 +4,8 @@
 //! Patch-keypoint localization by group-wise translation registration
 //! (congealing).
 //!
-//! See `specs/core/patch-keypoint-localization.md` and
-//! `specs/core/keypoint-localization-search-cache.md`. Given one 3D point with
+//! See `specs/core/patch/patch-keypoint-localization.md` and
+//! `specs/core/patch/keypoint-localization-search-cache.md`. Given one 3D point with
 //! its oriented patch, a view set `G`, and a starting keypoint per view,
 //! [`localize_patch_keypoints`] refines each keypoint to sub-pixel and reports
 //! which views it kept. The patch frame is fixed during localization, so each
@@ -86,7 +86,7 @@ const MAX_ANISOTROPY: u32 = 16;
 /// **integer** offset. Because the patch frame is fixed during localization, an
 /// integer in-plane shift is an integer cache-index shift, so a read at an
 /// integer offset is bit-identical to re-warping the patch at that offset (see
-/// `specs/core/keypoint-localization-search-cache.md`).
+/// `specs/core/patch/keypoint-localization-search-cache.md`).
 ///
 /// **Layout (stage 1 of the SIMD search kernel).** The cache is **planar per
 /// channel** in **centered `f32`**: `planes[c][row · istride + col]` holds
@@ -388,7 +388,7 @@ fn parabolic(mid: f64, left: f64, right: f64) -> f64 {
 /// detection and the final reported keypoint but is **never folded back into the
 /// read position**. The patch-grid in-plane offset is `(iacc + residual) / m` —
 /// see [`shifted_center`] / [`finalize`] and
-/// `specs/core/keypoint-localization-search-cache.md`.
+/// `specs/core/patch/keypoint-localization-search-cache.md`.
 struct ViewState {
     /// Image index into the caller's `views` slice.
     idx: u32,
@@ -457,7 +457,7 @@ fn retain_states_and_caches(
 ///
 /// Only consulted when [`KeypointLocalizeParams::basis_max_views`] caps the
 /// point's view set; the default (all fields empty) leaves the uncapped path
-/// untouched. See `specs/core/keypoint-localization-consensus-basis.md`.
+/// untouched. See `specs/core/patch/keypoint-localization-consensus-basis.md`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BasisEvidence<'a> {
     /// Per-view score to the point's starting appearance, parallel to the
@@ -487,7 +487,7 @@ pub struct BasisEvidence<'a> {
 /// have a stored keypoint) with expansion candidates (which do not) is therefore
 /// seeded per view rather than all-or-nothing. Returns the kept views and their
 /// refined keypoints; see [`KeypointLocalization`] and
-/// `specs/core/patch-keypoint-localization.md`.
+/// `specs/core/patch/patch-keypoint-localization.md`.
 ///
 /// Equivalent to [`localize_patch_keypoints_with_basis`] with no basis
 /// evidence — which is what the uncapped path (the default
@@ -510,7 +510,7 @@ pub fn localize_patch_keypoints(
 }
 
 /// [`localize_patch_keypoints`] with the caller's per-view ranking evidence for
-/// the **consensus-basis cap** (`specs/core/keypoint-localization-consensus-basis.md`).
+/// the **consensus-basis cap** (`specs/core/patch/keypoint-localization-consensus-basis.md`).
 ///
 /// With [`KeypointLocalizeParams::basis_max_views`] at `0` — or a
 /// view set no larger than the cap (the default `8`) — this is bit-identical to
@@ -528,7 +528,7 @@ pub fn localize_patch_keypoints_with_basis(
     // Search resolution `R_s = round(m·R)`: the cache, support, and shift grid all
     // build at `R_s`. An integer step in this grid is `1/m` patch-grid px, so the
     // found shift is scaled by `inv_m = 1/m` back to patch-grid px (`m = 1` — the
-    // default — is a no-op). See `specs/core/keypoint-localization-search-cache.md`.
+    // default — is a no-op). See `specs/core/patch/keypoint-localization-search-cache.md`.
     let m = (params.search_resolution_multiplier as f64).max(1e-3);
     let base_res = params.resolution.max(2);
     let resolution = ((m * base_res as f64).round() as u32).max(2);
@@ -909,7 +909,7 @@ pub fn localize_patch_keypoints_with_basis(
     // Phase B — register the tail. One final all-basis consensus template (no
     // holdout: a tail view never contributed to it, so leave-one-out is
     // unnecessary by construction), then one shift search per tail view against
-    // it. See `specs/core/keypoint-localization-consensus-basis.md`.
+    // it. See `specs/core/patch/keypoint-localization-consensus-basis.md`.
     if !tail.is_empty() {
         prof::TAIL_REGISTER.time(|| {
             register_tail(
