@@ -2682,7 +2682,6 @@ fn resecting_an_image_adds_a_derived_node_in_the_source_frame() {
     assert_eq!(derived.transform.scale, inherited.scale);
     assert_eq!(derived.transform.translation, inherited.translation);
     assert_eq!(derived.transform.rotation, inherited.rotation);
-    assert_eq!(derived.resected_from, Some((source, 3)));
     assert!(derived.path.is_none(), "the derived node claims a file");
     // Selection lands on the derived node with the resected image selected in
     // it, so the point track detail opens on it.
@@ -2698,41 +2697,6 @@ fn resecting_an_image_adds_a_derived_node_in_the_source_frame() {
     assert_eq!(
         state.scene[0].recon.images[3].quaternion_wxyz,
         resectable_node("/runs/run_a.sfmr").recon.images[3].quaternion_wxyz
-    );
-}
-
-#[test]
-fn the_resected_image_row_is_marked_in_the_derived_node() {
-    let mut state = resectable_scene();
-    let source = state.scene[0].id;
-    state.resect_image(source, 3, ResectFrom::Observations);
-    let derived = state.scene[1].id;
-    let name = state.scene[1].recon.images[3].name.clone();
-
-    let (mut panel, ctx) = settled(&mut state);
-    set_open(&ctx, row_id(source, "camera_images"), false);
-    set_open(&ctx, row_id(derived, "camera_images"), true);
-    // The image list is virtualized against the previous frame's layout, so the
-    // first pass after expanding it has not measured the viewport yet.
-    for _ in 0..2 {
-        run_frame(&mut panel, &ctx, &mut state, Vec::new());
-    }
-    painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
-    let painted = painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
-
-    assert!(
-        painted
-            .iter()
-            .any(|text| text.contains(&name) && text.contains("(resected)")),
-        "no row carried the resected marker: {painted:?}"
-    );
-    // Only the one image is marked.
-    assert_eq!(
-        painted
-            .iter()
-            .filter(|text| text.contains("(resected)"))
-            .count(),
-        1
     );
 }
 

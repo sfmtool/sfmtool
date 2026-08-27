@@ -753,21 +753,20 @@ impl AppState {
             None => resect::success_message(&basename, &label, &resected.report),
         };
 
-        let mut node = SceneNode::resected(
-            format!("{label} (resected {basename})"),
-            resected.reconstruction,
-            source,
-            image,
-        );
+        let derived_label = format!("{label} (resected {basename})");
+        let mut node = SceneNode::derived(derived_label.clone(), resected.reconstruction);
         // The derived node lands in the source's *displayed* frame, so it sits
         // exactly on top of it and the two can be compared with every existing
         // affordance.
         node.transform = self.scene[index].transform.clone();
         let new_id = node.id;
+        // The derived node's name is its provenance: the same source and image
+        // produce the same name, which is how a repeat finds the node it
+        // replaces.
         match self
             .scene
             .iter()
-            .position(|n| n.resected_from == Some((source, image as u32)))
+            .position(|n| n.path.is_none() && n.label == derived_label)
         {
             // Replaced in place, keeping its position in tree order and its
             // label: this is the same question asked again, not a third answer.

@@ -181,9 +181,9 @@ displacement in its own units and no ratio. On refusal:
   `.matches` file of the matches variant, and, on a `sift_files`
   reconstruction, the `.sift` companions of the images that observe the
   target's points (that is where those observations' 2D coordinates live).
-- The resected image's tree row carries a marker (a suffix in the row text)
-  so the reviewer can tell which image moved after the node has been renamed
-  or re-sorted.
+- The node's name is its provenance in the tree; the resected image is not
+  marked anywhere else (its identity is in the name, and in the
+  reconstruction's metadata).
 
 ---
 
@@ -216,7 +216,7 @@ Explorer (`sfm-explorer` lib tests, headless egui):
 
 - The menu entry appears on image rows only, greys correctly, emits the
   action, and the app creates the derived node with the specified name,
-  transform, selection, and row marker; a repeat replaces the earlier node.
+  transform, and selection; a repeat replaces the earlier node.
 
 ---
 

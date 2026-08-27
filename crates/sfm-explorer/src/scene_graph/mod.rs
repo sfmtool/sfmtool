@@ -17,7 +17,6 @@
 //!         #0  OPENCV_FISHEYE  480×480  f 240.1  26 images
 //!   ▾ 👁 Camera Images (243)
 //!       IMG_0001.jpg              ← virtualized, `ScrollArea::show_rows`
-//!       IMG_0007.jpg  (resected)  ← on a node the Resect Image action made
 //!   ▾ 👁 Points (1,204,551 · 12 at ∞) ∞
 //!       selected: pt3d_a1b2c3_88231   ← selection / hover rows only
 //!     👁 Patches                   ← only when the node carries patch data
@@ -903,7 +902,6 @@ fn show_camera_image_rows(
         return;
     }
     let resect = ResectAvailability::of(node);
-    let resected = node.resected_image();
 
     // Scroll the selected row into view only when the selection moved and it
     // belongs to this node. Driven by an explicit offset rather than
@@ -937,16 +935,7 @@ fn show_camera_image_rows(
             // egui's own, so a hover raised in the 3D viewport or the browser
             // lights this row up too.
             let hovered = ctx.hovered_image == Some(image);
-            // The marker on the image a resection moved. A suffix rather than a
-            // glyph or a colour: it has to survive the node being renamed and
-            // the list being scrolled, and it has to be readable in the one
-            // place the tree puts an image's identity.
-            let label = if resected == Some(index) {
-                format!("{name}  {RESECTED_MARKER}")
-            } else {
-                name.to_string()
-            };
-            let mut text = egui::RichText::new(label);
+            let mut text = egui::RichText::new(name.to_string());
             if hovered && !selected {
                 text = text.color(ui.visuals().strong_text_color());
             }
@@ -977,9 +966,6 @@ fn show_camera_image_rows(
         }
     });
 }
-
-/// What marks the image a resection moved, appended to its row text.
-const RESECTED_MARKER: &str = "(resected)";
 
 /// The image row's context menu: the two `Resect Image` entries.
 ///
