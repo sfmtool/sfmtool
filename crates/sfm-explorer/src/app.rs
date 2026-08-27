@@ -558,7 +558,7 @@ impl App {
         let hover_depth = self.scene_renderer.hover_depth();
         let hover_pick = self.scene_renderer.hover_pick();
 
-        let raw_input = egui_winit_state.take_egui_input(window);
+        let mut raw_input = egui_winit_state.take_egui_input(window);
 
         // Gather gesture events
         #[cfg(target_os = "windows")]
@@ -580,6 +580,28 @@ impl App {
         let handler_ok = self.gesture_handler.is_some();
         #[cfg(not(target_os = "windows"))]
         let handler_ok = false;
+
+        // Hand the DM pan on to egui as a scroll event as well, so the panels
+        // built out of plain `ScrollArea`s scroll under a two-finger gesture —
+        // DM having swallowed the contacts, no wheel event reaches egui by
+        // itself. `ScrollInput` below keeps the DM-driven panels from reading
+        // it a second time.
+        //
+        // The modifiers are the ones this frame's input carries, falling back
+        // to the state egui already holds: `RawInput` has no modifier field,
+        // only the `ModifiersChanged` events that move it.
+        let modifiers = raw_input
+            .events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                egui::Event::ModifiersChanged(modifiers) => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_else(|| self.egui_ctx.input(|i| i.modifiers));
+        raw_input
+            .events
+            .extend(platform::gesture_scroll_events(&gesture_events, modifiers));
 
         let app_state = &mut self.state;
         let viewer_3d = &mut self.viewer_3d;

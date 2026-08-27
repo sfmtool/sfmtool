@@ -382,6 +382,21 @@ For 10K+ cameras, async loading and an LRU texture cache are planned.
 - **DirectManipulation API**: Precision touchpad gesture recognition (pan,
   pinch, inertia). Requires specific initialization order relative to winit.
   See [gui-viewport-navigation.md](gui-viewport-navigation.md#windows-precision-touchpad-support).
+- **Trackpad scroll in `ScrollArea`s**: DM claims the touchpad contacts for the
+  whole window, so Windows never synthesises a `WM_MOUSEWHEEL` for a two-finger
+  scroll and egui's own scroll areas — the scene graph tree and its inner
+  lists, the Intrinsics panel, the Point Track table — would sit still under
+  one. `platform::gesture_scroll_events` converts each frame's DM pan back into
+  a `Point`-unit `Event::MouseWheel` on the raw input, which is what makes them
+  scroll. X is negated on the way through: DM reports a horizontal pan with the
+  opposite sign to the way egui reads a wheel's X, which is why the image strip
+  adds `dx` to its scroll offset where it subtracts a wheel `delta.x` from it.
+  The panels that read DM gestures directly (3D viewport, Image Detail,
+  Image Browser) do not double-handle it: they take wheel input through
+  `platform::ScrollInput`, which suppresses `Point` scroll for exactly the
+  frames DM was active. A pan under Ctrl/Cmd is dropped instead of forwarded,
+  since those frames are already a zoom gesture for the panels that handle DM
+  and egui reads a Ctrl+wheel as a request to zoom the whole UI.
 - **DPI awareness**: `SetProcessDpiAwarenessContext` for per-monitor DPI
 - **Graphics backend**: DirectX 12 via wgpu
 
