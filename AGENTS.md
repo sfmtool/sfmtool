@@ -88,9 +88,11 @@ deleting the lines.
   `conftest.py` of shared helpers, imported as `from .conftest import …`
   (the other subpackages have none). Look for `test_*_rust_bindings.py` modules
   that exercise the PyO3 surface.
-- `specs/` — design specs. Read the relevant file before making non-trivial
-  changes and update it when behavior diverges. Subdirs mirror the code they
-  describe:
+- `specs/` — design specs, indexed by `specs/README.md`. Read the relevant file
+  before making non-trivial changes and update it when behavior diverges. Each
+  area carries a `README.md` index — `cli/` (all commands, by category), each
+  `core/` module subdir, `formats/`, `gui/`, `workspace/`. Add a row there when
+  you add a spec. Subdirs mirror the code they describe:
   - `cli/` — one file per command, grouped by the `--help` category the command
     is registered under in `cli.py` (`workspace/`, `image-feature/`,
     `reconstruction/`, `visualization/`, `image-processing/`,
@@ -100,7 +102,7 @@ deleting the lines.
     (`analysis/`, `camera/`, `features/`, `geometry/`, `patch/`,
     `reconstruction/`, `spherical/`)
   - `formats/` — on-disk formats, one per format crate
-  - `gui/` — `sfm-explorer` design, flat, indexed by `gui/README.md`
+  - `gui/` — `sfm-explorer` design, flat
   - `workspace/` — workspace layout and its config files
 - `test-data/images/` — four checked-in datasets:
   `seoul_bull_sculpture` (17 @ 270×480), `dino_dog_toy` (85 @ 2040×1536),
