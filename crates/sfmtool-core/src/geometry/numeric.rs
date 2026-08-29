@@ -41,6 +41,32 @@ pub(crate) fn polar_rotation(m: &Matrix3<f64>) -> Option<Matrix3<f64>> {
     Some(if p.determinant() < 0.0 { -p } else { p })
 }
 
+/// Nearest rotation to `m` by polar decomposition, **preserving orientation**.
+///
+/// The sibling of [`polar_rotation`], and the choice between them is the sign
+/// convention, not the algorithm — both take `U Vᵀ` from the SVD and differ
+/// only in what they do when that product reflects:
+///
+/// - [`polar_rotation`] negates the whole product, because its callers recover
+///   `R` only up to scale *including sign*, so `M ≈ −R` must come back as `R`.
+/// - this one folds the sign into the last singular direction
+///   (`U · diag(1, 1, det) · Vᵀ`), which is the *proper* projection of `m`
+///   itself. Its caller has a matrix that is already the right rotation to
+///   within accumulated rounding — a Kabsch fit — and wants the nearest
+///   rotation to that, not to its negation.
+///
+/// Returns `m` unchanged when the SVD does not produce both factors.
+pub(crate) fn orthonormalized(m: &Matrix3<f64>) -> Matrix3<f64> {
+    let svd = m.svd(true, true);
+    match (svd.u, svd.v_t) {
+        (Some(u), Some(v_t)) => {
+            let d = (u * v_t).determinant().signum();
+            u * Matrix3::new(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, d) * v_t
+        }
+        _ => *m,
+    }
+}
+
 /// Rotation angle of `r` in radians.
 pub(crate) fn rotation_angle(r: &Matrix3<f64>) -> f64 {
     (((r.trace() - 1.0) / 2.0).clamp(-1.0, 1.0)).acos()

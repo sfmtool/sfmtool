@@ -32,13 +32,16 @@
 
 use std::collections::{HashMap, HashSet};
 
-use nalgebra::{Matrix3, Point3, Quaternion, UnitQuaternion, Vector3};
+use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 
 use matches_format::MatchesData;
 
+use crate::camera::report::angle_between;
 use crate::camera::CameraIntrinsics;
 use crate::geometry::batch_resection::{resect_images_batch, ResectOptions};
 use crate::geometry::focal_vote::column_scan::kabsch;
+use crate::geometry::numeric::orthonormalized;
+use crate::numeric::median_in_place;
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::reconstruction::{
     ObservationSource, ReconstructionError, SfmrImage, SfmrReconstruction,
@@ -1081,7 +1084,12 @@ fn rotation_estimate(
     };
     for _ in 1..ROTATION_TRIM_ROUNDS {
         let mut ranked: Vec<(f64, usize)> = (0..n)
-            .map(|i| (angle_between(&(rotation * world[i]), &rays[i]), i))
+            .map(|i| {
+                (
+                    angle_between((rotation * world[i]).into(), rays[i].into()),
+                    i,
+                )
+            })
             .collect();
         ranked.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         let take = ((n as f64 * ROTATION_KEEP_FRACTION).round() as usize).max(MIN_BEARINGS);
@@ -1095,7 +1103,7 @@ fn rotation_estimate(
 
     let tolerance = INLIER_PX * pixel_angle;
     let inliers = (0..n)
-        .filter(|&i| angle_between(&(rotation * world[i]), &rays[i]) < tolerance)
+        .filter(|&i| angle_between((rotation * world[i]).into(), rays[i].into()) < tolerance)
         .count();
     let inlier_fraction = inliers as f64 / n as f64;
     let accepted = inlier_fraction >= options.resect.accept_gate;
@@ -1134,26 +1142,8 @@ fn bearing_span(bearings: &[Vector3<f64>]) -> f64 {
     let mean = mean / norm;
     bearings
         .iter()
-        .map(|b| angle_between(b, &mean))
+        .map(|b| angle_between((*b).into(), mean.into()))
         .fold(0.0, f64::max)
-}
-
-/// Angle between two vectors that are already unit length.
-fn angle_between(a: &Vector3<f64>, b: &Vector3<f64>) -> f64 {
-    a.dot(b).clamp(-1.0, 1.0).acos()
-}
-
-/// The nearest rotation matrix, so a product of SVD factors is a rotation to
-/// `nalgebra`'s satisfaction rather than to `f64`'s.
-fn orthonormalized(m: &Matrix3<f64>) -> Matrix3<f64> {
-    let svd = m.svd(true, true);
-    match (svd.u, svd.v_t) {
-        (Some(u), Some(v_t)) => {
-            let d = (u * v_t).determinant().signum();
-            u * Matrix3::new(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, d) * v_t
-        }
-        _ => *m,
-    }
 }
 
 /// The capture's own length unit: the median over images of that image's median
@@ -1177,17 +1167,9 @@ fn scene_scale(recon: &SfmrReconstruction) -> Option<f64> {
     let mut medians: Vec<f64> = per_image
         .iter_mut()
         .filter(|d| !d.is_empty())
-        .map(|d| median(d))
+        .map(|d| median_in_place(d))
         .collect();
-    (!medians.is_empty()).then(|| median(&mut medians))
-}
-
-/// The median of a slice, by sorting it in place. Lower of the two middles on an
-/// even count, so the answer is a member of the sample rather than a mean of
-/// two.
-fn median(values: &mut [f64]) -> f64 {
-    values.sort_by(f64::total_cmp);
-    values[(values.len() - 1) / 2]
+    (!medians.is_empty()).then(|| median_in_place(&mut medians))
 }
 
 /// Record what this resection was, in the derived reconstruction's metadata, so

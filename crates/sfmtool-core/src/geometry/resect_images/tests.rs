@@ -16,6 +16,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
+use approx::assert_relative_eq;
 use nalgebra::{Matrix3, Point3, Rotation3, UnitQuaternion, Vector3};
 use ndarray::{Array2, Array4};
 
@@ -958,4 +959,46 @@ fn resects_a_member_of_the_infinity_candidate() {
     }
     assert_eq!(recon.metadata.feature_source, FEATURE_SOURCE_SIFT_FILES);
     assert_eq!(infinity, recon.points.len());
+}
+
+/// [`super::scene_scale`] takes the crate's median, which **averages the two
+/// middle values** on an even population.
+///
+/// Worth pinning rather than assuming, because this module carried its own
+/// `median` until 2026-08-29 and that one returned the *lower* of the two
+/// middles. The two rules agree on every odd population, so nothing in this
+/// file caught the difference; the fixture below is built with an even count
+/// at both levels of the reduction precisely so they cannot agree.
+///
+/// Four points strung along one optical axis, seen by two cameras a unit
+/// apart, so every distance is exact in binary and the expected answer can be
+/// read off the construction:
+///
+/// | | distances | averaging median | lower-middle median |
+/// |---|---|---|---|
+/// | camera A at the origin | 1, 2, 3, 4 | **2.5** | 2 |
+/// | camera B one unit back | 2, 3, 4, 5 | **3.5** | 3 |
+/// | over images | | **3.0** | 2 |
+#[test]
+fn scene_scale_averages_the_two_middles_of_an_even_population() {
+    let images = vec![
+        image_at("frames/a.jpg", Point3::origin(), Point3::new(1.0, 0.0, 0.0)),
+        image_at(
+            "frames/b.jpg",
+            Point3::new(-1.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+        ),
+    ];
+    let positions: Vec<Point3<f64>> = (1..=4).map(|d| Point3::new(d as f64, 0.0, 0.0)).collect();
+    let recon = build(images, positions, false, 800.0);
+    // Every point has to have survived, or the population is not the one the
+    // table above describes.
+    assert_eq!(recon.points.len(), 4);
+
+    let scale = super::scene_scale(&recon).expect("finite structure has a scale");
+    assert_relative_eq!(scale, 3.0, epsilon = 1e-12);
+    assert!(
+        (scale - 2.0).abs() > 0.5,
+        "scene_scale fell back to the lower-middle median: {scale}"
+    );
 }

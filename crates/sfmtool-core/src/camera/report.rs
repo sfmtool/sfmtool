@@ -513,12 +513,16 @@ fn max_distorted_radius(cam: &CameraIntrinsics, theta_deg: f64) -> Option<f64> {
 /// The optical axis in the canonical camera frame.
 const FORWARD: [f64; 3] = [0.0, 0.0, -1.0];
 
-/// Angle in degrees between two direction vectors.
+/// Angle in radians between two direction vectors.
 ///
 /// `atan2(|a × b|, a · b)` rather than `acos` of a normalized dot product: it
 /// needs neither input to be unit-length and stays accurate at both ends of the
-/// range, where `acos` loses most of its significant digits.
-fn angle_between_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
+/// range, where `acos` loses most of its significant digits. That accuracy is
+/// the reason this is the crate's one spelling of the quantity — a caller
+/// comparing the result against a *small* threshold (a per-pixel angle, say)
+/// is exactly the caller `acos` serves worst, and is the one most likely to
+/// reach for the one-line version.
+pub(crate) fn angle_between(a: [f64; 3], b: [f64; 3]) -> f64 {
     let dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     let cross = [
         a[1] * b[2] - a[2] * b[1],
@@ -526,7 +530,12 @@ fn angle_between_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
         a[0] * b[1] - a[1] * b[0],
     ];
     let cross_len = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
-    cross_len.atan2(dot).to_degrees()
+    cross_len.atan2(dot)
+}
+
+/// Angle in degrees between two direction vectors; see [`angle_between`].
+fn angle_between_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
+    angle_between(a, b).to_degrees()
 }
 
 /// Where the camera's family ideal map — the module docs' table — places a

@@ -1046,3 +1046,64 @@ fn distortion_field_samples_carry_their_incidence_angle() {
     // middle of the grid looks straighter ahead than the outermost one does.
     assert!(field[0].theta_deg > field[8 * 3 + 4].theta_deg);
 }
+
+/// [`angle_between`] holds its relative accuracy down to angles far below one
+/// pixel, which is the property that makes it the crate's one spelling of the
+/// quantity.
+///
+/// The alternative — `acos` of a normalized dot product — is what a caller
+/// writes when they reach for the one-liner, and it is worst exactly where the
+/// degeneracy gates live. Near zero, `cos ε ≈ 1 − ε²/2`: at `ε = 1e-8` the dot
+/// product rounds to `1.0` in `f64` and `acos` returns **0**, losing the
+/// measurement entirely. This test pins the accurate form against angles a
+/// resection gate actually compares (`bearing_span` is tested against one
+/// pixel's worth of angle, ~2e-3 rad at f = 500, and refuses below it).
+#[test]
+fn angle_between_is_accurate_far_below_a_pixel() {
+    for &eps in &[1e-3_f64, 1e-5, 1e-8, 1e-11] {
+        // Two unit rays separated by exactly `eps` about the x-axis.
+        let a = [0.0, 0.0, -1.0];
+        let b = [0.0, eps.sin(), -eps.cos()];
+        assert_relative_eq!(angle_between(a, b), eps, max_relative = 1e-9);
+
+        // The naive form collapses well before the accurate one does, so a
+        // caller that swapped them would silently stop measuring.
+        let naive = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
+            .clamp(-1.0, 1.0)
+            .acos();
+        if eps <= 1e-8 {
+            assert!(
+                (naive - eps).abs() > 0.1 * eps,
+                "acos was expected to lose this angle, but returned {naive} for {eps}"
+            );
+        }
+    }
+}
+
+/// Neither input has to be unit length, and the answer does not depend on
+/// either magnitude — the other half of why `atan2(|a × b|, a · b)` is the
+/// form callers get.
+#[test]
+fn angle_between_ignores_input_magnitude() {
+    let a = [0.0, 0.0, -1.0];
+    let b = [0.0, 1.0, -1.0]; // 45° from `a`
+    let expected = PI / 4.0;
+    assert_relative_eq!(angle_between(a, b), expected, epsilon = 1e-12);
+    assert_relative_eq!(
+        angle_between([0.0, 0.0, -1e6], [0.0, 1e-6, -1e-6]),
+        expected,
+        epsilon = 1e-12
+    );
+}
+
+/// Degrees is the radian primitive scaled, with nothing else between them.
+#[test]
+fn angle_between_deg_is_the_radian_form_in_degrees() {
+    let a = [0.3, -0.5, -1.0];
+    let b = [-0.2, 0.1, -1.0];
+    assert_relative_eq!(
+        angle_between_deg(a, b),
+        angle_between(a, b).to_degrees(),
+        epsilon = 1e-15
+    );
+}

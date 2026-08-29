@@ -46,6 +46,45 @@ enforcement behind it.
 
 **`resect_images.rs` reintroduced three primitives the crate already owns, and all
 three disagree with their counterpart**
+> _Status (2026-08-29): **Done.** All three local copies deleted; `resect_images.rs`
+> 1227 → 1209. `median` → `crate::numeric::median_in_place`; `orthonormalized` moved
+> to `geometry/numeric.rs` beside `polar_rotation`, with the sign convention that
+> separates the two written down on both; `angle_between` → a new `pub(crate)`
+> radian primitive in `camera::report`, with the existing `angle_between_deg`
+> reduced to `angle_between(a, b).to_degrees()` so there is one body. The lower-middle
+> rule was **not** preserved: `numeric.rs`'s averaging rule is the crate contract and
+> the spec (`specs/gui/resect-image.md:201`) only says "median", so nothing had to be
+> reconciled._
+>
+> _**The finding understated the angle case, and the new test says by how much.**
+> It called `acos`-of-dot merely less accurate. At ε = 1e-8 rad the dot product
+> rounds to `1.0` in `f64` and `acos` returns **exactly 0** — the measurement is not
+> degraded, it is gone. `camera/report/tests.rs::angle_between_is_accurate_far_below_a_pixel`
+> pins the accurate form to 1e-9 relative across ε = 1e-3 … 1e-11 **and** asserts the
+> naive form collapses, so a future one-liner cannot quietly come back._
+>
+> _Two claims in the finding were checked and are worth correcting. (1) The
+> unguarded-empty `median` was called a latent panic; it is not reachable and never
+> was — both call sites filter empties — so the only live defect was the even-count
+> rule. (2) "Needs the resect tests run either side and any moved threshold
+> understood" anticipated moved numbers. **Nothing moved**: the whole Rust workspace
+> is green at 2,025 tests (`sfmtool-core` lib 1,439, the 16 resect tests among them),
+> the Python suite at 2,215 passed / 1 skipped after `maturin develop --release`
+> (including the 10 `test_resect_images_rust_bindings.py` cases, of which
+> `test_same_input_gives_the_same_answer` is a bit-identical determinism check), and
+> `cargo fmt`, `clippy --workspace --all-targets` and the `pixi run doc` gate are all
+> clean. That is not evidence the change is inert — it is evidence the suite never
+> covered the divergence, which is why both corrected behaviours now have tests that fail under
+> the old rule (`scene_scale_averages_the_two_middles_of_an_even_population` is built
+> with an even population at both levels of the reduction precisely so the two rules
+> cannot agree)._
+>
+> _**Not done: the mechanical guard.** The Top 3 write-up asked for a clippy
+> `disallowed_methods` entry or a grep-based test making `numeric.rs` the only median
+> structurally. Neither fits: clippy cannot see a private local `fn`, and no
+> source-scanning test exists anywhere in this workspace to follow. Left open rather
+> than inventing a mechanism for one finding — but this is the second median
+> regression in six weeks, so it wants a decision rather than a third._
 - Location: `crates/sfmtool-core/src/geometry/resect_images.rs` (1227, new since the
   last snapshot) — `median` **1188**, `angle_between` **1142**, `orthonormalized`
   **1148**
@@ -247,6 +286,19 @@ appeared behind it**
 > _Carried forward from 2026-08-08. Its part (c) (six `median`s → one) landed as
 > `234546b`/#297 on 2026-08-14. Parts (a) and (b) remain, and the count has since
 > gone back **up**._
+>
+> _Status (2026-08-29): **Partially done.** The `resect_images.rs:1188` median is
+> gone (see the resect finding above), taking the count from three back to two.
+> Still open: `sfmtool-py`'s `patches/args.rs:15::np_median`, which uses
+> `partial_cmp().unwrap()` and so **panics on any NaN in the population** — the exact
+> policy `numeric.rs`'s docs were written to end. It is a different crate, so the fix
+> is not a one-line import: `numeric.rs` is `pub(crate)` in `sfmtool-core` and would
+> have to be exported (or the binding's median re-expressed through an existing
+> public entry point). Also still open in full: the **two `pub(crate) mod numeric`**
+> half of this finding — `crate::numeric` and `crate::geometry::numeric` still
+> coexist, and the latter still holds the three `cam_*` camera constructors that are
+> not numeric primitives by any reading. `orthonormalized` was added to it today,
+> which makes it one item longer but no better named._
 - Location: `crates/sfmtool-core/src/numeric.rs` (121) and
   `crates/sfmtool-core/src/geometry/numeric.rs` (112); new copies at
   `geometry/resect_images.rs:1188`, `sfmtool-py/src/patches/args.rs:15`,
