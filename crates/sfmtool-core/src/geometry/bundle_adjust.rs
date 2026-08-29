@@ -78,7 +78,8 @@ pub struct BundleAdjustment {
     /// Unweighted reprojection residual norm of every supplied observation at
     /// the final state; `+∞` where the point is non-finite, behind the
     /// camera, or outside the model domain. All-`∞` signals the degenerate
-    /// exit (fewer than `min_obs` observations survived a trim).
+    /// exit (fewer than `min_obs` observations, finite and direction alike,
+    /// survived a trim).
     pub residual_norms: Vec<f64>,
 }
 
@@ -313,8 +314,8 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// solve at the round's `loss_scale`. Poses and points are refined in place;
 /// the returned [`BundleAdjustment`] carries the focal and the per-observation
 /// residual norms at the final state (`+∞` where invalid — and everywhere,
-/// with the state passed through, when fewer than `min_obs` observations
-/// survive a trim).
+/// with the state passed through, when fewer than `min_obs` observations —
+/// finite and direction alike — survive a trim).
 ///
 /// `point_at_infinity` optionally marks per-point directions: a marked row of
 /// `points` is a world-frame direction (normalized on input and output) whose
@@ -1148,8 +1149,8 @@ fn solve_lm<const CAM_COLS: usize>(
 }
 
 /// The staged loop: direction-aware residuals, trims, re-estimation, and the
-/// finite-survivors-only `min_obs` floor. With an all-`false` `is_dir` every
-/// direction branch is skipped and this is the finite-only solve.
+/// `min_obs` floor over every trim survivor. With an all-`false` `is_dir`
+/// every direction branch is skipped and this is the finite-only solve.
 #[allow(clippy::too_many_arguments)]
 fn bundle_adjust_staged(
     cam: &CameraIntrinsics,
@@ -1284,14 +1285,13 @@ fn bundle_adjust_staged(
             keep[k] = keep[k] && (is_prot(k) || surv[obs_pt[k] as usize] >= min_track);
         }
         let kept: Vec<usize> = (0..n_obs).filter(|&k| keep[k]).collect();
-        // The degenerate floor counts finite-point survivors only: direction
-        // observations constrain no structure depth, so they cannot vouch
-        // for a usable finite solve.
-        let kept_finite = kept
-            .iter()
-            .filter(|&&k| !is_dir[obs_pt[k] as usize])
-            .count();
-        if kept_finite < min_obs {
+        // The degenerate floor counts every trim survivor, finite and
+        // direction alike: the floor asks whether the round retained enough
+        // evidence to solve on, and a direction vouches for the rotations and
+        // the camera model exactly as a finite observation does. Translation
+        // observability is handled separately — an image whose survivors are
+        // all directions has its translation frozen for the round.
+        if kept.len() < min_obs {
             // Degenerate (e.g. a wildly wrong focal): state passes through.
             return BundleAdjustment {
                 focal: f,

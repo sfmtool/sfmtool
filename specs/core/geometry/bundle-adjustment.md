@@ -407,11 +407,15 @@ standard `(1e6, 0)` penalized residual with a zero Jacobian row.
   Jacobian as finite points, and the `opt_f` derivative applies
   unchanged.
 - **Translation observability.** Infinity observations constrain no
-  translation. The `min_obs` degenerate-exit floor counts **finite-point
-  survivors only**, and an image whose surviving observations are all
-  directions has its translation frozen for that round (its rotation
-  still updates); otherwise the reduced camera system would carry a
-  zero-curvature translation block.
+  translation, so an image whose surviving observations are all directions
+  has its translation frozen for that round (its rotation still updates);
+  otherwise the reduced camera system would carry a zero-curvature
+  translation block. The `min_obs` degenerate-exit floor is independent of
+  that and counts **every trim survivor**, finite and direction alike: it
+  measures whether the round retained enough evidence to solve on, and a
+  direction constrains the rotations and the shared camera parameters just
+  as a finite observation does. A directions-only observation set therefore
+  runs at the default floor.
 
 ### Staged-loop semantics
 

@@ -614,9 +614,14 @@ fn unobserved_direction_row_does_not_perturb_finite_results() {
     // The direction machinery must not leak into a finite solve. Appending a
     // marked direction row that no observation references exercises every
     // direction branch's guard — `normalized_dir` on input, the `cp_dir`
-    // lookups, the tangent bases, the frozen-translation scan, the
-    // finite-survivors `min_obs` count — while changing nothing the solve is
-    // allowed to see. Every finite result must come back bit-identical.
+    // lookups, the tangent bases, the frozen-translation scan — while
+    // changing nothing the solve is allowed to see. Every finite result must
+    // come back bit-identical.
+    //
+    // The `min_obs` floor needs no separate finite-only test: it counts every
+    // trim survivor, so on a scene whose `is_dir` is all `false` (or, as here,
+    // marks only an unobserved row) the count is the finite one by
+    // construction, and this bit-identity assertion covers it.
     //
     // Since the finite-only kernel was folded into the staged loop this is
     // the load-bearing guard on that reduction: a direction branch that
@@ -684,8 +689,9 @@ fn direction_observations_fixpoint() {
 #[test]
 fn perturbed_rotations_recover_against_directions() {
     // Directions-only scene: every image observes directions exclusively, so
-    // every translation is frozen and the `min_obs` floor (finite survivors
-    // only) must be lifted for the solve to run at all.
+    // every translation is frozen. Run with the floor lifted entirely
+    // (`min_obs = 0`); `directions_only_scene_runs_at_default_min_obs` is the
+    // same recovery at the default floor.
     let mut s = make_scene(6, 4);
     s.points.clear();
     s.uv.clear();
@@ -728,6 +734,96 @@ fn perturbed_rotations_recover_against_directions() {
         let rel_true = q_true[i] * q_true[0].inverse();
         let ang = rel_est.angle_to(&rel_true);
         assert!(ang < 1e-4, "camera {i} relative rotation err {ang} rad");
+    }
+}
+
+#[test]
+fn directions_only_scene_runs_at_default_min_obs() {
+    // The same recovery as `perturbed_rotations_recover_against_directions`,
+    // at the DEFAULT `min_obs` floor of 12 instead of a lifted one. A
+    // directions-only scene has no finite survivor at all, so the floor has to
+    // count the directions for the solve to run: otherwise the round exits
+    // degenerate and hands back its input with every residual `+∞`.
+    let mut s = make_scene(6, 4);
+    s.points.clear();
+    s.uv.clear();
+    s.obs_img.clear();
+    s.obs_pt.clear();
+    let ids = add_direction_tracks(&mut s, 25, 400, 0.0);
+    let mask = dir_mask(&s, &ids);
+    assert!(
+        s.uv.len() >= 12,
+        "scene has only {} direction observations, below the floor",
+        s.uv.len()
+    );
+    let q_true = s.quats.clone();
+    for i in 0..s.quats.len() {
+        let d = Vector3::new(
+            0.015 * jitter(i, 421),
+            0.015 * jitter(i, 422),
+            0.015 * jitter(i, 423),
+        );
+        s.quats[i] = UnitQuaternion::from_scaled_axis(d) * s.quats[i];
+    }
+    let schedule = [BaSchedule {
+        trim_px: 50.0,
+        loss_scale: 1.0,
+    }];
+    let out = run_masked(&mut s, &mask, false, &schedule, 12);
+    // Not the degenerate exit: the residuals are real numbers, not `+∞`.
+    assert!(
+        out.residual_norms.iter().all(|r| r.is_finite()),
+        "degenerate exit at the default floor on a directions-only scene"
+    );
+    let max_res = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
+    assert!(max_res < 0.01, "max residual {max_res}");
+    // Rotations recover ground truth up to the free global rotation gauge.
+    for i in 1..s.quats.len() {
+        let rel_est = s.quats[i] * s.quats[0].inverse();
+        let rel_true = q_true[i] * q_true[0].inverse();
+        let ang = rel_est.angle_to(&rel_true);
+        assert!(ang < 1e-4, "camera {i} relative rotation err {ang} rad");
+    }
+}
+
+#[test]
+fn directions_carry_a_scene_whose_finite_survivors_are_below_the_floor() {
+    // A mixed scene with too few finite observations to clear `min_obs` on
+    // their own and plenty of directions beside them. The floor counts both,
+    // so the round solves instead of exiting degenerate.
+    let mut s = make_scene(6, 1);
+    let n_finite = s.uv.len();
+    let ids = add_direction_tracks(&mut s, 20, 700, 0.0);
+    let mask = dir_mask(&s, &ids);
+    assert!(
+        n_finite < 12 && s.uv.len() >= 12,
+        "scene is not the intended case: {n_finite} finite of {} total",
+        s.uv.len()
+    );
+    let q_true = s.quats.clone();
+    for i in 1..s.quats.len() {
+        let d = Vector3::new(
+            0.01 * jitter(i, 431),
+            0.01 * jitter(i, 432),
+            0.01 * jitter(i, 433),
+        );
+        s.quats[i] = UnitQuaternion::from_scaled_axis(d) * s.quats[i];
+    }
+    let schedule = [BaSchedule {
+        trim_px: 50.0,
+        loss_scale: 1.0,
+    }];
+    let out = run_masked(&mut s, &mask, false, &schedule, 12);
+    assert!(
+        out.residual_norms.iter().all(|r| r.is_finite()),
+        "degenerate exit with {n_finite} finite and {} total survivors",
+        s.uv.len()
+    );
+    for i in 1..s.quats.len() {
+        let rel_est = s.quats[i] * s.quats[0].inverse();
+        let rel_true = q_true[i] * q_true[0].inverse();
+        let ang = rel_est.angle_to(&rel_true);
+        assert!(ang < 1e-3, "camera {i} relative rotation err {ang} rad");
     }
 }
 
