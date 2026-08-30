@@ -27,6 +27,7 @@ pub mod rigid_transform;
 pub mod rot_quaternion;
 pub mod rotation_init;
 pub mod se3_transform;
+pub mod translation_averaging;
 
 pub use camera_intrinsics::PyCameraIntrinsics;
 pub use rigid_transform::PyRigidTransform;
@@ -54,5 +55,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pose_verification::register(m)?;
     relative_pose::register(m)?;
     resect_images::register(m)?;
+    translation_averaging::register(m)?;
     Ok(())
 }

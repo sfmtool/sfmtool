@@ -635,7 +635,7 @@ fn unit(v: [f64; 3]) -> [f64; 4] {
 
 /// The smallest cosine over every pair of a track's rays, the diagonal
 /// included: a pairwise statistic, read from the rays alone.
-fn smallest_pairwise_cosine(dirs: &[Vector3<f64>]) -> f64 {
+pub(crate) fn smallest_pairwise_cosine(dirs: &[Vector3<f64>]) -> f64 {
     let mut m = f64::INFINITY;
     for (a, x) in dirs.iter().enumerate() {
         for y in &dirs[a..] {

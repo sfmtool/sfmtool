@@ -27,6 +27,7 @@ pub mod rotation;
 pub mod rotation_init;
 pub mod se3_transform;
 pub mod transform;
+pub mod translation_averaging;
 pub mod viewing_angle;
 
 pub use batch_resection::{resect_images_batch, BatchResection, ResectOptions};

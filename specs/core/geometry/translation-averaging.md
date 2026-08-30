@@ -1,6 +1,6 @@
 # Translation Averaging from Pairwise Baselines
 
-**Status:** Specified; implementation target
+**Status:** Implemented in
 `crates/sfmtool-core/src/geometry/translation_averaging.rs`, bound under
 `sfmtool._sfmtool.geometry`.
 
@@ -101,9 +101,10 @@ gauge scale. Per edge the projected baseline length `lambda_ij =
 d_ij . (c_j - c_i)` and the direction residual. A census: `lambda_max`, the
 two smallest eigenvalues relative to it and their ratio (the conditioning of
 the constellation), `n_null`, `n_loose`, `n_free`, `read_off_null`,
-`n_lengths` (edges that stated a length). The solve returns nothing when the
-gauge vector has no component along the answer (the graph states no baseline
-at all).
+`n_lengths` (edges that stated a length) and `solved`. The solve returns
+nothing when the gauge vector has no component along the answer (the graph
+states no baseline at all): `solved` is false, the census still carries what
+the form read, and the per-frame and per-edge arrays are empty.
 
 A negative `lambda_ij` is an edge whose baseline the constellation placed
 backwards; the count and fraction are what a caller reads to judge the graph,
@@ -166,9 +167,11 @@ and does not contain them. Structure in front of the cameras is the one
 physical statement that separates the two.
 
 For every point with two or more observations, the point is solved at the
-current centres by the angular least squares (the closest approach of its
-rays), and each observation's depth along its own ray is read. The reading is
-the parallax-weighted vote
+current centres by the batch triangulation's least-squares midpoint (the
+closest approach of its rays, and the minimum-norm point in the observable
+subspace where those rays are exactly parallel, so no point drops out of the
+vote for being degenerate), and each observation's depth along its own ray is
+read. The reading is the parallax-weighted vote
 
 ```
 angw = sum_points  theta_widest(point) * ( n_front - n_behind )
@@ -201,12 +204,13 @@ Three functions in the geometry module of the bindings, taking NumPy arrays
 and returning NumPy arrays and a census dict:
 
 - `average_translations(edges, directions, weights, lengths=None,
-  length_weights=None, n_frames=..., rounds=...)`: `edges` an `(m, 2)` frame
+  length_weights=None, *, n_frames, rounds=...)`: `edges` an `(m, 2)` frame
   index array, `directions` `(m, 3)` unit rows, `weights` `(m,)`, `lengths`
   `(m,)` with NaN for an edge that states none and `length_weights` `(m,)`.
-  Returns `(centres (n, 3), lambda (m,), residual (m,), census)`, with
-  `centres` empty and the census carrying the reason when the solve returns
-  nothing.
+  `n_frames` is keyword-only and has no default, because nothing in the edges
+  says how many frames the graph addresses. Returns `(centres (n, 3),
+  lambda (m,), residual (m,), census)`, with all three arrays empty and the
+  census's `solved` false when the solve returns nothing.
 - `direction_reading(edges, directions, weights, n_frames)`: the census
   alone.
 - `relative_lengths(edge_of_row, frame_of_row, point_of_row, depth_of_row,
@@ -217,7 +221,8 @@ and returning NumPy arrays and a census dict:
 
 Arrays are accepted in either memory order and returned C-contiguous. The
 binding refuses a direction row that is not unit, an edge index outside
-`n_frames`, and a non-positive depth.
+`n_frames`, an edge joining a frame to itself (its block would land twice on
+one diagonal and once on nothing), and a non-positive depth.
 
 ## Testing
 
@@ -230,9 +235,10 @@ binding refuses a direction row that is not unit, an edge index outside
 - **Loose frame.** A frame attached by one edge with no length is reported
   loose and the remaining constellation is unchanged by its presence.
 - **Reflection.** Negating every centre negates `angw` exactly.
-- **Reweighting.** One edge with a direction perpendicular to the truth is
-  down-weighted to below its base weight and the centres move by less than
-  the edge's own residual would move them at full weight.
+- **Reweighting.** One edge with a direction perpendicular to the truth comes
+  back carrying the graph's largest direction residual, and the rest of the
+  constellation is still recovered. The weights themselves are internal, so
+  what the test reads is the outcome they produce.
 - **Relative lengths.** Two edges sharing tied rows at a known depth ratio
   recover that ratio; an edge with fewer tied rows than the floor returns NaN;
   a graph with no tied rows returns all NaN.
