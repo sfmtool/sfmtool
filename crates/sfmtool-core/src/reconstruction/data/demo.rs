@@ -85,8 +85,16 @@ impl SfmrReconstruction {
         }
 
         // Points: evenly distributed on the unit sphere via Thomson relaxation,
-        // then offset by +1 in z so they sit in front of the camera arc.
-        let sphere = evenly_distributed_sphere_points(num_points, &RelaxConfig::default());
+        // then offset by +1 in z so they sit in front of the camera arc. The
+        // sampling is seeded so the demo is the same reconstruction on every
+        // call: tests built on it reason about particular points.
+        let sphere = evenly_distributed_sphere_points(
+            num_points,
+            &RelaxConfig {
+                seed: Some(0x0d3a_0c1d),
+                ..RelaxConfig::default()
+            },
+        );
         let mut points = Vec::with_capacity(num_points);
         for i in 0..num_points {
             let x = sphere[3 * i] as f64;

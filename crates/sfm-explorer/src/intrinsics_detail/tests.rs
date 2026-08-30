@@ -376,13 +376,23 @@ fn p_is_k_times_s_times_rt_and_not_k_times_rt() {
     );
 
     // And the `S`-less spelling does not: `K · [R|t]` is the plausible-looking
-    // matrix this whole row exists to avoid handing out.
+    // matrix this whole row exists to avoid handing out. `S` mirrors the
+    // camera's x axis, so the naive projection lands at the point's mirror
+    // image about the principal point's column, exactly, for every point.
+    // (A distance bound would let a point near that column slip through.)
     let mut rt = nalgebra::Matrix3x4::zeros();
     rt.fixed_view_mut::<3, 3>(0, 0).copy_from(&pose.rotation);
     rt.fixed_view_mut::<3, 1>(0, 3).copy_from(&pose.translation);
     let naive = camera.intrinsic_matrix() * rt;
     let naive = naive * nalgebra::Vector4::new(world.x, world.y, world.z, 1.0);
-    assert!((naive[0] / naive[2] - u).abs() > 1.0 || (naive[1] / naive[2] - v).abs() > 1.0);
+    let (cx, _) = camera.principal_point();
+    let mirrored_u = 2.0 * cx - u;
+    assert!(
+        (naive[0] / naive[2] - mirrored_u).abs() < 1e-9,
+        "naive u {} vs mirrored {mirrored_u}",
+        naive[0] / naive[2]
+    );
+    assert!((naive[1] / naive[2] - v).abs() < 1e-9);
 }
 
 // ── Extrinsics ──────────────────────────────────────────────────────────
