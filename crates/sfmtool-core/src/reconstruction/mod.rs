@@ -9,6 +9,7 @@ mod edit;
 mod embed;
 pub mod filter;
 pub mod point_correspondence;
+pub mod point_estimation;
 pub mod triangulation;
 
 pub use data::{

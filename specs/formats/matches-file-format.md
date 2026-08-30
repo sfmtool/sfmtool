@@ -840,6 +840,11 @@ defined by the operation. All other metadata — including the timestamp — is
 inherited from the source; the derived file's content hashes are its own,
 computed at write time. The source file is never modified.
 
+When the source was itself an unwritten selection it has no
+`content_xxh128`, and the record carries an optional `source_selection` key
+holding the source's own record, so the chain still names the archive it
+started from. The key is absent whenever the source is an ordinary file.
+
 **Sentinel scoping.** Only in a file carrying the `cluster_selection`
 provenance record may `reference_members[c] = 0xFFFFFFFF` additionally mean
 "the cluster's reference member is not present in this selection": the

@@ -19,10 +19,9 @@ adjustment (specs/core/geometry/bundle-adjustment.md).
 > across the staged rounds). Consequently the far clusters' rows of
 > `points` return as unit world-frame directions, not triangulated
 > positions, and after the adjustment the gauge is renormalized so the
-> seed baseline is unit again. (2) `far_cluster_indexes` is the
-> deduplicated, sorted union over the component's validated edges — the
-> points-at-infinity consumer needs exactly the union, and per-edge lists
-> would need edge identities the output does not otherwise carry. (3) The
+> seed baseline is unit again. (2) The mask is the deduplicated union over
+> the component's validated edges; it is internal to the kernel and is not
+> exported (see the 2026-08-11 status below). (3) The
 > displacement tables are computed in-kernel with the focal vote's full
 > covisible-pair table (mean displacement over all covisible member pairs
 > of each cluster), not the sampled `ClusterCovisibility` tables — same
@@ -30,6 +29,16 @@ adjustment (specs/core/geometry/bundle-adjustment.md).
 > the 25-shared threshold. (4) The growth resection runs with an 8 px trim
 > gate and a 10-survivor floor (candidacy still requires 12 observed
 > triangulated points, per the text)._
+
+> _Status (2026-08-11): `far_cluster_indexes` is no longer part of the
+> output. The far-field mask stays inside the kernel, where it feeds the
+> finishing adjustment's points-at-infinity mask and the gauge
+> renormalization; the far rows of `points` are still unit directions, so
+> a caller that wants to know which clusters those are reads them off
+> `points`. The only consumer of the exported ids was the seed pipeline's
+> far-field admission channel, which was removed after an ablation
+> measured its whole fleet effect at 15 forced points across 3 of 41
+> entries, 14 of which their own observations explain better finite._
 
 ## Purpose
 
@@ -97,10 +106,9 @@ and repeat until no image is added or the core reaches its size budget
 ## Output
 
 Posed-image indices with rotations (WXYZ) and translations, the
-triangulated points (`NaN` where absent), each posed image's surviving
-inlier fraction from the final adjustment, and the per-edge far-field
-cluster ids (callers may feed these to the bundle adjustment's
-points-at-infinity mask).
+triangulated points (`NaN` where absent, and unit world-frame directions
+on the far-field rows the finishing adjustment modeled at infinity), and
+each posed image's surviving inlier fraction from the final adjustment.
 
 ## Binding
 
@@ -109,7 +117,7 @@ rotation_init(cluster_indexes, image_indexes, positions_xy,
               width, height, f0, seed=0,
               min_images=8, max_images=14)
     -> {"image_indexes", "quaternions_wxyz", "translations",
-        "points", "inlier_fractions", "far_cluster_indexes"} | None
+        "points", "inlier_fractions"} | None
 ```
 
 ## Testing requirements

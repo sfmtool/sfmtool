@@ -111,18 +111,15 @@ pub struct RotationInit {
     /// World-to-camera translations, aligned with `image_indexes`. The seed
     /// pair's baseline defines unit scale.
     pub translations: Vec<[f64; 3]>,
-    /// World points indexed by cluster id (`NaN` where absent). Rows listed
-    /// in `far_cluster_indexes` are unit world-frame directions (the final
-    /// adjustment models the far field at infinity); every other finite row
-    /// is a triangulated position.
+    /// World points indexed by cluster id (`NaN` where absent). The far-field
+    /// rows — the clusters a parallax-free conjugate homography explained —
+    /// are unit world-frame directions, because the final adjustment models
+    /// the far field at infinity; every other finite row is a triangulated
+    /// position.
     pub points: Vec<[f64; 3]>,
     /// Per-posed-image fraction of its observations surviving the final
     /// adjustment's last trim gate, aligned with `image_indexes`.
     pub inlier_fractions: Vec<f64>,
-    /// Far-field cluster ids: the union of the component edges' H-inlier
-    /// clusters, sorted ascending (callers may feed these to the bundle
-    /// adjustment's points-at-infinity mask).
-    pub far_cluster_indexes: Vec<u32>,
 }
 
 /// One validated rotation edge: the canonical relative rotation
@@ -762,8 +759,8 @@ pub fn rotation_init(
         }
     }
 
-    // Far-field cluster ids: union over the component's validated edges.
-    // They double as the finishing adjustment's points-at-infinity mask —
+    // Far-field clusters: union over the component's validated edges, and the
+    // finishing adjustment's points-at-infinity mask —
     // left finite, a dominant far cloud rewards baseline collapse (the LM
     // walks the scale gauge until the near field crosses the trim depth
     // floor and the core degenerates to a panorama).
@@ -873,17 +870,12 @@ pub fn rotation_init(
         })
         .collect();
 
-    let far_cluster_indexes: Vec<u32> = (0..n_pts as u32)
-        .filter(|&c| far_mask[c as usize])
-        .collect();
-
     Some(RotationInit {
         image_indexes: image_indexes_out,
         quaternions_wxyz,
         translations,
         points,
         inlier_fractions,
-        far_cluster_indexes,
     })
 }
 

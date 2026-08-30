@@ -237,18 +237,27 @@ fn far_field_scene_recovers_rotations_sub_degree() {
     let max_err = errs.iter().cloned().fold(0.0, f64::max);
     assert!(max_err < 1.0, "rotation errors (deg): {errs:?}");
 
-    // Far-field clusters flagged for the caller's points-at-infinity mask are
-    // overwhelmingly from the far cloud.
-    assert!(!out.far_cluster_indexes.is_empty());
-    let far_hits = out
-        .far_cluster_indexes
+    // The clusters the finishing adjustment modelled at infinity come back as
+    // unit directions, and they are overwhelmingly from the far cloud.
+    let at_infinity: Vec<u32> = out
+        .points
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| {
+            p[0].is_finite()
+                && ((p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() - 1.0).abs() < 1e-9
+        })
+        .map(|(c, _)| c as u32)
+        .collect();
+    assert!(!at_infinity.is_empty());
+    let far_hits = at_infinity
         .iter()
         .filter(|&&c| c >= scene.far_cid_start)
         .count();
     assert!(
-        far_hits * 10 >= out.far_cluster_indexes.len() * 8,
-        "far ids should be dominated by the far cloud: {far_hits}/{}",
-        out.far_cluster_indexes.len()
+        far_hits * 10 >= at_infinity.len() * 8,
+        "direction rows should be dominated by the far cloud: {far_hits}/{}",
+        at_infinity.len()
     );
 }
 
@@ -466,7 +475,6 @@ fn determinism_same_seed() {
     let a = run(&scene, 42, 8, 14).expect("run a");
     let b = run(&scene, 42, 8, 14).expect("run b");
     assert_eq!(a.image_indexes, b.image_indexes);
-    assert_eq!(a.far_cluster_indexes, b.far_cluster_indexes);
     let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
     for (qa, qb) in a.quaternions_wxyz.iter().zip(&b.quaternions_wxyz) {
         assert_eq!(bits(qa), bits(qb));

@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 
 pub mod absolute_pose;
 pub mod affine_factorization;
+pub mod baseline_direction;
 pub mod bundle_adjust;
 pub mod camera_intrinsics;
 pub mod convention;
@@ -48,6 +49,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     resect_translation::register(m)?;
     rotation_init::register(m)?;
     bundle_adjust::register(m)?;
+    baseline_direction::register(m)?;
     reconstruction_growth::register(m)?;
     pose_verification::register(m)?;
     relative_pose::register(m)?;

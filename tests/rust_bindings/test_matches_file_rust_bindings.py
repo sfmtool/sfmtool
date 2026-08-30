@@ -162,6 +162,56 @@ def test_select_clusters_restriction_and_save(matches_path, tmp_path):
     npt.assert_array_equal(reread.reference_members, sel.reference_members)
 
 
+def test_select_clusters_restrict_cluster_ids(matches_path, tmp_path):
+    mf = MatchesFile(matches_path)
+
+    # Cluster-id restriction: only source cluster 2 is requested (cluster 1 is
+    # dropped at the source anyway, being unrefinable).  The image table is
+    # untouched — the id axis does not shape it.
+    sel = mf.select_clusters(min_span=2, restrict_cluster_ids=[2])
+    assert sel.image_names == mf.image_names
+    npt.assert_array_equal(sel.cluster_starts, [0, 3])
+    npt.assert_array_equal(sel.member_images, [2, 3, 0])
+    npt.assert_array_equal(sel.member_features, [11, 12, 13])
+    npt.assert_array_equal(sel.reference_members, [0])
+    provenance = sel.metadata["matching_options"]["cluster_selection"]
+    assert provenance["restrict_cluster_ids"] == [2]
+
+    # Composition with the image axis: each applies its own.
+    both = mf.select_clusters(
+        min_span=2,
+        restrict_images=mf.image_names[1:],
+        restrict_cluster_ids=[0, 2],
+    )
+    npt.assert_array_equal(both.cluster_starts, [0, 2, 4])
+    npt.assert_array_equal(both.member_images, [0, 1, 1, 2])
+    npt.assert_array_equal(both.reference_members, [UNREFINABLE, 2])
+    assert both.image_names == mf.image_names[1:]
+
+    # Requesting every id changes nothing but the provenance key, and a
+    # selection that does not request the axis writes the same bytes as before
+    # the option existed (the key is simply absent).
+    all_ids = mf.select_clusters(min_span=2, restrict_cluster_ids=[0, 1, 2])
+    plain = mf.select_clusters(min_span=2)
+    npt.assert_array_equal(all_ids.cluster_starts, plain.cluster_starts)
+    npt.assert_array_equal(all_ids.member_features, plain.member_features)
+    assert (
+        "restrict_cluster_ids"
+        not in (plain.metadata["matching_options"]["cluster_selection"])
+    )
+    a, b = tmp_path / "plain.matches", tmp_path / "none.matches"
+    plain.save(a)
+    mf.select_clusters(min_span=2, restrict_cluster_ids=None).save(b)
+    assert a.read_bytes() == b.read_bytes()
+
+    # A saved id-restricted selection verifies and re-reads.
+    out = tmp_path / "restricted.matches"
+    sel.save(out)
+    valid, errors = verify_matches(out)
+    assert valid, errors
+    npt.assert_array_equal(MatchesFile(out).member_features, sel.member_features)
+
+
 def test_select_clusters_errors(matches_path):
     mf = MatchesFile(matches_path)
     with pytest.raises(ValueError, match="min_span"):
@@ -170,6 +220,9 @@ def test_select_clusters_errors(matches_path):
         mf.select_clusters(restrict_images=["frames/nope.jpg"])
     with pytest.raises(ValueError, match="ClusterMemberStatus"):
         mf.select_clusters(accepted_statuses=["bogus"])
+    # The file has 3 clusters, so id 3 names none of them.
+    with pytest.raises(ValueError, match="restrict_cluster_ids id 3"):
+        mf.select_clusters(restrict_cluster_ids=[3])
     # Statuses accept ints and names interchangeably.
     by_int = mf.select_clusters(accepted_statuses=[0, 1])
     by_name = mf.select_clusters(accepted_statuses=["reference", "kept"])

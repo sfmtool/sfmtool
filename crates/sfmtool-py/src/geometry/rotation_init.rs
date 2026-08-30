@@ -41,13 +41,11 @@ use sfmtool_core::geometry::rotation_init as core_rotation_init;
 /// Returns:
 ///     A dict ``{"image_indexes" (n_posed,) uint32, "quaternions_wxyz"
 ///     (n_posed, 4), "translations" (n_posed, 3), "points" (n_clusters, 3)
-///     with NaN where absent, "inlier_fractions" (n_posed,),
-///     "far_cluster_indexes" (m,) uint32}``, or ``None`` when no rotation
-///     edge validates, the component is too small, or the seed fails its
-///     cheirality floor. Rows of ``points`` listed in
-///     ``far_cluster_indexes`` are unit world-frame directions (usable as
-///     ``bundle_adjust``'s ``point_at_infinity`` rows); other finite rows
-///     are triangulated positions.
+///     with NaN where absent, "inlier_fractions" (n_posed,)}``, or ``None``
+///     when no rotation edge validates, the component is too small, or the
+///     seed fails its cheirality floor. The far-field rows of ``points`` are
+///     unit world-frame directions (the finishing adjustment models them at
+///     infinity); other finite rows are triangulated positions.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, width, height, f0, *, seed=0, min_images=8, max_images=14))]
@@ -120,10 +118,6 @@ pub fn rotation_init<'py>(
     d.set_item(
         "inlier_fractions",
         PyArray1::from_vec(py, out.inlier_fractions),
-    )?;
-    d.set_item(
-        "far_cluster_indexes",
-        PyArray1::from_vec(py, out.far_cluster_indexes),
     )?;
     Ok(Some(d))
 }

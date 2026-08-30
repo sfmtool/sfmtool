@@ -300,25 +300,33 @@ impl PyMatchesFile {
     /// whose reference fell outside the restriction records the
     /// `0xFFFFFFFF` sentinel ("reference not present in this selection").
     ///
+    /// A cluster-id restriction drops every cluster whose id in THIS file is
+    /// not requested; it composes with `restrict_images` and leaves the image
+    /// table untouched on its own.
+    ///
     /// Args:
     ///     min_span: Minimum distinct selected images per cluster (>= 2,
     ///         default 2).
     ///     restrict_images: Optional collection of image NAMES; every name
     ///         must exist in this file.
+    ///     restrict_cluster_ids: Optional sequence of cluster ids of THIS
+    ///         file (its source ids); every id must be in range.
     ///     accepted_statuses: Optional member statuses to keep, as ints
     ///         (0..=6) or names ("reference", "kept", ...). Default:
     ///         reference + kept. Ignored when the file has no
     ///         cluster_patches/ section.
-    #[pyo3(signature = (min_span=2, restrict_images=None, accepted_statuses=None))]
+    #[pyo3(signature = (min_span=2, restrict_images=None, restrict_cluster_ids=None, accepted_statuses=None))]
     fn select_clusters(
         &self,
         min_span: u32,
         restrict_images: Option<Vec<String>>,
+        restrict_cluster_ids: Option<Vec<u32>>,
         accepted_statuses: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<Self> {
         let mut opts = ClusterSelect {
             min_span,
             restrict_images,
+            restrict_cluster_ids,
             ..ClusterSelect::default()
         };
         if let Some(items) = accepted_statuses {

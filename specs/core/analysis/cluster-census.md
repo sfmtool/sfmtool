@@ -6,7 +6,9 @@ the per-pair stats, and `sat_pct` are native and at parity with the Python
 prototype (`scripts/seed_census.py`). The group-consistency companion
 (§ [Group consistency](#companion-group-consistency)) is behind the opt-in
 `compute_group_consistency`; unset, `CensusReport.group_consistency` is
-`None`. The `census_echo` seed confidence flag is not wired up yet._
+`None`. The `census_echo` seed confidence flag is wired into the seed
+finalization (`exp_pinhole_bootstrap._finalize_seed`) on the score alone; the
+coherence conjunct of the flag rule (§ [Callers](#callers)) is not applied._
 
 ## Problem
 
@@ -274,7 +276,7 @@ The candidate's intrinsics enter as a full camera model, not a bare focal, so
 the operation applies to any model the projection supports; the arbitration
 callers pass a shared pinhole.
 
-## Callers
+## <a name="callers"></a>Callers
 
 - **Finalization focal arbitration** (`_finalize_seed`): score each candidate
   BA result; keep the lower-scoring candidate, ties to the vote.
@@ -282,6 +284,18 @@ callers pass a shared pinhole.
   when `score ≥ flag_threshold` (and, with § 6 enabled, explained fraction ≥
   a coherence threshold to suppress junk-evidence flags). The flag reports the
   failure axis the focal flags cannot see: correct focal, wrong placement.
+  It is scored on the **accepted** candidate — the census of the solve that
+  ships, not of the candidates the arbitration compared. `n_groups < 2` is
+  unverifiable rather than clean, so the flag requires two or more viewpoint
+  groups outright instead of relying on the vacuous score to sit under the
+  threshold. The flag is
+  metadata: it lands in the seed's `confidence_flags` in the artifact's
+  `tool_options`, and the finalization ships the same reconstruction either
+  way. The coherence conjunct is **not applied**: the threshold it needs has no
+  calibrated value — live finalizations report explained fractions spread
+  through the gap between the prototype's junk band (0–5 %) and its genuine
+  misregistrations (49–97 %), so any bar drawn in that gap suppresses flags on
+  captures the score condemns.
 - **Fleet / analysis tooling**: per-solve echo screening over a workspace.
 
 ## Parameters

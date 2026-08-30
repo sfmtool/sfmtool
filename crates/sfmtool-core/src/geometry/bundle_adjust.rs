@@ -17,7 +17,7 @@
 //! coefficients), with analytic Jacobians; points are eliminated by a Schur
 //! complement and the dense reduced camera system is solved by LU.
 
-use nalgebra::{DMatrix, DVector, Matrix3, Point3, SMatrix, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{DMatrix, DVector, Matrix3, SMatrix, UnitQuaternion, Vector2, Vector3};
 
 use crate::camera::distortion::bspline::{
     basis_at, bspline_is_monotone, BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
@@ -25,7 +25,9 @@ use crate::camera::distortion::bspline::{
 use crate::camera::intrinsics::SplineRadial;
 use crate::camera::{CameraModel, PixelJacobian};
 use crate::geometry::numeric::{cam_with, cam_with_bspline};
-use crate::reconstruction::triangulation::triangulate_batch;
+use crate::reconstruction::point_estimation::{
+    estimate_points_from_observations, FewObservations, ObservationSet, PointRules,
+};
 use crate::CameraIntrinsics;
 
 /// A point behind the camera / outside the model domain contributes this pixel
@@ -495,13 +497,22 @@ fn residual_norms_depths(
     (norms, depths)
 }
 
-/// Re-estimation (rounds after the first): finite points rebuild from all
-/// supplied observations at the current poses by ray-midpoint batch
-/// triangulation; direction points re-estimate in closed form as the
-/// normalized mean of their observations' back-rotated rays
-/// `R_iᵀ · pixel_to_ray(uv)`. Tracks with fewer than two observations — and
-/// points with none — become `NaN`; callers refill from their full
-/// observation set (the bootstrap's post-BA refill rule).
+/// Re-estimation (rounds after the first): the shared point-estimation
+/// operation ([`crate::reconstruction::point_estimation`]) at the round's
+/// geometry with the adjustment's settings. `marks` is on with the round's
+/// direction mask, `few` is `absent`, and the floor, cheirality and bar rules
+/// are off. A finite track rebuilds from all supplied observations by
+/// ray-midpoint batch triangulation; a direction track re-estimates in closed
+/// form as the normalized mean of its observations' back-rotated rays
+/// `R_iᵀ · pixel_to_ray(uv)`. Tracks with fewer than two usable observations,
+/// and points with none, become `NaN`; callers refill from their full
+/// observation set (the bootstrap's post-BA refill rule). The adjustment's
+/// trim, not the operation, decides what a point behind a camera means, which
+/// is why cheirality stays off.
+///
+/// The operation builds its CSR grouping with a **stable** sort, so a track's
+/// observations accumulate in the order the caller listed them and the result
+/// is defined by the input order rather than by a sort's tie-breaking.
 #[allow(clippy::too_many_arguments)]
 fn reestimate_points(
     cam: &CameraIntrinsics,
@@ -513,60 +524,32 @@ fn reestimate_points(
     obs_img: &[u32],
     obs_pt: &[u32],
 ) {
-    let n_obs = obs_img.len();
-    let mut order: Vec<u32> = (0..n_obs as u32).collect();
-    order.sort_unstable_by_key(|&k| obs_pt[k as usize]);
-
-    // Direction means accumulate directly; finite tracks feed the batch
-    // triangulation.
-    let mut dir_sum: Vec<(usize, Vector3<f64>, usize)> = Vec::new();
-    let mut dirs = Vec::new();
-    let mut centers = Vec::new();
-    let mut offsets = Vec::new();
-    let mut track_pt = Vec::new();
-    let mut prev: Option<u32> = None;
-    for &k in &order {
-        let k = k as usize;
-        let p = obs_pt[k];
-        let pu = p as usize;
-        if prev != Some(p) {
-            if is_dir[pu] {
-                dir_sum.push((pu, Vector3::zeros(), 0));
-            } else {
-                offsets.push(dirs.len());
-                track_pt.push(pu);
-            }
-            prev = Some(p);
-        }
-        let i = obs_img[k] as usize;
-        let r_inv = quats[i].inverse();
-        let d = cam.pixel_to_ray(uv[k][0], uv[k][1]);
-        let world_ray = r_inv * Vector3::new(d[0], d[1], d[2]);
-        if is_dir[pu] {
-            let last = dir_sum.last_mut().unwrap();
-            last.1 += world_ray;
-            last.2 += 1;
-        } else {
-            dirs.push(world_ray);
-            centers.push(Point3::from(-(r_inv * trans[i])));
-        }
+    let mut quats_wxyz = Vec::with_capacity(quats.len() * 4);
+    for q in quats {
+        quats_wxyz.extend_from_slice(&[q.w, q.i, q.j, q.k]);
     }
-    offsets.push(dirs.len());
-
-    for p in points.iter_mut() {
-        *p = [f64::NAN; 3];
+    let mut translations = Vec::with_capacity(trans.len() * 3);
+    for t in trans {
+        translations.extend_from_slice(&[t.x, t.y, t.z]);
     }
-    let tris = triangulate_batch(&dirs, &centers, &offsets);
-    for (t, tri) in tris.iter().enumerate() {
-        if offsets[t + 1] - offsets[t] >= 2 {
-            points[track_pt[t]] = [tri.point.x, tri.point.y, tri.point.z];
-        }
-    }
-    for &(p, sum, count) in &dir_sum {
-        if count >= 2 {
-            let mean = sum / count as f64;
-            points[p] = normalized_dir([mean.x, mean.y, mean.z]);
-        }
+    let est = estimate_points_from_observations(
+        cam,
+        ObservationSet {
+            uv: uv.as_flattened(),
+            obs_image: obs_img,
+            obs_point: obs_pt,
+            quats_wxyz: &quats_wxyz,
+            translations: &translations,
+            n_tracks: points.len(),
+        },
+        Some(is_dir),
+        PointRules {
+            few: FewObservations::Absent,
+            ..Default::default()
+        },
+    );
+    for (p, e) in points.iter_mut().zip(&est.xyzw) {
+        *p = [e[0], e[1], e[2]];
     }
 }
 

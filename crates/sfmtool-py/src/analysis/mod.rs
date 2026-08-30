@@ -5,7 +5,8 @@
 //! RANSAC alignment, point correspondence, batch triangulation, epipolar curves,
 //! image-pair graph construction, image-space observation adjacency and the
 //! surfel normals fitted over it, per-image observation coverage grids, and the
-//! cluster match census.
+//! cluster match census, and the join that names the selection clusters a
+//! member left behind.
 
 use pyo3::prelude::*;
 
@@ -16,6 +17,7 @@ pub mod epipolar;
 pub mod image_pair_graph;
 pub mod observation_adjacency;
 pub mod observation_coverage;
+pub mod source_clusters;
 pub mod triangulation;
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -25,6 +27,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     image_pair_graph::register(m)?;
     observation_adjacency::register(m)?;
     observation_coverage::register(m)?;
+    source_clusters::register(m)?;
     adjacency_surfel_normals::register(m)?;
     cluster_census::register(m)?;
     Ok(())
