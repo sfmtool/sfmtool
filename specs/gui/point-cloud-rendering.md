@@ -22,7 +22,7 @@ scene: target indicator size, extent of the target light echoes, frustum stub de
 falloff distances, and fly-mode movement speed.
 
 Currently, `length_scale` is auto-computed from the point cloud as a multiple
-of the median nearest-neighbor distance (the same value used for auto point
+of the trimmed median nearest-neighbor distance (same value as auto point
 sizing). This is a rough approximation — it doesn't adapt as you navigate to
 different parts of the scene, and can be off significantly when point
 density varies across the reconstruction.
@@ -58,10 +58,25 @@ the points-at-infinity flag (see [Points at Infinity](#points-at-infinity)).
 
 Point size is determined by two factors:
 
-1. **Auto-size from data**: On point cloud upload, the median nearest-neighbor
-   distance is computed from a random subsample of up to 10,000 points (using
-   a KD-tree). This provides a base `point_size` that adapts to the
-   reconstruction's scale.
+1. **Auto-size from data**: On point cloud upload, a nearest-neighbor distance
+   is collected for each of a seeded random subsample of up to 10,000 finite
+   points (using a KD-tree). The base `point_size` is 1.1 times the *trimmed
+   median* of those distances, which adapts to the spacing of the
+   reconstruction's coherent structure rather than to the whole cloud:
+
+   - Take the median of the distance set.
+   - Drop every distance above 2x that median. Such a point is isolated by the
+     cloud's own scale, not by any distance fixed in scene units.
+   - Take the median of what is left and repeat, stopping at the first pass
+     that drops nothing, or after 8 passes.
+
+   A cloud carries a scattered sub-population beside its surfaces
+   (mis-triangulated points strung out along rays through empty space, for
+   one). Those distances form a broad upper tail that pulls the plain median
+   several-fold above the spacing of the dense structure, and splats sized off
+   it swell until the surfaces vanish underneath. Each pass cuts only from
+   above, so the medians are non-increasing and settle in a handful of passes;
+   on a tight distribution nothing exceeds the bar and the trim is a no-op.
 
 2. **User adjustment**: A log2-scale slider (`point_size_log2`, range -3 to +3)
    multiplies the base size. This gives intuitive control — each slider step
@@ -443,7 +458,7 @@ transform.
 
 - [x] GPU point splat rendering (billboard quads, instanced)
 - [x] Per-point RGB color
-- [x] Auto point sizing from median nearest-neighbor distance
+- [x] Auto point sizing from the trimmed median nearest-neighbor distance
 - [x] User-adjustable point size (log2 slider)
 - [x] EDL post-processing (8-neighbor, two-radius sampling)
 - [x] EDL line thickness plumbed through `AppState` to the shader uniforms,

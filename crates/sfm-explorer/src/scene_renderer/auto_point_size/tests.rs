@@ -228,3 +228,130 @@ fn test_grid_step_power_of_10() {
         );
     }
 }
+
+/// A cubic grid of `side^3` points spaced `spacing` apart: every point's
+/// nearest neighbor is exactly `spacing` away.
+fn make_grid(side: usize, spacing: f64) -> Vec<Point3D> {
+    let mut points = Vec::with_capacity(side * side * side);
+    for i in 0..side {
+        for j in 0..side {
+            for k in 0..side {
+                points.push(make_point(
+                    i as f64 * spacing,
+                    j as f64 * spacing,
+                    k as f64 * spacing,
+                ));
+            }
+        }
+    }
+    points
+}
+
+#[test]
+fn test_auto_point_size_clean_grid() {
+    // Every NN distance is the grid spacing, so nothing sits above the
+    // isolation bar and the trim is a no-op: the size is SPLAT_RADIUS_FACTOR
+    // times the spacing.
+    let points = make_grid(6, 2.0);
+    let size = compute_auto_point_size(&points);
+    assert!((size - 2.2).abs() < 1e-4, "size={size}");
+}
+
+#[test]
+fn test_auto_point_size_ignores_scattered_population() {
+    // The motivating case: a dense grid plus a scattered sub-population whose
+    // own spacing runs over two orders of magnitude (points strung out along
+    // rays through empty space). The scattered points are the majority here,
+    // so the plain median lands inside them, several times the grid spacing.
+    let grid = make_grid(6, 2.0);
+    let clean = compute_auto_point_size(&grid);
+
+    let mut points = grid;
+    let mut x = 1000.0_f64;
+    let mut gap = 4.0_f64;
+    for _ in 0..300 {
+        points.push(make_point(x, 0.0, 0.0));
+        x += gap;
+        gap *= 1.02;
+    }
+
+    // What the plain median of the same distance set would have produced.
+    let mut nn: Vec<f32> = vec![2.0; 216];
+    let mut g = 4.0_f32;
+    for _ in 0..300 {
+        nn.push(g);
+        g *= 1.02;
+    }
+    nn.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let plain_median_size = nn[nn.len() / 2] * SPLAT_RADIUS_FACTOR;
+    assert!(
+        plain_median_size > 3.0 * clean,
+        "the scattered population must inflate the plain median for this test \
+         to mean anything: plain={plain_median_size}, clean={clean}"
+    );
+
+    let size = compute_auto_point_size(&points);
+    assert!(
+        (size - clean).abs() < 1e-5,
+        "the scattered population moved the size: {size} vs {clean} (plain \
+         median would give {plain_median_size})"
+    );
+}
+
+#[test]
+fn test_trimmed_median_no_op_on_tight_distribution() {
+    let tight: Vec<f32> = (0..101).map(|i| 1.0 + i as f32 * 0.001).collect();
+    let m = iteratively_trimmed_median(&tight);
+    assert!((m - tight[50]).abs() < 1e-6, "m={m}");
+}
+
+#[test]
+fn test_trimmed_median_reaches_a_stable_fixpoint() {
+    // A dense block plus a broadly spread tail, the shape the trim exists for.
+    let mut distances: Vec<f32> = vec![2.0; 216];
+    let mut g = 4.0_f32;
+    for _ in 0..300 {
+        distances.push(g);
+        g *= 1.02;
+    }
+    distances.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let m = iteratively_trimmed_median(&distances);
+    assert!(
+        (m - 2.0).abs() < 1e-6,
+        "trim did not reach the dense block: {m}"
+    );
+
+    // Re-running the trim on the set it converged to changes nothing.
+    let kept: Vec<f32> = distances
+        .iter()
+        .copied()
+        .filter(|&d| d <= m * NN_ISOLATION_FACTOR)
+        .collect();
+    assert!(kept.len() < distances.len(), "nothing was trimmed at all");
+    let m2 = iteratively_trimmed_median(&kept);
+    assert_eq!(m, m2, "the fixpoint moved on a second application");
+}
+
+#[test]
+fn test_auto_point_size_fallback_on_degenerate_input() {
+    assert_eq!(compute_auto_point_size(&[]), FALLBACK_POINT_SIZE);
+    assert_eq!(
+        compute_auto_point_size(&[make_point(1.0, 2.0, 3.0)]),
+        FALLBACK_POINT_SIZE
+    );
+    // Coincident points yield only zero NN distances, which are discarded.
+    assert_eq!(
+        compute_auto_point_size(&[make_point(1.0, 2.0, 3.0), make_point(1.0, 2.0, 3.0)]),
+        FALLBACK_POINT_SIZE
+    );
+    // Points at infinity are excluded before the count check.
+    assert_eq!(
+        compute_auto_point_size(&[
+            make_infinity_point(1.0, 0.0, 0.0),
+            make_infinity_point(0.0, 1.0, 0.0),
+            make_point(1.0, 2.0, 3.0),
+        ]),
+        FALLBACK_POINT_SIZE
+    );
+}
