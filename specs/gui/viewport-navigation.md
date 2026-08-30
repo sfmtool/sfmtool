@@ -792,6 +792,14 @@ panel panning the Image Detail image beside it. The same rule covers the button
 state: a contact resting on the pad sets `POINTER_FLAG_FIRSTBUTTON`, which is
 not a mouse button being held.
 
+The other half of the rule is that the rect a panel tests must be the panel's
+own. `ui.available_rect_before_wrap()` is only that if nothing drawn above it in
+the same `Ui` has overflowed, since egui grows a `Ui`'s `max_rect` to include a
+widget that did — see
+[multi-panel-image-browser.md](multi-panel-image-browser.md#the-toolbar-may-not-widen-the-panel),
+where the Image Detail overlay toolbar overflowing a narrow dock cell handed
+that panel gestures aimed at the one beside it.
+
 `platform::windows::mouse_buttons_from` is the single decision point. It returns
 `None` for a non-mouse pointer, and both statics — the button mask and the
 cursor position — are written only when it returns `Some`. The one thing a

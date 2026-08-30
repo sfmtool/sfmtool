@@ -19,6 +19,9 @@ use crate::scene_graph::{SceneGraphPanel, SceneGraphResponse};
 use crate::state::{AppState, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode};
 use crate::viewer_3d::Viewer3D;
 
+#[cfg(test)]
+mod tests;
+
 /// Tabs that can appear in the dock area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Tab {
@@ -602,6 +605,37 @@ impl TabContext<'_> {
 /// gear, which are always shown because that layer composes with every mode
 /// including `None`.
 fn show_overlay_toolbar(
+    ui: &mut egui::Ui,
+    settings: &mut FeatureDisplaySettings,
+    intrinsics: &mut IntrinsicsDisplaySettings,
+    detail: &mut ImageDetail,
+    camera: Option<(CameraRef, &sfmtool_core::camera::CameraIntrinsics)>,
+) {
+    // One unwrapped row of controls, so in a narrow dock cell it is wider than
+    // the panel — and egui grows a `Ui`'s `max_rect` to include any widget that
+    // overflowed it (`Placer::advance_after_rects`). Left to do that, the
+    // toolbar would leave the `available_rect_before_wrap` that
+    // `ImageDetail::show` reads below reporting a panel that reaches into the
+    // *neighbouring* dock cell: the image would be laid out in the wrong
+    // rectangle, and — since that same rect decides whether a gesture is
+    // addressed to this panel (`platform::pointer_in_rect`) — a trackpad scroll
+    // over the panel next door would pan the image. So the row is drawn in a
+    // child `Ui` and only the space it was *offered* is allocated back. What
+    // overflows stays clipped by the `ScrollArea` egui_dock wraps every tab
+    // body in, exactly as it is today.
+    let offered = ui.available_rect_before_wrap();
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(offered));
+    show_overlay_toolbar_row(&mut row, settings, intrinsics, detail, camera);
+    let height = row.min_rect().height();
+    ui.advance_cursor_after_rect(egui::Rect::from_min_size(
+        offered.min,
+        egui::vec2(offered.width(), height),
+    ));
+}
+
+/// The toolbar's own contents, so that the containment in
+/// [`show_overlay_toolbar`] wraps a single call.
+fn show_overlay_toolbar_row(
     ui: &mut egui::Ui,
     settings: &mut FeatureDisplaySettings,
     intrinsics: &mut IntrinsicsDisplaySettings,

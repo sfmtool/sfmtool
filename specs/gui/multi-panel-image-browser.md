@@ -1058,6 +1058,34 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
 - Feature overlays use `image_to_panel(px, py)` and `panel_to_image(pos)`
   transforms derived from `image_rect` and `effective_scale` each frame
 - Features outside the visible panel are culled for performance when zoomed in
+- The panel rect is `ui.available_rect_before_wrap()`, which is only the panel's
+  own if nothing above it has overflowed — see "The toolbar may not widen the
+  panel" below
+
+#### The toolbar may not widen the panel
+
+egui grows a `Ui`'s `max_rect` to include any widget that overflowed it
+(`Placer::advance_after_rects`). The overlay toolbar is a single unwrapped row
+of controls — roughly 730 px with a feature mode active — so in a dock cell
+narrower than that it overflows, and the `available_rect_before_wrap()` the
+panel reads below it then describes a rectangle reaching into the
+**neighbouring** dock cell. A 400 px cell reported 726 px.
+
+That rect is load-bearing twice over: the image is fitted and centred in it, and
+`platform::pointer_in_rect` tests it to decide whether a trackpad gesture is
+addressed to this panel (see
+[viewport-navigation.md](viewport-navigation.md#which-panel-a-gesture-is-addressed-to)).
+An overhang therefore both mis-lays-out the image and steals gestures aimed at
+whatever sits to the right — scrolling the Intrinsics panel beside it panned the
+image, for exactly as far into that panel as the overhang reached, which is why
+widening the Image Detail panel made the symptom disappear.
+
+So `show_overlay_toolbar` draws its row into a child `Ui` and allocates back only
+the space it was *offered*, leaving the parent's `max_rect` alone. What does not
+fit stays clipped by the `ScrollArea` egui_dock wraps every tab body in. The
+panel is the only one that reads its rect *after* drawing something — every other
+tab takes `available_rect_before_wrap()` as its first act, which is pristine by
+construction.
 
 #### View persistence across image, reconstruction and panel changes
 
